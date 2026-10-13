@@ -1,0 +1,8 @@
+# Tool configuration only. Python packages get their own pyproject.toml next to their sources.
+
+[tool.ruff]
+line-length = 100
+extend-exclude = ["proto/gen", "schemas/generated", "build*", "install*", "log"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "PTH", "RUF"]

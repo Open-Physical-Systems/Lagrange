@@ -1,0 +1,32 @@
+* text=auto eol=lf
+
+*.cpp   text diff=cpp
+*.hpp   text diff=cpp
+*.h     text diff=cpp
+*.c     text diff=cpp
+*.slang text diff=cpp
+*.py    text diff=python
+*.md    text diff=markdown
+*.usda  text
+*.proto text
+*.yaml  text
+*.yml   text
+*.json  text
+
+*.usdc  binary
+*.usdz  binary
+*.mcap  binary
+*.vdb   binary
+*.nvdb  binary
+*.fmu   binary
+*.png   binary
+*.jpg   binary
+*.ktx2  binary
+*.ttf   binary
+*.otf   binary
+*.spv   binary
+
+schemas/generated/** linguist-generated=true
+proto/gen/**         linguist-generated=true
+tests/**/golden/**   linguist-generated=true -diff
+CHANGELOG.md         merge=union

@@ -1,0 +1,75 @@
+# Lint, build and test. Jobs are added here as the code they check arrives
+# (see docs/plan/repo-tooling.md section 9 for the planned matrix).
+name: ci
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev]
+permissions: {}
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  ROS_DISTRO: lyrical
+
+jobs:
+  lint:
+    name: lint (pre-commit)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run all pre-commit hooks
+        run: pipx run --spec pre-commit==4.7.0 pre-commit run --all-files --show-diff-on-failure
+
+  build-test:
+    name: build-test (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    container: ros:lyrical-ros-base-resolute
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: amd64
+            build_type: RelWithDebInfo
+            sanitizer: ""
+          - name: asan-ubsan
+            build_type: Debug
+            sanitizer: "address;undefined"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: src/lagrange
+          persist-credentials: false
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential cmake python3-colcon-common-extensions python3-rosdep
+          rosdep update --rosdistro "$ROS_DISTRO"
+          rosdep install --from-paths src --ignore-src -y --rosdistro "$ROS_DISTRO"
+      - name: Build
+        shell: bash
+        env:
+          BUILD_TYPE: ${{ matrix.build_type }}
+          SANITIZER: ${{ matrix.sanitizer }}
+        run: |
+          source "/opt/ros/$ROS_DISTRO/setup.bash"
+          colcon build --event-handlers console_cohesion+ --cmake-args \
+            "-DCMAKE_BUILD_TYPE=$BUILD_TYPE" -DBUILD_TESTING=ON \
+            -DLAGRANGE_WARNINGS_AS_ERRORS=ON "-DLAGRANGE_SANITIZER=$SANITIZER"
+      - name: Test
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          source install/setup.bash
+          colcon test --event-handlers console_direct+
+          colcon test-result --verbose

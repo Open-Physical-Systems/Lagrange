@@ -1,0 +1,7 @@
+[files]
+extend-exclude = ["LICENSE", "LICENSES/", "docs/imgs/", "*.usda", "*.mcap"]
+
+[default.extend-words]
+# Abbreviations and names that are not typos.
+sitl = "sitl"   # software in the loop
+lod = "lod"     # level of detail
