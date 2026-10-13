@@ -379,3 +379,69 @@ def test_a_regen_event_names_the_signal_that_shows_it():
         begin, end = event.begin.ns // current.dt_ns, event.end.ns // current.dt_ns
         # Most of the span is below zero: that is what regeneration means.
         assert (current.data[begin:end, 0] < 0.0).mean() > 0.5
+
+
+def test_environment_fields_ros_graph_and_world_reach_a_viewer_that_asks(recording, tmp_path):
+    async def scenario():
+        server, bound = await started(recording, Endpoint("unix", str(tmp_path / "s.sock")))
+        client = await ProtocolClient.connect(bound)
+        try:
+            await client.hello()
+            surroundings = (await receive_until(client, "environment")).environment
+            await client.command(
+                subscribe_field={"field": "emi/flux_density", "enabled": True, "heightM": 0.1}
+            )
+            await client.command(set_ros_graph={"enabled": True})
+            await client.command(set_world={"enabled": True})
+            await client.command(play={})
+            seen = {}
+            for _ in range(8000):
+                envelope = await client.receive()
+                body = envelope.WhichOneof("body")
+                if body in ("field_slice", "ros_graph", "world") and body not in seen:
+                    seen[body] = envelope
+                if len(seen) == 3:
+                    break
+            return surroundings, seen
+        finally:
+            await client.close()
+            await server.stop()
+
+    surroundings, seen = asyncio.run(scenario())
+    assert surroundings.synthetic
+    fields = {field.name: field for field in surroundings.fields}
+    assert fields["emi/flux_density"].available and fields["emi/flux_density"].unit.display == "µT"
+    assert not fields["weather/wind"].available and fields["weather/wind"].unavailable_reason
+    assert surroundings.emi_sources[0].frequency_hz == 20_000.0
+
+    field = seen["field_slice"].field_slice
+    assert (field.width, field.height, field.components) == (64, 48, 1)
+    values = np.frombuffer(field.values.inline, dtype="<f4").reshape(field.height, field.width)
+    assert field.values.size == values.nbytes
+    assert (
+        values.min() == pytest.approx(field.value_min) and values.max() <= field.value_max * 1.0001
+    )
+    assert values.min() > 0.0
+    # The field is strongest in the cell nearest the robot, which is near the middle early on.
+    row, column = np.unravel_index(values.argmax(), values.shape)
+    assert 8 < column < 56 and 6 < row < 42
+
+    graph = seen["ros_graph"].ros_graph
+    assert graph.note and graph.distro == "lyrical" and graph.use_sim_time
+    rates = {topic.name: topic.rate_hz for topic in graph.topics}
+    # The same rates as the sensors and signals the viewer shows elsewhere.
+    assert rates["/lidar_front/points"] == pytest.approx(10.0)
+    assert rates["/imu/data"] == pytest.approx(1000.0)
+    assert rates["/joint_states"] == pytest.approx(1000.0)
+    assert {node.name for node in graph.node_info} >= {
+        "/lagrange_ros2_bridge",
+        "/controller_manager",
+    }
+    assert graph.control.active and len(graph.control.joints) == 2
+
+    world = seen["world"].world
+    assert world.synthetic and not world.geo_origin.valid and world.tile_size_m == 256.0
+    assert len(world.tile_x) == len(world.tile_y) == len(world.tile_lod) == 13 * 13
+    assert world.tile_lod.count(0) == 1  # only the tile the robot is in has full physics
+    assert world.agents[0].name == "amr" and world.agents[0].focus
+    assert world.floating_origin.anchor == "amr"

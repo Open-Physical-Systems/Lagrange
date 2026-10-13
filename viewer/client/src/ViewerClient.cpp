@@ -5,8 +5,10 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <poll.h>
 #include <sys/eventfd.h>
 #include <unistd.h>
@@ -335,6 +337,126 @@ void ViewerClient::handleSensorFrame(const v1::Envelope& envelope) {
     ++stream->frames_;
 }
 
+float FieldSliceData::sample(double x, double y) const {
+    if (cellM <= 0.0 || width == 0 || height == 0) {
+        return std::numeric_limits<float>::quiet_NaN();
+    }
+    const double column = std::round((x - originX) / cellM);
+    const double row = std::round((y - originY) / cellM);
+    if (column < 0.0 || row < 0.0 || column >= static_cast<double>(width) ||
+        row >= static_cast<double>(height)) {
+        return std::numeric_limits<float>::quiet_NaN();
+    }
+    const std::size_t at =
+        (static_cast<std::size_t>(row) * width + static_cast<std::size_t>(column)) * components;
+    if (components == 1) {
+        return values[at];
+    }
+    float squares = 0.0F;
+    for (std::uint32_t c = 0; c < components; ++c) {
+        squares += values[at + c] * values[at + c];
+    }
+    return std::sqrt(squares);
+}
+
+void ViewerClient::sendFieldSubscription(const std::string& name, double heightM) {
+    auto envelope = std::make_unique<v1::Envelope>();
+    envelope->mutable_command()->set_request_id(nextRequestId_++);
+    v1::SubscribeField* subscribe = envelope->mutable_command()->mutable_subscribe_field();
+    subscribe->set_field(name);
+    subscribe->set_enabled(true);
+    subscribe->set_height_m(heightM);
+    enqueue(std::move(envelope));
+}
+
+std::shared_ptr<FieldStream> ViewerClient::watchField(const std::string& name, double heightM) {
+    std::shared_ptr<FieldStream> stream;
+    bool changed = false;
+    {
+        const std::lock_guard lock(sensorMutex_);
+        for (WatchedField& field : fields_) {
+            if (field.stream->name() == name) {
+                stream = field.stream;
+                changed = field.heightM != heightM;
+                field.heightM = heightM;
+            }
+        }
+        if (!stream) {
+            stream = std::make_shared<FieldStream>(name);
+            fields_.push_back({stream, heightM});
+            changed = true;
+        }
+    }
+    if (changed) {
+        sendFieldSubscription(name, heightM);
+    }
+    return stream;
+}
+
+void ViewerClient::sendViewRequests() {
+    auto graph = std::make_unique<v1::Envelope>();
+    graph->mutable_command()->set_request_id(nextRequestId_++);
+    graph->mutable_command()->mutable_set_ros_graph()->set_enabled(rosGraphWanted_);
+    enqueue(std::move(graph));
+    auto world = std::make_unique<v1::Envelope>();
+    world->mutable_command()->set_request_id(nextRequestId_++);
+    world->mutable_command()->mutable_set_world()->set_enabled(worldWanted_);
+    enqueue(std::move(world));
+}
+
+void ViewerClient::setRosGraphWanted(bool wanted) {
+    if (rosGraphWanted_.exchange(wanted) != wanted) {
+        sendViewRequests();
+    }
+}
+
+void ViewerClient::setWorldWanted(bool wanted) {
+    if (worldWanted_.exchange(wanted) != wanted) {
+        sendViewRequests();
+    }
+}
+
+void ViewerClient::handleFieldSlice(const v1::Envelope& envelope) {
+    constexpr std::uint64_t kMaxCells = 4096ULL * 4096ULL;
+    const v1::FieldSlice& slice = envelope.field_slice();
+    std::shared_ptr<FieldStream> stream;
+    {
+        const std::lock_guard lock(sensorMutex_);
+        for (const WatchedField& field : fields_) {
+            if (field.stream->name() == slice.field()) {
+                stream = field.stream;
+            }
+        }
+    }
+    if (!stream) {
+        return;
+    }
+    // From the network: every size is checked before the bytes are read.
+    const std::string& bytes = slice.values().inline_();
+    const std::uint64_t cells = static_cast<std::uint64_t>(slice.width()) * slice.height();
+    const std::uint32_t components = slice.components();
+    if (cells == 0 || cells > kMaxCells || components == 0 || components > 4 ||
+        slice.cell_m() <= 0.0 || bytes.size() != cells * components * sizeof(float)) {
+        ++stream->rejected_;
+        return;
+    }
+    auto data = std::make_shared<FieldSliceData>();
+    data->simTimeNs = slice.sim_time().ns();
+    data->width = slice.width();
+    data->height = slice.height();
+    data->components = components;
+    data->originX = slice.origin_x();
+    data->originY = slice.origin_y();
+    data->cellM = slice.cell_m();
+    data->heightM = slice.height_m();
+    data->valueMin = slice.value_min();
+    data->valueMax = slice.value_max();
+    data->values.resize(static_cast<std::size_t>(cells) * components);
+    std::memcpy(data->values.data(), bytes.data(), bytes.size());
+    stream->latest_.store(std::move(data));
+    ++stream->slices_;
+}
+
 std::uint64_t ViewerClient::requestAttributes(std::uint32_t prim) {
     auto envelope = std::make_unique<v1::Envelope>();
     const std::uint64_t id = nextRequestId_++;
@@ -522,6 +644,24 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
             // The server sends its console history again on every connection.
             logs_.store(std::make_shared<const LogBook>());
             subscribeSensors();  // a new connection knows nothing of earlier requests
+            {
+                std::vector<std::pair<std::string, double>> wanted;
+                {
+                    const std::lock_guard lock(sensorMutex_);
+                    for (const WatchedField& field : fields_) {
+                        wanted.emplace_back(field.stream->name(), field.heightM);
+                    }
+                }
+                for (const auto& [name, heightM] : wanted) {
+                    sendFieldSubscription(name, heightM);
+                }
+            }
+            if (rosGraphWanted_ || worldWanted_) {
+                sendViewRequests();
+            }
+            environment_.store(nullptr);
+            rosGraph_.store(nullptr);
+            world_.store(nullptr);
             events_.store(std::make_shared<const EventLog>());
             statistics_.store(nullptr);
             recording_.store(nullptr);
@@ -600,6 +740,133 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
         case v1::Envelope::kSensorFrame:
             handleSensorFrame(envelope);
             break;
+        case v1::Envelope::kFieldSlice:
+            handleFieldSlice(envelope);
+            break;
+        case v1::Envelope::kEnvironment: {
+            const v1::EnvironmentState& source = envelope.environment();
+            auto info = std::make_shared<EnvironmentInfo>();
+            info->layer = source.layer();
+            info->localTimeHours = source.local_time_hours();
+            info->sunElevationDeg = source.sun_elevation_deg();
+            info->ambientTemperatureK = source.ambient_temperature_k();
+            info->rainMmPerH = source.weather().rain_mm_per_h();
+            info->fogVisibilityM = source.weather().fog_visibility_m();
+            info->dustMgPerM3 = source.weather().dust_mg_per_m3();
+            info->surfaceWetness = source.weather().surface_wetness();
+            info->windSpeed = source.wind().speed_m_per_s();
+            info->windDirectionDeg = source.wind().direction_deg();
+            info->gustIntensity = source.wind().gust_intensity();
+            info->windField = source.wind().field();
+            info->synthetic = source.synthetic();
+            for (const auto& emi : source.emi_sources()) {
+                info->emiSources.push_back({emi.name(), emi.prim(), emi.frequency_hz(),
+                                            emi.current_a(), emi.power_w(), emi.detail()});
+            }
+            for (const auto& field : source.fields()) {
+                info->fields.push_back({field.name(), field.label(), field.domain(),
+                                        field.unit().display(),
+                                        std::max<std::uint32_t>(field.components(), 1),
+                                        field.available(), field.unavailable_reason()});
+            }
+            environment_.store(std::move(info));
+            break;
+        }
+        case v1::Envelope::kRosGraph: {
+            const v1::RosGraph& source = envelope.ros_graph();
+            auto graph = std::make_shared<RosGraphInfo>();
+            graph->rmw = source.rmw();
+            graph->distro = source.distro();
+            graph->domainId = source.domain_id();
+            graph->useSimTime = source.use_sim_time();
+            graph->note = source.note();
+            for (const auto& topic : source.topics()) {
+                graph->topics.push_back(
+                    {topic.name(), topic.type(), topic.publishers(), topic.subscribers(),
+                     topic.rate_hz(), topic.bandwidth_bps(), topic.from_bridge(), topic.status()});
+            }
+            for (const auto& node : source.node_info()) {
+                RosGraphInfo::Node out;
+                out.name = node.name();
+                out.publishes.assign(node.publishes().begin(), node.publishes().end());
+                out.subscribes.assign(node.subscribes().begin(), node.subscribes().end());
+                out.external = node.external();
+                out.detail = node.detail();
+                graph->nodes.push_back(std::move(out));
+            }
+            // An older server lists node names only.
+            for (int i = 0; source.node_info_size() == 0 && i < source.nodes_size(); ++i) {
+                RosGraphInfo::Node out;
+                out.name = source.nodes(i);
+                graph->nodes.push_back(std::move(out));
+            }
+            graph->hasControl = source.has_control();
+            graph->hardware = source.control().hardware();
+            graph->plugin = source.control().plugin();
+            graph->controlRateHz = source.control().rate_hz();
+            graph->controlActive = source.control().active();
+            for (const auto& joint : source.control().joints()) {
+                graph->joints.push_back({joint.name(), joint.interface(), joint.command(),
+                                         joint.state(), joint.unit()});
+            }
+            for (const auto& controller : source.control().controllers()) {
+                graph->controllers.push_back(
+                    {controller.name(), controller.rate_hz(), controller.state()});
+            }
+            rosGraph_.store(std::move(graph));
+            break;
+        }
+        case v1::Envelope::kWorld: {
+            const v1::WorldState& source = envelope.world();
+            auto world = std::make_shared<WorldInfo>();
+            const std::shared_ptr<const WorldInfo> before = world_.load();
+            world->simTimeNs = source.sim_time().ns();
+            world->georeferenced = source.geo_origin().valid();
+            world->latitudeDeg = source.geo_origin().latitude_deg();
+            world->longitudeDeg = source.geo_origin().longitude_deg();
+            world->heightM = source.geo_origin().height_m();
+            world->tileSizeM = source.tile_size_m();
+            world->tilesGeneration = source.tiles_generation();
+            // Tiles come only when they changed; otherwise keep the ones already held. The
+            // three arrays must be the same length, or the message is not used for tiles.
+            const auto count = static_cast<std::size_t>(source.tile_x_size());
+            if (count != 0 && count <= WorldInfo::kMaxTiles &&
+                count == static_cast<std::size_t>(source.tile_y_size()) &&
+                count == source.tile_lod().size()) {
+                world->tiles.reserve(count);
+                for (std::size_t i = 0; i < count; ++i) {
+                    world->tiles.push_back({source.tile_x(static_cast<int>(i)),
+                                            source.tile_y(static_cast<int>(i)),
+                                            static_cast<std::uint8_t>(source.tile_lod()[i])});
+                }
+            } else if (before && before->tilesGeneration == world->tilesGeneration) {
+                world->tiles = before->tiles;
+            }
+            for (const auto& agent : source.agents()) {
+                world->agents.push_back({agent.name(), agent.prim(), agent.kind(), agent.x(),
+                                         agent.y(), agent.speed_m_per_s(), agent.status(),
+                                         agent.active_radius_m(), agent.focus()});
+            }
+            world->anchor = source.floating_origin().anchor();
+            world->origin = {source.floating_origin().x(), source.floating_origin().y(),
+                             source.floating_origin().z()};
+            world->recenterThresholdM = source.floating_origin().recenter_threshold_m();
+            world->lastRecenterNs = source.floating_origin().last_recenter().ns();
+            world->recenters = source.floating_origin().recenters();
+            world->gpuMemoryBytes = source.streaming().gpu_memory_bytes();
+            world->gpuMemoryBudgetBytes = source.streaming().gpu_memory_budget_bytes();
+            world->hostCacheBytes = source.streaming().host_cache_bytes();
+            world->hostCacheBudgetBytes = source.streaming().host_cache_budget_bytes();
+            world->diskReadBytesPerS = source.streaming().disk_read_bytes_per_s();
+            world->loadQueue = source.streaming().load_queue();
+            for (const auto& region : source.regions()) {
+                world->regions.push_back({region.name(), region.min_x(), region.min_y(),
+                                          region.max_x(), region.max_y()});
+            }
+            world->synthetic = source.synthetic();
+            world_.store(std::move(world));
+            break;
+        }
         case v1::Envelope::kEventList: {
             auto log = std::make_shared<EventLog>();
             log->complete = envelope.event_list().complete();
