@@ -93,11 +93,13 @@ add_library(
     panels/src/Chrome.cpp
     panels/src/ConsolePanel.cpp
     panels/src/DomainsPanel.cpp
+    panels/src/ElectricalPanels.cpp
     panels/src/InspectorPanel.cpp
     panels/src/PanelFormat.cpp
     panels/src/ProfilePanel.cpp
     panels/src/ScenePanel.cpp
     panels/src/ScopePanel.cpp
+    panels/src/ScopePlots.cpp
     panels/src/SignalsPanel.cpp
     panels/src/TimelinePanel.cpp
     panels/src/ViewportPanel.cpp

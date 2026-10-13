@@ -117,7 +117,7 @@ def test_viewer_renders_the_scene_from_the_mock_server(socket_dir):
     assert stats["frames"] == 40
     assert stats["snapshots"] >= 1
     assert stats["deltas"] >= 5  # the scene kept moving while we rendered
-    assert stats["prims"] == 11 and stats["meshes"] == 4
+    assert stats["prims"] == 12 and stats["meshes"] == 4
     assert stats["draw_calls"] == 5  # base, two wheels, caster, ground
     assert stats["sim_time_ns"] > 0
     assert stats["validation_errors"] == 0, result.stderr
@@ -237,7 +237,7 @@ def test_a_file_that_cannot_be_opened_is_reported_and_the_scene_stays(socket_dir
     stats = json.loads(result.stdout.strip().splitlines()[-1])
     assert stats["notice_is_error"] is True
     assert "no such file" in stats["notice"]
-    assert stats["prims"] == 11  # still the sample scene
+    assert stats["prims"] == 12  # still the sample scene
 
 
 def test_viewer_reports_a_missing_server_and_exits(socket_dir):
@@ -369,3 +369,33 @@ def test_signals_workspace_plots_with_cursors(socket_dir):
     # Cursor B is drawn in the accent colour, as a line over the height of every plot.
     accent = sum(1 for r, g, b, _a in pixels if r > 215 and 100 < g < 135 and b < 70)
     assert accent > 300, accent
+
+
+def test_electrical_workspace_draws_the_schematic_and_scopes(socket_dir):
+    """Design 04-electrical: schematic from the stage's nets, scopes of the bus and branches."""
+    image = socket_dir / "electrical.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "120",
+            "--size",
+            "1600x1000",
+            "--workspace",
+            "electrical",
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    # The bus voltage and four branch currents at 10 kHz, for the table, the nodes and the scopes.
+    assert stats["samples"] > 20000
+    assert stats["dropped_samples"] == 0 and stats["invalid_runs"] == 0
+
+    _width, _height, rows = read_png(image)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    # The bus bar and the wires are in the electrical domain colour, #F5C842.
+    yellow = sum(1 for r, g, b, _a in pixels if r > 235 and 185 < g < 215 and 50 < b < 90)
+    assert yellow > 1500, f"bus and wires not drawn ({yellow} pixels)"

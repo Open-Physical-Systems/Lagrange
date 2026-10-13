@@ -283,14 +283,14 @@ def test_inspector_attributes_and_console_log(recording, tmp_path):
             await server.stop()
 
     logs, result = asyncio.run(scenario())
-    assert logs[0].source == "stage" and "11 prims" in logs[0].text
+    assert logs[0].source == "stage" and "12 prims" in logs[0].text
     assert logs[0].level == session_pb2.LOG_LEVEL_INFO
     assert "domains on: rigid_body" in logs[2].text
 
     assert result.ok and [item.prim for item in result.attributes.items] == [8, 10, 999]
     motor = {attribute.name: attribute for attribute in result.attributes.items[0].attributes}
     assert motor["elec:windingResistance"].real == pytest.approx(0.12)
-    assert motor["elec:windingResistance"].unit.display == "Ω"
+    assert motor["elec:windingResistance"].unit.display == "ohm"
     assert motor["elec:behaviorModel"].asset.endswith(".fmu")
     assert list(motor["elec:powerPort"].targets.prims) == [7]
     assert motor["thermal:heatCapacity"].unit.display == "J/K"
