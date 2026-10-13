@@ -1,0 +1,63 @@
+syntax = "proto3";
+package lagrange.viewer.v1;
+
+// Simulation time, integer nanoseconds since run start.
+message SimTime {
+  int64 ns = 1;
+}
+
+// SI dimension exponents + scale + kind. Mirrors lagrange::Unit.
+message Unit {
+  sint32 length = 1;
+  sint32 mass = 2;
+  sint32 time = 3;
+  sint32 current = 4;
+  sint32 temperature = 5;
+  sint32 amount = 6;
+  sint32 luminous = 7;
+  sint32 angle = 8;
+  double scale = 9; // 1.0 for SI
+  uint32 kind = 10; // lagrange::QuantityKind
+  string display = 11; // "N·m", for labels only
+}
+
+enum SignalType {
+  SIGNAL_TYPE_UNSPECIFIED = 0;
+  SIGNAL_TYPE_SCALAR = 1;
+  SIGNAL_TYPE_VEC3 = 2;
+  SIGNAL_TYPE_QUAT = 3;
+  SIGNAL_TYPE_POSE = 4;
+  SIGNAL_TYPE_WRENCH = 5;
+  SIGNAL_TYPE_SCALAR_ARRAY = 6;
+  SIGNAL_TYPE_BOOL = 7;
+  SIGNAL_TYPE_INT = 8;
+  SIGNAL_TYPE_BYTES = 9;
+  SIGNAL_TYPE_FIELD3D = 10;
+  SIGNAL_TYPE_IMAGE = 11;
+  SIGNAL_TYPE_POINT_CLOUD = 12;
+}
+
+// A payload that is either inline, chunked through Blob messages, or in shared memory.
+message DataRef {
+  oneof location {
+    bytes inline = 1;
+    uint64 blob_id = 2; // assembled from Blob chunks
+    ShmRef shm = 3;
+  }
+  uint64 size = 4; // total bytes
+  fixed64 xxh3 = 5; // content hash; also the cache key for meshes and textures
+}
+
+message ShmRef {
+  uint32 region = 1; // index announced in ServerHello / ShmRegionAdded
+  uint64 offset = 2;
+  uint64 size = 3;
+  uint64 generation = 4; // must equal the slot header's generation when read
+}
+
+message Blob {
+  uint64 blob_id = 1;
+  uint64 offset = 2;
+  bytes data = 3; // <= 4 MiB per chunk
+  bool last = 4;
+}

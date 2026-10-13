@@ -12,3 +12,5 @@ Notable changes to Lagrange are recorded here. The format follows
 - Repository tooling: license, formatter and linter configuration, pre-commit hooks, GitHub
   templates, labels and pull-request checks.
 - `lagrange_core` package with simulation time types.
+- `lagrange_proto` package: viewer protocol messages (`lagrange.viewer.v1`) with generated C++
+  and Python code. RFC 0003 accepted.
