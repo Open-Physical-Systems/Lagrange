@@ -57,3 +57,14 @@ library is not installed. Add `--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/1
 
 Larger changes start as an RFC in `rfcs/`, numbered in sequence, with motivation, design,
 alternatives considered and unresolved questions.
+
+## Changelog and releases
+
+`CHANGELOG.md` is generated. Do not edit it in a pull request: the title of your pull request
+(a Conventional Commit) becomes its changelog line when it is squash-merged into `dev`.
+`feat`, `fix`, `perf`, `revert`, `docs` and `build` appear in the changelog; other types are
+hidden. A `!` after the type marks a breaking change.
+
+The `release-please` workflow keeps one release pull request open against `dev` with the next
+version, the new changelog section and the version in every `package.xml`. Merging it tags the
+release; `dev` is then merged into `main`.
