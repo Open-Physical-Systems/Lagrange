@@ -176,6 +176,13 @@ class ReplayEngine:
         index = min(time_ns // signal.dt_ns, signal.sample_count - 1)
         return signal.data[index]
 
+    def pose_of(self, prim: int, time_ns: int) -> np.ndarray | None:
+        """Pose (x, y, z, qw, qx, qy, qz) of a prim that follows a pose signal, else None."""
+        for bound, signal in self._bindings:
+            if bound == prim and signal.sample_count != 0:
+                return self._pose_at(signal, time_ns)
+        return None
+
     def delta(self, time_ns: int) -> scene_pb2.SceneDelta:
         """Transforms of all bound prims at `time_ns`. The caller sets the sequence fields."""
         delta = scene_pb2.SceneDelta()

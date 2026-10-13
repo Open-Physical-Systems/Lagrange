@@ -136,6 +136,8 @@ public:
 [[nodiscard]] std::unique_ptr<Panel> createElectricalInspectorPanel();
 /// The Electrical workspace's Network, Schematic and Scopes panels. They share one state.
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createElectricalPanels();
+/// The Sensors workspace's list, lidar view, IMU scopes and sensor summary. One shared state.
+[[nodiscard]] std::vector<std::unique_ptr<Panel>> createSensorsPanels();
 [[nodiscard]] std::unique_ptr<Panel> createTimelinePanel();
 [[nodiscard]] std::unique_ptr<Panel> createBookmarksPanel();
 [[nodiscard]] std::unique_ptr<Panel> createConsolePanel();

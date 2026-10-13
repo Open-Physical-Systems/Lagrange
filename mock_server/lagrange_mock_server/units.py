@@ -16,6 +16,8 @@ KIND_ANGULAR_VELOCITY = 11
 KIND_ANGULAR_POSITION = 12
 KIND_POSITION = 14
 KIND_RATIO = 24
+KIND_RESISTANCE = 8
+KIND_LINEAR_ACCELERATION = 26
 
 
 def _unit(display: str, kind: int, **exponents: int) -> common_pb2.Unit:
@@ -32,7 +34,7 @@ KELVIN = _unit("K", KIND_TEMPERATURE, temperature=1)
 ONE = _unit("1", KIND_RATIO)
 # Units of prim attributes. kind 0: no quantity kind assigned yet (lagrange::QuantityKind).
 # "ohm", not the Greek letter: the viewer's bundled IBM Plex files have no Greek glyphs.
-OHM = _unit("ohm", 0, length=2, mass=1, time=-3, current=-2)
+OHM = _unit("ohm", KIND_RESISTANCE, length=2, mass=1, time=-3, current=-2)
 HENRY = _unit("H", 0, length=2, mass=1, time=-2, current=-2)
 NEWTON_METRE_PER_AMPERE = _unit("N·m/A", 0, length=2, mass=1, time=-2, current=-1)
 JOULE_PER_KELVIN = _unit("J/K", 0, length=2, mass=1, time=-2, temperature=-1)
@@ -40,3 +42,4 @@ WATT_PER_KELVIN = _unit("W/K", 0, length=2, mass=1, time=-3, temperature=-1)
 AMPERE_HOUR = _unit("A·h", 0, time=1, current=1)
 AMPERE_HOUR.scale = 3600.0  # one ampere hour is 3600 coulombs
 KILOGRAM = _unit("kg", 0, mass=1)
+METRE_PER_SECOND_SQUARED = _unit("m/s²", KIND_LINEAR_ACCELERATION, length=1, time=-2)

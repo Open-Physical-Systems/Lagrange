@@ -117,7 +117,7 @@ def test_viewer_renders_the_scene_from_the_mock_server(socket_dir):
     assert stats["frames"] == 40
     assert stats["snapshots"] >= 1
     assert stats["deltas"] >= 5  # the scene kept moving while we rendered
-    assert stats["prims"] == 12 and stats["meshes"] == 4
+    assert stats["prims"] == 15 and stats["meshes"] == 4
     assert stats["draw_calls"] == 5  # base, two wheels, caster, ground
     assert stats["sim_time_ns"] > 0
     assert stats["validation_errors"] == 0, result.stderr
@@ -237,7 +237,7 @@ def test_a_file_that_cannot_be_opened_is_reported_and_the_scene_stays(socket_dir
     stats = json.loads(result.stdout.strip().splitlines()[-1])
     assert stats["notice_is_error"] is True
     assert "no such file" in stats["notice"]
-    assert stats["prims"] == 12  # still the sample scene
+    assert stats["prims"] == 15  # still the sample scene
 
 
 def test_viewer_reports_a_missing_server_and_exits(socket_dir):
@@ -439,3 +439,32 @@ def test_launcher_is_shown_without_a_server(socket_dir):
     # The primary button and the selected card are in the accent colour, #E8772E.
     accent = sum(1 for r, g, b, _a in pixels if r > 220 and 105 < g < 135 and 30 < b < 65)
     assert accent > 5000, f"the Connect button is not drawn ({accent} accent pixels)"
+
+
+def test_sensors_workspace_shows_the_lidar_scan(socket_dir):
+    """Design 06-sensors: lidar bird's-eye view from sensor frames, IMU scopes from signals."""
+    image = socket_dir / "sensors.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "120",
+            "--size",
+            "1600x1000",
+            "--workspace",
+            "sensors",
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    assert stats["samples"] > 1500  # three IMU signals at 1 kHz
+    assert stats["dropped_samples"] == 0 and stats["invalid_runs"] == 0
+
+    _width, _height, rows = read_png(image)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    # Lidar returns are drawn in the sensors domain colour, #3FD1A7.
+    points = sum(1 for r, g, b, _a in pixels if 50 < r < 80 and g > 195 and 150 < b < 185)
+    assert points > 1500, f"no lidar points drawn ({points} pixels)"

@@ -131,6 +131,33 @@ struct PrimAttributes {
     std::vector<AttributeInfo> attributes;
 };
 
+/// One revolution of a lidar, or one frame of any sensor that returns points. Immutable.
+struct PointCloud {
+    std::int64_t simTimeNs{0};
+    std::uint32_t count{0};
+    std::vector<float> points;  ///< count x (x, y, z, intensity), in the sensor's frame.
+};
+
+/// The frames of one sensor the viewer watches. Written by the client's worker, read by the UI.
+class SensorStream {
+public:
+    explicit SensorStream(std::string name) : name_(std::move(name)) {}
+    [[nodiscard]] const std::string& name() const { return name_; }  ///< The sensor's prim path.
+    /// The newest frame, or nullptr before the first one.
+    [[nodiscard]] std::shared_ptr<const PointCloud> latest() const { return latest_.load(); }
+    /// Frames received since the stream was opened.
+    [[nodiscard]] std::uint64_t frames() const { return frames_.load(); }
+    /// Frames rejected because they were malformed.
+    [[nodiscard]] std::uint64_t rejected() const { return rejected_.load(); }
+
+private:
+    friend class ViewerClient;
+    std::string name_;
+    std::atomic<std::shared_ptr<const PointCloud>> latest_;
+    std::atomic<std::uint64_t> frames_{0};
+    std::atomic<std::uint64_t> rejected_{0};
+};
+
 /// One thing that can stand in for a disabled domain.
 struct SubstituteOption {
     std::string token;  ///< What the profile says: "zero", "replay", ...
@@ -258,6 +285,11 @@ public:
         return attributes_.load();
     }
 
+    // --- sensors ---------------------------------------------------------------------------
+    /// Starts receiving the frames of a sensor, named by its prim path. Asking again for the
+    /// same sensor returns the same stream. The subscription survives reconnects.
+    [[nodiscard]] std::shared_ptr<SensorStream> watchSensor(const std::string& name);
+
     // --- profile ---------------------------------------------------------------------------
     /// The profile the server runs, or nullptr before it arrived.
     [[nodiscard]] std::shared_ptr<const ProfileInfo> profile() const { return profile_.load(); }
@@ -318,6 +350,11 @@ private:
         std::uint32_t component{0};
         std::shared_ptr<ScopeBuffer> buffer;
     };
+
+    void subscribeSensors();  // (re)sends the sensor subscriptions; worker thread
+    void handleSensorFrame(const v1::Envelope& envelope);
+    std::mutex sensorMutex_;  // guards the list below; held only to look a stream up
+    std::vector<std::shared_ptr<SensorStream>> sensors_;
 
     std::mutex commandMutex_;  // held only to push or swap a small queue
     std::deque<std::unique_ptr<v1::Envelope>> commands_;

@@ -647,6 +647,54 @@ TEST(ViewerClient, AttributesOfAPrimAreRequestedAndDecoded) {
     client.stop();
 }
 
+TEST(ViewerClient, WatchedSensorReceivesPointCloudsAndRejectsMalformedOnes) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+
+    const auto stream = client.watchSensor("/amr/sensors/lidar_front");
+    ASSERT_NE(stream, nullptr);
+    EXPECT_EQ(client.watchSensor("/amr/sensors/lidar_front"), stream);  // one stream per sensor
+    EXPECT_EQ(stream->latest(), nullptr);
+    ASSERT_TRUE(
+        server.pump([&] { return server.countCommands(v1::Command::kSubscribeSensor) == 1; }));
+
+    const auto frame = [](const std::string& sensor, std::uint32_t count, std::uint32_t stride,
+                          const std::vector<float>& values) {
+        v1::Envelope envelope;
+        v1::SensorFrame* out = envelope.mutable_sensor_frame();
+        out->set_sensor(sensor);
+        out->mutable_sim_time()->set_ns(42);
+        out->mutable_points()->set_count(count);
+        out->mutable_points()->set_stride(stride);
+        for (const char* field : {"x", "y", "z", "intensity"}) {
+            out->mutable_points()->add_fields(field);
+        }
+        out->mutable_points()->mutable_data()->set_inline_(
+            std::string(reinterpret_cast<const char*>(values.data()),  // NOLINT
+                        values.size() * sizeof(float)));
+        return envelope;
+    };
+    server.send(frame("/amr/sensors/lidar_front", 2, 16, {1, 2, 3, 0.5F, 4, 5, 6, 0.25F}));
+    ASSERT_TRUE(server.pump([&] { return stream->frames() == 1; }));
+    const auto cloud = stream->latest();
+    ASSERT_NE(cloud, nullptr);
+    EXPECT_EQ(cloud->simTimeNs, 42);
+    EXPECT_EQ(cloud->count, 2U);
+    EXPECT_EQ(cloud->points, (std::vector<float>{1, 2, 3, 0.5F, 4, 5, 6, 0.25F}));
+
+    // A count that does not match the bytes, and a stride too small for four floats.
+    server.send(frame("/amr/sensors/lidar_front", 5, 16, {1, 2, 3, 4}));
+    server.send(frame("/amr/sensors/lidar_front", 1, 8, {1, 2}));
+    // A sensor nobody watches is ignored without counting as an error.
+    server.send(frame("/amr/sensors/other", 1, 16, {1, 2, 3, 4}));
+    ASSERT_TRUE(server.pump([&] { return stream->rejected() == 2; }));
+    EXPECT_EQ(stream->frames(), 1U);
+    EXPECT_EQ(stream->latest(), cloud);  // the good frame is still the one shown
+    client.stop();
+}
+
 TEST(ViewerClient, StartsAndStopsCleanlyWithNoServer) {
     ViewerClient client(Endpoint::unixSocket("/tmp/lagrange-no-such-server.sock"));
     client.start();

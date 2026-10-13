@@ -4,6 +4,7 @@ import asyncio
 import stat
 from pathlib import Path
 
+import numpy as np
 import pytest
 from lagrange.viewer.v1 import envelope_pb2, session_pb2, signals_pb2
 from lagrange_mock_server.client import ProtocolClient, run_conformance
@@ -283,7 +284,7 @@ def test_inspector_attributes_and_console_log(recording, tmp_path):
             await server.stop()
 
     logs, result = asyncio.run(scenario())
-    assert logs[0].source == "stage" and "12 prims" in logs[0].text
+    assert logs[0].source == "stage" and "15 prims" in logs[0].text
     assert logs[0].level == session_pb2.LOG_LEVEL_INFO
     assert "domains on: rigid_body" in logs[2].text
 
@@ -296,3 +297,31 @@ def test_inspector_attributes_and_console_log(recording, tmp_path):
     assert motor["thermal:heatCapacity"].unit.display == "J/K"
     # A prim without attributes, and one that does not exist, answer with an empty list.
     assert not result.attributes.items[1].attributes and not result.attributes.items[2].attributes
+
+
+def test_lidar_frames_are_sent_to_viewers_that_ask(recording, tmp_path):
+    async def scenario():
+        server, bound = await started(recording, Endpoint("unix", str(tmp_path / "s.sock")))
+        client = await ProtocolClient.connect(bound)
+        try:
+            await client.hello()
+            await client.command(
+                subscribe_sensor={"sensor": "/amr/sensors/lidar_front", "enabled": True}
+            )
+            await client.command(play={})
+            return (await receive_until(client, "sensor_frame", limit=2000)).sensor_frame
+        finally:
+            await client.close()
+            await server.stop()
+
+    frame = asyncio.run(scenario())
+    assert frame.sensor == "/amr/sensors/lidar_front"
+    assert list(frame.points.fields) == ["x", "y", "z", "intensity"]
+    assert frame.points.stride == 16
+    assert frame.points.data.size == frame.points.count * 16 == len(frame.points.data.inline)
+    # Four rings of 720 beams, nearly all of which hit a wall of the aisle.
+    assert 2500 < frame.points.count <= 2880
+    points = np.frombuffer(frame.points.data.inline, dtype="<f4").reshape(-1, 4)
+    ranges = np.hypot(points[:, 0], points[:, 1])
+    assert ranges.min() > 0.05 and ranges.max() < 25.0
+    assert points[:, 3].min() > 0.0 and points[:, 3].max() <= 1.0
