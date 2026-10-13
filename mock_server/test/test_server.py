@@ -261,3 +261,38 @@ def test_endpoint_strings_match_the_cpp_forms():
     ):
         with pytest.raises(ValueError):
             parse_endpoint(bad)
+
+
+def test_inspector_attributes_and_console_log(recording, tmp_path):
+    async def scenario():
+        server, bound = await started(recording, Endpoint("unix", str(tmp_path / "s.sock")))
+        client = await ProtocolClient.connect(bound)
+        try:
+            await client.hello()
+            # The console history is sent to a viewer when it connects.
+            logs = []
+            while len(logs) < 3:
+                envelope = await client.receive()
+                if envelope.WhichOneof("body") == "log":
+                    logs.append(envelope.log)
+            await client.command(get_attributes={"prims": [8, 10, 999]})
+            result = (await receive_until(client, "command_result")).command_result
+            return logs, result
+        finally:
+            await client.close()
+            await server.stop()
+
+    logs, result = asyncio.run(scenario())
+    assert logs[0].source == "stage" and "11 prims" in logs[0].text
+    assert logs[0].level == session_pb2.LOG_LEVEL_INFO
+    assert "domains on: rigid_body" in logs[2].text
+
+    assert result.ok and [item.prim for item in result.attributes.items] == [8, 10, 999]
+    motor = {attribute.name: attribute for attribute in result.attributes.items[0].attributes}
+    assert motor["elec:windingResistance"].real == pytest.approx(0.12)
+    assert motor["elec:windingResistance"].unit.display == "Ω"
+    assert motor["elec:behaviorModel"].asset.endswith(".fmu")
+    assert list(motor["elec:powerPort"].targets.prims) == [7]
+    assert motor["thermal:heatCapacity"].unit.display == "J/K"
+    # A prim without attributes, and one that does not exist, answer with an empty list.
+    assert not result.attributes.items[1].attributes and not result.attributes.items[2].attributes

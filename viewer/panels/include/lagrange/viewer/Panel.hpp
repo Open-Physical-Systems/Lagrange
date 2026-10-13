@@ -16,10 +16,10 @@ namespace lagrange::viewer {
 
 /// A workspace is one saved dock layout with its own panels (docs/design/ui: workspace bar).
 /// Only the workspaces that exist so far are listed; the design has ten.
-enum class Workspace : std::uint8_t { Scene, Domains };
+enum class Workspace : std::uint8_t { Scene, Domains, Signals };
 
 [[nodiscard]] const char* toString(Workspace workspace);
-/// "scene", "domains" (any case). Empty for anything else.
+/// "scene", "domains", "signals" (any case). Empty for anything else.
 [[nodiscard]] std::optional<Workspace> parseWorkspace(std::string_view name);
 
 /// What panels may read and change during one frame. Panels never touch the socket or Vulkan.
@@ -40,8 +40,8 @@ struct PanelContext {
     std::uint32_t requestedViewportHeight{0};
 
     std::shared_ptr<const SignalCatalog> catalog;  ///< Server's signal list; may be null.
-    /// Signals to open in the scope at start-up (command line); the scope panel empties it.
-    /// May be null.
+    /// Signals for the scope to open: from the command line at start-up, or from a panel
+    /// ("Plot in Signals"). The scope panel empties it. May be null.
     std::vector<std::string>* initialScopeSignals{nullptr};
 
     Notice notice;  ///< Latest message for the user (load results, command errors).
@@ -71,11 +71,17 @@ public:
     [[nodiscard]] virtual Workspace workspace() const { return Workspace::Scene; }
 };
 
+[[nodiscard]] std::unique_ptr<Panel> createViewportPanel();
+[[nodiscard]] std::unique_ptr<Panel> createScenePanel();
+[[nodiscard]] std::unique_ptr<Panel> createInspectorPanel();
+[[nodiscard]] std::unique_ptr<Panel> createTimelinePanel();
+[[nodiscard]] std::unique_ptr<Panel> createConsolePanel();
+[[nodiscard]] std::unique_ptr<Panel> createProblemsPanel();
 [[nodiscard]] std::unique_ptr<Panel> createScopePanel();
 [[nodiscard]] std::unique_ptr<Panel> createDomainsPanel();
 [[nodiscard]] std::unique_ptr<Panel> createProfilePanel();
 
-/// The v0.1 panels that exist so far, in default layout order.
+/// Every panel that exists so far, for all workspaces.
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createDefaultPanels();
 
 /// Draws the application chrome (menu bar, workspace bar, domain strip, status bar) and the

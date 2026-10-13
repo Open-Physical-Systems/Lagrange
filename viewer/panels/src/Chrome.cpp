@@ -29,9 +29,13 @@ struct WorkspaceEntry {
     const char* shortcut;
 };
 
-constexpr std::array<WorkspaceEntry, 2> kWorkspaces{{
-    {Workspace::Scene, "Scene", "lagrange-dockspace", ImGuiKey_1, "Ctrl+1"},
-    {Workspace::Domains, "Domains", "lagrange-dockspace-domains", ImGuiKey_2, "Ctrl+2"},
+// In the design's order, with its shortcut numbers (Signals is the fourth of ten). The dock
+// space names carry a layout version: change it when a default layout changes, so that a
+// layout saved by an older build is not applied to the new panels.
+constexpr std::array<WorkspaceEntry, 3> kWorkspaces{{
+    {Workspace::Scene, "Scene", "lagrange-dock-scene-2", ImGuiKey_1, "Ctrl+1"},
+    {Workspace::Domains, "Domains", "lagrange-dock-domains-1", ImGuiKey_2, "Ctrl+2"},
+    {Workspace::Signals, "Signals", "lagrange-dock-signals-1", ImGuiKey_4, "Ctrl+4"},
 }};
 
 constexpr ImGuiWindowFlags kBarFlags =
@@ -43,28 +47,36 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
     ImGui::DockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);
     ImGui::DockBuilderSetNodeSize(dockspace, size);
     ImGuiID centre = dockspace;
+    const auto fraction = [](float pixels, float of) {
+        return std::clamp(px(pixels) / std::max(of, 1.0F), 0.1F, 0.6F);
+    };
     if (workspace == Workspace::Scene) {
-        const ImGuiID bottom =
-            ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.15F, nullptr, &centre);
-        const ImGuiID scope =
-            ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.42F, nullptr, &centre);
-        const ImGuiID left =
-            ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left, 0.20F, nullptr, &centre);
-        const ImGuiID right =
-            ImGui::DockBuilderSplitNode(centre, ImGuiDir_Right, 0.26F, nullptr, &centre);
+        // Design: Scene 280 px left, Inspector 340 px right; under the viewport a 196 px
+        // band, 62 % Timeline and 38 % Console | Problems.
+        const ImGuiID left = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Left, fraction(280.0F, size.x), nullptr, &centre);
+        const ImGuiID right = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Right, fraction(340.0F, size.x - px(280.0F)), nullptr, &centre);
+        ImGuiID bottom = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down,
+                                                     fraction(196.0F, size.y), nullptr, &centre);
+        const ImGuiID console =
+            ImGui::DockBuilderSplitNode(bottom, ImGuiDir_Right, 0.38F, nullptr, &bottom);
         ImGui::DockBuilderDockWindow("Viewport", centre);
         ImGui::DockBuilderDockWindow("Scene", left);
         ImGui::DockBuilderDockWindow("Inspector", right);
         ImGui::DockBuilderDockWindow("Timeline", bottom);
-        ImGui::DockBuilderDockWindow("Scope", scope);
-    } else {
+        ImGui::DockBuilderDockWindow("Console", console);
+        ImGui::DockBuilderDockWindow("Problems", console);
+    } else if (workspace == Workspace::Domains) {
         // Design: Domains 520 px on the left, Profile on the right. The wiring and schedule
         // panels that sit between them are not built yet, so Profile takes that room for now.
-        const float fraction = std::clamp(px(520.0F) / std::max(size.x, 1.0F), 0.2F, 0.6F);
-        const ImGuiID left =
-            ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left, fraction, nullptr, &centre);
+        const ImGuiID left = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Left, fraction(520.0F, size.x), nullptr, &centre);
         ImGui::DockBuilderDockWindow("Domains", left);
         ImGui::DockBuilderDockWindow("Profile", centre);
+    } else {
+        // The scope alone until the Signals screen of the design is built.
+        ImGui::DockBuilderDockWindow("Scope", centre);
     }
     ImGui::DockBuilderFinish(dockspace);
 }
@@ -267,6 +279,13 @@ void drawStatusBar(const PanelContext& context, ImGuiViewport* viewport) {
         widgets::Mono(context.status.droppedDeltas == 0 ? c::t1 : c::warn, "%llu",
                       static_cast<unsigned long long>(context.status.droppedDeltas));
 
+        // The latest thing to tell the user: a file that loaded, a command that failed.
+        if (!context.notice.text.empty()) {
+            ImGui::SameLine(0.0F, px(20.0F));
+            widgets::Mono(context.notice.error ? c::error : c::info, "%s",
+                          context.notice.text.c_str());
+        }
+
         char right[200];
         const float fps = context.frameMs > 0.0F ? 1000.0F / context.frameMs : 0.0F;
         std::snprintf(right, sizeof(right), "%s · %s    %.1f ms · %.0f fps",
@@ -283,7 +302,9 @@ void drawStatusBar(const PanelContext& context, ImGuiViewport* viewport) {
 
 /// One host window fills what the bars left over. It holds a dock space per workspace; the
 /// ones not shown are kept alive, so their panels stay docked where the user put them.
-void drawDockSpaces(Workspace shown, ImGuiViewport* viewport) {
+/// Returns true when a default layout was built this frame.
+bool drawDockSpaces(Workspace shown, ImGuiViewport* viewport) {
+    bool built = false;
     ImGui::SetNextWindowPos(viewport->WorkPos);
     ImGui::SetNextWindowSize(viewport->WorkSize);
     ImGui::SetNextWindowViewport(viewport->ID);
@@ -300,6 +321,7 @@ void drawDockSpaces(Workspace shown, ImGuiViewport* viewport) {
         // Lay out only when there is no saved layout for this dock space.
         if (ImGui::DockBuilderGetNode(id) == nullptr) {
             buildLayout(entry.workspace, id, size);
+            built = true;
         }
         if (entry.workspace == shown) {
             ImGui::DockSpace(id, size);
@@ -308,6 +330,7 @@ void drawDockSpaces(Workspace shown, ImGuiViewport* viewport) {
         }
     }
     ImGui::End();
+    return built;
 }
 
 }  // namespace
@@ -334,6 +357,20 @@ std::optional<Workspace> parseWorkspace(std::string_view name) {
     return std::nullopt;
 }
 
+std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
+    std::vector<std::unique_ptr<Panel>> panels;
+    panels.push_back(createViewportPanel());
+    panels.push_back(createScenePanel());
+    panels.push_back(createInspectorPanel());
+    panels.push_back(createTimelinePanel());
+    panels.push_back(createConsolePanel());
+    panels.push_back(createProblemsPanel());
+    panels.push_back(createScopePanel());
+    panels.push_back(createDomainsPanel());
+    panels.push_back(createProfilePanel());
+    return panels;
+}
+
 void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& context) {
     context.profileSession->update(context.client,
                                    context.connection.state == ConnectionState::Ready,
@@ -354,11 +391,16 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
     drawDomainStrip(context, viewport);
     drawStatusBar(context, viewport);
     const Workspace shown = *context.workspace;  // a click this frame takes effect next frame
-    drawDockSpaces(shown, viewport);
+    const bool built = drawDockSpaces(shown, viewport);
     for (const std::unique_ptr<Panel>& panel : panels) {
         if (panel->workspace() == shown) {
             panel->draw(context);
         }
+    }
+    if (built && shown == Workspace::Scene) {
+        // In a fresh layout the first tab of a group is the one in front.
+        ImGui::SetWindowFocus("Console");
+        ImGui::SetWindowFocus("Viewport");
     }
 }
 

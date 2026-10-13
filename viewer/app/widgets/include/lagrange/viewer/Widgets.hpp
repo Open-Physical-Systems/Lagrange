@@ -54,6 +54,29 @@ bool SectionHeader(const char* title, const char* meta, bool defaultOpen = true)
 /// A top-level tab of a bar (workspaces): accent underline when active.
 bool BarTab(const char* label, bool active);
 
+/// A row of exclusive choices (time windows, level filters). Returns true when it changed.
+bool Segmented(const char* id, const char* const* options, int count, int* index);
+
+/// One row of a key/value grid: label column (112 px), then a read-only value field with the
+/// unit right-aligned inside it. `link` draws the value as a reference to a prim or file.
+/// Returns true when a link value was clicked.
+bool PropertyRow(const char* label, const char* value, const char* unit, bool link = false,
+                 const char* tooltip = nullptr);
+
+/// Three read-only number fields with coloured X / Y / Z labels.
+void Vec3Field(const char* label, const double value[3], const char* format = "%.3f");
+
+/// A small line plot of one signal: one min/max pair per pixel column. NaN columns are gaps.
+void Sparkline(const float* low, const float* high, int columns, const ImVec2& size,
+               const ImVec4& color);
+
+/// A chip naming an applied schema, in its domain's colour.
+void SchemaChip(const char* schema);
+
+/// The physics domain a USD schema belongs to ("ElectricalMotorAPI_1" -> "electrical"), also
+/// for attribute namespaces ("elec"). Empty when it is not a physics schema.
+[[nodiscard]] std::string_view schemaDomain(std::string_view schemaOrNamespace);
+
 /// A filled dot, vertically centred on the current line. Advances the cursor.
 void Dot(const ImVec4& color, bool filled = true);
 

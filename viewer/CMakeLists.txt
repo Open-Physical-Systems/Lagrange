@@ -88,11 +88,15 @@ add_library(
     lagrange_viewer_panels
     STATIC
     panels/src/Chrome.cpp
+    panels/src/ConsolePanel.cpp
     panels/src/DomainsPanel.cpp
+    panels/src/InspectorPanel.cpp
     panels/src/PanelFormat.cpp
-    panels/src/Panels.cpp
     panels/src/ProfilePanel.cpp
+    panels/src/ScenePanel.cpp
     panels/src/ScopePanel.cpp
+    panels/src/TimelinePanel.cpp
+    panels/src/ViewportPanel.cpp
 )
 lagrange_target_defaults(lagrange_viewer_panels)
 target_include_directories(lagrange_viewer_panels PUBLIC panels/include)

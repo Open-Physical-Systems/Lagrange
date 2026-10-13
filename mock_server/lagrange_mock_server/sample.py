@@ -153,6 +153,46 @@ def _first_order_lag(target: np.ndarray, alpha: float) -> np.ndarray:
     return out
 
 
+def _real(name: str, value: float, unit: common_pb2.Unit, doc: str) -> scene_pb2.Attribute:
+    return scene_pb2.Attribute(name=name, real=value, unit=unit, authored=True, doc=doc)
+
+
+def _motor_attributes() -> list[scene_pb2.Attribute]:
+    # Values of the reference motor in CLAUDE.md §11.3.
+    attributes = [
+        _real("elec:windingResistance", 0.12, units.OHM, "phase resistance at 25 °C"),
+        _real("elec:torqueConstant", 0.085, units.NEWTON_METRE_PER_AMPERE, "torque per amp"),
+        _real("elec:inductance", 0.00031, units.HENRY, "phase inductance"),
+        _real("elec:currentLimit", 18.0, units.AMPERE, "drive current limit"),
+        scene_pb2.Attribute(
+            name="elec:behaviorModel", asset="models/bldc_drive.fmu", authored=True,
+            doc="behaviour model (FMI 3.0)",
+        ),
+        scene_pb2.Attribute(name="elec:powerPort", authored=True, doc="supply bus"),
+        _real("thermal:heatCapacity", 450.0, units.JOULE_PER_KELVIN, "lumped heat capacity"),
+        _real("thermal:conductanceToBase", 1.8, units.WATT_PER_KELVIN, "to the chassis"),
+        _real("thermal:emissivity", 0.85, units.ONE, "surface emissivity"),
+    ]
+    attributes[5].targets.prims.append(7)  # /amr/power/dc_48v
+    return attributes
+
+
+def _sample_attributes() -> dict[int, list[scene_pb2.Attribute]]:
+    """What the inspector shows for the sample robot's prims (prim ids as in generate_sample)."""
+    return {
+        1: [_real("physics:mass", ROBOT_MASS, units.KILOGRAM, "robot with its load")],
+        6: [
+            _real("elec:capacity", 40.0, units.AMPERE_HOUR, "rated capacity"),
+            _real("elec:nominalVoltage", 48.0, units.VOLT, "nominal pack voltage"),
+            _real("elec:internalResistance", 0.045, units.OHM, "pack resistance at 25 °C"),
+            _real("thermal:heatCapacity", 9500.0, units.JOULE_PER_KELVIN, "lumped heat capacity"),
+        ],
+        7: [_real("elec:nominalVoltage", 48.0, units.VOLT, "bus voltage")],
+        8: _motor_attributes(),
+        9: _motor_attributes(),
+    }
+
+
 def generate_sample(duration_s: float = PATH_PERIOD, seed: int = 1) -> Recording:
     """Build the sample recording. Deterministic for a given (duration, seed)."""
     rng = np.random.default_rng(seed)
@@ -365,5 +405,6 @@ def generate_sample(duration_s: float = PATH_PERIOD, seed: int = 1) -> Recording
         ],
     )
     recording = Recording(meta=meta, snapshot=snapshot, signals=signals)
+    recording.attributes = _sample_attributes()
     recording.validate()
     return recording

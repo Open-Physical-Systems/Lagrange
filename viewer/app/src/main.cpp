@@ -20,7 +20,8 @@ void usage() {
         "  --open <file>          ask the server to load a robot (.urdf, .xacro) or recording "
         "(.mcap)\n"
         "  --scope <a,b,...>      open these signals in the scope at start-up\n"
-        "  --workspace <name>     workspace to show at start-up: scene (default) or domains\n"
+        "  --workspace <name>     workspace to show at start-up: scene, domains or signals\n"
+        "  --select <prim path>   select this prim once the scene arrived, e.g. /amr/base_link\n"
         "  --set-domain <d>=on|off  switch a domain in the profile being edited (repeatable)\n"
         "  --apply-profile        apply the edited profile once the server calls it valid\n"
         "  --headless             no window: render offscreen and exit\n"
@@ -72,6 +73,8 @@ int main(int argc, char** argv) {
                 return 2;
             }
             options.domainEdits.emplace_back(edit.substr(0, equals), state == "on");
+        } else if (arg == "--select") {
+            options.selectPath = value();
         } else if (arg == "--apply-profile") {
             options.applyProfile = true;
         } else if (arg == "--workspace") {

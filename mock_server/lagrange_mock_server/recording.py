@@ -56,6 +56,9 @@ class Recording:
     meta: record_pb2.RunMeta
     snapshot: scene_pb2.SceneSnapshot
     signals: list[Signal] = field(default_factory=list)  # list index == SignalInfo.id
+    # Attributes per prim id, served to the inspector on request. Not stored in MCAP files yet:
+    # a recording read from disk has none.
+    attributes: dict[int, list[scene_pb2.Attribute]] = field(default_factory=dict)
 
     @property
     def duration_ns(self) -> int:
