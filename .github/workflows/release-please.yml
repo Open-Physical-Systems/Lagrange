@@ -1,0 +1,25 @@
+# Keeps a release pull request open against dev. Its content is generated from the
+# Conventional Commit titles merged since the last release: a new CHANGELOG.md section, and the
+# version in version.txt and every package.xml. Merging that pull request tags the release.
+# dev is then merged into main by the usual release pull request (CLAUDE.md section 9).
+name: release-please
+on:
+  push:
+    branches: [dev]
+permissions: {}
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          target-branch: dev
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
