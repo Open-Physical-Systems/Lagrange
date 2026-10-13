@@ -11,8 +11,10 @@ namespace lagrange::viewer {
 /// History of one signal component for a waveform scope.
 ///
 /// One thread writes (the protocol client's worker) and one reads (the UI) without locks.
-/// Sample k of the signal is at time k * dt; the buffer keeps the most recent `capacity`
-/// samples by their absolute index, so the time axis stays exact however the data arrived.
+/// Sample k of the signal is at time k * dt; the buffer keeps the most recent
+/// `capacity - kBlock` samples by their absolute index, so the time axis stays exact however
+/// the data arrived. (One block is held back because the writer may be that far ahead of the
+/// position it has published.)
 ///
 /// A scope usually has far more samples than pixels. The writer therefore also keeps the
 /// minimum and maximum of every aligned block of kBlock samples, and decimate() uses whole

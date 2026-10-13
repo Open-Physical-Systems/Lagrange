@@ -131,10 +131,12 @@ TEST(ScopeBuffer, OldSamplesFallOutWhenTheRingWraps) {
     ScopeBuffer buffer(kDt, 256);
     push(buffer, 0, ramp(0, 1000));
     EXPECT_EQ(buffer.newestTimeNs(), 999 * kDt);
-    EXPECT_EQ(buffer.oldestTimeNs(), (1000 - 256) * kDt);
+    // One block of the ring is held back for the writer.
+    const std::int64_t oldest = 1000 - (256 - static_cast<std::int64_t>(ScopeBuffer::kBlock));
+    EXPECT_EQ(buffer.oldestTimeNs(), oldest * kDt);
     std::vector<ScopeBuffer::Column> columns(1);
     buffer.decimate(0, 1000 * kDt, columns);
-    EXPECT_FLOAT_EQ(columns[0].min, 744.0F);  // 0..743 are gone
+    EXPECT_FLOAT_EQ(columns[0].min, static_cast<float>(oldest));  // older ones are gone
     EXPECT_FLOAT_EQ(columns[0].max, 999.0F);
     buffer.decimate(0, 700 * kDt, columns);
     EXPECT_TRUE(std::isnan(columns[0].min));

@@ -103,7 +103,10 @@ ScopeBuffer::Range ScopeBuffer::range() const {
     if (end <= base) {
         return {end, end};
     }
-    return {std::max(base, end > capacity_ ? end - capacity_ : 0), end};
+    // The writer publishes `end_` once per block, so it may already have written up to
+    // kBlock - 1 samples past it, overwriting the oldest slots. Those are not readable.
+    const std::size_t readable = capacity_ - kBlock;
+    return {std::max(base, end > readable ? end - readable : 0), end};
 }
 
 std::int64_t ScopeBuffer::newestTimeNs() const {
@@ -162,11 +165,11 @@ void ScopeBuffer::decimate(std::int64_t tBeginNs, std::int64_t tEndNs,
         column = {low, high};
     }
     // The writer may have overwritten the oldest samples while we read. Blank the columns
-    // that could have been affected instead of showing mixed data. The writer publishes its
-    // position once per block, so it can be up to kBlock samples ahead of what range() says.
+    // that could have been affected instead of showing mixed data. (range() already leaves
+    // out the block the writer may be ahead by.)
     const Range after = range();
     if (after.begin > valid.begin && tEndNs > tBeginNs) {
-        const std::int64_t staleUntil = static_cast<std::int64_t>(after.begin + kBlock) * dt;
+        const std::int64_t staleUntil = static_cast<std::int64_t>(after.begin) * dt;
         const std::int64_t span = tEndNs - tBeginNs;
         for (std::int64_t c = 0; c < columns; ++c) {
             if (tBeginNs + span * c / columns < staleUntil) {
@@ -189,9 +192,8 @@ std::size_t ScopeBuffer::readRaw(std::int64_t tBeginNs, std::int64_t tEndNs,
         timesSeconds[written] = static_cast<double>(static_cast<std::int64_t>(i) * dt) * 1e-9;
         values[written] = samples_[i & mask_].load(std::memory_order_relaxed);
     }
-    // See decimate(): the writer can be up to kBlock samples ahead of its published position.
     const Range after = range();
-    if (written > 0 && after.begin + kBlock > firstRead && after.begin > valid.begin) {
+    if (written > 0 && after.begin > firstRead) {
         return 0;  // possibly overwritten while reading; the caller draws it next frame
     }
     return written;
