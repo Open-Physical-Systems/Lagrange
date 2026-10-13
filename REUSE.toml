@@ -1,0 +1,7 @@
+version = 1
+
+[[annotations]]
+path = ["**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Open Physical Systems and the Lagrange authors"
+SPDX-License-Identifier = "Apache-2.0"
