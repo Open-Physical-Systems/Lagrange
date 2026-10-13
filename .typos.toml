@@ -1,5 +1,5 @@
 [files]
-extend-exclude = ["LICENSE", "LICENSES/", "docs/imgs/", "*.usda", "*.mcap"]
+extend-exclude = ["LICENSE", "LICENSES/", "docs/imgs/", "*.usda", "*.mcap", "docs/design/ui/**/reference.html", "OFL.txt"]
 
 [default.extend-words]
 # Abbreviations and names that are not typos.

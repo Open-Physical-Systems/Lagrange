@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lagrange — World (huge worlds)</title>
+<style>
+@font-face{font-family:'IBM Plex Sans';src:url(fonts/IBMPlexSans-Regular.woff2) format('woff2');font-weight:400}
+@font-face{font-family:'IBM Plex Sans';src:url(fonts/IBMPlexSans-Medium.woff2) format('woff2');font-weight:500}
+@font-face{font-family:'IBM Plex Sans';src:url(fonts/IBMPlexSans-SemiBold.woff2) format('woff2');font-weight:600}
+@font-face{font-family:'IBM Plex Mono';src:url(fonts/IBMPlexMono-Regular.woff2) format('woff2');font-weight:400}
+@font-face{font-family:'IBM Plex Mono';src:url(fonts/IBMPlexMono-Medium.woff2) format('woff2');font-weight:500}
+/* Lagrange viewer — shared styles for every artboard.
+   These map 1:1 to ImGui style values; see design tokens in the handoff zips. */
+.app{
+--bg0:#070D17;--bg1:#0B1422;--bg2:#101B2C;--bg3:#16243A;--bg4:#1D2E48;
+--ln:#1B293D;--ln2:#2A3F5C;
+--t1:#E6EBF2;--t2:#A9B6C8;--t3:#8190A6;
+--acc:#E8772E;--acc2:rgba(232,119,46,.15);--acc3:rgba(232,119,46,.45);--onacc:#170A01;
+--ok:#3FB97F;--warn:#E5B33B;--err:#F04A4A;--info:#5AA2FF;
+--d-rb:#9AACC6;--d-el:#F5C842;--d-th:#FF7A6B;--d-ae:#5CC8E6;--d-we:#7FA8FF;--d-em:#B48CFF;--d-ra:#9BE15D;--d-se:#3FD1A7;
+--s1:#5AA2FF;--s2:#F5C842;--s3:#FF7A6B;--s4:#3FD1A7;--s5:#B48CFF;--s6:#5CC8E6;--s7:#E8772E;--s8:#9BE15D;
+width:1600px;height:1000px;background:var(--bg0);color:var(--t1);
+font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:13px;line-height:18px;
+display:flex;flex-direction:column;overflow:hidden;position:relative}
+.app *{box-sizing:border-box}
+:where(.app button){font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+.app svg{display:block;flex:none}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;font-variant-numeric:tabular-nums}
+.t1{color:var(--t1)}.t2{color:var(--t2)}.t3{color:var(--t3)}.acc{color:var(--acc)}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.err{color:var(--err)}.info{color:var(--info)}
+.b5{font-weight:500}.b6{font-weight:600}.sm{font-size:12px}.xs{font-size:11px;line-height:14px}
+.row{display:flex;align-items:center;gap:6px;min-width:0}
+.colf{display:flex;flex-direction:column;min-width:0;min-height:0}
+.sp{flex:1}
+.ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ---------- menu bar ---------- */
+.mb{height:28px;flex:none;display:flex;align-items:center;gap:2px;padding:0 8px;background:var(--bg1);border-bottom:1px solid var(--ln)}
+.mb .brand{display:flex;align-items:center;gap:7px;font-weight:600;padding-right:12px;margin-right:4px;border-right:1px solid var(--ln);height:18px;letter-spacing:-.2px}
+.mb .m{padding:3px 8px;border-radius:3px;color:var(--t2)}
+.mb .ctx{color:var(--t3);font-size:12px;display:flex;align-items:center;gap:8px}
+.mb .ctx b{color:var(--t2);font-weight:500}
+
+/* ---------- toolbar: workspaces + sim controls ---------- */
+.tb{height:40px;flex:none;display:flex;align-items:stretch;padding:0 4px 0 6px;background:var(--bg1);border-bottom:1px solid var(--ln)}
+.ws{display:flex;align-items:center;gap:6px;padding:0 10px;color:var(--t2);border-bottom:2px solid transparent;border-top:2px solid transparent;font-weight:500;font-size:12px;white-space:nowrap}
+.ws.on{color:var(--t1);border-bottom-color:var(--acc)}
+.ws.on svg{color:var(--acc)}
+.ctl{display:flex;align-items:center;gap:4px;padding-left:10px;margin-left:6px;border-left:1px solid var(--ln)}
+.btn{height:26px;min-width:26px;padding:0 10px;display:inline-flex;align-items:center;justify-content:center;gap:6px;border-radius:3px;background:var(--bg3);border:1px solid var(--ln2);color:var(--t1);font-weight:500;font-size:12px;white-space:nowrap}
+.app button.btn{background:var(--bg3);border:1px solid var(--ln2)}
+.app button.btn.pri,.btn.pri{background:var(--acc);border-color:var(--acc);color:var(--onacc)}
+.app button.btn.ghost,.btn.ghost{background:transparent;border-color:transparent;color:var(--t2)}
+.app button.btn.on,.btn.on{background:var(--acc2);border-color:var(--acc3);color:var(--acc)}
+.app button.btn.dis,.btn.dis{color:var(--t3);background:transparent}
+.btn.ic{padding:0;width:26px}
+.btn.sm{height:22px;min-width:22px;padding:0 8px;font-size:11px}
+.btn.sm.ic{width:22px;padding:0}
+.ro{height:26px;display:inline-flex;align-items:center;gap:6px;padding:0 8px;border-radius:3px;background:var(--bg0);border:1px solid var(--ln);font-size:12px;white-space:nowrap}
+.ro .k{color:var(--t3);font-size:11px}
+
+/* ---------- domain strip ---------- */
+.ds{height:32px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--bg0);border-bottom:1px solid var(--ln)}
+.ds .lbl{color:var(--t3);font-size:11px;margin-right:2px}
+.chip{height:22px;display:inline-flex;align-items:center;gap:6px;padding:0 9px 0 8px;border-radius:11px;border:1px solid var(--ln2);background:var(--bg2);color:var(--t1);font-size:12px;white-space:nowrap}
+.chip i{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.chip .s{color:var(--t3);font-family:'IBM Plex Mono',monospace;font-size:11px}
+.chip.sub{border-style:dashed;background:transparent;color:var(--t2)}
+.chip.sub i{background:transparent!important;border:1.5px solid var(--t3)}
+.chip.off{border-style:dashed;background:transparent;color:var(--t3)}
+.chip.off i{background:transparent!important;border:1.5px solid var(--t3)}
+.chip.bad{border-color:var(--err);color:var(--err)}
+
+/* ---------- body / panels ---------- */
+.body{flex:1;min-height:0;display:flex;gap:4px;padding:4px}
+.col{display:flex;flex-direction:column;gap:4px;min-width:0;min-height:0}
+.pn{background:var(--bg1);border:1px solid var(--ln);border-radius:3px;display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}
+.ph{height:28px;flex:none;display:flex;align-items:stretch;background:var(--bg2);border-bottom:1px solid var(--ln);padding-left:2px}
+.pt{display:flex;align-items:center;gap:6px;padding:0 10px;color:var(--t3);font-weight:500;font-size:12px;border-top:2px solid transparent;white-space:nowrap}
+.pt.on{color:var(--t1);background:var(--bg1);border-top-color:var(--acc)}
+.ph .tools{display:flex;align-items:center;gap:2px;padding-right:4px;color:var(--t3);margin-left:auto}
+.pb{flex:1;min-height:0;overflow:hidden;padding:8px}
+.pb.np{padding:0}
+.bar{height:32px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;border-bottom:1px solid var(--ln)}
+
+/* ---------- tree ---------- */
+.tr{display:flex;align-items:center;height:22px;gap:6px;padding-right:8px;border-radius:2px;white-space:nowrap;font-size:12px}
+.tr .cv{width:12px;color:var(--t3);flex:none;display:flex;justify-content:center}
+.tr .ic{color:var(--t3);flex:none}
+.tr .nm{color:var(--t1)}
+.tr .ty{color:var(--t3);font-size:11px}
+.tr .bd{margin-left:auto;display:flex;gap:3px;align-items:center}
+.tr .bd i{width:6px;height:6px;border-radius:50%;display:block}
+.tr.sel{background:var(--acc2);box-shadow:inset 2px 0 0 var(--acc)}
+.tr.sel .ic{color:var(--acc)}
+.tr.hov{background:var(--bg3)}
+.tr.dim .nm{color:var(--t3)}
+
+/* ---------- inspector ---------- */
+.sec{border-bottom:1px solid var(--ln)}
+.sh{height:26px;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--bg2);font-weight:600;font-size:12px}
+.sh .v{margin-left:auto;color:var(--t3);font-weight:400;font-family:'IBM Plex Mono',monospace;font-size:11px}
+.kv{display:grid;grid-template-columns:112px minmax(0,1fr);column-gap:8px;row-gap:4px;padding:8px;align-items:center}
+.kv .k{color:var(--t2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fld{height:22px;display:flex;align-items:center;gap:6px;padding:0 6px;background:var(--bg0);border:1px solid var(--ln);border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:12px;min-width:0;white-space:nowrap;overflow:hidden}
+.fld .u{margin-left:auto;color:var(--t3);font-size:11px}
+.fld.ed{border-color:var(--acc3)}
+.fld.ro2{background:transparent;border-color:transparent;padding-left:0}
+.fld.dd{padding-right:4px}
+.fld.dd::after{content:"";width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid var(--t3);margin-left:auto}
+.f3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}
+.ax{font-weight:600;width:8px}
+.ax.x{color:#F0605D}.ax.y{color:#4FC97A}.ax.z{color:#5AA2FF}
+.lnk{color:var(--info)}
+
+/* ---------- tables ---------- */
+.tbl{width:100%;border-collapse:collapse;font-size:12px}
+.tbl th{height:24px;text-align:left;font-weight:500;color:var(--t3);background:var(--bg2);padding:0 8px;border-bottom:1px solid var(--ln);white-space:nowrap;font-size:11px}
+.tbl td{height:23px;padding:0 8px;border-bottom:1px solid var(--ln);white-space:nowrap}
+.tbl tr.sel td{background:var(--acc2)}
+.tbl tr.sel td:first-child{box-shadow:inset 2px 0 0 var(--acc)}
+.tbl .n{text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-variant-numeric:tabular-nums}
+.tbl .m{font-family:'IBM Plex Mono',monospace;font-size:12px}
+
+/* ---------- small widgets ---------- */
+.pill{height:18px;display:inline-flex;align-items:center;gap:4px;padding:0 7px;border-radius:9px;font-size:11px;font-weight:500;background:var(--bg3);color:var(--t2);white-space:nowrap}
+.pill.ok{background:rgba(63,185,127,.14);color:var(--ok)}
+.pill.warn{background:rgba(229,179,59,.14);color:var(--warn)}
+.pill.err{background:rgba(240,74,74,.15);color:var(--err)}
+.pill.acc{background:var(--acc2);color:var(--acc)}
+.pill.info{background:rgba(90,162,255,.14);color:var(--info)}
+.sw{width:28px;height:16px;border-radius:8px;background:var(--bg4);position:relative;flex:none;border:1px solid var(--ln2);display:inline-block}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:var(--t3)}
+.sw.on{background:var(--acc);border-color:var(--acc)}
+.sw.on::after{left:14px;background:var(--onacc)}
+.cb{width:14px;height:14px;border-radius:3px;border:1px solid var(--ln2);background:var(--bg0);flex:none;display:inline-flex;align-items:center;justify-content:center}
+.cb.on{background:var(--acc);border-color:var(--acc)}
+.cb.on::after{content:"";width:7px;height:3px;border-left:2px solid var(--onacc);border-bottom:2px solid var(--onacc);transform:translateY(-1px) rotate(-45deg)}
+.seg{display:inline-flex;border:1px solid var(--ln2);border-radius:3px;overflow:hidden;flex:none}
+.seg span{height:22px;padding:0 8px;display:inline-flex;align-items:center;font-size:11px;color:var(--t2);border-right:1px solid var(--ln2);white-space:nowrap}
+.seg span:last-child{border-right:0}
+.seg span.on{background:var(--acc2);color:var(--acc)}
+.search{height:24px;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--bg0);border:1px solid var(--ln);border-radius:3px;color:var(--t3);font-size:12px;min-width:0}
+.kbd{font-family:'IBM Plex Mono',monospace;font-size:10px;padding:0 4px;border:1px solid var(--ln2);border-radius:2px;color:var(--t3);line-height:14px;white-space:nowrap;flex:none}
+.sw8{width:10px;height:10px;border-radius:2px;flex:none;display:inline-block}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.meter{height:6px;border-radius:3px;background:var(--bg4);overflow:hidden;flex:1;min-width:0}
+.meter b{display:block;height:100%;border-radius:3px}
+.hr{height:1px;background:var(--ln);flex:none}
+.cap{font-size:11px;color:var(--t3);font-weight:500;letter-spacing:.3px}
+
+/* ---------- viewport + overlays ---------- */
+.vp{position:relative;flex:1;min-height:0;background:#091120;overflow:hidden}
+.vp > svg.scene{position:absolute;inset:0;width:100%;height:100%}
+.ov{position:absolute;background:rgba(9,17,32,.88);border:1px solid var(--ln2);border-radius:4px;padding:5px 8px;font-size:12px}
+.ovbar{position:absolute;display:flex;gap:2px;padding:2px;background:rgba(9,17,32,.88);border:1px solid var(--ln2);border-radius:4px}
+.ovbar .b{width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:3px;color:var(--t2)}
+.ovbar .b.on{background:var(--acc2);color:var(--acc)}
+.tip{position:absolute;background:var(--bg2);border:1px solid var(--ln2);border-radius:4px;padding:6px 8px;font-size:12px;box-shadow:0 6px 18px rgba(0,0,0,.45)}
+
+/* ---------- plots ---------- */
+.plot{position:relative;background:var(--bg0);border:1px solid var(--ln);border-radius:3px;overflow:hidden}
+.plot > svg{position:absolute;inset:0;width:100%;height:100%}
+.plot .ttl{position:absolute;left:8px;top:5px;display:flex;align-items:center;gap:10px;font-size:11px;color:var(--t2)}
+.plot .ttl b{color:var(--t1);font-weight:600}
+.lg{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.lg i{width:12px;height:2px;border-radius:1px;display:inline-block}
+
+/* ---------- status bar ---------- */
+.sb{height:24px;flex:none;display:flex;align-items:center;gap:16px;padding:0 10px;background:var(--bg1);border-top:1px solid var(--ln);font-size:11px;color:var(--t2);white-space:nowrap}
+.sb .it{display:flex;align-items:center;gap:6px}
+.sb .k{color:var(--t3)}
+
+/* ---------- node graph ---------- */
+.node{position:absolute;background:var(--bg2);border:1px solid var(--ln2);border-radius:4px;font-size:12px;overflow:hidden}
+.node .nh{height:24px;display:flex;align-items:center;gap:6px;padding:0 8px;font-weight:600;border-bottom:1px solid var(--ln)}
+.node .nb{padding:6px 8px;display:flex;flex-direction:column;gap:3px}
+.node.sel{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.node.sub{border-style:dashed;background:var(--bg1)}
+.port{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--t2);white-space:nowrap}
+.port i{width:7px;height:7px;border-radius:50%;border:1.5px solid var(--t3);display:inline-block;flex:none}
+
+/* ---------- code ---------- */
+.code{font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:19px;white-space:pre;color:var(--t2)}
+.code .ln{color:#4A5B74;display:inline-block;width:26px;text-align:right;margin-right:12px}
+.code .k{color:#8FB8FF}.code .s{color:#9BD39B}.code .n{color:#F5C842}.code .b{color:#E8772E}.code .c{color:#6E7F98}
+.code .add{background:rgba(63,185,127,.10)}
+.code .rm{background:rgba(240,74,74,.10)}
+
+
+body{margin:0;background:#070D17}
+.ag{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:2px 8px;align-items:center;padding:6px 8px;border-bottom:1px solid #1B293D;font-size:12px}
+.ag .m{grid-column:2 / 4;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8190A6}
+.ag.sel{background:rgba(232,119,46,.10);box-shadow:inset 2px 0 0 #E8772E}
+
+</style>
+</head>
+<body>
+<div class="app">
+
+<div class="mb">
+<div class="brand"><svg width="16" height="16" viewBox="0 0 120 120" aria-hidden="true"><path d="M34 18 V86 H102" fill="none" stroke="#E6EBF2" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="68" cy="27.1" r="11" fill="#E8772E"></circle></svg>Lagrange</div>
+<button class="m">File</button><button class="m">Edit</button><button class="m">View</button><button class="m">Simulation</button><button class="m">Tools</button><button class="m">Window</button><button class="m">Help</button>
+<div class="sp"></div>
+<div class="ctx"><span>stage <b>industrial_park.usda</b></span><span>fleet <b>6 robots · 1 AV · 1 drone</b></span><span>profile <b>fleet_day.yaml</b></span><span class="kbd">Ctrl K</span></div>
+</div>
+
+<div class="tb">
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8l5.6 3.1v6.2L8 14.2l-5.6-3.1V4.9z M2.4 4.9L8 8l5.6-3.1 M8 8v6.2"></path></svg>Scene</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11 M2.5 8h11 M2.5 12h11"></path><circle cx="6" cy="4" r="1.6" fill="#0B1422"></circle><circle cx="10.5" cy="8" r="1.6" fill="#0B1422"></circle><circle cx="5" cy="12" r="1.6" fill="#0B1422"></circle></svg>Domains</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M9 1.5L3.5 9H8l-1 5.5L12.5 7H8z"></path></svg>Electrical</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 8h2.2l1.6-4.5 3 9 2-6.5 1.5 2h2.7"></path></svg>Signals</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M8 8l4.6-4.6 M14 8A6 6 0 1 1 8 2 M11 8a3 3 0 1 1-3-3"></path></svg>Sensors</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.6 9.5a3 3 0 0 1 .3-6 3.6 3.6 0 0 1 6.8 1.1 2.5 2.5 0 0 1-.2 4.9z M5.5 11.5l-.8 2 M8.5 11.5l-.8 2 M11.5 11.5l-.8 2"></path></svg>Environment</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9 M2.5 2.5v3h3 M7 5.8v4.4l3.2-2.2z"></path></svg>Replay</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="4" cy="4" r="1.7"></circle><circle cx="12" cy="4" r="1.7"></circle><circle cx="8" cy="12" r="1.7"></circle><path d="M5.7 4h4.6 M4.9 5.5L7.1 10.5 M11.1 5.5L8.9 10.5"></path></svg>ROS 2</button>
+<button class="ws on"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><path d="M2 8h12 M8 2c2.2 2.2 2.2 9.8 0 12 M8 2c-2.2 2.2-2.2 9.8 0 12"></path></svg>World</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M2.5 11.5a5.5 5.5 0 1 1 11 0 M8 11.5l3-4"></path></svg>Performance</button>
+<div class="sp"></div>
+<div class="ctl">
+<button class="btn ic" aria-label="Reset run"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8a4.5 4.5 0 1 0 1.3-3.2 M3.5 2.8v2.6h2.6"></path></svg></button>
+<button class="btn pri" aria-label="Pause"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5.5 3.5v9 M10.5 3.5v9"></path></svg>Pause</button>
+<button class="btn ic" aria-label="Step one tick"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.5 3.5v9l6.5-4.5z"></path><rect x="11" y="3.5" width="1.8" height="9" rx=".5"></rect></svg></button>
+<div class="ro"><span class="k">sim t</span><span class="mono">00:12:41.2</span></div>
+<div class="ro"><span class="k">RTF</span><span class="mono warn">0.94×</span><span class="k">/ 1.00</span></div>
+<div class="ro"><span class="k">lockstep</span><span class="ok mono">on</span></div>
+<button class="btn" aria-label="Start recording"><span class="dot" style="background: #F04A4A"></span>Record</button>
+</div>
+</div>
+
+<div class="ds">
+<span class="lbl">Domains</span>
+<span class="chip"><i style="background: #9AACC6"></i>Rigid body<span class="s">active regions only</span></span>
+<span class="chip"><i style="background: #F5C842"></i>Electrical<span class="s">averaged</span></span>
+<span class="chip"><i style="background: #FF7A6B"></i>Thermal<span class="s">sun · 1 s</span></span>
+<span class="chip"><i style="background: #5CC8E6"></i>Aero<span class="s">wind 4 m/s</span></span>
+<span class="chip sub"><i></i>Weather<span class="s">→ clear</span></span>
+<span class="chip"><i style="background: #B48CFF"></i>EMI<span class="s">comms only</span></span>
+<span class="chip off"><i></i>Radiation<span class="s">→ zero</span></span>
+<span class="chip"><i style="background: #3FD1A7"></i>Sensors<span class="s">31 active</span></span>
+<div class="sp"></div>
+<span class="pill">traffic → SUMO co-sim · 214 distant agents</span>
+</div>
+
+<div class="body">
+
+<div class="col" style="width: 300px">
+<div class="pn" style="flex: 1">
+<div class="ph"><span class="pt on">Agents</span><span class="pt">Regions</span></div>
+<div class="bar"><div class="search" style="flex: 1"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5l3.5 3.5"></path></svg>Filter agents</div></div>
+<div class="pb np">
+<div class="ag sel"><i class="dot" style="background: #E8772E"></i><span class="b5">amr_01</span><span class="pill acc">focus</span><div class="m">region R3 · 0.9 m/s · full fidelity</div></div>
+<div class="ag"><i class="dot" style="background: #E6EBF2"></i><span class="b5">amr_02</span><span class="pill">active</span><div class="m">region R3 · 1.1 m/s · full fidelity</div></div>
+<div class="ag"><i class="dot" style="background: #E6EBF2"></i><span class="b5">amr_03</span><span class="pill">active</span><div class="m">region R5 · docked · charging 61 %</div></div>
+<div class="ag"><i class="dot" style="background: #E6EBF2"></i><span class="b5">amr_04</span><span class="pill">active</span><div class="m">region R5 · 0.7 m/s</div></div>
+<div class="ag"><i class="dot" style="background: #E6EBF2"></i><span class="b5">amr_05</span><span class="pill">active</span><div class="m">region R7 · 1.2 m/s</div></div>
+<div class="ag"><i class="dot" style="background: #E6EBF2"></i><span class="b5">amr_06</span><span class="pill warn">Wi-Fi weak</span><div class="m">region R7 · RSSI −81 dBm</div></div>
+<div class="ag"><i class="dot" style="background: #5AA2FF"></i><span class="b5">av_01</span><span class="pill">active</span><div class="m">region R2 · 11.4 m/s · Autoware</div></div>
+<div class="ag"><i class="dot" style="background: #5CC8E6"></i><span class="b5">drone_01</span><span class="pill">active</span><div class="m">region R6 · alt 38 m · PX4 SITL</div></div>
+<div class="sh" style="margin-top: 6px"><span class="t3">▾</span>Distant agents<span class="v">simplified</span></div>
+<div style="padding: 8px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 10px; font-size: 12px">
+<span class="t2">vehicles (SUMO)</span><span class="mono xs">168 · kinematic</span>
+<span class="t2">pedestrians</span><span class="mono xs">46 · social force</span>
+<span class="t2">promoted to full physics</span><span class="mono xs">within 120 m</span>
+</div>
+</div>
+</div>
+</div>
+
+<div class="col" style="flex: 1">
+<div class="pn" style="flex: 1">
+<div class="ph"><span class="pt on">Map</span><span class="pt">3D</span>
+<div class="tools"><div class="seg"><span class="on">tiles · LOD</span><span>terrain</span><span>roads</span><span>coverage</span></div></div></div>
+<div class="vp" style="background: #070D17">
+<svg viewBox="0 0 832 520" preserveAspectRatio="xMidYMid meet" style="position: absolute; inset: 0; width: 100%; height: 100%" aria-hidden="true" font-family="IBM Plex Mono, monospace">
+<rect width="832" height="520" fill="#0A1322"></rect>
+<g fill="none" stroke="#16243A" stroke-width="1"><path d="M0 80 C 140 40, 260 120, 420 70 S 700 30, 832 90"></path><path d="M0 140 C 160 100, 280 180, 440 130 S 700 90, 832 150"></path><path d="M0 440 C 200 400, 300 470, 520 430 S 760 400, 832 450"></path><path d="M0 490 C 180 470, 320 520, 520 480 S 760 460, 832 495"></path></g>
+<rect x="1" y="105" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="1" y="157" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="1" y="209" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="1" y="261" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="1" y="313" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="1" y="365" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="1" y="417" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="1" y="469" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="53" y="53" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="53" y="105" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="53" y="157" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="53" y="209" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="53" y="261" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="53" y="313" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="53" y="365" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="53" y="417" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="53" y="469" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="105" y="53" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="105" y="105" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="105" y="157" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="105" y="209" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="105" y="261" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="105" y="313" width="50" height="50" fill="#E8772E" opacity="0.55"></rect><rect x="105" y="365" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="105" y="417" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="105" y="469" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="157" y="53" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="157" y="105" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="157" y="157" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="157" y="209" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="157" y="261" width="50" height="50" fill="#E8772E" opacity="0.55"></rect><rect x="157" y="313" width="50" height="50" fill="#E8772E" opacity="0.55"></rect><rect x="157" y="365" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="157" y="417" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="157" y="469" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="209" y="53" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="209" y="105" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="209" y="157" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="209" y="209" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="209" y="261" width="50" height="50" fill="#E8772E" opacity="0.55"></rect><rect x="209" y="313" width="50" height="50" fill="#E8772E" opacity="0.55"></rect><rect x="209" y="365" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="209" y="417" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="209" y="469" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="261" y="1" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="261" y="53" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="261" y="105" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="261" y="157" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="261" y="209" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="261" y="261" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="261" y="313" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="261" y="365" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="261" y="417" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="261" y="469" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="313" y="1" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="313" y="53" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="313" y="105" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="313" y="157" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="313" y="209" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="313" y="261" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="313" y="313" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="313" y="365" width="50" height="50" fill="#E8772E" opacity="0.55"></rect><rect x="313" y="417" width="50" height="50" fill="#E8772E" opacity="0.55"></rect><rect x="313" y="469" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="365" y="1" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="365" y="53" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="365" y="105" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="365" y="157" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="365" y="209" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="365" y="261" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="365" y="313" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="365" y="365" width="50" height="50" fill="#E8772E" opacity="0.55"></rect><rect x="365" y="417" width="50" height="50" fill="#E8772E" opacity="0.55"></rect><rect x="365" y="469" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="417" y="1" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="417" y="53" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="417" y="105" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="417" y="157" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="417" y="209" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="417" y="261" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="417" y="313" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="417" y="365" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="417" y="417" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="417" y="469" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="469" y="1" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="469" y="53" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="469" y="105" width="50" height="50" fill="#E8772E" opacity="0.55"></rect><rect x="469" y="157" width="50" height="50" fill="#E8772E" opacity="0.55"></rect><rect x="469" y="209" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="469" y="261" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="469" y="313" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="469" y="365" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="469" y="417" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="469" y="469" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="521" y="1" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="521" y="53" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="521" y="105" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="521" y="157" width="50" height="50" fill="#E8772E" opacity="0.55"></rect><rect x="521" y="209" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="521" y="261" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="521" y="313" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="521" y="365" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="521" y="417" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="521" y="469" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="573" y="1" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="573" y="53" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="573" y="105" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="573" y="157" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="573" y="209" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="573" y="261" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="573" y="313" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="573" y="365" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="573" y="417" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="573" y="469" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="625" y="1" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="625" y="53" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="625" y="105" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="625" y="157" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="625" y="209" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="625" y="261" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="625" y="313" width="50" height="50" fill="#E8772E" opacity="0.55"></rect><rect x="625" y="365" width="50" height="50" fill="#E8772E" opacity="0.55"></rect><rect x="625" y="417" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="625" y="469" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="677" y="1" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="677" y="53" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="677" y="105" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="677" y="157" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="677" y="209" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="677" y="261" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="677" y="313" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="677" y="365" width="50" height="50" fill="#E8772E" opacity="0.55"></rect><rect x="677" y="417" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="677" y="469" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="729" y="105" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="729" y="157" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="729" y="209" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="729" y="261" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="729" y="313" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="729" y="365" width="50" height="50" fill="#A0583A" opacity="0.45"></rect><rect x="729" y="417" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="729" y="469" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="781" y="157" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="781" y="209" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect><rect x="781" y="261" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="781" y="313" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="781" y="365" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="781" y="417" width="50" height="50" fill="#3A4E6E" opacity="0.55"></rect><rect x="781" y="469" width="50" height="50" fill="#1D2E48" opacity="0.6"></rect>
+<g fill="none" stroke-linecap="round">
+<path d="M0 250 C 120 240, 220 262, 330 250 S 560 236, 832 246" stroke="#A9B6C8" stroke-width="5" opacity=".55"></path>
+<path d="M455 0 C 450 120, 470 260, 452 380 S 440 470, 448 520" stroke="#A9B6C8" stroke-width="4" opacity=".5"></path>
+<path d="M120 520 C 140 420, 230 380, 330 360 S 560 330, 680 300 S 800 220, 832 200" stroke="#A9B6C8" stroke-width="3" opacity=".4"></path>
+<path d="M455 160 C 470 168, 490 172, 499 171.6" stroke="#5AA2FF" stroke-width="2" stroke-dasharray="5 4"></path>
+</g>
+<g fill="none" stroke-width="1.5"><circle cx="176.8" cy="322.4" r="34" stroke="#E8772E"></circle><circle cx="213.2" cy="291.2" r="34" stroke="#E6EBF2" stroke-opacity=".6"></circle><circle cx="499.2" cy="171.6" r="44" stroke="#5AA2FF"></circle><circle cx="665.6" cy="384.8" r="34" stroke="#E6EBF2" stroke-opacity=".6"></circle><circle cx="374.4" cy="421.2" r="34" stroke="#5CC8E6"></circle></g>
+<g><circle cx="176.8" cy="322.4" r="5" fill="#E8772E"></circle><circle cx="213.2" cy="291.2" r="4" fill="#E6EBF2"></circle><circle cx="499.2" cy="171.6" r="5" fill="#5AA2FF"></circle><circle cx="665.6" cy="384.8" r="4" fill="#E6EBF2"></circle><circle cx="656" cy="398" r="4" fill="#E6EBF2"></circle><circle cx="374.4" cy="421.2" r="4" fill="#5CC8E6"></circle><circle cx="232" cy="470" r="4" fill="#E6EBF2"></circle><circle cx="244" cy="478" r="4" fill="#E6EBF2"></circle></g>
+<g fill="#8190A6"><circle cx="40" cy="248" r="1.8"></circle><circle cx="96" cy="246" r="1.8"></circle><circle cx="300" cy="252" r="1.8"></circle><circle cx="590" cy="240" r="1.8"></circle><circle cx="650" cy="238" r="1.8"></circle><circle cx="760" cy="244" r="1.8"></circle><circle cx="452" cy="60" r="1.8"></circle><circle cx="458" cy="320" r="1.8"></circle><circle cx="446" cy="470" r="1.8"></circle><circle cx="560" cy="334" r="1.8"></circle><circle cx="720" cy="280" r="1.8"></circle></g>
+<g stroke="#E8772E" stroke-width="1.5"><line x1="176.8" y1="306" x2="176.8" y2="338"></line><line x1="161" y1="322.4" x2="193" y2="322.4"></line></g>
+<g font-size="10"><text x="186" y="314" fill="#E8772E">amr_01 · origin</text><text x="222" y="284" fill="#A9B6C8">amr_02</text><text x="510" y="166" fill="#5AA2FF">av_01</text><text x="676" y="380" fill="#A9B6C8">amr_05 · 06</text><text x="384" y="416" fill="#5CC8E6">drone_01</text><text x="252" y="474" fill="#A9B6C8">amr_03 · 04 dock</text></g>
+<g stroke="#2A3F5C" stroke-width="1" stroke-dasharray="6 4" fill="none"><line x1="416" y1="0" x2="416" y2="520"></line><line x1="0" y1="260" x2="832" y2="260"></line></g>
+<g font-size="10" fill="#8190A6"><text x="6" y="14">R1</text><text x="422" y="14">R2</text><text x="6" y="274">R3</text><text x="422" y="274">R4</text></g>
+<g><line x1="20" y1="502" x2="121.6" y2="502" stroke="#E6EBF2" stroke-width="2"></line><line x1="20" y1="497" x2="20" y2="507" stroke="#E6EBF2"></line><line x1="121.6" y1="497" x2="121.6" y2="507" stroke="#E6EBF2"></line><text x="128" y="506" font-size="10" fill="#E6EBF2">500 m</text></g>
+</svg>
+<div class="ov" style="right: 10px; top: 10px; display: flex; flex-direction: column; gap: 5px; font-size: 11px">
+<span class="b6 t1">tile state · 256 m tiles</span>
+<span class="row"><i class="sw8" style="background: #E8772E"></i>LOD0 · physics + sensors<span class="sp"></span><span class="mono">15</span></span>
+<span class="row"><i class="sw8" style="background: #A0583A"></i>LOD1 · render + collision<span class="sp"></span><span class="mono">37</span></span>
+<span class="row"><i class="sw8" style="background: #3A4E6E"></i>LOD2 · render only<span class="sp"></span><span class="mono">68</span></span>
+<span class="row"><i class="sw8" style="background: #1D2E48"></i>LOD3 · proxy<span class="sp"></span><span class="mono">29</span></span>
+<span class="row"><i class="sw8" style="border: 1px dashed #2A3F5C"></i>not loaded<span class="sp"></span><span class="mono">11</span></span>
+<span class="row"><i style="width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid #E8772E; display: inline-block"></i>active region · 150 m</span>
+</div>
+<div class="ov mono" style="left: 10px; bottom: 10px; font-size: 11px">cursor ENU  x +1 284.0  y −612.5 m · tile (7, 6)</div>
+</div>
+</div>
+</div>
+
+<div class="col" style="width: 320px">
+<div class="pn" style="flex: 1">
+<div class="ph"><span class="pt on">Streaming</span><span class="pt">Geodesy</span></div>
+<div class="pb np" style="display: flex; flex-direction: column">
+<div style="padding: 10px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid #1B293D">
+<div class="row sm"><span class="t2" style="width: 110px">GPU memory</span><div class="meter"><b style="width: 76%; background: #E5B33B"></b></div><span class="mono xs" style="width: 80px; text-align: right">6.1 / 8 GB</span></div>
+<div class="row sm"><span class="t2" style="width: 110px">host cache</span><div class="meter"><b style="width: 41%; background: #3FB97F"></b></div><span class="mono xs" style="width: 80px; text-align: right">13 / 32 GB</span></div>
+<div class="row sm"><span class="t2" style="width: 110px">disk read</span><div class="meter"><b style="width: 30%; background: #3FB97F"></b></div><span class="mono xs" style="width: 80px; text-align: right">120 MB/s</span></div>
+<div class="row sm"><span class="t2" style="width: 110px">load queue</span><div class="meter"><b style="width: 20%; background: #3FB97F"></b></div><span class="mono xs" style="width: 80px; text-align: right">4 tiles</span></div>
+</div>
+<div class="sh"><span class="t3">▾</span>Floating origin</div>
+<div class="kv">
+<span class="k">anchored to</span><div class="fld dd">amr_01 (focus)</div>
+<span class="k">origin ENU</span><div class="fld">+384.0, −1 024.0<span class="u">m</span></div>
+<span class="k">re-center at</span><div class="fld">2 000<span class="u">m drift</span></div>
+<span class="k">last re-center</span><div class="fld">00:09:12.6<span class="u">sim</span></div>
+<span class="k">world positions</span><div class="fld">float64<span class="u">render: f32 local</span></div>
+</div>
+<div class="sh"><span class="t3">▾</span>Georeference</div>
+<div class="kv">
+<span class="k">datum</span><div class="fld">WGS84 → local ENU</div>
+<span class="k">origin lat, lon</span><div class="fld t3">set in stage metadata</div>
+<span class="k">terrain</span><div class="fld"><span class="lnk">dem_1m.tif</span><span class="u">GeoTIFF</span></div>
+<span class="k">buildings · roads</span><div class="fld"><span class="lnk">park.osm.pbf</span><span class="u">OSM</span></div>
+<span class="k">photogrammetry</span><div class="fld"><span class="lnk">tileset.json</span><span class="u">3D Tiles</span></div>
+<span class="k">lanes</span><div class="fld"><span class="lnk">park.xodr</span><span class="u">OpenDRIVE</span></div>
+</div>
+<div class="sh"><span class="t3">▾</span>Regions<span class="v">1 server today</span></div>
+<div style="padding: 8px; font-size: 12px; display: flex; flex-direction: column; gap: 4px">
+<span class="t2">4 regions · boundaries ready for multi-server handoff</span>
+<span class="xs t3">distributed simulation is post-1.0</span>
+</div>
+</div>
+</div>
+</div>
+
+</div>
+
+<div class="sb">
+<span class="it"><span class="dot" style="background: #3FB97F"></span>Connected</span>
+<span class="it"><span class="k">server</span>gpu-box.lan · zenoh · 2.1 ms</span>
+<span class="it"><span class="k">tiles</span><span class="mono">149 / 160 loaded</span></span>
+<span class="it"><span class="k">dropped</span><span class="mono">0</span></span>
+<div class="sp"></div>
+<span class="it"><span class="k">GPU</span>RTX 4060 Laptop · Tier 2</span>
+<span class="it"><span class="k">viewer</span><span class="mono">14.9 ms · 67 fps</span></span>
+<span class="it"><span class="k">ROS 2</span>lyrical · domain 3 · zenoh</span>
+</div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,104 @@
+{
+  "$schema_note": "Lagrange viewer design tokens v0.1. Source of truth for lagrange_theme.hpp. Colors are sRGB hex; sizes are logical pixels at 1.0 UI scale.",
+  "color": {
+    "surface": {
+      "bg0": { "value": "#070D17", "use": "app background, viewport letterbox, input fields" },
+      "bg1": { "value": "#0B1422", "use": "panel body (WindowBg, ChildBg)" },
+      "bg2": { "value": "#101B2C", "use": "panel tab bar, section headers, table headers" },
+      "bg3": { "value": "#16243A", "use": "buttons, hovered rows (FrameBgHovered)" },
+      "bg4": { "value": "#1D2E48", "use": "switch track, meter track, pressed state" }
+    },
+    "line": {
+      "line": { "value": "#1B293D", "use": "panel borders, table rules, separators" },
+      "lineStrong": { "value": "#2A3F5C", "use": "control borders, plot axes, node borders" }
+    },
+    "text": {
+      "t1": { "value": "#E6EBF2", "use": "primary text", "contrastOnBg1": 15.4 },
+      "t2": { "value": "#A9B6C8", "use": "labels", "contrastOnBg1": 9.0 },
+      "t3": { "value": "#8190A6", "use": "captions, units, disabled", "contrastOnBg1": 5.7 }
+    },
+    "accent": {
+      "accent": { "value": "#E8772E", "use": "selection, active tab overline, primary button, playhead, focus" },
+      "accentWeak": { "value": "rgba(232,119,46,0.15)", "use": "selected row fill, toggled button fill" },
+      "accentBorder": { "value": "rgba(232,119,46,0.45)", "use": "edited field border, toggled border" },
+      "onAccent": { "value": "#170A01", "use": "text/icons on accent fill" }
+    },
+    "status": {
+      "ok": { "value": "#3FB97F" },
+      "warn": { "value": "#E5B33B" },
+      "error": { "value": "#F04A4A" },
+      "info": { "value": "#5AA2FF", "use": "links to prims/files, replay mode" }
+    },
+    "domain": {
+      "rigid_body": { "value": "#9AACC6" },
+      "electrical": { "value": "#F5C842" },
+      "thermal": { "value": "#FF7A6B" },
+      "aerodynamics": { "value": "#5CC8E6" },
+      "weather": { "value": "#7FA8FF" },
+      "emi": { "value": "#B48CFF" },
+      "radiation": { "value": "#9BE15D" },
+      "sensors": { "value": "#3FD1A7" },
+      "_rule": "Domain colors identify a domain (chips, tree badges, signal groups, timeline lanes). They are never used for plotted series."
+    },
+    "series": ["#5AA2FF", "#F5C842", "#FF7A6B", "#3FD1A7", "#B48CFF", "#5CC8E6", "#E8772E", "#9BE15D"],
+    "seriesRules": {
+      "sim": "solid 1.3 px",
+      "real_or_recorded": "dashed 4-2, color t2",
+      "threshold": "dotted 2-4, warn color",
+      "cursorA": "t1 vertical line",
+      "cursorB": "accent vertical line"
+    },
+    "colormap": {
+      "thermal": { "name": "inferno", "stops": ["#000004", "#420A68", "#932667", "#DD513A", "#FCA50A", "#FCFFA4"] },
+      "field": { "name": "viridis", "stops": ["#440154", "#3B528B", "#21918C", "#5EC962", "#FDE725"] },
+      "error": { "name": "diverging", "stops": ["#2F6FED", "#16243A", "#E8772E"] },
+      "tileLod": ["#E8772E", "#A0583A", "#3A4E6E", "#1D2E48"]
+    },
+    "axis": { "x": "#F0605D", "y": "#4FC97A", "z": "#5AA2FF" }
+  },
+  "type": {
+    "sans": { "family": "IBM Plex Sans", "weights": [400, 500, 600], "license": "SIL OFL 1.1" },
+    "mono": { "family": "IBM Plex Mono", "weights": [400, 500], "license": "SIL OFL 1.1", "rule": "all numbers, units, paths, topic names" },
+    "cjk": { "family": "IBM Plex Sans JP", "rule": "merged into the Sans atlas for Japanese glyph range. TODO(verify): package source and license file" },
+    "scale": {
+      "title": { "size": 14, "weight": 600, "line": 18 },
+      "body": { "size": 13, "weight": 400, "line": 18 },
+      "label": { "size": 12, "weight": 500, "line": 16 },
+      "caption": { "size": 11, "weight": 400, "line": 14 },
+      "mono": { "size": 12, "weight": 400, "line": 18 },
+      "kpi": { "size": 20, "weight": 400, "line": 26, "family": "mono" }
+    }
+  },
+  "size": {
+    "grid": 4,
+    "menuBarHeight": 28,
+    "workspaceBarHeight": 40,
+    "domainStripHeight": 32,
+    "statusBarHeight": 24,
+    "panelTabBarHeight": 28,
+    "controlHeight": 22,
+    "toolbarControlHeight": 26,
+    "treeRowHeight": 22,
+    "tableRowHeight": 23,
+    "dockGap": 4,
+    "iconSize": 14,
+    "iconStroke": 1.5
+  },
+  "imgui": {
+    "WindowPadding": [8, 8],
+    "FramePadding": [6, 3],
+    "ItemSpacing": [8, 4],
+    "ItemInnerSpacing": [4, 4],
+    "IndentSpacing": 14,
+    "ScrollbarSize": 10,
+    "GrabMinSize": 8,
+    "WindowRounding": 3,
+    "ChildRounding": 3,
+    "FrameRounding": 3,
+    "PopupRounding": 4,
+    "TabRounding": 3,
+    "WindowBorderSize": 1,
+    "FrameBorderSize": 1,
+    "TabBarOverlineSize": 2
+  }
+}

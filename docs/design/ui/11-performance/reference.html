@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lagrange — Performance</title>
+<style>
+@font-face{font-family:'IBM Plex Sans';src:url(fonts/IBMPlexSans-Regular.woff2) format('woff2');font-weight:400}
+@font-face{font-family:'IBM Plex Sans';src:url(fonts/IBMPlexSans-Medium.woff2) format('woff2');font-weight:500}
+@font-face{font-family:'IBM Plex Sans';src:url(fonts/IBMPlexSans-SemiBold.woff2) format('woff2');font-weight:600}
+@font-face{font-family:'IBM Plex Mono';src:url(fonts/IBMPlexMono-Regular.woff2) format('woff2');font-weight:400}
+@font-face{font-family:'IBM Plex Mono';src:url(fonts/IBMPlexMono-Medium.woff2) format('woff2');font-weight:500}
+/* Lagrange viewer — shared styles for every artboard.
+   These map 1:1 to ImGui style values; see design tokens in the handoff zips. */
+.app{
+--bg0:#070D17;--bg1:#0B1422;--bg2:#101B2C;--bg3:#16243A;--bg4:#1D2E48;
+--ln:#1B293D;--ln2:#2A3F5C;
+--t1:#E6EBF2;--t2:#A9B6C8;--t3:#8190A6;
+--acc:#E8772E;--acc2:rgba(232,119,46,.15);--acc3:rgba(232,119,46,.45);--onacc:#170A01;
+--ok:#3FB97F;--warn:#E5B33B;--err:#F04A4A;--info:#5AA2FF;
+--d-rb:#9AACC6;--d-el:#F5C842;--d-th:#FF7A6B;--d-ae:#5CC8E6;--d-we:#7FA8FF;--d-em:#B48CFF;--d-ra:#9BE15D;--d-se:#3FD1A7;
+--s1:#5AA2FF;--s2:#F5C842;--s3:#FF7A6B;--s4:#3FD1A7;--s5:#B48CFF;--s6:#5CC8E6;--s7:#E8772E;--s8:#9BE15D;
+width:1600px;height:1000px;background:var(--bg0);color:var(--t1);
+font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:13px;line-height:18px;
+display:flex;flex-direction:column;overflow:hidden;position:relative}
+.app *{box-sizing:border-box}
+:where(.app button){font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+.app svg{display:block;flex:none}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;font-variant-numeric:tabular-nums}
+.t1{color:var(--t1)}.t2{color:var(--t2)}.t3{color:var(--t3)}.acc{color:var(--acc)}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.err{color:var(--err)}.info{color:var(--info)}
+.b5{font-weight:500}.b6{font-weight:600}.sm{font-size:12px}.xs{font-size:11px;line-height:14px}
+.row{display:flex;align-items:center;gap:6px;min-width:0}
+.colf{display:flex;flex-direction:column;min-width:0;min-height:0}
+.sp{flex:1}
+.ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ---------- menu bar ---------- */
+.mb{height:28px;flex:none;display:flex;align-items:center;gap:2px;padding:0 8px;background:var(--bg1);border-bottom:1px solid var(--ln)}
+.mb .brand{display:flex;align-items:center;gap:7px;font-weight:600;padding-right:12px;margin-right:4px;border-right:1px solid var(--ln);height:18px;letter-spacing:-.2px}
+.mb .m{padding:3px 8px;border-radius:3px;color:var(--t2)}
+.mb .ctx{color:var(--t3);font-size:12px;display:flex;align-items:center;gap:8px}
+.mb .ctx b{color:var(--t2);font-weight:500}
+
+/* ---------- toolbar: workspaces + sim controls ---------- */
+.tb{height:40px;flex:none;display:flex;align-items:stretch;padding:0 4px 0 6px;background:var(--bg1);border-bottom:1px solid var(--ln)}
+.ws{display:flex;align-items:center;gap:6px;padding:0 10px;color:var(--t2);border-bottom:2px solid transparent;border-top:2px solid transparent;font-weight:500;font-size:12px;white-space:nowrap}
+.ws.on{color:var(--t1);border-bottom-color:var(--acc)}
+.ws.on svg{color:var(--acc)}
+.ctl{display:flex;align-items:center;gap:4px;padding-left:10px;margin-left:6px;border-left:1px solid var(--ln)}
+.btn{height:26px;min-width:26px;padding:0 10px;display:inline-flex;align-items:center;justify-content:center;gap:6px;border-radius:3px;background:var(--bg3);border:1px solid var(--ln2);color:var(--t1);font-weight:500;font-size:12px;white-space:nowrap}
+.app button.btn{background:var(--bg3);border:1px solid var(--ln2)}
+.app button.btn.pri,.btn.pri{background:var(--acc);border-color:var(--acc);color:var(--onacc)}
+.app button.btn.ghost,.btn.ghost{background:transparent;border-color:transparent;color:var(--t2)}
+.app button.btn.on,.btn.on{background:var(--acc2);border-color:var(--acc3);color:var(--acc)}
+.app button.btn.dis,.btn.dis{color:var(--t3);background:transparent}
+.btn.ic{padding:0;width:26px}
+.btn.sm{height:22px;min-width:22px;padding:0 8px;font-size:11px}
+.btn.sm.ic{width:22px;padding:0}
+.ro{height:26px;display:inline-flex;align-items:center;gap:6px;padding:0 8px;border-radius:3px;background:var(--bg0);border:1px solid var(--ln);font-size:12px;white-space:nowrap}
+.ro .k{color:var(--t3);font-size:11px}
+
+/* ---------- domain strip ---------- */
+.ds{height:32px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--bg0);border-bottom:1px solid var(--ln)}
+.ds .lbl{color:var(--t3);font-size:11px;margin-right:2px}
+.chip{height:22px;display:inline-flex;align-items:center;gap:6px;padding:0 9px 0 8px;border-radius:11px;border:1px solid var(--ln2);background:var(--bg2);color:var(--t1);font-size:12px;white-space:nowrap}
+.chip i{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.chip .s{color:var(--t3);font-family:'IBM Plex Mono',monospace;font-size:11px}
+.chip.sub{border-style:dashed;background:transparent;color:var(--t2)}
+.chip.sub i{background:transparent!important;border:1.5px solid var(--t3)}
+.chip.off{border-style:dashed;background:transparent;color:var(--t3)}
+.chip.off i{background:transparent!important;border:1.5px solid var(--t3)}
+.chip.bad{border-color:var(--err);color:var(--err)}
+
+/* ---------- body / panels ---------- */
+.body{flex:1;min-height:0;display:flex;gap:4px;padding:4px}
+.col{display:flex;flex-direction:column;gap:4px;min-width:0;min-height:0}
+.pn{background:var(--bg1);border:1px solid var(--ln);border-radius:3px;display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}
+.ph{height:28px;flex:none;display:flex;align-items:stretch;background:var(--bg2);border-bottom:1px solid var(--ln);padding-left:2px}
+.pt{display:flex;align-items:center;gap:6px;padding:0 10px;color:var(--t3);font-weight:500;font-size:12px;border-top:2px solid transparent;white-space:nowrap}
+.pt.on{color:var(--t1);background:var(--bg1);border-top-color:var(--acc)}
+.ph .tools{display:flex;align-items:center;gap:2px;padding-right:4px;color:var(--t3);margin-left:auto}
+.pb{flex:1;min-height:0;overflow:hidden;padding:8px}
+.pb.np{padding:0}
+.bar{height:32px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;border-bottom:1px solid var(--ln)}
+
+/* ---------- tree ---------- */
+.tr{display:flex;align-items:center;height:22px;gap:6px;padding-right:8px;border-radius:2px;white-space:nowrap;font-size:12px}
+.tr .cv{width:12px;color:var(--t3);flex:none;display:flex;justify-content:center}
+.tr .ic{color:var(--t3);flex:none}
+.tr .nm{color:var(--t1)}
+.tr .ty{color:var(--t3);font-size:11px}
+.tr .bd{margin-left:auto;display:flex;gap:3px;align-items:center}
+.tr .bd i{width:6px;height:6px;border-radius:50%;display:block}
+.tr.sel{background:var(--acc2);box-shadow:inset 2px 0 0 var(--acc)}
+.tr.sel .ic{color:var(--acc)}
+.tr.hov{background:var(--bg3)}
+.tr.dim .nm{color:var(--t3)}
+
+/* ---------- inspector ---------- */
+.sec{border-bottom:1px solid var(--ln)}
+.sh{height:26px;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--bg2);font-weight:600;font-size:12px}
+.sh .v{margin-left:auto;color:var(--t3);font-weight:400;font-family:'IBM Plex Mono',monospace;font-size:11px}
+.kv{display:grid;grid-template-columns:112px minmax(0,1fr);column-gap:8px;row-gap:4px;padding:8px;align-items:center}
+.kv .k{color:var(--t2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fld{height:22px;display:flex;align-items:center;gap:6px;padding:0 6px;background:var(--bg0);border:1px solid var(--ln);border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:12px;min-width:0;white-space:nowrap;overflow:hidden}
+.fld .u{margin-left:auto;color:var(--t3);font-size:11px}
+.fld.ed{border-color:var(--acc3)}
+.fld.ro2{background:transparent;border-color:transparent;padding-left:0}
+.fld.dd{padding-right:4px}
+.fld.dd::after{content:"";width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid var(--t3);margin-left:auto}
+.f3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}
+.ax{font-weight:600;width:8px}
+.ax.x{color:#F0605D}.ax.y{color:#4FC97A}.ax.z{color:#5AA2FF}
+.lnk{color:var(--info)}
+
+/* ---------- tables ---------- */
+.tbl{width:100%;border-collapse:collapse;font-size:12px}
+.tbl th{height:24px;text-align:left;font-weight:500;color:var(--t3);background:var(--bg2);padding:0 8px;border-bottom:1px solid var(--ln);white-space:nowrap;font-size:11px}
+.tbl td{height:23px;padding:0 8px;border-bottom:1px solid var(--ln);white-space:nowrap}
+.tbl tr.sel td{background:var(--acc2)}
+.tbl tr.sel td:first-child{box-shadow:inset 2px 0 0 var(--acc)}
+.tbl .n{text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-variant-numeric:tabular-nums}
+.tbl .m{font-family:'IBM Plex Mono',monospace;font-size:12px}
+
+/* ---------- small widgets ---------- */
+.pill{height:18px;display:inline-flex;align-items:center;gap:4px;padding:0 7px;border-radius:9px;font-size:11px;font-weight:500;background:var(--bg3);color:var(--t2);white-space:nowrap}
+.pill.ok{background:rgba(63,185,127,.14);color:var(--ok)}
+.pill.warn{background:rgba(229,179,59,.14);color:var(--warn)}
+.pill.err{background:rgba(240,74,74,.15);color:var(--err)}
+.pill.acc{background:var(--acc2);color:var(--acc)}
+.pill.info{background:rgba(90,162,255,.14);color:var(--info)}
+.sw{width:28px;height:16px;border-radius:8px;background:var(--bg4);position:relative;flex:none;border:1px solid var(--ln2);display:inline-block}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:var(--t3)}
+.sw.on{background:var(--acc);border-color:var(--acc)}
+.sw.on::after{left:14px;background:var(--onacc)}
+.cb{width:14px;height:14px;border-radius:3px;border:1px solid var(--ln2);background:var(--bg0);flex:none;display:inline-flex;align-items:center;justify-content:center}
+.cb.on{background:var(--acc);border-color:var(--acc)}
+.cb.on::after{content:"";width:7px;height:3px;border-left:2px solid var(--onacc);border-bottom:2px solid var(--onacc);transform:translateY(-1px) rotate(-45deg)}
+.seg{display:inline-flex;border:1px solid var(--ln2);border-radius:3px;overflow:hidden;flex:none}
+.seg span{height:22px;padding:0 8px;display:inline-flex;align-items:center;font-size:11px;color:var(--t2);border-right:1px solid var(--ln2);white-space:nowrap}
+.seg span:last-child{border-right:0}
+.seg span.on{background:var(--acc2);color:var(--acc)}
+.search{height:24px;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--bg0);border:1px solid var(--ln);border-radius:3px;color:var(--t3);font-size:12px;min-width:0}
+.kbd{font-family:'IBM Plex Mono',monospace;font-size:10px;padding:0 4px;border:1px solid var(--ln2);border-radius:2px;color:var(--t3);line-height:14px;white-space:nowrap;flex:none}
+.sw8{width:10px;height:10px;border-radius:2px;flex:none;display:inline-block}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.meter{height:6px;border-radius:3px;background:var(--bg4);overflow:hidden;flex:1;min-width:0}
+.meter b{display:block;height:100%;border-radius:3px}
+.hr{height:1px;background:var(--ln);flex:none}
+.cap{font-size:11px;color:var(--t3);font-weight:500;letter-spacing:.3px}
+
+/* ---------- viewport + overlays ---------- */
+.vp{position:relative;flex:1;min-height:0;background:#091120;overflow:hidden}
+.vp > svg.scene{position:absolute;inset:0;width:100%;height:100%}
+.ov{position:absolute;background:rgba(9,17,32,.88);border:1px solid var(--ln2);border-radius:4px;padding:5px 8px;font-size:12px}
+.ovbar{position:absolute;display:flex;gap:2px;padding:2px;background:rgba(9,17,32,.88);border:1px solid var(--ln2);border-radius:4px}
+.ovbar .b{width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:3px;color:var(--t2)}
+.ovbar .b.on{background:var(--acc2);color:var(--acc)}
+.tip{position:absolute;background:var(--bg2);border:1px solid var(--ln2);border-radius:4px;padding:6px 8px;font-size:12px;box-shadow:0 6px 18px rgba(0,0,0,.45)}
+
+/* ---------- plots ---------- */
+.plot{position:relative;background:var(--bg0);border:1px solid var(--ln);border-radius:3px;overflow:hidden}
+.plot > svg{position:absolute;inset:0;width:100%;height:100%}
+.plot .ttl{position:absolute;left:8px;top:5px;display:flex;align-items:center;gap:10px;font-size:11px;color:var(--t2)}
+.plot .ttl b{color:var(--t1);font-weight:600}
+.lg{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.lg i{width:12px;height:2px;border-radius:1px;display:inline-block}
+
+/* ---------- status bar ---------- */
+.sb{height:24px;flex:none;display:flex;align-items:center;gap:16px;padding:0 10px;background:var(--bg1);border-top:1px solid var(--ln);font-size:11px;color:var(--t2);white-space:nowrap}
+.sb .it{display:flex;align-items:center;gap:6px}
+.sb .k{color:var(--t3)}
+
+/* ---------- node graph ---------- */
+.node{position:absolute;background:var(--bg2);border:1px solid var(--ln2);border-radius:4px;font-size:12px;overflow:hidden}
+.node .nh{height:24px;display:flex;align-items:center;gap:6px;padding:0 8px;font-weight:600;border-bottom:1px solid var(--ln)}
+.node .nb{padding:6px 8px;display:flex;flex-direction:column;gap:3px}
+.node.sel{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.node.sub{border-style:dashed;background:var(--bg1)}
+.port{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--t2);white-space:nowrap}
+.port i{width:7px;height:7px;border-radius:50%;border:1.5px solid var(--t3);display:inline-block;flex:none}
+
+/* ---------- code ---------- */
+.code{font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:19px;white-space:pre;color:var(--t2)}
+.code .ln{color:#4A5B74;display:inline-block;width:26px;text-align:right;margin-right:12px}
+.code .k{color:#8FB8FF}.code .s{color:#9BD39B}.code .n{color:#F5C842}.code .b{color:#E8772E}.code .c{color:#6E7F98}
+.code .add{background:rgba(63,185,127,.10)}
+.code .rm{background:rgba(240,74,74,.10)}
+
+
+body{margin:0;background:#070D17}
+.kpi{background:#0B1422;border:1px solid #1B293D;border-radius:3px;padding:8px 10px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.kpi .v{font-family:'IBM Plex Mono',monospace;font-size:20px;line-height:26px}
+.kpi .l{font-size:11px;color:#8190A6}
+
+</style>
+</head>
+<body>
+<div class="app">
+
+<div class="mb">
+<div class="brand"><svg width="16" height="16" viewBox="0 0 120 120" aria-hidden="true"><path d="M34 18 V86 H102" fill="none" stroke="#E6EBF2" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="68" cy="27.1" r="11" fill="#E8772E"></circle></svg>Lagrange</div>
+<button class="m">File</button><button class="m">Edit</button><button class="m">View</button><button class="m">Simulation</button><button class="m">Tools</button><button class="m">Window</button><button class="m">Help</button>
+<div class="sp"></div>
+<div class="ctx"><span>stage <b>warehouse_a.usda</b></span><span>robot <b>amr_diffdrive</b></span><span>profile <b>rain_night.yaml</b></span><span class="kbd">Ctrl K</span></div>
+</div>
+
+<div class="tb">
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8l5.6 3.1v6.2L8 14.2l-5.6-3.1V4.9z M2.4 4.9L8 8l5.6-3.1 M8 8v6.2"></path></svg>Scene</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11 M2.5 8h11 M2.5 12h11"></path><circle cx="6" cy="4" r="1.6" fill="#0B1422"></circle><circle cx="10.5" cy="8" r="1.6" fill="#0B1422"></circle><circle cx="5" cy="12" r="1.6" fill="#0B1422"></circle></svg>Domains</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M9 1.5L3.5 9H8l-1 5.5L12.5 7H8z"></path></svg>Electrical</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 8h2.2l1.6-4.5 3 9 2-6.5 1.5 2h2.7"></path></svg>Signals</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M8 8l4.6-4.6 M14 8A6 6 0 1 1 8 2 M11 8a3 3 0 1 1-3-3"></path></svg>Sensors</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.6 9.5a3 3 0 0 1 .3-6 3.6 3.6 0 0 1 6.8 1.1 2.5 2.5 0 0 1-.2 4.9z M5.5 11.5l-.8 2 M8.5 11.5l-.8 2 M11.5 11.5l-.8 2"></path></svg>Environment</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9 M2.5 2.5v3h3 M7 5.8v4.4l3.2-2.2z"></path></svg>Replay</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="4" cy="4" r="1.7"></circle><circle cx="12" cy="4" r="1.7"></circle><circle cx="8" cy="12" r="1.7"></circle><path d="M5.7 4h4.6 M4.9 5.5L7.1 10.5 M11.1 5.5L8.9 10.5"></path></svg>ROS 2</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><path d="M2 8h12 M8 2c2.2 2.2 2.2 9.8 0 12 M8 2c-2.2 2.2-2.2 9.8 0 12"></path></svg>World</button>
+<button class="ws on"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M2.5 11.5a5.5 5.5 0 1 1 11 0 M8 11.5l3-4"></path></svg>Performance</button>
+<div class="sp"></div>
+<div class="ctl">
+<button class="btn ic" aria-label="Reset run"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8a4.5 4.5 0 1 0 1.3-3.2 M3.5 2.8v2.6h2.6"></path></svg></button>
+<button class="btn pri" aria-label="Pause"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5.5 3.5v9 M10.5 3.5v9"></path></svg>Pause</button>
+<button class="btn ic" aria-label="Step one tick"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.5 3.5v9l6.5-4.5z"></path><rect x="11" y="3.5" width="1.8" height="9" rx=".5"></rect></svg></button>
+<div class="ro"><span class="k">sim t</span><span class="mono">00:03.413</span></div>
+<div class="ro"><span class="k">RTF</span><span class="mono">0.97×</span><span class="k">/ 1.00</span></div>
+<div class="ro"><span class="k">lockstep</span><span class="ok mono">on</span></div>
+<button class="btn" aria-label="Start recording"><span class="dot" style="background: #F04A4A"></span>Record</button>
+</div>
+</div>
+
+<div class="ds">
+<span class="lbl">Domains</span>
+<span class="chip"><i style="background: #9AACC6"></i>Rigid body<span class="s">0.31 ms</span></span>
+<span class="chip"><i style="background: #F5C842"></i>Electrical<span class="s">0.12 ms</span></span>
+<span class="chip"><i style="background: #FF7A6B"></i>Thermal<span class="s">&lt;0.01</span></span>
+<span class="chip"><i style="background: #5CC8E6"></i>Aero<span class="s">0.04 ms</span></span>
+<span class="chip"><i style="background: #7FA8FF"></i>Weather<span class="s">0.40 gpu</span></span>
+<span class="chip"><i style="background: #B48CFF"></i>EMI<span class="s">0.05 ms</span></span>
+<span class="chip off"><i></i>Radiation<span class="s">0</span></span>
+<span class="chip"><i style="background: #3FD1A7"></i>Sensors<span class="s">2.1 gpu</span></span>
+<div class="sp"></div>
+<div class="seg"><span class="on">Live</span><span>Capture 10 s</span></div>
+<button class="btn sm">Export trace</button>
+</div>
+
+<div class="body" style="flex-direction: column">
+<div style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; flex: none">
+<div class="kpi"><span class="l">real-time factor</span><span class="v">0.97×</span><span class="l">target 1.00 · slowing, not skipping</span></div>
+<div class="kpi"><span class="l">CPU per 1 ms of sim · mean</span><span class="v">0.59 <span class="t3" style="font-size: 13px">/ 1.00 ms · p99 0.84</span></span><div class="meter"><b style="width: 59%; background: #3FB97F"></b></div></div>
+<div class="kpi"><span class="l">GPU per sensor frame</span><span class="v">2.5 ms</span><span class="l">lidar RT 1.4 · weather 0.4 · cam 0.7</span></div>
+<div class="kpi"><span class="l">viewer frame</span><span class="v">11.1 ms</span><span class="l">90 fps · budget 16.6</span></div>
+<div class="kpi"><span class="l">protocol</span><span class="v">117 Δ/s</span><span class="l">shm 212 MB/s · 0 dropped</span></div>
+<div class="kpi"><span class="l">determinism</span><span class="v ok">bit-exact</span><span class="l">CPU reference · last check 00:00</span></div>
+</div>
+<div style="flex: 1; min-height: 0; display: flex; gap: 4px">
+<div class="col" style="flex: 1">
+<div class="pn" style="height: 320px; flex: none">
+<div class="ph"><span class="pt on">Scheduler · last 10 ms</span><span class="pt">Threads</span><div class="tools"><span class="xs t3">sync barrier every 1 ms · width = wall time</span></div></div>
+<div class="pb" style="padding: 8px">
+<svg width="940" height="260" viewBox="0 0 940 260" aria-hidden="true" font-family="IBM Plex Sans, sans-serif">
+<g stroke="#1B293D" stroke-dasharray="2 3"><line x1="110" y1="30" x2="110" y2="232"></line><line x1="192" y1="30" x2="192" y2="232"></line><line x1="274" y1="30" x2="274" y2="232"></line><line x1="356" y1="30" x2="356" y2="232"></line><line x1="438" y1="30" x2="438" y2="232"></line><line x1="520" y1="30" x2="520" y2="232"></line><line x1="602" y1="30" x2="602" y2="232"></line><line x1="684" y1="30" x2="684" y2="232"></line><line x1="766" y1="30" x2="766" y2="232"></line><line x1="848" y1="30" x2="848" y2="232"></line><line x1="930" y1="30" x2="930" y2="232"></line></g>
+<g font-family="IBM Plex Mono, monospace" font-size="10" fill="#8190A6"><text x="106" y="20">0</text><text x="270" y="20">2</text><text x="434" y="20">4</text><text x="598" y="20">6</text><text x="762" y="20">8</text><text x="910" y="20">10 ms</text></g>
+<g font-size="11" fill="#A9B6C8"><text x="0" y="51">electrical</text><text x="0" y="77">rigid_body</text><text x="0" y="103">emi · comms</text><text x="0" y="129">ros2 bridge</text><text x="0" y="155">recorder</text><text x="0" y="181">GPU · sensors</text><text x="0" y="207">GPU · weather</text><text x="0" y="229">viewer client</text></g>
+<path d="M110.0 40v14M118.2 40v14M126.4 40v14M134.6 40v14M142.8 40v14M151.0 40v14M159.2 40v14M167.4 40v14M175.6 40v14M183.8 40v14M192.0 40v14M200.2 40v14M208.4 40v14M216.6 40v14M224.8 40v14M233.0 40v14M241.2 40v14M249.4 40v14M257.6 40v14M265.8 40v14M274.0 40v14M282.2 40v14M290.4 40v14M298.6 40v14M306.8 40v14M315.0 40v14M323.2 40v14M331.4 40v14M339.6 40v14M347.8 40v14M356.0 40v14M364.2 40v14M372.4 40v14M380.6 40v14M388.8 40v14M397.0 40v14M405.2 40v14M413.4 40v14M421.6 40v14M429.8 40v14M438.0 40v14M446.2 40v14M454.4 40v14M462.6 40v14M470.8 40v14M479.0 40v14M487.2 40v14M495.4 40v14M503.6 40v14M511.8 40v14M520.0 40v14M528.2 40v14M536.4 40v14M544.6 40v14M552.8 40v14M561.0 40v14M569.2 40v14M577.4 40v14M585.6 40v14M593.8 40v14M602.0 40v14M610.2 40v14M618.4 40v14M626.6 40v14M634.8 40v14M643.0 40v14M651.2 40v14M659.4 40v14M667.6 40v14M675.8 40v14M684.0 40v14M692.2 40v14M700.4 40v14M708.6 40v14M716.8 40v14M725.0 40v14M733.2 40v14M741.4 40v14M749.6 40v14M757.8 40v14M766.0 40v14M774.2 40v14M782.4 40v14M790.6 40v14M798.8 40v14M807.0 40v14M815.2 40v14M823.4 40v14M831.6 40v14M839.8 40v14M848.0 40v14M856.2 40v14M864.4 40v14M872.6 40v14M880.8 40v14M889.0 40v14M897.2 40v14M905.4 40v14M913.6 40v14M921.8 40v14" stroke="#F5C842" stroke-width="1.4"></path>
+<g fill="#9AACC6"><rect x="110.5" y="66" width="25" height="14" rx="2"></rect><rect x="192.5" y="66" width="25" height="14" rx="2"></rect><rect x="274.5" y="66" width="25" height="14" rx="2"></rect><rect x="356.5" y="66" width="25" height="14" rx="2"></rect><rect x="438.5" y="66" width="25" height="14" rx="2"></rect><rect x="520.5" y="66" width="25" height="14" rx="2"></rect><rect x="602.5" y="66" width="25" height="14" rx="2"></rect><rect x="684.5" y="66" width="25" height="14" rx="2"></rect><rect x="766.5" y="66" width="25" height="14" rx="2"></rect><rect x="848.5" y="66" width="25" height="14" rx="2"></rect></g>
+<rect x="111" y="92" width="5" height="14" rx="1" fill="#B48CFF"></rect>
+<g fill="#5AA2FF"><rect x="136" y="118" width="4" height="14" rx="1"></rect><rect x="218" y="118" width="4" height="14" rx="1"></rect><rect x="300" y="118" width="4" height="14" rx="1"></rect><rect x="382" y="118" width="4" height="14" rx="1"></rect><rect x="464" y="118" width="4" height="14" rx="1"></rect><rect x="546" y="118" width="4" height="14" rx="1"></rect><rect x="628" y="118" width="4" height="14" rx="1"></rect><rect x="710" y="118" width="4" height="14" rx="1"></rect><rect x="792" y="118" width="4" height="14" rx="1"></rect><rect x="874" y="118" width="4" height="14" rx="1"></rect></g>
+<g fill="#8190A6"><rect x="140" y="144" width="40" height="14" rx="2" opacity=".6"></rect><rect x="470" y="144" width="40" height="14" rx="2" opacity=".6"></rect><rect x="800" y="144" width="40" height="14" rx="2" opacity=".6"></rect></g>
+<rect x="112" y="170" width="115" height="14" rx="2" fill="#3FD1A7"></rect><text x="118" y="181" font-size="10" fill="#070D17">lidar RT 1.40 ms</text>
+<rect x="232" y="170" width="57" height="14" rx="2" fill="#3FD1A7" opacity=".7"></rect><text x="236" y="181" font-size="10" fill="#070D17">cam 0.70</text>
+<rect x="112" y="196" width="33" height="14" rx="2" fill="#7FA8FF"></rect><text x="150" y="207" font-size="10" fill="#7FA8FF">scatter 0.40</text>
+<rect x="110" y="218" width="820" height="14" rx="2" fill="#16243A"></rect>
+<rect x="110" y="218" width="910" height="14" rx="2" fill="none" stroke="#2A3F5C"></rect>
+<text x="116" y="229" font-size="10" fill="#A9B6C8">frame 11.1 ms (separate process · not in the sim budget)</text>
+<rect x="620" y="62" width="3" height="22" fill="#E5B33B"></rect>
+<text x="628" y="96" font-size="10" fill="#E5B33B">step 7: 0.42 ms (contact burst)</text>
+</svg>
+</div>
+</div>
+<div class="pn" style="flex: 1">
+<div class="ph"><span class="pt on">Modules</span><span class="pt">GPU passes</span><span class="pt">Memory</span></div>
+<div class="pb np">
+<table class="tbl">
+<thead><tr><th>module</th><th>backend</th><th class="n">dt</th><th class="n">steps / s</th><th class="n">mean</th><th class="n">p99</th><th class="n">budget share</th></tr></thead>
+<tbody>
+<tr><td><span class="row"><i class="dot" style="background: #9AACC6; width: 6px; height: 6px"></i>rigid_body</span></td><td class="t2">PhysX 5 · CPU</td><td class="n">1 ms</td><td class="n">1 000</td><td class="n">0.31 ms</td><td class="n warn">0.42 ms</td><td class="n">31 %</td></tr>
+<tr><td><span class="row"><i class="dot" style="background: #F5C842; width: 6px; height: 6px"></i>electrical</span></td><td class="t2">FMU ×3 · averaged</td><td class="n">100 µs</td><td class="n">10 000</td><td class="n">0.12 ms</td><td class="n">0.15 ms</td><td class="n">12 %</td></tr>
+<tr><td><span class="row"><i class="dot" style="background: #B48CFF; width: 6px; height: 6px"></i>emi + comms</span></td><td class="t2">baked VDB</td><td class="n">10 ms</td><td class="n">100</td><td class="n">0.07 ms</td><td class="n">0.09 ms</td><td class="n">1 %</td></tr>
+<tr><td><span class="row"><i class="dot" style="background: #5CC8E6; width: 6px; height: 6px"></i>aerodynamics</span></td><td class="t2">drag + field</td><td class="n">1 ms</td><td class="n">1 000</td><td class="n">0.04 ms</td><td class="n">0.05 ms</td><td class="n">4 %</td></tr>
+<tr><td><span class="row"><i class="dot" style="background: #FF7A6B; width: 6px; height: 6px"></i>thermal</span></td><td class="t2">lumped · 14 nodes</td><td class="n">100 ms</td><td class="n">10</td><td class="n">0.02 ms</td><td class="n">0.02 ms</td><td class="n">&lt;1 %</td></tr>
+<tr><td><span class="row"><i class="dot" style="background: #3FD1A7; width: 6px; height: 6px"></i>sensors</span></td><td class="t2">Vulkan RT · Tier 2</td><td class="n">varies</td><td class="n">—</td><td class="n">2.10 gpu</td><td class="n">2.60 gpu</td><td class="n">async</td></tr>
+<tr><td><span class="row"><i class="dot" style="background: #8190A6; width: 6px; height: 6px"></i>scheduler + bus</span></td><td class="t2">core</td><td class="n">—</td><td class="n">—</td><td class="n">0.06 ms</td><td class="n">0.08 ms</td><td class="n">6 %</td></tr>
+<tr><td><span class="row"><i class="dot" style="background: #8190A6; width: 6px; height: 6px"></i>ros2 bridge</span></td><td class="t2">rclcpp</td><td class="n">1 ms</td><td class="n">1 000</td><td class="n">0.05 ms</td><td class="n">0.11 ms</td><td class="n">5 %</td></tr>
+</tbody></table>
+</div>
+</div>
+</div>
+
+<div class="col" style="width: 380px">
+<div class="pn" style="height: 200px; flex: none">
+<div class="ph"><span class="pt on">RTF history</span><div class="tools"><span class="xs t3">last 120 s</span></div></div>
+<div class="pb" style="padding: 6px">
+<svg width="100%" height="140" viewBox="0 0 600 70" preserveAspectRatio="none" aria-hidden="true">
+<line x1="40" y1="21" x2="590" y2="21" stroke="#2A3F5C" stroke-dasharray="3 3"></line>
+<polyline points="40.0,21.0 44.6,21.0 49.2,21.7 53.8,21.0 58.4,21.0 63.0,21.0 67.6,21.0 72.2,22.4 76.8,21.0 81.4,22.1 86.0,22.2 90.6,21.3 95.2,21.0 99.8,21.0 104.4,21.0 109.0,21.0 113.6,21.0 118.2,23.5 122.8,21.0 127.4,22.0 132.0,21.8 136.6,21.0 141.2,21.3 145.8,24.0 150.4,21.0 155.0,21.5 159.6,22.8 164.2,22.4 168.8,22.0 173.4,21.0 178.0,21.7 182.6,21.0 187.2,21.0 191.8,22.2 196.4,22.3 201.0,21.4 205.6,21.0 210.2,22.1 214.8,21.0 219.4,23.0 224.0,22.6 228.6,36.7 233.2,37.9 237.8,37.6 242.4,35.9 247.0,35.5 251.6,36.4 256.2,37.0 260.8,34.5 265.4,36.0 270.0,37.0 274.6,34.7 279.2,22.4 283.8,21.0 288.4,21.0 293.0,21.0 297.6,21.9 302.2,21.0 306.8,21.8 311.4,21.9 316.0,22.6 320.6,21.0 325.2,21.9 329.8,21.0 334.4,21.0 339.0,21.4 343.6,21.0 348.2,21.0 352.8,21.0 357.4,23.1 362.0,21.0 366.6,21.0 371.2,21.0 375.8,21.0 380.4,21.0 385.0,21.0 389.6,21.0 394.2,23.4 398.8,21.4 403.4,24.9 408.0,21.0 412.6,21.0 417.2,21.0 421.8,21.6 426.4,24.2 431.0,21.0 435.6,23.1 440.2,23.0 444.8,21.3 449.4,46.0 454.0,47.8 458.6,46.7 463.2,49.9 467.8,44.3 472.4,47.1 477.0,46.8 481.6,21.0 486.2,21.0 490.8,21.0 495.4,22.4 500.0,21.2 504.6,21.0 509.2,21.0 513.8,21.2 518.4,21.0 523.0,21.0 527.6,21.0 532.2,21.0 536.8,21.4 541.4,21.8 546.0,21.0 550.6,21.0 555.2,21.0 559.8,21.0 564.4,21.0 569.0,21.0 573.6,21.0 578.2,22.6 582.8,21.0 587.4,21.1" fill="none" stroke="#5AA2FF" stroke-width="1.4" vector-effect="non-scaling-stroke"></polyline>
+</svg>
+<div class="row xs t3"><span>1.00 target</span><div class="sp"></div><span class="warn">dip 0.90 · lidar in downpour</span></div>
+</div>
+</div>
+<div class="pn" style="flex: 1">
+<div class="ph"><span class="pt on">Resources</span></div>
+<div class="pb" style="display: flex; flex-direction: column; gap: 10px; font-size: 12px">
+<div class="row"><span class="t2" style="width: 120px">CPU · sim threads</span><div class="meter"><b style="width: 58%; background: #3FB97F"></b></div><span class="mono xs" style="width: 60px; text-align: right">4 / 16</span></div>
+<div class="row"><span class="t2" style="width: 120px">GPU busy</span><div class="meter"><b style="width: 41%; background: #3FB97F"></b></div><span class="mono xs" style="width: 60px; text-align: right">41 %</span></div>
+<div class="row"><span class="t2" style="width: 120px">VRAM</span><div class="meter"><b style="width: 47%; background: #3FB97F"></b></div><span class="mono xs" style="width: 60px; text-align: right">3.8 GB</span></div>
+<div class="row"><span class="t2" style="width: 120px">sim memory</span><div class="meter"><b style="width: 22%; background: #3FB97F"></b></div><span class="mono xs" style="width: 60px; text-align: right">2.1 GB</span></div>
+<div class="row"><span class="t2" style="width: 120px">recorder buffer</span><div class="meter"><b style="width: 9%; background: #3FB97F"></b></div><span class="mono xs" style="width: 60px; text-align: right">61 MB</span></div>
+<div class="hr"></div>
+<div class="row"><span class="b6">Suggestions</span></div>
+<div class="row" style="align-items: flex-start"><span class="pill warn">p99</span><span class="t2">rigid_body p99 0.42 ms during contact bursts; try solver iterations 8 → 6 or the MuJoCo backend for this scene.</span></div>
+<div class="row" style="align-items: flex-start"><span class="pill info">GPU</span><span class="t2">lidar RT dominates GPU time; 16 → 8 channels halves it if your stack allows.</span></div>
+<div class="sp"></div>
+<div class="row"><button class="btn sm">Open in Tracy</button><button class="btn sm ghost">Save capture</button></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="sb">
+<span class="it"><span class="dot" style="background: #3FB97F"></span>Connected</span>
+<span class="it"><span class="k">server</span>lagrange_mock_server 0.1.0 · localhost · shm</span>
+<span class="it"><span class="k">profiling</span><span class="mono">on · 0.3 % overhead</span></span>
+<div class="sp"></div>
+<span class="it"><span class="k">GPU</span>RTX 4060 Laptop · Tier 2</span>
+<span class="it"><span class="k">viewer</span><span class="mono">11.1 ms · 90 fps</span></span>
+<span class="it"><span class="k">ROS 2</span>lyrical · domain 0 · fastrtps</span>
+</div>
+
+</div>
+</body>
+</html>
