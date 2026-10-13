@@ -12,14 +12,14 @@ and licenses come from `docs/plan/verification.md` (checked 2026-10-13). A cell 
    vcpkg, Conan or pip-installed C++ libraries next to rosdep (CLAUDE.md §1a).
 2. **Licenses**: Apache-2.0-compatible permissive licenses in anything linked or shipped
    (Apache-2.0, MIT, BSD, Zlib, BSL-1.0, MPL-2.0 and EPL-2.0 as unmodified separate libraries or
-   processes). No GPL or LGPL-only code linked into `simcore_*` libraries. GPL tools may be used
+   processes). No GPL or LGPL-only code linked into `lagrange_*` libraries. GPL tools may be used
    as developer tools or offline programs that exchange files.
 3. **Pinning**: vendor packages pin an exact tag and a SHA-256 of the source archive. apt
    dependencies float with the distribution (that is what being a `ros-lyrical-*` deb means), and
    CI catches breakage from archive updates with a weekly scheduled build.
 4. **Missing rosdep keys**: for apt packages without a key (SDL3, Slang, zenoh-c, SUMO, …) we
    contribute keys to `ros/rosdistro`. Until merged, a local rosdep source file
-   (`packaging/rosdep/simcore.yaml`) provides them, and the README tells users to add it.
+   (`packaging/rosdep/lagrange.yaml`) provides them, and the README tells users to add it.
 5. **Recording**: adding a dependency means adding a row here in the same PR, with license and
    source. CI's REUSE check and an SBOM generation step cross-check the list.
 6. **Optional dependencies** are compile-time options with a clear message when absent. A user
@@ -140,12 +140,12 @@ reads recordings. See open question Q4 for how the mock server gets scene conten
 | `rosgraph_msgs`, `sensor_msgs`, `nav_msgs`, `geometry_msgs`, `tf2_ros`, `visualization_msgs` | ROS bridge | Lyrical | |
 | `rosidl_buffer`, `cuda_buffer` | zero-copy sensor output | 5.2.1, 0.1.2 | `cuda_buffer` is optional (pulls NVIDIA libraries) |
 | `simulation_interfaces` | standard simulator services | in rosdistro; version TODO(verify) | |
-| `hardware_interface`, `controller_manager`, `pluginlib` | `simcore_ros2_control` | ros2_control 6.10.1 | |
+| `hardware_interface`, `controller_manager`, `pluginlib` | `lagrange_ros2_control` | ros2_control 6.10.1 | |
 | `rosbag2_storage_mcap`, `mcap_vendor` | recording interoperability | 0.33.3 | |
 | `rmw_fastrtps_cpp`, `rmw_zenoh_cpp` | tested RMWs | 9.4.10, 0.10.6 | |
 | Test-only: `nav2_bringup`, `moveit`, `ros2_controllers`, `mavros` | integration tests and demos | 1.5.1, 2.15.2, 6.9.0, 2.15.1 | `<test_depend>` or demo packages only |
 
-The viewer package (`simcore_viewer`) depends on `ament_cmake` and `ament_index_cpp` for build
+The viewer package (`lagrange_viewer`) depends on `ament_cmake` and `ament_index_cpp` for build
 and resource lookup only. It does not depend on `rclcpp`, so it starts without a ROS graph.
 
 ## 6. Developer tools

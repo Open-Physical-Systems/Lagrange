@@ -7,6 +7,24 @@ recommended option and say so, and CLAUDE.md is untouched.
 
 Evidence references (V…) point to `docs/plan/verification.md`.
 
+## Decisions recorded on 2026-10-13
+
+| Question | Decision |
+|---|---|
+| Q17 project name | **Lagrange**, organisation Open Physical Systems (`Open-Physical-Systems/Lagrange` on GitHub). Logos are in `docs/imgs/` |
+| Q19 hosting | The repository lives in a GitHub organisation. Team size and a self-hosted GPU runner are still open |
+| Q4 v0.1 without OpenUSD | Accepted: the mock server converts URDF directly to protocol scene messages; USD arrives in v0.2 |
+| Q15 mock server language | Python for v0.1 only. The shipped product is C++: replay moves into the C++ server in v0.2 and the Python server stays as a test tool |
+| Q20 protocol (RFC 0003) | Accepted: Protobuf over a Unix socket or TCP, `memfd` shared memory, Zenoh deferred |
+| Q21 window library (RFC 0006) | Accepted: SDL3 |
+| Q9 first physics backend | Accepted: MuJoCo in v0.2, Jolt next, PhysX in v0.6. No in-house rigid-body solver (invariant 12) |
+| Q3 thin electrical slice in v0.2 | Accepted as a stretch item |
+| Q2 radiation | Accepted: contract and `zero` substitute from v0.2; full module as v0.8 or post-1.0 |
+| Q8 FMUs | Accepted: built-in C++ models are the default; FMUs are an extension path. Accepting FMI 2.0 is still open |
+| Q13 Node-free tooling | Accepted: commitizen and mdformat |
+| Q16 sim-vs-real data | Acknowledged; hardware and publication terms still to be named |
+| Commit attribution | Commits carry only the author's `Signed-off-by`; no tool co-author trailers |
+
 ## Part 1 — Decisions needed
 
 ### Highest priority (block v0.1 or change its shape)
@@ -43,11 +61,11 @@ commitlint and markdownlint-cli2 need Node. CLAUDE.md §12.3 already prefers avo
 **Recommendation:** commitizen for commit messages and mdformat for Markdown (both Python, both
 verified). release-please stays, because it runs only as a GitHub Action.
 
-**Q17. Project name.**
-`simcore` is a placeholder and the working directory is called `Lagrange`. Package names, the
-plugin ABI prefix, the socket path, the ROS package prefix and the USD schema library names all
-embed the name. **Recommendation:** choose the name before the first package is created (issue
-0.1-A3). Check trademark and existing ROS/PyPI/apt package names at that time.
+**Q17. Project name.** — **Decided: Lagrange.**
+Identifiers use `lagrange` (packages `lagrange_core`, `lagrange_viewer`, …), the C ABI and CMake
+prefix `LAGRANGE_`, and the C++ namespace `lagrange`. The repository is
+`Open-Physical-Systems/Lagrange`. Still to check before the first release: existing ROS, PyPI and
+apt package names that contain `lagrange`, and trademarks (TODO(verify)).
 
 **Q19. Team size, repository owner and GitHub plan.**
 Estimates in the roadmap are relative because the team size is unknown. Merge queue and
@@ -210,7 +228,7 @@ in §11.3 also applies unversioned names.
 **F4. Schema attributes are `float` and carry units only in comments (§11.3).**
 `float` loses precision for values such as capacities in coulombs or geodetic quantities and
 forces conversions at load. Units in comments cannot be checked.
-**Fix:** `double` for physical parameters; a `simcore:unit` customData entry on every attribute
+**Fix:** `double` for physical parameters; a `lagrange:unit` customData entry on every attribute
 definition, parsed by the loader.
 
 **F5. Profile format gaps (§11.1).**
@@ -264,7 +282,7 @@ an always-on `wrench_sum` core module (Q14).
 | §1a, §5 | "C++20, matching Lyrical's language baseline" | Lyrical packages mostly export C++17 (V3) | See Q1 |
 | §1a | "Dependencies not packaged … (likely OpenUSD, PhysX 5, Slang; TODO(verify))" | OpenUSD and PhysX: not packaged. **Slang is packaged** (2026.1.1). Also not packaged: Jolt, ImPlot, MCAP as a system library (ROS vendor exists), FMI libraries. Dear ImGui is packaged without docking (V1, V12) | Update the list |
 | §1a | "Jetson … TODO(verify)" | JetPack 7.2.1 is on Ubuntu 24.04 (V9) | "Not supported: no JetPack on 26.04 as of 2026-10" |
-| §7 | `--mixin asan` | Mixins need per-machine setup | Explicit `-DSIMCORE_SANITIZER=…` |
+| §7 | `--mixin asan` | Mixins need per-machine setup | Explicit `-DLAGRANGE_SANITIZER=…` |
 | §7 | Viewer smoke test with `VK_ICD_FILENAMES=<lavapipe icd>` | Path is `/usr/share/vulkan/icd.d/lvp_icd.json` on Resolute | Fill in the path |
 | §10, §13.5 | ImGui multi-viewport on Wayland "[Medium confidence]" | Confirmed: issue #9370 open, positioning still not possible; SDL's own notes say the same (verification §9) | Raise to [High] |
 | §12.3 | "markdownlint-cli2 needs Node; prefer mdformat" | mdformat 1.0.0 is in apt | Remove the TODO; use mdformat |

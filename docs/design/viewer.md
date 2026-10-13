@@ -1,7 +1,7 @@
 # Viewer
 
 Status: draft for review; the stack is decided in `rfcs/0006-native-viewer-stack.md`.
-`simcore_viewer` is a native C++20 desktop program for Ubuntu 26.04. It draws with Vulkan through
+`lagrange_viewer` is a native C++20 desktop program for Ubuntu 26.04. It draws with Vulkan through
 `gpu/hal/`, builds its UI with Dear ImGui (docking branch), and talks to a simulation only
 through the protocol (`docs/design/protocol.md`). It contains no web technology (invariant 13).
 
@@ -148,7 +148,7 @@ Hand-off design:
 
 ```cpp
 // viewer/app/FrameLoop.hpp
-namespace simcore::viewer {
+namespace lagrange::viewer {
 
 struct FrameStats {
     double frameMs, uiBuildMs, viewportRenderMs, uiRenderMs, presentMs;
@@ -174,7 +174,7 @@ private:
     void handleDisplayScaleChange(float newScale);    // rebuild font atlas, rescale style
 };
 
-}  // namespace simcore::viewer
+}  // namespace lagrange::viewer
 ```
 
 ## 6. Panels
@@ -183,7 +183,7 @@ private:
 
 ```cpp
 // viewer/panels/Panel.hpp
-namespace simcore::viewer {
+namespace lagrange::viewer {
 
 // Everything a panel may touch. Panels never see the socket or Vulkan objects directly.
 struct PanelContext {
@@ -239,9 +239,9 @@ public:
     void loadAll(const SettingsReader&);
 };
 
-#define SIMCORE_REGISTER_PANEL(Type, id, menuPath, openByDefault) /* static registration */
+#define LAGRANGE_REGISTER_PANEL(Type, id, menuPath, openByDefault) /* static registration */
 
-}  // namespace simcore::viewer
+}  // namespace lagrange::viewer
 ```
 
 Third-party panels are out of scope for v0.1. The registry is the place where a plugin mechanism
@@ -397,7 +397,7 @@ drawing of windows from 1 ms to 10 min.
 
 ```cpp
 // viewer/client/ScopeBuffer.hpp
-namespace simcore::viewer {
+namespace lagrange::viewer {
 
 // Single-producer (client worker) single-consumer (UI thread) ring of uniformly sampled values
 // for one signal component. Lock-free: one atomic write cursor, one atomic generation.
@@ -434,7 +434,7 @@ private:
     // completed blocks plus the raw tail.
 };
 
-}  // namespace simcore::viewer
+}  // namespace lagrange::viewer
 ```
 
 Notes:
@@ -456,7 +456,7 @@ Notes:
 
 ```cpp
 // viewer/client/ViewerClient.hpp
-namespace simcore::viewer {
+namespace lagrange::viewer {
 
 struct Endpoint {
     enum class Kind { UnixSocket, Tcp } kind;
@@ -515,7 +515,7 @@ public:
     double latest(std::string_view signalName, std::uint32_t component = 0) const;   // inspector
 };
 
-}  // namespace simcore::viewer
+}  // namespace lagrange::viewer
 ```
 
 Shared-memory handling lives in `client/ShmMap`: it receives the file descriptors from the
@@ -525,10 +525,10 @@ once, directly into a staging buffer that `gpu/hal/` uploads.
 
 ## 9. Layouts
 
-- ImGui's docking state is saved to `~/.config/simcore/viewer/layout.ini` (XDG config
+- ImGui's docking state is saved to `~/.config/lagrange/viewer/layout.ini` (XDG config
   directory). Our panel settings are stored in the same file through an ImGui settings handler,
   so one file describes a layout.
-- Presets are `.ini` files in `share/simcore_viewer/layouts/`. "Reset layout" copies a preset
+- Presets are `.ini` files in `share/lagrange_viewer/layouts/`. "Reset layout" copies a preset
   over the user file. Users can save their own presets by name.
 - Layout files store a `ui_scale`-independent description (ImGui stores dock sizes as ratios
   within the dock space), so a layout saved on a HiDPI laptop opens correctly on a 1× monitor.
@@ -559,7 +559,7 @@ once, directly into a staging buffer that `gpu/hal/` uploads.
 | ≤ 16.6 ms frame on an RTX-class GPU, sample AMR scene, 8 scopes | `FrameStats` p99 over 3600 frames in `--benchmark` mode | GPU runner, nightly |
 | ≥ 16 signals at 10 kHz without drops | `ScopeBuffer::droppedSamples() == 0` and `ServerStatus.dropped_signal_blocks == 0` after 60 s | PR (lavapipe) and GPU runner |
 | Cold start to first frame with a sample URDF < 5 s (warm disk) | timestamp from `main()` to first present with at least one mesh drawn | GPU runner |
-| Runs on Tier 1 | Smoke test on an integrated-GPU runner or with `SIMCORE_TIER=1` | nightly |
+| Runs on Tier 1 | Smoke test on an integrated-GPU runner or with `LAGRANGE_TIER=1` | nightly |
 
 Internal targets that support them:
 
@@ -585,7 +585,7 @@ matches). Performance is asserted only on real GPUs.
   domain panel's saved YAML validates, check zero dropped samples.
 - **UI automation**: ImGui Test Engine scripts for panel interactions (toggle a domain, add a
   signal to a scope, select in tree → inspector shows it). Compiled only when
-  `SIMCORE_VIEWER_UI_TESTS=ON`; the engine is fetched at configure time in CI and is never part
+  `LAGRANGE_VIEWER_UI_TESTS=ON`; the engine is fetched at configure time in CI and is never part
   of an installed package (Q12).
 - **Sanitizers**: ASan+UBSan and TSan runs of the headless integration test.
 - **Manual matrix per release**: GNOME Wayland, GNOME X11, KDE Wayland; 1× and fractional scale;

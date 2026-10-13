@@ -29,7 +29,7 @@ below a few kilometres.
 
 ```cpp
 // core/world/coords/Frames.hpp
-namespace simcore::coords {
+namespace lagrange::coords {
 
 struct Geodetic { double latitudeRad, longitudeRad, heightM; };   // WGS84
 struct Ecef     { double x, y, z; };                               // m
@@ -52,7 +52,7 @@ struct RegionOrigin {
     std::uint64_t rebaseCount;          // increments on every rebase
 };
 
-}  // namespace simcore::coords
+}  // namespace lagrange::coords
 ```
 
 - Trigger: when the focus entity (the ego robot, or the centroid of robots in the region) is
@@ -129,7 +129,7 @@ world is static geometry plus simplified agents.
 
 ```cpp
 // core/world/regions/Region.hpp
-namespace simcore::regions {
+namespace lagrange::regions {
 
 struct RegionId { std::uint32_t value; };
 
@@ -147,7 +147,7 @@ enum class AgentLod : std::uint8_t {
     Statistical  // position and velocity only; no body; updated at the traffic rate
 };
 
-}  // namespace simcore::regions
+}  // namespace lagrange::regions
 ```
 
 Rules:

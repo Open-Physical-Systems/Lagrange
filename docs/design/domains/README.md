@@ -16,7 +16,7 @@ Conventions used in the signal listings:
   from `docs/design/architecture.md` §5. `SignalSpec` fields use C++20 designated initialisers.
 - `{j}` is a joint instance name, `{b}` a body, `{p}` the prim that carries the schema, `{bus}` a
   bus prim, `{s}` a sensor prim. Names follow architecture §4.
-- Units are constants from `simcore::units`. Constants not yet listed in architecture §3
+- Units are constants from `lagrange::units`. Constants not yet listed in architecture §3
   (`kg_m2`, `W_per_K`, `Hz`, `m_per_s2`, `rad_per_s2`, `N_s_per_m`, `one_per_s`, `bit_per_s`, `s`)
   are added to `core/signals/Unit.hpp` with the first module that needs them.
 - "Contract" lists the outputs that other domains may depend on. Every substitute must provide

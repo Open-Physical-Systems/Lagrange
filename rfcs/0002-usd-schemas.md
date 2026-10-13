@@ -27,8 +27,8 @@ before the first one is implemented, and a migration path from the start (invari
 1. Applied API schemas only; no new prim types.
 2. One namespace per library: `elec:`, `thermal:`, `aero:`, `weather:`, `emi:`, `rad:`,
    `sensmat:`, `sensor:`, `world:`.
-3. SI units for every attribute, recorded in `customData["simcore:unit"]` on the attribute
-   definition and parsed by the loader into `simcore::Unit`. A schema attribute without a unit
+3. SI units for every attribute, recorded in `customData["lagrange:unit"]` on the attribute
+   definition and parsed by the loader into `lagrange::Unit`. A schema attribute without a unit
    entry fails a repository test.
 4. Physical parameters are `double`.
 5. Site-dependent quantities (mains frequency, ambient temperature, Earth magnetic field, water
@@ -116,5 +116,5 @@ collected and reported together with prim paths.
 8. **Where calibration data lives.** Per-robot EMI calibration parameters are authored on prims.
    Should a robot instance be able to override them from a separate calibration layer? Proposed:
    yes, as an ordinary USD sublayer; no schema change needed.
-9. **Validation tool.** A `simcore check <stage>` command that reports schema and unit problems
+9. **Validation tool.** A `lagrange check <stage>` command that reports schema and unit problems
    without starting a simulation. Proposed for v0.2.

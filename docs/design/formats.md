@@ -29,8 +29,8 @@ format in `rfcs/0005-sim-profile-format.md`. This document expands CLAUDE.md §4
 2. **Namespaces.** `elec:`, `thermal:`, `aero:`, `emi:`, `rad:`, `sensmat:`, `sensor:`. One
    namespace per schema library.
 3. **Units.** Every attribute is SI. Every attribute definition carries
-   `customData = { string "simcore:unit" = "<unit>" }`. `core/stage/` parses that string into a
-   `simcore::Unit` and exposes it to modules, so the schema is the single source of unit truth.
+   `customData = { string "lagrange:unit" = "<unit>" }`. `core/stage/` parses that string into a
+   `lagrange::Unit` and exposes it to modules, so the schema is the single source of unit truth.
 4. **Types.** Physical parameters are `double`. The reference example in CLAUDE.md §11.3 uses
    `float`; see open question F4 for the reason to change.
 5. **No hidden site constants.** Attributes whose value depends on the site (mains frequency,
@@ -58,7 +58,7 @@ Library header used by every `schema.usda` below (shown once):
 
 over "GLOBAL" (
     customData = {
-        string libraryName = "simcoreElectrical"        # simcoreThermal, simcoreAero, ...
+        string libraryName = "lagrangeElectrical"        # lagrangeThermal, lagrangeAero, ...
         string libraryPath = "."
         bool skipCodeGeneration = true
     }
@@ -144,11 +144,11 @@ class "PortAPI_1" (
 )
 {
     uniform token kind = "dc" ( allowedTokens = ["dc", "ac1", "ac3", "signal"] )
-    double nominalVoltage ( customData = { string "simcore:unit" = "V" } )
-    double maxCurrent ( customData = { string "simcore:unit" = "A" } )
+    double nominalVoltage ( customData = { string "lagrange:unit" = "V" } )
+    double maxCurrent ( customData = { string "lagrange:unit" = "A" } )
     rel connectedTo ( doc = "Ports or bus prims on the same net." )
-    double wireResistance = 0.0 ( customData = { string "simcore:unit" = "ohm" } )
-    double wireInductance = 0.0 ( customData = { string "simcore:unit" = "H" } )
+    double wireResistance = 0.0 ( customData = { string "lagrange:unit" = "ohm" } )
+    double wireInductance = 0.0 ( customData = { string "lagrange:unit" = "H" } )
 }
 
 class "BatteryAPI_1" (
@@ -161,19 +161,19 @@ class "BatteryAPI_1" (
         allowedTokens = ["li_ion_nmc", "lfp", "lead_acid", "custom"] )
     int elec:battery:seriesCells
     int elec:battery:parallelCells = 1
-    double elec:battery:capacity ( customData = { string "simcore:unit" = "C" } )
-    double elec:battery:initialSoc = 1.0 ( customData = { string "simcore:unit" = "1" } )
-    double[] elec:battery:ocvSoc ( customData = { string "simcore:unit" = "1" } )
-    double[] elec:battery:ocvVoltage ( customData = { string "simcore:unit" = "V" } )
-    double elec:battery:r0 ( customData = { string "simcore:unit" = "ohm" } )
-    double elec:battery:r1 = 0.0 ( customData = { string "simcore:unit" = "ohm" } )
-    double elec:battery:c1 = 0.0 ( customData = { string "simcore:unit" = "F" } )
-    double elec:battery:r2 = 0.0 ( customData = { string "simcore:unit" = "ohm" } )
-    double elec:battery:c2 = 0.0 ( customData = { string "simcore:unit" = "F" } )
-    double elec:battery:referenceTemperature = 298.15 ( customData = { string "simcore:unit" = "K" } )
-    double elec:battery:r0TempCoeff = 0.0 ( customData = { string "simcore:unit" = "1/K" } )
-    double elec:battery:cutoffVoltage ( customData = { string "simcore:unit" = "V" } )
-    double elec:battery:maxChargeCurrent ( customData = { string "simcore:unit" = "A" } )
+    double elec:battery:capacity ( customData = { string "lagrange:unit" = "C" } )
+    double elec:battery:initialSoc = 1.0 ( customData = { string "lagrange:unit" = "1" } )
+    double[] elec:battery:ocvSoc ( customData = { string "lagrange:unit" = "1" } )
+    double[] elec:battery:ocvVoltage ( customData = { string "lagrange:unit" = "V" } )
+    double elec:battery:r0 ( customData = { string "lagrange:unit" = "ohm" } )
+    double elec:battery:r1 = 0.0 ( customData = { string "lagrange:unit" = "ohm" } )
+    double elec:battery:c1 = 0.0 ( customData = { string "lagrange:unit" = "F" } )
+    double elec:battery:r2 = 0.0 ( customData = { string "lagrange:unit" = "ohm" } )
+    double elec:battery:c2 = 0.0 ( customData = { string "lagrange:unit" = "F" } )
+    double elec:battery:referenceTemperature = 298.15 ( customData = { string "lagrange:unit" = "K" } )
+    double elec:battery:r0TempCoeff = 0.0 ( customData = { string "lagrange:unit" = "1/K" } )
+    double elec:battery:cutoffVoltage ( customData = { string "lagrange:unit" = "V" } )
+    double elec:battery:maxChargeCurrent ( customData = { string "lagrange:unit" = "A" } )
     asset elec:battery:behaviorModel
 }
 
@@ -184,21 +184,21 @@ class "ElectricalMotorAPI_1" (
 )
 {
     uniform token elec:motorType = "pmsm" ( allowedTokens = ["pmsm", "bldc", "dc_brushed"] )
-    double elec:windingResistance ( customData = { string "simcore:unit" = "ohm" } )
-    double elec:inductance ( customData = { string "simcore:unit" = "H" } )
-    double elec:inductanceQ ( customData = { string "simcore:unit" = "H" } )
-    double elec:torqueConstant ( customData = { string "simcore:unit" = "N.m/A" } )
-    double elec:backEmfConstant ( customData = { string "simcore:unit" = "V.s/rad" } )
+    double elec:windingResistance ( customData = { string "lagrange:unit" = "ohm" } )
+    double elec:inductance ( customData = { string "lagrange:unit" = "H" } )
+    double elec:inductanceQ ( customData = { string "lagrange:unit" = "H" } )
+    double elec:torqueConstant ( customData = { string "lagrange:unit" = "N.m/A" } )
+    double elec:backEmfConstant ( customData = { string "lagrange:unit" = "V.s/rad" } )
     int elec:polePairs = 1
-    double elec:rotorInertia = 0.0 ( customData = { string "simcore:unit" = "kg.m2" } )
-    double elec:gearRatio = 1.0 ( customData = { string "simcore:unit" = "1" } )
-    double elec:gearEfficiency = 1.0 ( customData = { string "simcore:unit" = "1" } )
-    double elec:maxCurrent ( customData = { string "simcore:unit" = "A" } )
-    double elec:referenceTemperature = 298.15 ( customData = { string "simcore:unit" = "K" } )
-    double elec:resistanceTempCoeff = 0.00393 ( customData = { string "simcore:unit" = "1/K" } )
+    double elec:rotorInertia = 0.0 ( customData = { string "lagrange:unit" = "kg.m2" } )
+    double elec:gearRatio = 1.0 ( customData = { string "lagrange:unit" = "1" } )
+    double elec:gearEfficiency = 1.0 ( customData = { string "lagrange:unit" = "1" } )
+    double elec:maxCurrent ( customData = { string "lagrange:unit" = "A" } )
+    double elec:referenceTemperature = 298.15 ( customData = { string "lagrange:unit" = "K" } )
+    double elec:resistanceTempCoeff = 0.00393 ( customData = { string "lagrange:unit" = "1/K" } )
     uniform token elec:controlMode = "torque" ( allowedTokens = ["torque", "velocity", "voltage"] )
-    double elec:currentLoopBandwidth = 6283.0 ( customData = { string "simcore:unit" = "rad/s" } )
-    double elec:pwmFrequency = 20000.0 ( customData = { string "simcore:unit" = "Hz" } )
+    double elec:currentLoopBandwidth = 6283.0 ( customData = { string "lagrange:unit" = "rad/s" } )
+    double elec:pwmFrequency = 20000.0 ( customData = { string "lagrange:unit" = "Hz" } )
     uniform token elec:rotorIntegration = "mechanical" ( allowedTokens = ["mechanical", "electrical"] )
     asset elec:behaviorModel
     rel elec:joint
@@ -247,17 +247,17 @@ class "ThermalAPI_1" (
     doc = "One lumped thermal node."
 )
 {
-    double thermal:heatCapacity ( customData = { string "simcore:unit" = "J/K" } )
-    double thermal:initialTemperature ( customData = { string "simcore:unit" = "K" } )
-    double thermal:convectionArea = 0.0 ( customData = { string "simcore:unit" = "m2" } )
-    double thermal:convectionCoeff = 10.0 ( customData = { string "simcore:unit" = "W/(m2.K)" } )
-    double thermal:forcedConvectionExponent = 0.8 ( customData = { string "simcore:unit" = "1" } )
-    double thermal:emissivity = 0.9 ( customData = { string "simcore:unit" = "1" } )
-    double thermal:radiativeArea = 0.0 ( customData = { string "simcore:unit" = "m2" } )
-    double thermal:solarAbsorptivity = 0.7 ( customData = { string "simcore:unit" = "1" } )
-    double thermal:solarArea = 0.0 ( customData = { string "simcore:unit" = "m2" } )
-    double thermal:maxTemperature ( customData = { string "simcore:unit" = "K" } )
-    double thermal:deratingStart ( customData = { string "simcore:unit" = "K" } )
+    double thermal:heatCapacity ( customData = { string "lagrange:unit" = "J/K" } )
+    double thermal:initialTemperature ( customData = { string "lagrange:unit" = "K" } )
+    double thermal:convectionArea = 0.0 ( customData = { string "lagrange:unit" = "m2" } )
+    double thermal:convectionCoeff = 10.0 ( customData = { string "lagrange:unit" = "W/(m2.K)" } )
+    double thermal:forcedConvectionExponent = 0.8 ( customData = { string "lagrange:unit" = "1" } )
+    double thermal:emissivity = 0.9 ( customData = { string "lagrange:unit" = "1" } )
+    double thermal:radiativeArea = 0.0 ( customData = { string "lagrange:unit" = "m2" } )
+    double thermal:solarAbsorptivity = 0.7 ( customData = { string "lagrange:unit" = "1" } )
+    double thermal:solarArea = 0.0 ( customData = { string "lagrange:unit" = "m2" } )
+    double thermal:maxTemperature ( customData = { string "lagrange:unit" = "K" } )
+    double thermal:deratingStart ( customData = { string "lagrange:unit" = "K" } )
 }
 
 class "ThermalLinkAPI_1" (
@@ -268,7 +268,7 @@ class "ThermalLinkAPI_1" (
     }
 )
 {
-    double conductance ( customData = { string "simcore:unit" = "W/K" } )
+    double conductance ( customData = { string "lagrange:unit" = "W/K" } )
     rel target
 }
 ```
@@ -305,12 +305,12 @@ class "AeroAPI_1" (
 )
 {
     uniform token aero:model = "drag_box" ( allowedTokens = ["drag_box", "drag_lift_table", "none"] )
-    double3 aero:referenceArea ( customData = { string "simcore:unit" = "m2" } )
-    double3 aero:dragCoeff = (1.0, 1.0, 1.0) ( customData = { string "simcore:unit" = "1" } )
-    double3 aero:centerOfPressure = (0, 0, 0) ( customData = { string "simcore:unit" = "m" } )
-    double aero:liftSlope = 0.0 ( customData = { string "simcore:unit" = "1/rad" } )
+    double3 aero:referenceArea ( customData = { string "lagrange:unit" = "m2" } )
+    double3 aero:dragCoeff = (1.0, 1.0, 1.0) ( customData = { string "lagrange:unit" = "1" } )
+    double3 aero:centerOfPressure = (0, 0, 0) ( customData = { string "lagrange:unit" = "m" } )
+    double aero:liftSlope = 0.0 ( customData = { string "lagrange:unit" = "1/rad" } )
     asset aero:coeffTable
-    double3 aero:angularDamping = (0, 0, 0) ( customData = { string "simcore:unit" = "N.m.s/rad" } )
+    double3 aero:angularDamping = (0, 0, 0) ( customData = { string "lagrange:unit" = "N.m.s/rad" } )
 }
 
 class "RotorAPI_1" (
@@ -318,10 +318,10 @@ class "RotorAPI_1" (
     customData = { token apiSchemaType = "singleApply" }
 )
 {
-    double aero:rotor:radius ( customData = { string "simcore:unit" = "m" } )
+    double aero:rotor:radius ( customData = { string "lagrange:unit" = "m" } )
     int aero:rotor:bladeCount
-    double aero:rotor:thrustCoeff ( customData = { string "simcore:unit" = "1" } )
-    double aero:rotor:powerCoeff ( customData = { string "simcore:unit" = "1" } )
+    double aero:rotor:thrustCoeff ( customData = { string "lagrange:unit" = "1" } )
+    double aero:rotor:powerCoeff ( customData = { string "lagrange:unit" = "1" } )
     uniform token aero:rotor:direction ( allowedTokens = ["cw", "ccw"] )
     asset aero:rotor:bladeTable
 }
@@ -359,22 +359,22 @@ class "WeatherAPI_1" (
     customData = { token apiSchemaType = "singleApply" }
 )
 {
-    double weather:ambientTemperature ( customData = { string "simcore:unit" = "K" } )
-    double weather:pressure ( customData = { string "simcore:unit" = "Pa" } )
-    double weather:relativeHumidity ( customData = { string "simcore:unit" = "1" } )
-    double3 weather:meanWind = (0, 0, 0) ( customData = { string "simcore:unit" = "m/s" } )
-    double weather:windReferenceHeight = 10.0 ( customData = { string "simcore:unit" = "m" } )
+    double weather:ambientTemperature ( customData = { string "lagrange:unit" = "K" } )
+    double weather:pressure ( customData = { string "lagrange:unit" = "Pa" } )
+    double weather:relativeHumidity ( customData = { string "lagrange:unit" = "1" } )
+    double3 weather:meanWind = (0, 0, 0) ( customData = { string "lagrange:unit" = "m/s" } )
+    double weather:windReferenceHeight = 10.0 ( customData = { string "lagrange:unit" = "m" } )
     uniform token weather:turbulenceModel = "none" ( allowedTokens = ["none", "dryden", "von_karman"] )
-    double weather:turbulenceIntensity = 0.0 ( customData = { string "simcore:unit" = "1" } )
+    double weather:turbulenceIntensity = 0.0 ( customData = { string "lagrange:unit" = "1" } )
     asset weather:windField
-    double weather:visibility ( customData = { string "simcore:unit" = "m" } )
+    double weather:visibility ( customData = { string "lagrange:unit" = "m" } )
     asset weather:fogField
-    double weather:rainRate = 0.0 ( customData = { string "simcore:unit" = "m/s" } )
-    double weather:dustConcentration = 0.0 ( customData = { string "simcore:unit" = "kg/m3" } )
-    double weather:dustMedianDiameter = 0.00001 ( customData = { string "simcore:unit" = "m" } )
-    double weather:solarIrradiance = 0.0 ( customData = { string "simcore:unit" = "W/m2" } )
-    double3 weather:sunDirection = (0, 0, 1) ( customData = { string "simcore:unit" = "1" } )
-    double weather:skyTemperature ( customData = { string "simcore:unit" = "K" } )
+    double weather:rainRate = 0.0 ( customData = { string "lagrange:unit" = "m/s" } )
+    double weather:dustConcentration = 0.0 ( customData = { string "lagrange:unit" = "kg/m3" } )
+    double weather:dustMedianDiameter = 0.00001 ( customData = { string "lagrange:unit" = "m" } )
+    double weather:solarIrradiance = 0.0 ( customData = { string "lagrange:unit" = "W/m2" } )
+    double3 weather:sunDirection = (0, 0, 1) ( customData = { string "lagrange:unit" = "1" } )
+    double weather:skyTemperature ( customData = { string "lagrange:unit" = "K" } )
 }
 ```
 
@@ -418,13 +418,13 @@ class "EmiSourceAPI_1" (
 {
     uniform token emi:sourceType (
         allowedTokens = ["power_line", "motor_drive", "transmitter", "welder", "custom"] )
-    double emi:frequency ( customData = { string "simcore:unit" = "Hz" }
+    double emi:frequency ( customData = { string "lagrange:unit" = "Hz" }
         doc = "Site parameter. No fallback: 50 Hz and 60 Hz grids both exist." )
-    double emi:current ( customData = { string "simcore:unit" = "A" } )
-    double emi:radiatedPower ( customData = { string "simcore:unit" = "W" } )
-    double[] emi:harmonics = [] ( customData = { string "simcore:unit" = "1" } )
-    double emi:dutyCycle = 1.0 ( customData = { string "simcore:unit" = "1" } )
-    double emi:bandwidth = 0.0 ( customData = { string "simcore:unit" = "Hz" } )
+    double emi:current ( customData = { string "lagrange:unit" = "A" } )
+    double emi:radiatedPower ( customData = { string "lagrange:unit" = "W" } )
+    double[] emi:harmonics = [] ( customData = { string "lagrange:unit" = "1" } )
+    double emi:dutyCycle = 1.0 ( customData = { string "lagrange:unit" = "1" } )
+    double emi:bandwidth = 0.0 ( customData = { string "lagrange:unit" = "Hz" } )
     asset emi:fieldMap
     uniform token emi:fieldMapQuantity = "B" ( allowedTokens = ["B", "E"] )
     rel emi:drivenBy
@@ -437,14 +437,14 @@ class "EmiSusceptibilityAPI_1" (
 {
     uniform token emi:victimType (
         allowedTokens = ["magnetometer", "imu_adc", "encoder", "can_bus", "radio"] )
-    double emi:magneticGain = 1.0 ( customData = { string "simcore:unit" = "1" } )
-    double emi:adcNoisePerField = 0.0 ( customData = { string "simcore:unit" = "V/(V/m)" } )
-    double emi:encoderGlitchField ( customData = { string "simcore:unit" = "V/m" } )
-    double emi:canErrorField ( customData = { string "simcore:unit" = "V/m" } )
-    double emi:canErrorRateAtField = 0.00001 ( customData = { string "simcore:unit" = "1" } )
-    double emi:receiverNoiseFigure = 1.0 ( customData = { string "simcore:unit" = "1" } )
-    double emi:couplingLoopArea = 0.0 ( customData = { string "simcore:unit" = "m2" } )
-    double emi:shieldingEffectiveness = 1.0 ( customData = { string "simcore:unit" = "1" } )
+    double emi:magneticGain = 1.0 ( customData = { string "lagrange:unit" = "1" } )
+    double emi:adcNoisePerField = 0.0 ( customData = { string "lagrange:unit" = "V/(V/m)" } )
+    double emi:encoderGlitchField ( customData = { string "lagrange:unit" = "V/m" } )
+    double emi:canErrorField ( customData = { string "lagrange:unit" = "V/m" } )
+    double emi:canErrorRateAtField = 0.00001 ( customData = { string "lagrange:unit" = "1" } )
+    double emi:receiverNoiseFigure = 1.0 ( customData = { string "lagrange:unit" = "1" } )
+    double emi:couplingLoopArea = 0.0 ( customData = { string "lagrange:unit" = "m2" } )
+    double emi:shieldingEffectiveness = 1.0 ( customData = { string "lagrange:unit" = "1" } )
 }
 ```
 
@@ -476,16 +476,16 @@ class "RadiationAPI_1" (
 {
     uniform token rad:role ( allowedTokens = ["source", "victim", "shield"] )
     uniform token rad:sourceType ( allowedTokens = ["point_gamma", "field_map"] )
-    double rad:activity ( customData = { string "simcore:unit" = "Bq" } )
-    double rad:gammaEnergy ( customData = { string "simcore:unit" = "J" } )
-    double rad:doseRateAt1m ( customData = { string "simcore:unit" = "Gy/s" } )
+    double rad:activity ( customData = { string "lagrange:unit" = "Bq" } )
+    double rad:gammaEnergy ( customData = { string "lagrange:unit" = "J" } )
+    double rad:doseRateAt1m ( customData = { string "lagrange:unit" = "Gy/s" } )
     asset rad:doseField
-    double rad:attenuationCoeff ( customData = { string "simcore:unit" = "1/m" } )
-    double rad:buildupFactor = 1.0 ( customData = { string "simcore:unit" = "1" } )
-    double rad:totalDoseLimit ( customData = { string "simcore:unit" = "Gy" } )
-    double rad:seuCrossSection = 0.0 ( customData = { string "simcore:unit" = "m2" } )
+    double rad:attenuationCoeff ( customData = { string "lagrange:unit" = "1/m" } )
+    double rad:buildupFactor = 1.0 ( customData = { string "lagrange:unit" = "1" } )
+    double rad:totalDoseLimit ( customData = { string "lagrange:unit" = "Gy" } )
+    double rad:seuCrossSection = 0.0 ( customData = { string "lagrange:unit" = "m2" } )
     int rad:sensitiveBits = 0
-    double rad:fluenceToDose ( customData = { string "simcore:unit" = "Gy.m2" } )
+    double rad:fluenceToDose ( customData = { string "lagrange:unit" = "Gy.m2" } )
 }
 ```
 
@@ -514,18 +514,18 @@ class "SensorMaterialAPI_1" (
     customData = { token apiSchemaType = "singleApply" }
 )
 {
-    double sensmat:reflectivity905 = 0.5 ( customData = { string "simcore:unit" = "1" } )
-    double sensmat:reflectivity1550 = 0.5 ( customData = { string "simcore:unit" = "1" } )
+    double sensmat:reflectivity905 = 0.5 ( customData = { string "lagrange:unit" = "1" } )
+    double sensmat:reflectivity1550 = 0.5 ( customData = { string "lagrange:unit" = "1" } )
     bool sensmat:retroreflective = false
-    double sensmat:specularFraction905 = 0.0 ( customData = { string "simcore:unit" = "1" } )
-    double sensmat:transmission905 = 0.0 ( customData = { string "simcore:unit" = "1" } )
-    double sensmat:radarCrossSectionDensity = 0.1 ( customData = { string "simcore:unit" = "1" } )
-    double sensmat:radarRoughness = 0.001 ( customData = { string "simcore:unit" = "m" } )
-    double sensmat:relativePermittivity = 1.0 ( customData = { string "simcore:unit" = "1" } )
-    double sensmat:conductivity = 0.0 ( customData = { string "simcore:unit" = "S/m" } )
-    double sensmat:relativePermeability = 1.0 ( customData = { string "simcore:unit" = "1" } )
-    double sensmat:thermalEmissivity = 0.9 ( customData = { string "simcore:unit" = "1" } )
-    double sensmat:frictionWetScale = 0.7 ( customData = { string "simcore:unit" = "1" } )
+    double sensmat:specularFraction905 = 0.0 ( customData = { string "lagrange:unit" = "1" } )
+    double sensmat:transmission905 = 0.0 ( customData = { string "lagrange:unit" = "1" } )
+    double sensmat:radarCrossSectionDensity = 0.1 ( customData = { string "lagrange:unit" = "1" } )
+    double sensmat:radarRoughness = 0.001 ( customData = { string "lagrange:unit" = "m" } )
+    double sensmat:relativePermittivity = 1.0 ( customData = { string "lagrange:unit" = "1" } )
+    double sensmat:conductivity = 0.0 ( customData = { string "lagrange:unit" = "S/m" } )
+    double sensmat:relativePermeability = 1.0 ( customData = { string "lagrange:unit" = "1" } )
+    double sensmat:thermalEmissivity = 0.9 ( customData = { string "lagrange:unit" = "1" } )
+    double sensmat:frictionWetScale = 0.7 ( customData = { string "lagrange:unit" = "1" } )
 }
 ```
 
@@ -561,7 +561,7 @@ stays tiny and has no external meshes.
     metersPerUnit = 1
     upAxis = "Z"
     kilogramsPerUnit = 1
-    doc = "Sample differential-drive AMR for simcore. Parameters are illustrative, not a real product."
+    doc = "Sample differential-drive AMR for lagrange. Parameters are illustrative, not a real product."
 )
 
 def Xform "amr" (
@@ -806,8 +806,8 @@ and requires a whole number of nanoseconds (architecture §2).
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://simcore.example/schemas/profile/1/schema.json",
-  "title": "simcore simulation profile",
+  "$id": "https://lagrange.example/schemas/profile/1/schema.json",
+  "title": "lagrange simulation profile",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "stage", "domains"],
@@ -1268,7 +1268,7 @@ parameters:
 ```
 
 - The FMU host checks each mapped variable's declared FMI unit against the signal unit. FMI units
-  are converted to a `simcore::Unit` from the `BaseUnit` exponents in `modelDescription.xml`; a
+  are converted to a `lagrange::Unit` from the `BaseUnit` exponents in `modelDescription.xml`; a
   mismatch is a wiring error.
 - FMUs must be source FMUs or carry a `linux64` (amd64) and `aarch64-linux` binary. Binary-only
   FMUs for one architecture make the profile fail on the other with a clear message.
@@ -1280,20 +1280,20 @@ parameters:
 ## 7. Recordings (MCAP)
 
 - One file per run. Chunked, zstd by default, with the summary section and index.
-- Message encoding: Protobuf, schemas from `proto/simcore/record/v1/`. The same
+- Message encoding: Protobuf, schemas from `proto/lagrange/record/v1/`. The same
   `SignalBlock` message as the live protocol is used, so replay is a file-backed protocol
   source.
 - Channels:
 
 | Channel topic | Message | Content |
 |---|---|---|
-| `/simcore/meta` | `RunMeta` | profile (YAML text), stage path and hash, schema versions, seed, tier, git describe |
-| `/simcore/catalog` | `SignalCatalog` | every signal's name, type, unit, writer |
-| `/simcore/scene/snapshot` | `SceneSnapshot` | one at start and every 10 s (seek points) |
-| `/simcore/scene/delta` | `SceneDelta` | transform and attribute changes |
-| `/simcore/signals/<rate_group>` | `SignalBlock` | signals grouped by writer step size |
-| `/simcore/state_hash` | `StateHash` | determinism check values |
-| `/simcore/log` | `LogRecord` | console messages |
+| `/lagrange/meta` | `RunMeta` | profile (YAML text), stage path and hash, schema versions, seed, tier, git describe |
+| `/lagrange/catalog` | `SignalCatalog` | every signal's name, type, unit, writer |
+| `/lagrange/scene/snapshot` | `SceneSnapshot` | one at start and every 10 s (seek points) |
+| `/lagrange/scene/delta` | `SceneDelta` | transform and attribute changes |
+| `/lagrange/signals/<rate_group>` | `SignalBlock` | signals grouped by writer step size |
+| `/lagrange/state_hash` | `StateHash` | determinism check values |
+| `/lagrange/log` | `LogRecord` | console messages |
 | ROS topics (optional) | CDR, as rosbag2 writes them | when `record.ros_topics` is used (later) |
 
 - Units are stored in the catalog. A replay substitute refuses a channel whose recorded unit
@@ -1333,7 +1333,7 @@ Electrical, thermal and EMI data do not exist in URDF/SDF/MJCF. Importers accept
 **overlay** file that applies our API schemas by link or joint name:
 
 ```yaml
-# amr.simcore.overlay.yaml
+# amr.lagrange.overlay.yaml
 schema_version: 1
 apply:
   - prim: left_wheel_joint
@@ -1358,9 +1358,9 @@ torque source. The viewer's domain panel shows why the electrical toggle is unav
 |---|---|---|---|
 | USD schemas | family + integer suffix (`ElectricalMotorAPI_1`) | Within a version: only additions with fallbacks. Renames, unit changes, removed attributes, changed fallbacks → new version | `tools/migrate_schema` rewrites `apiSchemas` and attributes; one function per (family, from, to) |
 | Profiles | `schema_version` integer | Same as above | `tools/migrate_profile` |
-| Protocol | package `simcore.viewer.v1` + handshake `(major, minor)` | `buf breaking` with the `WIRE_JSON` rule set against `main` | none; old clients are refused at handshake with a readable message |
+| Protocol | package `lagrange.viewer.v1` + handshake `(major, minor)` | `buf breaking` with the `WIRE_JSON` rule set against `main` | none; old clients are refused at handshake with a readable message |
 | Recordings | `RunMeta.format_version` + embedded schemas | Readers accept all older versions of the same major | `tools/mcap_upgrade` only on a major change |
-| Plugin ABI | `SIMCORE_PLUGIN_ABI_MAJOR/MINOR` | architecture §13 | none |
+| Plugin ABI | `LAGRANGE_PLUGIN_ABI_MAJOR/MINOR` | architecture §13 | none |
 | FMU map files | `schema_version` | as profiles | `tools/migrate_profile --fmu-map` |
 
 Loader behaviour: `core/stage/` supports the current and the previous version of each schema

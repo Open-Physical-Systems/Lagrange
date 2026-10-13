@@ -19,7 +19,7 @@ Agent bodies: near the robot (inside the active region) agents are kinematic rig
 collision shapes, so sensors see them and contacts are detected. Far agents are positions only
 (see `docs/design/huge-worlds.md`, simplified distant agents).
 
-SUMO is EPL-2.0 and runs as its own process; nothing from SUMO is linked into `simcore` binaries.
+SUMO is EPL-2.0 and runs as its own process; nothing from SUMO is linked into `lagrange` binaries.
 
 ## 3. Signals
 

@@ -18,7 +18,7 @@ Lyrical on 2026-10-13 (`docs/plan/verification.md` §4).
 
 ## 2. Common integration layer (all classes, from v0.2)
 
-### 2.1 ROS 2 bridge (`bridges/ros2/`, package `simcore_ros2`)
+### 2.1 ROS 2 bridge (`bridges/ros2/`, package `lagrange_ros2`)
 
 An `rclcpp` component inside the server process.
 
@@ -38,7 +38,7 @@ Lockstep: with `time.real_time_factor: 0` or when a controller must not miss a c
 can wait for a named set of subscribers to acknowledge each control period. This is implemented
 through ros2_control's own cycle (section 2.2), not through a custom ROS protocol.
 
-### 2.2 ros2_control (`bridges/ros2_control/`, package `simcore_ros2_control`)
+### 2.2 ros2_control (`bridges/ros2_control/`, package `lagrange_ros2_control`)
 
 Top-priority integration. A `hardware_interface::SystemInterface` plugin loaded by the user's
 `controller_manager`, as with `gz_ros2_control` (3.0.9 on Lyrical) and `mujoco_ros2_control`
@@ -49,7 +49,7 @@ Top-priority integration. A `hardware_interface::SystemInterface` plugin loaded 
 | Where the controller manager runs | Inside the server process, stepped by the scheduler at the controller update rate. This gives exact lockstep: read state → update controllers → write commands, once per control period, with no dependence on wall-clock timing |
 | State interfaces | `position`, `velocity`, `effort` per joint from `joint/{j}/*`; plus optional `current`, `temperature`, `bus_voltage` from electrical and thermal signals |
 | Command interfaces | `effort` → `joint/{j}/torque_command`; `velocity` and `position` → a built-in joint servo (PID with parameters from URDF `<ros2_control>` or the overlay) that produces `torque_command`. With electrical enabled and `elec:controlMode = velocity`, the velocity command goes to the drive model instead |
-| URDF | `<ros2_control>` blocks name the plugin `simcore_ros2_control/SimcoreSystem`. The importer keeps the block so the same URDF drives a real robot by changing the plugin name |
+| URDF | `<ros2_control>` blocks name the plugin `lagrange_ros2_control/LagrangeSystem`. The importer keeps the block so the same URDF drives a real robot by changing the plugin name |
 | Encoder effects | When EMI is enabled, `emi/{p}/glitch_probability` corrupts the position state read by controllers |
 
 ### 2.3 Scripting and RL
@@ -75,7 +75,7 @@ Sample assets: `assets/robots/amr_diffdrive/` (the file in `docs/design/formats.
 a ramp, a narrow aisle), `assets/worlds/empty_flat/`.
 
 Acceptance scenario for v0.2: the sample AMR navigates between four waypoints in the warehouse
-with Nav2, using `diff_drive_controller` through `simcore_ros2_control`, with lidar on Tier 0 and
+with Nav2, using `diff_drive_controller` through `lagrange_ros2_control`, with lidar on Tier 0 and
 Tier 1, for 10 simulated minutes without collision, at a real-time factor of at least 1.0 on the
 reference desktop.
 
@@ -147,7 +147,7 @@ repository, it is fetched by the build script.
 
 - In this repo: only files under 1 MB each (CLAUDE.md §9), authored for the project under
   Apache-2.0 or CC0, with primitive or low-polygon geometry.
-- In `simcore-assets` (separate repo or release bundles): detailed meshes and textures, each with
+- In `lagrange-assets` (separate repo or release bundles): detailed meshes and textures, each with
   a `LICENSE` and a source note. Fetched by `tools/fetch_assets` with SHA-256 verification.
 - No third-party robot model is redistributed until its license is recorded in
   `docs/design/dependencies.md`.

@@ -47,7 +47,7 @@ same HAL interfaces (invariant 8).
 
 ```cpp
 // gpu/capability/Capability.hpp
-namespace simcore::gpu {
+namespace lagrange::gpu {
 
 enum class CapabilityTier : std::uint8_t { Tier0 = 0, Tier1 = 1, Tier2 = 2 };
 
@@ -69,20 +69,20 @@ struct Capability {
     std::vector<std::string> reasons;  // why not a higher tier, human-readable
 };
 
-Capability detect(std::optional<CapabilityTier> requested);   // requested from profile or SIMCORE_TIER
+Capability detect(std::optional<CapabilityTier> requested);   // requested from profile or LAGRANGE_TIER
 
-}  // namespace simcore::gpu
+}  // namespace lagrange::gpu
 ```
 
 Rules:
 
 1. Enumerate Vulkan physical devices. Prefer discrete, then integrated; never choose a software
-   device when a hardware one exists. `SIMCORE_GPU=<index|name>` selects explicitly.
+   device when a hardware one exists. `LAGRANGE_GPU=<index|name>` selects explicitly.
 2. A software device alone gives Tier 0.
 3. The tier is the highest whose requirements the chosen device meets.
-4. `tier:` in the profile or `SIMCORE_TIER` lowers the effective tier. Requesting a tier above
+4. `tier:` in the profile or `LAGRANGE_TIER` lowers the effective tier. Requesting a tier above
    the detected one is an error (exit code 3), not a silent downgrade.
-5. `simcore_gpu_info` prints the `Capability` as text and JSON; bug reports ask for it.
+5. `lagrange_gpu_info` prints the `Capability` as text and JSON; bug reports ask for it.
 6. `reasons` lists what is missing ("no VK_KHR_ray_query", "4 GB device memory < 6 GB").
 
 ### The per-feature rule
@@ -122,7 +122,7 @@ that proves bit-identical output across runs on the same device and driver.
 | Tier | Where tested | When |
 |---|---|---|
 | 0 | GitHub-hosted runners in `ros:lyrical` containers, lavapipe for raster | every PR |
-| 1 | Self-hosted runner with `SIMCORE_TIER=1` (same RTX machine, RT features ignored); real integrated-GPU hardware in the manual release matrix | merge queue, nightly |
+| 1 | Self-hosted runner with `LAGRANGE_TIER=1` (same RTX machine, RT features ignored); real integrated-GPU hardware in the manual release matrix | merge queue, nightly |
 | 2 | Self-hosted RTX runner | merge queue, nightly |
 
 Running Tier 1 code paths on Tier 2 hardware does not test Tier 1 drivers. That gap is covered

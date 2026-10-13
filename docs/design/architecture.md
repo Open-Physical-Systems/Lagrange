@@ -11,7 +11,7 @@ Confidence marks: [High], [Medium], [Low] with the basis in brackets.
 
 ```mermaid
 flowchart TB
-  subgraph server["simcore_server (headless process)"]
+  subgraph server["lagrange_server (headless process)"]
     direction TB
     stage["core/stage: USD -> SoA"]
     world["core/world: SoA buffers, coords, regions"]
@@ -31,8 +31,8 @@ flowchart TB
     bus --> front
     world --> front
   end
-  mock["simcore_mock_server (replay of MCAP + USD)"]
-  viewer["simcore_viewer (native Vulkan + ImGui)"]
+  mock["lagrange_mock_server (replay of MCAP + USD)"]
+  viewer["lagrange_viewer (native Vulkan + ImGui)"]
   ros["bridges/ros2: rclcpp node"]
   script["python / gRPC clients"]
   front -- "viewer protocol (UDS/TCP + shm)" --> viewer
@@ -45,23 +45,23 @@ Colcon packages (each top-level directory is one or more `ament_cmake` packages)
 
 | Package | Directory | Depends on (project-internal) | First release |
 |---|---|---|---|
-| `simcore_proto` | `proto/` | — | v0.1 |
-| `simcore_core` | `core/` | — | v0.1 (units, signals, time only), v0.2 (all) |
-| `simcore_gpu_hal` | `gpu/hal/`, `gpu/capability/` | `simcore_core` | v0.1 |
-| `simcore_gpu_kernels` | `gpu/kernels/` | `simcore_gpu_hal` | v0.1 (viewer shaders), v0.2 (sensors) |
-| `simcore_viewer` | `viewer/` | `simcore_proto`, `simcore_gpu_hal`, `simcore_gpu_kernels` | v0.1 |
-| `simcore_mock_server` | `mock_server/` | `simcore_proto` | v0.1 |
-| `simcore_profiles` | `profiles/` | — | v0.1 |
-| `simcore_schemas` | `schemas/` | `openusd_vendor` | v0.2 |
-| `simcore_stage` | `core/stage/` | `simcore_core`, `simcore_schemas` | v0.2 |
-| `simcore_mod_<domain>` | `modules/<domain>/` | `simcore_core` only | per roadmap |
-| `simcore_io_*` | `io/*` | `simcore_core` | per roadmap |
-| `simcore_ros2`, `simcore_ros2_control` | `bridges/*` | `simcore_core` | v0.2 |
-| `simcore_server` | `server/` | `simcore_core`, `simcore_proto`, `simcore_stage` | v0.2 |
-| `simcore_py` | `python/` | `simcore_core` | v0.2 |
+| `lagrange_proto` | `proto/` | — | v0.1 |
+| `lagrange_core` | `core/` | — | v0.1 (units, signals, time only), v0.2 (all) |
+| `lagrange_gpu_hal` | `gpu/hal/`, `gpu/capability/` | `lagrange_core` | v0.1 |
+| `lagrange_gpu_kernels` | `gpu/kernels/` | `lagrange_gpu_hal` | v0.1 (viewer shaders), v0.2 (sensors) |
+| `lagrange_viewer` | `viewer/` | `lagrange_proto`, `lagrange_gpu_hal`, `lagrange_gpu_kernels` | v0.1 |
+| `lagrange_mock_server` | `mock_server/` | `lagrange_proto` | v0.1 |
+| `lagrange_profiles` | `profiles/` | — | v0.1 |
+| `lagrange_schemas` | `schemas/` | `openusd_vendor` | v0.2 |
+| `lagrange_stage` | `core/stage/` | `lagrange_core`, `lagrange_schemas` | v0.2 |
+| `lagrange_mod_<domain>` | `modules/<domain>/` | `lagrange_core` only | per roadmap |
+| `lagrange_io_*` | `io/*` | `lagrange_core` | per roadmap |
+| `lagrange_ros2`, `lagrange_ros2_control` | `bridges/*` | `lagrange_core` | v0.2 |
+| `lagrange_server` | `server/` | `lagrange_core`, `lagrange_proto`, `lagrange_stage` | v0.2 |
+| `lagrange_py` | `python/` | `lagrange_core` | v0.2 |
 
-`simcore_core` has no GPU, physics or USD dependency (invariant 5 keeps USD in `simcore_stage`).
-`simcore_viewer` never links a `simcore_mod_*` package or `simcore_server` (invariant 14). CI
+`lagrange_core` has no GPU, physics or USD dependency (invariant 5 keeps USD in `lagrange_stage`).
+`lagrange_viewer` never links a `lagrange_mod_*` package or `lagrange_server` (invariant 14). CI
 enforces both with a dependency-graph check on `package.xml` files.
 
 ## 2. Time
@@ -72,7 +72,7 @@ needs exact comparisons.
 
 ```cpp
 // core/time/SimTime.hpp
-namespace simcore {
+namespace lagrange {
 
 struct Duration {
     std::int64_t ns{0};
@@ -90,7 +90,7 @@ constexpr Duration operator""_ns(unsigned long long v) { return {static_cast<std
 constexpr Duration operator""_us(unsigned long long v) { return {static_cast<std::int64_t>(v) * 1'000}; }
 constexpr Duration operator""_ms(unsigned long long v) { return {static_cast<std::int64_t>(v) * 1'000'000}; }
 
-}  // namespace simcore
+}  // namespace lagrange
 ```
 
 A profile's `dt: 0.0001` is parsed as a decimal string and must be an exact multiple of 1 ns. A
@@ -107,7 +107,7 @@ therefore also carries a `QuantityKind`.
 
 ```cpp
 // core/signals/Unit.hpp
-namespace simcore {
+namespace lagrange {
 
 // Exponents of the seven SI base units plus angle. Angle is tracked so that rad/s and 1/s differ.
 struct Dimension {
@@ -166,14 +166,14 @@ inline constexpr Unit per_m     {{.length = -1},             1.0, QuantityKind::
 
 std::string to_string(const Unit&);   // "N·m (Torque)" — used in wiring error messages
 
-}  // namespace simcore
+}  // namespace lagrange
 ```
 
 Temperatures on the bus are always kelvin. Celsius exists only in UI formatting.
 
 ```cpp
 // core/signals/SignalType.hpp
-namespace simcore {
+namespace lagrange {
 
 enum class SignalType : std::uint8_t {
     Scalar,       // 1 x f64
@@ -192,7 +192,7 @@ enum class SignalType : std::uint8_t {
 
 std::size_t componentCount(SignalType, std::size_t arrayLength);  // f64 components, 0 for handles
 
-}  // namespace simcore
+}  // namespace lagrange
 ```
 
 ## 4. Signal bus
@@ -218,7 +218,7 @@ Examples: `joint/left_wheel/torque`, `bus/dc_48v/voltage`, `body/base_link/pose`
 
 ```cpp
 // core/signals/SignalBus.hpp
-namespace simcore {
+namespace lagrange {
 
 enum class Hold : std::uint8_t {
     ZeroOrder,          // reader sees the last committed value (default)
@@ -269,7 +269,7 @@ private:
     friend class Scheduler;                      // commit(), history management
 };
 
-}  // namespace simcore
+}  // namespace lagrange
 ```
 
 `read`/`write` are inline array accesses with a bounds check in debug builds. A module that is
@@ -288,7 +288,7 @@ addition is argued in RFC 0001.
 
 ```cpp
 // core/module/IModule.hpp
-namespace simcore {
+namespace lagrange {
 
 enum class StatusCode : std::uint8_t { Ok, InvalidConfig, UnitMismatch, MissingInput, Diverged, Unsupported, Internal };
 struct Status {
@@ -342,12 +342,12 @@ public:
     virtual Status restoreState(StateReader&) { return {StatusCode::Unsupported, {}}; }
 };
 
-}  // namespace simcore
+}  // namespace lagrange
 ```
 
 ```cpp
 // core/module/ModuleConfig.hpp
-namespace simcore {
+namespace lagrange {
 
 // The profile entry for one domain, already validated against profiles/schema.json.
 class ModuleConfig {
@@ -367,14 +367,14 @@ public:
     bool deterministic() const;                // profile's `deterministic: true`
 };
 
-}  // namespace simcore
+}  // namespace lagrange
 ```
 
 `WorldView` is the read-only runtime world. It contains no USD types (invariant 5).
 
 ```cpp
 // core/world/WorldView.hpp
-namespace simcore {
+namespace lagrange {
 
 struct BodyId  { std::uint32_t index; };
 struct JointId { std::uint32_t index; };
@@ -432,7 +432,7 @@ public:
     std::uint64_t topologyHash() const;                   // changes when bodies/joints/schemas change
 };
 
-}  // namespace simcore
+}  // namespace lagrange
 ```
 
 ## 6. Scheduler
@@ -466,7 +466,7 @@ current into a thermal loss model). Slow-to-fast uses `ZeroOrder` or `LinearExtr
 
 ```cpp
 // core/scheduler/Scheduler.hpp
-namespace simcore {
+namespace lagrange {
 
 struct ScheduledModule {
     IModule* module;
@@ -497,7 +497,7 @@ public:
     void add(std::unique_ptr<IModule> module, const ModuleConfig& config);
     std::expected<void, std::vector<WiringError>> wire(const WorldView& world);
 
-    // Introspection (used by the viewer's domain panel and by `simcore graph`).
+    // Introspection (used by the viewer's domain panel and by `lagrange graph`).
     std::span<const ScheduledModule> plan() const;
     Duration baseTick() const;
     Duration hyperperiod() const;
@@ -517,11 +517,11 @@ public:
     SignalBus& bus();
 };
 
-}  // namespace simcore
+}  // namespace lagrange
 ```
 
 `std::expected` is C++23. Because the project is limited to C++20 (CLAUDE.md §5), the code uses
-`tl::expected` or an in-tree `simcore::Expected<T, E>` with the same shape. This is a header
+`tl::expected` or an in-tree `lagrange::Expected<T, E>` with the same shape. This is a header
 sketch; the choice is tracked as an issue in the v0.2 core epic.
 
 Step sequence for one tick with electrical at 100 µs and physics at 1 ms:
@@ -553,7 +553,7 @@ domain safe is the **domain contract**: the set of outputs other domains may rel
 
 ```cpp
 // core/module/DomainContract.hpp
-namespace simcore {
+namespace lagrange {
 
 // "For every prim with ElectricalMotorAPI_1 that drives a joint, a signal
 //  joint/<joint>/torque of type Scalar and unit N·m exists."
@@ -592,9 +592,9 @@ public:
 };
 
 // In a module's .cpp. Registration happens when the plugin is loaded.
-#define SIMCORE_REGISTER_SUBSTITUTE(domain, kind, preset, Type) /* ... */
+#define LAGRANGE_REGISTER_SUBSTITUTE(domain, kind, preset, Type) /* ... */
 
-}  // namespace simcore
+}  // namespace lagrange
 ```
 
 Wiring rules that follow from this:
@@ -669,7 +669,7 @@ which is slow and expected to be benign.
 ## 9. Capability tiers
 
 Tiers are detected once at startup by `gpu/capability/` and can be forced lower with the profile
-key `tier` or the environment variable `SIMCORE_TIER`. RFC 0004 has the detection rules.
+key `tier` or the environment variable `LAGRANGE_TIER`. RFC 0004 has the detection rules.
 
 | Tier | Detection | Typical hardware |
 |---|---|---|
@@ -774,7 +774,7 @@ Measures:
 1. Integer time and a fixed total order of module steps (section 6).
 2. Serial module execution, or level-parallel execution with thread-count-independent results.
    Inside a module, parallel loops must use static partitioning and fixed-order reductions.
-3. Compiler flags for all `simcore_*` targets in deterministic builds: no `-ffast-math`,
+3. Compiler flags for all `lagrange_*` targets in deterministic builds: no `-ffast-math`,
    `-ffp-contract=off`, no `-march=native` in release artefacts.
 4. Counter-based RNG (Philox 4×32-10) keyed by `(runSeed, moduleId, entityId, stepIndex)`. No
    module owns sequential RNG state, so results do not depend on evaluation order.
@@ -786,7 +786,7 @@ Measures:
 7. GPU modules report `deterministic = false` unless they prove otherwise, and the scheduler
    refuses them in deterministic mode; the Tier 0 equivalents run instead.
 8. `Scheduler::stateHash()` is recorded into the MCAP file every 1000 ticks on the channel
-   `/simcore/state_hash`.
+   `/lagrange/state_hash`.
 
 CI (merge queue): run `profiles/examples/determinism_amr.yaml` twice for 10 simulated seconds and
 compare the hash channel and the final state bytes.
@@ -798,11 +798,11 @@ internal `IModule` adapter. First-party modules may use the C++ interface direct
 as plugins too, so that enabling or disabling them is a load-time choice.
 
 ```c
-/* core/plugin_abi/simcore_plugin.h
+/* core/plugin_abi/lagrange_plugin.h
  * SPDX-License-Identifier: Apache-2.0
  * Stable C ABI for simulation modules. C99. No exceptions, no C++ types cross this boundary. */
-#ifndef SIMCORE_PLUGIN_H
-#define SIMCORE_PLUGIN_H
+#ifndef LAGRANGE_PLUGIN_H
+#define LAGRANGE_PLUGIN_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -816,83 +816,83 @@ extern "C" {
  *   plugins with the same MAJOR.
  *   MINOR changes when fields are appended to structs or functions appended to tables. Every
  *   struct starts with struct_size so that either side can detect a shorter (older) struct. */
-#define SIMCORE_PLUGIN_ABI_MAJOR 1u
-#define SIMCORE_PLUGIN_ABI_MINOR 0u
+#define LAGRANGE_PLUGIN_ABI_MAJOR 1u
+#define LAGRANGE_PLUGIN_ABI_MINOR 0u
 
-#define SIMCORE_EXPORT __attribute__((visibility("default")))
+#define LAGRANGE_EXPORT __attribute__((visibility("default")))
 
-typedef enum simcore_status {
-    SIMCORE_OK = 0, SIMCORE_INVALID_CONFIG = 1, SIMCORE_UNIT_MISMATCH = 2,
-    SIMCORE_MISSING_INPUT = 3, SIMCORE_DIVERGED = 4, SIMCORE_UNSUPPORTED = 5, SIMCORE_INTERNAL = 6
-} simcore_status;
+typedef enum lagrange_status {
+    LAGRANGE_OK = 0, LAGRANGE_INVALID_CONFIG = 1, LAGRANGE_UNIT_MISMATCH = 2,
+    LAGRANGE_MISSING_INPUT = 3, LAGRANGE_DIVERGED = 4, LAGRANGE_UNSUPPORTED = 5, LAGRANGE_INTERNAL = 6
+} lagrange_status;
 
-typedef enum simcore_signal_type {
-    SIMCORE_SCALAR = 0, SIMCORE_VEC3 = 1, SIMCORE_QUAT = 2, SIMCORE_POSE = 3, SIMCORE_WRENCH = 4,
-    SIMCORE_SCALAR_ARRAY = 5, SIMCORE_BOOL = 6, SIMCORE_INT = 7, SIMCORE_BYTES = 8,
-    SIMCORE_FIELD3D = 9, SIMCORE_IMAGE = 10, SIMCORE_POINT_CLOUD = 11
-} simcore_signal_type;
+typedef enum lagrange_signal_type {
+    LAGRANGE_SCALAR = 0, LAGRANGE_VEC3 = 1, LAGRANGE_QUAT = 2, LAGRANGE_POSE = 3, LAGRANGE_WRENCH = 4,
+    LAGRANGE_SCALAR_ARRAY = 5, LAGRANGE_BOOL = 6, LAGRANGE_INT = 7, LAGRANGE_BYTES = 8,
+    LAGRANGE_FIELD3D = 9, LAGRANGE_IMAGE = 10, LAGRANGE_POINT_CLOUD = 11
+} lagrange_signal_type;
 
-typedef struct simcore_unit {
+typedef struct lagrange_unit {
     int8_t length, mass, time, current, temperature, amount, luminous, angle;
     double scale;             /* 1.0 for SI */
-    uint16_t kind;            /* simcore::QuantityKind value */
-} simcore_unit;
+    uint16_t kind;            /* lagrange::QuantityKind value */
+} lagrange_unit;
 
-typedef struct simcore_signal_spec {
+typedef struct lagrange_signal_spec {
     uint32_t struct_size;
     const char* name;         /* UTF-8, NUL-terminated; copied by the host during declare */
-    simcore_signal_type type;
-    simcore_unit unit;
+    lagrange_signal_type type;
+    lagrange_unit unit;
     uint32_t array_length;
     const char* frame;
     uint8_t hold;             /* 0 zero-order, 1 linear extrapolate, 2 window average */
     uint8_t optional;
     uint8_t feedback;
     double default_value;
-} simcore_signal_spec;
+} lagrange_signal_spec;
 
-typedef struct simcore_step_context {
+typedef struct lagrange_step_context {
     uint32_t struct_size;
     int64_t t_ns;
     int64_t dt_ns;
     uint64_t step_index;
     uint64_t seed;
-} simcore_step_context;
+} lagrange_step_context;
 
 /* Opaque host objects. */
-typedef struct simcore_world simcore_world;
-typedef struct simcore_config simcore_config;
-typedef struct simcore_bus simcore_bus;
-typedef struct simcore_declarer simcore_declarer;
+typedef struct lagrange_world lagrange_world;
+typedef struct lagrange_config lagrange_config;
+typedef struct lagrange_bus lagrange_bus;
+typedef struct lagrange_declarer lagrange_declarer;
 
 /* Functions the host gives to the plugin. */
-typedef struct simcore_host_api {
+typedef struct lagrange_host_api {
     uint32_t struct_size;
     uint32_t abi_major, abi_minor;
 
-    uint32_t (*declare_input)(simcore_declarer*, const simcore_signal_spec*);    /* returns signal id */
-    uint32_t (*declare_output)(simcore_declarer*, const simcore_signal_spec*);
+    uint32_t (*declare_input)(lagrange_declarer*, const lagrange_signal_spec*);    /* returns signal id */
+    uint32_t (*declare_output)(lagrange_declarer*, const lagrange_signal_spec*);
 
-    double (*bus_read)(const simcore_bus*, uint32_t id, uint32_t env);
-    void (*bus_write)(simcore_bus*, uint32_t id, uint32_t env, double value);
-    const double* (*bus_read_n)(const simcore_bus*, uint32_t id, uint32_t env, uint32_t* count);
-    void (*bus_write_n)(simcore_bus*, uint32_t id, uint32_t env, const double* values, uint32_t count);
+    double (*bus_read)(const lagrange_bus*, uint32_t id, uint32_t env);
+    void (*bus_write)(lagrange_bus*, uint32_t id, uint32_t env, double value);
+    const double* (*bus_read_n)(const lagrange_bus*, uint32_t id, uint32_t env, uint32_t* count);
+    void (*bus_write_n)(lagrange_bus*, uint32_t id, uint32_t env, const double* values, uint32_t count);
 
-    uint32_t (*world_joint_count)(const simcore_world*);
-    const char* (*world_joint_name)(const simcore_world*, uint32_t joint);
-    uint32_t (*world_schema_instance_count)(const simcore_world*, const char* schema);
-    int (*world_schema_real)(const simcore_world*, const char* schema, uint32_t instance,
+    uint32_t (*world_joint_count)(const lagrange_world*);
+    const char* (*world_joint_name)(const lagrange_world*, uint32_t joint);
+    uint32_t (*world_schema_instance_count)(const lagrange_world*, const char* schema);
+    int (*world_schema_real)(const lagrange_world*, const char* schema, uint32_t instance,
                              const char* attr, double* out);          /* 1 if present */
-    const char* (*world_schema_instance_name)(const simcore_world*, const char* schema, uint32_t instance);
+    const char* (*world_schema_instance_name)(const lagrange_world*, const char* schema, uint32_t instance);
 
-    int (*config_get_real)(const simcore_config*, const char* key, double* out);
-    int (*config_get_string)(const simcore_config*, const char* key, const char** out);
+    int (*config_get_real)(const lagrange_config*, const char* key, double* out);
+    int (*config_get_string)(const lagrange_config*, const char* key, const char** out);
 
     void (*log)(int level, const char* message);                      /* 0 debug .. 3 error */
-} simcore_host_api;
+} lagrange_host_api;
 
 /* Functions the plugin gives to the host. `self` is the plugin's own instance pointer. */
-typedef struct simcore_module_api {
+typedef struct lagrange_module_api {
     uint32_t struct_size;
     const char* domain;             /* "electrical" */
     const char* name;               /* "acme_bldc_drive" */
@@ -902,28 +902,28 @@ typedef struct simcore_module_api {
     uint8_t minimum_tier;           /* 0, 1, 2 */
     int64_t preferred_step_ns;
 
-    void* (*create)(const simcore_host_api*);
+    void* (*create)(const lagrange_host_api*);
     void (*destroy)(void* self);
-    simcore_status (*declare)(void* self, const simcore_world*, const simcore_config*, simcore_declarer*);
-    simcore_status (*init)(void* self, const simcore_world*, const simcore_config*, simcore_bus*);
-    simcore_status (*step)(void* self, const simcore_step_context*, simcore_bus*);
+    lagrange_status (*declare)(void* self, const lagrange_world*, const lagrange_config*, lagrange_declarer*);
+    lagrange_status (*init)(void* self, const lagrange_world*, const lagrange_config*, lagrange_bus*);
+    lagrange_status (*step)(void* self, const lagrange_step_context*, lagrange_bus*);
     void (*shutdown)(void* self);
     /* Optional (may be NULL). Size query: call with buffer == NULL. */
-    simcore_status (*save_state)(const void* self, uint8_t* buffer, size_t capacity, size_t* written);
-    simcore_status (*restore_state)(void* self, const uint8_t* buffer, size_t size);
+    lagrange_status (*save_state)(const void* self, uint8_t* buffer, size_t capacity, size_t* written);
+    lagrange_status (*restore_state)(void* self, const uint8_t* buffer, size_t size);
     const char* (*last_error)(const void* self);
-} simcore_module_api;
+} lagrange_module_api;
 
 /* The single symbol a plugin exports. Returns NULL if host_abi_major is not supported.
  * `index` enumerates the modules in this shared object: 0, 1, ... until NULL. */
-SIMCORE_EXPORT const simcore_module_api* simcore_plugin_get_module(uint32_t host_abi_major,
+LAGRANGE_EXPORT const lagrange_module_api* lagrange_plugin_get_module(uint32_t host_abi_major,
                                                                    uint32_t host_abi_minor,
                                                                    uint32_t index);
 
 #ifdef __cplusplus
 }
 #endif
-#endif /* SIMCORE_PLUGIN_H */
+#endif /* LAGRANGE_PLUGIN_H */
 ```
 
 ABI policy:
@@ -933,7 +933,7 @@ ABI policy:
   previous minor header, and loads both.
 - `abidiff` (libabigail) runs in CI against the last release for `core/plugin_abi/` headers.
   TODO(verify): libabigail availability in Resolute.
-- Plugins are discovered through the ament resource index (resource type `simcore_plugins`), which
+- Plugins are discovered through the ament resource index (resource type `lagrange_plugins`), which
   is how ROS packages register plugins without scanning directories.
 
 ## 14. Startup sequence

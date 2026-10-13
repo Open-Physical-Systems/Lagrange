@@ -10,7 +10,7 @@
 
 ## Summary
 
-`simcore_viewer` uses SDL3 for windows and input, Dear ImGui (docking branch) with ImPlot,
+`lagrange_viewer` uses SDL3 for windows and input, Dear ImGui (docking branch) with ImPlot,
 imgui-node-editor and ImGuizmo for the interface, and its own Vulkan renderer built on `gpu/hal/`
 and Slang shaders that are shared with camera-sensor rendering. All ImGui-family libraries are
 built from pinned commits in one vendor package. The default is a single docked window that
