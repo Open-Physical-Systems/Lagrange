@@ -1,0 +1,24 @@
+# clang-format 21 (Ubuntu 26.04: 21.1.6). Pin the major version in pre-commit and CI.
+BasedOnStyle: Google
+Language: Cpp
+Standard: c++20            # matches the project's language level (GCC 15 on Ubuntu 26.04)
+ColumnLimit: 100
+IndentWidth: 4
+AccessModifierOffset: -4
+PointerAlignment: Left
+DerivePointerAlignment: false
+IncludeBlocks: Regroup
+IncludeCategories:          # first matching regex wins, so order matters
+  - Regex: '^"'              # this target's own headers, first block after the main include
+    Priority: 0
+  - Regex: '^<lagrange/'      # project headers last
+    Priority: 4
+  - Regex: '^<(rclcpp|rclcpp_components|rcl|rmw|rosidl|hardware_interface|controller_manager|pluginlib|tf2|tf2_ros|ament_index_cpp|[a-z0-9_]+_msgs)/'   # ROS
+    Priority: 3
+  - Regex: '^<(pxr|PxPhysics|mujoco|Jolt|openvdb|nanovdb|embree4|vulkan|vk_mem_alloc|volk|SDL3|imgui|implot|google/protobuf|mcap|yaml-cpp|nlohmann|fmt|spdlog|Eigen|gtest|gmock|benchmark)[/.]'   # third-party
+    Priority: 2
+  - Regex: '^<.*>'           # std
+    Priority: 1
+AllowShortFunctionsOnASingleLine: Inline
+BreakConstructorInitializers: BeforeComma
+SortIncludes: CaseSensitive

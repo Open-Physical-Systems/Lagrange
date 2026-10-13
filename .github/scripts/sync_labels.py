@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 LINE = re.compile(
     r'^- \{ name: "(?P<name>[^"]+)",\s+color: "(?P<color>[0-9a-fA-F]{6})",'
@@ -21,7 +22,7 @@ LINE = re.compile(
 
 def parse(path: str) -> list[dict[str, str]]:
     labels = []
-    with open(path, encoding="utf-8") as handle:
+    with Path(path).open(encoding="utf-8") as handle:
         for number, raw in enumerate(handle, start=1):
             line = raw.rstrip("\n")
             if not line.strip() or line.lstrip().startswith("#"):
@@ -45,11 +46,20 @@ def main() -> int:
         sys.exit(f"duplicate label names: {', '.join(duplicates)}")
     for label in labels:
         if dry_run:
-            print(f'{label["name"]:32} #{label["color"]}  {label["description"]}')
+            print(f"{label['name']:32} #{label['color']}  {label['description']}")
             continue
         subprocess.run(
-            ["gh", "label", "create", label["name"], "--color", label["color"],
-             "--description", label["description"], "--force"],
+            [
+                "gh",
+                "label",
+                "create",
+                label["name"],
+                "--color",
+                label["color"],
+                "--description",
+                label["description"],
+                "--force",
+            ],
             check=True,
         )
     print(f"{len(labels)} labels {'parsed' if dry_run else 'synced'}")
