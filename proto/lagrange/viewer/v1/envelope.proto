@@ -31,5 +31,10 @@ message Envelope {
     Command command = 30;
     CommandResult command_result = 31;
     ProfileState profile_state = 32;
+
+    Event event = 40;
+    EventList event_list = 41;
+    ServerStats server_stats = 42;
+    RecordingInfo recording_info = 43;
   }
 }

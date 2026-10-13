@@ -83,6 +83,15 @@ message ElectricalNet {
   uint32 bus_prim = 3;
   repeated NetTerminal terminals = 4;
   string voltage_signal = 5; // signal name, empty if none
+  repeated NetLimit limits = 6;
+}
+// A bound the net's protection acts on: over- and undervoltage, a fuse rating.
+message NetLimit {
+  string label = 1; // "OV limit", "UV trip", "fuse F1"
+  double value = 2;
+  Unit unit = 3;
+  bool upper = 4; // true: the signal must stay below the value; false: above it
+  string signal = 5; // the signal that is compared with it
 }
 message NetTerminal {
   uint32 prim = 1;

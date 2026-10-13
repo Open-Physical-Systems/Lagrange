@@ -53,6 +53,10 @@ Every message on the stream is:
 | S→C | `LogRecord` | console output | small |
 | S→C | `RosGraph` | 1 Hz when the ROS panel is open | medium |
 | S→C | `SensorFrame` | subscribed sensor views (image, point cloud) | large (shm when local) |
+| S→C | `EventList` | after hello and when another run is loaded | medium |
+| S→C | `Event` | when something happens in a live run | small |
+| S→C | `ServerStats` | 1 Hz | small |
+| S→C | `RecordingInfo` | after hello and when another recording is opened (replay) | small |
 | both | `Ping` / `Pong` | every 2 s; timeout 10 s | small |
 
 The viewer does not link `rclcpp`. The ROS 2 topic browser is filled from `RosGraph`, which the
@@ -587,6 +591,30 @@ message Envelope {
   }
 }
 ```
+
+### 4.1 Additions of 2026-10-14 (version 0.1, backwards compatible)
+
+Added while building the viewer's screens, as new messages and new fields only; `buf breaking`
+passes against the previous files. The `.proto` files in `proto/` are the reference; the
+draft above predates them.
+
+| Addition | Where | Used by |
+|---|---|---|
+| `Event`, `EventList` | `session.proto`, `Envelope` 40 and 41 | timeline event lanes (Scene, Replay), Events list |
+| `ServerStats` with per-module timings | `session.proto`, `Envelope` 42 | Performance workspace |
+| `RecordingInfo` with channels | `session.proto`, `Envelope` 43 | Replay workspace: Recording and Channels |
+| `Wiring` (nodes, wires with source and sink units) in `ProfileValidation` | `command.proto` | Domains workspace: wiring graph, unit checks, schedule |
+| `NetLimit` in `ElectricalNet` | `scene.proto` | Electrical workspace: limits |
+
+Rules that go with them:
+
+- An `EventList` replaces what the viewer holds; an `Event` appends. A recording sends its
+  whole list with `complete = true`.
+- `ServerStats.estimated` says whether module costs are measured or estimated. The mock server
+  sets it: it replays, so its module costs are the profile's estimates.
+- `Wiring` is sent whenever the profile text could be parsed, also when a unit check fails:
+  a wire with `unit_ok = false` is what the user has to see (invariant 2).
+- `QuantityKind` gained `LinearAcceleration`, appended to the list (architecture §2).
 
 ## 5. Session flow
 

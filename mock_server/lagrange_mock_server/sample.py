@@ -41,6 +41,8 @@ BATTERY_OPEN_CIRCUIT = 52.5  # V
 BATTERY_RESISTANCE = 0.05  # ohm, pack + harness
 BATTERY_CAPACITY = 144_000.0  # C (40 Ah)
 COMPUTER_POWER = 45.0  # W
+PACK_CELLS = 13  # in series
+PACK_CURRENT_LIMIT = 40.0  # A, continuous discharge (1C of a 40 Ah pack)
 CURRENT_LOOP_BANDWIDTH = 2.0 * np.pi * 1000.0  # rad/s
 
 # Path: a lemniscate that closes after one period, so a looping replay has no jump.
@@ -348,6 +350,13 @@ def generate_sample(duration_s: float = PATH_PERIOD, seed: int = 1) -> Recording
     net.terminals.add(prim=8, port="dc_in", current_signal="motor/left_drive_motor/current_dc")
     net.terminals.add(prim=9, port="dc_in", current_signal="motor/right_drive_motor/current_dc")
     net.terminals.add(prim=11, port="dc_in", current_signal="load/computer/current")
+    # What the pack's protection acts on: 13 cells in series at 4.2 V and 3.0 V per cell.
+    net.limits.add(label="OV limit", value=PACK_CELLS * 4.2, unit=units.VOLT, upper=True,
+                   signal="bus/dc_48v/voltage")
+    net.limits.add(label="UV trip", value=PACK_CELLS * 3.0, unit=units.VOLT, upper=False,
+                   signal="bus/dc_48v/voltage")
+    net.limits.add(label="pack current", value=PACK_CURRENT_LIMIT, unit=units.AMPERE,
+                   upper=True, signal="battery/battery/current")
 
     # --- signals ---------------------------------------------------------------------------
     scalar = common_pb2.SIGNAL_TYPE_SCALAR

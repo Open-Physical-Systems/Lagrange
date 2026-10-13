@@ -158,6 +158,100 @@ private:
     std::atomic<std::uint64_t> rejected_{0};
 };
 
+/// Something that happened in a run at a time or over a span.
+struct EventInfo {
+    enum class Severity : std::uint8_t { Info = 1, Warning = 2, Error = 3 };
+    std::uint64_t id{0};
+    std::int64_t beginNs{0};
+    std::int64_t endNs{0};  ///< Equal to beginNs for an instant.
+    std::string domain;     ///< The lane it is drawn in.
+    std::string kind;       ///< "regen", "slip": stable, for filtering.
+    Severity severity{Severity::Info};
+    std::string text;
+    std::uint32_t prim{kNone};
+    std::string signal;  ///< The signal that shows it; may be empty.
+};
+
+/// The events of the run so far, ordered by begin time. Immutable once published.
+struct EventLog {
+    static constexpr std::size_t kCapacity = 20'000;
+    std::vector<EventInfo> events;
+    bool complete{false};  ///< A recording: no further events will come.
+};
+
+/// What the server costs to run, as it last reported. Immutable once published.
+struct ServerStatistics {
+    struct Module {
+        std::string module;  ///< "rigid_body/mujoco"
+        std::string domain;
+        std::int64_t dtNs{0};
+        double stepsPerSecond{0.0};
+        double cpuMsPerStep{0.0};
+        double cpuMsPerStepMax{0.0};
+        bool onGpu{false};
+    };
+    std::uint64_t serial{0};  ///< Increases with every report.
+    std::int64_t simTimeNs{0};
+    std::vector<Module> modules;
+    double realTimeFactor{0.0};
+    double tickMs{0.0};
+    double tickMsMax{0.0};
+    std::uint64_t memoryBytes{0};
+    std::uint64_t gpuMemoryBytes{0};
+    double bytesPerSecondOut{0.0};
+    std::uint32_t viewers{0};
+    bool estimated{false};  ///< Module costs are estimates, not measurements.
+};
+
+/// The recording a replay reads. Immutable once published.
+struct RecordingFacts {
+    struct Channel {
+        std::string topic;
+        double rateHz{0.0};
+        std::uint64_t messages{0};
+        std::string unit;
+    };
+    std::string path;  ///< Empty for a generated run.
+    std::int64_t durationNs{0};
+    std::uint64_t sizeBytes{0};
+    std::string compression;
+    std::vector<Channel> channels;
+    std::uint64_t messages{0};
+    std::int64_t recordedUnixNs{0};
+    bool synthetic{false};
+    std::string generator;
+    std::string description;
+};
+
+/// The modules and substitutes a profile would connect, and the signals between them.
+struct WiringInfo {
+    struct Node {
+        std::string module;
+        std::string domain;
+        bool substitute{false};
+        std::string detail;  ///< Backend, fidelity, or the substitute's name.
+        std::int64_t dtNs{0};
+        std::vector<std::string> inputs;
+        std::vector<std::string> outputs;
+        bool onGpu{false};
+    };
+    struct Wire {
+        std::string from;
+        std::string to;
+        std::string signal;
+        std::string symbol;
+        std::string sourceUnit;
+        std::string sinkUnit;
+        bool unitOk{true};
+        bool stiff{false};
+    };
+    std::vector<Node> nodes;
+    std::vector<Wire> wires;
+    std::int64_t baseTickNs{0};
+    std::int64_t syncNs{0};
+    [[nodiscard]] bool empty() const { return nodes.empty(); }
+};
+
 /// One thing that can stand in for a disabled domain.
 struct SubstituteOption {
     std::string token;  ///< What the profile says: "zero", "replay", ...
@@ -213,6 +307,7 @@ struct ProfileCheck {
     std::uint64_t requestId{0};  ///< What validateProfile() returned for this text.
     bool valid{false};
     std::vector<ProfileIssue> issues;
+    WiringInfo wiring;  ///< Empty when the text could not be read as a profile.
 };
 
 struct ClientStats {
@@ -285,6 +380,18 @@ public:
         return attributes_.load();
     }
 
+    // --- the run -------------------------------------------------------------------------
+    /// Events of the run. Never null; empty until the server sends some.
+    [[nodiscard]] std::shared_ptr<const EventLog> events() const { return events_.load(); }
+    /// The server's latest statistics, or nullptr before the first report.
+    [[nodiscard]] std::shared_ptr<const ServerStatistics> statistics() const {
+        return statistics_.load();
+    }
+    /// The recording being replayed, or nullptr when the server did not describe one.
+    [[nodiscard]] std::shared_ptr<const RecordingFacts> recording() const {
+        return recording_.load();
+    }
+
     // --- sensors ---------------------------------------------------------------------------
     /// Starts receiving the frames of a sensor, named by its prim path. Asking again for the
     /// same sensor returns the same stream. The subscription survives reconnects.
@@ -334,6 +441,10 @@ private:
     std::atomic<std::shared_ptr<const Notice>> notice_;
     std::atomic<std::shared_ptr<const ProfileInfo>> profile_;
     std::atomic<std::shared_ptr<const LogBook>> logs_;
+    std::atomic<std::shared_ptr<const EventLog>> events_;
+    std::atomic<std::shared_ptr<const ServerStatistics>> statistics_;
+    std::atomic<std::shared_ptr<const RecordingFacts>> recording_;
+    std::atomic<std::uint64_t> statisticsSerial_{0};
     std::atomic<std::shared_ptr<const PrimAttributes>> attributes_;
     std::atomic<std::shared_ptr<const ProfileCheck>> profileCheck_;
     std::atomic<std::uint64_t> profileSerial_{0};

@@ -256,6 +256,8 @@ class Checked:
 
     def to_proto(self) -> command_pb2.ProfileValidation:
         result = command_pb2.ProfileValidation(valid=self.valid)
+        if self.data is not None and isinstance(self.data.get("domains"), dict):
+            result.wiring.CopyFrom(wiring(self.data))
         for issue in self.issues:
             result.issues.add(
                 severity=(
@@ -322,6 +324,85 @@ def check(text: str) -> Checked:
                     )
                 )
     return Checked(data, issues)
+
+
+# --- wiring ------------------------------------------------------------------------------------
+
+# What each module reads from another: (writer, reader, signal, symbol, unit, stiff).
+# A real server takes this from the SignalSpec lists of its modules (invariant 2); here it is
+# the same information written out for the modules the profile can name.
+_WIRES: tuple[tuple[str, str, str, str, str, bool], ...] = (
+    ("electrical", "rigid_body", "joint/*/torque", "τ", "N·m", True),
+    ("rigid_body", "electrical", "joint/*/velocity", "ω", "rad/s", True),
+    ("electrical", "thermal", "*/loss_power", "P", "W", False),
+    ("thermal", "electrical", "*/temperature", "T", "K", False),
+    ("aerodynamics", "rigid_body", "link/*/ext_wrench", "F, τ", "N, N·m", False),
+    ("rigid_body", "aerodynamics", "link/*/velocity", "v", "m/s", False),
+    ("weather", "aerodynamics", "weather/wind", "v_wind", "m/s", False),
+    ("weather", "rigid_body", "contact/*/friction_scale", "μ_wet", "1", False),
+    ("weather", "thermal", "weather/ambient", "T_amb", "K", False),
+    ("weather", "sensors", "weather/extinction", "sigma_ext", "1/m", False),
+    ("rigid_body", "sensors", "body/*/pose", "pose", "m", False),
+    ("emi", "sensors", "emi/flux_density", "B", "T", False),
+    ("electrical", "emi", "motor/*/current", "I", "A", False),
+    ("rigid_body", "emi", "body/*/pose", "pose", "m", False),
+    ("rigid_body", "radiation", "body/*/pose", "pose", "m", False),
+    ("emi", "comms", "emi/noise_floor", "N0", "dBm", False),
+    ("rigid_body", "comms", "body/*/pose", "pose", "m", False),
+)
+_GPU_DOMAINS = ("sensors", "weather")
+
+
+def wiring(data: dict[str, Any]) -> command_pb2.Wiring:
+    """The modules and substitutes the profile names, and the signals between them."""
+    result = command_pb2.Wiring()
+    domains = data.get("domains", {})
+    present: dict[str, dict[str, Any]] = {
+        name: settings for name, settings in domains.items() if isinstance(settings, dict)
+    }
+    steps: list[int] = []
+    for name in (*CORE_DOMAINS, *EXTRA_DOMAINS):
+        settings = present.get(name)
+        facts = FACTS.get(name)
+        if settings is None or facts is None:
+            continue
+        enabled = bool(settings.get("enabled", False))
+        token = settings.get("substitute")
+        if isinstance(token, dict):
+            token = token.get("kind")
+        node = result.nodes.add(module=name, domain=name, substitute=not enabled)
+        if enabled:
+            node.detail = str(
+                settings.get("backend")
+                or settings.get("fidelity")
+                or (facts.backends or facts.fidelities or ("built-in",))[0]
+            )
+            node.dt_ns = _step_ns(settings, facts)
+            node.on_gpu = name in _GPU_DOMAINS
+            if node.dt_ns > 0:
+                steps.append(node.dt_ns)
+        else:
+            node.detail = str(token or (facts.substitutes[0].token if facts.substitutes else ""))
+    by_name = {node.module: node for node in result.nodes}
+    for writer, reader, signal, symbol, unit, stiff in _WIRES:
+        if writer not in by_name or reader not in by_name:
+            continue
+        result.wires.add(
+            signal=signal,
+            symbol=symbol,
+            source_unit=unit,
+            sink_unit=unit,
+            unit_ok=True,
+            stiff=stiff and not by_name[writer].substitute and not by_name[reader].substitute,
+            **{"from": writer, "to": reader},
+        )
+        by_name[writer].outputs.append(symbol)
+        by_name[reader].inputs.append(symbol)
+    result.base_tick_ns = min(steps, default=0)
+    # Modules exchange signals at the mechanical step, or at the smallest step there is.
+    rigid = by_name.get("rigid_body")
+    result.sync_ns = rigid.dt_ns if rigid is not None and rigid.dt_ns > 0 else result.base_tick_ns
+    return result
 
 
 # --- canonical text ---------------------------------------------------------------------------

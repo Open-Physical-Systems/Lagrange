@@ -76,6 +76,7 @@ ViewerClient::ViewerClient(proto::Endpoint endpoint)
     status_.store(std::make_shared<const ServerStatus>());
     notice_.store(std::make_shared<const Notice>());
     logs_.store(std::make_shared<const LogBook>());
+    events_.store(std::make_shared<const EventLog>());
     connection_.store(std::make_shared<const ConnectionInfo>());
 }
 
@@ -445,6 +446,54 @@ AttributeInfo toAttribute(const v1::Attribute& source) {
     return info;
 }
 
+EventInfo toEvent(const v1::Event& source) {
+    EventInfo event;
+    event.id = source.id();
+    event.beginNs = source.begin().ns();
+    event.endNs = std::max(source.end().ns(), event.beginNs);  // never a negative span
+    event.domain = source.domain();
+    event.kind = source.kind();
+    const int severity =
+        std::clamp(static_cast<int>(source.severity()), static_cast<int>(EventInfo::Severity::Info),
+                   static_cast<int>(EventInfo::Severity::Error));
+    event.severity = static_cast<EventInfo::Severity>(severity);
+    event.text = source.text();
+    event.prim = source.prim();
+    event.signal = source.signal();
+    return event;
+}
+
+WiringInfo toWiring(const v1::Wiring& source) {
+    WiringInfo wiring;
+    wiring.baseTickNs = source.base_tick_ns();
+    wiring.syncNs = source.sync_ns();
+    for (const v1::Wiring::Node& node : source.nodes()) {
+        WiringInfo::Node out;
+        out.module = node.module();
+        out.domain = node.domain();
+        out.substitute = node.substitute();
+        out.detail = node.detail();
+        out.dtNs = node.dt_ns();
+        out.inputs.assign(node.inputs().begin(), node.inputs().end());
+        out.outputs.assign(node.outputs().begin(), node.outputs().end());
+        out.onGpu = node.on_gpu();
+        wiring.nodes.push_back(std::move(out));
+    }
+    // A wire between modules the message does not list would have nothing to attach to.
+    const auto known = [&](const std::string& module) {
+        return std::ranges::any_of(
+            wiring.nodes, [&](const WiringInfo::Node& node) { return node.module == module; });
+    };
+    for (const v1::Wiring::Wire& wire : source.wires()) {
+        if (known(wire.from()) && known(wire.to())) {
+            wiring.wires.push_back({wire.from(), wire.to(), wire.signal(), wire.symbol(),
+                                    wire.source_unit(), wire.sink_unit(), wire.unit_ok(),
+                                    wire.stiff()});
+        }
+    }
+    return wiring;
+}
+
 }  // namespace
 
 void ViewerClient::handle(const v1::Envelope& envelope) {
@@ -473,6 +522,9 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
             // The server sends its console history again on every connection.
             logs_.store(std::make_shared<const LogBook>());
             subscribeSensors();  // a new connection knows nothing of earlier requests
+            events_.store(std::make_shared<const EventLog>());
+            statistics_.store(nullptr);
+            recording_.store(nullptr);
             publish(ConnectionState::Ready);
             requestSnapshot();
             break;
@@ -548,6 +600,71 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
         case v1::Envelope::kSensorFrame:
             handleSensorFrame(envelope);
             break;
+        case v1::Envelope::kEventList: {
+            auto log = std::make_shared<EventLog>();
+            log->complete = envelope.event_list().complete();
+            const int count = std::min(envelope.event_list().events_size(),
+                                       static_cast<int>(EventLog::kCapacity));
+            log->events.reserve(static_cast<std::size_t>(count));
+            for (int i = 0; i < count; ++i) {
+                log->events.push_back(toEvent(envelope.event_list().events(i)));
+            }
+            std::ranges::stable_sort(log->events, {}, &EventInfo::beginNs);
+            events_.store(std::move(log));
+            break;
+        }
+        case v1::Envelope::kEvent: {
+            // Copy-on-write, like the log: events are rare next to frames.
+            auto log = std::make_shared<EventLog>(*events_.load());
+            if (log->events.size() < EventLog::kCapacity) {
+                EventInfo event = toEvent(envelope.event());
+                const auto at =
+                    std::ranges::upper_bound(log->events, event.beginNs, {}, &EventInfo::beginNs);
+                log->events.insert(at, std::move(event));
+                events_.store(std::move(log));
+            }
+            break;
+        }
+        case v1::Envelope::kServerStats: {
+            const v1::ServerStats& source = envelope.server_stats();
+            auto stats = std::make_shared<ServerStatistics>();
+            stats->serial = ++statisticsSerial_;
+            stats->simTimeNs = source.sim_time().ns();
+            stats->realTimeFactor = source.real_time_factor();
+            stats->tickMs = source.tick_ms();
+            stats->tickMsMax = source.tick_ms_max();
+            stats->memoryBytes = source.memory_bytes();
+            stats->gpuMemoryBytes = source.gpu_memory_bytes();
+            stats->bytesPerSecondOut = source.bytes_per_second_out();
+            stats->viewers = source.viewers();
+            stats->estimated = source.estimated();
+            for (const v1::ServerStats::Module& module : source.modules()) {
+                stats->modules.push_back({module.module(), module.domain(), module.dt_ns(),
+                                          module.steps_per_second(), module.cpu_ms_per_step(),
+                                          module.cpu_ms_per_step_max(), module.on_gpu()});
+            }
+            statistics_.store(std::move(stats));
+            break;
+        }
+        case v1::Envelope::kRecordingInfo: {
+            const v1::RecordingInfo& source = envelope.recording_info();
+            auto facts = std::make_shared<RecordingFacts>();
+            facts->path = source.path();
+            facts->durationNs = source.duration().ns();
+            facts->sizeBytes = source.size_bytes();
+            facts->compression = source.compression();
+            facts->messages = source.messages();
+            facts->recordedUnixNs = source.recorded_unix_ns();
+            facts->synthetic = source.synthetic();
+            facts->generator = source.generator();
+            facts->description = source.description();
+            for (const v1::RecordingInfo::Channel& channel : source.channels()) {
+                facts->channels.push_back(
+                    {channel.topic(), channel.rate_hz(), channel.messages(), channel.unit()});
+            }
+            recording_.store(std::move(facts));
+            break;
+        }
         case v1::Envelope::kCommandResult: {
             const v1::CommandResult& result = envelope.command_result();
             if (result.has_attributes()) {
@@ -567,6 +684,7 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
                 auto check = std::make_shared<ProfileCheck>();
                 check->requestId = result.request_id();
                 check->valid = result.validation().valid();
+                check->wiring = toWiring(result.validation().wiring());
                 for (const v1::ProfileIssue& source : result.validation().issues()) {
                     check->issues.push_back(
                         {source.severity() != v1::ProfileIssue::SEVERITY_WARNING,

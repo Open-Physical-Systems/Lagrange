@@ -57,6 +57,15 @@ struct NetTerminal {
     [[nodiscard]] bool isSource() const { return port.ends_with("_out"); }
 };
 
+/// A bound a net's protection acts on: over- and undervoltage, a current rating.
+struct NetLimit {
+    std::string label;  ///< "OV limit"
+    double value{0.0};
+    std::string unit;    ///< Display form.
+    bool upper{true};    ///< The signal must stay below the value (true) or above it.
+    std::string signal;  ///< The signal compared with it; may be empty.
+};
+
 /// An electrical net: the prims connected to one bus. This is the topology the schematic is
 /// laid out from; it comes from the stage, never from the viewer.
 struct ElectricalNet {
@@ -65,6 +74,7 @@ struct ElectricalNet {
     std::uint32_t busPrim{kNone};
     std::string voltageSignal;  ///< Signal with the bus voltage; may be empty.
     std::vector<NetTerminal> terminals;
+    std::vector<NetLimit> limits;
 };
 
 /// Everything a snapshot defines that deltas do not change. Immutable once published, so the

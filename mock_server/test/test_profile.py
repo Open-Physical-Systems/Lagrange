@@ -162,3 +162,28 @@ def test_server_validates_and_applies_profiles(tmp_path):
             await server.stop()
 
     asyncio.run(scenario())
+
+
+def test_validation_carries_the_wiring_the_profile_would_build():
+    checked = profile.check(edited(aerodynamics={"enabled": False, "substitute": "zero"}))
+    wiring = checked.to_proto().wiring
+    nodes = {node.module: node for node in wiring.nodes}
+    assert set(nodes) == set(profile.CORE_DOMAINS)
+    assert nodes["rigid_body"].detail == "mujoco" and not nodes["rigid_body"].substitute
+    assert nodes["rigid_body"].dt_ns == 1_000_000
+    assert nodes["aerodynamics"].substitute and nodes["aerodynamics"].detail == "zero"
+    assert nodes["aerodynamics"].dt_ns == 0
+
+    wires = {(wire.to, getattr(wire, "from"), wire.symbol): wire for wire in wiring.wires}
+    torque = wires[("rigid_body", "electrical", "τ")]
+    assert torque.source_unit == torque.sink_unit == "N·m" and torque.unit_ok and torque.stiff
+    # A substitute still feeds its consumer, so the consumer never notices (invariant 3).
+    wrench = wires[("rigid_body", "aerodynamics", "F, τ")]
+    assert wrench.unit_ok and not wrench.stiff
+    assert "τ" in nodes["rigid_body"].inputs and "τ" in nodes["electrical"].outputs
+    assert all(wire.to in nodes and getattr(wire, "from") in nodes for wire in wiring.wires)
+    assert wiring.base_tick_ns == 100_000 and wiring.sync_ns == 1_000_000
+
+
+def test_text_that_is_not_a_profile_has_no_wiring():
+    assert not profile.check("stage: a\ndomains: {rigid_body: [\n").to_proto().HasField("wiring")
