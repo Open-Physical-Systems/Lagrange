@@ -1,0 +1,153 @@
+syntax = "proto3";
+package lagrange.viewer.v1;
+
+import "lagrange/viewer/v1/common.proto";
+
+// Positions are double. The snapshot states the origin of the local frame so that a viewer can
+// show geodetic coordinates and survive a floating-origin rebase.
+message LocalFrame {
+  double ecef_x = 1;
+  double ecef_y = 2;
+  double ecef_z = 3; // m; all zero if not georeferenced
+  repeated double enu_from_ecef = 4; // 9 values, row-major
+  uint64 rebase_count = 5; // increments at each rebase
+}
+
+message Prim {
+  uint32 id = 1; // dense, stable for the session
+  uint32 parent = 2; // 0xFFFFFFFF for roots
+  string name = 3;
+  string path = 4; // full USD path
+  string type_name = 5; // "Xform", "Mesh", "PhysicsRevoluteJoint"
+  repeated string api_schemas = 6;
+  uint32 mesh = 7; // index into SceneSnapshot.meshes, or 0xFFFFFFFF
+  uint32 material = 8;
+  bool visible = 9;
+  uint32 child_count = 10; // lets the scene tree virtualize without the whole list
+}
+
+message Attribute {
+  string name = 1; // "elec:windingResistance"
+  oneof value {
+    double real = 2;
+    int64 integer = 3;
+    bool boolean = 4;
+    string token = 5;
+    string asset = 6;
+    RealArray reals = 7;
+    Targets targets = 8; // relationship
+  }
+  Unit unit = 9;
+  bool editable = 10;
+  bool authored = 11; // false = schema fallback
+  string doc = 12;
+}
+message RealArray {
+  repeated double v = 1;
+}
+message Targets {
+  repeated uint32 prims = 1;
+}
+
+message PrimAttributes {
+  uint32 prim = 1;
+  repeated Attribute attributes = 2;
+}
+
+message Mesh {
+  uint32 id = 1;
+  uint32 vertex_count = 2;
+  uint32 index_count = 3;
+  DataRef positions = 4; // float32 x3, mesh-local
+  DataRef normals = 5; // float32 x3
+  DataRef uvs = 6; // float32 x2, optional
+  DataRef indices = 7; // uint32
+  repeated float aabb = 8; // min xyz, max xyz
+}
+
+message Material {
+  uint32 id = 1;
+  string name = 2;
+  repeated float base_color = 3; // rgba
+  float metallic = 4;
+  float roughness = 5;
+  repeated float emissive = 6;
+  DataRef base_color_texture = 7; // PNG/JPEG/KTX2 bytes, optional
+  string base_color_texture_mime = 8;
+}
+
+// Electrical topology for the schematic panel. Derived from PortAPI / ElectricalBusAPI prims.
+message ElectricalNet {
+  uint32 id = 1;
+  string name = 2; // "dc_48v"
+  uint32 bus_prim = 3;
+  repeated NetTerminal terminals = 4;
+  string voltage_signal = 5; // signal name, empty if none
+}
+message NetTerminal {
+  uint32 prim = 1;
+  string port = 2;
+  string current_signal = 3;
+}
+
+message SceneSnapshot {
+  uint64 sequence = 1; // deltas apply on top of this
+  SimTime sim_time = 2;
+  LocalFrame frame = 3;
+  repeated Prim prims = 4;
+  DataRef transforms = 5; // prim_count x (3 f64 position + 4 f32 quat + 3 f32 scale), prim id order
+  repeated Mesh meshes = 6;
+  repeated Material materials = 7;
+  repeated ElectricalNet nets = 8;
+  uint64 topology_hash = 9;
+  string stage_path = 10;
+  // Attributes are not included. The inspector requests them per prim (GetAttributes command).
+}
+
+message SceneDelta {
+  uint64 sequence = 1; // snapshot.sequence + n
+  uint64 base_sequence = 2; // must equal the client's current sequence, else resync
+  SimTime sim_time = 3;
+  // Changed transforms: parallel arrays.
+  repeated uint32 transform_prims = 4 [packed = true];
+  bytes transform_data = 5; // per entry: 3 f64 + 4 f32 (scale never changes in a delta)
+  repeated PrimAttributes attribute_changes = 6;
+  repeated Prim added = 7;
+  repeated uint32 removed = 8 [packed = true];
+  LocalFrame rebased_frame = 9; // set only when the floating origin moved
+  repeated Overlay overlays = 10; // contact points, force arrows
+}
+
+message Overlay {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_CONTACT_POINT = 1;
+    KIND_FORCE_ARROW = 2;
+    KIND_TORQUE_ARROW = 3;
+    KIND_PATH = 4;
+  }
+  Kind kind = 1;
+  bytes data = 2; // kind-specific packed f64: point(3)+normal(3)+magnitude(1) ...
+  uint32 count = 3;
+}
+
+message SensorFrame {
+  string sensor = 1; // "sensor/front_lidar"
+  SimTime sim_time = 2;
+  oneof payload {
+    ImageData image = 3;
+    PointCloudData points = 4;
+  }
+}
+message ImageData {
+  uint32 width = 1;
+  uint32 height = 2;
+  string encoding = 3;
+  DataRef data = 4;
+} // "rgba8", "r32f"
+message PointCloudData {
+  uint32 count = 1;
+  uint32 stride = 2;
+  repeated string fields = 3;
+  DataRef data = 4;
+} // "x","y","z","intensity"

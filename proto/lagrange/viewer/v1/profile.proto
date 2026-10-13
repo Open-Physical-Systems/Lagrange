@@ -1,0 +1,36 @@
+syntax = "proto3";
+package lagrange.viewer.v1;
+
+// The profile itself travels as YAML text, the same text a user would save. The structured
+// part below is what the domain panel needs in order to draw toggles without parsing YAML rules.
+message ProfileState {
+  string yaml = 1; // the active profile, canonical formatting
+  uint32 schema_version = 2;
+  string json_schema = 3; // profiles/schema.json content, so the viewer validates with the server's schema
+  repeated DomainState domains = 4;
+  bool restart_required = 5; // the last ApplyProfile needs a restart to take effect
+}
+
+message DomainState {
+  string domain = 1; // "electrical"
+  bool enabled = 2;
+  bool available = 3; // false: cannot be enabled for this stage/tier
+  string unavailable_reason = 4; // "no ElectricalMotorAPI prims in stage"
+  string active_module = 5; // "averaged_network" or the substitute name
+  bool substituted = 6;
+  repeated SubstituteOption substitutes = 7;
+  repeated string backends = 8; // rigid_body: physx, mujoco, jolt (as installed)
+  repeated string fidelities = 9;
+  int64 dt_ns = 10;
+  int64 min_dt_ns = 11;
+  int64 max_dt_ns = 12;
+  double cpu_ms_per_sim_s = 13; // measured cost, for the panel's load bar
+  repeated string depends_on = 14; // domains whose signals this one reads
+}
+
+message SubstituteOption {
+  string token = 1;
+  string kind = 2;
+  string description = 3;
+  bool needs_source = 4;
+}

@@ -1,0 +1,70 @@
+syntax = "proto3";
+package lagrange.viewer.v1;
+
+import "lagrange/viewer/v1/common.proto";
+
+message SignalInfo {
+  uint32 id = 1; // dense, stable until the catalog generation changes
+  string name = 2; // "joint/left_wheel/torque"
+  SignalType type = 3;
+  Unit unit = 4;
+  uint32 components = 5; // f64 components per sample
+  int64 native_dt_ns = 6; // writer's step; 0 for event-driven
+  string writer = 7; // "electrical/averaged_network"
+  bool substituted = 8; // written by a substitute
+  uint32 prim = 9; // related prim or 0xFFFFFFFF
+  repeated string component_names = 10; // "x","y","z"
+}
+
+message SignalCatalog {
+  uint64 generation = 1; // changes when wiring changes (profile applied, stage reloaded)
+  repeated SignalInfo signals = 2;
+}
+
+message Subscribe {
+  uint64 catalog_generation = 1;
+  repeated SignalSubscription signals = 2;
+}
+message SignalSubscription {
+  uint32 signal = 1;
+  // 1 = every sample. n > 1 = server sends min/max pairs over n samples (decimation="minmax")
+  // or every n-th sample (decimation="stride").
+  uint32 decimation = 2;
+  enum Mode {
+    MODE_UNSPECIFIED = 0;
+    MODE_FULL = 1;
+    MODE_MINMAX = 2;
+    MODE_STRIDE = 3;
+  }
+  Mode mode = 3;
+  uint32 component_mask = 4; // bit i = component i; 0 = all
+}
+message Unsubscribe {
+  repeated uint32 signals = 1;
+}
+
+enum SampleEncoding {
+  SAMPLE_ENCODING_UNSPECIFIED = 0;
+  SAMPLE_ENCODING_F64_LE = 1;
+  SAMPLE_ENCODING_F32_LE = 2; // allowed only for MINMAX display streams
+}
+
+// A run of consecutive samples of one signal.
+message SignalRun {
+  uint32 signal = 1;
+  SimTime t0 = 2; // time of the first sample
+  int64 dt_ns = 3; // uniform spacing; 0 = see timestamps
+  uint32 sample_count = 4;
+  uint32 components = 5;
+  SampleEncoding encoding = 6;
+  bytes samples = 7; // sample_count x components values; MINMAX: x2 (min then max)
+  bytes timestamps_ns = 8; // int64 LE per sample, only when dt_ns == 0
+  uint64 first_index = 9; // writer step index of the first sample; gaps reveal drops
+  SignalSubscription.Mode mode = 10;
+}
+
+// All runs produced since the previous block (default: 20 ms of simulation per block).
+message SignalBlock {
+  uint64 catalog_generation = 1;
+  repeated SignalRun runs = 2;
+}
