@@ -20,6 +20,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 #include <imgui.h>
+#include <implot.h>
 
 namespace lagrange::viewer {
 
@@ -31,10 +32,16 @@ using Clock = std::chrono::steady_clock;
 class Ui {
 public:
     Ui(const gpu::Device& device, ViewerClient& client, VkFormat targetFormat,
-       std::uint32_t imageCount, float dpiScale, bool persistLayout)
-        : device_(device), client_(client), renderer_(device), panels_(createDefaultPanels()) {
+       std::uint32_t imageCount, float dpiScale, bool persistLayout,
+       std::vector<std::string> scopeSignals)
+        : device_(device)
+        , client_(client)
+        , renderer_(device)
+        , panels_(createDefaultPanels())
+        , scopeSignals_(std::move(scopeSignals)) {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
+        ImPlot::CreateContext();
         ImGuiIO& io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_NavEnableKeyboard;
         if (persistLayout) {
@@ -89,6 +96,7 @@ public:
             ImGui_ImplVulkan_RemoveTexture(texture_);
         }
         ImGui_ImplVulkan_Shutdown();
+        ImPlot::DestroyContext();
         ImGui::DestroyContext();
     }
     Ui(const Ui&) = delete;
@@ -112,6 +120,8 @@ public:
         }
         PanelContext context{client_,         scene_,  client_.status(), client_.connection(),
                              client_.stats(), camera_, selectedPrim_};
+        context.catalog = client_.catalog();
+        context.initialScopeSignals = &scopeSignals_;
         context.viewportTexture =
             static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(texture_));
         context.viewportWidth = renderer_.extent().width;
@@ -167,6 +177,7 @@ private:
     std::uint32_t requestedWidth_{0};
     std::uint32_t requestedHeight_{0};
     std::string iniPath_;
+    std::vector<std::string> scopeSignals_;
     bool framed_{false};
 };
 
@@ -226,7 +237,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint) {
     int exitCode = 0;
     std::uint32_t rendered = 0;
     {
-        Ui ui(*device, client, format, 2, 1.0F, false);
+        Ui ui(*device, client, format, 2, 1.0F, false, options.scopeSignals);
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize =
             ImVec2(static_cast<float>(extent.width), static_cast<float>(extent.height));
@@ -282,13 +293,19 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint) {
         std::printf(
             "{\"frames\": %u, \"snapshots\": %llu, \"deltas\": %llu, \"resyncs\": %llu, "
             "\"prims\": %zu, \"meshes\": %zu, \"draw_calls\": %u, \"sim_time_ns\": %lld, "
+            "\"signal_blocks\": %llu, \"samples\": %llu, \"invalid_runs\": %llu, "
+            "\"dropped_samples\": %llu, "
             "\"device\": \"%s\", \"tier\": %d, \"validation_errors\": %u, \"connected\": %s}\n",
             rendered, static_cast<unsigned long long>(stats.snapshots),
             static_cast<unsigned long long>(stats.deltas),
             static_cast<unsigned long long>(stats.resyncs),
             scene ? scene->statics->prims.size() : std::size_t{0},
             scene ? scene->statics->meshes.size() : std::size_t{0}, ui.drawCalls(),
-            static_cast<long long>(scene ? scene->simTimeNs : 0), device->info().name.c_str(),
+            static_cast<long long>(scene ? scene->simTimeNs : 0),
+            static_cast<unsigned long long>(stats.signalBlocks),
+            static_cast<unsigned long long>(stats.samples),
+            static_cast<unsigned long long>(stats.invalidRuns),
+            static_cast<unsigned long long>(stats.droppedSamples), device->info().name.c_str(),
             static_cast<int>(device->tier()), device->validationErrorCount(),
             client.connection().state == ConnectionState::Ready ? "true" : "false");
         if (device->validationErrorCount() != 0 && exitCode == 0) {
@@ -474,7 +491,8 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint) {
     {
         const float dpiScale = std::max(SDL_GetWindowDisplayScale(window), 1.0F);
         Ui ui(*device, client, swapchain.format,
-              static_cast<std::uint32_t>(swapchain.images.size()), dpiScale, true);
+              static_cast<std::uint32_t>(swapchain.images.size()), dpiScale, true,
+              options.scopeSignals);
         ImGui_ImplSDL3_InitForVulkan(window);
 
         bool running = true;

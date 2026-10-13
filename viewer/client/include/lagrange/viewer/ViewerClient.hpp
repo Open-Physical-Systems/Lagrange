@@ -3,6 +3,7 @@
 #include "lagrange/proto/Endpoint.hpp"
 #include "lagrange/proto/UniqueFd.hpp"
 #include "lagrange/viewer/SceneStore.hpp"
+#include "lagrange/viewer/ScopeBuffer.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -11,6 +12,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace lagrange::viewer::v1 {
 class Envelope;
@@ -49,11 +51,42 @@ struct ServerStatus {
     std::uint32_t signalCount{0};
 };
 
+/// One signal the server offers.
+struct SignalInfo {
+    std::uint32_t id{0};
+    std::string name;    ///< "motor/left_drive_motor/current_q"
+    std::string unit;    ///< Display form of the unit, e.g. "A", "N·m".
+    std::string writer;  ///< Module that produces it.
+    std::uint32_t components{1};
+    std::vector<std::string> componentNames;  ///< Empty for scalars.
+    std::int64_t dtNs{0};                     ///< Native sample period.
+    std::uint32_t prim{kNone};
+};
+
+/// The server's list of signals. Immutable once published.
+struct SignalCatalog {
+    std::uint64_t generation{0};
+    std::vector<SignalInfo> signals;
+
+    [[nodiscard]] const SignalInfo* find(const std::string& name) const {
+        for (const SignalInfo& info : signals) {
+            if (info.name == name) {
+                return &info;
+            }
+        }
+        return nullptr;
+    }
+};
+
 struct ClientStats {
     std::uint64_t snapshots{0};
     std::uint64_t deltas{0};
     std::uint64_t resyncs{0};  ///< Snapshots requested because a delta was lost or invalid.
     std::uint64_t connects{0};
+    std::uint64_t signalBlocks{0};
+    std::uint64_t samples{0};         ///< Samples stored into scope buffers.
+    std::uint64_t invalidRuns{0};     ///< Signal runs rejected as malformed.
+    std::uint64_t droppedSamples{0};  ///< Samples missing between runs, over all buffers.
 };
 
 /// The viewer's only link to a simulation (invariant 14).
@@ -76,6 +109,17 @@ public:
     [[nodiscard]] ServerStatus status() const { return *status_.load(); }
     [[nodiscard]] ConnectionInfo connection() const { return *connection_.load(); }
     [[nodiscard]] ClientStats stats() const;
+    /// The server's signal list, or nullptr before it arrived.
+    [[nodiscard]] std::shared_ptr<const SignalCatalog> catalog() const { return catalog_.load(); }
+
+    // --- signals ---------------------------------------------------------------------------
+    /// Starts receiving one component of a signal into a new buffer. Subscriptions are by
+    /// name, so they survive reconnects and catalog changes. Returns nullptr if the catalog
+    /// has no such signal or component. Call from the UI thread.
+    [[nodiscard]] std::shared_ptr<ScopeBuffer> subscribe(const std::string& name,
+                                                         std::uint32_t component = 0);
+    /// Stops feeding `buffer`. The buffer keeps its history.
+    void unsubscribe(const std::shared_ptr<ScopeBuffer>& buffer);
     [[nodiscard]] const proto::Endpoint& endpoint() const { return endpoint_; }
 
     // --- commands; enqueue and return ------------------------------------------------------
@@ -89,6 +133,8 @@ private:
     void run();
     void handle(const v1::Envelope& envelope);
     void enqueue(std::unique_ptr<v1::Envelope> envelope);
+    void handleSignalBlock(const v1::Envelope& envelope);
+    void sendSubscriptions();
     void requestSnapshot();
     void publish(ConnectionState state, const std::string& message = {});
     void wake() const;
@@ -109,8 +155,23 @@ private:
     std::atomic<std::uint64_t> resyncs_{0};
     std::atomic<std::uint64_t> connects_{0};
 
+    std::atomic<std::shared_ptr<const SignalCatalog>> catalog_;
+    std::atomic<std::uint64_t> signalBlocks_{0};
+    std::atomic<std::uint64_t> samples_{0};
+    std::atomic<std::uint64_t> invalidRuns_{0};
+    std::atomic<std::uint64_t> droppedSamples_{0};
+
+    /// A change to the set of subscriptions, handed from the UI thread to the worker.
+    struct SubscriptionChange {
+        bool add{true};
+        std::string name;
+        std::uint32_t component{0};
+        std::shared_ptr<ScopeBuffer> buffer;
+    };
+
     std::mutex commandMutex_;  // held only to push or swap a small queue
     std::deque<std::unique_ptr<v1::Envelope>> commands_;
+    std::deque<SubscriptionChange> subscriptionChanges_;
     std::atomic<std::uint64_t> nextRequestId_{1};
 };
 

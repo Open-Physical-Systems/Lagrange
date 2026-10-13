@@ -1,5 +1,6 @@
 #include "App.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -16,6 +17,7 @@ void usage() {
         "  --gpu <index|name>     Vulkan device to use (see lagrange_gpu_info)\n"
         "  --validation           enable Vulkan validation layers\n"
         "  --size <W>x<H>         window or offscreen size in pixels (default 1600x900)\n"
+        "  --scope <a,b,...>      open these signals in the scope at start-up\n"
         "  --headless             no window: render offscreen and exit\n"
         "  --frames <N>           headless: frames to render once the scene arrived (default "
         "120);\n"
@@ -56,6 +58,15 @@ int main(int argc, char** argv) {
             options.waitMs = static_cast<std::uint32_t>(std::strtoul(value(), nullptr, 10));
         } else if (arg == "--screenshot") {
             options.screenshot = value();
+        } else if (arg == "--scope") {
+            const std::string list = value();
+            for (std::size_t start = 0; start <= list.size();) {
+                const std::size_t comma = std::min(list.find(',', start), list.size());
+                if (comma > start) {
+                    options.scopeSignals.push_back(list.substr(start, comma - start));
+                }
+                start = comma + 1;
+            }
         } else if (arg == "--size") {
             unsigned width = 0;
             unsigned height = 0;

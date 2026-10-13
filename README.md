@@ -80,6 +80,15 @@ Both use the same default Unix socket, so no address is needed on one machine. D
 left mouse button to orbit, the right or middle button to pan, and the wheel to zoom. Panels can
 be dragged and docked; the layout is saved in `~/.config/lagrange/viewer/layout.ini`.
 
+The Scope panel plots signals at their full rate (the sample has four at 10 kHz). Use
+**+ Signal** to add one; signals with the same unit share a plot. **Freeze** stops the plot
+from following time so that you can pan and zoom it. To open signals from the command line:
+
+```bash
+ros2 run lagrange_viewer lagrange_viewer \
+  --scope motor/left_drive_motor/current_q,bus/dc_48v/voltage,joint/left_wheel_joint/velocity
+```
+
 `--sample` serves a built-in synthetic recording (an AMR on a figure-eight path; computed, not
 simulated). `--write-sample file.mcap` writes it to disk and `--recording file.mcap` serves a
 file.

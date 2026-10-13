@@ -13,6 +13,7 @@ add_library(
     lagrange_viewer_client
     STATIC
     client/src/SceneStore.cpp
+    client/src/ScopeBuffer.cpp
     client/src/ViewerClient.cpp
 )
 lagrange_target_defaults(lagrange_viewer_client)
@@ -66,7 +67,12 @@ lagrange_add_slang_shader(
     SYMBOL kLineFragment
 )
 
-add_library(lagrange_viewer_panels STATIC panels/src/Panels.cpp)
+add_library(
+    lagrange_viewer_panels
+    STATIC
+    panels/src/Panels.cpp
+    panels/src/ScopePanel.cpp
+)
 lagrange_target_defaults(lagrange_viewer_panels)
 target_include_directories(lagrange_viewer_panels PUBLIC panels/include)
 target_link_libraries(
@@ -90,6 +96,7 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_viewer_client
         client/test/test_scene_store.cpp
+        client/test/test_scope_buffer.cpp
         client/test/test_viewer_client.cpp
         render/test/test_camera.cpp
         TIMEOUT 120

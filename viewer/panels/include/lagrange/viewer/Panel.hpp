@@ -28,6 +28,11 @@ struct PanelContext {
     std::uint32_t requestedViewportWidth{0};
     std::uint32_t requestedViewportHeight{0};
 
+    std::shared_ptr<const SignalCatalog> catalog;  ///< Server's signal list; may be null.
+    /// Signals to open in the scope at start-up (command line); the scope panel empties it.
+    /// May be null.
+    std::vector<std::string>* initialScopeSignals{nullptr};
+
     std::string deviceName;
     std::string tierName;
     float frameMs{0.0F};
@@ -43,6 +48,8 @@ public:
     [[nodiscard]] virtual const char* title() const = 0;
     virtual void draw(PanelContext& context) = 0;
 };
+
+[[nodiscard]] std::unique_ptr<Panel> createScopePanel();
 
 /// The v0.1 panels that exist so far, in default layout order.
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createDefaultPanels();
