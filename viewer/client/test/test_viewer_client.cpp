@@ -695,6 +695,136 @@ TEST(ViewerClient, WatchedSensorReceivesPointCloudsAndRejectsMalformedOnes) {
     client.stop();
 }
 
+TEST(ViewerClient, EventsStatisticsAndRecordingFactsArePublished) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+    EXPECT_TRUE(client.events()->events.empty());
+    EXPECT_EQ(client.statistics(), nullptr);
+    EXPECT_EQ(client.recording(), nullptr);
+
+    const auto event = [](std::uint64_t id, std::int64_t begin, std::int64_t end) {
+        v1::Event out;
+        out.set_id(id);
+        out.mutable_begin()->set_ns(begin);
+        out.mutable_end()->set_ns(end);
+        out.set_domain("electrical");
+        out.set_kind("regen");
+        out.set_severity(v1::Event::SEVERITY_WARNING);
+        out.set_text("regenerating");
+        out.set_prim(6);
+        out.set_signal("battery/current");
+        return out;
+    };
+    v1::Envelope list;
+    *list.mutable_event_list()->add_events() = event(2, 5'000, 9'000);
+    *list.mutable_event_list()->add_events() = event(1, 1'000, 500);  // end before begin
+    list.mutable_event_list()->set_complete(true);
+    server.send(list);
+    v1::Envelope live;
+    *live.mutable_event() = event(3, 3'000, 3'000);
+    server.send(live);
+    ASSERT_TRUE(server.pump([&] { return client.events()->events.size() == 3; }));
+    const auto log = client.events();
+    EXPECT_TRUE(log->complete);
+    EXPECT_EQ(log->events[0].id, 1U);  // ordered by begin time, whatever order they came in
+    EXPECT_EQ(log->events[1].id, 3U);
+    EXPECT_EQ(log->events[2].id, 2U);
+    EXPECT_EQ(log->events[0].endNs, 1'000);  // a negative span is made an instant
+    EXPECT_EQ(log->events[2].severity, lagrange::viewer::EventInfo::Severity::Warning);
+    EXPECT_EQ(log->events[2].kind, "regen");
+    EXPECT_EQ(log->events[2].signal, "battery/current");
+    EXPECT_EQ(log->events[2].prim, 6U);
+
+    v1::Envelope stats;
+    stats.mutable_server_stats()->set_real_time_factor(0.98);
+    stats.mutable_server_stats()->set_tick_ms(1.5);
+    stats.mutable_server_stats()->set_memory_bytes(123'456'789);
+    stats.mutable_server_stats()->set_estimated(true);
+    v1::ServerStats::Module* module = stats.mutable_server_stats()->add_modules();
+    module->set_module("rigid_body/mujoco");
+    module->set_domain("rigid_body");
+    module->set_dt_ns(1'000'000);
+    module->set_cpu_ms_per_step(0.31);
+    server.send(stats);
+    ASSERT_TRUE(server.pump([&] { return client.statistics() != nullptr; }));
+    EXPECT_DOUBLE_EQ(client.statistics()->realTimeFactor, 0.98);
+    EXPECT_EQ(client.statistics()->memoryBytes, 123'456'789U);
+    EXPECT_TRUE(client.statistics()->estimated);
+    ASSERT_EQ(client.statistics()->modules.size(), 1U);
+    EXPECT_EQ(client.statistics()->modules[0].module, "rigid_body/mujoco");
+    EXPECT_DOUBLE_EQ(client.statistics()->modules[0].cpuMsPerStep, 0.31);
+
+    v1::Envelope info;
+    info.mutable_recording_info()->set_path("/runs/run_001.mcap");
+    info.mutable_recording_info()->mutable_duration()->set_ns(252'000'000'000);
+    info.mutable_recording_info()->set_size_bytes(1'820'000'000);
+    info.mutable_recording_info()->set_compression("zstd");
+    v1::RecordingInfo::Channel* channel = info.mutable_recording_info()->add_channels();
+    channel->set_topic("bus/dc_48v/voltage");
+    channel->set_rate_hz(10'000.0);
+    channel->set_messages(2'520'000);
+    server.send(info);
+    ASSERT_TRUE(server.pump([&] { return client.recording() != nullptr; }));
+    EXPECT_EQ(client.recording()->path, "/runs/run_001.mcap");
+    EXPECT_EQ(client.recording()->durationNs, 252'000'000'000);
+    EXPECT_EQ(client.recording()->compression, "zstd");
+    ASSERT_EQ(client.recording()->channels.size(), 1U);
+    EXPECT_DOUBLE_EQ(client.recording()->channels[0].rateHz, 10'000.0);
+    client.stop();
+}
+
+TEST(ViewerClient, ProfileValidationCarriesTheWiring) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+    const std::uint64_t id = client.validateProfile("domains: {}\n");
+    ASSERT_TRUE(
+        server.pump([&] { return server.countCommands(v1::Command::kValidateProfile) == 1; }));
+
+    v1::Envelope answer;
+    answer.mutable_command_result()->set_request_id(id);
+    answer.mutable_command_result()->set_ok(true);
+    v1::ProfileValidation* validation = answer.mutable_command_result()->mutable_validation();
+    validation->set_valid(true);
+    v1::Wiring* wiring = validation->mutable_wiring();
+    wiring->set_base_tick_ns(100'000);
+    wiring->set_sync_ns(1'000'000);
+    for (const char* name : {"electrical", "rigid_body"}) {
+        v1::Wiring::Node* node = wiring->add_nodes();
+        node->set_module(name);
+        node->set_domain(name);
+        node->set_dt_ns(1'000'000);
+    }
+    wiring->mutable_nodes(0)->add_outputs("τ");
+    wiring->mutable_nodes(1)->add_inputs("τ");
+    v1::Wiring::Wire* wire = wiring->add_wires();
+    wire->set_from("electrical");
+    wire->set_to("rigid_body");
+    wire->set_symbol("τ");
+    wire->set_source_unit("N·m");
+    wire->set_sink_unit("N");
+    wire->set_unit_ok(false);
+    v1::Wiring::Wire* dangling = wiring->add_wires();
+    dangling->set_from("electrical");
+    dangling->set_to("nowhere");
+    server.send(answer);
+
+    ASSERT_TRUE(server.pump([&] { return client.profileCheck() != nullptr; }));
+    const auto check = client.profileCheck();
+    EXPECT_EQ(check->requestId, id);
+    ASSERT_EQ(check->wiring.nodes.size(), 2U);
+    EXPECT_EQ(check->wiring.nodes[0].outputs, std::vector<std::string>{"τ"});
+    ASSERT_EQ(check->wiring.wires.size(), 1U);  // the wire to an unknown module is dropped
+    EXPECT_EQ(check->wiring.wires[0].sourceUnit, "N·m");
+    EXPECT_EQ(check->wiring.wires[0].sinkUnit, "N");
+    EXPECT_FALSE(check->wiring.wires[0].unitOk);
+    EXPECT_EQ(check->wiring.baseTickNs, 100'000);
+    client.stop();
+}
+
 TEST(ViewerClient, StartsAndStopsCleanlyWithNoServer) {
     ViewerClient client(Endpoint::unixSocket("/tmp/lagrange-no-such-server.sock"));
     client.start();

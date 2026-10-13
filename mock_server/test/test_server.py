@@ -325,3 +325,57 @@ def test_lidar_frames_are_sent_to_viewers_that_ask(recording, tmp_path):
     ranges = np.hypot(points[:, 0], points[:, 1])
     assert ranges.min() > 0.05 and ranges.max() < 25.0
     assert points[:, 3].min() > 0.0 and points[:, 3].max() <= 1.0
+
+
+def test_run_facts_events_and_statistics_reach_a_viewer(tmp_path):
+    recording = generate_sample(duration_s=10.0, seed=1)  # a whole figure of eight
+
+    async def scenario():
+        server, bound = await started(recording, Endpoint("unix", str(tmp_path / "s.sock")))
+        client = await ProtocolClient.connect(bound)
+        try:
+            await client.hello()
+            info = (await receive_until(client, "recording_info")).recording_info
+            events = (await receive_until(client, "event_list")).event_list
+            await client.command(play={})
+            stats = (await receive_until(client, "server_stats", limit=5000)).server_stats
+            return info, events, stats
+        finally:
+            await client.close()
+            await server.stop()
+
+    info, events, stats = asyncio.run(scenario())
+    assert info.synthetic and info.path == "" and info.size_bytes == 0
+    assert info.duration.ns == recording.duration_ns
+    assert len(info.channels) == len(recording.signals)
+    assert info.messages == sum(channel.messages for channel in info.channels)
+    fast = next(c for c in info.channels if c.topic == "bus/dc_48v/voltage")
+    assert fast.rate_hz == pytest.approx(10_000.0) and fast.unit == "V"
+
+    assert events.complete and len(events.events) >= 2
+    assert [e.id for e in events.events] == list(range(1, len(events.events) + 1))
+    assert [e.begin.ns for e in events.events] == sorted(e.begin.ns for e in events.events)
+    kinds = {e.kind for e in events.events}
+    assert "hard_turn" in kinds
+    for event in events.events:
+        assert event.end.ns > event.begin.ns and event.text
+        assert event.signal in {s.info.name for s in recording.signals}
+
+    assert stats.estimated and stats.viewers == 1
+    assert stats.memory_bytes > 1_000_000 and stats.tick_ms > 0.0
+    assert stats.bytes_per_second_out > 0.0
+    modules = {m.domain: m for m in stats.modules}
+    assert modules["electrical"].dt_ns == 100_000 and modules["electrical"].cpu_ms_per_step > 0
+
+
+def test_a_regen_event_names_the_signal_that_shows_it():
+    from lagrange_mock_server.events import derive_events
+
+    recording = generate_sample(duration_s=10.0, seed=1)
+    regen = [e for e in derive_events(recording) if e.kind == "regen"]
+    current = recording.signal("battery/battery/current")
+    for event in regen:
+        assert event.domain == "electrical" and event.signal == "battery/battery/current"
+        begin, end = event.begin.ns // current.dt_ns, event.end.ns // current.dt_ns
+        # Most of the span is below zero: that is what regeneration means.
+        assert (current.data[begin:end, 0] < 0.0).mean() > 0.5

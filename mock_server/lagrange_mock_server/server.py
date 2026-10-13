@@ -26,6 +26,7 @@ from lagrange.viewer.v1 import (
 
 from . import __version__, profile, sensors
 from .endpoint import Endpoint
+from .events import derive_events
 from .framing import DEFAULT_MAX_FRAME_SIZE, FrameError, FrameReader, encode_frame
 from .recording import Recording, RecordingError, read_recording
 from .replay import MODE_FULL, ReplayEngine, Subscription, Window
@@ -35,6 +36,7 @@ PROTOCOL_MAJOR = 0
 PROTOCOL_MINOR = 1
 TICK_SECONDS = 0.02  # 50 Hz: scene deltas and 20 ms signal blocks
 STATUS_EVERY_TICKS = 5  # 10 Hz
+STATS_PERIOD_S = 1.0
 LIDAR_PERIOD_NS = round(1e9 / sensors.LIDAR_RATE_HZ)
 # A viewer that does not read gets its updates dropped beyond this much queued output.
 MAX_QUEUED_BYTES = 32 * 1024 * 1024
@@ -53,13 +55,16 @@ class _Session:
         self.needs_snapshot = False
         self.dropped_deltas = 0
         self.dropped_blocks = 0
+        self.bytes_out = 0  # since the last statistics message
         self.sensors: set[str] = set()  # sensor names (prim paths) this viewer watches
 
     def congested(self) -> bool:
         return self.writer.transport.get_write_buffer_size() > MAX_QUEUED_BYTES
 
     def send(self, envelope: envelope_pb2.Envelope) -> None:
-        self.writer.write(encode_frame(envelope.SerializeToString()))
+        frame = encode_frame(envelope.SerializeToString())
+        self.bytes_out += len(frame)
+        self.writer.write(frame)
 
 
 class MockServer:
@@ -75,6 +80,10 @@ class MockServer:
         self._loading: set[asyncio.Task] = set()
         self._restart_required = False
         self._last_lidar_ns = 0
+        self._events = derive_events(self.engine.recording)
+        self._tick_ms: list[float] = []  # wall time of each tick since the last statistics
+        self._stats_at = time.monotonic()
+        self._stats_sim_ns = 0
         self._reset_profile()
         # What the console shows. Kept so that a viewer that connects later sees it too.
         self._logs: deque[session_pb2.LogRecord] = deque(maxlen=MAX_LOG_RECORDS)
@@ -203,7 +212,75 @@ class MockServer:
         session.send(self._status())
         for record in self._logs:
             session.send(envelope_pb2.Envelope(log=record))
+        self._send_run_facts(session)
         return True
+
+    # --- what a run is and what happened in it ------------------------------------------------
+
+    def _recording_info(self) -> session_pb2.RecordingInfo:
+        recording = self.engine.recording
+        info = session_pb2.RecordingInfo(
+            path=recording.path,
+            size_bytes=recording.size_bytes,
+            compression="zstd" if recording.path else "",
+            synthetic=recording.meta.synthetic,
+            generator=recording.meta.generator,
+            description=recording.meta.description,
+        )
+        info.duration.ns = recording.duration_ns
+        for signal in recording.signals:
+            info.channels.add(
+                topic=signal.info.name,
+                rate_hz=1e9 / signal.dt_ns if signal.dt_ns > 0 else 0.0,
+                messages=signal.sample_count,
+                unit=signal.info.unit.display,
+            )
+            info.messages += signal.sample_count
+        return info
+
+    def _send_run_facts(self, session: _Session) -> None:
+        session.send(envelope_pb2.Envelope(recording_info=self._recording_info()))
+        events = envelope_pb2.Envelope()
+        events.event_list.events.extend(self._events)
+        events.event_list.complete = True  # a replay knows its whole recording
+        session.send(events)
+
+    def _send_stats(self) -> None:
+        """Once a second: what the server costs. Module costs are the profile's estimates."""
+        now = time.monotonic()
+        elapsed = max(now - self._stats_at, 1e-6)
+        sim_ns = self.engine.sim_time_ns
+        stats = session_pb2.ServerStats(estimated=True, viewers=len(self._sessions))
+        stats.sim_time.ns = sim_ns
+        advanced = sim_ns - self._stats_sim_ns
+        stats.real_time_factor = max(advanced, 0) / 1e9 / elapsed
+        if self._tick_ms:
+            stats.tick_ms = sum(self._tick_ms) / len(self._tick_ms)
+            stats.tick_ms_max = max(self._tick_ms)
+        with contextlib.suppress(OSError, ValueError):
+            # Resident pages of this process, from the kernel.
+            pages = int(Path("/proc/self/statm").read_text(encoding="ascii").split()[1])
+            stats.memory_bytes = pages * os.sysconf("SC_PAGE_SIZE")
+        state = self._profile_state()
+        for domain in state.domains:
+            if not domain.enabled or domain.dt_ns <= 0:
+                continue
+            steps_per_sim_s = 1e9 / domain.dt_ns
+            stats.modules.add(
+                module=f"{domain.domain}/{domain.active_module}",
+                domain=domain.domain,
+                dt_ns=domain.dt_ns,
+                steps_per_second=steps_per_sim_s * stats.real_time_factor,
+                cpu_ms_per_step=domain.cpu_ms_per_sim_s / steps_per_sim_s,
+                cpu_ms_per_step_max=1.6 * domain.cpu_ms_per_sim_s / steps_per_sim_s,
+            )
+        for session in self._sessions:
+            stats.bytes_per_second_out = session.bytes_out / elapsed
+            session.bytes_out = 0
+            session.send(envelope_pb2.Envelope(server_stats=stats))
+        self._tick_ms.clear()
+        self._stats_at = now
+        self._stats_sim_ns = sim_ns
 
     # --- console -----------------------------------------------------------------------------
 
@@ -419,6 +496,8 @@ class MockServer:
         self.catalog_generation += 1
         self._reset_profile()
         self._log_stage()
+        self._events = derive_events(recording)
+        self._stats_sim_ns = 0
         for session in self._sessions:
             session.subscriptions.clear()  # signal ids belong to the old catalog
             session.send(envelope_pb2.Envelope(profile_state=self._profile_state()))
@@ -427,6 +506,7 @@ class MockServer:
             session.send(catalog)
             self._send_snapshot(session)
             session.send(self._status())
+            self._send_run_facts(session)
 
     async def _load(self, session: _Session, command: command_pb2.Command) -> None:
         result = envelope_pb2.Envelope()
@@ -464,6 +544,7 @@ class MockServer:
             now = time.monotonic_ns()
             window = self.engine.advance(now - last)
             last = now
+            started = time.perf_counter()
             if window is not None:
                 self._emit(window)
                 # Sensors run on simulation time, so their rate follows the replay speed and
@@ -473,6 +554,9 @@ class MockServer:
                     self._last_lidar_ns = self.engine.sim_time_ns
                     self._emit_sensors()
             self._tick_count += 1
+            self._tick_ms.append((time.perf_counter() - started) * 1e3)
+            if time.monotonic() - self._stats_at >= STATS_PERIOD_S:
+                self._send_stats()
             if self._tick_count % STATUS_EVERY_TICKS == 0:
                 status = self._status()
                 for session in self._sessions:

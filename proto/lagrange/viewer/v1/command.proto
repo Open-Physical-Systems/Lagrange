@@ -128,6 +128,37 @@ message PrimAttributesList {
 message ProfileValidation {
   bool valid = 1;
   repeated ProfileIssue issues = 2;
+  // The wiring the server would build from this profile. Present when the profile could be
+  // parsed, even if a unit check fails: that is what the user needs to see.
+  Wiring wiring = 3;
+}
+
+// Modules and substitutes as the scheduler would connect them (invariants 1 to 4).
+message Wiring {
+  message Node {
+    string module = 1; // "rigid_body", "aerodynamics"
+    string domain = 2;
+    bool substitute = 3; // a substitute stands in for the disabled domain
+    string detail = 4; // backend, fidelity, or the substitute's name
+    int64 dt_ns = 5; // 0: no step of its own (runs per frame, or on demand)
+    repeated string inputs = 6; // display form: "τ", "F_ext"
+    repeated string outputs = 7;
+    bool on_gpu = 8;
+  }
+  message Wire {
+    string from = 1; // Node.module that writes the signal
+    string to = 2; // Node.module that reads it
+    string signal = 3; // "joint/*/torque"
+    string symbol = 4; // "τ"
+    string source_unit = 5; // display form of what the writer declares: "N·m"
+    string sink_unit = 6; // display form of what the reader expects
+    bool unit_ok = 7; // false blocks Apply (invariant 2)
+    bool stiff = 8; // a tightly coupled pair the scheduler solves implicitly
+  }
+  repeated Node nodes = 1;
+  repeated Wire wires = 2;
+  int64 base_tick_ns = 3; // the scheduler's smallest step
+  int64 sync_ns = 4; // modules exchange signals at least this often
 }
 message ProfileIssue {
   enum Severity {

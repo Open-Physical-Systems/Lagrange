@@ -113,6 +113,12 @@ TEST(SceneBuilder, ElectricalNetsAreKeptAndBadTerminalsDropped) {
     v1::NetTerminal* dangling = net->add_terminals();
     dangling->set_prim(99);  // no such prim
     dangling->set_port("dc_in");
+    v1::NetLimit* limit = net->add_limits();
+    limit->set_label("OV limit");
+    limit->set_value(54.6);
+    limit->mutable_unit()->set_display("V");
+    limit->set_upper(true);
+    limit->set_signal("bus/dc_48v/voltage");
     v1::ElectricalNet* orphan = snapshot.add_nets();
     orphan->set_bus_prim(77);  // no such prim either
 
@@ -129,6 +135,11 @@ TEST(SceneBuilder, ElectricalNetsAreKeptAndBadTerminalsDropped) {
     EXPECT_TRUE(nets[0].terminals[0].isSource());
     EXPECT_EQ(nets[0].terminals[0].currentSignal, "battery/current");
     EXPECT_FALSE(nets[0].terminals[1].isSource());
+    ASSERT_EQ(nets[0].limits.size(), 1U);
+    EXPECT_EQ(nets[0].limits[0].label, "OV limit");
+    EXPECT_DOUBLE_EQ(nets[0].limits[0].value, 54.6);
+    EXPECT_EQ(nets[0].limits[0].unit, "V");
+    EXPECT_TRUE(nets[0].limits[0].upper);
     EXPECT_EQ(nets[1].busPrim, kNone);
 }
 

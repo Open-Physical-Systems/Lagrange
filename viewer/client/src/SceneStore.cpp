@@ -149,6 +149,10 @@ bool SceneBuilder::applySnapshot(const v1::SceneSnapshot& snapshot, std::string&
                     {terminal.prim(), terminal.port(), terminal.current_signal()});
             }
         }
+        for (const v1::NetLimit& limit : source.limits()) {
+            net.limits.push_back({limit.label(), limit.value(), limit.unit().display(),
+                                  limit.upper(), limit.signal()});
+        }
         statics->nets.push_back(std::move(net));
     }
     statics->stagePath = snapshot.stage_path();
