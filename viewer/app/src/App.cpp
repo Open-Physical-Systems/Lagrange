@@ -154,6 +154,13 @@ public:
             }
             selectPath_.clear();
         }
+        // Cursors asked for on the command line wait for the first samples, so that they
+        // are placed inside a real time window.
+        if (cursorsWanted_ && !scopeSession_.traces().empty() &&
+            scopeSession_.traces().front().buffer->newestTimeNs() > 0) {
+            scopeSession_.showCursors(true);
+            cursorsWanted_ = false;
+        }
         // Edits asked for on the command line wait for the server's profile.
         if (!domainEdits_.empty() && profileSession_.profile()) {
             for (const auto& [domain, enabled] : domainEdits_) {
@@ -174,6 +181,7 @@ public:
         context.initialScopeSignals = &scopeSignals_;
         context.workspace = &workspace_;
         context.profileSession = &profileSession_;
+        context.scopeSession = &scopeSession_;
         context.viewportTexture =
             static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(texture_));
         context.viewportWidth = renderer_.extent().width;
@@ -198,6 +206,7 @@ public:
     void setCanOpenFiles(bool value) { canOpenFiles_ = value; }
     void setWorkspace(Workspace workspace) { workspace_ = workspace; }
     void setInitialSelection(std::string path) { selectPath_ = std::move(path); }
+    void setCursors(bool on) { cursorsWanted_ = on; }
     void setProfileEdits(std::vector<std::pair<std::string, bool>> edits, bool apply) {
         domainEdits_ = std::move(edits);
         applyProfile_ = apply;
@@ -270,9 +279,11 @@ private:
     bool canOpenFiles_{false};
     Workspace workspace_{Workspace::Scene};
     ProfileSession profileSession_;
+    ScopeSession scopeSession_;
     std::vector<std::pair<std::string, bool>> domainEdits_;
     bool applyProfile_{false};
     std::string selectPath_;
+    bool cursorsWanted_{false};
     bool openFileRequested_{false};
     std::string framedStage_{"\x01"};  // never a real stage path, so the first scene is framed
 };
@@ -361,6 +372,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         Ui ui(*device, client, format, 2, 1.0F, false, options.scopeSignals);
         ui.setWorkspace(workspace);
         ui.setInitialSelection(options.selectPath);
+        ui.setCursors(options.cursors);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize =
@@ -659,6 +671,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setCanOpenFiles(true);
         ui.setWorkspace(workspace);
         ui.setInitialSelection(options.selectPath);
+        ui.setCursors(options.cursors);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);
         // The file dialog reports its result on a callback that may run on another thread.
         struct Chosen {

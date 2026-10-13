@@ -35,7 +35,7 @@ struct WorkspaceEntry {
 constexpr std::array<WorkspaceEntry, 3> kWorkspaces{{
     {Workspace::Scene, "Scene", "lagrange-dock-scene-2", ImGuiKey_1, "Ctrl+1"},
     {Workspace::Domains, "Domains", "lagrange-dock-domains-1", ImGuiKey_2, "Ctrl+2"},
-    {Workspace::Signals, "Signals", "lagrange-dock-signals-1", ImGuiKey_4, "Ctrl+4"},
+    {Workspace::Signals, "Signals", "lagrange-dock-signals-2", ImGuiKey_4, "Ctrl+4"},
 }};
 
 constexpr ImGuiWindowFlags kBarFlags =
@@ -75,8 +75,17 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         ImGui::DockBuilderDockWindow("Domains", left);
         ImGui::DockBuilderDockWindow("Profile", centre);
     } else {
-        // The scope alone until the Signals screen of the design is built.
+        // Design: Signals 300 px left; Cursors over Statistics, 300 px right; scope between.
+        const ImGuiID left = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Left, fraction(300.0F, size.x), nullptr, &centre);
+        ImGuiID right = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Right, fraction(300.0F, size.x - px(300.0F)), nullptr, &centre);
+        const ImGuiID statistics =
+            ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.62F, nullptr, &right);
+        ImGui::DockBuilderDockWindow("Signals", left);
         ImGui::DockBuilderDockWindow("Scope", centre);
+        ImGui::DockBuilderDockWindow("Cursors", right);
+        ImGui::DockBuilderDockWindow("Statistics", statistics);
     }
     ImGui::DockBuilderFinish(dockspace);
 }
@@ -366,6 +375,9 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
     panels.push_back(createConsolePanel());
     panels.push_back(createProblemsPanel());
     panels.push_back(createScopePanel());
+    panels.push_back(createSignalsPanel());
+    panels.push_back(createCursorsPanel());
+    panels.push_back(createStatisticsPanel());
     panels.push_back(createDomainsPanel());
     panels.push_back(createProfilePanel());
     return panels;
@@ -375,6 +387,8 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
     context.profileSession->update(context.client,
                                    context.connection.state == ConnectionState::Ready,
                                    context.stats.connects, ImGui::GetTime());
+
+    context.scopeSession->update();  // every frame, so a trigger fires in any workspace
 
     if (context.canOpenFiles && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_O)) {
         context.openFileRequested = true;

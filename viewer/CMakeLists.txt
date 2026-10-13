@@ -16,6 +16,7 @@ add_library(
     client/src/ProfileSession.cpp
     client/src/SceneStore.cpp
     client/src/ScopeBuffer.cpp
+    client/src/ScopeSession.cpp
     client/src/ViewerClient.cpp
 )
 lagrange_target_defaults(lagrange_viewer_client)
@@ -95,6 +96,7 @@ add_library(
     panels/src/ProfilePanel.cpp
     panels/src/ScenePanel.cpp
     panels/src/ScopePanel.cpp
+    panels/src/SignalsPanel.cpp
     panels/src/TimelinePanel.cpp
     panels/src/ViewportPanel.cpp
 )
@@ -143,6 +145,7 @@ if(BUILD_TESTING)
         client/test/test_profile_session.cpp
         client/test/test_scene_store.cpp
         client/test/test_scope_buffer.cpp
+        client/test/test_scope_session.cpp
         client/test/test_viewer_client.cpp
         render/test/test_camera.cpp
         TIMEOUT 120
