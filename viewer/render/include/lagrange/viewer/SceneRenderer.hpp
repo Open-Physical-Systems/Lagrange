@@ -2,6 +2,7 @@
 
 #include "lagrange/gpu/Resources.hpp"
 #include "lagrange/viewer/Camera.hpp"
+#include "lagrange/viewer/RenderOptions.hpp"
 #include "lagrange/viewer/SceneStore.hpp"
 
 #include <cstdint>
@@ -31,7 +32,8 @@ public:
 
     /// Records the scene pass. `frame` may be null (draws the grid only). Leaves the colour
     /// image in SHADER_READ_ONLY_OPTIMAL.
-    void render(VkCommandBuffer commands, const SceneFrame* frame, const Camera& camera);
+    void render(VkCommandBuffer commands, const SceneFrame* frame, const Camera& camera,
+                const RenderOptions& options = {});
 
     [[nodiscard]] VkImageView colorView() const { return color_.view; }
     [[nodiscard]] const gpu::Image& color() const { return color_; }

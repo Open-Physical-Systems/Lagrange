@@ -266,8 +266,8 @@ void SceneRenderer::uploadMeshes(const SceneStatics& statics) {
     meshGeneration_ = statics.generation;
 }
 
-void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame,
-                           const Camera& camera) {
+void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, const Camera& camera,
+                           const RenderOptions& options) {
     if (frame != nullptr && frame->statics && frame->statics->generation != meshGeneration_) {
         uploadMeshes(*frame->statics);
     }
@@ -360,8 +360,10 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame,
     const std::array<double, 3> gridOrigin{std::floor(camera.target[0] / cell) * cell,
                                            std::floor(camera.target[1] / cell) * cell, 0.002};
     // Grid in the design's line colours: #1B293D minor, #2A3F5C major.
-    drawLines(gridMinor_, gridMinorCount_, gridOrigin, {0.106F, 0.161F, 0.239F, 1.0F});
-    drawLines(gridMajor_, gridMajorCount_, gridOrigin, {0.165F, 0.247F, 0.361F, 1.0F});
+    if (options.grid) {
+        drawLines(gridMinor_, gridMinorCount_, gridOrigin, {0.106F, 0.161F, 0.239F, 1.0F});
+        drawLines(gridMajor_, gridMajorCount_, gridOrigin, {0.165F, 0.247F, 0.361F, 1.0F});
+    }
     const std::array<double, 3> worldOrigin{0.0, 0.0, 0.004};
     LinePush axisPush{};
     axisPush.viewProjection = viewProjection;
@@ -375,7 +377,7 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame,
         {0.310F, 0.788F, 0.478F, 1.0F},  // Y #4FC97A
         {0.353F, 0.635F, 1.000F, 1.0F},  // Z #5AA2FF
     }};
-    for (std::uint32_t axis = 0; axis < 3; ++axis) {
+    for (std::uint32_t axis = 0; options.axes && axis < 3; ++axis) {
         axisPush.color = axisColors.at(axis);
         vkCmdPushConstants(commands, lineLayout_, stages, 0, sizeof(axisPush), &axisPush);
         vkCmdDraw(commands, 2, 1, axis * 2, 0);

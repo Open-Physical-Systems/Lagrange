@@ -69,4 +69,28 @@ Mat4 Camera::viewProjection(double aspect) const {
     return m;
 }
 
+Ray Camera::ray(double ndcX, double ndcY, double aspect) const {
+    const Basis b = basis(yaw, pitch);
+    // The inverse of viewProjection(): x' = (f / aspect) x / z and y' = -f y / z.
+    const double f = 1.0 / std::tan(verticalFov / 2.0);
+    Ray result;
+    result.origin = eye();
+    double length = 0.0;
+    for (std::size_t i = 0; i < 3; ++i) {
+        result.direction.at(i) =
+            b.forward.at(i) + b.right.at(i) * (ndcX * aspect / f) - b.up.at(i) * (ndcY / f);
+        length += result.direction.at(i) * result.direction.at(i);
+    }
+    length = std::sqrt(length);
+    for (double& component : result.direction) {
+        component /= length;
+    }
+    return result;
+}
+
+std::array<std::array<double, 3>, 3> Camera::axes() const {
+    const Basis b = basis(yaw, pitch);
+    return {b.right, b.up, b.forward};
+}
+
 }  // namespace lagrange::viewer

@@ -182,6 +182,7 @@ public:
         context.workspace = &workspace_;
         context.profileSession = &profileSession_;
         context.scopeSession = &scopeSession_;
+        context.renderOptions = &renderOptions_;
         context.viewportTexture =
             static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(texture_));
         context.viewportWidth = renderer_.extent().width;
@@ -198,7 +199,7 @@ public:
 
     /// Records the scene pass. The UI pass (ImGui draw data) is recorded by the caller.
     void renderScene(VkCommandBuffer commands) {
-        renderer_.render(commands, scene_.get(), camera_);
+        renderer_.render(commands, scene_.get(), camera_, renderOptions_);
     }
 
     [[nodiscard]] const std::shared_ptr<const SceneFrame>& scene() const { return scene_; }
@@ -280,6 +281,7 @@ private:
     Workspace workspace_{Workspace::Scene};
     ProfileSession profileSession_;
     ScopeSession scopeSession_;
+    RenderOptions renderOptions_;
     std::vector<std::pair<std::string, bool>> domainEdits_;
     bool applyProfile_{false};
     std::string selectPath_;

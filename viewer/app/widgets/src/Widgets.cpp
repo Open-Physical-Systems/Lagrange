@@ -287,6 +287,47 @@ bool Button(const char* label, ButtonKind kind, Icon icon, bool large) {
     return clicked;
 }
 
+void ToolBarFrame(int count, bool vertical) {
+    // Design (.ovbar): 2 px padding around 24 px buttons 2 px apart, on rgba(9, 17, 32, .88)
+    // with a lineStrong border and 4 px radius.
+    const float cell = px(24.0F);
+    const float gap = px(2.0F);
+    const float along = cell * static_cast<float>(count) + gap * static_cast<float>(count + 1);
+    const float across = cell + gap * 2.0F;
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const ImVec2 max(min.x + (vertical ? across : along), min.y + (vertical ? along : across));
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(min, max, u32(theme::hex(0x091120, 0.88F)), px(4.0F));
+    draw->AddRect(min, max, u32(c::lineStrong), px(4.0F));
+    ImGui::SetCursorScreenPos(ImVec2(min.x + gap, min.y + gap));
+}
+
+bool ToolButton(const char* id, Icon icon, bool on, const char* tooltip) {
+    const float cell = px(24.0F);
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const ImVec2 max(min.x + cell, min.y + cell);
+    const bool clicked = ImGui::InvisibleButton(id, ImVec2(cell, cell));
+    const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+    const bool disabled = (ImGui::GetItemFlags() & ImGuiItemFlags_Disabled) != 0;
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    if (on) {
+        draw->AddRectFilled(min, max, u32(c::accentWeak), px(3.0F));
+    } else if (hovered && !disabled) {
+        draw->AddRectFilled(min, max, u32(c::bg3), px(3.0F));
+    }
+    ImVec4 ink = on ? c::accent : c::t2;
+    if (disabled) {
+        ink = withAlpha(c::t3, 0.55F);
+    }
+    const float size = px(14.0F);
+    DrawIcon(draw, icon, ImVec2(min.x + (cell - size) * 0.5F, min.y + (cell - size) * 0.5F), size,
+             u32(ink), u32(theme::hex(0x091120)));
+    if (hovered && tooltip != nullptr) {
+        ImGui::SetTooltip("%s", tooltip);
+    }
+    return clicked;
+}
+
 float ButtonWidth(const char* label, Icon icon, bool large) {
     ImGui::PushFont(theme::fonts().sansMedium, large ? theme::kLabelSize : theme::kCaptionSize);
     const float text = ImGui::CalcTextSize(label, nullptr, true).x;
