@@ -51,8 +51,10 @@ public:
         ASSERT_TRUE(listener_.valid()) << ec.message();
     }
     void shutdown() {
-        connection_.close();
+        // Listener first: otherwise the client can reconnect into the still-open backlog in
+        // the instant between the two closes, and the test would count an extra connect.
         listener_.close();
+        connection_.close();
     }
 
     [[nodiscard]] const Endpoint& endpoint() const { return endpoint_; }
