@@ -183,6 +183,7 @@ public:
         context.profileSession = &profileSession_;
         context.scopeSession = &scopeSession_;
         context.renderOptions = &renderOptions_;
+        context.bookmarks = &bookmarks_;
         context.viewportTexture =
             static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(texture_));
         context.viewportWidth = renderer_.extent().width;
@@ -282,6 +283,7 @@ private:
     ProfileSession profileSession_;
     ScopeSession scopeSession_;
     RenderOptions renderOptions_;
+    std::vector<std::int64_t> bookmarks_;
     std::vector<std::pair<std::string, bool>> domainEdits_;
     bool applyProfile_{false};
     std::string selectPath_;

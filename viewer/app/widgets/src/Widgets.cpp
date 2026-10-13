@@ -287,6 +287,66 @@ bool Button(const char* label, ButtonKind kind, Icon icon, bool large) {
     return clicked;
 }
 
+float MenuButtonWidth(const char* label) {
+    ImGui::PushFont(theme::fonts().sansMedium, theme::kCaptionSize);
+    const float text = ImGui::CalcTextSize(label, nullptr, true).x;
+    ImGui::PopFont();
+    return px(8.0F) + text + px(6.0F) + px(10.0F) + px(6.0F);
+}
+
+bool MenuButton(const char* label) {
+    ImGui::PushFont(theme::fonts().sansMedium, theme::kCaptionSize);
+    const ImVec2 textSize = ImGui::CalcTextSize(label, nullptr, true);
+    const float chevron = px(10.0F);
+    const ImVec2 size(px(8.0F) + textSize.x + px(6.0F) + chevron + px(6.0F), px(22.0F));
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const ImVec2 max(min.x + size.x, min.y + size.y);
+    const bool clicked = ImGui::InvisibleButton(label, size);
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    if (hovered) {
+        draw->AddRectFilled(min, max, u32(c::bg3), px(3.0F));
+    }
+    const ImVec4 ink = hovered ? c::t1 : c::t2;
+    draw->AddText(ImVec2(min.x + px(8.0F), min.y + (size.y - textSize.y) * 0.5F), u32(ink), label,
+                  ImGui::FindRenderedTextEnd(label));
+    DrawIcon(draw, Icon::ChevronDown,
+             ImVec2(max.x - px(6.0F) - chevron, min.y + (size.y - chevron) * 0.5F), chevron,
+             u32(c::t3), u32(c::bg2));
+    ImGui::PopFont();
+    return clicked;
+}
+
+bool BeginPanelTools(const char* id, float width) {
+    const ImGuiWindow* window = ImGui::GetCurrentWindow();
+    const ImGuiDockNode* node = window->DockNode;
+    if (node == nullptr || node->TabBar == nullptr || node->IsHiddenTabBar() ||
+        !window->DockTabIsVisible) {
+        return false;
+    }
+    // The tab bar belongs to the dock node, not to the panel, so the tools are a small
+    // window of their own laid over its right end.
+    const ImRect bar = node->TabBar->BarRect;
+    const float height = px(22.0F);
+    ImGui::SetNextWindowPos(ImVec2(bar.Max.x - width - px(4.0F), bar.Min.y));
+    ImGui::SetNextWindowSize(ImVec2(width, bar.GetHeight()));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                        ImVec2(0.0F, std::max((bar.GetHeight() - height) * 0.5F, 0.0F)));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1.0F, 1.0F));
+    ImGui::Begin(id, nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
+                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+                     ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleVar(3);
+    return true;
+}
+
+void EndPanelTools() {
+    ImGui::End();
+}
+
 void ToolBarFrame(int count, bool vertical) {
     // Design (.ovbar): 2 px padding around 24 px buttons 2 px apart, on rgba(9, 17, 32, .88)
     // with a lineStrong border and 4 px radius.

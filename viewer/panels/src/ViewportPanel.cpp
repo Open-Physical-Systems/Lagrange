@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 #include <imgui.h>
 
@@ -23,7 +24,9 @@ using widgets::px;
 
 constexpr double kOrbitRadiansPerPixel = 0.006;
 constexpr double kZoomPerWheelStep = 0.88;
-constexpr float kClickSlopPixels = 4.0F;  // a press that moves less than this is a click
+constexpr double kSpeedSmoothingSeconds = 0.3;  // of the speed shown on a robot's name tag
+constexpr double kTagHeightMetres = 0.35;       // the tag sits this far above the robot's origin
+constexpr float kClickSlopPixels = 4.0F;        // a press that moves less than this is a click
 
 ImU32 u32(const ImVec4& color) {
     return ImGui::ColorConvertFloat4ToU32(color);
@@ -139,6 +142,18 @@ public:
             context.selectedPrim = pickPrim(*context.scene, rayAt(io.MousePos));
         }
         const bool hasSelection = context.selectedPrim < context.scene->statics->prims.size();
+        // Follow camera: keep looking at the selection, or at the robot when nothing is
+        // selected. Panning by hand turns it off.
+        if (follow_) {
+            if (ImGui::IsItemActive() && (ImGui::IsMouseDragging(ImGuiMouseButton_Middle) ||
+                                          ImGui::IsMouseDragging(ImGuiMouseButton_Right))) {
+                follow_ = false;
+            } else if (const std::uint32_t target =
+                           hasSelection ? context.selectedPrim : robotPrim(*context.scene);
+                       target != kNone) {
+                context.camera.target = context.scene->transforms[target].position;
+            }
+        }
         // F: look at the selection (design shortcut), unless a text field has the keyboard.
         if (hasSelection && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
             context.camera.target = context.scene->transforms[context.selectedPrim].position;
@@ -190,12 +205,133 @@ public:
             }
         }
 
+        nameTags(context, draw, origin, available);
         toolColumn(ImVec2(origin.x + px(10.0F), origin.y + px(46.0F)));
         overlayBar(context, ImVec2(origin.x + available.x - px(10.0F), origin.y + px(10.0F)));
+        headerMenus(context);
         ImGui::End();
     }
 
 private:
+    /// The first root prim that has children: what "the robot" is for the follow camera.
+    static std::uint32_t robotPrim(const SceneFrame& frame) {
+        const std::vector<PrimData>& prims = frame.statics->prims;
+        for (std::uint32_t i = 0; i < prims.size(); ++i) {
+            if (prims[i].parent == kNone) {
+                for (const PrimData& other : prims) {
+                    if (other.parent == i) {
+                        return i;
+                    }
+                }
+            }
+        }
+        return kNone;
+    }
+
+    /// Design: a name tag on each robot with its speed. A robot is a root prim with
+    /// children; its speed is how far it moved per simulated second, smoothed.
+    void nameTags(const PanelContext& context, ImDrawList* draw, const ImVec2& origin,
+                  const ImVec2& size) {
+        const SceneFrame& frame = *context.scene;
+        const std::uint32_t robot = robotPrim(frame);
+        if (robot == kNone) {
+            return;
+        }
+        const std::array<double, 3>& position = frame.transforms[robot].position;
+        if (frame.statics->generation != tagScene_ || frame.simTimeNs < tagTimeNs_) {
+            tagScene_ = frame.statics->generation;  // another stage, or time went back
+            tagSpeed_ = 0.0;
+        } else if (frame.simTimeNs > tagTimeNs_) {
+            const double dt = static_cast<double>(frame.simTimeNs - tagTimeNs_) * 1e-9;
+            const double distance =
+                std::hypot(position[0] - tagPosition_[0], position[1] - tagPosition_[1],
+                           position[2] - tagPosition_[2]);
+            const double blend = std::min(dt / kSpeedSmoothingSeconds, 1.0);
+            tagSpeed_ += (distance / dt - tagSpeed_) * blend;
+        }
+        tagPosition_ = position;
+        tagTimeNs_ = frame.simTimeNs;
+
+        ImVec2 at;
+        if (!project(context.camera, {position[0], position[1], position[2] + kTagHeightMetres},
+                     origin, size, at)) {
+            return;
+        }
+        // "name  0.42 m/s": the name in primary text, the speed in t2 mono.
+        const theme::Fonts& fonts = theme::fonts();
+        const char* name = frame.statics->prims[robot].name.c_str();
+        char speed[32];
+        std::snprintf(speed, sizeof(speed), "%.2f m/s", tagSpeed_);
+        const float text = px(theme::kLabelSize);
+        const ImVec2 a = fonts.sansMedium->CalcTextSizeA(text, FLT_MAX, 0.0F, name);
+        const ImVec2 b = fonts.mono->CalcTextSizeA(text, FLT_MAX, 0.0F, speed);
+        const ImVec2 min(at.x + px(8.0F), at.y - px(12.0F));
+        const ImVec2 max(min.x + a.x + b.x + px(26.0F), min.y + px(24.0F));
+        draw->AddRectFilled(min, max, u32(theme::hex(0x091120, 0.88F)), px(4.0F));
+        draw->AddRect(min, max, u32(c::lineStrong), px(4.0F));
+        draw->AddText(fonts.sansMedium, text, ImVec2(min.x + px(8.0F), min.y + px(5.0F)),
+                      u32(c::t1), name);
+        draw->AddText(fonts.mono, text, ImVec2(min.x + px(18.0F) + a.x, min.y + px(5.0F)),
+                      u32(c::t2), speed);
+    }
+
+    /// Design: shading, camera and overlay menus at the right of the panel's header.
+    void headerMenus(PanelContext& context) {
+        int overlays = 0;
+        overlays += context.renderOptions->grid ? 1 : 0;
+        overlays += context.renderOptions->axes ? 1 : 0;
+        char overlayLabel[40];
+        std::snprintf(overlayLabel, sizeof(overlayLabel), "Overlays · %d###overlays", overlays);
+        const char* camera = follow_ ? "Follow###camera" : "Perspective###camera";
+        const float gap = px(4.0F);
+        const float width = widgets::MenuButtonWidth("Lit") + widgets::MenuButtonWidth(camera) +
+                            widgets::MenuButtonWidth(overlayLabel) + gap * 2.0F;
+        if (!widgets::BeginPanelTools("##viewport-tools", width)) {
+            return;
+        }
+        if (widgets::MenuButton("Lit")) {
+            ImGui::OpenPopup("##shading");
+        }
+        if (ImGui::BeginPopup("##shading")) {
+            ImGui::MenuItem("Lit", nullptr, true);
+            // The renderer has one shading mode so far.
+            for (const char* mode : {"Unlit", "Wireframe", "Collision", "Thermal false colour"}) {
+                ImGui::MenuItem(mode, nullptr, false, false);
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::SameLine(0.0F, gap);
+        if (widgets::MenuButton(camera)) {
+            ImGui::OpenPopup("##camera");
+        }
+        if (ImGui::BeginPopup("##camera")) {
+            if (ImGui::MenuItem("Perspective", nullptr, !follow_)) {
+                follow_ = false;
+            }
+            ImGui::MenuItem("Orthographic", nullptr, false, false);  // not built yet
+            if (ImGui::MenuItem("Follow the robot or the selection", nullptr, follow_)) {
+                follow_ = !follow_;
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::SameLine(0.0F, gap);
+        if (widgets::MenuButton(overlayLabel)) {
+            ImGui::OpenPopup("##overlay-menu");
+        }
+        if (ImGui::BeginPopup("##overlay-menu")) {
+            ImGui::MenuItem("Grid", nullptr, &context.renderOptions->grid);
+            ImGui::MenuItem("Frame axes", nullptr, &context.renderOptions->axes);
+            // These need data that the server does not send yet.
+            for (const char* overlay :
+                 {"Contacts and forces", "Sensor frustums", "Planned path", "Field overlays",
+                  "Electrical overlay", "Weather effects"}) {
+                ImGui::MenuItem(overlay, nullptr, false, false);
+            }
+            ImGui::EndPopup();
+        }
+        widgets::EndPanelTools();
+    }
+
     /// The gizmo tools, as a column on the left. Selecting works; moving, turning, scaling
     /// and measuring change the scene, which a replay cannot do.
     static void toolColumn(const ImVec2& at) {
@@ -319,6 +455,12 @@ private:
             }
         }
     }
+
+    bool follow_{false};
+    std::uint64_t tagScene_{0};
+    std::int64_t tagTimeNs_{0};
+    std::array<double, 3> tagPosition_{};
+    double tagSpeed_{0.0};
 };
 
 }  // namespace

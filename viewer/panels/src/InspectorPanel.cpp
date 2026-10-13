@@ -47,8 +47,29 @@ public:
             ImGui::End();
             return;
         }
-        const bool valid = context.scene && context.selectedPrim != kNone &&
-                           context.selectedPrim < context.scene->statics->prims.size();
+        // The lock keeps the inspector on its prim while the selection moves elsewhere
+        // (design: the lock in the panel header).
+        const std::size_t count = context.scene ? context.scene->statics->prims.size() : 0;
+        if (locked_ && (lockedPrim_ >= count ||
+                        (context.scene && context.scene->statics->generation != lockedScene_))) {
+            locked_ = false;  // the prim it was locked to is gone
+        }
+        if (widgets::BeginPanelTools("##inspector-tools", px(26.0F))) {
+            ImGui::BeginDisabled(!locked_ && context.selectedPrim >= count);
+            if (widgets::Button("##lock",
+                                locked_ ? widgets::ButtonKind::On : widgets::ButtonKind::Ghost,
+                                widgets::Icon::Lock)) {
+                locked_ = !locked_;
+                lockedPrim_ = context.selectedPrim;
+                lockedScene_ = context.scene ? context.scene->statics->generation : 0;
+            }
+            ImGui::SetItemTooltip("%s", locked_ ? "Unlock: follow the selection again"
+                                                : "Lock the inspector to this prim");
+            ImGui::EndDisabled();
+            widgets::EndPanelTools();
+        }
+        const std::uint32_t shown = locked_ ? lockedPrim_ : context.selectedPrim;
+        const bool valid = context.scene && shown != kNone && shown < count;
         if (!valid) {
             follow(context, kNone, 0);
             widgets::Caption("%s", context.scene ? "Select a prim in the Scene panel."
@@ -57,7 +78,7 @@ public:
             return;
         }
         const SceneStatics& statics = *context.scene->statics;
-        const std::uint32_t id = context.selectedPrim;
+        const std::uint32_t id = shown;
         const PrimData& prim = statics.prims[id];
         const Transform& transform = context.scene->transforms[id];
         follow(context, id, statics.generation);
@@ -227,6 +248,15 @@ private:
             }
             *context.workspace = Workspace::Signals;
         }
+        ImGui::SameLine(0.0F, px(6.0F));
+        if (widgets::Button("Copy signal paths", widgets::ButtonKind::Ghost)) {
+            std::string paths;
+            for (const Live& entry : live_) {
+                paths += entry.name;
+                paths += '\n';
+            }
+            ImGui::SetClipboardText(paths.c_str());
+        }
         ImGui::Unindent(px(8.0F));
     }
 
@@ -295,6 +325,9 @@ private:
     }
 
     std::vector<Live> live_;
+    bool locked_{false};
+    std::uint32_t lockedPrim_{kNone};
+    std::uint64_t lockedScene_{0};
     std::uint32_t prim_{kNone};
     std::uint64_t sceneGeneration_{0};
     std::uint64_t catalog_{0};

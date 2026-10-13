@@ -67,6 +67,9 @@ struct PanelContext {
     ProfileSession* profileSession{nullptr};  ///< Profile being edited; never null in draw().
     ScopeSession* scopeSession{nullptr};      ///< What is plotted; never null in draw().
     RenderOptions* renderOptions{nullptr};    ///< Viewport overlays; never null in draw().
+    /// Times the user marked on the timeline, in simulation nanoseconds, ascending. Kept for
+    /// the session only. Never null in draw().
+    std::vector<std::int64_t>* bookmarks{nullptr};
     bool* resetLayout{nullptr};  ///< Set to rebuild the shown workspace's default layout.
 
     std::string deviceName;
@@ -80,7 +83,8 @@ struct PanelContext {
 class Panel {
 public:
     virtual ~Panel() = default;
-    /// Stable identifier; also the window title, which is what ImGui keys layouts on.
+    /// Stable identifier, which is what ImGui keys layouts on. A panel that shows a count in
+    /// its tab draws "Title · N###Title"; layouts then refer to it as "###Title".
     [[nodiscard]] virtual const char* title() const = 0;
     virtual void draw(PanelContext& context) = 0;
     /// The workspace this panel belongs to. It is drawn only while that workspace is shown.
@@ -91,6 +95,7 @@ public:
 [[nodiscard]] std::unique_ptr<Panel> createScenePanel();
 [[nodiscard]] std::unique_ptr<Panel> createInspectorPanel();
 [[nodiscard]] std::unique_ptr<Panel> createTimelinePanel();
+[[nodiscard]] std::unique_ptr<Panel> createBookmarksPanel();
 [[nodiscard]] std::unique_ptr<Panel> createConsolePanel();
 [[nodiscard]] std::unique_ptr<Panel> createProblemsPanel();
 [[nodiscard]] std::unique_ptr<Panel> createScopePanel();

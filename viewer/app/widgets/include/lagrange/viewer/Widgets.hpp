@@ -49,6 +49,16 @@ bool Button(const char* label, ButtonKind kind = ButtonKind::Default, Icon icon 
 /// The one primary action of a region: accent fill.
 bool PrimaryButton(const char* label);
 
+/// A flat button that opens a menu: label and a small chevron (design: panel header menus).
+bool MenuButton(const char* label);
+[[nodiscard]] float MenuButtonWidth(const char* label);
+
+/// Starts the tool slot at the right end of the current docked panel's tab bar (design:
+/// `.ph .tools`), `width` wide. Returns false when the panel has no tab bar to draw in (it
+/// floats, or its tab bar is hidden); otherwise place 22 px controls and call EndPanelTools().
+bool BeginPanelTools(const char* id, float width);
+void EndPanelTools();
+
 /// A 24 px icon button of a floating tool bar over the viewport: no frame, accent when on.
 bool ToolButton(const char* id, Icon icon, bool on, const char* tooltip);
 /// Draws the frame of a floating tool bar that holds `count` ToolButtons, laid out in a row
