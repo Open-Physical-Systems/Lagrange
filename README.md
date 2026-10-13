@@ -38,8 +38,8 @@ colcon test && colcon test-result --verbose
 ```
 
 Packages so far: `lagrange_cmake` (shared build options), `lagrange_core` (simulation time
-types) and `lagrange_proto` (viewer protocol messages, generated C++ and Python code, and
-stream framing).
+types) and `lagrange_proto` (viewer protocol messages, generated C++ and Python code, stream
+framing, Unix-socket/TCP transport and the shared-memory fast path).
 
 ## Contributing
 

@@ -29,6 +29,21 @@ colcon build && colcon test && colcon test-result --verbose
 `pre-commit` is in Ubuntu 26.04 (`sudo apt install pre-commit`); run `pre-commit install` once
 in your clone.
 
+### Fuzzing
+
+CI fuzzes nightly, not on pull requests. If you change `proto/framing/`, run the fuzzer before
+pushing (needs `clang` and `libclang-rt-dev`):
+
+```bash
+CC=clang CXX=clang++ colcon build --packages-up-to lagrange_proto --cmake-args \
+  -DBUILD_TESTING=OFF -DLAGRANGE_BUILD_FUZZERS=ON "-DLAGRANGE_SANITIZER=address;undefined"
+install/lagrange_proto/lib/lagrange_proto/fuzz_frame_reader -max_total_time=60 -max_len=8192
+```
+
+If Clang fails to link with `cannot find -lstdc++`, it has picked a GCC version whose C++
+library is not installed. Add `--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/15` to `CFLAGS`,
+`CXXFLAGS` and `LDFLAGS`.
+
 ## Rules that reviewers will check
 
 - Modules talk only through the signal bus. No module includes another module.
