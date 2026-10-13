@@ -147,11 +147,10 @@ private:
         ImGui::PopFont();
         ImGui::SameLine(0.0F, px(8.0F));
         ImGui::TextDisabled("%s", prim.typeName.c_str());
-        const float button =
-            ImGui::CalcTextSize("Focus").x + ImGui::GetStyle().FramePadding.x * 2.0F;
+        const float button = widgets::ButtonWidth("Focus");
         ImGui::SameLine();
         widgets::AlignRight(button);
-        if (ImGui::Button("Focus")) {
+        if (widgets::Button("Focus", widgets::ButtonKind::Ghost)) {
             context.camera.target = transform.position;
         }
         widgets::Mono(c::t3, "%s", prim.path.c_str());
@@ -219,7 +218,7 @@ private:
                 ImGui::Dummy(spark);
             }
         }
-        if (ImGui::Button("Plot in Signals") && context.initialScopeSignals != nullptr) {
+        if (widgets::Button("Plot in Signals") && context.initialScopeSignals != nullptr) {
             for (const Live& entry : live_) {
                 context.initialScopeSignals->push_back(entry.name);
             }

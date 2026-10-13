@@ -101,11 +101,14 @@ public:
         ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
         const float countWidth = ImGui::CalcTextSize(count).x;
         ImGui::PopFont();
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - countWidth - px(10.0F));
-        if (ImGui::InputTextWithHint("##search", "Search name or unit", search_, sizeof(search_))) {
+        const ImVec2 at = ImGui::GetCursorPos();
+        const float field = ImGui::GetContentRegionAvail().x - countWidth - px(10.0F);
+        if (widgets::SearchField("##search", "Search name or unit", search_, sizeof(search_),
+                                 field)) {
             dirty_ = true;
         }
-        ImGui::SameLine(0.0F, px(8.0F));
+        ImGui::SameLine(0.0F, 0.0F);
+        ImGui::SetCursorPos(ImVec2(at.x + field + px(8.0F), at.y));
         ImGui::AlignTextToFramePadding();
         widgets::Mono(c::t3, "%s", count);
 
@@ -329,7 +332,7 @@ public:
             widgets::Caption("No signals plotted.");
         } else if (!session.cursors) {
             widgets::Caption("Cursors are off.");
-            if (ImGui::Button("Show cursors A·B")) {
+            if (widgets::Button("Show cursors A·B")) {
                 session.showCursors(true);
             }
         } else if (ImGui::BeginTable("##cursors", 4, kTableFlags)) {

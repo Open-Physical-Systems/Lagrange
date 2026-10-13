@@ -18,8 +18,11 @@ Do not invent layouts, colours, fonts or widgets when the design covers them.
 2. Read `docs/design/ui/shared/design-tokens.json` and `shared/lagrange_theme.hpp`. The JSON is
    the source of truth; the header maps it onto Dear ImGui and ImPlot.
 3. Read the `SPEC.md` of the screen being worked on and look at its `reference.png`
-   (rendered at 2x for a 1600x1000 logical window). `reference.html` gives exact text, numbers
-   and colours when the image is not enough.
+   (rendered at 2x for a 1600x1000 logical window).
+4. **Read the `<style>` block and the markup of that screen's `reference.html`.** It is the
+   exact specification: every height, padding, radius, font size and weight, colour, border,
+   and every icon as an SVG path. The tokens file alone is not enough; work from the
+   stylesheet class by class (`.btn`, `.chip`, `.pill`, `.seg`, `.fld`, `.tr`, `.sh`, ...).
 
 | Folder | Screen |
 |---|---|
@@ -42,6 +45,9 @@ Suggested build order from the design: 00, 02, 03, 05, 04, 01, then 06 to 11.
 
 - The HTML is a picture of the target. Never port HTML or CSS, and never add web technology
   (CLAUDE.md §3 invariant 13). Rebuild each screen with Dear ImGui widgets.
+- Match the design exactly: the logo, the icons, the colours, the sizes. "Close" is not
+  done. Compare a headless screenshot with `reference.png` side by side before calling a
+  screen finished, and list every difference that remains.
 - Colours, sizes and fonts come from `lagrange::theme` and the shared widgets
   (`DomainChip`, `PanelTabBar`, `SectionHeader`, `PropertyRow`, `Pill`, `Switch`, ...). No
   inline `PushStyleColor` in panels except through those widgets.
@@ -59,6 +65,10 @@ Suggested build order from the design: 00, 02, 03, 05, 04, 01, then 06 to 11.
   screenshot with `reference.png`.
 
 ## Where the design lives in the code
+
+- Icons and the logo: `viewer/app/widgets/` (`Icons.hpp`). They are the SVG paths of the
+  design's `reference.html`, drawn as vectors. To add one, copy its path data from the HTML
+  into the table in `Icons.cpp`; never substitute a text label or a glyph for a designed icon.
 
 - Theme: `viewer/app/theme/` (`lagrange_theme.hpp` is the viewer's checked copy of the
   design's header; `Fonts.hpp` loads IBM Plex).

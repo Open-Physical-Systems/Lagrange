@@ -1,4 +1,5 @@
 #include "lagrange/viewer/Fonts.hpp"
+#include "lagrange/viewer/Icons.hpp"
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
@@ -150,22 +151,29 @@ float PillWidth(const char* text) {
 }
 
 void Pill(const char* text, PillKind kind) {
+    // Design (.pill): 18 px high, 9 px radius, 11 px medium, tinted fill, no border.
     ImVec4 color = c::t2;
+    ImVec4 fill = c::bg3;
     switch (kind) {
         case PillKind::Ok:
             color = c::ok;
+            fill = withAlpha(c::ok, 0.14F);
             break;
         case PillKind::Warn:
             color = c::warn;
+            fill = withAlpha(c::warn, 0.14F);
             break;
         case PillKind::Error:
             color = c::error;
+            fill = withAlpha(c::error, 0.15F);
             break;
         case PillKind::Info:
             color = c::info;
+            fill = withAlpha(c::info, 0.14F);
             break;
         case PillKind::Accent:
             color = c::accent;
+            fill = c::accentWeak;
             break;
         case PillKind::Neutral:
             break;
@@ -179,14 +187,14 @@ void Pill(const char* text, PillKind kind) {
     min.y += ImGui::GetCurrentWindow()->DC.CurrLineTextBaseOffset + (lineHeight - size.y) * 0.5F;
     const ImVec2 max(min.x + size.x, min.y + size.y);
     ImDrawList* draw = ImGui::GetWindowDrawList();
-    draw->AddRectFilled(min, max, u32(withAlpha(color, 0.14F)), size.y * 0.5F);
-    draw->AddRect(min, max, u32(withAlpha(color, 0.40F)), size.y * 0.5F);
+    draw->AddRectFilled(min, max, u32(fill), size.y * 0.5F);
     draw->AddText(ImVec2(min.x + px(7.0F), min.y + (size.y - textSize.y) * 0.5F), u32(color), text);
     ImGui::PopFont();
     ImGui::Dummy(ImVec2(size.x, lineHeight));
 }
 
 bool Switch(const char* id, bool* value) {
+    // Design (.sw): 28 x 16 track on bg4 with a 1 px border, 10 px knob 2 px from the edge.
     const ImVec2 size(px(28.0F), px(16.0F));
     const float height = ImGui::GetFrameHeight();
     const ImVec2 origin = ImGui::GetCursorScreenPos();
@@ -199,25 +207,184 @@ bool Switch(const char* id, bool* value) {
     ImDrawList* draw = ImGui::GetWindowDrawList();
     const float radius = size.y * 0.5F;
     draw->AddRectFilled(min, max, u32(*value ? c::accent : c::bg4), radius);
-    if (ImGui::IsItemHovered() || ImGui::IsItemFocused()) {
-        draw->AddRect(min, max, u32(*value ? c::t1 : c::lineStrong), radius);
-    }
-    const float knob = radius - px(2.5F);
-    const float x = *value ? max.x - radius : min.x + radius;
-    draw->AddCircleFilled(ImVec2(x, min.y + radius), knob, u32(*value ? c::onAccent : c::t2));
+    const bool hot = ImGui::IsItemHovered() || ImGui::IsItemFocused();
+    draw->AddRect(min, max, u32(*value ? c::accent : (hot ? c::t3 : c::lineStrong)), radius);
+    const float knob = px(5.0F);
+    const float x = *value ? max.x - px(3.0F) - knob : min.x + px(3.0F) + knob;
+    draw->AddCircleFilled(ImVec2(x, min.y + radius), knob, u32(*value ? c::onAccent : c::t3));
     return clicked;
 }
 
-bool PrimaryButton(const char* label) {
-    ImGui::PushStyleColor(ImGuiCol_Button, c::accent);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::hex(0xF08A45));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::hex(0xD0661F));
-    ImGui::PushStyleColor(ImGuiCol_Text, c::onAccent);
-    ImGui::PushFont(theme::fonts().sansMedium, theme::kLabelSize);
-    const bool clicked = ImGui::Button(label);
+bool Button(const char* label, ButtonKind kind, Icon icon, bool large) {
+    // Design (.btn): 26 px in toolbars, 22 px (.sm) in panels; bg3 with a 1 px lineStrong
+    // border; 12 / 11 px medium text; an optional 14 / 12 px icon before the text.
+    const theme::Fonts& fonts = theme::fonts();
+    const float height = px(large ? 26.0F : 22.0F);
+    const float fontSize = large ? theme::kLabelSize : theme::kCaptionSize;
+    const float iconSize = px(large ? 14.0F : 12.0F);
+    const float pad = px(large ? 10.0F : 8.0F);
+    ImGui::PushFont(fonts.sansMedium, fontSize);
+    const ImVec2 textSize = ImGui::CalcTextSize(label, nullptr, true);
+    const bool hasIcon = icon != Icon::Count;
+    const bool hasText = textSize.x > 0.0F;
+    float width = pad * 2.0F + textSize.x;
+    if (hasIcon) {
+        width = hasText ? width + iconSize + px(6.0F) : height;  // icon only: a square
+    }
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const ImVec2 max(min.x + width, min.y + height);
+    const bool clicked = ImGui::InvisibleButton(label, ImVec2(width, height));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+    const bool disabled = (ImGui::GetItemFlags() & ImGuiItemFlags_Disabled) != 0;
+
+    ImVec4 fill = hovered ? c::bg4 : c::bg3;
+    ImVec4 border = c::lineStrong;
+    ImVec4 ink = c::t1;
+    switch (kind) {
+        case ButtonKind::Primary:
+            fill = held ? theme::hex(0xD0661F) : (hovered ? theme::hex(0xF08A45) : c::accent);
+            border = fill;
+            ink = c::onAccent;
+            break;
+        case ButtonKind::Ghost:
+            fill = hovered ? c::bg3 : ImVec4(0, 0, 0, 0);
+            border = ImVec4(0, 0, 0, 0);
+            ink = hovered ? c::t1 : c::t2;
+            break;
+        case ButtonKind::On:
+            fill = c::accentWeak;
+            border = c::accentBorder;
+            ink = c::accent;
+            break;
+        case ButtonKind::Default:
+            if (held) {
+                fill = c::lineStrong;
+            }
+            break;
+    }
+    if (disabled) {
+        const float alpha = ImGui::GetStyle().DisabledAlpha;
+        fill.w *= alpha;
+        border.w *= alpha;
+        ink.w *= alpha;
+    }
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const float rounding = px(3.0F);
+    draw->AddRectFilled(min, max, u32(fill), rounding);
+    draw->AddRect(min, max, u32(border), rounding);
+    float x = min.x + (hasIcon && !hasText ? (width - iconSize) * 0.5F : pad);
+    if (hasIcon) {
+        DrawIcon(draw, icon, ImVec2(x, min.y + (height - iconSize) * 0.5F), iconSize, u32(ink),
+                 u32(fill));
+        x += iconSize + px(6.0F);
+    }
+    if (hasText) {
+        draw->AddText(ImVec2(x, min.y + (height - textSize.y) * 0.5F), u32(ink), label,
+                      ImGui::FindRenderedTextEnd(label));
+    }
     ImGui::PopFont();
-    ImGui::PopStyleColor(4);
     return clicked;
+}
+
+float ButtonWidth(const char* label, Icon icon, bool large) {
+    ImGui::PushFont(theme::fonts().sansMedium, large ? theme::kLabelSize : theme::kCaptionSize);
+    const float text = ImGui::CalcTextSize(label, nullptr, true).x;
+    ImGui::PopFont();
+    const float height = px(large ? 26.0F : 22.0F);
+    if (icon != Icon::Count && text <= 0.0F) {
+        return height;
+    }
+    return px(large ? 20.0F : 16.0F) + text +
+           (icon != Icon::Count ? px(large ? 20.0F : 18.0F) : 0.0F);
+}
+
+bool PrimaryButton(const char* label) {
+    return Button(label, ButtonKind::Primary);
+}
+
+void Readout(const char* key, const char* value, const char* after, const ImVec4& color) {
+    // Design (.ro): 26 px box on bg0 with a 1 px line border; 11 px key, 12 px mono value.
+    const theme::Fonts& fonts = theme::fonts();
+    const float keySize = px(theme::kCaptionSize);
+    const float valueSize = px(theme::kMonoSize);
+    const ImVec2 k = fonts.sans->CalcTextSizeA(keySize, FLT_MAX, 0.0F, key);
+    const ImVec2 v = fonts.mono->CalcTextSizeA(valueSize, FLT_MAX, 0.0F, value);
+    const bool hasAfter = after != nullptr && *after != '\0';
+    const ImVec2 a =
+        hasAfter ? fonts.sans->CalcTextSizeA(keySize, FLT_MAX, 0.0F, after) : ImVec2(0.0F, 0.0F);
+    const float gap = px(6.0F);
+    const ImVec2 size(px(16.0F) + k.x + gap + v.x + (hasAfter ? gap + a.x : 0.0F), px(26.0F));
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const ImVec2 max(min.x + size.x, min.y + size.y);
+    ImGui::Dummy(size);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(min, max, u32(c::bg0), px(3.0F));
+    draw->AddRect(min, max, u32(c::line), px(3.0F));
+    float x = min.x + px(8.0F);
+    const float mid = min.y + size.y * 0.5F;
+    draw->AddText(fonts.sans, keySize, ImVec2(x, mid - k.y * 0.5F), u32(c::t3), key);
+    x += k.x + gap;
+    draw->AddText(fonts.mono, valueSize, ImVec2(x, mid - v.y * 0.5F), u32(color), value);
+    x += v.x + gap;
+    if (hasAfter) {
+        draw->AddText(fonts.sans, keySize, ImVec2(x, mid - a.y * 0.5F), u32(c::t3), after);
+    }
+}
+
+float ReadoutWidth(const char* key, const char* value, const char* after) {
+    const theme::Fonts& fonts = theme::fonts();
+    const float keySize = px(theme::kCaptionSize);
+    float width = px(16.0F) + fonts.sans->CalcTextSizeA(keySize, FLT_MAX, 0.0F, key).x + px(6.0F) +
+                  fonts.mono->CalcTextSizeA(px(theme::kMonoSize), FLT_MAX, 0.0F, value).x;
+    if (after != nullptr && *after != '\0') {
+        width += px(6.0F) + fonts.sans->CalcTextSizeA(keySize, FLT_MAX, 0.0F, after).x;
+    }
+    return width;
+}
+
+void Kbd(const char* text) {
+    // Design (.kbd): 10 px mono in a 1 px lineStrong box.
+    const theme::Fonts& fonts = theme::fonts();
+    const float size = px(10.0F);
+    const ImVec2 extent = fonts.mono->CalcTextSizeA(size, FLT_MAX, 0.0F, text);
+    const ImVec2 box(extent.x + px(10.0F), px(16.0F));
+    const float line = ImGui::GetTextLineHeight();
+    ImVec2 min = ImGui::GetCursorScreenPos();
+    min.y += ImGui::GetCurrentWindow()->DC.CurrLineTextBaseOffset + (line - box.y) * 0.5F;
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRect(min, ImVec2(min.x + box.x, min.y + box.y), u32(c::lineStrong), px(2.0F));
+    draw->AddText(fonts.mono, size, ImVec2(min.x + px(5.0F), min.y + (box.y - extent.y) * 0.5F),
+                  u32(c::t3), text);
+    ImGui::Dummy(ImVec2(box.x, line));
+}
+
+bool SearchField(const char* id, const char* hint, char* buffer, std::size_t size, float width) {
+    // Design (.search): 24 px, bg0, 1 px line border, a 12 px search icon, 12 px text.
+    const float height = px(24.0F);
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const ImVec2 max(min.x + width, min.y + height);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(min, max, u32(c::bg0), px(3.0F));
+    draw->AddRect(min, max, u32(c::line), px(3.0F));
+    const float icon = px(12.0F);
+    DrawIcon(draw, Icon::Search, ImVec2(min.x + px(8.0F), min.y + (height - icon) * 0.5F), icon,
+             u32(c::t3), u32(c::bg0));
+    const float inset = px(8.0F) + icon + px(2.0F);
+    ImGui::PushFont(theme::fonts().sans, theme::kLabelSize);
+    const float pad = (height - ImGui::GetFontSize()) * 0.5F;
+    ImGui::SetCursorScreenPos(ImVec2(min.x + inset, min.y));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(px(4.0F), pad));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0F);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0, 0, 0, 0));
+    ImGui::SetNextItemWidth(width - inset - px(2.0F));
+    const bool changed = ImGui::InputTextWithHint(id, hint, buffer, size);
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar(2);
+    ImGui::PopFont();
+    return changed;
 }
 
 void Dot(const ImVec4& color, bool filled) {
@@ -237,59 +404,71 @@ void Dot(const ImVec4& color, bool filled) {
 
 bool DomainChip(const char* id, const ImVec4& color, const char* name, const char* detail,
                 ChipState state) {
+    // Design (.chip): 22 px, 11 px radius, bg2 with a lineStrong border, 8 px dot, 12 px name,
+    // 11 px mono detail in t3. Substitute and off: dashed border, no fill, hollow dot.
     const theme::Fonts& fonts = theme::fonts();
-    ImGui::PushFont(fonts.sansMedium, theme::kLabelSize);
-    const ImVec2 nameSize = ImGui::CalcTextSize(name);
-    ImGui::PopFont();
-    ImGui::PushFont(fonts.mono, theme::kCaptionSize);
-    const ImVec2 detailSize = ImGui::CalcTextSize(detail);
-    ImGui::PopFont();
-
-    const float pad = px(9.0F);
+    const float nameSize = px(theme::kLabelSize);
+    const float detailSize = px(theme::kCaptionSize);
+    const ImVec2 nameExtent = fonts.sans->CalcTextSizeA(nameSize, FLT_MAX, 0.0F, name);
+    const ImVec2 detailExtent = fonts.mono->CalcTextSizeA(detailSize, FLT_MAX, 0.0F, detail);
     const float dot = px(8.0F);
     const float gap = px(6.0F);
-    const ImVec2 size(
-        pad + dot + gap + nameSize.x + (detailSize.x > 0.0F ? gap + detailSize.x : 0) + pad,
-        px(22.0F));
+    const ImVec2 size(px(8.0F) + dot + gap + nameExtent.x +
+                          (detailExtent.x > 0.0F ? gap + detailExtent.x : 0.0F) + px(9.0F),
+                      px(22.0F));
     const ImVec2 min = ImGui::GetCursorScreenPos();
     const ImVec2 max(min.x + size.x, min.y + size.y);
     const bool clicked = ImGui::InvisibleButton(id, size);
     const bool hovered = ImGui::IsItemHovered();
 
-    const bool dim = state == ChipState::Off;
-    const bool hollow =
+    const bool dashed =
         state == ChipState::Substitute || state == ChipState::Off || state == ChipState::Pending;
     ImVec4 border = c::lineStrong;
-    ImVec4 text = dim ? c::t3 : c::t1;
-    if (state == ChipState::Pending) {
-        border = c::accent;
-        text = c::accent;
-    } else if (state == ChipState::Error) {
-        border = c::error;
+    ImVec4 text = c::t1;
+    ImVec4 detailColor = c::t3;
+    switch (state) {
+        case ChipState::Substitute:
+            text = c::t2;
+            break;
+        case ChipState::Off:
+            text = c::t3;
+            break;
+        case ChipState::Pending:
+            border = c::accent;
+            text = c::accent;
+            detailColor = c::accent;
+            break;
+        case ChipState::Error:
+            border = c::error;
+            text = c::error;
+            break;
+        case ChipState::On:
+            break;
     }
     ImDrawList* draw = ImGui::GetWindowDrawList();
     const float radius = size.y * 0.5F;
-    draw->AddRectFilled(min, max, u32(hovered ? c::bg3 : c::bg2), radius);
-    if (state == ChipState::Substitute || state == ChipState::Off || state == ChipState::Pending) {
-        dashedRect(draw, min, max, u32(border), radius);
-    } else {
+    if (!dashed) {
+        draw->AddRectFilled(min, max, u32(hovered ? c::bg3 : c::bg2), radius);
         draw->AddRect(min, max, u32(border), radius);
+    } else {
+        if (hovered) {
+            draw->AddRectFilled(min, max, u32(c::bg2), radius);
+        }
+        dashedRect(draw, min, max, u32(border), radius);
     }
     const float midY = min.y + size.y * 0.5F;
-    const ImVec4 dotColor =
-        state == ChipState::Pending ? c::accent : (dim ? withAlpha(color, 0.5F) : color);
-    if (hollow) {
-        draw->AddCircle(ImVec2(min.x + pad + dot * 0.5F, midY), dot * 0.5F - px(0.75F),
-                        u32(dotColor), 0, px(1.5F));
+    const ImVec2 centre(min.x + px(8.0F) + dot * 0.5F, midY);
+    if (dashed) {
+        draw->AddCircle(centre, dot * 0.5F - px(0.75F),
+                        u32(state == ChipState::Pending ? c::accent : c::t3), 0, px(1.5F));
     } else {
-        draw->AddCircleFilled(ImVec2(min.x + pad + dot * 0.5F, midY), dot * 0.5F, u32(dotColor));
+        draw->AddCircleFilled(centre, dot * 0.5F, u32(color));
     }
-    float x = min.x + pad + dot + gap;
-    draw->AddText(fonts.sansMedium, px(theme::kLabelSize), ImVec2(x, midY - nameSize.y * 0.5F),
-                  u32(text), name);
-    x += nameSize.x + gap;
-    draw->AddText(fonts.mono, px(theme::kCaptionSize), ImVec2(x, midY - detailSize.y * 0.5F),
-                  u32(state == ChipState::Pending ? c::accent : c::t3), detail);
+    float x = min.x + px(8.0F) + dot + gap;
+    draw->AddText(fonts.sans, nameSize, ImVec2(x, midY - nameExtent.y * 0.5F), u32(text), name);
+    x += nameExtent.x + gap;
+    draw->AddText(fonts.mono, detailSize, ImVec2(x, midY - detailExtent.y * 0.5F), u32(detailColor),
+                  detail);
     return clicked;
 }
 
@@ -343,11 +522,11 @@ bool SectionHeader(const char* title, const char* meta, bool defaultOpen) {
                                 ImVec2(at.x - caret * 0.6F, at.y + caret),
                                 ImVec2(at.x + caret * 0.8F, at.y), u32(c::t2));
     }
-    const float titleSize = px(theme::kBodySize);
+    const float titleSize = px(theme::kLabelSize);
     draw->AddText(fonts.sansSemiBold, titleSize, ImVec2(min.x + px(24.0F), midY - titleSize * 0.6F),
                   u32(c::t1), title);
     if (meta != nullptr && *meta != '\0') {
-        const float metaSize = px(theme::kMonoSize);
+        const float metaSize = px(theme::kCaptionSize);
         const ImVec2 extent = fonts.mono->CalcTextSizeA(metaSize, FLT_MAX, 0.0F, meta);
         draw->AddText(fonts.mono, metaSize,
                       ImVec2(max.x - extent.x - px(10.0F), midY - extent.y * 0.5F), u32(c::t3),
@@ -395,13 +574,17 @@ std::string_view schemaDomain(std::string_view name) {
 }
 
 bool Segmented(const char* id, const char* const* options, int count, int* index) {
+    // Design (.seg): one 1 px lineStrong frame around 22 px cells, 11 px text in t2; the
+    // chosen cell is filled with the weak accent and written in the accent.
     const theme::Fonts& fonts = theme::fonts();
     bool changed = false;
     ImGui::PushID(id);
-    ImGui::PushFont(fonts.sansMedium, theme::kLabelSize);
+    ImGui::PushFont(fonts.sans, theme::kCaptionSize);
     const float height = px(22.0F);
     ImDrawList* draw = ImGui::GetWindowDrawList();
-    const float rounding = ImGui::GetStyle().FrameRounding;
+    const float rounding = px(3.0F);
+    const ImVec2 first = ImGui::GetCursorScreenPos();
+    float right = first.x;
     for (int i = 0; i < count; ++i) {
         if (i != 0) {
             ImGui::SameLine(0.0F, 0.0F);
@@ -420,14 +603,18 @@ bool Segmented(const char* id, const char* const* options, int count, int* index
         const ImDrawFlags corners = i == 0 ? ImDrawFlags_RoundCornersLeft
                                            : (i == count - 1 ? ImDrawFlags_RoundCornersRight
                                                              : ImDrawFlags_RoundCornersNone);
-        draw->AddRectFilled(
-            min, max, u32(selected ? c::accentWeak : (ImGui::IsItemHovered() ? c::bg3 : c::bg2)),
-            rounding, corners);
-        draw->AddRect(min, max, u32(selected ? c::accentBorder : c::lineStrong), rounding, 1.0F,
-                      corners);
+        if (selected || ImGui::IsItemHovered()) {
+            draw->AddRectFilled(min, max, u32(selected ? c::accentWeak : c::bg3), rounding,
+                                corners);
+        }
+        if (i != 0) {
+            draw->AddLine(min, ImVec2(min.x, max.y), u32(c::lineStrong));
+        }
         draw->AddText(ImVec2(min.x + px(8.0F), min.y + (size.y - textSize.y) * 0.5F),
                       u32(selected ? c::accent : c::t2), options[i]);
+        right = max.x;
     }
+    draw->AddRect(first, ImVec2(right, first.y + height), u32(c::lineStrong), rounding);
     ImGui::PopFont();
     ImGui::PopID();
     return changed;
@@ -667,24 +854,31 @@ void Swatch(const ImVec4& color) {
     ImGui::Dummy(ImVec2(side, line));
 }
 
-bool BarTab(const char* label, bool active) {
+bool BarTab(const char* label, Icon icon, bool active, bool available) {
+    // Design (.ws): icon 14 px + 12 px medium label, 10 px side padding; the active tab has a
+    // 2 px accent underline and an accent icon.
     const theme::Fonts& fonts = theme::fonts();
-    ImGui::PushFont(fonts.sansMedium, theme::kBodySize);
+    ImGui::PushFont(fonts.sansMedium, theme::kLabelSize);
     const ImVec2 textSize = ImGui::CalcTextSize(label, nullptr, true);
-    const ImVec2 size(textSize.x + px(24.0F), ImGui::GetContentRegionAvail().y);
+    const float iconSize = px(14.0F);
+    const float pad = px(10.0F);
+    const ImVec2 size(pad + iconSize + px(6.0F) + textSize.x + pad,
+                      ImGui::GetContentRegionAvail().y);
     const ImVec2 min = ImGui::GetCursorScreenPos();
     const ImVec2 max(min.x + size.x, min.y + size.y);
     const bool clicked = ImGui::InvisibleButton(label, size);
     const bool hovered = ImGui::IsItemHovered();
     ImDrawList* draw = ImGui::GetWindowDrawList();
-    if (hovered && !active) {
-        draw->AddRectFilled(min, max, u32(c::bg3), ImGui::GetStyle().FrameRounding);
+    ImVec4 ink = active ? c::t1 : (hovered ? c::t1 : c::t2);
+    if (!available && !active) {
+        ink = hovered ? c::t2 : c::t3;
     }
-    draw->AddText(ImVec2(min.x + px(12.0F), min.y + (size.y - textSize.y) * 0.5F),
-                  u32(active ? c::t1 : c::t2), label, ImGui::FindRenderedTextEnd(label));
+    DrawIcon(draw, icon, ImVec2(min.x + pad, min.y + (size.y - iconSize) * 0.5F), iconSize,
+             u32(active ? c::accent : ink), u32(c::bg1));
+    draw->AddText(ImVec2(min.x + pad + iconSize + px(6.0F), min.y + (size.y - textSize.y) * 0.5F),
+                  u32(ink), label, ImGui::FindRenderedTextEnd(label));
     if (active) {
-        draw->AddRectFilled(ImVec2(min.x + px(6.0F), max.y - px(2.0F)),
-                            ImVec2(max.x - px(6.0F), max.y), u32(c::accent));
+        draw->AddRectFilled(ImVec2(min.x, max.y - px(2.0F)), max, u32(c::accent));
     }
     ImGui::PopFont();
     return clicked;

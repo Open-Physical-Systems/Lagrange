@@ -37,8 +37,9 @@ void overlayBox(ImDrawList* draw, const ImVec2& min, const char* first, const ch
     const float pad = px(8.0F);
     const float lines = second != nullptr ? 2.0F : 1.0F;
     const ImVec2 max(min.x + std::max(a.x, b.x) + pad * 2.0F, min.y + px(18.0F) * lines + pad);
-    draw->AddRectFilled(min, max, u32(theme::hex(0x0B1422, 0.88F)), px(3.0F));
-    draw->AddRect(min, max, u32(border), px(3.0F));
+    // Design (.ov): rgba(9, 17, 32, .88) with a lineStrong border, 4 px radius.
+    draw->AddRectFilled(min, max, u32(theme::hex(0x091120, 0.88F)), px(4.0F));
+    draw->AddRect(min, max, u32(border), px(4.0F));
     draw->AddText(font, size, ImVec2(min.x + pad, min.y + pad * 0.5F + px(2.0F)), u32(text), first);
     if (second != nullptr) {
         draw->AddText(font, size, ImVec2(min.x + pad, min.y + pad * 0.5F + px(20.0F)), u32(c::t2),
@@ -156,11 +157,10 @@ private:
             ImVec2(origin.x + (size.x - text.x) * 0.5F, origin.y + size.y * 0.5F - text.y));
         ImGui::TextDisabled("%s", message);
         if (connected && context.canOpenFiles) {
-            const float width =
-                ImGui::CalcTextSize("Open ...").x + ImGui::GetStyle().FramePadding.x * 2.0F;
+            const float width = widgets::ButtonWidth("Open ...");
             ImGui::SetCursorScreenPos(
                 ImVec2(origin.x + (size.x - width) * 0.5F, origin.y + size.y * 0.5F + px(8.0F)));
-            if (ImGui::Button("Open ...")) {
+            if (widgets::Button("Open ...")) {
                 context.openFileRequested = true;
             }
         }

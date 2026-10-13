@@ -19,8 +19,16 @@ namespace {
 namespace c = theme::c;
 using widgets::px;
 
-constexpr float kLineHeight = 18.0F;  // design: mono 12 on an 18 px line
+constexpr float kLineHeight = 19.0F;  // design: mono 12 on a 19 px line
 constexpr float kGutter = 44.0F;
+
+// Syntax colours of the design's code view (.code in reference.html).
+const ImVec4 kKey = theme::hex(0x8FB8FF);
+const ImVec4 kString = theme::hex(0x9BD39B);
+const ImVec4 kNumber = theme::hex(0xF5C842);
+const ImVec4 kBoolean = theme::hex(0xE8772E);
+const ImVec4 kComment = theme::hex(0x6E7F98);
+const ImVec4 kLineNumber = theme::hex(0x4A5B74);
 
 ImU32 u32(const ImVec4& color) {
     return ImGui::ColorConvertFloat4ToU32(color);
@@ -59,13 +67,13 @@ void drawYaml(ImDrawList* draw, ImVec2 at, std::string_view line) {
     while (i < line.size()) {
         const char ch = line[i];
         if (ch == '#') {
-            emit(line.substr(i), c::t3);
+            emit(line.substr(i), kComment);
             return;
         }
         if (ch == '"' || ch == '\'') {
             std::size_t end = line.find(ch, i + 1);
             end = end == std::string_view::npos ? line.size() : end + 1;
-            emit(line.substr(i, end - i), c::ok);
+            emit(line.substr(i, end - i), kString);
             i = end;
             continue;
         }
@@ -85,13 +93,13 @@ void drawYaml(ImDrawList* draw, ImVec2 at, std::string_view line) {
         const std::string_view word = line.substr(i, end - i);
         const bool key = end < line.size() && line[end] == ':';
         if (key) {
-            emit(word, c::info);
+            emit(word, kKey);
         } else if (word == "true" || word == "false" || word == "null") {
-            emit(word, c::accent);
+            emit(word, kBoolean);
         } else if (isNumber(word)) {
-            emit(word, c::warn);
+            emit(word, kNumber);
         } else {
-            emit(word, c::ok);
+            emit(word, kString);
         }
         i = end;
     }
@@ -110,7 +118,7 @@ void drawLine(std::string_view text, int number, LineKind kind) {
     if (kind != LineKind::Same) {
         const ImVec4 tint = kind == LineKind::Removed ? c::error : c::ok;
         draw->AddRectFilled(min, ImVec2(min.x + size.x, min.y + size.y),
-                            u32(withAlpha(tint, 0.12F)));
+                            u32(withAlpha(tint, 0.10F)));
     }
     ImFont* font = theme::fonts().mono;
     const float fontSize = px(theme::kMonoSize);
@@ -123,7 +131,7 @@ void drawLine(std::string_view text, int number, LineKind kind) {
     }
     const float width = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0F, gutter).x;
     draw->AddText(font, fontSize, ImVec2(min.x + px(kGutter - 14.0F) - width, y),
-                  u32(kind == LineKind::Removed ? c::error : c::t3), gutter);
+                  u32(kind == LineKind::Removed ? c::error : kLineNumber), gutter);
     drawYaml(draw, ImVec2(min.x + px(kGutter), y), text);
 }
 
@@ -176,13 +184,12 @@ public:
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Applying rebuilds the wiring and restarts the run at t = 0.");
         ImGui::BeginDisabled(!draft.dirty());
-        if (ImGui::Button("Revert")) {
+        if (widgets::Button("Revert")) {
             session.revert();
         }
         ImGui::EndDisabled();
         ImGui::SameLine();
-        const float width =
-            ImGui::CalcTextSize("Apply and restart").x + ImGui::GetStyle().FramePadding.x * 2.0F;
+        const float width = widgets::ButtonWidth("Apply and restart");
         widgets::AlignRight(width);
         ImGui::BeginDisabled(!connected || !session.canApply());
         if (widgets::PrimaryButton("Apply and restart")) {

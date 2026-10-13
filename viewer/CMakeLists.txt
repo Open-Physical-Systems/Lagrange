@@ -76,6 +76,7 @@ add_library(
     lagrange_viewer_widgets
     STATIC
     app/theme/src/Fonts.cpp
+    app/widgets/src/Icons.cpp
     app/widgets/src/Widgets.cpp
 )
 lagrange_target_defaults(lagrange_viewer_widgets)

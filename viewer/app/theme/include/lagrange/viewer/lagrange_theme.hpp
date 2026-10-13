@@ -76,7 +76,8 @@ inline void applyStyle(float scale) {
     ImGuiStyle& s = ImGui::GetStyle();
     s = ImGuiStyle();
     s.WindowPadding = ImVec2(8, 8);
-    s.FramePadding = ImVec2(6, 3);
+    // 4.5 px above and below 13 px text gives the design's 22 px control height.
+    s.FramePadding = ImVec2(6, 4.5F);
     s.ItemSpacing = ImVec2(8, 4);
     s.ItemInnerSpacing = ImVec2(4, 4);
     s.IndentSpacing = 14;

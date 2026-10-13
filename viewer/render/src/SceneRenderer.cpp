@@ -288,7 +288,9 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame,
     colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.clearValue.color = {{0.115F, 0.125F, 0.145F, 1.0F}};
+    // Design (.vp): #091120. The target is UNORM and shaders encode for display, so the
+    // clear colour is given in display values.
+    colorAttachment.clearValue.color = {{9.0F / 255.0F, 17.0F / 255.0F, 32.0F / 255.0F, 1.0F}};
     VkRenderingAttachmentInfo depthAttachment{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     depthAttachment.imageView = depth_.view;
     depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
@@ -357,8 +359,9 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame,
     const double cell = kGridMajorEvery;
     const std::array<double, 3> gridOrigin{std::floor(camera.target[0] / cell) * cell,
                                            std::floor(camera.target[1] / cell) * cell, 0.002};
-    drawLines(gridMinor_, gridMinorCount_, gridOrigin, {1.0F, 1.0F, 1.0F, 0.10F});
-    drawLines(gridMajor_, gridMajorCount_, gridOrigin, {1.0F, 1.0F, 1.0F, 0.28F});
+    // Grid in the design's line colours: #1B293D minor, #2A3F5C major.
+    drawLines(gridMinor_, gridMinorCount_, gridOrigin, {0.106F, 0.161F, 0.239F, 1.0F});
+    drawLines(gridMajor_, gridMajorCount_, gridOrigin, {0.165F, 0.247F, 0.361F, 1.0F});
     const std::array<double, 3> worldOrigin{0.0, 0.0, 0.004};
     LinePush axisPush{};
     axisPush.viewProjection = viewProjection;
@@ -367,9 +370,10 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame,
     }
     vkCmdBindVertexBuffers(commands, 0, 1, &axes_.buffer, &zero);
     const std::array<std::array<float, 4>, 3> axisColors = {{
-        {0.90F, 0.25F, 0.25F, 1.0F},  // X red
-        {0.35F, 0.80F, 0.30F, 1.0F},  // Y green
-        {0.30F, 0.50F, 0.95F, 1.0F},  // Z blue
+        // Design tokens, color.axis.
+        {0.941F, 0.376F, 0.365F, 1.0F},  // X #F0605D
+        {0.310F, 0.788F, 0.478F, 1.0F},  // Y #4FC97A
+        {0.353F, 0.635F, 1.000F, 1.0F},  // Z #5AA2FF
     }};
     for (std::uint32_t axis = 0; axis < 3; ++axis) {
         axisPush.color = axisColors.at(axis);
