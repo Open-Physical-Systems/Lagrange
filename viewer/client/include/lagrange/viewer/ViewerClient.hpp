@@ -78,6 +78,13 @@ struct SignalCatalog {
     }
 };
 
+/// The latest thing worth telling the user: a command that failed, or a file that loaded.
+struct Notice {
+    std::uint64_t serial{0};  ///< Increases with every notice, so the UI can spot a new one.
+    bool error{false};
+    std::string text;
+};
+
 struct ClientStats {
     std::uint64_t snapshots{0};
     std::uint64_t deltas{0};
@@ -128,6 +135,11 @@ public:
     void seek(std::int64_t simTimeNs);
     void step(std::int64_t durationNs);
     void setRealTimeFactor(double target);
+    /// Asks the server to load a file that it can read: a robot description (.urdf, .xacro)
+    /// or a recording (.mcap). The result arrives as a Notice and, on success, a new scene.
+    void openFile(const std::string& path);
+
+    [[nodiscard]] Notice notice() const { return *notice_.load(); }
 
 private:
     void run();
@@ -156,6 +168,8 @@ private:
     std::atomic<std::uint64_t> connects_{0};
 
     std::atomic<std::shared_ptr<const SignalCatalog>> catalog_;
+    std::atomic<std::shared_ptr<const Notice>> notice_;
+    void post(bool error, std::string text);
     std::atomic<std::uint64_t> signalBlocks_{0};
     std::atomic<std::uint64_t> samples_{0};
     std::atomic<std::uint64_t> invalidRuns_{0};

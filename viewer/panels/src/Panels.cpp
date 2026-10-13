@@ -265,6 +265,11 @@ public:
                 ImGui::TextColored(ImVec4(1.0F, 0.6F, 0.4F, 1.0F), "%s",
                                    context.connection.message.c_str());
             }
+            if (!context.notice.text.empty()) {
+                ImGui::TextColored(context.notice.error ? ImVec4(1.0F, 0.45F, 0.35F, 1.0F)
+                                                        : ImVec4(0.65F, 0.85F, 1.0F, 1.0F),
+                                   "%s", context.notice.text.c_str());
+            }
             ImGui::TextDisabled(
                 "%u signals   %llu samples   %llu snapshots   %llu deltas   %llu resyncs   "
                 "%llu dropped by server   %s",
@@ -322,6 +327,18 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
     // Lay out only when there is no saved layout for this dock space.
     if (ImGui::DockBuilderGetNode(dockspace) == nullptr) {
         buildDefaultLayout(dockspace);
+    }
+    if (context.canOpenFiles && ImGui::BeginMainMenuBar()) {
+        if (ImGui::BeginMenu("File")) {
+            if (ImGui::MenuItem("Open robot or recording...", "Ctrl+O")) {
+                context.openFileRequested = true;
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::EndMainMenuBar();
+    }
+    if (context.canOpenFiles && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_O)) {
+        context.openFileRequested = true;
     }
     ImGui::DockSpaceOverViewport(dockspace, ImGui::GetMainViewport());
     for (const std::unique_ptr<Panel>& panel : panels) {

@@ -14,6 +14,7 @@
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_vulkan.h>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -114,13 +115,18 @@ public:
     /// Call between ImGui::NewFrame and ImGui::Render.
     void build(float frameMs) {
         scene_ = client_.scene();
-        if (scene_ && !framed_) {
+        // Re-aim the camera whenever a different stage is shown (first scene, or a file was
+        // opened), but not when the same stage is merely re-sent after a seek.
+        if (scene_ && scene_->statics->stagePath != framedStage_) {
             frameScene(*scene_);
-            framed_ = true;
+            framedStage_ = scene_->statics->stagePath;
+            selectedPrim_ = kNone;
         }
         PanelContext context{client_,         scene_,  client_.status(), client_.connection(),
                              client_.stats(), camera_, selectedPrim_};
         context.catalog = client_.catalog();
+        context.notice = client_.notice();
+        context.canOpenFiles = canOpenFiles_;
         context.initialScopeSignals = &scopeSignals_;
         context.viewportTexture =
             static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(texture_));
@@ -131,6 +137,7 @@ public:
         context.frameMs = frameMs;
         context.drawCalls = renderer_.lastDrawCount();
         drawPanels(panels_, context);
+        openFileRequested_ = context.openFileRequested;
         requestedWidth_ = context.requestedViewportWidth;
         requestedHeight_ = context.requestedViewportHeight;
     }
@@ -142,6 +149,9 @@ public:
 
     [[nodiscard]] const std::shared_ptr<const SceneFrame>& scene() const { return scene_; }
     [[nodiscard]] std::uint32_t drawCalls() const { return renderer_.lastDrawCount(); }
+    void setCanOpenFiles(bool value) { canOpenFiles_ = value; }
+    /// True once after the user chose "Open..." in the menu.
+    [[nodiscard]] bool takeOpenFileRequest() { return std::exchange(openFileRequested_, false); }
 
 private:
     void registerTexture() {
@@ -149,20 +159,46 @@ private:
                                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
 
-    // Point the camera at the first prim that has geometry and is not huge (not the ground).
+    // Aim the camera at the scene: the bounds of everything with geometry, leaving out
+    // very large things (floors) so that they do not push the robot into the distance.
     void frameScene(const SceneFrame& frame) {
         const SceneStatics& statics = *frame.statics;
+        std::array<double, 3> low{1e300, 1e300, 1e300};
+        std::array<double, 3> high{-1e300, -1e300, -1e300};
+        bool any = false;
         for (std::size_t i = 0; i < statics.prims.size(); ++i) {
             const PrimData& prim = statics.prims[i];
             if (prim.mesh == kNone) {
                 continue;
             }
             const std::array<float, 6>& box = statics.meshes[prim.mesh].aabb;
-            if (box[3] - box[0] < 5.0F) {
-                camera_.target = frame.transforms[i].position;
-                return;
+            const Transform& transform = frame.transforms[i];
+            double radius = 0.0;  // of a sphere around the prim's origin that holds the mesh
+            for (std::size_t k = 0; k < 3; ++k) {
+                const double extent = std::max(std::abs(static_cast<double>(box.at(k))),
+                                               std::abs(static_cast<double>(box.at(k + 3)))) *
+                                      static_cast<double>(std::abs(transform.scale.at(k)));
+                radius = std::max(radius, extent);
             }
+            radius *= 1.7320508;  // corner of the box, not just its face
+            if (radius > 5.0) {
+                continue;
+            }
+            for (std::size_t k = 0; k < 3; ++k) {
+                low.at(k) = std::min(low.at(k), transform.position.at(k) - radius);
+                high.at(k) = std::max(high.at(k), transform.position.at(k) + radius);
+            }
+            any = true;
         }
+        if (!any) {
+            return;
+        }
+        double size = 0.0;
+        for (std::size_t k = 0; k < 3; ++k) {
+            camera_.target.at(k) = (low.at(k) + high.at(k)) / 2.0;
+            size = std::max(size, high.at(k) - low.at(k));
+        }
+        camera_.distance = std::clamp(size * 1.6, 0.3, 500.0);
     }
 
     const gpu::Device& device_;
@@ -178,7 +214,9 @@ private:
     std::uint32_t requestedHeight_{0};
     std::string iniPath_;
     std::vector<std::string> scopeSignals_;
-    bool framed_{false};
+    bool canOpenFiles_{false};
+    bool openFileRequested_{false};
+    std::string framedStage_{"\x01"};  // never a real stage path, so the first scene is framed
 };
 
 void beginUiPass(VkCommandBuffer commands, VkImageView view, VkExtent2D extent) {
@@ -196,6 +234,13 @@ void beginUiPass(VkCommandBuffer commands, VkImageView view, VkExtent2D extent) 
     vkCmdBeginRendering(commands, &rendering);
 }
 
+// The server reads the file itself, so it needs a path that means the same to it.
+void openFile(ViewerClient& client, const std::string& path) {
+    std::error_code ec;
+    const std::filesystem::path absolute = std::filesystem::absolute(path, ec);
+    client.openFile(ec ? path : absolute.lexically_normal().string());
+}
+
 proto::Endpoint resolveEndpoint(const Options& options, bool& ok) {
     ok = true;
     if (options.endpoint.empty()) {
@@ -209,6 +254,21 @@ proto::Endpoint resolveEndpoint(const Options& options, bool& ok) {
         return {};
     }
     return *parsed;
+}
+
+std::string jsonEscape(const std::string& text) {
+    std::string out;
+    for (const char c : text) {
+        if (c == '"' || c == '\\') {
+            out += '\\';
+            out += c;
+        } else if (static_cast<unsigned char>(c) < 0x20) {
+            out += ' ';
+        } else {
+            out += c;
+        }
+    }
+    return out;
 }
 
 // --- headless ---------------------------------------------------------------------------
@@ -227,6 +287,9 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint) {
 
     ViewerClient client(endpoint);
     client.start();
+    if (!options.openPath.empty()) {
+        openFile(client, options.openPath);
+    }
 
     const VkExtent2D extent{options.width, options.height};
     const VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -248,7 +311,11 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint) {
         // drawing (the "not connected" state) until the deadline.
         const std::uint32_t wanted = options.frames != 0 ? options.frames : 120;
         while (rendered < wanted) {
-            const bool haveScene = client.scene() != nullptr;
+            // With --open, wait for the requested file's scene, not the one served before it.
+            const auto current = client.scene();
+            const bool haveScene =
+                current != nullptr &&
+                (options.openPath.empty() || client.notice().text.rfind("Loading", 0) != 0);
             if (!haveScene && Clock::now() > deadline) {
                 std::fprintf(stderr, "error: no scene from %s within %u ms (%s)\n",
                              proto::toString(endpoint).c_str(), options.waitMs,
@@ -291,11 +358,13 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint) {
         const ClientStats stats = client.stats();
         const auto scene = client.scene();
         std::printf(
-            "{\"frames\": %u, \"snapshots\": %llu, \"deltas\": %llu, \"resyncs\": %llu, "
+            "{\"notice\": \"%s\", \"notice_is_error\": %s, \"frames\": %u, \"snapshots\": %llu, "
+            "\"deltas\": %llu, \"resyncs\": %llu, "
             "\"prims\": %zu, \"meshes\": %zu, \"draw_calls\": %u, \"sim_time_ns\": %lld, "
             "\"signal_blocks\": %llu, \"samples\": %llu, \"invalid_runs\": %llu, "
             "\"dropped_samples\": %llu, "
             "\"device\": \"%s\", \"tier\": %d, \"validation_errors\": %u, \"connected\": %s}\n",
+            jsonEscape(client.notice().text).c_str(), client.notice().error ? "true" : "false",
             rendered, static_cast<unsigned long long>(stats.snapshots),
             static_cast<unsigned long long>(stats.deltas),
             static_cast<unsigned long long>(stats.resyncs),
@@ -471,6 +540,9 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint) {
 
     ViewerClient client(endpoint);
     client.start();
+    if (!options.openPath.empty()) {
+        openFile(client, options.openPath);
+    }
 
     VkCommandBufferAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     allocateInfo.commandPool = device->commandPool();
@@ -494,6 +566,12 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint) {
               static_cast<std::uint32_t>(swapchain.images.size()), dpiScale, true,
               options.scopeSignals);
         ImGui_ImplSDL3_InitForVulkan(window);
+        ui.setCanOpenFiles(true);
+        // The file dialog reports its result on a callback that may run on another thread.
+        struct Chosen {
+            std::mutex mutex;
+            std::vector<std::string> paths;
+        } chosen;
 
         bool running = true;
         bool rebuild = false;
@@ -511,6 +589,9 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint) {
                 }
                 if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
                     rebuild = true;
+                }
+                if (event.type == SDL_EVENT_DROP_FILE && event.drop.data != nullptr) {
+                    openFile(client, event.drop.data);  // a file dropped on the window
                 }
             }
             if ((SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0) {
@@ -534,6 +615,26 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint) {
             ImGui::NewFrame();
             ui.build(frameMs);
             ImGui::Render();
+            if (ui.takeOpenFileRequest()) {
+                static const SDL_DialogFileFilter kFilters[] = {
+                    {"Robots and recordings", "urdf;xacro;mcap"}, {"All files", "*"}};
+                SDL_ShowOpenFileDialog(
+                    [](void* user, const char* const* files, int /*filter*/) {
+                        auto* result = static_cast<Chosen*>(user);
+                        if (files != nullptr && files[0] != nullptr) {
+                            const std::lock_guard lock(result->mutex);
+                            result->paths.emplace_back(files[0]);
+                        }
+                    },
+                    &chosen, window, kFilters, 2, nullptr, false);
+            }
+            {
+                const std::lock_guard lock(chosen.mutex);
+                for (const std::string& path : chosen.paths) {
+                    openFile(client, path);
+                }
+                chosen.paths.clear();
+            }
 
             std::uint32_t imageIndex = 0;
             const VkResult acquire =

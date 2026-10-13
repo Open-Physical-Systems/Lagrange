@@ -191,6 +191,55 @@ def test_unknown_scope_signal_is_ignored(socket_dir):
     assert stats["samples"] > 0 and stats["invalid_runs"] == 0
 
 
+ARM_URDF = Path(__file__).resolve().parents[2] / "assets/robots/primitives_arm/primitives_arm.urdf"
+
+
+def test_viewer_opens_a_urdf_through_the_server(socket_dir):
+    image = socket_dir / "arm.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "10",
+            "--size",
+            "1200x900",
+            "--open",
+            str(ARM_URDF),
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["notice_is_error"] is False
+    assert stats["notice"].startswith(("Loaded", "2 movable joints")), stats["notice"]
+    assert stats["prims"] == 10  # the robot, four links, five visuals
+    assert stats["meshes"] == 5 and stats["draw_calls"] == 5
+    assert stats["validation_errors"] == 0, result.stderr
+
+    _width, _height, rows = read_png(image)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    orange = sum(1 for r, g, b, _a in pixels if r > 130 and r > g + 40 and g > b + 20)
+    assert orange > 500, f"the arm's orange links are not visible ({orange} pixels)"
+
+
+def test_a_file_that_cannot_be_opened_is_reported_and_the_scene_stays(socket_dir):
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "5",
+            "--open",
+            "/no/such/robot.urdf",
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["notice_is_error"] is True
+    assert "no such file" in stats["notice"]
+    assert stats["prims"] == 11  # still the sample scene
+
+
 def test_viewer_reports_a_missing_server_and_exits(socket_dir):
     result = run_viewer(
         "--connect", f"unix:{socket_dir}/nobody.sock", "--frames", "5", "--wait-ms", "600"

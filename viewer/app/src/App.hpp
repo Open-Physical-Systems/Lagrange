@@ -17,6 +17,7 @@ struct Options {
     std::uint32_t waitMs{5000};             ///< Headless: how long to wait for the first scene.
     std::string screenshot;                 ///< Headless: PNG of the last frame (whole UI).
     std::vector<std::string> scopeSignals;  ///< Signals to open in the scope at start-up.
+    std::string openPath;  ///< Robot description or recording to ask the server to load.
     std::uint32_t width{1600};
     std::uint32_t height{900};
 };
