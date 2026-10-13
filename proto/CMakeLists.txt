@@ -3,6 +3,7 @@ project(lagrange_proto VERSION 0.0.0 LANGUAGES CXX)
 
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
+find_package(lagrange_cmake REQUIRED)
 find_package(Protobuf REQUIRED)
 
 set(LAGRANGE_PROTO_FILES
@@ -41,6 +42,18 @@ target_include_directories(
         $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
 )
 target_link_libraries(lagrange_proto PUBLIC protobuf::libprotobuf)
+
+# Framing: hand-written code, held to the project's warning level and sanitizers.
+add_library(lagrange_proto_framing framing/src/Framing.cpp)
+add_library(lagrange::proto_framing ALIAS lagrange_proto_framing)
+lagrange_target_defaults(lagrange_proto_framing)
+target_include_directories(
+    lagrange_proto_framing
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/framing/include>
+        $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
+)
+target_link_libraries(lagrange_proto_framing PUBLIC lagrange_proto)
 
 # Python modules, generated into the build tree and installed as the namespace package
 # lagrange.viewer.v1 (no __init__.py, so other packages can also provide lagrange.*).
@@ -89,8 +102,9 @@ install(
     FILES_MATCHING
     PATTERN "*_pb2.py"
 )
+install(DIRECTORY framing/include/ DESTINATION include/${PROJECT_NAME})
 install(
-    TARGETS lagrange_proto
+    TARGETS lagrange_proto lagrange_proto_framing
     EXPORT export_${PROJECT_NAME}
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
@@ -103,6 +117,11 @@ if(BUILD_TESTING)
     target_link_libraries(test_roundtrip lagrange_proto)
     target_compile_options(test_roundtrip PRIVATE -Wall -Wextra -Wpedantic)
 
+    ament_add_gtest(test_framing framing/test/test_framing.cpp)
+    target_link_libraries(test_framing lagrange_proto_framing)
+    target_include_directories(test_framing PRIVATE framing/fuzz)
+    lagrange_target_defaults(test_framing)
+
     find_package(ament_cmake_pytest REQUIRED)
     ament_add_pytest_test(
         test_roundtrip_py
@@ -110,6 +129,19 @@ if(BUILD_TESTING)
         APPEND_ENV
         PYTHONPATH=${_gen_python_dir}
     )
+endif()
+
+option(LAGRANGE_BUILD_FUZZERS "Build libFuzzer targets (needs Clang)" OFF)
+if(LAGRANGE_BUILD_FUZZERS)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "LAGRANGE_BUILD_FUZZERS needs Clang (libFuzzer)")
+    endif()
+    add_executable(fuzz_frame_reader framing/fuzz/fuzz_frame_reader.cpp)
+    target_link_libraries(fuzz_frame_reader PRIVATE lagrange_proto_framing)
+    target_compile_options(fuzz_frame_reader PRIVATE -fsanitize=fuzzer)
+    target_link_options(fuzz_frame_reader PRIVATE -fsanitize=fuzzer)
+    lagrange_target_defaults(fuzz_frame_reader)
+    install(TARGETS fuzz_frame_reader RUNTIME DESTINATION lib/${PROJECT_NAME})
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
