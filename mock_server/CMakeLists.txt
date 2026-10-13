@@ -14,6 +14,7 @@ if(BUILD_TESTING)
     foreach(
         _test
         framing
+        profile
         recording
         replay
         server

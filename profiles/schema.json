@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lagrange.example/schemas/profile/1/schema.json",
+  "title": "lagrange simulation profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "stage", "domains"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "stage": { "type": "string", "minLength": 1, "description": "USD file with the robot(s) and world." },
+    "environment": { "type": "string", "description": "USD file with a WeatherAPI prim and environment sources." },
+    "seed": { "type": "integer", "minimum": 0, "default": 0 },
+    "deterministic": { "type": "boolean", "default": false },
+    "tier": { "enum": ["auto", 0, 1, 2], "default": "auto" },
+    "batch": { "type": "integer", "minimum": 1, "default": 1, "description": "Parallel environments." },
+    "time": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "real_time_factor": { "type": "number", "minimum": 0, "default": 1.0, "description": "0 = as fast as possible." },
+        "end": { "type": "number", "exclusiveMinimum": 0, "description": "Stop after this many simulated seconds." }
+      }
+    },
+    "domains": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rigid_body", "electrical", "thermal", "aerodynamics", "weather", "emi", "radiation", "sensors"],
+      "properties": {
+        "rigid_body":       { "$ref": "#/$defs/rigid_body" },
+        "electrical":       { "$ref": "#/$defs/electrical" },
+        "thermal":          { "$ref": "#/$defs/thermal" },
+        "aerodynamics":     { "$ref": "#/$defs/aerodynamics" },
+        "weather":          { "$ref": "#/$defs/weather" },
+        "emi":              { "$ref": "#/$defs/emi" },
+        "radiation":        { "$ref": "#/$defs/radiation" },
+        "sensors":          { "$ref": "#/$defs/sensors" },
+        "vehicle_dynamics": { "$ref": "#/$defs/vehicle_dynamics" },
+        "rotor_aero":       { "$ref": "#/$defs/rotor_aero" },
+        "hydrodynamics":    { "$ref": "#/$defs/generic_domain" },
+        "traffic":          { "$ref": "#/$defs/traffic" },
+        "comms":            { "$ref": "#/$defs/generic_domain" }
+      }
+    },
+    "world": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "geo_origin": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["latitude", "longitude", "height"],
+          "properties": {
+            "latitude":  { "type": "number", "minimum": -90,  "maximum": 90,  "description": "degrees, WGS84" },
+            "longitude": { "type": "number", "minimum": -180, "maximum": 180, "description": "degrees, WGS84" },
+            "height":    { "type": "number", "description": "metres above the WGS84 ellipsoid" }
+          }
+        },
+        "streaming": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "load_radius":   { "type": "number", "exclusiveMinimum": 0, "description": "m" },
+            "unload_radius": { "type": "number", "exclusiveMinimum": 0, "description": "m" },
+            "active_region_radius": { "type": "number", "exclusiveMinimum": 0, "description": "m" },
+            "rebase_distance": { "type": "number", "exclusiveMinimum": 0, "default": 1000, "description": "m" }
+          }
+        }
+      }
+    },
+    "bridges": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ros2": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "namespace": { "type": "string", "default": "" },
+            "use_sim_time": { "type": "boolean", "default": true },
+            "gpu_buffers": { "type": "boolean", "default": false, "description": "Publish images/point clouds through rosidl::Buffer." }
+          }
+        },
+        "ros2_control": { "type": "object", "additionalProperties": false,
+          "properties": { "enabled": { "type": "boolean", "default": false } } },
+        "mavlink": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "autopilot": { "enum": ["px4", "ardupilot"] },
+            "lockstep": { "type": "boolean", "default": true },
+            "endpoint": { "type": "string", "description": "e.g. tcp://127.0.0.1:4560" }
+          }
+        },
+        "autoware": { "type": "object", "additionalProperties": false,
+          "properties": { "enabled": { "type": "boolean", "default": false } } }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "opendrive": { "type": "string" },
+        "openscenario": { "type": "string" }
+      }
+    },
+    "views": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "enum": ["physics_3d", "electrical_schematic", "waveforms", "thermal", "fields", "sensors"] }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "path"],
+      "properties": {
+        "format": { "const": "mcap" },
+        "path": { "type": "string", "minLength": 1 },
+        "signals": { "type": "array", "items": { "type": "string" }, "description": "Glob patterns; default all." },
+        "compression": { "enum": ["none", "zstd", "lz4"], "default": "zstd" }
+      }
+    }
+  },
+  "$defs": {
+    "dt": { "type": "number", "exclusiveMinimum": 0, "maximum": 10, "description": "seconds; must be a whole number of nanoseconds" },
+    "substitute": {
+      "oneOf": [
+        { "enum": ["ideal", "zero", "clear", "ambient", "ground_truth", "fixed", "load_profile", "replay"] },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "enum": ["ideal", "constant", "replay"] },
+            "preset": { "type": "string" },
+            "source": { "type": "string" },
+            "value": { "type": "number" }
+          }
+        }
+      ]
+    },
+    "enabled_or_substituted": {
+      "description": "A disabled domain must name a substitute; a replay substitute must name a source.",
+      "allOf": [
+        { "if": { "properties": { "enabled": { "const": false } } },
+          "then": { "required": ["substitute"] } },
+        { "if": { "properties": { "substitute": { "const": "replay" } }, "required": ["substitute"] },
+          "then": { "required": ["source"] } }
+      ]
+    },
+    "common": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "dt": { "$ref": "#/$defs/dt" },
+        "substitute": { "$ref": "#/$defs/substitute" },
+        "source": { "type": "string", "description": "MCAP file for a replay substitute." }
+      }
+    },
+    "generic_domain": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "unevaluatedProperties": false
+    },
+    "rigid_body": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "backend": { "enum": ["physx", "mujoco", "jolt"] },
+        "solver_iterations": { "type": "integer", "minimum": 1 },
+        "gpu": { "type": "boolean", "default": false },
+        "load_profile": { "type": "string", "description": "CSV torque-vs-speed table for the load_profile substitute." }
+      },
+      "unevaluatedProperties": false
+    },
+    "electrical": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "fidelity": { "enum": ["ideal_bus", "averaged", "fmu"], "default": "averaged" },
+        "speed_prediction": { "type": "boolean", "default": true }
+      },
+      "unevaluatedProperties": false
+    },
+    "thermal": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "ambient_temperature": { "type": "number", "exclusiveMinimum": 0, "description": "K; required for the ambient substitute when no environment file is given" }
+      },
+      "unevaluatedProperties": false
+    },
+    "aerodynamics": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "fidelity": { "enum": ["drag", "drag_plus_field", "lbm"], "default": "drag" }
+      },
+      "unevaluatedProperties": false
+    },
+    "weather": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "effects": { "type": "array", "uniqueItems": true,
+          "items": { "enum": ["fog", "rain", "dust", "wet_friction", "lens_contamination"] } }
+      },
+      "unevaluatedProperties": false
+    },
+    "emi": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "coupling": { "type": "array", "uniqueItems": true,
+          "items": { "enum": ["magnetometer", "imu", "encoder", "can_bus", "wifi"] } }
+      },
+      "unevaluatedProperties": false
+    },
+    "radiation": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "seu_injection": { "type": "boolean", "default": false }
+      },
+      "unevaluatedProperties": false
+    },
+    "sensors": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "only": { "type": "array", "items": { "type": "string" }, "description": "Sensor prim names to simulate; others get ground truth." }
+      },
+      "unevaluatedProperties": false
+    },
+    "vehicle_dynamics": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "tire_model": { "enum": ["linear", "pacejka"], "default": "pacejka" }
+      },
+      "unevaluatedProperties": false
+    },
+    "rotor_aero": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "fidelity": { "enum": ["coefficients", "bem"], "default": "coefficients" },
+        "ground_effect": { "type": "boolean", "default": true }
+      },
+      "unevaluatedProperties": false
+    },
+    "traffic": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "backend": { "enum": ["builtin", "sumo"], "default": "builtin" },
+        "sumo_config": { "type": "string" }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

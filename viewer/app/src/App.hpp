@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace lagrange::viewer {
@@ -17,7 +18,12 @@ struct Options {
     std::uint32_t waitMs{5000};             ///< Headless: how long to wait for the first scene.
     std::string screenshot;                 ///< Headless: PNG of the last frame (whole UI).
     std::vector<std::string> scopeSignals;  ///< Signals to open in the scope at start-up.
-    std::string openPath;  ///< Robot description or recording to ask the server to load.
+    std::string workspace;  ///< Workspace to show at start-up ("scene", "domains"); empty: scene.
+    /// Domain switches to flip in the profile draft once the server's profile arrived,
+    /// as (domain, enabled). They are edits, not applied, unless applyProfile is set.
+    std::vector<std::pair<std::string, bool>> domainEdits;
+    bool applyProfile{false};  ///< Apply the edited profile as soon as the server calls it valid.
+    std::string openPath;      ///< Robot description or recording to ask the server to load.
     std::uint32_t width{1600};
     std::uint32_t height{900};
 };

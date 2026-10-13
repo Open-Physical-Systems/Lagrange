@@ -12,6 +12,8 @@ find_package(SDL3 REQUIRED)
 add_library(
     lagrange_viewer_client
     STATIC
+    client/src/ProfileDraft.cpp
+    client/src/ProfileSession.cpp
     client/src/SceneStore.cpp
     client/src/ScopeBuffer.cpp
     client/src/ViewerClient.cpp
@@ -67,17 +69,40 @@ lagrange_add_slang_shader(
     SYMBOL kLineFragment
 )
 
+# The design system: theme, fonts and the widgets every panel is built from
+# (docs/design/ui/00-design-system).
+add_library(
+    lagrange_viewer_widgets
+    STATIC
+    app/theme/src/Fonts.cpp
+    app/widgets/src/Widgets.cpp
+)
+lagrange_target_defaults(lagrange_viewer_widgets)
+target_include_directories(
+    lagrange_viewer_widgets
+    PUBLIC app/theme/include app/widgets/include
+)
+target_link_libraries(lagrange_viewer_widgets PUBLIC imgui_vendor::imgui)
+
 add_library(
     lagrange_viewer_panels
     STATIC
+    panels/src/Chrome.cpp
+    panels/src/DomainsPanel.cpp
+    panels/src/PanelFormat.cpp
     panels/src/Panels.cpp
+    panels/src/ProfilePanel.cpp
     panels/src/ScopePanel.cpp
 )
 lagrange_target_defaults(lagrange_viewer_panels)
 target_include_directories(lagrange_viewer_panels PUBLIC panels/include)
 target_link_libraries(
     lagrange_viewer_panels
-    PUBLIC lagrange_viewer_client lagrange_viewer_render imgui_vendor::imgui
+    PUBLIC
+        lagrange_viewer_client
+        lagrange_viewer_render
+        lagrange_viewer_widgets
+        imgui_vendor::imgui
 )
 
 add_executable(lagrange_viewer app/src/main.cpp app/src/App.cpp)
@@ -88,13 +113,30 @@ target_link_libraries(
     PRIVATE lagrange_viewer_panels lagrange_viewer_render SDL3::SDL3
 )
 
+# Fonts are looked for next to the installed program first, then in the source tree, so the
+# viewer also finds them when it is run from the build directory.
+target_compile_definitions(
+    lagrange_viewer
+    PRIVATE
+        LAGRANGE_VIEWER_SOURCE_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts"
+)
+
 install(TARGETS lagrange_viewer RUNTIME DESTINATION lib/${PROJECT_NAME})
+install(
+    DIRECTORY assets/fonts/
+    DESTINATION share/${PROJECT_NAME}/fonts
+    FILES_MATCHING
+    PATTERN "*.ttf"
+    PATTERN "OFL.txt"
+)
 
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
     find_package(Threads REQUIRED)
     ament_add_gtest(
         test_viewer_client
+        client/test/test_profile_draft.cpp
+        client/test/test_profile_session.cpp
         client/test/test_scene_store.cpp
         client/test/test_scope_buffer.cpp
         client/test/test_viewer_client.cpp

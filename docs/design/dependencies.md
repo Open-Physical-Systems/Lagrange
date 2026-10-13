@@ -88,7 +88,7 @@ Separate processes and offline tools (not linked, not required to build):
 | ImGuizmo | gizmo | `imgui_vendor` | 1.10 | MIT | Low | |
 | FreeType | font rasterisation | apt `libfreetype-dev` | 2.14.2 | FTL or GPL-2.0 (use under FTL) | Low | |
 | stb (image) | texture decode | apt `libstb-dev` | 2025-09 snapshot | MIT or public domain | Low | |
-| Fonts: IBM Plex Sans (400/500/600) and IBM Plex Mono (400/500); IBM Plex Sans JP and an icon font still to choose | viewer | TTFs in `docs/design/ui/00-design-system/fonts-ttf/`, to be installed from `viewer/assets/fonts/` | TODO(verify) upstream release of the bundled builds | SIL OFL 1.1 (`LICENSES/OFL-1.1.txt`); JP and icon fonts TODO(verify) | Low | Chosen by the UI design (`docs/design/ui/`). A subsetted Japanese font must stay under 1 MB per file or move to the assets bundle |
+| Fonts: IBM Plex Sans (400/500/600) and IBM Plex Mono (400/500); IBM Plex Sans JP and an icon font still to choose | viewer | TTFs in `viewer/assets/fonts/`, installed to `share/lagrange_viewer/fonts` | TODO(verify) upstream release of the bundled builds | SIL OFL 1.1 (`LICENSES/OFL-1.1.txt`); JP and icon fonts TODO(verify) | Low | Chosen by the UI design (`docs/design/ui/`). A subsetted Japanese font must stay under 1 MB per file or move to the assets bundle |
 | Dear ImGui Test Engine | UI tests | fetched in CI only | — | Dear ImGui Test Engine License v1.04 (not OSI) | Low | Never vendored, never shipped (Q12) |
 
 `imgui_vendor` builds one static library containing ImGui core, the SDL3 platform backend, the

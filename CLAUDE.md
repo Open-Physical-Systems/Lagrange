@@ -149,7 +149,7 @@ lagrange/
 │   └── generated/              # usdGenSchema output (C++ + Python) — never edit by hand
 ├── profiles/
 │   ├── schema.json             # JSON Schema for YAML sim profiles
-│   └── examples/               # validated example profiles (see §11.1)
+│   └── examples/               # validated example profiles (see §11.1); package `lagrange_profiles`
 ├── proto/                      # UI↔server protocol (Protobuf/FlatBuffers)
 │
 ├── core/                       # no GPU, no physics — pure framework
@@ -208,6 +208,8 @@ lagrange/
 ├── python/                     # nanobind bindings, `pip install lagrange`
 ├── viewer/                     # native C++ app (ament_cmake package `lagrange_viewer`)
 │   ├── app/                    # main(), window (SDL3/GLFW), Vulkan swapchain, frame loop
+│   │   ├── theme/              # design tokens as ImGui/ImPlot style, font loading
+│   │   └── widgets/            # shared widgets of the design system (chips, pills, switch…)
 │   ├── render/                 # viewport renderer on gpu/hal: meshes, gizmos, grid, overlays
 │   ├── panels/                 # ImGui panels: scene tree, inspector, domains, timeline,
 │   │                           #   scopes (ImPlot), schematic, fields, console, ROS 2 topics

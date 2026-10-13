@@ -1,15 +1,26 @@
 #pragma once
 
 #include "lagrange/viewer/Camera.hpp"
+#include "lagrange/viewer/ProfileSession.hpp"
 #include "lagrange/viewer/SceneStore.hpp"
 #include "lagrange/viewer/ViewerClient.hpp"
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lagrange::viewer {
+
+/// A workspace is one saved dock layout with its own panels (docs/design/ui: workspace bar).
+/// Only the workspaces that exist so far are listed; the design has ten.
+enum class Workspace : std::uint8_t { Scene, Domains };
+
+[[nodiscard]] const char* toString(Workspace workspace);
+/// "scene", "domains" (any case). Empty for anything else.
+[[nodiscard]] std::optional<Workspace> parseWorkspace(std::string_view name);
 
 /// What panels may read and change during one frame. Panels never touch the socket or Vulkan.
 struct PanelContext {
@@ -39,6 +50,9 @@ struct PanelContext {
     bool canOpenFiles{false};
     bool openFileRequested{false};
 
+    Workspace* workspace{nullptr};            ///< The workspace shown; never null in draw().
+    ProfileSession* profileSession{nullptr};  ///< Profile being edited; never null in draw().
+
     std::string deviceName;
     std::string tierName;
     float frameMs{0.0F};
@@ -53,14 +67,19 @@ public:
     /// Stable identifier; also the window title, which is what ImGui keys layouts on.
     [[nodiscard]] virtual const char* title() const = 0;
     virtual void draw(PanelContext& context) = 0;
+    /// The workspace this panel belongs to. It is drawn only while that workspace is shown.
+    [[nodiscard]] virtual Workspace workspace() const { return Workspace::Scene; }
 };
 
 [[nodiscard]] std::unique_ptr<Panel> createScopePanel();
+[[nodiscard]] std::unique_ptr<Panel> createDomainsPanel();
+[[nodiscard]] std::unique_ptr<Panel> createProfilePanel();
 
 /// The v0.1 panels that exist so far, in default layout order.
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createDefaultPanels();
 
-/// Draws the dock space, lays the panels out on first use, and draws each panel.
+/// Draws the application chrome (menu bar, workspace bar, domain strip, status bar) and the
+/// panels of the workspace shown, laying them out on first use.
 void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& context);
 
 }  // namespace lagrange::viewer

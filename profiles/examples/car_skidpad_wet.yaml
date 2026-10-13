@@ -1,0 +1,21 @@
+# profiles/examples/car_skidpad_wet.yaml — passenger car, vehicle dynamics on a wet skid pad
+schema_version: 1
+stage: worlds/skidpad_sedan.usda
+environment: environments/rain_10mmh_day.usda
+
+domains:
+  rigid_body:       { enabled: true,  backend: physx, dt: 0.001 }
+  vehicle_dynamics: { enabled: true,  tire_model: pacejka, dt: 0.001 }
+  electrical:       { enabled: false, substitute: ideal }
+  thermal:          { enabled: false, substitute: ambient }
+  aerodynamics:     { enabled: true,  fidelity: drag, dt: 0.01 }
+  weather:          { enabled: true,  effects: [rain, wet_friction], dt: 0.05 }
+  emi:              { enabled: false, substitute: zero }
+  radiation:        { enabled: false, substitute: zero }
+  sensors:          { enabled: false, substitute: ground_truth }
+
+bridges:
+  ros2: { enabled: true }
+
+views: [physics_3d, waveforms]
+record: { format: mcap, path: runs/car_skidpad_001.mcap }

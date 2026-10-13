@@ -1,0 +1,22 @@
+# profiles/examples/amr_warehouse_nav2.yaml — AMR, ros2_control + Nav2, electrical on
+schema_version: 1
+stage: worlds/warehouse_small.usda
+environment: environments/indoor_20c.usda
+seed: 1
+
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: true,  fidelity: averaged, dt: 0.0001 }
+  thermal:      { enabled: true,  dt: 0.1 }
+  aerodynamics: { enabled: false, substitute: zero }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: false, substitute: zero }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: true,  dt: 0.005 }
+
+bridges:
+  ros2:         { enabled: true, use_sim_time: true }
+  ros2_control: { enabled: true }
+
+views: [physics_3d, waveforms, sensors]
+record: { format: mcap, path: runs/amr_warehouse_001.mcap }

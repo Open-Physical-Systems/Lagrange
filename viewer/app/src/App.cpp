@@ -2,9 +2,11 @@
 #include "lagrange/gpu/Device.hpp"
 #include "lagrange/gpu/Resources.hpp"
 #include "lagrange/proto/Endpoint.hpp"
+#include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/SceneRenderer.hpp"
 #include "lagrange/viewer/ViewerClient.hpp"
+#include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -28,6 +30,26 @@ namespace lagrange::viewer {
 namespace {
 
 using Clock = std::chrono::steady_clock;
+
+/// Where the bundled fonts are: an explicit directory, the installed share directory next to
+/// the program, or the source tree (when run from a build directory).
+std::string fontDirectory() {
+    // NOLINTNEXTLINE(concurrency-mt-unsafe): start-up, single-threaded.
+    if (const char* override = std::getenv("LAGRANGE_VIEWER_FONTS");
+        override != nullptr && *override != '\0') {
+        return override;
+    }
+    std::error_code ec;
+    if (const char* base = SDL_GetBasePath(); base != nullptr) {
+        // Installed layout: <prefix>/lib/lagrange_viewer/lagrange_viewer.
+        const std::filesystem::path installed =
+            std::filesystem::path(base) / "../../share/lagrange_viewer/fonts";
+        if (std::filesystem::is_directory(installed, ec)) {
+            return installed.string();
+        }
+    }
+    return LAGRANGE_VIEWER_SOURCE_FONTS;
+}
 
 // Everything both modes share: ImGui, the panels, the camera and the scene renderer.
 class Ui {
@@ -62,12 +84,14 @@ public:
         } else {
             io.IniFilename = nullptr;
         }
-        ImGui::StyleColorsDark();
-        ImGuiStyle& style = ImGui::GetStyle();
-        style.WindowRounding = 2.0F;
-        style.FrameRounding = 2.0F;
-        style.ScaleAllSizes(dpiScale);
-        style.FontScaleDpi = dpiScale;
+        // The whole look comes from the design system (docs/design/ui/00-design-system).
+        theme::apply(dpiScale);
+        if (!theme::loadFonts(fontDirectory()).bundled) {
+            std::fputs(
+                "warning: IBM Plex fonts not found; using the built-in font. Set "
+                "LAGRANGE_VIEWER_FONTS to the directory that holds them.\n",
+                stderr);
+        }
 
         ImGui_ImplVulkan_InitInfo info{};
         info.ApiVersion = VK_API_VERSION_1_3;
@@ -122,12 +146,26 @@ public:
             framedStage_ = scene_->statics->stagePath;
             selectedPrim_ = kNone;
         }
+        // Edits asked for on the command line wait for the server's profile.
+        if (!domainEdits_.empty() && profileSession_.profile()) {
+            for (const auto& [domain, enabled] : domainEdits_) {
+                if (!profileSession_.setEnabled(domain, enabled)) {
+                    std::fprintf(stderr, "warning: cannot switch domain '%s'\n", domain.c_str());
+                }
+            }
+            domainEdits_.clear();
+        } else if (applyProfile_ && domainEdits_.empty() && profileSession_.canApply()) {
+            profileSession_.apply(client_);
+            applyProfile_ = false;
+        }
         PanelContext context{client_,         scene_,  client_.status(), client_.connection(),
                              client_.stats(), camera_, selectedPrim_};
         context.catalog = client_.catalog();
         context.notice = client_.notice();
         context.canOpenFiles = canOpenFiles_;
         context.initialScopeSignals = &scopeSignals_;
+        context.workspace = &workspace_;
+        context.profileSession = &profileSession_;
         context.viewportTexture =
             static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(texture_));
         context.viewportWidth = renderer_.extent().width;
@@ -150,6 +188,12 @@ public:
     [[nodiscard]] const std::shared_ptr<const SceneFrame>& scene() const { return scene_; }
     [[nodiscard]] std::uint32_t drawCalls() const { return renderer_.lastDrawCount(); }
     void setCanOpenFiles(bool value) { canOpenFiles_ = value; }
+    void setWorkspace(Workspace workspace) { workspace_ = workspace; }
+    void setProfileEdits(std::vector<std::pair<std::string, bool>> edits, bool apply) {
+        domainEdits_ = std::move(edits);
+        applyProfile_ = apply;
+    }
+    [[nodiscard]] const ProfileSession& profileSession() const { return profileSession_; }
     /// True once after the user chose "Open..." in the menu.
     [[nodiscard]] bool takeOpenFileRequest() { return std::exchange(openFileRequested_, false); }
 
@@ -215,6 +259,10 @@ private:
     std::string iniPath_;
     std::vector<std::string> scopeSignals_;
     bool canOpenFiles_{false};
+    Workspace workspace_{Workspace::Scene};
+    ProfileSession profileSession_;
+    std::vector<std::pair<std::string, bool>> domainEdits_;
+    bool applyProfile_{false};
     bool openFileRequested_{false};
     std::string framedStage_{"\x01"};  // never a real stage path, so the first scene is framed
 };
@@ -273,7 +321,7 @@ std::string jsonEscape(const std::string& text) {
 
 // --- headless ---------------------------------------------------------------------------
 
-int runHeadless(const Options& options, const proto::Endpoint& endpoint) {
+int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspace workspace) {
     gpu::DeviceDesc desc;
     desc.applicationName = "lagrange_viewer";
     desc.validation = options.validation;
@@ -301,6 +349,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint) {
     std::uint32_t rendered = 0;
     {
         Ui ui(*device, client, format, 2, 1.0F, false, options.scopeSignals);
+        ui.setWorkspace(workspace);
+        ui.setProfileEdits(options.domainEdits, options.applyProfile);
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize =
             ImVec2(static_cast<float>(extent.width), static_cast<float>(extent.height));
@@ -355,6 +405,30 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint) {
             }
         }
 
+        // What the server runs (applied), and what it says about the profile being edited.
+        std::string enabledDomains;
+        if (const auto profile = client.profile()) {
+            for (const DomainInfo& domain : profile->domains) {
+                if (domain.enabled) {
+                    enabledDomains += enabledDomains.empty() ? "" : ",";
+                    enabledDomains += domain.name;
+                }
+            }
+        }
+        const char* profileVerdict = "none";
+        switch (ui.profileSession().validity()) {
+            case ProfileSession::Validity::Valid:
+                profileVerdict = "valid";
+                break;
+            case ProfileSession::Validity::Invalid:
+                profileVerdict = "invalid";
+                break;
+            case ProfileSession::Validity::Checking:
+                profileVerdict = "checking";
+                break;
+            case ProfileSession::Validity::None:
+                break;
+        }
         const ClientStats stats = client.stats();
         const auto scene = client.scene();
         std::printf(
@@ -363,7 +437,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint) {
             "\"prims\": %zu, \"meshes\": %zu, \"draw_calls\": %u, \"sim_time_ns\": %lld, "
             "\"signal_blocks\": %llu, \"samples\": %llu, \"invalid_runs\": %llu, "
             "\"dropped_samples\": %llu, "
-            "\"device\": \"%s\", \"tier\": %d, \"validation_errors\": %u, \"connected\": %s}\n",
+            "\"device\": \"%s\", \"tier\": %d, \"validation_errors\": %u, \"connected\": %s, "
+            "\"profile\": \"%s\", \"profile_changes\": %zu, \"domains_enabled\": \"%s\"}\n",
             jsonEscape(client.notice().text).c_str(), client.notice().error ? "true" : "false",
             rendered, static_cast<unsigned long long>(stats.snapshots),
             static_cast<unsigned long long>(stats.deltas),
@@ -376,7 +451,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint) {
             static_cast<unsigned long long>(stats.invalidRuns),
             static_cast<unsigned long long>(stats.droppedSamples), device->info().name.c_str(),
             static_cast<int>(device->tier()), device->validationErrorCount(),
-            client.connection().state == ConnectionState::Ready ? "true" : "false");
+            client.connection().state == ConnectionState::Ready ? "true" : "false", profileVerdict,
+            ui.profileSession().draft().changedLineCount(), enabledDomains.c_str());
         if (device->validationErrorCount() != 0 && exitCode == 0) {
             exitCode = 6;
         }
@@ -489,7 +565,7 @@ bool createSwapchain(const gpu::Device& device, SDL_Window* window, Swapchain& s
     return true;
 }
 
-int runWindowed(const Options& options, const proto::Endpoint& endpoint) {
+int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspace workspace) {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::fprintf(stderr, "error: cannot initialise the window system: %s\n", SDL_GetError());
         return 3;
@@ -567,6 +643,8 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint) {
               options.scopeSignals);
         ImGui_ImplSDL3_InitForVulkan(window);
         ui.setCanOpenFiles(true);
+        ui.setWorkspace(workspace);
+        ui.setProfileEdits(options.domainEdits, options.applyProfile);
         // The file dialog reports its result on a callback that may run on another thread.
         struct Chosen {
             std::mutex mutex;
@@ -726,7 +804,18 @@ int runViewer(const Options& options) {
     if (!ok) {
         return 2;
     }
-    return options.headless ? runHeadless(options, endpoint) : runWindowed(options, endpoint);
+    Workspace workspace = Workspace::Scene;
+    if (!options.workspace.empty()) {
+        const std::optional<Workspace> parsed = parseWorkspace(options.workspace);
+        if (!parsed) {
+            std::fprintf(stderr, "error: unknown workspace '%s' (scene, domains)\n",
+                         options.workspace.c_str());
+            return 2;
+        }
+        workspace = *parsed;
+    }
+    return options.headless ? runHeadless(options, endpoint, workspace)
+                            : runWindowed(options, endpoint, workspace);
 }
 
 }  // namespace lagrange::viewer

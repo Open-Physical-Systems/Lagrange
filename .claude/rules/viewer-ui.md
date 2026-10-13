@@ -45,8 +45,8 @@ Suggested build order from the design: 00, 02, 03, 05, 04, 01, then 06 to 11.
 - Colours, sizes and fonts come from `lagrange::theme` and the shared widgets
   (`DomainChip`, `PanelTabBar`, `SectionHeader`, `PropertyRow`, `Pill`, `Switch`, ...). No
   inline `PushStyleColor` in panels except through those widgets.
-- Fonts are IBM Plex Sans and IBM Plex Mono (SIL OFL 1.1, TTFs in
-  `docs/design/ui/00-design-system/fonts-ttf/`). Every number, unit, path and topic name is in
+- Fonts are IBM Plex Sans and IBM Plex Mono (SIL OFL 1.1, TTFs in `viewer/assets/fonts/`;
+  `docs/design/ui/00-design-system/fonts-ttf` links there). Every number, unit, path and topic name is in
   Mono.
 - Domain colours identify a domain only. Never use them for plotted series.
 - Panels show only what arrives through the protocol (invariant 14). Numbers visible in a
@@ -57,6 +57,17 @@ Suggested build order from the design: 00, 02, 03, 05, 04, 01, then 06 to 11.
   source (CLAUDE.md §10).
 - Finish a screen by running its `SPEC.md` acceptance checks and comparing a headless viewer
   screenshot with `reference.png`.
+
+## Where the design lives in the code
+
+- Theme: `viewer/app/theme/` (`lagrange_theme.hpp` is the viewer's checked copy of the
+  design's header; `Fonts.hpp` loads IBM Plex).
+- Widgets: `viewer/app/widgets/` (`Widgets.hpp`). Add a widget there when the design system
+  lists one that does not exist yet; do not draw it inline in a panel.
+- Chrome (menu bar, workspace bar, domain strip, status bar, per-workspace dock spaces):
+  `viewer/panels/src/Chrome.cpp`. A new workspace is one entry in its table plus a layout.
+- Headless screenshots for comparing with `reference.png`:
+  `lagrange_viewer --headless --workspace <name> --size 1600x1000 --screenshot out.png`.
 
 ## When the design and the code disagree
 
