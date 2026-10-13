@@ -399,3 +399,43 @@ def test_electrical_workspace_draws_the_schematic_and_scopes(socket_dir):
     # The bus bar and the wires are in the electrical domain colour, #F5C842.
     yellow = sum(1 for r, g, b, _a in pixels if r > 235 and 185 < g < 215 and 50 < b < 90)
     assert yellow > 1500, f"bus and wires not drawn ({yellow} pixels)"
+
+
+def test_launcher_is_shown_without_a_server(socket_dir):
+    """Design 01-launcher: the first screen needs no server and makes no connection."""
+    image = socket_dir / "launcher.png"
+    result = subprocess.run(
+        [
+            VIEWER,
+            "--headless",
+            "--gpu",
+            GPU,
+            "--validation",
+            "--launcher",
+            "--frames",
+            "8",
+            "--size",
+            "1600x1000",
+            "--screenshot",
+            str(image),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env={**os.environ, "XDG_CONFIG_HOME": str(socket_dir / "config")},
+    )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    assert stats["frames"] == 8
+    assert stats["connected"] is False and stats["snapshots"] == 0
+    # The viewer keeps its files under the configuration directory it was given.
+    assert (socket_dir / "config" / "lagrange").is_dir()
+
+    width, height, rows = read_png(image)
+    assert (width, height) == (1600, 1000)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    # The primary button and the selected card are in the accent colour, #E8772E.
+    accent = sum(1 for r, g, b, _a in pixels if r > 220 and 105 < g < 135 and 30 < b < 65)
+    assert accent > 5000, f"the Connect button is not drawn ({accent} accent pixels)"

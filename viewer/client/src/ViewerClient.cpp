@@ -89,6 +89,12 @@ void ViewerClient::start() {
     }
 }
 
+void ViewerClient::setEndpoint(proto::Endpoint endpoint) {
+    if (!thread_.joinable()) {
+        endpoint_ = std::move(endpoint);
+    }
+}
+
 void ViewerClient::stop() {
     stopRequested_ = true;
     wake();

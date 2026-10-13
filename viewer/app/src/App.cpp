@@ -12,7 +12,9 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
+#include <fstream>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_vulkan.h>
 #include <memory>
@@ -49,6 +51,59 @@ std::string fontDirectory() {
         }
     }
     return LAGRANGE_VIEWER_SOURCE_FONTS;
+}
+
+std::string environment(const char* name) {
+    // NOLINTNEXTLINE(concurrency-mt-unsafe): start-up, single-threaded.
+    const char* value = std::getenv(name);
+    return value != nullptr ? value : "";
+}
+
+/// "2026-10-14 23:12" in local time.
+std::string localTime() {
+    const std::time_t now = std::time(nullptr);
+    std::tm parts{};
+    localtime_r(&now, &parts);
+    char text[32];
+    std::strftime(text, sizeof(text), "%Y-%m-%d %H:%M", &parts);
+    return text;
+}
+
+/// What this machine offers, for the launcher's system check. Probed locally.
+SystemInfo systemInfo(const gpu::Device& device, float displayScale) {
+    SystemInfo info;
+    const gpu::DeviceInfo& gpuInfo = device.info();
+    info.gpu = gpuInfo.name;
+    char detail[160];
+    std::snprintf(detail, sizeof(detail), "Vulkan %u.%u · ray query %s · %.0f GB", gpuInfo.apiMajor,
+                  gpuInfo.apiMinor, gpuInfo.rayQuery ? "yes" : "no",
+                  static_cast<double>(gpuInfo.deviceMemoryBytes) / (1024.0 * 1024.0 * 1024.0));
+    info.gpuDetail = detail;
+    info.tier = gpu::toString(device.tier());
+    info.tier = info.tier.substr(0, info.tier.find(" ("));
+    info.softwareGpu = gpuInfo.isSoftware;
+    // PRETTY_NAME="Ubuntu 26.04 LTS" in /etc/os-release.
+    std::ifstream release("/etc/os-release");
+    for (std::string line; std::getline(release, line);) {
+        constexpr std::string_view kKey = "PRETTY_NAME=";
+        if (line.starts_with(kKey)) {
+            info.os = line.substr(kKey.size());
+            std::erase(info.os, '"');
+        }
+    }
+    info.session = environment("XDG_SESSION_TYPE");
+    info.scale = displayScale;
+    info.rosDistro = environment("ROS_DISTRO");
+    info.rmw = environment("RMW_IMPLEMENTATION");
+    info.rosDomain = environment("ROS_DOMAIN_ID");
+    const std::string configHome = environment("XDG_CONFIG_HOME");
+    const std::string home = environment("HOME");
+    info.configDirectory =
+        (configHome.empty() ? (home.empty() ? std::string(".") : home) + "/.config" : configHome) +
+        "/lagrange";
+    std::error_code ec;
+    std::filesystem::create_directories(info.configDirectory, ec);
+    return info;
 }
 
 // Everything both modes share: ImGui, the panels, the camera and the scene renderer.
@@ -153,6 +208,17 @@ public:
                 }
             }
             selectPath_.clear();
+            if (recordRecent_ && !recentPath_.empty()) {
+                RecentEntry entry;
+                entry.stage = scene_->statics->stagePath;
+                entry.robot =
+                    scene_->statics->prims.empty() ? "" : scene_->statics->prims.front().name;
+                entry.profile = "applied";
+                entry.endpoint = proto::toString(client_.endpoint());
+                entry.opened = localTime();
+                launcher_.recent.add(std::move(entry));
+                launcher_.recent.save(recentPath_);  // best effort: the list is a convenience
+            }
         }
         // Cursors asked for on the command line wait for the first samples, so that they
         // are placed inside a real time window.
@@ -184,6 +250,7 @@ public:
         context.scopeSession = &scopeSession_;
         context.renderOptions = &renderOptions_;
         context.bookmarks = &bookmarks_;
+        context.launcher = &launcher_;
         context.viewportTexture =
             static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(texture_));
         context.viewportWidth = renderer_.extent().width;
@@ -192,7 +259,41 @@ public:
         context.tierName = gpu::toString(device_.tier());
         context.frameMs = frameMs;
         context.drawCalls = renderer_.lastDrawCount();
+        if (launcher_.active && ImGui::GetTime() - socketChecked_ > 1.0) {
+            // Is a local server listening? Looked at once a second, not every frame.
+            socketChecked_ = ImGui::GetTime();
+            std::error_code ec;
+            launcher_.defaultAvailable =
+                std::filesystem::is_socket(proto::defaultUnixSocketPath(), ec);
+        }
         drawPanels(panels_, context);
+        if (launcher_.connectRequested) {
+            launcher_.connectRequested = false;
+            const auto endpoint = proto::parseEndpoint(launcher_.connectEndpoint);
+            if (!endpoint) {
+                launcher_.error = "'" + launcher_.connectEndpoint +
+                                  "' is not a server address (unix:/path or tcp://host:port)";
+            } else {
+                launcher_.error.clear();
+                client_.stop();
+                client_.setEndpoint(*endpoint);
+                client_.start();
+                if (!launcher_.openTarget.empty()) {
+                    client_.openFile(launcher_.openTarget);
+                    launcher_.openTarget.clear();
+                }
+                launcher_.active = false;
+                recordRecent_ = true;
+            }
+        }
+        if (launcher_.disconnectRequested) {
+            launcher_.disconnectRequested = false;
+            client_.stop();
+            if (recentPath_.empty()) {
+                showLauncher(ImGui::GetStyle().FontScaleDpi);
+            }
+            launcher_.active = true;
+        }
         openFileRequested_ = context.openFileRequested;
         requestedWidth_ = context.requestedViewportWidth;
         requestedHeight_ = context.requestedViewportHeight;
@@ -207,6 +308,23 @@ public:
     [[nodiscard]] std::uint32_t drawCalls() const { return renderer_.lastDrawCount(); }
     void setCanOpenFiles(bool value) { canOpenFiles_ = value; }
     void setWorkspace(Workspace workspace) { workspace_ = workspace; }
+
+    /// Shows the launcher first: the client is started when the user chooses a server.
+    void showLauncher(float displayScale) {
+        launcher_.active = true;
+        launcher_.system = systemInfo(device_, displayScale);
+        launcher_.defaultEndpoint =
+            proto::toString(proto::Endpoint::unixSocket(proto::defaultUnixSocketPath()));
+        recentPath_ = launcher_.system.configDirectory + "/recent.json";
+        launcher_.recent.load(recentPath_);
+    }
+    [[nodiscard]] bool launcherActive() const { return launcher_.active; }
+    /// A file chosen or dropped while the launcher is shown: opened after connecting.
+    void setOpenTarget(const std::string& path) {
+        std::error_code ec;
+        const std::filesystem::path absolute = std::filesystem::absolute(path, ec);
+        launcher_.openTarget = ec ? path : absolute.lexically_normal().string();
+    }
     void setInitialSelection(std::string path) { selectPath_ = std::move(path); }
     void setCursors(bool on) { cursorsWanted_ = on; }
     void setProfileEdits(std::vector<std::pair<std::string, bool>> edits, bool apply) {
@@ -284,6 +402,10 @@ private:
     ScopeSession scopeSession_;
     RenderOptions renderOptions_;
     std::vector<std::int64_t> bookmarks_;
+    LauncherState launcher_;
+    bool recordRecent_{false};
+    std::string recentPath_;
+    double socketChecked_{-10.0};
     std::vector<std::pair<std::string, bool>> domainEdits_;
     bool applyProfile_{false};
     std::string selectPath_;
@@ -359,9 +481,11 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
     }
 
     ViewerClient client(endpoint);
-    client.start();
-    if (!options.openPath.empty()) {
-        openFile(client, options.openPath);
+    if (!options.launcher) {
+        client.start();
+        if (!options.openPath.empty()) {
+            openFile(client, options.openPath);
+        }
     }
 
     const VkExtent2D extent{options.width, options.height};
@@ -375,6 +499,9 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
     {
         Ui ui(*device, client, format, 2, 1.0F, false, options.scopeSignals);
         ui.setWorkspace(workspace);
+        if (options.launcher) {
+            ui.showLauncher(1.0F);
+        }
         ui.setInitialSelection(options.selectPath);
         ui.setCursors(options.cursors);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);
@@ -390,9 +517,11 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         while (rendered < wanted) {
             // With --open, wait for the requested file's scene, not the one served before it.
             const auto current = client.scene();
+            // The launcher needs no scene: it is what is shown before connecting.
             const bool haveScene =
-                current != nullptr &&
-                (options.openPath.empty() || client.notice().text.rfind("Loading", 0) != 0);
+                options.launcher ||
+                (current != nullptr &&
+                 (options.openPath.empty() || client.notice().text.rfind("Loading", 0) != 0));
             if (!haveScene && Clock::now() > deadline) {
                 std::fprintf(stderr, "error: no scene from %s within %u ms (%s)\n",
                              proto::toString(endpoint).c_str(), options.waitMs,
@@ -644,10 +773,16 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         return 3;
     }
 
+    // Without a server named on the command line the viewer starts on the launcher, and the
+    // client is started when the user picks a server there (design: 01-launcher).
+    const bool launcher =
+        options.launcher || (options.endpoint.empty() && options.openPath.empty());
     ViewerClient client(endpoint);
-    client.start();
-    if (!options.openPath.empty()) {
-        openFile(client, options.openPath);
+    if (!launcher) {
+        client.start();
+        if (!options.openPath.empty()) {
+            openFile(client, options.openPath);
+        }
     }
 
     VkCommandBufferAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -673,6 +808,9 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
               options.scopeSignals);
         ImGui_ImplSDL3_InitForVulkan(window);
         ui.setCanOpenFiles(true);
+        if (launcher) {
+            ui.showLauncher(dpiScale);
+        }
         ui.setWorkspace(workspace);
         ui.setInitialSelection(options.selectPath);
         ui.setCursors(options.cursors);
@@ -701,7 +839,12 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
                     rebuild = true;
                 }
                 if (event.type == SDL_EVENT_DROP_FILE && event.drop.data != nullptr) {
-                    openFile(client, event.drop.data);  // a file dropped on the window
+                    // A file dropped on the window: opened now, or after connecting.
+                    if (ui.launcherActive()) {
+                        ui.setOpenTarget(event.drop.data);
+                    } else {
+                        openFile(client, event.drop.data);
+                    }
                 }
             }
             if ((SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0) {
@@ -741,7 +884,11 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
             {
                 const std::lock_guard lock(chosen.mutex);
                 for (const std::string& path : chosen.paths) {
-                    openFile(client, path);
+                    if (ui.launcherActive()) {
+                        ui.setOpenTarget(path);
+                    } else {
+                        openFile(client, path);
+                    }
                 }
                 chosen.paths.clear();
             }

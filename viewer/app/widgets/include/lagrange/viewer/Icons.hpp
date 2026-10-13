@@ -47,6 +47,9 @@ enum class Icon : int {
     Frustum,
     Path,
     Fields,
+    // Launcher.
+    Folder,
+    Download,
     Count,
 };
 
@@ -58,6 +61,12 @@ void DrawIcon(ImDrawList* draw, Icon icon, const ImVec2& topLeft, float size, Im
 /// An icon as an item on the current line, centred on the text. `logicalSize` is in design
 /// pixels (14 in toolbars, 12 in panels).
 void IconItem(Icon icon, float logicalSize, const ImVec4& color);
+
+/// Strokes SVG path data (the commands the design uses: M L H V C A Z, absolute or relative).
+/// A point (x, y) of the path lands at origin + (x, y) * scale. For line art that is not on
+/// the 16-unit icon grid.
+void StrokeSvgPath(ImDrawList* draw, const char* data, const ImVec2& origin, float scale,
+                   ImU32 color, float thickness);
 
 /// The Lagrange mark: an L with the accent dot.
 void DrawLogo(ImDrawList* draw, const ImVec2& topLeft, float size);

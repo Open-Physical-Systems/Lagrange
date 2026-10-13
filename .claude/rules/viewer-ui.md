@@ -78,6 +78,7 @@ Suggested build order from the design: 00, 02, 03, 05, 04, 01, then 06 to 11.
   `viewer/panels/src/Chrome.cpp`. A new workspace is one entry in its table plus a layout.
 - Headless screenshots for comparing with `reference.png`:
   `lagrange_viewer --headless --workspace <name> --size 1600x1000 --screenshot out.png`.
+  `--launcher` shows the first screen (no server needed).
   Add `--select <prim path>` to fill the inspector and `--set-domain <d>=on|off` for pending
   profile edits. Use about 25 frames with the sample robot: it drives out of view later.
 - One file per panel in `viewer/panels/src/` (`ScenePanel.cpp`, `InspectorPanel.cpp`, ...).
