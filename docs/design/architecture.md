@@ -45,8 +45,9 @@ Colcon packages (each top-level directory is one or more `ament_cmake` packages)
 
 | Package | Directory | Depends on (project-internal) | First release |
 |---|---|---|---|
-| `lagrange_proto` | `proto/` | — | v0.1 |
-| `lagrange_core` | `core/` | — | v0.1 (units, signals, time only), v0.2 (all) |
+| `lagrange_cmake` | `cmake/` | — | v0.1 |
+| `lagrange_proto` | `proto/` | `lagrange_cmake` (build only) | v0.1 |
+| `lagrange_core` | `core/` | `lagrange_cmake` (build only) | v0.1 (units, signals, time only), v0.2 (all) |
 | `lagrange_gpu_hal` | `gpu/hal/`, `gpu/capability/` | `lagrange_core` | v0.1 |
 | `lagrange_gpu_kernels` | `gpu/kernels/` | `lagrange_gpu_hal` | v0.1 (viewer shaders), v0.2 (sensors) |
 | `lagrange_viewer` | `viewer/` | `lagrange_proto`, `lagrange_gpu_hal`, `lagrange_gpu_kernels` | v0.1 |

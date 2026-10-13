@@ -37,8 +37,9 @@ colcon build --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
 colcon test && colcon test-result --verbose
 ```
 
-Packages so far: `lagrange_core` (simulation time types) and `lagrange_proto` (viewer protocol
-messages with generated C++ and Python code).
+Packages so far: `lagrange_cmake` (shared build options), `lagrange_core` (simulation time
+types) and `lagrange_proto` (viewer protocol messages, generated C++ and Python code, and
+stream framing).
 
 ## Contributing
 

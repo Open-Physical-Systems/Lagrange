@@ -14,3 +14,6 @@ Notable changes to Lagrange are recorded here. The format follows
 - `lagrange_core` package with simulation time types.
 - `lagrange_proto` package: viewer protocol messages (`lagrange.viewer.v1`) with generated C++
   and Python code. RFC 0003 accepted.
+- Protocol framing: `FrameReader` and `appendFrame` for length-prefixed frames, with a fuzz
+  target.
+- `lagrange_cmake` package with the shared compile options.
