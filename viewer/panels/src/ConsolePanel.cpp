@@ -47,11 +47,19 @@ public:
     }
 
     void draw(PanelContext& context) override {
-        if (!ImGui::Begin(title())) {
+        const std::shared_ptr<const LogBook> book = context.client.logs();
+        char label[48];
+        if (problemsOnly_) {
+            // Design: "Problems · 2". The part after ### keeps the window's identity.
+            std::snprintf(label, sizeof(label), "Problems · %u###Problems",
+                          book->warnings + book->errors);
+        } else {
+            std::snprintf(label, sizeof(label), "Console");
+        }
+        if (!ImGui::Begin(label)) {
             ImGui::End();
             return;
         }
-        const std::shared_ptr<const LogBook> book = context.client.logs();
         if (!problemsOnly_) {
             // Level filter, right-aligned, with the counts the design shows.
             char warn[24];

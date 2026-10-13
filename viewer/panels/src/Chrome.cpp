@@ -39,7 +39,7 @@ struct WorkspaceEntry {
 // The dock space names carry a layout version: change it when a default layout changes, so
 // that a layout saved by an older build is not applied to the new panels.
 constexpr std::array<WorkspaceEntry, 10> kWorkspaces{{
-    {Workspace::Scene, "Scene", widgets::Icon::Scene, "lagrange-dock-scene-3", ImGuiKey_1, "Ctrl+1",
+    {Workspace::Scene, "Scene", widgets::Icon::Scene, "lagrange-dock-scene-4", ImGuiKey_1, "Ctrl+1",
      "02-scene"},
     {Workspace::Domains, "Domains", widgets::Icon::Domains, "lagrange-dock-domains-2", ImGuiKey_2,
      "Ctrl+2", "03-domains"},
@@ -97,8 +97,9 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         ImGui::DockBuilderDockWindow("Scene", left);
         ImGui::DockBuilderDockWindow("Inspector", right);
         ImGui::DockBuilderDockWindow("Timeline", bottom);
+        ImGui::DockBuilderDockWindow("###Bookmarks", bottom);
         ImGui::DockBuilderDockWindow("Console", console);
-        ImGui::DockBuilderDockWindow("Problems", console);
+        ImGui::DockBuilderDockWindow("###Problems", console);
     } else if (workspace == Workspace::Domains) {
         // Design: Domains 520 px on the left, Profile on the right. The wiring and schedule
         // panels that sit between them are not built yet, so Profile takes that room for now.
@@ -653,6 +654,7 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
     panels.push_back(createScenePanel());
     panels.push_back(createInspectorPanel());
     panels.push_back(createTimelinePanel());
+    panels.push_back(createBookmarksPanel());
     panels.push_back(createConsolePanel());
     panels.push_back(createProblemsPanel());
     panels.push_back(createScopePanel());
@@ -714,6 +716,7 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
     if (built && shown == Workspace::Scene) {
         // In a fresh layout the first tab of a group is the one in front.
         ImGui::SetWindowFocus("Console");
+        ImGui::SetWindowFocus("Timeline");
         ImGui::SetWindowFocus("Viewport");
     }
 }

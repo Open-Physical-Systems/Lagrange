@@ -10,6 +10,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <vector>
 
 #include <imgui.h>
 
@@ -227,6 +228,19 @@ private:
                       recorded);
         draw->PopClipRect();
 
+        // Bookmarks: small flags on the ruler.
+        for (const std::int64_t bookmark : *context.bookmarks) {
+            const double t = static_cast<double>(bookmark) * 1e-9;
+            if (t < from || t > to) {
+                continue;
+            }
+            const float x = toX(t);
+            draw->AddLine(ImVec2(x, rulerY - px(8.0F)), ImVec2(x, rowBottom), u32(c::info));
+            draw->AddTriangleFilled(ImVec2(x, rulerY - px(8.0F)),
+                                    ImVec2(x + px(6.0F), rulerY - px(5.0F)),
+                                    ImVec2(x, rulerY - px(2.0F)), u32(c::info));
+        }
+
         // Playhead: an accent line with a triangle head on the ruler.
         if (now >= from && now <= to) {
             const float x = toX(now);
@@ -245,7 +259,70 @@ private:
     double lastSeek_{0.0};
 };
 
+/// Times the user marked, next to the timeline. Kept for the session only.
+class BookmarksPanel final : public Panel {
+public:
+    [[nodiscard]] const char* title() const override { return "Bookmarks"; }
+
+    void draw(PanelContext& context) override {
+        std::vector<std::int64_t>& bookmarks = *context.bookmarks;
+        char label[48];
+        std::snprintf(label, sizeof(label), "Bookmarks · %zu###Bookmarks", bookmarks.size());
+        if (!ImGui::Begin(label)) {
+            ImGui::End();
+            return;
+        }
+        const bool ready = context.connection.state == ConnectionState::Ready;
+        char add[48];
+        std::snprintf(add, sizeof(add), "Add at %.3f s",
+                      static_cast<double>(context.status.simTimeNs) * 1e-9);
+        ImGui::BeginDisabled(!ready);
+        if (widgets::Button(add, widgets::ButtonKind::Default, widgets::Icon::Plus)) {
+            const std::int64_t now = context.status.simTimeNs;
+            const auto at = std::lower_bound(bookmarks.begin(), bookmarks.end(), now);
+            if (at == bookmarks.end() || *at != now) {
+                bookmarks.insert(at, now);
+            }
+        }
+        ImGui::EndDisabled();
+        if (bookmarks.empty()) {
+            ImGui::SameLine(0.0F, px(10.0F));
+            ImGui::AlignTextToFramePadding();
+            widgets::Caption("No bookmarks. Add one at the current time.");
+        }
+        ImGui::Dummy(ImVec2(0.0F, px(2.0F)));
+        std::size_t remove = bookmarks.size();
+        for (std::size_t i = 0; i < bookmarks.size(); ++i) {
+            ImGui::PushID(static_cast<int>(i));
+            char time[32];
+            std::snprintf(time, sizeof(time), "%.3f s", static_cast<double>(bookmarks[i]) * 1e-9);
+            ImGui::BeginDisabled(!ready || !context.connection.canSeek);
+            if (widgets::Button("Go to", widgets::ButtonKind::Ghost)) {
+                context.client.seek(bookmarks[i]);
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine(0.0F, px(8.0F));
+            ImGui::AlignTextToFramePadding();
+            widgets::Mono(c::t1, "%s", time);
+            ImGui::SameLine();
+            widgets::AlignRight(widgets::ButtonWidth("Remove"));
+            if (widgets::Button("Remove", widgets::ButtonKind::Ghost)) {
+                remove = i;
+            }
+            ImGui::PopID();
+        }
+        if (remove < bookmarks.size()) {
+            bookmarks.erase(bookmarks.begin() + static_cast<std::ptrdiff_t>(remove));
+        }
+        ImGui::End();
+    }
+};
+
 }  // namespace
+
+std::unique_ptr<Panel> createBookmarksPanel() {
+    return std::make_unique<BookmarksPanel>();
+}
 
 std::unique_ptr<Panel> createTimelinePanel() {
     return std::make_unique<TimelinePanel>();
