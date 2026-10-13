@@ -595,7 +595,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             "\"dropped_samples\": %llu, "
             "\"device\": \"%s\", \"tier\": %d, \"validation_errors\": %u, \"connected\": %s, "
             "\"profile\": \"%s\", \"profile_changes\": %zu, \"domains_enabled\": \"%s\", "
-            "\"log_lines\": %llu, \"attributes\": %zu}\n",
+            "\"log_lines\": %llu, \"attributes\": %zu, \"wiring_nodes\": %zu, "
+            "\"wiring_wires\": %zu, \"events\": %zu, \"server_stats\": %s}\n",
             jsonEscape(client.notice().text).c_str(), client.notice().error ? "true" : "false",
             rendered, static_cast<unsigned long long>(stats.snapshots),
             static_cast<unsigned long long>(stats.deltas),
@@ -611,7 +612,9 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             client.connection().state == ConnectionState::Ready ? "true" : "false", profileVerdict,
             ui.profileSession().draft().changedLineCount(), enabledDomains.c_str(),
             static_cast<unsigned long long>(client.logs()->total),
-            client.attributes() ? client.attributes()->attributes.size() : std::size_t{0});
+            client.attributes() ? client.attributes()->attributes.size() : std::size_t{0},
+            ui.profileSession().wiring().nodes.size(), ui.profileSession().wiring().wires.size(),
+            client.events()->events.size(), client.statistics() ? "true" : "false");
         if (device->validationErrorCount() != 0 && exitCode == 0) {
             exitCode = 6;
         }

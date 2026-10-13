@@ -341,7 +341,7 @@ _WIRES: tuple[tuple[str, str, str, str, str, bool], ...] = (
     ("weather", "aerodynamics", "weather/wind", "v_wind", "m/s", False),
     ("weather", "rigid_body", "contact/*/friction_scale", "μ_wet", "1", False),
     ("weather", "thermal", "weather/ambient", "T_amb", "K", False),
-    ("weather", "sensors", "weather/extinction", "sigma_ext", "1/m", False),
+    ("weather", "sensors", "weather/extinction", "σ_ext", "1/m", False),  # noqa: RUF001
     ("rigid_body", "sensors", "body/*/pose", "pose", "m", False),
     ("emi", "sensors", "emi/flux_density", "B", "T", False),
     ("electrical", "emi", "motor/*/current", "I", "A", False),

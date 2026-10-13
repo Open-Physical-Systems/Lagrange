@@ -47,6 +47,15 @@ public:
     /// Issues for the current text; empty unless validity() is Invalid or Valid.
     [[nodiscard]] const std::vector<ProfileIssue>& issues() const;
     [[nodiscard]] bool domainHasError(std::string_view name) const;
+    /// The wiring the server would build from the draft. While the server is still checking
+    /// an edit, this is the wiring of the text it last answered for, so the graph does not
+    /// blink; wiringIsCurrent() says which it is. Empty before the first answer.
+    [[nodiscard]] const WiringInfo& wiring() const { return wiring_; }
+    [[nodiscard]] bool wiringIsCurrent() const {
+        return validity() == Validity::Valid || validity() == Validity::Invalid;
+    }
+    /// Wires whose writer and reader disagree on the unit. Any of them blocks Apply.
+    [[nodiscard]] std::size_t unitConflicts() const;
 
     /// Every domain the server listed, in its order, as the draft describes it.
     [[nodiscard]] const std::vector<DomainView>& domains() const { return views_; }
@@ -61,7 +70,9 @@ public:
     void revert();
     /// Sends the draft to the server to be applied (restarts the run at t = 0).
     void apply(ViewerClient& client) const;
-    [[nodiscard]] bool canApply() const { return draft_.dirty() && validity() == Validity::Valid; }
+    [[nodiscard]] bool canApply() const {
+        return draft_.dirty() && validity() == Validity::Valid && unitConflicts() == 0;
+    }
 
     std::string selectedDomain;  ///< Row selected in the Domains panel; may be empty.
 
@@ -71,6 +82,7 @@ private:
 
     std::shared_ptr<const ProfileInfo> profile_;
     std::shared_ptr<const ProfileCheck> check_;
+    WiringInfo wiring_;
     ProfileDraft draft_;
     std::vector<DomainView> views_;
     std::uint64_t connects_{0};

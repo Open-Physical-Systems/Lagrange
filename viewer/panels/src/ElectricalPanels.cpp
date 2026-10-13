@@ -236,6 +236,9 @@ public:
         }
         widgets::Caption("  V in volts  ·  I in amps  ·  P in watts");
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+        if (widgets::SectionHeader("Limits and events", "last 10 s")) {
+            limits(context, statics);
+        }
         if (widgets::SectionHeader("Bus summary", "last 10 s")) {
             summary(statics);
         }
@@ -339,7 +342,96 @@ private:
                 ImGui::PopFont();
             }
         }
-        widgets::Caption("Limits and events are not sent by this server.");
+        ImGui::Unindent(px(8.0F));
+    }
+
+    /// Design: meters for the limits the net's protection acts on (warn colour past 85 %),
+    /// then what happened lately in the electrical domain.
+    void limits(PanelContext& context, const SceneStatics& statics) const {
+        ImGui::Indent(px(8.0F));
+        bool any = false;
+        for (std::size_t n = 0; n < statics.nets.size() && n < state_->nets.size(); ++n) {
+            const ElectricalNet& net = statics.nets[n];
+            const NetLive& live = state_->nets[n];
+            for (const NetLimit& limit : net.limits) {
+                // The value now: from the signal the limit names, which the net already plots.
+                double value = NAN;
+                if (limit.signal == net.voltageSignal) {
+                    value = latest(live.voltage);
+                }
+                for (std::size_t t = 0; t < net.terminals.size(); ++t) {
+                    if (net.terminals[t].currentSignal == limit.signal) {
+                        value = latest(live.terminals[t].current);
+                    }
+                }
+                any = true;
+                // How close to the limit: 1 means at it. An upper limit is approached from
+                // below, a lower one from above.
+                double used = 0.0;
+                if (!std::isnan(value) && limit.value != 0.0) {
+                    used = limit.upper ? std::abs(value) / std::abs(limit.value)
+                                       : std::abs(limit.value) / std::max(std::abs(value), 1e-9);
+                }
+                char text[64];
+                if (std::isnan(value)) {
+                    std::snprintf(text, sizeof(text), "- / %.1f %s", limit.value,
+                                  limit.unit.c_str());
+                } else {
+                    std::snprintf(text, sizeof(text), "%.1f / %.1f %s", value, limit.value,
+                                  limit.unit.c_str());
+                }
+                ImGui::AlignTextToFramePadding();
+                ImGui::PushStyleColor(ImGuiCol_Text, c::t2);
+                ImGui::TextUnformatted(limit.label.c_str());
+                ImGui::PopStyleColor();
+                ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
+                const float width = ImGui::CalcTextSize(text).x;
+                ImGui::PopFont();
+                const float meter = px(84.0F);
+                ImGui::SameLine();
+                widgets::AlignRight(meter + px(8.0F) + width);
+                widgets::Meter(static_cast<float>(used),
+                               used >= 1.0 ? c::error : (used > 0.85 ? c::warn : c::ok), meter);
+                ImGui::SameLine(0.0F, px(8.0F));
+                widgets::Mono(used >= 1.0 ? c::error : c::t1, "%s", text);
+            }
+        }
+        if (!any) {
+            widgets::Caption("The nets of this stage declare no limits.");
+        }
+
+        // Electrical events of the last ten seconds, newest first.
+        const std::shared_ptr<const EventLog> log = context.client.events();
+        const std::int64_t now = context.status.simTimeNs;
+        int shown = 0;
+        for (std::size_t i = log->events.size(); i-- > 0 && shown < 4;) {
+            const EventInfo& event = log->events[i];
+            if (event.domain != "electrical" || event.beginNs > now ||
+                event.endNs < now - kRecentNs) {
+                continue;
+            }
+            widgets::Pill(event.kind.c_str(), event.severity == EventInfo::Severity::Error
+                                                  ? widgets::PillKind::Error
+                                                  : (event.severity == EventInfo::Severity::Warning
+                                                         ? widgets::PillKind::Warn
+                                                         : widgets::PillKind::Info));
+            ImGui::SameLine(0.0F, px(8.0F));
+            ImGui::PushFont(theme::fonts().sans, theme::kLabelSize);
+            ImGui::TextUnformatted(event.text.c_str());
+            ImGui::PopFont();
+            char ago[24];
+            std::snprintf(ago, sizeof(ago), "%.1f s",
+                          static_cast<double>(event.beginNs - now) * 1e-9);
+            ImGui::SameLine();
+            ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
+            widgets::AlignRight(ImGui::CalcTextSize(ago).x);
+            ImGui::PopFont();
+            widgets::Mono(c::t3, "%s", ago);
+            ++shown;
+        }
+        if (shown == 0) {
+            widgets::Caption("No electrical events in the last 10 s.");
+        }
         ImGui::Unindent(px(8.0F));
     }
 
@@ -430,7 +522,7 @@ private:
     static constexpr float kGap = 22.0F;    // between stacked nodes
 
     static void headerTools() {
-        // The design writes "∝"; the bundled IBM Plex files have no such glyph.
+        // The design writes the "proportional to" sign; IBM Plex has no such glyph.
         const char* hint = "wire width follows |I| · dashes move with current";
         ImGui::PushFont(theme::fonts().sans, theme::kCaptionSize);
         const float hintWidth = ImGui::CalcTextSize(hint).x;

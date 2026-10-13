@@ -287,6 +287,9 @@ def test_switching_a_domain_off_is_validated_and_applied_by_the_server(socket_di
     ]
     assert all(s["validation_errors"] == 0 for s in stats)
 
+    # The server sends the wiring with its verdict: the eight domains and the signals between
+    # them, also for the edited profile, where aerodynamics is a substitute.
+    assert all(s["wiring_nodes"] == 8 and s["wiring_wires"] >= 10 for s in stats)
     # The sample starts with aerodynamics on and an unedited, valid profile.
     assert "aerodynamics" in stats[0]["domains_enabled"].split(",")
     assert (stats[0]["profile"], stats[0]["profile_changes"]) == ("valid", 0)

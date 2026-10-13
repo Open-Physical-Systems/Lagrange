@@ -106,6 +106,7 @@ add_library(
     panels/src/SignalsPanel.cpp
     panels/src/TimelinePanel.cpp
     panels/src/ViewportPanel.cpp
+    panels/src/WiringPanels.cpp
 )
 lagrange_target_defaults(lagrange_viewer_panels)
 target_include_directories(lagrange_viewer_panels PUBLIC panels/include)

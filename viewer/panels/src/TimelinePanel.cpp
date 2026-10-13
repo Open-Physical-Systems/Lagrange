@@ -10,6 +10,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <string_view>
 #include <vector>
 
 #include <imgui.h>
@@ -227,6 +228,60 @@ private:
         draw->AddText(sans, small, ImVec2(recordedFrom + px(8.0F), rowTop + px(4.0F)), u32(c::t2),
                       recorded);
         draw->PopClipRect();
+
+        // Event lanes: one per domain that has events, in the domains' usual order. Spans are
+        // bars, instants are marks; errors are red whatever the domain.
+        const std::shared_ptr<const EventLog> log = context.client.events();
+        static constexpr std::array<std::string_view, 10> kLaneOrder{
+            "rigid_body", "electrical", "thermal", "aerodynamics", "weather",
+            "emi",        "comms",      "sensors", "radiation",    "traffic"};
+        float laneTop = rowBottom + px(6.0F);
+        const float laneHeight = px(16.0F);
+        const EventInfo* hoveredEvent = nullptr;
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        for (const std::string_view domain : kLaneOrder) {
+            bool any = false;
+            for (const EventInfo& event : log->events) {
+                if (event.domain != domain) {
+                    continue;
+                }
+                if (!any) {
+                    any = true;
+                    if (laneTop + laneHeight > origin.y + size.y) {
+                        break;  // no room for another lane in this panel
+                    }
+                    const std::string_view name = widgets::domainShortLabel(domain);
+                    draw->AddText(sans, small, ImVec2(origin.x + px(2.0F), laneTop + px(2.0F)),
+                                  u32(c::t3), name.data(), name.data() + name.size());
+                }
+                const double b = static_cast<double>(event.beginNs) * 1e-9;
+                const double e = static_cast<double>(event.endNs) * 1e-9;
+                if (e < from || b > to) {
+                    continue;
+                }
+                const ImVec4 color = event.severity == EventInfo::Severity::Error
+                                         ? c::error
+                                         : widgets::domainColor(domain);
+                const float x0 = std::max(toX(b), left);
+                const float x1 = std::max(std::min(toX(e), right), x0 + px(3.0F));
+                const ImVec2 min(x0, laneTop + px(2.0F));
+                const ImVec2 max(x1, laneTop + laneHeight - px(2.0F));
+                draw->AddRectFilled(min, max, u32(color), px(2.0F));
+                if (mouse.x >= min.x - px(2.0F) && mouse.x <= max.x + px(2.0F) &&
+                    mouse.y >= laneTop && mouse.y <= laneTop + laneHeight) {
+                    hoveredEvent = &event;
+                }
+            }
+            if (any) {
+                laneTop += laneHeight;
+            }
+        }
+        if (hoveredEvent != nullptr && ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s · %s\n%.3f s to %.3f s", hoveredEvent->kind.c_str(),
+                              hoveredEvent->text.c_str(),
+                              static_cast<double>(hoveredEvent->beginNs) * 1e-9,
+                              static_cast<double>(hoveredEvent->endNs) * 1e-9);
+        }
 
         // Bookmarks: small flags on the ruler.
         for (const std::int64_t bookmark : *context.bookmarks) {
