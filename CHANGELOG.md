@@ -31,6 +31,10 @@ Notable changes to Lagrange are recorded here. The format follows
 - `lagrange_viewer`: the first window. Dockable Viewport, Scene, Inspector and Timeline
   panels; protocol client with reconnect; orbit camera; headless mode with screenshots.
   RFC 0004 and RFC 0006 accepted.
+- Waveform scopes: signal catalog and name-based subscriptions in the viewer client, a
+  lock-free `ScopeBuffer` with per-pixel min/max decimation, and a Scope panel (ImPlot) with
+  one stacked plot per unit, freeze, window lengths from 20 ms to 30 s and a dropped-sample
+  counter. ImPlot v1.0 added to `imgui_vendor`.
 
 ### Changed
 
