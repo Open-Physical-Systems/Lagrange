@@ -126,20 +126,19 @@ private:
     }
 
     void toolbar() {
-        const float button =
-            ImGui::CalcTextSize("Schemas").x + ImGui::GetStyle().FramePadding.x * 2.0F + px(6.0F);
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - button);
-        if (ImGui::InputTextWithHint("##filter", "Filter prims", filter_, sizeof(filter_))) {
+        const float button = widgets::ButtonWidth("Schemas", widgets::Icon::Filter);
+        const ImVec2 at = ImGui::GetCursorPos();
+        if (widgets::SearchField("##filter", "Filter prims", filter_, sizeof(filter_),
+                                 ImGui::GetContentRegionAvail().x - button - px(6.0F))) {
             dirty_ = true;
         }
-        ImGui::SameLine(0.0F, px(6.0F));
-        if (domainMask_ != 0) {
-            ImGui::PushStyleColor(ImGuiCol_Border, c::accentBorder);  // a filter is active
-        }
-        const bool open = ImGui::Button("Schemas");
-        if (domainMask_ != 0) {
-            ImGui::PopStyleColor();
-        }
+        ImGui::SameLine(0.0F, 0.0F);
+        ImGui::SetCursorPos(
+            ImVec2(at.x + ImGui::GetContentRegionMax().x - at.x - button, at.y + px(1.0F)));
+        // Accent while a schema filter is active.
+        const bool open = widgets::Button(
+            "Schemas", domainMask_ != 0 ? widgets::ButtonKind::On : widgets::ButtonKind::Default,
+            widgets::Icon::Filter);
         if (open) {
             ImGui::OpenPopup("##schemas");
         }
@@ -265,7 +264,7 @@ private:
         }
 
         const theme::Fonts& fonts = theme::fonts();
-        const float size = px(theme::kBodySize);
+        const float size = px(theme::kLabelSize);
         const float textY = midY - size * 0.5F - px(1.0F);
         const float nameX = caretX + px(14.0F);
         draw->PushClipRect(min, ImVec2(std::max(right - px(4.0F), min.x), min.y + height), true);
@@ -273,7 +272,7 @@ private:
         draw->AddText(fonts.sans, size, ImVec2(nameX, textY), u32(prim.visible ? c::t1 : c::t3),
                       name);
         const float nameWidth = fonts.sans->CalcTextSizeA(size, FLT_MAX, 0.0F, name).x;
-        const float typeSize = px(theme::kLabelSize);
+        const float typeSize = px(theme::kCaptionSize);
         draw->AddText(fonts.sans, typeSize,
                       ImVec2(nameX + nameWidth + px(8.0F), midY - typeSize * 0.5F), u32(c::t3),
                       prim.typeName.c_str());

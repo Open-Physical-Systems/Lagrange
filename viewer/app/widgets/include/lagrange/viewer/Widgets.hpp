@@ -1,5 +1,8 @@
 #pragma once
 
+#include "lagrange/viewer/Icons.hpp"
+
+#include <cstddef>
 #include <string_view>
 
 #include <imgui.h>
@@ -36,8 +39,26 @@ void Pill(const char* text, PillKind kind);
 /// A 28x16 on/off switch. Returns true when clicked.
 bool Switch(const char* id, bool* value);
 
+enum class ButtonKind { Default, Primary, Ghost, On };
+/// A button of the design: 22 px in panels, 26 px (`large`) in toolbars; optional icon. With an
+/// icon and a label that is only an id ("##reset") it is a square icon button.
+bool Button(const char* label, ButtonKind kind = ButtonKind::Default, Icon icon = Icon::Count,
+            bool large = false);
+/// Width of a button with this label, to place it from the right edge.
+[[nodiscard]] float ButtonWidth(const char* label, Icon icon = Icon::Count, bool large = false);
 /// The one primary action of a region: accent fill.
 bool PrimaryButton(const char* label);
+
+/// A boxed read-only value in a toolbar: small key, mono value, optional small text after.
+void Readout(const char* key, const char* value, const char* after = nullptr,
+             const ImVec4& color = ImVec4(0.902F, 0.922F, 0.949F, 1.0F));
+[[nodiscard]] float ReadoutWidth(const char* key, const char* value, const char* after = nullptr);
+
+/// A keyboard shortcut hint ("Ctrl K").
+void Kbd(const char* text);
+
+/// A search box with the search icon. Returns true when the text changed.
+bool SearchField(const char* id, const char* hint, char* buffer, std::size_t size, float width);
 
 enum class ChipState { On, Substitute, Off, Pending, Error };
 /// One domain on the domain strip: colour dot, name, mono detail. Returns true when clicked.
@@ -51,8 +72,9 @@ bool OptionCard(const char* id, const char* title, const char* description, bool
 /// A 26 px collapsible section header on the raised surface, with mono text on the right.
 bool SectionHeader(const char* title, const char* meta, bool defaultOpen = true);
 
-/// A top-level tab of a bar (workspaces): accent underline when active.
-bool BarTab(const char* label, bool active);
+/// A workspace tab: icon and label, accent underline when active. `available` is false for a
+/// workspace that is not built yet; it is drawn dimmer.
+bool BarTab(const char* label, Icon icon, bool active, bool available);
 
 /// A row of exclusive choices (time windows, level filters). Returns true when it changed.
 bool Segmented(const char* id, const char* const* options, int count, int* index);

@@ -98,7 +98,7 @@ private:
 
         ImGui::SameLine(0.0F, px(12.0F));
         ImGui::BeginDisabled(session.traces().empty());
-        if (ImGui::Button("Trigger ...")) {
+        if (widgets::Button("Trigger ...")) {
             ImGui::OpenPopup("##trigger");
         }
         triggerPopup(session);
@@ -120,18 +120,12 @@ private:
         }
 
         ImGui::SameLine(0.0F, px(12.0F));
-        if (session.cursors) {
-            ImGui::PushStyleColor(ImGuiCol_Border, c::accentBorder);  // toggled on
-        }
-        const bool wasOn = session.cursors;
-        if (ImGui::Button("Cursors A·B")) {
+        if (widgets::Button("Cursors A·B", session.cursors ? widgets::ButtonKind::On
+                                                           : widgets::ButtonKind::Default)) {
             session.showCursors(!session.cursors);
         }
-        if (wasOn) {
-            ImGui::PopStyleColor();
-        }
         ImGui::SameLine(0.0F, px(6.0F));
-        if (ImGui::Button("Export CSV")) {
+        if (widgets::Button("Export CSV")) {
             exportCsv(session);
         }
         ImGui::SetItemTooltip("Raw samples of the visible window, into the current directory");
@@ -180,7 +174,7 @@ private:
         }
         ImGui::SameLine();
         ImGui::BeginDisabled(!session.trigger().armed);
-        if (ImGui::Button("Disarm")) {
+        if (widgets::Button("Disarm")) {
             session.disarm();
         }
         ImGui::EndDisabled();

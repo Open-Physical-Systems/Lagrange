@@ -327,10 +327,11 @@ def generate_sample(duration_s: float = PATH_PERIOD, seed: int = 1) -> Recording
             _mesh(3, _box(12.0, 8.0, 0.02)),
         ]
     )
-    snapshot.materials.add(id=0, name="painted_steel", base_color=[0.85, 0.45, 0.10, 1.0],
+    snapshot.materials.add(id=0, name="painted_steel", base_color=[0.36, 0.43, 0.56, 1.0],
                            metallic=0.6, roughness=0.5)
     snapshot.materials.add(id=1, name="rubber", base_color=[0.05, 0.05, 0.05, 1.0], roughness=0.9)
-    snapshot.materials.add(id=2, name="floor", base_color=[0.07, 0.075, 0.085, 1.0], roughness=0.8)
+    snapshot.materials.add(id=2, name="floor", base_color=[0.004, 0.008, 0.018, 1.0],
+                           roughness=0.8)
     net = snapshot.nets.add(id=0, name="dc_48v", bus_prim=7, voltage_signal="bus/dc_48v/voltage")
     net.terminals.add(prim=6, port="dc_out", current_signal="battery/battery/current")
     net.terminals.add(prim=8, port="dc_in", current_signal="motor/left_drive_motor/current_q")

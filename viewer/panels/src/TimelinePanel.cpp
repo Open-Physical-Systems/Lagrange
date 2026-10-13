@@ -81,13 +81,14 @@ private:
     void transport(PanelContext& context, double begin, double now, bool replay) {
         const bool running = context.status.runState == RunState::Running;
         ImGui::BeginDisabled(!context.connection.canSeek);
-        if (ImGui::Button("Start")) {
+        if (widgets::Button("##start", widgets::ButtonKind::Default, widgets::Icon::JumpStart)) {
             context.client.seek(static_cast<std::int64_t>(begin * 1e9));
         }
         ImGui::SetItemTooltip("Jump to the start");
         ImGui::EndDisabled();
         ImGui::SameLine(0.0F, px(4.0F));
-        if (widgets::PrimaryButton(running ? "Pause" : "Play")) {
+        if (widgets::Button("##play", widgets::ButtonKind::Primary,
+                            running ? widgets::Icon::Pause : widgets::Icon::Play)) {
             if (running) {
                 context.client.pause();
             } else {
@@ -96,7 +97,7 @@ private:
         }
         ImGui::SameLine(0.0F, px(4.0F));
         ImGui::BeginDisabled(!context.connection.canStep || running);
-        if (ImGui::Button("Step")) {
+        if (widgets::Button("##step", widgets::ButtonKind::Default, widgets::Icon::Step)) {
             context.client.step(static_cast<std::int64_t>(kSteps[step_].value * 1e9));
         }
         ImGui::EndDisabled();

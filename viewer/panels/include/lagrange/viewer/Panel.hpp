@@ -16,11 +16,22 @@
 namespace lagrange::viewer {
 
 /// A workspace is one saved dock layout with its own panels (docs/design/ui: workspace bar).
-/// Only the workspaces that exist so far are listed; the design has ten.
-enum class Workspace : std::uint8_t { Scene, Domains, Signals };
+/// All ten of the design are listed; the ones without panels yet show a notice.
+enum class Workspace : std::uint8_t {
+    Scene,
+    Domains,
+    Electrical,
+    Signals,
+    Sensors,
+    Environment,
+    Replay,
+    Ros2,
+    World,
+    Performance,
+};
 
 [[nodiscard]] const char* toString(Workspace workspace);
-/// "scene", "domains", "signals" (any case). Empty for anything else.
+/// A workspace by its label, in any case: "scene", "domains", "ros 2", ... Empty for anything else.
 [[nodiscard]] std::optional<Workspace> parseWorkspace(std::string_view name);
 
 /// What panels may read and change during one frame. Panels never touch the socket or Vulkan.
@@ -54,6 +65,7 @@ struct PanelContext {
     Workspace* workspace{nullptr};            ///< The workspace shown; never null in draw().
     ProfileSession* profileSession{nullptr};  ///< Profile being edited; never null in draw().
     ScopeSession* scopeSession{nullptr};      ///< What is plotted; never null in draw().
+    bool* resetLayout{nullptr};  ///< Set to rebuild the shown workspace's default layout.
 
     std::string deviceName;
     std::string tierName;

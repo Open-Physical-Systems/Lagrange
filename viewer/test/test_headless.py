@@ -126,10 +126,10 @@ def test_viewer_renders_the_scene_from_the_mock_server(socket_dir):
     assert (width, height) == (1400, 1000)
     pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
     assert len(set(pixels)) > 50, "the image is nearly uniform: nothing was drawn"
-    # The robot body is orange (base colour 0.85, 0.45, 0.10): clearly red > green > blue.
-    orange = sum(1 for r, g, b, _a in pixels if r > 130 and r > g + 40 and g > b + 20)
+    # The robot body is blue-grey (base colour 0.36, 0.43, 0.56), lit: blue > green > red, bright.
+    body = sum(1 for r, g, b, _a in pixels if r > 110 and b > 150 and b > r + 25 and b > g + 10)
     # The viewport shares the window with the other panels, so the robot is small.
-    assert orange > 150, f"robot body not visible ({orange} orange pixels)"
+    assert body > 150, f"robot body not visible ({body} blue-grey pixels)"
     assert all(p[3] == 255 for p in pixels[:: len(pixels) // 500]), "image is not opaque"
 
 
