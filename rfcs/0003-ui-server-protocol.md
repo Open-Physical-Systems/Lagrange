@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft |
+| Status | Accepted (2026-10-13) |
 | Created | 2026-10-13 |
 | Affects | `proto/`, `viewer/client/`, `server/`, `mock_server/`, `io/recording/` |
 | Decides | The open choices in CLAUDE.md §4: Protobuf or FlatBuffers; Zenoh or TCP/Unix socket |

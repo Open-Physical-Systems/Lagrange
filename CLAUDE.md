@@ -118,7 +118,7 @@ Other platforms: post-1.0, only through an RFC.
 | Recordings / replay | MCAP |
 | Mesh/material import | glTF 2.0, OBJ, STL, DAE (via importers → USD); never a runtime format |
 | Collision geometry | Separate convex decompositions (V-HACD/CoACD), never render meshes |
-| UI↔server protocol | Protobuf (or FlatBuffers — decided in RFC 0003), `proto/`. Transport: Zenoh or TCP/Unix socket + local shared memory (decided in RFC 0003). Not WebSocket/WebRTC |
+| UI↔server protocol | Protobuf (proto3), `proto/`, package `lagrange.viewer.v1`. Transport: length-prefixed frames over a Unix socket (local) or TCP (remote), plus local shared memory (`memfd`). Decided in RFC 0003. Zenoh deferred. Not WebSocket/WebRTC |
 
 Importers (URDF/xacro, SDFormat, MJCF → USD) are mandatory; users must not rewrite robots.
 
@@ -242,7 +242,7 @@ verification, not in this repo.
 - Viewer: built by colcon with everything else; run `ros2 run lagrange_viewer lagrange_viewer` (TBD)
 - Viewer headless smoke test: `VK_ICD_FILENAMES=<lavapipe icd> colcon test --packages-select lagrange_viewer` (TBD; software Vulkan for GPU-less CI)
 - All hooks: `pre-commit run --all-files`
-- Protocol: `buf lint && buf breaking --against '.git#branch=main'`
+- Protocol: `buf lint && buf format --diff --exit-code && buf breaking --against '.git#ref=origin/dev'`
 
 ## 8. Code conventions
 
@@ -515,7 +515,7 @@ repos:
   - repo: https://github.com/pre-commit/mirrors-clang-format
     rev: <pinned>
     hooks: [{ id: clang-format, types_or: [c++, c] }]
-  - repo: https://github.com/BlankSpruce/gersemi
+  - repo: https://github.com/BlankSpruce/gersemi-pre-commit
     rev: <pinned>
     hooks: [{ id: gersemi }]
   - repo: https://github.com/astral-sh/ruff-pre-commit
