@@ -1,0 +1,15 @@
+# Code owners. The organisation has no teams yet, so every path is owned by the maintainer.
+# Replace with @Open-Physical-Systems/<team> entries when teams exist (see
+# docs/plan/repo-tooling.md section 7 for the planned split).
+*                         @Danendra10
+
+# Stable surfaces: changes need an RFC or an explicit PR note and 2 approvals (CLAUDE.md section 9).
+/schemas/                 @Danendra10
+/core/plugin_abi/         @Danendra10
+/proto/                   @Danendra10
+/profiles/schema.json     @Danendra10
+/rfcs/                    @Danendra10
+
+# Supply chain and governance
+/.github/                 @Danendra10
+/CLAUDE.md                @Danendra10

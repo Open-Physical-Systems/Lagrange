@@ -1,0 +1,49 @@
+name: Bug report
+description: Something does not work as documented
+labels: ["type/bug", "needs-triage"]
+body:
+  - type: textarea
+    id: what
+    attributes: { label: What happened, description: "What you did, what you expected, what you saw." }
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes: { label: Steps to reproduce, description: "Profile YAML, stage file, commands. Attach a small MCAP if you can." }
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes: { label: lagrange version, description: "The git commit, or the release version once releases exist." }
+    validations: { required: true }
+  - type: dropdown
+    id: install
+    attributes: { label: Install method, options: ["apt (ros-lyrical-*)", "source (colcon)", "Docker image", "pip wheel"] }
+    validations: { required: true }
+  - type: input
+    id: os
+    attributes: { label: OS, description: "Output of `lsb_release -ds` and `uname -r`.", placeholder: "Ubuntu 26.04.1 LTS, 7.0.0-34-generic" }
+    validations: { required: true }
+  - type: dropdown
+    id: arch
+    attributes: { label: Architecture, options: [amd64, arm64] }
+    validations: { required: true }
+  - type: input
+    id: gpu
+    attributes: { label: GPU, description: "Model. Write 'none' for CPU-only.", placeholder: "NVIDIA RTX 4060" }
+    validations: { required: true }
+  - type: input
+    id: driver
+    attributes: { label: GPU driver, description: "`nvidia-smi` driver version or Mesa version.", placeholder: "NVIDIA 595.91.07" }
+    validations: { required: true }
+  - type: dropdown
+    id: session
+    attributes: { label: Display session, options: [Wayland, X11, "headless / none"] }
+    validations: { required: true }
+  - type: input
+    id: tier
+    attributes: { label: Capability tier, description: "0 (CPU), 1 (raster GPU) or 2 (RT GPU), if known." }
+  - type: input
+    id: rmw
+    attributes: { label: RMW implementation, placeholder: "rmw_fastrtps_cpp" }
+  - type: textarea
+    id: logs
+    attributes: { label: Logs, render: text }
