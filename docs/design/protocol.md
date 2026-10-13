@@ -635,7 +635,11 @@ Used only when both ends are on the same machine and connected by the Unix socke
   payload, then re-reads `generation`; a changed generation means the slot was reused during the
   read and the payload is discarded. This is a seqlock; no cross-process mutex is used.
 - Lifetime: `scene` slots live until the next `SceneSnapshot`. `stream` slots are a ring; the
-  server never reuses a slot sooner than 500 ms after publishing it.
+  server never reuses a slot sooner than 500 ms after publishing it. (The first implementation,
+  `lagrange::proto::ShmArena`, is a plain ring without the 500 ms rule; a reader that loses the
+  race gets `Stale` and asks again. The rule is added with the server's stream region.)
+- The descriptor sent to the viewer is opened read-only, so the viewer cannot map the region
+  writable, and the reader refuses any descriptor whose size is not sealed.
 - The fast path is an optimisation only. With `wants_shm = false` everything travels in-band and
   all tests must pass in both modes.
 - Later, for a server-side Vulkan device shared with the viewer on one GPU, exporting images by
