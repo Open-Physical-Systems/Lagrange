@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>imgui_vendor</name>
+  <version>0.0.0</version>
+  <description>Dear ImGui (docking branch) with the SDL3 and Vulkan backends, built from a pinned upstream release. Ubuntu's libimgui-dev is the master branch without docking, so it cannot be used.</description>
+  <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>libsdl3-dev</depend>
+  <depend>libvulkan-dev</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
