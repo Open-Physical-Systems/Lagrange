@@ -290,7 +290,7 @@ def generate_sample(duration_s: float = PATH_PERIOD, seed: int = 1) -> Recording
     snapshot.materials.add(id=0, name="painted_steel", base_color=[0.85, 0.45, 0.10, 1.0],
                            metallic=0.6, roughness=0.5)
     snapshot.materials.add(id=1, name="rubber", base_color=[0.05, 0.05, 0.05, 1.0], roughness=0.9)
-    snapshot.materials.add(id=2, name="floor", base_color=[0.55, 0.55, 0.58, 1.0], roughness=0.8)
+    snapshot.materials.add(id=2, name="floor", base_color=[0.07, 0.075, 0.085, 1.0], roughness=0.8)
     net = snapshot.nets.add(id=0, name="dc_48v", bus_prim=7, voltage_signal="bus/dc_48v/voltage")
     net.terminals.add(prim=6, port="dc_out", current_signal="battery/battery/current")
     net.terminals.add(prim=8, port="dc_in", current_signal="motor/left_drive_motor/current_q")
@@ -342,7 +342,7 @@ def generate_sample(duration_s: float = PATH_PERIOD, seed: int = 1) -> Recording
             first = by_name[bindings[prim_id]].data[0]
             position, quaternion = first[:3], first[3:]
         else:
-            position, quaternion = np.array([0.0, 0.0, -0.01]), np.array([1.0, 0.0, 0.0, 0.0])
+            position, quaternion = np.array([0.0, 0.0, -0.02]), np.array([1.0, 0.0, 0.0, 0.0])
         transforms += np.asarray(position, dtype="<f8").tobytes()
         transforms += np.asarray(quaternion, dtype="<f4").tobytes()
         transforms += np.ones(3, dtype="<f4").tobytes()

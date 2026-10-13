@@ -48,3 +48,10 @@ function(lagrange_target_defaults target)
         )
     endif()
 endfunction()
+
+# For targets that use the Vulkan C API. Its structs are initialised as
+# `VkFooCreateInfo info{VK_STRUCTURE_TYPE_FOO_CREATE_INFO};`, leaving the rest zero on purpose,
+# which -Wextra reports as missing initialisers.
+function(lagrange_target_vulkan_warnings target)
+    target_compile_options(${target} PRIVATE -Wno-missing-field-initializers)
+endfunction()

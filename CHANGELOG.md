@@ -25,6 +25,12 @@ Notable changes to Lagrange are recorded here. The format follows
   full/min-max/stride subscriptions), MCAP recording format, a synthetic sample recording, and
   a protocol conformance client (`--check`).
 - Golden protocol frames read identically by the C++ and Python decoders.
+- `lagrange_gpu` package: Vulkan device layer with capability tiers (0 CPU, 1 raster GPU,
+  2 hardware ray tracing), Slang shader build support and the `lagrange_gpu_info` tool.
+- `imgui_vendor` package: Dear ImGui docking branch with the SDL3 and Vulkan backends.
+- `lagrange_viewer`: the first window. Dockable Viewport, Scene, Inspector and Timeline
+  panels; protocol client with reconnect; orbit camera; headless mode with screenshots.
+  RFC 0004 and RFC 0006 accepted.
 
 ### Changed
 

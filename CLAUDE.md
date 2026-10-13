@@ -39,7 +39,7 @@ An open-source (Apache-2.0), GPU-accelerated robot simulator in the spirit of Ga
 | Default RMW | `rmw_fastrtps_cpp` (Lyrical default); also test `rmw_zenoh_cpp` |
 | GPU | NVIDIA with Vulkan (+ optional CUDA fast path). AMD/Intel Vulkan best-effort |
 | Python | Ubuntu 26.04 system Python (the one Lyrical's rclpy is built against) |
-| Viewer | Native C++20 app: Vulkan renderer + Dear ImGui (docking branch); window via SDL3 or GLFW (decided in RFC 0006) |
+| Viewer | Native C++20 app: Vulkan renderer + Dear ImGui (docking branch); window via SDL3 (RFC 0006, accepted) |
 | Comparison baseline | Gazebo Jetty (gz-sim 10), the Gazebo release paired with Lyrical |
 
 Consequences:
@@ -239,8 +239,9 @@ verification, not in this repo.
 - Sanitizer build: `colcon build --build-base build-asan --install-base install-asan --mixin asan` (TBD; verify mixin availability)
 - C++ tests: `colcon test && colcon test-result --verbose` (TBD)
 - Python: `ruff check . && ruff format --check . && mypy python/ && pytest` (TBD)
-- Viewer: built by colcon with everything else; run `ros2 run lagrange_viewer lagrange_viewer` (TBD)
-- Viewer headless smoke test: `VK_ICD_FILENAMES=<lavapipe icd> colcon test --packages-select lagrange_viewer` (TBD; software Vulkan for GPU-less CI)
+- Viewer: built by colcon with everything else; run `ros2 run lagrange_viewer lagrange_viewer --connect <endpoint>`
+- Viewer headless test: `colcon test --packages-select lagrange_viewer` (runs on the software Vulkan device, llvmpipe; `LAGRANGE_TEST_GPU=<name>` picks another)
+- GPU and tier of this machine: `ros2 run lagrange_gpu lagrange_gpu_info`
 - All hooks: `pre-commit run --all-files`
 - Protocol: `buf lint && buf format --diff --exit-code && buf breaking --against '.git#ref=origin/dev'`
 
@@ -601,7 +602,7 @@ everything on the GPU with Vulkan. There is no browser or web engine involved.
 
 | Concern | Choice |
 |---|---|
-| Window, input, Vulkan surface | SDL3 or GLFW (RFC 0006). Must work on Wayland and X11 |
+| Window, input, Vulkan surface | SDL3 (RFC 0006, accepted). Must work on Wayland and X11 |
 | 3D rendering | Own Vulkan renderer in `viewer/render/`, built on `gpu/hal/` and Slang shaders |
 | UI panels | Dear ImGui, docking branch (dockable panels, saved layouts, optional multi-viewport) |
 | Waveform scopes | ImPlot, fed from ring buffers; decimation (min/max per pixel) for 10 kHz+ signals |
