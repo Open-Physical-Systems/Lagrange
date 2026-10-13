@@ -32,14 +32,45 @@ Requirements: Ubuntu 26.04 with ROS 2 Lyrical installed.
 source /opt/ros/lyrical/setup.bash
 mkdir -p ~/lagrange_ws/src && cd ~/lagrange_ws
 git clone -b dev https://github.com/Open-Physical-Systems/Lagrange.git src/lagrange
-rosdep install --from-paths src --ignore-src -y
+
+# One dependency (the Python MCAP library) is not packaged for Ubuntu. Register the project's
+# extra rosdep keys once, then let rosdep install it with pip.
+echo "yaml file://$PWD/src/lagrange/packaging/rosdep/lagrange.yaml" | \
+  sudo tee /etc/ros/rosdep/sources.list.d/10-lagrange.list
+rosdep update
+PIP_BREAK_SYSTEM_PACKAGES=1 PIP_CONSTRAINT=$PWD/src/lagrange/packaging/pip-constraints.txt \
+  rosdep install --from-paths src --ignore-src -y
+
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
 colcon test && colcon test-result --verbose
 ```
 
-Packages so far: `lagrange_cmake` (shared build options), `lagrange_core` (simulation time
-types) and `lagrange_proto` (viewer protocol messages, generated C++ and Python code, stream
-framing, Unix-socket/TCP transport and the shared-memory fast path).
+If you prefer not to install pip packages into the system Python, create a virtual environment
+with `--system-site-packages`, install `mcap` there, and pass
+`-DPython3_EXECUTABLE=<venv>/bin/python` to `colcon build`.
+
+Packages so far:
+
+| Package | Directory | Content |
+|---|---|---|
+| `lagrange_cmake` | `cmake/` | Shared build options |
+| `lagrange_core` | `core/` | Simulation time types |
+| `lagrange_proto` | `proto/` | Viewer protocol messages, framing, socket transport, shared memory |
+| `lagrange_mock_server` | `mock_server/` | Replay server that speaks the protocol from a recording |
+
+## Try the mock server
+
+There is no viewer yet, but the server and its protocol check already run:
+
+```bash
+source install/setup.bash
+ros2 run lagrange_mock_server lagrange_mock_server --sample --listen tcp://127.0.0.1:47610 &
+ros2 run lagrange_mock_server lagrange_mock_server --check tcp://127.0.0.1:47610
+```
+
+`--sample` serves a built-in synthetic recording (an AMR on a figure-eight path; computed, not
+simulated). `--write-sample file.mcap` writes it to disk and `--recording file.mcap` serves a
+file.
 
 ## Contributing
 

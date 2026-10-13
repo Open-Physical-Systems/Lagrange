@@ -612,6 +612,16 @@ sequenceDiagram
   Note over V: subscriptions from generation 1 are void; the viewer re-subscribes by name
 ```
 
+Clarifications fixed by the first implementation (the mock server):
+
+- Transforms in `SceneSnapshot` and `SceneDelta` are absolute in the region-local frame, not
+  relative to the parent prim.
+- A `SceneSnapshot` also marks a discontinuity in time. After a seek, a reset, or a looping
+  replay restarting, the server sends a snapshot to every client, and signal sample indices
+  restart from the new time after it. Between two snapshots, runs of a signal are contiguous.
+- A `MODE_MINMAX` run has `2 x components` values per sample: all minima, then all maxima. A
+  bucket is sent once, in the block in which its last sample falls.
+
 Resynchronisation rules:
 
 - `SceneDelta.base_sequence` not equal to the client's sequence → the client drops deltas and

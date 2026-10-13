@@ -1291,7 +1291,7 @@ parameters:
 | `/lagrange/catalog` | `SignalCatalog` | every signal's name, type, unit, writer |
 | `/lagrange/scene/snapshot` | `SceneSnapshot` | one at start and every 10 s (seek points) |
 | `/lagrange/scene/delta` | `SceneDelta` | transform and attribute changes |
-| `/lagrange/signals/<rate_group>` | `SignalBlock` | signals grouped by writer step size |
+| `/lagrange/signals/<dt>ns` | `SignalBlock` | signals grouped by writer step size, e.g. `/lagrange/signals/100000ns` |
 | `/lagrange/state_hash` | `StateHash` | determinism check values |
 | `/lagrange/log` | `LogRecord` | console messages |
 | ROS topics (optional) | CDR, as rosbag2 writes them | when `record.ros_topics` is used (later) |
