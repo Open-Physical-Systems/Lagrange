@@ -33,6 +33,12 @@ struct PanelContext {
     /// May be null.
     std::vector<std::string>* initialScopeSignals{nullptr};
 
+    Notice notice;  ///< Latest message for the user (load results, command errors).
+    /// Out: set when the user asked for the "open file" dialog. Only shown when the
+    /// application can open one (not in headless mode).
+    bool canOpenFiles{false};
+    bool openFileRequested{false};
+
     std::string deviceName;
     std::string tierName;
     float frameMs{0.0F};

@@ -25,7 +25,9 @@ from lagrange.viewer.v1 import (
 from . import __version__
 from .endpoint import Endpoint
 from .framing import DEFAULT_MAX_FRAME_SIZE, FrameError, FrameReader, encode_frame
+from .recording import Recording, RecordingError, read_recording
 from .replay import MODE_FULL, ReplayEngine, Subscription, Window
+from .urdf import UrdfError, import_urdf
 
 PROTOCOL_MAJOR = 0
 PROTOCOL_MINOR = 1
@@ -65,6 +67,7 @@ class MockServer:
         self._ticker: asyncio.Task | None = None
         self._next_session_id = 1
         self._tick_count = 0
+        self._loading: set[asyncio.Task] = set()
 
     # --- lifecycle -------------------------------------------------------------------------
 
@@ -178,6 +181,7 @@ class MockServer:
         capabilities = hello.capabilities
         capabilities.can_seek = True
         capabilities.can_step = True
+        capabilities.can_import = True
         capabilities.tier = 0
         session.send(reply)
 
@@ -289,6 +293,12 @@ class MockServer:
                 self._send_snapshot(session)
             elif kind == "get_profile":
                 session.send(envelope_pb2.Envelope(profile_state=self._profile_state()))
+            elif kind in ("import_robot", "open_recording"):
+                # Reading files can take a moment: answer when it is done, off the event loop.
+                task = asyncio.create_task(self._load(session, command))
+                self._loading.add(task)
+                task.add_done_callback(self._loading.discard)
+                return
             elif kind == "get_attributes":
                 result.command_result.attributes.SetInParent()  # no attribute data yet
             else:
@@ -307,6 +317,55 @@ class MockServer:
             status = self._status()
             for other in self._sessions:
                 other.send(status)
+
+    # --- loading another scene -----------------------------------------------------------
+
+    def replace_recording(self, recording: Recording) -> None:
+        """Serve a different recording or scene. Every viewer gets the new catalog and scene."""
+        was_running = self.engine.state == session_pb2.RUN_STATE_RUNNING
+        self.engine = ReplayEngine(recording, loop=self.engine.loop)
+        if was_running:
+            self.engine.play()
+        self.catalog_generation += 1
+        for session in self._sessions:
+            session.subscriptions.clear()  # signal ids belong to the old catalog
+            session.send(envelope_pb2.Envelope(profile_state=self._profile_state()))
+            catalog = envelope_pb2.Envelope()
+            catalog.catalog.CopyFrom(recording.catalog(self.catalog_generation))
+            session.send(catalog)
+            self._send_snapshot(session)
+            session.send(self._status())
+
+    async def _load(self, session: _Session, command: command_pb2.Command) -> None:
+        result = envelope_pb2.Envelope()
+        result.command_result.request_id = command.request_id
+        kind = command.WhichOneof("command")
+        path = command.import_robot.path if kind == "import_robot" else command.open_recording.path
+        try:
+            if not path:
+                raise UrdfError("no file path given (uploading file content is not supported yet)")
+            if kind == "open_recording":
+                recording = await asyncio.to_thread(read_recording, Path(path))
+                notes: list[str] = []
+            else:
+                args = tuple(command.import_robot.xacro_args)
+                recording, report = await asyncio.to_thread(import_urdf, path, args)
+                notes = report.notes
+            self.replace_recording(recording)
+            result.command_result.ok = True
+            result.command_result.imported_stage_path = path
+            for note in notes:
+                log.info("import: %s", note)
+                record = envelope_pb2.Envelope()
+                record.log.level = session_pb2.LOG_LEVEL_WARN
+                record.log.source = "import"
+                record.log.text = note
+                session.send(record)
+        except (UrdfError, RecordingError, OSError) as error:
+            result.command_result.ok = False
+            result.command_result.error = str(error)
+        if not session.writer.is_closing():
+            session.send(result)
 
     # --- time ------------------------------------------------------------------------------
 

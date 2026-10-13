@@ -71,6 +71,7 @@ ViewerClient::ViewerClient(proto::Endpoint endpoint)
     , wakeFd_(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC))
     , worker_(std::make_unique<Worker>()) {
     status_.store(std::make_shared<const ServerStatus>());
+    notice_.store(std::make_shared<const Notice>());
     connection_.store(std::make_shared<const ConnectionInfo>());
 }
 
@@ -232,6 +233,29 @@ void ViewerClient::setRealTimeFactor(double target) {
     enqueue(std::move(envelope));
 }
 
+void ViewerClient::openFile(const std::string& path) {
+    auto envelope = std::make_unique<v1::Envelope>();
+    envelope->mutable_command()->set_request_id(nextRequestId_++);
+    const bool recording = path.size() > 5 && path.compare(path.size() - 5, 5, ".mcap") == 0;
+    if (recording) {
+        envelope->mutable_command()->mutable_open_recording()->set_path(path);
+    } else {
+        envelope->mutable_command()->mutable_import_robot()->set_path(path);
+    }
+    post(false, "Loading " + path + " ...");
+    enqueue(std::move(envelope));
+}
+
+// Called from the UI thread (openFile) and from the worker (results); the serial only has to
+// change, so a rare race between the two costs nothing.
+void ViewerClient::post(bool error, std::string text) {
+    auto notice = std::make_shared<Notice>();
+    notice->serial = notice_.load()->serial + 1;
+    notice->error = error;
+    notice->text = std::move(text);
+    notice_.store(std::move(notice));
+}
+
 void ViewerClient::publish(ConnectionState state, const std::string& message) {
     // A refusal stays visible while the client keeps retrying in the background; only a
     // successful handshake (or another refusal) replaces it.
@@ -350,6 +374,22 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
         }
         case v1::Envelope::kSignalBlock:
             handleSignalBlock(envelope);
+            break;
+        case v1::Envelope::kCommandResult: {
+            const v1::CommandResult& result = envelope.command_result();
+            if (!result.ok()) {
+                post(true,
+                     result.error().empty() ? "the server refused a command" : result.error());
+            } else if (!result.imported_stage_path().empty()) {
+                post(false, "Loaded " + result.imported_stage_path());
+            }
+            break;
+        }
+        case v1::Envelope::kLog:
+            // Import notes arrive as warnings; show the most recent one.
+            if (envelope.log().level() >= v1::LOG_LEVEL_WARN) {
+                post(false, envelope.log().text());
+            }
             break;
         default:
             break;  // messages this viewer does not use yet, or newer than it knows

@@ -17,6 +17,8 @@ void usage() {
         "  --gpu <index|name>     Vulkan device to use (see lagrange_gpu_info)\n"
         "  --validation           enable Vulkan validation layers\n"
         "  --size <W>x<H>         window or offscreen size in pixels (default 1600x900)\n"
+        "  --open <file>          ask the server to load a robot (.urdf, .xacro) or recording "
+        "(.mcap)\n"
         "  --scope <a,b,...>      open these signals in the scope at start-up\n"
         "  --headless             no window: render offscreen and exit\n"
         "  --frames <N>           headless: frames to render once the scene arrived (default "
@@ -58,6 +60,8 @@ int main(int argc, char** argv) {
             options.waitMs = static_cast<std::uint32_t>(std::strtoul(value(), nullptr, 10));
         } else if (arg == "--screenshot") {
             options.screenshot = value();
+        } else if (arg == "--open") {
+            options.openPath = value();
         } else if (arg == "--scope") {
             const std::string list = value();
             for (std::size_t start = 0; start <= list.size();) {

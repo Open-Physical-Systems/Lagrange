@@ -93,6 +93,22 @@ ros2 run lagrange_viewer lagrange_viewer \
 simulated). `--write-sample file.mcap` writes it to disk and `--recording file.mcap` serves a
 file.
 
+### Open your own robot
+
+With the viewer and the mock server running, open a URDF or xacro file in any of these ways:
+drag the file onto the window, use **File > Open robot or recording...** (Ctrl+O), or start
+the viewer with `--open`:
+
+```bash
+ros2 run lagrange_viewer lagrange_viewer --open ~/my_robot/urdf/my_robot.urdf
+```
+
+The robot is shown with every joint at zero. Meshes in STL, OBJ and DAE are read, and
+`package://` paths are looked up in installed ROS packages and in the folders above the file.
+Anything the importer could not use (textures, a mesh it could not find) is listed in the
+Timeline panel; a missing mesh is drawn as a magenta box. A `.mcap` recording opens the same
+way. To serve a robot directly: `lagrange_mock_server --urdf robot.urdf`.
+
 Other useful commands:
 
 ```bash

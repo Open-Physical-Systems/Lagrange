@@ -506,6 +506,48 @@ TEST(ViewerClient, SnapshotRestartsScopeHistoryAndReconnectResubscribes) {
     client.stop();
 }
 
+TEST(ViewerClient, OpenFileSendsTheRightCommandAndReportsTheOutcome) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+    EXPECT_TRUE(client.notice().text.empty());
+
+    client.openFile("/robots/arm.urdf");
+    EXPECT_EQ(client.notice().text, "Loading /robots/arm.urdf ...");
+    client.openFile("/runs/yesterday.mcap");
+    ASSERT_TRUE(
+        server.pump([&] { return server.countCommands(v1::Command::kOpenRecording) == 1; }));
+    ASSERT_EQ(server.countCommands(v1::Command::kImportRobot), 1);
+    std::uint64_t importId = 0;
+    for (const v1::Envelope& e : server.received()) {
+        if (e.body_case() == v1::Envelope::kCommand && e.command().has_import_robot()) {
+            EXPECT_EQ(e.command().import_robot().path(), "/robots/arm.urdf");
+            importId = e.command().request_id();
+        }
+        if (e.body_case() == v1::Envelope::kCommand && e.command().has_open_recording()) {
+            EXPECT_EQ(e.command().open_recording().path(), "/runs/yesterday.mcap");
+        }
+    }
+
+    const std::uint64_t before = client.notice().serial;
+    v1::Envelope failed;
+    failed.mutable_command_result()->set_request_id(importId);
+    failed.mutable_command_result()->set_error("arm.urdf is not valid XML");
+    server.send(failed);
+    ASSERT_TRUE(server.pump([&] { return client.notice().serial > before; }));
+    EXPECT_TRUE(client.notice().error);
+    EXPECT_EQ(client.notice().text, "arm.urdf is not valid XML");
+
+    v1::Envelope loaded;
+    loaded.mutable_command_result()->set_ok(true);
+    loaded.mutable_command_result()->set_imported_stage_path("/robots/arm.urdf");
+    server.send(loaded);
+    ASSERT_TRUE(server.pump([&] { return !client.notice().error; }));
+    EXPECT_EQ(client.notice().text, "Loaded /robots/arm.urdf");
+    client.stop();
+}
+
 TEST(ViewerClient, StartsAndStopsCleanlyWithNoServer) {
     ViewerClient client(Endpoint::unixSocket("/tmp/lagrange-no-such-server.sock"));
     client.start();

@@ -1,0 +1,79 @@
+<?xml version="1.0"?>
+<!--
+  A small test robot for the Lagrange URDF importer: a two-joint arm on a base, built from
+  primitives plus one mesh, with rotated and offset joint origins so that the kinematics are
+  exercised. Dimensions are arbitrary; it is not a model of any real robot.
+-->
+<robot name="primitives_arm">
+  <material name="steel">
+    <color rgba="0.55 0.57 0.60 1"/>
+  </material>
+  <material name="orange">
+    <color rgba="0.90 0.45 0.10 1"/>
+  </material>
+
+  <link name="base">
+    <visual>
+      <origin xyz="0 0 0.05"/>
+      <geometry>
+        <box size="0.40 0.30 0.10"/>
+      </geometry>
+      <material name="steel"/>
+    </visual>
+  </link>
+
+  <link name="shoulder">
+    <visual>
+      <origin xyz="0 0 0.15"/>
+      <geometry>
+        <cylinder radius="0.04" length="0.30"/>
+      </geometry>
+      <material name="orange"/>
+    </visual>
+  </link>
+  <joint name="base_to_shoulder" type="revolute">
+    <parent link="base"/>
+    <child link="shoulder"/>
+    <origin xyz="0.10 0 0.10"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1.57" upper="1.57" effort="10" velocity="1"/>
+  </joint>
+
+  <link name="forearm">
+    <visual>
+      <origin xyz="0.15 0 0"/>
+      <geometry>
+        <box size="0.30 0.05 0.05"/>
+      </geometry>
+      <material name="orange"/>
+    </visual>
+    <visual>
+      <origin xyz="0.30 0 0"/>
+      <geometry>
+        <sphere radius="0.04"/>
+      </geometry>
+      <material name="steel"/>
+    </visual>
+  </link>
+  <!-- Rotated a quarter turn about Z: the forearm's X axis points along the base's Y axis. -->
+  <joint name="shoulder_to_forearm" type="continuous">
+    <parent link="shoulder"/>
+    <child link="forearm"/>
+    <origin xyz="0 0 0.30" rpy="0 0 1.5707963267948966"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <link name="tool">
+    <visual>
+      <geometry>
+        <mesh filename="tool.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="steel"/>
+    </visual>
+  </link>
+  <joint name="forearm_to_tool" type="fixed">
+    <parent link="forearm"/>
+    <child link="tool"/>
+    <origin xyz="0.34 0 0"/>
+  </joint>
+</robot>

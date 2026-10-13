@@ -35,6 +35,10 @@ Notable changes to Lagrange are recorded here. The format follows
   lock-free `ScopeBuffer` with per-pixel min/max decimation, and a Scope panel (ImPlot) with
   one stacked plot per unit, freeze, window lengths from 20 ms to 30 s and a dropped-sample
   counter. ImPlot v1.0 added to `imgui_vendor`.
+- Opening your own robot: the mock server imports URDF and xacro files (links, joints at
+  zero, box/cylinder/sphere and STL/OBJ/DAE visuals, material colours) and reports what it
+  could not use. In the viewer: File > Open, Ctrl+O, drag and drop, or `--open`. Recordings
+  (`.mcap`) open the same way. `assets/robots/primitives_arm` is a small test robot.
 
 ### Changed
 

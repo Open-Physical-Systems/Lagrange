@@ -81,8 +81,8 @@ class ReplayEngine:
 
     def advance(self, wall_dt_ns: int) -> Window | None:
         """Move the clock by wall time while running. None when paused."""
-        if self.state != session_pb2.RUN_STATE_RUNNING:
-            return None
+        if self.state != session_pb2.RUN_STATE_RUNNING or self.duration_ns <= 0:
+            return None  # paused, or a static scene with no timeline
         return self._move(round(wall_dt_ns * self.rtf_target))
 
     def step(self, duration_ns: int) -> Window:

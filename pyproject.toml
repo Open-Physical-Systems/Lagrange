@@ -10,6 +10,8 @@ select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "PTH", "RUF"]
 [tool.ruff.lint.per-file-ignores]
 # Tables of signals and prims read better on one line each.
 "mock_server/lagrange_mock_server/sample.py" = ["E501"]
+"mock_server/lagrange_mock_server/meshes.py" = ["E501"]
+"mock_server/lagrange_mock_server/urdf.py" = ["E501"]
 "mock_server/test/*.py" = ["E501"]
 "proto/test/*.py" = ["E501"]
 "proto/test/golden/*.py" = ["E501"]
