@@ -260,12 +260,21 @@ verification, not in this repo.
 
 ## 9. Git workflow
 
-- Trunk-based; `main` always releasable; short-lived branches `feat/…`, `fix/…`, `docs/…`.
+- **`main` is for releases only.** It changes only by a release PR from `dev` (or a `release/x.y`
+  or `hotfix/…` branch). Never branch feature work from `main` and never open a feature PR
+  against it.
+- **`dev` is the integration branch.** Create work branches from `dev` and open PRs against `dev`.
+- **Conventional branch names**: `<type>/<kebab-description>` with type one of `feat`, `fix`,
+  `docs`, `ci`, `chore`, `refactor`, `perf`, `test`, `build`, `revert`. Example:
+  `feat/viewer-scope-panel`.
 - **Conventional Commits**, scopes matching the tree: `core`, `gpu`, `mod/<domain>`, `viewer`,
   `proto`, `bridge/<name>`, `io`, `schemas`, `docs`, `ci`, `packaging`.
   Example: `feat(viewer): add waveform scope panel`.
 - **DCO sign-off on every commit** (`git commit -s`).
-- Squash merge via merge queue. Never force-push `main`. Never commit directly to `main`.
+- Squash merge into `dev` (the PR title becomes the commit, so it must be a Conventional Commit).
+  Releases merge `dev` into `main` with a merge commit, so the two branches never diverge.
+- Never force-push `main` or `dev`. Never commit directly to `main` or `dev`.
+- Commit messages carry only the author's sign-off. Do not add tool or AI co-author trailers.
 - Changes to `schemas/`, `core/plugin_abi/`, or `proto/` need an RFC or an explicit note in the
   PR and 2 approvals.
 - No files >1 MB in the repo; large assets go to the separate assets repo/release bundles.
