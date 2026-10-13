@@ -598,6 +598,11 @@ Scorecard workflow, and Renovate grouped weekly.
 The viewer is `lagrange_viewer`, a native C++20 program. It opens real OS windows and draws
 everything on the GPU with Vulkan. There is no browser or web engine involved.
 
+**The UI design is in `docs/design/ui/` and is binding**: shared conventions, design tokens, the
+ImGui theme, and one `SPEC.md` + `reference.png` per screen. Read it before any viewer UI work;
+the rules are in `.claude/rules/viewer-ui.md`. It replaces the earlier panel sketches in
+`docs/design/viewer.md` where they differ.
+
 ### 13.1 Stack
 
 | Concern | Choice |

@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lagrange — Domains and profile</title>
+<style>
+@font-face{font-family:'IBM Plex Sans';src:url(fonts/IBMPlexSans-Regular.woff2) format('woff2');font-weight:400}
+@font-face{font-family:'IBM Plex Sans';src:url(fonts/IBMPlexSans-Medium.woff2) format('woff2');font-weight:500}
+@font-face{font-family:'IBM Plex Sans';src:url(fonts/IBMPlexSans-SemiBold.woff2) format('woff2');font-weight:600}
+@font-face{font-family:'IBM Plex Mono';src:url(fonts/IBMPlexMono-Regular.woff2) format('woff2');font-weight:400}
+@font-face{font-family:'IBM Plex Mono';src:url(fonts/IBMPlexMono-Medium.woff2) format('woff2');font-weight:500}
+/* Lagrange viewer — shared styles for every artboard.
+   These map 1:1 to ImGui style values; see design tokens in the handoff zips. */
+.app{
+--bg0:#070D17;--bg1:#0B1422;--bg2:#101B2C;--bg3:#16243A;--bg4:#1D2E48;
+--ln:#1B293D;--ln2:#2A3F5C;
+--t1:#E6EBF2;--t2:#A9B6C8;--t3:#8190A6;
+--acc:#E8772E;--acc2:rgba(232,119,46,.15);--acc3:rgba(232,119,46,.45);--onacc:#170A01;
+--ok:#3FB97F;--warn:#E5B33B;--err:#F04A4A;--info:#5AA2FF;
+--d-rb:#9AACC6;--d-el:#F5C842;--d-th:#FF7A6B;--d-ae:#5CC8E6;--d-we:#7FA8FF;--d-em:#B48CFF;--d-ra:#9BE15D;--d-se:#3FD1A7;
+--s1:#5AA2FF;--s2:#F5C842;--s3:#FF7A6B;--s4:#3FD1A7;--s5:#B48CFF;--s6:#5CC8E6;--s7:#E8772E;--s8:#9BE15D;
+width:1600px;height:1000px;background:var(--bg0);color:var(--t1);
+font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:13px;line-height:18px;
+display:flex;flex-direction:column;overflow:hidden;position:relative}
+.app *{box-sizing:border-box}
+:where(.app button){font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+.app svg{display:block;flex:none}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;font-variant-numeric:tabular-nums}
+.t1{color:var(--t1)}.t2{color:var(--t2)}.t3{color:var(--t3)}.acc{color:var(--acc)}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.err{color:var(--err)}.info{color:var(--info)}
+.b5{font-weight:500}.b6{font-weight:600}.sm{font-size:12px}.xs{font-size:11px;line-height:14px}
+.row{display:flex;align-items:center;gap:6px;min-width:0}
+.colf{display:flex;flex-direction:column;min-width:0;min-height:0}
+.sp{flex:1}
+.ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ---------- menu bar ---------- */
+.mb{height:28px;flex:none;display:flex;align-items:center;gap:2px;padding:0 8px;background:var(--bg1);border-bottom:1px solid var(--ln)}
+.mb .brand{display:flex;align-items:center;gap:7px;font-weight:600;padding-right:12px;margin-right:4px;border-right:1px solid var(--ln);height:18px;letter-spacing:-.2px}
+.mb .m{padding:3px 8px;border-radius:3px;color:var(--t2)}
+.mb .ctx{color:var(--t3);font-size:12px;display:flex;align-items:center;gap:8px}
+.mb .ctx b{color:var(--t2);font-weight:500}
+
+/* ---------- toolbar: workspaces + sim controls ---------- */
+.tb{height:40px;flex:none;display:flex;align-items:stretch;padding:0 4px 0 6px;background:var(--bg1);border-bottom:1px solid var(--ln)}
+.ws{display:flex;align-items:center;gap:6px;padding:0 10px;color:var(--t2);border-bottom:2px solid transparent;border-top:2px solid transparent;font-weight:500;font-size:12px;white-space:nowrap}
+.ws.on{color:var(--t1);border-bottom-color:var(--acc)}
+.ws.on svg{color:var(--acc)}
+.ctl{display:flex;align-items:center;gap:4px;padding-left:10px;margin-left:6px;border-left:1px solid var(--ln)}
+.btn{height:26px;min-width:26px;padding:0 10px;display:inline-flex;align-items:center;justify-content:center;gap:6px;border-radius:3px;background:var(--bg3);border:1px solid var(--ln2);color:var(--t1);font-weight:500;font-size:12px;white-space:nowrap}
+.app button.btn{background:var(--bg3);border:1px solid var(--ln2)}
+.app button.btn.pri,.btn.pri{background:var(--acc);border-color:var(--acc);color:var(--onacc)}
+.app button.btn.ghost,.btn.ghost{background:transparent;border-color:transparent;color:var(--t2)}
+.app button.btn.on,.btn.on{background:var(--acc2);border-color:var(--acc3);color:var(--acc)}
+.app button.btn.dis,.btn.dis{color:var(--t3);background:transparent}
+.btn.ic{padding:0;width:26px}
+.btn.sm{height:22px;min-width:22px;padding:0 8px;font-size:11px}
+.btn.sm.ic{width:22px;padding:0}
+.ro{height:26px;display:inline-flex;align-items:center;gap:6px;padding:0 8px;border-radius:3px;background:var(--bg0);border:1px solid var(--ln);font-size:12px;white-space:nowrap}
+.ro .k{color:var(--t3);font-size:11px}
+
+/* ---------- domain strip ---------- */
+.ds{height:32px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--bg0);border-bottom:1px solid var(--ln)}
+.ds .lbl{color:var(--t3);font-size:11px;margin-right:2px}
+.chip{height:22px;display:inline-flex;align-items:center;gap:6px;padding:0 9px 0 8px;border-radius:11px;border:1px solid var(--ln2);background:var(--bg2);color:var(--t1);font-size:12px;white-space:nowrap}
+.chip i{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.chip .s{color:var(--t3);font-family:'IBM Plex Mono',monospace;font-size:11px}
+.chip.sub{border-style:dashed;background:transparent;color:var(--t2)}
+.chip.sub i{background:transparent!important;border:1.5px solid var(--t3)}
+.chip.off{border-style:dashed;background:transparent;color:var(--t3)}
+.chip.off i{background:transparent!important;border:1.5px solid var(--t3)}
+.chip.bad{border-color:var(--err);color:var(--err)}
+
+/* ---------- body / panels ---------- */
+.body{flex:1;min-height:0;display:flex;gap:4px;padding:4px}
+.col{display:flex;flex-direction:column;gap:4px;min-width:0;min-height:0}
+.pn{background:var(--bg1);border:1px solid var(--ln);border-radius:3px;display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}
+.ph{height:28px;flex:none;display:flex;align-items:stretch;background:var(--bg2);border-bottom:1px solid var(--ln);padding-left:2px}
+.pt{display:flex;align-items:center;gap:6px;padding:0 10px;color:var(--t3);font-weight:500;font-size:12px;border-top:2px solid transparent;white-space:nowrap}
+.pt.on{color:var(--t1);background:var(--bg1);border-top-color:var(--acc)}
+.ph .tools{display:flex;align-items:center;gap:2px;padding-right:4px;color:var(--t3);margin-left:auto}
+.pb{flex:1;min-height:0;overflow:hidden;padding:8px}
+.pb.np{padding:0}
+.bar{height:32px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;border-bottom:1px solid var(--ln)}
+
+/* ---------- tree ---------- */
+.tr{display:flex;align-items:center;height:22px;gap:6px;padding-right:8px;border-radius:2px;white-space:nowrap;font-size:12px}
+.tr .cv{width:12px;color:var(--t3);flex:none;display:flex;justify-content:center}
+.tr .ic{color:var(--t3);flex:none}
+.tr .nm{color:var(--t1)}
+.tr .ty{color:var(--t3);font-size:11px}
+.tr .bd{margin-left:auto;display:flex;gap:3px;align-items:center}
+.tr .bd i{width:6px;height:6px;border-radius:50%;display:block}
+.tr.sel{background:var(--acc2);box-shadow:inset 2px 0 0 var(--acc)}
+.tr.sel .ic{color:var(--acc)}
+.tr.hov{background:var(--bg3)}
+.tr.dim .nm{color:var(--t3)}
+
+/* ---------- inspector ---------- */
+.sec{border-bottom:1px solid var(--ln)}
+.sh{height:26px;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--bg2);font-weight:600;font-size:12px}
+.sh .v{margin-left:auto;color:var(--t3);font-weight:400;font-family:'IBM Plex Mono',monospace;font-size:11px}
+.kv{display:grid;grid-template-columns:112px minmax(0,1fr);column-gap:8px;row-gap:4px;padding:8px;align-items:center}
+.kv .k{color:var(--t2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fld{height:22px;display:flex;align-items:center;gap:6px;padding:0 6px;background:var(--bg0);border:1px solid var(--ln);border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:12px;min-width:0;white-space:nowrap;overflow:hidden}
+.fld .u{margin-left:auto;color:var(--t3);font-size:11px}
+.fld.ed{border-color:var(--acc3)}
+.fld.ro2{background:transparent;border-color:transparent;padding-left:0}
+.fld.dd{padding-right:4px}
+.fld.dd::after{content:"";width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid var(--t3);margin-left:auto}
+.f3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}
+.ax{font-weight:600;width:8px}
+.ax.x{color:#F0605D}.ax.y{color:#4FC97A}.ax.z{color:#5AA2FF}
+.lnk{color:var(--info)}
+
+/* ---------- tables ---------- */
+.tbl{width:100%;border-collapse:collapse;font-size:12px}
+.tbl th{height:24px;text-align:left;font-weight:500;color:var(--t3);background:var(--bg2);padding:0 8px;border-bottom:1px solid var(--ln);white-space:nowrap;font-size:11px}
+.tbl td{height:23px;padding:0 8px;border-bottom:1px solid var(--ln);white-space:nowrap}
+.tbl tr.sel td{background:var(--acc2)}
+.tbl tr.sel td:first-child{box-shadow:inset 2px 0 0 var(--acc)}
+.tbl .n{text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-variant-numeric:tabular-nums}
+.tbl .m{font-family:'IBM Plex Mono',monospace;font-size:12px}
+
+/* ---------- small widgets ---------- */
+.pill{height:18px;display:inline-flex;align-items:center;gap:4px;padding:0 7px;border-radius:9px;font-size:11px;font-weight:500;background:var(--bg3);color:var(--t2);white-space:nowrap}
+.pill.ok{background:rgba(63,185,127,.14);color:var(--ok)}
+.pill.warn{background:rgba(229,179,59,.14);color:var(--warn)}
+.pill.err{background:rgba(240,74,74,.15);color:var(--err)}
+.pill.acc{background:var(--acc2);color:var(--acc)}
+.pill.info{background:rgba(90,162,255,.14);color:var(--info)}
+.sw{width:28px;height:16px;border-radius:8px;background:var(--bg4);position:relative;flex:none;border:1px solid var(--ln2);display:inline-block}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:var(--t3)}
+.sw.on{background:var(--acc);border-color:var(--acc)}
+.sw.on::after{left:14px;background:var(--onacc)}
+.cb{width:14px;height:14px;border-radius:3px;border:1px solid var(--ln2);background:var(--bg0);flex:none;display:inline-flex;align-items:center;justify-content:center}
+.cb.on{background:var(--acc);border-color:var(--acc)}
+.cb.on::after{content:"";width:7px;height:3px;border-left:2px solid var(--onacc);border-bottom:2px solid var(--onacc);transform:translateY(-1px) rotate(-45deg)}
+.seg{display:inline-flex;border:1px solid var(--ln2);border-radius:3px;overflow:hidden;flex:none}
+.seg span{height:22px;padding:0 8px;display:inline-flex;align-items:center;font-size:11px;color:var(--t2);border-right:1px solid var(--ln2);white-space:nowrap}
+.seg span:last-child{border-right:0}
+.seg span.on{background:var(--acc2);color:var(--acc)}
+.search{height:24px;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--bg0);border:1px solid var(--ln);border-radius:3px;color:var(--t3);font-size:12px;min-width:0}
+.kbd{font-family:'IBM Plex Mono',monospace;font-size:10px;padding:0 4px;border:1px solid var(--ln2);border-radius:2px;color:var(--t3);line-height:14px;white-space:nowrap;flex:none}
+.sw8{width:10px;height:10px;border-radius:2px;flex:none;display:inline-block}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.meter{height:6px;border-radius:3px;background:var(--bg4);overflow:hidden;flex:1;min-width:0}
+.meter b{display:block;height:100%;border-radius:3px}
+.hr{height:1px;background:var(--ln);flex:none}
+.cap{font-size:11px;color:var(--t3);font-weight:500;letter-spacing:.3px}
+
+/* ---------- viewport + overlays ---------- */
+.vp{position:relative;flex:1;min-height:0;background:#091120;overflow:hidden}
+.vp > svg.scene{position:absolute;inset:0;width:100%;height:100%}
+.ov{position:absolute;background:rgba(9,17,32,.88);border:1px solid var(--ln2);border-radius:4px;padding:5px 8px;font-size:12px}
+.ovbar{position:absolute;display:flex;gap:2px;padding:2px;background:rgba(9,17,32,.88);border:1px solid var(--ln2);border-radius:4px}
+.ovbar .b{width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:3px;color:var(--t2)}
+.ovbar .b.on{background:var(--acc2);color:var(--acc)}
+.tip{position:absolute;background:var(--bg2);border:1px solid var(--ln2);border-radius:4px;padding:6px 8px;font-size:12px;box-shadow:0 6px 18px rgba(0,0,0,.45)}
+
+/* ---------- plots ---------- */
+.plot{position:relative;background:var(--bg0);border:1px solid var(--ln);border-radius:3px;overflow:hidden}
+.plot > svg{position:absolute;inset:0;width:100%;height:100%}
+.plot .ttl{position:absolute;left:8px;top:5px;display:flex;align-items:center;gap:10px;font-size:11px;color:var(--t2)}
+.plot .ttl b{color:var(--t1);font-weight:600}
+.lg{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.lg i{width:12px;height:2px;border-radius:1px;display:inline-block}
+
+/* ---------- status bar ---------- */
+.sb{height:24px;flex:none;display:flex;align-items:center;gap:16px;padding:0 10px;background:var(--bg1);border-top:1px solid var(--ln);font-size:11px;color:var(--t2);white-space:nowrap}
+.sb .it{display:flex;align-items:center;gap:6px}
+.sb .k{color:var(--t3)}
+
+/* ---------- node graph ---------- */
+.node{position:absolute;background:var(--bg2);border:1px solid var(--ln2);border-radius:4px;font-size:12px;overflow:hidden}
+.node .nh{height:24px;display:flex;align-items:center;gap:6px;padding:0 8px;font-weight:600;border-bottom:1px solid var(--ln)}
+.node .nb{padding:6px 8px;display:flex;flex-direction:column;gap:3px}
+.node.sel{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.node.sub{border-style:dashed;background:var(--bg1)}
+.port{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--t2);white-space:nowrap}
+.port i{width:7px;height:7px;border-radius:50%;border:1.5px solid var(--t3);display:inline-block;flex:none}
+
+/* ---------- code ---------- */
+.code{font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:19px;white-space:pre;color:var(--t2)}
+.code .ln{color:#4A5B74;display:inline-block;width:26px;text-align:right;margin-right:12px}
+.code .k{color:#8FB8FF}.code .s{color:#9BD39B}.code .n{color:#F5C842}.code .b{color:#E8772E}.code .c{color:#6E7F98}
+.code .add{background:rgba(63,185,127,.10)}
+.code .rm{background:rgba(240,74,74,.10)}
+
+
+body{margin:0;background:#070D17}
+.dr{display:grid;grid-template-columns:4px 150px 30px minmax(0,1fr) 70px 62px;align-items:center;gap:0 10px;height:50px;padding-right:10px;border-bottom:1px solid #1B293D}
+.dr .bar4{width:4px;height:100%}
+.dr .nm{display:flex;flex-direction:column;min-width:0}
+.dr .nm b{font-weight:600;font-size:13px}
+.dr .nm span{font-size:11px;color:#8190A6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dr.sel{background:rgba(232,119,46,.08)}
+.dr.na{opacity:.5}
+.mr{display:grid;grid-template-columns:4px 150px 30px minmax(0,1fr) 70px 62px;align-items:center;gap:0 10px;height:30px;padding-right:10px;border-bottom:1px solid #1B293D;font-size:12px}
+.dh{display:grid;grid-template-columns:4px 150px 30px minmax(0,1fr) 70px 62px;gap:0 10px;height:24px;align-items:center;padding-right:10px;background:#101B2C;border-bottom:1px solid #1B293D;font-size:11px;color:#8190A6;font-weight:500}
+.el{font-family:'IBM Plex Mono',monospace;font-size:10px;fill:#A9B6C8}
+
+</style>
+</head>
+<body>
+<div class="app">
+
+<div class="mb">
+<div class="brand"><svg width="16" height="16" viewBox="0 0 120 120" aria-hidden="true"><path d="M34 18 V86 H102" fill="none" stroke="#E6EBF2" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="68" cy="27.1" r="11" fill="#E8772E"></circle></svg>Lagrange</div>
+<button class="m">File</button><button class="m">Edit</button><button class="m">View</button><button class="m">Simulation</button><button class="m">Tools</button><button class="m">Window</button><button class="m">Help</button>
+<div class="sp"></div>
+<div class="ctx"><span>stage <b>warehouse_a.usda</b></span><span>robot <b>amr_diffdrive</b></span><span>profile <b>rain_night.yaml</b></span><span class="pill acc">2 changes</span><span class="kbd">Ctrl K</span></div>
+</div>
+
+<div class="tb">
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8l5.6 3.1v6.2L8 14.2l-5.6-3.1V4.9z M2.4 4.9L8 8l5.6-3.1 M8 8v6.2"></path></svg>Scene</button>
+<button class="ws on"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11 M2.5 8h11 M2.5 12h11"></path><circle cx="6" cy="4" r="1.6" fill="#0B1422"></circle><circle cx="10.5" cy="8" r="1.6" fill="#0B1422"></circle><circle cx="5" cy="12" r="1.6" fill="#0B1422"></circle></svg>Domains</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M9 1.5L3.5 9H8l-1 5.5L12.5 7H8z"></path></svg>Electrical</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 8h2.2l1.6-4.5 3 9 2-6.5 1.5 2h2.7"></path></svg>Signals</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M8 8l4.6-4.6 M14 8A6 6 0 1 1 8 2 M11 8a3 3 0 1 1-3-3"></path></svg>Sensors</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.6 9.5a3 3 0 0 1 .3-6 3.6 3.6 0 0 1 6.8 1.1 2.5 2.5 0 0 1-.2 4.9z M5.5 11.5l-.8 2 M8.5 11.5l-.8 2 M11.5 11.5l-.8 2"></path></svg>Environment</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9 M2.5 2.5v3h3 M7 5.8v4.4l3.2-2.2z"></path></svg>Replay</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="4" cy="4" r="1.7"></circle><circle cx="12" cy="4" r="1.7"></circle><circle cx="8" cy="12" r="1.7"></circle><path d="M5.7 4h4.6 M4.9 5.5L7.1 10.5 M11.1 5.5L8.9 10.5"></path></svg>ROS 2</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><path d="M2 8h12 M8 2c2.2 2.2 2.2 9.8 0 12 M8 2c-2.2 2.2-2.2 9.8 0 12"></path></svg>World</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M2.5 11.5a5.5 5.5 0 1 1 11 0 M8 11.5l3-4"></path></svg>Performance</button>
+<div class="sp"></div>
+<div class="ctl">
+<button class="btn ic" aria-label="Reset run"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8a4.5 4.5 0 1 0 1.3-3.2 M3.5 2.8v2.6h2.6"></path></svg></button>
+<button class="btn pri" aria-label="Pause"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5.5 3.5v9 M10.5 3.5v9"></path></svg>Pause</button>
+<button class="btn ic" aria-label="Step one tick"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.5 3.5v9l6.5-4.5z"></path><rect x="11" y="3.5" width="1.8" height="9" rx=".5"></rect></svg></button>
+<div class="ro"><span class="k">sim t</span><span class="mono">00:03.413</span></div>
+<div class="ro"><span class="k">RTF</span><span class="mono">1.00×</span><span class="k">/ 1.00</span></div>
+<div class="ro"><span class="k">lockstep</span><span class="ok mono">on</span></div>
+<button class="btn" aria-label="Start recording"><span class="dot" style="background: #F04A4A"></span>Record</button>
+</div>
+</div>
+
+<div class="ds">
+<span class="lbl">Domains</span>
+<span class="chip"><i style="background: #9AACC6"></i>Rigid body<span class="s">physx · 1 ms</span></span>
+<span class="chip"><i style="background: #F5C842"></i>Electrical<span class="s">averaged · 100 µs</span></span>
+<span class="chip"><i style="background: #FF7A6B"></i>Thermal<span class="s">100 ms</span></span>
+<span class="chip sub" style="border-color: #E8772E; color: #E8772E"><i></i>Aero<span class="s">→ zero · pending</span></span>
+<span class="chip"><i style="background: #7FA8FF"></i>Weather<span class="s">rain 25 mm/h</span></span>
+<span class="chip"><i style="background: #B48CFF"></i>EMI<span class="s">3 couplings</span></span>
+<span class="chip off"><i></i>Radiation<span class="s">→ zero</span></span>
+<span class="chip"><i style="background: #3FD1A7"></i>Sensors<span class="s">6 active</span></span>
+<div class="sp"></div>
+<span class="pill ok"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3 3 7-7"></path></svg>preview wiring: 23 / 23 OK</span>
+</div>
+
+<div class="body">
+
+<div class="col" style="width: 520px">
+<div class="pn" style="flex: 1">
+<div class="ph"><span class="pt on">Domains</span><span class="pt">Modules · 5</span><div class="tools"><span class="xs t3" style="margin-right: 6px">est. cost per 1 ms of sim time</span></div></div>
+<div class="pb np" style="display: flex; flex-direction: column">
+<div class="dh"><span></span><span>domain</span><span>on</span><span>mode · substitute when off</span><span>step</span><span style="text-align: right">cost</span></div>
+<div class="dr"><span class="bar4" style="background: #9AACC6"></span><div class="nm"><b>Rigid body</b><span>contacts, joints</span></div><span class="sw on"></span><div class="fld dd">PhysX 5 · CPU</div><div class="fld">1<span class="u">ms</span></div><span class="mono" style="text-align: right">0.31 ms</span></div>
+<div class="dr"><span class="bar4" style="background: #F5C842"></span><div class="nm"><b>Electrical</b><span>battery, motors, bus</span></div><span class="sw on"></span><div class="fld dd">averaged · FMU</div><div class="fld">100<span class="u">µs</span></div><span class="mono" style="text-align: right">0.12 ms</span></div>
+<div class="dr"><span class="bar4" style="background: #FF7A6B"></span><div class="nm"><b>Thermal</b><span>lumped · 14 nodes</span></div><span class="sw on"></span><div class="fld dd">lumped network</div><div class="fld">100<span class="u">ms</span></div><span class="mono t3" style="text-align: right">&lt;0.01</span></div>
+<div class="dr sel"><span class="bar4" style="background: #E8772E"></span><div class="nm"><b>Aerodynamics</b><span class="acc">off · pending apply</span></div><span class="sw"></span><div class="fld dd" style="border-color: rgba(232,119,46,.45)">→ zero force</div><div class="fld ro2 t3">—</div><span class="mono acc" style="text-align: right">−0.04</span></div>
+<div class="dr"><span class="bar4" style="background: #7FA8FF"></span><div class="nm"><b>Weather</b><span>rain 25 mm/h · fog 40 m</span></div><span class="sw on"></span><div class="fld dd">GPU scattering</div><div class="fld">frame</div><span class="mono" style="text-align: right">0.40 gpu</span></div>
+<div class="dr"><span class="bar4" style="background: #B48CFF"></span><div class="nm"><b>EMI</b><span>3 sources · 3 couplings</span></div><span class="sw on"></span><div class="fld dd">baked + coupling</div><div class="fld">10<span class="u">ms</span></div><span class="mono" style="text-align: right">0.05 ms</span></div>
+<div class="dr"><span class="bar4" style="background: #9BE15D; opacity: .5"></span><div class="nm"><b>Radiation</b><span>no sources in stage</span></div><span class="sw"></span><div class="fld dd">→ zero dose</div><div class="fld ro2 t3">—</div><span class="mono t3" style="text-align: right">0</span></div>
+<div class="dr"><span class="bar4" style="background: #3FD1A7"></span><div class="nm"><b>Sensors</b><span>6 sensors</span></div><span class="sw on"></span><div class="fld dd">ray traced</div><div class="fld">varies</div><span class="mono" style="text-align: right">2.1 gpu</span></div>
+<div style="padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid #1B293D">
+<div class="row"><span class="b6 sm">Aerodynamics substitute</span><span class="pill warn" style="margin-left: 4px">affects 1 consumer</span></div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px">
+<button class="srvx" style="display: flex; flex-direction: column; gap: 2px; padding: 8px; border: 1px solid #E8772E; border-radius: 4px; background: rgba(232,119,46,.08)"><span class="sm b5">ideal · zero force</span><span class="xs t3">no drag on any link</span></button>
+<button style="display: flex; flex-direction: column; gap: 2px; padding: 8px; border: 1px solid #2A3F5C; border-radius: 4px"><span class="sm b5">constant wrench</span><span class="xs t3">fixed force per link</span></button>
+<button style="display: flex; flex-direction: column; gap: 2px; padding: 8px; border: 1px solid #2A3F5C; border-radius: 4px"><span class="sm b5">replay from MCAP</span><span class="xs t3">recorded wrench channel</span></button>
+</div>
+<div class="row xs t2"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="#5CC8E6" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2 8h10 M9 5l3 3-3 3"></path></svg><span class="mono">rigid_body.link/*/ext_wrench</span><span class="t3">[N, N·m] will read from the substitute</span></div>
+</div>
+<div class="sh" style="height: 26px"><span class="t3">▾</span>Additional modules<span class="v">from robot class</span></div>
+<div class="mr"><span class="bar4" style="background: #B48CFF"></span><span>comms</span><span class="sw on"></span><div class="fld dd">path loss + EMI</div><div class="fld">10<span class="u">ms</span></div><span class="mono" style="text-align: right">0.02 ms</span></div>
+<div class="mr"><span class="bar4" style="background: #8190A6"></span><span>traffic</span><span class="sw"></span><div class="fld dd">→ none</div><div class="fld ro2 t3">—</div><span class="mono t3" style="text-align: right">0</span></div>
+<div class="mr" style="opacity: .5"><span class="bar4" style="background: #8190A6"></span><span>vehicle_dynamics</span><span></span><span class="xs t3">not used by amr_diffdrive</span><span></span><span></span></div>
+<div class="mr" style="opacity: .5"><span class="bar4" style="background: #8190A6"></span><span>rotor_aero</span><span></span><span class="xs t3">not used by amr_diffdrive</span><span></span><span></span></div>
+<div class="mr" style="opacity: .5"><span class="bar4" style="background: #8190A6"></span><span>hydrodynamics</span><span></span><span class="xs t3">not used by amr_diffdrive</span><span></span><span></span></div>
+<div class="sp"></div>
+<div class="row" style="padding: 8px 10px; border-top: 1px solid #1B293D; background: #101B2C"><span class="xs t3">est. 0.59 ms CPU per 1 ms of sim · GPU 2.5 ms per sensor frame · fits real time</span></div>
+</div>
+</div>
+</div>
+
+<div class="col" style="flex: 1">
+<div class="pn" style="flex: 1">
+<div class="ph"><span class="pt on">Wiring</span><span class="pt">Unit checks</span><div class="tools"><span class="pill acc">preview — not applied</span></div></div>
+<div class="pb np" style="position: relative; background: #070D17">
+<svg width="640" height="440" viewBox="0 0 640 440" style="position: absolute; left: 0; top: 0" aria-hidden="true">
+<g stroke="#2A3F5C" stroke-width="1.5" fill="none">
+<path d="M88 98 V166"></path>
+<path d="M164 200 H252"></path>
+<path d="M252 236 H164"></path>
+<path d="M64 256 V332"></path>
+<path d="M112 332 V256"></path>
+<path d="M328 98 V166" stroke="#E8772E" stroke-dasharray="5 4"></path>
+<path d="M404 218 H476"></path>
+<path d="M552 98 V166"></path>
+<path d="M552 332 V256"></path>
+<path d="M476 380 H404"></path>
+</g>
+<g fill="#2A3F5C">
+<polygon points="88,166 84,158 92,158"></polygon>
+<polygon points="252,200 244,196 244,204"></polygon>
+<polygon points="164,236 172,232 172,240"></polygon>
+<polygon points="64,332 60,324 68,324"></polygon>
+<polygon points="112,256 108,264 116,264"></polygon>
+<polygon points="328,166 324,158 332,158" fill="#E8772E"></polygon>
+<polygon points="476,218 468,214 468,222"></polygon>
+<polygon points="552,166 548,158 556,158"></polygon>
+<polygon points="552,256 548,264 556,264"></polygon>
+<polygon points="404,380 412,376 412,384"></polygon>
+</g>
+<g class="el">
+<text x="94" y="136">cmd τ · N·m</text>
+<text x="176" y="194">τ · N·m</text>
+<text x="176" y="250">ω · rad/s</text>
+<text x="4" y="305">P · W</text>
+<text x="118" y="305">T · K</text>
+<text x="334" y="136" fill="#E8772E">F,τ · zero</text>
+<text x="410" y="212">pose · m</text>
+<text x="558" y="136">σ · 1/m</text>
+<text x="558" y="305">B · T</text>
+<text x="412" y="374">N₀ · dBm</text>
+</g>
+<rect x="176" y="208" width="66" height="16" rx="8" fill="#16243A" stroke="#2A3F5C"></rect>
+<text x="183" y="220" font-family="IBM Plex Sans, sans-serif" font-size="10" fill="#E5B33B">stiff · implicit</text>
+</svg>
+<div class="node" style="left: 12px; top: 14px; width: 152px"><div class="nh"><i class="dot" style="background: #8190A6"></i>ros2_control<span class="sp"></span><span class="xs t3">bridge</span></div><div class="nb mono xs t2"><span>out cmd τ ×2</span><span class="t3">from diff_drive_controller</span></div></div>
+<div class="node" style="left: 12px; top: 166px; width: 152px"><div class="nh"><i class="dot" style="background: #F5C842"></i>electrical<span class="sp"></span><span class="pill" style="height: 16px">averaged</span></div><div class="nb mono xs t2"><span>in  cmd τ, ω, T</span><span>out τ, P, V_bus</span><span class="t3">100 µs · FMU ×3</span></div></div>
+<div class="node" style="left: 12px; top: 332px; width: 152px"><div class="nh"><i class="dot" style="background: #FF7A6B"></i>thermal</div><div class="nb mono xs t2"><span>in  P, sun, wet</span><span>out T ×14</span><span class="t3">100 ms</span></div></div>
+<div class="node sub" style="left: 252px; top: 14px; width: 152px; border-color: #E8772E"><div class="nh" style="color: #E8772E"><i class="dot" style="border: 1.5px solid #E8772E"></i>aero → zero<span class="sp"></span><span class="xs">sub</span></div><div class="nb mono xs t2"><span>out F, τ per link</span><span class="t3">replaces drag + field</span></div></div>
+<div class="node" style="left: 252px; top: 166px; width: 152px"><div class="nh"><i class="dot" style="background: #9AACC6"></i>rigid_body<span class="sp"></span><span class="pill" style="height: 16px">physx</span></div><div class="nb mono xs t2"><span>in  τ, F_ext, μ_wet</span><span>out ω, pose, contacts</span><span class="t3">1 ms</span></div></div>
+<div class="node" style="left: 252px; top: 348px; width: 152px"><div class="nh"><i class="dot" style="background: #B48CFF"></i>comms</div><div class="nb mono xs t2"><span>in  N₀, pose</span><span>out loss %, latency</span></div></div>
+<div class="node" style="left: 476px; top: 14px; width: 152px"><div class="nh"><i class="dot" style="background: #7FA8FF"></i>weather</div><div class="nb mono xs t2"><span>out σ_fog, R_rain</span><span>out μ_wet</span></div></div>
+<div class="node" style="left: 476px; top: 166px; width: 152px"><div class="nh"><i class="dot" style="background: #3FD1A7"></i>sensors<span class="sp"></span><span class="pill" style="height: 16px">RT</span></div><div class="nb mono xs t2"><span>in  pose, σ, R, B</span><span>out 6 streams</span><span class="t3">per-sensor rate</span></div></div>
+<div class="node" style="left: 476px; top: 332px; width: 152px"><div class="nh"><i class="dot" style="background: #B48CFF"></i>emi</div><div class="nb mono xs t2"><span>in  I_motor, pose</span><span>out B, N₀</span><span class="t3">10 ms</span></div></div>
+</div>
+</div>
+<div class="pn" style="height: 268px; flex: none">
+<div class="ph"><span class="pt on">Schedule</span><span class="pt">Coupling</span><div class="tools"><span class="xs t3" style="margin-right: 4px">10 ms window · sync every 1 ms</span></div></div>
+<div class="pb" style="padding: 8px 10px">
+<svg width="620" height="200" viewBox="0 0 620 200" aria-hidden="true" font-family="IBM Plex Sans, sans-serif">
+<g font-size="11" fill="#A9B6C8">
+<text x="0" y="24">electrical</text><text x="0" y="50">rigid_body</text><text x="0" y="76">imu</text><text x="0" y="102">emi · comms</text><text x="0" y="128">camera</text><text x="0" y="154">thermal</text>
+</g>
+<g stroke="#1B293D"><line x1="96" y1="4" x2="96" y2="166"></line><line x1="148" y1="4" x2="148" y2="166"></line><line x1="200" y1="4" x2="200" y2="166"></line><line x1="252" y1="4" x2="252" y2="166"></line><line x1="304" y1="4" x2="304" y2="166"></line><line x1="356" y1="4" x2="356" y2="166"></line><line x1="408" y1="4" x2="408" y2="166"></line><line x1="460" y1="4" x2="460" y2="166"></line><line x1="512" y1="4" x2="512" y2="166"></line><line x1="564" y1="4" x2="564" y2="166"></line><line x1="616" y1="4" x2="616" y2="166"></line></g>
+<rect x="96" y="14" width="520" height="14" fill="#F5C842" opacity=".18"></rect>
+<path d="M96 14v14M101.2 14v14M106.4 14v14M111.6 14v14M116.8 14v14M122 14v14M127.2 14v14M132.4 14v14M137.6 14v14M142.8 14v14M148 14v14M153.2 14v14M158.4 14v14M163.6 14v14M168.8 14v14M174 14v14M179.2 14v14M184.4 14v14M189.6 14v14M194.8 14v14M200 14v14M205.2 14v14M210.4 14v14M215.6 14v14M220.8 14v14M226 14v14M231.2 14v14M236.4 14v14M241.6 14v14M246.8 14v14M252 14v14M257.2 14v14M262.4 14v14M267.6 14v14M272.8 14v14M278 14v14M283.2 14v14M288.4 14v14M293.6 14v14M298.8 14v14M304 14v14M309.2 14v14M314.4 14v14M319.6 14v14M324.8 14v14M330 14v14M335.2 14v14M340.4 14v14M345.6 14v14M350.8 14v14M356 14v14M361.2 14v14M366.4 14v14M371.6 14v14M376.8 14v14M382 14v14M387.2 14v14M392.4 14v14M397.6 14v14M402.8 14v14M408 14v14M413.2 14v14M418.4 14v14M423.6 14v14M428.8 14v14M434 14v14M439.2 14v14M444.4 14v14M449.6 14v14M454.8 14v14M460 14v14M465.2 14v14M470.4 14v14M475.6 14v14M480.8 14v14M486 14v14M491.2 14v14M496.4 14v14M501.6 14v14M506.8 14v14M512 14v14M517.2 14v14M522.4 14v14M527.6 14v14M532.8 14v14M538 14v14M543.2 14v14M548.4 14v14M553.6 14v14M558.8 14v14M564 14v14M569.2 14v14M574.4 14v14M579.6 14v14M584.8 14v14M590 14v14M595.2 14v14M600.4 14v14M605.6 14v14M610.8 14v14" stroke="#F5C842" stroke-width="1"></path>
+<g fill="#9AACC6"><rect x="97" y="40" width="16" height="14" rx="2"></rect><rect x="149" y="40" width="16" height="14" rx="2"></rect><rect x="201" y="40" width="17" height="14" rx="2"></rect><rect x="253" y="40" width="16" height="14" rx="2"></rect><rect x="305" y="40" width="16" height="14" rx="2"></rect><rect x="357" y="40" width="18" height="14" rx="2"></rect><rect x="409" y="40" width="16" height="14" rx="2"></rect><rect x="461" y="40" width="16" height="14" rx="2"></rect><rect x="513" y="40" width="16" height="14" rx="2"></rect><rect x="565" y="40" width="16" height="14" rx="2"></rect></g>
+<g fill="#3FD1A7"><rect x="96" y="66" width="4" height="14" rx="1"></rect><rect x="226" y="66" width="4" height="14" rx="1"></rect><rect x="356" y="66" width="4" height="14" rx="1"></rect><rect x="486" y="66" width="4" height="14" rx="1"></rect><rect x="616" y="66" width="4" height="14" rx="1"></rect></g>
+<g fill="#B48CFF"><rect x="96" y="92" width="10" height="14" rx="2"></rect></g>
+<text x="112" y="103" font-size="10" fill="#8190A6">next at 10 ms</text>
+<g fill="#3FD1A7"><rect x="96" y="118" width="24" height="14" rx="2" opacity=".6"></rect></g>
+<text x="126" y="129" font-size="10" fill="#8190A6">GPU · next frame at 33.3 ms</text>
+<text x="96" y="155" font-size="10" fill="#8190A6">next at 100 ms</text>
+<g font-family="IBM Plex Mono, monospace" font-size="10" fill="#8190A6"><text x="92" y="186">0</text><text x="194" y="186">2</text><text x="298" y="186">4</text><text x="402" y="186">6</text><text x="506" y="186">8</text><text x="606" y="186">10</text></g>
+<line x1="96" y1="172" x2="616" y2="172" stroke="#2A3F5C"></line>
+</svg>
+</div>
+</div>
+</div>
+
+<div class="col" style="width: 420px">
+<div class="pn" style="flex: 1">
+<div class="ph"><span class="pt on">Profile</span><span class="pt">Diff · 2</span><span class="pt">Schema</span></div>
+<div class="bar"><span class="mono sm">profiles/rain_night.yaml</span><div class="sp"></div><span class="pill ok">✓ valid · schema v1</span></div>
+<div class="pb" style="padding: 8px 0; background: #070D17">
+<div class="code" style="font-size: 11px; line-height: 18px"><span class="ln">1</span><span class="c"># Lagrange simulation profile</span>
+<span class="ln">2</span><span class="k">stage</span>: <span class="s">worlds/warehouse_a.usda</span>
+<span class="ln">3</span><span class="k">environment</span>: <span class="s">environments/heavy_rain_night.usda</span>
+<span class="ln">4</span>
+<span class="ln">5</span><span class="k">domains</span>:
+<span class="ln">6</span>  <span class="k">rigid_body</span>: &#123;<span class="k">enabled</span>: <span class="b">true</span>, <span class="k">backend</span>: physx, <span class="k">dt</span>: <span class="n">0.001</span>&#125;
+<span class="ln">7</span>  <span class="k">electrical</span>: &#123;<span class="k">enabled</span>: <span class="b">true</span>, <span class="k">fidelity</span>: averaged,
+<span class="ln">8</span>               <span class="k">dt</span>: <span class="n">0.0001</span>&#125;
+<span class="ln">9</span>  <span class="k">thermal</span>: &#123;<span class="k">enabled</span>: <span class="b">true</span>, <span class="k">dt</span>: <span class="n">0.1</span>&#125;
+<span class="rm"><span class="ln">−</span>  <span class="k">aerodynamics</span>: &#123;<span class="k">enabled</span>: <span class="b">true</span>,</span>
+<span class="rm"><span class="ln">−</span>                 <span class="k">fidelity</span>: drag_plus_field&#125;</span>
+<span class="add"><span class="ln">10</span>  <span class="k">aerodynamics</span>: &#123;<span class="k">enabled</span>: <span class="b">false</span>, <span class="k">substitute</span>: zero&#125;</span>
+<span class="ln">11</span>  <span class="k">weather</span>: &#123;<span class="k">enabled</span>: <span class="b">true</span>&#125;
+<span class="ln">12</span>  <span class="k">emi</span>: &#123;<span class="k">enabled</span>: <span class="b">true</span>,
+<span class="ln">13</span>        <span class="k">coupling</span>: [magnetometer, can_bus, wifi]&#125;
+<span class="ln">14</span>  <span class="k">radiation</span>: &#123;<span class="k">enabled</span>: <span class="b">false</span>, <span class="k">substitute</span>: zero&#125;
+<span class="ln">15</span>  <span class="k">sensors</span>: &#123;<span class="k">enabled</span>: <span class="b">true</span>&#125;
+<span class="ln">16</span>
+<span class="ln">17</span><span class="k">modules</span>:
+<span class="ln">18</span>  <span class="k">comms</span>: &#123;<span class="k">enabled</span>: <span class="b">true</span>, <span class="k">dt</span>: <span class="n">0.01</span>&#125;
+<span class="ln">19</span>  <span class="k">traffic</span>: &#123;<span class="k">enabled</span>: <span class="b">false</span>, <span class="k">substitute</span>: none&#125;
+<span class="ln">20</span>
+<span class="ln">21</span><span class="k">views</span>: [physics_3d, electrical_schematic, waveforms]
+<span class="rm"><span class="ln">−</span><span class="k">record</span>: &#123;<span class="k">format</span>: mcap, <span class="k">path</span>: <span class="s">runs/run_001.mcap</span>&#125;</span>
+<span class="add"><span class="ln">22</span><span class="k">record</span>: &#123;<span class="k">format</span>: mcap, <span class="k">path</span>: <span class="s">runs/run_002.mcap</span>&#125;</span></div>
+</div>
+<div style="padding: 10px; border-top: 1px solid #1B293D; display: flex; flex-direction: column; gap: 8px; background: #101B2C">
+<div class="row xs"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#E5B33B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2L1.5 13.5h13z M8 6.5v3.2 M8 11.6v.3"></path></svg><span class="t2">Applying rebuilds the wiring and restarts the run at t = 0.</span></div>
+<div class="row"><button class="btn sm">Revert</button><button class="btn sm">Save as…</button><button class="btn sm">Save<span class="kbd" style="margin-left: 4px">Ctrl S</span></button><div class="sp"></div><button class="btn sm pri">Apply and restart</button></div>
+</div>
+</div>
+</div>
+
+</div>
+
+<div class="sb">
+<span class="it"><span class="dot" style="background: #3FB97F"></span>Connected</span>
+<span class="it"><span class="k">server</span>lagrange_mock_server 0.1.0 · localhost · shm</span>
+<span class="it"><span class="k">signals</span><span class="mono">214</span></span>
+<span class="it"><span class="k">deltas</span><span class="mono">117/s</span></span>
+<span class="it"><span class="k">dropped</span><span class="mono">0</span></span>
+<div class="sp"></div>
+<span class="it"><span class="k">GPU</span>RTX 4060 Laptop · Tier 2</span>
+<span class="it"><span class="k">viewer</span><span class="mono">8.4 ms · 119 fps</span></span>
+<span class="it"><span class="k">ROS 2</span>lyrical · domain 0 · fastrtps</span>
+</div>
+
+</div>
+</body>
+</html>
