@@ -102,6 +102,7 @@ add_library(
     panels/src/ScenePanel.cpp
     panels/src/ScopePanel.cpp
     panels/src/ScopePlots.cpp
+    panels/src/SensorsPanels.cpp
     panels/src/SignalsPanel.cpp
     panels/src/TimelinePanel.cpp
     panels/src/ViewportPanel.cpp

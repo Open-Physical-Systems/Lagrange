@@ -24,6 +24,8 @@ DT_THERMAL = 100_000_000  # 10 Hz
 # Robot (illustrative values from the sample AMR).
 WHEEL_RADIUS = 0.08  # m
 WHEEL_SEPARATION = 0.50  # m
+IMU_ACCEL_NOISE = 0.05  # m/s², white, per sample: a typical MEMS IMU at 1 kHz
+IMU_GYRO_NOISE = 0.004  # rad/s
 ROBOT_MASS = 191.1  # kg: the 41.1 kg robot carrying a 150 kg load
 YAW_INERTIA = 12.0  # kg·m², rough box estimate with the load
 GEAR_RATIO = 20.0
@@ -314,6 +316,9 @@ def generate_sample(duration_s: float = PATH_PERIOD, seed: int = 1) -> Recording
         ("ground", NO_PARENT, "Mesh", [], 3, 2),
         # Appended so that the ids above stay what the tests and bindings expect.
         ("computer", 5, "Xform", ["PortAPI_1:dc_in"], NO_PARENT, NO_PARENT),
+        ("sensors", 0, "Scope", [], NO_PARENT, NO_PARENT),
+        ("lidar_front", 12, "Lidar", ["SensorLidarAPI_1"], NO_PARENT, NO_PARENT),
+        ("imu", 12, "Imu", ["SensorImuAPI_1"], NO_PARENT, NO_PARENT),
     ]
     paths: list[str] = []
     snapshot = scene_pb2.SceneSnapshot(sequence=1, stage_path="synthetic:amr_figure_eight")
@@ -371,6 +376,10 @@ def generate_sample(duration_s: float = PATH_PERIOD, seed: int = 1) -> Recording
         ("motor/left_drive_motor/current_dc", scalar, units.AMPERE, DT_ELECTRICAL, dc_left, "electrical", 8),
         ("motor/right_drive_motor/current_dc", scalar, units.AMPERE, DT_ELECTRICAL, dc_right, "electrical", 9),
         ("load/computer/current", scalar, units.AMPERE, DT_ELECTRICAL, dc_computer, "electrical", 11),
+        # What the IMU measures in the robot's frame: forward and sideways acceleration, turn rate.
+        ("sensor/imu/accel_x", scalar, units.METRE_PER_SECOND_SQUARED, DT_MECHANICAL, accel + rng.normal(0.0, IMU_ACCEL_NOISE, n_mech), "sensors", 14),
+        ("sensor/imu/accel_y", scalar, units.METRE_PER_SECOND_SQUARED, DT_MECHANICAL, speed * yaw_rate + rng.normal(0.0, IMU_ACCEL_NOISE, n_mech), "sensors", 14),
+        ("sensor/imu/gyro_z", scalar, units.RADIAN_PER_SECOND, DT_MECHANICAL, yaw_rate + rng.normal(0.0, IMU_GYRO_NOISE, n_mech), "sensors", 14),
     ]
     signals = []
     for signal_id, (name, kind, unit, dt, data, writer, prim) in enumerate(specs):
@@ -386,7 +395,8 @@ def generate_sample(duration_s: float = PATH_PERIOD, seed: int = 1) -> Recording
     bindings = {1: "body/base_link/pose", 2: "body/left_wheel/pose", 3: "body/right_wheel/pose",
                 4: "body/caster/pose", 0: "body/base_link/pose", 5: "body/base_link/pose",
                 6: "body/base_link/pose", 7: "body/base_link/pose", 8: "body/left_wheel/pose",
-                9: "body/right_wheel/pose", 11: "body/base_link/pose"}
+                9: "body/right_wheel/pose", 11: "body/base_link/pose",
+                12: "body/base_link/pose", 13: "body/base_link/pose", 14: "body/base_link/pose"}
     by_name = {s.info.name: s for s in signals}
     transforms = bytearray()
     for prim_id in range(len(prim_specs)):

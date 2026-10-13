@@ -47,8 +47,8 @@ constexpr std::array<WorkspaceEntry, 10> kWorkspaces{{
      ImGuiKey_3, "Ctrl+3", "04-electrical"},
     {Workspace::Signals, "Signals", widgets::Icon::Signals, "lagrange-dock-signals-3", ImGuiKey_4,
      "Ctrl+4", "05-signals"},
-    {Workspace::Sensors, "Sensors", widgets::Icon::Sensors, nullptr, ImGuiKey_5, "Ctrl+5",
-     "06-sensors"},
+    {Workspace::Sensors, "Sensors", widgets::Icon::Sensors, "lagrange-dock-sensors-1", ImGuiKey_5,
+     "Ctrl+5", "06-sensors"},
     {Workspace::Environment, "Environment", widgets::Icon::Environment, nullptr, ImGuiKey_6,
      "Ctrl+6", "07-environment"},
     {Workspace::Replay, "Replay", widgets::Icon::Replay, nullptr, ImGuiKey_7, "Ctrl+7",
@@ -113,6 +113,18 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         ImGui::DockBuilderDockWindow("Schematic", centre);
         ImGui::DockBuilderDockWindow("Scopes", scopes);
         ImGui::DockBuilderDockWindow("###InspectorElectrical", right);
+    } else if (workspace == Workspace::Sensors) {
+        // Design: sensor list 260 px left, Degradation 320 px right, sensor views between.
+        const ImGuiID left = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Left, fraction(260.0F, size.x), nullptr, &centre);
+        const ImGuiID right = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Right, fraction(320.0F, size.x - px(260.0F)), nullptr, &centre);
+        const ImGuiID imu =
+            ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.40F, nullptr, &centre);
+        ImGui::DockBuilderDockWindow("###SensorList", left);
+        ImGui::DockBuilderDockWindow("###Lidar", centre);
+        ImGui::DockBuilderDockWindow("###Imu", imu);
+        ImGui::DockBuilderDockWindow("Degradation", right);
     } else if (workspace == Workspace::Domains) {
         // Design: Domains 520 px on the left, Profile on the right. The wiring and schedule
         // panels that sit between them are not built yet, so Profile takes that room for now.
@@ -678,6 +690,9 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
     panels.push_back(createCursorsPanel());
     panels.push_back(createStatisticsPanel());
     for (std::unique_ptr<Panel>& panel : createElectricalPanels()) {
+        panels.push_back(std::move(panel));
+    }
+    for (std::unique_ptr<Panel>& panel : createSensorsPanels()) {
         panels.push_back(std::move(panel));
     }
     panels.push_back(createElectricalInspectorPanel());

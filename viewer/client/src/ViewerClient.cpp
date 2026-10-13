@@ -6,6 +6,7 @@
 #include <array>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <poll.h>
 #include <sys/eventfd.h>
 #include <unistd.h>
@@ -255,6 +256,84 @@ void ViewerClient::openFile(const std::string& path) {
     enqueue(std::move(envelope));
 }
 
+std::shared_ptr<SensorStream> ViewerClient::watchSensor(const std::string& name) {
+    {
+        const std::lock_guard lock(sensorMutex_);
+        for (const std::shared_ptr<SensorStream>& stream : sensors_) {
+            if (stream->name() == name) {
+                return stream;
+            }
+        }
+        sensors_.push_back(std::make_shared<SensorStream>(name));
+    }
+    auto envelope = std::make_unique<v1::Envelope>();
+    envelope->mutable_command()->set_request_id(nextRequestId_++);
+    v1::SubscribeSensor* subscribe = envelope->mutable_command()->mutable_subscribe_sensor();
+    subscribe->set_sensor(name);
+    subscribe->set_enabled(true);
+    enqueue(std::move(envelope));
+    const std::lock_guard lock(sensorMutex_);
+    return sensors_.back();
+}
+
+void ViewerClient::subscribeSensors() {
+    std::vector<std::string> names;
+    {
+        const std::lock_guard lock(sensorMutex_);
+        for (const std::shared_ptr<SensorStream>& stream : sensors_) {
+            names.push_back(stream->name());
+        }
+    }
+    for (const std::string& name : names) {
+        auto envelope = std::make_unique<v1::Envelope>();
+        envelope->mutable_command()->set_request_id(nextRequestId_++);
+        v1::SubscribeSensor* subscribe = envelope->mutable_command()->mutable_subscribe_sensor();
+        subscribe->set_sensor(name);
+        subscribe->set_enabled(true);
+        enqueue(std::move(envelope));
+    }
+}
+
+void ViewerClient::handleSensorFrame(const v1::Envelope& envelope) {
+    constexpr std::uint32_t kMaxPoints = 4'000'000;
+    constexpr std::uint32_t kFloats = 4;  // x, y, z, intensity
+    const v1::SensorFrame& frame = envelope.sensor_frame();
+    std::shared_ptr<SensorStream> stream;
+    {
+        const std::lock_guard lock(sensorMutex_);
+        for (const std::shared_ptr<SensorStream>& candidate : sensors_) {
+            if (candidate->name() == frame.sensor()) {
+                stream = candidate;
+            }
+        }
+    }
+    if (!stream || !frame.has_points()) {
+        return;  // not watched, or a kind of frame this viewer does not draw yet
+    }
+    // The message comes from the network: check every size before touching the bytes.
+    const v1::PointCloudData& points = frame.points();
+    const std::string& bytes = points.data().inline_();
+    const bool layout = points.fields_size() >= 4 && points.fields(0) == "x" &&
+                        points.fields(1) == "y" && points.fields(2) == "z" &&
+                        points.fields(3) == "intensity";
+    if (!layout || points.count() > kMaxPoints || points.stride() < kFloats * sizeof(float) ||
+        bytes.size() != static_cast<std::size_t>(points.count()) * points.stride()) {
+        ++stream->rejected_;
+        return;
+    }
+    auto cloud = std::make_shared<PointCloud>();
+    cloud->simTimeNs = frame.sim_time().ns();
+    cloud->count = points.count();
+    cloud->points.resize(static_cast<std::size_t>(points.count()) * kFloats);
+    for (std::uint32_t i = 0; i < points.count(); ++i) {
+        std::memcpy(&cloud->points[static_cast<std::size_t>(i) * kFloats],
+                    bytes.data() + static_cast<std::size_t>(i) * points.stride(),
+                    kFloats * sizeof(float));
+    }
+    stream->latest_.store(std::move(cloud));
+    ++stream->frames_;
+}
+
 std::uint64_t ViewerClient::requestAttributes(std::uint32_t prim) {
     auto envelope = std::make_unique<v1::Envelope>();
     const std::uint64_t id = nextRequestId_++;
@@ -393,6 +472,7 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
             w.backoff.reset();
             // The server sends its console history again on every connection.
             logs_.store(std::make_shared<const LogBook>());
+            subscribeSensors();  // a new connection knows nothing of earlier requests
             publish(ConnectionState::Ready);
             requestSnapshot();
             break;
@@ -464,6 +544,9 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
         }
         case v1::Envelope::kSignalBlock:
             handleSignalBlock(envelope);
+            break;
+        case v1::Envelope::kSensorFrame:
+            handleSensorFrame(envelope);
             break;
         case v1::Envelope::kCommandResult: {
             const v1::CommandResult& result = envelope.command_result();

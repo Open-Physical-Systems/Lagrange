@@ -15,6 +15,7 @@ import time
 from collections import deque
 from pathlib import Path
 
+import numpy as np
 from lagrange.viewer.v1 import (
     command_pb2,
     envelope_pb2,
@@ -23,7 +24,7 @@ from lagrange.viewer.v1 import (
     signals_pb2,
 )
 
-from . import __version__, profile
+from . import __version__, profile, sensors
 from .endpoint import Endpoint
 from .framing import DEFAULT_MAX_FRAME_SIZE, FrameError, FrameReader, encode_frame
 from .recording import Recording, RecordingError, read_recording
@@ -34,6 +35,7 @@ PROTOCOL_MAJOR = 0
 PROTOCOL_MINOR = 1
 TICK_SECONDS = 0.02  # 50 Hz: scene deltas and 20 ms signal blocks
 STATUS_EVERY_TICKS = 5  # 10 Hz
+LIDAR_PERIOD_NS = round(1e9 / sensors.LIDAR_RATE_HZ)
 # A viewer that does not read gets its updates dropped beyond this much queued output.
 MAX_QUEUED_BYTES = 32 * 1024 * 1024
 MAX_LOG_RECORDS = 500
@@ -51,6 +53,7 @@ class _Session:
         self.needs_snapshot = False
         self.dropped_deltas = 0
         self.dropped_blocks = 0
+        self.sensors: set[str] = set()  # sensor names (prim paths) this viewer watches
 
     def congested(self) -> bool:
         return self.writer.transport.get_write_buffer_size() > MAX_QUEUED_BYTES
@@ -71,6 +74,7 @@ class MockServer:
         self._tick_count = 0
         self._loading: set[asyncio.Task] = set()
         self._restart_required = False
+        self._last_lidar_ns = 0
         self._reset_profile()
         # What the console shows. Kept so that a viewer that connects later sees it too.
         self._logs: deque[session_pb2.LogRecord] = deque(maxlen=MAX_LOG_RECORDS)
@@ -227,6 +231,14 @@ class MockServer:
         )
         enabled = [name for name, d in self._profile_data["domains"].items() if d.get("enabled")]
         self.emit_log(info, "profile", "domains on: " + (", ".join(enabled) or "none"))
+        if recording.meta.synthetic and any(
+            prim.type_name == "Lidar" for prim in recording.snapshot.prims
+        ):
+            self.emit_log(
+                session_pb2.LOG_LEVEL_WARN,
+                "sensors",
+                "lidar frames are synthetic: a fixed aisle scanned from the robot's pose",
+            )
         if recording.meta.synthetic:
             self.emit_log(
                 session_pb2.LOG_LEVEL_WARN,
@@ -346,6 +358,11 @@ class MockServer:
                 self._send_snapshot(session)
             elif kind == "get_profile":
                 session.send(envelope_pb2.Envelope(profile_state=self._profile_state()))
+            elif kind == "subscribe_sensor":
+                if command.subscribe_sensor.enabled:
+                    session.sensors.add(command.subscribe_sensor.sensor)
+                else:
+                    session.sensors.discard(command.subscribe_sensor.sensor)
             elif kind == "validate_profile":
                 result.command_result.validation.CopyFrom(
                     profile.check(command.validate_profile.yaml).to_proto()
@@ -449,6 +466,12 @@ class MockServer:
             last = now
             if window is not None:
                 self._emit(window)
+                # Sensors run on simulation time, so their rate follows the replay speed and
+                # does not depend on how often this loop happens to wake up.
+                since = self.engine.sim_time_ns - self._last_lidar_ns
+                if since >= LIDAR_PERIOD_NS or since < 0:
+                    self._last_lidar_ns = self.engine.sim_time_ns
+                    self._emit_sensors()
             self._tick_count += 1
             if self._tick_count % STATUS_EVERY_TICKS == 0:
                 status = self._status()
@@ -456,6 +479,36 @@ class MockServer:
                     status.status.dropped_deltas = session.dropped_deltas
                     status.status.dropped_signal_blocks = session.dropped_blocks
                     session.send(status)
+
+    def _emit_sensors(self) -> None:
+        """Send a lidar frame to every viewer that watches a lidar of the sample scene."""
+        recording = self.engine.recording
+        if not recording.meta.synthetic or not any(s.sensors for s in self._sessions):
+            return
+        time_ns = self.engine.sim_time_ns
+        for prim in recording.snapshot.prims:
+            if prim.type_name != "Lidar":
+                continue
+            watchers = [s for s in self._sessions if prim.path in s.sensors and not s.congested()]
+            pose = self.engine.pose_of(prim.id, time_ns)
+            if not watchers or pose is None:
+                continue
+            qw, qz = float(pose[3]), float(pose[6])
+            points = sensors.lidar_scan(
+                float(pose[0]), float(pose[1]), 2.0 * float(np.arctan2(qz, qw)), time_ns
+            )
+            envelope = envelope_pb2.Envelope()
+            frame = envelope.sensor_frame
+            frame.sensor = prim.path
+            frame.sim_time.ns = time_ns
+            frame.points.count = len(points)
+            frame.points.stride = sensors.POINT_STRIDE
+            frame.points.fields.extend(sensors.POINT_FIELDS)
+            data = points.astype("<f4").tobytes()
+            frame.points.data.inline = data
+            frame.points.data.size = len(data)
+            for session in watchers:
+                session.send(envelope)
 
     def _emit(self, window: Window) -> None:
         """Send one window of signals and the scene at its end to every session."""

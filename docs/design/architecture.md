@@ -129,6 +129,7 @@ enum class QuantityKind : std::uint16_t {
     HeatFlow, AngularVelocity, AngularPosition, LinearVelocity, Position, Pressure,
     Density, ElectricField, MagneticFluxDensity, DoseRate, AbsorbedDose, Irradiance,
     Extinction, Probability, Ratio, Count,
+    LinearAcceleration,   // appended: numbers already used in recordings do not change
 };
 
 struct Unit {
