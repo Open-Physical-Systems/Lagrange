@@ -107,7 +107,7 @@ def test_viewer_renders_the_scene_from_the_mock_server(socket_dir):
             "--frames",
             "40",
             "--size",
-            "960x540",
+            "1400x1000",
             "--screenshot",
             str(image),
         )
@@ -123,13 +123,72 @@ def test_viewer_renders_the_scene_from_the_mock_server(socket_dir):
     assert stats["validation_errors"] == 0, result.stderr
 
     width, height, rows = read_png(image)
-    assert (width, height) == (960, 540)
+    assert (width, height) == (1400, 1000)
     pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
     assert len(set(pixels)) > 50, "the image is nearly uniform: nothing was drawn"
     # The robot body is orange (base colour 0.85, 0.45, 0.10): clearly red > green > blue.
     orange = sum(1 for r, g, b, _a in pixels if r > 130 and r > g + 40 and g > b + 20)
-    assert orange > 300, f"robot body not visible ({orange} orange pixels)"
+    # The viewport shares the window with the other panels, so the robot is small.
+    assert orange > 150, f"robot body not visible ({orange} orange pixels)"
     assert all(p[3] == 255 for p in pixels[:: len(pixels) // 500]), "image is not opaque"
+
+
+SCOPE_SIGNALS = [
+    "motor/left_drive_motor/current_q",  # 10 kHz
+    "motor/right_drive_motor/current_q",
+    "bus/dc_48v/voltage",
+    "battery/battery/current",
+    "joint/left_wheel_joint/velocity",  # 1 kHz
+    "thermal/left_drive_motor/temperature",  # 10 Hz
+]
+
+
+def test_scope_receives_every_sample_of_high_rate_signals(socket_dir):
+    image = socket_dir / "scope.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "120",
+            "--size",
+            "1280x900",
+            "--scope",
+            ",".join(SCOPE_SIGNALS),
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    assert stats["invalid_runs"] == 0
+    assert stats["dropped_samples"] == 0, "the scope lost samples"
+    assert stats["signal_blocks"] > 10
+    # 120 frames take about a second of replay: four 10 kHz signals alone give tens of
+    # thousands of samples. Far fewer would mean the subscription did not work.
+    assert stats["samples"] > 15000
+
+    _width, _height, rows = read_png(image)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    # The scope draws traces in the plot colour map; its first colour is a clear blue.
+    lower_half = pixels[len(pixels) // 2 :]
+    blue = sum(1 for r, g, b, _a in lower_half if b > 150 and b > r + 50 and b > g + 20)
+    assert blue > 200, f"no scope trace visible ({blue} blue pixels)"
+
+
+def test_unknown_scope_signal_is_ignored(socket_dir):
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "20",
+            "--scope",
+            "no/such/signal,bus/dc_48v/voltage",
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["samples"] > 0 and stats["invalid_runs"] == 0
 
 
 def test_viewer_reports_a_missing_server_and_exits(socket_dir):

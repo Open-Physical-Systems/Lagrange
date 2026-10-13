@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace lagrange::viewer {
 
@@ -13,8 +14,9 @@ struct Options {
     /// Headless: frames to render after the scene arrived (default 120 when 0).
     /// Windowed: close after this many frames; 0 means run until the window is closed.
     std::uint32_t frames{0};
-    std::uint32_t waitMs{5000};  ///< Headless: how long to wait for the first scene.
-    std::string screenshot;      ///< Headless: PNG of the last frame (whole UI).
+    std::uint32_t waitMs{5000};             ///< Headless: how long to wait for the first scene.
+    std::string screenshot;                 ///< Headless: PNG of the last frame (whole UI).
+    std::vector<std::string> scopeSignals;  ///< Signals to open in the scope at start-up.
     std::uint32_t width{1600};
     std::uint32_t height{900};
 };

@@ -266,9 +266,9 @@ public:
                                    context.connection.message.c_str());
             }
             ImGui::TextDisabled(
-                "%u signals   %llu snapshots   %llu deltas   %llu resyncs   %llu dropped by server "
-                "  %s",
-                context.status.signalCount,
+                "%u signals   %llu samples   %llu snapshots   %llu deltas   %llu resyncs   "
+                "%llu dropped by server   %s",
+                context.status.signalCount, static_cast<unsigned long long>(context.stats.samples),
                 static_cast<unsigned long long>(context.stats.snapshots),
                 static_cast<unsigned long long>(context.stats.deltas),
                 static_cast<unsigned long long>(context.stats.resyncs),
@@ -290,7 +290,9 @@ void buildDefaultLayout(ImGuiID dockspace) {
     ImGui::DockBuilderSetNodeSize(dockspace, ImGui::GetMainViewport()->Size);
     ImGuiID centre = dockspace;
     const ImGuiID bottom =
-        ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.20F, nullptr, &centre);
+        ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.15F, nullptr, &centre);
+    const ImGuiID scope =
+        ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.42F, nullptr, &centre);
     const ImGuiID left =
         ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left, 0.20F, nullptr, &centre);
     const ImGuiID right =
@@ -299,6 +301,7 @@ void buildDefaultLayout(ImGuiID dockspace) {
     ImGui::DockBuilderDockWindow("Scene", left);
     ImGui::DockBuilderDockWindow("Inspector", right);
     ImGui::DockBuilderDockWindow("Timeline", bottom);
+    ImGui::DockBuilderDockWindow("Scope", scope);
     ImGui::DockBuilderFinish(dockspace);
 }
 
@@ -310,6 +313,7 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
     panels.push_back(std::make_unique<ScenePanel>());
     panels.push_back(std::make_unique<InspectorPanel>());
     panels.push_back(std::make_unique<TimelinePanel>());
+    panels.push_back(createScopePanel());
     return panels;
 }
 
