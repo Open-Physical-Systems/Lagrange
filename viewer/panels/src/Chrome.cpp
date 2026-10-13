@@ -41,7 +41,7 @@ struct WorkspaceEntry {
 constexpr std::array<WorkspaceEntry, 10> kWorkspaces{{
     {Workspace::Scene, "Scene", widgets::Icon::Scene, "lagrange-dock-scene-4", ImGuiKey_1, "Ctrl+1",
      "02-scene"},
-    {Workspace::Domains, "Domains", widgets::Icon::Domains, "lagrange-dock-domains-2", ImGuiKey_2,
+    {Workspace::Domains, "Domains", widgets::Icon::Domains, "lagrange-dock-domains-3", ImGuiKey_2,
      "Ctrl+2", "03-domains"},
     {Workspace::Electrical, "Electrical", widgets::Icon::Electrical, "lagrange-dock-electrical-1",
      ImGuiKey_3, "Ctrl+3", "04-electrical"},
@@ -126,12 +126,19 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         ImGui::DockBuilderDockWindow("###Imu", imu);
         ImGui::DockBuilderDockWindow("Degradation", right);
     } else if (workspace == Workspace::Domains) {
-        // Design: Domains 520 px on the left, Profile on the right. The wiring and schedule
-        // panels that sit between them are not built yet, so Profile takes that room for now.
+        // Design: Domains 520 px left, Profile 420 px right; between them the wiring over a
+        // 268 px schedule.
         const ImGuiID left = ImGui::DockBuilderSplitNode(
             centre, ImGuiDir_Left, fraction(520.0F, size.x), nullptr, &centre);
+        const ImGuiID right = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Right, fraction(420.0F, size.x - px(520.0F)), nullptr, &centre);
+        const ImGuiID schedule = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Down, fraction(268.0F, size.y), nullptr, &centre);
         ImGui::DockBuilderDockWindow("Domains", left);
-        ImGui::DockBuilderDockWindow("Profile", centre);
+        ImGui::DockBuilderDockWindow("Wiring", centre);
+        ImGui::DockBuilderDockWindow("###UnitChecks", centre);
+        ImGui::DockBuilderDockWindow("Schedule", schedule);
+        ImGui::DockBuilderDockWindow("Profile", right);
     } else {
         // Design: Signals 300 px left; Cursors over Statistics, 300 px right; scope between.
         const ImGuiID left = ImGui::DockBuilderSplitNode(
@@ -697,6 +704,9 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
     }
     panels.push_back(createElectricalInspectorPanel());
     panels.push_back(createDomainsPanel());
+    for (std::unique_ptr<Panel>& panel : createWiringPanels()) {
+        panels.push_back(std::move(panel));
+    }
     panels.push_back(createProfilePanel());
     return panels;
 }
@@ -757,6 +767,9 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
         ImGui::SetWindowFocus("Console");
         ImGui::SetWindowFocus("Timeline");
         ImGui::SetWindowFocus("Viewport");
+    }
+    if (built && shown == Workspace::Domains) {
+        ImGui::SetWindowFocus("Wiring");
     }
 }
 

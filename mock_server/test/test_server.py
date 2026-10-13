@@ -291,7 +291,7 @@ def test_inspector_attributes_and_console_log(recording, tmp_path):
     assert result.ok and [item.prim for item in result.attributes.items] == [8, 10, 999]
     motor = {attribute.name: attribute for attribute in result.attributes.items[0].attributes}
     assert motor["elec:windingResistance"].real == pytest.approx(0.12)
-    assert motor["elec:windingResistance"].unit.display == "ohm"
+    assert motor["elec:windingResistance"].unit.display == "\u2126"
     assert motor["elec:behaviorModel"].asset.endswith(".fmu")
     assert list(motor["elec:powerPort"].targets.prims) == [7]
     assert motor["thermal:heatCapacity"].unit.display == "J/K"

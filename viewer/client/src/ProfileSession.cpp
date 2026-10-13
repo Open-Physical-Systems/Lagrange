@@ -90,8 +90,12 @@ void ProfileSession::update(ViewerClient& client, bool connected, std::uint64_t 
         requestId_ = client.validateProfile(draft_.text());
         sentRevision_ = draft_.revision();
     }
-    if (const auto check = client.profileCheck(); check && check->requestId == requestId_) {
+    if (const auto check = client.profileCheck();
+        check && check->requestId == requestId_ && check != check_) {
         check_ = check;
+        if (!check->wiring.empty()) {
+            wiring_ = check->wiring;  // kept until the next answer that has one
+        }
     }
 }
 
@@ -119,6 +123,11 @@ bool ProfileSession::domainHasError(std::string_view name) const {
         const std::string_view rest = std::string_view(issue.pointer).substr(kPrefix.size());
         return rest.starts_with(name) && (rest.size() == name.size() || rest[name.size()] == '/');
     });
+}
+
+std::size_t ProfileSession::unitConflicts() const {
+    return static_cast<std::size_t>(std::ranges::count_if(
+        wiring_.wires, [](const WiringInfo::Wire& wire) { return !wire.unitOk; }));
 }
 
 const DomainView* ProfileSession::find(std::string_view name) const {
