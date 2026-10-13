@@ -3,7 +3,7 @@
 <package format="3">
   <name>imgui_vendor</name>
   <version>0.0.0</version>
-  <description>Dear ImGui (docking branch) with the SDL3 and Vulkan backends, built from a pinned upstream release. Ubuntu's libimgui-dev is the master branch without docking, so it cannot be used.</description>
+  <description>Dear ImGui (docking branch) with the SDL3 and Vulkan backends, and ImPlot, built from pinned upstream releases. Ubuntu's libimgui-dev is the master branch without docking, so it cannot be used.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>MIT</license>
 

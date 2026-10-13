@@ -20,7 +20,21 @@ FetchContent_Declare(
     URL_HASH SHA256=${IMGUI_SHA256}
     DOWNLOAD_EXTRACT_TIMESTAMP FALSE
 )
-FetchContent_MakeAvailable(imgui_src)
+
+# ImPlot, for the waveform scopes. It must be built against the same Dear ImGui.
+# renovate: datasource=github-tags depName=epezent/implot
+set(IMPLOT_VERSION "v1.0")
+set(IMPLOT_COMMIT "524f9fcd48d76c13fdf94c5ffbba8787a1ff7e39")
+set(IMPLOT_SHA256
+    "1a8f01f7676070b98af8316eb91b02f462c0c613343b8ba847ddfce363b9b9df"
+)
+FetchContent_Declare(
+    implot_src
+    URL "https://github.com/epezent/implot/archive/${IMPLOT_COMMIT}.tar.gz"
+    URL_HASH SHA256=${IMPLOT_SHA256}
+    DOWNLOAD_EXTRACT_TIMESTAMP FALSE
+)
+FetchContent_MakeAvailable(imgui_src implot_src)
 
 add_library(
     imgui
@@ -32,6 +46,8 @@ add_library(
     ${imgui_src_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_src_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
     ${imgui_src_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+    ${implot_src_SOURCE_DIR}/implot.cpp
+    ${implot_src_SOURCE_DIR}/implot_items.cpp
 )
 add_library(imgui_vendor::imgui ALIAS imgui)
 target_compile_features(imgui PUBLIC cxx_std_17)
@@ -42,6 +58,7 @@ target_include_directories(
     PUBLIC
         $<BUILD_INTERFACE:${imgui_src_SOURCE_DIR}>
         $<BUILD_INTERFACE:${imgui_src_SOURCE_DIR}/backends>
+        $<BUILD_INTERFACE:${implot_src_SOURCE_DIR}>
         $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
 )
 target_link_libraries(imgui PUBLIC SDL3::SDL3 Vulkan::Vulkan)
@@ -56,12 +73,19 @@ install(
         ${imgui_src_SOURCE_DIR}/imstb_truetype.h
         ${imgui_src_SOURCE_DIR}/backends/imgui_impl_sdl3.h
         ${imgui_src_SOURCE_DIR}/backends/imgui_impl_vulkan.h
+        ${implot_src_SOURCE_DIR}/implot.h
+        ${implot_src_SOURCE_DIR}/implot_internal.h
     DESTINATION include/${PROJECT_NAME}
 )
 install(
     FILES ${imgui_src_SOURCE_DIR}/LICENSE.txt
     DESTINATION share/${PROJECT_NAME}
     RENAME LICENSE.imgui.txt
+)
+install(
+    FILES ${implot_src_SOURCE_DIR}/LICENSE
+    DESTINATION share/${PROJECT_NAME}
+    RENAME LICENSE.implot.txt
 )
 install(
     TARGETS imgui
