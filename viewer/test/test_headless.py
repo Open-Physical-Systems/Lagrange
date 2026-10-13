@@ -334,3 +334,38 @@ def test_scene_workspace_shows_the_selected_prim_and_the_console(socket_dir):
     assert (width, height) == (1600, 1000)
     pixels = {row[i : i + 4] for row in rows for i in range(0, len(row), 4)}
     assert len(pixels) > 50
+
+
+def test_signals_workspace_plots_with_cursors(socket_dir):
+    """Design 05-signals: stacked plots per unit, cursors on, no dropped samples."""
+    image = socket_dir / "signals.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "120",
+            "--size",
+            "1600x1000",
+            "--cursors",
+            "--scope",
+            "motor/left_drive_motor/current_q,bus/dc_48v/voltage,joint/left_wheel_joint/velocity",
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    assert stats["dropped_samples"] == 0 and stats["invalid_runs"] == 0
+    assert stats["samples"] > 8000
+
+    _width, _height, rows = read_png(image)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    # Three traces in the first three colours of the series palette: blue, yellow, coral.
+    blue = sum(1 for r, g, b, _a in pixels if b > 200 and r < 130 and g > 120)
+    yellow = sum(1 for r, g, b, _a in pixels if r > 220 and g > 170 and b < 110)
+    coral = sum(1 for r, g, b, _a in pixels if r > 230 and 90 < g < 150 and 80 < b < 140)
+    assert blue > 100 and yellow > 100 and coral > 100, (blue, yellow, coral)
+    # Cursor B is drawn in the accent colour, as a line over the height of every plot.
+    accent = sum(1 for r, g, b, _a in pixels if r > 215 and 100 < g < 135 and b < 70)
+    assert accent > 300, accent

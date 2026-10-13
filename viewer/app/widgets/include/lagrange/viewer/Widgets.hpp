@@ -77,6 +77,18 @@ void SchemaChip(const char* schema);
 /// for attribute namespaces ("elec"). Empty when it is not a physics schema.
 [[nodiscard]] std::string_view schemaDomain(std::string_view schemaOrNamespace);
 
+/// A check box: accent fill with a dark tick when on. Returns true when clicked.
+bool Checkbox(const char* id, bool* value);
+
+/// A small toggle for a filter ("electrical", "rate >= 100 Hz"), in `color` when on.
+bool FilterChip(const char* label, const ImVec4& color, bool selected);
+
+/// A 6 px bar filled to `fraction` (0..1).
+void Meter(float fraction, const ImVec4& color, float width);
+
+/// A small square in a series colour, centred on the line.
+void Swatch(const ImVec4& color);
+
 /// A filled dot, vertically centred on the current line. Advances the cursor.
 void Dot(const ImVec4& color, bool filled = true);
 

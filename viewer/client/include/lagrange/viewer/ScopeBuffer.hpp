@@ -59,6 +59,18 @@ public:
     std::size_t readRaw(std::int64_t tBeginNs, std::int64_t tEndNs, std::span<double> timesSeconds,
                         std::span<double> values) const;
 
+    struct Statistics {
+        std::uint64_t count{0};  ///< Samples in the range, gaps (NaN) not counted.
+        double min{0.0};
+        double max{0.0};
+        double mean{0.0};
+        double rms{0.0};
+    };
+    /// Minimum, maximum, mean and RMS of the raw samples in [tBeginNs, tEndNs).
+    [[nodiscard]] Statistics statistics(std::int64_t tBeginNs, std::int64_t tEndNs) const;
+    /// The sample nearest to `tNs`, or NaN when the buffer does not hold that time.
+    [[nodiscard]] double valueAt(std::int64_t tNs) const;
+
     [[nodiscard]] std::int64_t dtNs() const { return dtNs_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::size_t capacity() const { return capacity_; }
     /// Time of the newest sample, or -1 if the buffer is empty.

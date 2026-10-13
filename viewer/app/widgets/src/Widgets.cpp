@@ -2,6 +2,7 @@
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cfloat>
 #include <cmath>
@@ -589,6 +590,81 @@ void SchemaChip(const char* schema) {
                   schema);
     ImGui::PopFont();
     ImGui::Dummy(size);
+}
+
+bool Checkbox(const char* id, bool* value) {
+    const float box = px(14.0F);
+    const float height = ImGui::GetFrameHeight();
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const bool clicked = ImGui::InvisibleButton(id, ImVec2(box, height));
+    if (clicked) {
+        *value = !*value;
+    }
+    const ImVec2 min(origin.x, origin.y + (height - box) * 0.5F);
+    const ImVec2 max(min.x + box, min.y + box);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const float rounding = px(3.0F);
+    if (*value) {
+        draw->AddRectFilled(min, max, u32(c::accent), rounding);
+        const float t = px(1.6F);
+        draw->AddLine(ImVec2(min.x + box * 0.24F, min.y + box * 0.52F),
+                      ImVec2(min.x + box * 0.43F, min.y + box * 0.72F), u32(c::onAccent), t);
+        draw->AddLine(ImVec2(min.x + box * 0.43F, min.y + box * 0.72F),
+                      ImVec2(min.x + box * 0.78F, min.y + box * 0.30F), u32(c::onAccent), t);
+    } else {
+        draw->AddRectFilled(min, max, u32(c::bg0), rounding);
+        draw->AddRect(min, max, u32(ImGui::IsItemHovered() ? c::t3 : c::lineStrong), rounding);
+    }
+    return clicked;
+}
+
+bool FilterChip(const char* label, const ImVec4& color, bool selected) {
+    ImGui::PushFont(theme::fonts().sansMedium, theme::kCaptionSize);
+    const ImVec2 textSize = ImGui::CalcTextSize(label, nullptr, true);
+    const ImVec2 size(textSize.x + px(16.0F), px(20.0F));
+    if (ImGui::GetCursorPosX() > ImGui::GetStyle().WindowPadding.x + 1.0F &&
+        ImGui::GetContentRegionAvail().x < size.x) {
+        ImGui::NewLine();  // wrap
+    }
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const ImVec2 max(min.x + size.x, min.y + size.y);
+    const bool clicked = ImGui::InvisibleButton(label, size);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImVec4 tone = selected ? color : c::t3;
+    draw->AddRectFilled(
+        min, max, u32(withAlpha(tone, selected ? 0.16F : (ImGui::IsItemHovered() ? 0.12F : 0.06F))),
+        size.y * 0.5F);
+    draw->AddRect(min, max, u32(withAlpha(tone, selected ? 0.55F : 0.30F)), size.y * 0.5F);
+    draw->AddText(ImVec2(min.x + px(8.0F), min.y + (size.y - textSize.y) * 0.5F),
+                  u32(selected ? color : c::t2), label, ImGui::FindRenderedTextEnd(label));
+    ImGui::PopFont();
+    return clicked;
+}
+
+void Meter(float fraction, const ImVec4& color, float width) {
+    const float height = px(6.0F);
+    const float line = ImGui::GetTextLineHeight();
+    ImVec2 min = ImGui::GetCursorScreenPos();
+    min.y += ImGui::GetCurrentWindow()->DC.CurrLineTextBaseOffset + (line - height) * 0.5F;
+    const ImVec2 max(min.x + width, min.y + height);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(min, max, u32(c::bg4), height * 0.5F);
+    const float filled = width * std::clamp(fraction, 0.0F, 1.0F);
+    if (filled > 0.5F) {
+        draw->AddRectFilled(min, ImVec2(min.x + std::max(filled, height), max.y), u32(color),
+                            height * 0.5F);
+    }
+    ImGui::Dummy(ImVec2(width, line));
+}
+
+void Swatch(const ImVec4& color) {
+    const float side = px(10.0F);
+    const float line = ImGui::GetTextLineHeight();
+    ImVec2 min = ImGui::GetCursorScreenPos();
+    min.y += ImGui::GetCurrentWindow()->DC.CurrLineTextBaseOffset + (line - side) * 0.5F;
+    ImGui::GetWindowDrawList()->AddRectFilled(min, ImVec2(min.x + side, min.y + side), u32(color),
+                                              px(2.0F));
+    ImGui::Dummy(ImVec2(side, line));
 }
 
 bool BarTab(const char* label, bool active) {

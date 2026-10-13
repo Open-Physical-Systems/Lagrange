@@ -3,6 +3,7 @@
 #include "lagrange/viewer/Camera.hpp"
 #include "lagrange/viewer/ProfileSession.hpp"
 #include "lagrange/viewer/SceneStore.hpp"
+#include "lagrange/viewer/ScopeSession.hpp"
 #include "lagrange/viewer/ViewerClient.hpp"
 
 #include <cstdint>
@@ -52,6 +53,7 @@ struct PanelContext {
 
     Workspace* workspace{nullptr};            ///< The workspace shown; never null in draw().
     ProfileSession* profileSession{nullptr};  ///< Profile being edited; never null in draw().
+    ScopeSession* scopeSession{nullptr};      ///< What is plotted; never null in draw().
 
     std::string deviceName;
     std::string tierName;
@@ -78,6 +80,9 @@ public:
 [[nodiscard]] std::unique_ptr<Panel> createConsolePanel();
 [[nodiscard]] std::unique_ptr<Panel> createProblemsPanel();
 [[nodiscard]] std::unique_ptr<Panel> createScopePanel();
+[[nodiscard]] std::unique_ptr<Panel> createSignalsPanel();
+[[nodiscard]] std::unique_ptr<Panel> createCursorsPanel();
+[[nodiscard]] std::unique_ptr<Panel> createStatisticsPanel();
 [[nodiscard]] std::unique_ptr<Panel> createDomainsPanel();
 [[nodiscard]] std::unique_ptr<Panel> createProfilePanel();
 

@@ -199,4 +199,46 @@ std::size_t ScopeBuffer::readRaw(std::int64_t tBeginNs, std::int64_t tEndNs,
     return written;
 }
 
+ScopeBuffer::Statistics ScopeBuffer::statistics(std::int64_t tBeginNs, std::int64_t tEndNs) const {
+    const std::int64_t dt = dtNs();
+    const Range valid = range();
+    const std::uint64_t first = std::max(ceilIndex(tBeginNs, dt), valid.begin);
+    const std::uint64_t last = std::min(ceilIndex(tEndNs, dt), valid.end);
+    Statistics result;
+    double sum = 0.0;
+    double squares = 0.0;
+    for (std::uint64_t i = first; i < last; ++i) {
+        const double value = samples_[i & mask_].load(std::memory_order_relaxed);
+        if (value != value) {
+            continue;  // a gap
+        }
+        result.min = result.count == 0 ? value : std::min(result.min, value);
+        result.max = result.count == 0 ? value : std::max(result.max, value);
+        sum += value;
+        squares += value * value;
+        ++result.count;
+    }
+    if (result.count != 0) {
+        result.mean = sum / static_cast<double>(result.count);
+        result.rms = std::sqrt(squares / static_cast<double>(result.count));
+    }
+    // Statistics are a display aid: if the writer wrapped past the start of the range while
+    // we read, the caller gets the numbers of a moment later on its next call.
+    return result;
+}
+
+double ScopeBuffer::valueAt(std::int64_t tNs) const {
+    const std::int64_t dt = dtNs();
+    const Range valid = range();
+    if (tNs < 0 || dt <= 0) {
+        return kNaN;
+    }
+    const auto index = static_cast<std::uint64_t>((tNs + dt / 2) / dt);
+    if (index < valid.begin || index >= valid.end) {
+        return kNaN;
+    }
+    const double value = samples_[index & mask_].load(std::memory_order_relaxed);
+    return range().begin > index ? kNaN : value;
+}
+
 }  // namespace lagrange::viewer
