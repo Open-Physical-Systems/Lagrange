@@ -21,6 +21,10 @@ Notable changes to Lagrange are recorded here. The format follows
   file-descriptor passing, `Endpoint` parsing and reconnect `Backoff`.
 - Shared-memory fast path: `ShmArena` (sealed memfd ring) and `ShmReader` with generation and
   content-hash checks.
+- `lagrange_mock_server` package: asyncio replay server (play, pause, step, seek, speed,
+  full/min-max/stride subscriptions), MCAP recording format, a synthetic sample recording, and
+  a protocol conformance client (`--check`).
+- Golden protocol frames read identically by the C++ and Python decoders.
 
 ### Changed
 

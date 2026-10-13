@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>lagrange_mock_server</name>
+  <version>0.0.0</version>
+  <description>Lagrange mock/replay server: serves the viewer protocol from a recording, without a simulator.</description>
+  <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <buildtool_depend>lagrange_cmake</buildtool_depend>
+
+  <depend>lagrange_proto</depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-protobuf</exec_depend>
+  <!-- Not packaged for Ubuntu; key defined in packaging/rosdep/lagrange.yaml. -->
+  <exec_depend>python3-mcap-pip</exec_depend>
+
+  <test_depend>ament_cmake_pytest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

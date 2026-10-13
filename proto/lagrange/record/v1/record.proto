@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package lagrange.record.v1;
+
+import "lagrange/viewer/v1/common.proto";
+
+// Messages that exist only in recordings (MCAP files). Signals, the catalog, scene snapshots
+// and log records are stored with the lagrange.viewer.v1 messages, so replaying a file is the
+// same as serving the live protocol from disk.
+//
+// Channels:
+//   /lagrange/meta            RunMeta          one message at time 0
+//   /lagrange/catalog         SignalCatalog    one message at time 0
+//   /lagrange/scene/snapshot  SceneSnapshot    one message at time 0
+//   /lagrange/signals/<dt>    SignalBlock      one channel per writer step size, in time order
+//   /lagrange/state_hash      StateHash        optional
+
+// First message of every recording.
+message RunMeta {
+  uint32 format_version = 1; // 1
+  string profile_yaml = 2; // the profile the run used, canonical form; may be empty
+  string stage_path = 3;
+  uint64 seed = 4;
+  uint32 tier = 5;
+  string generator = 6; // program and version that wrote the file
+  // True when the data was produced by a script and not by a simulation or a real robot.
+  bool synthetic = 7;
+  string description = 8;
+  lagrange.viewer.v1.SimTime duration = 9;
+  repeated PoseBinding pose_bindings = 10;
+}
+
+// Says which Pose signal moves which prim, so scene deltas can be rebuilt from signals.
+message PoseBinding {
+  uint32 prim = 1;
+  string signal = 2;
+}
+
+// Hash of the complete simulation state at one time, for determinism checks.
+message StateHash {
+  lagrange.viewer.v1.SimTime sim_time = 1;
+  fixed64 hash = 2;
+}
