@@ -30,3 +30,12 @@ AMPERE = _unit("A", KIND_CURRENT, current=1)
 VOLT = _unit("V", KIND_VOLTAGE, length=2, mass=1, time=-3, current=-1)
 KELVIN = _unit("K", KIND_TEMPERATURE, temperature=1)
 ONE = _unit("1", KIND_RATIO)
+# Units of prim attributes. kind 0: no quantity kind assigned yet (lagrange::QuantityKind).
+OHM = _unit("Ω", 0, length=2, mass=1, time=-3, current=-2)
+HENRY = _unit("H", 0, length=2, mass=1, time=-2, current=-2)
+NEWTON_METRE_PER_AMPERE = _unit("N·m/A", 0, length=2, mass=1, time=-2, current=-1)
+JOULE_PER_KELVIN = _unit("J/K", 0, length=2, mass=1, time=-2, temperature=-1)
+WATT_PER_KELVIN = _unit("W/K", 0, length=2, mass=1, time=-3, temperature=-1)
+AMPERE_HOUR = _unit("A·h", 0, time=1, current=1)
+AMPERE_HOUR.scale = 3600.0  # one ampere hour is 3600 coulombs
+KILOGRAM = _unit("kg", 0, mass=1)

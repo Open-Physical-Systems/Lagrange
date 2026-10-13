@@ -86,6 +86,51 @@ struct Notice {
     std::string text;
 };
 
+enum class LogLevel : std::uint8_t { Debug = 1, Info = 2, Warn = 3, Error = 4 };
+
+/// One line of the server's log, for the console.
+struct LogEntry {
+    std::int64_t simTimeNs{0};
+    LogLevel level{LogLevel::Info};
+    std::string source;  ///< "stage", "electrical/averaged_network"
+    std::string text;
+};
+
+/// The most recent log lines, oldest first. Immutable once published.
+struct LogBook {
+    static constexpr std::size_t kCapacity = 500;
+    std::uint64_t total{0};  ///< Lines received since the connection was made.
+    std::uint32_t warnings{0};
+    std::uint32_t errors{0};  ///< Counts over the lines still held.
+    std::vector<LogEntry> entries;
+};
+
+/// One attribute of a prim, as the inspector shows it.
+struct AttributeInfo {
+    enum class Kind : std::uint8_t { Real, Integer, Boolean, Token, Asset, Reals, Targets };
+    std::string name;   ///< "elec:windingResistance"
+    std::string value;  ///< Display text of the value, without the unit.
+    std::string unit;   ///< Display form of the unit; empty when it has none.
+    std::string doc;
+    Kind kind{Kind::Token};
+    bool editable{false};
+    std::vector<std::uint32_t> targets;  ///< Prims a relationship points at.
+
+    /// "elec" for "elec:windingResistance"; empty when the name has no namespace.
+    [[nodiscard]] std::string_view group() const {
+        const std::size_t colon = name.find(':');
+        return colon == std::string::npos ? std::string_view{}
+                                          : std::string_view(name).substr(0, colon);
+    }
+};
+
+/// The server's answer to requestAttributes(). Immutable once published.
+struct PrimAttributes {
+    std::uint64_t requestId{0};  ///< What requestAttributes() returned.
+    std::uint32_t prim{kNone};
+    std::vector<AttributeInfo> attributes;
+};
+
 /// One thing that can stand in for a disabled domain.
 struct SubstituteOption {
     std::string token;  ///< What the profile says: "zero", "replay", ...
@@ -199,6 +244,16 @@ public:
 
     [[nodiscard]] Notice notice() const { return *notice_.load(); }
 
+    // --- console and inspector --------------------------------------------------------------
+    /// The server's recent log lines. Never null.
+    [[nodiscard]] std::shared_ptr<const LogBook> logs() const { return logs_.load(); }
+    /// Asks for the attributes of one prim. Returns the request id.
+    std::uint64_t requestAttributes(std::uint32_t prim);
+    /// The latest attributes answer, or nullptr.
+    [[nodiscard]] std::shared_ptr<const PrimAttributes> attributes() const {
+        return attributes_.load();
+    }
+
     // --- profile ---------------------------------------------------------------------------
     /// The profile the server runs, or nullptr before it arrived.
     [[nodiscard]] std::shared_ptr<const ProfileInfo> profile() const { return profile_.load(); }
@@ -242,6 +297,8 @@ private:
     std::atomic<std::shared_ptr<const SignalCatalog>> catalog_;
     std::atomic<std::shared_ptr<const Notice>> notice_;
     std::atomic<std::shared_ptr<const ProfileInfo>> profile_;
+    std::atomic<std::shared_ptr<const LogBook>> logs_;
+    std::atomic<std::shared_ptr<const PrimAttributes>> attributes_;
     std::atomic<std::shared_ptr<const ProfileCheck>> profileCheck_;
     std::atomic<std::uint64_t> profileSerial_{0};
     void post(bool error, std::string text);

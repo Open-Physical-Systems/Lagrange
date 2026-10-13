@@ -22,8 +22,11 @@ using namespace std::chrono_literals;
 using lagrange::proto::Connection;
 using lagrange::proto::Endpoint;
 using lagrange::proto::Listener;
+using lagrange::viewer::AttributeInfo;
 using lagrange::viewer::ConnectionState;
 using lagrange::viewer::kNone;
+using lagrange::viewer::LogBook;
+using lagrange::viewer::LogLevel;
 using lagrange::viewer::RunState;
 using lagrange::viewer::ViewerClient;
 namespace v1 = lagrange::viewer::v1;
@@ -545,6 +548,102 @@ TEST(ViewerClient, OpenFileSendsTheRightCommandAndReportsTheOutcome) {
     server.send(loaded);
     ASSERT_TRUE(server.pump([&] { return !client.notice().error; }));
     EXPECT_EQ(client.notice().text, "Loaded /robots/arm.urdf");
+    client.stop();
+}
+
+TEST(ViewerClient, LogLinesFillTheConsoleBookAndOldOnesFallOut) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+    EXPECT_TRUE(client.logs()->entries.empty());
+
+    const auto send = [&](v1::LogLevel level, const char* text, std::int64_t ns) {
+        v1::Envelope line;
+        line.mutable_log()->set_level(level);
+        line.mutable_log()->set_source("stage");
+        line.mutable_log()->set_text(text);
+        line.mutable_log()->mutable_sim_time()->set_ns(ns);
+        server.send(line);
+    };
+    send(v1::LOG_LEVEL_INFO, "loaded", 0);
+    send(v1::LOG_LEVEL_WARN, "slow", 2'000'000);
+    send(v1::LOG_LEVEL_ERROR, "broken", 3'000'000);
+    ASSERT_TRUE(server.pump([&] { return client.logs()->total == 3; }));
+    const std::shared_ptr<const LogBook> book = client.logs();
+    ASSERT_EQ(book->entries.size(), 3U);
+    EXPECT_EQ(book->entries[1].level, LogLevel::Warn);
+    EXPECT_EQ(book->entries[1].text, "slow");
+    EXPECT_EQ(book->entries[1].source, "stage");
+    EXPECT_EQ(book->entries[2].simTimeNs, 3'000'000);
+    EXPECT_EQ(book->warnings, 1U);
+    EXPECT_EQ(book->errors, 1U);
+    EXPECT_TRUE(client.notice().text.empty());  // log lines go to the console, not the notice
+
+    for (std::size_t i = 0; i < LogBook::kCapacity; ++i) {
+        send(v1::LOG_LEVEL_INFO, "more", 4'000'000);
+    }
+    ASSERT_TRUE(server.pump([&] { return client.logs()->total == 3 + LogBook::kCapacity; }));
+    EXPECT_EQ(client.logs()->entries.size(), LogBook::kCapacity);
+    EXPECT_EQ(client.logs()->warnings, 0U);  // the warning and the error fell out
+    EXPECT_EQ(client.logs()->errors, 0U);
+    client.stop();
+}
+
+TEST(ViewerClient, AttributesOfAPrimAreRequestedAndDecoded) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+    EXPECT_EQ(client.attributes(), nullptr);
+
+    const std::uint64_t id = client.requestAttributes(8);
+    ASSERT_TRUE(
+        server.pump([&] { return server.countCommands(v1::Command::kGetAttributes) == 1; }));
+    for (const v1::Envelope& e : server.received()) {
+        if (e.body_case() == v1::Envelope::kCommand && e.command().has_get_attributes()) {
+            ASSERT_EQ(e.command().get_attributes().prims_size(), 1);
+            EXPECT_EQ(e.command().get_attributes().prims(0), 8U);
+            EXPECT_EQ(e.command().request_id(), id);
+        }
+    }
+
+    v1::Envelope answer;
+    answer.mutable_command_result()->set_request_id(id);
+    answer.mutable_command_result()->set_ok(true);
+    v1::PrimAttributes* item = answer.mutable_command_result()->mutable_attributes()->add_items();
+    item->set_prim(8);
+    v1::Attribute* resistance = item->add_attributes();
+    resistance->set_name("elec:windingResistance");
+    resistance->set_real(0.12);
+    resistance->mutable_unit()->set_display("ohm");
+    v1::Attribute* model = item->add_attributes();
+    model->set_name("elec:behaviorModel");
+    model->set_asset("models/bldc_drive.fmu");
+    v1::Attribute* port = item->add_attributes();
+    port->set_name("powerPort");
+    port->mutable_targets()->add_prims(7);
+    v1::Attribute* ratio = item->add_attributes();
+    ratio->set_name("thermal:emissivity");
+    ratio->set_real(0.85);
+    ratio->mutable_unit()->set_display("1");
+    server.send(answer);
+
+    ASSERT_TRUE(server.pump([&] { return client.attributes() != nullptr; }));
+    const auto attributes = client.attributes();
+    EXPECT_EQ(attributes->requestId, id);
+    EXPECT_EQ(attributes->prim, 8U);
+    ASSERT_EQ(attributes->attributes.size(), 4U);
+    EXPECT_EQ(attributes->attributes[0].value, "0.12");
+    EXPECT_EQ(attributes->attributes[0].unit, "ohm");
+    EXPECT_EQ(attributes->attributes[0].group(), "elec");
+    EXPECT_EQ(attributes->attributes[0].kind, AttributeInfo::Kind::Real);
+    EXPECT_EQ(attributes->attributes[1].kind, AttributeInfo::Kind::Asset);
+    EXPECT_EQ(attributes->attributes[1].value, "models/bldc_drive.fmu");
+    EXPECT_EQ(attributes->attributes[2].kind, AttributeInfo::Kind::Targets);
+    EXPECT_EQ(attributes->attributes[2].targets, std::vector<std::uint32_t>{7});
+    EXPECT_TRUE(attributes->attributes[2].group().empty());
+    EXPECT_TRUE(attributes->attributes[3].unit.empty());  // a pure number shows no unit
     client.stop();
 }
 

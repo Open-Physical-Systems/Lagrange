@@ -145,6 +145,14 @@ public:
             frameScene(*scene_);
             framedStage_ = scene_->statics->stagePath;
             selectedPrim_ = kNone;
+            // A prim asked for on the command line is selected in the first stage shown.
+            for (std::uint32_t i = 0; !selectPath_.empty() && i < scene_->statics->prims.size();
+                 ++i) {
+                if (scene_->statics->prims[i].path == selectPath_) {
+                    selectedPrim_ = i;
+                }
+            }
+            selectPath_.clear();
         }
         // Edits asked for on the command line wait for the server's profile.
         if (!domainEdits_.empty() && profileSession_.profile()) {
@@ -189,6 +197,7 @@ public:
     [[nodiscard]] std::uint32_t drawCalls() const { return renderer_.lastDrawCount(); }
     void setCanOpenFiles(bool value) { canOpenFiles_ = value; }
     void setWorkspace(Workspace workspace) { workspace_ = workspace; }
+    void setInitialSelection(std::string path) { selectPath_ = std::move(path); }
     void setProfileEdits(std::vector<std::pair<std::string, bool>> edits, bool apply) {
         domainEdits_ = std::move(edits);
         applyProfile_ = apply;
@@ -263,6 +272,7 @@ private:
     ProfileSession profileSession_;
     std::vector<std::pair<std::string, bool>> domainEdits_;
     bool applyProfile_{false};
+    std::string selectPath_;
     bool openFileRequested_{false};
     std::string framedStage_{"\x01"};  // never a real stage path, so the first scene is framed
 };
@@ -350,6 +360,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
     {
         Ui ui(*device, client, format, 2, 1.0F, false, options.scopeSignals);
         ui.setWorkspace(workspace);
+        ui.setInitialSelection(options.selectPath);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize =
@@ -438,7 +449,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             "\"signal_blocks\": %llu, \"samples\": %llu, \"invalid_runs\": %llu, "
             "\"dropped_samples\": %llu, "
             "\"device\": \"%s\", \"tier\": %d, \"validation_errors\": %u, \"connected\": %s, "
-            "\"profile\": \"%s\", \"profile_changes\": %zu, \"domains_enabled\": \"%s\"}\n",
+            "\"profile\": \"%s\", \"profile_changes\": %zu, \"domains_enabled\": \"%s\", "
+            "\"log_lines\": %llu, \"attributes\": %zu}\n",
             jsonEscape(client.notice().text).c_str(), client.notice().error ? "true" : "false",
             rendered, static_cast<unsigned long long>(stats.snapshots),
             static_cast<unsigned long long>(stats.deltas),
@@ -452,7 +464,9 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             static_cast<unsigned long long>(stats.droppedSamples), device->info().name.c_str(),
             static_cast<int>(device->tier()), device->validationErrorCount(),
             client.connection().state == ConnectionState::Ready ? "true" : "false", profileVerdict,
-            ui.profileSession().draft().changedLineCount(), enabledDomains.c_str());
+            ui.profileSession().draft().changedLineCount(), enabledDomains.c_str(),
+            static_cast<unsigned long long>(client.logs()->total),
+            client.attributes() ? client.attributes()->attributes.size() : std::size_t{0});
         if (device->validationErrorCount() != 0 && exitCode == 0) {
             exitCode = 6;
         }
@@ -644,6 +658,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         ImGui_ImplSDL3_InitForVulkan(window);
         ui.setCanOpenFiles(true);
         ui.setWorkspace(workspace);
+        ui.setInitialSelection(options.selectPath);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);
         // The file dialog reports its result on a callback that may run on another thread.
         struct Chosen {
@@ -804,11 +819,12 @@ int runViewer(const Options& options) {
     if (!ok) {
         return 2;
     }
-    Workspace workspace = Workspace::Scene;
+    // Signals asked for on the command line are plotted in the Signals workspace.
+    Workspace workspace = options.scopeSignals.empty() ? Workspace::Scene : Workspace::Signals;
     if (!options.workspace.empty()) {
         const std::optional<Workspace> parsed = parseWorkspace(options.workspace);
         if (!parsed) {
-            std::fprintf(stderr, "error: unknown workspace '%s' (scene, domains)\n",
+            std::fprintf(stderr, "error: unknown workspace '%s' (scene, domains, signals)\n",
                          options.workspace.c_str());
             return 2;
         }

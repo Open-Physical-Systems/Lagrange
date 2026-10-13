@@ -24,6 +24,7 @@ constexpr std::size_t kMaxColumns = 4096;  // more columns than any plot is pixe
 class ScopePanel final : public Panel {
 public:
     [[nodiscard]] const char* title() const override { return "Scope"; }
+    [[nodiscard]] Workspace workspace() const override { return Workspace::Signals; }
 
     void draw(PanelContext& context) override {
         // Signals requested on the command line; they need the catalog first.

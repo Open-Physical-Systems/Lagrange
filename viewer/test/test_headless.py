@@ -303,3 +303,34 @@ def test_switching_a_domain_off_is_validated_and_applied_by_the_server(socket_di
     assert (width, height) == (1600, 1000)
     pixels = {row[i : i + 4] for row in rows for i in range(0, len(row), 4)}
     assert len(pixels) > 50, "the Domains workspace is nearly uniform: nothing was drawn"
+
+
+def test_scene_workspace_shows_the_selected_prim_and_the_console(socket_dir):
+    """Design 02-scene: the inspector fills for a selected prim; the console has the log."""
+    image = socket_dir / "scene.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "60",
+            "--size",
+            "1600x1000",
+            "--select",
+            "/amr/left_drive_motor",
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    assert stats["log_lines"] >= 3  # stage, replay and profile lines from the server
+    assert stats["attributes"] == 9  # the motor's electrical and thermal attributes
+    # The inspector streams the selected prim's own signals (10 kHz current, temperature).
+    assert stats["samples"] > 1000 and stats["dropped_samples"] == 0
+    assert stats["notice"] == ""  # log lines go to the console, not the status bar
+
+    width, height, rows = read_png(image)
+    assert (width, height) == (1600, 1000)
+    pixels = {row[i : i + 4] for row in rows for i in range(0, len(row), 4)}
+    assert len(pixels) > 50

@@ -3,8 +3,10 @@
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <array>
+#include <cfloat>
 #include <cmath>
 #include <cstdarg>
+#include <cstdio>
 #include <imgui_internal.h>  // ItemSize/ItemAdd for custom-drawn widgets
 
 namespace lagrange::viewer::widgets {
@@ -351,6 +353,242 @@ bool SectionHeader(const char* title, const char* meta, bool defaultOpen) {
                       meta);
     }
     return open;
+}
+
+std::string_view schemaDomain(std::string_view name) {
+    struct Prefix {
+        std::string_view prefix;
+        std::string_view domain;
+    };
+    // USD schema names and the attribute namespaces they use.
+    static constexpr std::array<Prefix, 22> kPrefixes{{
+        {"Physics", "rigid_body"},
+        {"physics", "rigid_body"},
+        {"Electrical", "electrical"},
+        {"Battery", "electrical"},
+        {"Port", "electrical"},
+        {"elec", "electrical"},
+        {"Thermal", "thermal"},
+        {"thermal", "thermal"},
+        {"Aero", "aerodynamics"},
+        {"aero", "aerodynamics"},
+        {"Weather", "weather"},
+        {"weather", "weather"},
+        {"Emi", "emi"},
+        {"emi", "emi"},
+        {"Radiation", "radiation"},
+        {"radiation", "radiation"},
+        {"Sensor", "sensors"},
+        {"sensor", "sensors"},
+        {"Lidar", "sensors"},
+        {"Camera", "sensors"},
+        {"Imu", "sensors"},
+        {"Magnetometer", "sensors"},
+    }};
+    for (const Prefix& entry : kPrefixes) {
+        if (name.starts_with(entry.prefix)) {
+            return entry.domain;
+        }
+    }
+    return {};
+}
+
+bool Segmented(const char* id, const char* const* options, int count, int* index) {
+    const theme::Fonts& fonts = theme::fonts();
+    bool changed = false;
+    ImGui::PushID(id);
+    ImGui::PushFont(fonts.sansMedium, theme::kLabelSize);
+    const float height = px(22.0F);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const float rounding = ImGui::GetStyle().FrameRounding;
+    for (int i = 0; i < count; ++i) {
+        if (i != 0) {
+            ImGui::SameLine(0.0F, 0.0F);
+        }
+        const ImVec2 textSize = ImGui::CalcTextSize(options[i]);
+        const ImVec2 size(textSize.x + px(16.0F), height);
+        const ImVec2 min = ImGui::GetCursorScreenPos();
+        const ImVec2 max(min.x + size.x, min.y + size.y);
+        ImGui::PushID(i);
+        if (ImGui::InvisibleButton("##option", size) && *index != i) {
+            *index = i;
+            changed = true;
+        }
+        ImGui::PopID();
+        const bool selected = *index == i;
+        const ImDrawFlags corners = i == 0 ? ImDrawFlags_RoundCornersLeft
+                                           : (i == count - 1 ? ImDrawFlags_RoundCornersRight
+                                                             : ImDrawFlags_RoundCornersNone);
+        draw->AddRectFilled(
+            min, max, u32(selected ? c::accentWeak : (ImGui::IsItemHovered() ? c::bg3 : c::bg2)),
+            rounding, corners);
+        draw->AddRect(min, max, u32(selected ? c::accentBorder : c::lineStrong), rounding, 1.0F,
+                      corners);
+        draw->AddText(ImVec2(min.x + px(8.0F), min.y + (size.y - textSize.y) * 0.5F),
+                      u32(selected ? c::accent : c::t2), options[i]);
+    }
+    ImGui::PopFont();
+    ImGui::PopID();
+    return changed;
+}
+
+namespace {
+
+constexpr float kLabelColumn = 112.0F;
+
+/// Draws a read-only value field at the cursor, `width` wide. Returns true when clicked.
+bool valueField(const char* id, const char* value, const char* unit, float width,
+                const ImVec4& color) {
+    const theme::Fonts& fonts = theme::fonts();
+    const ImVec2 size(width, px(22.0F));
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const ImVec2 max(min.x + size.x, min.y + size.y);
+    const bool clicked = ImGui::InvisibleButton(id, size);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const float rounding = ImGui::GetStyle().FrameRounding;
+    draw->AddRectFilled(min, max, u32(c::bg0), rounding);
+    draw->AddRect(min, max, u32(c::line), rounding);
+    const float fontSize = px(theme::kMonoSize);
+    const float y = min.y + (size.y - fontSize) * 0.5F - px(1.0F);
+    float right = max.x - px(6.0F);
+    if (unit != nullptr && *unit != '\0') {
+        const float unitSize = px(theme::kCaptionSize);
+        const ImVec2 extent = fonts.mono->CalcTextSizeA(unitSize, FLT_MAX, 0.0F, unit);
+        right -= extent.x;
+        draw->AddText(fonts.mono, unitSize, ImVec2(right, min.y + (size.y - unitSize) * 0.5F),
+                      u32(c::t3), unit);
+        right -= px(6.0F);
+    }
+    draw->PushClipRect(min, ImVec2(std::max(right, min.x), max.y), true);
+    draw->AddText(fonts.mono, fontSize, ImVec2(min.x + px(7.0F), y), u32(color), value);
+    draw->PopClipRect();
+    return clicked;
+}
+
+void rowLabel(const char* label) {
+    const float start = ImGui::GetCursorPosX();
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushStyleColor(ImGuiCol_Text, c::t2);
+    ImGui::TextUnformatted(label);
+    ImGui::PopStyleColor();
+    ImGui::SameLine(start + px(kLabelColumn));
+}
+
+}  // namespace
+
+bool PropertyRow(const char* label, const char* value, const char* unit, bool link,
+                 const char* tooltip) {
+    ImGui::PushID(label);
+    rowLabel(label);
+    const bool clicked =
+        valueField("##value", value, unit, std::max(ImGui::GetContentRegionAvail().x, px(40.0F)),
+                   link ? c::info : c::t1);
+    if (tooltip != nullptr && *tooltip != '\0') {
+        ImGui::SetItemTooltip("%s", tooltip);
+    }
+    ImGui::PopID();
+    return link && clicked;
+}
+
+void Vec3Field(const char* label, const double value[3], const char* format) {
+    static constexpr std::array<const char*, 3> kAxis{"X", "Y", "Z"};
+    const std::array<ImVec4, 3> colors{theme::hex(0xF0605D), theme::hex(0x4FC97A),
+                                       theme::hex(0x5AA2FF)};  // design tokens: color.axis
+    const theme::Fonts& fonts = theme::fonts();
+    ImGui::PushID(label);
+    rowLabel(label);
+    const float gap = px(4.0F);
+    const float width = (ImGui::GetContentRegionAvail().x - gap * 2.0F) / 3.0F;
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        if (axis != 0) {
+            ImGui::SameLine(0.0F, gap);
+        }
+        char text[32];
+        std::snprintf(text, sizeof(text), format, value[axis]);
+        const ImVec2 min = ImGui::GetCursorScreenPos();
+        // Leave room for the axis letter by drawing the value after it.
+        char padded[40];
+        std::snprintf(padded, sizeof(padded), "   %s", text);
+        valueField(kAxis[axis], padded, nullptr, std::max(width, px(30.0F)), c::t1);
+        const float fontSize = px(theme::kMonoSize);
+        draw->AddText(fonts.monoMedium, fontSize,
+                      ImVec2(min.x + px(7.0F), min.y + (px(22.0F) - fontSize) * 0.5F - px(1.0F)),
+                      u32(colors[axis]), kAxis[axis]);
+    }
+    ImGui::PopID();
+}
+
+void Sparkline(const float* low, const float* high, int columns, const ImVec2& size,
+               const ImVec4& color) {
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    ImGui::Dummy(size);
+    if (columns < 2 || !ImGui::IsItemVisible()) {
+        return;
+    }
+    float bottom = FLT_MAX;
+    float top = -FLT_MAX;
+    for (int i = 0; i < columns; ++i) {
+        if (!std::isnan(low[i])) {
+            bottom = std::min(bottom, low[i]);
+            top = std::max(top, high[i]);
+        }
+    }
+    if (bottom > top) {
+        return;  // no samples yet
+    }
+    const float span = std::max(top - bottom, 1e-9F * std::max(std::abs(top), 1.0F));
+    const float pad = px(2.0F);
+    const float scaleY = (size.y - pad * 2.0F) / span;
+    const float stepX = size.x / static_cast<float>(columns - 1);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImU32 line = u32(color);
+    bool previous = false;
+    ImVec2 last;
+    for (int i = 0; i < columns; ++i) {
+        if (std::isnan(low[i])) {
+            previous = false;
+            continue;
+        }
+        const float x = min.x + stepX * static_cast<float>(i);
+        const float yLow = min.y + size.y - pad - (low[i] - bottom) * scaleY;
+        const float yHigh = min.y + size.y - pad - (high[i] - bottom) * scaleY;
+        if (yLow - yHigh > 1.0F) {
+            draw->AddLine(ImVec2(x, yLow), ImVec2(x, yHigh), line);  // the range in this column
+        }
+        const ImVec2 mid(x, (yLow + yHigh) * 0.5F);
+        if (previous) {
+            draw->AddLine(last, mid, line, px(1.2F));
+        }
+        last = mid;
+        previous = true;
+    }
+}
+
+void SchemaChip(const char* schema) {
+    const theme::Fonts& fonts = theme::fonts();
+    const std::string_view domain = schemaDomain(schema);
+    const ImVec4 color = domain.empty() ? c::t2 : domainColor(domain);
+    ImGui::PushFont(fonts.sansMedium, theme::kCaptionSize);
+    const ImVec2 textSize = ImGui::CalcTextSize(schema);
+    const float dot = px(6.0F);
+    const ImVec2 size(textSize.x + dot + px(18.0F), px(20.0F));
+    // Wrap to the next line when the chip does not fit.
+    if (ImGui::GetCursorPosX() > ImGui::GetStyle().WindowPadding.x + 1.0F &&
+        ImGui::GetContentRegionAvail().x < size.x) {
+        ImGui::NewLine();
+    }
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const ImVec2 max(min.x + size.x, min.y + size.y);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(min, max, u32(withAlpha(color, 0.10F)), size.y * 0.5F);
+    draw->AddRect(min, max, u32(withAlpha(color, 0.35F)), size.y * 0.5F);
+    draw->AddCircleFilled(ImVec2(min.x + px(8.0F) + dot * 0.5F, min.y + size.y * 0.5F), dot * 0.5F,
+                          u32(color));
+    draw->AddText(ImVec2(min.x + px(12.0F) + dot, min.y + (size.y - textSize.y) * 0.5F), u32(color),
+                  schema);
+    ImGui::PopFont();
+    ImGui::Dummy(size);
 }
 
 bool BarTab(const char* label, bool active) {

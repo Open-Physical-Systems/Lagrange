@@ -23,6 +23,7 @@ struct Options {
     /// as (domain, enabled). They are edits, not applied, unless applyProfile is set.
     std::vector<std::pair<std::string, bool>> domainEdits;
     bool applyProfile{false};  ///< Apply the edited profile as soon as the server calls it valid.
+    std::string selectPath;    ///< Prim to select once the scene arrived, by its full path.
     std::string openPath;      ///< Robot description or recording to ask the server to load.
     std::uint32_t width{1600};
     std::uint32_t height{900};

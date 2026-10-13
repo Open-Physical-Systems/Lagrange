@@ -2,8 +2,10 @@
 #include "lagrange/viewer/ViewerClient.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <poll.h>
 #include <sys/eventfd.h>
 #include <unistd.h>
@@ -72,6 +74,7 @@ ViewerClient::ViewerClient(proto::Endpoint endpoint)
     , worker_(std::make_unique<Worker>()) {
     status_.store(std::make_shared<const ServerStatus>());
     notice_.store(std::make_shared<const Notice>());
+    logs_.store(std::make_shared<const LogBook>());
     connection_.store(std::make_shared<const ConnectionInfo>());
 }
 
@@ -246,6 +249,15 @@ void ViewerClient::openFile(const std::string& path) {
     enqueue(std::move(envelope));
 }
 
+std::uint64_t ViewerClient::requestAttributes(std::uint32_t prim) {
+    auto envelope = std::make_unique<v1::Envelope>();
+    const std::uint64_t id = nextRequestId_++;
+    envelope->mutable_command()->set_request_id(id);
+    envelope->mutable_command()->mutable_get_attributes()->add_prims(prim);
+    enqueue(std::move(envelope));
+    return id;
+}
+
 std::uint64_t ViewerClient::validateProfile(const std::string& yaml) {
     auto envelope = std::make_unique<v1::Envelope>();
     const std::uint64_t id = nextRequestId_++;
@@ -298,6 +310,58 @@ void ViewerClient::requestSnapshot() {
     worker_->snapshotRequested = worker_->connection.queue(envelope);
 }
 
+namespace {
+
+AttributeInfo toAttribute(const v1::Attribute& source) {
+    AttributeInfo info;
+    info.name = source.name();
+    info.unit = source.unit().display();
+    if (info.unit == "1") {
+        info.unit.clear();  // a pure number
+    }
+    info.doc = source.doc();
+    info.editable = source.editable();
+    char text[64];
+    switch (source.value_case()) {
+        case v1::Attribute::kReal:
+            info.kind = AttributeInfo::Kind::Real;
+            std::snprintf(text, sizeof(text), "%.6g", source.real());
+            info.value = text;
+            break;
+        case v1::Attribute::kInteger:
+            info.kind = AttributeInfo::Kind::Integer;
+            info.value = std::to_string(source.integer());
+            break;
+        case v1::Attribute::kBoolean:
+            info.kind = AttributeInfo::Kind::Boolean;
+            info.value = source.boolean() ? "true" : "false";
+            break;
+        case v1::Attribute::kAsset:
+            info.kind = AttributeInfo::Kind::Asset;
+            info.value = source.asset();
+            break;
+        case v1::Attribute::kReals:
+            info.kind = AttributeInfo::Kind::Reals;
+            for (int i = 0; i < source.reals().v_size() && i < 16; ++i) {
+                std::snprintf(text, sizeof(text), "%s%.6g", i == 0 ? "" : ", ",
+                              source.reals().v(i));
+                info.value += text;
+            }
+            break;
+        case v1::Attribute::kTargets:
+            info.kind = AttributeInfo::Kind::Targets;
+            info.targets.assign(source.targets().prims().begin(), source.targets().prims().end());
+            break;
+        default:
+            info.kind = AttributeInfo::Kind::Token;
+            info.value = source.token();
+            break;
+    }
+    return info;
+}
+
+}  // namespace
+
 void ViewerClient::handle(const v1::Envelope& envelope) {
     Worker& w = *worker_;
     switch (envelope.body_case()) {
@@ -321,6 +385,8 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
             w.info.canSeek = hello.capabilities().can_seek();
             w.info.canStep = hello.capabilities().can_step();
             w.backoff.reset();
+            // The server sends its console history again on every connection.
+            logs_.store(std::make_shared<const LogBook>());
             publish(ConnectionState::Ready);
             requestSnapshot();
             break;
@@ -395,7 +461,20 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
             break;
         case v1::Envelope::kCommandResult: {
             const v1::CommandResult& result = envelope.command_result();
-            if (result.has_validation()) {
+            if (result.has_attributes()) {
+                // The inspector asks for one prim at a time; take the first item.
+                auto answer = std::make_shared<PrimAttributes>();
+                answer->requestId = result.request_id();
+                if (result.attributes().items_size() > 0) {
+                    const v1::PrimAttributes& item = result.attributes().items(0);
+                    answer->prim = item.prim();
+                    answer->attributes.reserve(static_cast<std::size_t>(item.attributes_size()));
+                    for (const v1::Attribute& source : item.attributes()) {
+                        answer->attributes.push_back(toAttribute(source));
+                    }
+                }
+                attributes_.store(std::move(answer));
+            } else if (result.has_validation()) {
                 auto check = std::make_shared<ProfileCheck>();
                 check->requestId = result.request_id();
                 check->valid = result.validation().valid();
@@ -445,12 +524,27 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
             profile_.store(std::move(profile));
             break;
         }
-        case v1::Envelope::kLog:
-            // Import notes arrive as warnings; show the most recent one.
-            if (envelope.log().level() >= v1::LOG_LEVEL_WARN) {
-                post(false, envelope.log().text());
+        case v1::Envelope::kLog: {
+            // Copy-on-write: the book is small and log lines are rare next to frames.
+            auto book = std::make_shared<LogBook>(*logs_.load());
+            if (book->entries.size() >= LogBook::kCapacity) {
+                const LogEntry& oldest = book->entries.front();
+                book->warnings -= oldest.level == LogLevel::Warn ? 1U : 0U;
+                book->errors -= oldest.level == LogLevel::Error ? 1U : 0U;
+                book->entries.erase(book->entries.begin());
             }
+            const v1::LogRecord& record = envelope.log();
+            const int level =
+                std::clamp(static_cast<int>(record.level()), static_cast<int>(LogLevel::Debug),
+                           static_cast<int>(LogLevel::Error));
+            book->entries.push_back({record.sim_time().ns(), static_cast<LogLevel>(level),
+                                     record.source(), record.text()});
+            book->warnings += level == static_cast<int>(LogLevel::Warn) ? 1U : 0U;
+            book->errors += level == static_cast<int>(LogLevel::Error) ? 1U : 0U;
+            ++book->total;
+            logs_.store(std::move(book));
             break;
+        }
         default:
             break;  // messages this viewer does not use yet, or newer than it knows
     }
