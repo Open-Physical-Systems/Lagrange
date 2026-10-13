@@ -104,7 +104,7 @@ third-party domain can add its own).
 ### Paths
 
 Relative paths resolve against the profile file's directory, then against the search path
-`SIMCORE_ASSET_PATH`, then against installed share directories of ROS packages using
+`LAGRANGE_ASSET_PATH`, then against installed share directories of ROS packages using
 `package://<pkg>/…` URIs. Recording paths resolve against the working directory. `record.path`
 may contain `{date}`, `{time}` and `{seq}` placeholders (proposed).
 

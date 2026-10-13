@@ -21,14 +21,14 @@ merged.
 | Sign-off | DCO on every commit (`git commit -s`) |
 | Tags | `vX.Y.Z`, signed (Sigstore gitsign or GPG; decide with the release workflow) |
 | Release branches | From v1.0: `release/1.x`, supported for the life of ROS 2 Lyrical (May 2031). Fixes land on `main` first and are cherry-picked by a bot label `backport/1.x` |
-| Large files | Nothing over 1 MB. No Git LFS in the main repo (Free plan includes 10 GiB storage and 10 GiB bandwidth per month; a public repo cloned by CI would use that quickly). Large assets live in release bundles of a separate `simcore-assets` repo and are fetched by checksum |
+| Large files | Nothing over 1 MB. No Git LFS in the main repo (Free plan includes 10 GiB storage and 10 GiB bandwidth per month; a public repo cloned by CI would use that quickly). Large assets live in release bundles of a separate `lagrange-assets` repo and are fetched by checksum |
 
 ### Branch protection for `main` (repository ruleset)
 
 | Setting | Value |
 |---|---|
 | Require a pull request | yes |
-| Required approvals | 1; 2 for paths owned by `@simcore/core-maintainers` in CODEOWNERS (`schemas/`, `core/plugin_abi/`, `proto/`) through "require review from code owners" plus a second-approval check job |
+| Required approvals | 1; 2 for paths owned by `@Open-Physical-Systems/core-maintainers` in CODEOWNERS (`schemas/`, `core/plugin_abi/`, `proto/`) through "require review from code owners" plus a second-approval check job |
 | Dismiss stale approvals on new commits | yes |
 | Require conversation resolution | yes |
 | Require status checks | `lint`, `commits`, `build-test (amd64)`, `build-test (arm64)`, `sanitizers (asan-ubsan)`, `sanitizers (tsan)`, `viewer-headless`, `proto`, `docs`, `reuse` |
@@ -53,7 +53,7 @@ CMakePresets.json  colcon.defaults.yaml
 LICENSE  LICENSES/Apache-2.0.txt (+ one file per third-party license used)  REUSE.toml
 README.md  CONTRIBUTING.md  CODE_OF_CONDUCT.md  SECURITY.md  GOVERNANCE.md  CHANGELOG.md
 release-please-config.json  .release-please-manifest.json
-packaging/rosdep/simcore.yaml
+packaging/rosdep/lagrange.yaml
 .github/
 ├── CODEOWNERS
 ├── ISSUE_TEMPLATE/{bug.yml, feature.yml, robot-class.yml, config.yml}
@@ -199,7 +199,7 @@ IncludeBlocks: Regroup
 IncludeCategories:          # first matching regex wins, so order matters
   - Regex: '^"'              # this target's own headers, first block after the main include
     Priority: 0
-  - Regex: '^<simcore/'      # project headers last
+  - Regex: '^<lagrange/'      # project headers last
     Priority: 4
   - Regex: '^<(rclcpp|rclcpp_components|rcl|rmw|rosidl|hardware_interface|controller_manager|pluginlib|tf2|tf2_ros|ament_index_cpp|[a-z0-9_]+_msgs)/'   # ROS
     Priority: 3
@@ -258,7 +258,7 @@ The two extra disabled checks (`identifier-length`, `easily-swappable-parameters
 physics code uses names like `R`, `L`, `dt` and functions with several `double` parameters by
 nature. `ExcludeHeaderFilterRegex` exists in recent clang-tidy versions; TODO(verify) that
 clang-tidy 21 accepts the key. The naming rules follow the reference code in CLAUDE.md §11
-(`preferredStep`, `joints_`); the constants in `simcore::units` (`N_m`, `rad_per_s`) are exempted
+(`preferredStep`, `joints_`); the constants in `lagrange::units` (`N_m`, `rad_per_s`) are exempted
 with `// NOLINT` at the namespace or by a naming-rule exception to be settled in issue 0.1-A2.
 
 ### `CMakePresets.json`
@@ -281,7 +281,7 @@ Presets are for IDEs and single-package work. The normal build is `colcon build`
         "CMAKE_CXX_STANDARD": "20",
         "CMAKE_CXX_STANDARD_REQUIRED": "ON",
         "CMAKE_CXX_EXTENSIONS": "OFF",
-        "SIMCORE_WARNINGS_AS_ERRORS": "ON"
+        "LAGRANGE_WARNINGS_AS_ERRORS": "ON"
       }
     },
     { "name": "dev", "inherits": "base", "displayName": "Developer (RelWithDebInfo)",
@@ -289,15 +289,15 @@ Presets are for IDEs and single-package work. The normal build is `colcon build`
     { "name": "release", "inherits": "base", "displayName": "Release",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON" } },
     { "name": "deterministic", "inherits": "release", "displayName": "Release, deterministic FP flags",
-      "cacheVariables": { "SIMCORE_DETERMINISTIC": "ON" } },
+      "cacheVariables": { "LAGRANGE_DETERMINISTIC": "ON" } },
     { "name": "asan", "inherits": "base", "displayName": "ASan + UBSan",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "SIMCORE_SANITIZER": "address;undefined" } },
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "LAGRANGE_SANITIZER": "address;undefined" } },
     { "name": "tsan", "inherits": "base", "displayName": "TSan",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "SIMCORE_SANITIZER": "thread" } },
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "LAGRANGE_SANITIZER": "thread" } },
     { "name": "ci-amd64", "inherits": "base", "displayName": "CI amd64",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "CMAKE_CXX_COMPILER_LAUNCHER": "ccache", "BUILD_TESTING": "ON" } },
     { "name": "ci-arm64", "inherits": "ci-amd64", "displayName": "CI arm64 (CPU tests only)",
-      "cacheVariables": { "SIMCORE_GPU_TESTS": "OFF" } },
+      "cacheVariables": { "LAGRANGE_GPU_TESTS": "OFF" } },
     { "name": "ci-tidy", "inherits": "base", "displayName": "CI clang-tidy",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "CMAKE_CXX_COMPILER": "clang++", "CMAKE_CXX_CLANG_TIDY": "clang-tidy" } }
   ],
@@ -329,7 +329,7 @@ build:
     - -DCMAKE_BUILD_TYPE=RelWithDebInfo
     - -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
     - -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-    - -DSIMCORE_WARNINGS_AS_ERRORS=ON
+    - -DLAGRANGE_WARNINGS_AS_ERRORS=ON
   event-handlers: [console_cohesion+]
 test:
   event-handlers: [console_direct+]
@@ -337,7 +337,7 @@ test:
 ```
 
 Sanitizer builds: `colcon build --build-base build-asan --install-base install-asan
---cmake-args -DSIMCORE_SANITIZER="address;undefined"`. CLAUDE.md §7 mentions `--mixin asan`;
+--cmake-args -DLAGRANGE_SANITIZER="address;undefined"`. CLAUDE.md §7 mentions `--mixin asan`;
 colcon mixins need the mixin repository to be registered on each machine, so the plan passes the
 option explicitly (availability of mixins on Lyrical stays TODO(verify)).
 
@@ -550,36 +550,36 @@ because it needs no third-party app installation.
 ### `CODEOWNERS`
 
 ```
-# Later rules override earlier ones. Team names are placeholders until the organisation exists.
-*                         @simcore/maintainers
+# Later rules override earlier ones. Team names are placeholders until the teams are created in the organisation.
+*                         @Open-Physical-Systems/maintainers
 
-/core/                    @simcore/core-maintainers
-/gpu/                     @simcore/gpu-maintainers
-/viewer/                  @simcore/viewer-maintainers
-/modules/                 @simcore/domain-maintainers
-/modules/electrical/      @simcore/electrical-maintainers
-/modules/thermal/         @simcore/electrical-maintainers
-/bridges/                 @simcore/ros-maintainers
-/io/                      @simcore/io-maintainers
-/packaging/               @simcore/release-maintainers
-/vendor/                  @simcore/release-maintainers
-/docs/                    @simcore/maintainers
+/core/                    @Open-Physical-Systems/core-maintainers
+/gpu/                     @Open-Physical-Systems/gpu-maintainers
+/viewer/                  @Open-Physical-Systems/viewer-maintainers
+/modules/                 @Open-Physical-Systems/domain-maintainers
+/modules/electrical/      @Open-Physical-Systems/electrical-maintainers
+/modules/thermal/         @Open-Physical-Systems/electrical-maintainers
+/bridges/                 @Open-Physical-Systems/ros-maintainers
+/io/                      @Open-Physical-Systems/io-maintainers
+/packaging/               @Open-Physical-Systems/release-maintainers
+/vendor/                  @Open-Physical-Systems/release-maintainers
+/docs/                    @Open-Physical-Systems/maintainers
 
 # Stable surfaces: core-maintainer review is mandatory (CLAUDE.md §9); two approvals enforced by CI.
-/schemas/                 @simcore/core-maintainers
-/core/plugin_abi/         @simcore/core-maintainers
-/proto/                   @simcore/core-maintainers
-/profiles/schema.json     @simcore/core-maintainers
-/rfcs/                    @simcore/core-maintainers
+/schemas/                 @Open-Physical-Systems/core-maintainers
+/core/plugin_abi/         @Open-Physical-Systems/core-maintainers
+/proto/                   @Open-Physical-Systems/core-maintainers
+/profiles/schema.json     @Open-Physical-Systems/core-maintainers
+/rfcs/                    @Open-Physical-Systems/core-maintainers
 
 # Supply chain and governance
-/.github/                 @simcore/release-maintainers @simcore/core-maintainers
-/LICENSE                  @simcore/core-maintainers
-/LICENSES/                @simcore/core-maintainers
-/REUSE.toml               @simcore/core-maintainers
-/SECURITY.md              @simcore/core-maintainers
-/GOVERNANCE.md            @simcore/core-maintainers
-/CLAUDE.md                @simcore/core-maintainers
+/.github/                 @Open-Physical-Systems/release-maintainers @Open-Physical-Systems/core-maintainers
+/LICENSE                  @Open-Physical-Systems/core-maintainers
+/LICENSES/                @Open-Physical-Systems/core-maintainers
+/REUSE.toml               @Open-Physical-Systems/core-maintainers
+/SECURITY.md              @Open-Physical-Systems/core-maintainers
+/GOVERNANCE.md            @Open-Physical-Systems/core-maintainers
+/CLAUDE.md                @Open-Physical-Systems/core-maintainers
 ```
 
 ### `labels.yml`
@@ -708,7 +708,7 @@ body:
     validations: { required: true }
   - type: input
     id: version
-    attributes: { label: simcore version, description: "Output of `simcore info --version` or the git commit." }
+    attributes: { label: lagrange version, description: "Output of `lagrange info --version` or the git commit." }
     validations: { required: true }
   - type: dropdown
     id: install
@@ -736,7 +736,7 @@ body:
     validations: { required: true }
   - type: input
     id: tier
-    attributes: { label: Capability tier, description: "From `simcore_gpu_info` (0, 1 or 2)." }
+    attributes: { label: Capability tier, description: "From `lagrange_gpu_info` (0, 1 or 2)." }
   - type: input
     id: rmw
     attributes: { label: RMW implementation, placeholder: "rmw_fastrtps_cpp" }
@@ -813,10 +813,10 @@ body:
 blank_issues_enabled: false
 contact_links:
   - name: Question or discussion
-    url: https://github.com/OWNER/REPO/discussions     # TODO: set when the repository exists
+    url: https://github.com/Open-Physical-Systems/Lagrange/discussions     
     about: Ask usage questions here, not in issues.
   - name: Security vulnerability
-    url: https://github.com/OWNER/REPO/security/advisories/new
+    url: https://github.com/Open-Physical-Systems/Lagrange/security/advisories/new
     about: Report privately. Do not open a public issue.
 ```
 
@@ -958,7 +958,7 @@ jobs:
     permissions: { contents: read }
     steps:
       - uses: actions/checkout@TODO_VERIFY_SHA
-        with: { path: src/simcore }
+        with: { path: src/lagrange }
       - name: Restore ccache
         uses: actions/cache@TODO_VERIFY_SHA
         with:
@@ -970,13 +970,13 @@ jobs:
         uses: actions/cache@TODO_VERIFY_SHA
         with:
           path: vendor_install
-          key: vendor-${{ matrix.arch }}-${{ hashFiles('src/simcore/vendor/**') }}
+          key: vendor-${{ matrix.arch }}-${{ hashFiles('src/lagrange/vendor/**') }}
       - name: Install dependencies
         run: |
           apt-get update
           apt-get install -y --no-install-recommends ccache ninja-build python3-colcon-common-extensions python3-rosdep
-          cp src/simcore/packaging/rosdep/simcore.yaml /etc/ros/rosdep/sources.list.d/simcore.yaml || true
-          echo "yaml file:///etc/ros/rosdep/sources.list.d/simcore.yaml" > /etc/ros/rosdep/sources.list.d/10-simcore.list
+          cp src/lagrange/packaging/rosdep/lagrange.yaml /etc/ros/rosdep/sources.list.d/lagrange.yaml || true
+          echo "yaml file:///etc/ros/rosdep/sources.list.d/lagrange.yaml" > /etc/ros/rosdep/sources.list.d/10-lagrange.list
           rosdep update
           rosdep install --from-paths src --ignore-src -y --rosdistro "$ROS_DISTRO"
       - name: Build vendor packages (cache miss only)
@@ -984,16 +984,16 @@ jobs:
         shell: bash
         run: |
           source /opt/ros/$ROS_DISTRO/setup.bash
-          colcon build --base-paths src/simcore/vendor --install-base vendor_install --merge-install \
+          colcon build --base-paths src/lagrange/vendor --install-base vendor_install --merge-install \
             --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - name: Build
         shell: bash
         run: |
           source /opt/ros/$ROS_DISTRO/setup.bash
           [ -f vendor_install/setup.bash ] && source vendor_install/setup.bash
-          colcon build --base-paths src/simcore --packages-skip-regex '.*_vendor' \
+          colcon build --base-paths src/lagrange --packages-skip-regex '.*_vendor' \
             --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=ON \
-                         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DSIMCORE_WARNINGS_AS_ERRORS=ON
+                         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DLAGRANGE_WARNINGS_AS_ERRORS=ON
       - name: Test (gtest + pytest via colcon)
         shell: bash
         run: |
@@ -1020,15 +1020,15 @@ jobs:
     permissions: { contents: read }
     steps:
       - uses: actions/checkout@TODO_VERIFY_SHA
-        with: { path: src/simcore }
+        with: { path: src/lagrange }
       # ... same dependency and vendor-cache steps as build-test (shared through a composite action
       #     .github/actions/setup-workspace) ...
       - name: Build and test with sanitizer
         shell: bash
         run: |
           source /opt/ros/$ROS_DISTRO/setup.bash
-          colcon build --base-paths src/simcore --packages-skip-regex '.*_vendor' \
-            --cmake-args -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON "-DSIMCORE_SANITIZER=${{ matrix.flags }}"
+          colcon build --base-paths src/lagrange --packages-skip-regex '.*_vendor' \
+            --cmake-args -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON "-DLAGRANGE_SANITIZER=${{ matrix.flags }}"
           source install/setup.bash
           colcon test --packages-skip-regex '.*_vendor' --ctest-args -LE 'gpu|slow'
           colcon test-result --verbose
@@ -1039,27 +1039,27 @@ jobs:
     permissions: { contents: read }
     steps:
       - uses: actions/checkout@TODO_VERIFY_SHA
-        with: { path: src/simcore }
+        with: { path: src/lagrange }
       - name: Install software Vulkan
         run: |
           apt-get update
           apt-get install -y --no-install-recommends mesa-vulkan-drivers vulkan-tools libvulkan1
-      # ... workspace setup and build of simcore_proto, simcore_gpu_*, simcore_mock_server, simcore_viewer ...
+      # ... workspace setup and build of lagrange_proto, lagrange_gpu_*, lagrange_mock_server, lagrange_viewer ...
       - name: Headless viewer against the mock server (lavapipe)
         shell: bash
         env:
           VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json    # TODO(verify) arch-suffixed name in the image
           SDL_VIDEODRIVER: offscreen                                 # TODO(verify) SDL3 driver for surfaceless Vulkan
-          SIMCORE_TIER: "0"
+          LAGRANGE_TIER: "0"
         run: |
           source install/setup.bash
           vulkaninfo --summary
-          colcon test --packages-select simcore_viewer --ctest-args -L headless
+          colcon test --packages-select lagrange_viewer --ctest-args -L headless
           colcon test-result --verbose
       - name: Upload images on failure
         if: failure()
         uses: actions/upload-artifact@TODO_VERIFY_SHA
-        with: { name: viewer-golden-diff, path: "build/simcore_viewer/test_output/**" }
+        with: { name: viewer-golden-diff, path: "build/lagrange_viewer/test_output/**" }
 
   docs:
     runs-on: ubuntu-latest
@@ -1107,18 +1107,18 @@ jobs:
     permissions: { contents: read }
     steps:
       - uses: actions/checkout@TODO_VERIFY_SHA
-        with: { path: src/simcore }
+        with: { path: src/lagrange }
       - name: Build and run GPU-labelled tests in a container with the NVIDIA runtime
-        run: ./src/simcore/tools/ci/run_in_container.sh --gpus all -- colcon test --ctest-args -L gpu
+        run: ./src/lagrange/tools/ci/run_in_container.sh --gpus all -- colcon test --ctest-args -L gpu
   determinism:
     runs-on: ubuntu-latest
     container: ros:lyrical-ros-base-resolute
     permissions: { contents: read }
     steps:
       - uses: actions/checkout@TODO_VERIFY_SHA
-        with: { path: src/simcore }
+        with: { path: src/lagrange }
       - name: Same scenario twice, bit-identical CPU output
-        run: ./src/simcore/tools/ci/determinism.sh profiles/examples/determinism_amr.yaml --sim-seconds 10
+        run: ./src/lagrange/tools/ci/determinism.sh profiles/examples/determinism_amr.yaml --sim-seconds 10
 ```
 
 ### `nightly.yml` (outline)
@@ -1201,7 +1201,7 @@ jobs:
   "release-type": "simple",
   "include-component-in-tag": false,
   "bump-minor-pre-major": true,
-  "packages": { ".": { "package-name": "simcore", "changelog-path": "CHANGELOG.md",
+  "packages": { ".": { "package-name": "lagrange", "changelog-path": "CHANGELOG.md",
     "extra-files": [{ "type": "xml", "path": "**/package.xml", "xpath": "//package/version" }] } },
   "changelog-sections": [
     { "type": "feat", "section": "Features" }, { "type": "fix", "section": "Bug fixes" },
@@ -1256,9 +1256,9 @@ and `workflow_dispatch` events, never `pull_request` from forks, inside ephemera
 |---|---|---|
 | Source release | release-please PR → tag → GitHub release with changelog | v0.1 |
 | Vendor underlay tarballs (amd64, arm64) | Built in the release workflow; lets contributors skip OpenUSD builds | v0.2 |
-| Docker images | `ubuntu:resolute` base + ROS Lyrical + simcore; `-runtime` and `-dev` variants; pushed to GHCR; NVIDIA runtime optional | v0.2 |
+| Docker images | `ubuntu:resolute` base + ROS Lyrical + lagrange; `-runtime` and `-dev` variants; pushed to GHCR; NVIDIA runtime optional | v0.2 |
 | pip wheel | Python bindings wheel for the system Python (3.14), `manylinux` tag TODO(verify) feasibility with the USD dependency | v0.3 |
-| `ros-lyrical-simcore-*` debs | bloom → ROS buildfarm if vendor packages build there; else a project apt repository built by this CI (Q18) | trial in v0.2, official at v1.0 |
+| `ros-lyrical-lagrange-*` debs | bloom → ROS buildfarm if vendor packages build there; else a project apt repository built by this CI (Q18) | trial in v0.2, official at v1.0 |
 | SBOM | SPDX JSON per release artifact | v0.1 |
 | Signatures and provenance | Sigstore keyless signatures; GitHub build provenance attestations | v0.1 |
 
@@ -1282,13 +1282,13 @@ version = 1
 [[annotations]]
 path = ["**/*.cpp", "**/*.hpp", "**/*.h", "**/*.slang", "**/*.py", "**/*.proto", "**/CMakeLists.txt", "**/*.cmake"]
 precedence = "closest"
-SPDX-FileCopyrightText = "The simcore authors"
+SPDX-FileCopyrightText = "The lagrange authors"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
 path = ["docs/**", "rfcs/**", "*.md", "profiles/**", "schemas/**", "assets/**", ".github/**", "*.json", "*.yaml", "*.yml", "*.toml"]
 precedence = "closest"
-SPDX-FileCopyrightText = "The simcore authors"
+SPDX-FileCopyrightText = "The lagrange authors"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]

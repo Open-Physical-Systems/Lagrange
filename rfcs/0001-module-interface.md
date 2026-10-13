@@ -106,10 +106,10 @@ module). The scheduler composes them with bus contents and time into a run state
 
 ### C ABI
 
-`core/plugin_abi/simcore_plugin.h` mirrors the above in C99: `simcore_module_api` (function
-table from the plugin), `simcore_host_api` (function table from the host), every struct starting
-with `struct_size`, one exported symbol `simcore_plugin_get_module`, and
-`SIMCORE_PLUGIN_ABI_MAJOR/MINOR`. Same major required; minor additions are appended fields and
+`core/plugin_abi/lagrange_plugin.h` mirrors the above in C99: `lagrange_module_api` (function
+table from the plugin), `lagrange_host_api` (function table from the host), every struct starting
+with `struct_size`, one exported symbol `lagrange_plugin_get_module`, and
+`LAGRANGE_PLUGIN_ABI_MAJOR/MINOR`. Same major required; minor additions are appended fields and
 functions. The ABI is major 0 (unstable) until product v1.0.
 
 ### What the reference example keeps

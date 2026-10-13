@@ -1,6 +1,6 @@
 # Project overview
 
-Working name: `simcore` (placeholder; see open question Q17). Status: plan for review. Facts
+Project name: **Lagrange** (Open Physical Systems). Status: plan for review. Facts
 about other projects come from `docs/plan/verification.md` (checked 2026-10-13).
 
 ## 1. Vision
@@ -26,7 +26,7 @@ Three user stories define success:
 | | Gazebo Jetty | Isaac Sim 6 | MuJoCo 3 | Newton 1.x | Genesis | This project |
 |---|---|---|---|---|---|---|
 | License | open (line not re-verified) | source Apache-2.0, but needs Omniverse Kit under NVIDIA terms | Apache-2.0 | Apache-2.0 | Apache-2.0 | Apache-2.0 |
-| ROS 2 Lyrical debs | yes (`gz-jetty`, `ros-lyrical-ros-gz`) | no (own distribution) | vendor package + `mujoco_ros2_control` | no | no | target: `ros-lyrical-simcore-*` |
+| ROS 2 Lyrical debs | yes (`gz-jetty`, `ros-lyrical-ros-gz`) | no (own distribution) | vendor package + `mujoco_ros2_control` | no | no | target: `ros-lyrical-lagrange-*` |
 | ros2_control | `gz_ros2_control` | through Isaac ROS bridges | `mujoco_ros2_control` | not found | not found | first-class, in-process lockstep |
 | GPU-batched physics | no (not in the sources checked) | yes (PhysX GPU, Newton) | via MuJoCo Warp/MJX (Python) | yes (Python/Warp) | yes (Python) | Tier 2, through backends |
 | Electrical domain (battery, drives, bus) | no | no | no | no | no | **yes** |

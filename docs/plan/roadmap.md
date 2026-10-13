@@ -37,13 +37,13 @@ flowchart LR
 
 ## 2. v0.1 — native viewer, protocol, mock/replay server
 
-**Scope.** `simcore_viewer` (Vulkan + Dear ImGui docking) with the panels in CLAUDE.md §13.2, the
+**Scope.** `lagrange_viewer` (Vulkan + Dear ImGui docking) with the panels in CLAUDE.md §13.2, the
 protocol in `docs/design/protocol.md`, and a mock server that plays recordings and serves a
 sample scene. No physics.
 
 **Acceptance criteria.**
 
-1. On Ubuntu 26.04 amd64, `ros2 run simcore_viewer simcore_viewer` opens a native window under
+1. On Ubuntu 26.04 amd64, `ros2 run lagrange_viewer lagrange_viewer` opens a native window under
    GNOME Wayland and under X11.
 2. From a clean install, a user opens the bundled sample URDF and sees it in the 3D viewport
    within one minute, including reading the quick-start page.
@@ -66,22 +66,22 @@ directly with `urdfdom`'s Python bindings or its own small parser, and USD enter
 |---|---|---|---|---|
 | A1 | Bootstrap repository files | Add `LICENSE`, `LICENSES/`, `REUSE.toml`, `README.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `GOVERNANCE.md`, `CHANGELOG.md`, `.editorconfig`, `.gitattributes`, `.gitignore` from `repo-tooling.md`. **AC:** `reuse lint` passes; files render on GitHub | `area/ci`, `type/chore` | S |
 | A2 | Formatting and lint configs | Add `.clang-format`, `.clang-tidy` (with the corrected header filter, F6), `.pre-commit-config.yaml` with every `rev:` resolved and pinned, `pyproject.toml` (ruff, mypy), `.yamllint`, `.typos.toml`. **AC:** `pre-commit run --all-files` passes on the empty tree; pins recorded with their source in the PR | `area/ci`, `type/chore` | M |
-| A3 | Colcon workspace skeleton | Top-level layout, `colcon.defaults`, `CMakePresets.json`, `cmake/SimcoreCompileOptions.cmake` (warnings, `-ffp-contract=off` option, sanitizer presets), an empty `simcore_core` package that builds and runs one gtest. **AC:** `colcon build && colcon test` green in a `ros:lyrical` container on amd64 and arm64 | `area/core`, `type/chore` | M |
+| A3 | Colcon workspace skeleton | Top-level layout, `colcon.defaults`, `CMakePresets.json`, `cmake/LagrangeCompileOptions.cmake` (warnings, `-ffp-contract=off` option, sanitizer presets), an empty `lagrange_core` package that builds and runs one gtest. **AC:** `colcon build && colcon test` green in a `ros:lyrical` container on amd64 and arm64 | `area/core`, `type/chore` | M |
 | A4 | CI: lint, build, test | `ci.yml` jobs `lint`, `build-test` (amd64, arm64), with ccache. Actions pinned to SHAs. **AC:** required checks listed in branch protection run on a PR | `area/ci`, `type/feature` | M |
 | A5 | CI: sanitizers | ASan+UBSan and TSan jobs using presets from A3. **AC:** a deliberately broken test branch is caught by each sanitizer | `area/ci`, `type/feature` | S |
 | A6 | Commit and DCO checks | commitizen `cz check` on PR title and commits; DCO check. **AC:** a PR without sign-off or with a bad title fails | `area/ci`, `type/chore` | S |
 | A7 | Labels, templates, CODEOWNERS, Renovate | Add `.github/` files from `repo-tooling.md`. **AC:** label sync workflow creates the labels; issue forms require OS/GPU/driver for bugs | `area/ci`, `type/chore` | S |
 | A8 | Security workflows | CodeQL (C++ and Python), OpenSSF Scorecard, secret scanning with push protection enabled in settings. **AC:** workflows run; findings triaged | `area/ci`, `type/security` | S |
 | A9 | Docs site skeleton | Sphinx or MkDocs (decide in the issue; both are Python) building `docs/` with link checking. **AC:** docs job green; quick-start page exists | `area/docs`, `type/feature` | M |
-| A10 | Dependency-graph check | Script that parses `package.xml` files and fails if `simcore_viewer` depends on `simcore_mod_*`, `simcore_server` or `rclcpp`, or if a module depends on another module. **AC:** unit-tested with fixture trees; runs in `lint` | `area/ci`, `type/feature` | S |
-| A11 | Local rosdep source | `packaging/rosdep/simcore.yaml` with keys missing upstream (SDL3, Slang, …) and an upstream PR to `ros/rosdistro`. **AC:** `rosdep install --from-paths .` resolves every dependency in the container | `area/packaging`, `type/chore` | S |
+| A10 | Dependency-graph check | Script that parses `package.xml` files and fails if `lagrange_viewer` depends on `lagrange_mod_*`, `lagrange_server` or `rclcpp`, or if a module depends on another module. **AC:** unit-tested with fixture trees; runs in `lint` | `area/ci`, `type/feature` | S |
+| A11 | Local rosdep source | `packaging/rosdep/lagrange.yaml` with keys missing upstream (SDL3, Slang, …) and an upstream PR to `ros/rosdistro`. **AC:** `rosdep install --from-paths .` resolves every dependency in the container | `area/packaging`, `type/chore` | S |
 
 ### Epic 0.1-B: protocol
 
 | ID | Title | Description and acceptance criteria | Labels | Est. |
 |---|---|---|---|---|
 | B1 | Accept RFC 0003 | Review and merge `rfcs/0003`; record decisions (encoding, transport, shm). **AC:** RFC status "accepted" | `area/proto`, `needs-rfc` | S |
-| B2 | `simcore_proto` package | `.proto` files from `protocol.md`, `buf.yaml`, C++ and Python code generation in CMake, installed targets. **AC:** `buf lint` clean; a C++ and a Python test each round-trip every message | `area/proto`, `type/feature` | M |
+| B2 | `lagrange_proto` package | `.proto` files from `protocol.md`, `buf.yaml`, C++ and Python code generation in CMake, installed targets. **AC:** `buf lint` clean; a C++ and a Python test each round-trip every message | `area/proto`, `type/feature` | M |
 | B3 | `buf breaking` in CI | Job comparing against `main` with the `proto-break` label rule. **AC:** a field-number change without the label fails | `area/proto`, `area/ci` | S |
 | B4 | Framing library (C++) | Length-prefixed frame reader/writer over a byte stream with a size limit and partial-read handling; no sockets inside. **AC:** unit tests for split frames, oversize, truncated input; libFuzzer target runs 5 minutes clean in CI | `area/proto`, `type/feature` | M |
 | B5 | Transport: Unix socket and TCP | Non-blocking client connect, `poll` loop, reconnect, fd passing (`SCM_RIGHTS`) for Unix sockets. **AC:** integration test against a test server on both transports | `area/proto`, `type/feature` | M |
@@ -93,8 +93,8 @@ directly with `urdfdom`'s Python bindings or its own small parser, and USD enter
 
 | ID | Title | Description and acceptance criteria | Labels | Est. |
 |---|---|---|---|---|
-| C1 | Mock server skeleton | `simcore_mock_server` package (Python, ruff + mypy strict): asyncio server, handshake, status, ping. **AC:** conformance client handshake passes | `area/mock`, `type/feature` | M |
-| C2 | Recording format v1 | `proto/simcore/record/v1` messages (`RunMeta`, catalog, state hash) and an MCAP writer/reader wrapper. **AC:** write and read back a file; `mcap` CLI lists the channels | `area/io`, `type/feature` | M |
+| C1 | Mock server skeleton | `lagrange_mock_server` package (Python, ruff + mypy strict): asyncio server, handshake, status, ping. **AC:** conformance client handshake passes | `area/mock`, `type/feature` | M |
+| C2 | Recording format v1 | `proto/lagrange/record/v1` messages (`RunMeta`, catalog, state hash) and an MCAP writer/reader wrapper. **AC:** write and read back a file; `mcap` CLI lists the channels | `area/io`, `type/feature` | M |
 | C3 | Sample recording generator | Deterministic script producing `sample_amr.mcap`: AMR driving a figure-eight with plausible joint, body, motor-current, bus-voltage and temperature signals at their native rates (10 kHz electrical). Clearly labelled synthetic. **AC:** file under 1 MB in repo or fetched with checksum; regenerating gives identical bytes | `area/mock`, `type/feature` | M |
 | C4 | Replay engine | Play, pause, step, seek, real-time factor; emits `SceneDelta` and batched `SignalBlock`s with correct `first_index`. **AC:** conformance client sees no gaps at 1× and 4×; seek resyncs with a snapshot | `area/mock`, `type/feature` | L |
 | C5 | Subscriptions and decimation | Per-client subscriptions, `MODE_FULL`, `MODE_MINMAX`, `MODE_STRIDE`. **AC:** min/max output matches a brute-force reference | `area/mock`, `type/feature` | M |
@@ -111,8 +111,8 @@ directly with `urdfdom`'s Python bindings or its own small parser, and USD enter
 |---|---|---|---|---|
 | D1 | Accept RFC 0004 and RFC 0006 | Review and merge the tier and viewer-stack RFCs. **AC:** status "accepted" | `area/gpu`, `area/viewer`, `needs-rfc` | S |
 | D2 | `gpu/hal` Vulkan device | Instance, device selection, queues, VMA allocator, command contexts, staging uploads, debug names, validation-layer option. No SDL includes. **AC:** unit tests run on lavapipe; validation layers clean | `area/gpu`, `type/feature` | L |
-| D3 | Capability detection | `gpu/capability`: tier 0/1/2 from device features, `SIMCORE_TIER` override, a `simcore_gpu_info` tool. **AC:** reports Tier 0 on lavapipe-only, Tier 2 on the RTX runner | `area/gpu`, `tier/0`, `tier/1`, `tier/2` | M |
-| D4 | Slang build integration | CMake function `simcore_add_slang_module()` compiling `.slang` to SPIR-V at build time with reflection output; uses apt `slang-compiler`. **AC:** a triangle shader builds; SPIR-V validates; decision recorded on apt vs `slang_vendor` | `area/gpu`, `type/feature` | M |
+| D3 | Capability detection | `gpu/capability`: tier 0/1/2 from device features, `LAGRANGE_TIER` override, a `lagrange_gpu_info` tool. **AC:** reports Tier 0 on lavapipe-only, Tier 2 on the RTX runner | `area/gpu`, `tier/0`, `tier/1`, `tier/2` | M |
+| D4 | Slang build integration | CMake function `lagrange_add_slang_module()` compiling `.slang` to SPIR-V at build time with reflection output; uses apt `slang-compiler`. **AC:** a triangle shader builds; SPIR-V validates; decision recorded on apt vs `slang_vendor` | `area/gpu`, `type/feature` | M |
 | D5 | `gpu/scene` GpuScene | Mesh buffers, material table, instance transforms, `GpuSceneSource` interface. **AC:** unit test uploads and draws 1000 instances | `area/gpu`, `type/feature` | L |
 | D6 | Frame graph and opaque pass | Pass description, attachments, depth pre-pass, opaque pass with UsdPreviewSurface-level shading in Slang. **AC:** golden image of a test scene on lavapipe | `area/viewer`, `area/gpu` | L |
 | D7 | Overlay pass | Grid, axes, selection outline, id buffer picking, contact points and force arrows. **AC:** picking returns the right prim in a test scene | `area/viewer`, `type/feature` | M |
@@ -140,7 +140,7 @@ directly with `urdfdom`'s Python bindings or its own small parser, and USD enter
 | E15 | Fields, console, ROS topics panels | Three smaller panels. **AC:** each shows mock data; console handles 100 000 lines | `area/viewer`, `type/feature` | M |
 | E16 | File open and drag-and-drop | Open URDF/MCAP through `ImportRobot`/`OpenRecording`; remote content upload path. **AC:** dropping the sample URDF on the window shows it | `area/viewer`, `type/feature` | S |
 | E17 | Settings and CLI | `--connect`, `--layout`, `--headless`, `--frames`, `--benchmark`, `--x11`, `--wayland`; XDG config and cache paths. **AC:** documented in `--help` and the docs | `area/viewer`, `type/feature` | S |
-| E18 | Launch integration | `ros2 launch simcore_viewer demo.launch.py` starts the mock server and viewer. **AC:** quick-start works from a clean container with a display | `area/viewer`, `type/feature` | S |
+| E18 | Launch integration | `ros2 launch lagrange_viewer demo.launch.py` starts the mock server and viewer. **AC:** quick-start works from a clean container with a display | `area/viewer`, `type/feature` | S |
 
 ### Epic 0.1-F: profiles
 
@@ -157,7 +157,7 @@ directly with `urdfdom`'s Python bindings or its own small parser, and USD enter
 |---|---|---|---|---|
 | G1 | Headless viewer CI job | Install `mesa-vulkan-drivers`, set the lavapipe ICD, run mock server + viewer for 300 frames. **AC:** job green; frames complete; artifacts uploaded on failure | `area/ci`, `area/viewer`, `tier/0` | M |
 | G2 | Golden-image comparison | Tolerance-based comparison tool and goldens produced on lavapipe. **AC:** an intentional shader change fails the job | `area/viewer`, `type/test` | M |
-| G3 | UI automation | ImGui Test Engine behind `SIMCORE_VIEWER_UI_TESTS`, fetched in CI only; five scripted flows. **AC:** license handling documented (Q12); tests run headless | `area/viewer`, `type/test` | L |
+| G3 | UI automation | ImGui Test Engine behind `LAGRANGE_VIEWER_UI_TESTS`, fetched in CI only; five scripted flows. **AC:** license handling documented (Q12); tests run headless | `area/viewer`, `type/test` | L |
 | G4 | Performance harness | `--benchmark` mode writing JSON (`FrameStats` percentiles, drops, start-up time); nightly job on the GPU runner with thresholds. **AC:** budgets from CLAUDE.md §13.4 asserted | `area/viewer`, `type/perf` | M |
 | G5 | Self-hosted GPU runner | Provision an Ubuntu 26.04 runner with an RTX GPU and driver 595, hardened for public-repo use (jobs only from the merge queue and nightly). **AC:** `vulkaninfo` output archived, confirming ray-tracing extensions | `area/ci`, `tier/2` | M |
 | G6 | Manual test matrix | Checklist for GNOME Wayland/X11, KDE Wayland, fractional scaling, NVIDIA and Mesa drivers. **AC:** checklist run and filed for the release | `area/viewer`, `type/test` | S |
@@ -173,15 +173,15 @@ directly with `urdfdom`'s Python bindings or its own small parser, and USD enter
 
 ## 3. v0.2 — simulation core and AMR
 
-**Scope.** `simcore_core` (units, signal bus, scheduler, substitutes, plugin loading),
+**Scope.** `lagrange_core` (units, signal bus, scheduler, substitutes, plugin loading),
 USD stage loading into SoA with the first schemas, one rigid-body backend, lidar/IMU/encoder
 sensors on Tier 0 and Tier 1, the real server speaking the v0.1 protocol, ROS 2 bridge,
 ros2_control `SystemInterface`, Nav2 demo, importers, recording, determinism.
 
 **Acceptance criteria.**
 
-1. `ros2 launch simcore_demos amr_warehouse.launch.py` runs the sample AMR with Nav2 through
-   `simcore_ros2_control` and reaches four waypoints for 10 simulated minutes without collision.
+1. `ros2 launch lagrange_demos amr_warehouse.launch.py` runs the sample AMR with Nav2 through
+   `lagrange_ros2_control` and reaches four waypoints for 10 simulated minutes without collision.
 2. The viewer from v0.1 connects to the real server with no protocol major change and shows the
    scene, signals and domain states.
 3. A profile with mismatched units between two modules fails at startup with a message naming
@@ -210,7 +210,7 @@ ros2_control `SystemInterface`, Nav2 demo, importers, recording, determinism.
 | A8 | Substitute registry and generic substitutes | Registry, contracts, `Constant` and `Replay` generic substitutes, contract test harness. **AC:** every registered domain has a substitute or the test fails | `area/core`, `type/feature` | M |
 | A9 | State save/restore and hashing | `StateWriter/Reader`, `Scheduler::stateHash`. **AC:** save → run → restore → run gives identical hashes | `area/core`, `type/feature` | M |
 | A10 | Counter-based RNG | Philox keyed by (seed, module, entity, step). **AC:** known-answer tests; order-independence test | `area/core`, `type/feature` | S |
-| A11 | Plugin C ABI v0 | `simcore_plugin.h`, host adapter to `IModule`, C99 sample plugin, load test. **AC:** sample plugin built with `-std=c99 -pedantic` runs in the scheduler | `area/core`, `area/plugin-abi`, `needs-rfc` | L |
+| A11 | Plugin C ABI v0 | `lagrange_plugin.h`, host adapter to `IModule`, C99 sample plugin, load test. **AC:** sample plugin built with `-std=c99 -pedantic` runs in the scheduler | `area/core`, `area/plugin-abi`, `needs-rfc` | L |
 | A12 | Core services | `wrench_sum` module, `SceneQuery` service interface, logging sink. **AC:** two wrench writers on one body sum correctly | `area/core`, `type/feature` | M |
 | A13 | Coordinates | `GeoOrigin`, ECEF/ENU/geodetic, `RegionOrigin`, rebase of world tables. **AC:** agreement with GeographicLib < 1e-6 m within 100 km | `area/core`, `type/feature` | M |
 | A14 | Position-type lint | clang-tidy or script check that forbids `float` world/local positions. **AC:** fixture violations detected | `area/core`, `area/ci` | S |
@@ -223,7 +223,7 @@ ros2_control `SystemInterface`, Nav2 demo, importers, recording, determinism.
 | B2 | `openusd_vendor` | Vendor package per `dependencies.md` §4 with CI install-tree cache and a prebuilt underlay artifact. **AC:** clean CI build uses the cache; cache miss build documented | `area/packaging`, `type/feature` | L |
 | B3 | Accept RFC 0002 | Schema conventions, versioning suffix, codeless decision, first schema set. **AC:** accepted | `area/schemas`, `needs-rfc` | S |
 | B4 | Schema libraries (first set) | `PortAPI`, `BatteryAPI`, `ElectricalMotorAPI`, `ElectricalBusAPI`, `ElectricalLoadAPI`, `ThermalAPI`, `SensorMaterialAPI`, `SensorAPI`, `LidarAPI`, `ImuAPI` as codeless schemas with `plugInfo.json`; unit metadata check. **AC:** `usdchecker`-style validation of the sample robot; every attribute has a parsable unit | `area/schemas`, `type/feature` | L |
-| B5 | Stage loader | USD → SoA tables (`Prims`, `Transforms`, `Bodies`, `Joints`, `Colliders`, `RenderMeshes`, `Materials`, `SchemaInstances`), asset resolution, load report. **AC:** sample AMR loads; no USD symbol referenced from `simcore_core` or modules (link check) | `area/core`, `area/schemas` | L |
+| B5 | Stage loader | USD → SoA tables (`Prims`, `Transforms`, `Bodies`, `Joints`, `Colliders`, `RenderMeshes`, `Materials`, `SchemaInstances`), asset resolution, load report. **AC:** sample AMR loads; no USD symbol referenced from `lagrange_core` or modules (link check) | `area/core`, `area/schemas` | L |
 | B6 | `WorldView` | Read-only views and schema-instance lookup. **AC:** unit tests; used by the first module | `area/core`, `type/feature` | M |
 | B7 | Sample assets | `amr_diffdrive.usda`, `warehouse_small.usda`, `empty_flat.usda`, materials library with sources. **AC:** files under 1 MB; parameters documented as illustrative | `area/assets`, `type/feature` | M |
 | B8 | Collision bake tool | `tools/collision_bake` with CoACD (`coacd_vendor`). **AC:** warehouse shelves get convex hulls; report lists hull counts | `area/io`, `type/feature` | M |
@@ -253,13 +253,13 @@ ros2_control `SystemInterface`, Nav2 demo, importers, recording, determinism.
 
 | ID | Title | Description and acceptance criteria | Labels | Est. |
 |---|---|---|---|---|
-| E1 | Server process | `simcore_server`: profile load, tier detection, stage load, plugin load, wiring, run loop, exit codes. **AC:** startup sequence of `architecture.md` §14 with tests for each failure exit | `area/server`, `type/feature` | L |
+| E1 | Server process | `lagrange_server`: profile load, tier detection, stage load, plugin load, wiring, run loop, exit codes. **AC:** startup sequence of `architecture.md` §14 with tests for each failure exit | `area/server`, `type/feature` | L |
 | E2 | Protocol frontend (C++) | Snapshot/delta generation from world tables, signal blocks from the bus, subscriptions, commands, shared memory. **AC:** the v0.1 conformance client passes against the real server | `area/server`, `area/proto` | L |
 | E3 | Tick records and consumer rings | SPSC rings to protocol, recorder, ROS; drop/back-pressure policies. **AC:** slow-consumer tests | `area/server`, `type/feature` | M |
 | E4 | Recorder | MCAP writer on its own thread, catalog, state hashes, profile and stage hash in `RunMeta`. **AC:** a recorded run replays in the mock server and through the replay substitute | `area/io`, `type/feature` | M |
 | E5 | Profile apply and domain state | `ProfileState` with availability reasons, measured cost per domain, restart-on-apply. **AC:** viewer domain panel drives the real server | `area/server`, `area/profiles` | M |
 | E6 | Scene editing | `SetAttribute`, `SetTransform`, session-layer save. **AC:** inspector edit changes a motor parameter in a running sim | `area/server`, `type/feature` | M |
-| E7 | CLI | `simcore run <profile>`, `simcore validate`, `simcore graph` (DOT of the wiring), `simcore info`. **AC:** documented; `graph` output used in docs | `area/server`, `type/feature` | S |
+| E7 | CLI | `lagrange run <profile>`, `lagrange validate`, `lagrange graph` (DOT of the wiring), `lagrange info`. **AC:** documented; `graph` output used in docs | `area/server`, `type/feature` | S |
 | E8 | Mock server alignment | Decide and execute Q15 (keep Python mock as replay tool, or move replay into the C++ server). **AC:** one replay implementation is the product path; the other is test-only or removed | `area/mock`, `area/server` | M |
 
 ### Epic 0.2-F: ROS 2 and ros2_control
@@ -268,7 +268,7 @@ ros2_control `SystemInterface`, Nav2 demo, importers, recording, determinism.
 |---|---|---|---|---|
 | F1 | ROS 2 bridge core | In-process `rclcpp` node, `/clock`, TF, `JointState`, odometry, topic mapping file. **AC:** `ros2 topic hz /clock` matches the sim rate; works with Fast DDS and Zenoh RMWs | `area/bridge-ros2`, `type/feature` | L |
 | F2 | Sensor topics | `LaserScan`, `PointCloud2`, `Imu` with correct stamps and frames. **AC:** RViz2 displays them | `area/bridge-ros2`, `type/feature` | M |
-| F3 | `simcore_ros2_control` | `SystemInterface` plugin, in-process controller manager stepped by the scheduler, effort/velocity/position interfaces, joint servo. **AC:** `diff_drive_controller` and `joint_state_broadcaster` run in lockstep; behaviour compared with `mujoco_ros2_control` on the same URDF | `area/bridge-ros2-control`, `type/feature` | L |
+| F3 | `lagrange_ros2_control` | `SystemInterface` plugin, in-process controller manager stepped by the scheduler, effort/velocity/position interfaces, joint servo. **AC:** `diff_drive_controller` and `joint_state_broadcaster` run in lockstep; behaviour compared with `mujoco_ros2_control` on the same URDF | `area/bridge-ros2-control`, `type/feature` | L |
 | F4 | `simulation_interfaces` | Implement the services the Lyrical version defines for state, stepping, reset and entity queries. **AC:** interface tests; unsupported services return a clear error | `area/bridge-ros2`, `type/feature` | M |
 | F5 | `RosGraph` for the viewer | Topic list and rates from the bridge. **AC:** ROS topics panel shows the live graph | `area/bridge-ros2`, `area/viewer` | S |
 | F6 | Nav2 demo | Launch files, map, Nav2 parameters for the sample AMR and warehouse. **AC:** acceptance criterion 1; run nightly | `area/demos`, `type/feature` | L |
@@ -371,7 +371,7 @@ Radiation is proposed for the period between v0.7 and v1.0, or as v0.8, pending 
 |---|---|---|
 | Freeze | Schemas at their 1.0 versions, protocol `v1` under strict `buf breaking`, plugin ABI major 1 with `abidiff` | Freeze RFC accepted |
 | Migration tools | Schema, profile and recording migration covering every pre-1.0 change made after v0.5 | Old sample files migrate in CI |
-| Binary releases | `ros-lyrical-simcore-*` debs (buildfarm or own repository), Docker images, pip wheel, SBOM, Sigstore signatures | Clean-machine install test |
+| Binary releases | `ros-lyrical-lagrange-*` debs (buildfarm or own repository), Docker images, pip wheel, SBOM, Sigstore signatures | Clean-machine install test |
 | Documentation | Tutorials per robot class, module developer guide, validation report per domain | All tutorials run in CI |
 | Validation report | Sim-vs-real results for each domain with data sources and tolerances | Published with the release |
 | LTS policy | Release branch `release/1.x` supported with Lyrical (to May 2031); backport rules | Documented in `GOVERNANCE.md` |

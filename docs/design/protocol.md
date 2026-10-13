@@ -1,7 +1,7 @@
 # UI↔server protocol
 
 Status: draft for review; decided in `rfcs/0003-ui-server-protocol.md`. This is the only channel
-between `simcore_viewer` and a simulation (invariant 14). The mock server and the real server
+between `lagrange_viewer` and a simulation (invariant 14). The mock server and the real server
 implement the same protocol; the viewer cannot tell them apart except through
 `ServerHello.server_kind`.
 
@@ -31,7 +31,7 @@ Every message on the stream is:
   `Blob` messages or sent through shared memory.
 - The first frame in each direction is a handshake (`ClientHello`, then `ServerHello`). Any
   other first frame closes the connection.
-- Default endpoints: Unix socket `$XDG_RUNTIME_DIR/simcore/<instance>.sock` (instance defaults to
+- Default endpoints: Unix socket `$XDG_RUNTIME_DIR/lagrange/<instance>.sock` (instance defaults to
   `default`); TCP port `47610` (a project default, configurable; not an IANA registration).
 
 ## 3. Message catalog
@@ -60,19 +60,19 @@ server's ROS bridge produces. The mock server fills it from the MCAP channel lis
 
 ## 4. Draft `.proto` files
 
-Layout: `proto/simcore/viewer/v1/*.proto`, package `simcore.viewer.v1`. `buf.yaml` is in
+Layout: `proto/lagrange/viewer/v1/*.proto`, package `lagrange.viewer.v1`. `buf.yaml` is in
 `docs/plan/repo-tooling.md`.
 
 ### 4.1 `common.proto`
 
 ```proto
 syntax = "proto3";
-package simcore.viewer.v1;
+package lagrange.viewer.v1;
 
 // Simulation time, integer nanoseconds since run start.
 message SimTime { int64 ns = 1; }
 
-// SI dimension exponents + scale + kind. Mirrors simcore::Unit.
+// SI dimension exponents + scale + kind. Mirrors lagrange::Unit.
 message Unit {
   sint32 length = 1;
   sint32 mass = 2;
@@ -83,7 +83,7 @@ message Unit {
   sint32 luminous = 7;
   sint32 angle = 8;
   double scale = 9;          // 1.0 for SI
-  uint32 kind = 10;          // simcore::QuantityKind
+  uint32 kind = 10;          // lagrange::QuantityKind
   string display = 11;       // "N·m", for labels only
 }
 
@@ -133,15 +133,15 @@ message Blob {
 
 ```proto
 syntax = "proto3";
-package simcore.viewer.v1;
+package lagrange.viewer.v1;
 
-import "simcore/viewer/v1/common.proto";
+import "lagrange/viewer/v1/common.proto";
 
 message ProtocolVersion { uint32 major = 1; uint32 minor = 2; }
 
 message ClientHello {
   ProtocolVersion version = 1;
-  string client_name = 2;            // "simcore_viewer 0.1.0"
+  string client_name = 2;            // "lagrange_viewer 0.1.0"
   bool wants_shm = 3;                // only honoured on Unix sockets
   repeated string compression = 4;   // "zstd"; empty = none
   string locale = 5;                 // "ja_JP", for server-side message text (later)
@@ -223,9 +223,9 @@ message RosGraph {
 
 ```proto
 syntax = "proto3";
-package simcore.viewer.v1;
+package lagrange.viewer.v1;
 
-import "simcore/viewer/v1/common.proto";
+import "lagrange/viewer/v1/common.proto";
 
 // Positions are double. The snapshot states the origin of the local frame so that a viewer can
 // show geodetic coordinates and survive a floating-origin rebase.
@@ -349,9 +349,9 @@ message PointCloudData { uint32 count = 1; uint32 stride = 2; repeated string fi
 
 ```proto
 syntax = "proto3";
-package simcore.viewer.v1;
+package lagrange.viewer.v1;
 
-import "simcore/viewer/v1/common.proto";
+import "lagrange/viewer/v1/common.proto";
 
 message SignalInfo {
   uint32 id = 1;                 // dense, stable until the catalog generation changes
@@ -421,10 +421,10 @@ a local socket and acceptable on a LAN.
 
 ```proto
 syntax = "proto3";
-package simcore.viewer.v1;
+package lagrange.viewer.v1;
 
-import "simcore/viewer/v1/common.proto";
-import "simcore/viewer/v1/scene.proto";
+import "lagrange/viewer/v1/common.proto";
+import "lagrange/viewer/v1/scene.proto";
 
 message Command {
   uint64 request_id = 1;               // echoed in CommandResult
@@ -516,7 +516,7 @@ message ProfileIssue {
 
 ```proto
 syntax = "proto3";
-package simcore.viewer.v1;
+package lagrange.viewer.v1;
 
 // The profile itself travels as YAML text, the same text a user would save. The structured
 // part below is what the domain panel needs in order to draw toggles without parsing YAML rules.
@@ -552,14 +552,14 @@ message SubstituteOption { string token = 1; string kind = 2; string description
 
 ```proto
 syntax = "proto3";
-package simcore.viewer.v1;
+package lagrange.viewer.v1;
 
-import "simcore/viewer/v1/common.proto";
-import "simcore/viewer/v1/session.proto";
-import "simcore/viewer/v1/scene.proto";
-import "simcore/viewer/v1/signals.proto";
-import "simcore/viewer/v1/command.proto";
-import "simcore/viewer/v1/profile.proto";
+import "lagrange/viewer/v1/common.proto";
+import "lagrange/viewer/v1/session.proto";
+import "lagrange/viewer/v1/scene.proto";
+import "lagrange/viewer/v1/signals.proto";
+import "lagrange/viewer/v1/command.proto";
+import "lagrange/viewer/v1/profile.proto";
 
 message Envelope {
   oneof body {
@@ -643,7 +643,7 @@ Used only when both ends are on the same machine and connected by the Unix socke
 
 ## 7. Versioning and compatibility
 
-- Package `simcore.viewer.v1`. A breaking change creates `v2` in a new directory; both may be
+- Package `lagrange.viewer.v1`. A breaking change creates `v2` in a new directory; both may be
   served during a deprecation window.
 - Handshake: the server refuses a different `major` with `ServerHello.refusal` set to a sentence
   that names both versions. A different `minor` is accepted; unknown fields are ignored (proto3
@@ -668,7 +668,7 @@ created, since they were not linted in this planning task.
 
 - `tests/protocol/golden/`: binary frames recorded from the mock server for each message. The
   C++ decoder and the Python encoder must both round-trip them.
-- A Python reference client (`python/simcore/viewer_client.py`) connects to any server and checks
+- A Python reference client (`python/lagrange/viewer_client.py`) connects to any server and checks
   the handshake, snapshot/delta sequencing, catalog generations and gap-free signal runs. The
   same script runs against the mock server in v0.1 and the real server in v0.2. This is what
   keeps the two servers interchangeable.

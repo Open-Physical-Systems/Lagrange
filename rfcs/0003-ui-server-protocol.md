@@ -39,7 +39,7 @@ Requirements:
 
 ### Encoding: Protobuf (proto3)
 
-- Messages are defined in `proto/simcore/viewer/v1/` (drafts in `protocol.md` §4).
+- Messages are defined in `proto/lagrange/viewer/v1/` (drafts in `protocol.md` §4).
 - Bulk numeric data (signal samples, transform arrays, vertex data) is carried as raw
   little-endian arrays in `bytes` fields, described by sibling fields (count, components,
   encoding). Protobuf frames and describes; it does not encode each number.
@@ -49,7 +49,7 @@ Requirements:
 ### Framing and transport
 
 - Frame: `u32` little-endian length + one `Envelope` message. Maximum 64 MiB.
-- Local: Unix domain stream socket at `$XDG_RUNTIME_DIR/simcore/<instance>.sock`, mode 0600.
+- Local: Unix domain stream socket at `$XDG_RUNTIME_DIR/lagrange/<instance>.sock`, mode 0600.
 - Remote: TCP, default port 47610, bound to localhost unless told otherwise.
 - First frames: `ClientHello` → `ServerHello` with protocol version, capabilities, and
   shared-memory regions.
@@ -80,7 +80,7 @@ Requirements:
 
 ### Versioning
 
-Package `simcore.viewer.v1`; handshake `(major, minor)`; major mismatch is refused with a
+Package `lagrange.viewer.v1`; handshake `(major, minor)`; major mismatch is refused with a
 readable reason; minor differences rely on proto3 unknown-field handling. `buf lint` (STANDARD)
 and `buf breaking` (WIRE_JSON before 1.0, FILE after) run in CI. Breaking changes before 1.0
 need the `proto-break` label and two approvals.
@@ -147,7 +147,7 @@ multi-viewer or cross-network discovery without changing messages.
    server. Proposed: PNG/JPEG in v0.1.
 6. **Field volumes.** Dense grid in v0.1; NanoVDB buffers through shared memory from v0.5.
    Remote viewers need a downsampled representation. To be designed with the fields epic.
-7. **Recording schema location.** Whether `proto/simcore/record/v1` imports the viewer package
+7. **Recording schema location.** Whether `proto/lagrange/record/v1` imports the viewer package
    (proposed: yes, to reuse `SignalBlock` and scene messages) or duplicates messages to decouple
    file-format stability from live-protocol stability.
 8. **Default TCP port** 47610 is arbitrary and unregistered.
