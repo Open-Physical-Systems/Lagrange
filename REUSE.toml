@@ -7,7 +7,7 @@ SPDX-FileCopyrightText = "Open Physical Systems and the Lagrange authors"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
-path = ["docs/design/ui/fonts/**", "docs/design/ui/00-design-system/fonts-ttf/**"]
+path = ["docs/design/ui/fonts/**", "viewer/assets/fonts/**"]
 precedence = "override"
 SPDX-FileCopyrightText = "2017 IBM Corp. with Reserved Font Name \"Plex\""
 SPDX-License-Identifier = "OFL-1.1"

@@ -1,0 +1,21 @@
+# profiles/examples/arm_pick_place_moveit.yaml — 6-DoF arm, MoveIt 2, electrical + thermal
+schema_version: 1
+stage: worlds/workcell_arm6.usda
+environment: environments/indoor_20c.usda
+
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: true,  fidelity: averaged, dt: 0.0001 }
+  thermal:      { enabled: true,  dt: 0.1 }
+  aerodynamics: { enabled: false, substitute: zero }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: true,  coupling: [encoder], dt: 0.001 }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: true,  dt: 0.01, only: [wrist_camera] }
+
+bridges:
+  ros2:         { enabled: true }
+  ros2_control: { enabled: true }
+
+views: [physics_3d, electrical_schematic, waveforms, thermal]
+record: { format: mcap, path: runs/arm_pick_place_001.mcap }

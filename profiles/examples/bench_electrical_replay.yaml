@@ -1,0 +1,17 @@
+# profiles/examples/bench_electrical_replay.yaml — electrical bench mode: physics replaced by a
+# replayed real trajectory
+schema_version: 1
+stage: robots/amr_diffdrive.usda
+
+domains:
+  rigid_body:   { enabled: false, substitute: replay, source: logs/real_amr_run.mcap }
+  electrical:   { enabled: true,  fidelity: averaged, dt: 0.0001 }
+  thermal:      { enabled: true,  dt: 0.1 }
+  aerodynamics: { enabled: false, substitute: zero }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: false, substitute: zero }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: false, substitute: ground_truth }
+
+views: [electrical_schematic, waveforms]
+record: { format: mcap, path: runs/bench_001.mcap }

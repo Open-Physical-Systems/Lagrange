@@ -1,0 +1,23 @@
+# profiles/examples/quad_px4_gusty.yaml — quadcopter, PX4 SITL lockstep, wind gusts
+schema_version: 1
+stage: worlds/open_field_quad.usda
+environment: environments/gusty_8ms_dryden.usda
+deterministic: false
+
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: true,  fidelity: averaged, dt: 0.00005 }
+  thermal:      { enabled: true,  dt: 0.1 }
+  aerodynamics: { enabled: true,  fidelity: drag_plus_field, dt: 0.001 }
+  rotor_aero:   { enabled: true,  fidelity: coefficients, ground_effect: true, dt: 0.001 }
+  weather:      { enabled: true,  dt: 0.01 }
+  emi:          { enabled: true,  coupling: [magnetometer], dt: 0.001 }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: true,  dt: 0.001 }
+
+bridges:
+  ros2:    { enabled: true }
+  mavlink: { enabled: true, autopilot: px4, lockstep: true, endpoint: "tcp://127.0.0.1:4560" }
+
+views: [physics_3d, waveforms, fields]
+record: { format: mcap, path: runs/quad_gusty_001.mcap }

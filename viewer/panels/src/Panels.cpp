@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <imgui_internal.h>  // DockBuilder: the supported way to script a default layout
 
 #include <imgui.h>
 
@@ -257,28 +256,11 @@ public:
             ImGui::EndDisabled();
             ImGui::EndDisabled();
 
-            ImGui::Separator();
-            ImGui::Text("%s  %s", toString(context.connection.state),
-                        context.connection.serverName.c_str());
-            if (!context.connection.message.empty()) {
-                ImGui::SameLine();
-                ImGui::TextColored(ImVec4(1.0F, 0.6F, 0.4F, 1.0F), "%s",
-                                   context.connection.message.c_str());
-            }
             if (!context.notice.text.empty()) {
                 ImGui::TextColored(context.notice.error ? ImVec4(1.0F, 0.45F, 0.35F, 1.0F)
                                                         : ImVec4(0.65F, 0.85F, 1.0F, 1.0F),
                                    "%s", context.notice.text.c_str());
             }
-            ImGui::TextDisabled(
-                "%u signals   %llu samples   %llu snapshots   %llu deltas   %llu resyncs   "
-                "%llu dropped by server   %s",
-                context.status.signalCount, static_cast<unsigned long long>(context.stats.samples),
-                static_cast<unsigned long long>(context.stats.snapshots),
-                static_cast<unsigned long long>(context.stats.deltas),
-                static_cast<unsigned long long>(context.stats.resyncs),
-                static_cast<unsigned long long>(context.status.droppedDeltas),
-                context.deviceName.c_str());
         }
         ImGui::End();
     }
@@ -289,27 +271,6 @@ private:
     double lastSeek_{0.0};
 };
 
-void buildDefaultLayout(ImGuiID dockspace) {
-    ImGui::DockBuilderRemoveNode(dockspace);
-    ImGui::DockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);
-    ImGui::DockBuilderSetNodeSize(dockspace, ImGui::GetMainViewport()->Size);
-    ImGuiID centre = dockspace;
-    const ImGuiID bottom =
-        ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.15F, nullptr, &centre);
-    const ImGuiID scope =
-        ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.42F, nullptr, &centre);
-    const ImGuiID left =
-        ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left, 0.20F, nullptr, &centre);
-    const ImGuiID right =
-        ImGui::DockBuilderSplitNode(centre, ImGuiDir_Right, 0.26F, nullptr, &centre);
-    ImGui::DockBuilderDockWindow("Viewport", centre);
-    ImGui::DockBuilderDockWindow("Scene", left);
-    ImGui::DockBuilderDockWindow("Inspector", right);
-    ImGui::DockBuilderDockWindow("Timeline", bottom);
-    ImGui::DockBuilderDockWindow("Scope", scope);
-    ImGui::DockBuilderFinish(dockspace);
-}
-
 }  // namespace
 
 std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
@@ -319,31 +280,9 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
     panels.push_back(std::make_unique<InspectorPanel>());
     panels.push_back(std::make_unique<TimelinePanel>());
     panels.push_back(createScopePanel());
+    panels.push_back(createDomainsPanel());
+    panels.push_back(createProfilePanel());
     return panels;
-}
-
-void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& context) {
-    const ImGuiID dockspace = ImGui::GetID("lagrange-dockspace");
-    // Lay out only when there is no saved layout for this dock space.
-    if (ImGui::DockBuilderGetNode(dockspace) == nullptr) {
-        buildDefaultLayout(dockspace);
-    }
-    if (context.canOpenFiles && ImGui::BeginMainMenuBar()) {
-        if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("Open robot or recording...", "Ctrl+O")) {
-                context.openFileRequested = true;
-            }
-            ImGui::EndMenu();
-        }
-        ImGui::EndMainMenuBar();
-    }
-    if (context.canOpenFiles && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_O)) {
-        context.openFileRequested = true;
-    }
-    ImGui::DockSpaceOverViewport(dockspace, ImGui::GetMainViewport());
-    for (const std::unique_ptr<Panel>& panel : panels) {
-        panel->draw(context);
-    }
 }
 
 }  // namespace lagrange::viewer

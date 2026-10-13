@@ -20,6 +20,9 @@ void usage() {
         "  --open <file>          ask the server to load a robot (.urdf, .xacro) or recording "
         "(.mcap)\n"
         "  --scope <a,b,...>      open these signals in the scope at start-up\n"
+        "  --workspace <name>     workspace to show at start-up: scene (default) or domains\n"
+        "  --set-domain <d>=on|off  switch a domain in the profile being edited (repeatable)\n"
+        "  --apply-profile        apply the edited profile once the server calls it valid\n"
         "  --headless             no window: render offscreen and exit\n"
         "  --frames <N>           headless: frames to render once the scene arrived (default "
         "120);\n"
@@ -60,6 +63,19 @@ int main(int argc, char** argv) {
             options.waitMs = static_cast<std::uint32_t>(std::strtoul(value(), nullptr, 10));
         } else if (arg == "--screenshot") {
             options.screenshot = value();
+        } else if (arg == "--set-domain") {
+            const std::string edit = value();
+            const std::size_t equals = edit.find('=');
+            const std::string state = equals == std::string::npos ? "" : edit.substr(equals + 1);
+            if (equals == 0 || (state != "on" && state != "off")) {
+                std::fputs("error: --set-domain expects <domain>=on or <domain>=off\n", stderr);
+                return 2;
+            }
+            options.domainEdits.emplace_back(edit.substr(0, equals), state == "on");
+        } else if (arg == "--apply-profile") {
+            options.applyProfile = true;
+        } else if (arg == "--workspace") {
+            options.workspace = value();
         } else if (arg == "--open") {
             options.openPath = value();
         } else if (arg == "--scope") {

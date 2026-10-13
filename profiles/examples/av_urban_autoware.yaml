@@ -1,0 +1,29 @@
+# profiles/examples/av_urban_autoware.yaml — autonomous car, sensors + traffic + scenario
+schema_version: 1
+stage: worlds/city_block_av.usda
+environment: environments/fog_150m_dusk.usda
+tier: 2
+
+domains:
+  rigid_body:       { enabled: true,  backend: physx, dt: 0.002 }
+  vehicle_dynamics: { enabled: true,  tire_model: pacejka, dt: 0.002 }
+  electrical:       { enabled: false, substitute: ideal }
+  thermal:          { enabled: false, substitute: ambient }
+  aerodynamics:     { enabled: true,  fidelity: drag, dt: 0.01 }
+  weather:          { enabled: true,  effects: [fog, lens_contamination], dt: 0.05 }
+  emi:              { enabled: false, substitute: zero }
+  radiation:        { enabled: false, substitute: zero }
+  sensors:          { enabled: true,  dt: 0.002 }
+  traffic:          { enabled: true,  backend: sumo, sumo_config: scenarios/city_block.sumocfg, dt: 0.1 }
+  comms:            { enabled: false, substitute: ideal }
+
+scenario:
+  opendrive: scenarios/city_block.xodr
+  openscenario: scenarios/cut_in_fog.xosc
+
+bridges:
+  ros2:     { enabled: true, gpu_buffers: true }
+  autoware: { enabled: true }
+
+views: [physics_3d, sensors, fields]
+record: { format: mcap, path: runs/av_urban_001.mcap, signals: ["body/*", "sensor/*/meta", "traffic/*"] }

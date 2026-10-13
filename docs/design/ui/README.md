@@ -9,7 +9,7 @@ behavioural target for all viewer UI work. Claude Code loads the rules for it fr
 | `shared/` | `ui-conventions.md`, `design-tokens.json` (source of truth), `lagrange_theme.hpp` |
 | `00-design-system` … `11-performance` | one screen each: `SPEC.md`, `README.md`, `reference.png` (2x), `reference.html` |
 | `fonts/` | IBM Plex web fonts used by the `reference.html` pages (each screen's `fonts` is a link to it) |
-| `00-design-system/fonts-ttf/` | IBM Plex Sans and Mono TTFs for the ImGui font atlas |
+| `00-design-system/fonts-ttf/` | link to `viewer/assets/fonts/`: IBM Plex Sans and Mono TTFs, installed with the viewer |
 
 The fonts are IBM Plex, under the SIL Open Font License 1.1 (`fonts/OFL.txt`,
 `LICENSES/OFL-1.1.txt`).

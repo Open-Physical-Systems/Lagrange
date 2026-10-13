@@ -22,7 +22,7 @@ from lagrange.viewer.v1 import (
     signals_pb2,
 )
 
-from . import __version__
+from . import __version__, profile
 from .endpoint import Endpoint
 from .framing import DEFAULT_MAX_FRAME_SIZE, FrameError, FrameReader, encode_frame
 from .recording import Recording, RecordingError, read_recording
@@ -68,6 +68,8 @@ class MockServer:
         self._next_session_id = 1
         self._tick_count = 0
         self._loading: set[asyncio.Task] = set()
+        self._restart_required = False
+        self._reset_profile()
 
     # --- lifecycle -------------------------------------------------------------------------
 
@@ -192,28 +194,38 @@ class MockServer:
         session.send(self._status())
         return True
 
+    def _reset_profile(self) -> None:
+        """Take the profile the recording was made with, or a default one for its stage."""
+        meta = self.engine.recording.meta
+        checked = profile.check(meta.profile_yaml) if meta.profile_yaml else None
+        if checked is None or not checked.valid:
+            stage = meta.stage_path or self.engine.recording.snapshot.stage_path
+            checked = profile.check(profile.default_profile(stage))
+        assert checked.data is not None
+        self._profile_data = checked.data
+        self._profile_text = profile.canonical(checked.data)
+        self._restart_required = False
+
     def _profile_state(self) -> profile_pb2.ProfileState:
-        state = profile_pb2.ProfileState(
-            yaml=self.engine.recording.meta.profile_yaml, schema_version=1
+        return profile.state(
+            self._profile_text, self._profile_data, restart_required=self._restart_required
         )
-        writers: dict[str, str] = {}
-        for signal in self.engine.recording.signals:
-            domain, _, module = signal.info.writer.partition("/")
-            writers.setdefault(domain, module)
-        for domain, module in sorted(writers.items()):
-            state.domains.add(
-                domain=domain,
-                enabled=False,
-                available=True,
-                active_module="replay",
-                substituted=True,
-            ).substitutes.add(
-                token="replay",
-                kind="replay",
-                description=f"recorded {module} data",
-                needs_source=True,
-            )
-        return state
+
+    def _apply_profile(self, request: command_pb2.ApplyProfile) -> bool:
+        """Adopt a new profile. Returns True when the run restarted. Raises ValueError."""
+        checked = profile.check(request.yaml)
+        if not checked.valid or checked.data is None:
+            first = next(issue for issue in checked.issues if issue.error)
+            where = f"{first.pointer}: " if first.pointer else ""
+            raise ValueError(f"profile not applied: {where}{first.message}")
+        self._profile_data = checked.data
+        self._profile_text = profile.canonical(checked.data)
+        # A real server rebuilds its wiring here. The replay has nothing to rebuild, so a
+        # restart is the whole effect: the run starts again at t = 0.
+        self._restart_required = not request.restart
+        if request.restart:
+            self.engine.seek(0)
+        return request.restart
 
     def _status(self) -> envelope_pb2.Envelope:
         envelope = envelope_pb2.Envelope()
@@ -272,6 +284,7 @@ class MockServer:
         result.command_result.ok = True
         kind = command.WhichOneof("command")
         resync = False
+        profile_changed = False
         try:
             if kind == "play":
                 self.engine.play()
@@ -293,6 +306,13 @@ class MockServer:
                 self._send_snapshot(session)
             elif kind == "get_profile":
                 session.send(envelope_pb2.Envelope(profile_state=self._profile_state()))
+            elif kind == "validate_profile":
+                result.command_result.validation.CopyFrom(
+                    profile.check(command.validate_profile.yaml).to_proto()
+                )
+            elif kind == "apply_profile":
+                resync = self._apply_profile(command.apply_profile)
+                profile_changed = True
             elif kind in ("import_robot", "open_recording"):
                 # Reading files can take a moment: answer when it is done, off the event loop.
                 task = asyncio.create_task(self._load(session, command))
@@ -308,12 +328,16 @@ class MockServer:
             result.command_result.ok = False
             result.command_result.error = str(error)
         session.send(result)
+        if profile_changed:
+            state = envelope_pb2.Envelope(profile_state=self._profile_state())
+            for other in self._sessions:
+                other.send(state)
         if resync:
             # A snapshot marks the discontinuity for every viewer, including ones that only
             # watch signals: sample indices restart from the new time after it.
             for other in self._sessions:
                 self._send_snapshot(other)
-        if kind in ("play", "pause", "set_rtf", "seek", "reset", "step"):
+        if kind in ("play", "pause", "set_rtf", "seek", "reset", "step", "apply_profile"):
             status = self._status()
             for other in self._sessions:
                 other.send(status)
@@ -327,6 +351,7 @@ class MockServer:
         if was_running:
             self.engine.play()
         self.catalog_generation += 1
+        self._reset_profile()
         for session in self._sessions:
             session.subscriptions.clear()  # signal ids belong to the old catalog
             session.send(envelope_pb2.Envelope(profile_state=self._profile_state()))

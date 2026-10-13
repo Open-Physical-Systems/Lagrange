@@ -1,0 +1,18 @@
+# profiles/examples/bridge_rain_electrical.yaml — bridge inspection, heavy rain at night,
+# sensors replaced by ground truth
+schema_version: 1
+stage: worlds/bridge_inspection.usda
+environment: environments/heavy_rain_night.usda
+
+domains:
+  rigid_body:   { enabled: true,  backend: physx, dt: 0.001 }
+  electrical:   { enabled: true,  fidelity: averaged, dt: 0.0001 }
+  thermal:      { enabled: true,  dt: 0.1 }
+  aerodynamics: { enabled: true,  fidelity: drag_plus_field }
+  weather:      { enabled: true }
+  emi:          { enabled: true,  coupling: [magnetometer, can_bus, wifi] }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: false, substitute: ground_truth }
+
+views: [electrical_schematic, waveforms, physics_3d]
+record: { format: mcap, path: runs/run_001.mcap }

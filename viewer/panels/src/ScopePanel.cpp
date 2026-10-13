@@ -1,4 +1,5 @@
 #include "lagrange/viewer/Panel.hpp"
+#include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -236,7 +237,7 @@ private:
         const ImVec4 color = ImPlot::GetColormapColor(colorIndex);
         ImPlotSpec line;
         line.LineColor = color;
-        line.LineWeight = 1.0F;
+        line.LineWeight = theme::kSeriesLineWeight;
         const double samplesPerColumn = static_cast<double>(endNs - beginNs) /
                                         static_cast<double>(trace.buffer->dtNs()) /
                                         static_cast<double>(columns);

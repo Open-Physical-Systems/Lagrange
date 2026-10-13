@@ -264,3 +264,42 @@ def test_unknown_gpu_is_an_error_with_a_message():
     )
     assert result.returncode == 3
     assert "no-such-gpu" in result.stderr
+
+
+def test_switching_a_domain_off_is_validated_and_applied_by_the_server(socket_dir):
+    """Design acceptance (03-domains): toggling Aerodynamics off gives a valid profile."""
+    image = socket_dir / "domains.png"
+    common = ["--workspace", "domains", "--size", "1600x1000", "--frames", "90"]
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        connect = ["--connect", f"unix:{server.endpoint.address}"]
+        before = run_viewer(*connect, *common)
+        edited = run_viewer(
+            *connect, *common, "--set-domain", "aerodynamics=off", "--screenshot", str(image)
+        )
+        applied = run_viewer(
+            *connect, *common, "--set-domain", "aerodynamics=off", "--apply-profile"
+        )
+        after = run_viewer(*connect, *common)
+    for result in (before, edited, applied, after):
+        assert result.returncode == 0, result.stderr
+    stats = [
+        json.loads(r.stdout.strip().splitlines()[-1]) for r in (before, edited, applied, after)
+    ]
+    assert all(s["validation_errors"] == 0 for s in stats)
+
+    # The sample starts with aerodynamics on and an unedited, valid profile.
+    assert "aerodynamics" in stats[0]["domains_enabled"].split(",")
+    assert (stats[0]["profile"], stats[0]["profile_changes"]) == ("valid", 0)
+    # Edited but not applied: one changed line, valid, and the server still runs the old one.
+    assert (stats[1]["profile"], stats[1]["profile_changes"]) == ("valid", 1)
+    assert "aerodynamics" in stats[1]["domains_enabled"].split(",")
+    # Applied: the server adopted it, so nothing is pending any more, for this viewer or the next.
+    assert stats[2]["profile_changes"] == 0
+    assert "aerodynamics" not in stats[2]["domains_enabled"].split(",")
+    assert "aerodynamics" not in stats[3]["domains_enabled"].split(",")
+    assert "rigid_body" in stats[3]["domains_enabled"].split(",")
+
+    width, height, rows = read_png(image)
+    assert (width, height) == (1600, 1000)
+    pixels = {row[i : i + 4] for row in rows for i in range(0, len(row), 4)}
+    assert len(pixels) > 50, "the Domains workspace is nearly uniform: nothing was drawn"

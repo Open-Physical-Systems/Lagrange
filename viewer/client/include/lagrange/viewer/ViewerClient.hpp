@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -85,6 +86,63 @@ struct Notice {
     std::string text;
 };
 
+/// One thing that can stand in for a disabled domain.
+struct SubstituteOption {
+    std::string token;  ///< What the profile says: "zero", "replay", ...
+    std::string kind;   ///< ideal | constant | replay
+    std::string description;
+    bool needsSource{false};  ///< A replay needs a recording to read from.
+};
+
+/// One domain as the server sees it under the applied profile.
+struct DomainInfo {
+    std::string name;  ///< "rigid_body"
+    bool enabled{false};
+    bool available{true};
+    std::string unavailableReason;
+    std::string activeModule;  ///< Backend, fidelity, or the substitute in use.
+    bool substituted{false};
+    std::vector<SubstituteOption> substitutes;
+    std::vector<std::string> backends;
+    std::vector<std::string> fidelities;
+    std::int64_t dtNs{0};
+    std::int64_t minDtNs{0};
+    std::int64_t maxDtNs{0};
+    double cpuMsPerSimS{0.0};
+    std::vector<std::string> dependsOn;
+};
+
+/// The profile the server is running. Immutable once published.
+struct ProfileInfo {
+    std::uint64_t serial{0};  ///< Increases every time the server sends its profile.
+    std::string yaml;         ///< Canonical text: one domain per line.
+    std::uint32_t schemaVersion{0};
+    bool restartRequired{false};
+    std::vector<DomainInfo> domains;
+
+    [[nodiscard]] const DomainInfo* find(std::string_view name) const {
+        for (const DomainInfo& domain : domains) {
+            if (domain.name == name) {
+                return &domain;
+            }
+        }
+        return nullptr;
+    }
+};
+
+struct ProfileIssue {
+    bool error{true};
+    std::string pointer;  ///< JSON pointer into the profile: "/domains/thermal/dt"
+    std::string message;
+};
+
+/// The server's answer to validateProfile().
+struct ProfileCheck {
+    std::uint64_t requestId{0};  ///< What validateProfile() returned for this text.
+    bool valid{false};
+    std::vector<ProfileIssue> issues;
+};
+
 struct ClientStats {
     std::uint64_t snapshots{0};
     std::uint64_t deltas{0};
@@ -141,6 +199,20 @@ public:
 
     [[nodiscard]] Notice notice() const { return *notice_.load(); }
 
+    // --- profile ---------------------------------------------------------------------------
+    /// The profile the server runs, or nullptr before it arrived.
+    [[nodiscard]] std::shared_ptr<const ProfileInfo> profile() const { return profile_.load(); }
+    /// The latest validation answer, or nullptr. Compare its requestId with the id returned
+    /// by validateProfile() to know which text it is about.
+    [[nodiscard]] std::shared_ptr<const ProfileCheck> profileCheck() const {
+        return profileCheck_.load();
+    }
+    /// Asks the server whether `yaml` is a valid profile. Returns the request id.
+    std::uint64_t validateProfile(const std::string& yaml);
+    /// Asks the server to adopt `yaml` and restart the run at t = 0. A refusal arrives as a
+    /// Notice; success arrives as a new profile().
+    void applyProfile(const std::string& yaml);
+
 private:
     void run();
     void handle(const v1::Envelope& envelope);
@@ -169,6 +241,9 @@ private:
 
     std::atomic<std::shared_ptr<const SignalCatalog>> catalog_;
     std::atomic<std::shared_ptr<const Notice>> notice_;
+    std::atomic<std::shared_ptr<const ProfileInfo>> profile_;
+    std::atomic<std::shared_ptr<const ProfileCheck>> profileCheck_;
+    std::atomic<std::uint64_t> profileSerial_{0};
     void post(bool error, std::string text);
     std::atomic<std::uint64_t> signalBlocks_{0};
     std::atomic<std::uint64_t> samples_{0};

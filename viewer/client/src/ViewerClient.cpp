@@ -246,6 +246,24 @@ void ViewerClient::openFile(const std::string& path) {
     enqueue(std::move(envelope));
 }
 
+std::uint64_t ViewerClient::validateProfile(const std::string& yaml) {
+    auto envelope = std::make_unique<v1::Envelope>();
+    const std::uint64_t id = nextRequestId_++;
+    envelope->mutable_command()->set_request_id(id);
+    envelope->mutable_command()->mutable_validate_profile()->set_yaml(yaml);
+    enqueue(std::move(envelope));
+    return id;
+}
+
+void ViewerClient::applyProfile(const std::string& yaml) {
+    auto envelope = std::make_unique<v1::Envelope>();
+    envelope->mutable_command()->set_request_id(nextRequestId_++);
+    v1::ApplyProfile* apply = envelope->mutable_command()->mutable_apply_profile();
+    apply->set_yaml(yaml);
+    apply->set_restart(true);
+    enqueue(std::move(envelope));
+}
+
 // Called from the UI thread (openFile) and from the worker (results); the serial only has to
 // change, so a rare race between the two costs nothing.
 void ViewerClient::post(bool error, std::string text) {
@@ -377,12 +395,54 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
             break;
         case v1::Envelope::kCommandResult: {
             const v1::CommandResult& result = envelope.command_result();
-            if (!result.ok()) {
+            if (result.has_validation()) {
+                auto check = std::make_shared<ProfileCheck>();
+                check->requestId = result.request_id();
+                check->valid = result.validation().valid();
+                for (const v1::ProfileIssue& source : result.validation().issues()) {
+                    check->issues.push_back(
+                        {source.severity() != v1::ProfileIssue::SEVERITY_WARNING,
+                         source.json_pointer(), source.message()});
+                }
+                profileCheck_.store(std::move(check));
+            } else if (!result.ok()) {
                 post(true,
                      result.error().empty() ? "the server refused a command" : result.error());
             } else if (!result.imported_stage_path().empty()) {
                 post(false, "Loaded " + result.imported_stage_path());
             }
+            break;
+        }
+        case v1::Envelope::kProfileState: {
+            const v1::ProfileState& source = envelope.profile_state();
+            auto profile = std::make_shared<ProfileInfo>();
+            profile->serial = ++profileSerial_;
+            profile->yaml = source.yaml();
+            profile->schemaVersion = source.schema_version();
+            profile->restartRequired = source.restart_required();
+            profile->domains.reserve(static_cast<std::size_t>(source.domains_size()));
+            for (const v1::DomainState& domain : source.domains()) {
+                DomainInfo info;
+                info.name = domain.domain();
+                info.enabled = domain.enabled();
+                info.available = domain.available();
+                info.unavailableReason = domain.unavailable_reason();
+                info.activeModule = domain.active_module();
+                info.substituted = domain.substituted();
+                for (const v1::SubstituteOption& option : domain.substitutes()) {
+                    info.substitutes.push_back({option.token(), option.kind(), option.description(),
+                                                option.needs_source()});
+                }
+                info.backends.assign(domain.backends().begin(), domain.backends().end());
+                info.fidelities.assign(domain.fidelities().begin(), domain.fidelities().end());
+                info.dtNs = domain.dt_ns();
+                info.minDtNs = domain.min_dt_ns();
+                info.maxDtNs = domain.max_dt_ns();
+                info.cpuMsPerSimS = domain.cpu_ms_per_sim_s();
+                info.dependsOn.assign(domain.depends_on().begin(), domain.depends_on().end());
+                profile->domains.push_back(std::move(info));
+            }
+            profile_.store(std::move(profile));
             break;
         }
         case v1::Envelope::kLog:
