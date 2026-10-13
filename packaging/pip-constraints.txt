@@ -1,0 +1,3 @@
+# Exact versions of the Python packages that come from PyPI (not packaged for Ubuntu 26.04).
+# Used by tools/ci/install_deps.sh through PIP_CONSTRAINT.
+mcap==1.5.0

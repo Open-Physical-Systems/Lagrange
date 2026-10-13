@@ -1,0 +1,8 @@
+# rosdep keys that Lagrange needs and that are not in ros/rosdistro yet.
+# Register with:
+#   echo "yaml file://$(pwd)/packaging/rosdep/lagrange.yaml" | \
+#     sudo tee /etc/ros/rosdep/sources.list.d/10-lagrange.list && rosdep update
+python3-mcap-pip:
+  ubuntu:
+    pip:
+      packages: [mcap]
