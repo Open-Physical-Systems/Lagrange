@@ -85,8 +85,10 @@ bool DomainChip(const char* id, const ImVec4& color, const char* name, const cha
 bool OptionCard(const char* id, const char* title, const char* description, bool selected,
                 const ImVec2& size);
 
-/// A 26 px collapsible section header on the raised surface, with mono text on the right.
-bool SectionHeader(const char* title, const char* meta, bool defaultOpen = true);
+/// A 26 px collapsible section header on the raised surface, with mono text on the right
+/// and, when `dot` is given, a domain dot before the title.
+bool SectionHeader(const char* title, const char* meta, bool defaultOpen = true,
+                   const ImVec4* dot = nullptr);
 
 /// A workspace tab: icon and label, accent underline when active. `available` is false for a
 /// workspace that is not built yet; it is drawn dimmer.

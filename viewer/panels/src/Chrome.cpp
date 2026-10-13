@@ -49,12 +49,14 @@ constexpr std::array<WorkspaceEntry, 10> kWorkspaces{{
      "Ctrl+4", "05-signals"},
     {Workspace::Sensors, "Sensors", widgets::Icon::Sensors, "lagrange-dock-sensors-1", ImGuiKey_5,
      "Ctrl+5", "06-sensors"},
-    {Workspace::Environment, "Environment", widgets::Icon::Environment, nullptr, ImGuiKey_6,
-     "Ctrl+6", "07-environment"},
+    {Workspace::Environment, "Environment", widgets::Icon::Environment,
+     "lagrange-dock-environment-1", ImGuiKey_6, "Ctrl+6", "07-environment"},
     {Workspace::Replay, "Replay", widgets::Icon::Replay, "lagrange-dock-replay-1", ImGuiKey_7,
      "Ctrl+7", "08-replay"},
-    {Workspace::Ros2, "ROS 2", widgets::Icon::Ros2, nullptr, ImGuiKey_8, "Ctrl+8", "09-ros2"},
-    {Workspace::World, "World", widgets::Icon::World, nullptr, ImGuiKey_9, "Ctrl+9", "10-world"},
+    {Workspace::Ros2, "ROS 2", widgets::Icon::Ros2, "lagrange-dock-ros2-1", ImGuiKey_8, "Ctrl+8",
+     "09-ros2"},
+    {Workspace::World, "World", widgets::Icon::World, "lagrange-dock-world-1", ImGuiKey_9, "Ctrl+9",
+     "10-world"},
     {Workspace::Performance, "Performance", widgets::Icon::Performance,
      "lagrange-dock-performance-1", ImGuiKey_0, "Ctrl+0", "11-performance"},
 }};
@@ -148,6 +150,37 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         ImGui::DockBuilderDockWindow("###ReplayBookmarks", channels);
         ImGui::DockBuilderDockWindow("###ReplayTimeline", centre);
         ImGui::DockBuilderDockWindow("###ReplayEvents", events);
+    } else if (workspace == Workspace::Environment) {
+        // Design: Environment 320 px left, Overlays 300 px right, the field view between.
+        const ImGuiID left = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Left, fraction(320.0F, size.x), nullptr, &centre);
+        const ImGuiID right = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Right, fraction(300.0F, size.x - px(320.0F)), nullptr, &centre);
+        ImGui::DockBuilderDockWindow("###EnvironmentState", left);
+        ImGui::DockBuilderDockWindow("###FieldSlice", centre);
+        ImGui::DockBuilderDockWindow("Overlays", right);
+    } else if (workspace == Workspace::Ros2) {
+        // Design: Topics 440 px left, ros2_control 340 px right, the node graph over a
+        // 300 px console.
+        const ImGuiID left = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Left, fraction(440.0F, size.x), nullptr, &centre);
+        const ImGuiID right = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Right, fraction(340.0F, size.x - px(440.0F)), nullptr, &centre);
+        const ImGuiID console = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Down, fraction(300.0F, size.y), nullptr, &centre);
+        ImGui::DockBuilderDockWindow("Topics", left);
+        ImGui::DockBuilderDockWindow("Node graph", centre);
+        ImGui::DockBuilderDockWindow("###RosConsole", console);
+        ImGui::DockBuilderDockWindow("ros2_control", right);
+    } else if (workspace == Workspace::World) {
+        // Design: Agents 300 px left, Streaming 320 px right, the map between.
+        const ImGuiID left = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Left, fraction(300.0F, size.x), nullptr, &centre);
+        const ImGuiID right = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Right, fraction(320.0F, size.x - px(300.0F)), nullptr, &centre);
+        ImGui::DockBuilderDockWindow("Agents", left);
+        ImGui::DockBuilderDockWindow("Map", centre);
+        ImGui::DockBuilderDockWindow("Streaming", right);
     } else if (workspace == Workspace::Sensors) {
         // Design: sensor list 260 px left, Degradation 320 px right, sensor views between.
         const ImGuiID left = ImGui::DockBuilderSplitNode(
@@ -745,6 +778,12 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
     }
     panels.push_back(createReplayBookmarksPanel());
     panels.push_back(createReplayTimelinePanel());
+    for (auto* create : {createEnvironmentPanels, createRos2Panels, createWorldPanels}) {
+        for (std::unique_ptr<Panel>& panel : create()) {
+            panels.push_back(std::move(panel));
+        }
+    }
+    panels.push_back(createRosConsolePanel());
     panels.push_back(createElectricalInspectorPanel());
     panels.push_back(createDomainsPanel());
     for (std::unique_ptr<Panel>& panel : createWiringPanels()) {

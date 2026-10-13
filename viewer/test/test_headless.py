@@ -527,3 +527,66 @@ def test_replay_workspace_shows_the_recording_and_its_events(socket_dir):
     assert (width, height) == (1600, 1000)
     pixels = {row[i : i + 4] for row in rows for i in range(0, len(row), 4)}
     assert len(pixels) > 50
+
+
+def run_workspace(socket_dir, workspace, name):
+    """Runs the viewer on one workspace against the mock server; returns stats and pixels."""
+    image = socket_dir / name
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "60",
+            "--size",
+            "1600x1000",
+            "--workspace",
+            workspace,
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    width, height, rows = read_png(image)
+    assert (width, height) == (1600, 1000)
+    return stats, rows
+
+
+def count(rows, wanted):
+    return sum(
+        1 for row in rows for i in range(0, len(row), 4) if wanted(row[i], row[i + 1], row[i + 2])
+    )
+
+
+def test_environment_workspace_draws_the_field_slice(socket_dir):
+    """Design 07-environment: environment state, a 2D field slice, the overlay list."""
+    stats, rows = run_workspace(socket_dir, "environment", "environment.png")
+    assert stats["environment_fields"] >= 1
+    # The slice is drawn with viridis: its low end is a dark purple no other panel uses.
+    purple = count(rows, lambda r, g, b: 50 <= r <= 80 and g <= 30 and 60 <= b <= 100)
+    assert purple > 20000, f"field slice not drawn ({purple} pixels)"
+
+
+def test_ros2_workspace_lists_the_graph_only_when_shown(socket_dir):
+    """Design 09-ros2: topics, node graph, ros2_control. The graph is sent on request."""
+    stats, rows = run_workspace(socket_dir, "ros 2", "ros2.png")
+    assert stats["ros_topics"] >= 5
+    assert stats["ros_nodes"] >= 2
+    # The bridge node is outlined in the accent colour.
+    accent = count(rows, lambda r, g, b: r > 220 and 100 <= g <= 135 and b < 70)
+    assert accent > 400, f"bridge node not drawn ({accent} pixels)"
+    # Another workspace does not ask for the graph.
+    stats, _ = run_workspace(socket_dir, "scene", "scene_no_ros.png")
+    assert stats["ros_topics"] == 0
+    assert stats["world_tiles"] == 0
+
+
+def test_world_workspace_draws_the_tile_map(socket_dir):
+    """Design 10-world: agents, the tile map coloured by level of detail, streaming."""
+    stats, rows = run_workspace(socket_dir, "world", "world.png")
+    assert stats["world_tiles"] > 0
+    assert stats["world_agents"] >= 1
+    # Tiles at the lowest level of detail cover most of the map.
+    proxy = count(rows, lambda r, g, b: 15 <= r <= 35 and 30 <= g <= 50 and 50 <= b <= 80)
+    assert proxy > 50000, f"tile map not drawn ({proxy} pixels)"
