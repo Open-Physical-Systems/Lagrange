@@ -40,7 +40,11 @@ bool passes(const LogEntry& entry, Filter filter, bool problemsOnly) {
 
 class ConsolePanel final : public Panel {
 public:
-    explicit ConsolePanel(bool problemsOnly) : problemsOnly_(problemsOnly) {}
+    /// `window` names the window when the console is used outside the Scene workspace.
+    explicit ConsolePanel(bool problemsOnly, const char* window = nullptr,
+                          Workspace workspace = Workspace::Scene)
+        : problemsOnly_(problemsOnly), window_(window), workspace_(workspace) {}
+    [[nodiscard]] Workspace workspace() const override { return workspace_; }
 
     [[nodiscard]] const char* title() const override {
         return problemsOnly_ ? "Problems" : "Console";
@@ -54,7 +58,7 @@ public:
             std::snprintf(label, sizeof(label), "Problems · %u###Problems",
                           book->warnings + book->errors);
         } else {
-            std::snprintf(label, sizeof(label), "Console");
+            std::snprintf(label, sizeof(label), "%s", window_ != nullptr ? window_ : "Console");
         }
         if (!ImGui::Begin(label)) {
             ImGui::End();
@@ -143,6 +147,8 @@ private:
     }
 
     bool problemsOnly_;
+    const char* window_;
+    Workspace workspace_;
     Filter filter_{Filter::All};
     std::shared_ptr<const LogBook> shown_;
     std::vector<std::uint32_t> visible_;
@@ -153,6 +159,10 @@ private:
 
 std::unique_ptr<Panel> createConsolePanel() {
     return std::make_unique<ConsolePanel>(false);
+}
+
+std::unique_ptr<Panel> createRosConsolePanel() {
+    return std::make_unique<ConsolePanel>(false, "Console###RosConsole", Workspace::Ros2);
 }
 
 std::unique_ptr<Panel> createProblemsPanel() {

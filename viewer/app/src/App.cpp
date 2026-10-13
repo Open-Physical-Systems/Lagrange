@@ -596,7 +596,9 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             "\"device\": \"%s\", \"tier\": %d, \"validation_errors\": %u, \"connected\": %s, "
             "\"profile\": \"%s\", \"profile_changes\": %zu, \"domains_enabled\": \"%s\", "
             "\"log_lines\": %llu, \"attributes\": %zu, \"wiring_nodes\": %zu, "
-            "\"wiring_wires\": %zu, \"events\": %zu, \"server_stats\": %s}\n",
+            "\"wiring_wires\": %zu, \"events\": %zu, \"server_stats\": %s, "
+            "\"environment_fields\": %zu, \"ros_topics\": %zu, \"ros_nodes\": %zu, "
+            "\"world_tiles\": %zu, \"world_agents\": %zu}\n",
             jsonEscape(client.notice().text).c_str(), client.notice().error ? "true" : "false",
             rendered, static_cast<unsigned long long>(stats.snapshots),
             static_cast<unsigned long long>(stats.deltas),
@@ -614,7 +616,12 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             static_cast<unsigned long long>(client.logs()->total),
             client.attributes() ? client.attributes()->attributes.size() : std::size_t{0},
             ui.profileSession().wiring().nodes.size(), ui.profileSession().wiring().wires.size(),
-            client.events()->events.size(), client.statistics() ? "true" : "false");
+            client.events()->events.size(), client.statistics() ? "true" : "false",
+            client.environment() ? client.environment()->fields.size() : std::size_t{0},
+            client.rosGraph() ? client.rosGraph()->topics.size() : std::size_t{0},
+            client.rosGraph() ? client.rosGraph()->nodes.size() : std::size_t{0},
+            client.world() ? client.world()->tiles.size() : std::size_t{0},
+            client.world() ? client.world()->agents.size() : std::size_t{0});
         if (device->validationErrorCount() != 0 && exitCode == 0) {
             exitCode = 6;
         }

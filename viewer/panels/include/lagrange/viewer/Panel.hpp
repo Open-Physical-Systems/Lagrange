@@ -147,6 +147,11 @@ public:
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createReplayPanels();
 [[nodiscard]] std::unique_ptr<Panel> createReplayTimelinePanel();
 [[nodiscard]] std::unique_ptr<Panel> createReplayBookmarksPanel();
+/// The Environment, ROS 2 and World workspaces.
+[[nodiscard]] std::vector<std::unique_ptr<Panel>> createEnvironmentPanels();
+[[nodiscard]] std::vector<std::unique_ptr<Panel>> createRos2Panels();
+[[nodiscard]] std::unique_ptr<Panel> createRosConsolePanel();
+[[nodiscard]] std::vector<std::unique_ptr<Panel>> createWorldPanels();
 [[nodiscard]] std::unique_ptr<Panel> createTimelinePanel();
 [[nodiscard]] std::unique_ptr<Panel> createBookmarksPanel();
 [[nodiscard]] std::unique_ptr<Panel> createConsolePanel();

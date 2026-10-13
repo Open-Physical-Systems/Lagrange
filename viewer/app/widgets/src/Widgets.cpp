@@ -595,7 +595,7 @@ bool OptionCard(const char* id, const char* title, const char* description, bool
     return clicked;
 }
 
-bool SectionHeader(const char* title, const char* meta, bool defaultOpen) {
+bool SectionHeader(const char* title, const char* meta, bool defaultOpen, const ImVec4* dot) {
     ImGuiStorage* storage = ImGui::GetStateStorage();
     const ImGuiID id = ImGui::GetID(title);
     bool open = storage->GetBool(id, defaultOpen);
@@ -624,7 +624,12 @@ bool SectionHeader(const char* title, const char* meta, bool defaultOpen) {
                                 ImVec2(at.x + caret * 0.8F, at.y), u32(c::t2));
     }
     const float titleSize = px(theme::kLabelSize);
-    draw->AddText(fonts.sansSemiBold, titleSize, ImVec2(min.x + px(24.0F), midY - titleSize * 0.6F),
+    float titleX = min.x + px(24.0F);
+    if (dot != nullptr) {
+        draw->AddCircleFilled(ImVec2(titleX + px(4.0F), midY), px(4.0F), u32(*dot));
+        titleX += px(14.0F);
+    }
+    draw->AddText(fonts.sansSemiBold, titleSize, ImVec2(titleX, midY - titleSize * 0.6F),
                   u32(c::t1), title);
     if (meta != nullptr && *meta != '\0') {
         const float metaSize = px(theme::kCaptionSize);

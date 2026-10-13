@@ -95,12 +95,14 @@ add_library(
     panels/src/ConsolePanel.cpp
     panels/src/DomainsPanel.cpp
     panels/src/ElectricalPanels.cpp
+    panels/src/EnvironmentPanels.cpp
     panels/src/InspectorPanel.cpp
     panels/src/Launcher.cpp
     panels/src/PanelFormat.cpp
     panels/src/PerformancePanels.cpp
     panels/src/ProfilePanel.cpp
     panels/src/ReplayPanels.cpp
+    panels/src/Ros2Panels.cpp
     panels/src/ScenePanel.cpp
     panels/src/ScheduleChart.cpp
     panels/src/ScopePanel.cpp
@@ -110,6 +112,7 @@ add_library(
     panels/src/TimelinePanel.cpp
     panels/src/ViewportPanel.cpp
     panels/src/WiringPanels.cpp
+    panels/src/WorldPanels.cpp
 )
 lagrange_target_defaults(lagrange_viewer_panels)
 target_include_directories(lagrange_viewer_panels PUBLIC panels/include)
