@@ -55,6 +55,29 @@ target_include_directories(
 )
 target_link_libraries(lagrange_proto_framing PUBLIC lagrange_proto)
 
+# Transport: non-blocking Unix-socket/TCP connections and the shared-memory fast path.
+find_path(LAGRANGE_XXHASH_INCLUDE_DIR xxhash.h REQUIRED)
+add_library(
+    lagrange_proto_transport
+    transport/src/Connection.cpp
+    transport/src/Endpoint.cpp
+    transport/src/Shm.cpp
+)
+add_library(lagrange::proto_transport ALIAS lagrange_proto_transport)
+lagrange_target_defaults(lagrange_proto_transport)
+target_include_directories(
+    lagrange_proto_transport
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/transport/include>
+        $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
+)
+target_include_directories(
+    lagrange_proto_transport
+    SYSTEM
+    PRIVATE ${LAGRANGE_XXHASH_INCLUDE_DIR}
+)
+target_link_libraries(lagrange_proto_transport PUBLIC lagrange_proto_framing)
+
 # Python modules, generated into the build tree and installed as the namespace package
 # lagrange.viewer.v1 (no __init__.py, so other packages can also provide lagrange.*).
 set(_python_outputs "")
@@ -102,9 +125,12 @@ install(
     FILES_MATCHING
     PATTERN "*_pb2.py"
 )
-install(DIRECTORY framing/include/ DESTINATION include/${PROJECT_NAME})
 install(
-    TARGETS lagrange_proto lagrange_proto_framing
+    DIRECTORY framing/include/ transport/include/
+    DESTINATION include/${PROJECT_NAME}
+)
+install(
+    TARGETS lagrange_proto lagrange_proto_framing lagrange_proto_transport
     EXPORT export_${PROJECT_NAME}
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
@@ -121,6 +147,19 @@ if(BUILD_TESTING)
     target_link_libraries(test_framing lagrange_proto_framing)
     target_include_directories(test_framing PRIVATE framing/fuzz)
     lagrange_target_defaults(test_framing)
+
+    find_package(Threads REQUIRED)
+    ament_add_gtest(
+        test_transport
+        transport/test/test_transport.cpp
+        transport/test/test_shm.cpp
+    )
+    target_link_libraries(
+        test_transport
+        lagrange_proto_transport
+        Threads::Threads
+    )
+    lagrange_target_defaults(test_transport)
 
     find_package(ament_cmake_pytest REQUIRED)
     ament_add_pytest_test(
