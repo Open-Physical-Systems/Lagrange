@@ -98,8 +98,10 @@ add_library(
     panels/src/InspectorPanel.cpp
     panels/src/Launcher.cpp
     panels/src/PanelFormat.cpp
+    panels/src/PerformancePanels.cpp
     panels/src/ProfilePanel.cpp
     panels/src/ScenePanel.cpp
+    panels/src/ScheduleChart.cpp
     panels/src/ScopePanel.cpp
     panels/src/ScopePlots.cpp
     panels/src/SensorsPanels.cpp

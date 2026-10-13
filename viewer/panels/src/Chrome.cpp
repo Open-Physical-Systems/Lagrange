@@ -55,8 +55,8 @@ constexpr std::array<WorkspaceEntry, 10> kWorkspaces{{
      "08-replay"},
     {Workspace::Ros2, "ROS 2", widgets::Icon::Ros2, nullptr, ImGuiKey_8, "Ctrl+8", "09-ros2"},
     {Workspace::World, "World", widgets::Icon::World, nullptr, ImGuiKey_9, "Ctrl+9", "10-world"},
-    {Workspace::Performance, "Performance", widgets::Icon::Performance, nullptr, ImGuiKey_0,
-     "Ctrl+0", "11-performance"},
+    {Workspace::Performance, "Performance", widgets::Icon::Performance,
+     "lagrange-dock-performance-1", ImGuiKey_0, "Ctrl+0", "11-performance"},
 }};
 
 const WorkspaceEntry& entryOf(Workspace workspace) {
@@ -113,6 +113,27 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         ImGui::DockBuilderDockWindow("Schematic", centre);
         ImGui::DockBuilderDockWindow("Scopes", scopes);
         ImGui::DockBuilderDockWindow("###InspectorElectrical", right);
+    } else if (workspace == Workspace::Performance) {
+        // Design: a row of KPI cards on top; under it the scheduler (320 px) over the
+        // modules, and on the right (380 px) the RTF history (200 px) over the resources.
+        const ImGuiID top = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Up,
+                                                        fraction(104.0F, size.y), nullptr, &centre);
+        ImGuiID right = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Right,
+                                                    fraction(380.0F, size.x), nullptr, &centre);
+        const ImGuiID resources =
+            ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.68F, nullptr, &right);
+        const ImGuiID modules =
+            ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.58F, nullptr, &centre);
+        ImGui::DockBuilderDockWindow("###PerformanceOverview", top);
+        ImGui::DockBuilderDockWindow("###Scheduler", centre);
+        ImGui::DockBuilderDockWindow("###PerformanceModules", modules);
+        ImGui::DockBuilderDockWindow("RTF history", right);
+        ImGui::DockBuilderDockWindow("Resources", resources);
+        // The KPI row is not a tabbed panel in the design.
+        if (ImGuiDockNode* node = ImGui::DockBuilderGetNode(top)) {
+            node->LocalFlags |= static_cast<ImGuiDockNodeFlags>(ImGuiDockNodeFlags_NoTabBar) |
+                                static_cast<ImGuiDockNodeFlags>(ImGuiDockNodeFlags_NoResize);
+        }
     } else if (workspace == Workspace::Sensors) {
         // Design: sensor list 260 px left, Degradation 320 px right, sensor views between.
         const ImGuiID left = ImGui::DockBuilderSplitNode(
@@ -700,6 +721,9 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
         panels.push_back(std::move(panel));
     }
     for (std::unique_ptr<Panel>& panel : createSensorsPanels()) {
+        panels.push_back(std::move(panel));
+    }
+    for (std::unique_ptr<Panel>& panel : createPerformancePanels()) {
         panels.push_back(std::move(panel));
     }
     panels.push_back(createElectricalInspectorPanel());
