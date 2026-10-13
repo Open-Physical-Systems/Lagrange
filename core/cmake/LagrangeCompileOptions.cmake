@@ -1,0 +1,50 @@
+# Compile options shared by every Lagrange target.
+#
+#   lagrange_target_defaults(<target>)
+#
+# Options:
+#   LAGRANGE_WARNINGS_AS_ERRORS  Treat compiler warnings as errors.
+#   LAGRANGE_DETERMINISTIC       Floating-point flags for bit-reproducible CPU results.
+#   LAGRANGE_SANITIZER           Semicolon-separated sanitizers, e.g. "address;undefined".
+
+option(LAGRANGE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+option(
+    LAGRANGE_DETERMINISTIC
+    "Floating-point flags for bit-reproducible CPU results"
+    ON
+)
+set(LAGRANGE_SANITIZER
+    ""
+    CACHE STRING
+    "Semicolon-separated list of sanitizers (address, undefined, thread)"
+)
+
+function(lagrange_target_defaults target)
+    target_compile_features(${target} PUBLIC cxx_std_20)
+    set_target_properties(
+        ${target}
+        PROPERTIES CXX_EXTENSIONS OFF POSITION_INDEPENDENT_CODE ON
+    )
+    target_compile_options(
+        ${target}
+        PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow
+    )
+    if(LAGRANGE_WARNINGS_AS_ERRORS)
+        target_compile_options(${target} PRIVATE -Werror)
+    endif()
+    if(LAGRANGE_DETERMINISTIC)
+        # No fused multiply-add contraction: results must not depend on what the CPU supports.
+        target_compile_options(${target} PRIVATE -ffp-contract=off)
+    endif()
+    if(LAGRANGE_SANITIZER)
+        string(REPLACE ";" "," _lagrange_sanitizers "${LAGRANGE_SANITIZER}")
+        target_compile_options(
+            ${target}
+            PRIVATE -fsanitize=${_lagrange_sanitizers} -fno-omit-frame-pointer
+        )
+        target_link_options(
+            ${target}
+            PRIVATE -fsanitize=${_lagrange_sanitizers}
+        )
+    endif()
+endfunction()
