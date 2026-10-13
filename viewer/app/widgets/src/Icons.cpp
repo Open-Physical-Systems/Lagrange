@@ -99,6 +99,30 @@ constexpr std::array<Definition, static_cast<std::size_t>(Icon::Count)> kIcons{{
     {{{circle(8, 8, 5.5F), path("M5.6 10.5v-5l2.4 3 2.4-3v5")}}, 2},
     // Warning
     {{{path("M8 2.2l6.3 11.3H1.7z M8 6.5v3.4 M8 11.6v.4")}}, 1},
+    // Select
+    {{{path("M3.5 2.5l9 5-4 1-2 4.5z")}}, 1},
+    // Move
+    {{{path("M8 1.5v13 M1.5 8h13 M6 3.5l2-2 2 2 M6 12.5l2 2 2-2 M3.5 6l-2 2 2 2 "
+            "M12.5 6l2 2-2 2")}},
+     1},
+    // Rotate
+    {{{path("M13 8a5 5 0 1 1-1.5-3.6 M13 2.5v2.5h-2.5")}}, 1},
+    // Scale
+    {{{rect(2.5F, 7.5F, 6, 6), path("M8.5 7.5l5-5 M10 2.5h3.5V6")}}, 2},
+    // Measure
+    {{{path("M2 11l9-9 3 3-9 9z M5 8l1.5 1.5 M7.5 5.5L9 7")}}, 1},
+    // Grid
+    {{{path("M2.5 2.5h11v11h-11z M2.5 6.2h11 M2.5 9.8h11 M6.2 2.5v11 M9.8 2.5v11", 1.4F)}}, 1},
+    // Frames
+    {{{path("M4 12V3 M4 12h9 M4 12l-2.5 2.5")}}, 1},
+    // Forces
+    {{{path("M8 13.5V3 M5 6l3-3 3 3"), circle(8, 13.5F, 1.2F, 0.0F, Paint::Fill)}}, 2},
+    // Frustum
+    {{{path("M2 8l11-5v10z")}}, 1},
+    // Path
+    {{{path("M2 13c4 0 3-10 12-10")}}, 1},
+    // Fields
+    {{{path("M8 2l6 3-6 3-6-3z M2 8l6 3 6-3 M2 11l6 3 6-3")}}, 1},
 }};
 
 // --- SVG path data to polylines --------------------------------------------------------

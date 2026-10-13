@@ -141,8 +141,11 @@ private:
 
     static void header(PanelContext& context, const PrimData& prim, const Transform& transform) {
         const theme::Fonts& fonts = theme::fonts();
-        ImGui::PushFont(fonts.sansSemiBold, theme::kTitleSize);
+        // Design: a 16 px component mark in the accent before the name.
         ImGui::AlignTextToFramePadding();
+        widgets::IconItem(widgets::Icon::Component, 16.0F, c::accent);
+        ImGui::SameLine(0.0F, px(8.0F));
+        ImGui::PushFont(fonts.sansSemiBold, theme::kTitleSize);
         ImGui::TextUnformatted(prim.name.c_str());
         ImGui::PopFont();
         ImGui::SameLine(0.0F, px(8.0F));

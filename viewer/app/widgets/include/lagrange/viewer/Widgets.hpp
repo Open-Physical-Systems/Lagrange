@@ -49,6 +49,12 @@ bool Button(const char* label, ButtonKind kind = ButtonKind::Default, Icon icon 
 /// The one primary action of a region: accent fill.
 bool PrimaryButton(const char* label);
 
+/// A 24 px icon button of a floating tool bar over the viewport: no frame, accent when on.
+bool ToolButton(const char* id, Icon icon, bool on, const char* tooltip);
+/// Draws the frame of a floating tool bar that holds `count` ToolButtons, laid out in a row
+/// or a column from the cursor. Call before the buttons.
+void ToolBarFrame(int count, bool vertical);
+
 /// A boxed read-only value in a toolbar: small key, mono value, optional small text after.
 void Readout(const char* key, const char* value, const char* after = nullptr,
              const ImVec4& color = ImVec4(0.902F, 0.922F, 0.949F, 1.0F));

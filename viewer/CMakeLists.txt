@@ -31,6 +31,7 @@ add_library(
     lagrange_viewer_render
     STATIC
     render/src/Camera.cpp
+    render/src/Picking.cpp
     render/src/SceneRenderer.cpp
 )
 lagrange_target_defaults(lagrange_viewer_render)
@@ -149,6 +150,7 @@ if(BUILD_TESTING)
         client/test/test_scope_session.cpp
         client/test/test_viewer_client.cpp
         render/test/test_camera.cpp
+        render/test/test_picking.cpp
         TIMEOUT 120
     )
     target_link_libraries(

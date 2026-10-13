@@ -35,6 +35,18 @@ enum class Icon : int {
     Stage,
     Component,
     Warning,
+    // Viewport tools and overlays.
+    Select,
+    Move,
+    Rotate,
+    Scale,
+    Measure,
+    Grid,
+    Frames,
+    Forces,
+    Frustum,
+    Path,
+    Fields,
     Count,
 };
 

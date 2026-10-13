@@ -2,6 +2,7 @@
 
 #include "lagrange/viewer/Camera.hpp"
 #include "lagrange/viewer/ProfileSession.hpp"
+#include "lagrange/viewer/RenderOptions.hpp"
 #include "lagrange/viewer/SceneStore.hpp"
 #include "lagrange/viewer/ScopeSession.hpp"
 #include "lagrange/viewer/ViewerClient.hpp"
@@ -65,6 +66,7 @@ struct PanelContext {
     Workspace* workspace{nullptr};            ///< The workspace shown; never null in draw().
     ProfileSession* profileSession{nullptr};  ///< Profile being edited; never null in draw().
     ScopeSession* scopeSession{nullptr};      ///< What is plotted; never null in draw().
+    RenderOptions* renderOptions{nullptr};    ///< Viewport overlays; never null in draw().
     bool* resetLayout{nullptr};  ///< Set to rebuild the shown workspace's default layout.
 
     std::string deviceName;
