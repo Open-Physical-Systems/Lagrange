@@ -84,7 +84,7 @@ key must be contributed upstream or the dependency handled by a vendor package.
 | imnodes | not packaged | none | v0.5 (2022-03-09); last push 2026-05-13 | MIT | fallback candidate |
 | ImGuizmo | not packaged | none | 1.10 (2026-05-11) | MIT | inside `imgui_vendor` |
 | Vulkan Memory Allocator | `libvulkan-memory-allocator-dev` 3.3.0 | none | not checked | MIT (UNVERIFIED here) | apt |
-| volk | `libvolk-dev` 3.3.0 | none | not checked | MIT (UNVERIFIED here) | apt |
+| volk | **not packaged**. `libvolk-dev` 3.3.0 is an unrelated library (GNU Radio's vector kernels); the first version of this table confused the two | none | not checked | — | not used; link `libvulkan` directly |
 | Protobuf | `libprotobuf-dev`, `protobuf-compiler` 3.21.12 | `protobuf-dev` | not checked | BSD-3-Clause (UNVERIFIED here) | apt; proto3 only, no editions |
 | FlatBuffers | `libflatbuffers-dev` 23.5.26 | `libflatbuffers-dev` | not checked | Apache-2.0 (UNVERIFIED here) | not chosen (RFC 0003) |
 | gRPC | `libgrpc++-dev` 1.51.1 | none found under `grpc` | not checked | Apache-2.0 (UNVERIFIED here) | v0.2+, key TODO(verify) |

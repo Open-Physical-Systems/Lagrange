@@ -75,14 +75,14 @@ Separate processes and offline tools (not linked, not required to build):
 | Dependency | Used by | Obtained from | Version seen | License | Build risk | Notes |
 |---|---|---|---|---|---|---|
 | Vulkan headers and loader | `gpu/hal` | apt `libvulkan-dev` | 1.4.341.0 | Apache-2.0 / MIT (TODO(verify)) | Low | rosdep key `libvulkan-dev` |
-| volk | Vulkan function loading | apt `libvolk-dev` | 3.3.0 | MIT (TODO(verify)) | Low | |
+| volk (Vulkan loader helper) | not used | not packaged | — | — | — | Correction: Ubuntu's `libvolk-dev` is GNU Radio's "Vector-Optimized Library of Kernels", an unrelated library with the same name. The GPU layer links the standard Vulkan loader (`libvulkan`) directly |
 | Vulkan Memory Allocator | `gpu/hal` | apt `libvulkan-memory-allocator-dev` | 3.3.0 | MIT (TODO(verify)) | Low | Header-only |
 | Slang | shader and kernel compilation | apt `slang-compiler`, `libslang-compiler-dev`; fallback `slang_vendor` | 2026.1.1 (apt), v2026.19 (upstream) | Apache-2.0 WITH LLVM-exception | Medium | CUDA target in the Ubuntu build TODO(verify). Shaders are compiled at build time, so Slang is a build dependency, not a runtime one, unless runtime kernel specialisation is added |
 | SPIRV-Tools, validation layers | CI validation | apt | 2026.1, 1.4.341.0 | Apache-2.0 (TODO(verify)) | Low | Test-only |
 | Mesa lavapipe | software Vulkan for CI | apt `mesa-vulkan-drivers` | 26.0.8 | MIT (TODO(verify)) | Low | Test-only |
 | CUDA toolkit | optional fast paths, PhysX GPU, `cuda_buffer` | apt `nvidia-cuda-toolkit` (version TODO(verify)) | — | NVIDIA EULA (proprietary) | Medium | Optional. Debs built on the ROS buildfarm cannot depend on it by default; CUDA paths live in a separate optional package |
 | SDL3 | viewer window and input | apt `libsdl3-dev` | 3.4.2 | Zlib | Low | No rosdep key yet |
-| Dear ImGui (docking branch) | viewer UI | `imgui_vendor` | docking branch "1.93.0 WIP"; pin a commit | MIT | Low | apt package is the master branch without docking (V1) |
+| Dear ImGui (docking branch) | viewer UI | `imgui_vendor` | tag `v1.92.9b-docking`, pinned by commit and archive SHA-256 | MIT | Low | apt package is the master branch without docking (V1). The vendor package uses CMake `FetchContent` with a URL hash; `ament_cmake_vendor_package` is not needed for a library this small |
 | ImPlot | scopes | `imgui_vendor` | v1.0 | MIT | Low | |
 | imgui-node-editor | schematic | `imgui_vendor` | v0.9.3 + later commits | MIT | Medium | Compatibility with the pinned ImGui TODO(verify); behind an interface |
 | ImGuizmo | gizmo | `imgui_vendor` | 1.10 | MIT | Low | |
