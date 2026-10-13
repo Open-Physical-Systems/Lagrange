@@ -43,8 +43,8 @@ constexpr std::array<WorkspaceEntry, 10> kWorkspaces{{
      "02-scene"},
     {Workspace::Domains, "Domains", widgets::Icon::Domains, "lagrange-dock-domains-2", ImGuiKey_2,
      "Ctrl+2", "03-domains"},
-    {Workspace::Electrical, "Electrical", widgets::Icon::Electrical, nullptr, ImGuiKey_3, "Ctrl+3",
-     "04-electrical"},
+    {Workspace::Electrical, "Electrical", widgets::Icon::Electrical, "lagrange-dock-electrical-1",
+     ImGuiKey_3, "Ctrl+3", "04-electrical"},
     {Workspace::Signals, "Signals", widgets::Icon::Signals, "lagrange-dock-signals-3", ImGuiKey_4,
      "Ctrl+4", "05-signals"},
     {Workspace::Sensors, "Sensors", widgets::Icon::Sensors, nullptr, ImGuiKey_5, "Ctrl+5",
@@ -100,6 +100,19 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         ImGui::DockBuilderDockWindow("###Bookmarks", bottom);
         ImGui::DockBuilderDockWindow("Console", console);
         ImGui::DockBuilderDockWindow("###Problems", console);
+    } else if (workspace == Workspace::Electrical) {
+        // Design: Network 300 px left, Inspector 340 px right; the schematic over a 372 px
+        // band of scopes.
+        const ImGuiID left = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Left, fraction(300.0F, size.x), nullptr, &centre);
+        const ImGuiID right = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Right, fraction(340.0F, size.x - px(300.0F)), nullptr, &centre);
+        const ImGuiID scopes = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Down, fraction(372.0F, size.y), nullptr, &centre);
+        ImGui::DockBuilderDockWindow("Network", left);
+        ImGui::DockBuilderDockWindow("Schematic", centre);
+        ImGui::DockBuilderDockWindow("Scopes", scopes);
+        ImGui::DockBuilderDockWindow("###InspectorElectrical", right);
     } else if (workspace == Workspace::Domains) {
         // Design: Domains 520 px on the left, Profile on the right. The wiring and schedule
         // panels that sit between them are not built yet, so Profile takes that room for now.
@@ -661,6 +674,10 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
     panels.push_back(createSignalsPanel());
     panels.push_back(createCursorsPanel());
     panels.push_back(createStatisticsPanel());
+    for (std::unique_ptr<Panel>& panel : createElectricalPanels()) {
+        panels.push_back(std::move(panel));
+    }
+    panels.push_back(createElectricalInspectorPanel());
     panels.push_back(createDomainsPanel());
     panels.push_back(createProfilePanel());
     return panels;

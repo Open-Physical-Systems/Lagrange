@@ -134,6 +134,23 @@ bool SceneBuilder::applySnapshot(const v1::SceneSnapshot& snapshot, std::string&
         readPose(bytes, frame->transforms[i]);
         std::memcpy(frame->transforms[i].scale.data(), bytes + kDeltaTransformBytes, 12);
     }
+    // Electrical topology. Terminals that point at prims the scene does not have are dropped,
+    // so panels can index prims with them without checking again.
+    statics->nets.reserve(static_cast<std::size_t>(snapshot.nets_size()));
+    for (const v1::ElectricalNet& source : snapshot.nets()) {
+        ElectricalNet net;
+        net.id = source.id();
+        net.name = source.name();
+        net.busPrim = source.bus_prim() < statics->prims.size() ? source.bus_prim() : kNone;
+        net.voltageSignal = source.voltage_signal();
+        for (const v1::NetTerminal& terminal : source.terminals()) {
+            if (terminal.prim() < statics->prims.size()) {
+                net.terminals.push_back(
+                    {terminal.prim(), terminal.port(), terminal.current_signal()});
+            }
+        }
+        statics->nets.push_back(std::move(net));
+    }
     statics->stagePath = snapshot.stage_path();
     statics->generation = ++generation_;
     frame->statics = std::move(statics);

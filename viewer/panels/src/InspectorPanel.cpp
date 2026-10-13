@@ -40,10 +40,16 @@ std::array<double, 3> eulerDegrees(const std::array<float, 4>& q) {
 
 class InspectorPanel final : public Panel {
 public:
-    [[nodiscard]] const char* title() const override { return "Inspector"; }
+    /// `window` is the ImGui window name. The same inspector appears in several workspaces;
+    /// each needs a window of its own, because a window is docked in one place.
+    InspectorPanel(const char* window, const char* tools, Workspace workspace)
+        : window_(window), tools_(tools), workspace_(workspace) {}
+
+    [[nodiscard]] const char* title() const override { return window_; }
+    [[nodiscard]] Workspace workspace() const override { return workspace_; }
 
     void draw(PanelContext& context) override {
-        if (!ImGui::Begin(title())) {
+        if (!ImGui::Begin(window_)) {
             ImGui::End();
             return;
         }
@@ -54,7 +60,7 @@ public:
                         (context.scene && context.scene->statics->generation != lockedScene_))) {
             locked_ = false;  // the prim it was locked to is gone
         }
-        if (widgets::BeginPanelTools("##inspector-tools", px(26.0F))) {
+        if (widgets::BeginPanelTools(tools_, px(26.0F))) {
             ImGui::BeginDisabled(!locked_ && context.selectedPrim >= count);
             if (widgets::Button("##lock",
                                 locked_ ? widgets::ButtonKind::On : widgets::ButtonKind::Ghost,
@@ -324,6 +330,9 @@ private:
                              attribute.kind == AttributeInfo::Kind::Asset, attribute.doc.c_str());
     }
 
+    const char* window_;
+    const char* tools_;
+    Workspace workspace_;
     std::vector<Live> live_;
     bool locked_{false};
     std::uint32_t lockedPrim_{kNone};
@@ -341,7 +350,12 @@ private:
 }  // namespace
 
 std::unique_ptr<Panel> createInspectorPanel() {
-    return std::make_unique<InspectorPanel>();
+    return std::make_unique<InspectorPanel>("Inspector", "##inspector-tools", Workspace::Scene);
+}
+
+std::unique_ptr<Panel> createElectricalInspectorPanel() {
+    return std::make_unique<InspectorPanel>("Inspector###InspectorElectrical",
+                                            "##inspector-tools-electrical", Workspace::Electrical);
 }
 
 }  // namespace lagrange::viewer

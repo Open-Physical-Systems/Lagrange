@@ -96,6 +96,42 @@ TEST(SceneBuilder, AppliesAValidSnapshot) {
     EXPECT_EQ(frame->statics->generation, 1U);
 }
 
+TEST(SceneBuilder, ElectricalNetsAreKeptAndBadTerminalsDropped) {
+    v1::SceneSnapshot snapshot = validSnapshot();
+    v1::ElectricalNet* net = snapshot.add_nets();
+    net->set_id(3);
+    net->set_name("dc_48v");
+    net->set_bus_prim(0);
+    net->set_voltage_signal("bus/dc_48v/voltage");
+    v1::NetTerminal* source = net->add_terminals();
+    source->set_prim(1);
+    source->set_port("dc_out");
+    source->set_current_signal("battery/current");
+    v1::NetTerminal* load = net->add_terminals();
+    load->set_prim(0);
+    load->set_port("dc_in");
+    v1::NetTerminal* dangling = net->add_terminals();
+    dangling->set_prim(99);  // no such prim
+    dangling->set_port("dc_in");
+    v1::ElectricalNet* orphan = snapshot.add_nets();
+    orphan->set_bus_prim(77);  // no such prim either
+
+    SceneBuilder builder;
+    std::string error;
+    ASSERT_TRUE(builder.applySnapshot(snapshot, error)) << error;
+    const auto& nets = builder.frame()->statics->nets;
+    ASSERT_EQ(nets.size(), 2U);
+    EXPECT_EQ(nets[0].id, 3U);
+    EXPECT_EQ(nets[0].name, "dc_48v");
+    EXPECT_EQ(nets[0].busPrim, 0U);
+    EXPECT_EQ(nets[0].voltageSignal, "bus/dc_48v/voltage");
+    ASSERT_EQ(nets[0].terminals.size(), 2U);
+    EXPECT_TRUE(nets[0].terminals[0].isSource());
+    EXPECT_EQ(nets[0].terminals[0].currentSignal, "battery/current");
+    EXPECT_FALSE(nets[0].terminals[1].isSource());
+    EXPECT_EQ(nets[1].busPrim, kNone);
+}
+
 TEST(SceneBuilder, DeltaMovesOnlyItsPrimsAndSharesStatics) {
     SceneBuilder builder;
     std::string error;

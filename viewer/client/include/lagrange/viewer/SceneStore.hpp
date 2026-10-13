@@ -48,12 +48,32 @@ struct PrimData {
     bool visible{true};
 };
 
+/// One connection of a prim to an electrical net.
+struct NetTerminal {
+    std::uint32_t prim{kNone};
+    std::string port;           ///< "dc_out" for a source, "dc_in" for a load.
+    std::string currentSignal;  ///< Signal with the current through this terminal; may be empty.
+    /// A terminal that feeds the net (a battery, a supply), by the port naming convention.
+    [[nodiscard]] bool isSource() const { return port.ends_with("_out"); }
+};
+
+/// An electrical net: the prims connected to one bus. This is the topology the schematic is
+/// laid out from; it comes from the stage, never from the viewer.
+struct ElectricalNet {
+    std::uint32_t id{0};
+    std::string name;  ///< "dc_48v"
+    std::uint32_t busPrim{kNone};
+    std::string voltageSignal;  ///< Signal with the bus voltage; may be empty.
+    std::vector<NetTerminal> terminals;
+};
+
 /// Everything a snapshot defines that deltas do not change. Immutable once published, so the
 /// UI thread and the renderer can keep a pointer to it.
 struct SceneStatics {
     std::vector<PrimData> prims;  // index == prim id
     std::vector<MeshData> meshes;
     std::vector<MaterialData> materials;
+    std::vector<ElectricalNet> nets;
     std::string stagePath;
     std::uint64_t generation{0};  // increases with every snapshot; GPU caches key on it
 };

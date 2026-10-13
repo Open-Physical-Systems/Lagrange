@@ -293,7 +293,7 @@ def test_server_imports_a_robot_on_request_and_keeps_the_old_scene_on_failure():
         hello, failed, prims_after_failure, seen = asyncio.run(scenario(f"{directory}/s.sock"))
     assert hello.server_hello.capabilities.can_import
     assert not failed.ok and "no such file" in failed.error
-    assert prims_after_failure == 11  # the sample scene is still being served
+    assert prims_after_failure == 12  # the sample scene is still being served
     assert seen["command_result"].command_result.ok
     assert seen["command_result"].command_result.imported_stage_path == str(ARM)
     assert seen["catalog"].catalog.generation == 2 and not seen["catalog"].catalog.signals

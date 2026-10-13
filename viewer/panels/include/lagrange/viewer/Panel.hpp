@@ -94,6 +94,9 @@ public:
 [[nodiscard]] std::unique_ptr<Panel> createViewportPanel();
 [[nodiscard]] std::unique_ptr<Panel> createScenePanel();
 [[nodiscard]] std::unique_ptr<Panel> createInspectorPanel();
+[[nodiscard]] std::unique_ptr<Panel> createElectricalInspectorPanel();
+/// The Electrical workspace's Network, Schematic and Scopes panels. They share one state.
+[[nodiscard]] std::vector<std::unique_ptr<Panel>> createElectricalPanels();
 [[nodiscard]] std::unique_ptr<Panel> createTimelinePanel();
 [[nodiscard]] std::unique_ptr<Panel> createBookmarksPanel();
 [[nodiscard]] std::unique_ptr<Panel> createConsolePanel();

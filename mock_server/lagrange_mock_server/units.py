@@ -31,7 +31,8 @@ VOLT = _unit("V", KIND_VOLTAGE, length=2, mass=1, time=-3, current=-1)
 KELVIN = _unit("K", KIND_TEMPERATURE, temperature=1)
 ONE = _unit("1", KIND_RATIO)
 # Units of prim attributes. kind 0: no quantity kind assigned yet (lagrange::QuantityKind).
-OHM = _unit("Ω", 0, length=2, mass=1, time=-3, current=-2)
+# "ohm", not the Greek letter: the viewer's bundled IBM Plex files have no Greek glyphs.
+OHM = _unit("ohm", 0, length=2, mass=1, time=-3, current=-2)
 HENRY = _unit("H", 0, length=2, mass=1, time=-2, current=-2)
 NEWTON_METRE_PER_AMPERE = _unit("N·m/A", 0, length=2, mass=1, time=-2, current=-1)
 JOULE_PER_KELVIN = _unit("J/K", 0, length=2, mass=1, time=-2, temperature=-1)

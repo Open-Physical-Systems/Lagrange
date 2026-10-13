@@ -110,3 +110,18 @@ def test_unreadable_files_are_reported(tmp_path):
     garbage.write_bytes(b"this is not an mcap file")
     with pytest.raises(RecordingError):
         read_recording(garbage)
+
+
+def test_branch_currents_of_the_sample_add_up_to_the_battery_current():
+    """Design acceptance (04-electrical): the schematic shows both, so they must agree."""
+    recording = generate_sample(duration_s=1.0, seed=3)
+    net = recording.snapshot.nets[0]
+    source = [t for t in net.terminals if t.port.endswith("_out")]
+    loads = [t for t in net.terminals if t.port.endswith("_in")]
+    assert len(source) == 1 and len(loads) == 3
+    drawn = sum(recording.signal(t.current_signal).data[:, 0] for t in loads)
+    supplied = recording.signal(source[0].current_signal).data[:, 0]
+    assert drawn == pytest.approx(supplied, abs=1e-9)
+    # Every terminal names a prim of the scene and a signal of the catalog.
+    for terminal in net.terminals:
+        assert terminal.prim < len(recording.snapshot.prims)

@@ -261,12 +261,16 @@ def generate_sample(duration_s: float = PATH_PERIOD, seed: int = 1) -> Recording
     omega_left_e = np.repeat(omega_left, hold)[:n_elec] * GEAR_RATIO
     omega_right_e = np.repeat(omega_right, hold)[:n_elec] * GEAR_RATIO
     # Electrical power per motor: mechanical + copper loss. Negative means regeneration.
-    power = (
-        TORQUE_CONSTANT * (current_left * omega_left_e + current_right * omega_right_e)
-        + WINDING_RESISTANCE * (current_left**2 + current_right**2)
-        + COMPUTER_POWER
+    power_left = TORQUE_CONSTANT * current_left * omega_left_e + WINDING_RESISTANCE * current_left**2
+    power_right = (
+        TORQUE_CONSTANT * current_right * omega_right_e + WINDING_RESISTANCE * current_right**2
     )
-    battery_current = power / BATTERY_OPEN_CIRCUIT
+    # What each branch draws from the DC bus. The bus is taken at its open-circuit voltage
+    # here, so that the branch currents add up to the battery current exactly (Kirchhoff).
+    dc_left = power_left / BATTERY_OPEN_CIRCUIT
+    dc_right = power_right / BATTERY_OPEN_CIRCUIT
+    dc_computer = np.full(n_elec, COMPUTER_POWER / BATTERY_OPEN_CIRCUIT)
+    battery_current = dc_left + dc_right + dc_computer
     bus_voltage = BATTERY_OPEN_CIRCUIT - BATTERY_RESISTANCE * battery_current
     bus_voltage = bus_voltage + rng.normal(0.0, 0.01, n_elec)
 
@@ -308,6 +312,8 @@ def generate_sample(duration_s: float = PATH_PERIOD, seed: int = 1) -> Recording
         ("left_drive_motor", 0, "Xform", ["ElectricalMotorAPI_1", "ThermalAPI_1"], NO_PARENT, NO_PARENT),
         ("right_drive_motor", 0, "Xform", ["ElectricalMotorAPI_1", "ThermalAPI_1"], NO_PARENT, NO_PARENT),
         ("ground", NO_PARENT, "Mesh", [], 3, 2),
+        # Appended so that the ids above stay what the tests and bindings expect.
+        ("computer", 5, "Xform", ["PortAPI_1:dc_in"], NO_PARENT, NO_PARENT),
     ]
     paths: list[str] = []
     snapshot = scene_pb2.SceneSnapshot(sequence=1, stage_path="synthetic:amr_figure_eight")
@@ -334,8 +340,9 @@ def generate_sample(duration_s: float = PATH_PERIOD, seed: int = 1) -> Recording
                            roughness=0.8)
     net = snapshot.nets.add(id=0, name="dc_48v", bus_prim=7, voltage_signal="bus/dc_48v/voltage")
     net.terminals.add(prim=6, port="dc_out", current_signal="battery/battery/current")
-    net.terminals.add(prim=8, port="dc_in", current_signal="motor/left_drive_motor/current_q")
-    net.terminals.add(prim=9, port="dc_in", current_signal="motor/right_drive_motor/current_q")
+    net.terminals.add(prim=8, port="dc_in", current_signal="motor/left_drive_motor/current_dc")
+    net.terminals.add(prim=9, port="dc_in", current_signal="motor/right_drive_motor/current_dc")
+    net.terminals.add(prim=11, port="dc_in", current_signal="load/computer/current")
 
     # --- signals ---------------------------------------------------------------------------
     scalar = common_pb2.SIGNAL_TYPE_SCALAR
@@ -360,6 +367,10 @@ def generate_sample(duration_s: float = PATH_PERIOD, seed: int = 1) -> Recording
         ("battery/battery/soc", scalar, units.ONE, DT_THERMAL, soc, "electrical", 6),
         ("thermal/left_drive_motor/temperature", scalar, units.KELVIN, DT_THERMAL, temperature(current_left), "thermal", 8),
         ("thermal/right_drive_motor/temperature", scalar, units.KELVIN, DT_THERMAL, temperature(current_right), "thermal", 9),
+        # DC-side branch currents: what the schematic draws on its wires.
+        ("motor/left_drive_motor/current_dc", scalar, units.AMPERE, DT_ELECTRICAL, dc_left, "electrical", 8),
+        ("motor/right_drive_motor/current_dc", scalar, units.AMPERE, DT_ELECTRICAL, dc_right, "electrical", 9),
+        ("load/computer/current", scalar, units.AMPERE, DT_ELECTRICAL, dc_computer, "electrical", 11),
     ]
     signals = []
     for signal_id, (name, kind, unit, dt, data, writer, prim) in enumerate(specs):
@@ -375,7 +386,7 @@ def generate_sample(duration_s: float = PATH_PERIOD, seed: int = 1) -> Recording
     bindings = {1: "body/base_link/pose", 2: "body/left_wheel/pose", 3: "body/right_wheel/pose",
                 4: "body/caster/pose", 0: "body/base_link/pose", 5: "body/base_link/pose",
                 6: "body/base_link/pose", 7: "body/base_link/pose", 8: "body/left_wheel/pose",
-                9: "body/right_wheel/pose"}
+                9: "body/right_wheel/pose", 11: "body/base_link/pose"}
     by_name = {s.info.name: s for s in signals}
     transforms = bytearray()
     for prim_id in range(len(prim_specs)):
