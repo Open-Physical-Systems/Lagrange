@@ -2,8 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 project(lagrange_core VERSION 0.0.0 LANGUAGES CXX)
 
 find_package(ament_cmake REQUIRED)
-
-include(cmake/LagrangeCompileOptions.cmake)
+find_package(lagrange_cmake REQUIRED)
 
 add_library(lagrange_core time/src/SimTime.cpp)
 add_library(lagrange::core ALIAS lagrange_core)
@@ -23,11 +22,6 @@ install(
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin
 )
-install(
-    FILES cmake/LagrangeCompileOptions.cmake
-    DESTINATION share/${PROJECT_NAME}/cmake
-)
-
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
     ament_add_gtest(test_sim_time time/test/test_sim_time.cpp)
