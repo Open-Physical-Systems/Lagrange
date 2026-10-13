@@ -2,6 +2,7 @@
 
 lagrange_mock_server --sample                       serve the built-in synthetic sample
 lagrange_mock_server --recording run.mcap           serve a recording
+lagrange_mock_server --urdf robot.urdf              show a robot description (joints at zero)
 lagrange_mock_server --write-sample sample.mcap     write the sample to a file and exit
 lagrange_mock_server --check unix:/path/to.sock     run the conformance check against a server
 """
@@ -22,6 +23,7 @@ from .recording import RecordingError, read_recording, write_recording
 from .replay import ReplayEngine
 from .sample import generate_sample
 from .server import MockServer
+from .urdf import UrdfError, import_urdf
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -34,6 +36,7 @@ def _parser() -> argparse.ArgumentParser:
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--recording", type=Path, help="MCAP recording to serve")
     source.add_argument("--sample", action="store_true", help="serve the synthetic sample")
+    source.add_argument("--urdf", type=Path, help="URDF or xacro file to show (joints at zero)")
     source.add_argument(
         "--write-sample",
         type=Path,
@@ -98,7 +101,11 @@ def main(argv: list[str] | None = None) -> int:
             write_recording(generate_sample(args.duration, args.seed), args.write_sample)
             print(f"wrote {args.write_sample} ({args.write_sample.stat().st_size} bytes)")
             return 0
-        if args.recording:
+        if args.urdf:
+            recording, report = import_urdf(args.urdf)
+            for note in report.notes:
+                print(f"note: {note}")
+        elif args.recording:
             recording = read_recording(args.recording)
         else:
             recording = generate_sample(args.duration, args.seed)
@@ -106,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.paused:
             engine.play()
         asyncio.run(_serve(MockServer(engine, parse_endpoint(args.listen))))
-    except (RecordingError, ValueError, OSError) as error:
+    except (RecordingError, UrdfError, ValueError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
     return 0

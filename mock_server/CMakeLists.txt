@@ -11,7 +11,14 @@ install(PROGRAMS scripts/lagrange_mock_server DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
     find_package(ament_cmake_pytest REQUIRED)
-    foreach(_test framing recording replay server)
+    foreach(
+        _test
+        framing
+        recording
+        replay
+        server
+        urdf
+    )
         ament_add_pytest_test(
             test_${_test}
             test/test_${_test}.py
