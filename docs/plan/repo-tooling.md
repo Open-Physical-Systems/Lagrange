@@ -13,9 +13,9 @@ merged.
 
 | Rule | Setting |
 |---|---|
-| Model | Trunk-based. `main` is always releasable |
-| Branch names | `feat/…`, `fix/…`, `docs/…`, `ci/…`, `chore/…`, `release/x.y` |
-| Merging | Squash merge only, through the merge queue. Linear history |
+| Model | `main` is release-only. `dev` is the integration branch; all work branches start from `dev` and merge into `dev`. A release is a PR from `dev` to `main` |
+| Branch names | Conventional: `<type>/<kebab-description>`, type in `feat`, `fix`, `docs`, `ci`, `chore`, `refactor`, `perf`, `test`, `build`, `revert`; plus `release/x.y` and `hotfix/…`. Checked by `.github/workflows/pr-checks.yml` |
+| Merging | Squash merge into `dev`. Merge commit from `dev` into `main` at release time. Merge queue on `dev` when the plan allows it |
 | Commits | Conventional Commits. The squash commit title is the PR title, so the PR title is what is checked |
 | Scopes | `core`, `gpu`, `mod/<domain>`, `viewer`, `proto`, `bridge/<name>`, `io`, `schemas`, `profiles`, `server`, `mock`, `python`, `docs`, `ci`, `packaging`, `deps` |
 | Sign-off | DCO on every commit (`git commit -s`) |
@@ -23,7 +23,12 @@ merged.
 | Release branches | From v1.0: `release/1.x`, supported for the life of ROS 2 Lyrical (May 2031). Fixes land on `main` first and are cherry-picked by a bot label `backport/1.x` |
 | Large files | Nothing over 1 MB. No Git LFS in the main repo (Free plan includes 10 GiB storage and 10 GiB bandwidth per month; a public repo cloned by CI would use that quickly). Large assets live in release bundles of a separate `lagrange-assets` repo and are fetched by checksum |
 
-### Branch protection for `main` (repository ruleset)
+Decision of 2026-10-13: this `dev`/`main` model replaces the trunk-based model first drafted
+here. Where later sections say "`main`" for day-to-day CI triggers, protection and
+`buf breaking` baselines, read `dev`; `main` keeps the same protection plus "PRs only from
+`dev`, `release/*` or `hotfix/*`".
+
+### Branch protection for `main` and `dev` (repository ruleset)
 
 | Setting | Value |
 |---|---|

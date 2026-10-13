@@ -1,0 +1,34 @@
+name: Feature request
+description: Propose a capability
+labels: ["type/feature", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes: { label: Problem, description: "What are you trying to do that you cannot do now?" }
+    validations: { required: true }
+  - type: textarea
+    id: proposal
+    attributes: { label: Proposal }
+    validations: { required: true }
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [viewer, core, a physics domain, sensors, ROS 2 integration, importers, protocol, packaging, docs, other]
+    validations: { required: true }
+  - type: checkboxes
+    id: surfaces
+    attributes:
+      label: Does it change a stable surface?
+      description: "These need an RFC (see the rfcs/ directory)."
+      options:
+        - label: USD schemas
+        - label: UI-server protocol
+        - label: Plugin C ABI
+        - label: Profile format
+  - type: textarea
+    id: validation
+    attributes: { label: Validation, description: "For a physical model: which reference data or publication would it be checked against?" }
+  - type: textarea
+    id: tiers
+    attributes: { label: Tier behaviour, description: "Expected behaviour on Tier 0 (CPU), Tier 1 (raster GPU), Tier 2 (RT GPU)." }
