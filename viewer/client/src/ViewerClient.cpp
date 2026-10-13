@@ -7,6 +7,7 @@
 #include <poll.h>
 #include <sys/eventfd.h>
 #include <unistd.h>
+#include <unordered_map>
 #include <utility>
 
 namespace lagrange::viewer {
@@ -43,6 +44,25 @@ struct ViewerClient::Worker {
     ServerStatus status;
     bool snapshotRequested{false};
     bool helloSent{false};
+
+    // Subscriptions by signal name; `byId` is rebuilt whenever the catalog changes.
+    struct Wanted {
+        std::uint32_t component;
+        std::shared_ptr<ScopeBuffer> buffer;
+    };
+    std::unordered_map<std::string, std::vector<Wanted>> wanted;
+    std::vector<const std::vector<Wanted>*> byId;  // index: signal id; null if not subscribed
+    std::shared_ptr<const SignalCatalog> catalog;
+    bool subscriptionsDirty{false};
+
+    void resetBuffers() {
+        for (auto& [name, list] : wanted) {
+            const SignalInfo* signal = catalog ? catalog->find(name) : nullptr;
+            for (Wanted& item : list) {
+                item.buffer->reset(signal != nullptr ? signal->dtNs : item.buffer->dtNs());
+            }
+        }
+    }
     std::chrono::steady_clock::time_point nextAttempt{};
 };
 
@@ -74,7 +94,93 @@ void ViewerClient::stop() {
 }
 
 ClientStats ViewerClient::stats() const {
-    return {snapshots_.load(), deltas_.load(), resyncs_.load(), connects_.load()};
+    return {snapshots_.load(),    deltas_.load(),  resyncs_.load(),     connects_.load(),
+            signalBlocks_.load(), samples_.load(), invalidRuns_.load(), droppedSamples_.load()};
+}
+
+std::shared_ptr<ScopeBuffer> ViewerClient::subscribe(const std::string& name,
+                                                     std::uint32_t component) {
+    const std::shared_ptr<const SignalCatalog> catalog = catalog_.load();
+    const SignalInfo* info = catalog ? catalog->find(name) : nullptr;
+    if (info == nullptr || component >= info->components) {
+        return nullptr;
+    }
+    auto buffer = std::make_shared<ScopeBuffer>(info->dtNs);
+    {
+        const std::lock_guard lock(commandMutex_);
+        subscriptionChanges_.push_back({true, name, component, buffer});
+    }
+    wake();
+    return buffer;
+}
+
+void ViewerClient::unsubscribe(const std::shared_ptr<ScopeBuffer>& buffer) {
+    {
+        const std::lock_guard lock(commandMutex_);
+        subscriptionChanges_.push_back({false, {}, 0, buffer});
+    }
+    wake();
+}
+
+void ViewerClient::sendSubscriptions() {
+    Worker& w = *worker_;
+    w.subscriptionsDirty = false;
+    w.byId.clear();
+    if (!w.catalog) {
+        return;
+    }
+    w.byId.assign(w.catalog->signals.size(), nullptr);
+    // The server keeps what was subscribed before, so name what is no longer wanted too.
+    v1::Envelope subscribe;
+    v1::Envelope unsubscribe;
+    subscribe.mutable_subscribe()->set_catalog_generation(w.catalog->generation);
+    for (const SignalInfo& info : w.catalog->signals) {
+        const auto found = w.wanted.find(info.name);
+        if (found != w.wanted.end() && !found->second.empty()) {
+            w.byId[info.id] = &found->second;
+            auto* item = subscribe.mutable_subscribe()->add_signals();
+            item->set_signal(info.id);
+            item->set_mode(v1::SignalSubscription::MODE_FULL);
+            item->set_decimation(1);
+        } else {
+            unsubscribe.mutable_unsubscribe()->add_signals(info.id);
+        }
+    }
+    (void)w.connection.queue(unsubscribe);
+    (void)w.connection.queue(subscribe);
+}
+
+void ViewerClient::handleSignalBlock(const v1::Envelope& envelope) {
+    Worker& w = *worker_;
+    const v1::SignalBlock& block = envelope.signal_block();
+    if (!w.catalog || block.catalog_generation() != w.catalog->generation) {
+        return;  // for a catalog we no longer use
+    }
+    ++signalBlocks_;
+    for (const v1::SignalRun& run : block.runs()) {
+        if (run.signal() >= w.byId.size() || w.byId[run.signal()] == nullptr) {
+            continue;  // not subscribed (any more)
+        }
+        const SignalInfo& info = w.catalog->signals[run.signal()];
+        // Everything in a run comes from the network: check it before reading any sample.
+        const std::size_t components = run.components();
+        if (run.mode() != v1::SignalSubscription::MODE_FULL ||
+            run.encoding() != v1::SAMPLE_ENCODING_F64_LE || components != info.components ||
+            run.dt_ns() != info.dtNs ||
+            run.samples().size() != std::size_t{run.sample_count()} * components * sizeof(double)) {
+            ++invalidRuns_;
+            continue;
+        }
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): bytes of a protobuf string.
+        const auto* bytes = reinterpret_cast<const std::byte*>(run.samples().data());
+        for (const Worker::Wanted& wanted : *w.byId[run.signal()]) {
+            const std::uint64_t droppedBefore = wanted.buffer->droppedSamples();
+            wanted.buffer->push(run.first_index(), bytes + wanted.component * sizeof(double),
+                                run.sample_count(), components * sizeof(double));
+            samples_ += run.sample_count();
+            droppedSamples_ += wanted.buffer->droppedSamples() - droppedBefore;
+        }
+    }
 }
 
 void ViewerClient::wake() const {
@@ -179,6 +285,9 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
         }
         case v1::Envelope::kSnapshot: {
             w.snapshotRequested = false;
+            // A snapshot marks a discontinuity in time (seek, restart): sample indices start
+            // again after it, so the scope histories start again too.
+            w.resetBuffers();
             std::string error;
             if (w.builder.applySnapshot(envelope.snapshot(), error)) {
                 scene_.store(w.builder.frame());
@@ -210,9 +319,37 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
             status_.store(std::make_shared<const ServerStatus>(w.status));
             break;
         }
-        case v1::Envelope::kCatalog:
-            w.status.signalCount = static_cast<std::uint32_t>(envelope.catalog().signals_size());
+        case v1::Envelope::kCatalog: {
+            auto catalog = std::make_shared<SignalCatalog>();
+            catalog->generation = envelope.catalog().generation();
+            for (const v1::SignalInfo& source : envelope.catalog().signals()) {
+                // Ids must be dense so that they can index tables directly.
+                if (source.id() != catalog->signals.size() || source.native_dt_ns() <= 0 ||
+                    source.components() == 0 || source.components() > 64) {
+                    break;
+                }
+                SignalInfo info;
+                info.id = source.id();
+                info.name = source.name();
+                info.unit = source.unit().display();
+                info.writer = source.writer();
+                info.components = source.components();
+                info.componentNames.assign(source.component_names().begin(),
+                                           source.component_names().end());
+                info.dtNs = source.native_dt_ns();
+                info.prim = source.prim();
+                catalog->signals.push_back(std::move(info));
+            }
+            w.catalog = catalog;
+            catalog_.store(catalog);
+            w.resetBuffers();
+            sendSubscriptions();
+            w.status.signalCount = static_cast<std::uint32_t>(catalog->signals.size());
             status_.store(std::make_shared<const ServerStatus>(w.status));
+            break;
+        }
+        case v1::Envelope::kSignalBlock:
+            handleSignalBlock(envelope);
             break;
         default:
             break;  // messages this viewer does not use yet, or newer than it knows
@@ -227,6 +364,8 @@ void ViewerClient::run() {
         if (w.connection.state() == proto::Connection::State::Closed && now >= w.nextAttempt) {
             w.snapshotRequested = false;
             w.helloSent = false;
+            w.catalog.reset();  // the next server may number its signals differently
+            w.byId.clear();
             std::error_code ec;
             w.connection = proto::Connection::startConnect(endpoint_, ec);
             w.nextAttempt = now + w.backoff.next();
@@ -304,12 +443,30 @@ void ViewerClient::run() {
         if (w.connection.state() == proto::Connection::State::Connected) {
             if (w.info.state == ConnectionState::Ready) {
                 std::deque<std::unique_ptr<v1::Envelope>> pending;
+                std::deque<SubscriptionChange> changes;
                 {
                     const std::lock_guard lock(commandMutex_);
                     pending.swap(commands_);
+                    changes.swap(subscriptionChanges_);
                 }
                 for (const auto& command : pending) {
                     (void)w.connection.queue(*command);
+                }
+                for (SubscriptionChange& change : changes) {
+                    if (change.add) {
+                        w.wanted[change.name].push_back(
+                            {change.component, std::move(change.buffer)});
+                    } else {
+                        for (auto& [name, list] : w.wanted) {
+                            std::erase_if(list, [&](const Worker::Wanted& item) {
+                                return item.buffer == change.buffer;
+                            });
+                        }
+                    }
+                    w.subscriptionsDirty = true;
+                }
+                if (w.subscriptionsDirty) {
+                    sendSubscriptions();
                 }
             }
             (void)w.connection.flush(ec);

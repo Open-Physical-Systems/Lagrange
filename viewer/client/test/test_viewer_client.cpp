@@ -166,6 +166,55 @@ v1::Envelope delta(std::uint64_t base, double x) {
     return envelope;
 }
 
+// A catalog with a 10 kHz scalar "a" [A] and a 1 kHz three-component "b" [m].
+v1::Envelope catalog(std::uint64_t generation) {
+    v1::Envelope envelope;
+    v1::SignalCatalog& c = *envelope.mutable_catalog();
+    c.set_generation(generation);
+    auto* a = c.add_signals();
+    a->set_id(0);
+    a->set_name("a");
+    a->set_components(1);
+    a->set_native_dt_ns(100'000);
+    a->mutable_unit()->set_display("A");
+    auto* b = c.add_signals();
+    b->set_id(1);
+    b->set_name("b");
+    b->set_components(3);
+    b->set_native_dt_ns(1'000'000);
+    b->mutable_unit()->set_display("m");
+    b->add_component_names("x");
+    b->add_component_names("y");
+    b->add_component_names("z");
+    return envelope;
+}
+
+// One run of `count` samples per component; sample k of component c has value k + c / 10.
+v1::Envelope signalBlock(std::uint64_t generation, std::uint32_t signal, std::uint32_t components,
+                         std::int64_t dtNs, std::uint64_t firstIndex, std::uint32_t count) {
+    v1::Envelope envelope;
+    envelope.mutable_signal_block()->set_catalog_generation(generation);
+    v1::SignalRun& run = *envelope.mutable_signal_block()->add_runs();
+    run.set_signal(signal);
+    run.set_dt_ns(dtNs);
+    run.set_sample_count(count);
+    run.set_components(components);
+    run.set_encoding(v1::SAMPLE_ENCODING_F64_LE);
+    run.set_mode(v1::SignalSubscription::MODE_FULL);
+    run.set_first_index(firstIndex);
+    run.mutable_t0()->set_ns(static_cast<std::int64_t>(firstIndex) * dtNs);
+    std::string bytes(std::size_t{count} * components * sizeof(double), '\0');
+    for (std::uint32_t k = 0; k < count; ++k) {
+        for (std::uint32_t c = 0; c < components; ++c) {
+            const double value = static_cast<double>(firstIndex + k) + c / 10.0;
+            std::memcpy(bytes.data() + (std::size_t{k} * components + c) * sizeof(double), &value,
+                        sizeof(double));
+        }
+    }
+    run.set_samples(bytes);
+    return envelope;
+}
+
 double sceneX(const ViewerClient& client) {
     const auto scene = client.scene();
     return scene ? scene->transforms[0].position[0] : -1.0;
@@ -280,10 +329,7 @@ TEST(ViewerClient, CommandsStatusAndCatalogTravel) {
     status.mutable_status()->set_state(v1::RUN_STATE_RUNNING);
     status.mutable_status()->mutable_replay_end()->set_ns(10'000'000'000);
     server.send(status);
-    v1::Envelope catalog;
-    catalog.mutable_catalog()->add_signals()->set_name("a");
-    catalog.mutable_catalog()->add_signals()->set_name("b");
-    server.send(catalog);
+    server.send(catalog(1));
     ASSERT_TRUE(server.pump([&] { return client.status().signalCount == 2; }));
     EXPECT_EQ(client.status().simTimeNs, 1234);
     EXPECT_EQ(client.status().runState, RunState::Running);
@@ -311,6 +357,152 @@ TEST(ViewerClient, ReconnectsAfterTheServerRestarts) {
     EXPECT_EQ(client.stats().connects, 2U);
     server.send(snapshot(1, 4.0));
     ASSERT_TRUE(server.pump([&] { return sceneX(client) == 4.0; }));
+    client.stop();
+}
+
+TEST(ViewerClient, SubscribedSignalFillsItsBufferAndUnknownOnesAreRefused) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+    EXPECT_EQ(client.catalog(), nullptr);
+    EXPECT_EQ(client.subscribe("a"), nullptr);  // no catalog yet
+
+    server.send(catalog(1));
+    ASSERT_TRUE(server.pump([&] { return client.catalog() != nullptr; }));
+    ASSERT_EQ(client.catalog()->signals.size(), 2U);
+    EXPECT_EQ(client.catalog()->find("b")->unit, "m");
+    EXPECT_EQ(client.catalog()->find("b")->componentNames[2], "z");
+    EXPECT_EQ(client.subscribe("no/such/signal"), nullptr);
+    EXPECT_EQ(client.subscribe("b", 3), nullptr);  // component out of range
+
+    const auto a = client.subscribe("a");
+    const auto bz = client.subscribe("b", 2);
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(bz, nullptr);
+    EXPECT_EQ(a->dtNs(), 100'000);
+    EXPECT_EQ(bz->dtNs(), 1'000'000);
+
+    // The server is told which signal ids are wanted, for the current catalog.
+    const auto lastSubscribe = [&]() -> const v1::Subscribe* {
+        const v1::Subscribe* last = nullptr;
+        for (const v1::Envelope& e : server.received()) {
+            if (e.body_case() == v1::Envelope::kSubscribe) {
+                last = &e.subscribe();
+            }
+        }
+        return last;
+    };
+    ASSERT_TRUE(server.pump([&] {
+        const v1::Subscribe* s = lastSubscribe();
+        return s != nullptr && s->signals_size() == 2;
+    }));
+    EXPECT_EQ(lastSubscribe()->catalog_generation(), 1U);
+    EXPECT_EQ(lastSubscribe()->signals(0).signal(), 0U);
+    EXPECT_EQ(lastSubscribe()->signals(1).signal(), 1U);
+    EXPECT_EQ(lastSubscribe()->signals(0).mode(), v1::SignalSubscription::MODE_FULL);
+
+    server.send(signalBlock(1, 0, 1, 100'000, 500, 200));
+    server.send(signalBlock(1, 1, 3, 1'000'000, 50, 20));
+    ASSERT_TRUE(server.pump([&] { return a->totalSamples() == 200 && bz->totalSamples() == 20; }));
+    EXPECT_DOUBLE_EQ(a->latest(), 699.0);
+    EXPECT_EQ(a->newestTimeNs(), 699 * 100'000);
+    EXPECT_DOUBLE_EQ(bz->latest(), 69.2);  // component 2 of sample 69
+    EXPECT_EQ(a->droppedSamples(), 0U);
+    EXPECT_EQ(client.stats().samples, 220U);
+    EXPECT_EQ(client.stats().signalBlocks, 2U);
+
+    // A skipped run is visible as dropped samples.
+    server.send(signalBlock(1, 0, 1, 100'000, 750, 10));
+    ASSERT_TRUE(server.pump([&] { return a->totalSamples() == 210; }));
+    EXPECT_EQ(a->droppedSamples(), 50U);
+    client.stop();
+}
+
+TEST(ViewerClient, MalformedSignalRunsAreRejected) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+    server.send(catalog(1));
+    ASSERT_TRUE(server.pump([&] { return client.catalog() != nullptr; }));
+    const auto a = client.subscribe("a");
+    ASSERT_NE(a, nullptr);
+    ASSERT_TRUE(server.pump([&] { return server.count(v1::Envelope::kSubscribe) >= 2; }));
+
+    v1::Envelope shortBytes = signalBlock(1, 0, 1, 100'000, 0, 100);
+    shortBytes.mutable_signal_block()->mutable_runs(0)->set_sample_count(1000);  // claims more
+    v1::Envelope wrongStep = signalBlock(1, 0, 1, 250'000, 0, 10);
+    v1::Envelope wrongComponents = signalBlock(1, 0, 2, 100'000, 0, 10);
+    v1::Envelope hugeCount = signalBlock(1, 0, 1, 100'000, 0, 1);
+    hugeCount.mutable_signal_block()->mutable_runs(0)->set_sample_count(0xFFFFFFFFU);
+    v1::Envelope unknownSignal = signalBlock(1, 99, 1, 100'000, 0, 10);
+    v1::Envelope oldCatalog = signalBlock(7, 0, 1, 100'000, 0, 10);
+    for (const v1::Envelope* bad :
+         {&shortBytes, &wrongStep, &wrongComponents, &hugeCount, &unknownSignal, &oldCatalog}) {
+        server.send(*bad);
+    }
+    server.send(signalBlock(1, 0, 1, 100'000, 0, 5));  // a good one, to know all were handled
+    ASSERT_TRUE(server.pump([&] { return a->totalSamples() == 5; }));
+    EXPECT_EQ(client.stats().invalidRuns, 4U);  // unknown signal and old catalog are just skipped
+    client.stop();
+}
+
+TEST(ViewerClient, SnapshotRestartsScopeHistoryAndReconnectResubscribes) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+    server.send(catalog(1));
+    ASSERT_TRUE(server.pump([&] { return client.catalog() != nullptr; }));
+    const auto a = client.subscribe("a");
+    ASSERT_NE(a, nullptr);
+    // A server only sends what was subscribed, so wait until the request has arrived.
+    ASSERT_TRUE(server.pump([&] { return server.count(v1::Envelope::kSubscribe) >= 2; }));
+    server.send(signalBlock(1, 0, 1, 100'000, 0, 100));
+    ASSERT_TRUE(server.pump([&] { return a->totalSamples() == 100; }));
+
+    // A seek forward: snapshot, then samples from a later index. Not a gap.
+    server.send(snapshot(5, 0.0));
+    server.send(signalBlock(1, 0, 1, 100'000, 40'000, 10));
+    ASSERT_TRUE(server.pump([&] { return a->totalSamples() == 110; }));
+    EXPECT_EQ(a->droppedSamples(), 0U);
+    EXPECT_EQ(a->oldestTimeNs(), 40'000 * 100'000LL);
+
+    // The server restarts with a catalog that numbers the same signals differently.
+    server.shutdown();
+    ASSERT_TRUE(
+        server.pump([&] { return client.connection().state == ConnectionState::Disconnected; }));
+    server.listen();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+    v1::Envelope renumbered = catalog(2);
+    renumbered.mutable_catalog()->mutable_signals(0)->set_name("b");
+    renumbered.mutable_catalog()->mutable_signals(0)->set_components(3);
+    renumbered.mutable_catalog()->mutable_signals(0)->set_native_dt_ns(1'000'000);
+    renumbered.mutable_catalog()->mutable_signals(1)->set_name("a");
+    renumbered.mutable_catalog()->mutable_signals(1)->set_components(1);
+    renumbered.mutable_catalog()->mutable_signals(1)->set_native_dt_ns(100'000);
+    const int before = server.count(v1::Envelope::kSubscribe);
+    server.send(renumbered);
+    ASSERT_TRUE(server.pump([&] { return server.count(v1::Envelope::kSubscribe) > before; }));
+    const v1::Subscribe& again = server.received().back().subscribe();
+    ASSERT_EQ(again.signals_size(), 1);
+    EXPECT_EQ(again.signals(0).signal(), 1U);  // "a" is id 1 now
+    EXPECT_EQ(again.catalog_generation(), 2U);
+
+    server.send(signalBlock(2, 1, 1, 100'000, 3, 7));
+    ASSERT_TRUE(server.pump([&] { return a->totalSamples() == 117; }));
+    EXPECT_DOUBLE_EQ(a->latest(), 9.0);
+
+    // After unsubscribing, the buffer keeps its history and receives nothing more.
+    const int unsubscribes = server.count(v1::Envelope::kUnsubscribe);
+    client.unsubscribe(a);
+    ASSERT_TRUE(
+        server.pump([&] { return server.count(v1::Envelope::kUnsubscribe) > unsubscribes; }));
+    server.send(signalBlock(2, 1, 1, 100'000, 10, 7));
+    server.send(snapshot(9, 2.0));
+    ASSERT_TRUE(server.pump([&] { return sceneX(client) == 2.0; }));
+    EXPECT_EQ(a->totalSamples(), 117U);
     client.stop();
 }
 
