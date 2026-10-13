@@ -3,11 +3,11 @@
 //
 // World positions are double (invariant 6). The map subtracts its centre in double and only
 // then converts to float pixels, so a point far from the origin does not jitter.
+#include "PanelFormat.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
-#include "PanelFormat.hpp"
 
 #include <algorithm>
 #include <array>
@@ -32,20 +32,19 @@ using widgets::px;
 // Design tokens, colormap.tileLod: LOD0 physics and sensors .. LOD3 proxy.
 const std::array<ImVec4, 4> kLodColors{theme::hex(0xE8772E), theme::hex(0xA0583A),
                                        theme::hex(0x3A4E6E), theme::hex(0x1D2E48)};
-constexpr std::array<const char*, 4> kLodNames{"LOD0 · physics + sensors",
-                                               "LOD1 · render + collision", "LOD2 · render only",
-                                               "LOD3 · proxy"};
+constexpr std::array<const char*, 4> kLodNames{
+    "LOD0 · physics + sensors", "LOD1 · render + collision", "LOD2 · render only", "LOD3 · proxy"};
 
 ImU32 u32(const ImVec4& color) {
     return ImGui::ColorConvertFloat4ToU32(color);
 }
 
 bool containsNoCase(std::string_view text, std::string_view needle) {
-    const auto it = std::search(text.begin(), text.end(), needle.begin(), needle.end(),
-                                [](char a, char b) {
-                                    return std::tolower(static_cast<unsigned char>(a)) ==
-                                           std::tolower(static_cast<unsigned char>(b));
-                                });
+    const auto it =
+        std::search(text.begin(), text.end(), needle.begin(), needle.end(), [](char a, char b) {
+            return std::tolower(static_cast<unsigned char>(a)) ==
+                   std::tolower(static_cast<unsigned char>(b));
+        });
     return it != text.end();
 }
 
@@ -189,8 +188,8 @@ public:
         ImGui::SetCursorPos(top);
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         const ImVec2 size = ImGui::GetContentRegionAvail();
-        ImGui::InvisibleButton("##map", size,
-                               ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+        ImGui::InvisibleButton(
+            "##map", size, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
         const ImGuiIO& io = ImGui::GetIO();
         const double tile = world->tileSizeM > 0.0 ? world->tileSizeM : 256.0;
 
@@ -216,7 +215,8 @@ public:
             centreY_ += static_cast<double>(io.MouseDelta.y) * metresPerPixel_;
         }
         if (ImGui::IsItemHovered() && io.MouseWheel != 0.0F) {
-            metresPerPixel_ = std::clamp(metresPerPixel_ * std::pow(0.88, io.MouseWheel), 0.01, 500.0);
+            metresPerPixel_ =
+                std::clamp(metresPerPixel_ * std::pow(0.88, io.MouseWheel), 0.01, 500.0);
         }
         // East to the right, north up. The subtraction is in double; only the difference,
         // which is small on screen, becomes float.
@@ -274,8 +274,10 @@ public:
             }
             draw->AddCircleFilled(at, px(4.5F), u32(color));
             if (agent.name == world->anchor) {
-                draw->AddLine(ImVec2(at.x - px(14.0F), at.y), ImVec2(at.x + px(14.0F), at.y), u32(color));
-                draw->AddLine(ImVec2(at.x, at.y - px(14.0F)), ImVec2(at.x, at.y + px(14.0F)), u32(color));
+                draw->AddLine(ImVec2(at.x - px(14.0F), at.y), ImVec2(at.x + px(14.0F), at.y),
+                              u32(color));
+                draw->AddLine(ImVec2(at.x, at.y - px(14.0F)), ImVec2(at.x, at.y + px(14.0F)),
+                              u32(color));
             }
             char label[96];
             std::snprintf(label, sizeof(label), "%s%s", agent.name.c_str(),
@@ -302,7 +304,8 @@ public:
             draw->AddText(fonts.sans, px(theme::kLabelSize), ImVec2(legendMin.x + px(28.0F), y),
                           u32(c::t2), kLodNames.at(lod));
             std::snprintf(text, sizeof(text), "%u", counts.at(lod));
-            const float width = fonts.mono->CalcTextSizeA(px(theme::kMonoSize), FLT_MAX, 0.0F, text).x;
+            const float width =
+                fonts.mono->CalcTextSizeA(px(theme::kMonoSize), FLT_MAX, 0.0F, text).x;
             draw->AddText(fonts.mono, px(theme::kMonoSize),
                           ImVec2(legendMax.x - width - px(10.0F), y), u32(c::t1), text);
         }
@@ -320,7 +323,8 @@ public:
         const float bar = static_cast<float>(length / metresPerPixel_);
         const ImVec2 barAt(origin.x + px(16.0F), origin.y + size.y - px(64.0F));
         draw->AddLine(barAt, ImVec2(barAt.x + bar, barAt.y), u32(c::t1), px(1.5F));
-        draw->AddLine(ImVec2(barAt.x, barAt.y - px(5.0F)), ImVec2(barAt.x, barAt.y + px(5.0F)), u32(c::t1));
+        draw->AddLine(ImVec2(barAt.x, barAt.y - px(5.0F)), ImVec2(barAt.x, barAt.y + px(5.0F)),
+                      u32(c::t1));
         draw->AddLine(ImVec2(barAt.x + bar, barAt.y - px(5.0F)),
                       ImVec2(barAt.x + bar, barAt.y + px(5.0F)), u32(c::t1));
         if (length >= 1000.0) {
@@ -328,27 +332,32 @@ public:
         } else {
             std::snprintf(text, sizeof(text), "%g m", length);
         }
-        draw->AddText(fonts.mono, px(theme::kMonoSize), ImVec2(barAt.x + bar + px(8.0F), barAt.y - px(7.0F)),
-                      u32(c::t1), text);
+        draw->AddText(fonts.mono, px(theme::kMonoSize),
+                      ImVec2(barAt.x + bar + px(8.0F), barAt.y - px(7.0F)), u32(c::t1), text);
 
         // Cursor position in the world's ENU frame, and the tile under it.
         if (ImGui::IsItemHovered()) {
-            const double x = centreX_ + static_cast<double>(io.MousePos.x - middle.x) * metresPerPixel_;
-            const double y = centreY_ - static_cast<double>(io.MousePos.y - middle.y) * metresPerPixel_;
-            std::snprintf(text, sizeof(text), "cursor ENU  x %+.1f  y %+.1f m  ·  tile (%d, %d)", x, y,
-                          static_cast<int>(std::floor(x / tile)), static_cast<int>(std::floor(y / tile)));
-            const float width = fonts.mono->CalcTextSizeA(px(theme::kMonoSize), FLT_MAX, 0.0F, text).x;
+            const double x =
+                centreX_ + static_cast<double>(io.MousePos.x - middle.x) * metresPerPixel_;
+            const double y =
+                centreY_ - static_cast<double>(io.MousePos.y - middle.y) * metresPerPixel_;
+            std::snprintf(text, sizeof(text), "cursor ENU  x %+.1f  y %+.1f m  ·  tile (%d, %d)", x,
+                          y, static_cast<int>(std::floor(x / tile)),
+                          static_cast<int>(std::floor(y / tile)));
+            const float width =
+                fonts.mono->CalcTextSizeA(px(theme::kMonoSize), FLT_MAX, 0.0F, text).x;
             const ImVec2 min(origin.x + px(10.0F), origin.y + size.y - px(36.0F));
             draw->AddRectFilled(min, ImVec2(min.x + width + px(16.0F), min.y + px(26.0F)),
                                 u32(theme::hex(0x091120, 0.92F)), px(4.0F));
             draw->AddRect(min, ImVec2(min.x + width + px(16.0F), min.y + px(26.0F)),
                           u32(c::lineStrong), px(4.0F));
-            draw->AddText(fonts.mono, px(theme::kMonoSize), ImVec2(min.x + px(8.0F), min.y + px(6.0F)),
-                          u32(c::t1), text);
+            draw->AddText(fonts.mono, px(theme::kMonoSize),
+                          ImVec2(min.x + px(8.0F), min.y + px(6.0F)), u32(c::t1), text);
         }
         if (world->synthetic) {
             ImGui::SetCursorScreenPos(ImVec2(origin.x + px(16.0F), origin.y + size.y - px(104.0F)));
-            widgets::Pill("synthetic world · this server streams no tiles", widgets::PillKind::Warn);
+            widgets::Pill("synthetic world · this server streams no tiles",
+                          widgets::PillKind::Warn);
         }
         ImGui::End();
     }
@@ -415,7 +424,8 @@ public:
                 std::snprintf(text, sizeof(text), "%.1f", world->heightM);
                 widgets::PropertyRow("origin height", text, "m");
             } else {
-                widgets::Caption("This stage is not georeferenced: positions are in its own frame.");
+                widgets::Caption(
+                    "This stage is not georeferenced: positions are in its own frame.");
             }
             ImGui::Unindent(px(8.0F));
         }
@@ -424,8 +434,9 @@ public:
         if (widgets::SectionHeader("Regions", regions)) {
             ImGui::Indent(px(8.0F));
             ImGui::PushTextWrapPos(0.0F);
-            widgets::Caption("Region boundaries are where a world could be split between "
-                             "servers. Distributed simulation is planned after 1.0.");
+            widgets::Caption(
+                "Region boundaries are where a world could be split between "
+                "servers. Distributed simulation is planned after 1.0.");
             ImGui::PopTextWrapPos();
             ImGui::Unindent(px(8.0F));
         }
@@ -444,7 +455,8 @@ private:
         char b[24];
         bytes(limit, b, sizeof(b));
         std::snprintf(value, sizeof(value), "%s / %s", a, b);
-        const float fraction = static_cast<float>(static_cast<double>(used) / static_cast<double>(limit));
+        const float fraction =
+            static_cast<float>(static_cast<double>(used) / static_cast<double>(limit));
         ImGui::AlignTextToFramePadding();
         ImGui::PushStyleColor(ImGuiCol_Text, c::t2);
         ImGui::TextUnformatted(label);

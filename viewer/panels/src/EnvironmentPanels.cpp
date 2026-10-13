@@ -109,14 +109,17 @@ public:
             return;
         }
         if (!context.client.environment()) {
-            ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + px(8.0F), ImGui::GetCursorPosY() + px(8.0F)));
+            ImGui::SetCursorPos(
+                ImVec2(ImGui::GetCursorPosX() + px(8.0F), ImGui::GetCursorPosY() + px(8.0F)));
             emptyState(context);
             ImGui::End();
             return;
         }
         const EnvironmentInfo& info = *context.client.environment();
-        ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + px(8.0F), ImGui::GetCursorPosY() + px(6.0F)));
-        widgets::Mono(c::t1, "%s", info.layer.empty() ? "no environment layer" : info.layer.c_str());
+        ImGui::SetCursorPos(
+            ImVec2(ImGui::GetCursorPosX() + px(8.0F), ImGui::GetCursorPosY() + px(6.0F)));
+        widgets::Mono(c::t1, "%s",
+                      info.layer.empty() ? "no environment layer" : info.layer.c_str());
         if (info.synthetic) {
             ImGui::SameLine(0.0F, px(8.0F));
             widgets::Pill("not modelled by this server", widgets::PillKind::Warn);
@@ -174,10 +177,9 @@ public:
             row("mean", "m/s", "%.1f", info.windSpeed);
             row("direction", "°", "%.0f", info.windDirectionDeg);
             row("gust intensity", nullptr, "%.2f", info.gustIntensity);
-            widgets::PropertyRow("field",
-                                 info.windField.empty() ? "none — uniform wind"
-                                                        : info.windField.c_str(),
-                                 nullptr);
+            widgets::PropertyRow(
+                "field", info.windField.empty() ? "none — uniform wind" : info.windField.c_str(),
+                nullptr);
             ImGui::Unindent(pad);
         }
         const ImVec4 emi = widgets::domainColor("emi");
@@ -201,7 +203,8 @@ public:
                     std::snprintf(frequency, sizeof(frequency), "%g Hz", source.frequencyHz);
                 }
                 if (source.currentA != 0.0) {
-                    std::snprintf(numbers, sizeof(numbers), "%s · %g A", frequency, source.currentA);
+                    std::snprintf(numbers, sizeof(numbers), "%s · %g A", frequency,
+                                  source.currentA);
                 } else if (source.powerW != 0.0) {
                     std::snprintf(numbers, sizeof(numbers), "%s · %g W", frequency, source.powerW);
                 } else {
@@ -218,14 +221,14 @@ public:
                 const ImVec2 max = ImGui::GetItemRectMax();
                 ImDrawList* draw = ImGui::GetWindowDrawList();
                 const theme::Fonts& fonts = theme::fonts();
-                draw->AddText(fonts.sansMedium, px(theme::kBodySize), ImVec2(min.x, min.y + px(3.0F)),
-                              u32(c::t1), source.name.c_str());
+                draw->AddText(fonts.sansMedium, px(theme::kBodySize),
+                              ImVec2(min.x, min.y + px(3.0F)), u32(c::t1), source.name.c_str());
                 const float mono = px(theme::kMonoSize);
                 const float width = fonts.mono->CalcTextSizeA(mono, FLT_MAX, 0.0F, numbers).x;
                 draw->AddText(fonts.mono, mono, ImVec2(max.x - width - pad, min.y + px(4.0F)),
                               u32(c::t1), numbers);
-                draw->AddText(fonts.mono, px(theme::kCaptionSize),
-                              ImVec2(min.x, min.y + px(23.0F)), u32(c::t3), source.detail.c_str());
+                draw->AddText(fonts.mono, px(theme::kCaptionSize), ImVec2(min.x, min.y + px(23.0F)),
+                              u32(c::t3), source.detail.c_str());
             }
             ImGui::Unindent(pad);
         }
@@ -269,7 +272,8 @@ public:
             widgets::EndPanelTools();
         }
         if (!context.client.environment() || view_->field.empty()) {
-            ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + px(8.0F), ImGui::GetCursorPosY() + px(8.0F)));
+            ImGui::SetCursorPos(
+                ImVec2(ImGui::GetCursorPosX() + px(8.0F), ImGui::GetCursorPosY() + px(8.0F)));
             if (!emptyState(context)) {
                 widgets::Caption("No field of this run can be shown. The Overlays panel says why.");
             }
@@ -309,8 +313,9 @@ public:
         const float cell = static_cast<float>(slice->cellM) * scale;
         for (std::uint32_t r = 0; r < slice->height; ++r) {
             for (std::uint32_t col = 0; col < slice->width; ++col) {
-                const float value = slice->values[(static_cast<std::size_t>(r) * slice->width + col) *
-                                                  slice->components];
+                const float value =
+                    slice->values[(static_cast<std::size_t>(r) * slice->width + col) *
+                                  slice->components];
                 ImVec4 color = viridis((value - slice->valueMin) / range);
                 color.w = view_->opacity;
                 const ImVec2 min(base.x + static_cast<float>(col) * cell,
@@ -368,10 +373,10 @@ public:
             const double y = bottom + static_cast<double>(base.y - mouse.y) / scale;
             const float value = slice->sample(x, y);
             if (!std::isnan(value)) {
-                draw->AddLine(ImVec2(mouse.x - px(8.0F), mouse.y), ImVec2(mouse.x + px(8.0F), mouse.y),
-                              u32(c::t1));
-                draw->AddLine(ImVec2(mouse.x, mouse.y - px(8.0F)), ImVec2(mouse.x, mouse.y + px(8.0F)),
-                              u32(c::t1));
+                draw->AddLine(ImVec2(mouse.x - px(8.0F), mouse.y),
+                              ImVec2(mouse.x + px(8.0F), mouse.y), u32(c::t1));
+                draw->AddLine(ImVec2(mouse.x, mouse.y - px(8.0F)),
+                              ImVec2(mouse.x, mouse.y + px(8.0F)), u32(c::t1));
                 ImGui::BeginTooltip();
                 widgets::Mono(c::t3, "probe · x %.2f  y %.2f  z %.2f m", x, y, slice->heightM);
                 widgets::Dot(field != nullptr ? widgets::domainColor(field->domain) : c::t2);
@@ -389,7 +394,8 @@ public:
         draw->AddText(fonts.sansSemiBold, px(theme::kLabelSize),
                       ImVec2(legendMin.x + px(10.0F), legendMin.y + px(7.0F)), u32(c::t1), label);
         const float unitWidth = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, unit).x;
-        draw->AddText(fonts.mono, small, ImVec2(legendMax.x - unitWidth - px(10.0F), legendMin.y + px(8.0F)),
+        draw->AddText(fonts.mono, small,
+                      ImVec2(legendMax.x - unitWidth - px(10.0F), legendMin.y + px(8.0F)),
                       u32(c::t3), unit);
         const float barLeft = legendMin.x + px(10.0F);
         const float barRight = legendMax.x - px(10.0F);
@@ -406,8 +412,8 @@ public:
         draw->AddText(fonts.mono, small, ImVec2(barLeft, barTop + px(12.0F)), u32(c::t3), text);
         std::snprintf(text, sizeof(text), "%.3g", static_cast<double>(slice->valueMax));
         const float maxWidth = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, text).x;
-        draw->AddText(fonts.mono, small, ImVec2(barRight - maxWidth, barTop + px(12.0F)), u32(c::t3),
-                      text);
+        draw->AddText(fonts.mono, small, ImVec2(barRight - maxWidth, barTop + px(12.0F)),
+                      u32(c::t3), text);
         ImGui::End();
     }
 
@@ -462,7 +468,8 @@ public:
             ImGui::TextUnformatted(field.label.c_str());
             ImGui::PopStyleColor();
             // On the right: the unit, or why the field cannot be shown.
-            const char* note = field.available ? field.unit.c_str() : field.unavailableReason.c_str();
+            const char* note =
+                field.available ? field.unit.c_str() : field.unavailableReason.c_str();
             ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
             const float width = ImGui::CalcTextSize(note).x;
             ImGui::PopFont();
@@ -502,8 +509,9 @@ public:
         if (info.synthetic) {
             ImGui::Dummy(ImVec2(0.0F, px(6.0F)));
             ImGui::PushTextWrapPos(0.0F);
-            widgets::Caption("This server has no environment model. A field shown here is an "
-                             "estimate it derives from the recording.");
+            widgets::Caption(
+                "This server has no environment model. A field shown here is an "
+                "estimate it derives from the recording.");
             ImGui::PopTextWrapPos();
         }
         ImGui::End();

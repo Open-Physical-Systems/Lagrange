@@ -1,11 +1,11 @@
 // ROS 2 workspace: topics and their rates, the node graph, and the ros2_control interface
 // (docs/design/ui/09-ros2/SPEC.md). The viewer does not join the ROS domain: everything
 // comes from the simulation server's graph report.
+#include "PanelFormat.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
-#include "PanelFormat.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -31,11 +31,11 @@ ImU32 u32(const ImVec4& color) {
 }
 
 bool containsNoCase(std::string_view text, std::string_view needle) {
-    const auto it = std::search(text.begin(), text.end(), needle.begin(), needle.end(),
-                                [](char a, char b) {
-                                    return std::tolower(static_cast<unsigned char>(a)) ==
-                                           std::tolower(static_cast<unsigned char>(b));
-                                });
+    const auto it =
+        std::search(text.begin(), text.end(), needle.begin(), needle.end(), [](char a, char b) {
+            return std::tolower(static_cast<unsigned char>(a)) ==
+                   std::tolower(static_cast<unsigned char>(b));
+        });
     return it != text.end();
 }
 
@@ -146,9 +146,9 @@ public:
                 ImGui::PushID(topic.name.c_str());
                 ImGui::TableNextRow(ImGuiTableRowFlags_None, px(23.0F));
                 ImGui::TableNextColumn();
-                if (ImGui::Selectable("##topic", selected,
-                                      ImGuiSelectableFlags_SpanAllColumns |
-                                          ImGuiSelectableFlags_AllowOverlap)) {
+                if (ImGui::Selectable(
+                        "##topic", selected,
+                        ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
                     *selected_ = topic.name;
                 }
                 ImGui::SameLine(px(8.0F));
@@ -183,9 +183,10 @@ public:
             std::snprintf(text, sizeof(text), "%u publishing · %u subscribed", chosen->publishers,
                           chosen->subscribers);
             widgets::PropertyRow("endpoints", text, nullptr);
-            widgets::PropertyRow("from", chosen->fromBridge ? "the simulator's bridge"
-                                                             : "another node in the domain",
-                                 nullptr);
+            widgets::PropertyRow(
+                "from",
+                chosen->fromBridge ? "the simulator's bridge" : "another node in the domain",
+                nullptr);
             if (!chosen->status.empty()) {
                 widgets::Pill(chosen->status.c_str(), widgets::PillKind::Warn);
             }
@@ -280,9 +281,10 @@ public:
                     const ImVec2 mid((a.x + b.x) * 0.5F, (a.y + b.y) * 0.5F - small - px(2.0F));
                     const float width =
                         fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, topic.c_str()).x;
-                    draw->AddRectFilled(ImVec2(mid.x - width * 0.5F - px(3.0F), mid.y),
-                                        ImVec2(mid.x + width * 0.5F + px(3.0F), mid.y + small + px(2.0F)),
-                                        u32(c::bg0));
+                    draw->AddRectFilled(
+                        ImVec2(mid.x - width * 0.5F - px(3.0F), mid.y),
+                        ImVec2(mid.x + width * 0.5F + px(3.0F), mid.y + small + px(2.0F)),
+                        u32(c::bg0));
                     draw->AddText(fonts.mono, small, ImVec2(mid.x - width * 0.5F, mid.y),
                                   u32(selected ? c::accent : c::t3), topic.c_str());
                 }
@@ -321,8 +323,9 @@ public:
         ImGui::Dummy(ImVec2(rightX + nodeW + px(30.0F), std::max(leftY, rightY)));
         // A graph that no real bridge stands behind says so, on the canvas.
         if (!graph->note.empty()) {
-            ImGui::SetCursorScreenPos(ImVec2(origin.x + ImGui::GetScrollX() + px(10.0F),
-                                             origin.y + ImGui::GetScrollY() + visible.y - px(28.0F)));
+            ImGui::SetCursorScreenPos(
+                ImVec2(origin.x + ImGui::GetScrollX() + px(10.0F),
+                       origin.y + ImGui::GetScrollY() + visible.y - px(28.0F)));
             widgets::Pill(graph->note.c_str(), widgets::PillKind::Warn);
         }
         ImGui::EndChild();
@@ -361,8 +364,8 @@ public:
             const char* state = graph->controlActive ? "active" : "inactive";
             ImGui::SameLine();
             widgets::AlignRight(widgets::PillWidth(state));
-            widgets::Pill(state, graph->controlActive ? widgets::PillKind::Ok
-                                                      : widgets::PillKind::Warn);
+            widgets::Pill(state,
+                          graph->controlActive ? widgets::PillKind::Ok : widgets::PillKind::Warn);
             char hz[24];
             format::step(graph->controlRateHz > 0.0
                              ? static_cast<std::int64_t>(1e9 / graph->controlRateHz)
@@ -371,13 +374,14 @@ public:
             widgets::Mono(c::t3, "%s", graph->plugin.c_str());
             widgets::Mono(c::t3, "read/write every %s", hz);
             ImGui::PushTextWrapPos(0.0F);
-            widgets::Caption("Effort commands go through the electrical domain, not straight to "
-                             "the joints.");
+            widgets::Caption(
+                "Effort commands go through the electrical domain, not straight to "
+                "the joints.");
             ImGui::PopTextWrapPos();
             ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
-            if (ImGui::BeginTable("##joints", 3,
-                                  ImGuiTableFlags_BordersInnerH |
-                                      ImGuiTableFlags_SizingStretchProp)) {
+            if (ImGui::BeginTable(
+                    "##joints", 3,
+                    ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
                 ImGui::TableSetupColumn("joint", ImGuiTableColumnFlags_None, 2.4F);
                 ImGui::TableSetupColumn("command", ImGuiTableColumnFlags_None, 1.0F);
                 ImGui::TableSetupColumn("state", ImGuiTableColumnFlags_None, 1.0F);
@@ -411,9 +415,9 @@ public:
                     widgets::Mono(c::t3, "%s", text);
                     ImGui::SameLine();
                     widgets::AlignRight(widgets::PillWidth(controller.state.c_str()));
-                    widgets::Pill(controller.state.c_str(),
-                                  controller.state == "active" ? widgets::PillKind::Ok
-                                                               : widgets::PillKind::Neutral);
+                    widgets::Pill(controller.state.c_str(), controller.state == "active"
+                                                                ? widgets::PillKind::Ok
+                                                                : widgets::PillKind::Neutral);
                 }
             }
         }
