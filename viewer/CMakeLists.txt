@@ -14,6 +14,7 @@ add_library(
     STATIC
     client/src/ProfileDraft.cpp
     client/src/ProfileSession.cpp
+    client/src/RecentList.cpp
     client/src/SceneStore.cpp
     client/src/ScopeBuffer.cpp
     client/src/ScopeSession.cpp
@@ -95,6 +96,7 @@ add_library(
     panels/src/DomainsPanel.cpp
     panels/src/ElectricalPanels.cpp
     panels/src/InspectorPanel.cpp
+    panels/src/Launcher.cpp
     panels/src/PanelFormat.cpp
     panels/src/ProfilePanel.cpp
     panels/src/ScenePanel.cpp
@@ -147,6 +149,7 @@ if(BUILD_TESTING)
         test_viewer_client
         client/test/test_profile_draft.cpp
         client/test/test_profile_session.cpp
+        client/test/test_recent_list.cpp
         client/test/test_scene_store.cpp
         client/test/test_scope_buffer.cpp
         client/test/test_scope_session.cpp

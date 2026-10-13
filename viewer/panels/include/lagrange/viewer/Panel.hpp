@@ -2,6 +2,7 @@
 
 #include "lagrange/viewer/Camera.hpp"
 #include "lagrange/viewer/ProfileSession.hpp"
+#include "lagrange/viewer/RecentList.hpp"
 #include "lagrange/viewer/RenderOptions.hpp"
 #include "lagrange/viewer/SceneStore.hpp"
 #include "lagrange/viewer/ScopeSession.hpp"
@@ -34,6 +35,43 @@ enum class Workspace : std::uint8_t {
 [[nodiscard]] const char* toString(Workspace workspace);
 /// A workspace by its label, in any case: "scene", "domains", "ros 2", ... Empty for anything else.
 [[nodiscard]] std::optional<Workspace> parseWorkspace(std::string_view name);
+
+/// What the machine the viewer runs on offers, probed locally at start-up (design: the
+/// launcher's system check). Nothing here comes from a server.
+struct SystemInfo {
+    std::string gpu;        ///< Device name.
+    std::string gpuDetail;  ///< "Vulkan 1.4 · ray query yes · 8 GB"
+    std::string tier;       ///< "Tier 2"
+    bool softwareGpu{false};
+    std::string os;               ///< "Ubuntu 26.04 LTS"
+    std::string session;          ///< "wayland", "x11", or empty when unknown.
+    float scale{1.0F};            ///< HiDPI scale of the window's display.
+    std::string rosDistro;        ///< ROS_DISTRO, empty when ROS is not sourced.
+    std::string rmw;              ///< RMW_IMPLEMENTATION, may be empty.
+    std::string rosDomain;        ///< ROS_DOMAIN_ID, may be empty.
+    std::string configDirectory;  ///< Where the viewer keeps its files.
+};
+
+/// The first screen, before the viewer is connected: choose a server and what to open.
+struct LauncherState {
+    bool active{false};  ///< The launcher is shown in place of the workspaces.
+    SystemInfo system;
+    std::string defaultEndpoint;   ///< Where a local server listens unless told otherwise.
+    bool defaultAvailable{false};  ///< Something is listening there (checked now and then).
+    char otherEndpoint[160]{};     ///< A server typed in by the user.
+    bool showOther{false};
+    int server{1};           ///< 1: the default local server, 2: the typed one.
+    int robotClass{0};       ///< Selected card.
+    std::string openTarget;  ///< File to ask the server to open after connecting; may be empty.
+    RecentList recent;
+    char recentFilter[64]{};
+    std::string error;  ///< Why the last attempt to connect could not start.
+
+    // Out, read by the application after the frame.
+    bool connectRequested{false};
+    std::string connectEndpoint;
+    bool disconnectRequested{false};  ///< Stop the client and show the launcher again.
+};
 
 /// What panels may read and change during one frame. Panels never touch the socket or Vulkan.
 struct PanelContext {
@@ -70,7 +108,8 @@ struct PanelContext {
     /// Times the user marked on the timeline, in simulation nanoseconds, ascending. Kept for
     /// the session only. Never null in draw().
     std::vector<std::int64_t>* bookmarks{nullptr};
-    bool* resetLayout{nullptr};  ///< Set to rebuild the shown workspace's default layout.
+    LauncherState* launcher{nullptr};  ///< Never null in draw().
+    bool* resetLayout{nullptr};        ///< Set to rebuild the shown workspace's default layout.
 
     std::string deviceName;
     std::string tierName;
@@ -110,6 +149,9 @@ public:
 
 /// Every panel that exists so far, for all workspaces.
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createDefaultPanels();
+
+/// Draws the launcher (see LauncherState). Called by drawPanels() while it is active.
+void drawLauncher(PanelContext& context);
 
 /// Draws the application chrome (menu bar, workspace bar, domain strip, status bar) and the
 /// panels of the workspace shown, laying them out on first use.

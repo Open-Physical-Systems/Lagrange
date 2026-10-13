@@ -213,6 +213,9 @@ void drawMenuBar(PanelContext& context) {
         if (ImGui::MenuItem("Open robot or recording...", "Ctrl+O", false, context.canOpenFiles)) {
             context.openFileRequested = true;
         }
+        if (ImGui::MenuItem("Disconnect and show the launcher")) {
+            context.launcher->disconnectRequested = true;
+        }
         endMenu();
     }
     if (menu("Edit")) {
@@ -684,6 +687,10 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
 }
 
 void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& context) {
+    if (context.launcher->active) {
+        drawLauncher(context);  // the first screen: nothing else is shown until connected
+        return;
+    }
     context.profileSession->update(context.client,
                                    context.connection.state == ConnectionState::Ready,
                                    context.stats.connects, ImGui::GetTime());

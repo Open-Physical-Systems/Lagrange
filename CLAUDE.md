@@ -241,7 +241,7 @@ verification, not in this repo.
 - Sanitizer build: `colcon build --build-base build-asan --install-base install-asan --mixin asan` (TBD; verify mixin availability)
 - C++ tests: `colcon test && colcon test-result --verbose` (TBD)
 - Python: `ruff check . && ruff format --check . && mypy python/ && pytest` (TBD)
-- Viewer: built by colcon with everything else; run `ros2 run lagrange_viewer lagrange_viewer --connect <endpoint>`
+- Viewer: built by colcon with everything else; run `ros2 run lagrange_viewer lagrange_viewer` (starts on the launcher; `--connect <endpoint>` goes straight to a server)
 - Viewer headless test: `colcon test --packages-select lagrange_viewer` (runs on the software Vulkan device, llvmpipe; `LAGRANGE_TEST_GPU=<name>` picks another)
 - GPU and tier of this machine: `ros2 run lagrange_gpu lagrange_gpu_info`
 - All hooks: `pre-commit run --all-files`

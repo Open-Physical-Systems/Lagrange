@@ -213,6 +213,10 @@ public:
 
     void start();
     void stop();
+    /// True between start() and stop().
+    [[nodiscard]] bool running() const { return thread_.joinable(); }
+    /// Chooses the server to talk to. Only while the client is not running; ignored otherwise.
+    void setEndpoint(proto::Endpoint endpoint);
 
     // --- latest state; safe from any thread, never blocks on I/O ---------------------------
     [[nodiscard]] std::shared_ptr<const SceneFrame> scene() const { return scene_.load(); }

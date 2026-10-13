@@ -123,6 +123,10 @@ constexpr std::array<Definition, static_cast<std::size_t>(Icon::Count)> kIcons{{
     {{{path("M2 13c4 0 3-10 12-10")}}, 1},
     // Fields
     {{{path("M8 2l6 3-6 3-6-3z M2 8l6 3 6-3 M2 11l6 3 6-3")}}, 1},
+    // Folder
+    {{{path("M2 4.5h4l1.5 1.5H14v6.5H2z", 1.4F)}}, 1},
+    // Download
+    {{{path("M8 2.5v8 M4.5 7L8 10.5 11.5 7 M3 13.5h10", 1.4F)}}, 1},
 }};
 
 // --- SVG path data to polylines --------------------------------------------------------
@@ -372,6 +376,21 @@ void DrawIcon(ImDrawList* draw, Icon icon, const ImVec2& topLeft, float size, Im
                 }
                 break;
         }
+    }
+}
+
+void StrokeSvgPath(ImDrawList* draw, const char* data, const ImVec2& origin, float scale,
+                   ImU32 color, float thickness) {
+    static std::vector<ImVec2> scratch;  // UI thread only
+    // Cached by the address of the path data, like the icons: callers pass string literals.
+    const Shape shape = path(data);
+    for (const Outline& outline : outlinesOf(shape)) {
+        scratch.clear();
+        for (const ImVec2& point : outline.points) {
+            scratch.emplace_back(origin.x + point.x * scale, origin.y + point.y * scale);
+        }
+        draw->AddPolyline(scratch.data(), static_cast<int>(scratch.size()), color, thickness,
+                          outline.closed ? ImDrawFlags_Closed : ImDrawFlags_None);
     }
 }
 
