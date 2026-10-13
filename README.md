@@ -37,7 +37,8 @@ colcon build --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
 colcon test && colcon test-result --verbose
 ```
 
-At this stage the workspace contains one package, `lagrange_core`, with the simulation time types.
+Packages so far: `lagrange_core` (simulation time types) and `lagrange_proto` (viewer protocol
+messages with generated C++ and Python code).
 
 ## Contributing
 
