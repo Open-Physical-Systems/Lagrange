@@ -1,13 +1,13 @@
 #pragma once
 
-#include <vulkan/vulkan.h>
-
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
+
+#include <vulkan/vulkan.h>
 
 struct VmaAllocator_T;
 using VmaAllocator = VmaAllocator_T*;
@@ -65,8 +65,7 @@ struct DeviceDesc {
 class Device {
 public:
     /// Creates the device. On failure returns nullptr and puts a one-line reason in `error`.
-    [[nodiscard]] static std::unique_ptr<Device> create(const DeviceDesc& desc,
-                                                        std::string& error);
+    [[nodiscard]] static std::unique_ptr<Device> create(const DeviceDesc& desc, std::string& error);
     ~Device();
     Device(const Device&) = delete;
     Device& operator=(const Device&) = delete;

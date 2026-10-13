@@ -135,10 +135,10 @@ void classify(DeviceInfo& info) {
         info.tier = CapabilityTier::Tier1;
     }
     if (info.deviceMemoryBytes < kTier2MinimumMemoryBytes) {
-        info.reasons.emplace_back(
-            std::to_string(info.deviceMemoryBytes / (1024 * 1024)) +
-            " MiB of device memory, Tier 2 needs " +
-            std::to_string(kTier2MinimumMemoryBytes / (1024 * 1024)) + " MiB");
+        info.reasons.emplace_back(std::to_string(info.deviceMemoryBytes / (1024 * 1024)) +
+                                  " MiB of device memory, Tier 2 needs " +
+                                  std::to_string(kTier2MinimumMemoryBytes / (1024 * 1024)) +
+                                  " MiB");
         info.tier = CapabilityTier::Tier1;
     }
 }
@@ -256,10 +256,9 @@ std::unique_ptr<Device> Device::create(const DeviceDesc& desc, std::string& erro
         if (!candidate.presentable) {
             DeviceInfo& info = self->allDevices_.back();
             info.usable = false;
-            info.reasons.insert(info.reasons.begin(),
-                                self->surface_ != VK_NULL_HANDLE
-                                    ? "cannot present to the window"
-                                    : "no graphics+compute queue");
+            info.reasons.insert(info.reasons.begin(), self->surface_ != VK_NULL_HANDLE
+                                                          ? "cannot present to the window"
+                                                          : "no graphics+compute queue");
         }
         candidates.push_back(candidate);
     }
@@ -271,9 +270,9 @@ std::unique_ptr<Device> Device::create(const DeviceDesc& desc, std::string& erro
         const bool isIndex = std::all_of(wanted.begin(), wanted.end(),
                                          [](unsigned char c) { return std::isdigit(c) != 0; });
         for (std::size_t i = 0; i < candidates.size(); ++i) {
-            const bool match = isIndex ? std::to_string(i) == wanted
-                                       : lower(self->allDevices_[i].name).find(wanted) !=
-                                             std::string::npos;
+            const bool match =
+                isIndex ? std::to_string(i) == wanted
+                        : lower(self->allDevices_[i].name).find(wanted) != std::string::npos;
             if (match) {
                 chosen = static_cast<int>(i);
                 break;
@@ -361,8 +360,7 @@ std::unique_ptr<Device> Device::create(const DeviceDesc& desc, std::string& erro
     deviceInfo.pQueueCreateInfos = &queueInfo;
     deviceInfo.enabledExtensionCount = static_cast<std::uint32_t>(deviceExtensions.size());
     deviceInfo.ppEnabledExtensionNames = deviceExtensions.data();
-    if (vkCreateDevice(self->physicalDevice_, &deviceInfo, nullptr, &self->device_) !=
-        VK_SUCCESS) {
+    if (vkCreateDevice(self->physicalDevice_, &deviceInfo, nullptr, &self->device_) != VK_SUCCESS) {
         error = "cannot create a logical device on '" + self->info_.name + "'";
         return nullptr;
     }
@@ -371,8 +369,7 @@ std::unique_ptr<Device> Device::create(const DeviceDesc& desc, std::string& erro
     VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     poolInfo.queueFamilyIndex = self->queueFamily_;
-    if (vkCreateCommandPool(self->device_, &poolInfo, nullptr, &self->commandPool_) !=
-        VK_SUCCESS) {
+    if (vkCreateCommandPool(self->device_, &poolInfo, nullptr, &self->commandPool_) != VK_SUCCESS) {
         error = "cannot create a command pool";
         return nullptr;
     }

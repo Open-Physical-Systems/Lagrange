@@ -1,3 +1,8 @@
+#include "lagrange/gpu/Device.hpp"
+#include "lagrange/gpu/Resources.hpp"
+#include "shaders/kTriangleFragment.hpp"
+#include "shaders/kTriangleVertex.hpp"
+
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -6,11 +11,6 @@
 #include <vector>
 
 #include <gtest/gtest.h>
-
-#include "lagrange/gpu/Device.hpp"
-#include "lagrange/gpu/Resources.hpp"
-#include "shaders/kTriangleFragment.hpp"
-#include "shaders/kTriangleVertex.hpp"
 
 namespace {
 
@@ -117,10 +117,10 @@ TEST(Device, RendersATriangleOffscreenAndReadsItBack) {
     ASSERT_NE(device, nullptr);
     const VkExtent2D extent{64, 64};
     const VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
-    Image target = createImage2D(
-        *device, extent, format,
-        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-        VK_IMAGE_ASPECT_COLOR_BIT);
+    Image target =
+        createImage2D(*device, extent, format,
+                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                      VK_IMAGE_ASPECT_COLOR_BIT);
 
     VkShaderModule vertex = createShaderModule(*device, kTriangleVertex);
     VkShaderModule fragment = createShaderModule(*device, kTriangleFragment);
@@ -181,8 +181,8 @@ TEST(Device, RendersATriangleOffscreenAndReadsItBack) {
     pipelineInfo.pDynamicState = &dynamic;
     pipelineInfo.layout = layout;
     VkPipeline pipeline = VK_NULL_HANDLE;
-    ASSERT_EQ(vkCreateGraphicsPipelines(device->device(), VK_NULL_HANDLE, 1, &pipelineInfo,
-                                        nullptr, &pipeline),
+    ASSERT_EQ(vkCreateGraphicsPipelines(device->device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+                                        &pipeline),
               VK_SUCCESS);
 
     device->submitAndWait([&](VkCommandBuffer commands) {

@@ -1,15 +1,13 @@
+#include "lagrange/gpu/Device.hpp"
 #include "lagrange/gpu/Resources.hpp"
-
-#include <zlib.h>
 
 #include <array>
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <zlib.h>
 
 #include <vk_mem_alloc.h>
-
-#include "lagrange/gpu/Device.hpp"
 
 namespace lagrange::gpu {
 
@@ -21,8 +19,8 @@ Buffer createBuffer(const Device& device, VkDeviceSize size, VkBufferUsageFlags 
     VmaAllocationCreateInfo allocation{};
     allocation.usage = VMA_MEMORY_USAGE_AUTO;
     if (hostVisible) {
-        allocation.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
-                           VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        allocation.flags =
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
     }
     Buffer buffer;
     buffer.size = size;
@@ -207,7 +205,7 @@ bool writePng(const std::string& path, std::uint32_t width, std::uint32_t height
     appendChunk(file, "IEND", {});
 
     const std::unique_ptr<std::FILE, int (*)(std::FILE*)> out(std::fopen(path.c_str(), "wb"),
-                                                             &std::fclose);
+                                                              &std::fclose);
     return out != nullptr && std::fwrite(file.data(), 1, file.size(), out.get()) == file.size();
 }
 

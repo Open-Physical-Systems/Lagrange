@@ -17,7 +17,10 @@ function(lagrange_add_slang_shader target)
     cmake_parse_arguments(ARG "" "SOURCE;ENTRY;STAGE;SYMBOL" "" ${ARGN})
     foreach(_required SOURCE ENTRY STAGE SYMBOL)
         if(NOT ARG_${_required})
-            message(FATAL_ERROR "lagrange_add_slang_shader: ${_required} is required")
+            message(
+                FATAL_ERROR
+                "lagrange_add_slang_shader: ${_required} is required"
+            )
         endif()
     endforeach()
     get_filename_component(_source "${ARG_SOURCE}" ABSOLUTE)
@@ -28,8 +31,8 @@ function(lagrange_add_slang_shader target)
     add_custom_command(
         OUTPUT "${_header}"
         COMMAND
-            "${LAGRANGE_SLANGC}" "${_source}" -target spirv -entry "${ARG_ENTRY}"
-            -stage "${ARG_STAGE}" -o "${_spirv}"
+            "${LAGRANGE_SLANGC}" "${_source}" -target spirv -entry
+            "${ARG_ENTRY}" -stage "${ARG_STAGE}" -o "${_spirv}"
         COMMAND
             "${CMAKE_COMMAND}" "-DINPUT=${_spirv}" "-DOUTPUT=${_header}"
             "-DSYMBOL=${ARG_SYMBOL}" -P "${LAGRANGE_EMBED_SPIRV_SCRIPT}"

@@ -1,11 +1,11 @@
 // Prints the Vulkan devices on this machine and the capability tier of each.
 // Bug reports ask for this output.
 
+#include "lagrange/gpu/Device.hpp"
+
 #include <cstdio>
 #include <memory>
 #include <string>
-
-#include "lagrange/gpu/Device.hpp"
 
 int main() {
     std::string error;
@@ -32,6 +32,7 @@ int main() {
     }
     std::printf("\nSelected: %s\nCapability in effect: %s\n", device->info().name.c_str(),
                 lagrange::gpu::toString(device->tier()));
-    std::printf("Override with LAGRANGE_GPU=<index or part of the name> and LAGRANGE_TIER=<0|1|2>.\n");
+    std::printf(
+        "Override with LAGRANGE_GPU=<index or part of the name> and LAGRANGE_TIER=<0|1|2>.\n");
     return 0;
 }

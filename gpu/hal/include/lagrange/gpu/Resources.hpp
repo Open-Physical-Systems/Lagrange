@@ -1,12 +1,12 @@
 #pragma once
 
-#include <vulkan/vulkan.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
 #include <vector>
+
+#include <vulkan/vulkan.h>
 
 struct VmaAllocation_T;
 using VmaAllocation = VmaAllocation_T*;
@@ -30,8 +30,8 @@ struct Image {
     VkExtent2D extent{};
 };
 
-[[nodiscard]] Buffer createBuffer(const Device& device, VkDeviceSize size,
-                                  VkBufferUsageFlags usage, bool hostVisible);
+[[nodiscard]] Buffer createBuffer(const Device& device, VkDeviceSize size, VkBufferUsageFlags usage,
+                                  bool hostVisible);
 /// A device-local buffer holding `data`, uploaded through a temporary staging buffer.
 [[nodiscard]] Buffer createBufferWithData(const Device& device, std::span<const std::byte> data,
                                           VkBufferUsageFlags usage);
