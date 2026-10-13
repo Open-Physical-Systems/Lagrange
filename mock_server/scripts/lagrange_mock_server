@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+"""Entry point installed as `ros2 run lagrange_mock_server lagrange_mock_server`."""
+
+import sys
+
+from lagrange_mock_server.__main__ import main
+
+sys.exit(main())
