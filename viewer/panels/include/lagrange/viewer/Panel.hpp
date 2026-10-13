@@ -142,6 +142,11 @@ public:
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createWiringPanels();
 /// The Performance workspace's overview, scheduler, modules, history and resources panels.
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createPerformancePanels();
+/// The Replay workspace: recording facts, channels and the event list, and its own windows
+/// for the timeline and the bookmarks.
+[[nodiscard]] std::vector<std::unique_ptr<Panel>> createReplayPanels();
+[[nodiscard]] std::unique_ptr<Panel> createReplayTimelinePanel();
+[[nodiscard]] std::unique_ptr<Panel> createReplayBookmarksPanel();
 [[nodiscard]] std::unique_ptr<Panel> createTimelinePanel();
 [[nodiscard]] std::unique_ptr<Panel> createBookmarksPanel();
 [[nodiscard]] std::unique_ptr<Panel> createConsolePanel();
