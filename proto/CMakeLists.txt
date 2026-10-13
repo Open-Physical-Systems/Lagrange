@@ -14,6 +14,7 @@ set(LAGRANGE_PROTO_FILES
     lagrange/viewer/v1/command.proto
     lagrange/viewer/v1/profile.proto
     lagrange/viewer/v1/envelope.proto
+    lagrange/record/v1/record.proto
 )
 
 set(_gen_cpp_dir ${CMAKE_CURRENT_BINARY_DIR}/gen/cpp)
@@ -148,6 +149,14 @@ if(BUILD_TESTING)
     target_include_directories(test_framing PRIVATE framing/fuzz)
     lagrange_target_defaults(test_framing)
 
+    ament_add_gtest(test_golden test/test_golden.cpp)
+    target_link_libraries(test_golden lagrange_proto_framing)
+    target_compile_definitions(
+        test_golden
+        PRIVATE LAGRANGE_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/golden"
+    )
+    lagrange_target_defaults(test_golden)
+
     find_package(Threads REQUIRED)
     ament_add_gtest(
         test_transport
@@ -162,12 +171,14 @@ if(BUILD_TESTING)
     lagrange_target_defaults(test_transport)
 
     find_package(ament_cmake_pytest REQUIRED)
-    ament_add_pytest_test(
-        test_roundtrip_py
-        test/test_roundtrip.py
-        APPEND_ENV
-        PYTHONPATH=${_gen_python_dir}
-    )
+    foreach(_test roundtrip golden)
+        ament_add_pytest_test(
+            test_${_test}_py
+            test/test_${_test}.py
+            APPEND_ENV
+            PYTHONPATH=${_gen_python_dir}
+        )
+    endforeach()
 endif()
 
 option(LAGRANGE_BUILD_FUZZERS "Build libFuzzer targets (needs Clang)" OFF)
