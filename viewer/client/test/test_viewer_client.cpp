@@ -5,6 +5,7 @@
 #include "lagrange/viewer/v1/envelope.pb.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <functional>
@@ -822,6 +823,112 @@ TEST(ViewerClient, ProfileValidationCarriesTheWiring) {
     EXPECT_EQ(check->wiring.wires[0].sinkUnit, "N");
     EXPECT_FALSE(check->wiring.wires[0].unitOk);
     EXPECT_EQ(check->wiring.baseTickNs, 100'000);
+    client.stop();
+}
+
+TEST(ViewerClient, EnvironmentFieldsRosGraphAndWorldArePublished) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+    EXPECT_EQ(client.environment(), nullptr);
+    EXPECT_EQ(client.rosGraph(), nullptr);
+    EXPECT_EQ(client.world(), nullptr);
+
+    // Asking for the graph and the world sends the requests; asking again does nothing new.
+    client.setRosGraphWanted(true);
+    client.setRosGraphWanted(true);
+    client.setWorldWanted(true);
+    const auto stream = client.watchField("emi/flux_density", 0.1);
+    EXPECT_EQ(client.watchField("emi/flux_density", 0.1), stream);
+    ASSERT_TRUE(server.pump([&] {
+        return server.countCommands(v1::Command::kSetWorld) == 2 &&
+               server.countCommands(v1::Command::kSubscribeField) == 1;
+    }));
+    EXPECT_EQ(server.countCommands(v1::Command::kSetRosGraph), 2);  // one per change of either
+
+    v1::Envelope environment;
+    environment.mutable_environment()->set_synthetic(true);
+    environment.mutable_environment()->mutable_weather()->set_rain_mm_per_h(25.0);
+    auto* field = environment.mutable_environment()->add_fields();
+    field->set_name("emi/flux_density");
+    field->set_label("|B|");
+    field->mutable_unit()->set_display("uT");
+    field->set_available(true);
+    server.send(environment);
+
+    const auto slice = [](std::uint32_t width, std::uint32_t height,
+                          const std::vector<float>& values) {
+        v1::Envelope envelope;
+        v1::FieldSlice* out = envelope.mutable_field_slice();
+        out->set_field("emi/flux_density");
+        out->set_width(width);
+        out->set_height(height);
+        out->set_components(1);
+        out->set_origin_x(-1.0);
+        out->set_origin_y(0.0);
+        out->set_cell_m(1.0);
+        out->set_value_min(1.0F);
+        out->set_value_max(6.0F);
+        out->mutable_values()->set_inline_(
+            std::string(reinterpret_cast<const char*>(values.data()),  // NOLINT
+                        values.size() * sizeof(float)));
+        return envelope;
+    };
+    server.send(slice(3, 2, {1, 2, 3, 4, 5, 6}));
+    server.send(slice(3, 3, {1, 2, 3, 4, 5, 6}));  // nine cells announced, six sent
+    ASSERT_TRUE(server.pump([&] { return stream->slices() == 1 && stream->rejected() == 1; }));
+    const auto data = stream->latest();
+    ASSERT_NE(data, nullptr);
+    EXPECT_FLOAT_EQ(data->sample(-1.0, 0.0), 1.0F);   // cell (0, 0)
+    EXPECT_FLOAT_EQ(data->sample(1.2, 0.9), 6.0F);    // nearest cell is (2, 1)
+    EXPECT_TRUE(std::isnan(data->sample(5.0, 0.0)));  // outside the slice
+
+    v1::Envelope graph;
+    graph.mutable_ros_graph()->set_distro("lyrical");
+    graph.mutable_ros_graph()->set_note("no bridge");
+    auto* topic = graph.mutable_ros_graph()->add_topics();
+    topic->set_name("/imu/data");
+    topic->set_rate_hz(1000.0);
+    topic->set_from_bridge(true);
+    graph.mutable_ros_graph()->add_nodes("/legacy_node");  // names only: an older server
+    server.send(graph);
+
+    v1::Envelope world;
+    world.mutable_world()->set_tile_size_m(256.0);
+    world.mutable_world()->set_tiles_generation(7);
+    for (const int x : {0, 1, 2}) {
+        world.mutable_world()->add_tile_x(x);
+        world.mutable_world()->add_tile_y(-x);
+    }
+    world.mutable_world()->set_tile_lod(std::string("\x00\x01\x03", 3));
+    auto* agent = world.mutable_world()->add_agents();
+    agent->set_name("amr");
+    agent->set_x(1.0e6);  // far from the origin: stays double
+    agent->set_focus(true);
+    server.send(world);
+    // The next report has no tiles (same generation): the ones held are kept.
+    v1::Envelope later;
+    later.mutable_world()->set_tile_size_m(256.0);
+    later.mutable_world()->set_tiles_generation(7);
+    later.mutable_world()->mutable_sim_time()->set_ns(5);
+    server.send(later);
+
+    ASSERT_TRUE(server.pump([&] { return client.world() && client.world()->simTimeNs == 5; }));
+    ASSERT_NE(client.environment(), nullptr);
+    EXPECT_TRUE(client.environment()->synthetic);
+    EXPECT_DOUBLE_EQ(client.environment()->rainMmPerH, 25.0);
+    ASSERT_EQ(client.environment()->fields.size(), 1U);
+    EXPECT_EQ(client.environment()->fields[0].unit, "uT");
+    ASSERT_NE(client.rosGraph(), nullptr);
+    EXPECT_EQ(client.rosGraph()->note, "no bridge");
+    EXPECT_DOUBLE_EQ(client.rosGraph()->topics[0].rateHz, 1000.0);
+    ASSERT_EQ(client.rosGraph()->nodes.size(), 1U);
+    EXPECT_EQ(client.rosGraph()->nodes[0].name, "/legacy_node");
+    EXPECT_FALSE(client.rosGraph()->hasControl);
+    ASSERT_EQ(client.world()->tiles.size(), 3U);
+    EXPECT_EQ(client.world()->tiles[2].y, -2);
+    EXPECT_EQ(client.world()->tiles[2].lod, 3U);
     client.stop();
 }
 

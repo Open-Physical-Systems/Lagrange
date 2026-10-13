@@ -616,6 +616,29 @@ Rules that go with them:
   a wire with `unit_ok = false` is what the user has to see (invariant 2).
 - `QuantityKind` gained `LinearAcceleration`, appended to the list (architecture §2).
 
+### 4.2 Additions of 2026-10-14, second set (version 0.1, backwards compatible)
+
+For the Environment, ROS 2 and World workspaces. Again new messages and new fields only.
+
+| Addition | Where | Used by |
+|---|---|---|
+| `EnvironmentState` with the fields that can be sliced | `session.proto`, `Envelope` 44 | Environment workspace |
+| `FieldSlice`, `SubscribeField` | `session.proto`, `Envelope` 45; `command.proto` 53 | field overlays and the probe |
+| `WorldState`, `SetWorldEnabled` | `session.proto`, `Envelope` 46; `command.proto` 54 | World workspace |
+| `RosGraph`: nodes with their topics, `Control`, distro, domain, a `note`; `Topic`: bandwidth, origin, status | `session.proto` | ROS 2 workspace |
+
+Rules that go with them:
+
+- `FieldSlice`, `RosGraph` and `WorldState` are sent only to viewers that asked
+  (`SubscribeField`, `SetRosGraphEnabled`, `SetWorldEnabled`); a viewer asks while a panel that
+  shows them is open.
+- World positions in `WorldState` are `double` in the world's ENU frame (invariant 6). Tiles
+  are parallel arrays and are sent again only when `tiles_generation` changes.
+- `EnvironmentState.synthetic`, `WorldState.synthetic` and `RosGraph.note` say when a server
+  describes something it does not model or run. The mock server sets all three: it has no
+  environment model, no tile streamer and no ROS 2 bridge.
+- An EMI source's frequency is a parameter of the site or the device, never a default.
+
 ## 5. Session flow
 
 ```mermaid

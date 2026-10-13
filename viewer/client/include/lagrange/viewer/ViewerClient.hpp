@@ -252,6 +252,174 @@ struct WiringInfo {
     [[nodiscard]] bool empty() const { return nodes.empty(); }
 };
 
+/// The environment the simulation uses, and the fields it can slice. Immutable once published.
+struct EnvironmentInfo {
+    struct EmiSource {
+        std::string name;
+        std::uint32_t prim{kNone};
+        double frequencyHz{0.0};
+        double currentA{0.0};
+        double powerW{0.0};
+        std::string detail;
+    };
+    struct Field {
+        std::string name;   ///< "emi/flux_density"
+        std::string label;  ///< "|B|"
+        std::string domain;
+        std::string unit;
+        std::uint32_t components{1};
+        bool available{false};
+        std::string unavailableReason;
+    };
+    std::string layer;
+    double localTimeHours{0.0};
+    double sunElevationDeg{0.0};
+    double ambientTemperatureK{0.0};
+    double rainMmPerH{0.0};
+    double fogVisibilityM{0.0};
+    double dustMgPerM3{0.0};
+    double surfaceWetness{0.0};
+    double windSpeed{0.0};
+    double windDirectionDeg{0.0};
+    double gustIntensity{0.0};
+    std::string windField;
+    std::vector<EmiSource> emiSources;
+    std::vector<Field> fields;
+    bool synthetic{false};
+};
+
+/// One horizontal slice of a field. Immutable.
+struct FieldSliceData {
+    std::int64_t simTimeNs{0};
+    std::uint32_t width{0};
+    std::uint32_t height{0};
+    std::uint32_t components{1};
+    double originX{0.0};  ///< Region frame, centre of cell (0, 0).
+    double originY{0.0};
+    double cellM{0.0};
+    double heightM{0.0};
+    float valueMin{0.0F};
+    float valueMax{0.0F};
+    std::vector<float> values;  ///< Row-major from cell (0, 0), `components` per cell.
+
+    /// The magnitude at a point of the region frame, by the nearest cell. NaN outside.
+    [[nodiscard]] float sample(double x, double y) const;
+};
+
+/// The slices of one field the viewer watches.
+class FieldStream {
+public:
+    explicit FieldStream(std::string name) : name_(std::move(name)) {}
+    [[nodiscard]] const std::string& name() const { return name_; }
+    [[nodiscard]] std::shared_ptr<const FieldSliceData> latest() const { return latest_.load(); }
+    [[nodiscard]] std::uint64_t slices() const { return slices_.load(); }
+    [[nodiscard]] std::uint64_t rejected() const { return rejected_.load(); }
+
+private:
+    friend class ViewerClient;
+    std::string name_;
+    std::atomic<std::shared_ptr<const FieldSliceData>> latest_;
+    std::atomic<std::uint64_t> slices_{0};
+    std::atomic<std::uint64_t> rejected_{0};
+};
+
+/// The ROS 2 graph as the simulator's bridge reports it. Immutable once published.
+struct RosGraphInfo {
+    struct Topic {
+        std::string name;
+        std::string type;
+        std::uint32_t publishers{0};
+        std::uint32_t subscribers{0};
+        double rateHz{0.0};
+        double bandwidthBps{0.0};
+        bool fromBridge{false};
+        std::string status;
+    };
+    struct Node {
+        std::string name;
+        std::vector<std::string> publishes;
+        std::vector<std::string> subscribes;
+        bool external{false};
+        std::string detail;
+    };
+    struct Joint {
+        std::string name;
+        std::string interface;
+        double command{0.0};
+        double state{0.0};
+        std::string unit;
+    };
+    struct Controller {
+        std::string name;
+        double rateHz{0.0};
+        std::string state;
+    };
+    std::vector<Topic> topics;
+    std::vector<Node> nodes;
+    std::string rmw;
+    std::string distro;
+    std::uint32_t domainId{0};
+    bool useSimTime{false};
+    std::string note;  ///< Not empty when no real bridge is behind this graph.
+    bool hasControl{false};
+    std::string hardware;
+    std::string plugin;
+    double controlRateHz{0.0};
+    bool controlActive{false};
+    std::vector<Joint> joints;
+    std::vector<Controller> controllers;
+};
+
+/// A large world: tiles, agents, floating origin, streaming. Immutable once published.
+struct WorldInfo {
+    struct Tile {
+        std::int32_t x{0};
+        std::int32_t y{0};
+        std::uint8_t lod{0};  ///< 0 physics and sensors .. 3 proxy.
+    };
+    struct Agent {
+        std::string name;
+        std::uint32_t prim{kNone};
+        std::string kind;
+        double x{0.0};  ///< World ENU, metres.
+        double y{0.0};
+        double speed{0.0};
+        std::string status;
+        double activeRadiusM{0.0};
+        bool focus{false};
+    };
+    struct Region {
+        std::string name;
+        double minX{0.0};
+        double minY{0.0};
+        double maxX{0.0};
+        double maxY{0.0};
+    };
+    static constexpr std::size_t kMaxTiles = 1'000'000;
+    std::int64_t simTimeNs{0};
+    bool georeferenced{false};
+    double latitudeDeg{0.0};
+    double longitudeDeg{0.0};
+    double heightM{0.0};
+    double tileSizeM{0.0};
+    std::uint64_t tilesGeneration{0};
+    std::vector<Tile> tiles;
+    std::vector<Agent> agents;
+    std::string anchor;
+    std::array<double, 3> origin{};
+    double recenterThresholdM{0.0};
+    std::int64_t lastRecenterNs{0};
+    std::uint64_t recenters{0};
+    std::uint64_t gpuMemoryBytes{0};
+    std::uint64_t gpuMemoryBudgetBytes{0};
+    std::uint64_t hostCacheBytes{0};
+    std::uint64_t hostCacheBudgetBytes{0};
+    double diskReadBytesPerS{0.0};
+    std::uint32_t loadQueue{0};
+    std::vector<Region> regions;
+    bool synthetic{false};
+};
+
 /// One thing that can stand in for a disabled domain.
 struct SubstituteOption {
     std::string token;  ///< What the profile says: "zero", "replay", ...
@@ -392,6 +560,22 @@ public:
         return recording_.load();
     }
 
+    // --- environment, ROS 2, world ----------------------------------------------------------
+    /// The environment, or nullptr before the server described it.
+    [[nodiscard]] std::shared_ptr<const EnvironmentInfo> environment() const {
+        return environment_.load();
+    }
+    /// Starts receiving slices of a field at a height. Asking again for the same field
+    /// returns the same stream (and moves the slice to the new height).
+    [[nodiscard]] std::shared_ptr<FieldStream> watchField(const std::string& name, double heightM);
+    /// Asks the server to send (or stop sending) its ROS graph and its world state. Both are
+    /// off until a panel that shows them asks. Remembered across reconnects.
+    void setRosGraphWanted(bool wanted);
+    void setWorldWanted(bool wanted);
+    /// The latest of each, or nullptr.
+    [[nodiscard]] std::shared_ptr<const RosGraphInfo> rosGraph() const { return rosGraph_.load(); }
+    [[nodiscard]] std::shared_ptr<const WorldInfo> world() const { return world_.load(); }
+
     // --- sensors ---------------------------------------------------------------------------
     /// Starts receiving the frames of a sensor, named by its prim path. Asking again for the
     /// same sensor returns the same stream. The subscription survives reconnects.
@@ -463,6 +647,19 @@ private:
     };
 
     void subscribeSensors();  // (re)sends the sensor subscriptions; worker thread
+    void handleFieldSlice(const v1::Envelope& envelope);
+    void sendFieldSubscription(const std::string& name, double heightM);
+    void sendViewRequests();  // ROS graph and world, as wanted
+    struct WatchedField {
+        std::shared_ptr<FieldStream> stream;
+        double heightM{0.0};
+    };
+    std::vector<WatchedField> fields_;  // guarded by sensorMutex_
+    std::atomic<bool> rosGraphWanted_{false};
+    std::atomic<bool> worldWanted_{false};
+    std::atomic<std::shared_ptr<const EnvironmentInfo>> environment_;
+    std::atomic<std::shared_ptr<const RosGraphInfo>> rosGraph_;
+    std::atomic<std::shared_ptr<const WorldInfo>> world_;
     void handleSensorFrame(const v1::Envelope& envelope);
     std::mutex sensorMutex_;  // guards the list below; held only to look a stream up
     std::vector<std::shared_ptr<SensorStream>> sensors_;

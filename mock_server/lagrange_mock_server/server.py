@@ -24,7 +24,7 @@ from lagrange.viewer.v1 import (
     signals_pb2,
 )
 
-from . import __version__, profile, sensors
+from . import __version__, environment, profile, sensors
 from .endpoint import Endpoint
 from .events import derive_events
 from .framing import DEFAULT_MAX_FRAME_SIZE, FrameError, FrameReader, encode_frame
@@ -38,6 +38,7 @@ TICK_SECONDS = 0.02  # 50 Hz: scene deltas and 20 ms signal blocks
 STATUS_EVERY_TICKS = 5  # 10 Hz
 STATS_PERIOD_S = 1.0
 LIDAR_PERIOD_NS = round(1e9 / sensors.LIDAR_RATE_HZ)
+FIELD_PERIOD_NS = round(1e9 / environment.SLICE_RATE_HZ)
 # A viewer that does not read gets its updates dropped beyond this much queued output.
 MAX_QUEUED_BYTES = 32 * 1024 * 1024
 MAX_LOG_RECORDS = 500
@@ -56,7 +57,11 @@ class _Session:
         self.dropped_deltas = 0
         self.dropped_blocks = 0
         self.bytes_out = 0  # since the last statistics message
-        self.sensors: set[str] = set()  # sensor names (prim paths) this viewer watches
+        self.sensors: set[str] = set()
+        self.fields: dict[str, float] = {}  # field name -> height of the slice wanted
+        self.ros_graph = False
+        self.world = False
+        self.world_tiles_sent = False  # sensor names (prim paths) this viewer watches
 
     def congested(self) -> bool:
         return self.writer.transport.get_write_buffer_size() > MAX_QUEUED_BYTES
@@ -84,6 +89,8 @@ class MockServer:
         self._tick_ms: list[float] = []  # wall time of each tick since the last statistics
         self._stats_at = time.monotonic()
         self._stats_sim_ns = 0
+        self._last_poses: dict[int, np.ndarray] = {}
+        self._last_field_ns = 0
         self._reset_profile()
         # What the console shows. Kept so that a viewer that connects later sees it too.
         self._logs: deque[session_pb2.LogRecord] = deque(maxlen=MAX_LOG_RECORDS)
@@ -238,12 +245,66 @@ class MockServer:
             info.messages += signal.sample_count
         return info
 
+    def _environment(self) -> session_pb2.EnvironmentState:
+        on = {name for name, d in self._profile_data["domains"].items() if d.get("enabled")}
+        return environment.environment_state(self.engine.recording, on)
+
     def _send_run_facts(self, session: _Session) -> None:
         session.send(envelope_pb2.Envelope(recording_info=self._recording_info()))
+        session.send(envelope_pb2.Envelope(environment=self._environment()))
+        session.world_tiles_sent = False
         events = envelope_pb2.Envelope()
         events.event_list.events.extend(self._events)
         events.event_list.complete = True  # a replay knows its whole recording
         session.send(events)
+
+    def _root_poses(self) -> dict[int, np.ndarray]:
+        poses = {}
+        for prim in self.engine.recording.snapshot.prims:
+            pose = self.engine.pose_of(prim.id, self.engine.sim_time_ns)
+            if pose is not None:
+                poses[prim.id] = pose
+        return poses
+
+    def _send_slow_views(self, elapsed: float) -> None:
+        """Once a second, to the viewers that asked: the ROS graph and the world."""
+        recording = self.engine.recording
+        time_ns = self.engine.sim_time_ns
+        poses = self._root_poses()
+        # Speed of each posed prim over the last period, from where it was then.
+        speeds = {}
+        for prim, pose in poses.items():
+            before = self._last_poses.get(prim)
+            if before is not None and elapsed > 0.0:
+                speeds[prim] = float(np.hypot(pose[0] - before[0], pose[1] - before[1])) / elapsed
+        self._last_poses = {prim: pose.copy() for prim, pose in poses.items()}
+        graph = None
+        for session in self._sessions:
+            if session.ros_graph:
+                if graph is None:
+                    graph = envelope_pb2.Envelope(
+                        ros_graph=environment.ros_graph(recording, time_ns, sensors.LIDAR_RATE_HZ)
+                    )
+                session.send(graph)
+            if session.world:
+                world = environment.world_state(
+                    recording, poses, speeds, time_ns, with_tiles=not session.world_tiles_sent
+                )
+                session.world_tiles_sent = True
+                session.send(envelope_pb2.Envelope(world=world))
+
+    def _emit_fields(self) -> None:
+        """Slices of the fields viewers watch, a few times a second of simulation time."""
+        recording = self.engine.recording
+        time_ns = self.engine.sim_time_ns
+        pose = next(iter(self._root_poses().values()), None)
+        for session in self._sessions:
+            height = session.fields.get(environment.FIELD_FLUX)
+            if height is None or session.congested():
+                continue
+            field = environment.flux_slice(recording, pose, time_ns, height)
+            if field is not None:
+                session.send(envelope_pb2.Envelope(field_slice=field))
 
     def _send_stats(self) -> None:
         """Once a second: what the server costs. Module costs are the profile's estimates."""
@@ -440,6 +501,17 @@ class MockServer:
                     session.sensors.add(command.subscribe_sensor.sensor)
                 else:
                     session.sensors.discard(command.subscribe_sensor.sensor)
+            elif kind == "subscribe_field":
+                request = command.subscribe_field
+                if request.enabled:
+                    session.fields[request.field] = request.height_m
+                else:
+                    session.fields.pop(request.field, None)
+            elif kind == "set_ros_graph":
+                session.ros_graph = command.set_ros_graph.enabled
+            elif kind == "set_world":
+                session.world = command.set_world.enabled
+                session.world_tiles_sent = False
             elif kind == "validate_profile":
                 result.command_result.validation.CopyFrom(
                     profile.check(command.validate_profile.yaml).to_proto()
@@ -473,8 +545,10 @@ class MockServer:
         session.send(result)
         if profile_changed:
             state = envelope_pb2.Envelope(profile_state=self._profile_state())
+            surroundings = envelope_pb2.Envelope(environment=self._environment())
             for other in self._sessions:
                 other.send(state)
+                other.send(surroundings)
         if resync:
             # A snapshot marks the discontinuity for every viewer, including ones that only
             # watch signals: sample indices restart from the new time after it.
@@ -553,9 +627,14 @@ class MockServer:
                 if since >= LIDAR_PERIOD_NS or since < 0:
                     self._last_lidar_ns = self.engine.sim_time_ns
                     self._emit_sensors()
+                since = self.engine.sim_time_ns - self._last_field_ns
+                if since >= FIELD_PERIOD_NS or since < 0:
+                    self._last_field_ns = self.engine.sim_time_ns
+                    self._emit_fields()
             self._tick_count += 1
             self._tick_ms.append((time.perf_counter() - started) * 1e3)
             if time.monotonic() - self._stats_at >= STATS_PERIOD_S:
+                self._send_slow_views(time.monotonic() - self._stats_at)
                 self._send_stats()
             if self._tick_count % STATUS_EVERY_TICKS == 0:
                 status = self._status()

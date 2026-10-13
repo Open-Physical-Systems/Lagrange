@@ -31,6 +31,8 @@ message Command {
     SubscribeSensor subscribe_sensor = 50;
     SetRosGraphEnabled set_ros_graph = 51;
     SetOverlays set_overlays = 52;
+    SubscribeField subscribe_field = 53;
+    SetWorldEnabled set_world = 54;
   }
 }
 
@@ -101,6 +103,16 @@ message SubscribeSensor {
   string sensor = 1;
   bool enabled = 2;
   double max_rate_hz = 3;
+}
+// Start or stop receiving slices of a field (EnvironmentState.Field.name).
+message SubscribeField {
+  string field = 1;
+  bool enabled = 2;
+  double height_m = 3; // z of the slice
+}
+// Start or stop receiving WorldState. Off by default: most stages are small.
+message SetWorldEnabled {
+  bool enabled = 1;
 }
 message SetRosGraphEnabled {
   bool enabled = 1;

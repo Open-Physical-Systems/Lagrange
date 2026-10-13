@@ -36,5 +36,8 @@ message Envelope {
     EventList event_list = 41;
     ServerStats server_stats = 42;
     RecordingInfo recording_info = 43;
+    EnvironmentState environment = 44;
+    FieldSlice field_slice = 45;
+    WorldState world = 46;
   }
 }
