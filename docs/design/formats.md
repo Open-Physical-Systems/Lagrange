@@ -1,0 +1,1376 @@
+# Formats
+
+Status: draft for review. Schema details are decided in `rfcs/0002-usd-schemas.md`; the profile
+format in `rfcs/0005-sim-profile-format.md`. This document expands CLAUDE.md §4, §11.1 and §11.3.
+
+## 1. One home per kind of data
+
+| Data | Format | Written by | Read by | Notes |
+|---|---|---|---|---|
+| Robot, world, component placement | OpenUSD (`.usda` in git, `.usdc` in bundles) | importers, users, viewer (session layer) | `core/stage/` | Never read in `step()` |
+| Rigid bodies, joints, colliders | UsdPhysics schemas | importers | `core/stage/` | Standard schema, not ours |
+| Electrical topology, thermal, aero, EMI, radiation, sensor materials | Custom applied API schemas (`schemas/`) | importers, users | `core/stage/` | Versioned (section 3) |
+| Component behaviour | FMU, FMI 3.0 co-simulation | `models/` (Modelica) or vendors | `modules/electrical/fmu_host/` | Referenced by `asset` attributes |
+| Volumetric fields | OpenVDB on disk, NanoVDB at runtime | offline tools (`io/fields/`) | field-sampling kernels | Referenced by `asset` attributes; unit in metadata |
+| Simulation profile | YAML, validated by `profiles/schema.json` | users, viewer domain panel | server, mock server | Section 5 |
+| Recordings | MCAP, Protobuf-encoded messages | `io/recording/` | replay substitutes, mock server, viewer | Section 7 |
+| Mesh import | glTF 2.0, OBJ, STL, DAE | — | `io/importers/` only | Never loaded at runtime |
+| Materials | UsdPreviewSurface (baseline); MaterialX (optional, later) | importers | viewer renderer, camera sensor | Section 8 |
+| Collision geometry | Convex hulls in USD (`UsdPhysicsMeshCollisionAPI`, approximation `convexDecomposition` baked to explicit hull prims) | `tools/collision_bake` | rigid-body backends | Never the render mesh |
+| UI↔server protocol | Protobuf (proto3) | server, mock server | viewer | `docs/design/protocol.md` |
+| Robot description import | URDF/xacro, SDFormat, MJCF | — | `io/importers/` → USD | Section 9 |
+| Roads, scenarios | OpenDRIVE, OpenSCENARIO | — | `io/opendrive/`, `io/openscenario/` | v0.6 |
+| Geospatial | OGC 3D Tiles, GeoTIFF/DEM, OSM | — | `io/geospatial/` → USD payload tiles | v0.7 |
+
+## 2. Schema conventions
+
+1. **Applied API schemas only.** Our schemas add properties to existing prims (`Xform`, joints,
+   `Mesh`, `Material`). No new concrete prim types, so files stay readable in any USD tool.
+2. **Namespaces.** `elec:`, `thermal:`, `aero:`, `emi:`, `rad:`, `sensmat:`, `sensor:`. One
+   namespace per schema library.
+3. **Units.** Every attribute is SI. Every attribute definition carries
+   `customData = { string "simcore:unit" = "<unit>" }`. `core/stage/` parses that string into a
+   `simcore::Unit` and exposes it to modules, so the schema is the single source of unit truth.
+4. **Types.** Physical parameters are `double`. The reference example in CLAUDE.md §11.3 uses
+   `float`; see open question F4 for the reason to change.
+5. **No hidden site constants.** Attributes whose value depends on the site (mains frequency,
+   ambient temperature, latitude) have **no fallback value**. A missing value is a load error.
+   This implements the CLAUDE.md §10 rule on scenario parameters.
+6. **Versioning.** Each schema is a family with an integer version suffix. This document writes
+   `ElectricalMotorAPI_1`. CLAUDE.md writes `ElectricalMotorAPI_v1`. OpenUSD's own versioning
+   convention is `<Family>_<N>` [Medium, from OpenUSD schema-versioning documentation knowledge;
+   TODO(verify) against the v26.08 `usdGenSchema` documentation]. Open question F3 recommends the
+   USD convention.
+7. **Codeless schemas.** Schemas are registered with `skipCodeGeneration = true`. `core/stage/`
+   reads attributes by name into SoA pools, so generated C++ classes are not needed. This removes
+   `schemas/generated/` C++ from the build (open question Q7).
+8. **Topology lives on the 3D prims.** Electrical ports and connections are relationships on the
+   component prims, so the schematic view and the 3D view are two projections of the same data
+   (CLAUDE.md §11.3).
+
+Library header used by every `schema.usda` below (shown once):
+
+```usda
+#usda 1.0
+(
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "simcoreElectrical"        # simcoreThermal, simcoreAero, ...
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+```
+
+## 3. Draft schemas
+
+Attribute tables give name, type, unit and fallback. "—" in the fallback column means the
+attribute is required when the schema is applied. `.usda` text follows each table.
+
+### 3.1 `schemas/electrical/schema.usda`
+
+**`PortAPI_1`** (multiple-apply, instance name = port name, e.g. `elec:port:dc_in`). An
+electrical terminal pair on a component.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `elec:port:<n>:kind` | token | — | `dc` | `dc`, `ac1`, `ac3`, `signal` |
+| `elec:port:<n>:nominalVoltage` | double | V | — | Rated voltage, used for sanity checks |
+| `elec:port:<n>:maxCurrent` | double | A | — | Continuous rating |
+| `elec:port:<n>:connectedTo` | rel | — | — | Target port(s) or bus prim. Defines the net |
+| `elec:port:<n>:wireResistance` | double | ohm | `0.0` | Lumped harness resistance to the net |
+| `elec:port:<n>:wireInductance` | double | H | `0.0` | Lumped harness inductance |
+
+**`BatteryAPI_1`** (single-apply). Equivalent-circuit model: open-circuit voltage curve, series
+resistance, two RC pairs, thermal dependence.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `elec:battery:chemistry` | token | — | `li_ion_nmc` | `li_ion_nmc`, `lfp`, `lead_acid`, `custom` |
+| `elec:battery:seriesCells` | int | 1 | — | Cells in series |
+| `elec:battery:parallelCells` | int | 1 | `1` | Cells in parallel |
+| `elec:battery:capacity` | double | C | — | Rated charge of the pack (1 Ah = 3600 C) |
+| `elec:battery:initialSoc` | double | 1 | `1.0` | 0…1 |
+| `elec:battery:ocvSoc` | double[] | 1 | — | SoC breakpoints, ascending |
+| `elec:battery:ocvVoltage` | double[] | V | — | Cell open-circuit voltage at each breakpoint |
+| `elec:battery:r0` | double | ohm | — | Cell series resistance at `referenceTemperature` |
+| `elec:battery:r1`, `c1` | double | ohm, F | `0.0` | First RC pair (per cell) |
+| `elec:battery:r2`, `c2` | double | ohm, F | `0.0` | Second RC pair (per cell) |
+| `elec:battery:referenceTemperature` | double | K | `298.15` | Temperature at which `r0` is given |
+| `elec:battery:r0TempCoeff` | double | 1/K | `0.0` | Fractional change of `r0` per kelvin |
+| `elec:battery:cutoffVoltage` | double | V | — | Pack under-voltage cut-off |
+| `elec:battery:maxChargeCurrent` | double | A | — | Regeneration limit; excess raises bus voltage |
+| `elec:battery:behaviorModel` | asset | — | none | Optional FMU that replaces the built-in ECM |
+
+**`ElectricalMotorAPI_1`** (single-apply, on the prim that represents the motor; `elec:joint`
+points at the driven joint).
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `elec:motorType` | token | — | `pmsm` | `pmsm`, `bldc`, `dc_brushed`, `induction` (later) |
+| `elec:windingResistance` | double | ohm | — | Phase (or armature) resistance at `referenceTemperature` |
+| `elec:inductance` | double | H | — | d-axis (or armature) inductance |
+| `elec:inductanceQ` | double | H | = `inductance` | q-axis inductance (salient machines) |
+| `elec:torqueConstant` | double | N·m/A | — | Torque per q-axis ampere (peak) |
+| `elec:backEmfConstant` | double | V·s/rad | = `torqueConstant` | Line-neutral peak per mechanical rad/s |
+| `elec:polePairs` | int | 1 | `1` | |
+| `elec:rotorInertia` | double | kg·m² | `0.0` | Added to the joint's armature inertia |
+| `elec:gearRatio` | double | 1 | `1.0` | Motor revolutions per joint revolution |
+| `elec:gearEfficiency` | double | 1 | `1.0` | 0…1 |
+| `elec:maxCurrent` | double | A | — | Drive current limit (peak) |
+| `elec:referenceTemperature` | double | K | `298.15` | |
+| `elec:resistanceTempCoeff` | double | 1/K | `0.00393` | Copper, per kelvin (source: standard value for annealed copper at 20 °C; cite in code) |
+| `elec:controlMode` | token | — | `torque` | `torque`, `velocity`, `voltage` — what the command signal means |
+| `elec:currentLoopBandwidth` | double | rad/s | `6283.0` | FOC current-loop bandwidth (1 kHz) |
+| `elec:pwmFrequency` | double | Hz | `20000.0` | Used for ripple estimate and EMI source spectrum |
+| `elec:rotorIntegration` | token | — | `mechanical` | `mechanical` or `electrical` (architecture §8) |
+| `elec:behaviorModel` | asset | — | none | Optional FMU that replaces the built-in model |
+| `elec:joint` | rel | — | — | Driven joint prim |
+| `elec:powerPort` | rel | — | — | Port or bus the drive draws from |
+
+```usda
+class "PortAPI_1" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "multipleApply"
+        token propertyNamespacePrefix = "elec:port"
+    }
+    doc = "An electrical terminal pair on a component. Instance name is the port name."
+)
+{
+    uniform token kind = "dc" ( allowedTokens = ["dc", "ac1", "ac3", "signal"] )
+    double nominalVoltage ( customData = { string "simcore:unit" = "V" } )
+    double maxCurrent ( customData = { string "simcore:unit" = "A" } )
+    rel connectedTo ( doc = "Ports or bus prims on the same net." )
+    double wireResistance = 0.0 ( customData = { string "simcore:unit" = "ohm" } )
+    double wireInductance = 0.0 ( customData = { string "simcore:unit" = "H" } )
+}
+
+class "BatteryAPI_1" (
+    inherits = </APISchemaBase>
+    customData = { token apiSchemaType = "singleApply" }
+    doc = "Battery pack, equivalent-circuit model with two RC pairs."
+)
+{
+    uniform token elec:battery:chemistry = "li_ion_nmc" (
+        allowedTokens = ["li_ion_nmc", "lfp", "lead_acid", "custom"] )
+    int elec:battery:seriesCells
+    int elec:battery:parallelCells = 1
+    double elec:battery:capacity ( customData = { string "simcore:unit" = "C" } )
+    double elec:battery:initialSoc = 1.0 ( customData = { string "simcore:unit" = "1" } )
+    double[] elec:battery:ocvSoc ( customData = { string "simcore:unit" = "1" } )
+    double[] elec:battery:ocvVoltage ( customData = { string "simcore:unit" = "V" } )
+    double elec:battery:r0 ( customData = { string "simcore:unit" = "ohm" } )
+    double elec:battery:r1 = 0.0 ( customData = { string "simcore:unit" = "ohm" } )
+    double elec:battery:c1 = 0.0 ( customData = { string "simcore:unit" = "F" } )
+    double elec:battery:r2 = 0.0 ( customData = { string "simcore:unit" = "ohm" } )
+    double elec:battery:c2 = 0.0 ( customData = { string "simcore:unit" = "F" } )
+    double elec:battery:referenceTemperature = 298.15 ( customData = { string "simcore:unit" = "K" } )
+    double elec:battery:r0TempCoeff = 0.0 ( customData = { string "simcore:unit" = "1/K" } )
+    double elec:battery:cutoffVoltage ( customData = { string "simcore:unit" = "V" } )
+    double elec:battery:maxChargeCurrent ( customData = { string "simcore:unit" = "A" } )
+    asset elec:battery:behaviorModel
+}
+
+class "ElectricalMotorAPI_1" (
+    inherits = </APISchemaBase>
+    customData = { token apiSchemaType = "singleApply" }
+    doc = "Electric motor with its drive (inverter + current control), averaged model."
+)
+{
+    uniform token elec:motorType = "pmsm" ( allowedTokens = ["pmsm", "bldc", "dc_brushed"] )
+    double elec:windingResistance ( customData = { string "simcore:unit" = "ohm" } )
+    double elec:inductance ( customData = { string "simcore:unit" = "H" } )
+    double elec:inductanceQ ( customData = { string "simcore:unit" = "H" } )
+    double elec:torqueConstant ( customData = { string "simcore:unit" = "N.m/A" } )
+    double elec:backEmfConstant ( customData = { string "simcore:unit" = "V.s/rad" } )
+    int elec:polePairs = 1
+    double elec:rotorInertia = 0.0 ( customData = { string "simcore:unit" = "kg.m2" } )
+    double elec:gearRatio = 1.0 ( customData = { string "simcore:unit" = "1" } )
+    double elec:gearEfficiency = 1.0 ( customData = { string "simcore:unit" = "1" } )
+    double elec:maxCurrent ( customData = { string "simcore:unit" = "A" } )
+    double elec:referenceTemperature = 298.15 ( customData = { string "simcore:unit" = "K" } )
+    double elec:resistanceTempCoeff = 0.00393 ( customData = { string "simcore:unit" = "1/K" } )
+    uniform token elec:controlMode = "torque" ( allowedTokens = ["torque", "velocity", "voltage"] )
+    double elec:currentLoopBandwidth = 6283.0 ( customData = { string "simcore:unit" = "rad/s" } )
+    double elec:pwmFrequency = 20000.0 ( customData = { string "simcore:unit" = "Hz" } )
+    uniform token elec:rotorIntegration = "mechanical" ( allowedTokens = ["mechanical", "electrical"] )
+    asset elec:behaviorModel
+    rel elec:joint
+    rel elec:powerPort
+}
+```
+
+Proposed additions, not in the CLAUDE.md list, needed to describe a real DC bus (RFC 0002,
+unresolved question 1):
+
+| Schema | Purpose | Key attributes |
+|---|---|---|
+| `ElectricalBusAPI_1` | A named net with capacitance; brownout thresholds | `elec:bus:capacitance` (F), `elec:bus:undervoltageTrip` (V), `elec:bus:overvoltageTrip` (V), `elec:bus:brakeResistor` (ohm, 0 = none) |
+| `ElectricalLoadAPI_1` | Constant-power or resistive load (computer, lidar, heater) | `elec:load:model` (`constant_power`, `resistive`, `signal`), `elec:load:power` (W), `elec:load:minVoltage` (V), `elec:powerPort` |
+| `ElectricalConverterAPI_1` | DC-DC converter between two ports | `elec:conv:outputVoltage` (V), `elec:conv:efficiency` (1), `elec:conv:maxOutputCurrent` (A) |
+
+### 3.2 `schemas/thermal/schema.usda`
+
+**`ThermalAPI_1`** (single-apply): one lumped thermal node.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `thermal:heatCapacity` | double | J/K | — | Lumped capacity of the node |
+| `thermal:initialTemperature` | double | K | none | If absent, the profile's ambient temperature |
+| `thermal:convectionArea` | double | m² | `0.0` | Area exchanging with air |
+| `thermal:convectionCoeff` | double | W/(m²·K) | `10.0` | Still-air natural convection; forced convection scales with airspeed |
+| `thermal:forcedConvectionExponent` | double | 1 | `0.8` | `h = h0·(1 + v/v_ref)^n` |
+| `thermal:emissivity` | double | 1 | `0.9` | For radiative exchange with sky/ambient |
+| `thermal:radiativeArea` | double | m² | `0.0` | |
+| `thermal:solarAbsorptivity` | double | 1 | `0.7` | Fraction of irradiance absorbed |
+| `thermal:solarArea` | double | m² | `0.0` | Projected area for irradiance |
+| `thermal:maxTemperature` | double | K | none | Fault / shutdown threshold |
+| `thermal:deratingStart` | double | K | none | Above this, the owning component derates linearly to zero at `maxTemperature` |
+
+**`ThermalLinkAPI_1`** (multiple-apply, proposed addition): a conductance to another node.
+
+| Attribute | Type | Unit | Fallback |
+|---|---|---|---|
+| `thermal:link:<n>:conductance` | double | W/K | — |
+| `thermal:link:<n>:target` | rel | — | — |
+
+```usda
+class "ThermalAPI_1" (
+    inherits = </APISchemaBase>
+    customData = { token apiSchemaType = "singleApply" }
+    doc = "One lumped thermal node."
+)
+{
+    double thermal:heatCapacity ( customData = { string "simcore:unit" = "J/K" } )
+    double thermal:initialTemperature ( customData = { string "simcore:unit" = "K" } )
+    double thermal:convectionArea = 0.0 ( customData = { string "simcore:unit" = "m2" } )
+    double thermal:convectionCoeff = 10.0 ( customData = { string "simcore:unit" = "W/(m2.K)" } )
+    double thermal:forcedConvectionExponent = 0.8 ( customData = { string "simcore:unit" = "1" } )
+    double thermal:emissivity = 0.9 ( customData = { string "simcore:unit" = "1" } )
+    double thermal:radiativeArea = 0.0 ( customData = { string "simcore:unit" = "m2" } )
+    double thermal:solarAbsorptivity = 0.7 ( customData = { string "simcore:unit" = "1" } )
+    double thermal:solarArea = 0.0 ( customData = { string "simcore:unit" = "m2" } )
+    double thermal:maxTemperature ( customData = { string "simcore:unit" = "K" } )
+    double thermal:deratingStart ( customData = { string "simcore:unit" = "K" } )
+}
+
+class "ThermalLinkAPI_1" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "multipleApply"
+        token propertyNamespacePrefix = "thermal:link"
+    }
+)
+{
+    double conductance ( customData = { string "simcore:unit" = "W/K" } )
+    rel target
+}
+```
+
+### 3.3 `schemas/aero/schema.usda`
+
+**`AeroAPI_1`** (single-apply, on a rigid-body link).
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `aero:model` | token | — | `drag_box` | `drag_box`, `drag_lift_table`, `none` |
+| `aero:referenceArea` | double[3] | m² | — | Projected areas along body x, y, z |
+| `aero:dragCoeff` | double[3] | 1 | `(1.0, 1.0, 1.0)` | Per-axis drag coefficient |
+| `aero:centerOfPressure` | double[3] | m | `(0, 0, 0)` | In body frame |
+| `aero:liftSlope` | double | 1/rad | `0.0` | For `drag_lift_table` without a table |
+| `aero:coeffTable` | asset | — | none | CSV: angle of attack (rad), CL, CD, CM |
+| `aero:angularDamping` | double[3] | N·m·s/rad | `(0, 0, 0)` | |
+
+**`RotorAPI_1`** (proposed addition, on the rotor joint prim; used by `modules/rotor_aero/`).
+
+| Attribute | Type | Unit | Fallback |
+|---|---|---|---|
+| `aero:rotor:radius` | double | m | — |
+| `aero:rotor:bladeCount` | int | 1 | — |
+| `aero:rotor:thrustCoeff` | double | 1 | — (`T = CT·ρ·n²·D⁴`, `n` in rev/s) |
+| `aero:rotor:powerCoeff` | double | 1 | — |
+| `aero:rotor:direction` | token | — | — (`cw`, `ccw`) |
+| `aero:rotor:bladeTable` | asset | — | none (chord/twist vs radius, for BEM fidelity) |
+
+```usda
+class "AeroAPI_1" (
+    inherits = </APISchemaBase>
+    customData = { token apiSchemaType = "singleApply" }
+)
+{
+    uniform token aero:model = "drag_box" ( allowedTokens = ["drag_box", "drag_lift_table", "none"] )
+    double3 aero:referenceArea ( customData = { string "simcore:unit" = "m2" } )
+    double3 aero:dragCoeff = (1.0, 1.0, 1.0) ( customData = { string "simcore:unit" = "1" } )
+    double3 aero:centerOfPressure = (0, 0, 0) ( customData = { string "simcore:unit" = "m" } )
+    double aero:liftSlope = 0.0 ( customData = { string "simcore:unit" = "1/rad" } )
+    asset aero:coeffTable
+    double3 aero:angularDamping = (0, 0, 0) ( customData = { string "simcore:unit" = "N.m.s/rad" } )
+}
+
+class "RotorAPI_1" (
+    inherits = </APISchemaBase>
+    customData = { token apiSchemaType = "singleApply" }
+)
+{
+    double aero:rotor:radius ( customData = { string "simcore:unit" = "m" } )
+    int aero:rotor:bladeCount
+    double aero:rotor:thrustCoeff ( customData = { string "simcore:unit" = "1" } )
+    double aero:rotor:powerCoeff ( customData = { string "simcore:unit" = "1" } )
+    uniform token aero:rotor:direction ( allowedTokens = ["cw", "ccw"] )
+    asset aero:rotor:bladeTable
+}
+```
+
+### 3.4 `schemas/weather/schema.usda`
+
+Weather is authored on one environment prim (the `environment:` file of a profile).
+
+**`WeatherAPI_1`** (single-apply, proposed; CLAUDE.md lists the `weather/` directory but no
+schema name).
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `weather:ambientTemperature` | double | K | — | Site parameter, no fallback |
+| `weather:pressure` | double | Pa | — | Site parameter |
+| `weather:relativeHumidity` | double | 1 | — | 0…1 |
+| `weather:meanWind` | double3 | m/s | `(0, 0, 0)` | ENU, at `windReferenceHeight` |
+| `weather:windReferenceHeight` | double | m | `10.0` | |
+| `weather:turbulenceModel` | token | — | `none` | `none`, `dryden`, `von_karman` |
+| `weather:turbulenceIntensity` | double | 1 | `0.0` | σ / mean wind |
+| `weather:windField` | asset | — | none | NanoVDB vector grid (m/s), overrides `meanWind` inside its bounds |
+| `weather:visibility` | double | m | none | Meteorological optical range; sets fog extinction through Koschmieder (`σ = 3.912 / V`) |
+| `weather:fogField` | asset | — | none | NanoVDB scalar grid of extinction (1/m) |
+| `weather:rainRate` | double | m/s | `0.0` | Rain intensity (1 mm/h = 2.778e-7 m/s) |
+| `weather:dustConcentration` | double | kg/m³ | `0.0` | |
+| `weather:dustMedianDiameter` | double | m | `1.0e-5` | |
+| `weather:solarIrradiance` | double | W/m² | `0.0` | Direct normal |
+| `weather:sunDirection` | double3 | 1 | `(0, 0, 1)` | Unit vector to the sun, ENU |
+| `weather:skyTemperature` | double | K | none | For radiative exchange; defaults to ambient |
+
+```usda
+class "WeatherAPI_1" (
+    inherits = </APISchemaBase>
+    customData = { token apiSchemaType = "singleApply" }
+)
+{
+    double weather:ambientTemperature ( customData = { string "simcore:unit" = "K" } )
+    double weather:pressure ( customData = { string "simcore:unit" = "Pa" } )
+    double weather:relativeHumidity ( customData = { string "simcore:unit" = "1" } )
+    double3 weather:meanWind = (0, 0, 0) ( customData = { string "simcore:unit" = "m/s" } )
+    double weather:windReferenceHeight = 10.0 ( customData = { string "simcore:unit" = "m" } )
+    uniform token weather:turbulenceModel = "none" ( allowedTokens = ["none", "dryden", "von_karman"] )
+    double weather:turbulenceIntensity = 0.0 ( customData = { string "simcore:unit" = "1" } )
+    asset weather:windField
+    double weather:visibility ( customData = { string "simcore:unit" = "m" } )
+    asset weather:fogField
+    double weather:rainRate = 0.0 ( customData = { string "simcore:unit" = "m/s" } )
+    double weather:dustConcentration = 0.0 ( customData = { string "simcore:unit" = "kg/m3" } )
+    double weather:dustMedianDiameter = 0.00001 ( customData = { string "simcore:unit" = "m" } )
+    double weather:solarIrradiance = 0.0 ( customData = { string "simcore:unit" = "W/m2" } )
+    double3 weather:sunDirection = (0, 0, 1) ( customData = { string "simcore:unit" = "1" } )
+    double weather:skyTemperature ( customData = { string "simcore:unit" = "K" } )
+}
+```
+
+### 3.5 `schemas/emi/schema.usda`
+
+**`EmiSourceAPI_1`** (single-apply).
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `emi:sourceType` | token | — | — | `power_line`, `motor_drive`, `transmitter`, `welder`, `custom` |
+| `emi:frequency` | double | Hz | — | Fundamental. **No fallback** (site parameter: 50 or 60 Hz mains) |
+| `emi:current` | double | A | none | RMS current for `power_line`, `welder` |
+| `emi:radiatedPower` | double | W | none | For `transmitter` (EIRP) |
+| `emi:harmonics` | double[] | 1 | `[]` | Relative amplitude of harmonics 2, 3, … |
+| `emi:dutyCycle` | double | 1 | `1.0` | For intermittent sources (welders) |
+| `emi:bandwidth` | double | Hz | `0.0` | Occupied bandwidth for `transmitter` |
+| `emi:fieldMap` | asset | — | none | NanoVDB vector grid of B (T) or E (V/m), at `emi:current` or `emi:radiatedPower` |
+| `emi:fieldMapQuantity` | token | — | `B` | `B` or `E` |
+| `emi:drivenBy` | rel | — | none | Signal-producing prim (a motor) whose current scales the source at runtime |
+
+**`EmiSusceptibilityAPI_1`** (single-apply, on a sensor, bus or radio prim). These are the
+per-robot calibration parameters.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `emi:victimType` | token | — | — | `magnetometer`, `imu_adc`, `encoder`, `can_bus`, `radio` |
+| `emi:magneticGain` | double | 1 | `1.0` | Magnetometer: fraction of ambient AC field that appears in the reading |
+| `emi:adcNoisePerField` | double | V/(V/m) | `0.0` | IMU/ADC: added noise RMS per unit E-field |
+| `emi:encoderGlitchField` | double | V/m | none | Field level at which the glitch probability is 50 % per edge |
+| `emi:canErrorField` | double | V/m | none | Field level at which the bit-error rate reaches `canErrorRateAtField` |
+| `emi:canErrorRateAtField` | double | 1 | `1.0e-5` | |
+| `emi:receiverNoiseFigure` | double | 1 | `1.0` | Radio: linear noise figure |
+| `emi:couplingLoopArea` | double | m² | `0.0` | Effective loop area of the harness for induced voltage `V = ω·B·A` |
+| `emi:shieldingEffectiveness` | double | 1 | `1.0` | Linear field attenuation factor ≥ 1 |
+
+```usda
+class "EmiSourceAPI_1" (
+    inherits = </APISchemaBase>
+    customData = { token apiSchemaType = "singleApply" }
+)
+{
+    uniform token emi:sourceType (
+        allowedTokens = ["power_line", "motor_drive", "transmitter", "welder", "custom"] )
+    double emi:frequency ( customData = { string "simcore:unit" = "Hz" }
+        doc = "Site parameter. No fallback: 50 Hz and 60 Hz grids both exist." )
+    double emi:current ( customData = { string "simcore:unit" = "A" } )
+    double emi:radiatedPower ( customData = { string "simcore:unit" = "W" } )
+    double[] emi:harmonics = [] ( customData = { string "simcore:unit" = "1" } )
+    double emi:dutyCycle = 1.0 ( customData = { string "simcore:unit" = "1" } )
+    double emi:bandwidth = 0.0 ( customData = { string "simcore:unit" = "Hz" } )
+    asset emi:fieldMap
+    uniform token emi:fieldMapQuantity = "B" ( allowedTokens = ["B", "E"] )
+    rel emi:drivenBy
+}
+
+class "EmiSusceptibilityAPI_1" (
+    inherits = </APISchemaBase>
+    customData = { token apiSchemaType = "singleApply" }
+)
+{
+    uniform token emi:victimType (
+        allowedTokens = ["magnetometer", "imu_adc", "encoder", "can_bus", "radio"] )
+    double emi:magneticGain = 1.0 ( customData = { string "simcore:unit" = "1" } )
+    double emi:adcNoisePerField = 0.0 ( customData = { string "simcore:unit" = "V/(V/m)" } )
+    double emi:encoderGlitchField ( customData = { string "simcore:unit" = "V/m" } )
+    double emi:canErrorField ( customData = { string "simcore:unit" = "V/m" } )
+    double emi:canErrorRateAtField = 0.00001 ( customData = { string "simcore:unit" = "1" } )
+    double emi:receiverNoiseFigure = 1.0 ( customData = { string "simcore:unit" = "1" } )
+    double emi:couplingLoopArea = 0.0 ( customData = { string "simcore:unit" = "m2" } )
+    double emi:shieldingEffectiveness = 1.0 ( customData = { string "simcore:unit" = "1" } )
+}
+```
+
+### 3.6 `schemas/radiation/schema.usda`
+
+**`RadiationAPI_1`** (single-apply). One schema with a `rad:role` token, because the same prim is
+rarely both a source and a victim and the attribute sets are small.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `rad:role` | token | — | — | `source`, `victim`, `shield` |
+| `rad:sourceType` | token | — | none | `point_gamma`, `field_map` |
+| `rad:activity` | double | Bq | none | Point source activity |
+| `rad:gammaEnergy` | double | J | none | Mean photon energy (1 MeV = 1.602e-13 J) |
+| `rad:doseRateAt1m` | double | Gy/s | none | Alternative to activity + energy |
+| `rad:doseField` | asset | — | none | NanoVDB scalar grid of dose rate (Gy/s), e.g. from Geant4 offline |
+| `rad:attenuationCoeff` | double | 1/m | none | Shield: linear attenuation at the source energy |
+| `rad:buildupFactor` | double | 1 | `1.0` | Shield: simple build-up correction |
+| `rad:totalDoseLimit` | double | Gy | none | Victim: failure threshold |
+| `rad:seuCrossSection` | double | m² | `0.0` | Victim: single-event-upset cross-section per bit |
+| `rad:sensitiveBits` | int | 1 | `0` | Victim: number of bits exposed to SEU |
+| `rad:fluenceToDose` | double | Gy·m² | none | Victim: conversion used for SEU rate from dose rate |
+
+```usda
+class "RadiationAPI_1" (
+    inherits = </APISchemaBase>
+    customData = { token apiSchemaType = "singleApply" }
+)
+{
+    uniform token rad:role ( allowedTokens = ["source", "victim", "shield"] )
+    uniform token rad:sourceType ( allowedTokens = ["point_gamma", "field_map"] )
+    double rad:activity ( customData = { string "simcore:unit" = "Bq" } )
+    double rad:gammaEnergy ( customData = { string "simcore:unit" = "J" } )
+    double rad:doseRateAt1m ( customData = { string "simcore:unit" = "Gy/s" } )
+    asset rad:doseField
+    double rad:attenuationCoeff ( customData = { string "simcore:unit" = "1/m" } )
+    double rad:buildupFactor = 1.0 ( customData = { string "simcore:unit" = "1" } )
+    double rad:totalDoseLimit ( customData = { string "simcore:unit" = "Gy" } )
+    double rad:seuCrossSection = 0.0 ( customData = { string "simcore:unit" = "m2" } )
+    int rad:sensitiveBits = 0
+    double rad:fluenceToDose ( customData = { string "simcore:unit" = "Gy.m2" } )
+}
+```
+
+### 3.7 `schemas/sensor_material/schema.usda`
+
+**`SensorMaterialAPI_1`** (single-apply, on a `Material` prim). Non-visual surface properties.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `sensmat:reflectivity905` | double | 1 | `0.5` | Diffuse reflectivity at 905 nm |
+| `sensmat:reflectivity1550` | double | 1 | `0.5` | Diffuse reflectivity at 1550 nm |
+| `sensmat:retroreflective` | bool | — | `false` | Road signs, safety vests |
+| `sensmat:specularFraction905` | double | 1 | `0.0` | Fraction of return that is specular |
+| `sensmat:transmission905` | double | 1 | `0.0` | Glass: fraction transmitted |
+| `sensmat:radarCrossSectionDensity` | double | 1 | `0.1` | RCS per unit projected area (m²/m²) at 77 GHz |
+| `sensmat:radarRoughness` | double | m | `0.001` | RMS surface roughness |
+| `sensmat:relativePermittivity` | double | 1 | `1.0` | |
+| `sensmat:conductivity` | double | S/m | `0.0` | Electrical conductivity |
+| `sensmat:relativePermeability` | double | 1 | `1.0` | Magnetic permeability relative to vacuum |
+| `sensmat:thermalEmissivity` | double | 1 | `0.9` | Long-wave IR emissivity (thermal cameras) |
+| `sensmat:frictionWetScale` | double | 1 | `0.7` | Multiplier on friction when wet (weather coupling) |
+
+```usda
+class "SensorMaterialAPI_1" (
+    inherits = </APISchemaBase>
+    customData = { token apiSchemaType = "singleApply" }
+)
+{
+    double sensmat:reflectivity905 = 0.5 ( customData = { string "simcore:unit" = "1" } )
+    double sensmat:reflectivity1550 = 0.5 ( customData = { string "simcore:unit" = "1" } )
+    bool sensmat:retroreflective = false
+    double sensmat:specularFraction905 = 0.0 ( customData = { string "simcore:unit" = "1" } )
+    double sensmat:transmission905 = 0.0 ( customData = { string "simcore:unit" = "1" } )
+    double sensmat:radarCrossSectionDensity = 0.1 ( customData = { string "simcore:unit" = "1" } )
+    double sensmat:radarRoughness = 0.001 ( customData = { string "simcore:unit" = "m" } )
+    double sensmat:relativePermittivity = 1.0 ( customData = { string "simcore:unit" = "1" } )
+    double sensmat:conductivity = 0.0 ( customData = { string "simcore:unit" = "S/m" } )
+    double sensmat:relativePermeability = 1.0 ( customData = { string "simcore:unit" = "1" } )
+    double sensmat:thermalEmissivity = 0.9 ( customData = { string "simcore:unit" = "1" } )
+    double sensmat:frictionWetScale = 0.7 ( customData = { string "simcore:unit" = "1" } )
+}
+```
+
+The fallback values above are placeholders so that untagged assets still produce returns. They
+are not measured data. Realistic values per material class ship in a library file
+`assets/materials/sensor_materials.usda`, each entry with its source (risk R12).
+
+### 3.8 `schemas/sensor/schema.usda` (proposed addition)
+
+Sensors need schemas that CLAUDE.md does not list. USD has `UsdGeomCamera` for camera intrinsics;
+the rest is ours. Draft attribute sets (full `.usda` text is written in RFC 0002 once the list is
+agreed):
+
+| Schema | Attributes (unit, fallback) |
+|---|---|
+| `SensorAPI_1` (common) | `sensor:rate` (Hz, —), `sensor:latency` (s, 0), `sensor:jitter` (s, 0), `sensor:frameId` (string, prim name), `sensor:topic` (string, derived), `sensor:powerPort` (rel, none) |
+| `LidarAPI_1` | `sensor:lidar:wavelength` (m, 9.05e-7), `channels` (int, —), `horizontalSamples` (int, —), `verticalFov` (rad[2], —), `horizontalFov` (rad[2], (−π, π)), `rangeMin`/`rangeMax` (m, —), `rangeNoiseStd` (m, 0.02), `beamDivergence` (rad, 0.003), `returnMode` (token: `strongest`, `last`, `dual`), `scanPattern` (token: `rotating`, `solid_state`, `custom`), `rotationRate` (Hz, = rate), `motionDistortion` (bool, true) |
+| `CameraSensorAPI_1` | on a `UsdGeomCamera`: `sensor:camera:width`/`height` (int, —), `shutter` (token: `global`, `rolling`), `rollingShutterTime` (s, 0), `exposureTime` (s, —), `autoExposure` (bool, false), `gain` (1, 1), `readNoiseStd` (electrons, 2), `fullWellCapacity` (electrons, 10000), `bitDepth` (int, 8), `distortionModel` (token: `none`, `plumb_bob`, `equidistant`), `distortionCoeffs` (double[], []) |
+| `RadarAPI_1` | `sensor:radar:carrierFrequency` (Hz, 7.7e10), `bandwidth` (Hz, —), `rangeMax` (m, —), `azimuthFov`/`elevationFov` (rad, —), `rangeResolution` (m, derived), `velocityResolution` (m/s, —), `txPower` (W, —), `noiseFloor` (W, —) |
+| `ImuAPI_1` | `sensor:imu:accelNoiseDensity` (m/s²/√Hz, —), `accelBiasInstability` (m/s², —), `accelRandomWalk` (m/s³/√Hz, —), `gyroNoiseDensity` (rad/s/√Hz, —), `gyroBiasInstability` (rad/s, —), `gyroRandomWalk` (rad/s²/√Hz, —), `accelRange` (m/s², —), `gyroRange` (rad/s, —) |
+| `GnssAPI_1` | `sensor:gnss:horizontalStd` (m, —), `verticalStd` (m, —), `velocityStd` (m/s, —), `multipathModel` (token: `none`, `urban`), `minElevation` (rad, 0.17) |
+| `MagnetometerAPI_1` | `sensor:mag:noiseStd` (T, —), `hardIron` (T[3], 0), `softIron` (double[9], identity), `earthFieldModel` (token: `constant`, `wmm`), `earthField` (T[3], — when `constant`; site parameter, no fallback) |
+
+## 4. Sample robot: differential-drive AMR
+
+`assets/robots/amr_diffdrive/amr_diffdrive.usda`. Geometry is primitive shapes so that the file
+stays tiny and has no external meshes.
+
+```usda
+#usda 1.0
+(
+    defaultPrim = "amr"
+    metersPerUnit = 1
+    upAxis = "Z"
+    kilogramsPerUnit = 1
+    doc = "Sample differential-drive AMR for simcore. Parameters are illustrative, not a real product."
+)
+
+def Xform "amr" (
+    prepend apiSchemas = ["PhysicsArticulationRootAPI"]
+    kind = "component"
+)
+{
+    def Xform "base_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "AeroAPI_1", "ThermalAPI_1"]
+    )
+    {
+        float physics:mass = 38.0                       # kg
+        point3f physics:centerOfMass = (0, 0, 0.12)     # m
+        double3 aero:referenceArea = (0.18, 0.24, 0.30) # m², faces along x, y, z
+        double3 aero:dragCoeff = (1.05, 1.05, 1.05)
+        double thermal:heatCapacity = 9000.0            # J/K, chassis
+        double thermal:convectionArea = 0.9             # m²
+        double3 xformOp:translate = (0, 0, 0.10)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        def Cube "visual" { double size = 1 float3 xformOp:scale = (0.60, 0.44, 0.20)
+                            uniform token[] xformOpOrder = ["xformOp:scale"]
+                            rel material:binding = </amr/materials/painted_steel> }
+        def Cube "collision" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
+        {
+            double size = 1
+            float3 xformOp:scale = (0.60, 0.44, 0.20)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            uniform token purpose = "guide"
+        }
+    }
+
+    def Xform "left_wheel" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 1.4
+        double3 xformOp:translate = (0, 0.25, 0.08)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
+        { double radius = 0.08 double height = 0.04 uniform token axis = "Y"
+          rel material:binding:physics = </amr/materials/rubber> }
+    }
+
+    def Xform "right_wheel" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 1.4
+        double3 xformOp:translate = (0, -0.25, 0.08)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
+        { double radius = 0.08 double height = 0.04 uniform token axis = "Y"
+          rel material:binding:physics = </amr/materials/rubber> }
+    }
+
+    def Xform "caster" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 0.3
+        double3 xformOp:translate = (-0.24, 0, 0.03)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Sphere "collision" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
+        { double radius = 0.03 rel material:binding:physics = </amr/materials/low_friction> }
+    }
+
+    def Scope "joints"
+    {
+        def PhysicsRevoluteJoint "left_wheel_joint" ( prepend apiSchemas = ["PhysicsDriveAPI:angular"] )
+        {
+            rel physics:body0 = </amr/base_link>
+            rel physics:body1 = </amr/left_wheel>
+            uniform token physics:axis = "Y"
+            point3f physics:localPos0 = (0, 0.25, -0.02)
+        }
+        def PhysicsRevoluteJoint "right_wheel_joint" ( prepend apiSchemas = ["PhysicsDriveAPI:angular"] )
+        {
+            rel physics:body0 = </amr/base_link>
+            rel physics:body1 = </amr/right_wheel>
+            uniform token physics:axis = "Y"
+            point3f physics:localPos0 = (0, -0.25, -0.02)
+        }
+        def PhysicsSphericalJoint "caster_joint"
+        {
+            rel physics:body0 = </amr/base_link>
+            rel physics:body1 = </amr/caster>
+            point3f physics:localPos0 = (-0.24, 0, -0.07)
+        }
+    }
+
+    def Scope "power"
+    {
+        def Xform "battery" (
+            prepend apiSchemas = ["BatteryAPI_1", "ThermalAPI_1", "PortAPI_1:dc_out"]
+        )
+        {
+            uniform token elec:battery:chemistry = "lfp"
+            int elec:battery:seriesCells = 16
+            int elec:battery:parallelCells = 2
+            double elec:battery:capacity = 144000.0          # C (40 Ah)
+            double[] elec:battery:ocvSoc = [0.0, 0.1, 0.5, 0.9, 1.0]
+            double[] elec:battery:ocvVoltage = [2.80, 3.20, 3.28, 3.33, 3.45]   # V per cell
+            double elec:battery:r0 = 0.0015                  # ohm per cell
+            double elec:battery:r1 = 0.0008
+            double elec:battery:c1 = 12000.0
+            double elec:battery:cutoffVoltage = 44.8         # V
+            double elec:battery:maxChargeCurrent = 20.0      # A
+            double thermal:heatCapacity = 14000.0            # J/K
+            double elec:port:dc_out:nominalVoltage = 51.2    # V
+            double elec:port:dc_out:maxCurrent = 80.0        # A
+            rel elec:port:dc_out:connectedTo = </amr/power/dc_48v>
+            rel thermal:link:chassis:target = </amr/base_link>
+            double thermal:link:chassis:conductance = 2.5    # W/K
+        }
+
+        def Xform "dc_48v" ( prepend apiSchemas = ["ElectricalBusAPI_1"] )
+        {
+            double elec:bus:capacitance = 0.0047             # F
+            double elec:bus:undervoltageTrip = 42.0          # V
+            double elec:bus:overvoltageTrip = 60.0           # V
+        }
+
+        def Xform "computer" ( prepend apiSchemas = ["ElectricalLoadAPI_1"] )
+        {
+            uniform token elec:load:model = "constant_power"
+            double elec:load:power = 45.0                    # W
+            double elec:load:minVoltage = 36.0               # V
+            rel elec:powerPort = </amr/power/dc_48v>
+        }
+    }
+
+    def Xform "left_drive_motor" (
+        prepend apiSchemas = ["ElectricalMotorAPI_1", "ThermalAPI_1", "EmiSusceptibilityAPI_1", "EmiSourceAPI_1"]
+    )
+    {
+        double elec:windingResistance = 0.12       # ohm @ 25 °C
+        double elec:torqueConstant = 0.085         # N·m/A
+        double elec:inductance = 0.00031           # H
+        int elec:polePairs = 4
+        double elec:rotorInertia = 0.00012         # kg·m²
+        double elec:gearRatio = 20.0
+        double elec:gearEfficiency = 0.92
+        double elec:maxCurrent = 30.0              # A
+        rel elec:joint = </amr/joints/left_wheel_joint>
+        rel elec:powerPort = </amr/power/dc_48v>
+        double thermal:heatCapacity = 450.0        # J/K
+        double thermal:convectionArea = 0.03       # m²
+        double thermal:deratingStart = 373.15      # K
+        double thermal:maxTemperature = 403.15     # K
+        uniform token emi:victimType = "encoder"
+        double emi:encoderGlitchField = 200.0      # V/m
+        uniform token emi:sourceType = "motor_drive"
+        double emi:frequency = 20000.0             # Hz, the drive's PWM frequency (a component property)
+        rel emi:drivenBy = </amr/left_drive_motor>
+    }
+
+    def Xform "right_drive_motor" (
+        prepend apiSchemas = ["ElectricalMotorAPI_1", "ThermalAPI_1", "EmiSusceptibilityAPI_1"]
+    )
+    {
+        double elec:windingResistance = 0.12
+        double elec:torqueConstant = 0.085
+        double elec:inductance = 0.00031
+        int elec:polePairs = 4
+        double elec:rotorInertia = 0.00012
+        double elec:gearRatio = 20.0
+        double elec:gearEfficiency = 0.92
+        double elec:maxCurrent = 30.0
+        rel elec:joint = </amr/joints/right_wheel_joint>
+        rel elec:powerPort = </amr/power/dc_48v>
+        double thermal:heatCapacity = 450.0
+        double thermal:convectionArea = 0.03
+        uniform token emi:victimType = "encoder"
+        double emi:encoderGlitchField = 200.0
+    }
+
+    def Scope "sensors"
+    {
+        def Xform "front_lidar" ( prepend apiSchemas = ["SensorAPI_1", "LidarAPI_1"] )
+        {
+            double3 xformOp:translate = (0.25, 0, 0.28)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            double sensor:rate = 15.0                        # Hz
+            int sensor:lidar:channels = 1
+            int sensor:lidar:horizontalSamples = 1440
+            double2 sensor:lidar:verticalFov = (0, 0)
+            double sensor:lidar:rangeMin = 0.05              # m
+            double sensor:lidar:rangeMax = 25.0              # m
+        }
+        def Xform "imu" ( prepend apiSchemas = ["SensorAPI_1", "ImuAPI_1", "EmiSusceptibilityAPI_1"] )
+        {
+            double sensor:rate = 200.0
+            double sensor:imu:accelNoiseDensity = 0.002      # m/s²/√Hz
+            double sensor:imu:accelBiasInstability = 0.0004  # m/s²
+            double sensor:imu:accelRandomWalk = 0.00006
+            double sensor:imu:gyroNoiseDensity = 0.00017     # rad/s/√Hz
+            double sensor:imu:gyroBiasInstability = 0.00002
+            double sensor:imu:gyroRandomWalk = 0.000002
+            double sensor:imu:accelRange = 156.9             # m/s² (16 g)
+            double sensor:imu:gyroRange = 34.9               # rad/s (2000 °/s)
+            uniform token emi:victimType = "imu_adc"
+        }
+    }
+
+    def Scope "materials"
+    {
+        def Material "painted_steel" ( prepend apiSchemas = ["SensorMaterialAPI_1"] )
+        {
+            double sensmat:reflectivity905 = 0.45
+            double sensmat:conductivity = 6.0e6              # S/m, order of magnitude for steel
+            double sensmat:relativePermeability = 100.0
+        }
+        def Material "rubber" ( prepend apiSchemas = ["PhysicsMaterialAPI", "SensorMaterialAPI_1"] )
+        {
+            float physics:staticFriction = 0.9
+            float physics:dynamicFriction = 0.8
+            double sensmat:reflectivity905 = 0.05
+            double sensmat:frictionWetScale = 0.65
+        }
+        def Material "low_friction" ( prepend apiSchemas = ["PhysicsMaterialAPI"] )
+        { float physics:staticFriction = 0.05 float physics:dynamicFriction = 0.05 }
+    }
+}
+```
+
+All numeric values in this sample are illustrative. They are chosen to be plausible, not taken
+from a datasheet, and the file says so in its `doc` string.
+
+## 5. Simulation profiles
+
+### 5.1 Changes to the reference example
+
+The examples in CLAUDE.md §11.1 stay valid under the schema below. Four fields are added
+(open question F5):
+
+- `schema_version` (required): lets `tools/migrate_profile` upgrade old files.
+- `seed`, `deterministic`, `tier`: needed for reproducible runs and tier forcing.
+- `time`: real-time factor target and optional end time.
+- `substitute` accepts either the short token used in CLAUDE.md (`zero`, `clear`,
+  `ground_truth`, `replay`, …) or an object `{kind, preset, source}`.
+
+`dt` stays a number in seconds, as in the reference. The loader parses its decimal text exactly
+and requires a whole number of nanoseconds (architecture §2).
+
+### 5.2 `profiles/schema.json` (draft)
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simcore.example/schemas/profile/1/schema.json",
+  "title": "simcore simulation profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "stage", "domains"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "stage": { "type": "string", "minLength": 1, "description": "USD file with the robot(s) and world." },
+    "environment": { "type": "string", "description": "USD file with a WeatherAPI prim and environment sources." },
+    "seed": { "type": "integer", "minimum": 0, "default": 0 },
+    "deterministic": { "type": "boolean", "default": false },
+    "tier": { "enum": ["auto", 0, 1, 2], "default": "auto" },
+    "batch": { "type": "integer", "minimum": 1, "default": 1, "description": "Parallel environments." },
+    "time": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "real_time_factor": { "type": "number", "minimum": 0, "default": 1.0, "description": "0 = as fast as possible." },
+        "end": { "type": "number", "exclusiveMinimum": 0, "description": "Stop after this many simulated seconds." }
+      }
+    },
+    "domains": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rigid_body", "electrical", "thermal", "aerodynamics", "weather", "emi", "radiation", "sensors"],
+      "properties": {
+        "rigid_body":       { "$ref": "#/$defs/rigid_body" },
+        "electrical":       { "$ref": "#/$defs/electrical" },
+        "thermal":          { "$ref": "#/$defs/thermal" },
+        "aerodynamics":     { "$ref": "#/$defs/aerodynamics" },
+        "weather":          { "$ref": "#/$defs/weather" },
+        "emi":              { "$ref": "#/$defs/emi" },
+        "radiation":        { "$ref": "#/$defs/radiation" },
+        "sensors":          { "$ref": "#/$defs/sensors" },
+        "vehicle_dynamics": { "$ref": "#/$defs/vehicle_dynamics" },
+        "rotor_aero":       { "$ref": "#/$defs/rotor_aero" },
+        "hydrodynamics":    { "$ref": "#/$defs/generic_domain" },
+        "traffic":          { "$ref": "#/$defs/traffic" },
+        "comms":            { "$ref": "#/$defs/generic_domain" }
+      }
+    },
+    "world": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "geo_origin": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["latitude", "longitude", "height"],
+          "properties": {
+            "latitude":  { "type": "number", "minimum": -90,  "maximum": 90,  "description": "degrees, WGS84" },
+            "longitude": { "type": "number", "minimum": -180, "maximum": 180, "description": "degrees, WGS84" },
+            "height":    { "type": "number", "description": "metres above the WGS84 ellipsoid" }
+          }
+        },
+        "streaming": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "load_radius":   { "type": "number", "exclusiveMinimum": 0, "description": "m" },
+            "unload_radius": { "type": "number", "exclusiveMinimum": 0, "description": "m" },
+            "active_region_radius": { "type": "number", "exclusiveMinimum": 0, "description": "m" },
+            "rebase_distance": { "type": "number", "exclusiveMinimum": 0, "default": 1000, "description": "m" }
+          }
+        }
+      }
+    },
+    "bridges": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ros2": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "namespace": { "type": "string", "default": "" },
+            "use_sim_time": { "type": "boolean", "default": true },
+            "gpu_buffers": { "type": "boolean", "default": false, "description": "Publish images/point clouds through rosidl::Buffer." }
+          }
+        },
+        "ros2_control": { "type": "object", "additionalProperties": false,
+          "properties": { "enabled": { "type": "boolean", "default": false } } },
+        "mavlink": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "autopilot": { "enum": ["px4", "ardupilot"] },
+            "lockstep": { "type": "boolean", "default": true },
+            "endpoint": { "type": "string", "description": "e.g. tcp://127.0.0.1:4560" }
+          }
+        },
+        "autoware": { "type": "object", "additionalProperties": false,
+          "properties": { "enabled": { "type": "boolean", "default": false } } }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "opendrive": { "type": "string" },
+        "openscenario": { "type": "string" }
+      }
+    },
+    "views": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "enum": ["physics_3d", "electrical_schematic", "waveforms", "thermal", "fields", "sensors"] }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "path"],
+      "properties": {
+        "format": { "const": "mcap" },
+        "path": { "type": "string", "minLength": 1 },
+        "signals": { "type": "array", "items": { "type": "string" }, "description": "Glob patterns; default all." },
+        "compression": { "enum": ["none", "zstd", "lz4"], "default": "zstd" }
+      }
+    }
+  },
+  "$defs": {
+    "dt": { "type": "number", "exclusiveMinimum": 0, "maximum": 10, "description": "seconds; must be a whole number of nanoseconds" },
+    "substitute": {
+      "oneOf": [
+        { "enum": ["ideal", "zero", "clear", "ambient", "ground_truth", "fixed", "load_profile", "replay"] },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "enum": ["ideal", "constant", "replay"] },
+            "preset": { "type": "string" },
+            "source": { "type": "string" },
+            "value": { "type": "number" }
+          }
+        }
+      ]
+    },
+    "enabled_or_substituted": {
+      "description": "A disabled domain must name a substitute; a replay substitute must name a source.",
+      "allOf": [
+        { "if": { "properties": { "enabled": { "const": false } } },
+          "then": { "required": ["substitute"] } },
+        { "if": { "properties": { "substitute": { "const": "replay" } }, "required": ["substitute"] },
+          "then": { "required": ["source"] } }
+      ]
+    },
+    "common": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "dt": { "$ref": "#/$defs/dt" },
+        "substitute": { "$ref": "#/$defs/substitute" },
+        "source": { "type": "string", "description": "MCAP file for a replay substitute." }
+      }
+    },
+    "generic_domain": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "unevaluatedProperties": false
+    },
+    "rigid_body": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "backend": { "enum": ["physx", "mujoco", "jolt"] },
+        "solver_iterations": { "type": "integer", "minimum": 1 },
+        "gpu": { "type": "boolean", "default": false },
+        "load_profile": { "type": "string", "description": "CSV torque-vs-speed table for the load_profile substitute." }
+      },
+      "unevaluatedProperties": false
+    },
+    "electrical": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "fidelity": { "enum": ["ideal_bus", "averaged", "fmu"], "default": "averaged" },
+        "speed_prediction": { "type": "boolean", "default": true }
+      },
+      "unevaluatedProperties": false
+    },
+    "thermal": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "ambient_temperature": { "type": "number", "exclusiveMinimum": 0, "description": "K; required for the ambient substitute when no environment file is given" }
+      },
+      "unevaluatedProperties": false
+    },
+    "aerodynamics": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "fidelity": { "enum": ["drag", "drag_plus_field", "lbm"], "default": "drag" }
+      },
+      "unevaluatedProperties": false
+    },
+    "weather": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "effects": { "type": "array", "uniqueItems": true,
+          "items": { "enum": ["fog", "rain", "dust", "wet_friction", "lens_contamination"] } }
+      },
+      "unevaluatedProperties": false
+    },
+    "emi": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "coupling": { "type": "array", "uniqueItems": true,
+          "items": { "enum": ["magnetometer", "imu", "encoder", "can_bus", "wifi"] } }
+      },
+      "unevaluatedProperties": false
+    },
+    "radiation": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "seu_injection": { "type": "boolean", "default": false }
+      },
+      "unevaluatedProperties": false
+    },
+    "sensors": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "only": { "type": "array", "items": { "type": "string" }, "description": "Sensor prim names to simulate; others get ground truth." }
+      },
+      "unevaluatedProperties": false
+    },
+    "vehicle_dynamics": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "tire_model": { "enum": ["linear", "pacejka"], "default": "pacejka" }
+      },
+      "unevaluatedProperties": false
+    },
+    "rotor_aero": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "fidelity": { "enum": ["coefficients", "bem"], "default": "coefficients" },
+        "ground_effect": { "type": "boolean", "default": true }
+      },
+      "unevaluatedProperties": false
+    },
+    "traffic": {
+      "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
+      "properties": {
+        "backend": { "enum": ["builtin", "sumo"], "default": "builtin" },
+        "sumo_config": { "type": "string" }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}
+```
+
+Checks that JSON Schema cannot express and that the loader performs: every `dt` is a whole number
+of nanoseconds; steps are commensurate (architecture §6); referenced files exist; a `replay`
+source contains the channels the domain contract needs; `emi.coupling` entries have matching
+`EmiSusceptibilityAPI` prims; the requested tier is available.
+
+CI validates every file in `profiles/examples/` with `check-jsonschema` (TODO(verify) version)
+and then loads it with the mock server in `--validate-only` mode.
+
+### 5.3 Example profiles, one per robot class
+
+The two profiles from CLAUDE.md §11.1 remain in `profiles/examples/` with `schema_version: 1`
+added. The six below are new.
+
+```yaml
+# profiles/examples/amr_warehouse_nav2.yaml — AMR, ros2_control + Nav2, electrical on
+schema_version: 1
+stage: worlds/warehouse_small.usda
+environment: environments/indoor_20c.usda
+seed: 1
+
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: true,  fidelity: averaged, dt: 0.0001 }
+  thermal:      { enabled: true,  dt: 0.1 }
+  aerodynamics: { enabled: false, substitute: zero }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: false, substitute: zero }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: true,  dt: 0.005 }
+
+bridges:
+  ros2:         { enabled: true, use_sim_time: true }
+  ros2_control: { enabled: true }
+
+views: [physics_3d, waveforms, sensors]
+record: { format: mcap, path: runs/amr_warehouse_001.mcap }
+```
+
+```yaml
+# profiles/examples/arm_pick_place_moveit.yaml — 6-DoF arm, MoveIt 2, electrical + thermal
+schema_version: 1
+stage: worlds/workcell_arm6.usda
+environment: environments/indoor_20c.usda
+
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: true,  fidelity: averaged, dt: 0.0001 }
+  thermal:      { enabled: true,  dt: 0.1 }
+  aerodynamics: { enabled: false, substitute: zero }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: true,  coupling: [encoder], dt: 0.001 }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: true,  dt: 0.01, only: [wrist_camera] }
+
+bridges:
+  ros2:         { enabled: true }
+  ros2_control: { enabled: true }
+
+views: [physics_3d, electrical_schematic, waveforms, thermal]
+record: { format: mcap, path: runs/arm_pick_place_001.mcap }
+```
+
+```yaml
+# profiles/examples/quad_px4_gusty.yaml — quadcopter, PX4 SITL lockstep, wind gusts
+schema_version: 1
+stage: worlds/open_field_quad.usda
+environment: environments/gusty_8ms_dryden.usda
+deterministic: false
+
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: true,  fidelity: averaged, dt: 0.00005 }
+  thermal:      { enabled: true,  dt: 0.1 }
+  aerodynamics: { enabled: true,  fidelity: drag_plus_field, dt: 0.001 }
+  rotor_aero:   { enabled: true,  fidelity: coefficients, ground_effect: true, dt: 0.001 }
+  weather:      { enabled: true,  dt: 0.01 }
+  emi:          { enabled: true,  coupling: [magnetometer], dt: 0.001 }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: true,  dt: 0.001 }
+
+bridges:
+  ros2:    { enabled: true }
+  mavlink: { enabled: true, autopilot: px4, lockstep: true, endpoint: "tcp://127.0.0.1:4560" }
+
+views: [physics_3d, waveforms, fields]
+record: { format: mcap, path: runs/quad_gusty_001.mcap }
+```
+
+```yaml
+# profiles/examples/car_skidpad_wet.yaml — passenger car, vehicle dynamics on a wet skid pad
+schema_version: 1
+stage: worlds/skidpad_sedan.usda
+environment: environments/rain_10mmh_day.usda
+
+domains:
+  rigid_body:       { enabled: true,  backend: physx, dt: 0.001 }
+  vehicle_dynamics: { enabled: true,  tire_model: pacejka, dt: 0.001 }
+  electrical:       { enabled: false, substitute: ideal }
+  thermal:          { enabled: false, substitute: ambient }
+  aerodynamics:     { enabled: true,  fidelity: drag, dt: 0.01 }
+  weather:          { enabled: true,  effects: [rain, wet_friction], dt: 0.05 }
+  emi:              { enabled: false, substitute: zero }
+  radiation:        { enabled: false, substitute: zero }
+  sensors:          { enabled: false, substitute: ground_truth }
+
+bridges:
+  ros2: { enabled: true }
+
+views: [physics_3d, waveforms]
+record: { format: mcap, path: runs/car_skidpad_001.mcap }
+```
+
+```yaml
+# profiles/examples/av_urban_autoware.yaml — autonomous car, sensors + traffic + scenario
+schema_version: 1
+stage: worlds/city_block_av.usda
+environment: environments/fog_150m_dusk.usda
+tier: 2
+
+domains:
+  rigid_body:       { enabled: true,  backend: physx, dt: 0.002 }
+  vehicle_dynamics: { enabled: true,  tire_model: pacejka, dt: 0.002 }
+  electrical:       { enabled: false, substitute: ideal }
+  thermal:          { enabled: false, substitute: ambient }
+  aerodynamics:     { enabled: true,  fidelity: drag, dt: 0.01 }
+  weather:          { enabled: true,  effects: [fog, lens_contamination], dt: 0.05 }
+  emi:              { enabled: false, substitute: zero }
+  radiation:        { enabled: false, substitute: zero }
+  sensors:          { enabled: true,  dt: 0.002 }
+  traffic:          { enabled: true,  backend: sumo, sumo_config: scenarios/city_block.sumocfg, dt: 0.1 }
+  comms:            { enabled: false, substitute: ideal }
+
+scenario:
+  opendrive: scenarios/city_block.xodr
+  openscenario: scenarios/cut_in_fog.xosc
+
+bridges:
+  ros2:     { enabled: true, gpu_buffers: true }
+  autoware: { enabled: true }
+
+views: [physics_3d, sensors, fields]
+record: { format: mcap, path: runs/av_urban_001.mcap, signals: ["body/*", "sensor/*/meta", "traffic/*"] }
+```
+
+```yaml
+# profiles/examples/huge_world_survey.yaml — drone survey over a 40 km geospatial tile set
+schema_version: 1
+stage: worlds/coastal_survey_root.usda        # root layer; terrain tiles are USD payloads
+environment: environments/clear_day.usda
+
+world:
+  geo_origin: { latitude: 33.5902, longitude: 130.4017, height: 20.0 }   # scenario parameter
+  streaming:
+    enabled: true
+    load_radius: 3000
+    unload_radius: 3500
+    active_region_radius: 500
+    rebase_distance: 1000
+
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.002 }
+  electrical:   { enabled: true,  fidelity: averaged, dt: 0.0001 }
+  thermal:      { enabled: false, substitute: ambient, ambient_temperature: 293.15 }
+  aerodynamics: { enabled: true,  fidelity: drag_plus_field, dt: 0.002 }
+  rotor_aero:   { enabled: true,  fidelity: coefficients, dt: 0.002 }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: false, substitute: zero }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: true,  dt: 0.01, only: [gnss, imu, nadir_camera] }
+
+bridges:
+  ros2:    { enabled: true }
+  mavlink: { enabled: true, autopilot: ardupilot, lockstep: true }
+
+views: [physics_3d, sensors]
+record: { format: mcap, path: runs/coastal_survey_001.mcap }
+```
+
+In `quad_px4_gusty.yaml` the electrical step is 50 µs and physics is 1 ms; the base tick is 50 µs
+and the hyperperiod is 100 ms. In `amr_warehouse_nav2.yaml` the sensors step of 5 ms is the
+scheduling period of the sensor module; each sensor's own rate comes from `sensor:rate`.
+
+## 6. FMU usage
+
+- Standard: FMI 3.0 co-simulation. Model exchange is not hosted.
+- An FMU is referenced from USD with an `asset` attribute (`elec:behaviorModel`). Its variables
+  are mapped to signals by name through a sidecar file next to the FMU:
+
+```yaml
+# models/bldc_drive.fmu.map.yaml
+fmu: bldc_drive.fmu
+fmi_version: "3.0"
+step: 0.0001                      # s, communication step; must divide the electrical module dt
+inputs:
+  - { variable: omega_mech,  signal: "joint/{joint}/velocity", unit: rad/s }
+  - { variable: tau_cmd,     signal: "joint/{joint}/torque_command", unit: N.m }
+  - { variable: v_bus,       signal: "bus/{bus}/voltage", unit: V }
+  - { variable: T_winding,   signal: "thermal/{prim}/temperature", unit: K }
+outputs:
+  - { variable: tau_shaft,   signal: "joint/{joint}/torque", unit: N.m }
+  - { variable: i_bus,       signal: "motor/{prim}/bus_current", unit: A }
+  - { variable: p_loss,      signal: "motor/{prim}/loss_power", unit: W }
+parameters:
+  - { variable: R_s, attribute: "elec:windingResistance" }
+  - { variable: L_d, attribute: "elec:inductance" }
+  - { variable: K_t, attribute: "elec:torqueConstant" }
+```
+
+- The FMU host checks each mapped variable's declared FMI unit against the signal unit. FMI units
+  are converted to a `simcore::Unit` from the `BaseUnit` exponents in `modelDescription.xml`; a
+  mismatch is a wiring error.
+- FMUs must be source FMUs or carry a `linux64` (amd64) and `aarch64-linux` binary. Binary-only
+  FMUs for one architecture make the profile fail on the other with a clear message.
+- Determinism: an FMU is treated as deterministic only if it declares `canGetAndSetFMUState`
+  and passes a save/restore round-trip test at load.
+- Built-in C++ models are the default for the battery ECM and the dq motor. FMUs are the
+  extension path. See open question Q8 for why the plan does not depend on FMUs for v0.3.
+
+## 7. Recordings (MCAP)
+
+- One file per run. Chunked, zstd by default, with the summary section and index.
+- Message encoding: Protobuf, schemas from `proto/simcore/record/v1/`. The same
+  `SignalBlock` message as the live protocol is used, so replay is a file-backed protocol
+  source.
+- Channels:
+
+| Channel topic | Message | Content |
+|---|---|---|
+| `/simcore/meta` | `RunMeta` | profile (YAML text), stage path and hash, schema versions, seed, tier, git describe |
+| `/simcore/catalog` | `SignalCatalog` | every signal's name, type, unit, writer |
+| `/simcore/scene/snapshot` | `SceneSnapshot` | one at start and every 10 s (seek points) |
+| `/simcore/scene/delta` | `SceneDelta` | transform and attribute changes |
+| `/simcore/signals/<rate_group>` | `SignalBlock` | signals grouped by writer step size |
+| `/simcore/state_hash` | `StateHash` | determinism check values |
+| `/simcore/log` | `LogRecord` | console messages |
+| ROS topics (optional) | CDR, as rosbag2 writes them | when `record.ros_topics` is used (later) |
+
+- Units are stored in the catalog. A replay substitute refuses a channel whose recorded unit
+  differs from the contract.
+- Compatibility: files written by rosbag2 with the MCAP storage plugin can be opened by the mock
+  server for ROS-topic display (pose, joint states, images). They do not contain our signal
+  catalog, so scopes show only numeric fields that the viewer can extract from known message
+  types. This is the "MCAP compatibility" item in the v0.1 scope.
+
+## 8. Materials and meshes
+
+- Render materials: `UsdPreviewSurface` is the baseline that every importer writes and the viewer
+  renders. MaterialX (`UsdMtlx`) is read when present and falls back to its
+  `UsdPreviewSurface` approximation; a MaterialX-to-Slang path is a later RFC.
+- Importers convert glTF PBR metallic-roughness, OBJ MTL and DAE Phong/Lambert to
+  `UsdPreviewSurface`. Textures are copied next to the USD file; files over 1 MB are not
+  committed to the main repo (CLAUDE.md §9).
+- Collision: `tools/collision_bake` runs CoACD (default) or V-HACD on each render mesh marked for
+  collision and writes explicit convex hull `Mesh` prims with `purpose = "guide"` under a
+  `collision` scope. Backends load only those hulls and primitive shapes. A stage whose collider
+  references a render mesh directly produces a load warning and an automatic single convex hull.
+
+## 9. Importers
+
+All importers are command-line tools and library functions under `io/importers/`, and produce a
+USD layer plus a report of what was dropped. The viewer's "Open URDF…" action runs the importer
+in the server (or mock server) and receives the result through the protocol.
+
+| Source | Library | Covered | Not covered at first |
+|---|---|---|---|
+| URDF / xacro | `urdfdom` (ROS package `urdf`), `xacro` executable | links, joints (all standard types), inertials, visual/collision geometry (primitives + meshes via Assimp), materials, mimic joints, limits including URDF 1.2 acceleration/jerk, `<ros2_control>` blocks → joint interfaces | `<gazebo>` extension blocks: mapped where a rule exists (sensors, friction), otherwise listed in the report; transmissions other than simple reductions |
+| SDFormat | `sdformat_vendor` (0.3.4 in Lyrical) | models, links, joints, sensors (lidar, camera, imu, gps/navsat, magnetometer), lights, nested models, `<include>` of local URIs | Gazebo system plugins (reported, not converted), Fuel URIs without a local cache, heightmaps (v0.7) |
+| MJCF | MuJoCo's own parser (`mj_loadXML`) then model traversal | bodies, joints, geoms, actuators (motor, position, velocity), sensors that have an equivalent, tendons (fixed) | spatial tendons, flex/deformables, plugin-defined elements |
+| glTF 2.0 / OBJ / STL / DAE | Assimp 6.0.4 (apt) | meshes, node hierarchy, PBR/Phong materials, textures | animations, skins, morph targets |
+
+Electrical, thermal and EMI data do not exist in URDF/SDF/MJCF. Importers accept an optional
+**overlay** file that applies our API schemas by link or joint name:
+
+```yaml
+# amr.simcore.overlay.yaml
+schema_version: 1
+apply:
+  - prim: left_wheel_joint
+    create_child: left_drive_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:windingResistance: 0.12
+        elec:inductance: 0.00031
+        elec:torqueConstant: 0.085
+        elec:maxCurrent: 30.0
+        elec:joint: left_wheel_joint
+        elec:powerPort: power/dc_48v
+```
+
+Without an overlay, an imported robot runs with the electrical domain substituted by the ideal
+torque source. The viewer's domain panel shows why the electrical toggle is unavailable
+("no ElectricalMotorAPI prims in stage").
+
+## 10. Versioning and migration
+
+| Artefact | Version carrier | Compatibility rule | Migration tool |
+|---|---|---|---|
+| USD schemas | family + integer suffix (`ElectricalMotorAPI_1`) | Within a version: only additions with fallbacks. Renames, unit changes, removed attributes, changed fallbacks → new version | `tools/migrate_schema` rewrites `apiSchemas` and attributes; one function per (family, from, to) |
+| Profiles | `schema_version` integer | Same as above | `tools/migrate_profile` |
+| Protocol | package `simcore.viewer.v1` + handshake `(major, minor)` | `buf breaking` with the `WIRE_JSON` rule set against `main` | none; old clients are refused at handshake with a readable message |
+| Recordings | `RunMeta.format_version` + embedded schemas | Readers accept all older versions of the same major | `tools/mcap_upgrade` only on a major change |
+| Plugin ABI | `SIMCORE_PLUGIN_ABI_MAJOR/MINOR` | architecture §13 | none |
+| FMU map files | `schema_version` | as profiles | `tools/migrate_profile --fmu-map` |
+
+Loader behaviour: `core/stage/` supports the current and the previous version of each schema
+family. An older version loads with a warning that names the migration command. Two versions of
+the same family applied to one prim is an error.
+
+Every schema change needs: an RFC or a PR note (CLAUDE.md §9), a migration function with a test
+that round-trips a sample file, an entry in `schemas/CHANGELOG.md`, and two approvals including a
+core maintainer.
+
+Until v1.0 all schemas are version 1 and may change without a migration, and the documentation
+says so. The migration machinery is built in v0.3 and exercised with a synthetic `_0 → _1`
+migration so that it is proven before it is needed.
