@@ -471,3 +471,31 @@ def test_sensors_workspace_shows_the_lidar_scan(socket_dir):
     # Lidar returns are drawn in the sensors domain colour, #3FD1A7.
     points = sum(1 for r, g, b, _a in pixels if 50 < r < 80 and g > 195 and 150 < b < 185)
     assert points > 1500, f"no lidar points drawn ({points} pixels)"
+
+
+def test_performance_workspace_shows_the_servers_statistics(socket_dir):
+    """Design 11-performance: KPI cards, scheduler, modules, from the server's statistics."""
+    image = socket_dir / "performance.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "220",  # long enough for the once-a-second statistics to arrive
+            "--size",
+            "1600x1000",
+            "--workspace",
+            "performance",
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    assert stats["server_stats"] is True
+
+    _width, _height, rows = read_png(image)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    # The scheduler draws the electrical module's steps in its domain colour, #F5C842.
+    yellow = sum(1 for r, g, b, _a in pixels if r > 235 and 185 < g < 215 and 50 < b < 90)
+    assert yellow > 800, f"scheduler not drawn ({yellow} pixels)"

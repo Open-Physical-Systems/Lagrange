@@ -140,6 +140,8 @@ public:
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createSensorsPanels();
 /// The Domains workspace's Wiring, Unit checks and Schedule panels.
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createWiringPanels();
+/// The Performance workspace's overview, scheduler, modules, history and resources panels.
+[[nodiscard]] std::vector<std::unique_ptr<Panel>> createPerformancePanels();
 [[nodiscard]] std::unique_ptr<Panel> createTimelinePanel();
 [[nodiscard]] std::unique_ptr<Panel> createBookmarksPanel();
 [[nodiscard]] std::unique_ptr<Panel> createConsolePanel();
