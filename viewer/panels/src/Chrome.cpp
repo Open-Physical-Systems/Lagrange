@@ -51,8 +51,8 @@ constexpr std::array<WorkspaceEntry, 10> kWorkspaces{{
      "Ctrl+5", "06-sensors"},
     {Workspace::Environment, "Environment", widgets::Icon::Environment, nullptr, ImGuiKey_6,
      "Ctrl+6", "07-environment"},
-    {Workspace::Replay, "Replay", widgets::Icon::Replay, nullptr, ImGuiKey_7, "Ctrl+7",
-     "08-replay"},
+    {Workspace::Replay, "Replay", widgets::Icon::Replay, "lagrange-dock-replay-1", ImGuiKey_7,
+     "Ctrl+7", "08-replay"},
     {Workspace::Ros2, "ROS 2", widgets::Icon::Ros2, nullptr, ImGuiKey_8, "Ctrl+8", "09-ros2"},
     {Workspace::World, "World", widgets::Icon::World, nullptr, ImGuiKey_9, "Ctrl+9", "10-world"},
     {Workspace::Performance, "Performance", widgets::Icon::Performance,
@@ -134,6 +134,20 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
             node->LocalFlags |= static_cast<ImGuiDockNodeFlags>(ImGuiDockNodeFlags_NoTabBar) |
                                 static_cast<ImGuiDockNodeFlags>(ImGuiDockNodeFlags_NoResize);
         }
+    } else if (workspace == Workspace::Replay) {
+        // Design: Recording over Channels and Bookmarks, 280 px left; the timeline (400 px)
+        // over the events. (Sim vs real and Validation are not built: they need a second log.)
+        ImGuiID left = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left, fraction(280.0F, size.x),
+                                                   nullptr, &centre);
+        const ImGuiID channels =
+            ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.66F, nullptr, &left);
+        const ImGuiID events =
+            ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.52F, nullptr, &centre);
+        ImGui::DockBuilderDockWindow("Recording", left);
+        ImGui::DockBuilderDockWindow("Channels", channels);
+        ImGui::DockBuilderDockWindow("###ReplayBookmarks", channels);
+        ImGui::DockBuilderDockWindow("###ReplayTimeline", centre);
+        ImGui::DockBuilderDockWindow("###ReplayEvents", events);
     } else if (workspace == Workspace::Sensors) {
         // Design: sensor list 260 px left, Degradation 320 px right, sensor views between.
         const ImGuiID left = ImGui::DockBuilderSplitNode(
@@ -726,6 +740,11 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
     for (std::unique_ptr<Panel>& panel : createPerformancePanels()) {
         panels.push_back(std::move(panel));
     }
+    for (std::unique_ptr<Panel>& panel : createReplayPanels()) {
+        panels.push_back(std::move(panel));
+    }
+    panels.push_back(createReplayBookmarksPanel());
+    panels.push_back(createReplayTimelinePanel());
     panels.push_back(createElectricalInspectorPanel());
     panels.push_back(createDomainsPanel());
     for (std::unique_ptr<Panel>& panel : createWiringPanels()) {

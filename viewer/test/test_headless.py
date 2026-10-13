@@ -499,3 +499,31 @@ def test_performance_workspace_shows_the_servers_statistics(socket_dir):
     # The scheduler draws the electrical module's steps in its domain colour, #F5C842.
     yellow = sum(1 for r, g, b, _a in pixels if r > 235 and 185 < g < 215 and 50 < b < 90)
     assert yellow > 800, f"scheduler not drawn ({yellow} pixels)"
+
+
+def test_replay_workspace_shows_the_recording_and_its_events(socket_dir):
+    """Design 08-replay: recording facts, channels, the timeline with event lanes."""
+    image = socket_dir / "replay.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "60",
+            "--size",
+            "1600x1000",
+            "--workspace",
+            "replay",
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    # Two seconds of the sample hold at least one hard turn and one regeneration.
+    assert stats["events"] >= 2
+
+    width, height, rows = read_png(image)
+    assert (width, height) == (1600, 1000)
+    pixels = {row[i : i + 4] for row in rows for i in range(0, len(row), 4)}
+    assert len(pixels) > 50

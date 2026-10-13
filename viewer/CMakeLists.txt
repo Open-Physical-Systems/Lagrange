@@ -100,6 +100,7 @@ add_library(
     panels/src/PanelFormat.cpp
     panels/src/PerformancePanels.cpp
     panels/src/ProfilePanel.cpp
+    panels/src/ReplayPanels.cpp
     panels/src/ScenePanel.cpp
     panels/src/ScheduleChart.cpp
     panels/src/ScopePanel.cpp

@@ -51,10 +51,13 @@ double tickSpacing(double span, double target) {
 
 class TimelinePanel final : public Panel {
 public:
-    [[nodiscard]] const char* title() const override { return "Timeline"; }
+    /// `window` is the ImGui window name: the timeline appears in more than one workspace.
+    TimelinePanel(const char* window, Workspace workspace) : name_(window), workspace_(workspace) {}
+    [[nodiscard]] const char* title() const override { return name_; }
+    [[nodiscard]] Workspace workspace() const override { return workspace_; }
 
     void draw(PanelContext& context) override {
-        if (!ImGui::Begin(title())) {
+        if (!ImGui::Begin(name_)) {
             ImGui::End();
             return;
         }
@@ -241,6 +244,7 @@ private:
         const ImVec2 mouse = ImGui::GetIO().MousePos;
         for (const std::string_view domain : kLaneOrder) {
             bool any = false;
+            float labelEnd = left;  // where the last label of this lane ends
             for (const EventInfo& event : log->events) {
                 if (event.domain != domain) {
                     continue;
@@ -267,6 +271,18 @@ private:
                 const ImVec2 min(x0, laneTop + px(2.0F));
                 const ImVec2 max(x1, laneTop + laneHeight - px(2.0F));
                 draw->AddRectFilled(min, max, u32(color), px(2.0F));
+                // What it was, written after the bar when the next event leaves room.
+                const float textWidth =
+                    sans->CalcTextSizeA(small, FLT_MAX, 0.0F, event.text.c_str()).x;
+                if (max.x + px(5.0F) > labelEnd && max.x + px(5.0F) + textWidth < right) {
+                    draw->AddText(
+                        sans, small, ImVec2(max.x + px(5.0F), laneTop + px(2.0F)),
+                        u32(event.severity == EventInfo::Severity::Error ? c::error : c::t2),
+                        event.text.c_str());
+                    labelEnd = max.x + px(5.0F) + textWidth + px(10.0F);
+                } else {
+                    labelEnd = std::max(labelEnd, max.x);
+                }
                 if (mouse.x >= min.x - px(2.0F) && mouse.x <= max.x + px(2.0F) &&
                     mouse.y >= laneTop && mouse.y <= laneTop + laneHeight) {
                     hoveredEvent = &event;
@@ -307,6 +323,8 @@ private:
         }
     }
 
+    const char* name_;
+    Workspace workspace_;
     std::size_t step_{1};  // 10 ms
     int window_{3};        // all
     bool dragging_{false};
@@ -317,12 +335,15 @@ private:
 /// Times the user marked, next to the timeline. Kept for the session only.
 class BookmarksPanel final : public Panel {
 public:
-    [[nodiscard]] const char* title() const override { return "Bookmarks"; }
+    /// `id` is the window's identity (after ###): bookmarks appear in more than one workspace.
+    BookmarksPanel(const char* id, Workspace workspace) : id_(id), workspace_(workspace) {}
+    [[nodiscard]] const char* title() const override { return id_; }
+    [[nodiscard]] Workspace workspace() const override { return workspace_; }
 
     void draw(PanelContext& context) override {
         std::vector<std::int64_t>& bookmarks = *context.bookmarks;
-        char label[48];
-        std::snprintf(label, sizeof(label), "Bookmarks · %zu###Bookmarks", bookmarks.size());
+        char label[64];
+        std::snprintf(label, sizeof(label), "Bookmarks · %zu###%s", bookmarks.size(), id_);
         if (!ImGui::Begin(label)) {
             ImGui::End();
             return;
@@ -371,16 +392,28 @@ public:
         }
         ImGui::End();
     }
+
+private:
+    const char* id_;
+    Workspace workspace_;
 };
 
 }  // namespace
 
 std::unique_ptr<Panel> createBookmarksPanel() {
-    return std::make_unique<BookmarksPanel>();
+    return std::make_unique<BookmarksPanel>("Bookmarks", Workspace::Scene);
+}
+
+std::unique_ptr<Panel> createReplayBookmarksPanel() {
+    return std::make_unique<BookmarksPanel>("ReplayBookmarks", Workspace::Replay);
+}
+
+std::unique_ptr<Panel> createReplayTimelinePanel() {
+    return std::make_unique<TimelinePanel>("Timeline###ReplayTimeline", Workspace::Replay);
 }
 
 std::unique_ptr<Panel> createTimelinePanel() {
-    return std::make_unique<TimelinePanel>();
+    return std::make_unique<TimelinePanel>("Timeline", Workspace::Scene);
 }
 
 }  // namespace lagrange::viewer
