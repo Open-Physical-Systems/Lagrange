@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_viewer</name>
-  <version>0.0.0</version>
+  <version>0.1.0</version>
   <description>Lagrange viewer: a native Vulkan and Dear ImGui desktop application. It talks to a simulation only through the viewer protocol and links no simulation module.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
