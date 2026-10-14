@@ -204,6 +204,8 @@ struct Server::Impl {
     std::uint64_t catalogGeneration{1};
 
     v1::RunState state{v1::RUN_STATE_RUNNING};
+    bool stopped{false};        // paused at t = 0 by simulation_interfaces' STATE_STOPPED
+    bool quitRequested{false};  // by simulation_interfaces' STATE_QUITTING
     double rtfTarget{1.0};
     std::string error;
 
@@ -886,6 +888,7 @@ struct Server::Impl {
             case v1::Command::kPlay:
                 if (state != v1::RUN_STATE_ERROR) {
                     state = v1::RUN_STATE_RUNNING;
+                    stopped = false;
                     lastWall = Clock::now();
                 }
                 statusChanged = true;
@@ -931,17 +934,10 @@ struct Server::Impl {
                 break;
             }
             case v1::Command::kReset: {
-                const bool wasRunning = state == v1::RUN_STATE_RUNNING;
-                if (Status status = build(); !status.ok()) {
+                if (Status status = restart(); !status.ok()) {
                     r.set_ok(false);
                     r.set_error(status.message);
-                    fail(status);
-                } else {
-                    state = wasRunning ? v1::RUN_STATE_RUNNING : v1::RUN_STATE_PAUSED;
-                    error.clear();
-                    log(v1::LOG_LEVEL_INFO, "scheduler", "reset · the run restarted at t = 0");
                 }
-                lastWall = Clock::now();
                 resync = true;
                 statusChanged = true;
                 break;
@@ -995,15 +991,50 @@ struct Server::Impl {
         }
         session.send(result);
         if (resync) {
-            for (auto& other : sessions) {
-                if (other->greeted) {
-                    other->send(snapshot(*other));
-                }
-            }
+            resyncViewers();
         }
         if (statusChanged) {
             broadcast(statusEnvelope());
         }
+    }
+
+    /// Rebuilds the run at t = 0, keeping play or pause.
+    Status restart() {
+        const bool wasRunning = state == v1::RUN_STATE_RUNNING;
+        if (Status status = build(); !status.ok()) {
+            fail(status);
+            return status;
+        }
+        state = wasRunning ? v1::RUN_STATE_RUNNING : v1::RUN_STATE_PAUSED;
+        error.clear();
+        owedNs = 0;
+        lastWall = Clock::now();
+        log(v1::LOG_LEVEL_INFO, "scheduler", "reset · the run restarted at t = 0");
+        return {};
+    }
+
+    void resyncViewers() {
+        for (auto& session : sessions) {
+            if (session->greeted) {
+                session->send(snapshot(*session));
+            }
+        }
+    }
+
+    /// Steps `ticks` base ticks while paused, publishing to ROS after each.
+    Status stepTicks(std::uint64_t ticks) {
+        for (std::uint64_t i = 0; i < ticks; ++i) {
+            if (Status status = scheduler->stepTick(); !status.ok()) {
+                fail(status);
+                return status;
+            }
+            capture();
+            if (bridge) {
+                bridge->publish(scheduler->bus(), scheduler->now());
+            }
+        }
+        emit();
+        return {};
     }
 
     /// The profile this server runs is valid, with the wiring the scheduler built for it.
@@ -1123,6 +1154,7 @@ struct Server::Impl {
         return envelope;
     }
     std::unique_ptr<ros2::Bridge> bridge;
+    std::unique_ptr<ros2::SimulationHandler> simulation;  // behind the bridge's services
     DriveCommand* driveCommand{nullptr};
 
     /// The World workspace: the robot as the one agent, at its simulated position.
@@ -1331,6 +1363,180 @@ struct Server::Impl {
     }
 };
 
+namespace {
+
+/// The simulation_interfaces services (roadmap 0.2-F4) on the server's run state. Runs on the
+/// server thread, from Bridge::handleRequests() in runOnce().
+///
+/// Entities are named by scene path: each top-level model with a body of its own (the robot),
+/// and each child of a fixed model (the scenery: "/warehouse_small/pallet"), plus the ground.
+class SimulationControl final : public ros2::SimulationHandler {
+public:
+    explicit SimulationControl(Server::Impl& server) : s_(server) {}
+
+    ros2::SimState simulationState() override {
+        if (s_.state == v1::RUN_STATE_RUNNING) {
+            return ros2::SimState::Playing;
+        }
+        // A run that failed cannot go on until it is reset: like a stopped one.
+        return s_.stopped || s_.state == v1::RUN_STATE_ERROR ? ros2::SimState::Stopped
+                                                             : ros2::SimState::Paused;
+    }
+
+    ros2::SimOutcome setSimulationState(ros2::SimState target) override {
+        using ros2::SimResult;
+        using ros2::SimState;
+        const SimState current = simulationState();
+        if (target == current && target != SimState::Quitting) {
+            return {SimResult::AlreadyInTargetState, ""};
+        }
+        switch (target) {
+            case SimState::Playing:
+                if (s_.state == v1::RUN_STATE_ERROR) {
+                    return {SimResult::IncorrectState,
+                            "the run failed (" + s_.error + "); reset or stop it first"};
+                }
+                s_.state = v1::RUN_STATE_RUNNING;
+                s_.stopped = false;
+                s_.lastWall = Clock::now();
+                break;
+            case SimState::Paused:
+                if (current == SimState::Stopped) {
+                    return {SimResult::IncorrectTransition, "a stopped simulation cannot pause"};
+                }
+                s_.state = v1::RUN_STATE_PAUSED;
+                break;
+            case SimState::Stopped:
+                s_.state = v1::RUN_STATE_PAUSED;
+                if (Status status = s_.restart(); !status.ok()) {
+                    return {SimResult::Failed, status.message};
+                }
+                s_.state = v1::RUN_STATE_PAUSED;
+                s_.stopped = true;
+                s_.resyncViewers();
+                break;
+            case SimState::Quitting:
+                s_.quitRequested = true;
+                s_.log(v1::LOG_LEVEL_INFO, "server", "quitting: asked over simulation_interfaces");
+                break;
+        }
+        s_.broadcast(s_.statusEnvelope());
+        return {};
+    }
+
+    ros2::SimOutcome step(std::uint64_t ticks) override {
+        if (s_.state != v1::RUN_STATE_PAUSED) {
+            return {ros2::SimResult::Failed, s_.state == v1::RUN_STATE_ERROR
+                                                 ? "the run failed: " + s_.error
+                                                 : "pause the simulation before stepping"};
+        }
+        s_.stopped = false;
+        if (Status status = s_.stepTicks(ticks); !status.ok()) {
+            return {ros2::SimResult::Failed, status.message};
+        }
+        s_.broadcast(s_.statusEnvelope());
+        return {};
+    }
+
+    ros2::SimOutcome reset() override {
+        if (Status status = s_.restart(); !status.ok()) {
+            return {ros2::SimResult::Failed, status.message};
+        }
+        s_.resyncViewers();
+        s_.broadcast(s_.statusEnvelope());
+        return {};
+    }
+
+    std::vector<ros2::EntityDescription> entities() override {
+        std::vector<ros2::EntityDescription> out;
+        const std::vector<ScenePrim>& prims = s_.robot.scene.prims;
+        for (std::size_t p = 0; p < prims.size(); ++p) {
+            if (const auto entity = describe(p)) {
+                out.push_back(*entity);
+            }
+        }
+        return out;
+    }
+
+    std::optional<ros2::EntityMotion> entityMotion(const std::string& name) override {
+        const std::vector<ScenePrim>& prims = s_.robot.scene.prims;
+        for (std::size_t p = 0; p < prims.size(); ++p) {
+            if (prims[p].path != name || !describe(p)) {
+                continue;
+            }
+            ros2::EntityMotion motion;
+            const ScenePrim& prim = prims[p];
+            if (prim.body == kNoIndex) {
+                motion.pose = prim.offset;  // fixed: the offset is its world pose
+                return motion;
+            }
+            const SignalBus& bus = s_.scheduler->bus();
+            const std::string& body = s_.robot.world.bodies.names[prim.body];
+            const SignalId poseId = s_.bodyPose[prim.body];
+            if (!poseId.valid()) {
+                motion.pose = s_.robot.bodyRestPose[prim.body];
+                return motion;
+            }
+            const std::span<const double> pose = bus.readN(poseId);
+            motion.pose = Pose{{pose[0], pose[1], pose[2]}, {pose[3], pose[4], pose[5], pose[6]}};
+            if (const SignalId twist = bus.find("body/" + body + "/twist"); twist.valid()) {
+                const std::span<const double> v = bus.readN(twist);
+                std::copy(v.begin(), v.end(), motion.twist.begin());
+            }
+            if (const SignalId accel = bus.find("body/" + body + "/acceleration"); accel.valid()) {
+                // The bus has the proper acceleration in the body frame; ROS wants the
+                // coordinate acceleration in the world: rotate, then add gravity back.
+                const std::span<const double> a = bus.readN(accel);
+                const std::array<double, 3> linear =
+                    rotate(motion.pose.orientation, {a[0], a[1], a[2]});
+                const std::array<double, 3> angular =
+                    rotate(motion.pose.orientation, {a[3], a[4], a[5]});
+                const std::array<double, 3>& g = s_.robot.world.gravityLocal;
+                motion.acceleration = {linear[0] + g[0], linear[1] + g[1], linear[2] + g[2],
+                                       angular[0],       angular[1],       angular[2]};
+            }
+            return motion;
+        }
+        return std::nullopt;
+    }
+
+private:
+    /// The entity prim `p` stands for, if it is one.
+    std::optional<ros2::EntityDescription> describe(std::size_t p) const {
+        const std::vector<ScenePrim>& prims = s_.robot.scene.prims;
+        const ScenePrim& prim = prims[p];
+        if (prim.parent == kNoIndex) {
+            if (prim.body != kNoIndex) {
+                const bool driven = !s_.robot.actuatedJoints.empty();
+                return ros2::EntityDescription{
+                    prim.path,
+                    driven ? ros2::EntityCategory::Robot : ros2::EntityCategory::DynamicObject,
+                    driven ? "robot " + prim.name + " from " + s_.robot.sourcePath
+                           : "free body " + prim.name};
+            }
+            if (prim.mesh != kNoIndex) {  // a fixed top-level shape: the ground
+                return ros2::EntityDescription{prim.path, ros2::EntityCategory::StaticObject,
+                                               "fixed " + prim.name};
+            }
+            return std::nullopt;  // a fixed model: its children are the entities
+        }
+        // A link of a model bolted to the world: a static body, or a moving one (a door).
+        const ScenePrim& parent = prims[prim.parent];
+        if (parent.parent == kNoIndex && parent.body == kNoIndex && prim.typeName == "Xform") {
+            const bool moves = prim.body != kNoIndex && s_.bodyPose[prim.body].valid();
+            return ros2::EntityDescription{
+                prim.path,
+                moves ? ros2::EntityCategory::DynamicObject : ros2::EntityCategory::StaticObject,
+                (moves ? "moving part " : "fixed scenery ") + prim.name + " of " + parent.name};
+        }
+        return std::nullopt;
+    }
+
+    Server::Impl& s_;
+};
+
+}  // namespace
+
 Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
     impl_->options = std::move(options);
     impl_->rtfTarget = impl_->options.realTimeFactor;
@@ -1352,6 +1558,8 @@ Status Server::start() {
         settings.robotDescription = readFile(s.options.robotPath);
         settings.stampedCmdVel = s.options.stampedCmdVel;
         s.bridge = std::make_unique<ros2::Bridge>(settings);
+        s.simulation = std::make_unique<SimulationControl>(s);
+        s.bridge->serveSimulation(*s.simulation);
     }
     if (!s.options.worldPath.empty()) {
         if (auto added = addUrdf(s.robot, s.options.worldPath); !added) {
@@ -1404,7 +1612,9 @@ Status Server::start() {
         s.log(v1::LOG_LEVEL_INFO, "ros2",
               "node /" + s.bridge->nodeName() +
                   " publishes /clock /tf /tf_static /odom /joint_states /robot_description and "
-                  "the sensors; subscribes /cmd_vel (geometry_msgs/Twist)");
+                  "the sensors; subscribes /cmd_vel (geometry_msgs/" +
+                  (s.options.stampedCmdVel ? "TwistStamped" : "Twist") +
+                  "); serves the simulation_interfaces services");
     }
     s.log(v1::LOG_LEVEL_INFO, "server", "listening on " + proto::toString(s.listener.endpoint()));
     s.lastWall = s.lastStatus = s.lastStats = Clock::now();
@@ -1421,6 +1631,9 @@ void Server::runOnce(int timeoutMs) {
     ::poll(fds.data(), fds.size(), timeoutMs);
 
     s.accept();
+    if (s.bridge) {
+        s.bridge->handleRequests();
+    }
     for (auto& session : s.sessions) {
         if (session->connection.state() == proto::Connection::State::Connected) {
             s.serve(*session);
@@ -1487,6 +1700,10 @@ SimTime Server::simTime() const {
 
 bool Server::running() const {
     return impl_->state == v1::RUN_STATE_RUNNING;
+}
+
+bool Server::quitRequested() const {
+    return impl_->quitRequested;
 }
 
 }  // namespace lagrange::server

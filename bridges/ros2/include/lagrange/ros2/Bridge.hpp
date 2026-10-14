@@ -52,6 +52,64 @@ struct GraphSnapshot {
     std::uint32_t domainId{0};
 };
 
+/// Outcome of a simulation_interfaces request; values are those of simulation_interfaces/Result
+/// plus the extra codes of SetSimulationState.
+enum class SimResult : std::uint8_t {
+    Unsupported = 0,
+    Ok = 1,
+    NotFound = 2,
+    IncorrectState = 3,
+    Failed = 4,
+    AlreadyInTargetState = 101,
+    IncorrectTransition = 103,
+};
+
+struct SimOutcome {
+    SimResult result{SimResult::Ok};
+    std::string message;
+};
+
+/// simulation_interfaces/SimulationState values this server can be in or be asked for.
+enum class SimState : std::uint8_t { Stopped = 0, Playing = 1, Paused = 2, Quitting = 3 };
+
+/// simulation_interfaces/EntityCategory values.
+enum class EntityCategory : std::uint8_t {
+    Object = 0,
+    Robot = 1,
+    Human = 2,
+    DynamicObject = 4,
+    StaticObject = 5,
+};
+
+struct EntityDescription {
+    std::string name;
+    EntityCategory category{EntityCategory::Object};
+    std::string description;
+};
+
+/// Ground-truth motion of an entity in the world frame: pose; twist and acceleration as linear
+/// (m/s, m/s²) then angular (rad/s, rad/s²).
+struct EntityMotion {
+    Pose pose;
+    std::array<double, 6> twist{};
+    std::array<double, 6> acceleration{};
+};
+
+/// What the simulator does for the simulation_interfaces services. Called on the thread that
+/// calls Bridge::handleRequests(), never on a ROS thread.
+class SimulationHandler {
+public:
+    virtual ~SimulationHandler() = default;
+    [[nodiscard]] virtual SimState simulationState() = 0;
+    virtual SimOutcome setSimulationState(SimState target) = 0;
+    /// Steps `ticks` base ticks; only while paused or stopped.
+    virtual SimOutcome step(std::uint64_t ticks) = 0;
+    /// Restarts the run at t = 0 with the initial state, keeping play or pause.
+    virtual SimOutcome reset() = 0;
+    [[nodiscard]] virtual std::vector<EntityDescription> entities() = 0;
+    [[nodiscard]] virtual std::optional<EntityMotion> entityMotion(const std::string& name) = 0;
+};
+
 /// The ROS 2 bridge (roadmap 0.2-F1, F2): an rclcpp node in the server process.
 ///
 /// It reads the signal bus after the scheduler's ticks and publishes, stamped with simulation
@@ -86,6 +144,15 @@ public:
     /// The ROS graph as this node sees it. Cold path: about once a second.
     [[nodiscard]] GraphSnapshot graph();
     [[nodiscard]] const std::string& nodeName() const { return settings_.nodeName; }
+
+    /// Offers the simulation_interfaces services (roadmap 0.2-F4) under the root namespace:
+    /// get_simulator_features, get_simulation_state, set_simulation_state, step_simulation,
+    /// reset_simulation, get_entities, get_entities_states, get_entity_state, get_entity_info.
+    /// The other services of the standard answer RESULT_FEATURE_UNSUPPORTED with a reason.
+    /// Requests wait for handleRequests(); `handler` must outlive the bridge.
+    void serveSimulation(SimulationHandler& handler);
+    /// Runs the waiting simulation_interfaces requests on the caller's thread.
+    void handleRequests();
 
 private:
     struct Impl;

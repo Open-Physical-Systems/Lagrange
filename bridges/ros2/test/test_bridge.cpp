@@ -6,9 +6,17 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <future>
 #include <memory>
 #include <numbers>
 #include <optional>
+#include <simulation_interfaces/srv/get_entities.hpp>
+#include <simulation_interfaces/srv/get_entity_state.hpp>
+#include <simulation_interfaces/srv/get_simulation_state.hpp>
+#include <simulation_interfaces/srv/reset_simulation.hpp>
+#include <simulation_interfaces/srv/set_simulation_state.hpp>
+#include <simulation_interfaces/srv/spawn_entity.hpp>
+#include <simulation_interfaces/srv/step_simulation.hpp>
 
 #include <gtest/gtest.h>
 
@@ -179,6 +187,151 @@ TEST_F(BridgeTest, GraphListsTheBridgesTopicsWithRates) {
     }
     EXPECT_TRUE(bridgeNode);
     EXPECT_FALSE(graph.rmw.empty());
+}
+
+/// A simulator that records what it is asked, for the simulation_interfaces plumbing.
+class FakeSimulation final : public SimulationHandler {
+public:
+    SimState state{SimState::Playing};
+    std::uint64_t stepped{0};
+    int resets{0};
+
+    SimState simulationState() override { return state; }
+    SimOutcome setSimulationState(SimState target) override {
+        if (target == state) {
+            return {SimResult::AlreadyInTargetState, ""};
+        }
+        state = target;
+        return {};
+    }
+    SimOutcome step(std::uint64_t ticks) override {
+        if (state == SimState::Playing) {
+            return {SimResult::Failed, "pause first"};
+        }
+        stepped += ticks;
+        return {};
+    }
+    SimOutcome reset() override {
+        ++resets;
+        return {};
+    }
+    std::vector<EntityDescription> entities() override {
+        return {{"/robot", EntityCategory::Robot, "the robot"},
+                {"/scenery/pallet", EntityCategory::StaticObject, "a pallet"},
+                {"/scenery/rack", EntityCategory::StaticObject, "a rack"}};
+    }
+    std::optional<EntityMotion> entityMotion(const std::string& name) override {
+        if (name != "/robot") {
+            return std::nullopt;
+        }
+        EntityMotion motion;
+        motion.pose.position = {1.0, 2.0, 0.1};
+        motion.twist = {0.5, 0.0, 0.0, 0.0, 0.0, 0.25};
+        return motion;
+    }
+};
+
+class SimulationServicesTest : public BridgeTest {
+protected:
+    void SetUp() override {
+        BridgeTest::SetUp();
+        bridge_->serveSimulation(fake_);
+    }
+
+    /// Calls `service` and serves the bridge's queue on this thread until the answer comes.
+    template <class Srv>
+    typename Srv::Response::SharedPtr call(const std::string& service,
+                                           typename Srv::Request request) {
+        auto client = listener_->create_client<Srv>(service);
+        EXPECT_TRUE(client->wait_for_service(5s)) << service;
+        auto future =
+            client->async_send_request(std::make_shared<typename Srv::Request>(std::move(request)));
+        const auto deadline = std::chrono::steady_clock::now() + 10s;
+        while (future.wait_for(5ms) != std::future_status::ready &&
+               std::chrono::steady_clock::now() < deadline) {
+            bridge_->handleRequests();
+            executor_.spin_some();
+        }
+        EXPECT_EQ(future.wait_for(0s), std::future_status::ready) << service;
+        return future.get();
+    }
+
+    FakeSimulation fake_;
+};
+
+namespace si = simulation_interfaces;
+
+TEST_F(SimulationServicesTest, PausesStepsAndResets) {
+    si::srv::StepSimulation::Request step;
+    step.steps = 5;
+    EXPECT_EQ(call<si::srv::StepSimulation>("/step_simulation", step)->result.result,
+              si::msg::Result::RESULT_OPERATION_FAILED)
+        << "stepping a playing simulation must fail";
+
+    si::srv::SetSimulationState::Request pause;
+    pause.state.state = si::msg::SimulationState::STATE_PAUSED;
+    EXPECT_EQ(call<si::srv::SetSimulationState>("/set_simulation_state", pause)->result.result,
+              si::msg::Result::RESULT_OK);
+    EXPECT_EQ(call<si::srv::SetSimulationState>("/set_simulation_state", pause)->result.result,
+              si::srv::SetSimulationState::Response::ALREADY_IN_TARGET_STATE);
+    EXPECT_EQ(call<si::srv::GetSimulationState>("/get_simulation_state",
+                                                si::srv::GetSimulationState::Request())
+                  ->state.state,
+              si::msg::SimulationState::STATE_PAUSED);
+
+    EXPECT_EQ(call<si::srv::StepSimulation>("/step_simulation", step)->result.result,
+              si::msg::Result::RESULT_OK);
+    EXPECT_EQ(fake_.stepped, 5U);
+
+    si::srv::ResetSimulation::Request timeOnly;
+    timeOnly.scope = si::srv::ResetSimulation::Request::SCOPE_TIME;
+    EXPECT_EQ(call<si::srv::ResetSimulation>("/reset_simulation", timeOnly)->result.result,
+              si::msg::Result::RESULT_FEATURE_UNSUPPORTED);
+    EXPECT_EQ(
+        call<si::srv::ResetSimulation>("/reset_simulation", si::srv::ResetSimulation::Request())
+            ->result.result,
+        si::msg::Result::RESULT_OK);
+    EXPECT_EQ(fake_.resets, 1);
+
+    const auto spawn = call<si::srv::SpawnEntity>("/spawn_entity", si::srv::SpawnEntity::Request());
+    EXPECT_EQ(spawn->result.result, si::msg::Result::RESULT_FEATURE_UNSUPPORTED);
+    EXPECT_FALSE(spawn->result.error_message.empty());
+}
+
+TEST_F(SimulationServicesTest, ListsAndFiltersEntitiesAndReportsTheirState) {
+    EXPECT_EQ(call<si::srv::GetEntities>("/get_entities", si::srv::GetEntities::Request())
+                  ->entities.size(),
+              3U);
+
+    si::srv::GetEntities::Request byName;
+    byName.filters.filter = "pallet|robot";
+    EXPECT_EQ(call<si::srv::GetEntities>("/get_entities", byName)->entities,
+              (std::vector<std::string>{"/robot", "/scenery/pallet"}));
+
+    si::srv::GetEntities::Request byCategory;
+    si::msg::EntityCategory statics;
+    statics.category = si::msg::EntityCategory::CATEGORY_STATIC_OBJECT;
+    byCategory.filters.categories.push_back(statics);
+    EXPECT_EQ(call<si::srv::GetEntities>("/get_entities", byCategory)->entities,
+              (std::vector<std::string>{"/scenery/pallet", "/scenery/rack"}));
+
+    si::srv::GetEntities::Request byTag;
+    byTag.filters.tags.tags = {"shelf"};
+    EXPECT_EQ(call<si::srv::GetEntities>("/get_entities", byTag)->result.result,
+              si::msg::Result::RESULT_FEATURE_UNSUPPORTED);
+
+    si::srv::GetEntityState::Request robot;
+    robot.entity = "/robot";
+    const auto state = call<si::srv::GetEntityState>("/get_entity_state", robot);
+    EXPECT_EQ(state->result.result, si::msg::Result::RESULT_OK);
+    EXPECT_EQ(state->state.header.frame_id, "world");
+    EXPECT_DOUBLE_EQ(state->state.pose.position.y, 2.0);
+    EXPECT_DOUBLE_EQ(state->state.twist.angular.z, 0.25);
+
+    si::srv::GetEntityState::Request missing;
+    missing.entity = "/nope";
+    EXPECT_EQ(call<si::srv::GetEntityState>("/get_entity_state", missing)->result.result,
+              si::msg::Result::RESULT_NOT_FOUND);
 }
 
 }  // namespace
