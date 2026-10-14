@@ -54,7 +54,8 @@ and licenses come from `docs/plan/verification.md` (checked 2026-10-13). A cell 
 | SDFormat | SDF import | `ros-lyrical-sdformat-vendor` | 0.3.4 (vendor package) | Apache-2.0 (TODO(verify)) | Low | |
 | Assimp | mesh import | apt `libassimp-dev` | 6.0.4 | BSD-3-Clause (TODO(verify)) | Low | Import-time only |
 | CoACD | collision bake tool | `coacd_vendor` | TODO(verify) | MIT | Medium | Offline tool; V-HACD (BSD-3-Clause) is the alternative |
-| GDAL, PROJ, GeographicLib | geospatial | apt | 3.12.2, 9.7.1, 2.7 | MIT-style (TODO(verify) each) | Low | Tools only, plus GeographicLib in tests |
+| GDAL, PROJ | geospatial | apt | 3.12.2, 9.7.1 | MIT-style (TODO(verify) each) | Low | Tools only |
+| GeographicLib | `lagrange_core` tests (coordinate conversions) | apt `libgeographiclib-dev`, rosdep `geographiclib` | 2.7 | MIT (Expat) for the library; `kissfft.hh` BSD-3-Clause; Debian packaging files GPL-3+, not linked (verified in the package's `copyright` file, 2026-10-14) | Low | Test dependency only; later geospatial tools |
 | nanobind | Python bindings | apt `nanobind-dev` | 2.11.0 | BSD-3-Clause | Low | rosdep key `nanobind-dev` |
 | mp-units | optional compile-time units inside modules | `ros-lyrical-mp-units-vendor` | 2.5.0 | MIT (TODO(verify)) | Low | Not used for the runtime `Unit` check (Q6) |
 
@@ -98,7 +99,8 @@ pinned commits, because they must agree on one ImGui version and one `imconfig.h
 ## 4. OpenUSD build plan (highest build risk)
 
 Facts: not packaged for Ubuntu 26.04; upstream v26.08; needs TBB and (for imaging) many optional
-libraries; long build. Building with GCC 15.2, CMake 4.2 and Python 3.14 is unverified.
+libraries. v26.08 builds unpatched with GCC 15.2, CMake 4.2, system TBB 2022.3 and Python 3.14
+on amd64: about 5 min without Python and 12 min with it on 16 cores (spike, 2026-10-14).
 
 Plan:
 
@@ -108,8 +110,9 @@ Plan:
    OpenImageIO, OpenColorIO, Alembic, Draco, MaterialX (until needed), tests, tutorials,
    examples. Options in upstream CMake terms: `PXR_BUILD_IMAGING=OFF`,
    `PXR_BUILD_USD_IMAGING=OFF`, `PXR_BUILD_USDVIEW=OFF`, `PXR_BUILD_TESTS=OFF`,
-   `PXR_BUILD_EXAMPLES=OFF`, `PXR_BUILD_TUTORIALS=OFF`, `PXR_ENABLE_PYTHON_SUPPORT` per step 3
-   (option names TODO(verify) against v26.08).
+   `PXR_BUILD_EXAMPLES=OFF`, `PXR_BUILD_TUTORIALS=OFF`, `PXR_ENABLE_PYTHON_SUPPORT` per step 3,
+   plus `PXR_BUILD_EXEC=OFF` and `PXR_ENABLE_GL_SUPPORT=OFF` (option names verified in v26.08's
+   `cmake/defaults/Options.cmake`; spike result in `docs/plan/spikes/0.2-B1-openusd.md`).
 2. **System dependencies only**: TBB from apt. No bundled downloads; the vendor package does not
    use upstream's `build_usd.py`, which fetches its own dependencies.
 3. **Python**: build the USD Python bindings against system Python 3.14 only if step 5's spike

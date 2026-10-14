@@ -1,7 +1,7 @@
 """SI units for signals, as lagrange.viewer.v1.Unit messages.
 
-The `kind` numbers follow lagrange::QuantityKind in docs/design/architecture.md section 3.
-They must be kept equal to the C++ enum once core/signals/Unit.hpp exists.
+The `kind` numbers are those of lagrange::QuantityKind in core/signals/include/lagrange/signals/
+Unit.hpp and must stay equal to it.
 """
 
 from __future__ import annotations
@@ -16,8 +16,11 @@ KIND_ANGULAR_VELOCITY = 11
 KIND_ANGULAR_POSITION = 12
 KIND_POSITION = 14
 KIND_RATIO = 24
+KIND_CHARGE = 7
 KIND_RESISTANCE = 8
 KIND_LINEAR_ACCELERATION = 26
+KIND_INDUCTANCE = 28
+KIND_MASS = 31
 
 
 def _unit(display: str, kind: int, **exponents: int) -> common_pb2.Unit:
@@ -32,14 +35,14 @@ AMPERE = _unit("A", KIND_CURRENT, current=1)
 VOLT = _unit("V", KIND_VOLTAGE, length=2, mass=1, time=-3, current=-1)
 KELVIN = _unit("K", KIND_TEMPERATURE, temperature=1)
 ONE = _unit("1", KIND_RATIO)
-# Units of prim attributes. kind 0: no quantity kind assigned yet (lagrange::QuantityKind).
+# Units of prim attributes. kind 0: no single quantity kind (QuantityKind::Unspecified).
 # U+2126 OHM SIGN, the unit symbol (IBM Plex Mono has it; it has no Greek capital omega).
 OHM = _unit("\u2126", KIND_RESISTANCE, length=2, mass=1, time=-3, current=-2)
-HENRY = _unit("H", 0, length=2, mass=1, time=-2, current=-2)
+HENRY = _unit("H", KIND_INDUCTANCE, length=2, mass=1, time=-2, current=-2)
 NEWTON_METRE_PER_AMPERE = _unit("N·m/A", 0, length=2, mass=1, time=-2, current=-1)
 JOULE_PER_KELVIN = _unit("J/K", 0, length=2, mass=1, time=-2, temperature=-1)
 WATT_PER_KELVIN = _unit("W/K", 0, length=2, mass=1, time=-3, temperature=-1)
-AMPERE_HOUR = _unit("A·h", 0, time=1, current=1)
+AMPERE_HOUR = _unit("A·h", KIND_CHARGE, time=1, current=1)
 AMPERE_HOUR.scale = 3600.0  # one ampere hour is 3600 coulombs
-KILOGRAM = _unit("kg", 0, mass=1)
+KILOGRAM = _unit("kg", KIND_MASS, mass=1)
 METRE_PER_SECOND_SQUARED = _unit("m/s²", KIND_LINEAR_ACCELERATION, length=1, time=-2)

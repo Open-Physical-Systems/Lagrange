@@ -1,0 +1,7 @@
+syntax = "proto3";
+message Pose {
+  float position_x = 1; // BAD
+  repeated float origin_world = 2; // BAD
+  float aabb = 3;
+  double translation = 4;
+}

@@ -220,16 +220,17 @@ keeps its shape. Details in RFC 0001.
 
 **F3. Schema version suffix `_v1` (§3 invariant 11, §11.3).**
 OpenUSD's schema versioning convention is `<Family>_<N>` (for example `ElectricalMotorAPI_1`),
-and USD's registry parses family and version from that form [Medium; to be verified against the
-pinned USD release]. `_v1` would not be recognised as a version by USD tooling. The usage example
+and USD's registry parses family and version from that form (verified with v26.08 in the
+OpenUSD spike, `docs/plan/spikes/0.2-B1-openusd.md`). `_v1` would not be recognised as a version by USD tooling. The usage example
 in §11.3 also applies unversioned names.
 **Fix:** use `<Family>_<N>`; say "version 1" in prose.
 
 **F4. Schema attributes are `float` and carry units only in comments (§11.3).**
 `float` loses precision for values such as capacities in coulombs or geodetic quantities and
 forces conversions at load. Units in comments cannot be checked.
-**Fix:** `double` for physical parameters; a `lagrange:unit` customData entry on every attribute
-definition, parsed by the loader.
+**Fix:** `double` for physical parameters; a registered `lagrangeUnit` metadata field on every
+attribute definition, parsed by the loader. (Not customData: `usdGenSchema` and the schema
+registry drop it; see the OpenUSD spike.)
 
 **F5. Profile format gaps (§11.1).**
 (a) No `schema_version`, so migration is impossible. (b) No `seed`, `deterministic`, `tier`.

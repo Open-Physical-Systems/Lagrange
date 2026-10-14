@@ -27,9 +27,12 @@ before the first one is implemented, and a migration path from the start (invari
 1. Applied API schemas only; no new prim types.
 2. One namespace per library: `elec:`, `thermal:`, `aero:`, `weather:`, `emi:`, `rad:`,
    `sensmat:`, `sensor:`, `world:`.
-3. SI units for every attribute, recorded in `customData["lagrange:unit"]` on the attribute
-   definition and parsed by the loader into `lagrange::Unit`. A schema attribute without a unit
-   entry fails a repository test.
+3. SI units for every attribute, recorded in the registered metadata field `lagrangeUnit` on
+   the attribute definition and parsed by the loader into `lagrange::Unit`. A schema attribute
+   without a unit entry fails a repository test. (Changed from `customData["lagrange:unit"]`
+   after the OpenUSD spike: `usdGenSchema` deletes property customData and the schema registry
+   refuses it; a field registered through `SdfMetadata` in `plugInfo.json` survives generation
+   and resolves on every attribute. Evidence: `docs/plan/spikes/0.2-B1-openusd.md`.)
 4. Physical parameters are `double`.
 5. Site-dependent quantities (mains frequency, ambient temperature, Earth magnetic field, water
    density) have no fallback value. Missing values are load errors.
@@ -108,8 +111,8 @@ collected and reported together with prim paths.
    with drive-design experience, and a datasheet conversion guide.
 3. **One `RadiationAPI` with a role token** versus separate source, victim and shield schemas.
 4. **Codeless schemas** (open question Q7): confirm.
-5. **Schema suffix** (open question F3): confirm `<Family>_<N>` after checking the pinned USD
-   release's documentation.
+5. **Schema suffix** (open question F3): `<Family>_<N>` is what OpenUSD v26.08 parses as
+   family and version (verified in the OpenUSD spike); `_v1` is not. Recommend `_N`.
 6. **Relationship of `SensorAPI` to existing sensor schemas** in other ecosystems (Isaac Sim's
    sensor schemas, SDFormat sensor elements): importer mappings only, or aliases?
 7. **MaterialX**: when to read `UsdMtlx` materials directly.
