@@ -14,10 +14,20 @@ set -u
 
 dir="$(mktemp -d)"
 log="$dir/launch.log"
-ros2 launch lagrange_demos amr_warehouse.launch.py viewer:=false \
+# In its own process group, so that everything it started can be stopped together.
+setsid ros2 launch lagrange_demos amr_warehouse.launch.py viewer:=false \
     endpoint:="unix:$dir/demo.sock" >"$log" 2>&1 &
 launch=$!
-trap 'kill -INT "$launch" 2>/dev/null; wait "$launch" 2>/dev/null || true' EXIT
+stop() {
+    # SIGTERM, not SIGINT: a background job of a non-interactive shell ignores SIGINT.
+    kill -TERM -- "-$launch" 2>/dev/null || return 0
+    for _ in $(seq 30); do
+        kill -0 -- "-$launch" 2>/dev/null || return 0
+        sleep 1
+    done
+    kill -KILL -- "-$launch" 2>/dev/null || true
+}
+trap stop EXIT
 
 # One round is six legs, about 75 s of sim time at real time.
 status=0
