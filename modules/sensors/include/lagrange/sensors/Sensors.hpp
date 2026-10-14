@@ -22,9 +22,11 @@ inline constexpr double kNoHit = std::numeric_limits<double>::infinity();
 /// One module per sensor of the world (sensors.md §3): its rate is the sensor's update rate,
 /// so its signals have that native rate. Domain "sensors", name "<type>_<sensor name>".
 ///
-/// Lidar (2D, raycast level): one ray per sample from min_angle to max_angle in the sensor's xy
-/// plane, against every collider; Gaussian range noise; no return beyond max_range or below
-/// min_range (+inf). Output sensor/<n>/ranges, ScalarArray of `samples`, m.
+/// Lidar (raycast level): one ray per beam of its LidarLayout, `samples` columns from min_angle
+/// to max_angle about the sensor's z, in `vertical_samples` rings (1: a 2D scanner in the xy
+/// plane), against every collider; Gaussian range noise; no return beyond max_range or below
+/// min_range (+inf). Output sensor/<n>/ranges, ScalarArray of samples x vertical_samples, m,
+/// ring after ring (LidarLayout).
 ///
 /// IMU: specific force and angular rate in the sensor frame from the body's proper
 /// acceleration and twist, plus white Gaussian noise (accel_noise, gyro_noise); the lever arm

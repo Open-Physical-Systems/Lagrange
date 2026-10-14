@@ -114,9 +114,11 @@ public:
 ///
 /// It reads the signal bus after the scheduler's ticks and publishes, stamped with simulation
 /// time: /clock; /joint_states for every hinge and slide joint; /odom and the odom → base TF
-/// from the base body's pose and twist (ground truth); /tf_static for sensor frames; /scan
-/// (sensor_msgs/LaserScan) and /imu (sensor_msgs/Imu) when their sensors sample, named /scan
-/// and /imu when the robot has one of each, /<sensor>/scan and /<sensor>/imu otherwise; and
+/// from the base body's pose and twist (ground truth); /tf_static for sensor frames; when
+/// their sensors sample, /scan (sensor_msgs/LaserScan) for 2D lidars, /points
+/// (sensor_msgs/PointCloud2: x, y, z, intensity, ring; organised rings x columns) for 3D
+/// lidars, and /imu (sensor_msgs/Imu), each named so when the robot has one of the kind and
+/// /<sensor>/scan, /<sensor>/points, /<sensor>/imu otherwise; and
 /// /robot_description, latched. It subscribes /cmd_vel: geometry_msgs/TwistStamped, which Nav2
 /// and ros2_control publish by default, or geometry_msgs/Twist (BridgeSettings::stampedCmdVel).
 ///

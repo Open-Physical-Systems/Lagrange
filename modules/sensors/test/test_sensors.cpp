@@ -113,6 +113,41 @@ TEST(Lidar, RangesInARoomAreTheDistancesToTheWalls) {
     EXPECT_NEAR(ranges[6], 1.5, 1e-12);                   // 90°: wall y = 2
 }
 
+TEST(Lidar, RingsOfA3dLidarHitTheFloorAndTheWalls) {
+    // Sensor 0.5 m above the floor at (1, 0.5); three rings at -30, 0 and +30 degrees; four
+    // columns at 0, 90, 180 and 270 degrees (the last equals -90).
+    World world = room(4, 0.0);
+    world.addCollider(kWorldBody, ShapeType::Plane, {0, 0, 0}, Pose{}, 1.0);
+    auto& settings = world.sensors.settings[0];
+    settings["min_angle"] = 0.0;
+    settings["max_angle"] = 1.5 * std::numbers::pi;
+    settings["vertical_samples"] = 3.0;
+    settings["vertical_min_angle"] = -std::numbers::pi / 6.0;
+    settings["vertical_max_angle"] = std::numbers::pi / 6.0;
+    Scheduler scheduler;
+    for (auto& module : createSensorModules(world)) {
+        scheduler.add(std::move(module));
+    }
+    ASSERT_TRUE(scheduler.wire(WorldView(world)));
+    ASSERT_TRUE(scheduler.stepTick().ok());
+    const std::span<const double> r =
+        scheduler.bus().readN(scheduler.bus().find("sensor/scanner/ranges"));
+    ASSERT_EQ(r.size(), 12U);  // ring after ring, lowest first
+    const double cos30 = std::cos(std::numbers::pi / 6.0);
+    // Lowest ring: the floor, 0.5 m below, at 0.5 / sin 30 = 1 m, before any wall.
+    for (int column = 0; column < 4; ++column) {
+        EXPECT_NEAR(r[column], 1.0, 1e-12) << "column " << column;
+    }
+    // Middle ring: the walls, as the 2D scanner sees them.
+    EXPECT_NEAR(r[4], 2.0, 1e-12);  // 0 deg: x = 3
+    EXPECT_NEAR(r[5], 1.5, 1e-12);  // 90 deg: y = 2
+    EXPECT_NEAR(r[6], 4.0, 1e-12);  // 180 deg: x = -3
+    EXPECT_NEAR(r[7], 2.5, 1e-12);  // 270 deg: y = -2
+    // Top ring: the same walls, further along the slanted beam.
+    EXPECT_NEAR(r[8], 2.0 / cos30, 1e-12);
+    EXPECT_NEAR(r[9], 1.5 / cos30, 1e-12);
+}
+
 TEST(Lidar, NoiseHasTheConfiguredSpreadAndIsDeterministic) {
     const World world = room(720, 0.02);
     const auto scan = [&](std::uint64_t seed) {

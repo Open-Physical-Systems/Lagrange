@@ -1,5 +1,6 @@
 #include "lagrange/random/Philox.hpp"
 #include "lagrange/sensors/Sensors.hpp"
+#include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
@@ -187,9 +188,8 @@ public:
 
     Status declare(const WorldView& world, const ModuleConfig&, SignalDeclarer& d) override {
         const World::Sensors& sensors = world.sensors();
-        samples_ = static_cast<std::uint32_t>(setting(sensors, sensor_, "samples", 360.0));
-        minAngle_ = setting(sensors, sensor_, "min_angle", -3.14159265358979);
-        maxAngle_ = setting(sensors, sensor_, "max_angle", 3.14159265358979);
+        layout_ = LidarLayout::from(sensors.settings[sensor_]);
+        samples_ = layout_.beams();
         minRange_ = setting(sensors, sensor_, "min_range", 0.1);
         maxRange_ = setting(sensors, sensor_, "max_range", 30.0);
         noise_ = setting(sensors, sensor_, "range_noise", 0.0);
@@ -236,6 +236,7 @@ public:
             }
             shapes_.push_back(shape);
         }
+        placed_.resize(shapes_.size());
         buffer_.assign(samples_, kNoHit);
         bus.writeN(ranges_, buffer_);
         return {};
@@ -243,16 +244,18 @@ public:
 
     Status step(const StepContext& context, SignalBus& bus) override {
         const Pose sensor = compose(bodyPose(bus, body_), mount_);
-        const double increment = samples_ > 1 ? (maxAngle_ - minAngle_) / (samples_ - 1) : 0.0;
+        // Place every shape once per scan, not once per beam.
+        for (std::size_t k = 0; k < shapes_.size(); ++k) {
+            const Shape& shape = shapes_[k];
+            placed_[k] =
+                shape.body < 0 ? shape.pose : compose(bodyPose(bus, shape.body), shape.pose);
+        }
         for (std::uint32_t i = 0; i < samples_; ++i) {
-            const double angle = minAngle_ + increment * i;
-            const Vec3 dir = rotate(sensor.orientation, {std::cos(angle), std::sin(angle), 0.0});
+            const Vec3 dir = rotate(sensor.orientation, layout_.direction(i));
             double nearest = kNoHit;
-            for (const Shape& shape : shapes_) {
-                const Pose pose =
-                    shape.body < 0 ? shape.pose : compose(bodyPose(bus, shape.body), shape.pose);
-                nearest =
-                    std::min(nearest, raycast(shape.type, shape.size, pose, sensor.position, dir));
+            for (std::size_t k = 0; k < shapes_.size(); ++k) {
+                nearest = std::min(nearest, raycast(shapes_[k].type, shapes_[k].size, placed_[k],
+                                                    sensor.position, dir));
             }
             if (nearest < minRange_ || nearest > maxRange_) {
                 buffer_[i] = kNoHit;  // no valid return (sensor_msgs/LaserScan convention)
@@ -284,11 +287,13 @@ private:
         return {{v[0], v[1], v[2]}, {v[3], v[4], v[5], v[6]}};
     }
 
-    std::uint32_t samples_{0};
-    double minAngle_{0.0}, maxAngle_{0.0}, minRange_{0.0}, maxRange_{0.0}, noise_{0.0};
+    LidarLayout layout_;
+    std::uint32_t samples_{0};  // beams, all rings
+    double minRange_{0.0}, maxRange_{0.0}, noise_{0.0};
     std::vector<Pose> rest_;
     std::vector<SignalId> poses_;
     std::vector<Shape> shapes_;
+    std::vector<Pose> placed_;  // world pose of each shape for the current scan
     std::vector<double> buffer_;
     SignalId ranges_;
 };
