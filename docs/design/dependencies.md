@@ -30,7 +30,7 @@ and licenses come from `docs/plan/verification.md` (checked 2026-10-13). A cell 
 | Dependency | Used by | Obtained from | Version seen | License | Build risk | Notes |
 |---|---|---|---|---|---|---|
 | OpenUSD | `core/stage`, `schemas`, importers, tools | `openusd_vendor` | upstream v26.08 | TOST-1.0 (Apache-2.0 with modified trademark clause) | **High** | Section 4 |
-| MuJoCo | rigid body, MJCF import | `ros-lyrical-mujoco-vendor` (preferred) or `libmujoco-dev` | 3.12.0 (vendor), 3.5.0 (apt), 3.15.0 (upstream) | Apache-2.0 | Low | One source per build (Q9) |
+| MuJoCo | rigid body, MJCF import | `ros-lyrical-mujoco-vendor`, rosdep `mujoco_vendor` (decided in spike 0.2-C1) | 3.12.0 (vendor), 3.5.0 (apt, not used), 3.15.0 (upstream) | Apache-2.0; bundled third-party code MIT, BSD, Apache-2.0 with LLVM exception, OFL (verified from the package's `LICENSE` and `THIRD_PARTY_NOTICES`, 2026-10-14) | Low | One source per build (Q9). Validation: `docs/plan/spikes/0.2-C1-mujoco.md` |
 | Jolt Physics | rigid body | `jolt_vendor` | v5.6.0 | MIT | Low | Plain CMake, no dependencies |
 | PhysX 5 | rigid body (vehicles, GPU) | `physx_vendor` | SDK version TODO(verify) | BSD-3-Clause | **High** | Custom build system (`generate_projects`), GPU part needs the CUDA toolkit; GCC 15 compatibility TODO(verify). Optional |
 | Embree | CPU ray casting (lidar, radar, dose, comms) | apt `libembree-dev` | 4.4.0 | Apache-2.0 | Low | rosdep key `embree` |
