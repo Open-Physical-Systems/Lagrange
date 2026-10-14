@@ -59,6 +59,6 @@ jobs:
           colcon build --packages-up-to lagrange_server lagrange_demos \
             --packages-skip lagrange_viewer --event-handlers console_cohesion+ \
             --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=OFF
-      - name: Patrol two rounds
+      - name: Patrol for 10 simulated minutes without a collision
         shell: bash
-        run: src/lagrange/tools/ci/nav2_demo.sh 2
+        run: src/lagrange/tools/ci/nav2_demo.sh 10

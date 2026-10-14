@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# The v0.2 acceptance test: the sample AMR in the small warehouse, Nav2 driving it through the
-# patrol waypoints. Fails if any waypoint is missed.
-# Usage (from the colcon workspace root, after building): tools/ci/nav2_demo.sh [rounds]
+# The v0.2 acceptance test (criterion 1): the sample AMR in the small warehouse, Nav2 driving it
+# through the patrol waypoints for a number of simulated minutes. Fails if any waypoint is
+# missed or the robot touches the scenery.
+# Usage (from the colcon workspace root, after building): tools/ci/nav2_demo.sh [minutes]
 set -euo pipefail
 
-rounds="${1:-1}"
+minutes="${1:-1}"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-77}"
 export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 set +u
@@ -30,9 +31,9 @@ stop() {
 }
 trap stop EXIT
 
-# One round is six legs, about 75 s of sim time at real time.
+# Real time, plus start-up and the round that is under way when the time is up.
 status=0
-timeout $((300 * rounds)) ros2 run lagrange_demos patrol --rounds "$rounds" || status=$?
+timeout $((minutes * 90 + 300)) ros2 run lagrange_demos patrol --minutes "$minutes" || status=$?
 if [[ $status -ne 0 ]]; then
     echo "--- launch log (last 80 lines) ---"
     tail -n 80 "$log"
