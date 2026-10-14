@@ -1,6 +1,7 @@
 #include "Recorder.hpp"
 #include "lagrange/proto/Connection.hpp"
 #include "lagrange/proto/Framing.hpp"
+#include "lagrange/rigid_body/FixedRobot.hpp"
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/ros2/Bridge.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
@@ -227,7 +228,11 @@ struct Server::Impl {
     Status build() {
         // A run that takes commands from ROS is not deterministic: its input comes from outside.
         auto next = std::make_unique<Scheduler>(SchedulerOptions{.deterministic = !bridge});
-        next->add(std::make_unique<rigid_body::MujocoBackend>());
+        if (substituted("rigid_body")) {
+            next->add(std::make_unique<rigid_body::FixedRobot>());
+        } else {
+            next->add(std::make_unique<rigid_body::MujocoBackend>());
+        }
         if (robot.actuatedJoints.size() == 2) {
             std::function<std::optional<VelocityCommand>()> external;
             if (bridge) {
@@ -244,7 +249,8 @@ struct Server::Impl {
             next->add(std::move(command));
             next->add(std::make_unique<DiffDriveController>(driveSettings()));
         }
-        for (auto& sensor : sensors::createSensorModules(robot.world)) {
+        for (auto& sensor : substituted("sensors") ? sensors::createSensorSubstitutes(robot.world)
+                                                   : sensors::createSensorModules(robot.world)) {
             next->add(std::move(sensor));
         }
         auto wired = next->wire(WorldView(robot.world));
@@ -877,14 +883,19 @@ struct Server::Impl {
         return rate > 0.0 ? static_cast<std::int64_t>(std::llround(1e9 / rate)) : 0;
     }
 
+    [[nodiscard]] bool substituted(std::string_view domain) const {
+        return options.substituted.contains(std::string(domain));
+    }
+
     std::string profileYaml() const {
         std::string yaml =
             "# Lagrange simulation profile\nschema_version: 1\nstage: " + robot.sourcePath +
             "\n\ndomains:\n";
         for (const DomainRow& row : kDomains) {
-            if (std::string_view(row.domain) == "rigid_body") {
+            if (std::string_view(row.domain) == "rigid_body" && !substituted("rigid_body")) {
                 yaml += "  rigid_body: {enabled: true, backend: mujoco, dt: 0.001}\n";
-            } else if (std::string_view(row.domain) == "sensors" && hasSensors()) {
+            } else if (std::string_view(row.domain) == "sensors" && hasSensors() &&
+                       !substituted("sensors")) {
                 yaml += "  sensors: {enabled: true}\n";
             } else if (std::string_view(row.domain) == "comms" ||
                        std::string_view(row.domain) == "traffic" ||
@@ -920,10 +931,11 @@ struct Server::Impl {
             d.set_domain(row.domain);
             const bool physics = std::string_view(row.domain) == "rigid_body";
             const bool sensing = std::string_view(row.domain) == "sensors" && hasSensors();
-            const bool running = physics || sensing;
+            const bool built = physics || sensing;  // a module exists for it
+            const bool running = built && !substituted(row.domain);
             d.set_enabled(running);
-            d.set_available(running);
-            d.set_active_module(physics ? "mujoco" : (sensing ? "raycast" : row.substitute));
+            d.set_available(built);
+            d.set_active_module(running ? (physics ? "mujoco" : "raycast") : row.substitute);
             d.set_substituted(!running);
             d.set_cpu_ms_per_sim_s(cost[row.domain]);
             if (sensing) {
@@ -931,7 +943,7 @@ struct Server::Impl {
                 d.set_dt_ns(fastestSensorNs());
                 d.add_depends_on("rigid_body");
             }
-            if (!running) {
+            if (!built) {
                 d.set_unavailable_reason("no module in this build yet; the substitute stands in");
             }
             v1::SubstituteOption& option = *d.add_substitutes();

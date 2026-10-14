@@ -54,6 +54,7 @@ int usage(const char* error) {
                  "            server stops or the run is reset; the mock server replays it\n"
                  "  --record-max-components N  leave larger signals out (default 1024: the\n"
                  "            3D lidar's ranges)\n"
+                 "  --domain D=off  replace domain D (rigid_body, sensors) by its substitute\n"
                  "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
                  "            TwistStamped\n"
                  "  --export-map FILE.yaml  write an occupancy map of the fixed scenery for\n"
@@ -130,6 +131,24 @@ int main(int argc, char** argv) {
                 return usage("--record-max-components needs a positive number");
             }
             options.recordMaxComponents = static_cast<std::uint32_t>(n);
+        } else if (arg == "--domain") {
+            // --domain rigid_body=off: the domain's substitute stands in (fixed robot, ground
+            // truth sensors). Profiles will do this once the server applies them (0.2-E5).
+            const char* text = value();
+            const std::string_view setting = text != nullptr ? text : "";
+            const std::size_t equals = setting.find('=');
+            const std::string domain(setting.substr(0, equals));
+            const std::string_view state =
+                equals == std::string_view::npos ? "" : setting.substr(equals + 1);
+            if ((domain != "rigid_body" && domain != "sensors") ||
+                (state != "on" && state != "off")) {
+                return usage("--domain takes rigid_body=on|off or sensors=on|off");
+            }
+            if (state == "off") {
+                options.substituted.insert(domain);
+            } else {
+                options.substituted.erase(domain);
+            }
         } else if (arg == "--cmd-vel-unstamped") {
             options.stampedCmdVel = false;
         } else if (arg == "--export-map") {

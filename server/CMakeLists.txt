@@ -6,6 +6,7 @@ find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
 find_package(lagrange_proto REQUIRED)
 find_package(lagrange_rigid_body_mujoco REQUIRED)
+find_package(lagrange_rigid_body_substitutes REQUIRED)
 find_package(lagrange_sensors REQUIRED)
 find_package(lagrange_ros2 REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -35,6 +36,7 @@ target_link_libraries(
     PUBLIC lagrange_core::lagrange_core lagrange_proto::lagrange_proto_transport
     PRIVATE
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
+        lagrange_rigid_body_substitutes::lagrange_rigid_body_substitutes
         lagrange_sensors::lagrange_sensors
         lagrange_ros2::lagrange_ros2
         urdfdom::urdfdom_model
@@ -69,6 +71,7 @@ if(BUILD_TESTING)
         test/test_recorder.cpp
         test/test_robot.cpp
         test/test_server.cpp
+        test/test_toggles.cpp
         TIMEOUT 120
     )
     target_link_libraries(

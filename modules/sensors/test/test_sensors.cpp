@@ -148,6 +148,23 @@ TEST(Lidar, RingsOfA3dLidarHitTheFloorAndTheWalls) {
     EXPECT_NEAR(r[9], 1.5 / cos30, 1e-12);
 }
 
+TEST(Substitute, GroundTruthSensorsRenderNothingAndHaveNoNoise) {
+    World world = room(8, 0.05);  // a noisy lidar on a fixed post
+    Scheduler scheduler;
+    for (auto& module : createSensorSubstitutes(world)) {
+        EXPECT_TRUE(module->info().isSubstitute);
+        scheduler.add(std::move(module));
+    }
+    ASSERT_TRUE(scheduler.wire(WorldView(world)));
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{300'000'000}).ok());
+    const std::span<const double> ranges =
+        scheduler.bus().readN(scheduler.bus().find("sensor/scanner/ranges"));
+    ASSERT_EQ(ranges.size(), 8U) << "same signal as the real lidar";
+    for (const double r : ranges) {
+        EXPECT_TRUE(std::isinf(r)) << "no rendering: no returns";
+    }
+}
+
 TEST(Lidar, NoiseHasTheConfiguredSpreadAndIsDeterministic) {
     const World world = room(720, 0.02);
     const auto scan = [&](std::uint64_t seed) {
