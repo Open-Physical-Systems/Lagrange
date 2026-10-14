@@ -167,6 +167,9 @@ inline void applyPlotStyle() {
     p.PlotPadding = ImVec2(8, 6);
     p.LabelPadding = ImVec2(4, 2);
     p.LegendPadding = ImVec2(6, 4);
+    // Auto-fit leaves 10 % of the range above and below the data (ImPlot splits FitPadding
+    // between the two sides), so a flat trace is not drawn on the frame or under the legend.
+    p.FitPadding = ImVec2(0.0F, 0.2F);
     p.Colors[ImPlotCol_FrameBg] = c::bg0;
     p.Colors[ImPlotCol_PlotBg] = c::bg0;
     p.Colors[ImPlotCol_PlotBorder] = c::line;

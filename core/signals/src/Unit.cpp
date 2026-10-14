@@ -333,6 +333,16 @@ std::string symbol(const Unit& unit) {
     return out;
 }
 
+std::string label(const Unit& unit) {
+    for (const Named& named : kNamed) {
+        if (named.unit.dim == unit.dim && named.unit.scale == unit.scale &&
+            (named.unit.kind == unit.kind || unit.kind == QuantityKind::Unspecified)) {
+            return std::string(named.display);
+        }
+    }
+    return symbol(unit);
+}
+
 std::string to_string(const Unit& unit) {
     std::string out;
     for (const Named& named : kNamed) {

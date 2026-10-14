@@ -124,6 +124,9 @@ inline constexpr Unit per_m{{.length = -1}, 1.0, QuantityKind::Extinction};
 /// than 1 is written in front ("3600 A·s").
 [[nodiscard]] std::string symbol(const Unit& unit);
 
+/// The unit as people read it, without the kind: "N·m", "Ω", "m/s²", or the base-unit form.
+[[nodiscard]] std::string label(const Unit& unit);
+
 /// The unit for messages, e.g. "N·m (Torque)": a named symbol where one matches, else the
 /// base-unit form, then the quantity kind. Used in wiring errors, so both sides of a mismatch
 /// read clearly.

@@ -5,6 +5,7 @@
 #include "lagrange/random/Philox.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <map>
 #include <numeric>
@@ -461,7 +462,14 @@ Status Scheduler::stepTick() {
         bus_.currentModule_ = index;
         bus_.misuse_.clear();
         const StepContext context{now_, entry.dt, entry.stepIndex, entry.seed};
+        const auto started = std::chrono::steady_clock::now();
         const Status status = entry.module->step(context, bus_);
+        const std::int64_t elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                         std::chrono::steady_clock::now() - started)
+                                         .count();
+        ++entry.costSteps;
+        entry.costTotalNs += elapsed;
+        entry.costMaxNs = std::max(entry.costMaxNs, elapsed);
         bus_.currentModule_ = SignalBus::kNoModule;
         if (!bus_.misuse_.empty()) {
             return Status::error(StatusCode::Internal,
@@ -488,6 +496,40 @@ Status Scheduler::stepUntil(SimTime t) {
         }
     }
     return {};
+}
+
+SignalWriter Scheduler::writerOf(SignalId output) const {
+    if (!output.valid() || output.isInput() || output.index >= bus_.signals_.size()) {
+        return {};
+    }
+    const Entry& entry = entries_[bus_.signals_[output.index].writer];
+    return {entry.label, entry.dt, entry.info.isSubstitute};
+}
+
+std::vector<Connection> Scheduler::connections() const {
+    std::vector<Connection> out;
+    for (const SignalBus::InputSlot& slot : bus_.inputs_) {
+        if (slot.signal == kNone) {
+            continue;
+        }
+        const SignalBus::SignalRecord& record = bus_.signals_[slot.signal];
+        out.push_back({entries_[record.writer].label, entries_[slot.reader].label, slot.spec.name,
+                       record.spec.unit, slot.spec.unit, slot.spec.feedback});
+    }
+    return out;
+}
+
+std::vector<ModuleCost> Scheduler::takeCosts() {
+    std::vector<ModuleCost> costs;
+    for (const std::uint32_t index : order_) {
+        Entry& entry = entries_[index];
+        costs.push_back({entry.label, std::string(entry.info.domain), entry.dt, entry.costSteps,
+                         entry.costTotalNs, entry.costMaxNs});
+        entry.costSteps = 0;
+        entry.costTotalNs = 0;
+        entry.costMaxNs = 0;
+    }
+    return costs;
 }
 
 std::string Scheduler::dumpGraphDot() const {

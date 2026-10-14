@@ -36,6 +36,14 @@ TEST(Unit, ToStringFallsBackToBaseUnits) {
     EXPECT_EQ(to_string(Unit{}), "1");
 }
 
+TEST(Unit, LabelOmitsTheKind) {
+    EXPECT_EQ(label(units::N_m), "N·m");
+    EXPECT_EQ(label(units::J), "J");
+    EXPECT_EQ(label(units::rad_per_s2), "rad/s²");
+    // Same dimension as a named unit but another kind: the base-unit form, never a wrong name.
+    EXPECT_EQ(label(Unit{units::N_m.dim, 1.0, QuantityKind::Power}), "kg·m²·s⁻²");
+}
+
 TEST(Unit, KindNames) {
     EXPECT_EQ(to_string(QuantityKind::Unspecified), "Unspecified");
     EXPECT_EQ(to_string(QuantityKind::Activity), "Activity");

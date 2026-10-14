@@ -530,6 +530,48 @@ TEST(Execution, BatchEnvironmentsAreSeparate) {
     EXPECT_EQ(batch[3], 10.0);
 }
 
+TEST(Execution, CostsCountStepsAndReset) {
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<TestModule>("a", "fast", 1_ms));
+    scheduler.add(std::make_unique<TestModule>("b", "slow", 10_ms));
+    const World world;
+    ASSERT_TRUE(scheduler.wire(WorldView(world)));
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{100'000'000}).ok());
+    const std::vector<ModuleCost> costs = scheduler.takeCosts();
+    ASSERT_EQ(costs.size(), 2U);
+    EXPECT_EQ(costs[0].label, "a/fast");
+    EXPECT_EQ(costs[0].steps, 100U);
+    EXPECT_EQ(costs[1].steps, 10U);
+    EXPECT_GE(costs[0].maxNs, 0);
+    EXPECT_EQ(scheduler.takeCosts()[0].steps, 0U);
+}
+
+TEST(Execution, WriterOfASignal) {
+    Scheduler scheduler;
+    scheduler.add(source("electrical", 100_us, "x/a/out", units::A, [](double) { return 0.0; }));
+    const World world;
+    ASSERT_TRUE(scheduler.wire(WorldView(world)));
+    const SignalWriter writer = scheduler.writerOf(scheduler.bus().find("x/a/out"));
+    EXPECT_EQ(writer.label, "electrical/source");
+    EXPECT_EQ(writer.dt, 100_us);
+    EXPECT_TRUE(scheduler.writerOf(SignalId{}).label.empty());
+}
+
+TEST(Execution, ConnectionsListWriterReaderAndUnits) {
+    Scheduler scheduler;
+    scheduler.add(relay("a", "x/b/out", "x/a/out", true));
+    scheduler.add(relay("b", "x/a/out", "x/b/out", false));
+    const World world;
+    ASSERT_TRUE(scheduler.wire(WorldView(world)));
+    const std::vector<Connection> wires = scheduler.connections();
+    ASSERT_EQ(wires.size(), 2U);
+    EXPECT_EQ(wires[0].writer, "b/relay");
+    EXPECT_EQ(wires[0].reader, "a/relay");
+    EXPECT_TRUE(wires[0].feedback);
+    EXPECT_EQ(wires[1].signal, "x/a/out");
+    EXPECT_EQ(wires[1].readerUnit, units::m);
+}
+
 TEST(Execution, ShutdownRunsOnce) {
     bool called = false;
     {
