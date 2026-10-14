@@ -44,6 +44,34 @@ struct WiringError {
 /// One line for a startup error message: "UnitMismatch joint/a/torque: writer ...".
 [[nodiscard]] std::string to_string(const WiringError& error);
 
+/// Who writes a signal, for catalogs and tools.
+struct SignalWriter {
+    std::string_view label;  // "rigid_body/mujoco"
+    Duration dt;
+    bool substitute{false};
+};
+
+/// One wired input: who writes the signal, who reads it, with both declared units.
+struct Connection {
+    std::string writer;  // "rigid_body/mujoco"
+    std::string reader;
+    std::string signal;
+    Unit writerUnit;
+    Unit readerUnit;
+    bool feedback{false};
+};
+
+/// Wall-clock cost of one module since the last takeCosts(), for the Performance workspace.
+/// Timing is never part of the state, so it does not affect determinism.
+struct ModuleCost {
+    std::string label;
+    std::string domain;
+    Duration dt;
+    std::uint64_t steps{0};
+    std::int64_t totalNs{0};
+    std::int64_t maxNs{0};
+};
+
 /// One module in the run, in execution order.
 struct ScheduledModule {
     const IModule* module{nullptr};
@@ -85,6 +113,13 @@ public:
     [[nodiscard]] Expected<void, std::vector<WiringError>> wire(const WorldView& world);
 
     [[nodiscard]] std::span<const ScheduledModule> plan() const { return plan_; }
+    /// The module that writes an output signal; empty label for an invalid id.
+    [[nodiscard]] SignalWriter writerOf(SignalId output) const;
+    /// Every connected input after wire(), in declaration order. Unconnected optional inputs
+    /// are not listed.
+    [[nodiscard]] std::vector<Connection> connections() const;
+    /// Step counts and wall time per module since the previous call, in execution order.
+    [[nodiscard]] std::vector<ModuleCost> takeCosts();
     [[nodiscard]] Duration baseTick() const { return baseTick_; }
     [[nodiscard]] Duration hyperperiod() const { return hyperperiod_; }
     /// The wiring as a Graphviz digraph: modules, and one edge per connected signal
@@ -123,6 +158,9 @@ private:
         std::uint64_t seed{0};
         std::uint32_t level{0};
         bool initialised{false};
+        std::uint64_t costSteps{0};
+        std::int64_t costTotalNs{0};
+        std::int64_t costMaxNs{0};
     };
 
     void checkSteps(std::vector<WiringError>& errors);

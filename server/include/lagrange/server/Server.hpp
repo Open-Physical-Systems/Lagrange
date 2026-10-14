@@ -1,0 +1,52 @@
+#pragma once
+
+#include "lagrange/module/Status.hpp"
+#include "lagrange/proto/Endpoint.hpp"
+#include "lagrange/time/SimTime.hpp"
+
+#include <memory>
+#include <string>
+
+namespace lagrange::server {
+
+struct ServerOptions {
+    proto::Endpoint endpoint;
+    std::string robotPath;          // URDF of the robot to simulate
+    std::string profileSchemaPath;  // profiles/schema.json, sent to viewers; empty = none
+    double realTimeFactor{1.0};     // 0 = as fast as possible
+    bool startPaused{false};
+};
+
+/// The simulation server (roadmap 0.2-E1, E2): it loads a robot, wires the MuJoCo backend and
+/// the demo driver on the scheduler, runs them against the wall clock, and serves the viewer
+/// protocol (lagrange.viewer.v1) to any number of viewers, exactly as the mock server does. The
+/// viewer needs no change to connect to it.
+///
+/// Single-threaded: run() alternates between socket I/O and simulation steps, never blocking
+/// for longer than one viewer frame.
+class Server {
+public:
+    explicit Server(ServerOptions options);
+    ~Server();
+    Server(const Server&) = delete;
+    Server& operator=(const Server&) = delete;
+    Server(Server&&) = delete;
+    Server& operator=(Server&&) = delete;
+
+    /// Loads the robot, builds the simulation and starts listening.
+    Status start();
+    /// One iteration: waits up to `timeoutMs` for viewers, advances simulation time by the wall
+    /// time that passed (times the real-time factor), and sends what changed.
+    void runOnce(int timeoutMs);
+
+    /// The endpoint actually bound (with the real port when port 0 was asked for).
+    [[nodiscard]] const proto::Endpoint& endpoint() const;
+    [[nodiscard]] SimTime simTime() const;
+    [[nodiscard]] bool running() const;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+}  // namespace lagrange::server

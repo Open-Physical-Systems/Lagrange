@@ -535,11 +535,23 @@ void servers(LauncherState& state) {
     }
     ImGui::Dummy(ImVec2(0.0F, px(6.0F)));
 
-    serverRow("##local", "Start local simulator", "launches lagrange_server on this machine",
-              "v0.2+", widgets::PillKind::Neutral, false, false);
+    // Starting one is pointless while a server already listens on the default socket.
+    const bool canStart = !state.localServer.empty() && !state.defaultAvailable;
+    if (serverRow("##local", "Start local simulator",
+                  state.localServer.empty() ? "lagrange_server is not installed"
+                                            : "launches lagrange_server on this machine",
+                  state.localServer.empty() ? "not installed"
+                                            : (state.defaultAvailable ? "running" : "available"),
+                  canStart ? widgets::PillKind::Ok : widgets::PillKind::Neutral, state.server == 0,
+                  canStart)) {
+        state.server = 0;
+    }
+    if (state.server == 0 && !canStart) {
+        state.server = 1;
+    }
     char detail[220];
     std::snprintf(detail, sizeof(detail), "%s", state.defaultEndpoint.c_str());
-    if (serverRow("##mock", "lagrange_mock_server", detail,
+    if (serverRow("##mock", "Server on the default socket", detail,
                   state.defaultAvailable ? "ready" : "not running",
                   state.defaultAvailable ? widgets::PillKind::Ok : widgets::PillKind::Warn,
                   state.server == 1, true)) {
@@ -602,6 +614,7 @@ void servers(LauncherState& state) {
     if (clicked || (!endpoint.empty() && !ImGui::GetIO().WantTextInput &&
                     ImGui::IsKeyPressed(ImGuiKey_Enter, false))) {
         state.connectRequested = true;
+        state.startLocalRequested = state.server == 0;
         state.connectEndpoint = endpoint;
     }
     if (!state.error.empty()) {
@@ -614,7 +627,8 @@ void servers(LauncherState& state) {
     }
     if (!state.defaultAvailable && state.server == 1) {
         ImGui::Dummy(ImVec2(0.0F, px(6.0F)));
-        widgets::Caption("Start one in a terminal:");
+        widgets::Caption("Start one in a terminal, the simulator or the recorded sample:");
+        widgets::Mono(c::t2, "ros2 run lagrange_server lagrange_server");
         widgets::Mono(c::t2, "ros2 run lagrange_mock_server lagrange_mock_server --sample");
     }
     dropZone(state);

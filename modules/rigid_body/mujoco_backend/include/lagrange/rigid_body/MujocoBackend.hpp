@@ -16,6 +16,7 @@ namespace lagrange::rigid_body {
 /// init() builds a MuJoCo model from the world tables (bodies, joints, colliders): no MJCF file
 /// and no USD are involved, so the stage stays the only source of the robot (invariant 5).
 /// Settings from the validation spike: elliptic friction cone, implicitfast integrator.
+/// Bodies of one articulated tree do not collide with each other (Gazebo's self_collide false).
 ///
 /// Signals per actuated joint `j` (prismatic joints use N, m, m/s, m/s², kg):
 ///   in  joint/j/torque             N·m, WindowAverage

@@ -236,6 +236,13 @@ public:
         if (graph->nodes.empty()) {
             ImGui::SetCursorPos(ImVec2(px(8.0F), px(8.0F)));
             widgets::Caption("The graph lists no nodes.");
+            if (!graph->note.empty()) {
+                // A server without a bridge says why; that is the whole content of the graph.
+                ImGui::SetCursorPosX(px(8.0F));
+                ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
+                widgets::Pill(graph->note.c_str(), widgets::PillKind::Warn);
+                ImGui::PopTextWrapPos();
+            }
             ImGui::EndChild();
             ImGui::End();
             return;

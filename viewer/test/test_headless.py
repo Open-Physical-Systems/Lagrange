@@ -590,3 +590,35 @@ def test_world_workspace_draws_the_tile_map(socket_dir):
     # Tiles at the lowest level of detail cover most of the map.
     proxy = count(rows, lambda r, g, b: 15 <= r <= 35 and 30 <= g <= 50 and 50 <= b <= 80)
     assert proxy > 50000, f"tile map not drawn ({proxy} pixels)"
+
+
+def test_launcher_starts_the_simulator_and_the_viewer_shows_its_physics(socket_dir):
+    """The launcher's Start local simulator: lagrange_server with MuJoCo, then connect.
+
+    The robot in the scene moves because the physics computes it, not a recording. When the
+    viewer quits it stops the server it started, which removes its socket.
+    """
+    socket = socket_dir / "sim.sock"
+    image = socket_dir / "sim.png"
+    result = run_viewer(
+        "--start-local",
+        "--connect",
+        f"unix:{socket}",
+        "--frames",
+        "90",
+        "--size",
+        "1600x1000",
+        "--workspace",
+        "scene",
+        "--screenshot",
+        str(image),
+    )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    assert stats["notice"] == "", stats["notice"]
+    assert stats["prims"] == 17  # the sample AMR: robot, 7 links, 8 visuals, ground
+    assert stats["deltas"] > 0
+    assert stats["sim_time_ns"] > 0
+    assert stats["profile"] == "valid"
+    assert not socket.exists(), "the viewer did not stop the server it started"

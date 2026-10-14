@@ -184,6 +184,37 @@ TEST(MujocoBackend, FrictionScaleMakesTheBoxSlide) {
     }
 }
 
+TEST(MujocoBackend, LinksOfOneTreeDoNotCollideButTreesDo) {
+    // A ball hangs from an arm on a slider so that it overlaps the arm's base block: inside one
+    // tree that overlap is ignored, so the slider moves freely under a small force.
+    World world;
+    world.gravityLocal = {0.0, 0.0, 0.0};
+    const BodyId base = world.addBody("base", kWorldBody, Pose{}, 5.0, {}, diagonal(0.1, 0.1, 0.1));
+    world.addJoint("rail", JointType::Prismatic, base, {1.0, 0.0, 0.0}, true);
+    world.addCollider(base, ShapeType::Box, {0.2, 0.2, 0.2}, Pose{}, 1.0);
+    const BodyId arm = world.addBody("arm", base, Pose{}, 0.5, {}, diagonal(0.01, 0.01, 0.01));
+    world.addJoint("pin", JointType::Revolute, arm, {0.0, 0.0, 1.0}, false);
+    const BodyId ball =
+        world.addBody("ball", arm, Pose{{0.15, 0.0, 0.0}}, 0.2, {}, diagonal(0.001, 0.001, 0.001));
+    world.addCollider(ball, ShapeType::Sphere, {0.1, 0.0, 0.0}, Pose{}, 1.0);
+    // A separate free block that the base will run into.
+    const BodyId wall =
+        world.addBody("wall", kWorldBody, Pose{{1.0, 0.0, 0.0}}, 50.0, {}, diagonal(1.0, 1.0, 1.0));
+    world.addJoint("wall_free", JointType::Free, wall, {0.0, 0.0, 1.0}, false);
+    world.addCollider(wall, ShapeType::Box, {0.1, 0.5, 0.5}, Pose{}, 1.0);
+
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<MujocoBackend>());
+    scheduler.add(std::make_unique<Constant>("joint/rail/torque", units::N, 5.0));
+    wire(scheduler, world);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{400'000'000}).ok());
+    // Free motion: x = F t² / (2 m) with the whole tree's mass (5.7 kg), 0.07 m after 0.4 s.
+    EXPECT_NEAR(read(scheduler, "joint/rail/position"), 5.0 * 0.16 / (2.0 * 5.7), 2e-3);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{3'000'000'000}).ok());
+    // Separate trees collide: the wall was pushed.
+    EXPECT_GT(read(scheduler, "body/wall/pose", 0), 1.0 + 1e-3);
+}
+
 // --- state ---------------------------------------------------------------------------------
 
 std::uint64_t runAndHash(std::uint64_t seed) {

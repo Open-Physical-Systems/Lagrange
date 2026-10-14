@@ -263,6 +263,34 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
         geom->density = 0.0;
     }
 
+    // No self-collision inside one articulated tree, as Gazebo's default (self_collide false):
+    // links of one robot often overlap by design (a caster under the chassis), and MuJoCo only
+    // filters a body against its direct parent. Separate trees still collide with each other.
+    const auto rootOf = [&bodies](std::size_t b) {
+        while (bodies.parent[b] != kWorldBody) {
+            b = bodies.parent[b].index;
+        }
+        return b;
+    };
+    std::vector<std::size_t> withGeometry;
+    for (std::size_t b = 0; b < bodies.names.size(); ++b) {
+        if (std::find(colliders.body.begin(), colliders.body.end(),
+                      BodyId{static_cast<std::uint32_t>(b)}) != colliders.body.end()) {
+            withGeometry.push_back(b);
+        }
+    }
+    for (std::size_t i = 0; i < withGeometry.size(); ++i) {
+        for (std::size_t k = i + 1; k < withGeometry.size(); ++k) {
+            const std::size_t a = withGeometry[i];
+            const std::size_t b = withGeometry[k];
+            if (rootOf(a) == rootOf(b)) {
+                mjsExclude* exclude = mjs_addExclude(spec);
+                mjs_setString(exclude->bodyname1, bodies.names[a].c_str());
+                mjs_setString(exclude->bodyname2, bodies.names[b].c_str());
+            }
+        }
+    }
+
     mjModel* model = mj_compile(spec, nullptr);
     if (model == nullptr) {
         const std::string error = mjs_getError(spec);

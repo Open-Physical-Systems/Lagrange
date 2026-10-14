@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -19,7 +20,11 @@
 #include <imgui_impl_vulkan.h>
 #include <memory>
 #include <mutex>
+#include <signal.h>
+#include <spawn.h>
+#include <sys/wait.h>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 #include <SDL3/SDL.h>
@@ -107,6 +112,68 @@ SystemInfo systemInfo(const gpu::Device& device, float displayScale) {
 }
 
 // Everything both modes share: ImGui, the panels, the camera and the scene renderer.
+/// lagrange_server in the ROS install the viewer runs from, or empty.
+std::string findLocalServer() {
+    const char* prefixes = std::getenv("AMENT_PREFIX_PATH");
+    if (prefixes == nullptr) {
+        return {};
+    }
+    std::string list = prefixes;
+    std::size_t start = 0;
+    while (start <= list.size()) {
+        const std::size_t end = std::min(list.find(':', start), list.size());
+        const std::filesystem::path candidate =
+            std::filesystem::path(list.substr(start, end - start)) /
+            "lib/lagrange_server/lagrange_server";
+        std::error_code ec;
+        if (end > start && std::filesystem::is_regular_file(candidate, ec)) {
+            return candidate.string();
+        }
+        start = end + 1;
+    }
+    return {};
+}
+
+/// A simulation server started by the viewer from the launcher. Stopped with the viewer.
+class LocalServer {
+public:
+    LocalServer() = default;
+    LocalServer(const LocalServer&) = delete;
+    LocalServer& operator=(const LocalServer&) = delete;
+    ~LocalServer() { stop(); }
+
+    /// Starts `program --listen <endpoint>`. Returns an error message, or empty on success.
+    std::string start(const std::string& program, const std::string& endpoint) {
+        stop();
+        std::vector<std::string> args{program, "--listen", endpoint};
+        std::vector<char*> argv;
+        for (std::string& arg : args) {
+            argv.push_back(arg.data());
+        }
+        argv.push_back(nullptr);
+        const int error =
+            ::posix_spawn(&pid_, program.c_str(), nullptr, nullptr, argv.data(), environ);
+        if (error != 0) {
+            pid_ = -1;
+            return "could not start " + program + ": " + std::strerror(error);
+        }
+        return {};
+    }
+
+    /// Asks the server to finish (SIGTERM) and waits for it.
+    void stop() {
+        if (pid_ > 0) {
+            ::kill(pid_, SIGTERM);
+            int status = 0;
+            ::waitpid(pid_, &status, 0);
+            pid_ = -1;
+        }
+    }
+
+private:
+    pid_t pid_{-1};
+};
+
 class Ui {
 public:
     Ui(const gpu::Device& device, ViewerClient& client, VkFormat targetFormat,
@@ -275,6 +342,14 @@ public:
                                   "' is not a server address (unix:/path or tcp://host:port)";
             } else {
                 launcher_.error.clear();
+                if (launcher_.startLocalRequested) {
+                    // The client keeps retrying until the new server has bound its socket.
+                    launcher_.error =
+                        localServer_.start(launcher_.localServer, launcher_.connectEndpoint);
+                }
+                launcher_.startLocalRequested = false;
+            }
+            if (endpoint && launcher_.error.empty()) {
                 client_.stop();
                 client_.setEndpoint(*endpoint);
                 client_.start();
@@ -315,10 +390,22 @@ public:
         launcher_.system = systemInfo(device_, displayScale);
         launcher_.defaultEndpoint =
             proto::toString(proto::Endpoint::unixSocket(proto::defaultUnixSocketPath()));
+        launcher_.localServer = findLocalServer();
+        launcher_.server = launcher_.localServer.empty() ? 1 : 0;
         recentPath_ = launcher_.system.configDirectory + "/recent.json";
         launcher_.recent.load(recentPath_);
     }
     [[nodiscard]] bool launcherActive() const { return launcher_.active; }
+    /// As if the user chose Start local simulator and pressed Connect (--start-local).
+    void requestStartLocal(const std::string& endpoint) {
+        launcher_.server = 0;
+        launcher_.connectRequested = true;
+        launcher_.startLocalRequested = true;
+        launcher_.connectEndpoint = endpoint;
+        if (launcher_.localServer.empty()) {
+            launcher_.error = "lagrange_server is not installed";
+        }
+    }
     /// A file chosen or dropped while the launcher is shown: opened after connecting.
     void setOpenTarget(const std::string& path) {
         std::error_code ec;
@@ -403,6 +490,7 @@ private:
     RenderOptions renderOptions_;
     std::vector<std::int64_t> bookmarks_;
     LauncherState launcher_;
+    LocalServer localServer_;
     bool recordRecent_{false};
     std::string recentPath_;
     double socketChecked_{-10.0};
@@ -481,7 +569,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
     }
 
     ViewerClient client(endpoint);
-    if (!options.launcher) {
+    if (!options.launcher && !options.startLocal) {
         client.start();
         if (!options.openPath.empty()) {
             openFile(client, options.openPath);
@@ -499,8 +587,11 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
     {
         Ui ui(*device, client, format, 2, 1.0F, false, options.scopeSignals);
         ui.setWorkspace(workspace);
-        if (options.launcher) {
+        if (options.launcher || options.startLocal) {
             ui.showLauncher(1.0F);
+        }
+        if (options.startLocal) {
+            ui.requestStartLocal(proto::toString(endpoint));
         }
         ui.setInitialSelection(options.selectPath);
         ui.setCursors(options.cursors);
@@ -785,8 +876,8 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
 
     // Without a server named on the command line the viewer starts on the launcher, and the
     // client is started when the user picks a server there (design: 01-launcher).
-    const bool launcher =
-        options.launcher || (options.endpoint.empty() && options.openPath.empty());
+    const bool launcher = options.launcher || options.startLocal ||
+                          (options.endpoint.empty() && options.openPath.empty());
     ViewerClient client(endpoint);
     if (!launcher) {
         client.start();
@@ -820,6 +911,9 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setCanOpenFiles(true);
         if (launcher) {
             ui.showLauncher(dpiScale);
+        }
+        if (options.startLocal) {
+            ui.requestStartLocal(proto::toString(endpoint));
         }
         ui.setWorkspace(workspace);
         ui.setInitialSelection(options.selectPath);

@@ -22,6 +22,8 @@ void usage() {
         "  --scope <a,b,...>      open these signals in the scope at start-up\n"
         "  --workspace <name>     workspace to show at start-up: scene, domains or signals\n"
         "  --launcher             start on the launcher (the default when no --connect is given)\n"
+        "  --start-local          press the launcher's Start local simulator: run lagrange_server\n"
+        "                         on the --connect endpoint (or the default socket) and connect\n"
         "  --cursors              show the scope's A and B cursors from the start\n"
         "  --select <prim path>   select this prim once the scene arrived, e.g. /amr/base_link\n"
         "  --set-domain <d>=on|off  switch a domain in the profile being edited (repeatable)\n"
@@ -77,6 +79,8 @@ int main(int argc, char** argv) {
             options.domainEdits.emplace_back(edit.substr(0, equals), state == "on");
         } else if (arg == "--launcher") {
             options.launcher = true;
+        } else if (arg == "--start-local") {
+            options.startLocal = true;
         } else if (arg == "--cursors") {
             options.cursors = true;
         } else if (arg == "--select") {
