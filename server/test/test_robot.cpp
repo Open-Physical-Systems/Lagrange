@@ -39,7 +39,8 @@ TEST(LoadUrdf, SampleAmrBecomesBodiesJointsAndColliders) {
     const Robot robot = amr();
     const World& world = robot.world;
     EXPECT_EQ(robot.name, "amr_diffdrive");
-    EXPECT_EQ(world.bodies.names.size(), 8U);  // chassis, 2 wheels, 2 forks, 2 balls, lidar
+    // Chassis, 2 wheels, 2 forks, 2 balls, front lidar, roof mast and roof lidar.
+    EXPECT_EQ(world.bodies.names.size(), 10U);
     EXPECT_EQ(world.bodies.names[0], "base_link");
     EXPECT_DOUBLE_EQ(world.bodies.mass[0], 20.0);
     EXPECT_DOUBLE_EQ(world.bodies.comLocal[0][2], 0.03);
@@ -71,7 +72,7 @@ TEST(LoadUrdf, SampleAmrBecomesBodiesJointsAndColliders) {
 TEST(LoadUrdf, GazeboSensorBlocksBecomeSensors) {
     const Robot robot = amr();
     const World::Sensors& sensors = robot.world.sensors;
-    ASSERT_EQ(sensors.names.size(), 2U);
+    ASSERT_EQ(sensors.names.size(), 3U);
     EXPECT_EQ(sensors.names[0], "front_lidar");
     EXPECT_EQ(sensors.type[0], SensorType::Lidar);
     EXPECT_EQ(robot.world.bodies.names[sensors.body[0].index], "lidar_link");
@@ -79,9 +80,17 @@ TEST(LoadUrdf, GazeboSensorBlocksBecomeSensors) {
     EXPECT_DOUBLE_EQ(sensors.settings[0].at("samples"), 720.0);
     EXPECT_DOUBLE_EQ(sensors.settings[0].at("max_range"), 20.0);
     EXPECT_DOUBLE_EQ(sensors.settings[0].at("range_noise"), 0.01);
-    EXPECT_EQ(sensors.type[1], SensorType::Imu);
-    EXPECT_DOUBLE_EQ(sensors.rateHz[1], 200.0);
-    EXPECT_DOUBLE_EQ(sensors.settings[1].at("gyro_noise"), 0.002);
+    EXPECT_DOUBLE_EQ(sensors.settings[0].at("vertical_samples"), 1.0);  // a 2D scanner
+    // The roof lidar: 16 rings from -15 to +15 degrees.
+    EXPECT_EQ(sensors.names[1], "top_lidar");
+    EXPECT_EQ(sensors.type[1], SensorType::Lidar);
+    EXPECT_DOUBLE_EQ(sensors.settings[1].at("samples"), 900.0);
+    EXPECT_DOUBLE_EQ(sensors.settings[1].at("vertical_samples"), 16.0);
+    EXPECT_NEAR(sensors.settings[1].at("vertical_min_angle"), -0.261799, 1e-12);
+    EXPECT_NEAR(sensors.settings[1].at("vertical_max_angle"), 0.261799, 1e-12);
+    EXPECT_EQ(sensors.type[2], SensorType::Imu);
+    EXPECT_DOUBLE_EQ(sensors.rateHz[2], 200.0);
+    EXPECT_DOUBLE_EQ(sensors.settings[2].at("gyro_noise"), 0.002);
     EXPECT_EQ(robot.scene.prims[robot.sensorPrim[0]].path,
               "/amr_diffdrive/base_link/lidar_link/front_lidar");
     EXPECT_EQ(robot.scene.prims[robot.sensorPrim[0]].typeName, "Lidar");

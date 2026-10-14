@@ -1,12 +1,15 @@
 #include "lagrange/ros2/Bridge.hpp"
+#include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <future>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <regex>
@@ -47,6 +50,8 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/msg/point_field.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <tf2_msgs/msg/tf_message.hpp>
 
@@ -109,9 +114,11 @@ struct Bridge::Impl {
         std::string frame;
         std::string topic;
         SignalId ranges;
-        double minAngle{0.0}, maxAngle{0.0}, minRange{0.0}, maxRange{0.0}, rateHz{10.0};
+        LidarLayout layout;
+        double minRange{0.0}, maxRange{0.0}, rateHz{10.0};
         SimTime sent{-1};
-        rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr publisher;
+        rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr publisher;         // 2D
+        rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr cloudPublisher;  // 3D
     };
     struct Imu {
         std::string frame;
@@ -133,6 +140,53 @@ struct Bridge::Impl {
     Clock::time_point commandAt;
 
     std::map<std::string, TopicCounter> counters;  // by topic, the bridge's own
+
+    /// A 3D lidar's scan as sensor_msgs/PointCloud2: x, y, z, intensity (float32) and ring
+    /// (uint16), in the sensor frame, organised as rings x columns with NaN where no return.
+    void publishCloud(const Lidar& lidar, std::span<const double> ranges) {
+        using sensor_msgs::msg::PointField;
+        sensor_msgs::msg::PointCloud2 cloud;
+        cloud.header.stamp = stampOf(lidar.sent);
+        cloud.header.frame_id = lidar.frame;
+        cloud.height = lidar.layout.vertical;
+        cloud.width = lidar.layout.horizontal;
+        const auto field = [&cloud](const char* name, std::uint32_t offset, std::uint8_t type) {
+            PointField f;
+            f.name = name;
+            f.offset = offset;
+            f.datatype = type;
+            f.count = 1;
+            cloud.fields.push_back(f);
+        };
+        field("x", 0, PointField::FLOAT32);
+        field("y", 4, PointField::FLOAT32);
+        field("z", 8, PointField::FLOAT32);
+        field("intensity", 12, PointField::FLOAT32);
+        field("ring", 16, PointField::UINT16);
+        constexpr std::uint32_t kStride = 20;  // 18 bytes of fields, padded to 4
+        cloud.point_step = kStride;
+        cloud.row_step = kStride * cloud.width;
+        cloud.is_dense = false;
+        cloud.is_bigendian = false;
+        const std::uint32_t beams = std::min<std::uint32_t>(
+            lidar.layout.beams(), static_cast<std::uint32_t>(ranges.size()));
+        cloud.data.assign(static_cast<std::size_t>(cloud.row_step) * cloud.height, 0);
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        for (std::uint32_t i = 0; i < beams; ++i) {
+            const std::array<double, 3> d = lidar.layout.direction(i);
+            const bool hit = std::isfinite(ranges[i]);
+            const std::array<float, 4> values{hit ? static_cast<float>(ranges[i] * d[0]) : nan,
+                                              hit ? static_cast<float>(ranges[i] * d[1]) : nan,
+                                              hit ? static_cast<float>(ranges[i] * d[2]) : nan,
+                                              hit ? 1.0F : 0.0F};  // no reflectivity model yet
+            const auto ring = static_cast<std::uint16_t>(i / lidar.layout.horizontal);
+            std::uint8_t* point = cloud.data.data() + static_cast<std::size_t>(i) * kStride;
+            std::memcpy(point, values.data(), sizeof(values));
+            std::memcpy(point + 16, &ring, sizeof(ring));
+        }
+        counters[lidar.topic].add(cloud.data.size() + 128);
+        lidar.cloudPublisher->publish(std::move(cloud));
+    }
 
     // simulation_interfaces: requests queued by the service callbacks for handleRequests().
     SimulationHandler* handler{nullptr};
@@ -214,10 +268,16 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
     // Sensor frames are children of their links, at their mounts: published once, latched.
     tf2_msgs::msg::TFMessage mounts;
     const World::Sensors& sensors = world.sensors;
-    std::size_t lidarCount = 0;
+    // /scan, /points and /imu when the robot has one of the kind, /<sensor>/... otherwise.
+    std::size_t scanners = 0;
+    std::size_t clouds = 0;
     std::size_t imuCount = 0;
-    for (const SensorType type : sensors.type) {
-        (type == SensorType::Lidar ? lidarCount : imuCount) += 1;
+    for (std::size_t i = 0; i < sensors.type.size(); ++i) {
+        if (sensors.type[i] != SensorType::Lidar) {
+            ++imuCount;
+        } else {
+            (LidarLayout::from(sensors.settings[i]).is3d() ? clouds : scanners) += 1;
+        }
     }
     std::vector<Impl::Lidar> lidars;
     std::vector<Impl::Imu> imus;
@@ -243,10 +303,13 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
         if (sensors.type[i] == SensorType::Lidar) {
             Impl::Lidar lidar;
             lidar.frame = name;
-            lidar.topic = lidarCount == 1 ? "/scan" : "/" + name + "/scan";
+            lidar.layout = LidarLayout::from(settings);
+            if (lidar.layout.is3d()) {
+                lidar.topic = clouds == 1 ? "/points" : "/" + name + "/points";
+            } else {
+                lidar.topic = scanners == 1 ? "/scan" : "/" + name + "/scan";
+            }
             lidar.ranges = bus.find("sensor/" + name + "/ranges");
-            lidar.minAngle = get("min_angle", -3.14159265358979);
-            lidar.maxAngle = get("max_angle", 3.14159265358979);
             lidar.minRange = get("min_range", 0.1);
             lidar.maxRange = get("max_range", 30.0);
             lidar.rateHz = sensors.rateHz[i];
@@ -254,9 +317,13 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             for (const Impl::Lidar& old : s.lidars) {
                 if (old.topic == lidar.topic) {
                     lidar.publisher = old.publisher;
+                    lidar.cloudPublisher = old.cloudPublisher;
                 }
             }
-            if (!lidar.publisher) {
+            if (lidar.layout.is3d() && !lidar.cloudPublisher) {
+                lidar.cloudPublisher = s.node->create_publisher<sensor_msgs::msg::PointCloud2>(
+                    lidar.topic, rclcpp::SensorDataQoS());
+            } else if (!lidar.layout.is3d() && !lidar.publisher) {
                 lidar.publisher = s.node->create_publisher<sensor_msgs::msg::LaserScan>(
                     lidar.topic, rclcpp::SensorDataQoS());
             }
@@ -363,15 +430,19 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
         }
         lidar.sent = bus.stamp(lidar.ranges);
         const std::span<const double> ranges = bus.readN(lidar.ranges);
+        if (lidar.cloudPublisher) {
+            s.publishCloud(lidar, ranges);
+            continue;
+        }
         sensor_msgs::msg::LaserScan scan;
         scan.header.stamp = stampOf(lidar.sent);
         scan.header.frame_id = lidar.frame;
-        scan.angle_min = static_cast<float>(lidar.minAngle);
-        scan.angle_max = static_cast<float>(lidar.maxAngle);
-        scan.angle_increment = ranges.size() > 1
-                                   ? static_cast<float>((lidar.maxAngle - lidar.minAngle) /
-                                                        static_cast<double>(ranges.size() - 1))
-                                   : 0.0F;
+        scan.angle_min = static_cast<float>(lidar.layout.minAngle);
+        scan.angle_max = static_cast<float>(lidar.layout.maxAngle);
+        scan.angle_increment =
+            ranges.size() > 1 ? static_cast<float>((lidar.layout.maxAngle - lidar.layout.minAngle) /
+                                                   static_cast<double>(ranges.size() - 1))
+                              : 0.0F;
         scan.scan_time = static_cast<float>(1.0 / lidar.rateHz);
         scan.range_min = static_cast<float>(lidar.minRange);
         scan.range_max = static_cast<float>(lidar.maxRange);

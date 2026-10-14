@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <future>
 #include <memory>
@@ -26,6 +27,7 @@
 #include <rosgraph_msgs/msg/clock.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 
 namespace lagrange::ros2 {
 namespace {
@@ -150,6 +152,60 @@ TEST_F(BridgeTest, PublishesClockOdometryJointStatesAndScans) {
     EXPECT_FLOAT_EQ(scan->ranges[1], 2.0F);
     EXPECT_TRUE(std::isinf(scan->ranges[2]));
     EXPECT_FLOAT_EQ(scan->angle_increment, static_cast<float>(std::numbers::pi / 2));
+}
+
+/// The same robot with a two-ring lidar: two columns at 0 and 90 degrees, rings at 0 and +30.
+class CloudBridgeTest : public BridgeTest {
+protected:
+    void SetUp() override {
+        const BodyId base = world_.addBody("base_link", kWorldBody, Pose{}, 1.0, {}, {});
+        const BodyId wheel = world_.addBody("wheel_link", base, Pose{}, 1.0, {}, {});
+        world_.addJoint("wheel", JointType::Continuous, wheel, {0, 1, 0}, true);
+        world_.addSensor("front_lidar", SensorType::Lidar, base, Pose{}, 10.0,
+                         {{"samples", 2.0},
+                          {"min_angle", 0.0},
+                          {"max_angle", std::numbers::pi / 2},
+                          {"vertical_samples", 2.0},
+                          {"vertical_min_angle", 0.0},
+                          {"vertical_max_angle", std::numbers::pi / 6},
+                          {"min_range", 0.1},
+                          {"max_range", 10.0}});
+        scheduler_.add(std::make_unique<FakeRobot>());
+        ASSERT_TRUE(scheduler_.wire(WorldView(world_)));
+        BridgeSettings settings;
+        settings.baseLink = "base_link";
+        bridge_ = std::make_unique<Bridge>(settings);
+        bridge_->attach(world_, scheduler_.bus());
+        listener_ = std::make_shared<rclcpp::Node>("bridge_cloud_listener");
+        executor_.add_node(listener_);
+    }
+};
+
+TEST_F(CloudBridgeTest, PublishesA3dLidarAsAnOrganisedPointCloud) {
+    std::optional<sensor_msgs::msg::PointCloud2> cloud;
+    auto sub = listener_->create_subscription<sensor_msgs::msg::PointCloud2>(
+        "/points", rclcpp::SensorDataQoS(),
+        [&](const sensor_msgs::msg::PointCloud2& m) { cloud = m; });
+    ASSERT_TRUE(run([&] { return cloud.has_value(); }));
+    EXPECT_EQ(cloud->header.frame_id, "front_lidar");
+    EXPECT_EQ(cloud->height, 2U);
+    EXPECT_EQ(cloud->width, 2U);
+    ASSERT_EQ(cloud->fields.size(), 5U);
+    EXPECT_EQ(cloud->fields[4].name, "ring");
+    const auto point = [&](std::size_t i) {
+        std::array<float, 3> xyz{};
+        std::memcpy(xyz.data(), cloud->data.data() + i * cloud->point_step, sizeof(xyz));
+        return xyz;
+    };
+    // The fake ranges are 1, 2, +inf, 4: ring 0 at 0 and 90 deg, then ring 1 (+30 deg).
+    EXPECT_NEAR(point(0)[0], 1.0F, 1e-6F);
+    EXPECT_NEAR(point(1)[1], 2.0F, 1e-6F);
+    EXPECT_TRUE(std::isnan(point(2)[0])) << "no return is NaN in an organised cloud";
+    EXPECT_NEAR(point(3)[1], 4.0F * std::cos(std::numbers::pi_v<float> / 6), 1e-5F);
+    EXPECT_NEAR(point(3)[2], 2.0F, 1e-5F);  // 4 sin 30
+    std::uint16_t ring = 0;
+    std::memcpy(&ring, cloud->data.data() + 3 * cloud->point_step + 16, sizeof(ring));
+    EXPECT_EQ(ring, 1U);
 }
 
 TEST_F(BridgeTest, TakesVelocityCommandsAndExpiresThem) {

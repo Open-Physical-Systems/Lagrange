@@ -113,10 +113,13 @@ for (auto& s : world.instancesOf("SensorAPI_1")) {
 }
 ```
 
-Implementation note (v0.2): the 2D lidar writes `sensor/{n}/ranges` (ScalarArray, one range per
+Implementation note (v0.2): a lidar writes `sensor/{n}/ranges` (ScalarArray, one range per
 beam, m) instead of a `PointCloud` handle, because the bus's buffer table for handle types does not
-exist yet; the server turns ranges into the viewer's point frames and the ROS bridge into
-`sensor_msgs/LaserScan`. The IMU also writes `sensor/{n}/orientation` (ground truth) for
+exist yet. Beams are rings of columns (`LidarLayout` in `core/world`: SDFormat's horizontal and
+vertical samples and angles, ring after ring from the lowest); a single ring is a 2D scanner. The
+server turns ranges into the viewer's point frames, and the ROS bridge into `sensor_msgs/LaserScan`
+for 2D lidars or an organised `sensor_msgs/PointCloud2` (x, y, z, intensity, ring) for 3D ones.
+Rays are cast exactly against every collision shape on the CPU (Tier 0 without Embree yet). The IMU also writes `sensor/{n}/orientation` (ground truth) for
 `sensor_msgs/Imu`. Sensors come from Gazebo `<sensor>` blocks of a URDF until `SensorAPI_1` exists.
 
 Note on GNSS: a three-element array with mixed units (rad, rad, m) cannot carry one `Unit`. The

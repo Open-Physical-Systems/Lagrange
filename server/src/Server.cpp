@@ -8,6 +8,7 @@
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/server/Server.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
+#include "lagrange/world/LidarLayout.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -320,22 +321,18 @@ struct Server::Impl {
                 continue;
             }
             lidarSent[s] = bus.stamp(id);
-            const auto& settings = table.settings[s];
-            const double first = settings.at("min_angle");
+            const LidarLayout layout = LidarLayout::from(table.settings[s]);
             const std::span<const double> ranges = bus.readN(id);
-            const double step = ranges.size() > 1 ? (settings.at("max_angle") - first) /
-                                                        static_cast<double>(ranges.size() - 1)
-                                                  : 0.0;
             std::vector<float> points;
-            for (std::size_t i = 0; i < ranges.size(); ++i) {
+            for (std::uint32_t i = 0; i < ranges.size() && i < layout.beams(); ++i) {
                 if (!std::isfinite(ranges[i])) {
                     continue;
                 }
-                const double angle = first + step * static_cast<double>(i);
                 // Sensor frame, as the mock server sends. Intensity: no reflectivity model yet.
-                points.insert(points.end(),
-                              {static_cast<float>(ranges[i] * std::cos(angle)),
-                               static_cast<float>(ranges[i] * std::sin(angle)), 0.0F, 1.0F});
+                const std::array<double, 3> d = layout.direction(i);
+                points.insert(points.end(), {static_cast<float>(ranges[i] * d[0]),
+                                             static_cast<float>(ranges[i] * d[1]),
+                                             static_cast<float>(ranges[i] * d[2]), 1.0F});
             }
             v1::Envelope envelope;
             v1::SensorFrame& frame = *envelope.mutable_sensor_frame();

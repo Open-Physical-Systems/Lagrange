@@ -502,10 +502,12 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
                 settings["max_range"] = childNumber(ray, {"range", "max"}, 30.0);
                 settings["range_noise"] =
                     firstStddev(ray != nullptr ? ray->FirstChildElement("noise") : nullptr);
-                if (childNumber(ray, {"scan", "vertical", "samples"}, 1.0) > 1.0) {
-                    robot.notes.push_back("lidar '" + std::string(name) +
-                                          "' has vertical samples; v0.2 scans one plane");
-                }
+                settings["vertical_samples"] =
+                    childNumber(ray, {"scan", "vertical", "samples"}, 1.0);
+                settings["vertical_min_angle"] =
+                    childNumber(ray, {"scan", "vertical", "min_angle"}, 0.0);
+                settings["vertical_max_angle"] =
+                    childNumber(ray, {"scan", "vertical", "max_angle"}, 0.0);
                 typeName = "Lidar";
             } else {
                 robot.notes.push_back("sensor '" + std::string(name) + "' of type '" + type +
