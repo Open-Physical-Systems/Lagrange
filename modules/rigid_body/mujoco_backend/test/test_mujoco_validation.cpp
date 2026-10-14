@@ -313,6 +313,12 @@ TEST(Inertia, TwoLinkArmMatchesTheAnalyticMatrix) {
     EXPECT_NEAR(full[1] / m12, 1.0, 1e-9);
     EXPECT_NEAR(full[2] / m12, 1.0, 1e-9);
     EXPECT_NEAR(full[3] / m22, 1.0, 1e-9);
+
+    // The backend reads the diagonal from the sparse rows of d->M: the last entry of each row.
+    for (int i = 0; i < scene.m()->nv; ++i) {
+        const int last = scene.m()->M_rowadr[i] + scene.m()->M_rownnz[i] - 1;
+        EXPECT_EQ(scene.d()->M[last], full[i * scene.m()->nv + i]) << "dof " << i;
+    }
 }
 
 }  // namespace

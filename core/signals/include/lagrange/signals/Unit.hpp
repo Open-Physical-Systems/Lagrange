@@ -61,6 +61,8 @@ enum class QuantityKind : std::uint16_t {
     Area = 30,
     Mass = 31,
     Activity = 32,
+    AngularAcceleration = 33,
+    MomentOfInertia = 34,
 };
 
 /// A unit: dimension, factor to the coherent SI unit, and quantity kind.
@@ -84,6 +86,8 @@ inline constexpr Unit m_per_s{{.length = 1, .time = -1}, 1.0, QuantityKind::Line
 inline constexpr Unit m_per_s2{{.length = 1, .time = -2}, 1.0, QuantityKind::LinearAcceleration};
 inline constexpr Unit rad{{.angle = 1}, 1.0, QuantityKind::AngularPosition};
 inline constexpr Unit rad_per_s{{.time = -1, .angle = 1}, 1.0, QuantityKind::AngularVelocity};
+inline constexpr Unit rad_per_s2{{.time = -2, .angle = 1}, 1.0, QuantityKind::AngularAcceleration};
+inline constexpr Unit kg_m2{{.length = 2, .mass = 1}, 1.0, QuantityKind::MomentOfInertia};
 inline constexpr Unit Hz{{.time = -1}, 1.0, QuantityKind::Frequency};
 inline constexpr Unit N{{.length = 1, .mass = 1, .time = -2}, 1.0, QuantityKind::Force};
 inline constexpr Unit N_m{{.length = 2, .mass = 1, .time = -2}, 1.0, QuantityKind::Torque};
