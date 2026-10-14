@@ -68,6 +68,9 @@ jobs:
 
   dco:
     name: DCO sign-off
+    # A release pull request from dev carries the squash commits already checked in their own
+    # pull requests; GitHub authors those with the noreply address, not the sign-off address.
+    if: github.head_ref != 'dev'
     runs-on: ubuntu-latest
     permissions:
       contents: read
