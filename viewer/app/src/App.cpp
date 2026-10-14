@@ -412,15 +412,17 @@ public:
                 }
             }
         }
+        // Returns the index of a cleared batch: references into sensorOverlays_ are taken only
+        // after every batch of a lidar exists, since adding one may move the others.
         const auto batch = [&](const std::array<double, 3>& origin, const ImVec4& color) {
             if (used == sensorOverlays_.size()) {
                 sensorOverlays_.emplace_back();
             }
-            OverlayLines& lines = sensorOverlays_[used++];
+            OverlayLines& lines = sensorOverlays_[used];
             lines.origin = origin;
             lines.color = {color.x, color.y, color.z, color.w};
             lines.vertices.clear();  // keeps its capacity: no allocation once warmed up
-            return &lines.vertices;
+            return used++;
         };
         for (const auto& [prim, stream] : lidars_) {
             const std::shared_ptr<const PointCloud> cloud = stream->latest();
@@ -438,8 +440,10 @@ public:
                                             y + q[0] * ty + (q[3] * tx - q[1] * tz),
                                             z + q[0] * tz + (q[1] * ty - q[2] * tx)};
             };
-            std::vector<float>& strong = *batch(pose.position, kLidarStrong);
-            std::vector<float>& weak = *batch(pose.position, kLidarAttenuated);
+            const std::size_t strongBatch = batch(pose.position, kLidarStrong);
+            const std::size_t weakBatch = batch(pose.position, kLidarAttenuated);
+            std::vector<float>& strong = sensorOverlays_[strongBatch].vertices;
+            std::vector<float>& weak = sensorOverlays_[weakBatch].vertices;
             float lowest = 1e9F;
             float highest = -1e9F;
             for (std::uint32_t i = 0; i < cloud->count; ++i) {
