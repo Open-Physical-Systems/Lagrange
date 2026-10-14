@@ -220,7 +220,7 @@ Examples: `joint/left_wheel/torque`, `bus/dc_48v/voltage`, `body/base_link/pose`
 `robot/amr_01/joint/left_wheel/torque`.
 
 ```cpp
-// core/signals/SignalBus.hpp
+// core/signals/include/lagrange/signals/SignalBus.hpp (implemented; summary here)
 namespace lagrange {
 
 enum class Hold : std::uint8_t {
@@ -290,7 +290,7 @@ addition is argued in RFC 0001.
 - `StepContext`, so that later additions (substep index, deadline) do not change the signature.
 
 ```cpp
-// core/module/IModule.hpp
+// core/module/include/lagrange/module/IModule.hpp (implemented; summary here)
 namespace lagrange {
 
 enum class StatusCode : std::uint8_t { Ok, InvalidConfig, UnitMismatch, MissingInput, Diverged, Unsupported, Internal };
@@ -468,7 +468,7 @@ where the quantity is a flow that must conserve energy or charge (torque on the 
 current into a thermal loss model). Slow-to-fast uses `ZeroOrder` or `LinearExtrapolate`.
 
 ```cpp
-// core/scheduler/Scheduler.hpp
+// core/scheduler/include/lagrange/scheduler/Scheduler.hpp (implemented; summary here)
 namespace lagrange {
 
 struct ScheduledModule {
@@ -524,8 +524,12 @@ public:
 ```
 
 `std::expected` is C++23. Because the project is limited to C++20 (CLAUDE.md §5), the code uses
-`tl::expected` or an in-tree `lagrange::Expected<T, E>` with the same shape. This is a header
-sketch; the choice is tracked as an issue in the v0.2 core epic.
+an in-tree `lagrange::Expected<T, E>` with the same shape (RFC 0001, resolution 7).
+
+Implementation notes (v0.2): inputs are slots that the scheduler fills before each reader step,
+applying the hold policy, so `read` is one array access. Execution is serial in the total order;
+level-parallel execution and real-time pacing (in the server's run loop) come later. Wiring adds
+`NotDeterministic`, `InvalidDeclaration` and `ModuleFailed` to the error kinds above.
 
 Step sequence for one tick with electrical at 100 µs and physics at 1 ms:
 

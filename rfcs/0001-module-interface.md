@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft |
+| Status | Accepted (2026-10-14), with the resolutions below |
 | Created | 2026-10-13 |
 | Affects | `core/module/`, `core/signals/`, `core/scheduler/`, `core/plugin_abi/`, every module |
 | Supersedes | The illustrative interface in CLAUDE.md §11.4–§11.5 |
@@ -130,7 +130,21 @@ with both members being `SignalId`s. `preferredStep()`, `inputs()` and `outputs(
 | Direct module-to-module "fast path" for stiff pairs | Violates invariant 1. Stiff pairs are handled by subcycling, averaging and prediction (`architecture.md` §8) |
 | Variable-step co-simulation with rollback | More accurate for stiff coupling, but needs every module to support rollback and makes real-time pacing hard. `saveState` keeps the door open |
 
-## Unresolved questions
+## Resolutions on acceptance (2026-10-14)
+
+The owner accepted this RFC with the proposed answer to each question below:
+
+1. No Jacobian exchange in v1; `joint/*/effective_inertia` covers the motor case.
+2. No `Geodetic` signal type; three scalar signals.
+3. Optional `onParametersChanged`; other modules are re-initialised with state preserved.
+4. Events decided with their first consumer (v0.3).
+5. Topology changes only between ticks, by re-declare and re-wire; API designed in v0.2.
+6. GPU batch signals through `BufferHandle` with lazy readback, in a later RFC.
+7. An in-tree `lagrange::Expected<T, E>` (`core/module/Expected.hpp`), not `tl::expected`: no
+   new dependency, and the type is replaced by `std::expected` when the C++ baseline allows.
+8. Coupling thresholds stay provisional until the v0.3 coupling tests.
+
+## Unresolved questions (as proposed)
 
 1. **Jacobian exchange.** Should the interface let a module publish partial derivatives of
    outputs with respect to inputs (FMI-style directional derivatives) for implicit coupling?
