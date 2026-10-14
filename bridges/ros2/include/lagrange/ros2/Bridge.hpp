@@ -19,6 +19,7 @@ struct BridgeSettings {
     std::string baseLink;          // the robot's root body; empty: no /odom and no odom TF
     std::string robotDescription;  // URDF text for /robot_description; empty: not published
     double stateRateHz{50.0};      // /joint_states, /odom and the odom TF
+    bool stampedCmdVel{true};      // /cmd_vel as TwistStamped (Nav2's default) or Twist
 };
 
 /// A /cmd_vel message: forward speed and turn rate.
@@ -58,7 +59,8 @@ struct GraphSnapshot {
 /// from the base body's pose and twist (ground truth); /tf_static for sensor frames; /scan
 /// (sensor_msgs/LaserScan) and /imu (sensor_msgs/Imu) when their sensors sample, named /scan
 /// and /imu when the robot has one of each, /<sensor>/scan and /<sensor>/imu otherwise; and
-/// /robot_description, latched. It subscribes /cmd_vel (geometry_msgs/Twist).
+/// /robot_description, latched. It subscribes /cmd_vel: geometry_msgs/TwistStamped, which Nav2
+/// and ros2_control publish by default, or geometry_msgs/Twist (BridgeSettings::stampedCmdVel).
 ///
 /// ROS callbacks run on the bridge's own executor thread; publish() runs on the caller's
 /// thread between ticks and never blocks on the network (rclcpp publishing is asynchronous).
