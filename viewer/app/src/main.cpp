@@ -54,6 +54,9 @@ int main(int argc, char** argv) {
             usage();
             return 0;
         }
+        if (arg == "--ros-args") {
+            break;  // the viewer is not a ROS node; ros2 run and ros2 launch may append these
+        }
         if (arg == "--connect") {
             options.endpoint = value();
         } else if (arg == "--gpu") {
