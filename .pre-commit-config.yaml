@@ -3,6 +3,7 @@
 # reformat of docs/), mypy and buf (no Python package or proto files yet), shfmt, commitizen
 # (PR titles are checked in .github/workflows/pr-checks.yml), check-jsonschema.
 minimum_pre_commit_version: "4.0.0"
+exclude: \.pgm$   # binary occupancy-map images that `identify` takes for text
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

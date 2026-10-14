@@ -20,6 +20,7 @@
 *.nvdb  binary
 *.fmu   binary
 *.png   binary
+*.pgm   binary
 *.jpg   binary
 *.ktx2  binary
 *.ttf   binary

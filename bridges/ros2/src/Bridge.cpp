@@ -11,6 +11,7 @@
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rmw/rmw.h>
@@ -64,6 +65,13 @@ struct Bridge::Impl {
     rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tfStatic;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr description;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmdVel;
+    rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmdVelStamped;
+
+    void take(const geometry_msgs::msg::Twist& twist) {
+        const std::lock_guard<std::mutex> lock(commandMutex);
+        command = CmdVel{twist.linear.x, twist.angular.z};
+        commandAt = Clock::now();
+    }
 
     struct Joint {
         std::string name;
@@ -119,12 +127,14 @@ Bridge::Bridge(BridgeSettings settings)
         text.data = settings_.robotDescription;
         s.description->publish(text);
     }
-    s.cmdVel = s.node->create_subscription<geometry_msgs::msg::Twist>(
-        "/cmd_vel", 10, [&s](const geometry_msgs::msg::Twist& twist) {
-            const std::lock_guard<std::mutex> lock(s.commandMutex);
-            s.command = CmdVel{twist.linear.x, twist.angular.z};
-            s.commandAt = Clock::now();
-        });
+    if (settings_.stampedCmdVel) {
+        s.cmdVelStamped = s.node->create_subscription<geometry_msgs::msg::TwistStamped>(
+            "/cmd_vel", 10,
+            [&s](const geometry_msgs::msg::TwistStamped& twist) { s.take(twist.twist); });
+    } else {
+        s.cmdVel = s.node->create_subscription<geometry_msgs::msg::Twist>(
+            "/cmd_vel", 10, [&s](const geometry_msgs::msg::Twist& twist) { s.take(twist); });
+    }
     s.executor.add_node(s.node);
     s.spinner = std::thread([&s] { s.executor.spin(); });
 }

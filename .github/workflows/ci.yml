@@ -122,6 +122,13 @@ jobs:
           path: src/lagrange
           persist-credentials: false
       - name: Install dependencies
+        env:
+          # The Nav2 demo only installs files here; it runs in the nightly workflow.
+          ROSDEP_SKIP_KEYS: >-
+            nav2_behaviors nav2_bt_navigator nav2_controller nav2_lifecycle_manager
+            nav2_map_server nav2_navfn_planner nav2_planner
+            nav2_regulated_pure_pursuit_controller nav2_simple_commander nav2_waypoint_follower
+            robot_state_publisher
         run: src/lagrange/tools/ci/install_deps.sh
       - name: Build
         shell: bash

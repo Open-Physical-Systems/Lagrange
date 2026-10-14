@@ -12,7 +12,7 @@
 
 #include <gtest/gtest.h>
 
-#include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rosgraph_msgs/msg/clock.hpp>
@@ -145,10 +145,10 @@ TEST_F(BridgeTest, PublishesClockOdometryJointStatesAndScans) {
 }
 
 TEST_F(BridgeTest, TakesVelocityCommandsAndExpiresThem) {
-    auto publisher = listener_->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
-    geometry_msgs::msg::Twist twist;
-    twist.linear.x = 0.3;
-    twist.angular.z = -0.2;
+    auto publisher = listener_->create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel", 10);
+    geometry_msgs::msg::TwistStamped twist;
+    twist.twist.linear.x = 0.3;
+    twist.twist.angular.z = -0.2;
     ASSERT_TRUE(run([&] {
         publisher->publish(twist);
         return bridge_->latestCommand(500ms).has_value();

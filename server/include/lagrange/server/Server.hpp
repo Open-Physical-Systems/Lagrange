@@ -17,6 +17,7 @@ struct ServerOptions {
     double realTimeFactor{1.0};     // 0 = as fast as possible
     bool ros{false};                // run the ROS 2 bridge (rclcpp::init must have been called)
     bool startPaused{false};
+    bool stampedCmdVel{true};  // /cmd_vel as TwistStamped; false: Twist
 };
 
 /// The simulation server (roadmap 0.2-E1, E2): it loads a robot, wires the MuJoCo backend and

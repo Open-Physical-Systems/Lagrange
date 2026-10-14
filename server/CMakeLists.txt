@@ -19,6 +19,7 @@ add_library(
     src/Robot.cpp
     src/Meshes.cpp
     src/DiffDrive.cpp
+    src/MapExport.cpp
 )
 lagrange_target_defaults(lagrange_server)
 target_include_directories(
@@ -61,6 +62,7 @@ if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
     ament_add_gtest(
         test_server
+        test/test_map_export.cpp
         test/test_robot.cpp
         test/test_server.cpp
         TIMEOUT 120

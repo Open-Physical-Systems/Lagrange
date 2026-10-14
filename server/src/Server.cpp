@@ -1350,6 +1350,7 @@ Status Server::start() {
         ros2::BridgeSettings settings;
         settings.baseLink = s.robot.world.bodies.names.empty() ? "" : s.robot.world.bodies.names[0];
         settings.robotDescription = readFile(s.options.robotPath);
+        settings.stampedCmdVel = s.options.stampedCmdVel;
         s.bridge = std::make_unique<ros2::Bridge>(settings);
     }
     if (!s.options.worldPath.empty()) {

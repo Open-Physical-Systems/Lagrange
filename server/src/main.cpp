@@ -1,9 +1,12 @@
 // lagrange_server: simulate a robot and serve it to viewers.
 //
 //   lagrange_server [--robot FILE.urdf] [--listen ENDPOINT] [--rtf X] [--paused]
+//                   [--ros-args ...]
 //
 // Defaults: the sample AMR of lagrange_assets, and the default Unix socket that the viewer
 // connects to when started without --connect.
+#include "lagrange/server/MapExport.hpp"
+#include "lagrange/server/Robot.hpp"
 #include "lagrange/server/Server.hpp"
 
 #include <atomic>
@@ -46,7 +49,11 @@ int usage(const char* error) {
                  "  --listen  unix:/path.sock or tcp://host:port (default: %s)\n"
                  "  --rtf     real-time factor, 0 = as fast as possible (default 1)\n"
                  "  --paused  start paused; press Play in the viewer\n"
-                 "  --no-ros  run without the ROS 2 bridge\n",
+                 "  --no-ros  run without the ROS 2 bridge\n"
+                 "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
+                 "            TwistStamped\n"
+                 "  --export-map FILE.yaml  write an occupancy map of the fixed scenery for\n"
+                 "            nav2_map_server (PGM next to it) and exit\n",
                  lagrange::proto::defaultUnixSocketPath().c_str());
     return error != nullptr ? 2 : 0;
 }
@@ -56,6 +63,7 @@ int usage(const char* error) {
 int main(int argc, char** argv) {
     lagrange::server::ServerOptions options;
     options.ros = true;
+    std::string exportMap;
     options.endpoint =
         lagrange::proto::Endpoint::unixSocket(lagrange::proto::defaultUnixSocketPath());
     options.robotPath = shareFile("lagrange_assets", "robots/amr_diffdrive/amr_diffdrive.urdf");
@@ -67,6 +75,9 @@ int main(int argc, char** argv) {
         const auto value = [&]() -> const char* { return i + 1 < argc ? argv[++i] : nullptr; };
         if (arg == "--help" || arg == "-h") {
             return usage(nullptr);
+        }
+        if (arg == "--ros-args") {
+            break;  // the rest is for rclcpp (ros2 launch passes remappings and parameters)
         }
         if (arg == "--robot") {
             const char* path = value();
@@ -101,6 +112,14 @@ int main(int argc, char** argv) {
             options.startPaused = true;
         } else if (arg == "--no-ros") {
             options.ros = false;
+        } else if (arg == "--cmd-vel-unstamped") {
+            options.stampedCmdVel = false;
+        } else if (arg == "--export-map") {
+            const char* path = value();
+            if (path == nullptr) {
+                return usage("--export-map needs a .yaml path");
+            }
+            exportMap = path;
         } else {
             return usage(("unknown option " + std::string(arg)).c_str());
         }
@@ -108,10 +127,30 @@ int main(int argc, char** argv) {
     if (options.robotPath.empty()) {
         return usage("no --robot given and lagrange_assets is not installed");
     }
+    if (!exportMap.empty()) {
+        // Only the fixed scenery is mapped; the robot is loaded for its frame of reference.
+        auto robot = lagrange::server::loadUrdf(options.robotPath);
+        if (robot && !options.worldPath.empty()) {
+            if (auto added = lagrange::server::addUrdf(*robot, options.worldPath); !added) {
+                std::fprintf(stderr, "lagrange_server: %s\n", added.error().c_str());
+                return 1;
+            }
+        }
+        if (!robot) {
+            std::fprintf(stderr, "lagrange_server: %s\n", robot.error().c_str());
+            return 1;
+        }
+        if (auto written = lagrange::server::exportOccupancyMap(robot->world, exportMap);
+            !written) {
+            std::fprintf(stderr, "lagrange_server: %s\n", written.error().c_str());
+            return 1;
+        }
+        std::printf("wrote %s\n", exportMap.c_str());
+        return 0;
+    }
 
     if (options.ros) {
-        // ROS arguments (--ros-args ...) are not supported yet; the bridge uses the defaults.
-        rclcpp::init(0, nullptr, rclcpp::InitOptions(), rclcpp::SignalHandlerOptions::None);
+        rclcpp::init(argc, argv, rclcpp::InitOptions(), rclcpp::SignalHandlerOptions::None);
     }
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
