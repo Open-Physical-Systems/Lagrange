@@ -76,8 +76,8 @@ CommandLine defaultCommandLine() {
 
 void printServerOptions(std::FILE* out) {
     std::fprintf(out,
-                 "  --robot   URDF to simulate (default: the sample AMR from lagrange_assets)\n"
-                 "  --world   URDF of fixed scenery, or none (default: the sample warehouse)\n"
+                 "  --robot   URDF or USD to simulate (default: the sample AMR from lagrange_assets)\n"
+                 "  --world   URDF or USD of fixed scenery, or none (default: the sample warehouse)\n"
                  "  --listen  unix:/path.sock or tcp://host:port (default: %s)\n"
                  "  --spawn X,Y[,Z[,YAW]]  start the robot there (m, world ENU; heading in rad)\n"
                  "  --lidar auto|cpu|gpu  where lidars cast: auto (default) and cpu use the\n"
@@ -229,9 +229,9 @@ int serve(CommandLine& line, int argc, char** argv, const std::string* profileYa
     ServerOptions& options = line.options;
     if (!line.exportMap.empty()) {
         // Only the fixed scenery is mapped; the robot is loaded for its frame of reference.
-        auto robot = loadUrdf(options.robotPath, {.spawn = options.spawn});
+        auto robot = loadModel(options.robotPath, {.spawn = options.spawn});
         if (robot && !options.worldPath.empty()) {
-            if (auto added = addUrdf(*robot, options.worldPath); !added) {
+            if (auto added = addModel(*robot, options.worldPath); !added) {
                 std::fprintf(stderr, "%s: %s\n", program, added.error().c_str());
                 return 1;
             }

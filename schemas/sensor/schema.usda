@@ -1,0 +1,122 @@
+#usda 1.0
+(
+    """Lagrange sensor schemas (RFC 0002, docs/design/formats.md section 3.8). Codeless: the
+    stage loader reads the attributes by name. Units: the lagrangeUnit field of each attribute."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeSensor"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "SensorAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """Common properties of a simulated sensor. The sensor's frame is the prim's frame; its
+    body is the nearest ancestor with PhysicsRigidBodyAPI."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double sensor:rate (
+        lagrangeUnit = "Hz"
+        doc = "Output rate. Required."
+    )
+    double sensor:latency = 0 (
+        lagrangeUnit = "s"
+        doc = "Delay from sampling to output."
+    )
+    double sensor:jitter = 0 (
+        lagrangeUnit = "s"
+        doc = "Standard deviation of the output time."
+    )
+    string sensor:frameId = "" (
+        doc = "Frame name for ROS messages; empty: the prim name."
+    )
+    string sensor:topic = "" (
+        doc = "ROS topic; empty: derived from the sensor kind and name."
+    )
+}
+
+class "LidarAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A scanning lidar: channels rings across verticalFov, horizontalSamples columns
+    across horizontalFov. One channel is a 2D scanner. Apply with SensorAPI_1."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    int sensor:lidar:channels = 1 (
+        lagrangeUnit = "1"
+        doc = "Rings (vertical samples)."
+    )
+    int sensor:lidar:horizontalSamples (
+        lagrangeUnit = "1"
+        doc = "Columns per scan. Required."
+    )
+    double2 sensor:lidar:horizontalFov = (-3.141592653589793, 3.141592653589793) (
+        lagrangeUnit = "rad"
+        doc = "First and last column's azimuth about the sensor's z."
+    )
+    double2 sensor:lidar:verticalFov = (0, 0) (
+        lagrangeUnit = "rad"
+        doc = "Lowest and highest ring's elevation above the sensor's xy plane."
+    )
+    double sensor:lidar:rangeMin (
+        lagrangeUnit = "m"
+        doc = "Returns nearer than this are dropped. Required."
+    )
+    double sensor:lidar:rangeMax (
+        lagrangeUnit = "m"
+        doc = "Returns further than this are dropped. Required."
+    )
+    double sensor:lidar:rangeNoiseStd = 0.02 (
+        lagrangeUnit = "m"
+        doc = "Standard deviation of Gaussian range noise."
+    )
+    double sensor:lidar:wavelength = 9.05e-7 (
+        lagrangeUnit = "m"
+    )
+    double sensor:lidar:beamDivergence = 0.003 (
+        lagrangeUnit = "rad"
+    )
+    uniform token sensor:lidar:returnMode = "strongest" (
+        allowedTokens = ["strongest", "last", "dual"]
+    )
+    uniform token sensor:lidar:scanPattern = "rotating" (
+        allowedTokens = ["rotating", "solid_state", "custom"]
+    )
+}
+
+class "ImuAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """An inertial measurement unit: specific force and angular rate in the prim's frame.
+    Noise is white, per sample (the noise densities of formats.md wait for half powers in the
+    unit grammar). Apply with SensorAPI_1."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double sensor:imu:accelNoiseStd = 0 (
+        lagrangeUnit = "m/s2"
+        doc = "Standard deviation of each specific-force sample."
+    )
+    double sensor:imu:gyroNoiseStd = 0 (
+        lagrangeUnit = "rad/s"
+        doc = "Standard deviation of each angular-rate sample."
+    )
+    double sensor:imu:accelBiasInstability = 0 (
+        lagrangeUnit = "m/s2"
+    )
+    double sensor:imu:gyroBiasInstability = 0 (
+        lagrangeUnit = "rad/s"
+    )
+}

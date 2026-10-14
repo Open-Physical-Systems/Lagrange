@@ -1,0 +1,3 @@
+prepend-non-duplicate-if-exists;LD_LIBRARY_PATH;opt/openusd_vendor/lib
+prepend-non-duplicate-if-exists;PATH;opt/openusd_vendor/bin
+prepend-non-duplicate-if-exists;PYTHONPATH;opt/openusd_vendor/@OPENUSD_PYTHON_DIR@

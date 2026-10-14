@@ -130,14 +130,33 @@ jobs:
             nav2_regulated_pure_pursuit_controller nav2_simple_commander nav2_waypoint_follower
             robot_state_publisher
         run: src/lagrange/tools/ci/install_deps.sh
+      # OpenUSD takes about 12 minutes to build, so it is built once per change of its vendor
+      # package and restored as an underlay (docs/design/dependencies.md §4, step 6). It is a
+      # Release build in every matrix entry, so all of them share it.
+      - name: Restore the OpenUSD underlay
+        id: openusd
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: openusd_ws/install
+          key: >-
+            openusd-${{ runner.arch }}-${{ hashFiles('src/lagrange/vendor/openusd_vendor/CMakeLists.txt',
+            'src/lagrange/vendor/openusd_vendor/cmake/**', 'src/lagrange/vendor/openusd_vendor/env-hooks/**') }}
+      - name: Build the OpenUSD underlay
+        if: steps.openusd.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          source "/opt/ros/$ROS_DISTRO/setup.bash"
+          colcon build --base-paths src/lagrange/vendor/openusd_vendor \
+            --build-base openusd_ws/build --install-base openusd_ws/install \
+            --event-handlers console_cohesion+
       - name: Build
         shell: bash
         env:
           BUILD_TYPE: ${{ matrix.build_type }}
           SANITIZER: ${{ matrix.sanitizer }}
         run: |
-          source "/opt/ros/$ROS_DISTRO/setup.bash"
-          colcon build --event-handlers console_cohesion+ --cmake-args \
+          source openusd_ws/install/setup.bash
+          colcon build --packages-skip openusd_vendor --event-handlers console_cohesion+ --cmake-args \
             "-DCMAKE_BUILD_TYPE=$BUILD_TYPE" -DBUILD_TESTING=ON \
             -DLAGRANGE_WARNINGS_AS_ERRORS=ON "-DLAGRANGE_SANITIZER=$SANITIZER"
       - name: Test
@@ -147,5 +166,5 @@ jobs:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
           source install/setup.bash
-          colcon test --event-handlers console_direct+
+          colcon test --packages-skip openusd_vendor --event-handlers console_direct+
           colcon test-result --verbose

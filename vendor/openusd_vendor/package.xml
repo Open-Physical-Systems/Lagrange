@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>openusd_vendor</name>
+  <version>0.1.0</version>
+  <description>OpenUSD v26.08 (Pixar Universal Scene Description), built from the pinned upstream release in the minimal configuration the Lagrange simulator needs: no imaging, no OpenGL, Python bindings on for usdGenSchema.</description>
+  <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
+  <license>Apache-2.0</license>
+  <!-- OpenUSD itself is under the "Tomorrow Open Source Technology License 1.0"
+       (Apache-2.0 with a modified trademark clause); see docs/design/dependencies.md. -->
+  <url type="website">https://openusd.org</url>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <build_depend>python3-dev</build_depend>
+
+  <depend>tbb</depend>
+  <depend>python3-jinja2</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
