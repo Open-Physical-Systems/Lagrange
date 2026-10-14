@@ -18,7 +18,8 @@ namespace lagrange::rigid_body {
 /// Settings from the validation spike: elliptic friction cone, implicitfast integrator.
 /// Bodies of one articulated tree do not collide with each other (Gazebo's self_collide false).
 ///
-/// Signals per actuated joint `j` (prismatic joints use N, m, m/s, m/s², kg):
+/// Every hinge and slide joint `j` outputs joint/j/position and velocity (rad or m). Actuated
+/// joints add (prismatic joints use N, m, m/s, m/s², kg):
 ///   in  joint/j/torque             N·m, WindowAverage
 ///   in  joint/j/load_torque        N·m, WindowAverage, optional
 ///   out joint/j/position, velocity, acceleration, effective_inertia, constraint_torque

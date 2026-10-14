@@ -1,0 +1,116 @@
+<?xml version="1.0"?>
+<!--
+  A small warehouse for Lagrange samples: an 18 m x 9 m hall with two rack rows and a
+  pallet, all fixed to the ground (root link "world"). The same layout as the mock
+  server's synthetic lidar scene. Boxes only, so it needs no mesh files.
+-->
+<robot name="warehouse_small">
+  <material name="concrete">
+    <color rgba="0.55 0.57 0.60 1"/>
+  </material>
+  <material name="rack">
+    <color rgba="0.20 0.36 0.62 1"/>
+  </material>
+  <material name="wood">
+    <color rgba="0.62 0.46 0.28 1"/>
+  </material>
+  <link name="world"/>
+  <link name="wall_south">
+    <visual>
+      <geometry><box size="18 0.2 2"/></geometry>
+      <material name="concrete"/>
+    </visual>
+    <collision>
+      <geometry><box size="18 0.2 2"/></geometry>
+    </collision>
+  </link>
+  <joint name="wall_south_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="wall_south"/>
+    <origin xyz="0 -4.6 1"/>
+  </joint>
+  <link name="wall_north">
+    <visual>
+      <geometry><box size="18 0.2 2"/></geometry>
+      <material name="concrete"/>
+    </visual>
+    <collision>
+      <geometry><box size="18 0.2 2"/></geometry>
+    </collision>
+  </link>
+  <joint name="wall_north_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="wall_north"/>
+    <origin xyz="0 4.6 1"/>
+  </joint>
+  <link name="wall_west">
+    <visual>
+      <geometry><box size="0.2 9.4 2"/></geometry>
+      <material name="concrete"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.2 9.4 2"/></geometry>
+    </collision>
+  </link>
+  <joint name="wall_west_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="wall_west"/>
+    <origin xyz="-9.1 0 1"/>
+  </joint>
+  <link name="wall_east">
+    <visual>
+      <geometry><box size="0.2 9.4 2"/></geometry>
+      <material name="concrete"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.2 9.4 2"/></geometry>
+    </collision>
+  </link>
+  <joint name="wall_east_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="wall_east"/>
+    <origin xyz="9.1 0 1"/>
+  </joint>
+  <link name="rack_north">
+    <visual>
+      <geometry><box size="12 0.8 2.4"/></geometry>
+      <material name="rack"/>
+    </visual>
+    <collision>
+      <geometry><box size="12 0.8 2.4"/></geometry>
+    </collision>
+  </link>
+  <joint name="rack_north_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="rack_north"/>
+    <origin xyz="0 3.4 1.2"/>
+  </joint>
+  <link name="rack_south">
+    <visual>
+      <geometry><box size="12 0.8 2.4"/></geometry>
+      <material name="rack"/>
+    </visual>
+    <collision>
+      <geometry><box size="12 0.8 2.4"/></geometry>
+    </collision>
+  </link>
+  <joint name="rack_south_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="rack_south"/>
+    <origin xyz="0 -3.4 1.2"/>
+  </joint>
+  <link name="pallet">
+    <visual>
+      <geometry><box size="0.8 1.2 0.6"/></geometry>
+      <material name="wood"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.8 1.2 0.6"/></geometry>
+    </collision>
+  </link>
+  <joint name="pallet_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="pallet"/>
+    <origin xyz="5.6 1.3 0.3"/>
+  </joint>
+</robot>

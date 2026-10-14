@@ -6,7 +6,9 @@
 #include <map>
 #include <numbers>
 #include <set>
+#include <sstream>
 #include <string>
+#include <string_view>
 #include <tinyxml2.h>
 #include <urdf_parser/urdf_parser.h>
 #include <utility>
@@ -28,13 +30,6 @@ constexpr double kPlaceholderInertia = 1e-6;  // kg·m²
 Pose poseOf(const urdf::Pose& pose) {
     return {{pose.position.x, pose.position.y, pose.position.z},
             {pose.rotation.w, pose.rotation.x, pose.rotation.y, pose.rotation.z}};
-}
-
-std::array<double, 4> multiply(const std::array<double, 4>& a, const std::array<double, 4>& b) {
-    return {a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
-            a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
-            a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
-            a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0]};
 }
 
 /// Rotation matrix (row-major) of a unit quaternion.
@@ -400,19 +395,143 @@ private:
 
 }  // namespace
 
-Pose compose(const Pose& a, const Pose& b) {
-    const std::array<double, 3> moved = rotate(a.orientation, b.position);
-    return {{a.position[0] + moved[0], a.position[1] + moved[1], a.position[2] + moved[2]},
-            multiply(a.orientation, b.orientation)};
+namespace {
+
+/// Quaternion of a fixed-axis roll, pitch, yaw (R = Rz Ry Rx), as URDF and SDFormat use.
+std::array<double, 4> fromRpy(double roll, double pitch, double yaw) {
+    const double cr = std::cos(roll / 2), sr = std::sin(roll / 2);
+    const double cp = std::cos(pitch / 2), sp = std::sin(pitch / 2);
+    const double cy = std::cos(yaw / 2), sy = std::sin(yaw / 2);
+    return {cr * cp * cy + sr * sp * sy, sr * cp * cy - cr * sp * sy, cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy};
 }
 
-std::array<double, 3> rotate(const std::array<double, 4>& q, const std::array<double, 3>& v) {
-    const std::array<double, 9> r = matrix(q);
-    return {r[0] * v[0] + r[1] * v[1] + r[2] * v[2], r[3] * v[0] + r[4] * v[1] + r[5] * v[2],
-            r[6] * v[0] + r[7] * v[1] + r[8] * v[2]};
+double childNumber(const tinyxml2::XMLElement* parent, std::initializer_list<const char*> path,
+                   double fallback) {
+    const tinyxml2::XMLElement* element = parent;
+    for (const char* name : path) {
+        element = element != nullptr ? element->FirstChildElement(name) : nullptr;
+    }
+    double value = fallback;
+    if (element != nullptr && element->QueryDoubleText(&value) != tinyxml2::XML_SUCCESS) {
+        value = fallback;
+    }
+    return value;
 }
 
-Expected<Robot, std::string> loadUrdf(const std::string& path, const LoadOptions& options) {
+/// The first <stddev> anywhere below `element`, or 0.
+double firstStddev(const tinyxml2::XMLElement* element) {
+    if (element == nullptr) {
+        return 0.0;
+    }
+    for (const tinyxml2::XMLElement* child = element->FirstChildElement(); child != nullptr;
+         child = child->NextSiblingElement()) {
+        if (std::string_view(child->Name()) == "stddev") {
+            double value = 0.0;
+            return child->QueryDoubleText(&value) == tinyxml2::XML_SUCCESS ? value : 0.0;
+        }
+        if (const double found = firstStddev(child); found > 0.0) {
+            return found;
+        }
+    }
+    return 0.0;
+}
+
+/// Gazebo sensor blocks: <gazebo reference="link"><sensor name type>...</sensor></gazebo>.
+void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
+    tinyxml2::XMLDocument document;
+    if (document.LoadFile(path.c_str()) != tinyxml2::XML_SUCCESS) {
+        return;
+    }
+    const tinyxml2::XMLElement* top = document.FirstChildElement("robot");
+    World& world = robot.world;
+    for (const tinyxml2::XMLElement* gazebo = top != nullptr ? top->FirstChildElement("gazebo")
+                                                             : nullptr;
+         gazebo != nullptr; gazebo = gazebo->NextSiblingElement("gazebo")) {
+        const char* reference = gazebo->Attribute("reference");
+        for (const tinyxml2::XMLElement* sensor = gazebo->FirstChildElement("sensor");
+             sensor != nullptr; sensor = sensor->NextSiblingElement("sensor")) {
+            const std::string type =
+                sensor->Attribute("type") != nullptr ? sensor->Attribute("type") : "";
+            const char* name = sensor->Attribute("name");
+            std::size_t body = world.bodies.names.size();
+            for (std::size_t b = firstBody; b < world.bodies.names.size(); ++b) {
+                if (reference != nullptr && world.bodies.names[b] == reference) {
+                    body = b;
+                }
+            }
+            if (name == nullptr || body == world.bodies.names.size()) {
+                robot.notes.push_back("a <sensor> of type '" + type +
+                                      "' has no name or no known link; it is skipped");
+                continue;
+            }
+            Pose mount;
+            if (const tinyxml2::XMLElement* pose = sensor->FirstChildElement("pose");
+                pose != nullptr && pose->GetText() != nullptr) {
+                std::array<double, 6> v{};
+                std::istringstream text(pose->GetText());
+                for (double& x : v) {
+                    text >> x;
+                }
+                mount = {{v[0], v[1], v[2]}, fromRpy(v[3], v[4], v[5])};
+            }
+            const double rate = childNumber(sensor, {"update_rate"}, 10.0);
+            std::map<std::string, double, std::less<>> settings;
+            SensorType kind = SensorType::Imu;
+            std::string typeName;
+            if (type == "imu") {
+                const tinyxml2::XMLElement* imu = sensor->FirstChildElement("imu");
+                settings["gyro_noise"] = firstStddev(
+                    imu != nullptr ? imu->FirstChildElement("angular_velocity") : nullptr);
+                settings["accel_noise"] = firstStddev(
+                    imu != nullptr ? imu->FirstChildElement("linear_acceleration") : nullptr);
+                typeName = "Imu";
+            } else if (type == "ray" || type == "gpu_ray" || type == "lidar" ||
+                       type == "gpu_lidar") {
+                kind = SensorType::Lidar;
+                const tinyxml2::XMLElement* ray = sensor->FirstChildElement("ray");
+                if (ray == nullptr) {
+                    ray = sensor->FirstChildElement("lidar");
+                }
+                settings["samples"] = childNumber(ray, {"scan", "horizontal", "samples"}, 360.0);
+                settings["min_angle"] =
+                    childNumber(ray, {"scan", "horizontal", "min_angle"}, -3.14159265358979);
+                settings["max_angle"] =
+                    childNumber(ray, {"scan", "horizontal", "max_angle"}, 3.14159265358979);
+                settings["min_range"] = childNumber(ray, {"range", "min"}, 0.1);
+                settings["max_range"] = childNumber(ray, {"range", "max"}, 30.0);
+                settings["range_noise"] =
+                    firstStddev(ray != nullptr ? ray->FirstChildElement("noise") : nullptr);
+                if (childNumber(ray, {"scan", "vertical", "samples"}, 1.0) > 1.0) {
+                    robot.notes.push_back("lidar '" + std::string(name) +
+                                          "' has vertical samples; v0.2 scans one plane");
+                }
+                typeName = "Lidar";
+            } else {
+                robot.notes.push_back("sensor '" + std::string(name) + "' of type '" + type +
+                                      "' is not simulated yet");
+                continue;
+            }
+            const auto bodyId = BodyId{static_cast<std::uint32_t>(body)};
+            world.addSensor(name, kind, bodyId, mount, rate, settings);
+            ScenePrim prim;
+            prim.name = name;
+            prim.parent = robot.bodyPrim[body];
+            prim.path = robot.scene.prims[prim.parent].path + "/" + name;
+            prim.typeName = typeName;
+            prim.apiSchemas = {kind == SensorType::Lidar ? "SensorLidarAPI_1" : "SensorImuAPI_1"};
+            prim.body = static_cast<std::uint32_t>(body);
+            prim.offset = mount;
+            robot.scene.prims.push_back(std::move(prim));
+            robot.sensorPrim.push_back(static_cast<std::uint32_t>(robot.scene.prims.size() - 1));
+        }
+    }
+}
+
+}  // namespace
+
+Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
+                                    const LoadOptions& options) {
     const urdf::ModelInterfaceSharedPtr model = urdf::parseURDFFile(path);
     if (!model) {
         return Unexpected{path + " is not a valid URDF (the parser's message is on the console)"};
@@ -421,59 +540,43 @@ Expected<Robot, std::string> loadUrdf(const std::string& path, const LoadOptions
     if (!root) {
         return Unexpected{path + " has no root link"};
     }
-
-    Robot robot;
-    robot.name = model->getName();
-    robot.sourcePath = path;
+    const std::size_t firstBody = robot.world.bodies.names.size();
+    const std::size_t firstJoint = robot.world.joints.names.size();
     Builder builder(*model, options, robot);
     builder.setActuated(commandedJoints(path));
 
-    robot.world.addCollider(kWorldBody, ShapeType::Plane, {0.0, 0.0, 1.0}, Pose{},
-                            options.groundFriction);
-
     ScenePrim top;
-    top.name = robot.name.empty() ? "robot" : robot.name;
+    top.name = model->getName().empty() ? "robot" : model->getName();
     top.typeName = "Xform";
-    const std::uint32_t robotPrim = builder.addPrim(std::move(top));
+    const std::uint32_t topPrim = builder.addPrim(std::move(top));
 
-    // A root link named "world" is the ROS convention for a robot bolted to the ground.
+    // A root link named "world" is the ROS convention for something bolted to the ground.
     const bool fixedBase = root->name == "world";
     builder.setFixedBase(fixedBase);
     if (fixedBase) {
         for (const urdf::JointSharedPtr& joint : root->child_joints) {
             const urdf::LinkConstSharedPtr link = model->getLink(joint->child_link_name);
             if (link) {
-                builder.addLink(*link, kWorldBody, robotPrim, Pose{}, joint.get());
+                builder.addLink(*link, kWorldBody, topPrim, Pose{}, joint.get());
             }
         }
     } else {
-        builder.addLink(*root, kWorldBody, robotPrim, Pose{}, nullptr);
-        robot.world.addJoint(root->name + "_floating", JointType::Free, BodyId{0}, {0.0, 0.0, 1.0},
-                             false);
+        builder.addLink(*root, kWorldBody, topPrim, Pose{}, nullptr);
+        robot.world.addJoint(root->name + "_floating", JointType::Free,
+                             BodyId{static_cast<std::uint32_t>(firstBody)}, {0.0, 0.0, 1.0}, false);
+        robot.scene.prims[topPrim].body = static_cast<std::uint32_t>(firstBody);
     }
-    for (const BodyId child : robot.world.joints.child) {
-        robot.jointPrim.push_back(robot.bodyPrim.at(child.index));
+    for (std::size_t j = firstJoint; j < robot.world.joints.names.size(); ++j) {
+        robot.jointPrim.push_back(robot.bodyPrim.at(robot.world.joints.child[j].index));
     }
-    robot.scene.prims[robotPrim].body = robot.world.bodies.names.empty() ? kNoIndex : 0;
-
-    // Static scenery after the robot: viewers take the first root prim as the robot.
-    ScenePrim ground;
-    ground.name = "ground";
-    ground.typeName = "Mesh";
-    ground.mesh = builder.mesh("ground", [] {
-        return boxMesh(2 * kGroundHalfSizeM, 2 * kGroundHalfSizeM, kGroundThicknessM);
-    });
-    ground.material = builder.material("floor", kGroundColor);
-    ground.offset.position = {0.0, 0.0, -kGroundThicknessM / 2.0};
-    builder.addPrim(std::move(ground));
 
     // Place a free robot with its lowest collision shape just above the ground.
-    if (!fixedBase && !robot.world.bodies.names.empty()) {
+    if (!fixedBase && robot.world.bodies.names.size() > firstBody) {
         double lowest = 0.0;
         bool any = false;
         const World::Colliders& colliders = robot.world.colliders;
         for (std::size_t c = 0; c < colliders.body.size(); ++c) {
-            if (colliders.body[c] == kWorldBody) {
+            if (colliders.body[c] == kWorldBody || colliders.body[c].index < firstBody) {
                 continue;
             }
             const Pose shape =
@@ -483,16 +586,41 @@ Expected<Robot, std::string> loadUrdf(const std::string& path, const LoadOptions
             any = true;
         }
         if (!any) {
-            robot.notes.emplace_back(
-                "the robot has no collision shapes and will fall through the "
-                "ground");
+            robot.notes.emplace_back("'" + model->getName() +
+                                     "' has no collision shapes and will fall through the ground");
         }
         const double lift = (any ? -lowest : 0.0) + options.dropHeightM;
-        robot.world.bodies.poseInParent[0].position[2] += lift;
-        for (Pose& pose : robot.bodyRestPose) {
-            pose.position[2] += lift;
+        robot.world.bodies.poseInParent[firstBody].position[2] += lift;
+        for (std::size_t b = firstBody; b < robot.bodyRestPose.size(); ++b) {
+            robot.bodyRestPose[b].position[2] += lift;
         }
     }
+    addSensors(robot, path, firstBody);
+    return {};
+}
+
+Expected<Robot, std::string> loadUrdf(const std::string& path, const LoadOptions& options) {
+    Robot robot;
+    robot.sourcePath = path;
+    robot.world.addCollider(kWorldBody, ShapeType::Plane, {0.0, 0.0, 1.0}, Pose{},
+                            options.groundFriction);
+    if (auto added = addUrdf(robot, path, options); !added) {
+        return Unexpected{added.error()};
+    }
+    robot.name = robot.scene.prims.front().name;
+
+    // Static scenery after the robot: viewers take the first root prim as the robot.
+    ScenePrim ground;
+    ground.name = "ground";
+    ground.path = "/ground";
+    ground.typeName = "Mesh";
+    robot.scene.meshes.push_back(
+        boxMesh(2 * kGroundHalfSizeM, 2 * kGroundHalfSizeM, kGroundThicknessM));
+    ground.mesh = static_cast<std::uint32_t>(robot.scene.meshes.size() - 1);
+    robot.scene.materials.push_back({"floor", kGroundColor});
+    ground.material = static_cast<std::uint32_t>(robot.scene.materials.size() - 1);
+    ground.offset.position = {0.0, 0.0, -kGroundThicknessM / 2.0};
+    robot.scene.prims.push_back(std::move(ground));
     return robot;
 }
 

@@ -1,8 +1,10 @@
 #include "lagrange/proto/Connection.hpp"
 #include "lagrange/proto/Framing.hpp"
 #include "lagrange/rigid_body/MujocoBackend.hpp"
+#include "lagrange/ros2/Bridge.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
-#include "lagrange/server/FigureEightDriver.hpp"
+#include "lagrange/sensors/Sensors.hpp"
+#include "lagrange/server/DiffDrive.hpp"
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/server/Server.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
@@ -17,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <poll.h>
+#include <set>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -158,6 +161,7 @@ struct Session {
     std::uint64_t bytesOut{0};
     bool wantsRosGraph{false};
     bool wantsWorld{false};
+    std::set<std::string> sensors;  // prim paths of the sensors whose frames this viewer wants
 
     bool congested() const { return connection.pendingOutputBytes() > kMaxQueuedBytes; }
     void send(const v1::Envelope& envelope) {
@@ -217,13 +221,27 @@ struct Server::Impl {
     // --- simulation ----------------------------------------------------------------------
 
     Status build() {
-        auto next = std::make_unique<Scheduler>(SchedulerOptions{.deterministic = true});
+        // A run that takes commands from ROS is not deterministic: its input comes from outside.
+        auto next = std::make_unique<Scheduler>(SchedulerOptions{.deterministic = !bridge});
         next->add(std::make_unique<rigid_body::MujocoBackend>());
         if (robot.actuatedJoints.size() == 2) {
-            FigureEightDriver::Settings settings;
-            settings.leftJoint = robot.actuatedJoints[0];
-            settings.rightJoint = robot.actuatedJoints[1];
-            next->add(std::make_unique<FigureEightDriver>(settings));
+            std::function<std::optional<VelocityCommand>()> external;
+            if (bridge) {
+                external = [this]() -> std::optional<VelocityCommand> {
+                    const auto command = bridge->latestCommand(std::chrono::milliseconds(500));
+                    if (!command) {
+                        return std::nullopt;
+                    }
+                    return VelocityCommand{command->linearMps, command->angularRadps};
+                };
+            }
+            auto command = std::make_unique<DriveCommand>(DriveCommand::Settings{}, external);
+            driveCommand = command.get();
+            next->add(std::move(command));
+            next->add(std::make_unique<DiffDriveController>(driveSettings()));
+        }
+        for (auto& sensor : sensors::createSensorModules(robot.world)) {
+            next->add(std::move(sensor));
         }
         auto wired = next->wire(WorldView(robot.world));
         if (!wired) {
@@ -248,8 +266,94 @@ struct Server::Impl {
         }
         statsSimTime = SimTime{};
         (void)scheduler->takeCosts();
+        if (bridge) {
+            bridge->attach(robot.world, scheduler->bus());
+        }
+        lidarSent.assign(robot.world.sensors.names.size(), SimTime{-1});
         return {};
     }
+
+    /// Wheel radius and track of a two-wheel robot, from its wheel colliders and positions.
+    DiffDriveController::Settings driveSettings() const {
+        DiffDriveController::Settings settings;
+        settings.leftJoint = robot.actuatedJoints[0];
+        settings.rightJoint = robot.actuatedJoints[1];
+        const World& world = robot.world;
+        std::array<std::uint32_t, 2> wheels{};
+        for (std::size_t j = 0; j < world.joints.names.size(); ++j) {
+            for (std::size_t w = 0; w < 2; ++w) {
+                if (world.joints.names[j] == robot.actuatedJoints[w]) {
+                    wheels[w] = world.joints.child[j].index;
+                }
+            }
+        }
+        for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
+            if (world.colliders.body[c].index == wheels[0] &&
+                (world.colliders.shape[c] == ShapeType::Cylinder ||
+                 world.colliders.shape[c] == ShapeType::Sphere)) {
+                settings.wheelRadiusM = world.colliders.size[c][0];
+            }
+        }
+        const Pose& a = robot.bodyRestPose[wheels[0]];
+        const Pose& b = robot.bodyRestPose[wheels[1]];
+        settings.trackWidthM =
+            std::hypot(a.position[0] - b.position[0], a.position[1] - b.position[1]);
+        return settings;
+    }
+
+    /// The latest scan of each lidar to the viewers that watch it.
+    void sendSensorFrames() {
+        const World::Sensors& table = robot.world.sensors;
+        const SignalBus& bus = scheduler->bus();
+        for (std::size_t s = 0; s < table.names.size(); ++s) {
+            if (table.type[s] != SensorType::Lidar) {
+                continue;
+            }
+            const std::string& path = robot.scene.prims[robot.sensorPrim[s]].path;
+            const bool watched = std::any_of(sessions.begin(), sessions.end(), [&](const auto& x) {
+                return x->greeted && x->sensors.contains(path);
+            });
+            const SignalId id = bus.find("sensor/" + table.names[s] + "/ranges");
+            if (!watched || !id.valid() || bus.stamp(id) == lidarSent[s]) {
+                continue;
+            }
+            lidarSent[s] = bus.stamp(id);
+            const auto& settings = table.settings[s];
+            const double first = settings.at("min_angle");
+            const std::span<const double> ranges = bus.readN(id);
+            const double step = ranges.size() > 1 ? (settings.at("max_angle") - first) /
+                                                        static_cast<double>(ranges.size() - 1)
+                                                  : 0.0;
+            std::vector<float> points;
+            for (std::size_t i = 0; i < ranges.size(); ++i) {
+                if (!std::isfinite(ranges[i])) {
+                    continue;
+                }
+                const double angle = first + step * static_cast<double>(i);
+                // Sensor frame, as the mock server sends. Intensity: no reflectivity model yet.
+                points.insert(points.end(),
+                              {static_cast<float>(ranges[i] * std::cos(angle)),
+                               static_cast<float>(ranges[i] * std::sin(angle)), 0.0F, 1.0F});
+            }
+            v1::Envelope envelope;
+            v1::SensorFrame& frame = *envelope.mutable_sensor_frame();
+            frame.set_sensor(path);
+            frame.mutable_sim_time()->set_ns(lidarSent[s].ns);
+            v1::PointCloudData& cloud = *frame.mutable_points();
+            cloud.set_count(static_cast<std::uint32_t>(points.size() / 4));
+            cloud.set_stride(16);
+            for (const char* field : {"x", "y", "z", "intensity"}) {
+                cloud.add_fields(field);
+            }
+            setInline(*cloud.mutable_data(), points);
+            for (auto& session : sessions) {
+                if (session->greeted && session->sensors.contains(path) && !session->congested()) {
+                    session->send(envelope);
+                }
+            }
+        }
+    }
+    std::vector<SimTime> lidarSent;
 
     /// Records the samples committed in the last tick of every signal a viewer subscribes to.
     void capture() {
@@ -281,18 +385,30 @@ struct Server::Impl {
                            [signal](const auto& s) { return s->subscriptions.contains(signal); });
     }
 
+    /// Simulation time owed to the wall clock, in ns. Whole base ticks are stepped and the
+    /// remainder carries over, so the real-time factor averages exactly the target instead of
+    /// rounding every call up to a tick.
+    std::int64_t owedNs{0};
+
     Status advance(std::int64_t simNs) {
-        const SimTime target = scheduler->now() + Duration{simNs};
+        const std::int64_t tick = scheduler->baseTick().ns;
+        // Never owe more than 100 ms: a run that cannot keep up falls behind real time.
+        owedNs = std::min<std::int64_t>(owedNs + simNs, 100'000'000);
         const Clock::time_point began = Clock::now();
-        while (scheduler->now() < target) {
+        while (owedNs >= tick) {
+            owedNs -= tick;
             const Clock::time_point tickStart = Clock::now();
             if (Status status = scheduler->stepTick(); !status.ok()) {
                 return status;
             }
             tickNs.push_back(nanosSince(tickStart, Clock::now()));
             capture();
+            if (bridge) {
+                bridge->publish(scheduler->bus(), scheduler->now());
+            }
             if (nanosSince(began, Clock::now()) > kMaxStepWallNs) {
-                break;  // fall behind real time rather than stall the viewers
+                owedNs = 0;  // fall behind real time rather than stall the viewers
+                break;
             }
         }
         return {};
@@ -455,6 +571,13 @@ struct Server::Impl {
                 }
             }
         }
+        if (const std::string sensor = field("sensor/"); !sensor.empty()) {
+            for (std::size_t s = 0; s < world.sensors.names.size(); ++s) {
+                if (world.sensors.names[s] == sensor) {
+                    return robot.sensorPrim[s];
+                }
+            }
+        }
         if (const std::string joint = field("joint/"); !joint.empty()) {
             for (std::size_t j = 0; j < world.joints.names.size(); ++j) {
                 if (world.joints.names[j] == joint) {
@@ -597,6 +720,16 @@ struct Server::Impl {
         }
     }
 
+    bool hasSensors() const { return !robot.world.sensors.names.empty(); }
+
+    std::int64_t fastestSensorNs() const {
+        double rate = 0.0;
+        for (const double r : robot.world.sensors.rateHz) {
+            rate = std::max(rate, r);
+        }
+        return rate > 0.0 ? static_cast<std::int64_t>(std::llround(1e9 / rate)) : 0;
+    }
+
     std::string profileYaml() const {
         std::string yaml =
             "# Lagrange simulation profile\nschema_version: 1\nstage: " + robot.sourcePath +
@@ -604,6 +737,8 @@ struct Server::Impl {
         for (const DomainRow& row : kDomains) {
             if (std::string_view(row.domain) == "rigid_body") {
                 yaml += "  rigid_body: {enabled: true, backend: mujoco, dt: 0.001}\n";
+            } else if (std::string_view(row.domain) == "sensors" && hasSensors()) {
+                yaml += "  sensors: {enabled: true}\n";
             } else if (std::string_view(row.domain) == "comms" ||
                        std::string_view(row.domain) == "traffic" ||
                        std::string_view(row.domain) == "vehicle_dynamics" ||
@@ -625,22 +760,31 @@ struct Server::Impl {
         p.set_yaml(profileYaml());
         p.set_schema_version(1);
         p.set_json_schema(schemaText);
-        double physicsCost = 0.0;
-        for (const ModuleCost& cost : costs) {
-            if (cost.domain == "rigid_body" && cost.steps > 0) {
-                physicsCost = static_cast<double>(cost.totalNs) / 1e6 /
-                              (static_cast<double>(cost.steps) * cost.dt.seconds());
+        // Measured cost per simulated second, summed over each domain's modules.
+        std::map<std::string, double> cost;
+        for (const ModuleCost& c : costs) {
+            if (c.steps > 0) {
+                cost[c.domain] += static_cast<double>(c.totalNs) / 1e6 /
+                                  (static_cast<double>(c.steps) * c.dt.seconds());
             }
         }
         for (const DomainRow& row : kDomains) {
             v1::DomainState& d = *p.add_domains();
             d.set_domain(row.domain);
             const bool physics = std::string_view(row.domain) == "rigid_body";
-            d.set_enabled(physics);
-            d.set_available(physics);
-            d.set_active_module(physics ? "mujoco" : row.substitute);
-            d.set_substituted(!physics);
-            if (!physics) {
+            const bool sensing = std::string_view(row.domain) == "sensors" && hasSensors();
+            const bool running = physics || sensing;
+            d.set_enabled(running);
+            d.set_available(running);
+            d.set_active_module(physics ? "mujoco" : (sensing ? "raycast" : row.substitute));
+            d.set_substituted(!running);
+            d.set_cpu_ms_per_sim_s(cost[row.domain]);
+            if (sensing) {
+                d.add_fidelities("raycast");
+                d.set_dt_ns(fastestSensorNs());
+                d.add_depends_on("rigid_body");
+            }
+            if (!running) {
                 d.set_unavailable_reason("no module in this build yet; the substitute stands in");
             }
             v1::SubstituteOption& option = *d.add_substitutes();
@@ -652,7 +796,6 @@ struct Server::Impl {
                 d.set_dt_ns(1'000'000);
                 d.set_min_dt_ns(100'000);
                 d.set_max_dt_ns(10'000'000);
-                d.set_cpu_ms_per_sim_s(physicsCost);
             }
         }
         return envelope;
@@ -825,9 +968,15 @@ struct Server::Impl {
                 }
                 break;
             case v1::Command::kSubscribeSensor:
+                if (command.subscribe_sensor().enabled()) {
+                    session.sensors.insert(command.subscribe_sensor().sensor());
+                } else {
+                    session.sensors.erase(command.subscribe_sensor().sensor());
+                }
+                break;
             case v1::Command::kSubscribeField:
             case v1::Command::kSetOverlays:
-                break;  // accepted; this server has no sensors or fields yet
+                break;  // accepted; this server has no environment fields yet
             case v1::Command::kValidateProfile:
                 validate(command.validate_profile().yaml(), *r.mutable_validation());
                 break;
@@ -926,16 +1075,55 @@ struct Server::Impl {
         wiring.set_sync_ns(smallest);
     }
 
-    /// What the ROS 2 workspace shows: no bridge yet, said plainly.
-    static v1::Envelope rosGraph() {
+    /// What the ROS 2 workspace shows: the live graph seen by the bridge, or why there is none.
+    v1::Envelope rosGraph() {
         v1::Envelope envelope;
         v1::RosGraph& graph = *envelope.mutable_ros_graph();
         graph.set_distro("lyrical");
-        graph.set_note(
-            "lagrange_server v0.2 has no ROS 2 bridge yet (roadmap 0.2-F); the robot "
-            "is driven by the built-in figure-eight demo");
+        if (!bridge) {
+            graph.set_note("this server runs without its ROS 2 bridge (started with --no-ros)");
+            return envelope;
+        }
+        const ros2::GraphSnapshot snapshot = bridge->graph();
+        for (const ros2::GraphSnapshot::Topic& source : snapshot.topics) {
+            v1::RosGraph::Topic& topic = *graph.add_topics();
+            topic.set_name(source.name);
+            topic.set_type(source.type);
+            topic.set_publishers(source.publishers);
+            topic.set_subscribers(source.subscribers);
+            topic.set_rate_hz(source.rateHz);
+            topic.set_bandwidth_bps(source.bandwidthBps);
+            topic.set_from_bridge(source.fromBridge);
+            if (source.name == "/cmd_vel" && source.publishers == 0) {
+                topic.set_status("no publisher: the demo drives");
+            }
+        }
+        for (const ros2::GraphSnapshot::Node& source : snapshot.nodes) {
+            graph.add_nodes(source.name);
+            v1::RosGraph::Node& node = *graph.add_node_info();
+            node.set_name(source.name);
+            node.set_external(source.external);
+            for (const std::string& topic : source.publishes) {
+                node.add_publishes(topic);
+            }
+            for (const std::string& topic : source.subscribes) {
+                node.add_subscribes(topic);
+            }
+            if (!source.external) {
+                node.set_detail(std::string("simulator bridge · drive: ") +
+                                (driveCommand != nullptr ? driveCommand->source() : "none"));
+            }
+        }
+        graph.set_rmw(snapshot.rmw);
+        if (!snapshot.distro.empty()) {
+            graph.set_distro(snapshot.distro);
+        }
+        graph.set_domain_id(snapshot.domainId);
+        graph.set_use_sim_time(true);  // what the bridge's /clock is for
         return envelope;
     }
+    std::unique_ptr<ros2::Bridge> bridge;
+    DriveCommand* driveCommand{nullptr};
 
     /// The World workspace: the robot as the one agent, at its simulated position.
     v1::Envelope worldState() const {
@@ -1045,6 +1233,7 @@ struct Server::Impl {
             c.values.clear();
             c.count = 0;
         }
+        sendSensorFrames();
     }
 
     void sendStats(Clock::time_point now) {
@@ -1157,6 +1346,17 @@ Status Server::start() {
         return Status::error(StatusCode::InvalidConfig, robot.error());
     }
     s.robot = std::move(robot.value());
+    if (s.options.ros) {
+        ros2::BridgeSettings settings;
+        settings.baseLink = s.robot.world.bodies.names.empty() ? "" : s.robot.world.bodies.names[0];
+        settings.robotDescription = readFile(s.options.robotPath);
+        s.bridge = std::make_unique<ros2::Bridge>(settings);
+    }
+    if (!s.options.worldPath.empty()) {
+        if (auto added = addUrdf(s.robot, s.options.worldPath); !added) {
+            return Status::error(StatusCode::InvalidConfig, added.error());
+        }
+    }
     if (Status status = s.build(); !status.ok()) {
         return status;
     }
@@ -1182,12 +1382,28 @@ Status Server::start() {
           "MuJoCo 3.12 · 1 ms · elliptic friction cone · implicitfast");
     if (s.robot.actuatedJoints.size() == 2) {
         s.log(v1::LOG_LEVEL_INFO, "controller",
-              "figure-eight demo driver on " + s.robot.actuatedJoints[0] + " and " +
-                  s.robot.actuatedJoints[1] + " (stands in until the ROS 2 bridge)");
+              "diff drive on " + s.robot.actuatedJoints[0] + " and " + s.robot.actuatedJoints[1] +
+                  (s.bridge ? "; a figure-eight demo drives until /cmd_vel arrives"
+                            : "; a figure-eight demo drives"));
     } else {
         s.log(v1::LOG_LEVEL_WARN, "controller",
               "no demo driver: it needs exactly two actuated wheel joints, the robot has " +
                   std::to_string(s.robot.actuatedJoints.size()));
+    }
+    for (std::size_t i = 0; i < s.robot.world.sensors.names.size(); ++i) {
+        const World::Sensors& sensors = s.robot.world.sensors;
+        char line[160];
+        std::snprintf(line, sizeof(line), "%s %s on %s at %.0f Hz",
+                      sensors.type[i] == SensorType::Lidar ? "lidar" : "IMU",
+                      sensors.names[i].c_str(),
+                      s.robot.world.bodies.names[sensors.body[i].index].c_str(), sensors.rateHz[i]);
+        s.log(v1::LOG_LEVEL_INFO, "sensors", line);
+    }
+    if (s.bridge) {
+        s.log(v1::LOG_LEVEL_INFO, "ros2",
+              "node /" + s.bridge->nodeName() +
+                  " publishes /clock /tf /tf_static /odom /joint_states /robot_description and "
+                  "the sensors; subscribes /cmd_vel (geometry_msgs/Twist)");
     }
     s.log(v1::LOG_LEVEL_INFO, "server", "listening on " + proto::toString(s.listener.endpoint()));
     s.lastWall = s.lastStatus = s.lastStats = Clock::now();
@@ -1238,7 +1454,7 @@ void Server::runOnce(int timeoutMs) {
         s.sendStats(now);
         for (auto& session : s.sessions) {
             if (session->greeted && session->wantsRosGraph) {
-                session->send(Impl::rosGraph());
+                session->send(s.rosGraph());
             }
             if (session->greeted && session->wantsWorld) {
                 session->send(s.worldState());

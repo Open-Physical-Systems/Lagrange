@@ -39,6 +39,8 @@ struct Pose {
 /// {radius, half length}, box {half extents}, plane {half extents x, y, grid spacing}.
 enum class ShapeType : std::uint8_t { Plane, Sphere, Capsule, Cylinder, Box };
 
+enum class SensorType : std::uint8_t { Imu, Lidar };
+
 /// One applied API schema on one prim, with its attribute values read once at load.
 /// Lookups are by name, so they belong in declare() and init(), never in step().
 struct SchemaInstance {
@@ -102,6 +104,21 @@ struct World {
         std::vector<double> friction;  // Coulomb coefficient, sliding
     } colliders;
 
+    /// Sensors mounted on bodies (from SensorAPI schemas; from <sensor> blocks of a URDF until
+    /// the stage loader exists). Sensor frame: x forward, z up.
+    struct Sensors {                     // every vector has one entry per sensor
+        std::vector<std::string> names;  // "front_lidar": the name used in signal names
+        std::vector<SensorType> type;
+        std::vector<BodyId> body;
+        std::vector<Pose> poseInBody;
+        std::vector<double> rateHz;
+        std::vector<PrimId> prim;
+        /// Type-specific settings by name, SI units: lidar "samples", "min_angle" (rad),
+        /// "max_angle", "min_range" (m), "max_range", "range_noise" (m, 1 sigma); IMU
+        /// "accel_noise" (m/s², 1 sigma), "gyro_noise" (rad/s, 1 sigma).
+        std::vector<std::map<std::string, double, std::less<>>> settings;
+    } sensors;
+
     std::vector<std::string> robots;  // robot root prim names
     std::vector<SchemaInstance> schemaInstances;
     std::array<double, 3> gravityLocal{0.0, 0.0, -9.80665};  // m/s², standard gravity (CGPM 1901)
@@ -116,6 +133,8 @@ struct World {
     /// Adds a joint that moves `childBody` relative to its parent; the axis is in the child frame.
     JointId addJoint(std::string name, JointType jointType, BodyId childBody,
                      const std::array<double, 3>& jointAxis, bool isActuated);
+    void addSensor(std::string name, SensorType sensorType, BodyId onBody, const Pose& pose,
+                   double updateRateHz, std::map<std::string, double, std::less<>> sensorSettings);
     void addCollider(BodyId onBody, ShapeType shapeType, const std::array<double, 3>& shapeSize,
                      const Pose& poseInOwner, double slidingFriction);
 };
@@ -128,6 +147,9 @@ public:
     [[nodiscard]] const World::Bodies& bodies() const { return world_->bodies; }
     [[nodiscard]] const World::Joints& joints() const { return world_->joints; }
     [[nodiscard]] const World::Colliders& colliders() const { return world_->colliders; }
+    [[nodiscard]] const World::Sensors& sensors() const { return world_->sensors; }
+    /// All tables, read-only, for helpers that take a World (PoseMath.hpp).
+    [[nodiscard]] const World& raw() const { return *world_; }
     [[nodiscard]] std::size_t primCount() const { return world_->prims.paths.size(); }
     [[nodiscard]] std::string_view primPath(PrimId prim) const;
     [[nodiscard]] std::string_view signalInstanceName(PrimId prim) const;
