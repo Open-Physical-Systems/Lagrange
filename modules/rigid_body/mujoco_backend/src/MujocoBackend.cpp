@@ -1,4 +1,5 @@
 #include "lagrange/rigid_body/MujocoBackend.hpp"
+#include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
 #include <array>
@@ -36,33 +37,6 @@ SignalSpec flowInput(std::string name, SignalType type, Unit unit, bool optional
     out.hold = Hold::WindowAverage;  // flows: the impulse over the physics step is conserved
     out.optional = optional;
     return out;
-}
-
-/// Bodies that move: those with a joint to their parent, and everything below them.
-std::vector<bool> dynamicBodies(const WorldView& world) {
-    const World::Bodies& bodies = world.bodies();
-    std::vector<bool> jointed(bodies.names.size(), false);
-    for (std::size_t j = 0; j < world.joints().names.size(); ++j) {
-        if (world.joints().type[j] != JointType::Fixed) {
-            jointed.at(world.joints().child[j].index) = true;
-        }
-    }
-    std::vector<bool> dynamic(bodies.names.size(), false);
-    // Parents can come after children in the tables, so repeat until nothing changes.
-    for (bool changed = true; changed;) {
-        changed = false;
-        for (std::size_t b = 0; b < bodies.names.size(); ++b) {
-            const BodyId parent = bodies.parent[b];
-            const bool value =
-                jointed[b] ||
-                (parent != kWorldBody && parent.index < dynamic.size() && dynamic[parent.index]);
-            if (value && !dynamic[b]) {
-                dynamic[b] = true;
-                changed = true;
-            }
-        }
-    }
-    return dynamic;
 }
 
 mjtGeom geomType(ShapeType shape) {
@@ -116,21 +90,28 @@ Status MujocoBackend::declare(const WorldView& world, const ModuleConfig& config
     }
     const World::Joints& joints = world.joints();
     for (std::uint32_t j = 0; j < joints.names.size(); ++j) {
-        if (!joints.actuated[j] || !isActuatable(joints.type[j])) {
+        // Every hinge and slide reports where it is (robot_state_publisher needs the casters
+        // too); only actuated ones take a torque and report what a motor needs.
+        if (!isActuatable(joints.type[j])) {
             continue;
         }
+        const bool actuated = joints.actuated[j];
         const bool prismatic = joints.type[j] == JointType::Prismatic;
         const Unit effort = prismatic ? units::N : units::N_m;
         const std::string base = "joint/" + std::string(world.signalInstanceName(joints.prim[j]));
         JointSignals s;
         s.joint = j;
-        s.torque = declarer.input(flowInput(base + "/torque", SignalType::Scalar, effort, false));
-        s.loadTorque =
-            declarer.input(flowInput(base + "/load_torque", SignalType::Scalar, effort, true));
         s.position = declarer.output(
             spec(base + "/position", SignalType::Scalar, prismatic ? units::m : units::rad));
         s.velocity = declarer.output(spec(base + "/velocity", SignalType::Scalar,
                                           prismatic ? units::m_per_s : units::rad_per_s));
+        if (!actuated) {
+            joints_.push_back(s);
+            continue;
+        }
+        s.torque = declarer.input(flowInput(base + "/torque", SignalType::Scalar, effort, false));
+        s.loadTorque =
+            declarer.input(flowInput(base + "/load_torque", SignalType::Scalar, effort, true));
         s.acceleration = declarer.output(spec(base + "/acceleration", SignalType::Scalar,
                                               prismatic ? units::m_per_s2 : units::rad_per_s2));
         s.effectiveInertia = declarer.output(spec(base + "/effective_inertia", SignalType::Scalar,
@@ -139,7 +120,7 @@ Status MujocoBackend::declare(const WorldView& world, const ModuleConfig& config
             declarer.output(spec(base + "/constraint_torque", SignalType::Scalar, effort));
         joints_.push_back(s);
     }
-    const std::vector<bool> dynamic = dynamicBodies(world);
+    const std::vector<bool> dynamic = movingBodies(world.raw());
     const World::Bodies& bodies = world.bodies();
     for (std::uint32_t b = 0; b < bodies.names.size(); ++b) {
         if (!dynamic[b]) {
@@ -193,11 +174,15 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
             mjsBody* body = mjs_addBody(parentBody, nullptr);
             mjs_setName(body->element, bodies.names[b].c_str());
             setPose(body->pos, body->quat, bodies.poseInParent[b]);
-            body->mass = bodies.mass[b];
-            std::copy(bodies.comLocal[b].begin(), bodies.comLocal[b].end(), body->ipos);
-            std::copy(bodies.inertiaLocal[b].begin(), bodies.inertiaLocal[b].end(),
-                      body->fullinertia);
-            body->explicitinertial = 1;
+            // Massless bodies (static scenery, frames) keep MuJoCo's defaults: an explicit zero
+            // inertia is refused even when the body never moves.
+            if (bodies.mass[b] > 0.0) {
+                body->mass = bodies.mass[b];
+                std::copy(bodies.comLocal[b].begin(), bodies.comLocal[b].end(), body->ipos);
+                std::copy(bodies.inertiaLocal[b].begin(), bodies.inertiaLocal[b].end(),
+                          body->fullinertia);
+                body->explicitinertial = 1;
+            }
             made[b] = body;
             progress = true;
         }
@@ -323,7 +308,9 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
 Status MujocoBackend::step(const StepContext& /*context*/, SignalBus& bus) {
     // Inputs, held over this step by the scheduler.
     for (const JointSignals& s : joints_) {
-        data_->qfrc_applied[s.dofAddress] = bus.read(s.torque) + bus.read(s.loadTorque);
+        if (s.torque.valid()) {
+            data_->qfrc_applied[s.dofAddress] = bus.read(s.torque) + bus.read(s.loadTorque);
+        }
     }
     for (const BodySignals& s : bodies_) {
         const std::span<const double> wrench = bus.readN(s.externalWrench);
@@ -357,6 +344,9 @@ void MujocoBackend::writeOutputs(SignalBus& bus) const {
         const auto dof = static_cast<std::size_t>(s.dofAddress);
         bus.write(s.position, data_->qpos[s.qposAddress]);
         bus.write(s.velocity, data_->qvel[dof]);
+        if (!s.torque.valid()) {
+            continue;
+        }
         bus.write(s.acceleration, data_->qacc[dof]);
         // Diagonal of the joint-space inertia matrix, armature included (architecture.md §8).
         // MuJoCo 3.12 stores M as sparse lower-triangular rows; the diagonal ends each row

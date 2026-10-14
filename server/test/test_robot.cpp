@@ -1,6 +1,6 @@
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
-#include "lagrange/server/FigureEightDriver.hpp"
+#include "lagrange/server/DiffDrive.hpp"
 #include "lagrange/server/Robot.hpp"
 
 #include <algorithm>
@@ -39,7 +39,7 @@ TEST(LoadUrdf, SampleAmrBecomesBodiesJointsAndColliders) {
     const Robot robot = amr();
     const World& world = robot.world;
     EXPECT_EQ(robot.name, "amr_diffdrive");
-    EXPECT_EQ(world.bodies.names.size(), 7U);
+    EXPECT_EQ(world.bodies.names.size(), 8U);  // chassis, 2 wheels, 2 forks, 2 balls, lidar
     EXPECT_EQ(world.bodies.names[0], "base_link");
     EXPECT_DOUBLE_EQ(world.bodies.mass[0], 20.0);
     EXPECT_DOUBLE_EQ(world.bodies.comLocal[0][2], 0.03);
@@ -66,6 +66,37 @@ TEST(LoadUrdf, SampleAmrBecomesBodiesJointsAndColliders) {
         }
     }
     EXPECT_TRUE(robot.notes.empty()) << robot.notes.front();
+}
+
+TEST(LoadUrdf, GazeboSensorBlocksBecomeSensors) {
+    const Robot robot = amr();
+    const World::Sensors& sensors = robot.world.sensors;
+    ASSERT_EQ(sensors.names.size(), 2U);
+    EXPECT_EQ(sensors.names[0], "front_lidar");
+    EXPECT_EQ(sensors.type[0], SensorType::Lidar);
+    EXPECT_EQ(robot.world.bodies.names[sensors.body[0].index], "lidar_link");
+    EXPECT_DOUBLE_EQ(sensors.rateHz[0], 10.0);
+    EXPECT_DOUBLE_EQ(sensors.settings[0].at("samples"), 720.0);
+    EXPECT_DOUBLE_EQ(sensors.settings[0].at("max_range"), 20.0);
+    EXPECT_DOUBLE_EQ(sensors.settings[0].at("range_noise"), 0.01);
+    EXPECT_EQ(sensors.type[1], SensorType::Imu);
+    EXPECT_DOUBLE_EQ(sensors.rateHz[1], 200.0);
+    EXPECT_DOUBLE_EQ(sensors.settings[1].at("gyro_noise"), 0.002);
+    EXPECT_EQ(robot.scene.prims[robot.sensorPrim[0]].path,
+              "/amr_diffdrive/base_link/lidar_link/front_lidar");
+    EXPECT_EQ(robot.scene.prims[robot.sensorPrim[0]].typeName, "Lidar");
+}
+
+TEST(LoadUrdf, AWorldFileAddsFixedScenery) {
+    Robot robot = amr();
+    const std::size_t bodies = robot.world.bodies.names.size();
+    ASSERT_TRUE(addUrdf(robot, LAGRANGE_TEST_WAREHOUSE_URDF));
+    EXPECT_EQ(robot.world.bodies.names.size(), bodies + 7U);
+    EXPECT_EQ(robot.world.colliders.body.size(), 6U + 7U);
+    // Fixed to the world: no joints added, nothing lifted.
+    EXPECT_EQ(robot.world.joints.names.size(), 7U);
+    EXPECT_DOUBLE_EQ(robot.bodyRestPose[bodyIndex(robot, "wall_south")].position[2], 1.0);
+    EXPECT_EQ(robot.scene.prims.front().path, "/amr_diffdrive");  // still the robot first
 }
 
 TEST(LoadUrdf, FreeRobotIsLiftedOntoTheGround) {
@@ -106,10 +137,11 @@ TEST(AmrSimulation, TheDriverMovesTheRobotAndItStaysUpright) {
     const Robot robot = amr();
     Scheduler scheduler(SchedulerOptions{.deterministic = true});
     scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
-    FigureEightDriver::Settings settings;
+    scheduler.add(std::make_unique<DriveCommand>(DriveCommand::Settings{}, nullptr));
+    DiffDriveController::Settings settings;
     settings.leftJoint = robot.actuatedJoints[0];
     settings.rightJoint = robot.actuatedJoints[1];
-    scheduler.add(std::make_unique<FigureEightDriver>(settings));
+    scheduler.add(std::make_unique<DiffDriveController>(settings));
     auto wired = scheduler.wire(WorldView(robot.world));
     ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
     ASSERT_TRUE(scheduler.stepUntil(SimTime{6'000'000'000}).ok());
@@ -117,10 +149,10 @@ TEST(AmrSimulation, TheDriverMovesTheRobotAndItStaysUpright) {
     const SignalBus& bus = scheduler.bus();
     const std::span<const double> pose = bus.readN(bus.find("body/base_link/pose"));
     const double travelled = std::hypot(pose[0], pose[1]);
-    // 3 m along a 1.5 m circle after the 2 s ramp: a chord of about 2 R sin(1 rad) = 2.5 m.
-    EXPECT_NEAR(travelled, 2.5, 0.2);
-    // It turns as commanded: 0.4 rad/s about z.
-    EXPECT_NEAR(bus.readN(bus.find("body/base_link/twist"))[5], 0.4, 0.02);
+    // 3 m along a 1.2 m circle after the 2 s ramp: a chord of 2 R sin(1.25 rad) = 2.28 m.
+    EXPECT_NEAR(travelled, 2.28, 0.2);
+    // It turns as commanded: 0.5 rad/s about z.
+    EXPECT_NEAR(bus.readN(bus.find("body/base_link/twist"))[5], 0.5, 0.025);
     EXPECT_NEAR(pose[2], 0.1, 0.01) << "the chassis stays at axle height";
     // Upright: the body's z axis stays within 5° of vertical (quaternion w, x, y, z).
     const double tiltCos = 1.0 - 2.0 * (pose[4] * pose[4] + pose[5] * pose[5]);

@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -27,6 +28,7 @@ protected:
         ServerOptions options;
         options.endpoint = proto::Endpoint::unixSocket(directory_ + "/s.sock");
         options.robotPath = LAGRANGE_TEST_AMR_URDF;
+        options.worldPath = LAGRANGE_TEST_WAREHOUSE_URDF;
         options.startPaused = true;
         server_ = std::make_unique<Server>(options);
         const Status started = server_->start();
@@ -199,6 +201,29 @@ TEST_F(ServerTest, SubscribedSignalsArriveAsGapFreeRuns) {
         }
         return samples >= 200;  // 0.2 s of simulation
     }));
+}
+
+TEST_F(ServerTest, LidarFramesSeeTheWarehouseWalls) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    v1::Envelope watch = command(4);
+    watch.mutable_command()->mutable_subscribe_sensor()->set_sensor(
+        "/amr_diffdrive/base_link/lidar_link/front_lidar");
+    watch.mutable_command()->mutable_subscribe_sensor()->set_enabled(true);
+    send(watch);
+    v1::Envelope step = command(5);
+    step.mutable_command()->mutable_step()->set_duration_ns(200'000'000);
+    send(step);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_sensor_frame(); }));
+    const v1::SensorFrame& frame = received_.back().sensor_frame();
+    ASSERT_TRUE(frame.has_points());
+    const v1::PointCloudData& cloud = frame.points();
+    // 720 beams in a closed hall: every beam returns.
+    EXPECT_EQ(cloud.count(), 720U);
+    EXPECT_EQ(cloud.data().inline_().size(), cloud.count() * 16U);
+    // Beam 360 looks straight ahead (+x): the east wall's face is at x = 9.0, the lidar at 0.2.
+    float x = 0.0F;
+    std::memcpy(&x, cloud.data().inline_().data() + 360 * 16, sizeof(float));
+    EXPECT_NEAR(x, 8.8, 0.06);
 }
 
 }  // namespace

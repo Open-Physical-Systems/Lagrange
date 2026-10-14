@@ -194,6 +194,62 @@
     <axis xyz="0 1 0"/>
   </joint>
 
+  <!-- A 2D lidar on a short mast at the front, above the chassis. -->
+  <link name="lidar_link">
+    <inertial>
+      <mass value="0.3"/>
+      <inertia ixx="0.0002" iyy="0.0002" izz="0.0002" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <geometry>
+        <cylinder radius="0.04" length="0.05"/>
+      </geometry>
+      <material name="accent"/>
+    </visual>
+  </link>
+  <joint name="lidar_mount" type="fixed">
+    <parent link="base_link"/>
+    <child link="lidar_link"/>
+    <origin xyz="0.20 0 0.13"/>
+  </joint>
+
+  <!-- Sensors, in the Gazebo form most robot descriptions use. -->
+  <gazebo reference="lidar_link">
+    <sensor name="front_lidar" type="gpu_lidar">
+      <update_rate>10</update_rate>
+      <lidar>
+        <scan>
+          <horizontal>
+            <samples>720</samples>
+            <min_angle>-3.14159</min_angle>
+            <max_angle>3.14159</max_angle>
+          </horizontal>
+        </scan>
+        <range>
+          <min>0.12</min>
+          <max>20.0</max>
+        </range>
+        <noise>
+          <type>gaussian</type>
+          <stddev>0.01</stddev>
+        </noise>
+      </lidar>
+    </sensor>
+  </gazebo>
+  <gazebo reference="base_link">
+    <sensor name="imu" type="imu">
+      <update_rate>200</update_rate>
+      <imu>
+        <angular_velocity>
+          <z><noise type="gaussian"><stddev>0.002</stddev></noise></z>
+        </angular_velocity>
+        <linear_acceleration>
+          <x><noise type="gaussian"><stddev>0.02</stddev></noise></x>
+        </linear_acceleration>
+      </imu>
+    </sensor>
+  </gazebo>
+
   <!-- Which joints take commands: the driven wheels, by torque. -->
   <ros2_control name="LagrangeSystem" type="system">
     <hardware>

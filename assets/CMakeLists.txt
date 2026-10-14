@@ -3,6 +3,6 @@ project(lagrange_assets VERSION 0.0.0 LANGUAGES NONE)
 
 find_package(ament_cmake REQUIRED)
 
-install(DIRECTORY robots DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY robots worlds DESTINATION share/${PROJECT_NAME})
 
 ament_package()

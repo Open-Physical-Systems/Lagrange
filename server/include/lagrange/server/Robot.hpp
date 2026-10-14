@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lagrange/module/Expected.hpp"
+#include "lagrange/world/PoseMath.hpp"
 #include "lagrange/world/World.hpp"
 
 #include <array>
@@ -59,6 +60,7 @@ struct Robot {
     std::vector<Pose> bodyRestPose;           // world pose of each body with all joints at zero
     std::vector<std::uint32_t> bodyPrim;      // scene prim of each body
     std::vector<std::uint32_t> jointPrim;     // scene prim of each joint's child link
+    std::vector<std::uint32_t> sensorPrim;    // scene prim of each sensor
     std::vector<std::string> actuatedJoints;  // joints driven by torque, in file order
     std::vector<std::string> notes;           // what was skipped or approximated, for the user
 };
@@ -80,9 +82,13 @@ struct LoadOptions {
 [[nodiscard]] Expected<Robot, std::string> loadUrdf(const std::string& path,
                                                     const LoadOptions& options = {});
 
-/// Pose arithmetic for the loader and the server.
-[[nodiscard]] Pose compose(const Pose& a, const Pose& b);  // a then b: the pose of b in a's parent
-[[nodiscard]] std::array<double, 3> rotate(const std::array<double, 4>& q,
-                                           const std::array<double, 3>& v);
+/// Adds another URDF to a loaded robot: a second robot, or static scenery (a root link named
+/// "world", as in assets/worlds). Its prims go under their own top prim, after the others.
+///
+/// Sensors come from the Gazebo <sensor> blocks of the file (<gazebo reference="link">): types
+/// imu, ray, gpu_ray, lidar and gpu_lidar, with update_rate, pose, horizontal scan samples and
+/// angles, range min/max and the Gaussian noise stddev.
+[[nodiscard]] Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
+                                                  const LoadOptions& options = {});
 
 }  // namespace lagrange::server

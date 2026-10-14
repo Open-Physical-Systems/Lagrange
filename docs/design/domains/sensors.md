@@ -113,6 +113,12 @@ for (auto& s : world.instancesOf("SensorAPI_1")) {
 }
 ```
 
+Implementation note (v0.2): the 2D lidar writes `sensor/{n}/ranges` (ScalarArray, one range per
+beam, m) instead of a `PointCloud` handle, because the bus's buffer table for handle types does not
+exist yet; the server turns ranges into the viewer's point frames and the ROS bridge into
+`sensor_msgs/LaserScan`. The IMU also writes `sensor/{n}/orientation` (ground truth) for
+`sensor_msgs/Imu`. Sensors come from Gazebo `<sensor>` blocks of a URDF until `SensorAPI_1` exists.
+
 Note on GNSS: a three-element array with mixed units (rad, rad, m) cannot carry one `Unit`. The
 design options are three scalar signals (`latitude`, `longitude`, `height`) or a dedicated
 `Geodetic` signal type. The listing shows the problem on purpose; RFC 0001 unresolved question 2

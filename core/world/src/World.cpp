@@ -87,6 +87,19 @@ JointId World::addJoint(std::string name, JointType jointType, BodyId childBody,
     return JointId{static_cast<std::uint32_t>(joints.names.size() - 1)};
 }
 
+void World::addSensor(std::string name, SensorType sensorType, BodyId onBody, const Pose& pose,
+                      double updateRateHz,
+                      std::map<std::string, double, std::less<>> sensorSettings) {
+    const PrimId sensor = addPrim("/" + name, name);
+    sensors.names.push_back(std::move(name));
+    sensors.type.push_back(sensorType);
+    sensors.body.push_back(onBody);
+    sensors.poseInBody.push_back(pose);
+    sensors.rateHz.push_back(updateRateHz);
+    sensors.prim.push_back(sensor);
+    sensors.settings.push_back(std::move(sensorSettings));
+}
+
 void World::addCollider(BodyId onBody, ShapeType shapeType, const std::array<double, 3>& shapeSize,
                         const Pose& poseInOwner, double slidingFriction) {
     colliders.body.push_back(onBody);

@@ -12,8 +12,10 @@ namespace lagrange::server {
 struct ServerOptions {
     proto::Endpoint endpoint;
     std::string robotPath;          // URDF of the robot to simulate
+    std::string worldPath;          // URDF of static scenery (root link "world"); empty = none
     std::string profileSchemaPath;  // profiles/schema.json, sent to viewers; empty = none
     double realTimeFactor{1.0};     // 0 = as fast as possible
+    bool ros{false};                // run the ROS 2 bridge (rclcpp::init must have been called)
     bool startPaused{false};
 };
 

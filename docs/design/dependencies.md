@@ -52,6 +52,7 @@ and licenses come from `docs/plan/verification.md` (checked 2026-10-13). A cell 
 | CLI11 | command-line parsing | apt `libcli11-dev` | 2.6.1 | BSD-3-Clause | Low | |
 | urdfdom / `urdf`, xacro | URDF import; `lagrange_server` loads URDF with urdfdom until the USD importer exists | ROS Lyrical (rosdep `urdfdom`) | urdfdom 6.0.0, xacro 2.1.1 | urdfdom BSD (package `copyright`, verified 2026-10-14); xacro TODO(verify) | Low | |
 | tinyxml2 | `lagrange_server`: reads the `<ros2_control>` block that urdfdom ignores | apt `libtinyxml2-dev` (rosdep `tinyxml2`) | 11.0.0 | zlib/libpng for the library; Debian packaging files GPL-2+, not linked (verified 2026-10-14) | Low | |
+| rclcpp, rmw and the message packages (rosgraph_msgs, sensor_msgs, nav_msgs, geometry_msgs, tf2_msgs, std_msgs) | `lagrange_ros2` bridge | ROS Lyrical | as installed | Apache-2.0 (ROS 2 core) | Low | The bridge links them; the core does not |
 | ament_index_cpp | `lagrange_server`: finds the installed sample robot and profile schema | ROS Lyrical | as installed | Apache-2.0 (package `copyright`, verified 2026-10-14) | Low | |
 | SDFormat | SDF import | `ros-lyrical-sdformat-vendor` | 0.3.4 (vendor package) | Apache-2.0 (TODO(verify)) | Low | |
 | Assimp | mesh import | apt `libassimp-dev` | 6.0.4 | BSD-3-Clause (TODO(verify)) | Low | Import-time only |

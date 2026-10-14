@@ -15,6 +15,7 @@
 #include <string_view>
 
 #include <ament_index_cpp/get_package_share_path.hpp>
+#include <rclcpp/rclcpp.hpp>
 
 namespace {
 
@@ -37,12 +38,15 @@ int usage(const char* error) {
         std::fprintf(stderr, "lagrange_server: %s\n", error);
     }
     std::fprintf(stderr,
-                 "usage: lagrange_server [--robot FILE.urdf] [--listen ENDPOINT] [--rtf X] "
+                 "usage: lagrange_server [--robot FILE.urdf] [--world FILE.urdf|none] [--listen "
+                 "ENDPOINT] [--rtf X] "
                  "[--paused]\n"
                  "  --robot   URDF to simulate (default: the sample AMR from lagrange_assets)\n"
+                 "  --world   URDF of fixed scenery, or none (default: the sample warehouse)\n"
                  "  --listen  unix:/path.sock or tcp://host:port (default: %s)\n"
                  "  --rtf     real-time factor, 0 = as fast as possible (default 1)\n"
-                 "  --paused  start paused; press Play in the viewer\n",
+                 "  --paused  start paused; press Play in the viewer\n"
+                 "  --no-ros  run without the ROS 2 bridge\n",
                  lagrange::proto::defaultUnixSocketPath().c_str());
     return error != nullptr ? 2 : 0;
 }
@@ -51,9 +55,11 @@ int usage(const char* error) {
 
 int main(int argc, char** argv) {
     lagrange::server::ServerOptions options;
+    options.ros = true;
     options.endpoint =
         lagrange::proto::Endpoint::unixSocket(lagrange::proto::defaultUnixSocketPath());
     options.robotPath = shareFile("lagrange_assets", "robots/amr_diffdrive/amr_diffdrive.urdf");
+    options.worldPath = shareFile("lagrange_assets", "worlds/warehouse_small/warehouse_small.urdf");
     options.profileSchemaPath = shareFile("lagrange_profiles", "schema.json");
 
     for (int i = 1; i < argc; ++i) {
@@ -68,6 +74,12 @@ int main(int argc, char** argv) {
                 return usage("--robot needs a file");
             }
             options.robotPath = path;
+        } else if (arg == "--world") {
+            const char* path = value();
+            if (path == nullptr) {
+                return usage("--world needs a file, or none");
+            }
+            options.worldPath = std::string_view(path) == "none" ? "" : path;
         } else if (arg == "--listen") {
             const char* text = value();
             const auto endpoint =
@@ -87,6 +99,8 @@ int main(int argc, char** argv) {
             options.realTimeFactor = rtf;
         } else if (arg == "--paused") {
             options.startPaused = true;
+        } else if (arg == "--no-ros") {
+            options.ros = false;
         } else {
             return usage(("unknown option " + std::string(arg)).c_str());
         }
@@ -95,6 +109,10 @@ int main(int argc, char** argv) {
         return usage("no --robot given and lagrange_assets is not installed");
     }
 
+    if (options.ros) {
+        // ROS arguments (--ros-args ...) are not supported yet; the bridge uses the defaults.
+        rclcpp::init(0, nullptr, rclcpp::InitOptions(), rclcpp::SignalHandlerOptions::None);
+    }
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
     lagrange::server::Server server(options);
@@ -104,6 +122,9 @@ int main(int argc, char** argv) {
     }
     while (!gStop) {
         server.runOnce(5);
+    }
+    if (options.ros) {
+        rclcpp::shutdown();
     }
     return 0;
 }
