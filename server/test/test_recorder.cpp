@@ -9,6 +9,8 @@
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <gtest/gtest.h>
 #include <mcap/reader.hpp>
@@ -100,6 +102,58 @@ TEST(Recorder, ARunIsRecordedAsTheMockServerReadsIt) {
     for (const record::v1::PoseBinding& binding : meta.pose_bindings()) {
         EXPECT_TRUE(names.contains(binding.signal())) << binding.signal();
     }
+}
+
+/// The state hashes a recorded run wrote, in time order.
+std::vector<std::pair<std::int64_t, std::uint64_t>> recordedHashes(
+    const std::filesystem::path& file, std::int64_t untilNs) {
+    {
+        ServerOptions options;
+        options.endpoint = proto::Endpoint::unixSocket(file.string() + ".sock");
+        options.robotPath = LAGRANGE_TEST_AMR_URDF;
+        options.worldPath = LAGRANGE_TEST_WAREHOUSE_URDF;
+        options.realTimeFactor = 0.0;
+        options.recordPath = file.string();
+        Server server(options);
+        EXPECT_TRUE(server.start().ok());
+        while (server.simTime().ns < untilNs) {
+            server.runOnce(0);
+        }
+    }
+    std::vector<std::pair<std::int64_t, std::uint64_t>> out;
+    mcap::McapReader reader;
+    EXPECT_TRUE(reader.open(file.string()).ok());
+    for (const mcap::MessageView& view : reader.readMessages()) {
+        if (view.channel->topic == "/lagrange/state_hash") {
+            record::v1::StateHash hash;
+            EXPECT_TRUE(
+                hash.ParseFromArray(view.message.data, static_cast<int>(view.message.dataSize)));
+            out.emplace_back(hash.sim_time().ns(), hash.hash());
+        }
+    }
+    reader.close();
+    return out;
+}
+
+// v0.2 acceptance criterion 5: the demo (MuJoCo, both lidars with noise, the IMU, the drive
+// controller) gives bit-identical state hashes on two runs for 10 simulated seconds. Without
+// the ROS bridge the run takes no outside input, so the scheduler runs it in deterministic
+// mode. (That a nondeterministic module is caught is tested in core/scheduler.)
+TEST(Determinism, TheDemoRunsBitIdenticallyTwice) {
+    const std::filesystem::path dir =
+        std::filesystem::path(::testing::TempDir()) / "lagrange_determinism";
+    std::filesystem::create_directories(dir);
+    const auto first = recordedHashes(dir / "a.mcap", 10'000'000'000);
+    const auto second = recordedHashes(dir / "b.mcap", 10'000'000'000);
+    ASSERT_GE(first.size(), 11U) << "a hash a second from t = 0";
+    ASSERT_EQ(first.size(), second.size());
+    for (std::size_t i = 0; i < first.size(); ++i) {
+        EXPECT_EQ(second[i].first, first[i].first);
+        EXPECT_EQ(second[i].second, first[i].second)
+            << "diverged at t = " << first[i].first << " ns";
+    }
+    // And the run does something: the state changes over time.
+    EXPECT_NE(first.front().second, first.back().second);
 }
 
 }  // namespace
