@@ -12,6 +12,7 @@ find_package(rclcpp REQUIRED)
 find_package(urdfdom REQUIRED)
 find_package(tinyxml2 REQUIRED)
 find_package(ament_index_cpp REQUIRED)
+find_package(mcap_vendor REQUIRED)
 
 add_library(
     lagrange_server
@@ -20,6 +21,7 @@ add_library(
     src/Meshes.cpp
     src/DiffDrive.cpp
     src/MapExport.cpp
+    src/Recorder.cpp
 )
 lagrange_target_defaults(lagrange_server)
 target_include_directories(
@@ -37,6 +39,7 @@ target_link_libraries(
         lagrange_ros2::lagrange_ros2
         urdfdom::urdfdom_model
         tinyxml2::tinyxml2
+        mcap_vendor::mcap
 )
 
 add_executable(lagrange_server_main src/main.cpp)
@@ -63,6 +66,7 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_server
         test/test_map_export.cpp
+        test/test_recorder.cpp
         test/test_robot.cpp
         test/test_server.cpp
         TIMEOUT 120
@@ -71,6 +75,7 @@ if(BUILD_TESTING)
         test_server
         lagrange_server
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
+        mcap_vendor::mcap
     )
     target_compile_definitions(
         test_server

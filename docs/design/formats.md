@@ -1300,6 +1300,14 @@ parameters:
 | `/lagrange/log` | `LogRecord` | console messages |
 | ROS topics (optional) | CDR, as rosbag2 writes them | when `record.ros_topics` is used (later) |
 
+- Implementation (v0.2, `lagrange_server --record`): every bus signal at its native rate from
+  t = 0 (a sample written late is NaN, so runs stay contiguous), signals with more than
+  `--record-max-components` components (default 1024, e.g. a 3D lidar's ranges) left out, and
+  one `scene<prim path>/pose` signal at 50 Hz per moving prim, bound to its prim in
+  `RunMeta.pose_bindings` so that a replay moves visuals and sensors too. `RunMeta` is written
+  at the start and again at the end with the duration; readers keep the last. Scene deltas,
+  log records and sensor frames are not recorded yet. The sample AMR records about 1.5 MB per
+  simulated second (zstd does little for noisy doubles).
 - Units are stored in the catalog. A replay substitute refuses a channel whose recorded unit
   differs from the contract.
 - Compatibility: files written by rosbag2 with the MCAP storage plugin can be opened by the mock

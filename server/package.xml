@@ -19,6 +19,7 @@
   <depend>urdfdom</depend>
   <depend>tinyxml2</depend>
   <depend>ament_index_cpp</depend>
+  <depend>mcap_vendor</depend>
 
   <exec_depend>lagrange_assets</exec_depend>
   <exec_depend>lagrange_profiles</exec_depend>

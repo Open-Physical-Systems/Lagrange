@@ -50,6 +50,10 @@ int usage(const char* error) {
                  "  --rtf     real-time factor, 0 = as fast as possible (default 1)\n"
                  "  --paused  start paused; press Play in the viewer\n"
                  "  --no-ros  run without the ROS 2 bridge\n"
+                 "  --record FILE.mcap  record the run (signals, scene, state hashes) until the\n"
+                 "            server stops or the run is reset; the mock server replays it\n"
+                 "  --record-max-components N  leave larger signals out (default 1024: the\n"
+                 "            3D lidar's ranges)\n"
                  "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
                  "            TwistStamped\n"
                  "  --export-map FILE.yaml  write an occupancy map of the fixed scenery for\n"
@@ -112,6 +116,20 @@ int main(int argc, char** argv) {
             options.startPaused = true;
         } else if (arg == "--no-ros") {
             options.ros = false;
+        } else if (arg == "--record") {
+            const char* path = value();
+            if (path == nullptr) {
+                return usage("--record needs an .mcap path");
+            }
+            options.recordPath = path;
+        } else if (arg == "--record-max-components") {
+            const char* text = value();
+            char* end = nullptr;
+            const unsigned long n = text != nullptr ? std::strtoul(text, &end, 10) : 0;
+            if (text == nullptr || end == text || *end != '\0' || n == 0) {
+                return usage("--record-max-components needs a positive number");
+            }
+            options.recordMaxComponents = static_cast<std::uint32_t>(n);
         } else if (arg == "--cmd-vel-unstamped") {
             options.stampedCmdVel = false;
         } else if (arg == "--export-map") {
