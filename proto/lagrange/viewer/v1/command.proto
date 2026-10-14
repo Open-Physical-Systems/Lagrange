@@ -1,0 +1,184 @@
+syntax = "proto3";
+package lagrange.viewer.v1;
+
+import "lagrange/viewer/v1/common.proto";
+import "lagrange/viewer/v1/scene.proto";
+
+message Command {
+  uint64 request_id = 1; // echoed in CommandResult
+  oneof command {
+    Play play = 10;
+    Pause pause = 11;
+    Step step = 12;
+    Seek seek = 13;
+    SetRealTimeFactor set_rtf = 14;
+    Reset reset = 15;
+
+    RequestSnapshot request_snapshot = 20;
+    GetAttributes get_attributes = 21;
+    SetAttribute set_attribute = 22;
+    SetTransform set_transform = 23;
+    SetVisibility set_visibility = 24;
+
+    LoadStage load_stage = 30;
+    ImportRobot import_robot = 31;
+    OpenRecording open_recording = 32;
+
+    ValidateProfile validate_profile = 40;
+    ApplyProfile apply_profile = 41;
+    GetProfile get_profile = 42;
+
+    SubscribeSensor subscribe_sensor = 50;
+    SetRosGraphEnabled set_ros_graph = 51;
+    SetOverlays set_overlays = 52;
+    SubscribeField subscribe_field = 53;
+    SetWorldEnabled set_world = 54;
+  }
+}
+
+message Play {}
+message Pause {}
+message Step {
+  uint32 ticks = 1;
+  int64 duration_ns = 2;
+} // one of the two; 0 = unused
+message Seek {
+  SimTime to = 1;
+} // replay only
+message SetRealTimeFactor {
+  double target = 1;
+} // 0 = unlimited
+message Reset {}
+
+message RequestSnapshot {}
+message GetAttributes {
+  repeated uint32 prims = 1;
+}
+message SetAttribute {
+  uint32 prim = 1;
+  Attribute attribute = 2;
+  bool save_to_session_layer = 3;
+}
+message SetTransform {
+  uint32 prim = 1;
+  repeated double position = 2;
+  repeated double quat_wxyz = 3;
+}
+message SetVisibility {
+  uint32 prim = 1;
+  bool visible = 2;
+}
+
+message LoadStage {
+  string path = 1;
+}
+message ImportRobot {
+  enum Format {
+    FORMAT_UNSPECIFIED = 0;
+    FORMAT_URDF = 1;
+    FORMAT_XACRO = 2;
+    FORMAT_SDF = 3;
+    FORMAT_MJCF = 4;
+  }
+  Format format = 1;
+  string path = 2; // path on the server's filesystem
+  DataRef content = 3; // or the file content, when the viewer is remote
+  string overlay_path = 4;
+  repeated string xacro_args = 5;
+}
+message OpenRecording {
+  string path = 1;
+}
+
+message ValidateProfile {
+  string yaml = 1;
+}
+message ApplyProfile {
+  string yaml = 1;
+  bool restart = 2;
+}
+message GetProfile {}
+
+message SubscribeSensor {
+  string sensor = 1;
+  bool enabled = 2;
+  double max_rate_hz = 3;
+}
+// Start or stop receiving slices of a field (EnvironmentState.Field.name).
+message SubscribeField {
+  string field = 1;
+  bool enabled = 2;
+  double height_m = 3; // z of the slice
+}
+// Start or stop receiving WorldState. Off by default: most stages are small.
+message SetWorldEnabled {
+  bool enabled = 1;
+}
+message SetRosGraphEnabled {
+  bool enabled = 1;
+}
+message SetOverlays {
+  bool contacts = 1;
+  bool forces = 2;
+  string field_signal = 3;
+}
+
+message CommandResult {
+  uint64 request_id = 1;
+  bool ok = 2;
+  string error = 3; // human-readable, one line
+  oneof result {
+    PrimAttributesList attributes = 10;
+    ProfileValidation validation = 11;
+    string imported_stage_path = 12;
+  }
+}
+message PrimAttributesList {
+  repeated PrimAttributes items = 1;
+}
+
+message ProfileValidation {
+  bool valid = 1;
+  repeated ProfileIssue issues = 2;
+  // The wiring the server would build from this profile. Present when the profile could be
+  // parsed, even if a unit check fails: that is what the user needs to see.
+  Wiring wiring = 3;
+}
+
+// Modules and substitutes as the scheduler would connect them (invariants 1 to 4).
+message Wiring {
+  message Node {
+    string module = 1; // "rigid_body", "aerodynamics"
+    string domain = 2;
+    bool substitute = 3; // a substitute stands in for the disabled domain
+    string detail = 4; // backend, fidelity, or the substitute's name
+    int64 dt_ns = 5; // 0: no step of its own (runs per frame, or on demand)
+    repeated string inputs = 6; // display form: "τ", "F_ext"
+    repeated string outputs = 7;
+    bool on_gpu = 8;
+  }
+  message Wire {
+    string from = 1; // Node.module that writes the signal
+    string to = 2; // Node.module that reads it
+    string signal = 3; // "joint/*/torque"
+    string symbol = 4; // "τ"
+    string source_unit = 5; // display form of what the writer declares: "N·m"
+    string sink_unit = 6; // display form of what the reader expects
+    bool unit_ok = 7; // false blocks Apply (invariant 2)
+    bool stiff = 8; // a tightly coupled pair the scheduler solves implicitly
+  }
+  repeated Node nodes = 1;
+  repeated Wire wires = 2;
+  int64 base_tick_ns = 3; // the scheduler's smallest step
+  int64 sync_ns = 4; // modules exchange signals at least this often
+}
+message ProfileIssue {
+  enum Severity {
+    SEVERITY_UNSPECIFIED = 0;
+    SEVERITY_ERROR = 1;
+    SEVERITY_WARNING = 2;
+  }
+  Severity severity = 1;
+  string json_pointer = 2; // "/domains/electrical/dt"
+  string message = 3;
+}

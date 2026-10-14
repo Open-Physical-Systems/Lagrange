@@ -1,0 +1,14 @@
+extends: default
+ignore: |
+  build*/
+  install*/
+  log/
+rules:
+  document-start: disable
+  line-length: { max: 160 }
+  truthy: { check-keys: false }
+  braces: { max-spaces-inside: 1 }
+  commas: { max-spaces-after: -1 }
+  # Profiles align their domain columns, as in CLAUDE.md §11.1.
+  colons: { max-spaces-after: -1 }
+  comments: { min-spaces-from-content: 1 }

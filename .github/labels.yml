@@ -1,0 +1,60 @@
+# Synced by .github/workflows/labels.yml
+- { name: "type/bug",        color: "d73a4a", description: "Something is wrong" }
+- { name: "type/feature",    color: "0e8a16", description: "New capability" }
+- { name: "type/docs",       color: "0075ca", description: "Documentation" }
+- { name: "type/test",       color: "bfd4f2", description: "Tests and validation" }
+- { name: "type/perf",       color: "fbca04", description: "Performance" }
+- { name: "type/chore",      color: "cfd3d7", description: "Maintenance, tooling" }
+- { name: "type/spike",      color: "c5def5", description: "Time-boxed investigation with a written result" }
+- { name: "type/security",   color: "b60205", description: "Security" }
+- { name: "type/release",    color: "5319e7", description: "Release work" }
+- { name: "type/validation", color: "1d76db", description: "Sim-vs-real or reference comparison" }
+
+- { name: "area/core",        color: "5ebeff", description: "core/: scheduler, signals, world" }
+- { name: "area/plugin-abi",  color: "5ebeff", description: "core/plugin_abi" }
+- { name: "area/gpu",         color: "5ebeff", description: "gpu/: HAL, kernels, capability" }
+- { name: "area/viewer",      color: "5ebeff", description: "viewer/" }
+- { name: "area/proto",       color: "5ebeff", description: "proto/: UI-server protocol" }
+- { name: "area/schemas",     color: "5ebeff", description: "schemas/: USD schemas" }
+- { name: "area/profiles",    color: "5ebeff", description: "profiles/" }
+- { name: "area/server",      color: "5ebeff", description: "server/" }
+- { name: "area/mock",        color: "5ebeff", description: "mock_server/" }
+- { name: "area/io",          color: "5ebeff", description: "io/: importers, recording, fields, geospatial" }
+- { name: "area/python",      color: "5ebeff", description: "python/ bindings" }
+- { name: "area/bridge-ros2", color: "5ebeff", description: "bridges/ros2" }
+- { name: "area/bridge-ros2-control", color: "5ebeff", description: "bridges/ros2_control" }
+- { name: "area/bridge-mavlink", color: "5ebeff", description: "bridges/mavlink" }
+- { name: "area/bridge-autoware", color: "5ebeff", description: "bridges/autoware" }
+- { name: "area/mod-rigid-body", color: "5ebeff", description: "modules/rigid_body" }
+- { name: "area/mod-electrical", color: "5ebeff", description: "modules/electrical" }
+- { name: "area/mod-thermal",    color: "5ebeff", description: "modules/thermal" }
+- { name: "area/mod-aero",       color: "5ebeff", description: "modules/aerodynamics, rotor_aero" }
+- { name: "area/mod-weather",    color: "5ebeff", description: "modules/weather" }
+- { name: "area/mod-emi",        color: "5ebeff", description: "modules/emi" }
+- { name: "area/mod-radiation",  color: "5ebeff", description: "modules/radiation" }
+- { name: "area/mod-sensors",    color: "5ebeff", description: "modules/sensors" }
+- { name: "area/mod-vehicle",    color: "5ebeff", description: "modules/vehicle_dynamics" }
+- { name: "area/mod-traffic",    color: "5ebeff", description: "modules/traffic" }
+- { name: "area/mod-comms",      color: "5ebeff", description: "modules/comms" }
+- { name: "area/assets",      color: "5ebeff", description: "Sample robots and worlds" }
+- { name: "area/demos",       color: "5ebeff", description: "Demo launch files and tutorials" }
+- { name: "area/packaging",   color: "5ebeff", description: "Vendor packages, debs, Docker" }
+- { name: "area/ci",          color: "5ebeff", description: "CI, tooling, repository" }
+- { name: "area/docs",        color: "5ebeff", description: "docs/" }
+
+- { name: "tier/0", color: "ededed", description: "CPU-only tier" }
+- { name: "tier/1", color: "ededed", description: "Raster GPU tier" }
+- { name: "tier/2", color: "ededed", description: "Full RT GPU tier" }
+
+- { name: "needs-rfc",        color: "e99695", description: "Needs an accepted RFC before implementation" }
+- { name: "needs-triage",     color: "e99695", description: "Not yet triaged" }
+- { name: "needs-repro",      color: "e99695", description: "Cannot reproduce yet" }
+- { name: "proto-break",      color: "b60205", description: "Intentional protocol break; 2 approvals" }
+- { name: "schema-break",     color: "b60205", description: "Schema change needing migration; 2 approvals" }
+- { name: "abi-break",        color: "b60205", description: "Plugin ABI break; 2 approvals" }
+- { name: "good-first-issue", color: "7057ff", description: "Good for newcomers" }
+- { name: "help-wanted",      color: "008672", description: "Extra attention is needed" }
+- { name: "blocked",          color: "000000", description: "Blocked by another issue or upstream" }
+- { name: "upstream",         color: "d4c5f9", description: "Depends on a third-party project" }
+- { name: "backport/1.x",     color: "c2e0c6", description: "Cherry-pick to release/1.x" }
+- { name: "dependencies",     color: "0366d6", description: "Dependency update (Renovate)" }

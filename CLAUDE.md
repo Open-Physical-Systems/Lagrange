@@ -39,7 +39,7 @@ An open-source (Apache-2.0), GPU-accelerated robot simulator in the spirit of Ga
 | Default RMW | `rmw_fastrtps_cpp` (Lyrical default); also test `rmw_zenoh_cpp` |
 | GPU | NVIDIA with Vulkan (+ optional CUDA fast path). AMD/Intel Vulkan best-effort |
 | Python | Ubuntu 26.04 system Python (the one Lyrical's rclpy is built against) |
-| Viewer | Native C++20 app: Vulkan renderer + Dear ImGui (docking branch); window via SDL3 or GLFW (decided in RFC 0006) |
+| Viewer | Native C++20 app: Vulkan renderer + Dear ImGui (docking branch); window via SDL3 (RFC 0006, accepted) |
 | Comparison baseline | Gazebo Jetty (gz-sim 10), the Gazebo release paired with Lyrical |
 
 Consequences:
@@ -118,7 +118,7 @@ Other platforms: post-1.0, only through an RFC.
 | Recordings / replay | MCAP |
 | Mesh/material import | glTF 2.0, OBJ, STL, DAE (via importers → USD); never a runtime format |
 | Collision geometry | Separate convex decompositions (V-HACD/CoACD), never render meshes |
-| UI↔server protocol | Protobuf (or FlatBuffers — decided in RFC 0003), `proto/`. Transport: Zenoh or TCP/Unix socket + local shared memory (decided in RFC 0003). Not WebSocket/WebRTC |
+| UI↔server protocol | Protobuf (proto3), `proto/`, package `lagrange.viewer.v1`. Transport: length-prefixed frames over a Unix socket (local) or TCP (remote), plus local shared memory (`memfd`). Decided in RFC 0003. Zenoh deferred. Not WebSocket/WebRTC |
 
 Importers (URDF/xacro, SDFormat, MJCF → USD) are mandatory; users must not rewrite robots.
 
@@ -149,7 +149,7 @@ lagrange/
 │   └── generated/              # usdGenSchema output (C++ + Python) — never edit by hand
 ├── profiles/
 │   ├── schema.json             # JSON Schema for YAML sim profiles
-│   └── examples/               # validated example profiles (see §11.1)
+│   └── examples/               # validated example profiles (see §11.1); package `lagrange_profiles`
 ├── proto/                      # UI↔server protocol (Protobuf/FlatBuffers)
 │
 ├── core/                       # no GPU, no physics — pure framework
@@ -208,6 +208,8 @@ lagrange/
 ├── python/                     # nanobind bindings, `pip install lagrange`
 ├── viewer/                     # native C++ app (ament_cmake package `lagrange_viewer`)
 │   ├── app/                    # main(), window (SDL3/GLFW), Vulkan swapchain, frame loop
+│   │   ├── theme/              # design tokens as ImGui/ImPlot style, font loading
+│   │   └── widgets/            # shared widgets of the design system (chips, pills, switch…)
 │   ├── render/                 # viewport renderer on gpu/hal: meshes, gizmos, grid, overlays
 │   ├── panels/                 # ImGui panels: scene tree, inspector, domains, timeline,
 │   │                           #   scopes (ImPlot), schematic, fields, console, ROS 2 topics
@@ -239,10 +241,11 @@ verification, not in this repo.
 - Sanitizer build: `colcon build --build-base build-asan --install-base install-asan --mixin asan` (TBD; verify mixin availability)
 - C++ tests: `colcon test && colcon test-result --verbose` (TBD)
 - Python: `ruff check . && ruff format --check . && mypy python/ && pytest` (TBD)
-- Viewer: built by colcon with everything else; run `ros2 run lagrange_viewer lagrange_viewer` (TBD)
-- Viewer headless smoke test: `VK_ICD_FILENAMES=<lavapipe icd> colcon test --packages-select lagrange_viewer` (TBD; software Vulkan for GPU-less CI)
+- Viewer: built by colcon with everything else; run `ros2 run lagrange_viewer lagrange_viewer` (starts on the launcher; `--connect <endpoint>` goes straight to a server)
+- Viewer headless test: `colcon test --packages-select lagrange_viewer` (runs on the software Vulkan device, llvmpipe; `LAGRANGE_TEST_GPU=<name>` picks another)
+- GPU and tier of this machine: `ros2 run lagrange_gpu lagrange_gpu_info`
 - All hooks: `pre-commit run --all-files`
-- Protocol: `buf lint && buf breaking --against '.git#branch=main'`
+- Protocol: `buf lint && buf format --diff --exit-code && buf breaking --against '.git#ref=origin/dev'`
 
 ## 8. Code conventions
 
@@ -260,12 +263,21 @@ verification, not in this repo.
 
 ## 9. Git workflow
 
-- Trunk-based; `main` always releasable; short-lived branches `feat/…`, `fix/…`, `docs/…`.
+- **`main` is for releases only.** It changes only by a release PR from `dev` (or a `release/x.y`
+  or `hotfix/…` branch). Never branch feature work from `main` and never open a feature PR
+  against it.
+- **`dev` is the integration branch.** Create work branches from `dev` and open PRs against `dev`.
+- **Conventional branch names**: `<type>/<kebab-description>` with type one of `feat`, `fix`,
+  `docs`, `ci`, `chore`, `refactor`, `perf`, `test`, `build`, `revert`. Example:
+  `feat/viewer-scope-panel`.
 - **Conventional Commits**, scopes matching the tree: `core`, `gpu`, `mod/<domain>`, `viewer`,
   `proto`, `bridge/<name>`, `io`, `schemas`, `docs`, `ci`, `packaging`.
   Example: `feat(viewer): add waveform scope panel`.
 - **DCO sign-off on every commit** (`git commit -s`).
-- Squash merge via merge queue. Never force-push `main`. Never commit directly to `main`.
+- Squash merge into `dev` (the PR title becomes the commit, so it must be a Conventional Commit).
+  Releases merge `dev` into `main` with a merge commit, so the two branches never diverge.
+- Never force-push `main` or `dev`. Never commit directly to `main` or `dev`.
+- Commit messages carry only the author's sign-off. Do not add tool or AI co-author trailers.
 - Changes to `schemas/`, `core/plugin_abi/`, or `proto/` need an RFC or an explicit note in the
   PR and 2 approvals.
 - No files >1 MB in the repo; large assets go to the separate assets repo/release bundles.
@@ -506,7 +518,7 @@ repos:
   - repo: https://github.com/pre-commit/mirrors-clang-format
     rev: <pinned>
     hooks: [{ id: clang-format, types_or: [c++, c] }]
-  - repo: https://github.com/BlankSpruce/gersemi
+  - repo: https://github.com/BlankSpruce/gersemi-pre-commit
     rev: <pinned>
     hooks: [{ id: gersemi }]
   - repo: https://github.com/astral-sh/ruff-pre-commit
@@ -588,11 +600,16 @@ Scorecard workflow, and Renovate grouped weekly.
 The viewer is `lagrange_viewer`, a native C++20 program. It opens real OS windows and draws
 everything on the GPU with Vulkan. There is no browser or web engine involved.
 
+**The UI design is in `docs/design/ui/` and is binding**: shared conventions, design tokens, the
+ImGui theme, and one `SPEC.md` + `reference.png` per screen. Read it before any viewer UI work;
+the rules are in `.claude/rules/viewer-ui.md`. It replaces the earlier panel sketches in
+`docs/design/viewer.md` where they differ.
+
 ### 13.1 Stack
 
 | Concern | Choice |
 |---|---|
-| Window, input, Vulkan surface | SDL3 or GLFW (RFC 0006). Must work on Wayland and X11 |
+| Window, input, Vulkan surface | SDL3 (RFC 0006, accepted). Must work on Wayland and X11 |
 | 3D rendering | Own Vulkan renderer in `viewer/render/`, built on `gpu/hal/` and Slang shaders |
 | UI panels | Dear ImGui, docking branch (dockable panels, saved layouts, optional multi-viewport) |
 | Waveform scopes | ImPlot, fed from ring buffers; decimation (min/max per pixel) for 10 kHz+ signals |

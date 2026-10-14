@@ -1,0 +1,20 @@
+# Tool configuration only. Python packages get their own pyproject.toml next to their sources.
+
+[tool.ruff]
+line-length = 100
+extend-exclude = ["proto/gen", "schemas/generated", "build*", "install*", "log"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "PTH", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tables of signals and prims read better on one line each.
+"mock_server/lagrange_mock_server/sample.py" = ["E501"]
+"mock_server/lagrange_mock_server/meshes.py" = ["E501"]
+"mock_server/lagrange_mock_server/urdf.py" = ["E501"]
+"mock_server/test/*.py" = ["E501"]
+"proto/test/*.py" = ["E501"]
+"proto/test/golden/*.py" = ["E501"]
+
+[tool.ruff.format]
+exclude = ["mock_server/lagrange_mock_server/sample.py"]

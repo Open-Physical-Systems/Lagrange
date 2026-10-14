@@ -1,0 +1,31 @@
+# profiles/examples/huge_world_survey.yaml — drone survey over a 40 km geospatial tile set
+schema_version: 1
+stage: worlds/coastal_survey_root.usda        # root layer; terrain tiles are USD payloads
+environment: environments/clear_day.usda
+
+world:
+  geo_origin: { latitude: 33.5902, longitude: 130.4017, height: 20.0 }   # scenario parameter
+  streaming:
+    enabled: true
+    load_radius: 3000
+    unload_radius: 3500
+    active_region_radius: 500
+    rebase_distance: 1000
+
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.002 }
+  electrical:   { enabled: true,  fidelity: averaged, dt: 0.0001 }
+  thermal:      { enabled: false, substitute: ambient, ambient_temperature: 293.15 }
+  aerodynamics: { enabled: true,  fidelity: drag_plus_field, dt: 0.002 }
+  rotor_aero:   { enabled: true,  fidelity: coefficients, dt: 0.002 }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: false, substitute: zero }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: true,  dt: 0.01, only: [gnss, imu, nadir_camera] }
+
+bridges:
+  ros2:    { enabled: true }
+  mavlink: { enabled: true, autopilot: ardupilot, lockstep: true }
+
+views: [physics_3d, sensors]
+record: { format: mcap, path: runs/coastal_survey_001.mcap }

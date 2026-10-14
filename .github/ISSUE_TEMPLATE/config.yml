@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/Open-Physical-Systems/Lagrange/discussions
+    about: Ask usage questions here, not in issues.
+  - name: Security vulnerability
+    url: https://github.com/Open-Physical-Systems/Lagrange/security/advisories/new
+    about: Report privately. Do not open a public issue.

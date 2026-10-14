@@ -1,0 +1,43 @@
+syntax = "proto3";
+package lagrange.viewer.v1;
+
+import "lagrange/viewer/v1/command.proto";
+import "lagrange/viewer/v1/common.proto";
+import "lagrange/viewer/v1/profile.proto";
+import "lagrange/viewer/v1/scene.proto";
+import "lagrange/viewer/v1/session.proto";
+import "lagrange/viewer/v1/signals.proto";
+
+message Envelope {
+  oneof body {
+    ClientHello client_hello = 1;
+    ServerHello server_hello = 2;
+    ServerStatus status = 3;
+    Ping ping = 4;
+    Pong pong = 5;
+    LogRecord log = 6;
+    RosGraph ros_graph = 7;
+
+    SignalCatalog catalog = 10;
+    Subscribe subscribe = 11;
+    Unsubscribe unsubscribe = 12;
+    SignalBlock signal_block = 13;
+
+    SceneSnapshot snapshot = 20;
+    SceneDelta delta = 21;
+    Blob blob = 22;
+    SensorFrame sensor_frame = 23;
+
+    Command command = 30;
+    CommandResult command_result = 31;
+    ProfileState profile_state = 32;
+
+    Event event = 40;
+    EventList event_list = 41;
+    ServerStats server_stats = 42;
+    RecordingInfo recording_info = 43;
+    EnvironmentState environment = 44;
+    FieldSlice field_slice = 45;
+    WorldState world = 46;
+  }
+}

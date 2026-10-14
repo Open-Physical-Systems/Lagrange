@@ -1,0 +1,21 @@
+name: Robot class or integration request
+description: Ask for support for a kind of robot or an external stack
+labels: ["type/feature", "needs-triage"]
+body:
+  - type: input
+    id: robot
+    attributes: { label: Robot class or stack, placeholder: "Tracked vehicle; Open-RMF fleet adapter; ..." }
+    validations: { required: true }
+  - type: textarea
+    id: usecase
+    attributes: { label: Use case }
+    validations: { required: true }
+  - type: textarea
+    id: domains
+    attributes: { label: Domains needed, description: "Rigid body, electrical, thermal, aerodynamics, weather, EMI, sensors, ..." }
+  - type: textarea
+    id: integrations
+    attributes: { label: Integrations, description: "ROS 2 packages, controllers, autopilots; state their Lyrical availability if you know it." }
+  - type: textarea
+    id: model
+    attributes: { label: Model availability, description: "Is there a URDF/SDF/MJCF/USD you can share, and under which license?" }

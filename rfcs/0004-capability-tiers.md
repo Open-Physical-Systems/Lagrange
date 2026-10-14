@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft |
+| Status | Accepted (2026-10-13) |
 | Created | 2026-10-13 |
 | Affects | `gpu/capability/`, `gpu/hal/`, `gpu/kernels/`, every module with a GPU path, CI, the profile format |
 | Detail | `docs/design/architecture.md` §9 |

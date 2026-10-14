@@ -1,0 +1,592 @@
+"""The viewer binary, headless, against the Python mock server.
+
+This is the first test in which the C++ client and the Python server talk over a real socket.
+It runs on the software Vulkan device (llvmpipe), which every CI runner has. Set
+LAGRANGE_TEST_GPU to run it on another device, e.g. LAGRANGE_TEST_GPU=NVIDIA.
+"""
+
+import asyncio
+import json
+import os
+import struct
+import subprocess
+import tempfile
+import threading
+import zlib
+from pathlib import Path
+
+import pytest
+from lagrange_mock_server.endpoint import Endpoint
+from lagrange_mock_server.replay import ReplayEngine
+from lagrange_mock_server.sample import generate_sample
+from lagrange_mock_server.server import MockServer
+
+VIEWER = os.environ.get("LAGRANGE_VIEWER", "lagrange_viewer")
+GPU = os.environ.get("LAGRANGE_TEST_GPU", "llvmpipe")
+
+
+class ServerThread:
+    """Runs a MockServer on its own event loop in a background thread."""
+
+    def __init__(self, socket_path: str) -> None:
+        self.endpoint = Endpoint("unix", socket_path)
+        self._loop = asyncio.new_event_loop()
+        self._ready = threading.Event()
+        self._stop: asyncio.Event | None = None
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_until_complete(self._serve())
+
+    async def _serve(self) -> None:
+        engine = ReplayEngine(generate_sample(duration_s=2.0, seed=1))
+        engine.play()
+        server = MockServer(engine, self.endpoint)
+        await server.start()
+        self._stop = asyncio.Event()
+        self._ready.set()
+        await self._stop.wait()
+        await server.stop()
+
+    def __enter__(self):
+        self._thread.start()
+        assert self._ready.wait(10), "mock server did not start"
+        return self
+
+    def __exit__(self, *_):
+        self._loop.call_soon_threadsafe(self._stop.set)
+        self._thread.join(10)
+
+
+def read_png(path: Path):
+    """Decode an 8-bit RGBA PNG without filtering (what the viewer writes)."""
+    data = path.read_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    offset, width, height, idat = 8, 0, 0, b""
+    while offset < len(data):
+        (length,) = struct.unpack(">I", data[offset : offset + 4])
+        kind = data[offset + 4 : offset + 8]
+        body = data[offset + 8 : offset + 8 + length]
+        if kind == b"IHDR":
+            width, height, depth, colour = struct.unpack(">IIBB", body[:10])
+            assert (depth, colour) == (8, 6)
+        elif kind == b"IDAT":
+            idat += body
+        offset += 12 + length
+    raw = zlib.decompress(idat)
+    stride = width * 4 + 1
+    rows = [raw[y * stride + 1 : (y + 1) * stride] for y in range(height)]
+    assert all(raw[y * stride] == 0 for y in range(height))
+    return width, height, rows
+
+
+def run_viewer(*args, timeout=120):
+    return subprocess.run(
+        [VIEWER, "--headless", "--gpu", GPU, "--validation", *args],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+@pytest.fixture
+def socket_dir():
+    # Unix socket paths are limited to about 100 characters, so not pytest's tmp_path.
+    with tempfile.TemporaryDirectory(prefix="lgr-") as directory:
+        yield Path(directory)
+
+
+def test_viewer_renders_the_scene_from_the_mock_server(socket_dir):
+    image = socket_dir / "frame.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "40",
+            "--size",
+            "1400x1000",
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["connected"] is True
+    assert stats["frames"] == 40
+    assert stats["snapshots"] >= 1
+    assert stats["deltas"] >= 5  # the scene kept moving while we rendered
+    assert stats["prims"] == 15 and stats["meshes"] == 4
+    assert stats["draw_calls"] == 5  # base, two wheels, caster, ground
+    assert stats["sim_time_ns"] > 0
+    assert stats["validation_errors"] == 0, result.stderr
+
+    width, height, rows = read_png(image)
+    assert (width, height) == (1400, 1000)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    assert len(set(pixels)) > 50, "the image is nearly uniform: nothing was drawn"
+    # The robot body is blue-grey (base colour 0.36, 0.43, 0.56), lit: blue > green > red, bright.
+    body = sum(1 for r, g, b, _a in pixels if r > 110 and b > 150 and b > r + 25 and b > g + 10)
+    # The viewport shares the window with the other panels, so the robot is small.
+    assert body > 150, f"robot body not visible ({body} blue-grey pixels)"
+    assert all(p[3] == 255 for p in pixels[:: len(pixels) // 500]), "image is not opaque"
+
+
+SCOPE_SIGNALS = [
+    "motor/left_drive_motor/current_q",  # 10 kHz
+    "motor/right_drive_motor/current_q",
+    "bus/dc_48v/voltage",
+    "battery/battery/current",
+    "joint/left_wheel_joint/velocity",  # 1 kHz
+    "thermal/left_drive_motor/temperature",  # 10 Hz
+]
+
+
+def test_scope_receives_every_sample_of_high_rate_signals(socket_dir):
+    image = socket_dir / "scope.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "120",
+            "--size",
+            "1280x900",
+            "--scope",
+            ",".join(SCOPE_SIGNALS),
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    assert stats["invalid_runs"] == 0
+    assert stats["dropped_samples"] == 0, "the scope lost samples"
+    assert stats["signal_blocks"] > 10
+    # 120 frames take about a second of replay: four 10 kHz signals alone give tens of
+    # thousands of samples. Far fewer would mean the subscription did not work.
+    assert stats["samples"] > 15000
+
+    _width, _height, rows = read_png(image)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    # The scope draws traces in the plot colour map; its first colour is a clear blue.
+    lower_half = pixels[len(pixels) // 2 :]
+    blue = sum(1 for r, g, b, _a in lower_half if b > 150 and b > r + 50 and b > g + 20)
+    assert blue > 200, f"no scope trace visible ({blue} blue pixels)"
+
+
+def test_unknown_scope_signal_is_ignored(socket_dir):
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "20",
+            "--scope",
+            "no/such/signal,bus/dc_48v/voltage",
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["samples"] > 0 and stats["invalid_runs"] == 0
+
+
+ARM_URDF = Path(__file__).resolve().parents[2] / "assets/robots/primitives_arm/primitives_arm.urdf"
+
+
+def test_viewer_opens_a_urdf_through_the_server(socket_dir):
+    image = socket_dir / "arm.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "10",
+            "--size",
+            "1200x900",
+            "--open",
+            str(ARM_URDF),
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["notice_is_error"] is False
+    assert stats["notice"].startswith(("Loaded", "2 movable joints")), stats["notice"]
+    assert stats["prims"] == 10  # the robot, four links, five visuals
+    assert stats["meshes"] == 5 and stats["draw_calls"] == 5
+    assert stats["validation_errors"] == 0, result.stderr
+
+    _width, _height, rows = read_png(image)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    orange = sum(1 for r, g, b, _a in pixels if r > 130 and r > g + 40 and g > b + 20)
+    assert orange > 500, f"the arm's orange links are not visible ({orange} pixels)"
+
+
+def test_a_file_that_cannot_be_opened_is_reported_and_the_scene_stays(socket_dir):
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "5",
+            "--open",
+            "/no/such/robot.urdf",
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["notice_is_error"] is True
+    assert "no such file" in stats["notice"]
+    assert stats["prims"] == 15  # still the sample scene
+
+
+def test_viewer_reports_a_missing_server_and_exits(socket_dir):
+    result = run_viewer(
+        "--connect", f"unix:{socket_dir}/nobody.sock", "--frames", "5", "--wait-ms", "600"
+    )
+    assert result.returncode == 4
+    assert "no scene" in result.stderr
+
+
+def test_viewer_rejects_bad_arguments():
+    assert run_viewer("--connect", "http://example").returncode == 2
+    assert run_viewer("--size", "10x10").returncode == 2
+    assert run_viewer("--no-such-option").returncode == 2
+
+
+def test_unknown_gpu_is_an_error_with_a_message():
+    result = subprocess.run(
+        [VIEWER, "--headless", "--gpu", "no-such-gpu", "--frames", "1"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 3
+    assert "no-such-gpu" in result.stderr
+
+
+def test_switching_a_domain_off_is_validated_and_applied_by_the_server(socket_dir):
+    """Design acceptance (03-domains): toggling Aerodynamics off gives a valid profile."""
+    image = socket_dir / "domains.png"
+    common = ["--workspace", "domains", "--size", "1600x1000", "--frames", "90"]
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        connect = ["--connect", f"unix:{server.endpoint.address}"]
+        before = run_viewer(*connect, *common)
+        edited = run_viewer(
+            *connect, *common, "--set-domain", "aerodynamics=off", "--screenshot", str(image)
+        )
+        applied = run_viewer(
+            *connect, *common, "--set-domain", "aerodynamics=off", "--apply-profile"
+        )
+        after = run_viewer(*connect, *common)
+    for result in (before, edited, applied, after):
+        assert result.returncode == 0, result.stderr
+    stats = [
+        json.loads(r.stdout.strip().splitlines()[-1]) for r in (before, edited, applied, after)
+    ]
+    assert all(s["validation_errors"] == 0 for s in stats)
+
+    # The server sends the wiring with its verdict: the eight domains and the signals between
+    # them, also for the edited profile, where aerodynamics is a substitute.
+    assert all(s["wiring_nodes"] == 8 and s["wiring_wires"] >= 10 for s in stats)
+    # The sample starts with aerodynamics on and an unedited, valid profile.
+    assert "aerodynamics" in stats[0]["domains_enabled"].split(",")
+    assert (stats[0]["profile"], stats[0]["profile_changes"]) == ("valid", 0)
+    # Edited but not applied: one changed line, valid, and the server still runs the old one.
+    assert (stats[1]["profile"], stats[1]["profile_changes"]) == ("valid", 1)
+    assert "aerodynamics" in stats[1]["domains_enabled"].split(",")
+    # Applied: the server adopted it, so nothing is pending any more, for this viewer or the next.
+    assert stats[2]["profile_changes"] == 0
+    assert "aerodynamics" not in stats[2]["domains_enabled"].split(",")
+    assert "aerodynamics" not in stats[3]["domains_enabled"].split(",")
+    assert "rigid_body" in stats[3]["domains_enabled"].split(",")
+
+    width, height, rows = read_png(image)
+    assert (width, height) == (1600, 1000)
+    pixels = {row[i : i + 4] for row in rows for i in range(0, len(row), 4)}
+    assert len(pixels) > 50, "the Domains workspace is nearly uniform: nothing was drawn"
+
+
+def test_scene_workspace_shows_the_selected_prim_and_the_console(socket_dir):
+    """Design 02-scene: the inspector fills for a selected prim; the console has the log."""
+    image = socket_dir / "scene.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "60",
+            "--size",
+            "1600x1000",
+            "--select",
+            "/amr/left_drive_motor",
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    assert stats["log_lines"] >= 3  # stage, replay and profile lines from the server
+    assert stats["attributes"] == 9  # the motor's electrical and thermal attributes
+    # The inspector streams the selected prim's own signals (10 kHz current, temperature).
+    assert stats["samples"] > 1000 and stats["dropped_samples"] == 0
+    assert stats["notice"] == ""  # log lines go to the console, not the status bar
+
+    width, height, rows = read_png(image)
+    assert (width, height) == (1600, 1000)
+    pixels = {row[i : i + 4] for row in rows for i in range(0, len(row), 4)}
+    assert len(pixels) > 50
+
+
+def test_signals_workspace_plots_with_cursors(socket_dir):
+    """Design 05-signals: stacked plots per unit, cursors on, no dropped samples."""
+    image = socket_dir / "signals.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "120",
+            "--size",
+            "1600x1000",
+            "--cursors",
+            "--scope",
+            "motor/left_drive_motor/current_q,bus/dc_48v/voltage,joint/left_wheel_joint/velocity",
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    assert stats["dropped_samples"] == 0 and stats["invalid_runs"] == 0
+    assert stats["samples"] > 8000
+
+    _width, _height, rows = read_png(image)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    # Three traces in the first three colours of the series palette: blue, yellow, coral.
+    blue = sum(1 for r, g, b, _a in pixels if b > 200 and r < 130 and g > 120)
+    yellow = sum(1 for r, g, b, _a in pixels if r > 220 and g > 170 and b < 110)
+    coral = sum(1 for r, g, b, _a in pixels if r > 230 and 90 < g < 150 and 80 < b < 140)
+    assert blue > 100 and yellow > 100 and coral > 100, (blue, yellow, coral)
+    # Cursor B is drawn in the accent colour, as a line over the height of every plot.
+    accent = sum(1 for r, g, b, _a in pixels if r > 215 and 100 < g < 135 and b < 70)
+    assert accent > 300, accent
+
+
+def test_electrical_workspace_draws_the_schematic_and_scopes(socket_dir):
+    """Design 04-electrical: schematic from the stage's nets, scopes of the bus and branches."""
+    image = socket_dir / "electrical.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "120",
+            "--size",
+            "1600x1000",
+            "--workspace",
+            "electrical",
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    # The bus voltage and four branch currents at 10 kHz, for the table, the nodes and the scopes.
+    assert stats["samples"] > 20000
+    assert stats["dropped_samples"] == 0 and stats["invalid_runs"] == 0
+
+    _width, _height, rows = read_png(image)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    # The bus bar and the wires are in the electrical domain colour, #F5C842.
+    yellow = sum(1 for r, g, b, _a in pixels if r > 235 and 185 < g < 215 and 50 < b < 90)
+    assert yellow > 1500, f"bus and wires not drawn ({yellow} pixels)"
+
+
+def test_launcher_is_shown_without_a_server(socket_dir):
+    """Design 01-launcher: the first screen needs no server and makes no connection."""
+    image = socket_dir / "launcher.png"
+    result = subprocess.run(
+        [
+            VIEWER,
+            "--headless",
+            "--gpu",
+            GPU,
+            "--validation",
+            "--launcher",
+            "--frames",
+            "8",
+            "--size",
+            "1600x1000",
+            "--screenshot",
+            str(image),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env={**os.environ, "XDG_CONFIG_HOME": str(socket_dir / "config")},
+    )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    assert stats["frames"] == 8
+    assert stats["connected"] is False and stats["snapshots"] == 0
+    # The viewer keeps its files under the configuration directory it was given.
+    assert (socket_dir / "config" / "lagrange").is_dir()
+
+    width, height, rows = read_png(image)
+    assert (width, height) == (1600, 1000)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    # The primary button and the selected card are in the accent colour, #E8772E.
+    accent = sum(1 for r, g, b, _a in pixels if r > 220 and 105 < g < 135 and 30 < b < 65)
+    assert accent > 5000, f"the Connect button is not drawn ({accent} accent pixels)"
+
+
+def test_sensors_workspace_shows_the_lidar_scan(socket_dir):
+    """Design 06-sensors: lidar bird's-eye view from sensor frames, IMU scopes from signals."""
+    image = socket_dir / "sensors.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "120",
+            "--size",
+            "1600x1000",
+            "--workspace",
+            "sensors",
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    assert stats["samples"] > 1500  # three IMU signals at 1 kHz
+    assert stats["dropped_samples"] == 0 and stats["invalid_runs"] == 0
+
+    _width, _height, rows = read_png(image)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    # Lidar returns are drawn in the sensors domain colour, #3FD1A7.
+    points = sum(1 for r, g, b, _a in pixels if 50 < r < 80 and g > 195 and 150 < b < 185)
+    assert points > 1500, f"no lidar points drawn ({points} pixels)"
+
+
+def test_performance_workspace_shows_the_servers_statistics(socket_dir):
+    """Design 11-performance: KPI cards, scheduler, modules, from the server's statistics."""
+    image = socket_dir / "performance.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "220",  # long enough for the once-a-second statistics to arrive
+            "--size",
+            "1600x1000",
+            "--workspace",
+            "performance",
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    assert stats["server_stats"] is True
+
+    _width, _height, rows = read_png(image)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    # The scheduler draws the electrical module's steps in its domain colour, #F5C842.
+    yellow = sum(1 for r, g, b, _a in pixels if r > 235 and 185 < g < 215 and 50 < b < 90)
+    assert yellow > 800, f"scheduler not drawn ({yellow} pixels)"
+
+
+def test_replay_workspace_shows_the_recording_and_its_events(socket_dir):
+    """Design 08-replay: recording facts, channels, the timeline with event lanes."""
+    image = socket_dir / "replay.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "60",
+            "--size",
+            "1600x1000",
+            "--workspace",
+            "replay",
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    # Two seconds of the sample hold at least one hard turn and one regeneration.
+    assert stats["events"] >= 2
+
+    width, height, rows = read_png(image)
+    assert (width, height) == (1600, 1000)
+    pixels = {row[i : i + 4] for row in rows for i in range(0, len(row), 4)}
+    assert len(pixels) > 50
+
+
+def run_workspace(socket_dir, workspace, name):
+    """Runs the viewer on one workspace against the mock server; returns stats and pixels."""
+    image = socket_dir / name
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "60",
+            "--size",
+            "1600x1000",
+            "--workspace",
+            workspace,
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    width, height, rows = read_png(image)
+    assert (width, height) == (1600, 1000)
+    return stats, rows
+
+
+def count(rows, wanted):
+    return sum(
+        1 for row in rows for i in range(0, len(row), 4) if wanted(row[i], row[i + 1], row[i + 2])
+    )
+
+
+def test_environment_workspace_draws_the_field_slice(socket_dir):
+    """Design 07-environment: environment state, a 2D field slice, the overlay list."""
+    stats, rows = run_workspace(socket_dir, "environment", "environment.png")
+    assert stats["environment_fields"] >= 1
+    # The slice is drawn with viridis: its low end is a dark purple no other panel uses.
+    purple = count(rows, lambda r, g, b: 50 <= r <= 80 and g <= 30 and 60 <= b <= 100)
+    assert purple > 20000, f"field slice not drawn ({purple} pixels)"
+
+
+def test_ros2_workspace_lists_the_graph_only_when_shown(socket_dir):
+    """Design 09-ros2: topics, node graph, ros2_control. The graph is sent on request."""
+    stats, rows = run_workspace(socket_dir, "ros 2", "ros2.png")
+    assert stats["ros_topics"] >= 5
+    assert stats["ros_nodes"] >= 2
+    # The bridge node is outlined in the accent colour.
+    accent = count(rows, lambda r, g, b: r > 220 and 100 <= g <= 135 and b < 70)
+    assert accent > 400, f"bridge node not drawn ({accent} pixels)"
+    # Another workspace does not ask for the graph.
+    stats, _ = run_workspace(socket_dir, "scene", "scene_no_ros.png")
+    assert stats["ros_topics"] == 0
+    assert stats["world_tiles"] == 0
+
+
+def test_world_workspace_draws_the_tile_map(socket_dir):
+    """Design 10-world: agents, the tile map coloured by level of detail, streaming."""
+    stats, rows = run_workspace(socket_dir, "world", "world.png")
+    assert stats["world_tiles"] > 0
+    assert stats["world_agents"] >= 1
+    # Tiles at the lowest level of detail cover most of the map.
+    proxy = count(rows, lambda r, g, b: 15 <= r <= 35 and 30 <= g <= 50 and 50 <= b <= 80)
+    assert proxy > 50000, f"tile map not drawn ({proxy} pixels)"

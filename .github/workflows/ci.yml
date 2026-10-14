@@ -1,0 +1,144 @@
+# Lint, build and test. Build and protocol jobs run only when relevant files changed, so a
+# documentation-only pull request finishes after the lint job. Fuzzing runs in nightly.yml.
+name: ci
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev]
+permissions: {}
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  ROS_DISTRO: lyrical
+
+jobs:
+  changes:
+    name: detect changed areas
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      code: ${{ steps.detect.outputs.code }}
+      proto: ${{ steps.detect.outputs.proto }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Classify changed files
+        id: detect
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # Without a usable base (first push of a branch) everything runs.
+          if [[ -z "$BASE" || "$BASE" =~ ^0+$ ]] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "proto=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files="$(git diff --name-only "$BASE...$HEAD")"
+          echo "$files"
+          # Documentation and repository metadata do not need a build.
+          docs_only='^(docs/|rfcs/|LICENSES/|\.github/ISSUE_TEMPLATE/|\.github/PULL_REQUEST_TEMPLATE\.md$|\.github/CODEOWNERS$|\.github/labels\.yml$|\.github/renovate\.json$|LICENSE$|[^/]*\.md$)'
+          non_docs="$(grep -Ev "$docs_only" <<< "$files" || true)"
+          proto_files="$(grep -E '^(proto/|buf\.yaml$|\.github/workflows/)' <<< "$files" || true)"
+          if [[ -n "$non_docs" ]]; then code=true; else code=false; fi
+          if [[ -n "$proto_files" ]]; then proto=true; else proto=false; fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "proto=$proto" >> "$GITHUB_OUTPUT"
+  lint:
+    name: lint (pre-commit)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run all pre-commit hooks
+        run: pipx run --spec pre-commit==4.7.0 pre-commit run --all-files --show-diff-on-failure
+
+  proto:
+    name: proto (buf)
+    needs: changes
+    if: needs.changes.outputs.proto == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      BUF_VERSION: v1.73.0
+      BUF_SHA256: 8f2986298ad08f0cc1bf999b9797b7c383adf32d7edf0f73d6f1e1a701baeac1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install buf (checksum-verified release binary)
+        run: |
+          curl -sSL -o "$RUNNER_TEMP/buf" \
+            "https://github.com/bufbuild/buf/releases/download/$BUF_VERSION/buf-Linux-x86_64"
+          echo "$BUF_SHA256  $RUNNER_TEMP/buf" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/buf"
+      - name: Lint and format check
+        run: |
+          "$RUNNER_TEMP/buf" lint
+          "$RUNNER_TEMP/buf" format --diff --exit-code
+      - name: Breaking-change check against dev
+        if: >-
+          github.event_name == 'pull_request' &&
+          !contains(github.event.pull_request.labels.*.name, 'proto-break')
+        run: |
+          if git cat-file -e origin/dev:proto/lagrange/viewer/v1/envelope.proto 2>/dev/null; then
+            "$RUNNER_TEMP/buf" breaking --against '.git#ref=origin/dev'
+          else
+            echo "No protocol on dev yet; nothing to compare against."
+          fi
+
+  build-test:
+    name: build-test (${{ matrix.name }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    container: ros:lyrical-ros-base-resolute
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: amd64
+            build_type: RelWithDebInfo
+            sanitizer: ""
+          - name: asan-ubsan
+            build_type: Debug
+            sanitizer: "address;undefined"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: src/lagrange
+          persist-credentials: false
+      - name: Install dependencies
+        run: src/lagrange/tools/ci/install_deps.sh
+      - name: Build
+        shell: bash
+        env:
+          BUILD_TYPE: ${{ matrix.build_type }}
+          SANITIZER: ${{ matrix.sanitizer }}
+        run: |
+          source "/opt/ros/$ROS_DISTRO/setup.bash"
+          colcon build --event-handlers console_cohesion+ --cmake-args \
+            "-DCMAKE_BUILD_TYPE=$BUILD_TYPE" -DBUILD_TESTING=ON \
+            -DLAGRANGE_WARNINGS_AS_ERRORS=ON "-DLAGRANGE_SANITIZER=$SANITIZER"
+      - name: Test
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          source install/setup.bash
+          colcon test --event-handlers console_direct+
+          colcon test-result --verbose

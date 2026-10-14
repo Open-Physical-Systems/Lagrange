@@ -1,0 +1,342 @@
+syntax = "proto3";
+package lagrange.viewer.v1;
+
+import "lagrange/viewer/v1/common.proto";
+
+message ProtocolVersion {
+  uint32 major = 1;
+  uint32 minor = 2;
+}
+
+message ClientHello {
+  ProtocolVersion version = 1;
+  string client_name = 2; // "lagrange_viewer 0.1.0"
+  bool wants_shm = 3; // only honoured on Unix sockets
+  repeated string compression = 4; // "zstd"; empty = none
+  string locale = 5; // "ja_JP", for server-side message text (later)
+}
+
+enum ServerKind {
+  SERVER_KIND_UNSPECIFIED = 0;
+  SERVER_KIND_SIM = 1;
+  SERVER_KIND_MOCK = 2;
+  SERVER_KIND_REPLAY = 3;
+}
+
+message ServerHello {
+  ProtocolVersion version = 1;
+  ServerKind server_kind = 2;
+  string server_name = 3;
+  uint64 session_id = 4;
+  bool shm_enabled = 5; // file descriptors follow as ancillary data
+  repeated ShmRegion shm_regions = 6;
+  string compression = 7; // chosen, or empty
+  Capabilities capabilities = 8;
+  string refusal = 9; // non-empty = connection refused, human-readable reason
+}
+
+message ShmRegion {
+  uint32 region = 1;
+  uint64 size = 2;
+  string purpose = 3;
+}
+
+message Capabilities {
+  bool can_seek = 1; // replay/mock
+  bool can_step = 2;
+  bool can_edit_scene = 3;
+  bool can_apply_profile = 4;
+  bool can_import = 5; // URDF/SDF/MJCF import through the server
+  uint32 tier = 6; // 0, 1, 2
+  bool has_ros_graph = 7;
+}
+
+enum RunState {
+  RUN_STATE_UNSPECIFIED = 0;
+  RUN_STATE_STOPPED = 1;
+  RUN_STATE_PAUSED = 2;
+  RUN_STATE_RUNNING = 3;
+  RUN_STATE_ERROR = 4;
+}
+
+message ServerStatus {
+  SimTime sim_time = 1;
+  RunState state = 2;
+  double real_time_factor = 3; // measured
+  double real_time_factor_target = 4;
+  SimTime replay_begin = 5; // replay only
+  SimTime replay_end = 6;
+  uint64 dropped_deltas = 7;
+  uint64 dropped_signal_blocks = 8;
+  string error = 9;
+}
+
+message Ping {
+  uint64 nonce = 1;
+  int64 client_monotonic_ns = 2;
+}
+message Pong {
+  uint64 nonce = 1;
+  int64 client_monotonic_ns = 2;
+  SimTime sim_time = 3;
+}
+
+enum LogLevel {
+  LOG_LEVEL_UNSPECIFIED = 0;
+  LOG_LEVEL_DEBUG = 1;
+  LOG_LEVEL_INFO = 2;
+  LOG_LEVEL_WARN = 3;
+  LOG_LEVEL_ERROR = 4;
+}
+
+message LogRecord {
+  SimTime sim_time = 1;
+  int64 wall_unix_ns = 2;
+  LogLevel level = 3;
+  string source = 4; // "scheduler", "electrical/averaged_network"
+  string text = 5;
+}
+
+message RosGraph {
+  message Topic {
+    string name = 1;
+    string type = 2;
+    uint32 publishers = 3;
+    uint32 subscribers = 4;
+    double rate_hz = 5;
+    double bandwidth_bps = 6;
+    bool from_bridge = 7; // published by the simulator's bridge
+    string status = 8; // empty when fine; else one short reason: "no fix"
+  }
+  repeated Topic topics = 1;
+  repeated string nodes = 2;
+  string rmw = 3;
+  // What follows was added on 2026-10-14 for the ROS 2 workspace.
+  message Node {
+    string name = 1; // "/controller_manager"
+    repeated string publishes = 2; // topic names
+    repeated string subscribes = 3;
+    bool external = 4; // not started by the simulator: the user's stack, rviz2
+    string detail = 5; // one line: its controllers, its role
+  }
+  message Joint {
+    string name = 1;
+    string interface = 2; // "effort", "velocity"
+    double command = 3;
+    double state = 4;
+    string unit = 5; // display form
+  }
+  message Controller {
+    string name = 1;
+    double rate_hz = 2;
+    string state = 3; // "active", "inactive"
+  }
+  // The simulated hardware interface, when the bridge serves ros2_control.
+  message Control {
+    string hardware = 1; // "LagrangeSystem"
+    string plugin = 2;
+    double rate_hz = 3;
+    bool active = 4;
+    repeated Joint joints = 5;
+    repeated Controller controllers = 6;
+  }
+  repeated Node node_info = 4;
+  string distro = 5; // "lyrical"
+  uint32 domain_id = 6;
+  bool use_sim_time = 7;
+  Control control = 8;
+  // Empty for a live bridge. A server that only describes what a bridge would publish says
+  // so here, and the viewer shows it.
+  string note = 9;
+}
+
+// Something that happened in a run at a time or over a span: a wheel slipped, the bus
+// regenerated, a link dropped packets. The timeline draws events in a lane per domain.
+message Event {
+  enum Severity {
+    SEVERITY_UNSPECIFIED = 0;
+    SEVERITY_INFO = 1;
+    SEVERITY_WARNING = 2;
+    SEVERITY_ERROR = 3;
+  }
+  uint64 id = 1; // unique within the run
+  SimTime begin = 2;
+  SimTime end = 3; // equal to begin for something that happened at an instant
+  string domain = 4; // "electrical"; the lane it is drawn in
+  string kind = 5; // "regen", "slip", "brownout": stable, for filtering
+  Severity severity = 6;
+  string text = 7; // one line for people: "bus peaked at 52.5 V"
+  uint32 prim = 8; // what it is about, or 0xFFFFFFFF
+  string signal = 9; // the signal that shows it, or empty
+}
+
+// Every event known so far. Sent after the handshake and whenever a different run is loaded;
+// a replay knows all the events of its recording at once. Later events arrive one by one.
+message EventList {
+  repeated Event events = 1;
+  bool complete = 2; // true for a recording: no further events will be appended
+}
+
+// What the server costs to run, about once a second. For the Performance workspace.
+message ServerStats {
+  message Module {
+    string module = 1; // "rigid_body/mujoco"
+    string domain = 2;
+    int64 dt_ns = 3;
+    double steps_per_second = 4; // of wall time
+    double cpu_ms_per_step = 5; // mean over the reporting period
+    double cpu_ms_per_step_max = 6;
+    bool on_gpu = 7;
+  }
+  SimTime sim_time = 1;
+  repeated Module modules = 2;
+  double real_time_factor = 3; // measured over the reporting period
+  double tick_ms = 4; // wall time of one scheduler tick, mean
+  double tick_ms_max = 5;
+  uint64 memory_bytes = 6; // resident memory of the server process
+  uint64 gpu_memory_bytes = 7; // 0 when the server uses no GPU
+  double bytes_per_second_out = 8; // to this viewer
+  uint32 viewers = 9;
+  bool estimated = 10; // true when module costs are estimates, not measurements
+}
+
+// The recording a replay reads. Sent after the handshake and when another one is opened.
+message RecordingInfo {
+  message Channel {
+    string topic = 1; // MCAP topic, or the signal name for a generated run
+    double rate_hz = 2; // 0 for channels without a fixed rate
+    uint64 messages = 3;
+    string unit = 4; // display unit, may be empty
+  }
+  string path = 1; // file path as the server sees it; empty for a generated run
+  SimTime duration = 2;
+  uint64 size_bytes = 3; // 0 when there is no file
+  string compression = 4; // "zstd", "lz4", "none", or empty
+  repeated Channel channels = 5;
+  uint64 messages = 6; // total over all channels
+  int64 recorded_unix_ns = 7; // 0 when unknown
+  bool synthetic = 8; // generated by a script, not by a simulation or a robot
+  string generator = 9; // program and version that wrote it
+  string description = 10;
+}
+
+// The environment layer as the simulation uses it now, and the fields that can be shown.
+// Sent after the handshake and when it changes.
+message EnvironmentState {
+  message Weather {
+    double rain_mm_per_h = 1;
+    double fog_visibility_m = 2; // 0: no fog
+    double dust_mg_per_m3 = 3;
+    double surface_wetness = 4; // 0 dry .. 1 standing water
+  }
+  message Wind {
+    double speed_m_per_s = 1; // mean
+    double direction_deg = 2; // where it blows to, from +X towards +Y
+    double gust_intensity = 3; // 0..1
+    string field = 4; // baked field in use; empty for a uniform wind
+  }
+  message EmiSource {
+    string name = 1;
+    uint32 prim = 2; // or 0xFFFFFFFF
+    double frequency_hz = 3; // a site parameter, never a default (50 or 60 Hz mains)
+    double current_a = 4; // 0 when the source is given by power
+    double power_w = 5;
+    string detail = 6; // "baked VDB", "robot self-emission"
+  }
+  // A field the server can slice for display.
+  message Field {
+    string name = 1; // "emi/flux_density"
+    string label = 2; // "|B|"
+    string domain = 3;
+    Unit unit = 4;
+    uint32 components = 5; // 1 scalar, 2 a vector in the slice plane
+    bool available = 6; // false: its domain is off, or the stage has no such field
+    string unavailable_reason = 7;
+  }
+  string layer = 1; // environment layer path; empty when the stage has none
+  double local_time_hours = 2; // 0..24
+  double sun_elevation_deg = 3;
+  double ambient_temperature_k = 4;
+  Weather weather = 5;
+  Wind wind = 6;
+  repeated EmiSource emi_sources = 7;
+  repeated Field fields = 8;
+  bool synthetic = 9; // values made up by a server that has no environment model
+}
+
+// A horizontal slice of a field, for an overlay. Sent for subscribed fields when it changes
+// and at most a few times a second.
+message FieldSlice {
+  string field = 1; // EnvironmentState.Field.name
+  SimTime sim_time = 2;
+  uint32 width = 3; // cells along +X
+  uint32 height = 4; // cells along +Y
+  uint32 components = 5; // values per cell
+  double origin_x = 6; // region frame, centre of cell (0, 0)
+  double origin_y = 7;
+  double cell_m = 8;
+  double height_m = 9; // z of the slice
+  float value_min = 10; // of the magnitude, over the slice
+  float value_max = 11;
+  DataRef values = 12; // float32, row-major from cell (0, 0), `components` per cell
+}
+
+// A large world: its tiles, the agents in it, the floating origin and the streaming budgets.
+// About once a second. Tiles are sent again only when `tiles_generation` changes.
+message WorldState {
+  message GeoOrigin {
+    bool valid = 1; // false: the stage is not georeferenced
+    double latitude_deg = 2; // WGS84
+    double longitude_deg = 3;
+    double height_m = 4; // above the ellipsoid
+  }
+  message Agent {
+    string name = 1;
+    uint32 prim = 2; // or 0xFFFFFFFF
+    string kind = 3; // "robot", "vehicle", "drone", "pedestrian"
+    double x = 4; // world ENU, metres (double: invariant 6)
+    double y = 5;
+    double speed_m_per_s = 6;
+    string status = 7; // "focus", "active", "kinematic"
+    double active_radius_m = 8; // full physics around it; 0 for none
+    bool focus = 9; // the floating origin follows this one
+  }
+  message FloatingOrigin {
+    string anchor = 1; // agent the origin follows
+    double x = 2; // world ENU of the local frame's origin
+    double y = 3;
+    double z = 4;
+    double recenter_threshold_m = 5;
+    SimTime last_recenter = 6;
+    uint64 recenters = 7;
+  }
+  message Streaming {
+    uint64 gpu_memory_bytes = 1;
+    uint64 gpu_memory_budget_bytes = 2;
+    uint64 host_cache_bytes = 3;
+    uint64 host_cache_budget_bytes = 4;
+    double disk_read_bytes_per_s = 5;
+    uint32 load_queue = 6; // tiles waiting to load
+  }
+  message Region {
+    string name = 1; // "R1"
+    double min_x = 2; // world ENU
+    double min_y = 3;
+    double max_x = 4;
+    double max_y = 5;
+  }
+  SimTime sim_time = 1;
+  GeoOrigin geo_origin = 2;
+  double tile_size_m = 3;
+  uint64 tiles_generation = 4;
+  // Tiles as parallel arrays, present when the generation changed. Level of detail: 0 physics
+  // and sensors, 1 render and collision, 2 render only, 3 proxy. Tiles not listed are not loaded.
+  repeated sint32 tile_x = 5 [packed = true]; // tile index along +X (east)
+  repeated sint32 tile_y = 6 [packed = true];
+  bytes tile_lod = 7; // one byte per tile
+  repeated Agent agents = 8;
+  FloatingOrigin floating_origin = 9;
+  Streaming streaming = 10;
+  repeated Region regions = 11;
+  bool synthetic = 12; // made up by a server that has no world streaming
+}

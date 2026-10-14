@@ -53,6 +53,10 @@ Every message on the stream is:
 | S→C | `LogRecord` | console output | small |
 | S→C | `RosGraph` | 1 Hz when the ROS panel is open | medium |
 | S→C | `SensorFrame` | subscribed sensor views (image, point cloud) | large (shm when local) |
+| S→C | `EventList` | after hello and when another run is loaded | medium |
+| S→C | `Event` | when something happens in a live run | small |
+| S→C | `ServerStats` | 1 Hz | small |
+| S→C | `RecordingInfo` | after hello and when another recording is opened (replay) | small |
 | both | `Ping` / `Pong` | every 2 s; timeout 10 s | small |
 
 The viewer does not link `rclcpp`. The ROS 2 topic browser is filled from `RosGraph`, which the
@@ -588,6 +592,53 @@ message Envelope {
 }
 ```
 
+### 4.1 Additions of 2026-10-14 (version 0.1, backwards compatible)
+
+Added while building the viewer's screens, as new messages and new fields only; `buf breaking`
+passes against the previous files. The `.proto` files in `proto/` are the reference; the
+draft above predates them.
+
+| Addition | Where | Used by |
+|---|---|---|
+| `Event`, `EventList` | `session.proto`, `Envelope` 40 and 41 | timeline event lanes (Scene, Replay), Events list |
+| `ServerStats` with per-module timings | `session.proto`, `Envelope` 42 | Performance workspace |
+| `RecordingInfo` with channels | `session.proto`, `Envelope` 43 | Replay workspace: Recording and Channels |
+| `Wiring` (nodes, wires with source and sink units) in `ProfileValidation` | `command.proto` | Domains workspace: wiring graph, unit checks, schedule |
+| `NetLimit` in `ElectricalNet` | `scene.proto` | Electrical workspace: limits |
+
+Rules that go with them:
+
+- An `EventList` replaces what the viewer holds; an `Event` appends. A recording sends its
+  whole list with `complete = true`.
+- `ServerStats.estimated` says whether module costs are measured or estimated. The mock server
+  sets it: it replays, so its module costs are the profile's estimates.
+- `Wiring` is sent whenever the profile text could be parsed, also when a unit check fails:
+  a wire with `unit_ok = false` is what the user has to see (invariant 2).
+- `QuantityKind` gained `LinearAcceleration`, appended to the list (architecture §2).
+
+### 4.2 Additions of 2026-10-14, second set (version 0.1, backwards compatible)
+
+For the Environment, ROS 2 and World workspaces. Again new messages and new fields only.
+
+| Addition | Where | Used by |
+|---|---|---|
+| `EnvironmentState` with the fields that can be sliced | `session.proto`, `Envelope` 44 | Environment workspace |
+| `FieldSlice`, `SubscribeField` | `session.proto`, `Envelope` 45; `command.proto` 53 | field overlays and the probe |
+| `WorldState`, `SetWorldEnabled` | `session.proto`, `Envelope` 46; `command.proto` 54 | World workspace |
+| `RosGraph`: nodes with their topics, `Control`, distro, domain, a `note`; `Topic`: bandwidth, origin, status | `session.proto` | ROS 2 workspace |
+
+Rules that go with them:
+
+- `FieldSlice`, `RosGraph` and `WorldState` are sent only to viewers that asked
+  (`SubscribeField`, `SetRosGraphEnabled`, `SetWorldEnabled`); a viewer asks while a panel that
+  shows them is open.
+- World positions in `WorldState` are `double` in the world's ENU frame (invariant 6). Tiles
+  are parallel arrays and are sent again only when `tiles_generation` changes.
+- `EnvironmentState.synthetic`, `WorldState.synthetic` and `RosGraph.note` say when a server
+  describes something it does not model or run. The mock server sets all three: it has no
+  environment model, no tile streamer and no ROS 2 bridge.
+- An EMI source's frequency is a parameter of the site or the device, never a default.
+
 ## 5. Session flow
 
 ```mermaid
@@ -612,6 +663,16 @@ sequenceDiagram
   Note over V: subscriptions from generation 1 are void; the viewer re-subscribes by name
 ```
 
+Clarifications fixed by the first implementation (the mock server):
+
+- Transforms in `SceneSnapshot` and `SceneDelta` are absolute in the region-local frame, not
+  relative to the parent prim.
+- A `SceneSnapshot` also marks a discontinuity in time. After a seek, a reset, or a looping
+  replay restarting, the server sends a snapshot to every client, and signal sample indices
+  restart from the new time after it. Between two snapshots, runs of a signal are contiguous.
+- A `MODE_MINMAX` run has `2 x components` values per sample: all minima, then all maxima. A
+  bucket is sent once, in the block in which its last sample falls.
+
 Resynchronisation rules:
 
 - `SceneDelta.base_sequence` not equal to the client's sequence → the client drops deltas and
@@ -635,7 +696,11 @@ Used only when both ends are on the same machine and connected by the Unix socke
   payload, then re-reads `generation`; a changed generation means the slot was reused during the
   read and the payload is discarded. This is a seqlock; no cross-process mutex is used.
 - Lifetime: `scene` slots live until the next `SceneSnapshot`. `stream` slots are a ring; the
-  server never reuses a slot sooner than 500 ms after publishing it.
+  server never reuses a slot sooner than 500 ms after publishing it. (The first implementation,
+  `lagrange::proto::ShmArena`, is a plain ring without the 500 ms rule; a reader that loses the
+  race gets `Stale` and asks again. The rule is added with the server's stream region.)
+- The descriptor sent to the viewer is opened read-only, so the viewer cannot map the region
+  writable, and the reader refuses any descriptor whose size is not sealed.
 - The fast path is an optimisation only. With `wants_shm = false` everything travels in-band and
   all tests must pass in both modes.
 - Later, for a server-side Vulkan device shared with the viewer on one GPU, exporting images by

@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lagrange — Environment and fields</title>
+<style>
+@font-face{font-family:'IBM Plex Sans';src:url(fonts/IBMPlexSans-Regular.woff2) format('woff2');font-weight:400}
+@font-face{font-family:'IBM Plex Sans';src:url(fonts/IBMPlexSans-Medium.woff2) format('woff2');font-weight:500}
+@font-face{font-family:'IBM Plex Sans';src:url(fonts/IBMPlexSans-SemiBold.woff2) format('woff2');font-weight:600}
+@font-face{font-family:'IBM Plex Mono';src:url(fonts/IBMPlexMono-Regular.woff2) format('woff2');font-weight:400}
+@font-face{font-family:'IBM Plex Mono';src:url(fonts/IBMPlexMono-Medium.woff2) format('woff2');font-weight:500}
+/* Lagrange viewer — shared styles for every artboard.
+   These map 1:1 to ImGui style values; see design tokens in the handoff zips. */
+.app{
+--bg0:#070D17;--bg1:#0B1422;--bg2:#101B2C;--bg3:#16243A;--bg4:#1D2E48;
+--ln:#1B293D;--ln2:#2A3F5C;
+--t1:#E6EBF2;--t2:#A9B6C8;--t3:#8190A6;
+--acc:#E8772E;--acc2:rgba(232,119,46,.15);--acc3:rgba(232,119,46,.45);--onacc:#170A01;
+--ok:#3FB97F;--warn:#E5B33B;--err:#F04A4A;--info:#5AA2FF;
+--d-rb:#9AACC6;--d-el:#F5C842;--d-th:#FF7A6B;--d-ae:#5CC8E6;--d-we:#7FA8FF;--d-em:#B48CFF;--d-ra:#9BE15D;--d-se:#3FD1A7;
+--s1:#5AA2FF;--s2:#F5C842;--s3:#FF7A6B;--s4:#3FD1A7;--s5:#B48CFF;--s6:#5CC8E6;--s7:#E8772E;--s8:#9BE15D;
+width:1600px;height:1000px;background:var(--bg0);color:var(--t1);
+font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:13px;line-height:18px;
+display:flex;flex-direction:column;overflow:hidden;position:relative}
+.app *{box-sizing:border-box}
+:where(.app button){font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+.app svg{display:block;flex:none}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;font-variant-numeric:tabular-nums}
+.t1{color:var(--t1)}.t2{color:var(--t2)}.t3{color:var(--t3)}.acc{color:var(--acc)}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.err{color:var(--err)}.info{color:var(--info)}
+.b5{font-weight:500}.b6{font-weight:600}.sm{font-size:12px}.xs{font-size:11px;line-height:14px}
+.row{display:flex;align-items:center;gap:6px;min-width:0}
+.colf{display:flex;flex-direction:column;min-width:0;min-height:0}
+.sp{flex:1}
+.ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ---------- menu bar ---------- */
+.mb{height:28px;flex:none;display:flex;align-items:center;gap:2px;padding:0 8px;background:var(--bg1);border-bottom:1px solid var(--ln)}
+.mb .brand{display:flex;align-items:center;gap:7px;font-weight:600;padding-right:12px;margin-right:4px;border-right:1px solid var(--ln);height:18px;letter-spacing:-.2px}
+.mb .m{padding:3px 8px;border-radius:3px;color:var(--t2)}
+.mb .ctx{color:var(--t3);font-size:12px;display:flex;align-items:center;gap:8px}
+.mb .ctx b{color:var(--t2);font-weight:500}
+
+/* ---------- toolbar: workspaces + sim controls ---------- */
+.tb{height:40px;flex:none;display:flex;align-items:stretch;padding:0 4px 0 6px;background:var(--bg1);border-bottom:1px solid var(--ln)}
+.ws{display:flex;align-items:center;gap:6px;padding:0 10px;color:var(--t2);border-bottom:2px solid transparent;border-top:2px solid transparent;font-weight:500;font-size:12px;white-space:nowrap}
+.ws.on{color:var(--t1);border-bottom-color:var(--acc)}
+.ws.on svg{color:var(--acc)}
+.ctl{display:flex;align-items:center;gap:4px;padding-left:10px;margin-left:6px;border-left:1px solid var(--ln)}
+.btn{height:26px;min-width:26px;padding:0 10px;display:inline-flex;align-items:center;justify-content:center;gap:6px;border-radius:3px;background:var(--bg3);border:1px solid var(--ln2);color:var(--t1);font-weight:500;font-size:12px;white-space:nowrap}
+.app button.btn{background:var(--bg3);border:1px solid var(--ln2)}
+.app button.btn.pri,.btn.pri{background:var(--acc);border-color:var(--acc);color:var(--onacc)}
+.app button.btn.ghost,.btn.ghost{background:transparent;border-color:transparent;color:var(--t2)}
+.app button.btn.on,.btn.on{background:var(--acc2);border-color:var(--acc3);color:var(--acc)}
+.app button.btn.dis,.btn.dis{color:var(--t3);background:transparent}
+.btn.ic{padding:0;width:26px}
+.btn.sm{height:22px;min-width:22px;padding:0 8px;font-size:11px}
+.btn.sm.ic{width:22px;padding:0}
+.ro{height:26px;display:inline-flex;align-items:center;gap:6px;padding:0 8px;border-radius:3px;background:var(--bg0);border:1px solid var(--ln);font-size:12px;white-space:nowrap}
+.ro .k{color:var(--t3);font-size:11px}
+
+/* ---------- domain strip ---------- */
+.ds{height:32px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--bg0);border-bottom:1px solid var(--ln)}
+.ds .lbl{color:var(--t3);font-size:11px;margin-right:2px}
+.chip{height:22px;display:inline-flex;align-items:center;gap:6px;padding:0 9px 0 8px;border-radius:11px;border:1px solid var(--ln2);background:var(--bg2);color:var(--t1);font-size:12px;white-space:nowrap}
+.chip i{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.chip .s{color:var(--t3);font-family:'IBM Plex Mono',monospace;font-size:11px}
+.chip.sub{border-style:dashed;background:transparent;color:var(--t2)}
+.chip.sub i{background:transparent!important;border:1.5px solid var(--t3)}
+.chip.off{border-style:dashed;background:transparent;color:var(--t3)}
+.chip.off i{background:transparent!important;border:1.5px solid var(--t3)}
+.chip.bad{border-color:var(--err);color:var(--err)}
+
+/* ---------- body / panels ---------- */
+.body{flex:1;min-height:0;display:flex;gap:4px;padding:4px}
+.col{display:flex;flex-direction:column;gap:4px;min-width:0;min-height:0}
+.pn{background:var(--bg1);border:1px solid var(--ln);border-radius:3px;display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}
+.ph{height:28px;flex:none;display:flex;align-items:stretch;background:var(--bg2);border-bottom:1px solid var(--ln);padding-left:2px}
+.pt{display:flex;align-items:center;gap:6px;padding:0 10px;color:var(--t3);font-weight:500;font-size:12px;border-top:2px solid transparent;white-space:nowrap}
+.pt.on{color:var(--t1);background:var(--bg1);border-top-color:var(--acc)}
+.ph .tools{display:flex;align-items:center;gap:2px;padding-right:4px;color:var(--t3);margin-left:auto}
+.pb{flex:1;min-height:0;overflow:hidden;padding:8px}
+.pb.np{padding:0}
+.bar{height:32px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;border-bottom:1px solid var(--ln)}
+
+/* ---------- tree ---------- */
+.tr{display:flex;align-items:center;height:22px;gap:6px;padding-right:8px;border-radius:2px;white-space:nowrap;font-size:12px}
+.tr .cv{width:12px;color:var(--t3);flex:none;display:flex;justify-content:center}
+.tr .ic{color:var(--t3);flex:none}
+.tr .nm{color:var(--t1)}
+.tr .ty{color:var(--t3);font-size:11px}
+.tr .bd{margin-left:auto;display:flex;gap:3px;align-items:center}
+.tr .bd i{width:6px;height:6px;border-radius:50%;display:block}
+.tr.sel{background:var(--acc2);box-shadow:inset 2px 0 0 var(--acc)}
+.tr.sel .ic{color:var(--acc)}
+.tr.hov{background:var(--bg3)}
+.tr.dim .nm{color:var(--t3)}
+
+/* ---------- inspector ---------- */
+.sec{border-bottom:1px solid var(--ln)}
+.sh{height:26px;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--bg2);font-weight:600;font-size:12px}
+.sh .v{margin-left:auto;color:var(--t3);font-weight:400;font-family:'IBM Plex Mono',monospace;font-size:11px}
+.kv{display:grid;grid-template-columns:112px minmax(0,1fr);column-gap:8px;row-gap:4px;padding:8px;align-items:center}
+.kv .k{color:var(--t2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fld{height:22px;display:flex;align-items:center;gap:6px;padding:0 6px;background:var(--bg0);border:1px solid var(--ln);border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:12px;min-width:0;white-space:nowrap;overflow:hidden}
+.fld .u{margin-left:auto;color:var(--t3);font-size:11px}
+.fld.ed{border-color:var(--acc3)}
+.fld.ro2{background:transparent;border-color:transparent;padding-left:0}
+.fld.dd{padding-right:4px}
+.fld.dd::after{content:"";width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid var(--t3);margin-left:auto}
+.f3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}
+.ax{font-weight:600;width:8px}
+.ax.x{color:#F0605D}.ax.y{color:#4FC97A}.ax.z{color:#5AA2FF}
+.lnk{color:var(--info)}
+
+/* ---------- tables ---------- */
+.tbl{width:100%;border-collapse:collapse;font-size:12px}
+.tbl th{height:24px;text-align:left;font-weight:500;color:var(--t3);background:var(--bg2);padding:0 8px;border-bottom:1px solid var(--ln);white-space:nowrap;font-size:11px}
+.tbl td{height:23px;padding:0 8px;border-bottom:1px solid var(--ln);white-space:nowrap}
+.tbl tr.sel td{background:var(--acc2)}
+.tbl tr.sel td:first-child{box-shadow:inset 2px 0 0 var(--acc)}
+.tbl .n{text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-variant-numeric:tabular-nums}
+.tbl .m{font-family:'IBM Plex Mono',monospace;font-size:12px}
+
+/* ---------- small widgets ---------- */
+.pill{height:18px;display:inline-flex;align-items:center;gap:4px;padding:0 7px;border-radius:9px;font-size:11px;font-weight:500;background:var(--bg3);color:var(--t2);white-space:nowrap}
+.pill.ok{background:rgba(63,185,127,.14);color:var(--ok)}
+.pill.warn{background:rgba(229,179,59,.14);color:var(--warn)}
+.pill.err{background:rgba(240,74,74,.15);color:var(--err)}
+.pill.acc{background:var(--acc2);color:var(--acc)}
+.pill.info{background:rgba(90,162,255,.14);color:var(--info)}
+.sw{width:28px;height:16px;border-radius:8px;background:var(--bg4);position:relative;flex:none;border:1px solid var(--ln2);display:inline-block}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:var(--t3)}
+.sw.on{background:var(--acc);border-color:var(--acc)}
+.sw.on::after{left:14px;background:var(--onacc)}
+.cb{width:14px;height:14px;border-radius:3px;border:1px solid var(--ln2);background:var(--bg0);flex:none;display:inline-flex;align-items:center;justify-content:center}
+.cb.on{background:var(--acc);border-color:var(--acc)}
+.cb.on::after{content:"";width:7px;height:3px;border-left:2px solid var(--onacc);border-bottom:2px solid var(--onacc);transform:translateY(-1px) rotate(-45deg)}
+.seg{display:inline-flex;border:1px solid var(--ln2);border-radius:3px;overflow:hidden;flex:none}
+.seg span{height:22px;padding:0 8px;display:inline-flex;align-items:center;font-size:11px;color:var(--t2);border-right:1px solid var(--ln2);white-space:nowrap}
+.seg span:last-child{border-right:0}
+.seg span.on{background:var(--acc2);color:var(--acc)}
+.search{height:24px;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--bg0);border:1px solid var(--ln);border-radius:3px;color:var(--t3);font-size:12px;min-width:0}
+.kbd{font-family:'IBM Plex Mono',monospace;font-size:10px;padding:0 4px;border:1px solid var(--ln2);border-radius:2px;color:var(--t3);line-height:14px;white-space:nowrap;flex:none}
+.sw8{width:10px;height:10px;border-radius:2px;flex:none;display:inline-block}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.meter{height:6px;border-radius:3px;background:var(--bg4);overflow:hidden;flex:1;min-width:0}
+.meter b{display:block;height:100%;border-radius:3px}
+.hr{height:1px;background:var(--ln);flex:none}
+.cap{font-size:11px;color:var(--t3);font-weight:500;letter-spacing:.3px}
+
+/* ---------- viewport + overlays ---------- */
+.vp{position:relative;flex:1;min-height:0;background:#091120;overflow:hidden}
+.vp > svg.scene{position:absolute;inset:0;width:100%;height:100%}
+.ov{position:absolute;background:rgba(9,17,32,.88);border:1px solid var(--ln2);border-radius:4px;padding:5px 8px;font-size:12px}
+.ovbar{position:absolute;display:flex;gap:2px;padding:2px;background:rgba(9,17,32,.88);border:1px solid var(--ln2);border-radius:4px}
+.ovbar .b{width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:3px;color:var(--t2)}
+.ovbar .b.on{background:var(--acc2);color:var(--acc)}
+.tip{position:absolute;background:var(--bg2);border:1px solid var(--ln2);border-radius:4px;padding:6px 8px;font-size:12px;box-shadow:0 6px 18px rgba(0,0,0,.45)}
+
+/* ---------- plots ---------- */
+.plot{position:relative;background:var(--bg0);border:1px solid var(--ln);border-radius:3px;overflow:hidden}
+.plot > svg{position:absolute;inset:0;width:100%;height:100%}
+.plot .ttl{position:absolute;left:8px;top:5px;display:flex;align-items:center;gap:10px;font-size:11px;color:var(--t2)}
+.plot .ttl b{color:var(--t1);font-weight:600}
+.lg{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.lg i{width:12px;height:2px;border-radius:1px;display:inline-block}
+
+/* ---------- status bar ---------- */
+.sb{height:24px;flex:none;display:flex;align-items:center;gap:16px;padding:0 10px;background:var(--bg1);border-top:1px solid var(--ln);font-size:11px;color:var(--t2);white-space:nowrap}
+.sb .it{display:flex;align-items:center;gap:6px}
+.sb .k{color:var(--t3)}
+
+/* ---------- node graph ---------- */
+.node{position:absolute;background:var(--bg2);border:1px solid var(--ln2);border-radius:4px;font-size:12px;overflow:hidden}
+.node .nh{height:24px;display:flex;align-items:center;gap:6px;padding:0 8px;font-weight:600;border-bottom:1px solid var(--ln)}
+.node .nb{padding:6px 8px;display:flex;flex-direction:column;gap:3px}
+.node.sel{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.node.sub{border-style:dashed;background:var(--bg1)}
+.port{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--t2);white-space:nowrap}
+.port i{width:7px;height:7px;border-radius:50%;border:1.5px solid var(--t3);display:inline-block;flex:none}
+
+/* ---------- code ---------- */
+.code{font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:19px;white-space:pre;color:var(--t2)}
+.code .ln{color:#4A5B74;display:inline-block;width:26px;text-align:right;margin-right:12px}
+.code .k{color:#8FB8FF}.code .s{color:#9BD39B}.code .n{color:#F5C842}.code .b{color:#E8772E}.code .c{color:#6E7F98}
+.code .add{background:rgba(63,185,127,.10)}
+.code .rm{background:rgba(240,74,74,.10)}
+
+
+body{margin:0;background:#070D17}
+.ly{display:grid;grid-template-columns:14px 10px minmax(0,1fr) auto;gap:8px;align-items:center;height:26px;padding:0 8px;font-size:12px}
+.ly.sel{background:rgba(232,119,46,.10);box-shadow:inset 2px 0 0 #E8772E}
+.src{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;padding:6px 8px;border-bottom:1px solid #1B293D;font-size:12px}
+.src .m{grid-column:1 / 3;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8190A6}
+
+</style>
+</head>
+<body>
+<div class="app">
+
+<div class="mb">
+<div class="brand"><svg width="16" height="16" viewBox="0 0 120 120" aria-hidden="true"><path d="M34 18 V86 H102" fill="none" stroke="#E6EBF2" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="68" cy="27.1" r="11" fill="#E8772E"></circle></svg>Lagrange</div>
+<button class="m">File</button><button class="m">Edit</button><button class="m">View</button><button class="m">Simulation</button><button class="m">Tools</button><button class="m">Window</button><button class="m">Help</button>
+<div class="sp"></div>
+<div class="ctx"><span>stage <b>warehouse_a.usda</b></span><span>environment <b>heavy_rain_night.usda</b></span><span>profile <b>rain_night.yaml</b></span><span class="kbd">Ctrl K</span></div>
+</div>
+
+<div class="tb">
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8l5.6 3.1v6.2L8 14.2l-5.6-3.1V4.9z M2.4 4.9L8 8l5.6-3.1 M8 8v6.2"></path></svg>Scene</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11 M2.5 8h11 M2.5 12h11"></path><circle cx="6" cy="4" r="1.6" fill="#0B1422"></circle><circle cx="10.5" cy="8" r="1.6" fill="#0B1422"></circle><circle cx="5" cy="12" r="1.6" fill="#0B1422"></circle></svg>Domains</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M9 1.5L3.5 9H8l-1 5.5L12.5 7H8z"></path></svg>Electrical</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 8h2.2l1.6-4.5 3 9 2-6.5 1.5 2h2.7"></path></svg>Signals</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M8 8l4.6-4.6 M14 8A6 6 0 1 1 8 2 M11 8a3 3 0 1 1-3-3"></path></svg>Sensors</button>
+<button class="ws on"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.6 9.5a3 3 0 0 1 .3-6 3.6 3.6 0 0 1 6.8 1.1 2.5 2.5 0 0 1-.2 4.9z M5.5 11.5l-.8 2 M8.5 11.5l-.8 2 M11.5 11.5l-.8 2"></path></svg>Environment</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9 M2.5 2.5v3h3 M7 5.8v4.4l3.2-2.2z"></path></svg>Replay</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="4" cy="4" r="1.7"></circle><circle cx="12" cy="4" r="1.7"></circle><circle cx="8" cy="12" r="1.7"></circle><path d="M5.7 4h4.6 M4.9 5.5L7.1 10.5 M11.1 5.5L8.9 10.5"></path></svg>ROS 2</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><path d="M2 8h12 M8 2c2.2 2.2 2.2 9.8 0 12 M8 2c-2.2 2.2-2.2 9.8 0 12"></path></svg>World</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M2.5 11.5a5.5 5.5 0 1 1 11 0 M8 11.5l3-4"></path></svg>Performance</button>
+<div class="sp"></div>
+<div class="ctl">
+<button class="btn ic" aria-label="Reset run"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8a4.5 4.5 0 1 0 1.3-3.2 M3.5 2.8v2.6h2.6"></path></svg></button>
+<button class="btn pri" aria-label="Pause"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5.5 3.5v9 M10.5 3.5v9"></path></svg>Pause</button>
+<button class="btn ic" aria-label="Step one tick"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.5 3.5v9l6.5-4.5z"></path><rect x="11" y="3.5" width="1.8" height="9" rx=".5"></rect></svg></button>
+<div class="ro"><span class="k">sim t</span><span class="mono">00:03.413</span></div>
+<div class="ro"><span class="k">RTF</span><span class="mono">1.00×</span><span class="k">/ 1.00</span></div>
+<div class="ro"><span class="k">lockstep</span><span class="ok mono">on</span></div>
+<button class="btn" aria-label="Start recording"><span class="dot" style="background: #F04A4A"></span>Record</button>
+</div>
+</div>
+
+<div class="ds">
+<span class="lbl">Domains</span>
+<span class="chip"><i style="background: #9AACC6"></i>Rigid body<span class="s">physx · 1 ms</span></span>
+<span class="chip"><i style="background: #F5C842"></i>Electrical<span class="s">averaged · 100 µs</span></span>
+<span class="chip"><i style="background: #FF7A6B"></i>Thermal<span class="s">100 ms</span></span>
+<span class="chip"><i style="background: #5CC8E6"></i>Aero<span class="s">drag + field</span></span>
+<span class="chip"><i style="background: #7FA8FF"></i>Weather<span class="s">rain 25 mm/h</span></span>
+<span class="chip"><i style="background: #B48CFF"></i>EMI<span class="s">3 couplings</span></span>
+<span class="chip off"><i></i>Radiation<span class="s">→ zero</span></span>
+<span class="chip"><i style="background: #3FD1A7"></i>Sensors<span class="s">6 active</span></span>
+<div class="sp"></div>
+<span class="pill acc">environment layer edited · live</span>
+</div>
+
+<div class="body">
+
+<div class="col" style="width: 320px">
+<div class="pn" style="flex: 1">
+<div class="ph"><span class="pt on">Environment</span><span class="pt">Presets</span></div>
+<div class="bar"><span class="mono sm">environments/heavy_rain_night.usda</span><div class="sp"></div><button class="btn sm ghost">Swap…</button></div>
+<div class="pb np">
+<div class="sec"><div class="sh"><span class="t3">▾</span><i class="dot" style="background: #FF7A6B; width: 6px; height: 6px"></i>Time and sun</div>
+<div class="kv">
+<span class="k">local time</span><div class="fld">22:40<span class="u">JST</span></div>
+<span class="k">sun elevation</span><div class="fld">−38.2<span class="u">° below</span></div>
+<span class="k">ambient</span><div class="fld">17.5<span class="u">°C</span></div>
+</div></div>
+<div class="sec"><div class="sh"><span class="t3">▾</span><i class="dot" style="background: #7FA8FF; width: 6px; height: 6px"></i>Weather</div>
+<div class="kv">
+<span class="k">rain rate</span><div class="fld ed">25.0<span class="u">mm/h</span></div>
+<span class="k">drop sizes</span><div class="fld dd">Marshall–Palmer</div>
+<span class="k">fog visibility</span><div class="fld">40<span class="u">m</span></div>
+<span class="k">dust</span><div class="fld">0<span class="u">mg/m³</span></div>
+<span class="k">surface wetness</span><div class="row"><div class="meter"><b style="width: 80%; background: #7FA8FF"></b></div><span class="mono xs">0.80</span></div>
+</div></div>
+<div class="sec"><div class="sh"><span class="t3">▾</span><i class="dot" style="background: #5CC8E6; width: 6px; height: 6px"></i>Wind</div>
+<div class="kv">
+<span class="k">mean</span><div class="f3" style="grid-template-columns: repeat(2, minmax(0, 1fr))"><div class="fld">6.0<span class="u">m/s</span></div><div class="fld">230<span class="u">°</span></div></div>
+<span class="k">gusts</span><div class="fld dd">Dryden · I 0.15</div>
+<span class="k">CFD field</span><div class="fld"><span class="t3">none — indoor stage</span></div>
+</div></div>
+<div class="sec"><div class="sh"><span class="t3">▾</span><i class="dot" style="background: #B48CFF; width: 6px; height: 6px"></i>EMI sources<span class="v">3</span></div>
+<div class="src"><span class="b5">power_line_01</span><span class="mono xs">60 Hz · 400 A</span><span class="m">cable tray · baked field power_line_01.vdb</span></div>
+<div class="src"><span class="b5">drive inverters</span><span class="mono xs">20 kHz PWM</span><span class="m">robot self-emission · from electrical</span></div>
+<div class="src"><span class="b5">wifi_ap_03</span><span class="mono xs">2.4 GHz · 20 dBm</span><span class="m">path loss + noise floor → comms</span></div>
+</div>
+<div class="sec"><div class="sh"><span class="t3">▸</span><i class="dot" style="background: #9BE15D; width: 6px; height: 6px"></i>Radiation<span class="v">domain off</span></div></div>
+</div>
+</div>
+</div>
+
+<div class="col" style="flex: 1">
+<div class="pn" style="flex: 1">
+<div class="ph"><span class="pt on">Viewport · fields</span><span class="pt">Slice 2D</span>
+<div class="tools"><span class="xs t3" style="margin-right: 4px">slice</span><div class="seg"><span class="on">XY</span><span>XZ</span><span>YZ</span><span>volume</span></div><span class="xs t3" style="margin: 0 4px 0 8px">height</span><div class="fld" style="width: 84px">1.00<span class="u">m</span></div></div></div>
+<div class="vp">
+<svg class="scene" viewBox="0 -90 960 835" preserveAspectRatio="xMidYMid slice" aria-hidden="true" font-family="IBM Plex Sans, sans-serif">
+<defs>
+<linearGradient id="fade2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0A1322"></stop><stop offset="1" stop-color="#0A1322" stop-opacity="0"></stop></linearGradient>
+<marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#5CC8E6"></path></marker>
+</defs>
+<rect y="-90" width="960" height="835" fill="#0A1322"></rect>
+<rect y="150" width="960" height="600" fill="#0E1829"></rect>
+<path d="M236.0 170.0L-1267.4 639.8M272.7 170.0L-369.4 639.8M309.3 170.0L528.6 639.8M346.0 170.0L1426.5 639.8M382.7 170.0L2324.5 639.8M419.3 170.0L3222.4 639.8M456.0 170.0L4120.4 639.8M492.7 170.0L5018.4 639.8M-4868.0 390.0L7452.0 390.0M-2284.0 270.0L3876.0 270.0M-1422.7 230.0L2684.0 230.0M-992.0 210.0L2088.0 210.0M-6160.0 450.0L9240.0 450.0M-8313.3 550.0L12220.0 550.0" stroke="#1A2A40" stroke-width="1" fill="none"></path>
+<rect y="146" width="960" height="66" fill="url(#fade2)"></rect>
+<g stroke="#2A3F5C" stroke-width="1">
+<polygon points="117.8,283.3 411.1,283.3 411.1,166.0 117.8,166.0" fill="#112035"></polygon>
+<path d="M117.8 244.2L411.1 244.2M117.8 205.1L411.1 205.1M191.1 283.3L191.1 166.0M264.4 283.3L264.4 166.0M337.8 283.3L337.8 166.0" fill="none"></path>
+<polygon points="518.7,283.3 518.7,166.0 492.9,164.1 492.9,267.6" fill="#0D1829"></polygon>
+<polygon points="518.7,283.3 851.1,283.3 851.1,166.0 518.7,166.0" fill="#112035"></polygon>
+<path d="M518.7 244.2L851.1 244.2M518.7 205.1L851.1 205.1M592.0 283.3L592.0 166.0M665.3 283.3L665.3 166.0M738.7 283.3L738.7 166.0M812.0 283.3L812.0 166.0" fill="none"></path>
+</g>
+<g opacity=".62">
+<polygon points="-100.0,403.3 10.0,403.3 68.0,352.7 -20.0,352.7" fill="#3a558b"></polygon><polygon points="-20.0,352.7 68.0,352.7 106.7,318.9 33.3,318.9" fill="#365e8b"></polygon><polygon points="33.3,318.9 106.7,318.9 134.3,294.8 71.4,294.8" fill="#316a8b"></polygon><polygon points="71.4,294.8 134.3,294.8 155.0,276.7 100.0,276.7" fill="#2a7b8c"></polygon><polygon points="100.0,276.7 155.0,276.7 171.1,262.6 122.2,262.6" fill="#22928c"></polygon><polygon points="122.2,262.6 171.1,262.6 184.0,251.3 140.0,251.3" fill="#40ae77"></polygon><polygon points="140.0,251.3 184.0,251.3 194.5,242.1 154.5,242.1" fill="#6dcc5c"></polygon><polygon points="154.5,242.1 194.5,242.1 203.3,234.4 166.7,234.4" fill="#9bd54b"></polygon><polygon points="10.0,403.3 120.0,403.3 156.0,352.7 68.0,352.7" fill="#3a568b"></polygon><polygon points="68.0,352.7 156.0,352.7 180.0,318.9 106.7,318.9" fill="#365f8b"></polygon><polygon points="106.7,318.9 180.0,318.9 197.1,294.8 134.3,294.8" fill="#316b8b"></polygon><polygon points="134.3,294.8 197.1,294.8 210.0,276.7 155.0,276.7" fill="#2a7b8c"></polygon><polygon points="155.0,276.7 210.0,276.7 220.0,262.6 171.1,262.6" fill="#22928b"></polygon><polygon points="171.1,262.6 220.0,262.6 228.0,251.3 184.0,251.3" fill="#40ae76"></polygon><polygon points="184.0,251.3 228.0,251.3 234.5,242.1 194.5,242.1" fill="#6dcc5c"></polygon><polygon points="194.5,242.1 234.5,242.1 240.0,234.4 203.3,234.4" fill="#9cd54a"></polygon><polygon points="120.0,403.3 230.0,403.3 244.0,352.7 156.0,352.7" fill="#39578b"></polygon><polygon points="156.0,352.7 244.0,352.7 253.3,318.9 180.0,318.9" fill="#35608b"></polygon><polygon points="180.0,318.9 253.3,318.9 260.0,294.8 197.1,294.8" fill="#306c8b"></polygon><polygon points="197.1,294.8 260.0,294.8 265.0,276.7 210.0,276.7" fill="#2a7c8c"></polygon><polygon points="210.0,276.7 265.0,276.7 268.9,262.6 220.0,262.6" fill="#23928b"></polygon><polygon points="220.0,262.6 268.9,262.6 272.0,251.3 228.0,251.3" fill="#41ae76"></polygon><polygon points="228.0,251.3 272.0,251.3 274.5,242.1 234.5,242.1" fill="#6ecc5c"></polygon><polygon points="234.5,242.1 274.5,242.1 276.7,234.4 240.0,234.4" fill="#9dd54a"></polygon><polygon points="230.0,403.3 340.0,403.3 332.0,352.7 244.0,352.7" fill="#39588b"></polygon><polygon points="244.0,352.7 332.0,352.7 326.7,318.9 253.3,318.9" fill="#35618b"></polygon><polygon points="253.3,318.9 326.7,318.9 322.9,294.8 260.0,294.8" fill="#306d8b"></polygon><polygon points="260.0,294.8 322.9,294.8 320.0,276.7 265.0,276.7" fill="#297d8c"></polygon><polygon points="265.0,276.7 320.0,276.7 317.8,262.6 268.9,262.6" fill="#23938b"></polygon><polygon points="268.9,262.6 317.8,262.6 316.0,251.3 272.0,251.3" fill="#41af76"></polygon><polygon points="272.0,251.3 316.0,251.3 314.5,242.1 274.5,242.1" fill="#6fcc5b"></polygon><polygon points="274.5,242.1 314.5,242.1 313.3,234.4 276.7,234.4" fill="#9dd54a"></polygon><polygon points="340.0,403.3 450.0,403.3 420.0,352.7 332.0,352.7" fill="#385a8b"></polygon><polygon points="332.0,352.7 420.0,352.7 400.0,318.9 326.7,318.9" fill="#34638b"></polygon><polygon points="326.7,318.9 400.0,318.9 385.7,294.8 322.9,294.8" fill="#2f6e8b"></polygon><polygon points="322.9,294.8 385.7,294.8 375.0,276.7 320.0,276.7" fill="#297e8c"></polygon><polygon points="320.0,276.7 375.0,276.7 366.7,262.6 317.8,262.6" fill="#24948a"></polygon><polygon points="317.8,262.6 366.7,262.6 360.0,251.3 316.0,251.3" fill="#42af75"></polygon><polygon points="316.0,251.3 360.0,251.3 354.5,242.1 314.5,242.1" fill="#70cc5b"></polygon><polygon points="314.5,242.1 354.5,242.1 350.0,234.4 313.3,234.4" fill="#9ed549"></polygon><polygon points="450.0,403.3 560.0,403.3 508.0,352.7 420.0,352.7" fill="#365e8b"></polygon><polygon points="420.0,352.7 508.0,352.7 473.3,318.9 400.0,318.9" fill="#33668b"></polygon><polygon points="400.0,318.9 473.3,318.9 448.6,294.8 385.7,294.8" fill="#2e718b"></polygon><polygon points="385.7,294.8 448.6,294.8 430.0,276.7 375.0,276.7" fill="#287f8c"></polygon><polygon points="375.0,276.7 430.0,276.7 415.6,262.6 366.7,262.6" fill="#259489"></polygon><polygon points="366.7,262.6 415.6,262.6 404.0,251.3 360.0,251.3" fill="#42b075"></polygon><polygon points="360.0,251.3 404.0,251.3 394.5,242.1 354.5,242.1" fill="#71cd5b"></polygon><polygon points="354.5,242.1 394.5,242.1 386.7,234.4 350.0,234.4" fill="#9fd549"></polygon><polygon points="560.0,403.3 670.0,403.3 596.0,352.7 508.0,352.7" fill="#33668b"></polygon><polygon points="508.0,352.7 596.0,352.7 546.7,318.9 473.3,318.9" fill="#306d8b"></polygon><polygon points="473.3,318.9 546.7,318.9 511.4,294.8 448.6,294.8" fill="#2d748c"></polygon><polygon points="448.6,294.8 511.4,294.8 485.0,276.7 430.0,276.7" fill="#28818c"></polygon><polygon points="430.0,276.7 485.0,276.7 464.4,262.6 415.6,262.6" fill="#269589"></polygon><polygon points="415.6,262.6 464.4,262.6 448.0,251.3 404.0,251.3" fill="#43b075"></polygon><polygon points="404.0,251.3 448.0,251.3 434.5,242.1 394.5,242.1" fill="#72cd5a"></polygon><polygon points="394.5,242.1 434.5,242.1 423.3,234.4 386.7,234.4" fill="#9fd549"></polygon><polygon points="670.0,403.3 780.0,403.3 684.0,352.7 596.0,352.7" fill="#24898c"></polygon><polygon points="596.0,352.7 684.0,352.7 620.0,318.9 546.7,318.9" fill="#2a7b8c"></polygon><polygon points="546.7,318.9 620.0,318.9 574.3,294.8 511.4,294.8" fill="#2c778c"></polygon><polygon points="511.4,294.8 574.3,294.8 540.0,276.7 485.0,276.7" fill="#27828c"></polygon><polygon points="485.0,276.7 540.0,276.7 513.3,262.6 464.4,262.6" fill="#269688"></polygon><polygon points="464.4,262.6 513.3,262.6 492.0,251.3 448.0,251.3" fill="#43b074"></polygon><polygon points="448.0,251.3 492.0,251.3 474.5,242.1 434.5,242.1" fill="#72cd5a"></polygon><polygon points="434.5,242.1 474.5,242.1 460.0,234.4 423.3,234.4" fill="#9fd549"></polygon><polygon points="780.0,403.3 890.0,403.3 772.0,352.7 684.0,352.7" fill="#228f8c"></polygon><polygon points="684.0,352.7 772.0,352.7 693.3,318.9 620.0,318.9" fill="#297d8c"></polygon><polygon points="620.0,318.9 693.3,318.9 637.1,294.8 574.3,294.8" fill="#2b788c"></polygon><polygon points="574.3,294.8 637.1,294.8 595.0,276.7 540.0,276.7" fill="#27828c"></polygon><polygon points="540.0,276.7 595.0,276.7 562.2,262.6 513.3,262.6" fill="#269688"></polygon><polygon points="513.3,262.6 562.2,262.6 536.0,251.3 492.0,251.3" fill="#43b074"></polygon><polygon points="492.0,251.3 536.0,251.3 514.5,242.1 474.5,242.1" fill="#72cd5a"></polygon><polygon points="474.5,242.1 514.5,242.1 496.7,234.4 460.0,234.4" fill="#9fd549"></polygon><polygon points="890.0,403.3 1000.0,403.3 860.0,352.7 772.0,352.7" fill="#32688b"></polygon><polygon points="772.0,352.7 860.0,352.7 766.7,318.9 693.3,318.9" fill="#2f6e8b"></polygon><polygon points="693.3,318.9 766.7,318.9 700.0,294.8 637.1,294.8" fill="#2d748c"></polygon><polygon points="637.1,294.8 700.0,294.8 650.0,276.7 595.0,276.7" fill="#28818c"></polygon><polygon points="595.0,276.7 650.0,276.7 611.1,262.6 562.2,262.6" fill="#269589"></polygon><polygon points="562.2,262.6 611.1,262.6 580.0,251.3 536.0,251.3" fill="#43b075"></polygon><polygon points="536.0,251.3 580.0,251.3 554.5,242.1 514.5,242.1" fill="#72cd5a"></polygon><polygon points="514.5,242.1 554.5,242.1 533.3,234.4 496.7,234.4" fill="#9fd549"></polygon><polygon points="860.0,352.7 948.0,352.7 840.0,318.9 766.7,318.9" fill="#32678b"></polygon><polygon points="766.7,318.9 840.0,318.9 762.9,294.8 700.0,294.8" fill="#2e718b"></polygon><polygon points="700.0,294.8 762.9,294.8 705.0,276.7 650.0,276.7" fill="#287f8c"></polygon><polygon points="650.0,276.7 705.0,276.7 660.0,262.6 611.1,262.6" fill="#259589"></polygon><polygon points="611.1,262.6 660.0,262.6 624.0,251.3 580.0,251.3" fill="#43b075"></polygon><polygon points="580.0,251.3 624.0,251.3 594.5,242.1 554.5,242.1" fill="#71cd5b"></polygon><polygon points="554.5,242.1 594.5,242.1 570.0,234.4 533.3,234.4" fill="#9fd549"></polygon><polygon points="840.0,318.9 913.3,318.9 825.7,294.8 762.9,294.8" fill="#2f6f8b"></polygon><polygon points="762.9,294.8 825.7,294.8 760.0,276.7 705.0,276.7" fill="#297e8c"></polygon><polygon points="705.0,276.7 760.0,276.7 708.9,262.6 660.0,262.6" fill="#24948a"></polygon><polygon points="660.0,262.6 708.9,262.6 668.0,251.3 624.0,251.3" fill="#42af75"></polygon><polygon points="624.0,251.3 668.0,251.3 634.5,242.1 594.5,242.1" fill="#70cc5b"></polygon><polygon points="594.5,242.1 634.5,242.1 606.7,234.4 570.0,234.4" fill="#9ed549"></polygon><polygon points="825.7,294.8 888.6,294.8 815.0,276.7 760.0,276.7" fill="#297d8c"></polygon><polygon points="760.0,276.7 815.0,276.7 757.8,262.6 708.9,262.6" fill="#23938a"></polygon><polygon points="708.9,262.6 757.8,262.6 712.0,251.3 668.0,251.3" fill="#41af76"></polygon><polygon points="668.0,251.3 712.0,251.3 674.5,242.1 634.5,242.1" fill="#6fcc5b"></polygon><polygon points="634.5,242.1 674.5,242.1 643.3,234.4 606.7,234.4" fill="#9dd54a"></polygon><polygon points="815.0,276.7 870.0,276.7 806.7,262.6 757.8,262.6" fill="#23928b"></polygon><polygon points="757.8,262.6 806.7,262.6 756.0,251.3 712.0,251.3" fill="#41ae76"></polygon><polygon points="712.0,251.3 756.0,251.3 714.5,242.1 674.5,242.1" fill="#6ecc5c"></polygon><polygon points="674.5,242.1 714.5,242.1 680.0,234.4 643.3,234.4" fill="#9dd54a"></polygon><polygon points="806.7,262.6 855.6,262.6 800.0,251.3 756.0,251.3" fill="#41ae76"></polygon><polygon points="756.0,251.3 800.0,251.3 754.5,242.1 714.5,242.1" fill="#6ecc5c"></polygon><polygon points="714.5,242.1 754.5,242.1 716.7,234.4 680.0,234.4" fill="#9cd54a"></polygon><polygon points="800.0,251.3 844.0,251.3 794.5,242.1 754.5,242.1" fill="#6dcc5c"></polygon><polygon points="754.5,242.1 794.5,242.1 753.3,234.4 716.7,234.4" fill="#9bd54a"></polygon><polygon points="794.5,242.1 834.5,242.1 790.0,234.4 753.3,234.4" fill="#9bd44b"></polygon><polygon points="834.5,242.1 874.5,242.1 826.7,234.4 790.0,234.4" fill="#9ad44b"></polygon>
+</g>
+<line x1="0" y1="156.5" x2="960" y2="156.5" stroke="#B48CFF" stroke-width="3"></line>
+<text x="16" y="146" font-size="11" fill="#B48CFF">power_line_01 · cable tray 2.6 m · 400 A · 60 Hz</text>
+<g fill="none" stroke="#5CC8E6" stroke-width="1.6" marker-end="url(#ah)" opacity=".9">
+<path d="M110.0 285.0L198.4 271.4M173.3 240.0L229.9 233.7M205.0 217.5L246.5 213.9M330.0 285.0L396.2 271.4M320.0 240.0L366.4 233.7M315.0 217.5L350.6 213.9M550.0 285.0L593.9 271.4M466.7 240.0L502.8 233.7M425.0 217.5L454.8 213.9M770.0 285.0L791.7 271.4M613.3 240.0L639.2 233.7M535.0 217.5L558.9 213.9M760.0 240.0L775.7 233.7M645.0 217.5L663.1 213.9M906.7 240.0L912.1 233.7M755.0 217.5L767.2 213.9"></path>
+</g>
+<polygon points="733.1,550.0 846.0,550.0 709.5,450.0 624.8,450.0" fill="#000000" opacity=".35"></polygon>
+<g stroke="#0A1322" stroke-width="1" stroke-linejoin="round">
+<polygon points="729.0,525.7 729.0,483.2 641.0,414.8 641.0,448.7" fill="#6B7F9C"></polygon>
+<polygon points="729.0,525.7 814.2,525.7 814.2,483.2 729.0,483.2" fill="#8798B2"></polygon>
+<polygon points="729.0,483.2 814.2,483.2 708.7,414.8 641.0,414.8" fill="#B5C2D5"></polygon>
+</g>
+<path d="M731.8 451 V462 A11.4 5.4 0 0 0 754.6 462 V451 Z" fill="#1B2533"></path>
+<ellipse cx="743.2" cy="451" rx="11.4" ry="5.4" fill="#2E3D52"></ellipse>
+<circle cx="354.8" cy="272.6" r="5" fill="none" stroke="#E6EBF2" stroke-width="1.5"></circle>
+<line x1="354.8" y1="262" x2="354.8" y2="283" stroke="#E6EBF2"></line><line x1="344" y1="272.6" x2="366" y2="272.6" stroke="#E6EBF2"></line>
+<g stroke="#E3EAF2" stroke-width="1" opacity=".22" stroke-linecap="round"><path d="M80 60 l-8 22 M190 110 l-8 22 M300 40 l-8 22 M420 90 l-8 22 M560 50 l-8 22 M680 120 l-8 22 M820 70 l-8 22 M900 160 l-8 22 M60 330 l-8 22 M240 420 l-8 22 M470 470 l-8 22 M880 430 l-8 22 M600 560 l-8 22 M150 520 l-8 22"></path></g>
+</svg>
+<div class="tip" style="left: 382px; top: 330px; display: flex; flex-direction: column; gap: 3px">
+<span class="mono xs t3">probe · x −0.50  y 6.20  z 1.00 m</span>
+<span class="row mono xs"><i class="dot" style="background: #B48CFF; width: 6px; height: 6px"></i>|B| 29.4 µT · 60 Hz</span>
+<span class="row mono xs"><i class="dot" style="background: #5CC8E6; width: 6px; height: 6px"></i>wind 6.3 m/s · 231°</span>
+<span class="row mono xs"><i class="dot" style="background: #7FA8FF; width: 6px; height: 6px"></i>σ_fog 0.075 /m</span>
+<span class="row mono xs"><i class="dot" style="background: #FF7A6B; width: 6px; height: 6px"></i>air 17.5 °C</span>
+</div>
+<div class="ov" style="left: 10px; top: 10px; display: flex; gap: 12px"><span class="t2">Fields · Lit</span><span class="mono t3">NanoVDB · 0.25 m voxels</span><span class="t3">rain shown</span></div>
+<div class="ov" style="right: 10px; bottom: 10px; width: 260px; display: flex; flex-direction: column; gap: 6px">
+<div class="row xs"><span class="b6 t1">|B| magnetic flux density</span><span class="sp"></span><span class="mono t3">µT</span></div>
+<div style="height: 12px; border-radius: 2px; background: linear-gradient(90deg, #440154, #3B528B, #21918C, #5EC962, #FDE725)"></div>
+<div class="row mono xs t3"><span>0</span><span class="sp"></span><span>30</span><span class="sp"></span><span>60+</span></div>
+<div class="row xs"><i style="width: 18px; height: 2px; background: #5CC8E6; display: inline-block"></i><span class="t2">wind at 1.5 m · arrow ∝ speed</span></div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="col" style="width: 300px">
+<div class="pn" style="flex: 1">
+<div class="ph"><span class="pt on">Overlays</span><span class="pt">Field info</span></div>
+<div class="pb np">
+<div class="ly sel"><span class="cb on"></span><i class="sw8" style="background: linear-gradient(90deg, #440154, #21918C, #FDE725)"></i><span>EMI |B| · slice</span><span class="mono xs t3">0–60 µT</span></div>
+<div class="ly"><span class="cb"></span><i class="sw8" style="background: linear-gradient(90deg, #440154, #21918C, #FDE725)"></i><span>EMI |E| · slice</span><span class="mono xs t3">V/m</span></div>
+<div class="ly"><span class="cb on"></span><i class="sw8" style="background: #5CC8E6"></i><span>wind vectors</span><span class="mono xs t3">m/s</span></div>
+<div class="ly"><span class="cb"></span><i class="sw8" style="background: #7FA8FF"></i><span>fog density · volume</span><span class="mono xs t3">1/m</span></div>
+<div class="ly"><span class="cb"></span><i class="sw8" style="background: #A58A2C"></i><span>dust · volume</span><span class="mono xs t3">mg/m³</span></div>
+<div class="ly"><span class="cb"></span><i class="sw8" style="background: linear-gradient(90deg, #000004, #932667, #FCFFA4)"></i><span>temperature · surfaces</span><span class="mono xs t3">°C</span></div>
+<div class="ly" style="opacity: .5"><span class="cb"></span><i class="sw8" style="background: #9BE15D"></i><span>dose rate</span><span class="mono xs t3">radiation off</span></div>
+<div class="ly"><span class="cb"></span><i class="sw8" style="background: #B48CFF"></i><span>Wi-Fi coverage</span><span class="mono xs t3">dBm</span></div>
+<div class="sh" style="margin-top: 8px"><span class="t3">▾</span>Selected layer</div>
+<div class="kv">
+<span class="k">source</span><div class="fld"><span class="lnk">power_line_01.vdb</span></div>
+<span class="k">grid</span><div class="fld">0.25<span class="u">m · sparse</span></div>
+<span class="k">bounds</span><div class="fld">40 × 24 × 6<span class="u">m</span></div>
+<span class="k">GPU memory</span><div class="fld">38<span class="u">MB NanoVDB</span></div>
+<span class="k">range</span><div class="f3" style="grid-template-columns: repeat(2, minmax(0, 1fr))"><div class="fld">0<span class="u">µT</span></div><div class="fld">60<span class="u">µT</span></div></div>
+<span class="k">opacity</span><div class="row"><div class="meter"><b style="width: 62%; background: #E8772E"></b></div><span class="mono xs">0.62</span></div>
+<span class="k">colormap</span><div class="fld dd">viridis</div>
+</div>
+<div class="sh"><span class="t3">▾</span>Coupled into</div>
+<div style="padding: 8px; display: flex; flex-direction: column; gap: 6px; font-size: 12px">
+<div class="row"><span class="t2" style="flex: 1">magnetometer</span><span class="mono warn">+6.2° heading</span></div>
+<div class="row"><span class="t2" style="flex: 1">CAN bus</span><span class="mono">0.4 err frames/s</span></div>
+<div class="row"><span class="t2" style="flex: 1">Wi-Fi link</span><span class="mono">SNR 21 dB · 0.8 % loss</span></div>
+</div>
+</div>
+</div>
+</div>
+
+</div>
+
+<div class="sb">
+<span class="it"><span class="dot" style="background: #3FB97F"></span>Connected</span>
+<span class="it"><span class="k">server</span>lagrange_mock_server 0.1.0 · localhost · shm</span>
+<span class="it"><span class="k">fields</span><span class="mono">3 VDB · 112 MB</span></span>
+<span class="it"><span class="k">dropped</span><span class="mono">0</span></span>
+<div class="sp"></div>
+<span class="it"><span class="k">GPU</span>RTX 4060 Laptop · Tier 2</span>
+<span class="it"><span class="k">viewer</span><span class="mono">13.8 ms · 72 fps</span></span>
+<span class="it"><span class="k">ROS 2</span>lyrical · domain 0 · fastrtps</span>
+</div>
+
+</div>
+</body>
+</html>

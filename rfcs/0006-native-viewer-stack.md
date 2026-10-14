@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft |
+| Status | Accepted (2026-10-13): SDL3, Dear ImGui docking branch |
 | Created | 2026-10-13 |
 | Affects | `viewer/`, `gpu/hal/`, `gpu/scene/`, `gpu/kernels/`, `vendor/imgui_vendor` |
 | Decides | Window library (SDL3 or GLFW), UI libraries, how the viewport shares the renderer with sensors |

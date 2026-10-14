@@ -1,0 +1,95 @@
+# Checks that apply to every pull request, before any code exists to build:
+# branch name, target branch, Conventional Commit title, and DCO sign-off.
+name: pr-checks
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: [dev, main]
+permissions: {}
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  conventions:
+    name: branch, target, title
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Branch name is conventional
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          types='feat|fix|docs|ci|chore|refactor|perf|test|build|revert'
+          if [[ "$HEAD_REF" =~ ^($types)/[a-z0-9][a-z0-9._-]*$ ]] ||
+             [[ "$HEAD_REF" =~ ^release/[0-9]+\.[0-9]+(\.[0-9x]+)?$ ]] ||
+             [[ "$HEAD_REF" =~ ^hotfix/[a-z0-9][a-z0-9._-]*$ ]] ||
+             [[ "$HEAD_REF" =~ ^renovate/ ]] ||
+             [[ "$HEAD_REF" =~ ^release-please-- ]] ||
+             [[ "$HEAD_REF" == "dev" ]]; then
+            echo "ok: $HEAD_REF"
+          else
+            echo "::error::branch '$HEAD_REF' is not <type>/<kebab-description> (types: ${types//|/, }), release/x.y or hotfix/<name>"
+            exit 1
+          fi
+
+      - name: Target branch is allowed
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [[ "$BASE_REF" == "main" ]]; then
+            if [[ "$HEAD_REF" == "dev" || "$HEAD_REF" =~ ^release/ || "$HEAD_REF" =~ ^hotfix/ ]]; then
+              echo "ok: release PR $HEAD_REF -> main"
+            else
+              echo "::error::main is release-only. Open this PR against dev."
+              exit 1
+            fi
+          elif [[ "$HEAD_REF" == "dev" ]]; then
+            echo "::error::dev can only be merged into main."
+            exit 1
+          else
+            echo "ok: $HEAD_REF -> $BASE_REF"
+          fi
+
+      - name: PR title is a Conventional Commit
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          types='feat|fix|docs|ci|chore|refactor|perf|test|build|revert'
+          scopes='core|gpu|viewer|proto|io|schemas|profiles|server|mock|python|docs|plan|design|rfcs|ci|packaging|deps|release|mod/[a-z_]+|bridge/[a-z0-9_]+'
+          re="^($types)(\(($scopes)\))?!?: [^A-Z ].*[^. ]$"
+          if [[ "$PR_TITLE" =~ $re ]] && (( ${#PR_TITLE} <= 100 )); then
+            echo "ok: $PR_TITLE"
+          else
+            echo "::error::PR title must be 'type(scope): subject' (lower-case subject, no trailing period, at most 100 characters). See CLAUDE.md section 9."
+            exit 1
+          fi
+
+  dco:
+    name: DCO sign-off
+    # A release pull request from dev carries the squash commits already checked in their own
+    # pull requests; GitHub authors those with the noreply address, not the sign-off address.
+    if: github.head_ref != 'dev'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Every commit is signed off by its author
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          fail=0
+          for c in $(git rev-list --no-merges "$BASE..$HEAD"); do
+            email="$(git show -s --format='%ae' "$c")"
+            if ! git show -s --format='%(trailers:key=Signed-off-by,valueonly)' "$c" | grep -Fq "<$email>"; then
+              echo "::error::commit $c is not signed off by its author <$email> (use 'git commit -s')"
+              fail=1
+            fi
+          done
+          exit "$fail"

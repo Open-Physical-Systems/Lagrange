@@ -1,0 +1,59 @@
+// Opaque mesh shading shared by the viewer's viewport and, later, the camera sensor
+// (invariant 13: the same code draws both).
+//
+// Matrices are passed as rows and applied with dot products, so the result does not depend
+// on the compiler's matrix layout convention.
+
+struct MeshPush
+{
+    float4 viewProjection[4]; // rows; view is camera-relative (no translation)
+    float4 model[3];          // rows of the 3x4 model matrix; translation is relative to the camera
+    float4 baseColor;
+};
+
+[[vk::push_constant]]
+ConstantBuffer<MeshPush> push;
+
+struct VertexInput
+{
+    float3 position : POSITION;
+    float3 normal : NORMAL;
+};
+
+struct VertexOutput
+{
+    float4 position : SV_Position;
+    float3 normal;
+};
+
+[shader("vertex")]
+VertexOutput vsMain(VertexInput input)
+{
+    float4 local = float4(input.position, 1.0);
+    float4 relative = float4(dot(push.model[0], local), dot(push.model[1], local), dot(push.model[2], local), 1.0);
+
+    VertexOutput output;
+    output.position = float4(dot(push.viewProjection[0], relative), dot(push.viewProjection[1], relative),
+                             dot(push.viewProjection[2], relative), dot(push.viewProjection[3], relative));
+    output.normal = float3(dot(push.model[0].xyz, input.normal), dot(push.model[1].xyz, input.normal),
+                           dot(push.model[2].xyz, input.normal));
+    return output;
+}
+
+[shader("fragment")]
+float4 fsMain(VertexOutput input) : SV_Target
+{
+    // One directional light plus a sky/ground ambient term. Deliberately simple: the viewport
+    // is for inspection, not for realistic images.
+    static const float3 lightDirection = normalize(float3(0.35, 0.25, 0.9));
+    static const float3 skyColor = float3(0.55, 0.60, 0.70);
+    static const float3 groundColor = float3(0.20, 0.19, 0.18);
+
+    float3 normal = normalize(input.normal);
+    float diffuse = max(dot(normal, lightDirection), 0.0);
+    float3 ambient = lerp(groundColor, skyColor, normal.z * 0.5 + 0.5);
+    float3 linearColor = push.baseColor.rgb * (ambient * 0.6 + diffuse * 0.8);
+
+    // The colour target is UNORM: encode for display here.
+    return float4(pow(saturate(linearColor), float3(1.0 / 2.2)), push.baseColor.a);
+}

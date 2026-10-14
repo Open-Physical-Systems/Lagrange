@@ -38,6 +38,7 @@ and licenses come from `docs/plan/verification.md` (checked 2026-10-13). A cell 
 | OpenVDB / NanoVDB | fields | apt `libopenvdb-dev`, `libnanovdb-dev` | 10.0.1 | Apache-2.0 (MPL-2.0 for older releases; TODO(verify) which applies to 10.0.1) | Medium | Three majors behind upstream 13.1.0 (R10). NanoVDB is header-only, so a newer copy can be vendored alone if needed |
 | FMI import library | `modules/electrical/fmu_host` | `fmilib_vendor` (Modelon FMI Library) | 3.0.4 | BSD-3-Clause-style | Medium | FMI 3.0 co-simulation coverage TODO(verify). Alternative: a thin in-house loader over the FMI 3.0 C headers (the headers are BSD-2-Clause; TODO(verify)) |
 | MCAP C++ | recording, replay, mock server | `ros-lyrical-mcap-vendor` | 0.33.3 | MIT | Low | Header-only library plus zstd/lz4 |
+| MCAP Python (`mcap`) | mock server | PyPI, through the rosdep key `python3-mcap-pip` in `packaging/rosdep/lagrange.yaml`; version pinned in `packaging/pip-constraints.txt` | 1.5.0 | MIT (repository license; PyPI metadata has no license field) | Low | Not packaged for Ubuntu. Pulls `lz4` and `zstandard` from PyPI. Only the mock server needs it, which becomes a test tool in v0.2 |
 | zstd, lz4 | MCAP, protocol compression | apt | 1.5.7, 1.10.0 | BSD / BSD-2-Clause (TODO(verify)) | Low | |
 | Protobuf | protocol, recordings | apt `libprotobuf-dev`, `protobuf-compiler` | 3.21.12 | BSD-3-Clause (TODO(verify)) | Low | Old: proto3 only, no editions. rosdep key `protobuf-dev` |
 | gRPC | control API (v0.2+) | apt `libgrpc++-dev` | 1.51.1 | Apache-2.0 (TODO(verify)) | Low | rosdep key TODO(verify) |
@@ -74,20 +75,20 @@ Separate processes and offline tools (not linked, not required to build):
 | Dependency | Used by | Obtained from | Version seen | License | Build risk | Notes |
 |---|---|---|---|---|---|---|
 | Vulkan headers and loader | `gpu/hal` | apt `libvulkan-dev` | 1.4.341.0 | Apache-2.0 / MIT (TODO(verify)) | Low | rosdep key `libvulkan-dev` |
-| volk | Vulkan function loading | apt `libvolk-dev` | 3.3.0 | MIT (TODO(verify)) | Low | |
+| volk (Vulkan loader helper) | not used | not packaged | — | — | — | Correction: Ubuntu's `libvolk-dev` is GNU Radio's "Vector-Optimized Library of Kernels", an unrelated library with the same name. The GPU layer links the standard Vulkan loader (`libvulkan`) directly |
 | Vulkan Memory Allocator | `gpu/hal` | apt `libvulkan-memory-allocator-dev` | 3.3.0 | MIT (TODO(verify)) | Low | Header-only |
 | Slang | shader and kernel compilation | apt `slang-compiler`, `libslang-compiler-dev`; fallback `slang_vendor` | 2026.1.1 (apt), v2026.19 (upstream) | Apache-2.0 WITH LLVM-exception | Medium | CUDA target in the Ubuntu build TODO(verify). Shaders are compiled at build time, so Slang is a build dependency, not a runtime one, unless runtime kernel specialisation is added |
 | SPIRV-Tools, validation layers | CI validation | apt | 2026.1, 1.4.341.0 | Apache-2.0 (TODO(verify)) | Low | Test-only |
 | Mesa lavapipe | software Vulkan for CI | apt `mesa-vulkan-drivers` | 26.0.8 | MIT (TODO(verify)) | Low | Test-only |
 | CUDA toolkit | optional fast paths, PhysX GPU, `cuda_buffer` | apt `nvidia-cuda-toolkit` (version TODO(verify)) | — | NVIDIA EULA (proprietary) | Medium | Optional. Debs built on the ROS buildfarm cannot depend on it by default; CUDA paths live in a separate optional package |
 | SDL3 | viewer window and input | apt `libsdl3-dev` | 3.4.2 | Zlib | Low | No rosdep key yet |
-| Dear ImGui (docking branch) | viewer UI | `imgui_vendor` | docking branch "1.93.0 WIP"; pin a commit | MIT | Low | apt package is the master branch without docking (V1) |
+| Dear ImGui (docking branch) | viewer UI | `imgui_vendor` | tag `v1.92.9b-docking`, pinned by commit and archive SHA-256 | MIT | Low | apt package is the master branch without docking (V1). The vendor package uses CMake `FetchContent` with a URL hash; `ament_cmake_vendor_package` is not needed for a library this small |
 | ImPlot | scopes | `imgui_vendor` | v1.0 | MIT | Low | |
 | imgui-node-editor | schematic | `imgui_vendor` | v0.9.3 + later commits | MIT | Medium | Compatibility with the pinned ImGui TODO(verify); behind an interface |
 | ImGuizmo | gizmo | `imgui_vendor` | 1.10 | MIT | Low | |
 | FreeType | font rasterisation | apt `libfreetype-dev` | 2.14.2 | FTL or GPL-2.0 (use under FTL) | Low | |
 | stb (image) | texture decode | apt `libstb-dev` | 2025-09 snapshot | MIT or public domain | Low | |
-| Fonts (Noto Sans, Noto Sans JP, a monospace face, an icon font) | viewer | bundled in `viewer/assets/fonts/` | TODO(verify) exact builds | SIL OFL 1.1 (TODO(verify) per file) | Low | Each font ships with its license file; subsetted Japanese font must stay under 1 MB per file or move to the assets bundle |
+| Fonts: IBM Plex Sans (400/500/600) and IBM Plex Mono (400/500); IBM Plex Sans JP and an icon font still to choose | viewer | TTFs in `viewer/assets/fonts/`, installed to `share/lagrange_viewer/fonts` | TODO(verify) upstream release of the bundled builds | SIL OFL 1.1 (`LICENSES/OFL-1.1.txt`); JP and icon fonts TODO(verify) | Low | Chosen by the UI design (`docs/design/ui/`). A subsetted Japanese font must stay under 1 MB per file or move to the assets bundle |
 | Dear ImGui Test Engine | UI tests | fetched in CI only | — | Dear ImGui Test Engine License v1.04 (not OSI) | Low | Never vendored, never shipped (Q12) |
 
 `imgui_vendor` builds one static library containing ImGui core, the SDL3 platform backend, the

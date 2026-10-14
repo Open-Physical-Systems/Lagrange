@@ -45,11 +45,12 @@ Colcon packages (each top-level directory is one or more `ament_cmake` packages)
 
 | Package | Directory | Depends on (project-internal) | First release |
 |---|---|---|---|
-| `lagrange_proto` | `proto/` | — | v0.1 |
-| `lagrange_core` | `core/` | — | v0.1 (units, signals, time only), v0.2 (all) |
-| `lagrange_gpu_hal` | `gpu/hal/`, `gpu/capability/` | `lagrange_core` | v0.1 |
-| `lagrange_gpu_kernels` | `gpu/kernels/` | `lagrange_gpu_hal` | v0.1 (viewer shaders), v0.2 (sensors) |
-| `lagrange_viewer` | `viewer/` | `lagrange_proto`, `lagrange_gpu_hal`, `lagrange_gpu_kernels` | v0.1 |
+| `lagrange_cmake` | `cmake/` | — | v0.1 |
+| `lagrange_proto` | `proto/` | `lagrange_cmake` (build only) | v0.1 |
+| `lagrange_core` | `core/` | `lagrange_cmake` (build only) | v0.1 (units, signals, time only), v0.2 (all) |
+| `lagrange_gpu` | `gpu/` (`hal/`, `kernels/`, `cmake/`) | `lagrange_cmake` (build only) | v0.1. One package for now; device layer, tier detection, Slang build support and the shared shader sources. Split when sensors need it |
+| `imgui_vendor` | `vendor/imgui_vendor/` | — | v0.1 |
+| `lagrange_viewer` | `viewer/` | `lagrange_proto`, `lagrange_gpu`, `imgui_vendor` | v0.1 |
 | `lagrange_mock_server` | `mock_server/` | `lagrange_proto` | v0.1 |
 | `lagrange_profiles` | `profiles/` | — | v0.1 |
 | `lagrange_schemas` | `schemas/` | `openusd_vendor` | v0.2 |
@@ -128,6 +129,7 @@ enum class QuantityKind : std::uint16_t {
     HeatFlow, AngularVelocity, AngularPosition, LinearVelocity, Position, Pressure,
     Density, ElectricField, MagneticFluxDensity, DoseRate, AbsorbedDose, Irradiance,
     Extinction, Probability, Ratio, Count,
+    LinearAcceleration,   // appended: numbers already used in recordings do not change
 };
 
 struct Unit {

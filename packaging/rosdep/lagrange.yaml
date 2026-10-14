@@ -1,0 +1,17 @@
+# rosdep keys that Lagrange needs and that are not in ros/rosdistro yet.
+# Register with:
+#   echo "yaml file://$(pwd)/packaging/rosdep/lagrange.yaml" | \
+#     sudo tee /etc/ros/rosdep/sources.list.d/10-lagrange.list && rosdep update
+python3-mcap-pip:
+  ubuntu:
+    pip:
+      packages: [mcap]
+# Packaged in Ubuntu 26.04 but without a rosdep key upstream.
+libsdl3-dev:
+  ubuntu: [libsdl3-dev]
+slang-compiler:
+  ubuntu: [slang-compiler]
+libvulkan-memory-allocator-dev:
+  ubuntu: [libvulkan-memory-allocator-dev]
+mesa-vulkan-drivers:
+  ubuntu: [mesa-vulkan-drivers]
