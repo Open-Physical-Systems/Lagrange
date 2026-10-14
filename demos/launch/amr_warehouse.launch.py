@@ -12,7 +12,7 @@ from pathlib import Path
 
 from ament_index_python.packages import get_package_share_path
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -126,11 +126,11 @@ def generate_launch_description() -> LaunchDescription:
                     LaunchConfiguration("rtf"),
                 ],
             ),
-            Node(
-                package="lagrange_viewer",
-                executable="lagrange_viewer",
+            # Not a ROS node: started as a plain process, so no --ros-args are appended.
+            ExecuteProcess(
+                cmd=["ros2", "run", "lagrange_viewer", "lagrange_viewer", "--connect", endpoint],
                 name="lagrange_viewer",
-                arguments=["--connect", endpoint],
+                output="screen",
                 condition=IfCondition(LaunchConfiguration("viewer")),
             ),
             Node(
