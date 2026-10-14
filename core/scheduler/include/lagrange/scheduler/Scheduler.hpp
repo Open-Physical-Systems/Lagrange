@@ -1,0 +1,145 @@
+#pragma once
+
+#include "lagrange/module/Expected.hpp"
+#include "lagrange/module/IModule.hpp"
+#include "lagrange/module/ModuleConfig.hpp"
+#include "lagrange/module/StateIO.hpp"
+#include "lagrange/module/Status.hpp"
+#include "lagrange/module/Substitutes.hpp"
+#include "lagrange/signals/SignalBus.hpp"
+#include "lagrange/time/SimTime.hpp"
+#include "lagrange/world/World.hpp"
+
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace lagrange {
+
+/// A reason the scheduler refuses to start (docs/design/architecture.md §6). wire() collects
+/// all of them rather than stopping at the first.
+struct WiringError {
+    enum class Kind : std::uint8_t {
+        UnitMismatch,         // writer and reader units differ (dimension, scale or kind)
+        TypeMismatch,         // type, array length, frame, or a hold the type cannot use
+        MissingWriter,        // a required input that no module writes
+        DuplicateWriter,      // two modules write the same signal
+        Cycle,                // a loop with no input marked feedback
+        ContractUnsatisfied,  // a module does not provide what its domain promises
+        IncommensurateSteps,  // step <= 0, base tick < 1 µs, or hyperperiod > 10 s
+        TierUnsupported,      // the module needs a higher capability tier than the run has
+        NotDeterministic,     // a non-deterministic module in a deterministic run
+        InvalidDeclaration,   // a malformed signal name or spec
+        ModuleFailed,         // declare() or init() returned an error
+    };
+    Kind kind;
+    std::string signal;  // "joint/left_wheel/torque", or "" when not about one signal
+    std::string detail;  // "writer electrical/x: N·m (Torque); reader rigid_body/y: N (Force)"
+};
+
+[[nodiscard]] std::string_view to_string(WiringError::Kind kind);
+/// One line for a startup error message: "UnitMismatch joint/a/torque: writer ...".
+[[nodiscard]] std::string to_string(const WiringError& error);
+
+/// One module in the run, in execution order.
+struct ScheduledModule {
+    const IModule* module{nullptr};
+    std::string label;  // "rigid_body/mujoco"
+    Duration dt;
+    std::uint32_t level{0};  // topological level: modules on one level do not read each other
+    std::uint32_t order{0};  // position in the total order of a tick
+    std::uint64_t seed{0};   // StepContext::seed
+};
+
+struct SchedulerOptions {
+    bool deterministic{false};  // refuse modules that are not deterministic
+    std::uint64_t runSeed{0};   // profile `seed`
+    /// Domain contracts to check at wiring; none are checked when null.
+    const SubstituteRegistry* contracts{nullptr};
+};
+
+/// The multirate co-simulation master (invariant 4, RFC 0001).
+///
+/// Each module steps at its own dt; the base tick is their greatest common divisor. Within a
+/// tick, due modules run in a fixed total order: topological over the signal graph (writers
+/// before readers, feedback inputs excluded), ties broken by (dt, domain, name). Execution is
+/// serial; the order is the same on every run, so results are deterministic when the modules
+/// are.
+class Scheduler {
+public:
+    explicit Scheduler(SchedulerOptions options = {});
+    ~Scheduler();
+    Scheduler(const Scheduler&) = delete;
+    Scheduler& operator=(const Scheduler&) = delete;
+    Scheduler(Scheduler&&) = delete;
+    Scheduler& operator=(Scheduler&&) = delete;
+
+    /// Adds a module or substitute before wire().
+    void add(std::unique_ptr<IModule> module, ModuleConfig config = {});
+
+    /// Declares, checks and initialises every module. On failure nothing is initialised and
+    /// every error found is returned.
+    [[nodiscard]] Expected<void, std::vector<WiringError>> wire(const WorldView& world);
+
+    [[nodiscard]] std::span<const ScheduledModule> plan() const { return plan_; }
+    [[nodiscard]] Duration baseTick() const { return baseTick_; }
+    [[nodiscard]] Duration hyperperiod() const { return hyperperiod_; }
+    /// The wiring as a Graphviz digraph: modules, and one edge per connected signal
+    /// (dashed for feedback inputs). Used by `lagrange graph`.
+    [[nodiscard]] std::string dumpGraphDot() const;
+
+    /// Advances by one base tick, stepping every module that is due.
+    Status stepTick();
+    /// Steps until now() >= t.
+    Status stepUntil(SimTime t);
+    [[nodiscard]] SimTime now() const { return now_; }
+    [[nodiscard]] std::uint64_t tick() const { return tick_; }
+
+    /// All modules' state, the bus and time. Fails if a module cannot save its state.
+    Status saveState(StateWriter& writer) const;
+    Status restoreState(StateReader& reader);
+    /// XXH3-64 of the saved state; equal hashes mean equal runs (determinism tests).
+    [[nodiscard]] Expected<std::uint64_t, Status> stateHash() const;
+
+    [[nodiscard]] SignalBus& bus() { return bus_; }
+    [[nodiscard]] const SignalBus& bus() const { return bus_; }
+
+    /// Calls shutdown() on every initialised module; also done by the destructor.
+    void shutdown();
+
+private:
+    struct Entry {
+        std::unique_ptr<IModule> module;
+        ModuleConfig config;
+        ModuleInfo info;
+        std::string label;
+        Duration dt;
+        std::vector<std::uint32_t> inputSlots;
+        std::vector<std::uint32_t> outputSignals;
+        std::uint64_t stepIndex{0};
+        std::uint64_t seed{0};
+        std::uint32_t level{0};
+        bool initialised{false};
+    };
+
+    void checkSteps(std::vector<WiringError>& errors);
+    void connect(std::vector<WiringError>& errors);
+    void checkContracts(const WorldView& world, std::vector<WiringError>& errors);
+    void order(std::vector<WiringError>& errors);
+
+    SchedulerOptions options_;
+    std::vector<Entry> entries_;        // in add() order; the bus refers to these indices
+    std::vector<std::uint32_t> order_;  // indices into entries_, in execution order
+    std::vector<ScheduledModule> plan_;
+    SignalBus bus_;
+    Duration baseTick_{};
+    Duration hyperperiod_{};
+    SimTime now_{};
+    std::uint64_t tick_{0};
+    bool wired_{false};
+};
+
+}  // namespace lagrange

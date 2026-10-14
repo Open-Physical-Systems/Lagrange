@@ -5,14 +5,33 @@ find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)
 
 # One library; each subdirectory is one part of the framework with its own include tree.
-set(LAGRANGE_CORE_PARTS time signals random world/coords)
+set(LAGRANGE_CORE_PARTS
+    time
+    signals
+    random
+    world
+    world/coords
+    module
+    scheduler
+)
 
 add_library(
     lagrange_core
     time/src/SimTime.cpp
     signals/src/Unit.cpp
+    signals/src/SignalBus.cpp
     random/src/Philox.cpp
+    world/src/World.cpp
     world/coords/src/Frames.cpp
+    module/src/Module.cpp
+    scheduler/src/Scheduler.cpp
+)
+# xxHash is used header-only (XXH_INLINE_ALL) for state and topology hashes.
+find_path(LAGRANGE_XXHASH_INCLUDE_DIR xxhash.h REQUIRED)
+target_include_directories(
+    lagrange_core
+    SYSTEM
+    PRIVATE ${LAGRANGE_XXHASH_INCLUDE_DIR}
 )
 add_library(lagrange::core ALIAS lagrange_core)
 lagrange_target_defaults(lagrange_core)
@@ -44,6 +63,7 @@ if(BUILD_TESTING)
             time/test/test_sim_time.cpp
             signals/test/test_unit.cpp
             random/test/test_philox.cpp
+            scheduler/test/test_scheduler.cpp
     )
         get_filename_component(name ${test} NAME_WE)
         ament_add_gtest(${name} ${test})

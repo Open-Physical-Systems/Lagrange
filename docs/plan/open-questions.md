@@ -24,6 +24,7 @@ Evidence references (V…) point to `docs/plan/verification.md`.
 | Q13 Node-free tooling | Accepted: commitizen and mdformat |
 | Q16 sim-vs-real data | Acknowledged; hardware and publication terms still to be named |
 | Commit attribution | Commits carry only the author's `Signed-off-by`; no tool co-author trailers |
+| RFC 0001 module interface | Accepted 2026-10-14 with the proposed answers to its open questions; in-tree `Expected` instead of `tl::expected` |
 
 ## Part 1 — Decisions needed
 

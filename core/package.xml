@@ -10,6 +10,8 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>lagrange_cmake</buildtool_depend>
 
+  <build_depend>libxxhash-dev</build_depend>
+
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>geographiclib</test_depend>
 
