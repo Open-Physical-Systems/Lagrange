@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft |
+| Status | Accepted (2026-10-15), with the resolutions below |
 | Created | 2026-10-13 |
 | Affects | `schemas/`, `core/stage/`, importers, every domain module, the viewer inspector |
 | Detail | `docs/design/formats.md` §2–§4, §10 |
@@ -101,7 +101,26 @@ collected and reported together with prim paths.
 | MJCF or SDF extensions as the source of truth | Neither has layering, references, payloads or a schema mechanism comparable to USD; both remain import formats |
 | `float` attributes as in the reference example | Precision and silent conversions; `double` costs nothing at authoring scale |
 
-## Unresolved questions
+## Resolutions on acceptance (2026-10-15)
+
+The owner accepted this RFC and asked for the work it gates to start. Each question below takes
+its proposed answer, or is deferred to the release that first needs it:
+
+1. `ElectricalBusAPI_1`, `ElectricalLoadAPI_1` and `ElectricalConverterAPI_1` are accepted. A bus
+   is a schema on a dedicated prim; nets are not inferred from port connections alone.
+2. The motor constant conventions are accepted as proposed (`torqueConstant` in N·m per peak
+   q-axis ampere, `backEmfConstant` in V·s/rad line-neutral peak per mechanical rad/s). They
+   still need a review by someone with drive-design experience, and the datasheet conversion
+   guide, before v0.3 uses them.
+3. Radiation schema split: deferred to the radiation domain's release.
+4. Codeless schemas: confirmed (Q7).
+5. Suffix `<Family>_<N>`: confirmed (F3), as verified in the OpenUSD spike.
+6. Other ecosystems' sensor schemas (Isaac Sim, SDFormat): importer mappings only, no aliases.
+7. MaterialX: deferred; v0.2 reads `UsdPreviewSurface` only.
+8. Calibration overrides are an ordinary USD sublayer; no schema change.
+9. `lagrange check <stage>`: yes, in v0.2, with the CLI (roadmap 0.2-E7).
+
+## Unresolved questions (as proposed)
 
 1. **Electrical bus, load and converter schemas** are additions. Are they accepted, and is
    `ElectricalBusAPI` a schema on a dedicated prim (proposed) or should nets be implicit from

@@ -64,8 +64,8 @@ as `v0.1.0` on 2026-10-14). Plan: `docs/plan/roadmap.md` §3, epics 0.2-A to 0.2
 - Core framework first (units, signal bus, wiring, multirate scheduler, substitutes), then USD
   stage loading, the MuJoCo backend, sensors, the ROS 2 bridge and ros2_control, then the Nav2
   demo.
-- Work that depends on a Draft RFC (0001 module interface, 0002 USD schemas, 0005 profile
-  format) waits until the owner accepts it.
+- RFC 0001 (module interface), 0002 (USD schemas) and 0005 (profile format) are accepted; work
+  that depends on a still-Draft RFC waits until the owner accepts it.
 - The Python mock server stays as a test tool once replay moves into the C++ server (Q15).
 - Update this section when the phase changes.
 
