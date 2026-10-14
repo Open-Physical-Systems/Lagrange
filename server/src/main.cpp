@@ -159,7 +159,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "lagrange_server: %s\n", status.message.c_str());
         return 1;
     }
-    while (!gStop) {
+    while (!gStop && !server.quitRequested()) {
         server.runOnce(5);
     }
     if (options.ros) {

@@ -8,6 +8,7 @@ find_package(rclcpp REQUIRED)
 find_package(rmw REQUIRED)
 find_package(rosgraph_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(simulation_interfaces REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(tf2_msgs REQUIRED)
@@ -29,6 +30,7 @@ target_link_libraries(
         rmw::rmw
         ${rosgraph_msgs_TARGETS}
         ${sensor_msgs_TARGETS}
+        ${simulation_interfaces_TARGETS}
         ${nav_msgs_TARGETS}
         ${geometry_msgs_TARGETS}
         ${tf2_msgs_TARGETS}
@@ -59,6 +61,7 @@ if(BUILD_TESTING)
         rclcpp::rclcpp
         ${rosgraph_msgs_TARGETS}
         ${sensor_msgs_TARGETS}
+        ${simulation_interfaces_TARGETS}
         ${nav_msgs_TARGETS}
         ${geometry_msgs_TARGETS}
     )
@@ -72,6 +75,7 @@ ament_export_dependencies(
     rmw
     rosgraph_msgs
     sensor_msgs
+    simulation_interfaces
     nav_msgs
     geometry_msgs
     tf2_msgs

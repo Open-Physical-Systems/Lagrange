@@ -146,7 +146,7 @@ reads recordings. See open question Q4 for how the mock server gets scene conten
 | `rclcpp`, `rclcpp_components` | ROS bridge | 32.0.3 | |
 | `rosgraph_msgs`, `sensor_msgs`, `nav_msgs`, `geometry_msgs`, `tf2_ros`, `visualization_msgs` | ROS bridge | Lyrical | |
 | `rosidl_buffer`, `cuda_buffer` | zero-copy sensor output | 5.2.1, 0.1.2 | `cuda_buffer` is optional (pulls NVIDIA libraries) |
-| `simulation_interfaces` | standard simulator services | in rosdistro; version TODO(verify) | |
+| `simulation_interfaces` | standard simulator services (`lagrange_ros2`) | 2.1.0 | Apache-2.0 |
 | `hardware_interface`, `controller_manager`, `pluginlib` | `lagrange_ros2_control` | ros2_control 6.10.1 | |
 | `rosbag2_storage_mcap`, `mcap_vendor` | recording interoperability | 0.33.3 | |
 | `rmw_fastrtps_cpp`, `rmw_zenoh_cpp` | tested RMWs | 9.4.10, 0.10.6 | |

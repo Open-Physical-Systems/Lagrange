@@ -4,10 +4,38 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <deque>
+#include <functional>
+#include <future>
 #include <map>
 #include <mutex>
+#include <regex>
 #include <set>
+#include <simulation_interfaces/msg/simulator_features.hpp>
+#include <simulation_interfaces/srv/delete_entity.hpp>
+#include <simulation_interfaces/srv/get_available_worlds.hpp>
+#include <simulation_interfaces/srv/get_current_world.hpp>
+#include <simulation_interfaces/srv/get_entities.hpp>
+#include <simulation_interfaces/srv/get_entities_states.hpp>
+#include <simulation_interfaces/srv/get_entity_bounds.hpp>
+#include <simulation_interfaces/srv/get_entity_info.hpp>
+#include <simulation_interfaces/srv/get_entity_state.hpp>
+#include <simulation_interfaces/srv/get_named_pose_bounds.hpp>
+#include <simulation_interfaces/srv/get_named_poses.hpp>
+#include <simulation_interfaces/srv/get_simulation_state.hpp>
+#include <simulation_interfaces/srv/get_simulator_features.hpp>
+#include <simulation_interfaces/srv/get_spawnables.hpp>
+#include <simulation_interfaces/srv/load_world.hpp>
+#include <simulation_interfaces/srv/reset_simulation.hpp>
+#include <simulation_interfaces/srv/set_entity_info.hpp>
+#include <simulation_interfaces/srv/set_entity_state.hpp>
+#include <simulation_interfaces/srv/set_simulation_state.hpp>
+#include <simulation_interfaces/srv/spawn_entities.hpp>
+#include <simulation_interfaces/srv/spawn_entity.hpp>
+#include <simulation_interfaces/srv/step_simulation.hpp>
+#include <simulation_interfaces/srv/unload_world.hpp>
 #include <thread>
+#include <variant>
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
@@ -105,6 +133,30 @@ struct Bridge::Impl {
     Clock::time_point commandAt;
 
     std::map<std::string, TopicCounter> counters;  // by topic, the bridge's own
+
+    // simulation_interfaces: requests queued by the service callbacks for handleRequests().
+    SimulationHandler* handler{nullptr};
+    std::vector<rclcpp::ServiceBase::SharedPtr> services;
+    std::mutex requestMutex;
+    std::deque<std::function<void()>> requests;
+
+    /// Runs `work` on the handleRequests() thread and returns its result, or nullopt if that
+    /// thread did not get to it in time. `work` owns everything it touches, so a late run is
+    /// harmless.
+    template <class Work>
+    auto onMain(Work work) -> std::optional<decltype(work())> {
+        using Result = decltype(work());
+        auto task = std::make_shared<std::packaged_task<Result()>>(std::move(work));
+        std::future<Result> result = task->get_future();
+        {
+            const std::lock_guard<std::mutex> lock(requestMutex);
+            requests.emplace_back([task] { (*task)(); });
+        }
+        if (result.wait_for(std::chrono::seconds(30)) != std::future_status::ready) {
+            return std::nullopt;
+        }
+        return result.get();
+    }
     Clock::time_point windowStart{Clock::now()};
 };
 
@@ -428,6 +480,307 @@ GraphSnapshot Bridge::graph() {
         out.domainId = static_cast<std::uint32_t>(std::strtoul(domain, nullptr, 10));
     }
     return out;
+}
+
+namespace {
+
+namespace si = simulation_interfaces;
+
+void setResult(si::msg::Result& out, const SimOutcome& outcome) {
+    out.result = static_cast<std::uint8_t>(outcome.result);
+    out.error_message = outcome.message;
+}
+
+void timedOut(si::msg::Result& out) {
+    out.result = si::msg::Result::RESULT_OPERATION_FAILED;
+    out.error_message = "the simulator did not answer within 30 s";
+}
+
+/// Entities that pass `filters`, or an outcome saying why the filters cannot be applied.
+std::variant<std::vector<EntityDescription>, SimOutcome> filtered(
+    std::vector<EntityDescription> all, const si::msg::EntityFilters& filters) {
+    if (!filters.tags.tags.empty()) {
+        return SimOutcome{SimResult::Unsupported, "entities have no tags in this simulator"};
+    }
+    if (filters.bounds.type != si::msg::Bounds::TYPE_EMPTY) {
+        return SimOutcome{SimResult::Unsupported, "filtering by bounds is not supported"};
+    }
+    std::optional<std::regex> pattern;
+    if (!filters.filter.empty()) {
+        try {
+            pattern.emplace(filters.filter, std::regex::extended);
+        } catch (const std::regex_error& e) {
+            return SimOutcome{SimResult::Failed,
+                              "invalid filter '" + filters.filter + "': " + e.what()};
+        }
+    }
+    std::vector<EntityDescription> out;
+    for (EntityDescription& entity : all) {
+        const bool nameOk = !pattern || std::regex_search(entity.name, *pattern);
+        const bool categoryOk =
+            filters.categories.empty() ||
+            std::any_of(filters.categories.begin(), filters.categories.end(),
+                        [&](const si::msg::EntityCategory& c) {
+                            return c.category == static_cast<std::uint8_t>(entity.category);
+                        });
+        if (nameOk && categoryOk) {
+            out.push_back(std::move(entity));
+        }
+    }
+    return out;
+}
+
+/// A service this simulator does not support yet: it answers RESULT_FEATURE_UNSUPPORTED rather
+/// than leaving callers waiting for a server that never appears.
+template <class Srv>
+rclcpp::ServiceBase::SharedPtr unsupported(rclcpp::Node& node, const std::string& name,
+                                           const std::string& why) {
+    return node.create_service<Srv>(name,
+                                    [why](const std::shared_ptr<typename Srv::Request>&,
+                                          const std::shared_ptr<typename Srv::Response>& response) {
+                                        setResult(response->result, {SimResult::Unsupported, why});
+                                    });
+}
+
+si::msg::EntityState stateMessage(const EntityMotion& motion, SimTime now) {
+    si::msg::EntityState state;
+    state.header.stamp = stampOf(now);
+    state.header.frame_id = "world";
+    state.pose.position.x = motion.pose.position[0];
+    state.pose.position.y = motion.pose.position[1];
+    state.pose.position.z = motion.pose.position[2];
+    state.pose.orientation.w = motion.pose.orientation[0];
+    state.pose.orientation.x = motion.pose.orientation[1];
+    state.pose.orientation.y = motion.pose.orientation[2];
+    state.pose.orientation.z = motion.pose.orientation[3];
+    state.twist.linear.x = motion.twist[0];
+    state.twist.linear.y = motion.twist[1];
+    state.twist.linear.z = motion.twist[2];
+    state.twist.angular.x = motion.twist[3];
+    state.twist.angular.y = motion.twist[4];
+    state.twist.angular.z = motion.twist[5];
+    state.acceleration.linear.x = motion.acceleration[0];
+    state.acceleration.linear.y = motion.acceleration[1];
+    state.acceleration.linear.z = motion.acceleration[2];
+    state.acceleration.angular.x = motion.acceleration[3];
+    state.acceleration.angular.y = motion.acceleration[4];
+    state.acceleration.angular.z = motion.acceleration[5];
+    return state;
+}
+
+}  // namespace
+
+void Bridge::serveSimulation(SimulationHandler& handler) {
+    Impl& s = *impl_;
+    s.handler = &handler;
+    SimulationHandler* h = &handler;
+    rclcpp::Node& node = *s.node;
+    using si::msg::SimulatorFeatures;
+
+    s.services.push_back(node.create_service<si::srv::GetSimulatorFeatures>(
+        "get_simulator_features",
+        [](const std::shared_ptr<si::srv::GetSimulatorFeatures::Request>&,
+           const std::shared_ptr<si::srv::GetSimulatorFeatures::Response>& response) {
+            response->features.features = {
+                SimulatorFeatures::ENTITY_CATEGORIES,
+                SimulatorFeatures::ENTITY_STATE_GETTING,
+                SimulatorFeatures::ENTITY_INFO_GETTING,
+                SimulatorFeatures::SIMULATION_RESET,
+                SimulatorFeatures::SIMULATION_STATE_GETTING,
+                SimulatorFeatures::SIMULATION_STATE_SETTING,
+                SimulatorFeatures::SIMULATION_STATE_PAUSE,
+                SimulatorFeatures::STEP_SIMULATION_SINGLE,
+                SimulatorFeatures::STEP_SIMULATION_MULTIPLE,
+            };
+            response->features.custom_info =
+                "Lagrange: entities are the robot and the fixed scenery objects; a step is one "
+                "base tick of the scheduler; reset restarts time and state together.";
+        }));
+
+    s.services.push_back(node.create_service<si::srv::GetSimulationState>(
+        "get_simulation_state",
+        [&s, h](const std::shared_ptr<si::srv::GetSimulationState::Request>&,
+                const std::shared_ptr<si::srv::GetSimulationState::Response>& response) {
+            const auto state = s.onMain([h] { return h->simulationState(); });
+            if (!state) {
+                timedOut(response->result);
+                return;
+            }
+            response->state.state = static_cast<std::uint8_t>(*state);
+            response->result.result = si::msg::Result::RESULT_OK;
+        }));
+
+    s.services.push_back(node.create_service<si::srv::SetSimulationState>(
+        "set_simulation_state",
+        [&s, h](const std::shared_ptr<si::srv::SetSimulationState::Request>& request,
+                const std::shared_ptr<si::srv::SetSimulationState::Response>& response) {
+            const std::uint8_t target = request->state.state;
+            if (target > static_cast<std::uint8_t>(SimState::Quitting)) {
+                setResult(response->result,
+                          {SimResult::Unsupported, "worlds cannot be loaded or unloaded"});
+                return;
+            }
+            const auto outcome = s.onMain(
+                [h, target] { return h->setSimulationState(static_cast<SimState>(target)); });
+            outcome ? setResult(response->result, *outcome) : timedOut(response->result);
+        }));
+
+    s.services.push_back(node.create_service<si::srv::StepSimulation>(
+        "step_simulation",
+        [&s, h](const std::shared_ptr<si::srv::StepSimulation::Request>& request,
+                const std::shared_ptr<si::srv::StepSimulation::Response>& response) {
+            const std::uint64_t steps = request->steps;
+            const auto outcome = s.onMain([h, steps] { return h->step(steps); });
+            outcome ? setResult(response->result, *outcome) : timedOut(response->result);
+        }));
+
+    s.services.push_back(node.create_service<si::srv::ResetSimulation>(
+        "reset_simulation",
+        [&s, h](const std::shared_ptr<si::srv::ResetSimulation::Request>& request,
+                const std::shared_ptr<si::srv::ResetSimulation::Response>& response) {
+            using Reset = si::srv::ResetSimulation::Request;
+            const std::uint8_t scope = request->scope;
+            const std::uint8_t timeAndState = Reset::SCOPE_TIME | Reset::SCOPE_STATE;
+            if (scope == Reset::SCOPE_SPAWNED) {
+                // Nothing can be spawned yet, so there is nothing to remove.
+                response->result.result = si::msg::Result::RESULT_OK;
+                return;
+            }
+            if (scope != Reset::SCOPE_DEFAULT && (scope & timeAndState) != timeAndState) {
+                setResult(response->result,
+                          {SimResult::Unsupported, "time and state can only be reset together"});
+                return;
+            }
+            const auto outcome = s.onMain([h] { return h->reset(); });
+            outcome ? setResult(response->result, *outcome) : timedOut(response->result);
+        }));
+
+    s.services.push_back(node.create_service<si::srv::GetEntities>(
+        "get_entities", [&s, h](const std::shared_ptr<si::srv::GetEntities::Request>& request,
+                                const std::shared_ptr<si::srv::GetEntities::Response>& response) {
+            const auto all = s.onMain([h] { return h->entities(); });
+            if (!all) {
+                timedOut(response->result);
+                return;
+            }
+            auto matched = filtered(*all, request->filters);
+            if (const auto* failed = std::get_if<SimOutcome>(&matched)) {
+                setResult(response->result, *failed);
+                return;
+            }
+            for (const EntityDescription& entity : std::get<0>(matched)) {
+                response->entities.push_back(entity.name);
+            }
+            response->result.result = si::msg::Result::RESULT_OK;
+        }));
+
+    s.services.push_back(node.create_service<si::srv::GetEntitiesStates>(
+        "get_entities_states",
+        [&s, h, this](const std::shared_ptr<si::srv::GetEntitiesStates::Request>& request,
+                      const std::shared_ptr<si::srv::GetEntitiesStates::Response>& response) {
+            si::msg::EntityFilters filters = request->filters;
+            using States = std::pair<std::vector<std::string>, std::vector<si::msg::EntityState>>;
+            const auto result = s.onMain([h, this, filters]() -> std::variant<States, SimOutcome> {
+                auto matched = filtered(h->entities(), filters);
+                if (auto* failed = std::get_if<SimOutcome>(&matched)) {
+                    return *failed;
+                }
+                States states;
+                for (const EntityDescription& entity : std::get<0>(matched)) {
+                    if (const auto motion = h->entityMotion(entity.name)) {
+                        states.first.push_back(entity.name);
+                        states.second.push_back(stateMessage(*motion, impl_->lastClock));
+                    }
+                }
+                return states;
+            });
+            if (!result) {
+                timedOut(response->result);
+            } else if (const auto* failed = std::get_if<SimOutcome>(&*result)) {
+                setResult(response->result, *failed);
+            } else {
+                const States& states = std::get<States>(*result);
+                response->entities = states.first;
+                response->states = states.second;
+                response->result.result = si::msg::Result::RESULT_OK;
+            }
+        }));
+
+    s.services.push_back(node.create_service<si::srv::GetEntityState>(
+        "get_entity_state",
+        [&s, h, this](const std::shared_ptr<si::srv::GetEntityState::Request>& request,
+                      const std::shared_ptr<si::srv::GetEntityState::Response>& response) {
+            const std::string name = request->entity;
+            const auto motion = s.onMain([h, this, name]() -> std::optional<si::msg::EntityState> {
+                if (const auto found = h->entityMotion(name)) {
+                    return stateMessage(*found, impl_->lastClock);
+                }
+                return std::nullopt;
+            });
+            if (!motion) {
+                timedOut(response->result);
+            } else if (!*motion) {
+                setResult(response->result,
+                          {SimResult::NotFound, "no entity named '" + name + "'"});
+            } else {
+                response->state = **motion;
+                response->result.result = si::msg::Result::RESULT_OK;
+            }
+        }));
+
+    s.services.push_back(node.create_service<si::srv::GetEntityInfo>(
+        "get_entity_info",
+        [&s, h](const std::shared_ptr<si::srv::GetEntityInfo::Request>& request,
+                const std::shared_ptr<si::srv::GetEntityInfo::Response>& response) {
+            const std::string name = request->entity;
+            const auto all = s.onMain([h] { return h->entities(); });
+            if (!all) {
+                timedOut(response->result);
+                return;
+            }
+            for (const EntityDescription& entity : *all) {
+                if (entity.name == name) {
+                    response->info.category.category = static_cast<std::uint8_t>(entity.category);
+                    response->info.description = entity.description;
+                    response->result.result = si::msg::Result::RESULT_OK;
+                    return;
+                }
+            }
+            setResult(response->result, {SimResult::NotFound, "no entity named '" + name + "'"});
+        }));
+    const std::string noSpawning = "spawning and deleting entities is not supported yet";
+    const std::string noWorlds = "this server runs the world it was started with";
+    const std::string noEditing = "entity state and info are read-only in this version";
+    s.services.push_back(unsupported<si::srv::SpawnEntity>(node, "spawn_entity", noSpawning));
+    s.services.push_back(unsupported<si::srv::SpawnEntities>(node, "spawn_entities", noSpawning));
+    s.services.push_back(unsupported<si::srv::DeleteEntity>(node, "delete_entity", noSpawning));
+    s.services.push_back(unsupported<si::srv::GetSpawnables>(node, "get_spawnables", noSpawning));
+    s.services.push_back(unsupported<si::srv::SetEntityState>(node, "set_entity_state", noEditing));
+    s.services.push_back(unsupported<si::srv::SetEntityInfo>(node, "set_entity_info", noEditing));
+    s.services.push_back(unsupported<si::srv::GetEntityBounds>(
+        node, "get_entity_bounds", "entity bounds are not reported yet"));
+    s.services.push_back(
+        unsupported<si::srv::GetNamedPoses>(node, "get_named_poses", "no named poses are defined"));
+    s.services.push_back(unsupported<si::srv::GetNamedPoseBounds>(node, "get_named_pose_bounds",
+                                                                  "no named poses are defined"));
+    s.services.push_back(unsupported<si::srv::LoadWorld>(node, "load_world", noWorlds));
+    s.services.push_back(unsupported<si::srv::UnloadWorld>(node, "unload_world", noWorlds));
+    s.services.push_back(
+        unsupported<si::srv::GetCurrentWorld>(node, "get_current_world", noWorlds));
+    s.services.push_back(
+        unsupported<si::srv::GetAvailableWorlds>(node, "get_available_worlds", noWorlds));
+}
+
+void Bridge::handleRequests() {
+    Impl& s = *impl_;
+    std::deque<std::function<void()>> pending;
+    {
+        const std::lock_guard<std::mutex> lock(s.requestMutex);
+        pending.swap(s.requests);
+    }
+    for (const std::function<void()>& request : pending) {
+        request();
+    }
 }
 
 }  // namespace lagrange::ros2

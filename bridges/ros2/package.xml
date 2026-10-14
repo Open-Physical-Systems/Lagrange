@@ -15,6 +15,7 @@
   <depend>rmw</depend>
   <depend>rosgraph_msgs</depend>
   <depend>sensor_msgs</depend>
+  <depend>simulation_interfaces</depend>
   <depend>nav_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>tf2_msgs</depend>

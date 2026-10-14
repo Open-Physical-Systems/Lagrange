@@ -46,9 +46,12 @@ public:
     [[nodiscard]] const proto::Endpoint& endpoint() const;
     [[nodiscard]] SimTime simTime() const;
     [[nodiscard]] bool running() const;
+    /// A client asked the simulator to quit (simulation_interfaces STATE_QUITTING).
+    [[nodiscard]] bool quitRequested() const;
+
+    struct Impl;
 
 private:
-    struct Impl;
     std::unique_ptr<Impl> impl_;
 };
 
