@@ -26,6 +26,19 @@ struct JointId {
 
 enum class JointType : std::uint8_t { Fixed, Revolute, Prismatic, Spherical, Free, Continuous };
 
+/// The world itself as a parent body: bodies whose parent is kWorldBody hang from the world.
+inline constexpr BodyId kWorldBody{0xFFFF'FFFFU};
+
+/// A rigid transform: position in metres, orientation as a unit quaternion (w, x, y, z).
+struct Pose {
+    std::array<double, 3> position{0.0, 0.0, 0.0};
+    std::array<double, 4> orientation{1.0, 0.0, 0.0, 0.0};
+};
+
+/// Collision shapes. Sizes follow MuJoCo's conventions: sphere {radius}, capsule and cylinder
+/// {radius, half length}, box {half extents}, plane {half extents x, y, grid spacing}.
+enum class ShapeType : std::uint8_t { Plane, Sphere, Capsule, Cylinder, Box };
+
 /// One applied API schema on one prim, with its attribute values read once at load.
 /// Lookups are by name, so they belong in declare() and init(), never in step().
 struct SchemaInstance {
@@ -63,6 +76,8 @@ struct World {
         std::vector<std::array<double, 6>> inertiaLocal;  // kg·m², (xx, yy, zz, xy, xz, yz)
         std::vector<PrimId> prim;
         std::vector<std::uint32_t> robot;  // index into robots
+        std::vector<BodyId> parent;        // kWorldBody for a root
+        std::vector<Pose> poseInParent;    // with every joint at zero
     } bodies;
 
     struct Joints {  // every vector has one entry per joint
@@ -75,7 +90,17 @@ struct World {
         std::vector<double> effortLimit;             // N·m or N
         std::vector<double> velocityLimit;           // rad/s or m/s
         std::vector<PrimId> prim;
+        std::vector<bool> actuated;  // a motor or controller drives it
     } joints;
+
+    /// Collision geometry: convex shapes only, never render meshes (CLAUDE.md §4).
+    struct Colliders {             // every vector has one entry per collider
+        std::vector<BodyId> body;  // kWorldBody for static geometry such as the ground
+        std::vector<ShapeType> shape;
+        std::vector<std::array<double, 3>> size;  // m, see ShapeType
+        std::vector<Pose> poseInBody;
+        std::vector<double> friction;  // Coulomb coefficient, sliding
+    } colliders;
 
     std::vector<std::string> robots;  // robot root prim names
     std::vector<SchemaInstance> schemaInstances;
@@ -84,6 +109,15 @@ struct World {
 
     /// Adds a prim and returns its id. `instanceName` is the name used in signal names.
     PrimId addPrim(std::string path, std::string instanceName);
+
+    /// Adds a body with its prim. Inertia is about the centre of mass, in the body frame.
+    BodyId addBody(std::string name, BodyId parentBody, const Pose& poseInParentBody, double massKg,
+                   const std::array<double, 3>& centreOfMass, const std::array<double, 6>& inertia);
+    /// Adds a joint that moves `childBody` relative to its parent; the axis is in the child frame.
+    JointId addJoint(std::string name, JointType jointType, BodyId childBody,
+                     const std::array<double, 3>& jointAxis, bool isActuated);
+    void addCollider(BodyId onBody, ShapeType shapeType, const std::array<double, 3>& shapeSize,
+                     const Pose& poseInOwner, double slidingFriction);
 };
 
 /// Read-only access to the world for modules (declare and init).
@@ -93,6 +127,7 @@ public:
 
     [[nodiscard]] const World::Bodies& bodies() const { return world_->bodies; }
     [[nodiscard]] const World::Joints& joints() const { return world_->joints; }
+    [[nodiscard]] const World::Colliders& colliders() const { return world_->colliders; }
     [[nodiscard]] std::size_t primCount() const { return world_->prims.paths.size(); }
     [[nodiscard]] std::string_view primPath(PrimId prim) const;
     [[nodiscard]] std::string_view signalInstanceName(PrimId prim) const;

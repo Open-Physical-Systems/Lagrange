@@ -60,7 +60,7 @@ TEST(ParseUnit, EverySchemaUnitString) {
         {"1/K", Unit{{.temperature = -1}}},
         {"rad/s", units::rad_per_s},
         {"kg/m3", units::kg_per_m3},
-        {"kg.m2", Unit{{.length = 2, .mass = 1}}},
+        {"kg.m2", units::kg_m2},
         {"W/m2", units::W_per_m2},
         {"W/K", Unit{{.length = 2, .mass = 1, .time = -3, .temperature = -1}}},
         {"W/(m2.K)", Unit{{.mass = 1, .time = -3, .temperature = -1}}},

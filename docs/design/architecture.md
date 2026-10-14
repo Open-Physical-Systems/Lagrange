@@ -131,6 +131,7 @@ enum class QuantityKind : std::uint16_t {
     Extinction, Probability, Ratio, Count,
     LinearAcceleration,   // appended: numbers already used in recordings do not change
     Frequency, Inductance, Capacitance, Area, Mass, Activity,  // appended in v0.2
+    AngularAcceleration, MomentOfInertia,                       // appended in v0.2
 };
 
 struct Unit {

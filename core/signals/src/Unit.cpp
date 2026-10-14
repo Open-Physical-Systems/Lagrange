@@ -10,7 +10,7 @@ namespace lagrange {
 
 namespace {
 
-constexpr std::array<std::string_view, 33> kKindNames{
+constexpr std::array<std::string_view, 35> kKindNames{
     "Unspecified",
     "Torque",
     "Energy",
@@ -44,6 +44,8 @@ constexpr std::array<std::string_view, 33> kKindNames{
     "Area",
     "Mass",
     "Activity",
+    "AngularAcceleration",
+    "MomentOfInertia",
 };
 
 /// A symbol the parser accepts, with its dimension.
@@ -89,21 +91,37 @@ struct Named {
     Unit unit;
 };
 
-constexpr std::array<Named, 29> kNamed{{
-    {"1", "1", units::one},         {"m", "m", units::m},
-    {"m2", "m²", units::m2},        {"kg", "kg", units::kg},
-    {"m/s", "m/s", units::m_per_s}, {"m/s2", "m/s²", units::m_per_s2},
-    {"rad", "rad", units::rad},     {"rad/s", "rad/s", units::rad_per_s},
-    {"Hz", "Hz", units::Hz},        {"N", "N", units::N},
-    {"N.m", "N·m", units::N_m},     {"J", "J", units::J},
-    {"W", "W", units::W},           {"V", "V", units::V},
-    {"A", "A", units::A},           {"C", "C", units::C},
-    {"ohm", "Ω", units::ohm},       {"H", "H", units::H},
-    {"F", "F", units::F},           {"K", "K", units::K},
-    {"Pa", "Pa", units::Pa},        {"kg/m3", "kg/m³", units::kg_per_m3},
-    {"V/m", "V/m", units::V_per_m}, {"T", "T", units::T},
-    {"Gy", "Gy", units::Gy},        {"Gy/s", "Gy/s", units::Gy_per_s},
-    {"Bq", "Bq", units::Bq},        {"W/m2", "W/m²", units::W_per_m2},
+constexpr std::array<Named, 31> kNamed{{
+    {"1", "1", units::one},
+    {"m", "m", units::m},
+    {"m2", "m²", units::m2},
+    {"kg", "kg", units::kg},
+    {"m/s", "m/s", units::m_per_s},
+    {"m/s2", "m/s²", units::m_per_s2},
+    {"rad", "rad", units::rad},
+    {"rad/s", "rad/s", units::rad_per_s},
+    {"rad/s2", "rad/s²", units::rad_per_s2},
+    {"kg.m2", "kg·m²", units::kg_m2},
+    {"Hz", "Hz", units::Hz},
+    {"N", "N", units::N},
+    {"N.m", "N·m", units::N_m},
+    {"J", "J", units::J},
+    {"W", "W", units::W},
+    {"V", "V", units::V},
+    {"A", "A", units::A},
+    {"C", "C", units::C},
+    {"ohm", "Ω", units::ohm},
+    {"H", "H", units::H},
+    {"F", "F", units::F},
+    {"K", "K", units::K},
+    {"Pa", "Pa", units::Pa},
+    {"kg/m3", "kg/m³", units::kg_per_m3},
+    {"V/m", "V/m", units::V_per_m},
+    {"T", "T", units::T},
+    {"Gy", "Gy", units::Gy},
+    {"Gy/s", "Gy/s", units::Gy_per_s},
+    {"Bq", "Bq", units::Bq},
+    {"W/m2", "W/m²", units::W_per_m2},
     {"1/m", "1/m", units::per_m},
 }};
 

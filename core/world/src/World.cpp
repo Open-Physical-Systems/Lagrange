@@ -55,6 +55,47 @@ PrimId World::addPrim(std::string path, std::string instanceName) {
     return PrimId{static_cast<std::uint32_t>(prims.paths.size() - 1)};
 }
 
+BodyId World::addBody(std::string name, BodyId parentBody, const Pose& poseInParentBody,
+                      double massKg, const std::array<double, 3>& centreOfMass,
+                      const std::array<double, 6>& inertia) {
+    const PrimId body = addPrim("/" + name, name);
+    bodies.names.push_back(std::move(name));
+    bodies.mass.push_back(massKg);
+    bodies.comLocal.push_back(centreOfMass);
+    bodies.inertiaLocal.push_back(inertia);
+    bodies.prim.push_back(body);
+    bodies.robot.push_back(0);
+    bodies.parent.push_back(parentBody);
+    bodies.poseInParent.push_back(poseInParentBody);
+    return BodyId{static_cast<std::uint32_t>(bodies.names.size() - 1)};
+}
+
+JointId World::addJoint(std::string name, JointType jointType, BodyId childBody,
+                        const std::array<double, 3>& jointAxis, bool isActuated) {
+    const PrimId joint = addPrim("/" + name, name);
+    joints.names.push_back(std::move(name));
+    joints.type.push_back(jointType);
+    joints.parent.push_back(bodies.parent.at(childBody.index));
+    joints.child.push_back(childBody);
+    joints.axis.push_back(jointAxis);
+    joints.lowerLimit.push_back(0.0);
+    joints.upperLimit.push_back(0.0);  // lower == upper: unlimited
+    joints.effortLimit.push_back(0.0);
+    joints.velocityLimit.push_back(0.0);
+    joints.prim.push_back(joint);
+    joints.actuated.push_back(isActuated);
+    return JointId{static_cast<std::uint32_t>(joints.names.size() - 1)};
+}
+
+void World::addCollider(BodyId onBody, ShapeType shapeType, const std::array<double, 3>& shapeSize,
+                        const Pose& poseInOwner, double slidingFriction) {
+    colliders.body.push_back(onBody);
+    colliders.shape.push_back(shapeType);
+    colliders.size.push_back(shapeSize);
+    colliders.poseInBody.push_back(poseInOwner);
+    colliders.friction.push_back(slidingFriction);
+}
+
 std::string_view WorldView::primPath(PrimId prim) const {
     return prim.index < world_->prims.paths.size()
                ? std::string_view(world_->prims.paths[prim.index])
