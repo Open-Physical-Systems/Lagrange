@@ -17,7 +17,9 @@ struct ServerOptions {
     double realTimeFactor{1.0};     // 0 = as fast as possible
     bool ros{false};                // run the ROS 2 bridge (rclcpp::init must have been called)
     bool startPaused{false};
-    bool stampedCmdVel{true};  // /cmd_vel as TwistStamped; false: Twist
+    std::string recordPath;                   // MCAP file to record the run to; empty: no recording
+    std::uint32_t recordMaxComponents{1024};  // larger signals (3D lidar ranges) are left out
+    bool stampedCmdVel{true};                 // /cmd_vel as TwistStamped; false: Twist
 };
 
 /// The simulation server (roadmap 0.2-E1, E2): it loads a robot, wires the MuJoCo backend and

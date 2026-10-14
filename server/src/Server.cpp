@@ -1,3 +1,4 @@
+#include "Recorder.hpp"
 #include "lagrange/proto/Connection.hpp"
 #include "lagrange/proto/Framing.hpp"
 #include "lagrange/rigid_body/MujocoBackend.hpp"
@@ -402,6 +403,7 @@ struct Server::Impl {
             }
             tickNs.push_back(nanosSince(tickStart, Clock::now()));
             capture();
+            record();
             if (bridge) {
                 bridge->publish(scheduler->bus(), scheduler->now());
             }
@@ -411,6 +413,148 @@ struct Server::Impl {
             }
         }
         return {};
+    }
+
+    // --- recording (roadmap 0.2-E4) ------------------------------------------------------
+
+    /// World poses of the moving prims, recorded as signals "scene<path>/pose" so that a replay
+    /// moves every prim (visuals and sensors sit at an offset from their body).
+    static constexpr std::int64_t kScenePoseNs = 20'000'000;  // 50 Hz, a viewer's frame rate
+    static constexpr std::int64_t kStateHashNs = 1'000'000'000;
+    std::unique_ptr<Recorder> recorder;
+    std::vector<SimTime> recordedStamp;            // per bus signal
+    std::vector<std::uint32_t> recordedId;         // per bus signal: id in the file, or kNoIndex
+    std::uint32_t recordedSignals{0};              // bus signals in the file
+    std::vector<std::uint32_t> recordedPosePrims;  // scene prims with a pose signal
+    std::uint64_t nextPoseIndex{0};
+    std::int64_t nextHashNs{0};
+
+    record::v1::RunMeta runMeta() const {
+        record::v1::RunMeta meta;
+        meta.set_format_version(1);
+        meta.set_profile_yaml(profileYaml());
+        meta.set_stage_path(robot.sourcePath);
+        meta.set_generator(kServerName);
+        meta.set_description("recorded by " + std::string(kServerName));
+        for (const std::uint32_t prim : recordedPosePrims) {
+            record::v1::PoseBinding& binding = *meta.add_pose_bindings();
+            binding.set_prim(prim);
+            binding.set_signal("scene" + robot.scene.prims[prim].path + "/pose");
+        }
+        return meta;
+    }
+
+    Status startRecording(const std::string& path) {
+        auto created = Recorder::create(path);
+        if (!created) {
+            return Status::error(StatusCode::InvalidConfig, created.error());
+        }
+        recorder = std::move(*created);
+        recordedPosePrims.clear();
+        for (std::uint32_t p = 0; p < robot.scene.prims.size(); ++p) {
+            const std::uint32_t body = robot.scene.prims[p].body;
+            if (body != kNoIndex && bodyPose[body].valid()) {
+                recordedPosePrims.push_back(p);
+            }
+        }
+        // The bus signals that fit, renumbered 0..n-1, then the prim poses.
+        const v1::Envelope full = catalog();
+        v1::SignalCatalog signals;
+        signals.set_generation(1);
+        recordedId.assign(scheduler->bus().signalCount(), kNoIndex);
+        std::vector<std::string> left;
+        for (const v1::SignalInfo& info : full.catalog().signals()) {
+            if (info.components() > options.recordMaxComponents) {
+                left.push_back(info.name());
+                continue;
+            }
+            recordedId[info.id()] = static_cast<std::uint32_t>(signals.signals_size());
+            v1::SignalInfo& kept = *signals.add_signals();
+            kept = info;
+            kept.set_id(recordedId[info.id()]);
+        }
+        recordedSignals = static_cast<std::uint32_t>(signals.signals_size());
+        SignalSpec pose;
+        pose.type = SignalType::Pose;
+        pose.unit = units::m;
+        for (std::size_t k = 0; k < recordedPosePrims.size(); ++k) {
+            const ScenePrim& prim = robot.scene.prims[recordedPosePrims[k]];
+            v1::SignalInfo& info = *signals.add_signals();
+            info.set_id(static_cast<std::uint32_t>(signals.signals_size() - 1));
+            info.set_name("scene" + prim.path + "/pose");
+            info.set_type(static_cast<v1::SignalType>(static_cast<int>(SignalType::Pose) + 1));
+            setUnit(*info.mutable_unit(), units::m);
+            info.set_components(7);
+            info.set_native_dt_ns(kScenePoseNs);
+            info.set_writer("recorder");
+            info.set_prim(recordedPosePrims[k]);
+            for (const std::string& name : componentNames(pose)) {
+                info.add_component_names(name);
+            }
+        }
+        recorder->begin(runMeta(), signals, snapshotAt(0).snapshot());
+        recordedStamp.assign(scheduler->bus().signalCount(), SimTime{-1});
+        nextPoseIndex = 0;
+        nextHashNs = 0;
+        record();  // the values at t = 0
+        log(v1::LOG_LEVEL_INFO, "recorder", "recording to " + path);
+        for (const std::string& name : left) {
+            log(v1::LOG_LEVEL_INFO, "recorder",
+                name + " is not recorded: larger than --record-max-components");
+        }
+        return {};
+    }
+
+    /// The samples written by the last tick, the prim poses that fall due, and a state hash a
+    /// second.
+    void record() {
+        if (!recorder) {
+            return;
+        }
+        const SignalBus& bus = scheduler->bus();
+        for (std::uint32_t s = 0; s < bus.signalCount(); ++s) {
+            const SignalId id = SignalId::output(s);
+            const SimTime stamp = bus.stamp(id);
+            if (recordedId[s] == kNoIndex || stamp == recordedStamp[s] || stamp.ns < 0) {
+                continue;
+            }
+            recordedStamp[s] = stamp;
+            const std::int64_t dt = std::max<std::int64_t>(scheduler->writerOf(id).dt.ns, 1);
+            recorder->add(recordedId[s], static_cast<std::uint64_t>(stamp.ns / dt), bus.readN(id));
+        }
+        const SimTime now = scheduler->now();
+        for (; static_cast<std::int64_t>(nextPoseIndex) * kScenePoseNs <= now.ns; ++nextPoseIndex) {
+            for (std::size_t k = 0; k < recordedPosePrims.size(); ++k) {
+                const Pose p = primPose(robot.scene.prims[recordedPosePrims[k]]);
+                const std::array<double, 7> values{
+                    p.position[0],    p.position[1],    p.position[2],   p.orientation[0],
+                    p.orientation[1], p.orientation[2], p.orientation[3]};
+                recorder->add(recordedSignals + static_cast<std::uint32_t>(k), nextPoseIndex,
+                              values);
+            }
+        }
+        if (now.ns >= nextHashNs) {
+            if (const auto hash = scheduler->stateHash()) {
+                recorder->stateHash(now, *hash);
+            }
+            nextHashNs += kStateHashNs;
+        }
+        recorder->flush(now);
+    }
+
+    void stopRecording(const std::string& why) {
+        if (!recorder) {
+            return;
+        }
+        const std::string path = recorder->path();
+        if (auto done = recorder->finish(scheduler->now(), runMeta()); !done) {
+            log(v1::LOG_LEVEL_ERROR, "recorder", done.error());
+        } else {
+            log(v1::LOG_LEVEL_INFO, "recorder",
+                "recorded " + path + " (" + why + ") · " +
+                    std::to_string(scheduler->now().ns / 1'000'000) + " ms");
+        }
+        recorder.reset();
     }
 
     void fail(const Status& status) {
@@ -436,9 +580,14 @@ struct Server::Impl {
     }
 
     v1::Envelope snapshot(Session& session) {
+        session.hasSnapshot = true;
+        return snapshotAt(++session.sequence);
+    }
+
+    v1::Envelope snapshotAt(std::uint64_t sequence) {
         v1::Envelope envelope;
         v1::SceneSnapshot& snap = *envelope.mutable_snapshot();
-        snap.set_sequence(++session.sequence);
+        snap.set_sequence(sequence);
         snap.mutable_sim_time()->set_ns(scheduler->now().ns);
         v1::LocalFrame& frame = *snap.mutable_frame();
         for (const double v : {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}) {
@@ -502,7 +651,6 @@ struct Server::Impl {
         }
         snap.set_topology_hash(WorldView(robot.world).topologyHash());
         snap.set_stage_path(robot.sourcePath);
-        session.hasSnapshot = true;
         return envelope;
     }
 
@@ -924,6 +1072,7 @@ struct Server::Impl {
                             break;
                         }
                         capture();
+                        record();
                     }
                     emit();
                 }
@@ -997,6 +1146,7 @@ struct Server::Impl {
 
     /// Rebuilds the run at t = 0, keeping play or pause.
     Status restart() {
+        stopRecording("the run was reset");
         const bool wasRunning = state == v1::RUN_STATE_RUNNING;
         if (Status status = build(); !status.ok()) {
             fail(status);
@@ -1026,6 +1176,7 @@ struct Server::Impl {
                 return status;
             }
             capture();
+            record();
             if (bridge) {
                 bridge->publish(scheduler->bus(), scheduler->now());
             }
@@ -1540,7 +1691,11 @@ Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
     impl_->state = impl_->options.startPaused ? v1::RUN_STATE_PAUSED : v1::RUN_STATE_RUNNING;
 }
 
-Server::~Server() = default;
+Server::~Server() {
+    if (impl_->scheduler) {
+        impl_->stopRecording("the server stopped");
+    }
+}
 
 Status Server::start() {
     Impl& s = *impl_;
@@ -1565,6 +1720,11 @@ Status Server::start() {
     }
     if (Status status = s.build(); !status.ok()) {
         return status;
+    }
+    if (!s.options.recordPath.empty()) {
+        if (Status status = s.startRecording(s.options.recordPath); !status.ok()) {
+            return status;
+        }
     }
     if (!s.options.profileSchemaPath.empty()) {
         s.schemaText = readFile(s.options.profileSchemaPath);
