@@ -31,6 +31,10 @@ Buffer createBuffer(const Device& device, VkDeviceSize size, VkBufferUsageFlags 
     return buffer;
 }
 
+void flush(const Device& device, const Buffer& buffer) {
+    vmaFlushAllocation(device.allocator(), buffer.allocation, 0, VK_WHOLE_SIZE);
+}
+
 Buffer createBufferWithData(const Device& device, std::span<const std::byte> data,
                             VkBufferUsageFlags usage) {
     Buffer staging = createBuffer(device, data.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
