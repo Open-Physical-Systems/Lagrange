@@ -54,3 +54,17 @@ repos:
     rev: v6.2.0
     hooks:
       - id: reuse
+  - repo: local
+    hooks:
+      - id: position-types
+        name: no float world or region positions (invariant 6)
+        entry: python3 tools/lint/check_position_types.py
+        language: system
+        types_or: [c++, c, proto]
+        exclude: ^tools/lint/fixtures/
+      - id: position-types-selftest
+        name: position-types lint self-test
+        entry: python3 -m unittest discover -s tools/lint
+        language: system
+        pass_filenames: false
+        files: ^tools/lint/

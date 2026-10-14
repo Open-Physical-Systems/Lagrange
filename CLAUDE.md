@@ -57,12 +57,16 @@ Consequences:
 
 ## 2. Current phase
 
-**v0.1 = native viewer + UI↔server protocol + mock/replay server.** No physics yet.
+**v0.2 = simulation core + AMR** (v0.1, the viewer, protocol and mock server, was released
+as `v0.1.0` on 2026-10-14). Plan: `docs/plan/roadmap.md` §3, epics 0.2-A to 0.2-H.
 
-- The viewer is a native Vulkan + Dear ImGui desktop application (§13). It is not a web app.
-- The viewer must be built against the real protocol, fed by the mock server. Never hard-code
-  fake data inside viewer panels.
-- The mock server becomes the product's replay mode later — write it as production code.
+- Build the real C++ server so the v0.1 viewer connects to it unchanged (protocol stays v1).
+- Core framework first (units, signal bus, wiring, multirate scheduler, substitutes), then USD
+  stage loading, the MuJoCo backend, sensors, the ROS 2 bridge and ros2_control, then the Nav2
+  demo.
+- Work that depends on a Draft RFC (0001 module interface, 0002 USD schemas, 0005 profile
+  format) waits until the owner accepts it.
+- The Python mock server stays as a test tool once replay moves into the C++ server (Q15).
 - Update this section when the phase changes.
 
 Roadmap: v0.1 UI/protocol/mock → v0.2 sim core + AMR (ROS 2, ros2_control, Nav2) →
@@ -157,6 +161,7 @@ lagrange/
 │   ├── scheduler/              # multirate co-sim master, dependency graph
 │   ├── signals/                # typed signal bus (torque, current, temp...)
 │   ├── time/                   # sim clock, lockstep, real-time factor
+│   ├── random/                 # counter-based RNG (Philox 4x32-10) for deterministic noise
 │   ├── world/                  # runtime world state (flat SoA arrays)
 │   │   ├── coords/             # double-precision world, floating origin, WGS84↔ENU
 │   │   ├── streaming/          # tile loading, LOD, USD payload management

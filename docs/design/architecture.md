@@ -107,7 +107,7 @@ kg·m²·s⁻². A dimension-only check would let a module wire energy into a to
 therefore also carries a `QuantityKind`.
 
 ```cpp
-// core/signals/Unit.hpp
+// core/signals/include/lagrange/signals/Unit.hpp (implemented; summary here)
 namespace lagrange {
 
 // Exponents of the seven SI base units plus angle. Angle is tracked so that rad/s and 1/s differ.
@@ -130,6 +130,7 @@ enum class QuantityKind : std::uint16_t {
     Density, ElectricField, MagneticFluxDensity, DoseRate, AbsorbedDose, Irradiance,
     Extinction, Probability, Ratio, Count,
     LinearAcceleration,   // appended: numbers already used in recordings do not change
+    Frequency, Inductance, Capacitance, Area, Mass, Activity,  // appended in v0.2
 };
 
 struct Unit {
