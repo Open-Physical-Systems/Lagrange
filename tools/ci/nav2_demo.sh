@@ -18,6 +18,7 @@ log="$dir/launch.log"
 setsid ros2 launch lagrange_demos amr_warehouse.launch.py viewer:=false \
     endpoint:="unix:$dir/demo.sock" >"$log" 2>&1 &
 launch=$!
+# shellcheck disable=SC2329  # called by the EXIT trap
 stop() {
     # SIGTERM, not SIGINT: a background job of a non-interactive shell ignores SIGINT.
     kill -TERM -- "-$launch" 2>/dev/null || return 0
