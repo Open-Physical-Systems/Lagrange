@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -35,6 +36,12 @@
 namespace lagrange::viewer {
 
 namespace {
+
+// The lidar bird's-eye view's two tones (design 06-sensors: the sensor colour, strong and
+// attenuated), and the intensity between them; the viewport overlay draws in the same.
+const ImVec4 kLidarStrong = theme::kDomainColor[static_cast<int>(theme::Domain::Sensors)];
+const ImVec4 kLidarAttenuated = theme::hex(0x2A8F76);
+constexpr float kLidarStrongIntensity = 0.12F;
 
 using Clock = std::chrono::steady_clock;
 
@@ -376,7 +383,100 @@ public:
 
     /// Records the scene pass. The UI pass (ImGui draw data) is recorded by the caller.
     void renderScene(VkCommandBuffer commands) {
-        renderer_.render(commands, scene_.get(), camera_, renderOptions_);
+        buildSensorOverlays();
+        renderer_.render(commands, scene_.get(), camera_, renderOptions_, sensorOverlays_);
+    }
+
+    /// Sensor frustums overlay: for each lidar of the scene, its coverage fan (spanning the
+    /// returns, at kFanRadiusM) and a small cross at every return of its latest scan, in the
+    /// two tones the lidar bird's-eye view uses. Points arrive in the sensor frame and are
+    /// placed with the sensor's current pose.
+    void buildSensorOverlays() {
+        constexpr float kCrossHalfM = 0.025F;  // half the size of a return's marker
+        constexpr float kFanRadiusM = 0.6F;
+        constexpr int kFanSegments = 24;
+        std::size_t used = 0;
+        const SceneFrame* frame = scene_.get();
+        if (!renderOptions_.sensors || frame == nullptr || !frame->statics) {
+            sensorOverlays_.clear();
+            return;
+        }
+        const SceneStatics& statics = *frame->statics;
+        if (statics.generation != lidarGeneration_) {
+            lidarGeneration_ = statics.generation;
+            lidars_.clear();
+            for (std::size_t i = 0; i < statics.prims.size(); ++i) {
+                if (statics.prims[i].typeName == "Lidar") {
+                    lidars_.push_back({static_cast<std::uint32_t>(i),
+                                       client_.watchSensor(statics.prims[i].path)});
+                }
+            }
+        }
+        const auto batch = [&](const std::array<double, 3>& origin, const ImVec4& color) {
+            if (used == sensorOverlays_.size()) {
+                sensorOverlays_.emplace_back();
+            }
+            OverlayLines& lines = sensorOverlays_[used++];
+            lines.origin = origin;
+            lines.color = {color.x, color.y, color.z, color.w};
+            lines.vertices.clear();  // keeps its capacity: no allocation once warmed up
+            return &lines.vertices;
+        };
+        for (const auto& [prim, stream] : lidars_) {
+            const std::shared_ptr<const PointCloud> cloud = stream->latest();
+            if (!cloud || cloud->count == 0 || prim >= frame->transforms.size()) {
+                continue;
+            }
+            const Transform& pose = frame->transforms[prim];
+            const std::array<float, 4>& q = pose.rotation;
+            const auto rotate = [&q](float x, float y, float z) {
+                // v' = v + 2w (u x v) + 2 u x (u x v), u = (q.x, q.y, q.z)
+                const float tx = 2.0F * (q[2] * z - q[3] * y);
+                const float ty = 2.0F * (q[3] * x - q[1] * z);
+                const float tz = 2.0F * (q[1] * y - q[2] * x);
+                return std::array<float, 3>{x + q[0] * tx + (q[2] * tz - q[3] * ty),
+                                            y + q[0] * ty + (q[3] * tx - q[1] * tz),
+                                            z + q[0] * tz + (q[1] * ty - q[2] * tx)};
+            };
+            std::vector<float>& strong = *batch(pose.position, kLidarStrong);
+            std::vector<float>& weak = *batch(pose.position, kLidarAttenuated);
+            float lowest = 1e9F;
+            float highest = -1e9F;
+            for (std::uint32_t i = 0; i < cloud->count; ++i) {
+                const float* p = &cloud->points[static_cast<std::size_t>(i) * 4];
+                const float angle = std::atan2(p[1], p[0]);
+                lowest = std::min(lowest, angle);
+                highest = std::max(highest, angle);
+                const std::array<float, 3> at = rotate(p[0], p[1], p[2]);
+                std::vector<float>& out = p[3] >= kLidarStrongIntensity ? strong : weak;
+                for (int axis = 0; axis < 3; ++axis) {
+                    std::array<float, 3> a = at;
+                    std::array<float, 3> b = at;
+                    a.at(axis) -= kCrossHalfM;
+                    b.at(axis) += kCrossHalfM;
+                    out.insert(out.end(), {a[0], a[1], a[2], b[0], b[1], b[2]});
+                }
+            }
+            std::vector<float>& fan = weak;
+            const auto edge = [&](float angle) {
+                const std::array<float, 3> end =
+                    rotate(kFanRadiusM * std::cos(angle), kFanRadiusM * std::sin(angle), 0.0F);
+                fan.insert(fan.end(), {0.0F, 0.0F, 0.0F, end[0], end[1], end[2]});
+            };
+            edge(lowest);
+            edge(highest);
+            for (int k = 0; k < kFanSegments; ++k) {
+                const float a0 = lowest + (highest - lowest) * static_cast<float>(k) / kFanSegments;
+                const float a1 =
+                    lowest + (highest - lowest) * static_cast<float>(k + 1) / kFanSegments;
+                const std::array<float, 3> p0 =
+                    rotate(kFanRadiusM * std::cos(a0), kFanRadiusM * std::sin(a0), 0.0F);
+                const std::array<float, 3> p1 =
+                    rotate(kFanRadiusM * std::cos(a1), kFanRadiusM * std::sin(a1), 0.0F);
+                fan.insert(fan.end(), {p0[0], p0[1], p0[2], p1[0], p1[1], p1[2]});
+            }
+        }
+        sensorOverlays_.resize(used);
     }
 
     [[nodiscard]] const std::shared_ptr<const SceneFrame>& scene() const { return scene_; }
@@ -488,6 +588,9 @@ private:
     ProfileSession profileSession_;
     ScopeSession scopeSession_;
     RenderOptions renderOptions_;
+    std::uint64_t lidarGeneration_{0};  // statics generation lidars_ was built from
+    std::vector<std::pair<std::uint32_t, std::shared_ptr<SensorStream>>> lidars_;  // prim, frames
+    std::vector<OverlayLines> sensorOverlays_;
     std::vector<std::int64_t> bookmarks_;
     LauncherState launcher_;
     LocalServer localServer_;
