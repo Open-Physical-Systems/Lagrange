@@ -248,7 +248,7 @@ verification, not in this repo.
 - C++ tests: `colcon test && colcon test-result --verbose` (TBD)
 - Python: `ruff check . && ruff format --check . && mypy python/ && pytest` (TBD)
 - Simulator: `ros2 run lagrange_server lagrange_server [--robot FILE.urdf] [--world FILE.urdf|none] [--listen ENDPOINT] [--rtf X] [--paused] [--no-ros] [--cmd-vel-unstamped] [--export-map FILE.yaml]` (MuJoCo physics, IMU and lidar on the scheduler, ROS 2 bridge publishing /clock /tf /odom /joint_states /scan /points /imu and taking /cmd_vel as TwistStamped, plus the `simulation_interfaces` services: get/set_simulation_state, step_simulation, reset_simulation, get_entities, get_entity_state, ...; default: the sample AMR in the sample warehouse on the default socket; `--export-map` writes a Nav2 occupancy map of the fixed scenery and exits)
-- Nav2 demo: `ros2 launch lagrange_demos amr_warehouse.launch.py [viewer:=false]`, then `ros2 run lagrange_demos patrol [--minutes N]`
+- Nav2 demo: `ros2 launch lagrange_demos amr_warehouse.launch.py [viewer:=false]`, then `ros2 run lagrange_demos patrol [--minutes N]` (fails on a missed waypoint or a collision; nightly CI runs 10 minutes via `tools/ci/nav2_demo.sh 10`)
 - Viewer: built by colcon with everything else; run `ros2 run lagrange_viewer lagrange_viewer` (starts on the launcher, whose Start local simulator runs `lagrange_server`; `--connect <endpoint>` goes straight to a server)
 - Viewer headless test: `colcon test --packages-select lagrange_viewer` (runs on the software Vulkan device, llvmpipe; `LAGRANGE_TEST_GPU=<name>` picks another)
 - GPU and tier of this machine: `ros2 run lagrange_gpu lagrange_gpu_info`
