@@ -166,5 +166,6 @@ jobs:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
           source install/setup.bash
+          export LSAN_OPTIONS="suppressions=$GITHUB_WORKSPACE/src/lagrange/tools/ci/lsan.supp"
           colcon test --packages-skip openusd_vendor --event-handlers console_direct+
           colcon test-result --verbose
