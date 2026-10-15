@@ -29,6 +29,7 @@ protected:
         options.endpoint = proto::Endpoint::unixSocket(directory_ + "/s.sock");
         options.robotPath = LAGRANGE_TEST_AMR_URDF;
         options.worldPath = LAGRANGE_TEST_WAREHOUSE_URDF;
+        options.profileSchemaPath = LAGRANGE_TEST_SCHEMA;
         options.startPaused = true;
         server_ = std::make_unique<Server>(options);
         const Status started = server_->start();
@@ -155,6 +156,67 @@ TEST_F(ServerTest, SnapshotStepAndDeltas) {
     EXPECT_EQ(delta.transform_data().size(),
               static_cast<std::size_t>(delta.transform_prims_size()) * 40U);
     EXPECT_EQ(server_->simTime(), SimTime{10'000'000});
+}
+
+// Roadmap 0.2-E5: a profile from the viewer is checked, previewed and applied; the run
+// restarts with the domain switched to its substitute.
+TEST_F(ServerTest, AppliesAProfileThatSwitchesADomainOff) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_profile_state(); }));
+    std::string yaml = received_.back().profile_state().yaml();
+    const std::string on = "rigid_body: {enabled: true, backend: mujoco, dt: 0.001}";
+    ASSERT_NE(yaml.find(on), std::string::npos) << yaml;
+    yaml.replace(yaml.find(on), on.size(), "rigid_body: {enabled: false, substitute: fixed}");
+
+    // Validate first: valid, and the preview wiring has the fixed robot.
+    v1::Envelope check = command(1);
+    check.mutable_command()->mutable_validate_profile()->set_yaml(yaml);
+    send(check);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) {
+        return e.has_command_result() && e.command_result().request_id() == 1;
+    }));
+    const v1::ProfileValidation& validation = received_.back().command_result().validation();
+    EXPECT_TRUE(validation.valid());
+    bool fixed = false;
+    for (const v1::Wiring::Node& node : validation.wiring().nodes()) {
+        fixed = fixed || (node.domain() == "rigid_body" && node.detail() == "fixed");
+    }
+    EXPECT_TRUE(fixed) << "the preview wires the substitute";
+
+    // Apply with a restart: the profile state now has rigid_body substituted.
+    v1::Envelope apply = command(2);
+    apply.mutable_command()->mutable_apply_profile()->set_yaml(yaml);
+    apply.mutable_command()->mutable_apply_profile()->set_restart(true);
+    send(apply);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) {
+        return e.has_command_result() && e.command_result().request_id() == 2;
+    }));
+    EXPECT_TRUE(received_.back().command_result().ok())
+        << received_.back().command_result().error();
+    // The new profile state goes out before the command's result.
+    const v1::ProfileState* state = nullptr;
+    for (const v1::Envelope& e : received_) {
+        if (e.has_profile_state()) {
+            state = &e.profile_state();
+        }
+    }
+    ASSERT_NE(state, nullptr);
+    const v1::DomainState& rigid = state->domains(0);
+    EXPECT_EQ(rigid.domain(), "rigid_body");
+    EXPECT_EQ(rigid.active_module(), "fixed");
+    EXPECT_TRUE(rigid.substituted());
+
+    // An invalid profile is refused and changes nothing.
+    v1::Envelope bad = command(3);
+    bad.mutable_command()->mutable_apply_profile()->set_yaml(
+        "schema_version: 1\nstage: x\ndomains: {}\n");
+    bad.mutable_command()->mutable_apply_profile()->set_restart(true);
+    send(bad);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) {
+        return e.has_command_result() && e.command_result().request_id() == 3;
+    }));
+    EXPECT_FALSE(received_.back().command_result().ok());
+    EXPECT_NE(received_.back().command_result().error().find("profile not applied"),
+              std::string::npos);
 }
 
 TEST_F(ServerTest, SubscribedSignalsArriveAsGapFreeRuns) {

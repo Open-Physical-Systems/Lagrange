@@ -43,8 +43,8 @@ and licenses come from `docs/plan/verification.md` (checked 2026-10-13). A cell 
 | Protobuf | protocol, recordings | apt `libprotobuf-dev`, `protobuf-compiler` | 3.21.12 | BSD-3-Clause (TODO(verify)) | Low | Old: proto3 only, no editions. rosdep key `protobuf-dev` |
 | gRPC | control API (v0.2+) | apt `libgrpc++-dev` | 1.51.1 | Apache-2.0 (TODO(verify)) | Low | rosdep key TODO(verify) |
 | Zenoh (zenoh-c, zenoh-cpp) | optional transport, bridge | apt `libzenohc-dev`, `libzenohcpp-dev` | 1.8.0 | Apache-2.0 OR EPL-2.0 | Low | `ros-lyrical-zenoh-cpp-vendor` 0.10.6 also exists; avoid loading two copies in one process (TODO(verify) symbol conflicts) |
-| yaml-cpp | profiles | apt | 0.8.0 | MIT (TODO(verify)) | Low | |
-| JSON Schema validator (C++) | profile validation in server and viewer | `TODO(verify)`: candidate libraries to evaluate; none found in apt in this pass | — | — | Medium | The mock server uses `python3-jsonschema` 4.19.2 (apt). For C++ the options are a small vendored validator or validating in-process through generated code |
+| yaml-cpp | profiles (`lagrange_server`) | apt `libyaml-cpp-dev`, rosdep `yaml-cpp` | 0.8.0 | X11, an MIT-style licence (Ubuntu copyright file; only Debian's packaging files are GPL-2.0+) | Low | |
+| jsoncons (JSON Schema validator, C++) | profile validation in `lagrange_server` (RFC 0005 resolution 7) | apt `libjsoncons-dev`, rosdep key `libjsoncons-dev` in `packaging/rosdep/lagrange.yaml` | 1.5.0 | BSL-1.0 (Ubuntu copyright file) | Low | Header-only; supports JSON Schema 2020-12 including `unevaluatedProperties`, which `profiles/schema.json` uses. valijson was rejected: no 2020-12 support, so unknown keys would pass. The mock server keeps `python3-jsonschema` |
 | nlohmann-json | JSON handling | apt `nlohmann-json3-dev` | 3.11.3-based | MIT (TODO(verify)) | Low | |
 | Eigen | maths | apt `libeigen3-dev` | 3.4.0 | MPL-2.0 | Low | Header-only |
 | fmt, spdlog | logging | apt | 10.1.1, 1.15.3 | MIT | Low | |

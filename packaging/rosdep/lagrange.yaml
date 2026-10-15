@@ -7,6 +7,8 @@ python3-mcap-pip:
     pip:
       packages: [mcap]
 # Packaged in Ubuntu 26.04 but without a rosdep key upstream.
+libjsoncons-dev:
+  ubuntu: [libjsoncons-dev]
 libsdl3-dev:
   ubuntu: [libsdl3-dev]
 slang-compiler:

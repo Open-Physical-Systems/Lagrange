@@ -1,3 +1,4 @@
+#include "Profile.hpp"
 #include "Recorder.hpp"
 #include "lagrange/proto/Connection.hpp"
 #include "lagrange/proto/Framing.hpp"
@@ -225,13 +226,23 @@ struct Server::Impl {
 
     // --- simulation ----------------------------------------------------------------------
 
-    Status build() {
+    /// The modules for `settings`, wired: the run itself (build) or a profile's preview.
+    Expected<std::unique_ptr<Scheduler>, std::string> makeScheduler(const ProfileSettings& settings,
+                                                                    DriveCommand** driveOut) {
+        const auto off = [&settings](const char* domain) {
+            return settings.substituted.contains(domain);
+        };
         // A run that takes commands from ROS is not deterministic: its input comes from outside.
         auto next = std::make_unique<Scheduler>(SchedulerOptions{.deterministic = !bridge});
-        if (substituted("rigid_body")) {
+        if (off("rigid_body")) {
             next->add(std::make_unique<rigid_body::FixedRobot>());
         } else {
-            next->add(std::make_unique<rigid_body::MujocoBackend>());
+            ModuleConfigData physics;
+            physics.backend = "mujoco";
+            if (settings.rigidBodyDtNs) {
+                physics.dt = Duration{*settings.rigidBodyDtNs};
+            }
+            next->add(std::make_unique<rigid_body::MujocoBackend>(), ModuleConfig(physics));
         }
         if (robot.actuatedJoints.size() == 2) {
             std::function<std::optional<VelocityCommand>()> external;
@@ -244,13 +255,15 @@ struct Server::Impl {
                     return VelocityCommand{command->linearMps, command->angularRadps};
                 };
             }
-            auto command = std::make_unique<DriveCommand>(DriveCommand::Settings{}, external);
-            driveCommand = command.get();
-            next->add(std::move(command));
+            auto drive = std::make_unique<DriveCommand>(DriveCommand::Settings{}, external);
+            if (driveOut != nullptr) {
+                *driveOut = drive.get();
+            }
+            next->add(std::move(drive));
             next->add(std::make_unique<DiffDriveController>(driveSettings()));
         }
-        for (auto& sensor : substituted("sensors") ? sensors::createSensorSubstitutes(robot.world)
-                                                   : sensors::createSensorModules(robot.world)) {
+        for (auto& sensor : off("sensors") ? sensors::createSensorSubstitutes(robot.world)
+                                           : sensors::createSensorModules(robot.world)) {
             next->add(std::move(sensor));
         }
         auto wired = next->wire(WorldView(robot.world));
@@ -259,9 +272,27 @@ struct Server::Impl {
             for (const WiringError& e : wired.error()) {
                 message += "\n  " + to_string(e);
             }
-            return Status::error(StatusCode::InvalidConfig, message);
+            return Unexpected{message};
         }
-        scheduler = std::move(next);
+        return next;
+    }
+
+    /// The settings of the profile the run uses (the command line's, or the last applied).
+    ProfileSettings active() const {
+        ProfileSettings settings;
+        settings.substituted = options.substituted;
+        settings.rigidBodyDtNs = rigidBodyDtNs;
+        return settings;
+    }
+    std::optional<std::int64_t> rigidBodyDtNs;  // from an applied profile
+    std::optional<ProfileSettings> pending;     // applied without restart: used at the next reset
+
+    Status build() {
+        auto made = makeScheduler(active(), &driveCommand);
+        if (!made) {
+            return Status::error(StatusCode::InvalidConfig, made.error());
+        }
+        scheduler = std::move(*made);
         bodyPose.assign(robot.world.bodies.names.size(), SignalId{});
         for (std::size_t b = 0; b < bodyPose.size(); ++b) {
             bodyPose[b] = scheduler->bus().find("body/" + robot.world.bodies.names[b] + "/pose");
@@ -893,7 +924,11 @@ struct Server::Impl {
             "\n\ndomains:\n";
         for (const DomainRow& row : kDomains) {
             if (std::string_view(row.domain) == "rigid_body" && !substituted("rigid_body")) {
-                yaml += "  rigid_body: {enabled: true, backend: mujoco, dt: 0.001}\n";
+                char dt[48];
+                std::snprintf(dt, sizeof(dt), "%.9g",
+                              static_cast<double>(rigidBodyDtNs.value_or(1'000'000)) / 1e9);
+                yaml +=
+                    "  rigid_body: {enabled: true, backend: mujoco, dt: " + std::string(dt) + "}\n";
             } else if (std::string_view(row.domain) == "sensors" && hasSensors() &&
                        !substituted("sensors")) {
                 yaml += "  sensors: {enabled: true}\n";
@@ -918,6 +953,7 @@ struct Server::Impl {
         p.set_yaml(profileYaml());
         p.set_schema_version(1);
         p.set_json_schema(schemaText);
+        p.set_restart_required(pending.has_value());  // applied, waiting for the next reset
         // Measured cost per simulated second, summed over each domain's modules.
         std::map<std::string, double> cost;
         for (const ModuleCost& c : costs) {
@@ -1092,7 +1128,7 @@ struct Server::Impl {
                 break;
             }
             case v1::Command::kReset: {
-                if (Status status = restart(); !status.ok()) {
+                if (Status status = pending ? adopt(*pending) : restart(); !status.ok()) {
                     r.set_ok(false);
                     r.set_error(status.message);
                 }
@@ -1134,12 +1170,23 @@ struct Server::Impl {
             case v1::Command::kValidateProfile:
                 validate(command.validate_profile().yaml(), *r.mutable_validation());
                 break;
-            case v1::Command::kApplyProfile:
-                r.set_ok(false);
-                r.set_error(
-                    "lagrange_server v0.2 runs the profile it started with; edit and apply "
-                    "profiles with the mock server for now");
+            case v1::Command::kApplyProfile: {
+                const v1::ApplyProfile& request = command.apply_profile();
+                if (Status status = apply(request.yaml(), request.restart()); !status.ok()) {
+                    r.set_ok(false);
+                    r.set_error(status.message);
+                } else {
+                    resync = request.restart();
+                }
+                // Everyone sees the profile that is now in force (or pending).
+                for (auto& other : sessions) {
+                    if (other->greeted) {
+                        other->send(profileState(scheduler->takeCosts()));
+                    }
+                }
+                statusChanged = true;
                 break;
+            }
             default:
                 r.set_ok(false);
                 r.set_error(
@@ -1197,22 +1244,94 @@ struct Server::Impl {
         return {};
     }
 
-    /// The profile this server runs is valid, with the wiring the scheduler built for it.
-    /// Any other text is refused: v0.2 does not rebuild the run from a profile yet.
-    void validate(const std::string& yaml, v1::ProfileValidation& out) const {
-        if (yaml != profileYaml()) {
-            out.set_valid(false);
-            v1::ProfileIssue& issue = *out.add_issues();
-            issue.set_severity(v1::ProfileIssue::SEVERITY_ERROR);
-            issue.set_message(
-                "lagrange_server v0.2 runs only the profile it started with; edit "
-                "and apply profiles with the mock server for now");
-        } else {
-            out.set_valid(true);
+    /// What this server can do with a profile, for checkProfile.
+    ProfileContext profileContext() const {
+        ProfileContext context;
+        context.stage = robot.sourcePath;
+        context.modules.insert("rigid_body");
+        if (hasSensors()) {
+            context.modules.insert("sensors");
         }
-        v1::Wiring& wiring = *out.mutable_wiring();
+        for (const DomainRow& row : kDomains) {
+            context.substitutes[row.domain] = {row.substitute, row.substituteKind};
+        }
+        return context;
+    }
+
+    /// Checks a profile and shows the wiring it would build (or the running one if it does not
+    /// parse into settings).
+    void validate(const std::string& yaml, v1::ProfileValidation& out) {
+        const ProfileCheck check = checkProfile(yaml, schemaText, profileContext());
+        out.set_valid(check.valid);
+        for (const ProfileIssue& issue : check.issues) {
+            v1::ProfileIssue& item = *out.add_issues();
+            item.set_severity(issue.error ? v1::ProfileIssue::SEVERITY_ERROR
+                                          : v1::ProfileIssue::SEVERITY_WARNING);
+            item.set_json_pointer(issue.pointer);
+            item.set_message(issue.message);
+        }
+        if (check.settings) {
+            auto preview = makeScheduler(*check.settings, nullptr);
+            if (!preview) {
+                out.set_valid(false);
+                v1::ProfileIssue& item = *out.add_issues();
+                item.set_severity(v1::ProfileIssue::SEVERITY_ERROR);
+                item.set_json_pointer("/domains");
+                item.set_message(preview.error());
+                describeWiring(*scheduler, *out.mutable_wiring());
+                return;
+            }
+            describeWiring(**preview, *out.mutable_wiring());
+            return;
+        }
+        describeWiring(*scheduler, *out.mutable_wiring());
+    }
+
+    /// Adopts a valid profile: rebuilds the run at t = 0 now, or at the next reset.
+    Status apply(const std::string& yaml, bool restartNow) {
+        const ProfileCheck check = checkProfile(yaml, schemaText, profileContext());
+        if (!check.valid || !check.settings) {
+            for (const ProfileIssue& issue : check.issues) {
+                if (issue.error) {
+                    return Status::error(StatusCode::InvalidConfig,
+                                         "profile not applied: " +
+                                             (issue.pointer.empty() ? "" : issue.pointer + ": ") +
+                                             issue.message);
+                }
+            }
+            return Status::error(StatusCode::InvalidConfig, "profile not applied");
+        }
+        if (check.settings->realTimeFactor) {
+            rtfTarget = *check.settings->realTimeFactor;  // takes effect at once
+        }
+        if (!restartNow) {
+            pending = check.settings;
+            return {};
+        }
+        return adopt(*check.settings);
+    }
+
+    /// Makes `settings` the run's and restarts at t = 0.
+    Status adopt(const ProfileSettings& settings) {
+        const ProfileSettings previous = active();
+        options.substituted = settings.substituted;
+        rigidBodyDtNs = settings.rigidBodyDtNs;
+        pending.reset();
+        if (Status status = restart(); !status.ok()) {
+            // Keep the run going on the profile it had.
+            options.substituted = previous.substituted;
+            rigidBodyDtNs = previous.rigidBodyDtNs;
+            (void)restart();
+            return status;
+        }
+        log(v1::LOG_LEVEL_INFO, "profile", "applied; the run restarted at t = 0");
+        return {};
+    }
+
+    /// The modules of `wired` and the wires between them, grouped by signal pattern.
+    void describeWiring(const Scheduler& wired, v1::Wiring& wiring) const {
         std::int64_t smallest = 0;
-        for (const ScheduledModule& module : scheduler->plan()) {
+        for (const ScheduledModule& module : wired.plan()) {
             const std::string_view label = module.label;
             const std::size_t slash = label.find('/');
             v1::Wiring::Node& node = *wiring.add_nodes();
@@ -1225,7 +1344,7 @@ struct Server::Impl {
         // One wire per (writer, reader, signal pattern): "joint/left_wheel_joint/torque" and
         // its right twin become "joint/*/torque".
         std::map<std::tuple<std::string, std::string, std::string>, const Connection*> grouped;
-        const std::vector<Connection> connections = scheduler->connections();
+        const std::vector<Connection> connections = wired.connections();
         for (const Connection& c : connections) {
             std::string pattern = c.signal;
             const std::size_t first = pattern.find('/');
@@ -1262,7 +1381,7 @@ struct Server::Impl {
             wire.set_sink_unit(label(c->readerUnit));
             wire.set_unit_ok(c->writerUnit == c->readerUnit);
         }
-        wiring.set_base_tick_ns(scheduler->baseTick().ns);
+        wiring.set_base_tick_ns(wired.baseTick().ns);
         wiring.set_sync_ns(smallest);
     }
 
