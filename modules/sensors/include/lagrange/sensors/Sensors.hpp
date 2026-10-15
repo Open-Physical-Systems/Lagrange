@@ -36,4 +36,9 @@ inline constexpr double kNoHit = std::numeric_limits<double>::infinity();
 /// Noise comes from Philox keyed by run, sensor, step and beam, so it is deterministic.
 [[nodiscard]] std::vector<std::unique_ptr<IModule>> createSensorModules(const World& world);
 
+/// The sensors domain's "ground_truth" substitute (ideal kind, CLAUDE.md §11.2): one module per
+/// sensor with the same signals and rates, but no rendering. A lidar reports no returns (+inf);
+/// an IMU reports the true specific force and angular rate, without noise.
+[[nodiscard]] std::vector<std::unique_ptr<IModule>> createSensorSubstitutes(const World& world);
+
 }  // namespace lagrange::sensors

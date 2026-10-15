@@ -158,8 +158,9 @@ Duration periodOf(double rateHz) {
 /// Common to all sensors: the mount and how its body's pose is read.
 class SensorModule : public IModule {
 public:
-    SensorModule(const World& world, std::uint32_t sensor, const char* kind)
-        : sensor_(sensor)
+    SensorModule(const World& world, std::uint32_t sensor, const char* kind, bool groundTruth)
+        : groundTruth_(groundTruth)
+        , sensor_(sensor)
         , name_(world.sensors.names[sensor])
         , label_(std::string(kind) + "_" + world.sensors.names[sensor])
         , body_(world.sensors.body[sensor].index)
@@ -167,13 +168,14 @@ public:
         , step_(periodOf(world.sensors.rateHz[sensor])) {}
 
     [[nodiscard]] ModuleInfo info() const override {
-        return {"sensors", label_, 0, 1, false, true, CapabilityTier::Tier0};
+        return {"sensors", label_, 0, 1, groundTruth_, true, CapabilityTier::Tier0};
     }
     [[nodiscard]] Duration preferredStep() const override { return step_; }
     Status saveState(StateWriter&) const override { return {}; }  // sensors keep no state
     Status restoreState(StateReader&) override { return {}; }
 
 protected:
+    bool groundTruth_;  // the ground_truth substitute: no rendering, no noise
     std::uint32_t sensor_;
     std::string name_;
     std::string label_;
@@ -184,7 +186,8 @@ protected:
 
 class Lidar final : public SensorModule {
 public:
-    Lidar(const World& world, std::uint32_t sensor) : SensorModule(world, sensor, "lidar") {}
+    Lidar(const World& world, std::uint32_t sensor, bool groundTruth)
+        : SensorModule(world, sensor, "lidar", groundTruth) {}
 
     Status declare(const WorldView& world, const ModuleConfig&, SignalDeclarer& d) override {
         const World::Sensors& sensors = world.sensors();
@@ -243,6 +246,10 @@ public:
     }
 
     Status step(const StepContext& context, SignalBus& bus) override {
+        if (groundTruth_) {
+            bus.writeN(ranges_, buffer_);  // no rendering: no returns (+inf from init)
+            return {};
+        }
         const Pose sensor = compose(bodyPose(bus, body_), mount_);
         // Place every shape once per scan, not once per beam.
         for (std::size_t k = 0; k < shapes_.size(); ++k) {
@@ -300,7 +307,8 @@ private:
 
 class Imu final : public SensorModule {
 public:
-    Imu(const World& world, std::uint32_t sensor) : SensorModule(world, sensor, "imu") {}
+    Imu(const World& world, std::uint32_t sensor, bool groundTruth)
+        : SensorModule(world, sensor, "imu", groundTruth) {}
 
     Status declare(const WorldView& world, const ModuleConfig&, SignalDeclarer& d) override {
         const World& raw = world.raw();
@@ -309,8 +317,8 @@ public:
                 StatusCode::InvalidConfig,
                 "IMU " + name_ + " is on '" + raw.bodies.names[body_] + "', which never moves");
         }
-        accelNoise_ = setting(world.sensors(), sensor_, "accel_noise", 0.0);
-        gyroNoise_ = setting(world.sensors(), sensor_, "gyro_noise", 0.0);
+        accelNoise_ = groundTruth_ ? 0.0 : setting(world.sensors(), sensor_, "accel_noise", 0.0);
+        gyroNoise_ = groundTruth_ ? 0.0 : setting(world.sensors(), sensor_, "gyro_noise", 0.0);
         const std::string body = "body/" + raw.bodies.names[body_];
         pose_ = d.input(spec(body + "/pose", SignalType::Pose, units::m, "world_local"));
         twist_ = d.input(spec(body + "/twist", SignalType::Wrench, units::m_per_s, "world_local"));
@@ -362,19 +370,31 @@ private:
 
 }  // namespace
 
-std::vector<std::unique_ptr<IModule>> createSensorModules(const World& world) {
+namespace {
+
+std::vector<std::unique_ptr<IModule>> createModules(const World& world, bool groundTruth) {
     std::vector<std::unique_ptr<IModule>> modules;
     for (std::uint32_t s = 0; s < world.sensors.names.size(); ++s) {
         switch (world.sensors.type[s]) {
             case SensorType::Lidar:
-                modules.push_back(std::make_unique<Lidar>(world, s));
+                modules.push_back(std::make_unique<Lidar>(world, s, groundTruth));
                 break;
             case SensorType::Imu:
-                modules.push_back(std::make_unique<Imu>(world, s));
+                modules.push_back(std::make_unique<Imu>(world, s, groundTruth));
                 break;
         }
     }
     return modules;
+}
+
+}  // namespace
+
+std::vector<std::unique_ptr<IModule>> createSensorModules(const World& world) {
+    return createModules(world, false);
+}
+
+std::vector<std::unique_ptr<IModule>> createSensorSubstitutes(const World& world) {
+    return createModules(world, true);
 }
 
 }  // namespace lagrange::sensors

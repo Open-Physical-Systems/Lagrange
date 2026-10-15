@@ -5,6 +5,7 @@
 #include "lagrange/time/SimTime.hpp"
 
 #include <memory>
+#include <set>
 #include <string>
 
 namespace lagrange::server {
@@ -19,7 +20,10 @@ struct ServerOptions {
     bool startPaused{false};
     std::string recordPath;                   // MCAP file to record the run to; empty: no recording
     std::uint32_t recordMaxComponents{1024};  // larger signals (3D lidar ranges) are left out
-    bool stampedCmdVel{true};                 // /cmd_vel as TwistStamped; false: Twist
+    /// Domains replaced by their substitute (CLAUDE.md §11.2): "rigid_body" (fixed robot) and
+    /// "sensors" (ground truth); the others have no module yet and are always substituted.
+    std::set<std::string> substituted;
+    bool stampedCmdVel{true};  // /cmd_vel as TwistStamped; false: Twist
 };
 
 /// The simulation server (roadmap 0.2-E1, E2): it loads a robot, wires the MuJoCo backend and
