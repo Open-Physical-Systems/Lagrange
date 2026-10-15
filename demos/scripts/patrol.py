@@ -5,8 +5,9 @@
 #   ros2 run lagrange_demos patrol --rounds 3
 #   ros2 run lagrange_demos patrol --minutes 10       # keep patrolling for 10 simulated minutes
 #
-# It also watches for collisions: the server's /odom is ground truth, so the robot's footprint
-# is tested against the occupancy map of the scenery at every odometry message.
+# It also watches for collisions: the robot's footprint is tested against the occupancy map of
+# the scenery at every true pose the server publishes (/ground_truth/odom; /odom may be wheel
+# odometry, which drifts).
 #
 # Exits non-zero if a waypoint was missed or the robot touched anything (tools/ci/nav2_demo.sh
 # runs it nightly: v0.2 acceptance criterion 1).
@@ -158,8 +159,23 @@ def main() -> int:
         get_package_share_path("lagrange_demos") / "maps" / "warehouse_small.yaml"
     )
     # Spun with the navigator: isTaskComplete() spins its node.
-    navigator.create_subscription(Odometry, "/odom", watch.check, QoSProfile(depth=10))
-    wait_until_active(navigator, ["map_server", "bt_navigator"])
+    navigator.create_subscription(Odometry, "/ground_truth/odom", watch.check, QoSProfile(depth=10))
+    # With ros2_control, AMCL localizes and the diff drive publishes /odom once spawned: wait for
+    # both, or the first goal goes out before the robot can move.
+    deadline = time.monotonic() + 60.0
+    while "amcl" not in navigator.get_node_names() and time.monotonic() < deadline:
+        rclpy.spin_once(navigator, timeout_sec=0.5)
+        if "map_server" in navigator.get_node_names() and time.monotonic() > deadline - 50.0:
+            break  # the builtin controller: ground-truth odometry, no localization
+    localizer = "amcl" if "amcl" in navigator.get_node_names() else "map_server"
+    wait_until_active(navigator, [localizer, "bt_navigator"])
+    odometry: list[Odometry] = []
+    navigator.create_subscription(Odometry, "/odom", odometry.append, QoSProfile(depth=1))
+    while not odometry and time.monotonic() < deadline + 60.0:
+        rclpy.spin_once(navigator, timeout_sec=0.5)
+    if not odometry:
+        print("no /odom: is the robot's drive running?", flush=True)
+        return 1
 
     start = navigator.get_clock().now()
     reached = failed = 0

@@ -2,18 +2,23 @@
 #
 #   ros2 launch lagrange_demos amr_warehouse.launch.py            # server + viewer + Nav2
 #   ros2 launch lagrange_demos amr_warehouse.launch.py viewer:=false
+#   ros2 launch lagrange_demos amr_warehouse.launch.py control:=builtin
 #   ros2 run lagrange_demos patrol                                # then send it on a patrol
 #
-# The server publishes /odom and odom -> base_link from the simulated ground truth, so there is
-# no localization: map -> odom is a fixed identity (the map is exported from the same world with
-# `lagrange_server --export-map`).
+# control:=ros2_control (default): the server runs a ros2_control controller manager in
+# lockstep; joint_state_broadcaster and diff_drive_controller are spawned as on a real robot,
+# Nav2's /cmd_vel goes to the diff drive, which publishes wheel odometry, and AMCL localizes
+# against the map (exported from the same world with `lagrange_server --export-map`).
+#
+# control:=builtin: the server's own drive controller takes /cmd_vel and publishes ground-truth
+# /odom, so map -> odom is a fixed identity and no localization runs.
 import os
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_path
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, LaunchConfigurationEquals
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -43,6 +48,61 @@ def generate_launch_description() -> LaunchDescription:
     params = str(demos / "config" / "nav2_params.yaml")
     sim_time = {"use_sim_time": True}
     endpoint = LaunchConfiguration("endpoint")
+
+    controllers = str(demos / "config" / "ros2_controllers.yaml")
+    server_args = [
+        "--robot",
+        str(robot),
+        "--world",
+        str(world),
+        "--listen",
+        endpoint,
+        "--rtf",
+        LaunchConfiguration("rtf"),
+        "--lidar",
+        LaunchConfiguration("lidar"),
+        # Nav2 takes a while to start; the robot must still be at the start pose (the map's
+        # origin) when it does, not out on the demo figure-eight.
+        "--no-demo",
+    ]
+    with_controllers = LaunchConfigurationEquals("control", "ros2_control")
+
+    # The standard spawners load the controllers into the server's /controller_manager, as on a
+    # real robot. Nav2 uses /cmd_vel and /odom; the diff drive is remapped onto them.
+    spawners = [
+        Node(
+            package="controller_manager",
+            executable="spawner",
+            arguments=[
+                "joint_state_broadcaster",
+                "diff_drive_controller",
+                "--param-file",
+                controllers,
+                "--controller-ros-args",
+                "-r /diff_drive_controller/cmd_vel:=/cmd_vel -r /diff_drive_controller/odom:=/odom",
+            ],
+            condition=with_controllers,
+        ),
+    ]
+    # Wheel odometry drifts, so AMCL keeps map -> odom right from the lidar and the map.
+    localization = [
+        Node(
+            package="nav2_amcl",
+            executable="amcl",
+            name="amcl",
+            output="screen",
+            parameters=[params, sim_time],
+            condition=with_controllers,
+        ),
+        Node(
+            package="nav2_lifecycle_manager",
+            executable="lifecycle_manager",
+            name="lifecycle_manager_localization",
+            output="screen",
+            parameters=[sim_time, {"autostart": True, "node_names": ["amcl"]}],
+            condition=with_controllers,
+        ),
+    ]
 
     nav2 = [
         Node(
@@ -116,26 +176,30 @@ def generate_launch_description() -> LaunchDescription:
                 default_value="auto",
                 description="Where lidars cast: auto, cpu or gpu (lagrange_server --lidar)",
             ),
+            DeclareLaunchArgument(
+                "control",
+                default_value="ros2_control",
+                choices=["ros2_control", "builtin"],
+                description="Who drives the wheels: ros2_control's diff_drive_controller, or the "
+                "server's built-in controller",
+            ),
+            # The simulator: with ros2_control, or with its built-in drive controller.
             Node(
                 package="lagrange_server",
                 executable="lagrange_server",
                 output="screen",
-                arguments=[
-                    "--robot",
-                    str(robot),
-                    "--world",
-                    str(world),
-                    "--listen",
-                    endpoint,
-                    "--rtf",
-                    LaunchConfiguration("rtf"),
-                    "--lidar",
-                    LaunchConfiguration("lidar"),
-                    # Nav2 takes a while to start; the robot must still be at the start pose
-                    # (the map's origin) when it does, not out on the demo figure-eight.
-                    "--no-demo",
-                ],
+                arguments=[*server_args, "--ros2-control", controllers],
+                condition=LaunchConfigurationEquals("control", "ros2_control"),
             ),
+            Node(
+                package="lagrange_server",
+                executable="lagrange_server",
+                output="screen",
+                arguments=server_args,
+                condition=LaunchConfigurationEquals("control", "builtin"),
+            ),
+            *spawners,
+            *localization,
             # Not a ROS node: started as a plain process, so no --ros-args are appended.
             ExecuteProcess(
                 cmd=["ros2", "run", "lagrange_viewer", "lagrange_viewer", "--connect", endpoint],
@@ -149,12 +213,14 @@ def generate_launch_description() -> LaunchDescription:
                 output="screen",
                 parameters=[sim_time, {"robot_description": Path(robot).read_text()}],
             ),
+            # Ground-truth odometry needs no localization: the map frame is the odom frame.
             Node(
                 package="tf2_ros",
                 executable="static_transform_publisher",
                 name="map_to_odom",
                 arguments=["--frame-id", "map", "--child-frame-id", "odom"],
                 parameters=[sim_time],
+                condition=LaunchConfigurationEquals("control", "builtin"),
             ),
             *nav2,
         ]

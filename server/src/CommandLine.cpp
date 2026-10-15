@@ -87,6 +87,8 @@ void printServerOptions(std::FILE* out) {
                  "  --rtf     real-time factor, 0 = as fast as possible (default 1)\n"
                  "  --paused  start paused; press Play in the viewer\n"
                  "  --no-ros  run without the ROS 2 bridge\n"
+                 "  --ros2-control PARAMS.yaml  run a ros2_control controller manager in lockstep\n"
+                 "            (lagrange_ros2_control/LagrangeSystem); spawn its controllers\n"
                  "  --record FILE.mcap  record the run (signals, scene, state hashes) until the\n"
                  "            server stops or the run is reset; the mock server replays it\n"
                  "  --record-max-components N  leave larger signals out (default 1024: the\n"
@@ -207,6 +209,12 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             }
         } else if (arg == "--cmd-vel-unstamped") {
             options.stampedCmdVel = false;
+        } else if (arg == "--ros2-control") {
+            const char* path = value();
+            if (path == nullptr) {
+                return "--ros2-control needs the controllers' parameter file";
+            }
+            options.ros2ControlParams = path;
         } else if (arg == "--no-demo") {
             options.demoDrive = false;
         } else if (arg == "--export-map") {

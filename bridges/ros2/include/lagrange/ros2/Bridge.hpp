@@ -20,6 +20,9 @@ struct BridgeSettings {
     std::string robotDescription;  // URDF text for /robot_description; empty: not published
     double stateRateHz{50.0};      // /joint_states, /odom and the odom TF
     bool stampedCmdVel{true};      // /cmd_vel as TwistStamped (Nav2's default) or Twist
+    /// ros2_control drives the robot: its controllers publish /joint_states, /odom and the
+    /// odom TF and take the velocity commands, so the bridge does none of these.
+    bool controllersOwnState{false};
 };
 
 /// A /cmd_vel message: forward speed and turn rate.

@@ -148,7 +148,9 @@ reads recordings. See open question Q4 for how the mock server gets scene conten
 | `rosgraph_msgs`, `sensor_msgs`, `nav_msgs`, `geometry_msgs`, `tf2_ros`, `visualization_msgs` | ROS bridge | Lyrical | |
 | `rosidl_buffer`, `cuda_buffer` | zero-copy sensor output | 5.2.1, 0.1.2 | `cuda_buffer` is optional (pulls NVIDIA libraries) |
 | `simulation_interfaces` | standard simulator services (`lagrange_ros2`) | 2.1.0 | Apache-2.0 |
-| `hardware_interface`, `controller_manager`, `pluginlib` | `lagrange_ros2_control` | ros2_control 6.10.1 | |
+| `hardware_interface`, `controller_manager`, `pluginlib` | `lagrange_ros2_control` | ros2_control 6.10.1, pluginlib 5.8.5 | Apache-2.0; pluginlib BSD |
+| `diff_drive_controller`, `joint_state_broadcaster` | `lagrange_demos` (exec only); `forward_command_controller` in `lagrange_ros2_control`'s test | 6.9.0 | Apache-2.0 |
+| `nav2_amcl` | `lagrange_demos` (exec only: AMCL localizes when ros2_control drives) | 1.5.1 | **LGPL-2.1-or-later**. Started as its own process by the demo launch file; nothing in the project links it, so no LGPL code is in core or any library we ship |
 | `rosbag2_storage_mcap`, `mcap_vendor` | recording interoperability; `lagrange_server --record` writes MCAP with `mcap_vendor` | 0.33.3 | Apache-2.0 (`mcap_vendor` package); zstd BSD-3-Clause or GPL-2 (used under BSD), lz4 library BSD-2-Clause (Ubuntu copyright files); the MCAP C++ library MIT (foxglove/mcap LICENSE) |
 | `rmw_fastrtps_cpp`, `rmw_zenoh_cpp` | tested RMWs | 9.4.10, 0.10.6 | |
 | `nav2_map_server`, `nav2_planner`, `nav2_navfn_planner`, `nav2_controller`, `nav2_regulated_pure_pursuit_controller`, `nav2_behaviors`, `nav2_bt_navigator`, `nav2_waypoint_follower`, `nav2_lifecycle_manager`, `nav2_simple_commander` | `lagrange_demos` (exec only) | 1.5.1 | Apache-2.0 (map_server, navfn also BSD-3-Clause). Not `nav2_bringup`: not installed by default, and the demo starts the nodes itself |
