@@ -23,7 +23,7 @@ struct ServerOptions {
     /// Domains replaced by their substitute (CLAUDE.md §11.2): "rigid_body" (fixed robot) and
     /// "sensors" (ground truth); the others have no module yet and are always substituted.
     std::set<std::string> substituted;
-    bool stampedCmdVel{true};                 // /cmd_vel as TwistStamped; false: Twist
+    bool stampedCmdVel{true};  // /cmd_vel as TwistStamped; false: Twist
 };
 
 /// The simulation server (roadmap 0.2-E1, E2): it loads a robot, wires the MuJoCo backend and
