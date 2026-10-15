@@ -166,8 +166,9 @@ The owner accepted this RFC. Each question below takes its proposed answer, or i
    and `thermal.ambient_temperature` remains for the substitute.
 6. Machine-specific settings (ROS domain id, endpoints) come from the command line and the
    environment, never the profile.
-7. The C++ JSON Schema validator is chosen when the server applies profiles (roadmap 0.2-E5),
-   with its licence checked and recorded in `dependencies.md`.
+7. The C++ JSON Schema validator is jsoncons (BSL-1.0, header-only, Ubuntu `libjsoncons-dev`),
+   chosen with roadmap 0.2-E5 because it supports JSON Schema 2020-12 `unevaluatedProperties`;
+   recorded in `dependencies.md`.
 8. The published `$id` URL waits for the project's domain; until then it stays as it is.
 
 ## Unresolved questions (as proposed)
