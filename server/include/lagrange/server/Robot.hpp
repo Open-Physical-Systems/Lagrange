@@ -63,12 +63,14 @@ inline constexpr double kRebaseDistanceM = 1000.0;
 /// loaded. Returns the shift (zeros when nothing moved).
 std::array<double, 3> recentre(Robot& robot, double rebaseDistanceM = kRebaseDistanceM);
 
-/// A robot from a URDF (.urdf) or a USD stage (.usd, .usda, .usdc: lagrange_stage), with the
-/// ground added.
+/// A robot from a URDF, an SDFormat or MJCF file (lagrange_importers, told apart by their root
+/// element) or a USD stage (.usd, .usda, .usdc: lagrange_stage), with the ground added unless
+/// the file has a ground plane of its own.
 [[nodiscard]] Expected<Robot, std::string> loadModel(const std::string& path,
                                                      const LoadOptions& options = {});
 
-/// Adds a second file to a loaded robot (the world's scenery, or another robot), URDF or USD.
+/// Adds a second file to a loaded robot (the world's scenery, or another robot), in any of the
+/// formats loadModel reads. Its own ground plane is left out.
 [[nodiscard]] Expected<void, std::string> addModel(Robot& robot, const std::string& path,
                                                    const LoadOptions& options = {});
 

@@ -75,30 +75,30 @@ CommandLine defaultCommandLine() {
 }
 
 void printServerOptions(std::FILE* out) {
-    std::fprintf(
-        out,
-        "  --robot   URDF or USD to simulate (default: the sample AMR from lagrange_assets)\n"
-        "  --world   URDF or USD of fixed scenery, or none (default: the sample warehouse)\n"
-        "  --listen  unix:/path.sock or tcp://host:port (default: %s)\n"
-        "  --spawn X,Y[,Z[,YAW]]  start the robot there (m, world ENU; heading in rad)\n"
-        "  --lidar auto|cpu|gpu  where lidars cast: auto (default) and cpu use the\n"
-        "            exact CPU caster; gpu the compute kernel on a hardware GPU\n"
-        "  --gpu DEVICE  Vulkan device for the lidar (index or part of its name)\n"
-        "  --rtf     real-time factor, 0 = as fast as possible (default 1)\n"
-        "  --paused  start paused; press Play in the viewer\n"
-        "  --no-ros  run without the ROS 2 bridge\n"
-        "  --record FILE.mcap  record the run (signals, scene, state hashes) until the\n"
-        "            server stops or the run is reset; the mock server replays it\n"
-        "  --record-max-components N  leave larger signals out (default 1024: the\n"
-        "            3D lidar's ranges)\n"
-        "  --domain D=off  replace domain D (rigid_body, sensors) by its substitute\n"
-        "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
-        "            TwistStamped\n"
-        "  --no-demo  stand still until the first /cmd_vel instead of driving the demo\n"
-        "            figure-eight\n"
-        "  --export-map FILE.yaml  write an occupancy map of the fixed scenery for\n"
-        "            nav2_map_server (PGM next to it) and exit\n",
-        proto::defaultUnixSocketPath().c_str());
+    std::fprintf(out,
+                 "  --robot   URDF, SDFormat, MJCF or USD to simulate (default: the sample AMR)\n"
+                 "  --world   fixed scenery in any of those formats, or none (default: the sample\n"
+                 "            warehouse)\n"
+                 "  --listen  unix:/path.sock or tcp://host:port (default: %s)\n"
+                 "  --spawn X,Y[,Z[,YAW]]  start the robot there (m, world ENU; heading in rad)\n"
+                 "  --lidar auto|cpu|gpu  where lidars cast: auto (default) and cpu use the\n"
+                 "            exact CPU caster; gpu the compute kernel on a hardware GPU\n"
+                 "  --gpu DEVICE  Vulkan device for the lidar (index or part of its name)\n"
+                 "  --rtf     real-time factor, 0 = as fast as possible (default 1)\n"
+                 "  --paused  start paused; press Play in the viewer\n"
+                 "  --no-ros  run without the ROS 2 bridge\n"
+                 "  --record FILE.mcap  record the run (signals, scene, state hashes) until the\n"
+                 "            server stops or the run is reset; the mock server replays it\n"
+                 "  --record-max-components N  leave larger signals out (default 1024: the\n"
+                 "            3D lidar's ranges)\n"
+                 "  --domain D=off  replace domain D (rigid_body, sensors) by its substitute\n"
+                 "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
+                 "            TwistStamped\n"
+                 "  --no-demo  stand still until the first /cmd_vel instead of driving the demo\n"
+                 "            figure-eight\n"
+                 "  --export-map FILE.yaml  write an occupancy map of the fixed scenery for\n"
+                 "            nav2_map_server (PGM next to it) and exit\n",
+                 proto::defaultUnixSocketPath().c_str());
 }
 
 std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bool allowPositional,

@@ -354,5 +354,45 @@ TEST(FloatingOrigin, ARobotNearTheOriginStaysWhereItWas) {
     EXPECT_EQ(robot.bodyRestPose[0].position, before[0].position);
 }
 
+/// The base pose after 6 s of the drive test, with the deterministic scheduler.
+std::array<double, 7> drivenPose(const Robot& robot) {
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+    scheduler.add(std::make_unique<DriveCommand>(DriveCommand::Settings{}, nullptr));
+    DiffDriveController::Settings settings;
+    settings.leftJoint = robot.actuatedJoints.at(0);
+    settings.rightJoint = robot.actuatedJoints.at(1);
+    scheduler.add(std::make_unique<DiffDriveController>(settings));
+    auto wired = scheduler.wire(WorldView(robot.world));
+    EXPECT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    EXPECT_TRUE(scheduler.stepUntil(SimTime{6'000'000'000}).ok());
+    const SignalBus& bus = scheduler.bus();
+    const std::span<const double> pose = bus.readN(bus.find("body/base_link/pose"));
+    std::array<double, 7> out{};
+    std::copy(pose.begin(), pose.end(), out.begin());
+    return out;
+}
+
+TEST(AmrSimulation, TheSdfAndMjcfVersionsDriveLikeTheUrdf) {
+    // Acceptance criterion 7 (with test_usd_assets for the USD side): the three descriptions of
+    // the sample AMR are the same robot. Body and joint order differ between the loaders, and
+    // MuJoCo's contacts depend on it, so the paths agree to a few millimetres, not bit for bit.
+    const std::array<double, 7> urdf = drivenPose(amr());
+    for (const char* path : {LAGRANGE_TEST_AMR_SDF, LAGRANGE_TEST_AMR_MJCF}) {
+        auto robot = loadModel(path);
+        ASSERT_TRUE(robot) << robot.error();
+        const std::array<double, 7> pose = drivenPose(*robot);
+        EXPECT_NEAR(pose[0], urdf[0], 0.01) << path;
+        EXPECT_NEAR(pose[1], urdf[1], 0.01) << path;
+        EXPECT_NEAR(pose[2], urdf[2], 0.001) << path;
+        // Same heading: |<q_urdf, q>| close to 1.
+        double dot = 0.0;
+        for (std::size_t k = 3; k < 7; ++k) {
+            dot += pose[k] * urdf[k];
+        }
+        EXPECT_GT(std::abs(dot), std::cos(0.01)) << path;
+    }
+}
+
 }  // namespace
 }  // namespace lagrange::server

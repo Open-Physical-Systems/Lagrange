@@ -1,9 +1,11 @@
 // The sample assets in USD (made by lagrange_import from the URDFs) simulate as the URDFs do:
-// same bodies, joints, colliders and sensors. If this fails after a URDF change, convert again:
+// same bodies, joints, colliders and sensors; the SDFormat and MJCF versions convert the same way.
+// If this fails after a URDF change, convert again:
 //   lagrange_import assets/robots/amr_diffdrive/amr_diffdrive.urdf
 //                   assets/robots/amr_diffdrive/amr_diffdrive.usda
 #include "lagrange/server/MapExport.hpp"
 #include "lagrange/server/Robot.hpp"
+#include "lagrange/stage/Stage.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -21,15 +23,12 @@ std::size_t named(const std::vector<std::string>& names, const std::string& name
     return static_cast<std::size_t>(it - names.begin());
 }
 
-TEST(UsdAssets, TheSampleAmrInUsdMatchesItsUrdf) {
-    auto urdf = loadModel(LAGRANGE_TEST_AMR_URDF);
-    auto usd = loadModel(LAGRANGE_TEST_AMR_USDA);
-    ASSERT_TRUE(urdf) << urdf.error();
-    ASSERT_TRUE(usd) << usd.error();
-    const World& a = urdf->world;
-    const World& b = usd->world;
-    EXPECT_EQ(usd->name, urdf->name);
-    EXPECT_TRUE(usd->notes.empty()) << usd->notes.front();
+/// `b` (read back from USD) has the bodies, joints, colliders and sensors of `a`.
+void expectSameModel(const Robot& a0, const Robot& b0) {
+    const World& a = a0.world;
+    const World& b = b0.world;
+    EXPECT_EQ(b0.name, a0.name);
+    EXPECT_TRUE(b0.notes.empty()) << b0.notes.front();
     constexpr double kFloat = 2e-5;  // UsdPhysics stores masses and joint frames as float
 
     ASSERT_EQ(b.bodies.names.size(), a.bodies.names.size());
@@ -40,7 +39,7 @@ TEST(UsdAssets, TheSampleAmrInUsdMatchesItsUrdf) {
             EXPECT_NEAR(b.bodies.inertiaLocal[j][k], a.bodies.inertiaLocal[i][k], kFloat);
         }
         for (std::size_t k = 0; k < 3; ++k) {
-            EXPECT_NEAR(usd->bodyRestPose[j].position[k], urdf->bodyRestPose[i].position[k], 1e-9)
+            EXPECT_NEAR(b0.bodyRestPose[j].position[k], a0.bodyRestPose[i].position[k], 1e-9)
                 << a.bodies.names[i];
         }
     }
@@ -55,7 +54,7 @@ TEST(UsdAssets, TheSampleAmrInUsdMatchesItsUrdf) {
             }
         }
     }
-    EXPECT_EQ(usd->actuatedJoints, urdf->actuatedJoints);
+    EXPECT_EQ(b0.actuatedJoints, a0.actuatedJoints);
     ASSERT_EQ(b.colliders.body.size(), a.colliders.body.size());
     for (const ShapeType shape :
          {ShapeType::Plane, ShapeType::Box, ShapeType::Cylinder, ShapeType::Sphere}) {
@@ -97,50 +96,76 @@ TEST(UsdAssets, SpawnMovesAUsdRobotLikeAUrdfOne) {
         }
         EXPECT_NEAR(std::abs(dot), 1.0, 1e-6) << name;
     }
-}
 
-TEST(UsdAssets, TheWarehouseInUsdMapsLikeItsUrdf) {
-    // The scenery becomes world colliders in USD (static, massless links need no body); the
-    // occupancy map, which only sees fixed geometry, must come out the same.
-    auto urdf = loadModel(LAGRANGE_TEST_AMR_URDF);
-    auto usd = loadModel(LAGRANGE_TEST_AMR_USDA);
-    ASSERT_TRUE(urdf && usd);
-    ASSERT_TRUE(addModel(*urdf, LAGRANGE_TEST_WAREHOUSE_URDF));
-    ASSERT_TRUE(addModel(*usd, LAGRANGE_TEST_WAREHOUSE_USDA));
-    const std::filesystem::path dir =
-        std::filesystem::path(::testing::TempDir()) / "lagrange_usd_assets";
-    std::filesystem::create_directories(dir);
-    ASSERT_TRUE(exportOccupancyMap(urdf->world, (dir / "urdf.yaml").string()));
-    ASSERT_TRUE(exportOccupancyMap(usd->world, (dir / "usd.yaml").string()));
-    // Box sizes pass through float scales in USD, so a bound may round to the next cell:
-    // compare the image sizes to one cell and the occupied area to 1 %.
-    struct Pgm {
-        int width{0}, height{0};
-        long occupied{0};
-    };
-    const auto read = [](const std::filesystem::path& path) {
-        std::ifstream in(path, std::ios::binary);
-        std::string magic, comment;
-        Pgm pgm;
-        int maxValue = 0;
-        in >> magic;
-        in.ignore();
-        std::getline(in, comment);
-        in >> pgm.width >> pgm.height >> maxValue;
-        in.ignore();
-        std::string pixels(static_cast<std::size_t>(pgm.width) * pgm.height, '\0');
-        in.read(pixels.data(), static_cast<std::streamsize>(pixels.size()));
-        pgm.occupied = std::count(pixels.begin(), pixels.end(), '\0');
-        return pgm;
-    };
-    const Pgm a = read(dir / "urdf.pgm");
-    const Pgm b = read(dir / "usd.pgm");
-    EXPECT_NEAR(b.width, a.width, 1);
-    EXPECT_NEAR(b.height, a.height, 1);
-    ASSERT_GT(a.occupied, 1000);
-    EXPECT_NEAR(static_cast<double>(b.occupied), static_cast<double>(a.occupied),
-                0.01 * static_cast<double>(a.occupied));
-}
+    TEST(UsdAssets, TheSampleAmrInUsdMatchesItsUrdf) {
+        auto urdf = loadModel(LAGRANGE_TEST_AMR_URDF);
+        auto usd = loadModel(LAGRANGE_TEST_AMR_USDA);
+        ASSERT_TRUE(urdf) << urdf.error();
+        ASSERT_TRUE(usd) << usd.error();
+        expectSameModel(*urdf, *usd);
+    }
+
+    TEST(UsdAssets, TheSdfAndMjcfVersionsConvertToUsd) {
+        // Acceptance criterion 7: SDFormat and MJCF import to USD that loads back the same robot
+        // (test_robot.cpp drives the three versions and compares them).
+        const std::filesystem::path dir =
+            std::filesystem::path(::testing::TempDir()) / "lagrange_usd_assets";
+        std::filesystem::create_directories(dir);
+        for (const char* path : {LAGRANGE_TEST_AMR_SDF, LAGRANGE_TEST_AMR_MJCF}) {
+            auto source = loadModel(path);
+            ASSERT_TRUE(source) << source.error();
+            const std::string usda =
+                (dir / (std::filesystem::path(path).extension().string().substr(1) + ".usda"))
+                    .string();
+            ASSERT_TRUE(stage::writeStage(*source, usda)) << path;
+            auto usd = loadModel(usda);
+            ASSERT_TRUE(usd) << usd.error();
+            expectSameModel(*source, *usd);
+        }
+    }
+
+    TEST(UsdAssets, TheWarehouseInUsdMapsLikeItsUrdf) {
+        // The scenery becomes world colliders in USD (static, massless links need no body); the
+        // occupancy map, which only sees fixed geometry, must come out the same.
+        auto urdf = loadModel(LAGRANGE_TEST_AMR_URDF);
+        auto usd = loadModel(LAGRANGE_TEST_AMR_USDA);
+        ASSERT_TRUE(urdf && usd);
+        ASSERT_TRUE(addModel(*urdf, LAGRANGE_TEST_WAREHOUSE_URDF));
+        ASSERT_TRUE(addModel(*usd, LAGRANGE_TEST_WAREHOUSE_USDA));
+        const std::filesystem::path dir =
+            std::filesystem::path(::testing::TempDir()) / "lagrange_usd_assets";
+        std::filesystem::create_directories(dir);
+        ASSERT_TRUE(exportOccupancyMap(urdf->world, (dir / "urdf.yaml").string()));
+        ASSERT_TRUE(exportOccupancyMap(usd->world, (dir / "usd.yaml").string()));
+        // Box sizes pass through float scales in USD, so a bound may round to the next cell:
+        // compare the image sizes to one cell and the occupied area to 1 %.
+        struct Pgm {
+            int width{0}, height{0};
+            long occupied{0};
+        };
+        const auto read = [](const std::filesystem::path& path) {
+            std::ifstream in(path, std::ios::binary);
+            std::string magic, comment;
+            Pgm pgm;
+            int maxValue = 0;
+            in >> magic;
+            in.ignore();
+            std::getline(in, comment);
+            in >> pgm.width >> pgm.height >> maxValue;
+            in.ignore();
+            std::string pixels(static_cast<std::size_t>(pgm.width) * pgm.height, '\0');
+            in.read(pixels.data(), static_cast<std::streamsize>(pixels.size()));
+            pgm.occupied = std::count(pixels.begin(), pixels.end(), '\0');
+            return pgm;
+        };
+        const Pgm a = read(dir / "urdf.pgm");
+        const Pgm b = read(dir / "usd.pgm");
+        EXPECT_NEAR(b.width, a.width, 1);
+        EXPECT_NEAR(b.height, a.height, 1);
+        ASSERT_GT(a.occupied, 1000);
+        EXPECT_NEAR(static_cast<double>(b.occupied), static_cast<double>(a.occupied),
+                    0.01 * static_cast<double>(a.occupied));
+    }
 
 }  // namespace
 }  // namespace lagrange::server

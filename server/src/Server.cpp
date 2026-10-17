@@ -1,4 +1,5 @@
 #include "Recorder.hpp"
+#include "lagrange/importers/Importers.hpp"
 #include "lagrange/proto/Connection.hpp"
 #include "lagrange/proto/Framing.hpp"
 #include "lagrange/rigid_body/FixedRobot.hpp"
@@ -1905,8 +1906,11 @@ Status Server::load() {
     if (s.options.ros) {
         ros2::BridgeSettings settings;
         settings.baseLink = s.robot.world.bodies.names.empty() ? "" : s.robot.world.bodies.names[0];
-        // /robot_description is URDF; a USD robot has none to publish.
-        settings.robotDescription = isUsd(s.options.robotPath) ? "" : readFile(s.options.robotPath);
+        // /robot_description is URDF; a robot from another format has none to publish.
+        settings.robotDescription =
+            importers::formatOf(s.options.robotPath) == importers::Format::Urdf
+                ? readFile(s.options.robotPath)
+                : "";
         settings.stampedCmdVel = s.options.stampedCmdVel;
         s.bridge = std::make_unique<ros2::Bridge>(settings);
         s.simulation = std::make_unique<SimulationControl>(s);
