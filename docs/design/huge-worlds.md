@@ -73,6 +73,25 @@ struct RegionOrigin {
   spanning more than about 100 km the region frame should be re-anchored to a new tangent plane;
   that rotation is planned as an extension of rebase and is not in v0.7 scope.
 
+### 1.3 Status in v0.2
+
+The server sets the region origin once, at load (`server::recentre`): when the robot starts more
+than 1000 m from the origin, the whole-metre part of its position becomes `World::region`, and
+every position held in the world frame loses it (unbounded planes only along their normal).
+`--spawn X,Y[,Z[,YAW]]` places the robot. Acceptance criterion 8 is
+`FloatingOrigin.AWorld500KmOutSimulatesLikeOneAtTheOrigin` in `server/test/test_robot.cpp`: the
+warehouse authored 500 km out gives bit-identical poses and lidar ranges within 1.2e-10 m (the
+rounding of the authored coordinates) after 10 s; without the floating origin it is off by
+5e-7 m in pose and 8e-5 m in range.
+
+Not yet done:
+- Rebasing during a run, when the robot drives more than `rebase_distance` away (needs the
+  backend shift above).
+- The viewer cannot show world coordinates for a world that is not georeferenced. `LocalFrame`
+  carries an ECEF anchor and `rebase_count`, but no region offset; adding one is a `proto/`
+  change.
+- The ROS bridge does not publish `map → region`, and MCAP recordings do not store the origin.
+
 ## 2. Tile streaming
 
 Worlds are USD stages whose terrain, buildings and props are **payloads**, so they can be loaded

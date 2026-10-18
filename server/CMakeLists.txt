@@ -100,7 +100,9 @@ if(BUILD_TESTING)
         test_server
         lagrange_server
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
+        lagrange_sensors::lagrange_sensors
         mcap_vendor::mcap
+        tinyxml2::tinyxml2
     )
     target_compile_definitions(
         test_server

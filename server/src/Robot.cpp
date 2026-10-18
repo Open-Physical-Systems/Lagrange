@@ -563,7 +563,8 @@ Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
             }
         }
     } else {
-        builder.addLink(*root, kWorldBody, topPrim, Pose{}, nullptr);
+        builder.addLink(*root, kWorldBody, topPrim, options.spawn, nullptr);
+        robot.world.bodies.poseInParent[firstBody] = options.spawn;
         robot.world.addJoint(root->name + "_floating", JointType::Free,
                              BodyId{static_cast<std::uint32_t>(firstBody)}, {0.0, 0.0, 1.0}, false);
         robot.scene.prims[topPrim].body = static_cast<std::uint32_t>(firstBody);
@@ -591,7 +592,7 @@ Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
             robot.notes.emplace_back("'" + model->getName() +
                                      "' has no collision shapes and will fall through the ground");
         }
-        const double lift = (any ? -lowest : 0.0) + options.dropHeightM;
+        const double lift = (any ? options.spawn.position[2] - lowest : 0.0) + options.dropHeightM;
         robot.world.bodies.poseInParent[firstBody].position[2] += lift;
         for (std::size_t b = firstBody; b < robot.bodyRestPose.size(); ++b) {
             robot.bodyRestPose[b].position[2] += lift;
@@ -624,6 +625,58 @@ Expected<Robot, std::string> loadUrdf(const std::string& path, const LoadOptions
     ground.offset.position = {0.0, 0.0, -kGroundThicknessM / 2.0};
     robot.scene.prims.push_back(std::move(ground));
     return robot;
+}
+
+std::array<double, 3> recentre(Robot& robot, double rebaseDistanceM) {
+    World& world = robot.world;
+    if (world.bodies.names.empty()) {
+        return {0.0, 0.0, 0.0};
+    }
+    const std::array<double, 3> shift =
+        coords::rebaseShift(robot.bodyRestPose.front().position, rebaseDistanceM);
+    if (shift == std::array<double, 3>{0.0, 0.0, 0.0}) {
+        return shift;
+    }
+    const auto move = [&shift](Pose& pose) {
+        for (std::size_t i = 0; i < 3; ++i) {
+            pose.position.at(i) -= shift.at(i);
+        }
+    };
+    for (std::size_t b = 0; b < world.bodies.names.size(); ++b) {
+        if (world.bodies.parent[b] == kWorldBody) {
+            move(world.bodies.poseInParent[b]);
+        }
+        move(robot.bodyRestPose[b]);
+    }
+    for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
+        if (world.colliders.body[c] != kWorldBody) {
+            continue;
+        }
+        Pose& pose = world.colliders.poseInBody[c];
+        if (world.colliders.shape[c] == ShapeType::Plane && world.colliders.size[c][0] == 0.0) {
+            // An unbounded plane only moves along its normal (exact for a level ground).
+            const std::array<double, 3> normal = rotate(pose.orientation, {0.0, 0.0, 1.0});
+            const double along = shift[0] * normal[0] + shift[1] * normal[1] + shift[2] * normal[2];
+            for (std::size_t i = 0; i < 3; ++i) {
+                pose.position.at(i) -= along * normal.at(i);
+            }
+        } else {
+            move(pose);
+        }
+    }
+    for (ScenePrim& prim : robot.scene.prims) {
+        if (prim.body != kNoIndex) {
+            continue;
+        }
+        if (prim.path == "/ground") {
+            // It draws the infinite ground plane, so it stays under the region.
+            prim.offset.position[2] -= shift[2];
+        } else {
+            move(prim.offset);
+        }
+    }
+    coords::applyRebase(world.region, shift);
+    return shift;
 }
 
 }  // namespace lagrange::server

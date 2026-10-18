@@ -3,6 +3,7 @@
 #include "lagrange/module/Status.hpp"
 #include "lagrange/proto/Endpoint.hpp"
 #include "lagrange/time/SimTime.hpp"
+#include "lagrange/world/World.hpp"
 
 #include <memory>
 #include <set>
@@ -14,6 +15,7 @@ struct ServerOptions {
     proto::Endpoint endpoint;
     std::string robotPath;          // URDF of the robot to simulate
     std::string worldPath;          // URDF of static scenery (root link "world"); empty = none
+    Pose spawn;                     // where the robot starts, world ENU (LoadOptions::spawn)
     std::string profileSchemaPath;  // profiles/schema.json, sent to viewers; empty = none
     double realTimeFactor{1.0};     // 0 = as fast as possible
     bool ros{false};                // run the ROS 2 bridge (rclcpp::init must have been called)

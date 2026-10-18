@@ -10,10 +10,12 @@
 #include "lagrange/server/Server.hpp"
 
 #include <atomic>
+#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -36,6 +38,37 @@ std::string shareFile(const char* package, const char* relative) {
     }
 }
 
+/// "X,Y[,Z[,YAW]]": metres in world ENU and a heading in radians about z.
+std::optional<lagrange::Pose> parseSpawn(const char* text) {
+    if (text == nullptr) {
+        return std::nullopt;
+    }
+    double values[4] = {0.0, 0.0, 0.0, 0.0};
+    int count = 0;
+    const char* at = text;
+    while (count < 4) {
+        char* end = nullptr;
+        values[count++] = std::strtod(at, &end);
+        if (end == at || !std::isfinite(values[count - 1])) {
+            return std::nullopt;
+        }
+        if (*end == '\0') {
+            break;
+        }
+        if (*end != ',') {
+            return std::nullopt;
+        }
+        at = end + 1;
+    }
+    if (count < 2 || *at == '\0') {
+        return std::nullopt;
+    }
+    lagrange::Pose pose;
+    pose.position = {values[0], values[1], values[2]};
+    pose.orientation = {std::cos(values[3] / 2.0), 0.0, 0.0, std::sin(values[3] / 2.0)};
+    return pose;
+}
+
 int usage(const char* error) {
     if (error != nullptr) {
         std::fprintf(stderr, "lagrange_server: %s\n", error);
@@ -47,6 +80,7 @@ int usage(const char* error) {
                  "  --robot   URDF to simulate (default: the sample AMR from lagrange_assets)\n"
                  "  --world   URDF of fixed scenery, or none (default: the sample warehouse)\n"
                  "  --listen  unix:/path.sock or tcp://host:port (default: %s)\n"
+                 "  --spawn X,Y[,Z[,YAW]]  start the robot there (m, world ENU; heading in rad)\n"
                  "  --rtf     real-time factor, 0 = as fast as possible (default 1)\n"
                  "  --paused  start paused; press Play in the viewer\n"
                  "  --no-ros  run without the ROS 2 bridge\n"
@@ -105,6 +139,12 @@ int main(int argc, char** argv) {
                     "--listen needs an endpoint such as unix:/tmp/l.sock or tcp://127.0.0.1:47610");
             }
             options.endpoint = *endpoint;
+        } else if (arg == "--spawn") {
+            const auto spawn = parseSpawn(value());
+            if (!spawn) {
+                return usage("--spawn needs X,Y[,Z[,YAW]]");
+            }
+            options.spawn = *spawn;
         } else if (arg == "--rtf") {
             const char* text = value();
             char* end = nullptr;
@@ -166,7 +206,7 @@ int main(int argc, char** argv) {
     }
     if (!exportMap.empty()) {
         // Only the fixed scenery is mapped; the robot is loaded for its frame of reference.
-        auto robot = lagrange::server::loadUrdf(options.robotPath);
+        auto robot = lagrange::server::loadUrdf(options.robotPath, {.spawn = options.spawn});
         if (robot && !options.worldPath.empty()) {
             if (auto added = lagrange::server::addUrdf(*robot, options.worldPath); !added) {
                 std::fprintf(stderr, "lagrange_server: %s\n", added.error().c_str());
@@ -177,6 +217,8 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "lagrange_server: %s\n", robot.error().c_str());
             return 1;
         }
+        // The map is in the frame /odom and /tf use: region-local.
+        lagrange::server::recentre(*robot);
         if (auto written = lagrange::server::exportOccupancyMap(robot->world, exportMap);
             !written) {
             std::fprintf(stderr, "lagrange_server: %s\n", written.error().c_str());

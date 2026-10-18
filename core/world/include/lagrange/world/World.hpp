@@ -1,5 +1,7 @@
 #pragma once
 
+#include "lagrange/world/coords/Frames.hpp"
+
 #include <array>
 #include <cstdint>
 #include <map>
@@ -122,6 +124,9 @@ struct World {
     std::vector<std::string> robots;  // robot root prim names
     std::vector<SchemaInstance> schemaInstances;
     std::array<double, 3> gravityLocal{0.0, 0.0, -9.80665};  // m/s², standard gravity (CGPM 1901)
+    /// Where the region-local frame of every position above sits in world ENU (floating origin,
+    /// docs/design/huge-worlds.md §1).
+    coords::RegionOrigin region;
     std::uint32_t batchCount{1};
 
     /// Adds a prim and returns its id. `instanceName` is the name used in signal names.
