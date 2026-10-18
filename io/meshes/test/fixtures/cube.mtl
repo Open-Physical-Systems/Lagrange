@@ -1,0 +1,4 @@
+newmtl side
+Kd 0.5 0.5 0.5
+newmtl top
+Kd 1.0 0.0 0.0
