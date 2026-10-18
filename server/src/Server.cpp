@@ -14,6 +14,7 @@
 #include "lagrange/world/LidarLayout.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -627,6 +628,7 @@ struct Server::Impl {
         snap.set_sequence(sequence);
         snap.mutable_sim_time()->set_ns(scheduler->now().ns);
         v1::LocalFrame& frame = *snap.mutable_frame();
+        frame.set_rebase_count(robot.world.region.rebaseCount);
         for (const double v : {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}) {
             frame.add_enu_from_ecef(v);
         }
@@ -1830,7 +1832,7 @@ Server::~Server() {
 
 Status Server::start() {
     Impl& s = *impl_;
-    auto robot = loadUrdf(s.options.robotPath);
+    auto robot = loadUrdf(s.options.robotPath, {.spawn = s.options.spawn});
     if (!robot) {
         return Status::error(StatusCode::InvalidConfig, robot.error());
     }
@@ -1849,6 +1851,7 @@ Status Server::start() {
             return Status::error(StatusCode::InvalidConfig, added.error());
         }
     }
+    const std::array<double, 3> shift = recentre(s.robot);
     if (Status status = s.build(); !status.ok()) {
         return status;
     }
@@ -1872,6 +1875,14 @@ Status Server::start() {
           "loaded " + s.robot.sourcePath + " · " + std::to_string(world.bodies.names.size()) +
               " bodies, " + std::to_string(world.joints.names.size()) + " joints, " +
               std::to_string(s.robot.scene.prims.size()) + " prims");
+    if (s.robot.world.region.rebaseCount > 0) {
+        char text[160];
+        std::snprintf(text, sizeof text,
+                      "floating origin: the region-local frame starts at (%.0f, %.0f, %.0f) m in "
+                      "world ENU; poses, /odom, /tf and the viewer are relative to it",
+                      shift[0], shift[1], shift[2]);
+        s.log(v1::LOG_LEVEL_INFO, "stage", text);
+    }
     for (const std::string& note : s.robot.notes) {
         s.log(v1::LOG_LEVEL_WARN, "import", note);
     }

@@ -1,12 +1,18 @@
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
+#include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/server/DiffDrive.hpp"
 #include "lagrange/server/Robot.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdio>
+#include <filesystem>
 #include <memory>
 #include <string>
+#include <tinyxml2.h>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -172,6 +178,142 @@ TEST(AmrSimulation, TheDriverMovesTheRobotAndItStaysUpright) {
     const double left = bus.read(bus.find("joint/left_wheel_joint/velocity"));
     const double right = bus.read(bus.find("joint/right_wheel_joint/velocity"));
     EXPECT_NEAR((left + right) / 2.0 * 0.1, 0.6, 0.06);
+}
+
+/// The sample warehouse authored `offset` away: every fixed link (a joint from "world") moved,
+/// written to `file` the way a hand-made file would hold it, so the large coordinates go through
+/// the parser and its rounding.
+std::string movedWarehouse(const std::array<double, 3>& offset, const std::string& name) {
+    tinyxml2::XMLDocument document;
+    EXPECT_EQ(document.LoadFile(LAGRANGE_TEST_WAREHOUSE_URDF), tinyxml2::XML_SUCCESS);
+    for (tinyxml2::XMLElement* joint = document.RootElement()->FirstChildElement("joint");
+         joint != nullptr; joint = joint->NextSiblingElement("joint")) {
+        const tinyxml2::XMLElement* parent = joint->FirstChildElement("parent");
+        tinyxml2::XMLElement* origin = joint->FirstChildElement("origin");
+        if (parent == nullptr || std::string(parent->Attribute("link")) != "world" ||
+            origin == nullptr) {
+            continue;
+        }
+        std::array<double, 3> xyz{};
+        EXPECT_EQ(std::sscanf(origin->Attribute("xyz"), "%lf %lf %lf", &xyz[0], &xyz[1], &xyz[2]),
+                  3);
+        char text[96];
+        std::snprintf(text, sizeof text, "%.17g %.17g %.17g", xyz[0] + offset[0],
+                      xyz[1] + offset[1], xyz[2] + offset[2]);
+        origin->SetAttribute("xyz", text);
+    }
+    const std::string path = (std::filesystem::path(::testing::TempDir()) / name).string();
+    EXPECT_EQ(document.SaveFile(path.c_str()), tinyxml2::XML_SUCCESS);
+    return path;
+}
+
+Robot amrInWarehouse(const std::array<double, 3>& offset, const std::string& name) {
+    LoadOptions options;
+    options.spawn.position = offset;
+    auto robot = loadUrdf(LAGRANGE_TEST_AMR_URDF, options);
+    EXPECT_TRUE(robot) << (robot ? "" : robot.error());
+    if (!robot) {
+        return Robot{};
+    }
+    auto added = addUrdf(*robot, movedWarehouse(offset, name));
+    EXPECT_TRUE(added) << (added ? "" : added.error());
+    recentre(*robot);
+    return std::move(*robot);
+}
+
+struct DemoState {
+    std::vector<double> pose;    // base_link, region-local
+    std::vector<double> ranges;  // the 2D lidar's last scan
+    std::vector<double> wheels;  // joint positions, rad
+};
+
+/// The demo drive with the sensors for `seconds`.
+DemoState runDemo(const Robot& robot, std::int64_t seconds) {
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+    for (auto& module : sensors::createSensorModules(robot.world)) {
+        scheduler.add(std::move(module));
+    }
+    scheduler.add(std::make_unique<DriveCommand>(DriveCommand::Settings{}, nullptr));
+    DiffDriveController::Settings settings;
+    settings.leftJoint = robot.actuatedJoints[0];
+    settings.rightJoint = robot.actuatedJoints[1];
+    scheduler.add(std::make_unique<DiffDriveController>(settings));
+    auto wired = scheduler.wire(WorldView(robot.world));
+    EXPECT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    EXPECT_TRUE(scheduler.stepUntil(SimTime{seconds * 1'000'000'000}).ok());
+    const SignalBus& bus = scheduler.bus();
+    const auto read = [&bus](const std::string& name) {
+        const SignalId id = bus.find(name);
+        EXPECT_TRUE(id.valid()) << name;
+        const std::span<const double> v = id.valid() ? bus.readN(id) : std::span<const double>{};
+        return std::vector<double>(v.begin(), v.end());
+    };
+    return {
+        read("body/base_link/pose"),
+        read("sensor/front_lidar/ranges"),
+        {read("joint/left_wheel_joint/position")[0], read("joint/right_wheel_joint/position")[0]}};
+}
+
+// v0.2 acceptance criterion 8 (roadmap 0.2-H4): the warehouse and the AMR authored 500 km from
+// the origin simulate as they do at the origin. The floating origin takes the robot's whole-metre
+// position out at load, so physics and sensors see the same small coordinates; what is left is
+// the rounding of the authored coordinates themselves (an ulp of 5e5 m is 5.8e-11 m). Measured:
+// poses bit-identical, ranges within 1.2e-10 m; without the floating origin the same run is off
+// by 5e-7 m in pose and 8e-5 m in range after 10 s, which these 1e-9 m bounds catch.
+TEST(FloatingOrigin, AWorld500KmOutSimulatesLikeOneAtTheOrigin) {
+    const std::array<double, 3> far{400'000.0, 300'000.0, 0.0};  // 500 km from the origin
+    const Robot here = amrInWarehouse({0.0, 0.0, 0.0}, "warehouse_0km.urdf");
+    const Robot there = amrInWarehouse(far, "warehouse_500km.urdf");
+    EXPECT_EQ(here.world.region.rebaseCount, 0U);
+    EXPECT_EQ(there.world.region.rebaseCount, 1U);
+    EXPECT_EQ(there.world.region.worldEnu, far);
+    // Same region-local world: rest poses, scenery and colliders.
+    ASSERT_EQ(here.bodyRestPose.size(), there.bodyRestPose.size());
+    for (std::size_t b = 0; b < here.bodyRestPose.size(); ++b) {
+        for (std::size_t i = 0; i < 3; ++i) {
+            EXPECT_NEAR(there.bodyRestPose[b].position[i], here.bodyRestPose[b].position[i], 1e-9)
+                << here.world.bodies.names[b];
+        }
+    }
+    ASSERT_EQ(here.world.colliders.body.size(), there.world.colliders.body.size());
+    for (std::size_t c = 0; c < here.world.colliders.body.size(); ++c) {
+        for (std::size_t i = 0; i < 3; ++i) {
+            EXPECT_NEAR(there.world.colliders.poseInBody[c].position[i],
+                        here.world.colliders.poseInBody[c].position[i], 1e-9);
+        }
+    }
+
+    const DemoState a = runDemo(here, 10);
+    const DemoState b = runDemo(there, 10);
+    ASSERT_EQ(a.pose.size(), 7U);
+    ASSERT_EQ(b.pose.size(), 7U);
+    EXPECT_GT(std::hypot(a.pose[0], a.pose[1]), 0.5) << "the robot drove";
+    for (std::size_t i = 0; i < 7; ++i) {
+        EXPECT_NEAR(b.pose[i], a.pose[i], 1e-9) << "pose component " << i;
+    }
+    for (std::size_t i = 0; i < 2; ++i) {
+        EXPECT_NEAR(b.wheels[i], a.wheels[i], 1e-9);
+    }
+    ASSERT_EQ(a.ranges.size(), b.ranges.size());
+    std::size_t returns = 0;
+    for (std::size_t i = 0; i < a.ranges.size(); ++i) {
+        if (std::isinf(a.ranges[i])) {
+            EXPECT_TRUE(std::isinf(b.ranges[i])) << "beam " << i;
+            continue;
+        }
+        ++returns;
+        EXPECT_NEAR(b.ranges[i], a.ranges[i], 1e-9) << "beam " << i;
+    }
+    EXPECT_GT(returns, a.ranges.size() / 2) << "the lidar sees the warehouse";
+}
+
+TEST(FloatingOrigin, ARobotNearTheOriginStaysWhereItWas) {
+    Robot robot = amr();
+    const std::vector<Pose> before = robot.bodyRestPose;
+    EXPECT_EQ(recentre(robot), (std::array<double, 3>{0.0, 0.0, 0.0}));
+    EXPECT_EQ(robot.world.region.rebaseCount, 0U);
+    EXPECT_EQ(robot.bodyRestPose[0].position, before[0].position);
 }
 
 }  // namespace

@@ -69,7 +69,13 @@ struct LoadOptions {
     double groundFriction{1.0};   // Coulomb coefficient of the ground plane
     double surfaceFriction{1.0};  // of every robot collider (URDF carries no friction)
     double dropHeightM{0.001};    // the robot starts this far above the ground
+    /// Where a free robot's root link starts, in world ENU: x, y and heading as given, and its
+    /// lowest collision shape dropHeightM above the height z (the ground under it).
+    Pose spawn;
 };
+
+/// Distance from the region origin beyond which recentre() moves it (huge-worlds.md §1.2).
+inline constexpr double kRebaseDistanceM = 1000.0;
 
 /// Reads a URDF file into world tables and a scene (the v0.2 path until the USD importer of
 /// roadmap 0.2-G1: open question Q4).
@@ -90,5 +96,14 @@ struct LoadOptions {
 /// angles, range min/max and the Gaussian noise stddev.
 [[nodiscard]] Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
                                                   const LoadOptions& options = {});
+
+/// Moves the region-local frame (the floating origin, huge-worlds.md §1.2) to the first body
+/// when it is farther than `rebaseDistanceM` from it, so that physics, sensors, signals and the
+/// viewer work with small coordinates however far out the world was authored. Every position
+/// held in the world frame (root bodies, world colliders, rest poses, scenery prims; unbounded
+/// planes and the ground slab only along their normal) loses the same whole-metre shift, which is
+/// exact in double, and world.region records it. Call it once, after the robot and the world are
+/// loaded. Returns the shift (zeros when nothing moved).
+std::array<double, 3> recentre(Robot& robot, double rebaseDistanceM = kRebaseDistanceM);
 
 }  // namespace lagrange::server
