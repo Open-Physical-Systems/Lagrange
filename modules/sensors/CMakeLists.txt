@@ -6,7 +6,7 @@ find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
 find_package(lagrange_gpu REQUIRED)
 
-add_library(lagrange_sensors src/Sensors.cpp)
+add_library(lagrange_sensors src/Sensors.cpp src/ImuNoise.cpp)
 lagrange_target_defaults(lagrange_sensors)
 target_include_directories(
     lagrange_sensors
@@ -38,6 +38,9 @@ if(BUILD_TESTING)
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
     )
     lagrange_target_defaults(test_sensors)
+    ament_add_gtest(test_imu_noise test/test_imu_noise.cpp TIMEOUT 120)
+    target_link_libraries(test_imu_noise lagrange_sensors)
+    lagrange_target_defaults(test_imu_noise)
     # Runs on the software Vulkan device (llvmpipe) where there is no GPU; skipped without any.
     ament_add_gtest(
         test_lidar_tiers

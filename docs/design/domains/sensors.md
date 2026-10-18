@@ -43,6 +43,16 @@ sensor frame, plus white noise (noise density), bias instability (first-order Ga
 rate random walk, scale-factor and misalignment errors, saturation at the range limits,
 quantisation. Parameters map directly to Allan-variance datasheet values.
 
+Status in v0.2 (`modules/sensors/include/lagrange/sensors/ImuNoise.hpp`): white noise (per
+sample, or as a density N), turn-on bias, Gauss-Markov bias instability, rate random walk K,
+saturation and quantisation, per channel; the names follow SDFormat's `<noise>` elements, which
+the URDF loader reads. Scale-factor and misalignment errors are not modelled yet. The bias is
+saved with the module state and draws from its own Philox streams, so it leaves the white noise
+of a run unchanged. `test_imu_noise` checks the Allan deviation of a 4-hour static record
+against N²/τ + K²τ/3 (IEEE Std 952): within 1 % up to τ = 100 s and 4.3 % at 1000 s. SDFormat
+does not define whether `<dynamic_bias_stddev>` is the stationary deviation or the driving
+noise; here it is the stationary deviation. TODO(verify): Gazebo's reading of it.
+
 **GNSS**: position from the body pose converted through the local frame to WGS84
 (`core/world/coords/`), Gaussian horizontal and vertical error with first-order time
 correlation, velocity error, fix-loss when sky view is blocked (ray casts to a fixed set of

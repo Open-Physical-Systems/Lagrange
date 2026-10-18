@@ -1,4 +1,6 @@
+#include "lagrange/module/StateIO.hpp"
 #include "lagrange/random/Philox.hpp"
+#include "lagrange/sensors/ImuNoise.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/PoseMath.hpp"
@@ -172,7 +174,7 @@ public:
         return {"sensors", label_, 0, 1, groundTruth_, true, CapabilityTier::Tier0};
     }
     [[nodiscard]] Duration preferredStep() const override { return step_; }
-    Status saveState(StateWriter&) const override { return {}; }  // sensors keep no state
+    Status saveState(StateWriter&) const override { return {}; }  // a lidar keeps no state
     Status restoreState(StateReader&) override { return {}; }
 
 protected:
@@ -365,8 +367,15 @@ public:
                 StatusCode::InvalidConfig,
                 "IMU " + name_ + " is on '" + raw.bodies.names[body_] + "', which never moves");
         }
-        accelNoise_ = groundTruth_ ? 0.0 : setting(world.sensors(), sensor_, "accel_noise", 0.0);
-        gyroNoise_ = groundTruth_ ? 0.0 : setting(world.sensors(), sensor_, "gyro_noise", 0.0);
+        if (!groundTruth_) {
+            const auto& settings = world.sensors().settings[sensor_];
+            const double rate = world.sensors().rateHz[sensor_];
+            const double dt = step_.seconds();
+            accel_ = ImuChannel(ImuNoise::from(settings, "accel", rate), dt);
+            gyro_ = ImuChannel(ImuNoise::from(settings, "gyro", rate), dt);
+            biased_ = ImuNoise::from(settings, "accel", rate).hasBias() ||
+                      ImuNoise::from(settings, "gyro", rate).hasBias();
+        }
         const std::string body = "body/" + raw.bodies.names[body_];
         pose_ = d.input(spec(body + "/pose", SignalType::Pose, units::m, "world_local"));
         twist_ = d.input(spec(body + "/twist", SignalType::Wrench, units::m_per_s, "world_local"));
@@ -400,10 +409,24 @@ public:
         // Proper acceleration is already in the body frame; the angular rate is in the world.
         Vec3 force = rotate(unmount, {accel[0], accel[1], accel[2]});
         Vec3 rate = rotate(unmount, rotate(conjugate(body), {twist[3], twist[4], twist[5]}));
+        if (biased_) {
+            // Separate streams from the white noise, so that adding a bias term leaves the
+            // white noise of a run as it was.
+            if (!started_) {
+                random::Stream rng(context.seed, 0, kTurnOnStream);
+                accel_.start(rng);
+                gyro_.start(rng);
+                started_ = true;
+            } else {
+                random::Stream rng(context.seed, context.stepIndex, kBiasStream);
+                accel_.advance(rng);
+                gyro_.advance(rng);
+            }
+        }
         random::Stream rng(context.seed, context.stepIndex, 0);
         for (std::size_t i = 0; i < 3; ++i) {
-            force[i] += accelNoise_ * rng.normal();
-            rate[i] += gyroNoise_ * rng.normal();
+            force[i] = accel_.measure(i, force[i], rng.normal());
+            rate[i] = gyro_.measure(i, rate[i], rng.normal());
         }
         bus.writeN(force_, force);
         bus.writeN(rate_, rate);
@@ -411,8 +434,29 @@ public:
         return {};
     }
 
+    Status saveState(StateWriter& writer) const override {
+        writer.put(started_);
+        writer.putDoubles(accel_.state());
+        writer.putDoubles(gyro_.state());
+        return {};
+    }
+
+    Status restoreState(StateReader& reader) override {
+        std::array<double, 9> accel{}, gyro{};
+        if (!reader.get(started_) || !reader.getDoubles(accel) || !reader.getDoubles(gyro)) {
+            return Status::error(StatusCode::Internal, "IMU " + name_ + ": truncated state");
+        }
+        accel_.setState(accel);
+        gyro_.setState(gyro);
+        return {};
+    }
+
 private:
-    double accelNoise_{0.0}, gyroNoise_{0.0};
+    static constexpr std::uint32_t kTurnOnStream = 1;  // Philox entities besides 0, the white
+    static constexpr std::uint32_t kBiasStream = 2;    // noise
+    ImuChannel accel_, gyro_;  // all terms off for the ground-truth substitute
+    bool biased_{false};
+    bool started_{false};  // turn-on bias drawn
     SignalId pose_, twist_, acceleration_, force_, rate_, orientation_;
 };
 
