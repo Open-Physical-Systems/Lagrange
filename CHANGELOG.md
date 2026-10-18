@@ -5,6 +5,35 @@ Notable changes to Lagrange are recorded here. Each release section is generated
 titles merged into `dev`; do not edit it by hand. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v0.1.0...v0.2.0) (2026-10-18)
+
+
+### Features
+
+* **bridge/ros2:** serve the simulation_interfaces services ([#41](https://github.com/Open-Physical-Systems/Lagrange/issues/41)) ([778dd97](https://github.com/Open-Physical-Systems/Lagrange/commit/778dd9708832b41d30a3546bddabf5646a59cd17))
+* **core:** add the signal bus, module interface and multirate scheduler ([#35](https://github.com/Open-Physical-Systems/Lagrange/issues/35)) ([2c63a02](https://github.com/Open-Physical-Systems/Lagrange/commit/2c63a02db4244539823c564c8f58ed40127e819e))
+* **core:** add units, counter-based RNG and coordinates; OpenUSD spike ([#32](https://github.com/Open-Physical-Systems/Lagrange/issues/32)) ([f942614](https://github.com/Open-Physical-Systems/Lagrange/commit/f942614767ca3572b34cc3f3ce0680427547a4e4))
+* **mod/rigid_body:** add the fixed and ground-truth substitutes and domain toggles ([#48](https://github.com/Open-Physical-Systems/Lagrange/issues/48)) ([235b46d](https://github.com/Open-Physical-Systems/Lagrange/commit/235b46d2e7fcbd90058ee667bd5c094dec71c05b))
+* **mod/rigid_body:** add the MuJoCo backend module ([#36](https://github.com/Open-Physical-Systems/Lagrange/issues/36)) ([f1c0aca](https://github.com/Open-Physical-Systems/Lagrange/commit/f1c0aca72330322706047b1f37a3600ba1c70da8))
+* **mod/sensors:** simulate 3D lidars and add a roof lidar to the sample AMR ([#43](https://github.com/Open-Physical-Systems/Lagrange/issues/43)) ([25a76ee](https://github.com/Open-Physical-Systems/Lagrange/commit/25a76eebedaded7a5c0c2699df8258686e575cfa))
+* **sensors,ros2:** add IMU and lidar sensors and the ROS 2 bridge ([#38](https://github.com/Open-Physical-Systems/Lagrange/issues/38)) ([01bb815](https://github.com/Open-Physical-Systems/Lagrange/commit/01bb81543ab472b493e02077bfa2c1b03ecc9831))
+* **server:** add lagrange_server, the simulation server the viewer connects to ([#37](https://github.com/Open-Physical-Systems/Lagrange/issues/37)) ([71de011](https://github.com/Open-Physical-Systems/Lagrange/commit/71de01145c4e48ffe82736f0bfd2eeaa52a7cc14))
+* **server:** add the Nav2 warehouse demo and occupancy-map export ([#39](https://github.com/Open-Physical-Systems/Lagrange/issues/39)) ([098f3de](https://github.com/Open-Physical-Systems/Lagrange/commit/098f3deedce1e91d3f21381235cb4a90c443f9be))
+* **server:** place worlds far from the origin with a floating origin ([#51](https://github.com/Open-Physical-Systems/Lagrange/issues/51)) ([fa3d650](https://github.com/Open-Physical-Systems/Lagrange/commit/fa3d6504681659ecacec2b76cc331976f0c2e3ba))
+* **server:** record a run to MCAP for replay ([#47](https://github.com/Open-Physical-Systems/Lagrange/issues/47)) ([7cce7cb](https://github.com/Open-Physical-Systems/Lagrange/commit/7cce7cb9db11f285065bb9dcac3f27e2389b141c))
+* **server:** validate and apply simulation profiles from the viewer ([#49](https://github.com/Open-Physical-Systems/Lagrange/issues/49)) ([e58fb11](https://github.com/Open-Physical-Systems/Lagrange/commit/e58fb11eb9303f2ba55d61dc4f969e08300b8980))
+* **viewer:** draw lidar returns under the Sensor frustums overlay ([#42](https://github.com/Open-Physical-Systems/Lagrange/issues/42)) ([4fd7525](https://github.com/Open-Physical-Systems/Lagrange/commit/4fd7525725a3b8eb76a0bb82c0c348fa90e1a3ef))
+
+
+### Bug fixes
+
+* **viewer:** open the viewer from the Nav2 demo launch ([#40](https://github.com/Open-Physical-Systems/Lagrange/issues/40)) ([c3253ed](https://github.com/Open-Physical-Systems/Lagrange/commit/c3253ed259e65c216b9453519e1015d581d742b9))
+
+
+### Documentation
+
+* **rfcs:** accept RFC 0002 (USD schemas) and RFC 0005 (profile format) ([#44](https://github.com/Open-Physical-Systems/Lagrange/issues/44)) ([f6a71b8](https://github.com/Open-Physical-Systems/Lagrange/commit/f6a71b847e092e9247ee7081aa66b2ad02efd51a))
+
 ## 0.1.0 (2026-10-14)
 
 

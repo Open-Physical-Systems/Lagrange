@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_server</name>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
   <description>The Lagrange simulation server: loads a robot, runs the modules on the scheduler against the wall clock, and serves the viewer protocol.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
