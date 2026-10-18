@@ -119,7 +119,18 @@ exist yet. Beams are rings of columns (`LidarLayout` in `core/world`: SDFormat's
 vertical samples and angles, ring after ring from the lowest); a single ring is a 2D scanner. The
 server turns ranges into the viewer's point frames, and the ROS bridge into `sensor_msgs/LaserScan`
 for 2D lidars or an organised `sensor_msgs/PointCloud2` (x, y, z, intensity, ring) for 3D ones.
-Rays are cast exactly against every collision shape on the CPU (Tier 0 without Embree yet). The IMU also writes `sensor/{n}/orientation` (ground truth) for
+Rays are cast exactly against every collision shape on the CPU (Tier 0 without Embree yet), or
+on Tier 1 by `gpu/kernels/lidar/bvh_traverse.slang`: the same closed-form tests in float, one
+thread per beam, through a bounding-volume hierarchy built on the CPU each scan (median split,
+uploaded). Shapes are taken relative to the sensor and combined with its orientation in double
+before the conversion to float, and spheres and cylinders use the distance-to-line form of the
+discriminant (Ray Tracing Gems, ch. 7), so grazing rays keep their precision. Range limits and
+Philox noise are applied on the CPU after the cast, keyed by the same module name, so both tiers
+add the same noise. The GPU lidar declares itself not deterministic; the server uses it only when
+the run takes ROS input, or with `--lidar gpu` (acceptance criterion 6 is
+`modules/sensors/test/test_lidar_tiers.cpp`: 100 000 random beams in 400 random shapes give the
+same shape for every beam and a worst range error of 0.16 mm on an Intel Iris Xe and 0.31 mm on
+llvmpipe, within 300 m). The IMU also writes `sensor/{n}/orientation` (ground truth) for
 `sensor_msgs/Imu`. Sensors come from Gazebo `<sensor>` blocks of a URDF until `SensorAPI_1` exists.
 
 Note on GNSS: a three-element array with mixed units (rad, rad, m) cannot carry one `Unit`. The

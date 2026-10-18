@@ -3,7 +3,7 @@
 <package format="3">
   <name>lagrange_sensors</name>
   <version>0.1.0</version>
-  <description>The sensors domain: IMU and 2D lidar on Tier 0 (exact ray casts against collision shapes), with deterministic noise.</description>
+  <description>The sensors domain: IMU and 2D/3D lidar on Tier 0 (exact ray casts against collision shapes on the CPU) and Tier 1 (the same tests in a compute kernel over a bounding-volume hierarchy), with deterministic noise.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
 
@@ -11,9 +11,11 @@
   <buildtool_depend>lagrange_cmake</buildtool_depend>
 
   <depend>lagrange_core</depend>
+  <depend>lagrange_gpu</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>lagrange_rigid_body_mujoco</test_depend>
+  <test_depend>mesa-vulkan-drivers</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

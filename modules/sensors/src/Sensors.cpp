@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -186,8 +187,18 @@ protected:
 
 class Lidar final : public SensorModule {
 public:
-    Lidar(const World& world, std::uint32_t sensor, bool groundTruth)
-        : SensorModule(world, sensor, "lidar", groundTruth) {}
+    Lidar(const World& world, std::uint32_t sensor, bool groundTruth,
+          std::shared_ptr<gpu::RayContext> rayContext)
+        : SensorModule(world, sensor, "lidar", groundTruth), rayContext_(std::move(rayContext)) {}
+
+    [[nodiscard]] ModuleInfo info() const override {
+        ModuleInfo out = SensorModule::info();
+        if (rayContext_) {
+            out.deterministic = false;
+            out.minimumTier = CapabilityTier::Tier1;
+        }
+        return out;
+    }
 
     Status declare(const WorldView& world, const ModuleConfig&, SignalDeclarer& d) override {
         const World::Sensors& sensors = world.sensors();
@@ -241,6 +252,17 @@ public:
         }
         placed_.resize(shapes_.size());
         buffer_.assign(samples_, kNoHit);
+        if (rayContext_ && !groundTruth_) {
+            std::vector<std::array<float, 3>> directions(samples_);
+            for (std::uint32_t i = 0; i < samples_; ++i) {
+                const Vec3 d = layout_.direction(i);
+                directions[i] = {static_cast<float>(d[0]), static_cast<float>(d[1]),
+                                 static_cast<float>(d[2])};
+            }
+            scan_ = std::make_unique<gpu::RayScan>(rayContext_, directions);
+            castShapes_.resize(shapes_.size());
+            hits_.resize(samples_);
+        }
         bus.writeN(ranges_, buffer_);
         return {};
     }
@@ -257,12 +279,19 @@ public:
             placed_[k] =
                 shape.body < 0 ? shape.pose : compose(bodyPose(bus, shape.body), shape.pose);
         }
+        if (scan_) {
+            castOnGpu(sensor);
+        }
         for (std::uint32_t i = 0; i < samples_; ++i) {
-            const Vec3 dir = rotate(sensor.orientation, layout_.direction(i));
             double nearest = kNoHit;
-            for (std::size_t k = 0; k < shapes_.size(); ++k) {
-                nearest = std::min(nearest, raycast(shapes_[k].type, shapes_[k].size, placed_[k],
-                                                    sensor.position, dir));
+            if (scan_) {
+                nearest = static_cast<double>(hits_[i].range);
+            } else {
+                const Vec3 dir = rotate(sensor.orientation, layout_.direction(i));
+                for (std::size_t k = 0; k < shapes_.size(); ++k) {
+                    nearest = std::min(nearest, raycast(shapes_[k].type, shapes_[k].size,
+                                                        placed_[k], sensor.position, dir));
+                }
             }
             if (nearest < minRange_ || nearest > maxRange_) {
                 buffer_[i] = kNoHit;  // no valid return (sensor_msgs/LaserScan convention)
@@ -286,6 +315,21 @@ private:
         int body;
     };
 
+    /// Shapes relative to the sensor, in double; the caster converts to float last
+    /// (huge-worlds.md §1: only the GPU sees float positions, and only small ones).
+    void castOnGpu(const Pose& sensor) {
+        for (std::size_t k = 0; k < shapes_.size(); ++k) {
+            gpu::CastShape& out = castShapes_[k];
+            out.type = static_cast<std::uint32_t>(shapes_[k].type);
+            out.size = shapes_[k].size;
+            for (std::size_t i = 0; i < 3; ++i) {
+                out.position[i] = placed_[k].position[i] - sensor.position[i];
+            }
+            out.orientation = placed_[k].orientation;
+        }
+        scan_->cast(castShapes_, sensor.orientation, hits_);
+    }
+
     Pose bodyPose(const SignalBus& bus, std::uint32_t b) const {
         if (!poses_[b].valid()) {
             return rest_[b];
@@ -303,6 +347,10 @@ private:
     std::vector<Pose> placed_;  // world pose of each shape for the current scan
     std::vector<double> buffer_;
     SignalId ranges_;
+    std::shared_ptr<gpu::RayContext> rayContext_;  // null: cast on the CPU
+    std::unique_ptr<gpu::RayScan> scan_;
+    std::vector<gpu::CastShape> castShapes_;
+    std::vector<gpu::CastHit> hits_;
 };
 
 class Imu final : public SensorModule {
@@ -372,12 +420,13 @@ private:
 
 namespace {
 
-std::vector<std::unique_ptr<IModule>> createModules(const World& world, bool groundTruth) {
+std::vector<std::unique_ptr<IModule>> createModules(
+    const World& world, bool groundTruth, const std::shared_ptr<gpu::RayContext>& rayContext) {
     std::vector<std::unique_ptr<IModule>> modules;
     for (std::uint32_t s = 0; s < world.sensors.names.size(); ++s) {
         switch (world.sensors.type[s]) {
             case SensorType::Lidar:
-                modules.push_back(std::make_unique<Lidar>(world, s, groundTruth));
+                modules.push_back(std::make_unique<Lidar>(world, s, groundTruth, rayContext));
                 break;
             case SensorType::Imu:
                 modules.push_back(std::make_unique<Imu>(world, s, groundTruth));
@@ -389,12 +438,13 @@ std::vector<std::unique_ptr<IModule>> createModules(const World& world, bool gro
 
 }  // namespace
 
-std::vector<std::unique_ptr<IModule>> createSensorModules(const World& world) {
-    return createModules(world, false);
+std::vector<std::unique_ptr<IModule>> createSensorModules(
+    const World& world, std::shared_ptr<gpu::RayContext> rayContext) {
+    return createModules(world, false, rayContext);
 }
 
 std::vector<std::unique_ptr<IModule>> createSensorSubstitutes(const World& world) {
-    return createModules(world, true);
+    return createModules(world, true, nullptr);
 }
 
 }  // namespace lagrange::sensors

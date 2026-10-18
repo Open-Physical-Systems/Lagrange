@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lagrange/gpu/RayCaster.hpp"
 #include "lagrange/module/IModule.hpp"
 #include "lagrange/world/World.hpp"
 
@@ -34,7 +35,13 @@ inline constexpr double kNoHit = std::numeric_limits<double>::infinity();
 /// angular_rate (Vec3 rad/s), orientation (Quat, ground truth, world_local).
 ///
 /// Noise comes from Philox keyed by run, sensor, step and beam, so it is deterministic.
-[[nodiscard]] std::vector<std::unique_ptr<IModule>> createSensorModules(const World& world);
+///
+/// With `rayContext`, lidars cast on the GPU (Tier 1, gpu/kernels/lidar/bvh_traverse.slang) in
+/// a frame centred on the sensor, in float; range limits and noise are applied afterwards
+/// exactly as on the CPU. Such a lidar is not deterministic (invariant 7: the CPU path is the
+/// reference) and needs a module config of Tier 1 or more.
+[[nodiscard]] std::vector<std::unique_ptr<IModule>> createSensorModules(
+    const World& world, std::shared_ptr<gpu::RayContext> rayContext = nullptr);
 
 /// The sensors domain's "ground_truth" substitute (ideal kind, CLAUDE.md §11.2): one module per
 /// sensor with the same signals and rates, but no rendering. A lidar reports no returns (+inf);

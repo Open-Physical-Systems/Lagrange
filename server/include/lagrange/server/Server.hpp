@@ -5,6 +5,7 @@
 #include "lagrange/time/SimTime.hpp"
 #include "lagrange/world/World.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <set>
 #include <string>
@@ -26,6 +27,11 @@ struct ServerOptions {
     /// "sensors" (ground truth); the others have no module yet and are always substituted.
     std::set<std::string> substituted;
     bool stampedCmdVel{true};  // /cmd_vel as TwistStamped; false: Twist
+    /// Where lidars cast: Auto puts them on a hardware GPU (Tier 1 or 2) when the run is not
+    /// deterministic (it takes ROS input) and on the CPU otherwise; Gpu also on a deterministic
+    /// run, which then is not one; Cpu always on the CPU reference.
+    enum class Lidar : std::uint8_t { Auto, Cpu, Gpu } lidar{Lidar::Auto};
+    std::string gpu;  // Vulkan device for the lidar (index or part of its name); empty: automatic
 };
 
 /// The simulation server (roadmap 0.2-E1, E2): it loads a robot, wires the MuJoCo backend and

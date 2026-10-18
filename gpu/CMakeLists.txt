@@ -26,6 +26,7 @@ target_link_libraries(lagrange_gpu_vma PRIVATE Vulkan::Vulkan)
 
 add_library(
     lagrange_gpu
+    hal/src/Compute.cpp
     hal/src/Device.cpp
     hal/src/Resources.cpp
     $<TARGET_OBJECTS:lagrange_gpu_vma>
@@ -42,11 +43,32 @@ target_include_directories(
 target_include_directories(lagrange_gpu SYSTEM PRIVATE ${_vma_include})
 target_link_libraries(lagrange_gpu PUBLIC Vulkan::Vulkan PRIVATE ZLIB::ZLIB)
 
+# The Tier 1 lidar's ray caster: kernels/lidar/bvh_traverse.slang and its host side.
+add_library(lagrange_gpu_raycast raycast/src/RayCaster.cpp)
+add_library(lagrange::gpu_raycast ALIAS lagrange_gpu_raycast)
+lagrange_target_defaults(lagrange_gpu_raycast)
+lagrange_target_vulkan_warnings(lagrange_gpu_raycast)
+target_include_directories(
+    lagrange_gpu_raycast
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/raycast/include>
+        $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
+)
+target_link_libraries(lagrange_gpu_raycast PRIVATE lagrange_gpu)
+lagrange_add_slang_shader(
+    lagrange_gpu_raycast
+    SOURCE kernels/lidar/bvh_traverse.slang
+    ENTRY castRays
+    STAGE compute
+    SYMBOL kBvhTraverse
+)
+
 add_executable(lagrange_gpu_info tools/gpu_info.cpp)
 lagrange_target_defaults(lagrange_gpu_info)
 target_link_libraries(lagrange_gpu_info PRIVATE lagrange_gpu)
 
 install(DIRECTORY hal/include/ DESTINATION include/${PROJECT_NAME})
+install(DIRECTORY raycast/include/ DESTINATION include/${PROJECT_NAME})
 # Shader sources are installed so that other packages compile the same kernels (invariant 13).
 install(DIRECTORY kernels/ DESTINATION share/${PROJECT_NAME}/kernels)
 install(
@@ -54,7 +76,7 @@ install(
     DESTINATION share/${PROJECT_NAME}/cmake
 )
 install(
-    TARGETS lagrange_gpu
+    TARGETS lagrange_gpu lagrange_gpu_raycast
     EXPORT export_${PROJECT_NAME}
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
