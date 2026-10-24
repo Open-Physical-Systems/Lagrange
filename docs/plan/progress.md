@@ -42,7 +42,7 @@ flowchart TB
         B6["B6 WorldView"]:::done
         B7["B7 sample assets"]:::done
         B2["B2 openusd_vendor<br/>B4 schemas · B5 stage loader"]:::done
-        B8["B8 collision bake"]:::todo
+        B8["B8 collision bake<br/>(v0.3, with mesh colliders)"]:::todo
     end
     subgraph C["C · rigid body"]
         C1_3["C1–C3 MuJoCo backend<br/>and substitutes"]:::done
@@ -73,7 +73,7 @@ flowchart TB
         G1["G1 URDF/xacro → USD"]:::done
         G5["G5 mesh import"]:::done
         G34["G3 SDFormat · G4 MJCF"]:::done
-        G2["G2 overlay files"]:::todo
+        G2["G2 overlay files<br/>(v0.3, with electrical schemas)"]:::todo
     end
     subgraph H["H · determinism, validation, packaging"]
         H1["H1 deterministic mode"]:::done
@@ -82,7 +82,7 @@ flowchart TB
         H9["H9 docs + tutorial"]:::done
         H8["H8 packaging trial<br/><b>next</b>"]:::next
         H2["H2 determinism check"]:::done
-        H5["H5 Python bindings"]:::todo
+        H5["H5 Python bindings"]:::done
         H7["H7 electrical slice<br/>(skipped: v0.3)"]:::done
         H10["H10 v0.2 release"]:::todo
     end
@@ -107,6 +107,9 @@ flowchart TB
 |---|---|---|
 | H7 (Q3) | No thin electrical slice in v0.2 | v0.3 builds the full electrical domain (network, battery, motors, FOC); a slice now would be rewritten |
 | E6 | Scene editing moves to v0.3 | Its acceptance test edits a motor parameter in a running sim; motors arrive with v0.3's electrical domain |
+| G2 | Overlay files move to v0.3 | Its acceptance test gives an imported AMR motors and a battery; those schemas (`ElectricalMotorAPI`, `BatteryAPI`) come with v0.3's electrical domain |
+| B8 | Collision bake moves to v0.3 | Needs mesh colliders in physics and in the lidar (none yet) and a CoACD vendor package; the sample warehouse's shelves are primitives today |
+| E8 | Replay in the C++ server last in v0.2 | Large and mostly parity with the Python replay that works today; smaller, certain items first |
 
 ## Autonomous run (from 2026-10-24)
 

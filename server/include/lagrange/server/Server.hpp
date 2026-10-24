@@ -11,6 +11,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace lagrange::server {
 
@@ -80,6 +81,20 @@ public:
     Status stepUntil(SimTime t);
     /// After load(): the hash of the run's whole state (Scheduler::stateHash).
     [[nodiscard]] Expected<std::uint64_t, Status> stateHash() const;
+
+    /// After load(): every signal on the bus, with its unit ("N·m") and components.
+    struct SignalEntry {
+        std::string name;
+        std::string unit;
+        std::uint32_t components{1};
+    };
+    [[nodiscard]] std::vector<SignalEntry> signals() const;
+    /// After load(): the latest value of a signal; empty for an unknown name.
+    [[nodiscard]] std::vector<double> read(const std::string& name) const;
+    /// After load(): the simulated time.
+    [[nodiscard]] SimTime now() const;
+    /// After load(): the world (bodies, joints, colliders, sensors) as loaded.
+    [[nodiscard]] const World& world() const;
     /// One iteration: waits up to `timeoutMs` for viewers, advances simulation time by the wall
     /// time that passed (times the real-time factor), and sends what changed.
     void runOnce(int timeoutMs);
