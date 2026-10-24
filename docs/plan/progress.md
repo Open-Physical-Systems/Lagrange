@@ -150,7 +150,24 @@ v0.2, in order:
 8. H8 packaging trial (Podman image running the Nav2 demo, bloom dry run, Q18 write-up)
 9. H10 release preparation (not published)
 
-Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md).
+Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
+
+1. Torque commands: controllers write `joint/<j>/torque_command`; the electrical domain turns it
+   into `joint/<j>/torque` (its ideal substitute until the network exists). **Done** (2026-10-25)
+2. Electrical schemas (`ElectricalMotorAPI_v1`, `BatteryAPI_v1`, `PortAPI_v1`); the stage
+   collects their instances; G2 overlay files
+3. Electrical network module (DC bus, battery ECM, averaged motor drives) and its tests
+4. Thermal module (lumped networks), coupled to electrical losses
+5. Coupling stability checks across the electrical, thermal and physics rates
+6. FMU host on `fmilibrary_vendor` (TODO(verify) version and licence)
+7. Bench mode: the replay substitute for rigid body (E8 follows from it)
+8. SPICE netlist and Modelica export; ngspice offline comparison
+9. Robot arm sample and MoveIt 2
+10. Raster camera sensor
+11. Jolt full backend
+12. Schema migration tools (`tools/`)
+13. E6 scene editing; B8 collision bake
+14. Viewer additions (schematic, electrical scopes)
 
 ### Merged under the autonomous mandate
 

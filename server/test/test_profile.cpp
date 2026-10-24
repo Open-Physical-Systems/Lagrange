@@ -170,7 +170,11 @@ TEST(Profile, TheSampleAmrExampleValidatesWiresAndApplies) {
     substituted.replace(substituted.find(on), on.size(),
                         "sensors: { enabled: false, substitute: ground_truth }");
     ASSERT_TRUE(server.applyProfile(substituted).ok());
-    EXPECT_EQ(dot.find("substitute"), std::string::npos) << dot;
+    // Before: only electrical ran as a substitute (the ideal torque source; v0.3 adds the network).
+    EXPECT_EQ(dot.find("sensors/lidar_front_lidar\\n100 ms\\nsubstitute"), std::string::npos)
+        << dot;
+    EXPECT_NE(dot.find("electrical/ideal_torque_source\\n1 ms\\nsubstitute"), std::string::npos)
+        << dot;
     EXPECT_NE(server.wiringDot().find("sensors/lidar_front_lidar\\n100 ms\\nsubstitute"),
               std::string::npos)
         << server.wiringDot();

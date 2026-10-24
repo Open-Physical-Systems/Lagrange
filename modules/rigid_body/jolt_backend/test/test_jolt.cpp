@@ -1,5 +1,6 @@
 // Spike 0.2-C6: Jolt runs the pendulum and the AMR. Tolerances are a spike's: the full
 // backend gets MuJoCo's validation suite (docs/plan/spikes/0.2-C1-mujoco.md).
+#include "lagrange/electrical/IdealTorqueSource.hpp"
 #include "lagrange/rigid_body/JoltBackend.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/server/DiffDrive.hpp"
@@ -68,6 +69,7 @@ TEST(Jolt, TheAmrDrivesLikeOnMujoco) {
     settings.leftJoint = robot->actuatedJoints.at(0);
     settings.rightJoint = robot->actuatedJoints.at(1);
     scheduler.add(std::make_unique<server::DiffDriveController>(settings));
+    scheduler.add(std::make_unique<electrical::IdealTorqueSource>());  // torque_command -> torque
     auto wired = scheduler.wire(WorldView(robot->world));
     ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
     ASSERT_TRUE(scheduler.stepUntil(SimTime{6'000'000'000}).ok());
@@ -97,6 +99,8 @@ TEST(Jolt, TwoRunsAreIdentical) {
         settings.leftJoint = robot->actuatedJoints.at(0);
         settings.rightJoint = robot->actuatedJoints.at(1);
         scheduler->add(std::make_unique<server::DiffDriveController>(settings));
+        scheduler->add(
+            std::make_unique<electrical::IdealTorqueSource>());  // torque_command -> torque
         EXPECT_TRUE(scheduler->wire(WorldView(robot->world)));
         EXPECT_TRUE(scheduler->stepUntil(SimTime{2'000'000'000}).ok());
         return scheduler->stateHash().value();

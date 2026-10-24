@@ -1,5 +1,6 @@
 // Keeps docs/guide/writing-a-module.md true: the Odometer wires next to the MuJoCo backend on
 // the sample AMR, agrees with the true motion, and a wrong unit is refused at wiring.
+#include "lagrange/electrical/IdealTorqueSource.hpp"
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/server/DiffDrive.hpp"
@@ -30,6 +31,7 @@ void addDrive(Scheduler& scheduler) {
     drive.leftJoint = "left_wheel_joint";
     drive.rightJoint = "right_wheel_joint";
     scheduler.add(std::make_unique<server::DiffDriveController>(drive));
+    scheduler.add(std::make_unique<electrical::IdealTorqueSource>());  // torque_command -> torque
 }
 
 TEST(Odometer, AgreesWithTheTrueMotionOfTheSampleAmr) {

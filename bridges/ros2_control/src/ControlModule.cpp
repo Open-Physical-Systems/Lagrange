@@ -65,7 +65,10 @@ public:
                 d.input(feedback(base + "/position", prismatic ? units::m : units::rad));
             joint.velocity = d.input(
                 feedback(base + "/velocity", prismatic ? units::m_per_s : units::rad_per_s));
-            joint.torque = d.output(spec(base + "/torque", prismatic ? units::N : units::N_m));
+            // The command: the electrical domain (or its ideal substitute) turns it into the
+            // torque.
+            joint.torque =
+                d.output(spec(base + "/torque_command", prismatic ? units::N : units::N_m));
             signals_.push_back(joint);
         }
         return {};

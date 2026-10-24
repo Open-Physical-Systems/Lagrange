@@ -1,4 +1,5 @@
 #include "Recorder.hpp"
+#include "lagrange/electrical/IdealTorqueSource.hpp"
 #include "lagrange/importers/Importers.hpp"
 #include "lagrange/proto/Connection.hpp"
 #include "lagrange/proto/Framing.hpp"
@@ -275,6 +276,9 @@ struct Server::Impl {
             next->add(std::move(drive));
             next->add(std::make_unique<DiffDriveController>(driveSettings()));
         }
+        // Electrical has no model yet: its ideal substitute turns the controllers' torque
+        // commands into joint torques (domains/electrical.md §5).
+        next->add(std::make_unique<electrical::IdealTorqueSource>());
         ModuleConfigData sensing;
         sensing.tier =
             rayContext ? static_cast<CapabilityTier>(rayContext->tier()) : CapabilityTier::Tier0;

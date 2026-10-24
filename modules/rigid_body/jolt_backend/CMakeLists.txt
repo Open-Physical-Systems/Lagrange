@@ -32,11 +32,13 @@ install(
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
     find_package(lagrange_server REQUIRED)
+    find_package(lagrange_electrical REQUIRED)
     ament_add_gtest(test_jolt test/test_jolt.cpp TIMEOUT 120)
     target_link_libraries(
         test_jolt
         lagrange_rigid_body_jolt
         lagrange_server::lagrange_server
+        lagrange_electrical::lagrange_electrical
     )
     target_compile_definitions(
         test_jolt

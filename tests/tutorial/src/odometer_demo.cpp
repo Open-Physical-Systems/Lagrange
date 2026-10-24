@@ -3,6 +3,7 @@
 //
 //   odometer_demo [SECONDS]      prints odometry against the true pose once a second
 //   odometer_demo --wrong-unit   adds a module that reads a wheel speed in m/s: wiring refuses
+#include "lagrange/electrical/IdealTorqueSource.hpp"
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/server/DiffDrive.hpp"
@@ -87,6 +88,7 @@ int main(int argc, char** argv) {
     drive.leftJoint = "left_wheel_joint";
     drive.rightJoint = "right_wheel_joint";
     scheduler.add(std::make_unique<server::DiffDriveController>(drive));
+    scheduler.add(std::make_unique<electrical::IdealTorqueSource>());  // torque_command -> torque
     scheduler.add(std::make_unique<tutorial::Odometer>(tutorial::Odometer::Settings{}));
     if (wrongUnit) {
         scheduler.add(std::make_unique<WrongUnitReader>());

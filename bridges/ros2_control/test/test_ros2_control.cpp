@@ -1,5 +1,6 @@
 // ros2_control in the loop: a forward_command_controller loaded by the standard spawner commands
 // a simulated wheel's velocity through LagrangeSystem, and the servo makes the wheel follow.
+#include "lagrange/electrical/IdealTorqueSource.hpp"
 #include "lagrange/ros2_control/ControllerHost.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 
@@ -105,6 +106,7 @@ TEST(Ros2Control, AControllerDrivesTheWheelThroughTheServo) {
     Wheel* sim = wheel.get();
     scheduler.add(std::move(wheel));
     scheduler.add(createControlModule(**host, *joints));
+    scheduler.add(std::make_unique<electrical::IdealTorqueSource>());  // torque_command -> torque
     auto wired = scheduler.wire(WorldView(world));
     ASSERT_TRUE(wired) << to_string(wired.error().front());
 
