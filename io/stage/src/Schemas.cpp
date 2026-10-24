@@ -1,8 +1,10 @@
 // Applied schemas of the project's libraries -> World::schemaInstances (RFC 0002, "Loading").
 #include "Schemas.hpp"
+#include "lagrange/stage/Stage.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <mutex>
 #include <string_view>
@@ -78,6 +80,56 @@ void registerSchemaLibraries() {
         }
         plugins.RegisterPlugins(paths);
     });
+}
+
+std::optional<SchemaAttribute> schemaAttribute(const std::string& schema,
+                                               const std::string& instance,
+                                               const std::string& attribute) {
+    registerSchemaLibraries();
+    const UsdPrimDefinition* definition =
+        UsdSchemaRegistry::GetInstance().FindAppliedAPIPrimDefinition(TfToken(schema));
+    if (definition == nullptr) {
+        return std::nullopt;
+    }
+    // A multiple-apply schema's properties are templates: "thermal:link:__INSTANCE_NAME__:...".
+    std::string name = attribute;
+    if (!instance.empty()) {
+        const std::string named = ":" + instance + ":";
+        if (const std::size_t at = name.find(named); at != std::string::npos) {
+            name = UsdSchemaRegistry::MakeMultipleApplyNameTemplate(name.substr(0, at),
+                                                                    name.substr(at + named.size()))
+                       .GetString();
+        }
+    }
+    UsdPrimDefinition::Attribute property = definition->GetAttributeDefinition(TfToken(name));
+    if (!property) {
+        return std::nullopt;
+    }
+    SchemaAttribute out;
+    out.type = property.GetTypeName().GetAsToken().GetString();
+    out.doc = property.GetDocumentation();
+    VtValue unit;
+    if (property.GetMetadata(TfToken("lagrangeUnit"), &unit) && unit.IsHolding<std::string>()) {
+        out.unit = unit.UncheckedGet<std::string>();
+        if (out.unit == "1") {
+            out.unit.clear();
+        }
+    }
+    return out;
+}
+
+std::optional<std::string> checkSchemaReal(const std::string& schema, const std::string& attribute,
+                                           double value) {
+    if (!std::isfinite(value)) {
+        return attribute + " must be a finite number";
+    }
+    for (const Fraction& rule : kFractions) {
+        if (schema == rule.schema && attribute == rule.attribute &&
+            !(value >= 0.0 && value <= 1.0)) {
+            return attribute + " is " + std::to_string(value) + "; it must be within 0 to 1";
+        }
+    }
+    return std::nullopt;
 }
 
 SchemaCollector::SchemaCollector(UsdStageRefPtr stage, WorldPrimOf worldPrimOf,

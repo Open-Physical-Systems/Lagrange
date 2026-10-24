@@ -10,7 +10,11 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <map>
 #include <numbers>
+#include <string>
+#include <vector>
 
 #include <imgui.h>
 
@@ -102,6 +106,7 @@ public:
             ImGui::Unindent(px(8.0F));
         }
         attributes(context, statics, prim);
+        editsFooter(context, id);
         if (prim.mesh != kNone && widgets::SectionHeader("Geometry", "render mesh")) {
             const MeshData& mesh = statics.meshes[prim.mesh];
             char text[32];
@@ -138,6 +143,9 @@ private:
             context.client.unsubscribe(entry.buffer);
         }
         live_.clear();
+        if (prim != prim_) {
+            edits_.clear();  // edits are local to the prim they were typed for
+        }
         prim_ = prim;
         sceneGeneration_ = sceneGeneration;
         catalog_ = catalog;
@@ -309,8 +317,7 @@ private:
                       group.empty() ? "attributes" : group.data());
     }
 
-    static void row(PanelContext& context, const SceneStatics& statics,
-                    const AttributeInfo& attribute) {
+    void row(PanelContext& context, const SceneStatics& statics, const AttributeInfo& attribute) {
         const std::size_t colon = attribute.name.find(':');
         const char* label = attribute.name.c_str() + (colon == std::string::npos ? 0 : colon + 1);
         if (attribute.kind == AttributeInfo::Kind::Targets) {
@@ -326,14 +333,69 @@ private:
             }
             return;
         }
+        if (attribute.editable && attribute.kind == AttributeInfo::Kind::Real) {
+            // Design: edits stay local until Apply; an edited field gets the accent border.
+            auto it = edits_.find(attribute.name);
+            std::array<char, 48> buffer{};
+            const std::string& shown = it != edits_.end() ? it->second : attribute.value;
+            std::snprintf(buffer.data(), buffer.size(), "%s", shown.c_str());
+            const bool edited = it != edits_.end() && it->second != attribute.value;
+            if (widgets::PropertyEdit(label, buffer.data(), buffer.size(), attribute.unit.c_str(),
+                                      edited, attribute.doc.c_str())) {
+                edits_[attribute.name] = buffer.data();
+            }
+            return;
+        }
         widgets::PropertyRow(label, attribute.value.c_str(), attribute.unit.c_str(),
                              attribute.kind == AttributeInfo::Kind::Asset, attribute.doc.c_str());
+    }
+
+    /// Design: "N edits", Revert and Apply; Apply sends one set_attribute per edit. The server
+    /// applies them to the running simulation from its next step.
+    void editsFooter(PanelContext& context, std::uint32_t prim) {
+        const std::shared_ptr<const PrimAttributes> answer = context.client.attributes();
+        std::size_t count = 0;
+        for (const auto& [name, text] : edits_) {
+            for (const AttributeInfo& a : answer ? answer->attributes : kNoAttributes) {
+                count += a.name == name && a.value != text ? 1 : 0;
+            }
+        }
+        if (count == 0) {
+            return;
+        }
+        ImGui::Dummy(ImVec2(0.0F, px(6.0F)));
+        ImGui::Separator();
+        ImGui::AlignTextToFramePadding();
+        widgets::Caption("%zu %s · applies to the running simulation", count,
+                         count == 1 ? "edit" : "edits");
+        const float revert = widgets::ButtonWidth("Revert");
+        const float apply = widgets::ButtonWidth("Apply");
+        ImGui::SameLine();
+        widgets::AlignRight(revert + apply + px(6.0F));
+        if (widgets::Button("Revert", widgets::ButtonKind::Ghost)) {
+            edits_.clear();
+        }
+        ImGui::SameLine(0.0F, px(6.0F));
+        if (widgets::PrimaryButton("Apply")) {
+            for (const auto& [name, text] : edits_) {
+                char* end = nullptr;
+                const double value = std::strtod(text.c_str(), &end);
+                if (end == text.c_str() || *end != '\0' || !std::isfinite(value)) {
+                    continue;  // not a number: left as typed, for the user to correct
+                }
+                context.client.setAttribute(prim, name, value, false);
+            }
+            edits_.clear();
+            requestId_ = context.client.requestAttributes(prim);  // the values as applied
+        }
     }
 
     const char* window_;
     const char* tools_;
     Workspace workspace_;
     std::vector<Live> live_;
+    std::map<std::string, std::string, std::less<>> edits_;  // attribute -> typed text
+    static inline const std::vector<AttributeInfo> kNoAttributes;
     bool locked_{false};
     std::uint32_t lockedPrim_{kNone};
     std::uint64_t lockedScene_{0};

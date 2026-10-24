@@ -499,6 +499,18 @@ std::uint64_t ViewerClient::validateProfile(const std::string& yaml) {
     return id;
 }
 
+void ViewerClient::setAttribute(std::uint32_t prim, const std::string& name, double value,
+                                bool save) {
+    auto envelope = std::make_unique<v1::Envelope>();
+    envelope->mutable_command()->set_request_id(nextRequestId_++);
+    v1::SetAttribute* set = envelope->mutable_command()->mutable_set_attribute();
+    set->set_prim(prim);
+    set->mutable_attribute()->set_name(name);
+    set->mutable_attribute()->set_real(value);
+    set->set_save_to_session_layer(save);
+    enqueue(std::move(envelope));
+}
+
 void ViewerClient::applyProfile(const std::string& yaml) {
     auto envelope = std::make_unique<v1::Envelope>();
     envelope->mutable_command()->set_request_id(nextRequestId_++);

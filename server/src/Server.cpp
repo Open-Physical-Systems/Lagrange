@@ -25,11 +25,13 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -126,6 +128,34 @@ template <class T>
 void setInline(v1::DataRef& ref, const std::vector<T>& values) {
     ref.set_inline_(values.data(), values.size() * sizeof(T));
     ref.set_size(values.size() * sizeof(T));
+}
+
+/// A schema's unit text ("N.m/A", "W/(m2.K)", "ohm") as a label: "N·m/A", "W/(m²·K)", "Ω".
+std::string displayUnit(const std::string& text) {
+    static constexpr std::array<const char*, 10> kSuperscript{"⁰", "¹", "²", "³", "⁴",
+                                                              "⁵", "⁶", "⁷", "⁸", "⁹"};
+    std::string out;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const char ch = text[i];
+        const bool afterSymbol =
+            i > 0 &&
+            (std::isalpha(static_cast<unsigned char>(text[i - 1])) != 0 || text[i - 1] == ')');
+        if (ch == '.') {
+            out += "·";
+        } else if (afterSymbol && ch == '-' && i + 1 < text.size() &&
+                   std::isdigit(static_cast<unsigned char>(text[i + 1])) != 0) {
+            out += "⁻";
+        } else if ((afterSymbol || (!out.empty() && out.ends_with("⁻"))) &&
+                   std::isdigit(static_cast<unsigned char>(ch)) != 0) {
+            out += kSuperscript.at(static_cast<std::size_t>(ch - '0'));
+        } else if (text.compare(i, 3, "ohm") == 0) {
+            out += "Ω";
+            i += 2;
+        } else {
+            out += ch;
+        }
+    }
+    return out;
 }
 
 std::string readFile(const std::string& path) {
@@ -390,11 +420,13 @@ struct Server::Impl {
     std::optional<ProfileSettings> pending;  // applied without restart: used at the next reset
 
     Status build() {
-        auto made = makeScheduler(active(), &driveCommand);
+        DriveCommand* drive = nullptr;
+        auto made = makeScheduler(active(), &drive);
         if (!made) {
             return Status::error(StatusCode::InvalidConfig, made.error());
         }
         scheduler = std::move(*made);
+        driveCommand = drive;  // only now: a failed build leaves the run as it was
         bodyPose.assign(robot.world.bodies.names.size(), SignalId{});
         for (std::size_t b = 0; b < bodyPose.size(); ++b) {
             bodyPose[b] = scheduler->bus().find("body/" + robot.world.bodies.names[b] + "/pose");
@@ -1448,6 +1480,16 @@ struct Server::Impl {
             case v1::Command::kGetAttributes:
                 attributes(command.get_attributes(), *r.mutable_attributes());
                 break;
+            case v1::Command::kSetAttribute:
+                if (Status status = setAttribute(command.set_attribute()); !status.ok()) {
+                    r.set_ok(false);
+                    r.set_error(status.message);
+                }
+                break;
+            case v1::Command::kSetTransform:
+                r.set_ok(false);
+                r.set_error("moving prims is not supported by this server yet");
+                break;
             case v1::Command::kSetRosGraph:
                 session.wantsRosGraph = command.set_ros_graph().enabled();
                 if (session.wantsRosGraph) {
@@ -1507,6 +1549,166 @@ struct Server::Impl {
     }
 
     /// Rebuilds the run at t = 0, keeping play or pause.
+    /// Rebuilds the run from the (edited) world and carries its state over: the edit applies
+    /// from the next step and the run goes on (E6). On failure the run is left as it was.
+    Status rebuildKeepingState() {
+        StateWriter saved;
+        if (Status status = scheduler->saveState(saved); !status.ok()) {
+            return status;
+        }
+        std::unique_ptr<Scheduler> previous = std::move(scheduler);
+        DriveCommand* previousDrive = driveCommand;
+        if (Status status = build(); !status.ok()) {
+            scheduler = std::move(previous);
+            driveCommand = previousDrive;
+            if (bridge) {
+                bridge->attach(robot.world, scheduler->bus());
+            }
+            return status;
+        }
+        StateReader reader(saved.bytes());
+        if (Status status = scheduler->restoreState(reader); !status.ok()) {
+            scheduler = std::move(previous);
+            driveCommand = previousDrive;
+            (void)build();  // the previous wiring, at t = 0: the old state cannot be carried
+            return status;
+        }
+        return {};
+    }
+
+    /// The world prim standing for a scene prim, by path; kNoPrim if there is none.
+    [[nodiscard]] std::uint32_t worldPrimOf(std::uint32_t scenePrim) const {
+        if (scenePrim >= robot.scene.prims.size()) {
+            return kNoIndex;
+        }
+        const std::string& path = robot.scene.prims[scenePrim].path;
+        const auto& paths = robot.world.prims.paths;
+        const auto it = std::find(paths.begin(), paths.end(), path);
+        return it == paths.end() ? kNoIndex : static_cast<std::uint32_t>(it - paths.begin());
+    }
+
+    /// The scene prim of a world prim: a joint's is its child link's, a body's and a sensor's
+    /// their own; else by path. kNoIndex if there is none.
+    [[nodiscard]] std::uint32_t scenePrimOf(PrimId prim) const {
+        const World& world = robot.world;
+        for (std::size_t j = 0; j < world.joints.prim.size() && j < robot.jointPrim.size(); ++j) {
+            if (world.joints.prim[j] == prim) {
+                return robot.jointPrim[j];
+            }
+        }
+        for (std::size_t b = 0; b < world.bodies.prim.size() && b < robot.bodyPrim.size(); ++b) {
+            if (world.bodies.prim[b] == prim) {
+                return robot.bodyPrim[b];
+            }
+        }
+        for (std::size_t n = 0; n < world.sensors.prim.size() && n < robot.sensorPrim.size(); ++n) {
+            if (world.sensors.prim[n] == prim) {
+                return robot.sensorPrim[n];
+            }
+        }
+        if (prim.index >= world.prims.paths.size()) {
+            return kNoIndex;
+        }
+        const std::string& path = robot.world.prims.paths[prim.index];
+        for (std::uint32_t p = 0; p < robot.scene.prims.size(); ++p) {
+            if (robot.scene.prims[p].path == path) {
+                return p;
+            }
+        }
+        return kNoIndex;
+    }
+
+    /// Command SetAttribute: a number of one of the prim's schemas (or a body's mass), checked as
+    /// the loader checks it, applied to the running simulation, and optionally saved.
+    Status setAttribute(const v1::SetAttribute& request) {
+        const v1::Attribute& attribute = request.attribute();
+        const std::string& name = attribute.name();
+        if (attribute.value_case() != v1::Attribute::kReal) {
+            return Status::error(StatusCode::Unsupported,
+                                 name + ": only numbers can be edited yet");
+        }
+        const double value = attribute.real();
+        double* target = nullptr;
+        std::string what;
+        std::string unitText;
+        if (name == "physics:mass") {
+            for (std::size_t b = 0; b < robot.bodyPrim.size(); ++b) {
+                if (robot.bodyPrim[b] == request.prim()) {
+                    target = &robot.world.bodies.mass[b];
+                    unitText = "kg";
+                }
+            }
+            if (target != nullptr && !(value > 0.0 && std::isfinite(value))) {
+                return Status::error(StatusCode::InvalidConfig, "physics:mass must be positive");
+            }
+        } else {
+            const std::uint32_t prim = worldPrimOf(request.prim());
+            for (SchemaInstance& s : robot.world.schemaInstances) {
+                const auto it = s.reals.find(name);
+                if (prim == kNoIndex || s.prim.index != prim || it == s.reals.end()) {
+                    continue;
+                }
+                if (auto problem = stage::checkSchemaReal(s.schema, name, value)) {
+                    return Status::error(StatusCode::InvalidConfig, *problem);
+                }
+                target = &it->second;
+                what = s.schema;
+                if (auto info = stage::schemaAttribute(s.schema, s.instance, name)) {
+                    unitText = info->unit;
+                }
+            }
+        }
+        if (target == nullptr) {
+            return Status::error(StatusCode::InvalidConfig,
+                                 "this prim has no number " + name + " that can be edited");
+        }
+        const double old = *target;
+        *target = value;
+        if (Status status = rebuildKeepingState(); !status.ok()) {
+            *target = old;
+            return Status::error(status.code, name + " = " + std::to_string(value) +
+                                                  " was not applied: " + status.message);
+        }
+        char line[256];
+        std::snprintf(line, sizeof(line), "%s %s %g -> %g %s (from t = %.3f s)",
+                      robot.scene.prims[request.prim()].path.c_str(), name.c_str(), old, value,
+                      unitText.c_str(), scheduler->now().seconds());
+        log(v1::LOG_LEVEL_INFO, "edit", line);
+        broadcast(statusEnvelope());
+        if (request.save_to_session_layer()) {
+            return saveSession();
+        }
+        return {};
+    }
+
+    /// The session layer: the edited model as a USD layer that `--robot FILE --world none`
+    /// reads back.
+    Status saveSession() {
+        std::filesystem::path path = options.sessionPath;
+        if (path.empty()) {
+            const char* stateHome = std::getenv("XDG_STATE_HOME");
+            const char* home = std::getenv("HOME");
+            const std::filesystem::path base =
+                stateHome != nullptr && *stateHome != '\0'
+                    ? std::filesystem::path(stateHome)
+                    : std::filesystem::path(home != nullptr ? home : ".") / ".local" / "state";
+            path = base / "lagrange" / (robot.name + ".session.usda");
+        }
+        std::error_code ec;
+        std::filesystem::create_directories(path.parent_path(), ec);
+        stage::WriteOptions write;
+        write.doc = "Session layer of lagrange_server: " + robot.sourcePath +
+                    " with the edits made in the viewer. Run it with --robot this file --world "
+                    "none.";
+        if (auto written = stage::writeStage(robot, path.string(), write); !written) {
+            return Status::error(
+                StatusCode::Internal,
+                "the edit applies, but the session layer was not saved: " + written.error());
+        }
+        log(v1::LOG_LEVEL_INFO, "edit", "session layer saved to " + path.string());
+        return {};
+    }
+
     Status restart() {
         stopRecording("the run was reset");
         const bool wasRunning = state == v1::RUN_STATE_RUNNING;
@@ -1813,6 +2015,62 @@ struct Server::Impl {
         return envelope;
     }
 
+    /// The values of the prim's schemas of ours, numbers editable (SetAttribute).
+    void schemaAttributes(std::uint32_t prim, v1::PrimAttributes& item) const {
+        const std::uint32_t world = worldPrimOf(prim);
+        if (world == kNoIndex) {
+            return;
+        }
+        for (const SchemaInstance& s : robot.world.schemaInstances) {
+            if (s.prim.index != world) {
+                continue;
+            }
+            const auto add = [&](const std::string& name) -> v1::Attribute& {
+                v1::Attribute& a = *item.add_attributes();
+                a.set_name(name);
+                a.set_authored(true);
+                if (auto info = stage::schemaAttribute(s.schema, s.instance, name)) {
+                    a.set_doc(info->doc);
+                    if (!info->unit.empty()) {
+                        if (const UnitParse unit = parseUnit(info->unit); unit.unit) {
+                            setUnit(*a.mutable_unit(), *unit.unit);
+                            a.mutable_unit()->set_display(displayUnit(info->unit));
+                        }
+                    }
+                }
+                return a;
+            };
+            for (const auto& [name, value] : s.reals) {
+                v1::Attribute& a = add(name);
+                a.set_real(value);
+                a.set_editable(true);
+            }
+            for (const auto& [name, value] : s.integers) {
+                add(name).set_integer(value);
+            }
+            for (const auto& [name, value] : s.tokens) {
+                add(name).set_token(value);
+            }
+            for (const auto& [name, value] : s.assetPaths) {
+                add(name).set_asset(value);
+            }
+            for (const auto& [name, values] : s.realArrays) {
+                v1::Attribute& a = add(name);
+                for (const double v : values) {
+                    a.mutable_reals()->add_v(v);
+                }
+            }
+            for (const auto& [name, targets] : s.relationships) {
+                v1::Attribute& a = add(name);
+                for (const PrimId target : targets) {
+                    if (const std::uint32_t p = scenePrimOf(target); p != kNoIndex) {
+                        a.mutable_targets()->add_prims(p);
+                    }
+                }
+            }
+        }
+    }
+
     void attributes(const v1::GetAttributes& request, v1::PrimAttributesList& out) const {
         const World& world = robot.world;
         for (const std::uint32_t prim : request.prims()) {
@@ -1827,6 +2085,7 @@ struct Server::Impl {
                 mass.set_real(world.bodies.mass[b]);
                 setUnit(*mass.mutable_unit(), units::kg);
                 mass.set_authored(true);
+                mass.set_editable(true);
                 v1::Attribute& inertia = *item.add_attributes();
                 inertia.set_name("physics:diagonalInertia");
                 for (std::size_t i = 0; i < 3; ++i) {
@@ -1835,6 +2094,7 @@ struct Server::Impl {
                 setUnit(*inertia.mutable_unit(), units::kg_m2);
                 inertia.set_authored(true);
             }
+            schemaAttributes(prim, item);
             for (std::size_t j = 0; j < robot.jointPrim.size(); ++j) {
                 if (robot.jointPrim[j] != prim) {
                     continue;

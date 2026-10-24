@@ -784,6 +784,48 @@ bool PropertyRow(const char* label, const char* value, const char* unit, bool li
     return link && clicked;
 }
 
+bool PropertyEdit(const char* label, char* buffer, std::size_t size, const char* unit, bool edited,
+                  const char* tooltip) {
+    ImGui::PushID(label);
+    rowLabel(label);
+    const theme::Fonts& fonts = theme::fonts();
+    const float width = std::max(ImGui::GetContentRegionAvail().x, px(40.0F));
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const ImVec2 max(min.x + width, min.y + px(22.0F));
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const float rounding = ImGui::GetStyle().FrameRounding;
+    draw->AddRectFilled(min, max, u32(c::bg0), rounding);
+    draw->AddRect(min, max, u32(edited ? c::accentBorder : c::line), rounding);
+    float unitWidth = 0.0F;
+    if (unit != nullptr && *unit != '\0') {
+        const float unitSize = px(theme::kCaptionSize);
+        const ImVec2 extent = fonts.mono->CalcTextSizeA(unitSize, FLT_MAX, 0.0F, unit);
+        unitWidth = extent.x + px(12.0F);
+        draw->AddText(fonts.mono, unitSize,
+                      ImVec2(max.x - px(6.0F) - extent.x, min.y + (px(22.0F) - unitSize) * 0.5F),
+                      u32(c::t3), unit);
+    }
+    ImGui::PushFont(fonts.mono, theme::kMonoSize);
+    const float pad = (px(22.0F) - ImGui::GetFontSize()) * 0.5F;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(px(7.0F), pad));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0F);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0, 0, 0, 0));
+    ImGui::SetNextItemWidth(width - unitWidth);
+    const bool changed =
+        ImGui::InputText("##edit", buffer, size,
+                         ImGuiInputTextFlags_CharsScientific | ImGuiInputTextFlags_AutoSelectAll);
+    if (tooltip != nullptr && *tooltip != '\0') {
+        ImGui::SetItemTooltip("%s", tooltip);
+    }
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar(2);
+    ImGui::PopFont();
+    ImGui::PopID();
+    return changed;
+}
+
 void Vec3Field(const char* label, const double value[3], const char* format) {
     static constexpr std::array<const char*, 3> kAxis{"X", "Y", "Z"};
     const std::array<ImVec4, 3> colors{theme::hex(0xF0605D), theme::hex(0x4FC97A),
