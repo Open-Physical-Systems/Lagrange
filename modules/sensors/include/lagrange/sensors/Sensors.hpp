@@ -18,10 +18,11 @@ inline constexpr double kNoHit = std::numeric_limits<double>::infinity();
 
 /// Distance along the unit direction `dir` from `origin` to the first point of a collision
 /// shape at `shapePose` (world frame), or kNoHit. Exact for every ShapeType (sizes as in
-/// World::Colliders). A ray starting inside a shape reports where it leaves it.
+/// World::Colliders; a ConvexHull needs its `hull`). A ray starting inside a shape reports where
+/// it leaves it.
 [[nodiscard]] double raycast(ShapeType shape, const std::array<double, 3>& size,
                              const Pose& shapePose, const std::array<double, 3>& origin,
-                             const std::array<double, 3>& dir);
+                             const std::array<double, 3>& dir, const ConvexHull* hull = nullptr);
 
 /// What cameras draw: every mesh prim of a model's scene, on one GPU device (a software device
 /// on a machine without a GPU, sensors.md §6). Made once per run and shared by its cameras.

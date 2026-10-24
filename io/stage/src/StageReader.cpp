@@ -46,6 +46,7 @@
 #include <pxr/usd/usdPhysics/joint.h>
 #include <pxr/usd/usdPhysics/massAPI.h>
 #include <pxr/usd/usdPhysics/materialAPI.h>
+#include <pxr/usd/usdPhysics/meshCollisionAPI.h>
 #include <pxr/usd/usdPhysics/metrics.h>
 #include <pxr/usd/usdPhysics/prismaticJoint.h>
 #include <pxr/usd/usdPhysics/revoluteJoint.h>
@@ -811,14 +812,103 @@ private:
                 w.addCollider(body, ShapeType::Plane, {0.0, 0.0, 1.0}, pose, friction);
                 hasPlane_ = true;
             } else if (prim.IsA<UsdGeomMesh>()) {
-                note(path +
-                     ": mesh colliders are not used yet; convex decomposition comes with "
-                     "the collision bake tool");
+                addMeshCollider(prim, body, pose, s, friction);
             } else {
                 note(path + ": collider type " + prim.GetTypeName().GetString() +
                      " is not supported");
             }
         }
+    }
+
+    /// A mesh collider (formats.md §2: convex hulls, never render meshes): one marked
+    /// physics:approximation "convexHull" whose points are convex is a hull; anything else is
+    /// skipped with a note naming the collision bake.
+    void addMeshCollider(const UsdPrim& prim, BodyId body, const Pose& pose,
+                         const std::array<double, 3>& scale, double friction) {
+        const std::string path = prim.GetPath().GetString();
+        TfToken approximation = UsdPhysicsTokens->none;
+        if (prim.HasAPI<UsdPhysicsMeshCollisionAPI>()) {
+            UsdPhysicsMeshCollisionAPI(prim).GetApproximationAttr().Get(&approximation);
+        }
+        if (approximation != UsdPhysicsTokens->convexHull) {
+            note(path + ": a mesh collider with approximation \"" + approximation.GetString() +
+                 "\" is not used; bake it into convex hulls with `ros2 run "
+                 "lagrange_collision_bake collision_bake`");
+            return;
+        }
+        const UsdGeomMesh mesh(prim);
+        VtVec3fArray points;
+        VtIntArray counts;
+        VtIntArray indices;
+        mesh.GetPointsAttr().Get(&points);
+        mesh.GetFaceVertexCountsAttr().Get(&counts);
+        mesh.GetFaceVertexIndicesAttr().Get(&indices);
+        ConvexHull hull;
+        for (const GfVec3f& p : points) {
+            hull.points.push_back({p[0] * scale[0], p[1] * scale[1], p[2] * scale[2]});
+        }
+        std::size_t at = 0;
+        for (const int count : counts) {
+            for (int k = 1; k + 1 < count; ++k) {  // a fan per face
+                const auto index = [&](std::size_t i) {
+                    return static_cast<std::uint32_t>(indices[i]);
+                };
+                hull.triangles.push_back({index(at), index(at + k), index(at + k + 1)});
+            }
+            at += static_cast<std::size_t>(std::max(count, 0));
+        }
+        for (const auto& t : hull.triangles) {
+            if (std::max({t[0], t[1], t[2]}) >= hull.points.size()) {
+                errors_.push_back(path + ": a face indexes a point the mesh does not have");
+                return;
+            }
+        }
+        if (hull.points.size() < 4 || hull.triangles.size() < 4 || !convex(hull)) {
+            note(path +
+                 ": approximation \"convexHull\" on a mesh that is not convex; it is not "
+                 "used: decompose it with `ros2 run lagrange_collision_bake "
+                 "collision_bake`");
+            return;
+        }
+        m_.world.addHullCollider(body, std::move(hull), pose, friction);
+    }
+
+    /// Whether every point lies on the inner side of every face plane (within 1e-6 of the
+    /// hull's size): the face-plane ray casts are exact only for a convex mesh.
+    static bool convex(const ConvexHull& hull) {
+        std::array<double, 3> centre{};
+        double extent = 0.0;
+        for (const auto& p : hull.points) {
+            for (std::size_t i = 0; i < 3; ++i) {
+                centre.at(i) += p.at(i) / static_cast<double>(hull.points.size());
+                extent = std::max(extent, std::abs(p.at(i)));
+            }
+        }
+        const double tolerance = 1e-6 * std::max(extent, 1e-3);
+        for (const auto& t : hull.triangles) {
+            const auto& a = hull.points[t[0]];
+            const auto& b = hull.points[t[1]];
+            const auto& c = hull.points[t[2]];
+            const std::array<double, 3> u{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+            const std::array<double, 3> v{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+            const std::array<double, 3> n{u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
+                                          u[0] * v[1] - u[1] * v[0]};
+            const double length = std::hypot(n[0], n[1], n[2]);
+            if (length <= 0.0) {
+                continue;
+            }
+            const auto side = [&](const std::array<double, 3>& x) {
+                return (n[0] * (x[0] - a[0]) + n[1] * (x[1] - a[1]) + n[2] * (x[2] - a[2])) /
+                       length;
+            };
+            const double sign = side(centre) > 0.0 ? -1.0 : 1.0;  // outward
+            for (const auto& p : hull.points) {
+                if (sign * side(p) > tolerance) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     double frictionOf(const UsdPrim& prim) const {
@@ -888,6 +978,7 @@ Expected<Model, std::string> loadStage(const std::string& path, const ReadOption
         w.colliders.size.insert(w.colliders.size.begin(), {0.0, 0.0, 1.0});
         w.colliders.poseInBody.insert(w.colliders.poseInBody.begin(), Pose{});
         w.colliders.friction.insert(w.colliders.friction.begin(), options.groundFriction);
+        w.colliders.hull.insert(w.colliders.hull.begin(), kNoHull);
         addGroundPrim(model);
     }
     const UsdPrim root = stage->GetDefaultPrim();

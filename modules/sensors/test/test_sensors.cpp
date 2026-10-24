@@ -1,6 +1,8 @@
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/Sensors.hpp"
+#include "lagrange/sensors/ShapeCaster.hpp"
+#include "lagrange/world/Model.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
 #include <cmath>
@@ -28,6 +30,46 @@ Pose turned(double angle, double x, double y, double z) {
 }
 
 // --- ray casts against closed forms ---------------------------------------------------------
+
+TEST(Raycast, AConvexHullOfABoxCastsAsTheBox) {
+    // The face-plane test against the closed form, from random outside points and directions.
+    const std::array<double, 3> half{0.4, 0.25, 0.6};
+    const ConvexHull hull = boxHull(half);
+    const Pose pose = compose(at(1.0, -2.0, 0.5), turned(0.7, 0.36, 0.48, 0.8));
+    std::uint64_t state = 12345;
+    const auto uniform = [&state]() {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        return static_cast<double>(state >> 11U) / static_cast<double>(1ULL << 53U) * 2.0 - 1.0;
+    };
+    int hits = 0;
+    for (int k = 0; k < 2000; ++k) {
+        const std::array<double, 3> origin{1.0 + 3.0 * uniform(), -2.0 + 3.0 * uniform(),
+                                           0.5 + 3.0 * uniform()};
+        // Aimed near the box, so that some hit and some miss.
+        std::array<double, 3> d{1.0 - origin[0] + 0.8 * uniform(),
+                                -2.0 - origin[1] + 0.8 * uniform(),
+                                0.5 - origin[2] + 0.8 * uniform()};
+        const double n = std::hypot(d[0], d[1], d[2]);
+        for (double& x : d) {
+            x /= n;
+        }
+        const double box = raycast(ShapeType::Box, half, pose, origin, d);
+        const double convex = raycast(ShapeType::ConvexHull, half, pose, origin, d, &hull);
+        if (std::isinf(box)) {
+            EXPECT_TRUE(std::isinf(convex)) << k;
+        } else {
+            ++hits;
+            EXPECT_NEAR(convex, box, 1e-12) << k;
+        }
+    }
+    EXPECT_GT(hits, 200);
+    EXPECT_LT(hits, 1800);
+    // Distance: exact straight out from a face, 0 inside.
+    const std::array<double, 3> out = rotate(pose.orientation, {0.0, 0.0, 1.0});
+    const std::array<double, 3> above{1.0 + out[0] * 0.9, -2.0 + out[1] * 0.9, 0.5 + out[2] * 0.9};
+    EXPECT_NEAR(distanceToShape(ShapeType::ConvexHull, half, pose, above, &hull), 0.3, 1e-12);
+    EXPECT_EQ(distanceToShape(ShapeType::ConvexHull, half, pose, {1.0, -2.0, 0.5}, &hull), 0.0);
+}
 
 TEST(Raycast, Plane) {
     EXPECT_DOUBLE_EQ(raycast(ShapeType::Plane, {}, Pose{}, {0, 0, 2}, {0, 0, -1}), 2.0);

@@ -24,6 +24,7 @@
 #include <Jolt/Physics/Collision/GroupFilterTable.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/EmptyShape.h>
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
@@ -145,7 +146,8 @@ Mat3 moved(const Mat3& local, const Mat3& r, double mass, const Vec3& offset) {
 /// Rotation that turns Jolt's y-axis shapes (capsule, cylinder) to our z axis.
 const JPH::Quat kYToZ = JPH::Quat::sRotation(JPH::Vec3::sAxisX(), 0.5F * JPH::JPH_PI);
 
-JPH::ShapeSettings::ShapeResult shapeFor(ShapeType type, const std::array<double, 3>& size) {
+JPH::ShapeSettings::ShapeResult shapeFor(ShapeType type, const std::array<double, 3>& size,
+                                         const ConvexHull* hull) {
     const auto f = [](double v) { return static_cast<float>(v); };
     switch (type) {
         case ShapeType::Sphere:
@@ -166,8 +168,26 @@ JPH::ShapeSettings::ShapeResult shapeFor(ShapeType type, const std::array<double
         }
         case ShapeType::Plane:
             return JPH::PlaneShapeSettings(JPH::Plane(JPH::Vec3::sAxisZ(), 0.0F)).Create();
+        case ShapeType::ConvexHull: {
+            JPH::Array<JPH::Vec3> points;
+            points.reserve(hull->points.size());
+            for (const auto& p : hull->points) {
+                points.push_back(jv(p));
+            }
+            // A small convex radius: the hull's edges are rounded by it, inside the points.
+            const float smallest = f(std::min({size[0], size[1], size[2]}));
+            return JPH::ConvexHullShapeSettings(
+                       points, std::min(JPH::cDefaultConvexRadius, 0.1F * smallest))
+                .Create();
+        }
     }
     return {};
+}
+
+const ConvexHull* hullOf(const World& world, std::size_t c) {
+    return world.colliders.shape[c] == ShapeType::ConvexHull
+               ? &world.hulls.at(world.colliders.hull[c])
+               : nullptr;
 }
 
 JPH::Quat shapeRotation(ShapeType type, const std::array<double, 4>& q) {
@@ -678,7 +698,8 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalBus& 
                 continue;
             }
             const Pose p = compose(s.inGroup[owner.index], world.colliders.poseInBody[c]);
-            const auto shape = shapeFor(world.colliders.shape[c], world.colliders.size[c]);
+            const auto shape =
+                shapeFor(world.colliders.shape[c], world.colliders.size[c], hullOf(world, c));
             if (shape.HasError()) {
                 return Status::error(StatusCode::InvalidConfig,
                                      "jolt: collider of " + bodies.names[owner.index] + ": " +
@@ -742,7 +763,8 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalBus& 
         const Pose p = owner == kWorldBody
                            ? world.colliders.poseInBody[c]
                            : compose(rest[owner.index], world.colliders.poseInBody[c]);
-        const auto shape = shapeFor(world.colliders.shape[c], world.colliders.size[c]);
+        const auto shape =
+            shapeFor(world.colliders.shape[c], world.colliders.size[c], hullOf(world, c));
         if (shape.HasError()) {
             return Status::error(StatusCode::InvalidConfig,
                                  "jolt: " + std::string(shape.GetError().c_str()));

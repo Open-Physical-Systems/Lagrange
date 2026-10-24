@@ -2,6 +2,8 @@
 
 // Header-only xxHash, as in proto/transport: no library to link.
 #define XXH_INLINE_ALL
+#include <algorithm>
+#include <cmath>
 #include <string>
 #include <utility>
 #include <xxhash.h>
@@ -108,6 +110,20 @@ void World::addCollider(BodyId onBody, ShapeType shapeType, const std::array<dou
     colliders.size.push_back(shapeSize);
     colliders.poseInBody.push_back(poseInOwner);
     colliders.friction.push_back(slidingFriction);
+    colliders.hull.push_back(kNoHull);
+}
+
+void World::addHullCollider(BodyId onBody, ConvexHull hull, const Pose& poseInOwner,
+                            double slidingFriction) {
+    std::array<double, 3> half{};
+    for (const auto& p : hull.points) {
+        for (std::size_t i = 0; i < 3; ++i) {
+            half.at(i) = std::max(half.at(i), std::abs(p.at(i)));
+        }
+    }
+    addCollider(onBody, ShapeType::ConvexHull, half, poseInOwner, slidingFriction);
+    colliders.hull.back() = static_cast<std::uint32_t>(hulls.size());
+    hulls.push_back(std::move(hull));
 }
 
 std::string_view WorldView::primPath(PrimId prim) const {

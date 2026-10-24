@@ -107,10 +107,79 @@ double box(const Vec3& o, const Vec3& d, const Vec3& half) {
     return exit > 0.0 ? exit : kNoHit;
 }
 
+/// The face planes of a hull, each turned so that the hull's centroid is inside: unit outward
+/// normal n and offset c with n·x <= c inside. Independent of the triangles' winding.
+void facePlanes(const ConvexHull& hull, std::vector<std::array<double, 4>>& out) {
+    out.clear();
+    Vec3 centre{};
+    for (const auto& p : hull.points) {
+        for (std::size_t i = 0; i < 3; ++i) {
+            centre.at(i) += p.at(i) / static_cast<double>(hull.points.size());
+        }
+    }
+    for (const auto& t : hull.triangles) {
+        const Vec3& a = hull.points.at(t[0]);
+        const Vec3& b = hull.points.at(t[1]);
+        const Vec3& c = hull.points.at(t[2]);
+        const Vec3 u{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+        const Vec3 v{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+        Vec3 n{u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
+        const double length = std::sqrt(dot(n, n));
+        if (length <= 0.0) {
+            continue;  // a degenerate triangle has no plane
+        }
+        for (double& x : n) {
+            x /= length;
+        }
+        double offset = dot(n, a);
+        if (dot(n, centre) > offset) {
+            n = {-n[0], -n[1], -n[2]};
+            offset = -offset;
+        }
+        out.push_back({n[0], n[1], n[2], offset});
+    }
+}
+
+/// Ray against a convex polyhedron, as the intersection of its faces' half-spaces.
+double convexHull(const Vec3& o, const Vec3& d, const ConvexHull& hull) {
+    thread_local std::vector<std::array<double, 4>> planes;
+    facePlanes(hull, planes);
+    if (planes.empty()) {
+        return kNoHit;
+    }
+    double enter = -kNoHit;
+    double exit = kNoHit;
+    for (const auto& plane : planes) {
+        const Vec3 n{plane[0], plane[1], plane[2]};
+        const double rate = dot(n, d);
+        const double gap = plane[3] - dot(n, o);  // >= 0 when o is inside this face's plane
+        if (rate == 0.0) {
+            if (gap < 0.0) {
+                return kNoHit;  // parallel and outside
+            }
+            continue;
+        }
+        const double t = gap / rate;
+        if (rate < 0.0) {
+            enter = std::max(enter, t);
+        } else {
+            exit = std::min(exit, t);
+        }
+        if (enter > exit) {
+            return kNoHit;
+        }
+    }
+    if (enter > 0.0) {
+        return enter;
+    }
+    return exit > 0.0 ? exit : kNoHit;
+}
+
 }  // namespace
 
 double raycast(ShapeType shape, const std::array<double, 3>& size, const Pose& shapePose,
-               const std::array<double, 3>& origin, const std::array<double, 3>& dir) {
+               const std::array<double, 3>& origin, const std::array<double, 3>& dir,
+               const ConvexHull* hull) {
     // Into the shape's frame.
     const std::array<double, 4> inverse = conjugate(shapePose.orientation);
     const Vec3 o =
@@ -136,6 +205,8 @@ double raycast(ShapeType shape, const std::array<double, 3>& size, const Pose& s
             return std::min({cylinderSide(o, d, size[0], size[1]),
                              sphere({o[0], o[1], o[2] - size[1]}, d, size[0]),
                              sphere({o[0], o[1], o[2] + size[1]}, d, size[0])});
+        case ShapeType::ConvexHull:
+            return hull != nullptr ? convexHull(o, d, *hull) : kNoHit;
     }
     return kNoHit;
 }
@@ -246,7 +317,10 @@ public:
         for (std::size_t c = 0; c < colliders.body.size(); ++c) {
             const BodyId owner = colliders.body[c];
             Shape shape{colliders.shape[c], colliders.size[c], colliders.poseInBody[c],
-                        owner == kWorldBody ? -1 : static_cast<int>(owner.index)};
+                        owner == kWorldBody ? -1 : static_cast<int>(owner.index),
+                        colliders.shape[c] == ShapeType::ConvexHull
+                            ? &world.raw().hulls.at(colliders.hull[c])
+                            : nullptr};
             // Geometry that never moves is placed in the world once.
             if (owner == kWorldBody) {
                 shape.pose = colliders.poseInBody[c];
@@ -260,6 +334,13 @@ public:
         buffer_.assign(samples_, kNoHit);
         nearest_.assign(samples_, kNoHit);
         casterShapes_.resize(shapes_.size());
+        if (rayContext_ && !groundTruth_ &&
+            std::ranges::count(colliders.shape, ShapeType::ConvexHull) != 0) {
+            return Status::error(StatusCode::Unsupported,
+                                 "lidar " + name_ +
+                                     ": the GPU lidar kernel has no convex hulls yet; cast on "
+                                     "the CPU (--lidar cpu)");
+        }
         if (rayContext_ && !groundTruth_) {
             std::vector<std::array<float, 3>> directions(samples_);
             for (std::uint32_t i = 0; i < samples_; ++i) {
@@ -317,13 +398,14 @@ private:
         std::array<double, 3> size;
         Pose pose;  // world pose when body < 0, else pose in the body
         int body;
+        const ConvexHull* hull;  // in the world tables, which outlive the run
     };
 
     /// Tier 0: exact casts in double, culled by Embree (ShapeCaster), beams in parallel. Each
     /// beam is independent, so the result does not depend on the threads.
     void castOnCpu(const Pose& sensor) {
         for (std::size_t k = 0; k < shapes_.size(); ++k) {
-            casterShapes_[k] = {shapes_[k].type, shapes_[k].size, placed_[k]};
+            casterShapes_[k] = {shapes_[k].type, shapes_[k].size, placed_[k], shapes_[k].hull};
         }
         caster_.update(casterShapes_);
         tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {

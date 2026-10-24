@@ -128,6 +128,7 @@ Model sampleModel() {
     w.colliders.size.insert(w.colliders.size.begin(), {0, 0, 1});
     w.colliders.poseInBody.insert(w.colliders.poseInBody.begin(), Pose{});
     w.colliders.friction.insert(w.colliders.friction.begin(), 1.0);
+    w.colliders.hull.insert(w.colliders.hull.begin(), kNoHull);
     addGroundPrim(m);
     return m;
 }
@@ -609,6 +610,73 @@ def Xform "bot" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     ASSERT_FALSE(both);
     EXPECT_NE(both.error().find("/bot/imu applies two versions of SensorAPI"), std::string::npos)
         << both.error();
+}
+
+TEST(StageReader, ConvexMeshCollidersBecomeHullsAndSurviveTheRoundTrip) {
+    // formats.md §2: collision geometry is convex hulls (what the collision bake writes). A
+    // mesh marked convexHull that is convex is used; others are skipped with a note.
+    const std::string header = "#usda 1.0\n(\n    metersPerUnit = 1\n    upAxis = \"Z\"\n)\n";
+    auto model = loadStage(writeText("hulls.usda", header + R"(
+def Xform "shelf"
+{
+    def Mesh "hull" ( prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"] )
+    {
+        uniform token physics:approximation = "convexHull"
+        point3f[] points = [(-0.5, -0.2, 0), (0.5, -0.2, 0), (-0.5, 0.2, 0), (0.5, 0.2, 0), (-0.5, -0.2, 1), (0.5, -0.2, 1), (-0.5, 0.2, 1), (0.5, 0.2, 1)]
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 2, 3, 1, 4, 5, 7, 6, 0, 1, 5, 4, 2, 6, 7, 3, 0, 4, 6, 2, 1, 3, 7, 5]
+        double3 xformOp:translate = (2, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Mesh "two_boxes" ( prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"] )
+    {
+        uniform token physics:approximation = "convexHull"
+        point3f[] points = [(-0.5, -0.2, 0), (0.5, -0.2, 0), (-0.5, 0.2, 0), (0.5, 0.2, 0), (-0.5, -0.2, 1), (0.5, -0.2, 1), (-0.5, 0.2, 1), (0.5, 0.2, 1), (1.5, -0.2, 0), (2.5, -0.2, 0), (1.5, 0.2, 0), (2.5, 0.2, 0), (1.5, -0.2, 1), (2.5, -0.2, 1), (1.5, 0.2, 1), (2.5, 0.2, 1)]
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 2, 3, 1, 4, 5, 7, 6, 0, 1, 5, 4, 2, 6, 7, 3, 0, 4, 6, 2, 1, 3, 7, 5, 8, 10, 11, 9, 12, 13, 15, 14, 8, 9, 13, 12, 10, 14, 15, 11, 8, 12, 14, 10, 9, 11, 15, 13]
+    }
+    def Mesh "raw" ( prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"] )
+    {
+        uniform token physics:approximation = "convexDecomposition"
+        point3f[] points = [(-0.5, -0.2, 0), (0.5, -0.2, 0), (-0.5, 0.2, 0), (0.5, 0.2, 0), (-0.5, -0.2, 1), (0.5, -0.2, 1), (-0.5, 0.2, 1), (0.5, 0.2, 1)]
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 2, 3, 1, 4, 5, 7, 6, 0, 1, 5, 4, 2, 6, 7, 3, 0, 4, 6, 2, 1, 3, 7, 5]
+    }
+}
+)")
+                               .string());
+    ASSERT_TRUE(model) << model.error();
+    const World& w = model->world;
+    ASSERT_EQ(w.hulls.size(), 1U);
+    const auto c = static_cast<std::size_t>(
+        std::find(w.colliders.shape.begin(), w.colliders.shape.end(), ShapeType::ConvexHull) -
+        w.colliders.shape.begin());
+    ASSERT_LT(c, w.colliders.shape.size());
+    EXPECT_EQ(w.hulls[0].points.size(), 8U);
+    EXPECT_EQ(w.hulls[0].triangles.size(), 12U);  // the quads as fans
+    EXPECT_NEAR(w.colliders.size[c][0], 0.5, 1e-6);
+    EXPECT_NEAR(w.colliders.size[c][2], 1.0, 1e-6);  // about the shape origin, not the centre
+    EXPECT_NEAR(w.colliders.poseInBody[c].position[0], 2.0, 1e-12);
+    int notes = 0;
+    for (const std::string& note : model->notes) {
+        notes += note.find("/shelf/two_boxes") != std::string::npos &&
+                 note.find("not convex") != std::string::npos;
+        notes += note.find("/shelf/raw") != std::string::npos &&
+                 note.find("collision_bake") != std::string::npos;
+    }
+    EXPECT_EQ(notes, 2);
+
+    const std::filesystem::path out = scratch("hulls_out.usda");
+    ASSERT_TRUE(writeStage(*model, out.string()));
+    auto back = loadStage(out.string());
+    ASSERT_TRUE(back) << back.error();
+    ASSERT_EQ(back->world.hulls.size(), 1U);
+    EXPECT_EQ(back->world.hulls[0].triangles.size(), 12U);
+    for (std::size_t i = 0; i < 8; ++i) {
+        for (std::size_t k = 0; k < 3; ++k) {
+            EXPECT_NEAR(back->world.hulls[0].points[i][k], w.hulls[0].points[i][k], 1e-6);
+        }
+    }
 }
 
 TEST(StageWriter, SchemaInstancesSurviveTheRoundTrip) {

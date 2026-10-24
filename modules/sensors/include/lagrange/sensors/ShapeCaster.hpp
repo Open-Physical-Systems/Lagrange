@@ -25,7 +25,8 @@ public:
     struct Shape {
         ShapeType type{ShapeType::Box};
         std::array<double, 3> size{};
-        Pose pose;  // world_local
+        Pose pose;                        // world_local
+        const ConvexHull* hull{nullptr};  // a ConvexHull's points; must outlive the caster
     };
 
     ShapeCaster();
@@ -61,9 +62,12 @@ private:
 };
 
 /// Distance (m) from `point` to the shape, 0 inside it. A plane is the half-space below it
-/// (the ground): 0 under it, the height above it otherwise.
+/// (the ground): 0 under it, the height above it otherwise. For a convex hull it is the
+/// distance to the farthest face plane, which is exact over a face and at most the true
+/// distance near an edge or corner (overlap queries err on the side of reporting).
 [[nodiscard]] double distanceToShape(ShapeType type, const std::array<double, 3>& size,
-                                     const Pose& pose, const std::array<double, 3>& point);
+                                     const Pose& pose, const std::array<double, 3>& point,
+                                     const ConvexHull* hull = nullptr);
 
 /// Radius of a sphere around the shape's origin that contains it (+inf for a plane).
 [[nodiscard]] double boundingRadius(ShapeType type, const std::array<double, 3>& size);
