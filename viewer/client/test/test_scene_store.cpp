@@ -96,6 +96,37 @@ TEST(SceneBuilder, AppliesAValidSnapshot) {
     EXPECT_EQ(frame->statics->generation, 1U);
 }
 
+TEST(SceneBuilder, CollidersAreKeptAndBadOnesDropped) {
+    v1::SceneSnapshot snapshot = validSnapshot();
+    v1::Collider* good = snapshot.add_colliders();
+    good->set_prim(1);
+    good->set_mesh(0);
+    for (const double v : {0.1, 0.2, 0.3}) {
+        good->add_position(v);
+    }
+    for (const float v : {1.0F, 0.0F, 0.0F, 0.0F}) {
+        good->add_rotation(v);
+    }
+    v1::Collider* fixed = snapshot.add_colliders();  // fixed in the frame, no prim
+    *fixed = *good;
+    fixed->set_prim(0xFFFFFFFFU);
+    v1::Collider* noMesh = snapshot.add_colliders();
+    *noMesh = *good;
+    noMesh->set_mesh(9);
+    v1::Collider* noPose = snapshot.add_colliders();
+    noPose->set_prim(1);
+    noPose->set_mesh(0);
+
+    SceneBuilder builder;
+    std::string error;
+    ASSERT_TRUE(builder.applySnapshot(snapshot, error)) << error;
+    const auto& colliders = builder.frame()->statics->colliders;
+    ASSERT_EQ(colliders.size(), 2U);
+    EXPECT_EQ(colliders[0].prim, 1U);
+    EXPECT_DOUBLE_EQ(colliders[0].position[2], 0.3);
+    EXPECT_EQ(colliders[1].prim, kNone);
+}
+
 TEST(SceneBuilder, ElectricalNetsAreKeptAndBadTerminalsDropped) {
     v1::SceneSnapshot snapshot = validSnapshot();
     v1::ElectricalNet* net = snapshot.add_nets();

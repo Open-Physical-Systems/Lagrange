@@ -457,6 +457,30 @@ TEST_F(PoweredServerTest, AnEditChangesAMotorParameterInTheRunningSimulation) {
     EXPECT_TRUE(savedValue);
 }
 
+TEST_F(PoweredServerTest, TheSnapshotCarriesTheCollisionShapes) {
+    const std::uint32_t base = primNamed("base_link");  // asks for a snapshot
+    const v1::SceneSnapshot* snapshot = nullptr;
+    for (const v1::Envelope& e : received_) {
+        if (e.has_snapshot()) {
+            snapshot = &e.snapshot();
+        }
+    }
+    ASSERT_NE(snapshot, nullptr);
+    // The sample AMR's links and the warehouse's boxes; the ground plane is left out.
+    ASSERT_GT(snapshot->colliders_size(), 5);
+    bool onBase = false;
+    for (const v1::Collider& c : snapshot->colliders()) {
+        ASSERT_LT(c.mesh(), static_cast<std::uint32_t>(snapshot->meshes_size()));
+        EXPECT_GT(snapshot->meshes(static_cast<int>(c.mesh())).index_count(), 0U);
+        ASSERT_EQ(c.position_size(), 3);
+        ASSERT_EQ(c.rotation_size(), 4);
+        EXPECT_TRUE(c.prim() == 0xFFFFFFFFU ||
+                    c.prim() < static_cast<std::uint32_t>(snapshot->prims_size()));
+        onBase = onBase || c.prim() == base;
+    }
+    EXPECT_TRUE(onBase) << "the chassis has a collider that moves with it";
+}
+
 TEST_F(PoweredServerTest, TheSnapshotCarriesThePowerSystemForTheElectricalWorkspace) {
     ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
     const v1::SignalCatalog catalog = [this] {

@@ -21,6 +21,35 @@ using gpu::kDepthFormat;
 constexpr int kGridHalfCells = 20;  // lines every metre, 20 m to each side
 constexpr int kGridMajorEvery = 5;
 constexpr float kNoTemperature = 0.02F;  // linear grey of meshes without a thermal node
+// Collision shading: the design tokens' rigid-body domain colour, #9AACC6, as linear RGB.
+constexpr std::array<float, 4> kColliderColor{0.3231F, 0.4179F, 0.5647F, 1.0F};
+
+// a then b, for a collider placed in its prim's frame (scale left out: colliders have their
+// size in their mesh).
+Transform compose(const Transform& a, const std::array<double, 3>& position,
+                  const std::array<float, 4>& rotation) {
+    const float w = a.rotation[0];
+    const float x = a.rotation[1];
+    const float y = a.rotation[2];
+    const float z = a.rotation[3];
+    const std::array<double, 3> p = position;
+    // v' = v + 2w(u × v) + 2u × (u × v), u = (x, y, z), in double for the position.
+    const std::array<double, 3> u{x, y, z};
+    const std::array<double, 3> t{2.0 * (u[1] * p[2] - u[2] * p[1]),
+                                  2.0 * (u[2] * p[0] - u[0] * p[2]),
+                                  2.0 * (u[0] * p[1] - u[1] * p[0])};
+    Transform out;
+    out.position = {a.position[0] + p[0] + w * t[0] + (u[1] * t[2] - u[2] * t[1]),
+                    a.position[1] + p[1] + w * t[1] + (u[2] * t[0] - u[0] * t[2]),
+                    a.position[2] + p[2] + w * t[2] + (u[0] * t[1] - u[1] * t[0])};
+    const float bw = rotation[0];
+    const float bx = rotation[1];
+    const float by = rotation[2];
+    const float bz = rotation[3];
+    out.rotation = {w * bw - x * bx - y * by - z * bz, w * bx + x * bw + y * bz - z * by,
+                    w * by - x * bz + y * bw + z * bx, w * bz + x * by - y * bx + z * bw};
+    return out;
+}
 
 // gpu::MeshPush, with the viewer's matrix type.
 struct MeshPush {
@@ -248,7 +277,25 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
         }
         vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
         const SceneStatics& statics = *frame->statics;
-        for (std::size_t i = 0; i < statics.prims.size(); ++i) {
+        if (options.shading == Shading::Collision) {
+            vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipeline_);
+            for (const ColliderData& collider : statics.colliders) {
+                const Transform at = compose(collider.prim < frame->transforms.size()
+                                                 ? frame->transforms[collider.prim]
+                                                 : Transform{},
+                                             collider.position, collider.rotation);
+                MeshPush push{};
+                push.viewProjection = viewProjection;
+                push.model = modelRows(at, eye);
+                push.baseColor = kColliderColor;
+                vkCmdPushConstants(commands, meshLayout_, stages, 0, sizeof(push), &push);
+                if (meshes_.draw(commands, collider.mesh)) {
+                    ++lastDrawCount_;
+                }
+            }
+        }
+        for (std::size_t i = 0; options.shading != Shading::Collision && i < statics.prims.size();
+             ++i) {
             const PrimData& prim = statics.prims[i];
             if (!prim.visible || prim.mesh == kNone) {
                 continue;

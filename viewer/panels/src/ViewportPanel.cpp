@@ -224,6 +224,8 @@ private:
                 return "Thermal";
             case Shading::Wireframe:
                 return "Wireframe";
+            case Shading::Collision:
+                return "Collision";
             case Shading::Lit:
                 break;
         }
@@ -436,7 +438,14 @@ private:
             if (!context.renderOptions->wireframeAvailable) {
                 ImGui::SetItemTooltip("This GPU cannot draw polygons as lines");
             }
-            ImGui::MenuItem("Collision", nullptr, false, false);  // needs colliders in the protocol
+            const bool colliders = context.scene && context.scene->statics &&
+                                   !context.scene->statics->colliders.empty();
+            if (ImGui::MenuItem("Collision", nullptr, mode == Shading::Collision, colliders)) {
+                mode = Shading::Collision;
+            }
+            if (!colliders) {
+                ImGui::SetItemTooltip("The server sends no collision shapes");
+            }
             if (ImGui::MenuItem("Thermal false colour", nullptr, mode == Shading::Thermal,
                                 !temperatures_.empty())) {
                 mode = Shading::Thermal;

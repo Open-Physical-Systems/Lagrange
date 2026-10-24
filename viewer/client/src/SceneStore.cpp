@@ -155,6 +155,23 @@ bool SceneBuilder::applySnapshot(const v1::SceneSnapshot& snapshot, std::string&
         }
         statics->nets.push_back(std::move(net));
     }
+    // Colliders with a missing prim or mesh, or a malformed pose, are dropped.
+    for (const v1::Collider& source : snapshot.colliders()) {
+        if ((source.prim() != kNone && source.prim() >= primCount) || source.mesh() >= meshCount ||
+            source.position_size() != 3 || source.rotation_size() != 4) {
+            continue;
+        }
+        ColliderData collider;
+        collider.prim = source.prim();
+        collider.mesh = source.mesh();
+        for (std::size_t k = 0; k < 3; ++k) {
+            collider.position.at(k) = source.position(static_cast<int>(k));
+        }
+        for (std::size_t k = 0; k < 4; ++k) {
+            collider.rotation.at(k) = source.rotation(static_cast<int>(k));
+        }
+        statics->colliders.push_back(collider);
+    }
     statics->stagePath = snapshot.stage_path();
     statics->generation = ++generation_;
     frame->statics = std::move(statics);

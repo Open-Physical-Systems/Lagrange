@@ -650,6 +650,45 @@ def local_server() -> str:
     pytest.skip("lagrange_server is not installed")
 
 
+def test_collision_shading_draws_the_simulators_colliders(socket_dir):
+    """Design 02-scene's Collision shading: the server's collision shapes in the rigid-body
+    domain colour (#9AACC6) in place of the visuals."""
+    socket = socket_dir / "co.sock"
+    server = subprocess.Popen(
+        [local_server(), "--no-ros", "--listen", f"unix:{socket}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    image = socket_dir / "collision.png"
+    try:
+        result = run_viewer(
+            "--connect",
+            f"unix:{socket}",
+            "--frames",
+            "25",
+            "--size",
+            "1600x1000",
+            "--workspace",
+            "scene",
+            "--shading",
+            "collision",
+            "--screenshot",
+            str(image),
+        )
+    finally:
+        server.terminate()
+        server.wait(10)
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    assert stats["draw_calls"] > 5  # the colliders, not the visual meshes
+    _width, _height, rows = read_png(image)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    # Lit faces of the rigid-body colour: grey-blue, blue the strongest.
+    shapes = sum(1 for r, g, b, _a in pixels if b > 120 and b > r + 15 and g > r and r > 60)
+    assert shapes > 2000, f"no colliders drawn ({shapes} pixels)"
+
+
 def test_thermal_shading_colours_the_simulators_robot_by_temperature(socket_dir):
     """Design 02-scene's Thermal shading on the simulator's thermal network (v0.3).
 

@@ -12,6 +12,7 @@ enum class Shading : std::uint8_t {
     Unlit,      ///< Material colour as it is.
     Thermal,    ///< Temperature on the design's thermal colour map; unlit.
     Wireframe,  ///< Triangle edges in the material colour, unlit (when the device can).
+    Collision,  ///< The collision shapes the server sends, lit, in place of the visuals.
 };
 
 /// What the viewport draws besides the scene's meshes.
