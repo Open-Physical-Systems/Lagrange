@@ -373,7 +373,10 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
     for (Motor& m : motors_) {
         const std::string joint = "joint/" + m.joint + "/";
         const std::string motor = "motor/" + m.name + "/";
-        m.command = d.input(scalar(joint + "torque_command", units::N_m));
+        // A drive nothing commands makes no torque (a robot without a controller).
+        SignalSpec command = scalar(joint + "torque_command", units::N_m);
+        command.optional = true;
+        m.command = d.input(command);
         SignalSpec velocity = scalar(joint + "velocity", units::rad_per_s);
         // Predicting, the drive integrates between samples itself and needs the sample as is.
         velocity.hold = predict_ ? Hold::ZeroOrder : Hold::LinearExtrapolate;

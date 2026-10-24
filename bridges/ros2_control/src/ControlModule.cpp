@@ -122,10 +122,14 @@ public:
                     torque = joint.gains.velocityP * error + joint.gains.velocityI * joint.integral;
                     break;
                 }
-                case CommandMode::Position:
-                    torque = joint.gains.positionP * (slot.commandPosition - slot.position) -
+                case CommandMode::Position: {
+                    const double error = slot.commandPosition - slot.position;
+                    joint.integral += error * dt;
+                    torque = joint.gains.positionP * error +
+                             joint.gains.positionI * joint.integral -
                              joint.gains.positionD * slot.velocity;
                     break;
+                }
                 case CommandMode::None:
                     break;
             }
@@ -133,6 +137,8 @@ public:
             // Anti-windup: stop integrating while the motor saturates.
             if (clamped != torque && slot.mode == CommandMode::Velocity) {
                 joint.integral -= (slot.commandVelocity - slot.velocity) * dt;
+            } else if (clamped != torque && slot.mode == CommandMode::Position) {
+                joint.integral -= (slot.commandPosition - slot.position) * dt;
             }
             joint.applied = clamped;
             bus.write(joint.torque, clamped);
