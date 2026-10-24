@@ -251,8 +251,8 @@ std::vector<Recorder::Column> standardColumns() {
     std::vector<Recorder::Column> c{
         {"bus/dc_48v/voltage", units::V},         {"bus/dc_48v/brownout", units::one},
         {"battery/battery/current", units::A},    {"battery/battery/soc", units::one},
-        {"battery/battery/loss_power", units::W}, {"load/computer/current", units::A},
-        {"load/computer/powered", units::one}};
+        {"battery/battery/loss_power", units::W}, {"battery/battery/power", units::W},
+        {"load/computer/current", units::A},      {"load/computer/powered", units::one}};
     for (const char* m : {"left_drive_motor", "right_drive_motor"}) {
         for (const char* q : {"bus_current", "loss_power", "fault", "current_d", "current_q"}) {
             c.push_back({std::string("motor/") + m + "/" + q,
@@ -311,6 +311,8 @@ TEST(ElectricalNetwork, TheSampleAmrDrivesItsWheelsFromTheBattery) {
     EXPECT_LT(volts, 16 * 3.45);  // sagging under load
     EXPECT_GT(volts, 50.0);
     EXPECT_GT(last[r.column("battery/battery/current")], 0.0);
+    EXPECT_DOUBLE_EQ(last[r.column("battery/battery/power")],
+                     volts * last[r.column("battery/battery/current")]);
     EXPECT_LT(last[r.column("battery/battery/soc")], 1.0);
     EXPECT_EQ(last[r.column("load/computer/powered")], 1.0);
     EXPECT_NEAR(last[r.column("load/computer/current")], 45.0 / volts, 0.05);

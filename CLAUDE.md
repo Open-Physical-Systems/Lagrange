@@ -57,13 +57,13 @@ Consequences:
 
 ## 2. Current phase
 
-**v0.2 = simulation core + AMR** (v0.1, the viewer, protocol and mock server, was released
-as `v0.1.0` on 2026-10-14). Plan: `docs/plan/roadmap.md` §3, epics 0.2-A to 0.2-H.
+**v0.2 (simulation core + AMR) and v0.3 (arms, electrical, thermal) are done on `dev` and
+prepared for release, not published** (`docs/release/v0.2.0.md`, `docs/release/v0.3.0.md`;
+v0.1.0 was released on 2026-10-14). Plans: `docs/plan/roadmap.md` §3 and §4; status and owed
+items: `docs/plan/progress.md`. Next by the roadmap: v0.4 drones (§5), once the owner has
+reviewed and published v0.2 and v0.3.
 
-- Build the real C++ server so the v0.1 viewer connects to it unchanged (protocol stays v1).
-- Core framework first (units, signal bus, wiring, multirate scheduler, substitutes), then USD
-  stage loading, the MuJoCo backend, sensors, the ROS 2 bridge and ros2_control, then the Nav2
-  demo.
+- The protocol stays v1; the v0.1 viewer connects to the C++ server unchanged.
 - RFC 0001 (module interface), 0002 (USD schemas) and 0005 (profile format) are accepted; work
   that depends on a still-Draft RFC waits until the owner accepts it.
 - Replay is in the C++ server (`--replay`, E8); the Python mock server is a test tool (Q15).
@@ -258,7 +258,7 @@ verification, not in this repo.
 - Bench mode: `lagrange_server --bench run.mcap` (or a profile's `rigid_body: {enabled: false, substitute: replay, source: run.mcap}`) replaces physics by the recording's joint and body motion, open loop, while electrical, thermal and sensors run live (`lagrange_recording`'s `ReplaySubstitute`)
 - Import to USD: `ros2 run lagrange_server lagrange_import robot.urdf|robot.sdf|robot.xml robot.usda [--overlay FILE.yaml]` (URDF, SDFormat or MJCF, told apart by the root element; writes what the server reads back; the sample `.usda` assets are made this way and `test_usd_assets` keeps them in step with the URDFs; `lagrange_importers` holds the SDFormat and MJCF readers, and the sample AMR also ships as `.sdf` and MJCF `.xml`; an overlay file (formats.md §9) adds motors, battery and bus, as `amr_diffdrive.overlay.yaml` does for the sample, whose hand-written equivalent is `amr_diffdrive_powered.usda`)
 - Migrations (formats.md §10): `ros2 run lagrange_migrate migrate_schema FILE.usda --in-place|-o OUT|--check` and `ros2 run lagrange_migrate migrate_profile FILE.yaml --in-place|-o OUT|--check [--schema profiles/schema.json]` (one function per schema family and version step in `tools/migrate/lagrange_migrate/`; profiles without `schema_version` are version 0)
-- Collision bake (B8): `ros2 run lagrange_collision_bake collision_bake IN.usda -o OUT.usda [--threshold 0.05] [--preprocess auto|on|off] [--seed N] [--report FILE.json]` decomposes every mesh collider that is not already a convex hull with CoACD into `convexHull` meshes under `<mesh>_collision` (the mesh stays drawn); the loader reads convex `convexHull` meshes as hull colliders (MuJoCo, Jolt, CPU lidar; the GPU lidar refuses them). Sample: `assets/worlds/rack_sample/rack.usda` and `rack_baked.usda`
+- Collision bake (B8): `ros2 run lagrange_collision_bake collision_bake IN.usda -o OUT.usda [--threshold 0.05] [--preprocess auto|on|off] [--seed N] [--report FILE.json]` decomposes every mesh collider that is not already a convex hull with CoACD into `convexHull` meshes under `<mesh>_collision` (the mesh stays drawn); the loader reads convex `convexHull` meshes as hull colliders (MuJoCo, Jolt, both lidar tiers). Sample: `assets/worlds/rack_sample/rack.usda` and `rack_baked.usda`
 - Electrical export: `ros2 run lagrange_server lagrange export spice|modelica [PROFILE] [options] [--out FILE]` writes the robot's power system as an ngspice netlist or a Modelica model (drives as averaged power sinks; electrical.md §7); `test_export` runs a netlist through ngspice when installed
 - Arm demo (v0.3): `ros2 launch lagrange_demos arm6_workcell.launch.py [motors:=sized|undersized] [electrical:=on|off] [ambient:=K] [rtf:=X] [record:=FILE.mcap] [viewer:=true]`, then `ros2 run lagrange_demos pick_place [--cycles N] [--speed 0..1]` (MoveIt 2 via moveit_py through joint_trajectory_controller at 1 kHz; exit 3 when a move fails); `tools/ci/arm_scenario.sh` runs the derating scenario of robot-classes.md §4 (about ten minutes)
 - Nav2 demo: `ros2 launch lagrange_demos amr_warehouse.launch.py [viewer:=false] [control:=ros2_control|builtin] [lidar:=auto|cpu|gpu]`, then `ros2 run lagrange_demos patrol [--minutes N]` (fails on a missed waypoint or a collision; nightly CI runs 10 minutes via `tools/ci/nav2_demo.sh 10`)

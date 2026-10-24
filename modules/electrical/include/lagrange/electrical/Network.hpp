@@ -101,7 +101,7 @@ private:
         double initialSoc{1.0};
         std::size_t bus{0};
         double current{0.0};  // A, positive discharging, this step
-        SignalId temperature, soc, terminalVoltage, currentOut, loss;
+        SignalId temperature, soc, terminalVoltage, currentOut, loss, power;
     };
     struct Bus {
         std::string name;

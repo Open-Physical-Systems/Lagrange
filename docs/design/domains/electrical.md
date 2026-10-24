@@ -76,6 +76,7 @@ for (auto& b : world.instancesOf("BatteryAPI_1")) {
     d.output({.name = fmt("battery/{}/terminal_voltage", p), .type = SignalType::Scalar, .unit = units::V});
     d.output({.name = fmt("battery/{}/current", p),          .type = SignalType::Scalar, .unit = units::A});
     d.output({.name = fmt("battery/{}/loss_power", p),       .type = SignalType::Scalar, .unit = units::W});
+    d.output({.name = fmt("battery/{}/power", p),            .type = SignalType::Scalar, .unit = units::W});   // at its terminals
 }
 for (auto& bus : world.instancesOf("ElectricalBusAPI_1")) {
     d.output({.name = fmt("bus/{}/voltage", name(bus)),    .type = SignalType::Scalar, .unit = units::V});
