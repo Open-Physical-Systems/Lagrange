@@ -144,6 +144,8 @@ struct Bridge::Impl {
 
     /// A 3D lidar's scan as sensor_msgs/PointCloud2: x, y, z, intensity (float32) and ring
     /// (uint16), in the sensor frame, organised as rings x columns with NaN where no return.
+    /// In Lyrical, PointCloud2::data is a rosidl::Buffer with the CPU backend; a CUDA backend
+    /// can replace it without touching this code: docs/plan/spikes/0.2-F7-rosidl-buffer.md.
     void publishCloud(const Lidar& lidar, std::span<const double> ranges) {
         using sensor_msgs::msg::PointField;
         sensor_msgs::msg::PointCloud2 cloud;

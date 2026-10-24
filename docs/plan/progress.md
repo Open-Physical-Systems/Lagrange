@@ -67,7 +67,7 @@ flowchart TB
         F1_2["F1 bridge · F2 sensor topics"]:::done
         F4_6["F4 simulation_interfaces<br/>F5 RosGraph · F6 Nav2 demo"]:::done
         F3["F3 ros2_control"]:::done
-        F7["F7 rosidl::Buffer spike"]:::todo
+        F7["F7 rosidl::Buffer<br/>(desk study; CUDA run on NVIDIA)"]:::done
     end
     subgraph G["G · importers"]
         G1["G1 URDF/xacro → USD"]:::done
@@ -151,6 +151,7 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md).
 | #46 OpenUSD vendor, schemas, stage loader | `schemas/` (sensor library, `lagrangeUnit` metadata, under the accepted RFC 0002) | Rebased onto #51–#58; `--spawn` fixed for USD. ASan/UBSan run not done: stopped by the system for low memory while building OpenUSD |
 | #50 SDFormat and MJCF importers | none (stacked on #46) | Rebased; `--spawn` fixed for SDFormat and MJCF too |
 | plugin C ABI v0 (A11) | `core/plugin_abi/` (new: `lagrange_plugin.h`, ABI 0.1, as RFC 0001 and architecture.md §13 specify) | C99 sample built with `-std=c99 -pedantic -Werror`; ASan/UBSan clean |
+| plugin ABI schema queries | `core/plugin_abi/` (host functions answer from `World::schemaInstances`) | C99 sample's schema_probe reads two motors' values |
 
 ### Known issues
 
