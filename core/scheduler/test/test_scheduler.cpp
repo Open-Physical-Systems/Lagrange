@@ -28,11 +28,12 @@ public:
     std::vector<SimTime> stepTimes;  // every step's start time
     double state{0.0};               // saved and restored
     bool deterministic{true};
+    bool isSubstitute{false};
     CapabilityTier tier{CapabilityTier::Tier0};
     bool* shutdownCalled{nullptr};
 
     [[nodiscard]] ModuleInfo info() const override {
-        return {domain_, name_, 1, 0, false, deterministic, tier};
+        return {domain_, name_, 1, 0, isSubstitute, deterministic, tier};
     }
     [[nodiscard]] Duration preferredStep() const override { return step_; }
     Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& declarer) override {
@@ -753,6 +754,20 @@ TEST(Graph, DotListsModulesAndEdges) {
     const std::string dot = scheduler.dumpGraphDot();
     EXPECT_NE(dot.find("label=\"a/relay\\n1 ms\""), std::string::npos);
     EXPECT_NE(dot.find("label=\"x/b/out\", style=dashed"), std::string::npos);
+}
+
+TEST(Graph, DotMarksSubstitutes) {
+    Scheduler scheduler;
+    auto standIn =
+        source("electrical", 1_ms, "joint/a/torque", units::N_m, [](double) { return 0.0; });
+    standIn->isSubstitute = true;
+    scheduler.add(std::move(standIn));
+    const World world;
+    ASSERT_TRUE(scheduler.wire(WorldView(world)));
+    EXPECT_NE(scheduler.dumpGraphDot().find(
+                  "label=\"electrical/source\\n1 ms\\nsubstitute\", style=dashed"),
+              std::string::npos)
+        << scheduler.dumpGraphDot();
 }
 
 }  // namespace

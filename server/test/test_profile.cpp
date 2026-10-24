@@ -1,5 +1,6 @@
 // Profile checks (RFC 0005, roadmap 0.2-E5): the schema, and what this server can run.
-#include "../src/Profile.hpp"
+#include "lagrange/server/Profile.hpp"
+#include "lagrange/server/Server.hpp"
 
 #include <fstream>
 #include <sstream>
@@ -135,6 +136,49 @@ TEST(Profile, ReportsBadYamlWithItsLine) {
     ASSERT_FALSE(check.valid);
     ASSERT_FALSE(check.issues.empty());
     EXPECT_NE(check.issues[0].message.find("line"), std::string::npos) << issues(check);
+}
+
+// `lagrange validate`, `graph` and `run` (roadmap 0.2-E7) go through these: the example profile
+// for the sample AMR is valid in the real server, wires, and applies.
+TEST(Profile, TheSampleAmrExampleValidatesWiresAndApplies) {
+    ServerOptions options;
+    options.robotPath = LAGRANGE_TEST_AMR_URDF;
+    options.worldPath = LAGRANGE_TEST_WAREHOUSE_URDF;
+    options.profileSchemaPath = LAGRANGE_TEST_SCHEMA;
+    options.stageName = "robots/amr_diffdrive/amr_diffdrive.urdf";
+    Server server(options);
+    ASSERT_TRUE(server.load().ok());
+    ASSERT_TRUE(server.load().ok());  // once only
+
+    std::ifstream in(LAGRANGE_TEST_PROFILES "/amr_sample_urdf.yaml");
+    std::stringstream text;
+    text << in.rdbuf();
+    const std::string example = text.str();
+    const ProfileCheck check = server.validateProfile(example);
+    EXPECT_TRUE(check.valid) << issues(check);
+    EXPECT_TRUE(check.issues.empty()) << issues(check);
+
+    const std::string dot = server.wiringDot();
+    EXPECT_NE(dot.find("rigid_body/mujoco"), std::string::npos) << dot;
+    EXPECT_NE(dot.find("sensors/lidar_front_lidar"), std::string::npos) << dot;
+
+    // Sensors off: ground-truth substitutes stand in for the lidars in the wiring.
+    std::string substituted = example;
+    const std::string on = "sensors:      { enabled: true }";
+    ASSERT_NE(substituted.find(on), std::string::npos);
+    substituted.replace(substituted.find(on), on.size(),
+                        "sensors: { enabled: false, substitute: ground_truth }");
+    ASSERT_TRUE(server.applyProfile(substituted).ok());
+    EXPECT_EQ(dot.find("substitute"), std::string::npos) << dot;
+    EXPECT_NE(server.wiringDot().find("sensors/lidar_front_lidar\\n100 ms\\nsubstitute"),
+              std::string::npos)
+        << server.wiringDot();
+
+    // Another stage is refused.
+    std::string other = example;
+    other.replace(other.find("robots/amr_diffdrive"), 20, "robots/other_robot00");
+    EXPECT_TRUE(hasIssue(server.validateProfile(other), "/stage"));
+    EXPECT_FALSE(server.applyProfile(other).ok());
 }
 
 }  // namespace

@@ -1,4 +1,3 @@
-#include "Profile.hpp"
 #include "Recorder.hpp"
 #include "lagrange/proto/Connection.hpp"
 #include "lagrange/proto/Framing.hpp"
@@ -8,6 +7,7 @@
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/server/DiffDrive.hpp"
+#include "lagrange/server/Profile.hpp"
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/server/Server.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
@@ -218,6 +218,7 @@ struct Server::Impl {
     std::vector<Captured> captured;  // by signal index; empty values when nobody subscribes
     std::deque<v1::LogRecord> logs;
     std::string schemaText;
+    std::array<double, 3> shift{};  // world ENU of the region-local origin at load
 
     Clock::time_point lastWall{Clock::now()};
     Clock::time_point lastStatus{Clock::now()};
@@ -1295,7 +1296,7 @@ struct Server::Impl {
     /// What this server can do with a profile, for checkProfile.
     ProfileContext profileContext() const {
         ProfileContext context;
-        context.stage = robot.sourcePath;
+        context.stage = options.stageName.empty() ? robot.sourcePath : options.stageName;
         context.modules.insert("rigid_body");
         if (hasSensors()) {
             context.modules.insert("sensors");
@@ -1333,6 +1334,18 @@ struct Server::Impl {
             return;
         }
         describeWiring(*scheduler, *out.mutable_wiring());
+    }
+
+    /// checkProfile, then whether the settings wire (as validate, without the wiring preview).
+    ProfileCheck check(const std::string& yaml) {
+        ProfileCheck check = checkProfile(yaml, schemaText, profileContext());
+        if (check.settings) {
+            if (auto preview = makeScheduler(*check.settings, nullptr); !preview) {
+                check.valid = false;
+                check.issues.push_back({true, "/domains", preview.error()});
+            }
+        }
+        return check;
     }
 
     /// Adopts a valid profile: rebuilds the run at t = 0 now, or at the next reset.
@@ -1876,8 +1889,11 @@ Server::~Server() {
     }
 }
 
-Status Server::start() {
+Status Server::load() {
     Impl& s = *impl_;
+    if (s.scheduler) {
+        return {};
+    }
     auto robot = loadUrdf(s.options.robotPath, {.spawn = s.options.spawn});
     if (!robot) {
         return Status::error(StatusCode::InvalidConfig, robot.error());
@@ -1897,20 +1913,42 @@ Status Server::start() {
             return Status::error(StatusCode::InvalidConfig, added.error());
         }
     }
-    const std::array<double, 3> shift = recentre(s.robot);
+    s.shift = recentre(s.robot);
     if (Status status = s.placeLidar(); !status.ok()) {
         return status;
     }
     if (Status status = s.build(); !status.ok()) {
+        s.scheduler.reset();
         return status;
     }
+    if (!s.options.profileSchemaPath.empty()) {
+        s.schemaText = readFile(s.options.profileSchemaPath);
+    }
+    return {};
+}
+
+std::string Server::wiringDot() const {
+    return impl_->scheduler ? impl_->scheduler->dumpGraphDot() : std::string{};
+}
+
+ProfileCheck Server::validateProfile(const std::string& yaml) {
+    return impl_->check(yaml);
+}
+
+Status Server::applyProfile(const std::string& yaml) {
+    return impl_->apply(yaml, true);
+}
+
+Status Server::start() {
+    Impl& s = *impl_;
+    if (Status status = load(); !status.ok()) {
+        return status;
+    }
+    const std::array<double, 3>& shift = s.shift;
     if (!s.options.recordPath.empty()) {
         if (Status status = s.startRecording(s.options.recordPath); !status.ok()) {
             return status;
         }
-    }
-    if (!s.options.profileSchemaPath.empty()) {
-        s.schemaText = readFile(s.options.profileSchemaPath);
     }
     std::error_code ec;
     s.listener = proto::Listener::listen(s.options.endpoint, ec);

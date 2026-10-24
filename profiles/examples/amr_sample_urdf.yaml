@@ -1,0 +1,17 @@
+# profiles/examples/amr_sample_urdf.yaml — what the v0.2 server runs today: the sample AMR
+# (URDF from lagrange_assets) with MuJoCo and its sensors; domains without a module yet are
+# substituted. `lagrange run profiles/examples/amr_sample_urdf.yaml`
+schema_version: 1
+stage: robots/amr_diffdrive/amr_diffdrive.urdf
+
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: false, substitute: ideal }
+  thermal:      { enabled: false, substitute: ambient }
+  aerodynamics: { enabled: false, substitute: zero }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: false, substitute: zero }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: true }
+
+time: { real_time_factor: 1.0 }
