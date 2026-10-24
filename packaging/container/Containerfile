@@ -1,0 +1,37 @@
+# The headless simulator and the Nav2 demo on Ubuntu 26.04 + ROS 2 Lyrical (roadmap 0.2-H8).
+#
+#   podman build -f packaging/container/Containerfile -t lagrange:dev .
+#   podman run --rm lagrange:dev                      # patrols the warehouse for one minute
+#   podman run --rm lagrange:dev tools/ci/nav2_demo.sh 10
+#   podman run --rm -e CONTROL=ros2_control lagrange:dev
+#
+# Docker reads the same file (docker build -f packaging/container/Containerfile .).
+FROM docker.io/library/ros:lyrical-ros-base-resolute
+
+ENV ROS_DISTRO=lyrical
+WORKDIR /ws
+
+# Dependencies first, from the package manifests only, so a source change keeps this layer.
+COPY packaging/rosdep packaging/pip-constraints.txt src/lagrange/packaging/
+COPY tools/ci/install_deps.sh src/lagrange/tools/ci/
+COPY . src/lagrange
+RUN src/lagrange/tools/ci/install_deps.sh && rm -rf /var/lib/apt/lists/*
+
+# The simulator and the demo, without the viewer (no display in a container). Two packages at
+# a time: OpenUSD's build needs about 2 GB per compiler.
+# bash, not SHELL: Podman's default OCI image format ignores SHELL.
+RUN bash -c 'source "/opt/ros/$ROS_DISTRO/setup.bash" \
+    && MAKEFLAGS=-j6 colcon build --parallel-workers 2 \
+        --base-paths src/lagrange \
+        --packages-up-to lagrange_server lagrange_demos \
+        --packages-skip lagrange_viewer \
+        --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=OFF \
+    && rm -rf build log' 
+
+# The demo script expects the workspace root with install/ and the sources under src/lagrange.
+RUN ln -s src/lagrange/tools tools
+# The built-in drive controller by default: with ros2_control, Nav2's start-up sometimes loses a
+# service between processes (docs/plan/progress.md, known issues). -e CONTROL=ros2_control
+# runs that path.
+ENV CONTROL=builtin
+CMD ["tools/ci/nav2_demo.sh", "1"]

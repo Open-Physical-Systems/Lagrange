@@ -1,0 +1,55 @@
+# rosdep keys for Lagrange's own packages, as bloom names their debs (ros-lyrical-<name>).
+# Only for local bloom builds before a buildfarm release (roadmap 0.2-H8); once released,
+# rosdistro has the keys and this file goes away.
+lagrange_assets:
+  ubuntu: [ros-lyrical-lagrange-assets]
+lagrange_ros2_control:
+  ubuntu: [ros-lyrical-lagrange-ros2-control]
+lagrange_ros2:
+  ubuntu: [ros-lyrical-lagrange-ros2]
+lagrange_cmake:
+  ubuntu: [ros-lyrical-lagrange-cmake]
+lagrange_core:
+  ubuntu: [ros-lyrical-lagrange-core]
+lagrange_demos:
+  ubuntu: [ros-lyrical-lagrange-demos]
+lagrange_gpu:
+  ubuntu: [ros-lyrical-lagrange-gpu]
+lagrange_importers:
+  ubuntu: [ros-lyrical-lagrange-importers]
+lagrange_meshes:
+  ubuntu: [ros-lyrical-lagrange-meshes]
+lagrange_stage:
+  ubuntu: [ros-lyrical-lagrange-stage]
+lagrange_mock_server:
+  ubuntu: [ros-lyrical-lagrange-mock-server]
+lagrange_rigid_body_jolt:
+  ubuntu: [ros-lyrical-lagrange-rigid-body-jolt]
+lagrange_rigid_body_mujoco:
+  ubuntu: [ros-lyrical-lagrange-rigid-body-mujoco]
+lagrange_rigid_body_substitutes:
+  ubuntu: [ros-lyrical-lagrange-rigid-body-substitutes]
+lagrange_sensors:
+  ubuntu: [ros-lyrical-lagrange-sensors]
+lagrange_profiles:
+  ubuntu: [ros-lyrical-lagrange-profiles]
+lagrange_proto:
+  ubuntu: [ros-lyrical-lagrange-proto]
+lagrange_python:
+  ubuntu: [ros-lyrical-lagrange-python]
+lagrange_schemas:
+  ubuntu: [ros-lyrical-lagrange-schemas]
+lagrange_server:
+  ubuntu: [ros-lyrical-lagrange-server]
+lagrange_benchmarks:
+  ubuntu: [ros-lyrical-lagrange-benchmarks]
+lagrange_tutorial:
+  ubuntu: [ros-lyrical-lagrange-tutorial]
+imgui_vendor:
+  ubuntu: [ros-lyrical-imgui-vendor]
+jolt_vendor:
+  ubuntu: [ros-lyrical-jolt-vendor]
+openusd_vendor:
+  ubuntu: [ros-lyrical-openusd-vendor]
+lagrange_viewer:
+  ubuntu: [ros-lyrical-lagrange-viewer]
