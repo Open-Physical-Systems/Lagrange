@@ -81,7 +81,7 @@ flowchart TB
         H6["H6 benchmarks"]:::done
         H9["H9 docs + tutorial"]:::done
         H8["H8 packaging trial<br/><b>next</b>"]:::next
-        H2["H2 determinism CI job"]:::todo
+        H2["H2 determinism check"]:::done
         H5["H5 Python bindings"]:::todo
         H7["H7 electrical slice<br/>(skipped: v0.3)"]:::done
         H10["H10 v0.2 release"]:::todo

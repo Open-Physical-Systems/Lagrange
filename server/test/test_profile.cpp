@@ -2,6 +2,7 @@
 #include "lagrange/server/Profile.hpp"
 #include "lagrange/server/Server.hpp"
 
+#include <cstdint>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -179,6 +180,28 @@ TEST(Profile, TheSampleAmrExampleValidatesWiresAndApplies) {
     other.replace(other.find("robots/amr_diffdrive"), 20, "robots/other_robot00");
     EXPECT_TRUE(hasIssue(server.validateProfile(other), "/stage"));
     EXPECT_FALSE(server.applyProfile(other).ok());
+}
+
+// `lagrange determinism` (roadmap 0.2-H2) steps two servers headless: the state must move on
+// with time, and be the same in both.
+TEST(Determinism, TwoHeadlessServersStayIdenticalWhileTheRobotMoves) {
+    ServerOptions options;
+    options.robotPath = LAGRANGE_TEST_AMR_URDF;
+    options.worldPath = LAGRANGE_TEST_WAREHOUSE_URDF;
+    options.lidar = ServerOptions::Lidar::Cpu;
+    Server a(options);
+    Server b(options);
+    ASSERT_TRUE(a.load().ok());
+    ASSERT_TRUE(b.load().ok());
+    ASSERT_TRUE(a.stepUntil(SimTime{1'000'000'000}).ok());
+    ASSERT_TRUE(b.stepUntil(SimTime{1'000'000'000}).ok());
+    const std::uint64_t at1 = a.stateHash().value();
+    EXPECT_EQ(at1, b.stateHash().value());
+    ASSERT_TRUE(a.stepUntil(SimTime{2'000'000'000}).ok());
+    ASSERT_TRUE(b.stepUntil(SimTime{2'000'000'000}).ok());
+    const std::uint64_t at2 = a.stateHash().value();
+    EXPECT_EQ(at2, b.stateHash().value());
+    EXPECT_NE(at1, at2) << "the run advanced";
 }
 
 }  // namespace

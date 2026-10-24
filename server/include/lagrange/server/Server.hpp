@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lagrange/module/Expected.hpp"
 #include "lagrange/module/Status.hpp"
 #include "lagrange/proto/Endpoint.hpp"
 #include "lagrange/server/Profile.hpp"
@@ -74,6 +75,11 @@ public:
     [[nodiscard]] ProfileCheck validateProfile(const std::string& yaml);
     /// After load(): applies a valid profile, rebuilding the run at t = 0.
     Status applyProfile(const std::string& yaml);
+    /// After load(), without start(): advances the simulation to `t` as fast as it can (no
+    /// viewers, no wall clock), for headless checks such as `lagrange determinism`.
+    Status stepUntil(SimTime t);
+    /// After load(): the hash of the run's whole state (Scheduler::stateHash).
+    [[nodiscard]] Expected<std::uint64_t, Status> stateHash() const;
     /// One iteration: waits up to `timeoutMs` for viewers, advances simulation time by the wall
     /// time that passed (times the real-time factor), and sends what changed.
     void runOnce(int timeoutMs);

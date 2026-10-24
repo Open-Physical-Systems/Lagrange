@@ -3,13 +3,17 @@
 //   lagrange run PROFILE [options]          the simulator with a profile applied
 //   lagrange validate PROFILE... [options]  check profiles; exit 1 if any has an error
 //   lagrange graph [PROFILE] [options]      the wiring as Graphviz DOT
+//   lagrange determinism [PROFILE] [options] [--seconds N]
+//                                           run twice, compare the state hashes
 //   lagrange info [--version]               version, paths and GPUs of this installation
 //
 // Options are lagrange_server's. A profile's `stage` names the robot to load (URDF, SDFormat,
 // MJCF or USD, found next to the profile or in lagrange_assets) unless --robot is given.
 #include "CommandLine.hpp"
 #include "lagrange/gpu/Device.hpp"
+#include "lagrange/services/DeterminismCheck.hpp"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -19,6 +23,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <yaml-cpp/yaml.h>
 
@@ -44,6 +49,10 @@ int usage(const char* error) {
                  "  validate PROFILE... [options]  check profiles against profiles/schema.json\n"
                  "                                 and what this simulator can run\n"
                  "  graph [PROFILE] [options]      print the wiring of the run as Graphviz DOT\n"
+                 "  determinism [PROFILE] [options] [--seconds N]\n"
+                 "                                 run twice (no ROS, CPU lidar) and compare the\n"
+                 "                                 state hashes every 100 ms; exit 1 if they\n"
+                 "                                 differ (default 10 s)\n"
                  "  info [--version]               version, paths and GPUs\n"
                  "A profile's stage names the robot (URDF) unless --robot is given.\n"
                  "Options (as lagrange_server):\n");
@@ -178,6 +187,66 @@ int graph(CommandLine& line) {
     return 0;
 }
 
+/// One headless run of the server for the determinism check.
+class ServerRun final : public lagrange::services::CheckedRun {
+public:
+    explicit ServerRun(const lagrange::server::ServerOptions& options) : server_(options) {}
+    lagrange::Status load() { return server_.load(); }
+    lagrange::Status stepUntil(lagrange::SimTime t) override { return server_.stepUntil(t); }
+    [[nodiscard]] lagrange::Expected<std::uint64_t, lagrange::Status> stateHash() const override {
+        return server_.stateHash();
+    }
+
+private:
+    lagrange::server::Server server_;
+};
+
+int determinism(CommandLine& line, double seconds) {
+    if (line.positional.size() > 1) {
+        return usage("determinism takes at most one profile");
+    }
+    std::optional<std::string> yaml;
+    if (!line.positional.empty()) {
+        yaml = readFile(line.positional[0]);
+        if (!yaml) {
+            std::fprintf(stderr, "lagrange: cannot read %s\n", line.positional[0].c_str());
+            return 1;
+        }
+        if (const auto error = useStage(line, *yaml, line.positional[0])) {
+            std::fprintf(stderr, "lagrange: %s\n", error->c_str());
+            return 1;
+        }
+    }
+    // A deterministic run: nothing from outside (no ROS) and the CPU lidar.
+    line.options.ros = false;
+    line.options.lidar = lagrange::server::ServerOptions::Lidar::Cpu;
+    const auto make =
+        [&]() -> lagrange::Expected<std::unique_ptr<lagrange::services::CheckedRun>, std::string> {
+        auto run = std::make_unique<ServerRun>(line.options);
+        if (lagrange::Status status = run->load(); !status.ok()) {
+            return lagrange::Unexpected{status.message};
+        }
+        return std::unique_ptr<lagrange::services::CheckedRun>(std::move(run));
+    };
+    const auto end = lagrange::SimTime{static_cast<std::int64_t>(seconds * 1e9)};
+    const lagrange::services::DeterminismReport report =
+        lagrange::services::checkDeterminism(make, end, lagrange::Duration{100'000'000});
+    if (!report.error.empty()) {
+        std::fprintf(stderr, "lagrange: %s\n", report.error.c_str());
+        return 1;
+    }
+    if (!report.identical) {
+        std::printf(
+            "NOT deterministic: the two runs differ at t = %.3f s (after %u identical "
+            "comparisons)\n",
+            report.firstDivergence->seconds(), report.comparisons - 1);
+        return 1;
+    }
+    std::printf("deterministic: %u state hashes over %.1f s identical in both runs\n",
+                report.comparisons, seconds);
+    return 0;
+}
+
 int run(CommandLine& line, int argc, char** argv) {
     if (line.positional.size() != 1) {
         return usage("run needs one profile");
@@ -246,9 +315,27 @@ int main(int argc, char** argv) {
     if (command == "info") {
         return info(argc, argv);
     }
-    if (command != "run" && command != "validate" && command != "graph") {
+    if (command != "run" && command != "validate" && command != "graph" &&
+        command != "determinism") {
         return usage(("unknown command " + std::string(command)).c_str());
     }
+    // --seconds belongs to `determinism` only; take it out before the server's options.
+    double seconds = 10.0;
+    std::vector<char*> args(argv, argv + argc);
+    for (std::size_t i = 2; i + 1 < args.size(); ++i) {
+        if (std::string_view(args[i]) == "--seconds") {
+            char* end = nullptr;
+            seconds = std::strtod(args[i + 1], &end);
+            if (end == args[i + 1] || *end != '\0' || !(seconds > 0.0)) {
+                return usage("--seconds needs a positive number");
+            }
+            args.erase(args.begin() + static_cast<std::ptrdiff_t>(i),
+                       args.begin() + static_cast<std::ptrdiff_t>(i) + 2);
+            break;
+        }
+    }
+    argc = static_cast<int>(args.size());
+    argv = args.data();
     CommandLine line = lagrange::server::defaultCommandLine();
     if (const auto error = lagrange::server::parseCommandLine(argc, argv, 2, true, line)) {
         return usage(error->c_str());
@@ -258,6 +345,9 @@ int main(int argc, char** argv) {
     }
     if (command == "run") {
         return run(line, argc, argv);
+    }
+    if (command == "determinism") {
+        return determinism(line, seconds);
     }
     // Checking and printing need no ROS node.
     line.options.ros = false;
