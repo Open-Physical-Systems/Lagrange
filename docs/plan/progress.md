@@ -61,7 +61,7 @@ flowchart TB
         E7["E7 lagrange CLI"]:::done
         E3["E3 consumer rings"]:::done
         E6["E6 scene editing<br/>(with v0.3 motors)"]:::todo
-        E8["E8 mock server alignment"]:::todo
+        E8["E8 replay in C++<br/>(v0.3, with the replay substitute)"]:::todo
     end
     subgraph F["F · ROS 2"]
         F1_2["F1 bridge · F2 sensor topics"]:::done
@@ -80,7 +80,7 @@ flowchart TB
         H3_4["H3 toggle matrix<br/>H4 offset origin"]:::done
         H6["H6 benchmarks"]:::done
         H9["H9 docs + tutorial"]:::done
-        H8["H8 packaging trial<br/><b>next</b>"]:::next
+        H8["H8 packaging trial"]:::done
         H2["H2 determinism check"]:::done
         H5["H5 Python bindings"]:::done
         H7["H7 electrical slice<br/>(skipped: v0.3)"]:::done
@@ -109,7 +109,7 @@ flowchart TB
 | E6 | Scene editing moves to v0.3 | Its acceptance test edits a motor parameter in a running sim; motors arrive with v0.3's electrical domain |
 | G2 | Overlay files move to v0.3 | Its acceptance test gives an imported AMR motors and a battery; those schemas (`ElectricalMotorAPI`, `BatteryAPI`) come with v0.3's electrical domain |
 | B8 | Collision bake moves to v0.3 | Needs mesh colliders in physics and in the lidar (none yet) and a CoACD vendor package; the sample warehouse's shelves are primitives today |
-| E8 | Replay in the C++ server last in v0.2 | Large and mostly parity with the Python replay that works today; smaller, certain items first |
+| E8 | Replay in the C++ server moves to v0.3 | The Python replay works for users today. v0.3's bench mode needs a C++ replay substitute (rigid body replaced by a recorded run); built once there as a module, it gives the server replay too |
 
 ## Autonomous run (from 2026-10-24)
 
@@ -161,3 +161,7 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md).
   in place: spawner retried in fresh processes, 30 s bond timeout, the patrol exits 3 when the
   stack never comes up and `nav2_demo.sh` relaunches once on that only. Root cause (Fast DDS
   discovery) not found; investigation stopped to keep the queue moving.
+  Seen again in the container image (H8): with ros2_control in two runs out of two, and once
+  with the built-in controller (Nav2's controller server never got `/odom`). So it is not
+  ros2_control's: some process occasionally never discovers another's endpoint during the
+  crowded start-up. The image defaults to the built-in controller.

@@ -188,6 +188,11 @@ bench), stored in the assets repository with a data sheet.
 The ROS buildfarm may not accept long vendor builds or CUDA dependencies (unverified).
 **Recommendation:** aim for the buildfarm for core packages; plan a project apt repository for
 vendor-heavy and CUDA packages; decide after the v0.2 packaging trial (issue 0.2-H8).
+**After the trial (2026-10-25, docs/plan/spikes/0.2-H8-packaging.md):** the buildfarm releases
+vendor packages that fetch sources at build time (`mujoco_vendor`, `aws_sdk_cpp_vendor`,
+`gz_*_vendor`), so `openusd_vendor` and `jolt_vendor` fit it. Recommend the buildfarm for every
+package, and a project repository only for CUDA paths if the buildfarm cannot build them.
+Owner to confirm; OpenUSD's build time on a buildfarm devel job is still to be checked.
 
 **Q24. Jetson.**
 JetPack is on Ubuntu 24.04 (V9). **Recommendation:** no Jetson support statement; revisit when a

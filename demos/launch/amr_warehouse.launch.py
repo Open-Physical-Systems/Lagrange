@@ -186,7 +186,11 @@ def generate_launch_description() -> LaunchDescription:
 
     return LaunchDescription(
         [
-            DeclareLaunchArgument("viewer", default_value="true", description="Open the viewer"),
+            DeclareLaunchArgument(
+                "viewer",
+                default_value="true",
+                description="Open the viewer (needs lagrange_viewer; the demo itself does not)",
+            ),
             DeclareLaunchArgument(
                 "endpoint",
                 default_value=default_socket(),
