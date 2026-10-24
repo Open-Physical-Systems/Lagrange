@@ -167,7 +167,9 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
    2026-10-25: architecture.md §8.1; the scheduler steps flow readers at their window's end)
 6. FMU host (**done** 2026-10-25, on our `fmilibrary3_vendor`: Lyrical's `fmilibrary_vendor`
    pins FMI Library 2.2.3, FMI 2.0 only; reference FMU `lagrange_models/dc_drive`)
-7. Bench mode: the replay substitute for rigid body (E8 follows from it)
+7. Bench mode: the replay substitute for rigid body (**done** 2026-10-25: `lagrange_recording`,
+   `--bench`; 10 kHz electrical at about 59× real time. E8, replay in the C++ server, stays
+   open: the viewer's replay seeks, the scheduler does not; open-questions.md Q15)
 8. SPICE netlist and Modelica export; ngspice offline comparison
 9. Robot arm sample and MoveIt 2
 10. Raster camera sensor

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <filesystem>
 #include <jsoncons/json.hpp>
 #include <jsoncons_ext/jsonschema/jsonschema.hpp>
 
@@ -204,6 +205,24 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
             }
             if (context.modules.contains(name)) {
                 settings.substituted.insert(name);
+            }
+            if (name == "rigid_body") {
+                // A replay names its recording on the domain or in the substitute object.
+                const jsoncons::json* source = nullptr;
+                if (domain.contains("source")) {
+                    source = &domain["source"];
+                } else if (domain.contains("substitute") && domain["substitute"].is_object() &&
+                           domain["substitute"].contains("source")) {
+                    source = &domain["substitute"]["source"];
+                }
+                if (source != nullptr && source->is_string()) {
+                    const std::string file = source->as<std::string>();
+                    if (!std::filesystem::exists(file)) {
+                        error(check, at + "/source", "the recording " + file + " does not exist");
+                    } else {
+                        settings.rigidBodyReplay = file;
+                    }
+                }
             }
             if (domain.contains("substitute")) {
                 const jsoncons::json& substitute = domain["substitute"];

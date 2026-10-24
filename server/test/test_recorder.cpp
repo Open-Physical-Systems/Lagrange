@@ -156,5 +156,63 @@ TEST(Determinism, TheDemoRunsBitIdenticallyTwice) {
     EXPECT_NE(first.front().second, first.back().second);
 }
 
+TEST(BenchMode, AReplayedRunDrivesTheElectricalDomainAsTheOriginalDid) {
+    // Roadmap v0.3 bench mode: record the sample AMR's demo drive with its power system, then
+    // replace physics by the recording. The wheel speeds are the recorded ones, and the live
+    // electrical network, fed the same motion and the same commands, ends where it did.
+    const std::filesystem::path dir =
+        std::filesystem::path(::testing::TempDir()) / "lagrange_bench";
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path file = dir / "drive.mcap";
+    std::filesystem::remove(file);
+    constexpr std::int64_t kEnd = 2'000'000'000;
+    ServerOptions options;
+    options.robotPath = LAGRANGE_TEST_AMR_URDF;
+    options.worldPath = LAGRANGE_TEST_WAREHOUSE_URDF;
+    options.overlayPath = LAGRANGE_TEST_AMR_OVERLAY;
+    options.realTimeFactor = 0.0;
+    std::vector<double> original;
+    double originalSpeed = 0.0;
+    {
+        ServerOptions record = options;
+        record.endpoint = proto::Endpoint::unixSocket((dir / "a.sock").string());
+        record.recordPath = file.string();
+        Server server(record);
+        const Status started = server.start();
+        ASSERT_TRUE(started.ok()) << started.message;
+        while (server.simTime().ns < kEnd) {
+            server.runOnce(0);
+        }
+        original = {server.read("bus/dc_48v/voltage").at(0),
+                    server.read("battery/battery/soc").at(0),
+                    server.read("motor/left_drive_motor/current_q").at(0)};
+        originalSpeed = server.read("joint/left_wheel_joint/velocity").at(0);
+    }
+    ASSERT_GT(std::abs(originalSpeed), 1.0);  // the demo drive moved
+
+    ServerOptions bench = options;
+    bench.endpoint = proto::Endpoint::unixSocket((dir / "b.sock").string());
+    bench.benchReplayPath = file.string();
+    bench.substituted.insert("rigid_body");
+    Server server(bench);
+    const Status started = server.start();
+    ASSERT_TRUE(started.ok()) << started.message;
+    EXPECT_NE(server.wiringDot().find("rigid_body/replay"), std::string::npos);
+    EXPECT_EQ(server.wiringDot().find("rigid_body/mujoco"), std::string::npos);
+    while (server.simTime().ns < kEnd) {
+        server.runOnce(0);
+        ASSERT_TRUE(server.running());
+    }
+    // The replay commits a sample for its step's end time, as live physics does; physics in
+    // the original made it visible one step later (it steps at the end of its window), so the
+    // values compare at a tolerance, not bit for bit.
+    EXPECT_NEAR(server.read("joint/left_wheel_joint/velocity").at(0), originalSpeed,
+                0.02 * std::abs(originalSpeed));
+    EXPECT_NEAR(server.read("bus/dc_48v/voltage").at(0), original[0], 0.002 * original[0]);
+    EXPECT_NEAR(server.read("battery/battery/soc").at(0), original[1], 1e-5);
+    EXPECT_NEAR(server.read("motor/left_drive_motor/current_q").at(0), original[2],
+                0.05 * std::abs(original[2]) + 0.05);
+}
+
 }  // namespace
 }  // namespace lagrange::server

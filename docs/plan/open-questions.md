@@ -48,6 +48,12 @@ server side.
 a good protocol conformance check). In v0.2, move replay into the C++ server as a mode that uses
 replay substitutes for every domain, and keep the Python server as a test tool. Decide finally in
 issue 0.2-E8.
+*Status (2026-10-25):* the C++ replay substitute exists (`lagrange_recording`, bench mode:
+`--bench`, a profile's rigid_body `replay`). A whole-run replay mode in the C++ server is the
+same substitute for every domain, but the viewer's replay also seeks and scrubs, which the
+Python mock server does and the scheduler does not (it only steps forward from t = 0). E8 stays
+open until seeking is designed (restore from saved states every N seconds is the likely way);
+until then the Python server remains the viewer's replay path.
 
 **Q20. Protocol encoding and transport (RFC 0003).**
 **Recommendation:** Protobuf (proto3) with raw little-endian arrays in `bytes` fields for bulk

@@ -99,6 +99,8 @@ void printServerOptions(std::FILE* out) {
         "            server stops or the run is reset; the mock server replays it\n"
         "  --record-max-components N  leave larger signals out (default 1024: the\n"
         "            3D lidar's ranges)\n"
+        "  --bench RUN.mcap  bench mode: physics replaced by the run's recorded joint\n"
+        "            and body motion, open loop (electrical, thermal, sensors live)\n"
         "  --ambient-temperature K  the site's air temperature: runs the thermal domain\n"
         "            (no default; a profile's thermal.ambient_temperature also sets it)\n"
         "  --domain D=off  replace domain D (rigid_body, electrical, thermal, sensors) by its\n"
@@ -188,6 +190,13 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--rtf needs a number >= 0";
             }
             options.realTimeFactor = rtf;
+        } else if (arg == "--bench") {
+            const char* path = value();
+            if (path == nullptr) {
+                return "--bench needs a recording (.mcap)";
+            }
+            options.benchReplayPath = path;
+            options.substituted.insert("rigid_body");
         } else if (arg == "--ambient-temperature") {
             const char* text = value();
             char* end = nullptr;
