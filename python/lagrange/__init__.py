@@ -9,7 +9,14 @@ print(sim.read("body/base_link/pose"))
 
 from __future__ import annotations
 
+import pkgutil
+
 from ament_index_python.packages import get_package_share_directory
+
+# Other packages also install modules under `lagrange` (lagrange_proto: lagrange.viewer.v1,
+# lagrange.record.v1). This package is a regular one, so without this whichever comes first on
+# the path would hide the others (the mock server then fails to import its messages).
+__path__ = pkgutil.extend_path(__path__, __name__)
 
 from lagrange._lagrange import Simulation
 
