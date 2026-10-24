@@ -1,0 +1,142 @@
+# The sample arm with its shoulder and elbow motors one size too small (the wrist motor's winding,
+# Kt 0.05 N·m/A, 0.8 ohm, on the same gearbox, run at up to 30 A to keep the torque) and cooled
+# weakly (0.1 W/K): about ten times the copper loss of arm6.overlay.yaml for the same moves. A
+# repeated full-speed cycle heats them into derating within minutes, the v0.3 arm scenario
+# (docs/design/robot-classes.md §4; `ros2 launch lagrange_demos arm6_workcell.launch.py
+# motors:=undersized`). Everything else as arm6.overlay.yaml.
+schema_version: 1
+apply:
+  - create: power/supply
+    schemas:
+      BatteryAPI_1:
+        elec:battery:chemistry: custom
+        elec:battery:seriesCells: 1
+        elec:battery:capacity: 3.6e7              # C: a supply does not run down
+        elec:battery:ocvSoc: [0.0, 1.0]
+        elec:battery:ocvVoltage: [48.0, 48.0]     # V
+        elec:battery:r0: 0.01                     # ohm
+        elec:battery:cutoffVoltage: 10.0          # V
+        elec:battery:maxChargeCurrent: 0.0        # A: it takes nothing back
+      PortAPI_1:out:
+        elec:port:out:connectedTo: power/dc_48v
+  - create: power/dc_48v
+    schemas:
+      ElectricalBusAPI_1:
+        elec:bus:capacitance: 0.01                # F
+        elec:bus:undervoltageTrip: 36.0           # V
+        elec:bus:overvoltageTrip: 56.0            # V
+        elec:bus:brakeResistor: 10.0              # ohm
+  - prim: shoulder_pan_joint
+    create_child: shoulder_pan_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:windingResistance: 0.8
+        elec:inductance: 0.0012
+        elec:torqueConstant: 0.05
+        elec:polePairs: 4
+        elec:rotorInertia: 1.2e-05
+        elec:gearRatio: 100.0
+        elec:gearEfficiency: 0.85
+        elec:maxCurrent: 30.0
+        elec:joint: shoulder_pan_joint
+        elec:powerPort: power/dc_48v
+      ThermalAPI_1:
+        thermal:heatCapacity: 150.0
+        thermal:convectionArea: 0.01
+        thermal:deratingStart: 393.15
+        thermal:maxTemperature: 428.15
+  - prim: shoulder_lift_joint
+    create_child: shoulder_lift_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:windingResistance: 0.8
+        elec:inductance: 0.0012
+        elec:torqueConstant: 0.05
+        elec:polePairs: 4
+        elec:rotorInertia: 1.2e-05
+        elec:gearRatio: 100.0
+        elec:gearEfficiency: 0.85
+        elec:maxCurrent: 30.0
+        elec:joint: shoulder_lift_joint
+        elec:powerPort: power/dc_48v
+      ThermalAPI_1:
+        thermal:heatCapacity: 150.0
+        thermal:convectionArea: 0.01
+        thermal:deratingStart: 393.15
+        thermal:maxTemperature: 428.15
+  - prim: elbow_joint
+    create_child: elbow_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:windingResistance: 0.8
+        elec:inductance: 0.0012
+        elec:torqueConstant: 0.05
+        elec:polePairs: 4
+        elec:rotorInertia: 1.2e-05
+        elec:gearRatio: 100.0
+        elec:gearEfficiency: 0.85
+        elec:maxCurrent: 30.0
+        elec:joint: elbow_joint
+        elec:powerPort: power/dc_48v
+      ThermalAPI_1:
+        thermal:heatCapacity: 150.0
+        thermal:convectionArea: 0.01
+        thermal:deratingStart: 393.15
+        thermal:maxTemperature: 428.15
+  - prim: wrist_1_joint
+    create_child: wrist_1_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:windingResistance: 0.8
+        elec:inductance: 0.0012
+        elec:torqueConstant: 0.05
+        elec:polePairs: 4
+        elec:rotorInertia: 5e-06
+        elec:gearRatio: 50.0
+        elec:gearEfficiency: 0.85
+        elec:maxCurrent: 8.0
+        elec:joint: wrist_1_joint
+        elec:powerPort: power/dc_48v
+      ThermalAPI_1:
+        thermal:heatCapacity: 60.0
+        thermal:convectionArea: 0.01
+        thermal:deratingStart: 393.15
+        thermal:maxTemperature: 428.15
+  - prim: wrist_2_joint
+    create_child: wrist_2_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:windingResistance: 0.8
+        elec:inductance: 0.0012
+        elec:torqueConstant: 0.05
+        elec:polePairs: 4
+        elec:rotorInertia: 5e-06
+        elec:gearRatio: 50.0
+        elec:gearEfficiency: 0.85
+        elec:maxCurrent: 8.0
+        elec:joint: wrist_2_joint
+        elec:powerPort: power/dc_48v
+      ThermalAPI_1:
+        thermal:heatCapacity: 60.0
+        thermal:convectionArea: 0.01
+        thermal:deratingStart: 393.15
+        thermal:maxTemperature: 428.15
+  - prim: wrist_3_joint
+    create_child: wrist_3_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:windingResistance: 0.8
+        elec:inductance: 0.0012
+        elec:torqueConstant: 0.05
+        elec:polePairs: 4
+        elec:rotorInertia: 5e-06
+        elec:gearRatio: 50.0
+        elec:gearEfficiency: 0.85
+        elec:maxCurrent: 8.0
+        elec:joint: wrist_3_joint
+        elec:powerPort: power/dc_48v
+      ThermalAPI_1:
+        thermal:heatCapacity: 60.0
+        thermal:convectionArea: 0.01
+        thermal:deratingStart: 393.15
+        thermal:maxTemperature: 428.15
