@@ -2,7 +2,8 @@
 (
     defaultPrim = "amr_diffdrive"
     doc = """The sample AMR with its power system, written by hand: two wheel drives on a 48 V bus
-    fed by an LFP battery, and the onboard computer as a load. The same data as
+    fed by an LFP battery, the onboard computer as a load, and thermal nodes on the motors, the
+    battery and the chassis. The same data as
     amr_diffdrive.overlay.yaml applied to amr_diffdrive.urdf (roadmap 0.2-G2 checks that they
     agree). Parameters are illustrative, not a real product; the overlay file explains the
     sizing."""
@@ -14,10 +15,15 @@
 
 over "amr_diffdrive"
 {
-    over "base_link"
+    over "base_link" (
+        prepend apiSchemas = ["ThermalAPI_1"]
+    )
     {
+        double thermal:heatCapacity = 9000             # J/K
+        double thermal:convectionArea = 0.9            # m²
+
         def Xform "left_drive_motor" (
-            prepend apiSchemas = ["ElectricalMotorAPI_1"]
+            prepend apiSchemas = ["ElectricalMotorAPI_1", "ThermalAPI_1", "ThermalLinkAPI_1:to_chassis"]
         )
         {
             double elec:windingResistance = 0.12   # ohm at 25 °C
@@ -30,10 +36,16 @@ over "amr_diffdrive"
             double elec:maxCurrent = 8             # A
             rel elec:joint = </amr_diffdrive/joints/left_wheel_joint>
             rel elec:powerPort = </amr_diffdrive/power/dc_48v>
+            double thermal:heatCapacity = 225          # J/K
+            double thermal:convectionArea = 0.02       # m²
+            double thermal:deratingStart = 393.15      # K (120 °C)
+            double thermal:maxTemperature = 428.15     # K (155 °C)
+            double thermal:link:to_chassis:conductance = 0.5   # W/K
+            rel thermal:link:to_chassis:target = </amr_diffdrive/base_link>
         }
 
         def Xform "right_drive_motor" (
-            prepend apiSchemas = ["ElectricalMotorAPI_1"]
+            prepend apiSchemas = ["ElectricalMotorAPI_1", "ThermalAPI_1", "ThermalLinkAPI_1:to_chassis"]
         )
         {
             double elec:windingResistance = 0.12
@@ -46,13 +58,19 @@ over "amr_diffdrive"
             double elec:maxCurrent = 8
             rel elec:joint = </amr_diffdrive/joints/right_wheel_joint>
             rel elec:powerPort = </amr_diffdrive/power/dc_48v>
+            double thermal:heatCapacity = 225          # J/K
+            double thermal:convectionArea = 0.02       # m²
+            double thermal:deratingStart = 393.15      # K (120 °C)
+            double thermal:maxTemperature = 428.15     # K (155 °C)
+            double thermal:link:to_chassis:conductance = 0.5   # W/K
+            rel thermal:link:to_chassis:target = </amr_diffdrive/base_link>
         }
     }
 
     def Xform "power"
     {
         def Xform "battery" (
-            prepend apiSchemas = ["BatteryAPI_1", "PortAPI_1:dc_out"]
+            prepend apiSchemas = ["BatteryAPI_1", "PortAPI_1:dc_out", "ThermalAPI_1", "ThermalLinkAPI_1:to_chassis"]
         )
         {
             uniform token elec:battery:chemistry = "lfp"
@@ -68,6 +86,12 @@ over "amr_diffdrive"
             double elec:port:dc_out:nominalVoltage = 51.2  # V
             double elec:port:dc_out:maxCurrent = 40        # A
             rel elec:port:dc_out:connectedTo = </amr_diffdrive/power/dc_48v>
+            double thermal:heatCapacity = 8000             # J/K
+            double thermal:convectionArea = 0.1            # m²
+            double thermal:deratingStart = 318.15          # K (45 °C)
+            double thermal:maxTemperature = 333.15         # K (60 °C)
+            double thermal:link:to_chassis:conductance = 2 # W/K
+            rel thermal:link:to_chassis:target = </amr_diffdrive/base_link>
         }
 
         def Xform "dc_48v" (

@@ -20,6 +20,9 @@ constexpr std::int64_t kMaxPhysicsDtNs = 10'000'000;  // 10 ms
 // The electrical network's step range (domains/electrical.md §4), as DomainState advertises.
 constexpr std::int64_t kMinElectricalDtNs = 10'000;     // 10 µs
 constexpr std::int64_t kMaxElectricalDtNs = 1'000'000;  // 1 ms
+// The thermal network's step range (domains/thermal.md §4).
+constexpr std::int64_t kMinThermalDtNs = 1'000'000;       // 1 ms
+constexpr std::int64_t kMaxThermalDtNs = 10'000'000'000;  // 10 s
 
 /// A YAML document as JSON, for the schema. Scalars keep YAML 1.2 core meanings: true/false,
 /// null and ~, integers, floats; anything else is a string.
@@ -132,6 +135,16 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 continue;  // the schema reported it
             }
             const bool enabled = domain["enabled"].as<bool>();
+            if (name == "thermal" && domain.contains("ambient_temperature") &&
+                domain["ambient_temperature"].is_number()) {
+                settings.ambientTemperatureK = domain["ambient_temperature"].as<double>();
+            }
+            if (name == "thermal" && enabled && context.modules.contains("thermal") &&
+                !settings.ambientTemperatureK && !context.ambientKnown) {
+                error(check, at + "/ambient_temperature",
+                      "the thermal domain needs the site's ambient temperature (K); it has no "
+                      "default");
+            }
             if (domain.contains("dt") && domain["dt"].is_number()) {
                 const double ns = domain["dt"].as<double>() * kNsPerS;
                 if (std::abs(ns - std::round(ns)) > 1e-6) {
@@ -142,6 +155,13 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                         error(check, at + "/dt", "the MuJoCo step must be from 0.0001 to 0.01 s");
                     } else {
                         settings.rigidBodyDtNs = step;
+                    }
+                } else if (name == "thermal") {
+                    const auto step = static_cast<std::int64_t>(std::llround(ns));
+                    if (step < kMinThermalDtNs || step > kMaxThermalDtNs) {
+                        error(check, at + "/dt", "the thermal step must be from 0.001 to 10 s");
+                    } else {
+                        settings.thermalDtNs = step;
                     }
                 } else if (name == "electrical") {
                     const auto step = static_cast<std::int64_t>(std::llround(ns));
