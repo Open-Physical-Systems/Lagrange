@@ -7,6 +7,7 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <limits>
+#include <optional>
 #include <span>
 #include <string>
 #include <utility>
@@ -102,14 +103,51 @@ const char* worldJointName(const lagrange_world* w, std::uint32_t joint) {
     const auto& names = world(w).joints().names;
     return joint < names.size() ? names[joint].c_str() : nullptr;
 }
-std::uint32_t worldSchemaInstanceCount(const lagrange_world*, const char*) {
-    return 0;  // the stage does not keep custom schema values in the world yet
-}
-int worldSchemaReal(const lagrange_world*, const char*, std::uint32_t, const char*, double*) {
-    return 0;
-}
-const char* worldSchemaInstanceName(const lagrange_world*, const char*, std::uint32_t) {
+/// The `instance`-th application of `schema` in the world, or nullptr.
+const SchemaInstance* schemaInstance(const lagrange_world* w, const char* schema,
+                                     std::uint32_t instance) {
+    if (schema == nullptr) {
+        return nullptr;
+    }
+    std::uint32_t seen = 0;
+    for (const SchemaInstance& s : world(w).raw().schemaInstances) {
+        if (s.schema == schema && seen++ == instance) {
+            return &s;
+        }
+    }
     return nullptr;
+}
+std::uint32_t worldSchemaInstanceCount(const lagrange_world* w, const char* schema) {
+    if (schema == nullptr) {
+        return 0;
+    }
+    std::uint32_t count = 0;
+    for (const SchemaInstance& s : world(w).raw().schemaInstances) {
+        count += s.schema == schema ? 1 : 0;
+    }
+    return count;
+}
+int worldSchemaReal(const lagrange_world* w, const char* schema, std::uint32_t instance,
+                    const char* attr, double* out) {
+    const SchemaInstance* s = schemaInstance(w, schema, instance);
+    if (s == nullptr || attr == nullptr || out == nullptr) {
+        return 0;
+    }
+    const std::optional<double> value = s->real(attr);
+    if (!value) {
+        return 0;
+    }
+    *out = *value;
+    return 1;
+}
+const char* worldSchemaInstanceName(const lagrange_world* w, const char* schema,
+                                    std::uint32_t instance) {
+    const SchemaInstance* s = schemaInstance(w, schema, instance);
+    if (s == nullptr) {
+        return nullptr;
+    }
+    const auto& names = world(w).raw().prims.instanceNames;
+    return s->prim.index < names.size() ? names[s->prim.index].c_str() : nullptr;
 }
 int configGetReal(const lagrange_config* c, const char* key, double* out) {
     if (key == nullptr || out == nullptr) {

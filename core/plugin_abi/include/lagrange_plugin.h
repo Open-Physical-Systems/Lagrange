@@ -110,7 +110,8 @@ typedef struct lagrange_host_api {
     /* declare() and init(). */
     uint32_t (*world_joint_count)(const lagrange_world*);
     const char* (*world_joint_name)(const lagrange_world*, uint32_t joint);
-    /* Schema queries (custom USD schemas); 0 instances until the stage keeps schema values. */
+    /* Custom schemas applied in the stage ("ElectricalMotorAPI_1"): how many prims carry one,
+     * a real attribute of the n-th ("elec:torqueConstant"), and that prim's name. */
     uint32_t (*world_schema_instance_count)(const lagrange_world*, const char* schema);
     int (*world_schema_real)(const lagrange_world*, const char* schema, uint32_t instance,
                              const char* attr, double* out); /* 1 if present */
