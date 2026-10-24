@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+"""Decomposes a stage's mesh colliders into convex hulls (CoACD)."""
+
+import sys
+
+from lagrange_collision_bake.bake import main
+
+sys.exit(main())

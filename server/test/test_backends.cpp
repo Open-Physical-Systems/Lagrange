@@ -5,8 +5,10 @@
 #include "lagrange/rigid_body/JoltBackend.hpp"
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
+#include "lagrange/sensors/ShapeCaster.hpp"
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/server/Server.hpp"
+#include "lagrange/stage/Stage.hpp"
 
 #include <cmath>
 #include <filesystem>
@@ -181,6 +183,54 @@ TEST(Backends, AConvexHullBoxRestsLikeABoxOnBoth) {
             scheduler.bus().readN(scheduler.bus().find("body/box/pose"));
         EXPECT_NEAR(pose[2], 0.1, 0.002);
         EXPECT_NEAR(pose[3], 1.0, 1e-3) << "flat on a face";
+    }
+}
+
+TEST(CollisionBake, TheBakedRackKeepsItsGapsForTheLidarAndHoldsABox) {
+    // assets/worlds/rack_sample/rack_baked.usda: the sample rack (one non-convex mesh, x = 3 m)
+    // after collision_bake. The lidar sees between its boards and stops at a board's edge; a
+    // box rests on its middle board.
+    auto rack = stage::loadStage(LAGRANGE_TEST_RACK_BAKED_USDA);
+    ASSERT_TRUE(rack) << rack.error();
+    const World& world = rack->world;
+    const auto hullCount = std::count(world.colliders.shape.begin(), world.colliders.shape.end(),
+                                      ShapeType::ConvexHull);
+    RecordProperty("hulls", std::to_string(hullCount));
+    EXPECT_GE(hullCount, 7);
+    std::vector<sensors::ShapeCaster::Shape> shapes;
+    for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
+        shapes.push_back({world.colliders.shape[c], world.colliders.size[c],
+                          world.colliders.poseInBody[c],
+                          world.colliders.shape[c] == ShapeType::ConvexHull
+                              ? &world.hulls.at(world.colliders.hull[c])
+                              : nullptr});
+    }
+    sensors::ShapeCaster caster;
+    caster.update(shapes);
+    // Between the first two boards (0.3 m and 1.0 m), between the uprights: nothing.
+    EXPECT_TRUE(std::isinf(caster.cast({0.0, 0.0, 0.65}, {1.0, 0.0, 0.0})));
+    // At a board's height: its near edge, 3 - 0.6 = 2.4 m away.
+    EXPECT_NEAR(caster.cast({0.0, 0.0, 1.0}, {1.0, 0.0, 0.0}), 2.4, 0.003);
+
+    // A 0.2 m box dropped on the middle board (top at 1.015 m) rests at 1.115 m.
+    Model scene = *rack;
+    World& w = scene.world;
+    const BodyId box = w.addBody("box", kWorldBody, Pose{{3.0, 0.0, 1.25}}, 1.0, {},
+                                 {0.0067, 0.0067, 0.0067, 0, 0, 0});
+    w.addJoint("box_free", JointType::Free, box, {0, 0, 1}, false);
+    w.addCollider(box, ShapeType::Box, {0.1, 0.1, 0.1}, Pose{}, 1.0);
+    for (const bool jolt : {false, true}) {
+        SCOPED_TRACE(jolt ? "jolt" : "mujoco");
+        Scheduler scheduler(SchedulerOptions{.deterministic = true});
+        if (jolt) {
+            scheduler.add(std::make_unique<rigid_body::JoltBackend>());
+        } else {
+            scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+        }
+        auto wired = scheduler.wire(WorldView(w));
+        ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+        ASSERT_TRUE(scheduler.stepUntil(SimTime{1'500'000'000}).ok());
+        EXPECT_NEAR(scheduler.bus().readN(scheduler.bus().find("body/box/pose"))[2], 1.115, 0.003);
     }
 }
 
