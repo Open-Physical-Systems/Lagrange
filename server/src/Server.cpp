@@ -37,6 +37,7 @@
 #include <memory>
 #include <poll.h>
 #include <set>
+#include <span>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -854,6 +855,7 @@ struct Server::Impl {
             }
             out.set_roughness(0.6F);
         }
+        electricalNets(snap);
         snap.set_topology_hash(WorldView(robot.world).topologyHash());
         snap.set_stage_path(robot.sourcePath);
         return envelope;
@@ -906,7 +908,85 @@ struct Server::Impl {
         return envelope;
     }
 
-    /// The scene prim a signal is about: body/<link>/... and joint/<joint>/... name it.
+    /// The electrical nets for the Electrical workspace (scene.proto ElectricalNet), from the
+    /// world's schemas: a net per ElectricalBusAPI prim; its terminals the battery ports,
+    /// motors and loads connected to it, each with the current the network reports for it;
+    /// its limits the bus trips and the ports' current ratings.
+    void electricalNets(v1::SceneSnapshot& snap) const {
+        const World& world = robot.world;
+        const WorldView view(world);
+        const auto name = [&view](PrimId prim) {
+            return std::string(view.signalInstanceName(prim));
+        };
+        const auto volt = [](v1::Unit& unit) { setUnit(unit, units::V); };
+        const auto amp = [](v1::Unit& unit) { setUnit(unit, units::A); };
+        std::uint32_t id = 0;
+        for (const SchemaInstance& bus : world.schemaInstances) {
+            if (bus.schema != "ElectricalBusAPI_1") {
+                continue;
+            }
+            const std::string busName = name(bus.prim);
+            v1::ElectricalNet& net = *snap.add_nets();
+            net.set_id(id++);
+            net.set_name(busName);
+            net.set_bus_prim(scenePrimOf(bus.prim));
+            net.set_voltage_signal("bus/" + busName + "/voltage");
+            const auto connected = [&bus](std::span<const PrimId> targets) {
+                return std::ranges::find(targets, bus.prim) != targets.end();
+            };
+            for (const SchemaInstance& s : world.schemaInstances) {
+                const std::string component = name(s.prim);
+                if (s.schema == "PortAPI_1" &&
+                    connected(s.rel("elec:port:" + s.instance + ":connectedTo"))) {
+                    // A battery's port: its current out of the pack.
+                    const bool battery = std::ranges::any_of(
+                        world.schemaInstances, [&s](const SchemaInstance& other) {
+                            return other.prim == s.prim && other.schema == "BatteryAPI_1";
+                        });
+                    v1::NetTerminal& terminal = *net.add_terminals();
+                    terminal.set_prim(scenePrimOf(s.prim));
+                    terminal.set_port(s.instance);
+                    if (battery) {
+                        terminal.set_current_signal("battery/" + component + "/current");
+                    }
+                    if (const auto rating = s.real("elec:port:" + s.instance + ":maxCurrent");
+                        rating && battery) {
+                        v1::NetLimit& limit = *net.add_limits();
+                        limit.set_label(component + " current");
+                        limit.set_value(*rating);
+                        amp(*limit.mutable_unit());
+                        limit.set_upper(true);
+                        limit.set_signal(terminal.current_signal());
+                    }
+                } else if ((s.schema == "ElectricalMotorAPI_1" ||
+                            s.schema == "ElectricalLoadAPI_1") &&
+                           connected(s.rel("elec:powerPort"))) {
+                    const bool motor = s.schema == "ElectricalMotorAPI_1";
+                    v1::NetTerminal& terminal = *net.add_terminals();
+                    terminal.set_prim(scenePrimOf(s.prim));
+                    terminal.set_port("power");
+                    terminal.set_current_signal(motor ? "motor/" + component + "/bus_current"
+                                                      : "load/" + component + "/current");
+                }
+            }
+            for (const auto& [attribute, label, upper] :
+                 {std::tuple{"elec:bus:overvoltageTrip", "OV trip", true},
+                  std::tuple{"elec:bus:undervoltageTrip", "UV trip", false}}) {
+                if (const auto value = bus.real(attribute); value && *value > 0.0) {
+                    v1::NetLimit& limit = *net.add_limits();
+                    limit.set_label(label);
+                    limit.set_value(*value);
+                    volt(*limit.mutable_unit());
+                    limit.set_upper(upper);
+                    limit.set_signal(net.voltage_signal());
+                }
+            }
+        }
+    }
+
+    /// The scene prim a signal is about: body/<link>/..., joint/<joint>/..., sensor/<sensor>/...
+    /// and the electrical and thermal components' motor/, battery/, load/, bus/ and thermal/
+    /// <prim>/... name it.
     std::uint32_t primOfSignal(const std::string& name) const {
         const auto field = [&](std::string_view prefix) -> std::string {
             if (name.rfind(prefix, 0) != 0) {
@@ -934,6 +1014,16 @@ struct Server::Impl {
             for (std::size_t j = 0; j < world.joints.names.size(); ++j) {
                 if (world.joints.names[j] == joint) {
                     return robot.jointPrim[j];
+                }
+            }
+        }
+        for (const char* domain : {"motor/", "battery/", "load/", "bus/", "thermal/"}) {
+            if (const std::string component = field(domain); !component.empty()) {
+                const WorldView view(world);
+                for (std::uint32_t p = 0; p < world.prims.paths.size(); ++p) {
+                    if (view.signalInstanceName(PrimId{p}) == component) {
+                        return scenePrimOf(PrimId{p});
+                    }
                 }
             }
         }
