@@ -11,6 +11,7 @@ find_package(lagrange_sensors REQUIRED)
 find_package(lagrange_meshes REQUIRED)
 find_package(lagrange_ros2 REQUIRED)
 find_package(lagrange_stage REQUIRED)
+find_package(lagrange_importers REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(urdfdom REQUIRED)
 find_package(tinyxml2 REQUIRED)
@@ -63,6 +64,7 @@ target_link_libraries(
         lagrange_meshes::lagrange_meshes
         lagrange_ros2::lagrange_ros2
         lagrange_stage::lagrange_stage
+        lagrange_importers::lagrange_importers
         urdfdom::urdfdom_model
         tinyxml2::tinyxml2
         yaml-cpp::yaml-cpp
@@ -154,6 +156,7 @@ if(BUILD_TESTING)
         lagrange_server
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
         lagrange_sensors::lagrange_sensors
+        lagrange_stage::lagrange_stage
         mcap_vendor::mcap
         tinyxml2::tinyxml2
     )
@@ -164,6 +167,8 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_SCHEMA="${CMAKE_CURRENT_SOURCE_DIR}/../profiles/schema.json"
             LAGRANGE_TEST_PROFILES="${CMAKE_CURRENT_SOURCE_DIR}/../profiles/examples"
             LAGRANGE_TEST_WAREHOUSE_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.urdf"
+            LAGRANGE_TEST_AMR_SDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.sdf"
+            LAGRANGE_TEST_AMR_MJCF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.xml"
             LAGRANGE_TEST_ARM_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/primitives_arm/primitives_arm.urdf"
             LAGRANGE_TEST_AMR_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.usda"
             LAGRANGE_TEST_WAREHOUSE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.usda"

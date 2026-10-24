@@ -41,7 +41,7 @@ flowchart TB
         B3["B3 RFC 0002"]:::done
         B6["B6 WorldView"]:::done
         B7["B7 sample assets"]:::done
-        B2["B2 openusd_vendor<br/>B4 schemas · B5 stage loader<br/>(PR #46, owner review)"]:::now
+        B2["B2 openusd_vendor<br/>B4 schemas · B5 stage loader"]:::done
         B8["B8 collision bake"]:::todo
     end
     subgraph C["C · rigid body"]
@@ -70,9 +70,9 @@ flowchart TB
         F7["F7 rosidl::Buffer spike"]:::todo
     end
     subgraph G["G · importers"]
-        G1["G1 URDF/xacro<br/>(to USD needs #46)"]:::done
+        G1["G1 URDF/xacro → USD"]:::done
         G5["G5 mesh import"]:::done
-        G34["G3 SDFormat · G4 MJCF<br/>(PR #50, after #46)"]:::now
+        G34["G3 SDFormat · G4 MJCF"]:::done
         G2["G2 overlay files"]:::todo
     end
     subgraph H["H · determinism, validation, packaging"]
@@ -105,7 +105,6 @@ flowchart TB
 
 | Item | Question |
 |---|---|
-| #46 (B2, B4, B5) | Review and approve the vendored OpenUSD and the stage loader (schema changes need 2 approvals). #50 follows it |
 | F3 | Keep the `feat/ros2-control` branch, or change acceptance criterion 1 |
 | C5 | Draft the RFC 0001 change for rebasing while the run is going (a new module hook) |
 | D2 | Where encoder resolution comes from (proposal: a `<param name="encoder_resolution">` in `<ros2_control>`) |
@@ -148,3 +147,5 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md).
 
 | PR | Gated path | Note |
 |---|---|---|
+| #46 OpenUSD vendor, schemas, stage loader | `schemas/` (sensor library, `lagrangeUnit` metadata, under the accepted RFC 0002) | Rebased onto #51–#58; `--spawn` fixed for USD. ASan/UBSan run not done: stopped by the system for low memory while building OpenUSD |
+| #50 SDFormat and MJCF importers | none (stacked on #46) | Rebased; `--spawn` fixed for SDFormat and MJCF too |

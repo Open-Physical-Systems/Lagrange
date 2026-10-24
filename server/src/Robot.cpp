@@ -1,3 +1,4 @@
+#include "lagrange/importers/Importers.hpp"
 #include "lagrange/meshes/MeshImport.hpp"
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/stage/Stage.hpp"
@@ -793,42 +794,71 @@ bool isUsd(const std::string& path) {
     return extension == ".usd" || extension == ".usda" || extension == ".usdc";
 }
 
-Expected<Robot, std::string> loadModel(const std::string& path, const LoadOptions& options) {
-    if (!isUsd(path)) {
-        return loadUrdf(path, options);
+namespace {
+
+/// A file that holds its bodies where they were authored (USD, SDFormat, MJCF): --spawn moves
+/// the robot from there, as it moves a URDF robot from its origin.
+Expected<Robot, std::string> placed(Expected<Robot, std::string> model, const Pose& spawn) {
+    if (!model || (spawn.position == std::array<double, 3>{0.0, 0.0, 0.0} &&
+                   spawn.orientation == std::array<double, 4>{1.0, 0.0, 0.0, 0.0})) {
+        return model;
     }
-    stage::ReadOptions read;
-    read.defaultFriction = options.surfaceFriction;
-    read.groundFriction = options.groundFriction;
-    auto model = stage::loadStage(path, read);
-    if (!model) {
-        return Unexpected{model.error()};
-    }
-    // A stage holds its bodies where they were authored: --spawn moves the robot from there,
-    // as it moves a URDF robot from its origin.
-    const Pose& spawn = options.spawn;
-    if (spawn.position != std::array<double, 3>{0.0, 0.0, 0.0} ||
-        spawn.orientation != std::array<double, 4>{1.0, 0.0, 0.0, 0.0}) {
-        World& world = model->world;
-        for (std::size_t b = 0; b < world.bodies.names.size(); ++b) {
-            if (world.bodies.parent[b] == kWorldBody) {
-                world.bodies.poseInParent[b] = compose(spawn, world.bodies.poseInParent[b]);
-            }
-            model->bodyRestPose[b] = compose(spawn, model->bodyRestPose[b]);
+    World& world = model->world;
+    for (std::size_t b = 0; b < world.bodies.names.size(); ++b) {
+        if (world.bodies.parent[b] == kWorldBody) {
+            world.bodies.poseInParent[b] = compose(spawn, world.bodies.poseInParent[b]);
         }
+        model->bodyRestPose[b] = compose(spawn, model->bodyRestPose[b]);
     }
-    return std::move(*model);
+    return model;
+}
+
+}  // namespace
+
+Expected<Robot, std::string> loadModel(const std::string& path, const LoadOptions& options) {
+    importers::ImportOptions import;
+    import.groundFriction = options.groundFriction;
+    switch (importers::formatOf(path)) {
+        case importers::Format::Usd: {
+            stage::ReadOptions read;
+            read.defaultFriction = options.surfaceFriction;
+            read.groundFriction = options.groundFriction;
+            return placed(stage::loadStage(path, read), options.spawn);
+        }
+        case importers::Format::Sdf:
+            return placed(importers::importSdf(path, import), options.spawn);
+        case importers::Format::Mjcf:
+            return placed(importers::importMjcf(path, import), options.spawn);
+        case importers::Format::Urdf:
+        case importers::Format::Unknown:
+            break;
+    }
+    return loadUrdf(path, options);
 }
 
 Expected<void, std::string> addModel(Robot& robot, const std::string& path,
                                      const LoadOptions& options) {
-    if (!isUsd(path)) {
-        return addUrdf(robot, path, options);
+    importers::ImportOptions import;
+    import.addGround = false;
+    Expected<Robot, std::string> other = Unexpected{std::string()};
+    switch (importers::formatOf(path)) {
+        case importers::Format::Usd: {
+            stage::ReadOptions read;
+            read.defaultFriction = options.surfaceFriction;
+            read.addGround = false;
+            other = stage::loadStage(path, read);
+            break;
+        }
+        case importers::Format::Sdf:
+            other = importers::importSdf(path, import);
+            break;
+        case importers::Format::Mjcf:
+            other = importers::importMjcf(path, import);
+            break;
+        case importers::Format::Urdf:
+        case importers::Format::Unknown:
+            return addUrdf(robot, path, options);
     }
-    stage::ReadOptions read;
-    read.defaultFriction = options.surfaceFriction;
-    read.addGround = false;
-    auto other = stage::loadStage(path, read);
     if (!other) {
         return Unexpected{other.error()};
     }

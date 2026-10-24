@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>lagrange_importers</name>
+  <version>0.1.0</version>
+  <description>Reads SDFormat and MJCF robot and world descriptions into Lagrange's world tables and scene, for the server to run and for lagrange_import to write as USD.</description>
+  <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>lagrange_cmake</buildtool_depend>
+
+  <depend>lagrange_core</depend>
+  <depend>sdformat_vendor</depend>
+  <depend>mujoco_vendor</depend>
+  <depend>tinyxml2</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>lagrange_rigid_body_mujoco</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

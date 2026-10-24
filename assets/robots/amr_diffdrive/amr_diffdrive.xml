@@ -1,0 +1,100 @@
+<!--
+  The sample differential-drive AMR (amr_diffdrive.urdf) in MJCF: the same bodies, joints,
+  inertias, shapes and colours, written the way MuJoCo models are. The importer test checks that
+  it loads to the same bodies and joints as the URDF and drives the same way.
+
+  One geom is both collision and visual in MJCF; the decorations have contype and conaffinity 0.
+  MJCF has no lidar sensor, so this version has the IMU only (a gyro and an accelerometer on one
+  site, read at every physics step: the 5 ms timestep gives the URDF's 200 Hz).
+-->
+<mujoco model="amr_diffdrive">
+  <compiler angle="radian"/>
+  <option timestep="0.005"/>
+
+  <asset>
+    <material name="body" rgba="0.20 0.24 0.30 1"/>
+    <material name="accent" rgba="0.91 0.47 0.18 1"/>
+    <material name="rubber" rgba="0.08 0.08 0.09 1"/>
+    <material name="steel" rgba="0.62 0.64 0.67 1"/>
+  </asset>
+
+  <default>
+    <default class="decoration">
+      <geom contype="0" conaffinity="0"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <body name="base_link" pos="0 0 0.101">
+      <freejoint name="base_link_floating"/>
+      <!-- box 0.60 x 0.40 x 0.15 m -->
+      <inertial pos="0 0 0.03" mass="20.0" diaginertia="0.30417 0.6375 0.86667"/>
+      <geom name="chassis" type="box" size="0.30 0.20 0.075" pos="0 0 0.03" material="body"/>
+      <geom name="bumper" class="decoration" type="box" size="0.02 0.15 0.02" pos="0.28 0 0.07"
+            material="accent"/>
+      <site name="imu"/>
+
+      <!-- Driven wheels: radius 0.10 m, width 0.05 m, 1.5 kg. -->
+      <body name="left_wheel" pos="0 0.23 0">
+        <joint name="left_wheel_joint" type="hinge" axis="0 1 0"/>
+        <inertial pos="0 0 0" mass="1.5" diaginertia="0.0040625 0.0075 0.0040625"/>
+        <geom name="left_tyre" type="cylinder" size="0.10 0.025" euler="1.5707963 0 0"
+              material="rubber"/>
+      </body>
+      <body name="right_wheel" pos="0 -0.23 0">
+        <joint name="right_wheel_joint" type="hinge" axis="0 1 0"/>
+        <inertial pos="0 0 0" mass="1.5" diaginertia="0.0040625 0.0075 0.0040625"/>
+        <geom name="right_tyre" type="cylinder" size="0.10 0.025" euler="1.5707963 0 0"
+              material="rubber"/>
+      </body>
+
+      <!-- Swivel casters, front and back: a fork turning about z, a 0.03 m ball under it. -->
+      <body name="front_caster_fork" pos="0.22 0 -0.04">
+        <joint name="front_caster_swivel" type="hinge" axis="0 0 1"/>
+        <inertial pos="0 0 0" mass="0.1" diaginertia="0.0001 0.0001 0.0001"/>
+        <geom class="decoration" type="box" size="0.02 0.015 0.015" pos="-0.015 0 -0.01"
+              material="steel"/>
+        <body name="front_caster_wheel" pos="-0.03 0 -0.03">
+          <joint name="front_caster_axle" type="hinge" axis="0 1 0"/>
+          <inertial pos="0 0 0" mass="0.2" diaginertia="0.000072 0.000072 0.000072"/>
+          <geom type="sphere" size="0.03" material="rubber"/>
+        </body>
+      </body>
+      <body name="rear_caster_fork" pos="-0.22 0 -0.04">
+        <joint name="rear_caster_swivel" type="hinge" axis="0 0 1"/>
+        <inertial pos="0 0 0" mass="0.1" diaginertia="0.0001 0.0001 0.0001"/>
+        <geom class="decoration" type="box" size="0.02 0.015 0.015" pos="-0.015 0 -0.01"
+              material="steel"/>
+        <body name="rear_caster_wheel" pos="-0.03 0 -0.03">
+          <joint name="rear_caster_axle" type="hinge" axis="0 1 0"/>
+          <inertial pos="0 0 0" mass="0.2" diaginertia="0.000072 0.000072 0.000072"/>
+          <geom type="sphere" size="0.03" material="rubber"/>
+        </body>
+      </body>
+
+      <!-- The lidar housings, without the lidars (see above). -->
+      <body name="lidar_link" pos="0.20 0 0.13">
+        <inertial pos="0 0 0" mass="0.3" diaginertia="0.0002 0.0002 0.0002"/>
+        <geom class="decoration" type="cylinder" size="0.04 0.025" material="accent"/>
+      </body>
+      <body name="lidar_mast" pos="-0.10 0 0.205">
+        <inertial pos="0 0 0" mass="0.2" diaginertia="0.0007 0.0007 0.00002"/>
+        <geom class="decoration" type="cylinder" size="0.015 0.10" material="body"/>
+        <body name="top_lidar_link" pos="0 0 0.135">
+          <inertial pos="0 0 0" mass="0.8" diaginertia="0.0008 0.0008 0.001"/>
+          <geom class="decoration" type="cylinder" size="0.05 0.035" material="accent"/>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <motor name="left_wheel_motor" joint="left_wheel_joint" ctrlrange="-10 10"/>
+    <motor name="right_wheel_motor" joint="right_wheel_joint" ctrlrange="-10 10"/>
+  </actuator>
+
+  <sensor>
+    <gyro name="imu_gyro" site="imu" noise="0.002"/>
+    <accelerometer name="imu_accel" site="imu" noise="0.02"/>
+  </sensor>
+</mujoco>
