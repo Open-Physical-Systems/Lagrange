@@ -2,6 +2,7 @@
 
 #include "lagrange/module/Status.hpp"
 #include "lagrange/proto/Endpoint.hpp"
+#include "lagrange/server/Profile.hpp"
 #include "lagrange/time/SimTime.hpp"
 #include "lagrange/world/World.hpp"
 
@@ -18,8 +19,11 @@ struct ServerOptions {
     std::string worldPath;          // URDF of static scenery (root link "world"); empty = none
     Pose spawn;                     // where the robot starts, world ENU (LoadOptions::spawn)
     std::string profileSchemaPath;  // profiles/schema.json, sent to viewers; empty = none
-    double realTimeFactor{1.0};     // 0 = as fast as possible
-    bool ros{false};                // run the ROS 2 bridge (rclcpp::init must have been called)
+    /// What a profile's `stage` must say to apply to this run; empty: robotPath. `lagrange run`
+    /// sets it to the stage as the profile writes it.
+    std::string stageName;
+    double realTimeFactor{1.0};  // 0 = as fast as possible
+    bool ros{false};             // run the ROS 2 bridge (rclcpp::init must have been called)
     bool startPaused{false};
     std::string recordPath;                   // MCAP file to record the run to; empty: no recording
     std::uint32_t recordMaxComponents{1024};  // larger signals (3D lidar ranges) are left out
@@ -50,8 +54,19 @@ public:
     Server(Server&&) = delete;
     Server& operator=(Server&&) = delete;
 
-    /// Loads the robot, builds the simulation and starts listening.
+    /// Loads the robot and the scenery and wires the simulation, without listening. start()
+    /// does this first when it has not been done.
+    Status load();
+    /// Loads (if needed), then starts listening.
     Status start();
+
+    /// After load(): the wiring as a Graphviz digraph (Scheduler::dumpGraphDot).
+    [[nodiscard]] std::string wiringDot() const;
+    /// After load(): checks a profile against the schema and this run, and that its settings
+    /// wire. Needs ServerOptions::profileSchemaPath.
+    [[nodiscard]] ProfileCheck validateProfile(const std::string& yaml);
+    /// After load(): applies a valid profile, rebuilding the run at t = 0.
+    Status applyProfile(const std::string& yaml);
     /// One iteration: waits up to `timeoutMs` for viewers, advances simulation time by the wall
     /// time that passed (times the real-time factor), and sends what changed.
     void runOnce(int timeoutMs);

@@ -535,8 +535,11 @@ std::vector<ModuleCost> Scheduler::takeCosts() {
 std::string Scheduler::dumpGraphDot() const {
     std::string out = "digraph lagrange {\n  rankdir=LR;\n  node [shape=box];\n";
     for (std::uint32_t i = 0; i < entries_.size(); ++i) {
+        // A substitute stands in for its domain's module (often under the same name): dashed.
+        const bool substitute = entries_[i].info.isSubstitute;
         out += "  m" + std::to_string(i) + " [label=\"" + entries_[i].label + "\\n" +
-               formatDuration(entries_[i].dt) + "\"];\n";
+               formatDuration(entries_[i].dt) +
+               (substitute ? "\\nsubstitute\", style=dashed" : "\"") + "];\n";
     }
     for (const SignalBus::InputSlot& slot : bus_.inputs_) {
         if (slot.signal == kNone) {
