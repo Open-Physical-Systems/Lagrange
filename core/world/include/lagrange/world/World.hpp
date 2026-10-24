@@ -46,7 +46,8 @@ enum class SensorType : std::uint8_t { Imu, Lidar };
 /// One applied API schema on one prim, with its attribute values read once at load.
 /// Lookups are by name, so they belong in declare() and init(), never in step().
 struct SchemaInstance {
-    std::string schema;  // "ElectricalMotorAPI_1"
+    std::string schema;    // "ElectricalMotorAPI_1"
+    std::string instance;  // a multiple-apply schema's instance ("dc_out"); empty otherwise
     PrimId prim;
     std::map<std::string, double, std::less<>> reals;
     std::map<std::string, std::int64_t, std::less<>> integers;

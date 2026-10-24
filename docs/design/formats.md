@@ -216,8 +216,11 @@ unresolved question 1):
 | Schema | Purpose | Key attributes |
 |---|---|---|
 | `ElectricalBusAPI_1` | A named net with capacitance; brownout thresholds | `elec:bus:capacitance` (F), `elec:bus:undervoltageTrip` (V), `elec:bus:overvoltageTrip` (V), `elec:bus:brakeResistor` (ohm, 0 = none) |
-| `ElectricalLoadAPI_1` | Constant-power or resistive load (computer, lidar, heater) | `elec:load:model` (`constant_power`, `resistive`, `signal`), `elec:load:power` (W), `elec:load:minVoltage` (V), `elec:powerPort` |
-| `ElectricalConverterAPI_1` | DC-DC converter between two ports | `elec:conv:outputVoltage` (V), `elec:conv:efficiency` (1), `elec:conv:maxOutputCurrent` (A) |
+| `ElectricalLoadAPI_1` | Constant-power or resistive load (computer, lidar, heater) | `elec:load:model` (`constant_power`, `resistive`, `signal`), `elec:load:power` (W), `elec:load:minVoltage` (V, fallback 0), `elec:powerPort` |
+| `ElectricalConverterAPI_1` | DC-DC converter between two ports | `elec:conv:outputVoltage` (V), `elec:conv:efficiency` (1), `elec:conv:maxOutputCurrent` (A), `elec:conv:input` and `elec:conv:output` (relationships to buses or ports) |
+
+Implemented in `schemas/electrical/schema.usda` (v0.3); `schemas/CHANGELOG.md` lists the
+differences from these drafts.
 
 ### 3.2 `schemas/thermal/schema.usda`
 

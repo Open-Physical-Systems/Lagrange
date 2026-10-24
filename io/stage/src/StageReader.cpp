@@ -12,6 +12,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <pxr/base/gf/matrix4d.h>
@@ -22,8 +23,14 @@
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/tf/token.h>
 #include <pxr/base/vt/array.h>
+#include <pxr/usd/sdf/assetPath.h>
+#include <pxr/usd/sdf/listOp.h>
+#include <pxr/usd/sdf/types.h>
+#include <pxr/usd/usd/primDefinition.h>
 #include <pxr/usd/usd/primRange.h>
+#include <pxr/usd/usd/schemaRegistry.h>
 #include <pxr/usd/usd/stage.h>
+#include <pxr/usd/usd/tokens.h>
 #include <pxr/usd/usdGeom/capsule.h>
 #include <pxr/usd/usdGeom/cube.h>
 #include <pxr/usd/usdGeom/cylinder.h>
@@ -58,6 +65,29 @@ using namespace pxr;  // NOLINT(google-build-using-namespace): OpenUSD names are
 
 constexpr std::array<float, 4> kDefaultColor{0.70F, 0.70F, 0.72F, 1.0F};  // as the URDF loader
 constexpr double kPlaceholderMassKg = 1e-3;
+
+// Property namespaces of the project's schema libraries (RFC 0002 convention 2): an applied
+// schema whose properties live in one of them is collected into World::schemaInstances.
+constexpr std::array<std::string_view, 9> kSchemaNamespaces{
+    "elec:", "thermal:", "aero:", "weather:", "emi:", "rad:", "sensmat:", "sensor:", "world:"};
+
+// Loader checks of RFC 0002 ("Loading") that the schema definitions cannot express.
+struct PairedArrays {
+    std::string_view schema, first, second;
+};
+constexpr std::array<PairedArrays, 1> kPairedArrays{
+    {{"BatteryAPI_1", "elec:battery:ocvSoc", "elec:battery:ocvVoltage"}}};
+struct Fraction {
+    std::string_view schema, attribute;
+};
+constexpr std::array<Fraction, 3> kFractions{
+    {{"BatteryAPI_1", "elec:battery:initialSoc"},
+     {"ElectricalMotorAPI_1", "elec:gearEfficiency"},
+     {"ElectricalConverterAPI_1", "elec:conv:efficiency"}}};
+struct JointTarget {
+    std::string_view schema, relationship;
+};
+constexpr std::array<JointTarget, 1> kJointTargets{{{"ElectricalMotorAPI_1", "elec:joint"}}};
 constexpr double kPlaceholderInertia = 1e-6;  // kg·m²
 constexpr double kAnchorTolerance = 1e-6;     // m, joint anchor away from body1's origin
 
@@ -161,6 +191,7 @@ public:
             return status;
         }
         buildColliders();
+        collectSchemas();
         if (!errors_.empty()) {
             std::string message = "the stage cannot be simulated:";
             for (const std::string& e : errors_) {
@@ -325,6 +356,7 @@ private:
         const std::string name = prim.GetName().GetString();
         const BodyId body = w.addBody(name, parent, inParent, mass, com, inertia);
         bodyIndex_[prim.GetPath()] = body.index;
+        worldPrim_[prim.GetPath()] = w.bodies.prim.back();
         m_.bodyRestPose.push_back(bodyWorld);
         if (joint == nullptr) {
             w.addJoint(name + "_floating", JointType::Free, body, {0.0, 0.0, 1.0}, false);
@@ -387,6 +419,7 @@ private:
         const std::array<double, 3> axis = rotate(frame1, axisVector(axisToken));
         const std::string name = prim.GetName().GetString();
         w.addJoint(name, type, body, axis, driven);
+        worldPrim_[prim.GetPath()] = w.joints.prim.back();
         w.joints.lowerLimit.back() = lower;
         w.joints.upperLimit.back() = upper;
         if (driven) {
@@ -669,6 +702,7 @@ private:
         }
         m_.world.addSensor(prim.GetName().GetString(), type, BodyId{body}, scene.offset, *rate,
                            settings);
+        worldPrim_[prim.GetPath()] = m_.world.sensors.prim.back();
         return {};
     }
 
@@ -743,6 +777,189 @@ private:
         return options_.defaultFriction;
     }
 
+    /// The world prim of a USD prim: its body, joint or sensor, or a new prim (a bus, a battery)
+    /// named after it.
+    PrimId worldPrimOf(const UsdPrim& prim) {
+        if (const auto found = worldPrim_.find(prim.GetPath()); found != worldPrim_.end()) {
+            return found->second;
+        }
+        const PrimId id = m_.world.addPrim(prim.GetPath().GetString(), prim.GetName().GetString());
+        worldPrim_.emplace(prim.GetPath(), id);
+        return id;
+    }
+
+    /// Every applied schema of the project's libraries, with its values read once
+    /// (invariant 5), then the RFC 0002 loader checks. Problems go to errors_ together.
+    void collectSchemas() {
+        const UsdSchemaRegistry& registry = UsdSchemaRegistry::GetInstance();
+        for (const UsdPrim& prim : stage_->Traverse()) {
+            // GetAppliedSchemas() leaves out schemas USD does not know; the authored list has
+            // them.
+            SdfTokenListOp authored;
+            TfTokenVector names;
+            if (prim.GetMetadata(UsdTokens->apiSchemas, &authored)) {
+                authored.ApplyOperations(&names);
+            }
+            for (const TfToken& applied : names) {
+                const auto [schema, instance] = UsdSchemaRegistry::GetTypeNameAndInstance(applied);
+                const UsdPrimDefinition* definition = registry.FindAppliedAPIPrimDefinition(schema);
+                if (definition == nullptr) {
+                    if (ours(schema.GetString())) {
+                        note(prim.GetPath().GetString() + ": " + applied.GetString() +
+                             " is not a registered schema here; its values are not read");
+                    }
+                    continue;
+                }
+                if (!ours(*definition)) {
+                    continue;
+                }
+                SchemaInstance s;
+                s.schema = schema.GetString();
+                s.instance = instance.GetString();
+                s.prim = worldPrimOf(prim);
+                for (const TfToken& property : definition->GetPropertyNames()) {
+                    const TfToken name = instance.IsEmpty()
+                                             ? property
+                                             : UsdSchemaRegistry::MakeMultipleApplyNameInstance(
+                                                   property.GetString(), instance.GetString());
+                    readProperty(prim, *definition, property, name, s);
+                }
+                check(prim, s);
+                m_.world.schemaInstances.push_back(std::move(s));
+            }
+        }
+    }
+
+    /// Whether `name` looks like one of ours though its library is not loaded: the families
+    /// of RFC 0002's schema set end in "API_<N>" and are not USD's own.
+    static bool ours(const std::string& name) {
+        return name.find("API_") != std::string::npos && name.rfind("Physics", 0) != 0;
+    }
+
+    static bool ours(const UsdPrimDefinition& definition) {
+        for (const TfToken& property : definition.GetPropertyNames()) {
+            const std::string_view text = property.GetString();
+            for (const std::string_view space : kSchemaNamespaces) {
+                if (text.starts_with(space)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    void readProperty(const UsdPrim& prim, const UsdPrimDefinition& definition,
+                      const TfToken& property, const TfToken& name, SchemaInstance& s) {
+        const std::string where = prim.GetPath().GetString() + ": " + name.GetString();
+        if (const UsdRelationship rel = prim.GetRelationship(name)) {
+            SdfPathVector targets;
+            rel.GetForwardedTargets(&targets);
+            std::vector<PrimId> ids;
+            for (const SdfPath& target : targets) {
+                const UsdPrim targetPrim = stage_->GetPrimAtPath(target.GetPrimPath());
+                if (!targetPrim) {
+                    errors_.push_back(where + " targets " + target.GetString() +
+                                      ", which is not in the stage");
+                    continue;
+                }
+                ids.push_back(worldPrimOf(targetPrim));
+            }
+            if (!ids.empty()) {
+                s.relationships.emplace(name.GetString(), std::move(ids));
+            }
+            return;
+        }
+        const UsdAttribute attribute = prim.GetAttribute(name);
+        VtValue value;
+        if (!attribute || !attribute.Get(&value) || value.IsEmpty()) {
+            return;  // no fallback and not authored: the module says whether it is required
+        }
+        const std::string key = name.GetString();
+        if (value.IsHolding<double>()) {
+            s.reals.emplace(key, value.UncheckedGet<double>());
+        } else if (value.IsHolding<int>()) {
+            s.integers.emplace(key, value.UncheckedGet<int>());
+        } else if (value.IsHolding<bool>()) {
+            s.integers.emplace(key, value.UncheckedGet<bool>() ? 1 : 0);
+        } else if (value.IsHolding<TfToken>()) {
+            const TfToken token = value.UncheckedGet<TfToken>();
+            VtTokenArray allowed;
+            if (definition.GetPropertyMetadata(property, SdfFieldKeys->AllowedTokens, &allowed) &&
+                !allowed.empty() &&
+                std::find(allowed.begin(), allowed.end(), token) == allowed.end()) {
+                std::string list;
+                for (const TfToken& a : allowed) {
+                    list += (list.empty() ? "" : ", ") + a.GetString();
+                }
+                errors_.push_back(where + " is \"" + token.GetString() + "\"; allowed: " + list);
+            }
+            s.tokens.emplace(key, token.GetString());
+        } else if (value.IsHolding<std::string>()) {
+            s.tokens.emplace(key, value.UncheckedGet<std::string>());
+        } else if (value.IsHolding<SdfAssetPath>()) {
+            const SdfAssetPath& asset = value.UncheckedGet<SdfAssetPath>();
+            if (asset.GetAssetPath().empty()) {
+                return;
+            }
+            if (asset.GetResolvedPath().empty()) {
+                errors_.push_back(where + " names " + asset.GetAssetPath() +
+                                  ", which cannot be found");
+                return;
+            }
+            s.assetPaths.emplace(key, asset.GetResolvedPath());
+        } else if (value.IsHolding<VtDoubleArray>()) {
+            const VtDoubleArray& array = value.UncheckedGet<VtDoubleArray>();
+            s.realArrays.emplace(key, std::vector<double>(array.begin(), array.end()));
+        } else if (value.IsHolding<GfVec2d>()) {
+            const GfVec2d& v = value.UncheckedGet<GfVec2d>();
+            s.realArrays.emplace(key, std::vector<double>{v[0], v[1]});
+        } else if (value.IsHolding<GfVec3d>()) {
+            const GfVec3d& v = value.UncheckedGet<GfVec3d>();
+            s.realArrays.emplace(key, std::vector<double>{v[0], v[1], v[2]});
+        } else {
+            note(where + ": values of type " + attribute.GetTypeName().GetAsToken().GetString() +
+                 " are not read yet");
+        }
+    }
+
+    void check(const UsdPrim& prim, const SchemaInstance& s) {
+        const std::string path = prim.GetPath().GetString();
+        for (const PairedArrays& rule : kPairedArrays) {
+            if (s.schema == rule.schema &&
+                s.realArray(rule.first).size() != s.realArray(rule.second).size()) {
+                errors_.push_back(path + ": " + std::string(rule.first) + " and " +
+                                  std::string(rule.second) + " differ in length (" +
+                                  std::to_string(s.realArray(rule.first).size()) + " and " +
+                                  std::to_string(s.realArray(rule.second).size()) + ")");
+            }
+        }
+        for (const Fraction& rule : kFractions) {
+            const std::optional<double> value = s.real(rule.attribute);
+            if (s.schema == rule.schema && value && !(*value >= 0.0 && *value <= 1.0)) {
+                errors_.push_back(path + ": " + std::string(rule.attribute) + " is " +
+                                  std::to_string(*value) + "; it must be within 0 to 1");
+            }
+        }
+        for (const JointTarget& rule : kJointTargets) {
+            if (s.schema != rule.schema) {
+                continue;
+            }
+            const UsdRelationship rel =
+                prim.GetRelationship(TfToken(std::string(rule.relationship)));
+            SdfPathVector targets;
+            if (rel) {
+                rel.GetForwardedTargets(&targets);
+            }
+            for (const SdfPath& target : targets) {
+                const UsdPrim joint = stage_->GetPrimAtPath(target);
+                if (joint && !joint.IsA<UsdPhysicsJoint>()) {
+                    errors_.push_back(path + ": " + std::string(rule.relationship) + " targets " +
+                                      target.GetString() + ", which is not a joint");
+                }
+            }
+        }
+    }
+
 public:
     [[nodiscard]] bool hasPlane() const { return hasPlane_; }
 
@@ -752,6 +969,7 @@ private:
     Model& m_;
     std::vector<UsdPrim> bodyPrims_;
     std::map<SdfPath, std::uint32_t> bodyIndex_;
+    std::map<SdfPath, PrimId> worldPrim_;  // USD prim -> world prim, for schema instances
     std::vector<UsdPhysicsJoint> joints_;
     std::vector<std::string> errors_;
     bool hasPlane_{false};

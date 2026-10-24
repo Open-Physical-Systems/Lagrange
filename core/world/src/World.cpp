@@ -154,6 +154,7 @@ std::uint64_t WorldView::topologyHash() const {
     }
     for (const SchemaInstance& instance : world_->schemaInstances) {
         addText(instance.schema);
+        addText(instance.instance);
         XXH3_64bits_update(state, &instance.prim.index, sizeof(std::uint32_t));
     }
     const std::uint64_t hash = XXH3_64bits_digest(state);
