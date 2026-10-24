@@ -2,9 +2,12 @@
 // <ros2_control> block names. Like gz_ros2_control's GazeboSimSystem, it is loaded by the
 // controller manager that runs inside the simulator, and exchanges joint values with the
 // simulation through the JointTable (docs/design/robot-classes.md §2.2).
+#include "lagrange/ros2_control/Encoder.hpp"
 #include "lagrange/ros2_control/JointTable.hpp"
 
 #include <cmath>
+#include <cstdlib>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -33,6 +36,22 @@ public:
             }
             states_.push_back(states);
             commands_.push_back(commands);
+            // <param name="encoder_resolution">counts per revolution</param>: whole counts.
+            std::optional<Encoder> encoder;
+            if (const auto it = joint.parameters.find("encoder_resolution");
+                it != joint.parameters.end()) {
+                char* end = nullptr;
+                const double counts = std::strtod(it->second.c_str(), &end);
+                if (end == it->second.c_str() || *end != '\0' || !(counts >= 1.0)) {
+                    RCLCPP_ERROR(get_logger(),
+                                 "joint %s: encoder_resolution must be a count per revolution "
+                                 ">= 1, not '%s'",
+                                 joint.name.c_str(), it->second.c_str());
+                    return CallbackReturn::ERROR;
+                }
+                encoder.emplace(counts);
+            }
+            encoders_.push_back(encoder);
         }
         return CallbackReturn::SUCCESS;
     }
@@ -74,17 +93,23 @@ public:
         return hardware_interface::return_type::OK;
     }
 
-    hardware_interface::return_type read(const rclcpp::Time&, const rclcpp::Duration&) override {
+    hardware_interface::return_type read(const rclcpp::Time&,
+                                         const rclcpp::Duration& period) override {
         JointTable& table = JointTable::instance();
         const std::lock_guard<std::mutex> lock(table.mutex());
         for (std::size_t j = 0; j < joints_.size(); ++j) {
             const JointSlot& slot = table[joints_[j]];
+            std::optional<Encoder>& encoder = encoders_[j];
+            // With an encoder, position and velocity are what its counter and driver report.
+            const double position = encoder ? encoder->position(slot.position) : slot.position;
+            const double velocity =
+                encoder ? encoder->velocity(slot.position, period.seconds()) : slot.velocity;
             for (const std::string& state : states_[j]) {
                 const std::string name = joints_[j] + "/" + state;
                 if (state == hardware_interface::HW_IF_POSITION) {
-                    set_state(name, slot.position);
+                    set_state(name, position);
                 } else if (state == hardware_interface::HW_IF_VELOCITY) {
-                    set_state(name, slot.velocity);
+                    set_state(name, velocity);
                 } else if (state == hardware_interface::HW_IF_EFFORT) {
                     set_state(name, slot.effort);
                 }
@@ -120,6 +145,7 @@ private:
     std::vector<std::string> joints_;
     std::vector<std::vector<std::string>> states_;
     std::vector<std::vector<std::string>> commands_;
+    std::vector<std::optional<Encoder>> encoders_;  // per joint; none: exact values
 };
 
 }  // namespace lagrange::ros2_control

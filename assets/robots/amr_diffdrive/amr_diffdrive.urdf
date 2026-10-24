@@ -327,6 +327,8 @@
       <!-- Wheel speed servo (N·m per rad/s, N·m per rad) for velocity commands. -->
       <param name="velocity_p">8.0</param>
       <param name="velocity_i">40.0</param>
+      <!-- Wheel encoder: counts per revolution after quadrature (a 4096-line encoder). -->
+      <param name="encoder_resolution">16384</param>
     </joint>
     <joint name="right_wheel_joint">
       <command_interface name="velocity"/>
@@ -336,6 +338,8 @@
       <!-- Wheel speed servo (N·m per rad/s, N·m per rad) for velocity commands. -->
       <param name="velocity_p">8.0</param>
       <param name="velocity_i">40.0</param>
+      <!-- Wheel encoder: counts per revolution after quadrature (a 4096-line encoder). -->
+      <param name="encoder_resolution">16384</param>
     </joint>
   </ros2_control>
 </robot>

@@ -46,13 +46,13 @@ flowchart TB
     end
     subgraph C["C · rigid body"]
         C1_3["C1–C3 MuJoCo backend<br/>and substitutes"]:::done
-        C5["C5 rebase<br/>at load: done<br/>at run time: RFC 0001 change"]:::blocked
+        C5["C5 rebase at load<br/>(run time: v0.7)"]:::done
         C4["C4 scene queries"]:::todo
         C6["C6 Jolt spike"]:::todo
     end
     subgraph D["D · sensors"]
         D1_5["D1 framework · D2 IMU<br/>D3 lidar Tier 0 · D4 Tier 1<br/>D5 sensor views"]:::done
-        D2e["D2 encoders<br/>(resolution source)"]:::blocked
+        D2e["D2 encoders"]:::done
         D3e["D3 Embree Tier 0<br/>bit-identical, ~100× faster"]:::done
     end
     subgraph E["E · server"]
@@ -66,7 +66,7 @@ flowchart TB
     subgraph F["F · ROS 2"]
         F1_2["F1 bridge · F2 sensor topics"]:::done
         F4_6["F4 simulation_interfaces<br/>F5 RosGraph · F6 Nav2 demo"]:::done
-        F3["F3 ros2_control<br/>(branch kept or criterion changed?)"]:::blocked
+        F3["F3 ros2_control"]:::done
         F7["F7 rosidl::Buffer spike"]:::todo
     end
     subgraph G["G · importers"]
@@ -83,7 +83,7 @@ flowchart TB
         H8["H8 packaging trial<br/><b>next</b>"]:::next
         H2["H2 determinism CI job"]:::todo
         H5["H5 Python bindings"]:::todo
-        H7["H7 electrical slice (if Q3)"]:::todo
+        H7["H7 electrical slice<br/>(skipped: v0.3)"]:::done
         H10["H10 v0.2 release"]:::todo
     end
 
@@ -101,14 +101,11 @@ flowchart TB
     classDef todo fill:#30363d,stroke:#6e7681,color:#c9d1d9
 ```
 
-## Decisions waiting on the owner
+## Defaults taken during the autonomous run
 
-| Item | Question |
-|---|---|
-| F3 | Keep the `feat/ros2-control` branch, or change acceptance criterion 1 |
-| C5 | Draft the RFC 0001 change for rebasing while the run is going (a new module hook) |
-| D2 | Where encoder resolution comes from (proposal: a `<param name="encoder_resolution">` in `<ros2_control>`) |
-| H7 | Q3: whether v0.2 gets a thin electrical slice |
+| Item | Default | Why |
+|---|---|---|
+| H7 (Q3) | No thin electrical slice in v0.2 | v0.3 builds the full electrical domain (network, battery, motors, FOC); a slice now would be rewritten |
 
 ## Autonomous run (from 2026-10-24)
 

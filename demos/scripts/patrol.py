@@ -9,8 +9,8 @@
 # the scenery at every true pose the server publishes (/ground_truth/odom; /odom may be wheel
 # odometry, which drifts).
 #
-# Exits non-zero if a waypoint was missed or the robot touched anything (tools/ci/nav2_demo.sh
-# runs it nightly: v0.2 acceptance criterion 1).
+# Exits 1 if a waypoint was missed or the robot touched anything, 3 if Nav2 never became ready
+# (tools/ci/nav2_demo.sh runs it nightly: v0.2 acceptance criterion 1).
 import argparse
 import math
 import sys
@@ -26,6 +26,8 @@ from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 from nav_msgs.msg import Odometry
 from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile
+from rclpy.time import Time
+from tf2_ros import Buffer, TransformListener
 
 # (x, y, heading) in the map frame: around the pallet, along both racks and back.
 WAYPOINTS = [
@@ -118,17 +120,32 @@ def pose(navigator: BasicNavigator, x: float, y: float, heading: float) -> PoseS
     return goal
 
 
-def wait_until_active(navigator: BasicNavigator, nodes: list[str]) -> None:
-    """BasicNavigator.waitUntilNav2Active, with a timeout on each get_state call.
+# Failed or rejected first goals retried while Nav2 settles, before any leg has succeeded.
+STARTUP_RETRIES = 10
+# Exit code when the stack never became ready (no patrol happened), as opposed to 1 for a missed
+# waypoint or a collision: tools/ci/nav2_demo.sh may relaunch on the former, never the latter.
+STARTUP_FAILED = 3
+
+
+def wait_until_active(navigator: BasicNavigator, nodes: list[str], limit_s: float = 240.0) -> bool:
+    """BasicNavigator.waitUntilNav2Active, with a timeout on each get_state call and overall.
 
     nav2_simple_commander waits for each reply without a timeout, so one lost service response
-    (DDS sometimes drops them while many nodes start at once) blocks the patrol for good.
+    (DDS sometimes drops them while many nodes start at once) blocks the patrol for good. A node
+    that never becomes active (its lifecycle manager gave up) fails the patrol after `limit_s`.
     """
+    deadline = time.monotonic() + limit_s
     for name in nodes:
         client = navigator.create_client(GetState, f"{name}/get_state")
         while not client.wait_for_service(timeout_sec=1.0):
             navigator.info(f"{name}/get_state service not available, waiting...")
+            if time.monotonic() > deadline:
+                print(f"{name} never offered get_state", flush=True)
+                return False
         while True:
+            if time.monotonic() > deadline:
+                print(f"{name} did not become active within {limit_s:.0f} s", flush=True)
+                return False
             future = client.call_async(GetState.Request())
             rclpy.spin_until_future_complete(navigator, future, timeout_sec=2.0)
             result = future.result() if future.done() else None
@@ -139,6 +156,7 @@ def wait_until_active(navigator: BasicNavigator, nodes: list[str]) -> None:
             time.sleep(1.0)
         navigator.destroy_client(client)
     navigator.info("Nav2 is ready for use!")
+    return True
 
 
 def main() -> int:
@@ -168,33 +186,56 @@ def main() -> int:
         if "map_server" in navigator.get_node_names() and time.monotonic() > deadline - 50.0:
             break  # the builtin controller: ground-truth odometry, no localization
     localizer = "amcl" if "amcl" in navigator.get_node_names() else "map_server"
-    wait_until_active(navigator, [localizer, "bt_navigator"])
+    if not wait_until_active(navigator, [localizer, "bt_navigator"]):
+        return STARTUP_FAILED
     odometry: list[Odometry] = []
     navigator.create_subscription(Odometry, "/odom", odometry.append, QoSProfile(depth=1))
     while not odometry and time.monotonic() < deadline + 60.0:
         rclpy.spin_once(navigator, timeout_sec=0.5)
     if not odometry:
         print("no /odom: is the robot's drive running?", flush=True)
-        return 1
+        return STARTUP_FAILED
+    # Nav2 reports active before AMCL has placed the robot on the map; a goal sent then fails or
+    # is rejected. Wait for map -> base_link, as a robot does before taking goals.
+    tf_buffer = Buffer()
+    TransformListener(tf_buffer, navigator)
+    tf_deadline = time.monotonic() + 120.0
+    while not tf_buffer.can_transform("map", "base_link", Time()):
+        rclpy.spin_once(navigator, timeout_sec=0.5)
+        if time.monotonic() > tf_deadline:
+            print("no map -> base_link transform: is localization running?", flush=True)
+            return STARTUP_FAILED
 
     start = navigator.get_clock().now()
     reached = failed = 0
     leg = 0
+    startup_retries = 0
     while True:
         x, y, heading = WAYPOINTS[leg % len(WAYPOINTS)]
         leg_start = navigator.get_clock().now()
-        navigator.goToPose(pose(navigator, x, y, heading))
-        while not navigator.isTaskComplete():
+        accepted = navigator.goToPose(pose(navigator, x, y, heading))
+        while accepted and not navigator.isTaskComplete():
             elapsed = (navigator.get_clock().now() - leg_start).nanoseconds * 1e-9
             if elapsed > args.leg_timeout:
                 navigator.cancelTask()
         seconds = (navigator.get_clock().now() - leg_start).nanoseconds * 1e-9
-        if navigator.getResult() == TaskResult.SUCCEEDED:
+        if accepted and navigator.getResult() == TaskResult.SUCCEEDED:
             reached += 1
             print(f"leg {leg + 1}: reached ({x:.1f}, {y:.1f}) in {seconds:.1f} s", flush=True)
+        elif reached == 0 and startup_retries < STARTUP_RETRIES:
+            # Before the first success a failure is Nav2 still settling (costmaps, planner):
+            # wait, keeping the clock fed, and send the same waypoint again.
+            startup_retries += 1
+            print(f"leg {leg + 1}: not taken yet, retrying ({startup_retries})", flush=True)
+            settle = time.monotonic() + 3.0
+            while time.monotonic() < settle:
+                rclpy.spin_once(navigator, timeout_sec=0.2)
+            continue
         else:
             failed += 1
             print(f"leg {leg + 1}: FAILED to reach ({x:.1f}, {y:.1f})", flush=True)
+            if not accepted:
+                rclpy.spin_once(navigator, timeout_sec=1.0)  # keep the clock moving
         leg += 1
         total = (navigator.get_clock().now() - start).nanoseconds * 1e-9
         rounds = leg // len(WAYPOINTS)

@@ -17,8 +17,9 @@ from pathlib import Path
 
 from ament_index_python.packages import get_package_share_path
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, RegisterEventHandler
 from launch.conditions import IfCondition, LaunchConfigurationEquals
+from launch.event_handlers import OnProcessIO
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -30,6 +31,11 @@ NAV2_NODES = [
     "bt_navigator",
     "waypoint_follower",
 ]
+
+
+# Seconds a lifecycle manager waits for each node's bond. Nav2's default of 4 s is too short
+# while a dozen nodes start at once on a busy machine: AMCL then never activates.
+BOND_TIMEOUT_S = 30.0
 
 
 def default_socket() -> str:
@@ -70,17 +76,21 @@ def generate_launch_description() -> LaunchDescription:
     # The standard spawners load the controllers into the server's /controller_manager, as on a
     # real robot. Nav2 uses /cmd_vel and /odom; the diff drive is remapped onto them.
     spawners = [
+        # The standard spawner, retried in a fresh process if it cannot reach the controller
+        # manager (spawn_controllers.py).
         Node(
-            package="controller_manager",
-            executable="spawner",
+            package="lagrange_demos",
+            executable="spawn_controllers",
             arguments=[
                 "joint_state_broadcaster",
                 "diff_drive_controller",
+                "--",
                 "--param-file",
                 controllers,
                 "--controller-ros-args",
                 "-r /diff_drive_controller/cmd_vel:=/cmd_vel -r /diff_drive_controller/odom:=/odom",
             ],
+            output="screen",
             condition=with_controllers,
         ),
     ]
@@ -99,7 +109,10 @@ def generate_launch_description() -> LaunchDescription:
             executable="lifecycle_manager",
             name="lifecycle_manager_localization",
             output="screen",
-            parameters=[sim_time, {"autostart": True, "node_names": ["amcl"]}],
+            parameters=[
+                sim_time,
+                {"autostart": True, "node_names": ["amcl"], "bond_timeout": BOND_TIMEOUT_S},
+            ],
             condition=with_controllers,
         ),
     ]
@@ -156,9 +169,20 @@ def generate_launch_description() -> LaunchDescription:
             executable="lifecycle_manager",
             name="lifecycle_manager_navigation",
             output="screen",
-            parameters=[sim_time, {"autostart": True, "node_names": NAV2_NODES}],
+            parameters=[
+                sim_time,
+                {"autostart": True, "node_names": NAV2_NODES, "bond_timeout": BOND_TIMEOUT_S},
+            ],
         ),
     ]
+
+    server_with_controllers = Node(
+        package="lagrange_server",
+        executable="lagrange_server",
+        output="screen",
+        arguments=[*server_args, "--ros2-control", controllers],
+        condition=with_controllers,
+    )
 
     return LaunchDescription(
         [
@@ -184,12 +208,15 @@ def generate_launch_description() -> LaunchDescription:
                 "server's built-in controller",
             ),
             # The simulator: with ros2_control, or with its built-in drive controller.
-            Node(
-                package="lagrange_server",
-                executable="lagrange_server",
-                output="screen",
-                arguments=[*server_args, "--ros2-control", controllers],
-                condition=LaunchConfigurationEquals("control", "ros2_control"),
+            server_with_controllers,
+            # The spawners start once that server is listening: a service client made while the
+            # controller manager is still starting can lose every reply (Fast DDS discovery),
+            # and the spawner then retries for ever.
+            RegisterEventHandler(
+                OnProcessIO(
+                    target_action=server_with_controllers,
+                    on_stderr=lambda event: spawners if b"listening on" in event.text else None,
+                )
             ),
             Node(
                 package="lagrange_server",
@@ -198,7 +225,6 @@ def generate_launch_description() -> LaunchDescription:
                 arguments=server_args,
                 condition=LaunchConfigurationEquals("control", "builtin"),
             ),
-            *spawners,
             *localization,
             # Not a ROS node: started as a plain process, so no --ros-args are appended.
             ExecuteProcess(

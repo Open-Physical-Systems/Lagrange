@@ -51,6 +51,12 @@ install(
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
     find_package(std_msgs REQUIRED)
+    ament_add_gtest(test_encoder test/test_encoder.cpp)
+    target_include_directories(
+        test_encoder
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    lagrange_target_defaults(test_encoder)
     ament_add_gtest(
         test_ros2_control
         test/test_ros2_control.cpp
