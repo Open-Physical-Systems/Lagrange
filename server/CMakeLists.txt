@@ -190,6 +190,8 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_AMR_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.overlay.yaml"
             LAGRANGE_TEST_AMR_POWERED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive_powered.usda"
             LAGRANGE_TEST_WAREHOUSE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.usda"
+            LAGRANGE_TEST_ARM6_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.urdf"
+            LAGRANGE_TEST_WORKCELL_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_arm6.urdf"
     )
     # The arm with ros2_control in the loop: the standard spawner and joint_trajectory_controller.
     find_package(trajectory_msgs REQUIRED)

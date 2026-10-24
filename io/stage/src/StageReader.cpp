@@ -26,6 +26,7 @@
 #include <pxr/base/vt/array.h>
 #include <pxr/usd/usd/primRange.h>
 #include <pxr/usd/usd/stage.h>
+#include <pxr/usd/usdGeom/camera.h>
 #include <pxr/usd/usdGeom/capsule.h>
 #include <pxr/usd/usdGeom/cube.h>
 #include <pxr/usd/usdGeom/cylinder.h>
@@ -610,7 +611,8 @@ private:
                 m_.bodyPrim[bodyIndex_.at(prim.GetPath())] = index;
             }
             if (m_.scene.prims[index].typeName == "Lidar" ||
-                m_.scene.prims[index].typeName == "Imu") {
+                m_.scene.prims[index].typeName == "Imu" ||
+                m_.scene.prims[index].typeName == "Camera") {
                 m_.sensorPrim.push_back(index);
             }
         }
@@ -636,7 +638,39 @@ private:
         }
         std::map<std::string, double, std::less<>> settings;
         SensorType type = SensorType::Imu;
-        if (prim.HasAPI(TfToken("LidarAPI_1"))) {
+        Pose mount = scene.offset;
+        if (prim.HasAPI(TfToken("CameraSensorAPI_1"))) {
+            const UsdGeomCamera camera(prim);
+            const std::optional<int> width =
+                valueOf<int>(prim.GetAttribute(TfToken("sensor:camera:width")));
+            const std::optional<int> height =
+                valueOf<int>(prim.GetAttribute(TfToken("sensor:camera:height")));
+            if (!camera || !width || !height || *width < 1 || *height < 1) {
+                return Unexpected{path +
+                                  ": CameraSensorAPI_1 goes on a Camera prim and needs "
+                                  "sensor:camera:width and height"};
+            }
+            type = SensorType::Camera;
+            scene.typeName = "Camera";
+            float focal = 0.0F;
+            float aperture = 0.0F;
+            GfVec2f clip(0.05F, 100.0F);
+            camera.GetFocalLengthAttr().Get(&focal);
+            camera.GetHorizontalApertureAttr().Get(&aperture);
+            camera.GetClippingRangeAttr().Get(&clip);
+            if (focal <= 0.0F || aperture <= 0.0F) {
+                return Unexpected{path +
+                                  ": the camera's focalLength and horizontalAperture must "
+                                  "be positive"};
+            }
+            settings = {{"width", *width},
+                        {"height", *height},
+                        {"horizontal_fov", 2.0 * std::atan(aperture / 2.0 / focal)},
+                        {"near_clip", clip[0]},
+                        {"far_clip", clip[1]}};
+            // The sensor looks along x; the USD camera along its -z.
+            mount = compose(scene.offset, {{0, 0, 0}, conjugate(kSensorFromUsdCamera)});
+        } else if (prim.HasAPI(TfToken("LidarAPI_1"))) {
             type = SensorType::Lidar;
             scene.typeName = "Lidar";
             const auto integer = [&prim](const char* name) {
@@ -669,12 +703,13 @@ private:
             settings = {{"accel_noise", real("sensor:imu:accelNoiseStd").value_or(0.0)},
                         {"gyro_noise", real("sensor:imu:gyroNoiseStd").value_or(0.0)}};
         } else {
-            note(path + ": a sensor without LidarAPI_1 or ImuAPI_1 is not simulated yet");
+            note(path +
+                 ": a sensor without LidarAPI_1, ImuAPI_1 or CameraSensorAPI_1 is not "
+                 "simulated yet");
             scene.typeName = "Xform";
             return {};
         }
-        m_.world.addSensor(prim.GetName().GetString(), type, BodyId{body}, scene.offset, *rate,
-                           settings);
+        m_.world.addSensor(prim.GetName().GetString(), type, BodyId{body}, mount, *rate, settings);
         worldPrim_[prim.GetPath()] = m_.world.sensors.prim.back();
         return {};
     }

@@ -8,6 +8,15 @@
 
 namespace lagrange {
 
+/// The frame of a USD camera (looking along -z, y up) in a sensor's frame (looking along x, z
+/// up, the URDF convention): a camera sensor's mount is its UsdGeomCamera's pose composed with
+/// the conjugate of this.
+inline constexpr std::array<double, 4> kSensorFromUsdCamera = {0.5, 0.5, -0.5, -0.5};
+
+/// A camera's optical frame (z forward, x right, y down; ROS REP 103 "_optical") in its sensor
+/// frame (x forward, z up): roll -90°, then yaw -90°.
+inline constexpr std::array<double, 4> kSensorFromOptical = {0.5, -0.5, 0.5, -0.5};
+
 /// Quaternion product a b, (w, x, y, z).
 [[nodiscard]] inline std::array<double, 4> multiply(const std::array<double, 4>& a,
                                                     const std::array<double, 4>& b) {

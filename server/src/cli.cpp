@@ -224,9 +224,11 @@ int determinism(CommandLine& line, double seconds) {
             return 1;
         }
     }
-    // A deterministic run: nothing from outside (no ROS) and the CPU lidar.
+    // A deterministic run: nothing from outside (no ROS), the CPU lidar, no camera rendering
+    // (a GPU path, invariant 7).
     line.options.ros = false;
     line.options.lidar = lagrange::server::ServerOptions::Lidar::Cpu;
+    line.options.cameras = false;
     const auto make =
         [&]() -> lagrange::Expected<std::unique_ptr<lagrange::services::CheckedRun>, std::string> {
         auto run = std::make_unique<ServerRun>(line.options);

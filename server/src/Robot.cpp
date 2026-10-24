@@ -557,6 +557,18 @@ void imuNoise(const tinyxml2::XMLElement* channel, const std::string& prefix,
     }
 }
 
+const char* sensorSchema(SensorType kind) {
+    switch (kind) {
+        case SensorType::Lidar:
+            return "LidarAPI_1";
+        case SensorType::Camera:
+            return "CameraSensorAPI_1";
+        case SensorType::Imu:
+            break;
+    }
+    return "ImuAPI_1";
+}
+
 /// Gazebo sensor blocks: <gazebo reference="link"><sensor name type>...</sensor></gazebo>.
 void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
     tinyxml2::XMLDocument document;
@@ -629,6 +641,17 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
                 settings["vertical_max_angle"] =
                     childNumber(ray, {"scan", "vertical", "max_angle"}, 0.0);
                 typeName = "Lidar";
+            } else if (type == "camera" || type == "depth" || type == "depth_camera" ||
+                       type == "rgbd_camera") {
+                // One raster camera gives colour, depth and instance ids (sensors.md).
+                kind = SensorType::Camera;
+                const tinyxml2::XMLElement* camera = sensor->FirstChildElement("camera");
+                settings["width"] = childNumber(camera, {"image", "width"}, 640.0);
+                settings["height"] = childNumber(camera, {"image", "height"}, 480.0);
+                settings["horizontal_fov"] = childNumber(camera, {"horizontal_fov"}, 1.047);
+                settings["near_clip"] = childNumber(camera, {"clip", "near"}, 0.05);
+                settings["far_clip"] = childNumber(camera, {"clip", "far"}, 100.0);
+                typeName = "Camera";
             } else {
                 robot.notes.push_back("sensor '" + std::string(name) + "' of type '" + type +
                                       "' is not simulated yet");
@@ -641,8 +664,7 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
             prim.parent = robot.bodyPrim[body];
             prim.path = robot.scene.prims[prim.parent].path + "/" + name;
             prim.typeName = typeName;
-            prim.apiSchemas = {"SensorAPI_1",
-                               kind == SensorType::Lidar ? "LidarAPI_1" : "ImuAPI_1"};
+            prim.apiSchemas = {"SensorAPI_1", sensorSchema(kind)};
             prim.body = static_cast<std::uint32_t>(body);
             prim.offset = mount;
             robot.scene.prims.push_back(std::move(prim));

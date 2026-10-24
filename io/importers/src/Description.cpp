@@ -512,9 +512,20 @@ private:
         ScenePrim prim;
         prim.name = name;
         prim.parent = linkPrim;
-        prim.typeName = sensor.type == SensorType::Lidar ? "Lidar" : "Imu";
-        prim.apiSchemas = {"SensorAPI_1",
-                           sensor.type == SensorType::Lidar ? "LidarAPI_1" : "ImuAPI_1"};
+        switch (sensor.type) {
+            case SensorType::Lidar:
+                prim.typeName = "Lidar";
+                prim.apiSchemas = {"SensorAPI_1", "LidarAPI_1"};
+                break;
+            case SensorType::Camera:
+                prim.typeName = "Camera";
+                prim.apiSchemas = {"SensorAPI_1", "CameraSensorAPI_1"};
+                break;
+            case SensorType::Imu:
+                prim.typeName = "Imu";
+                prim.apiSchemas = {"SensorAPI_1", "ImuAPI_1"};
+                break;
+        }
         prim.body = body.index;
         prim.offset = mount;
         m_.sensorPrim.push_back(addPrim(std::move(prim)));

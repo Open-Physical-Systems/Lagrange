@@ -222,6 +222,20 @@
     <limit lower="-0.002" upper="0.037" effort="20" velocity="0.1"/>
   </joint>
 
+  <!-- Wrist camera on the palm, looking between the fingers (along the palm's z). The sensor
+       frame looks along its x (the Gazebo convention); ROS gets wrist_camera_optical too. -->
+  <gazebo reference="palm_link">
+    <sensor name="wrist_camera" type="camera">
+      <pose>0.03 0 0.02 0 -1.5707963 0</pose>
+      <update_rate>15</update_rate>
+      <camera>
+        <horizontal_fov>1.2</horizontal_fov>
+        <image><width>640</width><height>480</height></image>
+        <clip><near>0.02</near><far>5</far></clip>
+      </camera>
+    </sensor>
+  </gazebo>
+
   <!-- Position servos in the drives (LagrangeSystem): joint_trajectory_controller sends
        positions; the gains turn them into torque commands for the electrical domain. -->
   <ros2_control name="LagrangeSystem" type="system">

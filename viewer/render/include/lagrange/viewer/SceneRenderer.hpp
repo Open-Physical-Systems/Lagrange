@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lagrange/gpu/Raster.hpp"
 #include "lagrange/gpu/Resources.hpp"
 #include "lagrange/viewer/Camera.hpp"
 #include "lagrange/viewer/RenderOptions.hpp"
@@ -53,15 +54,8 @@ public:
     [[nodiscard]] std::uint32_t lastDrawCount() const { return lastDrawCount_; }
 
 private:
-    struct GpuMesh {
-        gpu::Buffer vertices;
-        gpu::Buffer indices;
-        std::uint32_t indexCount{0};
-    };
-
     void createPipelines();
     void uploadMeshes(const SceneStatics& statics);
-    void destroyMeshes();
 
     const gpu::Device& device_;
     gpu::Image color_;
@@ -73,7 +67,7 @@ private:
     VkPipelineLayout lineLayout_{VK_NULL_HANDLE};
     VkPipeline linePipeline_{VK_NULL_HANDLE};
 
-    std::vector<GpuMesh> meshes_;
+    gpu::MeshSet meshes_;
     std::uint64_t meshGeneration_{0};  // SceneStatics::generation the meshes were built from
     gpu::Buffer gridMinor_;
     gpu::Buffer gridMajor_;

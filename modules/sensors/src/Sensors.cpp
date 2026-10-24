@@ -8,8 +8,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <memory>
+#include <span>
 #include <string>
 #include <tbb/parallel_for.h>
 #include <utility>
@@ -476,12 +478,161 @@ private:
     SignalId pose_, twist_, acceleration_, force_, rate_, orientation_;
 };
 
+/// Rounds a rate's period to whole milliseconds, so that a camera at 30 Hz lines up with the
+/// other modules' steps (the scheduler refuses a base tick below 1 µs).
+Duration wholeMilliseconds(double rateHz) {
+    const auto ms = std::max<std::int64_t>(std::llround(1e3 / std::max(rateHz, 1e-3)), 1);
+    return Duration{ms * 1'000'000};
+}
+
+class Camera final : public SensorModule {
+public:
+    Camera(const World& world, std::uint32_t sensor, bool groundTruth,
+           std::shared_ptr<const CameraScene> scene)
+        : SensorModule(world, sensor, "camera", groundTruth), scene_(std::move(scene)) {
+        step_ = wholeMilliseconds(world.sensors.rateHz[sensor]);
+    }
+
+    [[nodiscard]] ModuleInfo info() const override {
+        ModuleInfo out = SensorModule::info();
+        out.deterministic = groundTruth_;  // rendering is a GPU path (invariant 7)
+        return out;
+    }
+
+    Status declare(const WorldView& world, const ModuleConfig&, SignalDeclarer& d) override {
+        const World::Sensors& sensors = world.sensors();
+        const double width = setting(sensors, sensor_, "width", 640.0);
+        const double height = setting(sensors, sensor_, "height", 480.0);
+        const double fov = setting(sensors, sensor_, "horizontal_fov", 1.047);
+        if (width < 1.0 || height < 1.0 || width > 16384.0 || height > 16384.0 || fov <= 0.0 ||
+            fov >= 3.1) {
+            return Status::error(StatusCode::InvalidConfig,
+                                 "camera " + name_ + ": image size or horizontal_fov out of range");
+        }
+        camera_.width = static_cast<std::uint32_t>(width);
+        camera_.height = static_cast<std::uint32_t>(height);
+        camera_.fx = width / 2.0 / std::tan(fov / 2.0);
+        camera_.fy = camera_.fx;
+        camera_.cx = (width - 1.0) / 2.0;
+        camera_.cy = (height - 1.0) / 2.0;
+        camera_.near = setting(sensors, sensor_, "near_clip", 0.05);
+        far_ = setting(sensors, sensor_, "far_clip", 100.0);
+
+        const World& raw = world.raw();
+        const std::vector<bool> moving = movingBodies(raw);
+        rest_ = restPoses(raw);
+        poses_.assign(moving.size(), SignalId{});
+        const auto watch = [&](std::uint32_t b) {
+            if (b < moving.size() && moving[b] && !poses_[b].valid()) {
+                poses_[b] = d.input(spec("body/" + raw.bodies.names[b] + "/pose", SignalType::Pose,
+                                         units::m, "world_local"));
+            }
+        };
+        watch(body_);
+        if (scene_ && !groundTruth_) {
+            for (const CameraScene::Drawable& drawable : scene_->drawables) {
+                if (drawable.body != kNoIndex) {
+                    watch(drawable.body);
+                }
+            }
+        }
+        const auto image = [&](const char* what, Unit unit) {
+            SignalSpec out =
+                spec("sensor/" + name_ + "/" + what, SignalType::Image, unit, "optical");
+            return d.output(std::move(out));
+        };
+        image_ = image("image", Unit{});
+        depth_ = image("depth", units::m);
+        instance_ = image("instance", Unit{});
+        return {};
+    }
+
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        if (!groundTruth_) {
+            if (!scene_ || !scene_->raster) {
+                return Status::error(StatusCode::Unsupported,
+                                     "camera " + name_ +
+                                         " needs a Vulkan device, and none was usable (set the "
+                                         "sensors domain to ground_truth to run without one)");
+            }
+            renderer_ =
+                std::make_unique<gpu::RasterCamera>(scene_->raster, camera_.width, camera_.height);
+            instances_.resize(scene_->drawables.size());
+        }
+        publish(bus);  // empty images until the first frame
+        return {};
+    }
+
+    Status step(const StepContext&, SignalBus& bus) override {
+        if (groundTruth_) {
+            publish(bus);
+            return {};
+        }
+        const Pose sensor = compose(bodyPose(bus, body_), mount_);
+        camera_.position = sensor.position;
+        camera_.orientation = multiply(sensor.orientation, kSensorFromOptical);
+        for (std::size_t k = 0; k < instances_.size(); ++k) {
+            const CameraScene::Drawable& drawable = scene_->drawables[k];
+            const Pose pose = drawable.body == kNoIndex
+                                  ? drawable.offset
+                                  : compose(bodyPose(bus, drawable.body), drawable.offset);
+            instances_[k] = {drawable.mesh,  pose.position,  pose.orientation,
+                             drawable.scale, drawable.color, drawable.prim};
+        }
+        renderer_->render(instances_, camera_, images_);
+        for (float& depth : images_.depth) {
+            if (depth > far_) {
+                depth = std::numeric_limits<float>::infinity();
+                // The colour keeps whatever was drawn: a far clip limits the range, not the view.
+            }
+        }
+        publish(bus);
+        return {};
+    }
+
+private:
+    /// Publishes the last images; empty buffers (with their size) before the first frame and
+    /// for the ground-truth substitute.
+    void publish(SignalBus& bus) {
+        const auto buffer = [&](const char* encoding, const auto& pixels) {
+            auto out = std::make_shared<Buffer>();
+            out->width = camera_.width;
+            out->height = camera_.height;
+            out->encoding = encoding;
+            const auto bytes = std::as_bytes(std::span{pixels});
+            out->bytes.assign(bytes.begin(), bytes.end());
+            return out;
+        };
+        bus.publishBuffer(image_, buffer("rgba8", images_.rgba));
+        bus.publishBuffer(depth_, buffer("r32f", images_.depth));
+        bus.publishBuffer(instance_, buffer("r32u", images_.instance));
+    }
+
+    Pose bodyPose(const SignalBus& bus, std::uint32_t b) const {
+        if (b >= poses_.size() || !poses_[b].valid()) {
+            return b < rest_.size() ? rest_[b] : Pose{};
+        }
+        const std::span<const double> v = bus.readN(poses_[b]);
+        return {{v[0], v[1], v[2]}, {v[3], v[4], v[5], v[6]}};
+    }
+
+    std::shared_ptr<const CameraScene> scene_;
+    gpu::PinholeCamera camera_;
+    double far_{100.0};
+    std::vector<Pose> rest_;
+    std::vector<SignalId> poses_;
+    std::unique_ptr<gpu::RasterCamera> renderer_;
+    std::vector<gpu::RasterInstance> instances_;
+    gpu::RasterImages images_;
+    SignalId image_, depth_, instance_;
+};
 }  // namespace
 
 namespace {
 
 std::vector<std::unique_ptr<IModule>> createModules(
-    const World& world, bool groundTruth, const std::shared_ptr<gpu::RayContext>& rayContext) {
+    const World& world, bool groundTruth, const std::shared_ptr<gpu::RayContext>& rayContext,
+    const std::shared_ptr<const CameraScene>& cameraScene, bool groundTruthCameras) {
     std::vector<std::unique_ptr<IModule>> modules;
     for (std::uint32_t s = 0; s < world.sensors.names.size(); ++s) {
         switch (world.sensors.type[s]) {
@@ -491,6 +642,10 @@ std::vector<std::unique_ptr<IModule>> createModules(
             case SensorType::Imu:
                 modules.push_back(std::make_unique<Imu>(world, s, groundTruth));
                 break;
+            case SensorType::Camera:
+                modules.push_back(std::make_unique<Camera>(
+                    world, s, groundTruth || groundTruthCameras, cameraScene));
+                break;
         }
     }
     return modules;
@@ -499,12 +654,42 @@ std::vector<std::unique_ptr<IModule>> createModules(
 }  // namespace
 
 std::vector<std::unique_ptr<IModule>> createSensorModules(
-    const World& world, std::shared_ptr<gpu::RayContext> rayContext) {
-    return createModules(world, false, rayContext);
+    const World& world, std::shared_ptr<gpu::RayContext> rayContext,
+    std::shared_ptr<const CameraScene> cameraScene, bool groundTruthCameras) {
+    return createModules(world, false, rayContext, cameraScene, groundTruthCameras);
 }
 
 std::vector<std::unique_ptr<IModule>> createSensorSubstitutes(const World& world) {
-    return createModules(world, true, nullptr);
+    return createModules(world, true, nullptr, nullptr, true);
+}
+
+std::shared_ptr<CameraScene> createCameraScene(const Model& model,
+                                               const std::string& preferredDevice,
+                                               std::string& error) {
+    auto scene = std::make_shared<CameraScene>();
+    std::vector<gpu::MeshSource> meshes;
+    meshes.reserve(model.scene.meshes.size());
+    for (const TriMesh& mesh : model.scene.meshes) {
+        meshes.push_back({mesh.positions, mesh.normals, mesh.indices});
+    }
+    for (std::uint32_t p = 0; p < model.scene.prims.size(); ++p) {
+        const ScenePrim& prim = model.scene.prims[p];
+        if (prim.mesh == kNoIndex) {
+            continue;
+        }
+        CameraScene::Drawable drawable;
+        drawable.mesh = prim.mesh;
+        drawable.body = prim.body;
+        drawable.offset = prim.offset;
+        drawable.scale = prim.scale;
+        if (prim.material != kNoIndex) {
+            drawable.color = model.scene.materials[prim.material].rgba;
+        }
+        drawable.prim = p;
+        scene->drawables.push_back(drawable);
+    }
+    scene->raster = gpu::RasterScene::create(preferredDevice, meshes, error);
+    return scene->raster ? scene : nullptr;
 }
 
 }  // namespace lagrange::sensors

@@ -41,7 +41,7 @@ struct Pose {
 /// {radius, half length}, box {half extents}, plane {half extents x, y, grid spacing}.
 enum class ShapeType : std::uint8_t { Plane, Sphere, Capsule, Cylinder, Box };
 
-enum class SensorType : std::uint8_t { Imu, Lidar };
+enum class SensorType : std::uint8_t { Imu, Lidar, Camera };
 
 /// One applied API schema on one prim, with its attribute values read once at load.
 /// Lookups are by name, so they belong in declare() and init(), never in step().
@@ -121,7 +121,8 @@ struct World {
         std::vector<PrimId> prim;
         /// Type-specific settings by name, SI units: lidar "samples", "min_angle" (rad),
         /// "max_angle", "min_range" (m), "max_range", "range_noise" (m, 1 sigma); IMU
-        /// "accel_noise" (m/s², 1 sigma), "gyro_noise" (rad/s, 1 sigma).
+        /// "accel_noise" (m/s², 1 sigma), "gyro_noise" (rad/s, 1 sigma); camera "width",
+        /// "height" (px), "horizontal_fov" (rad), "near_clip" (m), "far_clip" (m).
         std::vector<std::map<std::string, double, std::less<>>> settings;
     } sensors;
 

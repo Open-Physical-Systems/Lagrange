@@ -57,7 +57,11 @@ struct ServerOptions {
     /// deterministic, the fastest for scans of tens of thousands of beams); Gpu on a hardware
     /// GPU's compute kernel (Tier 1), which makes the run non-deterministic.
     enum class Lidar : std::uint8_t { Auto, Cpu, Gpu } lidar{Lidar::Auto};
-    std::string gpu;  // Vulkan device for the lidar (index or part of its name); empty: automatic
+    std::string gpu;  // Vulkan device for the lidar and cameras (index or part of its name)
+    /// Render cameras (on `gpu`, or a software device without one), which makes the run
+    /// non-deterministic; false: cameras publish their ground truth (empty images), as for
+    /// `lagrange determinism`.
+    bool cameras{true};
 };
 
 /// The simulation server (roadmap 0.2-E1, E2): it loads a robot, wires the MuJoCo backend and

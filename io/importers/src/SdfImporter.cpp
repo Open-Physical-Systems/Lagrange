@@ -9,6 +9,7 @@
 #include <gz/math/Inertial.hh>
 #include <gz/math/Pose3.hh>
 #include <limits>
+#include <sdf/Camera.hh>
 #include <sdf/Collision.hh>
 #include <sdf/Element.hh>
 #include <sdf/Error.hh>
@@ -367,6 +368,18 @@ private:
             out.settings["vertical_samples"] = lidar->VerticalScanSamples();
             out.settings["vertical_min_angle"] = lidar->VerticalScanMinAngle().Radian();
             out.settings["vertical_max_angle"] = lidar->VerticalScanMaxAngle().Radian();
+        } else if (const sdf::Camera* camera = sensor.CameraSensor();
+                   (sensor.Type() == sdf::SensorType::CAMERA ||
+                    sensor.Type() == sdf::SensorType::DEPTH_CAMERA ||
+                    sensor.Type() == sdf::SensorType::RGBD_CAMERA) &&
+                   camera != nullptr) {
+            // One raster camera gives colour, depth and instance ids; it looks along x.
+            out.type = SensorType::Camera;
+            out.settings["width"] = camera->ImageWidth();
+            out.settings["height"] = camera->ImageHeight();
+            out.settings["horizontal_fov"] = camera->HorizontalFov().Radian();
+            out.settings["near_clip"] = camera->NearClip();
+            out.settings["far_clip"] = camera->FarClip();
         } else {
             detail::note(model_, "sensor '" + sensor.Name() + "' of type '" + sensor.TypeStr() +
                                      "' is not simulated yet");

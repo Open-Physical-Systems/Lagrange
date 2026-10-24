@@ -19,6 +19,7 @@
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>mesa-vulkan-drivers</test_depend>
+  <test_depend>libopencv-dev</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
