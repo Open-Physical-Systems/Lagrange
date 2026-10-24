@@ -1,5 +1,6 @@
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
+#include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -25,7 +26,18 @@ struct Query {
     std::array<double, 3> origin;
     std::array<double, 3> dir;
     double nearest;
+    std::uint32_t shape;  // of the nearest hit; services::RayHit::kNone for none
 };
+
+/// Keeps the nearer hit, and on a tie the lower shape index, whatever order shapes are tested.
+bool keep(Query& q, double t, std::uint32_t shape) {
+    if (t < q.nearest || (t == q.nearest && t < kNoHit && shape < q.shape)) {
+        q.nearest = t;
+        q.shape = shape;
+        return true;
+    }
+    return false;
+}
 
 struct Geometry {
     const ShapeCaster::Impl* caster;
@@ -99,10 +111,9 @@ struct ShapeCaster::Impl {
         const auto* g = static_cast<const Geometry*>(args->geometryUserPtr);
         auto* query = reinterpret_cast<Query*>(args->context);
         const double t = g->caster->exact(g->shape, *query);
-        if (!(t < query->nearest)) {
+        if (!keep(*query, t, g->shape)) {
             return;
         }
-        query->nearest = t;
         // Embree may now skip what lies beyond, with the margin for its float traversal.
         RTCRayN* ray = RTCRayHitN_RayN(args->rayhit, 1);
         RTCRayN_tfar(ray, 1, 0) = up(t + kMarginM);
@@ -183,20 +194,26 @@ void ShapeCaster::update(std::span<const Shape> shapes) {
 
 double ShapeCaster::cast(const std::array<double, 3>& origin,
                          const std::array<double, 3>& dir) const {
+    return castHit(origin, dir).distance;
+}
+
+services::RayHit ShapeCaster::castHit(const std::array<double, 3>& origin,
+                                      const std::array<double, 3>& dir) const {
     const Impl& s = *impl_;
     Query query;
     rtcInitRayQueryContext(&query.context);
     query.origin = origin;
     query.dir = dir;
     query.nearest = kNoHit;
+    query.shape = services::RayHit::kNone;
     if (s.scene == nullptr) {
         for (std::uint32_t k = 0; k < s.shapes.size(); ++k) {
-            query.nearest = std::min(query.nearest, s.exact(k, query));
+            keep(query, s.exact(k, query), k);
         }
-        return query.nearest;
+        return {query.nearest, query.shape};
     }
     for (const std::uint32_t k : s.planes) {
-        query.nearest = std::min(query.nearest, s.exact(k, query));
+        keep(query, s.exact(k, query), k);
     }
     RTCRayHit rayhit{};
     rayhit.ray.org_x = static_cast<float>(origin[0]);
@@ -216,7 +233,63 @@ double ShapeCaster::cast(const std::array<double, 3>& origin,
     arguments.context = &query.context;
     arguments.intersect = &Impl::intersect;
     rtcIntersect1(s.scene, &rayhit, &arguments);
-    return query.nearest;
+    return {query.nearest, query.shape};
+}
+
+services::RayHit ShapeCaster::ray(const std::array<double, 3>& origin,
+                                  const std::array<double, 3>& dir, double maxDistance) const {
+    const services::RayHit hit = castHit(origin, dir);
+    return hit.distance <= maxDistance ? hit : services::RayHit{};
+}
+
+std::vector<std::uint32_t> ShapeCaster::overlapSphere(const std::array<double, 3>& center,
+                                                      double radius) const {
+    const Impl& s = *impl_;
+    std::vector<std::uint32_t> out;
+    for (std::uint32_t k = 0; k < s.shapes.size(); ++k) {
+        const Shape& shape = s.shapes[k];
+        // Bounding spheres first: only shapes that could reach the query are tested exactly.
+        if (shape.type != ShapeType::Plane) {
+            const std::array<double, 3>& c = shape.pose.position;
+            const double gap = std::hypot(center[0] - c[0], center[1] - c[1], center[2] - c[2]);
+            if (gap > radius + s.radius[k]) {
+                continue;
+            }
+        }
+        if (distanceToShape(shape.type, shape.size, shape.pose, center) <= radius) {
+            out.push_back(k);
+        }
+    }
+    return out;
+}
+
+double distanceToShape(ShapeType type, const std::array<double, 3>& size, const Pose& pose,
+                       const std::array<double, 3>& point) {
+    const std::array<double, 3> q = rotate(
+        conjugate(pose.orientation),
+        {point[0] - pose.position[0], point[1] - pose.position[1], point[2] - pose.position[2]});
+    switch (type) {
+        case ShapeType::Plane:
+            return std::max(q[2], 0.0);
+        case ShapeType::Sphere:
+            return std::max(std::hypot(q[0], q[1], q[2]) - size[0], 0.0);
+        case ShapeType::Box: {
+            const double dx = std::max(std::abs(q[0]) - size[0], 0.0);
+            const double dy = std::max(std::abs(q[1]) - size[1], 0.0);
+            const double dz = std::max(std::abs(q[2]) - size[2], 0.0);
+            return std::hypot(dx, dy, dz);
+        }
+        case ShapeType::Capsule: {
+            const double z = std::clamp(q[2], -size[1], size[1]);
+            return std::max(std::hypot(q[0], q[1], q[2] - z) - size[0], 0.0);
+        }
+        case ShapeType::Cylinder: {
+            const double radial = std::max(std::hypot(q[0], q[1]) - size[0], 0.0);
+            const double axial = std::max(std::abs(q[2]) - size[1], 0.0);
+            return std::hypot(radial, axial);
+        }
+    }
+    return std::numeric_limits<double>::infinity();
 }
 
 }  // namespace lagrange::sensors

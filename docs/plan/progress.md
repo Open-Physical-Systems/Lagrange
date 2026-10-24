@@ -34,7 +34,7 @@ flowchart TB
         A13["A13 coordinates"]:::done
         A14["A14 position-type lint"]:::done
         A11["A11 plugin C ABI v0"]:::done
-        A12["A12 core services<br/>(SceneQuery with C4)"]:::done
+        A12["A12 core services"]:::done
     end
     subgraph B["B · USD and world"]
         B1["B1 OpenUSD spike"]:::done
@@ -47,7 +47,7 @@ flowchart TB
     subgraph C["C · rigid body"]
         C1_3["C1–C3 MuJoCo backend<br/>and substitutes"]:::done
         C5["C5 rebase at load<br/>(run time: v0.7)"]:::done
-        C4["C4 scene queries"]:::todo
+        C4["C4 scene queries"]:::done
         C6["C6 Jolt spike"]:::todo
     end
     subgraph D["D · sensors"]
