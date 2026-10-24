@@ -202,6 +202,17 @@ if(BUILD_TESTING)
         PROPERTIES WILL_FAIL TRUE
     )
     add_test(
+        NAME lagrange_cli_determinism
+        COMMAND
+            $<TARGET_FILE:lagrange_cli> determinism
+            ${CMAKE_CURRENT_SOURCE_DIR}/../profiles/examples/amr_sample_urdf.yaml
+            ${_lagrange_cli_robot} --seconds 3
+    )
+    set_tests_properties(
+        lagrange_cli_determinism
+        PROPERTIES PASS_REGULAR_EXPRESSION "deterministic: 31 state hashes"
+    )
+    add_test(
         NAME lagrange_cli_version
         COMMAND $<TARGET_FILE:lagrange_cli> info --version
     )

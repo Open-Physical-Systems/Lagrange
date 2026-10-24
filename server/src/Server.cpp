@@ -1988,6 +1988,20 @@ Status Server::applyProfile(const std::string& yaml) {
     return impl_->apply(yaml, true);
 }
 
+Status Server::stepUntil(SimTime t) {
+    if (!impl_->scheduler) {
+        return Status::error(StatusCode::Internal, "stepUntil before load()");
+    }
+    return impl_->scheduler->stepUntil(t);
+}
+
+Expected<std::uint64_t, Status> Server::stateHash() const {
+    if (!impl_->scheduler) {
+        return Unexpected{Status::error(StatusCode::Internal, "stateHash before load()")};
+    }
+    return impl_->scheduler->stateHash();
+}
+
 Status Server::start() {
     Impl& s = *impl_;
     if (Status status = load(); !status.ok()) {

@@ -31,6 +31,7 @@ add_library(
     plugin_abi/src/PluginLibrary.cpp
     services/src/WrenchSum.cpp
     services/src/Log.cpp
+    services/src/DeterminismCheck.cpp
 )
 # xxHash is used header-only (XXH_INLINE_ALL) for state and topology hashes.
 find_path(LAGRANGE_XXHASH_INCLUDE_DIR xxhash.h REQUIRED)
@@ -74,6 +75,7 @@ if(BUILD_TESTING)
             scheduler/test/test_scheduler.cpp
             services/test/test_services.cpp
             services/test/test_consumer_ring.cpp
+            services/test/test_determinism_check.cpp
     )
         get_filename_component(name ${test} NAME_WE)
         ament_add_gtest(${name} ${test})
