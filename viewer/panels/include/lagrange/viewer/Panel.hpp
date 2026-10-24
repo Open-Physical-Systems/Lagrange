@@ -76,6 +76,17 @@ struct LauncherState {
 };
 
 /// What panels may read and change during one frame. Panels never touch the socket or Vulkan.
+/// GPU textures for sensor images, provided by the application. A panel asks for an image's
+/// texture while it draws; the upload is recorded before the frame's UI pass.
+class SensorTextures {
+public:
+    virtual ~SensorTextures() = default;
+    /// The ImTextureID showing `image` under `key` (one texture per key, reused while the
+    /// size stays); 0 if it cannot be made.
+    virtual std::uint64_t texture(const std::string& key,
+                                  const std::shared_ptr<const SensorImage>& image) = 0;
+};
+
 struct PanelContext {
     ViewerClient& client;
     std::shared_ptr<const SceneFrame> scene;  ///< Latest frame; may be null.
@@ -85,8 +96,9 @@ struct PanelContext {
     Camera& camera;
     std::uint32_t& selectedPrim;  ///< kNone when nothing is selected.
 
-    std::uint64_t viewportTexture{0};  ///< ImTextureID of the rendered scene; 0 if none.
-    std::uint32_t viewportWidth{0};    ///< Size of that texture in pixels.
+    std::uint64_t viewportTexture{0};         ///< ImTextureID of the rendered scene; 0 if none.
+    SensorTextures* sensorTextures{nullptr};  ///< Null in tests without a GPU.
+    std::uint32_t viewportWidth{0};           ///< Size of that texture in pixels.
     std::uint32_t viewportHeight{0};
     /// Out: the size the viewport panel wants next frame, in pixels.
     std::uint32_t requestedViewportWidth{0};
