@@ -234,7 +234,9 @@ struct Server::Impl {
             return settings.substituted.contains(domain);
         };
         // A run that takes commands from ROS is not deterministic: its input comes from outside.
-        auto next = std::make_unique<Scheduler>(SchedulerOptions{.deterministic = !bridge});
+        // So is one with the lidar on the GPU (invariant 7: the CPU is the reference).
+        auto next =
+            std::make_unique<Scheduler>(SchedulerOptions{.deterministic = !bridge && !rayContext});
         if (off("rigid_body")) {
             next->add(std::make_unique<rigid_body::FixedRobot>());
         } else {
@@ -263,9 +265,13 @@ struct Server::Impl {
             next->add(std::move(drive));
             next->add(std::make_unique<DiffDriveController>(driveSettings()));
         }
-        for (auto& sensor : off("sensors") ? sensors::createSensorSubstitutes(robot.world)
-                                           : sensors::createSensorModules(robot.world)) {
-            next->add(std::move(sensor));
+        ModuleConfigData sensing;
+        sensing.tier =
+            rayContext ? static_cast<CapabilityTier>(rayContext->tier()) : CapabilityTier::Tier0;
+        for (auto& sensor : off("sensors")
+                                ? sensors::createSensorSubstitutes(robot.world)
+                                : sensors::createSensorModules(robot.world, rayContext)) {
+            next->add(std::move(sensor), ModuleConfig(sensing));
         }
         auto wired = next->wire(WorldView(robot.world));
         if (!wired) {
@@ -908,6 +914,44 @@ struct Server::Impl {
 
     bool hasSensors() const { return !robot.world.sensors.names.empty(); }
 
+    /// Picks where lidars cast (ServerOptions::lidar); logs the choice.
+    Status placeLidar() {
+        const auto hasLidar = std::ranges::any_of(
+            robot.world.sensors.type, [](SensorType t) { return t == SensorType::Lidar; });
+        using Lidar = ServerOptions::Lidar;
+        if (!hasLidar || options.lidar == Lidar::Cpu || (options.lidar == Lidar::Auto && !bridge)) {
+            if (hasLidar) {
+                log(v1::LOG_LEVEL_INFO, "sensors",
+                    options.lidar == Lidar::Cpu
+                        ? "lidar on the CPU (Tier 0, exact casts), as asked"
+                        : "lidar on the CPU (Tier 0, exact casts): the run is deterministic");
+            }
+            return {};
+        }
+        std::string reason;
+        auto made = gpu::RayContext::create(options.gpu, reason);
+        if (made && made->tier() < 1) {
+            reason = made->deviceName() + " is a software device (Tier 0)";
+            made.reset();
+        }
+        if (!made) {
+            if (options.lidar == Lidar::Gpu) {
+                return Status::error(StatusCode::InvalidConfig,
+                                     "--lidar gpu needs a Tier 1 GPU: " + reason);
+            }
+            log(v1::LOG_LEVEL_INFO, "sensors",
+                "lidar on the CPU (Tier 0, exact casts): no GPU for it (" + reason + ")");
+            return {};
+        }
+        rayContext = std::move(made);
+        log(v1::LOG_LEVEL_INFO, "sensors",
+            "lidar on the GPU: " + rayContext->deviceName() + " (Tier " +
+                std::to_string(rayContext->tier()) +
+                ", compute BVH, bvh_traverse.slang); the run is not deterministic");
+        return {};
+    }
+    std::shared_ptr<gpu::RayContext> rayContext;  // null: lidars on the CPU
+
     std::int64_t fastestSensorNs() const {
         double rate = 0.0;
         for (const double r : robot.world.sensors.rateHz) {
@@ -973,11 +1017,13 @@ struct Server::Impl {
             const bool running = built && !substituted(row.domain);
             d.set_enabled(running);
             d.set_available(built);
-            d.set_active_module(running ? (physics ? "mujoco" : "raycast") : row.substitute);
+            d.set_active_module(
+                running ? (physics ? "mujoco" : (rayContext ? "raycast_gpu" : "raycast"))
+                        : row.substitute);
             d.set_substituted(!running);
             d.set_cpu_ms_per_sim_s(cost[row.domain]);
             if (sensing) {
-                d.add_fidelities("raycast");
+                d.add_fidelities(rayContext ? "raycast_gpu" : "raycast");
                 d.set_dt_ns(fastestSensorNs());
                 d.add_depends_on("rigid_body");
             }
@@ -1852,6 +1898,9 @@ Status Server::start() {
         }
     }
     const std::array<double, 3> shift = recentre(s.robot);
+    if (Status status = s.placeLidar(); !status.ok()) {
+        return status;
+    }
     if (Status status = s.build(); !status.ok()) {
         return status;
     }

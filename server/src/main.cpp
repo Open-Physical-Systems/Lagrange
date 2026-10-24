@@ -81,6 +81,9 @@ int usage(const char* error) {
                  "  --world   URDF of fixed scenery, or none (default: the sample warehouse)\n"
                  "  --listen  unix:/path.sock or tcp://host:port (default: %s)\n"
                  "  --spawn X,Y[,Z[,YAW]]  start the robot there (m, world ENU; heading in rad)\n"
+                 "  --lidar auto|cpu|gpu  where lidars cast: auto (default) uses a hardware GPU\n"
+                 "            when the run takes ROS input, else the CPU reference\n"
+                 "  --gpu DEVICE  Vulkan device for the lidar (index or part of its name)\n"
                  "  --rtf     real-time factor, 0 = as fast as possible (default 1)\n"
                  "  --paused  start paused; press Play in the viewer\n"
                  "  --no-ros  run without the ROS 2 bridge\n"
@@ -145,6 +148,24 @@ int main(int argc, char** argv) {
                 return usage("--spawn needs X,Y[,Z[,YAW]]");
             }
             options.spawn = *spawn;
+        } else if (arg == "--lidar") {
+            const char* text = value();
+            const std::string_view where = text != nullptr ? text : "";
+            if (where == "auto") {
+                options.lidar = lagrange::server::ServerOptions::Lidar::Auto;
+            } else if (where == "cpu") {
+                options.lidar = lagrange::server::ServerOptions::Lidar::Cpu;
+            } else if (where == "gpu") {
+                options.lidar = lagrange::server::ServerOptions::Lidar::Gpu;
+            } else {
+                return usage("--lidar needs auto, cpu or gpu");
+            }
+        } else if (arg == "--gpu") {
+            const char* device = value();
+            if (device == nullptr) {
+                return usage("--gpu needs a device index or part of its name");
+            }
+            options.gpu = device;
         } else if (arg == "--rtf") {
             const char* text = value();
             char* end = nullptr;

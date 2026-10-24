@@ -1,6 +1,7 @@
 #include "lagrange/server/Robot.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <map>
@@ -437,6 +438,48 @@ double firstStddev(const tinyxml2::XMLElement* element) {
     return 0.0;
 }
 
+const tinyxml2::XMLElement* firstNoise(const tinyxml2::XMLElement* element) {
+    if (element == nullptr) {
+        return nullptr;
+    }
+    for (const tinyxml2::XMLElement* child = element->FirstChildElement(); child != nullptr;
+         child = child->NextSiblingElement()) {
+        if (std::string_view(child->Name()) == "noise") {
+            return child;
+        }
+        if (const tinyxml2::XMLElement* found = firstNoise(child); found != nullptr) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+/// The SDFormat <noise> of an IMU channel (the first axis that has one) as the settings of
+/// sensors::ImuNoise: "<prefix>_noise", "_bias_mean", ... Zeros are left out.
+void imuNoise(const tinyxml2::XMLElement* channel, const std::string& prefix,
+              std::map<std::string, double, std::less<>>& settings) {
+    const tinyxml2::XMLElement* noise = firstNoise(channel);
+    if (noise == nullptr) {
+        return;
+    }
+    static constexpr std::array<std::pair<const char*, const char*>, 6> kFields{{
+        {"stddev", "_noise"},
+        {"bias_mean", "_bias_mean"},
+        {"bias_stddev", "_bias_stddev"},
+        {"dynamic_bias_stddev", "_dynamic_bias_stddev"},
+        {"dynamic_bias_correlation_time", "_dynamic_bias_correlation_time"},
+        {"precision", "_precision"},
+    }};
+    for (const auto& [element, key] : kFields) {
+        double value = 0.0;
+        const tinyxml2::XMLElement* field = noise->FirstChildElement(element);
+        if (field != nullptr && field->QueryDoubleText(&value) == tinyxml2::XML_SUCCESS &&
+            value != 0.0) {
+            settings[prefix + key] = value;
+        }
+    }
+}
+
 /// Gazebo sensor blocks: <gazebo reference="link"><sensor name type>...</sensor></gazebo>.
 void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
     tinyxml2::XMLDocument document;
@@ -481,10 +524,10 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
             std::string typeName;
             if (type == "imu") {
                 const tinyxml2::XMLElement* imu = sensor->FirstChildElement("imu");
-                settings["gyro_noise"] = firstStddev(
-                    imu != nullptr ? imu->FirstChildElement("angular_velocity") : nullptr);
-                settings["accel_noise"] = firstStddev(
-                    imu != nullptr ? imu->FirstChildElement("linear_acceleration") : nullptr);
+                imuNoise(imu != nullptr ? imu->FirstChildElement("angular_velocity") : nullptr,
+                         "gyro", settings);
+                imuNoise(imu != nullptr ? imu->FirstChildElement("linear_acceleration") : nullptr,
+                         "accel", settings);
                 typeName = "Imu";
             } else if (type == "ray" || type == "gpu_ray" || type == "lidar" ||
                        type == "gpu_lidar") {

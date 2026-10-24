@@ -1,4 +1,6 @@
+#include "lagrange/module/StateIO.hpp"
 #include "lagrange/random/Philox.hpp"
+#include "lagrange/sensors/ImuNoise.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/PoseMath.hpp"
@@ -6,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -171,7 +174,7 @@ public:
         return {"sensors", label_, 0, 1, groundTruth_, true, CapabilityTier::Tier0};
     }
     [[nodiscard]] Duration preferredStep() const override { return step_; }
-    Status saveState(StateWriter&) const override { return {}; }  // sensors keep no state
+    Status saveState(StateWriter&) const override { return {}; }  // a lidar keeps no state
     Status restoreState(StateReader&) override { return {}; }
 
 protected:
@@ -186,8 +189,18 @@ protected:
 
 class Lidar final : public SensorModule {
 public:
-    Lidar(const World& world, std::uint32_t sensor, bool groundTruth)
-        : SensorModule(world, sensor, "lidar", groundTruth) {}
+    Lidar(const World& world, std::uint32_t sensor, bool groundTruth,
+          std::shared_ptr<gpu::RayContext> rayContext)
+        : SensorModule(world, sensor, "lidar", groundTruth), rayContext_(std::move(rayContext)) {}
+
+    [[nodiscard]] ModuleInfo info() const override {
+        ModuleInfo out = SensorModule::info();
+        if (rayContext_) {
+            out.deterministic = false;
+            out.minimumTier = CapabilityTier::Tier1;
+        }
+        return out;
+    }
 
     Status declare(const WorldView& world, const ModuleConfig&, SignalDeclarer& d) override {
         const World::Sensors& sensors = world.sensors();
@@ -241,6 +254,17 @@ public:
         }
         placed_.resize(shapes_.size());
         buffer_.assign(samples_, kNoHit);
+        if (rayContext_ && !groundTruth_) {
+            std::vector<std::array<float, 3>> directions(samples_);
+            for (std::uint32_t i = 0; i < samples_; ++i) {
+                const Vec3 d = layout_.direction(i);
+                directions[i] = {static_cast<float>(d[0]), static_cast<float>(d[1]),
+                                 static_cast<float>(d[2])};
+            }
+            scan_ = std::make_unique<gpu::RayScan>(rayContext_, directions);
+            castShapes_.resize(shapes_.size());
+            hits_.resize(samples_);
+        }
         bus.writeN(ranges_, buffer_);
         return {};
     }
@@ -257,12 +281,19 @@ public:
             placed_[k] =
                 shape.body < 0 ? shape.pose : compose(bodyPose(bus, shape.body), shape.pose);
         }
+        if (scan_) {
+            castOnGpu(sensor);
+        }
         for (std::uint32_t i = 0; i < samples_; ++i) {
-            const Vec3 dir = rotate(sensor.orientation, layout_.direction(i));
             double nearest = kNoHit;
-            for (std::size_t k = 0; k < shapes_.size(); ++k) {
-                nearest = std::min(nearest, raycast(shapes_[k].type, shapes_[k].size, placed_[k],
-                                                    sensor.position, dir));
+            if (scan_) {
+                nearest = static_cast<double>(hits_[i].range);
+            } else {
+                const Vec3 dir = rotate(sensor.orientation, layout_.direction(i));
+                for (std::size_t k = 0; k < shapes_.size(); ++k) {
+                    nearest = std::min(nearest, raycast(shapes_[k].type, shapes_[k].size,
+                                                        placed_[k], sensor.position, dir));
+                }
             }
             if (nearest < minRange_ || nearest > maxRange_) {
                 buffer_[i] = kNoHit;  // no valid return (sensor_msgs/LaserScan convention)
@@ -286,6 +317,21 @@ private:
         int body;
     };
 
+    /// Shapes relative to the sensor, in double; the caster converts to float last
+    /// (huge-worlds.md §1: only the GPU sees float positions, and only small ones).
+    void castOnGpu(const Pose& sensor) {
+        for (std::size_t k = 0; k < shapes_.size(); ++k) {
+            gpu::CastShape& out = castShapes_[k];
+            out.type = static_cast<std::uint32_t>(shapes_[k].type);
+            out.size = shapes_[k].size;
+            for (std::size_t i = 0; i < 3; ++i) {
+                out.position[i] = placed_[k].position[i] - sensor.position[i];
+            }
+            out.orientation = placed_[k].orientation;
+        }
+        scan_->cast(castShapes_, sensor.orientation, hits_);
+    }
+
     Pose bodyPose(const SignalBus& bus, std::uint32_t b) const {
         if (!poses_[b].valid()) {
             return rest_[b];
@@ -303,6 +349,10 @@ private:
     std::vector<Pose> placed_;  // world pose of each shape for the current scan
     std::vector<double> buffer_;
     SignalId ranges_;
+    std::shared_ptr<gpu::RayContext> rayContext_;  // null: cast on the CPU
+    std::unique_ptr<gpu::RayScan> scan_;
+    std::vector<gpu::CastShape> castShapes_;
+    std::vector<gpu::CastHit> hits_;
 };
 
 class Imu final : public SensorModule {
@@ -317,8 +367,15 @@ public:
                 StatusCode::InvalidConfig,
                 "IMU " + name_ + " is on '" + raw.bodies.names[body_] + "', which never moves");
         }
-        accelNoise_ = groundTruth_ ? 0.0 : setting(world.sensors(), sensor_, "accel_noise", 0.0);
-        gyroNoise_ = groundTruth_ ? 0.0 : setting(world.sensors(), sensor_, "gyro_noise", 0.0);
+        if (!groundTruth_) {
+            const auto& settings = world.sensors().settings[sensor_];
+            const double rate = world.sensors().rateHz[sensor_];
+            const double dt = step_.seconds();
+            accel_ = ImuChannel(ImuNoise::from(settings, "accel", rate), dt);
+            gyro_ = ImuChannel(ImuNoise::from(settings, "gyro", rate), dt);
+            biased_ = ImuNoise::from(settings, "accel", rate).hasBias() ||
+                      ImuNoise::from(settings, "gyro", rate).hasBias();
+        }
         const std::string body = "body/" + raw.bodies.names[body_];
         pose_ = d.input(spec(body + "/pose", SignalType::Pose, units::m, "world_local"));
         twist_ = d.input(spec(body + "/twist", SignalType::Wrench, units::m_per_s, "world_local"));
@@ -352,10 +409,24 @@ public:
         // Proper acceleration is already in the body frame; the angular rate is in the world.
         Vec3 force = rotate(unmount, {accel[0], accel[1], accel[2]});
         Vec3 rate = rotate(unmount, rotate(conjugate(body), {twist[3], twist[4], twist[5]}));
+        if (biased_) {
+            // Separate streams from the white noise, so that adding a bias term leaves the
+            // white noise of a run as it was.
+            if (!started_) {
+                random::Stream rng(context.seed, 0, kTurnOnStream);
+                accel_.start(rng);
+                gyro_.start(rng);
+                started_ = true;
+            } else {
+                random::Stream rng(context.seed, context.stepIndex, kBiasStream);
+                accel_.advance(rng);
+                gyro_.advance(rng);
+            }
+        }
         random::Stream rng(context.seed, context.stepIndex, 0);
         for (std::size_t i = 0; i < 3; ++i) {
-            force[i] += accelNoise_ * rng.normal();
-            rate[i] += gyroNoise_ * rng.normal();
+            force[i] = accel_.measure(i, force[i], rng.normal());
+            rate[i] = gyro_.measure(i, rate[i], rng.normal());
         }
         bus.writeN(force_, force);
         bus.writeN(rate_, rate);
@@ -363,8 +434,29 @@ public:
         return {};
     }
 
+    Status saveState(StateWriter& writer) const override {
+        writer.put(started_);
+        writer.putDoubles(accel_.state());
+        writer.putDoubles(gyro_.state());
+        return {};
+    }
+
+    Status restoreState(StateReader& reader) override {
+        std::array<double, 9> accel{}, gyro{};
+        if (!reader.get(started_) || !reader.getDoubles(accel) || !reader.getDoubles(gyro)) {
+            return Status::error(StatusCode::Internal, "IMU " + name_ + ": truncated state");
+        }
+        accel_.setState(accel);
+        gyro_.setState(gyro);
+        return {};
+    }
+
 private:
-    double accelNoise_{0.0}, gyroNoise_{0.0};
+    static constexpr std::uint32_t kTurnOnStream = 1;  // Philox entities besides 0, the white
+    static constexpr std::uint32_t kBiasStream = 2;    // noise
+    ImuChannel accel_, gyro_;  // all terms off for the ground-truth substitute
+    bool biased_{false};
+    bool started_{false};  // turn-on bias drawn
     SignalId pose_, twist_, acceleration_, force_, rate_, orientation_;
 };
 
@@ -372,12 +464,13 @@ private:
 
 namespace {
 
-std::vector<std::unique_ptr<IModule>> createModules(const World& world, bool groundTruth) {
+std::vector<std::unique_ptr<IModule>> createModules(
+    const World& world, bool groundTruth, const std::shared_ptr<gpu::RayContext>& rayContext) {
     std::vector<std::unique_ptr<IModule>> modules;
     for (std::uint32_t s = 0; s < world.sensors.names.size(); ++s) {
         switch (world.sensors.type[s]) {
             case SensorType::Lidar:
-                modules.push_back(std::make_unique<Lidar>(world, s, groundTruth));
+                modules.push_back(std::make_unique<Lidar>(world, s, groundTruth, rayContext));
                 break;
             case SensorType::Imu:
                 modules.push_back(std::make_unique<Imu>(world, s, groundTruth));
@@ -389,12 +482,13 @@ std::vector<std::unique_ptr<IModule>> createModules(const World& world, bool gro
 
 }  // namespace
 
-std::vector<std::unique_ptr<IModule>> createSensorModules(const World& world) {
-    return createModules(world, false);
+std::vector<std::unique_ptr<IModule>> createSensorModules(
+    const World& world, std::shared_ptr<gpu::RayContext> rayContext) {
+    return createModules(world, false, rayContext);
 }
 
 std::vector<std::unique_ptr<IModule>> createSensorSubstitutes(const World& world) {
-    return createModules(world, true);
+    return createModules(world, true, nullptr);
 }
 
 }  // namespace lagrange::sensors
