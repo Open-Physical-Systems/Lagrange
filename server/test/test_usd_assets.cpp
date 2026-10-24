@@ -69,6 +69,36 @@ TEST(UsdAssets, TheSampleAmrInUsdMatchesItsUrdf) {
     }
 }
 
+// --spawn moves a USD robot as it moves a URDF one: the same bodies end up in the same places.
+TEST(UsdAssets, SpawnMovesAUsdRobotLikeAUrdfOne) {
+    LoadOptions options;
+    options.spawn.position = {4.0, -2.0, 0.0};
+    options.spawn.orientation = {std::cos(0.35), 0.0, 0.0, std::sin(0.35)};  // 0.7 rad about z
+    auto urdf = loadModel(LAGRANGE_TEST_AMR_URDF, options);
+    auto usd = loadModel(LAGRANGE_TEST_AMR_USDA, options);
+    ASSERT_TRUE(urdf) << urdf.error();
+    ASSERT_TRUE(usd) << usd.error();
+    ASSERT_EQ(urdf->bodyRestPose.size(), usd->bodyRestPose.size());
+    // The two files list the bodies in different orders: match them by name.
+    const auto& names = usd->world.bodies.names;
+    for (std::size_t b = 0; b < urdf->bodyRestPose.size(); ++b) {
+        const std::string& name = urdf->world.bodies.names[b];
+        const auto it = std::find(names.begin(), names.end(), name);
+        ASSERT_NE(it, names.end()) << name;
+        const Pose& got = usd->bodyRestPose[static_cast<std::size_t>(it - names.begin())];
+        const Pose& want = urdf->bodyRestPose[b];
+        for (std::size_t i = 0; i < 3; ++i) {
+            EXPECT_NEAR(got.position[i], want.position[i], 1e-5) << name;
+        }
+        // Same rotation: q and -q are the same.
+        double dot = 0.0;
+        for (std::size_t i = 0; i < 4; ++i) {
+            dot += got.orientation[i] * want.orientation[i];
+        }
+        EXPECT_NEAR(std::abs(dot), 1.0, 1e-6) << name;
+    }
+}
+
 TEST(UsdAssets, TheWarehouseInUsdMapsLikeItsUrdf) {
     // The scenery becomes world colliders in USD (static, massless links need no body); the
     // occupancy map, which only sees fixed geometry, must come out the same.
