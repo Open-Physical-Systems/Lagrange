@@ -13,6 +13,8 @@
   <depend>lagrange_core</depend>
   <depend>openusd_vendor</depend>
   <depend>lagrange_schemas</depend>
+  <depend>yaml-cpp</depend>
+  <depend>ament_index_cpp</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
 

@@ -73,7 +73,7 @@ flowchart TB
         G1["G1 URDF/xacro → USD"]:::done
         G5["G5 mesh import"]:::done
         G34["G3 SDFormat · G4 MJCF"]:::done
-        G2["G2 overlay files<br/>(v0.3, with electrical schemas)"]:::todo
+        G2["G2 overlay files<br/>(done in v0.3, with electrical schemas)"]:::done
     end
     subgraph H["H · determinism, validation, packaging"]
         H1["H1 deterministic mode"]:::done
@@ -155,7 +155,7 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 1. Torque commands: controllers write `joint/<j>/torque_command`; the electrical domain turns it
    into `joint/<j>/torque` (its ideal substitute until the network exists). **Done** (2026-10-25)
 2. Electrical schemas (`ElectricalMotorAPI_1`, `BatteryAPI_1`, `PortAPI_1`, bus, load,
-   converter); the stage collects their instances (**done** 2026-10-25); G2 overlay files
+   converter); the stage collects their instances; G2 overlay files (**done** 2026-10-25)
 3. Electrical network module (DC bus, battery ECM, averaged motor drives) and its tests
 4. Thermal module (lumped networks), coupled to electrical losses
 5. Coupling stability checks across the electrical, thermal and physics rates

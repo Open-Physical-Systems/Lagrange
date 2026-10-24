@@ -17,8 +17,11 @@ namespace lagrange::server {
 
 struct ServerOptions {
     proto::Endpoint endpoint;
-    std::string robotPath;          // URDF of the robot to simulate
-    std::string worldPath;          // URDF of static scenery (root link "world"); empty = none
+    std::string robotPath;  // URDF of the robot to simulate
+    std::string worldPath;  // URDF of static scenery (root link "world"); empty = none
+    /// Overlay file applied to the robot (docs/design/formats.md §9: motors, battery, bus);
+    /// empty = none
+    std::string overlayPath;
     Pose spawn;                     // where the robot starts, world ENU (LoadOptions::spawn)
     std::string profileSchemaPath;  // profiles/schema.json, sent to viewers; empty = none
     /// What a profile's `stage` must say to apply to this run; empty: robotPath. `lagrange run`

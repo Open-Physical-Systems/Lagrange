@@ -70,6 +70,8 @@ CommandLine defaultCommandLine() {
         shareFile("lagrange_assets", "robots/amr_diffdrive/amr_diffdrive.urdf");
     line.options.worldPath =
         shareFile("lagrange_assets", "worlds/warehouse_small/warehouse_small.urdf");
+    line.options.overlayPath =
+        shareFile("lagrange_assets", "robots/amr_diffdrive/amr_diffdrive.overlay.yaml");
     line.options.profileSchemaPath = shareFile("lagrange_profiles", "schema.json");
     return line;
 }
@@ -79,6 +81,8 @@ void printServerOptions(std::FILE* out) {
                  "  --robot   URDF, SDFormat, MJCF or USD to simulate (default: the sample AMR)\n"
                  "  --world   fixed scenery in any of those formats, or none (default: the sample\n"
                  "            warehouse)\n"
+                 "  --overlay FILE.yaml  apply schemas (motors, battery, bus) to the robot, or\n"
+                 "            none (default: the sample AMR's power system, for the sample only)\n"
                  "  --listen  unix:/path.sock or tcp://host:port (default: %s)\n"
                  "  --spawn X,Y[,Z[,YAW]]  start the robot there (m, world ENU; heading in rad)\n"
                  "  --lidar auto|cpu|gpu  where lidars cast: auto (default) and cpu use the\n"
@@ -131,6 +135,13 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--world needs a file, or none";
             }
             options.worldPath = std::string_view(path) == "none" ? "" : path;
+        } else if (arg == "--overlay") {
+            const char* path = value();
+            if (path == nullptr) {
+                return "--overlay needs a file, or none";
+            }
+            options.overlayPath = std::string_view(path) == "none" ? "" : path;
+            out.overlayGiven = true;
         } else if (arg == "--listen") {
             const char* text = value();
             const auto endpoint = text != nullptr ? proto::parseEndpoint(text) : std::nullopt;
@@ -229,6 +240,9 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
     }
     if (options.robotPath.empty()) {
         return "no --robot given and lagrange_assets is not installed";
+    }
+    if (out.robotGiven && !out.overlayGiven) {
+        options.overlayPath.clear();  // the default overlay fits the sample robot only
     }
     return std::nullopt;
 }

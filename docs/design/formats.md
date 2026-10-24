@@ -1364,20 +1364,30 @@ Electrical, thermal and EMI data do not exist in URDF/SDF/MJCF. Importers accept
 **overlay** file that applies our API schemas by link or joint name:
 
 ```yaml
-# amr.lagrange.overlay.yaml
+# amr_diffdrive.overlay.yaml (excerpt; the full file is in assets/robots/amr_diffdrive/)
 schema_version: 1
 apply:
-  - prim: left_wheel_joint
-    create_child: left_drive_motor
+  - prim: left_wheel_joint            # a link, joint or sensor by name, or a prim path
+    create_child: left_drive_motor    # a new prim, under a joint's parent link
     schemas:
       ElectricalMotorAPI_1:
         elec:windingResistance: 0.12
         elec:inductance: 0.00031
         elec:torqueConstant: 0.085
-        elec:maxCurrent: 30.0
-        elec:joint: left_wheel_joint
+        elec:maxCurrent: 8.0
+        elec:joint: left_wheel_joint  # relationships: names or paths
         elec:powerPort: power/dc_48v
+  - create: power/dc_48v              # a new prim at this path under the robot's top prim
+    schemas:
+      ElectricalBusAPI_1: { elec:bus:undervoltageTrip: 42.0, elec:bus:overvoltageTrip: 60.0 }
 ```
+
+**Status (v0.3).** `lagrange_stage::applyOverlay` implements this format (rules on its
+declaration in `io/stage/include/lagrange/stage/Stage.hpp`); `lagrange_server --overlay` and
+`lagrange_import --overlay` use it, and the stage writer writes the instances, so an imported
+robot keeps them in USD. Values are checked as the stage loader checks a stage, and every
+problem is reported together. Overlays add schema instances; they do not yet create simulated
+sensors, so lidars on an MJCF robot still need USD for now.
 
 Without an overlay, an imported robot runs with the electrical domain substituted by the ideal
 torque source. The viewer's domain panel shows why the electrical toggle is unavailable

@@ -113,6 +113,9 @@ std::optional<std::string> useStage(CommandLine& line, const std::string& yaml,
                " or in lagrange_assets; pass --robot FILE to check the profile against a robot";
     }
     line.options.robotPath = found->string();
+    if (!line.overlayGiven && found->filename() != "amr_diffdrive.urdf") {
+        line.options.overlayPath.clear();  // the default overlay fits the sample robot only
+    }
     return std::nullopt;
 }
 

@@ -7,6 +7,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <numbers>
 #include <string>
 
@@ -569,6 +570,147 @@ TEST(StageReader, RefusesBadSchemaValuesNamingThePrims) {
         << e;
     EXPECT_NE(e.find("targets /bot/power/dc_12v, which is not in the stage"), std::string::npos)
         << e;
+}
+
+TEST(StageWriter, SchemaInstancesSurviveTheRoundTrip) {
+    auto model = loadStage(writeText("powered.usda", kPowered).string());
+    ASSERT_TRUE(model) << model.error();
+    const std::filesystem::path out = scratch("powered_out.usda");
+    ASSERT_TRUE(writeStage(*model, out.string()));
+    auto back = loadStage(out.string());
+    ASSERT_TRUE(back) << back.error();
+    const WorldView a(model->world);
+    const WorldView b(back->world);
+    ASSERT_EQ(back->world.schemaInstances.size(), model->world.schemaInstances.size());
+    for (const SchemaInstance& s : model->world.schemaInstances) {
+        const auto match =
+            std::find_if(back->world.schemaInstances.begin(), back->world.schemaInstances.end(),
+                         [&](const SchemaInstance& t) {
+                             return t.schema == s.schema && t.instance == s.instance &&
+                                    b.signalInstanceName(t.prim) == a.signalInstanceName(s.prim);
+                         });
+        ASSERT_NE(match, back->world.schemaInstances.end()) << s.schema;
+        EXPECT_EQ(match->reals, s.reals) << s.schema;
+        EXPECT_EQ(match->integers, s.integers) << s.schema;
+        EXPECT_EQ(match->tokens, s.tokens) << s.schema;
+        EXPECT_EQ(match->realArrays, s.realArrays) << s.schema;
+        for (const auto& [name, targets] : s.relationships) {
+            ASSERT_EQ(match->rel(name).size(), targets.size()) << name;
+            for (std::size_t i = 0; i < targets.size(); ++i) {
+                EXPECT_EQ(b.signalInstanceName(match->rel(name)[i]),
+                          a.signalInstanceName(targets[i]))
+                    << name;
+            }
+        }
+    }
+    // Fallbacks stay unauthored.
+    std::ifstream file(out);
+    const std::string text((std::istreambuf_iterator<char>(file)),
+                           std::istreambuf_iterator<char>());
+    EXPECT_EQ(text.find("resistanceTempCoeff"), std::string::npos);
+    EXPECT_NE(text.find("elec:torqueConstant = 0.085"), std::string::npos);
+}
+
+TEST(Overlay, AppliesSchemasByNameAndCreatesPrims) {
+    auto model = loadStage(writeText("bare.usda", R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 10
+    }
+    def Xform "wheel" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 1
+    }
+    def PhysicsRevoluteJoint "wheel_joint" ( prepend apiSchemas = ["PhysicsDriveAPI:angular"] )
+    {
+        rel physics:body0 = </bot/base>
+        rel physics:body1 = </bot/wheel>
+        uniform token physics:axis = "Y"
+    }
+}
+)")
+                               .string());
+    ASSERT_TRUE(model) << model.error();
+    const std::filesystem::path overlay = writeText("bot.overlay.yaml", R"(schema_version: 1
+apply:
+  - prim: wheel_joint
+    create_child: drive
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:windingResistance: 0.2
+        elec:inductance: 0.001
+        elec:torqueConstant: 0.05
+        elec:polePairs: 2
+        elec:maxCurrent: 10
+        elec:motorType: dc_brushed
+        elec:joint: wheel_joint
+        elec:powerPort: power/bus
+  - create: power/bus
+    schemas:
+      ElectricalBusAPI_1: { elec:bus:undervoltageTrip: 9.0, elec:bus:overvoltageTrip: 15.0 }
+)");
+    ASSERT_TRUE(applyOverlay(*model, overlay.string()));
+    const World& w = model->world;
+    const WorldView view(w);
+    const SchemaInstance* motor = only(w, "ElectricalMotorAPI_1");
+    ASSERT_NE(motor, nullptr);
+    EXPECT_EQ(view.primPath(motor->prim), "/bot/base/drive");  // on the joint's parent link
+    EXPECT_EQ(motor->integer("elec:polePairs"), 2);
+    EXPECT_EQ(motor->real("elec:gearRatio"), 1.0);  // the fallback
+    EXPECT_EQ(motor->token("elec:motorType"), "dc_brushed");
+    EXPECT_EQ(view.signalInstanceName(motor->rel("elec:joint")[0]), "wheel_joint");
+    const SchemaInstance* bus = only(w, "ElectricalBusAPI_1");
+    ASSERT_NE(bus, nullptr);
+    EXPECT_EQ(view.primPath(bus->prim), "/bot/power/bus");
+    EXPECT_EQ(motor->rel("elec:powerPort")[0], bus->prim);
+    // Applying it twice is refused: the motor is there already.
+    auto again = applyOverlay(*model, overlay.string());
+    ASSERT_FALSE(again);
+    EXPECT_NE(again.error().find("already has ElectricalMotorAPI_1"), std::string::npos)
+        << again.error();
+}
+
+TEST(Overlay, RefusesMistakesTogetherAndLeavesTheModelAsItWas) {
+    auto model = loadStage(writeText("powered.usda", kPowered).string());
+    ASSERT_TRUE(model) << model.error();
+    const std::size_t prims = model->scene.prims.size();
+    const std::size_t instances = model->world.schemaInstances.size();
+    const std::filesystem::path overlay = writeText("bad.overlay.yaml", R"(schema_version: 1
+apply:
+  - prim: no_such_link
+    schemas: { ElectricalLoadAPI_1: { elec:load:power: 5 } }
+  - create: power/heater
+    schemas:
+      ElectricalLoadAPI_1: { elec:load:power: 5, elec:load:colour: red, elec:powerPort: nowhere }
+      HeaterAPI_1: {}
+  - create: power/fan
+    schemas:
+      ElectricalLoadAPI_1: { elec:load:power: lots, elec:load:model: magic }
+)");
+    auto applied = applyOverlay(*model, overlay.string());
+    ASSERT_FALSE(applied);
+    const std::string& e = applied.error();
+    EXPECT_NE(e.find("no_such_link is not a link, joint, sensor or prim"), std::string::npos) << e;
+    EXPECT_NE(e.find("elec:load:colour is not a property of ElectricalLoadAPI_1"),
+              std::string::npos)
+        << e;
+    EXPECT_NE(e.find("nowhere is not a link"), std::string::npos) << e;
+    EXPECT_NE(e.find("HeaterAPI_1 is not a registered schema"), std::string::npos) << e;
+    EXPECT_NE(e.find("/bot/power/fan: elec:load:power"), std::string::npos) << e;
+    EXPECT_EQ(model->scene.prims.size(), prims);
+    EXPECT_EQ(model->world.schemaInstances.size(), instances);
+
+    auto version =
+        applyOverlay(*model, writeText("v2.yaml", "schema_version: 2\napply: []\n").string());
+    ASSERT_FALSE(version);
+    EXPECT_NE(version.error().find("schema_version must be 1"), std::string::npos);
 }
 
 }  // namespace
