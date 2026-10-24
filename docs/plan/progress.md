@@ -84,7 +84,7 @@ flowchart TB
         H2["H2 determinism check"]:::done
         H5["H5 Python bindings"]:::done
         H7["H7 electrical slice<br/>(skipped: v0.3)"]:::done
-        H10["H10 v0.2 release"]:::todo
+        H10["H10 release prepared<br/>(owner publishes)"]:::now
     end
 
     A --> B --> G
@@ -100,6 +100,14 @@ flowchart TB
     classDef blocked fill:#8e1519,stroke:#f85149,color:#fff
     classDef todo fill:#30363d,stroke:#6e7681,color:#c9d1d9
 ```
+
+## v0.2 status (2026-10-25)
+
+Every v0.2 item is done or moved to v0.3 with a reason (below). Release notes, acceptance
+evidence and the Gazebo Jetty comparison are in `docs/release/v0.2.0.md` and
+`docs/release/v0.2.0-comparison.md`. Criteria 2 to 9 are met. **Criterion 1 is not:** a
+10-minute Nav2 patrol through ros2_control did not get past Nav2's start-up on 2026-10-25
+(known issue). Publishing (merging into `main`, tagging) stays with the owner.
 
 ## Defaults taken during the autonomous run
 
