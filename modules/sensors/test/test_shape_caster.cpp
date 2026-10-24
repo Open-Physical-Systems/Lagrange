@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <numbers>
 #include <random>
 #include <vector>
 
@@ -173,6 +174,89 @@ TEST(ShapeCaster, IsExactFarFromTheRegionOrigin) {
     EXPECT_EQ(mismatches(caster, shapes, {{far[0], far[1], far[2] + 0.5}}, random, 20'000, hits),
               0);
     EXPECT_GT(hits, 10'000);
+}
+
+// Roadmap 0.2-C4: the SceneQuery side of the caster.
+TEST(SceneQuery, RayHitsNameTheShapeBruteForceFinds) {
+    std::mt19937_64 random(17);
+    const auto shapes = scene(random, 300, {0.0, 0.0, 0.0});
+    ShapeCaster caster;
+    caster.update(shapes);
+    int hits = 0;
+    for (int r = 0; r < 20'000; ++r) {
+        const std::array<double, 3> origin{0.3, -0.2, 0.5};
+        const std::array<double, 3> dir = randomDirection(random);
+        double nearest = kNoHit;
+        std::uint32_t shape = services::RayHit::kNone;
+        for (std::uint32_t k = 0; k < shapes.size(); ++k) {
+            const double t = raycast(shapes[k].type, shapes[k].size, shapes[k].pose, origin, dir);
+            if (t < nearest) {  // ascending k: the lowest index wins a tie
+                nearest = t;
+                shape = k;
+            }
+        }
+        const services::RayHit hit = caster.castHit(origin, dir);
+        ASSERT_EQ(hit.shape, shape) << "ray " << r;
+        ASSERT_EQ(hit.distance, nearest) << "ray " << r;
+        hits += hit.hit() ? 1 : 0;
+        // Through the interface, with a range limit.
+        const services::SceneQuery& query = caster;
+        const services::RayHit limited = query.ray(origin, dir, 5.0);
+        EXPECT_EQ(limited.hit(), hit.hit() && hit.distance <= 5.0);
+    }
+    EXPECT_GT(hits, 10'000);
+}
+
+TEST(SceneQuery, DistanceToEachShapeKind) {
+    const Pose at{{1.0, 2.0, 3.0}, {1, 0, 0, 0}};
+    // Turned 90 degrees about z: local x is world y.
+    const Pose turned{
+        {0.0, 0.0, 0.0},
+        {std::cos(0.25 * std::numbers::pi), 0.0, 0.0, std::sin(0.25 * std::numbers::pi)}};
+    EXPECT_NEAR(distanceToShape(ShapeType::Sphere, {0.5, 0, 0}, at, {1.0, 2.0, 5.0}), 1.5, 1e-12);
+    EXPECT_EQ(distanceToShape(ShapeType::Sphere, {0.5, 0, 0}, at, {1.2, 2.0, 3.0}), 0.0);
+    // Box with half extents 2 (x) and 0.5 (y), turned: it is long along world y.
+    EXPECT_NEAR(distanceToShape(ShapeType::Box, {2.0, 0.5, 0.5}, turned, {0.0, 3.0, 0.0}), 1.0,
+                1e-12);
+    EXPECT_NEAR(distanceToShape(ShapeType::Box, {2.0, 0.5, 0.5}, turned, {3.0, 0.0, 0.0}), 2.5,
+                1e-12);
+    // Corner: from (1.5, 2.5, 0) to the corner (0.5, 2, 0) of the turned box.
+    EXPECT_NEAR(distanceToShape(ShapeType::Box, {2.0, 0.5, 0.5}, turned, {1.5, 2.5, 0.0}),
+                std::hypot(1.0, 0.5), 1e-12);
+    // Capsule radius 0.2, half length 1 along z: beyond the cap, and beside the side.
+    EXPECT_NEAR(distanceToShape(ShapeType::Capsule, {0.2, 1.0, 0}, Pose{}, {0, 0, 2.0}), 0.8,
+                1e-12);
+    EXPECT_NEAR(distanceToShape(ShapeType::Capsule, {0.2, 1.0, 0}, Pose{}, {1.0, 0, 0.5}), 0.8,
+                1e-12);
+    // Cylinder radius 0.2, half length 1: off the rim diagonally.
+    EXPECT_NEAR(distanceToShape(ShapeType::Cylinder, {0.2, 1.0, 0}, Pose{}, {0.5, 0, 1.4}),
+                std::hypot(0.3, 0.4), 1e-12);
+    // The ground: height above it, zero below.
+    EXPECT_NEAR(distanceToShape(ShapeType::Plane, {0, 0, 0}, Pose{}, {7, -3, 0.25}), 0.25, 1e-12);
+    EXPECT_EQ(distanceToShape(ShapeType::Plane, {0, 0, 0}, Pose{}, {7, -3, -1.0}), 0.0);
+}
+
+TEST(SceneQuery, OverlapsMatchEveryShapeTested) {
+    std::mt19937_64 random(19);
+    const auto shapes = scene(random, 400, {0.0, 0.0, 0.0});
+    ShapeCaster caster;
+    caster.update(shapes);
+    std::uniform_real_distribution<double> spread(-22.0, 22.0);
+    std::uniform_real_distribution<double> reach(0.0, 3.0);
+    std::size_t found = 0;
+    for (int q = 0; q < 2000; ++q) {
+        const std::array<double, 3> center{spread(random), spread(random), 0.2 + reach(random)};
+        const double radius = reach(random);
+        std::vector<std::uint32_t> expected;
+        for (std::uint32_t k = 0; k < shapes.size(); ++k) {
+            if (distanceToShape(shapes[k].type, shapes[k].size, shapes[k].pose, center) <= radius) {
+                expected.push_back(k);
+            }
+        }
+        ASSERT_EQ(caster.overlapSphere(center, radius), expected) << "query " << q;
+        found += expected.size();
+    }
+    EXPECT_GT(found, 2000U) << "the queries reach shapes, not only the ground";
 }
 
 TEST(ShapeCaster, BoundingRadiusContainsEveryShape) {
