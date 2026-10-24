@@ -191,6 +191,29 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_AMR_POWERED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive_powered.usda"
             LAGRANGE_TEST_WAREHOUSE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.usda"
     )
+    # The arm with ros2_control in the loop: the standard spawner and joint_trajectory_controller.
+    find_package(trajectory_msgs REQUIRED)
+    ament_add_gtest(
+        test_arm
+        test/test_arm.cpp
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal"
+        TIMEOUT 180
+    )
+    target_link_libraries(
+        test_arm
+        lagrange_server
+        rclcpp::rclcpp
+        ${trajectory_msgs_TARGETS}
+    )
+    target_compile_definitions(
+        test_arm
+        PRIVATE
+            LAGRANGE_TEST_ARM6_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.urdf"
+            LAGRANGE_TEST_ARM6_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.overlay.yaml"
+            LAGRANGE_TEST_ARM6_CONTROLLERS="${CMAKE_CURRENT_SOURCE_DIR}/../demos/config/arm6_controllers.yaml"
+            LAGRANGE_TEST_WORKCELL_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_arm6.urdf"
+    )
+    lagrange_target_defaults(test_arm)
     lagrange_target_defaults(test_server)
     # The installed tool end to end: exit 0 for the valid example, 1 for an invalid one.
     set(_lagrange_cli_robot

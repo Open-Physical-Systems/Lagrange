@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<!-- workcell_arm6: fixed scenery for the sample arm (docs/design/robot-classes.md §4): a table in
+     front of it with a pick station and a place station marked on the top. The root link
+     "world" makes it static. -->
+<robot name="workcell_arm6">
+  <material name="table"><color rgba="0.55 0.45 0.35 1"/></material>
+  <material name="station"><color rgba="0.85 0.75 0.2 1"/></material>
+  <link name="world"/>
+  <joint name="world_to_table" type="fixed">
+    <parent link="world"/>
+    <child link="table"/>
+    <origin xyz="0.55 0 0.15"/>
+  </joint>
+  <link name="table">
+    <visual><geometry><box size="0.4 0.9 0.3"/></geometry><material name="table"/></visual>
+    <collision><geometry><box size="0.4 0.9 0.3"/></geometry></collision>
+  </link>
+  <joint name="table_to_pick" type="fixed">
+    <parent link="table"/>
+    <child link="pick_station"/>
+    <origin xyz="0 0.25 0.155"/>
+  </joint>
+  <link name="pick_station">
+    <visual><geometry><box size="0.1 0.1 0.01"/></geometry><material name="station"/></visual>
+  </link>
+  <joint name="table_to_place" type="fixed">
+    <parent link="table"/>
+    <child link="place_station"/>
+    <origin xyz="0 -0.25 0.155"/>
+  </joint>
+  <link name="place_station">
+    <visual><geometry><box size="0.1 0.1 0.01"/></geometry><material name="station"/></visual>
+  </link>
+</robot>

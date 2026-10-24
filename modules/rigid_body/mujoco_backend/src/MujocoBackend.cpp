@@ -109,7 +109,8 @@ Status MujocoBackend::declare(const WorldView& world, const ModuleConfig& config
             joints_.push_back(s);
             continue;
         }
-        s.torque = declarer.input(flowInput(base + "/torque", SignalType::Scalar, effort, false));
+        // Optional: an actuated joint that nothing drives (a robot without a controller) is free.
+        s.torque = declarer.input(flowInput(base + "/torque", SignalType::Scalar, effort, true));
         s.loadTorque =
             declarer.input(flowInput(base + "/load_torque", SignalType::Scalar, effort, true));
         s.acceleration = declarer.output(spec(base + "/acceleration", SignalType::Scalar,
@@ -147,6 +148,9 @@ Status MujocoBackend::declare(const WorldView& world, const ModuleConfig& config
 
 Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, SignalBus& bus) {
     mjSpec* spec = mj_makeSpec();
+    // The world's angles (joint limits) are radians; MuJoCo's compiler reads degrees by default,
+    // as MJCF does.
+    spec->compiler.degree = 0;
     const Duration dt = config.dt().value_or(preferredStep());
     spec->option.timestep = dt.seconds();
     const std::array<double, 3> gravity = world.gravityLocal();

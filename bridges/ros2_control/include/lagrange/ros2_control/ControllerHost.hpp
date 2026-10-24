@@ -49,6 +49,8 @@ struct ServoGains {
     double velocityI{20.0};
     double positionP{100.0};
     double positionD{10.0};
+    /// Position integral (N·m per rad·s): holds a joint against a steady load such as gravity.
+    double positionI{0.0};
 };
 
 struct ControlJoint {

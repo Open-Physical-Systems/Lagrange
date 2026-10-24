@@ -1,0 +1,45 @@
+# ros2_control for the sample arm (lagrange_server --ros2-control): the controller manager runs
+# inside the simulator in lockstep at 1 kHz, with lagrange_ros2_control/LagrangeSystem as
+# hardware (position servos in the drives, gains in arm6.urdf).
+controller_manager:
+  ros__parameters:
+    update_rate: 1000  # Hz
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+    arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+    gripper_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+arm_controller:
+  ros__parameters:
+    joints:
+      - shoulder_pan_joint
+      - shoulder_lift_joint
+      - elbow_joint
+      - wrist_1_joint
+      - wrist_2_joint
+      - wrist_3_joint
+    command_interfaces: [position]
+    state_interfaces: [position, velocity]
+    # Path and goal tolerances (rad): a joint that lags its trajectory by more than this, for
+    # example because its motor derates, aborts the goal with a tolerance violation.
+    constraints:
+      stopped_velocity_tolerance: 0.05
+      goal_time: 1.0
+      shoulder_pan_joint: {trajectory: 0.15, goal: 0.02}
+      shoulder_lift_joint: {trajectory: 0.15, goal: 0.02}
+      elbow_joint: {trajectory: 0.15, goal: 0.02}
+      wrist_1_joint: {trajectory: 0.2, goal: 0.03}
+      wrist_2_joint: {trajectory: 0.2, goal: 0.03}
+      wrist_3_joint: {trajectory: 0.2, goal: 0.03}
+
+gripper_controller:
+  ros__parameters:
+    joints: [finger_left_joint, finger_right_joint]
+    command_interfaces: [position]
+    state_interfaces: [position, velocity]
+    constraints:
+      goal_time: 1.0
+      finger_left_joint: {goal: 0.003}
+      finger_right_joint: {goal: 0.003}
