@@ -21,6 +21,7 @@ void usage() {
         "(.mcap)\n"
         "  --scope <a,b,...>      open these signals in the scope at start-up\n"
         "  --workspace <name>     workspace to show at start-up: scene, domains or signals\n"
+        "  --shading <mode>       viewport shading at start-up: lit, unlit or thermal\n"
         "  --launcher             start on the launcher (the default when no --connect is given)\n"
         "  --start-local          press the launcher's Start local simulator: run lagrange_server\n"
         "                         on the --connect endpoint (or the default socket) and connect\n"
@@ -92,6 +93,8 @@ int main(int argc, char** argv) {
             options.applyProfile = true;
         } else if (arg == "--workspace") {
             options.workspace = value();
+        } else if (arg == "--shading") {
+            options.shading = value();
         } else if (arg == "--open") {
             options.openPath = value();
         } else if (arg == "--scope") {

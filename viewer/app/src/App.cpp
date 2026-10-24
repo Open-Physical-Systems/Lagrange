@@ -622,6 +622,13 @@ public:
     }
     void setInitialSelection(std::string path) { selectPath_ = std::move(path); }
     void setCursors(bool on) { cursorsWanted_ = on; }
+    void setShading(const std::string& name) {
+        if (name == "unlit") {
+            renderOptions_.shading = Shading::Unlit;
+        } else if (name == "thermal") {
+            renderOptions_.shading = Shading::Thermal;  // falls back to Lit without thermal nodes
+        }
+    }
     void setProfileEdits(std::vector<std::pair<std::string, bool>> edits, bool apply) {
         domainEdits_ = std::move(edits);
         applyProfile_ = apply;
@@ -807,6 +814,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         }
         ui.setInitialSelection(options.selectPath);
         ui.setCursors(options.cursors);
+        ui.setShading(options.shading);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize =
@@ -1130,6 +1138,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setWorkspace(workspace);
         ui.setInitialSelection(options.selectPath);
         ui.setCursors(options.cursors);
+        ui.setShading(options.shading);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);
         // The file dialog reports its result on a callback that may run on another thread.
         struct Chosen {

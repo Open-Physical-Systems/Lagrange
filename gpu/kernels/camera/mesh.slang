@@ -64,6 +64,14 @@ float4 fsMain(VertexOutput input) : SV_Target
     return float4(shade(input.normal), push.baseColor.a);
 }
 
+// The viewport's Unlit and false-colour shading: the base colour as it is, encoded for
+// display, so that a colour map reads the same on every face.
+[shader("fragment")]
+float4 fsUnlit(VertexOutput input) : SV_Target
+{
+    return float4(pow(saturate(push.baseColor.rgb), float3(1.0 / 2.2)), push.baseColor.a);
+}
+
 // The camera sensor draws twice: the image, multisampled and averaged so that a pixel
 // integrates over its area; then depth and instance id at one sample, so that an edge pixel
 // never mixes two surfaces.

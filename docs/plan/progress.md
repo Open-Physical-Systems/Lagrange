@@ -42,7 +42,7 @@ flowchart TB
         B6["B6 WorldView"]:::done
         B7["B7 sample assets"]:::done
         B2["B2 openusd_vendor<br/>B4 schemas · B5 stage loader"]:::done
-        B8["B8 collision bake<br/>(v0.3, with mesh colliders)"]:::todo
+        B8["B8 collision bake<br/>(done in v0.3, with mesh colliders)"]:::done
     end
     subgraph C["C · rigid body"]
         C1_3["C1–C3 MuJoCo backend<br/>and substitutes"]:::done
@@ -60,7 +60,7 @@ flowchart TB
         E4_5["E4 recorder · E5 profiles"]:::done
         E7["E7 lagrange CLI"]:::done
         E3["E3 consumer rings"]:::done
-        E6["E6 scene editing<br/>(with v0.3 motors)"]:::todo
+        E6["E6 scene editing<br/>(done in v0.3, with motors)"]:::done
         E8["E8 replay in C++<br/>(v0.3, with the replay substitute)"]:::todo
     end
     subgraph F["F · ROS 2"]
@@ -225,8 +225,11 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
    ratings) and attributes motor/battery/load/bus/thermal signals to their prims; so the
    Electrical workspace (Network, Schematic, Scopes) runs on the simulator, not only the mock.
    Scopes as the design lists them: bus voltage, the motors' q currents, the source current.
-   Not yet: the viewport's thermal false-colour shading, the design's fuse and DC-DC nodes
-   (no such components in the samples), a battery power signal)
+   The viewport's thermal false-colour shading followed the same day: the design tokens'
+   inferno map over the thermal nodes' temperatures, each mesh taking its nearest ancestor's,
+   with a legend; Unlit shading too; `--shading`. Not yet: the design's fuse and DC-DC nodes
+   (no such components in the samples), a battery power signal, Wireframe and Collision
+   shading)
 
 ### Merged under the autonomous mandate
 

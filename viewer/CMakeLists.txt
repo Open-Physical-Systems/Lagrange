@@ -40,7 +40,10 @@ lagrange_target_vulkan_warnings(lagrange_viewer_render)
 target_include_directories(lagrange_viewer_render PUBLIC render/include)
 target_link_libraries(
     lagrange_viewer_render
-    PUBLIC lagrange_viewer_client lagrange_gpu::lagrange_gpu lagrange_gpu::lagrange_gpu_raster
+    PUBLIC
+        lagrange_viewer_client
+        lagrange_gpu::lagrange_gpu
+        lagrange_gpu::lagrange_gpu_raster
 )
 set(_kernels "${LAGRANGE_GPU_KERNELS_DIR}")
 lagrange_add_slang_shader(
@@ -56,6 +59,13 @@ lagrange_add_slang_shader(
     ENTRY fsMain
     STAGE fragment
     SYMBOL kMeshFragment
+)
+lagrange_add_slang_shader(
+    lagrange_viewer_render
+    SOURCE ${_kernels}/camera/mesh.slang
+    ENTRY fsUnlit
+    STAGE fragment
+    SYMBOL kMeshUnlitFragment
 )
 lagrange_add_slang_shader(
     lagrange_viewer_render
@@ -164,6 +174,7 @@ if(BUILD_TESTING)
         client/test/test_viewer_client.cpp
         render/test/test_camera.cpp
         render/test/test_picking.cpp
+        render/test/test_thermal.cpp
         TIMEOUT 120
     )
     target_link_libraries(
