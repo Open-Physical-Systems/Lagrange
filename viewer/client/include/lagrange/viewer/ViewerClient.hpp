@@ -608,6 +608,9 @@ public:
     /// Asks the server to adopt `yaml` and restart the run at t = 0. A refusal arrives as a
     /// Notice; success arrives as a new profile().
     void applyProfile(const std::string& yaml);
+    /// Sets a number of a prim's schema in the running simulation (SetAttribute). A refusal
+    /// arrives as an error notice; `save` also writes the server's session layer.
+    void setAttribute(std::uint32_t prim, const std::string& name, double value, bool save);
 
 private:
     void run();

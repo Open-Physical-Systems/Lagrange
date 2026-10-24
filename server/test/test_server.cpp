@@ -1,6 +1,7 @@
 // The server end to end over a real Unix socket, as the viewer sees it.
 #include "lagrange/proto/Connection.hpp"
 #include "lagrange/server/Server.hpp"
+#include "lagrange/stage/Stage.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
 
 #include <chrono>
@@ -345,6 +346,141 @@ TEST_F(ArmServerTest, CameraFramesCarryTheWristCameraImage) {
     EXPECT_EQ(frame.image().height(), 480U);
     EXPECT_EQ(frame.image().encoding(), "rgba8");
     EXPECT_EQ(frame.image().data().inline_().size(), 640U * 480U * 4U);
+}
+
+/// The sample AMR with its power system: motors whose parameters can be edited.
+class PoweredServerTest : public ServerTest {
+protected:
+    void adjust(ServerOptions& options) override {
+        options.overlayPath = LAGRANGE_TEST_AMR_OVERLAY;
+        options.ambientTemperatureK = 298.15;
+        options.sessionPath = directory_ + "/session.usda";
+    }
+
+    std::uint32_t primNamed(const std::string& name) {
+        v1::Envelope ask = command(99);
+        ask.mutable_command()->mutable_request_snapshot();
+        send(ask);
+        EXPECT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_snapshot(); }));
+        for (const v1::Envelope& e : received_) {
+            if (e.has_snapshot()) {
+                for (const v1::Prim& prim : e.snapshot().prims()) {
+                    if (prim.name() == name) {
+                        return prim.id();
+                    }
+                }
+            }
+        }
+        return 0xFFFF'FFFFU;
+    }
+
+    v1::CommandResult run(v1::Envelope command) {
+        const std::uint64_t id = command.command().request_id();
+        send(command);
+        EXPECT_TRUE(pumpUntil([id](const v1::Envelope& e) {
+            return e.has_command_result() && e.command_result().request_id() == id;
+        }));
+        return received_.back().command_result();
+    }
+
+    void stepFor(std::int64_t ns, std::uint64_t id) {
+        v1::Envelope step = command(id);
+        step.mutable_command()->mutable_step()->set_duration_ns(ns);
+        EXPECT_TRUE(run(step).ok());
+    }
+};
+
+TEST_F(PoweredServerTest, AnEditChangesAMotorParameterInTheRunningSimulation) {
+    // E6: the inspector reads the motor's parameters, edits one, and the run goes on with it.
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    const std::uint32_t motor = primNamed("left_drive_motor");
+    ASSERT_NE(motor, 0xFFFF'FFFFU);
+    v1::Envelope get = command(10);
+    get.mutable_command()->mutable_get_attributes()->add_prims(motor);
+    const v1::CommandResult listed = run(get);
+    ASSERT_TRUE(listed.ok()) << listed.error();
+    bool found = false;
+    for (const v1::Attribute& a : listed.attributes().items(0).attributes()) {
+        if (a.name() == "elec:windingResistance") {
+            found = true;
+            EXPECT_DOUBLE_EQ(a.real(), 0.12);
+            EXPECT_TRUE(a.editable());
+            EXPECT_EQ(a.unit().mass(), 1);  // ohm: kg·m²·s⁻³·A⁻²
+            EXPECT_EQ(a.unit().current(), -2);
+            EXPECT_FALSE(a.doc().empty());
+        }
+        if (a.name() == "elec:joint") {
+            EXPECT_EQ(a.targets().prims_size(), 1);  // a relationship, to the wheel's prim
+        }
+    }
+    ASSERT_TRUE(found);
+
+    stepFor(2'000'000'000, 11);  // the demo drive at speed
+    const double lossBefore = server_->read("motor/left_drive_motor/loss_power").at(0);
+    const std::int64_t before = server_->simTime().ns;
+
+    v1::Envelope set = command(12);
+    v1::SetAttribute& edit = *set.mutable_command()->mutable_set_attribute();
+    edit.set_prim(motor);
+    edit.mutable_attribute()->set_name("elec:windingResistance");
+    edit.mutable_attribute()->set_real(1.2);
+    edit.set_save_to_session_layer(true);
+    const v1::CommandResult applied = run(set);
+    ASSERT_TRUE(applied.ok()) << applied.error();
+    EXPECT_EQ(server_->simTime().ns, before) << "the run goes on, not restarted";
+
+    stepFor(500'000'000, 13);
+    const double lossAfter = server_->read("motor/left_drive_motor/loss_power").at(0);
+    RecordProperty("loss_before_W", std::to_string(lossBefore));
+    RecordProperty("loss_after_W", std::to_string(lossAfter));
+    EXPECT_GT(lossAfter, 3.0 * lossBefore) << "ten times the resistance, more copper loss";
+
+    // Read back, and from the session layer.
+    const v1::CommandResult again = run(get);
+    for (const v1::Attribute& a : again.attributes().items(0).attributes()) {
+        if (a.name() == "elec:windingResistance") {
+            EXPECT_DOUBLE_EQ(a.real(), 1.2);
+        }
+    }
+    auto saved = stage::loadStage(directory_ + "/session.usda");
+    ASSERT_TRUE(saved) << saved.error();
+    bool savedValue = false;
+    for (const SchemaInstance& s : saved->world.schemaInstances) {
+        if (s.schema == "ElectricalMotorAPI_1" &&
+            saved->world.prims.paths[s.prim.index].ends_with("left_drive_motor")) {
+            savedValue = s.real("elec:windingResistance") == 1.2;
+        }
+    }
+    EXPECT_TRUE(savedValue);
+}
+
+TEST_F(PoweredServerTest, BadEditsAreRefusedAndChangeNothing) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    const std::uint32_t motor = primNamed("left_drive_motor");
+    const auto edit = [&](const char* name, double value, std::uint64_t id) {
+        v1::Envelope set = command(id);
+        v1::SetAttribute& e = *set.mutable_command()->mutable_set_attribute();
+        e.set_prim(motor);
+        e.mutable_attribute()->set_name(name);
+        e.mutable_attribute()->set_real(value);
+        return run(set);
+    };
+    // The loader's check: a fraction.
+    const v1::CommandResult fraction = edit("elec:gearEfficiency", 1.5, 20);
+    EXPECT_FALSE(fraction.ok());
+    EXPECT_NE(fraction.error().find("within 0 to 1"), std::string::npos) << fraction.error();
+    // The module's check, at the rebuild: a motor that cannot carry current.
+    const v1::CommandResult zero = edit("elec:windingResistance", 0.0, 21);
+    EXPECT_FALSE(zero.ok());
+    EXPECT_NE(zero.error().find("was not applied"), std::string::npos) << zero.error();
+    const v1::CommandResult unknown = edit("elec:noSuchThing", 1.0, 22);
+    EXPECT_FALSE(unknown.ok());
+    v1::Envelope move = command(23);
+    move.mutable_command()->mutable_set_transform()->set_prim(motor);
+    EXPECT_FALSE(run(move).ok());
+    // The run still works, with the old value.
+    stepFor(100'000'000, 24);
+    EXPECT_GT(server_->simTime().ns, 0);
 }
 
 }  // namespace

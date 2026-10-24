@@ -91,6 +91,8 @@ void printServerOptions(std::FILE* out) {
         "            exact CPU caster; gpu the compute kernel on a hardware GPU\n"
         "  --gpu DEVICE  Vulkan device for the lidar and cameras (index or part of its name)\n"
         "  --physics mujoco|jolt  rigid-body backend (default mujoco)\n"
+        "  --session FILE.usda  where the viewer's edits are saved when it asks (default:\n"
+        "            $XDG_STATE_HOME/lagrange/<robot>.session.usda)\n"
         "  --rtf     real-time factor, 0 = as fast as possible (default 1)\n"
         "  --paused  start paused; press Play in the viewer\n"
         "  --no-ros  run without the ROS 2 bridge\n"
@@ -177,6 +179,12 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             } else {
                 return "--lidar needs auto, cpu or gpu";
             }
+        } else if (arg == "--session") {
+            const char* path = value();
+            if (path == nullptr) {
+                return "--session needs a file";
+            }
+            options.sessionPath = path;
         } else if (arg == "--physics") {
             const char* text = value();
             const std::string_view backend = text != nullptr ? text : "";

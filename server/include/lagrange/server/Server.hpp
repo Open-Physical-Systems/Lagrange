@@ -63,6 +63,9 @@ struct ServerOptions {
     /// `lagrange determinism`.
     bool cameras{true};
     std::string physics{"mujoco"};  // rigid-body backend: "mujoco" or "jolt" (--physics)
+    /// Where edits from the viewer are saved when it asks (SetAttribute save_to_session_layer):
+    /// the edited model as a USD layer. Empty: $XDG_STATE_HOME/lagrange/<robot>.session.usda.
+    std::string sessionPath;
 };
 
 /// The simulation server (roadmap 0.2-E1, E2): it loads a robot, wires the MuJoCo backend and

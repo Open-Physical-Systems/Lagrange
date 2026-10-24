@@ -103,6 +103,12 @@ bool Segmented(const char* id, const char* const* options, int count, int* index
 bool PropertyRow(const char* label, const char* value, const char* unit, bool link = false,
                  const char* tooltip = nullptr);
 
+/// A PropertyRow whose value can be typed: the same 22 px field on bg0 with the unit inside on
+/// the right; `edited` (an unapplied change) gives it the accent border (ui-conventions §2).
+/// Returns true when the text changed.
+bool PropertyEdit(const char* label, char* buffer, std::size_t size, const char* unit, bool edited,
+                  const char* tooltip = nullptr);
+
 /// Three read-only number fields with coloured X / Y / Z labels.
 void Vec3Field(const char* label, const double value[3], const char* format = "%.3f");
 

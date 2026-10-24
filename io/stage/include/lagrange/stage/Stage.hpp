@@ -3,6 +3,7 @@
 #include "lagrange/module/Expected.hpp"
 #include "lagrange/world/Model.hpp"
 
+#include <optional>
 #include <string>
 
 namespace lagrange::stage {
@@ -42,6 +43,26 @@ struct ReadOptions {
 /// Model::notes; anything that cannot be simulated is an error naming the prim.
 [[nodiscard]] Expected<Model, std::string> loadStage(const std::string& path,
                                                      const ReadOptions& options = {});
+
+/// What the schema registry says about one attribute of an applied schema of ours.
+struct SchemaAttribute {
+    std::string unit;  // the lagrangeUnit text ("ohm", "N.m/A"); empty when dimensionless/none
+    std::string doc;
+    std::string type;  // the USD value type: "double", "float", "int", "token", "double[]", ...
+};
+
+/// `attribute` of `schema` ("ElectricalMotorAPI_1", "elec:windingResistance"); for a
+/// multiple-apply schema the attribute names its instance ("thermal:link:to_chassis:target").
+/// Empty when the schema or the attribute is not registered.
+[[nodiscard]] std::optional<SchemaAttribute> schemaAttribute(const std::string& schema,
+                                                             const std::string& instance,
+                                                             const std::string& attribute);
+
+/// The loader's value checks for one number (RFC 0002 "Loading": fractions within 0 to 1):
+/// a message when `value` is not acceptable for `attribute` of `schema`.
+[[nodiscard]] std::optional<std::string> checkSchemaReal(const std::string& schema,
+                                                         const std::string& attribute,
+                                                         double value);
 
 /// Applies an overlay file (docs/design/formats.md §9) to a loaded model: the project's API
 /// schemas by name, for robots from formats without them (URDF, SDFormat, MJCF) or added to a USD

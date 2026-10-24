@@ -201,7 +201,16 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
    time samples) and `migrate_profile` (version 0, no `schema_version`, to 1, comments kept);
    the stage loader notes older versions with the command and refuses two versions on a prim;
    the sample assets and example profiles are checked to be current)
-13. E6 scene editing; B8 collision bake
+13. E6 scene editing (**done** 2026-10-25: `GetAttributes` lists every schema value with
+   unit and doc; `SetAttribute` checks a number as the loader would, rebuilds the run and
+   carries its state across (scheduler save/restore), so an edit applies from the next step:
+   the AMR's winding resistance ×10 raised its copper loss from 0.03 to 0.9 W mid-run;
+   `save_to_session_layer` writes the edited model as a USD layer; the inspector edits numbers
+   with Apply and Revert. Differences from the design, to confirm with the owner: the footer
+   says "applies to the running simulation" (the design's "applies on next run" predates the
+   server applying edits live), and nothing in the design lets the user ask for the session
+   save yet. `SetTransform` is refused: the backends cannot set a pose yet);
+   B8 collision bake (next)
 14. Viewer additions (schematic, electrical scopes)
 
 ### Merged under the autonomous mandate
