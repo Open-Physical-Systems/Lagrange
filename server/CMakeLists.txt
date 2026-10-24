@@ -114,8 +114,12 @@ install(
     TARGETS lagrange_server_main lagrange_cli
     RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
+# The library is exported so that programs can build a run with their own modules until
+# plugins load through the C ABI (docs/guide/writing-a-module.md).
+install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
 install(
     TARGETS lagrange_server
+    EXPORT export_${PROJECT_NAME}
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin
@@ -186,4 +190,6 @@ if(BUILD_TESTING)
     )
 endif()
 
+ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
+ament_export_dependencies(lagrange_core lagrange_proto)
 ament_package()

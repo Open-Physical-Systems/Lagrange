@@ -111,6 +111,11 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument(
                 "rtf", default_value="1.0", description="Real-time factor (0 = as fast as possible)"
             ),
+            DeclareLaunchArgument(
+                "lidar",
+                default_value="auto",
+                description="Where lidars cast: auto, cpu or gpu (lagrange_server --lidar)",
+            ),
             Node(
                 package="lagrange_server",
                 executable="lagrange_server",
@@ -124,6 +129,11 @@ def generate_launch_description() -> LaunchDescription:
                     endpoint,
                     "--rtf",
                     LaunchConfiguration("rtf"),
+                    "--lidar",
+                    LaunchConfiguration("lidar"),
+                    # Nav2 takes a while to start; the robot must still be at the start pose
+                    # (the map's origin) when it does, not out on the demo figure-eight.
+                    "--no-demo",
                 ],
             ),
             # Not a ROS node: started as a plain process, so no --ros-args are appended.

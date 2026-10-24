@@ -13,12 +13,14 @@
 import argparse
 import math
 import sys
+import time
 from pathlib import Path
 
 import rclpy
 import yaml
 from ament_index_python.packages import get_package_share_path
 from geometry_msgs.msg import PoseStamped
+from lifecycle_msgs.srv import GetState
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 from nav_msgs.msg import Odometry
 from rclpy.parameter import Parameter
@@ -115,6 +117,29 @@ def pose(navigator: BasicNavigator, x: float, y: float, heading: float) -> PoseS
     return goal
 
 
+def wait_until_active(navigator: BasicNavigator, nodes: list[str]) -> None:
+    """BasicNavigator.waitUntilNav2Active, with a timeout on each get_state call.
+
+    nav2_simple_commander waits for each reply without a timeout, so one lost service response
+    (DDS sometimes drops them while many nodes start at once) blocks the patrol for good.
+    """
+    for name in nodes:
+        client = navigator.create_client(GetState, f"{name}/get_state")
+        while not client.wait_for_service(timeout_sec=1.0):
+            navigator.info(f"{name}/get_state service not available, waiting...")
+        while True:
+            future = client.call_async(GetState.Request())
+            rclpy.spin_until_future_complete(navigator, future, timeout_sec=2.0)
+            result = future.result() if future.done() else None
+            if result is not None and result.current_state.label == "active":
+                break
+            if not future.done():
+                future.cancel()
+            time.sleep(1.0)
+        navigator.destroy_client(client)
+    navigator.info("Nav2 is ready for use!")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Patrol the warehouse with Nav2.")
     parser.add_argument("--rounds", type=int, default=1, help="patrol at least this many rounds")
@@ -134,7 +159,7 @@ def main() -> int:
     )
     # Spun with the navigator: isTaskComplete() spins its node.
     navigator.create_subscription(Odometry, "/odom", watch.check, QoSProfile(depth=10))
-    navigator.waitUntilNav2Active(localizer="map_server")
+    wait_until_active(navigator, ["map_server", "bt_navigator"])
 
     start = navigator.get_clock().now()
     reached = failed = 0

@@ -141,8 +141,10 @@ int validate(const CommandLine& base) {
         for (const auto& issue : check.issues) {
             errors += issue.error ? 1 : 0;
         }
-        std::printf("%s: %s (%zu errors, %zu warnings)\n", path.c_str(),
-                    check.valid ? "valid" : "invalid", errors, check.issues.size() - errors);
+        const std::size_t warnings = check.issues.size() - errors;
+        std::printf("%s: %s (%zu error%s, %zu warning%s)\n", path.c_str(),
+                    check.valid ? "valid" : "invalid", errors, errors == 1 ? "" : "s", warnings,
+                    warnings == 1 ? "" : "s");
         for (const auto& issue : check.issues) {
             std::printf("  %-7s %s%s%s\n", issue.error ? "error" : "warning", issue.pointer.c_str(),
                         issue.pointer.empty() ? "" : ": ", issue.message.c_str());

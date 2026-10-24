@@ -198,6 +198,26 @@ TEST(AmrSimulation, TheDriverMovesTheRobotAndItStaysUpright) {
     EXPECT_NEAR((left + right) / 2.0 * 0.1, 0.6, 0.06);
 }
 
+// --no-demo (the Nav2 launch): the robot waits at its start pose for the first /cmd_vel.
+TEST(AmrSimulation, WithoutTheDemoTheRobotStaysPut) {
+    const Robot robot = amr();
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+    DriveCommand::Settings still;
+    still.demo = false;
+    scheduler.add(std::make_unique<DriveCommand>(still, nullptr));
+    DiffDriveController::Settings settings;
+    settings.leftJoint = robot.actuatedJoints[0];
+    settings.rightJoint = robot.actuatedJoints[1];
+    scheduler.add(std::make_unique<DiffDriveController>(settings));
+    ASSERT_TRUE(scheduler.wire(WorldView(robot.world)));
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{3'000'000'000}).ok());
+    const SignalBus& bus = scheduler.bus();
+    const std::span<const double> pose = bus.readN(bus.find("body/base_link/pose"));
+    EXPECT_LT(std::hypot(pose[0], pose[1]), 0.01);
+    EXPECT_EQ(bus.read(bus.find("base/command/linear_velocity")), 0.0);
+}
+
 /// The sample warehouse authored `offset` away: every fixed link (a joint from "world") moved,
 /// written to `file` the way a hand-made file would hold it, so the large coordinates go through
 /// the parser and its rounding.

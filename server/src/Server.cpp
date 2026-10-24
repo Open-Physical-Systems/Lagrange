@@ -259,7 +259,9 @@ struct Server::Impl {
                     return VelocityCommand{command->linearMps, command->angularRadps};
                 };
             }
-            auto drive = std::make_unique<DriveCommand>(DriveCommand::Settings{}, external);
+            DriveCommand::Settings demo;
+            demo.demo = options.demoDrive;
+            auto drive = std::make_unique<DriveCommand>(demo, external);
             if (driveOut != nullptr) {
                 *driveOut = drive.get();
             }
@@ -965,9 +967,14 @@ struct Server::Impl {
         return options.substituted.contains(std::string(domain));
     }
 
+    /// The stage as profiles name it (ServerOptions::stageName).
+    std::string stageName() const {
+        return options.stageName.empty() ? robot.sourcePath : options.stageName;
+    }
+
     std::string profileYaml() const {
         std::string yaml =
-            "# Lagrange simulation profile\nschema_version: 1\nstage: " + robot.sourcePath +
+            "# Lagrange simulation profile\nschema_version: 1\nstage: " + stageName() +
             "\n\ndomains:\n";
         for (const DomainRow& row : kDomains) {
             if (std::string_view(row.domain) == "rigid_body" && !substituted("rigid_body")) {
@@ -1296,7 +1303,7 @@ struct Server::Impl {
     /// What this server can do with a profile, for checkProfile.
     ProfileContext profileContext() const {
         ProfileContext context;
-        context.stage = options.stageName.empty() ? robot.sourcePath : options.stageName;
+        context.stage = stageName();
         context.modules.insert("rigid_body");
         if (hasSensors()) {
             context.modules.insert("sensors");
@@ -1978,8 +1985,9 @@ Status Server::start() {
     if (s.robot.actuatedJoints.size() == 2) {
         s.log(v1::LOG_LEVEL_INFO, "controller",
               "diff drive on " + s.robot.actuatedJoints[0] + " and " + s.robot.actuatedJoints[1] +
-                  (s.bridge ? "; a figure-eight demo drives until /cmd_vel arrives"
-                            : "; a figure-eight demo drives"));
+                  (!s.options.demoDrive ? "; it stands still until /cmd_vel arrives"
+                   : s.bridge           ? "; a figure-eight demo drives until /cmd_vel arrives"
+                                        : "; a figure-eight demo drives"));
     } else {
         s.log(v1::LOG_LEVEL_WARN, "controller",
               "no demo driver: it needs exactly two actuated wheel joints, the robot has " +
