@@ -1,11 +1,10 @@
 #include "Recorder.hpp"
+#include "lagrange/services/ConsumerRing.hpp"
 
 #include <algorithm>
-#include <condition_variable>
-#include <deque>
 #include <limits>
 #include <map>
-#include <mutex>
+#include <optional>
 #include <set>
 #include <thread>
 #include <vector>
@@ -44,6 +43,13 @@ std::string descriptorSet(const google::protobuf::Descriptor* descriptor) {
 
 }  // namespace
 
+namespace {
+
+// Messages queued for the writer thread: about 100 s of a typical run's blocks.
+constexpr std::size_t kQueueItems = 1024;
+
+}  // namespace
+
 struct Recorder::Impl {
     std::string path;
     mcap::McapWriter writer;
@@ -54,12 +60,11 @@ struct Recorder::Impl {
         std::int64_t timeNs;
         std::string bytes;
     };
-    std::mutex mutex;
-    std::condition_variable wake;
-    std::deque<Item> queue;
-    bool closing{false};
+    // To the writer thread. Bounded with back-pressure (roadmap 0.2-E3): a disk that cannot keep
+    // up slows the run instead of growing memory without limit, and nothing is lost.
+    services::ConsumerRing<Item> queue{kQueueItems, services::Overflow::Block};
     std::thread thread;
-    std::string error;  // the first write error, from the writer thread
+    std::string error;  // the first write error; the writer thread's until it is joined
     std::uint32_t sequence{0};
 
     struct Signal {
@@ -88,23 +93,12 @@ struct Recorder::Impl {
     void push(mcap::ChannelId channel, std::int64_t timeNs, const google::protobuf::Message& m) {
         Item item{channel, timeNs, {}};
         m.SerializeToString(&item.bytes);
-        {
-            const std::lock_guard<std::mutex> lock(mutex);
-            queue.push_back(std::move(item));
-        }
-        wake.notify_one();
+        queue.push(std::move(item));
     }
 
     void run() {
-        std::unique_lock<std::mutex> lock(mutex);
-        for (;;) {
-            wake.wait(lock, [this] { return closing || !queue.empty(); });
-            if (queue.empty() && closing) {
-                return;
-            }
-            Item item = std::move(queue.front());
-            queue.pop_front();
-            lock.unlock();
+        while (std::optional<Item> next = queue.popWait()) {
+            const Item& item = *next;
             mcap::Message message;
             message.channelId = item.channel;
             message.sequence = ++sequence;
@@ -113,7 +107,6 @@ struct Recorder::Impl {
             message.data = reinterpret_cast<const std::byte*>(item.bytes.data());
             message.dataSize = item.bytes.size();
             const mcap::Status status = writer.write(message);
-            lock.lock();
             if (!status.ok() && error.empty()) {
                 error = status.message;
             }
@@ -157,11 +150,7 @@ Recorder::Recorder() : impl_(std::make_unique<Impl>()) {}
 
 Recorder::~Recorder() {
     if (impl_->thread.joinable()) {
-        {
-            const std::lock_guard<std::mutex> lock(impl_->mutex);
-            impl_->closing = true;
-        }
-        impl_->wake.notify_one();
+        impl_->queue.close();
         impl_->thread.join();
         impl_->writer.close();
     }
@@ -244,11 +233,7 @@ Expected<void, std::string> Recorder::finish(SimTime end, record::v1::RunMeta me
     meta.mutable_duration()->set_ns(end.ns);
     // A second RunMeta, now with the duration: readers keep the last one.
     s.push(s.channels.at("/lagrange/meta"), end.ns, meta);
-    {
-        const std::lock_guard<std::mutex> lock(s.mutex);
-        s.closing = true;
-    }
-    s.wake.notify_one();
+    s.queue.close();  // the writer drains what is queued, then stops
     s.thread.join();
     s.writer.close();
     if (!s.error.empty()) {

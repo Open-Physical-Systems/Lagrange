@@ -73,6 +73,7 @@ if(BUILD_TESTING)
             random/test/test_philox.cpp
             scheduler/test/test_scheduler.cpp
             services/test/test_services.cpp
+            services/test/test_consumer_ring.cpp
     )
         get_filename_component(name ${test} NAME_WE)
         ament_add_gtest(${name} ${test})
