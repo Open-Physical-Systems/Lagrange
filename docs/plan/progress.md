@@ -34,7 +34,7 @@ flowchart TB
         A13["A13 coordinates"]:::done
         A14["A14 position-type lint"]:::done
         A11["A11 plugin C ABI v0"]:::done
-        A12["A12 core services"]:::todo
+        A12["A12 core services<br/>(SceneQuery with C4)"]:::done
     end
     subgraph B["B · USD and world"]
         B1["B1 OpenUSD spike"]:::done

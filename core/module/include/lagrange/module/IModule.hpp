@@ -43,6 +43,11 @@ public:
 
     [[nodiscard]] std::span<const SignalSpec> inputs() const { return inputs_; }
     [[nodiscard]] std::span<const SignalSpec> outputs() const { return outputs_; }
+    /// Outputs that modules added before this one have declared, whose names start with
+    /// `prefix`. For collectors such as WrenchSum, which sum what others write: add a
+    /// collector after the modules it collects from. Copies: declaring more signals moves the
+    /// bus's table.
+    [[nodiscard]] std::vector<SignalSpec> declaredOutputs(std::string_view prefix) const;
 
 private:
     friend class Scheduler;

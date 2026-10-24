@@ -44,6 +44,17 @@ SignalId SignalDeclarer::input(SignalSpec spec) {
     return SignalId::input(slot);
 }
 
+std::vector<SignalSpec> SignalDeclarer::declaredOutputs(std::string_view prefix) const {
+    std::vector<SignalSpec> out;
+    for (std::size_t i = 0; i < bus_->signalCount(); ++i) {
+        const SignalSpec& spec = bus_->specAt(i);
+        if (std::string_view(spec.name).starts_with(prefix)) {
+            out.push_back(spec);
+        }
+    }
+    return out;
+}
+
 SignalId SignalDeclarer::output(SignalSpec spec) {
     if (std::string problem = checkSignalName(spec.name); !problem.empty()) {
         problems_.push_back("output: " + problem);

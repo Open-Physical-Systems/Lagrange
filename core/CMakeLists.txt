@@ -14,6 +14,7 @@ set(LAGRANGE_CORE_PARTS
     module
     scheduler
     plugin_abi
+    services
 )
 
 add_library(
@@ -28,6 +29,8 @@ add_library(
     module/src/Module.cpp
     scheduler/src/Scheduler.cpp
     plugin_abi/src/PluginLibrary.cpp
+    services/src/WrenchSum.cpp
+    services/src/Log.cpp
 )
 # xxHash is used header-only (XXH_INLINE_ALL) for state and topology hashes.
 find_path(LAGRANGE_XXHASH_INCLUDE_DIR xxhash.h REQUIRED)
@@ -69,6 +72,7 @@ if(BUILD_TESTING)
             signals/test/test_unit.cpp
             random/test/test_philox.cpp
             scheduler/test/test_scheduler.cpp
+            services/test/test_services.cpp
     )
         get_filename_component(name ${test} NAME_WE)
         ament_add_gtest(${name} ${test})
