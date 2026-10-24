@@ -238,7 +238,9 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
    The viewport's thermal false-colour shading followed the same day: the design tokens'
    inferno map over the thermal nodes' temperatures, each mesh taking its nearest ancestor's,
    with a legend; Unlit shading too; `--shading`. Not yet: the design's fuse and DC-DC nodes
-   (no such components in the samples), Wireframe and Collision shading. The battery's
+   (no such components in the samples), Collision shading (colliders are not in the protocol
+   yet). Wireframe shading followed (a line-fill pipeline where the GPU has fillModeNonSolid,
+   else the menu entry stays disabled). The battery's
    `battery/<b>/power` followed the same day and is the Scopes' third plot, as designed)
 15. E8 replay in the C++ server (**done** 2026-10-25, Q15 decided: `lagrange_server --replay
    run.mcap` and the protocol's OpenRecording; every recorded domain becomes a replay

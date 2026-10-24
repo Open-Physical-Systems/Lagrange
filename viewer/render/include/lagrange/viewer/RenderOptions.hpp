@@ -8,9 +8,10 @@ namespace lagrange::viewer {
 
 /// How the viewport colours meshes (design 02-scene: the shading menu).
 enum class Shading : std::uint8_t {
-    Lit,      ///< Material colour, one directional light and sky ambient.
-    Unlit,    ///< Material colour as it is.
-    Thermal,  ///< Temperature on the design's thermal colour map; unlit.
+    Lit,        ///< Material colour, one directional light and sky ambient.
+    Unlit,      ///< Material colour as it is.
+    Thermal,    ///< Temperature on the design's thermal colour map; unlit.
+    Wireframe,  ///< Triangle edges in the material colour, unlit (when the device can).
 };
 
 /// What the viewport draws besides the scene's meshes.
@@ -20,6 +21,7 @@ struct RenderOptions {
     bool sensors{true};  ///< Sensor frustums: each lidar's coverage fan and latest returns.
 
     Shading shading{Shading::Lit};
+    bool wireframeAvailable{false};  ///< Set from SceneRenderer::wireframeSupported().
     /// Thermal shading: per scene prim, the temperature (K) its meshes take (NaN: none, drawn
     /// dim grey), and the range the colour map spans.
     std::vector<float> temperature;

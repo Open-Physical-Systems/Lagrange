@@ -119,6 +119,10 @@ SceneRenderer::~SceneRenderer() {
     vkDestroyPipelineLayout(device_.device(), meshLayout_, nullptr);
     vkDestroyPipeline(device_.device(), unlitPipeline_, nullptr);
     vkDestroyPipelineLayout(device_.device(), unlitLayout_, nullptr);
+    if (wireframePipeline_ != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device_.device(), wireframePipeline_, nullptr);
+        vkDestroyPipelineLayout(device_.device(), wireframeLayout_, nullptr);
+    }
     vkDestroyPipeline(device_.device(), linePipeline_, nullptr);
     vkDestroyPipelineLayout(device_.device(), lineLayout_, nullptr);
 }
@@ -133,6 +137,11 @@ void SceneRenderer::createPipelines() {
     gpu::PipelineSpec unlit = mesh;
     unlit.fragment = kMeshUnlitFragment;
     gpu::buildPipeline(device_, unlit, unlitLayout_, unlitPipeline_);
+    if (device_.nonSolidFill()) {
+        gpu::PipelineSpec wireframe = unlit;
+        wireframe.polygonMode = VK_POLYGON_MODE_LINE;
+        gpu::buildPipeline(device_, wireframe, wireframeLayout_, wireframePipeline_);
+    }
     gpu::PipelineSpec line = mesh;
     line.vertex = kLineVertex;
     line.fragment = kLineFragment;
@@ -228,10 +237,16 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
 
     // --- meshes ---------------------------------------------------------------------------
     if (frame != nullptr && frame->statics) {
-        const bool lit = options.shading == Shading::Lit;
-        vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          lit ? meshPipeline_ : unlitPipeline_);
-        const VkPipelineLayout layout = lit ? meshLayout_ : unlitLayout_;
+        VkPipeline pipeline = unlitPipeline_;
+        VkPipelineLayout layout = unlitLayout_;
+        if (options.shading == Shading::Lit) {
+            pipeline = meshPipeline_;
+            layout = meshLayout_;
+        } else if (options.shading == Shading::Wireframe && wireframeSupported()) {
+            pipeline = wireframePipeline_;
+            layout = wireframeLayout_;
+        }
+        vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
         const SceneStatics& statics = *frame->statics;
         for (std::size_t i = 0; i < statics.prims.size(); ++i) {
             const PrimData& prim = statics.prims[i];

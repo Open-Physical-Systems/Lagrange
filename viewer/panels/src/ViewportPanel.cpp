@@ -222,6 +222,8 @@ private:
                 return "Unlit";
             case Shading::Thermal:
                 return "Thermal";
+            case Shading::Wireframe:
+                return "Wireframe";
             case Shading::Lit:
                 break;
         }
@@ -427,8 +429,14 @@ private:
             if (ImGui::MenuItem("Unlit", nullptr, mode == Shading::Unlit)) {
                 mode = Shading::Unlit;
             }
-            ImGui::MenuItem("Wireframe", nullptr, false, false);  // not built yet
-            ImGui::MenuItem("Collision", nullptr, false, false);
+            if (ImGui::MenuItem("Wireframe", nullptr, mode == Shading::Wireframe,
+                                context.renderOptions->wireframeAvailable)) {
+                mode = Shading::Wireframe;
+            }
+            if (!context.renderOptions->wireframeAvailable) {
+                ImGui::SetItemTooltip("This GPU cannot draw polygons as lines");
+            }
+            ImGui::MenuItem("Collision", nullptr, false, false);  // needs colliders in the protocol
             if (ImGui::MenuItem("Thermal false colour", nullptr, mode == Shading::Thermal,
                                 !temperatures_.empty())) {
                 mode = Shading::Thermal;

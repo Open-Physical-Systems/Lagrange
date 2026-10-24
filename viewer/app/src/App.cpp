@@ -292,6 +292,7 @@ public:
         , renderer_(device)
         , panels_(createDefaultPanels())
         , scopeSignals_(std::move(scopeSignals)) {
+        renderOptions_.wireframeAvailable = renderer_.wireframeSupported();
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImPlot::CreateContext();
@@ -625,6 +626,8 @@ public:
     void setShading(const std::string& name) {
         if (name == "unlit") {
             renderOptions_.shading = Shading::Unlit;
+        } else if (name == "wireframe") {
+            renderOptions_.shading = Shading::Wireframe;
         } else if (name == "thermal") {
             renderOptions_.shading = Shading::Thermal;  // falls back to Lit without thermal nodes
         }

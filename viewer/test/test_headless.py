@@ -705,3 +705,34 @@ def test_thermal_shading_colours_the_simulators_robot_by_temperature(socket_dir)
     assert counts["lit"][0] > 150, f"robot not visible lit ({counts})"
     assert counts["thermal"][0] < counts["lit"][0] // 4, f"robot still in its material {counts}"
     assert counts["lit"][1] < 20 and counts["thermal"][1] > 50, f"no thermal legend {counts}"
+
+
+def test_wireframe_shading_draws_edges_instead_of_surfaces(socket_dir):
+    """Design 02-scene's Wireframe shading: the robot's triangles as lines in the same unlit
+    colour, so fewer of its blue-grey pixels than when its surfaces are filled, but some."""
+    counts = {}
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        for shading in ("unlit", "wireframe"):
+            image = socket_dir / f"{shading}.png"
+            result = run_viewer(
+                "--connect",
+                f"unix:{server.endpoint.address}",
+                "--frames",
+                "40",
+                "--size",
+                "1400x1000",
+                "--shading",
+                shading,
+                "--screenshot",
+                str(image),
+            )
+            assert result.returncode == 0, result.stderr
+            stats = json.loads(result.stdout.strip().splitlines()[-1])
+            assert stats["validation_errors"] == 0, result.stderr
+            _width, _height, rows = read_png(image)
+            pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+            counts[shading] = sum(
+                1 for r, g, b, _a in pixels if r > 110 and b > 150 and b > r + 25 and b > g + 10
+            )
+    assert counts["unlit"] > 150, counts
+    assert 0 < counts["wireframe"] < counts["unlit"] // 2, counts

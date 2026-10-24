@@ -52,6 +52,9 @@ public:
     [[nodiscard]] const gpu::Image& color() const { return color_; }
     [[nodiscard]] VkExtent2D extent() const { return color_.extent; }
     [[nodiscard]] std::uint32_t lastDrawCount() const { return lastDrawCount_; }
+    /// Whether Shading::Wireframe draws edges (the device can fill polygons as lines); without
+    /// it wireframe shading draws unlit.
+    [[nodiscard]] bool wireframeSupported() const { return wireframePipeline_ != VK_NULL_HANDLE; }
 
 private:
     void createPipelines();
@@ -66,6 +69,8 @@ private:
     VkPipeline meshPipeline_{VK_NULL_HANDLE};
     VkPipelineLayout unlitLayout_{VK_NULL_HANDLE};
     VkPipeline unlitPipeline_{VK_NULL_HANDLE};
+    VkPipelineLayout wireframeLayout_{VK_NULL_HANDLE};
+    VkPipeline wireframePipeline_{VK_NULL_HANDLE};
     VkPipelineLayout lineLayout_{VK_NULL_HANDLE};
     VkPipeline linePipeline_{VK_NULL_HANDLE};
 
