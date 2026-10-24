@@ -17,6 +17,7 @@
 #include "lagrange/services/Log.hpp"
 #include "lagrange/services/WrenchSum.hpp"
 #include "lagrange/stage/Stage.hpp"
+#include "lagrange/thermal/ThermalNetwork.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
 #include "lagrange/world/LidarLayout.hpp"
 
@@ -291,6 +292,22 @@ struct Server::Impl {
         } else {
             next->add(std::make_unique<electrical::IdealTorqueSource>());
         }
+        // Thermal, after electrical: it reads the losses. It needs the site's ambient
+        // temperature; without one nothing stands in, and the electrical network keeps its
+        // reference temperatures.
+        if (hasThermalNodes() && settings.ambientTemperatureK) {
+            ModuleConfigData heat;
+            heat.fidelity = "lumped";
+            heat.values.emplace(thermal::kAmbientKey, *settings.ambientTemperatureK);
+            if (settings.thermalDtNs) {
+                heat.dt = Duration{*settings.thermalDtNs};
+            }
+            if (off("thermal")) {
+                next->add(std::make_unique<thermal::AmbientTemperature>(), ModuleConfig(heat));
+            } else {
+                next->add(std::make_unique<thermal::ThermalNetwork>(), ModuleConfig(heat));
+            }
+        }
         ModuleConfigData sensing;
         sensing.tier =
             rayContext ? static_cast<CapabilityTier>(rayContext->tier()) : CapabilityTier::Tier0;
@@ -318,8 +335,16 @@ struct Server::Impl {
         settings.substituted = options.substituted;
         settings.rigidBodyDtNs = rigidBodyDtNs;
         settings.electricalDtNs = electricalDtNs;
+        settings.thermalDtNs = thermalDtNs;
+        settings.ambientTemperatureK = ambient();
         return settings;
     }
+    /// The ambient temperature the run uses: an applied profile's, else the command line's.
+    std::optional<double> ambient() const {
+        return appliedAmbientK ? appliedAmbientK : options.ambientTemperatureK;
+    }
+    std::optional<std::int64_t> thermalDtNs;     // from an applied profile
+    std::optional<double> appliedAmbientK;       // from an applied profile
     std::optional<std::int64_t> rigidBodyDtNs;   // from an applied profile
     std::optional<std::int64_t> electricalDtNs;  // from an applied profile
     std::optional<ProfileSettings> pending;      // applied without restart: used at the next reset
@@ -944,6 +969,10 @@ struct Server::Impl {
 
     bool hasSensors() const { return !robot.world.sensors.names.empty(); }
     /// Motors to simulate: ElectricalMotorAPI_1 prims from USD or an overlay.
+    /// Thermal nodes: ThermalAPI_1 prims.
+    bool hasThermalNodes() const {
+        return !WorldView(robot.world).instancesOf("ThermalAPI_1").empty();
+    }
     bool hasMotors() const {
         return !WorldView(robot.world).instancesOf("ElectricalMotorAPI_1").empty();
     }
@@ -1017,6 +1046,20 @@ struct Server::Impl {
                               static_cast<double>(electricalDtNs.value_or(100'000)) / 1e9);
                 yaml += "  electrical: {enabled: true, fidelity: averaged, dt: " + std::string(dt) +
                         "}\n";
+            } else if (std::string_view(row.domain) == "thermal" && hasThermalNodes() &&
+                       ambient()) {
+                char text[96];
+                if (substituted("thermal")) {
+                    std::snprintf(text, sizeof(text),
+                                  "{enabled: false, substitute: ambient, ambient_temperature: "
+                                  "%.9g}",
+                                  *ambient());
+                } else {
+                    std::snprintf(
+                        text, sizeof(text), "{enabled: true, dt: %.9g, ambient_temperature: %.9g}",
+                        static_cast<double>(thermalDtNs.value_or(100'000'000)) / 1e9, *ambient());
+                }
+                yaml += "  thermal: " + std::string(text) + "\n";
             } else if (std::string_view(row.domain) == "sensors" && hasSensors() &&
                        !substituted("sensors")) {
                 yaml += "  sensors: {enabled: true}\n";
@@ -1056,12 +1099,15 @@ struct Server::Impl {
             const bool physics = std::string_view(row.domain) == "rigid_body";
             const bool sensing = std::string_view(row.domain) == "sensors" && hasSensors();
             const bool powered = std::string_view(row.domain) == "electrical" && hasMotors();
-            const bool built = physics || sensing || powered;  // a module exists for it
+            const bool heated =
+                std::string_view(row.domain) == "thermal" && hasThermalNodes() && ambient();
+            const bool built = physics || sensing || powered || heated;  // a module exists
             const bool running = built && !substituted(row.domain);
             d.set_enabled(running);
             d.set_available(built);
             d.set_active_module(running ? (physics   ? "mujoco"
                                            : powered ? "averaged_network"
+                                           : heated  ? "lumped"
                                                      : (rayContext ? "raycast_gpu" : "raycast"))
                                         : row.substitute);
             d.set_substituted(!running);
@@ -1078,11 +1124,24 @@ struct Server::Impl {
                 d.set_max_dt_ns(1'000'000);
                 d.add_depends_on("rigid_body");
             }
+            if (heated) {
+                d.add_fidelities("lumped");
+                d.set_dt_ns(thermalDtNs.value_or(100'000'000));
+                d.set_min_dt_ns(1'000'000);
+                d.set_max_dt_ns(10'000'000'000);
+                d.add_depends_on("electrical");
+            }
             if (!built) {
+                const std::string_view domain = row.domain;
                 d.set_unavailable_reason(
-                    std::string_view(row.domain) == "electrical"
+                    domain == "electrical"
                         ? "no ElectricalMotorAPI prims in the stage; the ideal torque source "
                           "stands in (an overlay file adds motors to a URDF robot)"
+                    : domain == "thermal" && hasThermalNodes()
+                        ? "needs the site's ambient temperature: thermal.ambient_temperature in "
+                          "the profile, or --ambient-temperature K"
+                    : domain == "thermal"
+                        ? "no ThermalAPI prims in the stage"
                         : "no module in this build yet; the substitute stands in");
             }
             v1::SubstituteOption& option = *d.add_substitutes();
@@ -1358,6 +1417,10 @@ struct Server::Impl {
         if (hasMotors()) {
             context.modules.insert("electrical");
         }
+        if (hasThermalNodes()) {
+            context.modules.insert("thermal");
+        }
+        context.ambientKnown = options.ambientTemperatureK.has_value();
         for (const DomainRow& row : kDomains) {
             context.substitutes[row.domain] = {row.substitute, row.substituteKind};
         }
@@ -1377,7 +1440,11 @@ struct Server::Impl {
             item.set_message(issue.message);
         }
         if (check.settings) {
-            auto preview = makeScheduler(*check.settings, nullptr);
+            ProfileSettings previewed = *check.settings;
+            if (!previewed.ambientTemperatureK) {
+                previewed.ambientTemperatureK = ambient();
+            }
+            auto preview = makeScheduler(previewed, nullptr);
             if (!preview) {
                 out.set_valid(false);
                 v1::ProfileIssue& item = *out.add_issues();
@@ -1435,12 +1502,19 @@ struct Server::Impl {
         options.substituted = settings.substituted;
         rigidBodyDtNs = settings.rigidBodyDtNs;
         electricalDtNs = settings.electricalDtNs;
+        thermalDtNs = settings.thermalDtNs;
+        const std::optional<double> previousAmbient = appliedAmbientK;
+        if (settings.ambientTemperatureK) {
+            appliedAmbientK = settings.ambientTemperatureK;
+        }
         pending.reset();
         if (Status status = restart(); !status.ok()) {
             // Keep the run going on the profile it had.
             options.substituted = previous.substituted;
             rigidBodyDtNs = previous.rigidBodyDtNs;
             electricalDtNs = previous.electricalDtNs;
+            thermalDtNs = previous.thermalDtNs;
+            appliedAmbientK = previousAmbient;
             (void)restart();
             return status;
         }

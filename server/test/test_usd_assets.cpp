@@ -224,7 +224,10 @@ TEST(Overlay, TheImportedAmrGainsThePowerSystemOfTheHandWrittenSample) {
     ASSERT_TRUE(handWritten) << handWritten.error();
 
     const std::map<std::string, std::string> overlaid = electrical(*robot);
-    EXPECT_EQ(overlaid.size(), 6U);  // two motors, the battery and its port, the bus, the load
+    // Two motors, the battery and its port, the bus, the load; four thermal nodes (motors,
+    // battery, chassis) and three links to the chassis.
+    EXPECT_EQ(overlaid.size(), 13U);
+    EXPECT_TRUE(overlaid.contains("ThermalLinkAPI_1:to_chassis /amr_diffdrive/power/battery"));
     EXPECT_TRUE(
         overlaid.contains("ElectricalMotorAPI_1 /amr_diffdrive/base_link/left_drive_motor"));
     EXPECT_TRUE(overlaid.contains("PortAPI_1:dc_out /amr_diffdrive/power/battery"));

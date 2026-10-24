@@ -1,7 +1,8 @@
 // v0.2 acceptance criterion 4: disabling any domain that has a module, in favour of its
 // substitute, keeps the simulation running. Every combination of the domains with modules is
 // wired (so each substitute provides what the other modules consume) and run for 2 s. The
-// sample AMR carries its power-system overlay, so electrical has a module too.
+// sample AMR carries its power-system overlay and an ambient temperature is given, so electrical
+// and thermal have modules too.
 #include "lagrange/server/Server.hpp"
 
 #include <filesystem>
@@ -15,7 +16,7 @@ namespace lagrange::server {
 namespace {
 
 TEST(DomainToggles, EveryCombinationOfSubstitutesRuns) {
-    const std::vector<std::string> domains{"rigid_body", "electrical", "sensors"};
+    const std::vector<std::string> domains{"rigid_body", "electrical", "thermal", "sensors"};
     const std::filesystem::path dir =
         std::filesystem::path(::testing::TempDir()) / "lagrange_toggles";
     std::filesystem::create_directories(dir);
@@ -26,6 +27,7 @@ TEST(DomainToggles, EveryCombinationOfSubstitutesRuns) {
         options.robotPath = LAGRANGE_TEST_AMR_URDF;
         options.worldPath = LAGRANGE_TEST_WAREHOUSE_URDF;
         options.overlayPath = LAGRANGE_TEST_AMR_OVERLAY;
+        options.ambientTemperatureK = 298.15;  // a warehouse at 25 °C: thermal has a module
         options.realTimeFactor = 0.0;
         std::string label;
         for (std::size_t d = 0; d < domains.size(); ++d) {
@@ -54,6 +56,7 @@ TEST(DomainToggles, TheSampleAmrRunsOnItsBatteryAndTheProfileSwitchesItToIdeal) 
     options.robotPath = LAGRANGE_TEST_AMR_URDF;
     options.worldPath = LAGRANGE_TEST_WAREHOUSE_URDF;
     options.overlayPath = LAGRANGE_TEST_AMR_OVERLAY;
+    options.ambientTemperatureK = 298.15;
     options.realTimeFactor = 0.0;
     Server server(options);
     const Status started = server.start();
@@ -70,6 +73,12 @@ TEST(DomainToggles, TheSampleAmrRunsOnItsBatteryAndTheProfileSwitchesItToIdeal) 
     EXPECT_GT(volts, 50.0);
     EXPECT_LT(volts, 16 * 3.45);
     EXPECT_EQ(server.read("load/computer/powered").at(0), 1.0);
+    EXPECT_NE(server.wiringDot().find("thermal/lumped\\n100 ms"), std::string::npos);
+    // The motors' copper losses warm them, a little, in three seconds.
+    const double motor = server.read("thermal/left_drive_motor/temperature").at(0);
+    EXPECT_GT(motor, 298.15);
+    EXPECT_LT(motor, 299.15);
+    EXPECT_EQ(server.read("thermal/left_drive_motor/derating").at(0), 1.0);
     EXPECT_GT(std::abs(server.read("joint/left_wheel_joint/torque").at(0)) +
                   std::abs(server.read("motor/left_drive_motor/current_q").at(0)),
               0.0);
@@ -80,11 +89,14 @@ stage: )" + std::string(LAGRANGE_TEST_AMR_URDF) +
 domains:
   rigid_body: {enabled: true}
   electrical: {enabled: false, substitute: ideal}
+  thermal: {enabled: false, substitute: ambient}
   sensors: {enabled: true}
 )");
     ASSERT_TRUE(off.ok()) << off.message;
     EXPECT_NE(server.wiringDot().find("electrical/ideal_torque_source"), std::string::npos);
     EXPECT_EQ(server.wiringDot().find("averaged_network"), std::string::npos);
+    EXPECT_NE(server.wiringDot().find("thermal/ambient"), std::string::npos);
+    EXPECT_EQ(server.read("thermal/left_drive_motor/temperature").at(0), 298.15);
 }
 
 }  // namespace

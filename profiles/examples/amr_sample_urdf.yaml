@@ -1,6 +1,7 @@
 # profiles/examples/amr_sample_urdf.yaml — what the server runs today: the sample AMR (URDF
-# from lagrange_assets) with MuJoCo, its sensors, and the electrical network of its power-system
-# overlay; domains without a module yet are substituted.
+# from lagrange_assets) with MuJoCo, its sensors, and the electrical and thermal networks of its
+# power-system overlay; domains without a module yet are substituted. The ambient temperature is
+# this scenario's site parameter.
 # `lagrange run profiles/examples/amr_sample_urdf.yaml`
 schema_version: 1
 stage: robots/amr_diffdrive/amr_diffdrive.urdf
@@ -8,7 +9,7 @@ stage: robots/amr_diffdrive/amr_diffdrive.urdf
 domains:
   rigid_body:   { enabled: true,  backend: mujoco, dt: 0.001 }
   electrical:   { enabled: true,  fidelity: averaged, dt: 0.0001 }
-  thermal:      { enabled: false, substitute: ambient }
+  thermal:      { enabled: true,  dt: 0.1, ambient_temperature: 298.15 }  # a warehouse at 25 °C
   aerodynamics: { enabled: false, substitute: zero }
   weather:      { enabled: false, substitute: clear }
   emi:          { enabled: false, substitute: zero }

@@ -5,6 +5,9 @@ every schema is version 1 and may change without a migration.
 
 ## Unreleased
 
+- **Thermal library** (`schemas/thermal`): `ThermalAPI_1` and `ThermalLinkAPI_1`
+  (multiple-apply), as drafted in `docs/design/formats.md` §3.2.
+
 - **Electrical library** (`schemas/electrical`): `PortAPI_1` (multiple-apply), `BatteryAPI_1`,
   `ElectricalMotorAPI_1`, `ElectricalBusAPI_1`, `ElectricalLoadAPI_1`,
   `ElectricalConverterAPI_1`, from the drafts in `docs/design/formats.md` §3.1. Additions to the

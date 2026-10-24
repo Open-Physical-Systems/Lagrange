@@ -19,6 +19,7 @@ EXPECTED = {
         "ElectricalLoadAPI_1",
         "ElectricalConverterAPI_1",
     ],
+    "thermal": ["ThermalAPI_1", "ThermalLinkAPI_1"],
 }
 
 

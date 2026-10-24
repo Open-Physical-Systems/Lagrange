@@ -15,7 +15,8 @@ A domain is one kind of physics, simulated by its own modules:
 | `rigid_body` | MuJoCo 3.12: bodies, joints, contacts, at 1 ms | `fixed`: the robot holds its pose |
 | `sensors` | IMU and 2D/3D lidar, with noise models | `ground_truth`: exact values, no noise |
 | `electrical` | v0.3: battery, bus, motor drives and loads, averaged, at 100 µs, for robots with motor prims (the sample AMR's come from its overlay file) | `ideal`: the commanded torque reaches the joint |
-| `thermal`, `aerodynamics`, `weather`, `emi`, `radiation` | no module yet | `ambient`, `zero`, `clear`, `zero`, `zero` |
+| `thermal` | v0.3: lumped networks heated by the electrical losses, at 100 ms, for robots with thermal prims, given the site's ambient temperature | `ambient`: every node at the ambient temperature |
+| `aerodynamics`, `weather`, `emi`, `radiation` | no module yet | `zero`, `clear`, `zero`, `zero` |
 
 Domains without a module are always substituted. Robot-class domains (`comms`, `traffic`,
 `vehicle_dynamics`, `rotor_aero`, `hydrodynamics`) follow in later releases.

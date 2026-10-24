@@ -9,6 +9,7 @@ find_package(lagrange_rigid_body_mujoco REQUIRED)
 find_package(lagrange_rigid_body_substitutes REQUIRED)
 find_package(lagrange_sensors REQUIRED)
 find_package(lagrange_electrical REQUIRED)
+find_package(lagrange_thermal REQUIRED)
 find_package(lagrange_meshes REQUIRED)
 find_package(lagrange_ros2 REQUIRED)
 find_package(lagrange_stage REQUIRED)
@@ -64,6 +65,7 @@ target_link_libraries(
         lagrange_rigid_body_substitutes::lagrange_rigid_body_substitutes
         lagrange_sensors::lagrange_sensors
         lagrange_electrical::lagrange_electrical
+        lagrange_thermal::lagrange_thermal
         lagrange_meshes::lagrange_meshes
         lagrange_ros2::lagrange_ros2
         lagrange_stage::lagrange_stage
@@ -152,7 +154,7 @@ if(BUILD_TESTING)
         test/test_server.cpp
         test/test_toggles.cpp
         test/test_usd_assets.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal"
         TIMEOUT 120
     )
     target_link_libraries(

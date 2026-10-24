@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -22,6 +23,10 @@ struct ServerOptions {
     /// Overlay file applied to the robot (docs/design/formats.md §9: motors, battery, bus);
     /// empty = none
     std::string overlayPath;
+    /// The site's ambient air temperature, K (--ambient-temperature; a profile's
+    /// thermal.ambient_temperature overrides it). A site parameter with no default: without it
+    /// the thermal domain does not run (CLAUDE.md §10).
+    std::optional<double> ambientTemperatureK;
     Pose spawn;                     // where the robot starts, world ENU (LoadOptions::spawn)
     std::string profileSchemaPath;  // profiles/schema.json, sent to viewers; empty = none
     /// What a profile's `stage` must say to apply to this run; empty: robotPath. `lagrange run`
