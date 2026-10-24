@@ -132,6 +132,88 @@ void setInline(v1::DataRef& ref, const std::vector<T>& values) {
     ref.set_size(values.size() * sizeof(T));
 }
 
+/// A collider's shape as a mesh at its size (World::Colliders conventions: half extents, radius
+/// and half length), for drawing; empty for a plane.
+TriMesh colliderMesh(ShapeType shape, const std::array<double, 3>& size, const ConvexHull* hull) {
+    constexpr int kSegments = 24;  // round shapes: enough to read the shape, cheap to draw
+    constexpr int kRings = 12;
+    const auto append = [](TriMesh& to, const TriMesh& from, double dz) {
+        const auto base = static_cast<std::uint32_t>(to.positions.size() / 3);
+        for (std::size_t v = 0; v < from.positions.size(); v += 3) {
+            to.positions.insert(to.positions.end(),
+                                {from.positions[v], from.positions[v + 1],
+                                 from.positions[v + 2] + static_cast<float>(dz)});
+        }
+        to.normals.insert(to.normals.end(), from.normals.begin(), from.normals.end());
+        for (const std::uint32_t i : from.indices) {
+            to.indices.push_back(base + i);
+        }
+    };
+    switch (shape) {
+        case ShapeType::Plane:
+            return {};
+        case ShapeType::Sphere:
+            return sphereMesh(size[0], kSegments, kRings);
+        case ShapeType::Box:
+            return boxMesh(2.0 * size[0], 2.0 * size[1], 2.0 * size[2]);
+        case ShapeType::Cylinder:
+            return cylinderMesh(size[0], 2.0 * size[1], kSegments);
+        case ShapeType::Capsule: {
+            TriMesh mesh = cylinderMesh(size[0], 2.0 * size[1], kSegments);
+            const TriMesh cap = sphereMesh(size[0], kSegments, kRings);
+            append(mesh, cap, size[1]);
+            append(mesh, cap, -size[1]);
+            return mesh;
+        }
+        case ShapeType::ConvexHull: {
+            TriMesh mesh;
+            if (hull == nullptr || hull->points.empty()) {
+                return mesh;
+            }
+            std::array<double, 3> centre{};
+            for (const auto& p : hull->points) {
+                for (std::size_t a = 0; a < 3; ++a) {
+                    centre.at(a) += p.at(a) / static_cast<double>(hull->points.size());
+                }
+            }
+            // Flat faces, each turned away from the centre whatever the triangle's winding.
+            for (const auto& t : hull->triangles) {
+                std::array<std::array<double, 3>, 3> corner{
+                    hull->points.at(t[0]), hull->points.at(t[1]), hull->points.at(t[2])};
+                const std::array<double, 3> u{corner[1][0] - corner[0][0],
+                                              corner[1][1] - corner[0][1],
+                                              corner[1][2] - corner[0][2]};
+                const std::array<double, 3> v{corner[2][0] - corner[0][0],
+                                              corner[2][1] - corner[0][1],
+                                              corner[2][2] - corner[0][2]};
+                std::array<double, 3> n{u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
+                                        u[0] * v[1] - u[1] * v[0]};
+                const double length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+                if (length <= 0.0) {
+                    continue;
+                }
+                double outward = 0.0;
+                for (std::size_t a = 0; a < 3; ++a) {
+                    outward += n.at(a) * (corner[0].at(a) - centre.at(a));
+                }
+                if (outward < 0.0) {
+                    std::swap(corner[1], corner[2]);
+                    n = {-n[0], -n[1], -n[2]};
+                }
+                for (const auto& p : corner) {
+                    mesh.indices.push_back(static_cast<std::uint32_t>(mesh.positions.size() / 3));
+                    for (std::size_t a = 0; a < 3; ++a) {
+                        mesh.positions.push_back(static_cast<float>(p.at(a)));
+                        mesh.normals.push_back(static_cast<float>(n.at(a) / length));
+                    }
+                }
+            }
+            return mesh;
+        }
+    }
+    return {};
+}
+
 /// A schema's unit text ("N.m/A", "W/(m2.K)", "ohm") as a label: "N·m/A", "W/(m²·K)", "Ω".
 std::string displayUnit(const std::string& text) {
     static constexpr std::array<const char*, 10> kSuperscript{"⁰", "¹", "²", "³", "⁴",
@@ -948,6 +1030,7 @@ struct Server::Impl {
                 out.add_aabb(value);
             }
         }
+        colliders(snap);
         for (std::uint32_t m = 0; m < robot.scene.materials.size(); ++m) {
             const SceneMaterial& material = robot.scene.materials[m];
             v1::Material& out = *snap.add_materials();
@@ -1013,6 +1096,55 @@ struct Server::Impl {
             }
         }
         return envelope;
+    }
+
+    /// The collision shapes (scene.proto Collider), for the viewport's Collision shading: one
+    /// mesh per collider after the scene's meshes, placed in its body's prim (planes left out:
+    /// the ground is drawn already).
+    void colliders(v1::SceneSnapshot& snap) const {
+        const World& world = robot.world;
+        const World::Colliders& c = world.colliders;
+        for (std::size_t k = 0; k < c.body.size(); ++k) {
+            const TriMesh mesh = colliderMesh(
+                c.shape[k], c.size[k],
+                c.shape[k] == ShapeType::ConvexHull ? &world.hulls.at(c.hull[k]) : nullptr);
+            if (mesh.indices.empty()) {
+                continue;
+            }
+            std::uint32_t prim = kNoIndex;
+            Pose local = c.poseInBody[k];
+            if (c.body[k] != kWorldBody) {
+                const std::size_t b = c.body[k].index;
+                if (b >= robot.bodyPrim.size()) {
+                    continue;
+                }
+                prim = robot.bodyPrim[b];
+                // In the prim's frame: undo the prim's offset from its body.
+                const Pose& offset = robot.scene.prims[prim].offset;
+                const std::array<double, 4> back = conjugate(offset.orientation);
+                const std::array<double, 3> inPrim =
+                    rotate(back, {local.position[0] - offset.position[0],
+                                  local.position[1] - offset.position[1],
+                                  local.position[2] - offset.position[2]});
+                local = {inPrim, multiply(back, local.orientation)};
+            }
+            v1::Mesh& out = *snap.add_meshes();
+            out.set_id(static_cast<std::uint32_t>(snap.meshes_size() - 1));
+            out.set_vertex_count(static_cast<std::uint32_t>(mesh.positions.size() / 3));
+            out.set_index_count(static_cast<std::uint32_t>(mesh.indices.size()));
+            setInline(*out.mutable_positions(), mesh.positions);
+            setInline(*out.mutable_normals(), mesh.normals);
+            setInline(*out.mutable_indices(), mesh.indices);
+            v1::Collider& collider = *snap.add_colliders();
+            collider.set_prim(prim);
+            collider.set_mesh(out.id());
+            for (const double v : local.position) {
+                collider.add_position(v);
+            }
+            for (const double v : local.orientation) {
+                collider.add_rotation(static_cast<float>(v));
+            }
+        }
     }
 
     /// The electrical nets for the Electrical workspace (scene.proto ElectricalNet), from the

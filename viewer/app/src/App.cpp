@@ -626,6 +626,8 @@ public:
     void setShading(const std::string& name) {
         if (name == "unlit") {
             renderOptions_.shading = Shading::Unlit;
+        } else if (name == "collision") {
+            renderOptions_.shading = Shading::Collision;
         } else if (name == "wireframe") {
             renderOptions_.shading = Shading::Wireframe;
         } else if (name == "thermal") {

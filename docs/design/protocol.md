@@ -639,6 +639,20 @@ Rules that go with them:
   environment model, no tile streamer and no ROS 2 bridge.
 - An EMI source's frequency is a parameter of the site or the device, never a default.
 
+### 4.3 Addition of 2026-10-25 (version 0.1, backwards compatible)
+
+Pre-approved by the owner on 2026-10-24 for autonomous work; listed for review in
+`docs/plan/progress.md`.
+
+| Addition | Where | Used by |
+|---|---|---|
+| `Collider` (prim, mesh, pose in the prim's frame), `SceneSnapshot.colliders` 11 | `scene.proto` | viewport Collision shading |
+
+- Each collider's mesh is its shape at its size, appended to `SceneSnapshot.meshes` after the
+  visual meshes, so `Prim.mesh` indices are unchanged. Planes are not sent.
+- A collider moves with its prim, `0xFFFFFFFF` for fixed scenery. A viewer that does not know
+  the field ignores it; the mock server sends none, and the menu entry is then disabled.
+
 ## 5. Session flow
 
 ```mermaid

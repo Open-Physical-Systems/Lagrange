@@ -99,6 +99,15 @@ message NetTerminal {
   string current_signal = 3;
 }
 
+// A collision shape, for the viewport's Collision shading. It moves with `prim` (0xFFFFFFFF:
+// fixed in the region-local frame); its mesh is the shape at its size.
+message Collider {
+  uint32 prim = 1;
+  uint32 mesh = 2; // index into SceneSnapshot.meshes
+  repeated double position = 3; // m, x y z in the prim's frame
+  repeated float rotation = 4; // w x y z, in the prim's frame
+}
+
 message SceneSnapshot {
   uint64 sequence = 1; // deltas apply on top of this
   SimTime sim_time = 2;
@@ -110,6 +119,7 @@ message SceneSnapshot {
   repeated ElectricalNet nets = 8;
   uint64 topology_hash = 9;
   string stage_path = 10;
+  repeated Collider colliders = 11; // empty from servers that do not send them
   // Attributes are not included. The inspector requests them per prim (GetAttributes command).
 }
 
