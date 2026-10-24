@@ -4,11 +4,14 @@
 #include "lagrange/stage/Stage.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <map>
+#include <set>
 #include <string>
 #include <unistd.h>
 #include <vector>
@@ -452,6 +455,56 @@ TEST_F(PoweredServerTest, AnEditChangesAMotorParameterInTheRunningSimulation) {
         }
     }
     EXPECT_TRUE(savedValue);
+}
+
+TEST_F(PoweredServerTest, TheSnapshotCarriesThePowerSystemForTheElectricalWorkspace) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    const v1::SignalCatalog catalog = [this] {
+        for (const v1::Envelope& e : received_) {
+            if (e.has_catalog()) {
+                return e.catalog();
+            }
+        }
+        return v1::SignalCatalog{};
+    }();
+    const std::uint32_t motor = primNamed("left_drive_motor");
+    const std::uint32_t battery = primNamed("battery");
+    const v1::SceneSnapshot* snapshot = nullptr;
+    for (const v1::Envelope& e : received_) {
+        if (e.has_snapshot()) {
+            snapshot = &e.snapshot();
+        }
+    }
+    ASSERT_NE(snapshot, nullptr);
+    ASSERT_EQ(snapshot->nets_size(), 1);
+    const v1::ElectricalNet& net = snapshot->nets(0);
+    EXPECT_EQ(net.name(), "dc_48v");
+    EXPECT_EQ(net.voltage_signal(), "bus/dc_48v/voltage");
+    std::map<std::uint32_t, std::string> terminals;
+    for (const v1::NetTerminal& t : net.terminals()) {
+        terminals[t.prim()] = t.current_signal();
+    }
+    EXPECT_EQ(terminals.size(), 4U);  // the battery, two motors, the computer
+    EXPECT_EQ(terminals[battery], "battery/battery/current");
+    EXPECT_EQ(terminals[motor], "motor/left_drive_motor/bus_current");
+    std::set<std::string> limits;
+    for (const v1::NetLimit& limit : net.limits()) {
+        limits.insert(limit.label());
+    }
+    EXPECT_EQ(limits, (std::set<std::string>{"OV trip", "UV trip", "battery current"}));
+    // Every terminal's current is a signal, and the motors' signals belong to their prims (the
+    // schematic shows a node's other values from them).
+    bool motorSignal = false;
+    for (const v1::SignalInfo& info : catalog.signals()) {
+        motorSignal = motorSignal ||
+                      (info.name() == "motor/left_drive_motor/current_q" && info.prim() == motor);
+    }
+    EXPECT_TRUE(motorSignal);
+    for (const auto& [prim, signal] : terminals) {
+        EXPECT_TRUE(std::ranges::any_of(catalog.signals(), [&](const v1::SignalInfo& info) {
+            return info.name() == signal;
+        })) << signal;
+    }
 }
 
 TEST_F(PoweredServerTest, BadEditsAreRefusedAndChangeNothing) {

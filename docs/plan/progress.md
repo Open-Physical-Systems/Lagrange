@@ -219,7 +219,14 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
    board's edge within 3 mm, a box rests on a board within 3 mm on MuJoCo and Jolt. The
    roadmap's AC names the warehouse shelves; the sample warehouse's shelves are boxes, so the
    rack stands in for them. Not yet: hulls in the GPU lidar kernel
-14. Viewer additions (schematic, electrical scopes)
+14. Viewer additions (schematic, electrical scopes) (**done** 2026-10-25: the server sends
+   the power system in the snapshot (`ElectricalNet`: a net per bus, terminals for battery
+   ports, motors and loads with their current signals, limits from the bus trips and port
+   ratings) and attributes motor/battery/load/bus/thermal signals to their prims; so the
+   Electrical workspace (Network, Schematic, Scopes) runs on the simulator, not only the mock.
+   Scopes as the design lists them: bus voltage, the motors' q currents, the source current.
+   Not yet: the viewport's thermal false-colour shading, the design's fuse and DC-DC nodes
+   (no such components in the samples), a battery power signal)
 
 ### Merged under the autonomous mandate
 
