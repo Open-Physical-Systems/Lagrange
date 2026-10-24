@@ -10,6 +10,7 @@
 // Options are lagrange_server's. A profile's `stage` names the robot to load (URDF, SDFormat,
 // MJCF or USD, found next to the profile or in lagrange_assets) unless --robot is given.
 #include "CommandLine.hpp"
+#include "lagrange/electrical/Export.hpp"
 #include "lagrange/gpu/Device.hpp"
 #include "lagrange/services/DeterminismCheck.hpp"
 
@@ -53,6 +54,9 @@ int usage(const char* error) {
                  "                                 run twice (no ROS, CPU lidar) and compare the\n"
                  "                                 state hashes every 100 ms; exit 1 if they\n"
                  "                                 differ (default 10 s)\n"
+                 "  export spice|modelica [PROFILE] [options] [--out FILE]\n"
+                 "                                 the robot's power system as an ngspice\n"
+                 "                                 netlist or a Modelica model (to stdout)\n"
                  "  info [--version]               version, paths and GPUs\n"
                  "A profile's stage names the robot (URDF) unless --robot is given.\n"
                  "Options (as lagrange_server):\n");
@@ -307,6 +311,51 @@ int info(int argc, char** argv) {
 
 }  // namespace
 
+/// `lagrange export spice|modelica`: the robot's electrical network for offline study
+/// (domains/electrical.md §7).
+int exportNetwork(CommandLine& line, std::string_view format, const std::string& out) {
+    if (line.positional.size() > 1) {
+        return usage("export takes at most one profile");
+    }
+    if (!line.positional.empty()) {
+        const auto yaml = readFile(line.positional[0]);
+        if (!yaml) {
+            std::fprintf(stderr, "lagrange: cannot read %s\n", line.positional[0].c_str());
+            return 1;
+        }
+        if (const auto error = useStage(line, *yaml, line.positional[0])) {
+            std::fprintf(stderr, "lagrange: %s\n", error->c_str());
+            return 1;
+        }
+    }
+    lagrange::server::Server server(line.options);
+    if (const lagrange::Status status = server.load(); !status.ok()) {
+        std::fprintf(stderr, "lagrange: %s\n", status.message.c_str());
+        return 1;
+    }
+    lagrange::electrical::ExportOptions options;
+    options.title = fs::path(line.options.robotPath).stem().string() + "_power";
+    const lagrange::WorldView world(server.world());
+    const auto text = format == "spice" ? lagrange::electrical::spiceNetlist(world, options)
+                                        : lagrange::electrical::modelicaModel(world, options);
+    if (!text) {
+        std::fprintf(stderr, "lagrange: %s\n", text.error().c_str());
+        return 1;
+    }
+    if (out.empty()) {
+        std::fputs(text->c_str(), stdout);
+        return 0;
+    }
+    std::ofstream file(out);
+    file << *text;
+    if (!file) {
+        std::fprintf(stderr, "lagrange: cannot write %s\n", out.c_str());
+        return 1;
+    }
+    std::printf("wrote %s\n", out.c_str());
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         return usage("no command");
@@ -319,12 +368,36 @@ int main(int argc, char** argv) {
         return info(argc, argv);
     }
     if (command != "run" && command != "validate" && command != "graph" &&
-        command != "determinism") {
+        command != "determinism" && command != "export") {
         return usage(("unknown command " + std::string(command)).c_str());
     }
-    // --seconds belongs to `determinism` only; take it out before the server's options.
+    // `export` takes its format first.
+    std::string_view format;
+    std::vector<char*> exportArgs;
+    if (command == "export") {
+        if (argc < 3 ||
+            (std::string_view(argv[2]) != "spice" && std::string_view(argv[2]) != "modelica")) {
+            return usage("export needs spice or modelica");
+        }
+        format = argv[2];
+        exportArgs.assign(argv, argv + argc);
+        exportArgs.erase(exportArgs.begin() + 2);
+        argc = static_cast<int>(exportArgs.size());
+        argv = exportArgs.data();
+    }
+    // --seconds belongs to `determinism` and --out to `export`; take them out before the
+    // server's options.
     double seconds = 10.0;
+    std::string out;
     std::vector<char*> args(argv, argv + argc);
+    for (std::size_t i = 2; i + 1 < args.size(); ++i) {
+        if (std::string_view(args[i]) == "--out") {
+            out = args[i + 1];
+            args.erase(args.begin() + static_cast<std::ptrdiff_t>(i),
+                       args.begin() + static_cast<std::ptrdiff_t>(i) + 2);
+            break;
+        }
+    }
     for (std::size_t i = 2; i + 1 < args.size(); ++i) {
         if (std::string_view(args[i]) == "--seconds") {
             char* end = nullptr;
@@ -354,5 +427,8 @@ int main(int argc, char** argv) {
     }
     // Checking and printing need no ROS node.
     line.options.ros = false;
+    if (command == "export") {
+        return exportNetwork(line, format, out);
+    }
     return command == "validate" ? validate(line) : graph(line);
 }

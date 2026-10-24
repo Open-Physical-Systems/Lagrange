@@ -120,6 +120,15 @@ later RFC.
 
 ## 7. Offline export
 
+*Status (v0.3):* `lagrange export spice|modelica [PROFILE] [options] [--out FILE]`
+(`Export.hpp` in `lagrange_electrical`) rather than separate `tools/` programs: the export needs
+the loaded stage, overlays included, as the simulator sees it. The drives are averaged sinks of
+their electrical power (a parameter to edit, or a waveform such as one recorded from a run); the
+open-circuit voltage is held at the initial state of charge; charge limits, trips, brake
+resistors and converters are not exported. The Modelica model uses the Modelica Standard
+Library 4's `Electrical.Analog`; it is checked for its structure only, as OpenModelica is not
+part of the build.
+
 `tools/export_spice` writes an ngspice netlist of the topology (battery ECM, bus capacitors,
 ideal averaged drive sources or a three-phase inverter subcircuit per motor) for switching-level
 study. `tools/export_modelica` writes a Modelica model with the same topology. Both are derived
@@ -187,6 +196,6 @@ battery FMUs, motors on prismatic joints, and the rotor inertia in Jolt.
 | Coupled motor + inertia | met, < 2 % RMS in speed and current against a monolithic 1 µs solution, inertias 6e-7 to 1e-2 kg·m², no growth | `test_coupling`, `CoSimulatedWithPhysicsAtOneMillisecond...` |
 | Battery ECM pulse | closed form met exactly; the published-dataset comparison is owed (dataset not chosen) | `PulseDischargeMatchesTheClosedForm` |
 | Energy balance over a drive cycle | met, 0.5 % | `test_network` `EnergyBalancesOverADriveCycle` |
-| Netlist round trip | with the SPICE export (v0.3 queue step 8) | — |
+| Netlist round trip | met: with a drive cycle sagging a weak pack's bus by 2.4 V, ngspice's bus voltage is within 0.05 % of the network's (sag within 0.16 % RMS) | `test_export` (needs ngspice) |
 | Brownout scenario | met | `AStalledAmrOnALowBatteryBrownsOutAndRecovers` |
 | Sim-vs-real | owed: needs the bench recording (Q16) | — |

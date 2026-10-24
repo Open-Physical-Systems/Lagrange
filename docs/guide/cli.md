@@ -14,6 +14,7 @@ ros2 run lagrange_server lagrange <command> [arguments]
 | `lagrange validate PROFILE... [options]` | Checks each profile against `profiles/schema.json` and against what this simulator can run. Exits 1 if any profile has an error |
 | `lagrange graph [PROFILE] [options]` | Prints the wiring of the run (modules and the signals between them) as a Graphviz digraph |
 | `lagrange determinism [PROFILE] [options] [--seconds N]` | Runs the simulation twice, without ROS and with the CPU lidar, and compares the hashes of the whole state every 100 ms of simulated time. Exits 1 at the first difference (default 10 s) |
+| `lagrange export spice\|modelica [PROFILE] [options] [--out FILE]` | Writes the robot's power system (from its electrical schemas or overlay) as an ngspice netlist or a Modelica model, for offline study: battery ECM, bus capacitors, loads, and the drives as averaged power sinks whose power you set |
 | `lagrange info [--version]` | Prints the version, the installed sample robot, world and profile schema, the viewer socket, and the Vulkan devices with their capability tiers |
 
 The options are the same as `lagrange_server`'s (`--robot`, `--world`, `--overlay`, `--spawn`,

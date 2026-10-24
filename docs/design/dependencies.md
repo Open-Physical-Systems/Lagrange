@@ -173,6 +173,7 @@ and resource lookup only. It does not depend on `rclcpp`, so it starts without a
 | buf | GitHub release binary | v1.73.0 | Apache-2.0 | Not in apt; installed in CI by checksum |
 | pre-commit | apt | 4.5.1 | MIT | |
 | yamllint | apt | 1.37.1 | GPL-3.0-or-later | Tool only |
+| ngspice | apt `ngspice` | 45.2 (Ubuntu 26.04) | BSD-3-clause (its sources; Debian copyright file) | Offline tool only, run as a separate program: the netlist round-trip test (`lagrange_electrical`'s `test_export`, skipped without it) and users' switching-level studies of exported netlists |
 | yamlfmt | Go binary | TODO(verify) | Apache-2.0 | Optional; yamllint alone may be enough |
 | mdformat | apt | 1.0.0 | MIT | Replaces markdownlint (Node) |
 | shfmt, shellcheck | apt | 3.12.0, 0.11.0 | BSD-3-Clause, GPL-3.0 (TODO(verify)) | Tools only |

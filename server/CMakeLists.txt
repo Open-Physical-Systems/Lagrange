@@ -118,7 +118,11 @@ target_compile_definitions(
 )
 target_link_libraries(
     lagrange_cli
-    PRIVATE lagrange_server_cli lagrange_gpu::lagrange_gpu yaml-cpp::yaml-cpp
+    PRIVATE
+        lagrange_server_cli
+        lagrange_gpu::lagrange_gpu
+        yaml-cpp::yaml-cpp
+        lagrange_electrical::lagrange_electrical
 )
 
 add_executable(lagrange_import src/import_main.cpp)
