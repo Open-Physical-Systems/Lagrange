@@ -133,14 +133,27 @@ private:
             }
             for (const NetTerminal& terminal : net.terminals) {
                 TerminalLive entry;
-                // Design (Scopes): the bus voltage, the motors' q-axis currents and the source's
-                // current; the branches' currents are in the Network table.
+                // Design (Scopes): the bus voltage, the motors' q-axis currents and the battery's
+                // power (its current when the server sends no power); the branches' currents are
+                // in the Network table.
                 const bool motor = hasSchema(context, terminal.prim, "ElectricalMotorAPI");
                 const bool source = hasSchema(context, terminal.prim, "BatteryAPI");
+                const SignalInfo* power = nullptr;
+                if (source) {
+                    for (const SignalInfo& info : catalog.signals) {
+                        if (info.prim == terminal.prim && info.name.ends_with("/power")) {
+                            power = &info;
+                        }
+                    }
+                }
+                if (power != nullptr) {
+                    scopes.add(context.client, catalog, power->name);
+                }
                 if (catalog.find(terminal.currentSignal) != nullptr) {
                     entry.current = context.client.subscribe(terminal.currentSignal);
-                    if (source ||
-                        (!motor && !hasSchema(context, terminal.prim, "ElectricalLoadAPI"))) {
+                    if ((source && power == nullptr) ||
+                        (!motor && !source &&
+                         !hasSchema(context, terminal.prim, "ElectricalLoadAPI"))) {
                         scopes.add(context.client, catalog, terminal.currentSignal);
                     }
                 }

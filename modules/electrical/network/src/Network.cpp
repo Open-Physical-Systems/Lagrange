@@ -441,6 +441,7 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
         b.terminalVoltage = d.output(scalar(battery + "terminal_voltage", units::V));
         b.currentOut = d.output(scalar(battery + "current", units::A));
         b.loss = d.output(scalar(battery + "loss_power", units::W));
+        b.power = d.output(scalar(battery + "power", units::W));  // at its terminals
     }
     for (Bus& bus : buses_) {
         bus.voltageOut = d.output(scalar("bus/" + bus.name + "/voltage", units::V));
@@ -545,6 +546,7 @@ Status ElectricalNetwork::init(const WorldView&, const ModuleConfig&, SignalBus&
         bus.write(b.terminalVoltage, buses_[b.bus].voltage);
         bus.write(b.currentOut, 0.0);
         bus.write(b.loss, 0.0);
+        bus.write(b.power, 0.0);
     }
     for (const Passthrough& p : ideal_) {
         bus.write(p.torque, 0.0);
@@ -753,6 +755,7 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
         bus.write(b.terminalVoltage, b.state.cut ? 0.0 : buses_[b.bus].voltage);
         bus.write(b.currentOut, b.current);
         bus.write(b.loss, loss);
+        bus.write(b.power, b.state.cut ? 0.0 : buses_[b.bus].voltage * b.current);
     }
     for (std::size_t k = 0; k < converters_.size(); ++k) {
         const Converter& c = converters_[k];
