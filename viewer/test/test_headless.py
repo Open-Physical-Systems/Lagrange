@@ -631,9 +631,10 @@ def test_launcher_starts_the_simulator_and_the_viewer_shows_its_physics(socket_d
     stats = json.loads(result.stdout.strip().splitlines()[-1])
     assert stats["validation_errors"] == 0, result.stderr
     assert stats["notice"] == "", stats["notice"]
-    # The sample AMR (robot, 10 links, 11 visuals, 3 sensors), the ground, and the warehouse
-    # (its top prim, 7 boxes and their visuals).
-    assert stats["prims"] == 41
+    # The sample AMR (robot, 10 links, 11 visuals, 3 sensors, and from its overlay 2 motors and
+    # the power prim with battery, bus and computer), the ground, and the warehouse (its top
+    # prim, 7 boxes and their visuals).
+    assert stats["prims"] == 47
     assert stats["deltas"] > 0
     assert stats["sim_time_ns"] > 0
     assert stats["profile"] == "valid"

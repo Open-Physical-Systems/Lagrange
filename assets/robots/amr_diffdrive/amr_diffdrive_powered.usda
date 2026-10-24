@@ -1,0 +1,92 @@
+#usda 1.0
+(
+    defaultPrim = "amr_diffdrive"
+    doc = """The sample AMR with its power system, written by hand: two wheel drives on a 48 V bus
+    fed by an LFP battery, and the onboard computer as a load. The same data as
+    amr_diffdrive.overlay.yaml applied to amr_diffdrive.urdf (roadmap 0.2-G2 checks that they
+    agree). Parameters are illustrative, not a real product; the overlay file explains the
+    sizing."""
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    subLayers = [@./amr_diffdrive.usda@]
+    upAxis = "Z"
+)
+
+over "amr_diffdrive"
+{
+    over "base_link"
+    {
+        def Xform "left_drive_motor" (
+            prepend apiSchemas = ["ElectricalMotorAPI_1"]
+        )
+        {
+            double elec:windingResistance = 0.12   # ohm at 25 °C
+            double elec:inductance = 0.00031       # H
+            double elec:torqueConstant = 0.085     # N·m/A
+            int elec:polePairs = 4
+            double elec:rotorInertia = 0.00012     # kg·m²
+            double elec:gearRatio = 20
+            double elec:gearEfficiency = 0.92
+            double elec:maxCurrent = 8             # A
+            rel elec:joint = </amr_diffdrive/joints/left_wheel_joint>
+            rel elec:powerPort = </amr_diffdrive/power/dc_48v>
+        }
+
+        def Xform "right_drive_motor" (
+            prepend apiSchemas = ["ElectricalMotorAPI_1"]
+        )
+        {
+            double elec:windingResistance = 0.12
+            double elec:inductance = 0.00031
+            double elec:torqueConstant = 0.085
+            int elec:polePairs = 4
+            double elec:rotorInertia = 0.00012
+            double elec:gearRatio = 20
+            double elec:gearEfficiency = 0.92
+            double elec:maxCurrent = 8
+            rel elec:joint = </amr_diffdrive/joints/right_wheel_joint>
+            rel elec:powerPort = </amr_diffdrive/power/dc_48v>
+        }
+    }
+
+    def Xform "power"
+    {
+        def Xform "battery" (
+            prepend apiSchemas = ["BatteryAPI_1", "PortAPI_1:dc_out"]
+        )
+        {
+            uniform token elec:battery:chemistry = "lfp"
+            int elec:battery:seriesCells = 16
+            double elec:battery:capacity = 72000           # C (20 Ah)
+            double[] elec:battery:ocvSoc = [0, 0.1, 0.5, 0.9, 1]
+            double[] elec:battery:ocvVoltage = [2.8, 3.2, 3.28, 3.33, 3.45]   # V per cell
+            double elec:battery:r0 = 0.0015                # ohm per cell
+            double elec:battery:r1 = 0.0008                # ohm per cell
+            double elec:battery:c1 = 12000                 # F per cell
+            double elec:battery:cutoffVoltage = 44.8       # V
+            double elec:battery:maxChargeCurrent = 10      # A
+            double elec:port:dc_out:nominalVoltage = 51.2  # V
+            double elec:port:dc_out:maxCurrent = 40        # A
+            rel elec:port:dc_out:connectedTo = </amr_diffdrive/power/dc_48v>
+        }
+
+        def Xform "dc_48v" (
+            prepend apiSchemas = ["ElectricalBusAPI_1"]
+        )
+        {
+            double elec:bus:capacitance = 0.0047           # F
+            double elec:bus:undervoltageTrip = 42          # V
+            double elec:bus:overvoltageTrip = 60           # V
+        }
+
+        def Xform "computer" (
+            prepend apiSchemas = ["ElectricalLoadAPI_1"]
+        )
+        {
+            uniform token elec:load:model = "constant_power"
+            double elec:load:power = 45                    # W
+            double elec:load:minVoltage = 36               # V
+            rel elec:powerPort = </amr_diffdrive/power/dc_48v>
+        }
+    }
+}

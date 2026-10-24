@@ -43,13 +43,37 @@ struct ReadOptions {
 [[nodiscard]] Expected<Model, std::string> loadStage(const std::string& path,
                                                      const ReadOptions& options = {});
 
+/// Applies an overlay file (docs/design/formats.md §9) to a loaded model: the project's API
+/// schemas by name, for robots from formats without them (URDF, SDFormat, MJCF) or added to a USD
+/// one. YAML:
+///
+///     schema_version: 1
+///     apply:
+///       - prim: left_wheel_joint          # a link, joint or sensor by name, or a prim path
+///         create_child: left_drive_motor  # optional: a new prim under it (a joint's: under
+///         schemas:                        #   its parent link) that gets the schemas
+///           ElectricalMotorAPI_1:
+///             elec:torqueConstant: 0.085
+///             elec:joint: left_wheel_joint      # relationships: names or paths, or lists
+///             elec:powerPort: power/dc_48v
+///       - create: power/dc_48v            # a new prim at this path under the top prim
+///         schemas:
+///           ElectricalBusAPI_1: { elec:bus:undervoltageTrip: 42.0 }
+///
+/// Values take the type of the schema's property. Asset paths are relative to the overlay file.
+/// The result is checked as loadStage checks a stage. New prims become Xform scene prims that
+/// move with their parent and world prims named after themselves. Every problem is reported
+/// together, and a refused overlay leaves the model unchanged.
+[[nodiscard]] Expected<void, std::string> applyOverlay(Model& model, const std::string& path);
+
 struct WriteOptions {
     std::string doc;  // the layer's documentation string
 };
 
 /// Writes a model as a USD layer that loadStage reads back to the same model: the importers'
-/// back end (URDF -> USD). Schema instances other than the sensors' are not written yet (they
-/// come with the overlay files, roadmap 0.2-G2). The ground (the plane collider on the world and
+/// back end (URDF -> USD). Schema instances are written on their prims, values equal to the
+/// schema's fallback left unauthored; asset paths below the layer's directory become relative.
+/// The ground (the plane collider on the world and
 /// the prim named "ground") is left out; loadStage adds it again. The lagrange_schemas plugins must
 /// be on PXR_PLUGINPATH_NAME for the sensor schemas.
 [[nodiscard]] Expected<void, std::string> writeStage(const Model& model, const std::string& path,

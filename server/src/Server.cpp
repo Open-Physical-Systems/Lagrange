@@ -15,6 +15,7 @@
 #include "lagrange/server/Server.hpp"
 #include "lagrange/services/Log.hpp"
 #include "lagrange/services/WrenchSum.hpp"
+#include "lagrange/stage/Stage.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
 #include "lagrange/world/LidarLayout.hpp"
 
@@ -1925,6 +1926,11 @@ Status Server::load() {
         return Status::error(StatusCode::InvalidConfig, robot.error());
     }
     s.robot = std::move(robot.value());
+    if (!s.options.overlayPath.empty()) {
+        if (auto applied = stage::applyOverlay(s.robot, s.options.overlayPath); !applied) {
+            return Status::error(StatusCode::InvalidConfig, applied.error());
+        }
+    }
     if (!s.options.ros && !s.options.ros2ControlParams.empty()) {
         return Status::error(StatusCode::InvalidConfig,
                              "--ros2-control needs the ROS 2 bridge: drop --no-ros");

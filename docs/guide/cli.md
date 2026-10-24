@@ -16,8 +16,13 @@ ros2 run lagrange_server lagrange <command> [arguments]
 | `lagrange determinism [PROFILE] [options] [--seconds N]` | Runs the simulation twice, without ROS and with the CPU lidar, and compares the hashes of the whole state every 100 ms of simulated time. Exits 1 at the first difference (default 10 s) |
 | `lagrange info [--version]` | Prints the version, the installed sample robot, world and profile schema, the viewer socket, and the Vulkan devices with their capability tiers |
 
-The options are the same as `lagrange_server`'s (`--robot`, `--world`, `--spawn`, `--lidar`,
-`--rtf`, `--no-ros`, `--record`, ...; `lagrange --help` lists them).
+The options are the same as `lagrange_server`'s (`--robot`, `--world`, `--overlay`, `--spawn`,
+`--lidar`, `--rtf`, `--no-ros`, `--record`, ...; `lagrange --help` lists them).
+
+`--overlay FILE.yaml` applies the project's schemas to a robot from a format that cannot carry
+them (motors, battery, bus on a URDF; [formats.md §9](../design/formats.md#9-importers)). The
+sample AMR gets its power system from `amr_diffdrive.overlay.yaml` by default; another `--robot`
+gets no overlay unless one is given, and `--overlay none` turns it off.
 
 ## Profiles and stages
 
