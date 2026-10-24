@@ -170,7 +170,9 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 7. Bench mode: the replay substitute for rigid body (**done** 2026-10-25: `lagrange_recording`,
    `--bench`; 10 kHz electrical at about 59× real time. E8, replay in the C++ server, stays
    open: the viewer's replay seeks, the scheduler does not; open-questions.md Q15)
-8. SPICE netlist and Modelica export; ngspice offline comparison
+8. SPICE netlist and Modelica export; ngspice offline comparison (**done** 2026-10-25:
+   `lagrange export`; netlist round trip in ngspice within 0.05 %; Modelica checked for
+   structure only, no OpenModelica here)
 9. Robot arm sample and MoveIt 2
 10. Raster camera sensor
 11. Jolt full backend
