@@ -1897,7 +1897,7 @@ Status Server::load() {
     if (s.scheduler) {
         return {};
     }
-    auto robot = loadUrdf(s.options.robotPath, {.spawn = s.options.spawn});
+    auto robot = loadModel(s.options.robotPath, {.spawn = s.options.spawn});
     if (!robot) {
         return Status::error(StatusCode::InvalidConfig, robot.error());
     }
@@ -1905,14 +1905,15 @@ Status Server::load() {
     if (s.options.ros) {
         ros2::BridgeSettings settings;
         settings.baseLink = s.robot.world.bodies.names.empty() ? "" : s.robot.world.bodies.names[0];
-        settings.robotDescription = readFile(s.options.robotPath);
+        // /robot_description is URDF; a USD robot has none to publish.
+        settings.robotDescription = isUsd(s.options.robotPath) ? "" : readFile(s.options.robotPath);
         settings.stampedCmdVel = s.options.stampedCmdVel;
         s.bridge = std::make_unique<ros2::Bridge>(settings);
         s.simulation = std::make_unique<SimulationControl>(s);
         s.bridge->serveSimulation(*s.simulation);
     }
     if (!s.options.worldPath.empty()) {
-        if (auto added = addUrdf(s.robot, s.options.worldPath); !added) {
+        if (auto added = addModel(s.robot, s.options.worldPath); !added) {
             return Status::error(StatusCode::InvalidConfig, added.error());
         }
     }

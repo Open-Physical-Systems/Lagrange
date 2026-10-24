@@ -186,7 +186,7 @@ and resource lookup only. It does not depend on `rclcpp`, so it starts without a
 | Package | Upstream | Needed from | Build time class | Cache strategy |
 |---|---|---|---|---|
 | `imgui_vendor` | ocornut/imgui (docking), epezent/implot, thedmd/imgui-node-editor, CedricGuillemet/ImGuizmo | v0.1 | seconds | ccache |
-| `openusd_vendor` | PixarAnimationStudios/OpenUSD | v0.2 | tens of minutes (TODO(verify) by the spike) | install-tree cache + prebuilt underlay |
+| `openusd_vendor` | PixarAnimationStudios/OpenUSD | v0.2 | about 12 min with Python on 16 cores (spike), longer on CI runners | install-tree cache (`actions/cache`, keyed on the vendor package's CMake files) restored as a colcon underlay; prebuilt underlay asset still to do |
 | `jolt_vendor` | jrouwe/JoltPhysics | v0.2 or v0.3 | minutes | ccache |
 | `fmilib_vendor` | modelon-community/fmi-library | v0.3 | minutes | ccache |
 | `physx_vendor` | NVIDIA-Omniverse/PhysX | v0.6 (or earlier for GPU batches) | tens of minutes | install-tree cache; CUDA part optional |

@@ -5,10 +5,11 @@
 //   lagrange graph [PROFILE] [options]      the wiring as Graphviz DOT
 //   lagrange info [--version]               version, paths and GPUs of this installation
 //
-// Options are lagrange_server's. A profile's `stage` names the robot to load (a URDF, found
-// next to the profile, in the working directory or in lagrange_assets) unless --robot is given.
+// Options are lagrange_server's. A profile's `stage` names the robot to load (a URDF
+// or USD stage, found next to the profile or in lagrange_assets) unless --robot is given.
 #include "CommandLine.hpp"
 #include "lagrange/gpu/Device.hpp"
+#include "lagrange/server/Robot.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -103,10 +104,11 @@ std::optional<std::string> useStage(CommandLine& line, const std::string& yaml,
         return "stage " + stage + " not found next to " + profile.string() +
                " or in lagrange_assets; pass --robot FILE to check the profile against a robot";
     }
-    if (found->extension() != ".urdf") {
+    const std::string extension = found->extension().string();
+    if (extension != ".urdf" && !lagrange::server::isUsd(found->string())) {
         return "stage " + stage +
-               ": this version loads URDF robots; pass --robot FILE to check the profile "
-               "against one";
+               ": this version loads URDF and USD robots; pass --robot FILE to check the "
+               "profile against one";
     }
     line.options.robotPath = found->string();
     return std::nullopt;

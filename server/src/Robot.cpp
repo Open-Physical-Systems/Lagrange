@@ -1,5 +1,6 @@
 #include "lagrange/meshes/MeshImport.hpp"
 #include "lagrange/server/Robot.hpp"
+#include "lagrange/stage/Stage.hpp"
 
 #include <algorithm>
 #include <array>
@@ -23,9 +24,6 @@ namespace {
 
 constexpr std::array<float, 4> kDefaultColor{0.70F, 0.70F, 0.72F, 1.0F};
 constexpr std::array<float, 4> kPlaceholderColor{0.85F, 0.20F, 0.55F, 1.0F};  // "not loaded"
-constexpr std::array<float, 4> kGroundColor{0.004F, 0.008F, 0.018F, 1.0F};    // the mock's floor
-constexpr double kGroundHalfSizeM = 25.0;  // the visible ground; the collision plane is infinite
-constexpr double kGroundThicknessM = 0.02;
 // Moving bodies need positive mass and inertia in MuJoCo; links without an <inertial> get this.
 constexpr double kPlaceholderMassKg = 1e-3;
 constexpr double kPlaceholderInertia = 1e-6;  // kg·m²
@@ -642,7 +640,8 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
             prim.parent = robot.bodyPrim[body];
             prim.path = robot.scene.prims[prim.parent].path + "/" + name;
             prim.typeName = typeName;
-            prim.apiSchemas = {kind == SensorType::Lidar ? "SensorLidarAPI_1" : "SensorImuAPI_1"};
+            prim.apiSchemas = {"SensorAPI_1",
+                               kind == SensorType::Lidar ? "LidarAPI_1" : "ImuAPI_1"};
             prim.body = static_cast<std::uint32_t>(body);
             prim.offset = mount;
             robot.scene.prims.push_back(std::move(prim));
@@ -733,18 +732,7 @@ Expected<Robot, std::string> loadUrdf(const std::string& path, const LoadOptions
     }
     robot.name = robot.scene.prims.front().name;
 
-    // Static scenery after the robot: viewers take the first root prim as the robot.
-    ScenePrim ground;
-    ground.name = "ground";
-    ground.path = "/ground";
-    ground.typeName = "Mesh";
-    robot.scene.meshes.push_back(
-        boxMesh(2 * kGroundHalfSizeM, 2 * kGroundHalfSizeM, kGroundThicknessM));
-    ground.mesh = static_cast<std::uint32_t>(robot.scene.meshes.size() - 1);
-    robot.scene.materials.push_back({"floor", kGroundColor});
-    ground.material = static_cast<std::uint32_t>(robot.scene.materials.size() - 1);
-    ground.offset.position = {0.0, 0.0, -kGroundThicknessM / 2.0};
-    robot.scene.prims.push_back(std::move(ground));
+    addGroundPrim(robot);  // static scenery after the robot
     return robot;
 }
 
@@ -798,6 +786,54 @@ std::array<double, 3> recentre(Robot& robot, double rebaseDistanceM) {
     }
     coords::applyRebase(world.region, shift);
     return shift;
+}
+
+bool isUsd(const std::string& path) {
+    const std::string extension = std::filesystem::path(path).extension().string();
+    return extension == ".usd" || extension == ".usda" || extension == ".usdc";
+}
+
+Expected<Robot, std::string> loadModel(const std::string& path, const LoadOptions& options) {
+    if (!isUsd(path)) {
+        return loadUrdf(path, options);
+    }
+    stage::ReadOptions read;
+    read.defaultFriction = options.surfaceFriction;
+    read.groundFriction = options.groundFriction;
+    auto model = stage::loadStage(path, read);
+    if (!model) {
+        return Unexpected{model.error()};
+    }
+    // A stage holds its bodies where they were authored: --spawn moves the robot from there,
+    // as it moves a URDF robot from its origin.
+    const Pose& spawn = options.spawn;
+    if (spawn.position != std::array<double, 3>{0.0, 0.0, 0.0} ||
+        spawn.orientation != std::array<double, 4>{1.0, 0.0, 0.0, 0.0}) {
+        World& world = model->world;
+        for (std::size_t b = 0; b < world.bodies.names.size(); ++b) {
+            if (world.bodies.parent[b] == kWorldBody) {
+                world.bodies.poseInParent[b] = compose(spawn, world.bodies.poseInParent[b]);
+            }
+            model->bodyRestPose[b] = compose(spawn, model->bodyRestPose[b]);
+        }
+    }
+    return std::move(*model);
+}
+
+Expected<void, std::string> addModel(Robot& robot, const std::string& path,
+                                     const LoadOptions& options) {
+    if (!isUsd(path)) {
+        return addUrdf(robot, path, options);
+    }
+    stage::ReadOptions read;
+    read.defaultFriction = options.surfaceFriction;
+    read.addGround = false;
+    auto other = stage::loadStage(path, read);
+    if (!other) {
+        return Unexpected{other.error()};
+    }
+    appendModel(robot, *other);
+    return {};
 }
 
 }  // namespace lagrange::server

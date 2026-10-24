@@ -10,6 +10,7 @@ find_package(lagrange_rigid_body_substitutes REQUIRED)
 find_package(lagrange_sensors REQUIRED)
 find_package(lagrange_meshes REQUIRED)
 find_package(lagrange_ros2 REQUIRED)
+find_package(lagrange_stage REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(urdfdom REQUIRED)
 find_package(tinyxml2 REQUIRED)
@@ -29,7 +30,6 @@ add_library(
     lagrange_server
     src/Server.cpp
     src/Robot.cpp
-    src/Meshes.cpp
     src/DiffDrive.cpp
     src/MapExport.cpp
     src/Profile.cpp
@@ -62,6 +62,7 @@ target_link_libraries(
         lagrange_sensors::lagrange_sensors
         lagrange_meshes::lagrange_meshes
         lagrange_ros2::lagrange_ros2
+        lagrange_stage::lagrange_stage
         urdfdom::urdfdom_model
         tinyxml2::tinyxml2
         yaml-cpp::yaml-cpp
@@ -110,8 +111,15 @@ target_link_libraries(
     PRIVATE lagrange_server_cli lagrange_gpu::lagrange_gpu yaml-cpp::yaml-cpp
 )
 
+add_executable(lagrange_import src/import_main.cpp)
+lagrange_target_defaults(lagrange_import)
+target_link_libraries(
+    lagrange_import
+    PRIVATE lagrange_server lagrange_stage::lagrange_stage
+)
+
 install(
-    TARGETS lagrange_server_main lagrange_cli
+    TARGETS lagrange_server_main lagrange_cli lagrange_import
     RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 # The library is exported so that programs can build a run with their own modules until
@@ -127,6 +135,8 @@ install(
 
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
+    find_package(lagrange_schemas REQUIRED)
+    get_filename_component(schemas_share "${lagrange_schemas_DIR}/.." ABSOLUTE)
     ament_add_gtest(
         test_server
         test/test_map_export.cpp
@@ -135,6 +145,8 @@ if(BUILD_TESTING)
         test/test_robot.cpp
         test/test_server.cpp
         test/test_toggles.cpp
+        test/test_usd_assets.cpp
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor"
         TIMEOUT 120
     )
     target_link_libraries(
@@ -153,6 +165,8 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_PROFILES="${CMAKE_CURRENT_SOURCE_DIR}/../profiles/examples"
             LAGRANGE_TEST_WAREHOUSE_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.urdf"
             LAGRANGE_TEST_ARM_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/primitives_arm/primitives_arm.urdf"
+            LAGRANGE_TEST_AMR_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.usda"
+            LAGRANGE_TEST_WAREHOUSE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.usda"
     )
     lagrange_target_defaults(test_server)
     # The installed tool end to end: exit 0 for the valid example, 1 for an invalid one.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lagrange/module/Expected.hpp"
+#include "lagrange/world/Model.hpp"
 #include "lagrange/world/PoseMath.hpp"
 #include "lagrange/world/World.hpp"
 
@@ -11,59 +12,15 @@
 
 namespace lagrange::server {
 
-inline constexpr std::uint32_t kNoIndex = 0xFFFF'FFFFU;
-
-/// Triangle mesh for the viewer: float32 positions and normals, uint32 indices.
-struct TriMesh {
-    std::vector<float> positions;  // x, y, z per vertex
-    std::vector<float> normals;
-    std::vector<std::uint32_t> indices;
-};
-
-[[nodiscard]] TriMesh boxMesh(double sizeX, double sizeY, double sizeZ);
-/// A cylinder along z, centred at the origin (the URDF convention).
-[[nodiscard]] TriMesh cylinderMesh(double radius, double length, int segments = 32);
-[[nodiscard]] TriMesh sphereMesh(double radius, int segments = 32, int rings = 16);
-
-/// One prim of the scene the viewer shows. Its world pose is the pose of `body` composed with
-/// `offset`, or `offset` alone when `body` is kNoIndex (static scenery).
-struct ScenePrim {
-    std::string name;
-    std::string path;
-    std::uint32_t parent{kNoIndex};
-    std::string typeName;  // "Xform", "Mesh"
-    std::vector<std::string> apiSchemas;
-    std::uint32_t mesh{kNoIndex};
-    std::uint32_t material{kNoIndex};
-    std::uint32_t body{kNoIndex};
-    Pose offset;
-    std::array<float, 3> scale{1.0F, 1.0F, 1.0F};
-};
-
-struct SceneMaterial {
-    std::string name;
-    std::array<float, 4> rgba{0.7F, 0.7F, 0.72F, 1.0F};
-};
-
-struct Scene {
-    std::vector<ScenePrim> prims;
-    std::vector<TriMesh> meshes;
-    std::vector<SceneMaterial> materials;
-};
-
-/// A robot ready to simulate and to show: the world tables for the physics, and the scene.
-struct Robot {
-    std::string name;
-    std::string sourcePath;
-    World world;
-    Scene scene;
-    std::vector<Pose> bodyRestPose;           // world pose of each body with all joints at zero
-    std::vector<std::uint32_t> bodyPrim;      // scene prim of each body
-    std::vector<std::uint32_t> jointPrim;     // scene prim of each joint's child link
-    std::vector<std::uint32_t> sensorPrim;    // scene prim of each sensor
-    std::vector<std::string> actuatedJoints;  // joints driven by torque, in file order
-    std::vector<std::string> notes;           // what was skipped or approximated, for the user
-};
+using lagrange::boxMesh;
+using lagrange::cylinderMesh;
+using lagrange::kNoIndex;
+using lagrange::Scene;
+using lagrange::SceneMaterial;
+using lagrange::ScenePrim;
+using lagrange::sphereMesh;
+using lagrange::TriMesh;
+using Robot = lagrange::Model;
 
 struct LoadOptions {
     double groundFriction{1.0};   // Coulomb coefficient of the ground plane
@@ -105,5 +62,17 @@ inline constexpr double kRebaseDistanceM = 1000.0;
 /// exact in double, and world.region records it. Call it once, after the robot and the world are
 /// loaded. Returns the shift (zeros when nothing moved).
 std::array<double, 3> recentre(Robot& robot, double rebaseDistanceM = kRebaseDistanceM);
+
+/// A robot from a URDF (.urdf) or a USD stage (.usd, .usda, .usdc: lagrange_stage), with the
+/// ground added.
+[[nodiscard]] Expected<Robot, std::string> loadModel(const std::string& path,
+                                                     const LoadOptions& options = {});
+
+/// Adds a second file to a loaded robot (the world's scenery, or another robot), URDF or USD.
+[[nodiscard]] Expected<void, std::string> addModel(Robot& robot, const std::string& path,
+                                                   const LoadOptions& options = {});
+
+/// Whether a path names a USD layer.
+[[nodiscard]] bool isUsd(const std::string& path);
 
 }  // namespace lagrange::server

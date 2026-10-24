@@ -1,0 +1,19 @@
+{
+    "Plugins": [
+        {
+            "Info": {
+                "SdfMetadata": {
+                    "lagrangeUnit": {
+                        "type": "string",
+                        "appliesTo": ["attributes"],
+                        "displayGroup": "Lagrange"
+                    }
+                }
+            },
+            "Name": "lagrangeMetadata",
+            "Type": "resource",
+            "Root": ".",
+            "ResourcePath": "."
+        }
+    ]
+}

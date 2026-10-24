@@ -147,7 +147,7 @@ lagrange/
 ├── cmake/                      # shared CMake modules (no cross-platform toolchains yet)
 │   # every top-level C++ dir below is one or more ament_cmake packages with a package.xml
 │
-├── schemas/                    # USD custom schemas — the data model
+├── schemas/                    # USD custom schemas — the data model (package `lagrange_schemas`)
 │   ├── electrical/schema.usda      # ElectricalMotorAPI, BatteryAPI, PortAPI...
 │   ├── thermal/  aero/  weather/  emi/  radiation/  sensor_material/
 │   └── generated/              # usdGenSchema output (C++ + Python) — never edit by hand
@@ -166,7 +166,7 @@ lagrange/
 │   │   ├── coords/             # double-precision world, floating origin, WGS84↔ENU
 │   │   ├── streaming/          # tile loading, LOD, USD payload management
 │   │   └── regions/            # active-region management, future distributed handoff
-│   ├── stage/                  # USD stage loading → runtime world conversion
+│   ├── stage/                  # (planned here; lives in io/stage, since core/ is one colcon package)
 │   └── plugin_abi/             # versioned C ABI for third-party plugins
 │
 ├── gpu/
@@ -193,6 +193,7 @@ lagrange/
 │   └── sensors/                # lidar, camera, imu, gnss, magnetometer...
 │
 ├── io/
+│   ├── stage/                  # `lagrange_stage`: USD stage → world tables and scene, and back
 │   ├── importers/              # urdf, xacro, sdformat, mjcf → usd
 │   ├── recording/              # MCAP writer/reader, replay substitutes
 │   ├── fields/                 # OpenVDB loading, offline CFD import
@@ -247,10 +248,12 @@ verification, not in this repo.
 - Sanitizer build: `colcon build --build-base build-asan --install-base install-asan --mixin asan` (TBD; verify mixin availability)
 - C++ tests: `colcon test && colcon test-result --verbose` (TBD)
 - Python: `ruff check . && ruff format --check . && mypy python/ && pytest` (TBD)
-- Simulator: `ros2 run lagrange_server lagrange_server [--robot FILE.urdf] [--world FILE.urdf|none] [--listen ENDPOINT] [--spawn X,Y[,Z[,YAW]]] [--lidar auto|cpu|gpu] [--gpu DEVICE] [--rtf X] [--paused] [--no-ros] [--domain rigid_body|sensors=off] [--cmd-vel-unstamped] [--no-demo] [--record FILE.mcap] [--export-map FILE.yaml]` (MuJoCo physics, IMU and lidar on the scheduler, ROS 2 bridge publishing /clock /tf /odom /joint_states /scan /points /imu and taking /cmd_vel as TwistStamped, plus the `simulation_interfaces` services: get/set_simulation_state, step_simulation, reset_simulation, get_entities, get_entity_state, ...; default: the sample AMR in the sample warehouse on the default socket; `--export-map` writes a Nav2 occupancy map of the fixed scenery and exits)
+- Simulator: `ros2 run lagrange_server lagrange_server [--robot FILE.urdf|FILE.usd] [--world FILE.urdf|FILE.usd|none] [--listen ENDPOINT] [--spawn X,Y[,Z[,YAW]]] [--lidar auto|cpu|gpu] [--gpu DEVICE] [--rtf X] [--paused] [--no-ros] [--domain rigid_body|sensors=off] [--cmd-vel-unstamped] [--no-demo] [--record FILE.mcap] [--export-map FILE.yaml]` (MuJoCo physics, IMU and lidar on the scheduler, ROS 2 bridge publishing /clock /tf /odom /joint_states /scan /points /imu and taking /cmd_vel as TwistStamped, plus the `simulation_interfaces` services: get/set_simulation_state, step_simulation, reset_simulation, get_entities, get_entity_state, ...; default: the sample AMR in the sample warehouse on the default socket; `--export-map` writes a Nav2 occupancy map of the fixed scenery and exits)
 - CLI: `ros2 run lagrange_server lagrange run PROFILE | validate PROFILE... | graph [PROFILE] | info [--version]` (a profile's `stage` names the URDF robot unless `--robot` is given; options as `lagrange_server`; `docs/guide/cli.md`; the example for the sample AMR is `profiles/examples/amr_sample_urdf.yaml`)
 - User guide and tutorial: `docs/guide/` (tutorial, concepts, profiles, writing a module, CLI); `tools/ci/tutorial_amr.sh` runs the AMR tutorial headless and checks each step (Nav2 step only when Nav2 is installed); the module chapter's code is package `lagrange_tutorial` in `tests/tutorial/`
+- USD import: `ros2 run lagrange_server lagrange_import robot.urdf robot.usda` writes a URDF (or USD) robot as a USD stage with the Lagrange schemas; `lagrange_server` loads either
 - Record and replay: `lagrange_server --record run.mcap` writes the run until the server stops or is reset (signals at full rate, about 1.5 MB/s for the sample AMR; arrays over 1024 components left out); `ros2 run lagrange_mock_server lagrange_mock_server --recording run.mcap` replays it to the viewer
+- URDF to USD: `ros2 run lagrange_server lagrange_import robot.urdf robot.usda` (writes what the server reads back; the sample `.usda` assets are made this way and `test_usd_assets` keeps them in step with the URDFs)
 - Nav2 demo: `ros2 launch lagrange_demos amr_warehouse.launch.py [viewer:=false]`, then `ros2 run lagrange_demos patrol [--minutes N]` (fails on a missed waypoint or a collision; nightly CI runs 10 minutes via `tools/ci/nav2_demo.sh 10`)
 - Profiles: the server validates profiles from the viewer against `profiles/schema.json` (jsoncons, JSON Schema 2020-12) and what it can run, and applies them by rebuilding the run at t = 0 (domain on/off with substitutes, `rigid_body.dt`, `time.real_time_factor`); other keys are warnings
 - Viewer: built by colcon with everything else; run `ros2 run lagrange_viewer lagrange_viewer` (starts on the launcher, whose Start local simulator runs `lagrange_server`; `--connect <endpoint>` goes straight to a server)
