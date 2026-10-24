@@ -11,6 +11,11 @@ every schema is version 1 and may change without a migration.
   drafts: `elec:conv:input` and `elec:conv:output` relationships on the converter (the draft had
   no topology for it), and a fallback of 0 V for `elec:load:minVoltage`.
 
+- `elec:backEmfConstant`'s documented fallback corrected: torqueConstant / 1.5 for pmsm and bldc
+  (Kt = 1.5·p·λ and Ke = p·λ in the peak dq convention), torqueConstant for dc_brushed; the
+  draft said torqueConstant for all. Documentation only: the attribute still has no authored
+  fallback, and the electrical network derives the value.
+
 ## v0.2.0
 
 - **Sensor library** (`schemas/sensor`): `SensorAPI_1`, `LidarAPI_1`, `ImuAPI_1`.

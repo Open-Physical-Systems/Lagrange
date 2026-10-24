@@ -163,7 +163,10 @@ class "ElectricalMotorAPI_1" (
     )
     double elec:backEmfConstant (
         lagrangeUnit = "V.s/rad"
-        doc = "Line-neutral peak volts per mechanical rad/s; unauthored: equal to torqueConstant."
+        doc = """Line-neutral peak volts per mechanical rad/s. Unauthored: what torqueConstant
+        implies, Kt/1.5 for pmsm and bldc (power balance in the peak dq convention) and Kt for
+        dc_brushed. When authored it must agree with that within 3 %, or the network refuses the
+        motor: a mismatch means one constant is in another convention (RMS, line-line)."""
     )
     int elec:polePairs = 1 (
         lagrangeUnit = "1"

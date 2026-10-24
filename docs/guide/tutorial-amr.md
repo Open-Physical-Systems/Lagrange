@@ -50,8 +50,8 @@ $ lagrange graph $profile | dot -Tsvg -o wiring.svg
 ```
 
 `wiring.svg` shows the modules and the signals between them, as on [the CLI page](cli.md#the-wiring-graph):
-the diff-drive controller sends wheel torque commands through the electrical domain (its ideal
-substitute for now) to MuJoCo, and the IMU and the two lidars read body
+the diff-drive controller sends wheel torque commands through the electrical network (motors,
+drives, the battery and its 48 V bus) to MuJoCo, and the IMU and the two lidars read body
 poses from it.
 
 ## 3. Run it and watch

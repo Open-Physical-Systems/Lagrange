@@ -7,6 +7,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <string_view>
 
 #include <ament_index_cpp/get_package_share_path.hpp>
@@ -97,7 +98,8 @@ void printServerOptions(std::FILE* out) {
                  "            server stops or the run is reset; the mock server replays it\n"
                  "  --record-max-components N  leave larger signals out (default 1024: the\n"
                  "            3D lidar's ranges)\n"
-                 "  --domain D=off  replace domain D (rigid_body, sensors) by its substitute\n"
+                 "  --domain D=off  replace domain D (rigid_body, electrical, sensors) by its\n"
+                 "            substitute\n"
                  "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
                  "            TwistStamped\n"
                  "  --no-demo  stand still until the first /cmd_vel instead of driving the demo\n"
@@ -209,9 +211,9 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             const std::string domain(setting.substr(0, equals));
             const std::string_view state =
                 equals == std::string_view::npos ? "" : setting.substr(equals + 1);
-            if ((domain != "rigid_body" && domain != "sensors") ||
+            if ((domain != "rigid_body" && domain != "sensors" && domain != "electrical") ||
                 (state != "on" && state != "off")) {
-                return "--domain takes rigid_body=on|off or sensors=on|off";
+                return "--domain takes rigid_body=on|off, electrical=on|off or sensors=on|off";
             }
             if (state == "off") {
                 options.substituted.insert(domain);
@@ -241,7 +243,8 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
     if (options.robotPath.empty()) {
         return "no --robot given and lagrange_assets is not installed";
     }
-    if (out.robotGiven && !out.overlayGiven) {
+    if (out.robotGiven && !out.overlayGiven &&
+        std::filesystem::path(options.robotPath).filename() != "amr_diffdrive.urdf") {
         options.overlayPath.clear();  // the default overlay fits the sample robot only
     }
     return std::nullopt;

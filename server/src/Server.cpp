@@ -1,5 +1,6 @@
 #include "Recorder.hpp"
 #include "lagrange/electrical/IdealTorqueSource.hpp"
+#include "lagrange/electrical/Network.hpp"
 #include "lagrange/importers/Importers.hpp"
 #include "lagrange/proto/Connection.hpp"
 #include "lagrange/proto/Framing.hpp"
@@ -277,9 +278,19 @@ struct Server::Impl {
             next->add(std::move(drive));
             next->add(std::make_unique<DiffDriveController>(driveSettings()));
         }
-        // Electrical has no model yet: its ideal substitute turns the controllers' torque
-        // commands into joint torques (domains/electrical.md §5).
-        next->add(std::make_unique<electrical::IdealTorqueSource>());
+        // The electrical domain turns the controllers' torque commands into joint torques: the
+        // network when the robot has motors (from USD or an overlay), else its ideal substitute
+        // (domains/electrical.md §5).
+        if (hasMotors() && !off("electrical")) {
+            ModuleConfigData power;
+            power.fidelity = "averaged";
+            if (settings.electricalDtNs) {
+                power.dt = Duration{*settings.electricalDtNs};
+            }
+            next->add(std::make_unique<electrical::ElectricalNetwork>(), ModuleConfig(power));
+        } else {
+            next->add(std::make_unique<electrical::IdealTorqueSource>());
+        }
         ModuleConfigData sensing;
         sensing.tier =
             rayContext ? static_cast<CapabilityTier>(rayContext->tier()) : CapabilityTier::Tier0;
@@ -306,10 +317,12 @@ struct Server::Impl {
         ProfileSettings settings;
         settings.substituted = options.substituted;
         settings.rigidBodyDtNs = rigidBodyDtNs;
+        settings.electricalDtNs = electricalDtNs;
         return settings;
     }
-    std::optional<std::int64_t> rigidBodyDtNs;  // from an applied profile
-    std::optional<ProfileSettings> pending;     // applied without restart: used at the next reset
+    std::optional<std::int64_t> rigidBodyDtNs;   // from an applied profile
+    std::optional<std::int64_t> electricalDtNs;  // from an applied profile
+    std::optional<ProfileSettings> pending;      // applied without restart: used at the next reset
 
     Status build() {
         auto made = makeScheduler(active(), &driveCommand);
@@ -930,6 +943,10 @@ struct Server::Impl {
     }
 
     bool hasSensors() const { return !robot.world.sensors.names.empty(); }
+    /// Motors to simulate: ElectricalMotorAPI_1 prims from USD or an overlay.
+    bool hasMotors() const {
+        return !WorldView(robot.world).instancesOf("ElectricalMotorAPI_1").empty();
+    }
 
     /// Picks where lidars cast (ServerOptions::lidar); logs the choice.
     Status placeLidar() {
@@ -993,6 +1010,13 @@ struct Server::Impl {
                               static_cast<double>(rigidBodyDtNs.value_or(1'000'000)) / 1e9);
                 yaml +=
                     "  rigid_body: {enabled: true, backend: mujoco, dt: " + std::string(dt) + "}\n";
+            } else if (std::string_view(row.domain) == "electrical" && hasMotors() &&
+                       !substituted("electrical")) {
+                char dt[48];
+                std::snprintf(dt, sizeof(dt), "%.9g",
+                              static_cast<double>(electricalDtNs.value_or(100'000)) / 1e9);
+                yaml += "  electrical: {enabled: true, fidelity: averaged, dt: " + std::string(dt) +
+                        "}\n";
             } else if (std::string_view(row.domain) == "sensors" && hasSensors() &&
                        !substituted("sensors")) {
                 yaml += "  sensors: {enabled: true}\n";
@@ -1031,13 +1055,15 @@ struct Server::Impl {
             d.set_domain(row.domain);
             const bool physics = std::string_view(row.domain) == "rigid_body";
             const bool sensing = std::string_view(row.domain) == "sensors" && hasSensors();
-            const bool built = physics || sensing;  // a module exists for it
+            const bool powered = std::string_view(row.domain) == "electrical" && hasMotors();
+            const bool built = physics || sensing || powered;  // a module exists for it
             const bool running = built && !substituted(row.domain);
             d.set_enabled(running);
             d.set_available(built);
-            d.set_active_module(
-                running ? (physics ? "mujoco" : (rayContext ? "raycast_gpu" : "raycast"))
-                        : row.substitute);
+            d.set_active_module(running ? (physics   ? "mujoco"
+                                           : powered ? "averaged_network"
+                                                     : (rayContext ? "raycast_gpu" : "raycast"))
+                                        : row.substitute);
             d.set_substituted(!running);
             d.set_cpu_ms_per_sim_s(cost[row.domain]);
             if (sensing) {
@@ -1045,8 +1071,19 @@ struct Server::Impl {
                 d.set_dt_ns(fastestSensorNs());
                 d.add_depends_on("rigid_body");
             }
+            if (powered) {
+                d.add_fidelities("averaged");
+                d.set_dt_ns(electricalDtNs.value_or(100'000));
+                d.set_min_dt_ns(10'000);
+                d.set_max_dt_ns(1'000'000);
+                d.add_depends_on("rigid_body");
+            }
             if (!built) {
-                d.set_unavailable_reason("no module in this build yet; the substitute stands in");
+                d.set_unavailable_reason(
+                    std::string_view(row.domain) == "electrical"
+                        ? "no ElectricalMotorAPI prims in the stage; the ideal torque source "
+                          "stands in (an overlay file adds motors to a URDF robot)"
+                        : "no module in this build yet; the substitute stands in");
             }
             v1::SubstituteOption& option = *d.add_substitutes();
             option.set_token(row.substitute);
@@ -1318,6 +1355,9 @@ struct Server::Impl {
         if (hasSensors()) {
             context.modules.insert("sensors");
         }
+        if (hasMotors()) {
+            context.modules.insert("electrical");
+        }
         for (const DomainRow& row : kDomains) {
             context.substitutes[row.domain] = {row.substitute, row.substituteKind};
         }
@@ -1394,11 +1434,13 @@ struct Server::Impl {
         const ProfileSettings previous = active();
         options.substituted = settings.substituted;
         rigidBodyDtNs = settings.rigidBodyDtNs;
+        electricalDtNs = settings.electricalDtNs;
         pending.reset();
         if (Status status = restart(); !status.ok()) {
             // Keep the run going on the profile it had.
             options.substituted = previous.substituted;
             rigidBodyDtNs = previous.rigidBodyDtNs;
+            electricalDtNs = previous.electricalDtNs;
             (void)restart();
             return status;
         }
