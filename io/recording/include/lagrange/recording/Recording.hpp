@@ -18,8 +18,9 @@ struct RecordedSignal {
     Unit unit;
     std::uint32_t components{1};
     std::int64_t dtNs{0};
-    std::string writer;           // "rigid_body/mujoco"
-    std::vector<double> samples;  // sample-major: samples[k * components + c]
+    std::string writer;                // "rigid_body/mujoco"
+    std::uint32_t prim{0xFFFF'FFFFU};  // scene prim the signal is about (the catalog's), or none
+    std::vector<double> samples;       // sample-major: samples[k * components + c]
 
     [[nodiscard]] std::size_t sampleCount() const {
         return components == 0 ? 0 : samples.size() / components;
@@ -34,6 +35,18 @@ struct Recording {
     std::string stagePath;
     SimTime duration;
     std::vector<RecordedSignal> signals;
+    /// Every signal of the catalog, kept or not: name, writer and prim.
+    struct CatalogEntry {
+        std::string name;
+        std::string writer;
+        std::uint32_t prim{0xFFFF'FFFFU};
+        std::int64_t dtNs{0};
+        std::string unit;  // display form ("N·m")
+    };
+    std::vector<CatalogEntry> catalog;
+    /// The scene at the start (a serialized lagrange.viewer.v1.SceneSnapshot), for a replay
+    /// that shows the run; empty when the file has none.
+    std::string snapshot;
 
     [[nodiscard]] const RecordedSignal* find(std::string_view name) const;
 

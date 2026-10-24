@@ -35,6 +35,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <optional>
 #include <poll.h>
 #include <set>
 #include <span>
@@ -159,6 +160,64 @@ std::string displayUnit(const std::string& text) {
     return out;
 }
 
+/// The scene a recording starts with (its SceneSnapshot) as a model to replay: prims at their
+/// recorded poses, meshes and materials. No bodies: a replay moves prims by their recorded
+/// "scene<path>/pose" signals.
+Expected<Model, std::string> modelOfSnapshot(const std::string& bytes) {
+    v1::SceneSnapshot snap;
+    if (bytes.empty() || !snap.ParseFromString(bytes)) {
+        return Unexpected{std::string("the recording has no scene snapshot to show")};
+    }
+    Model model;
+    model.name = "replay";
+    model.sourcePath = snap.stage_path();
+    const std::string& poses = snap.transforms().inline_();
+    constexpr std::size_t kPoseBytes = 52;  // appendPose with scale
+    for (int i = 0; i < snap.prims_size(); ++i) {
+        const v1::Prim& in = snap.prims(i);
+        ScenePrim prim;
+        prim.name = in.name();
+        prim.path = in.path();
+        prim.parent = in.parent();
+        prim.typeName = in.type_name();
+        prim.apiSchemas.assign(in.api_schemas().begin(), in.api_schemas().end());
+        prim.mesh = in.mesh();
+        prim.material = in.material();
+        const std::size_t at = static_cast<std::size_t>(i) * kPoseBytes;
+        if (at + kPoseBytes <= poses.size()) {
+            std::array<float, 4> q{};
+            std::memcpy(prim.offset.position.data(), poses.data() + at, 24);
+            std::memcpy(q.data(), poses.data() + at + 24, 16);
+            std::memcpy(prim.scale.data(), poses.data() + at + 40, 12);
+            prim.offset.orientation = {q[0], q[1], q[2], q[3]};
+        }
+        model.scene.prims.push_back(std::move(prim));
+    }
+    const auto floats = [](const v1::DataRef& ref) {
+        std::vector<float> out(ref.inline_().size() / sizeof(float));
+        std::memcpy(out.data(), ref.inline_().data(), out.size() * sizeof(float));
+        return out;
+    };
+    for (const v1::Mesh& in : snap.meshes()) {
+        TriMesh mesh;
+        mesh.positions = floats(in.positions());
+        mesh.normals = floats(in.normals());
+        mesh.indices.resize(in.indices().inline_().size() / sizeof(std::uint32_t));
+        std::memcpy(mesh.indices.data(), in.indices().inline_().data(),
+                    mesh.indices.size() * sizeof(std::uint32_t));
+        model.scene.meshes.push_back(std::move(mesh));
+    }
+    for (const v1::Material& in : snap.materials()) {
+        SceneMaterial material;
+        material.name = in.name();
+        for (int c = 0; c < std::min(in.base_color_size(), 4); ++c) {
+            material.rgba.at(static_cast<std::size_t>(c)) = in.base_color(c);
+        }
+        model.scene.materials.push_back(std::move(material));
+    }
+    return model;
+}
+
 std::string readFile(const std::string& path) {
     std::ifstream file(path);
     std::stringstream text;
@@ -275,6 +334,24 @@ struct Server::Impl {
         const auto off = [&settings](const char* domain) {
             return settings.substituted.contains(domain);
         };
+        if (replay) {
+            // Every domain the recording has, replayed: nothing is simulated.
+            auto next = std::make_unique<Scheduler>(SchedulerOptions{.deterministic = true});
+            std::set<std::string> domains;
+            for (const recording::Recording::CatalogEntry& entry : replay->catalog) {
+                domains.insert(entry.writer.substr(0, entry.writer.find('/')));
+            }
+            for (const std::string& domain : domains) {
+                next->add(
+                    std::make_unique<recording::ReplaySubstitute>(domain, options.replayPath));
+            }
+            auto wired = next->wire(WorldView(robot.world));
+            if (!wired) {
+                return Unexpected{"the recording cannot be replayed: " +
+                                  to_string(wired.error().front())};
+            }
+            return next;
+        }
         // A run that takes commands from ROS is not deterministic: its input comes from outside.
         // So is one with the lidar on the GPU or rendering cameras (invariant 7: the CPU is the
         // reference).
@@ -446,6 +523,9 @@ struct Server::Impl {
             bridge->attach(robot.world, scheduler->bus());
         }
         lidarSent.assign(robot.world.sensors.names.size(), SimTime{-1});
+        if (replay) {
+            startReplay();
+        }
         return {};
     }
 
@@ -609,6 +689,17 @@ struct Server::Impl {
             tickNs.push_back(nanosSince(tickStart, Clock::now()));
             capture();
             record();
+            if (replay) {
+                if (scheduler->now().ns % kCheckpointNs == 0) {
+                    checkpoint();
+                }
+                if (scheduler->now() >= replay->duration) {
+                    state = v1::RUN_STATE_PAUSED;  // the end of the recording
+                    owedNs = 0;
+                    log(v1::LOG_LEVEL_INFO, "replay", "end of the recording");
+                    break;
+                }
+            }
             if (bridge) {
                 bridge->publish(scheduler->bus(), scheduler->now());
             }
@@ -650,6 +741,10 @@ struct Server::Impl {
     }
 
     Status startRecording(const std::string& path) {
+        if (replay) {
+            return Status::error(StatusCode::Unsupported,
+                                 "a replay is not recorded again: copy the file instead");
+        }
         auto created = Recorder::create(path);
         if (!created) {
             return Status::error(StatusCode::InvalidConfig, created.error());
@@ -772,6 +867,14 @@ struct Server::Impl {
     // --- scene -----------------------------------------------------------------------------
 
     Pose primPose(const ScenePrim& prim) const {
+        if (!replayPose.empty()) {
+            const auto index = static_cast<std::size_t>(&prim - robot.scene.prims.data());
+            if (index < replayPose.size() && replayPose[index].valid()) {
+                const std::span<const double> v = scheduler->bus().readN(replayPose[index]);
+                return {{v[0], v[1], v[2]}, {v[3], v[4], v[5], v[6]}};
+            }
+            return prim.offset;
+        }
         if (prim.body == kNoIndex) {
             return prim.offset;
         }
@@ -855,7 +958,11 @@ struct Server::Impl {
             }
             out.set_roughness(0.6F);
         }
-        electricalNets(snap);
+        if (replay) {
+            *snap.mutable_nets() = replayNets;  // the recorded power system
+        } else {
+            electricalNets(snap);
+        }
         snap.set_topology_hash(WorldView(robot.world).topologyHash());
         snap.set_stage_path(robot.sourcePath);
         return envelope;
@@ -988,6 +1095,14 @@ struct Server::Impl {
     /// and the electrical and thermal components' motor/, battery/, load/, bus/ and thermal/
     /// <prim>/... name it.
     std::uint32_t primOfSignal(const std::string& name) const {
+        if (replay) {
+            for (const recording::Recording::CatalogEntry& entry : replay->catalog) {
+                if (entry.name == name) {
+                    return entry.prim;
+                }
+            }
+            return kNoIndex;
+        }
         const auto field = [&](std::string_view prefix) -> std::string {
             if (name.rfind(prefix, 0) != 0) {
                 return {};
@@ -1131,6 +1246,10 @@ struct Server::Impl {
         s.set_real_time_factor_target(rtfTarget);
         s.set_real_time_factor(state == v1::RUN_STATE_RUNNING ? measuredRtf : 0.0);
         s.set_error(error);
+        if (replay) {
+            s.mutable_replay_begin()->set_ns(0);
+            s.mutable_replay_end()->set_ns(replay->duration.ns);
+        }
         return envelope;
     }
     double measuredRtf{0.0};
@@ -1275,6 +1394,24 @@ struct Server::Impl {
     }
 
     std::string profileYaml() const {
+        if (replay) {
+            // A replay: every recorded domain is its replay substitute, the rest their default.
+            std::string yaml =
+                "# Lagrange simulation profile: a replay\nschema_version: 1\n"
+                "stage: " +
+                stageName() + "\n\ndomains:\n";
+            for (const DomainRow& row : kDomains) {
+                const bool recorded = std::ranges::any_of(
+                    replay->catalog, [&row](const recording::Recording::CatalogEntry& entry) {
+                        return entry.writer.starts_with(std::string(row.domain) + "/");
+                    });
+                yaml +=
+                    "  " + std::string(row.domain) + ": {enabled: false, substitute: " +
+                    (recorded ? "replay, source: " + replay->path : std::string(row.substitute)) +
+                    "}\n";
+            }
+            return yaml;
+        }
         std::string yaml =
             "# Lagrange simulation profile\nschema_version: 1\nstage: " + stageName() +
             "\n\ndomains:\n";
@@ -1346,6 +1483,22 @@ struct Server::Impl {
         for (const DomainRow& row : kDomains) {
             v1::DomainState& d = *p.add_domains();
             d.set_domain(row.domain);
+            if (replay) {
+                // A replay simulates nothing: what was recorded stands in for every domain.
+                const bool recorded = std::ranges::any_of(
+                    replay->catalog, [&row](const recording::Recording::CatalogEntry& entry) {
+                        return entry.writer.starts_with(std::string(row.domain) + "/");
+                    });
+                d.set_enabled(false);
+                d.set_available(false);
+                d.set_substituted(true);
+                d.set_active_module(recorded ? "replay" : row.substitute);
+                v1::SubstituteOption& option = *d.add_substitutes();
+                option.set_token(recorded ? "replay" : row.substitute);
+                option.set_kind(recorded ? "replay" : row.substituteKind);
+                d.set_unavailable_reason("a replay of " + replay->path + ": nothing is simulated");
+                continue;
+            }
             const bool physics = std::string_view(row.domain) == "rigid_body";
             const bool sensing = std::string_view(row.domain) == "sensors" && hasSensors();
             const bool powered = std::string_view(row.domain) == "electrical" && hasMotors();
@@ -1405,9 +1558,9 @@ struct Server::Impl {
             option.set_token(row.substitute);
             option.set_kind(row.substituteKind);
             if (physics) {
-                v1::SubstituteOption& replay = *d.add_substitutes();
-                replay.set_token("replay");
-                replay.set_kind("replay");
+                v1::SubstituteOption& replayOption = *d.add_substitutes();
+                replayOption.set_token("replay");
+                replayOption.set_kind("replay");
             }
             if (physics) {
                 d.add_backends("mujoco");
@@ -1448,9 +1601,13 @@ struct Server::Impl {
         hello.set_session_id(nextSessionId++);
         v1::Capabilities& caps = *hello.mutable_capabilities();
         caps.set_can_step(true);
+        caps.set_can_seek(replay.has_value());
         caps.set_tier(0);
         session.send(reply);
         session.greeted = true;
+        if (replay) {
+            session.send(recordingInfo());
+        }
 
         session.send(profileState({}));
         session.send(catalog());
@@ -1576,6 +1733,23 @@ struct Server::Impl {
                     r.set_error(status.message);
                 }
                 break;
+            case v1::Command::kOpenRecording:
+                if (Status status = openRecording(command.open_recording().path()); !status.ok()) {
+                    r.set_ok(false);
+                    r.set_error(status.message);
+                } else {
+                    r.set_imported_stage_path(command.open_recording().path());
+                }
+                break;
+            case v1::Command::kSeek:
+                if (Status status = seek(command.seek().to().ns()); !status.ok()) {
+                    r.set_ok(false);
+                    r.set_error(status.message);
+                } else {
+                    resync = true;
+                }
+                statusChanged = true;
+                break;
             case v1::Command::kSetTransform:
                 r.set_ok(false);
                 r.set_error("moving prims is not supported by this server yet");
@@ -1639,6 +1813,161 @@ struct Server::Impl {
     }
 
     /// Rebuilds the run at t = 0, keeping play or pause.
+    // --- replay mode (roadmap 0.2-E8) --------------------------------------------------------
+
+    std::optional<recording::Recording> replay;  // the recording's metadata; signals not kept
+    std::vector<SignalId> replayPose;            // per scene prim: its recorded pose, if any
+    google::protobuf::RepeatedPtrField<v1::ElectricalNet> replayNets;  // from its snapshot
+    static constexpr std::int64_t kCheckpointNs = 1'000'000'000;       // a saved state a second
+    std::map<std::int64_t, std::vector<std::byte>> checkpoints;        // by simulated time
+
+    /// Loads the recording: its scene as the model, its domains as replay substitutes.
+    Status loadReplay() {
+        auto opened = recording::Recording::open(options.replayPath,
+                                                 [](const std::string&, const std::string&) {
+                                                     return false;  // metadata only
+                                                 });
+        if (!opened) {
+            return Status::error(StatusCode::InvalidConfig, opened.error());
+        }
+        auto model = modelOfSnapshot(opened->snapshot);
+        if (!model) {
+            return Status::error(StatusCode::InvalidConfig,
+                                 options.replayPath + ": " + model.error());
+        }
+        v1::SceneSnapshot recorded;
+        if (recorded.ParseFromString(opened->snapshot)) {
+            replayNets = recorded.nets();
+        }
+        replay = std::move(*opened);
+        robot = std::move(*model);
+        log(v1::LOG_LEVEL_INFO, "replay",
+            options.replayPath + " · " + std::to_string(replay->catalog.size()) + " signals · " +
+                std::to_string(replay->duration.seconds()) + " s · stage " + robot.sourcePath);
+        return {};
+    }
+
+    v1::Envelope recordingInfo() const {
+        v1::Envelope info;
+        v1::RecordingInfo& r = *info.mutable_recording_info();
+        r.set_path(replay->path);
+        r.mutable_duration()->set_ns(replay->duration.ns);
+        std::error_code ec;
+        r.set_size_bytes(std::filesystem::file_size(replay->path, ec));
+        r.set_generator("lagrange_server");
+        std::uint64_t total = 0;
+        for (const recording::Recording::CatalogEntry& entry : replay->catalog) {
+            v1::RecordingInfo::Channel& channel = *r.add_channels();
+            channel.set_topic(entry.name);
+            if (entry.dtNs > 0) {
+                channel.set_rate_hz(1e9 / static_cast<double>(entry.dtNs));
+                const auto messages =
+                    static_cast<std::uint64_t>(replay->duration.ns / entry.dtNs) + 1;
+                channel.set_messages(messages);  // samples
+                total += messages;
+            }
+            channel.set_unit(entry.unit);
+        }
+        r.set_messages(total);
+        return info;
+    }
+
+    /// Command OpenRecording: the server becomes a replay of the file (from the viewer's
+    /// "Open recording"). Not with the ROS bridge, which drives a robot a replay does not have.
+    Status openRecording(const std::string& path) {
+        if (bridge) {
+            return Status::error(StatusCode::Unsupported,
+                                 "this server runs the ROS 2 bridge; replay with `lagrange_server "
+                                 "--replay " +
+                                     path + "` instead");
+        }
+        stopRecording("a recording was opened");
+        const std::string previous = options.replayPath;
+        options.replayPath = path;
+        if (Status status = loadReplay(); !status.ok()) {
+            options.replayPath = previous;
+            return status;
+        }
+        if (Status status = build(); !status.ok()) {
+            fail(status);
+            return status;
+        }
+        state = v1::RUN_STATE_PAUSED;
+        error.clear();
+        owedNs = 0;
+        ++catalogGeneration;
+        for (auto& session : sessions) {
+            if (!session->greeted) {
+                continue;
+            }
+            session->subscriptions.clear();
+            session->sensors.clear();
+            session->send(catalog());
+            session->send(recordingInfo());
+            session->send(snapshot(*session));
+            session->send(statusEnvelope());
+        }
+        return {};
+    }
+
+    /// After a build in replay mode: the prims' pose signals and the first checkpoint.
+    void startReplay() {
+        replayPose.assign(robot.scene.prims.size(), SignalId{});
+        for (std::uint32_t p = 0; p < robot.scene.prims.size(); ++p) {
+            replayPose[p] = scheduler->bus().find("scene" + robot.scene.prims[p].path + "/pose");
+        }
+        checkpoints.clear();
+        checkpoint();
+    }
+
+    void checkpoint() {
+        if (!replay || checkpoints.contains(scheduler->now().ns)) {
+            return;
+        }
+        StateWriter writer;
+        if (scheduler->saveState(writer).ok()) {
+            const std::span<const std::byte> bytes = writer.bytes();
+            checkpoints.emplace(scheduler->now().ns,
+                                std::vector<std::byte>(bytes.begin(), bytes.end()));
+        }
+    }
+
+    /// Command Seek: from the latest checkpoint at or before `to`, stepped forward to it.
+    Status seek(std::int64_t to) {
+        if (!replay) {
+            return Status::error(StatusCode::Unsupported,
+                                 "seeking needs a replay: start the server with --replay FILE");
+        }
+        to = std::clamp<std::int64_t>(to, 0, replay->duration.ns);
+        auto it = checkpoints.upper_bound(to);
+        if (it == checkpoints.begin()) {
+            return Status::error(StatusCode::Internal, "no checkpoint to seek from");
+        }
+        --it;
+        StateReader reader(it->second);
+        if (Status status = scheduler->restoreState(reader); !status.ok()) {
+            return status;
+        }
+        while (scheduler->now().ns < to) {
+            if (Status status = scheduler->stepTick(); !status.ok()) {
+                return status;
+            }
+            if (scheduler->now().ns % kCheckpointNs == 0) {
+                checkpoint();
+            }
+        }
+        owedNs = 0;
+        captured.assign(captured.size(), Captured{});  // nothing captured before the seek
+        for (std::size_t s = 0; s < captured.size(); ++s) {
+            const SignalId id = SignalId::output(static_cast<std::uint32_t>(s));
+            captured[s].id = id;
+            captured[s].components = componentCount(scheduler->bus().specAt(s).type,
+                                                    scheduler->bus().specAt(s).arrayLength);
+            captured[s].dtNs = scheduler->writerOf(id).dt.ns;
+        }
+        return {};
+    }
+
     /// Rebuilds the run from the (edited) world and carries its state over: the edit applies
     /// from the next step and the run goes on (E6). On failure the run is left as it was.
     Status rebuildKeepingState() {
@@ -1866,7 +2195,7 @@ struct Server::Impl {
     /// Checks a profile and shows the wiring it would build (or the running one if it does not
     /// parse into settings).
     void validate(const std::string& yaml, v1::ProfileValidation& out) {
-        const ProfileCheck check = checkProfile(yaml, schemaText, profileContext());
+        const ProfileCheck check = this->check(yaml);
         out.set_valid(check.valid);
         for (const ProfileIssue& issue : check.issues) {
             v1::ProfileIssue& item = *out.add_issues();
@@ -1898,6 +2227,18 @@ struct Server::Impl {
 
     /// checkProfile, then whether the settings wire (as validate, without the wiring preview).
     ProfileCheck check(const std::string& yaml) {
+        if (replay) {
+            // A replay runs what was recorded: its own profile is the only one, and it is valid.
+            ProfileCheck check;
+            check.valid = true;
+            check.settings = active();
+            if (yaml != profileYaml()) {
+                check.issues.push_back({false, "/domains",
+                                        "a replay runs what was recorded; profile changes do "
+                                        "not apply to it"});
+            }
+            return check;
+        }
         ProfileCheck check = checkProfile(yaml, schemaText, profileContext());
         if (check.settings) {
             if (auto preview = makeScheduler(*check.settings, nullptr); !preview) {
@@ -1910,6 +2251,10 @@ struct Server::Impl {
 
     /// Adopts a valid profile: rebuilds the run at t = 0 now, or at the next reset.
     Status apply(const std::string& yaml, bool restartNow) {
+        if (replay) {
+            return Status::error(StatusCode::Unsupported,
+                                 "profile not applied: a replay runs what was recorded");
+        }
         const ProfileCheck check = checkProfile(yaml, schemaText, profileContext());
         if (!check.valid || !check.settings) {
             for (const ProfileIssue& issue : check.issues) {
@@ -2539,6 +2884,19 @@ Status Server::load() {
                                                        v1::LOG_LEVEL_WARN, v1::LOG_LEVEL_ERROR};
             s.log(kLevels[static_cast<int>(level)], std::string(source), std::string(text));
         });
+    if (!s.options.replayPath.empty()) {
+        if (Status status = s.loadReplay(); !status.ok()) {
+            return status;
+        }
+        if (Status status = s.build(); !status.ok()) {
+            s.scheduler.reset();
+            return status;
+        }
+        if (!s.options.profileSchemaPath.empty()) {
+            s.schemaText = readFile(s.options.profileSchemaPath);
+        }
+        return {};
+    }
     auto robot = loadModel(s.options.robotPath, {.spawn = s.options.spawn});
     if (!robot) {
         return Status::error(StatusCode::InvalidConfig, robot.error());

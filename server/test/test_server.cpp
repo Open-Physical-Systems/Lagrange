@@ -536,5 +536,147 @@ TEST_F(PoweredServerTest, BadEditsAreRefusedAndChangeNothing) {
     EXPECT_GT(server_->simTime().ns, 0);
 }
 
+/// Replay mode (E8): a run recorded once for the suite, replayed through the protocol.
+class ReplayServerTest : public ServerTest {
+protected:
+    static void SetUpTestSuite() {
+        const std::filesystem::path dir =
+            std::filesystem::path(::testing::TempDir()) / "lagrange_replay";
+        std::filesystem::create_directories(dir);
+        file_ = (dir / "run.mcap").string();
+        std::filesystem::remove(file_);
+        ServerOptions options;
+        options.endpoint = proto::Endpoint::unixSocket((dir / "record.sock").string());
+        options.robotPath = LAGRANGE_TEST_AMR_URDF;
+        options.worldPath = LAGRANGE_TEST_WAREHOUSE_URDF;
+        options.overlayPath = LAGRANGE_TEST_AMR_OVERLAY;
+        options.ambientTemperatureK = 298.15;
+        options.realTimeFactor = 0.0;
+        options.ros = false;
+        {
+            ServerOptions recording = options;
+            recording.recordPath = file_;
+            Server server(recording);
+            const Status started = server.start();
+            ASSERT_TRUE(started.ok()) << started.message;
+            while (server.simTime().ns < 2'200'000'000) {
+                server.runOnce(0);
+            }
+        }  // closes the recording
+        // The same run again (deterministic: no ROS, the CPU lidar), for the poses to compare.
+        Server reference(options);
+        ASSERT_TRUE(reference.load().ok());
+        ASSERT_TRUE(reference.stepUntil(SimTime{500'000'000}).ok());
+        at05_ = reference.read("body/base_link/pose");
+        ASSERT_TRUE(reference.stepUntil(SimTime{1'500'000'000}).ok());
+        at15_ = reference.read("body/base_link/pose");
+    }
+
+    void adjust(ServerOptions& options) override {
+        options.replayPath = file_;
+        options.ros = false;
+    }
+
+    void expectPose(const std::vector<double>& expected) const {
+        const std::vector<double> pose = server_->read("body/base_link/pose");
+        ASSERT_EQ(pose.size(), expected.size());
+        for (std::size_t i = 0; i < pose.size(); ++i) {
+            EXPECT_NEAR(pose[i], expected[i], 1e-12) << i;
+        }
+    }
+
+    v1::CommandResult run(v1::Envelope command) {
+        const std::uint64_t id = command.command().request_id();
+        send(command);
+        EXPECT_TRUE(pumpUntil([id](const v1::Envelope& e) {
+            return e.has_command_result() && e.command_result().request_id() == id;
+        }));
+        return received_.back().command_result();
+    }
+
+    v1::CommandResult seekTo(std::int64_t ns, std::uint64_t id) {
+        v1::Envelope seek = command(id);
+        seek.mutable_command()->mutable_seek()->mutable_to()->set_ns(ns);
+        return run(seek);
+    }
+
+    static inline std::string file_;
+    static inline std::vector<double> at05_;
+    static inline std::vector<double> at15_;
+};
+
+TEST_F(ReplayServerTest, TheRecordingReplaysSampleForSampleAndSeeks) {
+    // The hello sends the catalog, then the status.
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_status(); }));
+    bool canSeek = false;
+    bool info = false;
+    std::int64_t end = 0;
+    for (const v1::Envelope& e : received_) {
+        canSeek = canSeek || (e.has_server_hello() && e.server_hello().capabilities().can_seek());
+        info = info || e.has_recording_info();
+        if (e.has_status()) {
+            end = e.status().replay_end().ns();
+        }
+    }
+    EXPECT_TRUE(canSeek);
+    EXPECT_TRUE(info);
+    EXPECT_GE(end, 2'200'000'000);
+    // The recorded scene, its nets included.
+    v1::Envelope ask = command(1);
+    ask.mutable_command()->mutable_request_snapshot();
+    send(ask);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_snapshot(); }));
+    EXPECT_GT(received_.back().snapshot().prims_size(), 20);
+    EXPECT_EQ(received_.back().snapshot().nets_size(), 1);
+
+    v1::Envelope step = command(2);
+    step.mutable_command()->mutable_step()->set_duration_ns(1'500'000'000);
+    ASSERT_TRUE(run(step).ok());
+    expectPose(at15_);
+    // Back, then forward again past a checkpoint: the same samples.
+    ASSERT_TRUE(seekTo(500'000'000, 3).ok());
+    EXPECT_EQ(server_->simTime().ns, 500'000'000);
+    expectPose(at05_);
+    ASSERT_TRUE(seekTo(1'500'000'000, 4).ok());
+    expectPose(at15_);
+}
+
+/// A simulating server (without ROS) that the viewer asks to open the recording.
+class OpenRecordingTest : public ReplayServerTest {
+protected:
+    void adjust(ServerOptions& options) override { options.ros = false; }
+};
+
+TEST_F(OpenRecordingTest, OpeningARecordingTurnsTheServerIntoItsReplay) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_status(); }));
+    v1::Envelope open = command(5);
+    open.mutable_command()->mutable_open_recording()->set_path(file_);
+    const v1::CommandResult opened = run(open);
+    ASSERT_TRUE(opened.ok()) << opened.error();
+    EXPECT_EQ(opened.imported_stage_path(), file_);
+    ASSERT_TRUE(pumpUntil(
+        [](const v1::Envelope& e) { return e.has_status() && e.status().replay_end().ns() > 0; }));
+    ASSERT_TRUE(seekTo(1'500'000'000, 6).ok());
+    expectPose(at15_);
+    // A file that is not a recording is refused and the replay stays.
+    v1::Envelope bad = command(7);
+    bad.mutable_command()->mutable_open_recording()->set_path("/nonexistent.mcap");
+    EXPECT_FALSE(run(bad).ok());
+    ASSERT_TRUE(seekTo(500'000'000, 8).ok());
+    expectPose(at05_);
+}
+
+TEST_F(ServerTest, SeekingASimulationIsRefused) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    v1::Envelope seek = command(7);
+    seek.mutable_command()->mutable_seek()->mutable_to()->set_ns(0);
+    send(seek);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) {
+        return e.has_command_result() && e.command_result().request_id() == 7;
+    }));
+    EXPECT_FALSE(received_.back().command_result().ok());
+    EXPECT_NE(received_.back().command_result().error().find("--replay"), std::string::npos);
+}
+
 }  // namespace
 }  // namespace lagrange::server

@@ -78,6 +78,8 @@ Expected<Recording, std::string> Recording::open(
             }
             haveCatalog = true;
             for (const v1::SignalInfo& info : catalog.signals()) {
+                out.catalog.push_back({info.name(), info.writer(), info.prim(), info.native_dt_ns(),
+                                       info.unit().display()});
                 if (keep && !keep(info.name(), info.writer())) {
                     continue;
                 }
@@ -88,9 +90,13 @@ Expected<Recording, std::string> Recording::open(
                 s.components = std::max<std::uint32_t>(1, info.components());
                 s.dtNs = info.native_dt_ns();
                 s.writer = info.writer();
+                s.prim = info.prim();
                 slotOf.emplace(info.id(), out.signals.size());
                 out.signals.push_back(std::move(s));
             }
+        } else if (topic == "/lagrange/scene/snapshot" && out.snapshot.empty()) {
+            out.snapshot.assign(reinterpret_cast<const char*>(data),
+                                static_cast<std::size_t>(size));
         } else if (std::string_view(topic).starts_with(kSignalsTopic)) {
             v1::SignalBlock block;
             if (!block.ParseFromArray(data, size)) {
@@ -153,9 +159,12 @@ ReplaySubstitute::Impl& ReplaySubstitute::load() const {
     impl_ = std::make_unique<Impl>();
     Impl& f = *impl_;
     const std::string prefix = domain_ + "/";
-    auto recording = Recording::open(path_, [&prefix](const std::string&, const std::string& w) {
-        return w.starts_with(prefix);
-    });
+    // "rigid_body/mujoco" is of the rigid_body domain; a writer without a module part (the
+    // server's "recorder", which records the prims' poses) is a domain of its own.
+    auto recording =
+        Recording::open(path_, [this, &prefix](const std::string&, const std::string& w) {
+            return w.starts_with(prefix) || w == domain_;
+        });
     if (!recording) {
         f.loadStatus = Status::error(StatusCode::InvalidConfig, recording.error());
         return f;

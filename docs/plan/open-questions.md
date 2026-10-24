@@ -14,7 +14,7 @@ Evidence references (V…) point to `docs/plan/verification.md`.
 | Q17 project name | **Lagrange**, organisation Open Physical Systems (`Open-Physical-Systems/Lagrange` on GitHub). Logos are in `docs/imgs/` |
 | Q19 hosting | The repository lives in a GitHub organisation. Team size and a self-hosted GPU runner are still open |
 | Q4 v0.1 without OpenUSD | Accepted: the mock server converts URDF directly to protocol scene messages; USD arrives in v0.2 |
-| Q15 mock server language | Python for v0.1 only. The shipped product is C++: replay moves into the C++ server in v0.2 and the Python server stays as a test tool |
+| Q15 mock server language | Decided (2026-10-25, E8): replay is `lagrange_server --replay`; the Python server is a test tool (conformance, the viewer's golden images) |
 | Q20 protocol (RFC 0003) | Accepted: Protobuf over a Unix socket or TCP, `memfd` shared memory, Zenoh deferred |
 | Q21 window library (RFC 0006) | Accepted: SDL3 |
 | Q9 first physics backend | Accepted: MuJoCo in v0.2, Jolt next, PhysX in v0.6. No in-house rigid-body solver (invariant 12) |
@@ -54,6 +54,12 @@ same substitute for every domain, but the viewer's replay also seeks and scrubs,
 Python mock server does and the scheduler does not (it only steps forward from t = 0). E8 stays
 open until seeking is designed (restore from saved states every N seconds is the likely way);
 until then the Python server remains the viewer's replay path.
+*Decided (2026-10-25, E8):* `lagrange_server --replay run.mcap` (and the viewer's Open
+recording on a running server) is the product's replay. Every recorded domain runs as a replay
+substitute, the scene comes from the snapshot the recorder now stores, and seeking restores the
+nearest of the scheduler states saved every second of replay time and steps forward from it
+(a seek ahead of what has been played first plays up to it). The Python mock server stays as a
+test tool: the protocol conformance client and the viewer's headless golden images run on it.
 
 **Q20. Protocol encoding and transport (RFC 0003).**
 **Recommendation:** Protobuf (proto3) with raw little-endian arrays in `bytes` fields for bulk
