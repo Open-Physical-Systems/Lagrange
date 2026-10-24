@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+"""Brings USD files up to the newest versions of the Lagrange schemas."""
+
+import sys
+
+from lagrange_migrate.schema import main
+
+sys.exit(main())

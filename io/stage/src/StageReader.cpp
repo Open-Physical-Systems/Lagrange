@@ -11,6 +11,7 @@
 #include <map>
 #include <numbers>
 #include <optional>
+#include <regex>
 #include <set>
 #include <string>
 #include <string_view>
@@ -25,6 +26,7 @@
 #include <pxr/base/tf/token.h>
 #include <pxr/base/vt/array.h>
 #include <pxr/usd/usd/primRange.h>
+#include <pxr/usd/usd/schemaRegistry.h>
 #include <pxr/usd/usd/stage.h>
 #include <pxr/usd/usdGeom/camera.h>
 #include <pxr/usd/usdGeom/capsule.h>
@@ -191,6 +193,8 @@ private:
         return {};
     }
 
+    static constexpr int kNewerVersionsSearched = 8;  // versions above an unknown one tried
+
     void note(std::string text) {
         if (std::find(m_.notes.begin(), m_.notes.end(), text) == m_.notes.end()) {
             m_.notes.push_back(std::move(text));
@@ -212,8 +216,52 @@ private:
         return {};
     }
 
+    /// Schema versions (formats.md §10): a prim that applies an older version of a family this
+    /// build knows is reported with the command that migrates it; two versions of one family
+    /// on one prim is an error.
+    void checkSchemaVersions(const UsdPrim& prim) {
+        static const std::regex applied(R"(^([A-Za-z][A-Za-z0-9]*)_([0-9]+)(:.+)?$)");
+        const UsdSchemaRegistry& registry = UsdSchemaRegistry::GetInstance();
+        std::map<std::string, int> versions;  // family + instance -> version
+        // The authored list, not GetAppliedSchemas(), which leaves out unregistered names.
+        SdfTokenListOp authored;
+        TfTokenVector names;
+        if (prim.GetMetadata(UsdTokens->apiSchemas, &authored)) {
+            authored.ApplyOperations(&names);
+        }
+        for (const TfToken& token : names) {
+            std::smatch match;
+            const std::string name = token.GetString();
+            if (!std::regex_match(name, match, applied)) {
+                continue;
+            }
+            const std::string family = match[1];
+            const int version = std::stoi(match[2]);
+            const auto [at, inserted] = versions.emplace(family + match[3].str(), version);
+            if (!inserted && at->second != version) {
+                errors_.push_back(prim.GetPath().GetString() + " applies two versions of " +
+                                  family);
+                continue;
+            }
+            if (registry.FindAppliedAPIPrimDefinition(TfToken(family + "_" + match[2].str()))) {
+                continue;
+            }
+            for (int newer = version + 1; newer <= version + kNewerVersionsSearched; ++newer) {
+                const std::string current = family + "_" + std::to_string(newer);
+                if (registry.FindAppliedAPIPrimDefinition(TfToken(current))) {
+                    note(prim.GetPath().GetString() + " applies " + family + "_" +
+                         std::to_string(version) + ", an older version of " + current +
+                         ", which is not read: migrate the file with `ros2 run lagrange_migrate "
+                         "migrate_schema FILE --in-place`");
+                    break;
+                }
+            }
+        }
+    }
+
     void collect() {
         for (const UsdPrim& prim : stage_->Traverse()) {
+            checkSchemaVersions(prim);
             if (prim.HasAPI<UsdPhysicsRigidBodyAPI>()) {
                 bool enabled = true;
                 UsdPhysicsRigidBodyAPI(prim).GetRigidBodyEnabledAttr().Get(&enabled);
