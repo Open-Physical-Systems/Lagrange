@@ -6,6 +6,10 @@ python3-mcap-pip:
   ubuntu:
     pip:
       packages: [mcap]
+python3-coacd-pip:
+  ubuntu:
+    pip:
+      packages: [coacd]
 # Packaged in Ubuntu 26.04 but without a rosdep key upstream.
 libjsoncons-dev:
   ubuntu: [libjsoncons-dev]

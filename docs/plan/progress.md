@@ -213,7 +213,12 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
    B8 collision bake: part 1 **done** 2026-10-25, convex hull colliders end to end (world
    tables, USD `physics:approximation "convexHull"` read and written, MuJoCo mesh geoms,
    Jolt convex hulls, the CPU lidar's exact face-plane casts, occupancy maps); the GPU lidar
-   kernel refuses hulls for now. Part 2, the bake tool with CoACD, next
+   kernel refuses hulls for now. Part 2 **done** the same day: `collision_bake`
+   (`lagrange_collision_bake`, CoACD 1.0.14 from PyPI, MIT) and the sample rack
+   (`assets/worlds/rack_sample`): 13 hulls, the lidar sees between its boards and stops at a
+   board's edge within 3 mm, a box rests on a board within 3 mm on MuJoCo and Jolt. The
+   roadmap's AC names the warehouse shelves; the sample warehouse's shelves are boxes, so the
+   rack stands in for them. Not yet: hulls in the GPU lidar kernel
 14. Viewer additions (schematic, electrical scopes)
 
 ### Merged under the autonomous mandate
