@@ -52,7 +52,8 @@ private:
     SignalId linear_, angular_;
 };
 
-/// Turns the base velocity command into wheel torques for a two-wheel differential drive,
+/// Turns the base velocity command into wheel torque commands (joint/<j>/torque_command) for a
+/// two-wheel differential drive,
 /// with a PI loop on each wheel's speed. It stands in for ros2_control's
 /// diff_drive_controller until the ros2_control bridge exists (roadmap 0.2-F3).
 class DiffDriveController final : public IModule {

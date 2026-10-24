@@ -1,3 +1,4 @@
+#include "lagrange/electrical/IdealTorqueSource.hpp"
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/Sensors.hpp"
@@ -175,6 +176,7 @@ TEST(AmrSimulation, TheDriverMovesTheRobotAndItStaysUpright) {
     settings.leftJoint = robot.actuatedJoints[0];
     settings.rightJoint = robot.actuatedJoints[1];
     scheduler.add(std::make_unique<DiffDriveController>(settings));
+    scheduler.add(std::make_unique<electrical::IdealTorqueSource>());  // torque_command -> torque
     auto wired = scheduler.wire(WorldView(robot.world));
     ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
     ASSERT_TRUE(scheduler.stepUntil(SimTime{6'000'000'000}).ok());
@@ -210,6 +212,7 @@ TEST(AmrSimulation, WithoutTheDemoTheRobotStaysPut) {
     settings.leftJoint = robot.actuatedJoints[0];
     settings.rightJoint = robot.actuatedJoints[1];
     scheduler.add(std::make_unique<DiffDriveController>(settings));
+    scheduler.add(std::make_unique<electrical::IdealTorqueSource>());  // torque_command -> torque
     ASSERT_TRUE(scheduler.wire(WorldView(robot.world)));
     ASSERT_TRUE(scheduler.stepUntil(SimTime{3'000'000'000}).ok());
     const SignalBus& bus = scheduler.bus();
@@ -277,6 +280,7 @@ DemoState runDemo(const Robot& robot, std::int64_t seconds) {
     settings.leftJoint = robot.actuatedJoints[0];
     settings.rightJoint = robot.actuatedJoints[1];
     scheduler.add(std::make_unique<DiffDriveController>(settings));
+    scheduler.add(std::make_unique<electrical::IdealTorqueSource>());  // torque_command -> torque
     auto wired = scheduler.wire(WorldView(robot.world));
     EXPECT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
     EXPECT_TRUE(scheduler.stepUntil(SimTime{seconds * 1'000'000'000}).ok());
@@ -363,6 +367,7 @@ std::array<double, 7> drivenPose(const Robot& robot) {
     settings.leftJoint = robot.actuatedJoints.at(0);
     settings.rightJoint = robot.actuatedJoints.at(1);
     scheduler.add(std::make_unique<DiffDriveController>(settings));
+    scheduler.add(std::make_unique<electrical::IdealTorqueSource>());  // torque_command -> torque
     auto wired = scheduler.wire(WorldView(robot.world));
     EXPECT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
     EXPECT_TRUE(scheduler.stepUntil(SimTime{6'000'000'000}).ok());

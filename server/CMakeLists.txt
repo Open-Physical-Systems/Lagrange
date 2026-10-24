@@ -8,6 +8,7 @@ find_package(lagrange_proto REQUIRED)
 find_package(lagrange_rigid_body_mujoco REQUIRED)
 find_package(lagrange_rigid_body_substitutes REQUIRED)
 find_package(lagrange_sensors REQUIRED)
+find_package(lagrange_electrical REQUIRED)
 find_package(lagrange_meshes REQUIRED)
 find_package(lagrange_ros2 REQUIRED)
 find_package(lagrange_stage REQUIRED)
@@ -62,6 +63,7 @@ target_link_libraries(
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
         lagrange_rigid_body_substitutes::lagrange_rigid_body_substitutes
         lagrange_sensors::lagrange_sensors
+        lagrange_electrical::lagrange_electrical
         lagrange_meshes::lagrange_meshes
         lagrange_ros2::lagrange_ros2
         lagrange_stage::lagrange_stage
@@ -156,6 +158,7 @@ if(BUILD_TESTING)
     target_link_libraries(
         test_server
         lagrange_server
+        lagrange_electrical::lagrange_electrical
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
         lagrange_sensors::lagrange_sensors
         lagrange_stage::lagrange_stage

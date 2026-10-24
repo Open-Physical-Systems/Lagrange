@@ -13,6 +13,7 @@
   <depend>lagrange_core</depend>
   <depend>lagrange_rigid_body_mujoco</depend>
   <depend>lagrange_server</depend>
+  <depend>lagrange_electrical</depend>
   <depend>ament_index_cpp</depend>
 
   <exec_depend>lagrange_assets</exec_depend>
