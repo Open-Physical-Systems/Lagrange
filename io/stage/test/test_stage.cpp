@@ -572,6 +572,45 @@ TEST(StageReader, RefusesBadSchemaValuesNamingThePrims) {
         << e;
 }
 
+TEST(StageReader, AnOlderSchemaVersionIsReportedWithItsMigration) {
+    // formats.md §10: an older version of a known family loads with a note naming the
+    // migration; two versions of one family on one prim is an error.
+    const std::string header = "#usda 1.0\n(\n    metersPerUnit = 1\n    upAxis = \"Z\"\n)\n";
+    auto old = loadStage(writeText("old_schema.usda", header + R"(
+def Xform "bot" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+{
+    float physics:mass = 1
+    def Xform "imu" ( prepend apiSchemas = ["SensorAPI_0", "ImuAPI_1"] )
+    {
+    }
+}
+)")
+                             .string());
+    ASSERT_TRUE(old) << old.error();
+    bool noted = false;
+    for (const std::string& note : old->notes) {
+        noted = noted || (note.find("/bot/imu applies SensorAPI_0, an older version of "
+                                    "SensorAPI_1") != std::string::npos &&
+                          note.find("migrate_schema") != std::string::npos);
+    }
+    EXPECT_TRUE(noted);
+
+    auto both = loadStage(writeText("two_versions.usda", header + R"(
+def Xform "bot" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+{
+    float physics:mass = 1
+    def Xform "imu" ( prepend apiSchemas = ["SensorAPI_0", "SensorAPI_1", "ImuAPI_1"] )
+    {
+        double sensor:rate = 100
+    }
+}
+)")
+                              .string());
+    ASSERT_FALSE(both);
+    EXPECT_NE(both.error().find("/bot/imu applies two versions of SensorAPI"), std::string::npos)
+        << both.error();
+}
+
 TEST(StageWriter, SchemaInstancesSurviveTheRoundTrip) {
     auto model = loadStage(writeText("powered.usda", kPowered).string());
     ASSERT_TRUE(model) << model.error();

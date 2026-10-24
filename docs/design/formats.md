@@ -1416,12 +1416,12 @@ torque source. The viewer's domain panel shows why the electrical toggle is unav
 
 | Artefact | Version carrier | Compatibility rule | Migration tool |
 |---|---|---|---|
-| USD schemas | family + integer suffix (`ElectricalMotorAPI_1`) | Within a version: only additions with fallbacks. Renames, unit changes, removed attributes, changed fallbacks → new version | `tools/migrate_schema` rewrites `apiSchemas` and attributes; one function per (family, from, to) |
-| Profiles | `schema_version` integer | Same as above | `tools/migrate_profile` |
+| USD schemas | family + integer suffix (`ElectricalMotorAPI_1`) | Within a version: only additions with fallbacks. Renames, unit changes, removed attributes, changed fallbacks → new version | `migrate_schema` (package `lagrange_migrate`, `tools/migrate/`) rewrites `apiSchemas` and attributes; one function per (family, from version) |
+| Profiles | `schema_version` integer | Same as above | `migrate_profile` (`lagrange_migrate`); version 0 is a profile without `schema_version` |
 | Protocol | package `lagrange.viewer.v1` + handshake `(major, minor)` | `buf breaking` with the `WIRE_JSON` rule set against `main` | none; old clients are refused at handshake with a readable message |
 | Recordings | `RunMeta.format_version` + embedded schemas | Readers accept all older versions of the same major | `tools/mcap_upgrade` only on a major change |
 | Plugin ABI | `LAGRANGE_PLUGIN_ABI_MAJOR/MINOR` | architecture §13 | none |
-| FMU map files | `schema_version` | as profiles | `tools/migrate_profile --fmu-map` |
+| FMU map files | `schema_version` | as profiles | `migrate_profile --fmu-map` (not built: no FMU map files exist yet) |
 
 Loader behaviour: `core/stage/` supports the current and the previous version of each schema
 family. An older version loads with a warning that names the migration command. Two versions of
@@ -1433,4 +1433,7 @@ core maintainer.
 
 Until v1.0 all schemas are version 1 and may change without a migration, and the documentation
 says so. The migration machinery is built in v0.3 and exercised with a synthetic `_0 → _1`
-migration so that it is proven before it is needed.
+migration so that it is proven before it is needed: the family `ExampleMotorAPI`, which no real
+file uses (`tools/migrate/test/test_schema.py`). The stage loader notes a prim that applies an
+older version of a registered family with the command that migrates it, and refuses two versions
+of one family on one prim.

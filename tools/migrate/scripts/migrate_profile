@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+"""Brings simulation profiles up to the newest schema_version."""
+
+import sys
+
+from lagrange_migrate.profile import main
+
+sys.exit(main())

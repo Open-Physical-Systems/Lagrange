@@ -195,7 +195,12 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
    the way: Jolt's default angular-velocity clamp (47 rad/s, before the constraint solve) threw
    joint torques on light links away; now 1e6 rad/s. Known: the AMR's wheels slip on Jolt's
    rigid contacts while ramping up, see Known issues)
-12. Schema migration tools (`tools/`)
+12. Schema migration tools (`tools/`) (**done** 2026-10-25: package `lagrange_migrate` in
+   `tools/migrate/` with `migrate_schema` (USD, at the layer level, so old schemas need not be
+   registered; synthetic `ExampleMotorAPI_0 -> _1` with a unit change, a rename, a removal and
+   time samples) and `migrate_profile` (version 0, no `schema_version`, to 1, comments kept);
+   the stage loader notes older versions with the command and refuses two versions on a prim;
+   the sample assets and example profiles are checked to be current)
 13. E6 scene editing; B8 collision bake
 14. Viewer additions (schematic, electrical scopes)
 
