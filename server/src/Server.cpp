@@ -12,6 +12,8 @@
 #include "lagrange/server/Profile.hpp"
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/server/Server.hpp"
+#include "lagrange/services/Log.hpp"
+#include "lagrange/services/WrenchSum.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
 #include "lagrange/world/LidarLayout.hpp"
 
@@ -281,6 +283,8 @@ struct Server::Impl {
                                 : sensors::createSensorModules(robot.world, rayContext)) {
             next->add(std::move(sensor), ModuleConfig(sensing));
         }
+        // Always last: it sums the body/<b>/wrench/<source> written by the modules above.
+        next->add(std::make_unique<services::WrenchSum>());
         auto wired = next->wire(WorldView(robot.world));
         if (!wired) {
             std::string message = "the simulation could not start:";
@@ -1894,6 +1898,7 @@ Server::Server(ServerOptions options) : impl_(std::make_unique<Impl>()) {
 }
 
 Server::~Server() {
+    services::setLogSink({});
     if (impl_->scheduler) {
         impl_->stopRecording("the server stopped");
     }
@@ -1904,6 +1909,13 @@ Status Server::load() {
     if (s.scheduler) {
         return {};
     }
+    // What modules and plugins log goes to the viewer's console with the server's own lines.
+    services::setLogSink(
+        [&s](services::LogLevel level, std::string_view source, std::string_view text) {
+            static constexpr v1::LogLevel kLevels[] = {v1::LOG_LEVEL_DEBUG, v1::LOG_LEVEL_INFO,
+                                                       v1::LOG_LEVEL_WARN, v1::LOG_LEVEL_ERROR};
+            s.log(kLevels[static_cast<int>(level)], std::string(source), std::string(text));
+        });
     auto robot = loadModel(s.options.robotPath, {.spawn = s.options.spawn});
     if (!robot) {
         return Status::error(StatusCode::InvalidConfig, robot.error());

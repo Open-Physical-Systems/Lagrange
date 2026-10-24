@@ -1,5 +1,6 @@
 // The host side of the plugin C ABI: dlopen, the host function table, and the IModule adapter.
 #include "lagrange/plugin_abi/PluginLibrary.hpp"
+#include "lagrange/services/Log.hpp"
 #include "lagrange_plugin.h"
 
 #include <cstdio>
@@ -132,9 +133,8 @@ int configGetString(const lagrange_config* c, const char* key, const char** out)
     return 1;
 }
 void log(int level, const char* message) {
-    static constexpr const char* kLevels[] = {"debug", "info", "warning", "error"};
-    std::fprintf(stderr, "[plugin %s] %s\n", kLevels[level < 0 ? 0 : (level > 3 ? 3 : level)],
-                 message != nullptr ? message : "");
+    const auto clamped = static_cast<services::LogLevel>(level < 0 ? 0 : (level > 3 ? 3 : level));
+    services::log(clamped, "plugin", message != nullptr ? message : "");
 }
 
 constexpr lagrange_host_api kHostApi{
