@@ -179,3 +179,24 @@ waypoint_follower:
       plugin: "nav2_waypoint_follower::WaitAtWaypoint"
       enabled: true
       waypoint_pause_duration: 500
+
+# Localization in control:=ros2_control, where odometry comes from the wheels. The robot starts
+# at the map origin, facing +x.
+amcl:
+  ros__parameters:
+    global_frame_id: map
+    odom_frame_id: odom
+    base_frame_id: base_link
+    scan_topic: scan
+    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+    set_initial_pose: true
+    initial_pose: {x: 0.0, y: 0.0, z: 0.0, yaw: 0.0}
+    laser_max_range: 20.0
+    laser_min_range: 0.12
+    max_beams: 120
+    min_particles: 500
+    max_particles: 2000
+    update_min_d: 0.1
+    update_min_a: 0.2
+    transform_tolerance: 0.5
+    tf_broadcast: true

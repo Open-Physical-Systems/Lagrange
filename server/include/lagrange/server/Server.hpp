@@ -30,6 +30,10 @@ struct ServerOptions {
     /// Domains replaced by their substitute (CLAUDE.md §11.2): "rigid_body" (fixed robot) and
     /// "sensors" (ground truth); the others have no module yet and are always substituted.
     std::set<std::string> substituted;
+    /// Parameters of an in-process ros2_control controller manager (update_rate, controller
+    /// types); empty: the built-in drive controller instead. Needs the ROS bridge and a URDF
+    /// robot whose <ros2_control> block uses lagrange_ros2_control/LagrangeSystem.
+    std::string ros2ControlParams;
     bool stampedCmdVel{true};  // /cmd_vel as TwistStamped; false: Twist
     /// Drive the demo figure-eight until the first /cmd_vel; false: stand still until then
     /// (a navigation stack that is still starting up should find the robot where it began).

@@ -1,0 +1,7 @@
+<library path="lagrange_ros2_control">
+  <class name="lagrange_ros2_control/LagrangeSystem"
+         type="lagrange::ros2_control::LagrangeSystem"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>The Lagrange simulator as ros2_control hardware: joint states from the simulation, effort commands applied directly, velocity and position commands through a joint servo.</description>
+  </class>
+</library>

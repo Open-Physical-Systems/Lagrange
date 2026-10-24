@@ -20,6 +20,7 @@
   <depend>lagrange_ros2</depend>
   <depend>lagrange_stage</depend>
   <depend>lagrange_importers</depend>
+  <depend>lagrange_ros2_control</depend>
   <depend>rclcpp</depend>
   <depend>urdfdom</depend>
   <depend>tinyxml2</depend>

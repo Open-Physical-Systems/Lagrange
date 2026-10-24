@@ -1,0 +1,10 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 100  # Hz
+    wheel_velocity:
+      type: forward_command_controller/ForwardCommandController
+
+wheel_velocity:
+  ros__parameters:
+    joints: [wheel]
+    interface_name: velocity

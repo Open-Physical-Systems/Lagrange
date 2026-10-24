@@ -1,0 +1,33 @@
+# ros2_control for the sample AMR (lagrange_server --ros2-control): the controller manager runs
+# inside the simulator in lockstep, with lagrange_ros2_control/LagrangeSystem as hardware.
+controller_manager:
+  ros__parameters:
+    update_rate: 100  # Hz
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+    diff_drive_controller:
+      type: diff_drive_controller/DiffDriveController
+
+diff_drive_controller:
+  ros__parameters:
+    left_wheel_names: [left_wheel_joint]
+    right_wheel_names: [right_wheel_joint]
+    wheel_separation: 0.46  # m, wheels at y = +-0.23 (amr_diffdrive.urdf)
+    wheel_radius: 0.10      # m
+    odom_frame_id: odom
+    base_frame_id: base_link
+    tf_frame_prefix_enable: false
+    enable_odom_tf: true
+    cmd_vel_timeout: 0.5
+    linear:
+      x:
+        max_velocity: 1.0
+        min_velocity: -1.0
+        max_acceleration: 1.5
+        max_deceleration: -2.0
+    angular:
+      z:
+        max_velocity: 2.0
+        min_velocity: -2.0
+        max_acceleration: 4.0
+        max_deceleration: -4.0

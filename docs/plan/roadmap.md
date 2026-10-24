@@ -236,7 +236,7 @@ ros2_control `SystemInterface`, Nav2 demo, importers, recording, determinism.
 | C2 | MuJoCo backend | Build an `mjModel` from the SoA world, step, write joint/body signals, `effective_inertia`, contacts. **AC:** validation tests in `domains/rigid_body.md` §7 (free fall, pendulum, incline) | `area/mod-rigid-body`, `type/feature` | L |
 | C3 | Rigid-body substitutes | `fixed`, `load_profile`, `replay`. **AC:** contract tests pass | `area/mod-rigid-body`, `type/feature` | M |
 | C4 | Scene query service | Ray and overlap queries through `SceneQuery` backed by Embree on collision geometry. **AC:** unit tests; used by sensors | `area/mod-rigid-body`, `type/feature` | M |
-| C5 | Rebase support | Origin shift in the backend. **AC:** forced rebase does not change the trajectory | `area/mod-rigid-body`, `type/feature` | S |
+| C5 | Rebase support | Origin shift in the backend. **AC:** forced rebase does not change the trajectory. **v0.2 scope:** rebase at load (`recentre`, #51). Rebasing while a run is going needs a new module hook in RFC 0001; deferred to v0.7 (huge worlds) by the owner, 2026-10-24 | `area/mod-rigid-body`, `type/feature` | S |
 | C6 | Second backend spike (Jolt) | Minimal Jolt backend running the pendulum and AMR. **AC:** abstraction gaps listed; full backend scheduled | `area/mod-rigid-body`, `type/spike` | M |
 
 ### Epic 0.2-D: sensors

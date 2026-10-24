@@ -5,6 +5,7 @@
 #include "lagrange/rigid_body/FixedRobot.hpp"
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/ros2/Bridge.hpp"
+#include "lagrange/ros2_control/ControllerHost.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/server/DiffDrive.hpp"
@@ -249,7 +250,10 @@ struct Server::Impl {
             }
             next->add(std::make_unique<rigid_body::MujocoBackend>(), ModuleConfig(physics));
         }
-        if (robot.actuatedJoints.size() == 2) {
+        if (controllers) {
+            // ros2_control drives the joints; the controller manager outlives this scheduler.
+            next->add(ros2_control::createControlModule(*controllers, controlJoints));
+        } else if (robot.actuatedJoints.size() == 2) {
             std::function<std::optional<VelocityCommand>()> external;
             if (bridge) {
                 external = [this]() -> std::optional<VelocityCommand> {
@@ -1500,6 +1504,8 @@ struct Server::Impl {
     std::unique_ptr<ros2::Bridge> bridge;
     std::unique_ptr<ros2::SimulationHandler> simulation;  // behind the bridge's services
     DriveCommand* driveCommand{nullptr};
+    std::unique_ptr<ros2_control::ControllerHost> controllers;  // with --ros2-control
+    std::vector<ros2_control::ControlJoint> controlJoints;
 
     /// The World workspace: the robot as the one agent, at its simulated position.
     v1::Envelope worldState() const {
@@ -1903,6 +1909,10 @@ Status Server::load() {
         return Status::error(StatusCode::InvalidConfig, robot.error());
     }
     s.robot = std::move(robot.value());
+    if (!s.options.ros && !s.options.ros2ControlParams.empty()) {
+        return Status::error(StatusCode::InvalidConfig,
+                             "--ros2-control needs the ROS 2 bridge: drop --no-ros");
+    }
     if (s.options.ros) {
         ros2::BridgeSettings settings;
         settings.baseLink = s.robot.world.bodies.names.empty() ? "" : s.robot.world.bodies.names[0];
@@ -1912,7 +1922,26 @@ Status Server::load() {
                 ? readFile(s.options.robotPath)
                 : "";
         settings.stampedCmdVel = s.options.stampedCmdVel;
+        settings.controllersOwnState = !s.options.ros2ControlParams.empty();
         s.bridge = std::make_unique<ros2::Bridge>(settings);
+        if (!s.options.ros2ControlParams.empty()) {
+            if (importers::formatOf(s.options.robotPath) != importers::Format::Urdf) {
+                return Status::error(StatusCode::InvalidConfig,
+                                     "--ros2-control needs a URDF robot: its <ros2_control> block "
+                                     "names the hardware");
+            }
+            const std::string urdf = readFile(s.options.robotPath);
+            auto joints = ros2_control::controlJoints(urdf);
+            if (!joints) {
+                return Status::error(StatusCode::InvalidConfig, joints.error());
+            }
+            auto host = ros2_control::ControllerHost::start(urdf, s.options.ros2ControlParams);
+            if (!host) {
+                return Status::error(StatusCode::InvalidConfig, host.error());
+            }
+            s.controlJoints = std::move(*joints);
+            s.controllers = std::move(*host);
+        }
         s.simulation = std::make_unique<SimulationControl>(s);
         s.bridge->serveSimulation(*s.simulation);
     }
@@ -1983,7 +2012,13 @@ Status Server::start() {
     }
     s.log(v1::LOG_LEVEL_INFO, "rigid_body",
           "MuJoCo 3.12 · 1 ms · elliptic friction cone · implicitfast");
-    if (s.robot.actuatedJoints.size() == 2) {
+    if (s.controllers) {
+        s.log(v1::LOG_LEVEL_INFO, "controller",
+              "ros2_control: /controller_manager at " +
+                  std::to_string(s.controllers->updateRateHz()) + " Hz drives " +
+                  std::to_string(s.controlJoints.size()) +
+                  " joints through lagrange_ros2_control/LagrangeSystem; spawn its controllers");
+    } else if (s.robot.actuatedJoints.size() == 2) {
         s.log(v1::LOG_LEVEL_INFO, "controller",
               "diff drive on " + s.robot.actuatedJoints[0] + " and " + s.robot.actuatedJoints[1] +
                   (!s.options.demoDrive ? "; it stands still until /cmd_vel arrives"

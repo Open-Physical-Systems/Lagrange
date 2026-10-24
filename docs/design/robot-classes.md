@@ -50,6 +50,7 @@ Top-priority integration. A `hardware_interface::SystemInterface` plugin loaded 
 | State interfaces | `position`, `velocity`, `effort` per joint from `joint/{j}/*`; plus optional `current`, `temperature`, `bus_voltage` from electrical and thermal signals |
 | Command interfaces | `effort` → `joint/{j}/torque_command`; `velocity` and `position` → a built-in joint servo (PID with parameters from URDF `<ros2_control>` or the overlay) that produces `torque_command`. With electrical enabled and `elec:controlMode = velocity`, the velocity command goes to the drive model instead |
 | URDF | `<ros2_control>` blocks name the plugin `lagrange_ros2_control/LagrangeSystem`. The importer keeps the block so the same URDF drives a real robot by changing the plugin name |
+| Encoders | `<param name="encoder_resolution">` on a joint (counts per revolution, after quadrature) makes its `position` state a whole number of counts, rounded down as a counter is, and its `velocity` state the count change over the control period, as a driver computes it (`Encoder.hpp`, `test_encoder`). Without it the states are exact. The sample AMR's wheels have 16384 counts per revolution |
 | Encoder effects | When EMI is enabled, `emi/{p}/glitch_probability` corrupts the position state read by controllers |
 
 ### 2.3 Scripting and RL

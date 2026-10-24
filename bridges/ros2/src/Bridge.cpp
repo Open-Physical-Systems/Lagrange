@@ -94,6 +94,7 @@ struct Bridge::Impl {
     rclcpp::Publisher<rosgraph_msgs::msg::Clock>::SharedPtr clock;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr jointStates;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom;
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr groundTruth;  // /ground_truth/odom
     rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tf;
     rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tfStatic;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr description;
@@ -219,8 +220,13 @@ Bridge::Bridge(BridgeSettings settings)
     Impl& s = *impl_;
     s.node = std::make_shared<rclcpp::Node>(settings_.nodeName);
     s.clock = s.node->create_publisher<rosgraph_msgs::msg::Clock>("/clock", rclcpp::ClockQoS());
-    s.jointStates = s.node->create_publisher<sensor_msgs::msg::JointState>("/joint_states", 10);
+    if (!settings_.controllersOwnState) {
+        s.jointStates = s.node->create_publisher<sensor_msgs::msg::JointState>("/joint_states", 10);
+    }
     if (!settings_.baseLink.empty()) {
+        s.groundTruth = s.node->create_publisher<nav_msgs::msg::Odometry>("/ground_truth/odom", 10);
+    }
+    if (!settings_.baseLink.empty() && !settings_.controllersOwnState) {
         s.odom = s.node->create_publisher<nav_msgs::msg::Odometry>("/odom", 10);
     }
     s.tf = s.node->create_publisher<tf2_msgs::msg::TFMessage>("/tf", rclcpp::QoS(100));
@@ -233,7 +239,9 @@ Bridge::Bridge(BridgeSettings settings)
         text.data = settings_.robotDescription;
         s.description->publish(text);
     }
-    if (settings_.stampedCmdVel) {
+    if (settings_.controllersOwnState) {
+        // diff_drive_controller (or another) takes the commands.
+    } else if (settings_.stampedCmdVel) {
         s.cmdVelStamped = s.node->create_subscription<geometry_msgs::msg::TwistStamped>(
             "/cmd_vel", 10,
             [&s](const geometry_msgs::msg::TwistStamped& twist) { s.take(twist.twist); });
@@ -380,12 +388,14 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
             joints.velocity.push_back(joint.velocity.valid() ? bus.read(joint.velocity) : 0.0);
             joints.effort.push_back(joint.torque.valid() ? bus.read(joint.torque) : 0.0);
         }
-        s.jointStates->publish(joints);
-        s.counters["/joint_states"].add(joints.name.size() * 40 + 16);
+        if (s.jointStates) {
+            s.jointStates->publish(joints);
+            s.counters["/joint_states"].add(joints.name.size() * 40 + 16);
+        }
 
         const std::span<const double> pose = values(bus, s.basePose);
         const std::span<const double> twist = values(bus, s.baseTwist);
-        if (s.odom && pose.size() == 7 && twist.size() == 6) {
+        if (s.groundTruth && pose.size() == 7 && twist.size() == 6) {
             nav_msgs::msg::Odometry odom;
             odom.header.stamp = stampOf(now);
             odom.header.frame_id = settings_.odomFrame;
@@ -407,20 +417,29 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
             odom.twist.twist.angular.x = angular[0];
             odom.twist.twist.angular.y = angular[1];
             odom.twist.twist.angular.z = angular[2];
-            s.odom->publish(odom);
-            s.counters["/odom"].add(720);
+            // The true pose, always, in the world frame (for tests and evaluation, as a
+            // simulator's ground-truth plugin publishes it).
+            nav_msgs::msg::Odometry truth = odom;
+            truth.header.frame_id = "world";
+            s.groundTruth->publish(truth);
+            s.counters["/ground_truth/odom"].add(720);
+            // With ros2_control, its controllers publish /odom and the odom TF.
+            if (s.odom) {
+                s.odom->publish(odom);
+                s.counters["/odom"].add(720);
 
-            tf2_msgs::msg::TFMessage tf;
-            geometry_msgs::msg::TransformStamped base;
-            base.header = odom.header;
-            base.child_frame_id = settings_.baseLink;
-            base.transform.translation.x = pose[0];
-            base.transform.translation.y = pose[1];
-            base.transform.translation.z = pose[2];
-            base.transform.rotation = odom.pose.pose.orientation;
-            tf.transforms.push_back(base);
-            s.tf->publish(tf);
-            s.counters["/tf"].add(80);
+                tf2_msgs::msg::TFMessage tf;
+                geometry_msgs::msg::TransformStamped base;
+                base.header = odom.header;
+                base.child_frame_id = settings_.baseLink;
+                base.transform.translation.x = pose[0];
+                base.transform.translation.y = pose[1];
+                base.transform.translation.z = pose[2];
+                base.transform.rotation = odom.pose.pose.orientation;
+                tf.transforms.push_back(base);
+                s.tf->publish(tf);
+                s.counters["/tf"].add(80);
+            }
         }
     }
 

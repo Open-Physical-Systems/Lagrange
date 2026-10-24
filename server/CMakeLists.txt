@@ -12,6 +12,7 @@ find_package(lagrange_meshes REQUIRED)
 find_package(lagrange_ros2 REQUIRED)
 find_package(lagrange_stage REQUIRED)
 find_package(lagrange_importers REQUIRED)
+find_package(lagrange_ros2_control REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(urdfdom REQUIRED)
 find_package(tinyxml2 REQUIRED)
@@ -65,6 +66,7 @@ target_link_libraries(
         lagrange_ros2::lagrange_ros2
         lagrange_stage::lagrange_stage
         lagrange_importers::lagrange_importers
+        lagrange_ros2_control::lagrange_ros2_control
         urdfdom::urdfdom_model
         tinyxml2::tinyxml2
         yaml-cpp::yaml-cpp

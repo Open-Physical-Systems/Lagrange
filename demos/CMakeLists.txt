@@ -9,5 +9,10 @@ install(
     DESTINATION lib/${PROJECT_NAME}
     RENAME patrol
 )
+install(
+    PROGRAMS scripts/spawn_controllers.py
+    DESTINATION lib/${PROJECT_NAME}
+    RENAME spawn_controllers
+)
 
 ament_package()
