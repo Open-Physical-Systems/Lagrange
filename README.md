@@ -77,6 +77,7 @@ Packages:
 | `lagrange_mock_server` | `mock_server/` | Replay server for recordings; a test tool |
 | `lagrange_assets` | `assets/` | The sample robots and worlds |
 | `lagrange_demos` | `demos/` | The Nav2 warehouse demo |
+| `lagrange_python` | `python/` | Python bindings: run a simulation headless, step it, read signals |
 | `lagrange_tutorial` | `tests/tutorial/` | The user guide's code and its tests |
 | `lagrange_benchmarks` | `tests/benchmarks/` | Performance benchmarks |
 

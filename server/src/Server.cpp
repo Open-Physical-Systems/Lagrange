@@ -1995,6 +1995,41 @@ Status Server::stepUntil(SimTime t) {
     return impl_->scheduler->stepUntil(t);
 }
 
+std::vector<Server::SignalEntry> Server::signals() const {
+    std::vector<SignalEntry> out;
+    if (!impl_->scheduler) {
+        return out;
+    }
+    const SignalBus& bus = impl_->scheduler->bus();
+    for (std::size_t i = 0; i < bus.signalCount(); ++i) {
+        const SignalSpec& spec = bus.specAt(i);
+        out.push_back({spec.name, label(spec.unit),
+                       static_cast<std::uint32_t>(componentCount(spec.type, spec.arrayLength))});
+    }
+    return out;
+}
+
+std::vector<double> Server::read(const std::string& name) const {
+    if (!impl_->scheduler) {
+        return {};
+    }
+    const SignalBus& bus = impl_->scheduler->bus();
+    const SignalId id = bus.find(name);
+    if (!id.valid()) {
+        return {};
+    }
+    const std::span<const double> values = bus.readN(id);
+    return {values.begin(), values.end()};
+}
+
+SimTime Server::now() const {
+    return impl_->scheduler ? impl_->scheduler->now() : SimTime{};
+}
+
+const World& Server::world() const {
+    return impl_->robot.world;
+}
+
 Expected<std::uint64_t, Status> Server::stateHash() const {
     if (!impl_->scheduler) {
         return Unexpected{Status::error(StatusCode::Internal, "stateHash before load()")};
