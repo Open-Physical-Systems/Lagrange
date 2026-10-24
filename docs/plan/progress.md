@@ -146,3 +146,12 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md).
 |---|---|---|
 | #46 OpenUSD vendor, schemas, stage loader | `schemas/` (sensor library, `lagrangeUnit` metadata, under the accepted RFC 0002) | Rebased onto #51–#58; `--spawn` fixed for USD. ASan/UBSan run not done: stopped by the system for low memory while building OpenUSD |
 | #50 SDFormat and MJCF importers | none (stacked on #46) | Rebased; `--spawn` fixed for SDFormat and MJCF too |
+
+### Known issues
+
+- **Nav2 demo start-up on one machine** (2026-10-25): with ros2_control, about half the launches
+  have one ROS process never discover another's services (spawner and `/controller_manager`,
+  patrol and AMCL). Once up, every patrol reached 6/6 waypoints without a collision. Mitigations
+  in place: spawner retried in fresh processes, 30 s bond timeout, the patrol exits 3 when the
+  stack never comes up and `nav2_demo.sh` relaunches once on that only. Root cause (Fast DDS
+  discovery) not found; investigation stopped to keep the queue moving.
