@@ -29,6 +29,11 @@ namespace lagrange::electrical {
 ///   undervoltage fault latches. Above the overvoltage trip without a brake resistor the drives
 ///   switch off (fault = 2) until it recovers.
 /// - ElectricalLoadAPI_1 loads draw their power (load/<l>/power_demand when connected).
+/// - An ElectricalConverterAPI_1 is an averaged DC-DC regulator: on its output bus an ideal
+///   source at elec:conv:outputVoltage within the node equation, delivering 0 to
+///   maxOutputCurrent (no reverse flow; at the limit the bus sags); on its input bus a sink of
+///   the output power over the efficiency, drawn at the input voltage one step late, like a
+///   load. It stops while its input bus is browned out. One converter per output bus.
 /// - Joints with a torque command but no motor are driven ideally, as the substitute does.
 ///
 /// Coupling with physics (architecture.md §8). Config "exchange_step" (s) is the physics step
@@ -44,8 +49,8 @@ namespace lagrange::electrical {
 /// by the caller from motorFmuBindings); the network takes its motor/<m>/bus_current into the
 /// bus and leaves its joint to it. At `averaged` the behaviour models are ignored.
 ///
-/// Not yet: converters (ElectricalConverterAPI_1 is refused), velocity and voltage control
-/// modes, battery FMUs, motors on prismatic joints. Default step 100 µs.
+/// Not yet: velocity and voltage control modes, battery FMUs, motors on prismatic joints.
+/// Default step 100 µs.
 class ElectricalNetwork final : public IModule {
 public:
     /// H/τm above which the exchange is refused without and with speed prediction
@@ -115,6 +120,13 @@ private:
         std::size_t bus{0};
         SignalId demand, currentOut, poweredOut;
     };
+    struct Converter {
+        std::string name;
+        std::size_t input{0}, output{0};  // buses
+        double outputVoltage{0.0}, efficiency{1.0}, maxCurrent{0.0};
+        double current{0.0};  // A delivered to the output bus this step
+        SignalId outputCurrent, inputCurrent, loss;
+    };
     struct FmuMotor {  // a motor its FMU simulates
         std::string name;
         std::size_t bus{0};
@@ -131,9 +143,11 @@ private:
     std::vector<Battery> batteries_;
     std::vector<Bus> buses_;
     std::vector<Load> loads_;
+    std::vector<Converter> converters_;
     std::vector<Passthrough> ideal_;
     std::vector<FmuMotor> fmuMotors_;
     std::vector<double> batteryTemperature_;  // K, read each step
+    std::vector<double> converterInput_;      // A, each converter's input current this step
     std::vector<bool> limitedScratch_;        // batteries at their charge limit, per solve
     std::uint32_t exchangeSteps_{0};          // electrical steps per physics step; 0: unknown
     bool predict_{false};

@@ -1017,8 +1017,8 @@ struct Server::Impl {
 
     /// The electrical nets for the Electrical workspace (scene.proto ElectricalNet), from the
     /// world's schemas: a net per ElectricalBusAPI prim; its terminals the battery ports,
-    /// motors and loads connected to it, each with the current the network reports for it;
-    /// its limits the bus trips and the ports' current ratings.
+    /// motors, loads and converter sides connected to it, each with the current the network reports
+    /// for it; its limits the bus trips and the ports' current ratings.
     void electricalNets(v1::SceneSnapshot& snap) const {
         const World& world = robot.world;
         const WorldView view(world);
@@ -1074,6 +1074,17 @@ struct Server::Impl {
                     terminal.set_port("power");
                     terminal.set_current_signal(motor ? "motor/" + component + "/bus_current"
                                                       : "load/" + component + "/current");
+                } else if (s.schema == "ElectricalConverterAPI_1") {
+                    // A DC-DC converter is a terminal on both its nets.
+                    for (const char* side : {"input", "output"}) {
+                        if (connected(s.rel(std::string("elec:conv:") + side))) {
+                            v1::NetTerminal& terminal = *net.add_terminals();
+                            terminal.set_prim(scenePrimOf(s.prim));
+                            terminal.set_port(side);
+                            terminal.set_current_signal("converter/" + component + "/" + side +
+                                                        "_current");
+                        }
+                    }
                 }
             }
             for (const auto& [attribute, label, upper] :
@@ -1092,8 +1103,8 @@ struct Server::Impl {
     }
 
     /// The scene prim a signal is about: body/<link>/..., joint/<joint>/..., sensor/<sensor>/...
-    /// and the electrical and thermal components' motor/, battery/, load/, bus/ and thermal/
-    /// <prim>/... name it.
+    /// and the electrical and thermal components' motor/, battery/, load/, bus/, converter/ and
+    /// thermal/ <prim>/... name it.
     std::uint32_t primOfSignal(const std::string& name) const {
         if (replay) {
             for (const recording::Recording::CatalogEntry& entry : replay->catalog) {
@@ -1132,7 +1143,8 @@ struct Server::Impl {
                 }
             }
         }
-        for (const char* domain : {"motor/", "battery/", "load/", "bus/", "thermal/"}) {
+        for (const char* domain :
+             {"motor/", "battery/", "load/", "bus/", "converter/", "thermal/"}) {
             if (const std::string component = field(domain); !component.empty()) {
                 const WorldView view(world);
                 for (std::uint32_t p = 0; p < world.prims.paths.size(); ++p) {

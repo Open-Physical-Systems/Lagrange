@@ -186,7 +186,15 @@ Choices made while implementing, beyond §2:
 - **Fidelity `fmu`** (formats.md §6 status): a motor with `elec:behaviorModel` is simulated by
   its FMU, the network feeding its bus; `averaged` ignores the behaviour models.
 
-Not yet: converters (refused with the prim named), `velocity` and `voltage` control modes,
+- **DC-DC converters** (`ElectricalConverterAPI_1`) are averaged regulators. On the output bus
+  the converter is an ideal source at `outputVoltage` inside the node equation, giving 0 to
+  `maxOutputCurrent` (no reverse flow); at the limit the bus sags and its loads drop at their
+  `minVoltage` or with its undervoltage trip. On the input bus it draws the output power over
+  `efficiency`, one step late as loads do. It stops while its input bus is browned out. One
+  converter per output bus. Signals `converter/<c>/output_current`, `input_current` and
+  `loss_power`; `test_network` checks regulation, the power drawn and the current limit.
+
+Not yet: `velocity` and `voltage` control modes,
 battery FMUs, motors on prismatic joints, and the rotor inertia in Jolt.
 
 | §8 check | Status | Test |

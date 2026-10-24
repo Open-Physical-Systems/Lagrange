@@ -99,6 +99,7 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
     batteries_.clear();
     buses_.clear();
     loads_.clear();
+    converters_.clear();
     ideal_.clear();
     predict_ = false;
     exchangeSteps_ = 0;
@@ -363,7 +364,39 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
         loads_.push_back(std::move(load));
     }
     for (const SchemaInstance* s : world.instancesOf("ElectricalConverterAPI_1")) {
-        problems.add(path(s->prim), "DC-DC converters are not simulated yet");
+        Converter converter;
+        converter.name = name(s->prim);
+        const auto voltage = s->real("elec:conv:outputVoltage");
+        const auto current = s->real("elec:conv:maxOutputCurrent");
+        converter.efficiency = s->real("elec:conv:efficiency").value_or(1.0);
+        if (!voltage || *voltage <= 0.0 || !current || *current <= 0.0 ||
+            converter.efficiency <= 0.0 || converter.efficiency > 1.0) {
+            problems.add(path(s->prim),
+                         "a converter needs outputVoltage > 0, maxOutputCurrent > 0 and an "
+                         "efficiency in (0, 1]");
+            continue;
+        }
+        converter.outputVoltage = *voltage;
+        converter.maxCurrent = *current;
+        const auto in = busThrough(s, "elec:conv:input");
+        const auto out = busThrough(s, "elec:conv:output");
+        if (!in || !out) {
+            continue;
+        }
+        if (*in == *out) {
+            problems.add(path(s->prim), "a converter's input and output are the same bus");
+            continue;
+        }
+        const bool shared = std::ranges::any_of(
+            converters_, [&](const Converter& other) { return other.output == *out; });
+        if (shared) {
+            problems.add(path(s->prim), "two converters feed bus " + buses_[*out].name +
+                                            "; one converter per output bus is simulated");
+            continue;
+        }
+        converter.input = *in;
+        converter.output = *out;
+        converters_.push_back(std::move(converter));
     }
     if (Status status = problems.status(); !status.ok()) {
         return status;
@@ -413,6 +446,12 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
         bus.voltageOut = d.output(scalar("bus/" + bus.name + "/voltage", units::V));
         bus.brownoutOut = d.output(scalar("bus/" + bus.name + "/brownout", units::one));
     }
+    for (Converter& c : converters_) {
+        const std::string converter = "converter/" + c.name + "/";
+        c.outputCurrent = d.output(scalar(converter + "output_current", units::A));
+        c.inputCurrent = d.output(scalar(converter + "input_current", units::A));
+        c.loss = d.output(scalar(converter + "loss_power", units::W));
+    }
     for (Load& l : loads_) {
         SignalSpec demand = scalar("load/" + l.name + "/power_demand", units::W);
         demand.optional = true;
@@ -441,6 +480,7 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
 
 Status ElectricalNetwork::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     batteryTemperature_.assign(batteries_.size(), kAmbientK);
+    converterInput_.assign(converters_.size(), 0.0);
     limitedScratch_.assign(batteries_.size(), false);
     for (Battery& b : batteries_) {
         b.state = BatteryState{};
@@ -463,6 +503,22 @@ Status ElectricalNetwork::init(const WorldView&, const ModuleConfig&, SignalBus&
         node.voltage = conductance > 0.0 ? injected / conductance : 0.0;
         node.brownout = node.voltage < node.undervoltage;
         node.overvoltageTripped = false;
+    }
+    // A converter's output bus starts regulated when its input is up (input buses first: a
+    // chain of converters is in declaration order).
+    for (Converter& c : converters_) {
+        c.current = 0.0;
+        const Bus& in = buses_[c.input];
+        Bus& out = buses_[c.output];
+        if (!in.brownout && in.voltage > 0.0) {
+            out.voltage = std::max(out.voltage, c.outputVoltage);
+            out.brownout = out.voltage < out.undervoltage;
+        }
+        for (const SignalId id : {c.outputCurrent, c.inputCurrent, c.loss}) {
+            bus.write(id, 0.0);
+        }
+    }
+    for (const Bus& node : buses_) {
         bus.write(node.voltageOut, node.voltage);
         bus.write(node.brownoutOut, node.brownout ? 1.0 : 0.0);
     }
@@ -505,6 +561,14 @@ void ElectricalNetwork::solveBus(std::size_t b, double dt, std::vector<double>& 
     std::vector<bool>& limited = limitedScratch_;  // sized in init: no allocation here
     std::fill(limited.begin(), limited.end(), false);
     double voltage = node.voltage;
+    Converter* feeder = nullptr;  // the converter regulating this bus, if any and running
+    for (Converter& c : converters_) {
+        if (c.output == b) {
+            c.current = 0.0;
+            const Bus& in = buses_[c.input];
+            feeder = !in.brownout && in.voltage > 0.0 ? &c : nullptr;
+        }
+    }
     for (std::size_t pass = 0; pass <= batteries_.size(); ++pass) {
         double conductance = companion;
         double injected = companion * node.voltage - node.sink;
@@ -525,6 +589,16 @@ void ElectricalNetwork::solveBus(std::size_t b, double dt, std::vector<double>& 
             injected += t.emf / t.resistance;
         }
         voltage = std::max(0.0, injected / conductance);
+        if (feeder != nullptr && voltage < feeder->outputVoltage) {
+            // The current that holds the set point, within the converter's limit.
+            const double needed = conductance * feeder->outputVoltage - injected;
+            feeder->current = std::min(needed, feeder->maxCurrent);
+            voltage = needed <= feeder->maxCurrent
+                          ? feeder->outputVoltage
+                          : std::max(0.0, (injected + feeder->maxCurrent) / conductance);
+        } else if (feeder != nullptr) {
+            feeder->current = 0.0;
+        }
         bool changed = false;
         for (std::size_t i = 0; i < batteries_.size(); ++i) {
             Battery& battery = batteries_[i];
@@ -629,6 +703,16 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
         bus.write(l.currentOut, current);
         bus.write(l.poweredOut, powered ? 1.0 : 0.0);
     }
+    // A converter draws its last step's output power over its efficiency, as a load does.
+    std::fill(converterInput_.begin(), converterInput_.end(), 0.0);
+    for (std::size_t k = 0; k < converters_.size(); ++k) {
+        const Converter& c = converters_[k];
+        const Bus& in = buses_[c.input];
+        if (in.voltage > 0.0 && !in.brownout) {
+            converterInput_[k] = buses_[c.output].voltage * c.current / c.efficiency / in.voltage;
+            buses_[c.input].sink += converterInput_[k];
+        }
+    }
     for (std::size_t i = 0; i < batteries_.size(); ++i) {
         batteryTemperature_[i] = bus.read(batteries_[i].temperature);
         batteries_[i].current = 0.0;
@@ -670,6 +754,13 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
         bus.write(b.currentOut, b.current);
         bus.write(b.loss, loss);
     }
+    for (std::size_t k = 0; k < converters_.size(); ++k) {
+        const Converter& c = converters_[k];
+        const double out = buses_[c.output].voltage * c.current;
+        bus.write(c.outputCurrent, c.current);
+        bus.write(c.inputCurrent, converterInput_[k]);
+        bus.write(c.loss, out * (1.0 / c.efficiency - 1.0));
+    }
     for (const Passthrough& p : ideal_) {
         bus.write(p.torque, bus.read(p.command));
     }
@@ -698,6 +789,9 @@ Status ElectricalNetwork::saveState(StateWriter& writer) const {
         writer.put(node.brownout);
         writer.put(node.overvoltageTripped);
     }
+    for (const Converter& c : converters_) {
+        writer.put(c.current);
+    }
     return {};
 }
 
@@ -715,6 +809,9 @@ Status ElectricalNetwork::restoreState(StateReader& reader) {
     for (Bus& node : buses_) {
         ok = ok && reader.get(node.voltage) && reader.get(node.brownout) &&
              reader.get(node.overvoltageTripped);
+    }
+    for (Converter& c : converters_) {
+        ok = ok && reader.get(c.current);
     }
     return ok ? Status{} : Status::error(StatusCode::InvalidConfig, "electrical state truncated");
 }
