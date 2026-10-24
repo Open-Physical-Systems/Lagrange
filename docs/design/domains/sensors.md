@@ -129,8 +129,13 @@ exist yet. Beams are rings of columns (`LidarLayout` in `core/world`: SDFormat's
 vertical samples and angles, ring after ring from the lowest); a single ring is a 2D scanner. The
 server turns ranges into the viewer's point frames, and the ROS bridge into `sensor_msgs/LaserScan`
 for 2D lidars or an organised `sensor_msgs/PointCloud2` (x, y, z, intensity, ring) for 3D ones.
-Rays are cast exactly against every collision shape on the CPU (Tier 0 without Embree yet), or
-on Tier 1 by `gpu/kernels/lidar/bvh_traverse.slang`: the same closed-form tests in float, one
+On Tier 0, rays are cast on the CPU with the exact closed-form tests in double, and Embree's
+bounding-volume hierarchy (user geometry: a padded bounding sphere per shape, refitted when
+shapes move) only skips the shapes a ray cannot reach; planes are tested directly. The result
+is bit-identical to testing every shape (`ShapeCaster`, `test_shape_caster`), beams run in
+parallel with TBB, and the run stays deterministic. `--lidar auto` uses it: it outruns the GPU
+round trip for scans of this size (docs/design/benchmarks.md). On Tier 1 (`--lidar gpu`), rays
+are cast by `gpu/kernels/lidar/bvh_traverse.slang`: the same closed-form tests in float, one
 thread per beam, through a bounding-volume hierarchy built on the CPU each scan (median split,
 uploaded). Shapes are taken relative to the sensor and combined with its orientation in double
 before the conversion to float, and spheres and cylinders use the distance-to-line form of the

@@ -34,9 +34,9 @@ struct ServerOptions {
     /// Drive the demo figure-eight until the first /cmd_vel; false: stand still until then
     /// (a navigation stack that is still starting up should find the robot where it began).
     bool demoDrive{true};
-    /// Where lidars cast: Auto puts them on a hardware GPU (Tier 1 or 2) when the run is not
-    /// deterministic (it takes ROS input) and on the CPU otherwise; Gpu also on a deterministic
-    /// run, which then is not one; Cpu always on the CPU reference.
+    /// Where lidars cast: Auto and Cpu on the CPU (Tier 0: exact casts culled by Embree,
+    /// deterministic, the fastest for scans of tens of thousands of beams); Gpu on a hardware
+    /// GPU's compute kernel (Tier 1), which makes the run non-deterministic.
     enum class Lidar : std::uint8_t { Auto, Cpu, Gpu } lidar{Lidar::Auto};
     std::string gpu;  // Vulkan device for the lidar (index or part of its name); empty: automatic
 };

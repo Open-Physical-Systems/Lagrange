@@ -12,6 +12,8 @@
 
   <depend>lagrange_core</depend>
   <depend>lagrange_gpu</depend>
+  <depend>embree</depend>
+  <depend>tbb</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>lagrange_rigid_body_mujoco</test_depend>

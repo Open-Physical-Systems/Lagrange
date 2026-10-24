@@ -88,7 +88,7 @@ Every feature defines what it does on each tier of hardware:
 
 | Tier | Hardware | Lidar, for example |
 |---|---|---|
-| 0 | CPU only (servers, CI runners) | exact casts in double precision, every beam against every shape |
+| 0 | CPU only (servers, CI runners) | exact casts in double precision; Embree skips the shapes a beam cannot reach; all cores |
 | 1 | a GPU without hardware ray tracing (integrated, older) | a compute shader over a bounding-volume hierarchy |
 | 2 | an RTX-class GPU with hardware ray tracing | (later) hardware ray tracing |
 
@@ -106,8 +106,8 @@ of their state. In a deterministic run:
 - every module can save and restore its complete state.
 
 `lagrange_server` runs deterministically when nothing outside the simulation steers it: no
-ROS 2 bridge (`--no-ros`) and the lidar on the CPU. With ROS input, the lidar moves to the
-GPU when there is one (`--lidar` overrides it).
+ROS 2 bridge (`--no-ros`) and the lidar on the CPU (the default; `--lidar gpu` moves it to the
+GPU, and the run is then not deterministic).
 
 ## Coordinates
 

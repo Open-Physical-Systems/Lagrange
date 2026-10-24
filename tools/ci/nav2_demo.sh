@@ -3,7 +3,7 @@
 # through the patrol waypoints for a number of simulated minutes. Fails if any waypoint is
 # missed or the robot touches the scenery.
 # Usage (from the colcon workspace root, after building): tools/ci/nav2_demo.sh [minutes]
-# LIDAR=auto|cpu|gpu picks where the lidars cast (default auto: the GPU when there is one).
+# LIDAR=auto|cpu|gpu picks where the lidars cast (default auto: the CPU).
 set -euo pipefail
 
 minutes="${1:-1}"

@@ -2,6 +2,7 @@
 #include "lagrange/random/Philox.hpp"
 #include "lagrange/sensors/ImuNoise.hpp"
 #include "lagrange/sensors/Sensors.hpp"
+#include "lagrange/sensors/ShapeCaster.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
@@ -10,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <tbb/parallel_for.h>
 #include <utility>
 #include <vector>
 
@@ -254,6 +256,8 @@ public:
         }
         placed_.resize(shapes_.size());
         buffer_.assign(samples_, kNoHit);
+        nearest_.assign(samples_, kNoHit);
+        casterShapes_.resize(shapes_.size());
         if (rayContext_ && !groundTruth_) {
             std::vector<std::array<float, 3>> directions(samples_);
             for (std::uint32_t i = 0; i < samples_; ++i) {
@@ -283,18 +287,14 @@ public:
         }
         if (scan_) {
             castOnGpu(sensor);
+            for (std::uint32_t i = 0; i < samples_; ++i) {
+                nearest_[i] = static_cast<double>(hits_[i].range);
+            }
+        } else {
+            castOnCpu(sensor);
         }
         for (std::uint32_t i = 0; i < samples_; ++i) {
-            double nearest = kNoHit;
-            if (scan_) {
-                nearest = static_cast<double>(hits_[i].range);
-            } else {
-                const Vec3 dir = rotate(sensor.orientation, layout_.direction(i));
-                for (std::size_t k = 0; k < shapes_.size(); ++k) {
-                    nearest = std::min(nearest, raycast(shapes_[k].type, shapes_[k].size,
-                                                        placed_[k], sensor.position, dir));
-                }
-            }
+            double nearest = nearest_[i];
             if (nearest < minRange_ || nearest > maxRange_) {
                 buffer_[i] = kNoHit;  // no valid return (sensor_msgs/LaserScan convention)
                 continue;
@@ -316,6 +316,19 @@ private:
         Pose pose;  // world pose when body < 0, else pose in the body
         int body;
     };
+
+    /// Tier 0: exact casts in double, culled by Embree (ShapeCaster), beams in parallel. Each
+    /// beam is independent, so the result does not depend on the threads.
+    void castOnCpu(const Pose& sensor) {
+        for (std::size_t k = 0; k < shapes_.size(); ++k) {
+            casterShapes_[k] = {shapes_[k].type, shapes_[k].size, placed_[k]};
+        }
+        caster_.update(casterShapes_);
+        tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
+            nearest_[i] =
+                caster_.cast(sensor.position, rotate(sensor.orientation, layout_.direction(i)));
+        });
+    }
 
     /// Shapes relative to the sensor, in double; the caster converts to float last
     /// (huge-worlds.md §1: only the GPU sees float positions, and only small ones).
@@ -346,7 +359,10 @@ private:
     std::vector<Pose> rest_;
     std::vector<SignalId> poses_;
     std::vector<Shape> shapes_;
-    std::vector<Pose> placed_;  // world pose of each shape for the current scan
+    std::vector<Pose> placed_;     // world pose of each shape for the current scan
+    std::vector<double> nearest_;  // per beam, before range limits and noise
+    ShapeCaster caster_;
+    std::vector<ShapeCaster::Shape> casterShapes_;
     std::vector<double> buffer_;
     SignalId ranges_;
     std::shared_ptr<gpu::RayContext> rayContext_;  // null: cast on the CPU

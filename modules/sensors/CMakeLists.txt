@@ -5,8 +5,16 @@ find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
 find_package(lagrange_gpu REQUIRED)
+# Tier 0 ray casting: Embree's hierarchy culls, the exact tests stay ours (ShapeCaster).
+find_package(embree 4 REQUIRED)
+find_package(TBB REQUIRED)
 
-add_library(lagrange_sensors src/Sensors.cpp src/ImuNoise.cpp)
+add_library(
+    lagrange_sensors
+    src/Sensors.cpp
+    src/ImuNoise.cpp
+    src/ShapeCaster.cpp
+)
 lagrange_target_defaults(lagrange_sensors)
 target_include_directories(
     lagrange_sensors
@@ -17,6 +25,7 @@ target_include_directories(
 target_link_libraries(
     lagrange_sensors
     PUBLIC lagrange_core::lagrange_core lagrange_gpu::lagrange_gpu_raycast
+    PRIVATE embree TBB::tbb
 )
 
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
@@ -38,6 +47,9 @@ if(BUILD_TESTING)
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
     )
     lagrange_target_defaults(test_sensors)
+    ament_add_gtest(test_shape_caster test/test_shape_caster.cpp TIMEOUT 120)
+    target_link_libraries(test_shape_caster lagrange_sensors)
+    lagrange_target_defaults(test_shape_caster)
     ament_add_gtest(test_imu_noise test/test_imu_noise.cpp TIMEOUT 120)
     target_link_libraries(test_imu_noise lagrange_sensors)
     lagrange_target_defaults(test_imu_noise)
@@ -54,5 +66,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(lagrange_core lagrange_gpu)
+ament_export_dependencies(lagrange_core lagrange_gpu embree TBB)
 ament_package()

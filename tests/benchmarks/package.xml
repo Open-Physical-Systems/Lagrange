@@ -14,6 +14,7 @@
   <depend>lagrange_core</depend>
   <depend>lagrange_gpu</depend>
   <depend>lagrange_sensors</depend>
+  <depend>tbb</depend>
 
   <exec_depend>mesa-vulkan-drivers</exec_depend>
 

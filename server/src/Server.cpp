@@ -922,12 +922,13 @@ struct Server::Impl {
         const auto hasLidar = std::ranges::any_of(
             robot.world.sensors.type, [](SensorType t) { return t == SensorType::Lidar; });
         using Lidar = ServerOptions::Lidar;
-        if (!hasLidar || options.lidar == Lidar::Cpu || (options.lidar == Lidar::Auto && !bridge)) {
+        // Auto stays on the CPU: the exact casts, culled by Embree and spread over the cores,
+        // outrun a GPU round trip for scans of tens of thousands of beams (docs/design/
+        // benchmarks.md) and keep the run deterministic. --lidar gpu takes the compute kernel.
+        if (!hasLidar || options.lidar != Lidar::Gpu) {
             if (hasLidar) {
                 log(v1::LOG_LEVEL_INFO, "sensors",
-                    options.lidar == Lidar::Cpu
-                        ? "lidar on the CPU (Tier 0, exact casts), as asked"
-                        : "lidar on the CPU (Tier 0, exact casts): the run is deterministic");
+                    "lidar on the CPU (Tier 0: exact casts, Embree culling, all cores)");
             }
             return {};
         }
@@ -938,13 +939,8 @@ struct Server::Impl {
             made.reset();
         }
         if (!made) {
-            if (options.lidar == Lidar::Gpu) {
-                return Status::error(StatusCode::InvalidConfig,
-                                     "--lidar gpu needs a Tier 1 GPU: " + reason);
-            }
-            log(v1::LOG_LEVEL_INFO, "sensors",
-                "lidar on the CPU (Tier 0, exact casts): no GPU for it (" + reason + ")");
-            return {};
+            return Status::error(StatusCode::InvalidConfig,
+                                 "--lidar gpu needs a Tier 1 GPU: " + reason);
         }
         rayContext = std::move(made);
         log(v1::LOG_LEVEL_INFO, "sensors",
