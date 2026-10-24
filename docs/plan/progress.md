@@ -210,7 +210,10 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
    says "applies to the running simulation" (the design's "applies on next run" predates the
    server applying edits live), and nothing in the design lets the user ask for the session
    save yet. `SetTransform` is refused: the backends cannot set a pose yet);
-   B8 collision bake (next)
+   B8 collision bake: part 1 **done** 2026-10-25, convex hull colliders end to end (world
+   tables, USD `physics:approximation "convexHull"` read and written, MuJoCo mesh geoms,
+   Jolt convex hulls, the CPU lidar's exact face-plane casts, occupancy maps); the GPU lidar
+   kernel refuses hulls for now. Part 2, the bake tool with CoACD, next
 14. Viewer additions (schematic, electrical scopes)
 
 ### Merged under the autonomous mandate

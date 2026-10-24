@@ -11,6 +11,7 @@
 #include <cmath>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -153,6 +154,33 @@ TEST(Backends, ArmatureSlowsTheFallAlike) {
     }
     for (const std::size_t i : {1U, 2U}) {
         EXPECT_LT(std::abs(m.position[i]), std::abs(free.position[i])) << "the armature slows it";
+    }
+}
+
+TEST(Backends, AConvexHullBoxRestsLikeABoxOnBoth) {
+    // Collision geometry as a convex hull (the collision bake's output): a 0.2 m cube's hull
+    // dropped from 0.15 m comes to rest at its half height.
+    for (const bool jolt : {false, true}) {
+        SCOPED_TRACE(jolt ? "jolt" : "mujoco");
+        World world;
+        world.addCollider(kWorldBody, ShapeType::Plane, {0, 0, 1}, Pose{}, 1.0);
+        const BodyId box = world.addBody("box", kWorldBody, Pose{{0.0, 0.0, 0.15}}, 1.0, {},
+                                         {0.0067, 0.0067, 0.0067, 0, 0, 0});
+        world.addJoint("box_free", JointType::Free, box, {0, 0, 1}, false);
+        world.addHullCollider(box, boxHull({0.1, 0.1, 0.1}), Pose{}, 1.0);
+        Scheduler scheduler(SchedulerOptions{.deterministic = true});
+        if (jolt) {
+            scheduler.add(std::make_unique<rigid_body::JoltBackend>());
+        } else {
+            scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+        }
+        auto wired = scheduler.wire(WorldView(world));
+        ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+        ASSERT_TRUE(scheduler.stepUntil(SimTime{1'500'000'000}).ok());
+        const std::span<const double> pose =
+            scheduler.bus().readN(scheduler.bus().find("body/box/pose"));
+        EXPECT_NEAR(pose[2], 0.1, 0.002);
+        EXPECT_NEAR(pose[3], 1.0, 1e-3) << "flat on a face";
     }
 }
 

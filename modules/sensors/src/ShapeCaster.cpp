@@ -69,6 +69,7 @@ double boundingRadius(ShapeType type, const std::array<double, 3>& size) {
         case ShapeType::Cylinder:
             return std::hypot(size[0], size[1]);
         case ShapeType::Box:
+        case ShapeType::ConvexHull:  // its size bounds every point's coordinates
             return std::sqrt(size[0] * size[0] + size[1] * size[1] + size[2] * size[2]);
     }
     return std::numeric_limits<double>::infinity();
@@ -86,7 +87,7 @@ struct ShapeCaster::Impl {
 
     [[nodiscard]] double exact(std::uint32_t k, const Query& q) const {
         const Shape& s = shapes[k];
-        return raycast(s.type, s.size, s.pose, q.origin, q.dir);
+        return raycast(s.type, s.size, s.pose, q.origin, q.dir, s.hull);
     }
 
     static void bounds(const RTCBoundsFunctionArguments* args) {
@@ -256,7 +257,7 @@ std::vector<std::uint32_t> ShapeCaster::overlapSphere(const std::array<double, 3
                 continue;
             }
         }
-        if (distanceToShape(shape.type, shape.size, shape.pose, center) <= radius) {
+        if (distanceToShape(shape.type, shape.size, shape.pose, center, shape.hull) <= radius) {
             out.push_back(k);
         }
     }
@@ -264,7 +265,7 @@ std::vector<std::uint32_t> ShapeCaster::overlapSphere(const std::array<double, 3
 }
 
 double distanceToShape(ShapeType type, const std::array<double, 3>& size, const Pose& pose,
-                       const std::array<double, 3>& point) {
+                       const std::array<double, 3>& point, const ConvexHull* hull) {
     const std::array<double, 3> q = rotate(
         conjugate(pose.orientation),
         {point[0] - pose.position[0], point[1] - pose.position[1], point[2] - pose.position[2]});
@@ -287,6 +288,37 @@ double distanceToShape(ShapeType type, const std::array<double, 3>& size, const 
             const double radial = std::max(std::hypot(q[0], q[1]) - size[0], 0.0);
             const double axial = std::max(std::abs(q[2]) - size[1], 0.0);
             return std::hypot(radial, axial);
+        }
+        case ShapeType::ConvexHull: {
+            if (hull == nullptr) {
+                return std::numeric_limits<double>::infinity();
+            }
+            double farthest = 0.0;
+            std::array<double, 3> centre{};
+            for (const auto& p : hull->points) {
+                for (std::size_t i = 0; i < 3; ++i) {
+                    centre.at(i) += p.at(i) / static_cast<double>(hull->points.size());
+                }
+            }
+            for (const auto& t : hull->triangles) {
+                const auto& a = hull->points.at(t[0]);
+                const auto& b = hull->points.at(t[1]);
+                const auto& c = hull->points.at(t[2]);
+                const std::array<double, 3> u{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+                const std::array<double, 3> v{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+                std::array<double, 3> n{u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
+                                        u[0] * v[1] - u[1] * v[0]};
+                const double length = std::hypot(n[0], n[1], n[2]);
+                if (length <= 0.0) {
+                    continue;
+                }
+                const auto side = [&n, &a](const std::array<double, 3>& x) {
+                    return n[0] * (x[0] - a[0]) + n[1] * (x[1] - a[1]) + n[2] * (x[2] - a[2]);
+                };
+                const double sign = side(centre) > 0.0 ? -1.0 : 1.0;  // outward
+                farthest = std::max(farthest, sign * side(q) / length);
+            }
+            return farthest;
         }
     }
     return std::numeric_limits<double>::infinity();

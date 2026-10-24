@@ -1,3 +1,4 @@
+#include "lagrange/sensors/ShapeCaster.hpp"
 #include "lagrange/server/MapExport.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
@@ -12,8 +13,11 @@ namespace lagrange::server {
 namespace {
 
 /// Whether a point given in a shape's own frame lies inside it.
-bool inside(ShapeType shape, const std::array<double, 3>& size, const std::array<double, 3>& p) {
+bool inside(ShapeType shape, const std::array<double, 3>& size, const std::array<double, 3>& p,
+            const ConvexHull* hull) {
     switch (shape) {
+        case ShapeType::ConvexHull:
+            return sensors::distanceToShape(shape, size, Pose{}, p, hull) == 0.0;
         case ShapeType::Box:
             return std::abs(p[0]) <= size[0] && std::abs(p[1]) <= size[1] &&
                    std::abs(p[2]) <= size[2];
@@ -35,7 +39,7 @@ bool inside(ShapeType shape, const std::array<double, 3>& size, const std::array
 std::array<double, 2> halfExtent(ShapeType shape, const std::array<double, 3>& size,
                                  const Pose& pose) {
     std::array<double, 2> out{0.0, 0.0};
-    if (shape == ShapeType::Box) {
+    if (shape == ShapeType::Box || shape == ShapeType::ConvexHull) {  // a hull: its bounding box
         for (int axis = 0; axis < 3; ++axis) {
             std::array<double, 3> edge{0.0, 0.0, 0.0};
             edge[axis] = size[axis];
@@ -67,6 +71,7 @@ Expected<void, std::string> exportOccupancyMap(const World& world, const std::st
         ShapeType type;
         std::array<double, 3> size;
         Pose pose;
+        const ConvexHull* hull;
     };
     const std::vector<Pose> rest = restPoses(world);
     const std::vector<bool> moving = movingBodies(world);
@@ -90,7 +95,10 @@ Expected<void, std::string> exportOccupancyMap(const World& world, const std::st
         maxX = std::max(maxX, pose.position[0] + half[0]);
         minY = std::min(minY, pose.position[1] - half[1]);
         maxY = std::max(maxY, pose.position[1] + half[1]);
-        shapes.push_back({colliders.shape[c], colliders.size[c], pose});
+        shapes.push_back({colliders.shape[c], colliders.size[c], pose,
+                          colliders.shape[c] == ShapeType::ConvexHull
+                              ? &world.hulls.at(colliders.hull[c])
+                              : nullptr});
     }
     if (shapes.empty()) {
         return Unexpected{std::string("the world has no fixed geometry")};
@@ -114,7 +122,7 @@ Expected<void, std::string> exportOccupancyMap(const World& world, const std::st
                     rotate(conjugate(shape.pose.orientation),
                            {x - shape.pose.position[0], y - shape.pose.position[1],
                             settings.heightM - shape.pose.position[2]});
-                if (inside(shape.type, shape.size, local)) {
+                if (inside(shape.type, shape.size, local, shape.hull)) {
                     pixels[row * width + col] = 0;
                     break;
                 }

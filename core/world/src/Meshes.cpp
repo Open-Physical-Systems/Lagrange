@@ -25,6 +25,18 @@ std::uint32_t vertexCount(const TriMesh& mesh) {
 
 }  // namespace
 
+ConvexHull boxHull(const std::array<double, 3>& half) {
+    ConvexHull hull;
+    for (int k = 0; k < 8; ++k) {
+        hull.points.push_back({(k & 1) != 0 ? half[0] : -half[0], (k & 2) != 0 ? half[1] : -half[1],
+                               (k & 4) != 0 ? half[2] : -half[2]});
+    }
+    // Two triangles per face, wound outward (corner k has bit 0 x, bit 1 y, bit 2 z).
+    hull.triangles = {{0, 2, 3}, {0, 3, 1}, {4, 5, 7}, {4, 7, 6}, {0, 1, 5}, {0, 5, 4},
+                      {2, 6, 7}, {2, 7, 3}, {0, 4, 6}, {0, 6, 2}, {1, 3, 7}, {1, 7, 5}};
+    return hull;
+}
+
 TriMesh boxMesh(double sizeX, double sizeY, double sizeZ) {
     const std::array<double, 3> half{sizeX / 2.0, sizeY / 2.0, sizeZ / 2.0};
     TriMesh mesh;
@@ -160,6 +172,11 @@ void appendModel(Model& model, const Model& other) {
     }
     for (std::size_t c = 0; c < o.colliders.body.size(); ++c) {
         if (o.colliders.body[c] == kWorldBody && o.colliders.shape[c] == ShapeType::Plane) {
+            continue;
+        }
+        if (o.colliders.shape[c] == ShapeType::ConvexHull) {
+            w.addHullCollider(map(o.colliders.body[c]), o.hulls.at(o.colliders.hull[c]),
+                              o.colliders.poseInBody[c], o.colliders.friction[c]);
             continue;
         }
         w.addCollider(map(o.colliders.body[c]), o.colliders.shape[c], o.colliders.size[c],

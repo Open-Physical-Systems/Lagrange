@@ -43,6 +43,7 @@
 #include <pxr/usd/usdPhysics/fixedJoint.h>
 #include <pxr/usd/usdPhysics/massAPI.h>
 #include <pxr/usd/usdPhysics/materialAPI.h>
+#include <pxr/usd/usdPhysics/meshCollisionAPI.h>
 #include <pxr/usd/usdPhysics/metrics.h>
 #include <pxr/usd/usdPhysics/prismaticJoint.h>
 #include <pxr/usd/usdPhysics/revoluteJoint.h>
@@ -369,6 +370,31 @@ private:
                     capsule.CreateAxisAttr().Set(UsdGeomTokens->z);
                     setTransform(capsule, pose);
                     gprim = capsule;
+                    break;
+                }
+                case ShapeType::ConvexHull: {
+                    const ConvexHull& hull = m_.world.hulls.at(colliders.hull[c]);
+                    UsdGeomMesh mesh = UsdGeomMesh::Define(stage_, path);
+                    VtVec3fArray points;
+                    for (const auto& p : hull.points) {
+                        points.push_back(GfVec3f(static_cast<float>(p[0]), static_cast<float>(p[1]),
+                                                 static_cast<float>(p[2])));
+                    }
+                    VtIntArray counts(hull.triangles.size(), 3);
+                    VtIntArray indices;
+                    for (const auto& t : hull.triangles) {
+                        for (const std::uint32_t i : t) {
+                            indices.push_back(static_cast<int>(i));
+                        }
+                    }
+                    mesh.CreatePointsAttr().Set(points);
+                    mesh.CreateFaceVertexCountsAttr().Set(counts);
+                    mesh.CreateFaceVertexIndicesAttr().Set(indices);
+                    setTransform(mesh, pose);
+                    UsdPhysicsMeshCollisionAPI::Apply(mesh.GetPrim())
+                        .CreateApproximationAttr()
+                        .Set(UsdPhysicsTokens->convexHull);
+                    gprim = mesh;
                     break;
                 }
                 case ShapeType::Plane:
