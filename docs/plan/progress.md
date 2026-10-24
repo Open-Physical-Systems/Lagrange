@@ -48,7 +48,7 @@ flowchart TB
         C1_3["C1–C3 MuJoCo backend<br/>and substitutes"]:::done
         C5["C5 rebase at load<br/>(run time: v0.7)"]:::done
         C4["C4 scene queries"]:::done
-        C6["C6 Jolt spike"]:::todo
+        C6["C6 Jolt spike<br/>(full backend: v0.3)"]:::done
     end
     subgraph D["D · sensors"]
         D1_5["D1 framework · D2 IMU<br/>D3 lidar Tier 0 · D4 Tier 1<br/>D5 sensor views"]:::done
