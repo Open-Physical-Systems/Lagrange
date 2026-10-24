@@ -188,9 +188,14 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                     domain["backend"].as<std::string>() != "mujoco") {
                     error(check, at + "/backend", "this server's rigid body backend is mujoco");
                 }
-                if (name == "electrical" && domain.contains("fidelity") &&
-                    domain["fidelity"].as<std::string>() != "averaged") {
-                    error(check, at + "/fidelity", "this server's electrical fidelity is averaged");
+                if (name == "electrical" && domain.contains("fidelity")) {
+                    const std::string fidelity = domain["fidelity"].as<std::string>();
+                    if (fidelity != "averaged" && fidelity != "fmu") {
+                        error(check, at + "/fidelity",
+                              "this server's electrical fidelities are averaged and fmu");
+                    } else {
+                        settings.electricalFidelity = fidelity;
+                    }
                 }
                 if (name == "sensors" && domain.contains("only")) {
                     warning(check, at + "/only", "not applied yet: every sensor is simulated");

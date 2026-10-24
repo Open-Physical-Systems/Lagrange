@@ -165,7 +165,8 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
    airspeed and sun direction with the aero and weather domains: domains/thermal.md §8)
 5. Coupling stability checks across the electrical, thermal and physics rates (**done**
    2026-10-25: architecture.md §8.1; the scheduler steps flow readers at their window's end)
-6. FMU host on `fmilibrary_vendor` (TODO(verify) version and licence)
+6. FMU host (**done** 2026-10-25, on our `fmilibrary3_vendor`: Lyrical's `fmilibrary_vendor`
+   pins FMI Library 2.2.3, FMI 2.0 only; reference FMU `lagrange_models/dc_drive`)
 7. Bench mode: the replay substitute for rigid body (E8 follows from it)
 8. SPICE netlist and Modelica export; ngspice offline comparison
 9. Robot arm sample and MoveIt 2

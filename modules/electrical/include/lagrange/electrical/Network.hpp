@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lagrange/electrical/FmuHost.hpp"
 #include "lagrange/electrical/Models.hpp"
 #include "lagrange/module/IModule.hpp"
 
@@ -39,9 +40,12 @@ namespace lagrange::electrical {
 /// the world (the joint's child body and armature at rest), against kMaxStepRatioPredicted or
 /// kMaxStepRatio, and refuses to start with the motor named when the exchange would be unstable.
 ///
+/// Fidelity `fmu`: a motor with elec:behaviorModel is simulated by its FMU (FmuComponent, added
+/// by the caller from motorFmuBindings); the network takes its motor/<m>/bus_current into the
+/// bus and leaves its joint to it. At `averaged` the behaviour models are ignored.
+///
 /// Not yet: converters (ElectricalConverterAPI_1 is refused), velocity and voltage control
-/// modes, FMU behaviour models (ignored at this fidelity), motors on prismatic joints. Default
-/// step 100 µs.
+/// modes, battery FMUs, motors on prismatic joints. Default step 100 µs.
 class ElectricalNetwork final : public IModule {
 public:
     /// H/τm above which the exchange is refused without and with speed prediction
@@ -111,6 +115,11 @@ private:
         std::size_t bus{0};
         SignalId demand, currentOut, poweredOut;
     };
+    struct FmuMotor {  // a motor its FMU simulates
+        std::string name;
+        std::size_t bus{0};
+        SignalId busCurrent;
+    };
     struct Passthrough {
         std::string joint;
         SignalId command, torque;
@@ -123,6 +132,7 @@ private:
     std::vector<Bus> buses_;
     std::vector<Load> loads_;
     std::vector<Passthrough> ideal_;
+    std::vector<FmuMotor> fmuMotors_;
     std::vector<double> batteryTemperature_;  // K, read each step
     std::vector<bool> limitedScratch_;        // batteries at their charge limit, per solve
     std::uint32_t exchangeSteps_{0};          // electrical steps per physics step; 0: unknown
@@ -133,5 +143,10 @@ private:
 /// armature of the joint it drives, so that physics accelerates the rotor too. Call once on the
 /// loaded world, before physics is built.
 void applyRotorInertia(World& world);
+
+/// The FMUs that simulate motors at fidelity `fmu`: every ElectricalMotorAPI_1 with an
+/// elec:behaviorModel, with the placeholders of its map ({joint}, {bus}, {prim}) and its
+/// attributes. Add one FmuComponent per binding after the network.
+[[nodiscard]] std::vector<FmuBinding> motorFmuBindings(const WorldView& world);
 
 }  // namespace lagrange::electrical

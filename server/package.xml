@@ -16,6 +16,7 @@
   <depend>lagrange_rigid_body_substitutes</depend>
   <depend>lagrange_sensors</depend>
   <depend>lagrange_electrical</depend>
+  <test_depend>lagrange_models</test_depend>
   <depend>lagrange_thermal</depend>
   <depend>lagrange_gpu</depend>
   <depend>lagrange_meshes</depend>

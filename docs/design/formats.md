@@ -1284,6 +1284,18 @@ parameters:
 - Built-in C++ models are the default for the battery ECM and the dq motor. FMUs are the
   extension path. See open question Q8 for why the plan does not depend on FMUs for v0.3.
 
+**Status (v0.3).** `FmuComponent` (`modules/electrical/fmu_host/`, on FMI Library 3.0.4 through
+`fmilibrary3_vendor`) hosts FMI 3.0 co-simulation FMUs as above: the map, unit checks from the
+BaseUnit exponents (SI units only: a factor or offset is refused), parameters from the
+component's attributes, one `fmi3DoStep` per module step at the map's `step`, and determinism and
+save/restore through `fmi3GetFMUState` and serialization when the FMU declares both. Additions to
+the sketch above: an input may say `optional: <value>`, read while its signal is not written (a
+winding temperature without the thermal domain); every input is read as a feedback input, so an
+FMU and the network can read each other's outputs. At electrical fidelity `fmu` the network leaves
+a motor with `elec:behaviorModel` to its FMU and takes its `motor/<m>/bus_current` into the bus;
+battery FMUs are not hosted yet. The reference FMU is `lagrange_models`' `dc_drive` (a brushed DC
+drive, hand-written in C, Apache-2.0), which matches the built-in brushed model step for step.
+
 ## 7. Recordings (MCAP)
 
 - One file per run. Chunked, zstd by default, with the summary section and index.

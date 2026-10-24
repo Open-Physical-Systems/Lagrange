@@ -128,6 +128,10 @@ the validated path in v0.3; the FMU host is an extension mechanism delivered in 
 reference FMU whose license is clear. Consider accepting FMI 2.0 co-simulation FMUs too, since
 most existing vendor FMUs are 2.0; this would be a change to the format stack and needs your
 decision.
+*Status (2026-10-25):* the FMU host is built on FMI Library 3.0.4 (which can also read FMI 2.0,
+so accepting 2.0 later is a host change, not a new dependency). The reference FMU is
+`lagrange_models`' `dc_drive`, hand-written in C under Apache-2.0, which sidesteps the
+OpenModelica export and licence questions. FMI 2.0 stays open.
 
 **Q9. First rigid-body backend and MuJoCo source.**
 The brief lists PhysX first. PhysX is not packaged, has a custom build system, and its GPU part

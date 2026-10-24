@@ -109,10 +109,11 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
             static_cast<std::uint32_t>(std::max(1.0, std::round(*exchange / electricalStep)));
         predict_ = config.get<bool>("speed_prediction").value_or(true);
     }
-    if (!config.fidelity().empty() && config.fidelity() != "averaged") {
+    const bool fmuFidelity = config.fidelity() == "fmu";
+    if (!config.fidelity().empty() && config.fidelity() != "averaged" && !fmuFidelity) {
         return Status::error(StatusCode::InvalidConfig,
                              "electrical fidelity " + std::string(config.fidelity()) +
-                                 " is not available; this module runs averaged");
+                                 " is not available; this module runs averaged or fmu");
     }
     Problems problems;
     const auto name = [&world](PrimId prim) { return std::string(world.signalInstanceName(prim)); };
@@ -231,7 +232,20 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
 
     const World::Joints& joints = world.joints();
     std::map<std::string, bool, std::less<>> motorJoint;
+    fmuMotors_.clear();
     for (const SchemaInstance* s : world.instancesOf("ElectricalMotorAPI_1")) {
+        if (fmuFidelity && s->assetPath("elec:behaviorModel")) {
+            // Its FMU simulates it; the network only feeds its bus.
+            const auto joint = s->rel("elec:joint");
+            const auto bus = busThrough(s, "elec:powerPort");
+            if (joint.size() != 1 || !bus) {
+                problems.add(path(s->prim), "a motor needs one elec:joint and a bus");
+                continue;
+            }
+            motorJoint[name(joint[0])] = true;
+            fmuMotors_.push_back({name(s->prim), *bus, {}});
+            continue;
+        }
         Motor motor;
         motor.name = name(s->prim);
         const std::string where = path(s->prim);
@@ -377,6 +391,11 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
         m.busCurrent = d.output(scalar(motor + "bus_current", units::A));
         m.loss = d.output(scalar(motor + "loss_power", units::W));
         m.fault = d.output(scalar(motor + "fault", units::one));
+    }
+    for (FmuMotor& m : fmuMotors_) {
+        SignalSpec current = scalar("motor/" + m.name + "/bus_current", units::A);
+        current.feedback = true;  // its FMU reads the bus voltage the network writes
+        m.busCurrent = d.input(current);
     }
     for (Battery& b : batteries_) {
         const std::string battery = "battery/" + b.name + "/";
@@ -591,6 +610,9 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
         bus.write(m.loss, out.lossPower);
         bus.write(m.fault, m.tripped ? 1.0 : (overvoltageOff ? 2.0 : 0.0));
     }
+    for (const FmuMotor& m : fmuMotors_) {
+        buses_[m.bus].sink += bus.read(m.busCurrent);
+    }
     for (Load& l : loads_) {
         Bus& node = buses_[l.bus];
         const bool powered = !node.brownout && node.voltage >= l.minVoltage && node.voltage > 0.0;
@@ -714,6 +736,52 @@ std::vector<std::string> ElectricalNetwork::idealJoints() const {
     std::vector<std::string> out;
     for (const Passthrough& p : ideal_) {
         out.push_back(p.joint);
+    }
+    return out;
+}
+
+std::vector<FmuBinding> motorFmuBindings(const WorldView& world) {
+    std::vector<FmuBinding> out;
+    std::map<std::uint32_t, std::vector<const SchemaInstance*>> portsOfPrim;
+    for (const SchemaInstance* s : world.instancesOf("PortAPI_1")) {
+        portsOfPrim[s->prim.index].push_back(s);
+    }
+    std::map<std::uint32_t, bool> isBus;
+    for (const SchemaInstance* s : world.instancesOf("ElectricalBusAPI_1")) {
+        isBus[s->prim.index] = true;
+    }
+    for (const SchemaInstance* s : world.instancesOf("ElectricalMotorAPI_1")) {
+        const auto model = s->assetPath("elec:behaviorModel");
+        const auto joint = s->rel("elec:joint");
+        const auto power = s->rel("elec:powerPort");
+        if (!model || joint.size() != 1 || power.empty()) {
+            continue;
+        }
+        // The bus: the power port's target, or where its port connects (a few hops).
+        PrimId bus = power[0];
+        for (int hop = 0; hop < kMaxPortHops && !isBus.contains(bus.index); ++hop) {
+            const auto ports = portsOfPrim.find(bus.index);
+            if (ports == portsOfPrim.end()) {
+                break;
+            }
+            for (const SchemaInstance* port : ports->second) {
+                const auto targets = port->rel("elec:port:" + port->instance + ":connectedTo");
+                if (!targets.empty()) {
+                    bus = targets[0];
+                    break;
+                }
+            }
+        }
+        FmuBinding binding;
+        binding.fmuPath = std::string(*model);
+        binding.name = std::string(world.signalInstanceName(s->prim));
+        binding.placeholders = {{"joint", std::string(world.signalInstanceName(joint[0]))},
+                                {"bus", std::string(world.signalInstanceName(bus))},
+                                {"prim", binding.name}};
+        for (const auto& [key, value] : s->reals) {
+            binding.attributes.emplace(key, value);
+        }
+        out.push_back(std::move(binding));
     }
     return out;
 }
