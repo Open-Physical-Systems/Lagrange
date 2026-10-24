@@ -114,8 +114,7 @@ evidence and the Gazebo Jetty comparison are in `docs/release/v0.2.0.md` and
 Every v0.3 epic of roadmap §4 is done, and so are the v0.2 items that moved here (G2, B8, E6,
 E8). Release notes and acceptance evidence: `docs/release/v0.3.0.md`. Owed within the epics:
 the battery against a published cell dataset and a motor heat run (Q16), the drive-design
-review of the motor constants, converters, FMI 2.0 FMUs (Q8), hulls in the GPU lidar kernel,
-Jolt's wheel slip. Publishing (merging into `main`, tagging) stays with the owner, after v0.2.0.
+review of the motor constants, converters, FMI 2.0 FMUs (Q8), Jolt's wheel slip. Publishing (merging into `main`, tagging) stays with the owner, after v0.2.0.
 
 ## Defaults taken during the autonomous run
 
@@ -226,7 +225,9 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
    (`assets/worlds/rack_sample`): 13 hulls, the lidar sees between its boards and stops at a
    board's edge within 3 mm, a box rests on a board within 3 mm on MuJoCo and Jolt. The
    roadmap's AC names the warehouse shelves; the sample warehouse's shelves are boxes, so the
-   rack stands in for them. Not yet: hulls in the GPU lidar kernel
+   rack stands in for them. Hulls in the GPU lidar kernel followed the same day: face planes
+   per hull, tested as on the CPU; 100 % same shape against the CPU reference over 200 random
+   hulls, worst 7.4 µm on llvmpipe
 14. Viewer additions (schematic, electrical scopes) (**done** 2026-10-25: the server sends
    the power system in the snapshot (`ElectricalNet`: a net per bus, terminals for battery
    ports, motors and loads with their current signals, limits from the bus trips and port

@@ -24,6 +24,10 @@ inline constexpr double kNoHit = std::numeric_limits<double>::infinity();
                              const Pose& shapePose, const std::array<double, 3>& origin,
                              const std::array<double, 3>& dir, const ConvexHull* hull = nullptr);
 
+/// The face planes of a hull, each turned so that the hull's centroid is inside: unit outward
+/// normal n and offset c with n·x <= c inside. Independent of the triangles' winding.
+void facePlanes(const ConvexHull& hull, std::vector<std::array<double, 4>>& out);
+
 /// What cameras draw: every mesh prim of a model's scene, on one GPU device (a software device
 /// on a machine without a GPU, sensors.md §6). Made once per run and shared by its cameras.
 struct CameraScene {
