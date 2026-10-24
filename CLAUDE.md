@@ -254,6 +254,7 @@ verification, not in this repo.
 - Viewer: built by colcon with everything else; run `ros2 run lagrange_viewer lagrange_viewer` (starts on the launcher, whose Start local simulator runs `lagrange_server`; `--connect <endpoint>` goes straight to a server)
 - Viewer headless test: `colcon test --packages-select lagrange_viewer` (runs on the software Vulkan device, llvmpipe; `LAGRANGE_TEST_GPU=<name>` picks another)
 - GPU and tier of this machine: `ros2 run lagrange_gpu lagrange_gpu_info`
+- Benchmarks: `tools/ci/benchmarks.sh MACHINE` (scheduler, bus, lidar per tier; medians against `tests/benchmarks/baseline.json`, see `docs/design/benchmarks.md`)
 - All hooks: `pre-commit run --all-files`
 - Protocol: `buf lint && buf format --diff --exit-code && buf breaking --against '.git#ref=origin/dev'`
 

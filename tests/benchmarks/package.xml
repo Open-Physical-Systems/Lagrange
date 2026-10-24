@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>lagrange_benchmarks</name>
+  <version>0.1.0</version>
+  <description>Performance benchmarks: scheduler overhead, signal bus access and lidar rays per second per capability tier, with the regression check the nightly job runs.</description>
+  <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>lagrange_cmake</buildtool_depend>
+
+  <depend>benchmark</depend>
+  <depend>lagrange_core</depend>
+  <depend>lagrange_gpu</depend>
+  <depend>lagrange_sensors</depend>
+
+  <exec_depend>mesa-vulkan-drivers</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
