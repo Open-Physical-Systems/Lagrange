@@ -59,8 +59,8 @@ flowchart TB
         E1_2["E1 server · E2 protocol"]:::done
         E4_5["E4 recorder · E5 profiles"]:::done
         E7["E7 lagrange CLI"]:::done
-        E3["E3 tick records"]:::todo
-        E6["E6 scene editing"]:::todo
+        E3["E3 consumer rings"]:::done
+        E6["E6 scene editing<br/>(with v0.3 motors)"]:::todo
         E8["E8 mock server alignment"]:::todo
     end
     subgraph F["F · ROS 2"]
@@ -106,6 +106,7 @@ flowchart TB
 | Item | Default | Why |
 |---|---|---|
 | H7 (Q3) | No thin electrical slice in v0.2 | v0.3 builds the full electrical domain (network, battery, motors, FOC); a slice now would be rewritten |
+| E6 | Scene editing moves to v0.3 | Its acceptance test edits a motor parameter in a running sim; motors arrive with v0.3's electrical domain |
 
 ## Autonomous run (from 2026-10-24)
 
