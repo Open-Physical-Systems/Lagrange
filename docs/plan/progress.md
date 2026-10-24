@@ -173,10 +173,11 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 8. SPICE netlist and Modelica export; ngspice offline comparison (**done** 2026-10-25:
    `lagrange export`; netlist round trip in ngspice within 0.05 %; Modelica checked for
    structure only, no OpenModelica here)
-9. Robot arm sample and MoveIt 2 (part 1 **done** 2026-10-25: `assets/robots/arm6` with its
-   overlay and `workcell_arm6`, joint_trajectory_controller at 1 kHz through the drives' position
-   servos, now with `position_i`; found and fixed: MuJoCo read revolute limits as degrees.
-   Part 2: the MoveIt 2 config, pick-and-place demo and the derating scenario)
+9. Robot arm sample and MoveIt 2 (**done** 2026-10-25: `arm6`, its overlays and workcell;
+   joint_trajectory_controller at 1 kHz; MoveIt 2 pick-and-place via moveit_py; the derating
+   scenario passes with `tools/ci/arm_scenario.sh`. Fixed on the way: MuJoCo read revolute
+   limits as degrees; the position servo lagged moving set points (now velocity feedforward);
+   the Python bindings hid lagrange.viewer. Not yet: wrist camera, grasped object)
 10. Raster camera sensor
 11. Jolt full backend
 12. Schema migration tools (`tools/`)

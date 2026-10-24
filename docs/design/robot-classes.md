@@ -100,6 +100,22 @@ phase currents and bus voltage; repeating the cycle at full speed raises the win
 until derating limits torque and the trajectory controller reports a tolerance violation.
 Disabling electrical (ideal torque source) makes the same cycle run without that effect.
 
+**Status (v0.3).** The sample arm is `assets/robots/arm6` (a generic 6-DoF arm with a parallel
+gripper; its motors, 48 V supply, brake resistor and thermal nodes in `arm6.overlay.yaml`) in
+`assets/worlds/workcell_arm6`, driven by `joint_trajectory_controller` at 1 kHz through the
+drives' position servos (`demos/config/arm6_controllers.yaml`). MoveIt 2 plans with MoveItCpp
+(`moveit_py`, `demos/config/arm6_moveit/`, `ros2 run lagrange_demos pick_place`) through named
+poses above and at two stations; the gripper opens and closes, but there is no object to grasp
+yet. The scenario: `tools/ci/arm_scenario.sh`. With `arm6_undersized.overlay.yaml` (shoulder and
+elbow motors one size too small) the shoulder-lift winding heats from 25 °C to 150 °C over 79
+full-speed cycles (about 530 simulated seconds), derates to 0.14 and the trajectory controller
+aborts the next move on its path tolerance; with electrical off all 80 cycles complete. The
+sample's own motors are sized for the cycle (2.9 K in 15 cycles). Signals for the scopes:
+`motor/<m>/current_q`, `bus/dc_48v/voltage`, `thermal/<m>/temperature`. Not yet: a wrist
+camera (the raster camera is the next v0.3 step), a grasped object, the arm in USD
+(`lagrange_import` it). At 8x real time MoveIt's state monitor, fed in wall-clock time, can
+lag the simulation; `pick_place` retries a move once when its start state looks stale.
+
 ## 5. Drone (v0.4)
 
 | Need | Provided by |

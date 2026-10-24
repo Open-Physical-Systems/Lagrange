@@ -15,4 +15,10 @@ install(
     RENAME spawn_controllers
 )
 
+install(
+    PROGRAMS scripts/pick_place.py
+    DESTINATION lib/${PROJECT_NAME}
+    RENAME pick_place
+)
+
 ament_package()
