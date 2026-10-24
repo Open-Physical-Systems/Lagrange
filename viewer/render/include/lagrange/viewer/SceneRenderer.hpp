@@ -64,6 +64,8 @@ private:
 
     VkPipelineLayout meshLayout_{VK_NULL_HANDLE};
     VkPipeline meshPipeline_{VK_NULL_HANDLE};
+    VkPipelineLayout unlitLayout_{VK_NULL_HANDLE};
+    VkPipeline unlitPipeline_{VK_NULL_HANDLE};
     VkPipelineLayout lineLayout_{VK_NULL_HANDLE};
     VkPipeline linePipeline_{VK_NULL_HANDLE};
 

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <vector>
 
 #include <imgui.h>
@@ -166,8 +167,10 @@ public:
             *detail = '\0';  // "Tier 2 (full, hardware ray tracing)" -> "Tier 2"
         }
         char text[160];
-        std::snprintf(text, sizeof(text), "Perspective · Lit   %.1f ms   %u draws   %s",
+        std::snprintf(text, sizeof(text), "%s · %s   %.1f ms   %u draws   %s",
+                      follow_ ? "Follow" : "Perspective", shadingName(context),
                       static_cast<double>(context.frameMs), context.drawCalls, tier);
+        thermal(context, draw, origin, available);
         overlayBox(draw, ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)), text, nullptr);
 
         // Bottom left: the frame's axes as the camera sees them, its convention, and how far
@@ -213,6 +216,127 @@ public:
     }
 
 private:
+    static const char* shadingName(const PanelContext& context) {
+        switch (context.renderOptions->shading) {
+            case Shading::Unlit:
+                return "Unlit";
+            case Shading::Thermal:
+                return "Thermal";
+            case Shading::Lit:
+                break;
+        }
+        return "Lit";
+    }
+
+    struct Temperature {
+        std::uint32_t prim{kNone};
+        std::shared_ptr<ScopeBuffer> buffer;
+    };
+
+    /// Thermal shading: the temperature of every thermal node (thermal/<n>/temperature, on its
+    /// prim) for the renderer, each mesh taking its nearest ancestor's, and the legend.
+    void thermal(PanelContext& context, ImDrawList* draw, const ImVec2& origin,
+                 const ImVec2& size) {
+        const std::uint64_t catalog = context.catalog ? context.catalog->generation : 0;
+        const std::uint64_t scene = context.scene->statics->generation;
+        if (catalog != catalog_ || scene != scene_) {
+            catalog_ = catalog;
+            scene_ = scene;
+            for (const Temperature& t : temperatures_) {
+                context.client.unsubscribe(t.buffer);
+            }
+            temperatures_.clear();
+            if (context.catalog) {
+                for (const SignalInfo& info : context.catalog->signals) {
+                    if (info.name.starts_with("thermal/") && info.name.ends_with("/temperature") &&
+                        info.prim != kNone) {
+                        if (auto buffer = context.client.subscribe(info.name)) {
+                            temperatures_.push_back({info.prim, std::move(buffer)});
+                        }
+                    }
+                }
+            }
+        }
+        RenderOptions& options = *context.renderOptions;
+        if (temperatures_.empty() && options.shading == Shading::Thermal) {
+            options.shading = Shading::Lit;
+        }
+        if (options.shading != Shading::Thermal) {
+            return;
+        }
+        const std::vector<PrimData>& prims = context.scene->statics->prims;
+        own_.assign(prims.size(), NAN);
+        float low = INFINITY;
+        float high = -INFINITY;
+        for (const Temperature& t : temperatures_) {
+            const auto value = static_cast<float>(t.buffer->latest());
+            if (t.prim < prims.size() && !std::isnan(value)) {
+                own_[t.prim] = value;
+                low = std::min(low, value);
+                high = std::max(high, value);
+            }
+        }
+        // Each prim takes its own temperature or its nearest ancestor's: a link's meshes
+        // show the link's node.
+        options.temperature.assign(prims.size(), NAN);
+        for (std::uint32_t i = 0; i < prims.size(); ++i) {
+            for (std::uint32_t p = i; p != kNone && p < prims.size(); p = prims[p].parent) {
+                if (!std::isnan(own_[p])) {
+                    options.temperature[i] = own_[p];
+                    break;
+                }
+            }
+        }
+        if (low > high) {
+            return;  // no samples yet
+        }
+        // At least kMinimumSpanK across, so that small differences do not saturate the map.
+        if (high - low < kMinimumSpanK) {
+            high = low + kMinimumSpanK;
+        }
+        options.temperatureLow = low;
+        options.temperatureHigh = high;
+
+        // Legend (design 07-environment's field legend): name, unit, colour bar and range.
+        const float width = px(200.0F);
+        const float barHeight = px(8.0F);
+        const ImVec2 min(origin.x + size.x - width - px(10.0F), origin.y + size.y - px(92.0F));
+        const ImVec2 max(min.x + width, min.y + px(48.0F));
+        draw->AddRectFilled(min, max, u32(c::bg1), px(4.0F));
+        draw->AddRect(min, max, u32(c::line), px(4.0F));
+        const theme::Fonts& fonts = theme::fonts();
+        const float small = px(theme::kCaptionSize);
+        draw->AddText(fonts.sans, small, ImVec2(min.x + px(8.0F), min.y + px(5.0F)), u32(c::t2),
+                      "temperature · K");
+        const ImVec2 bar(min.x + px(8.0F), min.y + px(22.0F));
+        const float barWidth = width - px(16.0F);
+        constexpr int kSteps = 32;
+        for (int k = 0; k < kSteps; ++k) {
+            const std::array<float, 3> lin =
+                thermalColor((static_cast<float>(k) + 0.5F) / static_cast<float>(kSteps));
+            const ImVec4 colour(std::pow(lin[0], 1.0F / 2.2F), std::pow(lin[1], 1.0F / 2.2F),
+                                std::pow(lin[2], 1.0F / 2.2F), 1.0F);
+            const float x0 = bar.x + barWidth * static_cast<float>(k) / kSteps;
+            const float x1 = bar.x + barWidth * static_cast<float>(k + 1) / kSteps;
+            draw->AddRectFilled(ImVec2(x0, bar.y), ImVec2(x1, bar.y + barHeight), u32(colour));
+        }
+        char text[32];
+        std::snprintf(text, sizeof(text), "%.1f", static_cast<double>(low));
+        draw->AddText(fonts.mono, small, ImVec2(bar.x, bar.y + barHeight + px(3.0F)), u32(c::t3),
+                      text);
+        std::snprintf(text, sizeof(text), "%.1f", static_cast<double>(high));
+        const float right = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, text).x;
+        draw->AddText(fonts.mono, small,
+                      ImVec2(bar.x + barWidth - right, bar.y + barHeight + px(3.0F)), u32(c::t3),
+                      text);
+    }
+
+    static constexpr float kMinimumSpanK = 10.0F;
+    std::vector<Temperature> temperatures_;
+    std::vector<float> own_;
+    std::uint64_t catalog_{~0ULL};
+    std::uint64_t scene_{~0ULL};
+
     /// The first root prim that has children: what "the robot" is for the follow camera.
     static std::uint32_t robotPrim(const SceneFrame& frame) {
         const std::vector<PrimData>& prims = frame.statics->prims;
@@ -285,19 +409,34 @@ private:
         std::snprintf(overlayLabel, sizeof(overlayLabel), "Overlays · %d###overlays", overlays);
         const char* camera = follow_ ? "Follow###camera" : "Perspective###camera";
         const float gap = px(4.0F);
-        const float width = widgets::MenuButtonWidth("Lit") + widgets::MenuButtonWidth(camera) +
+        const float width = widgets::MenuButtonWidth("Thermal") + widgets::MenuButtonWidth(camera) +
                             widgets::MenuButtonWidth(overlayLabel) + gap * 2.0F;
         if (!widgets::BeginPanelTools("##viewport-tools", width)) {
             return;
         }
-        if (widgets::MenuButton("Lit")) {
+        char shading[48];
+        std::snprintf(shading, sizeof(shading), "%s###shading-menu", shadingName(context));
+        if (widgets::MenuButton(shading)) {
             ImGui::OpenPopup("##shading");
         }
         if (ImGui::BeginPopup("##shading")) {
-            ImGui::MenuItem("Lit", nullptr, true);
-            // The renderer has one shading mode so far.
-            for (const char* mode : {"Unlit", "Wireframe", "Collision", "Thermal false colour"}) {
-                ImGui::MenuItem(mode, nullptr, false, false);
+            Shading& mode = context.renderOptions->shading;
+            if (ImGui::MenuItem("Lit", nullptr, mode == Shading::Lit)) {
+                mode = Shading::Lit;
+            }
+            if (ImGui::MenuItem("Unlit", nullptr, mode == Shading::Unlit)) {
+                mode = Shading::Unlit;
+            }
+            ImGui::MenuItem("Wireframe", nullptr, false, false);  // not built yet
+            ImGui::MenuItem("Collision", nullptr, false, false);
+            if (ImGui::MenuItem("Thermal false colour", nullptr, mode == Shading::Thermal,
+                                !temperatures_.empty())) {
+                mode = Shading::Thermal;
+            }
+            if (temperatures_.empty()) {
+                ImGui::SetItemTooltip(
+                    "No thermal nodes: the thermal domain is off or the "
+                    "stage has none");
             }
             ImGui::EndPopup();
         }

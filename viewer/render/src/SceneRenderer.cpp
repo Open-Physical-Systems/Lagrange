@@ -4,6 +4,7 @@
 #include "shaders/kLineFragment.hpp"
 #include "shaders/kLineVertex.hpp"
 #include "shaders/kMeshFragment.hpp"
+#include "shaders/kMeshUnlitFragment.hpp"
 #include "shaders/kMeshVertex.hpp"
 
 #include <algorithm>
@@ -19,6 +20,7 @@ constexpr VkFormat kColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
 using gpu::kDepthFormat;
 constexpr int kGridHalfCells = 20;  // lines every metre, 20 m to each side
 constexpr int kGridMajorEvery = 5;
+constexpr float kNoTemperature = 0.02F;  // linear grey of meshes without a thermal node
 
 // gpu::MeshPush, with the viewer's matrix type.
 struct MeshPush {
@@ -64,6 +66,27 @@ gpu::Buffer lineBuffer(const gpu::Device& device, const std::vector<float>& vert
 
 }  // namespace
 
+std::array<float, 3> thermalColor(float t) {
+    // Design tokens colormap.thermal ("inferno"), sRGB.
+    static constexpr std::array<std::array<int, 3>, 6> kStops{{{0x00, 0x00, 0x04},
+                                                               {0x42, 0x0A, 0x68},
+                                                               {0x93, 0x26, 0x67},
+                                                               {0xDD, 0x51, 0x3A},
+                                                               {0xFC, 0xA5, 0x0A},
+                                                               {0xFC, 0xFF, 0xA4}}};
+    const float x = std::clamp(t, 0.0F, 1.0F) * static_cast<float>(kStops.size() - 1);
+    const auto k = std::min(static_cast<std::size_t>(x), kStops.size() - 2);
+    const float f = x - static_cast<float>(k);
+    std::array<float, 3> out{};
+    for (std::size_t c = 0; c < 3; ++c) {
+        // Blend in sRGB, where the map's stops are even, then make it linear.
+        const float srgb = (1.0F - f) * static_cast<float>(kStops[k][c]) +
+                           f * static_cast<float>(kStops[k + 1][c]);
+        out[c] = std::pow(srgb / 255.0F, 2.2F);
+    }
+    return out;
+}
+
 SceneRenderer::SceneRenderer(const gpu::Device& device) : device_(device), meshes_(device) {
     createPipelines();
 
@@ -94,6 +117,8 @@ SceneRenderer::~SceneRenderer() {
     gpu::destroy(device_, depth_);
     vkDestroyPipeline(device_.device(), meshPipeline_, nullptr);
     vkDestroyPipelineLayout(device_.device(), meshLayout_, nullptr);
+    vkDestroyPipeline(device_.device(), unlitPipeline_, nullptr);
+    vkDestroyPipelineLayout(device_.device(), unlitLayout_, nullptr);
     vkDestroyPipeline(device_.device(), linePipeline_, nullptr);
     vkDestroyPipelineLayout(device_.device(), lineLayout_, nullptr);
 }
@@ -105,6 +130,9 @@ void SceneRenderer::createPipelines() {
     mesh.pushSize = sizeof(MeshPush);
     mesh.colorFormats = std::span{&kColorFormat, 1};
     gpu::buildPipeline(device_, mesh, meshLayout_, meshPipeline_);
+    gpu::PipelineSpec unlit = mesh;
+    unlit.fragment = kMeshUnlitFragment;
+    gpu::buildPipeline(device_, unlit, unlitLayout_, unlitPipeline_);
     gpu::PipelineSpec line = mesh;
     line.vertex = kLineVertex;
     line.fragment = kLineFragment;
@@ -200,7 +228,10 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
 
     // --- meshes ---------------------------------------------------------------------------
     if (frame != nullptr && frame->statics) {
-        vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipeline_);
+        const bool lit = options.shading == Shading::Lit;
+        vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          lit ? meshPipeline_ : unlitPipeline_);
+        const VkPipelineLayout layout = lit ? meshLayout_ : unlitLayout_;
         const SceneStatics& statics = *frame->statics;
         for (std::size_t i = 0; i < statics.prims.size(); ++i) {
             const PrimData& prim = statics.prims[i];
@@ -212,7 +243,19 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
             push.model = modelRows(frame->transforms[i], eye);
             push.baseColor = prim.material != kNone ? statics.materials[prim.material].baseColor
                                                     : std::array<float, 4>{0.8F, 0.8F, 0.8F, 1.0F};
-            vkCmdPushConstants(commands, meshLayout_, stages, 0, sizeof(push), &push);
+            if (options.shading == Shading::Thermal) {
+                const float t = i < options.temperature.size() ? options.temperature[i] : NAN;
+                if (std::isnan(t)) {
+                    push.baseColor = {kNoTemperature, kNoTemperature, kNoTemperature, 1.0F};
+                } else {
+                    const float span =
+                        std::max(options.temperatureHigh - options.temperatureLow, 1e-3F);
+                    const std::array<float, 3> rgb =
+                        thermalColor((t - options.temperatureLow) / span);
+                    push.baseColor = {rgb[0], rgb[1], rgb[2], 1.0F};
+                }
+            }
+            vkCmdPushConstants(commands, layout, stages, 0, sizeof(push), &push);
             if (meshes_.draw(commands, prim.mesh)) {
                 ++lastDrawCount_;
             }

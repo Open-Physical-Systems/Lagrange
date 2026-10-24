@@ -26,6 +26,7 @@ struct Options {
     bool launcher{false};      ///< Start on the launcher even when a server is named.
     bool startLocal{false};    ///< Start lagrange_server from the launcher, then connect.
     bool cursors{false};       ///< Show the scope's A and B cursors from the start.
+    std::string shading;       ///< Viewport shading at start-up: lit, unlit or thermal.
     std::string selectPath;    ///< Prim to select once the scene arrived, by its full path.
     std::string openPath;      ///< Robot description or recording to ask the server to load.
     std::uint32_t width{1600};
