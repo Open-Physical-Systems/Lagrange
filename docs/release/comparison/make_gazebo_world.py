@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sys
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 
 def main() -> int:
@@ -35,8 +36,8 @@ def main() -> int:
         size = box.get("size")
         links.append(
             f'      <link name="{name}"><pose>{origins[name]}</pose>'
-            f"<collision name=\"c\"><geometry><box><size>{size}</size></box></geometry>"
-            f"</collision><visual name=\"v\"><geometry><box><size>{size}</size></box>"
+            f'<collision name="c"><geometry><box><size>{size}</size></box></geometry>'
+            f'</collision><visual name="v"><geometry><box><size>{size}</size></box>'
             f"</geometry></visual></link>"
         )
     sensor_systems = (
@@ -46,7 +47,7 @@ def main() -> int:
         if sensors
         else ""
     )
-    with open(out, "w", encoding="utf-8") as f:
+    with Path(out).open("w", encoding="utf-8") as f:
         f.write(f"""<?xml version="1.0"?>
 <sdf version="1.11">
   <world name="warehouse_small">
