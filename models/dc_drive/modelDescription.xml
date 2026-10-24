@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fmiModelDescription
+    fmiVersion="3.0"
+    modelName="dc_drive"
+    instantiationToken="{6d1f3c38-6a3e-4c2a-9a55-1d4b8b2f6c01}"
+    description="Brushed DC motor with its drive (PI current loop, H-bridge voltage limit): Lagrange's reference FMU"
+    generationTool="hand-written (models/dc_drive)"
+    license="Apache-2.0">
+  <CoSimulation
+      modelIdentifier="dc_drive"
+      canHandleVariableCommunicationStepSize="true"
+      canGetAndSetFMUState="true"
+      canSerializeFMUState="true"/>
+  <UnitDefinitions>
+    <Unit name="ohm"><BaseUnit kg="1" m="2" s="-3" A="-2"/></Unit>
+    <Unit name="H"><BaseUnit kg="1" m="2" s="-2" A="-2"/></Unit>
+    <Unit name="N.m/A"><BaseUnit kg="1" m="2" s="-2" A="-1"/></Unit>
+    <Unit name="A"><BaseUnit A="1"/></Unit>
+    <Unit name="1/K"><BaseUnit K="-1"/></Unit>
+    <Unit name="K"><BaseUnit K="1"/></Unit>
+    <Unit name="rad/s"><BaseUnit s="-1" rad="1"/></Unit>
+    <Unit name="N.m"><BaseUnit kg="1" m="2" s="-2"/></Unit>
+    <Unit name="V"><BaseUnit kg="1" m="2" s="-3" A="-1"/></Unit>
+    <Unit name="W"><BaseUnit kg="1" m="2" s="-3"/></Unit>
+  </UnitDefinitions>
+  <ModelVariables>
+    <Float64 name="time" valueReference="0" causality="independent" variability="continuous"/>
+    <Float64 name="R" valueReference="1" causality="parameter" variability="fixed" unit="ohm" start="0.5"/>
+    <Float64 name="L" valueReference="2" causality="parameter" variability="fixed" unit="H" start="0.0005"/>
+    <Float64 name="K_t" valueReference="3" causality="parameter" variability="fixed" unit="N.m/A" start="0.05"/>
+    <Float64 name="I_max" valueReference="4" causality="parameter" variability="fixed" unit="A" start="10"/>
+    <Float64 name="alpha" valueReference="5" causality="parameter" variability="fixed" unit="1/K" start="0.00393"/>
+    <Float64 name="T_ref" valueReference="6" causality="parameter" variability="fixed" unit="K" start="298.15"/>
+    <Float64 name="omega_c" valueReference="7" causality="parameter" variability="fixed" unit="rad/s" start="6283"/>
+    <Float64 name="omega" valueReference="10" causality="input" variability="continuous" unit="rad/s" start="0"/>
+    <Float64 name="tau_cmd" valueReference="11" causality="input" variability="continuous" unit="N.m" start="0"/>
+    <Float64 name="v_bus" valueReference="12" causality="input" variability="continuous" unit="V" start="0"/>
+    <Float64 name="T_winding" valueReference="13" causality="input" variability="continuous" unit="K" start="298.15"/>
+    <Float64 name="tau_shaft" valueReference="20" causality="output" variability="continuous" unit="N.m"/>
+    <Float64 name="i_bus" valueReference="21" causality="output" variability="continuous" unit="A"/>
+    <Float64 name="p_loss" valueReference="22" causality="output" variability="continuous" unit="W"/>
+    <Float64 name="i_a" valueReference="23" causality="output" variability="continuous" unit="A"/>
+  </ModelVariables>
+  <ModelStructure>
+    <Output valueReference="20"/>
+    <Output valueReference="21"/>
+    <Output valueReference="22"/>
+    <Output valueReference="23"/>
+  </ModelStructure>
+</fmiModelDescription>

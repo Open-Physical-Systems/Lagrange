@@ -284,7 +284,7 @@ struct Server::Impl {
         // (domains/electrical.md §5).
         if (hasMotors() && !off("electrical")) {
             ModuleConfigData power;
-            power.fidelity = "averaged";
+            power.fidelity = settings.electricalFidelity.value_or("averaged");
             // The physics step the joint speeds arrive at: speed prediction and the stability
             // check (architecture.md §8). A fixed robot has no speeds to predict.
             if (!off("rigid_body")) {
@@ -296,7 +296,15 @@ struct Server::Impl {
             if (settings.electricalDtNs) {
                 power.dt = Duration{*settings.electricalDtNs};
             }
+            const bool fmu = power.fidelity == "fmu";
             next->add(std::make_unique<electrical::ElectricalNetwork>(), ModuleConfig(power));
+            // At fidelity fmu, motors with a behaviour model are their FMUs (formats.md §6).
+            if (fmu) {
+                for (electrical::FmuBinding& binding :
+                     electrical::motorFmuBindings(WorldView(robot.world))) {
+                    next->add(std::make_unique<electrical::FmuComponent>(std::move(binding)));
+                }
+            }
         } else {
             next->add(std::make_unique<electrical::IdealTorqueSource>());
         }
@@ -345,6 +353,7 @@ struct Server::Impl {
         settings.electricalDtNs = electricalDtNs;
         settings.thermalDtNs = thermalDtNs;
         settings.speedPrediction = speedPrediction;
+        settings.electricalFidelity = electricalFidelity;
         settings.ambientTemperatureK = ambient();
         return settings;
     }
@@ -352,12 +361,13 @@ struct Server::Impl {
     std::optional<double> ambient() const {
         return appliedAmbientK ? appliedAmbientK : options.ambientTemperatureK;
     }
-    std::optional<std::int64_t> thermalDtNs;     // from an applied profile
-    std::optional<double> appliedAmbientK;       // from an applied profile
-    std::optional<bool> speedPrediction;         // from an applied profile
-    std::optional<std::int64_t> rigidBodyDtNs;   // from an applied profile
-    std::optional<std::int64_t> electricalDtNs;  // from an applied profile
-    std::optional<ProfileSettings> pending;      // applied without restart: used at the next reset
+    std::optional<std::int64_t> thermalDtNs;        // from an applied profile
+    std::optional<double> appliedAmbientK;          // from an applied profile
+    std::optional<bool> speedPrediction;            // from an applied profile
+    std::optional<std::string> electricalFidelity;  // from an applied profile
+    std::optional<std::int64_t> rigidBodyDtNs;      // from an applied profile
+    std::optional<std::int64_t> electricalDtNs;     // from an applied profile
+    std::optional<ProfileSettings> pending;  // applied without restart: used at the next reset
 
     Status build() {
         auto made = makeScheduler(active(), &driveCommand);
@@ -1054,7 +1064,8 @@ struct Server::Impl {
                 char dt[48];
                 std::snprintf(dt, sizeof(dt), "%.9g",
                               static_cast<double>(electricalDtNs.value_or(100'000)) / 1e9);
-                yaml += "  electrical: {enabled: true, fidelity: averaged, dt: " + std::string(dt) +
+                yaml += "  electrical: {enabled: true, fidelity: " +
+                        electricalFidelity.value_or("averaged") + ", dt: " + std::string(dt) +
                         "}\n";
             } else if (std::string_view(row.domain) == "thermal" && hasThermalNodes() &&
                        ambient()) {
@@ -1129,6 +1140,9 @@ struct Server::Impl {
             }
             if (powered) {
                 d.add_fidelities("averaged");
+                if (!electrical::motorFmuBindings(WorldView(robot.world)).empty()) {
+                    d.add_fidelities("fmu");
+                }
                 d.set_dt_ns(electricalDtNs.value_or(100'000));
                 d.set_min_dt_ns(10'000);
                 d.set_max_dt_ns(1'000'000);
@@ -1514,6 +1528,7 @@ struct Server::Impl {
         electricalDtNs = settings.electricalDtNs;
         thermalDtNs = settings.thermalDtNs;
         speedPrediction = settings.speedPrediction;
+        electricalFidelity = settings.electricalFidelity;
         const std::optional<double> previousAmbient = appliedAmbientK;
         if (settings.ambientTemperatureK) {
             appliedAmbientK = settings.ambientTemperatureK;
@@ -1526,6 +1541,7 @@ struct Server::Impl {
             electricalDtNs = previous.electricalDtNs;
             thermalDtNs = previous.thermalDtNs;
             speedPrediction = previous.speedPrediction;
+            electricalFidelity = previous.electricalFidelity;
             appliedAmbientK = previousAmbient;
             (void)restart();
             return status;

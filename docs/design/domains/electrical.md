@@ -174,9 +174,11 @@ Choices made while implementing, beyond §2:
   step diverges. (§4's "warn when dt > 0.2 / bandwidth" would warn at the default 100 µs step
   for the default 1 kHz loop, which runs well; the cap is where it matters.)
 
-Not yet: converters (refused with the prim named), `velocity` and `voltage` control modes, FMU
-behaviour models (step 6 of the v0.3 queue), motors on prismatic joints, and the rotor inertia
-in Jolt.
+- **Fidelity `fmu`** (formats.md §6 status): a motor with `elec:behaviorModel` is simulated by
+  its FMU, the network feeding its bus; `averaged` ignores the behaviour models.
+
+Not yet: converters (refused with the prim named), `velocity` and `voltage` control modes,
+battery FMUs, motors on prismatic joints, and the rotor inertia in Jolt.
 
 | §8 check | Status | Test |
 |---|---|---|

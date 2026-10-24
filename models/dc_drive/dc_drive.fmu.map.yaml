@@ -1,0 +1,24 @@
+# The mapping of dc_drive.fmu's variables to Lagrange signals and schema attributes
+# (docs/design/formats.md §6). {joint}, {bus} and {prim} are the motor's joint, the bus it draws
+# from and its own prim.
+fmu: dc_drive.fmu
+fmi_version: "3.0"
+step: 0.0001                      # s, the communication step
+inputs:
+  - { variable: omega,     signal: "joint/{joint}/velocity",         unit: rad/s }
+  - { variable: tau_cmd,   signal: "joint/{joint}/torque_command",   unit: N.m }
+  - { variable: v_bus,     signal: "bus/{bus}/voltage",              unit: V }
+  - { variable: T_winding, signal: "thermal/{prim}/temperature",     unit: K, optional: 298.15 }
+outputs:
+  - { variable: tau_shaft, signal: "joint/{joint}/torque",           unit: N.m }
+  - { variable: i_bus,     signal: "motor/{prim}/bus_current",       unit: A }
+  - { variable: p_loss,    signal: "motor/{prim}/loss_power",        unit: W }
+  - { variable: i_a,       signal: "motor/{prim}/current_q",         unit: A }
+parameters:
+  - { variable: R,       attribute: "elec:windingResistance" }
+  - { variable: L,       attribute: "elec:inductance" }
+  - { variable: K_t,     attribute: "elec:torqueConstant" }
+  - { variable: I_max,   attribute: "elec:maxCurrent" }
+  - { variable: alpha,   attribute: "elec:resistanceTempCoeff" }
+  - { variable: T_ref,   attribute: "elec:referenceTemperature" }
+  - { variable: omega_c, attribute: "elec:currentLoopBandwidth" }

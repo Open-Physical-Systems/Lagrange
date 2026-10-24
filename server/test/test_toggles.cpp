@@ -5,7 +5,9 @@
 // and thermal have modules too.
 #include "lagrange/server/Server.hpp"
 
+#include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <set>
 #include <string>
 #include <vector>
@@ -97,6 +99,70 @@ domains:
     EXPECT_EQ(server.wiringDot().find("averaged_network"), std::string::npos);
     EXPECT_NE(server.wiringDot().find("thermal/ambient"), std::string::npos);
     EXPECT_EQ(server.read("thermal/left_drive_motor/temperature").at(0), 298.15);
+}
+
+TEST(DomainToggles, AProfileHandsTheMotorsToTheirFmus) {
+    // The sample's wheel drives replaced by the reference FMU (a brushed drive, formats.md §6)
+    // through an overlay, then electrical fidelity fmu from a profile.
+    const std::filesystem::path dir =
+        std::filesystem::path(::testing::TempDir()) / "lagrange_toggles";
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path overlay = dir / "fmu.overlay.yaml";
+    std::string motors;
+    for (const char* side : {"left", "right"}) {
+        motors += std::string("  - prim: ") + side + "_wheel_joint\n    create_child: " + side +
+                  "_drive_motor\n    schemas:\n      ElectricalMotorAPI_1:\n"
+                  "        elec:motorType: dc_brushed\n        elec:windingResistance: 0.12\n"
+                  "        elec:inductance: 0.00031\n        elec:torqueConstant: 0.085\n"
+                  "        elec:maxCurrent: 8.0\n        elec:behaviorModel: " +
+                  std::string(LAGRANGE_TEST_DC_DRIVE_FMU) + "\n        elec:joint: " + side +
+                  "_wheel_joint\n        elec:powerPort: power/dc\n";
+    }
+    std::ofstream(overlay) << "schema_version: 1\napply:\n"
+                              "  - create: power/dc\n    schemas:\n      ElectricalBusAPI_1:\n"
+                              "        elec:bus:capacitance: 0.0047\n"
+                              "        elec:bus:undervoltageTrip: 20.0\n"
+                              "        elec:bus:overvoltageTrip: 60.0\n"
+                              "  - create: power/battery\n    schemas:\n      BatteryAPI_1:\n"
+                              "        elec:battery:seriesCells: 8\n"
+                              "        elec:battery:capacity: 72000.0\n"
+                              "        elec:battery:ocvSoc: [0.0, 1.0]\n"
+                              "        elec:battery:ocvVoltage: [3.2, 3.3]\n"
+                              "        elec:battery:r0: 0.002\n"
+                              "        elec:battery:cutoffVoltage: 22.0\n"
+                              "        elec:battery:maxChargeCurrent: 10.0\n"
+                              "      PortAPI_1:out:\n"
+                              "        elec:port:out:connectedTo: power/dc\n"
+                           << motors;
+    ServerOptions options;
+    options.endpoint = proto::Endpoint::unixSocket((dir / "fmu.sock").string());
+    options.robotPath = LAGRANGE_TEST_AMR_URDF;
+    options.worldPath = LAGRANGE_TEST_WAREHOUSE_URDF;
+    options.overlayPath = overlay.string();
+    options.realTimeFactor = 0.0;
+    Server server(options);
+    const Status started = server.start();
+    ASSERT_TRUE(started.ok()) << started.message;
+    EXPECT_NE(server.wiringDot().find("averaged_network"), std::string::npos);
+    EXPECT_EQ(server.wiringDot().find("electrical/fmu_"), std::string::npos);
+
+    const Status applied = server.applyProfile(R"(schema_version: 1
+stage: )" + std::string(LAGRANGE_TEST_AMR_URDF) +
+                                               R"(
+domains:
+  rigid_body: {enabled: true}
+  electrical: {enabled: true, fidelity: fmu}
+  sensors: {enabled: true}
+)");
+    ASSERT_TRUE(applied.ok()) << applied.message;
+    EXPECT_NE(server.wiringDot().find("electrical/fmu_left_drive_motor"), std::string::npos)
+        << server.wiringDot();
+    while (server.simTime().ns < 1'000'000'000) {  // the demo drive
+        server.runOnce(0);
+        ASSERT_TRUE(server.running());
+    }
+    EXPECT_NE(server.read("joint/left_wheel_joint/torque").at(0), 0.0);
+    EXPECT_GT(std::abs(server.read("battery/battery/current").at(0)), 0.0);
 }
 
 }  // namespace

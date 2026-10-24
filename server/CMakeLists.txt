@@ -144,6 +144,8 @@ install(
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
     find_package(lagrange_schemas REQUIRED)
+    find_package(lagrange_models REQUIRED)
+    get_filename_component(models_share "${lagrange_models_DIR}/.." ABSOLUTE)
     get_filename_component(schemas_share "${lagrange_schemas_DIR}/.." ABSOLUTE)
     ament_add_gtest(
         test_server
@@ -178,6 +180,7 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_AMR_MJCF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.xml"
             LAGRANGE_TEST_ARM_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/primitives_arm/primitives_arm.urdf"
             LAGRANGE_TEST_AMR_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.usda"
+            LAGRANGE_TEST_DC_DRIVE_FMU="${models_share}/fmu/dc_drive.fmu"
             LAGRANGE_TEST_AMR_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.overlay.yaml"
             LAGRANGE_TEST_AMR_POWERED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive_powered.usda"
             LAGRANGE_TEST_WAREHOUSE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.usda"
