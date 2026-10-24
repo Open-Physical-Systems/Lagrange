@@ -8,6 +8,7 @@ find_package(lagrange_proto REQUIRED)
 find_package(lagrange_rigid_body_mujoco REQUIRED)
 find_package(lagrange_rigid_body_substitutes REQUIRED)
 find_package(lagrange_sensors REQUIRED)
+find_package(lagrange_meshes REQUIRED)
 find_package(lagrange_ros2 REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(urdfdom REQUIRED)
@@ -58,6 +59,7 @@ target_link_libraries(
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
         lagrange_rigid_body_substitutes::lagrange_rigid_body_substitutes
         lagrange_sensors::lagrange_sensors
+        lagrange_meshes::lagrange_meshes
         lagrange_ros2::lagrange_ros2
         urdfdom::urdfdom_model
         tinyxml2::tinyxml2

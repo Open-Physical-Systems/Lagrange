@@ -1341,6 +1341,14 @@ in the server (or mock server) and receives the result through the protocol.
 | MJCF | MuJoCo's own parser (`mj_loadXML`) then model traversal | bodies, joints, geoms, actuators (motor, position, velocity), sensors that have an equivalent, tendons (fixed) | spatial tendons, flex/deformables, plugin-defined elements |
 | glTF 2.0 / OBJ / STL / DAE | Assimp 6.0.4 (apt) | meshes, node hierarchy, PBR/Phong materials, textures | animations, skins, morph targets |
 
+Meshes in v0.2: `lagrange_meshes` (`io/meshes/`) reads glTF, OBJ, STL and Collada through
+Assimp into triangles grouped by material, with the node hierarchy baked in, Collada units
+applied and Collada's `<up_axis>` ignored (the geometry keeps its authored axes, as ROS tools
+expect). `package://`, `file://` and relative references resolve through the ament index. The
+URDF loader uses it for visual meshes: one prim per material, coloured by the URDF material when
+there is one and by the file's otherwise. Textures are not imported yet (a note says so), and
+collision meshes still wait for the convex decomposition of roadmap 0.2-B8.
+
 Electrical, thermal and EMI data do not exist in URDF/SDF/MJCF. Importers accept an optional
 **overlay** file that applies our API schemas by link or joint name:
 

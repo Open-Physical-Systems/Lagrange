@@ -55,7 +55,7 @@ and licenses come from `docs/plan/verification.md` (checked 2026-10-13). A cell 
 | rclcpp, rmw and the message packages (rosgraph_msgs, sensor_msgs, nav_msgs, geometry_msgs, tf2_msgs, std_msgs) | `lagrange_ros2` bridge | ROS Lyrical | as installed | Apache-2.0 (ROS 2 core) | Low | The bridge links them; the core does not |
 | ament_index_cpp | `lagrange_server`: finds the installed sample robot and profile schema | ROS Lyrical | as installed | Apache-2.0 (package `copyright`, verified 2026-10-14) | Low | |
 | SDFormat | SDF import | `ros-lyrical-sdformat-vendor` | 0.3.4 (vendor package) | Apache-2.0 (TODO(verify)) | Low | |
-| Assimp | mesh import | apt `libassimp-dev` | 6.0.4 | BSD-3-Clause (TODO(verify)) | Low | Import-time only |
+| Assimp | mesh import (`lagrange_meshes`) | apt `libassimp-dev` (rosdep `assimp`) | 6.0.4 | BSD-3-Clause; bundled parts MIT, ISC, BSL-1.0, Apache-2.0, public domain; GPL-3+ only for Debian packaging scripts (checked in `/usr/share/doc/libassimp-dev/copyright` of 6.0.4+ds-1build1, 2026-10-18) | Low | Import-time only |
 | CoACD | collision bake tool | `coacd_vendor` | TODO(verify) | MIT | Medium | Offline tool; V-HACD (BSD-3-Clause) is the alternative |
 | GDAL, PROJ | geospatial | apt | 3.12.2, 9.7.1 | MIT-style (TODO(verify) each) | Low | Tools only |
 | GeographicLib | `lagrange_core` tests (coordinate conversions) | apt `libgeographiclib-dev`, rosdep `geographiclib` | 2.7 | MIT (Expat) for the library; `kissfft.hh` BSD-3-Clause; Debian packaging files GPL-3+, not linked (verified in the package's `copyright` file, 2026-10-14) | Low | Test dependency only; later geospatial tools |

@@ -15,6 +15,7 @@
   <depend>lagrange_rigid_body_mujoco</depend>
   <depend>lagrange_rigid_body_substitutes</depend>
   <depend>lagrange_sensors</depend>
+  <depend>lagrange_meshes</depend>
   <depend>lagrange_ros2</depend>
   <depend>rclcpp</depend>
   <depend>urdfdom</depend>

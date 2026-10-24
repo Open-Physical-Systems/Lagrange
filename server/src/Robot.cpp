@@ -1,8 +1,10 @@
+#include "lagrange/meshes/MeshImport.hpp"
 #include "lagrange/server/Robot.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <numbers>
@@ -115,8 +117,12 @@ double lowestPoint(ShapeType shape, const std::array<double, 3>& size, const Pos
 
 class Builder {
 public:
-    Builder(const urdf::ModelInterface& model, const LoadOptions& options, Robot& robot)
-        : model_(model), options_(options), robot_(robot) {}
+    Builder(const urdf::ModelInterface& model, const LoadOptions& options, Robot& robot,
+            std::string baseDirectory)
+        : model_(model)
+        , options_(options)
+        , robot_(robot)
+        , baseDirectory_(std::move(baseDirectory)) {}
 
     void note(std::string text) {
         if (std::find(robot_.notes.begin(), robot_.notes.end(), text) == robot_.notes.end()) {
@@ -317,6 +323,44 @@ private:
         }
     }
 
+    struct MeshFilePart {
+        std::uint32_t mesh;
+        std::string material;
+        std::array<float, 4> rgba;
+        bool hasColor;
+    };
+
+    /// The parts of a mesh file, imported once per file; empty (and a note) if it cannot be read.
+    const std::vector<MeshFilePart>& meshFile(const std::string& uri, const std::string& link) {
+        const auto cached = meshFiles_.find(uri);
+        if (cached != meshFiles_.end()) {
+            return cached->second;
+        }
+        std::vector<MeshFilePart>& parts = meshFiles_[uri];
+        auto path = meshes::resolveMeshUri(uri, baseDirectory_);
+        auto imported = path
+                            ? meshes::importMesh(*path)
+                            : Expected<meshes::ImportedMesh, std::string>(Unexpected{path.error()});
+        if (!imported) {
+            note(imported.error() + "; a magenta box is shown (link '" + link + "')");
+            return parts;
+        }
+        for (const std::string& text : imported->notes) {
+            note(uri + ": " + text);
+        }
+        for (std::size_t k = 0; k < imported->parts.size(); ++k) {
+            meshes::MeshPart& part = imported->parts[k];
+            TriMesh triangles;
+            triangles.positions = std::move(part.positions);
+            triangles.normals = std::move(part.normals);
+            triangles.indices = std::move(part.indices);
+            robot_.scene.meshes.push_back(std::move(triangles));
+            parts.push_back({static_cast<std::uint32_t>(robot_.scene.meshes.size() - 1),
+                             part.material, part.rgba, part.hasColor});
+        }
+        return parts;
+    }
+
     void addVisual(const std::string& link, const urdf::Visual& visual, std::size_t index,
                    BodyId body, std::uint32_t linkPrim) {
         const urdf::Geometry* geometry = visual.geometry.get();
@@ -364,11 +408,43 @@ private:
                               [=] { return cylinderMesh(r, l); });
                 break;
             }
+            case urdf::Geometry::MESH: {
+                const auto& file = static_cast<const urdf::Mesh&>(*geometry);
+                const std::array<float, 3> fileScale{static_cast<float>(file.scale.x),
+                                                     static_cast<float>(file.scale.y),
+                                                     static_cast<float>(file.scale.z)};
+                const std::vector<MeshFilePart>& parts = meshFile(file.filename, link);
+                if (!parts.empty()) {
+                    // One prim per material of the file; a URDF material colours them all.
+                    for (std::size_t k = 0; k < parts.size(); ++k) {
+                        ScenePrim prim;
+                        prim.name = index == 0 ? "visual" : "visual_" + std::to_string(index);
+                        if (parts.size() > 1) {
+                            prim.name += "_" + std::to_string(k);
+                        }
+                        prim.parent = linkPrim;
+                        prim.typeName = "Mesh";
+                        prim.mesh = parts[k].mesh;
+                        prim.material =
+                            visual.material || !parts[k].hasColor
+                                ? material(materialName, rgba)
+                                : material(
+                                      parts[k].material.empty() ? file.filename : parts[k].material,
+                                      parts[k].rgba);
+                        prim.body = body.index;
+                        prim.offset = poseOf(visual.origin);
+                        prim.scale = fileScale;
+                        addPrim(std::move(prim));
+                    }
+                    return;
+                }
+                meshId = mesh("placeholder", [] { return boxMesh(0.1, 0.1, 0.1); });
+                rgba = kPlaceholderColor;
+                materialName = "missing-mesh";
+                break;
+            }
             default:
-                note(
-                    "visual mesh files are not loaded by lagrange_server yet; a magenta box is "
-                    "shown (link '" +
-                    link + "')");
+                note("an unknown visual geometry is drawn as a magenta box (link '" + link + "')");
                 meshId = mesh("placeholder", [] { return boxMesh(0.1, 0.1, 0.1); });
                 rgba = kPlaceholderColor;
                 materialName = "missing-mesh";
@@ -388,7 +464,9 @@ private:
 
     const urdf::ModelInterface& model_;
     const LoadOptions& options_;
+    std::map<std::string, std::vector<MeshFilePart>> meshFiles_;  // by URI
     Robot& robot_;
+    std::string baseDirectory_;  // of the URDF file: relative mesh paths start here
     std::map<std::string, std::uint32_t> meshes_;
     std::set<std::string> actuated_;
     bool fixedBase_{false};
@@ -587,7 +665,7 @@ Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
     }
     const std::size_t firstBody = robot.world.bodies.names.size();
     const std::size_t firstJoint = robot.world.joints.names.size();
-    Builder builder(*model, options, robot);
+    Builder builder(*model, options, robot, std::filesystem::path(path).parent_path().string());
     builder.setActuated(commandedJoints(path));
 
     ScenePrim top;

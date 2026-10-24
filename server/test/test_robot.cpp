@@ -144,8 +144,26 @@ TEST(LoadUrdf, FixedBaseRobotAndMissingFiles) {
 
     auto arm = loadUrdf(LAGRANGE_TEST_ARM_URDF);
     ASSERT_TRUE(arm) << arm.error();
-    // The arm has visuals only: no collisions, so it would fall, and a mesh visual.
+    // The arm has visuals only: no collisions, so it would fall.
     EXPECT_FALSE(arm->notes.empty());
+}
+
+TEST(LoadUrdf, MeshVisualsAreImportedWithTheirScaleAndMaterial) {
+    auto arm = loadUrdf(LAGRANGE_TEST_ARM_URDF);
+    ASSERT_TRUE(arm) << arm.error();
+    for (const std::string& note : arm->notes) {
+        EXPECT_EQ(note.find("magenta"), std::string::npos) << note;
+    }
+    const auto tool =
+        std::find_if(arm->scene.prims.begin(), arm->scene.prims.end(),
+                     [](const ScenePrim& p) { return p.path.ends_with("tool/visual"); });
+    ASSERT_NE(tool, arm->scene.prims.end());
+    // tool.stl: a tetrahedron in millimetres, scaled by the URDF to metres.
+    ASSERT_NE(tool->mesh, kNoIndex);
+    EXPECT_EQ(arm->scene.meshes[tool->mesh].indices.size(), 4U * 3U);
+    EXPECT_EQ(tool->scale, (std::array<float, 3>{0.001F, 0.001F, 0.001F}));
+    // The URDF's material wins over the file's.
+    EXPECT_EQ(arm->scene.materials[tool->material].name, "steel");
 }
 
 TEST(AmrSimulation, TheDriverMovesTheRobotAndItStaysUpright) {
