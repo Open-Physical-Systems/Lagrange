@@ -1,11 +1,14 @@
 // Lidar rays per second per capability tier (roadmap H6). Baselines: docs/design/benchmarks.md.
 //
-// Tier 0 is the CPU reference the lidar module runs (every beam against every shape, exact, in
-// double); Tier 1 is the compute kernel over a bounding-volume hierarchy
+// The reference is every beam against every shape, exact, in double, on one thread. Tier 0 is
+// what the lidar module runs on the CPU: the same exact tests, culled by Embree (ShapeCaster),
+// beams in parallel with TBB; bit-identical to the reference. Tier 1 is the compute kernel over
+// a bounding-volume hierarchy
 // (gpu/kernels/lidar/bvh_traverse.slang). Both cast the same beams into the same random scene.
 // LAGRANGE_TEST_GPU picks the Vulkan device, as in the tests.
 #include "lagrange/gpu/RayCaster.hpp"
 #include "lagrange/sensors/Sensors.hpp"
+#include "lagrange/sensors/ShapeCaster.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
 #include <array>
@@ -15,6 +18,7 @@
 #include <memory>
 #include <random>
 #include <string>
+#include <tbb/parallel_for.h>
 #include <vector>
 
 #include <benchmark/benchmark.h>
@@ -76,7 +80,7 @@ Scene randomScene(int bounded) {
     return scene;
 }
 
-void LidarTier0(benchmark::State& state) {
+void LidarReference(benchmark::State& state) {
     const Scene scene = randomScene(static_cast<int>(state.range(0)));
     std::vector<std::array<double, 3>> directions(scene.beams.size());
     for (std::size_t i = 0; i < scene.beams.size(); ++i) {
@@ -96,7 +100,39 @@ void LidarTier0(benchmark::State& state) {
     state.SetItemsProcessed(state.iterations() * static_cast<std::int64_t>(kBeams));
     state.SetLabel("cpu, 1 thread");
 }
-BENCHMARK(LidarTier0)->ArgName("shapes")->Arg(50)->Arg(400)->Unit(benchmark::kMillisecond);
+BENCHMARK(LidarReference)->ArgName("shapes")->Arg(50)->Arg(400)->Unit(benchmark::kMillisecond);
+
+// One scan: shape update (hierarchy refit), then every beam, as the lidar module does.
+void LidarTier0(benchmark::State& state) {
+    const Scene scene = randomScene(static_cast<int>(state.range(0)));
+    std::vector<std::array<double, 3>> directions(scene.beams.size());
+    for (std::size_t i = 0; i < scene.beams.size(); ++i) {
+        const std::array<double, 3> local{scene.beams[i][0], scene.beams[i][1], scene.beams[i][2]};
+        directions[i] = rotate(scene.sensor.orientation, local);
+    }
+    std::vector<ShapeCaster::Shape> shapes;
+    for (const SceneShape& shape : scene.shapes) {
+        shapes.push_back({shape.type, shape.size, shape.pose});
+    }
+    ShapeCaster caster;
+    caster.update(shapes);
+    std::vector<double> nearest(directions.size());
+    for (auto _ : state) {
+        caster.update(shapes);
+        tbb::parallel_for(std::size_t{0}, directions.size(), [&](std::size_t i) {
+            nearest[i] = caster.cast(scene.sensor.position, directions[i]);
+        });
+        benchmark::DoNotOptimize(nearest.data());
+    }
+    state.SetItemsProcessed(state.iterations() * static_cast<std::int64_t>(kBeams));
+    state.SetLabel("cpu, Embree culling, TBB");
+}
+BENCHMARK(LidarTier0)
+    ->ArgName("shapes")
+    ->Arg(50)
+    ->Arg(400)
+    ->Unit(benchmark::kMillisecond)
+    ->UseRealTime();
 
 std::shared_ptr<gpu::RayContext> context() {
     static const std::shared_ptr<gpu::RayContext> made = [] {

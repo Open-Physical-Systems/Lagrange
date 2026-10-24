@@ -53,7 +53,7 @@ flowchart TB
     subgraph D["D · sensors"]
         D1_5["D1 framework · D2 IMU<br/>D3 lidar Tier 0 · D4 Tier 1<br/>D5 sensor views"]:::done
         D2e["D2 encoders<br/>(resolution source)"]:::blocked
-        D3e["D3 Embree Tier 0<br/>(Embree now installed)"]:::todo
+        D3e["D3 Embree Tier 0<br/>bit-identical, ~100× faster"]:::done
     end
     subgraph E["E · server"]
         E1_2["E1 server · E2 protocol"]:::done
@@ -79,7 +79,7 @@ flowchart TB
         H1["H1 deterministic mode"]:::done
         H3_4["H3 toggle matrix<br/>H4 offset origin"]:::done
         H6["H6 benchmarks"]:::done
-        H9["H9 docs + tutorial<br/>(finishing)"]:::now
+        H9["H9 docs + tutorial"]:::done
         H8["H8 packaging trial<br/><b>next</b>"]:::next
         H2["H2 determinism CI job"]:::todo
         H5["H5 Python bindings"]:::todo

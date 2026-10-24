@@ -166,7 +166,7 @@ ros2 run lagrange_demos patrol --minutes 1
 ```
 
 It prints each waypoint as it is reached, and fails on a missed waypoint or a collision. Add
-`viewer:=false` to run without the window, and `lidar:=cpu` to use the CPU lidar.
+`viewer:=false` to run without the window, and `lidar:=gpu` to cast the lidars on the GPU.
 
 ## Where next
 

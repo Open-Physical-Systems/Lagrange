@@ -6,6 +6,7 @@ find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
 find_package(lagrange_sensors REQUIRED)
 find_package(benchmark REQUIRED)
+find_package(TBB REQUIRED)
 
 # Run by hand or by the nightly job (tools/ci/benchmarks.sh), not by colcon test: timings on a
 # shared machine are not pass/fail. The smoke test below only checks that every benchmark runs.
@@ -22,6 +23,7 @@ target_link_libraries(
     bench_lidar
     lagrange_sensors::lagrange_sensors
     benchmark::benchmark_main
+    TBB::tbb
 )
 lagrange_target_defaults(bench_lidar)
 
