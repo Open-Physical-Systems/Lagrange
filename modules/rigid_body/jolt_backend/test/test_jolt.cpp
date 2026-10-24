@@ -1,10 +1,7 @@
-// Spike 0.2-C6: Jolt runs the pendulum and the AMR. Tolerances are a spike's: the full
-// backend gets MuJoCo's validation suite (docs/plan/spikes/0.2-C1-mujoco.md).
-#include "lagrange/electrical/IdealTorqueSource.hpp"
+// The Jolt backend on its own: closed-form pendulums. The robot-level comparison with MuJoCo is
+// the agreement suite, server/test/test_backends.cpp.
 #include "lagrange/rigid_body/JoltBackend.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
-#include "lagrange/server/DiffDrive.hpp"
-#include "lagrange/server/Robot.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -58,54 +55,83 @@ TEST(Jolt, APendulumSwingsWithItsSmallAnglePeriod) {
     EXPECT_NEAR(period, expected, 0.01 * expected);
 }
 
-TEST(Jolt, TheAmrDrivesLikeOnMujoco) {
-    auto robot = server::loadUrdf(LAGRANGE_TEST_AMR_URDF);
-    ASSERT_TRUE(robot) << robot.error();
-    Scheduler scheduler(SchedulerOptions{.deterministic = true});
-    scheduler.add(std::make_unique<JoltBackend>());
-    scheduler.add(
-        std::make_unique<server::DriveCommand>(server::DriveCommand::Settings{}, nullptr));
-    server::DiffDriveController::Settings settings;
-    settings.leftJoint = robot->actuatedJoints.at(0);
-    settings.rightJoint = robot->actuatedJoints.at(1);
-    scheduler.add(std::make_unique<server::DiffDriveController>(settings));
-    scheduler.add(std::make_unique<electrical::IdealTorqueSource>());  // torque_command -> torque
-    auto wired = scheduler.wire(WorldView(robot->world));
-    ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
-    ASSERT_TRUE(scheduler.stepUntil(SimTime{6'000'000'000}).ok());
-
-    const SignalBus& bus = scheduler.bus();
-    const std::span<const double> pose = bus.readN(bus.find("body/base_link/pose"));
-    std::printf("AMR after 6 s: chord %.3f m, z %.4f m, yaw rate %.4f rad/s\n",
-                std::hypot(pose[0], pose[1]), pose[2],
-                bus.readN(bus.find("body/base_link/twist"))[5]);
-    // MuJoCo (test_robot.cpp): 3 m along a 1.2 m circle after the 2 s ramp, a 2.28 m chord.
-    EXPECT_NEAR(std::hypot(pose[0], pose[1]), 2.28, 0.3);
-    EXPECT_NEAR(pose[2], 0.1, 0.02) << "the chassis stays at axle height";
-    const double tiltCos = 1.0 - 2.0 * (pose[4] * pose[4] + pose[5] * pose[5]);
-    EXPECT_GT(tiltCos, std::cos(5.0 * std::numbers::pi / 180.0)) << "upright";
-    EXPECT_NEAR(bus.readN(bus.find("body/base_link/twist"))[5], 0.5, 0.05) << "turns at 0.5 rad/s";
+/// A point mass on a 1 m massless rod hinged to the world about y, `start` rad from hanging.
+World pendulum(double start, double armature = 0.0, double lower = -INFINITY,
+               double upper = INFINITY, double bobInertia = 1e-6) {
+    World world;
+    world.robots.push_back("pendulum");
+    const Pose released{{0, 0, 2.0}, {std::cos(start / 2), 0, std::sin(start / 2), 0}};
+    const BodyId bob = world.addBody("bob", kWorldBody, released, 1.0, {0, 0, -1.0},
+                                     {bobInertia, bobInertia, bobInertia, 0, 0, 0});
+    world.bodies.robot[bob.index] = 0;
+    world.addJoint("pivot", std::isfinite(lower) ? JointType::Revolute : JointType::Continuous, bob,
+                   {0, 1, 0}, true);
+    world.joints.armature.back() = armature;
+    world.joints.lowerLimit.back() = lower;
+    world.joints.upperLimit.back() = upper;
+    return world;
 }
 
-TEST(Jolt, TwoRunsAreIdentical) {
-    auto robot = server::loadUrdf(LAGRANGE_TEST_AMR_URDF);
-    ASSERT_TRUE(robot) << robot.error();
-    const auto run = [&]() {
-        auto scheduler = std::make_unique<Scheduler>(SchedulerOptions{.deterministic = true});
-        scheduler->add(std::make_unique<JoltBackend>());
-        scheduler->add(
-            std::make_unique<server::DriveCommand>(server::DriveCommand::Settings{}, nullptr));
-        server::DiffDriveController::Settings settings;
-        settings.leftJoint = robot->actuatedJoints.at(0);
-        settings.rightJoint = robot->actuatedJoints.at(1);
-        scheduler->add(std::make_unique<server::DiffDriveController>(settings));
-        scheduler->add(
-            std::make_unique<electrical::IdealTorqueSource>());  // torque_command -> torque
-        EXPECT_TRUE(scheduler->wire(WorldView(robot->world)));
-        EXPECT_TRUE(scheduler->stepUntil(SimTime{2'000'000'000}).ok());
-        return scheduler->stateHash().value();
-    };
-    EXPECT_EQ(run(), run());
+TEST(Jolt, ArmatureSlowsThePendulumAsItsInertiaSays) {
+    // T = 2 pi sqrt((m L^2 + Ia) / (m g L)): an armature of 1 kg·m² doubles m L^2.
+    const World world = pendulum(0.1, 1.0);
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<JoltBackend>());
+    ASSERT_TRUE(scheduler.wire(WorldView(world)));
+    const SignalBus& bus = scheduler.bus();
+    const SignalId velocity = bus.find("joint/pivot/velocity");
+    std::vector<double> turns;
+    double previous = 0.0;
+    for (int k = 0; k < 9000; ++k) {
+        ASSERT_TRUE(scheduler.stepTick().ok());
+        const double v = bus.read(velocity);
+        if (k > 10 && v * previous < 0.0) {
+            turns.push_back(scheduler.now().seconds());
+        }
+        previous = v;
+    }
+    ASSERT_GE(turns.size(), 4U);
+    const double period =
+        2.0 * (turns.back() - turns.front()) / static_cast<double>(turns.size() - 1);
+    const double expected = 2.0 * std::numbers::pi * std::sqrt(2.0 / 9.80665);
+    RecordProperty("period_s", std::to_string(period));
+    EXPECT_NEAR(period, expected, 0.01 * expected);
+    EXPECT_NEAR(bus.read(bus.find("joint/pivot/effective_inertia")), 2.0, 1e-3);
+}
+
+TEST(Jolt, AccelerationsAreWhatAnImuAndAMotorRead) {
+    const World world = pendulum(0.3);
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<JoltBackend>());
+    ASSERT_TRUE(scheduler.wire(WorldView(world)));
+    ASSERT_TRUE(scheduler.stepTick().ok());
+    ASSERT_TRUE(scheduler.stepTick().ok());
+    const SignalBus& bus = scheduler.bus();
+    // Joint positions count from the pose in the world tables, here 0.3 rad from hanging:
+    // q'' = -(g / L) sin(0.3 + q).
+    const double angle = 0.3 + bus.read(bus.find("joint/pivot/position"));
+    EXPECT_NEAR(bus.read(bus.find("joint/pivot/acceleration")), -9.80665 * std::sin(angle), 0.02);
+    // At the body origin, the pivot, which does not move: the proper acceleration is -g, in the
+    // body frame (turned by `angle` about y), as MuJoCo reports it.
+    const std::span<const double> a = bus.readN(bus.find("body/bob/acceleration"));
+    EXPECT_NEAR(a[0], -9.80665 * std::sin(angle), 0.02);
+    EXPECT_NEAR(a[1], 0.0, 0.02);
+    EXPECT_NEAR(a[2], 9.80665 * std::cos(angle), 0.02);
+}
+
+TEST(Jolt, ALimitHoldsTheJointAndReportsItsTorque) {
+    // Gravity's torque about +y on the bob 0.5 rad from hanging is -m g L sin(0.5): released
+    // there (q = 0) on a lower limit at q = 0, the limit holds it with +m g L sin(0.5).
+    const World world = pendulum(0.5, 0.0, 0.0, 1.0, 1e-3);
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<JoltBackend>());
+    ASSERT_TRUE(scheduler.wire(WorldView(world)));
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{2'000'000'000}).ok());
+    const SignalBus& bus = scheduler.bus();
+    EXPECT_NEAR(bus.read(bus.find("joint/pivot/position")), 0.0, 0.01);
+    EXPECT_NEAR(bus.read(bus.find("joint/pivot/velocity")), 0.0, 1e-3);
+    const double held = 9.80665 * std::sin(0.5);
+    EXPECT_NEAR(bus.read(bus.find("joint/pivot/constraint_torque")), held, 0.05 * held);
 }
 
 }  // namespace

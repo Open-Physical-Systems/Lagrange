@@ -6,6 +6,7 @@
 #include "lagrange/proto/Framing.hpp"
 #include "lagrange/recording/Recording.hpp"
 #include "lagrange/rigid_body/FixedRobot.hpp"
+#include "lagrange/rigid_body/JoltBackend.hpp"
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/ros2/Bridge.hpp"
 #include "lagrange/ros2_control/ControllerHost.hpp"
@@ -257,11 +258,15 @@ struct Server::Impl {
             next->add(std::make_unique<rigid_body::FixedRobot>());
         } else {
             ModuleConfigData physics;
-            physics.backend = "mujoco";
+            physics.backend = settings.rigidBodyBackend.value_or(options.physics);
             if (settings.rigidBodyDtNs) {
                 physics.dt = Duration{*settings.rigidBodyDtNs};
             }
-            next->add(std::make_unique<rigid_body::MujocoBackend>(), ModuleConfig(physics));
+            if (physics.backend == "jolt") {
+                next->add(std::make_unique<rigid_body::JoltBackend>(), ModuleConfig(physics));
+            } else {
+                next->add(std::make_unique<rigid_body::MujocoBackend>(), ModuleConfig(physics));
+            }
         }
         if (controllers) {
             // ros2_control drives the joints; the controller manager outlives this scheduler.
@@ -358,6 +363,7 @@ struct Server::Impl {
         ProfileSettings settings;
         settings.substituted = options.substituted;
         settings.rigidBodyDtNs = rigidBodyDtNs;
+        settings.rigidBodyBackend = rigidBodyBackend;
         settings.electricalDtNs = electricalDtNs;
         settings.thermalDtNs = thermalDtNs;
         settings.speedPrediction = speedPrediction;
@@ -379,6 +385,7 @@ struct Server::Impl {
     std::optional<std::string> electricalFidelity;  // from an applied profile
     std::optional<std::string> rigidBodyReplay;     // --bench, or an applied profile
     std::optional<std::int64_t> rigidBodyDtNs;      // from an applied profile
+    std::optional<std::string> rigidBodyBackend;    // from an applied profile
     std::optional<std::int64_t> electricalDtNs;     // from an applied profile
     std::optional<ProfileSettings> pending;  // applied without restart: used at the next reset
 
@@ -1137,6 +1144,9 @@ struct Server::Impl {
         return options.substituted.contains(std::string(domain));
     }
 
+    /// The rigid-body backend the run uses: an applied profile's, else the command line's.
+    std::string physicsBackend() const { return rigidBodyBackend.value_or(options.physics); }
+
     /// The stage as profiles name it (ServerOptions::stageName).
     std::string stageName() const {
         return options.stageName.empty() ? robot.sourcePath : options.stageName;
@@ -1151,8 +1161,8 @@ struct Server::Impl {
                 char dt[48];
                 std::snprintf(dt, sizeof(dt), "%.9g",
                               static_cast<double>(rigidBodyDtNs.value_or(1'000'000)) / 1e9);
-                yaml +=
-                    "  rigid_body: {enabled: true, backend: mujoco, dt: " + std::string(dt) + "}\n";
+                yaml += "  rigid_body: {enabled: true, backend: " + physicsBackend() +
+                        ", dt: " + std::string(dt) + "}\n";
             } else if (std::string_view(row.domain) == "rigid_body" && rigidBodyReplay) {
                 yaml += "  rigid_body: {enabled: false, substitute: replay, source: " +
                         *rigidBodyReplay + "}\n";
@@ -1223,7 +1233,7 @@ struct Server::Impl {
             const bool running = built && !substituted(row.domain);
             d.set_enabled(running);
             d.set_available(built);
-            d.set_active_module(running ? (physics   ? "mujoco"
+            d.set_active_module(running ? (physics   ? physicsBackend()
                                            : powered ? "averaged_network"
                                            : heated  ? "lumped"
                                                      : sensorLevel())
@@ -1279,6 +1289,7 @@ struct Server::Impl {
             }
             if (physics) {
                 d.add_backends("mujoco");
+                d.add_backends("jolt");
                 d.add_fidelities("articulated");
                 d.set_dt_ns(1'000'000);
                 d.set_min_dt_ns(100'000);
@@ -1634,6 +1645,7 @@ struct Server::Impl {
         const ProfileSettings previous = active();
         options.substituted = settings.substituted;
         rigidBodyDtNs = settings.rigidBodyDtNs;
+        rigidBodyBackend = settings.rigidBodyBackend;
         electricalDtNs = settings.electricalDtNs;
         thermalDtNs = settings.thermalDtNs;
         speedPrediction = settings.speedPrediction;
@@ -1648,6 +1660,7 @@ struct Server::Impl {
             // Keep the run going on the profile it had.
             options.substituted = previous.substituted;
             rigidBodyDtNs = previous.rigidBodyDtNs;
+            rigidBodyBackend = previous.rigidBodyBackend;
             electricalDtNs = previous.electricalDtNs;
             thermalDtNs = previous.thermalDtNs;
             speedPrediction = previous.speedPrediction;

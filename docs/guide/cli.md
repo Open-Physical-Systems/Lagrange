@@ -18,7 +18,9 @@ ros2 run lagrange_server lagrange <command> [arguments]
 | `lagrange info [--version]` | Prints the version, the installed sample robot, world and profile schema, the viewer socket, and the Vulkan devices with their capability tiers |
 
 The options are the same as `lagrange_server`'s (`--robot`, `--world`, `--overlay`, `--spawn`,
-`--lidar`, `--rtf`, `--no-ros`, `--record`, ...; `lagrange --help` lists them).
+`--lidar`, `--physics`, `--rtf`, `--no-ros`, `--record`, ...; `lagrange --help` lists them).
+`--physics jolt` (or a profile's `rigid_body: {backend: jolt}`) runs the rigid bodies on Jolt
+instead of MuJoCo; MuJoCo stays the default and the reference (rigid_body.md §7).
 
 `--overlay FILE.yaml` applies the project's schemas to a robot from a format that cannot carry
 them (motors, battery, bus on a URDF; [formats.md §9](../design/formats.md#9-importers)). The

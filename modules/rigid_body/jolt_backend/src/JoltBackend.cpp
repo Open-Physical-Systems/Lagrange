@@ -45,6 +45,12 @@ namespace {
 using Vec3 = std::array<double, 3>;
 using Mat3 = std::array<std::array<double, 3>, 3>;
 
+// Share of a step's new armature torque estimate taken (JoltBackend::Impl::updateArmatureTorques).
+constexpr double kArmatureRelaxation = 0.5;
+
+// A bound on any body's angular velocity that no robot reaches (rad/s); see its use.
+constexpr float kMaxAngularVelocityRadPerS = 1.0e6F;
+
 // Object layers: static scenery, and everything that moves.
 constexpr JPH::ObjectLayer kStaticLayer = 0;
 constexpr JPH::ObjectLayer kMovingLayer = 1;
@@ -178,6 +184,22 @@ SignalSpec spec(std::string name, SignalType type, Unit unit, std::string frame 
     return out;
 }
 
+/// Flows (torques, wrenches) are averaged over the physics step, so the impulse is conserved.
+SignalSpec flowInput(std::string name, SignalType type, Unit unit, std::string frame = {}) {
+    SignalSpec out = spec(std::move(name), type, unit, std::move(frame));
+    out.hold = Hold::WindowAverage;
+    out.optional = true;  // an actuated joint that nothing drives is free
+    return out;
+}
+
+Vec3 cross(const Vec3& a, const Vec3& b) {
+    return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+}
+
+double dot(const Vec3& a, const Vec3& b) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
 }  // namespace
 
 struct JoltBackend::Impl {
@@ -192,8 +214,14 @@ struct JoltBackend::Impl {
     struct Group {  // one Jolt body: a moving body and the bodies fixed to it
         JPH::BodyID id;
         std::uint32_t root{0};
+        double mass{0.0};
+        Mat3 inertia{};  // about the centre of mass, in the root's frame
+        Vec3 com{};      // in the root's frame
+        float friction{0.5F};
     };
     std::vector<Group> groups;
+    std::vector<std::pair<JPH::BodyID, float>> staticFriction;  // scenery: body, base friction
+    double appliedFrictionScale{1.0};
     std::vector<std::int32_t> groupOf;  // per world body; -1 for static ones
     std::vector<Pose> inGroup;          // per world body: its pose in its group root's frame
 
@@ -203,15 +231,55 @@ struct JoltBackend::Impl {
         JPH::Ref<JPH::Constraint> constraint;
         JPH::BodyID parent;  // invalid for the world
         JPH::BodyID child;
-        SignalId position, velocity, torque;
+        std::int32_t childGroup{-1};
+        std::vector<std::int32_t> subtree;  // groups that move with the joint (child included)
+        double armature{0.0};               // kg·m² or kg: the rotor inertia the joint drives
+        SignalId position, velocity, torque, loadTorque;
+        SignalId acceleration, effectiveInertia, constraintTorque;
+        double lastVelocity{0.0};      // at the end of the previous step: for the acceleration
+        double lastAcceleration{0.0};  // over the previous step
+        double armatureTorque{0.0};    // applied over the previous step
     };
     std::vector<Joint> joints;
 
     struct Body {
         std::uint32_t body{0};
-        SignalId pose, twist, externalWrench;
+        SignalId pose, twist, acceleration, externalWrench;
+        std::array<double, 6> lastTwist{};  // world, at the body origin: for the acceleration
     };
     std::vector<Body> bodies;
+    SignalId frictionScale;
+    Vec3 gravity{};
+
+    /// The joint's axis in world coordinates (on the child).
+    [[nodiscard]] JPH::Vec3 axisOf(const Joint& j) const;
+
+    /// The joint's anchor in world coordinates (on the child).
+    [[nodiscard]] Vec3 anchorOf(const Joint& j) const;
+
+    void applyFrictionScale(double scale);
+
+    /// Rotor inertia (armature, reflected through the gear) as joint torques: Jolt has no
+    /// joint-space inertia, so the joints' inertia matrix M is built from the bodies (the
+    /// composite-rigid-body formula, base held still). Over the last step the joints' other
+    /// generalised forces were F = M q'' - tau_a; this step's armature torques are
+    /// tau_a = -D (M + D)^-1 F, D the armatures, so that (M + D) q'' = F, one step late, for
+    /// the whole chain at once. They go through Jolt's solver like any joint torque, so the
+    /// constraints stay consistent. A floating base (an AMR's wheels) makes M approximate.
+    void updateArmatureTorques();
+    bool hasArmature{false};
+
+    /// Joint-space inertia M(a, b): what joint a feels when joint b accelerates (0 unless one's
+    /// subtree holds the other's).
+    [[nodiscard]] double jointInertia(const Joint& a, const Joint& b) const;
+
+    /// The joint's relative velocity: rad/s about, or m/s along, its world axis `axis`.
+    [[nodiscard]] double jointVelocity(const Joint& j, JPH::Vec3Arg axis) const;
+
+    /// The inertia the joint moves with the rest of the tree held still (MuJoCo's joint-space
+    /// diagonal): its subtree's inertia about the joint axis, or its mass for a slide, without
+    /// the armature. `axis` and `anchor` are in world coordinates.
+    [[nodiscard]] double subtreeInertia(const Joint& j, const Vec3& axis, const Vec3& anchor) const;
 
     [[nodiscard]] Vec3 axisWorld(const Joint& j, const World& world) const {
         const JPH::BodyLockInterfaceNoLock& lock = system->GetBodyLockInterfaceNoLock();
@@ -222,6 +290,193 @@ struct JoltBackend::Impl {
         return rotate(dq(child->GetRotation()), inRoot);
     }
 };
+
+double JoltBackend::Impl::jointVelocity(const Joint& j, JPH::Vec3Arg axis) const {
+    const JPH::BodyLockInterfaceNoLock& lock = system->GetBodyLockInterfaceNoLock();
+    const JPH::Body* child = lock.TryGetBody(j.child);
+    const JPH::Body* parent = j.parent.IsInvalid() ? nullptr : lock.TryGetBody(j.parent);
+    if (j.prismatic) {
+        JPH::Vec3 v = child->GetLinearVelocity();
+        if (parent != nullptr) {
+            v -= parent->GetLinearVelocity();
+        }
+        return v.Dot(axis);
+    }
+    JPH::Vec3 w = child->GetAngularVelocity();
+    if (parent != nullptr) {
+        w -= parent->GetAngularVelocity();
+    }
+    return w.Dot(axis);
+}
+
+JPH::Vec3 JoltBackend::Impl::axisOf(const Joint& j) const {
+    const JPH::Body* child = system->GetBodyLockInterfaceNoLock().TryGetBody(j.child);
+    if (j.prismatic) {
+        const auto& slider = static_cast<const JPH::SliderConstraint&>(*j.constraint);
+        return (child->GetRotation() * slider.GetConstraintToBody2Matrix().GetAxisX()).Normalized();
+    }
+    const auto& hinge = static_cast<const JPH::HingeConstraint&>(*j.constraint);
+    return (child->GetRotation() * hinge.GetLocalSpaceHingeAxis2()).Normalized();
+}
+
+Vec3 JoltBackend::Impl::anchorOf(const Joint& j) const {
+    const JPH::Body* child = system->GetBodyLockInterfaceNoLock().TryGetBody(j.child);
+    const auto& constraint = static_cast<const JPH::TwoBodyConstraint&>(*j.constraint);
+    return dv(JPH::Vec3(child->GetCenterOfMassTransform() *
+                        constraint.GetConstraintToBody2Matrix().GetTranslation()));
+}
+
+void JoltBackend::Impl::applyFrictionScale(double scale) {
+    JPH::BodyInterface& bi = system->GetBodyInterfaceNoLock();
+    for (const Group& group : groups) {
+        bi.SetFriction(group.id, static_cast<float>(group.friction * scale));
+    }
+    for (const auto& [id, friction] : staticFriction) {
+        bi.SetFriction(id, static_cast<float>(friction * scale));
+    }
+    appliedFrictionScale = scale;
+}
+
+double JoltBackend::Impl::jointInertia(const Joint& a, const Joint& b) const {
+    // b must move inside a's subtree (or the reverse): a's force is the rate of the momentum
+    // b's motion gives b's subtree, taken about a's axis.
+    const bool bInA =
+        std::find(a.subtree.begin(), a.subtree.end(), b.childGroup) != a.subtree.end();
+    const bool aInB =
+        std::find(b.subtree.begin(), b.subtree.end(), a.childGroup) != b.subtree.end();
+    if (!bInA && !aInB) {
+        return 0.0;
+    }
+    const Joint& outer = bInA ? a : b;  // nearer the root
+    const Joint& inner = bInA ? b : a;
+    const JPH::BodyLockInterfaceNoLock& lock = system->GetBodyLockInterfaceNoLock();
+    const Vec3 axisO = dv(axisOf(outer));
+    const Vec3 axisI = dv(axisOf(inner));
+    const Vec3 anchorO = anchorOf(outer);
+    const Vec3 anchorI = anchorOf(inner);
+    double sum = 0.0;
+    for (const std::int32_t g : inner.subtree) {
+        const Group& group = groups.at(static_cast<std::size_t>(g));
+        const JPH::Body* body = lock.TryGetBody(group.id);
+        const Vec3 com = dv(JPH::Vec3(body->GetCenterOfMassPosition()));
+        // The group's motion for a unit rate of the inner joint.
+        Vec3 omega{};
+        Vec3 velocity = axisI;
+        if (!inner.prismatic) {
+            omega = axisI;
+            velocity =
+                cross(axisI, {com[0] - anchorI[0], com[1] - anchorI[1], com[2] - anchorI[2]});
+        }
+        const Vec3 momentum{group.mass * velocity[0], group.mass * velocity[1],
+                            group.mass * velocity[2]};
+        if (outer.prismatic) {
+            sum += dot(axisO, momentum);
+            continue;
+        }
+        // Angular momentum about the outer anchor: I omega (world) plus r x p.
+        const std::array<double, 4> q = dq(body->GetRotation());
+        const Vec3 local = rotate(conjugate(q), omega);
+        Vec3 spun{};
+        for (std::size_t r = 0; r < 3; ++r) {
+            for (std::size_t c = 0; c < 3; ++c) {
+                spun.at(r) += group.inertia.at(r).at(c) * local.at(c);
+            }
+        }
+        const Vec3 spin = rotate(q, spun);
+        const Vec3 orbit =
+            cross({com[0] - anchorO[0], com[1] - anchorO[1], com[2] - anchorO[2]}, momentum);
+        sum += dot(axisO, {spin[0] + orbit[0], spin[1] + orbit[1], spin[2] + orbit[2]});
+    }
+    return sum;
+}
+
+void JoltBackend::Impl::updateArmatureTorques() {
+    const std::size_t n = joints.size();
+    // A = M + D and the right-hand side D-weighted F, solved by Gaussian elimination with
+    // partial pivoting (a few joints per robot).
+    std::vector<double> a(n * n, 0.0);
+    std::vector<double> f(n, 0.0);
+    for (std::size_t r = 0; r < n; ++r) {
+        for (std::size_t c = r; c < n; ++c) {
+            const double m = jointInertia(joints[r], joints[c]);
+            a[r * n + c] = m;
+            a[c * n + r] = m;
+        }
+    }
+    for (std::size_t r = 0; r < n; ++r) {
+        double other = -joints[r].armatureTorque;
+        for (std::size_t c = 0; c < n; ++c) {
+            other += a[r * n + c] * joints[c].lastAcceleration;
+        }
+        f[r] = other;
+        a[r * n + r] += joints[r].armature;
+        if (a[r * n + r] <= 0.0) {
+            a[r * n + r] = 1.0;  // a joint that moves nothing: decoupled, no armature torque
+        }
+    }
+    for (std::size_t k = 0; k < n; ++k) {
+        std::size_t pivot = k;
+        for (std::size_t r = k + 1; r < n; ++r) {
+            if (std::abs(a[r * n + k]) > std::abs(a[pivot * n + k])) {
+                pivot = r;
+            }
+        }
+        if (pivot != k) {
+            for (std::size_t c = 0; c < n; ++c) {
+                std::swap(a[k * n + c], a[pivot * n + c]);
+            }
+            std::swap(f[k], f[pivot]);
+        }
+        for (std::size_t r = k + 1; r < n; ++r) {
+            const double factor = a[r * n + k] / a[k * n + k];
+            for (std::size_t c = k; c < n; ++c) {
+                a[r * n + c] -= factor * a[k * n + c];
+            }
+            f[r] -= factor * f[k];
+        }
+    }
+    for (std::size_t k = n; k-- > 0;) {
+        double value = f[k];
+        for (std::size_t c = k + 1; c < n; ++c) {
+            value -= a[k * n + c] * f[c];
+        }
+        f[k] = value / a[k * n + k];  // q'' with the armature
+    }
+    for (std::size_t r = 0; r < n; ++r) {
+        // Half the step towards the new value: the one-step-late estimate otherwise rings at
+        // half the step rate wherever Jolt's response differs from M (constraint stabilisation).
+        joints[r].armatureTorque = kArmatureRelaxation * -joints[r].armature * f[r] +
+                                   (1.0 - kArmatureRelaxation) * joints[r].armatureTorque;
+    }
+}
+
+double JoltBackend::Impl::subtreeInertia(const Joint& j, const Vec3& axis,
+                                         const Vec3& anchor) const {
+    const JPH::BodyLockInterfaceNoLock& lock = system->GetBodyLockInterfaceNoLock();
+    double sum = 0.0;
+    for (const std::int32_t g : j.subtree) {
+        const Group& group = groups.at(static_cast<std::size_t>(g));
+        if (j.prismatic) {
+            sum += group.mass;
+            continue;
+        }
+        const JPH::Body* body = lock.TryGetBody(group.id);
+        const std::array<double, 4> q = dq(body->GetRotation());
+        // The axis in the group's frame, and the centre of mass's distance from the axis line.
+        const Vec3 local = rotate(conjugate(q), axis);
+        double about = 0.0;
+        for (std::size_t a = 0; a < 3; ++a) {
+            for (std::size_t b = 0; b < 3; ++b) {
+                about += local.at(a) * group.inertia.at(a).at(b) * local.at(b);
+            }
+        }
+        const Vec3 com = dv(JPH::Vec3(body->GetCenterOfMassPosition()));
+        const Vec3 r{com[0] - anchor[0], com[1] - anchor[1], com[2] - anchor[2]};
+        const Vec3 off = cross(axis, r);
+        sum += about + group.mass * dot(off, off);
+    }
+    return sum;
+}
 
 JoltBackend::JoltBackend() : impl_(std::make_unique<Impl>()) {}
 JoltBackend::~JoltBackend() = default;
@@ -234,8 +489,17 @@ Duration JoltBackend::preferredStep() const {
     return 1_ms;
 }
 
-Status JoltBackend::declare(const WorldView& world, const ModuleConfig&, SignalDeclarer& declarer) {
+Status JoltBackend::declare(const WorldView& world, const ModuleConfig& config,
+                            SignalDeclarer& declarer) {
     Impl& s = *impl_;
+    if (!config.fidelity().empty() && config.fidelity() != "articulated") {
+        return Status::error(StatusCode::InvalidConfig,
+                             "the Jolt backend supports fidelity \"articulated\", not \"" +
+                                 std::string(config.fidelity()) + "\"");
+    }
+    if (world.batchCount() != 1) {
+        return Status::error(StatusCode::Unsupported, "the Jolt backend runs one environment");
+    }
     s.joints.clear();
     s.bodies.clear();
     const World::Joints& joints = world.joints();
@@ -243,7 +507,8 @@ Status JoltBackend::declare(const WorldView& world, const ModuleConfig&, SignalD
         const JointType type = joints.type[j];
         if (type == JointType::Spherical) {
             return Status::error(StatusCode::Unsupported,
-                                 "jolt: spherical joint " + joints.names[j] + " (spike)");
+                                 "the Jolt backend has no spherical joints yet (" +
+                                     joints.names[j] + "); use mujoco");
         }
         if (type != JointType::Revolute && type != JointType::Continuous &&
             type != JointType::Prismatic) {
@@ -259,10 +524,19 @@ Status JoltBackend::declare(const WorldView& world, const ModuleConfig&, SignalD
         out.velocity = declarer.output(spec(base + "/velocity", SignalType::Scalar,
                                             prismatic ? units::m_per_s : units::rad_per_s));
         if (joints.actuated[j]) {
-            SignalSpec torque =
-                spec(base + "/torque", SignalType::Scalar, prismatic ? units::N : units::N_m);
-            torque.hold = Hold::WindowAverage;
-            out.torque = declarer.input(torque);
+            // As MujocoBackend: what a motor needs from the joint it drives.
+            const Unit effort = prismatic ? units::N : units::N_m;
+            out.torque = declarer.input(flowInput(base + "/torque", SignalType::Scalar, effort));
+            out.loadTorque =
+                declarer.input(flowInput(base + "/load_torque", SignalType::Scalar, effort));
+            out.acceleration =
+                declarer.output(spec(base + "/acceleration", SignalType::Scalar,
+                                     prismatic ? units::m_per_s2 : units::rad_per_s2));
+            out.effectiveInertia =
+                declarer.output(spec(base + "/effective_inertia", SignalType::Scalar,
+                                     prismatic ? units::kg : units::kg_m2));
+            out.constraintTorque =
+                declarer.output(spec(base + "/constraint_torque", SignalType::Scalar, effort));
         }
         s.joints.push_back(out);
     }
@@ -278,13 +552,16 @@ Status JoltBackend::declare(const WorldView& world, const ModuleConfig&, SignalD
         out.pose = declarer.output(spec(base + "/pose", SignalType::Pose, units::m, "world_local"));
         out.twist = declarer.output(
             spec(base + "/twist", SignalType::Wrench, units::m_per_s, "world_local"));
-        SignalSpec wrench =
-            spec(base + "/external_wrench", SignalType::Wrench, units::N, "world_local");
-        wrench.hold = Hold::WindowAverage;
-        wrench.optional = true;
-        out.externalWrench = declarer.input(wrench);
+        out.acceleration = declarer.output(
+            spec(base + "/acceleration", SignalType::Wrench, units::m_per_s2, "body"));
+        out.externalWrench = declarer.input(
+            flowInput(base + "/external_wrench", SignalType::Wrench, units::N, "world_local"));
         s.bodies.push_back(out);
     }
+    SignalSpec friction = spec("env/friction_scale", SignalType::Scalar, units::one);
+    friction.optional = true;
+    friction.defaultValue = 1.0;
+    s.frictionScale = declarer.input(friction);
     return {};
 }
 
@@ -332,6 +609,16 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalBus& 
     s.system = std::make_unique<JPH::PhysicsSystem>();
     s.system->Init(4096, 0, 8192, 8192, s.broadPhase, s.objectVsBroadPhase, s.objectPairs);
     s.system->SetGravity(jv(world.gravityLocal));
+    // Contact friction is the larger of the two bodies', as MuJoCo combines its geoms' (Jolt's
+    // default is the geometric mean).
+    s.system->SetCombineFriction(
+        [](const JPH::Body& a, const JPH::SubShapeID&, const JPH::Body& b, const JPH::SubShapeID&) {
+            return std::max(a.GetFriction(), b.GetFriction());
+        });
+    s.gravity = world.gravityLocal;
+    s.staticFriction.clear();
+    s.appliedFrictionScale = 1.0;
+    s.hasArmature = false;
     JPH::BodyInterface& bi = s.system->GetBodyInterfaceNoLock();
 
     // Bodies of one robot do not collide with each other (as MujocoBackend).
@@ -430,10 +717,19 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalBus& 
         tensorJ(3, 3) = 1.0F;
         settings.mMassPropertiesOverride.mInertia = tensorJ;
         settings.mFriction = friction > 0.0F ? friction : 0.5F;
+        s.groups[g].mass = mass;
+        s.groups[g].inertia = inertia;
+        s.groups[g].com = com;
+        s.groups[g].friction = settings.mFriction;
         settings.mCollisionGroup = JPH::CollisionGroup(
             filter, static_cast<JPH::CollisionGroup::GroupID>(bodies.robot[s.groups[g].root]),
             static_cast<JPH::CollisionGroup::SubGroupID>(g));
         settings.mAllowSleeping = false;  // a robot waiting for a command must not doze off
+        // Jolt clamps the angular velocity after adding forces and before solving constraints
+        // (default 0.25 rev per frame at 60 Hz, a game's value): a joint torque on a link with
+        // little inertia about its centre spins it far past that before the hinge takes over,
+        // and the clamp would throw most of the torque away.
+        settings.mMaxAngularVelocity = kMaxAngularVelocityRadPerS;
         s.groups[g].id = bi.CreateAndAddBody(settings, JPH::EActivation::Activate);
     }
 
@@ -455,14 +751,31 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalBus& 
                                            shapeRotation(world.colliders.shape[c], p.orientation),
                                            JPH::EMotionType::Static, kStaticLayer);
         settings.mFriction = static_cast<float>(world.colliders.friction[c]);
-        bi.CreateAndAddBody(settings, JPH::EActivation::DontActivate);
+        s.staticFriction.emplace_back(bi.CreateAndAddBody(settings, JPH::EActivation::DontActivate),
+                                      settings.mFriction);
     }
 
     // Joints between groups: the anchor is the child's origin, the axis in the child frame.
     for (Impl::Joint& j : s.joints) {
         const std::uint32_t child = world.joints.child[j.joint].index;
         const BodyId parent = world.joints.parent[j.joint];
-        j.child = s.groups.at(static_cast<std::size_t>(s.groupOf[child])).id;
+        j.childGroup = s.groupOf[child];
+        j.child = s.groups.at(static_cast<std::size_t>(j.childGroup)).id;
+        j.armature = world.joints.armature[j.joint];
+        j.lastVelocity = 0.0;
+        j.lastAcceleration = 0.0;
+        j.armatureTorque = 0.0;
+        s.hasArmature = s.hasArmature || j.armature > 0.0;
+        // The groups that move with this joint: those whose root descends from its child.
+        j.subtree.clear();
+        for (std::size_t g = 0; g < s.groups.size(); ++g) {
+            for (BodyId b{s.groups[g].root}; b != kWorldBody; b = bodies.parent[b.index]) {
+                if (b.index == child) {
+                    j.subtree.push_back(static_cast<std::int32_t>(g));
+                    break;
+                }
+            }
+        }
         const bool toWorld = parent == kWorldBody || s.groupOf[parent.index] < 0;
         j.parent = toWorld ? JPH::BodyID()
                            : s.groups.at(static_cast<std::size_t>(s.groupOf[parent.index])).id;
@@ -506,17 +819,32 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalBus& 
     s.system->OptimizeBroadPhase();
 
     // Initial outputs: the rest state.
-    for (const Impl::Joint& j : s.joints) {
+    for (Impl::Joint& j : s.joints) {
         bus.write(j.position, 0.0);
         bus.write(j.velocity, 0.0);
+        if (j.acceleration.valid()) {
+            bus.write(j.acceleration, 0.0);
+            bus.write(j.constraintTorque, 0.0);
+            const std::uint32_t child = world.joints.child[j.joint].index;
+            bus.write(
+                j.effectiveInertia,
+                j.armature +
+                    s.subtreeInertia(j, rotate(rest[child].orientation, world.joints.axis[j.joint]),
+                                     rest[child].position));
+        }
     }
-    for (const Impl::Body& b : s.bodies) {
+    for (Impl::Body& b : s.bodies) {
         const Pose& p = rest[b.body];
         const std::array<double, 7> pose{p.position[0],    p.position[1],    p.position[2],
                                          p.orientation[0], p.orientation[1], p.orientation[2],
                                          p.orientation[3]};
         bus.writeN(b.pose, pose);
         bus.writeN(b.twist, std::array<double, 6>{});
+        b.lastTwist = {};
+        // At rest: the proper acceleration holds the body up against gravity.
+        const Vec3 up =
+            rotate(conjugate(p.orientation), {-s.gravity[0], -s.gravity[1], -s.gravity[2]});
+        bus.writeN(b.acceleration, std::array<double, 6>{up[0], up[1], up[2], 0.0, 0.0, 0.0});
     }
     return {};
 }
@@ -527,11 +855,16 @@ Status JoltBackend::step(const StepContext& context, SignalBus& bus) {
     const JPH::BodyLockInterfaceNoLock& lock = s.system->GetBodyLockInterfaceNoLock();
 
     // Joint torques: equal and opposite on the two bodies, about the joint axis.
-    for (const Impl::Joint& j : s.joints) {
-        if (!j.torque.valid()) {
+    if (s.hasArmature) {
+        s.updateArmatureTorques();
+    }
+    for (Impl::Joint& j : s.joints) {
+        const double rotor = j.armatureTorque;
+        if (!j.torque.valid() && rotor == 0.0) {
             continue;
         }
-        const double tau = bus.read(j.torque);
+        const double tau =
+            (j.torque.valid() ? bus.read(j.torque) + bus.read(j.loadTorque) : 0.0) + rotor;
         JPH::Vec3 axis;
         if (j.prismatic) {
             axis = static_cast<JPH::SliderConstraint&>(*j.constraint)
@@ -564,40 +897,47 @@ Status JoltBackend::step(const StepContext& context, SignalBus& bus) {
         }
     }
 
+    // env/friction_scale (wet floors, ...): every body's friction, as MuJoCo scales its geoms'.
+    if (const double scale = bus.read(s.frictionScale); scale != s.appliedFrictionScale) {
+        s.applyFrictionScale(scale);
+    }
+
+    const double dt = context.dt.seconds();
     const JPH::EPhysicsUpdateError error =
-        s.system->Update(static_cast<float>(context.dt.seconds()), 1, s.temp.get(), s.jobs.get());
+        s.system->Update(static_cast<float>(dt), 1, s.temp.get(), s.jobs.get());
     if (error != JPH::EPhysicsUpdateError::None) {
         return Status::error(StatusCode::Diverged, "jolt: physics update error " +
                                                        std::to_string(static_cast<int>(error)));
     }
 
-    for (const Impl::Joint& j : s.joints) {
-        const JPH::Body* child = lock.TryGetBody(j.child);
-        const JPH::Body* parent = j.parent.IsInvalid() ? nullptr : lock.TryGetBody(j.parent);
+    for (Impl::Joint& j : s.joints) {
+        const JPH::Vec3 axis = s.axisOf(j);
+        double velocity = 0.0;
+        double limitLambda = 0.0;
         if (j.prismatic) {
             const auto& slider = static_cast<JPH::SliderConstraint&>(*j.constraint);
             bus.write(j.position, slider.GetCurrentPosition());
-            const JPH::Vec3 axis =
-                (child->GetRotation() * slider.GetConstraintToBody2Matrix().GetAxisX())
-                    .Normalized();
-            JPH::Vec3 v = child->GetLinearVelocity();
-            if (parent != nullptr) {
-                v -= parent->GetLinearVelocity();
-            }
-            bus.write(j.velocity, v.Dot(axis));
+            limitLambda = slider.GetTotalLambdaPositionLimits();
         } else {
             const auto& hinge = static_cast<JPH::HingeConstraint&>(*j.constraint);
             bus.write(j.position, hinge.GetCurrentAngle());
-            const JPH::Vec3 axis =
-                (child->GetRotation() * hinge.GetLocalSpaceHingeAxis2()).Normalized();
-            JPH::Vec3 w = child->GetAngularVelocity();
-            if (parent != nullptr) {
-                w -= parent->GetAngularVelocity();
-            }
-            bus.write(j.velocity, w.Dot(axis));
+            limitLambda = hinge.GetTotalLambdaRotationLimits();
         }
+        velocity = s.jointVelocity(j, axis);
+        bus.write(j.velocity, velocity);
+        j.lastAcceleration = (velocity - j.lastVelocity) / dt;
+        if (j.acceleration.valid()) {
+            // Jolt has no joint-space acceleration: the change of velocity over the step.
+            bus.write(j.acceleration, j.lastAcceleration);
+            // The limit's impulse over the step, on the child along the axis. Contacts are not
+            // projected onto the joint (MuJoCo's qfrc_constraint includes them).
+            bus.write(j.constraintTorque, limitLambda / dt);
+            const Vec3 anchor = s.anchorOf(j);
+            bus.write(j.effectiveInertia, j.armature + s.subtreeInertia(j, dv(axis), anchor));
+        }
+        j.lastVelocity = velocity;
     }
-    for (const Impl::Body& b : s.bodies) {
+    for (Impl::Body& b : s.bodies) {
         const JPH::Body* body =
             lock.TryGetBody(s.groups.at(static_cast<std::size_t>(s.groupOf[b.body])).id);
         const Pose root{dv(JPH::Vec3(body->GetPosition())), dq(body->GetRotation())};
@@ -608,7 +948,20 @@ Status JoltBackend::step(const StepContext& context, SignalBus& bus) {
         bus.writeN(b.pose, pose);
         const Vec3 v = dv(JPH::Vec3(body->GetPointVelocity(JPH::RVec3(jv(p.position)))));
         const Vec3 w = dv(body->GetAngularVelocity());
-        bus.writeN(b.twist, std::array<double, 6>{v[0], v[1], v[2], w[0], w[1], w[2]});
+        const std::array<double, 6> twist{v[0], v[1], v[2], w[0], w[1], w[2]};
+        bus.writeN(b.twist, twist);
+        // The proper acceleration at the body origin in the body frame, as an IMU feels it
+        // (MuJoCo's cacc): the change of velocity over the step, less gravity.
+        const std::array<double, 4> toBody = conjugate(p.orientation);
+        const Vec3 linear = rotate(toBody, {(v[0] - b.lastTwist[0]) / dt - s.gravity[0],
+                                            (v[1] - b.lastTwist[1]) / dt - s.gravity[1],
+                                            (v[2] - b.lastTwist[2]) / dt - s.gravity[2]});
+        const Vec3 angular =
+            rotate(toBody, {(w[0] - b.lastTwist[3]) / dt, (w[1] - b.lastTwist[4]) / dt,
+                            (w[2] - b.lastTwist[5]) / dt});
+        bus.writeN(b.acceleration, std::array<double, 6>{linear[0], linear[1], linear[2],
+                                                         angular[0], angular[1], angular[2]});
+        b.lastTwist = twist;
     }
     return {};
 }
@@ -632,6 +985,16 @@ Status JoltBackend::saveState(StateWriter& writer) const {
     impl_->system->SaveState(recorder);
     const std::string bytes = recorder.GetData();
     writer.putString(bytes);
+    // What the finite-difference accelerations and the friction scale need besides.
+    writer.put(impl_->appliedFrictionScale);
+    for (const Impl::Joint& j : impl_->joints) {
+        writer.put(j.lastVelocity);
+        writer.put(j.lastAcceleration);
+        writer.put(j.armatureTorque);
+    }
+    for (const Impl::Body& b : impl_->bodies) {
+        writer.putDoubles(b.lastTwist);
+    }
     return {};
 }
 
@@ -646,6 +1009,19 @@ Status JoltBackend::restoreState(StateReader& reader) {
     if (!impl_->system->RestoreState(recorder)) {
         return Status::error(StatusCode::Internal, "jolt: state does not fit this world");
     }
+    double scale = 1.0;
+    bool ok = reader.get(scale);
+    for (Impl::Joint& j : impl_->joints) {
+        ok = ok && reader.get(j.lastVelocity) && reader.get(j.lastAcceleration) &&
+             reader.get(j.armatureTorque);
+    }
+    for (Impl::Body& b : impl_->bodies) {
+        ok = ok && reader.getDoubles(b.lastTwist);
+    }
+    if (!ok) {
+        return Status::error(StatusCode::Internal, "jolt: short state");
+    }
+    impl_->applyFrictionScale(scale);
     return {};
 }
 

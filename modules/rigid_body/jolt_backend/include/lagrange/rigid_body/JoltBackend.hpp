@@ -6,16 +6,23 @@
 
 namespace lagrange::rigid_body {
 
-/// The rigid-body domain on Jolt Physics 5.6 (spike 0.2-C6; docs/plan/spikes/0.2-C6-jolt.md).
+/// The rigid-body domain on Jolt Physics 5.6, the second backend (rigid_body.md; spike 0.2-C6,
+/// docs/plan/spikes/0.2-C6-jolt.md). The same signals as MujocoBackend, so either runs a profile:
+/// joint/j/position and velocity for hinges and slides; for actuated ones joint/j/torque and
+/// load_torque in (optional, WindowAverage) and acceleration, effective_inertia and
+/// constraint_torque out; for every moving body body/b/pose, twist and acceleration (proper,
+/// body frame, as an IMU feels it) out and external_wrench in; env/friction_scale in.
 ///
-/// Same signals as MujocoBackend for what the spike covers: joint/j/position and velocity for
-/// hinges and slides, joint/j/torque in for actuated ones (WindowAverage), and for every moving
-/// body body/b/pose and body/b/twist out and body/b/external_wrench in (optional). Bodies joined
-/// by fixed joints are one Jolt body (masses and inertias combined); static scenery and the
-/// ground plane are static bodies. Deterministic: Jolt built cross-platform deterministic,
-/// stepped on one thread. Not covered yet (the spike report lists them): joint acceleration,
-/// effective inertia and constraint torque, load torque, body acceleration, spherical joints,
-/// joint limits' softness, env/friction_scale.
+/// Where Jolt differs from MuJoCo:
+/// - Bodies joined by fixed joints are one Jolt body (masses and inertias combined).
+/// - Accelerations are the change of velocity over the step (Jolt has no qacc).
+/// - constraint_torque is the joint limit's reaction only; MuJoCo's includes contacts.
+/// - Rotor inertia (armature) is applied as joint torques computed from the joints' inertia
+///   matrix, one step late (Impl::updateArmatureTorques); MuJoCo has it in its joint space.
+/// - Friction is per Jolt body (the largest of its colliders); a contact takes the larger of
+///   the two bodies', as MuJoCo does.
+/// - No spherical joints yet.
+/// Deterministic: Jolt built cross-platform deterministic, stepped on one thread.
 class JoltBackend final : public IModule {
 public:
     JoltBackend();

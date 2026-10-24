@@ -185,9 +185,14 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                               " has no module in this server yet; disable it and name a "
                               "substitute");
                 }
-                if (name == "rigid_body" && domain.contains("backend") &&
-                    domain["backend"].as<std::string>() != "mujoco") {
-                    error(check, at + "/backend", "this server's rigid body backend is mujoco");
+                if (name == "rigid_body" && domain.contains("backend")) {
+                    const std::string backend = domain["backend"].as<std::string>();
+                    if (backend != "mujoco" && backend != "jolt") {
+                        error(check, at + "/backend",
+                              "this server's rigid body backends are mujoco and jolt");
+                    } else {
+                        settings.rigidBodyBackend = backend;
+                    }
                 }
                 if (name == "electrical" && domain.contains("fidelity")) {
                     const std::string fidelity = domain["fidelity"].as<std::string>();

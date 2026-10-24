@@ -62,6 +62,7 @@ struct ServerOptions {
     /// non-deterministic; false: cameras publish their ground truth (empty images), as for
     /// `lagrange determinism`.
     bool cameras{true};
+    std::string physics{"mujoco"};  // rigid-body backend: "mujoco" or "jolt" (--physics)
 };
 
 /// The simulation server (roadmap 0.2-E1, E2): it loads a robot, wires the MuJoCo backend and

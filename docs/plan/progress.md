@@ -188,7 +188,13 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
    the 2x2 grid beside the lidar; depth and labels are not sent to the viewer yet. Not yet:
    the mock server's synthetic camera image (06-sensors SPEC asks for one; adding a prim to
    the sample shifts the prim ids the viewer's golden images use), the magnetometer view)
-11. Jolt full backend
+11. Jolt full backend (**done** 2026-10-25: every signal MuJoCo has (joint acceleration,
+   effective inertia, limit torque, load torque, body acceleration for the IMU, friction
+   scale); rotor inertia (armature) as joint torques from Jolt's own joint-space inertia;
+   `--physics jolt` and a profile's `backend: jolt`; agreement suite `test_backends`. Found on
+   the way: Jolt's default angular-velocity clamp (47 rad/s, before the constraint solve) threw
+   joint torques on light links away; now 1e6 rad/s. Known: the AMR's wheels slip on Jolt's
+   rigid contacts while ramping up, see Known issues)
 12. Schema migration tools (`tools/`)
 13. E6 scene editing; B8 collision bake
 14. Viewer additions (schematic, electrical scopes)
@@ -208,6 +214,13 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 
 ### Known issues
 
+- **Jolt: wheels and casters share load indeterminately** (2026-10-25): on Jolt's rigid contacts
+  the sample AMR (two drive wheels, two casters) puts little load on the drive wheels; under
+  0.5 N·m they spin up to 20 rad/s within 1 s while MuJoCo's roll. At speed both agree (the
+  agreement suite checks that); after the 6 s demo drive Jolt is about 0.4 m behind. More
+  solver iterations make it worse; Jolt has no contact compliance to share the load as MuJoCo's
+  soft contacts do. MuJoCo stays the default; options: caster suspension in the asset, or
+  Jolt's vehicle constraint for wheels. Time-boxed.
 - **Nav2 demo start-up on one machine** (2026-10-25): with ros2_control, about half the launches
   have one ROS process never discover another's services (spawner and `/controller_manager`,
   patrol and AMCL). Once up, every patrol reached 6/6 waypoints without a collision. Mitigations
