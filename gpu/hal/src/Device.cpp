@@ -354,8 +354,14 @@ std::unique_ptr<Device> Device::create(const DeviceDesc& desc, std::string& erro
     if (self->surface_ != VK_NULL_HANDLE) {
         deviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     }
+    VkPhysicalDeviceFeatures supported{};
+    vkGetPhysicalDeviceFeatures(self->physicalDevice_, &supported);
+    VkPhysicalDeviceFeatures core{};
+    core.fillModeNonSolid = supported.fillModeNonSolid;  // the viewer's wireframe shading
+    self->nonSolidFill_ = supported.fillModeNonSolid == VK_TRUE;
     VkDeviceCreateInfo deviceInfo{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     deviceInfo.pNext = &features13;
+    deviceInfo.pEnabledFeatures = &core;
     deviceInfo.queueCreateInfoCount = 1;
     deviceInfo.pQueueCreateInfos = &queueInfo;
     deviceInfo.enabledExtensionCount = static_cast<std::uint32_t>(deviceExtensions.size());

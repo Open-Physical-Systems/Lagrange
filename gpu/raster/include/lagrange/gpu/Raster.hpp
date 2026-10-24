@@ -47,6 +47,7 @@ struct PipelineSpec {
     std::span<const VkFormat> colorFormats;
     bool blend{true};  // alpha blending on the first attachment
     VkSampleCountFlagBits samples{VK_SAMPLE_COUNT_1_BIT};
+    VkPolygonMode polygonMode{VK_POLYGON_MODE_FILL};  // LINE needs Device::nonSolidFill()
 };
 
 inline constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;

@@ -93,7 +93,7 @@ void buildPipeline(const Device& device, const PipelineSpec& spec, VkPipelineLay
     viewport.scissorCount = 1;
     VkPipelineRasterizationStateCreateInfo raster{
         VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.polygonMode = spec.polygonMode;
     raster.cullMode = VK_CULL_MODE_NONE;  // imported meshes do not have reliable winding yet
     raster.lineWidth = 1.0F;
     VkPipelineMultisampleStateCreateInfo multisample{
