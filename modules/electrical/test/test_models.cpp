@@ -115,6 +115,22 @@ TEST(MotorModel, PmsmDeliversTheCommandAndConservesPower) {
     EXPECT_NEAR(settle(p, 50.0, 0.0, 51.2).jointTorque, 0.085 * 8.0 * 20.0 * 0.92, 1e-3);
 }
 
+TEST(MotorModel, ALongStepCapsTheCurrentLoopInsteadOfDiverging) {
+    // At the network's largest step (1 ms) a 1 kHz loop (6283 rad/s) would be 6 steps of
+    // bandwidth per step and diverge; capped at 1/dt it settles on the command.
+    const MotorParams p = sampleDrive();
+    MotorState s;
+    MotorInputs in;
+    in.torqueCommand = 5.0;
+    in.busVoltage = 51.2;
+    MotorOutputs out;
+    for (int n = 0; n < 200; ++n) {
+        out = stepMotor(p, s, in, 1e-3);
+    }
+    EXPECT_NEAR(out.jointTorque, 5.0, 5e-3 * 5.0);
+    EXPECT_NEAR(s.iq, 5.0 / (20.0 * 0.92 * 0.085), 1e-3);
+}
+
 TEST(MotorModel, AnOffDriveMakesNoTorque) {
     const MotorParams p = sampleDrive();
     MotorState s;

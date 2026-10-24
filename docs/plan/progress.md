@@ -163,7 +163,8 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 4. Thermal module (lumped networks), coupled to electrical losses (**done** 2026-10-25; runs
    when the ambient temperature is given. Owed: a published or recorded motor heat run (Q16),
    airspeed and sun direction with the aero and weather domains: domains/thermal.md §8)
-5. Coupling stability checks across the electrical, thermal and physics rates
+5. Coupling stability checks across the electrical, thermal and physics rates (**done**
+   2026-10-25: architecture.md §8.1; the scheduler steps flow readers at their window's end)
 6. FMU host on `fmilibrary_vendor` (TODO(verify) version and licence)
 7. Bench mode: the replay substitute for rigid body (E8 follows from it)
 8. SPICE netlist and Modelica export; ngspice offline comparison

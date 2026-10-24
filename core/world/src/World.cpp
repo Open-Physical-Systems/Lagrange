@@ -82,6 +82,7 @@ JointId World::addJoint(std::string name, JointType jointType, BodyId childBody,
     joints.upperLimit.push_back(0.0);  // lower == upper: unlimited
     joints.effortLimit.push_back(0.0);
     joints.velocityLimit.push_back(0.0);
+    joints.armature.push_back(0.0);
     joints.prim.push_back(joint);
     joints.actuated.push_back(isActuated);
     return JointId{static_cast<std::uint32_t>(joints.names.size() - 1)};

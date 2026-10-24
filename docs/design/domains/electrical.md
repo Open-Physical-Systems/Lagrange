@@ -167,15 +167,22 @@ Choices made while implementing, beyond §2:
 - **Resistive loads** take their resistance from `elec:load:power` at the bus's starting
   voltage; the bus schema has no nominal voltage.
 
+- **Coupling with physics** (architecture.md §8.1): speed prediction with the current and the
+  rotor speed advanced together, the startup check on H/τm, and the rotor inertia added to the
+  joint's armature (`applyRotorInertia`, called by the server).
+- **Current-loop bandwidth** is capped at 1/dt with a warning: a discrete loop faster than its
+  step diverges. (§4's "warn when dt > 0.2 / bandwidth" would warn at the default 100 µs step
+  for the default 1 kHz loop, which runs well; the cap is where it matters.)
+
 Not yet: converters (refused with the prim named), `velocity` and `voltage` control modes, FMU
 behaviour models (step 6 of the v0.3 queue), motors on prismatic joints, and the rotor inertia
-(physics takes no armature inertia signal yet).
+in Jolt.
 
 | §8 check | Status | Test |
 |---|---|---|
 | RL step response, d and q | met (exact up to rounding) | `test_models` `RlStepResponseMatchesTheClosedForm` |
 | DC motor no-load speed, stall current, torque-speed line | met, 0.5 % | `BrushedDcTorqueSpeedLineMatchesTheClosedForm` |
-| Coupled motor + inertia | met, < 2 % RMS against the drive and flywheel both at 10 µs (a tightly coupled reference, not yet a monolithic stiff solver) | `CoSimulatedWithPhysicsAtOneMillisecond...` |
+| Coupled motor + inertia | met, < 2 % RMS in speed and current against a monolithic 1 µs solution, inertias 6e-7 to 1e-2 kg·m², no growth | `test_coupling`, `CoSimulatedWithPhysicsAtOneMillisecond...` |
 | Battery ECM pulse | closed form met exactly; the published-dataset comparison is owed (dataset not chosen) | `PulseDischargeMatchesTheClosedForm` |
 | Energy balance over a drive cycle | met, 0.5 % | `test_network` `EnergyBalancesOverADriveCycle` |
 | Netlist round trip | with the SPICE export (v0.3 queue step 8) | — |

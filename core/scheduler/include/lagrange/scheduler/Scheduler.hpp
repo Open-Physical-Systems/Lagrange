@@ -80,6 +80,10 @@ struct ScheduledModule {
     std::uint32_t level{0};  // topological level: modules on one level do not read each other
     std::uint32_t order{0};  // position in the total order of a tick
     std::uint64_t seed{0};   // StepContext::seed
+    /// Runs at the end of its step's window rather than at its start: it reads a flow from a
+    /// faster module (architecture.md §8), so that the faster module has stepped through the
+    /// window and the reader gets the average over its own step, not the one before.
+    bool atWindowEnd{false};
 };
 
 struct SchedulerOptions {
@@ -157,6 +161,7 @@ private:
         std::uint64_t stepIndex{0};
         std::uint64_t seed{0};
         std::uint32_t level{0};
+        bool atWindowEnd{false};  // ScheduledModule::atWindowEnd
         bool initialised{false};
         std::uint64_t costSteps{0};
         std::int64_t costTotalNs{0};

@@ -3,6 +3,7 @@
 #include "lagrange/services/Log.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <optional>
@@ -26,6 +27,28 @@ constexpr double kBackEmfTolerance = 0.03;
 constexpr double kResetTorqueNm = 1e-6;
 // Ports followed from a component to its bus.
 constexpr int kMaxPortHops = 4;
+
+/// The inertia a joint turns at rest, about its axis (kg·m²): its armature and its child
+/// body's inertia about the axis through the body origin (axis in the child frame, as URDF
+/// writes it). The child's own children are left out: an estimate for the startup check.
+double jointInertia(const WorldView& world, std::size_t j) {
+    const World::Joints& joints = world.joints();
+    const World::Bodies& bodies = world.bodies();
+    const std::size_t b = joints.child[j].index;
+    const std::array<double, 3>& a = joints.axis[j];
+    const double norm = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+    if (b >= bodies.mass.size() || norm <= 0.0) {
+        return joints.armature[j];
+    }
+    const std::array<double, 3> u{a[0] / norm, a[1] / norm, a[2] / norm};
+    const std::array<double, 6>& i = bodies.inertiaLocal[b];  // xx yy zz xy xz yz, at the COM
+    const double aboutCom = u[0] * u[0] * i[0] + u[1] * u[1] * i[1] + u[2] * u[2] * i[2] +
+                            2.0 * (u[0] * u[1] * i[3] + u[0] * u[2] * i[4] + u[1] * u[2] * i[5]);
+    const std::array<double, 3>& c = bodies.comLocal[b];
+    const double along = c[0] * u[0] + c[1] * u[1] + c[2] * u[2];
+    const double offAxis = c[0] * c[0] + c[1] * c[1] + c[2] * c[2] - along * along;
+    return joints.armature[j] + aboutCom + bodies.mass[b] * offAxis;
+}
 
 /// Collects "prim: problem" lines for one error status at the end of declare.
 struct Problems {
@@ -77,6 +100,15 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
     buses_.clear();
     loads_.clear();
     ideal_.clear();
+    predict_ = false;
+    exchangeSteps_ = 0;
+    const std::optional<double> exchange = config.get<double>("exchange_step");
+    const double electricalStep = config.dt().value_or(preferredStep()).seconds();
+    if (exchange && *exchange > 0.0) {
+        exchangeSteps_ =
+            static_cast<std::uint32_t>(std::max(1.0, std::round(*exchange / electricalStep)));
+        predict_ = config.get<bool>("speed_prediction").value_or(true);
+    }
     if (!config.fidelity().empty() && config.fidelity() != "averaged") {
         return Status::error(StatusCode::InvalidConfig,
                              "electrical fidelity " + std::string(config.fidelity()) +
@@ -263,7 +295,37 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
         if (!bus) {
             continue;
         }
+        if (p.currentLoopBandwidth * electricalStep > 1.0) {
+            services::log(services::LogLevel::Warning, kSource,
+                          where + ": the current loop's bandwidth (" +
+                              std::to_string(p.currentLoopBandwidth) +
+                              " rad/s) is above what the electrical step resolves; it runs at " +
+                              std::to_string(1.0 / electricalStep) + " rad/s. Use a smaller dt");
+        }
         motor.bus = *bus;
+        motor.worldInertia =
+            jointInertia(world, static_cast<std::size_t>(j - joints.names.begin()));
+        if (exchange && *exchange > 0.0 && motor.worldInertia > 0.0) {
+            // Mechanical time constant at the joint: J·R / ((N·Kt)·(N·Ke)).
+            const double n = p.gearRatio;
+            const double tau = motor.worldInertia * p.resistance /
+                               (n * n * p.torqueConstant * p.backEmfConstant());
+            const double ratio = *exchange / tau;
+            const double limit = predict_ ? kMaxStepRatioPredicted : kMaxStepRatio;
+            if (ratio > limit) {
+                problems.add(where, "the physics step " + std::to_string(*exchange * 1e3) +
+                                        " ms is " + std::to_string(ratio) +
+                                        " mechanical time constants of this motor (τm = " +
+                                        std::to_string(tau * 1e3) + " ms; at most " +
+                                        std::to_string(limit) +
+                                        (predict_ ? "" : " without speed prediction") +
+                                        "): the exchange would be unstable. Use a physics dt "
+                                        "below " +
+                                        std::to_string(limit * tau * 1e3) + " ms" +
+                                        (predict_ ? "" : ", or turn speed_prediction on"));
+                continue;
+            }
+        }
         motorJoint[motor.joint] = true;
         motors_.push_back(std::move(motor));
     }
@@ -299,9 +361,11 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
         const std::string motor = "motor/" + m.name + "/";
         m.command = d.input(scalar(joint + "torque_command", units::N_m));
         SignalSpec velocity = scalar(joint + "velocity", units::rad_per_s);
-        velocity.hold = Hold::LinearExtrapolate;
+        // Predicting, the drive integrates between samples itself and needs the sample as is.
+        velocity.hold = predict_ ? Hold::ZeroOrder : Hold::LinearExtrapolate;
         velocity.feedback = true;
         m.velocity = d.input(velocity);
+        m.effectiveInertia = d.input(optionalInput(joint + "effective_inertia", units::kg_m2, 0.0));
         m.temperature =
             d.input(optionalInput("thermal/" + m.name + "/temperature", units::K, kAmbientK));
         m.derating = d.input(optionalInput("thermal/" + m.name + "/derating", units::one, 1.0));
@@ -390,6 +454,9 @@ Status ElectricalNetwork::init(const WorldView&, const ModuleConfig&, SignalBus&
     for (Motor& m : motors_) {
         m.state = MotorState{};
         m.tripped = false;
+        m.predicted = m.loadEstimate = m.lastSample = m.torqueSum = 0.0;
+        m.stepsSince = 0;
+        m.synced = false;
         for (const SignalId id : {m.torque, m.currentD, m.currentQ, m.voltageD, m.voltageQ,
                                   m.busCurrent, m.loss, m.fault}) {
             bus.write(id, 0.0);
@@ -469,6 +536,30 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
         const Bus& node = buses_[m.bus];
         MotorInputs in;
         in.torqueCommand = bus.read(m.command);
+        const double sample = bus.read(m.velocity);
+        if (predict_) {
+            // Resync to physics every H; estimate the load from the last window:
+            // J·Δω/H = mean drive torque − load.
+            const double inertia =
+                bus.read(m.effectiveInertia) > 0.0 ? bus.read(m.effectiveInertia) : m.worldInertia;
+            if (!m.synced || m.stepsSince >= exchangeSteps_) {
+                if (m.synced && m.stepsSince > 0 && inertia > 0.0) {
+                    const double window = m.stepsSince * dt;
+                    m.loadEstimate =
+                        m.torqueSum / m.stepsSince - inertia * (sample - m.lastSample) / window;
+                }
+                m.predicted = sample;
+                m.lastSample = sample;
+                m.torqueSum = 0.0;
+                m.stepsSince = 0;
+                m.synced = true;
+            }
+            in.jointVelocity = m.predicted;
+            in.inertia = inertia;
+            in.loadTorque = m.loadEstimate;
+        } else {
+            in.jointVelocity = sample;
+        }
         if (node.brownout) {
             m.tripped = true;
         } else if (m.tripped && std::abs(in.torqueCommand) < kResetTorqueNm) {
@@ -476,12 +567,20 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
         }
         const bool overvoltageOff = node.overvoltageTripped && node.brakeResistance <= 0.0;
         const bool off = m.tripped || overvoltageOff;
-        in.jointVelocity = bus.read(m.velocity);
         in.busVoltage = node.voltage;
         in.temperature = bus.read(m.temperature);
         in.derating = bus.read(m.derating);
         in.enabled = !off;
         const MotorOutputs out = stepMotor(m.params, m.state, in, dt);
+        if (predict_) {
+            const double inertia =
+                bus.read(m.effectiveInertia) > 0.0 ? bus.read(m.effectiveInertia) : m.worldInertia;
+            m.torqueSum += out.jointTorque;
+            ++m.stepsSince;
+            if (inertia > 0.0) {
+                m.predicted = out.jointVelocity;
+            }
+        }
         buses_[m.bus].sink += out.busCurrent;
         bus.write(m.torque, out.jointTorque);
         bus.write(m.currentD, m.state.id);
@@ -556,6 +655,12 @@ Status ElectricalNetwork::saveState(StateWriter& writer) const {
     for (const Motor& m : motors_) {
         writer.put(m.state);
         writer.put(m.tripped);
+        writer.put(m.predicted);
+        writer.put(m.loadEstimate);
+        writer.put(m.lastSample);
+        writer.put(m.torqueSum);
+        writer.put(m.stepsSince);
+        writer.put(m.synced);
     }
     for (const Battery& b : batteries_) {
         writer.put(b.state.soc);
@@ -574,7 +679,9 @@ Status ElectricalNetwork::saveState(StateWriter& writer) const {
 Status ElectricalNetwork::restoreState(StateReader& reader) {
     bool ok = true;
     for (Motor& m : motors_) {
-        ok = ok && reader.get(m.state) && reader.get(m.tripped);
+        ok = ok && reader.get(m.state) && reader.get(m.tripped) && reader.get(m.predicted) &&
+             reader.get(m.loadEstimate) && reader.get(m.lastSample) && reader.get(m.torqueSum) &&
+             reader.get(m.stepsSince) && reader.get(m.synced);
     }
     for (Battery& b : batteries_) {
         ok = ok && reader.get(b.state.soc) && reader.get(b.state.v1) && reader.get(b.state.v2) &&
@@ -609,6 +716,24 @@ std::vector<std::string> ElectricalNetwork::idealJoints() const {
         out.push_back(p.joint);
     }
     return out;
+}
+
+void applyRotorInertia(World& world) {
+    const WorldView view(world);
+    for (const SchemaInstance* s : view.instancesOf("ElectricalMotorAPI_1")) {
+        const auto joint = s->rel("elec:joint");
+        const double rotor = s->real("elec:rotorInertia").value_or(0.0);
+        const double n = s->real("elec:gearRatio").value_or(1.0);
+        if (joint.size() != 1 || rotor <= 0.0) {
+            continue;
+        }
+        const std::string_view name = view.signalInstanceName(joint[0]);
+        for (std::size_t j = 0; j < world.joints.names.size(); ++j) {
+            if (world.joints.names[j] == name) {
+                world.joints.armature[j] += n * n * rotor;
+            }
+        }
+    }
 }
 
 }  // namespace lagrange::electrical
