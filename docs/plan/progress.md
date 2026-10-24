@@ -183,8 +183,11 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
    module (colour, depth, instance ids; MSAA colour); cameras from URDF, SDFormat and USD
    (`CameraSensorAPI_1`); images to the viewer and as ROS `Image` + `CameraInfo`; arm6 wrist
    camera. Projection test: OpenCV finds checkerboard corners within 0.066 px mean of the
-   pinhole model and calibration recovers fx, fy, cx, cy, RMS 0.07 px. Part B, the viewer's
-   sensor view (06-sensors), is next)
+   pinhole model and calibration recovers fx, fy, cx, cy, RMS 0.07 px. Part B, done the same
+   day: the Sensors workspace's camera view (06-sensors) shows the image as a GPU texture, in
+   the 2x2 grid beside the lidar; depth and labels are not sent to the viewer yet. Not yet:
+   the mock server's synthetic camera image (06-sensors SPEC asks for one; adding a prim to
+   the sample shifts the prim ids the viewer's golden images use), the magnetometer view)
 11. Jolt full backend
 12. Schema migration tools (`tools/`)
 13. E6 scene editing; B8 collision bake

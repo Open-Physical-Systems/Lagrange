@@ -1106,11 +1106,31 @@ struct Server::Impl {
     std::shared_ptr<const sensors::CameraScene> cameraScene;  // null: no camera rendering
 
     std::int64_t fastestSensorNs() const {
-        double rate = 0.0;
-        for (const double r : robot.world.sensors.rateHz) {
-            rate = std::max(rate, r);
+        const World::Sensors& sensors = robot.world.sensors;
+        std::int64_t fastest = 0;
+        for (std::size_t s = 0; s < sensors.rateHz.size(); ++s) {
+            if (sensors.rateHz[s] <= 0.0) {
+                continue;
+            }
+            // Cameras step on whole milliseconds (the sensors module rounds their period).
+            const std::int64_t period =
+                sensors.type[s] == SensorType::Camera
+                    ? std::max<std::int64_t>(std::llround(1e3 / sensors.rateHz[s]), 1) * 1'000'000
+                    : std::llround(1e9 / sensors.rateHz[s]);
+            fastest = fastest == 0 ? period : std::min(fastest, period);
         }
-        return rate > 0.0 ? static_cast<std::int64_t>(std::llround(1e9 / rate)) : 0;
+        return fastest;
+    }
+
+    /// What the sensors domain runs: the lidar's casting, else the cameras' raster.
+    std::string sensorLevel() const {
+        const auto has = [this](SensorType type) {
+            return std::ranges::count(robot.world.sensors.type, type) != 0;
+        };
+        if (has(SensorType::Lidar) || !has(SensorType::Camera)) {
+            return rayContext ? "raycast_gpu" : "raycast";
+        }
+        return "raster";
     }
 
     [[nodiscard]] bool substituted(std::string_view domain) const {
@@ -1206,12 +1226,16 @@ struct Server::Impl {
             d.set_active_module(running ? (physics   ? "mujoco"
                                            : powered ? "averaged_network"
                                            : heated  ? "lumped"
-                                                     : (rayContext ? "raycast_gpu" : "raycast"))
+                                                     : sensorLevel())
                                         : row.substitute);
             d.set_substituted(!running);
             d.set_cpu_ms_per_sim_s(cost[row.domain]);
             if (sensing) {
-                d.add_fidelities(rayContext ? "raycast_gpu" : "raycast");
+                d.add_fidelities(sensorLevel());
+                if (sensorLevel() != "raster" &&
+                    std::ranges::count(robot.world.sensors.type, SensorType::Camera) != 0) {
+                    d.add_fidelities("raster");
+                }
                 d.set_dt_ns(fastestSensorNs());
                 d.add_depends_on("rigid_body");
             }

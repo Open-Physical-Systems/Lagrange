@@ -189,8 +189,12 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
             centre, ImGuiDir_Right, fraction(320.0F, size.x - px(260.0F)), nullptr, &centre);
         const ImGuiID imu =
             ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.40F, nullptr, &centre);
+        // The top of the 2x2 grid: lidar | camera.
+        const ImGuiID camera =
+            ImGui::DockBuilderSplitNode(centre, ImGuiDir_Right, 0.5F, nullptr, &centre);
         ImGui::DockBuilderDockWindow("###SensorList", left);
         ImGui::DockBuilderDockWindow("###Lidar", centre);
+        ImGui::DockBuilderDockWindow("###Camera", camera);
         ImGui::DockBuilderDockWindow("###Imu", imu);
         ImGui::DockBuilderDockWindow("Degradation", right);
     } else if (workspace == Workspace::Domains) {
