@@ -70,6 +70,14 @@ public:
         return std::nullopt;
     }
 
+    /// A pointer to a stored value of exactly type T, valid as long as this config; nullptr if
+    /// absent or of another type (for the C ABI, which hands out C strings).
+    template <class T>
+    [[nodiscard]] const T* find(std::string_view key) const {
+        const auto it = data_.values.find(key);
+        return it == data_.values.end() ? nullptr : std::get_if<T>(&it->second);
+    }
+
 private:
     ModuleConfigData data_;
 };

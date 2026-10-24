@@ -33,7 +33,7 @@ flowchart TB
         A2_10["A2–A10 time, units, bus,<br/>modules, wiring, scheduler,<br/>substitutes, state, RNG"]:::done
         A13["A13 coordinates"]:::done
         A14["A14 position-type lint"]:::done
-        A11["A11 plugin C ABI v0"]:::todo
+        A11["A11 plugin C ABI v0"]:::done
         A12["A12 core services"]:::todo
     end
     subgraph B["B · USD and world"]
@@ -146,6 +146,7 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md).
 |---|---|---|
 | #46 OpenUSD vendor, schemas, stage loader | `schemas/` (sensor library, `lagrangeUnit` metadata, under the accepted RFC 0002) | Rebased onto #51–#58; `--spawn` fixed for USD. ASan/UBSan run not done: stopped by the system for low memory while building OpenUSD |
 | #50 SDFormat and MJCF importers | none (stacked on #46) | Rebased; `--spawn` fixed for SDFormat and MJCF too |
+| plugin C ABI v0 (A11) | `core/plugin_abi/` (new: `lagrange_plugin.h`, ABI 0.1, as RFC 0001 and architecture.md §13 specify) | C99 sample built with `-std=c99 -pedantic -Werror`; ASan/UBSan clean |
 
 ### Known issues
 
