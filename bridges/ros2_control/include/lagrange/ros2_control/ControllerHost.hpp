@@ -43,7 +43,8 @@ private:
 
 /// Joint servo gains (docs/design/robot-classes.md §2.2), from <param>s of the joint in the
 /// <ros2_control> block: velocity_p (N·m per rad/s), velocity_i (N·m per rad), position_p
-/// (N·m per rad), position_d (N·m per rad/s); N and m for prismatic joints.
+/// (N·m per rad), position_d (N·m per rad/s, on the error between the command's rate and the
+/// joint's speed: velocity feedforward); N and m for prismatic joints.
 struct ServoGains {
     double velocityP{5.0};
     double velocityI{20.0};
