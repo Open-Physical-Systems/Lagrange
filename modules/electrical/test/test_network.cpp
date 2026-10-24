@@ -471,7 +471,7 @@ TEST(ElectricalNetwork, RefusesAnIncompleteNetworkNamingEveryPrim) {
             s.relationships["elec:powerPort"] = {world.joints.prim[0]};
         }
     }
-    add(world, "ElectricalConverterAPI_1", world.addPrim("/amr/power/dcdc", "dcdc"));
+    add(world, "ElectricalConverterAPI_1", world.addPrim("/amr/power/dcdc", "dcdc"));  // empty
     Scheduler scheduler;
     scheduler.add(std::make_unique<Commander>(
         std::vector<std::string>(kWheels.begin(), kWheels.end()), [](double) { return 0.0; }));
@@ -490,9 +490,120 @@ TEST(ElectricalNetwork, RefusesAnIncompleteNetworkNamingEveryPrim) {
     EXPECT_NE(text.find("/amr/power/computer: elec:powerPort must lead to an ElectricalBusAPI_1"),
               std::string::npos)
         << text;
-    EXPECT_NE(text.find("/amr/power/dcdc: DC-DC converters are not simulated yet"),
-              std::string::npos)
+    EXPECT_NE(text.find("/amr/power/dcdc: a converter needs outputVoltage > 0"), std::string::npos)
         << text;
+}
+
+/// The sample AMR with a 12 V bus for its sensors, fed from the 48 V bus by a DC-DC converter
+/// (efficiency 0.9, `limit` A), and a constant-power sensor load of `sensors` W on it.
+World amrWithConverter(double sensors, double limit) {
+    World w = poweredAmr();
+    PrimId bus48{};
+    for (const SchemaInstance& s : w.schemaInstances) {
+        if (s.schema == "ElectricalBusAPI_1") {
+            bus48 = s.prim;
+        }
+    }
+    const PrimId bus12 = w.addPrim("/amr/power/dc_12v", "dc_12v");
+    SchemaInstance& b = add(w, "ElectricalBusAPI_1", bus12);
+    b.reals = {{"elec:bus:capacitance", 0.001},
+               {"elec:bus:undervoltageTrip", 10.0},
+               {"elec:bus:overvoltageTrip", 14.0}};
+    SchemaInstance& converter =
+        add(w, "ElectricalConverterAPI_1", w.addPrim("/amr/power/dcdc", "dcdc"));
+    converter.reals = {{"elec:conv:outputVoltage", 12.0},
+                       {"elec:conv:efficiency", 0.9},
+                       {"elec:conv:maxOutputCurrent", limit}};
+    converter.relationships = {{"elec:conv:input", {bus48}}, {"elec:conv:output", {bus12}}};
+    SchemaInstance& load = add(w, "ElectricalLoadAPI_1", w.addPrim("/amr/sensors/rack", "rack"));
+    load.reals = {{"elec:load:power", sensors}, {"elec:load:minVoltage", 10.5}};
+    load.relationships = {{"elec:powerPort", {bus12}}};
+    return w;
+}
+
+std::vector<Recorder::Column> converterColumns() {
+    std::vector<Recorder::Column> c = standardColumns();
+    c.insert(c.end(), {{"bus/dc_12v/voltage", units::V},
+                       {"bus/dc_12v/brownout", units::one},
+                       {"converter/dcdc/output_current", units::A},
+                       {"converter/dcdc/input_current", units::A},
+                       {"converter/dcdc/loss_power", units::W},
+                       {"load/rack/current", units::A},
+                       {"load/rack/powered", units::one}});
+    return c;
+}
+
+Rig converterRun() {
+    Rig run;
+    run.scheduler = std::make_unique<Scheduler>(SchedulerOptions{.deterministic = true});
+    run.scheduler->add(std::make_unique<Commander>(
+        std::vector<std::string>(kWheels.begin(), kWheels.end()), [](double) { return 0.0; }));
+    auto network = std::make_unique<ElectricalNetwork>();
+    run.network = network.get();
+    run.scheduler->add(std::move(network));
+    auto plant = std::make_unique<Flywheels>(0.5, 1_ms);
+    run.flywheels = plant.get();
+    run.scheduler->add(std::move(plant));
+    auto recorder = std::make_unique<Recorder>(converterColumns());
+    run.recorder = recorder.get();
+    run.scheduler->add(std::move(recorder));
+    return run;
+}
+
+TEST(ElectricalNetwork, AConverterRegulatesItsBusAndDrawsItsPowerOverItsEfficiency) {
+    const World world = amrWithConverter(24.0, 5.0);  // 2 A at 12 V, within the limit
+    Rig run = converterRun();
+    auto wired = run.scheduler->wire(WorldView(world));
+    ASSERT_TRUE(wired) << to_string(wired.error().front());
+    EXPECT_EQ(run.network->buses(), (std::vector<std::string>{"dc_48v", "dc_12v"}));
+    ASSERT_TRUE(run.scheduler->stepUntil(SimTime{200'000'000}).ok());
+    const Recorder& r = *run.recorder;
+    const std::vector<double>& last = r.rows.back();
+    EXPECT_NEAR(last[r.column("bus/dc_12v/voltage")], 12.0, 1e-9);
+    EXPECT_NEAR(last[r.column("converter/dcdc/output_current")], 2.0, 1e-6);
+    EXPECT_NEAR(last[r.column("load/rack/current")], 2.0, 1e-6);
+    const double v48 = last[r.column("bus/dc_48v/voltage")];
+    EXPECT_NEAR(last[r.column("converter/dcdc/input_current")], 24.0 / 0.9 / v48, 1e-4);
+    EXPECT_NEAR(last[r.column("converter/dcdc/loss_power")], 24.0 * (1.0 / 0.9 - 1.0), 1e-4);
+    // The pack carries the computer, the sensors and the converter's loss.
+    EXPECT_NEAR(last[r.column("battery/battery/current")] * v48, 45.0 + 24.0 / 0.9, 0.05);
+}
+
+TEST(ElectricalNetwork, AConverterAtItsCurrentLimitLetsItsBusSagUntilTheLoadsDrop) {
+    // 60 W of sensors at 12 V need 5 A from a converter limited to 3 A: the 12 V bus falls until
+    // the load switches off at its minVoltage, the bus recovers, and the cycle repeats; the
+    // converter never exceeds 3 A.
+    const World world = amrWithConverter(60.0, 3.0);
+    Rig run = converterRun();
+    ASSERT_TRUE(run.scheduler->wire(WorldView(world)));
+    ASSERT_TRUE(run.scheduler->stepUntil(SimTime{200'000'000}).ok());
+    const Recorder& r = *run.recorder;
+    double most = 0.0;
+    bool dropped = false;
+    for (const std::vector<double>& row : r.rows) {
+        most = std::max(most, row[r.column("converter/dcdc/output_current")]);
+        dropped = dropped || row[r.column("load/rack/powered")] == 0.0;
+    }
+    EXPECT_NEAR(most, 3.0, 1e-9);
+    EXPECT_TRUE(dropped);
+    EXPECT_EQ(r.rows.back()[r.column("bus/dc_48v/brownout")], 0.0);  // the 48 V side is fine
+}
+
+TEST(ElectricalNetwork, ConvertersAreRefusedWhenMiswired) {
+    World world = amrWithConverter(24.0, 5.0);
+    for (SchemaInstance& s : world.schemaInstances) {
+        if (s.schema == "ElectricalConverterAPI_1") {
+            s.relationships["elec:conv:output"] = s.relationships["elec:conv:input"];
+        }
+    }
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<ElectricalNetwork>());
+    auto wired = scheduler.wire(WorldView(world));
+    ASSERT_FALSE(wired);
+    EXPECT_NE(to_string(wired.error().front())
+                  .find("/amr/power/dcdc: a converter's input and output are the same bus"),
+              std::string::npos)
+        << to_string(wired.error().front());
 }
 
 TEST(ElectricalNetwork, ItIsDeterministicAndRestoresItsState) {
