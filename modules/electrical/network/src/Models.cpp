@@ -2,6 +2,7 @@
 #include "lagrange/electrical/Models.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 
@@ -18,6 +19,9 @@ constexpr double kDqFactor = 1.5;
 // overmodulation is Vbus/√3 with space-vector (or third-harmonic) modulation.
 const double kSqrt3 = std::sqrt(3.0);
 
+// Largest current-loop bandwidth × step the drive model runs at (ωc·dt): stable and well damped.
+constexpr double kMaxLoopBandwidthSteps = 1.0;
+
 /// One axis of L·di/dt = u − R·i, with u held over the step: the exact solution.
 double advanceAxis(double current, double u, double resistance, double inductance, double dt) {
     if (inductance <= 0.0) {
@@ -28,6 +32,38 @@ double advanceAxis(double current, double u, double resistance, double inductanc
     }
     const double decay = std::exp(-resistance * dt / inductance);
     return decay * current + (1.0 - decay) * u / resistance;
+}
+
+/// x' = e^(A·h)·x + A⁻¹·(e^(A·h) − I)·b for a 2×2 A with a positive determinant: the exact step
+/// of x' = A·x + b with b held. e^(A·h) from the Cayley–Hamilton form e^(s·h)·(c·I + k·(A − s·I)),
+/// s = tr/2, with c, k from cosh/sinh or cos/sin of the eigenvalues' spread.
+void exactStep2(const std::array<double, 4>& a, const std::array<double, 2>& b,
+                std::array<double, 2>& x, double h) {
+    const double s = 0.5 * (a[0] + a[3]);
+    const double det = a[0] * a[3] - a[1] * a[2];
+    const double q = s * s - det;
+    double c = 1.0;
+    double k = h;
+    if (q > 0.0) {
+        const double d = std::sqrt(q);
+        c = std::cosh(d * h);
+        k = std::sinh(d * h) / d;
+    } else if (q < 0.0) {
+        const double d = std::sqrt(-q);
+        c = std::cos(d * h);
+        k = std::sin(d * h) / d;
+    }
+    const double e = std::exp(s * h);
+    const std::array<double, 4> m{e * (c + k * (a[0] - s)), e * k * a[1], e * k * a[2],
+                                  e * (c + k * (a[3] - s))};
+    // (e^(A·h) − I)·b, then A⁻¹ of it.
+    const double r0 = (m[0] - 1.0) * b[0] + m[1] * b[1];
+    const double r1 = m[2] * b[0] + (m[3] - 1.0) * b[1];
+    const double y0 = (a[3] * r0 - a[1] * r1) / det;
+    const double y1 = (-a[2] * r0 + a[0] * r1) / det;
+    const double x0 = m[0] * x[0] + m[1] * x[1] + y0;
+    const double x1 = m[2] * x[0] + m[3] * x[1] + y1;
+    x = {x0, x1};
 }
 
 }  // namespace
@@ -78,7 +114,9 @@ MotorOutputs stepMotor(const MotorParams& p, MotorState& s, const MotorInputs& i
 
     // PI current loops with the plant's zero cancelled: Kp = L·ωc, Ki = R·ωc, giving a
     // first-order closed loop of bandwidth ωc. Tuned on the nominal resistance, as a drive is.
-    const double wc = p.currentLoopBandwidth;
+    // A discrete loop cannot be faster than its step resolves: above ωc·dt ≈ 2 it oscillates and
+    // diverges. The bandwidth is capped at 1/dt (the network warns when it caps it).
+    const double wc = std::min(p.currentLoopBandwidth, kMaxLoopBandwidthSteps / dt);
     const double ki = p.resistance * wc;
     const double ed = -s.id;
     const double eq = iqRef - s.iq;
@@ -109,11 +147,45 @@ MotorOutputs stepMotor(const MotorParams& p, MotorState& s, const MotorInputs& i
 
     const double idStart = s.id;
     const double iqStart = s.iq;
+    const double factor = p.dq ? kDqFactor : 1.0;
+    if (in.inertia > 0.0 && p.inductanceQ > 0.0) {
+        // Speed prediction: q-axis current and speed as one linear system, the back-EMF
+        // implicit (architecture.md §8). Motor side, ω_m = N·ω:
+        //   Lq·di/dt = u − R·i − Ke·ω_m,   J/N²·dω_m/dt = g·Kt·i − τ_load/N
+        // with u the q voltage less the explicit d-axis cross term, g the gear's efficiency in
+        // the direction power flows at the step's start. Reluctance torque is left out here.
+        const double n = p.gearRatio;
+        const double we = p.dq ? p.polePairs * motorVelocity : 0.0;
+        const double efficiency = p.torqueConstant * s.iq * motorVelocity >= 0.0
+                                      ? p.gearEfficiency
+                                      : 1.0 / p.gearEfficiency;
+        if (p.dq) {
+            s.id = advanceAxis(s.id, vd + we * p.inductanceQ * s.iq, resistance, p.inductanceD, dt);
+        }
+        const double u = vq - (p.dq ? we * p.inductanceD * idStart : 0.0);
+        const double ke = p.backEmfConstant();
+        const std::array<double, 4> a{-resistance / p.inductanceQ, -ke / p.inductanceQ,
+                                      n * n * efficiency * p.torqueConstant / in.inertia, 0.0};
+        const std::array<double, 2> b{u / p.inductanceQ, -n * in.loadTorque / in.inertia};
+        std::array<double, 2> x{s.iq, motorVelocity};
+        exactStep2(a, b, x, dt);
+        s.iq = x[0];
+        out.jointVelocity = x[1] / n;
+        out.vd = vd;
+        out.vq = vq;
+        out.motorTorque = p.torqueConstant * s.iq;
+        // The step's average torque: what turned the inertia, plus the load it held.
+        out.jointTorque = in.inertia * (out.jointVelocity - in.jointVelocity) / dt + in.loadTorque;
+        const double id = 0.5 * (idStart + s.id);
+        const double iq = 0.5 * (iqStart + s.iq);
+        out.busCurrent = factor * (vd * id + vq * iq) / in.busVoltage;
+        out.lossPower = factor * resistance * (id * id + iq * iq);
+        return out;
+    }
     advanceCurrents(p, s, vd, vq, motorVelocity, resistance, dt);
     // Step averages for the power and loss, so that energy balances to second order in dt.
     const double id = 0.5 * (idStart + s.id);
     const double iq = 0.5 * (iqStart + s.iq);
-    const double factor = p.dq ? kDqFactor : 1.0;
     out.vd = vd;
     out.vq = vq;
     out.motorTorque =

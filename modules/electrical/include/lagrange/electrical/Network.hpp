@@ -30,11 +30,26 @@ namespace lagrange::electrical {
 /// - ElectricalLoadAPI_1 loads draw their power (load/<l>/power_demand when connected).
 /// - Joints with a torque command but no motor are driven ideally, as the substitute does.
 ///
+/// Coupling with physics (architecture.md §8). Config "exchange_step" (s) is the physics step
+/// H that the joint velocities arrive at. With it and "speed_prediction" (default true), each
+/// drive integrates a local rotor model J_eff·ω̇ = τ − τ_load between physics updates for its
+/// back-EMF, J_eff from joint/<j>/effective_inertia (or the world's estimate) and τ_load from
+/// the previous window, and resyncs to the true velocity every H. At declare it checks H/τm per
+/// motor, τm = J·R/(N²·Kt·Ke) the mechanical time constant at the joint with J estimated from
+/// the world (the joint's child body and armature at rest), against kMaxStepRatioPredicted or
+/// kMaxStepRatio, and refuses to start with the motor named when the exchange would be unstable.
+///
 /// Not yet: converters (ElectricalConverterAPI_1 is refused), velocity and voltage control
-/// modes, FMU behaviour models (ignored at this fidelity), motors on prismatic joints, the
-/// rotor inertia (physics does not take it yet). Default step 100 µs.
+/// modes, FMU behaviour models (ignored at this fidelity), motors on prismatic joints. Default
+/// step 100 µs.
 class ElectricalNetwork final : public IModule {
 public:
+    /// H/τm above which the exchange is refused without and with speed prediction
+    /// (architecture.md §8). Set from the coupling tests (test_coupling): with prediction a
+    /// rotor at H/τm ≈ 8 tracks the monolithic solution within 2 %.
+    static constexpr double kMaxStepRatio = 0.5;
+    static constexpr double kMaxStepRatioPredicted = 10.0;
+
     /// The fraction above the undervoltage trip (or below the overvoltage trip) at which a
     /// tripped bus recovers: hysteresis so that a bus at the threshold does not chatter. A
     /// modelling choice, not a hardware value.
@@ -60,7 +75,13 @@ private:
         MotorParams params;
         MotorState state;
         std::size_t bus{0};
-        bool tripped{false};  // undervoltage fault, latched
+        bool tripped{false};       // undervoltage fault, latched
+        double worldInertia{0.0};  // kg·m², the joint's at rest, from the world
+        // Speed prediction between physics updates.
+        double predicted{0.0}, loadEstimate{0.0}, lastSample{0.0}, torqueSum{0.0};
+        std::uint32_t stepsSince{0};
+        bool synced{false};
+        SignalId effectiveInertia;
         SignalId command, velocity, temperature, derating;
         SignalId torque, currentD, currentQ, voltageD, voltageQ, busCurrent, loss, fault;
     };
@@ -104,6 +125,13 @@ private:
     std::vector<Passthrough> ideal_;
     std::vector<double> batteryTemperature_;  // K, read each step
     std::vector<bool> limitedScratch_;        // batteries at their charge limit, per solve
+    std::uint32_t exchangeSteps_{0};          // electrical steps per physics step; 0: unknown
+    bool predict_{false};
 };
+
+/// Adds every motor's rotor inertia, reflected through its gear (N²·elec:rotorInertia), to the
+/// armature of the joint it drives, so that physics accelerates the rotor too. Call once on the
+/// loaded world, before physics is built.
+void applyRotorInertia(World& world);
 
 }  // namespace lagrange::electrical

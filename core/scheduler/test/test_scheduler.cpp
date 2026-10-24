@@ -465,12 +465,14 @@ TEST(Multirate, WindowAverageConservesTheImpulse) {
     ASSERT_TRUE(scheduler.wire(WorldView(world)));
     ASSERT_TRUE(scheduler.stepUntil(SimTime{3'000'000}).ok());
     ASSERT_EQ(seen->values.size(), 3U);
-    // The writer runs first in each tick. At t = 0 the window holds one commit (0.1 N·m, the
-    // step ending at 0.1 ms). At t = 1 ms it holds the ten commits of the steps starting at
-    // 0.1 ... 1.0 ms, valued 0.2 ... 1.1 N·m: mean 0.65. Then 1.2 ... 2.1: mean 1.65.
-    EXPECT_NEAR(seen->values[0], 0.1, 1e-12);
-    EXPECT_NEAR(seen->values[1], 0.65, 1e-12);
-    EXPECT_NEAR(seen->values[2], 1.65, 1e-12);
+    // The slow reader reads a flow from a faster writer, so it steps at the end of each window
+    // (architecture.md §8): the step for [0, 1 ms) sees the ten commits of the writer's steps in
+    // it, valued 0.1 ... 1.0 N·m (each at its end time): mean 0.55. Then 1.1 ... 2.0: 1.55.
+    EXPECT_TRUE(scheduler.plan()[1].atWindowEnd);
+    EXPECT_FALSE(scheduler.plan()[0].atWindowEnd);
+    EXPECT_NEAR(seen->values[0], 0.55, 1e-12);
+    EXPECT_NEAR(seen->values[1], 1.55, 1e-12);
+    EXPECT_NEAR(seen->values[2], 2.55, 1e-12);
 }
 
 TEST(Execution, StepErrorsNameTheModuleAndTime) {

@@ -135,6 +135,10 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 continue;  // the schema reported it
             }
             const bool enabled = domain["enabled"].as<bool>();
+            if (name == "electrical" && domain.contains("speed_prediction") &&
+                domain["speed_prediction"].is_bool()) {
+                settings.speedPrediction = domain["speed_prediction"].as<bool>();
+            }
             if (name == "thermal" && domain.contains("ambient_temperature") &&
                 domain["ambient_temperature"].is_number()) {
                 settings.ambientTemperatureK = domain["ambient_temperature"].as<double>();

@@ -34,6 +34,14 @@ if(BUILD_TESTING)
     ament_add_gtest(test_lumped test/test_lumped.cpp)
     target_link_libraries(test_lumped lagrange_thermal)
     lagrange_target_defaults(test_lumped)
+    find_package(lagrange_electrical REQUIRED)
+    ament_add_gtest(test_thermal_coupling test/test_thermal_coupling.cpp TIMEOUT 120)
+    target_link_libraries(
+        test_thermal_coupling
+        lagrange_thermal
+        lagrange_electrical::lagrange_electrical
+    )
+    lagrange_target_defaults(test_thermal_coupling)
     ament_add_gtest(test_thermal_network test/test_thermal_network.cpp)
     target_link_libraries(test_thermal_network lagrange_thermal)
     lagrange_target_defaults(test_thermal_network)

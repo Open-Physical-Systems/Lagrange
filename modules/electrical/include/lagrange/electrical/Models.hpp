@@ -43,14 +43,21 @@ struct MotorInputs {
     double temperature{298.15};  // K, of the winding
     double derating{1.0};        // 0..1, scales the current limit
     bool enabled{true};          // false: the drive is off (fault) and the currents are zero
+    /// Speed prediction (architecture.md §8): the inertia the joint turns, kg·m², and the load
+    /// torque on it, N·m. With an inertia the q-axis current and the joint speed are advanced
+    /// together, exactly for the voltages held over the step, and the joint torque is the
+    /// step's average, so the impulse matches the predicted speed change.
+    double inertia{0.0};
+    double loadTorque{0.0};
 };
 
 struct MotorOutputs {
-    double jointTorque{0.0};  // N·m
-    double vd{0.0}, vq{0.0};  // V, applied
-    double busCurrent{0.0};   // A, drawn from the bus (negative when regenerating)
-    double lossPower{0.0};    // W, copper loss
-    double motorTorque{0.0};  // N·m at the motor shaft
+    double jointTorque{0.0};    // N·m
+    double vd{0.0}, vq{0.0};    // V, applied
+    double busCurrent{0.0};     // A, drawn from the bus (negative when regenerating)
+    double lossPower{0.0};      // W, copper loss
+    double motorTorque{0.0};    // N·m at the motor shaft
+    double jointVelocity{0.0};  // rad/s at the end of the step, predicted (with an inertia)
 };
 
 /// Advances the winding currents by `dt` under constant applied voltages `vd`, `vq` and speed:

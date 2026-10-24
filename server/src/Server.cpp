@@ -285,6 +285,14 @@ struct Server::Impl {
         if (hasMotors() && !off("electrical")) {
             ModuleConfigData power;
             power.fidelity = "averaged";
+            // The physics step the joint speeds arrive at: speed prediction and the stability
+            // check (architecture.md §8). A fixed robot has no speeds to predict.
+            if (!off("rigid_body")) {
+                power.values.emplace(
+                    "exchange_step",
+                    static_cast<double>(settings.rigidBodyDtNs.value_or(1'000'000)) * 1e-9);
+            }
+            power.values.emplace("speed_prediction", settings.speedPrediction.value_or(true));
             if (settings.electricalDtNs) {
                 power.dt = Duration{*settings.electricalDtNs};
             }
@@ -336,6 +344,7 @@ struct Server::Impl {
         settings.rigidBodyDtNs = rigidBodyDtNs;
         settings.electricalDtNs = electricalDtNs;
         settings.thermalDtNs = thermalDtNs;
+        settings.speedPrediction = speedPrediction;
         settings.ambientTemperatureK = ambient();
         return settings;
     }
@@ -345,6 +354,7 @@ struct Server::Impl {
     }
     std::optional<std::int64_t> thermalDtNs;     // from an applied profile
     std::optional<double> appliedAmbientK;       // from an applied profile
+    std::optional<bool> speedPrediction;         // from an applied profile
     std::optional<std::int64_t> rigidBodyDtNs;   // from an applied profile
     std::optional<std::int64_t> electricalDtNs;  // from an applied profile
     std::optional<ProfileSettings> pending;      // applied without restart: used at the next reset
@@ -1503,6 +1513,7 @@ struct Server::Impl {
         rigidBodyDtNs = settings.rigidBodyDtNs;
         electricalDtNs = settings.electricalDtNs;
         thermalDtNs = settings.thermalDtNs;
+        speedPrediction = settings.speedPrediction;
         const std::optional<double> previousAmbient = appliedAmbientK;
         if (settings.ambientTemperatureK) {
             appliedAmbientK = settings.ambientTemperatureK;
@@ -1514,6 +1525,7 @@ struct Server::Impl {
             rigidBodyDtNs = previous.rigidBodyDtNs;
             electricalDtNs = previous.electricalDtNs;
             thermalDtNs = previous.thermalDtNs;
+            speedPrediction = previous.speedPrediction;
             appliedAmbientK = previousAmbient;
             (void)restart();
             return status;
@@ -2047,6 +2059,8 @@ Status Server::load() {
             return Status::error(StatusCode::InvalidConfig, applied.error());
         }
     }
+    // Motors' rotors turn with their joints: physics gets their reflected inertia.
+    electrical::applyRotorInertia(s.robot.world);
     if (!s.options.ros && !s.options.ros2ControlParams.empty()) {
         return Status::error(StatusCode::InvalidConfig,
                              "--ros2-control needs the ROS 2 bridge: drop --no-ros");

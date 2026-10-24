@@ -225,6 +225,9 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
                 break;
         }
         std::copy(joints.axis[j].begin(), joints.axis[j].end(), joint->axis);
+        if (j < joints.armature.size()) {
+            joint->armature = joints.armature[j];  // a motor's reflected rotor inertia
+        }
         if (joints.type[j] != JointType::Continuous &&
             joints.lowerLimit[j] < joints.upperLimit[j]) {
             joint->limited = mjLIMITED_TRUE;
