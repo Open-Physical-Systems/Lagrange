@@ -5,6 +5,7 @@ find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
 find_package(lagrange_proto REQUIRED)
+find_package(lagrange_rigid_body_jolt REQUIRED)
 find_package(lagrange_rigid_body_mujoco REQUIRED)
 find_package(lagrange_rigid_body_substitutes REQUIRED)
 find_package(lagrange_sensors REQUIRED)
@@ -62,6 +63,7 @@ target_link_libraries(
     lagrange_server
     PUBLIC lagrange_core::lagrange_core lagrange_proto::lagrange_proto_transport
     PRIVATE
+        lagrange_rigid_body_jolt::lagrange_rigid_body_jolt
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
         lagrange_rigid_body_substitutes::lagrange_rigid_body_substitutes
         lagrange_sensors::lagrange_sensors
@@ -157,6 +159,7 @@ if(BUILD_TESTING)
         test_server
         test/test_map_export.cpp
         test/test_profile.cpp
+        test/test_backends.cpp
         test/test_recorder.cpp
         test/test_robot.cpp
         test/test_server.cpp
@@ -169,6 +172,7 @@ if(BUILD_TESTING)
         test_server
         lagrange_server
         lagrange_electrical::lagrange_electrical
+        lagrange_rigid_body_jolt::lagrange_rigid_body_jolt
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
         lagrange_sensors::lagrange_sensors
         lagrange_stage::lagrange_stage
@@ -191,6 +195,7 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_AMR_POWERED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive_powered.usda"
             LAGRANGE_TEST_WAREHOUSE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.usda"
             LAGRANGE_TEST_ARM6_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.urdf"
+            LAGRANGE_TEST_ARM6_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.overlay.yaml"
             LAGRANGE_TEST_WORKCELL_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_arm6.urdf"
     )
     # The arm with ros2_control in the loop: the standard spawner and joint_trajectory_controller.

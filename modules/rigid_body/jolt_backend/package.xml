@@ -14,9 +14,6 @@
   <depend>jolt_vendor</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
-  <test_depend>lagrange_server</test_depend>
-  <test_depend>lagrange_electrical</test_depend>
-  <test_depend>lagrange_assets</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

@@ -12,6 +12,7 @@
 
   <depend>lagrange_core</depend>
   <depend>lagrange_proto</depend>
+  <depend>lagrange_rigid_body_jolt</depend>
   <depend>lagrange_rigid_body_mujoco</depend>
   <depend>lagrange_rigid_body_substitutes</depend>
   <depend>lagrange_sensors</depend>

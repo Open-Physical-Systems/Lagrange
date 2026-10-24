@@ -89,7 +89,8 @@ void printServerOptions(std::FILE* out) {
         "  --spawn X,Y[,Z[,YAW]]  start the robot there (m, world ENU; heading in rad)\n"
         "  --lidar auto|cpu|gpu  where lidars cast: auto (default) and cpu use the\n"
         "            exact CPU caster; gpu the compute kernel on a hardware GPU\n"
-        "  --gpu DEVICE  Vulkan device for the lidar (index or part of its name)\n"
+        "  --gpu DEVICE  Vulkan device for the lidar and cameras (index or part of its name)\n"
+        "  --physics mujoco|jolt  rigid-body backend (default mujoco)\n"
         "  --rtf     real-time factor, 0 = as fast as possible (default 1)\n"
         "  --paused  start paused; press Play in the viewer\n"
         "  --no-ros  run without the ROS 2 bridge\n"
@@ -176,6 +177,13 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             } else {
                 return "--lidar needs auto, cpu or gpu";
             }
+        } else if (arg == "--physics") {
+            const char* text = value();
+            const std::string_view backend = text != nullptr ? text : "";
+            if (backend != "mujoco" && backend != "jolt") {
+                return "--physics needs mujoco or jolt";
+            }
+            options.physics = std::string(backend);
         } else if (arg == "--gpu") {
             const char* device = value();
             if (device == nullptr) {
