@@ -109,6 +109,14 @@ evidence and the Gazebo Jetty comparison are in `docs/release/v0.2.0.md` and
 10-minute Nav2 patrol through ros2_control did not get past Nav2's start-up on 2026-10-25
 (known issue). Publishing (merging into `main`, tagging) stays with the owner.
 
+## v0.3 status (2026-10-25)
+
+Every v0.3 epic of roadmap §4 is done, and so are the v0.2 items that moved here (G2, B8, E6,
+E8). Release notes and acceptance evidence: `docs/release/v0.3.0.md`. Owed within the epics:
+the battery against a published cell dataset and a motor heat run (Q16), the drive-design
+review of the motor constants, converters, FMI 2.0 FMUs (Q8), hulls in the GPU lidar kernel,
+Jolt's wheel slip. Publishing (merging into `main`, tagging) stays with the owner, after v0.2.0.
+
 ## Defaults taken during the autonomous run
 
 | Item | Default | Why |
