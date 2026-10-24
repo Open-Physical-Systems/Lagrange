@@ -63,6 +63,10 @@ struct ServerOptions {
     /// `lagrange determinism`.
     bool cameras{true};
     std::string physics{"mujoco"};  // rigid-body backend: "mujoco" or "jolt" (--physics)
+    /// Replay mode (roadmap 0.2-E8, Q15): serve this recording (`--record`'s MCAP) instead of a
+    /// simulation. Every recorded domain is a replay substitute; the scene is the recorded one;
+    /// the viewer can seek. No robot is loaded and the ROS bridge is off.
+    std::string replayPath;
     /// Where edits from the viewer are saved when it asks (SetAttribute save_to_session_layer):
     /// the edited model as a USD layer. Empty: $XDG_STATE_HOME/lagrange/<robot>.session.usda.
     std::string sessionPath;

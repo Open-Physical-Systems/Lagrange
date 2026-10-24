@@ -91,6 +91,8 @@ void printServerOptions(std::FILE* out) {
         "            exact CPU caster; gpu the compute kernel on a hardware GPU\n"
         "  --gpu DEVICE  Vulkan device for the lidar and cameras (index or part of its name)\n"
         "  --physics mujoco|jolt  rigid-body backend (default mujoco)\n"
+        "  --replay FILE.mcap  replay a recording instead of simulating (the viewer can seek;\n"
+        "            no ROS bridge)\n"
         "  --session FILE.usda  where the viewer's edits are saved when it asks (default:\n"
         "            $XDG_STATE_HOME/lagrange/<robot>.session.usda)\n"
         "  --rtf     real-time factor, 0 = as fast as possible (default 1)\n"
@@ -179,6 +181,13 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             } else {
                 return "--lidar needs auto, cpu or gpu";
             }
+        } else if (arg == "--replay") {
+            const char* path = value();
+            if (path == nullptr) {
+                return "--replay needs a recording (FILE.mcap from --record)";
+            }
+            options.replayPath = path;
+            options.ros = false;  // a replay has no robot to drive
         } else if (arg == "--session") {
             const char* path = value();
             if (path == nullptr) {

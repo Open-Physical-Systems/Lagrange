@@ -61,7 +61,7 @@ flowchart TB
         E7["E7 lagrange CLI"]:::done
         E3["E3 consumer rings"]:::done
         E6["E6 scene editing<br/>(done in v0.3, with motors)"]:::done
-        E8["E8 replay in C++<br/>(v0.3, with the replay substitute)"]:::todo
+        E8["E8 replay in C++<br/>(done in v0.3, with the replay substitute)"]:::done
     end
     subgraph F["F · ROS 2"]
         F1_2["F1 bridge · F2 sensor topics"]:::done
@@ -168,8 +168,8 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 6. FMU host (**done** 2026-10-25, on our `fmilibrary3_vendor`: Lyrical's `fmilibrary_vendor`
    pins FMI Library 2.2.3, FMI 2.0 only; reference FMU `lagrange_models/dc_drive`)
 7. Bench mode: the replay substitute for rigid body (**done** 2026-10-25: `lagrange_recording`,
-   `--bench`; 10 kHz electrical at about 59× real time. E8, replay in the C++ server, stays
-   open: the viewer's replay seeks, the scheduler does not; open-questions.md Q15)
+   `--bench`; 10 kHz electrical at about 59× real time. E8, replay in the C++ server, followed
+   as item 15)
 8. SPICE netlist and Modelica export; ngspice offline comparison (**done** 2026-10-25:
    `lagrange export`; netlist round trip in ngspice within 0.05 %; Modelica checked for
    structure only, no OpenModelica here)
@@ -230,6 +230,13 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
    with a legend; Unlit shading too; `--shading`. Not yet: the design's fuse and DC-DC nodes
    (no such components in the samples), a battery power signal, Wireframe and Collision
    shading)
+15. E8 replay in the C++ server (**done** 2026-10-25, Q15 decided: `lagrange_server --replay
+   run.mcap` and the protocol's OpenRecording; every recorded domain becomes a replay
+   substitute, the recorder now stores the scene snapshot and each channel's prim, writer,
+   rate and unit; seeking restores the nearest of the checkpoints saved every second and steps
+   on from it; the run pauses at the recording's end; profiles are not applied to a replay.
+   Test: a recorded AMR run replays every signal sample for sample, and poses after seeking
+   back and forward match the recording. The Python mock server is a test tool now)
 
 ### Merged under the autonomous mandate
 

@@ -66,7 +66,7 @@ as `v0.1.0` on 2026-10-14). Plan: `docs/plan/roadmap.md` §3, epics 0.2-A to 0.2
   demo.
 - RFC 0001 (module interface), 0002 (USD schemas) and 0005 (profile format) are accepted; work
   that depends on a still-Draft RFC waits until the owner accepts it.
-- The Python mock server stays as a test tool once replay moves into the C++ server (Q15).
+- Replay is in the C++ server (`--replay`, E8); the Python mock server is a test tool (Q15).
 - Update this section when the phase changes.
 
 Roadmap: v0.1 UI/protocol/mock → v0.2 sim core + AMR (ROS 2, ros2_control, Nav2) →
@@ -210,7 +210,7 @@ lagrange/
 │   └── zenoh/
 │
 ├── server/                     # headless sim server; serves the protocol to viewers
-├── mock_server/                # v0.1 mock/replay server (becomes replay mode)
+├── mock_server/                # v0.1 mock/replay server (test tool; replay is lagrange_server --replay)
 ├── demos/                      # runnable demos (`lagrange_demos`): launch files, Nav2 config, maps
 ├── python/                     # nanobind bindings, `pip install lagrange`
 ├── viewer/                     # native C++ app (ament_cmake package `lagrange_viewer`)
@@ -254,7 +254,7 @@ verification, not in this repo.
 - ros2_control: `lagrange_server --ros2-control PARAMS.yaml` runs a controller manager (`/controller_manager`) in lockstep with `lagrange_ros2_control/LagrangeSystem` as hardware; spawn controllers with `ros2 run controller_manager spawner NAME --param-file PARAMS.yaml`; `/odom`, `/joint_states` and `/cmd_vel` then belong to the controllers, and ground truth stays on `/ground_truth/odom`; a joint's `<param name="encoder_resolution">` (counts per revolution) quantises its position and velocity states like a real encoder
 - CLI: `ros2 run lagrange_server lagrange run PROFILE | validate PROFILE... | graph [PROFILE] | determinism [PROFILE] [--seconds N] | info [--version]` (`determinism` runs twice without ROS and with the CPU lidar and compares state hashes every 100 ms; exit 1 on a difference) (a profile's `stage` names the URDF robot unless `--robot` is given; options as `lagrange_server`; `docs/guide/cli.md`; the example for the sample AMR is `profiles/examples/amr_sample_urdf.yaml`)
 - User guide and tutorial: `docs/guide/` (tutorial, concepts, profiles, writing a module, CLI); `tools/ci/tutorial_amr.sh` runs the AMR tutorial headless and checks each step (Nav2 step only when Nav2 is installed); the module chapter's code is package `lagrange_tutorial` in `tests/tutorial/`
-- Record and replay: `lagrange_server --record run.mcap` writes the run until the server stops or is reset (signals at full rate, about 2.8 MB/s for the sample AMR with its 10 kHz electrical signals; arrays over 1024 components left out); `ros2 run lagrange_mock_server lagrange_mock_server --recording run.mcap` replays it to the viewer
+- Record and replay: `lagrange_server --record run.mcap` writes the run until the server stops or is reset (signals at full rate, about 2.8 MB/s for the sample AMR with its 10 kHz electrical signals; arrays over 1024 components left out); `lagrange_server --replay run.mcap` replays it to the viewer (every domain a replay substitute, the scene from the recording, seeking by restoring checkpoints saved every second; no ROS), and the viewer's Open recording does the same on a running server; the Python `lagrange_mock_server --recording` is a test tool only (Q15)
 - Bench mode: `lagrange_server --bench run.mcap` (or a profile's `rigid_body: {enabled: false, substitute: replay, source: run.mcap}`) replaces physics by the recording's joint and body motion, open loop, while electrical, thermal and sensors run live (`lagrange_recording`'s `ReplaySubstitute`)
 - Import to USD: `ros2 run lagrange_server lagrange_import robot.urdf|robot.sdf|robot.xml robot.usda [--overlay FILE.yaml]` (URDF, SDFormat or MJCF, told apart by the root element; writes what the server reads back; the sample `.usda` assets are made this way and `test_usd_assets` keeps them in step with the URDFs; `lagrange_importers` holds the SDFormat and MJCF readers, and the sample AMR also ships as `.sdf` and MJCF `.xml`; an overlay file (formats.md §9) adds motors, battery and bus, as `amr_diffdrive.overlay.yaml` does for the sample, whose hand-written equivalent is `amr_diffdrive_powered.usda`)
 - Migrations (formats.md §10): `ros2 run lagrange_migrate migrate_schema FILE.usda --in-place|-o OUT|--check` and `ros2 run lagrange_migrate migrate_profile FILE.yaml --in-place|-o OUT|--check [--schema profiles/schema.json]` (one function per schema family and version step in `tools/migrate/lagrange_migrate/`; profiles without `schema_version` are version 0)
