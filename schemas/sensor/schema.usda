@@ -120,3 +120,58 @@ class "ImuAPI_1" (
         lagrangeUnit = "rad/s"
     )
 }
+
+class "CameraSensorAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A camera: apply to a UsdGeomCamera with SensorAPI_1. The camera's lens comes from
+    UsdGeomCamera (focalLength, horizontalAperture, clippingRange); it looks along its -z with y
+    up. The raster level draws colour, depth and instance ids; the sensor-model attributes below
+    (exposure, noise, distortion, rolling shutter) take effect at the sensor_model level
+    (docs/design/domains/sensors.md section 2)."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    int sensor:camera:width (
+        lagrangeUnit = "1"
+        doc = "Image width in pixels. Required."
+    )
+    int sensor:camera:height (
+        lagrangeUnit = "1"
+        doc = "Image height in pixels. Required."
+    )
+    uniform token sensor:camera:shutter = "global" (
+        allowedTokens = ["global", "rolling"]
+    )
+    double sensor:camera:rollingShutterTime = 0 (
+        lagrangeUnit = "s"
+        doc = "Time from the first row's exposure to the last's."
+    )
+    double sensor:camera:exposureTime (
+        lagrangeUnit = "s"
+        doc = "No fallback: the sensor_model level needs it."
+    )
+    bool sensor:camera:autoExposure = false
+    double sensor:camera:gain = 1 (
+        lagrangeUnit = "1"
+    )
+    double sensor:camera:readNoiseStd = 2 (
+        lagrangeUnit = "1"
+        doc = "Read noise in electrons."
+    )
+    double sensor:camera:fullWellCapacity = 10000 (
+        lagrangeUnit = "1"
+        doc = "Electrons."
+    )
+    int sensor:camera:bitDepth = 8 (
+        lagrangeUnit = "1"
+    )
+    uniform token sensor:camera:distortionModel = "none" (
+        allowedTokens = ["none", "plumb_bob", "equidistant"]
+    )
+    double[] sensor:camera:distortionCoeffs = [] (
+        lagrangeUnit = "1"
+        doc = "OpenCV order: k1, k2, p1, p2, k3 for plumb_bob; k1 to k4 for equidistant."
+    )
+}

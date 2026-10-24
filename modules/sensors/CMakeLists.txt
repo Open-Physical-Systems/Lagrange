@@ -24,7 +24,10 @@ target_include_directories(
 )
 target_link_libraries(
     lagrange_sensors
-    PUBLIC lagrange_core::lagrange_core lagrange_gpu::lagrange_gpu_raycast
+    PUBLIC
+        lagrange_core::lagrange_core
+        lagrange_gpu::lagrange_gpu_raycast
+        lagrange_gpu::lagrange_gpu_raster
     PRIVATE embree TBB::tbb
 )
 
@@ -63,6 +66,15 @@ if(BUILD_TESTING)
     )
     target_link_libraries(test_lidar_tiers lagrange_sensors)
     lagrange_target_defaults(test_lidar_tiers)
+    ament_add_gtest(
+        test_camera
+        test/test_camera.cpp
+        TIMEOUT 120
+        ENV
+        ASAN_OPTIONS=${LAGRANGE_GPU_TEST_ASAN_OPTIONS}
+    )
+    target_link_libraries(test_camera lagrange_sensors)
+    lagrange_target_defaults(test_camera)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

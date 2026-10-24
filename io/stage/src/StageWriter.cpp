@@ -27,6 +27,7 @@
 #include <pxr/usd/usd/attribute.h>
 #include <pxr/usd/usd/relationship.h>
 #include <pxr/usd/usd/stage.h>
+#include <pxr/usd/usdGeom/camera.h>
 #include <pxr/usd/usdGeom/capsule.h>
 #include <pxr/usd/usdGeom/cube.h>
 #include <pxr/usd/usdGeom/cylinder.h>
@@ -55,6 +56,10 @@ namespace lagrange::stage {
 namespace {
 
 using namespace pxr;  // NOLINT(google-build-using-namespace): OpenUSD names are long enough
+
+// UsdGeomCamera's fallback horizontal aperture (tenths of a scene unit, by its convention). Only
+// the ratio to the focal length matters here.
+constexpr double kHorizontalApertureMm = 20.955;
 
 GfVec3d vec3d(const std::array<double, 3>& v) {
     return {v[0], v[1], v[2]};
@@ -193,9 +198,19 @@ private:
             }
             return {};
         }
+        const auto sensor = sensorOfPrim_.find(index);
+        if (sensor != sensorOfPrim_.end() &&
+            m_.world.sensors.type[sensor->second] == SensorType::Camera) {
+            // A UsdGeomCamera looks along its -z: turn the sensor frame (x forward) into it.
+            UsdGeomCamera camera = UsdGeomCamera::Define(stage_, paths_[p]);
+            const Pose mount = localPose(index);
+            setTransform(camera,
+                         {mount.position, multiply(mount.orientation, kSensorFromUsdCamera)});
+            return writeSensor(camera.GetPrim(), sensor->second);
+        }
         UsdGeomXform xform = UsdGeomXform::Define(stage_, paths_[p]);
         setTransform(xform, localPose(index));
-        if (const auto sensor = sensorOfPrim_.find(index); sensor != sensorOfPrim_.end()) {
+        if (sensor != sensorOfPrim_.end()) {
             return writeSensor(xform.GetPrim(), sensor->second);
         }
         return {};
@@ -230,6 +245,24 @@ private:
             real("sensor:lidar:rangeMin", get("min_range", 0.1));
             real("sensor:lidar:rangeMax", get("max_range", 30.0));
             real("sensor:lidar:rangeNoiseStd", get("range_noise", 0.0));
+        } else if (sensors.type[s] == SensorType::Camera) {
+            prim.ApplyAPI(TfToken("CameraSensorAPI_1"));
+            const double width = get("width", 640.0);
+            const double height = get("height", 480.0);
+            prim.CreateAttribute(TfToken("sensor:camera:width"), SdfValueTypeNames->Int)
+                .Set(static_cast<int>(width));
+            prim.CreateAttribute(TfToken("sensor:camera:height"), SdfValueTypeNames->Int)
+                .Set(static_cast<int>(height));
+            // The lens: square pixels, so the apertures have the image's aspect ratio.
+            const UsdGeomCamera camera(prim);
+            const double aperture = kHorizontalApertureMm;
+            const double focal = aperture / 2.0 / std::tan(get("horizontal_fov", 1.047) / 2.0);
+            camera.CreateFocalLengthAttr().Set(static_cast<float>(focal));
+            camera.CreateHorizontalApertureAttr().Set(static_cast<float>(aperture));
+            camera.CreateVerticalApertureAttr().Set(static_cast<float>(aperture * height / width));
+            camera.CreateClippingRangeAttr().Set(
+                GfVec2f(static_cast<float>(get("near_clip", 0.05)),
+                        static_cast<float>(get("far_clip", 100.0))));
         } else {
             prim.ApplyAPI(TfToken("ImuAPI_1"));
             real("sensor:imu:accelNoiseStd", get("accel_noise", 0.0));

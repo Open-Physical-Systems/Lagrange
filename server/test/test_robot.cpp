@@ -4,6 +4,7 @@
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/server/DiffDrive.hpp"
 #include "lagrange/server/Robot.hpp"
+#include "lagrange/stage/Stage.hpp"
 
 #include <algorithm>
 #include <array>
@@ -101,6 +102,44 @@ TEST(LoadUrdf, GazeboSensorBlocksBecomeSensors) {
     EXPECT_EQ(robot.scene.prims[robot.sensorPrim[0]].path,
               "/amr_diffdrive/base_link/lidar_link/front_lidar");
     EXPECT_EQ(robot.scene.prims[robot.sensorPrim[0]].typeName, "Lidar");
+}
+
+TEST(LoadUrdf, CameraSensorsLoadAndSurviveAUsdRoundTrip) {
+    Robot robot;
+    ASSERT_TRUE(addUrdf(robot, LAGRANGE_TEST_ARM6_URDF));
+    const World::Sensors& sensors = robot.world.sensors;
+    ASSERT_EQ(sensors.names.size(), 1U);
+    EXPECT_EQ(sensors.names[0], "wrist_camera");
+    EXPECT_EQ(sensors.type[0], SensorType::Camera);
+    EXPECT_EQ(robot.world.bodies.names[sensors.body[0].index], "palm_link");
+    EXPECT_DOUBLE_EQ(sensors.rateHz[0], 15.0);
+    EXPECT_DOUBLE_EQ(sensors.settings[0].at("width"), 640.0);
+    EXPECT_DOUBLE_EQ(sensors.settings[0].at("height"), 480.0);
+    EXPECT_DOUBLE_EQ(sensors.settings[0].at("horizontal_fov"), 1.2);
+    EXPECT_DOUBLE_EQ(sensors.settings[0].at("near_clip"), 0.02);
+    EXPECT_EQ(robot.scene.prims[robot.sensorPrim[0]].apiSchemas.back(), "CameraSensorAPI_1");
+
+    // Written as a UsdGeomCamera (looking along its -z) and read back as the same sensor.
+    const std::string usda = ::testing::TempDir() + "/arm6_camera.usda";
+    ASSERT_TRUE(stage::writeStage(robot, usda));
+    const auto back = stage::loadStage(usda);
+    ASSERT_TRUE(back) << back.error();
+    const World::Sensors& read = back->world.sensors;
+    ASSERT_EQ(read.names.size(), 1U);
+    EXPECT_EQ(read.type[0], SensorType::Camera);
+    EXPECT_EQ(back->scene.prims[back->sensorPrim[0]].typeName, "Camera");
+    EXPECT_NEAR(read.settings[0].at("horizontal_fov"), 1.2, 1e-6);
+    EXPECT_DOUBLE_EQ(read.settings[0].at("width"), 640.0);
+    EXPECT_NEAR(read.settings[0].at("far_clip"), 5.0, 1e-6);
+    for (std::size_t i = 0; i < 3; ++i) {
+        EXPECT_NEAR(read.poseInBody[0].position[i], sensors.poseInBody[0].position[i], 1e-9);
+    }
+    // The same rotation (q or -q).
+    double dot = 0.0;
+    for (std::size_t i = 0; i < 4; ++i) {
+        dot += read.poseInBody[0].orientation[i] * sensors.poseInBody[0].orientation[i];
+    }
+    EXPECT_NEAR(std::abs(dot), 1.0, 1e-9);
 }
 
 TEST(LoadUrdf, AWorldFileAddsFixedScenery) {

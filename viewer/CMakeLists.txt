@@ -40,7 +40,7 @@ lagrange_target_vulkan_warnings(lagrange_viewer_render)
 target_include_directories(lagrange_viewer_render PUBLIC render/include)
 target_link_libraries(
     lagrange_viewer_render
-    PUBLIC lagrange_viewer_client lagrange_gpu::lagrange_gpu
+    PUBLIC lagrange_viewer_client lagrange_gpu::lagrange_gpu lagrange_gpu::lagrange_gpu_raster
 )
 set(_kernels "${LAGRANGE_GPU_KERNELS_DIR}")
 lagrange_add_slang_shader(

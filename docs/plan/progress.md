@@ -178,7 +178,13 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
    scenario passes with `tools/ci/arm_scenario.sh`. Fixed on the way: MuJoCo read revolute
    limits as degrees; the position servo lagged moving set points (now velocity feedforward);
    the Python bindings hid lagrange.viewer. Not yet: wrist camera, grasped object)
-10. Raster camera sensor
+10. Raster camera sensor (**done** 2026-10-25, part A: image buffers on the signal bus; the
+   mesh pipeline shared by the viewer and the camera in `lagrange_gpu_raster`; the camera
+   module (colour, depth, instance ids; MSAA colour); cameras from URDF, SDFormat and USD
+   (`CameraSensorAPI_1`); images to the viewer and as ROS `Image` + `CameraInfo`; arm6 wrist
+   camera. Projection test: OpenCV finds checkerboard corners within 0.066 px mean of the
+   pinhole model and calibration recovers fx, fy, cx, cy, RMS 0.07 px. Part B, the viewer's
+   sensor view (06-sensors), is next)
 11. Jolt full backend
 12. Schema migration tools (`tools/`)
 13. E6 scene editing; B8 collision bake
@@ -194,6 +200,7 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 | plugin ABI schema queries | `core/plugin_abi/` (host functions answer from `World::schemaInstances`) | C99 sample's schema_probe reads two motors' values |
 | thermal schemas | `schemas/` (new `schemas/thermal` library: `ThermalAPI_1`, `ThermalLinkAPI_1` from formats.md §3.2, under the accepted RFC 0002) | As drafted; changelog entry |
 | electrical network (fallback doc fix) | `schemas/` (documentation of `elec:backEmfConstant`'s fallback corrected to Kt/1.5 for dq machines; changelog entry) | No attribute changed; the network refuses an authored Ke that disagrees with Kt by over 3 % |
+| raster camera sensor | `schemas/` (`CameraSensorAPI_1` in the sensor library, from formats.md §3.8, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-24 for autonomous work. Applied to a UsdGeomCamera, whose lens gives the field of view |
 | electrical schemas and their loading | `schemas/` (new `schemas/electrical` library: six schemas from formats.md §3.1, under the accepted RFC 0002; `schemas/CHANGELOG.md` started) | Two additions to the drafts, listed in the changelog. Motor constant conventions still need the drive-design review RFC 0002 asks for before the network uses them |
 
 ### Known issues

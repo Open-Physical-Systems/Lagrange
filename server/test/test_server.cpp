@@ -315,5 +315,37 @@ TEST_F(ServerTest, LidarFramesSeeTheWarehouseWalls) {
     EXPECT_NEAR(x, 8.8, 0.06);
 }
 
+/// The sample arm in its workcell: a wrist camera.
+class ArmServerTest : public ServerTest {
+protected:
+    void adjust(ServerOptions& options) override {
+        options.robotPath = LAGRANGE_TEST_ARM6_URDF;
+        options.worldPath = LAGRANGE_TEST_WORKCELL_URDF;
+    }
+};
+
+TEST_F(ArmServerTest, CameraFramesCarryTheWristCameraImage) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    v1::Envelope watch = command(4);
+    watch.mutable_command()->mutable_subscribe_sensor()->set_sensor(
+        "/arm6/base_link/shoulder_link/upper_arm_link/forearm_link/wrist_1_link/wrist_2_link/"
+        "wrist_3_link/palm_link/wrist_camera");
+    watch.mutable_command()->mutable_subscribe_sensor()->set_enabled(true);
+    send(watch);
+    v1::Envelope step = command(5);
+    step.mutable_command()->mutable_step()->set_duration_ns(100'000'000);
+    send(step);
+    if (!pumpUntil([](const v1::Envelope& e) { return e.has_sensor_frame(); })) {
+        // Without a Vulkan device the cameras cannot render; the log says so.
+        GTEST_SKIP() << "no camera frame (no Vulkan device?)";
+    }
+    const v1::SensorFrame& frame = received_.back().sensor_frame();
+    ASSERT_TRUE(frame.has_image());
+    EXPECT_EQ(frame.image().width(), 640U);
+    EXPECT_EQ(frame.image().height(), 480U);
+    EXPECT_EQ(frame.image().encoding(), "rgba8");
+    EXPECT_EQ(frame.image().data().inline_().size(), 640U * 480U * 4U);
+}
+
 }  // namespace
 }  // namespace lagrange::server

@@ -10,7 +10,7 @@ from pxr import Sdf, Usd
 UNITLESS_TYPES = {"string", "token", "bool", "asset"}
 
 EXPECTED = {
-    "sensor": ["SensorAPI_1", "LidarAPI_1", "ImuAPI_1"],
+    "sensor": ["SensorAPI_1", "LidarAPI_1", "ImuAPI_1", "CameraSensorAPI_1"],
     "electrical": [
         "PortAPI_1",
         "BatteryAPI_1",

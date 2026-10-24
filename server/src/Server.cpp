@@ -244,9 +244,11 @@ struct Server::Impl {
             return settings.substituted.contains(domain);
         };
         // A run that takes commands from ROS is not deterministic: its input comes from outside.
-        // So is one with the lidar on the GPU (invariant 7: the CPU is the reference).
-        auto next =
-            std::make_unique<Scheduler>(SchedulerOptions{.deterministic = !bridge && !rayContext});
+        // So is one with the lidar on the GPU or rendering cameras (invariant 7: the CPU is the
+        // reference).
+        const bool rendering = cameraScene != nullptr && !off("sensors");
+        auto next = std::make_unique<Scheduler>(
+            SchedulerOptions{.deterministic = !bridge && !rayContext && !rendering});
         if (off("rigid_body") && settings.rigidBodyReplay) {
             // Bench mode: physics replayed from a recording, open loop.
             next->add(std::make_unique<recording::ReplaySubstitute>("rigid_body",
@@ -334,7 +336,8 @@ struct Server::Impl {
             rayContext ? static_cast<CapabilityTier>(rayContext->tier()) : CapabilityTier::Tier0;
         for (auto& sensor : off("sensors")
                                 ? sensors::createSensorSubstitutes(robot.world)
-                                : sensors::createSensorModules(robot.world, rayContext)) {
+                                : sensors::createSensorModules(robot.world, rayContext, cameraScene,
+                                                               !options.cameras)) {
             next->add(std::move(sensor), ModuleConfig(sensing));
         }
         // Always last: it sums the body/<b>/wrench/<source> written by the modules above.
@@ -434,18 +437,21 @@ struct Server::Impl {
         return settings;
     }
 
-    /// The latest scan of each lidar to the viewers that watch it.
+    /// The latest scan of each lidar and image of each camera to the viewers that watch it.
     void sendSensorFrames() {
         const World::Sensors& table = robot.world.sensors;
         const SignalBus& bus = scheduler->bus();
         for (std::size_t s = 0; s < table.names.size(); ++s) {
-            if (table.type[s] != SensorType::Lidar) {
-                continue;
-            }
             const std::string& path = robot.scene.prims[robot.sensorPrim[s]].path;
             const bool watched = std::any_of(sessions.begin(), sessions.end(), [&](const auto& x) {
                 return x->greeted && x->sensors.contains(path);
             });
+            if (table.type[s] == SensorType::Camera && watched) {
+                sendImage(s, path);
+            }
+            if (table.type[s] != SensorType::Lidar) {
+                continue;
+            }
             const SignalId id = bus.find("sensor/" + table.names[s] + "/ranges");
             if (!watched || !id.valid() || bus.stamp(id) == lidarSent[s]) {
                 continue;
@@ -482,7 +488,37 @@ struct Server::Impl {
             }
         }
     }
-    std::vector<SimTime> lidarSent;
+    std::vector<SimTime> lidarSent;  // per sensor: stamp of the last frame sent (lidar, camera)
+
+    /// A camera's colour image (rgba8, inline), once per new frame. An empty buffer (the
+    /// ground-truth substitute, or before the first frame) is not sent.
+    void sendImage(std::size_t s, const std::string& path) {
+        const SignalBus& bus = scheduler->bus();
+        const SignalId id = bus.find("sensor/" + robot.world.sensors.names[s] + "/image");
+        if (!id.valid() || bus.stamp(id) == lidarSent[s]) {
+            return;
+        }
+        lidarSent[s] = bus.stamp(id);
+        const std::shared_ptr<const Buffer> image = bus.buffer(bus.readBuffer(id));
+        if (!image || image->bytes.empty()) {
+            return;
+        }
+        v1::Envelope envelope;
+        v1::SensorFrame& frame = *envelope.mutable_sensor_frame();
+        frame.set_sensor(path);
+        frame.mutable_sim_time()->set_ns(lidarSent[s].ns);
+        v1::ImageData& data = *frame.mutable_image();
+        data.set_width(image->width);
+        data.set_height(image->height);
+        data.set_encoding(image->encoding);
+        data.mutable_data()->set_inline_(image->bytes.data(), image->bytes.size());
+        data.mutable_data()->set_size(image->bytes.size());
+        for (auto& session : sessions) {
+            if (session->greeted && session->sensors.contains(path) && !session->congested()) {
+                session->send(envelope);
+            }
+        }
+    }
 
     /// Records the samples committed in the last tick of every signal a viewer subscribes to.
     void capture() {
@@ -1040,6 +1076,34 @@ struct Server::Impl {
         return {};
     }
     std::shared_ptr<gpu::RayContext> rayContext;  // null: lidars on the CPU
+
+    /// Uploads the scene for the cameras, if the robot has any; logs the device.
+    void placeCameras() {
+        const auto count = std::ranges::count(robot.world.sensors.type, SensorType::Camera);
+        if (count == 0) {
+            return;
+        }
+        if (!options.cameras) {
+            log(v1::LOG_LEVEL_INFO, "sensors",
+                "cameras publish ground truth (empty images): rendering is off for this run");
+            return;
+        }
+        std::string reason;
+        cameraScene = sensors::createCameraScene(robot, options.gpu, reason);
+        if (!cameraScene) {
+            log(v1::LOG_LEVEL_WARN, "sensors",
+                "cameras need a Vulkan device and none is usable (" + reason +
+                    "); set the sensors domain to ground_truth to run without them");
+            return;
+        }
+        const gpu::RasterScene& raster = *cameraScene->raster;
+        log(v1::LOG_LEVEL_INFO, "sensors",
+            std::to_string(count) + (count == 1 ? " camera" : " cameras") + " rendered on " +
+                raster.deviceName() + " (" + std::to_string(raster.samples()) +
+                " samples per pixel" + (raster.isSoftware() ? "; a software device, slow" : "") +
+                "); the run is not deterministic");
+    }
+    std::shared_ptr<const sensors::CameraScene> cameraScene;  // null: no camera rendering
 
     std::int64_t fastestSensorNs() const {
         double rate = 0.0;
@@ -2145,6 +2209,7 @@ Status Server::load() {
     if (Status status = s.placeLidar(); !status.ok()) {
         return status;
     }
+    s.placeCameras();
     if (Status status = s.build(); !status.ok()) {
         s.scheduler.reset();
         return status;
@@ -2272,9 +2337,10 @@ Status Server::start() {
     for (std::size_t i = 0; i < s.robot.world.sensors.names.size(); ++i) {
         const World::Sensors& sensors = s.robot.world.sensors;
         char line[160];
-        std::snprintf(line, sizeof(line), "%s %s on %s at %.0f Hz",
-                      sensors.type[i] == SensorType::Lidar ? "lidar" : "IMU",
-                      sensors.names[i].c_str(),
+        const char* kind = sensors.type[i] == SensorType::Lidar    ? "lidar"
+                           : sensors.type[i] == SensorType::Camera ? "camera"
+                                                                   : "IMU";
+        std::snprintf(line, sizeof(line), "%s %s on %s at %.0f Hz", kind, sensors.names[i].c_str(),
                       s.robot.world.bodies.names[sensors.body[i].index].c_str(), sensors.rateHz[i]);
         s.log(v1::LOG_LEVEL_INFO, "sensors", line);
     }

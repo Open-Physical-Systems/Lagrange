@@ -1,4 +1,5 @@
 #include "lagrange/gpu/Device.hpp"
+#include "lagrange/gpu/Raster.hpp"
 #include "lagrange/viewer/SceneRenderer.hpp"
 #include "shaders/kLineFragment.hpp"
 #include "shaders/kLineVertex.hpp"
@@ -15,16 +16,17 @@ namespace lagrange::viewer {
 namespace {
 
 constexpr VkFormat kColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
-constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
+using gpu::kDepthFormat;
 constexpr int kGridHalfCells = 20;  // lines every metre, 20 m to each side
 constexpr int kGridMajorEvery = 5;
 
+// gpu::MeshPush, with the viewer's matrix type.
 struct MeshPush {
     Mat4 viewProjection;
     std::array<float, 12> model;
     std::array<float, 4> baseColor;
 };
-static_assert(sizeof(MeshPush) == 128, "must match MeshPush in mesh.slang");
+static_assert(sizeof(MeshPush) == sizeof(gpu::MeshPush), "must match MeshPush in mesh.slang");
 
 struct LinePush {
     Mat4 viewProjection;
@@ -55,110 +57,6 @@ std::array<float, 12> modelRows(const Transform& t, const std::array<double, 3>&
     return m;
 }
 
-struct PipelineSpec {
-    std::span<const std::uint32_t> vertex;
-    std::span<const std::uint32_t> fragment;
-    VkPrimitiveTopology topology;
-    std::uint32_t stride;
-    bool hasNormal;
-    std::uint32_t pushSize;
-    bool depthWrite;
-};
-
-void buildPipeline(const gpu::Device& device, const PipelineSpec& spec, VkPipelineLayout& layout,
-                   VkPipeline& pipeline) {
-    VkPushConstantRange range{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                              spec.pushSize};
-    VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    layoutInfo.pushConstantRangeCount = 1;
-    layoutInfo.pPushConstantRanges = &range;
-    vkCreatePipelineLayout(device.device(), &layoutInfo, nullptr, &layout);
-
-    VkShaderModule vertex = gpu::createShaderModule(device, spec.vertex);
-    VkShaderModule fragment = gpu::createShaderModule(device, spec.fragment);
-    std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
-    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    stages[0].module = vertex;
-    stages[0].pName = "main";
-    stages[1] = stages[0];
-    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stages[1].module = fragment;
-
-    const VkVertexInputBindingDescription binding{0, spec.stride, VK_VERTEX_INPUT_RATE_VERTEX};
-    const std::array<VkVertexInputAttributeDescription, 2> attributes = {{
-        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
-        {1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12},
-    }};
-    VkPipelineVertexInputStateCreateInfo vertexInput{
-        VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    vertexInput.vertexBindingDescriptionCount = 1;
-    vertexInput.pVertexBindingDescriptions = &binding;
-    vertexInput.vertexAttributeDescriptionCount = spec.hasNormal ? 2 : 1;
-    vertexInput.pVertexAttributeDescriptions = attributes.data();
-
-    VkPipelineInputAssemblyStateCreateInfo assembly{
-        VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-    assembly.topology = spec.topology;
-    VkPipelineViewportStateCreateInfo viewport{
-        VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-    viewport.viewportCount = 1;
-    viewport.scissorCount = 1;
-    VkPipelineRasterizationStateCreateInfo raster{
-        VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-    raster.polygonMode = VK_POLYGON_MODE_FILL;
-    raster.cullMode = VK_CULL_MODE_NONE;  // imported meshes do not have reliable winding yet
-    raster.lineWidth = 1.0F;
-    VkPipelineMultisampleStateCreateInfo multisample{
-        VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-    VkPipelineDepthStencilStateCreateInfo depth{
-        VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-    depth.depthTestEnable = VK_TRUE;
-    depth.depthWriteEnable = spec.depthWrite ? VK_TRUE : VK_FALSE;
-    depth.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;  // reversed depth
-    VkPipelineColorBlendAttachmentState blendAttachment{};
-    blendAttachment.colorWriteMask = 0xF;
-    blendAttachment.blendEnable = VK_TRUE;
-    blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-    blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    blendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
-    blendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    blendAttachment.alphaBlendOp = VK_BLEND_OP_MAX;
-    VkPipelineColorBlendStateCreateInfo blend{
-        VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    blend.attachmentCount = 1;
-    blend.pAttachments = &blendAttachment;
-    const std::array<VkDynamicState, 2> dynamicStates = {VK_DYNAMIC_STATE_VIEWPORT,
-                                                         VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-    dynamic.dynamicStateCount = static_cast<std::uint32_t>(dynamicStates.size());
-    dynamic.pDynamicStates = dynamicStates.data();
-    VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachmentFormats = &kColorFormat;
-    rendering.depthAttachmentFormat = kDepthFormat;
-
-    VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-    info.pNext = &rendering;
-    info.stageCount = static_cast<std::uint32_t>(stages.size());
-    info.pStages = stages.data();
-    info.pVertexInputState = &vertexInput;
-    info.pInputAssemblyState = &assembly;
-    info.pViewportState = &viewport;
-    info.pRasterizationState = &raster;
-    info.pMultisampleState = &multisample;
-    info.pDepthStencilState = &depth;
-    info.pColorBlendState = &blend;
-    info.pDynamicState = &dynamic;
-    info.layout = layout;
-    vkCreateGraphicsPipelines(device.device(), VK_NULL_HANDLE, 1, &info, nullptr, &pipeline);
-
-    vkDestroyShaderModule(device.device(), vertex, nullptr);
-    vkDestroyShaderModule(device.device(), fragment, nullptr);
-}
-
 gpu::Buffer lineBuffer(const gpu::Device& device, const std::vector<float>& vertices) {
     return gpu::createBufferWithData(device, std::as_bytes(std::span{vertices}),
                                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
@@ -166,7 +64,7 @@ gpu::Buffer lineBuffer(const gpu::Device& device, const std::vector<float>& vert
 
 }  // namespace
 
-SceneRenderer::SceneRenderer(const gpu::Device& device) : device_(device) {
+SceneRenderer::SceneRenderer(const gpu::Device& device) : device_(device), meshes_(device) {
     createPipelines();
 
     // Grid on the z = 0 plane, centred on its own origin; drawn snapped under the camera target.
@@ -187,7 +85,7 @@ SceneRenderer::SceneRenderer(const gpu::Device& device) : device_(device) {
 
 SceneRenderer::~SceneRenderer() {
     vkDeviceWaitIdle(device_.device());
-    destroyMeshes();
+    meshes_.clear();
     gpu::destroy(device_, gridMinor_);
     gpu::destroy(device_, gridMajor_);
     gpu::destroy(device_, axes_);
@@ -201,14 +99,21 @@ SceneRenderer::~SceneRenderer() {
 }
 
 void SceneRenderer::createPipelines() {
-    buildPipeline(device_,
-                  {kMeshVertex, kMeshFragment, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 24, true,
-                   sizeof(MeshPush), true},
-                  meshLayout_, meshPipeline_);
-    buildPipeline(device_,
-                  {kLineVertex, kLineFragment, VK_PRIMITIVE_TOPOLOGY_LINE_LIST, 12, false,
-                   sizeof(LinePush), false},
-                  lineLayout_, linePipeline_);
+    gpu::PipelineSpec mesh;
+    mesh.vertex = kMeshVertex;
+    mesh.fragment = kMeshFragment;
+    mesh.pushSize = sizeof(MeshPush);
+    mesh.colorFormats = std::span{&kColorFormat, 1};
+    gpu::buildPipeline(device_, mesh, meshLayout_, meshPipeline_);
+    gpu::PipelineSpec line = mesh;
+    line.vertex = kLineVertex;
+    line.fragment = kLineFragment;
+    line.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+    line.stride = 12;
+    line.hasNormal = false;
+    line.pushSize = sizeof(LinePush);
+    line.depthWrite = false;
+    gpu::buildPipeline(device_, line, lineLayout_, linePipeline_);
 }
 
 bool SceneRenderer::resize(VkExtent2D extent) {
@@ -232,39 +137,14 @@ bool SceneRenderer::resize(VkExtent2D extent) {
     return true;
 }
 
-void SceneRenderer::destroyMeshes() {
-    for (GpuMesh& mesh : meshes_) {
-        gpu::destroy(device_, mesh.vertices);
-        gpu::destroy(device_, mesh.indices);
-    }
-    meshes_.clear();
-}
-
 void SceneRenderer::uploadMeshes(const SceneStatics& statics) {
     vkDeviceWaitIdle(device_.device());
-    destroyMeshes();
-    meshes_.resize(statics.meshes.size());
-    for (std::size_t i = 0; i < statics.meshes.size(); ++i) {
-        const MeshData& source = statics.meshes[i];
-        const std::size_t vertexCount = source.positions.size() / 3;
-        if (vertexCount == 0 || source.indices.empty()) {
-            continue;
-        }
-        std::vector<float> interleaved(vertexCount * 6);
-        for (std::size_t v = 0; v < vertexCount; ++v) {
-            std::memcpy(&interleaved[v * 6], &source.positions[v * 3], 12);
-            if (source.normals.empty()) {
-                interleaved[v * 6 + 5] = 1.0F;  // no normals: light it as if facing up
-            } else {
-                std::memcpy(&interleaved[v * 6 + 3], &source.normals[v * 3], 12);
-            }
-        }
-        meshes_[i].vertices = gpu::createBufferWithData(
-            device_, std::as_bytes(std::span{interleaved}), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-        meshes_[i].indices = gpu::createBufferWithData(
-            device_, std::as_bytes(std::span{source.indices}), VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
-        meshes_[i].indexCount = static_cast<std::uint32_t>(source.indices.size());
+    std::vector<gpu::MeshSource> sources;
+    sources.reserve(statics.meshes.size());
+    for (const MeshData& mesh : statics.meshes) {
+        sources.push_back({mesh.positions, mesh.normals, mesh.indices});
     }
+    meshes_.upload(sources);
     meshGeneration_ = statics.generation;
 }
 
@@ -324,8 +204,7 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
         const SceneStatics& statics = *frame->statics;
         for (std::size_t i = 0; i < statics.prims.size(); ++i) {
             const PrimData& prim = statics.prims[i];
-            if (!prim.visible || prim.mesh == kNone || prim.mesh >= meshes_.size() ||
-                meshes_[prim.mesh].indexCount == 0) {
+            if (!prim.visible || prim.mesh == kNone) {
                 continue;
             }
             MeshPush push{};
@@ -334,11 +213,9 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
             push.baseColor = prim.material != kNone ? statics.materials[prim.material].baseColor
                                                     : std::array<float, 4>{0.8F, 0.8F, 0.8F, 1.0F};
             vkCmdPushConstants(commands, meshLayout_, stages, 0, sizeof(push), &push);
-            const GpuMesh& mesh = meshes_[prim.mesh];
-            vkCmdBindVertexBuffers(commands, 0, 1, &mesh.vertices.buffer, &zero);
-            vkCmdBindIndexBuffer(commands, mesh.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdDrawIndexed(commands, mesh.indexCount, 1, 0, 0, 0);
-            ++lastDrawCount_;
+            if (meshes_.draw(commands, prim.mesh)) {
+                ++lastDrawCount_;
+            }
         }
     }
 

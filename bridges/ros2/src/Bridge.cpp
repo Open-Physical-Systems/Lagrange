@@ -47,6 +47,8 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rmw/rmw.h>
 #include <rosgraph_msgs/msg/clock.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
+#include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
@@ -121,6 +123,17 @@ struct Bridge::Impl {
         rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr publisher;         // 2D
         rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr cloudPublisher;  // 3D
     };
+    /// A camera: colour (rgb8) and depth (32FC1, m; +inf where nothing is in range, REP 118)
+    /// in its optical frame, each with its CameraInfo.
+    struct Camera {
+        std::string frame;  // "<sensor>_optical"
+        std::string ns;     // "/<sensor>"
+        SignalId image, depth;
+        sensor_msgs::msg::CameraInfo info;
+        SimTime sent{-1};
+        rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr color, depthImage;
+        rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr colorInfo, depthInfo;
+    };
     struct Imu {
         std::string frame;
         std::string topic;
@@ -131,6 +144,7 @@ struct Bridge::Impl {
     };
     std::vector<Joint> joints;
     std::vector<Lidar> lidars;
+    std::vector<Camera> cameras;
     std::vector<Imu> imus;
     SignalId basePose, baseTwist;
     SimTime lastClock{-1};
@@ -189,6 +203,91 @@ struct Bridge::Impl {
         }
         counters[lidar.topic].add(cloud.data.size() + 128);
         lidar.cloudPublisher->publish(std::move(cloud));
+    }
+
+    /// The publishers and calibration of a camera, reusing publishers of an earlier attach()
+    /// (a new one would drop subscribers).
+    Camera camera(const std::string& name, const std::map<std::string, double, std::less<>>& set) {
+        const auto get = [&set](const char* key, double fallback) {
+            const auto it = set.find(key);
+            return it == set.end() ? fallback : it->second;
+        };
+        Camera out;
+        out.frame = name + "_optical";
+        out.ns = "/" + name;
+        // The pinhole of the camera module: square pixels, principal point at the centre.
+        const double width = get("width", 640.0);
+        const double height = get("height", 480.0);
+        const double f = width / 2.0 / std::tan(get("horizontal_fov", 1.047) / 2.0);
+        out.info.header.frame_id = out.frame;
+        out.info.width = static_cast<std::uint32_t>(width);
+        out.info.height = static_cast<std::uint32_t>(height);
+        out.info.distortion_model = "plumb_bob";
+        out.info.d = {0.0, 0.0, 0.0, 0.0, 0.0};
+        out.info.k = {f, 0.0, (width - 1.0) / 2.0, 0.0, f, (height - 1.0) / 2.0, 0.0, 0.0, 1.0};
+        out.info.r = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+        out.info.p = {
+            f,   0.0, (width - 1.0) / 2.0, 0.0, 0.0, f, (height - 1.0) / 2.0, 0.0, 0.0, 0.0,
+            1.0, 0.0};
+        for (const Camera& old : cameras) {
+            if (old.ns == out.ns) {
+                out.color = old.color;
+                out.depthImage = old.depthImage;
+                out.colorInfo = old.colorInfo;
+                out.depthInfo = old.depthInfo;
+            }
+        }
+        if (!out.color) {
+            const rclcpp::SensorDataQoS qos;
+            out.color = node->create_publisher<sensor_msgs::msg::Image>(out.ns + "/image_raw", qos);
+            out.colorInfo =
+                node->create_publisher<sensor_msgs::msg::CameraInfo>(out.ns + "/camera_info", qos);
+            out.depthImage =
+                node->create_publisher<sensor_msgs::msg::Image>(out.ns + "/depth/image_raw", qos);
+            out.depthInfo = node->create_publisher<sensor_msgs::msg::CameraInfo>(
+                out.ns + "/depth/camera_info", qos);
+        }
+        return out;
+    }
+
+    /// Both images of a camera's latest frame; nothing for an empty one (the ground-truth
+    /// substitute publishes only the calibration).
+    void publishCamera(Camera& camera, const SignalBus& bus) {
+        camera.info.header.stamp = stampOf(camera.sent);
+        camera.colorInfo->publish(camera.info);
+        camera.depthInfo->publish(camera.info);
+        counters[camera.ns + "/camera_info"].add(350);
+        counters[camera.ns + "/depth/camera_info"].add(350);
+        const std::shared_ptr<const Buffer> rgba = bus.buffer(bus.readBuffer(camera.image));
+        if (rgba && !rgba->bytes.empty()) {
+            sensor_msgs::msg::Image image;
+            image.header = camera.info.header;
+            image.width = rgba->width;
+            image.height = rgba->height;
+            image.encoding = "rgb8";
+            image.step = rgba->width * 3;
+            const std::size_t pixels = std::size_t{rgba->width} * rgba->height;
+            image.data.assign(pixels * 3, 0);
+            const auto* in = reinterpret_cast<const std::uint8_t*>(rgba->bytes.data());
+            for (std::size_t p = 0; p < pixels; ++p) {
+                std::memcpy(image.data.data() + p * 3, in + p * 4, 3);  // drop alpha
+            }
+            counters[camera.ns + "/image_raw"].add(image.data.size() + 64);
+            camera.color->publish(std::move(image));
+        }
+        const std::shared_ptr<const Buffer> depth = bus.buffer(bus.readBuffer(camera.depth));
+        if (depth && !depth->bytes.empty()) {
+            sensor_msgs::msg::Image image;
+            image.header = camera.info.header;
+            image.width = depth->width;
+            image.height = depth->height;
+            image.encoding = "32FC1";
+            image.step = depth->width * 4;
+            const auto* in = reinterpret_cast<const std::uint8_t*>(depth->bytes.data());
+            image.data.assign(in, in + depth->bytes.size());
+            counters[camera.ns + "/depth/image_raw"].add(image.data.size() + 64);
+            camera.depthImage->publish(std::move(image));
+        }
     }
 
     // simulation_interfaces: requests queued by the service callbacks for handleRequests().
@@ -283,13 +382,14 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
     std::size_t clouds = 0;
     std::size_t imuCount = 0;
     for (std::size_t i = 0; i < sensors.type.size(); ++i) {
-        if (sensors.type[i] != SensorType::Lidar) {
+        if (sensors.type[i] == SensorType::Imu) {
             ++imuCount;
-        } else {
+        } else if (sensors.type[i] == SensorType::Lidar) {
             (LidarLayout::from(sensors.settings[i]).is3d() ? clouds : scanners) += 1;
         }
     }
     std::vector<Impl::Lidar> lidars;
+    std::vector<Impl::Camera> cameras;
     std::vector<Impl::Imu> imus;
     for (std::size_t i = 0; i < sensors.names.size(); ++i) {
         const std::string& name = sensors.names[i];
@@ -338,6 +438,18 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
                     lidar.topic, rclcpp::SensorDataQoS());
             }
             lidars.push_back(std::move(lidar));
+        } else if (sensors.type[i] == SensorType::Camera) {
+            cameras.push_back(s.camera(name, settings));
+            geometry_msgs::msg::TransformStamped optical;
+            optical.header.frame_id = name;
+            optical.child_frame_id = cameras.back().frame;
+            optical.transform.rotation.w = kSensorFromOptical[0];
+            optical.transform.rotation.x = kSensorFromOptical[1];
+            optical.transform.rotation.y = kSensorFromOptical[2];
+            optical.transform.rotation.z = kSensorFromOptical[3];
+            mounts.transforms.push_back(optical);
+            cameras.back().image = bus.find("sensor/" + name + "/image");
+            cameras.back().depth = bus.find("sensor/" + name + "/depth");
         } else {
             Impl::Imu imu;
             imu.frame = name;
@@ -360,6 +472,7 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
         }
     }
     s.lidars = std::move(lidars);
+    s.cameras = std::move(cameras);
     s.imus = std::move(imus);
     s.lastClock = SimTime{-1};
     s.lastState = SimTime{-1};
@@ -473,6 +586,14 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
         }
         lidar.publisher->publish(scan);
         s.counters[lidar.topic].add(ranges.size() * 4 + 64);
+    }
+
+    for (Impl::Camera& camera : s.cameras) {
+        if (!camera.image.valid() || bus.stamp(camera.image) == camera.sent) {
+            continue;
+        }
+        camera.sent = bus.stamp(camera.image);
+        s.publishCamera(camera, bus);
     }
 
     for (Impl::Imu& imu : s.imus) {

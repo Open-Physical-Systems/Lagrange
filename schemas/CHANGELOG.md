@@ -5,6 +5,9 @@ every schema is version 1 and may change without a migration.
 
 ## Unreleased
 
+- **Sensor library**: `CameraSensorAPI_1`, as drafted in `docs/design/formats.md` §3.8, applied
+  to a `UsdGeomCamera` whose lens attributes give the field of view and clip range.
+
 - **Thermal library** (`schemas/thermal`): `ThermalAPI_1` and `ThermalLinkAPI_1`
   (multiple-apply), as drafted in `docs/design/formats.md` §3.2.
 

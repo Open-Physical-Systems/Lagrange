@@ -30,7 +30,7 @@ Each sensor has `ground_truth` (the substitute) and one or more physical levels.
 
 | Level | Content |
 |---|---|
-| `raster` | Rasterised colour, depth, instance segmentation through the shared renderer (`gpu/kernels/camera/`) |
+| `raster` | Rasterised colour, depth, instance segmentation through the shared renderer (`gpu/kernels/camera/`). Implemented (v0.3): `lagrange_gpu_raster` draws colour multisampled (up to 8 samples, averaged: a pixel integrates its area) and depth and instance id at one sample; outputs `sensor/<n>/image` (rgba8), `depth` (r32f, m along the optical axis) and `instance` (r32u, scene prim index). Periods are rounded to whole milliseconds |
 | `sensor_model` | Adds exposure (scene radiance → electrons with exposure time and gain), photon shot noise and read noise, quantisation to bit depth, lens distortion (plumb-bob or equidistant), vignetting, motion blur from per-pixel velocity, rolling shutter by rendering row bands at different times |
 | `rt` (Tier 2) | Ray-traced shadows and reflections for the above |
 

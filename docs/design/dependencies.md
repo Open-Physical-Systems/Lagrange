@@ -174,6 +174,7 @@ and resource lookup only. It does not depend on `rclcpp`, so it starts without a
 | pre-commit | apt | 4.5.1 | MIT | |
 | yamllint | apt | 1.37.1 | GPL-3.0-or-later | Tool only |
 | ngspice | apt `ngspice` | 45.2 (Ubuntu 26.04) | BSD-3-clause (its sources; Debian copyright file) | Offline tool only, run as a separate program: the netlist round-trip test (`lagrange_electrical`'s `test_export`, skipped without it) and users' switching-level studies of exported netlists |
+| OpenCV | apt `libopencv-dev` | 4.10.0 (Ubuntu 26.04) | Apache-2.0 AND BSD-3-Clause (Debian copyright file) | Test only: the camera projection test (`lagrange_gpu`'s `test_raster`) finds checkerboard corners and calibrates with it |
 | yamlfmt | Go binary | TODO(verify) | Apache-2.0 | Optional; yamllint alone may be enough |
 | mdformat | apt | 1.0.0 | MIT | Replaces markdownlint (Node) |
 | shfmt, shellcheck | apt | 3.12.0, 0.11.0 | BSD-3-Clause, GPL-3.0 (TODO(verify)) | Tools only |
