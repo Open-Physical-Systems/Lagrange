@@ -28,8 +28,10 @@ struct ProfileSettings {
     std::optional<std::int64_t> thermalDtNs;        // domains.thermal.dt
     std::optional<bool> speedPrediction;            // domains.electrical.speed_prediction
     std::optional<std::string> electricalFidelity;  // domains.electrical.fidelity
-    std::optional<double> ambientTemperatureK;      // domains.thermal.ambient_temperature
-    std::optional<double> realTimeFactor;  // time.real_time_factor (0: as fast as possible)
+    /// Bench mode: the recording that replaces physics (rigid_body substitute replay, source).
+    std::optional<std::string> rigidBodyReplay;
+    std::optional<double> ambientTemperatureK;  // domains.thermal.ambient_temperature
+    std::optional<double> realTimeFactor;       // time.real_time_factor (0: as fast as possible)
 };
 
 struct ProfileIssue {

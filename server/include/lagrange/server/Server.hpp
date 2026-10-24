@@ -27,6 +27,10 @@ struct ServerOptions {
     /// thermal.ambient_temperature overrides it). A site parameter with no default: without it
     /// the thermal domain does not run (CLAUDE.md §10).
     std::optional<double> ambientTemperatureK;
+    /// Bench mode (--bench): physics replaced by this recording's rigid-body signals, replayed
+    /// open loop (the replay substitute); empty = none. A profile's rigid_body replay source
+    /// overrides it.
+    std::string benchReplayPath;
     Pose spawn;                     // where the robot starts, world ENU (LoadOptions::spawn)
     std::string profileSchemaPath;  // profiles/schema.json, sent to viewers; empty = none
     /// What a profile's `stage` must say to apply to this run; empty: robotPath. `lagrange run`

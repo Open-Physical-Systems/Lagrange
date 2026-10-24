@@ -4,6 +4,7 @@
 #include "lagrange/importers/Importers.hpp"
 #include "lagrange/proto/Connection.hpp"
 #include "lagrange/proto/Framing.hpp"
+#include "lagrange/recording/Recording.hpp"
 #include "lagrange/rigid_body/FixedRobot.hpp"
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/ros2/Bridge.hpp"
@@ -246,7 +247,11 @@ struct Server::Impl {
         // So is one with the lidar on the GPU (invariant 7: the CPU is the reference).
         auto next =
             std::make_unique<Scheduler>(SchedulerOptions{.deterministic = !bridge && !rayContext});
-        if (off("rigid_body")) {
+        if (off("rigid_body") && settings.rigidBodyReplay) {
+            // Bench mode: physics replayed from a recording, open loop.
+            next->add(std::make_unique<recording::ReplaySubstitute>("rigid_body",
+                                                                    *settings.rigidBodyReplay));
+        } else if (off("rigid_body")) {
             next->add(std::make_unique<rigid_body::FixedRobot>());
         } else {
             ModuleConfigData physics;
@@ -354,6 +359,10 @@ struct Server::Impl {
         settings.thermalDtNs = thermalDtNs;
         settings.speedPrediction = speedPrediction;
         settings.electricalFidelity = electricalFidelity;
+        settings.rigidBodyReplay = rigidBodyReplay;
+        if (!settings.rigidBodyReplay && !options.benchReplayPath.empty()) {
+            settings.rigidBodyReplay = options.benchReplayPath;  // --bench
+        }
         settings.ambientTemperatureK = ambient();
         return settings;
     }
@@ -365,6 +374,7 @@ struct Server::Impl {
     std::optional<double> appliedAmbientK;          // from an applied profile
     std::optional<bool> speedPrediction;            // from an applied profile
     std::optional<std::string> electricalFidelity;  // from an applied profile
+    std::optional<std::string> rigidBodyReplay;     // --bench, or an applied profile
     std::optional<std::int64_t> rigidBodyDtNs;      // from an applied profile
     std::optional<std::int64_t> electricalDtNs;     // from an applied profile
     std::optional<ProfileSettings> pending;  // applied without restart: used at the next reset
@@ -1059,6 +1069,9 @@ struct Server::Impl {
                               static_cast<double>(rigidBodyDtNs.value_or(1'000'000)) / 1e9);
                 yaml +=
                     "  rigid_body: {enabled: true, backend: mujoco, dt: " + std::string(dt) + "}\n";
+            } else if (std::string_view(row.domain) == "rigid_body" && rigidBodyReplay) {
+                yaml += "  rigid_body: {enabled: false, substitute: replay, source: " +
+                        *rigidBodyReplay + "}\n";
             } else if (std::string_view(row.domain) == "electrical" && hasMotors() &&
                        !substituted("electrical")) {
                 char dt[48];
@@ -1171,6 +1184,11 @@ struct Server::Impl {
             v1::SubstituteOption& option = *d.add_substitutes();
             option.set_token(row.substitute);
             option.set_kind(row.substituteKind);
+            if (physics) {
+                v1::SubstituteOption& replay = *d.add_substitutes();
+                replay.set_token("replay");
+                replay.set_kind("replay");
+            }
             if (physics) {
                 d.add_backends("mujoco");
                 d.add_fidelities("articulated");
@@ -1447,6 +1465,9 @@ struct Server::Impl {
         context.ambientKnown = options.ambientTemperatureK.has_value();
         for (const DomainRow& row : kDomains) {
             context.substitutes[row.domain] = {row.substitute, row.substituteKind};
+            if (std::string_view(row.domain) == "rigid_body") {
+                context.substitutes[row.domain].insert("replay");  // bench mode
+            }
         }
         return context;
     }
@@ -1529,6 +1550,7 @@ struct Server::Impl {
         thermalDtNs = settings.thermalDtNs;
         speedPrediction = settings.speedPrediction;
         electricalFidelity = settings.electricalFidelity;
+        rigidBodyReplay = settings.rigidBodyReplay;
         const std::optional<double> previousAmbient = appliedAmbientK;
         if (settings.ambientTemperatureK) {
             appliedAmbientK = settings.ambientTemperatureK;
@@ -1542,6 +1564,7 @@ struct Server::Impl {
             thermalDtNs = previous.thermalDtNs;
             speedPrediction = previous.speedPrediction;
             electricalFidelity = previous.electricalFidelity;
+            rigidBodyReplay = previous.rigidBodyReplay;
             appliedAmbientK = previousAmbient;
             (void)restart();
             return status;

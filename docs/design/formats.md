@@ -1322,7 +1322,14 @@ drive, hand-written in C, Apache-2.0), which matches the built-in brushed model 
   `RunMeta.pose_bindings` so that a replay moves visuals and sensors too. `RunMeta` is written
   at the start and again at the end with the duration; readers keep the last. Scene deltas,
   log records and sensor frames are not recorded yet. The sample AMR records about 1.5 MB per
-  simulated second (zstd does little for noisy doubles).
+  simulated second without its power system and about 2.8 MB with it (the 10 kHz electrical
+  signals; zstd does little for noisy doubles).
+- Replay (v0.3, `lagrange_recording`): `Recording::open` loads a file's signals into memory, and
+  `ReplaySubstitute(domain, file)` writes every signal a module of that domain wrote, at its
+  recorded rate and unit, committing the sample for its step's end time as a live writer does.
+  Bench mode replays `rigid_body` (`--bench`, or the profile's `replay` substitute with a
+  `source`). Physics stepping at the end of its window (architecture.md §8.1) made the same
+  sample visible one step later, so a bench run matches the original closely, not bit for bit.
 - Units are stored in the catalog. A replay substitute refuses a channel whose recorded unit
   differs from the contract.
 - Compatibility: files written by rosbag2 with the MCAP storage plugin can be opened by the mock
