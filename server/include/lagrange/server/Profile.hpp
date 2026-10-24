@@ -19,9 +19,10 @@ struct ProfileContext {
 
 /// The settings of a valid profile that the server applies.
 struct ProfileSettings {
-    std::set<std::string> substituted;          // domains with modules that are switched off
-    std::optional<std::int64_t> rigidBodyDtNs;  // domains.rigid_body.dt
-    std::optional<double> realTimeFactor;       // time.real_time_factor (0: as fast as possible)
+    std::set<std::string> substituted;           // domains with modules that are switched off
+    std::optional<std::int64_t> rigidBodyDtNs;   // domains.rigid_body.dt
+    std::optional<std::int64_t> electricalDtNs;  // domains.electrical.dt
+    std::optional<double> realTimeFactor;        // time.real_time_factor (0: as fast as possible)
 };
 
 struct ProfileIssue {

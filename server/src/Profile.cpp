@@ -17,6 +17,9 @@ namespace jsonschema = jsoncons::jsonschema;
 constexpr double kNsPerS = 1e9;
 constexpr std::int64_t kMinPhysicsDtNs = 100'000;     // 0.1 ms, as DomainState advertises
 constexpr std::int64_t kMaxPhysicsDtNs = 10'000'000;  // 10 ms
+// The electrical network's step range (domains/electrical.md §4), as DomainState advertises.
+constexpr std::int64_t kMinElectricalDtNs = 10'000;     // 10 µs
+constexpr std::int64_t kMaxElectricalDtNs = 1'000'000;  // 1 ms
 
 /// A YAML document as JSON, for the schema. Scalars keep YAML 1.2 core meanings: true/false,
 /// null and ~, integers, floats; anything else is a string.
@@ -140,6 +143,14 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                     } else {
                         settings.rigidBodyDtNs = step;
                     }
+                } else if (name == "electrical") {
+                    const auto step = static_cast<std::int64_t>(std::llround(ns));
+                    if (step < kMinElectricalDtNs || step > kMaxElectricalDtNs) {
+                        error(check, at + "/dt",
+                              "the electrical step must be from 0.00001 to 0.001 s");
+                    } else {
+                        settings.electricalDtNs = step;
+                    }
                 }
             }
             if (enabled) {
@@ -152,6 +163,10 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 if (name == "rigid_body" && domain.contains("backend") &&
                     domain["backend"].as<std::string>() != "mujoco") {
                     error(check, at + "/backend", "this server's rigid body backend is mujoco");
+                }
+                if (name == "electrical" && domain.contains("fidelity") &&
+                    domain["fidelity"].as<std::string>() != "averaged") {
+                    error(check, at + "/fidelity", "this server's electrical fidelity is averaged");
                 }
                 if (name == "sensors" && domain.contains("only")) {
                     warning(check, at + "/only", "not applied yet: every sensor is simulated");

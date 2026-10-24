@@ -121,7 +121,7 @@ points at the driven joint).
 | `elec:inductance` | double | H | — | d-axis (or armature) inductance |
 | `elec:inductanceQ` | double | H | = `inductance` | q-axis inductance (salient machines) |
 | `elec:torqueConstant` | double | N·m/A | — | Torque per q-axis ampere (peak) |
-| `elec:backEmfConstant` | double | V·s/rad | = `torqueConstant` | Line-neutral peak per mechanical rad/s |
+| `elec:backEmfConstant` | double | V·s/rad | = `torqueConstant`/1.5 (pmsm, bldc), = `torqueConstant` (dc_brushed) | Line-neutral peak per mechanical rad/s; an authored value must agree within 3 % |
 | `elec:polePairs` | int | 1 | `1` | |
 | `elec:rotorInertia` | double | kg·m² | `0.0` | Added to the joint's armature inertia |
 | `elec:gearRatio` | double | 1 | `1.0` | Motor revolutions per joint revolution |

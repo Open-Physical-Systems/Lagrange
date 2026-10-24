@@ -60,13 +60,17 @@ it to the one that reads it. Dashed arrows are feedback inputs, which read the w
 step to break a loop. Dashed boxes are substitutes standing in for a disabled domain. For the
 sample AMR:
 
-![Wiring of the sample AMR: the diff-drive controller's torque commands pass through the
-electrical substitute to MuJoCo at 1 ms, which feeds two lidars at 100 ms and the IMU at
-5 ms](../imgs/amr-wiring.svg)
+![Wiring of the sample AMR: the diff-drive controller's torque commands go to the electrical
+network at 100 µs, whose wheel torques MuJoCo reads at 1 ms; MuJoCo feeds two lidars at 100 ms
+and the IMU at 5 ms](../imgs/amr-wiring.svg)
 
-The diff-drive controller writes wheel torque *commands*. The electrical domain turns them into
-the torques MuJoCo reads; in v0.2 that is its ideal substitute (dashed), which passes them
-through unchanged. The controller reads the wheel velocities back as feedback inputs, so the
-loop has a one-step delay instead of a cycle. `core/wrench_sum` adds up external forces on the
+The diff-drive controller writes wheel torque *commands*. The electrical network
+(`electrical/averaged_network`, every 100 µs) turns them into the torques MuJoCo reads, through
+the sample's motors, drives and battery (its overlay file): a command beyond the drive's current
+or the bus voltage is not delivered, and the battery's charge, the bus voltage and the motor
+currents are signals of their own. With `--domain electrical=off`, or a robot without motors,
+the ideal substitute takes its place and passes the commands through unchanged. Both read the
+wheel velocities back as feedback inputs, so each loop has a one-step delay instead of a
+cycle. `core/wrench_sum` adds up external forces on the
 bodies (none in this world). The
 sensors read body poses (and the IMU also twist and acceleration) at their own rates.

@@ -5,7 +5,12 @@ find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
 
-add_library(lagrange_electrical substitutes/src/IdealTorqueSource.cpp)
+add_library(
+    lagrange_electrical
+    substitutes/src/IdealTorqueSource.cpp
+    network/src/Models.cpp
+    network/src/Network.cpp
+)
 lagrange_target_defaults(lagrange_electrical)
 target_include_directories(
     lagrange_electrical
@@ -29,6 +34,12 @@ if(BUILD_TESTING)
     ament_add_gtest(test_ideal_torque_source test/test_ideal_torque_source.cpp)
     target_link_libraries(test_ideal_torque_source lagrange_electrical)
     lagrange_target_defaults(test_ideal_torque_source)
+    ament_add_gtest(test_models test/test_models.cpp)
+    target_link_libraries(test_models lagrange_electrical)
+    lagrange_target_defaults(test_models)
+    ament_add_gtest(test_network test/test_network.cpp TIMEOUT 120)
+    target_link_libraries(test_network lagrange_electrical)
+    lagrange_target_defaults(test_network)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

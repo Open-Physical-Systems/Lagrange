@@ -157,6 +157,9 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 2. Electrical schemas (`ElectricalMotorAPI_1`, `BatteryAPI_1`, `PortAPI_1`, bus, load,
    converter); the stage collects their instances; G2 overlay files (**done** 2026-10-25)
 3. Electrical network module (DC bus, battery ECM, averaged motor drives) and its tests
+   (**done** 2026-10-25; the sample AMR runs on it by default. Owed: the battery check against a
+   published cell dataset, sim-vs-real (Q16), the drive-design review of the motor constants
+   (RFC 0002 resolution 2), converters, rotor inertia in physics: domains/electrical.md §9)
 4. Thermal module (lumped networks), coupled to electrical losses
 5. Coupling stability checks across the electrical, thermal and physics rates
 6. FMU host on `fmilibrary_vendor` (TODO(verify) version and licence)
@@ -177,6 +180,7 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 | #50 SDFormat and MJCF importers | none (stacked on #46) | Rebased; `--spawn` fixed for SDFormat and MJCF too |
 | plugin C ABI v0 (A11) | `core/plugin_abi/` (new: `lagrange_plugin.h`, ABI 0.1, as RFC 0001 and architecture.md §13 specify) | C99 sample built with `-std=c99 -pedantic -Werror`; ASan/UBSan clean |
 | plugin ABI schema queries | `core/plugin_abi/` (host functions answer from `World::schemaInstances`) | C99 sample's schema_probe reads two motors' values |
+| electrical network (fallback doc fix) | `schemas/` (documentation of `elec:backEmfConstant`'s fallback corrected to Kt/1.5 for dq machines; changelog entry) | No attribute changed; the network refuses an authored Ke that disagrees with Kt by over 3 % |
 | electrical schemas and their loading | `schemas/` (new `schemas/electrical` library: six schemas from formats.md §3.1, under the accepted RFC 0002; `schemas/CHANGELOG.md` started) | Two additions to the drafts, listed in the changelog. Motor constant conventions still need the drive-design review RFC 0002 asks for before the network uses them |
 
 ### Known issues

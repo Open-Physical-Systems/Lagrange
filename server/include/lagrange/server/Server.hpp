@@ -32,8 +32,9 @@ struct ServerOptions {
     bool startPaused{false};
     std::string recordPath;                   // MCAP file to record the run to; empty: no recording
     std::uint32_t recordMaxComponents{1024};  // larger signals (3D lidar ranges) are left out
-    /// Domains replaced by their substitute (CLAUDE.md §11.2): "rigid_body" (fixed robot) and
-    /// "sensors" (ground truth); the others have no module yet and are always substituted.
+    /// Domains replaced by their substitute (CLAUDE.md §11.2): "rigid_body" (fixed robot),
+    /// "electrical" (ideal torque source; also used when the robot has no motors) and "sensors"
+    /// (ground truth); the others have no module yet and are always substituted.
     std::set<std::string> substituted;
     /// Parameters of an in-process ros2_control controller manager (update_rate, controller
     /// types); empty: the built-in drive controller instead. Needs the ROS bridge and a URDF
