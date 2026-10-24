@@ -168,6 +168,34 @@ void appendModel(Model& model, const Model& other) {
         w.addSensor(o.sensors.names[s], o.sensors.type[s], map(o.sensors.body[s]),
                     o.sensors.poseInBody[s], o.sensors.rateHz[s], o.sensors.settings[s]);
     }
+    // Schema instances: bodies, joints and sensors got new prims above; any other prim (a bus,
+    // a battery) is added as it was.
+    std::vector<PrimId> worldPrimMap(o.prims.paths.size(), PrimId{kNoIndex});
+    const auto mapPrims = [&worldPrimMap](const std::vector<PrimId>& from,
+                                          const std::vector<PrimId>& to, std::size_t offset) {
+        for (std::size_t i = 0; i < from.size(); ++i) {
+            worldPrimMap[from[i].index] = to[offset + i];
+        }
+    };
+    mapPrims(o.bodies.prim, w.bodies.prim, w.bodies.prim.size() - o.bodies.prim.size());
+    mapPrims(o.joints.prim, w.joints.prim, w.joints.prim.size() - o.joints.prim.size());
+    mapPrims(o.sensors.prim, w.sensors.prim, w.sensors.prim.size() - o.sensors.prim.size());
+    const auto mapPrim = [&](PrimId p) {
+        if (worldPrimMap[p.index].index == kNoIndex) {
+            worldPrimMap[p.index] =
+                w.addPrim(o.prims.paths[p.index], o.prims.instanceNames[p.index]);
+        }
+        return worldPrimMap[p.index];
+    };
+    for (SchemaInstance instance : o.schemaInstances) {
+        instance.prim = mapPrim(instance.prim);
+        for (auto& [name, targets] : instance.relationships) {
+            for (PrimId& target : targets) {
+                target = mapPrim(target);
+            }
+        }
+        w.schemaInstances.push_back(std::move(instance));
+    }
     model.actuatedJoints.insert(model.actuatedJoints.end(), other.actuatedJoints.begin(),
                                 other.actuatedJoints.end());
     model.notes.insert(model.notes.end(), other.notes.begin(), other.notes.end());

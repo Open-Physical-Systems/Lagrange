@@ -403,5 +403,173 @@ def Xform "a" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
     EXPECT_NE(rate.error().find("sensor:rate"), std::string::npos) << rate.error();
 }
 
+/// A wheel on a driven joint, its motor, a battery with a port, a bus and a load: the sample
+/// AMR's power system in miniature (formats.md §4).
+const char* const kPowered = R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 10
+    }
+    def Xform "wheel" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 1
+    }
+    def PhysicsRevoluteJoint "wheel_joint" ( prepend apiSchemas = ["PhysicsDriveAPI:angular"] )
+    {
+        rel physics:body0 = </bot/base>
+        rel physics:body1 = </bot/wheel>
+        uniform token physics:axis = "Y"
+    }
+    def Xform "power"
+    {
+        def Xform "battery" ( prepend apiSchemas = ["BatteryAPI_1", "PortAPI_1:dc_out", "ThermalAPI_1"] )
+        {
+            uniform token elec:battery:chemistry = "lfp"
+            int elec:battery:seriesCells = 16
+            double elec:battery:capacity = 144000
+            double[] elec:battery:ocvSoc = [0, 0.5, 1]
+            double[] elec:battery:ocvVoltage = [2.8, 3.28, 3.45]
+            double elec:battery:r0 = 0.0015
+            double elec:battery:cutoffVoltage = 44.8
+            double elec:battery:maxChargeCurrent = 20
+            double elec:port:dc_out:maxCurrent = 80
+            rel elec:port:dc_out:connectedTo = </bot/power/dc_48v>
+        }
+        def Xform "dc_48v" ( prepend apiSchemas = ["ElectricalBusAPI_1"] )
+        {
+            double elec:bus:capacitance = 0.0047
+            double elec:bus:undervoltageTrip = 42
+            double elec:bus:overvoltageTrip = 60
+        }
+        def Xform "computer" ( prepend apiSchemas = ["ElectricalLoadAPI_1"] )
+        {
+            double elec:load:power = 45
+            rel elec:powerPort = </bot/power/dc_48v>
+        }
+    }
+    def Xform "left_drive_motor" ( prepend apiSchemas = ["ElectricalMotorAPI_1"] )
+    {
+        double elec:windingResistance = 0.12
+        double elec:inductance = 0.00031
+        double elec:torqueConstant = 0.085
+        int elec:polePairs = 4
+        double elec:gearRatio = 20
+        double elec:maxCurrent = 30
+        rel elec:joint = </bot/wheel_joint>
+        rel elec:powerPort = </bot/power/dc_48v>
+    }
+}
+)";
+
+const SchemaInstance* only(const World& world, const std::string& schema) {
+    const std::vector<const SchemaInstance*> found = WorldView(world).instancesOf(schema);
+    EXPECT_EQ(found.size(), 1U) << schema;
+    return found.empty() ? nullptr : found[0];
+}
+
+TEST(StageReader, CollectsTheElectricalSchemas) {
+    auto model = loadStage(writeText("powered.usda", kPowered).string());
+    ASSERT_TRUE(model) << model.error();
+    const World& w = model->world;
+    const WorldView view(w);
+
+    const SchemaInstance* motor = only(w, "ElectricalMotorAPI_1");
+    ASSERT_NE(motor, nullptr);
+    EXPECT_EQ(view.signalInstanceName(motor->prim), "left_drive_motor");
+    EXPECT_EQ(motor->real("elec:torqueConstant"), 0.085);
+    EXPECT_EQ(motor->integer("elec:polePairs"), 4);
+    EXPECT_EQ(motor->real("elec:gearRatio"), 20.0);
+    EXPECT_EQ(motor->real("elec:resistanceTempCoeff"), 0.00393);  // the schema's fallback
+    EXPECT_EQ(motor->token("elec:motorType"), "pmsm");
+    EXPECT_FALSE(motor->real("elec:inductanceQ"));  // no fallback, not authored
+    // elec:joint resolves to the world joint, so the network finds its signals by name.
+    ASSERT_EQ(motor->rel("elec:joint").size(), 1U);
+    EXPECT_EQ(motor->rel("elec:joint")[0], w.joints.prim[1]);
+    EXPECT_EQ(view.signalInstanceName(motor->rel("elec:joint")[0]), "wheel_joint");
+
+    const SchemaInstance* bus = only(w, "ElectricalBusAPI_1");
+    ASSERT_NE(bus, nullptr);
+    EXPECT_EQ(view.signalInstanceName(bus->prim), "dc_48v");
+    EXPECT_EQ(view.primPath(bus->prim), "/bot/power/dc_48v");
+    EXPECT_EQ(motor->rel("elec:powerPort")[0], bus->prim);
+
+    const SchemaInstance* battery = only(w, "BatteryAPI_1");
+    ASSERT_NE(battery, nullptr);
+    EXPECT_EQ(battery->realArray("elec:battery:ocvVoltage").size(), 3U);
+    EXPECT_EQ(battery->integer("elec:battery:parallelCells"), 1);
+    EXPECT_EQ(battery->token("elec:battery:chemistry"), "lfp");
+
+    // A multiple-apply port keeps its instance name and namespaced properties.
+    const SchemaInstance* port = only(w, "PortAPI_1");
+    ASSERT_NE(port, nullptr);
+    EXPECT_EQ(port->instance, "dc_out");
+    EXPECT_EQ(port->prim, battery->prim);
+    EXPECT_EQ(port->real("elec:port:dc_out:maxCurrent"), 80.0);
+    EXPECT_EQ(port->token("elec:port:dc_out:kind"), "dc");
+    ASSERT_EQ(port->rel("elec:port:dc_out:connectedTo").size(), 1U);
+    EXPECT_EQ(port->rel("elec:port:dc_out:connectedTo")[0], bus->prim);
+
+    EXPECT_EQ(only(w, "ElectricalLoadAPI_1")->real("elec:load:power"), 45.0);
+    // ThermalAPI_1 is not defined until the thermal library exists: noted, not an error.
+    EXPECT_TRUE(std::any_of(model->notes.begin(), model->notes.end(), [](const std::string& n) {
+        return n.find("ThermalAPI_1") != std::string::npos;
+    }));
+}
+
+TEST(StageReader, SchemaInstancesSurviveAppendingModels) {
+    auto first = loadStage(writeText("powered.usda", kPowered).string());
+    auto second = loadStage(writeText("powered.usda", kPowered).string());
+    ASSERT_TRUE(first && second);
+    appendModel(*first, *second);
+    const World& w = first->world;
+    const WorldView view(w);
+    const std::vector<const SchemaInstance*> motors = view.instancesOf("ElectricalMotorAPI_1");
+    ASSERT_EQ(motors.size(), 2U);
+    // The second motor drives the second robot's wheel joint and draws from its own bus.
+    EXPECT_EQ(motors[1]->rel("elec:joint")[0], w.joints.prim[3]);
+    const std::vector<const SchemaInstance*> buses = view.instancesOf("ElectricalBusAPI_1");
+    ASSERT_EQ(buses.size(), 2U);
+    EXPECT_NE(buses[0]->prim, buses[1]->prim);
+    EXPECT_EQ(motors[1]->rel("elec:powerPort")[0], buses[1]->prim);
+    EXPECT_EQ(view.signalInstanceName(motors[1]->prim), "left_drive_motor");
+}
+
+TEST(StageReader, RefusesBadSchemaValuesNamingThePrims) {
+    const auto with = [](std::string text, const std::string& from, const std::string& to) {
+        text.replace(text.find(from), from.size(), to);
+        return text;
+    };
+    std::string bad = kPowered;
+    bad = with(bad, "\"lfp\"", "\"nickel_iron\"");
+    bad = with(bad, "[2.8, 3.28, 3.45]", "[2.8, 3.45]");
+    bad = with(bad, "double elec:gearRatio = 20",
+               "double elec:gearRatio = 20\n        double elec:gearEfficiency = 1.2");
+    bad = with(bad, "rel elec:joint = </bot/wheel_joint>", "rel elec:joint = </bot/wheel>");
+    bad = with(bad, "rel elec:powerPort = </bot/power/dc_48v>\n    }\n}",
+               "rel elec:powerPort = </bot/power/dc_12v>\n    }\n}");
+    auto model = loadStage(writeText("bad_power.usda", bad).string());
+    ASSERT_FALSE(model);
+    const std::string& e = model.error();
+    // Every problem at once, each with its prim.
+    EXPECT_NE(e.find("/bot/power/battery: elec:battery:chemistry is \"nickel_iron\""),
+              std::string::npos)
+        << e;
+    EXPECT_NE(e.find("ocvSoc and elec:battery:ocvVoltage differ in length (3 and 2)"),
+              std::string::npos)
+        << e;
+    EXPECT_NE(e.find("/bot/left_drive_motor: elec:gearEfficiency is 1.2"), std::string::npos) << e;
+    EXPECT_NE(e.find("elec:joint targets /bot/wheel, which is not a joint"), std::string::npos)
+        << e;
+    EXPECT_NE(e.find("targets /bot/power/dc_12v, which is not in the stage"), std::string::npos)
+        << e;
+}
+
 }  // namespace
 }  // namespace lagrange::stage

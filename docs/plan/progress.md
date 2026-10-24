@@ -154,8 +154,8 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 
 1. Torque commands: controllers write `joint/<j>/torque_command`; the electrical domain turns it
    into `joint/<j>/torque` (its ideal substitute until the network exists). **Done** (2026-10-25)
-2. Electrical schemas (`ElectricalMotorAPI_v1`, `BatteryAPI_v1`, `PortAPI_v1`); the stage
-   collects their instances; G2 overlay files
+2. Electrical schemas (`ElectricalMotorAPI_1`, `BatteryAPI_1`, `PortAPI_1`, bus, load,
+   converter); the stage collects their instances (**done** 2026-10-25); G2 overlay files
 3. Electrical network module (DC bus, battery ECM, averaged motor drives) and its tests
 4. Thermal module (lumped networks), coupled to electrical losses
 5. Coupling stability checks across the electrical, thermal and physics rates
@@ -177,6 +177,7 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 | #50 SDFormat and MJCF importers | none (stacked on #46) | Rebased; `--spawn` fixed for SDFormat and MJCF too |
 | plugin C ABI v0 (A11) | `core/plugin_abi/` (new: `lagrange_plugin.h`, ABI 0.1, as RFC 0001 and architecture.md §13 specify) | C99 sample built with `-std=c99 -pedantic -Werror`; ASan/UBSan clean |
 | plugin ABI schema queries | `core/plugin_abi/` (host functions answer from `World::schemaInstances`) | C99 sample's schema_probe reads two motors' values |
+| electrical schemas and their loading | `schemas/` (new `schemas/electrical` library: six schemas from formats.md §3.1, under the accepted RFC 0002; `schemas/CHANGELOG.md` started) | Two additions to the drafts, listed in the changelog. Motor constant conventions still need the drive-design review RFC 0002 asks for before the network uses them |
 
 ### Known issues
 

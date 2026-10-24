@@ -1,0 +1,302 @@
+#usda 1.0
+(
+    """Lagrange electrical schemas (RFC 0002, docs/design/formats.md section 3.1). Codeless: the
+    stage loader reads the attributes by name. Units: the lagrangeUnit field of each attribute.
+    Topology is relationships on the component prims: a motor's elec:powerPort, a load's
+    elec:powerPort and a port's connectedTo name the bus (or port) they draw from."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeElectrical"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "PortAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """An electrical terminal pair on a component. Multiple-apply: the instance name is the
+    port name, e.g. PortAPI_1:dc_out gives elec:port:dc_out:*."""
+    customData = {
+        token apiSchemaType = "multipleApply"
+        token propertyNamespacePrefix = "elec:port"
+    }
+)
+{
+    uniform token kind = "dc" (
+        allowedTokens = ["dc", "ac1", "ac3", "signal"]
+        doc = "What the port carries."
+    )
+    double nominalVoltage (
+        lagrangeUnit = "V"
+        doc = "Rated voltage, for sanity checks."
+    )
+    double maxCurrent (
+        lagrangeUnit = "A"
+        doc = "Continuous current rating."
+    )
+    rel connectedTo (
+        doc = "Ports or bus prims on the same net."
+    )
+    double wireResistance = 0 (
+        lagrangeUnit = "ohm"
+        doc = "Lumped harness resistance to the net."
+    )
+    double wireInductance = 0 (
+        lagrangeUnit = "H"
+        doc = "Lumped harness inductance to the net."
+    )
+}
+
+class "BatteryAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A battery pack: equivalent-circuit model with an open-circuit voltage curve, a series
+    resistance and two RC pairs. Per-cell values; the pack is seriesCells x parallelCells."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token elec:battery:chemistry = "li_ion_nmc" (
+        allowedTokens = ["li_ion_nmc", "lfp", "lead_acid", "custom"]
+        doc = "Cell chemistry, for reports and defaults of later models."
+    )
+    int elec:battery:seriesCells (
+        lagrangeUnit = "1"
+        doc = "Cells in series. Required."
+    )
+    int elec:battery:parallelCells = 1 (
+        lagrangeUnit = "1"
+        doc = "Cells in parallel."
+    )
+    double elec:battery:capacity (
+        lagrangeUnit = "C"
+        doc = "Rated charge of the pack (1 Ah = 3600 C). Required."
+    )
+    double elec:battery:initialSoc = 1 (
+        lagrangeUnit = "1"
+        doc = "State of charge at the start, 0 to 1."
+    )
+    double[] elec:battery:ocvSoc (
+        lagrangeUnit = "1"
+        doc = "State-of-charge breakpoints, ascending. Required."
+    )
+    double[] elec:battery:ocvVoltage (
+        lagrangeUnit = "V"
+        doc = "Cell open-circuit voltage at each breakpoint of ocvSoc. Required."
+    )
+    double elec:battery:r0 (
+        lagrangeUnit = "ohm"
+        doc = "Cell series resistance at referenceTemperature. Required."
+    )
+    double elec:battery:r1 = 0 (
+        lagrangeUnit = "ohm"
+        doc = "First RC pair's resistance, per cell."
+    )
+    double elec:battery:c1 = 0 (
+        lagrangeUnit = "F"
+        doc = "First RC pair's capacitance, per cell."
+    )
+    double elec:battery:r2 = 0 (
+        lagrangeUnit = "ohm"
+        doc = "Second RC pair's resistance, per cell."
+    )
+    double elec:battery:c2 = 0 (
+        lagrangeUnit = "F"
+        doc = "Second RC pair's capacitance, per cell."
+    )
+    double elec:battery:referenceTemperature = 298.15 (
+        lagrangeUnit = "K"
+        doc = "Temperature at which r0 is given."
+    )
+    double elec:battery:r0TempCoeff = 0 (
+        lagrangeUnit = "1/K"
+        doc = "Fractional change of r0 per kelvin."
+    )
+    double elec:battery:cutoffVoltage (
+        lagrangeUnit = "V"
+        doc = "Pack under-voltage cut-off. Required."
+    )
+    double elec:battery:maxChargeCurrent (
+        lagrangeUnit = "A"
+        doc = "Regeneration limit; current beyond it raises the bus voltage. Required."
+    )
+    asset elec:battery:behaviorModel (
+        doc = "Optional FMU that replaces the built-in model."
+    )
+}
+
+class "ElectricalMotorAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """An electric motor with its drive (inverter and current control), averaged model.
+    Constants use the peak-amplitude dq convention: torqueConstant in N.m per peak q-axis
+    ampere, backEmfConstant line-neutral peak volts per mechanical rad/s (RFC 0002 resolution
+    2; docs/design/domains/electrical.md section 2)."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token elec:motorType = "pmsm" (
+        allowedTokens = ["pmsm", "bldc", "dc_brushed"]
+        doc = "Machine type."
+    )
+    double elec:windingResistance (
+        lagrangeUnit = "ohm"
+        doc = "Phase (or armature) resistance at referenceTemperature. Required."
+    )
+    double elec:inductance (
+        lagrangeUnit = "H"
+        doc = "d-axis (or armature) inductance. Required."
+    )
+    double elec:inductanceQ (
+        lagrangeUnit = "H"
+        doc = "q-axis inductance of a salient machine; unauthored: equal to inductance."
+    )
+    double elec:torqueConstant (
+        lagrangeUnit = "N.m/A"
+        doc = "Torque per peak q-axis ampere, at the motor shaft. Required."
+    )
+    double elec:backEmfConstant (
+        lagrangeUnit = "V.s/rad"
+        doc = "Line-neutral peak volts per mechanical rad/s; unauthored: equal to torqueConstant."
+    )
+    int elec:polePairs = 1 (
+        lagrangeUnit = "1"
+        doc = "Pole pairs."
+    )
+    double elec:rotorInertia = 0 (
+        lagrangeUnit = "kg.m2"
+        doc = "Rotor inertia at the motor shaft; added to the joint's armature inertia."
+    )
+    double elec:gearRatio = 1 (
+        lagrangeUnit = "1"
+        doc = "Motor revolutions per joint revolution."
+    )
+    double elec:gearEfficiency = 1 (
+        lagrangeUnit = "1"
+        doc = "Gear efficiency, 0 to 1."
+    )
+    double elec:maxCurrent (
+        lagrangeUnit = "A"
+        doc = "Drive current limit (peak). Required."
+    )
+    double elec:referenceTemperature = 298.15 (
+        lagrangeUnit = "K"
+        doc = "Temperature at which windingResistance is given."
+    )
+    double elec:resistanceTempCoeff = 0.00393 (
+        lagrangeUnit = "1/K"
+        doc = "Fractional change of resistance per kelvin; the default is annealed copper at 20 C."
+    )
+    uniform token elec:controlMode = "torque" (
+        allowedTokens = ["torque", "velocity", "voltage"]
+        doc = "What the joint's torque_command signal means."
+    )
+    double elec:currentLoopBandwidth = 6283 (
+        lagrangeUnit = "rad/s"
+        doc = "Current-loop bandwidth of the drive (6283 rad/s is 1 kHz)."
+    )
+    double elec:pwmFrequency = 20000 (
+        lagrangeUnit = "Hz"
+        doc = "Switching frequency, for the ripple estimate and the EMI spectrum."
+    )
+    uniform token elec:rotorIntegration = "mechanical" (
+        allowedTokens = ["mechanical", "electrical"]
+        doc = "Which domain integrates the rotor speed (architecture section 8)."
+    )
+    asset elec:behaviorModel (
+        doc = "Optional FMU that replaces the built-in model."
+    )
+    rel elec:joint (
+        doc = "The driven joint. Required."
+    )
+    rel elec:powerPort (
+        doc = "The bus or port the drive draws from. Required."
+    )
+}
+
+class "ElectricalBusAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A DC bus: one net with its capacitance and protection thresholds, on a prim of its
+    own (RFC 0002 resolution 1). Components connect to it through relationships."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double elec:bus:capacitance (
+        lagrangeUnit = "F"
+        doc = "Bus capacitance; unauthored: 1 uF with a warning."
+    )
+    double elec:bus:undervoltageTrip (
+        lagrangeUnit = "V"
+        doc = "Below this the bus browns out and its loads switch off. Required."
+    )
+    double elec:bus:overvoltageTrip (
+        lagrangeUnit = "V"
+        doc = "Above this the drives trip. Required."
+    )
+    double elec:bus:brakeResistor = 0 (
+        lagrangeUnit = "ohm"
+        doc = "Brake (chopper) resistor switched in above overvoltageTrip; 0: none."
+    )
+}
+
+class "ElectricalLoadAPI_1" (
+    inherits = </APISchemaBase>
+    doc = "A load on a bus: a computer, a sensor, a heater."
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token elec:load:model = "constant_power" (
+        allowedTokens = ["constant_power", "resistive", "signal"]
+        doc = """constant_power draws power; resistive draws power at nominal voltage and scales
+        with the square of the voltage; signal draws the load's power_demand input."""
+    )
+    double elec:load:power (
+        lagrangeUnit = "W"
+        doc = "Power drawn (resistive: at the bus's nominal voltage). Required."
+    )
+    double elec:load:minVoltage = 0 (
+        lagrangeUnit = "V"
+        doc = "Below this the load switches off (powered = false)."
+    )
+    rel elec:powerPort (
+        doc = "The bus or port the load draws from. Required."
+    )
+}
+
+class "ElectricalConverterAPI_1" (
+    inherits = </APISchemaBase>
+    doc = "A DC-DC converter from an input bus to an output bus."
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double elec:conv:outputVoltage (
+        lagrangeUnit = "V"
+        doc = "Regulated output voltage. Required."
+    )
+    double elec:conv:efficiency = 1 (
+        lagrangeUnit = "1"
+        doc = "Power efficiency, 0 to 1."
+    )
+    double elec:conv:maxOutputCurrent (
+        lagrangeUnit = "A"
+        doc = "Output current limit. Required."
+    )
+    rel elec:conv:input (
+        doc = "The bus or port the converter draws from. Required."
+    )
+    rel elec:conv:output (
+        doc = "The bus or port the converter feeds. Required."
+    )
+}
