@@ -160,12 +160,97 @@ static const lagrange_module_api kModule = {
     last_error,
 };
 
+/* A second module: one output per prim carrying TestMotorAPI, named after the prim and set
+ * to its elec:torqueConstant. It exercises the schema queries of the host API. */
+typedef struct probe {
+    const lagrange_host_api* host;
+    uint32_t count;
+    uint32_t out[MAX_JOINTS];
+    double value[MAX_JOINTS];
+} probe;
+
+static void* probe_create(const lagrange_host_api* host) {
+    probe* self = (probe*)calloc(1, sizeof(probe));
+    if (self != NULL) {
+        self->host = host;
+    }
+    return self;
+}
+
+static lagrange_status probe_declare(void* p, const lagrange_world* world,
+                                     const lagrange_config* config, lagrange_declarer* declarer) {
+    probe* self = (probe*)p;
+    const char* schema = "TestMotorAPI";
+    uint32_t i;
+    (void)config;
+    self->count = self->host->world_schema_instance_count(world, schema);
+    if (self->count > MAX_JOINTS) {
+        return LAGRANGE_INVALID_CONFIG;
+    }
+    for (i = 0; i < self->count; ++i) {
+        char name[160];
+        lagrange_signal_spec spec;
+        memset(&spec, 0, sizeof spec);
+        spec.struct_size = sizeof spec;
+        spec.type = LAGRANGE_SCALAR;
+        spec.unit.scale = 1.0;
+        spec.name = name;
+        snprintf(name, sizeof name, "test/%s/torque_constant",
+                 self->host->world_schema_instance_name(world, schema, i));
+        self->out[i] = self->host->declare_output(declarer, &spec);
+        if (!self->host->world_schema_real(world, schema, i, "elec:torqueConstant",
+                                           &self->value[i])) {
+            self->value[i] = -1.0;
+        }
+    }
+    return LAGRANGE_OK;
+}
+
+static lagrange_status probe_init(void* p, const lagrange_world* world,
+                                  const lagrange_config* config, lagrange_bus* bus) {
+    probe* self = (probe*)p;
+    uint32_t i;
+    (void)world;
+    (void)config;
+    for (i = 0; i < self->count; ++i) {
+        self->host->bus_write(bus, self->out[i], 0, self->value[i]);
+    }
+    return LAGRANGE_OK;
+}
+
+static lagrange_status probe_step(void* p, const lagrange_step_context* context,
+                                  lagrange_bus* bus) {
+    (void)context;
+    return probe_init(p, NULL, NULL, bus);
+}
+
+static const lagrange_module_api kProbe = {
+    sizeof(lagrange_module_api),
+    "test",
+    "schema_probe",
+    0,
+    1,
+    0,
+    1,
+    0,
+    1000000,
+    probe_create,
+    destroy,
+    probe_declare,
+    probe_init,
+    probe_step,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+};
+
 LAGRANGE_EXPORT const lagrange_module_api* lagrange_plugin_get_module(uint32_t host_abi_major,
                                                                       uint32_t host_abi_minor,
                                                                       uint32_t index) {
     (void)host_abi_minor;
-    if (host_abi_major != SAMPLE_ABI_MAJOR || index != 0) {
+    if (host_abi_major != SAMPLE_ABI_MAJOR || index > 1) {
         return NULL;
     }
-    return &kModule;
+    return index == 0 ? &kModule : &kProbe;
 }

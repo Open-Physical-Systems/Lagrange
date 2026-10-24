@@ -75,8 +75,9 @@ ModuleConfig wheel() {
 TEST(PluginAbi, TheC99SampleLoads) {
     auto library = PluginLibrary::open(LAGRANGE_SAMPLE_PLUGIN);
     ASSERT_TRUE(library) << library.error();
-    ASSERT_EQ(library->size(), 1U);
+    ASSERT_EQ(library->size(), 2U);
     EXPECT_EQ(library->label(0), "electrical/ideal_torque_source");
+    EXPECT_EQ(library->label(1), "test/schema_probe");
     const auto module = library->create(0);
     ASSERT_NE(module, nullptr);
     EXPECT_TRUE(module->info().isSubstitute);
@@ -88,8 +89,8 @@ TEST(PluginAbi, ItRunsInTheSchedulerBetweenCppModules) {
     auto library = PluginLibrary::open(LAGRANGE_SAMPLE_PLUGIN);
     ASSERT_TRUE(library) << library.error();
     Scheduler scheduler(SchedulerOptions{.deterministic = true});
-    scheduler.add(std::make_unique<Probe>("command", "joint/wheel/torque_command", units::N_m,
-                                          true, [](double t) { return 2.0 * t; }));
+    scheduler.add(std::make_unique<Probe>("command", "joint/wheel/torque_command", units::N_m, true,
+                                          [](double t) { return 2.0 * t; }));
     scheduler.add(library->create(0), wheel());
     auto sink = std::make_unique<Probe>("sink", "joint/wheel/torque", units::N_m, false);
     Probe* seen = sink.get();
@@ -109,8 +110,8 @@ TEST(PluginAbi, UnitsAreCheckedAcrossTheAbi) {
     auto library = PluginLibrary::open(LAGRANGE_SAMPLE_PLUGIN);
     ASSERT_TRUE(library) << library.error();
     Scheduler scheduler;
-    scheduler.add(std::make_unique<Probe>("command", "joint/wheel/torque_command", units::N_m,
-                                          true, [](double) { return 0.0; }));
+    scheduler.add(std::make_unique<Probe>("command", "joint/wheel/torque_command", units::N_m, true,
+                                          [](double) { return 0.0; }));
     scheduler.add(library->create(0), wheel());
     // Reads the plugin's N·m output as a force.
     scheduler.add(std::make_unique<Probe>("sink", "joint/wheel/torque", units::N, false));
@@ -127,8 +128,8 @@ TEST(PluginAbi, ItsStateIsSavedAndRestored) {
     ASSERT_TRUE(library) << library.error();
     const World world;
     const auto build = [&](Scheduler& scheduler) {
-        scheduler.add(std::make_unique<Probe>("command", "joint/wheel/torque_command",
-                                              units::N_m, true, [](double t) { return t; }));
+        scheduler.add(std::make_unique<Probe>("command", "joint/wheel/torque_command", units::N_m,
+                                              true, [](double t) { return t; }));
         scheduler.add(library->create(0), wheel());
         return static_cast<bool>(scheduler.wire(WorldView(world)));
     };
@@ -155,6 +156,34 @@ TEST(PluginAbi, BadLibrariesAreRefusedWithAReason) {
     ASSERT_FALSE(other);
     EXPECT_NE(other.error().find("offers no module for plugin ABI 0.x"), std::string::npos)
         << other.error();
+}
+
+TEST(PluginAbi, SchemaValuesReachThePlugin) {
+    auto library = PluginLibrary::open(LAGRANGE_SAMPLE_PLUGIN);
+    ASSERT_TRUE(library) << library.error();
+    World world;
+    const PrimId left = world.addPrim("/amr/left_drive_motor", "left_drive_motor");
+    const PrimId right = world.addPrim("/amr/right_drive_motor", "right_drive_motor");
+    world.addPrim("/amr/battery", "battery");
+    SchemaInstance a;
+    a.schema = "TestMotorAPI";
+    a.prim = left;
+    a.reals["elec:torqueConstant"] = 0.085;
+    SchemaInstance b = a;
+    b.prim = right;
+    b.reals["elec:torqueConstant"] = 0.09;
+    SchemaInstance other;  // another schema: not counted
+    other.schema = "TestBatteryAPI";
+    world.schemaInstances = {a, other, b};
+
+    Scheduler scheduler;
+    scheduler.add(library->create(1));
+    auto wired = scheduler.wire(WorldView(world));
+    ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    const SignalBus& bus = scheduler.bus();
+    EXPECT_EQ(bus.read(bus.find("test/left_drive_motor/torque_constant")), 0.085);
+    EXPECT_EQ(bus.read(bus.find("test/right_drive_motor/torque_constant")), 0.09);
+    EXPECT_FALSE(bus.find("test/battery/torque_constant").valid());
 }
 
 }  // namespace
