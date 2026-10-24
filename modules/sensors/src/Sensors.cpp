@@ -107,39 +107,6 @@ double box(const Vec3& o, const Vec3& d, const Vec3& half) {
     return exit > 0.0 ? exit : kNoHit;
 }
 
-/// The face planes of a hull, each turned so that the hull's centroid is inside: unit outward
-/// normal n and offset c with n·x <= c inside. Independent of the triangles' winding.
-void facePlanes(const ConvexHull& hull, std::vector<std::array<double, 4>>& out) {
-    out.clear();
-    Vec3 centre{};
-    for (const auto& p : hull.points) {
-        for (std::size_t i = 0; i < 3; ++i) {
-            centre.at(i) += p.at(i) / static_cast<double>(hull.points.size());
-        }
-    }
-    for (const auto& t : hull.triangles) {
-        const Vec3& a = hull.points.at(t[0]);
-        const Vec3& b = hull.points.at(t[1]);
-        const Vec3& c = hull.points.at(t[2]);
-        const Vec3 u{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
-        const Vec3 v{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
-        Vec3 n{u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
-        const double length = std::sqrt(dot(n, n));
-        if (length <= 0.0) {
-            continue;  // a degenerate triangle has no plane
-        }
-        for (double& x : n) {
-            x /= length;
-        }
-        double offset = dot(n, a);
-        if (dot(n, centre) > offset) {
-            n = {-n[0], -n[1], -n[2]};
-            offset = -offset;
-        }
-        out.push_back({n[0], n[1], n[2], offset});
-    }
-}
-
 /// Ray against a convex polyhedron, as the intersection of its faces' half-spaces.
 double convexHull(const Vec3& o, const Vec3& d, const ConvexHull& hull) {
     thread_local std::vector<std::array<double, 4>> planes;
@@ -176,6 +143,37 @@ double convexHull(const Vec3& o, const Vec3& d, const ConvexHull& hull) {
 }
 
 }  // namespace
+
+void facePlanes(const ConvexHull& hull, std::vector<std::array<double, 4>>& out) {
+    out.clear();
+    Vec3 centre{};
+    for (const auto& p : hull.points) {
+        for (std::size_t i = 0; i < 3; ++i) {
+            centre.at(i) += p.at(i) / static_cast<double>(hull.points.size());
+        }
+    }
+    for (const auto& t : hull.triangles) {
+        const Vec3& a = hull.points.at(t[0]);
+        const Vec3& b = hull.points.at(t[1]);
+        const Vec3& c = hull.points.at(t[2]);
+        const Vec3 u{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+        const Vec3 v{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+        Vec3 n{u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
+        const double length = std::sqrt(dot(n, n));
+        if (length <= 0.0) {
+            continue;  // a degenerate triangle has no plane
+        }
+        for (double& x : n) {
+            x /= length;
+        }
+        double offset = dot(n, a);
+        if (dot(n, centre) > offset) {
+            n = {-n[0], -n[1], -n[2]};
+            offset = -offset;
+        }
+        out.push_back({n[0], n[1], n[2], offset});
+    }
+}
 
 double raycast(ShapeType shape, const std::array<double, 3>& size, const Pose& shapePose,
                const std::array<double, 3>& origin, const std::array<double, 3>& dir,
@@ -334,14 +332,13 @@ public:
         buffer_.assign(samples_, kNoHit);
         nearest_.assign(samples_, kNoHit);
         casterShapes_.resize(shapes_.size());
-        if (rayContext_ && !groundTruth_ &&
-            std::ranges::count(colliders.shape, ShapeType::ConvexHull) != 0) {
-            return Status::error(StatusCode::Unsupported,
-                                 "lidar " + name_ +
-                                     ": the GPU lidar kernel has no convex hulls yet; cast on "
-                                     "the CPU (--lidar cpu)");
-        }
         if (rayContext_ && !groundTruth_) {
+            hullFaces_.assign(shapes_.size(), {});
+            for (std::size_t k = 0; k < shapes_.size(); ++k) {
+                if (shapes_[k].hull != nullptr) {
+                    facePlanes(*shapes_[k].hull, hullFaces_[k]);
+                }
+            }
             std::vector<std::array<float, 3>> directions(samples_);
             for (std::uint32_t i = 0; i < samples_; ++i) {
                 const Vec3 d = layout_.direction(i);
@@ -425,6 +422,7 @@ private:
                 out.position[i] = placed_[k].position[i] - sensor.position[i];
             }
             out.orientation = placed_[k].orientation;
+            out.faces = hullFaces_[k];
         }
         scan_->cast(castShapes_, sensor.orientation, hits_);
     }
@@ -452,6 +450,7 @@ private:
     std::shared_ptr<gpu::RayContext> rayContext_;  // null: cast on the CPU
     std::unique_ptr<gpu::RayScan> scan_;
     std::vector<gpu::CastShape> castShapes_;
+    std::vector<std::vector<std::array<double, 4>>> hullFaces_;  // per shape, for the GPU
     std::vector<gpu::CastHit> hits_;
 };
 

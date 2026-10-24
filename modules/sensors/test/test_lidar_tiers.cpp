@@ -5,6 +5,7 @@
 #include "lagrange/gpu/RayCaster.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/Sensors.hpp"
+#include "lagrange/world/Model.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
@@ -162,6 +163,104 @@ TEST(LidarTiers, RandomScenesAgreeWithTheCpuReference) {
     EXPECT_EQ(outOfTolerance, 0U) << "worst " << worst << " m";
 }
 
+/// An octahedron with half-diagonals `half`: a hull whose faces are not axis-aligned.
+ConvexHull octahedron(const std::array<double, 3>& half) {
+    ConvexHull hull;
+    hull.points = {{half[0], 0, 0},  {-half[0], 0, 0}, {0, half[1], 0},
+                   {0, -half[1], 0}, {0, 0, half[2]},  {0, 0, -half[2]}};
+    for (const std::uint32_t x : {0U, 1U}) {
+        for (const std::uint32_t y : {2U, 3U}) {
+            for (const std::uint32_t z : {4U, 5U}) {
+                hull.triangles.push_back({x, y, z});  // the winding does not matter
+            }
+        }
+    }
+    return hull;
+}
+
+// Convex hulls (sensors.md §7 tier agreement): the kernel's face-plane test against the CPU's.
+TEST(LidarTiers, ConvexHullsAgreeWithTheCpuReference) {
+    const auto gpuContext = context();
+    if (!gpuContext) {
+        GTEST_SKIP() << "no usable Vulkan device";
+    }
+    std::mt19937_64 random(20261025);
+    std::uniform_real_distribution<double> unit(0.0, 1.0);
+    std::uniform_real_distribution<double> spread(-10.0, 10.0);
+    std::vector<ConvexHull> hulls;
+    std::vector<Pose> poses;
+    for (int k = 0; k < 200; ++k) {
+        const std::array<double, 3> half{0.05 + unit(random), 0.05 + unit(random),
+                                         0.05 + unit(random)};
+        hulls.push_back(k % 2 == 0 ? octahedron(half) : boxHull(half));
+        poses.push_back(
+            {{spread(random), spread(random), 2.0 * unit(random)}, randomRotation(random)});
+    }
+    std::vector<std::vector<std::array<double, 4>>> faces(hulls.size());
+    std::vector<gpu::CastShape> shapes(hulls.size());
+    const Pose sensor{{0.37, -0.21, 0.52}, randomRotation(random)};
+    for (std::size_t k = 0; k < hulls.size(); ++k) {
+        facePlanes(hulls[k], faces[k]);
+        shapes[k].type = static_cast<std::uint32_t>(ShapeType::ConvexHull);
+        for (const auto& p : hulls[k].points) {
+            for (std::size_t j = 0; j < 3; ++j) {
+                shapes[k].size.at(j) = std::max(shapes[k].size.at(j), std::abs(p.at(j)));
+            }
+        }
+        for (std::size_t j = 0; j < 3; ++j) {
+            shapes[k].position.at(j) = poses[k].position.at(j) - sensor.position.at(j);
+        }
+        shapes[k].orientation = poses[k].orientation;
+        shapes[k].faces = faces[k];
+    }
+
+    std::vector<std::array<float, 3>> beams(50'000);
+    std::normal_distribution<double> normal;
+    for (auto& beam : beams) {
+        std::array<double, 3> d{normal(random), normal(random), normal(random)};
+        const double n = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        for (std::size_t j = 0; j < 3; ++j) {
+            beam.at(j) = static_cast<float>(d.at(j) / n);
+        }
+    }
+    gpu::RayScan scan(gpuContext, beams);
+    std::vector<gpu::CastHit> hits(beams.size());
+    scan.cast(shapes, sensor.orientation, hits);
+
+    std::size_t same = 0, returns = 0, outOfTolerance = 0;
+    double worst = 0.0;
+    for (std::size_t i = 0; i < beams.size(); ++i) {
+        const std::array<double, 3> dir =
+            rotate(sensor.orientation, {beams[i][0], beams[i][1], beams[i][2]});
+        double range = kNoHit;
+        std::uint32_t shape = gpu::kNoShape;
+        for (std::size_t k = 0; k < hulls.size(); ++k) {
+            const double t = raycast(ShapeType::ConvexHull, shapes[k].size, poses[k],
+                                     sensor.position, dir, &hulls[k]);
+            if (t < range) {
+                range = t;
+                shape = static_cast<std::uint32_t>(k);
+            }
+        }
+        returns += std::isinf(range) ? 0 : 1;
+        if (hits[i].shape != shape) {
+            continue;
+        }
+        ++same;
+        if (!std::isinf(range)) {
+            const double error = std::abs(static_cast<double>(hits[i].range) - range);
+            worst = std::max(worst, error);
+            outOfTolerance += error > kRangeToleranceM ? 1 : 0;
+        }
+    }
+    const double fraction = static_cast<double>(same) / static_cast<double>(beams.size());
+    std::printf("hulls on %s: same shape for %.4f %% of %zu beams (%zu returns), worst %.3g m\n",
+                gpuContext->deviceName().c_str(), 100.0 * fraction, beams.size(), returns, worst);
+    EXPECT_GT(returns, beams.size() / 10) << "the hulls are hit";
+    EXPECT_GT(fraction, kSameShapeFraction);
+    EXPECT_EQ(outOfTolerance, 0U) << "worst " << worst << " m";
+}
+
 World room() {
     World world;
     world.addCollider(kWorldBody, ShapeType::Plane, {0, 0, 0}, Pose{}, 1.0);
@@ -171,6 +270,7 @@ World room() {
     world.addCollider(kWorldBody, ShapeType::Box, {0.1, 2.0, 1.0}, {{-3.1, 0, 1}}, 1.0);
     world.addCollider(kWorldBody, ShapeType::Cylinder, {0.3, 0.5, 0}, {{1.5, -1.0, 0.5}}, 1.0);
     world.addCollider(kWorldBody, ShapeType::Sphere, {0.4, 0, 0}, {{-1.5, 1.0, 0.4}}, 1.0);
+    world.addHullCollider(kWorldBody, octahedron({0.4, 0.3, 0.5}), {{1.0, 1.2, 0.5}}, 1.0);
     const BodyId post = world.addBody("post", kWorldBody, {{0.2, 0.1, 0}}, 0.0, {}, {});
     world.addSensor("scanner", SensorType::Lidar, post, {{0, 0, 0.5}}, 10.0,
                     {{"samples", 360.0},

@@ -13,6 +13,7 @@ static const uint kSphere = 1;
 static const uint kCapsule = 2;
 static const uint kCylinder = 3;
 static const uint kBox = 4;
+static const uint kConvexHull = 5;
 
 static const uint kNone = 0xFFFFFFFF;
 static const int kStackSize = 64;
@@ -24,8 +25,8 @@ struct Shape {
     uint type;
     float3 size;  // lagrange::ShapeType conventions
     uint pad;
-    float4 row0;  // sensor-to-shape rotation, by rows (xyz)
-    float4 row1;
+    float4 row0;  // sensor-to-shape rotation, by rows (xyz); a hull's first face in w (as uint)
+    float4 row1;  // a hull's face count in w (as uint)
     float4 row2;
 };
 
@@ -56,6 +57,7 @@ struct Params {
 [[vk::binding(1, 0)]] StructuredBuffer<Node> nodes;
 [[vk::binding(2, 0)]] StructuredBuffer<float4> directions;  // per beam, sensor frame
 [[vk::binding(3, 0)]] RWStructuredBuffer<Hit> hits;
+[[vk::binding(4, 0)]] StructuredBuffer<float4> faces;  // hull face planes, shape frame
 [[vk::push_constant]] ConstantBuffer<Params> params;
 
 static const float kNoHit = 1.0 / 0.0;
@@ -161,6 +163,40 @@ float box(float3 o, float3 d, float3 half) {
     return exit > 0.0 ? exit : kNoHit;
 }
 
+// A convex hull as the intersection of its faces' half-spaces: unit outward normal n (xyz) and
+// offset c (w), n·x <= c inside, as the CPU reference does.
+float convexHull(float3 o, float3 d, uint first, uint count) {
+    float enter = -kNoHit;
+    float exit = kNoHit;
+    for (uint f = first; f < first + count; ++f) {
+        const float4 plane = faces[f];
+        const float rate = dot(plane.xyz, d);
+        const float gap = plane.w - dot(plane.xyz, o);
+        if (rate == 0.0) {
+            if (gap < 0.0) {
+                return kNoHit;
+            }
+            continue;
+        }
+        const float t = gap / rate;
+        if (rate < 0.0) {
+            enter = max(enter, t);
+        } else {
+            exit = min(exit, t);
+        }
+        if (enter > exit) {
+            return kNoHit;
+        }
+    }
+    if (count == 0) {
+        return kNoHit;
+    }
+    if (enter > 0.0) {
+        return enter;
+    }
+    return exit > 0.0 ? exit : kNoHit;
+}
+
 // The ray leaves the sensor along `local` (the beam in the sensor frame).
 float intersect(Shape s, float3 local) {
     const float3 o = s.origin;
@@ -185,6 +221,8 @@ float intersect(Shape s, float3 local) {
             return min(cylinderSide(o, d, s.size.x, s.size.y),
                        min(sphere(float3(o.x, o.y, o.z - s.size.y), d, s.size.x),
                            sphere(float3(o.x, o.y, o.z + s.size.y), d, s.size.x)));
+        case kConvexHull:
+            return convexHull(o, d, asuint(s.row0.w), asuint(s.row1.w));
         default:
             return kNoHit;
     }

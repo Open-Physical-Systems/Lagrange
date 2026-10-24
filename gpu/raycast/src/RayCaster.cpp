@@ -5,6 +5,7 @@
 #include "shaders/kBvhTraverse.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -22,7 +23,7 @@ struct GpuShape {
     std::uint32_t type;
     float size[3];
     std::uint32_t pad;
-    float rows[3][4];  // sensor-to-shape rotation, by rows
+    float rows[3][4];  // sensor-to-shape rotation, by rows; w of rows 0 and 1: a hull's faces
 };
 static_assert(sizeof(GpuShape) == 80);
 
@@ -45,7 +46,8 @@ struct Params {
 static_assert(sizeof(Params) == 64);
 
 constexpr std::uint32_t kGroupSize = 64;  // numthreads of castRays
-constexpr std::uint32_t kPlane = 0, kSphere = 1, kCapsule = 2, kCylinder = 3, kBox = 4;
+constexpr std::uint32_t kPlane = 0, kSphere = 1, kCapsule = 2, kCylinder = 3, kBox = 4,
+                        kConvexHull = 5;
 // Bounding boxes are grown by this much (m) plus a relative part, so that float rounding at a
 // face never culls a shape the exact test would hit.
 constexpr double kBoxMarginM = 1e-4;
@@ -76,6 +78,7 @@ Box boundsOf(const CastShape& s, const Matrix& r) {
                 extent[i] = s.size[0];
                 break;
             case kBox:
+            case kConvexHull:  // its size bounds every point's coordinates
                 extent[i] =
                     std::abs(ax) * s.size[0] + std::abs(ay) * s.size[1] + std::abs(az) * s.size[2];
                 break;
@@ -193,7 +196,7 @@ std::shared_ptr<RayContext> RayContext::create(const std::string& preferredDevic
     }
     std::shared_ptr<RayContext> context(new RayContext());
     context->impl_->kernel =
-        createComputeKernel(*device, kBvhTraverse, 4, static_cast<std::uint32_t>(sizeof(Params)));
+        createComputeKernel(*device, kBvhTraverse, 5, static_cast<std::uint32_t>(sizeof(Params)));
     if (context->impl_->kernel.pipeline == VK_NULL_HANDLE) {
         error = "cannot build the lidar kernel on " + device->info().name;
         return nullptr;
@@ -213,8 +216,9 @@ int RayContext::tier() const {
 struct RayScan::Impl {
     std::shared_ptr<RayContext> context;
     std::uint32_t rays{0};
-    Buffer directions, shapes, nodes, hits;
+    Buffer directions, shapes, nodes, hits, faces;
     std::vector<GpuShape> shapeData;
+    std::vector<float> faceData;  // four per face of every hull
     std::vector<Box> boxes;
     std::vector<std::uint32_t> boundedShapes;
 
@@ -247,7 +251,8 @@ RayScan::RayScan(std::shared_ptr<RayContext> context,
 
 RayScan::~RayScan() {
     const Device& device = impl_->device();
-    for (Buffer* buffer : {&impl_->directions, &impl_->shapes, &impl_->nodes, &impl_->hits}) {
+    for (Buffer* buffer :
+         {&impl_->directions, &impl_->shapes, &impl_->nodes, &impl_->hits, &impl_->faces}) {
         destroy(device, *buffer);
     }
 }
@@ -258,6 +263,7 @@ void RayScan::cast(std::span<const CastShape> shapes,
     const Matrix sensor = matrixOf(sensorOrientation);  // world from sensor
     // Planes first (tested by every ray), then the bounded shapes behind the hierarchy.
     s.shapeData.clear();
+    s.faceData.clear();
     s.boxes.clear();
     s.boundedShapes.clear();
     std::vector<std::uint32_t> original;  // input index of each uploaded shape
@@ -285,6 +291,17 @@ void RayScan::cast(std::span<const CastShape> shapes,
                 }
                 g.origin[i] = static_cast<float>(origin);
             }
+            if (shape.type == kConvexHull) {
+                // Face planes are in the shape's frame, so their offsets are small: float.
+                g.rows[0][3] = std::bit_cast<float>(
+                    static_cast<std::uint32_t>(s.faceData.size() / 4));  // first face
+                g.rows[1][3] = std::bit_cast<float>(static_cast<std::uint32_t>(shape.faces.size()));
+                for (const auto& face : shape.faces) {
+                    for (const double v : face) {
+                        s.faceData.push_back(static_cast<float>(v));
+                    }
+                }
+            }
             if (!planes) {
                 s.boxes.push_back(boundsOf(shape, world));
                 s.boundedShapes.push_back(static_cast<std::uint32_t>(s.shapeData.size()));
@@ -311,12 +328,15 @@ void RayScan::cast(std::span<const CastShape> shapes,
     const Device& device = s.device();
     s.reserve(s.shapes, s.shapeData.size() * sizeof(GpuShape));
     s.reserve(s.nodes, tree.size() * sizeof(GpuNode));
+    s.reserve(s.faces, s.faceData.size() * sizeof(float));
     std::memcpy(s.shapes.mapped, s.shapeData.data(), s.shapeData.size() * sizeof(GpuShape));
     std::memcpy(s.nodes.mapped, tree.data(), tree.size() * sizeof(GpuNode));
+    std::memcpy(s.faces.mapped, s.faceData.data(), s.faceData.size() * sizeof(float));
     flush(device, s.shapes);
     flush(device, s.nodes);
+    flush(device, s.faces);
     const ComputeKernel& kernel = s.context->impl_->kernel;
-    const std::array<const Buffer*, 4> bound{&s.shapes, &s.nodes, &s.directions, &s.hits};
+    const std::array<const Buffer*, 5> bound{&s.shapes, &s.nodes, &s.directions, &s.hits, &s.faces};
     bindBuffers(device, kernel, bound);
     device.submitAndWait([&](VkCommandBuffer commands) {
         recordDispatch(commands, kernel, std::as_bytes(std::span(&params, 1)),
