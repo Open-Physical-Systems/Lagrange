@@ -93,6 +93,8 @@ void printServerOptions(std::FILE* out) {
                  "  --domain D=off  replace domain D (rigid_body, sensors) by its substitute\n"
                  "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
                  "            TwistStamped\n"
+                 "  --no-demo  stand still until the first /cmd_vel instead of driving the demo\n"
+                 "            figure-eight\n"
                  "  --export-map FILE.yaml  write an occupancy map of the fixed scenery for\n"
                  "            nav2_map_server (PGM next to it) and exit\n",
                  proto::defaultUnixSocketPath().c_str());
@@ -204,6 +206,8 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             }
         } else if (arg == "--cmd-vel-unstamped") {
             options.stampedCmdVel = false;
+        } else if (arg == "--no-demo") {
+            options.demoDrive = false;
         } else if (arg == "--export-map") {
             const char* path = value();
             if (path == nullptr) {

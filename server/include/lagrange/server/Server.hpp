@@ -31,6 +31,9 @@ struct ServerOptions {
     /// "sensors" (ground truth); the others have no module yet and are always substituted.
     std::set<std::string> substituted;
     bool stampedCmdVel{true};  // /cmd_vel as TwistStamped; false: Twist
+    /// Drive the demo figure-eight until the first /cmd_vel; false: stand still until then
+    /// (a navigation stack that is still starting up should find the robot where it began).
+    bool demoDrive{true};
     /// Where lidars cast: Auto puts them on a hardware GPU (Tier 1 or 2) when the run is not
     /// deterministic (it takes ROS input) and on the CPU otherwise; Gpu also on a deterministic
     /// run, which then is not one; Cpu always on the CPU reference.

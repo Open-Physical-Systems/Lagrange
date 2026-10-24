@@ -3,6 +3,7 @@
 # through the patrol waypoints for a number of simulated minutes. Fails if any waypoint is
 # missed or the robot touches the scenery.
 # Usage (from the colcon workspace root, after building): tools/ci/nav2_demo.sh [minutes]
+# LIDAR=auto|cpu|gpu picks where the lidars cast (default auto: the GPU when there is one).
 set -euo pipefail
 
 minutes="${1:-1}"
@@ -17,7 +18,7 @@ dir="$(mktemp -d)"
 log="$dir/launch.log"
 # In its own process group, so that everything it started can be stopped together.
 setsid ros2 launch lagrange_demos amr_warehouse.launch.py viewer:=false \
-    endpoint:="unix:$dir/demo.sock" >"$log" 2>&1 &
+    endpoint:="unix:$dir/demo.sock" lidar:="${LIDAR:-auto}" >"$log" 2>&1 &
 launch=$!
 # shellcheck disable=SC2329  # called by the EXIT trap
 stop() {

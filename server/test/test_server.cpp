@@ -31,6 +31,7 @@ protected:
         options.worldPath = LAGRANGE_TEST_WAREHOUSE_URDF;
         options.profileSchemaPath = LAGRANGE_TEST_SCHEMA;
         options.startPaused = true;
+        adjust(options);
         server_ = std::make_unique<Server>(options);
         const Status started = server_->start();
         ASSERT_TRUE(started.ok()) << started.message;
@@ -43,6 +44,9 @@ protected:
         hello.mutable_client_hello()->mutable_version()->set_minor(1);
         ASSERT_TRUE(client_.queue(hello));
     }
+
+    /// For fixtures that start the server differently.
+    virtual void adjust(ServerOptions& /*options*/) {}
 
     void TearDown() override {
         client_.close();
@@ -217,6 +221,29 @@ TEST_F(ServerTest, AppliesAProfileThatSwitchesADomainOff) {
     EXPECT_FALSE(received_.back().command_result().ok());
     EXPECT_NE(received_.back().command_result().error().find("profile not applied"),
               std::string::npos);
+}
+
+// `lagrange run PROFILE` names the stage as the profile does; the profile the server sends to
+// the viewer must use that name too, or the viewer's own profile would not validate.
+class ServerWithStageNameTest : public ServerTest {
+protected:
+    void adjust(ServerOptions& options) override {
+        options.stageName = "robots/amr_diffdrive/amr_diffdrive.urdf";
+    }
+};
+
+TEST_F(ServerWithStageNameTest, ItsOwnProfileNamesTheStageAndValidates) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_profile_state(); }));
+    const std::string yaml = received_.back().profile_state().yaml();
+    EXPECT_NE(yaml.find("stage: robots/amr_diffdrive/amr_diffdrive.urdf\n"), std::string::npos)
+        << yaml;
+    v1::Envelope check = command(1);
+    check.mutable_command()->mutable_validate_profile()->set_yaml(yaml);
+    send(check);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) {
+        return e.has_command_result() && e.command_result().request_id() == 1;
+    }));
+    EXPECT_TRUE(received_.back().command_result().validation().valid());
 }
 
 TEST_F(ServerTest, SubscribedSignalsArriveAsGapFreeRuns) {
