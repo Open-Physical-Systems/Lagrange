@@ -239,6 +239,13 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_POWER_LINE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/power_line/power_line.usda"
             LAGRANGE_TEST_QUAD_INVERTED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500_inverted/quad_x500_inverted.usda"
     )
+    ament_add_gtest(test_command_line test/test_command_line.cpp)
+    target_link_libraries(test_command_line lagrange_server_cli)
+    target_include_directories(
+        test_command_line
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    lagrange_target_defaults(test_command_line)
     # The arm with ros2_control in the loop: the standard spawner and joint_trajectory_controller.
     find_package(trajectory_msgs REQUIRED)
     ament_add_gtest(
