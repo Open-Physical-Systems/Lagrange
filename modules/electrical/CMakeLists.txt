@@ -66,6 +66,15 @@ if(BUILD_TESTING)
     ament_add_gtest(test_coupling test/test_coupling.cpp TIMEOUT 300)
     target_link_libraries(test_coupling lagrange_electrical)
     lagrange_target_defaults(test_coupling)
+    # The battery model against published cell data (data/lg_hg2, CC BY 4.0).
+    ament_add_gtest(test_battery_dataset test/test_battery_dataset.cpp)
+    target_link_libraries(test_battery_dataset lagrange_electrical)
+    target_compile_definitions(
+        test_battery_dataset
+        PRIVATE
+            LAGRANGE_TEST_HG2_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/data/lg_hg2"
+    )
+    lagrange_target_defaults(test_battery_dataset)
     ament_add_gtest(test_network test/test_network.cpp TIMEOUT 120)
     target_link_libraries(test_network lagrange_electrical)
     lagrange_target_defaults(test_network)

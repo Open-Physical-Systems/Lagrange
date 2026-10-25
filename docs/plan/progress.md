@@ -113,7 +113,8 @@ evidence and the Gazebo Jetty comparison are in `docs/release/v0.2.0.md` and
 
 Every v0.3 epic of roadmap §4 is done, and so are the v0.2 items that moved here (G2, B8, E6,
 E8). Release notes and acceptance evidence: `docs/release/v0.3.0.md`. Owed within the epics:
-the battery against a published cell dataset and a motor heat run (Q16), the drive-design
+a motor heat run (Q16; the battery is checked against published cell data since 2026-10-25,
+from 35 % state of charge up), the drive-design
 review of the motor constants, FMI 2.0 FMUs (Q8), Jolt's wheel slip. Publishing (merging into `main`, tagging) stays with the owner, after v0.2.0.
 
 ## Defaults taken during the autonomous run
@@ -167,7 +168,9 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
    (**done** 2026-10-25; the sample AMR runs on it by default. Owed: the battery check against a
    published cell dataset, sim-vs-real (Q16), the drive-design review of the motor constants
    (RFC 0002 resolution 2), rotor inertia in physics: domains/electrical.md §9. DC-DC
-   converters followed the same day: averaged regulators between buses)
+   converters followed the same day: averaged regulators between buses; and the battery check
+   against published cell data (LG HG2, CC BY 4.0): within 20 mV from 35 % state of charge up,
+   21.5 mV at 24 %)
 4. Thermal module (lumped networks), coupled to electrical losses (**done** 2026-10-25; runs
    when the ambient temperature is given. Owed: a published or recorded motor heat run (Q16),
    airspeed and sun direction with the aero and weather domains: domains/thermal.md §8)
