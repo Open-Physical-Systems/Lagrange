@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_mock_server</name>
-  <version>0.2.0</version>
+  <version>0.3.0</version>
   <description>Lagrange mock/replay server: serves the viewer protocol from a recording, without a simulator.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>

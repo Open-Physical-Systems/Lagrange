@@ -57,11 +57,9 @@ Consequences:
 
 ## 2. Current phase
 
-**v0.2 (simulation core + AMR) and v0.3 (arms, electrical, thermal) are done on `dev` and
-prepared for release, not published** (`docs/release/v0.2.0.md`, `docs/release/v0.3.0.md`;
-v0.1.0 was released on 2026-10-14). Plans: `docs/plan/roadmap.md` §3 and §4; status and owed
-items: `docs/plan/progress.md`. Next by the roadmap: v0.4 drones (§5), once the owner has
-reviewed and published v0.2 and v0.3.
+**v0.2 (simulation core + AMR) and v0.3 (arms, electrical, thermal) are released** as
+`v0.2.0` and `v0.3.0` on 2026-10-25 (`docs/release/`; v0.1.0 on 2026-10-14). Status and owed
+items: `docs/plan/progress.md`. Next by the roadmap: **v0.4 drones** (`docs/plan/roadmap.md` §5).
 
 - The protocol stays v1; the v0.1 viewer connects to the C++ server unchanged.
 - RFC 0001 (module interface), 0002 (USD schemas) and 0005 (profile format) are accepted; work

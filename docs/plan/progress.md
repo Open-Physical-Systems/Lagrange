@@ -1,15 +1,15 @@
 # Progress
 
-Where the project stands against the [roadmap](roadmap.md). Updated 2026-10-24.
+Where the project stands against the [roadmap](roadmap.md). Updated 2026-10-25.
 
 ## The releases
 
 ```mermaid
 flowchart LR
     v01["v0.1<br/>viewer, protocol,<br/>mock server<br/><b>released 2026-10-14</b>"]:::done
-    v02["v0.2<br/>simulation core + AMR<br/>ROS 2, Nav2<br/><b>we are here</b>"]:::now
-    v03["v0.3<br/>arms + electrical<br/>MoveIt 2"]:::todo
-    v04["v0.4<br/>drones<br/>PX4 / ArduPilot SITL"]:::todo
+    v02["v0.2<br/>simulation core + AMR<br/>ROS 2, Nav2<br/><b>released 2026-10-25</b>"]:::done
+    v03["v0.3<br/>arms + electrical<br/>MoveIt 2<br/><b>released 2026-10-25</b>"]:::done
+    v04["v0.4<br/>drones<br/>PX4 / ArduPilot SITL<br/><b>next</b>"]:::now
     v05["v0.5<br/>weather + EMI"]:::todo
     v06["v0.6<br/>cars, autonomous cars<br/>OpenDRIVE, Autoware"]:::todo
     v07["v0.7<br/>huge worlds"]:::todo
@@ -107,7 +107,8 @@ Every v0.2 item is done or moved to v0.3 with a reason (below). Release notes, a
 evidence and the Gazebo Jetty comparison are in `docs/release/v0.2.0.md` and
 `docs/release/v0.2.0-comparison.md`. Criteria 2 to 9 are met. **Criterion 1 is not:** a
 10-minute Nav2 patrol through ros2_control did not get past Nav2's start-up on 2026-10-25
-(known issue). Publishing (merging into `main`, tagging) stays with the owner.
+(known issue). Released as `v0.2.0` on 2026-10-25 at the owner's request, with criterion 1
+open.
 
 ## v0.3 status (2026-10-25)
 
@@ -115,7 +116,7 @@ Every v0.3 epic of roadmap §4 is done, and so are the v0.2 items that moved her
 E8). Release notes and acceptance evidence: `docs/release/v0.3.0.md`. Owed within the epics:
 a motor heat run (Q16; the battery is checked against published cell data since 2026-10-25,
 from 35 % state of charge up), the drive-design
-review of the motor constants, FMI 2.0 FMUs (Q8), Jolt's wheel slip. Publishing (merging into `main`, tagging) stays with the owner, after v0.2.0.
+review of the motor constants, FMI 2.0 FMUs (Q8), Jolt's wheel slip. Released as `v0.3.0` on 2026-10-25 at the owner's request, after v0.2.0.
 
 ## Defaults taken during the autonomous run
 
@@ -141,7 +142,7 @@ these standing answers:
   `diff_drive_controller`.
 - **C5 runtime rebase**: deferred to v0.7 (huge worlds); v0.2 rebases at load.
 - **Releases**: prepared (notes, comparison, release PR), never merged to `main` or tagged by
-  the agent.
+  the agent. Changed on 2026-10-25: the owner asked the agent to publish v0.2.0 and v0.3.0.
 - **F7** (`rosidl::Buffer`, CUDA): this machine has no NVIDIA GPU; desk study only.
 
 ### Work queue
