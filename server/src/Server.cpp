@@ -2,6 +2,7 @@
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
 #include "lagrange/electrical/IdealTorqueSource.hpp"
 #include "lagrange/electrical/Network.hpp"
+#include "lagrange/emi/Emi.hpp"
 #include "lagrange/fields/Field.hpp"
 #include "lagrange/importers/Importers.hpp"
 #include "lagrange/mavlink/ArduPilotJson.hpp"
@@ -424,6 +425,8 @@ struct Server::Impl {
     Clock::time_point lastStats{Clock::now()};
     Clock::time_point lastFields{Clock::now()};
     mutable fields::FieldSignal fogFieldSignal, windFieldSignal;
+    mutable std::vector<emi::Source> cachedEmiSources;  // emiSources()
+    mutable bool emiSourcesRead{false};
     SimTime statsSimTime{};
     std::vector<std::int64_t> tickNs;
 
@@ -646,6 +649,15 @@ struct Server::Impl {
                           ModuleConfig(air));
             }
         }
+        // EMI (domains/emi.md) when the stage has sources or victims: before the sensors, which
+        // read its disturbances; off, its zero substitute.
+        if (hasEmi()) {
+            ModuleConfigData emi;
+            if (settings.emiCoupling) {
+                emi.values["coupling"] = *settings.emiCoupling;
+            }
+            next->add(std::make_unique<emi::Emi>(off("emi")), ModuleConfig(emi));
+        }
         ModuleConfigData sensing;
         sensing.values["weather"] = weatherInRun;
         sensing.tier =
@@ -689,7 +701,21 @@ struct Server::Impl {
         settings.aerodynamics = appliedAerodynamics;
         settings.rotorAero = appliedRotorAero;
         settings.weather = appliedWeather;
+        settings.emiCoupling = appliedEmiCoupling;
         return settings;
+    }
+    /// Whether the stage has EMI sources or victims.
+    bool hasEmi() const {
+        const WorldView world(robot.world);
+        return !world.instancesOf("EmiSourceAPI_1").empty() ||
+               !world.instancesOf("EmiSusceptibilityAPI_1").empty();
+    }
+    /// Whether the EMI module itself (not its zero substitute) is in the run.
+    bool emiRuns() const {
+        return scheduler != nullptr &&
+               std::ranges::any_of(scheduler->plan(), [](const ScheduledModule& m) {
+                   return std::string_view(m.label) == "emi/analytic";
+               });
     }
     /// Whether the weather module (or its substitute) is in the run.
     bool weatherRuns() const {
@@ -709,6 +735,7 @@ struct Server::Impl {
     std::map<std::string, ConfigValue, std::less<>> appliedAerodynamics;  // its wind
     std::map<std::string, ConfigValue, std::less<>> appliedRotorAero;     // its rotor settings
     std::map<std::string, ConfigValue, std::less<>> appliedWeather;       // its weather
+    std::optional<std::vector<std::string>> appliedEmiCoupling;           // its EMI victims
     std::shared_ptr<mavlink::Px4Link> px4Link;  // PX4's connection, across rebuilds of the run
     std::shared_ptr<mavlink::ArduPilotLink> ardupilotLink;  // ArduPilot's, likewise
     std::optional<bool> speedPrediction;                    // from an applied profile
@@ -1780,6 +1807,16 @@ struct Server::Impl {
                     }
                 }
                 yaml += "  weather: " + text + "}\n";
+            } else if (std::string_view(row.domain) == "emi" && hasEmi() && !substituted("emi")) {
+                std::string text = "{enabled: true";
+                if (appliedEmiCoupling) {
+                    text += ", coupling: [";
+                    for (std::size_t i = 0; i < appliedEmiCoupling->size(); ++i) {
+                        text += (i == 0 ? "" : ", ") + (*appliedEmiCoupling)[i];
+                    }
+                    text += "]";
+                }
+                yaml += "  emi: " + text + "}\n";
             } else if (std::string_view(row.domain) == "comms" ||
                        std::string_view(row.domain) == "traffic" ||
                        std::string_view(row.domain) == "vehicle_dynamics" ||
@@ -2183,6 +2220,7 @@ struct Server::Impl {
         }
         replay = std::move(*opened);
         robot = std::move(*model);
+        emiSourcesRead = false;  // the recording's scene
         log(v1::LOG_LEVEL_INFO, "replay",
             options.replayPath + " · " + std::to_string(replay->catalog.size()) + " signals · " +
                 std::to_string(replay->duration.seconds()) + " s · stage " + robot.sourcePath);
@@ -2414,6 +2452,7 @@ struct Server::Impl {
                 }
                 target = &it->second;
                 what = s.schema;
+                emiSourcesRead = false;  // an EMI source's value may change
                 if (auto info = stage::schemaAttribute(s.schema, s.instance, name)) {
                     unitText = info->unit;
                 }
@@ -2532,6 +2571,9 @@ struct Server::Impl {
             context.modules.insert("aerodynamics");
         }
         context.modules.insert("weather");
+        if (hasEmi()) {
+            context.modules.insert("emi");
+        }
         for (const auto& [key, value] : options.weather) {
             context.weatherKnown.insert(key);
         }
@@ -2677,6 +2719,7 @@ struct Server::Impl {
         appliedAerodynamics = settings.aerodynamics;
         appliedRotorAero = settings.rotorAero;
         appliedWeather = settings.weather;
+        appliedEmiCoupling = settings.emiCoupling;
         pending.reset();
         if (Status status = restart(); !status.ok()) {
             // Keep the run going on the profile it had.
@@ -2906,17 +2949,78 @@ struct Server::Impl {
         field(kWindField, "wind", "weather", units::m_per_s, 2,
               runWind().has_value() || (weather && !text("wind_field").empty()),
               "no wind: the aerodynamics domain's wind or a wind field");
-        field(kFluxField, "|B|", "emi", units::T, 1, false, "the EMI domain is not built yet");
+        field(kFluxField, "|B|", "emi", units::T, 1, emiRuns(),
+              hasEmi() ? "the EMI domain is off (zero substitute)"
+                       : "the stage has no EMI sources (EmiSourceAPI_1)");
+        if (emiRuns()) {
+            for (const emi::Source& s : emiSources()) {
+                v1::EnvironmentState::EmiSource& out = *env.add_emi_sources();
+                out.set_name(s.name);
+                out.set_prim(0xFFFF'FFFFU);
+                out.set_frequency_hz(s.frequency);
+                out.set_current_a(emiState(s).current);
+                out.set_power_w(s.radiatedPower);
+                static constexpr std::array<const char*, 5> kKinds{
+                    "power line", "motor drive (dipole)", "transmitter", "welder (dipole)",
+                    "custom"};
+                out.set_detail(s.fieldMap ? "field map"
+                                          : kKinds.at(static_cast<std::size_t>(s.type)));
+            }
+        }
         return envelope;
+    }
+
+    /// The run's EMI sources, read from the stage once.
+    const std::vector<emi::Source>& emiSources() const {
+        if (!emiSourcesRead) {
+            auto sources = emi::sourcesOf(WorldView(robot.world));
+            cachedEmiSources = sources ? std::move(*sources) : std::vector<emi::Source>{};
+            emiSourcesRead = true;
+        }
+        return cachedEmiSources;
+    }
+
+    /// A source's pose and current now, from the bus (its body's pose, its motor's current).
+    emi::SourceState emiState(const emi::Source& s) const {
+        emi::SourceState now;
+        now.current = s.current;
+        Pose body;
+        if (s.body != kWorldBody) {
+            body = robot.bodyRestPose.at(s.body.index);
+        }
+        if (scheduler != nullptr) {
+            const SignalBus& bus = scheduler->bus();
+            if (s.body != kWorldBody) {
+                const SignalId id =
+                    bus.find("body/" + robot.world.bodies.names[s.body.index] + "/pose");
+                if (id.valid()) {
+                    const std::span<const double> v = bus.readN(id);
+                    body = Pose{{v[0], v[1], v[2]}, {v[3], v[4], v[5], v[6]}};
+                }
+            }
+            if (!s.drivenBy.empty()) {
+                const SignalId id = bus.find("motor/" + s.drivenBy + "/current_q");
+                if (id.valid()) {
+                    now.current = std::abs(bus.read(id));
+                }
+            }
+        }
+        now.pose = s.body == kWorldBody ? s.poseInBody : compose(body, s.poseInBody);
+        return now;
     }
 
     /// A horizontal slice of `name` at height `height` around the robot, or nothing for a field
     /// the run does not have.
     std::optional<v1::Envelope> fieldSlice(const std::string& name, double height) const {
-        if (scheduler == nullptr || (name != kFogField && name != kWindField)) {
+        if (scheduler == nullptr ||
+            (name != kFogField && name != kWindField && name != kFluxField)) {
+            return std::nullopt;
+        }
+        if (name == kFluxField && !emiRuns()) {
             return std::nullopt;
         }
         const bool fog = name == kFogField;
+        const bool flux = name == kFluxField;
         const SignalBus& bus = scheduler->bus();
         const SignalId gridId = bus.find(fog ? "env/extinction/field" : "env/wind/velocity_field");
         const std::shared_ptr<const fields::Field> grid =
@@ -2925,8 +3029,14 @@ struct Server::Impl {
         if (fog && !bus.find("env/extinction/visible").valid()) {
             return std::nullopt;
         }
-        if (!fog && !grid && !wind) {
+        if (!fog && !flux && !grid && !wind) {
             return std::nullopt;
+        }
+        std::vector<emi::SourceState> sources;
+        if (flux) {
+            for (const emi::Source& s : emiSources()) {
+                sources.push_back(emiState(s));
+            }
         }
         // Centred on the robot.
         Pose centre = robot.bodyRestPose.empty() ? Pose{} : robot.bodyRestPose[0];
@@ -2940,7 +3050,7 @@ struct Server::Impl {
         slice.mutable_sim_time()->set_ns(scheduler->now().ns);
         slice.set_width(kSliceWidth);
         slice.set_height(kSliceHeight);
-        const std::uint32_t components = fog ? 1 : 2;
+        const std::uint32_t components = fog || flux ? 1 : 2;
         slice.set_components(components);
         slice.set_origin_x(centre.position[0] - (kSliceWidth - 1) * kSliceCell / 2.0);
         slice.set_origin_y(centre.position[1] - (kSliceHeight - 1) * kSliceCell / 2.0);
@@ -2955,6 +3065,19 @@ struct Server::Impl {
             for (std::uint32_t i = 0; i < kSliceWidth; ++i) {
                 const fields::Vec3 at{slice.origin_x() + i * kSliceCell,
                                       slice.origin_y() + j * kSliceCell, height};
+                if (flux) {
+                    // |B| RMS; sources add in power (as incoherent ones would).
+                    double b2 = 0.0;
+                    for (std::size_t k = 0; k < sources.size(); ++k) {
+                        const double b = emi::magneticFieldRms(emiSources()[k], sources[k], at).b;
+                        b2 += b * b;
+                    }
+                    const double v = std::sqrt(b2);
+                    values.push_back(static_cast<float>(v));
+                    lo = std::min(lo, v);
+                    hi = std::max(hi, v);
+                    continue;
+                }
                 if (fog) {
                     const double v = uniform + (grid ? grid->sampleScalar(at) : 0.0);
                     values.push_back(static_cast<float>(v));

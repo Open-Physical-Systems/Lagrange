@@ -69,8 +69,8 @@ server, previews the wiring, and applies it with *Apply and restart*.
 ![The Domains workspace: one row per domain with its switch, substitute and step; the wiring
 and schedule in the middle; the applied profile on the right](../imgs/tutorial-domains.png)
 
-**On `lagrange_server`'s command line**: `--domain sensors=off` and `--domain rigid_body=off`
-substitute a domain without writing a profile.
+**On `lagrange_server`'s command line**: `--domain D=off` substitutes a domain without writing a
+profile, for `rigid_body`, `electrical`, `thermal`, `weather`, `emi` and `sensors`.
 
 ## Errors you may see
 

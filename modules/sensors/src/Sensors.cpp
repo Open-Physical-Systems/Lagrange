@@ -542,6 +542,14 @@ public:
         twist_ = d.input(spec(body + "/twist", SignalType::Wrench, units::m_per_s, "world_local"));
         acceleration_ =
             d.input(spec(body + "/acceleration", SignalType::Wrench, units::m_per_s2, "body"));
+        if (const std::string victim = emiVictim(world, sensor_, "imu_adc");
+            !victim.empty() && !groundTruth_) {
+            // Noise the EMI domain adds to the ADC channels (emi.md §2), 1 σ.
+            emiAccel_ =
+                d.input(optionalSpec(victim + "accel_noise", SignalType::Scalar, units::m_per_s2));
+            emiGyro_ =
+                d.input(optionalSpec(victim + "gyro_noise", SignalType::Scalar, units::rad_per_s));
+        }
         const std::string base = "sensor/" + name_;
         force_ =
             d.output(spec(base + "/specific_force", SignalType::Vec3, units::m_per_s2, "sensor"));
@@ -589,6 +597,16 @@ public:
             force[i] = accel_.measure(i, force[i], rng.normal());
             rate[i] = gyro_.measure(i, rate[i], rng.normal());
         }
+        if (emiAccel_.valid()) {
+            // Its own stream, so that the IMU's own noise is the same with or without EMI.
+            random::Stream emi(context.seed, context.stepIndex, kEmiStream);
+            const double a = bus.read(emiAccel_);
+            const double g = bus.read(emiGyro_);
+            for (std::size_t i = 0; i < 3; ++i) {
+                force[i] += a * emi.normal();
+                rate[i] += g * emi.normal();
+            }
+        }
         bus.writeN(force_, force);
         bus.writeN(rate_, rate);
         bus.writeN(orientation_, multiply(body, mount_.orientation));
@@ -615,10 +633,12 @@ public:
 private:
     static constexpr std::uint32_t kTurnOnStream = 1;  // Philox entities besides 0, the white
     static constexpr std::uint32_t kBiasStream = 2;    // noise
+    static constexpr std::uint32_t kEmiStream = 3;
     ImuChannel accel_, gyro_;  // all terms off for the ground-truth substitute
     bool biased_{false};
     bool started_{false};  // turn-on bias drawn
     SignalId pose_, twist_, acceleration_, force_, rate_, orientation_;
+    SignalId emiAccel_, emiGyro_;  // EMI noise, when the IMU is a victim
 };
 
 /// Rounds a rate's period to whole milliseconds, so that a camera at 30 Hz lines up with the

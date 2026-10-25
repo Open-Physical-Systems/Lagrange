@@ -195,6 +195,13 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                     }
                 }
             }
+            if (name == "emi" && domain.contains("coupling") && domain["coupling"].is_array()) {
+                std::vector<std::string> coupling;
+                for (const auto& c : domain["coupling"].array_range()) {
+                    coupling.push_back(c.as<std::string>());
+                }
+                settings.emiCoupling = coupling;
+            }
             if (name == "rotor_aero") {
                 for (const char* key : {"inflow_time_constant", "speed_of_sound"}) {
                     if (domain.contains(key) && domain[key].is_number()) {

@@ -369,6 +369,61 @@ TEST_F(QuadServerTest, AProfileWithoutTheSiteKeepsTheRunningSite) {
     EXPECT_TRUE(rotors);
 }
 
+/// The quadcopter with EMI victims, at the power line.
+class EmiServerTest : public QuadServerTest {
+protected:
+    void adjust(ServerOptions& options) override {
+        QuadServerTest::adjust(options);
+        options.robotPath = LAGRANGE_TEST_QUAD_EMI_USDA;
+        options.worldPath = LAGRANGE_TEST_POWER_LINE_USDA;
+    }
+};
+
+TEST_F(EmiServerTest, ThePowerLineDisturbsTheMagnetometerAndReachesTheViewer) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_environment(); }));
+    const v1::EnvironmentState env = received_.back().environment();
+    ASSERT_EQ(env.emi_sources_size(), 1);
+    EXPECT_EQ(env.emi_sources(0).name(), "power_line_01");
+    EXPECT_EQ(env.emi_sources(0).frequency_hz(), 60.0);
+    bool flux = false;
+    for (const auto& f : env.fields()) {
+        flux = flux || (f.name() == "emi/flux_density" && f.available());
+    }
+    EXPECT_TRUE(flux);
+    std::set<std::string> names;
+    for (const v1::Envelope& e : received_) {
+        if (e.has_catalog()) {
+            for (const v1::SignalInfo& info : e.catalog().signals()) {
+                names.insert(info.name());
+            }
+        }
+    }
+    EXPECT_TRUE(names.contains("emi/magnetometer/b_field"));
+    EXPECT_TRUE(names.contains("emi/imu/accel_noise"));
+
+    // The flux slice at 10 m (the conductor's height) peaks next to it: 400 A at a few metres
+    // is tens of µT.
+    v1::Envelope watch = command(4);
+    watch.mutable_command()->mutable_subscribe_field()->set_field("emi/flux_density");
+    watch.mutable_command()->mutable_subscribe_field()->set_enabled(true);
+    watch.mutable_command()->mutable_subscribe_field()->set_height_m(9.0);
+    send(watch);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_field_slice(); }));
+    const v1::FieldSlice& slice = received_.back().field_slice();
+    EXPECT_EQ(slice.field(), "emi/flux_density");
+    EXPECT_GT(slice.value_max(), 2e-5);  // within 4 m of 400 A: above 20 µT
+    EXPECT_LT(slice.value_min(), 1e-5);
+    // In the profile, and the profile validates.
+    std::string yaml;
+    for (const v1::Envelope& e : received_) {
+        if (e.has_profile_state()) {
+            yaml = e.profile_state().yaml();
+        }
+    }
+    EXPECT_NE(yaml.find("emi: {enabled: true"), std::string::npos) << yaml;
+    EXPECT_TRUE(server_->validateProfile(yaml).valid);
+}
+
 /// The sample AMR in fog and rain (--weather).
 class WeatherServerTest : public ServerTest {
 protected:

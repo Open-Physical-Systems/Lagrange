@@ -49,6 +49,8 @@ struct ProfileSettings {
     std::map<std::string, ConfigValue, std::less<>> rotorAero;
     /// domains.weather: the site and effects keys, as the weather module's config takes them.
     std::map<std::string, ConfigValue, std::less<>> weather;
+    /// domains.emi.coupling: the victims the EMI domain disturbs (all when absent).
+    std::optional<std::vector<std::string>> emiCoupling;
     std::optional<double> realTimeFactor;  // time.real_time_factor (0: as fast as possible)
 };
 

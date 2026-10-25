@@ -141,7 +141,10 @@ time-boxed. Order:
    server sends the viewer's Environment workspace its `EnvironmentState` and, for subscribed
    fields, 64 × 48 `FieldSlice`s of fog extinction and wind around the robot twice a second)
 5. `modules/emi`: analytic sources and field maps, victims (magnetometer, IMU, encoder, CAN,
-   radio)
+   radio) (**done** 2026-10-25: `lagrange_emi`, emi.md §8; the magnetometer and IMU apply it,
+   the viewer gets the sources and |B| slices; the sample power line with the quadcopter,
+   `profiles/examples/quad_x500_power_line.yaml`. Encoder glitches, CAN errors and the radio's
+   SNR are applied with step 6)
 6. `modules/comms`: link budget, packet errors, CAN fault confinement; bridges drop and delay
    what rides on a link
 7. Offline CFD import: OpenFOAM results to a VDB wind field
