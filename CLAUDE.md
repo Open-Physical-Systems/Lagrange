@@ -268,7 +268,7 @@ verification, not in this repo.
 - Viewer: built by colcon with everything else; run `ros2 run lagrange_viewer lagrange_viewer` (starts on the launcher, whose Start local simulator runs `lagrange_server`; `--connect <endpoint>` goes straight to a server)
 - Viewer headless test: `colcon test --packages-select lagrange_viewer` (runs on the software Vulkan device, llvmpipe; `LAGRANGE_TEST_GPU=<name>` picks another)
 - GPU and tier of this machine: `ros2 run lagrange_gpu lagrange_gpu_info`
-- Container: `podman build -f packaging/container/Containerfile -t lagrange:dev .` then `podman run --rm lagrange:dev` runs the Nav2 demo headless (built-in controller; `-e CONTROL=ros2_control` for ros2_control); Docker reads the same file. Local `.deb` dry runs: `bloom-generate rosdebian --ros-distro lyrical` with `packaging/rosdep/lagrange-self.yaml` registered (docs/plan/spikes/0.2-H8-packaging.md)
+- Container: `podman build -f packaging/container/Containerfile -t lagrange:dev .` then `podman run --rm lagrange:dev` runs the Nav2 demo headless (built-in controller; `-e CONTROL=ros2_control` for ros2_control), and `podman run --rm lagrange:dev tools/ci/tutorial_drone.sh` the drone tutorial (without its PX4 and ArduPilot steps); Docker reads the same file. Local `.deb` dry runs: `bloom-generate rosdebian --ros-distro lyrical` with `packaging/rosdep/lagrange-self.yaml` registered (docs/plan/spikes/0.2-H8-packaging.md)
 - Benchmarks: `tools/ci/benchmarks.sh MACHINE` (scheduler, bus, lidar per tier; medians against `tests/benchmarks/baseline.json`, see `docs/design/benchmarks.md`)
 - All hooks: `pre-commit run --all-files`
 - Protocol: `buf lint && buf format --diff --exit-code && buf breaking --against '.git#ref=origin/dev'`
