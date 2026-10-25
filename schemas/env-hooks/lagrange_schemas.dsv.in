@@ -8,3 +8,4 @@ prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/emi
 prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/sensor_material
 prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/comms
 prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/vehicle
+prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/road

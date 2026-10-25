@@ -1,0 +1,61 @@
+#usda 1.0
+(
+    """Lagrange road schemas (RFC 0002, docs/design/formats.md section 3.11). Codeless.
+    RoadLaneAPI_1 makes a prim one lane of a road network (from OpenDRIVE, io/opendrive): its
+    centre line in the direction of travel and its links, for traffic and planners."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeRoad"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "RoadLaneAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """One lane of one lane section of a road, in its direction of travel (OpenDRIVE: right
+    lanes along the reference line, left lanes against it, for right-hand traffic)."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double[] lane:centreLine = [] (
+        lagrangeUnit = "m"
+        doc = "Points of the lane's centre line, x y z after one another, region-local, in the direction of travel. Required."
+    )
+    double[] lane:width = [] (
+        lagrangeUnit = "m"
+        doc = "The lane's width at each centre-line point."
+    )
+    uniform token lane:type = "driving" (
+        allowedTokens = ["driving", "sidewalk", "biking", "parking", "other"]
+        doc = "What the lane is for."
+    )
+    double lane:speedLimit = 0 (
+        lagrangeUnit = "m/s"
+        doc = "Speed limit; 0: none given."
+    )
+    int lane:road = 0 (
+        lagrangeUnit = "1"
+        doc = "The OpenDRIVE road id."
+    )
+    int lane:lane = 0 (
+        lagrangeUnit = "1"
+        doc = "The OpenDRIVE lane id (negative: right of the reference line)."
+    )
+    bool lane:junction = false (
+        doc = "A lane of a junction's connecting road."
+    )
+    rel lane:successors (
+        doc = "Lanes a vehicle can continue into at the end."
+    )
+    rel lane:predecessors (
+        doc = "Lanes that lead into this one."
+    )
+}

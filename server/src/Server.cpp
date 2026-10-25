@@ -68,7 +68,7 @@ using Clock = std::chrono::steady_clock;
 
 constexpr std::uint32_t kProtocolMajor = 0;  // the mock server's version (server.py)
 constexpr std::uint32_t kProtocolMinor = 1;
-constexpr char kServerName[] = "lagrange_server 0.1.0";
+constexpr char kServerName[] = "lagrange_server " LAGRANGE_VERSION;
 constexpr std::int64_t kStatusPeriodNs = 100'000'000;  // 10 Hz, as the mock server
 constexpr std::int64_t kStatsPeriodNs = 1'000'000'000;
 constexpr std::int64_t kFieldPeriodNs = 500'000'000;  // field slices: twice a second
@@ -3884,6 +3884,13 @@ Status Server::start() {
                   (!s.options.demoDrive ? "; it stands still until /cmd_vel arrives"
                    : s.bridge           ? "; a figure-eight demo drives until /cmd_vel arrives"
                                         : "; a figure-eight demo drives"));
+    } else if (s.hasVehicles()) {
+        s.log(v1::LOG_LEVEL_INFO, "controller",
+              std::string("car: the driver turns /cmd_vel (speed, turn rate) into throttle, brake "
+                          "and steering") +
+                  (s.options.demoDrive ? "; until the first command it drives a 5 m circle round "
+                                         "the origin"
+                                       : "; it stands still until /cmd_vel arrives"));
     } else if (s.options.ardupilotPort) {
         s.log(v1::LOG_LEVEL_INFO, "controller",
               "ArduPilot SITL flies it through its JSON interface on UDP port " +

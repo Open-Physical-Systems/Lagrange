@@ -141,7 +141,11 @@ fallback documented if Autoware is not available for Lyrical.
    `assets/worlds/city_block/`, `profiles/examples/sedan_city.yaml`; `/cmd_vel` through the car
    controller, a closed-loop demo circle until the first command; the loader names robots by
    their top prim. An Ackermann message type is owed)
-5. `io/opendrive`: road network to USD meshes and lane tables (own reader)
+5. `io/opendrive`: road network to USD meshes and lane tables (own reader) (**done** 2026-10-25:
+   `lagrange_opendrive` and `lagrange_opendrive_import`, `RoadLaneAPI_1` (new `road` schema
+   library), formats.md §3.11; the city block's roads from `city_block.xodr`, lanes checked to
+   meet end to start. Owed: superelevation, lane heights, objects and signals; driving on
+   elevated roads)
 6. `modules/traffic`, `builtin` backend: lane-following vehicles, social-force pedestrians,
    traffic lights, as kinematic bodies
 7. `io/openscenario`: a built-in runner for a subset of OpenSCENARIO 1.x
@@ -425,6 +429,7 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 | electrical network (fallback doc fix) | `schemas/` (documentation of `elec:backEmfConstant`'s fallback corrected to Kt/1.5 for dq machines; changelog entry) | No attribute changed; the network refuses an authored Ke that disagrees with Kt by over 3 % |
 | raster camera sensor | `schemas/` (`CameraSensorAPI_1` in the sensor library, from formats.md §3.8, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-24 for autonomous work. Applied to a UsdGeomCamera, whose lens gives the field of view |
 | geo sensor schemas | `schemas/` (`GnssAPI_1`, `MagnetometerAPI_1`, `BarometerAPI_1` in the sensor library, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4 |
+| v0.6 road schema | `schemas/` (new `road` library: `RoadLaneAPI_1`, formats.md §3.11; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.6. New library, nothing to migrate |
 | v0.6 vehicle schemas | `schemas/` (new `vehicle` library: `VehicleAPI_1`, `WheelAPI_1`, formats.md §3.10; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.6. New library, nothing to migrate |
 | v0.5 schema libraries | `schemas/` (new `weather`, `emi`, `sensor_material`, `comms` libraries: `WeatherAPI_1`, `EmiSourceAPI_1`, `EmiSusceptibilityAPI_1`, `SensorMaterialAPI_1` from formats.md §3.4, §3.5, §3.7, and new `RadioLinkAPI_1`, `CanBusAPI_1` (§3.9); changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.5. Additions to the drafts listed in the changelog |
 | propeller files on rotors | `schemas/` (`RotorAPI_1`: `aero:rotor:propeller` replaces the unused `aero:rotor:bladeTable`, new `aero:rotor:mount`, `aero:rotor:direction` documented as the motor's sense; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4. `RotorAPI_1` is unreleased, so no migration |
