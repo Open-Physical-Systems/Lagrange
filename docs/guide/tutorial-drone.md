@@ -61,6 +61,8 @@ ros2 run lagrange_server lagrange_server --robot assets/robots/quad_x500/quad_x5
     --world none --air-density 1.225 --geo-origin 47.397742,8.545594,488
 ```
 
+`--world assets/worlds/open_field/open_field.usda` in place of `--world none` puts it on the
+landing pad of an open field with trees, a shed and a windsock, where the missions below fly.
 Watch it with `ros2 run lagrange_viewer lagrange_viewer --connect
 unix:$XDG_RUNTIME_DIR/lagrange/default.sock`. In the Electrical workspace the battery gives
 about 190 W; the Signals workspace has the four rotors' speed (about 550 rad/s) and thrust.

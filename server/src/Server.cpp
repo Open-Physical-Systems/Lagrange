@@ -2463,19 +2463,7 @@ struct Server::Impl {
             item.set_message(issue.message);
         }
         if (check.settings) {
-            // The site parameters a profile leaves out are the running ones, as adopt keeps them.
-            ProfileSettings previewed = *check.settings;
-            const ProfileSettings running = active();
-            if (!previewed.ambientTemperatureK) {
-                previewed.ambientTemperatureK = ambient();
-            }
-            if (!previewed.airDensityKgM3) {
-                previewed.airDensityKgM3 = running.airDensityKgM3;
-            }
-            if (!previewed.geoOrigin) {
-                previewed.geoOrigin = running.geoOrigin;
-            }
-            auto preview = makeScheduler(previewed, nullptr);
+            auto preview = makeScheduler(withRunningSite(*check.settings), nullptr);
             if (!preview) {
                 out.set_valid(false);
                 v1::ProfileIssue& item = *out.add_issues();
@@ -2489,6 +2477,22 @@ struct Server::Impl {
             return;
         }
         describeWiring(*scheduler, *out.mutable_wiring());
+    }
+
+    /// `settings` with the site parameters it leaves out (ambient temperature, air density, geo
+    /// origin) taken from the running ones, as adopt keeps them: what a check wires.
+    ProfileSettings withRunningSite(ProfileSettings settings) const {
+        const ProfileSettings running = active();
+        if (!settings.ambientTemperatureK) {
+            settings.ambientTemperatureK = ambient();
+        }
+        if (!settings.airDensityKgM3) {
+            settings.airDensityKgM3 = running.airDensityKgM3;
+        }
+        if (!settings.geoOrigin) {
+            settings.geoOrigin = running.geoOrigin;
+        }
+        return settings;
     }
 
     /// checkProfile, then whether the settings wire (as validate, without the wiring preview).
@@ -2507,7 +2511,7 @@ struct Server::Impl {
         }
         ProfileCheck check = checkProfile(yaml, schemaText, profileContext());
         if (check.settings) {
-            if (auto preview = makeScheduler(*check.settings, nullptr); !preview) {
+            if (auto preview = makeScheduler(withRunningSite(*check.settings), nullptr); !preview) {
                 check.valid = false;
                 check.issues.push_back({true, "/domains", preview.error()});
             }

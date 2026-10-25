@@ -30,7 +30,7 @@ cp "$share/22100_lagrange_quad_x500" "$build/etc/init.d-posix/airframes/"
 mkdir -p "$build/rootfs"
 
 site=(--air-density 1.225 --geo-origin "47.397742,8.545594,488")  # PX4 SITL's default home
-robot=(--robot assets/robots/quad_x500/quad_x500.usda --world none)
+robot=(--robot assets/robots/quad_x500/quad_x500.usda --world assets/worlds/open_field/open_field.usda)
 socket=${XDG_RUNTIME_DIR:-/tmp}/lagrange-px4.sock
 if [ "${1:-}" = "--wind" ]; then
     ros2 run lagrange_server lagrange run profiles/examples/quad_x500_gusty.yaml "${robot[@]}" \

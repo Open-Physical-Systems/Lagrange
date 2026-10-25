@@ -26,7 +26,7 @@ set -u
 params=$(ros2 pkg prefix lagrange_mavlink)/share/lagrange_mavlink/ardupilot/lagrange_quad_x500.parm
 
 site=(--air-density 1.225 --geo-origin "47.397742,8.545594,488")
-robot=(--robot assets/robots/quad_x500/quad_x500.usda --world none)
+robot=(--robot assets/robots/quad_x500/quad_x500.usda --world assets/worlds/open_field/open_field.usda)
 socket=${XDG_RUNTIME_DIR:-/tmp}/lagrange-ardupilot.sock
 if [ "${1:-}" = "--wind" ]; then
     ros2 run lagrange_server lagrange run profiles/examples/quad_x500_gusty.yaml "${robot[@]}" \
