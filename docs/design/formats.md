@@ -662,6 +662,34 @@ suspension and tyres itself, so wheel bodies carry no collision shapes.
 | `wheel:springStiffness` | double | N/m | — | Required |
 | `wheel:damping` | double | N·s/m | — | Required |
 
+### 3.11 `schemas/road/schema.usda`
+
+Defined in v0.6 and written by the OpenDRIVE importer (`io/opendrive/`, `lagrange_opendrive_import`).
+
+**`RoadLaneAPI_1`** (single-apply, on an Xform per lane and lane section).
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `lane:centreLine` | double[] | m | — | x y z of each centre-line point, in the direction of travel. Required |
+| `lane:width` | double[] | m | — | Width at each point |
+| `lane:type` | token | — | `driving` | `driving`, `sidewalk`, `biking`, `parking`, `other` |
+| `lane:speedLimit` | double | m/s | `0` | 0: none given |
+| `lane:road`, `lane:lane` | int | 1 | `0` | OpenDRIVE road and lane ids |
+| `lane:junction` | bool | — | `false` | A junction's connecting road |
+| `lane:successors`, `lane:predecessors` | rel | — | — | Lanes it continues into, and those leading into it |
+
+**OpenDRIVE import** (v0.6). An own reader covers the subset that carries geometry and lanes:
+- **Reference lines:** line, arc, spiral (clothoid, by Gauss–Legendre integration), poly3 and
+  paramPoly3 (both by arc length).
+- **Roads:** elevation, lane offset, lane sections with width polynomials, road marks.
+- **Links:** lane, road and junction links.
+
+Superelevation, lane heights, objects and signals are not read yet. Road surfaces become meshes
+per lane type, road marks become thin meshes (broken marks are 3 m on and 6 m off,
+illustrative), and every driving, biking, parking or sidewalk lane becomes a `RoadLaneAPI_1`
+prim with its links. The surfaces have no colliders: they lie 1 cm above the ground plane that
+the loader adds, so roads with elevation are drawn but not yet driven on.
+
 ## 4. Sample robot: differential-drive AMR
 
 `assets/robots/amr_diffdrive/amr_diffdrive.usda`. Geometry is primitive shapes so that the file

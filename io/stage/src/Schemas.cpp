@@ -35,9 +35,9 @@ namespace {
 
 // Property namespaces of the project's schema libraries (RFC 0002 convention 2): an applied
 // schema whose properties live in one of them is collected into World::schemaInstances.
-constexpr std::array<std::string_view, 13> kSchemaNamespaces{
-    "elec:",   "thermal:", "aero:",  "weather:", "emi:",     "rad:",  "sensmat:",
-    "sensor:", "world:",   "comms:", "can:",     "vehicle:", "wheel:"};
+constexpr std::array<std::string_view, 14> kSchemaNamespaces{
+    "elec:",   "thermal:", "aero:",  "weather:", "emi:",     "rad:",   "sensmat:",
+    "sensor:", "world:",   "comms:", "can:",     "vehicle:", "wheel:", "lane:"};
 
 // Loader checks of RFC 0002 ("Loading") that the schema definitions cannot express.
 struct PairedArrays {

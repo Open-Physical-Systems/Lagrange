@@ -34,6 +34,7 @@ EXPECTED = {
     "sensor_material": ["SensorMaterialAPI_1"],
     "comms": ["RadioLinkAPI_1", "CanBusAPI_1"],
     "vehicle": ["VehicleAPI_1", "WheelAPI_1"],
+    "road": ["RoadLaneAPI_1"],
 }
 
 
