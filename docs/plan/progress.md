@@ -153,7 +153,8 @@ time-boxed. Order:
    `lagrange_foam_to_vdb` and `readFoamVectorField`/`foamToWindField` in `lagrange_fields`;
    ASCII `C` and `U`, cells averaged into voxels; round trip of an analytic field. Owed: a run
    against files from a real OpenFOAM case, TODO(verify))
-8. Samples, tutorial, release notes
+8. Samples, tutorial, release notes (**done** 2026-10-25: `docs/guide/tutorial-environment.md`
+   run by `tools/ci/tutorial_environment.sh`; `docs/release/v0.5.0.md` drafted, not released)
 
 ## v0.4 status (2026-10-25)
 

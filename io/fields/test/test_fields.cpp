@@ -109,8 +109,8 @@ std::vector<Vec3> cellCentres(const Vec3& first, double h, int nx, int ny, int n
 }
 
 TEST(Foam, AnAnalyticWindRoundTripsThroughOpenFoamFiles) {
-    // Cells of 0.5 m on the voxel lattice: one cell per voxel.
-    const std::vector<Vec3> centres = cellCentres({-3.0, -2.0, 0.5}, 0.5, 13, 9, 7);
+    // Cells of 0.5 m aligned with the origin: one cell per voxel, centre on centre.
+    const std::vector<Vec3> centres = cellCentres({-2.75, -1.75, 0.25}, 0.5, 13, 9, 7);
     std::vector<Vec3> u;
     for (const Vec3& c : centres) {
         u.push_back(linearWind(c));
@@ -129,7 +129,7 @@ TEST(Foam, AnAnalyticWindRoundTripsThroughOpenFoamFiles) {
     const auto field = Field::load(temp("foam.nvdb"));
     ASSERT_TRUE(field) << field.error();
     EXPECT_EQ((*field)->kind(), Field::Kind::Vector);
-    for (const Vec3& p : {Vec3{0.0, 0.0, 1.0}, Vec3{-1.3, 1.1, 2.2}, Vec3{2.6, -1.7, 3.4}}) {
+    for (const Vec3& p : {Vec3{0.0, 0.0, 1.0}, Vec3{-1.3, 1.1, 2.2}, Vec3{2.6, -1.2, 2.4}}) {
         const Vec3 got = (*field)->sampleVector(p);
         const Vec3 want = linearWind(p);
         for (std::size_t k = 0; k < 3; ++k) {
@@ -139,8 +139,8 @@ TEST(Foam, AnAnalyticWindRoundTripsThroughOpenFoamFiles) {
 }
 
 TEST(Foam, CellsAreAveragedIntoCoarserVoxelsAndShifted) {
-    // Cells of 0.5 m centred between voxel centres: eight per 1 m voxel, whose mean is the
-    // value at the voxel's centre for a linear field; the offset moves the case into the region.
+    // Cells of 0.5 m, eight per 1 m voxel, whose mean is the value at the voxel's centre for a
+    // linear field; the offset moves the case into the region.
     const std::vector<Vec3> centres = cellCentres({0.25, 0.25, 0.25}, 0.5, 12, 12, 8);
     std::vector<Vec3> u;
     for (const Vec3& c : centres) {
@@ -151,7 +151,7 @@ TEST(Foam, CellsAreAveragedIntoCoarserVoxelsAndShifted) {
     ASSERT_TRUE(report) << report.error();
     const auto field = Field::load(temp("coarse.nvdb"));
     ASSERT_TRUE(field);
-    for (const Vec3& voxel : {Vec3{2.0, 3.0, 2.0}, Vec3{4.0, 1.0, 3.0}}) {  // interior voxels
+    for (const Vec3& voxel : {Vec3{2.5, 3.5, 2.5}, Vec3{4.5, 1.5, 3.5}}) {  // interior voxels
         const Vec3 got = (*field)->sampleVector(
             {voxel[0] + offset[0], voxel[1] + offset[1], voxel[2] + offset[2]});
         const Vec3 want = linearWind(voxel);
