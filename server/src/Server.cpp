@@ -401,8 +401,9 @@ struct Server::Impl {
     double rtfTarget{1.0};
     std::string error;
 
-    std::vector<SignalId> bodyPose;  // pose signal per body, invalid for static bodies
-    std::vector<Captured> captured;  // by signal index; empty values when nobody subscribes
+    std::vector<SignalId> bodyPose;   // pose signal per body, invalid for static bodies
+    std::vector<SignalId> primHinge;  // angle signal per prim with a hinge, else invalid
+    std::vector<Captured> captured;   // by signal index; empty values when nobody subscribes
     std::deque<v1::LogRecord> logs;
     std::string schemaText;
     std::array<double, 3> shift{};  // world ENU of the region-local origin at load
@@ -665,6 +666,12 @@ struct Server::Impl {
         bodyPose.assign(robot.world.bodies.names.size(), SignalId{});
         for (std::size_t b = 0; b < bodyPose.size(); ++b) {
             bodyPose[b] = scheduler->bus().find("body/" + robot.world.bodies.names[b] + "/pose");
+        }
+        primHinge.assign(robot.scene.prims.size(), SignalId{});
+        for (std::size_t p = 0; p < primHinge.size(); ++p) {
+            if (!robot.scene.prims[p].hinge.empty()) {
+                primHinge[p] = scheduler->bus().find(robot.scene.prims[p].hinge);
+            }
         }
         captured.assign(scheduler->bus().signalCount(), Captured{});
         for (std::size_t s = 0; s < captured.size(); ++s) {
@@ -1041,7 +1048,16 @@ struct Server::Impl {
             const std::span<const double> v = scheduler->bus().readN(id);
             body = {{v[0], v[1], v[2]}, {v[3], v[4], v[5], v[6]}};
         }
-        return compose(body, prim.offset);
+        const Pose placed = compose(body, prim.offset);
+        const auto index = static_cast<std::size_t>(&prim - robot.scene.prims.data());
+        if (index < primHinge.size() && primHinge[index].valid()) {
+            // Turned on its hinge by the signal's angle.
+            const double half = 0.5 * scheduler->bus().read(primHinge[index]);
+            const std::array<double, 3>& a = prim.hingeAxis;
+            const double s = std::sin(half);
+            return compose(placed, Pose{{}, {std::cos(half), s * a[0], s * a[1], s * a[2]}});
+        }
+        return placed;
     }
 
     v1::Envelope snapshot(Session& session) {

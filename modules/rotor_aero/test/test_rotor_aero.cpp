@@ -337,6 +337,26 @@ TEST(RotorAeroBem, APropellerOfTheWrongHandGivesLittleThrust) {
     EXPECT_NEAR(bemThrust(propellerRig("cw", propellerFile("cw")), -600.0), right, 1e-9);
 }
 
+TEST(RotorAeroBem, FoldingBladesHangStoppedAndConeSpinning) {
+    const std::string file =
+        std::string(LAGRANGE_PROPELLERS) + "/generic_10in_folding_ccw.prop.yaml";
+    const World world = propellerRig("ccw", file);
+    Rig rig = makeRig(world, bem());
+    auto wired = rig.scheduler->wire(WorldView(world));
+    ASSERT_TRUE(wired) << to_string(wired.error().front());
+    ASSERT_TRUE(rig.scheduler->stepUntil(SimTime{2'000'000}).ok());
+    EXPECT_NEAR(rig.read("rotor/prop_joint/blade_angle"), -85.0 * std::numbers::pi / 180.0, 1e-9);
+    EXPECT_EQ(rig.read("rotor/prop_joint/thrust"), 0.0);
+    rig.plant->omega = 600.0;
+    ASSERT_TRUE(rig.scheduler->stepUntil(SimTime{5'000'000}).ok());
+    const double beta = rig.read("rotor/prop_joint/blade_angle");
+    EXPECT_GT(beta, 0.0);
+    std::string error;
+    const BemLoad open =
+        PropellerTable::build(loadPropeller(file, error), false).at(600.0, 0.0, {kRho, 0.0});
+    EXPECT_NEAR(rig.read("rotor/prop_joint/thrust"), open.thrust * std::cos(beta), 1e-9);
+}
+
 TEST(RotorAeroBem, RefusesARotorWithoutItsPropellerFile) {
     const World world = propellerRig();
     Rig rig = makeRig(world, bem());

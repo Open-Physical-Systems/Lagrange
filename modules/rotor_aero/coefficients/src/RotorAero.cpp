@@ -67,6 +67,7 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
     lag_ = ideal_ ? 0.0 : std::max(0.0, config.get<double>("inflow_time_constant").value_or(0.0));
     bem_ = !ideal_ && config.get<std::string>("fidelity").value_or("coefficients") == "bem";
     speedOfSound_ = std::max(0.0, config.get<double>("speed_of_sound").value_or(0.0));
+    gravity_ = world.gravityLocal();
     std::map<std::string, std::shared_ptr<const PropellerTable>> tables;  // by file
     groundEffect_ = !ideal_ && config.get<bool>("ground_effect").value_or(true);
 
@@ -144,6 +145,16 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
                     PropellerTable::build(p, speedOfSound_ > 0.0));
             }
             r.propeller = table;
+            if (p.folding) {
+                r.folding = FoldingBlade(p);
+            }
+        } else if (const auto file = s->assetPath("aero:rotor:propeller"); file && !ideal_) {
+            // Folding blades are mechanics, whatever the aerodynamics: the file gives them.
+            std::string error;
+            const Propeller p = loadPropeller(std::string(*file), error);
+            if (error.empty() && p.folding) {
+                r.folding = FoldingBlade(p);
+            }
         }
         const std::array<double, 3>& a = joints.axis[j];
         const double norm = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
@@ -176,6 +187,9 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
         wrench.frame = "world_local";
         r.wrenchOut = d.output(wrench);
         r.loadOut = d.output(scalar(base + "load_torque", units::N_m));
+        if (r.folding) {
+            r.bladeAngleOut = d.output(scalar(rotor + "blade_angle", units::rad));
+        }
         rotors_.push_back(std::move(r));
     }
     if (!problems.empty()) {
@@ -195,6 +209,15 @@ Status RotorAero::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
             bus.write(id, 0.0);
         }
         bus.writeN(r.wrenchOut, std::array<double, 6>{});
+        if (r.folding) {
+            // Stopped: as its weight hangs it, with the link as it rests (axis in the world's
+            // frame, as robots are built).
+            const double gravityAlong =
+                r.mountSign *
+                (gravity_[0] * r.axis[0] + gravity_[1] * r.axis[1] + gravity_[2] * r.axis[2]);
+            r.bladeAngle = r.folding->angle(0.0, 0.0, 0.0, gravityAlong);
+            bus.write(r.bladeAngleOut, r.bladeAngle);
+        }
     }
     return {};
 }
@@ -220,7 +243,16 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
             const std::span<const double> hubTwist = bus.readN(r.twist);
             const double axial =
                 hubTwist[0] * axis[0] + hubTwist[1] * axis[1] + hubTwist[2] * axis[2];
-            const BemLoad bem = r.propeller->at(spin, axial, {rho_, speedOfSound_});
+            BemLoad bem = r.propeller->at(spin, axial, {rho_, speedOfSound_});
+            if (r.folding) {
+                // Blades on their hinges: coned or folded, the disc gives the axial share.
+                const double gravityAlong =
+                    gravity_[0] * axis[0] + gravity_[1] * axis[1] + gravity_[2] * axis[2];
+                r.bladeAngle = r.folding->angle(omega, bem.thrust, bem.thrustRadius, gravityAlong);
+                bem.thrust *= std::cos(r.bladeAngle);
+                bem.torque *= std::cos(r.bladeAngle);
+                bus.write(r.bladeAngleOut, r.bladeAngle);
+            }
             // The air's torque about the joint axis: against the propeller's rotation in its hand.
             load = {bem.thrust, -r.handSign * r.mountSign * bem.torque};
             induced = bem.inducedVelocity;
@@ -228,6 +260,18 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
             // About the thrust direction, then back about the joint axis.
             const Load l = staticLoad(r.params, r.mountSign * omega, rho_);
             load = {l.thrust, r.mountSign * l.torque};
+            if (r.folding) {
+                // The coefficients have no thrust distribution: it acts at 0.75 R, the usual
+                // representative radius of a propeller.
+                constexpr double kThrustRadius = 0.75;
+                const double gravityAlong =
+                    gravity_[0] * axis[0] + gravity_[1] * axis[1] + gravity_[2] * axis[2];
+                r.bladeAngle = r.folding->angle(omega, load.thrust, kThrustRadius * r.params.radius,
+                                                gravityAlong);
+                load.thrust *= std::cos(r.bladeAngle);
+                load.torque *= std::cos(r.bladeAngle);
+                bus.write(r.bladeAngleOut, r.bladeAngle);
+            }
         }
         double target = load.thrust;
         if (groundEffect_ && hasGround_) {

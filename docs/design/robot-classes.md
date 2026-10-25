@@ -144,7 +144,10 @@ momentum are the APC's measured ones. The viewer draws the blades (twisted, in t
 spinning with their joints); `profiles/examples/quad_x500_bem.yaml` flies the quadcopter on them
 (`rotor_aero.fidelity: bem`): it hovers at 2 m as on the coefficients, rotors at 548 rad/s,
 192 W. Propeller hand and mount (puller or pusher) are physical: a propeller of the wrong hand
-turns backwards and gives little thrust (aerodynamics.md §2.1).
+turns backwards and gives little thrust (aerodynamics.md §2.1). Variants: folding blades
+(`quad_x500_folding.overlay.yaml` on the same URDF: they hang folded when stopped and open as the
+motors spin up), and `assets/robots/quad_x500_inverted/`, the motors upside down under the arms
+with the propellers as pushers; a three-blade propeller is in `assets/propellers/` too.
 
 *Status (v0.4, step 7):* `lagrange_mavlink` (`bridges/mavlink`) runs PX4 SITL in lockstep
 (`lagrange_server --mavlink px4`): HIL_SENSOR at the IMU's rate (FRD, gauss, hPa), HIL_GPS at the

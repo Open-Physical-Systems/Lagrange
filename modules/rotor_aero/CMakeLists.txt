@@ -39,6 +39,11 @@ if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
     ament_add_gtest(test_rotor_aero test/test_rotor_aero.cpp)
     target_link_libraries(test_rotor_aero lagrange_rotor_aero)
+    target_compile_definitions(
+        test_rotor_aero
+        PRIVATE
+            LAGRANGE_PROPELLERS="${CMAKE_CURRENT_SOURCE_DIR}/../../assets/propellers"
+    )
     lagrange_target_defaults(test_rotor_aero)
     ament_add_gtest(test_bem test/test_bem.cpp)
     target_link_libraries(test_bem lagrange_rotor_aero)

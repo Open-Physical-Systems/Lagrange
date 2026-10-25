@@ -37,6 +37,9 @@ constexpr double kRootTolerance = 1e-10;
 constexpr int kTableAngles = 1440;
 constexpr double kTableMachStep = 0.1;
 constexpr int kTableMachs = 10;  // 0 to 0.9
+// A folding blade's stop either way when the file gives none: folded nearly flat along the
+// motor. A modelling choice; real hinges vary.
+constexpr double kDefaultFoldLimitDeg = 85.0;
 
 double wrapAngle(double a) {
     a = std::fmod(a + std::numbers::pi, 2.0 * std::numbers::pi);
@@ -202,6 +205,13 @@ Propeller loadPropeller(const std::string& path, std::string& error) {
             }
             p.stations.push_back(s);
         }
+        if (const YAML::Node f = root["folding"]) {
+            Folding folding;
+            folding.hinge = f["hinge"].as<double>();
+            folding.bladeMass = f["blade_mass"].as<double>();
+            folding.limit = f["limit"].as<double>(kDefaultFoldLimitDeg) * kDeg;
+            p.folding = folding;
+        }
     } catch (const YAML::Exception& e) {
         error = path + ": " + e.what();
         return {};
@@ -212,6 +222,15 @@ Propeller loadPropeller(const std::string& path, std::string& error) {
                          std::ranges::adjacent_find(p.stations, [](const auto& a, const auto& b) {
                              return a.radius == b.radius;
                          }) == p.stations.end();
+    const bool foldingOk = !p.folding || (p.folding->hinge > 0.0 && p.folding->hinge < 0.5 &&
+                                          p.folding->bladeMass > 0.0 && p.folding->limit > 0.0 &&
+                                          p.folding->limit <= 0.5 * std::numbers::pi);
+    if (!foldingOk) {
+        error = path +
+                ": folding needs a hinge at r/R in (0, 0.5), blade_mass > 0 and a limit "
+                "in (0, 90] degrees";
+        return {};
+    }
     if (p.radius <= 0.0 || p.blades < 1 || (p.hand != "ccw" && p.hand != "cw") || !ordered ||
         std::ranges::any_of(p.stations, [](const BladeStation& s) { return s.chord <= 0.0; })) {
         error = path +
@@ -237,6 +256,7 @@ BemLoad bemLoad(const Propeller& p, double omega, double axialSpeed, const Air& 
     const double root = p.stations.front().radius * p.radius;
     const double dr = (p.radius - root) / kElements;
     double inducedThrust = 0.0;
+    double thrustMoment = 0.0;
     for (int k = 0; k < kElements; ++k) {
         const double r = root + (k + 0.5) * dr;
         const BladeStation s = stationAt(p.stations, r / p.radius);
@@ -302,8 +322,11 @@ BemLoad bemLoad(const Propeller& p, double omega, double axialSpeed, const Air& 
         out.thrust += load.thrust * dr;
         out.torque += load.torque * dr;
         inducedThrust += load.thrust * dr * w;
+        thrustMoment += load.thrust * dr * r;
     }
     out.inducedVelocity = out.thrust != 0.0 ? inducedThrust / out.thrust : 0.0;
+    out.thrustRadius =
+        out.thrust != 0.0 ? std::clamp(thrustMoment / out.thrust, root, p.radius) : 0.75 * p.radius;
     return out;
 }
 
@@ -325,7 +348,7 @@ PropellerTable PropellerTable::build(const Propeller& p, bool compressible) {
                 const double theta = -std::numbers::pi + 2.0 * std::numbers::pi * k / kTableAngles;
                 const BemLoad l = bemLoad(p, std::cos(theta) / p.radius, std::sin(theta), air);
                 t.rows_[static_cast<std::size_t>(m) * (kTableAngles + 1) + k] = {
-                    l.thrust, l.torque, l.inducedVelocity, l.vortexRing};
+                    l.thrust, l.torque, l.inducedVelocity, l.thrustRadius / p.radius, l.vortexRing};
             }
         });
     }
@@ -369,8 +392,66 @@ BemLoad PropellerTable::at(double omega, double axialSpeed, const Air& air) cons
     out.thrust = air.density * speed2 * mix([](const Row& r) { return r.thrust; });
     out.torque = air.density * speed2 * mix([](const Row& r) { return r.torque; });
     out.inducedVelocity = speed * mix([](const Row& r) { return r.induced; });
+    out.thrustRadius = radius_ * mix([](const Row& r) { return r.thrustRadius; });
     out.vortexRing = row(m, fu < 0.5 ? k : k + 1).vortexRing;
     return out;
+}
+
+FoldingBlade::FoldingBlade(const Propeller& p)
+    : blades_(p.blades)
+    , hinge_(p.folding ? p.folding->hinge * p.radius : 0.0)
+    , mass_(p.folding ? p.folding->bladeMass : 0.0)
+    , limit_(p.folding ? p.folding->limit : 0.0) {
+    if (!p.folding || p.stations.empty()) {
+        return;
+    }
+    // Mass along the blade outboard of the hinge as chord²·thickness (the section's area).
+    constexpr int kSlices = 50;
+    const double ds = (p.radius - hinge_) / kSlices;
+    double total = 0.0, first = 0.0, second = 0.0;
+    for (int k = 0; k < kSlices; ++k) {
+        const double s = (k + 0.5) * ds;
+        const BladeStation st = stationAt(p.stations, (hinge_ + s) / p.radius);
+        const double w = st.chord * st.chord * st.thickness * ds;
+        total += w;
+        first += w * s;
+        second += w * s * s;
+    }
+    s1_ = mass_ * first / total;
+    s2_ = mass_ * second / total;
+    centre_ = hinge_ + first / total;
+}
+
+double FoldingBlade::angle(double omega, double thrust, double thrustRadius,
+                           double gravityAlong) const {
+    if (mass_ <= 0.0) {
+        return 0.0;
+    }
+    // Moment towards the front: one blade's thrust and its weight's component along the axis.
+    const double push =
+        thrust / blades_ * std::max(thrustRadius - hinge_, 0.0) + gravityAlong * s1_;
+    const double spin = omega * omega;
+    const auto balance = [&](double beta) {
+        return push * std::cos(beta) -
+               spin * std::sin(beta) * (hinge_ * s1_ + std::cos(beta) * s2_);
+    };
+    // Stopped (or nearly): folded to the stop the moment pulls it to.
+    if (spin * (hinge_ * s1_ + s2_) < 1e-9 * std::abs(push) + 1e-15) {
+        return push >= 0.0 ? limit_ : -limit_;
+    }
+    double lo = -limit_;
+    double hi = limit_;
+    if (balance(lo) <= 0.0) {
+        return lo;
+    }
+    if (balance(hi) >= 0.0) {
+        return hi;
+    }
+    for (int i = 0; i < kRootIterations; ++i) {
+        const double mid = 0.5 * (lo + hi);
+        (balance(mid) > 0.0 ? lo : hi) = mid;
+    }
+    return 0.5 * (lo + hi);
 }
 
 PropellerCoefficients coefficientsAt(const Propeller& p, double advanceRatio, double tipSpeed,

@@ -2,6 +2,7 @@
 #include "Stations.hpp"
 #include "lagrange/rotor_aero/Propeller.hpp"
 #include "lagrange/world/Model.hpp"
+#include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
 #include <array>
@@ -54,19 +55,19 @@ void append(TriMesh& to, const TriMesh& from) {
     }
 }
 
-/// One blade along the direction at angle `psi` about +z.
-TriMesh blade(const Propeller& p, double psi) {
+/// One blade along the direction at angle `psi` about +z, from radius fraction `from` to `to`,
+/// moved `shift` (m) towards the axis.
+TriMesh blade(const Propeller& p, double psi, double from, double to, double shift = 0.0) {
     const double hand = p.hand == "cw" ? -1.0 : 1.0;
     const Vec3 radial{std::cos(psi), std::sin(psi), 0.0};
     // The direction the blade moves in: about +z in the propeller's hand.
     const Vec3 ahead{-hand * std::sin(psi), hand * std::cos(psi), 0.0};
-    const double root = p.stations.front().radius;
     std::vector<Vec3> points;
     const int ring = 2 * kSectionPoints;
     for (int i = 0; i <= kRadialSections; ++i) {
-        const double x = root + (1.0 - root) * i / kRadialSections;
+        const double x = from + (to - from) * i / kRadialSections;
         const BladeStation s = stationAt(p.stations, x);
-        const double r = x * p.radius;
+        const double r = x * p.radius - shift;
         const double c = s.chord * p.radius;
         // Chord towards the leading edge, and the side the camber faces (the front).
         const double cb = std::cos(s.twist);
@@ -160,12 +161,36 @@ TriMesh propellerMesh(const Propeller& p) {
         return mesh;
     }
     for (int b = 0; b < p.blades; ++b) {
-        append(mesh, blade(p, 2.0 * std::numbers::pi * b / p.blades));
+        append(mesh,
+               blade(p, 2.0 * std::numbers::pi * b / p.blades, p.stations.front().radius, 1.0));
     }
     const BladeStation& root = p.stations.front();
     append(mesh, cylinderMesh(root.radius * p.radius,
                               kHubThicknessOfRootChord * root.chord * p.radius, 24));
     return mesh;
+}
+
+TriMesh foldingHubMesh(const Propeller& p) {
+    TriMesh mesh;
+    if (p.stations.empty() || !p.folding) {
+        return mesh;
+    }
+    const double root = p.stations.front().radius;
+    for (int b = 0; b < p.blades; ++b) {
+        append(mesh, blade(p, 2.0 * std::numbers::pi * b / p.blades, root,
+                           std::max(p.folding->hinge, root)));
+    }
+    const BladeStation& s = p.stations.front();
+    append(mesh, cylinderMesh(root * p.radius, kHubThicknessOfRootChord * s.chord * p.radius, 24));
+    return mesh;
+}
+
+TriMesh foldingBladeMesh(const Propeller& p) {
+    if (p.stations.empty() || !p.folding) {
+        return {};
+    }
+    const double hinge = std::max(p.folding->hinge, p.stations.front().radius);
+    return blade(p, 0.0, hinge, 1.0, hinge * p.radius);
 }
 
 void addPropellerBlades(Model& model) {
@@ -209,8 +234,36 @@ void addPropellerBlades(Model& model) {
         prim.offset.orientation = fromZ({mount * a[0] / n, mount * a[1] / n, mount * a[2] / n});
         prim.material = material;
         prim.mesh = static_cast<std::uint32_t>(model.scene.meshes.size());
-        model.scene.meshes.push_back(propellerMesh(p));
-        model.scene.prims.push_back(std::move(prim));
+        if (!p.folding) {
+            model.scene.meshes.push_back(propellerMesh(p));
+            model.scene.prims.push_back(std::move(prim));
+            continue;
+        }
+        // Folding: the hub, and each blade on its hinge, turned by the rotor's blade angle.
+        const std::string joint(world.signalInstanceName(s->prim));
+        const Quat mounted = prim.offset.orientation;
+        model.scene.meshes.push_back(foldingHubMesh(p));
+        const auto bladeMesh = static_cast<std::uint32_t>(model.scene.meshes.size());
+        model.scene.meshes.push_back(foldingBladeMesh(p));
+        const std::string path = prim.path;
+        model.scene.prims.push_back(prim);
+        for (int b = 0; b < p.blades; ++b) {
+            const double psi = 2.0 * std::numbers::pi * b / p.blades;
+            const double hinge = std::max(p.folding->hinge, p.stations.front().radius) * p.radius;
+            ScenePrim part = prim;
+            part.name = "blade_" + std::to_string(b + 1);
+            part.path = path + "_" + part.name;
+            part.mesh = bladeMesh;
+            // At its hinge, along its azimuth, in the propeller's frame; it folds about the
+            // tangent: Ry(−β) lifts its tip towards the thrust direction.
+            const Quat azimuth{std::cos(0.5 * psi), 0.0, 0.0, std::sin(0.5 * psi)};
+            part.offset.orientation = multiply(mounted, azimuth);
+            part.offset.position =
+                rotate(mounted, {hinge * std::cos(psi), hinge * std::sin(psi), 0.0});
+            part.hinge = "rotor/" + joint + "/blade_angle";
+            part.hingeAxis = {0.0, -1.0, 0.0};
+            model.scene.prims.push_back(std::move(part));
+        }
     }
 }
 
