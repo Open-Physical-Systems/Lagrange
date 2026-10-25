@@ -126,9 +126,11 @@ with it.
   `induced_voltage` (`2π·f·B·A`, RMS) for a loop area.
 - Applied (`lagrange_sensors`): the magnetometer adds `b_field` at its own rate (a 60 Hz field
   sampled at 100 Hz shows at 40 Hz, `test_emi`), the IMU adds `accel_noise` and `gyro_noise` from
-  its own random stream. Optional inputs: without the EMI domain they read zero. Not yet: the
-  encoder glitches in the ros2_control bridge, CAN errors and the radio's SNR (v0.5 step 6, the
-  comms domain).
+  its own random stream. Optional inputs: without the EMI domain they read zero. An encoder
+  victim on a joint's prim (`emi/<joint>/glitch_probability`) corrupts the counts of that
+  joint's encoder in the ros2_control bridge (`encoder_resolution`): each edge, an extra or a
+  missing count that stays in the counter. CAN errors and the radio's SNR are applied by the
+  comms domain (comms.md §8).
 - The viewer: the server lists the sources in `EnvironmentState` and slices `emi/flux_density`
   (|B| RMS, sources added in power) analytically; `env/emi/b_field_rms` as a Field3D signal is
   not written yet.

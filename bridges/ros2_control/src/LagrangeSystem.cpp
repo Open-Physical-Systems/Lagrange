@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <optional>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -100,7 +101,12 @@ public:
         for (std::size_t j = 0; j < joints_.size(); ++j) {
             const JointSlot& slot = table[joints_[j]];
             std::optional<Encoder>& encoder = encoders_[j];
-            // With an encoder, position and velocity are what its counter and driver report.
+            // With an encoder, position and velocity are what its counter and driver report,
+            // with the counts interference added or took away.
+            if (encoder && slot.glitchProbability > 0.0) {
+                encoder->glitch(slot.position, slot.glitchProbability,
+                                [this] { return uniform_(rng_); });
+            }
             const double position = encoder ? encoder->position(slot.position) : slot.position;
             const double velocity =
                 encoder ? encoder->velocity(slot.position, period.seconds()) : slot.velocity;
@@ -146,6 +152,8 @@ private:
     std::vector<std::vector<std::string>> states_;
     std::vector<std::vector<std::string>> commands_;
     std::vector<std::optional<Encoder>> encoders_;  // per joint; none: exact values
+    std::mt19937_64 rng_{0x656e636fU};              // glitches; a fixed seed, so runs repeat
+    std::uniform_real_distribution<double> uniform_{0.0, 1.0};
 };
 
 }  // namespace lagrange::ros2_control

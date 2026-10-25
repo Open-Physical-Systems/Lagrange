@@ -65,6 +65,12 @@ public:
                 d.input(feedback(base + "/position", prismatic ? units::m : units::rad));
             joint.velocity = d.input(
                 feedback(base + "/velocity", prismatic ? units::m_per_s : units::rad_per_s));
+            // An encoder victim of EMI on the joint's prim (EmiSusceptibilityAPI_1, encoder).
+            SignalSpec glitch = spec("emi/" + std::string(world.signalInstanceName(table.prim[j])) +
+                                         "/glitch_probability",
+                                     units::one);
+            glitch.optional = true;
+            joint.glitch = d.input(glitch);
             // The command: the electrical domain (or its ideal substitute) turns it into the
             // torque.
             joint.torque =
@@ -96,6 +102,7 @@ public:
                 slot.position = bus.read(joint.position);
                 slot.velocity = bus.read(joint.velocity);
                 slot.effort = joint.applied;
+                slot.glitchProbability = bus.read(joint.glitch);
             }
         }
         bool cycled = false;
@@ -167,7 +174,7 @@ private:
         std::string slot;
         ServoGains gains;
         double effortLimit{INFINITY};
-        SignalId position, velocity, torque;
+        SignalId position, velocity, torque, glitch;
         CommandMode mode{CommandMode::None};
         double integral{0.0};
         double applied{0.0};
