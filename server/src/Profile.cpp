@@ -145,6 +145,17 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 domain["ambient_temperature"].is_number()) {
                 settings.ambientTemperatureK = domain["ambient_temperature"].as<double>();
             }
+            if (name == "aerodynamics") {
+                for (const char* key : {"air_density", "wind_speed", "wind_from",
+                                        "wind_reference_height", "roughness_length"}) {
+                    if (domain.contains(key) && domain[key].is_number()) {
+                        settings.aerodynamics[key] = domain[key].as<double>();
+                    }
+                }
+                if (domain.contains("turbulence") && domain["turbulence"].is_string()) {
+                    settings.aerodynamics["turbulence"] = domain["turbulence"].as<std::string>();
+                }
+            }
             if (name == "rotor_aero" && domain.contains("air_density") &&
                 domain["air_density"].is_number()) {
                 settings.airDensityKgM3 = domain["air_density"].as<double>();

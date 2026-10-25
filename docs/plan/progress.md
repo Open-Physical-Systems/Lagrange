@@ -147,6 +147,9 @@ step resting on the ones before:
    0.001 nT of NOAA's 100 test points; the ICAO standard atmosphere; on the sample quadcopter
    with PX4 SITL's default home as the example site)
 6. `modules/aerodynamics`: link drag, mean wind profile, Dryden turbulence (MIL-HDBK-1797)
+   (**done** 2026-10-25: `AeroDrag`; the wind in the aerodynamics config until v0.5's weather;
+   the sample quadcopter holds 2 m within 6 cm in 8 m/s with gusts, `quad_x500_gusty.yaml`;
+   MIL-HDBK-1797 equation numbers marked TODO(verify))
 7. `bridges/mavlink`: PX4 SITL lockstep (`HIL_SENSOR`, `HIL_GPS`, `HIL_ACTUATOR_CONTROLS`), then
    ArduPilot's JSON interface
 8. The acceptance mission (take-off, square in 8 m/s gusts, land; low-battery thrust sag), the

@@ -12,6 +12,7 @@ find_package(lagrange_sensors REQUIRED)
 find_package(lagrange_electrical REQUIRED)
 find_package(lagrange_thermal REQUIRED)
 find_package(lagrange_rotor_aero REQUIRED)
+find_package(lagrange_aerodynamics REQUIRED)
 find_package(lagrange_recording REQUIRED)
 find_package(lagrange_meshes REQUIRED)
 find_package(lagrange_ros2 REQUIRED)
@@ -72,6 +73,7 @@ target_link_libraries(
         lagrange_electrical::lagrange_electrical
         lagrange_thermal::lagrange_thermal
         lagrange_rotor_aero::lagrange_rotor_aero
+        lagrange_aerodynamics::lagrange_aerodynamics
         lagrange_recording::lagrange_recording
         lagrange_meshes::lagrange_meshes
         lagrange_ros2::lagrange_ros2

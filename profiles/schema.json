@@ -192,7 +192,13 @@
     "aerodynamics": {
       "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
       "properties": {
-        "fidelity": { "enum": ["drag", "drag_plus_field", "lbm"], "default": "drag" }
+        "fidelity": { "enum": ["drag", "drag_plus_field", "lbm"], "default": "drag" },
+        "air_density": { "type": "number", "exclusiveMinimum": 0, "description": "kg/m³, the site's air density; rotor_aero.air_density when absent. No default." },
+        "wind_speed": { "type": "number", "minimum": 0, "description": "m/s, mean wind at wind_reference_height (until the weather domain gives the site's wind, v0.5)" },
+        "wind_from": { "type": "number", "description": "degrees, meteorological: 0 from the north, 90 from the east" },
+        "wind_reference_height": { "type": "number", "exclusiveMinimum": 0, "description": "m above the ground" },
+        "roughness_length": { "type": "number", "exclusiveMinimum": 0, "description": "m, the terrain's z0 for the logarithmic profile (open flat terrain: about 0.03)" },
+        "turbulence": { "enum": ["none", "dryden"], "default": "none" }
       },
       "unevaluatedProperties": false
     },

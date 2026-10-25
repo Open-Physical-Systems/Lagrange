@@ -16,9 +16,12 @@ def Xform "quad_x500" (
     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
     def Xform "base_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "AeroAPI_1"]
     )
     {
+        double3 aero:angularDamping = (0.002, 0.002, 0.004)
+        double3 aero:dragCoeff = (1, 1, 1.1)
+        double3 aero:referenceArea = (0.04, 0.04, 0.09)
         point3f physics:centerOfMass = (0, 0, 0)
         float3 physics:diagonalInertia = (0.0217, 0.0217, 0.04)
         float physics:mass = 1.9

@@ -114,6 +114,13 @@ apply:
         elec:maxCurrent: 25.0                    # A
         elec:joint: rotor_4_joint
         elec:powerPort: power/dc_bus
+  # Drag of the frame, battery and arms (illustrative): projected areas along x, y and z.
+  - prim: base_link
+    schemas:
+      AeroAPI_1:
+        aero:referenceArea: [0.04, 0.04, 0.09]   # m²
+        aero:dragCoeff: [1.0, 1.0, 1.1]
+        aero:angularDamping: [0.002, 0.002, 0.004]   # N·m·s/rad
   # Flight sensors on the frame, for an autopilot (noise illustrative, of small-drone parts).
   - prim: base_link
     create_child: imu
