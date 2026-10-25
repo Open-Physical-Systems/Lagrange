@@ -131,7 +131,9 @@ time-boxed. Order:
    `clear` substitute (**done** 2026-10-25: `lagrange_weather`, `--weather`, the profile's
    weather keys; weather.md §8. The wind stays in the aerodynamics config for now)
 3. Sensor weather effects: lidar attenuation, backscatter and rain returns (CPU and the GPU
-   kernel), camera fog and rain
+   kernel), camera fog and rain (**done** 2026-10-25: per beam on the CPU on every tier, the
+   GPU kernel not needed; weather.md §8; fog clutter uncalibrated (owed: fog-chamber data);
+   `profiles/examples/amr_fog.yaml`)
 4. Fields infrastructure: OpenVDB/NanoVDB, field signals, CPU and GPU sampling, the viewer's
    volume overlays; wind and fog fields
 5. `modules/emi`: analytic sources and field maps, victims (magnetometer, IMU, encoder, CAN,

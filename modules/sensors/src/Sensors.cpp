@@ -4,6 +4,7 @@
 #include "lagrange/sensors/ImuNoise.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
+#include "lagrange/sensors/WeatherEffects.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
@@ -276,7 +277,7 @@ public:
         return out;
     }
 
-    Status declare(const WorldView& world, const ModuleConfig&, SignalDeclarer& d) override {
+    Status declare(const WorldView& world, const ModuleConfig& config, SignalDeclarer& d) override {
         const World::Sensors& sensors = world.sensors();
         layout_ = LidarLayout::from(sensors.settings[sensor_]);
         samples_ = layout_.beams();
@@ -308,6 +309,32 @@ public:
             out.arrayLength = samples_;
             return out;
         }());
+        // In the weather domain's air (config "weather": it runs): extinction at the lidar's
+        // wavelength, the fog's share of it, the rain rate and the window's contamination.
+        weather_ = config.get<bool>("weather").value_or(false) && !groundTruth_;
+        if (weather_) {
+            const bool infrared = setting(sensors, sensor_, "wavelength", 905e-9) > 1.2e-6;
+            const auto in = [&](const std::string& name) {
+                SignalSpec s = spec(name, SignalType::Scalar, units::per_m);
+                s.feedback = true;  // the weather changes slowly
+                return s;
+            };
+            extinction_ =
+                d.input(in(infrared ? "env/extinction/nir_1550" : "env/extinction/nir_905"));
+            fogExtinction_ =
+                d.input(in(infrared ? "env/extinction/fog_1550" : "env/extinction/fog_905"));
+            SignalSpec rain = in("env/rain_rate");
+            rain.unit = units::m_per_s;
+            rainRate_ = d.input(rain);
+            SignalSpec dirt = in("sensor/" + name_ + "/contamination");
+            dirt.unit = units::one;
+            contamination_ = d.input(dirt);
+            clutter_.pulseLength = setting(sensors, sensor_, "pulse_length", clutter_.pulseLength);
+            clutter_.beamDiameter =
+                setting(sensors, sensor_, "beam_diameter", clutter_.beamDiameter);
+            clutter_.reflectivity =
+                setting(sensors, sensor_, "max_range_reflectivity", clutter_.reflectivity);
+        }
         return {};
     }
 
@@ -374,6 +401,19 @@ public:
         } else {
             castOnCpu(sensor);
         }
+        if (weather_) {
+            const SensorWeather w{bus.read(extinction_), bus.read(fogExtinction_),
+                                  bus.read(rainRate_), bus.read(contamination_)};
+            for (std::uint32_t i = 0; i < samples_; ++i) {
+                // Its own stream, so that the range noise below is the same with or without.
+                random::Stream rng(context.seed, context.stepIndex, kWeatherStream + i);
+                const double u1 = rng.uniform();
+                const double u2 = rng.uniform();
+                const double u3 = rng.uniform();
+                nearest_[i] =
+                    weatherRange(nearest_[i], minRange_, maxRange_, w, clutter_, u1, u2, u3);
+            }
+        }
         for (std::uint32_t i = 0; i < samples_; ++i) {
             double nearest = nearest_[i];
             if (nearest < minRange_ || nearest > maxRange_) {
@@ -436,6 +476,10 @@ private:
         return {{v[0], v[1], v[2]}, {v[3], v[4], v[5], v[6]}};
     }
 
+    static constexpr std::uint32_t kWeatherStream = 0x8000'0000U;  // + beam
+    bool weather_{false};
+    LidarClutter clutter_;
+    SignalId extinction_, fogExtinction_, rainRate_, contamination_;
     LidarLayout layout_;
     std::uint32_t samples_{0};  // beams, all rings
     double minRange_{0.0}, maxRange_{0.0}, noise_{0.0};
@@ -581,7 +625,7 @@ public:
         return out;
     }
 
-    Status declare(const WorldView& world, const ModuleConfig&, SignalDeclarer& d) override {
+    Status declare(const WorldView& world, const ModuleConfig& config, SignalDeclarer& d) override {
         const World::Sensors& sensors = world.sensors();
         const double width = setting(sensors, sensor_, "width", 640.0);
         const double height = setting(sensors, sensor_, "height", 480.0);
@@ -626,6 +670,17 @@ public:
         image_ = image("image", Unit{});
         depth_ = image("depth", units::m);
         instance_ = image("instance", Unit{});
+        // The weather's veil (config "weather"): visible extinction and the lens's contamination.
+        weather_ = config.get<bool>("weather").value_or(false) && !groundTruth_;
+        if (weather_) {
+            SignalSpec e = spec("env/extinction/visible", SignalType::Scalar, units::per_m);
+            e.feedback = true;
+            extinction_ = d.input(e);
+            SignalSpec dirt =
+                spec("sensor/" + name_ + "/contamination", SignalType::Scalar, units::one);
+            dirt.feedback = true;
+            contamination_ = d.input(dirt);
+        }
         return {};
     }
 
@@ -668,6 +723,10 @@ public:
                 // The colour keeps whatever was drawn: a far clip limits the range, not the view.
             }
         }
+        if (weather_) {
+            applyCameraWeather(images_.rgba, images_.depth, bus.read(extinction_),
+                               bus.read(contamination_));
+        }
         publish(bus);
         return {};
     }
@@ -707,6 +766,8 @@ private:
     std::vector<gpu::RasterInstance> instances_;
     gpu::RasterImages images_;
     SignalId image_, depth_, instance_;
+    bool weather_{false};
+    SignalId extinction_, contamination_;
 };
 }  // namespace
 

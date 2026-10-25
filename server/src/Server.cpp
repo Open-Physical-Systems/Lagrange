@@ -536,6 +536,7 @@ struct Server::Impl {
                 next->add(std::make_unique<thermal::ThermalNetwork>(), ModuleConfig(heat));
             }
         }
+        bool weatherInRun = false;  // the sensors see the weather when it runs
         // The weather (domains/weather.md): the site's atmosphere from --weather, a WeatherAPI_1
         // prim and the profile (the profile wins), the temperature falling back to the ambient
         // one. Without the site it does not run (nothing needs it yet); off, its clear substitute.
@@ -553,6 +554,7 @@ struct Server::Impl {
             const ModuleConfig config(weather);
             if (weather::Weather::hasSite(WorldView(robot.world), config)) {
                 next->add(std::make_unique<weather::Weather>(off("weather")), config);
+                weatherInRun = true;
             }
         }
         bool windInRun = false;
@@ -629,6 +631,7 @@ struct Server::Impl {
             }
         }
         ModuleConfigData sensing;
+        sensing.values["weather"] = weatherInRun;
         sensing.tier =
             rayContext ? static_cast<CapabilityTier>(rayContext->tier()) : CapabilityTier::Tier0;
         for (auto& sensor : off("sensors")

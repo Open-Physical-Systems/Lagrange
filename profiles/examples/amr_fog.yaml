@@ -1,0 +1,17 @@
+# profiles/examples/amr_fog.yaml — the sample AMR in its warehouse in dense fog: the weather
+# domain (site: 10 °C, 1000 hPa, 95 % humidity; this scenario's parameters) with 60 m of
+# visibility. The lidars lose range by the lidar equation and see clutter near the sensor; the
+# camera, if any, a veil. Run:
+#   ros2 run lagrange_server lagrange run profiles/examples/amr_fog.yaml
+schema_version: 1
+stage: robots/amr_diffdrive/amr_diffdrive.urdf
+domains:
+  rigid_body:   { enabled: true, backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: false, substitute: ideal }
+  thermal:      { enabled: false, substitute: ambient }
+  aerodynamics: { enabled: false, substitute: zero }
+  weather:      { enabled: true, temperature: 283.15, pressure: 100000, relative_humidity: 0.95,
+                  visibility: 60, effects: [fog, rain, dust, wet_friction, lens_contamination] }
+  emi:          { enabled: false, substitute: zero }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: true }
