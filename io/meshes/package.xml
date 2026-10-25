@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>lagrange_meshes</name>
+  <version>0.2.0</version>
+  <description>Mesh import for Lagrange: glTF 2.0, OBJ, STL and Collada files through Assimp, as triangles grouped by material, and the resolution of package:// mesh references.</description>
+  <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>lagrange_cmake</buildtool_depend>
+  <depend>lagrange_core</depend>
+  <depend>ament_index_cpp</depend>
+  <depend>assimp</depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

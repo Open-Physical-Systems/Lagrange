@@ -1,0 +1,5 @@
+# LeakSanitizer suppressions for the sanitizer builds.
+#
+# OpenUSD keeps process-lifetime registries (Sdf_IdRegistryImpl, TfType, the plugin and schema
+# registries) that it deliberately never frees. It is a Release dependency, not code under test.
+leak:libusd_ms.so

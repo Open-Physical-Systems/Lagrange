@@ -1,0 +1,207 @@
+#include "lagrange/server/Profile.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <exception>
+#include <jsoncons/json.hpp>
+#include <jsoncons_ext/jsonschema/jsonschema.hpp>
+
+#include <yaml-cpp/yaml.h>
+
+namespace lagrange::server {
+
+namespace {
+
+namespace jsonschema = jsoncons::jsonschema;
+
+constexpr double kNsPerS = 1e9;
+constexpr std::int64_t kMinPhysicsDtNs = 100'000;     // 0.1 ms, as DomainState advertises
+constexpr std::int64_t kMaxPhysicsDtNs = 10'000'000;  // 10 ms
+
+/// A YAML document as JSON, for the schema. Scalars keep YAML 1.2 core meanings: true/false,
+/// null and ~, integers, floats; anything else is a string.
+jsoncons::json toJson(const YAML::Node& node) {
+    switch (node.Type()) {
+        case YAML::NodeType::Map: {
+            jsoncons::json out(jsoncons::json_object_arg);
+            for (const auto& item : node) {
+                out.insert_or_assign(item.first.as<std::string>(), toJson(item.second));
+            }
+            return out;
+        }
+        case YAML::NodeType::Sequence: {
+            jsoncons::json out(jsoncons::json_array_arg);
+            for (const auto& item : node) {
+                out.push_back(toJson(item));
+            }
+            return out;
+        }
+        case YAML::NodeType::Scalar: {
+            const std::string text = node.Scalar();
+            if (node.Tag() == "!") {  // quoted: always a string
+                return jsoncons::json(text);
+            }
+            if (text == "true" || text == "false") {
+                return jsoncons::json(text == "true");
+            }
+            if (text == "null" || text == "~" || text.empty()) {
+                return jsoncons::json::null();
+            }
+            std::size_t used = 0;
+            try {
+                const long long integer = std::stoll(text, &used);
+                if (used == text.size()) {
+                    return jsoncons::json(static_cast<std::int64_t>(integer));
+                }
+                const double real = std::stod(text, &used);
+                if (used == text.size()) {
+                    return jsoncons::json(real);
+                }
+            } catch (const std::exception&) {
+            }
+            return jsoncons::json(text);
+        }
+        case YAML::NodeType::Null:
+        case YAML::NodeType::Undefined:
+            break;
+    }
+    return jsoncons::json::null();
+}
+
+void error(ProfileCheck& check, std::string pointer, std::string message) {
+    check.issues.push_back({true, std::move(pointer), std::move(message)});
+}
+
+void warning(ProfileCheck& check, std::string pointer, std::string message) {
+    check.issues.push_back({false, std::move(pointer), std::move(message)});
+}
+
+}  // namespace
+
+ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson,
+                          const ProfileContext& context) {
+    ProfileCheck check;
+    jsoncons::json profile;
+    try {
+        const YAML::Node document = YAML::Load(yaml);
+        if (!document.IsMap()) {
+            error(check, "", "a profile must be a mapping with 'stage' and 'domains'");
+            return check;
+        }
+        profile = toJson(document);
+    } catch (const YAML::Exception& e) {
+        error(check, "", "line " + std::to_string(e.mark.line + 1) + ": " + e.msg);
+        return check;
+    }
+
+    if (!schemaJson.empty()) {
+        try {
+            const auto schema = jsonschema::make_json_schema(jsoncons::json::parse(schemaJson));
+            schema.validate(
+                profile,
+                [&check](const jsonschema::validation_message& message) -> jsonschema::walk_result {
+                    std::string text = message.message();
+                    if (text.size() > 200) {
+                        text = text.substr(0, 197) + "...";
+                    }
+                    error(check, message.instance_location().string(), text);
+                    return jsonschema::walk_result::advance;
+                });
+        } catch (const std::exception& e) {
+            error(check, "", std::string("the profile schema could not be used: ") + e.what());
+        }
+    }
+
+    ProfileSettings settings;
+    if (profile.contains("stage") && profile["stage"].is_string() &&
+        profile["stage"].as<std::string>() != context.stage) {
+        error(check, "/stage",
+              "this server runs " + context.stage +
+                  "; to run another stage, start the server with it");
+    }
+    if (profile.contains("domains") && profile["domains"].is_object()) {
+        for (const auto& member : profile["domains"].object_range()) {
+            const std::string name(member.key());
+            const jsoncons::json& domain = member.value();
+            const std::string at = "/domains/" + name;
+            if (!domain.is_object() || !domain.contains("enabled") ||
+                !domain["enabled"].is_bool()) {
+                continue;  // the schema reported it
+            }
+            const bool enabled = domain["enabled"].as<bool>();
+            if (domain.contains("dt") && domain["dt"].is_number()) {
+                const double ns = domain["dt"].as<double>() * kNsPerS;
+                if (std::abs(ns - std::round(ns)) > 1e-6) {
+                    error(check, at + "/dt", "dt must be a whole number of nanoseconds");
+                } else if (name == "rigid_body") {
+                    const auto step = static_cast<std::int64_t>(std::llround(ns));
+                    if (step < kMinPhysicsDtNs || step > kMaxPhysicsDtNs) {
+                        error(check, at + "/dt", "the MuJoCo step must be from 0.0001 to 0.01 s");
+                    } else {
+                        settings.rigidBodyDtNs = step;
+                    }
+                }
+            }
+            if (enabled) {
+                if (!context.modules.contains(name)) {
+                    error(check, at + "/enabled",
+                          name +
+                              " has no module in this server yet; disable it and name a "
+                              "substitute");
+                }
+                if (name == "rigid_body" && domain.contains("backend") &&
+                    domain["backend"].as<std::string>() != "mujoco") {
+                    error(check, at + "/backend", "this server's rigid body backend is mujoco");
+                }
+                if (name == "sensors" && domain.contains("only")) {
+                    warning(check, at + "/only", "not applied yet: every sensor is simulated");
+                }
+                continue;
+            }
+            if (context.modules.contains(name)) {
+                settings.substituted.insert(name);
+            }
+            if (domain.contains("substitute")) {
+                const jsoncons::json& substitute = domain["substitute"];
+                const std::string token =
+                    substitute.is_string()
+                        ? substitute.as<std::string>()
+                        : (substitute.contains("kind") ? substitute["kind"].as<std::string>()
+                                                       : std::string());
+                const auto allowed = context.substitutes.find(name);
+                if (allowed != context.substitutes.end() && !allowed->second.contains(token)) {
+                    std::string choices;
+                    for (const std::string& option : allowed->second) {
+                        choices += (choices.empty() ? "" : ", ") + option;
+                    }
+                    error(check, at + "/substitute",
+                          "'" + token + "' cannot replace " + name + " here; choose " + choices);
+                }
+            }
+        }
+    }
+    if (profile.contains("time") && profile["time"].is_object() &&
+        profile["time"].contains("real_time_factor") &&
+        profile["time"]["real_time_factor"].is_number()) {
+        settings.realTimeFactor = profile["time"]["real_time_factor"].as<double>();
+        if (profile["time"].contains("end")) {
+            warning(check, "/time/end", "not applied yet: the run does not stop by itself");
+        }
+    }
+    for (const char* key : {"environment", "seed", "deterministic", "tier", "batch", "world",
+                            "bridges", "scenario", "record"}) {
+        if (profile.contains(key)) {
+            warning(check, std::string("/") + key,
+                    std::string("not applied by this server yet") +
+                        (std::string(key) == "record" ? "; start it with --record" : ""));
+        }
+    }
+    check.valid = std::none_of(check.issues.begin(), check.issues.end(),
+                               [](const ProfileIssue& issue) { return issue.error; });
+    if (check.valid) {
+        check.settings = std::move(settings);
+    }
+    return check;
+}
+
+}  // namespace lagrange::server

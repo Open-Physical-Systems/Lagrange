@@ -1,0 +1,12 @@
+# Build trees and local state stay out of container builds (packaging/container/Containerfile).
+build
+build-*
+install
+install-*
+log
+.git
+.VSCodeCounter
+wiring.png
+# The Containerfile itself: editing it must not invalidate the source layer (and rebuild
+# OpenUSD).
+packaging/container

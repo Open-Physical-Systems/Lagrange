@@ -1,0 +1,295 @@
+<?xml version="1.0"?>
+<!--
+  The sample differential-drive AMR (amr_diffdrive.urdf) in SDFormat: the same links, joints,
+  inertias, shapes, colours and sensors, written the way Gazebo models are. The importer test
+  checks that it loads to the same bodies and joints as the URDF and drives the same way.
+
+  Unlike the URDF, SDFormat places the model itself: it starts with the wheels 1 mm above the
+  ground, where the URDF loader drops the URDF version. The DiffDrive plugin names the driven
+  wheels, which makes them the actuated joints.
+-->
+<sdf version="1.11">
+  <model name="amr_diffdrive">
+    <pose>0 0 0.101 0 0 0</pose>
+
+    <link name="base_link">
+      <inertial>
+        <pose>0 0 0.03 0 0 0</pose>
+        <mass>20.0</mass>
+        <!-- box 0.60 x 0.40 x 0.15 m -->
+        <inertia>
+          <ixx>0.30417</ixx><iyy>0.6375</iyy><izz>0.86667</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <visual name="chassis">
+        <pose>0 0 0.03 0 0 0</pose>
+        <geometry><box><size>0.60 0.40 0.15</size></box></geometry>
+        <material><diffuse>0.20 0.24 0.30 1</diffuse></material>
+      </visual>
+      <visual name="bumper">
+        <pose>0.28 0 0.07 0 0 0</pose>
+        <geometry><box><size>0.04 0.30 0.04</size></box></geometry>
+        <material><diffuse>0.91 0.47 0.18 1</diffuse></material>
+      </visual>
+      <collision name="chassis">
+        <pose>0 0 0.03 0 0 0</pose>
+        <geometry><box><size>0.60 0.40 0.15</size></box></geometry>
+      </collision>
+      <sensor name="imu" type="imu">
+        <update_rate>200</update_rate>
+        <imu>
+          <angular_velocity>
+            <z><noise type="gaussian"><stddev>0.002</stddev></noise></z>
+          </angular_velocity>
+          <linear_acceleration>
+            <x><noise type="gaussian"><stddev>0.02</stddev></noise></x>
+          </linear_acceleration>
+        </imu>
+      </sensor>
+    </link>
+
+    <!-- Driven wheels: radius 0.10 m, width 0.05 m, 1.5 kg. -->
+    <link name="left_wheel">
+      <pose>0 0.23 0 0 0 0</pose>
+      <inertial>
+        <mass>1.5</mass>
+        <inertia>
+          <ixx>0.0040625</ixx><iyy>0.0075</iyy><izz>0.0040625</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <visual name="tyre">
+        <pose>0 0 0 1.5707963 0 0</pose>
+        <geometry><cylinder><radius>0.10</radius><length>0.05</length></cylinder></geometry>
+        <material><diffuse>0.08 0.08 0.09 1</diffuse></material>
+      </visual>
+      <collision name="tyre">
+        <pose>0 0 0 1.5707963 0 0</pose>
+        <geometry><cylinder><radius>0.10</radius><length>0.05</length></cylinder></geometry>
+      </collision>
+    </link>
+    <joint name="left_wheel_joint" type="continuous">
+      <parent>base_link</parent>
+      <child>left_wheel</child>
+      <axis>
+        <xyz>0 1 0</xyz>
+        <limit><effort>10.0</effort><velocity>20.0</velocity></limit>
+      </axis>
+    </joint>
+
+    <link name="right_wheel">
+      <pose>0 -0.23 0 0 0 0</pose>
+      <inertial>
+        <mass>1.5</mass>
+        <inertia>
+          <ixx>0.0040625</ixx><iyy>0.0075</iyy><izz>0.0040625</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <visual name="tyre">
+        <pose>0 0 0 1.5707963 0 0</pose>
+        <geometry><cylinder><radius>0.10</radius><length>0.05</length></cylinder></geometry>
+        <material><diffuse>0.08 0.08 0.09 1</diffuse></material>
+      </visual>
+      <collision name="tyre">
+        <pose>0 0 0 1.5707963 0 0</pose>
+        <geometry><cylinder><radius>0.10</radius><length>0.05</length></cylinder></geometry>
+      </collision>
+    </link>
+    <joint name="right_wheel_joint" type="continuous">
+      <parent>base_link</parent>
+      <child>right_wheel</child>
+      <axis>
+        <xyz>0 1 0</xyz>
+        <limit><effort>10.0</effort><velocity>20.0</velocity></limit>
+      </axis>
+    </joint>
+
+    <!-- Swivel casters, front and back: a fork turning about z, a 0.03 m ball under it. -->
+    <link name="front_caster_fork">
+      <pose>0.22 0 -0.04 0 0 0</pose>
+      <inertial>
+        <mass>0.1</mass>
+        <inertia>
+          <ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <visual name="fork">
+        <pose>-0.015 0 -0.01 0 0 0</pose>
+        <geometry><box><size>0.04 0.03 0.03</size></box></geometry>
+        <material><diffuse>0.62 0.64 0.67 1</diffuse></material>
+      </visual>
+    </link>
+    <joint name="front_caster_swivel" type="continuous">
+      <parent>base_link</parent>
+      <child>front_caster_fork</child>
+      <axis><xyz>0 0 1</xyz></axis>
+    </joint>
+    <link name="front_caster_wheel">
+      <pose>0.19 0 -0.07 0 0 0</pose>
+      <inertial>
+        <mass>0.2</mass>
+        <inertia>
+          <ixx>0.000072</ixx><iyy>0.000072</iyy><izz>0.000072</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <visual name="ball">
+        <geometry><sphere><radius>0.03</radius></sphere></geometry>
+        <material><diffuse>0.08 0.08 0.09 1</diffuse></material>
+      </visual>
+      <collision name="ball">
+        <geometry><sphere><radius>0.03</radius></sphere></geometry>
+      </collision>
+    </link>
+    <joint name="front_caster_axle" type="continuous">
+      <parent>front_caster_fork</parent>
+      <child>front_caster_wheel</child>
+      <axis><xyz>0 1 0</xyz></axis>
+    </joint>
+
+    <link name="rear_caster_fork">
+      <pose>-0.22 0 -0.04 0 0 0</pose>
+      <inertial>
+        <mass>0.1</mass>
+        <inertia>
+          <ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <visual name="fork">
+        <pose>-0.015 0 -0.01 0 0 0</pose>
+        <geometry><box><size>0.04 0.03 0.03</size></box></geometry>
+        <material><diffuse>0.62 0.64 0.67 1</diffuse></material>
+      </visual>
+    </link>
+    <joint name="rear_caster_swivel" type="continuous">
+      <parent>base_link</parent>
+      <child>rear_caster_fork</child>
+      <axis><xyz>0 0 1</xyz></axis>
+    </joint>
+    <link name="rear_caster_wheel">
+      <pose>-0.25 0 -0.07 0 0 0</pose>
+      <inertial>
+        <mass>0.2</mass>
+        <inertia>
+          <ixx>0.000072</ixx><iyy>0.000072</iyy><izz>0.000072</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <visual name="ball">
+        <geometry><sphere><radius>0.03</radius></sphere></geometry>
+        <material><diffuse>0.08 0.08 0.09 1</diffuse></material>
+      </visual>
+      <collision name="ball">
+        <geometry><sphere><radius>0.03</radius></sphere></geometry>
+      </collision>
+    </link>
+    <joint name="rear_caster_axle" type="continuous">
+      <parent>rear_caster_fork</parent>
+      <child>rear_caster_wheel</child>
+      <axis><xyz>0 1 0</xyz></axis>
+    </joint>
+
+    <!-- A 2D lidar on a short mast at the front, above the chassis. -->
+    <link name="lidar_link">
+      <pose>0.20 0 0.13 0 0 0</pose>
+      <inertial>
+        <mass>0.3</mass>
+        <inertia>
+          <ixx>0.0002</ixx><iyy>0.0002</iyy><izz>0.0002</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <visual name="housing">
+        <geometry><cylinder><radius>0.04</radius><length>0.05</length></cylinder></geometry>
+        <material><diffuse>0.91 0.47 0.18 1</diffuse></material>
+      </visual>
+      <sensor name="front_lidar" type="gpu_lidar">
+        <update_rate>10</update_rate>
+        <lidar>
+          <scan>
+            <horizontal>
+              <samples>720</samples>
+              <min_angle>-3.14159</min_angle>
+              <max_angle>3.14159</max_angle>
+            </horizontal>
+          </scan>
+          <range><min>0.12</min><max>20.0</max></range>
+          <noise><type>gaussian</type><stddev>0.01</stddev></noise>
+        </lidar>
+      </sensor>
+    </link>
+    <joint name="lidar_mount" type="fixed">
+      <parent>base_link</parent>
+      <child>lidar_link</child>
+    </joint>
+
+    <!-- Roof lidar on a mast: visual only, so that its own beams never hit it. -->
+    <link name="lidar_mast">
+      <pose>-0.10 0 0.205 0 0 0</pose>
+      <inertial>
+        <mass>0.2</mass>
+        <inertia>
+          <ixx>0.0007</ixx><iyy>0.0007</iyy><izz>0.00002</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <visual name="mast">
+        <geometry><cylinder><radius>0.015</radius><length>0.20</length></cylinder></geometry>
+        <material><diffuse>0.20 0.24 0.30 1</diffuse></material>
+      </visual>
+    </link>
+    <joint name="mast_mount" type="fixed">
+      <parent>base_link</parent>
+      <child>lidar_mast</child>
+    </joint>
+    <!-- A 16-ring 3D lidar: 360 degrees in 900 columns, rings from -15 to +15 degrees. -->
+    <link name="top_lidar_link">
+      <pose>-0.10 0 0.34 0 0 0</pose>
+      <inertial>
+        <mass>0.8</mass>
+        <inertia>
+          <ixx>0.0008</ixx><iyy>0.0008</iyy><izz>0.001</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <visual name="housing">
+        <geometry><cylinder><radius>0.05</radius><length>0.07</length></cylinder></geometry>
+        <material><diffuse>0.91 0.47 0.18 1</diffuse></material>
+      </visual>
+      <sensor name="top_lidar" type="gpu_lidar">
+        <update_rate>10</update_rate>
+        <lidar>
+          <scan>
+            <horizontal>
+              <samples>900</samples>
+              <min_angle>-3.14159</min_angle>
+              <max_angle>3.14159</max_angle>
+            </horizontal>
+            <vertical>
+              <samples>16</samples>
+              <min_angle>-0.261799</min_angle>
+              <max_angle>0.261799</max_angle>
+            </vertical>
+          </scan>
+          <range><min>0.3</min><max>40.0</max></range>
+          <noise><type>gaussian</type><stddev>0.02</stddev></noise>
+        </lidar>
+      </sensor>
+    </link>
+    <joint name="top_lidar_mount" type="fixed">
+      <parent>lidar_mast</parent>
+      <child>top_lidar_link</child>
+    </joint>
+
+    <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
+      <left_joint>left_wheel_joint</left_joint>
+      <right_joint>right_wheel_joint</right_joint>
+      <wheel_separation>0.46</wheel_separation>
+      <wheel_radius>0.10</wheel_radius>
+    </plugin>
+  </model>
+</sdf>

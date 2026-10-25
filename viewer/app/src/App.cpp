@@ -10,8 +10,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -19,7 +21,11 @@
 #include <imgui_impl_vulkan.h>
 #include <memory>
 #include <mutex>
+#include <signal.h>
+#include <spawn.h>
+#include <sys/wait.h>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 #include <SDL3/SDL.h>
@@ -30,6 +36,12 @@
 namespace lagrange::viewer {
 
 namespace {
+
+// The lidar bird's-eye view's two tones (design 06-sensors: the sensor colour, strong and
+// attenuated), and the intensity between them; the viewport overlay draws in the same.
+const ImVec4 kLidarStrong = theme::kDomainColor[static_cast<int>(theme::Domain::Sensors)];
+const ImVec4 kLidarAttenuated = theme::hex(0x2A8F76);
+constexpr float kLidarStrongIntensity = 0.12F;
 
 using Clock = std::chrono::steady_clock;
 
@@ -107,6 +119,68 @@ SystemInfo systemInfo(const gpu::Device& device, float displayScale) {
 }
 
 // Everything both modes share: ImGui, the panels, the camera and the scene renderer.
+/// lagrange_server in the ROS install the viewer runs from, or empty.
+std::string findLocalServer() {
+    const char* prefixes = std::getenv("AMENT_PREFIX_PATH");
+    if (prefixes == nullptr) {
+        return {};
+    }
+    std::string list = prefixes;
+    std::size_t start = 0;
+    while (start <= list.size()) {
+        const std::size_t end = std::min(list.find(':', start), list.size());
+        const std::filesystem::path candidate =
+            std::filesystem::path(list.substr(start, end - start)) /
+            "lib/lagrange_server/lagrange_server";
+        std::error_code ec;
+        if (end > start && std::filesystem::is_regular_file(candidate, ec)) {
+            return candidate.string();
+        }
+        start = end + 1;
+    }
+    return {};
+}
+
+/// A simulation server started by the viewer from the launcher. Stopped with the viewer.
+class LocalServer {
+public:
+    LocalServer() = default;
+    LocalServer(const LocalServer&) = delete;
+    LocalServer& operator=(const LocalServer&) = delete;
+    ~LocalServer() { stop(); }
+
+    /// Starts `program --listen <endpoint>`. Returns an error message, or empty on success.
+    std::string start(const std::string& program, const std::string& endpoint) {
+        stop();
+        std::vector<std::string> args{program, "--listen", endpoint};
+        std::vector<char*> argv;
+        for (std::string& arg : args) {
+            argv.push_back(arg.data());
+        }
+        argv.push_back(nullptr);
+        const int error =
+            ::posix_spawn(&pid_, program.c_str(), nullptr, nullptr, argv.data(), environ);
+        if (error != 0) {
+            pid_ = -1;
+            return "could not start " + program + ": " + std::strerror(error);
+        }
+        return {};
+    }
+
+    /// Asks the server to finish (SIGTERM) and waits for it.
+    void stop() {
+        if (pid_ > 0) {
+            ::kill(pid_, SIGTERM);
+            int status = 0;
+            ::waitpid(pid_, &status, 0);
+            pid_ = -1;
+        }
+    }
+
+private:
+    pid_t pid_{-1};
+};
+
 class Ui {
 public:
     Ui(const gpu::Device& device, ViewerClient& client, VkFormat targetFormat,
@@ -275,6 +349,14 @@ public:
                                   "' is not a server address (unix:/path or tcp://host:port)";
             } else {
                 launcher_.error.clear();
+                if (launcher_.startLocalRequested) {
+                    // The client keeps retrying until the new server has bound its socket.
+                    launcher_.error =
+                        localServer_.start(launcher_.localServer, launcher_.connectEndpoint);
+                }
+                launcher_.startLocalRequested = false;
+            }
+            if (endpoint && launcher_.error.empty()) {
                 client_.stop();
                 client_.setEndpoint(*endpoint);
                 client_.start();
@@ -301,7 +383,104 @@ public:
 
     /// Records the scene pass. The UI pass (ImGui draw data) is recorded by the caller.
     void renderScene(VkCommandBuffer commands) {
-        renderer_.render(commands, scene_.get(), camera_, renderOptions_);
+        buildSensorOverlays();
+        renderer_.render(commands, scene_.get(), camera_, renderOptions_, sensorOverlays_);
+    }
+
+    /// Sensor frustums overlay: for each lidar of the scene, its coverage fan (spanning the
+    /// returns, at kFanRadiusM) and a small cross at every return of its latest scan, in the
+    /// two tones the lidar bird's-eye view uses. Points arrive in the sensor frame and are
+    /// placed with the sensor's current pose.
+    void buildSensorOverlays() {
+        constexpr float kCrossHalfM = 0.025F;  // half the size of a return's marker
+        constexpr float kFanRadiusM = 0.6F;
+        constexpr int kFanSegments = 24;
+        std::size_t used = 0;
+        const SceneFrame* frame = scene_.get();
+        if (!renderOptions_.sensors || frame == nullptr || !frame->statics) {
+            sensorOverlays_.clear();
+            return;
+        }
+        const SceneStatics& statics = *frame->statics;
+        if (statics.generation != lidarGeneration_) {
+            lidarGeneration_ = statics.generation;
+            lidars_.clear();
+            for (std::size_t i = 0; i < statics.prims.size(); ++i) {
+                if (statics.prims[i].typeName == "Lidar") {
+                    lidars_.push_back({static_cast<std::uint32_t>(i),
+                                       client_.watchSensor(statics.prims[i].path)});
+                }
+            }
+        }
+        // Returns the index of a cleared batch: references into sensorOverlays_ are taken only
+        // after every batch of a lidar exists, since adding one may move the others.
+        const auto batch = [&](const std::array<double, 3>& origin, const ImVec4& color) {
+            if (used == sensorOverlays_.size()) {
+                sensorOverlays_.emplace_back();
+            }
+            OverlayLines& lines = sensorOverlays_[used];
+            lines.origin = origin;
+            lines.color = {color.x, color.y, color.z, color.w};
+            lines.vertices.clear();  // keeps its capacity: no allocation once warmed up
+            return used++;
+        };
+        for (const auto& [prim, stream] : lidars_) {
+            const std::shared_ptr<const PointCloud> cloud = stream->latest();
+            if (!cloud || cloud->count == 0 || prim >= frame->transforms.size()) {
+                continue;
+            }
+            const Transform& pose = frame->transforms[prim];
+            const std::array<float, 4>& q = pose.rotation;
+            const auto rotate = [&q](float x, float y, float z) {
+                // v' = v + 2w (u x v) + 2 u x (u x v), u = (q.x, q.y, q.z)
+                const float tx = 2.0F * (q[2] * z - q[3] * y);
+                const float ty = 2.0F * (q[3] * x - q[1] * z);
+                const float tz = 2.0F * (q[1] * y - q[2] * x);
+                return std::array<float, 3>{x + q[0] * tx + (q[2] * tz - q[3] * ty),
+                                            y + q[0] * ty + (q[3] * tx - q[1] * tz),
+                                            z + q[0] * tz + (q[1] * ty - q[2] * tx)};
+            };
+            const std::size_t strongBatch = batch(pose.position, kLidarStrong);
+            const std::size_t weakBatch = batch(pose.position, kLidarAttenuated);
+            std::vector<float>& strong = sensorOverlays_[strongBatch].vertices;
+            std::vector<float>& weak = sensorOverlays_[weakBatch].vertices;
+            float lowest = 1e9F;
+            float highest = -1e9F;
+            for (std::uint32_t i = 0; i < cloud->count; ++i) {
+                const float* p = &cloud->points[static_cast<std::size_t>(i) * 4];
+                const float angle = std::atan2(p[1], p[0]);
+                lowest = std::min(lowest, angle);
+                highest = std::max(highest, angle);
+                const std::array<float, 3> at = rotate(p[0], p[1], p[2]);
+                std::vector<float>& out = p[3] >= kLidarStrongIntensity ? strong : weak;
+                for (int axis = 0; axis < 3; ++axis) {
+                    std::array<float, 3> a = at;
+                    std::array<float, 3> b = at;
+                    a.at(axis) -= kCrossHalfM;
+                    b.at(axis) += kCrossHalfM;
+                    out.insert(out.end(), {a[0], a[1], a[2], b[0], b[1], b[2]});
+                }
+            }
+            std::vector<float>& fan = weak;
+            const auto edge = [&](float angle) {
+                const std::array<float, 3> end =
+                    rotate(kFanRadiusM * std::cos(angle), kFanRadiusM * std::sin(angle), 0.0F);
+                fan.insert(fan.end(), {0.0F, 0.0F, 0.0F, end[0], end[1], end[2]});
+            };
+            edge(lowest);
+            edge(highest);
+            for (int k = 0; k < kFanSegments; ++k) {
+                const float a0 = lowest + (highest - lowest) * static_cast<float>(k) / kFanSegments;
+                const float a1 =
+                    lowest + (highest - lowest) * static_cast<float>(k + 1) / kFanSegments;
+                const std::array<float, 3> p0 =
+                    rotate(kFanRadiusM * std::cos(a0), kFanRadiusM * std::sin(a0), 0.0F);
+                const std::array<float, 3> p1 =
+                    rotate(kFanRadiusM * std::cos(a1), kFanRadiusM * std::sin(a1), 0.0F);
+                fan.insert(fan.end(), {p0[0], p0[1], p0[2], p1[0], p1[1], p1[2]});
+            }
+        }
+        sensorOverlays_.resize(used);
     }
 
     [[nodiscard]] const std::shared_ptr<const SceneFrame>& scene() const { return scene_; }
@@ -315,10 +494,22 @@ public:
         launcher_.system = systemInfo(device_, displayScale);
         launcher_.defaultEndpoint =
             proto::toString(proto::Endpoint::unixSocket(proto::defaultUnixSocketPath()));
+        launcher_.localServer = findLocalServer();
+        launcher_.server = launcher_.localServer.empty() ? 1 : 0;
         recentPath_ = launcher_.system.configDirectory + "/recent.json";
         launcher_.recent.load(recentPath_);
     }
     [[nodiscard]] bool launcherActive() const { return launcher_.active; }
+    /// As if the user chose Start local simulator and pressed Connect (--start-local).
+    void requestStartLocal(const std::string& endpoint) {
+        launcher_.server = 0;
+        launcher_.connectRequested = true;
+        launcher_.startLocalRequested = true;
+        launcher_.connectEndpoint = endpoint;
+        if (launcher_.localServer.empty()) {
+            launcher_.error = "lagrange_server is not installed";
+        }
+    }
     /// A file chosen or dropped while the launcher is shown: opened after connecting.
     void setOpenTarget(const std::string& path) {
         std::error_code ec;
@@ -401,8 +592,12 @@ private:
     ProfileSession profileSession_;
     ScopeSession scopeSession_;
     RenderOptions renderOptions_;
+    std::uint64_t lidarGeneration_{0};  // statics generation lidars_ was built from
+    std::vector<std::pair<std::uint32_t, std::shared_ptr<SensorStream>>> lidars_;  // prim, frames
+    std::vector<OverlayLines> sensorOverlays_;
     std::vector<std::int64_t> bookmarks_;
     LauncherState launcher_;
+    LocalServer localServer_;
     bool recordRecent_{false};
     std::string recentPath_;
     double socketChecked_{-10.0};
@@ -481,7 +676,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
     }
 
     ViewerClient client(endpoint);
-    if (!options.launcher) {
+    if (!options.launcher && !options.startLocal) {
         client.start();
         if (!options.openPath.empty()) {
             openFile(client, options.openPath);
@@ -499,8 +694,11 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
     {
         Ui ui(*device, client, format, 2, 1.0F, false, options.scopeSignals);
         ui.setWorkspace(workspace);
-        if (options.launcher) {
+        if (options.launcher || options.startLocal) {
             ui.showLauncher(1.0F);
+        }
+        if (options.startLocal) {
+            ui.requestStartLocal(proto::toString(endpoint));
         }
         ui.setInitialSelection(options.selectPath);
         ui.setCursors(options.cursors);
@@ -785,8 +983,8 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
 
     // Without a server named on the command line the viewer starts on the launcher, and the
     // client is started when the user picks a server there (design: 01-launcher).
-    const bool launcher =
-        options.launcher || (options.endpoint.empty() && options.openPath.empty());
+    const bool launcher = options.launcher || options.startLocal ||
+                          (options.endpoint.empty() && options.openPath.empty());
     ViewerClient client(endpoint);
     if (!launcher) {
         client.start();
@@ -820,6 +1018,9 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setCanOpenFiles(true);
         if (launcher) {
             ui.showLauncher(dpiScale);
+        }
+        if (options.startLocal) {
+            ui.requestStartLocal(proto::toString(endpoint));
         }
         ui.setWorkspace(workspace);
         ui.setInitialSelection(options.selectPath);

@@ -1,0 +1,37 @@
+{
+  "comment": "items_per_second per benchmark (median of 3), per machine. Written by check_benchmarks.py --record; see docs/design/benchmarks.md.",
+  "machines": {
+    "i9-13900H-iris-xe": {
+      "description": "Intel Core i9-13900H laptop, Intel Iris Xe (Mesa 26.0.8), Ubuntu 26.04, RelWithDebInfo",
+      "items_per_second": {
+        "BusAccess": 241600000.0,
+        "LidarReference/shapes:400": 145400.0,
+        "LidarReference/shapes:50": 1689000.0,
+        "LidarTier0/shapes:400/real_time": 61280000.0,
+        "LidarTier0/shapes:50/real_time": 177500000.0,
+        "LidarTier1/shapes:400/real_time": 36490000.0,
+        "LidarTier1/shapes:50/real_time": 34280000.0,
+        "SchedulerTick/modules:1/multirate:0": 25380000.0,
+        "SchedulerTick/modules:10/multirate:0": 22860000.0,
+        "SchedulerTick/modules:100/multirate:0": 22480000.0,
+        "SchedulerTick/modules:100/multirate:1": 21880000.0
+      }
+    },
+    "i9-13900H-llvmpipe": {
+      "description": "Intel Core i9-13900H laptop, llvmpipe (Mesa 26.0.8, LLVM 21.1.8), Ubuntu 26.04, RelWithDebInfo",
+      "items_per_second": {
+        "BusAccess": 241600000.0,
+        "LidarReference/shapes:400": 141800.0,
+        "LidarReference/shapes:50": 1661000.0,
+        "LidarTier0/shapes:400/real_time": 59940000.0,
+        "LidarTier0/shapes:50/real_time": 173200000.0,
+        "LidarTier1/shapes:400/real_time": 10420000.0,
+        "LidarTier1/shapes:50/real_time": 40340000.0,
+        "SchedulerTick/modules:1/multirate:0": 25380000.0,
+        "SchedulerTick/modules:10/multirate:0": 22860000.0,
+        "SchedulerTick/modules:100/multirate:0": 22480000.0,
+        "SchedulerTick/modules:100/multirate:1": 21880000.0
+      }
+    }
+  }
+}

@@ -30,11 +30,11 @@ and licenses come from `docs/plan/verification.md` (checked 2026-10-13). A cell 
 | Dependency | Used by | Obtained from | Version seen | License | Build risk | Notes |
 |---|---|---|---|---|---|---|
 | OpenUSD | `core/stage`, `schemas`, importers, tools | `openusd_vendor` | upstream v26.08 | TOST-1.0 (Apache-2.0 with modified trademark clause) | **High** | Section 4 |
-| MuJoCo | rigid body, MJCF import | `ros-lyrical-mujoco-vendor` (preferred) or `libmujoco-dev` | 3.12.0 (vendor), 3.5.0 (apt), 3.15.0 (upstream) | Apache-2.0 | Low | One source per build (Q9) |
-| Jolt Physics | rigid body | `jolt_vendor` | v5.6.0 | MIT | Low | Plain CMake, no dependencies |
+| MuJoCo | rigid body, MJCF import (`lagrange_importers` reads the compiled `mjModel`) | `ros-lyrical-mujoco-vendor`, rosdep `mujoco_vendor` (decided in spike 0.2-C1) | 3.12.0 (vendor), 3.5.0 (apt, not used), 3.15.0 (upstream) | Apache-2.0; bundled third-party code MIT, BSD, Apache-2.0 with LLVM exception, OFL (verified from the package's `LICENSE` and `THIRD_PARTY_NOTICES`, 2026-10-14) | Low | One source per build (Q9). Validation: `docs/plan/spikes/0.2-C1-mujoco.md` |
+| Jolt Physics | rigid body (second backend; spike 0.2-C6) | `jolt_vendor` (release tarball, SHA-256 pinned) | v5.6.0 (latest release, 2026-07-11) | MIT (checked on GitHub, 2026-10-25) | Low | Plain CMake, no dependencies; GPU compute (hair) disabled in the vendor build |
 | PhysX 5 | rigid body (vehicles, GPU) | `physx_vendor` | SDK version TODO(verify) | BSD-3-Clause | **High** | Custom build system (`generate_projects`), GPU part needs the CUDA toolkit; GCC 15 compatibility TODO(verify). Optional |
-| Embree | CPU ray casting (lidar, radar, dose, comms) | apt `libembree-dev` | 4.4.0 | Apache-2.0 | Low | rosdep key `embree` |
-| TBB | Embree, OpenVDB, worker pool | apt `libtbb-dev` | 2022.3.0 | Apache-2.0 (TODO(verify)) | Low | |
+| Embree | CPU ray casting: Tier 0 lidar culling (`ShapeCaster`, `lagrange_sensors`); later radar, dose, comms | apt `libembree-dev` | 4.4.0 | Apache-2.0 (checked in `/usr/share/doc/libembree-dev/copyright` of 4.4.0+dfsg-1, 2026-10-24) | Low | rosdep key `embree` |
+| TBB | Embree, OpenVDB, worker pool; parallel lidar beams (`lagrange_sensors`) | apt `libtbb-dev` (rosdep `tbb`) | 2022.3.0 | Apache-2.0 for the library; GPL only for one example's resource file and Debian's packaging (checked in `/usr/share/doc/libtbb-dev/copyright` of 2022.3.0-2, 2026-10-24) | Low | |
 | OpenVDB / NanoVDB | fields | apt `libopenvdb-dev`, `libnanovdb-dev` | 10.0.1 | Apache-2.0 (MPL-2.0 for older releases; TODO(verify) which applies to 10.0.1) | Medium | Three majors behind upstream 13.1.0 (R10). NanoVDB is header-only, so a newer copy can be vendored alone if needed |
 | FMI import library | `modules/electrical/fmu_host` | `fmilib_vendor` (Modelon FMI Library) | 3.0.4 | BSD-3-Clause-style | Medium | FMI 3.0 co-simulation coverage TODO(verify). Alternative: a thin in-house loader over the FMI 3.0 C headers (the headers are BSD-2-Clause; TODO(verify)) |
 | MCAP C++ | recording, replay, mock server | `ros-lyrical-mcap-vendor` | 0.33.3 | MIT | Low | Header-only library plus zstd/lz4 |
@@ -43,18 +43,24 @@ and licenses come from `docs/plan/verification.md` (checked 2026-10-13). A cell 
 | Protobuf | protocol, recordings | apt `libprotobuf-dev`, `protobuf-compiler` | 3.21.12 | BSD-3-Clause (TODO(verify)) | Low | Old: proto3 only, no editions. rosdep key `protobuf-dev` |
 | gRPC | control API (v0.2+) | apt `libgrpc++-dev` | 1.51.1 | Apache-2.0 (TODO(verify)) | Low | rosdep key TODO(verify) |
 | Zenoh (zenoh-c, zenoh-cpp) | optional transport, bridge | apt `libzenohc-dev`, `libzenohcpp-dev` | 1.8.0 | Apache-2.0 OR EPL-2.0 | Low | `ros-lyrical-zenoh-cpp-vendor` 0.10.6 also exists; avoid loading two copies in one process (TODO(verify) symbol conflicts) |
-| yaml-cpp | profiles | apt | 0.8.0 | MIT (TODO(verify)) | Low | |
-| JSON Schema validator (C++) | profile validation in server and viewer | `TODO(verify)`: candidate libraries to evaluate; none found in apt in this pass | — | — | Medium | The mock server uses `python3-jsonschema` 4.19.2 (apt). For C++ the options are a small vendored validator or validating in-process through generated code |
+| yaml-cpp | profiles (`lagrange_server`) | apt `libyaml-cpp-dev`, rosdep `yaml-cpp` | 0.8.0 | X11, an MIT-style licence (Ubuntu copyright file; only Debian's packaging files are GPL-2.0+) | Low | |
+| jsoncons (JSON Schema validator, C++) | profile validation in `lagrange_server` (RFC 0005 resolution 7) | apt `libjsoncons-dev`, rosdep key `libjsoncons-dev` in `packaging/rosdep/lagrange.yaml` | 1.5.0 | BSL-1.0 (Ubuntu copyright file) | Low | Header-only; supports JSON Schema 2020-12 including `unevaluatedProperties`, which `profiles/schema.json` uses. valijson was rejected: no 2020-12 support, so unknown keys would pass. The mock server keeps `python3-jsonschema` |
 | nlohmann-json | JSON handling | apt `nlohmann-json3-dev` | 3.11.3-based | MIT (TODO(verify)) | Low | |
 | Eigen | maths | apt `libeigen3-dev` | 3.4.0 | MPL-2.0 | Low | Header-only |
 | fmt, spdlog | logging | apt | 10.1.1, 1.15.3 | MIT | Low | |
 | xxHash | state hashes, content keys | apt `libxxhash-dev` | 0.8.3 | BSD-2-Clause | Low | |
 | CLI11 | command-line parsing | apt `libcli11-dev` | 2.6.1 | BSD-3-Clause | Low | |
-| urdfdom / `urdf`, xacro | URDF import | ROS Lyrical | urdfdom 6.0.0, xacro 2.1.1 | BSD-3-Clause (TODO(verify)) | Low | |
-| SDFormat | SDF import | `ros-lyrical-sdformat-vendor` | 0.3.4 (vendor package) | Apache-2.0 (TODO(verify)) | Low | |
-| Assimp | mesh import | apt `libassimp-dev` | 6.0.4 | BSD-3-Clause (TODO(verify)) | Low | Import-time only |
+| urdfdom / `urdf`, xacro | URDF import; `lagrange_server` loads URDF with urdfdom until the USD importer exists | ROS Lyrical (rosdep `urdfdom`) | urdfdom 6.0.0, xacro 2.1.1 | urdfdom BSD (package `copyright`, verified 2026-10-14); xacro TODO(verify) | Low | |
+| tinyxml2 | `lagrange_server`: reads the `<ros2_control>` block that urdfdom ignores; `lagrange_importers`: tells URDF, SDFormat and MJCF apart by their root element | apt `libtinyxml2-dev` (rosdep `tinyxml2`) | 11.0.0 | zlib/libpng for the library; Debian packaging files GPL-2+, not linked (verified 2026-10-14) | Low | |
+| rclcpp, rmw and the message packages (rosgraph_msgs, sensor_msgs, nav_msgs, geometry_msgs, tf2_msgs, std_msgs) | `lagrange_ros2` bridge | ROS Lyrical | as installed | Apache-2.0 (ROS 2 core) | Low | The bridge links them; the core does not |
+| ament_index_cpp | `lagrange_server`: finds the installed sample robot and profile schema | ROS Lyrical | as installed | Apache-2.0 (package `copyright`, verified 2026-10-14) | Low | |
+| SDFormat (libsdformat) | SDF import (`lagrange_importers`) | `ros-lyrical-sdformat-vendor`, rosdep `sdformat_vendor` | 0.3.4 (vendor package) of sdformat 16.1.0 | Apache-2.0; `src/urdf/*` (the URDF parser inside) BSD-3-Clause (verified from the Debian `copyright` of libsdformat16 and the vendor's `package.xml`, 2026-10-17) | Low | Links gz-math and gz-utils (Apache-2.0, through the same vendor chain) |
+| Assimp | mesh import (`lagrange_meshes`) | apt `libassimp-dev` (rosdep `assimp`) | 6.0.4 | BSD-3-Clause; bundled parts MIT, ISC, BSL-1.0, Apache-2.0, public domain; GPL-3+ only for Debian packaging scripts (checked in `/usr/share/doc/libassimp-dev/copyright` of 6.0.4+ds-1build1, 2026-10-18) | Low | Import-time only |
+| Google Benchmark | performance benchmarks (`lagrange_benchmarks`) | apt `libbenchmark-dev` (rosdep `benchmark`) | 1.9.1 | Apache-2.0 (checked in `/usr/share/doc/libbenchmark-dev/copyright` of 1.9.1-1build1, 2026-10-24) | Low | Benchmarks only, not in the product |
+| nanobind | Python bindings (`lagrange_python`) | apt `nanobind-dev` (rosdep `nanobind-dev`) | 2.11.0 | BSD-3-Clause (checked in `/usr/share/doc/nanobind-dev/copyright`, 2026-10-25) | Low | Build time only |
 | CoACD | collision bake tool | `coacd_vendor` | TODO(verify) | MIT | Medium | Offline tool; V-HACD (BSD-3-Clause) is the alternative |
-| GDAL, PROJ, GeographicLib | geospatial | apt | 3.12.2, 9.7.1, 2.7 | MIT-style (TODO(verify) each) | Low | Tools only, plus GeographicLib in tests |
+| GDAL, PROJ | geospatial | apt | 3.12.2, 9.7.1 | MIT-style (TODO(verify) each) | Low | Tools only |
+| GeographicLib | `lagrange_core` tests (coordinate conversions) | apt `libgeographiclib-dev`, rosdep `geographiclib` | 2.7 | MIT (Expat) for the library; `kissfft.hh` BSD-3-Clause; Debian packaging files GPL-3+, not linked (verified in the package's `copyright` file, 2026-10-14) | Low | Test dependency only; later geospatial tools |
 | nanobind | Python bindings | apt `nanobind-dev` | 2.11.0 | BSD-3-Clause | Low | rosdep key `nanobind-dev` |
 | mp-units | optional compile-time units inside modules | `ros-lyrical-mp-units-vendor` | 2.5.0 | MIT (TODO(verify)) | Low | Not used for the runtime `Unit` check (Q6) |
 
@@ -98,7 +104,8 @@ pinned commits, because they must agree on one ImGui version and one `imconfig.h
 ## 4. OpenUSD build plan (highest build risk)
 
 Facts: not packaged for Ubuntu 26.04; upstream v26.08; needs TBB and (for imaging) many optional
-libraries; long build. Building with GCC 15.2, CMake 4.2 and Python 3.14 is unverified.
+libraries. v26.08 builds unpatched with GCC 15.2, CMake 4.2, system TBB 2022.3 and Python 3.14
+on amd64: about 5 min without Python and 12 min with it on 16 cores (spike, 2026-10-14).
 
 Plan:
 
@@ -108,8 +115,9 @@ Plan:
    OpenImageIO, OpenColorIO, Alembic, Draco, MaterialX (until needed), tests, tutorials,
    examples. Options in upstream CMake terms: `PXR_BUILD_IMAGING=OFF`,
    `PXR_BUILD_USD_IMAGING=OFF`, `PXR_BUILD_USDVIEW=OFF`, `PXR_BUILD_TESTS=OFF`,
-   `PXR_BUILD_EXAMPLES=OFF`, `PXR_BUILD_TUTORIALS=OFF`, `PXR_ENABLE_PYTHON_SUPPORT` per step 3
-   (option names TODO(verify) against v26.08).
+   `PXR_BUILD_EXAMPLES=OFF`, `PXR_BUILD_TUTORIALS=OFF`, `PXR_ENABLE_PYTHON_SUPPORT` per step 3,
+   plus `PXR_BUILD_EXEC=OFF` and `PXR_ENABLE_GL_SUPPORT=OFF` (option names verified in v26.08's
+   `cmake/defaults/Options.cmake`; spike result in `docs/plan/spikes/0.2-B1-openusd.md`).
 2. **System dependencies only**: TBB from apt. No bundled downloads; the vendor package does not
    use upstream's `build_usd.py`, which fetches its own dependencies.
 3. **Python**: build the USD Python bindings against system Python 3.14 only if step 5's spike
@@ -140,11 +148,15 @@ reads recordings. See open question Q4 for how the mock server gets scene conten
 | `rclcpp`, `rclcpp_components` | ROS bridge | 32.0.3 | |
 | `rosgraph_msgs`, `sensor_msgs`, `nav_msgs`, `geometry_msgs`, `tf2_ros`, `visualization_msgs` | ROS bridge | Lyrical | |
 | `rosidl_buffer`, `cuda_buffer` | zero-copy sensor output | 5.2.1, 0.1.2 | `cuda_buffer` is optional (pulls NVIDIA libraries) |
-| `simulation_interfaces` | standard simulator services | in rosdistro; version TODO(verify) | |
-| `hardware_interface`, `controller_manager`, `pluginlib` | `lagrange_ros2_control` | ros2_control 6.10.1 | |
-| `rosbag2_storage_mcap`, `mcap_vendor` | recording interoperability | 0.33.3 | |
+| `simulation_interfaces` | standard simulator services (`lagrange_ros2`) | 2.1.0 | Apache-2.0 |
+| `hardware_interface`, `controller_manager`, `pluginlib` | `lagrange_ros2_control` | ros2_control 6.10.1, pluginlib 5.8.5 | Apache-2.0; pluginlib BSD |
+| `diff_drive_controller`, `joint_state_broadcaster` | `lagrange_demos` (exec only); `forward_command_controller` in `lagrange_ros2_control`'s test | 6.9.0 | Apache-2.0 |
+| `nav2_amcl` | `lagrange_demos` (exec only: AMCL localizes when ros2_control drives) | 1.5.1 | **LGPL-2.1-or-later**. Started as its own process by the demo launch file; nothing in the project links it, so no LGPL code is in core or any library we ship |
+| `rosbag2_storage_mcap`, `mcap_vendor` | recording interoperability; `lagrange_server --record` writes MCAP with `mcap_vendor` | 0.33.3 | Apache-2.0 (`mcap_vendor` package); zstd BSD-3-Clause or GPL-2 (used under BSD), lz4 library BSD-2-Clause (Ubuntu copyright files); the MCAP C++ library MIT (foxglove/mcap LICENSE) |
 | `rmw_fastrtps_cpp`, `rmw_zenoh_cpp` | tested RMWs | 9.4.10, 0.10.6 | |
-| Test-only: `nav2_bringup`, `moveit`, `ros2_controllers`, `mavros` | integration tests and demos | 1.5.1, 2.15.2, 6.9.0, 2.15.1 | `<test_depend>` or demo packages only |
+| `nav2_map_server`, `nav2_planner`, `nav2_navfn_planner`, `nav2_controller`, `nav2_regulated_pure_pursuit_controller`, `nav2_behaviors`, `nav2_bt_navigator`, `nav2_waypoint_follower`, `nav2_lifecycle_manager`, `nav2_simple_commander` | `lagrange_demos` (exec only) | 1.5.1 | Apache-2.0 (map_server, navfn also BSD-3-Clause). Not `nav2_bringup`: not installed by default, and the demo starts the nodes itself |
+| `robot_state_publisher`, `launch_ros` | `lagrange_demos` (exec only) | 3.5.6, 0.29.9 | BSD, Apache-2.0 |
+| Test-only: `moveit`, `ros2_controllers`, `mavros` | integration tests and demos | 2.15.2, 6.9.0, 2.15.1 | `<test_depend>` or demo packages only |
 
 The viewer package (`lagrange_viewer`) depends on `ament_cmake` and `ament_index_cpp` for build
 and resource lookup only. It does not depend on `rclcpp`, so it starts without a ROS graph.
@@ -177,7 +189,7 @@ and resource lookup only. It does not depend on `rclcpp`, so it starts without a
 | Package | Upstream | Needed from | Build time class | Cache strategy |
 |---|---|---|---|---|
 | `imgui_vendor` | ocornut/imgui (docking), epezent/implot, thedmd/imgui-node-editor, CedricGuillemet/ImGuizmo | v0.1 | seconds | ccache |
-| `openusd_vendor` | PixarAnimationStudios/OpenUSD | v0.2 | tens of minutes (TODO(verify) by the spike) | install-tree cache + prebuilt underlay |
+| `openusd_vendor` | PixarAnimationStudios/OpenUSD | v0.2 | about 12 min with Python on 16 cores (spike), longer on CI runners | install-tree cache (`actions/cache`, keyed on the vendor package's CMake files) restored as a colcon underlay; prebuilt underlay asset still to do |
 | `jolt_vendor` | jrouwe/JoltPhysics | v0.2 or v0.3 | minutes | ccache |
 | `fmilib_vendor` | modelon-community/fmi-library | v0.3 | minutes | ccache |
 | `physx_vendor` | NVIDIA-Omniverse/PhysX | v0.6 (or earlier for GPU batches) | tens of minutes | install-tree cache; CUDA part optional |

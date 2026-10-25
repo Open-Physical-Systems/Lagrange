@@ -57,12 +57,16 @@ Consequences:
 
 ## 2. Current phase
 
-**v0.1 = native viewer + UI↔server protocol + mock/replay server.** No physics yet.
+**v0.2 = simulation core + AMR** (v0.1, the viewer, protocol and mock server, was released
+as `v0.1.0` on 2026-10-14). Plan: `docs/plan/roadmap.md` §3, epics 0.2-A to 0.2-H.
 
-- The viewer is a native Vulkan + Dear ImGui desktop application (§13). It is not a web app.
-- The viewer must be built against the real protocol, fed by the mock server. Never hard-code
-  fake data inside viewer panels.
-- The mock server becomes the product's replay mode later — write it as production code.
+- Build the real C++ server so the v0.1 viewer connects to it unchanged (protocol stays v1).
+- Core framework first (units, signal bus, wiring, multirate scheduler, substitutes), then USD
+  stage loading, the MuJoCo backend, sensors, the ROS 2 bridge and ros2_control, then the Nav2
+  demo.
+- RFC 0001 (module interface), 0002 (USD schemas) and 0005 (profile format) are accepted; work
+  that depends on a still-Draft RFC waits until the owner accepts it.
+- The Python mock server stays as a test tool once replay moves into the C++ server (Q15).
 - Update this section when the phase changes.
 
 Roadmap: v0.1 UI/protocol/mock → v0.2 sim core + AMR (ROS 2, ros2_control, Nav2) →
@@ -143,7 +147,7 @@ lagrange/
 ├── cmake/                      # shared CMake modules (no cross-platform toolchains yet)
 │   # every top-level C++ dir below is one or more ament_cmake packages with a package.xml
 │
-├── schemas/                    # USD custom schemas — the data model
+├── schemas/                    # USD custom schemas — the data model (package `lagrange_schemas`)
 │   ├── electrical/schema.usda      # ElectricalMotorAPI, BatteryAPI, PortAPI...
 │   ├── thermal/  aero/  weather/  emi/  radiation/  sensor_material/
 │   └── generated/              # usdGenSchema output (C++ + Python) — never edit by hand
@@ -157,11 +161,12 @@ lagrange/
 │   ├── scheduler/              # multirate co-sim master, dependency graph
 │   ├── signals/                # typed signal bus (torque, current, temp...)
 │   ├── time/                   # sim clock, lockstep, real-time factor
+│   ├── random/                 # counter-based RNG (Philox 4x32-10) for deterministic noise
 │   ├── world/                  # runtime world state (flat SoA arrays)
 │   │   ├── coords/             # double-precision world, floating origin, WGS84↔ENU
 │   │   ├── streaming/          # tile loading, LOD, USD payload management
 │   │   └── regions/            # active-region management, future distributed handoff
-│   ├── stage/                  # USD stage loading → runtime world conversion
+│   ├── stage/                  # (planned here; lives in io/stage, since core/ is one colcon package)
 │   └── plugin_abi/             # versioned C ABI for third-party plugins
 │
 ├── gpu/
@@ -188,6 +193,7 @@ lagrange/
 │   └── sensors/                # lidar, camera, imu, gnss, magnetometer...
 │
 ├── io/
+│   ├── stage/                  # `lagrange_stage`: USD stage → world tables and scene, and back
 │   ├── importers/              # urdf, xacro, sdformat, mjcf → usd
 │   ├── recording/              # MCAP writer/reader, replay substitutes
 │   ├── fields/                 # OpenVDB loading, offline CFD import
@@ -205,6 +211,7 @@ lagrange/
 │
 ├── server/                     # headless sim server; serves the protocol to viewers
 ├── mock_server/                # v0.1 mock/replay server (becomes replay mode)
+├── demos/                      # runnable demos (`lagrange_demos`): launch files, Nav2 config, maps
 ├── python/                     # nanobind bindings, `pip install lagrange`
 ├── viewer/                     # native C++ app (ament_cmake package `lagrange_viewer`)
 │   ├── app/                    # main(), window (SDL3/GLFW), Vulkan swapchain, frame loop
@@ -241,9 +248,20 @@ verification, not in this repo.
 - Sanitizer build: `colcon build --build-base build-asan --install-base install-asan --mixin asan` (TBD; verify mixin availability)
 - C++ tests: `colcon test && colcon test-result --verbose` (TBD)
 - Python: `ruff check . && ruff format --check . && mypy python/ && pytest` (TBD)
-- Viewer: built by colcon with everything else; run `ros2 run lagrange_viewer lagrange_viewer` (starts on the launcher; `--connect <endpoint>` goes straight to a server)
+- Python API: `import lagrange; sim = lagrange.Simulation(lagrange.sample_robot(), world=lagrange.sample_world()); sim.step_until(2.0); sim.read("body/base_link/pose")` (package `lagrange_python`, nanobind; headless, no ROS; also `signals()`, `bodies()`, `joints()`, `state_hash()`, `profile=` and `lidar=`)
+- Simulator: `ros2 run lagrange_server lagrange_server [--robot FILE] [--world FILE|none] [--listen ENDPOINT] [--spawn X,Y[,Z[,YAW]]] [--lidar auto|cpu|gpu] [--gpu DEVICE] [--rtf X] [--paused] [--no-ros] [--ros2-control PARAMS.yaml] [--domain rigid_body|sensors=off] [--cmd-vel-unstamped] [--no-demo] [--record FILE.mcap] [--export-map FILE.yaml]` (FILE: URDF, SDFormat, MJCF or USD; MuJoCo physics, IMU and lidar on the scheduler, ROS 2 bridge publishing /clock /tf /odom /joint_states /scan /points /imu and taking /cmd_vel as TwistStamped, plus the `simulation_interfaces` services: get/set_simulation_state, step_simulation, reset_simulation, get_entities, get_entity_state, ...; default: the sample AMR in the sample warehouse on the default socket; `--export-map` writes a Nav2 occupancy map of the fixed scenery and exits)
+- ros2_control: `lagrange_server --ros2-control PARAMS.yaml` runs a controller manager (`/controller_manager`) in lockstep with `lagrange_ros2_control/LagrangeSystem` as hardware; spawn controllers with `ros2 run controller_manager spawner NAME --param-file PARAMS.yaml`; `/odom`, `/joint_states` and `/cmd_vel` then belong to the controllers, and ground truth stays on `/ground_truth/odom`; a joint's `<param name="encoder_resolution">` (counts per revolution) quantises its position and velocity states like a real encoder
+- CLI: `ros2 run lagrange_server lagrange run PROFILE | validate PROFILE... | graph [PROFILE] | determinism [PROFILE] [--seconds N] | info [--version]` (`determinism` runs twice without ROS and with the CPU lidar and compares state hashes every 100 ms; exit 1 on a difference) (a profile's `stage` names the URDF robot unless `--robot` is given; options as `lagrange_server`; `docs/guide/cli.md`; the example for the sample AMR is `profiles/examples/amr_sample_urdf.yaml`)
+- User guide and tutorial: `docs/guide/` (tutorial, concepts, profiles, writing a module, CLI); `tools/ci/tutorial_amr.sh` runs the AMR tutorial headless and checks each step (Nav2 step only when Nav2 is installed); the module chapter's code is package `lagrange_tutorial` in `tests/tutorial/`
+- Record and replay: `lagrange_server --record run.mcap` writes the run until the server stops or is reset (signals at full rate, about 1.5 MB/s for the sample AMR; arrays over 1024 components left out); `ros2 run lagrange_mock_server lagrange_mock_server --recording run.mcap` replays it to the viewer
+- Import to USD: `ros2 run lagrange_server lagrange_import robot.urdf|robot.sdf|robot.xml robot.usda` (URDF, SDFormat or MJCF, told apart by the root element; writes what the server reads back; the sample `.usda` assets are made this way and `test_usd_assets` keeps them in step with the URDFs; `lagrange_importers` holds the SDFormat and MJCF readers, and the sample AMR also ships as `.sdf` and MJCF `.xml`)
+- Nav2 demo: `ros2 launch lagrange_demos amr_warehouse.launch.py [viewer:=false] [control:=ros2_control|builtin] [lidar:=auto|cpu|gpu]`, then `ros2 run lagrange_demos patrol [--minutes N]` (fails on a missed waypoint or a collision; nightly CI runs 10 minutes via `tools/ci/nav2_demo.sh 10`)
+- Profiles: the server validates profiles from the viewer against `profiles/schema.json` (jsoncons, JSON Schema 2020-12) and what it can run, and applies them by rebuilding the run at t = 0 (domain on/off with substitutes, `rigid_body.dt`, `time.real_time_factor`); other keys are warnings
+- Viewer: built by colcon with everything else; run `ros2 run lagrange_viewer lagrange_viewer` (starts on the launcher, whose Start local simulator runs `lagrange_server`; `--connect <endpoint>` goes straight to a server)
 - Viewer headless test: `colcon test --packages-select lagrange_viewer` (runs on the software Vulkan device, llvmpipe; `LAGRANGE_TEST_GPU=<name>` picks another)
 - GPU and tier of this machine: `ros2 run lagrange_gpu lagrange_gpu_info`
+- Container: `podman build -f packaging/container/Containerfile -t lagrange:dev .` then `podman run --rm lagrange:dev` runs the Nav2 demo headless (built-in controller; `-e CONTROL=ros2_control` for ros2_control); Docker reads the same file. Local `.deb` dry runs: `bloom-generate rosdebian --ros-distro lyrical` with `packaging/rosdep/lagrange-self.yaml` registered (docs/plan/spikes/0.2-H8-packaging.md)
+- Benchmarks: `tools/ci/benchmarks.sh MACHINE` (scheduler, bus, lidar per tier; medians against `tests/benchmarks/baseline.json`, see `docs/design/benchmarks.md`)
 - All hooks: `pre-commit run --all-files`
 - Protocol: `buf lint && buf format --diff --exit-code && buf breaking --against '.git#ref=origin/dev'`
 

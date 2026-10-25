@@ -1,0 +1,878 @@
+#include "lagrange/ros2/Bridge.hpp"
+#include "lagrange/world/LidarLayout.hpp"
+#include "lagrange/world/PoseMath.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <deque>
+#include <functional>
+#include <future>
+#include <limits>
+#include <map>
+#include <mutex>
+#include <regex>
+#include <set>
+#include <simulation_interfaces/msg/simulator_features.hpp>
+#include <simulation_interfaces/srv/delete_entity.hpp>
+#include <simulation_interfaces/srv/get_available_worlds.hpp>
+#include <simulation_interfaces/srv/get_current_world.hpp>
+#include <simulation_interfaces/srv/get_entities.hpp>
+#include <simulation_interfaces/srv/get_entities_states.hpp>
+#include <simulation_interfaces/srv/get_entity_bounds.hpp>
+#include <simulation_interfaces/srv/get_entity_info.hpp>
+#include <simulation_interfaces/srv/get_entity_state.hpp>
+#include <simulation_interfaces/srv/get_named_pose_bounds.hpp>
+#include <simulation_interfaces/srv/get_named_poses.hpp>
+#include <simulation_interfaces/srv/get_simulation_state.hpp>
+#include <simulation_interfaces/srv/get_simulator_features.hpp>
+#include <simulation_interfaces/srv/get_spawnables.hpp>
+#include <simulation_interfaces/srv/load_world.hpp>
+#include <simulation_interfaces/srv/reset_simulation.hpp>
+#include <simulation_interfaces/srv/set_entity_info.hpp>
+#include <simulation_interfaces/srv/set_entity_state.hpp>
+#include <simulation_interfaces/srv/set_simulation_state.hpp>
+#include <simulation_interfaces/srv/spawn_entities.hpp>
+#include <simulation_interfaces/srv/spawn_entity.hpp>
+#include <simulation_interfaces/srv/step_simulation.hpp>
+#include <simulation_interfaces/srv/unload_world.hpp>
+#include <thread>
+#include <variant>
+
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <rmw/rmw.h>
+#include <rosgraph_msgs/msg/clock.hpp>
+#include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
+#include <sensor_msgs/msg/laser_scan.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/msg/point_field.hpp>
+#include <std_msgs/msg/string.hpp>
+#include <tf2_msgs/msg/tf_message.hpp>
+
+namespace lagrange::ros2 {
+
+namespace {
+
+using Clock = std::chrono::steady_clock;
+
+builtin_interfaces::msg::Time stampOf(SimTime t) {
+    builtin_interfaces::msg::Time stamp;
+    stamp.sec = static_cast<std::int32_t>(t.ns / 1'000'000'000);
+    stamp.nanosec = static_cast<std::uint32_t>(t.ns % 1'000'000'000);
+    return stamp;
+}
+
+std::span<const double> values(const SignalBus& bus, SignalId id) {
+    return id.valid() ? bus.readN(id) : std::span<const double>();
+}
+
+/// Messages and an estimate of their size, per topic, for the graph's rate and bandwidth.
+struct TopicCounter {
+    std::uint64_t messages{0};
+    std::uint64_t bytes{0};
+    std::uint64_t windowMessages{0};
+    std::uint64_t windowBytes{0};
+    void add(std::size_t size) {
+        ++messages;
+        bytes += size;
+    }
+};
+
+}  // namespace
+
+struct Bridge::Impl {
+    rclcpp::Node::SharedPtr node;
+    rclcpp::executors::SingleThreadedExecutor executor;
+    std::thread spinner;
+
+    rclcpp::Publisher<rosgraph_msgs::msg::Clock>::SharedPtr clock;
+    rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr jointStates;
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom;
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr groundTruth;  // /ground_truth/odom
+    rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tf;
+    rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tfStatic;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr description;
+    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmdVel;
+    rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmdVelStamped;
+
+    void take(const geometry_msgs::msg::Twist& twist) {
+        const std::lock_guard<std::mutex> lock(commandMutex);
+        command = CmdVel{twist.linear.x, twist.angular.z};
+        commandAt = Clock::now();
+    }
+
+    struct Joint {
+        std::string name;
+        SignalId position, velocity, torque;
+    };
+    struct Lidar {
+        std::string frame;
+        std::string topic;
+        SignalId ranges;
+        LidarLayout layout;
+        double minRange{0.0}, maxRange{0.0}, rateHz{10.0};
+        SimTime sent{-1};
+        rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr publisher;         // 2D
+        rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr cloudPublisher;  // 3D
+    };
+    struct Imu {
+        std::string frame;
+        std::string topic;
+        SignalId force, rate, orientation;
+        double accelNoise{0.0}, gyroNoise{0.0};
+        SimTime sent{-1};
+        rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr publisher;
+    };
+    std::vector<Joint> joints;
+    std::vector<Lidar> lidars;
+    std::vector<Imu> imus;
+    SignalId basePose, baseTwist;
+    SimTime lastClock{-1};
+    SimTime lastState{-1};
+
+    mutable std::mutex commandMutex;
+    std::optional<CmdVel> command;
+    Clock::time_point commandAt;
+
+    std::map<std::string, TopicCounter> counters;  // by topic, the bridge's own
+
+    /// A 3D lidar's scan as sensor_msgs/PointCloud2: x, y, z, intensity (float32) and ring
+    /// (uint16), in the sensor frame, organised as rings x columns with NaN where no return.
+    /// In Lyrical, PointCloud2::data is a rosidl::Buffer with the CPU backend; a CUDA backend
+    /// can replace it without touching this code: docs/plan/spikes/0.2-F7-rosidl-buffer.md.
+    void publishCloud(const Lidar& lidar, std::span<const double> ranges) {
+        using sensor_msgs::msg::PointField;
+        sensor_msgs::msg::PointCloud2 cloud;
+        cloud.header.stamp = stampOf(lidar.sent);
+        cloud.header.frame_id = lidar.frame;
+        cloud.height = lidar.layout.vertical;
+        cloud.width = lidar.layout.horizontal;
+        const auto field = [&cloud](const char* name, std::uint32_t offset, std::uint8_t type) {
+            PointField f;
+            f.name = name;
+            f.offset = offset;
+            f.datatype = type;
+            f.count = 1;
+            cloud.fields.push_back(f);
+        };
+        field("x", 0, PointField::FLOAT32);
+        field("y", 4, PointField::FLOAT32);
+        field("z", 8, PointField::FLOAT32);
+        field("intensity", 12, PointField::FLOAT32);
+        field("ring", 16, PointField::UINT16);
+        constexpr std::uint32_t kStride = 20;  // 18 bytes of fields, padded to 4
+        cloud.point_step = kStride;
+        cloud.row_step = kStride * cloud.width;
+        cloud.is_dense = false;
+        cloud.is_bigendian = false;
+        const std::uint32_t beams = std::min<std::uint32_t>(
+            lidar.layout.beams(), static_cast<std::uint32_t>(ranges.size()));
+        cloud.data.assign(static_cast<std::size_t>(cloud.row_step) * cloud.height, 0);
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        for (std::uint32_t i = 0; i < beams; ++i) {
+            const std::array<double, 3> d = lidar.layout.direction(i);
+            const bool hit = std::isfinite(ranges[i]);
+            const std::array<float, 4> values{hit ? static_cast<float>(ranges[i] * d[0]) : nan,
+                                              hit ? static_cast<float>(ranges[i] * d[1]) : nan,
+                                              hit ? static_cast<float>(ranges[i] * d[2]) : nan,
+                                              hit ? 1.0F : 0.0F};  // no reflectivity model yet
+            const auto ring = static_cast<std::uint16_t>(i / lidar.layout.horizontal);
+            std::uint8_t* point = cloud.data.data() + static_cast<std::size_t>(i) * kStride;
+            std::memcpy(point, values.data(), sizeof(values));
+            std::memcpy(point + 16, &ring, sizeof(ring));
+        }
+        counters[lidar.topic].add(cloud.data.size() + 128);
+        lidar.cloudPublisher->publish(std::move(cloud));
+    }
+
+    // simulation_interfaces: requests queued by the service callbacks for handleRequests().
+    SimulationHandler* handler{nullptr};
+    std::vector<rclcpp::ServiceBase::SharedPtr> services;
+    std::mutex requestMutex;
+    std::deque<std::function<void()>> requests;
+
+    /// Runs `work` on the handleRequests() thread and returns its result, or nullopt if that
+    /// thread did not get to it in time. `work` owns everything it touches, so a late run is
+    /// harmless.
+    template <class Work>
+    auto onMain(Work work) -> std::optional<decltype(work())> {
+        using Result = decltype(work());
+        auto task = std::make_shared<std::packaged_task<Result()>>(std::move(work));
+        std::future<Result> result = task->get_future();
+        {
+            const std::lock_guard<std::mutex> lock(requestMutex);
+            requests.emplace_back([task] { (*task)(); });
+        }
+        if (result.wait_for(std::chrono::seconds(30)) != std::future_status::ready) {
+            return std::nullopt;
+        }
+        return result.get();
+    }
+    Clock::time_point windowStart{Clock::now()};
+};
+
+Bridge::Bridge(BridgeSettings settings)
+    : settings_(std::move(settings)), impl_(std::make_unique<Impl>()) {
+    Impl& s = *impl_;
+    s.node = std::make_shared<rclcpp::Node>(settings_.nodeName);
+    s.clock = s.node->create_publisher<rosgraph_msgs::msg::Clock>("/clock", rclcpp::ClockQoS());
+    if (!settings_.controllersOwnState) {
+        s.jointStates = s.node->create_publisher<sensor_msgs::msg::JointState>("/joint_states", 10);
+    }
+    if (!settings_.baseLink.empty()) {
+        s.groundTruth = s.node->create_publisher<nav_msgs::msg::Odometry>("/ground_truth/odom", 10);
+    }
+    if (!settings_.baseLink.empty() && !settings_.controllersOwnState) {
+        s.odom = s.node->create_publisher<nav_msgs::msg::Odometry>("/odom", 10);
+    }
+    s.tf = s.node->create_publisher<tf2_msgs::msg::TFMessage>("/tf", rclcpp::QoS(100));
+    s.tfStatic = s.node->create_publisher<tf2_msgs::msg::TFMessage>(
+        "/tf_static", rclcpp::QoS(1).transient_local().reliable());
+    if (!settings_.robotDescription.empty()) {
+        s.description = s.node->create_publisher<std_msgs::msg::String>(
+            "/robot_description", rclcpp::QoS(1).transient_local().reliable());
+        std_msgs::msg::String text;
+        text.data = settings_.robotDescription;
+        s.description->publish(text);
+    }
+    if (settings_.controllersOwnState) {
+        // diff_drive_controller (or another) takes the commands.
+    } else if (settings_.stampedCmdVel) {
+        s.cmdVelStamped = s.node->create_subscription<geometry_msgs::msg::TwistStamped>(
+            "/cmd_vel", 10,
+            [&s](const geometry_msgs::msg::TwistStamped& twist) { s.take(twist.twist); });
+    } else {
+        s.cmdVel = s.node->create_subscription<geometry_msgs::msg::Twist>(
+            "/cmd_vel", 10, [&s](const geometry_msgs::msg::Twist& twist) { s.take(twist); });
+    }
+    s.executor.add_node(s.node);
+    s.spinner = std::thread([&s] { s.executor.spin(); });
+}
+
+Bridge::~Bridge() {
+    impl_->executor.cancel();
+    if (impl_->spinner.joinable()) {
+        impl_->spinner.join();
+    }
+}
+
+void Bridge::attach(const World& world, const SignalBus& bus) {
+    Impl& s = *impl_;
+    s.joints.clear();
+    for (const std::string& name : world.joints.names) {
+        const SignalId position = bus.find("joint/" + name + "/position");
+        if (position.valid()) {
+            s.joints.push_back({name, position, bus.find("joint/" + name + "/velocity"),
+                                bus.find("joint/" + name + "/torque")});
+        }
+    }
+    s.basePose = bus.find("body/" + settings_.baseLink + "/pose");
+    s.baseTwist = bus.find("body/" + settings_.baseLink + "/twist");
+
+    // Sensor frames are children of their links, at their mounts: published once, latched.
+    tf2_msgs::msg::TFMessage mounts;
+    const World::Sensors& sensors = world.sensors;
+    // /scan, /points and /imu when the robot has one of the kind, /<sensor>/... otherwise.
+    std::size_t scanners = 0;
+    std::size_t clouds = 0;
+    std::size_t imuCount = 0;
+    for (std::size_t i = 0; i < sensors.type.size(); ++i) {
+        if (sensors.type[i] != SensorType::Lidar) {
+            ++imuCount;
+        } else {
+            (LidarLayout::from(sensors.settings[i]).is3d() ? clouds : scanners) += 1;
+        }
+    }
+    std::vector<Impl::Lidar> lidars;
+    std::vector<Impl::Imu> imus;
+    for (std::size_t i = 0; i < sensors.names.size(); ++i) {
+        const std::string& name = sensors.names[i];
+        geometry_msgs::msg::TransformStamped mount;
+        mount.header.frame_id = world.bodies.names[sensors.body[i].index];
+        mount.child_frame_id = name;
+        const Pose& pose = sensors.poseInBody[i];
+        mount.transform.translation.x = pose.position[0];
+        mount.transform.translation.y = pose.position[1];
+        mount.transform.translation.z = pose.position[2];
+        mount.transform.rotation.w = pose.orientation[0];
+        mount.transform.rotation.x = pose.orientation[1];
+        mount.transform.rotation.y = pose.orientation[2];
+        mount.transform.rotation.z = pose.orientation[3];
+        mounts.transforms.push_back(mount);
+        const auto& settings = sensors.settings[i];
+        const auto get = [&settings](const char* key, double fallback) {
+            const auto it = settings.find(key);
+            return it == settings.end() ? fallback : it->second;
+        };
+        if (sensors.type[i] == SensorType::Lidar) {
+            Impl::Lidar lidar;
+            lidar.frame = name;
+            lidar.layout = LidarLayout::from(settings);
+            if (lidar.layout.is3d()) {
+                lidar.topic = clouds == 1 ? "/points" : "/" + name + "/points";
+            } else {
+                lidar.topic = scanners == 1 ? "/scan" : "/" + name + "/scan";
+            }
+            lidar.ranges = bus.find("sensor/" + name + "/ranges");
+            lidar.minRange = get("min_range", 0.1);
+            lidar.maxRange = get("max_range", 30.0);
+            lidar.rateHz = sensors.rateHz[i];
+            // Reuse the publisher across attach() calls: a new one would drop subscribers.
+            for (const Impl::Lidar& old : s.lidars) {
+                if (old.topic == lidar.topic) {
+                    lidar.publisher = old.publisher;
+                    lidar.cloudPublisher = old.cloudPublisher;
+                }
+            }
+            if (lidar.layout.is3d() && !lidar.cloudPublisher) {
+                lidar.cloudPublisher = s.node->create_publisher<sensor_msgs::msg::PointCloud2>(
+                    lidar.topic, rclcpp::SensorDataQoS());
+            } else if (!lidar.layout.is3d() && !lidar.publisher) {
+                lidar.publisher = s.node->create_publisher<sensor_msgs::msg::LaserScan>(
+                    lidar.topic, rclcpp::SensorDataQoS());
+            }
+            lidars.push_back(std::move(lidar));
+        } else {
+            Impl::Imu imu;
+            imu.frame = name;
+            imu.topic = imuCount == 1 ? "/imu" : "/" + name + "/imu";
+            imu.force = bus.find("sensor/" + name + "/specific_force");
+            imu.rate = bus.find("sensor/" + name + "/angular_rate");
+            imu.orientation = bus.find("sensor/" + name + "/orientation");
+            imu.accelNoise = get("accel_noise", 0.0);
+            imu.gyroNoise = get("gyro_noise", 0.0);
+            for (const Impl::Imu& old : s.imus) {
+                if (old.topic == imu.topic) {
+                    imu.publisher = old.publisher;
+                }
+            }
+            if (!imu.publisher) {
+                imu.publisher = s.node->create_publisher<sensor_msgs::msg::Imu>(
+                    imu.topic, rclcpp::SensorDataQoS());
+            }
+            imus.push_back(std::move(imu));
+        }
+    }
+    s.lidars = std::move(lidars);
+    s.imus = std::move(imus);
+    s.lastClock = SimTime{-1};
+    s.lastState = SimTime{-1};
+    if (!mounts.transforms.empty()) {
+        s.tfStatic->publish(mounts);
+        s.counters["/tf_static"].add(mounts.transforms.size() * 80);
+    }
+}
+
+void Bridge::publish(const SignalBus& bus, SimTime now) {
+    Impl& s = *impl_;
+    if (now != s.lastClock) {
+        rosgraph_msgs::msg::Clock clock;
+        clock.clock = stampOf(now);
+        s.clock->publish(clock);
+        s.counters["/clock"].add(8);
+        s.lastClock = now;
+    }
+
+    const auto period = static_cast<std::int64_t>(1e9 / settings_.stateRateHz);
+    if (s.lastState.ns < 0 || now.ns - s.lastState.ns >= period) {
+        s.lastState = now;
+        sensor_msgs::msg::JointState joints;
+        joints.header.stamp = stampOf(now);
+        for (const Impl::Joint& joint : s.joints) {
+            joints.name.push_back(joint.name);
+            joints.position.push_back(bus.read(joint.position));
+            joints.velocity.push_back(joint.velocity.valid() ? bus.read(joint.velocity) : 0.0);
+            joints.effort.push_back(joint.torque.valid() ? bus.read(joint.torque) : 0.0);
+        }
+        if (s.jointStates) {
+            s.jointStates->publish(joints);
+            s.counters["/joint_states"].add(joints.name.size() * 40 + 16);
+        }
+
+        const std::span<const double> pose = values(bus, s.basePose);
+        const std::span<const double> twist = values(bus, s.baseTwist);
+        if (s.groundTruth && pose.size() == 7 && twist.size() == 6) {
+            nav_msgs::msg::Odometry odom;
+            odom.header.stamp = stampOf(now);
+            odom.header.frame_id = settings_.odomFrame;
+            odom.child_frame_id = settings_.baseLink;
+            odom.pose.pose.position.x = pose[0];
+            odom.pose.pose.position.y = pose[1];
+            odom.pose.pose.position.z = pose[2];
+            odom.pose.pose.orientation.w = pose[3];
+            odom.pose.pose.orientation.x = pose[4];
+            odom.pose.pose.orientation.y = pose[5];
+            odom.pose.pose.orientation.z = pose[6];
+            // ROS odometry gives the twist in the child frame; the bus gives it in the world.
+            const std::array<double, 4> inverse = conjugate({pose[3], pose[4], pose[5], pose[6]});
+            const std::array<double, 3> linear = rotate(inverse, {twist[0], twist[1], twist[2]});
+            const std::array<double, 3> angular = rotate(inverse, {twist[3], twist[4], twist[5]});
+            odom.twist.twist.linear.x = linear[0];
+            odom.twist.twist.linear.y = linear[1];
+            odom.twist.twist.linear.z = linear[2];
+            odom.twist.twist.angular.x = angular[0];
+            odom.twist.twist.angular.y = angular[1];
+            odom.twist.twist.angular.z = angular[2];
+            // The true pose, always, in the world frame (for tests and evaluation, as a
+            // simulator's ground-truth plugin publishes it).
+            nav_msgs::msg::Odometry truth = odom;
+            truth.header.frame_id = "world";
+            s.groundTruth->publish(truth);
+            s.counters["/ground_truth/odom"].add(720);
+            // With ros2_control, its controllers publish /odom and the odom TF.
+            if (s.odom) {
+                s.odom->publish(odom);
+                s.counters["/odom"].add(720);
+
+                tf2_msgs::msg::TFMessage tf;
+                geometry_msgs::msg::TransformStamped base;
+                base.header = odom.header;
+                base.child_frame_id = settings_.baseLink;
+                base.transform.translation.x = pose[0];
+                base.transform.translation.y = pose[1];
+                base.transform.translation.z = pose[2];
+                base.transform.rotation = odom.pose.pose.orientation;
+                tf.transforms.push_back(base);
+                s.tf->publish(tf);
+                s.counters["/tf"].add(80);
+            }
+        }
+    }
+
+    for (Impl::Lidar& lidar : s.lidars) {
+        if (!lidar.ranges.valid() || bus.stamp(lidar.ranges) == lidar.sent) {
+            continue;
+        }
+        lidar.sent = bus.stamp(lidar.ranges);
+        const std::span<const double> ranges = bus.readN(lidar.ranges);
+        if (lidar.cloudPublisher) {
+            s.publishCloud(lidar, ranges);
+            continue;
+        }
+        sensor_msgs::msg::LaserScan scan;
+        scan.header.stamp = stampOf(lidar.sent);
+        scan.header.frame_id = lidar.frame;
+        scan.angle_min = static_cast<float>(lidar.layout.minAngle);
+        scan.angle_max = static_cast<float>(lidar.layout.maxAngle);
+        scan.angle_increment =
+            ranges.size() > 1 ? static_cast<float>((lidar.layout.maxAngle - lidar.layout.minAngle) /
+                                                   static_cast<double>(ranges.size() - 1))
+                              : 0.0F;
+        scan.scan_time = static_cast<float>(1.0 / lidar.rateHz);
+        scan.range_min = static_cast<float>(lidar.minRange);
+        scan.range_max = static_cast<float>(lidar.maxRange);
+        scan.ranges.reserve(ranges.size());
+        for (const double r : ranges) {
+            scan.ranges.push_back(static_cast<float>(r));
+        }
+        lidar.publisher->publish(scan);
+        s.counters[lidar.topic].add(ranges.size() * 4 + 64);
+    }
+
+    for (Impl::Imu& imu : s.imus) {
+        if (!imu.force.valid() || bus.stamp(imu.force) == imu.sent) {
+            continue;
+        }
+        imu.sent = bus.stamp(imu.force);
+        const std::span<const double> force = bus.readN(imu.force);
+        const std::span<const double> rate = bus.readN(imu.rate);
+        const std::span<const double> q = bus.readN(imu.orientation);
+        sensor_msgs::msg::Imu message;
+        message.header.stamp = stampOf(imu.sent);
+        message.header.frame_id = imu.frame;
+        message.orientation.w = q[0];
+        message.orientation.x = q[1];
+        message.orientation.y = q[2];
+        message.orientation.z = q[3];
+        message.angular_velocity.x = rate[0];
+        message.angular_velocity.y = rate[1];
+        message.angular_velocity.z = rate[2];
+        message.linear_acceleration.x = force[0];
+        message.linear_acceleration.y = force[1];
+        message.linear_acceleration.z = force[2];
+        // Diagonal covariances from the configured white noise.
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            message.angular_velocity_covariance.at(axis * 4) = imu.gyroNoise * imu.gyroNoise;
+            message.linear_acceleration_covariance.at(axis * 4) = imu.accelNoise * imu.accelNoise;
+        }
+        imu.publisher->publish(message);
+        s.counters[imu.topic].add(330);
+    }
+}
+
+std::optional<CmdVel> Bridge::latestCommand(std::chrono::milliseconds maxAge) const {
+    const std::lock_guard<std::mutex> lock(impl_->commandMutex);
+    if (!impl_->command || Clock::now() - impl_->commandAt > maxAge) {
+        return std::nullopt;
+    }
+    return impl_->command;
+}
+
+GraphSnapshot Bridge::graph() {
+    Impl& s = *impl_;
+    GraphSnapshot out;
+    const auto now = Clock::now();
+    const double seconds =
+        std::max(std::chrono::duration<double>(now - s.windowStart).count(), 1e-3);
+    s.windowStart = now;
+    for (const auto& [name, types] : s.node->get_topic_names_and_types()) {
+        GraphSnapshot::Topic topic;
+        topic.name = name;
+        topic.type = types.empty() ? "" : types.front();
+        topic.publishers = static_cast<std::uint32_t>(s.node->count_publishers(name));
+        topic.subscribers = static_cast<std::uint32_t>(s.node->count_subscribers(name));
+        const auto counter = s.counters.find(name);
+        if (counter != s.counters.end()) {
+            TopicCounter& c = counter->second;
+            topic.fromBridge = true;
+            topic.rateHz = static_cast<double>(c.messages - c.windowMessages) / seconds;
+            topic.bandwidthBps = 8.0 * static_cast<double>(c.bytes - c.windowBytes) / seconds;
+            c.windowMessages = c.messages;
+            c.windowBytes = c.bytes;
+        }
+        out.topics.push_back(std::move(topic));
+    }
+    const auto graph = s.node->get_node_graph_interface();
+    constexpr std::size_t kMaxNodes = 64;
+    for (const auto& [name, space] : graph->get_node_names_and_namespaces()) {
+        if (out.nodes.size() >= kMaxNodes) {
+            break;
+        }
+        if (name.starts_with('_')) {
+            continue;  // hidden by ROS convention (the ros2cli daemon, for one)
+        }
+        GraphSnapshot::Node node;
+        node.name = (space == "/" ? "/" : space + "/") + name;
+        node.external = name != settings_.nodeName;
+        try {
+            for (const auto& [topic, types] :
+                 graph->get_publisher_names_and_types_by_node(name, space)) {
+                node.publishes.push_back(topic);
+            }
+            for (const auto& [topic, types] :
+                 graph->get_subscriber_names_and_types_by_node(name, space)) {
+                node.subscribes.push_back(topic);
+            }
+        } catch (const std::exception&) {
+            // A node that left between the two queries: list it without topics.
+        }
+        out.nodes.push_back(std::move(node));
+    }
+    out.rmw = rmw_get_implementation_identifier();
+    if (const char* distro = std::getenv("ROS_DISTRO")) {
+        out.distro = distro;
+    }
+    if (const char* domain = std::getenv("ROS_DOMAIN_ID")) {
+        out.domainId = static_cast<std::uint32_t>(std::strtoul(domain, nullptr, 10));
+    }
+    return out;
+}
+
+namespace {
+
+namespace si = simulation_interfaces;
+
+void setResult(si::msg::Result& out, const SimOutcome& outcome) {
+    out.result = static_cast<std::uint8_t>(outcome.result);
+    out.error_message = outcome.message;
+}
+
+void timedOut(si::msg::Result& out) {
+    out.result = si::msg::Result::RESULT_OPERATION_FAILED;
+    out.error_message = "the simulator did not answer within 30 s";
+}
+
+/// Entities that pass `filters`, or an outcome saying why the filters cannot be applied.
+std::variant<std::vector<EntityDescription>, SimOutcome> filtered(
+    std::vector<EntityDescription> all, const si::msg::EntityFilters& filters) {
+    if (!filters.tags.tags.empty()) {
+        return SimOutcome{SimResult::Unsupported, "entities have no tags in this simulator"};
+    }
+    if (filters.bounds.type != si::msg::Bounds::TYPE_EMPTY) {
+        return SimOutcome{SimResult::Unsupported, "filtering by bounds is not supported"};
+    }
+    std::optional<std::regex> pattern;
+    if (!filters.filter.empty()) {
+        try {
+            pattern.emplace(filters.filter, std::regex::extended);
+        } catch (const std::regex_error& e) {
+            return SimOutcome{SimResult::Failed,
+                              "invalid filter '" + filters.filter + "': " + e.what()};
+        }
+    }
+    std::vector<EntityDescription> out;
+    for (EntityDescription& entity : all) {
+        const bool nameOk = !pattern || std::regex_search(entity.name, *pattern);
+        const bool categoryOk =
+            filters.categories.empty() ||
+            std::any_of(filters.categories.begin(), filters.categories.end(),
+                        [&](const si::msg::EntityCategory& c) {
+                            return c.category == static_cast<std::uint8_t>(entity.category);
+                        });
+        if (nameOk && categoryOk) {
+            out.push_back(std::move(entity));
+        }
+    }
+    return out;
+}
+
+/// A service this simulator does not support yet: it answers RESULT_FEATURE_UNSUPPORTED rather
+/// than leaving callers waiting for a server that never appears.
+template <class Srv>
+rclcpp::ServiceBase::SharedPtr unsupported(rclcpp::Node& node, const std::string& name,
+                                           const std::string& why) {
+    return node.create_service<Srv>(name,
+                                    [why](const std::shared_ptr<typename Srv::Request>&,
+                                          const std::shared_ptr<typename Srv::Response>& response) {
+                                        setResult(response->result, {SimResult::Unsupported, why});
+                                    });
+}
+
+si::msg::EntityState stateMessage(const EntityMotion& motion, SimTime now) {
+    si::msg::EntityState state;
+    state.header.stamp = stampOf(now);
+    state.header.frame_id = "world";
+    state.pose.position.x = motion.pose.position[0];
+    state.pose.position.y = motion.pose.position[1];
+    state.pose.position.z = motion.pose.position[2];
+    state.pose.orientation.w = motion.pose.orientation[0];
+    state.pose.orientation.x = motion.pose.orientation[1];
+    state.pose.orientation.y = motion.pose.orientation[2];
+    state.pose.orientation.z = motion.pose.orientation[3];
+    state.twist.linear.x = motion.twist[0];
+    state.twist.linear.y = motion.twist[1];
+    state.twist.linear.z = motion.twist[2];
+    state.twist.angular.x = motion.twist[3];
+    state.twist.angular.y = motion.twist[4];
+    state.twist.angular.z = motion.twist[5];
+    state.acceleration.linear.x = motion.acceleration[0];
+    state.acceleration.linear.y = motion.acceleration[1];
+    state.acceleration.linear.z = motion.acceleration[2];
+    state.acceleration.angular.x = motion.acceleration[3];
+    state.acceleration.angular.y = motion.acceleration[4];
+    state.acceleration.angular.z = motion.acceleration[5];
+    return state;
+}
+
+}  // namespace
+
+void Bridge::serveSimulation(SimulationHandler& handler) {
+    Impl& s = *impl_;
+    s.handler = &handler;
+    SimulationHandler* h = &handler;
+    rclcpp::Node& node = *s.node;
+    using si::msg::SimulatorFeatures;
+
+    s.services.push_back(node.create_service<si::srv::GetSimulatorFeatures>(
+        "get_simulator_features",
+        [](const std::shared_ptr<si::srv::GetSimulatorFeatures::Request>&,
+           const std::shared_ptr<si::srv::GetSimulatorFeatures::Response>& response) {
+            response->features.features = {
+                SimulatorFeatures::ENTITY_CATEGORIES,
+                SimulatorFeatures::ENTITY_STATE_GETTING,
+                SimulatorFeatures::ENTITY_INFO_GETTING,
+                SimulatorFeatures::SIMULATION_RESET,
+                SimulatorFeatures::SIMULATION_STATE_GETTING,
+                SimulatorFeatures::SIMULATION_STATE_SETTING,
+                SimulatorFeatures::SIMULATION_STATE_PAUSE,
+                SimulatorFeatures::STEP_SIMULATION_SINGLE,
+                SimulatorFeatures::STEP_SIMULATION_MULTIPLE,
+            };
+            response->features.custom_info =
+                "Lagrange: entities are the robot and the fixed scenery objects; a step is one "
+                "base tick of the scheduler; reset restarts time and state together.";
+        }));
+
+    s.services.push_back(node.create_service<si::srv::GetSimulationState>(
+        "get_simulation_state",
+        [&s, h](const std::shared_ptr<si::srv::GetSimulationState::Request>&,
+                const std::shared_ptr<si::srv::GetSimulationState::Response>& response) {
+            const auto state = s.onMain([h] { return h->simulationState(); });
+            if (!state) {
+                timedOut(response->result);
+                return;
+            }
+            response->state.state = static_cast<std::uint8_t>(*state);
+            response->result.result = si::msg::Result::RESULT_OK;
+        }));
+
+    s.services.push_back(node.create_service<si::srv::SetSimulationState>(
+        "set_simulation_state",
+        [&s, h](const std::shared_ptr<si::srv::SetSimulationState::Request>& request,
+                const std::shared_ptr<si::srv::SetSimulationState::Response>& response) {
+            const std::uint8_t target = request->state.state;
+            if (target > static_cast<std::uint8_t>(SimState::Quitting)) {
+                setResult(response->result,
+                          {SimResult::Unsupported, "worlds cannot be loaded or unloaded"});
+                return;
+            }
+            const auto outcome = s.onMain(
+                [h, target] { return h->setSimulationState(static_cast<SimState>(target)); });
+            outcome ? setResult(response->result, *outcome) : timedOut(response->result);
+        }));
+
+    s.services.push_back(node.create_service<si::srv::StepSimulation>(
+        "step_simulation",
+        [&s, h](const std::shared_ptr<si::srv::StepSimulation::Request>& request,
+                const std::shared_ptr<si::srv::StepSimulation::Response>& response) {
+            const std::uint64_t steps = request->steps;
+            const auto outcome = s.onMain([h, steps] { return h->step(steps); });
+            outcome ? setResult(response->result, *outcome) : timedOut(response->result);
+        }));
+
+    s.services.push_back(node.create_service<si::srv::ResetSimulation>(
+        "reset_simulation",
+        [&s, h](const std::shared_ptr<si::srv::ResetSimulation::Request>& request,
+                const std::shared_ptr<si::srv::ResetSimulation::Response>& response) {
+            using Reset = si::srv::ResetSimulation::Request;
+            const std::uint8_t scope = request->scope;
+            const std::uint8_t timeAndState = Reset::SCOPE_TIME | Reset::SCOPE_STATE;
+            if (scope == Reset::SCOPE_SPAWNED) {
+                // Nothing can be spawned yet, so there is nothing to remove.
+                response->result.result = si::msg::Result::RESULT_OK;
+                return;
+            }
+            if (scope != Reset::SCOPE_DEFAULT && (scope & timeAndState) != timeAndState) {
+                setResult(response->result,
+                          {SimResult::Unsupported, "time and state can only be reset together"});
+                return;
+            }
+            const auto outcome = s.onMain([h] { return h->reset(); });
+            outcome ? setResult(response->result, *outcome) : timedOut(response->result);
+        }));
+
+    s.services.push_back(node.create_service<si::srv::GetEntities>(
+        "get_entities", [&s, h](const std::shared_ptr<si::srv::GetEntities::Request>& request,
+                                const std::shared_ptr<si::srv::GetEntities::Response>& response) {
+            const auto all = s.onMain([h] { return h->entities(); });
+            if (!all) {
+                timedOut(response->result);
+                return;
+            }
+            auto matched = filtered(*all, request->filters);
+            if (const auto* failed = std::get_if<SimOutcome>(&matched)) {
+                setResult(response->result, *failed);
+                return;
+            }
+            for (const EntityDescription& entity : std::get<0>(matched)) {
+                response->entities.push_back(entity.name);
+            }
+            response->result.result = si::msg::Result::RESULT_OK;
+        }));
+
+    s.services.push_back(node.create_service<si::srv::GetEntitiesStates>(
+        "get_entities_states",
+        [&s, h, this](const std::shared_ptr<si::srv::GetEntitiesStates::Request>& request,
+                      const std::shared_ptr<si::srv::GetEntitiesStates::Response>& response) {
+            si::msg::EntityFilters filters = request->filters;
+            using States = std::pair<std::vector<std::string>, std::vector<si::msg::EntityState>>;
+            const auto result = s.onMain([h, this, filters]() -> std::variant<States, SimOutcome> {
+                auto matched = filtered(h->entities(), filters);
+                if (auto* failed = std::get_if<SimOutcome>(&matched)) {
+                    return *failed;
+                }
+                States states;
+                for (const EntityDescription& entity : std::get<0>(matched)) {
+                    if (const auto motion = h->entityMotion(entity.name)) {
+                        states.first.push_back(entity.name);
+                        states.second.push_back(stateMessage(*motion, impl_->lastClock));
+                    }
+                }
+                return states;
+            });
+            if (!result) {
+                timedOut(response->result);
+            } else if (const auto* failed = std::get_if<SimOutcome>(&*result)) {
+                setResult(response->result, *failed);
+            } else {
+                const States& states = std::get<States>(*result);
+                response->entities = states.first;
+                response->states = states.second;
+                response->result.result = si::msg::Result::RESULT_OK;
+            }
+        }));
+
+    s.services.push_back(node.create_service<si::srv::GetEntityState>(
+        "get_entity_state",
+        [&s, h, this](const std::shared_ptr<si::srv::GetEntityState::Request>& request,
+                      const std::shared_ptr<si::srv::GetEntityState::Response>& response) {
+            const std::string name = request->entity;
+            const auto motion = s.onMain([h, this, name]() -> std::optional<si::msg::EntityState> {
+                if (const auto found = h->entityMotion(name)) {
+                    return stateMessage(*found, impl_->lastClock);
+                }
+                return std::nullopt;
+            });
+            if (!motion) {
+                timedOut(response->result);
+            } else if (!*motion) {
+                setResult(response->result,
+                          {SimResult::NotFound, "no entity named '" + name + "'"});
+            } else {
+                response->state = **motion;
+                response->result.result = si::msg::Result::RESULT_OK;
+            }
+        }));
+
+    s.services.push_back(node.create_service<si::srv::GetEntityInfo>(
+        "get_entity_info",
+        [&s, h](const std::shared_ptr<si::srv::GetEntityInfo::Request>& request,
+                const std::shared_ptr<si::srv::GetEntityInfo::Response>& response) {
+            const std::string name = request->entity;
+            const auto all = s.onMain([h] { return h->entities(); });
+            if (!all) {
+                timedOut(response->result);
+                return;
+            }
+            for (const EntityDescription& entity : *all) {
+                if (entity.name == name) {
+                    response->info.category.category = static_cast<std::uint8_t>(entity.category);
+                    response->info.description = entity.description;
+                    response->result.result = si::msg::Result::RESULT_OK;
+                    return;
+                }
+            }
+            setResult(response->result, {SimResult::NotFound, "no entity named '" + name + "'"});
+        }));
+    const std::string noSpawning = "spawning and deleting entities is not supported yet";
+    const std::string noWorlds = "this server runs the world it was started with";
+    const std::string noEditing = "entity state and info are read-only in this version";
+    s.services.push_back(unsupported<si::srv::SpawnEntity>(node, "spawn_entity", noSpawning));
+    s.services.push_back(unsupported<si::srv::SpawnEntities>(node, "spawn_entities", noSpawning));
+    s.services.push_back(unsupported<si::srv::DeleteEntity>(node, "delete_entity", noSpawning));
+    s.services.push_back(unsupported<si::srv::GetSpawnables>(node, "get_spawnables", noSpawning));
+    s.services.push_back(unsupported<si::srv::SetEntityState>(node, "set_entity_state", noEditing));
+    s.services.push_back(unsupported<si::srv::SetEntityInfo>(node, "set_entity_info", noEditing));
+    s.services.push_back(unsupported<si::srv::GetEntityBounds>(
+        node, "get_entity_bounds", "entity bounds are not reported yet"));
+    s.services.push_back(
+        unsupported<si::srv::GetNamedPoses>(node, "get_named_poses", "no named poses are defined"));
+    s.services.push_back(unsupported<si::srv::GetNamedPoseBounds>(node, "get_named_pose_bounds",
+                                                                  "no named poses are defined"));
+    s.services.push_back(unsupported<si::srv::LoadWorld>(node, "load_world", noWorlds));
+    s.services.push_back(unsupported<si::srv::UnloadWorld>(node, "unload_world", noWorlds));
+    s.services.push_back(
+        unsupported<si::srv::GetCurrentWorld>(node, "get_current_world", noWorlds));
+    s.services.push_back(
+        unsupported<si::srv::GetAvailableWorlds>(node, "get_available_worlds", noWorlds));
+}
+
+void Bridge::handleRequests() {
+    Impl& s = *impl_;
+    std::deque<std::function<void()>> pending;
+    {
+        const std::lock_guard<std::mutex> lock(s.requestMutex);
+        pending.swap(s.requests);
+    }
+    for (const std::function<void()>& request : pending) {
+        request();
+    }
+}
+
+}  // namespace lagrange::ros2

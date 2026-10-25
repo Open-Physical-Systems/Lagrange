@@ -5,6 +5,7 @@
 #include "shaders/kMeshFragment.hpp"
 #include "shaders/kMeshVertex.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -190,6 +191,7 @@ SceneRenderer::~SceneRenderer() {
     gpu::destroy(device_, gridMinor_);
     gpu::destroy(device_, gridMajor_);
     gpu::destroy(device_, axes_);
+    gpu::destroy(device_, overlay_);
     gpu::destroy(device_, color_);
     gpu::destroy(device_, depth_);
     vkDestroyPipeline(device_.device(), meshPipeline_, nullptr);
@@ -267,7 +269,7 @@ void SceneRenderer::uploadMeshes(const SceneStatics& statics) {
 }
 
 void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, const Camera& camera,
-                           const RenderOptions& options) {
+                           const RenderOptions& options, std::span<const OverlayLines> overlays) {
     if (frame != nullptr && frame->statics && frame->statics->generation != meshGeneration_) {
         uploadMeshes(*frame->statics);
     }
@@ -381,6 +383,42 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
         axisPush.color = axisColors.at(axis);
         vkCmdPushConstants(commands, lineLayout_, stages, 0, sizeof(axisPush), &axisPush);
         vkCmdDraw(commands, 2, 1, axis * 2, 0);
+    }
+
+    // --- overlays -------------------------------------------------------------------------
+    std::size_t floats = 0;
+    for (const OverlayLines& batch : overlays) {
+        floats += batch.vertices.size();
+    }
+    if (floats > 0) {
+        const VkDeviceSize bytes = floats * sizeof(float);
+        if (overlay_.size < bytes) {
+            gpu::destroy(device_, overlay_);  // the previous frame has finished (see header)
+            overlay_ = gpu::createBuffer(device_, std::max<VkDeviceSize>(bytes * 2, 64 * 1024),
+                                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
+        }
+        auto* mapped = static_cast<float*>(overlay_.mapped);
+        std::size_t written = 0;
+        for (const OverlayLines& batch : overlays) {
+            std::copy(batch.vertices.begin(), batch.vertices.end(), mapped + written);
+            written += batch.vertices.size();
+        }
+        gpu::flush(device_, overlay_);
+        std::size_t first = 0;
+        for (const OverlayLines& batch : overlays) {
+            LinePush push{};
+            push.viewProjection = viewProjection;
+            for (std::size_t k = 0; k < 3; ++k) {
+                push.offset.at(k) = static_cast<float>(batch.origin.at(k) - eye.at(k));
+            }
+            push.color = batch.color;
+            vkCmdPushConstants(commands, lineLayout_, stages, 0, sizeof(push), &push);
+            const VkDeviceSize offset = first * sizeof(float);
+            vkCmdBindVertexBuffers(commands, 0, 1, &overlay_.buffer, &offset);
+            vkCmdDraw(commands, static_cast<std::uint32_t>(batch.vertices.size() / 3), 1, 0, 0);
+            ++lastDrawCount_;
+            first += batch.vertices.size();
+        }
     }
 
     vkCmdEndRendering(commands);

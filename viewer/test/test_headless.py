@@ -118,7 +118,9 @@ def test_viewer_renders_the_scene_from_the_mock_server(socket_dir):
     assert stats["snapshots"] >= 1
     assert stats["deltas"] >= 5  # the scene kept moving while we rendered
     assert stats["prims"] == 15 and stats["meshes"] == 4
-    assert stats["draw_calls"] == 5  # base, two wheels, caster, ground
+    # Base, two wheels, caster, ground; and, once the first lidar scan arrived, the sensor
+    # frustums overlay: strong and attenuated returns.
+    assert stats["draw_calls"] in (5, 7)
     assert stats["sim_time_ns"] > 0
     assert stats["validation_errors"] == 0, result.stderr
 
@@ -529,7 +531,19 @@ def test_replay_workspace_shows_the_recording_and_its_events(socket_dir):
     assert len(pixels) > 50
 
 
-def run_workspace(socket_dir, workspace, name):
+def test_viewport_draws_the_lidar_returns_as_sensor_frustums(socket_dir):
+    """Scene viewport, Sensor frustums overlay (on by default): each lidar return is a cross
+    in the sensors domain colour, placed with the sensor's pose."""
+    stats, rows = run_workspace(socket_dir, "scene", "frustums.png", frames="120")
+    assert stats["draw_calls"] == 7, "the overlay adds the strong and attenuated returns"
+    # Only the viewport (left panel 280 px, inspector 340 px, header and timeline excluded),
+    # so that the domain strip's Sensors chip does not count.
+    viewport = [row[300 * 4 : 1240 * 4] for row in rows[140:760]]
+    returns = count(viewport, lambda r, g, b: 50 < r < 80 and g > 195 and 150 < b < 185)
+    assert returns > 40, f"no lidar returns in the viewport ({returns} pixels)"
+
+
+def run_workspace(socket_dir, workspace, name, frames="60"):
     """Runs the viewer on one workspace against the mock server; returns stats and pixels."""
     image = socket_dir / name
     with ServerThread(str(socket_dir / "s.sock")) as server:
@@ -537,7 +551,7 @@ def run_workspace(socket_dir, workspace, name):
             "--connect",
             f"unix:{server.endpoint.address}",
             "--frames",
-            "60",
+            frames,
             "--size",
             "1600x1000",
             "--workspace",
@@ -590,3 +604,37 @@ def test_world_workspace_draws_the_tile_map(socket_dir):
     # Tiles at the lowest level of detail cover most of the map.
     proxy = count(rows, lambda r, g, b: 15 <= r <= 35 and 30 <= g <= 50 and 50 <= b <= 80)
     assert proxy > 50000, f"tile map not drawn ({proxy} pixels)"
+
+
+def test_launcher_starts_the_simulator_and_the_viewer_shows_its_physics(socket_dir):
+    """The launcher's Start local simulator: lagrange_server with MuJoCo, then connect.
+
+    The robot in the scene moves because the physics computes it, not a recording. When the
+    viewer quits it stops the server it started, which removes its socket.
+    """
+    socket = socket_dir / "sim.sock"
+    image = socket_dir / "sim.png"
+    result = run_viewer(
+        "--start-local",
+        "--connect",
+        f"unix:{socket}",
+        "--frames",
+        "90",
+        "--size",
+        "1600x1000",
+        "--workspace",
+        "scene",
+        "--screenshot",
+        str(image),
+    )
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    assert stats["notice"] == "", stats["notice"]
+    # The sample AMR (robot, 10 links, 11 visuals, 3 sensors), the ground, and the warehouse
+    # (its top prim, 7 boxes and their visuals).
+    assert stats["prims"] == 41
+    assert stats["deltas"] > 0
+    assert stats["sim_time_ns"] > 0
+    assert stats["profile"] == "valid"
+    assert not socket.exists(), "the viewer did not stop the server it started"

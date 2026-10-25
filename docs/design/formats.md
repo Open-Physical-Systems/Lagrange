@@ -29,18 +29,22 @@ format in `rfcs/0005-sim-profile-format.md`. This document expands CLAUDE.md §4
 2. **Namespaces.** `elec:`, `thermal:`, `aero:`, `emi:`, `rad:`, `sensmat:`, `sensor:`. One
    namespace per schema library.
 3. **Units.** Every attribute is SI. Every attribute definition carries
-   `customData = { string "lagrange:unit" = "<unit>" }`. `core/stage/` parses that string into a
-   `lagrange::Unit` and exposes it to modules, so the schema is the single source of unit truth.
+   `lagrangeUnit = "<unit>"`, a metadata field registered by the `lagrange_schemas` plugin
+   (`SdfMetadata` in its `plugInfo.json`). `core/stage/` parses that string into a
+   `lagrange::Unit` (`lagrange::parseUnit`) and exposes it to modules, so the schema is the
+   single source of unit truth. `customData` cannot carry it: `usdGenSchema` deletes property
+   customData and the schema registry refuses it as a fallback (OpenUSD spike,
+   `docs/plan/spikes/0.2-B1-openusd.md`).
 4. **Types.** Physical parameters are `double`. The reference example in CLAUDE.md §11.3 uses
    `float`; see open question F4 for the reason to change.
 5. **No hidden site constants.** Attributes whose value depends on the site (mains frequency,
    ambient temperature, latitude) have **no fallback value**. A missing value is a load error.
    This implements the CLAUDE.md §10 rule on scenario parameters.
 6. **Versioning.** Each schema is a family with an integer version suffix. This document writes
-   `ElectricalMotorAPI_1`. CLAUDE.md writes `ElectricalMotorAPI_v1`. OpenUSD's own versioning
-   convention is `<Family>_<N>` [Medium, from OpenUSD schema-versioning documentation knowledge;
-   TODO(verify) against the v26.08 `usdGenSchema` documentation]. Open question F3 recommends the
-   USD convention.
+   `ElectricalMotorAPI_1`. CLAUDE.md writes `ElectricalMotorAPI_v1`. OpenUSD v26.08 parses
+   `ElectricalMotorAPI_1` as family `ElectricalMotorAPI`, version 1
+   (`Usd.SchemaRegistry.ParseSchemaFamilyAndVersionFromIdentifier`, verified in the OpenUSD
+   spike); `_v1` is not recognised as a version. Open question F3 recommends the USD convention.
 7. **Codeless schemas.** Schemas are registered with `skipCodeGeneration = true`. `core/stage/`
    reads attributes by name into SoA pools, so generated C++ classes are not needed. This removes
    `schemas/generated/` C++ from the build (open question Q7).
@@ -144,11 +148,11 @@ class "PortAPI_1" (
 )
 {
     uniform token kind = "dc" ( allowedTokens = ["dc", "ac1", "ac3", "signal"] )
-    double nominalVoltage ( customData = { string "lagrange:unit" = "V" } )
-    double maxCurrent ( customData = { string "lagrange:unit" = "A" } )
+    double nominalVoltage ( lagrangeUnit = "V" )
+    double maxCurrent ( lagrangeUnit = "A" )
     rel connectedTo ( doc = "Ports or bus prims on the same net." )
-    double wireResistance = 0.0 ( customData = { string "lagrange:unit" = "ohm" } )
-    double wireInductance = 0.0 ( customData = { string "lagrange:unit" = "H" } )
+    double wireResistance = 0.0 ( lagrangeUnit = "ohm" )
+    double wireInductance = 0.0 ( lagrangeUnit = "H" )
 }
 
 class "BatteryAPI_1" (
@@ -161,19 +165,19 @@ class "BatteryAPI_1" (
         allowedTokens = ["li_ion_nmc", "lfp", "lead_acid", "custom"] )
     int elec:battery:seriesCells
     int elec:battery:parallelCells = 1
-    double elec:battery:capacity ( customData = { string "lagrange:unit" = "C" } )
-    double elec:battery:initialSoc = 1.0 ( customData = { string "lagrange:unit" = "1" } )
-    double[] elec:battery:ocvSoc ( customData = { string "lagrange:unit" = "1" } )
-    double[] elec:battery:ocvVoltage ( customData = { string "lagrange:unit" = "V" } )
-    double elec:battery:r0 ( customData = { string "lagrange:unit" = "ohm" } )
-    double elec:battery:r1 = 0.0 ( customData = { string "lagrange:unit" = "ohm" } )
-    double elec:battery:c1 = 0.0 ( customData = { string "lagrange:unit" = "F" } )
-    double elec:battery:r2 = 0.0 ( customData = { string "lagrange:unit" = "ohm" } )
-    double elec:battery:c2 = 0.0 ( customData = { string "lagrange:unit" = "F" } )
-    double elec:battery:referenceTemperature = 298.15 ( customData = { string "lagrange:unit" = "K" } )
-    double elec:battery:r0TempCoeff = 0.0 ( customData = { string "lagrange:unit" = "1/K" } )
-    double elec:battery:cutoffVoltage ( customData = { string "lagrange:unit" = "V" } )
-    double elec:battery:maxChargeCurrent ( customData = { string "lagrange:unit" = "A" } )
+    double elec:battery:capacity ( lagrangeUnit = "C" )
+    double elec:battery:initialSoc = 1.0 ( lagrangeUnit = "1" )
+    double[] elec:battery:ocvSoc ( lagrangeUnit = "1" )
+    double[] elec:battery:ocvVoltage ( lagrangeUnit = "V" )
+    double elec:battery:r0 ( lagrangeUnit = "ohm" )
+    double elec:battery:r1 = 0.0 ( lagrangeUnit = "ohm" )
+    double elec:battery:c1 = 0.0 ( lagrangeUnit = "F" )
+    double elec:battery:r2 = 0.0 ( lagrangeUnit = "ohm" )
+    double elec:battery:c2 = 0.0 ( lagrangeUnit = "F" )
+    double elec:battery:referenceTemperature = 298.15 ( lagrangeUnit = "K" )
+    double elec:battery:r0TempCoeff = 0.0 ( lagrangeUnit = "1/K" )
+    double elec:battery:cutoffVoltage ( lagrangeUnit = "V" )
+    double elec:battery:maxChargeCurrent ( lagrangeUnit = "A" )
     asset elec:battery:behaviorModel
 }
 
@@ -184,21 +188,21 @@ class "ElectricalMotorAPI_1" (
 )
 {
     uniform token elec:motorType = "pmsm" ( allowedTokens = ["pmsm", "bldc", "dc_brushed"] )
-    double elec:windingResistance ( customData = { string "lagrange:unit" = "ohm" } )
-    double elec:inductance ( customData = { string "lagrange:unit" = "H" } )
-    double elec:inductanceQ ( customData = { string "lagrange:unit" = "H" } )
-    double elec:torqueConstant ( customData = { string "lagrange:unit" = "N.m/A" } )
-    double elec:backEmfConstant ( customData = { string "lagrange:unit" = "V.s/rad" } )
+    double elec:windingResistance ( lagrangeUnit = "ohm" )
+    double elec:inductance ( lagrangeUnit = "H" )
+    double elec:inductanceQ ( lagrangeUnit = "H" )
+    double elec:torqueConstant ( lagrangeUnit = "N.m/A" )
+    double elec:backEmfConstant ( lagrangeUnit = "V.s/rad" )
     int elec:polePairs = 1
-    double elec:rotorInertia = 0.0 ( customData = { string "lagrange:unit" = "kg.m2" } )
-    double elec:gearRatio = 1.0 ( customData = { string "lagrange:unit" = "1" } )
-    double elec:gearEfficiency = 1.0 ( customData = { string "lagrange:unit" = "1" } )
-    double elec:maxCurrent ( customData = { string "lagrange:unit" = "A" } )
-    double elec:referenceTemperature = 298.15 ( customData = { string "lagrange:unit" = "K" } )
-    double elec:resistanceTempCoeff = 0.00393 ( customData = { string "lagrange:unit" = "1/K" } )
+    double elec:rotorInertia = 0.0 ( lagrangeUnit = "kg.m2" )
+    double elec:gearRatio = 1.0 ( lagrangeUnit = "1" )
+    double elec:gearEfficiency = 1.0 ( lagrangeUnit = "1" )
+    double elec:maxCurrent ( lagrangeUnit = "A" )
+    double elec:referenceTemperature = 298.15 ( lagrangeUnit = "K" )
+    double elec:resistanceTempCoeff = 0.00393 ( lagrangeUnit = "1/K" )
     uniform token elec:controlMode = "torque" ( allowedTokens = ["torque", "velocity", "voltage"] )
-    double elec:currentLoopBandwidth = 6283.0 ( customData = { string "lagrange:unit" = "rad/s" } )
-    double elec:pwmFrequency = 20000.0 ( customData = { string "lagrange:unit" = "Hz" } )
+    double elec:currentLoopBandwidth = 6283.0 ( lagrangeUnit = "rad/s" )
+    double elec:pwmFrequency = 20000.0 ( lagrangeUnit = "Hz" )
     uniform token elec:rotorIntegration = "mechanical" ( allowedTokens = ["mechanical", "electrical"] )
     asset elec:behaviorModel
     rel elec:joint
@@ -247,17 +251,17 @@ class "ThermalAPI_1" (
     doc = "One lumped thermal node."
 )
 {
-    double thermal:heatCapacity ( customData = { string "lagrange:unit" = "J/K" } )
-    double thermal:initialTemperature ( customData = { string "lagrange:unit" = "K" } )
-    double thermal:convectionArea = 0.0 ( customData = { string "lagrange:unit" = "m2" } )
-    double thermal:convectionCoeff = 10.0 ( customData = { string "lagrange:unit" = "W/(m2.K)" } )
-    double thermal:forcedConvectionExponent = 0.8 ( customData = { string "lagrange:unit" = "1" } )
-    double thermal:emissivity = 0.9 ( customData = { string "lagrange:unit" = "1" } )
-    double thermal:radiativeArea = 0.0 ( customData = { string "lagrange:unit" = "m2" } )
-    double thermal:solarAbsorptivity = 0.7 ( customData = { string "lagrange:unit" = "1" } )
-    double thermal:solarArea = 0.0 ( customData = { string "lagrange:unit" = "m2" } )
-    double thermal:maxTemperature ( customData = { string "lagrange:unit" = "K" } )
-    double thermal:deratingStart ( customData = { string "lagrange:unit" = "K" } )
+    double thermal:heatCapacity ( lagrangeUnit = "J/K" )
+    double thermal:initialTemperature ( lagrangeUnit = "K" )
+    double thermal:convectionArea = 0.0 ( lagrangeUnit = "m2" )
+    double thermal:convectionCoeff = 10.0 ( lagrangeUnit = "W/(m2.K)" )
+    double thermal:forcedConvectionExponent = 0.8 ( lagrangeUnit = "1" )
+    double thermal:emissivity = 0.9 ( lagrangeUnit = "1" )
+    double thermal:radiativeArea = 0.0 ( lagrangeUnit = "m2" )
+    double thermal:solarAbsorptivity = 0.7 ( lagrangeUnit = "1" )
+    double thermal:solarArea = 0.0 ( lagrangeUnit = "m2" )
+    double thermal:maxTemperature ( lagrangeUnit = "K" )
+    double thermal:deratingStart ( lagrangeUnit = "K" )
 }
 
 class "ThermalLinkAPI_1" (
@@ -268,7 +272,7 @@ class "ThermalLinkAPI_1" (
     }
 )
 {
-    double conductance ( customData = { string "lagrange:unit" = "W/K" } )
+    double conductance ( lagrangeUnit = "W/K" )
     rel target
 }
 ```
@@ -305,12 +309,12 @@ class "AeroAPI_1" (
 )
 {
     uniform token aero:model = "drag_box" ( allowedTokens = ["drag_box", "drag_lift_table", "none"] )
-    double3 aero:referenceArea ( customData = { string "lagrange:unit" = "m2" } )
-    double3 aero:dragCoeff = (1.0, 1.0, 1.0) ( customData = { string "lagrange:unit" = "1" } )
-    double3 aero:centerOfPressure = (0, 0, 0) ( customData = { string "lagrange:unit" = "m" } )
-    double aero:liftSlope = 0.0 ( customData = { string "lagrange:unit" = "1/rad" } )
+    double3 aero:referenceArea ( lagrangeUnit = "m2" )
+    double3 aero:dragCoeff = (1.0, 1.0, 1.0) ( lagrangeUnit = "1" )
+    double3 aero:centerOfPressure = (0, 0, 0) ( lagrangeUnit = "m" )
+    double aero:liftSlope = 0.0 ( lagrangeUnit = "1/rad" )
     asset aero:coeffTable
-    double3 aero:angularDamping = (0, 0, 0) ( customData = { string "lagrange:unit" = "N.m.s/rad" } )
+    double3 aero:angularDamping = (0, 0, 0) ( lagrangeUnit = "N.m.s/rad" )
 }
 
 class "RotorAPI_1" (
@@ -318,10 +322,10 @@ class "RotorAPI_1" (
     customData = { token apiSchemaType = "singleApply" }
 )
 {
-    double aero:rotor:radius ( customData = { string "lagrange:unit" = "m" } )
+    double aero:rotor:radius ( lagrangeUnit = "m" )
     int aero:rotor:bladeCount
-    double aero:rotor:thrustCoeff ( customData = { string "lagrange:unit" = "1" } )
-    double aero:rotor:powerCoeff ( customData = { string "lagrange:unit" = "1" } )
+    double aero:rotor:thrustCoeff ( lagrangeUnit = "1" )
+    double aero:rotor:powerCoeff ( lagrangeUnit = "1" )
     uniform token aero:rotor:direction ( allowedTokens = ["cw", "ccw"] )
     asset aero:rotor:bladeTable
 }
@@ -359,22 +363,22 @@ class "WeatherAPI_1" (
     customData = { token apiSchemaType = "singleApply" }
 )
 {
-    double weather:ambientTemperature ( customData = { string "lagrange:unit" = "K" } )
-    double weather:pressure ( customData = { string "lagrange:unit" = "Pa" } )
-    double weather:relativeHumidity ( customData = { string "lagrange:unit" = "1" } )
-    double3 weather:meanWind = (0, 0, 0) ( customData = { string "lagrange:unit" = "m/s" } )
-    double weather:windReferenceHeight = 10.0 ( customData = { string "lagrange:unit" = "m" } )
+    double weather:ambientTemperature ( lagrangeUnit = "K" )
+    double weather:pressure ( lagrangeUnit = "Pa" )
+    double weather:relativeHumidity ( lagrangeUnit = "1" )
+    double3 weather:meanWind = (0, 0, 0) ( lagrangeUnit = "m/s" )
+    double weather:windReferenceHeight = 10.0 ( lagrangeUnit = "m" )
     uniform token weather:turbulenceModel = "none" ( allowedTokens = ["none", "dryden", "von_karman"] )
-    double weather:turbulenceIntensity = 0.0 ( customData = { string "lagrange:unit" = "1" } )
+    double weather:turbulenceIntensity = 0.0 ( lagrangeUnit = "1" )
     asset weather:windField
-    double weather:visibility ( customData = { string "lagrange:unit" = "m" } )
+    double weather:visibility ( lagrangeUnit = "m" )
     asset weather:fogField
-    double weather:rainRate = 0.0 ( customData = { string "lagrange:unit" = "m/s" } )
-    double weather:dustConcentration = 0.0 ( customData = { string "lagrange:unit" = "kg/m3" } )
-    double weather:dustMedianDiameter = 0.00001 ( customData = { string "lagrange:unit" = "m" } )
-    double weather:solarIrradiance = 0.0 ( customData = { string "lagrange:unit" = "W/m2" } )
-    double3 weather:sunDirection = (0, 0, 1) ( customData = { string "lagrange:unit" = "1" } )
-    double weather:skyTemperature ( customData = { string "lagrange:unit" = "K" } )
+    double weather:rainRate = 0.0 ( lagrangeUnit = "m/s" )
+    double weather:dustConcentration = 0.0 ( lagrangeUnit = "kg/m3" )
+    double weather:dustMedianDiameter = 0.00001 ( lagrangeUnit = "m" )
+    double weather:solarIrradiance = 0.0 ( lagrangeUnit = "W/m2" )
+    double3 weather:sunDirection = (0, 0, 1) ( lagrangeUnit = "1" )
+    double weather:skyTemperature ( lagrangeUnit = "K" )
 }
 ```
 
@@ -418,13 +422,13 @@ class "EmiSourceAPI_1" (
 {
     uniform token emi:sourceType (
         allowedTokens = ["power_line", "motor_drive", "transmitter", "welder", "custom"] )
-    double emi:frequency ( customData = { string "lagrange:unit" = "Hz" }
+    double emi:frequency ( lagrangeUnit = "Hz"
         doc = "Site parameter. No fallback: 50 Hz and 60 Hz grids both exist." )
-    double emi:current ( customData = { string "lagrange:unit" = "A" } )
-    double emi:radiatedPower ( customData = { string "lagrange:unit" = "W" } )
-    double[] emi:harmonics = [] ( customData = { string "lagrange:unit" = "1" } )
-    double emi:dutyCycle = 1.0 ( customData = { string "lagrange:unit" = "1" } )
-    double emi:bandwidth = 0.0 ( customData = { string "lagrange:unit" = "Hz" } )
+    double emi:current ( lagrangeUnit = "A" )
+    double emi:radiatedPower ( lagrangeUnit = "W" )
+    double[] emi:harmonics = [] ( lagrangeUnit = "1" )
+    double emi:dutyCycle = 1.0 ( lagrangeUnit = "1" )
+    double emi:bandwidth = 0.0 ( lagrangeUnit = "Hz" )
     asset emi:fieldMap
     uniform token emi:fieldMapQuantity = "B" ( allowedTokens = ["B", "E"] )
     rel emi:drivenBy
@@ -437,14 +441,14 @@ class "EmiSusceptibilityAPI_1" (
 {
     uniform token emi:victimType (
         allowedTokens = ["magnetometer", "imu_adc", "encoder", "can_bus", "radio"] )
-    double emi:magneticGain = 1.0 ( customData = { string "lagrange:unit" = "1" } )
-    double emi:adcNoisePerField = 0.0 ( customData = { string "lagrange:unit" = "V/(V/m)" } )
-    double emi:encoderGlitchField ( customData = { string "lagrange:unit" = "V/m" } )
-    double emi:canErrorField ( customData = { string "lagrange:unit" = "V/m" } )
-    double emi:canErrorRateAtField = 0.00001 ( customData = { string "lagrange:unit" = "1" } )
-    double emi:receiverNoiseFigure = 1.0 ( customData = { string "lagrange:unit" = "1" } )
-    double emi:couplingLoopArea = 0.0 ( customData = { string "lagrange:unit" = "m2" } )
-    double emi:shieldingEffectiveness = 1.0 ( customData = { string "lagrange:unit" = "1" } )
+    double emi:magneticGain = 1.0 ( lagrangeUnit = "1" )
+    double emi:adcNoisePerField = 0.0 ( lagrangeUnit = "V/(V/m)" )
+    double emi:encoderGlitchField ( lagrangeUnit = "V/m" )
+    double emi:canErrorField ( lagrangeUnit = "V/m" )
+    double emi:canErrorRateAtField = 0.00001 ( lagrangeUnit = "1" )
+    double emi:receiverNoiseFigure = 1.0 ( lagrangeUnit = "1" )
+    double emi:couplingLoopArea = 0.0 ( lagrangeUnit = "m2" )
+    double emi:shieldingEffectiveness = 1.0 ( lagrangeUnit = "1" )
 }
 ```
 
@@ -476,16 +480,16 @@ class "RadiationAPI_1" (
 {
     uniform token rad:role ( allowedTokens = ["source", "victim", "shield"] )
     uniform token rad:sourceType ( allowedTokens = ["point_gamma", "field_map"] )
-    double rad:activity ( customData = { string "lagrange:unit" = "Bq" } )
-    double rad:gammaEnergy ( customData = { string "lagrange:unit" = "J" } )
-    double rad:doseRateAt1m ( customData = { string "lagrange:unit" = "Gy/s" } )
+    double rad:activity ( lagrangeUnit = "Bq" )
+    double rad:gammaEnergy ( lagrangeUnit = "J" )
+    double rad:doseRateAt1m ( lagrangeUnit = "Gy/s" )
     asset rad:doseField
-    double rad:attenuationCoeff ( customData = { string "lagrange:unit" = "1/m" } )
-    double rad:buildupFactor = 1.0 ( customData = { string "lagrange:unit" = "1" } )
-    double rad:totalDoseLimit ( customData = { string "lagrange:unit" = "Gy" } )
-    double rad:seuCrossSection = 0.0 ( customData = { string "lagrange:unit" = "m2" } )
+    double rad:attenuationCoeff ( lagrangeUnit = "1/m" )
+    double rad:buildupFactor = 1.0 ( lagrangeUnit = "1" )
+    double rad:totalDoseLimit ( lagrangeUnit = "Gy" )
+    double rad:seuCrossSection = 0.0 ( lagrangeUnit = "m2" )
     int rad:sensitiveBits = 0
-    double rad:fluenceToDose ( customData = { string "lagrange:unit" = "Gy.m2" } )
+    double rad:fluenceToDose ( lagrangeUnit = "Gy.m2" )
 }
 ```
 
@@ -514,18 +518,18 @@ class "SensorMaterialAPI_1" (
     customData = { token apiSchemaType = "singleApply" }
 )
 {
-    double sensmat:reflectivity905 = 0.5 ( customData = { string "lagrange:unit" = "1" } )
-    double sensmat:reflectivity1550 = 0.5 ( customData = { string "lagrange:unit" = "1" } )
+    double sensmat:reflectivity905 = 0.5 ( lagrangeUnit = "1" )
+    double sensmat:reflectivity1550 = 0.5 ( lagrangeUnit = "1" )
     bool sensmat:retroreflective = false
-    double sensmat:specularFraction905 = 0.0 ( customData = { string "lagrange:unit" = "1" } )
-    double sensmat:transmission905 = 0.0 ( customData = { string "lagrange:unit" = "1" } )
-    double sensmat:radarCrossSectionDensity = 0.1 ( customData = { string "lagrange:unit" = "1" } )
-    double sensmat:radarRoughness = 0.001 ( customData = { string "lagrange:unit" = "m" } )
-    double sensmat:relativePermittivity = 1.0 ( customData = { string "lagrange:unit" = "1" } )
-    double sensmat:conductivity = 0.0 ( customData = { string "lagrange:unit" = "S/m" } )
-    double sensmat:relativePermeability = 1.0 ( customData = { string "lagrange:unit" = "1" } )
-    double sensmat:thermalEmissivity = 0.9 ( customData = { string "lagrange:unit" = "1" } )
-    double sensmat:frictionWetScale = 0.7 ( customData = { string "lagrange:unit" = "1" } )
+    double sensmat:specularFraction905 = 0.0 ( lagrangeUnit = "1" )
+    double sensmat:transmission905 = 0.0 ( lagrangeUnit = "1" )
+    double sensmat:radarCrossSectionDensity = 0.1 ( lagrangeUnit = "1" )
+    double sensmat:radarRoughness = 0.001 ( lagrangeUnit = "m" )
+    double sensmat:relativePermittivity = 1.0 ( lagrangeUnit = "1" )
+    double sensmat:conductivity = 0.0 ( lagrangeUnit = "S/m" )
+    double sensmat:relativePermeability = 1.0 ( lagrangeUnit = "1" )
+    double sensmat:thermalEmissivity = 0.9 ( lagrangeUnit = "1" )
+    double sensmat:frictionWetScale = 0.7 ( lagrangeUnit = "1" )
 }
 ```
 
@@ -545,7 +549,7 @@ agreed):
 | `LidarAPI_1` | `sensor:lidar:wavelength` (m, 9.05e-7), `channels` (int, —), `horizontalSamples` (int, —), `verticalFov` (rad[2], —), `horizontalFov` (rad[2], (−π, π)), `rangeMin`/`rangeMax` (m, —), `rangeNoiseStd` (m, 0.02), `beamDivergence` (rad, 0.003), `returnMode` (token: `strongest`, `last`, `dual`), `scanPattern` (token: `rotating`, `solid_state`, `custom`), `rotationRate` (Hz, = rate), `motionDistortion` (bool, true) |
 | `CameraSensorAPI_1` | on a `UsdGeomCamera`: `sensor:camera:width`/`height` (int, —), `shutter` (token: `global`, `rolling`), `rollingShutterTime` (s, 0), `exposureTime` (s, —), `autoExposure` (bool, false), `gain` (1, 1), `readNoiseStd` (electrons, 2), `fullWellCapacity` (electrons, 10000), `bitDepth` (int, 8), `distortionModel` (token: `none`, `plumb_bob`, `equidistant`), `distortionCoeffs` (double[], []) |
 | `RadarAPI_1` | `sensor:radar:carrierFrequency` (Hz, 7.7e10), `bandwidth` (Hz, —), `rangeMax` (m, —), `azimuthFov`/`elevationFov` (rad, —), `rangeResolution` (m, derived), `velocityResolution` (m/s, —), `txPower` (W, —), `noiseFloor` (W, —) |
-| `ImuAPI_1` | `sensor:imu:accelNoiseDensity` (m/s²/√Hz, —), `accelBiasInstability` (m/s², —), `accelRandomWalk` (m/s³/√Hz, —), `gyroNoiseDensity` (rad/s/√Hz, —), `gyroBiasInstability` (rad/s, —), `gyroRandomWalk` (rad/s²/√Hz, —), `accelRange` (m/s², —), `gyroRange` (rad/s, —) |
+| `ImuAPI_1` | v0.2 implements per-sample white noise, `sensor:imu:accelNoiseStd` (m/s², 0) and `gyroNoiseStd` (rad/s, 0), plus the bias instabilities: densities need half powers in the unit grammar. Draft: `sensor:imu:accelNoiseDensity` (m/s²/√Hz, —), `accelBiasInstability` (m/s², —), `accelRandomWalk` (m/s³/√Hz, —), `gyroNoiseDensity` (rad/s/√Hz, —), `gyroBiasInstability` (rad/s, —), `gyroRandomWalk` (rad/s²/√Hz, —), `accelRange` (m/s², —), `gyroRange` (rad/s, —) |
 | `GnssAPI_1` | `sensor:gnss:horizontalStd` (m, —), `verticalStd` (m, —), `velocityStd` (m/s, —), `multipathModel` (token: `none`, `urban`), `minElevation` (rad, 0.17) |
 | `MagnetometerAPI_1` | `sensor:mag:noiseStd` (T, —), `hardIron` (T[3], 0), `softIron` (double[9], identity), `earthFieldModel` (token: `constant`, `wmm`), `earthField` (T[3], — when `constant`; site parameter, no fallback) |
 
@@ -1296,6 +1300,14 @@ parameters:
 | `/lagrange/log` | `LogRecord` | console messages |
 | ROS topics (optional) | CDR, as rosbag2 writes them | when `record.ros_topics` is used (later) |
 
+- Implementation (v0.2, `lagrange_server --record`): every bus signal at its native rate from
+  t = 0 (a sample written late is NaN, so runs stay contiguous), signals with more than
+  `--record-max-components` components (default 1024, e.g. a 3D lidar's ranges) left out, and
+  one `scene<prim path>/pose` signal at 50 Hz per moving prim, bound to its prim in
+  `RunMeta.pose_bindings` so that a replay moves visuals and sensors too. `RunMeta` is written
+  at the start and again at the end with the duration; readers keep the last. Scene deltas,
+  log records and sensor frames are not recorded yet. The sample AMR records about 1.5 MB per
+  simulated second (zstd does little for noisy doubles).
 - Units are stored in the catalog. A replay substitute refuses a channel whose recorded unit
   differs from the contract.
 - Compatibility: files written by rosbag2 with the MCAP storage plugin can be opened by the mock
@@ -1328,6 +1340,22 @@ in the server (or mock server) and receives the result through the protocol.
 | SDFormat | `sdformat_vendor` (0.3.4 in Lyrical) | models, links, joints, sensors (lidar, camera, imu, gps/navsat, magnetometer), lights, nested models, `<include>` of local URIs | Gazebo system plugins (reported, not converted), Fuel URIs without a local cache, heightmaps (v0.7) |
 | MJCF | MuJoCo's own parser (`mj_loadXML`) then model traversal | bodies, joints, geoms, actuators (motor, position, velocity), sensors that have an equivalent, tendons (fixed) | spatial tendons, flex/deformables, plugin-defined elements |
 | glTF 2.0 / OBJ / STL / DAE | Assimp 6.0.4 (apt) | meshes, node hierarchy, PBR/Phong materials, textures | animations, skins, morph targets |
+
+Meshes in v0.2: `lagrange_meshes` (`io/meshes/`) reads glTF, OBJ, STL and Collada through
+Assimp into triangles grouped by material, with the node hierarchy baked in, Collada units
+applied and Collada's `<up_axis>` ignored (the geometry keeps its authored axes, as ROS tools
+expect). `package://`, `file://` and relative references resolve through the ament index. The
+URDF loader uses it for visual meshes: one prim per material, coloured by the URDF material when
+there is one and by the file's otherwise. Textures are not imported yet (a note says so), and
+collision meshes still wait for the convex decomposition of roadmap 0.2-B8.
+
+**Status in v0.2.** `lagrange_importers` reads SDFormat and MJCF into the same world tables and
+scene as the URDF loader, and `lagrange_import` writes any of the three as USD
+(`io/importers/include/lagrange/importers/Importers.hpp` lists the rules). Not yet: mesh visuals in SDFormat
+and MJCF (the URDF loader reads them through `lagrange_meshes`), mesh colliders (collision bake), ellipsoid colliders, cameras and other
+sensors without a Lagrange model, joints between the models of an SDFormat world, and MJCF
+tendons, flex and servo actuators (their joints take torque commands instead). Each is listed in
+the import report. MJCF has no lidar; lidars on an MJCF robot come from an overlay (0.2-G2).
 
 Electrical, thermal and EMI data do not exist in URDF/SDF/MJCF. Importers accept an optional
 **overlay** file that applies our API schemas by link or joint name:

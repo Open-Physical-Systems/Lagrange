@@ -360,7 +360,11 @@ void drawMenuBar(PanelContext& context) {
     ImGui::PopStyleColor();
 
     // Context on the right.
+    // The file name only: a full path does not fit beside the run controls.
     const char* stage = context.scene ? context.scene->statics->stagePath.c_str() : "";
+    if (const char* slash = std::strrchr(stage, '/'); slash != nullptr && slash[1] != '\0') {
+        stage = slash + 1;
+    }
     const char* robot = context.scene && !context.scene->statics->prims.empty()
                             ? context.scene->statics->prims.front().name.c_str()
                             : "";

@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>lagrange_server</name>
+  <version>0.2.0</version>
+  <description>The Lagrange simulation server: loads a robot, runs the modules on the scheduler against the wall clock, and serves the viewer protocol.</description>
+  <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>lagrange_cmake</buildtool_depend>
+
+  <depend>lagrange_core</depend>
+  <depend>lagrange_proto</depend>
+  <depend>lagrange_rigid_body_mujoco</depend>
+  <depend>lagrange_rigid_body_substitutes</depend>
+  <depend>lagrange_sensors</depend>
+  <depend>lagrange_gpu</depend>
+  <depend>lagrange_meshes</depend>
+  <depend>lagrange_ros2</depend>
+  <depend>lagrange_stage</depend>
+  <depend>lagrange_importers</depend>
+  <depend>lagrange_ros2_control</depend>
+  <depend>rclcpp</depend>
+  <depend>urdfdom</depend>
+  <depend>tinyxml2</depend>
+  <depend>ament_index_cpp</depend>
+  <depend>yaml-cpp</depend>
+  <depend>libjsoncons-dev</depend>
+  <depend>mcap_vendor</depend>
+
+  <exec_depend>lagrange_assets</exec_depend>
+  <exec_depend>lagrange_profiles</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>lagrange_assets</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

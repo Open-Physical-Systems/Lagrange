@@ -9,18 +9,21 @@ Its aim is multi-physics that can be switched on and off: rigid-body motion, ele
 aerodynamics, weather, EMI and sensors are separate domains on a unit-checked signal bus, and any
 of them can be disabled or replaced by ideal, constant or replayed data.
 
-**Status: early development.** The current phase is v0.1: a native Vulkan viewer, the viewer
-protocol, and a mock/replay server. There is no physics yet: the viewer below is showing a
-synthetic recording.
+**Status: early development (v0.2 in progress).** The simulator runs a differential-drive AMR
+with MuJoCo physics, an IMU and 2D/3D lidars (on the CPU, or on the GPU with a compute kernel),
+switchable domains with substitutes, profiles, MCAP recording and a ROS 2 bridge that Nav2
+drives. Electrical, thermal and the other domains have their formats and substitutes, but no
+models yet.
 
 <p align="center">
-  <img src="docs/imgs/viewer-first-window.png" alt="The Lagrange viewer showing the sample AMR" width="820">
+  <img src="docs/imgs/tutorial-scene.png" alt="The Lagrange viewer showing the simulated AMR in the sample warehouse with its lidar returns" width="820">
 </p>
 
 ## Where to read
 
 | Topic | File |
 |---|---|
+| **User guide: tutorial, concepts, profiles, writing a module, CLI** | [docs/guide/](docs/guide/README.md) |
 | Vision, scope and release metrics | [docs/plan/00-overview.md](docs/plan/00-overview.md) |
 | Roadmap and v0.1/v0.2 issues | [docs/plan/roadmap.md](docs/plan/roadmap.md) |
 | Architecture | [docs/design/architecture.md](docs/design/architecture.md) |
@@ -54,21 +57,46 @@ If you prefer not to install pip packages into the system Python, create a virtu
 with `--system-site-packages`, install `mcap` there, and pass
 `-DPython3_EXECUTABLE=<venv>/bin/python` to `colcon build`.
 
-Packages so far:
+Packages:
 
 | Package | Directory | Content |
 |---|---|---|
 | `lagrange_cmake` | `cmake/` | Shared build options |
-| `lagrange_core` | `core/` | Simulation time types |
+| `lagrange_core` | `core/` | Units, signal bus, multirate scheduler, time, random numbers, world state, coordinates |
+| `lagrange_gpu` | `gpu/` | Vulkan device layer, capability tiers, Slang kernels, the GPU ray caster |
+| `lagrange_rigid_body_mujoco` | `modules/rigid_body/mujoco_backend/` | The rigid-body domain on MuJoCo |
+| `lagrange_rigid_body_substitutes` | `modules/rigid_body/substitutes/` | Fixed robot and other rigid-body substitutes |
+| `lagrange_sensors` | `modules/sensors/` | IMU and lidar, their noise models and ground-truth substitutes |
+| `lagrange_meshes` | `io/meshes/` | glTF, OBJ, STL and Collada import |
+| `lagrange_ros2` | `bridges/ros2/` | The ROS 2 bridge: topics, `/clock`, `simulation_interfaces` services |
+| `lagrange_server` | `server/` | The simulator (`lagrange_server`) and the `lagrange` command |
+| `lagrange_profiles` | `profiles/` | Profile schema and examples |
 | `lagrange_proto` | `proto/` | Viewer protocol messages, framing, socket transport, shared memory |
-| `lagrange_mock_server` | `mock_server/` | Replay server that speaks the protocol from a recording |
-| `lagrange_gpu` | `gpu/` | Vulkan device layer, capability tiers, Slang shader build |
-| `imgui_vendor` | `vendor/imgui_vendor/` | Dear ImGui (docking branch), pinned upstream release |
 | `lagrange_viewer` | `viewer/` | The desktop viewer |
+| `imgui_vendor` | `vendor/imgui_vendor/` | Dear ImGui (docking branch), pinned upstream release |
+| `lagrange_mock_server` | `mock_server/` | Replay server for recordings; a test tool |
+| `lagrange_assets` | `assets/` | The sample robots and worlds |
+| `lagrange_demos` | `demos/` | The Nav2 warehouse demo |
+| `lagrange_python` | `python/` | Python bindings: run a simulation headless, step it, read signals |
+| `lagrange_tutorial` | `tests/tutorial/` | The user guide's code and its tests |
+| `lagrange_benchmarks` | `tests/benchmarks/` | Performance benchmarks |
 
-## Run the viewer
+## Run the simulator
 
-Start the mock server with the built-in sample, then the viewer:
+```bash
+source install/setup.bash
+ros2 run lagrange_server lagrange_server &      # the sample AMR in the sample warehouse
+ros2 run lagrange_viewer lagrange_viewer --connect unix:$XDG_RUNTIME_DIR/lagrange/default.sock
+```
+
+The robot drives a figure-eight until it gets `/cmd_vel`. For a walk through everything (ROS 2,
+profiles, recording, substitutes, your own module, Nav2), follow the
+[tutorial](docs/guide/tutorial-amr.md).
+
+## The viewer and the mock server
+
+The viewer also works without the simulator: the mock server replays recordings and a built-in
+synthetic sample. Start the mock server with the sample, then the viewer:
 
 ```bash
 source install/setup.bash
@@ -95,7 +123,7 @@ file.
 
 ### Open your own robot
 
-With the viewer and the mock server running, open a URDF or xacro file in any of these ways:
+With the viewer and a server running, open a URDF or xacro file in any of these ways:
 drag the file onto the window, use **File > Open robot or recording...** (Ctrl+O), or start
 the viewer with `--open`:
 
@@ -112,6 +140,7 @@ way. To serve a robot directly: `lagrange_mock_server --urdf robot.urdf`.
 Other useful commands:
 
 ```bash
+ros2 run lagrange_server lagrange info                        # version, paths, GPUs and tiers
 ros2 run lagrange_gpu lagrange_gpu_info                      # GPUs and their capability tier
 ros2 run lagrange_viewer lagrange_viewer --gpu Intel         # pick a GPU by name or index
 ros2 run lagrange_viewer lagrange_viewer --headless --screenshot out.png   # no window

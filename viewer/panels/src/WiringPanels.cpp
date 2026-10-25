@@ -136,7 +136,15 @@ public:
             nodeWidth_ + std::max((available - nodeWidth_ * 3.0F) * 0.5F, px(kMinGap));
         // Place the nodes.
         places_.resize(wiring.nodes.size());
-        int extraRow = 4;
+        // Modules without a place of their own go in the rows below the placed ones.
+        int extraRow = 0;
+        for (const WiringInfo::Node& node : wiring.nodes) {
+            for (const Slot& slot : kSlots) {
+                if (slot.module == node.module) {
+                    extraRow = std::max(extraRow, slot.row + 1);
+                }
+            }
+        }
         int extraColumn = 0;
         float width = 0.0F;
         float height = 0.0F;

@@ -509,9 +509,29 @@ class MockServer:
                     session.fields.pop(request.field, None)
             elif kind == "set_ros_graph":
                 session.ros_graph = command.set_ros_graph.enabled
+                if session.ros_graph:  # answer now; the once-a-second updates follow
+                    session.send(
+                        envelope_pb2.Envelope(
+                            ros_graph=environment.ros_graph(
+                                self.engine.recording,
+                                self.engine.sim_time_ns,
+                                sensors.LIDAR_RATE_HZ,
+                            )
+                        )
+                    )
             elif kind == "set_world":
                 session.world = command.set_world.enabled
                 session.world_tiles_sent = False
+                if session.world:
+                    world = environment.world_state(
+                        self.engine.recording,
+                        self._root_poses(),
+                        {},
+                        self.engine.sim_time_ns,
+                        with_tiles=True,
+                    )
+                    session.world_tiles_sent = True
+                    session.send(envelope_pb2.Envelope(world=world))
             elif kind == "validate_profile":
                 result.command_result.validation.CopyFrom(
                     profile.check(command.validate_profile.yaml).to_proto()

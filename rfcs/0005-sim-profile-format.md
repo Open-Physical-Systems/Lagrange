@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft |
+| Status | Accepted (2026-10-15), with the resolutions below |
 | Created | 2026-10-13 |
 | Affects | `profiles/`, `server/`, `mock_server/`, the viewer's domain panel, `core/module/ModuleConfig` |
 | Extends | The example profiles in CLAUDE.md §11.1 |
@@ -153,7 +153,25 @@ are in `formats.md` §5.3.
 | Implicit substitutes (a default when the key is missing) | The reference rule "every disabled domain names a substitute" is deliberate: what replaces a domain changes results and must be visible in the file |
 | A domain-specific language or Python config | Not statically validatable; harder for the viewer to round-trip |
 
-## Unresolved questions
+## Resolutions on acceptance (2026-10-15)
+
+The owner accepted this RFC. Each question below takes its proposed answer, or is deferred:
+
+1. Per-robot overrides: not in version 1; a later `overrides:` list keyed by robot prim path.
+2. Every change under `domains` restarts the run in v0.2; real-time factor, recording and the
+   sensor `only` list may apply live. Live re-wiring waits for RFC 0001 question 5.
+3. No `extends:` composition in version 1.
+4. `views` stays in the profile as a hint to the viewer.
+5. No general `environment_overrides:` in version 1; site constants stay in the environment USD,
+   and `thermal.ambient_temperature` remains for the substitute.
+6. Machine-specific settings (ROS domain id, endpoints) come from the command line and the
+   environment, never the profile.
+7. The C++ JSON Schema validator is jsoncons (BSL-1.0, header-only, Ubuntu `libjsoncons-dev`),
+   chosen with roadmap 0.2-E5 because it supports JSON Schema 2020-12 `unevaluatedProperties`;
+   recorded in `dependencies.md`.
+8. The published `$id` URL waits for the project's domain; until then it stays as it is.
+
+## Unresolved questions (as proposed)
 
 1. **Per-robot overrides.** In a multi-robot stage, can one robot have electrical enabled and
    another substituted? Proposed for a later version: an `overrides:` list keyed by robot prim

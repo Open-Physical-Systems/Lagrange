@@ -5,6 +5,55 @@ Notable changes to Lagrange are recorded here. Each release section is generated
 titles merged into `dev`; do not edit it by hand. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v0.1.0...v0.2.0) (2026-10-25)
+
+
+### Features
+
+* **bridge/ros2:** serve the simulation_interfaces services ([#41](https://github.com/Open-Physical-Systems/Lagrange/issues/41)) ([778dd97](https://github.com/Open-Physical-Systems/Lagrange/commit/778dd9708832b41d30a3546bddabf5646a59cd17))
+* **bridge/ros2_control:** run ros2_control in lockstep, with encoders and a robust Nav2 demo ([b736f69](https://github.com/Open-Physical-Systems/Lagrange/commit/b736f69fcf195161989d85f1849baca105fa4f4b))
+* **core:** add bounded consumer rings; the recorder applies back-pressure ([0cc713d](https://github.com/Open-Physical-Systems/Lagrange/commit/0cc713d63ad8a88a838dd85c96c00c0f008e3ea4))
+* **core:** add SceneQuery, ray and overlap queries on the collision shapes ([619eb1f](https://github.com/Open-Physical-Systems/Lagrange/commit/619eb1f88c061a133d0aabd0721e95a1a9f44d10))
+* **core:** add the determinism check and lagrange determinism ([7ec1955](https://github.com/Open-Physical-Systems/Lagrange/commit/7ec1955f4a100c94a5ea3ff7508018cd8d97387f))
+* **core:** add the plugin C ABI v0 and its host ([cdeccbb](https://github.com/Open-Physical-Systems/Lagrange/commit/cdeccbb2d4855032af1b9b61e013eb330c24032c))
+* **core:** add the signal bus, module interface and multirate scheduler ([#35](https://github.com/Open-Physical-Systems/Lagrange/issues/35)) ([2c63a02](https://github.com/Open-Physical-Systems/Lagrange/commit/2c63a02db4244539823c564c8f58ed40127e819e))
+* **core:** add units, counter-based RNG and coordinates; OpenUSD spike ([#32](https://github.com/Open-Physical-Systems/Lagrange/issues/32)) ([f942614](https://github.com/Open-Physical-Systems/Lagrange/commit/f942614767ca3572b34cc3f3ce0680427547a4e4))
+* **core:** add wrench_sum and the run log sink ([ae9d68a](https://github.com/Open-Physical-Systems/Lagrange/commit/ae9d68ac7f8fee7b1132aec58af808abf825ff08))
+* **io:** import glTF, OBJ, STL and Collada meshes ([#53](https://github.com/Open-Physical-Systems/Lagrange/issues/53)) ([f4201f0](https://github.com/Open-Physical-Systems/Lagrange/commit/f4201f0df5943c1842765357ed98198c8479c76f))
+* **io:** import SDFormat and MJCF robots and worlds ([#50](https://github.com/Open-Physical-Systems/Lagrange/issues/50)) ([0d9cd12](https://github.com/Open-Physical-Systems/Lagrange/commit/0d9cd12ccc733b462ddd58d8ce55dd73c4e7daf2))
+* **io:** load and write USD stages with a vendored OpenUSD ([#46](https://github.com/Open-Physical-Systems/Lagrange/issues/46)) ([4a4bf61](https://github.com/Open-Physical-Systems/Lagrange/commit/4a4bf6153b523bb53bf2e1f7237e17629f5dc062))
+* **mod/rigid_body:** add a Jolt Physics backend spike and its gaps report ([502c1dd](https://github.com/Open-Physical-Systems/Lagrange/commit/502c1ddb2667f391092e72741990c5b3dd284766))
+* **mod/rigid_body:** add the fixed and ground-truth substitutes and domain toggles ([#48](https://github.com/Open-Physical-Systems/Lagrange/issues/48)) ([235b46d](https://github.com/Open-Physical-Systems/Lagrange/commit/235b46d2e7fcbd90058ee667bd5c094dec71c05b))
+* **mod/rigid_body:** add the MuJoCo backend module ([#36](https://github.com/Open-Physical-Systems/Lagrange/issues/36)) ([f1c0aca](https://github.com/Open-Physical-Systems/Lagrange/commit/f1c0aca72330322706047b1f37a3600ba1c70da8))
+* **mod/sensors:** cast lidar rays on the GPU and model IMU bias and random walk ([#52](https://github.com/Open-Physical-Systems/Lagrange/issues/52)) ([873ea51](https://github.com/Open-Physical-Systems/Lagrange/commit/873ea51b3cfb9988c21a3c2fb3e2c26a1c9a6389))
+* **mod/sensors:** cast Tier 0 lidar rays through Embree, bit-identical to the reference ([#57](https://github.com/Open-Physical-Systems/Lagrange/issues/57)) ([f580812](https://github.com/Open-Physical-Systems/Lagrange/commit/f5808121fb5655eda87137196c317f5453715a19))
+* **mod/sensors:** simulate 3D lidars and add a roof lidar to the sample AMR ([#43](https://github.com/Open-Physical-Systems/Lagrange/issues/43)) ([25a76ee](https://github.com/Open-Physical-Systems/Lagrange/commit/25a76eebedaded7a5c0c2699df8258686e575cfa))
+* **packaging:** build .debs with bloom and a container that runs the Nav2 demo ([b5bf5ab](https://github.com/Open-Physical-Systems/Lagrange/commit/b5bf5abcf0d184cd83d62af8735028a9e58b4add))
+* **sensors,ros2:** add IMU and lidar sensors and the ROS 2 bridge ([#38](https://github.com/Open-Physical-Systems/Lagrange/issues/38)) ([01bb815](https://github.com/Open-Physical-Systems/Lagrange/commit/01bb81543ab472b493e02077bfa2c1b03ecc9831))
+* **server:** add lagrange_server, the simulation server the viewer connects to ([#37](https://github.com/Open-Physical-Systems/Lagrange/issues/37)) ([71de011](https://github.com/Open-Physical-Systems/Lagrange/commit/71de01145c4e48ffe82736f0bfd2eeaa52a7cc14))
+* **server:** add Python bindings: run a simulation headless from Python ([34986e3](https://github.com/Open-Physical-Systems/Lagrange/commit/34986e3f4bfcdfb8ad2504991ca66b754832da16))
+* **server:** add the lagrange command: run, validate, graph and info ([#55](https://github.com/Open-Physical-Systems/Lagrange/issues/55)) ([cf94508](https://github.com/Open-Physical-Systems/Lagrange/commit/cf94508fbe0ca1a88d25b869f2d13052fdb28d5e))
+* **server:** add the Nav2 warehouse demo and occupancy-map export ([#39](https://github.com/Open-Physical-Systems/Lagrange/issues/39)) ([098f3de](https://github.com/Open-Physical-Systems/Lagrange/commit/098f3deedce1e91d3f21381235cb4a90c443f9be))
+* **server:** place worlds far from the origin with a floating origin ([#51](https://github.com/Open-Physical-Systems/Lagrange/issues/51)) ([fa3d650](https://github.com/Open-Physical-Systems/Lagrange/commit/fa3d6504681659ecacec2b76cc331976f0c2e3ba))
+* **server:** record a run to MCAP for replay ([#47](https://github.com/Open-Physical-Systems/Lagrange/issues/47)) ([7cce7cb](https://github.com/Open-Physical-Systems/Lagrange/commit/7cce7cb9db11f285065bb9dcac3f27e2389b141c))
+* **server:** validate and apply simulation profiles from the viewer ([#49](https://github.com/Open-Physical-Systems/Lagrange/issues/49)) ([e58fb11](https://github.com/Open-Physical-Systems/Lagrange/commit/e58fb11eb9303f2ba55d61dc4f969e08300b8980))
+* **viewer:** draw lidar returns under the Sensor frustums overlay ([#42](https://github.com/Open-Physical-Systems/Lagrange/issues/42)) ([4fd7525](https://github.com/Open-Physical-Systems/Lagrange/commit/4fd7525725a3b8eb76a0bb82c0c348fa90e1a3ef))
+
+
+### Bug fixes
+
+* **core:** answer the plugin ABI's schema queries from the world ([45f3ff1](https://github.com/Open-Physical-Systems/Lagrange/commit/45f3ff16e8551e0fe219dd582cc9fbc4b8801df1))
+* **viewer:** open the viewer from the Nav2 demo launch ([#40](https://github.com/Open-Physical-Systems/Lagrange/issues/40)) ([c3253ed](https://github.com/Open-Physical-Systems/Lagrange/commit/c3253ed259e65c216b9453519e1015d581d742b9))
+
+
+### Documentation
+
+* **docs:** add the user guide and the AMR tutorial, run end to end ([#56](https://github.com/Open-Physical-Systems/Lagrange/issues/56)) ([c5143f0](https://github.com/Open-Physical-Systems/Lagrange/commit/c5143f0fd76396927256924215b7b7d78406d079))
+* **docs:** record the autonomous run's standing answers and work queue ([#58](https://github.com/Open-Physical-Systems/Lagrange/issues/58)) ([e586156](https://github.com/Open-Physical-Systems/Lagrange/commit/e586156be6938ee592ee37cffd2750c359f44eb3))
+* **docs:** the rosidl::Buffer desk study (spike 0.2-F7) ([ec5dfa0](https://github.com/Open-Physical-Systems/Lagrange/commit/ec5dfa08a513618449ab923f05f6d040badcd6dd))
+* **docs:** v0.2.0 release notes, acceptance evidence and the Gazebo Jetty comparison ([189916b](https://github.com/Open-Physical-Systems/Lagrange/commit/189916b64dab6e1fcba8b6cd3b91f8f3a6e358d7))
+* **rfcs:** accept RFC 0002 (USD schemas) and RFC 0005 (profile format) ([#44](https://github.com/Open-Physical-Systems/Lagrange/issues/44)) ([f6a71b8](https://github.com/Open-Physical-Systems/Lagrange/commit/f6a71b847e092e9247ee7081aa66b2ad02efd51a))
+
 ## 0.1.0 (2026-10-14)
 
 

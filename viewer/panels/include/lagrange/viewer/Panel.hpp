@@ -60,7 +60,8 @@ struct LauncherState {
     bool defaultAvailable{false};  ///< Something is listening there (checked now and then).
     char otherEndpoint[160]{};     ///< A server typed in by the user.
     bool showOther{false};
-    int server{1};           ///< 1: the default local server, 2: the typed one.
+    std::string localServer;  ///< lagrange_server found in the ROS install; empty if none.
+    int server{1};  ///< 0: start lagrange_server, 1: the default local server, 2: the typed one.
     int robotClass{0};       ///< Selected card.
     std::string openTarget;  ///< File to ask the server to open after connecting; may be empty.
     RecentList recent;
@@ -69,6 +70,7 @@ struct LauncherState {
 
     // Out, read by the application after the frame.
     bool connectRequested{false};
+    bool startLocalRequested{false};  ///< Start lagrange_server first, then connect.
     std::string connectEndpoint;
     bool disconnectRequested{false};  ///< Stop the client and show the launcher again.
 };

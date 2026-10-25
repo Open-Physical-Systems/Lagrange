@@ -146,11 +146,15 @@ private:
             }
             if (context.catalog) {
                 for (const SignalInfo& info : context.catalog->signals) {
-                    if (info.prim == i && info.components == 1) {
-                        ++sensor.signals;
-                        sensor.signalDtNs = info.dtNs;
-                        if (sensor.kind == Kind::Imu) {
-                            scopes.add(context.client, *context.catalog, info.name);
+                    // Scalars, and the axes of vectors (an IMU's specific force and rate).
+                    if (info.prim != i || (info.components != 1 && info.components != 3)) {
+                        continue;
+                    }
+                    ++sensor.signals;
+                    sensor.signalDtNs = info.dtNs;
+                    if (sensor.kind == Kind::Imu) {
+                        for (std::uint32_t c = 0; c < info.components; ++c) {
+                            scopes.add(context.client, *context.catalog, info.name, c);
                         }
                     }
                 }

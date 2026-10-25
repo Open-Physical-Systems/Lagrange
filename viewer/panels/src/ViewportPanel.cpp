@@ -280,6 +280,7 @@ private:
         int overlays = 0;
         overlays += context.renderOptions->grid ? 1 : 0;
         overlays += context.renderOptions->axes ? 1 : 0;
+        overlays += context.renderOptions->sensors ? 1 : 0;
         char overlayLabel[40];
         std::snprintf(overlayLabel, sizeof(overlayLabel), "Overlays · %d###overlays", overlays);
         const char* camera = follow_ ? "Follow###camera" : "Perspective###camera";
@@ -321,10 +322,10 @@ private:
         if (ImGui::BeginPopup("##overlay-menu")) {
             ImGui::MenuItem("Grid", nullptr, &context.renderOptions->grid);
             ImGui::MenuItem("Frame axes", nullptr, &context.renderOptions->axes);
+            ImGui::MenuItem("Sensor frustums", nullptr, &context.renderOptions->sensors);
             // These need data that the server does not send yet.
-            for (const char* overlay :
-                 {"Contacts and forces", "Sensor frustums", "Planned path", "Field overlays",
-                  "Electrical overlay", "Weather effects"}) {
+            for (const char* overlay : {"Contacts and forces", "Planned path", "Field overlays",
+                                        "Electrical overlay", "Weather effects"}) {
                 ImGui::MenuItem(overlay, nullptr, false, false);
             }
             ImGui::EndPopup();
@@ -360,8 +361,8 @@ private:
         }
     }
 
-    /// The overlay toggles, as a row ending at `topRight`. Grid and frame axes are drawn by
-    /// the viewer; the others show data that this server does not send yet.
+    /// The overlay toggles, as a row ending at `topRight`. Grid, frame axes and sensor
+    /// frustums are drawn by the viewer; the others show data that servers do not send yet.
     static void overlayBar(PanelContext& context, const ImVec2& topRight) {
         struct Overlay {
             const char* id;
@@ -374,8 +375,7 @@ private:
             {"##frames", widgets::Icon::Frames, "Frame axes", &RenderOptions::axes},
             {"##forces", widgets::Icon::Forces, "Contacts and forces: no data from this server",
              nullptr},
-            {"##frustums", widgets::Icon::Frustum, "Sensor frustums: no data from this server",
-             nullptr},
+            {"##frustums", widgets::Icon::Frustum, "Sensor frustums", &RenderOptions::sensors},
             {"##path", widgets::Icon::Path, "Planned path: no data from this server", nullptr},
             {"##fields", widgets::Icon::Fields, "Field overlays: no data from this server",
              nullptr},

@@ -3,6 +3,7 @@
 # reformat of docs/), mypy and buf (no Python package or proto files yet), shfmt, commitizen
 # (PR titles are checked in .github/workflows/pr-checks.yml), check-jsonschema.
 minimum_pre_commit_version: "4.0.0"
+exclude: \.pgm$   # binary occupancy-map images that `identify` takes for text
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -54,3 +55,17 @@ repos:
     rev: v6.2.0
     hooks:
       - id: reuse
+  - repo: local
+    hooks:
+      - id: position-types
+        name: no float world or region positions (invariant 6)
+        entry: python3 tools/lint/check_position_types.py
+        language: system
+        types_or: [c++, c, proto]
+        exclude: ^tools/lint/fixtures/
+      - id: position-types-selftest
+        name: position-types lint self-test
+        entry: python3 -m unittest discover -s tools/lint
+        language: system
+        pass_filenames: false
+        files: ^tools/lint/

@@ -36,6 +36,10 @@ struct Image {
 [[nodiscard]] Buffer createBufferWithData(const Device& device, std::span<const std::byte> data,
                                           VkBufferUsageFlags usage);
 void destroy(const Device& device, Buffer& buffer);
+/// Makes host writes to a host-visible buffer visible to the GPU (needed on non-coherent memory).
+void flush(const Device& device, const Buffer& buffer);
+/// Makes GPU writes to a host-visible buffer visible to host reads (needed on non-coherent memory).
+void invalidate(const Device& device, const Buffer& buffer);
 
 [[nodiscard]] Image createImage2D(const Device& device, VkExtent2D extent, VkFormat format,
                                   VkImageUsageFlags usage, VkImageAspectFlags aspect,

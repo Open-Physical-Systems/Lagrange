@@ -24,6 +24,7 @@ Evidence references (V…) point to `docs/plan/verification.md`.
 | Q13 Node-free tooling | Accepted: commitizen and mdformat |
 | Q16 sim-vs-real data | Acknowledged; hardware and publication terms still to be named |
 | Commit attribution | Commits carry only the author's `Signed-off-by`; no tool co-author trailers |
+| RFC 0001 module interface | Accepted 2026-10-14 with the proposed answers to its open questions; in-tree `Expected` instead of `tl::expected` |
 
 ## Part 1 — Decisions needed
 
@@ -187,6 +188,11 @@ bench), stored in the assets repository with a data sheet.
 The ROS buildfarm may not accept long vendor builds or CUDA dependencies (unverified).
 **Recommendation:** aim for the buildfarm for core packages; plan a project apt repository for
 vendor-heavy and CUDA packages; decide after the v0.2 packaging trial (issue 0.2-H8).
+**After the trial (2026-10-25, docs/plan/spikes/0.2-H8-packaging.md):** the buildfarm releases
+vendor packages that fetch sources at build time (`mujoco_vendor`, `aws_sdk_cpp_vendor`,
+`gz_*_vendor`), so `openusd_vendor` and `jolt_vendor` fit it. Recommend the buildfarm for every
+package, and a project repository only for CUDA paths if the buildfarm cannot build them.
+Owner to confirm; OpenUSD's build time on a buildfarm devel job is still to be checked.
 
 **Q24. Jetson.**
 JetPack is on Ubuntu 24.04 (V9). **Recommendation:** no Jetson support statement; revisit when a
@@ -220,16 +226,17 @@ keeps its shape. Details in RFC 0001.
 
 **F3. Schema version suffix `_v1` (§3 invariant 11, §11.3).**
 OpenUSD's schema versioning convention is `<Family>_<N>` (for example `ElectricalMotorAPI_1`),
-and USD's registry parses family and version from that form [Medium; to be verified against the
-pinned USD release]. `_v1` would not be recognised as a version by USD tooling. The usage example
+and USD's registry parses family and version from that form (verified with v26.08 in the
+OpenUSD spike, `docs/plan/spikes/0.2-B1-openusd.md`). `_v1` would not be recognised as a version by USD tooling. The usage example
 in §11.3 also applies unversioned names.
 **Fix:** use `<Family>_<N>`; say "version 1" in prose.
 
 **F4. Schema attributes are `float` and carry units only in comments (§11.3).**
 `float` loses precision for values such as capacities in coulombs or geodetic quantities and
 forces conversions at load. Units in comments cannot be checked.
-**Fix:** `double` for physical parameters; a `lagrange:unit` customData entry on every attribute
-definition, parsed by the loader.
+**Fix:** `double` for physical parameters; a registered `lagrangeUnit` metadata field on every
+attribute definition, parsed by the loader. (Not customData: `usdGenSchema` and the schema
+registry drop it; see the OpenUSD spike.)
 
 **F5. Profile format gaps (§11.1).**
 (a) No `schema_version`, so migration is impossible. (b) No `seed`, `deterministic`, `tier`.
