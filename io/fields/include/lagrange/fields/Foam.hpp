@@ -29,8 +29,9 @@ struct FoamImport {
 };
 
 /// Bins cells into voxels of `voxelSize` (m) and writes the mean velocity of each voxel's cells
-/// as a vector grid named `name` at `path`. Voxel centres sit on multiples of the voxel size
-/// in the region-local frame, the case's coordinates plus `offset`; voxels without cells are
+/// as a vector grid named `name` at `path`. Voxel k covers [k·h, (k + 1)·h) on each axis of the
+/// region-local frame (the case's coordinates plus `offset`), so the cells of a mesh of size h
+/// aligned with the origin land one per voxel, centre on centre; voxels without cells are
 /// left out (the field's background, zero: the weather's mean wind holds outside the grid's
 /// bounds). A uniform U (one vector) fills every cell.
 [[nodiscard]] Expected<FoamImport, std::string> foamToWindField(

@@ -179,7 +179,7 @@ Expected<FoamImport, std::string> foamToWindField(const std::vector<Vec3>& centr
     for (std::size_t c = 0; c < centres.size(); ++c) {
         std::array<std::int64_t, 3> key{};
         for (std::size_t k = 0; k < 3; ++k) {
-            key[k] = std::llround((centres[c][k] + offset[k]) / voxelSize);
+            key[k] = static_cast<std::int64_t>(std::floor((centres[c][k] + offset[k]) / voxelSize));
         }
         Sum& s = voxels[key];
         const Vec3& u = velocity.size() == 1 ? velocity[0] : velocity[c];
@@ -199,13 +199,13 @@ Expected<FoamImport, std::string> foamToWindField(const std::vector<Vec3>& centr
     DenseBox box;
     box.size = voxelSize;
     for (std::size_t k = 0; k < 3; ++k) {
-        box.origin[k] = static_cast<double>(lo[k]) * voxelSize;
+        box.origin[k] = (static_cast<double>(lo[k]) + 0.5) * voxelSize;
         box.count[k] = static_cast<int>(hi[k] - lo[k] + 1);
     }
     auto written = writeVectorField(path, name, box, [&](const Vec3& at) -> Vec3 {
         std::array<std::int64_t, 3> key{};
         for (std::size_t k = 0; k < 3; ++k) {
-            key[k] = std::llround(at[k] / voxelSize);
+            key[k] = static_cast<std::int64_t>(std::floor(at[k] / voxelSize));
         }
         const auto it = voxels.find(key);
         if (it == voxels.end()) {
@@ -222,7 +222,7 @@ Expected<FoamImport, std::string> foamToWindField(const std::vector<Vec3>& centr
     report.voxels = voxels.size();
     for (std::size_t k = 0; k < 3; ++k) {
         report.min[k] = box.origin[k];
-        report.max[k] = static_cast<double>(hi[k]) * voxelSize;
+        report.max[k] = (static_cast<double>(hi[k]) + 0.5) * voxelSize;
     }
     return report;
 }
