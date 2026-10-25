@@ -14,6 +14,8 @@ add_library(
     src/Sensors.cpp
     src/ImuNoise.cpp
     src/ShapeCaster.cpp
+    src/Wmm.cpp
+    src/GeoSensors.cpp
 )
 lagrange_target_defaults(lagrange_sensors)
 target_include_directories(
@@ -53,6 +55,16 @@ if(BUILD_TESTING)
     ament_add_gtest(test_shape_caster test/test_shape_caster.cpp TIMEOUT 120)
     target_link_libraries(test_shape_caster lagrange_sensors)
     lagrange_target_defaults(test_shape_caster)
+    ament_add_gtest(test_wmm test/test_wmm.cpp)
+    target_link_libraries(test_wmm lagrange_sensors)
+    target_compile_definitions(
+        test_wmm
+        PRIVATE LAGRANGE_TEST_WMM_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/wmm2025"
+    )
+    lagrange_target_defaults(test_wmm)
+    ament_add_gtest(test_geo_sensors test/test_geo_sensors.cpp)
+    target_link_libraries(test_geo_sensors lagrange_sensors)
+    lagrange_target_defaults(test_geo_sensors)
     ament_add_gtest(test_imu_noise test/test_imu_noise.cpp TIMEOUT 120)
     target_link_libraries(test_imu_noise lagrange_sensors)
     lagrange_target_defaults(test_imu_noise)

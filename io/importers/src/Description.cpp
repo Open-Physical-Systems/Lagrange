@@ -525,6 +525,18 @@ private:
                 prim.typeName = "Imu";
                 prim.apiSchemas = {"SensorAPI_1", "ImuAPI_1"};
                 break;
+            case SensorType::Gnss:
+                prim.typeName = "Gnss";
+                prim.apiSchemas = {"SensorAPI_1", "GnssAPI_1"};
+                break;
+            case SensorType::Magnetometer:
+                prim.typeName = "Magnetometer";
+                prim.apiSchemas = {"SensorAPI_1", "MagnetometerAPI_1"};
+                break;
+            case SensorType::Barometer:
+                prim.typeName = "Barometer";
+                prim.apiSchemas = {"SensorAPI_1", "BarometerAPI_1"};
+                break;
         }
         prim.body = body.index;
         prim.offset = mount;

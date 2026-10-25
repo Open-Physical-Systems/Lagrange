@@ -747,13 +747,28 @@ private:
                         {"min_range", *rangeMin},
                         {"max_range", *rangeMax},
                         {"range_noise", real("sensor:lidar:rangeNoiseStd").value_or(0.0)}};
+        } else if (prim.HasAPI(TfToken("GnssAPI_1"))) {
+            type = SensorType::Gnss;
+            scene.typeName = "Gnss";
+            settings = {{"horizontal_noise", real("sensor:gnss:horizontalNoiseStd").value_or(0.0)},
+                        {"vertical_noise", real("sensor:gnss:verticalNoiseStd").value_or(0.0)},
+                        {"velocity_noise", real("sensor:gnss:velocityNoiseStd").value_or(0.0)}};
+        } else if (prim.HasAPI(TfToken("MagnetometerAPI_1"))) {
+            type = SensorType::Magnetometer;
+            scene.typeName = "Magnetometer";
+            settings = {{"noise", real("sensor:magnetometer:noiseStd").value_or(0.0)}};
+        } else if (prim.HasAPI(TfToken("BarometerAPI_1"))) {
+            type = SensorType::Barometer;
+            scene.typeName = "Barometer";
+            settings = {{"noise", real("sensor:barometer:noiseStd").value_or(0.0)}};
         } else if (prim.HasAPI(TfToken("ImuAPI_1"))) {
             scene.typeName = "Imu";
             settings = {{"accel_noise", real("sensor:imu:accelNoiseStd").value_or(0.0)},
                         {"gyro_noise", real("sensor:imu:gyroNoiseStd").value_or(0.0)}};
         } else {
             note(path +
-                 ": a sensor without LidarAPI_1, ImuAPI_1 or CameraSensorAPI_1 is not "
+                 ": a sensor without LidarAPI_1, ImuAPI_1, CameraSensorAPI_1, GnssAPI_1, "
+                 "MagnetometerAPI_1 or BarometerAPI_1 is not "
                  "simulated yet");
             scene.typeName = "Xform";
             return {};

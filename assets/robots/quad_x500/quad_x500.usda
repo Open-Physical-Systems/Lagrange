@@ -267,6 +267,53 @@ def Xform "quad_x500" (
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
         }
 
+        def Xform "imu" (
+            prepend apiSchemas = ["SensorAPI_1", "ImuAPI_1"]
+        )
+        {
+            double sensor:imu:accelNoiseStd = 0.02
+            double sensor:imu:gyroNoiseStd = 0.002
+            double sensor:rate = 250
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+        }
+
+        def Xform "gnss" (
+            prepend apiSchemas = ["SensorAPI_1", "GnssAPI_1"]
+        )
+        {
+            double sensor:gnss:horizontalNoiseStd = 0.3
+            double sensor:gnss:velocityNoiseStd = 0.05
+            double sensor:gnss:verticalNoiseStd = 0.5
+            double sensor:rate = 10
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+        }
+
+        def Xform "magnetometer" (
+            prepend apiSchemas = ["SensorAPI_1", "MagnetometerAPI_1"]
+        )
+        {
+            double sensor:magnetometer:noiseStd = 5e-8
+            double sensor:rate = 100
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+        }
+
+        def Xform "barometer" (
+            prepend apiSchemas = ["SensorAPI_1", "BarometerAPI_1"]
+        )
+        {
+            double sensor:barometer:noiseStd = 1
+            double sensor:rate = 50
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+        }
+
         def Cube "collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )

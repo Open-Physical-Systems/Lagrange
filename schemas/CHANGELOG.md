@@ -5,6 +5,10 @@ every schema is version 1 and may change without a migration.
 
 ## Unreleased
 
+- **Sensor library**: `GnssAPI_1`, `MagnetometerAPI_1` and `BarometerAPI_1` for v0.4's drones,
+  each with its white-noise standard deviations (formats.md §3.8 lists the sensor kinds but no
+  attributes for these).
+
 - **Aerodynamics library** (`schemas/aero`): `AeroAPI_1` and `RotorAPI_1`, as drafted in
   `docs/design/formats.md` §3.3, for v0.4's drones. Additions to the drafts: `lagrangeUnit = "1"`
   on `aero:rotor:bladeCount`, and the meaning of `aero:rotor:direction` (the sense of rotation

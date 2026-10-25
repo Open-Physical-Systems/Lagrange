@@ -436,6 +436,8 @@ struct Server::Impl {
             }
             return next;
         }
+        // The site's place on the Earth, for the sensors that need it.
+        robot.world.geoOrigin = settings.geoOrigin;
         // A run that takes commands from ROS is not deterministic: its input comes from outside.
         // So is one with the lidar on the GPU or rendering cameras (invariant 7: the CPU is the
         // reference).
@@ -585,21 +587,23 @@ struct Server::Impl {
         }
         settings.ambientTemperatureK = ambient();
         settings.airDensityKgM3 = appliedAirDensity ? appliedAirDensity : options.airDensityKgM3;
+        settings.geoOrigin = appliedGeoOrigin ? appliedGeoOrigin : options.geoOrigin;
         return settings;
     }
     /// The ambient temperature the run uses: an applied profile's, else the command line's.
     std::optional<double> ambient() const {
         return appliedAmbientK ? appliedAmbientK : options.ambientTemperatureK;
     }
-    std::optional<std::int64_t> thermalDtNs;        // from an applied profile
-    std::optional<double> appliedAmbientK;          // from an applied profile
-    std::optional<double> appliedAirDensity;        // from an applied profile
-    std::optional<bool> speedPrediction;            // from an applied profile
-    std::optional<std::string> electricalFidelity;  // from an applied profile
-    std::optional<std::string> rigidBodyReplay;     // --bench, or an applied profile
-    std::optional<std::int64_t> rigidBodyDtNs;      // from an applied profile
-    std::optional<std::string> rigidBodyBackend;    // from an applied profile
-    std::optional<std::int64_t> electricalDtNs;     // from an applied profile
+    std::optional<std::int64_t> thermalDtNs;           // from an applied profile
+    std::optional<double> appliedAmbientK;             // from an applied profile
+    std::optional<double> appliedAirDensity;           // from an applied profile
+    std::optional<coords::Geodetic> appliedGeoOrigin;  // from an applied profile
+    std::optional<bool> speedPrediction;               // from an applied profile
+    std::optional<std::string> electricalFidelity;     // from an applied profile
+    std::optional<std::string> rigidBodyReplay;        // --bench, or an applied profile
+    std::optional<std::int64_t> rigidBodyDtNs;         // from an applied profile
+    std::optional<std::string> rigidBodyBackend;       // from an applied profile
+    std::optional<std::int64_t> electricalDtNs;        // from an applied profile
     std::optional<ProfileSettings> pending;  // applied without restart: used at the next reset
 
     Status build() {
@@ -2477,6 +2481,9 @@ struct Server::Impl {
         }
         if (settings.airDensityKgM3) {
             appliedAirDensity = settings.airDensityKgM3;
+        }
+        if (settings.geoOrigin) {
+            appliedGeoOrigin = settings.geoOrigin;
         }
         pending.reset();
         if (Status status = restart(); !status.ok()) {

@@ -564,6 +564,12 @@ const char* sensorSchema(SensorType kind) {
             return "LidarAPI_1";
         case SensorType::Camera:
             return "CameraSensorAPI_1";
+        case SensorType::Gnss:
+            return "GnssAPI_1";
+        case SensorType::Magnetometer:
+            return "MagnetometerAPI_1";
+        case SensorType::Barometer:
+            return "BarometerAPI_1";
         case SensorType::Imu:
             break;
     }

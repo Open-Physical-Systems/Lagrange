@@ -114,3 +114,35 @@ apply:
         elec:maxCurrent: 25.0                    # A
         elec:joint: rotor_4_joint
         elec:powerPort: power/dc_bus
+  # Flight sensors on the frame, for an autopilot (noise illustrative, of small-drone parts).
+  - prim: base_link
+    create_child: imu
+    schemas:
+      SensorAPI_1:
+        sensor:rate: 250.0                       # Hz
+      ImuAPI_1:
+        sensor:imu:accelNoiseStd: 0.02           # m/s2 per sample
+        sensor:imu:gyroNoiseStd: 0.002           # rad/s per sample
+  - prim: base_link
+    create_child: gnss
+    schemas:
+      SensorAPI_1:
+        sensor:rate: 10.0                        # Hz
+      GnssAPI_1:
+        sensor:gnss:horizontalNoiseStd: 0.3      # m
+        sensor:gnss:verticalNoiseStd: 0.5        # m
+        sensor:gnss:velocityNoiseStd: 0.05       # m/s
+  - prim: base_link
+    create_child: magnetometer
+    schemas:
+      SensorAPI_1:
+        sensor:rate: 100.0                       # Hz
+      MagnetometerAPI_1:
+        sensor:magnetometer:noiseStd: 5.0e-8     # T (0.5 mG)
+  - prim: base_link
+    create_child: barometer
+    schemas:
+      SensorAPI_1:
+        sensor:rate: 50.0                        # Hz
+      BarometerAPI_1:
+        sensor:barometer:noiseStd: 1.0           # Pa (about 8 cm)

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "lagrange/world/coords/Frames.hpp"
+
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -35,6 +37,7 @@ struct ProfileSettings {
     std::optional<std::string> rigidBodyReplay;
     std::optional<double> ambientTemperatureK;  // domains.thermal.ambient_temperature
     std::optional<double> airDensityKgM3;       // domains.rotor_aero.air_density
+    std::optional<coords::Geodetic> geoOrigin;  // world.geo_origin (radians, m)
     std::optional<double> realTimeFactor;       // time.real_time_factor (0: as fast as possible)
 };
 
