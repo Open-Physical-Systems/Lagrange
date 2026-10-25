@@ -130,5 +130,6 @@ Weather effects on sensors are statistical. Each validation states the quantity 
   time series, rain streaks in the camera.
 - Offline CFD: `lagrange_foam_to_vdb` turns an OpenFOAM case's cell velocities (ASCII `U`, and
   the cell centres `C` from `postProcess -func writeCellCentres`) into a wind grid: the mean of
-  the cells in each voxel, voxel centres on multiples of the voxel size after `--offset`. It
+  the cells in each voxel (voxel k covers [k·h, (k + 1)·h) after `--offset`, so cells of size h
+  aligned with the origin map one to one). It
   reads OpenFOAM's files only; OpenFOAM is not a dependency.
