@@ -265,7 +265,10 @@
       "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
       "properties": {
         "backend": { "enum": ["builtin", "sumo"], "default": "builtin" },
-        "sumo_config": { "type": "string" }
+        "sumo_config": { "type": "string" },
+        "vehicles": { "type": "integer", "minimum": 0, "maximum": 200, "description": "builtin: road vehicles on the stage's RoadLaneAPI_1 lanes (default 8)." },
+        "pedestrians": { "type": "integer", "minimum": 0, "maximum": 200, "description": "builtin: pedestrians on its sidewalk lanes (default 6)." },
+        "seed": { "type": "integer", "minimum": 0, "description": "builtin: where agents start and which way they turn (default 1)." }
       },
       "unevaluatedProperties": false
     }

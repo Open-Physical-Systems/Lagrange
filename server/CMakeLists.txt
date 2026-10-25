@@ -18,6 +18,7 @@ find_package(lagrange_fields REQUIRED)
 find_package(lagrange_emi REQUIRED)
 find_package(lagrange_comms REQUIRED)
 find_package(lagrange_vehicle_dynamics REQUIRED)
+find_package(lagrange_traffic REQUIRED)
 find_package(lagrange_mavlink REQUIRED)
 find_package(lagrange_recording REQUIRED)
 find_package(lagrange_meshes REQUIRED)
@@ -86,6 +87,7 @@ target_link_libraries(
         lagrange_emi::lagrange_emi
         lagrange_comms::lagrange_comms
         lagrange_vehicle_dynamics::lagrange_vehicle_dynamics
+        lagrange_traffic::lagrange_traffic
         lagrange_mavlink::lagrange_mavlink
         lagrange_recording::lagrange_recording
         lagrange_meshes::lagrange_meshes

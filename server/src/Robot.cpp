@@ -820,6 +820,20 @@ std::array<double, 3> recentre(Robot& robot, double rebaseDistanceM) {
             move(prim.offset);
         }
     }
+    // Prims fixed in the world (EMI sources, radios), and road lanes' centre lines.
+    for (std::size_t p = 0; p < world.prims.body.size(); ++p) {
+        if (world.prims.body[p] == kWorldBody) {
+            move(world.prims.poseInBody[p]);
+        }
+    }
+    for (SchemaInstance& instance : world.schemaInstances) {
+        if (const auto it = instance.realArrays.find("lane:centreLine");
+            it != instance.realArrays.end()) {
+            for (std::size_t i = 0; i < it->second.size(); ++i) {
+                it->second[i] -= shift.at(i % 3);
+            }
+        }
+    }
     coords::applyRebase(world.region, shift);
     return shift;
 }
