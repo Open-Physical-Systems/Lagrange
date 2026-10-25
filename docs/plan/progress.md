@@ -163,8 +163,9 @@ step resting on the ones before:
    tutorial, and rebase in flight (the mission and the low-battery scenario **done** 2026-10-25,
    robot-classes.md §5. Rebase in flight needs the runtime rebase, C5, which the owner deferred
    to v0.7 (huge worlds): it moves there with it. The tutorial **done** the same day:
-   `docs/guide/tutorial-drone.md`, run by `tools/ci/tutorial_drone.sh` with the PX4 step; not
-   yet in a container, which needs a PX4 build in the image)
+   `docs/guide/tutorial-drone.md`, run by `tools/ci/tutorial_drone.sh` with the PX4 step; in the
+   container image too, without the SITL steps, which need PX4 and ArduPilot builds in the
+   image: `podman run --rm lagrange:dev tools/ci/tutorial_drone.sh` passes)
 9. Propellers as built (asked for by the owner on 2026-10-25: real blade shapes, hands and
    mounts instead of the drawn discs): (a) the `bem` fidelity, blade-element momentum on a
    propeller file, with hand (cw/ccw) and mount (puller/pusher) on `RotorAPI_1`, validated
