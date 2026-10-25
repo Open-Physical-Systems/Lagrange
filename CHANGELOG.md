@@ -5,6 +5,27 @@ Notable changes to Lagrange are recorded here. Each release section is generated
 titles merged into `dev`; do not edit it by hand. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v0.4.0...v0.5.0) (2026-10-25)
+
+
+### Features
+
+* **bridge/ros2_control:** emi glitches in encoder counts ([#139](https://github.com/Open-Physical-Systems/Lagrange/issues/139)) ([68ca91b](https://github.com/Open-Physical-Systems/Lagrange/commit/68ca91ba7bcbda5d2b6ef5cbdbebbfd4c2507c31))
+* **io:** openfoam velocities to a nanovdb wind field ([#137](https://github.com/Open-Physical-Systems/Lagrange/issues/137)) ([780dec2](https://github.com/Open-Physical-Systems/Lagrange/commit/780dec202369eb11c5a505237defa104b7653d9b))
+* **io:** volumetric fields as nanovdb grids ([#132](https://github.com/Open-Physical-Systems/Lagrange/issues/132)) ([319c5e3](https://github.com/Open-Physical-Systems/Lagrange/commit/319c5e3c510baa39ab7c763b48ed97161c688782))
+* **mod/comms:** radio link budgets, CAN fault confinement and lossy topics ([#136](https://github.com/Open-Physical-Systems/Lagrange/issues/136)) ([3e2832d](https://github.com/Open-Physical-Systems/Lagrange/commit/3e2832d847b0dde1a1011b3d2aafae47f2a422eb))
+* **mod/emi:** power lines, motor drives, welders and transmitters disturb sensors ([#135](https://github.com/Open-Physical-Systems/Lagrange/issues/135)) ([2a46335](https://github.com/Open-Physical-Systems/Lagrange/commit/2a46335469203e10b43e6785402c64d2f143fb33))
+* **mod/sensors:** lidar and camera in fog, rain, dust and with dirty lenses ([#131](https://github.com/Open-Physical-Systems/Lagrange/issues/131)) ([4440bf0](https://github.com/Open-Physical-Systems/Lagrange/commit/4440bf0327ea9ed7a8fc357bf08d0e22cba259b9))
+* **mod/weather:** fog and wind fields through the weather, sensors and drag ([#133](https://github.com/Open-Physical-Systems/Lagrange/issues/133)) ([752fedf](https://github.com/Open-Physical-Systems/Lagrange/commit/752fedf9c20b1153fa0bea960f434fc5d7a22175))
+* **mod/weather:** the site's atmosphere, fog, rain, dust, wet friction and lens contamination ([#130](https://github.com/Open-Physical-Systems/Lagrange/issues/130)) ([c224dcf](https://github.com/Open-Physical-Systems/Lagrange/commit/c224dcfb5649568adbe4f1da3165679709af43ee))
+* **schemas:** weather, emi, sensor-material and comms schema libraries ([#129](https://github.com/Open-Physical-Systems/Lagrange/issues/129)) ([d3b907e](https://github.com/Open-Physical-Systems/Lagrange/commit/d3b907e7e62839806da12e8faa4c108a69d03338))
+* **server:** environment state and fog and wind field slices for the viewer ([#134](https://github.com/Open-Physical-Systems/Lagrange/issues/134)) ([13643a7](https://github.com/Open-Physical-Systems/Lagrange/commit/13643a7c6ada79ec67870bbc016a42418f3f491a))
+* **server:** fly the quadcopter with /cmd_vel ([#128](https://github.com/Open-Physical-Systems/Lagrange/issues/128)) ([d66bc98](https://github.com/Open-Physical-Systems/Lagrange/commit/d66bc98ecbe453706bad9681705accc0b7f44bdc))
+
+### Documentation
+
+* **docs:** the v0.5 environment tutorial and draft release notes ([#138](https://github.com/Open-Physical-Systems/Lagrange/issues/138)) ([cfc04a1](https://github.com/Open-Physical-Systems/Lagrange/commit/cfc04a180e9824d74564bf1f133aec08adb01fd0))
+
 ## [0.4.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v0.3.0...v0.4.0) (2026-10-25)
 
 

@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_models</name>
-  <version>0.4.0</version>
+  <version>0.5.0</version>
   <description>Component behaviour models as FMI 3.0 co-simulation FMUs, with their signal maps: dc_drive, the FMU host's reference FMU (a brushed DC drive).</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
