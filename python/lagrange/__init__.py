@@ -20,7 +20,15 @@ __path__ = pkgutil.extend_path(__path__, __name__)
 
 from lagrange._lagrange import Simulation
 
-__all__ = ["Simulation", "sample_profile", "sample_quadcopter", "sample_robot", "sample_world"]
+__all__ = [
+    "Simulation",
+    "sample_city",
+    "sample_profile",
+    "sample_quadcopter",
+    "sample_robot",
+    "sample_sedan",
+    "sample_world",
+]
 
 
 def sample_robot() -> str:
@@ -33,6 +41,16 @@ def sample_robot() -> str:
 def sample_quadcopter() -> str:
     """The sample quadcopter (USD, with its rotors, motors and battery) from lagrange_assets."""
     return get_package_share_directory("lagrange_assets") + "/robots/quad_x500/quad_x500.usda"
+
+
+def sample_sedan() -> str:
+    """The sample sedan (USD, a vehicle on Magic Formula tyres) from lagrange_assets."""
+    return get_package_share_directory("lagrange_assets") + "/robots/sedan/sedan.usda"
+
+
+def sample_city() -> str:
+    """The sample city block (USD: a junction, pavements, buildings) from lagrange_assets."""
+    return get_package_share_directory("lagrange_assets") + "/worlds/city_block/city_block.usda"
 
 
 def sample_profile(name: str) -> str:

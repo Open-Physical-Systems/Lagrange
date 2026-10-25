@@ -195,6 +195,10 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                     }
                 }
             }
+            if (name == "vehicle_dynamics" && domain.contains("tire_model") &&
+                domain["tire_model"].is_string()) {
+                settings.tireModel = domain["tire_model"].as<std::string>();
+            }
             if (name == "emi" && domain.contains("coupling") && domain["coupling"].is_array()) {
                 std::vector<std::string> coupling;
                 for (const auto& c : domain["coupling"].array_range()) {

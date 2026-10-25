@@ -164,6 +164,7 @@ public:
         if (auto status = buildBodies(); !status) {
             return status;
         }
+        nameRobots();
         if (auto status = buildScene(); !status) {
             return status;
         }
@@ -274,6 +275,23 @@ private:
             if (prim.IsA<UsdPhysicsJoint>()) {
                 joints_.push_back(UsdPhysicsJoint(prim));
             }
+        }
+    }
+
+    /// Each body's robot: the top-level prim it is under (/sedan/base_link: sedan).
+    void nameRobots() {
+        World& w = m_.world;
+        for (const auto& [path, index] : bodyIndex_) {
+            if (index == kNoIndex) {
+                continue;
+            }
+            const std::string top = path.GetPrefixes().front().GetName();
+            auto it = std::find(w.robots.begin(), w.robots.end(), top);
+            if (it == w.robots.end()) {
+                w.robots.push_back(top);
+                it = std::prev(w.robots.end());
+            }
+            w.bodies.robot.at(index) = static_cast<std::uint32_t>(it - w.robots.begin());
         }
     }
 

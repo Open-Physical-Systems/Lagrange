@@ -153,12 +153,22 @@ void appendModel(Model& model, const Model& other) {
     World& w = model.world;
     const World& o = other.world;
     const auto bodyOffset = static_cast<std::uint32_t>(w.bodies.names.size());
+    // Robots: the other model's after ours (a model with bodies but no names is one robot).
+    if (w.robots.empty() && !w.bodies.names.empty()) {
+        w.robots.emplace_back("robot");
+    }
+    const auto robotOffset = static_cast<std::uint32_t>(w.robots.size());
+    if (o.robots.empty() && !o.bodies.names.empty()) {
+        w.robots.emplace_back("scenery");
+    }
+    w.robots.insert(w.robots.end(), o.robots.begin(), o.robots.end());
     const auto map = [bodyOffset](BodyId b) {
         return b == kWorldBody ? b : BodyId{b.index + bodyOffset};
     };
     for (std::size_t b = 0; b < o.bodies.names.size(); ++b) {
         w.addBody(o.bodies.names[b], map(o.bodies.parent[b]), o.bodies.poseInParent[b],
                   o.bodies.mass[b], o.bodies.comLocal[b], o.bodies.inertiaLocal[b]);
+        w.bodies.robot.back() = robotOffset + o.bodies.robot[b];
         model.bodyRestPose.push_back(other.bodyRestPose[b]);
     }
     for (std::size_t j = 0; j < o.joints.names.size(); ++j) {

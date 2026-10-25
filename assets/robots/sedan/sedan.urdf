@@ -1,0 +1,210 @@
+<?xml version="1.0"?>
+<!--
+  The sample sedan (domains/vehicle_dynamics.md, robot-classes.md): a generic 1.5 t rear-wheel
+  drive saloon, 4.6 m long, wheelbase 2.7 m, track 1.56 m, 205/55 R16 tyres. Primitives only.
+  The wheels carry no collision shapes: vehicle dynamics finds the ground under them by rays and
+  models suspension and tyres itself (sedan.usda adds VehicleAPI_1 and WheelAPI_1). base_link's
+  origin is at the wheel centres' height, between the axles. Values are illustrative, not a
+  real product.
+-->
+<robot name="sedan">
+  <material name="paint"><color rgba="0.62 0.07 0.09 1"/></material>
+  <material name="glass"><color rgba="0.12 0.16 0.2 1"/></material>
+  <material name="tyre"><color rgba="0.06 0.06 0.07 1"/></material>
+  <material name="rim"><color rgba="0.7 0.71 0.73 1"/></material>
+  <material name="sensor"><color rgba="0.15 0.15 0.16 1"/></material>
+
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0.1 0 0.1"/>
+      <mass value="1400"/>
+      <inertia ixx="607" iyy="2591" izz="2740" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.17"/>
+      <geometry><box size="4.6 1.8 0.5"/></geometry>
+      <material name="paint"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.25 0 0.67"/>
+      <geometry><box size="2.3 1.6 0.5"/></geometry>
+      <material name="glass"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.3"/>
+      <geometry><box size="4.6 1.8 0.76"/></geometry>
+    </collision>
+  </link>
+
+  <link name="front_left_knuckle">
+    <inertial><mass value="5"/><inertia ixx="0.05" iyy="0.05" izz="0.05" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="front_left_steer" type="revolute">
+    <parent link="base_link"/><child link="front_left_knuckle"/>
+    <origin xyz="1.35 0.78 0"/><axis xyz="0 0 1"/>
+    <limit lower="-0.65" upper="0.65" effort="2000" velocity="3"/>
+  </joint>
+  <link name="front_left_wheel">
+    <inertial><mass value="15"/><inertia ixx="0.4" iyy="0.75" izz="0.4" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual>
+      <origin rpy="1.5707963 0 0"/>
+      <geometry><cylinder radius="0.316" length="0.205"/></geometry>
+      <material name="tyre"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0.105 0" rpy="1.5707963 0 0"/>
+      <geometry><cylinder radius="0.2" length="0.01"/></geometry>
+      <material name="rim"/>
+    </visual>
+  </link>
+  <joint name="front_left_spin" type="continuous">
+    <parent link="front_left_knuckle"/><child link="front_left_wheel"/>
+    <origin xyz="0 0 0"/><axis xyz="0 1 0"/>
+  </joint>
+  <link name="front_right_knuckle">
+    <inertial><mass value="5"/><inertia ixx="0.05" iyy="0.05" izz="0.05" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="front_right_steer" type="revolute">
+    <parent link="base_link"/><child link="front_right_knuckle"/>
+    <origin xyz="1.35 -0.78 0"/><axis xyz="0 0 1"/>
+    <limit lower="-0.65" upper="0.65" effort="2000" velocity="3"/>
+  </joint>
+  <link name="front_right_wheel">
+    <inertial><mass value="15"/><inertia ixx="0.4" iyy="0.75" izz="0.4" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual>
+      <origin rpy="1.5707963 0 0"/>
+      <geometry><cylinder radius="0.316" length="0.205"/></geometry>
+      <material name="tyre"/>
+    </visual>
+    <visual>
+      <origin xyz="0 -0.105 0" rpy="1.5707963 0 0"/>
+      <geometry><cylinder radius="0.2" length="0.01"/></geometry>
+      <material name="rim"/>
+    </visual>
+  </link>
+  <joint name="front_right_spin" type="continuous">
+    <parent link="front_right_knuckle"/><child link="front_right_wheel"/>
+    <origin xyz="0 0 0"/><axis xyz="0 1 0"/>
+  </joint>
+  <link name="rear_left_wheel">
+    <inertial><mass value="15"/><inertia ixx="0.4" iyy="0.75" izz="0.4" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual>
+      <origin rpy="1.5707963 0 0"/>
+      <geometry><cylinder radius="0.316" length="0.205"/></geometry>
+      <material name="tyre"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0.105 0" rpy="1.5707963 0 0"/>
+      <geometry><cylinder radius="0.2" length="0.01"/></geometry>
+      <material name="rim"/>
+    </visual>
+  </link>
+  <joint name="rear_left_spin" type="continuous">
+    <parent link="base_link"/><child link="rear_left_wheel"/>
+    <origin xyz="-1.35 0.78 0"/><axis xyz="0 1 0"/>
+  </joint>
+  <link name="rear_right_wheel">
+    <inertial><mass value="15"/><inertia ixx="0.4" iyy="0.75" izz="0.4" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual>
+      <origin rpy="1.5707963 0 0"/>
+      <geometry><cylinder radius="0.316" length="0.205"/></geometry>
+      <material name="tyre"/>
+    </visual>
+    <visual>
+      <origin xyz="0 -0.105 0" rpy="1.5707963 0 0"/>
+      <geometry><cylinder radius="0.2" length="0.01"/></geometry>
+      <material name="rim"/>
+    </visual>
+  </link>
+  <joint name="rear_right_spin" type="continuous">
+    <parent link="base_link"/><child link="rear_right_wheel"/>
+    <origin xyz="-1.35 -0.78 0"/><axis xyz="0 1 0"/>
+  </joint>
+
+  <!-- Sensors: a 32-ring 3D lidar on the roof, a forward camera behind the windscreen, an IMU. -->
+  <link name="lidar_link">
+    <inertial><mass value="1"/><inertia ixx="0.01" iyy="0.01" izz="0.01" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual>
+      <geometry><cylinder radius="0.06" length="0.08"/></geometry>
+      <material name="sensor"/>
+    </visual>
+  </link>
+  <joint name="lidar_mount" type="fixed">
+    <parent link="base_link"/><child link="lidar_link"/>
+    <origin xyz="-0.2 0 0.96"/>
+  </joint>
+  <link name="camera_link">
+    <inertial><mass value="0.2"/><inertia ixx="0.001" iyy="0.001" izz="0.001" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="camera_mount" type="fixed">
+    <parent link="base_link"/><child link="camera_link"/>
+    <origin xyz="0.8 0 0.85"/>
+  </joint>
+  <gazebo reference="lidar_link">
+    <sensor name="roof_lidar" type="gpu_lidar">
+      <update_rate>10</update_rate>
+      <lidar>
+        <scan>
+          <horizontal><samples>1024</samples><min_angle>-3.14159</min_angle><max_angle>3.14159</max_angle></horizontal>
+          <vertical><samples>32</samples><min_angle>-0.4363</min_angle><max_angle>0.2618</max_angle></vertical>
+        </scan>
+        <range><min>0.5</min><max>100.0</max></range>
+        <noise><type>gaussian</type><stddev>0.02</stddev></noise>
+      </lidar>
+    </sensor>
+  </gazebo>
+  <gazebo reference="camera_link">
+    <sensor name="front_camera" type="camera">
+      <update_rate>10</update_rate>
+      <camera>
+        <horizontal_fov>1.2</horizontal_fov>
+        <image><width>960</width><height>540</height></image>
+        <clip><near>0.1</near><far>200</far></clip>
+      </camera>
+    </sensor>
+  </gazebo>
+  <gazebo reference="base_link">
+    <sensor name="imu" type="imu">
+      <update_rate>100</update_rate>
+      <imu>
+        <angular_velocity><z><noise type="gaussian"><stddev>0.002</stddev></noise></z></angular_velocity>
+        <linear_acceleration><x><noise type="gaussian"><stddev>0.02</stddev></noise></x></linear_acceleration>
+      </imu>
+    </sensor>
+  </gazebo>
+
+  <!-- Which joints take commands: vehicle dynamics drives the wheels and the steering. -->
+  <ros2_control name="LagrangeSystem" type="system">
+    <hardware><plugin>lagrange_ros2_control/LagrangeSystem</plugin></hardware>
+    <joint name="front_left_steer">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="front_right_steer">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="front_left_spin">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="front_right_spin">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="rear_left_spin">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="rear_right_spin">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+</robot>

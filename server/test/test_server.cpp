@@ -464,6 +464,46 @@ TEST_F(CommsServerTest, TheLinkCrossesTheWallAndTheProfileSaysSo) {
     EXPECT_TRUE(server_->validateProfile(yaml).valid);
 }
 
+/// The sample sedan in the city block, on its demo circle.
+class SedanServerTest : public ServerTest {
+protected:
+    void adjust(ServerOptions& options) override {
+        options.robotPath = LAGRANGE_TEST_SEDAN_USDA;
+        options.worldPath = LAGRANGE_TEST_CITY_USDA;
+    }
+};
+
+TEST_F(SedanServerTest, TheCarDrivesItsDemoCircleOnItsTyres) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    for (std::uint64_t id = 10; id < 22; ++id) {  // 12 s, a second at a time
+        v1::Envelope step = command(id);
+        step.mutable_command()->mutable_step()->set_duration_ns(1'000'000'000);
+        send(step);
+        ASSERT_TRUE(pumpUntil([id](const v1::Envelope& e) {
+            return e.has_command_result() && e.command_result().request_id() == id;
+        }));
+    }
+    EXPECT_NEAR(server_->read("vehicle/sedan/speed").at(0), 3.0, 0.2);
+    const std::vector<double> pose = server_->read("body/base_link/pose");
+    EXPECT_NEAR(pose.at(2), 0.316, 0.01);                // on its wheels, at ride height
+    EXPECT_LT(std::hypot(pose.at(0), pose.at(1)), 6.0);  // on the circle round the junction
+    double load = 0.0;
+    for (const char* w : {"front_left", "front_right", "rear_left", "rear_right"}) {
+        load += server_->read(std::string("wheel/") + w + "_spin/normal_force").at(0);
+    }
+    EXPECT_NEAR(load, 1490.0 * 9.80665, 0.1 * 1490.0 * 9.80665);  // the car's weight, turning
+    std::string yaml;
+    for (const v1::Envelope& e : received_) {
+        if (e.has_profile_state()) {
+            yaml = e.profile_state().yaml();
+        }
+    }
+    EXPECT_NE(yaml.find("vehicle_dynamics: {enabled: true, tire_model: pacejka}"),
+              std::string::npos)
+        << yaml;
+    EXPECT_TRUE(server_->validateProfile(yaml).valid);
+}
+
 /// The sample AMR in fog and rain (--weather).
 class WeatherServerTest : public ServerTest {
 protected:
