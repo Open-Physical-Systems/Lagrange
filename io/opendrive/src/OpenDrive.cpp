@@ -625,7 +625,7 @@ private:
                         std::reverse(centre.begin(), centre.end());
                         std::reverse(widths.begin(), widths.end());
                     }
-                    addLane(road, k, lane, token, centre, widths);
+                    addLane(road, k, lane, token, centre, widths, sec.s, end);
                 }
             }
             for (std::size_t r = 0; r < sec.centreMarks.size(); ++r) {
@@ -648,7 +648,7 @@ private:
 
     void addLane(const Road& road, std::size_t section, const Lane& lane, const std::string& type,
                  const std::vector<std::array<double, 3>>& centre,
-                 const std::vector<double>& widths) {
+                 const std::vector<double>& widths, double sStart, double sEnd) {
         const std::string name = "road_" + std::to_string(road.id) + "_s" +
                                  std::to_string(section) + "_lane_" + (lane.id < 0 ? "m" : "p") +
                                  std::to_string(std::abs(lane.id));
@@ -662,7 +662,8 @@ private:
         }
         s.realArrays = {{"lane:centreLine", points}, {"lane:width", widths}};
         s.tokens = {{"lane:type", type}};
-        s.reals = {{"lane:speedLimit", road.speedLimit}};
+        s.reals = {
+            {"lane:speedLimit", road.speedLimit}, {"lane:sStart", sStart}, {"lane:sEnd", sEnd}};
         s.integers = {{"lane:road", road.id},
                       {"lane:lane", lane.id},
                       {"lane:junction", road.junction >= 0 ? 1 : 0}};

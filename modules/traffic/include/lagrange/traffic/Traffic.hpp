@@ -7,6 +7,7 @@
 
 #include "lagrange/module/IModule.hpp"
 #include "lagrange/world/Model.hpp"
+#include "lagrange/world/RoadLanes.hpp"
 
 #include <array>
 #include <cstdint>
@@ -18,24 +19,10 @@ namespace lagrange::traffic {
 
 using Vec3 = std::array<double, 3>;
 
-/// One lane of the network, read once at load (RoadLaneAPI_1).
-struct Lane {
-    std::string name;
-    std::vector<Vec3> points;      // centre line, in the direction of travel
-    std::vector<double> distance;  // along it, from its start (m)
-    double width{3.5};
-    double speedLimit{0.0};  // m/s; 0: none
-    bool sidewalk{false};
-    bool junction{false};
-    int road{0};
-    std::vector<std::size_t> successors, predecessors;  // lane indices
-    [[nodiscard]] double length() const { return distance.empty() ? 0.0 : distance.back(); }
-    /// Position and heading (rad, about z) at `s` metres along.
-    [[nodiscard]] std::pair<Vec3, double> at(double s) const;
-};
+using Lane = RoadLane;
 
 struct LaneGraph {
-    std::vector<Lane> lanes;
+    std::vector<Lane> lanes;  // roadLanesOf's
     /// Traffic lights: per lane into a junction (a non-junction lane whose successors are
     /// junction lanes), its signal group within its junction; −1 for other lanes.
     std::vector<int> signalGroup;

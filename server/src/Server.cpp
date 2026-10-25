@@ -8,6 +8,8 @@
 #include "lagrange/importers/Importers.hpp"
 #include "lagrange/mavlink/ArduPilotJson.hpp"
 #include "lagrange/mavlink/Px4Lockstep.hpp"
+#include "lagrange/opendrive/OpenDrive.hpp"
+#include "lagrange/openscenario/Scenario.hpp"
 #include "lagrange/proto/Connection.hpp"
 #include "lagrange/proto/Framing.hpp"
 #include "lagrange/recording/Recording.hpp"
@@ -35,6 +37,7 @@
 #include "lagrange/viewer/v1/envelope.pb.h"
 #include "lagrange/weather/Weather.hpp"
 #include "lagrange/world/LidarLayout.hpp"
+#include "lagrange/world/RoadLanes.hpp"
 
 #include <algorithm>
 #include <array>
@@ -525,6 +528,21 @@ struct Server::Impl {
             }
             next->add(std::make_unique<CarController>(external, options.demoDrive));
         }
+        // The scenario's runner: its entities, its storyboard.
+        if (scenario) {
+            ModuleConfigData runner;
+            const World& world = robot.world;
+            for (std::size_t b = 0; b < world.bodies.names.size(); ++b) {
+                if (world.bodies.parent[b] == kWorldBody && !world.bodies.kinematic[b] &&
+                    movingBodies(world)[b]) {
+                    runner.values["ego_body"] = world.bodies.names[b];
+                    break;
+                }
+            }
+            next->add(
+                std::make_unique<openscenario::ScenarioRunner>(*scenario, options.scenarioEgo),
+                ModuleConfig(runner));
+        }
         // Traffic (domains/traffic.md): moves the agents addAgents made, around the robots.
         if (hasTraffic()) {
             ModuleConfigData traffic;
@@ -869,6 +887,7 @@ struct Server::Impl {
     std::optional<std::int64_t> rigidBodyDtNs;              // from an applied profile
     std::optional<std::string> rigidBodyBackend;            // from an applied profile
     std::optional<std::string> appliedTireModel;            // vehicle_dynamics.tire_model
+    std::optional<openscenario::Scenario> scenario;         // --scenario
     std::optional<std::int64_t> electricalDtNs;             // from an applied profile
     std::optional<ProfileSettings> pending;  // applied without restart: used at the next reset
 
@@ -3733,11 +3752,48 @@ Status Server::load() {
         }
         return {};
     }
+    // A scenario: its roads, and where the ego starts.
+    std::optional<Model> scenarioRoads;
+    if (!s.options.scenarioPath.empty()) {
+        auto scenario = openscenario::read(s.options.scenarioPath);
+        if (!scenario) {
+            return Status::error(StatusCode::InvalidConfig, scenario.error());
+        }
+        s.scenario = std::move(*scenario);
+        if (!s.scenario->roadNetwork.empty()) {
+            auto network = opendrive::read(s.scenario->roadNetwork);
+            if (!network) {
+                return Status::error(StatusCode::InvalidConfig, network.error());
+            }
+            auto roads = opendrive::toModel(*network);
+            if (!roads) {
+                return Status::error(StatusCode::InvalidConfig, roads.error());
+            }
+            const RoadLanes lanes = roadLanesOf(WorldView(roads->world));
+            for (const openscenario::Action& a : s.scenario->init) {
+                if (a.entity == s.options.scenarioEgo &&
+                    a.kind == openscenario::Action::Kind::Teleport) {
+                    if (const auto pose = openscenario::poseOf(a.position, lanes)) {
+                        s.options.spawn.position = {(*pose)[0], (*pose)[1], (*pose)[2]};
+                        s.options.spawn.orientation = {std::cos((*pose)[3] / 2.0), 0.0, 0.0,
+                                                       std::sin((*pose)[3] / 2.0)};
+                    }
+                }
+            }
+            if (s.options.worldPath.empty()) {
+                scenarioRoads = std::move(*roads);
+            }
+        }
+        s.options.demoDrive = false;  // the ego waits for the system under test
+    }
     auto robot = loadModel(s.options.robotPath, {.spawn = s.options.spawn});
     if (!robot) {
         return Status::error(StatusCode::InvalidConfig, robot.error());
     }
     s.robot = std::move(robot.value());
+    if (scenarioRoads) {
+        appendModel(s.robot, *scenarioRoads);
+    }
     if (!s.options.overlayPath.empty()) {
         if (auto applied = stage::applyOverlay(s.robot, s.options.overlayPath); !applied) {
             return Status::error(StatusCode::InvalidConfig, applied.error());
@@ -3789,8 +3845,19 @@ Status Server::load() {
             return Status::error(StatusCode::InvalidConfig, added.error());
         }
     }
-    // Traffic agents on the world's road lanes, away from the robots (traffic.md).
-    if (!WorldView(s.robot.world).instancesOf("RoadLaneAPI_1").empty() &&
+    if (s.scenario) {
+        if (auto added = openscenario::addEntities(s.robot, *s.scenario, s.options.scenarioEgo);
+            !added) {
+            return Status::error(StatusCode::InvalidConfig,
+                                 s.options.scenarioPath + ": " + added.error());
+        }
+        s.log(v1::LOG_LEVEL_INFO, "scenario",
+              s.options.scenarioPath + " · " + std::to_string(s.scenario->entities.size()) +
+                  " entities, " + s.options.scenarioEgo + " is the robot");
+    }
+    // Traffic agents on the world's road lanes, away from the robots (traffic.md); not with a
+    // scenario, which says who is on the road.
+    if (!s.scenario && !WorldView(s.robot.world).instancesOf("RoadLaneAPI_1").empty() &&
         s.options.trafficVehicles + s.options.trafficPedestrians > 0) {
         std::vector<traffic::Vec3> robots;
         for (std::size_t b = 0; b < s.robot.world.bodies.names.size(); ++b) {

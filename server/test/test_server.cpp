@@ -504,6 +504,40 @@ TEST_F(SedanServerTest, TheCarDrivesItsDemoCircleOnItsTyres) {
     EXPECT_TRUE(server_->validateProfile(yaml).valid);
 }
 
+/// The cut-in scenario with the sedan as its ego, on the scenario's own roads.
+class ScenarioServerTest : public ServerTest {
+protected:
+    void adjust(ServerOptions& options) override {
+        options.robotPath = LAGRANGE_TEST_SEDAN_USDA;
+        options.worldPath.clear();
+        options.scenarioPath = LAGRANGE_TEST_CUT_IN;
+    }
+};
+
+TEST_F(ScenarioServerTest, TheCutInRunsAroundTheSedan) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    // The sedan starts where the scenario puts the ego: road 1, lane -2, s = 30.
+    std::vector<double> pose = server_->read("body/base_link/pose");
+    EXPECT_NEAR(pose.at(0), 42.0, 0.05);
+    EXPECT_NEAR(pose.at(1), -5.25, 0.05);
+    for (std::uint64_t id = 10; id < 23; ++id) {  // 13 s, a second at a time
+        v1::Envelope step = command(id);
+        step.mutable_command()->mutable_step()->set_duration_ns(1'000'000'000);
+        send(step);
+        ASSERT_TRUE(pumpUntil([id](const v1::Envelope& e) {
+            return e.has_command_result() && e.command_result().request_id() == id;
+        }));
+    }
+    EXPECT_EQ(server_->read("scenario/state").at(0), 1.0);
+    const std::vector<double> target = server_->read("scenario/entities");
+    EXPECT_EQ(target.at(7), -2.0);                      // in the sedan's lane
+    EXPECT_GT(target.at(0), 42.0);                      // ahead of it
+    pose = server_->read("body/scenario_Target/pose");  // the kinematic body follows
+    EXPECT_NEAR(pose.at(0), target.at(0), 0.2);
+    pose = server_->read("body/base_link/pose");
+    EXPECT_NEAR(pose.at(0), 42.0, 0.1);  // the ego waited: nothing drives it but its stack
+}
+
 /// The sample AMR in fog and rain (--weather).
 class WeatherServerTest : public ServerTest {
 protected:

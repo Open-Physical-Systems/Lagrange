@@ -27,6 +27,8 @@
   <depend>lagrange_comms</depend>
   <depend>lagrange_vehicle_dynamics</depend>
   <depend>lagrange_traffic</depend>
+  <depend>lagrange_opendrive</depend>
+  <depend>lagrange_openscenario</depend>
   <depend>lagrange_mavlink</depend>
   <depend>lagrange_recording</depend>
   <depend>lagrange_gpu</depend>

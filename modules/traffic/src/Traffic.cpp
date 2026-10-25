@@ -52,32 +52,6 @@ std::array<double, 4> yawQuat(double yaw) {
     return {std::cos(yaw / 2.0), 0.0, 0.0, std::sin(yaw / 2.0)};
 }
 
-/// The nearest point of a lane to `p`: (s along it, lateral distance, signed to the left).
-std::pair<double, double> project(const Lane& lane, const Vec3& p) {
-    double bestS = 0.0;
-    double best = std::numeric_limits<double>::infinity();
-    double side = 0.0;
-    for (std::size_t i = 0; i + 1 < lane.points.size(); ++i) {
-        const Vec3& a = lane.points[i];
-        const Vec3& b = lane.points[i + 1];
-        const double dx = b[0] - a[0];
-        const double dy = b[1] - a[1];
-        const double len2 = dx * dx + dy * dy;
-        const double t =
-            len2 > 0.0 ? std::clamp(((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2, 0.0, 1.0)
-                       : 0.0;
-        const double x = a[0] + t * dx - p[0];
-        const double y = a[1] + t * dy - p[1];
-        const double d = std::hypot(x, y);
-        if (d < best) {
-            best = d;
-            bestS = lane.distance[i] + t * (lane.distance[i + 1] - lane.distance[i]);
-            side = dx * (p[1] - a[1]) - dy * (p[0] - a[0]) >= 0.0 ? 1.0 : -1.0;
-        }
-    }
-    return {bestS, side * best};
-}
-
 }  // namespace
 
 /// Whether two polylines cross (or touch), in the plane.
@@ -99,68 +73,9 @@ bool crosses(const std::vector<Vec3>& a, const std::vector<Vec3>& b) {
     return false;
 }
 
-std::pair<Vec3, double> Lane::at(double s) const {
-    if (points.size() < 2) {
-        return {points.empty() ? Vec3{} : points.front(), 0.0};
-    }
-    s = std::clamp(s, 0.0, length());
-    const auto it = std::upper_bound(distance.begin(), distance.end(), s);
-    const std::size_t i =
-        std::min(static_cast<std::size_t>(std::max<std::ptrdiff_t>(it - distance.begin() - 1, 0)),
-                 points.size() - 2);
-    const double span = distance[i + 1] - distance[i];
-    const double t = span > 0.0 ? (s - distance[i]) / span : 0.0;
-    const Vec3& a = points[i];
-    const Vec3& b = points[i + 1];
-    return {{a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), a[2] + t * (b[2] - a[2])},
-            std::atan2(b[1] - a[1], b[0] - a[0])};
-}
-
 LaneGraph lanesOf(const WorldView& world) {
     LaneGraph g;
-    const std::vector<const SchemaInstance*> instances = world.instancesOf("RoadLaneAPI_1");
-    std::map<std::uint32_t, std::size_t> byPrim;
-    for (const SchemaInstance* s : instances) {
-        Lane lane;
-        lane.name = std::string(world.signalInstanceName(s->prim));
-        const std::span<const double> c = s->realArray("lane:centreLine");
-        for (std::size_t i = 0; i + 2 < c.size(); i += 3) {
-            lane.points.push_back({c[i], c[i + 1], c[i + 2]});
-        }
-        if (lane.points.size() < 2) {
-            continue;
-        }
-        lane.distance.push_back(0.0);
-        for (std::size_t i = 1; i < lane.points.size(); ++i) {
-            lane.distance.push_back(lane.distance.back() +
-                                    distance2d(lane.points[i], lane.points[i - 1]));
-        }
-        const std::span<const double> w = s->realArray("lane:width");
-        lane.width = w.empty() ? 3.5 : w[w.size() / 2];
-        lane.speedLimit = s->real("lane:speedLimit").value_or(0.0);
-        lane.sidewalk = s->token("lane:type") == "sidewalk";
-        lane.junction = s->integer("lane:junction").value_or(0) != 0;
-        lane.road = static_cast<int>(s->integer("lane:road").value_or(0));
-        if (const std::string_view type = s->token("lane:type").value_or("driving");
-            type != "driving" && type != "sidewalk") {
-            continue;
-        }
-        byPrim[s->prim.index] = g.lanes.size();
-        g.lanes.push_back(std::move(lane));
-    }
-    // Links, now that every lane has its index.
-    for (const SchemaInstance* s : instances) {
-        const auto self = byPrim.find(s->prim.index);
-        if (self == byPrim.end()) {
-            continue;
-        }
-        for (const PrimId next : s->rel("lane:successors")) {
-            if (const auto it = byPrim.find(next.index); it != byPrim.end()) {
-                g.lanes[self->second].successors.push_back(it->second);
-                g.lanes[it->second].predecessors.push_back(self->second);
-            }
-        }
-    }
+    g.lanes = roadLanesOf(world).lanes;
     // Junctions: groups of junction lanes reachable from each other's entries share one; each
     // approach (a lane into a junction) gets a signal group by its heading at the stop line.
     g.signalGroup.assign(g.lanes.size(), -1);
@@ -394,7 +309,7 @@ Status Traffic::declare(const WorldView& world, const ModuleConfig& config, Sign
             if (lane.sidewalk != pedestrian) {
                 continue;
             }
-            const auto [s, lateral] = project(lane, at);
+            const auto [s, lateral] = lane.project(at);
             if (std::abs(lateral) < best) {
                 best = std::abs(lateral);
                 a.lane = i;
@@ -616,7 +531,7 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
         }
         for (const auto& [p, v] : egos) {
             for (const std::size_t l : {a.lane, a.next.value_or(a.lane)}) {
-                const auto [s, lateral] = project(graph_.lanes[l], p);
+                const auto [s, lateral] = graph_.lanes[l].project(p);
                 if (std::abs(lateral) > kEgoLateral) {
                     continue;
                 }

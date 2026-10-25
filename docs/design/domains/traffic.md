@@ -109,3 +109,47 @@ SUMO co-simulation is not built (the owner's v0.6 decision: no new external engi
   - the fundamental-diagram check for pedestrians;
   - scenario conformance (with the OpenSCENARIO runner);
   - SUMO, esmini.
+
+### 8.1 OpenSCENARIO runner (v0.6)
+
+`lagrange_openscenario` (`io/openscenario/`) is an own reader and runner for a subset of
+OpenSCENARIO 1.x XML. esmini is not used (the owner's v0.6 decision).
+`lagrange_server --scenario FILE.xosc [--scenario-ego NAME]`:
+- runs the scenario;
+- uses its `RoadNetwork/LogicFile` (OpenDRIVE) as the world when `--world` is not given;
+- puts the robot at the ego entity's Init teleport (`Ego` by default);
+- turns the builtin traffic and the robot's demo drive off.
+
+**Read:**
+- `ParameterDeclarations` (`$name` substitution).
+- Vehicle and Pedestrian entities with their bounding boxes (no catalogs).
+- `Init` with `TeleportAction` (`LanePosition`, `WorldPosition`) and `SpeedAction`.
+- Stories, acts, maneuver groups, maneuvers and events.
+- Private `SpeedAction` (absolute, or relative as a delta; step, linear, sinusoidal or cubic
+  over a time, a distance or at a rate).
+- `LaneChangeAction` (relative to an entity's lane, or an absolute lane id; over a time or a
+  distance).
+- Start and stop triggers of condition groups, with delays and edges:
+  - `SimulationTimeCondition`, `ReachPositionCondition`;
+  - `RelativeDistanceCondition` (longitudinal, lateral or Euclidean; freespace);
+  - `SpeedCondition`, `TraveledDistanceCondition`.
+
+Anything else is refused with its name.
+
+**Entities.** Entities other than the ego are kinematic bodies (`scenario_<name>`) that the
+runner moves along the road lanes, going straight on at a lane's end. The ego is the robot,
+which its own stack drives; actions on the ego are not applied.
+
+**Outputs.** `scenario/state` (1 once the stop trigger has held), `scenario/time` and
+`scenario/entities`.
+
+**Sample and checks.** The sample is `assets/scenarios/cut_in.xosc` on the city block.
+`test_openscenario` checks it runs to its end with its lane change at 3.5 s (35 m at 10 m/s),
+halfway at 5 s, in the ego's lane at 6.6 s, 8 m/s at 7.5 s on its linear slow-down, and ended
+at 12 s. `ScenarioServerTest` runs it around the sample sedan.
+
+**Owed:**
+- catalogs;
+- routing and trajectory actions;
+- controllers;
+- the ASAM example scenarios, and a comparison with esmini.
