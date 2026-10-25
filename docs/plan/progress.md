@@ -10,8 +10,8 @@ flowchart LR
     v02["v0.2<br/>simulation core + AMR<br/>ROS 2, Nav2<br/><b>released 2026-10-25</b>"]:::done
     v03["v0.3<br/>arms + electrical<br/>MoveIt 2<br/><b>released 2026-10-25</b>"]:::done
     v04["v0.4<br/>drones<br/>PX4 / ArduPilot SITL<br/><b>released 2026-10-25</b>"]:::done
-    v05["v0.5<br/>weather + EMI<br/><b>next</b>"]:::now
-    v06["v0.6<br/>cars, autonomous cars<br/>OpenDRIVE, Autoware"]:::todo
+    v05["v0.5<br/>weather + EMI + comms<br/><b>released 2026-10-25</b>"]:::done
+    v06["v0.6<br/>cars, autonomous cars<br/>OpenDRIVE, Autoware<br/><b>next</b>"]:::now
     v07["v0.7<br/>huge worlds"]:::todo
     v10["v1.0<br/>stable schemas + plugin ABI<br/>ros-lyrical-* debs"]:::todo
     v01 --> v02 --> v03 --> v04 --> v05 --> v06 --> v07 --> v10
@@ -117,6 +117,15 @@ E8). Release notes and acceptance evidence: `docs/release/v0.3.0.md`. Owed withi
 a motor heat run (Q16; the battery is checked against published cell data since 2026-10-25,
 from 35 % state of charge up), the drive-design
 review of the motor constants, FMI 2.0 FMUs (Q8), Jolt's wheel slip. Released as `v0.3.0` on 2026-10-25 at the owner's request, after v0.2.0.
+
+## v0.5 status (2026-10-25)
+
+Every v0.5 plan step is done. Release notes and acceptance evidence: `docs/release/v0.5.0.md`.
+Owed within the epics: lidar fog clutter calibrated against chamber data (DENSE), the 5 %
+rain-rate check (20 % met), field measurements near power lines and the RSSI recording (Q16),
+ITU-R P.1238 parameters, a real OpenFOAM case's files, MAVLink telemetry over links,
+`SensorMaterialAPI_1` in the sensors, 3D field volumes and a link panel in the viewer. Released
+as `v0.5.0` on 2026-10-25 at the owner's request.
 
 ## v0.5 plan (2026-10-25)
 
