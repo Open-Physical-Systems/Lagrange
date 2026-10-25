@@ -128,7 +128,10 @@ step resting on the ones before:
 1. `schemas/aero`: `AeroAPI_1`, `RotorAPI_1` (**done** 2026-10-25)
 2. `modules/rotor_aero`: coefficient model, inflow lag, ground effect, the `ideal` substitute;
    thrust into `wrench_sum`, shaft torque into `joint/<j>/load_torque`; checks against closed
-   forms and published propeller data
+   forms and published propeller data (**done** 2026-10-25 against the closed forms; aerodynamics.md §8.
+   Published propeller data comes with step 3's propeller. PX4 v1.17.0 SITL builds on the host:
+   `~/PX4-Autopilot`, Python dependencies in its `.venv` made with uv, as `python3-venv` is not
+   installed)
 3. Sample quadcopter `assets/robots/quad_x500` (URDF, overlay with rotors, motors, 4S battery)
    and `assets/worlds/open_field`; hover by a simple attitude/thrust controller in a test
 4. Electrical at 50 µs for small fast motors; coupling tests at J = 1e-5 kg·m²
