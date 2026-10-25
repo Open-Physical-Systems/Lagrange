@@ -675,6 +675,7 @@ Defined in v0.6 and written by the OpenDRIVE importer (`io/opendrive/`, `lagrang
 | `lane:type` | token | — | `driving` | `driving`, `sidewalk`, `biking`, `parking`, `other` |
 | `lane:speedLimit` | double | m/s | `0` | 0: none given |
 | `lane:road`, `lane:lane` | int | 1 | `0` | OpenDRIVE road and lane ids |
+| `lane:sStart`, `lane:sEnd` | double | m | `0` | The lane section's range along its road (OpenDRIVE s) |
 | `lane:junction` | bool | — | `false` | A junction's connecting road |
 | `lane:successors`, `lane:predecessors` | rel | — | — | Lanes it continues into, and those leading into it |
 

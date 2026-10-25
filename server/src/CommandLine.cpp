@@ -128,6 +128,9 @@ void printServerOptions(std::FILE* out) {
         "            a profile's weather keys also set them\n"
         "  --domain D=off  replace domain D (rigid_body, electrical, thermal, weather, emi,\n"
         "            comms, vehicle_dynamics, traffic, sensors) by its substitute\n"
+        "  --scenario FILE.xosc  run an OpenSCENARIO scenario (a subset of 1.x); its roads are "
+        "the\n"
+        "            world unless --world is given; its entity Ego (--scenario-ego) is the robot\n"
         "  --traffic vehicles=N,pedestrians=M,seed=S  the builtin traffic on a world with road\n"
         "            lanes (default 8, 6, 1; 0 and 0: none)\n"
         "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
@@ -285,6 +288,18 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--air-density needs a density in kg/m³";
             }
             options.airDensityKgM3 = rho;
+        } else if (arg == "--scenario") {
+            const char* text = value();
+            if (text == nullptr) {
+                return "--scenario needs an OpenSCENARIO file (.xosc)";
+            }
+            options.scenarioPath = text;
+        } else if (arg == "--scenario-ego") {
+            const char* text = value();
+            if (text == nullptr) {
+                return "--scenario-ego needs the scenario entity that is the robot";
+            }
+            options.scenarioEgo = text;
         } else if (arg == "--traffic") {
             const char* text = value();
             if (text == nullptr) {

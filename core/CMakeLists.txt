@@ -25,6 +25,7 @@ add_library(
     random/src/Philox.cpp
     world/src/World.cpp
     world/src/Meshes.cpp
+    world/src/RoadLanes.cpp
     world/coords/src/Frames.cpp
     module/src/Module.cpp
     scheduler/src/Scheduler.cpp

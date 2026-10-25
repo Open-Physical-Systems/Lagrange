@@ -43,6 +43,10 @@ struct ServerOptions {
     std::map<std::string, std::string> linkTopics;
     /// --traffic: the builtin traffic's agents when the world has road lanes (RoadLaneAPI_1);
     /// set when the server starts.
+    /// --scenario: an OpenSCENARIO file to run (its roads become the world when --world is not
+    /// given; its entity `scenarioEgo` is the robot, placed at its Init position).
+    std::string scenarioPath;
+    std::string scenarioEgo{"Ego"};
     int trafficVehicles{8};
     int trafficPedestrians{6};
     std::uint64_t trafficSeed{1};

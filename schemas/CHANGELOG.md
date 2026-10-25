@@ -7,7 +7,8 @@ every schema is version 1 and may change without a migration.
 
 - **Road library** for v0.6 (formats.md §3.11): `RoadLaneAPI_1`, one lane of a road network
   (centre line in the direction of travel, widths, type, speed limit, OpenDRIVE road and lane
-  ids, successors and predecessors), written by the OpenDRIVE importer.
+  ids, the section's range along the road, successors and predecessors), written by the
+  OpenDRIVE importer.
 
 - **Vehicle library** for v0.6 (formats.md §3.10): `VehicleAPI_1` on a chassis body
   (powertrain, steering, brakes, anti-roll bars, the engine map and gears of an `ice_map`

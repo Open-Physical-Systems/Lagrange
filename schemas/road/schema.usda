@@ -49,6 +49,14 @@ class "RoadLaneAPI_1" (
         lagrangeUnit = "1"
         doc = "The OpenDRIVE lane id (negative: right of the reference line)."
     )
+    double lane:sStart = 0 (
+        lagrangeUnit = "m"
+        doc = "Where along its road (OpenDRIVE s) the lane section starts."
+    )
+    double lane:sEnd = 0 (
+        lagrangeUnit = "m"
+        doc = "Where along its road the lane section ends."
+    )
     bool lane:junction = false (
         doc = "A lane of a junction's connecting road."
     )
