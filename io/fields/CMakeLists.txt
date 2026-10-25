@@ -16,7 +16,7 @@ find_path(
     REQUIRED
 )
 
-add_library(lagrange_fields src/Field.cpp)
+add_library(lagrange_fields src/Field.cpp src/Foam.cpp)
 lagrange_target_defaults(lagrange_fields)
 target_include_directories(
     lagrange_fields
@@ -43,7 +43,14 @@ target_link_libraries(lagrange_make_fields lagrange_fields)
 lagrange_target_defaults(lagrange_make_fields)
 
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
-install(TARGETS lagrange_make_fields DESTINATION lib/${PROJECT_NAME})
+add_executable(lagrange_foam_to_vdb tools/foam_to_vdb.cpp)
+target_link_libraries(lagrange_foam_to_vdb lagrange_fields)
+lagrange_target_defaults(lagrange_foam_to_vdb)
+
+install(
+    TARGETS lagrange_make_fields lagrange_foam_to_vdb
+    DESTINATION lib/${PROJECT_NAME}
+)
 install(
     TARGETS lagrange_fields
     EXPORT export_${PROJECT_NAME}

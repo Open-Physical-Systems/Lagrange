@@ -128,3 +128,7 @@ Weather effects on sensors are statistical. Each validation states the quantity 
   from 109 of the front lidar's 720 beams.
 - Not yet: rigid body's wet friction, the viewer's field overlays, radar attenuation, a weather
   time series, rain streaks in the camera.
+- Offline CFD: `lagrange_foam_to_vdb` turns an OpenFOAM case's cell velocities (ASCII `U`, and
+  the cell centres `C` from `postProcess -func writeCellCentres`) into a wind grid: the mean of
+  the cells in each voxel, voxel centres on multiples of the voxel size after `--offset`. It
+  reads OpenFOAM's files only; OpenFOAM is not a dependency.

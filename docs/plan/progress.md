@@ -149,7 +149,10 @@ time-boxed. Order:
    what rides on a link (**done** 2026-10-25: `lagrange_comms`, comms.md §8; the ROS 2 bridge
    gates topics with `--link-topics`; sample `amr_diffdrive_wifi.usda`. Not yet: MAVLink
    telemetry and encoder glitches)
-7. Offline CFD import: OpenFOAM results to a VDB wind field
+7. Offline CFD import: OpenFOAM results to a VDB wind field (**done** 2026-10-25:
+   `lagrange_foam_to_vdb` and `readFoamVectorField`/`foamToWindField` in `lagrange_fields`;
+   ASCII `C` and `U`, cells averaged into voxels; round trip of an analytic field. Owed: a run
+   against files from a real OpenFOAM case, TODO(verify))
 8. Samples, tutorial, release notes
 
 ## v0.4 status (2026-10-25)
