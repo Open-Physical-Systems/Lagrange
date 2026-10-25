@@ -53,4 +53,18 @@ TEST(Encoder, AZeroPeriodGivesZeroVelocity) {
 }
 
 }  // namespace
+TEST(Encoder, InterferenceAddsOrDropsCountsPerEdge) {
+    Encoder encoder(1024);
+    const double step = encoder.step();
+    (void)encoder.velocity(0.5 * step, 0.001);  // the first reading: no edges yet
+    // Ten edges at a probability of 1, every draw 0: each edge gains a count, and they stay.
+    encoder.glitch(10.5 * step, 1.0, [] { return 0.0; });
+    EXPECT_EQ(encoder.glitches(), 10);
+    EXPECT_NEAR(encoder.position(10.5 * step), 20.0 * step, 1e-12);
+    EXPECT_NEAR(encoder.velocity(10.5 * step, 0.001), 20.0 * step / 0.001, 1e-6);
+    // No interference: no change, however far it turns.
+    encoder.glitch(100.5 * step, 0.0, [] { return 0.0; });
+    EXPECT_EQ(encoder.glitches(), 10);
+}
+
 }  // namespace lagrange::ros2_control

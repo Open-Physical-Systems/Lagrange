@@ -961,6 +961,19 @@ private:
             if (!prim || !prim.IsA<UsdGeomXformable>()) {
                 continue;
             }
+            if (prim.IsA<UsdPhysicsJoint>()) {
+                // A joint is where it acts: in its child body, at its anchor there.
+                SdfPathVector child;
+                UsdPhysicsJoint joint(prim);
+                joint.GetBody1Rel().GetTargets(&child);
+                if (!child.empty() && bodyIndex_.contains(child[0])) {
+                    const GfVec3f anchor =
+                        valueOf<GfVec3f>(joint.GetLocalPos1Attr()).value_or(GfVec3f(0.0F));
+                    prims.body.at(id.index) = BodyId{bodyIndex_.at(child[0])};
+                    prims.poseInBody.at(id.index).position = {anchor[0], anchor[1], anchor[2]};
+                    continue;
+                }
+            }
             const SdfPath bodyPath = bodyOf(prim);
             const Placement placement = world(prim);
             if (bodyPath.IsEmpty()) {
