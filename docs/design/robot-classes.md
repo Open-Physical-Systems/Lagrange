@@ -137,6 +137,13 @@ controller (`Multicopter.hpp`): it takes off and holds 2 m within 1 mm, rotors a
 about 190 W from the battery (`test_the_sample_quadcopter_takes_off_and_hovers`). The open
 field world comes with the mission scenario.
 
+*Status (v0.4, step 7):* `lagrange_mavlink` (`bridges/mavlink`) runs PX4 SITL in lockstep
+(`lagrange_server --mavlink px4`): HIL_SENSOR at the IMU's rate (FRD, gauss, hPa), HIL_GPS at the
+GNSS rate, HIL_ACTUATOR_CONTROLS back to speed-controlling ESCs; lockstep starts with PX4's first
+outputs. PX4 v1.17.0 with the airframe `bridges/mavlink/px4/22100_lagrange_quad_x500` takes off,
+flies a 10 m square at 5 m and lands (`tools/ci/px4_mission.sh`, `fly_square_mission.py`).
+ArduPilot's JSON interface is not done yet.
+
 Acceptance scenario for v0.4: PX4 SITL in lockstep takes off, flies a square mission in 8 m/s
 gusty wind and lands; a low battery scenario shows voltage sag reducing available thrust.
 

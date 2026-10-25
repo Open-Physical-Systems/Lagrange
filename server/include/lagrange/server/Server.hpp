@@ -34,6 +34,9 @@ struct ServerOptions {
     /// overrides it). A site parameter with no default: GNSS, magnetometers and barometers do
     /// not run without it.
     std::optional<coords::Geodetic> geoOrigin;
+    /// PX4 SITL through the MAVLink bridge (--mavlink px4[:PORT]): the TCP port it connects to;
+    /// none: the built-in multicopter controller flies a multicopter.
+    std::optional<std::uint16_t> px4Port;
     /// Bench mode (--bench): physics replaced by this recording's rigid-body signals, replayed
     /// open loop (the replay substitute); empty = none. A profile's rigid_body replay source
     /// overrides it.

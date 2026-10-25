@@ -151,7 +151,10 @@ step resting on the ones before:
    the sample quadcopter holds 2 m within 6 cm in 8 m/s with gusts, `quad_x500_gusty.yaml`;
    MIL-HDBK-1797 equation numbers marked TODO(verify))
 7. `bridges/mavlink`: PX4 SITL lockstep (`HIL_SENSOR`, `HIL_GPS`, `HIL_ACTUATOR_CONTROLS`), then
-   ArduPilot's JSON interface
+   ArduPilot's JSON interface (PX4 **done** 2026-10-25: the square mission flies end to end with
+   PX4 v1.17.0; `ros-lyrical-mavlink` is a new rosdep dependency (`sudo apt install
+   ros-lyrical-mavlink`; on this machine unpacked to `~/.local/ros-mavlink` until installed).
+   ArduPilot: not yet)
 8. The acceptance mission (take-off, square in 8 m/s gusts, land; low-battery thrust sag), the
    tutorial, and rebase in flight
 

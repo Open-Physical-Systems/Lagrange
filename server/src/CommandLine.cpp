@@ -110,6 +110,8 @@ void printServerOptions(std::FILE* out) {
         "            and body motion, open loop (electrical, thermal, sensors live)\n"
         "  --ambient-temperature K  the site's air temperature: runs the thermal domain\n"
         "            (no default; a profile's thermal.ambient_temperature also sets it)\n"
+        "  --mavlink px4[:PORT]  fly a multicopter with PX4 SITL in lockstep: PX4 connects to\n"
+        "            TCP PORT (4560); start PX4 with tools/ci/px4_sitl.sh\n"
         "  --geo-origin LAT,LON,HEIGHT  where the world's origin is on the Earth (degrees,\n"
         "            degrees, m above WGS84), for GNSS, magnetometers and barometers (no default;\n"
         "            a profile's world.geo_origin also sets it)\n"
@@ -237,6 +239,16 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--ambient-temperature needs a temperature in K";
             }
             options.ambientTemperatureK = kelvin;
+        } else if (arg == "--mavlink") {
+            const char* text = value();
+            const std::string_view which = text != nullptr ? text : "";
+            unsigned port = 4560;
+            if (which != "px4" &&
+                !(which.starts_with("px4:") && std::sscanf(text + 4, "%u", &port) == 1 &&
+                  port > 0 && port < 65536)) {
+                return "--mavlink takes px4 or px4:PORT (PX4 SITL connects to TCP 4560 + instance)";
+            }
+            options.px4Port = static_cast<std::uint16_t>(port);
         } else if (arg == "--geo-origin") {
             const char* text = value();
             double lat = 0.0, lon = 0.0, height = 0.0;

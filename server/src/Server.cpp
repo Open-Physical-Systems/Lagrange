@@ -3,6 +3,7 @@
 #include "lagrange/electrical/IdealTorqueSource.hpp"
 #include "lagrange/electrical/Network.hpp"
 #include "lagrange/importers/Importers.hpp"
+#include "lagrange/mavlink/Px4Lockstep.hpp"
 #include "lagrange/proto/Connection.hpp"
 #include "lagrange/proto/Framing.hpp"
 #include "lagrange/recording/Recording.hpp"
@@ -443,8 +444,8 @@ struct Server::Impl {
         // So is one with the lidar on the GPU or rendering cameras (invariant 7: the CPU is the
         // reference).
         const bool rendering = cameraScene != nullptr && !off("sensors");
-        auto next = std::make_unique<Scheduler>(
-            SchedulerOptions{.deterministic = !bridge && !rayContext && !rendering});
+        auto next = std::make_unique<Scheduler>(SchedulerOptions{
+            .deterministic = !bridge && !rayContext && !rendering && !options.px4Port});
         if (off("rigid_body") && settings.rigidBodyReplay) {
             // Bench mode: physics replayed from a recording, open loop.
             next->add(std::make_unique<recording::ReplaySubstitute>("rigid_body",
@@ -556,7 +557,20 @@ struct Server::Impl {
             air.values.emplace(rotor_aero::kAirDensityKey, *settings.airDensityKgM3);
             next->add(std::make_unique<rotor_aero::RotorAero>(off("rotor_aero")),
                       ModuleConfig(air));
-            if (!controllers && !bridge && MulticopterController::canFly(WorldView(robot.world))) {
+            if (options.px4Port) {
+                if (!px4Link) {
+                    std::string why;
+                    px4Link = mavlink::openPx4Link(*options.px4Port, why);
+                    if (!px4Link) {
+                        return Unexpected{why};
+                    }
+                }
+                mavlink::Px4Settings px4;
+                px4.port = *options.px4Port;
+                px4.airDensity = *settings.airDensityKgM3;
+                next->add(mavlink::createPx4Lockstep(px4, px4Link));
+            } else if (!controllers && !bridge &&
+                       MulticopterController::canFly(WorldView(robot.world))) {
                 next->add(
                     std::make_unique<MulticopterController>(MulticopterController::Settings{}),
                     ModuleConfig(air));
@@ -613,13 +627,14 @@ struct Server::Impl {
     std::optional<double> appliedAirDensity;                              // from an applied profile
     std::optional<coords::Geodetic> appliedGeoOrigin;                     // from an applied profile
     std::map<std::string, ConfigValue, std::less<>> appliedAerodynamics;  // its wind
-    std::optional<bool> speedPrediction;                                  // from an applied profile
-    std::optional<std::string> electricalFidelity;                        // from an applied profile
-    std::optional<std::string> rigidBodyReplay;   // --bench, or an applied profile
-    std::optional<std::int64_t> rigidBodyDtNs;    // from an applied profile
-    std::optional<std::string> rigidBodyBackend;  // from an applied profile
-    std::optional<std::int64_t> electricalDtNs;   // from an applied profile
-    std::optional<ProfileSettings> pending;       // applied without restart: used at the next reset
+    std::shared_ptr<mavlink::Px4Link> px4Link;      // PX4's connection, across rebuilds of the run
+    std::optional<bool> speedPrediction;            // from an applied profile
+    std::optional<std::string> electricalFidelity;  // from an applied profile
+    std::optional<std::string> rigidBodyReplay;     // --bench, or an applied profile
+    std::optional<std::int64_t> rigidBodyDtNs;      // from an applied profile
+    std::optional<std::string> rigidBodyBackend;    // from an applied profile
+    std::optional<std::int64_t> electricalDtNs;     // from an applied profile
+    std::optional<ProfileSettings> pending;  // applied without restart: used at the next reset
 
     Status build() {
         DriveCommand* drive = nullptr;
@@ -3286,6 +3301,10 @@ Status Server::start() {
                   (!s.options.demoDrive ? "; it stands still until /cmd_vel arrives"
                    : s.bridge           ? "; a figure-eight demo drives until /cmd_vel arrives"
                                         : "; a figure-eight demo drives"));
+    } else if (s.options.px4Port) {
+        s.log(v1::LOG_LEVEL_INFO, "controller",
+              "PX4 SITL flies it through the MAVLink bridge on TCP port " +
+                  std::to_string(*s.options.px4Port) + " (lockstep once PX4 connects)");
     } else if (MulticopterController::canFly(WorldView(s.robot.world))) {
         s.log(v1::LOG_LEVEL_INFO, "controller",
               "multicopter: the built-in controller takes off after 1 s and hovers 2 m above the "

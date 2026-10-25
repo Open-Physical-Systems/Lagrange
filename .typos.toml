@@ -6,6 +6,7 @@ extend-exclude = ["LICENSE", "LICENSES/", "docs/imgs/", "*.usda", "*.mcap", "doc
 # Abbreviations and names that are not typos.
 sitl = "sitl"   # software in the loop
 lod = "lod"     # level of detail
+thr = "thr"     # PX4 parameter names: THR_MDL_FAC, MPC_THR_HOVER
 
 [default.extend-identifiers]
 # POSIX msghdr field.
