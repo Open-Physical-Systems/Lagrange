@@ -3,6 +3,8 @@
 #include "lagrange/module/IModule.hpp"
 
 #include <array>
+#include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -30,9 +32,25 @@ public:
         double attitudeHz{3.0};     // natural frequency of the attitude loop
         double damping{0.9};        // damping ratio of both
         double speedGain{0.02};     // N·m per rad/s of rotor speed error
+        // Limits on what a velocity command may ask for.
+        double maxHorizontalMps{5.0};
+        double maxVerticalMps{2.0};
+        double maxYawRateRadps{1.5};
+        double minHeightM{0.3};  // m above the start the set point never goes below
     };
 
-    explicit MulticopterController(Settings settings) : settings_(settings) {}
+    /// A velocity command: forward and left in the drone's heading frame, up, and yaw rate.
+    struct FlightCommand {
+        double forwardMps{0.0};
+        double leftMps{0.0};
+        double upMps{0.0};
+        double yawRateRadps{0.0};
+    };
+    /// Where commands come from (ROS /cmd_vel); nullopt: none recent, hold where it is.
+    using CommandSource = std::function<std::optional<FlightCommand>()>;
+
+    explicit MulticopterController(Settings settings, CommandSource commands = {})
+        : settings_(settings), commands_(std::move(commands)) {}
 
     [[nodiscard]] ModuleInfo info() const override;
     [[nodiscard]] Duration preferredStep() const override;
@@ -64,6 +82,9 @@ private:
     std::array<double, 3> inertia_{};  // base, principal, kg·m²
     std::array<double, 3> home_{};
     bool homed_{false};
+    CommandSource commands_;
+    std::array<double, 3> setpoint_{};  // world-local, m: where it holds or flies to
+    double heading_{0.0};               // rad, the yaw it holds
     SignalId pose_, twist_;
 };
 

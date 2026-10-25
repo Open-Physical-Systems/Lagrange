@@ -11,6 +11,8 @@
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/services/WrenchSum.hpp"
 
+#include <numbers>
+#include <optional>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -124,6 +126,61 @@ TEST(Multicopter, HoversOnItsBladesAndWithInvertedMotors) {
     EXPECT_GT(blades.rotorSpeed, 0.0);    // rotor 1 is ccw about its upward axis
     EXPECT_LT(inverted.rotorSpeed, 0.0);  // the same sense seen from above, about a downward axis
     EXPECT_NEAR(inverted.rotorSpeed, -blades.rotorSpeed, 0.01 * blades.rotorSpeed);
+}
+
+// Steering (/cmd_vel): velocity commands move the set point in the heading frame and turn the
+// heading; without commands the quadcopter holds where it is.
+TEST(Multicopter, FliesWhereItsVelocityCommandsSay) {
+    auto robot = loadModel(LAGRANGE_TEST_QUAD_USDA);
+    ASSERT_TRUE(robot) << robot.error();
+    Scheduler scheduler(SchedulerOptions{.deterministic = false});
+    scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+    ModuleConfigData power;
+    power.dt = 50_us;
+    power.values["exchange_step"] = 0.001;
+    scheduler.add(std::make_unique<electrical::ElectricalNetwork>(), ModuleConfig(power));
+    ModuleConfigData air;
+    air.values[rotor_aero::kAirDensityKey] = 1.225;
+    scheduler.add(std::make_unique<rotor_aero::RotorAero>(), ModuleConfig(air));
+    std::optional<MulticopterController::FlightCommand> command;
+    scheduler.add(std::make_unique<MulticopterController>(MulticopterController::Settings{},
+                                                          [&command] { return command; }),
+                  ModuleConfig(air));
+    scheduler.add(std::make_unique<services::WrenchSum>());
+    auto wired = scheduler.wire(WorldView(robot->world));
+    ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    const SignalBus& bus = scheduler.bus();
+    const SignalId pose = bus.find("body/base_link/pose");
+    double t = 0.0;
+    const auto fly = [&](double seconds) {
+        t += seconds;
+        EXPECT_TRUE(scheduler.stepUntil(SimTime{static_cast<std::int64_t>(t * 1e9)}).ok());
+        const std::span<const double> p = bus.readN(pose);
+        return std::array<double, 3>{p[0], p[1], p[2]};
+    };
+    const std::array<double, 3> hover = fly(5.0);
+    // Forward at 1 m/s for 3 s, then 3 s without commands: 3 m along x, and it stays there.
+    command = MulticopterController::FlightCommand{1.0, 0.0, 0.0, 0.0};
+    (void)fly(3.0);
+    command.reset();
+    const std::array<double, 3> stopped = fly(3.0);
+    EXPECT_NEAR(stopped[0] - hover[0], 3.0, 0.2);
+    EXPECT_NEAR(stopped[1] - hover[1], 0.0, 0.1);
+    EXPECT_NEAR(fly(2.0)[0], stopped[0], 0.05);  // holds
+    // Turn 90° left (π/4 rad/s for 2 s), then forward 2 m: along y now.
+    command = MulticopterController::FlightCommand{0.0, 0.0, 0.0, std::numbers::pi / 4.0};
+    (void)fly(2.0);
+    command = MulticopterController::FlightCommand{1.0, 0.0, 0.0, 0.0};
+    (void)fly(2.0);
+    command.reset();
+    const std::array<double, 3> turned = fly(3.0);
+    EXPECT_NEAR(turned[0] - stopped[0], 0.0, 0.2);
+    EXPECT_NEAR(turned[1] - stopped[1], 2.0, 0.2);
+    // Up 1 m/s for 1 s.
+    command = MulticopterController::FlightCommand{0.0, 0.0, 1.0, 0.0};
+    (void)fly(1.0);
+    command.reset();
+    EXPECT_NEAR(fly(3.0)[2] - turned[2], 1.0, 0.1);
 }
 
 }  // namespace

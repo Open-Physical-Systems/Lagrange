@@ -590,11 +590,22 @@ struct Server::Impl {
                 px4.airDensity = *settings.airDensityKgM3;
                 next->add(mavlink::createPx4Lockstep(px4, px4Link));
             } else if (!controllers && MulticopterController::canFly(WorldView(robot.world))) {
-                // With or without ROS: nothing on ROS flies a multicopter yet (no ros2_control
-                // controllers for rotors), so the built-in controller hovers it.
-                next->add(
-                    std::make_unique<MulticopterController>(MulticopterController::Settings{}),
-                    ModuleConfig(air));
+                // The built-in controller hovers it, and with ROS flies it by /cmd_vel: forward,
+                // left and up in m/s, yaw rate in rad/s; without a command for 0.5 s it holds.
+                MulticopterController::CommandSource commands;
+                if (bridge) {
+                    commands = [this]() -> std::optional<MulticopterController::FlightCommand> {
+                        const auto c = bridge->latestCommand(std::chrono::milliseconds(500));
+                        if (!c) {
+                            return std::nullopt;
+                        }
+                        return MulticopterController::FlightCommand{
+                            c->linearMps, c->lateralMps, c->verticalMps, c->angularRadps};
+                    };
+                }
+                next->add(std::make_unique<MulticopterController>(MulticopterController::Settings{},
+                                                                  std::move(commands)),
+                          ModuleConfig(air));
             }
         }
         ModuleConfigData sensing;
@@ -3365,8 +3376,9 @@ Status Server::start() {
                   std::to_string(*s.options.px4Port) + " (lockstep once PX4 connects)");
     } else if (MulticopterController::canFly(WorldView(s.robot.world))) {
         s.log(v1::LOG_LEVEL_INFO, "controller",
-              "multicopter: the built-in controller takes off after 1 s and hovers 2 m above the "
-              "start (until an autopilot flies it)");
+              std::string("multicopter: the built-in controller takes off after 1 s and hovers 2 m "
+                          "above the start") +
+                  (s.bridge ? "; /cmd_vel flies it (forward, left, up m/s; yaw rate rad/s)" : ""));
     } else {
         s.log(v1::LOG_LEVEL_WARN, "controller",
               "no demo driver: it needs exactly two actuated wheel joints, the robot has " +

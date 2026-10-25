@@ -110,7 +110,7 @@ struct Bridge::Impl {
 
     void take(const geometry_msgs::msg::Twist& twist) {
         const std::lock_guard<std::mutex> lock(commandMutex);
-        command = CmdVel{twist.linear.x, twist.angular.z};
+        command = CmdVel{twist.linear.x, twist.angular.z, twist.linear.y, twist.linear.z};
         commandAt = Clock::now();
     }
 
