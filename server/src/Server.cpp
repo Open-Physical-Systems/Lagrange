@@ -589,8 +589,9 @@ struct Server::Impl {
                 px4.port = *options.px4Port;
                 px4.airDensity = *settings.airDensityKgM3;
                 next->add(mavlink::createPx4Lockstep(px4, px4Link));
-            } else if (!controllers && !bridge &&
-                       MulticopterController::canFly(WorldView(robot.world))) {
+            } else if (!controllers && MulticopterController::canFly(WorldView(robot.world))) {
+                // With or without ROS: nothing on ROS flies a multicopter yet (no ros2_control
+                // controllers for rotors), so the built-in controller hovers it.
                 next->add(
                     std::make_unique<MulticopterController>(MulticopterController::Settings{}),
                     ModuleConfig(air));
