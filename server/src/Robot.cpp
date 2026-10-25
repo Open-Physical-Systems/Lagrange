@@ -570,6 +570,8 @@ const char* sensorSchema(SensorType kind) {
             return "MagnetometerAPI_1";
         case SensorType::Barometer:
             return "BarometerAPI_1";
+        case SensorType::Radar:
+            return "RadarAPI_1";
         case SensorType::Imu:
             break;
     }

@@ -5,6 +5,10 @@ every schema is version 1 and may change without a migration.
 
 ## Unreleased
 
+- **`RadarAPI_1`** in the sensor library for v0.6 (formats.md §3.8): carrier frequency, range,
+  fields of view, resolutions, transmit power, antenna gain, effective noise floor, detection
+  threshold; `bandwidth` as drafted is left out (the range resolution stands for it).
+
 - **Road library** for v0.6 (formats.md §3.11): `RoadLaneAPI_1`, one lane of a road network
   (centre line in the direction of travel, widths, type, speed limit, OpenDRIVE road and lane
   ids, the section's range along the road, successors and predecessors), written by the

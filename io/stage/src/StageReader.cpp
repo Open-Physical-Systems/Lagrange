@@ -775,6 +775,29 @@ private:
             type = SensorType::Magnetometer;
             scene.typeName = "Magnetometer";
             settings = {{"noise", real("sensor:magnetometer:noiseStd").value_or(0.0)}};
+        } else if (prim.HasAPI(TfToken("RadarAPI_1"))) {
+            type = SensorType::Radar;
+            scene.typeName = "Radar";
+            settings = {
+                {"carrier_frequency", real("sensor:radar:carrierFrequency").value_or(77e9)},
+                {"azimuth_resolution", real("sensor:radar:azimuthResolution").value_or(0.035)},
+                {"range_resolution", real("sensor:radar:rangeResolution").value_or(0.2)},
+                {"velocity_resolution", real("sensor:radar:velocityResolution").value_or(0.1)},
+                {"antenna_gain", real("sensor:radar:antennaGain").value_or(1.0)},
+                {"detection_threshold", real("sensor:radar:detectionThreshold").value_or(10.0)}};
+            for (const auto& [key, attribute] :
+                 {std::pair{"max_range", "sensor:radar:rangeMax"},
+                  std::pair{"azimuth_fov", "sensor:radar:azimuthFov"},
+                  std::pair{"elevation_fov", "sensor:radar:elevationFov"},
+                  std::pair{"tx_power", "sensor:radar:txPower"},
+                  std::pair{"noise_floor", "sensor:radar:noiseFloor"}}) {
+                const auto value = real(attribute);
+                if (!value || *value <= 0.0) {
+                    errors_.push_back(path + ": " + attribute + " is required and positive");
+                    return {};
+                }
+                settings[key] = *value;
+            }
         } else if (prim.HasAPI(TfToken("BarometerAPI_1"))) {
             type = SensorType::Barometer;
             scene.typeName = "Barometer";
@@ -786,7 +809,7 @@ private:
         } else {
             note(path +
                  ": a sensor without LidarAPI_1, ImuAPI_1, CameraSensorAPI_1, GnssAPI_1, "
-                 "MagnetometerAPI_1 or BarometerAPI_1 is not "
+                 "MagnetometerAPI_1, BarometerAPI_1 or RadarAPI_1 is not "
                  "simulated yet");
             scene.typeName = "Xform";
             return {};

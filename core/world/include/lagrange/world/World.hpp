@@ -52,7 +52,7 @@ struct ConvexHull {
     std::vector<std::array<std::uint32_t, 3>> triangles;
 };
 
-enum class SensorType : std::uint8_t { Imu, Lidar, Camera, Gnss, Magnetometer, Barometer };
+enum class SensorType : std::uint8_t { Imu, Lidar, Camera, Gnss, Magnetometer, Barometer, Radar };
 
 /// One applied API schema on one prim, with its attribute values read once at load.
 /// Lookups are by name, so they belong in declare() and init(), never in step().
