@@ -4,6 +4,7 @@ project(lagrange_aerodynamics VERSION 0.0.0 LANGUAGES CXX)
 find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
+find_package(lagrange_fields REQUIRED)
 
 add_library(lagrange_aerodynamics drag/src/Aerodynamics.cpp)
 lagrange_target_defaults(lagrange_aerodynamics)
@@ -13,7 +14,10 @@ target_include_directories(
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
 )
-target_link_libraries(lagrange_aerodynamics PUBLIC lagrange_core::lagrange_core)
+target_link_libraries(
+    lagrange_aerodynamics
+    PUBLIC lagrange_core::lagrange_core lagrange_fields::lagrange_fields
+)
 
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
 install(
@@ -32,5 +36,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(lagrange_core)
+ament_export_dependencies(lagrange_core lagrange_fields)
 ament_package()

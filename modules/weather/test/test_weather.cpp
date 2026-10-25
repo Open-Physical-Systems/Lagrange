@@ -1,5 +1,6 @@
 // The weather domain against closed forms (domains/weather.md §7): the atmosphere, Koschmieder
 // and Beer–Lambert, the Kim model, Marshall–Palmer, dust; and the module's signals.
+#include "lagrange/fields/Field.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/weather/Weather.hpp"
 
@@ -151,6 +152,23 @@ TEST(Weather, ClearHasNoFogRainOrDust) {
     EXPECT_EQ(r.read("env/friction_scale"), 1.0);
     EXPECT_EQ(r.read("sensor/lidar/contamination"), 0.0);
     EXPECT_EQ(r.read("env/air_temperature"), 283.15);
+}
+
+TEST(Weather, PublishesItsFogGrid) {
+    const std::string path = testing::TempDir() + "/fog_grid.nvdb";
+    ASSERT_TRUE(fields::writeScalarField(path, "fog", {{0.0, 0.0, 0.0}, 0.5, {9, 9, 5}},
+                                         [](const fields::Vec3& p) { return 0.01 + 0.01 * p[0]; }));
+    const World world = site();
+    ModuleConfigData c = siteConfig();
+    c.values["fog_field"] = path;
+    Fixture r = run(world, c);
+    ASSERT_TRUE(r.scheduler->stepUntil(SimTime{100'000'000}).ok());
+    const SignalBus& bus = r.scheduler->bus();
+    fields::FieldSignal signal;
+    const auto field = signal.read(bus, bus.find("env/extinction/field"));
+    ASSERT_TRUE(field);
+    EXPECT_NEAR(field->sampleScalar({2.0, 1.0, 1.0}), 0.03, 1e-6);
+    EXPECT_FALSE(signal.read(bus, bus.find("env/wind/velocity_field")));  // no wind grid
 }
 
 TEST(Weather, RefusesWithoutTheSite) {

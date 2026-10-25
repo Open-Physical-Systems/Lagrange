@@ -215,7 +215,9 @@
         "dust_concentration": { "type": "number", "minimum": 0, "description": "kg/m³ of airborne dust." },
         "dust_median_diameter": { "type": "number", "exclusiveMinimum": 0, "description": "m, the dust's median particle diameter." },
         "solar_irradiance": { "type": "number", "minimum": 0, "description": "W/m², direct normal." },
-        "sky_temperature": { "type": "number", "exclusiveMinimum": 0, "description": "K, for radiative exchange; default the air temperature." }
+        "sky_temperature": { "type": "number", "exclusiveMinimum": 0, "description": "K, for radiative exchange; default the air temperature." },
+        "fog_field": { "type": "string", "description": "A NanoVDB file (.nvdb): a grid of fog extinction (1/m), added to the visibility's." },
+        "wind_field": { "type": "string", "description": "A NanoVDB file (.nvdb): a grid of wind (m/s, ENU), the wind inside its bounds." }
       },
       "unevaluatedProperties": false
     },

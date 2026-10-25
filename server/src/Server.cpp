@@ -545,6 +545,9 @@ struct Server::Impl {
             for (const auto& [key, value] : options.weather) {
                 weather.values[key] = value;
             }
+            for (const auto& [key, value] : options.weatherFiles) {
+                weather.values[key] = value;
+            }
             for (const auto& [key, value] : settings.weather) {
                 weather.values[key] = value;
             }
@@ -563,6 +566,7 @@ struct Server::Impl {
         if (!WorldView(robot.world).instancesOf("AeroAPI_1").empty() && !off("aerodynamics")) {
             ModuleConfigData aero;
             aero.values.insert(settings.aerodynamics.begin(), settings.aerodynamics.end());
+            aero.values["weather"] = weatherInRun;  // its wind grid, if any
             if (!aero.values.contains("air_density") && settings.airDensityKgM3) {
                 aero.values.emplace("air_density", *settings.airDensityKgM3);
             }

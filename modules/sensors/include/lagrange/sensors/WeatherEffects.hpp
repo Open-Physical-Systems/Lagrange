@@ -59,18 +59,22 @@ struct Clutter {
 [[nodiscard]] double rainClutterProbability(const LidarClutter& c, double rainRateMps,
                                             double minRange);
 
-/// One beam's range in weather: the true range if the target is within the detection range,
-/// else no return (+inf); replaced by a nearer false return from fog or rain when the beam's
-/// uniform draws (u1 for fog, u2 for rain, u3 for where) say so.
+/// One beam's range in weather: the true range if the lidar equation still detects the target
+/// there (r·exp(σr + τ) ≤ R·(1 − c), τ the optical depth of a fog field along the beam up to
+/// it), else no return (+inf); replaced by a nearer false return from fog or rain when the
+/// beam's uniform draws (u1 for fog, u2 for rain, u3 for where) say so.
 [[nodiscard]] double weatherRange(double range, double minRange, double maxRange,
                                   const SensorWeather& w, const LidarClutter& c, double u1,
-                                  double u2, double u3);
+                                  double u2, double u3, double fieldDepth = 0.0);
 
 /// The camera's veil, per pixel, in place: L = L0·exp(−σd) + L_air·(1 − exp(−σd)) with d the
 /// depth (∞ for sky: all air light), then the dirty lens mixing in a grey haze of weight c/2.
 /// `rgba` is 8-bit RGBA, `depth` metres per pixel.
 void applyCameraWeather(std::span<std::uint8_t> rgba, std::span<const float> depth,
-                        double extinction, double contamination);
+                        double extinction, double contamination,
+                        std::span<const float> fieldDepth = {});
+/// (`fieldDepth`, when given: per pixel, a fog field's optical depth along the pixel's ray up to
+/// its depth, added to σ·d.)
 
 /// The air light of the veil (overcast sky), 8-bit RGB.
 inline constexpr std::uint8_t kAirLight[3]{190, 194, 200};

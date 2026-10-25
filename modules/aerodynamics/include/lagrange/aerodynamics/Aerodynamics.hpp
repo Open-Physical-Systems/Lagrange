@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lagrange/fields/Field.hpp"
 #include "lagrange/module/Expected.hpp"
 #include "lagrange/module/IModule.hpp"
 
@@ -82,6 +83,8 @@ private:
     std::array<double, 3> groundPoint_{};
     std::vector<Link> links_;
     SignalId gust_;
+    SignalId windField_;  // the weather's wind grid, when it runs
+    fields::FieldSignal windFieldSignal_;
     SignalId windVelocity_;
 };
 

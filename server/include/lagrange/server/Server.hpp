@@ -37,6 +37,8 @@ struct ServerOptions {
     /// first three are site parameters with no default: the weather does not run without them
     /// (the temperature falls back to --ambient-temperature).
     std::map<std::string, double, std::less<>> weather;
+    /// --weather's fields: fog_field and wind_field, NanoVDB files (.nvdb).
+    std::map<std::string, std::string, std::less<>> weatherFiles;
     /// Where world ENU (0, 0, 0) is on the Earth (--geo-origin; a profile's world.geo_origin
     /// overrides it). A site parameter with no default: GNSS, magnetometers and barometers do
     /// not run without it.

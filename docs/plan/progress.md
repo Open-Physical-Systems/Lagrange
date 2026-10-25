@@ -135,7 +135,10 @@ time-boxed. Order:
    GPU kernel not needed; weather.md §8; fog clutter uncalibrated (owed: fog-chamber data);
    `profiles/examples/amr_fog.yaml`)
 4. Fields infrastructure: OpenVDB/NanoVDB, field signals, CPU and GPU sampling, the viewer's
-   volume overlays; wind and fog fields
+   volume overlays; wind and fog fields (NanoVDB, CPU sampling, the fog and wind grids through
+   weather, lidar, camera and link drag **done** 2026-10-25: `lagrange_fields`, zlib-compressed
+   `.nvdb`, samples in `assets/fields/`. GPU sampling not needed yet (per beam on the CPU); the
+   viewer's overlays next)
 5. `modules/emi`: analytic sources and field maps, victims (magnetometer, IMU, encoder, CAN,
    radio)
 6. `modules/comms`: link budget, packet errors, CAN fault confinement; bridges drop and delay

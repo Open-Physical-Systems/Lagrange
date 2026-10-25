@@ -202,6 +202,14 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
         links_.push_back(std::move(link));
     }
     gust_ = d.output(spec("env/wind/gust", SignalType::Vec3, units::m_per_s, "world_local"));
+    // The weather's wind grid (config "weather": it runs): inside it, the mean wind is the grid's.
+    windField_ = SignalId{};
+    if (config.get<bool>("weather").value_or(false)) {
+        SignalSpec field =
+            spec("env/wind/velocity_field", SignalType::Field3D, units::m_per_s, "world_local");
+        field.feedback = true;
+        windField_ = d.input(field);
+    }
     windVelocity_ =
         d.output(spec("env/wind/velocity", SignalType::Vec3, units::m_per_s, "world_local"));
     return {};
@@ -224,6 +232,8 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
     const double from = wind_.fromDegrees * std::numbers::pi / 180.0;
     const Vec3 downwind{-std::sin(from), -std::cos(from), 0.0};
     const Vec3 left{-downwind[1], downwind[0], 0.0};
+    const std::shared_ptr<const fields::Field> field =
+        windField_.valid() ? windFieldSignal_.read(bus, windField_) : nullptr;
     for (std::size_t i = 0; i < links_.size(); ++i) {
         Link& link = links_[i];
         const std::span<const double> p = bus.readN(link.pose);
@@ -235,6 +245,14 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
         const double height = p[2] - groundPoint_[2];
         const double mean = meanWindAt(wind_, height);
         Vec3 air{mean * downwind[0], mean * downwind[1], 0.0};
+        if (field) {
+            const fields::Vec3 at{p[0] + arm[0], p[1] + arm[1], p[2] + arm[2]};
+            const auto& box = field->bounds();
+            if (at[0] >= box[0][0] && at[0] <= box[1][0] && at[1] >= box[0][1] &&
+                at[1] <= box[1][1] && at[2] >= box[0][2] && at[2] <= box[1][2]) {
+                air = field->sampleVector(at);
+            }
+        }
         Vec3 velocity{t[0] + spin[0], t[1] + spin[1], t[2] + spin[2]};
         if (wind_.dryden && wind_.speed > 0.0) {
             const double w20 = meanWindAt(wind_, kW20HeightM);

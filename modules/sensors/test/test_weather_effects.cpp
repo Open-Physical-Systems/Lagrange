@@ -70,6 +70,15 @@ TEST(LidarWeather, ABeamInWeather) {
     EXPECT_LE(r, 2.0);
 }
 
+TEST(LidarWeather, AFogFieldsDepthCountsAlongTheBeam) {
+    const LidarClutter c;
+    // A fog bank of optical depth 2 between the lidar and a target at 10 m: 10·e² = 74 m > 30 m.
+    EXPECT_EQ(weatherRange(10.0, 0.1, 30.0, {}, c, 0.99, 0.99, 0.5, 2.0),
+              std::numeric_limits<double>::infinity());
+    // A thin one (depth 0.5): 10·e^0.5 = 16.5 m, still within reach.
+    EXPECT_EQ(weatherRange(10.0, 0.1, 30.0, {}, c, 0.99, 0.99, 0.5, 0.5), 10.0);
+}
+
 TEST(CameraWeather, TheVeilIsKoschmieders) {
     // A black target at the visibility shows 2 % of the contrast it has against the air light.
     const double sigma = 3.912 / 100.0;
