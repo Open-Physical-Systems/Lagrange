@@ -1,0 +1,20 @@
+# profiles/examples/sedan_city.yaml — the sample sedan in the city block: MuJoCo, vehicle dynamics
+# with Magic Formula tyres, the electrical substitute (the drive torque reaches the wheels
+# exactly), the roof lidar, the camera and the IMU. Run:
+#   ros2 run lagrange_server lagrange run profiles/examples/sedan_city.yaml \
+#       --robot assets/robots/sedan/sedan.usda --world assets/worlds/city_block/city_block.usda
+schema_version: 1
+stage: robots/sedan/sedan.usda
+
+domains:
+  rigid_body:       { enabled: true,  backend: mujoco, dt: 0.001 }
+  electrical:       { enabled: false, substitute: ideal }
+  thermal:          { enabled: false, substitute: ambient }
+  aerodynamics:     { enabled: false, substitute: zero }
+  weather:          { enabled: false, substitute: clear }
+  emi:              { enabled: false, substitute: zero }
+  radiation:        { enabled: false, substitute: zero }
+  sensors:          { enabled: true }
+  vehicle_dynamics: { enabled: true,  tire_model: pacejka }
+
+time: { real_time_factor: 1.0 }

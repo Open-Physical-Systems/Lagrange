@@ -144,8 +144,9 @@ Expected<std::vector<Vehicle>, std::string> vehiclesOf(const WorldView& world) {
         }
         Vehicle v;
         v.chassis = *chassis;
-        v.name = raw.robots.empty() ? raw.bodies.names[*chassis]
-                                    : raw.robots.at(raw.bodies.robot[*chassis]);
+        v.name = raw.bodies.robot[*chassis] < raw.robots.size()
+                     ? raw.robots[raw.bodies.robot[*chassis]]
+                     : raw.bodies.names[*chassis];
         v.engine = inst->token("vehicle:powertrain").value_or("electric") == "ice_map";
         v.maxDriveTorque = inst->real("vehicle:maxDriveTorque").value_or(0.0);
         v.maxSteerAngle = inst->real("vehicle:maxSteerAngle").value_or(0.0);
@@ -185,9 +186,16 @@ Expected<std::vector<Vehicle>, std::string> vehiclesOf(const WorldView& world) {
             return Unexpected{where + "an electric powertrain needs vehicle:maxDriveTorque"};
         }
         const Pose& chassisRest = rest[v.chassis];
-        const std::uint32_t robot = raw.bodies.robot[v.chassis];
+        // The vehicle: the chassis and everything that hangs from it.
+        std::vector<bool> carried(raw.bodies.names.size(), false);
         for (std::uint32_t b = 0; b < raw.bodies.names.size(); ++b) {
-            if (raw.bodies.robot[b] == robot) {
+            for (BodyId a{b}; a != kWorldBody; a = raw.bodies.parent[a.index]) {
+                if (a.index == v.chassis) {
+                    carried[b] = true;
+                    break;
+                }
+            }
+            if (carried[b]) {
                 v.mass += raw.bodies.mass[b];
             }
         }
@@ -310,7 +318,7 @@ Expected<std::vector<Vehicle>, std::string> vehiclesOf(const WorldView& world) {
         // share of the weight there (by the centre of mass between the axles).
         Vec3 com{};
         for (std::uint32_t b = 0; b < raw.bodies.names.size(); ++b) {
-            if (raw.bodies.robot[b] == robot) {
+            if (carried[b]) {
                 const Vec3 c =
                     add(rest[b].position, rotate(rest[b].orientation, raw.bodies.comLocal[b]));
                 com = add(com, mul(c, raw.bodies.mass[b] / v.mass));
@@ -423,6 +431,7 @@ Status VehicleDynamics::declare(const WorldView& world, const ModuleConfig& conf
 Status VehicleDynamics::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     for (VehicleState& s : vehicles_) {
         s.delta = 0.0;
+        s.steerTarget = 0.0;
         s.currentGear = 1;
         s.shiftHold = 0.0;
         s.idealSpeed = 0.0;
@@ -469,9 +478,9 @@ void VehicleDynamics::stepVehicle(VehicleState& s, double dt, SignalBus& bus) {
 
     // Steering: rate limit, then the actuator's first-order lag.
     const double command = std::clamp(bus.read(s.steering), -v.maxSteerAngle, v.maxSteerAngle);
-    const double limited =
-        s.delta + std::clamp(command - s.delta, -v.steerRate * dt, v.steerRate * dt);
-    s.delta += (limited - s.delta) * (1.0 - std::exp(-dt / std::max(v.steerTimeConstant, 1e-6)));
+    s.steerTarget += std::clamp(command - s.steerTarget, -v.steerRate * dt, v.steerRate * dt);
+    s.delta +=
+        (s.steerTarget - s.delta) * (1.0 - std::exp(-dt / std::max(v.steerTimeConstant, 1e-6)));
 
     // Suspension: compression along the chassis's up from each wheel's mount.
     const std::size_t n = v.wheels.size();
@@ -722,6 +731,7 @@ void VehicleDynamics::stepVehicle(VehicleState& s, double dt, SignalBus& bus) {
 Status VehicleDynamics::saveState(StateWriter& writer) const {
     for (const VehicleState& s : vehicles_) {
         writer.put(s.delta);
+        writer.put(s.steerTarget);
         writer.put(s.currentGear);
         writer.put(s.shiftHold);
         writer.put(s.idealSpeed);
@@ -736,8 +746,8 @@ Status VehicleDynamics::saveState(StateWriter& writer) const {
 
 Status VehicleDynamics::restoreState(StateReader& reader) {
     for (VehicleState& s : vehicles_) {
-        bool ok = reader.get(s.delta) && reader.get(s.currentGear) && reader.get(s.shiftHold) &&
-                  reader.get(s.idealSpeed);
+        bool ok = reader.get(s.delta) && reader.get(s.steerTarget) && reader.get(s.currentGear) &&
+                  reader.get(s.shiftHold) && reader.get(s.idealSpeed);
         for (WheelState& w : s.wheels) {
             ok = ok && reader.get(w.longDeflection) && reader.get(w.latDeflection) &&
                  reader.get(w.compression);

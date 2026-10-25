@@ -137,7 +137,10 @@ fallback documented if Autoware is not available for Lyrical.
    **done** 2026-10-25, vehicle_dynamics.md §8: braking distance and steady cornering checked;
    the server wiring comes with the sample sedan; ISO manoeuvres owed)
 4. Sample sedan and a city block world, profiles, driving over ROS 2 (`/cmd_vel` or an Ackermann
-   command)
+   command) (**done** 2026-10-25: `assets/robots/sedan/` (URDF, imported USD, vehicle layer),
+   `assets/worlds/city_block/`, `profiles/examples/sedan_city.yaml`; `/cmd_vel` through the car
+   controller, a closed-loop demo circle until the first command; the loader names robots by
+   their top prim. An Ackermann message type is owed)
 5. `io/opendrive`: road network to USD meshes and lane tables (own reader)
 6. `modules/traffic`, `builtin` backend: lane-following vehicles, social-force pedestrians,
    traffic lights, as kinematic bodies

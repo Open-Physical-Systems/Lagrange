@@ -1,0 +1,890 @@
+<?xml version="1.0"?>
+<!--
+  A city block for the car samples (robot-classes.md, v0.6): two 14 m roads crossing at the
+  origin with centre and stop lines (visual, flush with the ground), raised pavements in the
+  four corners, twelve buildings set back 12 m from the junction and four poles at its corners.
+  The sample sedan's demo circle (5 m round the origin) fits in the junction. Fixed to the ground
+  (root link "world"); primitives only.
+-->
+<robot name="city_block">
+  <material name="asphalt"><color rgba="0.18 0.18 0.19 1"/></material>
+  <material name="paint"><color rgba="0.92 0.92 0.88 1"/></material>
+  <material name="pavement"><color rgba="0.62 0.6 0.56 1"/></material>
+  <material name="building"><color rgba="0.72 0.68 0.6 1"/></material>
+  <material name="metal"><color rgba="0.35 0.36 0.38 1"/></material>
+  <link name="world"/>
+  <link name="road_east_west">
+    <visual>
+      <geometry><box size="140 14 0.01"/></geometry>
+      <material name="asphalt"/>
+    </visual>
+  </link>
+  <joint name="road_east_west_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="road_east_west"/>
+    <origin xyz="0 0 0.005"/>
+  </joint>
+  <link name="road_north_south">
+    <visual>
+      <geometry><box size="14 140 0.01"/></geometry>
+      <material name="asphalt"/>
+    </visual>
+  </link>
+  <joint name="road_north_south_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="road_north_south"/>
+    <origin xyz="0 0 0.006"/>
+  </joint>
+  <link name="centre_ew_0">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_0_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_0"/>
+    <origin xyz="-65.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_0">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_0_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_0"/>
+    <origin xyz="0 -65.0 0.013"/>
+  </joint>
+  <link name="centre_ew_1">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_1_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_1"/>
+    <origin xyz="-60.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_1">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_1_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_1"/>
+    <origin xyz="0 -60.0 0.013"/>
+  </joint>
+  <link name="centre_ew_2">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_2_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_2"/>
+    <origin xyz="-55.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_2">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_2_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_2"/>
+    <origin xyz="0 -55.0 0.013"/>
+  </joint>
+  <link name="centre_ew_3">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_3_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_3"/>
+    <origin xyz="-50.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_3">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_3_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_3"/>
+    <origin xyz="0 -50.0 0.013"/>
+  </joint>
+  <link name="centre_ew_4">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_4_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_4"/>
+    <origin xyz="-45.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_4">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_4_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_4"/>
+    <origin xyz="0 -45.0 0.013"/>
+  </joint>
+  <link name="centre_ew_5">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_5_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_5"/>
+    <origin xyz="-40.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_5">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_5_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_5"/>
+    <origin xyz="0 -40.0 0.013"/>
+  </joint>
+  <link name="centre_ew_6">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_6_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_6"/>
+    <origin xyz="-35.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_6">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_6_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_6"/>
+    <origin xyz="0 -35.0 0.013"/>
+  </joint>
+  <link name="centre_ew_7">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_7_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_7"/>
+    <origin xyz="-30.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_7">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_7_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_7"/>
+    <origin xyz="0 -30.0 0.013"/>
+  </joint>
+  <link name="centre_ew_8">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_8_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_8"/>
+    <origin xyz="-25.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_8">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_8_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_8"/>
+    <origin xyz="0 -25.0 0.013"/>
+  </joint>
+  <link name="centre_ew_9">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_9_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_9"/>
+    <origin xyz="-20.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_9">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_9_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_9"/>
+    <origin xyz="0 -20.0 0.013"/>
+  </joint>
+  <link name="centre_ew_10">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_10_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_10"/>
+    <origin xyz="-15.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_10">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_10_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_10"/>
+    <origin xyz="0 -15.0 0.013"/>
+  </joint>
+  <link name="centre_ew_11">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_11_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_11"/>
+    <origin xyz="-10.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_11">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_11_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_11"/>
+    <origin xyz="0 -10.0 0.013"/>
+  </joint>
+  <link name="centre_ew_15">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_15_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_15"/>
+    <origin xyz="10.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_15">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_15_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_15"/>
+    <origin xyz="0 10.0 0.013"/>
+  </joint>
+  <link name="centre_ew_16">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_16_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_16"/>
+    <origin xyz="15.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_16">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_16_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_16"/>
+    <origin xyz="0 15.0 0.013"/>
+  </joint>
+  <link name="centre_ew_17">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_17_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_17"/>
+    <origin xyz="20.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_17">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_17_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_17"/>
+    <origin xyz="0 20.0 0.013"/>
+  </joint>
+  <link name="centre_ew_18">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_18_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_18"/>
+    <origin xyz="25.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_18">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_18_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_18"/>
+    <origin xyz="0 25.0 0.013"/>
+  </joint>
+  <link name="centre_ew_19">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_19_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_19"/>
+    <origin xyz="30.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_19">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_19_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_19"/>
+    <origin xyz="0 30.0 0.013"/>
+  </joint>
+  <link name="centre_ew_20">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_20_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_20"/>
+    <origin xyz="35.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_20">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_20_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_20"/>
+    <origin xyz="0 35.0 0.013"/>
+  </joint>
+  <link name="centre_ew_21">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_21_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_21"/>
+    <origin xyz="40.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_21">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_21_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_21"/>
+    <origin xyz="0 40.0 0.013"/>
+  </joint>
+  <link name="centre_ew_22">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_22_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_22"/>
+    <origin xyz="45.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_22">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_22_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_22"/>
+    <origin xyz="0 45.0 0.013"/>
+  </joint>
+  <link name="centre_ew_23">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_23_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_23"/>
+    <origin xyz="50.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_23">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_23_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_23"/>
+    <origin xyz="0 50.0 0.013"/>
+  </joint>
+  <link name="centre_ew_24">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_24_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_24"/>
+    <origin xyz="55.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_24">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_24_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_24"/>
+    <origin xyz="0 55.0 0.013"/>
+  </joint>
+  <link name="centre_ew_25">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_25_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_25"/>
+    <origin xyz="60.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_25">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_25_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_25"/>
+    <origin xyz="0 60.0 0.013"/>
+  </joint>
+  <link name="centre_ew_26">
+    <visual>
+      <geometry><box size="2.5 0.15 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ew_26_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ew_26"/>
+    <origin xyz="65.0 0 0.012"/>
+  </joint>
+  <link name="centre_ns_26">
+    <visual>
+      <geometry><box size="0.15 2.5 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="centre_ns_26_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="centre_ns_26"/>
+    <origin xyz="0 65.0 0.013"/>
+  </joint>
+  <link name="stop_line_0">
+    <visual>
+      <geometry><box size="0.4 7 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="stop_line_0_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="stop_line_0"/>
+    <origin xyz="9 -3.5 0.014"/>
+  </joint>
+  <link name="stop_line_1">
+    <visual>
+      <geometry><box size="0.4 7 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="stop_line_1_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="stop_line_1"/>
+    <origin xyz="-9 3.5 0.014"/>
+  </joint>
+  <link name="stop_line_2">
+    <visual>
+      <geometry><box size="7 0.4 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="stop_line_2_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="stop_line_2"/>
+    <origin xyz="3.5 9 0.014"/>
+  </joint>
+  <link name="stop_line_3">
+    <visual>
+      <geometry><box size="7 0.4 0.01"/></geometry>
+      <material name="paint"/>
+    </visual>
+  </link>
+  <joint name="stop_line_3_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="stop_line_3"/>
+    <origin xyz="-3.5 -9 0.014"/>
+  </joint>
+  <link name="pavement_ne">
+    <visual>
+      <geometry><box size="60 60 0.15"/></geometry>
+      <material name="pavement"/>
+    </visual>
+    <collision>
+      <geometry><box size="60 60 0.15"/></geometry>
+    </collision>
+  </link>
+  <joint name="pavement_ne_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="pavement_ne"/>
+    <origin xyz="37 37 0.075"/>
+  </joint>
+  <link name="pavement_se">
+    <visual>
+      <geometry><box size="60 60 0.15"/></geometry>
+      <material name="pavement"/>
+    </visual>
+    <collision>
+      <geometry><box size="60 60 0.15"/></geometry>
+    </collision>
+  </link>
+  <joint name="pavement_se_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="pavement_se"/>
+    <origin xyz="37 -37 0.075"/>
+  </joint>
+  <link name="pavement_nw">
+    <visual>
+      <geometry><box size="60 60 0.15"/></geometry>
+      <material name="pavement"/>
+    </visual>
+    <collision>
+      <geometry><box size="60 60 0.15"/></geometry>
+    </collision>
+  </link>
+  <joint name="pavement_nw_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="pavement_nw"/>
+    <origin xyz="-37 37 0.075"/>
+  </joint>
+  <link name="pavement_sw">
+    <visual>
+      <geometry><box size="60 60 0.15"/></geometry>
+      <material name="pavement"/>
+    </visual>
+    <collision>
+      <geometry><box size="60 60 0.15"/></geometry>
+    </collision>
+  </link>
+  <joint name="pavement_sw_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="pavement_sw"/>
+    <origin xyz="-37 -37 0.075"/>
+  </joint>
+  <link name="building_ne_tower">
+    <visual>
+      <geometry><box size="16 16 30"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="16 16 30"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_ne_tower_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_ne_tower"/>
+    <origin xyz="22 22 15.15"/>
+  </joint>
+  <link name="building_ne_low">
+    <visual>
+      <geometry><box size="20 14 9"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="20 14 9"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_ne_low_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_ne_low"/>
+    <origin xyz="46 21 4.65"/>
+  </joint>
+  <link name="building_ne_rear">
+    <visual>
+      <geometry><box size="30 18 14"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="30 18 14"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_ne_rear_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_ne_rear"/>
+    <origin xyz="32 46 7.15"/>
+  </joint>
+  <link name="building_nw_hall">
+    <visual>
+      <geometry><box size="22 18 12"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="22 18 12"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_nw_hall_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_nw_hall"/>
+    <origin xyz="-25 23 6.15"/>
+  </joint>
+  <link name="building_nw_flats">
+    <visual>
+      <geometry><box size="16 26 18"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="16 26 18"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_nw_flats_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_nw_flats"/>
+    <origin xyz="-48 33 9.15"/>
+  </joint>
+  <link name="building_nw_shop">
+    <visual>
+      <geometry><box size="14 10 6"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="14 10 6"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_nw_shop_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_nw_shop"/>
+    <origin xyz="-21 46 3.15"/>
+  </joint>
+  <link name="building_sw_office">
+    <visual>
+      <geometry><box size="18 18 22"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="18 18 22"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_sw_office_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_sw_office"/>
+    <origin xyz="-23 -23 11.15"/>
+  </joint>
+  <link name="building_sw_depot">
+    <visual>
+      <geometry><box size="28 16 8"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="28 16 8"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_sw_depot_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_sw_depot"/>
+    <origin xyz="-40 -48 4.15"/>
+  </joint>
+  <link name="building_sw_block">
+    <visual>
+      <geometry><box size="12 12 15"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="12 12 15"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_sw_block_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_sw_block"/>
+    <origin xyz="-48 -21 7.65"/>
+  </joint>
+  <link name="building_se_mall">
+    <visual>
+      <geometry><box size="26 20 10"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="26 20 10"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_se_mall_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_se_mall"/>
+    <origin xyz="27 -24 5.15"/>
+  </joint>
+  <link name="building_se_tower">
+    <visual>
+      <geometry><box size="14 14 40"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="14 14 40"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_se_tower_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_se_tower"/>
+    <origin xyz="48 -45 20.15"/>
+  </joint>
+  <link name="building_se_house">
+    <visual>
+      <geometry><box size="10 10 7"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="10 10 7"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_se_house_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_se_house"/>
+    <origin xyz="22 -48 3.65"/>
+  </joint>
+  <link name="pole_0">
+    <visual>
+      <geometry><box size="0.25 0.25 6"/></geometry>
+      <material name="metal"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.25 0.25 6"/></geometry>
+    </collision>
+  </link>
+  <joint name="pole_0_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="pole_0"/>
+    <origin xyz="9 9 3.15"/>
+  </joint>
+  <link name="pole_1">
+    <visual>
+      <geometry><box size="0.25 0.25 6"/></geometry>
+      <material name="metal"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.25 0.25 6"/></geometry>
+    </collision>
+  </link>
+  <joint name="pole_1_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="pole_1"/>
+    <origin xyz="-9 9 3.15"/>
+  </joint>
+  <link name="pole_2">
+    <visual>
+      <geometry><box size="0.25 0.25 6"/></geometry>
+      <material name="metal"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.25 0.25 6"/></geometry>
+    </collision>
+  </link>
+  <joint name="pole_2_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="pole_2"/>
+    <origin xyz="-9 -9 3.15"/>
+  </joint>
+  <link name="pole_3">
+    <visual>
+      <geometry><box size="0.25 0.25 6"/></geometry>
+      <material name="metal"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.25 0.25 6"/></geometry>
+    </collision>
+  </link>
+  <joint name="pole_3_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="pole_3"/>
+    <origin xyz="9 -9 3.15"/>
+  </joint>
+</robot>

@@ -1,0 +1,102 @@
+#usda 1.0
+(
+    defaultPrim = "sedan"
+    doc = """The sample sedan as a vehicle (domains/vehicle_dynamics.md): sedan_base.usda (made from
+    sedan.urdf by lagrange_import) at its ride height, with VehicleAPI_1 on the chassis and
+    WheelAPI_1 on the four spin joints. Electric, rear-wheel drive, 2000 N·m at the rear wheels
+    (a 150 kW motor through a 9:1 reduction), Magic Formula tyres from
+    assets/tyres/generic_205_55R16.tir. Illustrative values, not a real product."""
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    subLayers = [@./sedan_base.usda@]
+    upAxis = "Z"
+)
+
+over "sedan"
+{
+    double3 xformOp:translate = (0, 0, 0.316)    # the wheel centres' height at ride height
+
+    over "base_link" (
+        prepend apiSchemas = ["VehicleAPI_1"]
+    )
+    {
+        uniform token vehicle:powertrain = "electric"
+        double vehicle:maxDriveTorque = 2000           # N·m at the rear wheels
+        double vehicle:maxSteerAngle = 0.6             # rad, inner road wheel
+        double vehicle:steerRate = 0.8                 # rad/s
+        double vehicle:maxBrakeTorque = 8000           # N·m over the four wheels
+        double vehicle:brakeBias = 0.65
+        bool vehicle:abs = true
+        double vehicle:antiRollStiffnessFront = 20000  # N/m
+        double vehicle:antiRollStiffnessRear = 10000   # N/m
+    }
+
+    over "joints"
+    {
+        over "front_left_spin" (
+            prepend apiSchemas = ["WheelAPI_1"]
+        )
+        {
+            double wheel:radius = 0.316
+            double wheel:width = 0.205
+            uniform token wheel:axle = "front"
+            bool wheel:steered = true
+            bool wheel:driven = false
+            rel wheel:steerJoint = </sedan/joints/front_left_steer>
+            asset wheel:tyre = @../../tyres/generic_205_55R16.tir@
+            double wheel:restLength = 0.25        # m, mount to wheel centre at ride height
+            double wheel:travel = 0.09            # m to the bump stop
+            double wheel:springStiffness = 30000  # N/m at the wheel
+            double wheel:damping = 3000           # N·s/m
+        }
+
+        over "front_right_spin" (
+            prepend apiSchemas = ["WheelAPI_1"]
+        )
+        {
+            double wheel:radius = 0.316
+            double wheel:width = 0.205
+            uniform token wheel:axle = "front"
+            bool wheel:steered = true
+            bool wheel:driven = false
+            rel wheel:steerJoint = </sedan/joints/front_right_steer>
+            asset wheel:tyre = @../../tyres/generic_205_55R16.tir@
+            double wheel:restLength = 0.25        # m, mount to wheel centre at ride height
+            double wheel:travel = 0.09            # m to the bump stop
+            double wheel:springStiffness = 30000  # N/m at the wheel
+            double wheel:damping = 3000           # N·s/m
+        }
+
+        over "rear_left_spin" (
+            prepend apiSchemas = ["WheelAPI_1"]
+        )
+        {
+            double wheel:radius = 0.316
+            double wheel:width = 0.205
+            uniform token wheel:axle = "rear"
+            bool wheel:steered = false
+            bool wheel:driven = true
+            asset wheel:tyre = @../../tyres/generic_205_55R16.tir@
+            double wheel:restLength = 0.25        # m, mount to wheel centre at ride height
+            double wheel:travel = 0.09            # m to the bump stop
+            double wheel:springStiffness = 30000  # N/m at the wheel
+            double wheel:damping = 3000           # N·s/m
+        }
+
+        over "rear_right_spin" (
+            prepend apiSchemas = ["WheelAPI_1"]
+        )
+        {
+            double wheel:radius = 0.316
+            double wheel:width = 0.205
+            uniform token wheel:axle = "rear"
+            bool wheel:steered = false
+            bool wheel:driven = true
+            asset wheel:tyre = @../../tyres/generic_205_55R16.tir@
+            double wheel:restLength = 0.25        # m, mount to wheel centre at ride height
+            double wheel:travel = 0.09            # m to the bump stop
+            double wheel:springStiffness = 30000  # N/m at the wheel
+            double wheel:damping = 3000           # N·s/m
+        }
+    }
+}

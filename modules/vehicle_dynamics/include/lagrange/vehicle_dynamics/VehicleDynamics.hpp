@@ -118,7 +118,8 @@ private:
         SignalId throttle, brake, steering, gearIn, pose, twist, frictionScale;
         SignalId wrench, speed, engineSpeed, gear;
         std::vector<WheelState> wheels;
-        double delta{0.0};  // rad, the bicycle angle after rate limit and lag
+        double steerTarget{0.0};  // rad, the command after the rate limit
+        double delta{0.0};        // rad, the bicycle angle after the actuator's lag
         int currentGear{1};
         double shiftHold{0.0};   // s since the last shift
         double idealSpeed{0.0};  // m/s, the ideal substitute's speed

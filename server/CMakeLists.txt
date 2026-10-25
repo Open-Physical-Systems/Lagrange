@@ -17,6 +17,7 @@ find_package(lagrange_weather REQUIRED)
 find_package(lagrange_fields REQUIRED)
 find_package(lagrange_emi REQUIRED)
 find_package(lagrange_comms REQUIRED)
+find_package(lagrange_vehicle_dynamics REQUIRED)
 find_package(lagrange_mavlink REQUIRED)
 find_package(lagrange_recording REQUIRED)
 find_package(lagrange_meshes REQUIRED)
@@ -44,6 +45,7 @@ add_library(
     src/Server.cpp
     src/Robot.cpp
     src/DiffDrive.cpp
+    src/CarDrive.cpp
     src/Multicopter.cpp
     src/MapExport.cpp
     src/Profile.cpp
@@ -83,6 +85,7 @@ target_link_libraries(
         lagrange_fields::lagrange_fields
         lagrange_emi::lagrange_emi
         lagrange_comms::lagrange_comms
+        lagrange_vehicle_dynamics::lagrange_vehicle_dynamics
         lagrange_mavlink::lagrange_mavlink
         lagrange_recording::lagrange_recording
         lagrange_meshes::lagrange_meshes
@@ -212,6 +215,8 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_AMR_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.overlay.yaml"
             LAGRANGE_TEST_AMR_POWERED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive_powered.usda"
             LAGRANGE_TEST_AMR_WIFI_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive_wifi.usda"
+            LAGRANGE_TEST_SEDAN_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/sedan/sedan.usda"
+            LAGRANGE_TEST_CITY_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/city_block/city_block.usda"
             LAGRANGE_TEST_WAREHOUSE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.usda"
             LAGRANGE_TEST_ARM6_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.urdf"
             LAGRANGE_TEST_ARM6_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.overlay.yaml"

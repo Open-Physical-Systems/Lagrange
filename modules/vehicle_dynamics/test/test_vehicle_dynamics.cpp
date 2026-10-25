@@ -291,6 +291,22 @@ TEST(VehicleDynamics, TheIdealSubstituteFollowsTheBicycleModel) {
     EXPECT_NEAR(yaw, v * std::tan(0.1) / 2.7, 0.03 * v * std::tan(0.1) / 2.7);
 }
 
+TEST(VehicleDynamics, SteeringFollowsItsRateLimitThenItsLag) {
+    // steerRate 2 rad/s: a 0.4 rad step takes 0.2 s, plus the 50 ms lag.
+    auto r = drive(car(), [](double t, double) {
+        return std::array<double, 3>{0.0, 0.3, t >= 1.0 ? 0.4 : 0.0};
+    });
+    ASSERT_TRUE(r);
+    ASSERT_TRUE(stepTo(*r, 1.1));
+    // After 0.1 s the target is at 0.2 rad and the lag 50 ms behind a ramp: about 0.11 rad.
+    const double bicycle = 0.2 - 2.0 * 0.05 * (1.0 - std::exp(-0.1 / 0.05));
+    EXPECT_NEAR(r->read("wheel/front_right_spin/steer_angle"), ackermannAngle(bicycle, 2.7, -0.78),
+                0.01);
+    ASSERT_TRUE(stepTo(*r, 1.6));
+    EXPECT_NEAR(r->read("wheel/front_right_spin/steer_angle"), ackermannAngle(0.4, 2.7, -0.78),
+                1e-3);
+}
+
 TEST(VehicleDynamics, AckermannTurnsTheInnerWheelMore) {
     const double inner = ackermannAngle(0.2, 2.7, 0.78);
     const double outer = ackermannAngle(0.2, 2.7, -0.78);

@@ -20,6 +20,7 @@
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
+#include "lagrange/server/CarDrive.hpp"
 #include "lagrange/server/DiffDrive.hpp"
 #include "lagrange/server/Multicopter.hpp"
 #include "lagrange/server/Profile.hpp"
@@ -29,6 +30,7 @@
 #include "lagrange/services/WrenchSum.hpp"
 #include "lagrange/stage/Stage.hpp"
 #include "lagrange/thermal/ThermalNetwork.hpp"
+#include "lagrange/vehicle_dynamics/VehicleDynamics.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
 #include "lagrange/weather/Weather.hpp"
 #include "lagrange/world/LidarLayout.hpp"
@@ -507,6 +509,30 @@ struct Server::Impl {
             }
             next->add(std::move(drive));
             next->add(std::make_unique<DiffDriveController>(driveSettings()));
+        } else if (hasVehicles()) {
+            // A road vehicle: /cmd_vel through the car's driver to throttle, brake and
+            // steering; until the first command, its demo circle.
+            std::function<std::optional<VelocityCommand>()> external;
+            if (bridge) {
+                external = [this]() -> std::optional<VelocityCommand> {
+                    const auto command = bridge->latestCommand(std::chrono::milliseconds(500));
+                    if (!command) {
+                        return std::nullopt;
+                    }
+                    return VelocityCommand{command->linearMps, command->angularRadps};
+                };
+            }
+            next->add(std::make_unique<CarController>(external, options.demoDrive));
+        }
+        // Road vehicles (domains/vehicle_dynamics.md): before the electrical domain, which turns
+        // their drive and steering commands into joint torques.
+        if (hasVehicles()) {
+            auto [ground, friction] = groundQuery();
+            ModuleConfigData vehicle;
+            vehicle.values["tire_model"] = appliedTireModel.value_or("pacejka");
+            next->add(std::make_unique<vehicle_dynamics::VehicleDynamics>(
+                          off("vehicle_dynamics"), std::move(ground), std::move(friction)),
+                      ModuleConfig(vehicle));
         }
         // The electrical domain turns the controllers' torque commands into joint torques: the
         // network when the robot has motors (from USD or an overlay), else its ideal substitute
@@ -711,6 +737,38 @@ struct Server::Impl {
         settings.emiCoupling = appliedEmiCoupling;
         return settings;
     }
+    /// Whether the stage has road vehicles.
+    bool hasVehicles() const { return !WorldView(robot.world).instancesOf("VehicleAPI_1").empty(); }
+    /// A scene query over what wheels roll on: the fixed scenery's shapes and the ground
+    /// plane, with each shape's friction coefficient.
+    std::pair<std::shared_ptr<const services::SceneQuery>, std::vector<double>> groundQuery()
+        const {
+        const World& world = robot.world;
+        const std::vector<Pose> rest = restPoses(world);
+        const std::vector<bool> moving = movingBodies(world);
+        std::vector<sensors::ShapeCaster::Shape> shapes;
+        std::vector<double> friction;
+        for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
+            const BodyId owner = world.colliders.body[c];
+            if (owner != kWorldBody && moving[owner.index]) {
+                continue;
+            }
+            sensors::ShapeCaster::Shape shape;
+            shape.type = world.colliders.shape[c];
+            shape.size = world.colliders.size[c];
+            shape.pose = owner == kWorldBody
+                             ? world.colliders.poseInBody[c]
+                             : compose(rest[owner.index], world.colliders.poseInBody[c]);
+            shape.hull = shape.type == ShapeType::ConvexHull
+                             ? &world.hulls.at(world.colliders.hull[c])
+                             : nullptr;
+            shapes.push_back(shape);
+            friction.push_back(world.colliders.friction[c]);
+        }
+        auto caster = std::make_shared<sensors::ShapeCaster>();
+        caster->update(shapes);
+        return {std::move(caster), std::move(friction)};
+    }
     /// Whether the stage has radio links or CAN buses.
     bool hasComms() const {
         const WorldView world(robot.world);
@@ -787,6 +845,7 @@ struct Server::Impl {
     std::optional<std::string> rigidBodyReplay;             // --bench, or an applied profile
     std::optional<std::int64_t> rigidBodyDtNs;              // from an applied profile
     std::optional<std::string> rigidBodyBackend;            // from an applied profile
+    std::optional<std::string> appliedTireModel;            // vehicle_dynamics.tire_model
     std::optional<std::int64_t> electricalDtNs;             // from an applied profile
     std::optional<ProfileSettings> pending;  // applied without restart: used at the next reset
 
@@ -1861,6 +1920,11 @@ struct Server::Impl {
                     text += "]";
                 }
                 yaml += "  emi: " + text + "}\n";
+            } else if (std::string_view(row.domain) == "vehicle_dynamics" && hasVehicles()) {
+                yaml += substituted("vehicle_dynamics")
+                            ? "  vehicle_dynamics: {enabled: false, substitute: ideal}\n"
+                            : "  vehicle_dynamics: {enabled: true, tire_model: " +
+                                  appliedTireModel.value_or("pacejka") + "}\n";
             } else if (std::string_view(row.domain) == "comms" && hasComms()) {
                 yaml += substituted("comms") ? "  comms: {enabled: false, substitute: ideal}\n"
                                              : "  comms: {enabled: true}\n";
@@ -2624,6 +2688,9 @@ struct Server::Impl {
         if (hasComms()) {
             context.modules.insert("comms");
         }
+        if (hasVehicles()) {
+            context.modules.insert("vehicle_dynamics");
+        }
         for (const auto& [key, value] : options.weather) {
             context.weatherKnown.insert(key);
         }
@@ -2751,6 +2818,7 @@ struct Server::Impl {
         options.substituted = settings.substituted;
         rigidBodyDtNs = settings.rigidBodyDtNs;
         rigidBodyBackend = settings.rigidBodyBackend;
+        appliedTireModel = settings.tireModel;
         electricalDtNs = settings.electricalDtNs;
         thermalDtNs = settings.thermalDtNs;
         speedPrediction = settings.speedPrediction;
