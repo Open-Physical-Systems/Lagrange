@@ -27,8 +27,10 @@ struct BridgeSettings {
 
 /// A /cmd_vel message: forward speed and turn rate.
 struct CmdVel {
-    double linearMps{0.0};
-    double angularRadps{0.0};
+    double linearMps{0.0};     // forward (x)
+    double angularRadps{0.0};  // yaw rate (about z)
+    double lateralMps{0.0};    // left (y), for robots that move sideways (multicopters)
+    double verticalMps{0.0};   // up (z), likewise
 };
 
 /// What the viewer's ROS 2 workspace shows (lagrange.viewer.v1.RosGraph).
