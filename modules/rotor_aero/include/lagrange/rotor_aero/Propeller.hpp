@@ -3,6 +3,11 @@
 #include <string>
 #include <vector>
 
+namespace lagrange {
+struct Model;
+struct TriMesh;
+}  // namespace lagrange
+
 namespace lagrange::rotor_aero {
 
 /// A section's aerodynamics over the full circle of angles of attack (aerodynamics.md §2.1):
@@ -20,6 +25,10 @@ struct Aerofoil {
     double cdMin{0.0};
     double clAtCdMin{0.0};
     double cdLift{0.0};
+    // For drawing only: the section's mean-line camber (fraction of chord) and its position
+    // (NACA four-digit mean line); the thickness is the station's.
+    double camber{0.0};
+    double camberPosition{0.4};
 };
 
 /// Lift and drag coefficient of `a` at angle of attack `alpha` (rad, any value) and Mach number
@@ -105,6 +114,19 @@ private:
     int machs_{1};
     std::vector<Row> rows_;  // per Mach number, per inflow angle
 };
+
+/// The propeller's blades and hub as a triangle mesh in its own frame: thrust along +z, the first
+/// blade along +x, each blade's leading edge ahead in the propeller's hand and its cambered side
+/// to the front, sections of NACA four-digit shape (the station's thickness, the aerofoil's
+/// drawing camber).
+[[nodiscard]] TriMesh propellerMesh(const Propeller& p);
+
+/// Draws every rotor with a propeller file (aero:rotor:propeller) as its blades: the mesh on the
+/// rotor's link, turned so the propeller's thrust direction is the rotor's (the joint axis, or
+/// against it for a pusher), in place of the link's other visuals, which a propeller file
+/// replaces. A file that cannot be read is noted in model.notes and the link keeps its visuals.
+/// For a loaded model only: what an importer writes keeps the authored visuals.
+void addPropellerBlades(Model& model);
 
 /// Thrust and power coefficients of `p` at advance ratio J = V/(nD), as in propeller test reports:
 /// CT = T/(ρn²D⁴), CP = P/(ρn³D⁵). Speed of rotation given by `tipSpeed` (m/s).

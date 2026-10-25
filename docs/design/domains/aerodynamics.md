@@ -183,6 +183,8 @@ model has no stall-delay correction yet, so that range is not part of the test.
   rotor_aero may not use, invariant 1). Below z = 0.5 R the factor is held at its value there:
   the design's clamp at 0.25 R is where the formula diverges.
 - `bem` (§2.1): blade-element momentum on the propeller file's geometry, with hand and mount;
+  the server draws such rotors as their blades (`rotor_aero::addPropellerBlades`, NACA four-
+  digit sections from the file's thickness and drawing camber);
   checked against NACA Report 640 (§7.1). The built-in controller and the autopilot bridges'
   ESCs turn a pusher's motor the right way about its joint axis.
 - Not yet: advance-ratio corrections at the `coefficients` fidelity, edgewise flow and blade

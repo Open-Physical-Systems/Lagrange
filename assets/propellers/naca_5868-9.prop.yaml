@@ -32,6 +32,8 @@ aerofoils:
     cd_min: 0.0093
     cl_at_cd_min: 0.2
     cd_lift: 0.01
+    camber: 0.035        # drawing only: about the Clark Y's mean line
+    camber_position: 0.4
   round_shank:
     lift_slope: 0.0
     zero_lift_angle: 0.0

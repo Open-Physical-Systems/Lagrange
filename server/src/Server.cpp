@@ -631,6 +631,7 @@ struct Server::Impl {
         settings.airDensityKgM3 = appliedAirDensity ? appliedAirDensity : options.airDensityKgM3;
         settings.geoOrigin = appliedGeoOrigin ? appliedGeoOrigin : options.geoOrigin;
         settings.aerodynamics = appliedAerodynamics;
+        settings.rotorAero = appliedRotorAero;
         return settings;
     }
     /// The ambient temperature the run uses: an applied profile's, else the command line's.
@@ -642,6 +643,7 @@ struct Server::Impl {
     std::optional<double> appliedAirDensity;                              // from an applied profile
     std::optional<coords::Geodetic> appliedGeoOrigin;                     // from an applied profile
     std::map<std::string, ConfigValue, std::less<>> appliedAerodynamics;  // its wind
+    std::map<std::string, ConfigValue, std::less<>> appliedRotorAero;     // its rotor settings
     std::shared_ptr<mavlink::Px4Link> px4Link;  // PX4's connection, across rebuilds of the run
     std::shared_ptr<mavlink::ArduPilotLink> ardupilotLink;  // ArduPilot's, likewise
     std::optional<bool> speedPrediction;                    // from an applied profile
@@ -2441,9 +2443,17 @@ struct Server::Impl {
             item.set_message(issue.message);
         }
         if (check.settings) {
+            // The site parameters a profile leaves out are the running ones, as adopt keeps them.
             ProfileSettings previewed = *check.settings;
+            const ProfileSettings running = active();
             if (!previewed.ambientTemperatureK) {
                 previewed.ambientTemperatureK = ambient();
+            }
+            if (!previewed.airDensityKgM3) {
+                previewed.airDensityKgM3 = running.airDensityKgM3;
+            }
+            if (!previewed.geoOrigin) {
+                previewed.geoOrigin = running.geoOrigin;
             }
             auto preview = makeScheduler(previewed, nullptr);
             if (!preview) {
@@ -2535,6 +2545,7 @@ struct Server::Impl {
             appliedGeoOrigin = settings.geoOrigin;
         }
         appliedAerodynamics = settings.aerodynamics;
+        appliedRotorAero = settings.rotorAero;
         pending.reset();
         if (Status status = restart(); !status.ok()) {
             // Keep the run going on the profile it had.
@@ -3152,6 +3163,8 @@ Status Server::load() {
     }
     // Motors' rotors turn with their joints: physics gets their reflected inertia.
     electrical::applyRotorInertia(s.robot.world);
+    // Propellers with a propeller file are drawn as their blades.
+    rotor_aero::addPropellerBlades(s.robot);
     if (!s.options.ros && !s.options.ros2ControlParams.empty()) {
         return Status::error(StatusCode::InvalidConfig,
                              "--ros2-control needs the ROS 2 bridge: drop --no-ros");

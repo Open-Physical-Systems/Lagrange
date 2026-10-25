@@ -351,7 +351,7 @@ YAML, `*.prop.yaml`, `format: lagrange-propeller-1`. Samples are in `assets/prop
 | `diameter` | m | Tip diameter |
 | `blades` | 1 | Number of blades |
 | `hand` | — | `ccw` or `cw`: the sense of rotation, seen from the front (from where its thrust points), in which it makes thrust. A "right-hand" aircraft propeller is `ccw` here (clockwise seen from behind) |
-| `aerofoils.<name>` | — | Section data: `lift_slope` (1/rad, two-dimensional), `zero_lift_angle` (deg), `cl_max`, `cl_min`, `cd_min`, `cl_at_cd_min`, `cd_lift` (drag polar `cd = cd_min + cd_lift·(cl − cl_at_cd_min)²`) |
+| `aerofoils.<name>` | — | Section data: `lift_slope` (1/rad, two-dimensional), `zero_lift_angle` (deg), `cl_max`, `cl_min`, `cd_min`, `cl_at_cd_min`, `cd_lift` (drag polar `cd = cd_min + cd_lift·(cl − cl_at_cd_min)²`); for drawing only, `camber` and `camber_position` (NACA four-digit mean line, fractions of the chord) |
 | `stations[]` | — | Blade stations from root to tip: `r` (r/R), `chord` (c/R), `twist` (deg, the section's reference line against the plane of rotation), `thickness` (t/c, for drawing), `aerofoil` (a name above), and optionally `zero_lift_angle` and `cd_min` for that station |
 
 Every file says where its numbers come from in comments at its top; a propeller made up for a

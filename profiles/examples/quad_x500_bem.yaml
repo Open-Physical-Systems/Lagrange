@@ -1,0 +1,28 @@
+# profiles/examples/quad_x500_bem.yaml — the sample quadcopter flown on its propellers as built:
+# as quad_x500_hover.yaml (MuJoCo, the electrical network at 50 µs, the built-in controller
+# hovering 2 m above the start), but each rotor's thrust and torque come from its blades by
+# blade-element momentum (the propeller files in assets/propellers), with ground effect and
+# compressibility. Air density and speed of sound are this scenario's site parameters (ISA sea
+# level). Run:
+#   ros2 run lagrange_server lagrange run profiles/examples/quad_x500_bem.yaml \
+#       --robot assets/robots/quad_x500/quad_x500.usda --world none
+schema_version: 1
+stage: robots/quad_x500/quad_x500.usda
+
+# The site: PX4 SITL's default home (Zurich), so an autopilot and the sensors agree.
+world:
+  geo_origin: { latitude: 47.397742, longitude: 8.545594, height: 488.0 }
+
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: true,  fidelity: averaged, dt: 0.00005 }  # 50 µs: small fast motors
+  thermal:      { enabled: false, substitute: ambient }
+  aerodynamics: { enabled: false, substitute: zero }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: false, substitute: zero }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: true }
+  rotor_aero:   { enabled: true,  fidelity: bem, ground_effect: true, air_density: 1.225,
+                  speed_of_sound: 340.3 }
+
+time: { real_time_factor: 1.0 }

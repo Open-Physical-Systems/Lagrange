@@ -392,6 +392,7 @@ def Xform "quad_x500" (
             int aero:rotor:bladeCount = 2
             uniform token aero:rotor:direction = "ccw"
             double aero:rotor:powerCoeff = 0.0507
+            asset aero:rotor:propeller = @../../propellers/generic_10in_2blade_ccw.prop.yaml@
             double aero:rotor:radius = 0.127
             double aero:rotor:thrustCoeff = 0.125
             uniform token drive:angular:physics:type = "force"
@@ -411,6 +412,7 @@ def Xform "quad_x500" (
             int aero:rotor:bladeCount = 2
             uniform token aero:rotor:direction = "ccw"
             double aero:rotor:powerCoeff = 0.0507
+            asset aero:rotor:propeller = @../../propellers/generic_10in_2blade_ccw.prop.yaml@
             double aero:rotor:radius = 0.127
             double aero:rotor:thrustCoeff = 0.125
             uniform token drive:angular:physics:type = "force"
@@ -430,6 +432,7 @@ def Xform "quad_x500" (
             int aero:rotor:bladeCount = 2
             uniform token aero:rotor:direction = "cw"
             double aero:rotor:powerCoeff = 0.0507
+            asset aero:rotor:propeller = @../../propellers/generic_10in_2blade_cw.prop.yaml@
             double aero:rotor:radius = 0.127
             double aero:rotor:thrustCoeff = 0.125
             uniform token drive:angular:physics:type = "force"
@@ -449,6 +452,7 @@ def Xform "quad_x500" (
             int aero:rotor:bladeCount = 2
             uniform token aero:rotor:direction = "cw"
             double aero:rotor:powerCoeff = 0.0507
+            asset aero:rotor:propeller = @../../propellers/generic_10in_2blade_cw.prop.yaml@
             double aero:rotor:radius = 0.127
             double aero:rotor:thrustCoeff = 0.125
             uniform token drive:angular:physics:type = "force"

@@ -169,8 +169,12 @@ step resting on the ones before:
    8 % in CT and 6 % in CP over the attached-flow range, aerodynamics.md §7.1; the built-in
    controller and the PX4 and ArduPilot ESCs turn pushers the right way); (b) drawn blades made
    from the same file, sample propellers for the quadcopter (fixed two-blade, folding, three-
-   blade) and a quadcopter variant with pushers; (c) folding blades (hinged, opening as they
-   spin up); (d) edgewise flow in forward flight (H-force, flapping) and wind at the rotors
+   blade) and a quadcopter variant with pushers (blades and the fixed two-blade **done**
+   2026-10-25: generic 10-inch blades of each hand, NACA 6412 sections from NACA Report 586,
+   static CT and CP matched to the measured APC 10x4.7 SF; `quad_x500_bem.yaml` hovers on them;
+   a profile check from the viewer no longer drops the site's geo origin from its preview);
+   (c) folding blades (hinged, opening as they spin up); (d) edgewise flow in forward flight
+   (H-force, flapping) and wind at the rotors
 
 ## Defaults taken during the autonomous run
 

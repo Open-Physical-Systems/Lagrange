@@ -1,0 +1,40 @@
+# A generic 10-inch two-blade multicopter propeller, made up for the samples (not a product):
+# a chord distribution of the usual shape (widest near 0.4 R, narrowing to a rounded tip),
+# constant geometric pitch, NACA 6412 sections. Its two free choices, the chord scale (×1.3 of
+# the base shape) and the pitch (5.6 in, blade angle atan(P / 2πr)), were set so that its static
+# CT and CP by blade-element momentum (0.126, 0.0508) are those measured on an APC 10x4.7 SF by
+# the UIUC propeller database (CT 0.125, CP 0.0507; the sample quadcopter's coefficients), so
+# the coefficients and bem fidelities agree in hover; away from hover bem follows the geometry.
+#
+# Section data: NACA 6412 at the lowest Reynolds number of NACA Report 586 (Jacobs and Sherman,
+# 1937; public domain), figure 8, test R = 41,800 (effective about 110,000 with the variable-
+# density tunnel's turbulence factor of 2.64, the report's), which is where a 10-inch propeller
+# works near hover (chord about 30 mm at 57 m/s: R ≈ 110,000). Read off the chart: zero-lift
+# angle −5°, lift slope about 0.1 per degree, maximum lift 1.35, profile drag 0.023 at cl 0.7
+# rising to 0.027 at cl 0.2 (about twice the high-Reynolds-number value: laminar separation).
+# Chart readings to about ±5 %.
+format: lagrange-propeller-1
+name: Generic 10 in, 2 blades, ccw
+diameter: 0.254          # m
+blades: 2
+hand: ccw
+aerofoils:
+  naca6412_low_re:
+    lift_slope: 5.73     # 1/rad (0.1 per degree)
+    zero_lift_angle: -5.0  # deg
+    cl_max: 1.35
+    cl_min: -0.3         # TODO(verify): the chart's negative stall is off its range
+    cd_min: 0.023
+    cl_at_cd_min: 0.7
+    cd_lift: 0.016
+    camber: 0.06         # drawing: NACA 6412's mean line
+    camber_position: 0.4
+stations:
+  - {r: 0.15, chord: 0.1300, twist: 49.92, thickness: 0.20, aerofoil: naca6412_low_re}
+  - {r: 0.25, chord: 0.2080, twist: 35.49, thickness: 0.16, aerofoil: naca6412_low_re}
+  - {r: 0.40, chord: 0.2470, twist: 24.02, thickness: 0.13, aerofoil: naca6412_low_re}
+  - {r: 0.55, chord: 0.2340, twist: 17.96, thickness: 0.12, aerofoil: naca6412_low_re}
+  - {r: 0.70, chord: 0.1950, twist: 14.29, thickness: 0.12, aerofoil: naca6412_low_re}
+  - {r: 0.85, chord: 0.1430, twist: 11.84, thickness: 0.11, aerofoil: naca6412_low_re}
+  - {r: 0.95, chord: 0.0910, twist: 10.63, thickness: 0.10, aerofoil: naca6412_low_re}
+  - {r: 1.00, chord: 0.0520, twist: 10.11, thickness: 0.10, aerofoil: naca6412_low_re}

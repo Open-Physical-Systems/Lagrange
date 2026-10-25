@@ -11,6 +11,7 @@ add_library(
     lagrange_rotor_aero
     coefficients/src/RotorAero.cpp
     bem/src/Propeller.cpp
+    bem/src/PropellerMesh.cpp
 )
 lagrange_target_defaults(lagrange_rotor_aero)
 target_include_directories(
