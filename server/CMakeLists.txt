@@ -11,6 +11,9 @@ find_package(lagrange_rigid_body_substitutes REQUIRED)
 find_package(lagrange_sensors REQUIRED)
 find_package(lagrange_electrical REQUIRED)
 find_package(lagrange_thermal REQUIRED)
+find_package(lagrange_rotor_aero REQUIRED)
+find_package(lagrange_aerodynamics REQUIRED)
+find_package(lagrange_mavlink REQUIRED)
 find_package(lagrange_recording REQUIRED)
 find_package(lagrange_meshes REQUIRED)
 find_package(lagrange_ros2 REQUIRED)
@@ -37,6 +40,7 @@ add_library(
     src/Server.cpp
     src/Robot.cpp
     src/DiffDrive.cpp
+    src/Multicopter.cpp
     src/MapExport.cpp
     src/Profile.cpp
     src/Recorder.cpp
@@ -69,6 +73,9 @@ target_link_libraries(
         lagrange_sensors::lagrange_sensors
         lagrange_electrical::lagrange_electrical
         lagrange_thermal::lagrange_thermal
+        lagrange_rotor_aero::lagrange_rotor_aero
+        lagrange_aerodynamics::lagrange_aerodynamics
+        lagrange_mavlink::lagrange_mavlink
         lagrange_recording::lagrange_recording
         lagrange_meshes::lagrange_meshes
         lagrange_ros2::lagrange_ros2
@@ -163,15 +170,17 @@ if(BUILD_TESTING)
         test/test_recorder.cpp
         test/test_robot.cpp
         test/test_server.cpp
+        test/test_multicopter.cpp
         test/test_toggles.cpp
         test/test_usd_assets.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero"
         TIMEOUT 120
     )
     target_link_libraries(
         test_server
         lagrange_server
         lagrange_electrical::lagrange_electrical
+        lagrange_rotor_aero::lagrange_rotor_aero
         lagrange_rigid_body_jolt::lagrange_rigid_body_jolt
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
         lagrange_sensors::lagrange_sensors
@@ -198,13 +207,15 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_ARM6_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.overlay.yaml"
             LAGRANGE_TEST_RACK_BAKED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/rack_sample/rack_baked.usda"
             LAGRANGE_TEST_WORKCELL_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_arm6.urdf"
+            LAGRANGE_TEST_QUAD_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500.usda"
+            LAGRANGE_TEST_QUAD_INVERTED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500_inverted/quad_x500_inverted.usda"
     )
     # The arm with ros2_control in the loop: the standard spawner and joint_trajectory_controller.
     find_package(trajectory_msgs REQUIRED)
     ament_add_gtest(
         test_arm
         test/test_arm.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero"
         TIMEOUT 180
     )
     target_link_libraries(

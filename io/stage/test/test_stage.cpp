@@ -431,7 +431,7 @@ def Xform "bot"
     }
     def Xform "power"
     {
-        def Xform "battery" ( prepend apiSchemas = ["BatteryAPI_1", "PortAPI_1:dc_out", "AeroAPI_1"] )
+        def Xform "battery" ( prepend apiSchemas = ["BatteryAPI_1", "PortAPI_1:dc_out", "WeatherAPI_1"] )
         {
             uniform token elec:battery:chemistry = "lfp"
             int elec:battery:seriesCells = 16
@@ -519,9 +519,9 @@ TEST(StageReader, CollectsTheElectricalSchemas) {
     EXPECT_EQ(port->rel("elec:port:dc_out:connectedTo")[0], bus->prim);
 
     EXPECT_EQ(only(w, "ElectricalLoadAPI_1")->real("elec:load:power"), 45.0);
-    // AeroAPI_1 is not defined until the aerodynamics library exists (v0.4): noted, not an error.
+    // WeatherAPI_1 is not defined until the weather library exists (v0.5): noted, not an error.
     EXPECT_TRUE(std::any_of(model->notes.begin(), model->notes.end(), [](const std::string& n) {
-        return n.find("AeroAPI_1") != std::string::npos;
+        return n.find("WeatherAPI_1") != std::string::npos;
     }));
 }
 

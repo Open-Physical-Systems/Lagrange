@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <jsoncons/json.hpp>
 #include <jsoncons_ext/jsonschema/jsonschema.hpp>
+#include <numbers>
 
 #include <yaml-cpp/yaml.h>
 
@@ -144,6 +145,39 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 domain["ambient_temperature"].is_number()) {
                 settings.ambientTemperatureK = domain["ambient_temperature"].as<double>();
             }
+            if (name == "aerodynamics") {
+                for (const char* key : {"air_density", "wind_speed", "wind_from",
+                                        "wind_reference_height", "roughness_length"}) {
+                    if (domain.contains(key) && domain[key].is_number()) {
+                        settings.aerodynamics[key] = domain[key].as<double>();
+                    }
+                }
+                if (domain.contains("turbulence") && domain["turbulence"].is_string()) {
+                    settings.aerodynamics["turbulence"] = domain["turbulence"].as<std::string>();
+                }
+            }
+            if (name == "rotor_aero" && domain.contains("air_density") &&
+                domain["air_density"].is_number()) {
+                settings.airDensityKgM3 = domain["air_density"].as<double>();
+            }
+            if (name == "rotor_aero") {
+                for (const char* key : {"inflow_time_constant", "speed_of_sound"}) {
+                    if (domain.contains(key) && domain[key].is_number()) {
+                        settings.rotorAero[key] = domain[key].as<double>();
+                    }
+                }
+                if (domain.contains("fidelity") && domain["fidelity"].is_string()) {
+                    settings.rotorAero["fidelity"] = domain["fidelity"].as<std::string>();
+                }
+                if (domain.contains("ground_effect") && domain["ground_effect"].is_bool()) {
+                    settings.rotorAero["ground_effect"] = domain["ground_effect"].as<bool>();
+                }
+            }
+            if (name == "rotor_aero" && context.modules.contains("rotor_aero") &&
+                !settings.airDensityKgM3 && !context.airDensityKnown) {
+                error(check, at + "/air_density",
+                      "the rotors need the site's air density (kg/m³); it has no default");
+            }
             if (name == "thermal" && enabled && context.modules.contains("thermal") &&
                 !settings.ambientTemperatureK && !context.ambientKnown) {
                 error(check, at + "/ambient_temperature",
@@ -256,8 +290,26 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
             warning(check, "/time/end", "not applied yet: the run does not stop by itself");
         }
     }
-    for (const char* key : {"environment", "seed", "deterministic", "tier", "batch", "world",
-                            "bridges", "scenario", "record"}) {
+    if (profile.contains("world") && profile["world"].is_object()) {
+        const jsoncons::json& world = profile["world"];
+        if (world.contains("geo_origin") && world["geo_origin"].is_object()) {
+            const jsoncons::json& g = world["geo_origin"];
+            if (g.contains("latitude") && g.contains("longitude") && g.contains("height")) {
+                constexpr double kDegree = std::numbers::pi / 180.0;
+                settings.geoOrigin = coords::Geodetic{g["latitude"].as<double>() * kDegree,
+                                                      g["longitude"].as<double>() * kDegree,
+                                                      g["height"].as<double>()};
+            }
+        }
+        for (const auto& member : world.object_range()) {
+            if (member.key() != "geo_origin") {
+                warning(check, "/world/" + std::string(member.key()),
+                        "not applied by this server yet");
+            }
+        }
+    }
+    for (const char* key : {"environment", "seed", "deterministic", "tier", "batch", "bridges",
+                            "scenario", "record"}) {
         if (profile.contains(key)) {
             warning(check, std::string("/") + key,
                     std::string("not applied by this server yet") +

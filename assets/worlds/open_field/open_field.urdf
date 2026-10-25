@@ -1,0 +1,191 @@
+<?xml version="1.0"?>
+<!--
+  An open field for the drone samples (robot-classes.md §5): the loaders' 50 m ground slab with a
+  painted landing pad at the origin (visual only, flush with the ground), a windsock on a pole
+  4 m from the pad, four trees and a shed, all more than 15 m from the pad so that the 10 m
+  mission square at 5 m (tools/ci/px4_mission.sh) flies clear of them, all fixed to the ground
+  (root link "world"). Primitives only, so it needs no mesh files.
+-->
+<robot name="open_field">
+  <material name="pad"><color rgba="0.95 0.55 0.15 1"/></material>
+  <material name="mark"><color rgba="0.96 0.96 0.94 1"/></material>
+  <material name="metal"><color rgba="0.62 0.64 0.66 1"/></material>
+  <material name="windsock"><color rgba="0.93 0.33 0.12 1"/></material>
+  <material name="bark"><color rgba="0.40 0.28 0.18 1"/></material>
+  <material name="leaves"><color rgba="0.24 0.48 0.22 1"/></material>
+  <material name="shed"><color rgba="0.62 0.52 0.40 1"/></material>
+  <link name="world"/>
+  <link name="landing_pad">
+    <visual>
+      <geometry><box size="2 2 0.005"/></geometry>
+      <material name="pad"/>
+    </visual>
+  </link>
+  <joint name="landing_pad_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="landing_pad"/>
+    <origin xyz="0 0 0.0025"/>
+  </joint>
+  <link name="landing_pad_mark">
+    <visual>
+      <geometry><box size="1.2 0.2 0.006"/></geometry>
+      <material name="mark"/>
+    </visual>
+  </link>
+  <joint name="landing_pad_mark_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="landing_pad_mark"/>
+    <origin xyz="0 0 0.003"/>
+  </joint>
+  <link name="windsock_pole">
+    <visual>
+      <geometry><cylinder radius="0.04" length="4"/></geometry>
+      <material name="metal"/>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.04" length="4"/></geometry>
+    </collision>
+  </link>
+  <joint name="windsock_pole_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="windsock_pole"/>
+    <origin xyz="-4 4 2"/>
+  </joint>
+  <link name="windsock">
+    <visual>
+      <geometry><cylinder radius="0.15" length="0.8"/></geometry>
+      <material name="windsock"/>
+    </visual>
+  </link>
+  <joint name="windsock_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="windsock"/>
+    <origin xyz="-4.4 4 3.8" rpy="0 1.5707963 0"/>
+  </joint>
+  <link name="tree_1_trunk">
+    <visual>
+      <geometry><cylinder radius="0.25" length="3"/></geometry>
+      <material name="bark"/>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.25" length="3"/></geometry>
+    </collision>
+  </link>
+  <joint name="tree_1_trunk_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="tree_1_trunk"/>
+    <origin xyz="18 8 1.5"/>
+  </joint>
+  <link name="tree_1_crown">
+    <visual>
+      <geometry><sphere radius="1.8"/></geometry>
+      <material name="leaves"/>
+    </visual>
+    <collision>
+      <geometry><sphere radius="1.8"/></geometry>
+    </collision>
+  </link>
+  <joint name="tree_1_crown_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="tree_1_crown"/>
+    <origin xyz="18 8 4.3"/>
+  </joint>
+  <link name="tree_2_trunk">
+    <visual>
+      <geometry><cylinder radius="0.25" length="3"/></geometry>
+      <material name="bark"/>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.25" length="3"/></geometry>
+    </collision>
+  </link>
+  <joint name="tree_2_trunk_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="tree_2_trunk"/>
+    <origin xyz="-16 -14 1.5"/>
+  </joint>
+  <link name="tree_2_crown">
+    <visual>
+      <geometry><sphere radius="1.8"/></geometry>
+      <material name="leaves"/>
+    </visual>
+    <collision>
+      <geometry><sphere radius="1.8"/></geometry>
+    </collision>
+  </link>
+  <joint name="tree_2_crown_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="tree_2_crown"/>
+    <origin xyz="-16 -14 4.3"/>
+  </joint>
+  <link name="tree_3_trunk">
+    <visual>
+      <geometry><cylinder radius="0.25" length="3"/></geometry>
+      <material name="bark"/>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.25" length="3"/></geometry>
+    </collision>
+  </link>
+  <joint name="tree_3_trunk_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="tree_3_trunk"/>
+    <origin xyz="14 -19 1.5"/>
+  </joint>
+  <link name="tree_3_crown">
+    <visual>
+      <geometry><sphere radius="1.8"/></geometry>
+      <material name="leaves"/>
+    </visual>
+    <collision>
+      <geometry><sphere radius="1.8"/></geometry>
+    </collision>
+  </link>
+  <joint name="tree_3_crown_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="tree_3_crown"/>
+    <origin xyz="14 -19 4.3"/>
+  </joint>
+  <link name="tree_4_trunk">
+    <visual>
+      <geometry><cylinder radius="0.25" length="3"/></geometry>
+      <material name="bark"/>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.25" length="3"/></geometry>
+    </collision>
+  </link>
+  <joint name="tree_4_trunk_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="tree_4_trunk"/>
+    <origin xyz="-20 10 1.5"/>
+  </joint>
+  <link name="tree_4_crown">
+    <visual>
+      <geometry><sphere radius="1.8"/></geometry>
+      <material name="leaves"/>
+    </visual>
+    <collision>
+      <geometry><sphere radius="1.8"/></geometry>
+    </collision>
+  </link>
+  <joint name="tree_4_crown_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="tree_4_crown"/>
+    <origin xyz="-20 10 4.3"/>
+  </joint>
+  <link name="shed">
+    <visual>
+      <geometry><box size="4 3 2.5"/></geometry>
+      <material name="shed"/>
+    </visual>
+    <collision>
+      <geometry><box size="4 3 2.5"/></geometry>
+    </collision>
+  </link>
+  <joint name="shed_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="shed"/>
+    <origin xyz="-18 -2 1.25"/>
+  </joint>
+</robot>

@@ -12,6 +12,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <numbers>
 #include <regex>
 #include <set>
 #include <simulation_interfaces/msg/simulator_features.hpp>
@@ -48,12 +49,16 @@
 #include <rmw/rmw.h>
 #include <rosgraph_msgs/msg/clock.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
+#include <sensor_msgs/msg/fluid_pressure.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
+#include <sensor_msgs/msg/magnetic_field.hpp>
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/point_field.hpp>
+#include <sensor_msgs/msg/temperature.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <tf2_msgs/msg/tf_message.hpp>
 
@@ -142,10 +147,24 @@ struct Bridge::Impl {
         SimTime sent{-1};
         rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr publisher;
     };
+    // GNSS, magnetometer and barometer: /<sensor>/fix, /<sensor>/field, /<sensor>/pressure and
+    // /<sensor>/temperature.
+    struct Geo {
+        SensorType type{SensorType::Gnss};
+        std::string name;
+        SignalId first, second, third, fourth;  // lat lon alt fix | field | pressure temperature
+        double noise{0.0}, verticalNoise{0.0};
+        SimTime sent{-1};
+        rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr fix;
+        rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr field;
+        rclcpp::Publisher<sensor_msgs::msg::FluidPressure>::SharedPtr pressure;
+        rclcpp::Publisher<sensor_msgs::msg::Temperature>::SharedPtr temperature;
+    };
     std::vector<Joint> joints;
     std::vector<Lidar> lidars;
     std::vector<Camera> cameras;
     std::vector<Imu> imus;
+    std::vector<Geo> geos;
     SignalId basePose, baseTwist;
     SimTime lastClock{-1};
     SimTime lastState{-1};
@@ -391,6 +410,7 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
     std::vector<Impl::Lidar> lidars;
     std::vector<Impl::Camera> cameras;
     std::vector<Impl::Imu> imus;
+    std::vector<Impl::Geo> geos;
     for (std::size_t i = 0; i < sensors.names.size(); ++i) {
         const std::string& name = sensors.names[i];
         geometry_msgs::msg::TransformStamped mount;
@@ -450,7 +470,53 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             mounts.transforms.push_back(optical);
             cameras.back().image = bus.find("sensor/" + name + "/image");
             cameras.back().depth = bus.find("sensor/" + name + "/depth");
-        } else {
+        } else if (sensors.type[i] == SensorType::Gnss ||
+                   sensors.type[i] == SensorType::Magnetometer ||
+                   sensors.type[i] == SensorType::Barometer) {
+            Impl::Geo geo;
+            geo.type = sensors.type[i];
+            geo.name = name;
+            const std::string base = "sensor/" + name + "/";
+            for (const Impl::Geo& old : s.geos) {
+                if (old.name == name) {  // keep subscribers across attach() calls
+                    geo.fix = old.fix;
+                    geo.field = old.field;
+                    geo.pressure = old.pressure;
+                    geo.temperature = old.temperature;
+                }
+            }
+            const auto qos = rclcpp::SensorDataQoS();
+            if (geo.type == SensorType::Gnss) {
+                geo.first = bus.find(base + "latitude");
+                geo.second = bus.find(base + "longitude");
+                geo.third = bus.find(base + "altitude");
+                geo.fourth = bus.find(base + "fix");
+                geo.noise = get("horizontal_noise", 0.0);
+                geo.verticalNoise = get("vertical_noise", 0.0);
+                if (!geo.fix) {
+                    geo.fix = s.node->create_publisher<sensor_msgs::msg::NavSatFix>(
+                        "/" + name + "/fix", qos);
+                }
+            } else if (geo.type == SensorType::Magnetometer) {
+                geo.first = bus.find(base + "field");
+                geo.noise = get("noise", 0.0);
+                if (!geo.field) {
+                    geo.field = s.node->create_publisher<sensor_msgs::msg::MagneticField>(
+                        "/" + name + "/field", qos);
+                }
+            } else {
+                geo.first = bus.find(base + "pressure");
+                geo.second = bus.find(base + "temperature");
+                geo.noise = get("noise", 0.0);
+                if (!geo.pressure) {
+                    geo.pressure = s.node->create_publisher<sensor_msgs::msg::FluidPressure>(
+                        "/" + name + "/pressure", qos);
+                    geo.temperature = s.node->create_publisher<sensor_msgs::msg::Temperature>(
+                        "/" + name + "/temperature", qos);
+                }
+            }
+            geos.push_back(std::move(geo));
+        } else if (sensors.type[i] == SensorType::Imu) {
             Impl::Imu imu;
             imu.frame = name;
             imu.topic = imuCount == 1 ? "/imu" : "/" + name + "/imu";
@@ -474,6 +540,7 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
     s.lidars = std::move(lidars);
     s.cameras = std::move(cameras);
     s.imus = std::move(imus);
+    s.geos = std::move(geos);
     s.lastClock = SimTime{-1};
     s.lastState = SimTime{-1};
     if (!mounts.transforms.empty()) {
@@ -624,6 +691,62 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
         }
         imu.publisher->publish(message);
         s.counters[imu.topic].add(330);
+    }
+
+    for (Impl::Geo& geo : s.geos) {
+        // Not running without the site's geo origin: no signals, nothing to publish.
+        if (!geo.first.valid() || bus.stamp(geo.first) == geo.sent) {
+            continue;
+        }
+        geo.sent = bus.stamp(geo.first);
+        const auto stamp = stampOf(geo.sent);
+        if (geo.type == SensorType::Gnss) {
+            constexpr double kDegrees = 180.0 / std::numbers::pi;
+            sensor_msgs::msg::NavSatFix fix;
+            fix.header.stamp = stamp;
+            fix.header.frame_id = geo.name;
+            fix.latitude = bus.read(geo.first) * kDegrees;
+            fix.longitude = bus.read(geo.second) * kDegrees;
+            fix.altitude = bus.read(geo.third);  // above the WGS84 ellipsoid, as the message says
+            fix.status.status = bus.read(geo.fourth) >= 2.0
+                                    ? sensor_msgs::msg::NavSatStatus::STATUS_FIX
+                                    : sensor_msgs::msg::NavSatStatus::STATUS_NO_FIX;
+            fix.status.service = sensor_msgs::msg::NavSatStatus::SERVICE_GPS;
+            fix.position_covariance.at(0) = geo.noise * geo.noise;
+            fix.position_covariance.at(4) = geo.noise * geo.noise;
+            fix.position_covariance.at(8) = geo.verticalNoise * geo.verticalNoise;
+            fix.position_covariance_type =
+                sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_DIAGONAL_KNOWN;
+            geo.fix->publish(fix);
+            s.counters["/" + geo.name + "/fix"].add(120);
+        } else if (geo.type == SensorType::Magnetometer) {
+            const std::span<const double> b = bus.readN(geo.first);
+            sensor_msgs::msg::MagneticField field;
+            field.header.stamp = stamp;
+            field.header.frame_id = geo.name;
+            field.magnetic_field.x = b[0];
+            field.magnetic_field.y = b[1];
+            field.magnetic_field.z = b[2];
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                field.magnetic_field_covariance.at(axis * 4) = geo.noise * geo.noise;
+            }
+            geo.field->publish(field);
+            s.counters["/" + geo.name + "/field"].add(100);
+        } else {
+            sensor_msgs::msg::FluidPressure pressure;
+            pressure.header.stamp = stamp;
+            pressure.header.frame_id = geo.name;
+            pressure.fluid_pressure = bus.read(geo.first);
+            pressure.variance = geo.noise * geo.noise;
+            geo.pressure->publish(pressure);
+            sensor_msgs::msg::Temperature temperature;
+            temperature.header = pressure.header;
+            constexpr double kCelsiusZero = 273.15;  // K
+            temperature.temperature = bus.read(geo.second) - kCelsiusZero;
+            geo.temperature->publish(temperature);
+            s.counters["/" + geo.name + "/pressure"].add(40);
+            s.counters["/" + geo.name + "/temperature"].add(40);
+        }
     }
 }
 

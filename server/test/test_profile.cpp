@@ -132,6 +132,24 @@ TEST(Profile, AppliesTheRealTimeFactorAndWarnsAboutWhatItIgnores) {
     EXPECT_TRUE(hasIssue(check, "/record", false)) << issues(check);
 }
 
+TEST(Profile, PassesTheRotorSettingsToTheRotors) {
+    ProfileContext c = context();
+    c.modules.insert("rotor_aero");
+    const ProfileCheck check = checkProfile(
+        profile() +
+            "  rotor_aero: {enabled: true, fidelity: bem, air_density: 1.225, "
+            "speed_of_sound: 340.3, ground_effect: false, inflow_time_constant: 0.02}\n",
+        schema(), c);
+    EXPECT_TRUE(check.valid) << issues(check);
+    ASSERT_TRUE(check.settings);
+    EXPECT_EQ(check.settings->airDensityKgM3, 1.225);
+    const auto& r = check.settings->rotorAero;
+    EXPECT_EQ(std::get<std::string>(r.at("fidelity")), "bem");
+    EXPECT_EQ(std::get<double>(r.at("speed_of_sound")), 340.3);
+    EXPECT_EQ(std::get<bool>(r.at("ground_effect")), false);
+    EXPECT_EQ(std::get<double>(r.at("inflow_time_constant")), 0.02);
+}
+
 TEST(Profile, ReportsBadYamlWithItsLine) {
     const ProfileCheck check = checkProfile("schema_version: 1\ndomains: [\n", schema(), context());
     ASSERT_FALSE(check.valid);

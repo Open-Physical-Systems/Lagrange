@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <numbers>
 #include <set>
 #include <string>
 #include <unistd.h>
@@ -317,6 +318,55 @@ TEST_F(ServerTest, LidarFramesSeeTheWarehouseWalls) {
     float x = 0.0F;
     std::memcpy(&x, cloud.data().inline_().data() + 360 * 16, sizeof(float));
     EXPECT_NEAR(x, 8.8, 0.06);
+}
+
+/// The sample quadcopter at its site (air density, geo origin from the command line).
+class QuadServerTest : public ServerTest {
+protected:
+    void adjust(ServerOptions& options) override {
+        options.robotPath = LAGRANGE_TEST_QUAD_USDA;
+        options.worldPath.clear();
+        options.airDensityKgM3 = 1.225;
+        options.geoOrigin = coords::Geodetic{47.397742 * std::numbers::pi / 180.0,
+                                             8.545594 * std::numbers::pi / 180.0, 488.0};
+    }
+};
+
+TEST_F(QuadServerTest, ItsPropellersAreDrawnAsBlades) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    v1::Envelope request = command(1);
+    request.mutable_command()->mutable_request_snapshot();
+    send(request);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_snapshot(); }));
+    int propellers = 0;
+    for (const v1::Prim& prim : received_.back().snapshot().prims()) {
+        propellers += prim.name() == "propeller" ? 1 : 0;
+    }
+    EXPECT_EQ(propellers, 4);
+}
+
+// A profile from the viewer names no site: its preview keeps the running one's, so the geo
+// sensors stay in the wiring (they used to drop out, with a warning, on every check).
+TEST_F(QuadServerTest, AProfileWithoutTheSiteKeepsTheRunningSite) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_profile_state(); }));
+    const std::string yaml = received_.back().profile_state().yaml();
+    ASSERT_EQ(yaml.find("geo_origin"), std::string::npos) << yaml;
+    v1::Envelope check = command(1);
+    check.mutable_command()->mutable_validate_profile()->set_yaml(yaml);
+    send(check);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) {
+        return e.has_command_result() && e.command_result().request_id() == 1;
+    }));
+    const v1::ProfileValidation& validation = received_.back().command_result().validation();
+    EXPECT_TRUE(validation.valid());
+    bool gnss = false;
+    bool rotors = false;
+    for (const v1::Wiring::Node& node : validation.wiring().nodes()) {
+        gnss = gnss || node.detail().starts_with("gnss");
+        rotors = rotors || node.domain() == "rotor_aero";
+    }
+    EXPECT_TRUE(gnss);
+    EXPECT_TRUE(rotors);
 }
 
 /// The sample arm in its workcell: a wrist camera.

@@ -264,6 +264,17 @@ private:
             camera.CreateClippingRangeAttr().Set(
                 GfVec2f(static_cast<float>(get("near_clip", 0.05)),
                         static_cast<float>(get("far_clip", 100.0))));
+        } else if (sensors.type[s] == SensorType::Gnss) {
+            prim.ApplyAPI(TfToken("GnssAPI_1"));
+            real("sensor:gnss:horizontalNoiseStd", get("horizontal_noise", 0.0));
+            real("sensor:gnss:verticalNoiseStd", get("vertical_noise", 0.0));
+            real("sensor:gnss:velocityNoiseStd", get("velocity_noise", 0.0));
+        } else if (sensors.type[s] == SensorType::Magnetometer) {
+            prim.ApplyAPI(TfToken("MagnetometerAPI_1"));
+            real("sensor:magnetometer:noiseStd", get("noise", 0.0));
+        } else if (sensors.type[s] == SensorType::Barometer) {
+            prim.ApplyAPI(TfToken("BarometerAPI_1"));
+            real("sensor:barometer:noiseStd", get("noise", 0.0));
         } else {
             prim.ApplyAPI(TfToken("ImuAPI_1"));
             real("sensor:imu:accelNoiseStd", get("accel_noise", 0.0));
@@ -614,11 +625,21 @@ private:
                 }
             }
             for (const auto& [key, value] : s.assetPaths) {
-                // Relative to the written layer when it is below it, so the files move together.
+                // Relative to the written layer when both are in the same tree (the same first
+                // directory: a source tree or an install space), so the files move together;
+                // "./" for one below the layer.
                 const std::filesystem::path asset(value);
                 const std::filesystem::path relative = asset.lexically_relative(directory_);
-                const bool below = !relative.empty() && *relative.begin() != "..";
-                set(key, VtValue(SdfAssetPath(below ? "./" + relative.string() : value)));
+                const auto top = [](const std::filesystem::path& p) {
+                    auto it = p.begin();
+                    return it != p.end() && ++it != p.end() ? *it : std::filesystem::path();
+                };
+                const bool sameTree = asset.is_absolute() && !relative.empty() &&
+                                      !top(asset).empty() && top(asset) == top(directory_);
+                const bool below = sameTree && *relative.begin() != "..";
+                set(key, VtValue(SdfAssetPath(below      ? "./" + relative.string()
+                                              : sameTree ? relative.string()
+                                                         : value)));
             }
             for (const auto& [key, targets] : s.relationships) {
                 SdfPathVector paths;

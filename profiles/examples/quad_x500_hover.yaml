@@ -1,0 +1,25 @@
+# profiles/examples/quad_x500_hover.yaml — what the server runs today for the sample quadcopter:
+# MuJoCo, the electrical network at 50 µs (4S battery, four motor drives), the rotors'
+# coefficient model with ground effect, and the built-in flight controller hovering 2 m above
+# the start. The air density is this scenario's site parameter (ISA sea level). Run:
+#   ros2 run lagrange_server lagrange run profiles/examples/quad_x500_hover.yaml \
+#       --robot assets/robots/quad_x500/quad_x500.usda --world none
+schema_version: 1
+stage: robots/quad_x500/quad_x500.usda
+
+# The site: PX4 SITL's default home (Zurich), so an autopilot and the sensors agree.
+world:
+  geo_origin: { latitude: 47.397742, longitude: 8.545594, height: 488.0 }
+
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: true,  fidelity: averaged, dt: 0.00005 }  # 50 µs: small fast motors
+  thermal:      { enabled: false, substitute: ambient }
+  aerodynamics: { enabled: false, substitute: zero }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: false, substitute: zero }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: true }
+  rotor_aero:   { enabled: true,  fidelity: coefficients, ground_effect: true, air_density: 1.225 }
+
+time: { real_time_factor: 1.0 }

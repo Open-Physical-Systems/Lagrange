@@ -1,0 +1,101 @@
+#usda 1.0
+(
+    """Lagrange aerodynamics schemas (RFC 0002, docs/design/formats.md section 3.3). Codeless:
+    the stage loader reads the attributes by name. Units: the lagrangeUnit field of each
+    attribute. AeroAPI_1 gives a link its drag (modules/aerodynamics); RotorAPI_1 makes a joint
+    a propeller or rotor (modules/rotor_aero)."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeAero"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "AeroAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """Aerodynamic forces on one rigid-body link: drag per body axis at a centre of
+    pressure, optional lift, and angular damping, from the air velocity relative to the link."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token aero:model = "drag_box" (
+        allowedTokens = ["drag_box", "drag_lift_table", "none"]
+        doc = "drag_box: per-axis drag; drag_lift_table: CL, CD, CM from coeffTable; none."
+    )
+    double3 aero:referenceArea (
+        lagrangeUnit = "m2"
+        doc = "Projected areas along body x, y and z. Required unless aero:model is none."
+    )
+    double3 aero:dragCoeff = (1, 1, 1) (
+        lagrangeUnit = "1"
+        doc = "Drag coefficient per body axis."
+    )
+    double3 aero:centerOfPressure = (0, 0, 0) (
+        lagrangeUnit = "m"
+        doc = "Where the force acts, in the body frame."
+    )
+    double aero:liftSlope = 0 (
+        lagrangeUnit = "1/rad"
+        doc = "Lift-curve slope for drag_lift_table without a table."
+    )
+    asset aero:coeffTable (
+        doc = "CSV with angle of attack (rad), CL, CD, CM, for drag_lift_table."
+    )
+    double3 aero:angularDamping = (0, 0, 0) (
+        lagrangeUnit = "N.m.s/rad"
+        doc = "Damping torque per unit angular velocity, per body axis."
+    )
+}
+
+class "RotorAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A propeller or rotor on a revolute or continuous joint: thrust and shaft torque from
+    the coefficient model T = CT·rho·n²·D⁴, Q = CP·rho·n²·D⁵/(2·pi), n in rev/s (aerodynamics.md
+    section 2). Thrust acts along the joint axis on the child link."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double aero:rotor:radius (
+        lagrangeUnit = "m"
+        doc = "Tip radius (D = 2·radius). Required."
+    )
+    int aero:rotor:bladeCount (
+        lagrangeUnit = "1"
+        doc = "Number of blades. Required."
+    )
+    double aero:rotor:thrustCoeff (
+        lagrangeUnit = "1"
+        doc = "Static thrust coefficient CT. Required."
+    )
+    double aero:rotor:powerCoeff (
+        lagrangeUnit = "1"
+        doc = "Static power coefficient CP. Required."
+    )
+    uniform token aero:rotor:direction (
+        allowedTokens = ["cw", "ccw"]
+        doc = """Sense in which the motor turns the rotor, seen from the front (from where the
+        thrust points). A propeller (aero:rotor:propeller) of the other hand then turns the wrong
+        way. Required."""
+    )
+    asset aero:rotor:propeller (
+        doc = """The propeller as built: a propeller file (lagrange-propeller-1, formats.md
+        section 3.3.1) with its blades' geometry, sections and hand. Required for the bem fidelity,
+        where it replaces the coefficients, and for drawing the blades."""
+    )
+    uniform token aero:rotor:mount = "puller" (
+        allowedTokens = ["puller", "pusher"]
+        doc = """Where the propeller sits on its motor, the joint axis pointing from the motor to
+        the propeller: puller, thrust along the joint axis (it pulls the motor); pusher, thrust
+        against it (the motor is in front and it pushes)."""
+    )
+}

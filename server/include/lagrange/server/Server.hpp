@@ -27,6 +27,19 @@ struct ServerOptions {
     /// thermal.ambient_temperature overrides it). A site parameter with no default: without it
     /// the thermal domain does not run (CLAUDE.md §10).
     std::optional<double> ambientTemperatureK;
+    /// The site's air density, kg/m³ (--air-density; a profile's rotor_aero.air_density
+    /// overrides it). A site parameter with no default: rotors do not run without it.
+    std::optional<double> airDensityKgM3;
+    /// Where world ENU (0, 0, 0) is on the Earth (--geo-origin; a profile's world.geo_origin
+    /// overrides it). A site parameter with no default: GNSS, magnetometers and barometers do
+    /// not run without it.
+    std::optional<coords::Geodetic> geoOrigin;
+    /// PX4 SITL through the MAVLink bridge (--mavlink px4[:PORT]): the TCP port it connects to;
+    /// none: the built-in multicopter controller flies a multicopter.
+    std::optional<std::uint16_t> px4Port;
+    /// ArduPilot SITL through its JSON interface (--mavlink ardupilot[:PORT]): the UDP port its
+    /// servo frames come to.
+    std::optional<std::uint16_t> ardupilotPort;
     /// Bench mode (--bench): physics replaced by this recording's rigid-body signals, replayed
     /// open loop (the replay substitute); empty = none. A profile's rigid_body replay source
     /// overrides it.

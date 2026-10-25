@@ -1,0 +1,7 @@
+This material is a work of the U.S. Government and is not subject to copyright protection in
+the United States; it is in the public domain.
+
+World Magnetic Model (NOAA National Centers for Environmental Information): "The WMM source code
+is in the public domain and not licensed or under copyright. The information and software may be
+used freely by the public." Third parties producing copyrighted works consisting predominantly
+of this material must provide notice identifying the U.S. Government material incorporated.

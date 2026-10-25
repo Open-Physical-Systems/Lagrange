@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_gpu</name>
-  <version>0.3.0</version>
+  <version>0.4.0</version>
   <description>Lagrange GPU layer: Vulkan device abstraction, capability tiers, and Slang shader build support. All Vulkan use in the project goes through this package.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>

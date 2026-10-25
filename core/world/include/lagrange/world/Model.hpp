@@ -38,6 +38,11 @@ struct ScenePrim {
     std::uint32_t body{kNoIndex};
     Pose offset;
     std::array<float, 3> scale{1.0F, 1.0F, 1.0F};
+    // A part that turns on its body about `hingeAxis` (unit, in the prim's frame, through its
+    // origin) by the angle in the scalar signal `hinge` (rad), such as a folding propeller blade;
+    // empty: rigid on its body.
+    std::string hinge;
+    std::array<double, 3> hingeAxis{0.0, 1.0, 0.0};
 };
 
 struct SceneMaterial {

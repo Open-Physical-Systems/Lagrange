@@ -23,15 +23,19 @@ RUN src/lagrange/tools/ci/install_deps.sh && rm -rf /var/lib/apt/lists/*
 RUN bash -c 'source "/opt/ros/$ROS_DISTRO/setup.bash" \
     && MAKEFLAGS=-j6 colcon build --parallel-workers 2 \
         --base-paths src/lagrange \
-        --packages-up-to lagrange_server lagrange_demos \
+        --packages-up-to lagrange_server lagrange_demos lagrange_python \
         --packages-skip lagrange_viewer \
         --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=OFF \
-    && rm -rf build log' 
+    && rm -rf build log'
 
-# The demo script expects the workspace root with install/ and the sources under src/lagrange.
-RUN ln -s src/lagrange/tools tools
+# The demo and tutorial scripts expect the workspace root with install/ and the sources' tools,
+# assets and profiles beside it.
+RUN ln -s src/lagrange/tools tools && ln -s src/lagrange/assets assets \
+    && ln -s src/lagrange/profiles profiles
 # The built-in drive controller by default: with ros2_control, Nav2's start-up sometimes loses a
 # service between processes (docs/plan/progress.md, known issues). -e CONTROL=ros2_control
 # runs that path.
 ENV CONTROL=builtin
+# The drone tutorial instead: podman run --rm lagrange:dev tools/ci/tutorial_drone.sh (PX4 and
+# ArduPilot are not in the image: their steps are left out).
 CMD ["tools/ci/nav2_demo.sh", "1"]

@@ -1,7 +1,10 @@
 #include "Recorder.hpp"
+#include "lagrange/aerodynamics/Aerodynamics.hpp"
 #include "lagrange/electrical/IdealTorqueSource.hpp"
 #include "lagrange/electrical/Network.hpp"
 #include "lagrange/importers/Importers.hpp"
+#include "lagrange/mavlink/ArduPilotJson.hpp"
+#include "lagrange/mavlink/Px4Lockstep.hpp"
 #include "lagrange/proto/Connection.hpp"
 #include "lagrange/proto/Framing.hpp"
 #include "lagrange/recording/Recording.hpp"
@@ -10,9 +13,11 @@
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/ros2/Bridge.hpp"
 #include "lagrange/ros2_control/ControllerHost.hpp"
+#include "lagrange/rotor_aero/RotorAero.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/server/DiffDrive.hpp"
+#include "lagrange/server/Multicopter.hpp"
 #include "lagrange/server/Profile.hpp"
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/server/Server.hpp"
@@ -375,7 +380,7 @@ constexpr std::array<DomainRow, 13> kDomains{{
     {"comms", "ideal", "ideal"},
     {"traffic", "zero", "constant"},
     {"vehicle_dynamics", "ideal", "ideal"},
-    {"rotor_aero", "zero", "constant"},
+    {"rotor_aero", "ideal", "ideal"},  // a drone cannot fly on zero (aerodynamics.md §5)
     {"hydrodynamics", "zero", "constant"},
 }};
 
@@ -396,8 +401,9 @@ struct Server::Impl {
     double rtfTarget{1.0};
     std::string error;
 
-    std::vector<SignalId> bodyPose;  // pose signal per body, invalid for static bodies
-    std::vector<Captured> captured;  // by signal index; empty values when nobody subscribes
+    std::vector<SignalId> bodyPose;   // pose signal per body, invalid for static bodies
+    std::vector<SignalId> primHinge;  // angle signal per prim with a hinge, else invalid
+    std::vector<Captured> captured;   // by signal index; empty values when nobody subscribes
     std::deque<v1::LogRecord> logs;
     std::string schemaText;
     std::array<double, 3> shift{};  // world ENU of the region-local origin at load
@@ -434,12 +440,15 @@ struct Server::Impl {
             }
             return next;
         }
+        // The site's place on the Earth, for the sensors that need it.
+        robot.world.geoOrigin = settings.geoOrigin;
         // A run that takes commands from ROS is not deterministic: its input comes from outside.
         // So is one with the lidar on the GPU or rendering cameras (invariant 7: the CPU is the
         // reference).
         const bool rendering = cameraScene != nullptr && !off("sensors");
         auto next = std::make_unique<Scheduler>(
-            SchedulerOptions{.deterministic = !bridge && !rayContext && !rendering});
+            SchedulerOptions{.deterministic = !bridge && !rayContext && !rendering &&
+                                              !options.px4Port && !options.ardupilotPort});
         if (off("rigid_body") && settings.rigidBodyReplay) {
             // Bench mode: physics replayed from a recording, open loop.
             next->add(std::make_unique<recording::ReplaySubstitute>("rigid_body",
@@ -526,6 +535,68 @@ struct Server::Impl {
                 next->add(std::make_unique<thermal::ThermalNetwork>(), ModuleConfig(heat));
             }
         }
+        bool windInRun = false;
+        // Link drag against the wind (an AeroAPI_1 robot, with the site's air density): the
+        // aerodynamics config's own density, else rotor_aero's.
+        if (!WorldView(robot.world).instancesOf("AeroAPI_1").empty() && !off("aerodynamics")) {
+            ModuleConfigData aero;
+            aero.values.insert(settings.aerodynamics.begin(), settings.aerodynamics.end());
+            if (!aero.values.contains("air_density") && settings.airDensityKgM3) {
+                aero.values.emplace("air_density", *settings.airDensityKgM3);
+            }
+            if (aero.values.contains("air_density")) {
+                next->add(std::make_unique<aerodynamics::AeroDrag>(), ModuleConfig(aero));
+                windInRun = true;
+            }
+        }
+        // Rotors after electrical: the rotor joints' load torque and the thrust on their links.
+        // They need the site's air density; without one they do not run (as thermal without
+        // the ambient temperature) and the server says so at load.
+        if (hasRotors() && !settings.airDensityKgM3) {
+            services::log(services::LogLevel::Warning, "rotor_aero",
+                          "the rotors do not run without the site's air density: "
+                          "--air-density or the profile's rotor_aero.air_density (kg/m³)");
+        }
+        if (hasRotors() && settings.airDensityKgM3) {
+            ModuleConfigData air;
+            air.values.insert(settings.rotorAero.begin(), settings.rotorAero.end());
+            // The rotors fly in the aerodynamics domain's wind when it is in the run.
+            air.values.emplace("wind", windInRun);
+            air.values.emplace(rotor_aero::kAirDensityKey, *settings.airDensityKgM3);
+            next->add(std::make_unique<rotor_aero::RotorAero>(off("rotor_aero")),
+                      ModuleConfig(air));
+            if (options.ardupilotPort) {
+                if (!ardupilotLink) {
+                    std::string why;
+                    ardupilotLink = mavlink::openArduPilotLink(*options.ardupilotPort, why);
+                    if (!ardupilotLink) {
+                        return Unexpected{why};
+                    }
+                }
+                mavlink::ArduPilotSettings ardupilot;
+                ardupilot.port = *options.ardupilotPort;
+                ardupilot.airDensity = *settings.airDensityKgM3;
+                next->add(mavlink::createArduPilotJson(ardupilot, ardupilotLink));
+            } else if (options.px4Port) {
+                if (!px4Link) {
+                    std::string why;
+                    px4Link = mavlink::openPx4Link(*options.px4Port, why);
+                    if (!px4Link) {
+                        return Unexpected{why};
+                    }
+                }
+                mavlink::Px4Settings px4;
+                px4.port = *options.px4Port;
+                px4.airDensity = *settings.airDensityKgM3;
+                next->add(mavlink::createPx4Lockstep(px4, px4Link));
+            } else if (!controllers && MulticopterController::canFly(WorldView(robot.world))) {
+                // With or without ROS: nothing on ROS flies a multicopter yet (no ros2_control
+                // controllers for rotors), so the built-in controller hovers it.
+                next->add(
+                    std::make_unique<MulticopterController>(MulticopterController::Settings{}),
+                    ModuleConfig(air));
+            }
+        }
         ModuleConfigData sensing;
         sensing.tier =
             rayContext ? static_cast<CapabilityTier>(rayContext->tier()) : CapabilityTier::Tier0;
@@ -563,20 +634,30 @@ struct Server::Impl {
             settings.rigidBodyReplay = options.benchReplayPath;  // --bench
         }
         settings.ambientTemperatureK = ambient();
+        settings.airDensityKgM3 = appliedAirDensity ? appliedAirDensity : options.airDensityKgM3;
+        settings.geoOrigin = appliedGeoOrigin ? appliedGeoOrigin : options.geoOrigin;
+        settings.aerodynamics = appliedAerodynamics;
+        settings.rotorAero = appliedRotorAero;
         return settings;
     }
     /// The ambient temperature the run uses: an applied profile's, else the command line's.
     std::optional<double> ambient() const {
         return appliedAmbientK ? appliedAmbientK : options.ambientTemperatureK;
     }
-    std::optional<std::int64_t> thermalDtNs;        // from an applied profile
-    std::optional<double> appliedAmbientK;          // from an applied profile
-    std::optional<bool> speedPrediction;            // from an applied profile
-    std::optional<std::string> electricalFidelity;  // from an applied profile
-    std::optional<std::string> rigidBodyReplay;     // --bench, or an applied profile
-    std::optional<std::int64_t> rigidBodyDtNs;      // from an applied profile
-    std::optional<std::string> rigidBodyBackend;    // from an applied profile
-    std::optional<std::int64_t> electricalDtNs;     // from an applied profile
+    std::optional<std::int64_t> thermalDtNs;                              // from an applied profile
+    std::optional<double> appliedAmbientK;                                // from an applied profile
+    std::optional<double> appliedAirDensity;                              // from an applied profile
+    std::optional<coords::Geodetic> appliedGeoOrigin;                     // from an applied profile
+    std::map<std::string, ConfigValue, std::less<>> appliedAerodynamics;  // its wind
+    std::map<std::string, ConfigValue, std::less<>> appliedRotorAero;     // its rotor settings
+    std::shared_ptr<mavlink::Px4Link> px4Link;  // PX4's connection, across rebuilds of the run
+    std::shared_ptr<mavlink::ArduPilotLink> ardupilotLink;  // ArduPilot's, likewise
+    std::optional<bool> speedPrediction;                    // from an applied profile
+    std::optional<std::string> electricalFidelity;          // from an applied profile
+    std::optional<std::string> rigidBodyReplay;             // --bench, or an applied profile
+    std::optional<std::int64_t> rigidBodyDtNs;              // from an applied profile
+    std::optional<std::string> rigidBodyBackend;            // from an applied profile
+    std::optional<std::int64_t> electricalDtNs;             // from an applied profile
     std::optional<ProfileSettings> pending;  // applied without restart: used at the next reset
 
     Status build() {
@@ -590,6 +671,12 @@ struct Server::Impl {
         bodyPose.assign(robot.world.bodies.names.size(), SignalId{});
         for (std::size_t b = 0; b < bodyPose.size(); ++b) {
             bodyPose[b] = scheduler->bus().find("body/" + robot.world.bodies.names[b] + "/pose");
+        }
+        primHinge.assign(robot.scene.prims.size(), SignalId{});
+        for (std::size_t p = 0; p < primHinge.size(); ++p) {
+            if (!robot.scene.prims[p].hinge.empty()) {
+                primHinge[p] = scheduler->bus().find(robot.scene.prims[p].hinge);
+            }
         }
         captured.assign(scheduler->bus().signalCount(), Captured{});
         for (std::size_t s = 0; s < captured.size(); ++s) {
@@ -966,7 +1053,16 @@ struct Server::Impl {
             const std::span<const double> v = scheduler->bus().readN(id);
             body = {{v[0], v[1], v[2]}, {v[3], v[4], v[5], v[6]}};
         }
-        return compose(body, prim.offset);
+        const Pose placed = compose(body, prim.offset);
+        const auto index = static_cast<std::size_t>(&prim - robot.scene.prims.data());
+        if (index < primHinge.size() && primHinge[index].valid()) {
+            // Turned on its hinge by the signal's angle.
+            const double half = 0.5 * scheduler->bus().read(primHinge[index]);
+            const std::array<double, 3>& a = prim.hingeAxis;
+            const double s = std::sin(half);
+            return compose(placed, Pose{{}, {std::cos(half), s * a[0], s * a[1], s * a[2]}});
+        }
+        return placed;
     }
 
     v1::Envelope snapshot(Session& session) {
@@ -1433,6 +1529,7 @@ struct Server::Impl {
     bool hasThermalNodes() const {
         return !WorldView(robot.world).instancesOf("ThermalAPI_1").empty();
     }
+    bool hasRotors() const { return !WorldView(robot.world).instancesOf("RotorAPI_1").empty(); }
     bool hasMotors() const {
         return !WorldView(robot.world).instancesOf("ElectricalMotorAPI_1").empty();
     }
@@ -1596,6 +1693,15 @@ struct Server::Impl {
             } else if (std::string_view(row.domain) == "sensors" && hasSensors() &&
                        !substituted("sensors")) {
                 yaml += "  sensors: {enabled: true}\n";
+            } else if (std::string_view(row.domain) == "rotor_aero" && hasRotors()) {
+                const std::optional<double> rho =
+                    appliedAirDensity ? appliedAirDensity : options.airDensityKgM3;
+                char text[160];
+                std::snprintf(text, sizeof(text), "{enabled: %s, %s%s%.9g}",
+                              substituted("rotor_aero") ? "false" : "true",
+                              substituted("rotor_aero") ? "substitute: ideal, " : "",
+                              rho ? "air_density: " : "dt: ", rho ? *rho : 0.001);
+                yaml += "  rotor_aero: " + std::string(text) + "\n";
             } else if (std::string_view(row.domain) == "comms" ||
                        std::string_view(row.domain) == "traffic" ||
                        std::string_view(row.domain) == "vehicle_dynamics" ||
@@ -2328,7 +2434,14 @@ struct Server::Impl {
         if (hasThermalNodes()) {
             context.modules.insert("thermal");
         }
+        if (hasRotors()) {
+            context.modules.insert("rotor_aero");
+        }
+        if (!WorldView(robot.world).instancesOf("AeroAPI_1").empty()) {
+            context.modules.insert("aerodynamics");
+        }
         context.ambientKnown = options.ambientTemperatureK.has_value();
+        context.airDensityKnown = options.airDensityKgM3.has_value();
         for (const DomainRow& row : kDomains) {
             context.substitutes[row.domain] = {row.substitute, row.substituteKind};
             if (std::string_view(row.domain) == "rigid_body") {
@@ -2351,11 +2464,7 @@ struct Server::Impl {
             item.set_message(issue.message);
         }
         if (check.settings) {
-            ProfileSettings previewed = *check.settings;
-            if (!previewed.ambientTemperatureK) {
-                previewed.ambientTemperatureK = ambient();
-            }
-            auto preview = makeScheduler(previewed, nullptr);
+            auto preview = makeScheduler(withRunningSite(*check.settings), nullptr);
             if (!preview) {
                 out.set_valid(false);
                 v1::ProfileIssue& item = *out.add_issues();
@@ -2369,6 +2478,22 @@ struct Server::Impl {
             return;
         }
         describeWiring(*scheduler, *out.mutable_wiring());
+    }
+
+    /// `settings` with the site parameters it leaves out (ambient temperature, air density, geo
+    /// origin) taken from the running ones, as adopt keeps them: what a check wires.
+    ProfileSettings withRunningSite(ProfileSettings settings) const {
+        const ProfileSettings running = active();
+        if (!settings.ambientTemperatureK) {
+            settings.ambientTemperatureK = ambient();
+        }
+        if (!settings.airDensityKgM3) {
+            settings.airDensityKgM3 = running.airDensityKgM3;
+        }
+        if (!settings.geoOrigin) {
+            settings.geoOrigin = running.geoOrigin;
+        }
+        return settings;
     }
 
     /// checkProfile, then whether the settings wire (as validate, without the wiring preview).
@@ -2387,7 +2512,7 @@ struct Server::Impl {
         }
         ProfileCheck check = checkProfile(yaml, schemaText, profileContext());
         if (check.settings) {
-            if (auto preview = makeScheduler(*check.settings, nullptr); !preview) {
+            if (auto preview = makeScheduler(withRunningSite(*check.settings), nullptr); !preview) {
                 check.valid = false;
                 check.issues.push_back({true, "/domains", preview.error()});
             }
@@ -2438,6 +2563,14 @@ struct Server::Impl {
         if (settings.ambientTemperatureK) {
             appliedAmbientK = settings.ambientTemperatureK;
         }
+        if (settings.airDensityKgM3) {
+            appliedAirDensity = settings.airDensityKgM3;
+        }
+        if (settings.geoOrigin) {
+            appliedGeoOrigin = settings.geoOrigin;
+        }
+        appliedAerodynamics = settings.aerodynamics;
+        appliedRotorAero = settings.rotorAero;
         pending.reset();
         if (Status status = restart(); !status.ok()) {
             // Keep the run going on the profile it had.
@@ -3055,6 +3188,8 @@ Status Server::load() {
     }
     // Motors' rotors turn with their joints: physics gets their reflected inertia.
     electrical::applyRotorInertia(s.robot.world);
+    // Propellers with a propeller file are drawn as their blades.
+    rotor_aero::addPropellerBlades(s.robot);
     if (!s.options.ros && !s.options.ros2ControlParams.empty()) {
         return Status::error(StatusCode::InvalidConfig,
                              "--ros2-control needs the ROS 2 bridge: drop --no-ros");
@@ -3220,6 +3355,18 @@ Status Server::start() {
                   (!s.options.demoDrive ? "; it stands still until /cmd_vel arrives"
                    : s.bridge           ? "; a figure-eight demo drives until /cmd_vel arrives"
                                         : "; a figure-eight demo drives"));
+    } else if (s.options.ardupilotPort) {
+        s.log(v1::LOG_LEVEL_INFO, "controller",
+              "ArduPilot SITL flies it through its JSON interface on UDP port " +
+                  std::to_string(*s.options.ardupilotPort) + " (lockstep once it connects)");
+    } else if (s.options.px4Port) {
+        s.log(v1::LOG_LEVEL_INFO, "controller",
+              "PX4 SITL flies it through the MAVLink bridge on TCP port " +
+                  std::to_string(*s.options.px4Port) + " (lockstep once PX4 connects)");
+    } else if (MulticopterController::canFly(WorldView(s.robot.world))) {
+        s.log(v1::LOG_LEVEL_INFO, "controller",
+              "multicopter: the built-in controller takes off after 1 s and hovers 2 m above the "
+              "start (until an autopilot flies it)");
     } else {
         s.log(v1::LOG_LEVEL_WARN, "controller",
               "no demo driver: it needs exactly two actuated wheel joints, the robot has " +
@@ -3228,9 +3375,9 @@ Status Server::start() {
     for (std::size_t i = 0; i < s.robot.world.sensors.names.size(); ++i) {
         const World::Sensors& sensors = s.robot.world.sensors;
         char line[160];
-        const char* kind = sensors.type[i] == SensorType::Lidar    ? "lidar"
-                           : sensors.type[i] == SensorType::Camera ? "camera"
-                                                                   : "IMU";
+        constexpr std::array<const char*, 6> kKinds{"IMU",  "lidar",        "camera",
+                                                    "GNSS", "magnetometer", "barometer"};
+        const char* kind = kKinds.at(static_cast<std::size_t>(sensors.type[i]));
         std::snprintf(line, sizeof(line), "%s %s on %s at %.0f Hz", kind, sensors.names[i].c_str(),
                       s.robot.world.bodies.names[sensors.body[i].index].c_str(), sensors.rateHz[i]);
         s.log(v1::LOG_LEVEL_INFO, "sensors", line);

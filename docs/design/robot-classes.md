@@ -124,11 +124,51 @@ lag the simulation; `pick_place` retries a move once when its start state looks 
 | Motor and ESC dynamics, battery sag affecting thrust | electrical at 50 µs |
 | IMU, barometer, magnetometer, GNSS | sensors |
 | Autopilot in the loop | `bridges/mavlink/`: PX4 SITL through its simulator MAVLink interface (`HIL_SENSOR`, `HIL_GPS`, `HIL_ACTUATOR_CONTROLS`) with lockstep; ArduPilot SITL through its JSON simulator interface. Both are independent of the ROS distro, which matters because their ROS 2 guides do not target Lyrical yet (V8). Interface details TODO(verify) against the PX4 and ArduPilot versions pinned at v0.4 |
-| ROS 2 access | MAVROS 2.15.1 (available), or PX4's uXRCE-DDS bridge with `px4_msgs` built from source |
+| ROS 2 access | The simulator's own topics (`/imu`, `/gnss/fix`, `/magnetometer/field`, `/barometer/pressure`, ground truth on `/odom`); with an autopilot, MAVROS 2.15.1 (available) or PX4's uXRCE-DDS bridge with `px4_msgs` built from source |
 | Wind and gusts | weather + aerodynamics |
 
 Sample assets: `assets/robots/quad_x500/` (a generic 500 mm quadcopter with illustrative
 parameters), `assets/worlds/open_field/`.
+
+*Status (v0.4, step 3):* `quad_x500` exists (URDF, overlay, USD): an X frame of 1.9 kg with four
+APC 10x4.7 SF propellers (CT and CP from the UIUC propeller database's static test), 920 KV-class
+motors and a 4S 5 Ah battery. Without an autopilot the server flies it with its built-in
+controller (`Multicopter.hpp`): it takes off and holds 2 m within 1 mm, rotors at 551 rad/s,
+about 190 W from the battery (`test_the_sample_quadcopter_takes_off_and_hovers`). The world
+`assets/worlds/open_field/` (URDF and USD) is a 50 m field with a painted landing pad at the
+origin, a windsock, four trees and a shed, all more than 15 m from the pad; the PX4 and
+ArduPilot missions fly their 10 m square over it.
+
+*Status (v0.4, step 9):* each rotor names its propeller as built, a generic 10-inch two-blade
+blade of each hand (`assets/propellers/generic_10in_2blade_{ccw,cw}.prop.yaml`, NACA 6412
+sections at low Reynolds number from NACA Report 586) whose static CT and CP by blade-element
+momentum are the APC's measured ones. The viewer draws the blades (twisted, in their hand,
+spinning with their joints); `profiles/examples/quad_x500_bem.yaml` flies the quadcopter on them
+(`rotor_aero.fidelity: bem`): it hovers at 2 m as on the coefficients, rotors at 548 rad/s,
+192 W. Propeller hand and mount (puller or pusher) are physical: a propeller of the wrong hand
+turns backwards and gives little thrust (aerodynamics.md §2.1). Variants: folding blades
+(`quad_x500_folding.overlay.yaml` on the same URDF: they hang folded when stopped and open as the
+motors spin up), and `assets/robots/quad_x500_inverted/`, the motors upside down under the arms
+with the propellers as pushers; a three-blade propeller is in `assets/propellers/` too.
+
+*Status (v0.4, step 7):* `lagrange_mavlink` (`bridges/mavlink`) runs PX4 SITL in lockstep
+(`lagrange_server --mavlink px4`): HIL_SENSOR at the IMU's rate (FRD, gauss, hPa), HIL_GPS at the
+GNSS rate, HIL_ACTUATOR_CONTROLS back to speed-controlling ESCs; lockstep starts with PX4's first
+outputs. PX4 v1.17.0 with the airframe `bridges/mavlink/px4/22100_lagrange_quad_x500` takes off,
+flies a 10 m square at 5 m and lands (`tools/ci/px4_mission.sh`, `fly_square_mission.py`).
+ArduPilot runs through its JSON interface (`lagrange_server --mavlink ardupilot`): ArduCopter
+sends servo frames to UDP 9002 and each one is answered, in lockstep at 1 kHz, with the body's
+exact rates, specific force, NED position, velocity and attitude (ArduPilot adds its own sensor
+noise and makes GPS, compass and barometer itself). ArduCopter Copter-4.7.2 with
+`bridges/mavlink/ardupilot/lagrange_quad_x500.parm` flies the same square
+(`tools/ci/ardupilot_mission.sh`, calm and `--wind`).
+
+*Acceptance (v0.4):* the PX4 mission passes in 8 m/s of gusty wind (`tools/ci/px4_mission.sh
+--wind`, the profile `quad_x500_gusty.yaml`). Low battery: at full throttle a full pack holds
+16.2 V and gives 37.5 N; at 10 % charge the pack sags to 13.9 V, the voltage limits the motors,
+and the rotors give 29.0 N, so the climb in 2.5 s halves (23.9 m against 12.6 m;
+`Multicopter.ALowBatterySagsAndGivesLessThrust`). At 3 % the bus browns out at full load, the
+drives trip and it does not take off.
 
 Acceptance scenario for v0.4: PX4 SITL in lockstep takes off, flies a square mission in 8 m/s
 gusty wind and lands; a low battery scenario shows voltage sag reducing available thrust.

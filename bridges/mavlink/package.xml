@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>lagrange_mavlink</name>
+  <version>0.4.0</version>
+  <description>MAVLink bridge: PX4 SITL in lockstep through its simulator interface (HIL_SENSOR, HIL_GPS, HIL_ACTUATOR_CONTROLS), v0.4.</description>
+  <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>lagrange_cmake</buildtool_depend>
+
+  <depend>lagrange_core</depend>
+  <!-- Generated MAVLink C headers: MIT under the generator-output exception (COPYING.txt). -->
+  <depend>mavlink</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

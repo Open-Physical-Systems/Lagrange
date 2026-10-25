@@ -5,9 +5,11 @@
 #include <atomic>
 #include <cmath>
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <numbers>
 #include <string_view>
 
 #include <ament_index_cpp/get_package_share_path.hpp>
@@ -108,6 +110,14 @@ void printServerOptions(std::FILE* out) {
         "            and body motion, open loop (electrical, thermal, sensors live)\n"
         "  --ambient-temperature K  the site's air temperature: runs the thermal domain\n"
         "            (no default; a profile's thermal.ambient_temperature also sets it)\n"
+        "  --mavlink px4[:PORT]|ardupilot[:PORT]  fly a multicopter with PX4 SITL (TCP 4560;\n"
+        "            tools/ci/px4_mission.sh) or ArduPilot SITL's JSON interface (UDP 9002;\n"
+        "            tools/ci/ardupilot_mission.sh), in lockstep\n"
+        "  --geo-origin LAT,LON,HEIGHT  where the world's origin is on the Earth (degrees,\n"
+        "            degrees, m above WGS84), for GNSS, magnetometers and barometers (no default;\n"
+        "            a profile's world.geo_origin also sets it)\n"
+        "  --air-density KG_M3  the site's air density, for rotors (ISA sea level: 1.225; no\n"
+        "            default; a profile's rotor_aero.air_density also sets it)\n"
         "  --domain D=off  replace domain D (rigid_body, electrical, thermal, sensors) by its\n"
         "            substitute\n"
         "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
@@ -230,6 +240,39 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--ambient-temperature needs a temperature in K";
             }
             options.ambientTemperatureK = kelvin;
+        } else if (arg == "--mavlink") {
+            const char* text = value();
+            const std::string_view which = text != nullptr ? text : "";
+            const bool px4 = which == "px4" || which.starts_with("px4:");
+            const bool ardupilot = which == "ardupilot" || which.starts_with("ardupilot:");
+            unsigned port = px4 ? 4560 : 9002;
+            const std::size_t colon = which.find(':');
+            if ((!px4 && !ardupilot) ||
+                (colon != std::string_view::npos &&
+                 (std::sscanf(text + colon + 1, "%u", &port) != 1 || port == 0 || port > 65535))) {
+                return "--mavlink takes px4[:PORT] (PX4 SITL connects to TCP 4560) or "
+                       "ardupilot[:PORT] (ArduPilot's JSON frames on UDP 9002)";
+            }
+            (px4 ? options.px4Port : options.ardupilotPort) = static_cast<std::uint16_t>(port);
+        } else if (arg == "--geo-origin") {
+            const char* text = value();
+            double lat = 0.0, lon = 0.0, height = 0.0;
+            char tail = 0;
+            if (text == nullptr ||
+                std::sscanf(text, "%lf,%lf,%lf%c", &lat, &lon, &height, &tail) != 3 ||
+                std::abs(lat) > 90.0 || std::abs(lon) > 180.0) {
+                return "--geo-origin needs LAT,LON,HEIGHT (degrees, degrees, m above WGS84)";
+            }
+            constexpr double kDegree = std::numbers::pi / 180.0;
+            options.geoOrigin = coords::Geodetic{lat * kDegree, lon * kDegree, height};
+        } else if (arg == "--air-density") {
+            const char* text = value();
+            char* end = nullptr;
+            const double rho = text != nullptr ? std::strtod(text, &end) : -1.0;
+            if (text == nullptr || end == text || *end != '\0' || !(rho > 0.0)) {
+                return "--air-density needs a density in kg/m³";
+            }
+            options.airDensityKgM3 = rho;
         } else if (arg == "--paused") {
             options.startPaused = true;
         } else if (arg == "--no-ros") {

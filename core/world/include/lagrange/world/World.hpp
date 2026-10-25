@@ -52,7 +52,7 @@ struct ConvexHull {
     std::vector<std::array<std::uint32_t, 3>> triangles;
 };
 
-enum class SensorType : std::uint8_t { Imu, Lidar, Camera };
+enum class SensorType : std::uint8_t { Imu, Lidar, Camera, Gnss, Magnetometer, Barometer };
 
 /// One applied API schema on one prim, with its attribute values read once at load.
 /// Lookups are by name, so they belong in declare() and init(), never in step().
@@ -145,6 +145,9 @@ struct World {
     /// Where the region-local frame of every position above sits in world ENU (floating origin,
     /// docs/design/huge-worlds.md §1).
     coords::RegionOrigin region;
+    /// Where world ENU (0, 0, 0) is on the Earth (profile world.geo_origin, --geo-origin). A
+    /// site parameter with no default: GNSS, magnetometers and barometers need it.
+    std::optional<coords::Geodetic> geoOrigin;
     std::uint32_t batchCount{1};
 
     /// Adds a prim and returns its id. `instanceName` is the name used in signal names.

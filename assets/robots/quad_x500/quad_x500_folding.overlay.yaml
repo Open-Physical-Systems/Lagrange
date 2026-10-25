@@ -1,0 +1,162 @@
+# Power and propulsion of the sample quadcopter with folding propellers (docs/design/formats.md
+# §9): quad_x500.overlay.yaml with generic_10in_folding_* in place of the fixed blades. Applied to
+# quad_x500.urdf by `lagrange_import --overlay` and `lagrange_server --overlay`. Parameters are
+# illustrative, not a real product.
+#   - Propellers: APC 10x4.7 SF (radius 0.127 m). CT 0.125 and CP 0.0507 from the UIUC propeller
+#     database, volume 1, static test apcsf_10x4.7_static_kt0835 (J. B. Brandt, R. W. Deters,
+#     G. K. Ananda, O. D. Dantsker and M. S. Selig, UIUC Applied Aerodynamics Group): the measured
+#     CT is 0.120-0.130 and CP 0.048-0.053 from 4590 to 6528 RPM, around the hover speed of
+#     about 5400 RPM for 1.9 + 4 x 0.025 kg. Each rotor also names its propeller as built
+#     (assets/propellers/generic_10in_folding_*.prop.yaml, a generic blade of the same static CT
+#     and CP), drawn as its blades and flown by the bem fidelity.
+#   - Motors: 920 KV class, Ke = 60 / (2 pi 920) = 0.01038 V.s/rad, Kt = 1.5 Ke (peak dq
+#     convention, electrical.md §9), 7 pole pairs, 0.1 ohm, 30 uH, 25 A.
+#   - Battery: 4S 5000 mAh lithium-polymer pack (an illustrative OCV curve per cell).
+schema_version: 1
+apply:
+  - create: power/battery
+    schemas:
+      BatteryAPI_1:
+        elec:battery:chemistry: custom
+        elec:battery:seriesCells: 4
+        elec:battery:capacity: 18000.0            # C (5 Ah)
+        elec:battery:ocvSoc: [0.0, 0.05, 0.1, 0.2, 0.5, 0.8, 0.9, 1.0]
+        elec:battery:ocvVoltage: [3.30, 3.50, 3.60, 3.70, 3.80, 3.95, 4.05, 4.20]   # V per cell
+        elec:battery:r0: 0.004                    # ohm per cell
+        elec:battery:r1: 0.002                    # ohm per cell
+        elec:battery:c1: 2000.0                   # F per cell
+        elec:battery:cutoffVoltage: 13.2          # V, 3.3 V per cell
+        elec:battery:maxChargeCurrent: 5.0        # A
+      PortAPI_1:dc_out:
+        elec:port:dc_out:nominalVoltage: 14.8     # V
+        elec:port:dc_out:maxCurrent: 120.0        # A
+        elec:port:dc_out:connectedTo: power/dc_bus
+  - create: power/dc_bus
+    schemas:
+      ElectricalBusAPI_1:
+        elec:bus:capacitance: 0.001               # F, the ESCs' input capacitors
+        elec:bus:undervoltageTrip: 12.8           # V, 3.2 V per cell
+        elec:bus:overvoltageTrip: 17.6            # V
+  - prim: rotor_1_joint
+    schemas:
+      RotorAPI_1:
+        aero:rotor:radius: 0.127                 # m
+        aero:rotor:bladeCount: 2
+        aero:rotor:thrustCoeff: 0.125
+        aero:rotor:powerCoeff: 0.0507
+        aero:rotor:direction: ccw
+        aero:rotor:propeller: ../../propellers/generic_10in_folding_ccw.prop.yaml
+  - prim: rotor_1_joint
+    create_child: rotor_1_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:motorType: bldc
+        elec:windingResistance: 0.1              # ohm at 25 °C
+        elec:inductance: 0.00003                 # H
+        elec:torqueConstant: 0.01557             # N·m/A, 1.5 Ke
+        elec:polePairs: 7
+        elec:maxCurrent: 25.0                    # A
+        elec:joint: rotor_1_joint
+        elec:powerPort: power/dc_bus
+  - prim: rotor_2_joint
+    schemas:
+      RotorAPI_1:
+        aero:rotor:radius: 0.127                 # m
+        aero:rotor:bladeCount: 2
+        aero:rotor:thrustCoeff: 0.125
+        aero:rotor:powerCoeff: 0.0507
+        aero:rotor:direction: ccw
+        aero:rotor:propeller: ../../propellers/generic_10in_folding_ccw.prop.yaml
+  - prim: rotor_2_joint
+    create_child: rotor_2_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:motorType: bldc
+        elec:windingResistance: 0.1              # ohm at 25 °C
+        elec:inductance: 0.00003                 # H
+        elec:torqueConstant: 0.01557             # N·m/A, 1.5 Ke
+        elec:polePairs: 7
+        elec:maxCurrent: 25.0                    # A
+        elec:joint: rotor_2_joint
+        elec:powerPort: power/dc_bus
+  - prim: rotor_3_joint
+    schemas:
+      RotorAPI_1:
+        aero:rotor:radius: 0.127                 # m
+        aero:rotor:bladeCount: 2
+        aero:rotor:thrustCoeff: 0.125
+        aero:rotor:powerCoeff: 0.0507
+        aero:rotor:direction: cw
+        aero:rotor:propeller: ../../propellers/generic_10in_folding_cw.prop.yaml
+  - prim: rotor_3_joint
+    create_child: rotor_3_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:motorType: bldc
+        elec:windingResistance: 0.1              # ohm at 25 °C
+        elec:inductance: 0.00003                 # H
+        elec:torqueConstant: 0.01557             # N·m/A, 1.5 Ke
+        elec:polePairs: 7
+        elec:maxCurrent: 25.0                    # A
+        elec:joint: rotor_3_joint
+        elec:powerPort: power/dc_bus
+  - prim: rotor_4_joint
+    schemas:
+      RotorAPI_1:
+        aero:rotor:radius: 0.127                 # m
+        aero:rotor:bladeCount: 2
+        aero:rotor:thrustCoeff: 0.125
+        aero:rotor:powerCoeff: 0.0507
+        aero:rotor:direction: cw
+        aero:rotor:propeller: ../../propellers/generic_10in_folding_cw.prop.yaml
+  - prim: rotor_4_joint
+    create_child: rotor_4_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:motorType: bldc
+        elec:windingResistance: 0.1              # ohm at 25 °C
+        elec:inductance: 0.00003                 # H
+        elec:torqueConstant: 0.01557             # N·m/A, 1.5 Ke
+        elec:polePairs: 7
+        elec:maxCurrent: 25.0                    # A
+        elec:joint: rotor_4_joint
+        elec:powerPort: power/dc_bus
+  # Drag of the frame, battery and arms (illustrative): projected areas along x, y and z.
+  - prim: base_link
+    schemas:
+      AeroAPI_1:
+        aero:referenceArea: [0.04, 0.04, 0.09]   # m²
+        aero:dragCoeff: [1.0, 1.0, 1.1]
+        aero:angularDamping: [0.002, 0.002, 0.004]   # N·m·s/rad
+  # Flight sensors on the frame, for an autopilot (noise illustrative, of small-drone parts).
+  - prim: base_link
+    create_child: imu
+    schemas:
+      SensorAPI_1:
+        sensor:rate: 250.0                       # Hz
+      ImuAPI_1:
+        sensor:imu:accelNoiseStd: 0.02           # m/s2 per sample
+        sensor:imu:gyroNoiseStd: 0.002           # rad/s per sample
+  - prim: base_link
+    create_child: gnss
+    schemas:
+      SensorAPI_1:
+        sensor:rate: 10.0                        # Hz
+      GnssAPI_1:
+        sensor:gnss:horizontalNoiseStd: 0.3      # m
+        sensor:gnss:verticalNoiseStd: 0.5        # m
+        sensor:gnss:velocityNoiseStd: 0.05       # m/s
+  - prim: base_link
+    create_child: magnetometer
+    schemas:
+      SensorAPI_1:
+        sensor:rate: 100.0                       # Hz
+      MagnetometerAPI_1:
+        sensor:magnetometer:noiseStd: 5.0e-8     # T (0.5 mG)
+  - prim: base_link
+    create_child: barometer
+    schemas:
+      SensorAPI_1:
+        sensor:rate: 50.0                        # Hz
+      BarometerAPI_1:
+        sensor:barometer:noiseStd: 1.0           # Pa (about 8 cm)

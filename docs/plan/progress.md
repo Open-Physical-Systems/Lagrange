@@ -9,8 +9,8 @@ flowchart LR
     v01["v0.1<br/>viewer, protocol,<br/>mock server<br/><b>released 2026-10-14</b>"]:::done
     v02["v0.2<br/>simulation core + AMR<br/>ROS 2, Nav2<br/><b>released 2026-10-25</b>"]:::done
     v03["v0.3<br/>arms + electrical<br/>MoveIt 2<br/><b>released 2026-10-25</b>"]:::done
-    v04["v0.4<br/>drones<br/>PX4 / ArduPilot SITL<br/><b>next</b>"]:::now
-    v05["v0.5<br/>weather + EMI"]:::todo
+    v04["v0.4<br/>drones<br/>PX4 / ArduPilot SITL<br/><b>released 2026-10-25</b>"]:::done
+    v05["v0.5<br/>weather + EMI<br/><b>next</b>"]:::now
     v06["v0.6<br/>cars, autonomous cars<br/>OpenDRIVE, Autoware"]:::todo
     v07["v0.7<br/>huge worlds"]:::todo
     v10["v1.0<br/>stable schemas + plugin ABI<br/>ros-lyrical-* debs"]:::todo
@@ -117,6 +117,83 @@ E8). Release notes and acceptance evidence: `docs/release/v0.3.0.md`. Owed withi
 a motor heat run (Q16; the battery is checked against published cell data since 2026-10-25,
 from 35 % state of charge up), the drive-design
 review of the motor constants, FMI 2.0 FMUs (Q8), Jolt's wheel slip. Released as `v0.3.0` on 2026-10-25 at the owner's request, after v0.2.0.
+
+## v0.4 status (2026-10-25)
+
+Every v0.4 epic is done or moved: field sampling to v0.5 with the fields infrastructure, rebase
+in flight to v0.7 with C5. Release notes and acceptance evidence: `docs/release/v0.4.0.md`.
+Owed within the epics: small-propeller test data (the UIUC database states no licence),
+measured ground effect, stall delay, the Dryden spectrum's periodogram check, the tutorial's
+SITL steps in the container. Released as `v0.4.0` on 2026-10-25 at the owner's request.
+
+## v0.4 plan (2026-10-25)
+
+The owner asked to continue with v0.4 (drones) after publishing v0.2.0 and v0.3.0, with the same
+standing answers as v0.3 (gated changes merged and listed below; autonomous loop), PX4 SITL built
+on the host (v1.17.0, the latest stable release, BSD-3-Clause), and demos time-boxed. Order, each
+step resting on the ones before:
+
+1. `schemas/aero`: `AeroAPI_1`, `RotorAPI_1` (**done** 2026-10-25)
+2. `modules/rotor_aero`: coefficient model, inflow lag, ground effect, the `ideal` substitute;
+   thrust into `wrench_sum`, shaft torque into `joint/<j>/load_torque`; checks against closed
+   forms and published propeller data (**done** 2026-10-25 against the closed forms; aerodynamics.md §8.
+   Published propeller data comes with step 3's propeller. PX4 v1.17.0 SITL builds on the host:
+   `~/PX4-Autopilot`, Python dependencies in its `.venv` made with uv, as `python3-venv` is not
+   installed)
+3. Sample quadcopter `assets/robots/quad_x500` (URDF, overlay with rotors, motors, 4S battery)
+   and `assets/worlds/open_field`; hover by a simple attitude/thrust controller in a test
+   (**done** 2026-10-25, the world too: `assets/worlds/open_field`, where the missions fly;
+   rotors in the server with `--air-density`, the built-in
+   multicopter controller, hover within 1 mm at 2 m for 60 s; robot-classes.md §5. Tuning found
+   on the way: the position loop must be well below the attitude loop (0.6 and 3 Hz), and the
+   rotor speed loop well above it)
+4. Electrical at 50 µs for small fast motors; coupling tests at J = 1e-5 kg·m² (**done**
+   2026-10-25: `DroneCoupling` runs the quadcopter's drive at 50 µs on 1e-5 and 9e-5 kg·m²
+   rotors within 2 % RMS of a 1 µs monolithic solution; the quadcopter's profile runs at 50 µs)
+5. Sensors: GNSS, magnetometer (world magnetic model data, licence checked), barometer
+   (**done** 2026-10-25: `GnssAPI_1`, `MagnetometerAPI_1`, `BarometerAPI_1`; the world's geo
+   origin (`world.geo_origin`, `--geo-origin`, a site parameter); WMM2025 (public domain) within
+   0.001 nT of NOAA's 100 test points; the ICAO standard atmosphere; on the sample quadcopter
+   with PX4 SITL's default home as the example site; on ROS 2 the same day: `/<sensor>/fix`,
+   `/<sensor>/field`, `/<sensor>/pressure`, `/<sensor>/temperature`; before, the bridge took
+   every sensor that was not a lidar or camera for an IMU and opened extra `/imu` publishers)
+6. `modules/aerodynamics`: link drag, mean wind profile, Dryden turbulence (MIL-HDBK-1797)
+   (**done** 2026-10-25: `AeroDrag`; the wind in the aerodynamics config until v0.5's weather;
+   the sample quadcopter holds 2 m within 6 cm in 8 m/s with gusts, `quad_x500_gusty.yaml`;
+   MIL-HDBK-1797 equation numbers marked TODO(verify))
+7. `bridges/mavlink`: PX4 SITL lockstep (`HIL_SENSOR`, `HIL_GPS`, `HIL_ACTUATOR_CONTROLS`), then
+   ArduPilot's JSON interface (PX4 **done** 2026-10-25: the square mission flies end to end with
+   PX4 v1.17.0; `ros-lyrical-mavlink` is a new rosdep dependency (`sudo apt install
+   ros-lyrical-mavlink`). ArduPilot **done** the same day: `--mavlink ardupilot`, the JSON
+   interface at 1 kHz in lockstep; ArduCopter Copter-4.7.2 flies the square, calm and in 8 m/s
+   gusts, `tools/ci/ardupilot_mission.sh [--wind]`; `test_ardupilot_json`)
+8. The acceptance mission (take-off, square in 8 m/s gusts, land; low-battery thrust sag), the
+   tutorial, and rebase in flight (the mission and the low-battery scenario **done** 2026-10-25,
+   robot-classes.md §5. Rebase in flight needs the runtime rebase, C5, which the owner deferred
+   to v0.7 (huge worlds): it moves there with it. The tutorial **done** the same day:
+   `docs/guide/tutorial-drone.md`, run by `tools/ci/tutorial_drone.sh` with the PX4 step; in the
+   container image too, without the SITL steps, which need PX4 and ArduPilot builds in the
+   image: `podman run --rm lagrange:dev tools/ci/tutorial_drone.sh` passes)
+9. Propellers as built (asked for by the owner on 2026-10-25: real blade shapes, hands and
+   mounts instead of the drawn discs): (a) the `bem` fidelity, blade-element momentum on a
+   propeller file, with hand (cw/ccw) and mount (puller/pusher) on `RotorAPI_1`, validated
+   against measured full-scale propellers (**done** 2026-10-25: NACA Report 640's 5868-9 within
+   8 % in CT and 6 % in CP over the attached-flow range, aerodynamics.md §7.1; the built-in
+   controller and the PX4 and ArduPilot ESCs turn pushers the right way); (b) drawn blades made
+   from the same file, sample propellers for the quadcopter (fixed two-blade, folding, three-
+   blade) and a quadcopter variant with pushers (blades and the fixed two-blade **done**
+   2026-10-25: generic 10-inch blades of each hand, NACA 6412 sections from NACA Report 586,
+   static CT and CP matched to the measured APC 10x4.7 SF; `quad_x500_bem.yaml` hovers on them;
+   a profile check from the viewer no longer drops the site's geo origin from its preview);
+   (c) folding blades (hinged, opening as they spin up), the three-blade and the pusher variant
+   (**done** 2026-10-25: `FoldingBlade`, quasi-static on its hinge between thrust, weight and
+   spin, drawn as hinged scene prims (`ScenePrim::hinge`); `generic_10in_folding_*` and
+   `quad_x500_folding.overlay.yaml`; `generic_10in_3blade_*`; `quad_x500_inverted`, motors under
+   the arms with pushers, hovers as the sample does); (d) edgewise flow in forward flight
+   (H-force, flapping) and wind at the rotors (**done** 2026-10-25: blade loads averaged round
+   the disc with Glauert's mass flow, tabulated in normalised form; the H-force matches classical
+   rotor theory within 1 %; `env/wind/velocity` from the aerodynamics domain reaches the rotors;
+   the sample holds its spot in 8 m/s gusts at `bem`. Wake skew and flapping: not yet)
 
 ## Defaults taken during the autonomous run
 
@@ -266,6 +343,9 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 | thermal schemas | `schemas/` (new `schemas/thermal` library: `ThermalAPI_1`, `ThermalLinkAPI_1` from formats.md §3.2, under the accepted RFC 0002) | As drafted; changelog entry |
 | electrical network (fallback doc fix) | `schemas/` (documentation of `elec:backEmfConstant`'s fallback corrected to Kt/1.5 for dq machines; changelog entry) | No attribute changed; the network refuses an authored Ke that disagrees with Kt by over 3 % |
 | raster camera sensor | `schemas/` (`CameraSensorAPI_1` in the sensor library, from formats.md §3.8, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-24 for autonomous work. Applied to a UsdGeomCamera, whose lens gives the field of view |
+| geo sensor schemas | `schemas/` (`GnssAPI_1`, `MagnetometerAPI_1`, `BarometerAPI_1` in the sensor library, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4 |
+| propeller files on rotors | `schemas/` (`RotorAPI_1`: `aero:rotor:propeller` replaces the unused `aero:rotor:bladeTable`, new `aero:rotor:mount`, `aero:rotor:direction` documented as the motor's sense; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4. `RotorAPI_1` is unreleased, so no migration |
+| aerodynamics schemas | `schemas/` (new `schemas/aero` library: `AeroAPI_1`, `RotorAPI_1` from formats.md §3.3, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4. Two documentation additions to the draft, listed in the changelog |
 | collision shapes in the snapshot | `proto/` (`Collider`, `SceneSnapshot.colliders` 11; protocol.md §4.3; golden frames regenerated) | Pre-approved by the owner on 2026-10-24 for autonomous work. New message and field only; `buf` is not installed here, so `buf breaking` was not run |
 | electrical schemas and their loading | `schemas/` (new `schemas/electrical` library: six schemas from formats.md §3.1, under the accepted RFC 0002; `schemas/CHANGELOG.md` started) | Two additions to the drafts, listed in the changelog. Motor constant conventions still need the drive-design review RFC 0002 asks for before the network uses them |
 

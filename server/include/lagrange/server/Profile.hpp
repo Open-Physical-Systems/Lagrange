@@ -1,5 +1,8 @@
 #pragma once
 
+#include "lagrange/module/ModuleConfig.hpp"
+#include "lagrange/world/coords/Frames.hpp"
+
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -18,6 +21,8 @@ struct ProfileContext {
     /// The site's ambient temperature is known from the command line (--ambient-temperature);
     /// without it, a profile that runs thermal must give thermal.ambient_temperature.
     bool ambientKnown{false};
+    /// The site's air density is known from the command line (--air-density).
+    bool airDensityKnown{false};
 };
 
 /// The settings of a valid profile that the server applies.
@@ -32,7 +37,14 @@ struct ProfileSettings {
     /// Bench mode: the recording that replaces physics (rigid_body substitute replay, source).
     std::optional<std::string> rigidBodyReplay;
     std::optional<double> ambientTemperatureK;  // domains.thermal.ambient_temperature
-    std::optional<double> realTimeFactor;       // time.real_time_factor (0: as fast as possible)
+    std::optional<double> airDensityKgM3;       // domains.rotor_aero.air_density
+    std::optional<coords::Geodetic> geoOrigin;  // world.geo_origin (radians, m)
+    /// domains.aerodynamics: the wind and air density keys, as the module's config takes them.
+    std::map<std::string, ConfigValue, std::less<>> aerodynamics;
+    /// domains.rotor_aero but the air density: fidelity, ground_effect, inflow_time_constant,
+    /// speed_of_sound, as the module's config takes them.
+    std::map<std::string, ConfigValue, std::less<>> rotorAero;
+    std::optional<double> realTimeFactor;  // time.real_time_factor (0: as fast as possible)
 };
 
 struct ProfileIssue {

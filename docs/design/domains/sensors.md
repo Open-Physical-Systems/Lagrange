@@ -205,3 +205,20 @@ traversal differs. Tests compare tier outputs on the same scene (section 7).
 | GNSS | error statistics and correlation time | 5 % |
 | Timing | measured rate, latency and jitter histograms | 1 base tick |
 | Sim-vs-real (per release) | public datasets with ground truth and sensor specifications (candidates: an indoor 2D-lidar AMR dataset for v0.2; an automotive dataset for v0.6; choose and check licenses) | reported per metric; thresholds set from the dataset |
+
+## 8. GNSS, magnetometer and barometer (v0.4)
+
+`GeoSensors.cpp` in `lagrange_sensors`, from `GnssAPI_1`, `MagnetometerAPI_1` and
+`BarometerAPI_1` prims. They place the sensor on the Earth through the world's geo origin
+(`world.geo_origin` in a profile, `--geo-origin`), a site parameter with no default: without one
+they are left out and the server logs why.
+
+| Sensor | Signals | Model | Check |
+|---|---|---|---|
+| GNSS | `latitude`, `longitude` (rad), `altitude` (m, ellipsoidal), `velocity` (ENU, m/s), `fix` | The antenna's pose through the geo origin, velocity with the lever arm; white noise per fix | exact against `GeoOrigin` (`test_geo_sensors`) |
+| Magnetometer | `field` (T, sensor frame) | World Magnetic Model 2025 main field (`Wmm.hpp`, data in `data/wmm2025`, public domain) at the config's `decimal_year` (default 2025.0); white noise | within 0.001 nT of NOAA's 100 test points (`test_wmm`); rotation exact |
+| Barometer | `pressure` (Pa), `temperature` (K) | ICAO standard atmosphere at the sensor's ellipsoidal height (troposphere); white noise | ICAO table values (`test_geo_sensors`) |
+
+Not yet: GNSS outages, multipath and latency; crustal field, hard- and soft-iron effects; the
+geoid (ellipsoidal height stands for altitude above mean sea level); the site's weather instead of
+the standard day (v0.5); URDF and SDFormat `<sensor type="gps|magnetometer|altimeter">` import.
