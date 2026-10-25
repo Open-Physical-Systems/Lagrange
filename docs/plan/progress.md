@@ -138,7 +138,9 @@ step resting on the ones before:
    multicopter controller, hover within 1 mm at 2 m for 60 s; robot-classes.md §5. Tuning found
    on the way: the position loop must be well below the attitude loop (0.6 and 3 Hz), and the
    rotor speed loop well above it)
-4. Electrical at 50 µs for small fast motors; coupling tests at J = 1e-5 kg·m²
+4. Electrical at 50 µs for small fast motors; coupling tests at J = 1e-5 kg·m² (**done**
+   2026-10-25: `DroneCoupling` runs the quadcopter's drive at 50 µs on 1e-5 and 9e-5 kg·m²
+   rotors within 2 % RMS of a 1 µs monolithic solution; the quadcopter's profile runs at 50 µs)
 5. Sensors: GNSS, magnetometer (world magnetic model data, licence checked), barometer
 6. `modules/aerodynamics`: link drag, mean wind profile, Dryden turbulence (MIL-HDBK-1797)
 7. `bridges/mavlink`: PX4 SITL lockstep (`HIL_SENSOR`, `HIL_GPS`, `HIL_ACTUATOR_CONTROLS`), then

@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -20,19 +21,50 @@ namespace {
 
 using namespace literals;
 
-constexpr double kBusVolts = 51.2;  // 16 cells on a flat 3.2 V curve
 constexpr double kResistance = 0.5;
 constexpr double kInductance = 0.0005;
 constexpr double kTorqueConstant = 0.05;
 constexpr double kCommand = 1e3;  // N·m: far beyond what the bus allows, so the drive saturates
 
-MotorParams motor() {
+/// A drive and its supply, as the rig builds them.
+struct Drive {
+    bool dq{false};
+    double resistance{kResistance};
+    double inductance{kInductance};
+    double torqueConstant{kTorqueConstant};
+    int polePairs{1};
+    double maxCurrent{1e3};  // above the stall current: the voltage limits
+    int cells{16};           // on a flat 3.2 V curve
+    double command{kCommand};
+    std::optional<Duration> dt;  // the network's step; its default otherwise
+    [[nodiscard]] double busVolts() const { return 3.2 * cells; }
+};
+
+/// The sample quadcopter's drive (quad_x500.overlay.yaml) on a 4S pack held at 12.8 V, its
+/// network at 50 µs (roadmap §5: electrical tuned for small fast motors). The command is within
+/// the current limit, so the speed settles where the voltage limit is reached.
+Drive droneDrive() {
+    Drive d;
+    d.dq = true;
+    d.resistance = 0.1;
+    d.inductance = 3e-5;
+    d.torqueConstant = 0.01557;
+    d.polePairs = 7;
+    d.maxCurrent = 25.0;
+    d.cells = 4;
+    d.command = 0.2;  // N·m, about half the current limit
+    d.dt = 50_us;
+    return d;
+}
+
+MotorParams motor(const Drive& d = {}) {
     MotorParams p;
-    p.dq = false;
-    p.resistance = kResistance;
-    p.inductanceD = p.inductanceQ = kInductance;
-    p.torqueConstant = kTorqueConstant;
-    p.maxCurrent = 1e3;  // above the stall current: the voltage limits
+    p.dq = d.dq;
+    p.resistance = d.resistance;
+    p.inductanceD = p.inductanceQ = d.inductance;
+    p.torqueConstant = d.torqueConstant;
+    p.polePairs = d.polePairs;
+    p.maxCurrent = d.maxCurrent;
     return p;
 }
 
@@ -44,8 +76,9 @@ SchemaInstance& add(World& w, std::string schema, PrimId prim) {
     return s;
 }
 
-/// A rotor of inertia `inertia` on a hinge, driven by a brushed DC motor on a stiff 51.2 V bus.
-World rig(double inertia) {
+/// A rotor of inertia `inertia` on a hinge, driven by `drive` (a brushed DC motor on a stiff
+/// 51.2 V bus unless given).
+World rig(double inertia, const Drive& drive = {}) {
     World w;
     const BodyId base = w.addBody("base", kWorldBody, Pose{}, 10.0, {}, {1, 1, 1, 0, 0, 0});
     const BodyId rotor =
@@ -58,7 +91,7 @@ World rig(double inertia) {
                                                {"elec:bus:overvoltageTrip", 100.0}};
     const PrimId pack = w.addPrim("/rig/battery", "battery");
     SchemaInstance& b = add(w, "BatteryAPI_1", pack);
-    b.integers = {{"elec:battery:seriesCells", 16}};
+    b.integers = {{"elec:battery:seriesCells", drive.cells}};
     b.reals = {{"elec:battery:capacity", 1e9},
                {"elec:battery:r0", 1e-7},  // a stiff source: the bus stays at 51.2 V
                {"elec:battery:cutoffVoltage", 1.0},
@@ -68,11 +101,12 @@ World rig(double inertia) {
     port.instance = "out";
     port.relationships = {{"elec:port:out:connectedTo", {bus}}};
     SchemaInstance& m = add(w, "ElectricalMotorAPI_1", w.addPrim("/rig/motor", "motor"));
-    m.tokens = {{"elec:motorType", "dc_brushed"}};
-    m.reals = {{"elec:windingResistance", kResistance},
-               {"elec:inductance", kInductance},
-               {"elec:torqueConstant", kTorqueConstant},
-               {"elec:maxCurrent", 1e3}};
+    m.tokens = {{"elec:motorType", drive.dq ? "bldc" : "dc_brushed"}};
+    m.reals = {{"elec:windingResistance", drive.resistance},
+               {"elec:inductance", drive.inductance},
+               {"elec:torqueConstant", drive.torqueConstant},
+               {"elec:maxCurrent", drive.maxCurrent}};
+    m.integers = {{"elec:polePairs", drive.polePairs}};
     m.relationships = {{"elec:joint", {joint}}, {"elec:powerPort", {bus}}};
     return w;
 }
@@ -80,6 +114,7 @@ World rig(double inertia) {
 /// The command, constant from t = 0.
 class Command final : public IModule {
 public:
+    explicit Command(double command = kCommand) : command_(command) {}
     [[nodiscard]] ModuleInfo info() const override {
         return {"test", "command", 1, 0, false, true, CapabilityTier::Tier0};
     }
@@ -92,17 +127,18 @@ public:
         return {};
     }
     Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
-        bus.write(id_, kCommand);
+        bus.write(id_, command_);
         return {};
     }
     Status step(const StepContext&, SignalBus& bus) override {
-        bus.write(id_, kCommand);
+        bus.write(id_, command_);
         return {};
     }
     Status saveState(StateWriter&) const override { return {}; }
     Status restoreState(StateReader&) override { return {}; }
 
 private:
+    double command_;
     SignalId id_;
 };
 
@@ -159,8 +195,9 @@ private:
     SignalId torque_, current_, speed_, inertiaOut_;
 };
 
-ModuleConfig exchange(bool predict) {
+ModuleConfig exchange(bool predict, std::optional<Duration> dt = std::nullopt) {
     ModuleConfigData data;
+    data.dt = dt;
     data.values.emplace("exchange_step", 1e-3);
     data.values.emplace("speed_prediction", predict);
     return ModuleConfig(data);
@@ -171,8 +208,8 @@ struct Trace {
 };
 
 /// The same drive and flywheel integrated together at 1 µs: the monolithic reference.
-Trace reference(double inertia, double seconds) {
-    const MotorParams p = motor();
+Trace reference(double inertia, double seconds, const Drive& drive = {}) {
+    const MotorParams p = motor(drive);
     MotorState s;
     double velocity = 0.0;
     Trace trace;
@@ -181,9 +218,9 @@ Trace reference(double inertia, double seconds) {
     for (int k = 0; k < ms; ++k) {
         for (int n = 0; n < kPerMs; ++n) {
             MotorInputs in;
-            in.torqueCommand = kCommand;
+            in.torqueCommand = drive.command;
             in.jointVelocity = velocity;
-            in.busVoltage = kBusVolts;
+            in.busVoltage = drive.busVolts();
             const MotorOutputs out = stepMotor(p, s, in, 1e-6);
             velocity += out.jointTorque / inertia * 1e-6;
         }
@@ -235,6 +272,35 @@ TEST_P(Coupling, TracksTheMonolithicSolutionWithoutGrowth) {
 INSTANTIATE_TEST_SUITE_P(InertiaFrom1e6To1e2, Coupling,
                          // 6e-7: H/τm ≈ 8, near the limit with speed prediction.
                          ::testing::Values(6e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2));
+
+// Roadmap §5 (v0.4): the electrical network at 50 µs for a drone's small fast motor, on light
+// rotors: 1e-5 kg·m² and the sample quadcopter's 9e-5 kg·m² (motor bell and propeller).
+class DroneCoupling : public ::testing::TestWithParam<double> {};
+
+TEST_P(DroneCoupling, TracksTheMonolithicSolutionAt50Microseconds) {
+    const double inertia = GetParam();
+    const Drive drive = droneDrive();
+    const World world = rig(inertia, drive);
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<Command>(drive.command));
+    scheduler.add(std::make_unique<ElectricalNetwork>(), exchange(true, drive.dt));
+    auto plant = std::make_unique<Flywheel>(inertia);
+    Flywheel* flywheel = plant.get();
+    scheduler.add(std::move(plant));
+    auto wired = scheduler.wire(WorldView(world));
+    ASSERT_TRUE(wired) << to_string(wired.error().front());
+    constexpr double kSeconds = 0.3;  // spin-up to the voltage limit and settling
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{static_cast<std::int64_t>(kSeconds * 1e9)}).ok());
+    const Trace ref = reference(inertia, kSeconds, drive);
+    ASSERT_EQ(flywheel->speeds.size(), ref.speeds.size());
+    EXPECT_LT(rmsError(flywheel->speeds, ref.speeds), 0.02) << "speed, J = " << inertia;
+    EXPECT_LT(rmsError(flywheel->currents, ref.currents), 0.02) << "current, J = " << inertia;
+    EXPECT_NEAR(flywheel->speeds.back(), ref.speeds.back(), 0.01 * std::abs(ref.speeds.back()));
+    std::printf("drone drive, J = %g: %.0f rad/s after %.1f s (reference %.0f)\n", inertia,
+                flywheel->speeds.back(), kSeconds, ref.speeds.back());
+}
+
+INSTANTIATE_TEST_SUITE_P(LightRotors, DroneCoupling, ::testing::Values(1e-5, 9e-5));
 
 TEST(CouplingCheck, RefusesAnExchangeThatWouldBeUnstable) {
     // J = 1e-5: τm = 2 ms. Without prediction a 1 ms exchange is 0.5 τm, at the limit; J = 4e-6
