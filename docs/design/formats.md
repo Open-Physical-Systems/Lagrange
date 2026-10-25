@@ -617,6 +617,51 @@ shadowing spread is given in decibels, as path-loss models state it.
 **`CanBusAPI_1`** (single-apply, on a bus prim): `can:bitRate` (double, 1/s, required) and
 `can:frameBits` (int, fallback 108: an 11-bit identifier and 8 data bytes, before stuffing).
 
+### 3.10 `schemas/vehicle/schema.usda`
+
+Defined in v0.6 (`domains/vehicle_dynamics.md`). A road vehicle is a chassis body with wheels
+on revolute spin joints; the module finds the ground under each wheel by a ray and models the
+suspension and tyres itself, so wheel bodies carry no collision shapes.
+
+**`VehicleAPI_1`** (single-apply, on the chassis body).
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `vehicle:powertrain` | token | — | `electric` | `electric` or `ice_map` |
+| `vehicle:maxDriveTorque` | double | N·m | — | electric: total at the driven wheels at full throttle |
+| `vehicle:maxSteerAngle` | double | rad | — | Inner road wheel. Required with a steered wheel |
+| `vehicle:steerRate` | double | rad/s | `1.0` | Rate limit |
+| `vehicle:steerTimeConstant` | double | s | `0.05` | First-order lag |
+| `vehicle:maxBrakeTorque` | double | N·m | — | Total at full pedal. Required |
+| `vehicle:brakeBias` | double | 1 | `0.6` | Front fraction |
+| `vehicle:abs` | bool | — | `false` | Slip-limiting anti-lock braking |
+| `vehicle:engineSpeeds`, `vehicle:engineTorques` | double[] | rad/s, N·m | — | ice_map: full-throttle curve |
+| `vehicle:engineIdleSpeed` | double | rad/s | `80` | ice_map |
+| `vehicle:gearRatios` | double[] | 1 | — | ice_map: forward gears |
+| `vehicle:finalDriveRatio` | double | 1 | `1.0` | ice_map |
+| `vehicle:shiftUpSpeed`, `vehicle:shiftDownSpeed` | double | rad/s | `600`, `250` | ice_map: automatic shifts |
+| `vehicle:driveEfficiency` | double | 1 | `0.92` | ice_map |
+| `vehicle:antiRollStiffnessFront`, `...Rear` | double | N/m | `0` | Per metre of travel difference across the axle |
+
+**`WheelAPI_1`** (single-apply, on a wheel's spin joint).
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `wheel:radius` | double | m | — | Loaded rolling radius. Required |
+| `wheel:width` | double | m | `0.2` | |
+| `wheel:axle` | token | — | — | `front` or `rear`. Required |
+| `wheel:steered`, `wheel:driven` | bool | — | `false` | |
+| `wheel:steerJoint` | rel | — | — | A steered wheel's steering joint |
+| `wheel:tyre` | asset | — | — | `.tir` Magic Formula file (pacejka fidelity) |
+| `wheel:longitudinalStiffness` | double | N | — | linear fidelity, per unit slip ratio |
+| `wheel:corneringStiffness` | double | N/rad | — | linear fidelity |
+| `wheel:friction` | double | 1 | `1.0` | Peak μ on the reference surface |
+| `wheel:relaxationLength` | double | m | `0.3` | Lateral transient |
+| `wheel:restLength` | double | m | — | Suspension free length to the wheel centre. Required |
+| `wheel:travel` | double | m | — | To the bump stop. Required |
+| `wheel:springStiffness` | double | N/m | — | Required |
+| `wheel:damping` | double | N·s/m | — | Required |
+
 ## 4. Sample robot: differential-drive AMR
 
 `assets/robots/amr_diffdrive/amr_diffdrive.usda`. Geometry is primitive shapes so that the file
