@@ -16,6 +16,7 @@ add_library(
     src/ShapeCaster.cpp
     src/Wmm.cpp
     src/GeoSensors.cpp
+    src/WeatherEffects.cpp
 )
 lagrange_target_defaults(lagrange_sensors)
 target_include_directories(
@@ -65,6 +66,9 @@ if(BUILD_TESTING)
     ament_add_gtest(test_geo_sensors test/test_geo_sensors.cpp)
     target_link_libraries(test_geo_sensors lagrange_sensors)
     lagrange_target_defaults(test_geo_sensors)
+    ament_add_gtest(test_weather_effects test/test_weather_effects.cpp)
+    target_link_libraries(test_weather_effects lagrange_sensors)
+    lagrange_target_defaults(test_weather_effects)
     ament_add_gtest(test_imu_noise test/test_imu_noise.cpp TIMEOUT 120)
     target_link_libraries(test_imu_noise lagrange_sensors)
     lagrange_target_defaults(test_imu_noise)

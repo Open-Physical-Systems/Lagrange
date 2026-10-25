@@ -188,6 +188,8 @@ Status Weather::declare(const WorldView& world, const ModuleConfig& config, Sign
     visibleOut_ = d.output(spec("env/extinction/visible", SignalType::Scalar, units::per_m));
     nir905Out_ = d.output(spec("env/extinction/nir_905", SignalType::Scalar, units::per_m));
     nir1550Out_ = d.output(spec("env/extinction/nir_1550", SignalType::Scalar, units::per_m));
+    fog905Out_ = d.output(spec("env/extinction/fog_905", SignalType::Scalar, units::per_m));
+    fog1550Out_ = d.output(spec("env/extinction/fog_1550", SignalType::Scalar, units::per_m));
     rainOut_ = d.output(spec("env/rain_rate", SignalType::Scalar, units::m_per_s));
     frictionOut_ = d.output(spec("env/friction_scale", SignalType::Scalar, units::one));
     contaminationOut_.clear();
@@ -243,6 +245,8 @@ void Weather::writeAll(SignalBus& bus) const {
     bus.write(visibleOut_, total(kVisibleWavelength));
     bus.write(nir905Out_, total(kLidar905));
     bus.write(nir1550Out_, total(kLidar1550));
+    bus.write(fog905Out_, fog_ ? fogExtinction(s_.visibility, kLidar905) : 0.0);
+    bus.write(fog1550Out_, fog_ ? fogExtinction(s_.visibility, kLidar1550) : 0.0);
     bus.write(rainOut_, rain_ ? s_.rainRate : 0.0);
     bus.write(frictionOut_, 1.0 - wetness_ * (1.0 - kWetFrictionScale));
     for (std::size_t i = 0; i < contaminationOut_.size(); ++i) {
