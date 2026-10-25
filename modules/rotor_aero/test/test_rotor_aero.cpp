@@ -357,6 +357,84 @@ TEST(RotorAeroBem, FoldingBladesHangStoppedAndConeSpinning) {
     EXPECT_NEAR(rig.read("rotor/prop_joint/thrust"), open.thrust * std::cos(beta), 1e-9);
 }
 
+/// Writes the air's velocity, as the aerodynamics domain does.
+class Wind final : public IModule {
+public:
+    std::array<double, 3> velocity{};
+    [[nodiscard]] ModuleInfo info() const override {
+        return {"test", "wind", 1, 0, false, true, CapabilityTier::Tier0};
+    }
+    [[nodiscard]] Duration preferredStep() const override { return 1_ms; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        SignalSpec v;
+        v.name = "env/wind/velocity";
+        v.type = SignalType::Vec3;
+        v.unit = units::m_per_s;
+        v.frame = "world_local";
+        id_ = d.output(v);
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        bus.writeN(id_, velocity);
+        return {};
+    }
+    Status step(const StepContext&, SignalBus& bus) override {
+        bus.writeN(id_, velocity);
+        return {};
+    }
+    Status saveState(StateWriter&) const override { return {}; }
+    Status restoreState(StateReader&) override { return {}; }
+
+private:
+    SignalId id_;
+};
+
+/// The rotor's wrench with the hub moving at `motion` through air moving at `air`.
+std::vector<double> edgewiseWrench(const std::array<double, 3>& motion,
+                                   const std::array<double, 3>& air, double* thrust = nullptr,
+                                   const std::string& hand = "ccw") {
+    const World world = propellerRig(hand, propellerFile(hand));
+    ModuleConfigData config = bem();
+    config.values["wind"] = true;
+    Rig rig = makeRig(world, config);
+    auto wind = std::make_unique<Wind>();
+    Wind* w = wind.get();
+    rig.scheduler->add(std::move(wind));
+    auto wired = rig.scheduler->wire(WorldView(world));
+    EXPECT_TRUE(wired) << to_string(wired.error().front());
+    rig.plant->omega = hand == "ccw" ? 600.0 : -600.0;
+    rig.plant->twist = {motion[0], motion[1], motion[2], 0.0, 0.0, 0.0};
+    w->velocity = air;
+    EXPECT_TRUE(rig.scheduler->stepUntil(SimTime{3'000'000}).ok());
+    if (thrust != nullptr) {
+        *thrust = rig.read("rotor/prop_joint/thrust");
+    }
+    return rig.wrench();
+}
+
+TEST(RotorAeroBem, FlyingThroughStillAirIsBeingStillInTheWind) {
+    double moving = 0.0;
+    double still = 0.0;
+    const std::vector<double> a = edgewiseWrench({6.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, &moving);
+    const std::vector<double> b = edgewiseWrench({0.0, 0.0, 0.0}, {-6.0, 0.0, 0.0}, &still);
+    for (std::size_t k = 0; k < 6; ++k) {
+        EXPECT_NEAR(a[k], b[k], 1e-12) << k;
+    }
+    double hover = 0.0;
+    (void)edgewiseWrench({0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, &hover);
+    EXPECT_GT(moving, hover);  // translational lift
+    EXPECT_LT(a[0], 0.0);      // the H-force drags against the motion
+    EXPECT_NEAR(a[1], 0.0, 0.05 * std::abs(a[0]));
+    // The mirror image: a cw propeller's H-force is the same, its rolling moment (about the
+    // direction of flight here) the other way, so counter-rotating pairs cancel it.
+    const std::vector<double> cw = edgewiseWrench({6.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, nullptr, "cw");
+    EXPECT_NEAR(cw[0], a[0], 1e-9);
+    // About x only the hub moment acts (the centre of mass is off along x): the advancing blade
+    // rolls a ccw propeller one way and a cw one the other.
+    EXPECT_GT(std::abs(a[3]), 1e-4);
+    EXPECT_NEAR(cw[3], -a[3], 1e-9);
+}
+
 TEST(RotorAeroBem, RefusesARotorWithoutItsPropellerFile) {
     const World world = propellerRig();
     Rig rig = makeRig(world, bem());

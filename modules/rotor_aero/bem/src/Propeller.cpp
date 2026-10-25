@@ -29,6 +29,8 @@ constexpr double kMaxPrandtlGlauertMach = 0.7;
 constexpr int kElements = 40;
 // Swirl (tangential induction) passes; the swirl is small, so a few fixed-point passes converge.
 constexpr int kSwirlPasses = 4;
+// Blade azimuths round the disc in edgewise flow.
+constexpr int kAzimuths = 12;
 // Root finding on the bracketed residual (Illinois variant of regula falsi): iterations and the
 // relative tolerance on the induced velocity.
 constexpr int kRootIterations = 80;
@@ -37,6 +39,12 @@ constexpr double kRootTolerance = 1e-10;
 constexpr int kTableAngles = 1440;
 constexpr double kTableMachStep = 0.1;
 constexpr int kTableMachs = 10;  // 0 to 0.9
+// The edgewise table: inflow angles in 1° steps, edgewise angles 0 to 40° in 5° steps (an
+// advance ratio of 0.84 at 40°, beyond any multicopter's).
+constexpr int kEdgeAngles = 360;
+constexpr int kEdgeSlices = 9;
+constexpr double kEdgeStep = 5.0 * std::numbers::pi / 180.0;
+constexpr double kEdgeLimitAngle = 0.25 * std::numbers::pi / 180.0;  // for the first slice
 // A folding blade's stop either way when the file gives none: folded nearly flat along the
 // motor. A modelling choice; real hinges vary.
 constexpr double kDefaultFoldLimitDeg = 85.0;
@@ -101,11 +109,14 @@ struct ElementLoad {
 };
 
 ElementLoad elementLoad(const Element& e, int blades, double omega, double axialSpeed,
-                        double inducedAxial, double inducedSwirl, const Air& air) {
+                        double inducedAxial, double inducedSwirl, const Air& air,
+                        double edgewise = 0.0) {
     // The air as the blade meets it, in (rotation direction, thrust direction) coordinates: from
-    // the front at axialSpeed + w, from ahead at ω·r − w_t.
+    // the front at axialSpeed + w, from ahead at ω·r − w_t, plus the edgewise air's share
+    // (V_e·sin ψ at the blade's azimuth; its radial share is left out, the independence
+    // principle).
     const double ua = axialSpeed + inducedAxial;
-    const double ut = omega * e.radius - inducedSwirl;
+    const double ut = omega * e.radius + edgewise - inducedSwirl;
     const double w2 = ua * ua + ut * ut;
     if (w2 <= 0.0) {
         return {};
@@ -248,8 +259,25 @@ Propeller withBladeAngle(Propeller p, double delta) {
     return p;
 }
 
-BemLoad bemLoad(const Propeller& p, double omega, double axialSpeed, const Air& air) {
+BemLoad bemLoad(const Propeller& p, double omega, double axialSpeed, const Air& air,
+                double edgewiseSpeed) {
     BemLoad out;
+    // Edgewise flow: the blade's loads averaged round the disc (azimuth ψ from the direction the
+    // edgewise air moves, positive in the propeller's hand), with the inflow uniform per annulus.
+    const int azimuths = edgewiseSpeed > 0.0 ? kAzimuths : 1;
+    const auto averaged = [&](const Element& e, double w, double swirl) {
+        ElementLoad mean;
+        mean.sinPhi = 0.0;
+        for (int a = 0; a < azimuths; ++a) {
+            const double psi = 2.0 * std::numbers::pi * (a + 0.5) / azimuths;
+            const ElementLoad l = elementLoad(e, p.blades, omega, axialSpeed, w, swirl, air,
+                                              edgewiseSpeed * std::sin(psi));
+            mean.thrust += l.thrust / azimuths;
+            mean.torque += l.torque / azimuths;
+            mean.sinPhi += l.sinPhi / azimuths;
+        }
+        return mean;
+    };
     if (p.stations.empty() || p.radius <= 0.0 || air.density <= 0.0) {
         return out;
     }
@@ -263,17 +291,20 @@ BemLoad bemLoad(const Propeller& p, double omega, double axialSpeed, const Air& 
         const Element e{r, s.chord * p.radius, s.twist, s.aerofoil};
         // Momentum per unit span through the annulus, at axial induced velocity w (air pushed
         // back) and swirl w_t: dT = 4πrρF·|V + w|·w, dQ = 4πr²ρF·|V + w|·w_t.
+        // Edgewise, the mass flow is Glauert's: through the annulus at √(V_e² + (V + w)²).
         const auto momentum = [&](double w, double sinPhi) {
             return 4.0 * std::numbers::pi * r * air.density *
-                   tipLoss(p.blades, r, p.radius, sinPhi) * std::abs(axialSpeed + w);
+                   tipLoss(p.blades, r, p.radius, sinPhi) *
+                   std::hypot(edgewiseSpeed, axialSpeed + w);
         };
         double swirl = 0.0;
         double w = 0.0;
         ElementLoad load;
-        const double span = 2.0 * (std::abs(omega) * r + std::abs(axialSpeed)) + 1.0;
+        const double span =
+            2.0 * (std::abs(omega) * r + std::abs(axialSpeed) + edgewiseSpeed) + 1.0;
         for (int pass = 0; pass < kSwirlPasses; ++pass) {
             const auto residual = [&](double wi) {
-                const ElementLoad l = elementLoad(e, p.blades, omega, axialSpeed, wi, swirl, air);
+                const ElementLoad l = averaged(e, wi, swirl);
                 return l.thrust - momentum(wi, l.sinPhi) * wi;
             };
             // The working state: the root on the side of w = 0 that the blade's thrust there
@@ -312,7 +343,7 @@ BemLoad bemLoad(const Propeller& p, double omega, double axialSpeed, const Air& 
                     }
                 }
             }
-            load = elementLoad(e, p.blades, omega, axialSpeed, w, swirl, air);
+            load = averaged(e, w, swirl);
             const double flux = momentum(w, load.sinPhi) * r;
             const double next = flux > 1e-9 ? load.torque / flux : 0.0;
             swirl = std::clamp(next, -0.5 * std::abs(omega * r), 0.5 * std::abs(omega * r));
@@ -323,6 +354,21 @@ BemLoad bemLoad(const Propeller& p, double omega, double axialSpeed, const Air& 
         out.torque += load.torque * dr;
         inducedThrust += load.thrust * dr * w;
         thrustMoment += load.thrust * dr * r;
+        if (azimuths > 1) {
+            // Round the disc: the in-plane force (the blade's force along its motion, −sin ψ e1
+            // + cos ψ e2 at azimuth ψ) and the moment of the thrust about the hub
+            // (r·dT·(sin ψ e1 − cos ψ e2)).
+            for (int a = 0; a < azimuths; ++a) {
+                const double psi = 2.0 * std::numbers::pi * (a + 0.5) / azimuths;
+                const ElementLoad l = elementLoad(e, p.blades, omega, axialSpeed, w, swirl, air,
+                                                  edgewiseSpeed * std::sin(psi));
+                const double along = -l.torque / r * dr / azimuths;  // force along the motion
+                out.inPlane[0] += -along * std::sin(psi);
+                out.inPlane[1] += along * std::cos(psi);
+                out.hubMoment[0] += r * l.thrust * dr / azimuths * std::sin(psi);
+                out.hubMoment[1] += -r * l.thrust * dr / azimuths * std::cos(psi);
+            }
+        }
     }
     out.inducedVelocity = out.thrust != 0.0 ? inducedThrust / out.thrust : 0.0;
     out.thrustRadius =
@@ -352,13 +398,77 @@ PropellerTable PropellerTable::build(const Propeller& p, bool compressible) {
             }
         });
     }
+    // The edgewise table, one thread per edgewise angle, at unit density and unit speed in the
+    // disc's axial plane (U0² = Ω²R² + V_a² = 1), V_e = tan γ. Normalised by how each load grows
+    // from no edgewise flow, so that it varies little with γ and interpolates well: the in-plane
+    // force and hub moment by V_e/U0, the change of thrust and torque by (V_e/U0)². The first
+    // slice holds the limit, from a small edgewise angle.
+    t.edges_.resize(static_cast<std::size_t>(kEdgeSlices) * (kEdgeAngles + 1));
+    for (int g = 0; g < kEdgeSlices; ++g) {
+        threads.emplace_back([&t, &p, g] {
+            const double ratio = std::tan(g == 0 ? kEdgeLimitAngle : g * kEdgeStep);
+            for (int k = 0; k <= kEdgeAngles; ++k) {
+                const double theta = -std::numbers::pi + 2.0 * std::numbers::pi * k / kEdgeAngles;
+                const double omega = std::cos(theta) / p.radius;
+                const double axial = std::sin(theta);
+                const BemLoad none = bemLoad(p, omega, axial, Air{1.0, 0.0});
+                const BemLoad l = bemLoad(p, omega, axial, Air{1.0, 0.0}, ratio);
+                const double square = ratio * ratio;
+                t.edges_[static_cast<std::size_t>(g) * (kEdgeAngles + 1) + k] = {
+                    (l.thrust - none.thrust) / square,
+                    (l.torque - none.torque) / square,
+                    l.inPlane[0] / ratio,
+                    l.inPlane[1] / ratio,
+                    l.hubMoment[0] / ratio,
+                    l.hubMoment[1] / ratio};
+            }
+        });
+    }
     for (std::thread& thread : threads) {
         thread.join();
     }
     return t;
 }
 
-BemLoad PropellerTable::at(double omega, double axialSpeed, const Air& air) const {
+BemLoad PropellerTable::at(double omega, double axialSpeed, const Air& air,
+                           double edgewiseSpeed) const {
+    BemLoad out = axial(omega, axialSpeed, air);
+    const double tip = omega * radius_;
+    const double plane2 = tip * tip + axialSpeed * axialSpeed;
+    if (edges_.empty() || edgewiseSpeed <= 0.0 || plane2 <= 0.0) {
+        return out;
+    }
+    // Position in the edgewise table: inflow angle, edgewise angle (held at the last slice).
+    const double u =
+        (std::atan2(axialSpeed, tip) + std::numbers::pi) / (2.0 * std::numbers::pi) * kEdgeAngles;
+    const int k = std::clamp(static_cast<int>(u), 0, kEdgeAngles - 1);
+    const double fu = u - k;
+    const double ratio = edgewiseSpeed / std::sqrt(plane2);  // V_e / U0 = tan γ
+    const double v = std::min(std::atan(ratio) / kEdgeStep, kEdgeSlices - 1.0);
+    const int g = std::min(static_cast<int>(v), kEdgeSlices - 2);
+    const double fv = v - g;
+    const auto row = [&](int gi, int ki) {
+        return edges_[static_cast<std::size_t>(gi) * (kEdgeAngles + 1) + ki];
+    };
+    const auto at = [&](int gi, auto field) {
+        return field(row(gi, k)) + fu * (field(row(gi, k + 1)) - field(row(gi, k)));
+    };
+    const auto mix = [&](auto field) {
+        return at(g, field) + fv * (at(g + 1, field) - at(g, field));
+    };
+    // What the edgewise flow adds to the axial loads, and its in-plane loads.
+    const double scale = air.density * plane2;
+    const double square = ratio * ratio;
+    out.thrust += scale * square * mix([](const EdgeRow& r) { return r.thrust; });
+    out.torque += scale * square * mix([](const EdgeRow& r) { return r.torque; });
+    out.inPlane = {scale * ratio * mix([](const EdgeRow& r) { return r.inPlane0; }),
+                   scale * ratio * mix([](const EdgeRow& r) { return r.inPlane1; })};
+    out.hubMoment = {scale * ratio * mix([](const EdgeRow& r) { return r.moment0; }),
+                     scale * ratio * mix([](const EdgeRow& r) { return r.moment1; })};
+    return out;
+}
+
+BemLoad PropellerTable::axial(double omega, double axialSpeed, const Air& air) const {
     const double tip = omega * radius_;
     const double speed2 = tip * tip + axialSpeed * axialSpeed;
     if (rows_.empty() || speed2 <= 0.0) {

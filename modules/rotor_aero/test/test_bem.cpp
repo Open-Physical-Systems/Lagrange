@@ -380,6 +380,61 @@ TEST(PropellerMesh, AFoldingPropellerIsAHubAndHingedBlades) {
     EXPECT_GT(tip[2], 0.0);
 }
 
+/// Blades that only drag (no lift), of constant chord: the H-force of the classical rotor
+/// theory, C_H = σ·c_d0·μ/4 (Johnson, Helicopter Theory, 1980, §5.4; Leishman, Principles of
+/// Helicopter Aerodynamics, 2006, §3.4), here exactly ¼·B·c·c_d0·ρ·Ω·V_e·(R² − r0²) for blades
+/// from r0 to R, while no part of them meets reversed flow.
+TEST(Bem, EdgewiseHForceOfDraggingBladesIsTheClassicalOne) {
+    Propeller p;
+    p.radius = 1.0;
+    p.blades = 3;
+    p.hand = "ccw";
+    const Aerofoil drag{0.0, 0.0, 0.0, 0.0, 0.012, 0.0, 0.0};
+    for (const double r : {0.2, 0.6, 1.0}) {
+        p.stations.push_back({r, 0.08, 0.0, 0.12, drag});
+    }
+    const double omega = 50.0;
+    const double edgewise = 0.1 * omega;  // μ = 0.1: no reversed flow beyond r = 0.1 R
+    const BemLoad l = bemLoad(p, omega, 0.0, kSeaLevel, edgewise);
+    const double expected =
+        0.25 * 3 * 0.08 * 0.012 * kSeaLevel.density * omega * edgewise * (1.0 - 0.2 * 0.2);
+    EXPECT_NEAR(l.inPlane[0], expected, 0.01 * expected);
+    EXPECT_NEAR(l.inPlane[1], 0.0, 1e-9);
+    EXPECT_NEAR(l.thrust, 0.0, 1e-12);
+}
+
+TEST(Bem, EdgewiseFlowAddsThrustAndRollsTheHubToTheRetreatingSide) {
+    const Propeller p = sample("ccw");
+    const double omega = 550.0;
+    const BemLoad hover = bemLoad(p, omega, 0.0, kSeaLevel);
+    const BemLoad cruise = bemLoad(p, omega, 0.0, kSeaLevel, 0.1 * omega * p.radius);
+    // Translational lift: more air through the disc, more thrust at the same speed.
+    EXPECT_GT(cruise.thrust, hover.thrust);
+    // The H-force drags along with the edgewise air; the advancing blade (ψ = 90°, along e2)
+    // lifts more, which rolls the hub about e1.
+    EXPECT_GT(cruise.inPlane[0], 0.0);
+    EXPECT_GT(cruise.hubMoment[0], 0.0);
+    EXPECT_LT(std::abs(cruise.hubMoment[1]), 0.2 * cruise.hubMoment[0]);
+}
+
+TEST(PropellerTable, GivesWhatBemGivesEdgewise) {
+    const Propeller p = sample("ccw");
+    const PropellerTable table = PropellerTable::build(p, false);
+    for (const double v : {0.0, 3.0, -1.0}) {
+        for (const double edgewise : {2.0, 8.0}) {
+            const BemLoad direct = bemLoad(p, 550.0, v, kSeaLevel, edgewise);
+            const BemLoad looked = table.at(550.0, v, kSeaLevel, edgewise);
+            EXPECT_NEAR(looked.thrust, direct.thrust, 0.01 * direct.thrust) << v << " " << edgewise;
+            EXPECT_NEAR(looked.inPlane[0], direct.inPlane[0],
+                        0.03 * std::abs(direct.inPlane[0]) + 1e-4)
+                << v << " " << edgewise;
+            EXPECT_NEAR(looked.hubMoment[0], direct.hubMoment[0],
+                        0.03 * std::abs(direct.hubMoment[0]) + 1e-5)
+                << v << " " << edgewise;
+        }
+    }
+}
+
 TEST(Propeller, RejectsAnIncompleteFile) {
     std::string error;
     const Propeller p = loadPropeller("/nonexistent.prop.yaml", error);

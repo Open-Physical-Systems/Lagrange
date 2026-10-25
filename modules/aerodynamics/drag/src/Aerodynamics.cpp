@@ -202,6 +202,8 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
         links_.push_back(std::move(link));
     }
     gust_ = d.output(spec("env/wind/gust", SignalType::Vec3, units::m_per_s, "world_local"));
+    windVelocity_ =
+        d.output(spec("env/wind/velocity", SignalType::Vec3, units::m_per_s, "world_local"));
     return {};
 }
 
@@ -212,6 +214,7 @@ Status AeroDrag::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
         bus.write(link.airspeed, 0.0);
     }
     bus.writeN(gust_, Vec3{});
+    bus.writeN(windVelocity_, Vec3{});
     return {};
 }
 
@@ -249,6 +252,9 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
                 bus.writeN(gust_, Vec3{g[0] * downwind[0] + g[1] * left[0],
                                        g[0] * downwind[1] + g[1] * left[1], g[2]});
             }
+        }
+        if (i == 0) {
+            bus.writeN(windVelocity_, air);
         }
         // Drag in the body frame: −½·ρ·|v|·(Cd ∘ A ∘ v), v the link's velocity through the air.
         const Vec3 relative{velocity[0] - air[0], velocity[1] - air[1], velocity[2] - air[2]};

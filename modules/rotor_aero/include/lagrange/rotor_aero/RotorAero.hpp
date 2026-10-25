@@ -64,8 +64,13 @@ inline constexpr double kGroundEffectMinHeight = 0.5;  // ×R; the validated ran
 /// rotor/<j>/blade_angle (rad, FoldingBlade: coning towards the front positive, folded back
 /// when stopped), and its thrust and torque are the open propeller's times the cosine of it.
 ///
-/// Not yet: edgewise flow (forward flight's in-plane velocity, blade flapping), wind at the
-/// rotors, ground effect over scenery other than the ground plane.
+/// At `bem` the hub's velocity through the air (its own, less the wind env/wind/velocity when
+/// config "wind" is true: the aerodynamics domain is in the run) splits into the axial speed and
+/// the edgewise speed across the disc, whose in-plane H-force and hub moment go into the link's
+/// wrench with the thrust.
+///
+/// Not yet: blade flapping of rigid propellers beyond the hub moment, the wake's skew (inflow
+/// uniform per annulus), ground effect over scenery other than the ground plane.
 class RotorAero final : public IModule {
 public:
     /// `ideal` makes the substitute (aerodynamics.md §5): T = k·ω² with k from the thrust
@@ -102,6 +107,8 @@ private:
 
     bool ideal_;
     bool bem_{false};
+    bool wind_{false};
+    SignalId windIn_;
     double rho_{0.0};
     double speedOfSound_{0.0};         // m/s; 0: incompressible
     std::array<double, 3> gravity_{};  // m/s², world-local

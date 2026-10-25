@@ -50,7 +50,9 @@ private:
 /// every link with AeroAPI_1, the drag F = −½·ρ·|v_rel|·(Cd ∘ A ∘ v_rel) in the body frame at the
 /// centre of pressure and angular damping, against the air: the mean wind (Wind, logarithmic
 /// profile) plus Dryden turbulence at the link. Writes body/<b>/wrench/aero (for WrenchSum),
-/// body/<b>/airspeed and env/wind/gust (the turbulence at the first link). The air density is
+/// body/<b>/airspeed, env/wind/gust (the turbulence at the first link) and env/wind/velocity
+/// (the air's velocity there, mean wind and gust, world frame: what the rotors fly in, at the
+/// first link's height). The air density is
 /// the config's "air_density", as rotor_aero. Not yet: lift tables, wind fields from VDB.
 class AeroDrag final : public IModule {
 public:
@@ -80,6 +82,7 @@ private:
     std::array<double, 3> groundPoint_{};
     std::vector<Link> links_;
     SignalId gust_;
+    SignalId windVelocity_;
 };
 
 }  // namespace lagrange::aerodynamics
