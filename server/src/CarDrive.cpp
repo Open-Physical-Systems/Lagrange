@@ -77,12 +77,15 @@ Status CarController::step(const StepContext& context, SignalBus& bus) {
     const double speed = bus.read(speed_);
     double target = 0.0;
     double turn = 0.0;
-    std::optional<double> pursuit;  // a steering angle from the demo's pure pursuit
+    std::optional<double> pursuit;  // a steering angle: the demo's pure pursuit, or commanded
     if (const auto command = external_ ? external_() : std::nullopt) {
         externalSeen_ = true;
         source_ = "ros";
-        target = command->linearMps;
-        turn = command->angularRadps;
+        target = command->speed;
+        turn = command->turnRate;
+        if (command->steeringAngle) {
+            pursuit = *command->steeringAngle;
+        }
     } else if (externalSeen_ || !demo_) {
         source_ = "stopped";
     } else {

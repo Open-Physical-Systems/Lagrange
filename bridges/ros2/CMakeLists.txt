@@ -13,6 +13,7 @@ find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(tf2_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(ackermann_msgs REQUIRED)
 
 add_library(lagrange_ros2 src/Bridge.cpp)
 lagrange_target_defaults(lagrange_ros2)
@@ -35,6 +36,7 @@ target_link_libraries(
         ${geometry_msgs_TARGETS}
         ${tf2_msgs_TARGETS}
         ${std_msgs_TARGETS}
+        ${ackermann_msgs_TARGETS}
 )
 
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
@@ -64,6 +66,7 @@ if(BUILD_TESTING)
         ${simulation_interfaces_TARGETS}
         ${nav_msgs_TARGETS}
         ${geometry_msgs_TARGETS}
+        ${ackermann_msgs_TARGETS}
     )
     lagrange_target_defaults(test_bridge)
 endif()
@@ -80,5 +83,6 @@ ament_export_dependencies(
     geometry_msgs
     tf2_msgs
     std_msgs
+    ackermann_msgs
 )
 ament_package()

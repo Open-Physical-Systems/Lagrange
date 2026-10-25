@@ -160,7 +160,12 @@ fallback documented if Autoware is not available for Lyrical.
    **done** 2026-10-25: `CameraModel` (lens, vignetting, rotational rolling shutter, exposure and
    noise, auto exposure), sensors.md §2, the sedan's front camera. Owed: motion blur, a light
    model, demosaicing)
-9. Autoware bridge (interface and stand-in test)
+9. Autoware bridge (interface and stand-in test) (**done** 2026-10-25: `lagrange_autoware`
+   (`bridges/autoware`): Autoware's control, gear, indicator commands and control-mode service
+   to the server's new `/ackermann_cmd`, and the vehicle reports and kinematic state back;
+   built only with `autoware_msgs` 1.11.0 (no Lyrical binary of `autoware_vehicle_msgs`);
+   stand-in test and a hand run with the sedan; docs/guide/autoware.md has the fallback. Owed:
+   a run with Autoware itself once it is released for Lyrical)
 10. Tutorial, release notes
 
 Owed by the owner's decision: the PhysX backend, SUMO co-simulation, esmini. Zero-copy ROS

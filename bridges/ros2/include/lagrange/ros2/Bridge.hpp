@@ -21,6 +21,9 @@ struct BridgeSettings {
     std::string robotDescription;  // URDF text for /robot_description; empty: not published
     double stateRateHz{50.0};      // /joint_states, /odom and the odom TF
     bool stampedCmdVel{true};      // /cmd_vel as TwistStamped (Nav2's default) or Twist
+    /// A road vehicle: also /ackermann_cmd (ackermann_msgs/AckermannDriveStamped), steering
+    /// angle and speed, as Autoware's interface (lagrange_autoware) and Ackermann stacks send.
+    bool ackermannCmd{false};
     /// ros2_control drives the robot: its controllers publish /joint_states, /odom and the
     /// odom TF and take the velocity commands, so the bridge does none of these.
     bool controllersOwnState{false};
@@ -36,6 +39,9 @@ struct CmdVel {
     double angularRadps{0.0};  // yaw rate (about z)
     double lateralMps{0.0};    // left (y), for robots that move sideways (multicopters)
     double verticalMps{0.0};   // up (z), likewise
+    /// From /ackermann_cmd: the bicycle model's road-wheel angle (rad, positive left), which
+    /// then stands for the turn rate.
+    std::optional<double> steeringAngle;
 };
 
 /// What the viewer's ROS 2 workspace shows (lagrange.viewer.v1.RosGraph).

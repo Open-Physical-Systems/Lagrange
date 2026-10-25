@@ -21,6 +21,7 @@
 
 #include <gtest/gtest.h>
 
+#include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -222,6 +223,28 @@ TEST_F(BridgeTest, TakesVelocityCommandsAndExpiresThem) {
     EXPECT_DOUBLE_EQ(command.angularRadps, -0.2);
     std::this_thread::sleep_for(60ms);
     EXPECT_FALSE(bridge_->latestCommand(50ms).has_value()) << "a stale command must not count";
+}
+
+TEST_F(BridgeTest, TakesAckermannCommandsForRoadVehicles) {
+    // A road vehicle's bridge: the same robot, with /ackermann_cmd taken as well.
+    BridgeSettings settings;
+    settings.baseLink = "base_link";
+    settings.ackermannCmd = true;
+    bridge_ = std::make_unique<Bridge>(settings);
+    bridge_->attach(world_, scheduler_.bus());
+    auto publisher = listener_->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>(
+        "/ackermann_cmd", 10);
+    ackermann_msgs::msg::AckermannDriveStamped drive;
+    drive.drive.steering_angle = 0.15F;
+    drive.drive.speed = 4.0F;
+    ASSERT_TRUE(run([&] {
+        publisher->publish(drive);
+        return bridge_->latestCommand(500ms).has_value();
+    }));
+    const CmdVel command = *bridge_->latestCommand(500ms);
+    EXPECT_DOUBLE_EQ(command.linearMps, 4.0);
+    ASSERT_TRUE(command.steeringAngle.has_value());
+    EXPECT_FLOAT_EQ(static_cast<float>(*command.steeringAngle), 0.15F);
 }
 
 TEST_F(BridgeTest, GraphListsTheBridgesTopicsWithRates) {
