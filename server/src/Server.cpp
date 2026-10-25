@@ -516,14 +516,15 @@ struct Server::Impl {
         } else if (hasVehicles()) {
             // A road vehicle: /cmd_vel through the car's driver to throttle, brake and
             // steering; until the first command, its demo circle.
-            std::function<std::optional<VelocityCommand>()> external;
+            std::function<std::optional<CarCommand>()> external;
             if (bridge) {
-                external = [this]() -> std::optional<VelocityCommand> {
+                external = [this]() -> std::optional<CarCommand> {
                     const auto command = bridge->latestCommand(std::chrono::milliseconds(500));
                     if (!command) {
                         return std::nullopt;
                     }
-                    return VelocityCommand{command->linearMps, command->angularRadps};
+                    return CarCommand{command->linearMps, command->angularRadps,
+                                      command->steeringAngle};
                 };
             }
             next->add(std::make_unique<CarController>(external, options.demoDrive));
@@ -3818,6 +3819,7 @@ Status Server::load() {
         settings.stampedCmdVel = s.options.stampedCmdVel;
         settings.topicLinks = s.options.linkTopics;
         settings.controllersOwnState = !s.options.ros2ControlParams.empty();
+        settings.ackermannCmd = !WorldView(s.robot.world).instancesOf("VehicleAPI_1").empty();
         s.bridge = std::make_unique<ros2::Bridge>(settings);
         if (!s.options.ros2ControlParams.empty()) {
             if (importers::formatOf(s.options.robotPath) != importers::Format::Urdf) {
@@ -4000,8 +4002,8 @@ Status Server::start() {
                                         : "; a figure-eight demo drives"));
     } else if (s.hasVehicles()) {
         s.log(v1::LOG_LEVEL_INFO, "controller",
-              std::string("car: the driver turns /cmd_vel (speed, turn rate) into throttle, brake "
-                          "and steering") +
+              std::string("car: the driver turns /cmd_vel (speed, turn rate) or /ackermann_cmd "
+                          "(steering angle, speed) into throttle, brake and steering") +
                   (s.options.demoDrive ? "; until the first command it drives a 5 m circle round "
                                          "the origin"
                                        : "; it stands still until /cmd_vel arrives"));

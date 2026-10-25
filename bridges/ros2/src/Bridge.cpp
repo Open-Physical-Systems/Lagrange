@@ -42,6 +42,7 @@
 #include <thread>
 #include <variant>
 
+#include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
@@ -108,8 +109,13 @@ struct Bridge::Impl {
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr description;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmdVel;
     rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmdVelStamped;
+    rclcpp::Subscription<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr ackermannCmd;
 
     void take(const geometry_msgs::msg::Twist& twist) {
+        take(CmdVel{twist.linear.x, twist.angular.z, twist.linear.y, twist.linear.z, {}});
+    }
+
+    void take(const CmdVel& next) {
         const std::lock_guard<std::mutex> lock(commandMutex);
         auto delay = std::chrono::nanoseconds(0);
         if (commandGate.mapped) {
@@ -120,7 +126,6 @@ struct Bridge::Impl {
             }
             delay = std::chrono::nanoseconds(std::llround(commandGate.latency * 1e9));
         }
-        const CmdVel next{twist.linear.x, twist.angular.z, twist.linear.y, twist.linear.z};
         if (delay.count() > 0) {
             // The previous command stays in force until this one arrives.
             lateCommand = next;
@@ -463,6 +468,12 @@ Bridge::Bridge(BridgeSettings settings)
     } else {
         s.cmdVel = s.node->create_subscription<geometry_msgs::msg::Twist>(
             "/cmd_vel", 10, [&s](const geometry_msgs::msg::Twist& twist) { s.take(twist); });
+    }
+    if (settings_.ackermannCmd && !settings_.controllersOwnState) {
+        s.ackermannCmd = s.node->create_subscription<ackermann_msgs::msg::AckermannDriveStamped>(
+            "/ackermann_cmd", 10, [&s](const ackermann_msgs::msg::AckermannDriveStamped& drive) {
+                s.take(CmdVel{drive.drive.speed, 0.0, 0.0, 0.0, drive.drive.steering_angle});
+            });
     }
     s.executor.add_node(s.node);
     s.spinner = std::thread([&s] { s.executor.spin(); });

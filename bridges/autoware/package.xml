@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>lagrange_autoware</name>
+  <version>0.5.0</version>
+  <description>Autoware vehicle interface for Lagrange's road vehicles (v0.6): Autoware's control command to /ackermann_cmd, and the velocity, steering, gear and control-mode reports and the kinematic state from the simulator.</description>
+  <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>lagrange_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>ackermann_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <!-- Autoware's messages (autoware_msgs, Apache-2.0). autoware_vehicle_msgs has no Lyrical
+       binary package yet (TODO(verify) on each rosdistro sync), so both are asked for only with
+       LAGRANGE_AUTOWARE=on; without them the package builds nothing (docs/guide/autoware.md). -->
+  <depend condition="$LAGRANGE_AUTOWARE == on">autoware_control_msgs</depend>
+  <depend condition="$LAGRANGE_AUTOWARE == on">autoware_vehicle_msgs</depend>
+
+  <exec_depend>lagrange_server</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

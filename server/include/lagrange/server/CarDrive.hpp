@@ -9,17 +9,27 @@
 
 namespace lagrange::server {
 
+/// What drives a car: a speed (m/s, negative reverses) with a turn rate (rad/s, /cmd_vel), or
+/// with the bicycle model's road-wheel angle (rad, positive left; /ackermann_cmd), which then
+/// stands for the turn rate.
+struct CarCommand {
+    double speed{0.0};
+    double turnRate{0.0};
+    std::optional<double> steeringAngle;
+};
+
 /// Drives a road vehicle (VehicleAPI_1), the first of the world: writes vehicle/<v>/throttle,
 /// brake and steering_angle; reads vehicle/<v>/speed and the chassis's pose.
 ///
-/// The command is `external` (the ROS 2 bridge's /cmd_vel: speed and turn rate), turned into a
+/// The command is `external` (the ROS 2 bridge's /cmd_vel or /ackermann_cmd), turned into a
 /// speed PI on throttle, the brake when the car is faster than asked or is to stand still, and
-/// the bicycle model's steering angle atan(L·ω/v). Until the first external command, with
-/// `demo`, it drives a 5 m circle round the world's origin at 3 m/s (pure pursuit, so it stays
-/// on it), which fits the sample city block's junction; after it, a missing command stops it.
+/// the steering angle: the command's own, or the bicycle model's atan(L·ω/v) for a turn rate.
+/// Until the first external command, with `demo`, it drives a 5 m circle round the world's origin
+/// at 3 m/s (pure pursuit, so it stays on it), which fits the sample city block's junction; after
+/// it, a missing command stops it.
 class CarController final : public IModule {
 public:
-    CarController(std::function<std::optional<VelocityCommand>()> external, bool demo)
+    CarController(std::function<std::optional<CarCommand>()> external, bool demo)
         : external_(std::move(external)), demo_(demo) {}
 
     [[nodiscard]] ModuleInfo info() const override;
@@ -35,7 +45,7 @@ public:
     [[nodiscard]] const char* source() const { return source_; }
 
 private:
-    std::function<std::optional<VelocityCommand>()> external_;
+    std::function<std::optional<CarCommand>()> external_;
     bool demo_;
     bool externalSeen_{false};
     const char* source_{"demo"};
