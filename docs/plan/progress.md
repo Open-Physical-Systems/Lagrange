@@ -156,7 +156,10 @@ fallback documented if Autoware is not available for Lyrical.
    `assets/scenarios/cut_in.xosc`. Owed: catalogs, routing and trajectories, the ASAM examples)
 8. Sensors: radar; camera model (exposure, noise, distortion, rolling shutter) (radar **done**
    2026-10-25: `RadarAPI_1`, `lagrange_sensors`' radar by ray launching, sensors.md §2, the
-   sedan's front radar, `/<name>/detections`. Owed: rain attenuation, multipath)
+   sedan's front radar, `/<name>/detections`. Owed: rain attenuation, multipath) (camera model
+   **done** 2026-10-25: `CameraModel` (lens, vignetting, rotational rolling shutter, exposure and
+   noise, auto exposure), sensors.md §2, the sedan's front camera. Owed: motion blur, a light
+   model, demosaicing)
 9. Autoware bridge (interface and stand-in test)
 10. Tutorial, release notes
 
@@ -438,6 +441,7 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 | geo sensor schemas | `schemas/` (`GnssAPI_1`, `MagnetometerAPI_1`, `BarometerAPI_1` in the sensor library, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4 |
 | v0.6 road schema | `schemas/` (new `road` library: `RoadLaneAPI_1` with `lane:sStart`/`lane:sEnd`, formats.md §3.11; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.6. New library, nothing to migrate |
 | v0.6 radar schema | `schemas/` (`RadarAPI_1` in the sensor library, formats.md §3.8; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.6. New schema, nothing to migrate |
+| v0.6 camera schema additions | `schemas/` (`CameraSensorAPI_1`: `electronRate`, `vignetting`, formats.md §3.8; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.6. Additions, nothing to migrate |
 | v0.6 vehicle schemas | `schemas/` (new `vehicle` library: `VehicleAPI_1`, `WheelAPI_1`, formats.md §3.10; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.6. New library, nothing to migrate |
 | v0.5 schema libraries | `schemas/` (new `weather`, `emi`, `sensor_material`, `comms` libraries: `WeatherAPI_1`, `EmiSourceAPI_1`, `EmiSusceptibilityAPI_1`, `SensorMaterialAPI_1` from formats.md §3.4, §3.5, §3.7, and new `RadioLinkAPI_1`, `CanBusAPI_1` (§3.9); changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.5. Additions to the drafts listed in the changelog |
 | propeller files on rotors | `schemas/` (`RotorAPI_1`: `aero:rotor:propeller` replaces the unused `aero:rotor:bladeTable`, new `aero:rotor:mount`, `aero:rotor:direction` documented as the motor's sense; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4. `RotorAPI_1` is unreleased, so no migration |

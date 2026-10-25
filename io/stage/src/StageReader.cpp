@@ -735,6 +735,54 @@ private:
                         {"horizontal_fov", 2.0 * std::atan(aperture / 2.0 / focal)},
                         {"near_clip", clip[0]},
                         {"far_clip", clip[1]}};
+            // The sensor model (sensors.md §2): each part only when asked for.
+            const auto token = [&prim](const char* name) {
+                return valueOf<TfToken>(prim.GetAttribute(TfToken(name))).value_or(TfToken());
+            };
+            if (token("sensor:camera:shutter") == TfToken("rolling")) {
+                settings["rolling_shutter_time"] =
+                    real("sensor:camera:rollingShutterTime").value_or(0.0);
+            }
+            const TfToken distortion = token("sensor:camera:distortionModel");
+            if (distortion == TfToken("plumb_bob") || distortion == TfToken("equidistant")) {
+                const auto coeffs =
+                    valueOf<VtArray<double>>(
+                        prim.GetAttribute(TfToken("sensor:camera:distortionCoeffs")))
+                        .value_or(VtArray<double>());
+                const std::size_t wanted = distortion == TfToken("plumb_bob") ? 5 : 4;
+                if (coeffs.size() != wanted) {
+                    return Unexpected{path + ": sensor:camera:distortionCoeffs needs " +
+                                      std::to_string(wanted) + " values for " +
+                                      distortion.GetString()};
+                }
+                settings["distortion_model"] = distortion == TfToken("plumb_bob") ? 1.0 : 2.0;
+                for (std::size_t k = 0; k < wanted; ++k) {
+                    settings["distortion_k" + std::to_string(k + 1)] = coeffs[k];
+                }
+            }
+            if (const double v = real("sensor:camera:vignetting").value_or(0.0); v != 0.0) {
+                settings["vignetting"] = v;
+            }
+            const std::optional<double> exposure = real("sensor:camera:exposureTime");
+            const bool autoExposure =
+                valueOf<bool>(prim.GetAttribute(TfToken("sensor:camera:autoExposure")))
+                    .value_or(false);
+            if (exposure || autoExposure) {
+                const std::optional<double> electrons = real("sensor:camera:electronRate");
+                if (!exposure || !electrons) {
+                    return Unexpected{path +
+                                      ": the camera's sensor model needs "
+                                      "sensor:camera:exposureTime and electronRate"};
+                }
+                settings["exposure_time"] = *exposure;
+                settings["auto_exposure"] = autoExposure ? 1.0 : 0.0;
+                settings["electron_rate"] = *electrons;
+                settings["gain"] = real("sensor:camera:gain").value_or(1.0);
+                settings["read_noise"] = real("sensor:camera:readNoiseStd").value_or(2.0);
+                settings["full_well"] = real("sensor:camera:fullWellCapacity").value_or(10000.0);
+                settings["bit_depth"] =
+                    valueOf<int>(prim.GetAttribute(TfToken("sensor:camera:bitDepth"))).value_or(8);
+            }
             // The sensor looks along x; the USD camera along its -z.
             mount = compose(scene.offset, {{0, 0, 0}, conjugate(kSensorFromUsdCamera)});
         } else if (prim.HasAPI(TfToken("LidarAPI_1"))) {

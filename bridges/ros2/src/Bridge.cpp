@@ -329,8 +329,15 @@ struct Bridge::Impl {
         out.info.header.frame_id = out.frame;
         out.info.width = static_cast<std::uint32_t>(width);
         out.info.height = static_cast<std::uint32_t>(height);
-        out.info.distortion_model = "plumb_bob";
-        out.info.d = {0.0, 0.0, 0.0, 0.0, 0.0};
+        // The lens of the sensor model (CameraModel.hpp), in the same OpenCV order.
+        const double lens = get("distortion_model", 0.0);
+        out.info.distortion_model = lens == 2.0 ? "equidistant" : "plumb_bob";
+        out.info.d.assign(lens == 2.0 ? 4 : 5, 0.0);
+        if (lens > 0.0) {
+            for (std::size_t k = 0; k < out.info.d.size(); ++k) {
+                out.info.d[k] = get(("distortion_k" + std::to_string(k + 1)).c_str(), 0.0);
+            }
+        }
         out.info.k = {f, 0.0, (width - 1.0) / 2.0, 0.0, f, (height - 1.0) / 2.0, 0.0, 0.0, 1.0};
         out.info.r = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
         out.info.p = {

@@ -150,7 +150,18 @@ class "CameraSensorAPI_1" (
     )
     double sensor:camera:exposureTime (
         lagrangeUnit = "s"
-        doc = "No fallback: the sensor_model level needs it."
+        doc = """Exposure time; with autoExposure the longest one. No fallback: the sensor model
+        (exposure and noise) runs when it is given."""
+    )
+    double sensor:camera:electronRate (
+        lagrangeUnit = "1/s"
+        doc = """Electrons per second a pixel collects from what the renderer draws at full
+        brightness (linear 1): the scene's light level for this camera, which the raster level does
+        not model. Required with exposureTime."""
+    )
+    double sensor:camera:vignetting = 0 (
+        lagrangeUnit = "1"
+        doc = "Fraction of the natural cos⁴θ fall-off applied (0: none, 1: all of it)."
     )
     bool sensor:camera:autoExposure = false
     double sensor:camera:gain = 1 (
