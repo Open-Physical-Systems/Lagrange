@@ -206,7 +206,16 @@
       "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
       "properties": {
         "effects": { "type": "array", "uniqueItems": true,
-          "items": { "enum": ["fog", "rain", "dust", "wet_friction", "lens_contamination"] } }
+          "items": { "enum": ["fog", "rain", "dust", "wet_friction", "lens_contamination"] } },
+        "temperature": { "type": "number", "exclusiveMinimum": 0, "description": "K, the site's air temperature. No default (falls back to thermal's ambient temperature)." },
+        "pressure": { "type": "number", "exclusiveMinimum": 0, "description": "Pa, the site's air pressure. No default." },
+        "relative_humidity": { "type": "number", "minimum": 0, "maximum": 1, "description": "The site's relative humidity, 0 to 1. No default." },
+        "visibility": { "type": "number", "exclusiveMinimum": 0, "description": "m, meteorological optical range: fog by Koschmieder." },
+        "rain_rate": { "type": "number", "minimum": 0, "description": "m/s (1 mm/h = 2.778e-7 m/s)." },
+        "dust_concentration": { "type": "number", "minimum": 0, "description": "kg/m³ of airborne dust." },
+        "dust_median_diameter": { "type": "number", "exclusiveMinimum": 0, "description": "m, the dust's median particle diameter." },
+        "solar_irradiance": { "type": "number", "minimum": 0, "description": "W/m², direct normal." },
+        "sky_temperature": { "type": "number", "exclusiveMinimum": 0, "description": "K, for radiative exchange; default the air temperature." }
       },
       "unevaluatedProperties": false
     },

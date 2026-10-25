@@ -128,7 +128,8 @@ time-boxed. Order:
    `RadioLinkAPI_1`, `CanBusAPI_1` (**done** 2026-10-25)
 2. `modules/weather`: atmosphere state, mean wind and turbulence (from the aerodynamics config),
    fog by Koschmieder, rain by Marshall–Palmer, dust, wet friction, lens contamination; the
-   `clear` substitute
+   `clear` substitute (**done** 2026-10-25: `lagrange_weather`, `--weather`, the profile's
+   weather keys; weather.md §8. The wind stays in the aerodynamics config for now)
 3. Sensor weather effects: lidar attenuation, backscatter and rain returns (CPU and the GPU
    kernel), camera fog and rain
 4. Fields infrastructure: OpenVDB/NanoVDB, field signals, CPU and GPU sampling, the viewer's

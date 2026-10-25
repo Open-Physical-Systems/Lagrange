@@ -150,6 +150,34 @@ TEST(Profile, PassesTheRotorSettingsToTheRotors) {
     EXPECT_EQ(std::get<double>(r.at("inflow_time_constant")), 0.02);
 }
 
+TEST(Profile, TheWeatherNeedsItsSite) {
+    ProfileContext c = context();
+    c.modules.insert("weather");
+    const auto weather = [](const std::string& line) {
+        std::string yaml = profile();
+        yaml.replace(yaml.find("  weather: {enabled: false, substitute: clear}"),
+                     std::string("  weather: {enabled: false, substitute: clear}").size(),
+                     "  weather: " + line);
+        return yaml;
+    };
+    const ProfileCheck missing =
+        checkProfile(weather("{enabled: true, visibility: 100}"), schema(), c);
+    EXPECT_FALSE(missing.valid);
+    EXPECT_TRUE(hasIssue(missing, "/domains/weather/pressure")) << issues(missing);
+    const ProfileCheck given = checkProfile(
+        weather("{enabled: true, temperature: 283.15, pressure: 100000, relative_humidity: 0.9, "
+                "visibility: 100, effects: [fog]}"),
+        schema(), c);
+    EXPECT_TRUE(given.valid) << issues(given);
+    ASSERT_TRUE(given.settings);
+    EXPECT_EQ(std::get<double>(given.settings->weather.at("visibility")), 100.0);
+    EXPECT_EQ(std::get<std::vector<std::string>>(given.settings->weather.at("effects")),
+              std::vector<std::string>{"fog"});
+    // The site from the command line or a prim is enough.
+    c.weatherKnown = {"temperature", "pressure", "relative_humidity"};
+    EXPECT_TRUE(checkProfile(weather("{enabled: true, visibility: 100}"), schema(), c).valid);
+}
+
 TEST(Profile, ReportsBadYamlWithItsLine) {
     const ProfileCheck check = checkProfile("schema_version: 1\ndomains: [\n", schema(), context());
     ASSERT_FALSE(check.valid);

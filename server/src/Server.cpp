@@ -26,6 +26,7 @@
 #include "lagrange/stage/Stage.hpp"
 #include "lagrange/thermal/ThermalNetwork.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
+#include "lagrange/weather/Weather.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 
 #include <algorithm>
@@ -535,6 +536,25 @@ struct Server::Impl {
                 next->add(std::make_unique<thermal::ThermalNetwork>(), ModuleConfig(heat));
             }
         }
+        // The weather (domains/weather.md): the site's atmosphere from --weather, a WeatherAPI_1
+        // prim and the profile (the profile wins), the temperature falling back to the ambient
+        // one. Without the site it does not run (nothing needs it yet); off, its clear substitute.
+        {
+            ModuleConfigData weather;
+            for (const auto& [key, value] : options.weather) {
+                weather.values[key] = value;
+            }
+            for (const auto& [key, value] : settings.weather) {
+                weather.values[key] = value;
+            }
+            if (!weather.values.contains("temperature") && settings.ambientTemperatureK) {
+                weather.values["temperature"] = *settings.ambientTemperatureK;
+            }
+            const ModuleConfig config(weather);
+            if (weather::Weather::hasSite(WorldView(robot.world), config)) {
+                next->add(std::make_unique<weather::Weather>(off("weather")), config);
+            }
+        }
         bool windInRun = false;
         // Link drag against the wind (an AeroAPI_1 robot, with the site's air density): the
         // aerodynamics config's own density, else rotor_aero's.
@@ -649,7 +669,15 @@ struct Server::Impl {
         settings.geoOrigin = appliedGeoOrigin ? appliedGeoOrigin : options.geoOrigin;
         settings.aerodynamics = appliedAerodynamics;
         settings.rotorAero = appliedRotorAero;
+        settings.weather = appliedWeather;
         return settings;
+    }
+    /// Whether the weather module (or its substitute) is in the run.
+    bool weatherRuns() const {
+        return scheduler != nullptr &&
+               std::ranges::any_of(scheduler->plan(), [](const ScheduledModule& m) {
+                   return std::string_view(m.label).starts_with("weather/");
+               });
     }
     /// The ambient temperature the run uses: an applied profile's, else the command line's.
     std::optional<double> ambient() const {
@@ -661,6 +689,7 @@ struct Server::Impl {
     std::optional<coords::Geodetic> appliedGeoOrigin;                     // from an applied profile
     std::map<std::string, ConfigValue, std::less<>> appliedAerodynamics;  // its wind
     std::map<std::string, ConfigValue, std::less<>> appliedRotorAero;     // its rotor settings
+    std::map<std::string, ConfigValue, std::less<>> appliedWeather;       // its weather
     std::shared_ptr<mavlink::Px4Link> px4Link;  // PX4's connection, across rebuilds of the run
     std::shared_ptr<mavlink::ArduPilotLink> ardupilotLink;  // ArduPilot's, likewise
     std::optional<bool> speedPrediction;                    // from an applied profile
@@ -1713,6 +1742,25 @@ struct Server::Impl {
                               substituted("rotor_aero") ? "substitute: ideal, " : "",
                               rho ? "air_density: " : "dt: ", rho ? *rho : 0.001);
                 yaml += "  rotor_aero: " + std::string(text) + "\n";
+            } else if (std::string_view(row.domain) == "weather" && weatherRuns()) {
+                // What the run uses: the command line's weather, then the applied profile's.
+                std::map<std::string, ConfigValue, std::less<>> values;
+                for (const auto& [key, value] : options.weather) {
+                    values[key] = value;
+                }
+                for (const auto& [key, value] : appliedWeather) {
+                    values[key] = value;
+                }
+                std::string text = substituted("weather") ? "{enabled: false, substitute: clear"
+                                                          : "{enabled: true";
+                for (const auto& [key, value] : values) {
+                    if (const double* number = std::get_if<double>(&value)) {
+                        char item[96];
+                        std::snprintf(item, sizeof(item), ", %s: %.9g", key.c_str(), *number);
+                        text += item;
+                    }
+                }
+                yaml += "  weather: " + text + "}\n";
             } else if (std::string_view(row.domain) == "comms" ||
                        std::string_view(row.domain) == "traffic" ||
                        std::string_view(row.domain) == "vehicle_dynamics" ||
@@ -2451,6 +2499,20 @@ struct Server::Impl {
         if (!WorldView(robot.world).instancesOf("AeroAPI_1").empty()) {
             context.modules.insert("aerodynamics");
         }
+        context.modules.insert("weather");
+        for (const auto& [key, value] : options.weather) {
+            context.weatherKnown.insert(key);
+        }
+        if (const auto prims = WorldView(robot.world).instancesOf("WeatherAPI_1"); !prims.empty()) {
+            for (const auto& [key, attribute] :
+                 {std::pair{"temperature", "weather:ambientTemperature"},
+                  std::pair{"pressure", "weather:pressure"},
+                  std::pair{"relative_humidity", "weather:relativeHumidity"}}) {
+                if (prims.front()->real(attribute)) {
+                    context.weatherKnown.insert(key);
+                }
+            }
+        }
         context.ambientKnown = options.ambientTemperatureK.has_value();
         context.airDensityKnown = options.airDensityKgM3.has_value();
         for (const DomainRow& row : kDomains) {
@@ -2582,6 +2644,7 @@ struct Server::Impl {
         }
         appliedAerodynamics = settings.aerodynamics;
         appliedRotorAero = settings.rotorAero;
+        appliedWeather = settings.weather;
         pending.reset();
         if (Status status = restart(); !status.ok()) {
             // Keep the run going on the profile it had.
