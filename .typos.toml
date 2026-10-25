@@ -7,6 +7,9 @@ extend-exclude = ["LICENSE", "LICENSES/", "docs/imgs/", "*.usda", "*.mcap", "doc
 sitl = "sitl"   # software in the loop
 lod = "lod"     # level of detail
 thr = "thr"     # PX4 parameter names: THR_MDL_FAC, MPC_THR_HOVER
+ned = "ned"     # north-east-down, the aerospace navigation frame
+parm = "parm"   # ArduPilot parameter files (.parm)
+thst = "thst"   # ArduPilot parameter names: MOT_THST_HOVER
 
 [default.extend-identifiers]
 # POSIX msghdr field.

@@ -37,6 +37,9 @@ struct ServerOptions {
     /// PX4 SITL through the MAVLink bridge (--mavlink px4[:PORT]): the TCP port it connects to;
     /// none: the built-in multicopter controller flies a multicopter.
     std::optional<std::uint16_t> px4Port;
+    /// ArduPilot SITL through its JSON interface (--mavlink ardupilot[:PORT]): the UDP port its
+    /// servo frames come to.
+    std::optional<std::uint16_t> ardupilotPort;
     /// Bench mode (--bench): physics replaced by this recording's rigid-body signals, replayed
     /// open loop (the replay substitute); empty = none. A profile's rigid_body replay source
     /// overrides it.

@@ -153,8 +153,9 @@ step resting on the ones before:
 7. `bridges/mavlink`: PX4 SITL lockstep (`HIL_SENSOR`, `HIL_GPS`, `HIL_ACTUATOR_CONTROLS`), then
    ArduPilot's JSON interface (PX4 **done** 2026-10-25: the square mission flies end to end with
    PX4 v1.17.0; `ros-lyrical-mavlink` is a new rosdep dependency (`sudo apt install
-   ros-lyrical-mavlink`; on this machine unpacked to `~/.local/ros-mavlink` until installed).
-   ArduPilot: not yet)
+   ros-lyrical-mavlink`). ArduPilot **done** the same day: `--mavlink ardupilot`, the JSON
+   interface at 1 kHz in lockstep; ArduCopter Copter-4.7.2 flies the square, calm and in 8 m/s
+   gusts, `tools/ci/ardupilot_mission.sh [--wind]`; `test_ardupilot_json`)
 8. The acceptance mission (take-off, square in 8 m/s gusts, land; low-battery thrust sag), the
    tutorial, and rebase in flight (the mission and the low-battery scenario **done** 2026-10-25,
    robot-classes.md §5. Rebase in flight needs the runtime rebase, C5, which the owner deferred

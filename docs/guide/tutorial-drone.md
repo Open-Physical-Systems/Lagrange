@@ -90,7 +90,7 @@ The wind grows with height (a logarithmic profile over open terrain), and turbul
 of a metre or two per second; `env/wind/gust` is the gust at the frame. The controller leans
 into it and stays within a few centimetres of its spot.
 
-## 5. PX4 flies it
+## 5. PX4 or ArduPilot flies it
 
 PX4 runs as its own program and talks to the simulator through its simulator interface: the
 simulator sends it IMU, magnetometer, barometer and GNSS readings, PX4 answers with motor
@@ -114,6 +114,25 @@ The script starts `lagrange_server --mavlink px4` with the quadcopter, starts PX
 airframe `22100_lagrange_quad_x500` (the quadcopter's rotor layout for PX4), uploads the mission
 over MAVLink and follows it until PX4 has landed and disarmed. QGroundControl can watch it too:
 PX4 sends to UDP 14550.
+
+ArduPilot flies it too, through its JSON simulator interface. Build ArduCopter once:
+
+```bash
+git clone --branch Copter-4.7.2 --depth 1 --recurse-submodules --shallow-submodules \
+    https://github.com/ArduPilot/ardupilot.git ~/ardupilot
+cd ~/ardupilot && ./waf configure --board sitl && ./waf copter
+```
+
+(and `pymavlink` in `~/ardupilot/.venv`). Then:
+
+```bash
+tools/ci/ardupilot_mission.sh          # the same square, flown by ArduCopter
+tools/ci/ardupilot_mission.sh --wind
+```
+
+The server runs with `--mavlink ardupilot` and answers each of ArduCopter's servo frames with
+the vehicle's state, 1000 times a simulated second; ArduCopter takes its parameters from
+`bridges/mavlink/ardupilot/lagrange_quad_x500.parm`.
 
 ## 6. A low battery
 

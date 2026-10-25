@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs docs/guide/tutorial-drone.md headless, step by step, and fails when a step does not do
-# what the tutorial says. The viewer is left out; the PX4 step runs when PX4 SITL is built in
-# $PX4_DIR (default ~/PX4-Autopilot).
+# what the tutorial says. The viewer is left out; the PX4 and ArduPilot steps run when their SITL is
+# built in $PX4_DIR (default ~/PX4-Autopilot) and $ARDUPILOT_DIR (default ~/ardupilot).
 # Usage (from the source tree, after building): tools/ci/tutorial_drone.sh
 set -euo pipefail
 
@@ -55,11 +55,16 @@ print(f"drift {drift:.2f} m, airspeed {sim.read('body/base_link/airspeed')[0]:.1
 assert drift < 0.3, drift
 PY
 
-step "5. PX4 flies it"
+step "5. PX4 or ArduPilot flies it"
 if [ -x "${PX4_DIR:-$HOME/PX4-Autopilot}/build/px4_sitl_default/bin/px4" ]; then
     tools/ci/px4_mission.sh || fail "the PX4 mission"
 else
     echo "PX4 SITL is not built in ${PX4_DIR:-$HOME/PX4-Autopilot}: step left out"
+fi
+if [ -x "${ARDUPILOT_DIR:-$HOME/ardupilot}/build/sitl/bin/arducopter" ]; then
+    tools/ci/ardupilot_mission.sh || fail "the ArduPilot mission"
+else
+    echo "ArduCopter SITL is not built in ${ARDUPILOT_DIR:-$HOME/ardupilot}: step left out"
 fi
 
 echo
