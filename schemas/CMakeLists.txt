@@ -8,7 +8,7 @@ project(lagrange_schemas VERSION 0.0.0 LANGUAGES CXX) # CXX: pxrConfig finds TBB
 find_package(ament_cmake REQUIRED)
 find_package(openusd_vendor REQUIRED)
 
-set(LAGRANGE_SCHEMA_LIBRARIES sensor electrical thermal)
+set(LAGRANGE_SCHEMA_LIBRARIES sensor electrical thermal aero)
 set(usd_env
     "PXR_PLUGINPATH_NAME=${CMAKE_CURRENT_SOURCE_DIR}/metadata"
     "PYTHONPATH=${OPENUSD_VENDOR_PYTHONPATH}"

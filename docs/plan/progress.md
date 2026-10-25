@@ -118,6 +118,27 @@ a motor heat run (Q16; the battery is checked against published cell data since 
 from 35 % state of charge up), the drive-design
 review of the motor constants, FMI 2.0 FMUs (Q8), Jolt's wheel slip. Released as `v0.3.0` on 2026-10-25 at the owner's request, after v0.2.0.
 
+## v0.4 plan (2026-10-25)
+
+The owner asked to continue with v0.4 (drones) after publishing v0.2.0 and v0.3.0, with the same
+standing answers as v0.3 (gated changes merged and listed below; autonomous loop), PX4 SITL built
+on the host (v1.17.0, the latest stable release, BSD-3-Clause), and demos time-boxed. Order, each
+step resting on the ones before:
+
+1. `schemas/aero`: `AeroAPI_1`, `RotorAPI_1` (**done** 2026-10-25)
+2. `modules/rotor_aero`: coefficient model, inflow lag, ground effect, the `ideal` substitute;
+   thrust into `wrench_sum`, shaft torque into `joint/<j>/load_torque`; checks against closed
+   forms and published propeller data
+3. Sample quadcopter `assets/robots/quad_x500` (URDF, overlay with rotors, motors, 4S battery)
+   and `assets/worlds/open_field`; hover by a simple attitude/thrust controller in a test
+4. Electrical at 50 µs for small fast motors; coupling tests at J = 1e-5 kg·m²
+5. Sensors: GNSS, magnetometer (world magnetic model data, licence checked), barometer
+6. `modules/aerodynamics`: link drag, mean wind profile, Dryden turbulence (MIL-HDBK-1797)
+7. `bridges/mavlink`: PX4 SITL lockstep (`HIL_SENSOR`, `HIL_GPS`, `HIL_ACTUATOR_CONTROLS`), then
+   ArduPilot's JSON interface
+8. The acceptance mission (take-off, square in 8 m/s gusts, land; low-battery thrust sag), the
+   tutorial, and rebase in flight
+
 ## Defaults taken during the autonomous run
 
 | Item | Default | Why |
@@ -266,6 +287,7 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 | thermal schemas | `schemas/` (new `schemas/thermal` library: `ThermalAPI_1`, `ThermalLinkAPI_1` from formats.md §3.2, under the accepted RFC 0002) | As drafted; changelog entry |
 | electrical network (fallback doc fix) | `schemas/` (documentation of `elec:backEmfConstant`'s fallback corrected to Kt/1.5 for dq machines; changelog entry) | No attribute changed; the network refuses an authored Ke that disagrees with Kt by over 3 % |
 | raster camera sensor | `schemas/` (`CameraSensorAPI_1` in the sensor library, from formats.md §3.8, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-24 for autonomous work. Applied to a UsdGeomCamera, whose lens gives the field of view |
+| aerodynamics schemas | `schemas/` (new `schemas/aero` library: `AeroAPI_1`, `RotorAPI_1` from formats.md §3.3, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4. Two documentation additions to the draft, listed in the changelog |
 | collision shapes in the snapshot | `proto/` (`Collider`, `SceneSnapshot.colliders` 11; protocol.md §4.3; golden frames regenerated) | Pre-approved by the owner on 2026-10-24 for autonomous work. New message and field only; `buf` is not installed here, so `buf breaking` was not run |
 | electrical schemas and their loading | `schemas/` (new `schemas/electrical` library: six schemas from formats.md §3.1, under the accepted RFC 0002; `schemas/CHANGELOG.md` started) | Two additions to the drafts, listed in the changelog. Motor constant conventions still need the drive-design review RFC 0002 asks for before the network uses them |
 
