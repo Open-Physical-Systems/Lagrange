@@ -354,6 +354,8 @@ YAML, `*.prop.yaml`, `format: lagrange-propeller-1`. Samples are in `assets/prop
 | `aerofoils.<name>` | — | Section data: `lift_slope` (1/rad, two-dimensional), `zero_lift_angle` (deg), `cl_max`, `cl_min`, `cd_min`, `cl_at_cd_min`, `cd_lift` (drag polar `cd = cd_min + cd_lift·(cl − cl_at_cd_min)²`); for drawing only, `camber` and `camber_position` (NACA four-digit mean line, fractions of the chord) |
 | `stations[]` | — | Blade stations from root to tip: `r` (r/R), `chord` (c/R), `twist` (deg, the section's reference line against the plane of rotation), `thickness` (t/c, for drawing), `aerofoil` (a name above), and optionally `zero_lift_angle` and `cd_min` for that station |
 
+| `folding` | — | Optional, folding blades: `hinge` (r/R of the hinges), `blade_mass` (kg, one blade outboard of its hinge), `limit` (deg, the hinge's stop either way; fallback 85) |
+
 Every file says where its numbers come from in comments at its top; a propeller made up for a
 sample says so.
 

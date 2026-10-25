@@ -11,6 +11,8 @@
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/services/WrenchSum.hpp"
 
+#include <string>
+
 #include <gtest/gtest.h>
 
 namespace lagrange::server {
@@ -71,6 +73,57 @@ TEST(Multicopter, ALowBatterySagsAndGivesLessThrust) {
     EXPECT_LT(low.thrust, 0.9 * full.thrust);      // the voltage limits the rotor speed
     EXPECT_LT(low.height, 0.8 * full.height);
     EXPECT_GT(low.height, 0.0);  // it still flies
+}
+
+struct Hover {
+    double height{0.0};      // m above the start after 8 s
+    double rotorSpeed{0.0};  // rad/s, rotor 1 about its joint axis
+    double power{0.0};       // W from the battery
+};
+
+/// The built-in controller hovering `path` 2 m above its start, on the rotors' `fidelity`.
+Hover hover(const std::string& path, const std::string& fidelity) {
+    auto robot = loadModel(path);
+    EXPECT_TRUE(robot) << robot.error();
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+    ModuleConfigData power;
+    power.dt = 50_us;
+    power.values["exchange_step"] = 0.001;
+    scheduler.add(std::make_unique<electrical::ElectricalNetwork>(), ModuleConfig(power));
+    ModuleConfigData air;
+    air.values[rotor_aero::kAirDensityKey] = 1.225;
+    ModuleConfigData rotors = air;
+    rotors.values["fidelity"] = fidelity;
+    scheduler.add(std::make_unique<rotor_aero::RotorAero>(), ModuleConfig(rotors));
+    scheduler.add(std::make_unique<MulticopterController>(MulticopterController::Settings{}),
+                  ModuleConfig(air));
+    scheduler.add(std::make_unique<services::WrenchSum>());
+    auto wired = scheduler.wire(WorldView(robot->world));
+    EXPECT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    const SignalBus& bus = scheduler.bus();
+    const double start = bus.readN(bus.find("body/base_link/pose"))[2];
+    EXPECT_TRUE(scheduler.stepUntil(SimTime{8'000'000'000}).ok());
+    return {bus.readN(bus.find("body/base_link/pose"))[2] - start,
+            bus.read(bus.find("joint/rotor_1_joint/velocity")),
+            bus.read(bus.find("battery/battery/power"))};
+}
+
+// Propellers as built (step 9): the sample hovers alike on its coefficients and on its blades,
+// which were matched to the same measured propeller; and with its motors upside down under the
+// arms, pushers whose joints turn the other way about their downward axes, it hovers too.
+TEST(Multicopter, HoversOnItsBladesAndWithInvertedMotors) {
+    const Hover coefficients = hover(LAGRANGE_TEST_QUAD_USDA, "coefficients");
+    const Hover blades = hover(LAGRANGE_TEST_QUAD_USDA, "bem");
+    const Hover inverted = hover(LAGRANGE_TEST_QUAD_INVERTED_USDA, "bem");
+    for (const Hover& h : {coefficients, blades, inverted}) {
+        EXPECT_NEAR(h.height, 2.0, 0.05);
+    }
+    EXPECT_NEAR(blades.rotorSpeed, coefficients.rotorSpeed, 0.02 * coefficients.rotorSpeed);
+    EXPECT_NEAR(blades.power, coefficients.power, 0.03 * coefficients.power);
+    EXPECT_GT(blades.rotorSpeed, 0.0);    // rotor 1 is ccw about its upward axis
+    EXPECT_LT(inverted.rotorSpeed, 0.0);  // the same sense seen from above, about a downward axis
+    EXPECT_NEAR(inverted.rotorSpeed, -blades.rotorSpeed, 0.01 * blades.rotorSpeed);
 }
 
 }  // namespace

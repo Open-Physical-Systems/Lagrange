@@ -214,7 +214,9 @@ TEST(PropellerMesh, AModelDrawsItsPropellersInPlaceOfTheDisc) {
                                  kNoIndex,
                                  frame.index,
                                  {},
-                                 {1.0F, 1.0F, 1.0F}});
+                                 {1.0F, 1.0F, 1.0F},
+                                 {},
+                                 {0.0, 1.0, 0.0}});
     model.scene.prims.push_back({"prop",
                                  "/quad/prop",
                                  0,
@@ -224,7 +226,9 @@ TEST(PropellerMesh, AModelDrawsItsPropellersInPlaceOfTheDisc) {
                                  kNoIndex,
                                  prop.index,
                                  {},
-                                 {1.0F, 1.0F, 1.0F}});
+                                 {1.0F, 1.0F, 1.0F},
+                                 {},
+                                 {0.0, 1.0, 0.0}});
     model.scene.prims.push_back({"visual",
                                  "/quad/prop/visual",
                                  1,
@@ -234,7 +238,9 @@ TEST(PropellerMesh, AModelDrawsItsPropellersInPlaceOfTheDisc) {
                                  kNoIndex,
                                  prop.index,
                                  {},
-                                 {1.0F, 1.0F, 1.0F}});
+                                 {1.0F, 1.0F, 1.0F},
+                                 {},
+                                 {0.0, 1.0, 0.0}});
     model.bodyPrim = {0, 1};
     addPropellerBlades(model);
     ASSERT_EQ(model.scene.prims.size(), 4U);
@@ -247,6 +253,131 @@ TEST(PropellerMesh, AModelDrawsItsPropellersInPlaceOfTheDisc) {
     const auto up = rotate(blades.offset.orientation, {0.0, 0.0, 1.0});
     EXPECT_NEAR(up[2], 1.0, 1e-12);
     EXPECT_TRUE(model.notes.empty());
+}
+
+TEST(Propeller, TheSamplePropellersFlyBothHandsAlike) {
+    const Air air{1.225, 0.0};
+    for (const std::string blades : {"2blade", "3blade"}) {
+        std::string error;
+        const std::string base = std::string(LAGRANGE_PROPELLERS) + "/generic_10in_" + blades;
+        const Propeller ccw = loadPropeller(base + "_ccw.prop.yaml", error);
+        const Propeller cw = loadPropeller(base + "_cw.prop.yaml", error);
+        ASSERT_TRUE(error.empty()) << error;
+        const PropellerCoefficients a = coefficientsAt(ccw, 0.0, 76.2, air);
+        const PropellerCoefficients b = coefficientsAt(cw, 0.0, 76.2, air);
+        EXPECT_EQ(a.ct, b.ct) << blades;  // mirror images
+        EXPECT_EQ(a.cp, b.cp) << blades;
+    }
+    // The two-blade's static CT and CP are those of the measured APC 10x4.7 SF it stands for
+    // (UIUC propeller database: 0.125, 0.0507); the three-blade gives more thrust.
+    const PropellerCoefficients two = coefficientsAt(sample("ccw"), 0.0, 76.2, air);
+    EXPECT_NEAR(two.ct, 0.125, 0.02 * 0.125);
+    EXPECT_NEAR(two.cp, 0.0507, 0.02 * 0.0507);
+    std::string error;
+    const PropellerCoefficients three = coefficientsAt(
+        loadPropeller(std::string(LAGRANGE_PROPELLERS) + "/generic_10in_3blade_ccw.prop.yaml",
+                      error),
+        0.0, 76.2, air);
+    EXPECT_GT(three.ct, 1.1 * two.ct);
+}
+
+Propeller folding() {
+    std::string error;
+    const Propeller p = loadPropeller(
+        std::string(LAGRANGE_PROPELLERS) + "/generic_10in_folding_ccw.prop.yaml", error);
+    EXPECT_TRUE(error.empty()) << error;
+    EXPECT_TRUE(p.folding.has_value());
+    return p;
+}
+
+TEST(FoldingBlade, FoldsWhenStoppedAndOpensAsItSpinsUp) {
+    const Propeller p = folding();
+    const FoldingBlade blade(p);
+    const double limit = 85.0 * kDeg;
+    const double g = -9.80665;  // thrust up, gravity down
+    // Stopped: its weight folds it down against the stop.
+    EXPECT_NEAR(blade.angle(0.0, 0.0, 0.0, g), -limit, 1e-12);
+    // Spinning up, the blade rises towards the plane of rotation, then cones a little forward.
+    EXPECT_GT(blade.angle(20.0, 0.0, 0.0, g), -limit);  // 20 rad/s: centrifugal beats weight
+    double last = -limit;
+    for (const double omega : {5.0, 20.0, 50.0, 200.0, 550.0}) {
+        const BemLoad l = bemLoad(p, omega, 0.0, kSeaLevel);
+        const double beta = blade.angle(omega, l.thrust, l.thrustRadius, g);
+        EXPECT_GE(beta, last) << omega;  // slowly turning, it may still hang on its stop
+        last = beta;
+    }
+    EXPECT_GT(last, 0.0);
+    EXPECT_LT(last, 5.0 * kDeg);  // hover: a few degrees of coning
+    // The angle is where the moments balance: thrust and weight against the centrifugal one.
+    const BemLoad l = bemLoad(p, 550.0, 0.0, kSeaLevel);
+    const double beta = blade.angle(550.0, l.thrust, l.thrustRadius, g);
+    const double coarse = blade.angle(550.0, 2.0 * l.thrust, l.thrustRadius, g);
+    EXPECT_GT(coarse, beta);  // more thrust, more coning
+}
+
+TEST(PropellerMesh, AFoldingPropellerIsAHubAndHingedBlades) {
+    Model model;
+    World& w = model.world;
+    const BodyId frame =
+        w.addBody("frame", kWorldBody, Pose{}, 1.0, {}, {0.01, 0.01, 0.01, 0, 0, 0});
+    const BodyId prop =
+        w.addBody("prop", frame, {{0.2, 0.0, 0.05}}, 0.02, {}, {1e-5, 1e-5, 2e-5, 0, 0, 0});
+    w.addJoint("prop_joint", JointType::Continuous, prop, {0, 0, 1}, true);
+    w.schemaInstances.push_back({});
+    SchemaInstance& rotor = w.schemaInstances.back();
+    rotor.schema = "RotorAPI_1";
+    rotor.prim = w.joints.prim.back();
+    rotor.assetPaths = {{"aero:rotor:propeller",
+                         std::string(LAGRANGE_PROPELLERS) + "/generic_10in_folding_ccw.prop.yaml"}};
+    model.scene.prims.push_back({"frame",
+                                 "/quad/frame",
+                                 kNoIndex,
+                                 "Xform",
+                                 {},
+                                 kNoIndex,
+                                 kNoIndex,
+                                 frame.index,
+                                 {},
+                                 {1.0F, 1.0F, 1.0F},
+                                 {},
+                                 {0.0, 1.0, 0.0}});
+    model.scene.prims.push_back({"prop",
+                                 "/quad/prop",
+                                 0,
+                                 "Xform",
+                                 {},
+                                 kNoIndex,
+                                 kNoIndex,
+                                 prop.index,
+                                 {},
+                                 {1.0F, 1.0F, 1.0F},
+                                 {},
+                                 {0.0, 1.0, 0.0}});
+    model.bodyPrim = {0, 1};
+    addPropellerBlades(model);
+    ASSERT_EQ(model.scene.prims.size(), 5U);  // the hub and two blades
+    EXPECT_TRUE(model.scene.prims[2].hinge.empty());
+    for (const std::size_t b : {3U, 4U}) {
+        const ScenePrim& blade = model.scene.prims[b];
+        EXPECT_EQ(blade.hinge, "rotor/prop_joint/blade_angle");
+        EXPECT_EQ(blade.body, prop.index);
+        // At its hinge, 0.16 R from the axis.
+        EXPECT_NEAR(std::hypot(blade.offset.position[0], blade.offset.position[1]), 0.16 * 0.127,
+                    1e-9);
+    }
+    // The second blade is half a turn round from the first.
+    EXPECT_NEAR(model.scene.prims[3].offset.position[0], -model.scene.prims[4].offset.position[0],
+                1e-12);
+    // Turned by Ry(−β) about its hinge, the blade's tip rises towards the thrust direction.
+    const TriMesh m = foldingBladeMesh(folding());
+    double tipX = 0.0;
+    for (std::size_t v = 0; v < m.positions.size(); v += 3) {
+        tipX = std::max(tipX, static_cast<double>(m.positions[v]));
+    }
+    const double beta = 10.0 * kDeg;
+    const auto tip =
+        rotate({std::cos(-0.5 * beta), 0.0, std::sin(-0.5 * beta), 0.0}, {tipX, 0.0, 0.0});
+    EXPECT_GT(tip[2], 0.0);
 }
 
 TEST(Propeller, RejectsAnIncompleteFile) {

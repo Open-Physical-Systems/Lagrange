@@ -5,6 +5,7 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -58,7 +59,10 @@ inline constexpr double kGroundEffectMinHeight = 0.5;  // ×R; the validated ran
 /// so they follow climb, descent and the propeller's hand and mount; a propeller turned the wrong
 /// way (its hand against aero:rotor:direction) or mounted the wrong way round gives what a real
 /// one gives, with a warning at load. Optional config "speed_of_sound" (m/s, a site parameter)
-/// adds compressibility. It also reads body/<c>/twist.
+/// adds compressibility. It also reads body/<c>/twist. A propeller with folding blades (at
+/// either fidelity; at `coefficients` its thrust acts at 0.75 R) writes
+/// rotor/<j>/blade_angle (rad, FoldingBlade: coning towards the front positive, folded back
+/// when stopped), and its thrust and torque are the open propeller's times the cosine of it.
 ///
 /// Not yet: edgewise flow (forward flight's in-plane velocity, blade flapping), wind at the
 /// rotors, ground effect over scenery other than the ground plane.
@@ -90,15 +94,18 @@ private:
         double mountSign{1.0};                      // +1 puller (thrust along the axis), −1 pusher
         double handSign{1.0};  // +1 a ccw propeller (about its thrust direction), −1 cw
         std::shared_ptr<const PropellerTable> propeller;  // bem fidelity
-        SignalId velocity, pose, twist;
+        std::optional<FoldingBlade> folding;              // folding blades
+        double bladeAngle{0.0};                           // rad, last step's (folding)
+        SignalId velocity, pose, twist, bladeAngleOut;
         SignalId thrustOut, torqueOut, inducedOut, wrenchOut, loadOut;
     };
 
     bool ideal_;
     bool bem_{false};
     double rho_{0.0};
-    double speedOfSound_{0.0};  // m/s; 0: incompressible
-    double lag_{0.0};           // s
+    double speedOfSound_{0.0};         // m/s; 0: incompressible
+    std::array<double, 3> gravity_{};  // m/s², world-local
+    double lag_{0.0};                  // s
     bool groundEffect_{true};
     bool hasGround_{false};
     std::array<double, 3> groundPoint_{}, groundNormal_{0.0, 0.0, 1.0};

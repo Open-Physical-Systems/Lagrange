@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -52,6 +53,15 @@ struct BladeStation {
 /// A propeller as built: blade geometry and sections, read from a propeller file
 /// (`*.prop.yaml`, formats.md §3.3.1). `hand` is the sense of rotation about the propeller's own
 /// thrust direction that makes thrust: "ccw" or "cw".
+/// Folding blades: each blade outboard of `hinge` swings on a hinge whose axis is tangential,
+/// coning forward under thrust, straightened by its spin, and folded back by gravity when the
+/// propeller stops (FoldingBlade).
+struct Folding {
+    double hinge{0.0};      // r/R of the hinges
+    double bladeMass{0.0};  // kg, one blade outboard of its hinge
+    double limit{0.0};      // rad, the hinge's stop either way (folded flat against the motor)
+};
+
 struct Propeller {
     std::string name;
     double radius{0.0};  // m, tip
@@ -59,6 +69,33 @@ struct Propeller {
     std::string hand;
     std::vector<BladeStation> stations;  // by radius, the first at the root of the aerodynamic
                                          // blade (the hub's edge)
+    std::optional<Folding> folding;
+};
+
+/// A folding blade's angle on its hinge (aerodynamics.md §2.1), quasi-static: the moments of
+/// its thrust and its weight about the hinge balance the centrifugal moment of its mass,
+/// Ω²·sin β·(r_h·S1 + cos β·S2), with S1 and S2 the blade's first and second mass moments about
+/// the hinge (mass along the blade as chord²·thickness). β > 0 cones the blade towards the
+/// front; stopped, a blade folds to its limit the way its weight pulls it.
+class FoldingBlade {
+public:
+    FoldingBlade() = default;
+    explicit FoldingBlade(const Propeller& p);
+    /// β (rad) at speed of rotation `omega` (rad/s, either way) with the propeller's thrust
+    /// `thrust` (N, all blades, along its thrust direction) acting at `thrustRadius` (m) and
+    /// gravity's component along the thrust direction `gravityAlong` (m/s²).
+    [[nodiscard]] double angle(double omega, double thrust, double thrustRadius,
+                               double gravityAlong) const;
+    [[nodiscard]] double centreOfMass() const { return centre_; }  // m from the axis
+
+private:
+    int blades_{1};
+    double hinge_{0.0};   // m
+    double mass_{0.0};    // kg
+    double centre_{0.0};  // m from the axis
+    double s1_{0.0};      // kg·m: ∫ m'·s ds, s from the hinge
+    double s2_{0.0};      // kg·m²: ∫ m'·s² ds
+    double limit_{0.0};   // rad
 };
 
 /// Reads a propeller file; on failure returns an empty propeller (radius 0) and sets `error`.
@@ -89,6 +126,7 @@ struct BemLoad {
     double torque{0.0};  // N·m, the air's torque on the propeller about the thrust direction,
                          // positive against rotation in the hand (what the motor must give)
     double inducedVelocity{0.0};  // m/s, thrust-weighted mean axial induced velocity
+    double thrustRadius{0.0};     // m, thrust-weighted mean radius: where the thrust acts
     bool vortexRing{false};
 };
 [[nodiscard]] BemLoad bemLoad(const Propeller& p, double omega, double axialSpeed, const Air& air);
@@ -107,7 +145,7 @@ public:
 
 private:
     struct Row {
-        double thrust, torque, induced;
+        double thrust, torque, induced, thrustRadius;  // thrustRadius as a fraction of R
         bool vortexRing;
     };
     double radius_{0.0};
@@ -120,6 +158,12 @@ private:
 /// to the front, sections of NACA four-digit shape (the station's thickness, the aerofoil's
 /// drawing camber).
 [[nodiscard]] TriMesh propellerMesh(const Propeller& p);
+
+/// For a folding propeller: the hub with the blade roots inboard of the hinges (the propeller's
+/// frame, as propellerMesh), and one blade outboard of its hinge in a frame at the hinge: x
+/// along the blade, z the thrust direction; turned by Ry(−β) for its angle β.
+[[nodiscard]] TriMesh foldingHubMesh(const Propeller& p);
+[[nodiscard]] TriMesh foldingBladeMesh(const Propeller& p);
 
 /// Draws every rotor with a propeller file (aero:rotor:propeller) as its blades: the mesh on the
 /// rotor's link, turned so the propeller's thrust direction is the rotor's (the joint axis, or

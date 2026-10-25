@@ -96,6 +96,18 @@ propeller on a `ccw` motor in the overlay (`aero:rotor:propeller`) and the serve
 that rotor turns its propeller backwards, trailing edge first, and gives less than half its
 thrust for more power, as a real one does.
 
+Two variants show other propellers. Folding blades, which hang folded when the motors stop and
+open as they spin up:
+
+```bash
+ros2 run lagrange_server lagrange_server --robot assets/robots/quad_x500/quad_x500.urdf \
+    --overlay assets/robots/quad_x500/quad_x500_folding.overlay.yaml --world none \
+    --air-density 1.225 --geo-origin 47.397742,8.545594,488
+```
+
+and the motors upside down under the arms, the propellers pushing
+(`assets/robots/quad_x500_inverted/quad_x500_inverted.usda` in place of the sample).
+
 ## 4. Gusty wind
 
 ```bash

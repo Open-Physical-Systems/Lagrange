@@ -58,6 +58,15 @@ propeller file (formats.md §3.3.1) named by the rotor's `aero:rotor:propeller`.
   is solved once at load over the full circle of inflow angles `θ = atan2(V, ΩR)` (0.25°
   steps; with a speed of sound, also over tip Mach 0 to 0.9 in 0.1 steps, rows in parallel
   threads) and the step interpolates. Deterministic, and about 0.3 s per propeller at load.
+- **Folding blades** (a file's `folding:` section: hinge radius, blade mass, stop angle), at
+  either fidelity: each blade's angle on its hinge is quasi-static, where the moments of its
+  thrust (at the BEM thrust-weighted radius; 0.75 R at `coefficients`) and its weight about the
+  hinge balance the centrifugal moment `Ω²·sin β·(r_h·S1 + cos β·S2)` (S1, S2 the blade's mass
+  moments about the hinge, mass along the blade as chord²·thickness). Stopped, the blades hang
+  folded against their stop; spinning up they open, then cone a few degrees forward. Thrust and
+  torque are the open propeller's times `cos β`; `rotor/<j>/blade_angle` drives the drawn
+  blades. Quasi-static is right when the blade's flapping frequency (about Ω) is far above the
+  vehicle's; hinge friction and the blades' own dynamics at spin-up are not modelled.
 - **Inputs.** The axial speed is the hub's velocity along the thrust direction (still air).
 - **Limits.** No edgewise flow yet (forward flight's in-plane velocity, the H-force and blade
   flapping), no wind at the rotors, no stall delay on rotating blades (so thrust near the

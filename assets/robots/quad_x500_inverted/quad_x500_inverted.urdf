@@ -1,0 +1,144 @@
+<?xml version="1.0"?>
+<!-- The sample quadcopter with its motors upside down under the arms: each propeller sits 4 cm
+     below its arm and pushes the air down past nothing but the ground (a pusher on its motor).
+     The joint axes point from the motor to the propeller, down; the overlay mounts the
+     propellers as pushers, so their thrust is up. Otherwise quad_x500.urdf: PX4's Quadrotor X
+     numbering and senses seen from above, the same frame, rotors, motors and battery
+     (quad_x500.overlay.yaml with aero:rotor:mount pusher). Illustrative, not a real product. -->
+<robot name="quad_x500_inverted">
+  <material name="frame"><color rgba="0.18 0.2 0.24 1"/></material>
+  <material name="arm"><color rgba="0.3 0.33 0.38 1"/></material>
+  <material name="prop_ccw"><color rgba="0.85 0.55 0.2 1"/></material>
+  <material name="prop_cw"><color rgba="0.25 0.55 0.85 1"/></material>
+
+  <link name="base_link">
+    <!-- 1.9 kg: frame, arms, battery, electronics; inertia of a 2 kg X500-class airframe. -->
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="1.9"/>
+      <inertia ixx="0.0217" iyy="0.0217" izz="0.04" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <geometry><box size="0.16 0.12 0.06"/></geometry>
+      <material name="frame"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0.7853981634"/>
+      <geometry><box size="0.5 0.025 0.02"/></geometry>
+      <material name="arm"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 -0.7853981634"/>
+      <geometry><box size="0.5 0.025 0.02"/></geometry>
+      <material name="arm"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 -0.12"/>
+      <geometry><box size="0.3 0.25 0.01"/></geometry>
+      <material name="arm"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.16 0.12 0.06"/></geometry>
+    </collision>
+    <!-- Landing gear: a skid plate 12.5 cm under the frame's centre. -->
+    <collision>
+      <origin xyz="0 0 -0.12"/>
+      <geometry><box size="0.3 0.25 0.01"/></geometry>
+    </collision>
+  </link>
+  <link name="rotor_1_link">
+    <!-- Motor bell and propeller: 25 g; about the axis like a 10-inch two-blade propeller. -->
+    <inertial>
+      <mass value="0.025"/>
+      <inertia ixx="0.000045" iyy="0.000045" izz="0.00009" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <geometry><cylinder radius="0.127" length="0.004"/></geometry>
+      <material name="prop_ccw"/>
+    </visual>
+  </link>
+  <joint name="rotor_1_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="rotor_1_link"/>
+    <origin xyz="0.177 -0.177 -0.04"/>
+    <axis xyz="0 0 -1"/>
+  </joint>
+  <link name="rotor_2_link">
+    <!-- Motor bell and propeller: 25 g; about the axis like a 10-inch two-blade propeller. -->
+    <inertial>
+      <mass value="0.025"/>
+      <inertia ixx="0.000045" iyy="0.000045" izz="0.00009" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <geometry><cylinder radius="0.127" length="0.004"/></geometry>
+      <material name="prop_ccw"/>
+    </visual>
+  </link>
+  <joint name="rotor_2_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="rotor_2_link"/>
+    <origin xyz="-0.177 0.177 -0.04"/>
+    <axis xyz="0 0 -1"/>
+  </joint>
+  <link name="rotor_3_link">
+    <!-- Motor bell and propeller: 25 g; about the axis like a 10-inch two-blade propeller. -->
+    <inertial>
+      <mass value="0.025"/>
+      <inertia ixx="0.000045" iyy="0.000045" izz="0.00009" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <geometry><cylinder radius="0.127" length="0.004"/></geometry>
+      <material name="prop_cw"/>
+    </visual>
+  </link>
+  <joint name="rotor_3_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="rotor_3_link"/>
+    <origin xyz="0.177 0.177 -0.04"/>
+    <axis xyz="0 0 -1"/>
+  </joint>
+  <link name="rotor_4_link">
+    <!-- Motor bell and propeller: 25 g; about the axis like a 10-inch two-blade propeller. -->
+    <inertial>
+      <mass value="0.025"/>
+      <inertia ixx="0.000045" iyy="0.000045" izz="0.00009" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <geometry><cylinder radius="0.127" length="0.004"/></geometry>
+      <material name="prop_cw"/>
+    </visual>
+  </link>
+  <joint name="rotor_4_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="rotor_4_link"/>
+    <origin xyz="-0.177 -0.177 -0.04"/>
+    <axis xyz="0 0 -1"/>
+  </joint>
+  <!-- The motors take torque commands (from the built-in controller, or an autopilot through
+       the MAVLink bridge), which the electrical domain turns into motor torque. -->
+  <ros2_control name="LagrangeSystem" type="system">
+    <hardware>
+      <plugin>lagrange_ros2_control/LagrangeSystem</plugin>
+    </hardware>
+    <joint name="rotor_1_joint">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="rotor_2_joint">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="rotor_3_joint">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="rotor_4_joint">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+</robot>

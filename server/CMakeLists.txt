@@ -208,6 +208,7 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_RACK_BAKED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/rack_sample/rack_baked.usda"
             LAGRANGE_TEST_WORKCELL_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_arm6.urdf"
             LAGRANGE_TEST_QUAD_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500.usda"
+            LAGRANGE_TEST_QUAD_INVERTED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500_inverted/quad_x500_inverted.usda"
     )
     # The arm with ros2_control in the loop: the standard spawner and joint_trajectory_controller.
     find_package(trajectory_msgs REQUIRED)

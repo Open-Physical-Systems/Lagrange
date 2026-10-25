@@ -173,7 +173,11 @@ step resting on the ones before:
    2026-10-25: generic 10-inch blades of each hand, NACA 6412 sections from NACA Report 586,
    static CT and CP matched to the measured APC 10x4.7 SF; `quad_x500_bem.yaml` hovers on them;
    a profile check from the viewer no longer drops the site's geo origin from its preview);
-   (c) folding blades (hinged, opening as they spin up); (d) edgewise flow in forward flight
+   (c) folding blades (hinged, opening as they spin up), the three-blade and the pusher variant
+   (**done** 2026-10-25: `FoldingBlade`, quasi-static on its hinge between thrust, weight and
+   spin, drawn as hinged scene prims (`ScenePrim::hinge`); `generic_10in_folding_*` and
+   `quad_x500_folding.overlay.yaml`; `generic_10in_3blade_*`; `quad_x500_inverted`, motors under
+   the arms with pushers, hovers as the sample does); (d) edgewise flow in forward flight
    (H-force, flapping) and wind at the rotors
 
 ## Defaults taken during the autonomous run
