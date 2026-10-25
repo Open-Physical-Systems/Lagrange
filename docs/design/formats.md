@@ -361,6 +361,9 @@ sample says so.
 
 ### 3.4 `schemas/weather/schema.usda`
 
+Defined in v0.5 as drafted, plus `weather:roughnessLength` (m, fallback 0.03, open terrain) for
+the logarithmic wind profile that the aerodynamics domain already uses.
+
 Weather is authored on one environment prim (the `environment:` file of a profile).
 
 **`WeatherAPI_1`** (single-apply, proposed; CLAUDE.md lists the `weather/` directory but no
@@ -411,6 +414,12 @@ class "WeatherAPI_1" (
 ```
 
 ### 3.5 `schemas/emi/schema.usda`
+
+Defined in v0.5, with three changes to the draft below: `emi:direction` (the conductor's
+direction or the dipole axis, in the prim's frame) and `emi:dipoleMomentPerAmpere` (m², for
+motor drives and welders) added, which the analytic models need; `emi:adcNoisePerField` split
+into `emi:accelNoisePerField` ((m/s²)/(V/m)) and `emi:gyroNoisePerField` ((rad/s)/(V/m)), since
+the two channels have different units.
 
 **`EmiSourceAPI_1`** (single-apply).
 
@@ -580,6 +589,33 @@ agreed):
 | `ImuAPI_1` | v0.2 implements per-sample white noise, `sensor:imu:accelNoiseStd` (m/s², 0) and `gyroNoiseStd` (rad/s, 0), plus the bias instabilities: densities need half powers in the unit grammar. Draft: `sensor:imu:accelNoiseDensity` (m/s²/√Hz, —), `accelBiasInstability` (m/s², —), `accelRandomWalk` (m/s³/√Hz, —), `gyroNoiseDensity` (rad/s/√Hz, —), `gyroBiasInstability` (rad/s, —), `gyroRandomWalk` (rad/s²/√Hz, —), `accelRange` (m/s², —), `gyroRange` (rad/s, —) |
 | `GnssAPI_1` | `sensor:gnss:horizontalStd` (m, —), `verticalStd` (m, —), `velocityStd` (m/s, —), `multipathModel` (token: `none`, `urban`), `minElevation` (rad, 0.17) |
 | `MagnetometerAPI_1` | `sensor:mag:noiseStd` (T, —), `hardIron` (T[3], 0), `softIron` (double[9], identity), `earthFieldModel` (token: `constant`, `wmm`), `earthField` (T[3], — when `constant`; site parameter, no fallback) |
+
+### 3.9 `schemas/comms/schema.usda`
+
+Defined in v0.5 (`domains/comms.md`). Powers and ratios are linear SI values; only the
+shadowing spread is given in decibels, as path-loss models state it.
+
+**`RadioLinkAPI_1`** (single-apply, on the receiving radio's prim).
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `comms:transmitter` | rel | — | — | The transmitting radio's prim. Required |
+| `comms:frequency` | double | Hz | — | Carrier. Required |
+| `comms:bandwidth` | double | Hz | — | Channel bandwidth. Required |
+| `comms:txPower` | double | W | — | Transmit power. Required |
+| `comms:txAntennaGain`, `comms:rxAntennaGain` | double | 1 | `1.0` | Linear gains |
+| `comms:pathLossExponent` | double | 1 | `2.0` | Log-distance exponent |
+| `comms:referenceDistance` | double | m | `1.0` | d0, where free-space loss holds |
+| `comms:wallLoss` | double | 1 | `1.0` | Linear loss per wall crossed |
+| `comms:shadowingStd` | double | 1 | `0.0` | Log-normal shadowing, dB |
+| `comms:shadowingCorrelationDistance` | double | m | `0.0` | 0: independent each step |
+| `comms:noiseFigure` | double | 1 | `1.0` | Linear |
+| `comms:modulation` | token | — | `qpsk` | `bpsk`, `qpsk`, `qam16`, `qam64` |
+| `comms:packetBits` | int | 1 | `12000` | 1500 bytes |
+| `comms:maxRetries` | int | 1 | `0` | Retransmissions before a packet is lost |
+
+**`CanBusAPI_1`** (single-apply, on a bus prim): `can:bitRate` (double, 1/s, required) and
+`can:frameBits` (int, fallback 108: an 11-bit identifier and 8 data bytes, before stuffing).
 
 ## 4. Sample robot: differential-drive AMR
 

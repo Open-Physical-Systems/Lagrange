@@ -29,6 +29,10 @@ EXPECTED = {
     ],
     "thermal": ["ThermalAPI_1", "ThermalLinkAPI_1"],
     "aero": ["AeroAPI_1", "RotorAPI_1"],
+    "weather": ["WeatherAPI_1"],
+    "emi": ["EmiSourceAPI_1", "EmiSusceptibilityAPI_1"],
+    "sensor_material": ["SensorMaterialAPI_1"],
+    "comms": ["RadioLinkAPI_1", "CanBusAPI_1"],
 }
 
 

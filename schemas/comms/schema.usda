@@ -1,0 +1,107 @@
+#usda 1.0
+(
+    """Lagrange comms schemas (RFC 0002, docs/design/formats.md section 3.9). Codeless.
+    RadioLinkAPI_1 makes a radio prim the receiving end of a link from a transmitter;
+    CanBusAPI_1 makes a prim a CAN bus (modules/comms)."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeComms"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "RadioLinkAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A radio link, on the receiving radio's prim: the transmitter, the band, the powers and
+    gains, the path-loss model (log-distance with walls and shadowing) and the modulation that
+    turns the signal-to-noise ratio into packet errors (domains/comms.md)."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double comms:frequency (
+        lagrangeUnit = "Hz"
+        doc = "Carrier frequency. Required: no fallback."
+    )
+    double comms:bandwidth (
+        lagrangeUnit = "Hz"
+        doc = "Channel bandwidth. Required."
+    )
+    double comms:txPower (
+        lagrangeUnit = "W"
+        doc = "Transmit power. Required."
+    )
+    double comms:txAntennaGain = 1 (
+        lagrangeUnit = "1"
+        doc = "Linear transmit antenna gain."
+    )
+    double comms:rxAntennaGain = 1 (
+        lagrangeUnit = "1"
+        doc = "Linear receive antenna gain."
+    )
+    double comms:pathLossExponent = 2 (
+        lagrangeUnit = "1"
+        doc = "Log-distance exponent n (2: free space)."
+    )
+    double comms:referenceDistance = 1 (
+        lagrangeUnit = "m"
+        doc = "d0 of the log-distance model, where free-space loss holds."
+    )
+    double comms:wallLoss = 1 (
+        lagrangeUnit = "1"
+        doc = "Linear power loss factor per wall crossed (1: walls ignored)."
+    )
+    double comms:shadowingStd = 0 (
+        lagrangeUnit = "1"
+        doc = "Log-normal shadowing: standard deviation of the received power, in decibels."
+    )
+    double comms:shadowingCorrelationDistance = 0 (
+        lagrangeUnit = "m"
+        doc = "Distance over which shadowing decorrelates (0: independent each step)."
+    )
+    double comms:noiseFigure = 1 (
+        lagrangeUnit = "1"
+        doc = "Linear noise figure of the receiver."
+    )
+    uniform token comms:modulation = "qpsk" (
+        allowedTokens = ["bpsk", "qpsk", "qam16", "qam64"]
+        doc = "Modulation for the packet error rate: bpsk, qpsk, qam16 or qam64."
+    )
+    int comms:packetBits = 12000 (
+        lagrangeUnit = "1"
+        doc = "Bits per packet (1500 bytes)."
+    )
+    int comms:maxRetries = 0 (
+        lagrangeUnit = "1"
+        doc = "Retransmissions before a packet is lost."
+    )
+    rel comms:transmitter (
+        doc = "The transmitting radio's prim. Required."
+    )
+}
+
+class "CanBusAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A CAN bus: its bit rate and frame length; its errors come from EMI and follow the CAN
+    fault-confinement rules (domains/comms.md)."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double can:bitRate (
+        lagrangeUnit = "1/s"
+        doc = "Bit rate. Required."
+    )
+    int can:frameBits = 108 (
+        lagrangeUnit = "1"
+        doc = "Bits per frame before stuffing (108: an 11-bit identifier and 8 data bytes)."
+    )
+}

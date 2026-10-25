@@ -1,0 +1,75 @@
+#usda 1.0
+(
+    """Lagrange sensor-material schema (RFC 0002, docs/design/formats.md section 3.7). Codeless.
+    SensorMaterialAPI_1 gives a Material the non-visual properties sensors and the weather see."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeSensorMaterial"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "SensorMaterialAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """Non-visual surface properties of a material: lidar reflectivity, radar, electrical and
+    magnetic constants, thermal emissivity and the wet-friction scale. The fallbacks are
+    placeholders so that untagged assets still give returns, not measured data."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double sensmat:reflectivity905 = 0.5 (
+        lagrangeUnit = "1"
+        doc = "Diffuse reflectivity at 905 nm."
+    )
+    double sensmat:reflectivity1550 = 0.5 (
+        lagrangeUnit = "1"
+        doc = "Diffuse reflectivity at 1550 nm."
+    )
+    bool sensmat:retroreflective = false (
+        doc = "Retroreflective (road signs, safety vests)."
+    )
+    double sensmat:specularFraction905 = 0 (
+        lagrangeUnit = "1"
+        doc = "Fraction of the 905 nm return that is specular."
+    )
+    double sensmat:transmission905 = 0 (
+        lagrangeUnit = "1"
+        doc = "Fraction of 905 nm light transmitted (glass)."
+    )
+    double sensmat:radarCrossSectionDensity = 0.1 (
+        lagrangeUnit = "1"
+        doc = "Radar cross-section per unit projected area at 77 GHz."
+    )
+    double sensmat:radarRoughness = 0.001 (
+        lagrangeUnit = "m"
+        doc = "RMS surface roughness."
+    )
+    double sensmat:relativePermittivity = 1 (
+        lagrangeUnit = "1"
+        doc = "Relative permittivity."
+    )
+    double sensmat:conductivity = 0 (
+        lagrangeUnit = "S/m"
+        doc = "Electrical conductivity."
+    )
+    double sensmat:relativePermeability = 1 (
+        lagrangeUnit = "1"
+        doc = "Magnetic permeability relative to vacuum."
+    )
+    double sensmat:thermalEmissivity = 0.9 (
+        lagrangeUnit = "1"
+        doc = "Long-wave infrared emissivity."
+    )
+    double sensmat:frictionWetScale = 0.7 (
+        lagrangeUnit = "1"
+        doc = "Multiplier on friction when the surface is wet."
+    )
+}
