@@ -170,6 +170,7 @@ if(BUILD_TESTING)
         test/test_recorder.cpp
         test/test_robot.cpp
         test/test_server.cpp
+        test/test_multicopter.cpp
         test/test_toggles.cpp
         test/test_usd_assets.cpp
         ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero"
@@ -179,6 +180,7 @@ if(BUILD_TESTING)
         test_server
         lagrange_server
         lagrange_electrical::lagrange_electrical
+        lagrange_rotor_aero::lagrange_rotor_aero
         lagrange_rigid_body_jolt::lagrange_rigid_body_jolt
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
         lagrange_sensors::lagrange_sensors
@@ -205,6 +207,7 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_ARM6_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.overlay.yaml"
             LAGRANGE_TEST_RACK_BAKED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/rack_sample/rack_baked.usda"
             LAGRANGE_TEST_WORKCELL_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_arm6.urdf"
+            LAGRANGE_TEST_QUAD_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500.usda"
     )
     # The arm with ros2_control in the loop: the standard spawner and joint_trajectory_controller.
     find_package(trajectory_msgs REQUIRED)

@@ -156,7 +156,9 @@ step resting on the ones before:
    ros-lyrical-mavlink`; on this machine unpacked to `~/.local/ros-mavlink` until installed).
    ArduPilot: not yet)
 8. The acceptance mission (take-off, square in 8 m/s gusts, land; low-battery thrust sag), the
-   tutorial, and rebase in flight
+   tutorial, and rebase in flight (the mission and the low-battery scenario **done** 2026-10-25,
+   robot-classes.md §5. Rebase in flight needs the runtime rebase, C5, which the owner deferred
+   to v0.7 (huge worlds): it moves there with it)
 
 ## Defaults taken during the autonomous run
 
