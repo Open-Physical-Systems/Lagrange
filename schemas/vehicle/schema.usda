@@ -152,11 +152,12 @@ class "WheelAPI_1" (
     )
     double wheel:restLength (
         lagrangeUnit = "m"
-        doc = "Suspension length at zero spring force, from the anchor to the wheel centre. Required."
+        doc = """Suspension length at ride height, from the mount above the wheel to its centre: the
+        model's wheel position is the ride height, where the spring carries its static load. Required."""
     )
     double wheel:travel (
         lagrangeUnit = "m"
-        doc = "Suspension compression to the bump stop. Required."
+        doc = "Compression from ride height to the bump stop. Required."
     )
     double wheel:springStiffness (
         lagrangeUnit = "N/m"

@@ -129,10 +129,13 @@ fallback documented if Autoware is not available for Lyrical.
    joints: radius, tyre, suspension, steered, driven, braked); traffic-light and road-network
    schemas as the later steps need them (vehicle library **done** 2026-10-25)
 2. Tyre models: linear and Pacejka Magic Formula with `.tir` import, checked against a
-   published parameter set
+   published parameter set (**done** 2026-10-25, but the published-set comparison is owed: no
+   openly licensed `.tir` was found; the curves' analytic properties are checked)
 3. `modules/vehicle_dynamics`: wheel-ground queries through `services::SceneQuery`, suspension,
    tyres, brakes, Ackermann steering, electric and engine-map powertrains, the `ideal`
-   (kinematic bicycle) substitute; ISO manoeuvres and braking distance as tests
+   (kinematic bicycle) substitute; ISO manoeuvres and braking distance as tests (module
+   **done** 2026-10-25, vehicle_dynamics.md §8: braking distance and steady cornering checked;
+   the server wiring comes with the sample sedan; ISO manoeuvres owed)
 4. Sample sedan and a city block world, profiles, driving over ROS 2 (`/cmd_vel` or an Ackermann
    command)
 5. `io/opendrive`: road network to USD meshes and lane tables (own reader)

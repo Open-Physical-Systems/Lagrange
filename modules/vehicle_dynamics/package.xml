@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>lagrange_vehicle_dynamics</name>
+  <version>0.5.0</version>
+  <description>The vehicle dynamics domain: tyres (linear, Magic Formula), suspension, powertrain, brakes and steering of wheeled road vehicles (v0.6).</description>
+  <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>lagrange_cmake</buildtool_depend>
+
+  <depend>lagrange_core</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>lagrange_rigid_body_mujoco</test_depend>
+  <test_depend>lagrange_sensors</test_depend>
+  <test_depend>lagrange_electrical</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

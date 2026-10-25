@@ -657,8 +657,8 @@ suspension and tyres itself, so wheel bodies carry no collision shapes.
 | `wheel:corneringStiffness` | double | N/rad | — | linear fidelity |
 | `wheel:friction` | double | 1 | `1.0` | Peak μ on the reference surface |
 | `wheel:relaxationLength` | double | m | `0.3` | Lateral transient |
-| `wheel:restLength` | double | m | — | Suspension free length to the wheel centre. Required |
-| `wheel:travel` | double | m | — | To the bump stop. Required |
+| `wheel:restLength` | double | m | — | Mount to wheel centre at ride height (the model's wheel position; the spring is preloaded with its static load there). Required |
+| `wheel:travel` | double | m | — | From ride height to the bump stop. Required |
 | `wheel:springStiffness` | double | N/m | — | Required |
 | `wheel:damping` | double | N·s/m | — | Required |
 
