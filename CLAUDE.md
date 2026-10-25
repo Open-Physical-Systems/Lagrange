@@ -59,8 +59,9 @@ Consequences:
 
 **v0.2 (simulation core + AMR), v0.3 (arms, electrical, thermal), v0.4 (drones) and v0.5
 (weather, EMI, comms) are released** as `v0.2.0` to `v0.5.0` on 2026-10-25 (`docs/release/`;
-v0.1.0 on 2026-10-14). Status and owed items: `docs/plan/progress.md`. Next by the roadmap:
-**v0.6 cars and autonomous cars** (`docs/plan/roadmap.md` §7).
+v0.1.0 on 2026-10-14). Status and owed items: `docs/plan/progress.md`. **v0.6 cars and
+autonomous cars** (`docs/plan/roadmap.md` §7) is done on `dev` and waits for the owner's release
+request (`docs/release/v0.6.0.md`, draft). Next by the roadmap: v0.7 huge worlds.
 
 - The protocol stays v1; the v0.1 viewer connects to the C++ server unchanged.
 - RFC 0001 (module interface), 0002 (USD schemas) and 0005 (profile format) are accepted; work
@@ -268,6 +269,7 @@ verification, not in this repo.
 - Traffic (v0.6): on a world with `RoadLaneAPI_1` lanes the server adds `--traffic vehicles=N,pedestrians=M,seed=S` agents (default 8, 6, 1) as kinematic bodies (`World::Bodies::kinematic`; MuJoCo mocap, Jolt kinematic, moved by `body/<b>/pose_command`); `lagrange_traffic` drives them: IDM lane following behind agents and robots, fixed-cycle lights at junctions, first-come right of way, social-force pedestrians on sidewalks (traffic.md §8); `traffic/agents`, `traffic/lights`; `--domain traffic=off` hides them
 - Scenarios (v0.6): `lagrange_server --robot assets/robots/sedan/sedan.usda --scenario assets/scenarios/cut_in.xosc [--scenario-ego NAME]` runs an OpenSCENARIO 1.x subset (own runner `lagrange_openscenario`: parameters, entities, Init teleports and speeds, speed and lane-change actions, time/position/distance/speed/travelled conditions, stop trigger; traffic.md §8.1); the scenario's OpenDRIVE is the world unless `--world` is given, its `Ego` is the robot, other entities are kinematic `scenario_<name>` bodies; `scenario/state` turns 1 at the stop trigger
 - Autoware (v0.6): `ros2 launch lagrange_autoware sedan_autoware.launch.py [viewer:=true] [kinematic_state:=false]` runs the sedan in the city block with `lagrange_autoware_interface` (`bridges/autoware`): Autoware's `/control/command/control_cmd`, `gear_cmd`, indicator commands and `/control/control_mode_request` to the server's `/ackermann_cmd` (taken for any `VehicleAPI_1` robot), and `/vehicle/status/*` and ground-truth `/localization/kinematic_state` back; sensors remapped into `/sensing/...`. It builds only when `autoware_control_msgs` and `autoware_vehicle_msgs` are found (`LAGRANGE_AUTOWARE=on`; the vehicle messages have no Lyrical binary, so build `autoware_msgs` 1.11.0 in an underlay; docs/guide/autoware.md)
+- Cars tutorial (v0.6): `docs/guide/tutorial-cars.md`; `tools/ci/tutorial_cars.sh` runs it headless (the Autoware step when `lagrange_autoware` is built)
 - Drone tutorial (v0.4): `docs/guide/tutorial-drone.md`; `tools/ci/tutorial_drone.sh` runs it headless (the PX4 step when PX4 SITL is built)
 - PX4 mission (v0.4): `tools/ci/px4_mission.sh [--wind]` builds nothing: it needs PX4 SITL built in `$PX4_DIR` (default `~/PX4-Autopilot`, v1.17.0, `make px4_sitl_default`); it installs the airframe `bridges/mavlink/px4/22100_lagrange_quad_x500`, starts `lagrange_server --mavlink px4` with the sample quadcopter, starts PX4 in lockstep, flies `bridges/mavlink/px4/fly_square_mission.py` (pymavlink, take-off, 10 m square, land; exit 3 on a missed waypoint), and stops both
 - ArduPilot mission (v0.4): `tools/ci/ardupilot_mission.sh [--wind]` needs ArduCopter SITL built in `$ARDUPILOT_DIR` (default `~/ardupilot`, Copter-4.7.2, `./waf configure --board sitl && ./waf copter`, pymavlink in its `.venv`); it starts `lagrange_server --mavlink ardupilot` (JSON interface, UDP 9002, lockstep at 1 kHz), runs `arducopter --model JSON` with `bridges/mavlink/ardupilot/lagrange_quad_x500.parm`, flies `bridges/mavlink/ardupilot/fly_square_mission.py` over MAVLink TCP 5760, and stops both

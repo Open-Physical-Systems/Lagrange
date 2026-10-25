@@ -118,6 +118,15 @@ a motor heat run (Q16; the battery is checked against published cell data since 
 from 35 % state of charge up), the drive-design
 review of the motor constants, FMI 2.0 FMUs (Q8), Jolt's wheel slip. Released as `v0.3.0` on 2026-10-25 at the owner's request, after v0.2.0.
 
+## v0.6 status (2026-10-25)
+
+Every v0.6 plan step is done. Release notes (draft) and acceptance evidence:
+`docs/release/v0.6.0.md`. Left out by the owner's decision: the PhysX backend, SUMO and esmini.
+Owed within the epics: a published MF tyre set and the ISO manoeuvres, zero-copy ROS output,
+hardware ray-query radar and an RTF metric, the ASAM example scenarios and catalogs, the
+pedestrian fundamental diagram, lights drawn and pedestrians crossing, and a run with Autoware
+itself. Not released: waits for the owner's request.
+
 ## v0.6 plan (2026-10-25)
 
 The owner started v0.6 (cars and autonomous cars; roadmap §7) on 2026-10-25 with `/loop finish
@@ -166,7 +175,8 @@ fallback documented if Autoware is not available for Lyrical.
    built only with `autoware_msgs` 1.11.0 (no Lyrical binary of `autoware_vehicle_msgs`);
    stand-in test and a hand run with the sedan; docs/guide/autoware.md has the fallback. Owed:
    a run with Autoware itself once it is released for Lyrical)
-10. Tutorial, release notes
+10. Tutorial, release notes (**done** 2026-10-25: `docs/guide/tutorial-cars.md`, run by
+    `tools/ci/tutorial_cars.sh`; `docs/release/v0.6.0.md` drafted, not released)
 
 Owed by the owner's decision: the PhysX backend, SUMO co-simulation, esmini. Zero-copy ROS
 output (CUDA `rosidl::Buffer`) when the steps above leave time.
