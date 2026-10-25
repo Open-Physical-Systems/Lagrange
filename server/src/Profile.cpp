@@ -169,6 +169,11 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                         settings.weather[key] = domain[key].as<double>();
                     }
                 }
+                for (const char* key : {"fog_field", "wind_field"}) {
+                    if (domain.contains(key) && domain[key].is_string()) {
+                        settings.weather[key] = domain[key].as<std::string>();
+                    }
+                }
                 if (domain.contains("effects") && domain["effects"].is_array()) {
                     std::vector<std::string> effects;
                     for (const auto& e : domain["effects"].array_range()) {

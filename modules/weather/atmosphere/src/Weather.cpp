@@ -192,6 +192,43 @@ Status Weather::declare(const WorldView& world, const ModuleConfig& config, Sign
     fog1550Out_ = d.output(spec("env/extinction/fog_1550", SignalType::Scalar, units::per_m));
     rainOut_ = d.output(spec("env/rain_rate", SignalType::Scalar, units::m_per_s));
     frictionOut_ = d.output(spec("env/friction_scale", SignalType::Scalar, units::one));
+    // Fields: a fog grid (extinction, 1/m, scalar) and a wind grid (m/s, vector).
+    const auto loadField = [&](const char* key, const char* attribute, fields::Field::Kind kind,
+                               std::shared_ptr<const fields::Field>& out) -> Status {
+        std::string path = config.get<std::string>(key).value_or("");
+        if (path.empty() && prim != nullptr) {
+            path = std::string(prim->assetPath(attribute).value_or(""));
+        }
+        out.reset();
+        if (path.empty() || clear_) {
+            return {};
+        }
+        auto loaded = fields::Field::load(path);
+        if (!loaded) {
+            return Status::error(StatusCode::InvalidConfig, loaded.error());
+        }
+        if ((*loaded)->kind() != kind) {
+            return Status::error(StatusCode::InvalidConfig,
+                                 path + (kind == fields::Field::Kind::Scalar
+                                             ? ": a fog field holds one value per voxel"
+                                             : ": a wind field holds a vector per voxel"));
+        }
+        out = *loaded;
+        return {};
+    };
+    if (Status s =
+            loadField("fog_field", "weather:fogField", fields::Field::Kind::Scalar, fogField_);
+        !s.ok()) {
+        return s;
+    }
+    if (Status s =
+            loadField("wind_field", "weather:windField", fields::Field::Kind::Vector, windField_);
+        !s.ok()) {
+        return s;
+    }
+    fogFieldOut_ = d.output(spec("env/extinction/field", SignalType::Field3D, units::per_m));
+    windFieldOut_ = d.output(
+        spec("env/wind/velocity_field", SignalType::Field3D, units::m_per_s, "world_local"));
     contaminationOut_.clear();
     for (const std::string& name : world.sensors().names) {
         contaminationOut_.push_back(
@@ -203,6 +240,8 @@ Status Weather::declare(const WorldView& world, const ModuleConfig& config, Sign
 Status Weather::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     wetness_ = 0.0;
     contamination_.assign(contaminationOut_.size(), 0.0);
+    bus.publishBuffer(fogFieldOut_, fields::fieldBuffer(fogField_.get()));
+    bus.publishBuffer(windFieldOut_, fields::fieldBuffer(windField_.get()));
     writeAll(bus);
     return {};
 }

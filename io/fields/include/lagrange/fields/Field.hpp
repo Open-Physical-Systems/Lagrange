@@ -1,9 +1,11 @@
 #pragma once
 
 #include "lagrange/module/Expected.hpp"
+#include "lagrange/signals/SignalBus.hpp"
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -60,6 +62,21 @@ private:
     double voxel_{0.0};
     std::array<Vec3, 2> bounds_{};
     std::vector<std::byte> bytes_;
+};
+
+/// The Field3D buffer of a field (encoding "nanovdb", the grid's bytes), or an empty buffer for
+/// no field.
+[[nodiscard]] std::shared_ptr<const Buffer> fieldBuffer(const Field* field);
+
+/// A field read from a Field3D signal, rebuilt only when its buffer changes; null for an empty
+/// buffer (no field).
+class FieldSignal {
+public:
+    [[nodiscard]] std::shared_ptr<const Field> read(const SignalBus& bus, SignalId id);
+
+private:
+    std::uint64_t handle_{0};
+    std::shared_ptr<const Field> field_;
 };
 
 /// A dense box of voxels for writing fields: voxel (0, 0, 0)'s centre at `origin`, `size` apart,

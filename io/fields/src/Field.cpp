@@ -115,6 +115,27 @@ double Field::integrate(const Vec3& from, const Vec3& to) const {
     return sum;
 }
 
+std::shared_ptr<const Buffer> fieldBuffer(const Field* field) {
+    auto out = std::make_shared<Buffer>();
+    out->encoding = "nanovdb";
+    out->height = 1;
+    if (field != nullptr) {
+        out->bytes = field->bytes();
+        out->width = static_cast<std::uint32_t>(out->bytes.size());
+    }
+    return out;
+}
+
+std::shared_ptr<const Field> FieldSignal::read(const SignalBus& bus, SignalId id) {
+    const BufferHandle handle = bus.readBuffer(id);
+    if (handle.id != handle_) {
+        handle_ = handle.id;
+        const std::shared_ptr<const Buffer> buffer = bus.buffer(handle);
+        field_ = buffer && !buffer->bytes.empty() ? Field::fromBytes(buffer->bytes) : nullptr;
+    }
+    return field_;
+}
+
 namespace {
 
 template <typename ValueT, typename Convert>
@@ -140,7 +161,7 @@ Expected<void, std::string> write(const std::string& path, const std::string& na
         }
         const auto handle = builder.getHandle(
             box.size, nanovdb::Vec3d(box.origin[0], box.origin[1], box.origin[2]), name);
-        nanovdb::io::writeGrid(path, handle);
+        nanovdb::io::writeGrid(path, handle, nanovdb::io::Codec::ZIP);
         return {};
     } catch (const std::exception& e) {
         return Unexpected{path + ": " + e.what()};

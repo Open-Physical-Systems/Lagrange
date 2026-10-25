@@ -122,7 +122,8 @@ void printServerOptions(std::FILE* out) {
         "  --weather K=V,...  the weather: temperature (K), pressure (Pa) and relative_humidity\n"
         "            (0-1), the site, no defaults; visibility (m, fog), rain_rate (m/s),\n"
         "            dust_concentration (kg/m³), dust_median_diameter (m), solar_irradiance\n"
-        "            (W/m²), sky_temperature (K); a profile's weather keys also set them\n"
+        "            (W/m²), sky_temperature (K), fog_field and wind_field (.nvdb files);\n"
+        "            a profile's weather keys also set them\n"
         "  --domain D=off  replace domain D (rigid_body, electrical, thermal, sensors) by its\n"
         "            substitute\n"
         "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
@@ -293,6 +294,12 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 const std::size_t comma = std::min(list.find(',', at), list.size());
                 const std::string item = list.substr(at, comma - at);
                 const std::size_t equals = item.find('=');
+                if (equals != std::string::npos && (item.substr(0, equals) == "fog_field" ||
+                                                    item.substr(0, equals) == "wind_field")) {
+                    options.weatherFiles[item.substr(0, equals)] = item.substr(equals + 1);
+                    at = comma + 1;
+                    continue;
+                }
                 char* end = nullptr;
                 const double v = equals == std::string::npos
                                      ? 0.0
@@ -302,7 +309,8 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                     return "--weather: \"" + item +
                            "\" is not KEY=VALUE with KEY one of temperature, pressure, "
                            "relative_humidity, visibility, rain_rate, dust_concentration, "
-                           "dust_median_diameter, solar_irradiance, sky_temperature";
+                           "dust_median_diameter, solar_irradiance, sky_temperature, fog_field, "
+                           "wind_field";
                 }
                 options.weather[item.substr(0, equals)] = v;
                 at = comma + 1;

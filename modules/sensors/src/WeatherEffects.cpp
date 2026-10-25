@@ -89,9 +89,12 @@ double rainClutterProbability(const LidarClutter& c, double rainRateMps, double 
 }
 
 double weatherRange(double range, double minRange, double maxRange, const SensorWeather& w,
-                    const LidarClutter& c, double u1, double u2, double u3) {
+                    const LidarClutter& c, double u1, double u2, double u3, double fieldDepth) {
+    const double reach = maxRange * std::clamp(1.0 - w.contamination, 0.0, 1.0);
     double out =
-        range <= lidarDetectionRange(maxRange, w.extinction, w.contamination) ? range : kNoReturn;
+        std::isfinite(range) && range * std::exp(w.extinction * range + fieldDepth) <= reach
+            ? range
+            : kNoReturn;
     const Clutter fog = fogClutter(c, maxRange, w.fogExtinction, w.contamination, minRange);
     if (u1 < fog.probability) {
         // Somewhere about the peak of the fog's return.
@@ -104,16 +107,18 @@ double weatherRange(double range, double minRange, double maxRange, const Sensor
 }
 
 void applyCameraWeather(std::span<std::uint8_t> rgba, std::span<const float> depth,
-                        double extinction, double contamination) {
+                        double extinction, double contamination,
+                        std::span<const float> fieldDepth) {
     const double haze = std::clamp(contamination, 0.0, 1.0) / 2.0;
-    if (extinction <= 0.0 && haze <= 0.0) {
+    if (extinction <= 0.0 && haze <= 0.0 && fieldDepth.empty()) {
         return;
     }
     const std::size_t pixels = std::min(rgba.size() / 4, depth.size());
     for (std::size_t p = 0; p < pixels; ++p) {
         const double d = depth[p];
-        const double transmission =
-            std::isfinite(d) ? std::exp(-extinction * d) : (extinction > 0.0 ? 0.0 : 1.0);
+        const double extra = p < fieldDepth.size() ? fieldDepth[p] : 0.0;
+        const double transmission = std::isfinite(d) ? std::exp(-extinction * d - extra)
+                                                     : (extinction > 0.0 ? 0.0 : std::exp(-extra));
         for (std::size_t k = 0; k < 3; ++k) {
             const double seen =
                 rgba[4 * p + k] * transmission + kAirLight[k] * (1.0 - transmission);

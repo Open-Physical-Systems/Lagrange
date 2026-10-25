@@ -4,6 +4,7 @@ project(lagrange_sensors VERSION 0.0.0 LANGUAGES CXX)
 find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
+find_package(lagrange_fields REQUIRED)
 find_package(lagrange_gpu REQUIRED)
 # Tier 0 ray casting: Embree's hierarchy culls, the exact tests stay ours (ShapeCaster).
 find_package(embree 4 REQUIRED)
@@ -29,6 +30,7 @@ target_link_libraries(
     lagrange_sensors
     PUBLIC
         lagrange_core::lagrange_core
+        lagrange_fields::lagrange_fields
         lagrange_gpu::lagrange_gpu_raycast
         lagrange_gpu::lagrange_gpu_raster
     PRIVATE embree TBB::tbb

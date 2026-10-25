@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lagrange/fields/Field.hpp"
 #include "lagrange/module/IModule.hpp"
 
 #include <array>
@@ -72,6 +73,9 @@ inline constexpr double kLidar1550 = 1550e-9;         // m
 /// env/air_density, env/wind/mean (at the reference height, from the prim), env/solar_irradiance,
 /// env/sun_direction, env/extinction/{visible,nir_905,nir_1550} (fog, rain and dust together),
 /// env/extinction/{fog_905,fog_1550} (the fog's share, which backscatters into lidar clutter),
+/// env/extinction/field and env/wind/velocity_field (Field3D: the fog grid, extinction in 1/m,
+/// and the wind grid, m/s, from config "fog_field" and "wind_field" or the prim's
+/// weather:fogField and weather:windField, NanoVDB files; empty buffers without),
 /// env/rain_rate, env/friction_scale and sensor/<s>/contamination for every sensor. Default
 /// step 50 ms.
 ///
@@ -116,6 +120,8 @@ private:
     SignalId temperatureOut_, skyOut_, pressureOut_, humidityOut_, densityOut_, windOut_;
     SignalId irradianceOut_, sunOut_, visibleOut_, nir905Out_, nir1550Out_, rainOut_, frictionOut_;
     SignalId fog905Out_, fog1550Out_;
+    SignalId fogFieldOut_, windFieldOut_;
+    std::shared_ptr<const fields::Field> fogField_, windField_;
     std::vector<SignalId> contaminationOut_;
 };
 

@@ -118,5 +118,13 @@ Weather effects on sensors are statistical. Each validation states the quantity 
   - Camera: Koschmieder's veil from the depth image (sky all air light) and a haze for the lens.
   - Applied per beam on the CPU on every tier, after the cast: it is a few operations per beam,
     so the GPU kernel the placement table plans (`attenuate.slang`) is not needed yet.
-- Not yet: rigid body's wet friction, the wind and fog grids (step 4), radar attenuation, a
-  weather time series, rain streaks in the camera.
+- Fields (`lagrange_fields`, NanoVDB): a fog grid (`fog_field`, `weather:fogField`: extinction,
+  1/m) adds its optical depth along each lidar beam up to the hit and each camera pixel's ray
+  (once per 8×8 pixels), and its value at the sensor to the clutter; a wind grid (`wind_field`,
+  `weather:windField`: m/s) is the mean wind inside its bounds for link drag and, through
+  `env/wind/velocity`, the rotors. The weather publishes them as Field3D buffers
+  (`env/extinction/field`, `env/wind/velocity_field`). Samples: `assets/fields/` (synthetic, by
+  `lagrange_make_fields`): a 10 m-visibility bank across the warehouse aisle hides the far wall
+  from 109 of the front lidar's 720 beams.
+- Not yet: rigid body's wet friction, the viewer's field overlays, radar attenuation, a weather
+  time series, rain streaks in the camera.

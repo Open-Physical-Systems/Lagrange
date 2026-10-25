@@ -5,6 +5,7 @@ find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
 find_package(Threads REQUIRED)
+find_package(ZLIB REQUIRED)
 
 # NanoVDB is header-only (libnanovdb-dev, rosdep key libnanovdb-dev). A local copy of the
 # headers serves until the package is installed (NANOVDB_INCLUDE_DIR or ~/.local/nanovdb).
@@ -31,10 +32,18 @@ target_include_directories(
 target_link_libraries(
     lagrange_fields
     PUBLIC lagrange_core::lagrange_core
-    PRIVATE Threads::Threads
+    PRIVATE Threads::Threads ZLIB::ZLIB
 )
+# NanoVDB's zlib codec: files are written compressed (the grid's internal tables are mostly
+# zeros) and either kind is read.
+target_compile_definitions(lagrange_fields PRIVATE NANOVDB_USE_ZIP)
+
+add_executable(lagrange_make_fields tools/make_sample_fields.cpp)
+target_link_libraries(lagrange_make_fields lagrange_fields)
+lagrange_target_defaults(lagrange_make_fields)
 
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
+install(TARGETS lagrange_make_fields DESTINATION lib/${PROJECT_NAME})
 install(
     TARGETS lagrange_fields
     EXPORT export_${PROJECT_NAME}
@@ -51,5 +60,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(lagrange_core)
+ament_export_dependencies(lagrange_core Threads ZLIB)
 ament_package()
