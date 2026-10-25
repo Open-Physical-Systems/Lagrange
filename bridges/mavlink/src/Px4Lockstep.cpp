@@ -1,4 +1,5 @@
 // PX4 SITL in lockstep over MAVLink (Px4Lockstep.hpp).
+#include "Escs.hpp"
 #include "lagrange/mavlink/Px4Lockstep.hpp"
 #include "lagrange/services/Log.hpp"
 #include "lagrange/world/PoseMath.hpp"
@@ -8,7 +9,6 @@
 #include <chrono>
 #include <cmath>
 #include <fcntl.h>
-#include <map>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <numbers>
@@ -166,7 +166,6 @@ public:
     [[nodiscard]] Duration preferredStep() const override { return step_; }
 
     Status declare(const WorldView& world, const ModuleConfig&, SignalDeclarer& d) override {
-        rotors_.clear();
         const World::Sensors& sensors = world.sensors();
         const auto first = [&sensors](SensorType type) -> std::optional<std::uint32_t> {
             for (std::uint32_t s = 0; s < sensors.names.size(); ++s) {
@@ -207,37 +206,12 @@ public:
         }
 
         // The rotors in name order: rotor_1 is PX4's motor 1.
-        const World::Joints& joints = world.joints();
-        std::map<std::string, const SchemaInstance*> byName;
-        for (const SchemaInstance* s : world.instancesOf("RotorAPI_1")) {
-            byName[std::string(world.signalInstanceName(s->prim))] = s;
-        }
-        if (byName.empty()) {
-            return Status::error(StatusCode::InvalidConfig, "PX4 needs rotors (RotorAPI_1)");
-        }
-        for (const auto& [name, s] : byName) {
-            const double d4 = std::pow(2.0 * s->real("aero:rotor:radius").value_or(0.0), 4);
-            const double diameter = 2.0 * s->real("aero:rotor:radius").value_or(0.0);
-            Rotor r;
-            r.spin = s->token("aero:rotor:direction").value_or("ccw") == "ccw" ? 1.0 : -1.0;
-            r.torquePerOmega2 = s->real("aero:rotor:powerCoeff").value_or(0.0) *
-                                settings_.airDensity * d4 * diameter /
-                                (8.0 * std::numbers::pi * std::numbers::pi * std::numbers::pi);
-            const std::string base = "joint/" + name + "/";
-            SignalSpec velocity = spec(base + "velocity", SignalType::Scalar, units::rad_per_s);
-            velocity.feedback = true;
-            r.velocity = d.input(velocity);
-            r.command = d.output(spec(base + "torque_command", SignalType::Scalar, units::N_m));
-            rotors_.push_back(r);
-        }
-        (void)joints;
-        return {};
+        return escs_.declare(world, d, settings_.airDensity, settings_.maxRotorSpeed,
+                             settings_.speedGain);
     }
 
     Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
-        for (const Rotor& r : rotors_) {
-            bus.write(r.command, 0.0);
-        }
+        escs_.stop(bus);
         controls_.fill(0.0F);
         return {};
     }
@@ -262,16 +236,9 @@ public:
                 link_->answering = true;
             }
         }
-        for (std::size_t i = 0; i < rotors_.size(); ++i) {
-            const Rotor& r = rotors_[i];
-            const double control =
-                i < controls_.size() ? std::clamp<double>(controls_[i], 0.0, 1.0) : 0.0;
-            const double target = r.spin * control * settings_.maxRotorSpeed;
-            const double now = bus.read(r.velocity);
-            const double feedForward = r.spin * r.torquePerOmega2 * target * target;
-            bus.write(r.command,
-                      control > 0.0 ? feedForward + settings_.speedGain * (target - now) : 0.0);
-        }
+        std::array<double, 16> outputs{};
+        std::ranges::copy(controls_, outputs.begin());
+        escs_.drive(bus, outputs);
         return {};
     }
 
@@ -279,12 +246,6 @@ public:
     Status restoreState(StateReader&) override { return {}; }
 
 private:
-    struct Rotor {
-        double spin{1.0};
-        double torquePerOmega2{0.0};  // N·m per (rad/s)²: CP·ρ·D⁵/(8π³)
-        SignalId velocity, command;
-    };
-
     static std::uint32_t everyOf(double rate, double imuRate) {
         return std::max<std::uint32_t>(1, static_cast<std::uint32_t>(std::lround(imuRate / rate)));
     }
@@ -347,7 +308,7 @@ private:
 
     Px4Settings settings_;
     Duration step_{4'000'000};
-    std::vector<Rotor> rotors_;
+    Escs escs_;
     std::array<float, 16> controls_{};
     std::uint32_t magEvery_{1}, baroEvery_{1}, gpsEvery_{1};
     SignalId force_, rate_, field_, pressure_, temperature_;

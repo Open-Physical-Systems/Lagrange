@@ -160,6 +160,19 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 domain["air_density"].is_number()) {
                 settings.airDensityKgM3 = domain["air_density"].as<double>();
             }
+            if (name == "rotor_aero") {
+                for (const char* key : {"inflow_time_constant", "speed_of_sound"}) {
+                    if (domain.contains(key) && domain[key].is_number()) {
+                        settings.rotorAero[key] = domain[key].as<double>();
+                    }
+                }
+                if (domain.contains("fidelity") && domain["fidelity"].is_string()) {
+                    settings.rotorAero["fidelity"] = domain["fidelity"].as<std::string>();
+                }
+                if (domain.contains("ground_effect") && domain["ground_effect"].is_bool()) {
+                    settings.rotorAero["ground_effect"] = domain["ground_effect"].as<bool>();
+                }
+            }
             if (name == "rotor_aero" && context.modules.contains("rotor_aero") &&
                 !settings.airDensityKgM3 && !context.airDensityKnown) {
                 error(check, at + "/air_density",

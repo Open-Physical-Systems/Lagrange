@@ -33,6 +33,37 @@ Rotor aero (`fidelity`):
 | `coefficients` | `T = CT·ρ·n²·D⁴`, `Q = CP·ρ·n²·D⁵ / (2π)` with `n` in rev/s; first-order inflow lag; thrust and drag variation with advance ratio through a linear correction; blade-flapping moment as a simple coefficient |
 | `bem` | Blade-element momentum with the blade table (chord, twist, aerofoil polars); solves induced velocity per annulus; captures forward flight and descent better |
 
+### 2.1 Blade-element momentum (`bem`)
+
+The `bem` fidelity computes a propeller's loads from what it is: its blades' chord and twist
+along the radius, their sections' lift and drag, the number of blades and the hand, read from a
+propeller file (formats.md §3.3.1) named by the rotor's `aero:rotor:propeller`.
+
+- **Per annulus** (40 along the blade), the axial induced velocity `w` and the swirl `w_t` make
+  the blade-element forces equal the momentum change of the air through the annulus:
+  `dT = 4πrρF·|V + w|·w`, `dQ = 4πr²ρF·|V + w|·w_t`, with Prandtl's tip-loss factor `F`. The
+  axial balance is solved by bracketed root finding (Illinois), the swirl by a few fixed-point
+  passes. In descent through the rotor's own wake (the vortex-ring state, `−2w < V < 0`)
+  momentum theory has no valid solution; the result there is the momentum solution, flagged.
+- **Sections** over the full circle of angles of attack: linear lift with the Prandtl–Glauert
+  factor when the speed of sound is given, a parabolic drag polar, a blend over 8° past stall
+  into a flat plate (normal force `2·sin α`), which also covers reversed flow. So a propeller
+  turning the wrong way (its hand against the motor's direction) or mounted back to front gives
+  what a real one gives: little thrust for much power.
+- **Hand and mount.** The rotor's `aero:rotor:direction` is how the motor turns it, seen from
+  the front; the file's `hand` is how the propeller must turn to make thrust; `aero:rotor:mount`
+  is `puller` (thrust along the joint axis, which points from the motor to the propeller) or
+  `pusher` (against it). The loader warns when hand and direction disagree.
+- **Cost.** Loads scale exactly with `ρ·(Ω²R² + V²)` in incompressible flow, so each propeller
+  is solved once at load over the full circle of inflow angles `θ = atan2(V, ΩR)` (0.25°
+  steps; with a speed of sound, also over tip Mach 0 to 0.9 in 0.1 steps, rows in parallel
+  threads) and the step interpolates. Deterministic, and about 0.3 s per propeller at load.
+- **Inputs.** The axial speed is the hub's velocity along the thrust direction (still air).
+- **Limits.** No edgewise flow yet (forward flight's in-plane velocity, the H-force and blade
+  flapping), no wind at the rotors, no stall delay on rotating blades (so thrust near the
+  static condition of a highly pitched propeller is under-predicted; §7.1), no Reynolds-number
+  effects beyond what the file's section data are for.
+
 Ground effect: Cheeseman–Bennett correction `T/T∞ = 1 / (1 − (R / 4z)²)` for `z/R > 0.25`,
 clamped below that. Height `z` is found by a downward ray cast against collision geometry.
 
@@ -110,9 +141,30 @@ profile validator rejects it with that explanation.
 | Terminal velocity of a sphere and a plate | closed form | 0.5 % |
 | Turbulence spectra | analytic Dryden / von Kármán power spectral densities | within the 95 % confidence band of the periodogram |
 | Static thrust and torque vs speed | published propeller test data (candidate: the UIUC propeller database; check its terms of use before redistributing any data) | 5 % with coefficients taken from the same dataset |
+| `bem` against measured propellers | NACA Report 640 (1938, public domain): propeller 5868-9, two blades, Clark Y, at 15° and 25°; §7.1 | CT within 8 %, CP within 6 % (or 0.003) over the attached-flow range |
+| `bem` against momentum theory | ideal rotor (many blades, ideal twist, no drag): uniform inflow, figure of merit 1 | 3–4 % |
 | Ground effect | Cheeseman–Bennett curve and published small-rotor ground-effect measurements | 10 % for `z/R` in 0.5–3 |
 | Field sampling | analytic field baked to VDB | interpolation error bound from grid spacing |
 | Hover power and step response of the sample quadcopter | flight log of a comparable real vehicle (to be sourced; Q16) | reported, with tolerance set from data spread |
+
+### 7.1 The NACA Report 640 comparison
+
+`test_bem`'s `NacaReport640` runs propeller 5868-9 (10 ft, two blades, Clark Y; geometry in
+`assets/propellers/naca_5868-9.prop.yaml`) and compares CT and CP with the report's
+measurements. Geometry and measurements were read off the report's charts (figures 2, 6 and
+8) with the grid lines as reference: chord to about ±1.5 %, blade angle ±0.3°, CT and CP to
+about ±0.001. Section data are the Clark Y's from NACA Report 502 (lift slope, zero-lift angle,
+minimum drag, maximum lift), scaled per station for thickness as the file explains; nothing was
+fitted to the propeller data.
+
+| Blade angle | Range | CT | CP | Thrust vanishes |
+|---|---|---|---|---|
+| 15° | J = 0.3–0.7 | within 2–4 % | within 2–5 % (7 % at J = 0.2) | J = 0.82, as measured |
+| 25° | J = 0.5–1.1 | within 0–7 % | within 0–5 % | J = 1.29, as measured |
+
+Below J ≈ 0.5 at 25° the inner blade stalls. The real propeller keeps its thrust (CT 0.106 at
+J = 0.3 against 0.087 computed) and absorbs more power, as rotating blades delay stall; the
+model has no stall-delay correction yet, so that range is not part of the test.
 
 ## 8. Status (v0.4)
 
@@ -130,7 +182,11 @@ profile validator rejects it with that explanation.
   needs scene queries as a core service: the lidar's caster is in the sensors module, which
   rotor_aero may not use, invariant 1). Below z = 0.5 R the factor is held at its value there:
   the design's clamp at 0.25 R is where the formula diverges.
-- Not yet: advance-ratio corrections in forward flight, blade flapping, `bem`.
+- `bem` (§2.1): blade-element momentum on the propeller file's geometry, with hand and mount;
+  checked against NACA Report 640 (§7.1). The built-in controller and the autopilot bridges'
+  ESCs turn a pusher's motor the right way about its joint axis.
+- Not yet: advance-ratio corrections at the `coefficients` fidelity, edgewise flow and blade
+  flapping at `bem`, wind at the rotors.
 
 `lagrange_aerodynamics` (`modules/aerodynamics/`): `AeroDrag` at the `drag` fidelity over
 `AeroAPI_1` links: per-axis drag at the centre of pressure and angular damping against the air,

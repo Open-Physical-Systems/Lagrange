@@ -1,0 +1,57 @@
+# NACA propeller 5868-9: 10 ft, two blades, Clark Y sections, blade angle 25° at 0.75 R.
+# Geometry from NACA Report 640 (Hartman and Biermann, 1938; US Government work, public domain),
+# figure 2 (blade-form curves), read off the chart at r/R = 0.20 to 0.95 to about ±1.5 % of the
+# chord and ±0.3° (docs/design/domains/aerodynamics.md §7.1): chord c/R = 2·b/D; blade angle
+# β = atan(p/D / (π·r/R)) from the geometric pitch for the 25° setting, turned by −0.17° so that
+# β(0.75 R) is the stated 25°; thickness t/c = h/b. Other settings are this blade turned in its
+# hub (rotor_aero::withBladeAngle). Measured performance: TR-640 figures 6 and 8; the comparison
+# is test_bem's NacaReport640.
+#
+# Section data: Clark Y from NACA Report 502 (Silverstein, 1934; public domain) at Reynolds
+# numbers of 2 to 4 million, those of this propeller: lift slope 0.101 per degree for infinite
+# aspect ratio (its p. 5), zero-lift angle −5.3° (figure 10), profile drag at zero lift 0.0093
+# (figure 12), maximum lift 1.45 (figure 9). The blade's sections are the Clark Y scaled in
+# thickness on a flat face, so their camber scales with thickness: the zero-lift angle per
+# station is −5.3°·(t/c)/0.117 (thin-aerofoil theory: proportional to camber), up to t/c = 0.2;
+# the minimum drag per station scales by Hoerner's form factor 1 + 2·t/c + 60·(t/c)⁴ (Fluid-
+# Dynamic Drag, 1965, ch. 6; TODO(verify): the equation number). TODO(verify): cl_min, the drag
+# rise cd_lift and cl_at_cd_min are typical values for a cambered section, not from TR-502. The
+# round shank at 0.20–0.25 R is beyond the chart (h/b over 0.44): drag only, TODO(verify) its
+# coefficient.
+format: lagrange-propeller-1
+name: NACA 5868-9, Clark Y, 2 blades, 25° at 0.75 R
+diameter: 3.048          # m (10 ft)
+blades: 2
+hand: ccw                # right-hand (clockwise seen from behind), as tested; ccw seen from the front
+aerofoils:
+  clark_y:
+    lift_slope: 5.787    # 1/rad (0.101 per degree)
+    zero_lift_angle: -5.3  # deg, against the flat face
+    cl_max: 1.45
+    cl_min: -0.5
+    cd_min: 0.0093
+    cl_at_cd_min: 0.2
+    cd_lift: 0.01
+  round_shank:
+    lift_slope: 0.0
+    zero_lift_angle: 0.0
+    cl_max: 0.0
+    cl_min: 0.0
+    cd_min: 0.6
+stations:
+  - {r: 0.20, chord: 0.0766, twist: 45.63, thickness: 1.0, aerofoil: round_shank}
+  - {r: 0.25, chord: 0.0904, twist: 44.60, thickness: 1.0, aerofoil: round_shank}
+  - {r: 0.30, chord: 0.1064, twist: 41.78, thickness: 0.378, aerofoil: clark_y, zero_lift_angle: -9.06, cd_min: 0.0223}
+  - {r: 0.35, chord: 0.1226, twist: 39.26, thickness: 0.245, aerofoil: clark_y, zero_lift_angle: -9.06, cd_min: 0.0127}
+  - {r: 0.40, chord: 0.1356, twist: 36.75, thickness: 0.179, aerofoil: clark_y, zero_lift_angle: -8.11, cd_min: 0.0106}
+  - {r: 0.45, chord: 0.1470, twist: 34.23, thickness: 0.145, aerofoil: clark_y, zero_lift_angle: -6.57, cd_min: 0.0098}
+  - {r: 0.50, chord: 0.1518, twist: 31.90, thickness: 0.122, aerofoil: clark_y, zero_lift_angle: -5.53, cd_min: 0.0094}
+  - {r: 0.55, chord: 0.1506, twist: 30.09, thickness: 0.112, aerofoil: clark_y, zero_lift_angle: -5.07, cd_min: 0.0092}
+  - {r: 0.60, chord: 0.1450, twist: 28.79, thickness: 0.104, aerofoil: clark_y, zero_lift_angle: -4.71, cd_min: 0.0091}
+  - {r: 0.65, chord: 0.1386, twist: 27.22, thickness: 0.099, aerofoil: clark_y, zero_lift_angle: -4.48, cd_min: 0.0090}
+  - {r: 0.70, chord: 0.1306, twist: 26.03, thickness: 0.094, aerofoil: clark_y, zero_lift_angle: -4.26, cd_min: 0.0089}
+  - {r: 0.75, chord: 0.1224, twist: 25.00, thickness: 0.090, aerofoil: clark_y, zero_lift_angle: -4.08, cd_min: 0.0088}
+  - {r: 0.80, chord: 0.1134, twist: 24.10, thickness: 0.087, aerofoil: clark_y, zero_lift_angle: -3.94, cd_min: 0.0088}
+  - {r: 0.85, chord: 0.1034, twist: 23.26, thickness: 0.086, aerofoil: clark_y, zero_lift_angle: -3.90, cd_min: 0.0088}
+  - {r: 0.90, chord: 0.0914, twist: 22.50, thickness: 0.085, aerofoil: clark_y, zero_lift_angle: -3.85, cd_min: 0.0088}
+  - {r: 0.95, chord: 0.0782, twist: 21.82, thickness: 0.084, aerofoil: clark_y, zero_lift_angle: -3.81, cd_min: 0.0087}

@@ -36,7 +36,10 @@ public:
         for (const auto& [name, s] : byName) {
             const double diameter = 2.0 * s->real("aero:rotor:radius").value_or(0.0);
             Rotor r;
-            r.spin = s->token("aero:rotor:direction").value_or("ccw") == "ccw" ? 1.0 : -1.0;
+            // The motor's sense about the joint axis: its direction about the thrust, turned for
+            // a pusher, whose joint axis points against the thrust.
+            r.spin = (s->token("aero:rotor:direction").value_or("ccw") == "ccw" ? 1.0 : -1.0) *
+                     (s->token("aero:rotor:mount").value_or("puller") == "pusher" ? -1.0 : 1.0);
             // Q = CP·ρ·n²·D⁵/(2π) with n = ω/(2π): CP·ρ·D⁵/(8π³) per (rad/s)².
             r.torquePerOmega2 = s->real("aero:rotor:powerCoeff").value_or(0.0) * airDensity *
                                 std::pow(diameter, 5) /

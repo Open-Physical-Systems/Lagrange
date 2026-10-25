@@ -295,8 +295,10 @@ class "ThermalLinkAPI_1" (
 | `aero:angularDamping` | double[3] | N·m·s/rad | `(0, 0, 0)` | |
 
 **`RotorAPI_1`** (on the rotor joint prim; used by `modules/rotor_aero/`). Defined in
-`schemas/aero` since v0.4, with `aero:rotor:direction` meaning the sense of rotation that makes
-thrust, seen from above along the thrust direction.
+`schemas/aero` since v0.4, with `aero:rotor:direction` meaning the sense in which the motor
+turns the rotor, seen from the front (from where the thrust points). With a propeller file the
+propeller's own hand decides what that rotation does: a propeller of the other hand turns the
+wrong way and gives little thrust, as on a real vehicle.
 
 | Attribute | Type | Unit | Fallback |
 |---|---|---|---|
@@ -305,7 +307,8 @@ thrust, seen from above along the thrust direction.
 | `aero:rotor:thrustCoeff` | double | 1 | — (`T = CT·ρ·n²·D⁴`, `n` in rev/s) |
 | `aero:rotor:powerCoeff` | double | 1 | — |
 | `aero:rotor:direction` | token | — | — (`cw`, `ccw`) |
-| `aero:rotor:bladeTable` | asset | — | none (chord/twist vs radius, for BEM fidelity) |
+| `aero:rotor:propeller` | asset | — | none (propeller file, §3.3.1; required for the `bem` fidelity) |
+| `aero:rotor:mount` | token | — | `puller` (`puller`: thrust along the joint axis, which points from the motor to the propeller; `pusher`: against it) |
 
 ```usda
 class "AeroAPI_1" (
@@ -332,9 +335,27 @@ class "RotorAPI_1" (
     double aero:rotor:thrustCoeff ( lagrangeUnit = "1" )
     double aero:rotor:powerCoeff ( lagrangeUnit = "1" )
     uniform token aero:rotor:direction ( allowedTokens = ["cw", "ccw"] )
-    asset aero:rotor:bladeTable
+    asset aero:rotor:propeller
+    uniform token aero:rotor:mount = "puller" ( allowedTokens = ["puller", "pusher"] )
 }
 ```
+
+#### 3.3.1 Propeller files
+
+A propeller as built, for the `bem` fidelity of `rotor_aero` and for drawing its blades:
+YAML, `*.prop.yaml`, `format: lagrange-propeller-1`. Samples are in `assets/propellers/`.
+
+| Key | Unit | Meaning |
+|---|---|---|
+| `name` | — | What it is, for people |
+| `diameter` | m | Tip diameter |
+| `blades` | 1 | Number of blades |
+| `hand` | — | `ccw` or `cw`: the sense of rotation, seen from the front (from where its thrust points), in which it makes thrust. A "right-hand" aircraft propeller is `ccw` here (clockwise seen from behind) |
+| `aerofoils.<name>` | — | Section data: `lift_slope` (1/rad, two-dimensional), `zero_lift_angle` (deg), `cl_max`, `cl_min`, `cd_min`, `cl_at_cd_min`, `cd_lift` (drag polar `cd = cd_min + cd_lift·(cl − cl_at_cd_min)²`) |
+| `stations[]` | — | Blade stations from root to tip: `r` (r/R), `chord` (c/R), `twist` (deg, the section's reference line against the plane of rotation), `thickness` (t/c, for drawing), `aerofoil` (a name above), and optionally `zero_lift_angle` and `cd_min` for that station |
+
+Every file says where its numbers come from in comments at its top; a propeller made up for a
+sample says so.
 
 ### 3.4 `schemas/weather/schema.usda`
 

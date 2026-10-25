@@ -1,8 +1,10 @@
 #pragma once
 
 #include "lagrange/module/IModule.hpp"
+#include "lagrange/rotor_aero/Propeller.hpp"
 
 #include <array>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -48,8 +50,18 @@ inline constexpr double kGroundEffectMinHeight = 0.5;  // ×R; the validated ran
 /// rotor/<j>/induced_velocity (m/s, momentum theory at the current thrust), the thrust as
 /// body/<c>/wrench/rotor (summed by WrenchSum into body/<c>/external_wrench; force applied at
 /// the link's origin, torque about its centre of mass) and the shaft torque as
-/// joint/<j>/load_torque. Not yet: advance-ratio corrections in forward flight, blade flapping,
-/// ground effect over scenery other than the ground plane, the `bem` fidelity. Default step 1 ms.
+/// joint/<j>/load_torque. Default step 1 ms.
+///
+/// At the `bem` fidelity (config "fidelity": "bem") every rotor needs a propeller file
+/// (aero:rotor:propeller): its loads come from blade-element momentum theory on the propeller's
+/// geometry (PropellerTable, built at declare) with the axial speed of the hub through the air,
+/// so they follow climb, descent and the propeller's hand and mount; a propeller turned the wrong
+/// way (its hand against aero:rotor:direction) or mounted the wrong way round gives what a real
+/// one gives, with a warning at load. Optional config "speed_of_sound" (m/s, a site parameter)
+/// adds compressibility. It also reads body/<c>/twist.
+///
+/// Not yet: edgewise flow (forward flight's in-plane velocity, blade flapping), wind at the
+/// rotors, ground effect over scenery other than the ground plane.
 class RotorAero final : public IModule {
 public:
     /// `ideal` makes the substitute (aerodynamics.md §5): T = k·ω² with k from the thrust
@@ -75,13 +87,18 @@ private:
         std::array<double, 3> axis{0.0, 0.0, 1.0};  // joint axis in the child frame, unit
         std::array<double, 3> com{};                // child's centre of mass, child frame
         double thrust{0.0};                         // N, the lagged thrust
-        SignalId velocity, pose;
+        double mountSign{1.0};                      // +1 puller (thrust along the axis), −1 pusher
+        double handSign{1.0};  // +1 a ccw propeller (about its thrust direction), −1 cw
+        std::shared_ptr<const PropellerTable> propeller;  // bem fidelity
+        SignalId velocity, pose, twist;
         SignalId thrustOut, torqueOut, inducedOut, wrenchOut, loadOut;
     };
 
     bool ideal_;
+    bool bem_{false};
     double rho_{0.0};
-    double lag_{0.0};  // s
+    double speedOfSound_{0.0};  // m/s; 0: incompressible
+    double lag_{0.0};           // s
     bool groundEffect_{true};
     bool hasGround_{false};
     std::array<double, 3> groundPoint_{}, groundNormal_{0.0, 0.0, 1.0};

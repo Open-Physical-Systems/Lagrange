@@ -162,6 +162,15 @@ step resting on the ones before:
    to v0.7 (huge worlds): it moves there with it. The tutorial **done** the same day:
    `docs/guide/tutorial-drone.md`, run by `tools/ci/tutorial_drone.sh` with the PX4 step; not
    yet in a container, which needs a PX4 build in the image)
+9. Propellers as built (asked for by the owner on 2026-10-25: real blade shapes, hands and
+   mounts instead of the drawn discs): (a) the `bem` fidelity, blade-element momentum on a
+   propeller file, with hand (cw/ccw) and mount (puller/pusher) on `RotorAPI_1`, validated
+   against measured full-scale propellers (**done** 2026-10-25: NACA Report 640's 5868-9 within
+   8 % in CT and 6 % in CP over the attached-flow range, aerodynamics.md §7.1; the built-in
+   controller and the PX4 and ArduPilot ESCs turn pushers the right way); (b) drawn blades made
+   from the same file, sample propellers for the quadcopter (fixed two-blade, folding, three-
+   blade) and a quadcopter variant with pushers; (c) folding blades (hinged, opening as they
+   spin up); (d) edgewise flow in forward flight (H-force, flapping) and wind at the rotors
 
 ## Defaults taken during the autonomous run
 
@@ -312,6 +321,7 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 | electrical network (fallback doc fix) | `schemas/` (documentation of `elec:backEmfConstant`'s fallback corrected to Kt/1.5 for dq machines; changelog entry) | No attribute changed; the network refuses an authored Ke that disagrees with Kt by over 3 % |
 | raster camera sensor | `schemas/` (`CameraSensorAPI_1` in the sensor library, from formats.md §3.8, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-24 for autonomous work. Applied to a UsdGeomCamera, whose lens gives the field of view |
 | geo sensor schemas | `schemas/` (`GnssAPI_1`, `MagnetometerAPI_1`, `BarometerAPI_1` in the sensor library, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4 |
+| propeller files on rotors | `schemas/` (`RotorAPI_1`: `aero:rotor:propeller` replaces the unused `aero:rotor:bladeTable`, new `aero:rotor:mount`, `aero:rotor:direction` documented as the motor's sense; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4. `RotorAPI_1` is unreleased, so no migration |
 | aerodynamics schemas | `schemas/` (new `schemas/aero` library: `AeroAPI_1`, `RotorAPI_1` from formats.md §3.3, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4. Two documentation additions to the draft, listed in the changelog |
 | collision shapes in the snapshot | `proto/` (`Collider`, `SceneSnapshot.colliders` 11; protocol.md §4.3; golden frames regenerated) | Pre-approved by the owner on 2026-10-24 for autonomous work. New message and field only; `buf` is not installed here, so `buf breaking` was not run |
 | electrical schemas and their loading | `schemas/` (new `schemas/electrical` library: six schemas from formats.md §3.1, under the accepted RFC 0002; `schemas/CHANGELOG.md` started) | Two additions to the drafts, listed in the changelog. Motor constant conventions still need the drive-design review RFC 0002 asks for before the network uses them |

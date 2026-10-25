@@ -556,6 +556,7 @@ struct Server::Impl {
         }
         if (hasRotors() && settings.airDensityKgM3) {
             ModuleConfigData air;
+            air.values.insert(settings.rotorAero.begin(), settings.rotorAero.end());
             air.values.emplace(rotor_aero::kAirDensityKey, *settings.airDensityKgM3);
             next->add(std::make_unique<rotor_aero::RotorAero>(off("rotor_aero")),
                       ModuleConfig(air));

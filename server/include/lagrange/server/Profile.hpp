@@ -41,6 +41,9 @@ struct ProfileSettings {
     std::optional<coords::Geodetic> geoOrigin;  // world.geo_origin (radians, m)
     /// domains.aerodynamics: the wind and air density keys, as the module's config takes them.
     std::map<std::string, ConfigValue, std::less<>> aerodynamics;
+    /// domains.rotor_aero but the air density: fidelity, ground_effect, inflow_time_constant,
+    /// speed_of_sound, as the module's config takes them.
+    std::map<std::string, ConfigValue, std::less<>> rotorAero;
     std::optional<double> realTimeFactor;  // time.real_time_factor (0: as fast as possible)
 };
 

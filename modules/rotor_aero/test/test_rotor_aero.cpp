@@ -6,6 +6,7 @@
 #include "lagrange/world/PoseMath.hpp"
 
 #include <cmath>
+#include <fstream>
 #include <memory>
 #include <numbers>
 #include <string>
@@ -58,6 +59,7 @@ public:
     Plant(std::string joint, std::string link) : joint_(std::move(joint)), link_(std::move(link)) {}
     double omega{0.0};
     Pose pose{{0.0, 0.0, 10.0}, {1.0, 0.0, 0.0, 0.0}};
+    std::array<double, 6> twist{};  // world frame: linear, angular
     [[nodiscard]] ModuleInfo info() const override {
         return {"test", "plant", 1, 0, false, true, CapabilityTier::Tier0};
     }
@@ -73,6 +75,11 @@ public:
         p.unit = units::m;
         p.frame = "world_local";
         pose_ = d.output(p);
+        SignalSpec t = p;
+        t.name = "body/" + link_ + "/twist";
+        t.type = SignalType::Wrench;
+        t.unit = units::m_per_s;
+        twist_ = d.output(t);
         return {};
     }
     Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
@@ -93,14 +100,16 @@ private:
                    std::array<double, 7>{pose.position[0], pose.position[1], pose.position[2],
                                          pose.orientation[0], pose.orientation[1],
                                          pose.orientation[2], pose.orientation[3]});
+        bus.writeN(twist_, twist);
     }
     std::string joint_, link_;
-    SignalId velocity_, pose_;
+    SignalId velocity_, pose_, twist_;
 };
 
 /// A frame with one propeller on a continuous joint (axis +z), its centre of mass 2 cm off the
 /// axis, over a ground plane at z = 0.
-World propellerRig(const std::string& direction = "ccw") {
+World propellerRig(const std::string& direction = "ccw", const std::string& propeller = {},
+                   const std::string& mount = "puller") {
     World w;
     w.addCollider(kWorldBody, ShapeType::Plane, {0, 0, 0}, Pose{}, 1.0);
     const BodyId frame =
@@ -116,7 +125,10 @@ World propellerRig(const std::string& direction = "ccw") {
                    {"aero:rotor:thrustCoeff", kCt},
                    {"aero:rotor:powerCoeff", kCp}};
     rotor.integers = {{"aero:rotor:bladeCount", 2}};
-    rotor.tokens = {{"aero:rotor:direction", direction}};
+    rotor.tokens = {{"aero:rotor:direction", direction}, {"aero:rotor:mount", mount}};
+    if (!propeller.empty()) {
+        rotor.assetPaths = {{"aero:rotor:propeller", propeller}};
+    }
     return w;
 }
 
@@ -240,6 +252,97 @@ TEST(RotorAero, RefusesWithoutTheAirDensityAndOnAFixedJoint) {
     ASSERT_FALSE(wired);
     EXPECT_NE(to_string(wired.error().front()).find("revolute or continuous"), std::string::npos)
         << to_string(wired.error().front());
+}
+
+/// A 10-inch two-blade propeller of the given hand for the bem tests: constant 4.5-inch pitch,
+/// a thin cambered section. Made up for the test.
+std::string propellerFile(const std::string& hand) {
+    const std::string path = testing::TempDir() + "/test_" + hand + ".prop.yaml";
+    std::ofstream out(path);
+    out << "format: lagrange-propeller-1\nname: test 10x4.5 " << hand
+        << "\ndiameter: 0.254\nblades: 2\nhand: " << hand
+        << "\naerofoils:\n  thin: {lift_slope: 5.7, zero_lift_angle: -3, cl_max: 1.1, "
+           "cl_min: -0.5, cd_min: 0.02, cl_at_cd_min: 0.3, cd_lift: 0.02}\nstations:\n";
+    for (int i = 0; i <= 8; ++i) {
+        const double r = 0.15 + 0.85 * i / 8.0;
+        const double pitch = 0.1143;  // m
+        const double twist =
+            std::atan(pitch / (2.0 * std::numbers::pi * r * kRadius)) * 180.0 / std::numbers::pi;
+        out << "  - {r: " << r << ", chord: " << 0.16 - 0.08 * r << ", twist: " << twist
+            << ", aerofoil: thin}\n";
+    }
+    return path;
+}
+
+ModuleConfigData bem() {
+    ModuleConfigData config = withDensity();
+    config.values["fidelity"] = std::string("bem");
+    config.values["ground_effect"] = false;
+    return config;
+}
+
+double bemThrust(const World& world, double omega, double climb = 0.0,
+                 std::vector<double>* wrench = nullptr, double* load = nullptr) {
+    Rig rig = makeRig(world, bem());
+    auto wired = rig.scheduler->wire(WorldView(world));
+    EXPECT_TRUE(wired) << to_string(wired.error().front());
+    EXPECT_EQ(rig.rotor->info().name, "bem");
+    rig.plant->omega = omega;
+    rig.plant->twist = {0.0, 0.0, climb, 0.0, 0.0, 0.0};
+    EXPECT_TRUE(rig.scheduler->stepUntil(SimTime{3'000'000}).ok());
+    if (wrench != nullptr) {
+        *wrench = rig.wrench();
+    }
+    if (load != nullptr) {
+        *load = rig.read("joint/prop_joint/load_torque");
+    }
+    return rig.read("rotor/prop_joint/thrust");
+}
+
+TEST(RotorAeroBem, ThrustAndTorqueComeFromTheBlades) {
+    const std::string file = propellerFile("ccw");
+    std::string error;
+    const Propeller p = loadPropeller(file, error);
+    ASSERT_TRUE(error.empty()) << error;
+    const BemLoad expected = PropellerTable::build(p, false).at(600.0, 0.0, {kRho, 0.0});
+    std::vector<double> w;
+    double load = 0.0;
+    EXPECT_NEAR(bemThrust(propellerRig("ccw", file), 600.0, 0.0, &w, &load), expected.thrust, 1e-9);
+    EXPECT_GT(expected.thrust, 2.0);  // a narrow 10-inch propeller at 5700 rpm: a few newtons
+    EXPECT_NEAR(w[2], expected.thrust, 1e-9);
+    EXPECT_NEAR(load, -expected.torque, 1e-12);  // against the rotation
+    // Climbing, the blades meet the air at a smaller angle: less thrust.
+    EXPECT_LT(bemThrust(propellerRig("ccw", file), 600.0, 8.0), 0.8 * expected.thrust);
+}
+
+TEST(RotorAeroBem, APusherThrustsAgainstItsJointAxis) {
+    const std::string file = propellerFile("ccw");
+    const double puller = bemThrust(propellerRig("ccw", file), 600.0);
+    // Motor in front, propeller behind: the joint axis points back (from motor to propeller) and
+    // the motor turns ccw seen from the front, which is −600 rad/s about that axis.
+    std::vector<double> w;
+    double load = 0.0;
+    EXPECT_NEAR(bemThrust(propellerRig("ccw", file, "pusher"), -600.0, 0.0, &w, &load), puller,
+                1e-9);
+    EXPECT_NEAR(w[2], -puller, 1e-9);  // along −z: against the joint axis
+    EXPECT_GT(load, 0.0);              // against the rotation, which is negative about the axis
+}
+
+TEST(RotorAeroBem, APropellerOfTheWrongHandGivesLittleThrust) {
+    const double right = bemThrust(propellerRig("ccw", propellerFile("ccw")), 600.0);
+    // A cw propeller on the ccw motor: it turns backwards, trailing edge first.
+    const double wrong = bemThrust(propellerRig("ccw", propellerFile("cw")), 600.0);
+    EXPECT_LT(std::abs(wrong), 0.5 * right);
+    // The same propeller on a cw motor is right again.
+    EXPECT_NEAR(bemThrust(propellerRig("cw", propellerFile("cw")), -600.0), right, 1e-9);
+}
+
+TEST(RotorAeroBem, RefusesARotorWithoutItsPropellerFile) {
+    const World world = propellerRig();
+    Rig rig = makeRig(world, bem());
+    auto wired = rig.scheduler->wire(WorldView(world));
+    ASSERT_FALSE(wired);
+    EXPECT_NE(to_string(wired.error().front()).find("propeller file"), std::string::npos);
 }
 
 }  // namespace
