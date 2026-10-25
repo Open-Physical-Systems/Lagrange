@@ -4026,8 +4026,8 @@ Status Server::start() {
     for (std::size_t i = 0; i < s.robot.world.sensors.names.size(); ++i) {
         const World::Sensors& sensors = s.robot.world.sensors;
         char line[160];
-        constexpr std::array<const char*, 6> kKinds{"IMU",  "lidar",        "camera",
-                                                    "GNSS", "magnetometer", "barometer"};
+        constexpr std::array<const char*, 7> kKinds{"IMU",          "lidar",     "camera", "GNSS",
+                                                    "magnetometer", "barometer", "radar"};
         const char* kind = kKinds.at(static_cast<std::size_t>(sensors.type[i]));
         std::snprintf(line, sizeof(line), "%s %s on %s at %.0f Hz", kind, sensors.names[i].c_str(),
                       s.robot.world.bodies.names[sensors.body[i].index].c_str(), sensors.rateHz[i]);

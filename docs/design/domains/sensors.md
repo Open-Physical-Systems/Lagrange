@@ -38,6 +38,17 @@ Each sensor has `ground_truth` (the substitute) and one or more physical levels.
 radial velocity from relative motion, a range–Doppler–azimuth detection list after a
 constant-false-alarm threshold; rain attenuation from weather. Raw ADC cubes are not produced.
 
+Status in v0.6 (`modules/sensors/include/lagrange/sensors/Radar.hpp`, `RadarAPI_1`): rays at
+half the azimuth resolution over the field of view, each echo σ = ρ·r²·ΔΩ·cos θ (Lambertian
+back-scatter of the body's `sensmat:radarCrossSectionDensity`, 0.1 without one); echoes of one
+object in one range cell are one detection (power-weighted range, angles, radial velocity from
+the bodies' twists); SNR by the radar equation against the effective noise floor, a fixed
+threshold standing in for CFAR, noise of resolution/√(2·SNR); at most 64 detections, strongest
+first. Ground-plane hits are dropped as clutter. Checked in `test_radar`: a plate's σ = ρ·A
+within 3 %, a 10 m/s Doppler, the detection range from the radar equation. ROS:
+`/<name>/detections` PointCloud2 (x, y, z, velocity, rcs, snr). The sample sedan has a front
+radar. Owed: rain attenuation, multipath and ghosts, a published RCS reference.
+
 **IMU**: specific force and angular rate from `body/*/acceleration` and `body/*/twist` at the
 sensor frame, plus white noise (noise density), bias instability (first-order Gauss–Markov),
 rate random walk, scale-factor and misalignment errors, saturation at the range limits,

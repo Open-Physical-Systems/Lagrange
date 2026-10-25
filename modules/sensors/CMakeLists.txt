@@ -17,6 +17,7 @@ add_library(
     src/ShapeCaster.cpp
     src/Wmm.cpp
     src/GeoSensors.cpp
+    src/Radar.cpp
     src/WeatherEffects.cpp
 )
 lagrange_target_defaults(lagrange_sensors)
@@ -71,6 +72,13 @@ if(BUILD_TESTING)
     ament_add_gtest(test_weather_effects test/test_weather_effects.cpp)
     target_link_libraries(test_weather_effects lagrange_sensors)
     lagrange_target_defaults(test_weather_effects)
+    ament_add_gtest(test_radar test/test_radar.cpp)
+    target_link_libraries(
+        test_radar
+        lagrange_sensors
+        lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
+    )
+    lagrange_target_defaults(test_radar)
     ament_add_gtest(test_imu_noise test/test_imu_noise.cpp TIMEOUT 120)
     target_link_libraries(test_imu_noise lagrange_sensors)
     lagrange_target_defaults(test_imu_noise)

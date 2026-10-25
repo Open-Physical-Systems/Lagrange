@@ -275,6 +275,25 @@ private:
         } else if (sensors.type[s] == SensorType::Barometer) {
             prim.ApplyAPI(TfToken("BarometerAPI_1"));
             real("sensor:barometer:noiseStd", get("noise", 0.0));
+        } else if (sensors.type[s] == SensorType::Radar) {
+            prim.ApplyAPI(TfToken("RadarAPI_1"));
+            for (const auto& [key, attribute] :
+                 {std::pair{"carrier_frequency", "sensor:radar:carrierFrequency"},
+                  std::pair{"max_range", "sensor:radar:rangeMax"},
+                  std::pair{"azimuth_fov", "sensor:radar:azimuthFov"},
+                  std::pair{"elevation_fov", "sensor:radar:elevationFov"},
+                  std::pair{"azimuth_resolution", "sensor:radar:azimuthResolution"},
+                  std::pair{"range_resolution", "sensor:radar:rangeResolution"},
+                  std::pair{"velocity_resolution", "sensor:radar:velocityResolution"},
+                  std::pair{"tx_power", "sensor:radar:txPower"},
+                  std::pair{"antenna_gain", "sensor:radar:antennaGain"},
+                  std::pair{"noise_floor", "sensor:radar:noiseFloor"},
+                  std::pair{"detection_threshold", "sensor:radar:detectionThreshold"}}) {
+                if (const auto it = sensors.settings[s].find(key);
+                    it != sensors.settings[s].end()) {
+                    real(attribute, it->second);
+                }
+            }
         } else {
             prim.ApplyAPI(TfToken("ImuAPI_1"));
             real("sensor:imu:accelNoiseStd", get("accel_noise", 0.0));

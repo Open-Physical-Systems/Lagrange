@@ -3,6 +3,7 @@
 #include "lagrange/module/StateIO.hpp"
 #include "lagrange/random/Philox.hpp"
 #include "lagrange/sensors/ImuNoise.hpp"
+#include "lagrange/sensors/Radar.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
 #include "lagrange/sensors/WeatherEffects.hpp"
@@ -869,6 +870,9 @@ std::vector<std::unique_ptr<IModule>> createModules(
             case SensorType::Camera:
                 modules.push_back(std::make_unique<Camera>(
                     world, s, groundTruth || groundTruthCameras, cameraScene));
+                break;
+            case SensorType::Radar:
+                modules.push_back(createRadar(world, s, groundTruth));
                 break;
             case SensorType::Gnss:
             case SensorType::Magnetometer:

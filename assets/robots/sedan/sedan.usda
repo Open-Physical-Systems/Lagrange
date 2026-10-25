@@ -29,6 +29,30 @@ over "sedan"
         bool vehicle:abs = true
         double vehicle:antiRollStiffnessFront = 20000  # N/m
         double vehicle:antiRollStiffnessRear = 10000   # N/m
+
+        # A 77 GHz front radar behind the bumper: ±45° by ±7.5°, 2° resolution, 150 m.
+        # Illustrative values, not a product's datasheet.
+        def Xform "front_radar" (
+            prepend apiSchemas = ["SensorAPI_1", "RadarAPI_1"]
+        )
+        {
+            double sensor:rate = 20
+            double sensor:radar:rangeMax = 150
+            double sensor:radar:azimuthFov = 1.5708
+            double sensor:radar:elevationFov = 0.2618
+            double sensor:radar:azimuthResolution = 0.035
+            double sensor:radar:rangeResolution = 0.2
+            double sensor:radar:velocityResolution = 0.1
+            double sensor:radar:txPower = 0.01           # W (10 dBm)
+            double sensor:radar:antennaGain = 100        # 20 dBi
+            # Effective noise after processing: k·T·B·F over 1 GHz with F = 10 dB is 4e-11 W, less
+            # 40 dB of coherent gain over the chirps and samples (illustrative).
+            double sensor:radar:noiseFloor = 4e-15       # W
+            double sensor:radar:detectionThreshold = 10  # 10 dB
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (2.3, 0, 0.1)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+        }
     }
 
     over "joints"
