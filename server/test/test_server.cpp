@@ -369,6 +369,45 @@ TEST_F(QuadServerTest, AProfileWithoutTheSiteKeepsTheRunningSite) {
     EXPECT_TRUE(rotors);
 }
 
+/// The sample AMR in fog and rain (--weather).
+class WeatherServerTest : public ServerTest {
+protected:
+    void adjust(ServerOptions& options) override {
+        options.weather = {{"temperature", 283.15},
+                           {"pressure", 100000.0},
+                           {"relative_humidity", 0.95},
+                           {"visibility", 150.0},
+                           {"rain_rate", 2.778e-6}};
+    }
+};
+
+TEST_F(WeatherServerTest, TheWeatherRunsAndItsProfileSaysSo) {
+    v1::SignalCatalog catalog;
+    ASSERT_TRUE(pumpUntil([&](const v1::Envelope& e) {
+        if (e.has_catalog()) {
+            catalog = e.catalog();
+        }
+        return e.has_profile_state() && e.has_catalog() ? true : !catalog.signals().empty();
+    }));
+    std::set<std::string> names;
+    for (const v1::SignalInfo& info : catalog.signals()) {
+        names.insert(info.name());
+    }
+    EXPECT_TRUE(names.contains("env/extinction/nir_905"));
+    EXPECT_TRUE(names.contains("env/friction_scale"));
+    EXPECT_TRUE(names.contains("sensor/front_lidar/contamination"));
+    // The server's own profile (sent before the catalog) carries the weather, and it validates.
+    std::string yaml;
+    for (const v1::Envelope& e : received_) {
+        if (e.has_profile_state()) {
+            yaml = e.profile_state().yaml();
+        }
+    }
+    EXPECT_NE(yaml.find("weather: {enabled: true"), std::string::npos) << yaml;
+    EXPECT_NE(yaml.find("visibility: 150"), std::string::npos) << yaml;
+    EXPECT_TRUE(server_->validateProfile(yaml).valid);
+}
+
 /// The sample arm in its workcell: a wrist camera.
 class ArmServerTest : public ServerTest {
 protected:

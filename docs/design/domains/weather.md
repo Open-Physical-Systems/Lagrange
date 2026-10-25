@@ -15,7 +15,7 @@ The module has `effects` switches (profile key) instead of a single fidelity lad
 | Effect | Model | Consumed by |
 |---|---|---|
 | Atmosphere state | Values from `WeatherAPI`; optional time series from a CSV; density from the ideal gas law with humidity | thermal, aerodynamics |
-| `fog` | Extinction coefficient `σ` (1/m). Uniform from visibility by Koschmieder (`σ = 3.912 / V`, 5 % contrast threshold), or a NanoVDB grid. Lidar: two-way Beer–Lambert attenuation `exp(−2σr)` plus a backscatter return whose probability rises with `σ`. Camera: per-pixel `L = L0·exp(−σd) + L_air·(1 − exp(−σd))` | sensors |
+| `fog` | Extinction coefficient `σ` (1/m). Uniform from visibility by Koschmieder (`σ = 3.912 / V`, a 2 % contrast threshold; the WMO's meteorological optical range uses 5 %, `σ = 3.0 / V`), or a NanoVDB grid. Lidar: two-way Beer–Lambert attenuation `exp(−2σr)` plus a backscatter return whose probability rises with `σ`. Camera: per-pixel `L = L0·exp(−σd) + L_air·(1 − exp(−σd))` | sensors |
 | `rain` | Drop size distribution Marshall–Palmer `N(D) = N0·exp(−Λ·D)`, `N0 = 8000 m⁻³·mm⁻¹`, `Λ = 4.1·R^−0.21 mm⁻¹` with `R` in mm/h (Marshall and Palmer 1948). Gives extinction for lidar and camera, a rate of spurious near-range lidar returns from individual drops, radar attenuation, drops on lenses (accumulation rate proportional to rain rate and exposed area), and wetness of surfaces | sensors, rigid body |
 | `dust` | Mie-regime extinction from mass concentration and median diameter using tabulated extinction efficiency; lens accumulation; a slow ingress counter per `SensorAPI` prim | sensors |
 | `wet_friction` | `env/friction_scale` and per-material `sensmat:frictionWetScale`, rising with accumulated wetness and decaying with drying time | rigid body, vehicle dynamics |
@@ -87,3 +87,23 @@ Contract: all `env/*` outputs above and `sensor/{s}/contamination`.
 
 Weather effects on sensors are statistical. Each validation states the quantity compared
 (detection range, return rate), not image similarity.
+
+## 8. Status (v0.5)
+
+`lagrange_weather` (`modules/weather/`): `Weather` and its `clear` substitute (`Weather(true)`).
+
+- The site (air temperature, pressure, relative humidity) has no defaults: from `--weather`, a
+  `WeatherAPI_1` prim or the profile's `weather` keys (the profile wins; the temperature falls
+  back to thermal's ambient one). Without it the module does not run.
+- Moist air density from Alduchov and Eskridge's saturation vapour pressure (1996): the ICAO
+  sea-level density within 5e-4 for dry air.
+- Fog: Koschmieder at 550 nm, the Kim model's wavelength exponent for 905 and 1550 nm
+  (TODO(verify) the q table against Kim, McArthur and Korevaar 2001).
+- Rain: Marshall–Palmer, extinction `π·N0/Λ³` for drops much larger than the wavelength
+  (checked against the integral). The distribution with Atlas's fall speeds carries 5 to 18 %
+  more rain than it was built from, the known looseness of the fit; the design's 5 % target for
+  that check is not met and the test states the measured spread.
+- Dust: quartz spheres at the median diameter.
+- Wet friction and lens contamination: behavioural, time constants in `Weather.hpp`.
+- Not yet: consumers (sensors in step 3, rigid body's friction), the wind and fog grids
+  (step 4), radar attenuation, a weather time series.

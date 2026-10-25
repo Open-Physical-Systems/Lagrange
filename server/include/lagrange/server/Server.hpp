@@ -8,6 +8,7 @@
 #include "lagrange/world/World.hpp"
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -30,6 +31,12 @@ struct ServerOptions {
     /// The site's air density, kg/m³ (--air-density; a profile's rotor_aero.air_density
     /// overrides it). A site parameter with no default: rotors do not run without it.
     std::optional<double> airDensityKgM3;
+    /// The weather (--weather KEY=VALUE,...: temperature K, pressure Pa, relative_humidity,
+    /// visibility m, rain_rate m/s, dust_concentration kg/m³, dust_median_diameter m,
+    /// solar_irradiance W/m², sky_temperature K; a profile's weather keys override them). The
+    /// first three are site parameters with no default: the weather does not run without them
+    /// (the temperature falls back to --ambient-temperature).
+    std::map<std::string, double, std::less<>> weather;
     /// Where world ENU (0, 0, 0) is on the Earth (--geo-origin; a profile's world.geo_origin
     /// overrides it). A site parameter with no default: GNSS, magnetometers and barometers do
     /// not run without it.

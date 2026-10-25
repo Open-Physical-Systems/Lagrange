@@ -160,6 +160,36 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 domain["air_density"].is_number()) {
                 settings.airDensityKgM3 = domain["air_density"].as<double>();
             }
+            if (name == "weather") {
+                for (const char* key :
+                     {"temperature", "pressure", "relative_humidity", "visibility", "rain_rate",
+                      "dust_concentration", "dust_median_diameter", "solar_irradiance",
+                      "sky_temperature"}) {
+                    if (domain.contains(key) && domain[key].is_number()) {
+                        settings.weather[key] = domain[key].as<double>();
+                    }
+                }
+                if (domain.contains("effects") && domain["effects"].is_array()) {
+                    std::vector<std::string> effects;
+                    for (const auto& e : domain["effects"].array_range()) {
+                        effects.push_back(e.as<std::string>());
+                    }
+                    settings.weather["effects"] = effects;
+                }
+                if (enabled && context.modules.contains("weather")) {
+                    for (const char* key : {"temperature", "pressure", "relative_humidity"}) {
+                        const bool temperature =
+                            std::string_view(key) == "temperature" &&
+                            (settings.ambientTemperatureK || context.ambientKnown);
+                        if (!settings.weather.contains(key) &&
+                            !context.weatherKnown.contains(key) && !temperature) {
+                            error(check, at + "/" + key,
+                                  std::string("the weather needs the site's ") + key +
+                                      "; it has no default");
+                        }
+                    }
+                }
+            }
             if (name == "rotor_aero") {
                 for (const char* key : {"inflow_time_constant", "speed_of_sound"}) {
                     if (domain.contains(key) && domain[key].is_number()) {

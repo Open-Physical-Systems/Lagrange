@@ -10,6 +10,7 @@
 #include <exception>
 #include <filesystem>
 #include <numbers>
+#include <set>
 #include <string_view>
 
 #include <ament_index_cpp/get_package_share_path.hpp>
@@ -118,6 +119,10 @@ void printServerOptions(std::FILE* out) {
         "            a profile's world.geo_origin also sets it)\n"
         "  --air-density KG_M3  the site's air density, for rotors (ISA sea level: 1.225; no\n"
         "            default; a profile's rotor_aero.air_density also sets it)\n"
+        "  --weather K=V,...  the weather: temperature (K), pressure (Pa) and relative_humidity\n"
+        "            (0-1), the site, no defaults; visibility (m, fog), rain_rate (m/s),\n"
+        "            dust_concentration (kg/m³), dust_median_diameter (m), solar_irradiance\n"
+        "            (W/m²), sky_temperature (K); a profile's weather keys also set them\n"
         "  --domain D=off  replace domain D (rigid_body, electrical, thermal, sensors) by its\n"
         "            substitute\n"
         "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
@@ -273,6 +278,35 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--air-density needs a density in kg/m³";
             }
             options.airDensityKgM3 = rho;
+        } else if (arg == "--weather") {
+            const char* text = value();
+            if (text == nullptr) {
+                return "--weather needs KEY=VALUE,... (temperature=288.15,pressure=101325,...)";
+            }
+            static const std::set<std::string, std::less<>> kKeys{
+                "temperature",          "pressure",         "relative_humidity",
+                "visibility",           "rain_rate",        "dust_concentration",
+                "dust_median_diameter", "solar_irradiance", "sky_temperature"};
+            std::string list(text);
+            std::size_t at = 0;
+            while (at <= list.size()) {
+                const std::size_t comma = std::min(list.find(',', at), list.size());
+                const std::string item = list.substr(at, comma - at);
+                const std::size_t equals = item.find('=');
+                char* end = nullptr;
+                const double v = equals == std::string::npos
+                                     ? 0.0
+                                     : std::strtod(item.c_str() + equals + 1, &end);
+                if (equals == std::string::npos || !kKeys.contains(item.substr(0, equals)) ||
+                    end == item.c_str() + equals + 1 || *end != '\0') {
+                    return "--weather: \"" + item +
+                           "\" is not KEY=VALUE with KEY one of temperature, pressure, "
+                           "relative_humidity, visibility, rain_rate, dust_concentration, "
+                           "dust_median_diameter, solar_irradiance, sky_temperature";
+                }
+                options.weather[item.substr(0, equals)] = v;
+                at = comma + 1;
+            }
         } else if (arg == "--paused") {
             options.startPaused = true;
         } else if (arg == "--no-ros") {
