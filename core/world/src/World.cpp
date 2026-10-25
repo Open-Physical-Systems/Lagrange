@@ -54,6 +54,8 @@ std::span<const double> SchemaInstance::realArray(std::string_view attr) const {
 PrimId World::addPrim(std::string path, std::string instanceName) {
     prims.paths.push_back(std::move(path));
     prims.instanceNames.push_back(std::move(instanceName));
+    prims.body.push_back(kWorldBody);
+    prims.poseInBody.emplace_back();
     return PrimId{static_cast<std::uint32_t>(prims.paths.size() - 1)};
 }
 

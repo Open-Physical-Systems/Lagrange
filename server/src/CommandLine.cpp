@@ -13,6 +13,8 @@
 #include <set>
 #include <string_view>
 
+#include <yaml-cpp/yaml.h>
+
 #include <ament_index_cpp/get_package_share_path.hpp>
 #include <rclcpp/rclcpp.hpp>
 
@@ -125,11 +127,13 @@ void printServerOptions(std::FILE* out) {
         "            (W/m²), sky_temperature (K), fog_field and wind_field (.nvdb files);\n"
         "            a profile's weather keys also set them\n"
         "  --domain D=off  replace domain D (rigid_body, electrical, thermal, weather, emi,\n"
-        "            sensors) by its substitute\n"
+        "            comms, sensors) by its substitute\n"
         "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
         "            TwistStamped\n"
         "  --no-demo  stand still until the first /cmd_vel instead of driving the demo\n"
         "            figure-eight\n"
+        "  --link-topics FILE.yaml  ROS topics that ride on radio links (LINK: [/topic, ...]):\n"
+        "            lost and delayed as the comms domain's link quality says\n"
         "  --export-map FILE.yaml  write an occupancy map of the fixed scenery for\n"
         "            nav2_map_server (PGM next to it) and exit\n",
         proto::defaultUnixSocketPath().c_str());
@@ -279,6 +283,29 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--air-density needs a density in kg/m³";
             }
             options.airDensityKgM3 = rho;
+        } else if (arg == "--link-topics") {
+            // A YAML map from a link (the receiving radio's prim) to the topics on it.
+            const char* text = value();
+            if (text == nullptr) {
+                return "--link-topics needs a YAML file: LINK: [/topic, ...]";
+            }
+            try {
+                const YAML::Node file = YAML::LoadFile(text);
+                if (!file.IsMap()) {
+                    return std::string(text) + ": a map from links to lists of topics";
+                }
+                for (const auto& entry : file) {
+                    const std::string link = entry.first.as<std::string>();
+                    if (!entry.second.IsSequence()) {
+                        return std::string(text) + ": " + link + " needs a list of topics";
+                    }
+                    for (const auto& topic : entry.second) {
+                        options.linkTopics[topic.as<std::string>()] = link;
+                    }
+                }
+            } catch (const YAML::Exception& e) {
+                return std::string(text) + ": " + e.what();
+            }
         } else if (arg == "--weather") {
             const char* text = value();
             if (text == nullptr) {
@@ -343,10 +370,11 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             const std::string_view state =
                 equals == std::string_view::npos ? "" : setting.substr(equals + 1);
             if ((domain != "rigid_body" && domain != "sensors" && domain != "electrical" &&
-                 domain != "thermal" && domain != "weather" && domain != "emi") ||
+                 domain != "thermal" && domain != "weather" && domain != "emi" &&
+                 domain != "comms") ||
                 (state != "on" && state != "off")) {
-                return "--domain takes rigid_body, electrical, thermal, weather, emi or sensors "
-                       "=on|off";
+                return "--domain takes rigid_body, electrical, thermal, weather, emi, comms or "
+                       "sensors =on|off";
             }
             if (state == "off") {
                 options.substituted.insert(domain);

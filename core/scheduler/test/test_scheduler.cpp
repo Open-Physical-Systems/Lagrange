@@ -341,10 +341,8 @@ TEST(Wiring, ContractPerSchemaInstance) {
     World world;
     const PrimId left = world.addPrim("/amr/left_wheel", "left_wheel");
     const PrimId right = world.addPrim("/amr/right_wheel", "right_wheel");
-    world.schemaInstances.push_back(
-        {"ElectricalMotorAPI_1", {}, left, kWorldBody, {}, {}, {}, {}, {}, {}, {}});
-    world.schemaInstances.push_back(
-        {"ElectricalMotorAPI_1", {}, right, kWorldBody, {}, {}, {}, {}, {}, {}, {}});
+    world.schemaInstances.push_back({"ElectricalMotorAPI_1", {}, left, {}, {}, {}, {}, {}, {}});
+    world.schemaInstances.push_back({"ElectricalMotorAPI_1", {}, right, {}, {}, {}, {}, {}, {}});
 
     Scheduler scheduler(SchedulerOptions{.contracts = &registry});
     // Writes the left wheel's torque only, and in the wrong unit.
@@ -789,8 +787,7 @@ TEST(Substitutes, IdealTorqueSourceSatisfiesTheElectricalContract) {
                   [] { return std::make_unique<IdealTorqueSource>(); }});
     World world;
     const PrimId wheel = world.addPrim("/amr/left_wheel", "left_wheel");
-    world.schemaInstances.push_back(
-        {"ElectricalMotorAPI_1", {}, wheel, kWorldBody, {}, {}, {}, {}, {}, {}, {}});
+    world.schemaInstances.push_back({"ElectricalMotorAPI_1", {}, wheel, {}, {}, {}, {}, {}, {}});
 
     const auto choice = substituteForToken("ideal");
     ASSERT_TRUE(choice);

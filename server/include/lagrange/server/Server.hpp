@@ -39,6 +39,8 @@ struct ServerOptions {
     std::map<std::string, double, std::less<>> weather;
     /// --weather's fields: fog_field and wind_field, NanoVDB files (.nvdb).
     std::map<std::string, std::string, std::less<>> weatherFiles;
+    /// --link-topics: ROS topics that ride on radio links, topic → link (domains/comms.md).
+    std::map<std::string, std::string> linkTopics;
     /// Where world ENU (0, 0, 0) is on the Earth (--geo-origin; a profile's world.geo_origin
     /// overrides it). A site parameter with no default: GNSS, magnetometers and barometers do
     /// not run without it.

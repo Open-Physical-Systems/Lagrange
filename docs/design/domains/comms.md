@@ -81,3 +81,37 @@ step). The `raytraced` level would use the shared BVH kernels on Tier 1 and 2.
 | Indoor attenuation | path-loss exponents and wall losses from published indoor propagation models (for example the ITU-R P.1238 recommendation; cite the version used) | parameters traceable to the source; the model is a range check, not a site prediction |
 | CAN state machine | ISO 11898-1 fault confinement | exact |
 | End to end | an AMR driving away from an access point in a real building with logged RSSI (to be recorded; Q16) | RSSI trend within the shadowing spread |
+
+## 8. Status (v0.5)
+
+`lagrange_comms` (`modules/comms/`): `Comms` at 10 ms (`link_budget`) and its `ideal` substitute
+(`Comms(true)`). It runs when the stage has `RadioLinkAPI_1` or `CanBusAPI_1` prims;
+`--domain comms=off` or the profile's `comms: {enabled: false, substitute: ideal}` switches it
+off.
+
+- Links: log-distance path loss from Friis at d0; walls are the fixed scenery's collision shapes
+  that the straight line from transmitter to receiver crosses (`services::SceneQuery`, Embree on
+  every tier), each costing `comms:wallLoss`; log-normal shadowing correlated over the
+  receiver's travel (Gudmundson); noise `k·T0·B·F` (T0 = 290 K) plus `emi/<rx>/interference_power`.
+  The transmitter is any prim (`comms:transmitter`); prims are placed by the loader
+  (`World::Prims::body`, `poseInBody`), so a radio on the robot moves with it.
+- Packets: bit errors in AWGN for BPSK, QPSK (exact) and 16/64-QAM (nearest-neighbour
+  approximation), one symbol per hertz; `packet_error_rate` is the loss after
+  `comms:maxRetries`, `latency` the expected airtime with retries, `throughput` the bit rate
+  times the delivered fraction, `up` while at least half the packets arrive. No coding gain,
+  MAC contention or multipath (`raytraced`, later).
+- CAN: the frame error rate from `emi/<c>/bit_error_rate`, and ISO 11898-1 fault confinement of
+  the transmit error counter (error passive above 127, bus off above 255, recovery after 128 ×
+  11 recessive bits), with the bus taken as fully loaded by the node (the worst case). The
+  receive error counter is not modelled.
+- Applied: `lagrange_server --link-topics FILE.yaml` (`LINK: [/topic, ...]`) gates the ROS 2
+  bridge's topics on a link: each message is lost with the link's packet loss (always while it
+  is down) and the rest arrive its latency later, with their original stamps; incoming
+  `/cmd_vel` likewise (the previous command holds while a late one travels). Not yet: the
+  MAVLink bridge's telemetry, encoder glitches in ros2_control, the viewer's link panel.
+- Sample: `assets/robots/amr_diffdrive/amr_diffdrive_wifi.usda` (a 2.4 GHz radio, a 500 kbit/s
+  CAN bus, the access point outside the warehouse's east wall) with
+  `amr_diffdrive_wifi.links.yaml`.
+- Validation done: Friis against the textbook form, `k·T·B`, the BPSK 1e-5 point and Q(3), the
+  CAN transitions exactly, wall counting, the shadowing spread. Owed: indoor parameters traced
+  to ITU-R P.1238 (TODO(verify)), the end-to-end RSSI recording (Q16).

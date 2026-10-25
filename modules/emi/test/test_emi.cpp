@@ -68,7 +68,7 @@ struct Scene {
         SchemaInstance s;
         s.schema = schema;
         s.prim = world.addPrim(std::string("/site/") + name, name);
-        s.poseInBody = pose;
+        world.prims.poseInBody[s.prim.index] = pose;
         s.reals = std::move(reals);
         s.tokens = std::move(tokens);
         world.schemaInstances.push_back(std::move(s));

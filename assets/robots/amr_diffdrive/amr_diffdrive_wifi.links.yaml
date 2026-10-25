@@ -1,0 +1,3 @@
+# ROS topics that ride on the sample AMR's Wi-Fi link (lagrange_server --link-topics): the
+# link's packet loss drops them and its latency delays them (domains/comms.md).
+wifi: [/scan, /odom, /cmd_vel]
