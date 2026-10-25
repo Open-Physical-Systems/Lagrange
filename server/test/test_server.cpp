@@ -408,6 +408,37 @@ TEST_F(WeatherServerTest, TheWeatherRunsAndItsProfileSaysSo) {
     EXPECT_TRUE(server_->validateProfile(yaml).valid);
 }
 
+TEST_F(WeatherServerTest, TheEnvironmentAndItsFogSliceReachTheViewer) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_environment(); }));
+    const v1::EnvironmentState env = received_.back().environment();
+    EXPECT_FALSE(env.synthetic());
+    EXPECT_DOUBLE_EQ(env.weather().fog_visibility_m(), 150.0);
+    EXPECT_NEAR(env.weather().rain_mm_per_h(), 10.0, 1e-3);
+    EXPECT_NEAR(env.ambient_temperature_k(), 283.15, 1e-9);
+    std::map<std::string, bool> available;
+    for (const auto& f : env.fields()) {
+        available[f.name()] = f.available();
+    }
+    EXPECT_TRUE(available["weather/fog_density"]);
+    EXPECT_FALSE(available["weather/wind"]);  // no wind in this run
+    EXPECT_FALSE(available["emi/flux_density"]);
+
+    v1::Envelope watch = command(4);
+    watch.mutable_command()->mutable_subscribe_field()->set_field("weather/fog_density");
+    watch.mutable_command()->mutable_subscribe_field()->set_enabled(true);
+    watch.mutable_command()->mutable_subscribe_field()->set_height_m(1.0);
+    send(watch);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_field_slice(); }));
+    const v1::FieldSlice& slice = received_.back().field_slice();
+    EXPECT_EQ(slice.field(), "weather/fog_density");
+    EXPECT_EQ(slice.components(), 1U);
+    ASSERT_EQ(slice.values().inline_().size(),
+              std::size_t{slice.width()} * slice.height() * sizeof(float));
+    // Uniform fog of 150 m visibility, plus a little rain: Koschmieder's 3.912/V and more.
+    EXPECT_GT(slice.value_min(), 3.912 / 150.0);
+    EXPECT_NEAR(slice.value_max(), slice.value_min(), 1e-6);
+}
+
 /// The sample arm in its workcell: a wrist camera.
 class ArmServerTest : public ServerTest {
 protected:

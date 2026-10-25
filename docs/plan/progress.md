@@ -138,7 +138,8 @@ time-boxed. Order:
    volume overlays; wind and fog fields (NanoVDB, CPU sampling, the fog and wind grids through
    weather, lidar, camera and link drag **done** 2026-10-25: `lagrange_fields`, zlib-compressed
    `.nvdb`, samples in `assets/fields/`. GPU sampling not needed yet (per beam on the CPU); the
-   viewer's overlays next)
+   server sends the viewer's Environment workspace its `EnvironmentState` and, for subscribed
+   fields, 64 × 48 `FieldSlice`s of fog extinction and wind around the robot twice a second)
 5. `modules/emi`: analytic sources and field maps, victims (magnetometer, IMU, encoder, CAN,
    radio)
 6. `modules/comms`: link budget, packet errors, CAN fault confinement; bridges drop and delay
