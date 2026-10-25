@@ -124,7 +124,7 @@ lag the simulation; `pick_place` retries a move once when its start state looks 
 | Motor and ESC dynamics, battery sag affecting thrust | electrical at 50 µs |
 | IMU, barometer, magnetometer, GNSS | sensors |
 | Autopilot in the loop | `bridges/mavlink/`: PX4 SITL through its simulator MAVLink interface (`HIL_SENSOR`, `HIL_GPS`, `HIL_ACTUATOR_CONTROLS`) with lockstep; ArduPilot SITL through its JSON simulator interface. Both are independent of the ROS distro, which matters because their ROS 2 guides do not target Lyrical yet (V8). Interface details TODO(verify) against the PX4 and ArduPilot versions pinned at v0.4 |
-| ROS 2 access | MAVROS 2.15.1 (available), or PX4's uXRCE-DDS bridge with `px4_msgs` built from source |
+| ROS 2 access | The simulator's own topics (`/imu`, `/gnss/fix`, `/magnetometer/field`, `/barometer/pressure`, ground truth on `/odom`); with an autopilot, MAVROS 2.15.1 (available) or PX4's uXRCE-DDS bridge with `px4_msgs` built from source |
 | Wind and gusts | weather + aerodynamics |
 
 Sample assets: `assets/robots/quad_x500/` (a generic 500 mm quadcopter with illustrative

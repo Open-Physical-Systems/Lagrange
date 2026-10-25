@@ -146,7 +146,9 @@ step resting on the ones before:
    (**done** 2026-10-25: `GnssAPI_1`, `MagnetometerAPI_1`, `BarometerAPI_1`; the world's geo
    origin (`world.geo_origin`, `--geo-origin`, a site parameter); WMM2025 (public domain) within
    0.001 nT of NOAA's 100 test points; the ICAO standard atmosphere; on the sample quadcopter
-   with PX4 SITL's default home as the example site)
+   with PX4 SITL's default home as the example site; on ROS 2 the same day: `/<sensor>/fix`,
+   `/<sensor>/field`, `/<sensor>/pressure`, `/<sensor>/temperature`; before, the bridge took
+   every sensor that was not a lidar or camera for an IMU and opened extra `/imu` publishers)
 6. `modules/aerodynamics`: link drag, mean wind profile, Dryden turbulence (MIL-HDBK-1797)
    (**done** 2026-10-25: `AeroDrag`; the wind in the aerodynamics config until v0.5's weather;
    the sample quadcopter holds 2 m within 6 cm in 8 m/s with gusts, `quad_x500_gusty.yaml`;
