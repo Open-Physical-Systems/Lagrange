@@ -5,6 +5,11 @@ every schema is version 1 and may change without a migration.
 
 ## Unreleased
 
+- **Vehicle library** for v0.6 (formats.md §3.10): `VehicleAPI_1` on a chassis body
+  (powertrain, steering, brakes, anti-roll bars, the engine map and gears of an `ice_map`
+  powertrain) and `WheelAPI_1` on a wheel's spin joint (radius, axle, steered and driven, tyre
+  file or linear stiffnesses, friction, relaxation length, suspension).
+
 - **Weather, EMI, sensor-material and comms libraries** for v0.5: `WeatherAPI_1`,
   `EmiSourceAPI_1`, `EmiSusceptibilityAPI_1`, `SensorMaterialAPI_1` as drafted in formats.md
   §3.4, §3.5 and §3.7, and new `RadioLinkAPI_1` and `CanBusAPI_1` (§3.9). Additions to the

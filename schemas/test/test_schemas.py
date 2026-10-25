@@ -33,6 +33,7 @@ EXPECTED = {
     "emi": ["EmiSourceAPI_1", "EmiSusceptibilityAPI_1"],
     "sensor_material": ["SensorMaterialAPI_1"],
     "comms": ["RadioLinkAPI_1", "CanBusAPI_1"],
+    "vehicle": ["VehicleAPI_1", "WheelAPI_1"],
 }
 
 

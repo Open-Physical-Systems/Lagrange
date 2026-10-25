@@ -182,7 +182,7 @@ if(BUILD_TESTING)
         test/test_multicopter.cpp
         test/test_toggles.cpp
         test/test_usd_assets.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle"
         TIMEOUT 120
     )
     target_link_libraries(
@@ -227,7 +227,7 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_arm
         test/test_arm.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle"
         TIMEOUT 180
     )
     target_link_libraries(

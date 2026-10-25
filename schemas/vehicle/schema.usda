@@ -1,0 +1,169 @@
+#usda 1.0
+(
+    """Lagrange vehicle schemas (RFC 0002, docs/design/formats.md section 3.10). Codeless.
+    VehicleAPI_1 makes a rigid body the chassis of a wheeled road vehicle; WheelAPI_1 makes a
+    wheel's spin joint a wheel of it, with its tyre and suspension (modules/vehicle_dynamics)."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeVehicle"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "VehicleAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """The chassis of a wheeled road vehicle: its powertrain, steering and brakes. The
+    wheels are the WheelAPI_1 joints whose parent is this body (domains/vehicle_dynamics.md)."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token vehicle:powertrain = "electric" (
+        allowedTokens = ["electric", "ice_map"]
+        doc = """electric: the driven wheels' motors (or the electrical substitute) give the drive
+        torque, up to vehicle:maxDriveTorque; ice_map: an engine torque map through a geared
+        transmission and an open differential."""
+    )
+    double vehicle:maxDriveTorque (
+        lagrangeUnit = "N.m"
+        doc = "electric: total torque at the driven wheels at full throttle. Required for electric."
+    )
+    double vehicle:maxSteerAngle (
+        lagrangeUnit = "rad"
+        doc = "Largest road-wheel angle of the inner wheel. Required when a wheel is steered."
+    )
+    double vehicle:steerRate = 1 (
+        lagrangeUnit = "rad/s"
+        doc = "Largest rate of the road-wheel angle."
+    )
+    double vehicle:steerTimeConstant = 0.05 (
+        lagrangeUnit = "s"
+        doc = "First-order lag of the steering actuator."
+    )
+    double vehicle:maxBrakeTorque (
+        lagrangeUnit = "N.m"
+        doc = "Total brake torque over all braked wheels at full pedal. Required."
+    )
+    double vehicle:brakeBias = 0.6 (
+        lagrangeUnit = "1"
+        doc = "Fraction of the brake torque on the front axle."
+    )
+    bool vehicle:abs = false (
+        doc = "Anti-lock braking: limits each wheel's slip ratio while braking."
+    )
+    double[] vehicle:engineSpeeds = [] (
+        lagrangeUnit = "rad/s"
+        doc = "ice_map: engine speeds of the full-throttle torque curve, increasing."
+    )
+    double[] vehicle:engineTorques = [] (
+        lagrangeUnit = "N.m"
+        doc = "ice_map: full-throttle engine torque at vehicle:engineSpeeds."
+    )
+    double vehicle:engineIdleSpeed = 80 (
+        lagrangeUnit = "rad/s"
+        doc = "ice_map: idle speed; the clutch slips below it."
+    )
+    double[] vehicle:gearRatios = [] (
+        lagrangeUnit = "1"
+        doc = "ice_map: forward gear ratios, first gear first."
+    )
+    double vehicle:finalDriveRatio = 1 (
+        lagrangeUnit = "1"
+        doc = "ice_map: the differential's reduction."
+    )
+    double vehicle:shiftUpSpeed = 600 (
+        lagrangeUnit = "rad/s"
+        doc = "ice_map: engine speed at which the automatic transmission shifts up."
+    )
+    double vehicle:shiftDownSpeed = 250 (
+        lagrangeUnit = "rad/s"
+        doc = "ice_map: engine speed at which it shifts down."
+    )
+    double vehicle:driveEfficiency = 0.92 (
+        lagrangeUnit = "1"
+        doc = "ice_map: transmission and differential efficiency."
+    )
+    double vehicle:antiRollStiffnessFront = 0 (
+        lagrangeUnit = "N/m"
+        doc = "Anti-roll bar: force per metre of travel difference across the front axle."
+    )
+    double vehicle:antiRollStiffnessRear = 0 (
+        lagrangeUnit = "N/m"
+        doc = "Anti-roll bar across the rear axle."
+    )
+}
+
+class "WheelAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A wheel of a VehicleAPI_1 chassis, on the wheel's spin joint (its child body is the
+    wheel). The ground is found by a ray down from the joint's anchor at rest; the suspension
+    is a spring and damper along it, so the wheel body itself needs no collision shape."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double wheel:radius (
+        lagrangeUnit = "m"
+        doc = "Loaded rolling radius. Required."
+    )
+    double wheel:width = 0.2 (
+        lagrangeUnit = "m"
+        doc = "Tyre width (for drawing and the contact patch)."
+    )
+    uniform token wheel:axle (
+        allowedTokens = ["front", "rear"]
+        doc = "front or rear: for brake bias, anti-roll bars and Ackermann steering. Required."
+    )
+    bool wheel:steered = false (
+        doc = "Turned by the steering."
+    )
+    bool wheel:driven = false (
+        doc = "Driven by the powertrain."
+    )
+    rel wheel:steerJoint (
+        doc = "A steered wheel's steering joint (vertical revolute), turned to the road-wheel angle."
+    )
+    asset wheel:tyre (
+        doc = "A tyre property file (.tir) with Magic Formula coefficients, for the pacejka fidelity."
+    )
+    double wheel:longitudinalStiffness (
+        lagrangeUnit = "N"
+        doc = "linear fidelity: longitudinal force per unit slip ratio. Required without a tyre file."
+    )
+    double wheel:corneringStiffness (
+        lagrangeUnit = "N/rad"
+        doc = "linear fidelity: lateral force per radian of slip angle. Required without a tyre file."
+    )
+    double wheel:friction = 1 (
+        lagrangeUnit = "1"
+        doc = "Peak friction coefficient of the tyre on the reference (dry) surface."
+    )
+    double wheel:relaxationLength = 0.3 (
+        lagrangeUnit = "m"
+        doc = "Distance rolled for the lateral force to build up (transient response)."
+    )
+    double wheel:restLength (
+        lagrangeUnit = "m"
+        doc = "Suspension length at zero spring force, from the anchor to the wheel centre. Required."
+    )
+    double wheel:travel (
+        lagrangeUnit = "m"
+        doc = "Suspension compression to the bump stop. Required."
+    )
+    double wheel:springStiffness (
+        lagrangeUnit = "N/m"
+        doc = "Suspension spring rate at the wheel. Required."
+    )
+    double wheel:damping (
+        lagrangeUnit = "N.s/m"
+        doc = "Suspension damping at the wheel. Required."
+    )
+}
