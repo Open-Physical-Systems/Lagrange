@@ -144,6 +144,13 @@ outputs. PX4 v1.17.0 with the airframe `bridges/mavlink/px4/22100_lagrange_quad_
 flies a 10 m square at 5 m and lands (`tools/ci/px4_mission.sh`, `fly_square_mission.py`).
 ArduPilot's JSON interface is not done yet.
 
+*Acceptance (v0.4):* the PX4 mission passes in 8 m/s of gusty wind (`tools/ci/px4_mission.sh
+--wind`, the profile `quad_x500_gusty.yaml`). Low battery: at full throttle a full pack holds
+16.2 V and gives 37.5 N; at 10 % charge the pack sags to 13.9 V, the voltage limits the motors,
+and the rotors give 29.0 N, so the climb in 2.5 s halves (23.9 m against 12.6 m;
+`Multicopter.ALowBatterySagsAndGivesLessThrust`). At 3 % the bus browns out at full load, the
+drives trip and it does not take off.
+
 Acceptance scenario for v0.4: PX4 SITL in lockstep takes off, flies a square mission in 8 m/s
 gusty wind and lands; a low battery scenario shows voltage sag reducing available thrust.
 
