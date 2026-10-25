@@ -1,6 +1,8 @@
 // Blade-element momentum theory against momentum theory and against measured full-scale
 // propeller data (NACA Report 640), aerodynamics.md §7.
 #include "lagrange/rotor_aero/Propeller.hpp"
+#include "lagrange/world/Model.hpp"
+#include "lagrange/world/PoseMath.hpp"
 
 #include <cmath>
 #include <numbers>
@@ -149,6 +151,102 @@ TEST(PropellerTable, GivesWhatBemGives) {
     const BemLoad direct = bemLoad(p, 150.0, 30.0, air);  // tip Mach 0.68
     EXPECT_NEAR(fast.at(150.0, 30.0, air).thrust, direct.thrust, 0.01 * direct.thrust);
     EXPECT_GT(direct.thrust, bemLoad(p, 150.0, 30.0, kSeaLevel).thrust);
+}
+
+Propeller sample(const std::string& hand) {
+    std::string error;
+    const Propeller p = loadPropeller(
+        std::string(LAGRANGE_PROPELLERS) + "/generic_10in_2blade_" + hand + ".prop.yaml", error);
+    EXPECT_TRUE(error.empty()) << error;
+    return p;
+}
+
+TEST(PropellerMesh, BladesReachTheTipWithTheTrailingEdgeBehindInTheHand) {
+    for (const std::string hand : {"ccw", "cw"}) {
+        const Propeller p = sample(hand);
+        const TriMesh m = propellerMesh(p);
+        ASSERT_FALSE(m.indices.empty());
+        ASSERT_EQ(m.positions.size(), m.normals.size());
+        double reach = 0.0;
+        // The first blade's (along +x) farthest point from its quarter chord at 0.75 R: the
+        // trailing edge, three quarters of the chord back.
+        double trailY = 0.0;
+        double back = 0.0;
+        for (std::size_t v = 0; v < m.positions.size(); v += 3) {
+            const double x = m.positions[v];
+            const double y = m.positions[v + 1];
+            reach = std::max(reach, std::hypot(x, y));
+            if (x > 0.7 * p.radius && x < 0.8 * p.radius && std::abs(y) > std::abs(trailY)) {
+                trailY = y;
+                back = m.positions[v + 2];
+            }
+        }
+        EXPECT_NEAR(reach, p.radius, 0.01 * p.radius) << hand;
+        // Behind in the hand (−y for ccw about +z) and, the blade being pitched with its leading
+        // edge to the front, towards the back.
+        EXPECT_EQ(trailY < 0.0, hand == "ccw") << hand;
+        EXPECT_LT(back, 0.0) << hand;
+    }
+}
+
+TEST(PropellerMesh, AModelDrawsItsPropellersInPlaceOfTheDisc) {
+    Model model;
+    World& w = model.world;
+    const BodyId frame =
+        w.addBody("frame", kWorldBody, Pose{}, 1.0, {}, {0.01, 0.01, 0.01, 0, 0, 0});
+    const BodyId prop =
+        w.addBody("prop", frame, {{0.2, 0.0, 0.05}}, 0.02, {}, {1e-5, 1e-5, 2e-5, 0, 0, 0});
+    w.addJoint("prop_joint", JointType::Continuous, prop, {0, 0, -1}, true);  // axis down
+    w.schemaInstances.push_back({});
+    SchemaInstance& rotor = w.schemaInstances.back();
+    rotor.schema = "RotorAPI_1";
+    rotor.prim = w.joints.prim.back();
+    rotor.tokens = {{"aero:rotor:mount", "pusher"}};  // an inverted motor: thrust up
+    rotor.assetPaths = {{"aero:rotor:propeller",
+                         std::string(LAGRANGE_PROPELLERS) + "/generic_10in_2blade_ccw.prop.yaml"}};
+    model.scene.meshes.push_back(cylinderMesh(0.127, 0.004));
+    model.scene.prims.push_back({"frame",
+                                 "/quad/frame",
+                                 kNoIndex,
+                                 "Xform",
+                                 {},
+                                 kNoIndex,
+                                 kNoIndex,
+                                 frame.index,
+                                 {},
+                                 {1.0F, 1.0F, 1.0F}});
+    model.scene.prims.push_back({"prop",
+                                 "/quad/prop",
+                                 0,
+                                 "Xform",
+                                 {},
+                                 kNoIndex,
+                                 kNoIndex,
+                                 prop.index,
+                                 {},
+                                 {1.0F, 1.0F, 1.0F}});
+    model.scene.prims.push_back({"visual",
+                                 "/quad/prop/visual",
+                                 1,
+                                 "Mesh",
+                                 {},
+                                 0,
+                                 kNoIndex,
+                                 prop.index,
+                                 {},
+                                 {1.0F, 1.0F, 1.0F}});
+    model.bodyPrim = {0, 1};
+    addPropellerBlades(model);
+    ASSERT_EQ(model.scene.prims.size(), 4U);
+    EXPECT_EQ(model.scene.prims[2].mesh, kNoIndex);  // the disc gives way
+    const ScenePrim& blades = model.scene.prims[3];
+    EXPECT_EQ(blades.body, prop.index);
+    EXPECT_EQ(blades.parent, 1U);
+    EXPECT_EQ(blades.path, "/quad/prop/propeller");
+    // Pusher on an axis pointing down: the propeller's thrust (its +z) points up.
+    const auto up = rotate(blades.offset.orientation, {0.0, 0.0, 1.0});
+    EXPECT_NEAR(up[2], 1.0, 1e-12);
+    EXPECT_TRUE(model.notes.empty());
 }
 
 TEST(Propeller, RejectsAnIncompleteFile) {

@@ -5,7 +5,9 @@
 #     database, volume 1, static test apcsf_10x4.7_static_kt0835 (J. B. Brandt, R. W. Deters,
 #     G. K. Ananda, O. D. Dantsker and M. S. Selig, UIUC Applied Aerodynamics Group): the measured
 #     CT is 0.120-0.130 and CP 0.048-0.053 from 4590 to 6528 RPM, around the hover speed of
-#     about 5400 RPM for 1.9 + 4 x 0.025 kg.
+#     about 5400 RPM for 1.9 + 4 x 0.025 kg. Each rotor also names its propeller as built
+#     (assets/propellers/generic_10in_2blade_*.prop.yaml, a generic blade of the same static CT
+#     and CP), drawn as its blades and flown by the bem fidelity.
 #   - Motors: 920 KV class, Ke = 60 / (2 pi 920) = 0.01038 V.s/rad, Kt = 1.5 Ke (peak dq
 #     convention, electrical.md §9), 7 pole pairs, 0.1 ohm, 30 uH, 25 A.
 #   - Battery: 4S 5000 mAh lithium-polymer pack (an illustrative OCV curve per cell).
@@ -42,6 +44,7 @@ apply:
         aero:rotor:thrustCoeff: 0.125
         aero:rotor:powerCoeff: 0.0507
         aero:rotor:direction: ccw
+        aero:rotor:propeller: ../../propellers/generic_10in_2blade_ccw.prop.yaml
   - prim: rotor_1_joint
     create_child: rotor_1_motor
     schemas:
@@ -62,6 +65,7 @@ apply:
         aero:rotor:thrustCoeff: 0.125
         aero:rotor:powerCoeff: 0.0507
         aero:rotor:direction: ccw
+        aero:rotor:propeller: ../../propellers/generic_10in_2blade_ccw.prop.yaml
   - prim: rotor_2_joint
     create_child: rotor_2_motor
     schemas:
@@ -82,6 +86,7 @@ apply:
         aero:rotor:thrustCoeff: 0.125
         aero:rotor:powerCoeff: 0.0507
         aero:rotor:direction: cw
+        aero:rotor:propeller: ../../propellers/generic_10in_2blade_cw.prop.yaml
   - prim: rotor_3_joint
     create_child: rotor_3_motor
     schemas:
@@ -102,6 +107,7 @@ apply:
         aero:rotor:thrustCoeff: 0.125
         aero:rotor:powerCoeff: 0.0507
         aero:rotor:direction: cw
+        aero:rotor:propeller: ../../propellers/generic_10in_2blade_cw.prop.yaml
   - prim: rotor_4_joint
     create_child: rotor_4_motor
     schemas:

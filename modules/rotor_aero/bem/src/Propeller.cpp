@@ -1,4 +1,5 @@
 // Propeller files and blade-element momentum theory (Propeller.hpp, aerodynamics.md §2.1).
+#include "Stations.hpp"
 #include "lagrange/rotor_aero/Propeller.hpp"
 
 #include <algorithm>
@@ -49,13 +50,19 @@ double attachedDrag(const Aerofoil& a, double cl) {
 
 Aerofoil lerp(const Aerofoil& a, const Aerofoil& b, double t) {
     const auto mix = [t](double x, double y) { return x + t * (y - x); };
-    return {mix(a.liftSlope, b.liftSlope), mix(a.zeroLiftAngle, b.zeroLiftAngle),
-            mix(a.clMax, b.clMax),         mix(a.clMin, b.clMin),
-            mix(a.cdMin, b.cdMin),         mix(a.clAtCdMin, b.clAtCdMin),
-            mix(a.cdLift, b.cdLift)};
+    return {mix(a.liftSlope, b.liftSlope),
+            mix(a.zeroLiftAngle, b.zeroLiftAngle),
+            mix(a.clMax, b.clMax),
+            mix(a.clMin, b.clMin),
+            mix(a.cdMin, b.cdMin),
+            mix(a.clAtCdMin, b.clAtCdMin),
+            mix(a.cdLift, b.cdLift),
+            mix(a.camber, b.camber),
+            mix(a.camberPosition, b.camberPosition)};
 }
 
-/// The station at radius fraction `x`, interpolated linearly; held beyond the last station.
+}  // namespace
+
 BladeStation stationAt(const std::vector<BladeStation>& s, double x) {
     if (x <= s.front().radius) {
         return s.front();
@@ -73,6 +80,8 @@ BladeStation stationAt(const std::vector<BladeStation>& s, double x) {
     last.radius = x;
     return last;
 }
+
+namespace {
 
 /// Blade-element forces per unit span, all blades, at axial and swirl induced velocities.
 struct Element {
@@ -167,6 +176,8 @@ Propeller loadPropeller(const std::string& path, std::string& error) {
             a.cdMin = n["cd_min"].as<double>();
             a.clAtCdMin = n["cl_at_cd_min"].as<double>(0.0);
             a.cdLift = n["cd_lift"].as<double>(0.0);
+            a.camber = n["camber"].as<double>(0.0);
+            a.camberPosition = n["camber_position"].as<double>(0.4);
             aerofoils[entry.first.as<std::string>()] = a;
         }
         for (const YAML::Node& n : root["stations"]) {

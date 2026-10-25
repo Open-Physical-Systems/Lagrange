@@ -137,6 +137,15 @@ controller (`Multicopter.hpp`): it takes off and holds 2 m within 1 mm, rotors a
 about 190 W from the battery (`test_the_sample_quadcopter_takes_off_and_hovers`). The open
 field world comes with the mission scenario.
 
+*Status (v0.4, step 9):* each rotor names its propeller as built, a generic 10-inch two-blade
+blade of each hand (`assets/propellers/generic_10in_2blade_{ccw,cw}.prop.yaml`, NACA 6412
+sections at low Reynolds number from NACA Report 586) whose static CT and CP by blade-element
+momentum are the APC's measured ones. The viewer draws the blades (twisted, in their hand,
+spinning with their joints); `profiles/examples/quad_x500_bem.yaml` flies the quadcopter on them
+(`rotor_aero.fidelity: bem`): it hovers at 2 m as on the coefficients, rotors at 548 rad/s,
+192 W. Propeller hand and mount (puller or pusher) are physical: a propeller of the wrong hand
+turns backwards and gives little thrust (aerodynamics.md §2.1).
+
 *Status (v0.4, step 7):* `lagrange_mavlink` (`bridges/mavlink`) runs PX4 SITL in lockstep
 (`lagrange_server --mavlink px4`): HIL_SENSOR at the IMU's rate (FRD, gauss, hPa), HIL_GPS at the
 GNSS rate, HIL_ACTUATOR_CONTROLS back to speed-controlling ESCs; lockstep starts with PX4's first

@@ -79,6 +79,23 @@ print(sim.read("battery/battery/power")[0])  # about 190 W
 print(sim.read("sensor/barometer/pressure")[0])  # about 95 570 Pa at 490 m
 ```
 
+### Propellers as built
+
+Each rotor also names its propeller: `assets/propellers/generic_10in_2blade_ccw.prop.yaml` and
+its `cw` twin, the blade's chord and twist from root to tip, its sections' lift and drag, and
+its hand. The viewer draws the rotors as these blades. Fly the quadcopter on them, every
+rotor's thrust and torque computed from its blades (blade-element momentum):
+
+```bash
+lagrange run profiles/examples/quad_x500_bem.yaml \
+    --robot assets/robots/quad_x500/quad_x500.usda --world none
+```
+
+It hovers as before, its blades having been chosen to match the measured propeller. Put a `cw`
+propeller on a `ccw` motor in the overlay (`aero:rotor:propeller`) and the server warns at load:
+that rotor turns its propeller backwards, trailing edge first, and gives less than half its
+thrust for more power, as a real one does.
+
 ## 4. Gusty wind
 
 ```bash
