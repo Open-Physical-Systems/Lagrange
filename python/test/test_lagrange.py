@@ -71,3 +71,23 @@ def test_the_protocol_messages_import_alongside_the_bindings():
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_the_sample_quadcopter_takes_off_and_hovers() -> None:
+    # v0.4: rotors from coefficients, the electrical network and the built-in controller.
+    sim = lagrange.Simulation(
+        lagrange.sample_quadcopter(), world=None, profile=lagrange.sample_profile("quad_x500_hover")
+    )
+    start = sim.read("body/base_link/pose")
+    sim.step_until(8.0)
+    pose = sim.read("body/base_link/pose")
+    assert pose[2] - start[2] == pytest.approx(2.0, abs=0.01), "hovering 2 m above the start"
+    assert math.hypot(pose[0] - start[0], pose[1] - start[1]) < 0.01
+    assert pose[3] == pytest.approx(1.0, abs=1e-3), "level"
+    speeds = [sim.read(f"joint/rotor_{i}_joint/velocity")[0] for i in range(1, 5)]
+    assert speeds[0] > 0 and speeds[1] > 0 and speeds[2] < 0 and speeds[3] < 0  # ccw, ccw, cw, cw
+    # Momentum check: four rotors carry the weight (1.9 + 4 x 0.025 kg).
+    thrust = sum(sim.read(f"rotor/rotor_{i}_joint/thrust")[0] for i in range(1, 5))
+    assert thrust == pytest.approx(2.0 * 9.80665, rel=0.01)
+    power = sim.read("battery/battery/power")[0]
+    assert 150.0 < power < 250.0, f"hover power {power:.0f} W"

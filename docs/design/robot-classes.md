@@ -130,6 +130,13 @@ lag the simulation; `pick_place` retries a move once when its start state looks 
 Sample assets: `assets/robots/quad_x500/` (a generic 500 mm quadcopter with illustrative
 parameters), `assets/worlds/open_field/`.
 
+*Status (v0.4, step 3):* `quad_x500` exists (URDF, overlay, USD): an X frame of 1.9 kg with four
+APC 10x4.7 SF propellers (CT and CP from the UIUC propeller database's static test), 920 KV-class
+motors and a 4S 5 Ah battery. Without an autopilot the server flies it with its built-in
+controller (`Multicopter.hpp`): it takes off and holds 2 m within 1 mm, rotors at 551 rad/s,
+about 190 W from the battery (`test_the_sample_quadcopter_takes_off_and_hovers`). The open
+field world comes with the mission scenario.
+
 Acceptance scenario for v0.4: PX4 SITL in lockstep takes off, flies a square mission in 8 m/s
 gusty wind and lands; a low battery scenario shows voltage sag reducing available thrust.
 

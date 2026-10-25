@@ -108,6 +108,8 @@ void printServerOptions(std::FILE* out) {
         "            and body motion, open loop (electrical, thermal, sensors live)\n"
         "  --ambient-temperature K  the site's air temperature: runs the thermal domain\n"
         "            (no default; a profile's thermal.ambient_temperature also sets it)\n"
+        "  --air-density KG_M3  the site's air density, for rotors (ISA sea level: 1.225; no\n"
+        "            default; a profile's rotor_aero.air_density also sets it)\n"
         "  --domain D=off  replace domain D (rigid_body, electrical, thermal, sensors) by its\n"
         "            substitute\n"
         "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
@@ -230,6 +232,14 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--ambient-temperature needs a temperature in K";
             }
             options.ambientTemperatureK = kelvin;
+        } else if (arg == "--air-density") {
+            const char* text = value();
+            char* end = nullptr;
+            const double rho = text != nullptr ? std::strtod(text, &end) : -1.0;
+            if (text == nullptr || end == text || *end != '\0' || !(rho > 0.0)) {
+                return "--air-density needs a density in kg/m³";
+            }
+            options.airDensityKgM3 = rho;
         } else if (arg == "--paused") {
             options.startPaused = true;
         } else if (arg == "--no-ros") {

@@ -237,7 +237,9 @@
       "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
       "properties": {
         "fidelity": { "enum": ["coefficients", "bem"], "default": "coefficients" },
-        "ground_effect": { "type": "boolean", "default": true }
+        "ground_effect": { "type": "boolean", "default": true },
+        "air_density": { "type": "number", "exclusiveMinimum": 0, "description": "kg/m³, the site's air density (ISA sea level: 1.225). No default." },
+        "inflow_time_constant": { "type": "number", "minimum": 0, "description": "s, first-order inflow lag of the rotors; 0 for none." }
       },
       "unevaluatedProperties": false
     },

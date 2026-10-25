@@ -133,7 +133,7 @@ struct Rig {
     }
 };
 
-Rig makeRig(const World& world, ModuleConfigData config, bool ideal = false) {
+Rig makeRig(const World& /*world*/, ModuleConfigData config, bool ideal = false) {
     Rig rig;
     rig.scheduler = std::make_unique<Scheduler>(SchedulerOptions{.deterministic = true});
     auto plant = std::make_unique<Plant>("prop_joint", "prop");
