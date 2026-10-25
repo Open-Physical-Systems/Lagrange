@@ -134,7 +134,8 @@ step resting on the ones before:
    installed)
 3. Sample quadcopter `assets/robots/quad_x500` (URDF, overlay with rotors, motors, 4S battery)
    and `assets/worlds/open_field`; hover by a simple attitude/thrust controller in a test
-   (**done** 2026-10-25 but the world: rotors in the server with `--air-density`, the built-in
+   (**done** 2026-10-25, the world too: `assets/worlds/open_field`, where the missions fly;
+   rotors in the server with `--air-density`, the built-in
    multicopter controller, hover within 1 mm at 2 m for 60 s; robot-classes.md §5. Tuning found
    on the way: the position loop must be well below the attitude loop (0.6 and 3 Hz), and the
    rotor speed loop well above it)

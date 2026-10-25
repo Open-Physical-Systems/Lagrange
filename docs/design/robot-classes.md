@@ -134,8 +134,10 @@ parameters), `assets/worlds/open_field/`.
 APC 10x4.7 SF propellers (CT and CP from the UIUC propeller database's static test), 920 KV-class
 motors and a 4S 5 Ah battery. Without an autopilot the server flies it with its built-in
 controller (`Multicopter.hpp`): it takes off and holds 2 m within 1 mm, rotors at 551 rad/s,
-about 190 W from the battery (`test_the_sample_quadcopter_takes_off_and_hovers`). The open
-field world comes with the mission scenario.
+about 190 W from the battery (`test_the_sample_quadcopter_takes_off_and_hovers`). The world
+`assets/worlds/open_field/` (URDF and USD) is a 50 m field with a painted landing pad at the
+origin, a windsock, four trees and a shed, all more than 15 m from the pad; the PX4 and
+ArduPilot missions fly their 10 m square over it.
 
 *Status (v0.4, step 9):* each rotor names its propeller as built, a generic 10-inch two-blade
 blade of each hand (`assets/propellers/generic_10in_2blade_{ccw,cw}.prop.yaml`, NACA 6412
