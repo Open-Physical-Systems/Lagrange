@@ -113,3 +113,26 @@ profile validator rejects it with that explanation.
 | Ground effect | Cheeseman–Bennett curve and published small-rotor ground-effect measurements | 10 % for `z/R` in 0.5–3 |
 | Field sampling | analytic field baked to VDB | interpolation error bound from grid spacing |
 | Hover power and step response of the sample quadcopter | flight log of a comparable real vehicle (to be sourced; Q16) | reported, with tolerance set from data spread |
+
+## 8. Status (v0.4)
+
+`lagrange_rotor_aero` (`modules/rotor_aero/`): `RotorAero` at the `coefficients` fidelity and its
+`ideal` substitute (`RotorAero(true)`), over the `RotorAPI_1` joints of `schemas/aero`.
+
+- The air density is a site parameter with no default (`rotor_aero.air_density`, kg/m³), as the
+  ambient temperature is for thermal; the rotors refuse to start without it.
+- Thrust acts along the joint axis on the rotor's link, at the link's origin; the wrench goes to
+  `body/<link>/wrench/rotor` and `WrenchSum` adds it to the link's `external_wrench`. The shaft
+  torque is the joint's `load_torque`, opposing the rotation.
+- Inflow lag: first order with config `inflow_time_constant` (s), exact over the step; 0 (no lag)
+  unless set, because a published time constant for the sample propeller is not in hand.
+- Ground effect: Cheeseman–Bennett with the height above the world's ground plane only (scenery
+  needs scene queries as a core service: the lidar's caster is in the sensors module, which
+  rotor_aero may not use, invariant 1). Below z = 0.5 R the factor is held at its value there:
+  the design's clamp at 0.25 R is where the formula diverges.
+- Not yet: advance-ratio corrections in forward flight, blade flapping, `bem`.
+
+| §7 check | Status | Test |
+|---|---|---|
+| Static thrust and torque | closed form met exactly; published propeller data owed (with the sample quadcopter's propeller) | `test_rotor_aero` |
+| Ground effect | Cheeseman–Bennett met exactly for z/R 0.5 to 3; published small-rotor measurements owed | `test_rotor_aero` |
