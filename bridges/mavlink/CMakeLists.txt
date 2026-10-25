@@ -6,7 +6,7 @@ find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
 find_package(mavlink REQUIRED)
 
-add_library(lagrange_mavlink src/Px4Lockstep.cpp)
+add_library(lagrange_mavlink src/Px4Lockstep.cpp src/ArduPilotJson.cpp)
 lagrange_target_defaults(lagrange_mavlink)
 target_include_directories(
     lagrange_mavlink
@@ -23,7 +23,7 @@ target_include_directories(
 target_link_libraries(lagrange_mavlink PUBLIC lagrange_core::lagrange_core)
 
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
-install(DIRECTORY px4 DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY px4 ardupilot DESTINATION share/${PROJECT_NAME})
 install(
     TARGETS lagrange_mavlink
     EXPORT export_${PROJECT_NAME}
@@ -42,6 +42,9 @@ if(BUILD_TESTING)
         PRIVATE ${mavlink_INCLUDE_DIRS}/mavlink/v2.0
     )
     lagrange_target_defaults(test_px4_lockstep)
+    ament_add_gtest(test_ardupilot_json test/test_ardupilot_json.cpp TIMEOUT 120)
+    target_link_libraries(test_ardupilot_json lagrange_mavlink)
+    lagrange_target_defaults(test_ardupilot_json)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

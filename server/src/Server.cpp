@@ -3,6 +3,7 @@
 #include "lagrange/electrical/IdealTorqueSource.hpp"
 #include "lagrange/electrical/Network.hpp"
 #include "lagrange/importers/Importers.hpp"
+#include "lagrange/mavlink/ArduPilotJson.hpp"
 #include "lagrange/mavlink/Px4Lockstep.hpp"
 #include "lagrange/proto/Connection.hpp"
 #include "lagrange/proto/Framing.hpp"
@@ -444,8 +445,9 @@ struct Server::Impl {
         // So is one with the lidar on the GPU or rendering cameras (invariant 7: the CPU is the
         // reference).
         const bool rendering = cameraScene != nullptr && !off("sensors");
-        auto next = std::make_unique<Scheduler>(SchedulerOptions{
-            .deterministic = !bridge && !rayContext && !rendering && !options.px4Port});
+        auto next = std::make_unique<Scheduler>(
+            SchedulerOptions{.deterministic = !bridge && !rayContext && !rendering &&
+                                              !options.px4Port && !options.ardupilotPort});
         if (off("rigid_body") && settings.rigidBodyReplay) {
             // Bench mode: physics replayed from a recording, open loop.
             next->add(std::make_unique<recording::ReplaySubstitute>("rigid_body",
@@ -557,7 +559,19 @@ struct Server::Impl {
             air.values.emplace(rotor_aero::kAirDensityKey, *settings.airDensityKgM3);
             next->add(std::make_unique<rotor_aero::RotorAero>(off("rotor_aero")),
                       ModuleConfig(air));
-            if (options.px4Port) {
+            if (options.ardupilotPort) {
+                if (!ardupilotLink) {
+                    std::string why;
+                    ardupilotLink = mavlink::openArduPilotLink(*options.ardupilotPort, why);
+                    if (!ardupilotLink) {
+                        return Unexpected{why};
+                    }
+                }
+                mavlink::ArduPilotSettings ardupilot;
+                ardupilot.port = *options.ardupilotPort;
+                ardupilot.airDensity = *settings.airDensityKgM3;
+                next->add(mavlink::createArduPilotJson(ardupilot, ardupilotLink));
+            } else if (options.px4Port) {
                 if (!px4Link) {
                     std::string why;
                     px4Link = mavlink::openPx4Link(*options.px4Port, why);
@@ -627,13 +641,14 @@ struct Server::Impl {
     std::optional<double> appliedAirDensity;                              // from an applied profile
     std::optional<coords::Geodetic> appliedGeoOrigin;                     // from an applied profile
     std::map<std::string, ConfigValue, std::less<>> appliedAerodynamics;  // its wind
-    std::shared_ptr<mavlink::Px4Link> px4Link;      // PX4's connection, across rebuilds of the run
-    std::optional<bool> speedPrediction;            // from an applied profile
-    std::optional<std::string> electricalFidelity;  // from an applied profile
-    std::optional<std::string> rigidBodyReplay;     // --bench, or an applied profile
-    std::optional<std::int64_t> rigidBodyDtNs;      // from an applied profile
-    std::optional<std::string> rigidBodyBackend;    // from an applied profile
-    std::optional<std::int64_t> electricalDtNs;     // from an applied profile
+    std::shared_ptr<mavlink::Px4Link> px4Link;  // PX4's connection, across rebuilds of the run
+    std::shared_ptr<mavlink::ArduPilotLink> ardupilotLink;  // ArduPilot's, likewise
+    std::optional<bool> speedPrediction;                    // from an applied profile
+    std::optional<std::string> electricalFidelity;          // from an applied profile
+    std::optional<std::string> rigidBodyReplay;             // --bench, or an applied profile
+    std::optional<std::int64_t> rigidBodyDtNs;              // from an applied profile
+    std::optional<std::string> rigidBodyBackend;            // from an applied profile
+    std::optional<std::int64_t> electricalDtNs;             // from an applied profile
     std::optional<ProfileSettings> pending;  // applied without restart: used at the next reset
 
     Status build() {
@@ -3301,6 +3316,10 @@ Status Server::start() {
                   (!s.options.demoDrive ? "; it stands still until /cmd_vel arrives"
                    : s.bridge           ? "; a figure-eight demo drives until /cmd_vel arrives"
                                         : "; a figure-eight demo drives"));
+    } else if (s.options.ardupilotPort) {
+        s.log(v1::LOG_LEVEL_INFO, "controller",
+              "ArduPilot SITL flies it through its JSON interface on UDP port " +
+                  std::to_string(*s.options.ardupilotPort) + " (lockstep once it connects)");
     } else if (s.options.px4Port) {
         s.log(v1::LOG_LEVEL_INFO, "controller",
               "PX4 SITL flies it through the MAVLink bridge on TCP port " +
@@ -3317,9 +3336,9 @@ Status Server::start() {
     for (std::size_t i = 0; i < s.robot.world.sensors.names.size(); ++i) {
         const World::Sensors& sensors = s.robot.world.sensors;
         char line[160];
-        const char* kind = sensors.type[i] == SensorType::Lidar    ? "lidar"
-                           : sensors.type[i] == SensorType::Camera ? "camera"
-                                                                   : "IMU";
+        constexpr std::array<const char*, 6> kKinds{"IMU",  "lidar",        "camera",
+                                                    "GNSS", "magnetometer", "barometer"};
+        const char* kind = kKinds.at(static_cast<std::size_t>(sensors.type[i]));
         std::snprintf(line, sizeof(line), "%s %s on %s at %.0f Hz", kind, sensors.names[i].c_str(),
                       s.robot.world.bodies.names[sensors.body[i].index].c_str(), sensors.rateHz[i]);
         s.log(v1::LOG_LEVEL_INFO, "sensors", line);

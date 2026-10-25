@@ -74,7 +74,7 @@ Separate processes and offline tools (not linked, not required to build):
 | ngspice | run exported netlists | apt `ngspice` 45.2 | BSD-style (TODO(verify)) | Offline |
 | OpenFOAM | produce wind fields | not checked | GPL-3.0 (TODO(verify)) | Offline; we consume files only |
 | Geant4 | produce dose fields | not checked | Geant4 Software License (TODO(verify)) | Offline |
-| PX4, ArduPilot SITL | autopilots in the loop | upstream | BSD-3-Clause, GPL-3.0 (TODO(verify)) | Separate processes over MAVLink/UDP/TCP |
+| PX4, ArduPilot SITL | autopilots in the loop | upstream PX4 v1.17.0, ArduPilot Copter-4.7.2, built on the host | BSD-3-Clause (PX4 `LICENSE`), GPL-3.0 (ArduPilot `COPYING.txt`) | Separate processes over TCP 4560 (PX4) and UDP 9002 (ArduPilot JSON); nothing of either is linked or copied; airframe and parameter files in `bridges/mavlink/` are our own |
 | esmini | OpenSCENARIO reference / optional library | upstream | MPL-2.0 | Decision in v0.6 |
 
 ## 3. GPU and viewer

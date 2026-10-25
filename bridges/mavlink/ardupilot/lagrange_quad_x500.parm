@@ -1,0 +1,16 @@
+# The sample quadcopter (assets/robots/quad_x500) for ArduCopter SITL through the JSON interface
+# (lagrange_server --mavlink ardupilot), loaded after ArduPilot's own default_params/copter.parm.
+FRAME_CLASS     1
+FRAME_TYPE      1
+# The bridge's ESCs: rotor speed proportional to (PWM - 1000)/1000, so thrust goes with its
+# square (a thrust curve exponent of 1); about 0.65 to hover, learnt in flight.
+MOT_PWM_MIN     1000
+MOT_PWM_MAX     2000
+MOT_THST_EXPO   1.0
+MOT_THST_HOVER  0.65
+MOT_HOVER_LEARN 2
+# The exchange rate of the JSON interface.
+SIM_RATE_HZ     1000
+# No radio in the simulation.
+FS_THR_ENABLE   0
+FS_GCS_ENABLE   0

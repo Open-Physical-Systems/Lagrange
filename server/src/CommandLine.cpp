@@ -110,8 +110,9 @@ void printServerOptions(std::FILE* out) {
         "            and body motion, open loop (electrical, thermal, sensors live)\n"
         "  --ambient-temperature K  the site's air temperature: runs the thermal domain\n"
         "            (no default; a profile's thermal.ambient_temperature also sets it)\n"
-        "  --mavlink px4[:PORT]  fly a multicopter with PX4 SITL in lockstep: PX4 connects to\n"
-        "            TCP PORT (4560); start PX4 with tools/ci/px4_sitl.sh\n"
+        "  --mavlink px4[:PORT]|ardupilot[:PORT]  fly a multicopter with PX4 SITL (TCP 4560;\n"
+        "            tools/ci/px4_mission.sh) or ArduPilot SITL's JSON interface (UDP 9002;\n"
+        "            tools/ci/ardupilot_mission.sh), in lockstep\n"
         "  --geo-origin LAT,LON,HEIGHT  where the world's origin is on the Earth (degrees,\n"
         "            degrees, m above WGS84), for GNSS, magnetometers and barometers (no default;\n"
         "            a profile's world.geo_origin also sets it)\n"
@@ -242,13 +243,17 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
         } else if (arg == "--mavlink") {
             const char* text = value();
             const std::string_view which = text != nullptr ? text : "";
-            unsigned port = 4560;
-            if (which != "px4" &&
-                !(which.starts_with("px4:") && std::sscanf(text + 4, "%u", &port) == 1 &&
-                  port > 0 && port < 65536)) {
-                return "--mavlink takes px4 or px4:PORT (PX4 SITL connects to TCP 4560 + instance)";
+            const bool px4 = which == "px4" || which.starts_with("px4:");
+            const bool ardupilot = which == "ardupilot" || which.starts_with("ardupilot:");
+            unsigned port = px4 ? 4560 : 9002;
+            const std::size_t colon = which.find(':');
+            if ((!px4 && !ardupilot) ||
+                (colon != std::string_view::npos &&
+                 (std::sscanf(text + colon + 1, "%u", &port) != 1 || port == 0 || port > 65535))) {
+                return "--mavlink takes px4[:PORT] (PX4 SITL connects to TCP 4560) or "
+                       "ardupilot[:PORT] (ArduPilot's JSON frames on UDP 9002)";
             }
-            options.px4Port = static_cast<std::uint16_t>(port);
+            (px4 ? options.px4Port : options.ardupilotPort) = static_cast<std::uint16_t>(port);
         } else if (arg == "--geo-origin") {
             const char* text = value();
             double lat = 0.0, lon = 0.0, height = 0.0;
