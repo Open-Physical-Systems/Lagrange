@@ -158,7 +158,9 @@ step resting on the ones before:
 8. The acceptance mission (take-off, square in 8 m/s gusts, land; low-battery thrust sag), the
    tutorial, and rebase in flight (the mission and the low-battery scenario **done** 2026-10-25,
    robot-classes.md §5. Rebase in flight needs the runtime rebase, C5, which the owner deferred
-   to v0.7 (huge worlds): it moves there with it)
+   to v0.7 (huge worlds): it moves there with it. The tutorial **done** the same day:
+   `docs/guide/tutorial-drone.md`, run by `tools/ci/tutorial_drone.sh` with the PX4 step; not
+   yet in a container, which needs a PX4 build in the image)
 
 ## Defaults taken during the autonomous run
 
