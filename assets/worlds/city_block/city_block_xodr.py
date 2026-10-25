@@ -10,6 +10,7 @@ Run it from this directory to regenerate the file.
 """
 
 import math
+from pathlib import Path
 
 HALF = 12.0  # m, the junction's half width
 ARM = 58.0  # m
@@ -103,11 +104,13 @@ def connecting(incoming, outgoing, start_t, end_t, links):
     next_id += 1
     lanes = "".join(lane_xml(c, LANE, "driving", [], pred=i, succ=o) for i, c, o in links)
     roads.append(
-        f'<road name="connect_{in_id}_{out_id}" length="{length:.9f}" id="{road_id}" junction="1000">'
+        f'<road name="connect_{in_id}_{out_id}" length="{length:.9f}" id="{road_id}" '
+        f'junction="1000">'
         f'<link><predecessor elementType="road" elementId="{in_id}" contactPoint="start"/>'
         f'<successor elementType="road" elementId="{out_id}" contactPoint="start"/></link>'
         f'<type s="0" type="town"><speed max="30" unit="km/h"/></type>'
-        f'<planView><geometry s="0" x="{x0:.9f}" y="{y0:.9f}" hdg="{h0:.12f}" length="{length:.9f}">'
+        f'<planView><geometry s="0" x="{x0:.9f}" y="{y0:.9f}" hdg="{h0:.12f}" '
+        f'length="{length:.9f}">'
         f"{geometry}</geometry></planView>"
         f'<lanes><laneSection s="0"><center><lane id="0" type="none" level="false"/></center>'
         f"<right>{lanes}</right></laneSection></lanes></road>"
@@ -138,5 +141,4 @@ xml = (
     + f'\n<junction id="1000" name="crossing">{"".join(connections)}</junction>\n'
     "</OpenDRIVE>\n"
 )
-with open("city_block.xodr", "w") as out:
-    out.write(xml)
+Path("city_block.xodr").write_text(xml)
