@@ -51,6 +51,8 @@ mjtGeom geomType(ShapeType shape) {
             return mjGEOM_CYLINDER;
         case ShapeType::Box:
             return mjGEOM_BOX;
+        case ShapeType::ConvexHull:
+            return mjGEOM_MESH;  // MuJoCo collides with the convex hull of a mesh's vertices
     }
     return mjGEOM_SPHERE;
 }
@@ -109,7 +111,8 @@ Status MujocoBackend::declare(const WorldView& world, const ModuleConfig& config
             joints_.push_back(s);
             continue;
         }
-        s.torque = declarer.input(flowInput(base + "/torque", SignalType::Scalar, effort, false));
+        // Optional: an actuated joint that nothing drives (a robot without a controller) is free.
+        s.torque = declarer.input(flowInput(base + "/torque", SignalType::Scalar, effort, true));
         s.loadTorque =
             declarer.input(flowInput(base + "/load_torque", SignalType::Scalar, effort, true));
         s.acceleration = declarer.output(spec(base + "/acceleration", SignalType::Scalar,
@@ -147,6 +150,9 @@ Status MujocoBackend::declare(const WorldView& world, const ModuleConfig& config
 
 Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, SignalBus& bus) {
     mjSpec* spec = mj_makeSpec();
+    // The world's angles (joint limits) are radians; MuJoCo's compiler reads degrees by default,
+    // as MJCF does.
+    spec->compiler.degree = 0;
     const Duration dt = config.dt().value_or(preferredStep());
     spec->option.timestep = dt.seconds();
     const std::array<double, 3> gravity = world.gravityLocal();
@@ -225,6 +231,9 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
                 break;
         }
         std::copy(joints.axis[j].begin(), joints.axis[j].end(), joint->axis);
+        if (j < joints.armature.size()) {
+            joint->armature = joints.armature[j];  // a motor's reflected rotor inertia
+        }
         if (joints.type[j] != JointType::Continuous &&
             joints.lowerLimit[j] < joints.upperLimit[j]) {
             joint->limited = mjLIMITED_TRUE;
@@ -241,6 +250,20 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
         mjsGeom* geom = mjs_addGeom(body, nullptr);
         geom->type = geomType(colliders.shape[c]);
         std::copy(colliders.size[c].begin(), colliders.size[c].end(), geom->size);
+        if (colliders.shape[c] == ShapeType::ConvexHull) {
+            const ConvexHull& hull = world.raw().hulls.at(colliders.hull[c]);
+            std::vector<float> vertices;
+            vertices.reserve(hull.points.size() * 3);
+            for (const auto& p : hull.points) {
+                vertices.insert(vertices.end(), {static_cast<float>(p[0]), static_cast<float>(p[1]),
+                                                 static_cast<float>(p[2])});
+            }
+            mjsMesh* mesh = mjs_addMesh(spec, nullptr);
+            const std::string name = "hull_" + std::to_string(c);
+            mjs_setName(mesh->element, name.c_str());
+            mjs_setFloat(mesh->uservert, vertices.data(), static_cast<int>(vertices.size()));
+            mjs_setString(geom->meshname, name.c_str());
+        }
         setPose(geom->pos, geom->quat, colliders.poseInBody[c]);
         geom->friction[0] = colliders.friction[c];
         // Geoms carry collision only; mass and inertia come from the body tables.

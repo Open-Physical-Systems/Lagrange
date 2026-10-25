@@ -15,12 +15,23 @@ struct ProfileContext {
     std::set<std::string> modules;  // domains with a module in this server and robot
     /// Per domain, the substitute tokens that can stand in for it here.
     std::map<std::string, std::set<std::string>> substitutes;
+    /// The site's ambient temperature is known from the command line (--ambient-temperature);
+    /// without it, a profile that runs thermal must give thermal.ambient_temperature.
+    bool ambientKnown{false};
 };
 
 /// The settings of a valid profile that the server applies.
 struct ProfileSettings {
-    std::set<std::string> substituted;          // domains with modules that are switched off
-    std::optional<std::int64_t> rigidBodyDtNs;  // domains.rigid_body.dt
+    std::set<std::string> substituted;              // domains with modules that are switched off
+    std::optional<std::int64_t> rigidBodyDtNs;      // domains.rigid_body.dt
+    std::optional<std::string> rigidBodyBackend;    // domains.rigid_body.backend
+    std::optional<std::int64_t> electricalDtNs;     // domains.electrical.dt
+    std::optional<std::int64_t> thermalDtNs;        // domains.thermal.dt
+    std::optional<bool> speedPrediction;            // domains.electrical.speed_prediction
+    std::optional<std::string> electricalFidelity;  // domains.electrical.fidelity
+    /// Bench mode: the recording that replaces physics (rigid_body substitute replay, source).
+    std::optional<std::string> rigidBodyReplay;
+    std::optional<double> ambientTemperatureK;  // domains.thermal.ambient_temperature
     std::optional<double> realTimeFactor;       // time.real_time_factor (0: as fast as possible)
 };
 

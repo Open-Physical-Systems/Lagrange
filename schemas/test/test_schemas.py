@@ -10,7 +10,16 @@ from pxr import Sdf, Usd
 UNITLESS_TYPES = {"string", "token", "bool", "asset"}
 
 EXPECTED = {
-    "sensor": ["SensorAPI_1", "LidarAPI_1", "ImuAPI_1"],
+    "sensor": ["SensorAPI_1", "LidarAPI_1", "ImuAPI_1", "CameraSensorAPI_1"],
+    "electrical": [
+        "PortAPI_1",
+        "BatteryAPI_1",
+        "ElectricalMotorAPI_1",
+        "ElectricalBusAPI_1",
+        "ElectricalLoadAPI_1",
+        "ElectricalConverterAPI_1",
+    ],
+    "thermal": ["ThermalAPI_1", "ThermalLinkAPI_1"],
 }
 
 
@@ -63,3 +72,34 @@ def test_an_applied_schema_resolves_its_unit_on_an_authored_prim():
     assert attribute.GetMetadata("lagrangeUnit") == "m"
     assert prim.GetAttribute("sensor:lidar:rangeNoiseStd").Get() == pytest.approx(0.02)
     assert Sdf.ValueTypeNames.Double2 == prim.GetAttribute("sensor:lidar:verticalFov").GetTypeName()
+
+
+def test_a_multiple_apply_port_takes_its_instance_name():
+    stage = Usd.Stage.CreateInMemory()
+    bus = stage.DefinePrim("/robot/power/dc_48v", "Xform")
+    bus.AddAppliedSchema("ElectricalBusAPI_1")
+    battery = stage.DefinePrim("/robot/power/battery", "Xform")
+    battery.AddAppliedSchema("BatteryAPI_1")
+    battery.AddAppliedSchema("PortAPI_1:dc_out")
+    assert battery.HasAPI("PortAPI_1", "dc_out")
+    kind = battery.GetAttribute("elec:port:dc_out:kind")
+    assert kind.Get() == "dc"
+    definition = battery.GetPrimDefinition().GetAttributeDefinition("elec:port:dc_out:maxCurrent")
+    assert definition.GetMetadata("lagrangeUnit") == "A"
+    connected = battery.GetRelationship("elec:port:dc_out:connectedTo")
+    assert connected
+    connected.SetTargets([bus.GetPath()])
+    assert connected.GetTargets() == [bus.GetPath()]
+
+
+def test_motor_constants_carry_their_units():
+    definition = Usd.SchemaRegistry().FindAppliedAPIPrimDefinition("ElectricalMotorAPI_1")
+    units = {
+        name: definition.GetAttributeDefinition(name).GetMetadata("lagrangeUnit")
+        for name in ("elec:torqueConstant", "elec:backEmfConstant", "elec:rotorInertia")
+    }
+    assert units == {
+        "elec:torqueConstant": "N.m/A",
+        "elec:backEmfConstant": "V.s/rad",
+        "elec:rotorInertia": "kg.m2",
+    }

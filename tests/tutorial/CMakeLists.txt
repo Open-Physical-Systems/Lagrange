@@ -6,6 +6,7 @@ find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
 find_package(lagrange_rigid_body_mujoco REQUIRED)
 find_package(lagrange_server REQUIRED)
+find_package(lagrange_electrical REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 
 # The module of docs/guide/writing-a-module.md.
@@ -28,6 +29,7 @@ target_link_libraries(
         lagrange_tutorial_odometer
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
         lagrange_server::lagrange_server
+        lagrange_electrical::lagrange_electrical
         ament_index_cpp::ament_index_cpp
 )
 install(TARGETS odometer_demo DESTINATION lib/${PROJECT_NAME})
@@ -40,6 +42,7 @@ if(BUILD_TESTING)
         lagrange_tutorial_odometer
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
         lagrange_server::lagrange_server
+        lagrange_electrical::lagrange_electrical
     )
     target_compile_definitions(
         test_odometer

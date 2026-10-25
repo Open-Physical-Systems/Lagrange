@@ -129,14 +129,32 @@ TEST(MujocoBackend, TorqueInNewtonsIsRefusedAtWiring) {
               "writer controller/constant: N (Force); reader rigid_body/mujoco: N·m (Torque)");
 }
 
-TEST(MujocoBackend, ActuatedJointNeedsATorqueWriter) {
+TEST(MujocoBackend, RevoluteLimitsAreInRadians) {
+    // A hinge limited to ±2 rad, driven by a constant torque: it stops at 2 rad, not at 2°
+    // (MuJoCo's compiler reads degrees unless told otherwise).
+    World world = flywheel(0.02);
+    world.joints.type.back() = JointType::Revolute;
+    world.joints.lowerLimit.back() = -2.0;
+    world.joints.upperLimit.back() = 2.0;
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<MujocoBackend>());
+    scheduler.add(std::make_unique<Constant>("joint/axle/torque", units::N_m, 0.05));
+    wire(scheduler, world);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{5'000'000'000}).ok());
+    EXPECT_NEAR(read(scheduler, "joint/axle/position"), 2.0, 0.02);
+}
+
+TEST(MujocoBackend, AnActuatedJointNothingDrivesIsFree) {
+    // A robot without a controller still loads (an arm without ROS, `lagrange graph`): its
+    // actuated joints get no torque. A writer with the wrong unit is still refused (above).
     const World world = flywheel(0.02);
     Scheduler scheduler;
     scheduler.add(std::make_unique<MujocoBackend>());
     auto result = scheduler.wire(WorldView(world));
-    ASSERT_FALSE(result);
-    EXPECT_EQ(result.error().front().kind, WiringError::Kind::MissingWriter);
-    EXPECT_EQ(result.error().front().signal, "joint/axle/torque");
+    ASSERT_TRUE(result) << to_string(result.error().front());
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{100'000'000}).ok());
+    const SignalId speed = scheduler.bus().find("joint/axle/velocity");
+    EXPECT_EQ(scheduler.bus().read(speed), 0.0);
 }
 
 // --- contact -------------------------------------------------------------------------------

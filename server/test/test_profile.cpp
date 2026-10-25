@@ -147,6 +147,7 @@ TEST(Profile, TheSampleAmrExampleValidatesWiresAndApplies) {
     options.worldPath = LAGRANGE_TEST_WAREHOUSE_URDF;
     options.profileSchemaPath = LAGRANGE_TEST_SCHEMA;
     options.stageName = "robots/amr_diffdrive/amr_diffdrive.urdf";
+    options.overlayPath = LAGRANGE_TEST_AMR_OVERLAY;  // the example enables electrical
     Server server(options);
     ASSERT_TRUE(server.load().ok());
     ASSERT_TRUE(server.load().ok());  // once only
@@ -170,7 +171,9 @@ TEST(Profile, TheSampleAmrExampleValidatesWiresAndApplies) {
     substituted.replace(substituted.find(on), on.size(),
                         "sensors: { enabled: false, substitute: ground_truth }");
     ASSERT_TRUE(server.applyProfile(substituted).ok());
+    // Before: no substitute ran, and electrical was the network.
     EXPECT_EQ(dot.find("substitute"), std::string::npos) << dot;
+    EXPECT_NE(dot.find("electrical/averaged_network\\n100 µs"), std::string::npos) << dot;
     EXPECT_NE(server.wiringDot().find("sensors/lidar_front_lidar\\n100 ms\\nsubstitute"),
               std::string::npos)
         << server.wiringDot();

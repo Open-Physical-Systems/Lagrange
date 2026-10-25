@@ -154,6 +154,22 @@ Expected<void, std::vector<WiringError>> Scheduler::wire(const WorldView& world)
     if (!errors.empty()) {
         return Unexpected{std::move(errors)};
     }
+    // A module that reads a flow (not a feedback input) written by a faster module steps at the
+    // end of its window, after the writer's steps through it (architecture.md §8).
+    for (std::uint32_t reader = 0; reader < entries_.size(); ++reader) {
+        Entry& entry = entries_[reader];
+        entry.atWindowEnd = false;
+        for (const std::uint32_t slot : entry.inputSlots) {
+            const SignalBus::InputSlot& input = bus_.inputs_[slot];
+            if (input.signal == SignalBus::kNoModule || input.spec.feedback) {
+                continue;
+            }
+            const Entry& writer = entries_[bus_.signals_[input.signal].writer];
+            if (writer.dt.ns < entry.dt.ns) {
+                entry.atWindowEnd = true;
+            }
+        }
+    }
 
     // 3. Storage, then initial values in execution order.
     bus_.allocate(world.batchCount());
@@ -184,8 +200,8 @@ Expected<void, std::vector<WiringError>> Scheduler::wire(const WorldView& world)
     plan_.clear();
     for (std::uint32_t position = 0; position < order_.size(); ++position) {
         const Entry& entry = entries_[order_[position]];
-        plan_.push_back(
-            {entry.module.get(), entry.label, entry.dt, entry.level, position, entry.seed});
+        plan_.push_back({entry.module.get(), entry.label, entry.dt, entry.level, position,
+                         entry.seed, entry.atWindowEnd});
     }
     wired_ = true;
     now_ = SimTime{0};
@@ -453,15 +469,19 @@ Status Scheduler::stepTick() {
     }
     for (const std::uint32_t index : order_) {
         Entry& entry = entries_[index];
-        if (now_.ns % entry.dt.ns != 0) {
+        // A module stepping at its window's end runs on the window's last base tick; it still
+        // steps from the window's start.
+        const std::int64_t due = entry.atWindowEnd ? now_.ns + baseTick_.ns : now_.ns;
+        if (due % entry.dt.ns != 0) {
             continue;
         }
+        const SimTime start{due - (entry.atWindowEnd ? entry.dt.ns : 0)};
         for (const std::uint32_t slot : entry.inputSlots) {
-            bus_.prepareInput(slot, now_, tick_);
+            bus_.prepareInput(slot, start, tick_);
         }
         bus_.currentModule_ = index;
         bus_.misuse_.clear();
-        const StepContext context{now_, entry.dt, entry.stepIndex, entry.seed};
+        const StepContext context{start, entry.dt, entry.stepIndex, entry.seed};
         const auto started = std::chrono::steady_clock::now();
         const Status status = entry.module->step(context, bus_);
         const std::int64_t elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -473,14 +493,14 @@ Status Scheduler::stepTick() {
         bus_.currentModule_ = SignalBus::kNoModule;
         if (!bus_.misuse_.empty()) {
             return Status::error(StatusCode::Internal,
-                                 entry.label + " at " + formatTime(now_) + ": " + bus_.misuse_);
+                                 entry.label + " at " + formatTime(start) + ": " + bus_.misuse_);
         }
         if (!status.ok()) {
             return Status::error(status.code,
-                                 entry.label + " at " + formatTime(now_) + ": " + status.message);
+                                 entry.label + " at " + formatTime(start) + ": " + status.message);
         }
         for (const std::uint32_t signal : entry.outputSignals) {
-            bus_.commit(signal, now_ + entry.dt, tick_, entry.dt);
+            bus_.commit(signal, start + entry.dt, tick_, entry.dt);
         }
         ++entry.stepIndex;
     }

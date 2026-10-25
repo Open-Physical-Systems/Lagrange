@@ -3,8 +3,10 @@
 #include "lagrange/signals/Signal.hpp"
 #include "lagrange/time/SimTime.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -14,6 +16,15 @@ namespace lagrange {
 
 class Scheduler;
 class SignalDeclarer;
+
+/// What a handle-typed signal (Image, PointCloud, Bytes, Field3D) refers to: bytes in host
+/// memory with their shape. Immutable once published, so readers share it without copying.
+struct Buffer {
+    std::uint32_t width{0};   // pixels or elements per row
+    std::uint32_t height{0};  // rows; 1 for one-dimensional data
+    std::string encoding;     // "rgba8", "r32f" (one float per pixel), "r32u", "bytes"
+    std::vector<std::byte> bytes;
+};
 
 /// The typed signal bus (docs/design/architecture.md §4).
 ///
@@ -39,6 +50,14 @@ public:
 
     [[nodiscard]] BufferHandle readBuffer(SignalId id, std::uint32_t env = 0) const;
     void writeBuffer(SignalId id, BufferHandle handle, std::uint32_t env = 0);
+    /// Publishes `buffer` as the new value of a handle-typed output: writes a fresh handle and
+    /// keeps the buffer while a reader can still hold that handle (pending, committed and
+    /// previous values; publish at most once per step). Handles are numbered per signal in
+    /// publishing order, so a deterministic run publishes the same handles.
+    BufferHandle publishBuffer(SignalId id, std::shared_ptr<const Buffer> buffer,
+                               std::uint32_t env = 0);
+    /// The buffer a handle refers to; null for the empty handle and for one no longer kept.
+    [[nodiscard]] std::shared_ptr<const Buffer> buffer(BufferHandle handle) const;
 
     /// Whole-batch access for vectorised modules: [env][component], row-major.
     [[nodiscard]] std::span<const double> readBatch(SignalId id) const;
@@ -102,7 +121,14 @@ private:
     std::vector<InputSlot> inputs_;
     std::vector<double> committed_, previous_, pending_;  // numeric outputs
     std::vector<std::uint64_t> committedHandles_, previousHandles_, pendingHandles_;
-    std::vector<double> inputValues_;  // held input values
+    struct KeptBuffer {
+        std::uint64_t handle{0};
+        std::shared_ptr<const Buffer> buffer;
+    };
+    static constexpr std::size_t kKeptBuffers = 4;  // pending, committed, previous, and a spare
+    std::vector<std::array<KeptBuffer, kKeptBuffers>> kept_;  // per handle slot, by sequence
+    std::vector<std::uint32_t> published_;                    // per handle slot: last sequence
+    std::vector<double> inputValues_;                         // held input values
     std::vector<std::uint64_t> inputHandles_;
     std::vector<double> windowSums_;                         // per input component (WindowAverage)
     std::vector<std::vector<std::uint32_t>> windowReaders_;  // per signal: its WindowAverage slots

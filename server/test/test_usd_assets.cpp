@@ -11,6 +11,8 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <sstream>
 
 #include <gtest/gtest.h>
 
@@ -168,6 +170,85 @@ TEST(UsdAssets, TheWarehouseInUsdMapsLikeItsUrdf) {
     ASSERT_GT(a.occupied, 1000);
     EXPECT_NEAR(static_cast<double>(b.occupied), static_cast<double>(a.occupied),
                 0.01 * static_cast<double>(a.occupied));
+}
+
+/// The electrical schema instances of a robot as text, by schema and prim path, relationship
+/// targets by path: models loaded different ways compare equal when their data agree.
+std::map<std::string, std::string> electrical(const Robot& robot) {
+    const WorldView view(robot.world);
+    std::map<std::string, std::string> out;
+    for (const SchemaInstance& s : robot.world.schemaInstances) {
+        if (s.schema.rfind("Sensor", 0) == 0 || s.schema.rfind("Lidar", 0) == 0 ||
+            s.schema.rfind("Imu", 0) == 0) {
+            continue;
+        }
+        std::ostringstream text;
+        text.precision(17);
+        for (const auto& [k, v] : s.reals) {
+            text << k << '=' << v << '\n';
+        }
+        for (const auto& [k, v] : s.integers) {
+            text << k << '=' << v << '\n';
+        }
+        for (const auto& [k, v] : s.tokens) {
+            text << k << '=' << v << '\n';
+        }
+        for (const auto& [k, v] : s.realArrays) {
+            text << k << '=';
+            for (const double x : v) {
+                text << x << ' ';
+            }
+            text << '\n';
+        }
+        for (const auto& [k, targets] : s.relationships) {
+            text << k << "->";
+            for (const PrimId t : targets) {
+                text << view.primPath(t) << ' ';
+            }
+            text << '\n';
+        }
+        const std::string key = s.schema + (s.instance.empty() ? "" : ":" + s.instance) + " " +
+                                std::string(view.primPath(s.prim));
+        EXPECT_TRUE(out.emplace(key, text.str()).second) << "twice: " << key;
+    }
+    return out;
+}
+
+TEST(Overlay, TheImportedAmrGainsThePowerSystemOfTheHandWrittenSample) {
+    // Roadmap 0.2-G2: the URDF with the overlay applied, the hand-written USD sample, and the
+    // URDF converted with lagrange_import --overlay carry the same motors, battery, bus and load.
+    auto robot = loadModel(LAGRANGE_TEST_AMR_URDF);
+    ASSERT_TRUE(robot) << robot.error();
+    ASSERT_TRUE(stage::applyOverlay(*robot, LAGRANGE_TEST_AMR_OVERLAY));
+    auto handWritten = loadModel(LAGRANGE_TEST_AMR_POWERED_USDA);
+    ASSERT_TRUE(handWritten) << handWritten.error();
+
+    const std::map<std::string, std::string> overlaid = electrical(*robot);
+    // Two motors, the battery and its port, the bus, the load; four thermal nodes (motors,
+    // battery, chassis) and three links to the chassis.
+    EXPECT_EQ(overlaid.size(), 13U);
+    EXPECT_TRUE(overlaid.contains("ThermalLinkAPI_1:to_chassis /amr_diffdrive/power/battery"));
+    EXPECT_TRUE(
+        overlaid.contains("ElectricalMotorAPI_1 /amr_diffdrive/base_link/left_drive_motor"));
+    EXPECT_TRUE(overlaid.contains("PortAPI_1:dc_out /amr_diffdrive/power/battery"));
+    EXPECT_EQ(overlaid, electrical(*handWritten));
+
+    const std::filesystem::path converted =
+        std::filesystem::path(::testing::TempDir()) / "amr_diffdrive_powered_import.usda";
+    ASSERT_TRUE(stage::writeStage(*robot, converted.string()));
+    auto readBack = loadModel(converted.string());
+    ASSERT_TRUE(readBack) << readBack.error();
+    EXPECT_EQ(overlaid, electrical(*readBack));
+
+    // The motors are in the scene for the viewer, on the chassis, with their schema listed.
+    const auto motor =
+        std::find_if(robot->scene.prims.begin(), robot->scene.prims.end(),
+                     [](const ScenePrim& p) { return p.name == "left_drive_motor"; });
+    ASSERT_NE(motor, robot->scene.prims.end());
+    EXPECT_EQ(motor->path, "/amr_diffdrive/base_link/left_drive_motor");
+    EXPECT_EQ(motor->body, robot->scene.prims[robot->bodyPrim[0]].body);
+    EXPECT_NE(std::find(motor->apiSchemas.begin(), motor->apiSchemas.end(), "ElectricalMotorAPI_1"),
+              motor->apiSchemas.end());
 }
 
 }  // namespace

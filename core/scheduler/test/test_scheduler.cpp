@@ -341,8 +341,8 @@ TEST(Wiring, ContractPerSchemaInstance) {
     World world;
     const PrimId left = world.addPrim("/amr/left_wheel", "left_wheel");
     const PrimId right = world.addPrim("/amr/right_wheel", "right_wheel");
-    world.schemaInstances.push_back({"ElectricalMotorAPI_1", left, {}, {}, {}, {}, {}, {}});
-    world.schemaInstances.push_back({"ElectricalMotorAPI_1", right, {}, {}, {}, {}, {}, {}});
+    world.schemaInstances.push_back({"ElectricalMotorAPI_1", {}, left, {}, {}, {}, {}, {}, {}});
+    world.schemaInstances.push_back({"ElectricalMotorAPI_1", {}, right, {}, {}, {}, {}, {}, {}});
 
     Scheduler scheduler(SchedulerOptions{.contracts = &registry});
     // Writes the left wheel's torque only, and in the wrong unit.
@@ -465,12 +465,72 @@ TEST(Multirate, WindowAverageConservesTheImpulse) {
     ASSERT_TRUE(scheduler.wire(WorldView(world)));
     ASSERT_TRUE(scheduler.stepUntil(SimTime{3'000'000}).ok());
     ASSERT_EQ(seen->values.size(), 3U);
-    // The writer runs first in each tick. At t = 0 the window holds one commit (0.1 N·m, the
-    // step ending at 0.1 ms). At t = 1 ms it holds the ten commits of the steps starting at
-    // 0.1 ... 1.0 ms, valued 0.2 ... 1.1 N·m: mean 0.65. Then 1.2 ... 2.1: mean 1.65.
-    EXPECT_NEAR(seen->values[0], 0.1, 1e-12);
-    EXPECT_NEAR(seen->values[1], 0.65, 1e-12);
-    EXPECT_NEAR(seen->values[2], 1.65, 1e-12);
+    // The slow reader reads a flow from a faster writer, so it steps at the end of each window
+    // (architecture.md §8): the step for [0, 1 ms) sees the ten commits of the writer's steps in
+    // it, valued 0.1 ... 1.0 N·m (each at its end time): mean 0.55. Then 1.1 ... 2.0: 1.55.
+    EXPECT_TRUE(scheduler.plan()[1].atWindowEnd);
+    EXPECT_FALSE(scheduler.plan()[0].atWindowEnd);
+    EXPECT_NEAR(seen->values[0], 0.55, 1e-12);
+    EXPECT_NEAR(seen->values[1], 1.55, 1e-12);
+    EXPECT_NEAR(seen->values[2], 2.55, 1e-12);
+}
+
+TEST(Execution, PublishedBuffersResolveWhileReadersCanHoldThem) {
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    // A 10 ms camera publishes an image holding its step count; a 1 ms reader holds it, once
+    // directly and once as feedback.
+    auto camera = std::make_unique<TestModule>("sensors", "camera", 10_ms);
+    camera->onDeclare = [](SignalDeclarer& d, TestModule& m) {
+        SignalSpec image;
+        image.name = "sensor/cam/image";
+        image.type = SignalType::Image;
+        m.ids.push_back(d.output(image));
+    };
+    camera->onStep = [](const StepContext& c, SignalBus& bus, TestModule& m) {
+        auto buffer = std::make_shared<Buffer>();
+        buffer->width = 1;
+        buffer->height = 1;
+        buffer->encoding = "r32u";
+        buffer->bytes.assign(4, static_cast<std::byte>(c.stepIndex));
+        const BufferHandle handle = bus.publishBuffer(m.ids[0], std::move(buffer));
+        EXPECT_EQ(handle.id & 0xFFFF'FFFFU, c.stepIndex + 1);
+        return Status{};
+    };
+    struct Reads {
+        std::vector<int> held, delayed;
+    };
+    auto reads = std::make_shared<Reads>();
+    auto reader = std::make_unique<TestModule>("viewer", "reader", 1_ms);
+    reader->onDeclare = [](SignalDeclarer& d, TestModule& m) {
+        SignalSpec image;
+        image.name = "sensor/cam/image";
+        image.type = SignalType::Image;
+        m.ids.push_back(d.input(image));
+        image.feedback = true;
+        m.ids.push_back(d.input(image));
+    };
+    reader->onStep = [reads](const StepContext&, SignalBus& bus, TestModule& m) {
+        const auto value = [&](SignalId id) {
+            const std::shared_ptr<const Buffer> b = bus.buffer(bus.readBuffer(id));
+            return b ? static_cast<int>(b->bytes[0]) : -1;
+        };
+        reads->held.push_back(value(m.ids[0]));
+        reads->delayed.push_back(value(m.ids[1]));
+        return Status{};
+    };
+    scheduler.add(std::move(camera));
+    scheduler.add(std::move(reader));
+    ASSERT_TRUE(scheduler.wire(WorldView(World{})));
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{50'000'000}).ok());
+    ASSERT_EQ(reads->held.size(), 50U);
+    for (std::size_t k = 0; k < 50; ++k) {
+        // Held: the camera's step k / 10 commits before the reader's step in the same tick.
+        EXPECT_EQ(reads->held[k], static_cast<int>(k / 10)) << k;
+        // Feedback: what was committed before the tick began; nothing before the first step.
+        EXPECT_EQ(reads->delayed[k], static_cast<int>(k / 10) - (k % 10 == 0 ? 1 : 0)) << k;
+    }
+    EXPECT_EQ(scheduler.bus().buffer(BufferHandle{}), nullptr);
+    EXPECT_EQ(scheduler.bus().buffer(BufferHandle{(1ULL << 32U) | 1U}), nullptr);  // long gone
 }
 
 TEST(Execution, StepErrorsNameTheModuleAndTime) {
@@ -727,7 +787,7 @@ TEST(Substitutes, IdealTorqueSourceSatisfiesTheElectricalContract) {
                   [] { return std::make_unique<IdealTorqueSource>(); }});
     World world;
     const PrimId wheel = world.addPrim("/amr/left_wheel", "left_wheel");
-    world.schemaInstances.push_back({"ElectricalMotorAPI_1", wheel, {}, {}, {}, {}, {}, {}});
+    world.schemaInstances.push_back({"ElectricalMotorAPI_1", {}, wheel, {}, {}, {}, {}, {}, {}});
 
     const auto choice = substituteForToken("ideal");
     ASSERT_TRUE(choice);

@@ -48,6 +48,15 @@ struct PrimData {
     bool visible{true};
 };
 
+/// A collision shape: a mesh that moves with a prim (kNone: fixed in the region-local frame),
+/// at a pose in that prim's frame. Drawn by the Collision shading only.
+struct ColliderData {
+    std::uint32_t prim{kNone};
+    std::uint32_t mesh{kNone};
+    std::array<double, 3> position{0.0, 0.0, 0.0};
+    std::array<float, 4> rotation{1.0F, 0.0F, 0.0F, 0.0F};  // w, x, y, z
+};
+
 /// One connection of a prim to an electrical net.
 struct NetTerminal {
     std::uint32_t prim{kNone};
@@ -84,6 +93,7 @@ struct SceneStatics {
     std::vector<MeshData> meshes;
     std::vector<MaterialData> materials;
     std::vector<ElectricalNet> nets;
+    std::vector<ColliderData> colliders;
     std::string stagePath;
     std::uint64_t generation{0};  // increases with every snapshot; GPU caches key on it
 };

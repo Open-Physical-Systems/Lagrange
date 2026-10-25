@@ -8,7 +8,7 @@ project(lagrange_schemas VERSION 0.0.0 LANGUAGES CXX) # CXX: pxrConfig finds TBB
 find_package(ament_cmake REQUIRED)
 find_package(openusd_vendor REQUIRED)
 
-set(LAGRANGE_SCHEMA_LIBRARIES sensor)
+set(LAGRANGE_SCHEMA_LIBRARIES sensor electrical thermal)
 set(usd_env
     "PXR_PLUGINPATH_NAME=${CMAKE_CURRENT_SOURCE_DIR}/metadata"
     "PYTHONPATH=${OPENUSD_VENDOR_PYTHONPATH}"
@@ -57,11 +57,15 @@ ament_environment_hooks(env-hooks/lagrange_schemas.dsv.in)
 
 if(BUILD_TESTING)
     find_package(ament_cmake_pytest REQUIRED)
+    set(plugin_path "${CMAKE_CURRENT_SOURCE_DIR}/metadata")
+    foreach(library IN LISTS LAGRANGE_SCHEMA_LIBRARIES)
+        string(APPEND plugin_path ":${CMAKE_CURRENT_BINARY_DIR}/usd/${library}")
+    endforeach()
     ament_add_pytest_test(
         test_schemas
         test/test_schemas.py
         ENV
-            "PXR_PLUGINPATH_NAME=${CMAKE_CURRENT_SOURCE_DIR}/metadata:${CMAKE_CURRENT_BINARY_DIR}/usd/sensor"
+            "PXR_PLUGINPATH_NAME=${plugin_path}"
             "PYTHONPATH=${OPENUSD_VENDOR_PYTHONPATH}"
             "LD_LIBRARY_PATH=${OPENUSD_VENDOR_ROOT}/lib"
             "LAGRANGE_SCHEMA_LIBRARIES=${LAGRANGE_SCHEMA_LIBRARIES}"

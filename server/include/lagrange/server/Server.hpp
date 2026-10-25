@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -17,8 +18,19 @@ namespace lagrange::server {
 
 struct ServerOptions {
     proto::Endpoint endpoint;
-    std::string robotPath;          // URDF of the robot to simulate
-    std::string worldPath;          // URDF of static scenery (root link "world"); empty = none
+    std::string robotPath;  // URDF of the robot to simulate
+    std::string worldPath;  // URDF of static scenery (root link "world"); empty = none
+    /// Overlay file applied to the robot (docs/design/formats.md §9: motors, battery, bus);
+    /// empty = none
+    std::string overlayPath;
+    /// The site's ambient air temperature, K (--ambient-temperature; a profile's
+    /// thermal.ambient_temperature overrides it). A site parameter with no default: without it
+    /// the thermal domain does not run (CLAUDE.md §10).
+    std::optional<double> ambientTemperatureK;
+    /// Bench mode (--bench): physics replaced by this recording's rigid-body signals, replayed
+    /// open loop (the replay substitute); empty = none. A profile's rigid_body replay source
+    /// overrides it.
+    std::string benchReplayPath;
     Pose spawn;                     // where the robot starts, world ENU (LoadOptions::spawn)
     std::string profileSchemaPath;  // profiles/schema.json, sent to viewers; empty = none
     /// What a profile's `stage` must say to apply to this run; empty: robotPath. `lagrange run`
@@ -29,8 +41,9 @@ struct ServerOptions {
     bool startPaused{false};
     std::string recordPath;                   // MCAP file to record the run to; empty: no recording
     std::uint32_t recordMaxComponents{1024};  // larger signals (3D lidar ranges) are left out
-    /// Domains replaced by their substitute (CLAUDE.md §11.2): "rigid_body" (fixed robot) and
-    /// "sensors" (ground truth); the others have no module yet and are always substituted.
+    /// Domains replaced by their substitute (CLAUDE.md §11.2): "rigid_body" (fixed robot),
+    /// "electrical" (ideal torque source; also used when the robot has no motors) and "sensors"
+    /// (ground truth); the others have no module yet and are always substituted.
     std::set<std::string> substituted;
     /// Parameters of an in-process ros2_control controller manager (update_rate, controller
     /// types); empty: the built-in drive controller instead. Needs the ROS bridge and a URDF
@@ -44,7 +57,19 @@ struct ServerOptions {
     /// deterministic, the fastest for scans of tens of thousands of beams); Gpu on a hardware
     /// GPU's compute kernel (Tier 1), which makes the run non-deterministic.
     enum class Lidar : std::uint8_t { Auto, Cpu, Gpu } lidar{Lidar::Auto};
-    std::string gpu;  // Vulkan device for the lidar (index or part of its name); empty: automatic
+    std::string gpu;  // Vulkan device for the lidar and cameras (index or part of its name)
+    /// Render cameras (on `gpu`, or a software device without one), which makes the run
+    /// non-deterministic; false: cameras publish their ground truth (empty images), as for
+    /// `lagrange determinism`.
+    bool cameras{true};
+    std::string physics{"mujoco"};  // rigid-body backend: "mujoco" or "jolt" (--physics)
+    /// Replay mode (roadmap 0.2-E8, Q15): serve this recording (`--record`'s MCAP) instead of a
+    /// simulation. Every recorded domain is a replay substitute; the scene is the recorded one;
+    /// the viewer can seek. No robot is loaded and the ROS bridge is off.
+    std::string replayPath;
+    /// Where edits from the viewer are saved when it asks (SetAttribute save_to_session_layer):
+    /// the edited model as a USD layer. Empty: $XDG_STATE_HOME/lagrange/<robot>.session.usda.
+    std::string sessionPath;
 };
 
 /// The simulation server (roadmap 0.2-E1, E2): it loads a robot, wires the MuJoCo backend and

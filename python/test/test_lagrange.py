@@ -44,3 +44,30 @@ def test_two_runs_are_identical() -> None:
     a.step_until(1.0)
     b.step_until(1.0)
     assert a.state_hash() == b.state_hash()
+
+
+def test_the_protocol_messages_import_alongside_the_bindings():
+    """lagrange_proto installs lagrange.viewer.v1 and lagrange.record.v1 next to this package's
+    lagrange; with the bindings first on the path (as a sourced workspace has them), both
+    import. In a fresh interpreter: an extension module cannot be imported twice in one."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    import lagrange
+
+    bindings = str(Path(lagrange.__file__).parent.parent)
+    path = os.pathsep.join([bindings, *sys.path])
+    check = (
+        "import lagrange, lagrange.viewer.v1.signals_pb2 as s, lagrange.record.v1.record_pb2 as r;"
+        "assert lagrange.Simulation and s.SignalCatalog and r.RunMeta().format_version == 0"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", check],
+        env={**os.environ, "PYTHONPATH": path},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

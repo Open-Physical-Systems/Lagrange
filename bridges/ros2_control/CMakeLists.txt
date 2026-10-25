@@ -51,6 +51,7 @@ install(
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
     find_package(std_msgs REQUIRED)
+    find_package(lagrange_electrical REQUIRED)
     ament_add_gtest(test_encoder test/test_encoder.cpp)
     target_include_directories(
         test_encoder
@@ -66,6 +67,7 @@ if(BUILD_TESTING)
     target_link_libraries(
         test_ros2_control
         lagrange_ros2_control
+        lagrange_electrical::lagrange_electrical
         rclcpp::rclcpp
         ${std_msgs_TARGETS}
     )

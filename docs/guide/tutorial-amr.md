@@ -50,7 +50,8 @@ $ lagrange graph $profile | dot -Tsvg -o wiring.svg
 ```
 
 `wiring.svg` shows the modules and the signals between them, as on [the CLI page](cli.md#the-wiring-graph):
-the diff-drive controller sends wheel torques to MuJoCo, and the IMU and the two lidars read body
+the diff-drive controller sends wheel torque commands through the electrical network (motors,
+drives, the battery and its 48 V bus) to MuJoCo, and the IMU and the two lidars read body
 poses from it.
 
 ## 3. Run it and watch
@@ -117,11 +118,15 @@ $ ros2 topic echo --once --field twist.twist.linear.x /odom
 
 Stop the publisher: half a second without a command, the robot stops. Stop the simulator; the
 recording is closed and `run.mcap` holds every signal of the run (about 1.5 MB/s for this
-robot). Replay it to the viewer with:
+robot). Replay it with:
 
 ```bash
-ros2 run lagrange_mock_server lagrange_mock_server --recording run.mcap
+ros2 run lagrange_server lagrange_server --replay run.mcap
 ```
+
+then connect the viewer (`ros2 run lagrange_viewer lagrange_viewer`, Connect). The scene and
+every recorded signal come back sample for sample, and the Replay workspace's timeline seeks
+anywhere in the run. A replay runs no physics and publishes nothing to ROS.
 
 ## 5. Switch a domain off
 

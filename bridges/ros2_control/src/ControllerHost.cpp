@@ -116,6 +116,8 @@ Expected<std::vector<ControlJoint>, std::string> controlJoints(const std::string
                     control.gains.positionP = value;
                 } else if (key == "position_d") {
                     control.gains.positionD = value;
+                } else if (key == "position_i") {
+                    control.gains.positionI = value;
                 }
             }
             out.push_back(std::move(control));

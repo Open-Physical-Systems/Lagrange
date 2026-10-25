@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_server</name>
-  <version>0.2.0</version>
+  <version>0.3.0</version>
   <description>The Lagrange simulation server: loads a robot, runs the modules on the scheduler against the wall clock, and serves the viewer protocol.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
@@ -12,9 +12,14 @@
 
   <depend>lagrange_core</depend>
   <depend>lagrange_proto</depend>
+  <depend>lagrange_rigid_body_jolt</depend>
   <depend>lagrange_rigid_body_mujoco</depend>
   <depend>lagrange_rigid_body_substitutes</depend>
   <depend>lagrange_sensors</depend>
+  <depend>lagrange_electrical</depend>
+  <test_depend>lagrange_models</test_depend>
+  <depend>lagrange_thermal</depend>
+  <depend>lagrange_recording</depend>
   <depend>lagrange_gpu</depend>
   <depend>lagrange_meshes</depend>
   <depend>lagrange_ros2</depend>
@@ -34,6 +39,10 @@
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>lagrange_assets</test_depend>
+  <test_depend>trajectory_msgs</test_depend>
+  <test_depend>controller_manager</test_depend>
+  <test_depend>joint_trajectory_controller</test_depend>
+  <test_depend>joint_state_broadcaster</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

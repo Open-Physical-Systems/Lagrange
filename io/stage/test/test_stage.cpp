@@ -7,6 +7,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <numbers>
 #include <string>
 
@@ -127,6 +128,7 @@ Model sampleModel() {
     w.colliders.size.insert(w.colliders.size.begin(), {0, 0, 1});
     w.colliders.poseInBody.insert(w.colliders.poseInBody.begin(), Pose{});
     w.colliders.friction.insert(w.colliders.friction.begin(), 1.0);
+    w.colliders.hull.insert(w.colliders.hull.begin(), kNoHull);
     addGroundPrim(m);
     return m;
 }
@@ -401,6 +403,421 @@ def Xform "a" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
 )");
     ASSERT_FALSE(rate);
     EXPECT_NE(rate.error().find("sensor:rate"), std::string::npos) << rate.error();
+}
+
+/// A wheel on a driven joint, its motor, a battery with a port, a bus and a load: the sample
+/// AMR's power system in miniature (formats.md §4).
+const char* const kPowered = R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 10
+    }
+    def Xform "wheel" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 1
+    }
+    def PhysicsRevoluteJoint "wheel_joint" ( prepend apiSchemas = ["PhysicsDriveAPI:angular"] )
+    {
+        rel physics:body0 = </bot/base>
+        rel physics:body1 = </bot/wheel>
+        uniform token physics:axis = "Y"
+    }
+    def Xform "power"
+    {
+        def Xform "battery" ( prepend apiSchemas = ["BatteryAPI_1", "PortAPI_1:dc_out", "AeroAPI_1"] )
+        {
+            uniform token elec:battery:chemistry = "lfp"
+            int elec:battery:seriesCells = 16
+            double elec:battery:capacity = 144000
+            double[] elec:battery:ocvSoc = [0, 0.5, 1]
+            double[] elec:battery:ocvVoltage = [2.8, 3.28, 3.45]
+            double elec:battery:r0 = 0.0015
+            double elec:battery:cutoffVoltage = 44.8
+            double elec:battery:maxChargeCurrent = 20
+            double elec:port:dc_out:maxCurrent = 80
+            rel elec:port:dc_out:connectedTo = </bot/power/dc_48v>
+        }
+        def Xform "dc_48v" ( prepend apiSchemas = ["ElectricalBusAPI_1"] )
+        {
+            double elec:bus:capacitance = 0.0047
+            double elec:bus:undervoltageTrip = 42
+            double elec:bus:overvoltageTrip = 60
+        }
+        def Xform "computer" ( prepend apiSchemas = ["ElectricalLoadAPI_1"] )
+        {
+            double elec:load:power = 45
+            rel elec:powerPort = </bot/power/dc_48v>
+        }
+    }
+    def Xform "left_drive_motor" ( prepend apiSchemas = ["ElectricalMotorAPI_1"] )
+    {
+        double elec:windingResistance = 0.12
+        double elec:inductance = 0.00031
+        double elec:torqueConstant = 0.085
+        int elec:polePairs = 4
+        double elec:gearRatio = 20
+        double elec:maxCurrent = 30
+        rel elec:joint = </bot/wheel_joint>
+        rel elec:powerPort = </bot/power/dc_48v>
+    }
+}
+)";
+
+const SchemaInstance* only(const World& world, const std::string& schema) {
+    const std::vector<const SchemaInstance*> found = WorldView(world).instancesOf(schema);
+    EXPECT_EQ(found.size(), 1U) << schema;
+    return found.empty() ? nullptr : found[0];
+}
+
+TEST(StageReader, CollectsTheElectricalSchemas) {
+    auto model = loadStage(writeText("powered.usda", kPowered).string());
+    ASSERT_TRUE(model) << model.error();
+    const World& w = model->world;
+    const WorldView view(w);
+
+    const SchemaInstance* motor = only(w, "ElectricalMotorAPI_1");
+    ASSERT_NE(motor, nullptr);
+    EXPECT_EQ(view.signalInstanceName(motor->prim), "left_drive_motor");
+    EXPECT_EQ(motor->real("elec:torqueConstant"), 0.085);
+    EXPECT_EQ(motor->integer("elec:polePairs"), 4);
+    EXPECT_EQ(motor->real("elec:gearRatio"), 20.0);
+    EXPECT_EQ(motor->real("elec:resistanceTempCoeff"), 0.00393);  // the schema's fallback
+    EXPECT_EQ(motor->token("elec:motorType"), "pmsm");
+    EXPECT_FALSE(motor->real("elec:inductanceQ"));  // no fallback, not authored
+    // elec:joint resolves to the world joint, so the network finds its signals by name.
+    ASSERT_EQ(motor->rel("elec:joint").size(), 1U);
+    EXPECT_EQ(motor->rel("elec:joint")[0], w.joints.prim[1]);
+    EXPECT_EQ(view.signalInstanceName(motor->rel("elec:joint")[0]), "wheel_joint");
+
+    const SchemaInstance* bus = only(w, "ElectricalBusAPI_1");
+    ASSERT_NE(bus, nullptr);
+    EXPECT_EQ(view.signalInstanceName(bus->prim), "dc_48v");
+    EXPECT_EQ(view.primPath(bus->prim), "/bot/power/dc_48v");
+    EXPECT_EQ(motor->rel("elec:powerPort")[0], bus->prim);
+
+    const SchemaInstance* battery = only(w, "BatteryAPI_1");
+    ASSERT_NE(battery, nullptr);
+    EXPECT_EQ(battery->realArray("elec:battery:ocvVoltage").size(), 3U);
+    EXPECT_EQ(battery->integer("elec:battery:parallelCells"), 1);
+    EXPECT_EQ(battery->token("elec:battery:chemistry"), "lfp");
+
+    // A multiple-apply port keeps its instance name and namespaced properties.
+    const SchemaInstance* port = only(w, "PortAPI_1");
+    ASSERT_NE(port, nullptr);
+    EXPECT_EQ(port->instance, "dc_out");
+    EXPECT_EQ(port->prim, battery->prim);
+    EXPECT_EQ(port->real("elec:port:dc_out:maxCurrent"), 80.0);
+    EXPECT_EQ(port->token("elec:port:dc_out:kind"), "dc");
+    ASSERT_EQ(port->rel("elec:port:dc_out:connectedTo").size(), 1U);
+    EXPECT_EQ(port->rel("elec:port:dc_out:connectedTo")[0], bus->prim);
+
+    EXPECT_EQ(only(w, "ElectricalLoadAPI_1")->real("elec:load:power"), 45.0);
+    // AeroAPI_1 is not defined until the aerodynamics library exists (v0.4): noted, not an error.
+    EXPECT_TRUE(std::any_of(model->notes.begin(), model->notes.end(), [](const std::string& n) {
+        return n.find("AeroAPI_1") != std::string::npos;
+    }));
+}
+
+TEST(StageReader, SchemaInstancesSurviveAppendingModels) {
+    auto first = loadStage(writeText("powered.usda", kPowered).string());
+    auto second = loadStage(writeText("powered.usda", kPowered).string());
+    ASSERT_TRUE(first && second);
+    appendModel(*first, *second);
+    const World& w = first->world;
+    const WorldView view(w);
+    const std::vector<const SchemaInstance*> motors = view.instancesOf("ElectricalMotorAPI_1");
+    ASSERT_EQ(motors.size(), 2U);
+    // The second motor drives the second robot's wheel joint and draws from its own bus.
+    EXPECT_EQ(motors[1]->rel("elec:joint")[0], w.joints.prim[3]);
+    const std::vector<const SchemaInstance*> buses = view.instancesOf("ElectricalBusAPI_1");
+    ASSERT_EQ(buses.size(), 2U);
+    EXPECT_NE(buses[0]->prim, buses[1]->prim);
+    EXPECT_EQ(motors[1]->rel("elec:powerPort")[0], buses[1]->prim);
+    EXPECT_EQ(view.signalInstanceName(motors[1]->prim), "left_drive_motor");
+}
+
+TEST(StageReader, RefusesBadSchemaValuesNamingThePrims) {
+    const auto with = [](std::string text, const std::string& from, const std::string& to) {
+        text.replace(text.find(from), from.size(), to);
+        return text;
+    };
+    std::string bad = kPowered;
+    bad = with(bad, "\"lfp\"", "\"nickel_iron\"");
+    bad = with(bad, "[2.8, 3.28, 3.45]", "[2.8, 3.45]");
+    bad = with(bad, "double elec:gearRatio = 20",
+               "double elec:gearRatio = 20\n        double elec:gearEfficiency = 1.2");
+    bad = with(bad, "rel elec:joint = </bot/wheel_joint>", "rel elec:joint = </bot/wheel>");
+    bad = with(bad, "rel elec:powerPort = </bot/power/dc_48v>\n    }\n}",
+               "rel elec:powerPort = </bot/power/dc_12v>\n    }\n}");
+    auto model = loadStage(writeText("bad_power.usda", bad).string());
+    ASSERT_FALSE(model);
+    const std::string& e = model.error();
+    // Every problem at once, each with its prim.
+    EXPECT_NE(e.find("/bot/power/battery: elec:battery:chemistry is \"nickel_iron\""),
+              std::string::npos)
+        << e;
+    EXPECT_NE(e.find("ocvSoc and elec:battery:ocvVoltage differ in length (3 and 2)"),
+              std::string::npos)
+        << e;
+    EXPECT_NE(e.find("/bot/left_drive_motor: elec:gearEfficiency is 1.2"), std::string::npos) << e;
+    EXPECT_NE(e.find("elec:joint targets /bot/wheel, which is not a joint"), std::string::npos)
+        << e;
+    EXPECT_NE(e.find("targets /bot/power/dc_12v, which is not in the stage"), std::string::npos)
+        << e;
+}
+
+TEST(StageReader, AnOlderSchemaVersionIsReportedWithItsMigration) {
+    // formats.md §10: an older version of a known family loads with a note naming the
+    // migration; two versions of one family on one prim is an error.
+    const std::string header = "#usda 1.0\n(\n    metersPerUnit = 1\n    upAxis = \"Z\"\n)\n";
+    auto old = loadStage(writeText("old_schema.usda", header + R"(
+def Xform "bot" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+{
+    float physics:mass = 1
+    def Xform "imu" ( prepend apiSchemas = ["SensorAPI_0", "ImuAPI_1"] )
+    {
+    }
+}
+)")
+                             .string());
+    ASSERT_TRUE(old) << old.error();
+    bool noted = false;
+    for (const std::string& note : old->notes) {
+        noted = noted || (note.find("/bot/imu applies SensorAPI_0, an older version of "
+                                    "SensorAPI_1") != std::string::npos &&
+                          note.find("migrate_schema") != std::string::npos);
+    }
+    EXPECT_TRUE(noted);
+
+    auto both = loadStage(writeText("two_versions.usda", header + R"(
+def Xform "bot" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+{
+    float physics:mass = 1
+    def Xform "imu" ( prepend apiSchemas = ["SensorAPI_0", "SensorAPI_1", "ImuAPI_1"] )
+    {
+        double sensor:rate = 100
+    }
+}
+)")
+                              .string());
+    ASSERT_FALSE(both);
+    EXPECT_NE(both.error().find("/bot/imu applies two versions of SensorAPI"), std::string::npos)
+        << both.error();
+}
+
+TEST(StageReader, ConvexMeshCollidersBecomeHullsAndSurviveTheRoundTrip) {
+    // formats.md §2: collision geometry is convex hulls (what the collision bake writes). A
+    // mesh marked convexHull that is convex is used; others are skipped with a note.
+    const std::string header = "#usda 1.0\n(\n    metersPerUnit = 1\n    upAxis = \"Z\"\n)\n";
+    auto model = loadStage(writeText("hulls.usda", header + R"(
+def Xform "shelf"
+{
+    def Mesh "hull" ( prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"] )
+    {
+        uniform token physics:approximation = "convexHull"
+        point3f[] points = [(-0.5, -0.2, 0), (0.5, -0.2, 0), (-0.5, 0.2, 0), (0.5, 0.2, 0), (-0.5, -0.2, 1), (0.5, -0.2, 1), (-0.5, 0.2, 1), (0.5, 0.2, 1)]
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 2, 3, 1, 4, 5, 7, 6, 0, 1, 5, 4, 2, 6, 7, 3, 0, 4, 6, 2, 1, 3, 7, 5]
+        double3 xformOp:translate = (2, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Mesh "two_boxes" ( prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"] )
+    {
+        uniform token physics:approximation = "convexHull"
+        point3f[] points = [(-0.5, -0.2, 0), (0.5, -0.2, 0), (-0.5, 0.2, 0), (0.5, 0.2, 0), (-0.5, -0.2, 1), (0.5, -0.2, 1), (-0.5, 0.2, 1), (0.5, 0.2, 1), (1.5, -0.2, 0), (2.5, -0.2, 0), (1.5, 0.2, 0), (2.5, 0.2, 0), (1.5, -0.2, 1), (2.5, -0.2, 1), (1.5, 0.2, 1), (2.5, 0.2, 1)]
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 2, 3, 1, 4, 5, 7, 6, 0, 1, 5, 4, 2, 6, 7, 3, 0, 4, 6, 2, 1, 3, 7, 5, 8, 10, 11, 9, 12, 13, 15, 14, 8, 9, 13, 12, 10, 14, 15, 11, 8, 12, 14, 10, 9, 11, 15, 13]
+    }
+    def Mesh "raw" ( prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"] )
+    {
+        uniform token physics:approximation = "convexDecomposition"
+        point3f[] points = [(-0.5, -0.2, 0), (0.5, -0.2, 0), (-0.5, 0.2, 0), (0.5, 0.2, 0), (-0.5, -0.2, 1), (0.5, -0.2, 1), (-0.5, 0.2, 1), (0.5, 0.2, 1)]
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 2, 3, 1, 4, 5, 7, 6, 0, 1, 5, 4, 2, 6, 7, 3, 0, 4, 6, 2, 1, 3, 7, 5]
+    }
+}
+)")
+                               .string());
+    ASSERT_TRUE(model) << model.error();
+    const World& w = model->world;
+    ASSERT_EQ(w.hulls.size(), 1U);
+    const auto c = static_cast<std::size_t>(
+        std::find(w.colliders.shape.begin(), w.colliders.shape.end(), ShapeType::ConvexHull) -
+        w.colliders.shape.begin());
+    ASSERT_LT(c, w.colliders.shape.size());
+    EXPECT_EQ(w.hulls[0].points.size(), 8U);
+    EXPECT_EQ(w.hulls[0].triangles.size(), 12U);  // the quads as fans
+    EXPECT_NEAR(w.colliders.size[c][0], 0.5, 1e-6);
+    EXPECT_NEAR(w.colliders.size[c][2], 1.0, 1e-6);  // about the shape origin, not the centre
+    EXPECT_NEAR(w.colliders.poseInBody[c].position[0], 2.0, 1e-12);
+    int notes = 0;
+    for (const std::string& note : model->notes) {
+        notes += note.find("/shelf/two_boxes") != std::string::npos &&
+                 note.find("not convex") != std::string::npos;
+        notes += note.find("/shelf/raw") != std::string::npos &&
+                 note.find("collision_bake") != std::string::npos;
+    }
+    EXPECT_EQ(notes, 2);
+
+    const std::filesystem::path out = scratch("hulls_out.usda");
+    ASSERT_TRUE(writeStage(*model, out.string()));
+    auto back = loadStage(out.string());
+    ASSERT_TRUE(back) << back.error();
+    ASSERT_EQ(back->world.hulls.size(), 1U);
+    EXPECT_EQ(back->world.hulls[0].triangles.size(), 12U);
+    for (std::size_t i = 0; i < 8; ++i) {
+        for (std::size_t k = 0; k < 3; ++k) {
+            EXPECT_NEAR(back->world.hulls[0].points[i][k], w.hulls[0].points[i][k], 1e-6);
+        }
+    }
+}
+
+TEST(StageWriter, SchemaInstancesSurviveTheRoundTrip) {
+    auto model = loadStage(writeText("powered.usda", kPowered).string());
+    ASSERT_TRUE(model) << model.error();
+    const std::filesystem::path out = scratch("powered_out.usda");
+    ASSERT_TRUE(writeStage(*model, out.string()));
+    auto back = loadStage(out.string());
+    ASSERT_TRUE(back) << back.error();
+    const WorldView a(model->world);
+    const WorldView b(back->world);
+    ASSERT_EQ(back->world.schemaInstances.size(), model->world.schemaInstances.size());
+    for (const SchemaInstance& s : model->world.schemaInstances) {
+        const auto match =
+            std::find_if(back->world.schemaInstances.begin(), back->world.schemaInstances.end(),
+                         [&](const SchemaInstance& t) {
+                             return t.schema == s.schema && t.instance == s.instance &&
+                                    b.signalInstanceName(t.prim) == a.signalInstanceName(s.prim);
+                         });
+        ASSERT_NE(match, back->world.schemaInstances.end()) << s.schema;
+        EXPECT_EQ(match->reals, s.reals) << s.schema;
+        EXPECT_EQ(match->integers, s.integers) << s.schema;
+        EXPECT_EQ(match->tokens, s.tokens) << s.schema;
+        EXPECT_EQ(match->realArrays, s.realArrays) << s.schema;
+        for (const auto& [name, targets] : s.relationships) {
+            ASSERT_EQ(match->rel(name).size(), targets.size()) << name;
+            for (std::size_t i = 0; i < targets.size(); ++i) {
+                EXPECT_EQ(b.signalInstanceName(match->rel(name)[i]),
+                          a.signalInstanceName(targets[i]))
+                    << name;
+            }
+        }
+    }
+    // Fallbacks stay unauthored.
+    std::ifstream file(out);
+    const std::string text((std::istreambuf_iterator<char>(file)),
+                           std::istreambuf_iterator<char>());
+    EXPECT_EQ(text.find("resistanceTempCoeff"), std::string::npos);
+    EXPECT_NE(text.find("elec:torqueConstant = 0.085"), std::string::npos);
+}
+
+TEST(Overlay, AppliesSchemasByNameAndCreatesPrims) {
+    auto model = loadStage(writeText("bare.usda", R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 10
+    }
+    def Xform "wheel" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 1
+    }
+    def PhysicsRevoluteJoint "wheel_joint" ( prepend apiSchemas = ["PhysicsDriveAPI:angular"] )
+    {
+        rel physics:body0 = </bot/base>
+        rel physics:body1 = </bot/wheel>
+        uniform token physics:axis = "Y"
+    }
+}
+)")
+                               .string());
+    ASSERT_TRUE(model) << model.error();
+    const std::filesystem::path overlay = writeText("bot.overlay.yaml", R"(schema_version: 1
+apply:
+  - prim: wheel_joint
+    create_child: drive
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:windingResistance: 0.2
+        elec:inductance: 0.001
+        elec:torqueConstant: 0.05
+        elec:polePairs: 2
+        elec:maxCurrent: 10
+        elec:motorType: dc_brushed
+        elec:joint: wheel_joint
+        elec:powerPort: power/bus
+  - create: power/bus
+    schemas:
+      ElectricalBusAPI_1: { elec:bus:undervoltageTrip: 9.0, elec:bus:overvoltageTrip: 15.0 }
+)");
+    ASSERT_TRUE(applyOverlay(*model, overlay.string()));
+    const World& w = model->world;
+    const WorldView view(w);
+    const SchemaInstance* motor = only(w, "ElectricalMotorAPI_1");
+    ASSERT_NE(motor, nullptr);
+    EXPECT_EQ(view.primPath(motor->prim), "/bot/base/drive");  // on the joint's parent link
+    EXPECT_EQ(motor->integer("elec:polePairs"), 2);
+    EXPECT_EQ(motor->real("elec:gearRatio"), 1.0);  // the fallback
+    EXPECT_EQ(motor->token("elec:motorType"), "dc_brushed");
+    EXPECT_EQ(view.signalInstanceName(motor->rel("elec:joint")[0]), "wheel_joint");
+    const SchemaInstance* bus = only(w, "ElectricalBusAPI_1");
+    ASSERT_NE(bus, nullptr);
+    EXPECT_EQ(view.primPath(bus->prim), "/bot/power/bus");
+    EXPECT_EQ(motor->rel("elec:powerPort")[0], bus->prim);
+    // Applying it twice is refused: the motor is there already.
+    auto again = applyOverlay(*model, overlay.string());
+    ASSERT_FALSE(again);
+    EXPECT_NE(again.error().find("already has ElectricalMotorAPI_1"), std::string::npos)
+        << again.error();
+}
+
+TEST(Overlay, RefusesMistakesTogetherAndLeavesTheModelAsItWas) {
+    auto model = loadStage(writeText("powered.usda", kPowered).string());
+    ASSERT_TRUE(model) << model.error();
+    const std::size_t prims = model->scene.prims.size();
+    const std::size_t instances = model->world.schemaInstances.size();
+    const std::filesystem::path overlay = writeText("bad.overlay.yaml", R"(schema_version: 1
+apply:
+  - prim: no_such_link
+    schemas: { ElectricalLoadAPI_1: { elec:load:power: 5 } }
+  - create: power/heater
+    schemas:
+      ElectricalLoadAPI_1: { elec:load:power: 5, elec:load:colour: red, elec:powerPort: nowhere }
+      HeaterAPI_1: {}
+  - create: power/fan
+    schemas:
+      ElectricalLoadAPI_1: { elec:load:power: lots, elec:load:model: magic }
+)");
+    auto applied = applyOverlay(*model, overlay.string());
+    ASSERT_FALSE(applied);
+    const std::string& e = applied.error();
+    EXPECT_NE(e.find("no_such_link is not a link, joint, sensor or prim"), std::string::npos) << e;
+    EXPECT_NE(e.find("elec:load:colour is not a property of ElectricalLoadAPI_1"),
+              std::string::npos)
+        << e;
+    EXPECT_NE(e.find("nowhere is not a link"), std::string::npos) << e;
+    EXPECT_NE(e.find("HeaterAPI_1 is not a registered schema"), std::string::npos) << e;
+    EXPECT_NE(e.find("/bot/power/fan: elec:load:power"), std::string::npos) << e;
+    EXPECT_EQ(model->scene.prims.size(), prims);
+    EXPECT_EQ(model->world.schemaInstances.size(), instances);
+
+    auto version =
+        applyOverlay(*model, writeText("v2.yaml", "schema_version: 2\napply: []\n").string());
+    ASSERT_FALSE(version);
+    EXPECT_NE(version.error().find("schema_version must be 1"), std::string::npos);
 }
 
 }  // namespace

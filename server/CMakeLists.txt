@@ -5,9 +5,13 @@ find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
 find_package(lagrange_proto REQUIRED)
+find_package(lagrange_rigid_body_jolt REQUIRED)
 find_package(lagrange_rigid_body_mujoco REQUIRED)
 find_package(lagrange_rigid_body_substitutes REQUIRED)
 find_package(lagrange_sensors REQUIRED)
+find_package(lagrange_electrical REQUIRED)
+find_package(lagrange_thermal REQUIRED)
+find_package(lagrange_recording REQUIRED)
 find_package(lagrange_meshes REQUIRED)
 find_package(lagrange_ros2 REQUIRED)
 find_package(lagrange_stage REQUIRED)
@@ -59,9 +63,13 @@ target_link_libraries(
     lagrange_server
     PUBLIC lagrange_core::lagrange_core lagrange_proto::lagrange_proto_transport
     PRIVATE
+        lagrange_rigid_body_jolt::lagrange_rigid_body_jolt
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
         lagrange_rigid_body_substitutes::lagrange_rigid_body_substitutes
         lagrange_sensors::lagrange_sensors
+        lagrange_electrical::lagrange_electrical
+        lagrange_thermal::lagrange_thermal
+        lagrange_recording::lagrange_recording
         lagrange_meshes::lagrange_meshes
         lagrange_ros2::lagrange_ros2
         lagrange_stage::lagrange_stage
@@ -112,7 +120,11 @@ target_compile_definitions(
 )
 target_link_libraries(
     lagrange_cli
-    PRIVATE lagrange_server_cli lagrange_gpu::lagrange_gpu yaml-cpp::yaml-cpp
+    PRIVATE
+        lagrange_server_cli
+        lagrange_gpu::lagrange_gpu
+        yaml-cpp::yaml-cpp
+        lagrange_electrical::lagrange_electrical
 )
 
 add_executable(lagrange_import src/import_main.cpp)
@@ -140,22 +152,27 @@ install(
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
     find_package(lagrange_schemas REQUIRED)
+    find_package(lagrange_models REQUIRED)
+    get_filename_component(models_share "${lagrange_models_DIR}/.." ABSOLUTE)
     get_filename_component(schemas_share "${lagrange_schemas_DIR}/.." ABSOLUTE)
     ament_add_gtest(
         test_server
         test/test_map_export.cpp
         test/test_profile.cpp
+        test/test_backends.cpp
         test/test_recorder.cpp
         test/test_robot.cpp
         test/test_server.cpp
         test/test_toggles.cpp
         test/test_usd_assets.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal"
         TIMEOUT 120
     )
     target_link_libraries(
         test_server
         lagrange_server
+        lagrange_electrical::lagrange_electrical
+        lagrange_rigid_body_jolt::lagrange_rigid_body_jolt
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
         lagrange_sensors::lagrange_sensors
         lagrange_stage::lagrange_stage
@@ -173,8 +190,38 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_AMR_MJCF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.xml"
             LAGRANGE_TEST_ARM_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/primitives_arm/primitives_arm.urdf"
             LAGRANGE_TEST_AMR_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.usda"
+            LAGRANGE_TEST_DC_DRIVE_FMU="${models_share}/fmu/dc_drive.fmu"
+            LAGRANGE_TEST_AMR_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.overlay.yaml"
+            LAGRANGE_TEST_AMR_POWERED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive_powered.usda"
             LAGRANGE_TEST_WAREHOUSE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.usda"
+            LAGRANGE_TEST_ARM6_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.urdf"
+            LAGRANGE_TEST_ARM6_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.overlay.yaml"
+            LAGRANGE_TEST_RACK_BAKED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/rack_sample/rack_baked.usda"
+            LAGRANGE_TEST_WORKCELL_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_arm6.urdf"
     )
+    # The arm with ros2_control in the loop: the standard spawner and joint_trajectory_controller.
+    find_package(trajectory_msgs REQUIRED)
+    ament_add_gtest(
+        test_arm
+        test/test_arm.cpp
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal"
+        TIMEOUT 180
+    )
+    target_link_libraries(
+        test_arm
+        lagrange_server
+        rclcpp::rclcpp
+        ${trajectory_msgs_TARGETS}
+    )
+    target_compile_definitions(
+        test_arm
+        PRIVATE
+            LAGRANGE_TEST_ARM6_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.urdf"
+            LAGRANGE_TEST_ARM6_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.overlay.yaml"
+            LAGRANGE_TEST_ARM6_CONTROLLERS="${CMAKE_CURRENT_SOURCE_DIR}/../demos/config/arm6_controllers.yaml"
+            LAGRANGE_TEST_WORKCELL_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_arm6.urdf"
+    )
+    lagrange_target_defaults(test_arm)
     lagrange_target_defaults(test_server)
     # The installed tool end to end: exit 0 for the valid example, 1 for an invalid one.
     set(_lagrange_cli_robot

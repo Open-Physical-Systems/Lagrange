@@ -1,0 +1,102 @@
+# Power system of the sample AMR (docs/design/formats.md §9): two wheel drives on a 48 V bus fed
+# by an LFP battery, and the onboard computer as a load; and its thermal nodes: the motors and
+# the battery, each linked to the chassis. Applied to amr_diffdrive.urdf by
+# `lagrange_import --overlay` and `lagrange_server --overlay`. Parameters are illustrative, not a
+# real product. Sizing:
+#   - drive current limit 8 A: 0.085 N·m/A x 8 A x 20 x 0.92 = 12.5 N·m at the wheel, above the
+#     URDF's 10 N·m effort limit, so the joint limit stays the binding one;
+#   - top wheel speed 20 rad/s is 400 rad/s at the motor: back-EMF 0.085 x 400 = 34 V, inside
+#     the bus voltage;
+#   - 16 LFP cells in series (51.2 V nominal), 20 Ah.
+# Thermal: a motor of about 0.5 kg (225 J/K) with a class F winding (derating from 120 °C, limit
+# 155 °C); the pack of about 8 kg of cells (8000 J/K), derating from 45 °C, limit 60 °C; the
+# chassis 9000 J/K. Temperatures in K.
+schema_version: 1
+apply:
+  - create: power/battery
+    schemas:
+      BatteryAPI_1:
+        elec:battery:chemistry: lfp
+        elec:battery:seriesCells: 16
+        elec:battery:capacity: 72000.0           # C (20 Ah)
+        elec:battery:ocvSoc: [0.0, 0.1, 0.5, 0.9, 1.0]
+        elec:battery:ocvVoltage: [2.80, 3.20, 3.28, 3.33, 3.45]   # V per cell
+        elec:battery:r0: 0.0015                  # ohm per cell
+        elec:battery:r1: 0.0008                  # ohm per cell
+        elec:battery:c1: 12000.0                 # F per cell
+        elec:battery:cutoffVoltage: 44.8         # V, 2.8 V per cell
+        elec:battery:maxChargeCurrent: 10.0      # A
+      PortAPI_1:dc_out:
+        elec:port:dc_out:nominalVoltage: 51.2    # V
+        elec:port:dc_out:maxCurrent: 40.0        # A
+        elec:port:dc_out:connectedTo: power/dc_48v
+      ThermalAPI_1:
+        thermal:heatCapacity: 8000.0             # J/K
+        thermal:convectionArea: 0.1              # m²
+        thermal:deratingStart: 318.15            # K (45 °C)
+        thermal:maxTemperature: 333.15           # K (60 °C)
+      ThermalLinkAPI_1:to_chassis:
+        thermal:link:to_chassis:conductance: 2.0 # W/K
+        thermal:link:to_chassis:target: base_link
+  - create: power/dc_48v
+    schemas:
+      ElectricalBusAPI_1:
+        elec:bus:capacitance: 0.0047             # F
+        elec:bus:undervoltageTrip: 42.0          # V
+        elec:bus:overvoltageTrip: 60.0           # V
+  - create: power/computer
+    schemas:
+      ElectricalLoadAPI_1:
+        elec:load:model: constant_power
+        elec:load:power: 45.0                    # W
+        elec:load:minVoltage: 36.0               # V
+        elec:powerPort: power/dc_48v
+  - prim: left_wheel_joint
+    create_child: left_drive_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:windingResistance: 0.12             # ohm at 25 °C
+        elec:inductance: 0.00031                 # H
+        elec:torqueConstant: 0.085               # N·m/A
+        elec:polePairs: 4
+        elec:rotorInertia: 0.00012               # kg·m²
+        elec:gearRatio: 20.0
+        elec:gearEfficiency: 0.92
+        elec:maxCurrent: 8.0                     # A
+        elec:joint: left_wheel_joint
+        elec:powerPort: power/dc_48v
+      ThermalAPI_1:
+        thermal:heatCapacity: 225.0              # J/K
+        thermal:convectionArea: 0.02             # m²
+        thermal:deratingStart: 393.15            # K (120 °C)
+        thermal:maxTemperature: 428.15           # K (155 °C)
+      ThermalLinkAPI_1:to_chassis:
+        thermal:link:to_chassis:conductance: 0.5 # W/K
+        thermal:link:to_chassis:target: base_link
+  - prim: right_wheel_joint
+    create_child: right_drive_motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:windingResistance: 0.12
+        elec:inductance: 0.00031
+        elec:torqueConstant: 0.085
+        elec:polePairs: 4
+        elec:rotorInertia: 0.00012
+        elec:gearRatio: 20.0
+        elec:gearEfficiency: 0.92
+        elec:maxCurrent: 8.0
+        elec:joint: right_wheel_joint
+        elec:powerPort: power/dc_48v
+      ThermalAPI_1:
+        thermal:heatCapacity: 225.0              # J/K
+        thermal:convectionArea: 0.02             # m²
+        thermal:deratingStart: 393.15            # K (120 °C)
+        thermal:maxTemperature: 428.15           # K (155 °C)
+      ThermalLinkAPI_1:to_chassis:
+        thermal:link:to_chassis:conductance: 0.5 # W/K
+        thermal:link:to_chassis:target: base_link
+  - prim: base_link
+    schemas:
+      ThermalAPI_1:
+        thermal:heatCapacity: 9000.0             # J/K
+        thermal:convectionArea: 0.9              # m²

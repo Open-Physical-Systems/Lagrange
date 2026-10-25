@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <filesystem>
 #include <jsoncons/json.hpp>
 #include <jsoncons_ext/jsonschema/jsonschema.hpp>
 
@@ -17,6 +18,12 @@ namespace jsonschema = jsoncons::jsonschema;
 constexpr double kNsPerS = 1e9;
 constexpr std::int64_t kMinPhysicsDtNs = 100'000;     // 0.1 ms, as DomainState advertises
 constexpr std::int64_t kMaxPhysicsDtNs = 10'000'000;  // 10 ms
+// The electrical network's step range (domains/electrical.md §4), as DomainState advertises.
+constexpr std::int64_t kMinElectricalDtNs = 10'000;     // 10 µs
+constexpr std::int64_t kMaxElectricalDtNs = 1'000'000;  // 1 ms
+// The thermal network's step range (domains/thermal.md §4).
+constexpr std::int64_t kMinThermalDtNs = 1'000'000;       // 1 ms
+constexpr std::int64_t kMaxThermalDtNs = 10'000'000'000;  // 10 s
 
 /// A YAML document as JSON, for the schema. Scalars keep YAML 1.2 core meanings: true/false,
 /// null and ~, integers, floats; anything else is a string.
@@ -129,6 +136,20 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 continue;  // the schema reported it
             }
             const bool enabled = domain["enabled"].as<bool>();
+            if (name == "electrical" && domain.contains("speed_prediction") &&
+                domain["speed_prediction"].is_bool()) {
+                settings.speedPrediction = domain["speed_prediction"].as<bool>();
+            }
+            if (name == "thermal" && domain.contains("ambient_temperature") &&
+                domain["ambient_temperature"].is_number()) {
+                settings.ambientTemperatureK = domain["ambient_temperature"].as<double>();
+            }
+            if (name == "thermal" && enabled && context.modules.contains("thermal") &&
+                !settings.ambientTemperatureK && !context.ambientKnown) {
+                error(check, at + "/ambient_temperature",
+                      "the thermal domain needs the site's ambient temperature (K); it has no "
+                      "default");
+            }
             if (domain.contains("dt") && domain["dt"].is_number()) {
                 const double ns = domain["dt"].as<double>() * kNsPerS;
                 if (std::abs(ns - std::round(ns)) > 1e-6) {
@@ -140,6 +161,21 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                     } else {
                         settings.rigidBodyDtNs = step;
                     }
+                } else if (name == "thermal") {
+                    const auto step = static_cast<std::int64_t>(std::llround(ns));
+                    if (step < kMinThermalDtNs || step > kMaxThermalDtNs) {
+                        error(check, at + "/dt", "the thermal step must be from 0.001 to 10 s");
+                    } else {
+                        settings.thermalDtNs = step;
+                    }
+                } else if (name == "electrical") {
+                    const auto step = static_cast<std::int64_t>(std::llround(ns));
+                    if (step < kMinElectricalDtNs || step > kMaxElectricalDtNs) {
+                        error(check, at + "/dt",
+                              "the electrical step must be from 0.00001 to 0.001 s");
+                    } else {
+                        settings.electricalDtNs = step;
+                    }
                 }
             }
             if (enabled) {
@@ -149,9 +185,23 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                               " has no module in this server yet; disable it and name a "
                               "substitute");
                 }
-                if (name == "rigid_body" && domain.contains("backend") &&
-                    domain["backend"].as<std::string>() != "mujoco") {
-                    error(check, at + "/backend", "this server's rigid body backend is mujoco");
+                if (name == "rigid_body" && domain.contains("backend")) {
+                    const std::string backend = domain["backend"].as<std::string>();
+                    if (backend != "mujoco" && backend != "jolt") {
+                        error(check, at + "/backend",
+                              "this server's rigid body backends are mujoco and jolt");
+                    } else {
+                        settings.rigidBodyBackend = backend;
+                    }
+                }
+                if (name == "electrical" && domain.contains("fidelity")) {
+                    const std::string fidelity = domain["fidelity"].as<std::string>();
+                    if (fidelity != "averaged" && fidelity != "fmu") {
+                        error(check, at + "/fidelity",
+                              "this server's electrical fidelities are averaged and fmu");
+                    } else {
+                        settings.electricalFidelity = fidelity;
+                    }
                 }
                 if (name == "sensors" && domain.contains("only")) {
                     warning(check, at + "/only", "not applied yet: every sensor is simulated");
@@ -160,6 +210,24 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
             }
             if (context.modules.contains(name)) {
                 settings.substituted.insert(name);
+            }
+            if (name == "rigid_body") {
+                // A replay names its recording on the domain or in the substitute object.
+                const jsoncons::json* source = nullptr;
+                if (domain.contains("source")) {
+                    source = &domain["source"];
+                } else if (domain.contains("substitute") && domain["substitute"].is_object() &&
+                           domain["substitute"].contains("source")) {
+                    source = &domain["substitute"]["source"];
+                }
+                if (source != nullptr && source->is_string()) {
+                    const std::string file = source->as<std::string>();
+                    if (!std::filesystem::exists(file)) {
+                        error(check, at + "/source", "the recording " + file + " does not exist");
+                    } else {
+                        settings.rigidBodyReplay = file;
+                    }
+                }
             }
             if (domain.contains("substitute")) {
                 const jsoncons::json& substitute = domain["substitute"];

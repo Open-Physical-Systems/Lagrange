@@ -61,7 +61,7 @@ bool isSensorType(const std::string& typeName) {
 struct Sensor {
     std::uint32_t prim{kNone};
     Kind kind{Kind::Other};
-    std::shared_ptr<SensorStream> stream;  // sensors that send frames (lidar)
+    std::shared_ptr<SensorStream> stream;  // sensors that send frames (lidar, camera)
     std::size_t signals{0};                // sensors that send signals (IMU)
     std::int64_t signalDtNs{0};
     // Frame rate, measured.
@@ -140,7 +140,7 @@ private:
             sensor.prim = i;
             sensor.kind = kindOf(prims[i].typeName);
             sensor.countedAt = ImGui::GetTime();
-            if (sensor.kind == Kind::Lidar) {
+            if (sensor.kind == Kind::Lidar || sensor.kind == Kind::Camera) {
                 sensor.stream = context.client.watchSensor(prims[i].path);
                 sensor.countedFrames = sensor.stream->frames();
             }
@@ -222,7 +222,11 @@ public:
             const bool receiving =
                 sensor.stream ? sensor.stream->frames() != 0 : sensor.signals != 0;
             char detail[96];
-            if (sensor.stream) {
+            if (sensor.stream && sensor.kind == Kind::Camera) {
+                const std::shared_ptr<const SensorImage> image = sensor.stream->latestImage();
+                std::snprintf(detail, sizeof(detail), "%u×%u  ·  %.1f Hz",
+                              image ? image->width : 0U, image ? image->height : 0U, sensor.rateHz);
+            } else if (sensor.stream) {
                 const std::shared_ptr<const PointCloud> cloud = sensor.stream->latest();
                 std::snprintf(detail, sizeof(detail), "%.1f Hz  ·  %u pts", sensor.rateHz,
                               cloud ? cloud->count : 0U);
@@ -304,7 +308,7 @@ public:
         }
         const Sensor* lidar = state_->first(Kind::Lidar);
         if (lidar == nullptr) {
-            ImGui::SetCursorPos(ImVec2(px(8.0F), px(8.0F)));
+            ImGui::SetCursorPos(ImVec2(px(8.0F), ImGui::GetCursorPosY() + px(8.0F)));
             if (!emptyState(context, *state_)) {
                 widgets::Caption("This stage has no lidar.");
             }
@@ -486,6 +490,86 @@ private:
     std::shared_ptr<SensorsState> state_;
 };
 
+// --- camera -------------------------------------------------------------------------------
+
+class CameraPanel final : public Panel {
+public:
+    explicit CameraPanel(std::shared_ptr<SensorsState> state) : state_(std::move(state)) {}
+    [[nodiscard]] const char* title() const override { return "Camera"; }
+    [[nodiscard]] Workspace workspace() const override { return Workspace::Sensors; }
+
+    void draw(PanelContext& context) override {
+        state_->follow(context);
+        const Sensor* camera = state_->first(Kind::Camera);
+        // Design: the tab names the camera.
+        const std::string name = camera != nullptr && context.scene
+                                     ? context.scene->statics->prims[camera->prim].name
+                                     : std::string("Camera");
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
+        const bool open = ImGui::Begin((name + "###Camera").c_str());
+        ImGui::PopStyleVar();
+        if (!open) {
+            ImGui::End();
+            return;
+        }
+        if (widgets::BeginPanelTools("##camera-tools", px(150.0F))) {
+            static constexpr std::array<const char*, 3> kModes{"rgb", "depth", "labels"};
+            widgets::Segmented("##mode", kModes.data(), 3, &mode_);
+            widgets::EndPanelTools();
+        }
+        const std::shared_ptr<const SensorImage> image =
+            camera != nullptr && camera->stream ? camera->stream->latestImage() : nullptr;
+        if (camera == nullptr || !image || mode_ != 0) {
+            ImGui::SetCursorPos(ImVec2(px(8.0F), ImGui::GetCursorPosY() + px(8.0F)));
+            if (!emptyState(context, *state_)) {
+                ImGui::PushTextWrapPos(0.0F);
+                widgets::Caption("%s", camera == nullptr ? "This stage has no camera."
+                                       : mode_ != 0
+                                           ? "This server sends the colour image only."
+                                           : "Waiting for the first image (the sensors domain "
+                                             "may be on ground truth, which renders nothing).");
+                ImGui::PopTextWrapPos();
+            }
+            ImGui::End();
+            return;
+        }
+        // Design: the image across the panel's width at its own aspect, then a mono footer.
+        const ImVec2 available = ImGui::GetContentRegionAvail();
+        const float footer = px(28.0F);
+        const float aspect = static_cast<float>(image->height) / static_cast<float>(image->width);
+        float width = available.x;
+        float height = width * aspect;
+        if (height > available.y - footer) {
+            height = std::max(available.y - footer, 1.0F);
+            width = height / aspect;
+        }
+        const std::uint64_t texture =
+            context.sensorTextures != nullptr ? context.sensorTextures->texture(name, image) : 0;
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        if (texture != 0) {
+            ImGui::SetCursorScreenPos(ImVec2(at.x + (available.x - width) * 0.5F, at.y));
+            ImGui::Image(static_cast<ImTextureID>(texture), ImVec2(width, height));
+        } else {
+            ImGui::Dummy(ImVec2(width, height));
+        }
+        ImGui::SetCursorScreenPos(ImVec2(at.x + px(10.0F), at.y + height + px(8.0F)));
+        ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
+        ImGui::TextColored(c::t2, "%u×%u", image->width, image->height);
+        ImGui::SameLine(0.0F, px(14.0F));
+        ImGui::TextColored(c::t2, "%.1f Hz", camera->rateHz);
+        ImGui::SameLine(0.0F, px(14.0F));
+        ImGui::TextColored(c::t2, "t %.3f s", static_cast<double>(image->simTimeNs) * 1e-9);
+        ImGui::SameLine(0.0F, px(14.0F));
+        ImGui::TextColored(c::t3, "raster · no sensor model");
+        ImGui::PopFont();
+        ImGui::End();
+    }
+
+private:
+    std::shared_ptr<SensorsState> state_;
+    int mode_{0};
+};
+
 // --- summary of the selected sensor -------------------------------------------------------
 
 class DegradationPanel final : public Panel {
@@ -576,6 +660,7 @@ std::vector<std::unique_ptr<Panel>> createSensorsPanels() {
     std::vector<std::unique_ptr<Panel>> panels;
     panels.push_back(std::make_unique<SensorListPanel>(state));
     panels.push_back(std::make_unique<LidarPanel>(state));
+    panels.push_back(std::make_unique<CameraPanel>(state));
     panels.push_back(std::make_unique<ImuPanel>(state));
     panels.push_back(std::make_unique<DegradationPanel>(state));
     return panels;

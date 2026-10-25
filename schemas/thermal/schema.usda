@@ -1,0 +1,92 @@
+#usda 1.0
+(
+    """Lagrange thermal schemas (RFC 0002, docs/design/formats.md section 3.2). Codeless: the
+    stage loader reads the attributes by name. Units: the lagrangeUnit field of each attribute.
+    A node's heat sources are the loss_power signals of the component on the same prim (a
+    motor, a battery); links carry heat between nodes."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeThermal"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "ThermalAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """One lumped thermal node: a heat capacity exchanging heat with the air (convection),
+    the sky (radiation), the sun, and other nodes through ThermalLinkAPI_1."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double thermal:heatCapacity (
+        lagrangeUnit = "J/K"
+        doc = "Lumped heat capacity of the node. Required."
+    )
+    double thermal:initialTemperature (
+        lagrangeUnit = "K"
+        doc = "Temperature at the start; unauthored: the ambient air temperature."
+    )
+    double thermal:convectionArea = 0 (
+        lagrangeUnit = "m2"
+        doc = "Area exchanging heat with the air."
+    )
+    double thermal:convectionCoeff = 10 (
+        lagrangeUnit = "W/(m2.K)"
+        doc = "Heat transfer coefficient in still air (natural convection)."
+    )
+    double thermal:forcedConvectionExponent = 0.8 (
+        lagrangeUnit = "1"
+        doc = "Exponent of the airspeed dependence of the coefficient (with the aerodynamics domain)."
+    )
+    double thermal:emissivity = 0.9 (
+        lagrangeUnit = "1"
+        doc = "Emissivity for radiative exchange with the sky, 0 to 1."
+    )
+    double thermal:radiativeArea = 0 (
+        lagrangeUnit = "m2"
+        doc = "Area radiating to the sky."
+    )
+    double thermal:solarAbsorptivity = 0.7 (
+        lagrangeUnit = "1"
+        doc = "Fraction of the solar irradiance absorbed, 0 to 1."
+    )
+    double thermal:solarArea = 0 (
+        lagrangeUnit = "m2"
+        doc = "Area facing the sun."
+    )
+    double thermal:maxTemperature (
+        lagrangeUnit = "K"
+        doc = "At or above this the node is over temperature and its component derates to zero."
+    )
+    double thermal:deratingStart (
+        lagrangeUnit = "K"
+        doc = "Above this the component derates linearly, to zero at maxTemperature."
+    )
+}
+
+class "ThermalLinkAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A thermal conductance from this node to another. Multiple-apply: the instance name
+    names the link, e.g. ThermalLinkAPI_1:to_chassis gives thermal:link:to_chassis:*."""
+    customData = {
+        token apiSchemaType = "multipleApply"
+        token propertyNamespacePrefix = "thermal:link"
+    }
+)
+{
+    double conductance (
+        lagrangeUnit = "W/K"
+        doc = "Conductance of the path. Required."
+    )
+    rel target (
+        doc = "The other node (a prim with ThermalAPI_1). Required."
+    )
+}

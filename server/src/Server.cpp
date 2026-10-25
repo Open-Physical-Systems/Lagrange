@@ -1,8 +1,12 @@
 #include "Recorder.hpp"
+#include "lagrange/electrical/IdealTorqueSource.hpp"
+#include "lagrange/electrical/Network.hpp"
 #include "lagrange/importers/Importers.hpp"
 #include "lagrange/proto/Connection.hpp"
 #include "lagrange/proto/Framing.hpp"
+#include "lagrange/recording/Recording.hpp"
 #include "lagrange/rigid_body/FixedRobot.hpp"
+#include "lagrange/rigid_body/JoltBackend.hpp"
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/ros2/Bridge.hpp"
 #include "lagrange/ros2_control/ControllerHost.hpp"
@@ -14,21 +18,27 @@
 #include "lagrange/server/Server.hpp"
 #include "lagrange/services/Log.hpp"
 #include "lagrange/services/WrenchSum.hpp"
+#include "lagrange/stage/Stage.hpp"
+#include "lagrange/thermal/ThermalNetwork.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
 #include "lagrange/world/LidarLayout.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <memory>
+#include <optional>
 #include <poll.h>
 #include <set>
+#include <span>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -120,6 +130,174 @@ template <class T>
 void setInline(v1::DataRef& ref, const std::vector<T>& values) {
     ref.set_inline_(values.data(), values.size() * sizeof(T));
     ref.set_size(values.size() * sizeof(T));
+}
+
+/// A collider's shape as a mesh at its size (World::Colliders conventions: half extents, radius
+/// and half length), for drawing; empty for a plane.
+TriMesh colliderMesh(ShapeType shape, const std::array<double, 3>& size, const ConvexHull* hull) {
+    constexpr int kSegments = 24;  // round shapes: enough to read the shape, cheap to draw
+    constexpr int kRings = 12;
+    const auto append = [](TriMesh& to, const TriMesh& from, double dz) {
+        const auto base = static_cast<std::uint32_t>(to.positions.size() / 3);
+        for (std::size_t v = 0; v < from.positions.size(); v += 3) {
+            to.positions.insert(to.positions.end(),
+                                {from.positions[v], from.positions[v + 1],
+                                 from.positions[v + 2] + static_cast<float>(dz)});
+        }
+        to.normals.insert(to.normals.end(), from.normals.begin(), from.normals.end());
+        for (const std::uint32_t i : from.indices) {
+            to.indices.push_back(base + i);
+        }
+    };
+    switch (shape) {
+        case ShapeType::Plane:
+            return {};
+        case ShapeType::Sphere:
+            return sphereMesh(size[0], kSegments, kRings);
+        case ShapeType::Box:
+            return boxMesh(2.0 * size[0], 2.0 * size[1], 2.0 * size[2]);
+        case ShapeType::Cylinder:
+            return cylinderMesh(size[0], 2.0 * size[1], kSegments);
+        case ShapeType::Capsule: {
+            TriMesh mesh = cylinderMesh(size[0], 2.0 * size[1], kSegments);
+            const TriMesh cap = sphereMesh(size[0], kSegments, kRings);
+            append(mesh, cap, size[1]);
+            append(mesh, cap, -size[1]);
+            return mesh;
+        }
+        case ShapeType::ConvexHull: {
+            TriMesh mesh;
+            if (hull == nullptr || hull->points.empty()) {
+                return mesh;
+            }
+            std::array<double, 3> centre{};
+            for (const auto& p : hull->points) {
+                for (std::size_t a = 0; a < 3; ++a) {
+                    centre.at(a) += p.at(a) / static_cast<double>(hull->points.size());
+                }
+            }
+            // Flat faces, each turned away from the centre whatever the triangle's winding.
+            for (const auto& t : hull->triangles) {
+                std::array<std::array<double, 3>, 3> corner{
+                    hull->points.at(t[0]), hull->points.at(t[1]), hull->points.at(t[2])};
+                const std::array<double, 3> u{corner[1][0] - corner[0][0],
+                                              corner[1][1] - corner[0][1],
+                                              corner[1][2] - corner[0][2]};
+                const std::array<double, 3> v{corner[2][0] - corner[0][0],
+                                              corner[2][1] - corner[0][1],
+                                              corner[2][2] - corner[0][2]};
+                std::array<double, 3> n{u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
+                                        u[0] * v[1] - u[1] * v[0]};
+                const double length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+                if (length <= 0.0) {
+                    continue;
+                }
+                double outward = 0.0;
+                for (std::size_t a = 0; a < 3; ++a) {
+                    outward += n.at(a) * (corner[0].at(a) - centre.at(a));
+                }
+                if (outward < 0.0) {
+                    std::swap(corner[1], corner[2]);
+                    n = {-n[0], -n[1], -n[2]};
+                }
+                for (const auto& p : corner) {
+                    mesh.indices.push_back(static_cast<std::uint32_t>(mesh.positions.size() / 3));
+                    for (std::size_t a = 0; a < 3; ++a) {
+                        mesh.positions.push_back(static_cast<float>(p.at(a)));
+                        mesh.normals.push_back(static_cast<float>(n.at(a) / length));
+                    }
+                }
+            }
+            return mesh;
+        }
+    }
+    return {};
+}
+
+/// A schema's unit text ("N.m/A", "W/(m2.K)", "ohm") as a label: "N·m/A", "W/(m²·K)", "Ω".
+std::string displayUnit(const std::string& text) {
+    static constexpr std::array<const char*, 10> kSuperscript{"⁰", "¹", "²", "³", "⁴",
+                                                              "⁵", "⁶", "⁷", "⁸", "⁹"};
+    std::string out;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const char ch = text[i];
+        const bool afterSymbol =
+            i > 0 &&
+            (std::isalpha(static_cast<unsigned char>(text[i - 1])) != 0 || text[i - 1] == ')');
+        if (ch == '.') {
+            out += "·";
+        } else if (afterSymbol && ch == '-' && i + 1 < text.size() &&
+                   std::isdigit(static_cast<unsigned char>(text[i + 1])) != 0) {
+            out += "⁻";
+        } else if ((afterSymbol || (!out.empty() && out.ends_with("⁻"))) &&
+                   std::isdigit(static_cast<unsigned char>(ch)) != 0) {
+            out += kSuperscript.at(static_cast<std::size_t>(ch - '0'));
+        } else if (text.compare(i, 3, "ohm") == 0) {
+            out += "Ω";
+            i += 2;
+        } else {
+            out += ch;
+        }
+    }
+    return out;
+}
+
+/// The scene a recording starts with (its SceneSnapshot) as a model to replay: prims at their
+/// recorded poses, meshes and materials. No bodies: a replay moves prims by their recorded
+/// "scene<path>/pose" signals.
+Expected<Model, std::string> modelOfSnapshot(const std::string& bytes) {
+    v1::SceneSnapshot snap;
+    if (bytes.empty() || !snap.ParseFromString(bytes)) {
+        return Unexpected{std::string("the recording has no scene snapshot to show")};
+    }
+    Model model;
+    model.name = "replay";
+    model.sourcePath = snap.stage_path();
+    const std::string& poses = snap.transforms().inline_();
+    constexpr std::size_t kPoseBytes = 52;  // appendPose with scale
+    for (int i = 0; i < snap.prims_size(); ++i) {
+        const v1::Prim& in = snap.prims(i);
+        ScenePrim prim;
+        prim.name = in.name();
+        prim.path = in.path();
+        prim.parent = in.parent();
+        prim.typeName = in.type_name();
+        prim.apiSchemas.assign(in.api_schemas().begin(), in.api_schemas().end());
+        prim.mesh = in.mesh();
+        prim.material = in.material();
+        const std::size_t at = static_cast<std::size_t>(i) * kPoseBytes;
+        if (at + kPoseBytes <= poses.size()) {
+            std::array<float, 4> q{};
+            std::memcpy(prim.offset.position.data(), poses.data() + at, 24);
+            std::memcpy(q.data(), poses.data() + at + 24, 16);
+            std::memcpy(prim.scale.data(), poses.data() + at + 40, 12);
+            prim.offset.orientation = {q[0], q[1], q[2], q[3]};
+        }
+        model.scene.prims.push_back(std::move(prim));
+    }
+    const auto floats = [](const v1::DataRef& ref) {
+        std::vector<float> out(ref.inline_().size() / sizeof(float));
+        std::memcpy(out.data(), ref.inline_().data(), out.size() * sizeof(float));
+        return out;
+    };
+    for (const v1::Mesh& in : snap.meshes()) {
+        TriMesh mesh;
+        mesh.positions = floats(in.positions());
+        mesh.normals = floats(in.normals());
+        mesh.indices.resize(in.indices().inline_().size() / sizeof(std::uint32_t));
+        std::memcpy(mesh.indices.data(), in.indices().inline_().data(),
+                    mesh.indices.size() * sizeof(std::uint32_t));
+        model.scene.meshes.push_back(std::move(mesh));
+    }
+    for (const v1::Material& in : snap.materials()) {
+        SceneMaterial material;
+        material.name = in.name();
+        for (int c = 0; c < std::min(in.base_color_size(), 4); ++c) {
+            material.rgba.at(static_cast<std::size_t>(c)) = in.base_color(c);
+        }
+        model.scene.materials.push_back(std::move(material));
+    }
+    return model;
 }
 
 std::string readFile(const std::string& path) {
@@ -238,19 +416,47 @@ struct Server::Impl {
         const auto off = [&settings](const char* domain) {
             return settings.substituted.contains(domain);
         };
+        if (replay) {
+            // Every domain the recording has, replayed: nothing is simulated.
+            auto next = std::make_unique<Scheduler>(SchedulerOptions{.deterministic = true});
+            std::set<std::string> domains;
+            for (const recording::Recording::CatalogEntry& entry : replay->catalog) {
+                domains.insert(entry.writer.substr(0, entry.writer.find('/')));
+            }
+            for (const std::string& domain : domains) {
+                next->add(
+                    std::make_unique<recording::ReplaySubstitute>(domain, options.replayPath));
+            }
+            auto wired = next->wire(WorldView(robot.world));
+            if (!wired) {
+                return Unexpected{"the recording cannot be replayed: " +
+                                  to_string(wired.error().front())};
+            }
+            return next;
+        }
         // A run that takes commands from ROS is not deterministic: its input comes from outside.
-        // So is one with the lidar on the GPU (invariant 7: the CPU is the reference).
-        auto next =
-            std::make_unique<Scheduler>(SchedulerOptions{.deterministic = !bridge && !rayContext});
-        if (off("rigid_body")) {
+        // So is one with the lidar on the GPU or rendering cameras (invariant 7: the CPU is the
+        // reference).
+        const bool rendering = cameraScene != nullptr && !off("sensors");
+        auto next = std::make_unique<Scheduler>(
+            SchedulerOptions{.deterministic = !bridge && !rayContext && !rendering});
+        if (off("rigid_body") && settings.rigidBodyReplay) {
+            // Bench mode: physics replayed from a recording, open loop.
+            next->add(std::make_unique<recording::ReplaySubstitute>("rigid_body",
+                                                                    *settings.rigidBodyReplay));
+        } else if (off("rigid_body")) {
             next->add(std::make_unique<rigid_body::FixedRobot>());
         } else {
             ModuleConfigData physics;
-            physics.backend = "mujoco";
+            physics.backend = settings.rigidBodyBackend.value_or(options.physics);
             if (settings.rigidBodyDtNs) {
                 physics.dt = Duration{*settings.rigidBodyDtNs};
             }
-            next->add(std::make_unique<rigid_body::MujocoBackend>(), ModuleConfig(physics));
+            if (physics.backend == "jolt") {
+                next->add(std::make_unique<rigid_body::JoltBackend>(), ModuleConfig(physics));
+            } else {
+                next->add(std::make_unique<rigid_body::MujocoBackend>(), ModuleConfig(physics));
+            }
         }
         if (controllers) {
             // ros2_control drives the joints; the controller manager outlives this scheduler.
@@ -275,12 +481,58 @@ struct Server::Impl {
             next->add(std::move(drive));
             next->add(std::make_unique<DiffDriveController>(driveSettings()));
         }
+        // The electrical domain turns the controllers' torque commands into joint torques: the
+        // network when the robot has motors (from USD or an overlay), else its ideal substitute
+        // (domains/electrical.md §5).
+        if (hasMotors() && !off("electrical")) {
+            ModuleConfigData power;
+            power.fidelity = settings.electricalFidelity.value_or("averaged");
+            // The physics step the joint speeds arrive at: speed prediction and the stability
+            // check (architecture.md §8). A fixed robot has no speeds to predict.
+            if (!off("rigid_body")) {
+                power.values.emplace(
+                    "exchange_step",
+                    static_cast<double>(settings.rigidBodyDtNs.value_or(1'000'000)) * 1e-9);
+            }
+            power.values.emplace("speed_prediction", settings.speedPrediction.value_or(true));
+            if (settings.electricalDtNs) {
+                power.dt = Duration{*settings.electricalDtNs};
+            }
+            const bool fmu = power.fidelity == "fmu";
+            next->add(std::make_unique<electrical::ElectricalNetwork>(), ModuleConfig(power));
+            // At fidelity fmu, motors with a behaviour model are their FMUs (formats.md §6).
+            if (fmu) {
+                for (electrical::FmuBinding& binding :
+                     electrical::motorFmuBindings(WorldView(robot.world))) {
+                    next->add(std::make_unique<electrical::FmuComponent>(std::move(binding)));
+                }
+            }
+        } else {
+            next->add(std::make_unique<electrical::IdealTorqueSource>());
+        }
+        // Thermal, after electrical: it reads the losses. It needs the site's ambient
+        // temperature; without one nothing stands in, and the electrical network keeps its
+        // reference temperatures.
+        if (hasThermalNodes() && settings.ambientTemperatureK) {
+            ModuleConfigData heat;
+            heat.fidelity = "lumped";
+            heat.values.emplace(thermal::kAmbientKey, *settings.ambientTemperatureK);
+            if (settings.thermalDtNs) {
+                heat.dt = Duration{*settings.thermalDtNs};
+            }
+            if (off("thermal")) {
+                next->add(std::make_unique<thermal::AmbientTemperature>(), ModuleConfig(heat));
+            } else {
+                next->add(std::make_unique<thermal::ThermalNetwork>(), ModuleConfig(heat));
+            }
+        }
         ModuleConfigData sensing;
         sensing.tier =
             rayContext ? static_cast<CapabilityTier>(rayContext->tier()) : CapabilityTier::Tier0;
         for (auto& sensor : off("sensors")
                                 ? sensors::createSensorSubstitutes(robot.world)
-                                : sensors::createSensorModules(robot.world, rayContext)) {
+                                : sensors::createSensorModules(robot.world, rayContext, cameraScene,
+                                                               !options.cameras)) {
             next->add(std::move(sensor), ModuleConfig(sensing));
         }
         // Always last: it sums the body/<b>/wrench/<source> written by the modules above.
@@ -301,17 +553,40 @@ struct Server::Impl {
         ProfileSettings settings;
         settings.substituted = options.substituted;
         settings.rigidBodyDtNs = rigidBodyDtNs;
+        settings.rigidBodyBackend = rigidBodyBackend;
+        settings.electricalDtNs = electricalDtNs;
+        settings.thermalDtNs = thermalDtNs;
+        settings.speedPrediction = speedPrediction;
+        settings.electricalFidelity = electricalFidelity;
+        settings.rigidBodyReplay = rigidBodyReplay;
+        if (!settings.rigidBodyReplay && !options.benchReplayPath.empty()) {
+            settings.rigidBodyReplay = options.benchReplayPath;  // --bench
+        }
+        settings.ambientTemperatureK = ambient();
         return settings;
     }
-    std::optional<std::int64_t> rigidBodyDtNs;  // from an applied profile
-    std::optional<ProfileSettings> pending;     // applied without restart: used at the next reset
+    /// The ambient temperature the run uses: an applied profile's, else the command line's.
+    std::optional<double> ambient() const {
+        return appliedAmbientK ? appliedAmbientK : options.ambientTemperatureK;
+    }
+    std::optional<std::int64_t> thermalDtNs;        // from an applied profile
+    std::optional<double> appliedAmbientK;          // from an applied profile
+    std::optional<bool> speedPrediction;            // from an applied profile
+    std::optional<std::string> electricalFidelity;  // from an applied profile
+    std::optional<std::string> rigidBodyReplay;     // --bench, or an applied profile
+    std::optional<std::int64_t> rigidBodyDtNs;      // from an applied profile
+    std::optional<std::string> rigidBodyBackend;    // from an applied profile
+    std::optional<std::int64_t> electricalDtNs;     // from an applied profile
+    std::optional<ProfileSettings> pending;  // applied without restart: used at the next reset
 
     Status build() {
-        auto made = makeScheduler(active(), &driveCommand);
+        DriveCommand* drive = nullptr;
+        auto made = makeScheduler(active(), &drive);
         if (!made) {
             return Status::error(StatusCode::InvalidConfig, made.error());
         }
         scheduler = std::move(*made);
+        driveCommand = drive;  // only now: a failed build leaves the run as it was
         bodyPose.assign(robot.world.bodies.names.size(), SignalId{});
         for (std::size_t b = 0; b < bodyPose.size(); ++b) {
             bodyPose[b] = scheduler->bus().find("body/" + robot.world.bodies.names[b] + "/pose");
@@ -330,6 +605,9 @@ struct Server::Impl {
             bridge->attach(robot.world, scheduler->bus());
         }
         lidarSent.assign(robot.world.sensors.names.size(), SimTime{-1});
+        if (replay) {
+            startReplay();
+        }
         return {};
     }
 
@@ -361,18 +639,21 @@ struct Server::Impl {
         return settings;
     }
 
-    /// The latest scan of each lidar to the viewers that watch it.
+    /// The latest scan of each lidar and image of each camera to the viewers that watch it.
     void sendSensorFrames() {
         const World::Sensors& table = robot.world.sensors;
         const SignalBus& bus = scheduler->bus();
         for (std::size_t s = 0; s < table.names.size(); ++s) {
-            if (table.type[s] != SensorType::Lidar) {
-                continue;
-            }
             const std::string& path = robot.scene.prims[robot.sensorPrim[s]].path;
             const bool watched = std::any_of(sessions.begin(), sessions.end(), [&](const auto& x) {
                 return x->greeted && x->sensors.contains(path);
             });
+            if (table.type[s] == SensorType::Camera && watched) {
+                sendImage(s, path);
+            }
+            if (table.type[s] != SensorType::Lidar) {
+                continue;
+            }
             const SignalId id = bus.find("sensor/" + table.names[s] + "/ranges");
             if (!watched || !id.valid() || bus.stamp(id) == lidarSent[s]) {
                 continue;
@@ -409,7 +690,37 @@ struct Server::Impl {
             }
         }
     }
-    std::vector<SimTime> lidarSent;
+    std::vector<SimTime> lidarSent;  // per sensor: stamp of the last frame sent (lidar, camera)
+
+    /// A camera's colour image (rgba8, inline), once per new frame. An empty buffer (the
+    /// ground-truth substitute, or before the first frame) is not sent.
+    void sendImage(std::size_t s, const std::string& path) {
+        const SignalBus& bus = scheduler->bus();
+        const SignalId id = bus.find("sensor/" + robot.world.sensors.names[s] + "/image");
+        if (!id.valid() || bus.stamp(id) == lidarSent[s]) {
+            return;
+        }
+        lidarSent[s] = bus.stamp(id);
+        const std::shared_ptr<const Buffer> image = bus.buffer(bus.readBuffer(id));
+        if (!image || image->bytes.empty()) {
+            return;
+        }
+        v1::Envelope envelope;
+        v1::SensorFrame& frame = *envelope.mutable_sensor_frame();
+        frame.set_sensor(path);
+        frame.mutable_sim_time()->set_ns(lidarSent[s].ns);
+        v1::ImageData& data = *frame.mutable_image();
+        data.set_width(image->width);
+        data.set_height(image->height);
+        data.set_encoding(image->encoding);
+        data.mutable_data()->set_inline_(image->bytes.data(), image->bytes.size());
+        data.mutable_data()->set_size(image->bytes.size());
+        for (auto& session : sessions) {
+            if (session->greeted && session->sensors.contains(path) && !session->congested()) {
+                session->send(envelope);
+            }
+        }
+    }
 
     /// Records the samples committed in the last tick of every signal a viewer subscribes to.
     void capture() {
@@ -460,6 +771,17 @@ struct Server::Impl {
             tickNs.push_back(nanosSince(tickStart, Clock::now()));
             capture();
             record();
+            if (replay) {
+                if (scheduler->now().ns % kCheckpointNs == 0) {
+                    checkpoint();
+                }
+                if (scheduler->now() >= replay->duration) {
+                    state = v1::RUN_STATE_PAUSED;  // the end of the recording
+                    owedNs = 0;
+                    log(v1::LOG_LEVEL_INFO, "replay", "end of the recording");
+                    break;
+                }
+            }
             if (bridge) {
                 bridge->publish(scheduler->bus(), scheduler->now());
             }
@@ -501,6 +823,10 @@ struct Server::Impl {
     }
 
     Status startRecording(const std::string& path) {
+        if (replay) {
+            return Status::error(StatusCode::Unsupported,
+                                 "a replay is not recorded again: copy the file instead");
+        }
         auto created = Recorder::create(path);
         if (!created) {
             return Status::error(StatusCode::InvalidConfig, created.error());
@@ -623,6 +949,14 @@ struct Server::Impl {
     // --- scene -----------------------------------------------------------------------------
 
     Pose primPose(const ScenePrim& prim) const {
+        if (!replayPose.empty()) {
+            const auto index = static_cast<std::size_t>(&prim - robot.scene.prims.data());
+            if (index < replayPose.size() && replayPose[index].valid()) {
+                const std::span<const double> v = scheduler->bus().readN(replayPose[index]);
+                return {{v[0], v[1], v[2]}, {v[3], v[4], v[5], v[6]}};
+            }
+            return prim.offset;
+        }
         if (prim.body == kNoIndex) {
             return prim.offset;
         }
@@ -696,6 +1030,7 @@ struct Server::Impl {
                 out.add_aabb(value);
             }
         }
+        colliders(snap);
         for (std::uint32_t m = 0; m < robot.scene.materials.size(); ++m) {
             const SceneMaterial& material = robot.scene.materials[m];
             v1::Material& out = *snap.add_materials();
@@ -705,6 +1040,11 @@ struct Server::Impl {
                 out.add_base_color(c);
             }
             out.set_roughness(0.6F);
+        }
+        if (replay) {
+            *snap.mutable_nets() = replayNets;  // the recorded power system
+        } else {
+            electricalNets(snap);
         }
         snap.set_topology_hash(WorldView(robot.world).topologyHash());
         snap.set_stage_path(robot.sourcePath);
@@ -758,8 +1098,156 @@ struct Server::Impl {
         return envelope;
     }
 
-    /// The scene prim a signal is about: body/<link>/... and joint/<joint>/... name it.
+    /// The collision shapes (scene.proto Collider), for the viewport's Collision shading: one
+    /// mesh per collider after the scene's meshes, placed in its body's prim (planes left out:
+    /// the ground is drawn already).
+    void colliders(v1::SceneSnapshot& snap) const {
+        const World& world = robot.world;
+        const World::Colliders& c = world.colliders;
+        for (std::size_t k = 0; k < c.body.size(); ++k) {
+            const TriMesh mesh = colliderMesh(
+                c.shape[k], c.size[k],
+                c.shape[k] == ShapeType::ConvexHull ? &world.hulls.at(c.hull[k]) : nullptr);
+            if (mesh.indices.empty()) {
+                continue;
+            }
+            std::uint32_t prim = kNoIndex;
+            Pose local = c.poseInBody[k];
+            if (c.body[k] != kWorldBody) {
+                const std::size_t b = c.body[k].index;
+                if (b >= robot.bodyPrim.size()) {
+                    continue;
+                }
+                prim = robot.bodyPrim[b];
+                // In the prim's frame: undo the prim's offset from its body.
+                const Pose& offset = robot.scene.prims[prim].offset;
+                const std::array<double, 4> back = conjugate(offset.orientation);
+                const std::array<double, 3> inPrim =
+                    rotate(back, {local.position[0] - offset.position[0],
+                                  local.position[1] - offset.position[1],
+                                  local.position[2] - offset.position[2]});
+                local = {inPrim, multiply(back, local.orientation)};
+            }
+            v1::Mesh& out = *snap.add_meshes();
+            out.set_id(static_cast<std::uint32_t>(snap.meshes_size() - 1));
+            out.set_vertex_count(static_cast<std::uint32_t>(mesh.positions.size() / 3));
+            out.set_index_count(static_cast<std::uint32_t>(mesh.indices.size()));
+            setInline(*out.mutable_positions(), mesh.positions);
+            setInline(*out.mutable_normals(), mesh.normals);
+            setInline(*out.mutable_indices(), mesh.indices);
+            v1::Collider& collider = *snap.add_colliders();
+            collider.set_prim(prim);
+            collider.set_mesh(out.id());
+            for (const double v : local.position) {
+                collider.add_position(v);
+            }
+            for (const double v : local.orientation) {
+                collider.add_rotation(static_cast<float>(v));
+            }
+        }
+    }
+
+    /// The electrical nets for the Electrical workspace (scene.proto ElectricalNet), from the
+    /// world's schemas: a net per ElectricalBusAPI prim; its terminals the battery ports,
+    /// motors, loads and converter sides connected to it, each with the current the network reports
+    /// for it; its limits the bus trips and the ports' current ratings.
+    void electricalNets(v1::SceneSnapshot& snap) const {
+        const World& world = robot.world;
+        const WorldView view(world);
+        const auto name = [&view](PrimId prim) {
+            return std::string(view.signalInstanceName(prim));
+        };
+        const auto volt = [](v1::Unit& unit) { setUnit(unit, units::V); };
+        const auto amp = [](v1::Unit& unit) { setUnit(unit, units::A); };
+        std::uint32_t id = 0;
+        for (const SchemaInstance& bus : world.schemaInstances) {
+            if (bus.schema != "ElectricalBusAPI_1") {
+                continue;
+            }
+            const std::string busName = name(bus.prim);
+            v1::ElectricalNet& net = *snap.add_nets();
+            net.set_id(id++);
+            net.set_name(busName);
+            net.set_bus_prim(scenePrimOf(bus.prim));
+            net.set_voltage_signal("bus/" + busName + "/voltage");
+            const auto connected = [&bus](std::span<const PrimId> targets) {
+                return std::ranges::find(targets, bus.prim) != targets.end();
+            };
+            for (const SchemaInstance& s : world.schemaInstances) {
+                const std::string component = name(s.prim);
+                if (s.schema == "PortAPI_1" &&
+                    connected(s.rel("elec:port:" + s.instance + ":connectedTo"))) {
+                    // A battery's port: its current out of the pack.
+                    const bool battery = std::ranges::any_of(
+                        world.schemaInstances, [&s](const SchemaInstance& other) {
+                            return other.prim == s.prim && other.schema == "BatteryAPI_1";
+                        });
+                    v1::NetTerminal& terminal = *net.add_terminals();
+                    terminal.set_prim(scenePrimOf(s.prim));
+                    terminal.set_port(s.instance);
+                    if (battery) {
+                        terminal.set_current_signal("battery/" + component + "/current");
+                    }
+                    if (const auto rating = s.real("elec:port:" + s.instance + ":maxCurrent");
+                        rating && battery) {
+                        v1::NetLimit& limit = *net.add_limits();
+                        limit.set_label(component + " current");
+                        limit.set_value(*rating);
+                        amp(*limit.mutable_unit());
+                        limit.set_upper(true);
+                        limit.set_signal(terminal.current_signal());
+                    }
+                } else if ((s.schema == "ElectricalMotorAPI_1" ||
+                            s.schema == "ElectricalLoadAPI_1") &&
+                           connected(s.rel("elec:powerPort"))) {
+                    const bool motor = s.schema == "ElectricalMotorAPI_1";
+                    v1::NetTerminal& terminal = *net.add_terminals();
+                    terminal.set_prim(scenePrimOf(s.prim));
+                    terminal.set_port("power");
+                    terminal.set_current_signal(motor ? "motor/" + component + "/bus_current"
+                                                      : "load/" + component + "/current");
+                } else if (s.schema == "ElectricalConverterAPI_1") {
+                    // A DC-DC converter is a terminal on both its nets: a sink on its input
+                    // net and a source (port named *_out, as a battery's) on its output net.
+                    for (const auto& [side, port] :
+                         {std::pair{"input", "dc_in"}, std::pair{"output", "dc_out"}}) {
+                        if (connected(s.rel(std::string("elec:conv:") + side))) {
+                            v1::NetTerminal& terminal = *net.add_terminals();
+                            terminal.set_prim(scenePrimOf(s.prim));
+                            terminal.set_port(port);
+                            terminal.set_current_signal("converter/" + component + "/" + side +
+                                                        "_current");
+                        }
+                    }
+                }
+            }
+            for (const auto& [attribute, label, upper] :
+                 {std::tuple{"elec:bus:overvoltageTrip", "OV trip", true},
+                  std::tuple{"elec:bus:undervoltageTrip", "UV trip", false}}) {
+                if (const auto value = bus.real(attribute); value && *value > 0.0) {
+                    v1::NetLimit& limit = *net.add_limits();
+                    limit.set_label(label);
+                    limit.set_value(*value);
+                    volt(*limit.mutable_unit());
+                    limit.set_upper(upper);
+                    limit.set_signal(net.voltage_signal());
+                }
+            }
+        }
+    }
+
+    /// The scene prim a signal is about: body/<link>/..., joint/<joint>/..., sensor/<sensor>/...
+    /// and the electrical and thermal components' motor/, battery/, load/, bus/, converter/ and
+    /// thermal/ <prim>/... name it.
     std::uint32_t primOfSignal(const std::string& name) const {
+        if (replay) {
+            for (const recording::Recording::CatalogEntry& entry : replay->catalog) {
+                if (entry.name == name) {
+                    return entry.prim;
+                }
+            }
+            return kNoIndex;
+        }
         const auto field = [&](std::string_view prefix) -> std::string {
             if (name.rfind(prefix, 0) != 0) {
                 return {};
@@ -786,6 +1274,17 @@ struct Server::Impl {
             for (std::size_t j = 0; j < world.joints.names.size(); ++j) {
                 if (world.joints.names[j] == joint) {
                     return robot.jointPrim[j];
+                }
+            }
+        }
+        for (const char* domain :
+             {"motor/", "battery/", "load/", "bus/", "converter/", "thermal/"}) {
+            if (const std::string component = field(domain); !component.empty()) {
+                const WorldView view(world);
+                for (std::uint32_t p = 0; p < world.prims.paths.size(); ++p) {
+                    if (view.signalInstanceName(PrimId{p}) == component) {
+                        return scenePrimOf(PrimId{p});
+                    }
                 }
             }
         }
@@ -893,6 +1392,10 @@ struct Server::Impl {
         s.set_real_time_factor_target(rtfTarget);
         s.set_real_time_factor(state == v1::RUN_STATE_RUNNING ? measuredRtf : 0.0);
         s.set_error(error);
+        if (replay) {
+            s.mutable_replay_begin()->set_ns(0);
+            s.mutable_replay_end()->set_ns(replay->duration.ns);
+        }
         return envelope;
     }
     double measuredRtf{0.0};
@@ -925,6 +1428,14 @@ struct Server::Impl {
     }
 
     bool hasSensors() const { return !robot.world.sensors.names.empty(); }
+    /// Motors to simulate: ElectricalMotorAPI_1 prims from USD or an overlay.
+    /// Thermal nodes: ThermalAPI_1 prims.
+    bool hasThermalNodes() const {
+        return !WorldView(robot.world).instancesOf("ThermalAPI_1").empty();
+    }
+    bool hasMotors() const {
+        return !WorldView(robot.world).instancesOf("ElectricalMotorAPI_1").empty();
+    }
 
     /// Picks where lidars cast (ServerOptions::lidar); logs the choice.
     Status placeLidar() {
@@ -960,17 +1471,68 @@ struct Server::Impl {
     }
     std::shared_ptr<gpu::RayContext> rayContext;  // null: lidars on the CPU
 
-    std::int64_t fastestSensorNs() const {
-        double rate = 0.0;
-        for (const double r : robot.world.sensors.rateHz) {
-            rate = std::max(rate, r);
+    /// Uploads the scene for the cameras, if the robot has any; logs the device.
+    void placeCameras() {
+        const auto count = std::ranges::count(robot.world.sensors.type, SensorType::Camera);
+        if (count == 0) {
+            return;
         }
-        return rate > 0.0 ? static_cast<std::int64_t>(std::llround(1e9 / rate)) : 0;
+        if (!options.cameras) {
+            log(v1::LOG_LEVEL_INFO, "sensors",
+                "cameras publish ground truth (empty images): rendering is off for this run");
+            return;
+        }
+        std::string reason;
+        cameraScene = sensors::createCameraScene(robot, options.gpu, reason);
+        if (!cameraScene) {
+            log(v1::LOG_LEVEL_WARN, "sensors",
+                "cameras need a Vulkan device and none is usable (" + reason +
+                    "); set the sensors domain to ground_truth to run without them");
+            return;
+        }
+        const gpu::RasterScene& raster = *cameraScene->raster;
+        log(v1::LOG_LEVEL_INFO, "sensors",
+            std::to_string(count) + (count == 1 ? " camera" : " cameras") + " rendered on " +
+                raster.deviceName() + " (" + std::to_string(raster.samples()) +
+                " samples per pixel" + (raster.isSoftware() ? "; a software device, slow" : "") +
+                "); the run is not deterministic");
+    }
+    std::shared_ptr<const sensors::CameraScene> cameraScene;  // null: no camera rendering
+
+    std::int64_t fastestSensorNs() const {
+        const World::Sensors& sensors = robot.world.sensors;
+        std::int64_t fastest = 0;
+        for (std::size_t s = 0; s < sensors.rateHz.size(); ++s) {
+            if (sensors.rateHz[s] <= 0.0) {
+                continue;
+            }
+            // Cameras step on whole milliseconds (the sensors module rounds their period).
+            const std::int64_t period =
+                sensors.type[s] == SensorType::Camera
+                    ? std::max<std::int64_t>(std::llround(1e3 / sensors.rateHz[s]), 1) * 1'000'000
+                    : std::llround(1e9 / sensors.rateHz[s]);
+            fastest = fastest == 0 ? period : std::min(fastest, period);
+        }
+        return fastest;
+    }
+
+    /// What the sensors domain runs: the lidar's casting, else the cameras' raster.
+    std::string sensorLevel() const {
+        const auto has = [this](SensorType type) {
+            return std::ranges::count(robot.world.sensors.type, type) != 0;
+        };
+        if (has(SensorType::Lidar) || !has(SensorType::Camera)) {
+            return rayContext ? "raycast_gpu" : "raycast";
+        }
+        return "raster";
     }
 
     [[nodiscard]] bool substituted(std::string_view domain) const {
         return options.substituted.contains(std::string(domain));
     }
+
+    /// The rigid-body backend the run uses: an applied profile's, else the command line's.
+    std::string physicsBackend() const { return rigidBodyBackend.value_or(options.physics); }
 
     /// The stage as profiles name it (ServerOptions::stageName).
     std::string stageName() const {
@@ -978,6 +1540,24 @@ struct Server::Impl {
     }
 
     std::string profileYaml() const {
+        if (replay) {
+            // A replay: every recorded domain is its replay substitute, the rest their default.
+            std::string yaml =
+                "# Lagrange simulation profile: a replay\nschema_version: 1\n"
+                "stage: " +
+                stageName() + "\n\ndomains:\n";
+            for (const DomainRow& row : kDomains) {
+                const bool recorded = std::ranges::any_of(
+                    replay->catalog, [&row](const recording::Recording::CatalogEntry& entry) {
+                        return entry.writer.starts_with(std::string(row.domain) + "/");
+                    });
+                yaml +=
+                    "  " + std::string(row.domain) + ": {enabled: false, substitute: " +
+                    (recorded ? "replay, source: " + replay->path : std::string(row.substitute)) +
+                    "}\n";
+            }
+            return yaml;
+        }
         std::string yaml =
             "# Lagrange simulation profile\nschema_version: 1\nstage: " + stageName() +
             "\n\ndomains:\n";
@@ -986,8 +1566,33 @@ struct Server::Impl {
                 char dt[48];
                 std::snprintf(dt, sizeof(dt), "%.9g",
                               static_cast<double>(rigidBodyDtNs.value_or(1'000'000)) / 1e9);
-                yaml +=
-                    "  rigid_body: {enabled: true, backend: mujoco, dt: " + std::string(dt) + "}\n";
+                yaml += "  rigid_body: {enabled: true, backend: " + physicsBackend() +
+                        ", dt: " + std::string(dt) + "}\n";
+            } else if (std::string_view(row.domain) == "rigid_body" && rigidBodyReplay) {
+                yaml += "  rigid_body: {enabled: false, substitute: replay, source: " +
+                        *rigidBodyReplay + "}\n";
+            } else if (std::string_view(row.domain) == "electrical" && hasMotors() &&
+                       !substituted("electrical")) {
+                char dt[48];
+                std::snprintf(dt, sizeof(dt), "%.9g",
+                              static_cast<double>(electricalDtNs.value_or(100'000)) / 1e9);
+                yaml += "  electrical: {enabled: true, fidelity: " +
+                        electricalFidelity.value_or("averaged") + ", dt: " + std::string(dt) +
+                        "}\n";
+            } else if (std::string_view(row.domain) == "thermal" && hasThermalNodes() &&
+                       ambient()) {
+                char text[96];
+                if (substituted("thermal")) {
+                    std::snprintf(text, sizeof(text),
+                                  "{enabled: false, substitute: ambient, ambient_temperature: "
+                                  "%.9g}",
+                                  *ambient());
+                } else {
+                    std::snprintf(
+                        text, sizeof(text), "{enabled: true, dt: %.9g, ambient_temperature: %.9g}",
+                        static_cast<double>(thermalDtNs.value_or(100'000'000)) / 1e9, *ambient());
+                }
+                yaml += "  thermal: " + std::string(text) + "\n";
             } else if (std::string_view(row.domain) == "sensors" && hasSensors() &&
                        !substituted("sensors")) {
                 yaml += "  sensors: {enabled: true}\n";
@@ -1024,30 +1629,88 @@ struct Server::Impl {
         for (const DomainRow& row : kDomains) {
             v1::DomainState& d = *p.add_domains();
             d.set_domain(row.domain);
+            if (replay) {
+                // A replay simulates nothing: what was recorded stands in for every domain.
+                const bool recorded = std::ranges::any_of(
+                    replay->catalog, [&row](const recording::Recording::CatalogEntry& entry) {
+                        return entry.writer.starts_with(std::string(row.domain) + "/");
+                    });
+                d.set_enabled(false);
+                d.set_available(false);
+                d.set_substituted(true);
+                d.set_active_module(recorded ? "replay" : row.substitute);
+                v1::SubstituteOption& option = *d.add_substitutes();
+                option.set_token(recorded ? "replay" : row.substitute);
+                option.set_kind(recorded ? "replay" : row.substituteKind);
+                d.set_unavailable_reason("a replay of " + replay->path + ": nothing is simulated");
+                continue;
+            }
             const bool physics = std::string_view(row.domain) == "rigid_body";
             const bool sensing = std::string_view(row.domain) == "sensors" && hasSensors();
-            const bool built = physics || sensing;  // a module exists for it
+            const bool powered = std::string_view(row.domain) == "electrical" && hasMotors();
+            const bool heated =
+                std::string_view(row.domain) == "thermal" && hasThermalNodes() && ambient();
+            const bool built = physics || sensing || powered || heated;  // a module exists
             const bool running = built && !substituted(row.domain);
             d.set_enabled(running);
             d.set_available(built);
-            d.set_active_module(
-                running ? (physics ? "mujoco" : (rayContext ? "raycast_gpu" : "raycast"))
-                        : row.substitute);
+            d.set_active_module(running ? (physics   ? physicsBackend()
+                                           : powered ? "averaged_network"
+                                           : heated  ? "lumped"
+                                                     : sensorLevel())
+                                        : row.substitute);
             d.set_substituted(!running);
             d.set_cpu_ms_per_sim_s(cost[row.domain]);
             if (sensing) {
-                d.add_fidelities(rayContext ? "raycast_gpu" : "raycast");
+                d.add_fidelities(sensorLevel());
+                if (sensorLevel() != "raster" &&
+                    std::ranges::count(robot.world.sensors.type, SensorType::Camera) != 0) {
+                    d.add_fidelities("raster");
+                }
                 d.set_dt_ns(fastestSensorNs());
                 d.add_depends_on("rigid_body");
             }
+            if (powered) {
+                d.add_fidelities("averaged");
+                if (!electrical::motorFmuBindings(WorldView(robot.world)).empty()) {
+                    d.add_fidelities("fmu");
+                }
+                d.set_dt_ns(electricalDtNs.value_or(100'000));
+                d.set_min_dt_ns(10'000);
+                d.set_max_dt_ns(1'000'000);
+                d.add_depends_on("rigid_body");
+            }
+            if (heated) {
+                d.add_fidelities("lumped");
+                d.set_dt_ns(thermalDtNs.value_or(100'000'000));
+                d.set_min_dt_ns(1'000'000);
+                d.set_max_dt_ns(10'000'000'000);
+                d.add_depends_on("electrical");
+            }
             if (!built) {
-                d.set_unavailable_reason("no module in this build yet; the substitute stands in");
+                const std::string_view domain = row.domain;
+                d.set_unavailable_reason(
+                    domain == "electrical"
+                        ? "no ElectricalMotorAPI prims in the stage; the ideal torque source "
+                          "stands in (an overlay file adds motors to a URDF robot)"
+                    : domain == "thermal" && hasThermalNodes()
+                        ? "needs the site's ambient temperature: thermal.ambient_temperature in "
+                          "the profile, or --ambient-temperature K"
+                    : domain == "thermal"
+                        ? "no ThermalAPI prims in the stage"
+                        : "no module in this build yet; the substitute stands in");
             }
             v1::SubstituteOption& option = *d.add_substitutes();
             option.set_token(row.substitute);
             option.set_kind(row.substituteKind);
             if (physics) {
+                v1::SubstituteOption& replayOption = *d.add_substitutes();
+                replayOption.set_token("replay");
+                replayOption.set_kind("replay");
+            }
+            if (physics) {
                 d.add_backends("mujoco");
+                d.add_backends("jolt");
                 d.add_fidelities("articulated");
                 d.set_dt_ns(1'000'000);
                 d.set_min_dt_ns(100'000);
@@ -1084,9 +1747,13 @@ struct Server::Impl {
         hello.set_session_id(nextSessionId++);
         v1::Capabilities& caps = *hello.mutable_capabilities();
         caps.set_can_step(true);
+        caps.set_can_seek(replay.has_value());
         caps.set_tier(0);
         session.send(reply);
         session.greeted = true;
+        if (replay) {
+            session.send(recordingInfo());
+        }
 
         session.send(profileState({}));
         session.send(catalog());
@@ -1206,6 +1873,33 @@ struct Server::Impl {
             case v1::Command::kGetAttributes:
                 attributes(command.get_attributes(), *r.mutable_attributes());
                 break;
+            case v1::Command::kSetAttribute:
+                if (Status status = setAttribute(command.set_attribute()); !status.ok()) {
+                    r.set_ok(false);
+                    r.set_error(status.message);
+                }
+                break;
+            case v1::Command::kOpenRecording:
+                if (Status status = openRecording(command.open_recording().path()); !status.ok()) {
+                    r.set_ok(false);
+                    r.set_error(status.message);
+                } else {
+                    r.set_imported_stage_path(command.open_recording().path());
+                }
+                break;
+            case v1::Command::kSeek:
+                if (Status status = seek(command.seek().to().ns()); !status.ok()) {
+                    r.set_ok(false);
+                    r.set_error(status.message);
+                } else {
+                    resync = true;
+                }
+                statusChanged = true;
+                break;
+            case v1::Command::kSetTransform:
+                r.set_ok(false);
+                r.set_error("moving prims is not supported by this server yet");
+                break;
             case v1::Command::kSetRosGraph:
                 session.wantsRosGraph = command.set_ros_graph().enabled();
                 if (session.wantsRosGraph) {
@@ -1265,6 +1959,321 @@ struct Server::Impl {
     }
 
     /// Rebuilds the run at t = 0, keeping play or pause.
+    // --- replay mode (roadmap 0.2-E8) --------------------------------------------------------
+
+    std::optional<recording::Recording> replay;  // the recording's metadata; signals not kept
+    std::vector<SignalId> replayPose;            // per scene prim: its recorded pose, if any
+    google::protobuf::RepeatedPtrField<v1::ElectricalNet> replayNets;  // from its snapshot
+    static constexpr std::int64_t kCheckpointNs = 1'000'000'000;       // a saved state a second
+    std::map<std::int64_t, std::vector<std::byte>> checkpoints;        // by simulated time
+
+    /// Loads the recording: its scene as the model, its domains as replay substitutes.
+    Status loadReplay() {
+        auto opened = recording::Recording::open(options.replayPath,
+                                                 [](const std::string&, const std::string&) {
+                                                     return false;  // metadata only
+                                                 });
+        if (!opened) {
+            return Status::error(StatusCode::InvalidConfig, opened.error());
+        }
+        auto model = modelOfSnapshot(opened->snapshot);
+        if (!model) {
+            return Status::error(StatusCode::InvalidConfig,
+                                 options.replayPath + ": " + model.error());
+        }
+        v1::SceneSnapshot recorded;
+        if (recorded.ParseFromString(opened->snapshot)) {
+            replayNets = recorded.nets();
+        }
+        replay = std::move(*opened);
+        robot = std::move(*model);
+        log(v1::LOG_LEVEL_INFO, "replay",
+            options.replayPath + " · " + std::to_string(replay->catalog.size()) + " signals · " +
+                std::to_string(replay->duration.seconds()) + " s · stage " + robot.sourcePath);
+        return {};
+    }
+
+    v1::Envelope recordingInfo() const {
+        v1::Envelope info;
+        v1::RecordingInfo& r = *info.mutable_recording_info();
+        r.set_path(replay->path);
+        r.mutable_duration()->set_ns(replay->duration.ns);
+        std::error_code ec;
+        r.set_size_bytes(std::filesystem::file_size(replay->path, ec));
+        r.set_generator("lagrange_server");
+        std::uint64_t total = 0;
+        for (const recording::Recording::CatalogEntry& entry : replay->catalog) {
+            v1::RecordingInfo::Channel& channel = *r.add_channels();
+            channel.set_topic(entry.name);
+            if (entry.dtNs > 0) {
+                channel.set_rate_hz(1e9 / static_cast<double>(entry.dtNs));
+                const auto messages =
+                    static_cast<std::uint64_t>(replay->duration.ns / entry.dtNs) + 1;
+                channel.set_messages(messages);  // samples
+                total += messages;
+            }
+            channel.set_unit(entry.unit);
+        }
+        r.set_messages(total);
+        return info;
+    }
+
+    /// Command OpenRecording: the server becomes a replay of the file (from the viewer's
+    /// "Open recording"). Not with the ROS bridge, which drives a robot a replay does not have.
+    Status openRecording(const std::string& path) {
+        if (bridge) {
+            return Status::error(StatusCode::Unsupported,
+                                 "this server runs the ROS 2 bridge; replay with `lagrange_server "
+                                 "--replay " +
+                                     path + "` instead");
+        }
+        stopRecording("a recording was opened");
+        const std::string previous = options.replayPath;
+        options.replayPath = path;
+        if (Status status = loadReplay(); !status.ok()) {
+            options.replayPath = previous;
+            return status;
+        }
+        if (Status status = build(); !status.ok()) {
+            fail(status);
+            return status;
+        }
+        state = v1::RUN_STATE_PAUSED;
+        error.clear();
+        owedNs = 0;
+        ++catalogGeneration;
+        for (auto& session : sessions) {
+            if (!session->greeted) {
+                continue;
+            }
+            session->subscriptions.clear();
+            session->sensors.clear();
+            session->send(catalog());
+            session->send(recordingInfo());
+            session->send(snapshot(*session));
+            session->send(statusEnvelope());
+        }
+        return {};
+    }
+
+    /// After a build in replay mode: the prims' pose signals and the first checkpoint.
+    void startReplay() {
+        replayPose.assign(robot.scene.prims.size(), SignalId{});
+        for (std::uint32_t p = 0; p < robot.scene.prims.size(); ++p) {
+            replayPose[p] = scheduler->bus().find("scene" + robot.scene.prims[p].path + "/pose");
+        }
+        checkpoints.clear();
+        checkpoint();
+    }
+
+    void checkpoint() {
+        if (!replay || checkpoints.contains(scheduler->now().ns)) {
+            return;
+        }
+        StateWriter writer;
+        if (scheduler->saveState(writer).ok()) {
+            const std::span<const std::byte> bytes = writer.bytes();
+            checkpoints.emplace(scheduler->now().ns,
+                                std::vector<std::byte>(bytes.begin(), bytes.end()));
+        }
+    }
+
+    /// Command Seek: from the latest checkpoint at or before `to`, stepped forward to it.
+    Status seek(std::int64_t to) {
+        if (!replay) {
+            return Status::error(StatusCode::Unsupported,
+                                 "seeking needs a replay: start the server with --replay FILE");
+        }
+        to = std::clamp<std::int64_t>(to, 0, replay->duration.ns);
+        auto it = checkpoints.upper_bound(to);
+        if (it == checkpoints.begin()) {
+            return Status::error(StatusCode::Internal, "no checkpoint to seek from");
+        }
+        --it;
+        StateReader reader(it->second);
+        if (Status status = scheduler->restoreState(reader); !status.ok()) {
+            return status;
+        }
+        while (scheduler->now().ns < to) {
+            if (Status status = scheduler->stepTick(); !status.ok()) {
+                return status;
+            }
+            if (scheduler->now().ns % kCheckpointNs == 0) {
+                checkpoint();
+            }
+        }
+        owedNs = 0;
+        captured.assign(captured.size(), Captured{});  // nothing captured before the seek
+        for (std::size_t s = 0; s < captured.size(); ++s) {
+            const SignalId id = SignalId::output(static_cast<std::uint32_t>(s));
+            captured[s].id = id;
+            captured[s].components = componentCount(scheduler->bus().specAt(s).type,
+                                                    scheduler->bus().specAt(s).arrayLength);
+            captured[s].dtNs = scheduler->writerOf(id).dt.ns;
+        }
+        return {};
+    }
+
+    /// Rebuilds the run from the (edited) world and carries its state over: the edit applies
+    /// from the next step and the run goes on (E6). On failure the run is left as it was.
+    Status rebuildKeepingState() {
+        StateWriter saved;
+        if (Status status = scheduler->saveState(saved); !status.ok()) {
+            return status;
+        }
+        std::unique_ptr<Scheduler> previous = std::move(scheduler);
+        DriveCommand* previousDrive = driveCommand;
+        if (Status status = build(); !status.ok()) {
+            scheduler = std::move(previous);
+            driveCommand = previousDrive;
+            if (bridge) {
+                bridge->attach(robot.world, scheduler->bus());
+            }
+            return status;
+        }
+        StateReader reader(saved.bytes());
+        if (Status status = scheduler->restoreState(reader); !status.ok()) {
+            scheduler = std::move(previous);
+            driveCommand = previousDrive;
+            (void)build();  // the previous wiring, at t = 0: the old state cannot be carried
+            return status;
+        }
+        return {};
+    }
+
+    /// The world prim standing for a scene prim, by path; kNoPrim if there is none.
+    [[nodiscard]] std::uint32_t worldPrimOf(std::uint32_t scenePrim) const {
+        if (scenePrim >= robot.scene.prims.size()) {
+            return kNoIndex;
+        }
+        const std::string& path = robot.scene.prims[scenePrim].path;
+        const auto& paths = robot.world.prims.paths;
+        const auto it = std::find(paths.begin(), paths.end(), path);
+        return it == paths.end() ? kNoIndex : static_cast<std::uint32_t>(it - paths.begin());
+    }
+
+    /// The scene prim of a world prim: a joint's is its child link's, a body's and a sensor's
+    /// their own; else by path. kNoIndex if there is none.
+    [[nodiscard]] std::uint32_t scenePrimOf(PrimId prim) const {
+        const World& world = robot.world;
+        for (std::size_t j = 0; j < world.joints.prim.size() && j < robot.jointPrim.size(); ++j) {
+            if (world.joints.prim[j] == prim) {
+                return robot.jointPrim[j];
+            }
+        }
+        for (std::size_t b = 0; b < world.bodies.prim.size() && b < robot.bodyPrim.size(); ++b) {
+            if (world.bodies.prim[b] == prim) {
+                return robot.bodyPrim[b];
+            }
+        }
+        for (std::size_t n = 0; n < world.sensors.prim.size() && n < robot.sensorPrim.size(); ++n) {
+            if (world.sensors.prim[n] == prim) {
+                return robot.sensorPrim[n];
+            }
+        }
+        if (prim.index >= world.prims.paths.size()) {
+            return kNoIndex;
+        }
+        const std::string& path = robot.world.prims.paths[prim.index];
+        for (std::uint32_t p = 0; p < robot.scene.prims.size(); ++p) {
+            if (robot.scene.prims[p].path == path) {
+                return p;
+            }
+        }
+        return kNoIndex;
+    }
+
+    /// Command SetAttribute: a number of one of the prim's schemas (or a body's mass), checked as
+    /// the loader checks it, applied to the running simulation, and optionally saved.
+    Status setAttribute(const v1::SetAttribute& request) {
+        const v1::Attribute& attribute = request.attribute();
+        const std::string& name = attribute.name();
+        if (attribute.value_case() != v1::Attribute::kReal) {
+            return Status::error(StatusCode::Unsupported,
+                                 name + ": only numbers can be edited yet");
+        }
+        const double value = attribute.real();
+        double* target = nullptr;
+        std::string what;
+        std::string unitText;
+        if (name == "physics:mass") {
+            for (std::size_t b = 0; b < robot.bodyPrim.size(); ++b) {
+                if (robot.bodyPrim[b] == request.prim()) {
+                    target = &robot.world.bodies.mass[b];
+                    unitText = "kg";
+                }
+            }
+            if (target != nullptr && !(value > 0.0 && std::isfinite(value))) {
+                return Status::error(StatusCode::InvalidConfig, "physics:mass must be positive");
+            }
+        } else {
+            const std::uint32_t prim = worldPrimOf(request.prim());
+            for (SchemaInstance& s : robot.world.schemaInstances) {
+                const auto it = s.reals.find(name);
+                if (prim == kNoIndex || s.prim.index != prim || it == s.reals.end()) {
+                    continue;
+                }
+                if (auto problem = stage::checkSchemaReal(s.schema, name, value)) {
+                    return Status::error(StatusCode::InvalidConfig, *problem);
+                }
+                target = &it->second;
+                what = s.schema;
+                if (auto info = stage::schemaAttribute(s.schema, s.instance, name)) {
+                    unitText = info->unit;
+                }
+            }
+        }
+        if (target == nullptr) {
+            return Status::error(StatusCode::InvalidConfig,
+                                 "this prim has no number " + name + " that can be edited");
+        }
+        const double old = *target;
+        *target = value;
+        if (Status status = rebuildKeepingState(); !status.ok()) {
+            *target = old;
+            return Status::error(status.code, name + " = " + std::to_string(value) +
+                                                  " was not applied: " + status.message);
+        }
+        char line[256];
+        std::snprintf(line, sizeof(line), "%s %s %g -> %g %s (from t = %.3f s)",
+                      robot.scene.prims[request.prim()].path.c_str(), name.c_str(), old, value,
+                      unitText.c_str(), scheduler->now().seconds());
+        log(v1::LOG_LEVEL_INFO, "edit", line);
+        broadcast(statusEnvelope());
+        if (request.save_to_session_layer()) {
+            return saveSession();
+        }
+        return {};
+    }
+
+    /// The session layer: the edited model as a USD layer that `--robot FILE --world none`
+    /// reads back.
+    Status saveSession() {
+        std::filesystem::path path = options.sessionPath;
+        if (path.empty()) {
+            const char* stateHome = std::getenv("XDG_STATE_HOME");
+            const char* home = std::getenv("HOME");
+            const std::filesystem::path base =
+                stateHome != nullptr && *stateHome != '\0'
+                    ? std::filesystem::path(stateHome)
+                    : std::filesystem::path(home != nullptr ? home : ".") / ".local" / "state";
+            path = base / "lagrange" / (robot.name + ".session.usda");
+        }
+        std::error_code ec;
+        std::filesystem::create_directories(path.parent_path(), ec);
+        stage::WriteOptions write;
+        write.doc = "Session layer of lagrange_server: " + robot.sourcePath +
+                    " with the edits made in the viewer. Run it with --robot this file --world "
+                    "none.";
+        if (auto written = stage::writeStage(robot, path.string(), write); !written) {
+            return Status::error(
+                StatusCode::Internal,
+                "the edit applies, but the session layer was not saved: " + written.error());
+        }
+        log(v1::LOG_LEVEL_INFO, "edit", "session layer saved to " + path.string());
+        return {};
+    }
+
     Status restart() {
         stopRecording("the run was reset");
         const bool wasRunning = state == v1::RUN_STATE_RUNNING;
@@ -1313,8 +2322,18 @@ struct Server::Impl {
         if (hasSensors()) {
             context.modules.insert("sensors");
         }
+        if (hasMotors()) {
+            context.modules.insert("electrical");
+        }
+        if (hasThermalNodes()) {
+            context.modules.insert("thermal");
+        }
+        context.ambientKnown = options.ambientTemperatureK.has_value();
         for (const DomainRow& row : kDomains) {
             context.substitutes[row.domain] = {row.substitute, row.substituteKind};
+            if (std::string_view(row.domain) == "rigid_body") {
+                context.substitutes[row.domain].insert("replay");  // bench mode
+            }
         }
         return context;
     }
@@ -1322,7 +2341,7 @@ struct Server::Impl {
     /// Checks a profile and shows the wiring it would build (or the running one if it does not
     /// parse into settings).
     void validate(const std::string& yaml, v1::ProfileValidation& out) {
-        const ProfileCheck check = checkProfile(yaml, schemaText, profileContext());
+        const ProfileCheck check = this->check(yaml);
         out.set_valid(check.valid);
         for (const ProfileIssue& issue : check.issues) {
             v1::ProfileIssue& item = *out.add_issues();
@@ -1332,7 +2351,11 @@ struct Server::Impl {
             item.set_message(issue.message);
         }
         if (check.settings) {
-            auto preview = makeScheduler(*check.settings, nullptr);
+            ProfileSettings previewed = *check.settings;
+            if (!previewed.ambientTemperatureK) {
+                previewed.ambientTemperatureK = ambient();
+            }
+            auto preview = makeScheduler(previewed, nullptr);
             if (!preview) {
                 out.set_valid(false);
                 v1::ProfileIssue& item = *out.add_issues();
@@ -1350,6 +2373,18 @@ struct Server::Impl {
 
     /// checkProfile, then whether the settings wire (as validate, without the wiring preview).
     ProfileCheck check(const std::string& yaml) {
+        if (replay) {
+            // A replay runs what was recorded: its own profile is the only one, and it is valid.
+            ProfileCheck check;
+            check.valid = true;
+            check.settings = active();
+            if (yaml != profileYaml()) {
+                check.issues.push_back({false, "/domains",
+                                        "a replay runs what was recorded; profile changes do "
+                                        "not apply to it"});
+            }
+            return check;
+        }
         ProfileCheck check = checkProfile(yaml, schemaText, profileContext());
         if (check.settings) {
             if (auto preview = makeScheduler(*check.settings, nullptr); !preview) {
@@ -1362,6 +2397,10 @@ struct Server::Impl {
 
     /// Adopts a valid profile: rebuilds the run at t = 0 now, or at the next reset.
     Status apply(const std::string& yaml, bool restartNow) {
+        if (replay) {
+            return Status::error(StatusCode::Unsupported,
+                                 "profile not applied: a replay runs what was recorded");
+        }
         const ProfileCheck check = checkProfile(yaml, schemaText, profileContext());
         if (!check.valid || !check.settings) {
             for (const ProfileIssue& issue : check.issues) {
@@ -1389,11 +2428,28 @@ struct Server::Impl {
         const ProfileSettings previous = active();
         options.substituted = settings.substituted;
         rigidBodyDtNs = settings.rigidBodyDtNs;
+        rigidBodyBackend = settings.rigidBodyBackend;
+        electricalDtNs = settings.electricalDtNs;
+        thermalDtNs = settings.thermalDtNs;
+        speedPrediction = settings.speedPrediction;
+        electricalFidelity = settings.electricalFidelity;
+        rigidBodyReplay = settings.rigidBodyReplay;
+        const std::optional<double> previousAmbient = appliedAmbientK;
+        if (settings.ambientTemperatureK) {
+            appliedAmbientK = settings.ambientTemperatureK;
+        }
         pending.reset();
         if (Status status = restart(); !status.ok()) {
             // Keep the run going on the profile it had.
             options.substituted = previous.substituted;
             rigidBodyDtNs = previous.rigidBodyDtNs;
+            rigidBodyBackend = previous.rigidBodyBackend;
+            electricalDtNs = previous.electricalDtNs;
+            thermalDtNs = previous.thermalDtNs;
+            speedPrediction = previous.speedPrediction;
+            electricalFidelity = previous.electricalFidelity;
+            rigidBodyReplay = previous.rigidBodyReplay;
+            appliedAmbientK = previousAmbient;
             (void)restart();
             return status;
         }
@@ -1540,6 +2596,62 @@ struct Server::Impl {
         return envelope;
     }
 
+    /// The values of the prim's schemas of ours, numbers editable (SetAttribute).
+    void schemaAttributes(std::uint32_t prim, v1::PrimAttributes& item) const {
+        const std::uint32_t world = worldPrimOf(prim);
+        if (world == kNoIndex) {
+            return;
+        }
+        for (const SchemaInstance& s : robot.world.schemaInstances) {
+            if (s.prim.index != world) {
+                continue;
+            }
+            const auto add = [&](const std::string& name) -> v1::Attribute& {
+                v1::Attribute& a = *item.add_attributes();
+                a.set_name(name);
+                a.set_authored(true);
+                if (auto info = stage::schemaAttribute(s.schema, s.instance, name)) {
+                    a.set_doc(info->doc);
+                    if (!info->unit.empty()) {
+                        if (const UnitParse unit = parseUnit(info->unit); unit.unit) {
+                            setUnit(*a.mutable_unit(), *unit.unit);
+                            a.mutable_unit()->set_display(displayUnit(info->unit));
+                        }
+                    }
+                }
+                return a;
+            };
+            for (const auto& [name, value] : s.reals) {
+                v1::Attribute& a = add(name);
+                a.set_real(value);
+                a.set_editable(true);
+            }
+            for (const auto& [name, value] : s.integers) {
+                add(name).set_integer(value);
+            }
+            for (const auto& [name, value] : s.tokens) {
+                add(name).set_token(value);
+            }
+            for (const auto& [name, value] : s.assetPaths) {
+                add(name).set_asset(value);
+            }
+            for (const auto& [name, values] : s.realArrays) {
+                v1::Attribute& a = add(name);
+                for (const double v : values) {
+                    a.mutable_reals()->add_v(v);
+                }
+            }
+            for (const auto& [name, targets] : s.relationships) {
+                v1::Attribute& a = add(name);
+                for (const PrimId target : targets) {
+                    if (const std::uint32_t p = scenePrimOf(target); p != kNoIndex) {
+                        a.mutable_targets()->add_prims(p);
+                    }
+                }
+            }
+        }
+    }
+
     void attributes(const v1::GetAttributes& request, v1::PrimAttributesList& out) const {
         const World& world = robot.world;
         for (const std::uint32_t prim : request.prims()) {
@@ -1554,6 +2666,7 @@ struct Server::Impl {
                 mass.set_real(world.bodies.mass[b]);
                 setUnit(*mass.mutable_unit(), units::kg);
                 mass.set_authored(true);
+                mass.set_editable(true);
                 v1::Attribute& inertia = *item.add_attributes();
                 inertia.set_name("physics:diagonalInertia");
                 for (std::size_t i = 0; i < 3; ++i) {
@@ -1562,6 +2675,7 @@ struct Server::Impl {
                 setUnit(*inertia.mutable_unit(), units::kg_m2);
                 inertia.set_authored(true);
             }
+            schemaAttributes(prim, item);
             for (std::size_t j = 0; j < robot.jointPrim.size(); ++j) {
                 if (robot.jointPrim[j] != prim) {
                     continue;
@@ -1916,11 +3030,31 @@ Status Server::load() {
                                                        v1::LOG_LEVEL_WARN, v1::LOG_LEVEL_ERROR};
             s.log(kLevels[static_cast<int>(level)], std::string(source), std::string(text));
         });
+    if (!s.options.replayPath.empty()) {
+        if (Status status = s.loadReplay(); !status.ok()) {
+            return status;
+        }
+        if (Status status = s.build(); !status.ok()) {
+            s.scheduler.reset();
+            return status;
+        }
+        if (!s.options.profileSchemaPath.empty()) {
+            s.schemaText = readFile(s.options.profileSchemaPath);
+        }
+        return {};
+    }
     auto robot = loadModel(s.options.robotPath, {.spawn = s.options.spawn});
     if (!robot) {
         return Status::error(StatusCode::InvalidConfig, robot.error());
     }
     s.robot = std::move(robot.value());
+    if (!s.options.overlayPath.empty()) {
+        if (auto applied = stage::applyOverlay(s.robot, s.options.overlayPath); !applied) {
+            return Status::error(StatusCode::InvalidConfig, applied.error());
+        }
+    }
+    // Motors' rotors turn with their joints: physics gets their reflected inertia.
+    electrical::applyRotorInertia(s.robot.world);
     if (!s.options.ros && !s.options.ros2ControlParams.empty()) {
         return Status::error(StatusCode::InvalidConfig,
                              "--ros2-control needs the ROS 2 bridge: drop --no-ros");
@@ -1966,6 +3100,7 @@ Status Server::load() {
     if (Status status = s.placeLidar(); !status.ok()) {
         return status;
     }
+    s.placeCameras();
     if (Status status = s.build(); !status.ok()) {
         s.scheduler.reset();
         return status;
@@ -2093,9 +3228,10 @@ Status Server::start() {
     for (std::size_t i = 0; i < s.robot.world.sensors.names.size(); ++i) {
         const World::Sensors& sensors = s.robot.world.sensors;
         char line[160];
-        std::snprintf(line, sizeof(line), "%s %s on %s at %.0f Hz",
-                      sensors.type[i] == SensorType::Lidar ? "lidar" : "IMU",
-                      sensors.names[i].c_str(),
+        const char* kind = sensors.type[i] == SensorType::Lidar    ? "lidar"
+                           : sensors.type[i] == SensorType::Camera ? "camera"
+                                                                   : "IMU";
+        std::snprintf(line, sizeof(line), "%s %s on %s at %.0f Hz", kind, sensors.names[i].c_str(),
                       s.robot.world.bodies.names[sensors.body[i].index].c_str(), sensors.rateHz[i]);
         s.log(v1::LOG_LEVEL_INFO, "sensors", line);
     }

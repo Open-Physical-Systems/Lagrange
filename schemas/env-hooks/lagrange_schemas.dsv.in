@@ -1,2 +1,4 @@
 prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/metadata
 prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/sensor
+prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/electrical
+prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/thermal

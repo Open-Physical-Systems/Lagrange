@@ -5,6 +5,51 @@ Notable changes to Lagrange are recorded here. Each release section is generated
 titles merged into `dev`; do not edit it by hand. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v0.2.0...v0.3.0) (2026-10-25)
+
+
+### Features
+
+* **core:** stable coupling between the electrical network and physics ([#77](https://github.com/Open-Physical-Systems/Lagrange/issues/77)) ([ef835f5](https://github.com/Open-Physical-Systems/Lagrange/commit/ef835f5e32b5f94b3045ffcb1d9155ab42939db5))
+* **docs:** MoveIt 2 pick-and-place with the sample arm, and its derating scenario ([#84](https://github.com/Open-Physical-Systems/Lagrange/issues/84)) ([e447d0a](https://github.com/Open-Physical-Systems/Lagrange/commit/e447d0a507b299440c92df81646e1f98cee9a2d7))
+* **gpu:** convex hulls in the gpu lidar kernel ([#98](https://github.com/Open-Physical-Systems/Lagrange/issues/98)) ([5e74962](https://github.com/Open-Physical-Systems/Lagrange/commit/5e749625973d0d32875d824a5ec4395095a028c8))
+* **io:** bench mode, physics replaced by a recorded run ([#79](https://github.com/Open-Physical-Systems/Lagrange/issues/79)) ([f6607fb](https://github.com/Open-Physical-Systems/Lagrange/commit/f6607fb6c74593cbf9dac932debed3fa9e3e3f23))
+* **io:** collision bake tool with CoACD and a sample rack ([#91](https://github.com/Open-Physical-Systems/Lagrange/issues/91)) ([c333dc6](https://github.com/Open-Physical-Systems/Lagrange/commit/c333dc669e55419e72d7f1210167fd430010d951))
+* **io:** convex hull colliders in the world, USD, both backends and the lidar ([#90](https://github.com/Open-Physical-Systems/Lagrange/issues/90)) ([3b019d7](https://github.com/Open-Physical-Systems/Lagrange/commit/3b019d7609f1d3005d43c308995fe0cd9619ab6f))
+* **io:** overlay files apply the electrical schemas to imported robots (0.2-G2) ([#74](https://github.com/Open-Physical-Systems/Lagrange/issues/74)) ([8c7d7ab](https://github.com/Open-Physical-Systems/Lagrange/commit/8c7d7ab6335983595965f04ad7cd0c862abbdc22))
+* **io:** sample 6-DoF arm driven by joint_trajectory_controller at 1 kHz ([#81](https://github.com/Open-Physical-Systems/Lagrange/issues/81)) ([e3687d0](https://github.com/Open-Physical-Systems/Lagrange/commit/e3687d0f053624d8aa254709d423c22f13cb56e3))
+* **io:** schema and profile migration tools with a synthetic migration ([#88](https://github.com/Open-Physical-Systems/Lagrange/issues/88)) ([ff0d956](https://github.com/Open-Physical-Systems/Lagrange/commit/ff0d9564cbd5e775210cb561ffb0a63decb268ef))
+* **mod/electrical:** averaged electrical network with battery, bus, drives and loads ([#75](https://github.com/Open-Physical-Systems/Lagrange/issues/75)) ([f947e36](https://github.com/Open-Physical-Systems/Lagrange/commit/f947e36d351ce363636a77f3c04dde55b3a1e6d4))
+* **mod/electrical:** battery power signal, plotted in the electrical scopes ([#101](https://github.com/Open-Physical-Systems/Lagrange/issues/101)) ([48e2c41](https://github.com/Open-Physical-Systems/Lagrange/commit/48e2c41bd5e81d9fe47d151dcd31c36b8373b0e6))
+* **mod/electrical:** controllers write torque commands through the electrical domain ([#72](https://github.com/Open-Physical-Systems/Lagrange/issues/72)) ([c8dac89](https://github.com/Open-Physical-Systems/Lagrange/commit/c8dac89cfbfa7c2f085e4347587cef755d7a54ab))
+* **mod/electrical:** dc-dc converters between buses ([#99](https://github.com/Open-Physical-Systems/Lagrange/issues/99)) ([4584b33](https://github.com/Open-Physical-Systems/Lagrange/commit/4584b33197ac6bbb58c990b7a49d04fa62a5be70))
+* **mod/electrical:** export the power system as an ngspice netlist or a Modelica model ([#80](https://github.com/Open-Physical-Systems/Lagrange/issues/80)) ([6ea83b7](https://github.com/Open-Physical-Systems/Lagrange/commit/6ea83b707d264eb56a96c0c9fe8c2ea4492a8cf7))
+* **mod/electrical:** FMU host for FMI 3.0 co-simulation behaviour models ([#78](https://github.com/Open-Physical-Systems/Lagrange/issues/78)) ([3ca6365](https://github.com/Open-Physical-Systems/Lagrange/commit/3ca636595b93a8870e9806468dafe7e9e5407c4c))
+* **mod/rigid_body:** complete jolt backend with backend selection and agreement tests ([#87](https://github.com/Open-Physical-Systems/Lagrange/issues/87)) ([44a5dbd](https://github.com/Open-Physical-Systems/Lagrange/commit/44a5dbd2999fb272b5c86e702bbb49eb99678e42))
+* **mod/sensors:** raster camera sensor with colour, depth and instance images ([#85](https://github.com/Open-Physical-Systems/Lagrange/issues/85)) ([f459fef](https://github.com/Open-Physical-Systems/Lagrange/commit/f459fefa1a6dfd30ff4335f521c094036549e2d3))
+* **mod/thermal:** lumped thermal network heated by the electrical losses ([#76](https://github.com/Open-Physical-Systems/Lagrange/issues/76)) ([1e86ac8](https://github.com/Open-Physical-Systems/Lagrange/commit/1e86ac865b10d85f8eef6171e8469498d59e67b4))
+* **schemas:** electrical schema library, collected into the world by the stage loader ([#73](https://github.com/Open-Physical-Systems/Lagrange/issues/73)) ([3042ccf](https://github.com/Open-Physical-Systems/Lagrange/commit/3042ccf7580d4fa9377a24b3f09e8db096e908bf))
+* **server:** replay recordings in the C++ server with seeking ([#94](https://github.com/Open-Physical-Systems/Lagrange/issues/94)) ([8e4a1af](https://github.com/Open-Physical-Systems/Lagrange/commit/8e4a1afd6469534739513eed234f5daa5bb75b9d))
+* **viewer:** camera view in the sensors workspace ([#86](https://github.com/Open-Physical-Systems/Lagrange/issues/86)) ([5251bff](https://github.com/Open-Physical-Systems/Lagrange/commit/5251bff060c0d2699871bd49b05729fa11456f5e))
+* **viewer:** collision shading from the simulator's colliders ([#103](https://github.com/Open-Physical-Systems/Lagrange/issues/103)) ([11df1b1](https://github.com/Open-Physical-Systems/Lagrange/commit/11df1b1ca6bc3534359d8c127f57ad47717f4e76))
+* **viewer:** edit schema values in a running simulation from the inspector ([#89](https://github.com/Open-Physical-Systems/Lagrange/issues/89)) ([35c86b1](https://github.com/Open-Physical-Systems/Lagrange/commit/35c86b1765a0dd0a40721c8e2fd573706da8519b))
+* **viewer:** electrical workspace runs on the simulator's power system ([#92](https://github.com/Open-Physical-Systems/Lagrange/issues/92)) ([67a86e1](https://github.com/Open-Physical-Systems/Lagrange/commit/67a86e1914d517fa266af5ba00c7b1b704afb4dd))
+* **viewer:** thermal false-colour and unlit shading in the viewport ([#93](https://github.com/Open-Physical-Systems/Lagrange/issues/93)) ([d99428b](https://github.com/Open-Physical-Systems/Lagrange/commit/d99428b2581596434e8f499b19108c4a6237d731))
+* **viewer:** wireframe shading in the viewport ([#102](https://github.com/Open-Physical-Systems/Lagrange/issues/102)) ([5c0e25c](https://github.com/Open-Physical-Systems/Lagrange/commit/5c0e25c52c2f7c3ce511fc814f0bdf1738aad76d))
+
+
+### Bug fixes
+
+* **bridge/ros2_control:** position servo damps the velocity error, not the speed ([#83](https://github.com/Open-Physical-Systems/Lagrange/issues/83)) ([e8ebd1a](https://github.com/Open-Physical-Systems/Lagrange/commit/e8ebd1a0cbded171978b7ab6f883844a700d85e3))
+* **python:** keep lagrange.viewer importable next to the bindings ([#82](https://github.com/Open-Physical-Systems/Lagrange/issues/82)) ([5ad8fbc](https://github.com/Open-Physical-Systems/Lagrange/commit/5ad8fbc88e231415b8290a829c1107565cf85de7))
+* **server:** name a converter's net terminals dc_in and dc_out ([#100](https://github.com/Open-Physical-Systems/Lagrange/issues/100)) ([5881f9c](https://github.com/Open-Physical-Systems/Lagrange/commit/5881f9c2b8725251f98a79a5c9fc2c93cbcb86b3))
+
+
+### Documentation
+
+* **docs:** record the v0.3 status in progress.md ([#97](https://github.com/Open-Physical-Systems/Lagrange/issues/97)) ([7ed2173](https://github.com/Open-Physical-Systems/Lagrange/commit/7ed2173ecfa85f22065bf6c7f93b4fce76c40e1b))
+* **docs:** v0.3.0 release notes and acceptance evidence ([#96](https://github.com/Open-Physical-Systems/Lagrange/issues/96)) ([cb512f7](https://github.com/Open-Physical-Systems/Lagrange/commit/cb512f7a000efe1f81970aa109e28af0a110fa5b))
+
 ## [0.2.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v0.1.0...v0.2.0) (2026-10-25)
 
 

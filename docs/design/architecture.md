@@ -674,6 +674,38 @@ ratios from 1e-6 to 1e-2 kg·m² and require less than 2 % RMS error and no grow
 over 10 s. The same suite runs for thermal ↔ electrical (resistance rises with temperature),
 which is slow and expected to be benign.
 
+### 8.1 Status (v0.3)
+
+Implemented, with the tests in `modules/electrical/test/test_coupling.cpp` and
+`modules/thermal/test/test_thermal_coupling.cpp` (not a separate `tests/coupling/` package: each
+lives with the module it checks):
+
+1. **Window averaging, with the reader at the end of its window.** Averaging alone was not
+   enough: physics stepping at the start of its window received the average of the window
+   before, a delay of H that cost 8 % RMS on a 2 ms rotor. The scheduler now steps a module that
+   reads a flow from a faster module on the last base tick of its window
+   (`ScheduledModule::atWindowEnd`), so physics gets the average over its own step. Modules
+   without faster inputs keep their timing.
+2. **Speed prediction** as proposed, with one change: the drive advances its q-axis current and
+   the rotor speed together, exactly for the voltages held over the step (a 2×2 matrix
+   exponential), so the back-EMF coupling is implicit inside the window; the torque handed to
+   physics is the step's average, J·Δω/dt + τ_load, so physics' window impulse matches the
+   prediction. The load estimate comes from the previous window. The server passes the physics
+   step as `exchange_step`; the profile's `electrical.speed_prediction` turns it off.
+3. **Startup check** in the network's declare: J is the joint's child body and armature at rest,
+   from the world. Limits: H/τm ≤ 0.5 without prediction (as proposed) and ≤ 10 with it (raised
+   from 5: the tests track a rotor at H/τm ≈ 8 within 2 %).
+4. Co-located integration (`elec:rotorIntegration = "electrical"`) is not built: prediction
+   covered the whole tested range.
+
+Results: speed and current within 2 % RMS of a monolithic reference (the same drive and
+flywheel at 1 µs) for inertias from 6e-7 to 1e-2 kg·m², runs up to 10 s, no growth beyond the
+reference's own overshoot. Thermal ↔ electrical at 100 ms against 1 ms: within 2 % RMS, same
+steady temperature. Found on the way: a drive's PI current loop diverges when its bandwidth times
+the electrical step passes about 2 (6283 rad/s at a 1 ms step); the loop is now capped at 1/dt
+with a warning. Also: motors' rotor inertia (N²·J_rotor) is added to the joint's armature, which
+MuJoCo now takes (`World::Joints::armature`; Jolt not yet).
+
 ## 9. Capability tiers
 
 Tiers are detected once at startup by `gpu/capability/` and can be forced lower with the profile

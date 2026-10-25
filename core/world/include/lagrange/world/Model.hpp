@@ -19,6 +19,8 @@ struct TriMesh {
 };
 
 [[nodiscard]] TriMesh boxMesh(double sizeX, double sizeY, double sizeZ);
+/// A box of half extents `half` about its origin as a convex hull: 8 corners, 12 triangles.
+[[nodiscard]] ConvexHull boxHull(const std::array<double, 3>& half);
 /// A cylinder along z, centred at the origin (the URDF convention).
 [[nodiscard]] TriMesh cylinderMesh(double radius, double length, int segments = 32);
 [[nodiscard]] TriMesh sphereMesh(double radius, int segments = 32, int rings = 16);

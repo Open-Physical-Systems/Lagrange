@@ -310,6 +310,10 @@ void ViewerClient::handleSensorFrame(const v1::Envelope& envelope) {
             }
         }
     }
+    if (stream && frame.has_image()) {
+        handleImage(frame, *stream);
+        return;
+    }
     if (!stream || !frame.has_points()) {
         return;  // not watched, or a kind of frame this viewer does not draw yet
     }
@@ -335,6 +339,26 @@ void ViewerClient::handleSensorFrame(const v1::Envelope& envelope) {
     }
     stream->latest_.store(std::move(cloud));
     ++stream->frames_;
+}
+
+void ViewerClient::handleImage(const v1::SensorFrame& frame, SensorStream& stream) {
+    constexpr std::uint32_t kMaxSide = 16'384;  // as the camera module allows
+    // The message comes from the network: check every size before touching the bytes.
+    const v1::ImageData& image = frame.image();
+    const std::string& bytes = image.data().inline_();
+    if (image.encoding() != "rgba8" || image.width() == 0 || image.height() == 0 ||
+        image.width() > kMaxSide || image.height() > kMaxSide ||
+        bytes.size() != std::size_t{image.width()} * image.height() * 4) {
+        ++stream.rejected_;
+        return;
+    }
+    auto out = std::make_shared<SensorImage>();
+    out->simTimeNs = frame.sim_time().ns();
+    out->width = image.width();
+    out->height = image.height();
+    out->rgba.assign(bytes.begin(), bytes.end());
+    stream.latestImage_.store(std::move(out));
+    ++stream.frames_;
 }
 
 float FieldSliceData::sample(double x, double y) const {
@@ -473,6 +497,18 @@ std::uint64_t ViewerClient::validateProfile(const std::string& yaml) {
     envelope->mutable_command()->mutable_validate_profile()->set_yaml(yaml);
     enqueue(std::move(envelope));
     return id;
+}
+
+void ViewerClient::setAttribute(std::uint32_t prim, const std::string& name, double value,
+                                bool save) {
+    auto envelope = std::make_unique<v1::Envelope>();
+    envelope->mutable_command()->set_request_id(nextRequestId_++);
+    v1::SetAttribute* set = envelope->mutable_command()->mutable_set_attribute();
+    set->set_prim(prim);
+    set->mutable_attribute()->set_name(name);
+    set->mutable_attribute()->set_real(value);
+    set->set_save_to_session_layer(save);
+    enqueue(std::move(envelope));
 }
 
 void ViewerClient::applyProfile(const std::string& yaml) {

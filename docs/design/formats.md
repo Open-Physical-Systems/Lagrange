@@ -121,7 +121,7 @@ points at the driven joint).
 | `elec:inductance` | double | H | — | d-axis (or armature) inductance |
 | `elec:inductanceQ` | double | H | = `inductance` | q-axis inductance (salient machines) |
 | `elec:torqueConstant` | double | N·m/A | — | Torque per q-axis ampere (peak) |
-| `elec:backEmfConstant` | double | V·s/rad | = `torqueConstant` | Line-neutral peak per mechanical rad/s |
+| `elec:backEmfConstant` | double | V·s/rad | = `torqueConstant`/1.5 (pmsm, bldc), = `torqueConstant` (dc_brushed) | Line-neutral peak per mechanical rad/s; an authored value must agree within 3 % |
 | `elec:polePairs` | int | 1 | `1` | |
 | `elec:rotorInertia` | double | kg·m² | `0.0` | Added to the joint's armature inertia |
 | `elec:gearRatio` | double | 1 | `1.0` | Motor revolutions per joint revolution |
@@ -216,8 +216,11 @@ unresolved question 1):
 | Schema | Purpose | Key attributes |
 |---|---|---|
 | `ElectricalBusAPI_1` | A named net with capacitance; brownout thresholds | `elec:bus:capacitance` (F), `elec:bus:undervoltageTrip` (V), `elec:bus:overvoltageTrip` (V), `elec:bus:brakeResistor` (ohm, 0 = none) |
-| `ElectricalLoadAPI_1` | Constant-power or resistive load (computer, lidar, heater) | `elec:load:model` (`constant_power`, `resistive`, `signal`), `elec:load:power` (W), `elec:load:minVoltage` (V), `elec:powerPort` |
-| `ElectricalConverterAPI_1` | DC-DC converter between two ports | `elec:conv:outputVoltage` (V), `elec:conv:efficiency` (1), `elec:conv:maxOutputCurrent` (A) |
+| `ElectricalLoadAPI_1` | Constant-power or resistive load (computer, lidar, heater) | `elec:load:model` (`constant_power`, `resistive`, `signal`), `elec:load:power` (W), `elec:load:minVoltage` (V, fallback 0), `elec:powerPort` |
+| `ElectricalConverterAPI_1` | DC-DC converter between two ports | `elec:conv:outputVoltage` (V), `elec:conv:efficiency` (1), `elec:conv:maxOutputCurrent` (A), `elec:conv:input` and `elec:conv:output` (relationships to buses or ports) |
+
+Implemented in `schemas/electrical/schema.usda` (v0.3); `schemas/CHANGELOG.md` lists the
+differences from these drafts.
 
 ### 3.2 `schemas/thermal/schema.usda`
 
@@ -1281,6 +1284,18 @@ parameters:
 - Built-in C++ models are the default for the battery ECM and the dq motor. FMUs are the
   extension path. See open question Q8 for why the plan does not depend on FMUs for v0.3.
 
+**Status (v0.3).** `FmuComponent` (`modules/electrical/fmu_host/`, on FMI Library 3.0.4 through
+`fmilibrary3_vendor`) hosts FMI 3.0 co-simulation FMUs as above: the map, unit checks from the
+BaseUnit exponents (SI units only: a factor or offset is refused), parameters from the
+component's attributes, one `fmi3DoStep` per module step at the map's `step`, and determinism and
+save/restore through `fmi3GetFMUState` and serialization when the FMU declares both. Additions to
+the sketch above: an input may say `optional: <value>`, read while its signal is not written (a
+winding temperature without the thermal domain); every input is read as a feedback input, so an
+FMU and the network can read each other's outputs. At electrical fidelity `fmu` the network leaves
+a motor with `elec:behaviorModel` to its FMU and takes its `motor/<m>/bus_current` into the bus;
+battery FMUs are not hosted yet. The reference FMU is `lagrange_models`' `dc_drive` (a brushed DC
+drive, hand-written in C, Apache-2.0), which matches the built-in brushed model step for step.
+
 ## 7. Recordings (MCAP)
 
 - One file per run. Chunked, zstd by default, with the summary section and index.
@@ -1307,7 +1322,14 @@ parameters:
   `RunMeta.pose_bindings` so that a replay moves visuals and sensors too. `RunMeta` is written
   at the start and again at the end with the duration; readers keep the last. Scene deltas,
   log records and sensor frames are not recorded yet. The sample AMR records about 1.5 MB per
-  simulated second (zstd does little for noisy doubles).
+  simulated second without its power system and about 2.8 MB with it (the 10 kHz electrical
+  signals; zstd does little for noisy doubles).
+- Replay (v0.3, `lagrange_recording`): `Recording::open` loads a file's signals into memory, and
+  `ReplaySubstitute(domain, file)` writes every signal a module of that domain wrote, at its
+  recorded rate and unit, committing the sample for its step's end time as a live writer does.
+  Bench mode replays `rigid_body` (`--bench`, or the profile's `replay` substitute with a
+  `source`). Physics stepping at the end of its window (architecture.md §8.1) made the same
+  sample visible one step later, so a bench run matches the original closely, not bit for bit.
 - Units are stored in the catalog. A replay substitute refuses a channel whose recorded unit
   differs from the contract.
 - Compatibility: files written by rosbag2 with the MCAP storage plugin can be opened by the mock
@@ -1361,20 +1383,30 @@ Electrical, thermal and EMI data do not exist in URDF/SDF/MJCF. Importers accept
 **overlay** file that applies our API schemas by link or joint name:
 
 ```yaml
-# amr.lagrange.overlay.yaml
+# amr_diffdrive.overlay.yaml (excerpt; the full file is in assets/robots/amr_diffdrive/)
 schema_version: 1
 apply:
-  - prim: left_wheel_joint
-    create_child: left_drive_motor
+  - prim: left_wheel_joint            # a link, joint or sensor by name, or a prim path
+    create_child: left_drive_motor    # a new prim, under a joint's parent link
     schemas:
       ElectricalMotorAPI_1:
         elec:windingResistance: 0.12
         elec:inductance: 0.00031
         elec:torqueConstant: 0.085
-        elec:maxCurrent: 30.0
-        elec:joint: left_wheel_joint
+        elec:maxCurrent: 8.0
+        elec:joint: left_wheel_joint  # relationships: names or paths
         elec:powerPort: power/dc_48v
+  - create: power/dc_48v              # a new prim at this path under the robot's top prim
+    schemas:
+      ElectricalBusAPI_1: { elec:bus:undervoltageTrip: 42.0, elec:bus:overvoltageTrip: 60.0 }
 ```
+
+**Status (v0.3).** `lagrange_stage::applyOverlay` implements this format (rules on its
+declaration in `io/stage/include/lagrange/stage/Stage.hpp`); `lagrange_server --overlay` and
+`lagrange_import --overlay` use it, and the stage writer writes the instances, so an imported
+robot keeps them in USD. Values are checked as the stage loader checks a stage, and every
+problem is reported together. Overlays add schema instances; they do not yet create simulated
+sensors, so lidars on an MJCF robot still need USD for now.
 
 Without an overlay, an imported robot runs with the electrical domain substituted by the ideal
 torque source. The viewer's domain panel shows why the electrical toggle is unavailable
@@ -1384,12 +1416,12 @@ torque source. The viewer's domain panel shows why the electrical toggle is unav
 
 | Artefact | Version carrier | Compatibility rule | Migration tool |
 |---|---|---|---|
-| USD schemas | family + integer suffix (`ElectricalMotorAPI_1`) | Within a version: only additions with fallbacks. Renames, unit changes, removed attributes, changed fallbacks → new version | `tools/migrate_schema` rewrites `apiSchemas` and attributes; one function per (family, from, to) |
-| Profiles | `schema_version` integer | Same as above | `tools/migrate_profile` |
+| USD schemas | family + integer suffix (`ElectricalMotorAPI_1`) | Within a version: only additions with fallbacks. Renames, unit changes, removed attributes, changed fallbacks → new version | `migrate_schema` (package `lagrange_migrate`, `tools/migrate/`) rewrites `apiSchemas` and attributes; one function per (family, from version) |
+| Profiles | `schema_version` integer | Same as above | `migrate_profile` (`lagrange_migrate`); version 0 is a profile without `schema_version` |
 | Protocol | package `lagrange.viewer.v1` + handshake `(major, minor)` | `buf breaking` with the `WIRE_JSON` rule set against `main` | none; old clients are refused at handshake with a readable message |
 | Recordings | `RunMeta.format_version` + embedded schemas | Readers accept all older versions of the same major | `tools/mcap_upgrade` only on a major change |
 | Plugin ABI | `LAGRANGE_PLUGIN_ABI_MAJOR/MINOR` | architecture §13 | none |
-| FMU map files | `schema_version` | as profiles | `tools/migrate_profile --fmu-map` |
+| FMU map files | `schema_version` | as profiles | `migrate_profile --fmu-map` (not built: no FMU map files exist yet) |
 
 Loader behaviour: `core/stage/` supports the current and the previous version of each schema
 family. An older version loads with a warning that names the migration command. Two versions of
@@ -1401,4 +1433,7 @@ core maintainer.
 
 Until v1.0 all schemas are version 1 and may change without a migration, and the documentation
 says so. The migration machinery is built in v0.3 and exercised with a synthetic `_0 → _1`
-migration so that it is proven before it is needed.
+migration so that it is proven before it is needed: the family `ExampleMotorAPI`, which no real
+file uses (`tools/migrate/test/test_schema.py`). The stage loader notes a prim that applies an
+older version of a registered family with the command that migrates it, and refuses two versions
+of one family on one prim.

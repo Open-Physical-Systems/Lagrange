@@ -19,8 +19,10 @@ Sub-packages: `network/` (builds the circuit graph from `PortAPI`/`ElectricalBus
 | `averaged` (default) | ECM: `V = OCV(SoC) − I·R0 − V1 − V2`, RC pairs, `R0(T)` | dq-frame PMSM or DC model with PI current loops (FOC), voltage limit from bus voltage (field weakening not modelled at first), copper loss `I²R(T)`, simple iron/friction loss | Bus capacitor node; regeneration raises voltage; brake resistor; under- and over-voltage trips (brownout) |
 | `fmu` | FMU if `elec:battery:behaviorModel` is set | FMU if `elec:behaviorModel` is set, else `averaged` | as `averaged` |
 
-Equations of the averaged PMSM model, per motor, integrated with a fixed-step implicit
-(backward-Euler) update on the two currents, which is unconditionally stable for the R-L part:
+Equations of the averaged PMSM model, per motor, integrated per step with the exact solution of
+each axis's R-L equation for the voltages held over the step. That is unconditionally stable,
+like the backward-Euler update first planned, and exact for a voltage step, where backward Euler
+is 2.8 % off at 10 steps per time constant against the 0.1 % that §8 asks:
 
 ```
 v_d = R·i_d + L_d·di_d/dt − ω_e·L_q·i_q
@@ -74,6 +76,7 @@ for (auto& b : world.instancesOf("BatteryAPI_1")) {
     d.output({.name = fmt("battery/{}/terminal_voltage", p), .type = SignalType::Scalar, .unit = units::V});
     d.output({.name = fmt("battery/{}/current", p),          .type = SignalType::Scalar, .unit = units::A});
     d.output({.name = fmt("battery/{}/loss_power", p),       .type = SignalType::Scalar, .unit = units::W});
+    d.output({.name = fmt("battery/{}/power", p),            .type = SignalType::Scalar, .unit = units::W});   // at its terminals
 }
 for (auto& bus : world.instancesOf("ElectricalBusAPI_1")) {
     d.output({.name = fmt("bus/{}/voltage", name(bus)),    .type = SignalType::Scalar, .unit = units::V});
@@ -118,6 +121,15 @@ later RFC.
 
 ## 7. Offline export
 
+*Status (v0.3):* `lagrange export spice|modelica [PROFILE] [options] [--out FILE]`
+(`Export.hpp` in `lagrange_electrical`) rather than separate `tools/` programs: the export needs
+the loaded stage, overlays included, as the simulator sees it. The drives are averaged sinks of
+their electrical power (a parameter to edit, or a waveform such as one recorded from a run); the
+open-circuit voltage is held at the initial state of charge; charge limits, trips, brake
+resistors and converters are not exported. The Modelica model uses the Modelica Standard
+Library 4's `Electrical.Analog`; it is checked for its structure only, as OpenModelica is not
+part of the build.
+
 `tools/export_spice` writes an ngspice netlist of the topology (battery ECM, bus capacitors,
 ideal averaged drive sources or a three-phase inverter subcircuit per motor) for switching-level
 study. `tools/export_modelica` writes a Modelica model with the same topology. Both are derived
@@ -131,8 +143,68 @@ agree.
 | RL step response of the d and q axes | closed form | 0.1 % at 10 steps per time constant |
 | DC motor no-load speed, stall current, torque-speed line | closed form from `R`, `Kt`, `V` | 0.5 % |
 | Coupled motor + inertia step (coupling test) | monolithic stiff ODE solution | 2 % RMS (architecture §8) |
-| Battery ECM pulse discharge | published cell characterisation data with OCV and pulse tests (candidate: an openly licensed Li-ion cell dataset; to be selected and its license checked) | terminal-voltage RMS error < 20 mV per cell |
+| Battery ECM pulse discharge | published cell characterisation data with OCV and pulse tests: LG HG2 cell, Kollmeyer et al., doi:10.17632/b5mj79w5w9.2, CC BY 4.0 (HPPC and C/20 at 25 °C) | terminal-voltage RMS error < 20 mV per cell |
 | Energy balance | battery energy out = mechanical work + losses + stored | closed to 0.5 % over a drive cycle |
 | Netlist round trip | exported netlist run in ngspice (averaged sources) vs runtime | bus voltage within 1 % |
 | Brownout scenario | scripted stall of both AMR motors on a low battery | bus trips, `load/computer/powered` goes false, recovers after load removal |
 | Sim-vs-real (v0.3) | bench recording of a real BLDC drive: phase current, bus voltage, speed (to be recorded; Q16) | within measurement uncertainty bands stated with the dataset |
+
+## 9. Status (v0.3)
+
+`lagrange_electrical` (`modules/electrical/`): `ElectricalNetwork` (`network/`, fidelity
+`averaged`, default step 100 µs) and the `IdealTorqueSource` substitute. The models are in
+`Models.hpp` so the tests can drive them without a scheduler. The server runs the network when
+the robot has `ElectricalMotorAPI_1` prims (from USD, or a URDF with an overlay file such as the
+sample AMR's) and the profile or `--domain electrical=off` does not switch it to the
+substitute.
+
+Choices made while implementing, beyond §2:
+
+- **One flux linkage.** The torque and the back-EMF come from λ = Kt / (1.5·p), so power is
+  conserved by construction. An authored `backEmfConstant` is a check: it must be within 3 % of
+  Kt / 1.5 (dq) or Kt (brushed), or the motor is refused as a convention mix-up (risk R13).
+- **Voltage limit** of a drive: Vbus/√3 peak phase voltage (sine-triangle with third harmonic or
+  space-vector modulation, no overmodulation) for dq machines, Vbus for an H bridge. Saturation
+  scales the voltage vector and holds the PI integrators.
+- **Bus node** solved with the capacitor's backward-Euler companion against the batteries'
+  Thévenin sources; drives and loads draw at the previous step's voltage (explicit), so a load
+  notices a brownout one electrical step late.
+- **Brownout** latches each drive's fault until the bus has recovered by 2 % and the torque
+  command is back to zero; loads come back with the bus. Overvoltage switches in the brake
+  resistor, or switches the drives off when there is none, with the same 2 % hysteresis.
+- **Battery cut-off** when the open-circuit voltage reaches `cutoffVoltage` (empty), not on the
+  terminal voltage under load: sag under load is the bus's undervoltage trip's job.
+- **Resistive loads** take their resistance from `elec:load:power` at the bus's starting
+  voltage; the bus schema has no nominal voltage.
+
+- **Coupling with physics** (architecture.md §8.1): speed prediction with the current and the
+  rotor speed advanced together, the startup check on H/τm, and the rotor inertia added to the
+  joint's armature (`applyRotorInertia`, called by the server).
+- **Current-loop bandwidth** is capped at 1/dt with a warning: a discrete loop faster than its
+  step diverges. (§4's "warn when dt > 0.2 / bandwidth" would warn at the default 100 µs step
+  for the default 1 kHz loop, which runs well; the cap is where it matters.)
+
+- **Fidelity `fmu`** (formats.md §6 status): a motor with `elec:behaviorModel` is simulated by
+  its FMU, the network feeding its bus; `averaged` ignores the behaviour models.
+
+- **DC-DC converters** (`ElectricalConverterAPI_1`) are averaged regulators. On the output bus
+  the converter is an ideal source at `outputVoltage` inside the node equation, giving 0 to
+  `maxOutputCurrent` (no reverse flow); at the limit the bus sags and its loads drop at their
+  `minVoltage` or with its undervoltage trip. On the input bus it draws the output power over
+  `efficiency`, one step late as loads do. It stops while its input bus is browned out. One
+  converter per output bus. Signals `converter/<c>/output_current`, `input_current` and
+  `loss_power`; `test_network` checks regulation, the power drawn and the current limit.
+
+Not yet: `velocity` and `voltage` control modes,
+battery FMUs, motors on prismatic joints, and the rotor inertia in Jolt.
+
+| §8 check | Status | Test |
+|---|---|---|
+| RL step response, d and q | met (exact up to rounding) | `test_models` `RlStepResponseMatchesTheClosedForm` |
+| DC motor no-load speed, stall current, torque-speed line | met, 0.5 % | `BrushedDcTorqueSpeedLineMatchesTheClosedForm` |
+| Coupled motor + inertia | met, < 2 % RMS in speed and current against a monolithic 1 µs solution, inertias 6e-7 to 1e-2 kg·m², no growth | `test_coupling`, `CoSimulatedWithPhysicsAtOneMillisecond...` |
+| Battery ECM pulse | closed form met exactly; against the LG HG2 HPPC pulses, one fitted parameter set: 5.4 to 6.2 mV RMS on held-out blocks from 46 to 89 % state of charge, 21.5 mV at 24 % (not met: r0 and the OCV slope rise below about 35 %; a state-of-charge-dependent r0 is the next step). 25 °C only | `PulseDischargeMatchesTheClosedForm`, `test_battery_dataset` (data and fit in `test/data/lg_hg2`) |
+| Energy balance over a drive cycle | met, 0.5 % | `test_network` `EnergyBalancesOverADriveCycle` |
+| Netlist round trip | met: with a drive cycle sagging a weak pack's bus by 2.4 V, ngspice's bus voltage is within 0.05 % of the network's (sag within 0.16 % RMS) | `test_export` (needs ngspice) |
+| Brownout scenario | met | `AStalledAmrOnALowBatteryBrownsOutAndRecovers` |
+| Sim-vs-real | owed: needs the bench recording (Q16) | — |

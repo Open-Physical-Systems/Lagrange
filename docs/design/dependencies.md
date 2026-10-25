@@ -43,7 +43,8 @@ and licenses come from `docs/plan/verification.md` (checked 2026-10-13). A cell 
 | Protobuf | protocol, recordings | apt `libprotobuf-dev`, `protobuf-compiler` | 3.21.12 | BSD-3-Clause (TODO(verify)) | Low | Old: proto3 only, no editions. rosdep key `protobuf-dev` |
 | gRPC | control API (v0.2+) | apt `libgrpc++-dev` | 1.51.1 | Apache-2.0 (TODO(verify)) | Low | rosdep key TODO(verify) |
 | Zenoh (zenoh-c, zenoh-cpp) | optional transport, bridge | apt `libzenohc-dev`, `libzenohcpp-dev` | 1.8.0 | Apache-2.0 OR EPL-2.0 | Low | `ros-lyrical-zenoh-cpp-vendor` 0.10.6 also exists; avoid loading two copies in one process (TODO(verify) symbol conflicts) |
-| yaml-cpp | profiles (`lagrange_server`) | apt `libyaml-cpp-dev`, rosdep `yaml-cpp` | 0.8.0 | X11, an MIT-style licence (Ubuntu copyright file; only Debian's packaging files are GPL-2.0+) | Low | |
+| FMI Library | FMU host (`lagrange_electrical`, `FmuHost.cpp`); FMI 3 headers for the reference FMU (`lagrange_models`) | `fmilibrary3_vendor` (release tarball, SHA-256 pinned; static, with its bundled Expat, zlib and minizip) | 3.0.4 (latest release, 2025-06-25; checked on GitHub 2026-10-25) | BSD-3-Clause (Modelon, `LICENSE.md`); bundled Expat MIT, zlib and minizip zlib, FMI 3.0 headers BSD-2-Clause; Catch2 (BSL-1.0) only in its tests, not built | Low | Lyrical's `fmilibrary_vendor` (Bosch Research; source entry in rosdistro, no Lyrical release) pins FMI Library 2.2.3, which reads FMI 1.0 and 2.0 only, so it does not serve the FMI 3.0 format stack |
+| yaml-cpp | profiles (`lagrange_server`), overlay files (`lagrange_stage`), FMU maps (`lagrange_electrical`) | apt `libyaml-cpp-dev`, rosdep `yaml-cpp` | 0.8.0 | X11, an MIT-style licence (Ubuntu copyright file; only Debian's packaging files are GPL-2.0+) | Low | |
 | jsoncons (JSON Schema validator, C++) | profile validation in `lagrange_server` (RFC 0005 resolution 7) | apt `libjsoncons-dev`, rosdep key `libjsoncons-dev` in `packaging/rosdep/lagrange.yaml` | 1.5.0 | BSL-1.0 (Ubuntu copyright file) | Low | Header-only; supports JSON Schema 2020-12 including `unevaluatedProperties`, which `profiles/schema.json` uses. valijson was rejected: no 2020-12 support, so unknown keys would pass. The mock server keeps `python3-jsonschema` |
 | nlohmann-json | JSON handling | apt `nlohmann-json3-dev` | 3.11.3-based | MIT (TODO(verify)) | Low | |
 | Eigen | maths | apt `libeigen3-dev` | 3.4.0 | MPL-2.0 | Low | Header-only |
@@ -172,6 +173,9 @@ and resource lookup only. It does not depend on `rclcpp`, so it starts without a
 | buf | GitHub release binary | v1.73.0 | Apache-2.0 | Not in apt; installed in CI by checksum |
 | pre-commit | apt | 4.5.1 | MIT | |
 | yamllint | apt | 1.37.1 | GPL-3.0-or-later | Tool only |
+| ngspice | apt `ngspice` | 45.2 (Ubuntu 26.04) | BSD-3-clause (its sources; Debian copyright file) | Offline tool only, run as a separate program: the netlist round-trip test (`lagrange_electrical`'s `test_export`, skipped without it) and users' switching-level studies of exported netlists |
+| CoACD | PyPI `coacd` (rosdep `python3-coacd-pip`) | 1.0.14 | MIT (the wheel's LICENSE). Its native library may bundle third-party code: TODO(verify) their licences | Offline tool only: `collision_bake` (`lagrange_collision_bake`), run by people preparing assets, never by the simulator |
+| OpenCV | apt `libopencv-dev` | 4.10.0 (Ubuntu 26.04) | Apache-2.0 AND BSD-3-Clause (Debian copyright file) | Test only: the camera projection test (`lagrange_gpu`'s `test_raster`) finds checkerboard corners and calibrates with it |
 | yamlfmt | Go binary | TODO(verify) | Apache-2.0 | Optional; yamllint alone may be enough |
 | mdformat | apt | 1.0.0 | MIT | Replaces markdownlint (Node) |
 | shfmt, shellcheck | apt | 3.12.0, 0.11.0 | BSD-3-Clause, GPL-3.0 (TODO(verify)) | Tools only |

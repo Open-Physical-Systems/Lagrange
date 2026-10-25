@@ -69,6 +69,20 @@ void number(double value, const char* format, char* out, std::size_t size) {
     }
 }
 
+/// Whether the prim applies a version of the schema family `family` ("BatteryAPI").
+bool hasSchema(const PanelContext& context, std::uint32_t prim, std::string_view family) {
+    if (!context.scene || prim >= context.scene->statics->prims.size()) {
+        return false;
+    }
+    for (const std::string& schema : context.scene->statics->prims[prim].apiSchemas) {
+        if (schema.starts_with(family) && schema.size() > family.size() &&
+            schema[family.size()] == '_') {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// What the three panels share: the subscriptions for the stage's nets and the scope traces.
 class ElectricalState {
 public:
@@ -119,9 +133,36 @@ private:
             }
             for (const NetTerminal& terminal : net.terminals) {
                 TerminalLive entry;
+                // Design (Scopes): the bus voltage, the motors' q-axis currents and the battery's
+                // power (its current when the server sends no power); the branches' currents are
+                // in the Network table.
+                const bool motor = hasSchema(context, terminal.prim, "ElectricalMotorAPI");
+                const bool source = hasSchema(context, terminal.prim, "BatteryAPI");
+                const SignalInfo* power = nullptr;
+                if (source) {
+                    for (const SignalInfo& info : catalog.signals) {
+                        if (info.prim == terminal.prim && info.name.ends_with("/power")) {
+                            power = &info;
+                        }
+                    }
+                }
+                if (power != nullptr) {
+                    scopes.add(context.client, catalog, power->name);
+                }
                 if (catalog.find(terminal.currentSignal) != nullptr) {
                     entry.current = context.client.subscribe(terminal.currentSignal);
-                    scopes.add(context.client, catalog, terminal.currentSignal);
+                    if ((source && power == nullptr) ||
+                        (!motor && !source &&
+                         !hasSchema(context, terminal.prim, "ElectricalLoadAPI"))) {
+                        scopes.add(context.client, catalog, terminal.currentSignal);
+                    }
+                }
+                if (motor) {
+                    for (const SignalInfo& info : catalog.signals) {
+                        if (info.prim == terminal.prim && info.name.ends_with("/current_q")) {
+                            scopes.add(context.client, catalog, info.name);
+                        }
+                    }
                 }
                 // Other scalar signals of the same prim: state of charge, temperature, ...
                 for (const SignalInfo& info : catalog.signals) {

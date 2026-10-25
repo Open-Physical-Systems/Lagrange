@@ -8,8 +8,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <memory>
+#include <span>
 #include <string>
 #include <tbb/parallel_for.h>
 #include <utility>
@@ -105,10 +107,77 @@ double box(const Vec3& o, const Vec3& d, const Vec3& half) {
     return exit > 0.0 ? exit : kNoHit;
 }
 
+/// Ray against a convex polyhedron, as the intersection of its faces' half-spaces.
+double convexHull(const Vec3& o, const Vec3& d, const ConvexHull& hull) {
+    thread_local std::vector<std::array<double, 4>> planes;
+    facePlanes(hull, planes);
+    if (planes.empty()) {
+        return kNoHit;
+    }
+    double enter = -kNoHit;
+    double exit = kNoHit;
+    for (const auto& plane : planes) {
+        const Vec3 n{plane[0], plane[1], plane[2]};
+        const double rate = dot(n, d);
+        const double gap = plane[3] - dot(n, o);  // >= 0 when o is inside this face's plane
+        if (rate == 0.0) {
+            if (gap < 0.0) {
+                return kNoHit;  // parallel and outside
+            }
+            continue;
+        }
+        const double t = gap / rate;
+        if (rate < 0.0) {
+            enter = std::max(enter, t);
+        } else {
+            exit = std::min(exit, t);
+        }
+        if (enter > exit) {
+            return kNoHit;
+        }
+    }
+    if (enter > 0.0) {
+        return enter;
+    }
+    return exit > 0.0 ? exit : kNoHit;
+}
+
 }  // namespace
 
+void facePlanes(const ConvexHull& hull, std::vector<std::array<double, 4>>& out) {
+    out.clear();
+    Vec3 centre{};
+    for (const auto& p : hull.points) {
+        for (std::size_t i = 0; i < 3; ++i) {
+            centre.at(i) += p.at(i) / static_cast<double>(hull.points.size());
+        }
+    }
+    for (const auto& t : hull.triangles) {
+        const Vec3& a = hull.points.at(t[0]);
+        const Vec3& b = hull.points.at(t[1]);
+        const Vec3& c = hull.points.at(t[2]);
+        const Vec3 u{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+        const Vec3 v{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+        Vec3 n{u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
+        const double length = std::sqrt(dot(n, n));
+        if (length <= 0.0) {
+            continue;  // a degenerate triangle has no plane
+        }
+        for (double& x : n) {
+            x /= length;
+        }
+        double offset = dot(n, a);
+        if (dot(n, centre) > offset) {
+            n = {-n[0], -n[1], -n[2]};
+            offset = -offset;
+        }
+        out.push_back({n[0], n[1], n[2], offset});
+    }
+}
+
 double raycast(ShapeType shape, const std::array<double, 3>& size, const Pose& shapePose,
-               const std::array<double, 3>& origin, const std::array<double, 3>& dir) {
+               const std::array<double, 3>& origin, const std::array<double, 3>& dir,
+               const ConvexHull* hull) {
     // Into the shape's frame.
     const std::array<double, 4> inverse = conjugate(shapePose.orientation);
     const Vec3 o =
@@ -134,6 +203,8 @@ double raycast(ShapeType shape, const std::array<double, 3>& size, const Pose& s
             return std::min({cylinderSide(o, d, size[0], size[1]),
                              sphere({o[0], o[1], o[2] - size[1]}, d, size[0]),
                              sphere({o[0], o[1], o[2] + size[1]}, d, size[0])});
+        case ShapeType::ConvexHull:
+            return hull != nullptr ? convexHull(o, d, *hull) : kNoHit;
     }
     return kNoHit;
 }
@@ -244,7 +315,10 @@ public:
         for (std::size_t c = 0; c < colliders.body.size(); ++c) {
             const BodyId owner = colliders.body[c];
             Shape shape{colliders.shape[c], colliders.size[c], colliders.poseInBody[c],
-                        owner == kWorldBody ? -1 : static_cast<int>(owner.index)};
+                        owner == kWorldBody ? -1 : static_cast<int>(owner.index),
+                        colliders.shape[c] == ShapeType::ConvexHull
+                            ? &world.raw().hulls.at(colliders.hull[c])
+                            : nullptr};
             // Geometry that never moves is placed in the world once.
             if (owner == kWorldBody) {
                 shape.pose = colliders.poseInBody[c];
@@ -259,6 +333,12 @@ public:
         nearest_.assign(samples_, kNoHit);
         casterShapes_.resize(shapes_.size());
         if (rayContext_ && !groundTruth_) {
+            hullFaces_.assign(shapes_.size(), {});
+            for (std::size_t k = 0; k < shapes_.size(); ++k) {
+                if (shapes_[k].hull != nullptr) {
+                    facePlanes(*shapes_[k].hull, hullFaces_[k]);
+                }
+            }
             std::vector<std::array<float, 3>> directions(samples_);
             for (std::uint32_t i = 0; i < samples_; ++i) {
                 const Vec3 d = layout_.direction(i);
@@ -315,13 +395,14 @@ private:
         std::array<double, 3> size;
         Pose pose;  // world pose when body < 0, else pose in the body
         int body;
+        const ConvexHull* hull;  // in the world tables, which outlive the run
     };
 
     /// Tier 0: exact casts in double, culled by Embree (ShapeCaster), beams in parallel. Each
     /// beam is independent, so the result does not depend on the threads.
     void castOnCpu(const Pose& sensor) {
         for (std::size_t k = 0; k < shapes_.size(); ++k) {
-            casterShapes_[k] = {shapes_[k].type, shapes_[k].size, placed_[k]};
+            casterShapes_[k] = {shapes_[k].type, shapes_[k].size, placed_[k], shapes_[k].hull};
         }
         caster_.update(casterShapes_);
         tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
@@ -341,6 +422,7 @@ private:
                 out.position[i] = placed_[k].position[i] - sensor.position[i];
             }
             out.orientation = placed_[k].orientation;
+            out.faces = hullFaces_[k];
         }
         scan_->cast(castShapes_, sensor.orientation, hits_);
     }
@@ -368,6 +450,7 @@ private:
     std::shared_ptr<gpu::RayContext> rayContext_;  // null: cast on the CPU
     std::unique_ptr<gpu::RayScan> scan_;
     std::vector<gpu::CastShape> castShapes_;
+    std::vector<std::vector<std::array<double, 4>>> hullFaces_;  // per shape, for the GPU
     std::vector<gpu::CastHit> hits_;
 };
 
@@ -476,12 +559,161 @@ private:
     SignalId pose_, twist_, acceleration_, force_, rate_, orientation_;
 };
 
+/// Rounds a rate's period to whole milliseconds, so that a camera at 30 Hz lines up with the
+/// other modules' steps (the scheduler refuses a base tick below 1 µs).
+Duration wholeMilliseconds(double rateHz) {
+    const auto ms = std::max<std::int64_t>(std::llround(1e3 / std::max(rateHz, 1e-3)), 1);
+    return Duration{ms * 1'000'000};
+}
+
+class Camera final : public SensorModule {
+public:
+    Camera(const World& world, std::uint32_t sensor, bool groundTruth,
+           std::shared_ptr<const CameraScene> scene)
+        : SensorModule(world, sensor, "camera", groundTruth), scene_(std::move(scene)) {
+        step_ = wholeMilliseconds(world.sensors.rateHz[sensor]);
+    }
+
+    [[nodiscard]] ModuleInfo info() const override {
+        ModuleInfo out = SensorModule::info();
+        out.deterministic = groundTruth_;  // rendering is a GPU path (invariant 7)
+        return out;
+    }
+
+    Status declare(const WorldView& world, const ModuleConfig&, SignalDeclarer& d) override {
+        const World::Sensors& sensors = world.sensors();
+        const double width = setting(sensors, sensor_, "width", 640.0);
+        const double height = setting(sensors, sensor_, "height", 480.0);
+        const double fov = setting(sensors, sensor_, "horizontal_fov", 1.047);
+        if (width < 1.0 || height < 1.0 || width > 16384.0 || height > 16384.0 || fov <= 0.0 ||
+            fov >= 3.1) {
+            return Status::error(StatusCode::InvalidConfig,
+                                 "camera " + name_ + ": image size or horizontal_fov out of range");
+        }
+        camera_.width = static_cast<std::uint32_t>(width);
+        camera_.height = static_cast<std::uint32_t>(height);
+        camera_.fx = width / 2.0 / std::tan(fov / 2.0);
+        camera_.fy = camera_.fx;
+        camera_.cx = (width - 1.0) / 2.0;
+        camera_.cy = (height - 1.0) / 2.0;
+        camera_.near = setting(sensors, sensor_, "near_clip", 0.05);
+        far_ = setting(sensors, sensor_, "far_clip", 100.0);
+
+        const World& raw = world.raw();
+        const std::vector<bool> moving = movingBodies(raw);
+        rest_ = restPoses(raw);
+        poses_.assign(moving.size(), SignalId{});
+        const auto watch = [&](std::uint32_t b) {
+            if (b < moving.size() && moving[b] && !poses_[b].valid()) {
+                poses_[b] = d.input(spec("body/" + raw.bodies.names[b] + "/pose", SignalType::Pose,
+                                         units::m, "world_local"));
+            }
+        };
+        watch(body_);
+        if (scene_ && !groundTruth_) {
+            for (const CameraScene::Drawable& drawable : scene_->drawables) {
+                if (drawable.body != kNoIndex) {
+                    watch(drawable.body);
+                }
+            }
+        }
+        const auto image = [&](const char* what, Unit unit) {
+            SignalSpec out =
+                spec("sensor/" + name_ + "/" + what, SignalType::Image, unit, "optical");
+            return d.output(std::move(out));
+        };
+        image_ = image("image", Unit{});
+        depth_ = image("depth", units::m);
+        instance_ = image("instance", Unit{});
+        return {};
+    }
+
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        if (!groundTruth_) {
+            if (!scene_ || !scene_->raster) {
+                return Status::error(StatusCode::Unsupported,
+                                     "camera " + name_ +
+                                         " needs a Vulkan device, and none was usable (set the "
+                                         "sensors domain to ground_truth to run without one)");
+            }
+            renderer_ =
+                std::make_unique<gpu::RasterCamera>(scene_->raster, camera_.width, camera_.height);
+            instances_.resize(scene_->drawables.size());
+        }
+        publish(bus);  // empty images until the first frame
+        return {};
+    }
+
+    Status step(const StepContext&, SignalBus& bus) override {
+        if (groundTruth_) {
+            publish(bus);
+            return {};
+        }
+        const Pose sensor = compose(bodyPose(bus, body_), mount_);
+        camera_.position = sensor.position;
+        camera_.orientation = multiply(sensor.orientation, kSensorFromOptical);
+        for (std::size_t k = 0; k < instances_.size(); ++k) {
+            const CameraScene::Drawable& drawable = scene_->drawables[k];
+            const Pose pose = drawable.body == kNoIndex
+                                  ? drawable.offset
+                                  : compose(bodyPose(bus, drawable.body), drawable.offset);
+            instances_[k] = {drawable.mesh,  pose.position,  pose.orientation,
+                             drawable.scale, drawable.color, drawable.prim};
+        }
+        renderer_->render(instances_, camera_, images_);
+        for (float& depth : images_.depth) {
+            if (depth > far_) {
+                depth = std::numeric_limits<float>::infinity();
+                // The colour keeps whatever was drawn: a far clip limits the range, not the view.
+            }
+        }
+        publish(bus);
+        return {};
+    }
+
+private:
+    /// Publishes the last images; empty buffers (with their size) before the first frame and
+    /// for the ground-truth substitute.
+    void publish(SignalBus& bus) {
+        const auto buffer = [&](const char* encoding, const auto& pixels) {
+            auto out = std::make_shared<Buffer>();
+            out->width = camera_.width;
+            out->height = camera_.height;
+            out->encoding = encoding;
+            const auto bytes = std::as_bytes(std::span{pixels});
+            out->bytes.assign(bytes.begin(), bytes.end());
+            return out;
+        };
+        bus.publishBuffer(image_, buffer("rgba8", images_.rgba));
+        bus.publishBuffer(depth_, buffer("r32f", images_.depth));
+        bus.publishBuffer(instance_, buffer("r32u", images_.instance));
+    }
+
+    Pose bodyPose(const SignalBus& bus, std::uint32_t b) const {
+        if (b >= poses_.size() || !poses_[b].valid()) {
+            return b < rest_.size() ? rest_[b] : Pose{};
+        }
+        const std::span<const double> v = bus.readN(poses_[b]);
+        return {{v[0], v[1], v[2]}, {v[3], v[4], v[5], v[6]}};
+    }
+
+    std::shared_ptr<const CameraScene> scene_;
+    gpu::PinholeCamera camera_;
+    double far_{100.0};
+    std::vector<Pose> rest_;
+    std::vector<SignalId> poses_;
+    std::unique_ptr<gpu::RasterCamera> renderer_;
+    std::vector<gpu::RasterInstance> instances_;
+    gpu::RasterImages images_;
+    SignalId image_, depth_, instance_;
+};
 }  // namespace
 
 namespace {
 
 std::vector<std::unique_ptr<IModule>> createModules(
-    const World& world, bool groundTruth, const std::shared_ptr<gpu::RayContext>& rayContext) {
+    const World& world, bool groundTruth, const std::shared_ptr<gpu::RayContext>& rayContext,
+    const std::shared_ptr<const CameraScene>& cameraScene, bool groundTruthCameras) {
     std::vector<std::unique_ptr<IModule>> modules;
     for (std::uint32_t s = 0; s < world.sensors.names.size(); ++s) {
         switch (world.sensors.type[s]) {
@@ -491,6 +723,10 @@ std::vector<std::unique_ptr<IModule>> createModules(
             case SensorType::Imu:
                 modules.push_back(std::make_unique<Imu>(world, s, groundTruth));
                 break;
+            case SensorType::Camera:
+                modules.push_back(std::make_unique<Camera>(
+                    world, s, groundTruth || groundTruthCameras, cameraScene));
+                break;
         }
     }
     return modules;
@@ -499,12 +735,42 @@ std::vector<std::unique_ptr<IModule>> createModules(
 }  // namespace
 
 std::vector<std::unique_ptr<IModule>> createSensorModules(
-    const World& world, std::shared_ptr<gpu::RayContext> rayContext) {
-    return createModules(world, false, rayContext);
+    const World& world, std::shared_ptr<gpu::RayContext> rayContext,
+    std::shared_ptr<const CameraScene> cameraScene, bool groundTruthCameras) {
+    return createModules(world, false, rayContext, cameraScene, groundTruthCameras);
 }
 
 std::vector<std::unique_ptr<IModule>> createSensorSubstitutes(const World& world) {
-    return createModules(world, true, nullptr);
+    return createModules(world, true, nullptr, nullptr, true);
+}
+
+std::shared_ptr<CameraScene> createCameraScene(const Model& model,
+                                               const std::string& preferredDevice,
+                                               std::string& error) {
+    auto scene = std::make_shared<CameraScene>();
+    std::vector<gpu::MeshSource> meshes;
+    meshes.reserve(model.scene.meshes.size());
+    for (const TriMesh& mesh : model.scene.meshes) {
+        meshes.push_back({mesh.positions, mesh.normals, mesh.indices});
+    }
+    for (std::uint32_t p = 0; p < model.scene.prims.size(); ++p) {
+        const ScenePrim& prim = model.scene.prims[p];
+        if (prim.mesh == kNoIndex) {
+            continue;
+        }
+        CameraScene::Drawable drawable;
+        drawable.mesh = prim.mesh;
+        drawable.body = prim.body;
+        drawable.offset = prim.offset;
+        drawable.scale = prim.scale;
+        if (prim.material != kNoIndex) {
+            drawable.color = model.scene.materials[prim.material].rgba;
+        }
+        drawable.prim = p;
+        scene->drawables.push_back(drawable);
+    }
+    scene->raster = gpu::RasterScene::create(preferredDevice, meshes, error);
+    return scene->raster ? scene : nullptr;
 }
 
 }  // namespace lagrange::sensors

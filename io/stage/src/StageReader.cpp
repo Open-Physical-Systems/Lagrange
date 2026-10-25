@@ -1,5 +1,6 @@
 // USD -> Model. The rules are listed on loadStage in Stage.hpp.
 #include "Math.hpp"
+#include "Schemas.hpp"
 #include "lagrange/stage/Stage.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
@@ -10,8 +11,10 @@
 #include <map>
 #include <numbers>
 #include <optional>
+#include <regex>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <pxr/base/gf/matrix4d.h>
@@ -23,7 +26,9 @@
 #include <pxr/base/tf/token.h>
 #include <pxr/base/vt/array.h>
 #include <pxr/usd/usd/primRange.h>
+#include <pxr/usd/usd/schemaRegistry.h>
 #include <pxr/usd/usd/stage.h>
+#include <pxr/usd/usdGeom/camera.h>
 #include <pxr/usd/usdGeom/capsule.h>
 #include <pxr/usd/usdGeom/cube.h>
 #include <pxr/usd/usdGeom/cylinder.h>
@@ -41,6 +46,7 @@
 #include <pxr/usd/usdPhysics/joint.h>
 #include <pxr/usd/usdPhysics/massAPI.h>
 #include <pxr/usd/usdPhysics/materialAPI.h>
+#include <pxr/usd/usdPhysics/meshCollisionAPI.h>
 #include <pxr/usd/usdPhysics/metrics.h>
 #include <pxr/usd/usdPhysics/prismaticJoint.h>
 #include <pxr/usd/usdPhysics/revoluteJoint.h>
@@ -58,6 +64,7 @@ using namespace pxr;  // NOLINT(google-build-using-namespace): OpenUSD names are
 
 constexpr std::array<float, 4> kDefaultColor{0.70F, 0.70F, 0.72F, 1.0F};  // as the URDF loader
 constexpr double kPlaceholderMassKg = 1e-3;
+
 constexpr double kPlaceholderInertia = 1e-6;  // kg·m²
 constexpr double kAnchorTolerance = 1e-6;     // m, joint anchor away from body1's origin
 
@@ -161,6 +168,7 @@ public:
             return status;
         }
         buildColliders();
+        collectSchemas();
         if (!errors_.empty()) {
             std::string message = "the stage cannot be simulated:";
             for (const std::string& e : errors_) {
@@ -186,6 +194,8 @@ private:
         return {};
     }
 
+    static constexpr int kNewerVersionsSearched = 8;  // versions above an unknown one tried
+
     void note(std::string text) {
         if (std::find(m_.notes.begin(), m_.notes.end(), text) == m_.notes.end()) {
             m_.notes.push_back(std::move(text));
@@ -207,8 +217,52 @@ private:
         return {};
     }
 
+    /// Schema versions (formats.md §10): a prim that applies an older version of a family this
+    /// build knows is reported with the command that migrates it; two versions of one family
+    /// on one prim is an error.
+    void checkSchemaVersions(const UsdPrim& prim) {
+        static const std::regex applied(R"(^([A-Za-z][A-Za-z0-9]*)_([0-9]+)(:.+)?$)");
+        const UsdSchemaRegistry& registry = UsdSchemaRegistry::GetInstance();
+        std::map<std::string, int> versions;  // family + instance -> version
+        // The authored list, not GetAppliedSchemas(), which leaves out unregistered names.
+        SdfTokenListOp authored;
+        TfTokenVector names;
+        if (prim.GetMetadata(UsdTokens->apiSchemas, &authored)) {
+            authored.ApplyOperations(&names);
+        }
+        for (const TfToken& token : names) {
+            std::smatch match;
+            const std::string name = token.GetString();
+            if (!std::regex_match(name, match, applied)) {
+                continue;
+            }
+            const std::string family = match[1];
+            const int version = std::stoi(match[2]);
+            const auto [at, inserted] = versions.emplace(family + match[3].str(), version);
+            if (!inserted && at->second != version) {
+                errors_.push_back(prim.GetPath().GetString() + " applies two versions of " +
+                                  family);
+                continue;
+            }
+            if (registry.FindAppliedAPIPrimDefinition(TfToken(family + "_" + match[2].str()))) {
+                continue;
+            }
+            for (int newer = version + 1; newer <= version + kNewerVersionsSearched; ++newer) {
+                const std::string current = family + "_" + std::to_string(newer);
+                if (registry.FindAppliedAPIPrimDefinition(TfToken(current))) {
+                    note(prim.GetPath().GetString() + " applies " + family + "_" +
+                         std::to_string(version) + ", an older version of " + current +
+                         ", which is not read: migrate the file with `ros2 run lagrange_migrate "
+                         "migrate_schema FILE --in-place`");
+                    break;
+                }
+            }
+        }
+    }
+
     void collect() {
         for (const UsdPrim& prim : stage_->Traverse()) {
+            checkSchemaVersions(prim);
             if (prim.HasAPI<UsdPhysicsRigidBodyAPI>()) {
                 bool enabled = true;
                 UsdPhysicsRigidBodyAPI(prim).GetRigidBodyEnabledAttr().Get(&enabled);
@@ -325,6 +379,7 @@ private:
         const std::string name = prim.GetName().GetString();
         const BodyId body = w.addBody(name, parent, inParent, mass, com, inertia);
         bodyIndex_[prim.GetPath()] = body.index;
+        worldPrim_[prim.GetPath()] = w.bodies.prim.back();
         m_.bodyRestPose.push_back(bodyWorld);
         if (joint == nullptr) {
             w.addJoint(name + "_floating", JointType::Free, body, {0.0, 0.0, 1.0}, false);
@@ -387,6 +442,7 @@ private:
         const std::array<double, 3> axis = rotate(frame1, axisVector(axisToken));
         const std::string name = prim.GetName().GetString();
         w.addJoint(name, type, body, axis, driven);
+        worldPrim_[prim.GetPath()] = w.joints.prim.back();
         w.joints.lowerLimit.back() = lower;
         w.joints.upperLimit.back() = upper;
         if (driven) {
@@ -604,7 +660,8 @@ private:
                 m_.bodyPrim[bodyIndex_.at(prim.GetPath())] = index;
             }
             if (m_.scene.prims[index].typeName == "Lidar" ||
-                m_.scene.prims[index].typeName == "Imu") {
+                m_.scene.prims[index].typeName == "Imu" ||
+                m_.scene.prims[index].typeName == "Camera") {
                 m_.sensorPrim.push_back(index);
             }
         }
@@ -630,7 +687,39 @@ private:
         }
         std::map<std::string, double, std::less<>> settings;
         SensorType type = SensorType::Imu;
-        if (prim.HasAPI(TfToken("LidarAPI_1"))) {
+        Pose mount = scene.offset;
+        if (prim.HasAPI(TfToken("CameraSensorAPI_1"))) {
+            const UsdGeomCamera camera(prim);
+            const std::optional<int> width =
+                valueOf<int>(prim.GetAttribute(TfToken("sensor:camera:width")));
+            const std::optional<int> height =
+                valueOf<int>(prim.GetAttribute(TfToken("sensor:camera:height")));
+            if (!camera || !width || !height || *width < 1 || *height < 1) {
+                return Unexpected{path +
+                                  ": CameraSensorAPI_1 goes on a Camera prim and needs "
+                                  "sensor:camera:width and height"};
+            }
+            type = SensorType::Camera;
+            scene.typeName = "Camera";
+            float focal = 0.0F;
+            float aperture = 0.0F;
+            GfVec2f clip(0.05F, 100.0F);
+            camera.GetFocalLengthAttr().Get(&focal);
+            camera.GetHorizontalApertureAttr().Get(&aperture);
+            camera.GetClippingRangeAttr().Get(&clip);
+            if (focal <= 0.0F || aperture <= 0.0F) {
+                return Unexpected{path +
+                                  ": the camera's focalLength and horizontalAperture must "
+                                  "be positive"};
+            }
+            settings = {{"width", *width},
+                        {"height", *height},
+                        {"horizontal_fov", 2.0 * std::atan(aperture / 2.0 / focal)},
+                        {"near_clip", clip[0]},
+                        {"far_clip", clip[1]}};
+            // The sensor looks along x; the USD camera along its -z.
+            mount = compose(scene.offset, {{0, 0, 0}, conjugate(kSensorFromUsdCamera)});
+        } else if (prim.HasAPI(TfToken("LidarAPI_1"))) {
             type = SensorType::Lidar;
             scene.typeName = "Lidar";
             const auto integer = [&prim](const char* name) {
@@ -663,12 +752,14 @@ private:
             settings = {{"accel_noise", real("sensor:imu:accelNoiseStd").value_or(0.0)},
                         {"gyro_noise", real("sensor:imu:gyroNoiseStd").value_or(0.0)}};
         } else {
-            note(path + ": a sensor without LidarAPI_1 or ImuAPI_1 is not simulated yet");
+            note(path +
+                 ": a sensor without LidarAPI_1, ImuAPI_1 or CameraSensorAPI_1 is not "
+                 "simulated yet");
             scene.typeName = "Xform";
             return {};
         }
-        m_.world.addSensor(prim.GetName().GetString(), type, BodyId{body}, scene.offset, *rate,
-                           settings);
+        m_.world.addSensor(prim.GetName().GetString(), type, BodyId{body}, mount, *rate, settings);
+        worldPrim_[prim.GetPath()] = m_.world.sensors.prim.back();
         return {};
     }
 
@@ -721,14 +812,103 @@ private:
                 w.addCollider(body, ShapeType::Plane, {0.0, 0.0, 1.0}, pose, friction);
                 hasPlane_ = true;
             } else if (prim.IsA<UsdGeomMesh>()) {
-                note(path +
-                     ": mesh colliders are not used yet; convex decomposition comes with "
-                     "the collision bake tool");
+                addMeshCollider(prim, body, pose, s, friction);
             } else {
                 note(path + ": collider type " + prim.GetTypeName().GetString() +
                      " is not supported");
             }
         }
+    }
+
+    /// A mesh collider (formats.md §2: convex hulls, never render meshes): one marked
+    /// physics:approximation "convexHull" whose points are convex is a hull; anything else is
+    /// skipped with a note naming the collision bake.
+    void addMeshCollider(const UsdPrim& prim, BodyId body, const Pose& pose,
+                         const std::array<double, 3>& scale, double friction) {
+        const std::string path = prim.GetPath().GetString();
+        TfToken approximation = UsdPhysicsTokens->none;
+        if (prim.HasAPI<UsdPhysicsMeshCollisionAPI>()) {
+            UsdPhysicsMeshCollisionAPI(prim).GetApproximationAttr().Get(&approximation);
+        }
+        if (approximation != UsdPhysicsTokens->convexHull) {
+            note(path + ": a mesh collider with approximation \"" + approximation.GetString() +
+                 "\" is not used; bake it into convex hulls with `ros2 run "
+                 "lagrange_collision_bake collision_bake`");
+            return;
+        }
+        const UsdGeomMesh mesh(prim);
+        VtVec3fArray points;
+        VtIntArray counts;
+        VtIntArray indices;
+        mesh.GetPointsAttr().Get(&points);
+        mesh.GetFaceVertexCountsAttr().Get(&counts);
+        mesh.GetFaceVertexIndicesAttr().Get(&indices);
+        ConvexHull hull;
+        for (const GfVec3f& p : points) {
+            hull.points.push_back({p[0] * scale[0], p[1] * scale[1], p[2] * scale[2]});
+        }
+        std::size_t at = 0;
+        for (const int count : counts) {
+            for (int k = 1; k + 1 < count; ++k) {  // a fan per face
+                const auto index = [&](std::size_t i) {
+                    return static_cast<std::uint32_t>(indices[i]);
+                };
+                hull.triangles.push_back({index(at), index(at + k), index(at + k + 1)});
+            }
+            at += static_cast<std::size_t>(std::max(count, 0));
+        }
+        for (const auto& t : hull.triangles) {
+            if (std::max({t[0], t[1], t[2]}) >= hull.points.size()) {
+                errors_.push_back(path + ": a face indexes a point the mesh does not have");
+                return;
+            }
+        }
+        if (hull.points.size() < 4 || hull.triangles.size() < 4 || !convex(hull)) {
+            note(path +
+                 ": approximation \"convexHull\" on a mesh that is not convex; it is not "
+                 "used: decompose it with `ros2 run lagrange_collision_bake "
+                 "collision_bake`");
+            return;
+        }
+        m_.world.addHullCollider(body, std::move(hull), pose, friction);
+    }
+
+    /// Whether every point lies on the inner side of every face plane (within 1e-6 of the
+    /// hull's size): the face-plane ray casts are exact only for a convex mesh.
+    static bool convex(const ConvexHull& hull) {
+        std::array<double, 3> centre{};
+        double extent = 0.0;
+        for (const auto& p : hull.points) {
+            for (std::size_t i = 0; i < 3; ++i) {
+                centre.at(i) += p.at(i) / static_cast<double>(hull.points.size());
+                extent = std::max(extent, std::abs(p.at(i)));
+            }
+        }
+        const double tolerance = 1e-6 * std::max(extent, 1e-3);
+        for (const auto& t : hull.triangles) {
+            const auto& a = hull.points[t[0]];
+            const auto& b = hull.points[t[1]];
+            const auto& c = hull.points[t[2]];
+            const std::array<double, 3> u{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+            const std::array<double, 3> v{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+            const std::array<double, 3> n{u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
+                                          u[0] * v[1] - u[1] * v[0]};
+            const double length = std::hypot(n[0], n[1], n[2]);
+            if (length <= 0.0) {
+                continue;
+            }
+            const auto side = [&](const std::array<double, 3>& x) {
+                return (n[0] * (x[0] - a[0]) + n[1] * (x[1] - a[1]) + n[2] * (x[2] - a[2])) /
+                       length;
+            };
+            const double sign = side(centre) > 0.0 ? -1.0 : 1.0;  // outward
+            for (const auto& p : hull.points) {
+                if (sign * side(p) > tolerance) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     double frictionOf(const UsdPrim& prim) const {
@@ -743,6 +923,24 @@ private:
         return options_.defaultFriction;
     }
 
+    /// The world prim of a USD prim: its body, joint or sensor, or a new prim (a bus, a battery)
+    /// named after it.
+    PrimId worldPrimOf(const UsdPrim& prim) {
+        if (const auto found = worldPrim_.find(prim.GetPath()); found != worldPrim_.end()) {
+            return found->second;
+        }
+        const PrimId id = m_.world.addPrim(prim.GetPath().GetString(), prim.GetName().GetString());
+        worldPrim_.emplace(prim.GetPath(), id);
+        return id;
+    }
+
+    void collectSchemas() {
+        SchemaCollector collector(
+            stage_, [this](const UsdPrim& prim) { return worldPrimOf(prim); }, errors_,
+            [this](std::string text) { note(std::move(text)); });
+        collector.collect(m_.world.schemaInstances);
+    }
+
 public:
     [[nodiscard]] bool hasPlane() const { return hasPlane_; }
 
@@ -752,6 +950,7 @@ private:
     Model& m_;
     std::vector<UsdPrim> bodyPrims_;
     std::map<SdfPath, std::uint32_t> bodyIndex_;
+    std::map<SdfPath, PrimId> worldPrim_;  // USD prim -> world prim, for schema instances
     std::vector<UsdPhysicsJoint> joints_;
     std::vector<std::string> errors_;
     bool hasPlane_{false};
@@ -760,6 +959,7 @@ private:
 }  // namespace
 
 Expected<Model, std::string> loadStage(const std::string& path, const ReadOptions& options) {
+    registerSchemaLibraries();
     const UsdStageRefPtr stage = UsdStage::Open(path);
     if (!stage) {
         return Unexpected{"cannot open " + path + " as a USD stage"};
@@ -778,6 +978,7 @@ Expected<Model, std::string> loadStage(const std::string& path, const ReadOption
         w.colliders.size.insert(w.colliders.size.begin(), {0.0, 0.0, 1.0});
         w.colliders.poseInBody.insert(w.colliders.poseInBody.begin(), Pose{});
         w.colliders.friction.insert(w.colliders.friction.begin(), options.groundFriction);
+        w.colliders.hull.insert(w.colliders.hull.begin(), kNoHull);
         addGroundPrim(model);
     }
     const UsdPrim root = stage->GetDefaultPrim();

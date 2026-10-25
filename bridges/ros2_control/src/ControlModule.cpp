@@ -65,7 +65,10 @@ public:
                 d.input(feedback(base + "/position", prismatic ? units::m : units::rad));
             joint.velocity = d.input(
                 feedback(base + "/velocity", prismatic ? units::m_per_s : units::rad_per_s));
-            joint.torque = d.output(spec(base + "/torque", prismatic ? units::N : units::N_m));
+            // The command: the electrical domain (or its ideal substitute) turns it into the
+            // torque.
+            joint.torque =
+                d.output(spec(base + "/torque_command", prismatic ? units::N : units::N_m));
             signals_.push_back(joint);
         }
         return {};
@@ -95,10 +98,15 @@ public:
                 slot.effort = joint.applied;
             }
         }
+        bool cycled = false;
+        double cyclePeriod = 0.0;
         if (now - lastCycleNs_ >= periodNs_) {
             // read -> update -> write at the controller rate, in simulation time: lockstep.
-            host_.cycle(now, lastCycleNs_ < 0 ? periodNs_ : now - lastCycleNs_);
+            const std::int64_t period = lastCycleNs_ < 0 ? periodNs_ : now - lastCycleNs_;
+            host_.cycle(now, period);
             lastCycleNs_ = now;
+            cycled = true;
+            cyclePeriod = static_cast<double>(period) * 1e-9;
         }
         const double dt = context.dt.seconds();
         const std::lock_guard<std::mutex> lock(table.mutex());
@@ -108,6 +116,13 @@ public:
             if (slot.mode != joint.mode) {
                 joint.integral = 0.0;  // a new controller starts from rest
                 joint.mode = slot.mode;
+                joint.lastCommand = slot.commandPosition;
+                joint.commandRate = 0.0;
+            } else if (cycled && slot.mode == CommandMode::Position) {
+                // The commanded velocity: how fast the controller moves the set point (a
+                // trajectory controller's spline), the drive's velocity feedforward.
+                joint.commandRate = (slot.commandPosition - joint.lastCommand) / cyclePeriod;
+                joint.lastCommand = slot.commandPosition;
             }
             switch (slot.mode) {
                 case CommandMode::Effort:
@@ -119,10 +134,15 @@ public:
                     torque = joint.gains.velocityP * error + joint.gains.velocityI * joint.integral;
                     break;
                 }
-                case CommandMode::Position:
-                    torque = joint.gains.positionP * (slot.commandPosition - slot.position) -
-                             joint.gains.positionD * slot.velocity;
+                case CommandMode::Position: {
+                    const double error = slot.commandPosition - slot.position;
+                    joint.integral += error * dt;
+                    // D on the velocity error: damping without holding a moving joint back.
+                    torque = joint.gains.positionP * error +
+                             joint.gains.positionI * joint.integral +
+                             joint.gains.positionD * (joint.commandRate - slot.velocity);
                     break;
+                }
                 case CommandMode::None:
                     break;
             }
@@ -130,6 +150,8 @@ public:
             // Anti-windup: stop integrating while the motor saturates.
             if (clamped != torque && slot.mode == CommandMode::Velocity) {
                 joint.integral -= (slot.commandVelocity - slot.velocity) * dt;
+            } else if (clamped != torque && slot.mode == CommandMode::Position) {
+                joint.integral -= (slot.commandPosition - slot.position) * dt;
             }
             joint.applied = clamped;
             bus.write(joint.torque, clamped);
@@ -149,6 +171,8 @@ private:
         CommandMode mode{CommandMode::None};
         double integral{0.0};
         double applied{0.0};
+        double lastCommand{0.0};  // rad or m: the position command of the last controller cycle
+        double commandRate{0.0};  // rad/s or m/s: how fast the command moved over that cycle
     };
     ControllerHost& host_;
     std::vector<ControlJoint> joints_;

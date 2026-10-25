@@ -14,7 +14,7 @@ Evidence references (V…) point to `docs/plan/verification.md`.
 | Q17 project name | **Lagrange**, organisation Open Physical Systems (`Open-Physical-Systems/Lagrange` on GitHub). Logos are in `docs/imgs/` |
 | Q19 hosting | The repository lives in a GitHub organisation. Team size and a self-hosted GPU runner are still open |
 | Q4 v0.1 without OpenUSD | Accepted: the mock server converts URDF directly to protocol scene messages; USD arrives in v0.2 |
-| Q15 mock server language | Python for v0.1 only. The shipped product is C++: replay moves into the C++ server in v0.2 and the Python server stays as a test tool |
+| Q15 mock server language | Decided (2026-10-25, E8): replay is `lagrange_server --replay`; the Python server is a test tool (conformance, the viewer's golden images) |
 | Q20 protocol (RFC 0003) | Accepted: Protobuf over a Unix socket or TCP, `memfd` shared memory, Zenoh deferred |
 | Q21 window library (RFC 0006) | Accepted: SDL3 |
 | Q9 first physics backend | Accepted: MuJoCo in v0.2, Jolt next, PhysX in v0.6. No in-house rigid-body solver (invariant 12) |
@@ -48,6 +48,18 @@ server side.
 a good protocol conformance check). In v0.2, move replay into the C++ server as a mode that uses
 replay substitutes for every domain, and keep the Python server as a test tool. Decide finally in
 issue 0.2-E8.
+*Status (2026-10-25):* the C++ replay substitute exists (`lagrange_recording`, bench mode:
+`--bench`, a profile's rigid_body `replay`). A whole-run replay mode in the C++ server is the
+same substitute for every domain, but the viewer's replay also seeks and scrubs, which the
+Python mock server does and the scheduler does not (it only steps forward from t = 0). E8 stays
+open until seeking is designed (restore from saved states every N seconds is the likely way);
+until then the Python server remains the viewer's replay path.
+*Decided (2026-10-25, E8):* `lagrange_server --replay run.mcap` (and the viewer's Open
+recording on a running server) is the product's replay. Every recorded domain runs as a replay
+substitute, the scene comes from the snapshot the recorder now stores, and seeking restores the
+nearest of the scheduler states saved every second of replay time and steps forward from it
+(a seek ahead of what has been played first plays up to it). The Python mock server stays as a
+test tool: the protocol conformance client and the viewer's headless golden images run on it.
 
 **Q20. Protocol encoding and transport (RFC 0003).**
 **Recommendation:** Protobuf (proto3) with raw little-endian arrays in `bytes` fields for bulk
@@ -128,6 +140,10 @@ the validated path in v0.3; the FMU host is an extension mechanism delivered in 
 reference FMU whose license is clear. Consider accepting FMI 2.0 co-simulation FMUs too, since
 most existing vendor FMUs are 2.0; this would be a change to the format stack and needs your
 decision.
+*Status (2026-10-25):* the FMU host is built on FMI Library 3.0.4 (which can also read FMI 2.0,
+so accepting 2.0 later is a host change, not a new dependency). The reference FMU is
+`lagrange_models`' `dc_drive`, hand-written in C under Apache-2.0, which sidesteps the
+OpenModelica export and licence questions. FMI 2.0 stays open.
 
 **Q9. First rigid-body backend and MuJoCo source.**
 The brief lists PhysX first. PhysX is not packaged, has a custom build system, and its GPU part

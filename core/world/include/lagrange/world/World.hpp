@@ -28,6 +28,8 @@ struct JointId {
 
 enum class JointType : std::uint8_t { Fixed, Revolute, Prismatic, Spherical, Free, Continuous };
 
+inline constexpr std::uint32_t kNoHull = 0xFFFF'FFFFU;
+
 /// The world itself as a parent body: bodies whose parent is kWorldBody hang from the world.
 inline constexpr BodyId kWorldBody{0xFFFF'FFFFU};
 
@@ -38,15 +40,25 @@ struct Pose {
 };
 
 /// Collision shapes. Sizes follow MuJoCo's conventions: sphere {radius}, capsule and cylinder
-/// {radius, half length}, box {half extents}, plane {half extents x, y, grid spacing}.
-enum class ShapeType : std::uint8_t { Plane, Sphere, Capsule, Cylinder, Box };
+/// {radius, half length}, box {half extents}, plane {half extents x, y, grid spacing}. A convex
+/// hull's points are in World::hulls (Colliders::hull); its size is the half extents of their
+/// bounding box about the shape origin.
+enum class ShapeType : std::uint8_t { Plane, Sphere, Capsule, Cylinder, Box, ConvexHull };
 
-enum class SensorType : std::uint8_t { Imu, Lidar };
+/// A convex hull collider (formats.md §2: collision geometry is convex hulls, never render
+/// meshes): its vertices and its outward-wound triangles, in the shape's frame, m.
+struct ConvexHull {
+    std::vector<std::array<double, 3>> points;
+    std::vector<std::array<std::uint32_t, 3>> triangles;
+};
+
+enum class SensorType : std::uint8_t { Imu, Lidar, Camera };
 
 /// One applied API schema on one prim, with its attribute values read once at load.
 /// Lookups are by name, so they belong in declare() and init(), never in step().
 struct SchemaInstance {
-    std::string schema;  // "ElectricalMotorAPI_1"
+    std::string schema;    // "ElectricalMotorAPI_1"
+    std::string instance;  // a multiple-apply schema's instance ("dc_out"); empty otherwise
     PrimId prim;
     std::map<std::string, double, std::less<>> reals;
     std::map<std::string, std::int64_t, std::less<>> integers;
@@ -93,6 +105,9 @@ struct World {
         std::vector<double> lowerLimit, upperLimit;  // rad or m
         std::vector<double> effortLimit;             // N·m or N
         std::vector<double> velocityLimit;           // rad/s or m/s
+        /// Inertia added at the joint by what drives it: a motor's rotor reflected through its
+        /// gear, N²·J_rotor (kg·m², or kg for a slide). Physics adds it to the joint's mass.
+        std::vector<double> armature;
         std::vector<PrimId> prim;
         std::vector<bool> actuated;  // a motor or controller drives it
     } joints;
@@ -103,8 +118,10 @@ struct World {
         std::vector<ShapeType> shape;
         std::vector<std::array<double, 3>> size;  // m, see ShapeType
         std::vector<Pose> poseInBody;
-        std::vector<double> friction;  // Coulomb coefficient, sliding
+        std::vector<double> friction;     // Coulomb coefficient, sliding
+        std::vector<std::uint32_t> hull;  // index into hulls for a ConvexHull, else kNoHull
     } colliders;
+    std::vector<ConvexHull> hulls;
 
     /// Sensors mounted on bodies (from SensorAPI schemas; from <sensor> blocks of a URDF until
     /// the stage loader exists). Sensor frame: x forward, z up.
@@ -117,7 +134,8 @@ struct World {
         std::vector<PrimId> prim;
         /// Type-specific settings by name, SI units: lidar "samples", "min_angle" (rad),
         /// "max_angle", "min_range" (m), "max_range", "range_noise" (m, 1 sigma); IMU
-        /// "accel_noise" (m/s², 1 sigma), "gyro_noise" (rad/s, 1 sigma).
+        /// "accel_noise" (m/s², 1 sigma), "gyro_noise" (rad/s, 1 sigma); camera "width",
+        /// "height" (px), "horizontal_fov" (rad), "near_clip" (m), "far_clip" (m).
         std::vector<std::map<std::string, double, std::less<>>> settings;
     } sensors;
 
@@ -142,6 +160,9 @@ struct World {
                    double updateRateHz, std::map<std::string, double, std::less<>> sensorSettings);
     void addCollider(BodyId onBody, ShapeType shapeType, const std::array<double, 3>& shapeSize,
                      const Pose& poseInOwner, double slidingFriction);
+    /// A convex hull collider; its size is computed from the points.
+    void addHullCollider(BodyId onBody, ConvexHull hull, const Pose& poseInOwner,
+                         double slidingFriction);
 };
 
 /// Read-only access to the world for modules (declare and init).

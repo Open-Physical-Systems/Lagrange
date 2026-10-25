@@ -31,18 +31,8 @@ install(
 
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
-    find_package(lagrange_server REQUIRED)
     ament_add_gtest(test_jolt test/test_jolt.cpp TIMEOUT 120)
-    target_link_libraries(
-        test_jolt
-        lagrange_rigid_body_jolt
-        lagrange_server::lagrange_server
-    )
-    target_compile_definitions(
-        test_jolt
-        PRIVATE
-            LAGRANGE_TEST_AMR_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../../../assets/robots/amr_diffdrive/amr_diffdrive.urdf"
-    )
+    target_link_libraries(test_jolt lagrange_rigid_body_jolt)
     lagrange_target_defaults(test_jolt)
 endif()
 

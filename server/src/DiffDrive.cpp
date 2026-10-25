@@ -106,8 +106,10 @@ Status DiffDriveController::declare(const WorldView&, const ModuleConfig&, Signa
     };
     leftVelocity_ = velocity(settings_.leftJoint);
     rightVelocity_ = velocity(settings_.rightJoint);
-    leftTorque_ = d.output(scalar("joint/" + settings_.leftJoint + "/torque", units::N_m));
-    rightTorque_ = d.output(scalar("joint/" + settings_.rightJoint + "/torque", units::N_m));
+    // Torque commands: the electrical domain (or its ideal substitute) turns them into torque.
+    leftTorque_ = d.output(scalar("joint/" + settings_.leftJoint + "/torque_command", units::N_m));
+    rightTorque_ =
+        d.output(scalar("joint/" + settings_.rightJoint + "/torque_command", units::N_m));
     return {};
 }
 

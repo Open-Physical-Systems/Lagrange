@@ -12,9 +12,11 @@ A domain is one kind of physics, simulated by its own modules:
 
 | Domain | In v0.2 | Substitute when off |
 |---|---|---|
-| `rigid_body` | MuJoCo 3.12: bodies, joints, contacts, at 1 ms | `fixed`: the robot holds its pose |
+| `rigid_body` | MuJoCo 3.12: bodies, joints, contacts, at 1 ms | `fixed`: the robot holds its pose; `replay`: a recording's joint and body motion, open loop (bench mode, `--bench RUN.mcap`) |
 | `sensors` | IMU and 2D/3D lidar, with noise models | `ground_truth`: exact values, no noise |
-| `electrical`, `thermal`, `aerodynamics`, `weather`, `emi`, `radiation` | no module yet | `ideal`, `ambient`, `zero`, `clear`, `zero`, `zero` |
+| `electrical` | v0.3: battery, bus, motor drives and loads, averaged, at 100 µs, for robots with motor prims (the sample AMR's come from its overlay file) | `ideal`: the commanded torque reaches the joint |
+| `thermal` | v0.3: lumped networks heated by the electrical losses, at 100 ms, for robots with thermal prims, given the site's ambient temperature | `ambient`: every node at the ambient temperature |
+| `aerodynamics`, `weather`, `emi`, `radiation` | no module yet | `zero`, `clear`, `zero`, `zero` |
 
 Domains without a module are always substituted. Robot-class domains (`comms`, `traffic`,
 `vehicle_dynamics`, `rotor_aero`, `hydrodynamics`) follow in later releases.
@@ -66,8 +68,8 @@ refused: Lagrange never converts silently, so a wrong assumption in one module c
 
 ## Time and the scheduler
 
-Every module has its own step size: physics 1 ms, the IMU 5 ms, a lidar 100 ms, later an
-electrical model 100 µs. The scheduler is a **multirate** co-simulation master:
+Every module has its own step size: physics 1 ms, the IMU 5 ms, a lidar 100 ms, the electrical
+network 100 µs, the thermal network 100 ms. The scheduler is a **multirate** co-simulation master:
 
 - The **base tick** is the greatest common divisor of all step sizes. At each tick, the modules
   that are due step, in a fixed order: writers before their readers, ties broken by step size,
@@ -75,6 +77,10 @@ electrical model 100 µs. The scheduler is a **multirate** co-simulation master:
 - A reader that steps more slowly than its writer chooses how to see the values in between with
   the input's **hold**: `ZeroOrder` (the latest value, the default), `WindowAverage` (the mean
   since the reader's previous step), or `LinearExtrapolate`.
+- A slower module that reads a flow (not a feedback input) from a faster one steps at the **end
+  of its window**: physics at 1 ms reading the electrical network's torques runs after the ten
+  100 µs electrical steps of its millisecond, so it gets the average over its own step rather
+  than the one before. `lagrange graph` and the plan show it.
 - A loop (a controller reads joint velocities, and physics reads the controller's torques) needs
   one input marked **feedback**: it reads the writer's previous step. Without one, wiring
   reports a `Cycle`.

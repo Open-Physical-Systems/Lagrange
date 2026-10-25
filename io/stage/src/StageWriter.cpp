@@ -1,10 +1,13 @@
 // Model -> USD: the back end of the importers. Writes what loadStage reads back (StageReader.cpp
 // documents the rules in the other direction).
 #include "Math.hpp"
+#include "Schemas.hpp"
 #include "lagrange/stage/Stage.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <map>
 #include <numbers>
 #include <set>
@@ -13,13 +16,18 @@
 
 #include <pxr/base/gf/quatd.h>
 #include <pxr/base/gf/quatf.h>
+#include <pxr/base/gf/vec2d.h>
 #include <pxr/base/gf/vec3d.h>
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/tf/token.h>
 #include <pxr/base/vt/array.h>
+#include <pxr/usd/sdf/assetPath.h>
 #include <pxr/usd/sdf/path.h>
 #include <pxr/usd/sdf/types.h>
+#include <pxr/usd/usd/attribute.h>
+#include <pxr/usd/usd/relationship.h>
 #include <pxr/usd/usd/stage.h>
+#include <pxr/usd/usdGeom/camera.h>
 #include <pxr/usd/usdGeom/capsule.h>
 #include <pxr/usd/usdGeom/cube.h>
 #include <pxr/usd/usdGeom/cylinder.h>
@@ -35,6 +43,7 @@
 #include <pxr/usd/usdPhysics/fixedJoint.h>
 #include <pxr/usd/usdPhysics/massAPI.h>
 #include <pxr/usd/usdPhysics/materialAPI.h>
+#include <pxr/usd/usdPhysics/meshCollisionAPI.h>
 #include <pxr/usd/usdPhysics/metrics.h>
 #include <pxr/usd/usdPhysics/prismaticJoint.h>
 #include <pxr/usd/usdPhysics/revoluteJoint.h>
@@ -48,6 +57,10 @@ namespace lagrange::stage {
 namespace {
 
 using namespace pxr;  // NOLINT(google-build-using-namespace): OpenUSD names are long enough
+
+// UsdGeomCamera's fallback horizontal aperture (tenths of a scene unit, by its convention). Only
+// the ratio to the focal length matters here.
+constexpr double kHorizontalApertureMm = 20.955;
 
 GfVec3d vec3d(const std::array<double, 3>& v) {
     return {v[0], v[1], v[2]};
@@ -88,7 +101,8 @@ std::string primName(const std::string& name) {
 
 class Writer {
 public:
-    Writer(const Model& model, UsdStageRefPtr stage) : m_(model), stage_(std::move(stage)) {}
+    Writer(const Model& model, UsdStageRefPtr stage, std::filesystem::path directory)
+        : m_(model), stage_(std::move(stage)), directory_(std::move(directory)) {}
 
     Expected<void, std::string> write() {
         const std::vector<bool> moving = movingBodies(m_.world);
@@ -125,7 +139,10 @@ public:
             return status;
         }
         writeColliders();
-        return writeJoints();
+        if (auto status = writeJoints(); !status) {
+            return status;
+        }
+        return writeSchemas();
     }
 
 private:
@@ -182,9 +199,19 @@ private:
             }
             return {};
         }
+        const auto sensor = sensorOfPrim_.find(index);
+        if (sensor != sensorOfPrim_.end() &&
+            m_.world.sensors.type[sensor->second] == SensorType::Camera) {
+            // A UsdGeomCamera looks along its -z: turn the sensor frame (x forward) into it.
+            UsdGeomCamera camera = UsdGeomCamera::Define(stage_, paths_[p]);
+            const Pose mount = localPose(index);
+            setTransform(camera,
+                         {mount.position, multiply(mount.orientation, kSensorFromUsdCamera)});
+            return writeSensor(camera.GetPrim(), sensor->second);
+        }
         UsdGeomXform xform = UsdGeomXform::Define(stage_, paths_[p]);
         setTransform(xform, localPose(index));
-        if (const auto sensor = sensorOfPrim_.find(index); sensor != sensorOfPrim_.end()) {
+        if (sensor != sensorOfPrim_.end()) {
             return writeSensor(xform.GetPrim(), sensor->second);
         }
         return {};
@@ -219,6 +246,24 @@ private:
             real("sensor:lidar:rangeMin", get("min_range", 0.1));
             real("sensor:lidar:rangeMax", get("max_range", 30.0));
             real("sensor:lidar:rangeNoiseStd", get("range_noise", 0.0));
+        } else if (sensors.type[s] == SensorType::Camera) {
+            prim.ApplyAPI(TfToken("CameraSensorAPI_1"));
+            const double width = get("width", 640.0);
+            const double height = get("height", 480.0);
+            prim.CreateAttribute(TfToken("sensor:camera:width"), SdfValueTypeNames->Int)
+                .Set(static_cast<int>(width));
+            prim.CreateAttribute(TfToken("sensor:camera:height"), SdfValueTypeNames->Int)
+                .Set(static_cast<int>(height));
+            // The lens: square pixels, so the apertures have the image's aspect ratio.
+            const UsdGeomCamera camera(prim);
+            const double aperture = kHorizontalApertureMm;
+            const double focal = aperture / 2.0 / std::tan(get("horizontal_fov", 1.047) / 2.0);
+            camera.CreateFocalLengthAttr().Set(static_cast<float>(focal));
+            camera.CreateHorizontalApertureAttr().Set(static_cast<float>(aperture));
+            camera.CreateVerticalApertureAttr().Set(static_cast<float>(aperture * height / width));
+            camera.CreateClippingRangeAttr().Set(
+                GfVec2f(static_cast<float>(get("near_clip", 0.05)),
+                        static_cast<float>(get("far_clip", 100.0))));
         } else {
             prim.ApplyAPI(TfToken("ImuAPI_1"));
             real("sensor:imu:accelNoiseStd", get("accel_noise", 0.0));
@@ -327,6 +372,31 @@ private:
                     gprim = capsule;
                     break;
                 }
+                case ShapeType::ConvexHull: {
+                    const ConvexHull& hull = m_.world.hulls.at(colliders.hull[c]);
+                    UsdGeomMesh mesh = UsdGeomMesh::Define(stage_, path);
+                    VtVec3fArray points;
+                    for (const auto& p : hull.points) {
+                        points.push_back(GfVec3f(static_cast<float>(p[0]), static_cast<float>(p[1]),
+                                                 static_cast<float>(p[2])));
+                    }
+                    VtIntArray counts(hull.triangles.size(), 3);
+                    VtIntArray indices;
+                    for (const auto& t : hull.triangles) {
+                        for (const std::uint32_t i : t) {
+                            indices.push_back(static_cast<int>(i));
+                        }
+                    }
+                    mesh.CreatePointsAttr().Set(points);
+                    mesh.CreateFaceVertexCountsAttr().Set(counts);
+                    mesh.CreateFaceVertexIndicesAttr().Set(indices);
+                    setTransform(mesh, pose);
+                    UsdPhysicsMeshCollisionAPI::Apply(mesh.GetPrim())
+                        .CreateApproximationAttr()
+                        .Set(UsdPhysicsTokens->convexHull);
+                    gprim = mesh;
+                    break;
+                }
                 case ShapeType::Plane:
                     continue;  // only the ground is a plane
             }
@@ -378,6 +448,9 @@ private:
                 hasJoint ? world.joints.names[found->second] : world.bodies.names[b] + "_weld";
             const SdfPath scope = jointScope(static_cast<std::uint32_t>(b));
             const SdfPath path = scope.AppendChild(TfToken(primName(name)));
+            if (hasJoint) {
+                jointPath_[found->second] = path;
+            }
             const JointType type = hasJoint ? world.joints.type[found->second] : JointType::Fixed;
             const std::array<double, 3> axis =
                 hasJoint ? world.joints.axis[found->second] : std::array<double, 3>{1, 0, 0};
@@ -460,8 +533,108 @@ private:
         return scope;
     }
 
+    /// Where a world prim was written: its body's, joint's or sensor's prim, or the scene prim
+    /// with its path (an overlay's motor or bus); otherwise a new Xform at its path.
+    SdfPath pathOf(PrimId prim) {
+        const World& w = m_.world;
+        for (std::size_t b = 0; b < w.bodies.prim.size(); ++b) {
+            if (w.bodies.prim[b] == prim && primOfBody_[b] != kNoIndex) {
+                return paths_[primOfBody_[b]];
+            }
+        }
+        for (const auto& [joint, path] : jointPath_) {
+            if (w.joints.prim[joint] == prim) {
+                return path;
+            }
+        }
+        for (std::size_t s = 0; s < w.sensors.prim.size() && s < m_.sensorPrim.size(); ++s) {
+            if (w.sensors.prim[s] == prim) {
+                return paths_[m_.sensorPrim[s]];
+            }
+        }
+        const std::string& text = w.prims.paths[prim.index];
+        for (std::size_t p = 0; p < m_.scene.prims.size(); ++p) {
+            if (m_.scene.prims[p].path == text && !paths_[p].IsEmpty()) {
+                return paths_[p];
+            }
+        }
+        const SdfPath path(text);
+        if (!stage_->GetPrimAtPath(path)) {
+            UsdGeomXform::Define(stage_, path);
+        }
+        return path;
+    }
+
+    /// Schema instances, apart from those the writer has applied itself (the sensors'). Only
+    /// values that differ from the schema's fallback are authored.
+    Expected<void, std::string> writeSchemas() {
+        for (const SchemaInstance& s : m_.world.schemaInstances) {
+            const SdfPath path = pathOf(s.prim);
+            const UsdPrim prim = stage_->GetPrimAtPath(path);
+            const TfToken name(s.instance.empty() ? s.schema : s.schema + ":" + s.instance);
+            const TfTokenVector applied = prim.GetAppliedSchemas();
+            if (std::find(applied.begin(), applied.end(), name) != applied.end()) {
+                continue;
+            }
+            if (!prim.AddAppliedSchema(name) || !prim.HasAPI(TfToken(s.schema))) {
+                return Unexpected{"cannot apply " + name.GetString() + " to " + path.GetString() +
+                                  ": is lagrange_schemas on PXR_PLUGINPATH_NAME?"};
+            }
+            const auto set = [&](const std::string& key, const VtValue& value) {
+                UsdAttribute attribute = prim.GetAttribute(TfToken(key));
+                VtValue fallback;
+                if (!attribute || (attribute.Get(&fallback) && fallback == value)) {
+                    return;
+                }
+                attribute.Set(value);
+            };
+            const auto typeOf = [&](const std::string& key) {
+                const UsdAttribute attribute = prim.GetAttribute(TfToken(key));
+                return attribute ? attribute.GetTypeName() : SdfValueTypeName();
+            };
+            for (const auto& [key, value] : s.reals) {
+                set(key, VtValue(value));
+            }
+            for (const auto& [key, value] : s.integers) {
+                set(key, typeOf(key) == SdfValueTypeNames->Bool ? VtValue(value != 0)
+                                                                : VtValue(static_cast<int>(value)));
+            }
+            for (const auto& [key, value] : s.tokens) {
+                set(key, typeOf(key) == SdfValueTypeNames->String ? VtValue(value)
+                                                                  : VtValue(TfToken(value)));
+            }
+            for (const auto& [key, value] : s.realArrays) {
+                const SdfValueTypeName type = typeOf(key);
+                if (type == SdfValueTypeNames->Double2 && value.size() == 2) {
+                    set(key, VtValue(GfVec2d(value[0], value[1])));
+                } else if (type == SdfValueTypeNames->Double3 && value.size() == 3) {
+                    set(key, VtValue(GfVec3d(value[0], value[1], value[2])));
+                } else {
+                    set(key, VtValue(VtDoubleArray(value.begin(), value.end())));
+                }
+            }
+            for (const auto& [key, value] : s.assetPaths) {
+                // Relative to the written layer when it is below it, so the files move together.
+                const std::filesystem::path asset(value);
+                const std::filesystem::path relative = asset.lexically_relative(directory_);
+                const bool below = !relative.empty() && *relative.begin() != "..";
+                set(key, VtValue(SdfAssetPath(below ? "./" + relative.string() : value)));
+            }
+            for (const auto& [key, targets] : s.relationships) {
+                SdfPathVector paths;
+                for (const PrimId target : targets) {
+                    paths.push_back(pathOf(target));
+                }
+                prim.CreateRelationship(TfToken(key)).SetTargets(paths);
+            }
+        }
+        return {};
+    }
+
     const Model& m_;
     UsdStageRefPtr stage_;
+    std::filesystem::path directory_;
+    std::map<std::size_t, SdfPath> jointPath_;  // world joint -> its prim
     std::vector<bool> rigid_;
     std::vector<std::uint32_t> primOfBody_;
     std::map<std::uint32_t, std::size_t> sensorOfPrim_;
@@ -472,6 +645,7 @@ private:
 
 Expected<void, std::string> writeStage(const Model& model, const std::string& path,
                                        const WriteOptions& options) {
+    registerSchemaLibraries();
     UsdStageRefPtr stage = UsdStage::CreateInMemory();
     if (!stage) {
         return Unexpected{std::string("cannot create a USD stage")};
@@ -482,7 +656,7 @@ Expected<void, std::string> writeStage(const Model& model, const std::string& pa
     if (!options.doc.empty()) {
         stage->GetRootLayer()->SetDocumentation(options.doc);
     }
-    Writer writer(model, stage);
+    Writer writer(model, stage, std::filesystem::absolute(path).parent_path());
     if (auto written = writer.write(); !written) {
         return written;
     }

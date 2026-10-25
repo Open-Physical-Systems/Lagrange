@@ -95,7 +95,7 @@ actuated joint; `body/{b}/pose`, `body/{b}/twist`, `body/{b}/acceleration` for e
 |---|---|---|
 | Free fall, pendulum, double pendulum energy drift | closed-form or high-order integration | energy drift < 0.1 % over 10 s at 1 ms |
 | Sliding block on an incline | closed-form (Coulomb) | stick/slip angle within 1° |
-| Backend agreement | same scene in MuJoCo, Jolt, PhysX | joint trajectories within a stated envelope; differences reported, not hidden |
+| Backend agreement | same scene in MuJoCo, Jolt, PhysX | joint trajectories within a stated envelope; differences reported, not hidden. MuJoCo and Jolt (v0.3, `server/test/test_backends.cpp`): arm6 under tilted gravity, joint-space inertia within 2 %, its fall over 0.3 s within 2 % (+5 mrad), with armature within 5 % (+15 mrad); the sample AMR at speed within 0.02 m/s and 0.02 rad/s. Reported: on Jolt's rigid contacts the AMR's drive wheels slip while the drive ramps up (wheels and casters share the load indeterminately), about 0.4 m behind after 6 s |
 | `effective_inertia` | analytic two-link arm inertia matrix diagonal | 1e-9 relative |
 | Determinism | two runs, same seed | bit-identical state hash (MuJoCo backend) |
 | AMR drive test (v0.2) | sim-vs-real: recorded wheel odometry of a real differential-drive robot driving a square. Dataset to be recorded or sourced (open question Q16) | position error after 10 m within the spread of repeated real runs |

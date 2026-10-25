@@ -6,8 +6,16 @@ find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
 find_package(openusd_vendor REQUIRED)
 find_package(lagrange_schemas REQUIRED)
+find_package(yaml-cpp REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 
-add_library(lagrange_stage src/StageReader.cpp src/StageWriter.cpp)
+add_library(
+    lagrange_stage
+    src/StageReader.cpp
+    src/StageWriter.cpp
+    src/Schemas.cpp
+    src/Overlay.cpp
+)
 add_library(lagrange::stage ALIAS lagrange_stage)
 target_include_directories(
     lagrange_stage
@@ -18,7 +26,10 @@ target_include_directories(
 target_link_libraries(
     lagrange_stage
     PUBLIC lagrange_core::lagrange_core
-    PRIVATE openusd_vendor::usd
+    PRIVATE
+        openusd_vendor::usd
+        yaml-cpp::yaml-cpp
+        ament_index_cpp::ament_index_cpp
 )
 lagrange_target_defaults(lagrange_stage)
 
@@ -39,7 +50,7 @@ if(BUILD_TESTING)
         test_stage
         test/test_stage.cpp
         ENV
-            "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor"
+            "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal"
         TIMEOUT 120
     )
     target_link_libraries(test_stage lagrange_stage openusd_vendor::usd)
@@ -47,5 +58,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(lagrange_core openusd_vendor lagrange_schemas)
+ament_export_dependencies(lagrange_core openusd_vendor lagrange_schemas yaml-cpp ament_index_cpp)
 ament_package()

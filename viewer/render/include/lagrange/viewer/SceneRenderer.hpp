@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lagrange/gpu/Raster.hpp"
 #include "lagrange/gpu/Resources.hpp"
 #include "lagrange/viewer/Camera.hpp"
 #include "lagrange/viewer/RenderOptions.hpp"
@@ -51,17 +52,13 @@ public:
     [[nodiscard]] const gpu::Image& color() const { return color_; }
     [[nodiscard]] VkExtent2D extent() const { return color_.extent; }
     [[nodiscard]] std::uint32_t lastDrawCount() const { return lastDrawCount_; }
+    /// Whether Shading::Wireframe draws edges (the device can fill polygons as lines); without
+    /// it wireframe shading draws unlit.
+    [[nodiscard]] bool wireframeSupported() const { return wireframePipeline_ != VK_NULL_HANDLE; }
 
 private:
-    struct GpuMesh {
-        gpu::Buffer vertices;
-        gpu::Buffer indices;
-        std::uint32_t indexCount{0};
-    };
-
     void createPipelines();
     void uploadMeshes(const SceneStatics& statics);
-    void destroyMeshes();
 
     const gpu::Device& device_;
     gpu::Image color_;
@@ -70,10 +67,14 @@ private:
 
     VkPipelineLayout meshLayout_{VK_NULL_HANDLE};
     VkPipeline meshPipeline_{VK_NULL_HANDLE};
+    VkPipelineLayout unlitLayout_{VK_NULL_HANDLE};
+    VkPipeline unlitPipeline_{VK_NULL_HANDLE};
+    VkPipelineLayout wireframeLayout_{VK_NULL_HANDLE};
+    VkPipeline wireframePipeline_{VK_NULL_HANDLE};
     VkPipelineLayout lineLayout_{VK_NULL_HANDLE};
     VkPipeline linePipeline_{VK_NULL_HANDLE};
 
-    std::vector<GpuMesh> meshes_;
+    gpu::MeshSet meshes_;
     std::uint64_t meshGeneration_{0};  // SceneStatics::generation the meshes were built from
     gpu::Buffer gridMinor_;
     gpu::Buffer gridMajor_;

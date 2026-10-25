@@ -12,15 +12,19 @@ namespace lagrange::gpu {
 class Device;
 
 /// A collision shape for the GPU ray caster. `type` and `size` follow lagrange::ShapeType (Plane
-/// 0, Sphere 1, Capsule 2, Cylinder 3, Box 4); a plane is unbounded. Position and orientation
-/// are in double, relative to the sensor (world axes): the caster combines them with the sensor's
-/// orientation in double and converts to float last, so the kernel's float only ever holds
-/// sensor-relative quantities (docs/design/huge-worlds.md §1).
+/// 0, Sphere 1, Capsule 2, Cylinder 3, Box 4, ConvexHull 5); a plane is unbounded. A convex hull
+/// gives its face planes in `faces`, and `size` bounds its points' coordinates. Position and
+/// orientation are in double, relative to the sensor (world axes): the caster combines them with
+/// the sensor's orientation in double and converts to float last, so the kernel's float only ever
+/// holds sensor-relative quantities (docs/design/huge-worlds.md §1).
 struct CastShape {
     std::uint32_t type{0};
     std::array<double, 3> size{};
     std::array<double, 3> position{};               // m, shape origin minus sensor position
     std::array<double, 4> orientation{1, 0, 0, 0};  // world from shape, unit (w, x, y, z)
+    // ConvexHull only: unit outward normal n and offset c per face, n·x <= c inside, in the
+    // shape's frame. Must outlive the cast.
+    std::span<const std::array<double, 4>> faces{};
 };
 
 struct CastHit {

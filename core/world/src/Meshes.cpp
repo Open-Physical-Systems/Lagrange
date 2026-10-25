@@ -25,6 +25,18 @@ std::uint32_t vertexCount(const TriMesh& mesh) {
 
 }  // namespace
 
+ConvexHull boxHull(const std::array<double, 3>& half) {
+    ConvexHull hull;
+    for (int k = 0; k < 8; ++k) {
+        hull.points.push_back({(k & 1) != 0 ? half[0] : -half[0], (k & 2) != 0 ? half[1] : -half[1],
+                               (k & 4) != 0 ? half[2] : -half[2]});
+    }
+    // Two triangles per face, wound outward (corner k has bit 0 x, bit 1 y, bit 2 z).
+    hull.triangles = {{0, 2, 3}, {0, 3, 1}, {4, 5, 7}, {4, 7, 6}, {0, 1, 5}, {0, 5, 4},
+                      {2, 6, 7}, {2, 7, 3}, {0, 4, 6}, {0, 6, 2}, {1, 3, 7}, {1, 7, 5}};
+    return hull;
+}
+
 TriMesh boxMesh(double sizeX, double sizeY, double sizeZ) {
     const std::array<double, 3> half{sizeX / 2.0, sizeY / 2.0, sizeZ / 2.0};
     TriMesh mesh;
@@ -156,9 +168,15 @@ void appendModel(Model& model, const Model& other) {
         w.joints.upperLimit.back() = o.joints.upperLimit[j];
         w.joints.effortLimit.back() = o.joints.effortLimit[j];
         w.joints.velocityLimit.back() = o.joints.velocityLimit[j];
+        w.joints.armature.back() = o.joints.armature[j];
     }
     for (std::size_t c = 0; c < o.colliders.body.size(); ++c) {
         if (o.colliders.body[c] == kWorldBody && o.colliders.shape[c] == ShapeType::Plane) {
+            continue;
+        }
+        if (o.colliders.shape[c] == ShapeType::ConvexHull) {
+            w.addHullCollider(map(o.colliders.body[c]), o.hulls.at(o.colliders.hull[c]),
+                              o.colliders.poseInBody[c], o.colliders.friction[c]);
             continue;
         }
         w.addCollider(map(o.colliders.body[c]), o.colliders.shape[c], o.colliders.size[c],
@@ -167,6 +185,34 @@ void appendModel(Model& model, const Model& other) {
     for (std::size_t s = 0; s < o.sensors.names.size(); ++s) {
         w.addSensor(o.sensors.names[s], o.sensors.type[s], map(o.sensors.body[s]),
                     o.sensors.poseInBody[s], o.sensors.rateHz[s], o.sensors.settings[s]);
+    }
+    // Schema instances: bodies, joints and sensors got new prims above; any other prim (a bus,
+    // a battery) is added as it was.
+    std::vector<PrimId> worldPrimMap(o.prims.paths.size(), PrimId{kNoIndex});
+    const auto mapPrims = [&worldPrimMap](const std::vector<PrimId>& from,
+                                          const std::vector<PrimId>& to, std::size_t offset) {
+        for (std::size_t i = 0; i < from.size(); ++i) {
+            worldPrimMap[from[i].index] = to[offset + i];
+        }
+    };
+    mapPrims(o.bodies.prim, w.bodies.prim, w.bodies.prim.size() - o.bodies.prim.size());
+    mapPrims(o.joints.prim, w.joints.prim, w.joints.prim.size() - o.joints.prim.size());
+    mapPrims(o.sensors.prim, w.sensors.prim, w.sensors.prim.size() - o.sensors.prim.size());
+    const auto mapPrim = [&](PrimId p) {
+        if (worldPrimMap[p.index].index == kNoIndex) {
+            worldPrimMap[p.index] =
+                w.addPrim(o.prims.paths[p.index], o.prims.instanceNames[p.index]);
+        }
+        return worldPrimMap[p.index];
+    };
+    for (SchemaInstance instance : o.schemaInstances) {
+        instance.prim = mapPrim(instance.prim);
+        for (auto& [name, targets] : instance.relationships) {
+            for (PrimId& target : targets) {
+                target = mapPrim(target);
+            }
+        }
+        w.schemaInstances.push_back(std::move(instance));
     }
     model.actuatedJoints.insert(model.actuatedJoints.end(), other.actuatedJoints.begin(),
                                 other.actuatedJoints.end());

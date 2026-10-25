@@ -631,10 +631,147 @@ def test_launcher_starts_the_simulator_and_the_viewer_shows_its_physics(socket_d
     stats = json.loads(result.stdout.strip().splitlines()[-1])
     assert stats["validation_errors"] == 0, result.stderr
     assert stats["notice"] == "", stats["notice"]
-    # The sample AMR (robot, 10 links, 11 visuals, 3 sensors), the ground, and the warehouse
-    # (its top prim, 7 boxes and their visuals).
-    assert stats["prims"] == 41
+    # The sample AMR (robot, 10 links, 11 visuals, 3 sensors, and from its overlay 2 motors and
+    # the power prim with battery, bus and computer), the ground, and the warehouse (its top
+    # prim, 7 boxes and their visuals).
+    assert stats["prims"] == 47
     assert stats["deltas"] > 0
     assert stats["sim_time_ns"] > 0
     assert stats["profile"] == "valid"
     assert not socket.exists(), "the viewer did not stop the server it started"
+
+
+def local_server() -> str:
+    """lagrange_server in the ROS install, found as the launcher finds it."""
+    for prefix in os.environ.get("AMENT_PREFIX_PATH", "").split(":"):
+        candidate = Path(prefix) / "lib/lagrange_server/lagrange_server"
+        if prefix and candidate.is_file():
+            return str(candidate)
+    pytest.skip("lagrange_server is not installed")
+
+
+def test_collision_shading_draws_the_simulators_colliders(socket_dir):
+    """Design 02-scene's Collision shading: the server's collision shapes in the rigid-body
+    domain colour (#9AACC6) in place of the visuals."""
+    socket = socket_dir / "co.sock"
+    server = subprocess.Popen(
+        [local_server(), "--no-ros", "--listen", f"unix:{socket}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    image = socket_dir / "collision.png"
+    try:
+        result = run_viewer(
+            "--connect",
+            f"unix:{socket}",
+            "--frames",
+            "25",
+            "--size",
+            "1600x1000",
+            "--workspace",
+            "scene",
+            "--shading",
+            "collision",
+            "--screenshot",
+            str(image),
+        )
+    finally:
+        server.terminate()
+        server.wait(10)
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    assert stats["draw_calls"] > 5  # the colliders, not the visual meshes
+    _width, _height, rows = read_png(image)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    # Lit faces of the rigid-body colour: grey-blue, blue the strongest.
+    shapes = sum(1 for r, g, b, _a in pixels if b > 120 and b > r + 15 and g > r and r > 60)
+    assert shapes > 2000, f"no colliders drawn ({shapes} pixels)"
+
+
+def test_thermal_shading_colours_the_simulators_robot_by_temperature(socket_dir):
+    """Design 02-scene's Thermal shading on the simulator's thermal network (v0.3).
+
+    The robot's meshes take the false colour of their nearest thermal node instead of their
+    material, and the legend shows the inferno scale. The robot is near ambient here, the cold
+    end of the scale, so its blue-grey material must be gone.
+    """
+    socket = socket_dir / "th.sock"
+    server = subprocess.Popen(
+        [local_server(), "--no-ros", "--ambient-temperature", "298", "--listen", f"unix:{socket}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    counts = {}
+    try:
+        for shading in ("lit", "thermal"):
+            image = socket_dir / f"{shading}.png"
+            result = run_viewer(
+                "--connect",
+                f"unix:{socket}",
+                "--frames",
+                "25",
+                "--size",
+                "1600x1000",
+                "--workspace",
+                "scene",
+                "--shading",
+                shading,
+                "--screenshot",
+                str(image),
+            )
+            assert result.returncode == 0, result.stderr
+            stats = json.loads(result.stdout.strip().splitlines()[-1])
+            assert stats["validation_errors"] == 0, result.stderr
+            width, height, rows = read_png(image)
+            pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+            # The robot's blue-grey material, as in the first test.
+            body = sum(
+                1 for r, g, b, _a in pixels if r > 110 and b > 150 and b > r + 25 and b > g + 10
+            )
+            # The legend's hot end: inferno yellow, in the viewport's lower right.
+            legend = sum(
+                1
+                for y in range(height * 2 // 3, height)
+                for x in range(width // 2, width)
+                for r, g, b, _a in [rows[y][x * 4 : x * 4 + 4]]
+                if r > 235 and g > 180 and b < 140
+            )
+            counts[shading] = (body, legend)
+    finally:
+        server.terminate()
+        server.wait(10)
+    assert counts["lit"][0] > 150, f"robot not visible lit ({counts})"
+    assert counts["thermal"][0] < counts["lit"][0] // 4, f"robot still in its material {counts}"
+    assert counts["lit"][1] < 20 and counts["thermal"][1] > 50, f"no thermal legend {counts}"
+
+
+def test_wireframe_shading_draws_edges_instead_of_surfaces(socket_dir):
+    """Design 02-scene's Wireframe shading: the robot's triangles as lines in the same unlit
+    colour, so fewer of its blue-grey pixels than when its surfaces are filled, but some."""
+    counts = {}
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        for shading in ("unlit", "wireframe"):
+            image = socket_dir / f"{shading}.png"
+            result = run_viewer(
+                "--connect",
+                f"unix:{server.endpoint.address}",
+                "--frames",
+                "40",
+                "--size",
+                "1400x1000",
+                "--shading",
+                shading,
+                "--screenshot",
+                str(image),
+            )
+            assert result.returncode == 0, result.stderr
+            stats = json.loads(result.stdout.strip().splitlines()[-1])
+            assert stats["validation_errors"] == 0, result.stderr
+            _width, _height, rows = read_png(image)
+            pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+            counts[shading] = sum(
+                1 for r, g, b, _a in pixels if r > 110 and b > 150 and b > r + 25 and b > g + 10
+            )
+    assert counts["unlit"] > 150, counts
+    assert 0 < counts["wireframe"] < counts["unlit"] // 2, counts

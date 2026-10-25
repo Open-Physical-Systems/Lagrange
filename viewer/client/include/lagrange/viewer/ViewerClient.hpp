@@ -17,6 +17,7 @@
 
 namespace lagrange::viewer::v1 {
 class Envelope;
+class SensorFrame;
 }  // namespace lagrange::viewer::v1
 
 namespace lagrange::viewer {
@@ -138,6 +139,14 @@ struct PointCloud {
     std::vector<float> points;  ///< count x (x, y, z, intensity), in the sensor's frame.
 };
 
+/// One image of a camera, as RGBA8 rows from the top. Immutable.
+struct SensorImage {
+    std::int64_t simTimeNs{0};
+    std::uint32_t width{0};
+    std::uint32_t height{0};
+    std::vector<std::uint8_t> rgba;  ///< width x height x 4
+};
+
 /// The frames of one sensor the viewer watches. Written by the client's worker, read by the UI.
 class SensorStream {
 public:
@@ -145,6 +154,10 @@ public:
     [[nodiscard]] const std::string& name() const { return name_; }  ///< The sensor's prim path.
     /// The newest frame, or nullptr before the first one.
     [[nodiscard]] std::shared_ptr<const PointCloud> latest() const { return latest_.load(); }
+    /// The newest image (cameras), or nullptr before the first one.
+    [[nodiscard]] std::shared_ptr<const SensorImage> latestImage() const {
+        return latestImage_.load();
+    }
     /// Frames received since the stream was opened.
     [[nodiscard]] std::uint64_t frames() const { return frames_.load(); }
     /// Frames rejected because they were malformed.
@@ -154,6 +167,7 @@ private:
     friend class ViewerClient;
     std::string name_;
     std::atomic<std::shared_ptr<const PointCloud>> latest_;
+    std::atomic<std::shared_ptr<const SensorImage>> latestImage_;
     std::atomic<std::uint64_t> frames_{0};
     std::atomic<std::uint64_t> rejected_{0};
 };
@@ -594,6 +608,9 @@ public:
     /// Asks the server to adopt `yaml` and restart the run at t = 0. A refusal arrives as a
     /// Notice; success arrives as a new profile().
     void applyProfile(const std::string& yaml);
+    /// Sets a number of a prim's schema in the running simulation (SetAttribute). A refusal
+    /// arrives as an error notice; `save` also writes the server's session layer.
+    void setAttribute(std::uint32_t prim, const std::string& name, double value, bool save);
 
 private:
     void run();
@@ -661,6 +678,7 @@ private:
     std::atomic<std::shared_ptr<const RosGraphInfo>> rosGraph_;
     std::atomic<std::shared_ptr<const WorldInfo>> world_;
     void handleSensorFrame(const v1::Envelope& envelope);
+    void handleImage(const v1::SensorFrame& frame, SensorStream& stream);
     std::mutex sensorMutex_;  // guards the list below; held only to look a stream up
     std::vector<std::shared_ptr<SensorStream>> sensors_;
 

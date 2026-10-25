@@ -7,6 +7,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <string_view>
 
 #include <ament_index_cpp/get_package_share_path.hpp>
@@ -70,42 +71,58 @@ CommandLine defaultCommandLine() {
         shareFile("lagrange_assets", "robots/amr_diffdrive/amr_diffdrive.urdf");
     line.options.worldPath =
         shareFile("lagrange_assets", "worlds/warehouse_small/warehouse_small.urdf");
+    line.options.overlayPath =
+        shareFile("lagrange_assets", "robots/amr_diffdrive/amr_diffdrive.overlay.yaml");
     line.options.profileSchemaPath = shareFile("lagrange_profiles", "schema.json");
     return line;
 }
 
 void printServerOptions(std::FILE* out) {
-    std::fprintf(out,
-                 "  --robot   URDF, SDFormat, MJCF or USD to simulate (default: the sample AMR)\n"
-                 "  --world   fixed scenery in any of those formats, or none (default: the sample\n"
-                 "            warehouse)\n"
-                 "  --listen  unix:/path.sock or tcp://host:port (default: %s)\n"
-                 "  --spawn X,Y[,Z[,YAW]]  start the robot there (m, world ENU; heading in rad)\n"
-                 "  --lidar auto|cpu|gpu  where lidars cast: auto (default) and cpu use the\n"
-                 "            exact CPU caster; gpu the compute kernel on a hardware GPU\n"
-                 "  --gpu DEVICE  Vulkan device for the lidar (index or part of its name)\n"
-                 "  --rtf     real-time factor, 0 = as fast as possible (default 1)\n"
-                 "  --paused  start paused; press Play in the viewer\n"
-                 "  --no-ros  run without the ROS 2 bridge\n"
-                 "  --ros2-control PARAMS.yaml  run a ros2_control controller manager in lockstep\n"
-                 "            (lagrange_ros2_control/LagrangeSystem); spawn its controllers\n"
-                 "  --record FILE.mcap  record the run (signals, scene, state hashes) until the\n"
-                 "            server stops or the run is reset; the mock server replays it\n"
-                 "  --record-max-components N  leave larger signals out (default 1024: the\n"
-                 "            3D lidar's ranges)\n"
-                 "  --domain D=off  replace domain D (rigid_body, sensors) by its substitute\n"
-                 "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
-                 "            TwistStamped\n"
-                 "  --no-demo  stand still until the first /cmd_vel instead of driving the demo\n"
-                 "            figure-eight\n"
-                 "  --export-map FILE.yaml  write an occupancy map of the fixed scenery for\n"
-                 "            nav2_map_server (PGM next to it) and exit\n",
-                 proto::defaultUnixSocketPath().c_str());
+    std::fprintf(
+        out,
+        "  --robot   URDF, SDFormat, MJCF or USD to simulate (default: the sample AMR)\n"
+        "  --world   fixed scenery in any of those formats, or none (default: the sample\n"
+        "            warehouse)\n"
+        "  --overlay FILE.yaml  apply schemas (motors, battery, bus) to the robot, or\n"
+        "            none (default: the sample AMR's power system, for the sample only)\n"
+        "  --listen  unix:/path.sock or tcp://host:port (default: %s)\n"
+        "  --spawn X,Y[,Z[,YAW]]  start the robot there (m, world ENU; heading in rad)\n"
+        "  --lidar auto|cpu|gpu  where lidars cast: auto (default) and cpu use the\n"
+        "            exact CPU caster; gpu the compute kernel on a hardware GPU\n"
+        "  --gpu DEVICE  Vulkan device for the lidar and cameras (index or part of its name)\n"
+        "  --physics mujoco|jolt  rigid-body backend (default mujoco)\n"
+        "  --replay FILE.mcap  replay a recording instead of simulating (the viewer can seek;\n"
+        "            no ROS bridge)\n"
+        "  --session FILE.usda  where the viewer's edits are saved when it asks (default:\n"
+        "            $XDG_STATE_HOME/lagrange/<robot>.session.usda)\n"
+        "  --rtf     real-time factor, 0 = as fast as possible (default 1)\n"
+        "  --paused  start paused; press Play in the viewer\n"
+        "  --no-ros  run without the ROS 2 bridge\n"
+        "  --ros2-control PARAMS.yaml  run a ros2_control controller manager in lockstep\n"
+        "            (lagrange_ros2_control/LagrangeSystem); spawn its controllers\n"
+        "  --record FILE.mcap  record the run (signals, scene, state hashes) until the\n"
+        "            server stops or the run is reset; the mock server replays it\n"
+        "  --record-max-components N  leave larger signals out (default 1024: the\n"
+        "            3D lidar's ranges)\n"
+        "  --bench RUN.mcap  bench mode: physics replaced by the run's recorded joint\n"
+        "            and body motion, open loop (electrical, thermal, sensors live)\n"
+        "  --ambient-temperature K  the site's air temperature: runs the thermal domain\n"
+        "            (no default; a profile's thermal.ambient_temperature also sets it)\n"
+        "  --domain D=off  replace domain D (rigid_body, electrical, thermal, sensors) by its\n"
+        "            substitute\n"
+        "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
+        "            TwistStamped\n"
+        "  --no-demo  stand still until the first /cmd_vel instead of driving the demo\n"
+        "            figure-eight\n"
+        "  --export-map FILE.yaml  write an occupancy map of the fixed scenery for\n"
+        "            nav2_map_server (PGM next to it) and exit\n",
+        proto::defaultUnixSocketPath().c_str());
 }
 
 std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bool allowPositional,
                                             CommandLine& out) {
     ServerOptions& options = out.options;
+    bool thermalAsked = false;  // --domain thermal=on
     for (int i = first; i < argc; ++i) {
         const std::string_view arg = argv[i];
         const auto value = [&]() -> const char* { return i + 1 < argc ? argv[++i] : nullptr; };
@@ -131,6 +148,13 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--world needs a file, or none";
             }
             options.worldPath = std::string_view(path) == "none" ? "" : path;
+        } else if (arg == "--overlay") {
+            const char* path = value();
+            if (path == nullptr) {
+                return "--overlay needs a file, or none";
+            }
+            options.overlayPath = std::string_view(path) == "none" ? "" : path;
+            out.overlayGiven = true;
         } else if (arg == "--listen") {
             const char* text = value();
             const auto endpoint = text != nullptr ? proto::parseEndpoint(text) : std::nullopt;
@@ -157,6 +181,26 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             } else {
                 return "--lidar needs auto, cpu or gpu";
             }
+        } else if (arg == "--replay") {
+            const char* path = value();
+            if (path == nullptr) {
+                return "--replay needs a recording (FILE.mcap from --record)";
+            }
+            options.replayPath = path;
+            options.ros = false;  // a replay has no robot to drive
+        } else if (arg == "--session") {
+            const char* path = value();
+            if (path == nullptr) {
+                return "--session needs a file";
+            }
+            options.sessionPath = path;
+        } else if (arg == "--physics") {
+            const char* text = value();
+            const std::string_view backend = text != nullptr ? text : "";
+            if (backend != "mujoco" && backend != "jolt") {
+                return "--physics needs mujoco or jolt";
+            }
+            options.physics = std::string(backend);
         } else if (arg == "--gpu") {
             const char* device = value();
             if (device == nullptr) {
@@ -171,6 +215,21 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--rtf needs a number >= 0";
             }
             options.realTimeFactor = rtf;
+        } else if (arg == "--bench") {
+            const char* path = value();
+            if (path == nullptr) {
+                return "--bench needs a recording (.mcap)";
+            }
+            options.benchReplayPath = path;
+            options.substituted.insert("rigid_body");
+        } else if (arg == "--ambient-temperature") {
+            const char* text = value();
+            char* end = nullptr;
+            const double kelvin = text != nullptr ? std::strtod(text, &end) : -1.0;
+            if (text == nullptr || end == text || *end != '\0' || !(kelvin > 0.0)) {
+                return "--ambient-temperature needs a temperature in K";
+            }
+            options.ambientTemperatureK = kelvin;
         } else if (arg == "--paused") {
             options.startPaused = true;
         } else if (arg == "--no-ros") {
@@ -198,15 +257,17 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             const std::string domain(setting.substr(0, equals));
             const std::string_view state =
                 equals == std::string_view::npos ? "" : setting.substr(equals + 1);
-            if ((domain != "rigid_body" && domain != "sensors") ||
+            if ((domain != "rigid_body" && domain != "sensors" && domain != "electrical" &&
+                 domain != "thermal") ||
                 (state != "on" && state != "off")) {
-                return "--domain takes rigid_body=on|off or sensors=on|off";
+                return "--domain takes rigid_body, electrical, thermal or sensors =on|off";
             }
             if (state == "off") {
                 options.substituted.insert(domain);
             } else {
                 options.substituted.erase(domain);
             }
+            thermalAsked = domain == "thermal" ? state == "on" : thermalAsked;
         } else if (arg == "--cmd-vel-unstamped") {
             options.stampedCmdVel = false;
         } else if (arg == "--ros2-control") {
@@ -229,6 +290,13 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
     }
     if (options.robotPath.empty()) {
         return "no --robot given and lagrange_assets is not installed";
+    }
+    if (thermalAsked && !options.ambientTemperatureK) {
+        return "--domain thermal=on needs the site's ambient temperature: --ambient-temperature K";
+    }
+    if (out.robotGiven && !out.overlayGiven &&
+        std::filesystem::path(options.robotPath).filename() != "amr_diffdrive.urdf") {
+        options.overlayPath.clear();  // the default overlay fits the sample robot only
     }
     return std::nullopt;
 }

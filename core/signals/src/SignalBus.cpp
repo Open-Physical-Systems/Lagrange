@@ -208,6 +208,33 @@ void SignalBus::writeBuffer(SignalId id, BufferHandle handle, std::uint32_t env)
     pendingHandles_[index] = handle.id;
 }
 
+BufferHandle SignalBus::publishBuffer(SignalId id, std::shared_ptr<const Buffer> buffer,
+                                      std::uint32_t env) {
+    const std::size_t index = outputIndex(id, env, true);
+    if (index == kBad) {
+        return {};
+    }
+    if (signals_[id.index].components != 0) {
+        flagMisuse("buffer write to numeric signal \"" + signals_[id.index].spec.name + "\"");
+        return {};
+    }
+    // Slot in the high half, sequence in the low half; 0 stays the empty handle.
+    const std::uint32_t sequence = ++published_[index];
+    const BufferHandle handle{(std::uint64_t{index} + 1) << 32U | sequence};
+    kept_[index][sequence % kKeptBuffers] = {handle.id, std::move(buffer)};
+    pendingHandles_[index] = handle.id;
+    return handle;
+}
+
+std::shared_ptr<const Buffer> SignalBus::buffer(BufferHandle handle) const {
+    const std::uint64_t slot = handle.id >> 32U;
+    if (slot == 0 || slot > kept_.size()) {
+        return nullptr;
+    }
+    const KeptBuffer& kept = kept_[slot - 1][(handle.id & 0xFFFF'FFFFU) % kKeptBuffers];
+    return kept.handle == handle.id ? kept.buffer : nullptr;
+}
+
 std::span<const double> SignalBus::readBatch(SignalId id) const {
     const std::size_t components =
         id.isInput()
@@ -295,6 +322,8 @@ void SignalBus::allocate(std::uint32_t batchCount) {
     committedHandles_.assign(handles, 0);
     previousHandles_.assign(handles, 0);
     pendingHandles_.assign(handles, 0);
+    kept_.assign(handles, {});
+    published_.assign(handles, 0);
 
     std::size_t inputValues = 0;
     std::size_t inputHandles = 0;

@@ -19,6 +19,7 @@
 #include <fstream>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_vulkan.h>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <signal.h>
@@ -181,6 +182,106 @@ private:
     pid_t pid_{-1};
 };
 
+/// Sensor images as textures for the panels. An image is copied into a host-visible staging
+/// buffer when a panel asks for it and copied to its texture in the frame's command buffer,
+/// before the UI pass. The viewer has one frame in flight, so both are free by the next frame.
+class TextureCache final : public SensorTextures {
+public:
+    explicit TextureCache(const gpu::Device& device) : device_(device) {}
+    ~TextureCache() override { clear(); }
+    TextureCache(const TextureCache&) = delete;
+    TextureCache& operator=(const TextureCache&) = delete;
+
+    std::uint64_t texture(const std::string& key,
+                          const std::shared_ptr<const SensorImage>& image) override {
+        if (!image || image->width == 0 || image->height == 0) {
+            return 0;
+        }
+        Entry& entry = entries_[key];
+        if (entry.image.extent.width != image->width ||
+            entry.image.extent.height != image->height) {
+            if (entry.descriptor != VK_NULL_HANDLE) {
+                vkDeviceWaitIdle(device_.device());
+            }
+            release(entry);
+            entry.image =
+                gpu::createImage2D(device_, {image->width, image->height}, VK_FORMAT_R8G8B8A8_UNORM,
+                                   VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                   VK_IMAGE_ASPECT_COLOR_BIT);
+            entry.staging = gpu::createBuffer(device_, image->rgba.size(),
+                                              VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
+            entry.descriptor = ImGui_ImplVulkan_AddTexture(
+                entry.image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            entry.initialised = false;
+            entry.shown.reset();
+        }
+        if (entry.shown != image) {
+            std::memcpy(entry.staging.mapped, image->rgba.data(), image->rgba.size());
+            gpu::flush(device_, entry.staging);
+            entry.shown = image;
+            entry.pending = true;
+        }
+        return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(entry.descriptor));
+    }
+
+    /// Records the copies of the images asked for since the last frame.
+    void record(VkCommandBuffer commands) {
+        for (auto& [key, entry] : entries_) {
+            if (!entry.pending) {
+                continue;
+            }
+            gpu::transitionImage(commands, entry.image.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                 entry.initialised ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                                   : VK_IMAGE_LAYOUT_UNDEFINED,
+                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            VkBufferImageCopy region{};
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageExtent = {entry.image.extent.width, entry.image.extent.height, 1};
+            vkCmdCopyBufferToImage(commands, entry.staging.buffer, entry.image.image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            gpu::transitionImage(commands, entry.image.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            entry.pending = false;
+            entry.initialised = true;
+        }
+    }
+
+    /// Frees every texture; call before the ImGui Vulkan backend shuts down.
+    void clear() {
+        if (entries_.empty()) {
+            return;
+        }
+        vkDeviceWaitIdle(device_.device());
+        for (auto& [key, entry] : entries_) {
+            release(entry);
+        }
+        entries_.clear();
+    }
+
+private:
+    struct Entry {
+        gpu::Image image;
+        gpu::Buffer staging;
+        VkDescriptorSet descriptor{VK_NULL_HANDLE};
+        std::shared_ptr<const SensorImage> shown;
+        bool pending{false};
+        bool initialised{false};
+    };
+
+    void release(Entry& entry) {
+        if (entry.descriptor != VK_NULL_HANDLE) {
+            ImGui_ImplVulkan_RemoveTexture(entry.descriptor);
+            entry.descriptor = VK_NULL_HANDLE;
+        }
+        gpu::destroy(device_, entry.image);
+        gpu::destroy(device_, entry.staging);
+    }
+
+    const gpu::Device& device_;
+    std::map<std::string, Entry, std::less<>> entries_;
+};
+
 class Ui {
 public:
     Ui(const gpu::Device& device, ViewerClient& client, VkFormat targetFormat,
@@ -191,6 +292,7 @@ public:
         , renderer_(device)
         , panels_(createDefaultPanels())
         , scopeSignals_(std::move(scopeSignals)) {
+        renderOptions_.wireframeAvailable = renderer_.wireframeSupported();
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImPlot::CreateContext();
@@ -246,6 +348,7 @@ public:
 
     ~Ui() {
         vkDeviceWaitIdle(device_.device());
+        textures_.clear();
         if (texture_ != VK_NULL_HANDLE) {
             ImGui_ImplVulkan_RemoveTexture(texture_);
         }
@@ -327,6 +430,7 @@ public:
         context.launcher = &launcher_;
         context.viewportTexture =
             static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(texture_));
+        context.sensorTextures = &textures_;
         context.viewportWidth = renderer_.extent().width;
         context.viewportHeight = renderer_.extent().height;
         context.deviceName = device_.info().name;
@@ -383,6 +487,7 @@ public:
 
     /// Records the scene pass. The UI pass (ImGui draw data) is recorded by the caller.
     void renderScene(VkCommandBuffer commands) {
+        textures_.record(commands);
         buildSensorOverlays();
         renderer_.render(commands, scene_.get(), camera_, renderOptions_, sensorOverlays_);
     }
@@ -518,6 +623,17 @@ public:
     }
     void setInitialSelection(std::string path) { selectPath_ = std::move(path); }
     void setCursors(bool on) { cursorsWanted_ = on; }
+    void setShading(const std::string& name) {
+        if (name == "unlit") {
+            renderOptions_.shading = Shading::Unlit;
+        } else if (name == "collision") {
+            renderOptions_.shading = Shading::Collision;
+        } else if (name == "wireframe") {
+            renderOptions_.shading = Shading::Wireframe;
+        } else if (name == "thermal") {
+            renderOptions_.shading = Shading::Thermal;  // falls back to Lit without thermal nodes
+        }
+    }
     void setProfileEdits(std::vector<std::pair<std::string, bool>> edits, bool apply) {
         domainEdits_ = std::move(edits);
         applyProfile_ = apply;
@@ -582,6 +698,7 @@ private:
     std::uint32_t selectedPrim_{kNone};
     std::shared_ptr<const SceneFrame> scene_;
     VkDescriptorSet texture_{VK_NULL_HANDLE};
+    TextureCache textures_{device_};
     VkFormat targetFormat_{VK_FORMAT_UNDEFINED};
     std::uint32_t requestedWidth_{0};
     std::uint32_t requestedHeight_{0};
@@ -702,6 +819,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         }
         ui.setInitialSelection(options.selectPath);
         ui.setCursors(options.cursors);
+        ui.setShading(options.shading);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize =
@@ -1025,6 +1143,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setWorkspace(workspace);
         ui.setInitialSelection(options.selectPath);
         ui.setCursors(options.cursors);
+        ui.setShading(options.shading);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);
         // The file dialog reports its result on a callback that may run on another thread.
         struct Chosen {
