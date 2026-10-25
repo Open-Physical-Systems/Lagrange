@@ -83,10 +83,19 @@ class "RotorAPI_1" (
     )
     uniform token aero:rotor:direction (
         allowedTokens = ["cw", "ccw"]
-        doc = """Sense of rotation that makes thrust, seen from above along the thrust direction.
-        Required."""
+        doc = """Sense in which the motor turns the rotor, seen from the front (from where the
+        thrust points). A propeller (aero:rotor:propeller) of the other hand then turns the wrong
+        way. Required."""
     )
-    asset aero:rotor:bladeTable (
-        doc = "CSV of radius, chord and twist for the bem fidelity."
+    asset aero:rotor:propeller (
+        doc = """The propeller as built: a propeller file (lagrange-propeller-1, formats.md
+        section 3.3.1) with its blades' geometry, sections and hand. Required for the bem fidelity,
+        where it replaces the coefficients, and for drawing the blades."""
+    )
+    uniform token aero:rotor:mount = "puller" (
+        allowedTokens = ["puller", "pusher"]
+        doc = """Where the propeller sits on its motor, the joint axis pointing from the motor to
+        the propeller: puller, thrust along the joint axis (it pulls the motor); pusher, thrust
+        against it (the motor is in front and it pushes)."""
     )
 }

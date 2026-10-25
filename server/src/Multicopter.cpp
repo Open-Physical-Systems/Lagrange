@@ -129,7 +129,11 @@ Status MulticopterController::declare(const WorldView& world, const ModuleConfig
         const double perOmega2 = *rho / (4.0 * std::numbers::pi * std::numbers::pi);
         Rotor r;
         r.position = bodies.poseInParent[child].position;
-        r.spin = s->token("aero:rotor:direction").value_or("ccw") == "ccw" ? 1.0 : -1.0;
+        // The motor's sense about the thrust direction, and about the joint axis (which a pusher
+        // has pointing the other way).
+        r.direction = s->token("aero:rotor:direction").value_or("ccw") == "ccw" ? 1.0 : -1.0;
+        r.spin = r.direction *
+                 (s->token("aero:rotor:mount").value_or("puller") == "pusher" ? -1.0 : 1.0);
         r.thrustPerOmega2 = ct * perOmega2 * std::pow(diameter, 4);
         r.torquePerOmega2 = cp * perOmega2 * std::pow(diameter, 5) / (2.0 * std::numbers::pi);
         const std::string joint = "joint/" + std::string(world.signalInstanceName(s->prim)) + "/";
@@ -161,7 +165,7 @@ Status MulticopterController::declare(const WorldView& world, const ModuleConfig
     std::array<std::array<double, 4>, 4> a{};
     for (std::size_t i = 0; i < 4; ++i) {
         const Rotor& r = rotors_[i];
-        const double yawPerThrust = -r.spin * r.torquePerOmega2 / r.thrustPerOmega2;
+        const double yawPerThrust = -r.direction * r.torquePerOmega2 / r.thrustPerOmega2;
         a[0][i] = 1.0;
         a[1][i] = r.position[1];   // roll: y × thrust
         a[2][i] = -r.position[0];  // pitch: −x × thrust

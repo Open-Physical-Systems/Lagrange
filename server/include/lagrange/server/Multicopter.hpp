@@ -50,7 +50,8 @@ public:
 private:
     struct Rotor {
         std::array<double, 3> position{};  // hub in the base frame, m
-        double spin{1.0};                  // +1 ccw, −1 cw about +z
+        double direction{1.0};             // +1 ccw, −1 cw about the thrust direction (+z)
+        double spin{1.0};                  // the same about the joint axis (turned for a pusher)
         double thrustPerOmega2{0.0};       // N per (rad/s)²
         double torquePerOmega2{0.0};       // N·m per (rad/s)²
         SignalId velocity, command;

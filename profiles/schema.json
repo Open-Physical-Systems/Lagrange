@@ -245,7 +245,8 @@
         "fidelity": { "enum": ["coefficients", "bem"], "default": "coefficients" },
         "ground_effect": { "type": "boolean", "default": true },
         "air_density": { "type": "number", "exclusiveMinimum": 0, "description": "kg/m³, the site's air density (ISA sea level: 1.225). No default." },
-        "inflow_time_constant": { "type": "number", "minimum": 0, "description": "s, first-order inflow lag of the rotors; 0 for none." }
+        "inflow_time_constant": { "type": "number", "minimum": 0, "description": "s, first-order inflow lag of the rotors; 0 for none." },
+        "speed_of_sound": { "type": "number", "exclusiveMinimum": 0, "description": "m/s, the site's speed of sound (ISA sea level: 340.3); with the bem fidelity it adds compressibility. No default: without it, none." }
       },
       "unevaluatedProperties": false
     },

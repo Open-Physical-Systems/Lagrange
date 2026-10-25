@@ -5,6 +5,12 @@ every schema is version 1 and may change without a migration.
 
 ## Unreleased
 
+- **Aerodynamics library**: on `RotorAPI_1`, `aero:rotor:propeller` (a propeller file,
+  formats.md §3.3.1, for the `bem` fidelity and the drawn blades) replaces the unused
+  `aero:rotor:bladeTable`; new `aero:rotor:mount` (`puller` or `pusher`, fallback `puller`);
+  `aero:rotor:direction` now documented as the sense in which the motor turns the rotor, seen
+  from the front. `RotorAPI_1` has not been released, so no migration.
+
 - **Sensor library**: `GnssAPI_1`, `MagnetometerAPI_1` and `BarometerAPI_1` for v0.4's drones,
   each with its white-noise standard deviations (formats.md §3.8 lists the sensor kinds but no
   attributes for these).
