@@ -16,6 +16,7 @@ find_package(lagrange_aerodynamics REQUIRED)
 find_package(lagrange_weather REQUIRED)
 find_package(lagrange_fields REQUIRED)
 find_package(lagrange_emi REQUIRED)
+find_package(lagrange_comms REQUIRED)
 find_package(lagrange_mavlink REQUIRED)
 find_package(lagrange_recording REQUIRED)
 find_package(lagrange_meshes REQUIRED)
@@ -81,6 +82,7 @@ target_link_libraries(
         lagrange_weather::lagrange_weather
         lagrange_fields::lagrange_fields
         lagrange_emi::lagrange_emi
+        lagrange_comms::lagrange_comms
         lagrange_mavlink::lagrange_mavlink
         lagrange_recording::lagrange_recording
         lagrange_meshes::lagrange_meshes
@@ -100,6 +102,7 @@ lagrange_target_defaults(lagrange_server_cli)
 target_link_libraries(
     lagrange_server_cli
     PUBLIC lagrange_server ament_index_cpp::ament_index_cpp rclcpp::rclcpp
+    PRIVATE yaml-cpp::yaml-cpp
 )
 
 add_executable(lagrange_server_main src/main.cpp)
@@ -208,6 +211,7 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_DC_DRIVE_FMU="${models_share}/fmu/dc_drive.fmu"
             LAGRANGE_TEST_AMR_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.overlay.yaml"
             LAGRANGE_TEST_AMR_POWERED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive_powered.usda"
+            LAGRANGE_TEST_AMR_WIFI_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive_wifi.usda"
             LAGRANGE_TEST_WAREHOUSE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.usda"
             LAGRANGE_TEST_ARM6_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.urdf"
             LAGRANGE_TEST_ARM6_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.overlay.yaml"

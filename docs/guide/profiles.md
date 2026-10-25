@@ -70,7 +70,7 @@ server, previews the wiring, and applies it with *Apply and restart*.
 and schedule in the middle; the applied profile on the right](../imgs/tutorial-domains.png)
 
 **On `lagrange_server`'s command line**: `--domain D=off` substitutes a domain without writing a
-profile, for `rigid_body`, `electrical`, `thermal`, `weather`, `emi` and `sensors`.
+profile, for `rigid_body`, `electrical`, `thermal`, `weather`, `emi`, `comms` and `sensors`.
 
 ## Errors you may see
 

@@ -13,6 +13,7 @@
 #include <map>
 #include <mutex>
 #include <numbers>
+#include <random>
 #include <regex>
 #include <set>
 #include <simulation_interfaces/msg/simulator_features.hpp>
@@ -110,8 +111,83 @@ struct Bridge::Impl {
 
     void take(const geometry_msgs::msg::Twist& twist) {
         const std::lock_guard<std::mutex> lock(commandMutex);
-        command = CmdVel{twist.linear.x, twist.angular.z, twist.linear.y, twist.linear.z};
+        auto delay = std::chrono::nanoseconds(0);
+        if (commandGate.mapped) {
+            // On a radio link: lost, or late by its latency (wall clock, the command's clock).
+            if (!commandGate.up || uniform(commandRng) < commandGate.loss) {
+                ++commandGate.dropped;
+                return;
+            }
+            delay = std::chrono::nanoseconds(std::llround(commandGate.latency * 1e9));
+        }
+        const CmdVel next{twist.linear.x, twist.angular.z, twist.linear.y, twist.linear.z};
+        if (delay.count() > 0) {
+            // The previous command stays in force until this one arrives.
+            lateCommand = next;
+            lateAt = Clock::now() + std::chrono::duration_cast<Clock::duration>(delay);
+            return;
+        }
+        command = next;
         commandAt = Clock::now();
+    }
+
+    /// A topic on a radio link: the link's signals.
+    struct Gate {
+        SignalId loss, latency, up;
+        std::uint64_t dropped{0};
+    };
+    std::map<std::string, Gate> gates;  // by topic
+    struct Pending {
+        SimTime at;
+        std::function<void()> send;
+    };
+    std::deque<Pending> pending;  // late messages, in the order they were sent
+    std::mt19937_64 rng{0x6c616772U};
+    std::uniform_real_distribution<double> uniform{0.0, 1.0};
+    const SignalBus* gateBus{nullptr};  // during publish()
+    SimTime gateNow{0};
+    /// /cmd_vel's link, as of the last publish(), for the executor thread (under commandMutex).
+    struct CommandGate {
+        bool mapped{false};
+        bool up{true};
+        double loss{0.0}, latency{0.0};
+        std::uint64_t dropped{0};
+    };
+    CommandGate commandGate;
+    std::mt19937_64 commandRng{0x636d6476U};
+
+    /// Publishes `message` on `topic`, through its radio link if it rides on one.
+    template <class Publisher, class Message>
+    void deliver(const std::string& topic, const Publisher& publisher, Message&& message) {
+        const auto it = gates.find(topic);
+        if (it == gates.end() || gateBus == nullptr) {
+            publisher->publish(std::forward<Message>(message));
+            return;
+        }
+        Gate& gate = it->second;
+        if (gateBus->read(gate.up) < 0.5 || uniform(rng) < gateBus->read(gate.loss)) {
+            ++gate.dropped;
+            return;
+        }
+        const auto delay =
+            static_cast<std::int64_t>(std::llround(gateBus->read(gate.latency) * 1e9));
+        if (delay <= 0 && pending.empty()) {
+            publisher->publish(std::forward<Message>(message));
+            return;
+        }
+        auto held = std::make_shared<std::decay_t<Message>>(std::forward<Message>(message));
+        pending.push_back({SimTime{gateNow.ns + delay},
+                           [publisher, held]() { publisher->publish(std::move(*held)); }});
+    }
+
+    /// Sends the late messages that are due by `now`, oldest first.
+    void flush(SimTime now) {
+        std::stable_sort(pending.begin(), pending.end(),
+                         [](const Pending& a, const Pending& b) { return a.at < b.at; });
+        while (!pending.empty() && pending.front().at <= now) {
+            pending.front().send();
+            pending.pop_front();
+        }
     }
 
     struct Joint {
@@ -172,6 +248,8 @@ struct Bridge::Impl {
     mutable std::mutex commandMutex;
     std::optional<CmdVel> command;
     Clock::time_point commandAt;
+    std::optional<CmdVel> lateCommand;  // on its way over a radio link
+    Clock::time_point lateAt;
 
     std::map<std::string, TopicCounter> counters;  // by topic, the bridge's own
 
@@ -221,7 +299,7 @@ struct Bridge::Impl {
             std::memcpy(point + 16, &ring, sizeof(ring));
         }
         counters[lidar.topic].add(cloud.data.size() + 128);
-        lidar.cloudPublisher->publish(std::move(cloud));
+        deliver(lidar.topic, lidar.cloudPublisher, std::move(cloud));
     }
 
     /// The publishers and calibration of a camera, reusing publishers of an earlier attach()
@@ -273,8 +351,8 @@ struct Bridge::Impl {
     /// substitute publishes only the calibration).
     void publishCamera(Camera& camera, const SignalBus& bus) {
         camera.info.header.stamp = stampOf(camera.sent);
-        camera.colorInfo->publish(camera.info);
-        camera.depthInfo->publish(camera.info);
+        deliver(camera.ns + "/camera_info", camera.colorInfo, camera.info);
+        deliver(camera.ns + "/depth/camera_info", camera.depthInfo, camera.info);
         counters[camera.ns + "/camera_info"].add(350);
         counters[camera.ns + "/depth/camera_info"].add(350);
         const std::shared_ptr<const Buffer> rgba = bus.buffer(bus.readBuffer(camera.image));
@@ -292,7 +370,7 @@ struct Bridge::Impl {
                 std::memcpy(image.data.data() + p * 3, in + p * 4, 3);  // drop alpha
             }
             counters[camera.ns + "/image_raw"].add(image.data.size() + 64);
-            camera.color->publish(std::move(image));
+            deliver(camera.ns + "/image_raw", camera.color, std::move(image));
         }
         const std::shared_ptr<const Buffer> depth = bus.buffer(bus.readBuffer(camera.depth));
         if (depth && !depth->bytes.empty()) {
@@ -305,7 +383,7 @@ struct Bridge::Impl {
             const auto* in = reinterpret_cast<const std::uint8_t*>(depth->bytes.data());
             image.data.assign(in, in + depth->bytes.size());
             counters[camera.ns + "/depth/image_raw"].add(image.data.size() + 64);
-            camera.depthImage->publish(std::move(image));
+            deliver(camera.ns + "/depth/image_raw", camera.depthImage, std::move(image));
         }
     }
 
@@ -389,6 +467,27 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             s.joints.push_back({name, position, bus.find("joint/" + name + "/velocity"),
                                 bus.find("joint/" + name + "/torque")});
         }
+    }
+    // Topics on radio links: the comms domain's link signals (none without it).
+    s.gates.clear();
+    s.pending.clear();
+    s.gateBus = nullptr;
+    {
+        const std::lock_guard<std::mutex> lock(s.commandMutex);
+        s.commandGate = {};
+    }
+    for (const auto& [topic, link] : settings_.topicLinks) {
+        const std::string base = "link/" + link + "/";
+        const Impl::Gate gate{bus.find(base + "packet_error_rate"), bus.find(base + "latency"),
+                              bus.find(base + "up")};
+        if (!gate.loss.valid() || !gate.latency.valid() || !gate.up.valid()) {
+            RCLCPP_WARN(s.node->get_logger(),
+                        "%s rides on link %s, which this run does not have (no RadioLinkAPI_1 "
+                        "prim named so, or comms off): it is sent as is",
+                        topic.c_str(), link.c_str());
+            continue;
+        }
+        s.gates.emplace(topic, gate);
     }
     s.basePose = bus.find("body/" + settings_.baseLink + "/pose");
     s.baseTwist = bus.find("body/" + settings_.baseLink + "/twist");
@@ -551,6 +650,16 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
 
 void Bridge::publish(const SignalBus& bus, SimTime now) {
     Impl& s = *impl_;
+    s.gateBus = &bus;
+    s.gateNow = now;
+    s.flush(now);
+    if (const auto it = s.gates.find("/cmd_vel"); it != s.gates.end()) {
+        const std::lock_guard<std::mutex> lock(s.commandMutex);
+        s.commandGate.mapped = true;
+        s.commandGate.up = bus.read(it->second.up) > 0.5;
+        s.commandGate.loss = bus.read(it->second.loss);
+        s.commandGate.latency = bus.read(it->second.latency);
+    }
     if (now != s.lastClock) {
         rosgraph_msgs::msg::Clock clock;
         clock.clock = stampOf(now);
@@ -571,7 +680,7 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
             joints.effort.push_back(joint.torque.valid() ? bus.read(joint.torque) : 0.0);
         }
         if (s.jointStates) {
-            s.jointStates->publish(joints);
+            s.deliver("/joint_states", s.jointStates, joints);
             s.counters["/joint_states"].add(joints.name.size() * 40 + 16);
         }
 
@@ -603,11 +712,11 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
             // simulator's ground-truth plugin publishes it).
             nav_msgs::msg::Odometry truth = odom;
             truth.header.frame_id = "world";
-            s.groundTruth->publish(truth);
+            s.deliver("/ground_truth/odom", s.groundTruth, truth);
             s.counters["/ground_truth/odom"].add(720);
             // With ros2_control, its controllers publish /odom and the odom TF.
             if (s.odom) {
-                s.odom->publish(odom);
+                s.deliver("/odom", s.odom, odom);
                 s.counters["/odom"].add(720);
 
                 tf2_msgs::msg::TFMessage tf;
@@ -619,7 +728,7 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
                 base.transform.translation.z = pose[2];
                 base.transform.rotation = odom.pose.pose.orientation;
                 tf.transforms.push_back(base);
-                s.tf->publish(tf);
+                s.deliver("/tf", s.tf, tf);
                 s.counters["/tf"].add(80);
             }
         }
@@ -651,7 +760,7 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
         for (const double r : ranges) {
             scan.ranges.push_back(static_cast<float>(r));
         }
-        lidar.publisher->publish(scan);
+        s.deliver(lidar.topic, lidar.publisher, scan);
         s.counters[lidar.topic].add(ranges.size() * 4 + 64);
     }
 
@@ -689,7 +798,7 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
             message.angular_velocity_covariance.at(axis * 4) = imu.gyroNoise * imu.gyroNoise;
             message.linear_acceleration_covariance.at(axis * 4) = imu.accelNoise * imu.accelNoise;
         }
-        imu.publisher->publish(message);
+        s.deliver(imu.topic, imu.publisher, message);
         s.counters[imu.topic].add(330);
     }
 
@@ -717,7 +826,7 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
             fix.position_covariance.at(8) = geo.verticalNoise * geo.verticalNoise;
             fix.position_covariance_type =
                 sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_DIAGONAL_KNOWN;
-            geo.fix->publish(fix);
+            s.deliver("/" + geo.name + "/fix", geo.fix, fix);
             s.counters["/" + geo.name + "/fix"].add(120);
         } else if (geo.type == SensorType::Magnetometer) {
             const std::span<const double> b = bus.readN(geo.first);
@@ -730,7 +839,7 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
             for (std::size_t axis = 0; axis < 3; ++axis) {
                 field.magnetic_field_covariance.at(axis * 4) = geo.noise * geo.noise;
             }
-            geo.field->publish(field);
+            s.deliver("/" + geo.name + "/field", geo.field, field);
             s.counters["/" + geo.name + "/field"].add(100);
         } else {
             sensor_msgs::msg::FluidPressure pressure;
@@ -738,21 +847,39 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
             pressure.header.frame_id = geo.name;
             pressure.fluid_pressure = bus.read(geo.first);
             pressure.variance = geo.noise * geo.noise;
-            geo.pressure->publish(pressure);
+            s.deliver("/" + geo.name + "/pressure", geo.pressure, pressure);
             sensor_msgs::msg::Temperature temperature;
             temperature.header = pressure.header;
             constexpr double kCelsiusZero = 273.15;  // K
             temperature.temperature = bus.read(geo.second) - kCelsiusZero;
-            geo.temperature->publish(temperature);
+            s.deliver("/" + geo.name + "/temperature", geo.temperature, temperature);
             s.counters["/" + geo.name + "/pressure"].add(40);
             s.counters["/" + geo.name + "/temperature"].add(40);
         }
     }
 }
 
+std::map<std::string, std::uint64_t> Bridge::droppedOnLinks() const {
+    std::map<std::string, std::uint64_t> out;
+    for (const auto& [topic, gate] : impl_->gates) {
+        out[topic] = gate.dropped;
+    }
+    const std::lock_guard<std::mutex> lock(impl_->commandMutex);
+    if (impl_->commandGate.mapped) {
+        out["/cmd_vel"] = impl_->commandGate.dropped;
+    }
+    return out;
+}
+
 std::optional<CmdVel> Bridge::latestCommand(std::chrono::milliseconds maxAge) const {
     const std::lock_guard<std::mutex> lock(impl_->commandMutex);
-    if (!impl_->command || Clock::now() - impl_->commandAt > maxAge) {
+    const Clock::time_point now = Clock::now();
+    if (impl_->lateCommand && now >= impl_->lateAt) {
+        impl_->command = impl_->lateCommand;
+        impl_->commandAt = impl_->lateAt;
+        impl_->lateCommand.reset();
+    }
+    if (!impl_->command || now - impl_->commandAt > maxAge) {
         return std::nullopt;
     }
     return impl_->command;

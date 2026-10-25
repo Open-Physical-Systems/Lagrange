@@ -146,7 +146,9 @@ time-boxed. Order:
    `profiles/examples/quad_x500_power_line.yaml`. Encoder glitches, CAN errors and the radio's
    SNR are applied with step 6)
 6. `modules/comms`: link budget, packet errors, CAN fault confinement; bridges drop and delay
-   what rides on a link
+   what rides on a link (**done** 2026-10-25: `lagrange_comms`, comms.md §8; the ROS 2 bridge
+   gates topics with `--link-topics`; sample `amr_diffdrive_wifi.usda`. Not yet: MAVLink
+   telemetry and encoder glitches)
 7. Offline CFD import: OpenFOAM results to a VDB wind field
 8. Samples, tutorial, release notes
 

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -421,6 +422,45 @@ TEST_F(EmiServerTest, ThePowerLineDisturbsTheMagnetometerAndReachesTheViewer) {
         }
     }
     EXPECT_NE(yaml.find("emi: {enabled: true"), std::string::npos) << yaml;
+    EXPECT_TRUE(server_->validateProfile(yaml).valid);
+}
+
+/// The sample AMR with its Wi-Fi radio in the warehouse: the access point is outside the east
+/// wall.
+class CommsServerTest : public ServerTest {
+protected:
+    void adjust(ServerOptions& options) override {
+        options.robotPath = LAGRANGE_TEST_AMR_WIFI_USDA;
+        options.worldPath = LAGRANGE_TEST_WAREHOUSE_USDA;
+        options.demoDrive = false;
+    }
+};
+
+TEST_F(CommsServerTest, TheLinkCrossesTheWallAndTheProfileSaysSo) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    v1::Envelope step = command(4);
+    step.mutable_command()->mutable_step()->set_duration_ns(100'000'000);
+    send(step);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) {
+        return e.has_command_result() && e.command_result().request_id() == 4;
+    }));
+    // 12 m to the access point at 2.4 GHz, exponent 3 past 1 m, one 10 dB wall, 4 dB shadowing.
+    const std::vector<double> pose = server_->read("body/base_link/pose");
+    const double d = std::hypot(12.0 - pose.at(0), pose.at(1), 2.5 - (pose.at(2) + 0.4));
+    const double lambda = 299792458.0 / 2.437e9;
+    const double free = std::pow(4.0 * std::numbers::pi / lambda, 2) * std::pow(d, 3.0);
+    const double dbWithWall =
+        10.0 * std::log10(server_->read("link/wifi/rx_power").at(0) * free / 0.1);
+    EXPECT_NEAR(dbWithWall, -10.0, 4.0 * 4.0);  // the wall, within 4 σ of shadowing
+    EXPECT_EQ(server_->read("link/wifi/up").at(0), 1.0);
+    EXPECT_EQ(server_->read("can/can0/state").at(0), 0.0);
+    std::string yaml;
+    for (const v1::Envelope& e : received_) {
+        if (e.has_profile_state()) {
+            yaml = e.profile_state().yaml();
+        }
+    }
+    EXPECT_NE(yaml.find("comms: {enabled: true}"), std::string::npos) << yaml;
     EXPECT_TRUE(server_->validateProfile(yaml).valid);
 }
 

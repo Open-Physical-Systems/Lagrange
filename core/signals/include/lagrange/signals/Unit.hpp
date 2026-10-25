@@ -63,6 +63,8 @@ enum class QuantityKind : std::uint16_t {
     Activity = 32,
     AngularAcceleration = 33,
     MomentOfInertia = 34,
+    Duration = 35,  // appended in v0.5
+    DataRate = 36,
 };
 
 /// A unit: dimension, factor to the coherent SI unit, and quantity kind.
@@ -89,6 +91,9 @@ inline constexpr Unit rad_per_s{{.time = -1, .angle = 1}, 1.0, QuantityKind::Ang
 inline constexpr Unit rad_per_s2{{.time = -2, .angle = 1}, 1.0, QuantityKind::AngularAcceleration};
 inline constexpr Unit kg_m2{{.length = 2, .mass = 1}, 1.0, QuantityKind::MomentOfInertia};
 inline constexpr Unit Hz{{.time = -1}, 1.0, QuantityKind::Frequency};
+inline constexpr Unit s{{.time = 1}, 1.0, QuantityKind::Duration};
+/// Bits per second: a frequency in dimension, a data rate in kind (so it never wires to Hz).
+inline constexpr Unit bit_per_s{{.time = -1}, 1.0, QuantityKind::DataRate};
 inline constexpr Unit N{{.length = 1, .mass = 1, .time = -2}, 1.0, QuantityKind::Force};
 inline constexpr Unit N_m{{.length = 2, .mass = 1, .time = -2}, 1.0, QuantityKind::Torque};
 inline constexpr Unit J{{.length = 2, .mass = 1, .time = -2}, 1.0, QuantityKind::Energy};

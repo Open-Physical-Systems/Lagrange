@@ -160,8 +160,8 @@ Expected<std::vector<Source>, std::string> sourcesOf(const WorldView& world) {
         } else {
             return Unexpected{where + "emi:sourceType is required"};
         }
-        s.body = inst->body;
-        s.poseInBody = inst->poseInBody;
+        s.body = world.primBody(inst->prim);
+        s.poseInBody = world.primPoseInBody(inst->prim);
         const auto frequency = real(*inst, "emi:frequency");
         s.frequency = frequency.value_or(0.0);
         s.current = real(*inst, "emi:current").value_or(0.0);
@@ -282,8 +282,8 @@ Expected<std::vector<Victim>, std::string> victimsOf(const WorldView& world) {
         } else {
             return Unexpected{where + "emi:victimType is required"};
         }
-        v.body = inst->body;
-        v.poseInBody = inst->poseInBody;
+        v.body = world.primBody(inst->prim);
+        v.poseInBody = world.primPoseInBody(inst->prim);
         v.magneticGain = real(*inst, "emi:magneticGain").value_or(1.0);
         v.accelNoisePerField = real(*inst, "emi:accelNoisePerField").value_or(0.0);
         v.gyroNoisePerField = real(*inst, "emi:gyroNoisePerField").value_or(0.0);

@@ -1,5 +1,6 @@
 #include "Recorder.hpp"
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
+#include "lagrange/comms/Comms.hpp"
 #include "lagrange/electrical/IdealTorqueSource.hpp"
 #include "lagrange/electrical/Network.hpp"
 #include "lagrange/emi/Emi.hpp"
@@ -18,6 +19,7 @@
 #include "lagrange/rotor_aero/RotorAero.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/Sensors.hpp"
+#include "lagrange/sensors/ShapeCaster.hpp"
 #include "lagrange/server/DiffDrive.hpp"
 #include "lagrange/server/Multicopter.hpp"
 #include "lagrange/server/Profile.hpp"
@@ -658,6 +660,11 @@ struct Server::Impl {
             }
             next->add(std::make_unique<emi::Emi>(off("emi")), ModuleConfig(emi));
         }
+        // Comms (domains/comms.md) when the stage has radio links or CAN buses: after EMI, whose
+        // interference and bit errors it reads; walls are the fixed scenery's shapes.
+        if (hasComms()) {
+            next->add(std::make_unique<comms::Comms>(off("comms"), fixedScenery()));
+        }
         ModuleConfigData sensing;
         sensing.values["weather"] = weatherInRun;
         sensing.tier =
@@ -703,6 +710,43 @@ struct Server::Impl {
         settings.weather = appliedWeather;
         settings.emiCoupling = appliedEmiCoupling;
         return settings;
+    }
+    /// Whether the stage has radio links or CAN buses.
+    bool hasComms() const {
+        const WorldView world(robot.world);
+        return !world.instancesOf("RadioLinkAPI_1").empty() ||
+               !world.instancesOf("CanBusAPI_1").empty();
+    }
+    /// A scene query over the fixed scenery's shapes (not the ground plane, not what moves), for
+    /// the walls between radios.
+    std::shared_ptr<const services::SceneQuery> fixedScenery() const {
+        const World& world = robot.world;
+        const std::vector<Pose> rest = restPoses(world);
+        const std::vector<bool> moving = movingBodies(world);
+        std::vector<sensors::ShapeCaster::Shape> shapes;
+        for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
+            const BodyId owner = world.colliders.body[c];
+            if (world.colliders.shape[c] == ShapeType::Plane ||
+                (owner != kWorldBody && moving[owner.index])) {
+                continue;
+            }
+            sensors::ShapeCaster::Shape shape;
+            shape.type = world.colliders.shape[c];
+            shape.size = world.colliders.size[c];
+            shape.pose = owner == kWorldBody
+                             ? world.colliders.poseInBody[c]
+                             : compose(rest[owner.index], world.colliders.poseInBody[c]);
+            shape.hull = shape.type == ShapeType::ConvexHull
+                             ? &world.hulls.at(world.colliders.hull[c])
+                             : nullptr;
+            shapes.push_back(shape);
+        }
+        if (shapes.empty()) {
+            return nullptr;
+        }
+        auto caster = std::make_shared<sensors::ShapeCaster>();
+        caster->update(shapes);
+        return caster;
     }
     /// Whether the stage has EMI sources or victims.
     bool hasEmi() const {
@@ -1817,6 +1861,9 @@ struct Server::Impl {
                     text += "]";
                 }
                 yaml += "  emi: " + text + "}\n";
+            } else if (std::string_view(row.domain) == "comms" && hasComms()) {
+                yaml += substituted("comms") ? "  comms: {enabled: false, substitute: ideal}\n"
+                                             : "  comms: {enabled: true}\n";
             } else if (std::string_view(row.domain) == "comms" ||
                        std::string_view(row.domain) == "traffic" ||
                        std::string_view(row.domain) == "vehicle_dynamics" ||
@@ -2573,6 +2620,9 @@ struct Server::Impl {
         context.modules.insert("weather");
         if (hasEmi()) {
             context.modules.insert("emi");
+        }
+        if (hasComms()) {
+            context.modules.insert("comms");
         }
         for (const auto& [key, value] : options.weather) {
             context.weatherKnown.insert(key);
@@ -3613,6 +3663,7 @@ Status Server::load() {
                 ? readFile(s.options.robotPath)
                 : "";
         settings.stampedCmdVel = s.options.stampedCmdVel;
+        settings.topicLinks = s.options.linkTopics;
         settings.controllersOwnState = !s.options.ros2ControlParams.empty();
         s.bridge = std::make_unique<ros2::Bridge>(settings);
         if (!s.options.ros2ControlParams.empty()) {

@@ -56,7 +56,7 @@ struct Source {
     enum class Type { PowerLine, MotorDrive, Transmitter, Welder, Custom };
     std::string name;  // the prim's instance name
     Type type{Type::Custom};
-    BodyId body{kWorldBody};  // where it is (SchemaInstance::body, poseInBody)
+    BodyId body{kWorldBody};  // where it is (World::Prims::body, poseInBody)
     Pose poseInBody;
     double frequency{0.0};          // Hz; 0 for a direct current
     double current{0.0};            // A, RMS; for a field map, the current it was made at

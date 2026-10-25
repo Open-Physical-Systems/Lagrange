@@ -953,27 +953,23 @@ private:
         SchemaCollector collector(
             stage_, [this](const UsdPrim& prim) { return worldPrimOf(prim); }, errors_,
             [this](std::string text) { note(std::move(text)); });
-        const std::size_t first = m_.world.schemaInstances.size();
         collector.collect(m_.world.schemaInstances);
         // Where each prim is: its body and its pose in it (EMI sources and victims, radios).
-        std::vector<SdfPath> usdPath(m_.world.prims.paths.size());
+        World::Prims& prims = m_.world.prims;
         for (const auto& [path, id] : worldPrim_) {
-            usdPath.at(id.index) = path;
-        }
-        for (std::size_t i = first; i < m_.world.schemaInstances.size(); ++i) {
-            SchemaInstance& s = m_.world.schemaInstances[i];
-            const UsdPrim prim = stage_->GetPrimAtPath(usdPath.at(s.prim.index));
+            const UsdPrim prim = stage_->GetPrimAtPath(path);
             if (!prim || !prim.IsA<UsdGeomXformable>()) {
                 continue;
             }
             const SdfPath bodyPath = bodyOf(prim);
             const Placement placement = world(prim);
             if (bodyPath.IsEmpty()) {
-                s.poseInBody = placement.pose;
+                prims.poseInBody.at(id.index) = placement.pose;
                 continue;
             }
-            s.body = BodyId{bodyIndex_.at(bodyPath)};
-            s.poseInBody = relative(m_.bodyRestPose[s.body.index], placement.pose);
+            const BodyId body{bodyIndex_.at(bodyPath)};
+            prims.body.at(id.index) = body;
+            prims.poseInBody.at(id.index) = relative(m_.bodyRestPose[body.index], placement.pose);
         }
     }
 
