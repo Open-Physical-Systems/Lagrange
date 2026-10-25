@@ -11,8 +11,8 @@ flowchart LR
     v03["v0.3<br/>arms + electrical<br/>MoveIt 2<br/><b>released 2026-10-25</b>"]:::done
     v04["v0.4<br/>drones<br/>PX4 / ArduPilot SITL<br/><b>released 2026-10-25</b>"]:::done
     v05["v0.5<br/>weather + EMI + comms<br/><b>released 2026-10-25</b>"]:::done
-    v06["v0.6<br/>cars, autonomous cars<br/>OpenDRIVE, Autoware<br/><b>in progress</b>"]:::now
-    v07["v0.7<br/>huge worlds"]:::todo
+    v06["v0.6<br/>cars, autonomous cars<br/>OpenDRIVE, Autoware<br/><b>released 2026-10-25</b>"]:::done
+    v07["v0.7<br/>huge worlds<br/><b>next</b>"]:::now
     v10["v1.0<br/>stable schemas + plugin ABI<br/>ros-lyrical-* debs"]:::todo
     v01 --> v02 --> v03 --> v04 --> v05 --> v06 --> v07 --> v10
 
@@ -125,7 +125,7 @@ Every v0.6 plan step is done. Release notes (draft) and acceptance evidence:
 Owed within the epics: a published MF tyre set and the ISO manoeuvres, zero-copy ROS output,
 hardware ray-query radar and an RTF metric, the ASAM example scenarios and catalogs, the
 pedestrian fundamental diagram, lights drawn and pedestrians crossing, and a run with Autoware
-itself. Not released: waits for the owner's request.
+itself. Released as `v0.6.0` on 2026-10-25 at the owner's request.
 
 ## v0.6 plan (2026-10-25)
 

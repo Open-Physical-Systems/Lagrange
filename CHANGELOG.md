@@ -5,6 +5,32 @@ Notable changes to Lagrange are recorded here. Each release section is generated
 titles merged into `dev`; do not edit it by hand. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v0.5.0...v0.6.0) (2026-10-25)
+
+
+### Features
+
+* **bridge/autoware:** vehicle interface for autoware on /ackermann_cmd ([#152](https://github.com/Open-Physical-Systems/Lagrange/issues/152)) ([18e4f8f](https://github.com/Open-Physical-Systems/Lagrange/commit/18e4f8fee28f09fbac9329d9f6a4261b46ba31cc))
+* **io:** opendrive road networks to usd roads and lanes ([#146](https://github.com/Open-Physical-Systems/Lagrange/issues/146)) ([bcd99c2](https://github.com/Open-Physical-Systems/Lagrange/commit/bcd99c22a50448095e32d24e850bde0ac5d6deb1))
+* **io:** openscenario runner for a subset of 1.x ([#149](https://github.com/Open-Physical-Systems/Lagrange/issues/149)) ([e750ded](https://github.com/Open-Physical-Systems/Lagrange/commit/e750dedf5c143ae05f2f7b79af607bf75bf5c66a))
+* **mod/sensors:** automotive radar by ray launching ([#150](https://github.com/Open-Physical-Systems/Lagrange/issues/150)) ([bb9a778](https://github.com/Open-Physical-Systems/Lagrange/commit/bb9a778e564a7a0239ac064a6edf5d840f7ec3ea))
+* **mod/sensors:** camera sensor model with lens, rolling shutter and noise ([#151](https://github.com/Open-Physical-Systems/Lagrange/issues/151)) ([ca56cfc](https://github.com/Open-Physical-Systems/Lagrange/commit/ca56cfc29582dab4f5232c0e53c2b21863f84835))
+* **mod/traffic:** builtin traffic on road lanes with kinematic agents ([#148](https://github.com/Open-Physical-Systems/Lagrange/issues/148)) ([a41c03d](https://github.com/Open-Physical-Systems/Lagrange/commit/a41c03d8a0a45306d053fe6074f3df9bf769656a))
+* **mod/vehicle_dynamics:** raycast vehicles with magic formula tyres ([#144](https://github.com/Open-Physical-Systems/Lagrange/issues/144)) ([5bb6ac8](https://github.com/Open-Physical-Systems/Lagrange/commit/5bb6ac8c5fc697c86a8da9bbadc903a7334751f6))
+* **schemas:** vehicle schema library with VehicleAPI_1 and WheelAPI_1 ([#143](https://github.com/Open-Physical-Systems/Lagrange/issues/143)) ([4e0158c](https://github.com/Open-Physical-Systems/Lagrange/commit/4e0158c233aa7b1af44fe165eb8f84fe63a837ed))
+* **server:** sample sedan in a city block, driven by /cmd_vel ([#145](https://github.com/Open-Physical-Systems/Lagrange/issues/145)) ([6c2d0eb](https://github.com/Open-Physical-Systems/Lagrange/commit/6c2d0eba4fdb514b2d3fad14710791da856a02d5))
+
+
+### Bug Fixes
+
+* **io:** lint the city block's road generator ([#147](https://github.com/Open-Physical-Systems/Lagrange/issues/147)) ([a892783](https://github.com/Open-Physical-Systems/Lagrange/commit/a892783d44d4b61e49ef1f0aad78cbc80283b5e0))
+* **server:** a scenario without --world drives on its own roads ([#153](https://github.com/Open-Physical-Systems/Lagrange/issues/153)) ([7226762](https://github.com/Open-Physical-Systems/Lagrange/commit/7226762dfd3af4204f002969314235f9b1432b49))
+
+### Documentation
+
+* **guide:** cars tutorial and the v0.6.0 release notes draft ([#154](https://github.com/Open-Physical-Systems/Lagrange/issues/154)) ([5d7a486](https://github.com/Open-Physical-Systems/Lagrange/commit/5d7a486cca4ed3f89d816d9b8a12b3edbf49054c))
+* **plan:** the v0.6 plan ([#142](https://github.com/Open-Physical-Systems/Lagrange/issues/142)) ([d4f3fe4](https://github.com/Open-Physical-Systems/Lagrange/commit/d4f3fe4309d31a36f63e7d577e681ce43b733c4e))
+
 ## [0.5.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v0.4.0...v0.5.0) (2026-10-25)
 
 

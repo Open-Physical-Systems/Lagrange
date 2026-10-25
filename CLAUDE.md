@@ -57,11 +57,10 @@ Consequences:
 
 ## 2. Current phase
 
-**v0.2 (simulation core + AMR), v0.3 (arms, electrical, thermal), v0.4 (drones) and v0.5
-(weather, EMI, comms) are released** as `v0.2.0` to `v0.5.0` on 2026-10-25 (`docs/release/`;
-v0.1.0 on 2026-10-14). Status and owed items: `docs/plan/progress.md`. **v0.6 cars and
-autonomous cars** (`docs/plan/roadmap.md` §7) is done on `dev` and waits for the owner's release
-request (`docs/release/v0.6.0.md`, draft). Next by the roadmap: v0.7 huge worlds.
+**v0.2 (simulation core + AMR), v0.3 (arms, electrical, thermal), v0.4 (drones), v0.5
+(weather, EMI, comms) and v0.6 (cars, autonomous cars) are released** as `v0.2.0` to `v0.6.0` on
+2026-10-25 (`docs/release/`; v0.1.0 on 2026-10-14). Status and owed items:
+`docs/plan/progress.md`. Next by the roadmap: **v0.7 huge worlds** (`docs/plan/roadmap.md` §8).
 
 - The protocol stays v1; the v0.1 viewer connects to the C++ server unchanged.
 - RFC 0001 (module interface), 0002 (USD schemas) and 0005 (profile format) are accepted; work

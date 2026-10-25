@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_openscenario</name>
-  <version>0.5.0</version>
+  <version>0.6.0</version>
   <description>OpenSCENARIO: an own reader and runner for a subset of OpenSCENARIO 1.x (entities, Init, stories, speed and lane-change actions, conditions) on the road lanes (v0.6).</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
