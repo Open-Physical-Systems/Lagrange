@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_sensors</name>
-  <version>0.1.0</version>
+  <version>0.3.0</version>
   <description>The sensors domain: IMU and 2D/3D lidar on Tier 0 (exact ray casts against collision shapes on the CPU) and Tier 1 (the same tests in a compute kernel over a bounding-volume hierarchy), with deterministic noise.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
