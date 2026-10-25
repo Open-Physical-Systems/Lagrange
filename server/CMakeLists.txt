@@ -165,7 +165,7 @@ if(BUILD_TESTING)
         test/test_server.cpp
         test/test_toggles.cpp
         test/test_usd_assets.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero"
         TIMEOUT 120
     )
     target_link_libraries(
@@ -204,7 +204,7 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_arm
         test/test_arm.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero"
         TIMEOUT 180
     )
     target_link_libraries(

@@ -5,6 +5,11 @@ every schema is version 1 and may change without a migration.
 
 ## Unreleased
 
+- **Aerodynamics library** (`schemas/aero`): `AeroAPI_1` and `RotorAPI_1`, as drafted in
+  `docs/design/formats.md` §3.3, for v0.4's drones. Additions to the drafts: `lagrangeUnit = "1"`
+  on `aero:rotor:bladeCount`, and the meaning of `aero:rotor:direction` (the sense of rotation
+  that makes thrust, seen from above along the thrust direction).
+
 - **Sensor library**: `CameraSensorAPI_1`, as drafted in `docs/design/formats.md` §3.8, applied
   to a `UsdGeomCamera` whose lens attributes give the field of view and clip range.
 

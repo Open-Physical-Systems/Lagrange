@@ -294,7 +294,9 @@ class "ThermalLinkAPI_1" (
 | `aero:coeffTable` | asset | — | none | CSV: angle of attack (rad), CL, CD, CM |
 | `aero:angularDamping` | double[3] | N·m·s/rad | `(0, 0, 0)` | |
 
-**`RotorAPI_1`** (proposed addition, on the rotor joint prim; used by `modules/rotor_aero/`).
+**`RotorAPI_1`** (on the rotor joint prim; used by `modules/rotor_aero/`). Defined in
+`schemas/aero` since v0.4, with `aero:rotor:direction` meaning the sense of rotation that makes
+thrust, seen from above along the thrust direction.
 
 | Attribute | Type | Unit | Fallback |
 |---|---|---|---|
