@@ -22,6 +22,7 @@
   <depend>lagrange_rotor_aero</depend>
   <depend>lagrange_aerodynamics</depend>
   <depend>lagrange_weather</depend>
+  <depend>lagrange_fields</depend>
   <depend>lagrange_mavlink</depend>
   <depend>lagrange_recording</depend>
   <depend>lagrange_gpu</depend>

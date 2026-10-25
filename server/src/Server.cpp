@@ -2,6 +2,7 @@
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
 #include "lagrange/electrical/IdealTorqueSource.hpp"
 #include "lagrange/electrical/Network.hpp"
+#include "lagrange/fields/Field.hpp"
 #include "lagrange/importers/Importers.hpp"
 #include "lagrange/mavlink/ArduPilotJson.hpp"
 #include "lagrange/mavlink/Px4Lockstep.hpp"
@@ -65,6 +66,14 @@ constexpr std::uint32_t kProtocolMinor = 1;
 constexpr char kServerName[] = "lagrange_server 0.1.0";
 constexpr std::int64_t kStatusPeriodNs = 100'000'000;  // 10 Hz, as the mock server
 constexpr std::int64_t kStatsPeriodNs = 1'000'000'000;
+constexpr std::int64_t kFieldPeriodNs = 500'000'000;  // field slices: twice a second
+// The environment's fields (EnvironmentState.Field.name), as the mock server names them.
+constexpr const char* kFogField = "weather/fog_density";
+constexpr const char* kWindField = "weather/wind";
+constexpr const char* kFluxField = "emi/flux_density";
+constexpr std::uint32_t kSliceWidth = 64;   // cells along +X
+constexpr std::uint32_t kSliceHeight = 48;  // cells along +Y
+constexpr double kSliceCell = 0.5;          // m
 // Most simulation time one iteration may compute; beyond it the run falls behind real time
 // instead of freezing the viewer connection.
 constexpr std::int64_t kMaxStepWallNs = 40'000'000;
@@ -355,6 +364,7 @@ struct Session {
     bool wantsRosGraph{false};
     bool wantsWorld{false};
     std::set<std::string> sensors;  // prim paths of the sensors whose frames this viewer wants
+    std::map<std::string, double> fields;  // fields whose slices this viewer wants: their height
 
     bool congested() const { return connection.pendingOutputBytes() > kMaxQueuedBytes; }
     void send(const v1::Envelope& envelope) {
@@ -412,6 +422,8 @@ struct Server::Impl {
     Clock::time_point lastWall{Clock::now()};
     Clock::time_point lastStatus{Clock::now()};
     Clock::time_point lastStats{Clock::now()};
+    Clock::time_point lastFields{Clock::now()};
+    mutable fields::FieldSignal fogFieldSignal, windFieldSignal;
     SimTime statsSimTime{};
     std::vector<std::int64_t> tickNs;
 
@@ -1930,6 +1942,7 @@ struct Server::Impl {
         session.send(profileState({}));
         session.send(catalog());
         session.send(statusEnvelope());
+        session.send(environmentState());
         for (const v1::LogRecord& record : logs) {
             v1::Envelope line;
             *line.mutable_log() = record;
@@ -2091,9 +2104,20 @@ struct Server::Impl {
                     session.sensors.erase(command.subscribe_sensor().sensor());
                 }
                 break;
-            case v1::Command::kSubscribeField:
+            case v1::Command::kSubscribeField: {
+                const v1::SubscribeField& f = command.subscribe_field();
+                if (f.enabled()) {
+                    session.fields[f.field()] = f.height_m();
+                    if (auto slice = fieldSlice(f.field(), f.height_m())) {
+                        session.send(*slice);
+                    }
+                } else {
+                    session.fields.erase(f.field());
+                }
+                break;
+            }
             case v1::Command::kSetOverlays:
-                break;  // accepted; this server has no environment fields yet
+                break;  // accepted; overlays are drawn by the viewer
             case v1::Command::kValidateProfile:
                 validate(command.validate_profile().yaml(), *r.mutable_validation());
                 break;
@@ -2458,6 +2482,7 @@ struct Server::Impl {
         owedNs = 0;
         lastWall = Clock::now();
         log(v1::LOG_LEVEL_INFO, "scheduler", "reset · the run restarted at t = 0");
+        broadcast(environmentState());
         return {};
     }
 
@@ -2782,6 +2807,187 @@ struct Server::Impl {
     std::vector<ros2_control::ControlJoint> controlJoints;
 
     /// The World workspace: the robot as the one agent, at its simulated position.
+    /// The weather values the run uses: the command line's, then the applied profile's.
+    std::map<std::string, ConfigValue, std::less<>> weatherValues() const {
+        std::map<std::string, ConfigValue, std::less<>> values;
+        for (const auto& [key, value] : options.weather) {
+            values[key] = value;
+        }
+        for (const auto& [key, value] : options.weatherFiles) {
+            values[key] = value;
+        }
+        for (const auto& [key, value] : appliedWeather) {
+            values[key] = value;
+        }
+        return values;
+    }
+
+    /// The run's wind (the aerodynamics domain's config), if it has one.
+    std::optional<aerodynamics::Wind> runWind() const {
+        const ProfileSettings settings = active();
+        if (settings.aerodynamics.empty()) {
+            return std::nullopt;
+        }
+        ModuleConfigData data;
+        data.values.insert(settings.aerodynamics.begin(), settings.aerodynamics.end());
+        const auto wind = aerodynamics::AeroDrag::windOf(ModuleConfig(data));
+        return wind ? std::optional(*wind) : std::nullopt;
+    }
+
+    double busValue(const char* name, double fallback) const {
+        if (scheduler == nullptr) {
+            return fallback;
+        }
+        const SignalId id = scheduler->bus().find(name);
+        return id.valid() ? scheduler->bus().read(id) : fallback;
+    }
+
+    /// The environment as the run has it (protocol.md: EnvironmentState), for the viewer's
+    /// Environment workspace.
+    v1::Envelope environmentState() const {
+        v1::Envelope envelope;
+        v1::EnvironmentState& env = *envelope.mutable_environment();
+        const auto values = weatherValues();
+        const auto number = [&](const char* key) -> std::optional<double> {
+            const auto it = values.find(key);
+            if (it == values.end()) {
+                return std::nullopt;
+            }
+            const double* v = std::get_if<double>(&it->second);
+            return v != nullptr ? std::optional(*v) : std::nullopt;
+        };
+        const auto text = [&](const char* key) -> std::string {
+            const auto it = values.find(key);
+            const std::string* v =
+                it == values.end() ? nullptr : std::get_if<std::string>(&it->second);
+            return v != nullptr ? std::filesystem::path(*v).filename().string() : std::string();
+        };
+        const bool weather = weatherRuns() && !substituted("weather");
+        if (const auto t = ambient() ? ambient() : number("temperature")) {
+            env.set_ambient_temperature_k(*t);
+        }
+        v1::EnvironmentState::Weather& w = *env.mutable_weather();
+        if (weather) {
+            constexpr double kMmphPerMps = 3.6e6;
+            constexpr double kMgPerKg = 1e6;
+            constexpr double kWetFriction = 0.7;  // weather::kWetFrictionScale
+            w.set_rain_mm_per_h(number("rain_rate").value_or(0.0) * kMmphPerMps);
+            w.set_fog_visibility_m(number("visibility").value_or(0.0));
+            w.set_dust_mg_per_m3(number("dust_concentration").value_or(0.0) * kMgPerKg);
+            w.set_surface_wetness(std::clamp(
+                (1.0 - busValue("env/friction_scale", 1.0)) / (1.0 - kWetFriction), 0.0, 1.0));
+        }
+        if (const auto wind = runWind()) {
+            v1::EnvironmentState::Wind& out = *env.mutable_wind();
+            out.set_speed_m_per_s(wind->speed);
+            // Where it blows to, from +X towards +Y: the opposite of its meteorological bearing.
+            out.set_direction_deg(std::fmod(90.0 - (wind->fromDegrees + 180.0) + 720.0, 360.0));
+            out.set_gust_intensity(wind->dryden ? 1.0 : 0.0);
+        }
+        if (weather && !text("wind_field").empty()) {
+            env.mutable_wind()->set_field(text("wind_field"));
+        }
+        const auto field = [&](const char* name, const char* label, const char* domain,
+                               const Unit& unit, std::uint32_t components, bool available,
+                               const char* why) {
+            v1::EnvironmentState::Field& f = *env.add_fields();
+            f.set_name(name);
+            f.set_label(label);
+            f.set_domain(domain);
+            setUnit(*f.mutable_unit(), unit);
+            f.set_components(components);
+            f.set_available(available);
+            if (!available) {
+                f.set_unavailable_reason(why);
+            }
+        };
+        field(kFogField, "fog extinction", "weather", units::per_m, 1, weather,
+              "the weather does not run: it needs the site's temperature, pressure and humidity");
+        field(kWindField, "wind", "weather", units::m_per_s, 2,
+              runWind().has_value() || (weather && !text("wind_field").empty()),
+              "no wind: the aerodynamics domain's wind or a wind field");
+        field(kFluxField, "|B|", "emi", units::T, 1, false, "the EMI domain is not built yet");
+        return envelope;
+    }
+
+    /// A horizontal slice of `name` at height `height` around the robot, or nothing for a field
+    /// the run does not have.
+    std::optional<v1::Envelope> fieldSlice(const std::string& name, double height) const {
+        if (scheduler == nullptr || (name != kFogField && name != kWindField)) {
+            return std::nullopt;
+        }
+        const bool fog = name == kFogField;
+        const SignalBus& bus = scheduler->bus();
+        const SignalId gridId = bus.find(fog ? "env/extinction/field" : "env/wind/velocity_field");
+        const std::shared_ptr<const fields::Field> grid =
+            gridId.valid() ? (fog ? fogFieldSignal : windFieldSignal).read(bus, gridId) : nullptr;
+        const std::optional<aerodynamics::Wind> wind = runWind();
+        if (fog && !bus.find("env/extinction/visible").valid()) {
+            return std::nullopt;
+        }
+        if (!fog && !grid && !wind) {
+            return std::nullopt;
+        }
+        // Centred on the robot.
+        Pose centre = robot.bodyRestPose.empty() ? Pose{} : robot.bodyRestPose[0];
+        if (!bodyPose.empty() && bodyPose[0].valid()) {
+            const std::span<const double> v = bus.readN(bodyPose[0]);
+            centre.position = {v[0], v[1], v[2]};
+        }
+        v1::Envelope envelope;
+        v1::FieldSlice& slice = *envelope.mutable_field_slice();
+        slice.set_field(name);
+        slice.mutable_sim_time()->set_ns(scheduler->now().ns);
+        slice.set_width(kSliceWidth);
+        slice.set_height(kSliceHeight);
+        const std::uint32_t components = fog ? 1 : 2;
+        slice.set_components(components);
+        slice.set_origin_x(centre.position[0] - (kSliceWidth - 1) * kSliceCell / 2.0);
+        slice.set_origin_y(centre.position[1] - (kSliceHeight - 1) * kSliceCell / 2.0);
+        slice.set_cell_m(kSliceCell);
+        slice.set_height_m(height);
+        std::vector<float> values;
+        values.reserve(static_cast<std::size_t>(kSliceWidth) * kSliceHeight * components);
+        const double uniform = fog ? bus.read(bus.find("env/extinction/visible")) : 0.0;
+        double lo = std::numeric_limits<double>::infinity();
+        double hi = 0.0;
+        for (std::uint32_t j = 0; j < kSliceHeight; ++j) {
+            for (std::uint32_t i = 0; i < kSliceWidth; ++i) {
+                const fields::Vec3 at{slice.origin_x() + i * kSliceCell,
+                                      slice.origin_y() + j * kSliceCell, height};
+                if (fog) {
+                    const double v = uniform + (grid ? grid->sampleScalar(at) : 0.0);
+                    values.push_back(static_cast<float>(v));
+                    lo = std::min(lo, v);
+                    hi = std::max(hi, v);
+                    continue;
+                }
+                fields::Vec3 v{};
+                const auto& box = grid ? grid->bounds() : std::array<fields::Vec3, 2>{};
+                if (grid && at[0] >= box[0][0] && at[0] <= box[1][0] && at[1] >= box[0][1] &&
+                    at[1] <= box[1][1] && at[2] >= box[0][2] && at[2] <= box[1][2]) {
+                    v = grid->sampleVector(at);
+                } else if (wind) {
+                    const double from = wind->fromDegrees * std::numbers::pi / 180.0;
+                    const double u = aerodynamics::meanWindAt(*wind, height);
+                    v = {-u * std::sin(from), -u * std::cos(from), 0.0};
+                }
+                values.push_back(static_cast<float>(v[0]));
+                values.push_back(static_cast<float>(v[1]));
+                const double m = std::hypot(v[0], v[1]);
+                lo = std::min(lo, m);
+                hi = std::max(hi, m);
+            }
+        }
+        slice.set_value_min(static_cast<float>(lo));
+        slice.set_value_max(static_cast<float>(hi));
+        std::string bytes(reinterpret_cast<const char*>(values.data()),
+                          values.size() * sizeof(float));
+        slice.mutable_values()->set_size(bytes.size());
+        slice.mutable_values()->set_inline_(std::move(bytes));
+        return envelope;
+    }
+
     v1::Envelope worldState() const {
         v1::Envelope envelope;
         v1::WorldState& world = *envelope.mutable_world();
@@ -3517,6 +3723,19 @@ void Server::runOnce(int timeoutMs) {
                 status.mutable_status()->set_dropped_deltas(session->droppedDeltas);
                 status.mutable_status()->set_dropped_signal_blocks(session->droppedBlocks);
                 session->send(status);
+            }
+        }
+    }
+    if (nanosSince(s.lastFields, now) >= kFieldPeriodNs) {
+        s.lastFields = now;
+        for (auto& session : s.sessions) {
+            if (!session->greeted || session->congested()) {
+                continue;
+            }
+            for (const auto& [name, height] : session->fields) {
+                if (auto slice = s.fieldSlice(name, height)) {
+                    session->send(*slice);
+                }
             }
         }
     }
