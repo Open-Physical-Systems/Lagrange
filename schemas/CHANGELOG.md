@@ -5,6 +5,12 @@ every schema is version 1 and may change without a migration.
 
 ## Unreleased
 
+- **Weather, EMI, sensor-material and comms libraries** for v0.5: `WeatherAPI_1`,
+  `EmiSourceAPI_1`, `EmiSusceptibilityAPI_1`, `SensorMaterialAPI_1` as drafted in formats.md
+  §3.4, §3.5 and §3.7, and new `RadioLinkAPI_1` and `CanBusAPI_1` (§3.9). Additions to the
+  drafts: `weather:roughnessLength`; `emi:direction`, `emi:dipoleMomentPerAmpere`;
+  `emi:adcNoisePerField` split into `emi:accelNoisePerField` and `emi:gyroNoisePerField`.
+
 - **Aerodynamics library**: on `RotorAPI_1`, `aero:rotor:propeller` (a propeller file,
   formats.md §3.3.1, for the `bem` fidelity and the drawn blades) replaces the unused
   `aero:rotor:bladeTable`; new `aero:rotor:mount` (`puller` or `pusher`, fallback `puller`);

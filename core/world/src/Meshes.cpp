@@ -214,6 +214,13 @@ void appendModel(Model& model, const Model& other) {
         }
         w.schemaInstances.push_back(std::move(instance));
     }
+    // Where the prims are (after the schema instances added theirs), with their bodies renumbered.
+    for (std::size_t p = 0; p < worldPrimMap.size(); ++p) {
+        if (worldPrimMap[p].index != kNoIndex) {
+            w.prims.body[worldPrimMap[p].index] = map(o.prims.body[p]);
+            w.prims.poseInBody[worldPrimMap[p].index] = o.prims.poseInBody[p];
+        }
+    }
     model.actuatedJoints.insert(model.actuatedJoints.end(), other.actuatedJoints.begin(),
                                 other.actuatedJoints.end());
     model.notes.insert(model.notes.end(), other.notes.begin(), other.notes.end());

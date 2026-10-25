@@ -23,6 +23,9 @@ struct ProfileContext {
     bool ambientKnown{false};
     /// The site's air density is known from the command line (--air-density).
     bool airDensityKnown{false};
+    /// Weather keys known without the profile (--weather, a WeatherAPI_1 prim): a profile that
+    /// runs the weather must give the rest of temperature, pressure and relative_humidity.
+    std::set<std::string> weatherKnown;
 };
 
 /// The settings of a valid profile that the server applies.
@@ -44,6 +47,10 @@ struct ProfileSettings {
     /// domains.rotor_aero but the air density: fidelity, ground_effect, inflow_time_constant,
     /// speed_of_sound, as the module's config takes them.
     std::map<std::string, ConfigValue, std::less<>> rotorAero;
+    /// domains.weather: the site and effects keys, as the weather module's config takes them.
+    std::map<std::string, ConfigValue, std::less<>> weather;
+    /// domains.emi.coupling: the victims the EMI domain disturbs (all when absent).
+    std::optional<std::vector<std::string>> emiCoupling;
     std::optional<double> realTimeFactor;  // time.real_time_factor (0: as fast as possible)
 };
 

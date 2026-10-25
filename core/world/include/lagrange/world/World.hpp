@@ -83,6 +83,11 @@ struct World {
     struct Prims {
         std::vector<std::string> paths;          // "/amr/base_link/left_wheel"
         std::vector<std::string> instanceNames;  // "left_wheel": the name used in signal names
+        /// Where each prim is: the nearest body at or above it (kWorldBody for fixed scenery)
+        /// and its pose in that body's frame (region-local for kWorldBody), every joint at zero.
+        /// The loader fills them for the prims it adds; addPrim starts them at the world origin.
+        std::vector<BodyId> body;
+        std::vector<Pose> poseInBody;
     } prims;
 
     struct Bodies {  // every vector has one entry per body
@@ -182,6 +187,11 @@ public:
     [[nodiscard]] std::size_t primCount() const { return world_->prims.paths.size(); }
     [[nodiscard]] std::string_view primPath(PrimId prim) const;
     [[nodiscard]] std::string_view signalInstanceName(PrimId prim) const;
+    /// Where a prim is (World::Prims::body, poseInBody).
+    [[nodiscard]] BodyId primBody(PrimId prim) const { return world_->prims.body.at(prim.index); }
+    [[nodiscard]] const Pose& primPoseInBody(PrimId prim) const {
+        return world_->prims.poseInBody.at(prim.index);
+    }
     /// Every instance of an applied schema, in load order.
     [[nodiscard]] std::vector<const SchemaInstance*> instancesOf(std::string_view schema) const;
     [[nodiscard]] std::array<double, 3> gravityLocal() const { return world_->gravityLocal; }

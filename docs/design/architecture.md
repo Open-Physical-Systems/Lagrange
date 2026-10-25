@@ -132,6 +132,7 @@ enum class QuantityKind : std::uint16_t {
     LinearAcceleration,   // appended: numbers already used in recordings do not change
     Frequency, Inductance, Capacitance, Area, Mass, Activity,  // appended in v0.2
     AngularAcceleration, MomentOfInertia,                       // appended in v0.2
+    Duration, DataRate,                                         // appended in v0.5
 };
 
 struct Unit {

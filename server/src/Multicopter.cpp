@@ -98,7 +98,8 @@ bool MulticopterController::canFly(const WorldView& world) {
 }
 
 ModuleInfo MulticopterController::info() const {
-    return {"control", "multicopter", 0, 1, false, true, CapabilityTier::Tier0};
+    // Commands from outside (ROS) are not deterministic.
+    return {"control", "multicopter", 0, 1, false, !commands_, CapabilityTier::Tier0};
 }
 
 Duration MulticopterController::preferredStep() const {
@@ -212,6 +213,8 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
     if (!homed_) {
         home_ = position;
         homed_ = true;
+        setpoint_ = {home_[0], home_[1], home_[2] + settings_.altitudeM};
+        heading_ = 0.0;
     }
     if (context.t.seconds() < settings_.takeoffAfterS) {
         for (const Rotor& r : rotors_) {
@@ -230,10 +233,36 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
     const double wp = 2.0 * std::numbers::pi * settings_.positionHz;
     const double kp = wp * wp;
     const double kd = 2.0 * settings_.damping * wp;
-    const Vec3 target{home_[0], home_[1], home_[2] + settings_.altitudeM};
+    // A velocity command moves the set point (forward and left in the heading frame) and turns
+    // the heading; without one it holds where it is.
+    Vec3 wanted{};  // m/s, world: the velocity the set point moves at
+    if (const std::optional<FlightCommand> command = commands_ ? commands_() : std::nullopt) {
+        const double dt = context.dt.seconds();
+        double forward = command->forwardMps;
+        double left = command->leftMps;
+        const double planar = std::hypot(forward, left);
+        if (planar > settings_.maxHorizontalMps) {
+            forward *= settings_.maxHorizontalMps / planar;
+            left *= settings_.maxHorizontalMps / planar;
+        }
+        const double c = std::cos(heading_);
+        const double s = std::sin(heading_);
+        wanted = {c * forward - s * left, s * forward + c * left,
+                  std::clamp(command->upMps, -settings_.maxVerticalMps, settings_.maxVerticalMps)};
+        for (std::size_t i = 0; i < 3; ++i) {
+            setpoint_[i] += wanted[i] * dt;
+        }
+        if (setpoint_[2] < home_[2] + settings_.minHeightM) {
+            setpoint_[2] = home_[2] + settings_.minHeightM;
+            wanted[2] = 0.0;
+        }
+        heading_ += std::clamp(command->yawRateRadps, -settings_.maxYawRateRadps,
+                               settings_.maxYawRateRadps) *
+                    dt;
+    }
     Vec3 force{};
     for (std::size_t i = 0; i < 3; ++i) {
-        force[i] = mass_ * (kp * (target[i] - position[i]) - kd * velocity[i]);
+        force[i] = mass_ * (kp * (setpoint_[i] - position[i]) + kd * (wanted[i] - velocity[i]));
     }
     force[2] += mass_ * kGravity;
     // Never ask for more than 30° of tilt.
@@ -246,9 +275,9 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
     const Vec3 bodyZ{rot[0][2], rot[1][2], rot[2][2]};
     const double thrust = std::max(0.0, dot(force, bodyZ));
 
-    // Attitude: the body z axis along the force, heading kept at 0.
+    // Attitude: the body z axis along the force, the nose towards the heading.
     const Vec3 z = normalized(force);
-    const Vec3 y = normalized(cross(z, {1.0, 0.0, 0.0}));
+    const Vec3 y = normalized(cross(z, {std::cos(heading_), std::sin(heading_), 0.0}));
     const Vec3 x = cross(y, z);
     const Mat3 want{{{x[0], y[0], z[0]}, {x[1], y[1], z[1]}, {x[2], y[2], z[2]}}};
     // e_R = ½ vee(R_dᵀR − RᵀR_d) (Lee et al. eq. 11).
@@ -291,6 +320,10 @@ Status MulticopterController::saveState(StateWriter& writer) const {
     for (const double v : home_) {
         writer.put(v);
     }
+    for (const double v : setpoint_) {
+        writer.put(v);
+    }
+    writer.put(heading_);
     return {};
 }
 
@@ -299,6 +332,10 @@ Status MulticopterController::restoreState(StateReader& reader) {
     for (double& v : home_) {
         ok = ok && reader.get(v);
     }
+    for (double& v : setpoint_) {
+        ok = ok && reader.get(v);
+    }
+    ok = ok && reader.get(heading_);
     return ok ? Status{} : Status::error(StatusCode::InvalidConfig, "controller state truncated");
 }
 

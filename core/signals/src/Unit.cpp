@@ -10,7 +10,7 @@ namespace lagrange {
 
 namespace {
 
-constexpr std::array<std::string_view, 35> kKindNames{
+constexpr std::array<std::string_view, 37> kKindNames{
     "Unspecified",
     "Torque",
     "Energy",
@@ -46,6 +46,8 @@ constexpr std::array<std::string_view, 35> kKindNames{
     "Activity",
     "AngularAcceleration",
     "MomentOfInertia",
+    "Duration",
+    "DataRate",
 };
 
 /// A symbol the parser accepts, with its dimension.
@@ -91,7 +93,7 @@ struct Named {
     Unit unit;
 };
 
-constexpr std::array<Named, 31> kNamed{{
+constexpr std::array<Named, 32> kNamed{{
     {"1", "1", units::one},
     {"m", "m", units::m},
     {"m2", "m²", units::m2},
@@ -103,6 +105,7 @@ constexpr std::array<Named, 31> kNamed{{
     {"rad/s2", "rad/s²", units::rad_per_s2},
     {"kg.m2", "kg·m²", units::kg_m2},
     {"Hz", "Hz", units::Hz},
+    {"s", "s", units::s},
     {"N", "N", units::N},
     {"N.m", "N·m", units::N_m},
     {"J", "J", units::J},

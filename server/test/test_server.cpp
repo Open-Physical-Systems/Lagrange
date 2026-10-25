@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -367,6 +368,170 @@ TEST_F(QuadServerTest, AProfileWithoutTheSiteKeepsTheRunningSite) {
     }
     EXPECT_TRUE(gnss);
     EXPECT_TRUE(rotors);
+}
+
+/// The quadcopter with EMI victims, at the power line.
+class EmiServerTest : public QuadServerTest {
+protected:
+    void adjust(ServerOptions& options) override {
+        QuadServerTest::adjust(options);
+        options.robotPath = LAGRANGE_TEST_QUAD_EMI_USDA;
+        options.worldPath = LAGRANGE_TEST_POWER_LINE_USDA;
+    }
+};
+
+TEST_F(EmiServerTest, ThePowerLineDisturbsTheMagnetometerAndReachesTheViewer) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_environment(); }));
+    const v1::EnvironmentState env = received_.back().environment();
+    ASSERT_EQ(env.emi_sources_size(), 1);
+    EXPECT_EQ(env.emi_sources(0).name(), "power_line_01");
+    EXPECT_EQ(env.emi_sources(0).frequency_hz(), 60.0);
+    bool flux = false;
+    for (const auto& f : env.fields()) {
+        flux = flux || (f.name() == "emi/flux_density" && f.available());
+    }
+    EXPECT_TRUE(flux);
+    std::set<std::string> names;
+    for (const v1::Envelope& e : received_) {
+        if (e.has_catalog()) {
+            for (const v1::SignalInfo& info : e.catalog().signals()) {
+                names.insert(info.name());
+            }
+        }
+    }
+    EXPECT_TRUE(names.contains("emi/magnetometer/b_field"));
+    EXPECT_TRUE(names.contains("emi/imu/accel_noise"));
+
+    // The flux slice at 10 m (the conductor's height) peaks next to it: 400 A at a few metres
+    // is tens of µT.
+    v1::Envelope watch = command(4);
+    watch.mutable_command()->mutable_subscribe_field()->set_field("emi/flux_density");
+    watch.mutable_command()->mutable_subscribe_field()->set_enabled(true);
+    watch.mutable_command()->mutable_subscribe_field()->set_height_m(9.0);
+    send(watch);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_field_slice(); }));
+    const v1::FieldSlice& slice = received_.back().field_slice();
+    EXPECT_EQ(slice.field(), "emi/flux_density");
+    EXPECT_GT(slice.value_max(), 2e-5);  // within 4 m of 400 A: above 20 µT
+    EXPECT_LT(slice.value_min(), 1e-5);
+    // In the profile, and the profile validates.
+    std::string yaml;
+    for (const v1::Envelope& e : received_) {
+        if (e.has_profile_state()) {
+            yaml = e.profile_state().yaml();
+        }
+    }
+    EXPECT_NE(yaml.find("emi: {enabled: true"), std::string::npos) << yaml;
+    EXPECT_TRUE(server_->validateProfile(yaml).valid);
+}
+
+/// The sample AMR with its Wi-Fi radio in the warehouse: the access point is outside the east
+/// wall.
+class CommsServerTest : public ServerTest {
+protected:
+    void adjust(ServerOptions& options) override {
+        options.robotPath = LAGRANGE_TEST_AMR_WIFI_USDA;
+        options.worldPath = LAGRANGE_TEST_WAREHOUSE_USDA;
+        options.demoDrive = false;
+    }
+};
+
+TEST_F(CommsServerTest, TheLinkCrossesTheWallAndTheProfileSaysSo) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    v1::Envelope step = command(4);
+    step.mutable_command()->mutable_step()->set_duration_ns(100'000'000);
+    send(step);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) {
+        return e.has_command_result() && e.command_result().request_id() == 4;
+    }));
+    // 12 m to the access point at 2.4 GHz, exponent 3 past 1 m, one 10 dB wall, 4 dB shadowing.
+    const std::vector<double> pose = server_->read("body/base_link/pose");
+    const double d = std::hypot(12.0 - pose.at(0), pose.at(1), 2.5 - (pose.at(2) + 0.4));
+    const double lambda = 299792458.0 / 2.437e9;
+    const double free = std::pow(4.0 * std::numbers::pi / lambda, 2) * std::pow(d, 3.0);
+    const double dbWithWall =
+        10.0 * std::log10(server_->read("link/wifi/rx_power").at(0) * free / 0.1);
+    EXPECT_NEAR(dbWithWall, -10.0, 4.0 * 4.0);  // the wall, within 4 σ of shadowing
+    EXPECT_EQ(server_->read("link/wifi/up").at(0), 1.0);
+    EXPECT_EQ(server_->read("can/can0/state").at(0), 0.0);
+    std::string yaml;
+    for (const v1::Envelope& e : received_) {
+        if (e.has_profile_state()) {
+            yaml = e.profile_state().yaml();
+        }
+    }
+    EXPECT_NE(yaml.find("comms: {enabled: true}"), std::string::npos) << yaml;
+    EXPECT_TRUE(server_->validateProfile(yaml).valid);
+}
+
+/// The sample AMR in fog and rain (--weather).
+class WeatherServerTest : public ServerTest {
+protected:
+    void adjust(ServerOptions& options) override {
+        options.weather = {{"temperature", 283.15},
+                           {"pressure", 100000.0},
+                           {"relative_humidity", 0.95},
+                           {"visibility", 150.0},
+                           {"rain_rate", 2.778e-6}};
+    }
+};
+
+TEST_F(WeatherServerTest, TheWeatherRunsAndItsProfileSaysSo) {
+    v1::SignalCatalog catalog;
+    ASSERT_TRUE(pumpUntil([&](const v1::Envelope& e) {
+        if (e.has_catalog()) {
+            catalog = e.catalog();
+        }
+        return e.has_profile_state() && e.has_catalog() ? true : !catalog.signals().empty();
+    }));
+    std::set<std::string> names;
+    for (const v1::SignalInfo& info : catalog.signals()) {
+        names.insert(info.name());
+    }
+    EXPECT_TRUE(names.contains("env/extinction/nir_905"));
+    EXPECT_TRUE(names.contains("env/friction_scale"));
+    EXPECT_TRUE(names.contains("sensor/front_lidar/contamination"));
+    // The server's own profile (sent before the catalog) carries the weather, and it validates.
+    std::string yaml;
+    for (const v1::Envelope& e : received_) {
+        if (e.has_profile_state()) {
+            yaml = e.profile_state().yaml();
+        }
+    }
+    EXPECT_NE(yaml.find("weather: {enabled: true"), std::string::npos) << yaml;
+    EXPECT_NE(yaml.find("visibility: 150"), std::string::npos) << yaml;
+    EXPECT_TRUE(server_->validateProfile(yaml).valid);
+}
+
+TEST_F(WeatherServerTest, TheEnvironmentAndItsFogSliceReachTheViewer) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_environment(); }));
+    const v1::EnvironmentState env = received_.back().environment();
+    EXPECT_FALSE(env.synthetic());
+    EXPECT_DOUBLE_EQ(env.weather().fog_visibility_m(), 150.0);
+    EXPECT_NEAR(env.weather().rain_mm_per_h(), 10.0, 1e-3);
+    EXPECT_NEAR(env.ambient_temperature_k(), 283.15, 1e-9);
+    std::map<std::string, bool> available;
+    for (const auto& f : env.fields()) {
+        available[f.name()] = f.available();
+    }
+    EXPECT_TRUE(available["weather/fog_density"]);
+    EXPECT_FALSE(available["weather/wind"]);  // no wind in this run
+    EXPECT_FALSE(available["emi/flux_density"]);
+
+    v1::Envelope watch = command(4);
+    watch.mutable_command()->mutable_subscribe_field()->set_field("weather/fog_density");
+    watch.mutable_command()->mutable_subscribe_field()->set_enabled(true);
+    watch.mutable_command()->mutable_subscribe_field()->set_height_m(1.0);
+    send(watch);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_field_slice(); }));
+    const v1::FieldSlice& slice = received_.back().field_slice();
+    EXPECT_EQ(slice.field(), "weather/fog_density");
+    EXPECT_EQ(slice.components(), 1U);
+    ASSERT_EQ(slice.values().inline_().size(),
+              std::size_t{slice.width()} * slice.height() * sizeof(float));
+    // Uniform fog of 150 m visibility, plus a little rain: Koschmieder's 3.912/V and more.
+    EXPECT_GT(slice.value_min(), 3.912 / 150.0);
+    EXPECT_NEAR(slice.value_max(), slice.value_min(), 1e-6);
 }
 
 /// The sample arm in its workcell: a wrist camera.

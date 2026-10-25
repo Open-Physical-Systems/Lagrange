@@ -954,6 +954,36 @@ private:
             stage_, [this](const UsdPrim& prim) { return worldPrimOf(prim); }, errors_,
             [this](std::string text) { note(std::move(text)); });
         collector.collect(m_.world.schemaInstances);
+        // Where each prim is: its body and its pose in it (EMI sources and victims, radios).
+        World::Prims& prims = m_.world.prims;
+        for (const auto& [path, id] : worldPrim_) {
+            const UsdPrim prim = stage_->GetPrimAtPath(path);
+            if (!prim || !prim.IsA<UsdGeomXformable>()) {
+                continue;
+            }
+            if (prim.IsA<UsdPhysicsJoint>()) {
+                // A joint is where it acts: in its child body, at its anchor there.
+                SdfPathVector child;
+                UsdPhysicsJoint joint(prim);
+                joint.GetBody1Rel().GetTargets(&child);
+                if (!child.empty() && bodyIndex_.contains(child[0])) {
+                    const GfVec3f anchor =
+                        valueOf<GfVec3f>(joint.GetLocalPos1Attr()).value_or(GfVec3f(0.0F));
+                    prims.body.at(id.index) = BodyId{bodyIndex_.at(child[0])};
+                    prims.poseInBody.at(id.index).position = {anchor[0], anchor[1], anchor[2]};
+                    continue;
+                }
+            }
+            const SdfPath bodyPath = bodyOf(prim);
+            const Placement placement = world(prim);
+            if (bodyPath.IsEmpty()) {
+                prims.poseInBody.at(id.index) = placement.pose;
+                continue;
+            }
+            const BodyId body{bodyIndex_.at(bodyPath)};
+            prims.body.at(id.index) = body;
+            prims.poseInBody.at(id.index) = relative(m_.bodyRestPose[body.index], placement.pose);
+        }
     }
 
 public:

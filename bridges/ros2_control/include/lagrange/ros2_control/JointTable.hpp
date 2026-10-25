@@ -18,6 +18,8 @@ struct JointSlot {
     double commandVelocity{0.0};
     double commandPosition{0.0};
     CommandMode mode{CommandMode::None};
+    /// The EMI domain's emi/<joint>/glitch_probability: per encoder edge (0 without EMI).
+    double glitchProbability{0.0};
 };
 
 /// The joints shared between the simulation (ControlModule, on the scheduler) and the

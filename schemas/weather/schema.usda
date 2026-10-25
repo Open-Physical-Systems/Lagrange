@@ -1,0 +1,94 @@
+#usda 1.0
+(
+    """Lagrange weather schema (RFC 0002, docs/design/formats.md section 3.4). Codeless: the
+    stage loader reads the attributes by name. WeatherAPI_1 states the atmosphere on one
+    environment prim (modules/weather)."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeWeather"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "WeatherAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """The atmosphere at the site: temperature, pressure and humidity (site parameters, no
+    fallbacks), mean wind and turbulence, fog (visibility or a grid), rain, dust and the sun."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double weather:ambientTemperature (
+        lagrangeUnit = "K"
+        doc = "Air temperature at the site. Site parameter: no fallback."
+    )
+    double weather:pressure (
+        lagrangeUnit = "Pa"
+        doc = "Air pressure at the site. Site parameter: no fallback."
+    )
+    double weather:relativeHumidity (
+        lagrangeUnit = "1"
+        doc = "Relative humidity, 0 to 1. Site parameter: no fallback."
+    )
+    double3 weather:meanWind = (0, 0, 0) (
+        lagrangeUnit = "m/s"
+        doc = "Mean wind (ENU) at windReferenceHeight."
+    )
+    double weather:windReferenceHeight = 10 (
+        lagrangeUnit = "m"
+        doc = "Height of meanWind above the ground."
+    )
+    double weather:roughnessLength = 0.03 (
+        lagrangeUnit = "m"
+        doc = "Terrain roughness for the logarithmic wind profile (0.03: open terrain)."
+    )
+    uniform token weather:turbulenceModel = "none" (
+        allowedTokens = ["none", "dryden", "von_karman"]
+        doc = "Turbulence: none, dryden or von_karman."
+    )
+    double weather:turbulenceIntensity = 0 (
+        lagrangeUnit = "1"
+        doc = "Turbulence σ / mean wind; 0: the model's low-altitude intensities."
+    )
+    asset weather:windField (
+        doc = "NanoVDB vector grid of wind (m/s), overriding meanWind inside its bounds."
+    )
+    double weather:visibility (
+        lagrangeUnit = "m"
+        doc = "Meteorological optical range: fog extinction by Koschmieder (σ = 3.912 / V). None: no fog."
+    )
+    asset weather:fogField (
+        doc = "NanoVDB scalar grid of extinction (1/m)."
+    )
+    double weather:rainRate = 0 (
+        lagrangeUnit = "m/s"
+        doc = "Rain intensity (1 mm/h = 2.778e-7 m/s)."
+    )
+    double weather:dustConcentration = 0 (
+        lagrangeUnit = "kg/m3"
+        doc = "Airborne dust mass concentration."
+    )
+    double weather:dustMedianDiameter = 0.00001 (
+        lagrangeUnit = "m"
+        doc = "Median particle diameter of the dust."
+    )
+    double weather:solarIrradiance = 0 (
+        lagrangeUnit = "W/m2"
+        doc = "Direct normal irradiance."
+    )
+    double3 weather:sunDirection = (0, 0, 1) (
+        lagrangeUnit = "1"
+        doc = "Unit vector towards the sun, ENU."
+    )
+    double weather:skyTemperature (
+        lagrangeUnit = "K"
+        doc = "Effective sky temperature for radiative exchange; none: the ambient temperature."
+    )
+}

@@ -178,9 +178,11 @@ private:
 };
 
 /// Magnetometer: the World Magnetic Model 2025 main field at the sensor (Wmm.hpp), in the
-/// sensor frame, T, with white noise "noise" (T) per axis. The date is the sensors config's
-/// "decimal_year" (default 2025.0, the model's epoch). No crustal field, disturbances or
-/// hard- and soft-iron effects yet.
+/// sensor frame, T, with white noise "noise" (T) per axis, plus the EMI domain's disturbance
+/// field when the sensor is a magnetometer victim (emi/<p>/b_field, sampled at the sensor's
+/// rate, so a mains field aliases as it would). The date is the sensors config's
+/// "decimal_year" (default 2025.0, the model's epoch). No crustal field or hard- and soft-iron
+/// effects yet.
 class Magnetometer final : public GeoSensor {
 public:
     Magnetometer(const World& world, std::uint32_t sensor, bool groundTruth)
@@ -196,6 +198,11 @@ public:
                                  "the World Magnetic Model 2025 is valid from 2025.0 to 2030.0");
         }
         noise_ = groundTruth_ ? 0.0 : setting(world.sensors(), sensor_, "noise");
+        if (const std::string victim = emiVictim(world, sensor_, "magnetometer");
+            !victim.empty() && !groundTruth_) {
+            disturbance_ =
+                d.input(optionalSpec(victim + "b_field", SignalType::Vec3, units::T, "sensor"));
+        }
         field_ = d.output(spec("sensor/" + name_ + "/field", SignalType::Vec3, units::T, "sensor"));
         return {};
     }
@@ -207,7 +214,14 @@ public:
 
     Status step(const StepContext& context, SignalBus& bus) override {
         random::Stream rng(context.seed, context.stepIndex, 0);
-        bus.writeN(field_, measure(sensorPose(bus), &rng));
+        Vec3 field = measure(sensorPose(bus), &rng);
+        if (disturbance_.valid()) {
+            const std::span<const double> b = bus.readN(disturbance_);
+            for (std::size_t i = 0; i < 3; ++i) {
+                field[i] += b[i];
+            }
+        }
+        bus.writeN(field_, field);
         return {};
     }
 
@@ -228,7 +242,7 @@ private:
 
     double year_{kWmmValidFrom};
     double noise_{0.0};
-    SignalId field_;
+    SignalId field_, disturbance_;
 };
 
 /// Barometer: static pressure and air temperature of the ICAO standard atmosphere at the
@@ -281,6 +295,22 @@ Atmosphere standardAtmosphere(double altitudeM) {
     const double temperature = kSeaLevelTemperatureK - kLapseRateKPerM * altitudeM;
     return {kSeaLevelPressurePa * std::pow(temperature / kSeaLevelTemperatureK, kPressureExponent),
             temperature};
+}
+
+SignalSpec optionalSpec(std::string name, SignalType type, Unit unit, std::string frame) {
+    SignalSpec s = spec(std::move(name), type, unit, std::move(frame));
+    s.optional = true;
+    return s;
+}
+
+std::string emiVictim(const WorldView& world, std::uint32_t sensor, std::string_view victimType) {
+    const PrimId prim = world.sensors().prim[sensor];
+    for (const SchemaInstance* s : world.instancesOf("EmiSusceptibilityAPI_1")) {
+        if (s->prim == prim && s->token("emi:victimType") == victimType) {
+            return "emi/" + std::string(world.signalInstanceName(prim)) + "/";
+        }
+    }
+    return {};
 }
 
 void createGeoSensors(const World& world, bool groundTruth,

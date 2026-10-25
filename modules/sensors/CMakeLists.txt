@@ -4,6 +4,7 @@ project(lagrange_sensors VERSION 0.0.0 LANGUAGES CXX)
 find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
+find_package(lagrange_fields REQUIRED)
 find_package(lagrange_gpu REQUIRED)
 # Tier 0 ray casting: Embree's hierarchy culls, the exact tests stay ours (ShapeCaster).
 find_package(embree 4 REQUIRED)
@@ -16,6 +17,7 @@ add_library(
     src/ShapeCaster.cpp
     src/Wmm.cpp
     src/GeoSensors.cpp
+    src/WeatherEffects.cpp
 )
 lagrange_target_defaults(lagrange_sensors)
 target_include_directories(
@@ -28,6 +30,7 @@ target_link_libraries(
     lagrange_sensors
     PUBLIC
         lagrange_core::lagrange_core
+        lagrange_fields::lagrange_fields
         lagrange_gpu::lagrange_gpu_raycast
         lagrange_gpu::lagrange_gpu_raster
     PRIVATE embree TBB::tbb
@@ -65,6 +68,9 @@ if(BUILD_TESTING)
     ament_add_gtest(test_geo_sensors test/test_geo_sensors.cpp)
     target_link_libraries(test_geo_sensors lagrange_sensors)
     lagrange_target_defaults(test_geo_sensors)
+    ament_add_gtest(test_weather_effects test/test_weather_effects.cpp)
+    target_link_libraries(test_weather_effects lagrange_sensors)
+    lagrange_target_defaults(test_weather_effects)
     ament_add_gtest(test_imu_noise test/test_imu_noise.cpp TIMEOUT 120)
     target_link_libraries(test_imu_noise lagrange_sensors)
     lagrange_target_defaults(test_imu_noise)
@@ -90,5 +96,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(lagrange_core lagrange_gpu embree TBB)
+ament_export_dependencies(lagrange_core lagrange_fields lagrange_gpu embree TBB)
 ament_package()

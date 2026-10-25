@@ -1,7 +1,10 @@
 #include "Recorder.hpp"
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
+#include "lagrange/comms/Comms.hpp"
 #include "lagrange/electrical/IdealTorqueSource.hpp"
 #include "lagrange/electrical/Network.hpp"
+#include "lagrange/emi/Emi.hpp"
+#include "lagrange/fields/Field.hpp"
 #include "lagrange/importers/Importers.hpp"
 #include "lagrange/mavlink/ArduPilotJson.hpp"
 #include "lagrange/mavlink/Px4Lockstep.hpp"
@@ -16,6 +19,7 @@
 #include "lagrange/rotor_aero/RotorAero.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/Sensors.hpp"
+#include "lagrange/sensors/ShapeCaster.hpp"
 #include "lagrange/server/DiffDrive.hpp"
 #include "lagrange/server/Multicopter.hpp"
 #include "lagrange/server/Profile.hpp"
@@ -26,6 +30,7 @@
 #include "lagrange/stage/Stage.hpp"
 #include "lagrange/thermal/ThermalNetwork.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
+#include "lagrange/weather/Weather.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 
 #include <algorithm>
@@ -64,6 +69,14 @@ constexpr std::uint32_t kProtocolMinor = 1;
 constexpr char kServerName[] = "lagrange_server 0.1.0";
 constexpr std::int64_t kStatusPeriodNs = 100'000'000;  // 10 Hz, as the mock server
 constexpr std::int64_t kStatsPeriodNs = 1'000'000'000;
+constexpr std::int64_t kFieldPeriodNs = 500'000'000;  // field slices: twice a second
+// The environment's fields (EnvironmentState.Field.name), as the mock server names them.
+constexpr const char* kFogField = "weather/fog_density";
+constexpr const char* kWindField = "weather/wind";
+constexpr const char* kFluxField = "emi/flux_density";
+constexpr std::uint32_t kSliceWidth = 64;   // cells along +X
+constexpr std::uint32_t kSliceHeight = 48;  // cells along +Y
+constexpr double kSliceCell = 0.5;          // m
 // Most simulation time one iteration may compute; beyond it the run falls behind real time
 // instead of freezing the viewer connection.
 constexpr std::int64_t kMaxStepWallNs = 40'000'000;
@@ -354,6 +367,7 @@ struct Session {
     bool wantsRosGraph{false};
     bool wantsWorld{false};
     std::set<std::string> sensors;  // prim paths of the sensors whose frames this viewer wants
+    std::map<std::string, double> fields;  // fields whose slices this viewer wants: their height
 
     bool congested() const { return connection.pendingOutputBytes() > kMaxQueuedBytes; }
     void send(const v1::Envelope& envelope) {
@@ -411,6 +425,10 @@ struct Server::Impl {
     Clock::time_point lastWall{Clock::now()};
     Clock::time_point lastStatus{Clock::now()};
     Clock::time_point lastStats{Clock::now()};
+    Clock::time_point lastFields{Clock::now()};
+    mutable fields::FieldSignal fogFieldSignal, windFieldSignal;
+    mutable std::vector<emi::Source> cachedEmiSources;  // emiSources()
+    mutable bool emiSourcesRead{false};
     SimTime statsSimTime{};
     std::vector<std::int64_t> tickNs;
 
@@ -535,12 +553,37 @@ struct Server::Impl {
                 next->add(std::make_unique<thermal::ThermalNetwork>(), ModuleConfig(heat));
             }
         }
+        bool weatherInRun = false;  // the sensors see the weather when it runs
+        // The weather (domains/weather.md): the site's atmosphere from --weather, a WeatherAPI_1
+        // prim and the profile (the profile wins), the temperature falling back to the ambient
+        // one. Without the site it does not run (nothing needs it yet); off, its clear substitute.
+        {
+            ModuleConfigData weather;
+            for (const auto& [key, value] : options.weather) {
+                weather.values[key] = value;
+            }
+            for (const auto& [key, value] : options.weatherFiles) {
+                weather.values[key] = value;
+            }
+            for (const auto& [key, value] : settings.weather) {
+                weather.values[key] = value;
+            }
+            if (!weather.values.contains("temperature") && settings.ambientTemperatureK) {
+                weather.values["temperature"] = *settings.ambientTemperatureK;
+            }
+            const ModuleConfig config(weather);
+            if (weather::Weather::hasSite(WorldView(robot.world), config)) {
+                next->add(std::make_unique<weather::Weather>(off("weather")), config);
+                weatherInRun = true;
+            }
+        }
         bool windInRun = false;
         // Link drag against the wind (an AeroAPI_1 robot, with the site's air density): the
         // aerodynamics config's own density, else rotor_aero's.
         if (!WorldView(robot.world).instancesOf("AeroAPI_1").empty() && !off("aerodynamics")) {
             ModuleConfigData aero;
             aero.values.insert(settings.aerodynamics.begin(), settings.aerodynamics.end());
+            aero.values["weather"] = weatherInRun;  // its wind grid, if any
             if (!aero.values.contains("air_density") && settings.airDensityKgM3) {
                 aero.values.emplace("air_density", *settings.airDensityKgM3);
             }
@@ -590,14 +633,40 @@ struct Server::Impl {
                 px4.airDensity = *settings.airDensityKgM3;
                 next->add(mavlink::createPx4Lockstep(px4, px4Link));
             } else if (!controllers && MulticopterController::canFly(WorldView(robot.world))) {
-                // With or without ROS: nothing on ROS flies a multicopter yet (no ros2_control
-                // controllers for rotors), so the built-in controller hovers it.
-                next->add(
-                    std::make_unique<MulticopterController>(MulticopterController::Settings{}),
-                    ModuleConfig(air));
+                // The built-in controller hovers it, and with ROS flies it by /cmd_vel: forward,
+                // left and up in m/s, yaw rate in rad/s; without a command for 0.5 s it holds.
+                MulticopterController::CommandSource commands;
+                if (bridge) {
+                    commands = [this]() -> std::optional<MulticopterController::FlightCommand> {
+                        const auto c = bridge->latestCommand(std::chrono::milliseconds(500));
+                        if (!c) {
+                            return std::nullopt;
+                        }
+                        return MulticopterController::FlightCommand{
+                            c->linearMps, c->lateralMps, c->verticalMps, c->angularRadps};
+                    };
+                }
+                next->add(std::make_unique<MulticopterController>(MulticopterController::Settings{},
+                                                                  std::move(commands)),
+                          ModuleConfig(air));
             }
         }
+        // EMI (domains/emi.md) when the stage has sources or victims: before the sensors, which
+        // read its disturbances; off, its zero substitute.
+        if (hasEmi()) {
+            ModuleConfigData emi;
+            if (settings.emiCoupling) {
+                emi.values["coupling"] = *settings.emiCoupling;
+            }
+            next->add(std::make_unique<emi::Emi>(off("emi")), ModuleConfig(emi));
+        }
+        // Comms (domains/comms.md) when the stage has radio links or CAN buses: after EMI, whose
+        // interference and bit errors it reads; walls are the fixed scenery's shapes.
+        if (hasComms()) {
+            next->add(std::make_unique<comms::Comms>(off("comms"), fixedScenery()));
+        }
         ModuleConfigData sensing;
+        sensing.values["weather"] = weatherInRun;
         sensing.tier =
             rayContext ? static_cast<CapabilityTier>(rayContext->tier()) : CapabilityTier::Tier0;
         for (auto& sensor : off("sensors")
@@ -638,7 +707,66 @@ struct Server::Impl {
         settings.geoOrigin = appliedGeoOrigin ? appliedGeoOrigin : options.geoOrigin;
         settings.aerodynamics = appliedAerodynamics;
         settings.rotorAero = appliedRotorAero;
+        settings.weather = appliedWeather;
+        settings.emiCoupling = appliedEmiCoupling;
         return settings;
+    }
+    /// Whether the stage has radio links or CAN buses.
+    bool hasComms() const {
+        const WorldView world(robot.world);
+        return !world.instancesOf("RadioLinkAPI_1").empty() ||
+               !world.instancesOf("CanBusAPI_1").empty();
+    }
+    /// A scene query over the fixed scenery's shapes (not the ground plane, not what moves), for
+    /// the walls between radios.
+    std::shared_ptr<const services::SceneQuery> fixedScenery() const {
+        const World& world = robot.world;
+        const std::vector<Pose> rest = restPoses(world);
+        const std::vector<bool> moving = movingBodies(world);
+        std::vector<sensors::ShapeCaster::Shape> shapes;
+        for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
+            const BodyId owner = world.colliders.body[c];
+            if (world.colliders.shape[c] == ShapeType::Plane ||
+                (owner != kWorldBody && moving[owner.index])) {
+                continue;
+            }
+            sensors::ShapeCaster::Shape shape;
+            shape.type = world.colliders.shape[c];
+            shape.size = world.colliders.size[c];
+            shape.pose = owner == kWorldBody
+                             ? world.colliders.poseInBody[c]
+                             : compose(rest[owner.index], world.colliders.poseInBody[c]);
+            shape.hull = shape.type == ShapeType::ConvexHull
+                             ? &world.hulls.at(world.colliders.hull[c])
+                             : nullptr;
+            shapes.push_back(shape);
+        }
+        if (shapes.empty()) {
+            return nullptr;
+        }
+        auto caster = std::make_shared<sensors::ShapeCaster>();
+        caster->update(shapes);
+        return caster;
+    }
+    /// Whether the stage has EMI sources or victims.
+    bool hasEmi() const {
+        const WorldView world(robot.world);
+        return !world.instancesOf("EmiSourceAPI_1").empty() ||
+               !world.instancesOf("EmiSusceptibilityAPI_1").empty();
+    }
+    /// Whether the EMI module itself (not its zero substitute) is in the run.
+    bool emiRuns() const {
+        return scheduler != nullptr &&
+               std::ranges::any_of(scheduler->plan(), [](const ScheduledModule& m) {
+                   return std::string_view(m.label) == "emi/analytic";
+               });
+    }
+    /// Whether the weather module (or its substitute) is in the run.
+    bool weatherRuns() const {
+        return scheduler != nullptr &&
+               std::ranges::any_of(scheduler->plan(), [](const ScheduledModule& m) {
+                   return std::string_view(m.label).starts_with("weather/");
+               });
     }
     /// The ambient temperature the run uses: an applied profile's, else the command line's.
     std::optional<double> ambient() const {
@@ -650,6 +778,8 @@ struct Server::Impl {
     std::optional<coords::Geodetic> appliedGeoOrigin;                     // from an applied profile
     std::map<std::string, ConfigValue, std::less<>> appliedAerodynamics;  // its wind
     std::map<std::string, ConfigValue, std::less<>> appliedRotorAero;     // its rotor settings
+    std::map<std::string, ConfigValue, std::less<>> appliedWeather;       // its weather
+    std::optional<std::vector<std::string>> appliedEmiCoupling;           // its EMI victims
     std::shared_ptr<mavlink::Px4Link> px4Link;  // PX4's connection, across rebuilds of the run
     std::shared_ptr<mavlink::ArduPilotLink> ardupilotLink;  // ArduPilot's, likewise
     std::optional<bool> speedPrediction;                    // from an applied profile
@@ -1702,6 +1832,38 @@ struct Server::Impl {
                               substituted("rotor_aero") ? "substitute: ideal, " : "",
                               rho ? "air_density: " : "dt: ", rho ? *rho : 0.001);
                 yaml += "  rotor_aero: " + std::string(text) + "\n";
+            } else if (std::string_view(row.domain) == "weather" && weatherRuns()) {
+                // What the run uses: the command line's weather, then the applied profile's.
+                std::map<std::string, ConfigValue, std::less<>> values;
+                for (const auto& [key, value] : options.weather) {
+                    values[key] = value;
+                }
+                for (const auto& [key, value] : appliedWeather) {
+                    values[key] = value;
+                }
+                std::string text = substituted("weather") ? "{enabled: false, substitute: clear"
+                                                          : "{enabled: true";
+                for (const auto& [key, value] : values) {
+                    if (const double* number = std::get_if<double>(&value)) {
+                        char item[96];
+                        std::snprintf(item, sizeof(item), ", %s: %.9g", key.c_str(), *number);
+                        text += item;
+                    }
+                }
+                yaml += "  weather: " + text + "}\n";
+            } else if (std::string_view(row.domain) == "emi" && hasEmi() && !substituted("emi")) {
+                std::string text = "{enabled: true";
+                if (appliedEmiCoupling) {
+                    text += ", coupling: [";
+                    for (std::size_t i = 0; i < appliedEmiCoupling->size(); ++i) {
+                        text += (i == 0 ? "" : ", ") + (*appliedEmiCoupling)[i];
+                    }
+                    text += "]";
+                }
+                yaml += "  emi: " + text + "}\n";
+            } else if (std::string_view(row.domain) == "comms" && hasComms()) {
+                yaml += substituted("comms") ? "  comms: {enabled: false, substitute: ideal}\n"
+                                             : "  comms: {enabled: true}\n";
             } else if (std::string_view(row.domain) == "comms" ||
                        std::string_view(row.domain) == "traffic" ||
                        std::string_view(row.domain) == "vehicle_dynamics" ||
@@ -1864,6 +2026,7 @@ struct Server::Impl {
         session.send(profileState({}));
         session.send(catalog());
         session.send(statusEnvelope());
+        session.send(environmentState());
         for (const v1::LogRecord& record : logs) {
             v1::Envelope line;
             *line.mutable_log() = record;
@@ -2025,9 +2188,20 @@ struct Server::Impl {
                     session.sensors.erase(command.subscribe_sensor().sensor());
                 }
                 break;
-            case v1::Command::kSubscribeField:
+            case v1::Command::kSubscribeField: {
+                const v1::SubscribeField& f = command.subscribe_field();
+                if (f.enabled()) {
+                    session.fields[f.field()] = f.height_m();
+                    if (auto slice = fieldSlice(f.field(), f.height_m())) {
+                        session.send(*slice);
+                    }
+                } else {
+                    session.fields.erase(f.field());
+                }
+                break;
+            }
             case v1::Command::kSetOverlays:
-                break;  // accepted; this server has no environment fields yet
+                break;  // accepted; overlays are drawn by the viewer
             case v1::Command::kValidateProfile:
                 validate(command.validate_profile().yaml(), *r.mutable_validation());
                 break;
@@ -2093,6 +2267,7 @@ struct Server::Impl {
         }
         replay = std::move(*opened);
         robot = std::move(*model);
+        emiSourcesRead = false;  // the recording's scene
         log(v1::LOG_LEVEL_INFO, "replay",
             options.replayPath + " · " + std::to_string(replay->catalog.size()) + " signals · " +
                 std::to_string(replay->duration.seconds()) + " s · stage " + robot.sourcePath);
@@ -2324,6 +2499,7 @@ struct Server::Impl {
                 }
                 target = &it->second;
                 what = s.schema;
+                emiSourcesRead = false;  // an EMI source's value may change
                 if (auto info = stage::schemaAttribute(s.schema, s.instance, name)) {
                     unitText = info->unit;
                 }
@@ -2392,6 +2568,7 @@ struct Server::Impl {
         owedNs = 0;
         lastWall = Clock::now();
         log(v1::LOG_LEVEL_INFO, "scheduler", "reset · the run restarted at t = 0");
+        broadcast(environmentState());
         return {};
     }
 
@@ -2439,6 +2616,26 @@ struct Server::Impl {
         }
         if (!WorldView(robot.world).instancesOf("AeroAPI_1").empty()) {
             context.modules.insert("aerodynamics");
+        }
+        context.modules.insert("weather");
+        if (hasEmi()) {
+            context.modules.insert("emi");
+        }
+        if (hasComms()) {
+            context.modules.insert("comms");
+        }
+        for (const auto& [key, value] : options.weather) {
+            context.weatherKnown.insert(key);
+        }
+        if (const auto prims = WorldView(robot.world).instancesOf("WeatherAPI_1"); !prims.empty()) {
+            for (const auto& [key, attribute] :
+                 {std::pair{"temperature", "weather:ambientTemperature"},
+                  std::pair{"pressure", "weather:pressure"},
+                  std::pair{"relative_humidity", "weather:relativeHumidity"}}) {
+                if (prims.front()->real(attribute)) {
+                    context.weatherKnown.insert(key);
+                }
+            }
         }
         context.ambientKnown = options.ambientTemperatureK.has_value();
         context.airDensityKnown = options.airDensityKgM3.has_value();
@@ -2571,6 +2768,8 @@ struct Server::Impl {
         }
         appliedAerodynamics = settings.aerodynamics;
         appliedRotorAero = settings.rotorAero;
+        appliedWeather = settings.weather;
+        appliedEmiCoupling = settings.emiCoupling;
         pending.reset();
         if (Status status = restart(); !status.ok()) {
             // Keep the run going on the profile it had.
@@ -2701,6 +2900,267 @@ struct Server::Impl {
     std::vector<ros2_control::ControlJoint> controlJoints;
 
     /// The World workspace: the robot as the one agent, at its simulated position.
+    /// The weather values the run uses: the command line's, then the applied profile's.
+    std::map<std::string, ConfigValue, std::less<>> weatherValues() const {
+        std::map<std::string, ConfigValue, std::less<>> values;
+        for (const auto& [key, value] : options.weather) {
+            values[key] = value;
+        }
+        for (const auto& [key, value] : options.weatherFiles) {
+            values[key] = value;
+        }
+        for (const auto& [key, value] : appliedWeather) {
+            values[key] = value;
+        }
+        return values;
+    }
+
+    /// The run's wind (the aerodynamics domain's config), if it has one.
+    std::optional<aerodynamics::Wind> runWind() const {
+        const ProfileSettings settings = active();
+        if (settings.aerodynamics.empty()) {
+            return std::nullopt;
+        }
+        ModuleConfigData data;
+        data.values.insert(settings.aerodynamics.begin(), settings.aerodynamics.end());
+        const auto wind = aerodynamics::AeroDrag::windOf(ModuleConfig(data));
+        return wind ? std::optional(*wind) : std::nullopt;
+    }
+
+    double busValue(const char* name, double fallback) const {
+        if (scheduler == nullptr) {
+            return fallback;
+        }
+        const SignalId id = scheduler->bus().find(name);
+        return id.valid() ? scheduler->bus().read(id) : fallback;
+    }
+
+    /// The environment as the run has it (protocol.md: EnvironmentState), for the viewer's
+    /// Environment workspace.
+    v1::Envelope environmentState() const {
+        v1::Envelope envelope;
+        v1::EnvironmentState& env = *envelope.mutable_environment();
+        const auto values = weatherValues();
+        const auto number = [&](const char* key) -> std::optional<double> {
+            const auto it = values.find(key);
+            if (it == values.end()) {
+                return std::nullopt;
+            }
+            const double* v = std::get_if<double>(&it->second);
+            return v != nullptr ? std::optional(*v) : std::nullopt;
+        };
+        const auto text = [&](const char* key) -> std::string {
+            const auto it = values.find(key);
+            const std::string* v =
+                it == values.end() ? nullptr : std::get_if<std::string>(&it->second);
+            return v != nullptr ? std::filesystem::path(*v).filename().string() : std::string();
+        };
+        const bool weather = weatherRuns() && !substituted("weather");
+        if (const auto t = ambient() ? ambient() : number("temperature")) {
+            env.set_ambient_temperature_k(*t);
+        }
+        v1::EnvironmentState::Weather& w = *env.mutable_weather();
+        if (weather) {
+            constexpr double kMmphPerMps = 3.6e6;
+            constexpr double kMgPerKg = 1e6;
+            constexpr double kWetFriction = 0.7;  // weather::kWetFrictionScale
+            w.set_rain_mm_per_h(number("rain_rate").value_or(0.0) * kMmphPerMps);
+            w.set_fog_visibility_m(number("visibility").value_or(0.0));
+            w.set_dust_mg_per_m3(number("dust_concentration").value_or(0.0) * kMgPerKg);
+            w.set_surface_wetness(std::clamp(
+                (1.0 - busValue("env/friction_scale", 1.0)) / (1.0 - kWetFriction), 0.0, 1.0));
+        }
+        if (const auto wind = runWind()) {
+            v1::EnvironmentState::Wind& out = *env.mutable_wind();
+            out.set_speed_m_per_s(wind->speed);
+            // Where it blows to, from +X towards +Y: the opposite of its meteorological bearing.
+            out.set_direction_deg(std::fmod(90.0 - (wind->fromDegrees + 180.0) + 720.0, 360.0));
+            out.set_gust_intensity(wind->dryden ? 1.0 : 0.0);
+        }
+        if (weather && !text("wind_field").empty()) {
+            env.mutable_wind()->set_field(text("wind_field"));
+        }
+        const auto field = [&](const char* name, const char* label, const char* domain,
+                               const Unit& unit, std::uint32_t components, bool available,
+                               const char* why) {
+            v1::EnvironmentState::Field& f = *env.add_fields();
+            f.set_name(name);
+            f.set_label(label);
+            f.set_domain(domain);
+            setUnit(*f.mutable_unit(), unit);
+            f.set_components(components);
+            f.set_available(available);
+            if (!available) {
+                f.set_unavailable_reason(why);
+            }
+        };
+        field(kFogField, "fog extinction", "weather", units::per_m, 1, weather,
+              "the weather does not run: it needs the site's temperature, pressure and humidity");
+        field(kWindField, "wind", "weather", units::m_per_s, 2,
+              runWind().has_value() || (weather && !text("wind_field").empty()),
+              "no wind: the aerodynamics domain's wind or a wind field");
+        field(kFluxField, "|B|", "emi", units::T, 1, emiRuns(),
+              hasEmi() ? "the EMI domain is off (zero substitute)"
+                       : "the stage has no EMI sources (EmiSourceAPI_1)");
+        if (emiRuns()) {
+            for (const emi::Source& s : emiSources()) {
+                v1::EnvironmentState::EmiSource& out = *env.add_emi_sources();
+                out.set_name(s.name);
+                out.set_prim(0xFFFF'FFFFU);
+                out.set_frequency_hz(s.frequency);
+                out.set_current_a(emiState(s).current);
+                out.set_power_w(s.radiatedPower);
+                static constexpr std::array<const char*, 5> kKinds{
+                    "power line", "motor drive (dipole)", "transmitter", "welder (dipole)",
+                    "custom"};
+                out.set_detail(s.fieldMap ? "field map"
+                                          : kKinds.at(static_cast<std::size_t>(s.type)));
+            }
+        }
+        return envelope;
+    }
+
+    /// The run's EMI sources, read from the stage once.
+    const std::vector<emi::Source>& emiSources() const {
+        if (!emiSourcesRead) {
+            auto sources = emi::sourcesOf(WorldView(robot.world));
+            cachedEmiSources = sources ? std::move(*sources) : std::vector<emi::Source>{};
+            emiSourcesRead = true;
+        }
+        return cachedEmiSources;
+    }
+
+    /// A source's pose and current now, from the bus (its body's pose, its motor's current).
+    emi::SourceState emiState(const emi::Source& s) const {
+        emi::SourceState now;
+        now.current = s.current;
+        Pose body;
+        if (s.body != kWorldBody) {
+            body = robot.bodyRestPose.at(s.body.index);
+        }
+        if (scheduler != nullptr) {
+            const SignalBus& bus = scheduler->bus();
+            if (s.body != kWorldBody) {
+                const SignalId id =
+                    bus.find("body/" + robot.world.bodies.names[s.body.index] + "/pose");
+                if (id.valid()) {
+                    const std::span<const double> v = bus.readN(id);
+                    body = Pose{{v[0], v[1], v[2]}, {v[3], v[4], v[5], v[6]}};
+                }
+            }
+            if (!s.drivenBy.empty()) {
+                const SignalId id = bus.find("motor/" + s.drivenBy + "/current_q");
+                if (id.valid()) {
+                    now.current = std::abs(bus.read(id));
+                }
+            }
+        }
+        now.pose = s.body == kWorldBody ? s.poseInBody : compose(body, s.poseInBody);
+        return now;
+    }
+
+    /// A horizontal slice of `name` at height `height` around the robot, or nothing for a field
+    /// the run does not have.
+    std::optional<v1::Envelope> fieldSlice(const std::string& name, double height) const {
+        if (scheduler == nullptr ||
+            (name != kFogField && name != kWindField && name != kFluxField)) {
+            return std::nullopt;
+        }
+        if (name == kFluxField && !emiRuns()) {
+            return std::nullopt;
+        }
+        const bool fog = name == kFogField;
+        const bool flux = name == kFluxField;
+        const SignalBus& bus = scheduler->bus();
+        const SignalId gridId = bus.find(fog ? "env/extinction/field" : "env/wind/velocity_field");
+        const std::shared_ptr<const fields::Field> grid =
+            gridId.valid() ? (fog ? fogFieldSignal : windFieldSignal).read(bus, gridId) : nullptr;
+        const std::optional<aerodynamics::Wind> wind = runWind();
+        if (fog && !bus.find("env/extinction/visible").valid()) {
+            return std::nullopt;
+        }
+        if (!fog && !flux && !grid && !wind) {
+            return std::nullopt;
+        }
+        std::vector<emi::SourceState> sources;
+        if (flux) {
+            for (const emi::Source& s : emiSources()) {
+                sources.push_back(emiState(s));
+            }
+        }
+        // Centred on the robot.
+        Pose centre = robot.bodyRestPose.empty() ? Pose{} : robot.bodyRestPose[0];
+        if (!bodyPose.empty() && bodyPose[0].valid()) {
+            const std::span<const double> v = bus.readN(bodyPose[0]);
+            centre.position = {v[0], v[1], v[2]};
+        }
+        v1::Envelope envelope;
+        v1::FieldSlice& slice = *envelope.mutable_field_slice();
+        slice.set_field(name);
+        slice.mutable_sim_time()->set_ns(scheduler->now().ns);
+        slice.set_width(kSliceWidth);
+        slice.set_height(kSliceHeight);
+        const std::uint32_t components = fog || flux ? 1 : 2;
+        slice.set_components(components);
+        slice.set_origin_x(centre.position[0] - (kSliceWidth - 1) * kSliceCell / 2.0);
+        slice.set_origin_y(centre.position[1] - (kSliceHeight - 1) * kSliceCell / 2.0);
+        slice.set_cell_m(kSliceCell);
+        slice.set_height_m(height);
+        std::vector<float> values;
+        values.reserve(static_cast<std::size_t>(kSliceWidth) * kSliceHeight * components);
+        const double uniform = fog ? bus.read(bus.find("env/extinction/visible")) : 0.0;
+        double lo = std::numeric_limits<double>::infinity();
+        double hi = 0.0;
+        for (std::uint32_t j = 0; j < kSliceHeight; ++j) {
+            for (std::uint32_t i = 0; i < kSliceWidth; ++i) {
+                const fields::Vec3 at{slice.origin_x() + i * kSliceCell,
+                                      slice.origin_y() + j * kSliceCell, height};
+                if (flux) {
+                    // |B| RMS; sources add in power (as incoherent ones would).
+                    double b2 = 0.0;
+                    for (std::size_t k = 0; k < sources.size(); ++k) {
+                        const double b = emi::magneticFieldRms(emiSources()[k], sources[k], at).b;
+                        b2 += b * b;
+                    }
+                    const double v = std::sqrt(b2);
+                    values.push_back(static_cast<float>(v));
+                    lo = std::min(lo, v);
+                    hi = std::max(hi, v);
+                    continue;
+                }
+                if (fog) {
+                    const double v = uniform + (grid ? grid->sampleScalar(at) : 0.0);
+                    values.push_back(static_cast<float>(v));
+                    lo = std::min(lo, v);
+                    hi = std::max(hi, v);
+                    continue;
+                }
+                fields::Vec3 v{};
+                const auto& box = grid ? grid->bounds() : std::array<fields::Vec3, 2>{};
+                if (grid && at[0] >= box[0][0] && at[0] <= box[1][0] && at[1] >= box[0][1] &&
+                    at[1] <= box[1][1] && at[2] >= box[0][2] && at[2] <= box[1][2]) {
+                    v = grid->sampleVector(at);
+                } else if (wind) {
+                    const double from = wind->fromDegrees * std::numbers::pi / 180.0;
+                    const double u = aerodynamics::meanWindAt(*wind, height);
+                    v = {-u * std::sin(from), -u * std::cos(from), 0.0};
+                }
+                values.push_back(static_cast<float>(v[0]));
+                values.push_back(static_cast<float>(v[1]));
+                const double m = std::hypot(v[0], v[1]);
+                lo = std::min(lo, m);
+                hi = std::max(hi, m);
+            }
+        }
+        slice.set_value_min(static_cast<float>(lo));
+        slice.set_value_max(static_cast<float>(hi));
+        std::string bytes(reinterpret_cast<const char*>(values.data()),
+                          values.size() * sizeof(float));
+        slice.mutable_values()->set_size(bytes.size());
+        slice.mutable_values()->set_inline_(std::move(bytes));
+        return envelope;
+    }
+
     v1::Envelope worldState() const {
         v1::Envelope envelope;
         v1::WorldState& world = *envelope.mutable_world();
@@ -3203,6 +3663,7 @@ Status Server::load() {
                 ? readFile(s.options.robotPath)
                 : "";
         settings.stampedCmdVel = s.options.stampedCmdVel;
+        settings.topicLinks = s.options.linkTopics;
         settings.controllersOwnState = !s.options.ros2ControlParams.empty();
         s.bridge = std::make_unique<ros2::Bridge>(settings);
         if (!s.options.ros2ControlParams.empty()) {
@@ -3365,8 +3826,9 @@ Status Server::start() {
                   std::to_string(*s.options.px4Port) + " (lockstep once PX4 connects)");
     } else if (MulticopterController::canFly(WorldView(s.robot.world))) {
         s.log(v1::LOG_LEVEL_INFO, "controller",
-              "multicopter: the built-in controller takes off after 1 s and hovers 2 m above the "
-              "start (until an autopilot flies it)");
+              std::string("multicopter: the built-in controller takes off after 1 s and hovers 2 m "
+                          "above the start") +
+                  (s.bridge ? "; /cmd_vel flies it (forward, left, up m/s; yaw rate rad/s)" : ""));
     } else {
         s.log(v1::LOG_LEVEL_WARN, "controller",
               "no demo driver: it needs exactly two actuated wheel joints, the robot has " +
@@ -3435,6 +3897,19 @@ void Server::runOnce(int timeoutMs) {
                 status.mutable_status()->set_dropped_deltas(session->droppedDeltas);
                 status.mutable_status()->set_dropped_signal_blocks(session->droppedBlocks);
                 session->send(status);
+            }
+        }
+    }
+    if (nanosSince(s.lastFields, now) >= kFieldPeriodNs) {
+        s.lastFields = now;
+        for (auto& session : s.sessions) {
+            if (!session->greeted || session->congested()) {
+                continue;
+            }
+            for (const auto& [name, height] : session->fields) {
+                if (auto slice = s.fieldSlice(name, height)) {
+                    session->send(*slice);
+                }
             }
         }
     }

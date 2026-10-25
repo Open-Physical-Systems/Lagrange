@@ -67,6 +67,27 @@ Watch it with `ros2 run lagrange_viewer lagrange_viewer --connect
 unix:$XDG_RUNTIME_DIR/lagrange/default.sock`. In the Electrical workspace the battery gives
 about 190 W; the Signals workspace has the four rotors' speed (about 550 rad/s) and thrust.
 
+### Fly it yourself
+
+With ROS (the server's default), `/cmd_vel` flies it: `linear.x` forward and `linear.y` left
+in the drone's heading frame, `linear.z` up (m/s), `angular.z` the yaw rate (rad/s), as
+`geometry_msgs/TwistStamped`. Without a command for half a second it stops and holds. From the
+keyboard:
+
+```bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -p stamped:=true
+```
+
+`i` forward, `,` back, `j` and `l` turn, Shift with `J` and `L` sideways, `t` up, `b` down,
+`k` stop; `q` and `z` change the speed. Or one command at a time:
+
+```bash
+ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/TwistStamped "{twist: {linear: {x: 1.0}}}"
+```
+
+Speeds are capped at 5 m/s across, 2 m/s up or down and 1.5 rad/s of yaw, and it never goes
+below 0.3 m above where it took off.
+
 From Python, without ROS or the viewer:
 
 ```python

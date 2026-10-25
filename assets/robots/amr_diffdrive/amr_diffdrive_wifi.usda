@@ -1,0 +1,62 @@
+#usda 1.0
+(
+    defaultPrim = "amr_diffdrive"
+    doc = """The sample AMR with its power system, a Wi-Fi radio and a CAN bus (domains/comms.md),
+    and the access point it talks to: outside the sample warehouse's east wall, so that the link
+    crosses the wall and weakens as the robot drives away. Run it in
+    assets/worlds/warehouse_small/warehouse_small.usda with --link-topics
+    amr_diffdrive_wifi.links.yaml to lose and delay /scan, /odom and /cmd_vel as the link says.
+    Radio values are illustrative: indoor exponent 3 (ITU-R P.1238's office class at 2.4 GHz,
+    TODO(verify) against the recommendation's current version), 10 dB per wall, 4 dB shadowing
+    over 2 m."""
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    subLayers = [@./amr_diffdrive_powered.usda@]
+    upAxis = "Z"
+)
+
+over "amr_diffdrive"
+{
+    over "base_link"
+    {
+        def Xform "wifi" (
+            prepend apiSchemas = ["RadioLinkAPI_1"]
+        )
+        {
+            double comms:frequency = 2437000000      # Hz, 2.4 GHz channel 6
+            double comms:bandwidth = 20000000        # Hz
+            double comms:txPower = 0.1               # W (20 dBm)
+            double comms:pathLossExponent = 3
+            double comms:referenceDistance = 1       # m
+            double comms:wallLoss = 10               # 10 dB per wall
+            double comms:shadowingStd = 4            # dB
+            double comms:shadowingCorrelationDistance = 2  # m
+            double comms:noiseFigure = 4             # 6 dB
+            uniform token comms:modulation = "qam16"
+            int comms:packetBits = 12000
+            int comms:maxRetries = 3
+            rel comms:transmitter = </access_point>
+            double3 xformOp:translate = (0, 0, 0.4)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+
+        def Xform "can0" (
+            prepend apiSchemas = ["CanBusAPI_1"]
+        )
+        {
+            double can:bitRate = 500000              # 1/s
+        }
+    }
+}
+
+def Xform "access_point"
+{
+    double3 xformOp:translate = (12, 0, 2.5)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+
+    def Cube "visual"
+    {
+        double size = 0.25
+        color3f[] primvars:displayColor = [(0.9, 0.9, 0.92)]
+    }
+}

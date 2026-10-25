@@ -1,12 +1,14 @@
 // The aerodynamics domain against aerodynamics.md §7: terminal velocity (closed form), the
 // logarithmic wind profile, and the Dryden turbulence's variances and correlation time.
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
+#include "lagrange/fields/Field.hpp"
 #include "lagrange/random/Philox.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 
 #include <cmath>
 #include <memory>
 #include <numbers>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -140,6 +142,69 @@ TEST(Aerodynamics, AHeldSphereFeelsTheMeanWindFromTheProfile) {
     const double area = std::numbers::pi * 0.1 * 0.1;
     EXPECT_NEAR(ball->lastWrench[0], -0.5 * kRho * 0.47 * area * u * u, 1e-9);
     EXPECT_NEAR(ball->lastWrench[1], 0.0, 1e-12);
+}
+
+/// Publishes a wind grid as the weather domain does.
+class WindGrid final : public IModule {
+public:
+    explicit WindGrid(std::shared_ptr<const fields::Field> field) : field_(std::move(field)) {}
+    [[nodiscard]] ModuleInfo info() const override {
+        return {"test", "wind_grid", 1, 0, false, true, CapabilityTier::Tier0};
+    }
+    [[nodiscard]] Duration preferredStep() const override { return 1_ms; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        SignalSpec s;
+        s.name = "env/wind/velocity_field";
+        s.type = SignalType::Field3D;
+        s.unit = units::m_per_s;
+        s.frame = "world_local";
+        out_ = d.output(s);
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        bus.publishBuffer(out_, fields::fieldBuffer(field_.get()));
+        return {};
+    }
+    Status step(const StepContext&, SignalBus&) override { return {}; }
+    Status saveState(StateWriter&) const override { return {}; }
+    Status restoreState(StateReader&) override { return {}; }
+
+private:
+    std::shared_ptr<const fields::Field> field_;
+    SignalId out_;
+};
+
+TEST(Aerodynamics, InsideAWindGridTheGridIsTheWind) {
+    const std::string path = testing::TempDir() + "/wind_grid.nvdb";
+    const fields::Vec3 grid{3.0, -4.0, 0.0};  // 5 m/s
+    ASSERT_TRUE(fields::writeVectorField(path, "wind", {{-5.0, -5.0, 25.0}, 1.0, {11, 11, 11}},
+                                         [&](const fields::Vec3&) { return grid; }));
+    const auto field = fields::Field::load(path);
+    ASSERT_TRUE(field) << field.error();
+    const auto drag = [&](std::array<double, 3> at) {
+        const World world = sphere(1.0);
+        Scheduler scheduler(SchedulerOptions{.deterministic = true});
+        auto body = std::make_unique<Body>(1.0, true);
+        Body* ball = body.get();
+        ball->position = at;
+        scheduler.add(std::move(body));
+        scheduler.add(std::make_unique<WindGrid>(*field));
+        ModuleConfigData config;
+        config.values["air_density"] = kRho;
+        config.values["weather"] = true;
+        scheduler.add(std::make_unique<AeroDrag>(), ModuleConfig(config));
+        EXPECT_TRUE(scheduler.wire(WorldView(world)));
+        EXPECT_TRUE(scheduler.stepUntil(SimTime{50'000'000}).ok());
+        return ball->lastWrench;
+    };
+    const double area = std::numbers::pi * 0.1 * 0.1;
+    const std::array<double, 6> inside = drag({0.0, 0.0, 30.0});
+    // Drag along the air's motion: ½·ρ·Cd·A·|u|·u.
+    EXPECT_NEAR(inside[0], 0.5 * kRho * 0.47 * area * 5.0 * 3.0, 1e-6);
+    EXPECT_NEAR(inside[1], 0.5 * kRho * 0.47 * area * 5.0 * -4.0, 1e-6);
+    // Outside the grid: the mean wind, none here.
+    const std::array<double, 6> outside = drag({20.0, 0.0, 30.0});
+    EXPECT_NEAR(outside[0], 0.0, 1e-12);
 }
 
 TEST(Aerodynamics, DrydenTurbulenceHasItsSpecifiedVarianceAndCorrelation) {

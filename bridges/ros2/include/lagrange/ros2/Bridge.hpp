@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -23,12 +24,18 @@ struct BridgeSettings {
     /// ros2_control drives the robot: its controllers publish /joint_states, /odom and the
     /// odom TF and take the velocity commands, so the bridge does none of these.
     bool controllersOwnState{false};
+    /// Topics that ride on radio links (domains/comms.md): topic → link name. A message on a
+    /// mapped topic is lost with the link's link/<l>/packet_error_rate (always while the link is
+    /// down) and the rest arrive link/<l>/latency later; incoming /cmd_vel likewise.
+    std::map<std::string, std::string> topicLinks;
 };
 
 /// A /cmd_vel message: forward speed and turn rate.
 struct CmdVel {
-    double linearMps{0.0};
-    double angularRadps{0.0};
+    double linearMps{0.0};     // forward (x)
+    double angularRadps{0.0};  // yaw rate (about z)
+    double lateralMps{0.0};    // left (y), for robots that move sideways (multicopters)
+    double verticalMps{0.0};   // up (z), likewise
 };
 
 /// What the viewer's ROS 2 workspace shows (lagrange.viewer.v1.RosGraph).
@@ -146,6 +153,8 @@ public:
     void publish(const SignalBus& bus, SimTime now);
     /// The newest /cmd_vel if it arrived less than `maxAge` ago (wall clock).
     [[nodiscard]] std::optional<CmdVel> latestCommand(std::chrono::milliseconds maxAge) const;
+    /// Messages lost on a link so far, by topic (the topics of BridgeSettings::topicLinks).
+    [[nodiscard]] std::map<std::string, std::uint64_t> droppedOnLinks() const;
     /// The ROS graph as this node sees it. Cold path: about once a second.
     [[nodiscard]] GraphSnapshot graph();
     [[nodiscard]] const std::string& nodeName() const { return settings_.nodeName; }

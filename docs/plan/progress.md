@@ -10,8 +10,8 @@ flowchart LR
     v02["v0.2<br/>simulation core + AMR<br/>ROS 2, Nav2<br/><b>released 2026-10-25</b>"]:::done
     v03["v0.3<br/>arms + electrical<br/>MoveIt 2<br/><b>released 2026-10-25</b>"]:::done
     v04["v0.4<br/>drones<br/>PX4 / ArduPilot SITL<br/><b>released 2026-10-25</b>"]:::done
-    v05["v0.5<br/>weather + EMI<br/><b>next</b>"]:::now
-    v06["v0.6<br/>cars, autonomous cars<br/>OpenDRIVE, Autoware"]:::todo
+    v05["v0.5<br/>weather + EMI + comms<br/><b>released 2026-10-25</b>"]:::done
+    v06["v0.6<br/>cars, autonomous cars<br/>OpenDRIVE, Autoware<br/><b>next</b>"]:::now
     v07["v0.7<br/>huge worlds"]:::todo
     v10["v1.0<br/>stable schemas + plugin ABI<br/>ros-lyrical-* debs"]:::todo
     v01 --> v02 --> v03 --> v04 --> v05 --> v06 --> v07 --> v10
@@ -117,6 +117,53 @@ E8). Release notes and acceptance evidence: `docs/release/v0.3.0.md`. Owed withi
 a motor heat run (Q16; the battery is checked against published cell data since 2026-10-25,
 from 35 % state of charge up), the drive-design
 review of the motor constants, FMI 2.0 FMUs (Q8), Jolt's wheel slip. Released as `v0.3.0` on 2026-10-25 at the owner's request, after v0.2.0.
+
+## v0.5 status (2026-10-25)
+
+Every v0.5 plan step is done. Release notes and acceptance evidence: `docs/release/v0.5.0.md`.
+Owed within the epics: lidar fog clutter calibrated against chamber data (DENSE), the 5 %
+rain-rate check (20 % met), field measurements near power lines and the RSSI recording (Q16),
+ITU-R P.1238 parameters, a real OpenFOAM case's files, MAVLink telemetry over links,
+`SensorMaterialAPI_1` in the sensors, 3D field volumes and a link panel in the viewer. Released
+as `v0.5.0` on 2026-10-25 at the owner's request.
+
+## v0.5 plan (2026-10-25)
+
+The owner started v0.5 (weather, EMI, comms; roadmap §6) on 2026-10-25 with the same mandate as
+v0.4: gated paths pre-approved and listed below, OpenVDB vendored if apt's is not enough, demos
+time-boxed. Order:
+
+1. Schemas: `WeatherAPI_1`, `EmiSourceAPI_1`, `EmiSusceptibilityAPI_1`, `SensorMaterialAPI_1`,
+   `RadioLinkAPI_1`, `CanBusAPI_1` (**done** 2026-10-25)
+2. `modules/weather`: atmosphere state, mean wind and turbulence (from the aerodynamics config),
+   fog by Koschmieder, rain by Marshall–Palmer, dust, wet friction, lens contamination; the
+   `clear` substitute (**done** 2026-10-25: `lagrange_weather`, `--weather`, the profile's
+   weather keys; weather.md §8. The wind stays in the aerodynamics config for now)
+3. Sensor weather effects: lidar attenuation, backscatter and rain returns (CPU and the GPU
+   kernel), camera fog and rain (**done** 2026-10-25: per beam on the CPU on every tier, the
+   GPU kernel not needed; weather.md §8; fog clutter uncalibrated (owed: fog-chamber data);
+   `profiles/examples/amr_fog.yaml`)
+4. Fields infrastructure: OpenVDB/NanoVDB, field signals, CPU and GPU sampling, the viewer's
+   volume overlays; wind and fog fields (NanoVDB, CPU sampling, the fog and wind grids through
+   weather, lidar, camera and link drag **done** 2026-10-25: `lagrange_fields`, zlib-compressed
+   `.nvdb`, samples in `assets/fields/`. GPU sampling not needed yet (per beam on the CPU); the
+   server sends the viewer's Environment workspace its `EnvironmentState` and, for subscribed
+   fields, 64 × 48 `FieldSlice`s of fog extinction and wind around the robot twice a second)
+5. `modules/emi`: analytic sources and field maps, victims (magnetometer, IMU, encoder, CAN,
+   radio) (**done** 2026-10-25: `lagrange_emi`, emi.md §8; the magnetometer and IMU apply it,
+   the viewer gets the sources and |B| slices; the sample power line with the quadcopter,
+   `profiles/examples/quad_x500_power_line.yaml`. Encoder glitches, CAN errors and the radio's
+   SNR are applied with step 6)
+6. `modules/comms`: link budget, packet errors, CAN fault confinement; bridges drop and delay
+   what rides on a link (**done** 2026-10-25: `lagrange_comms`, comms.md §8; the ROS 2 bridge
+   gates topics with `--link-topics`; sample `amr_diffdrive_wifi.usda`. Not yet: MAVLink
+   telemetry and encoder glitches)
+7. Offline CFD import: OpenFOAM results to a VDB wind field (**done** 2026-10-25:
+   `lagrange_foam_to_vdb` and `readFoamVectorField`/`foamToWindField` in `lagrange_fields`;
+   ASCII `C` and `U`, cells averaged into voxels; round trip of an analytic field. Owed: a run
+   against files from a real OpenFOAM case, TODO(verify))
+8. Samples, tutorial, release notes (**done** 2026-10-25: `docs/guide/tutorial-environment.md`
+   run by `tools/ci/tutorial_environment.sh`; `docs/release/v0.5.0.md` drafted, not released)
 
 ## v0.4 status (2026-10-25)
 
@@ -344,6 +391,7 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 | electrical network (fallback doc fix) | `schemas/` (documentation of `elec:backEmfConstant`'s fallback corrected to Kt/1.5 for dq machines; changelog entry) | No attribute changed; the network refuses an authored Ke that disagrees with Kt by over 3 % |
 | raster camera sensor | `schemas/` (`CameraSensorAPI_1` in the sensor library, from formats.md §3.8, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-24 for autonomous work. Applied to a UsdGeomCamera, whose lens gives the field of view |
 | geo sensor schemas | `schemas/` (`GnssAPI_1`, `MagnetometerAPI_1`, `BarometerAPI_1` in the sensor library, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4 |
+| v0.5 schema libraries | `schemas/` (new `weather`, `emi`, `sensor_material`, `comms` libraries: `WeatherAPI_1`, `EmiSourceAPI_1`, `EmiSusceptibilityAPI_1`, `SensorMaterialAPI_1` from formats.md §3.4, §3.5, §3.7, and new `RadioLinkAPI_1`, `CanBusAPI_1` (§3.9); changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.5. Additions to the drafts listed in the changelog |
 | propeller files on rotors | `schemas/` (`RotorAPI_1`: `aero:rotor:propeller` replaces the unused `aero:rotor:bladeTable`, new `aero:rotor:mount`, `aero:rotor:direction` documented as the motor's sense; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4. `RotorAPI_1` is unreleased, so no migration |
 | aerodynamics schemas | `schemas/` (new `schemas/aero` library: `AeroAPI_1`, `RotorAPI_1` from formats.md §3.3, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4. Two documentation additions to the draft, listed in the changelog |
 | collision shapes in the snapshot | `proto/` (`Collider`, `SceneSnapshot.colliders` 11; protocol.md §4.3; golden frames regenerated) | Pre-approved by the owner on 2026-10-24 for autonomous work. New message and field only; `buf` is not installed here, so `buf breaking` was not run |

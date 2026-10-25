@@ -13,6 +13,10 @@ find_package(lagrange_electrical REQUIRED)
 find_package(lagrange_thermal REQUIRED)
 find_package(lagrange_rotor_aero REQUIRED)
 find_package(lagrange_aerodynamics REQUIRED)
+find_package(lagrange_weather REQUIRED)
+find_package(lagrange_fields REQUIRED)
+find_package(lagrange_emi REQUIRED)
+find_package(lagrange_comms REQUIRED)
 find_package(lagrange_mavlink REQUIRED)
 find_package(lagrange_recording REQUIRED)
 find_package(lagrange_meshes REQUIRED)
@@ -75,6 +79,10 @@ target_link_libraries(
         lagrange_thermal::lagrange_thermal
         lagrange_rotor_aero::lagrange_rotor_aero
         lagrange_aerodynamics::lagrange_aerodynamics
+        lagrange_weather::lagrange_weather
+        lagrange_fields::lagrange_fields
+        lagrange_emi::lagrange_emi
+        lagrange_comms::lagrange_comms
         lagrange_mavlink::lagrange_mavlink
         lagrange_recording::lagrange_recording
         lagrange_meshes::lagrange_meshes
@@ -94,6 +102,7 @@ lagrange_target_defaults(lagrange_server_cli)
 target_link_libraries(
     lagrange_server_cli
     PUBLIC lagrange_server ament_index_cpp::ament_index_cpp rclcpp::rclcpp
+    PRIVATE yaml-cpp::yaml-cpp
 )
 
 add_executable(lagrange_server_main src/main.cpp)
@@ -173,7 +182,7 @@ if(BUILD_TESTING)
         test/test_multicopter.cpp
         test/test_toggles.cpp
         test/test_usd_assets.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms"
         TIMEOUT 120
     )
     target_link_libraries(
@@ -202,12 +211,15 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_DC_DRIVE_FMU="${models_share}/fmu/dc_drive.fmu"
             LAGRANGE_TEST_AMR_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.overlay.yaml"
             LAGRANGE_TEST_AMR_POWERED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive_powered.usda"
+            LAGRANGE_TEST_AMR_WIFI_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive_wifi.usda"
             LAGRANGE_TEST_WAREHOUSE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.usda"
             LAGRANGE_TEST_ARM6_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.urdf"
             LAGRANGE_TEST_ARM6_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.overlay.yaml"
             LAGRANGE_TEST_RACK_BAKED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/rack_sample/rack_baked.usda"
             LAGRANGE_TEST_WORKCELL_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_arm6.urdf"
             LAGRANGE_TEST_QUAD_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500.usda"
+            LAGRANGE_TEST_QUAD_EMI_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500_emi.usda"
+            LAGRANGE_TEST_POWER_LINE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/power_line/power_line.usda"
             LAGRANGE_TEST_QUAD_INVERTED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500_inverted/quad_x500_inverted.usda"
     )
     # The arm with ros2_control in the loop: the standard spawner and joint_trajectory_controller.
@@ -215,7 +227,7 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_arm
         test/test_arm.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms"
         TIMEOUT 180
     )
     target_link_libraries(

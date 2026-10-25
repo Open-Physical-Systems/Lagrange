@@ -1,0 +1,36 @@
+#usda 1.0
+(
+    defaultPrim = "quad_x500"
+    doc = """The sample quadcopter with its magnetometer and IMU as EMI victims (domains/emi.md):
+    fly it near assets/worlds/power_line/power_line.usda. The values are illustrative, not
+    measured on a real airframe; fit them to measurements for a real one."""
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    subLayers = [
+        @quad_x500.usda@
+    ]
+    upAxis = "Z"
+)
+
+over "quad_x500"
+{
+    over "base_link"
+    {
+        over "magnetometer" (
+            prepend apiSchemas = ["EmiSusceptibilityAPI_1"]
+        )
+        {
+            uniform token emi:victimType = "magnetometer"
+            double emi:magneticGain = 1
+        }
+
+        over "imu" (
+            prepend apiSchemas = ["EmiSusceptibilityAPI_1"]
+        )
+        {
+            uniform token emi:victimType = "imu_adc"
+            double emi:accelNoisePerField = 0.002
+            double emi:gyroNoisePerField = 0.0002
+        }
+    }
+}

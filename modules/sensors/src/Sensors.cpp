@@ -1,9 +1,11 @@
 #include "GeoSensors.hpp"
+#include "lagrange/fields/Field.hpp"
 #include "lagrange/module/StateIO.hpp"
 #include "lagrange/random/Philox.hpp"
 #include "lagrange/sensors/ImuNoise.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
+#include "lagrange/sensors/WeatherEffects.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
@@ -276,7 +278,7 @@ public:
         return out;
     }
 
-    Status declare(const WorldView& world, const ModuleConfig&, SignalDeclarer& d) override {
+    Status declare(const WorldView& world, const ModuleConfig& config, SignalDeclarer& d) override {
         const World::Sensors& sensors = world.sensors();
         layout_ = LidarLayout::from(sensors.settings[sensor_]);
         samples_ = layout_.beams();
@@ -308,6 +310,35 @@ public:
             out.arrayLength = samples_;
             return out;
         }());
+        // In the weather domain's air (config "weather": it runs): extinction at the lidar's
+        // wavelength, the fog's share of it, the rain rate and the window's contamination.
+        weather_ = config.get<bool>("weather").value_or(false) && !groundTruth_;
+        if (weather_) {
+            const bool infrared = setting(sensors, sensor_, "wavelength", 905e-9) > 1.2e-6;
+            const auto in = [&](const std::string& name) {
+                SignalSpec s = spec(name, SignalType::Scalar, units::per_m);
+                s.feedback = true;  // the weather changes slowly
+                return s;
+            };
+            extinction_ =
+                d.input(in(infrared ? "env/extinction/nir_1550" : "env/extinction/nir_905"));
+            fogExtinction_ =
+                d.input(in(infrared ? "env/extinction/fog_1550" : "env/extinction/fog_905"));
+            SignalSpec rain = in("env/rain_rate");
+            rain.unit = units::m_per_s;
+            rainRate_ = d.input(rain);
+            SignalSpec dirt = in("sensor/" + name_ + "/contamination");
+            dirt.unit = units::one;
+            contamination_ = d.input(dirt);
+            SignalSpec field = in("env/extinction/field");
+            field.type = SignalType::Field3D;
+            fogField_ = d.input(field);
+            clutter_.pulseLength = setting(sensors, sensor_, "pulse_length", clutter_.pulseLength);
+            clutter_.beamDiameter =
+                setting(sensors, sensor_, "beam_diameter", clutter_.beamDiameter);
+            clutter_.reflectivity =
+                setting(sensors, sensor_, "max_range_reflectivity", clutter_.reflectivity);
+        }
         return {};
     }
 
@@ -374,6 +405,31 @@ public:
         } else {
             castOnCpu(sensor);
         }
+        if (weather_) {
+            // A fog field: its optical depth along each beam up to the hit, and its value at the
+            // sensor for the clutter near it (taken as the extinction at the lidar's wavelength).
+            const std::shared_ptr<const fields::Field> field = fogFieldSignal_.read(bus, fogField_);
+            const fields::Vec3 at = sensor.position;
+            const double local = field ? field->sampleScalar(at) : 0.0;
+            const SensorWeather w{bus.read(extinction_), bus.read(fogExtinction_) + local,
+                                  bus.read(rainRate_), bus.read(contamination_)};
+            tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
+                // Its own stream, so that the range noise below is the same with or without.
+                random::Stream rng(context.seed, context.stepIndex, kWeatherStream + i);
+                const double u1 = rng.uniform();
+                const double u2 = rng.uniform();
+                const double u3 = rng.uniform();
+                double depth = 0.0;
+                if (field && std::isfinite(nearest_[i])) {
+                    const Vec3 dir = rotate(sensor.orientation, layout_.direction(i));
+                    const double to = std::min(nearest_[i], maxRange_);
+                    depth = field->integrate(
+                        at, {at[0] + dir[0] * to, at[1] + dir[1] * to, at[2] + dir[2] * to});
+                }
+                nearest_[i] =
+                    weatherRange(nearest_[i], minRange_, maxRange_, w, clutter_, u1, u2, u3, depth);
+            });
+        }
         for (std::uint32_t i = 0; i < samples_; ++i) {
             double nearest = nearest_[i];
             if (nearest < minRange_ || nearest > maxRange_) {
@@ -436,6 +492,11 @@ private:
         return {{v[0], v[1], v[2]}, {v[3], v[4], v[5], v[6]}};
     }
 
+    static constexpr std::uint32_t kWeatherStream = 0x8000'0000U;  // + beam
+    bool weather_{false};
+    LidarClutter clutter_;
+    SignalId extinction_, fogExtinction_, rainRate_, contamination_, fogField_;
+    fields::FieldSignal fogFieldSignal_;
     LidarLayout layout_;
     std::uint32_t samples_{0};  // beams, all rings
     double minRange_{0.0}, maxRange_{0.0}, noise_{0.0};
@@ -481,6 +542,14 @@ public:
         twist_ = d.input(spec(body + "/twist", SignalType::Wrench, units::m_per_s, "world_local"));
         acceleration_ =
             d.input(spec(body + "/acceleration", SignalType::Wrench, units::m_per_s2, "body"));
+        if (const std::string victim = emiVictim(world, sensor_, "imu_adc");
+            !victim.empty() && !groundTruth_) {
+            // Noise the EMI domain adds to the ADC channels (emi.md §2), 1 σ.
+            emiAccel_ =
+                d.input(optionalSpec(victim + "accel_noise", SignalType::Scalar, units::m_per_s2));
+            emiGyro_ =
+                d.input(optionalSpec(victim + "gyro_noise", SignalType::Scalar, units::rad_per_s));
+        }
         const std::string base = "sensor/" + name_;
         force_ =
             d.output(spec(base + "/specific_force", SignalType::Vec3, units::m_per_s2, "sensor"));
@@ -528,6 +597,16 @@ public:
             force[i] = accel_.measure(i, force[i], rng.normal());
             rate[i] = gyro_.measure(i, rate[i], rng.normal());
         }
+        if (emiAccel_.valid()) {
+            // Its own stream, so that the IMU's own noise is the same with or without EMI.
+            random::Stream emi(context.seed, context.stepIndex, kEmiStream);
+            const double a = bus.read(emiAccel_);
+            const double g = bus.read(emiGyro_);
+            for (std::size_t i = 0; i < 3; ++i) {
+                force[i] += a * emi.normal();
+                rate[i] += g * emi.normal();
+            }
+        }
         bus.writeN(force_, force);
         bus.writeN(rate_, rate);
         bus.writeN(orientation_, multiply(body, mount_.orientation));
@@ -554,10 +633,12 @@ public:
 private:
     static constexpr std::uint32_t kTurnOnStream = 1;  // Philox entities besides 0, the white
     static constexpr std::uint32_t kBiasStream = 2;    // noise
+    static constexpr std::uint32_t kEmiStream = 3;
     ImuChannel accel_, gyro_;  // all terms off for the ground-truth substitute
     bool biased_{false};
     bool started_{false};  // turn-on bias drawn
     SignalId pose_, twist_, acceleration_, force_, rate_, orientation_;
+    SignalId emiAccel_, emiGyro_;  // EMI noise, when the IMU is a victim
 };
 
 /// Rounds a rate's period to whole milliseconds, so that a camera at 30 Hz lines up with the
@@ -581,7 +662,7 @@ public:
         return out;
     }
 
-    Status declare(const WorldView& world, const ModuleConfig&, SignalDeclarer& d) override {
+    Status declare(const WorldView& world, const ModuleConfig& config, SignalDeclarer& d) override {
         const World::Sensors& sensors = world.sensors();
         const double width = setting(sensors, sensor_, "width", 640.0);
         const double height = setting(sensors, sensor_, "height", 480.0);
@@ -626,6 +707,20 @@ public:
         image_ = image("image", Unit{});
         depth_ = image("depth", units::m);
         instance_ = image("instance", Unit{});
+        // The weather's veil (config "weather"): visible extinction and the lens's contamination.
+        weather_ = config.get<bool>("weather").value_or(false) && !groundTruth_;
+        if (weather_) {
+            SignalSpec e = spec("env/extinction/visible", SignalType::Scalar, units::per_m);
+            e.feedback = true;
+            extinction_ = d.input(e);
+            SignalSpec dirt =
+                spec("sensor/" + name_ + "/contamination", SignalType::Scalar, units::one);
+            dirt.feedback = true;
+            contamination_ = d.input(dirt);
+            SignalSpec field = spec("env/extinction/field", SignalType::Field3D, units::per_m);
+            field.feedback = true;
+            fogField_ = d.input(field);
+        }
         return {};
     }
 
@@ -668,6 +763,16 @@ public:
                 // The colour keeps whatever was drawn: a far clip limits the range, not the view.
             }
         }
+        if (weather_) {
+            const std::shared_ptr<const fields::Field> field = fogFieldSignal_.read(bus, fogField_);
+            if (field) {
+                fieldDepth(*field, sensor);
+            } else {
+                fieldDepth_.clear();
+            }
+            applyCameraWeather(images_.rgba, images_.depth, bus.read(extinction_),
+                               bus.read(contamination_), fieldDepth_);
+        }
         publish(bus);
         return {};
     }
@@ -707,6 +812,43 @@ private:
     std::vector<gpu::RasterInstance> instances_;
     gpu::RasterImages images_;
     SignalId image_, depth_, instance_;
+    /// A fog field's optical depth along each pixel's ray up to its depth (the far clip for the
+    /// sky), integrated once per kFieldBlock² pixels and shared across the block.
+    void fieldDepth(const fields::Field& field, const Pose& sensor) {
+        constexpr std::uint32_t kFieldBlock = 8;
+        const std::uint32_t w = camera_.width;
+        const std::uint32_t h = camera_.height;
+        fieldDepth_.assign(static_cast<std::size_t>(w) * h, 0.0F);
+        const std::array<double, 4> optical = multiply(sensor.orientation, kSensorFromOptical);
+        const std::uint32_t rows = (h + kFieldBlock - 1) / kFieldBlock;
+        const std::uint32_t columns = (w + kFieldBlock - 1) / kFieldBlock;
+        tbb::parallel_for(std::uint32_t{0}, rows, [&](std::uint32_t by) {
+            for (std::uint32_t bx = 0; bx < columns; ++bx) {
+                const std::uint32_t u = std::min(w - 1, bx * kFieldBlock + kFieldBlock / 2);
+                const std::uint32_t v = std::min(h - 1, by * kFieldBlock + kFieldBlock / 2);
+                const float d = images_.depth[static_cast<std::size_t>(v) * w + u];
+                const double z = std::isfinite(d) ? d : far_;
+                // The pixel's ray in the optical frame (x right, y down, z forward), to depth z.
+                const Vec3 ray = rotate(optical, {(u - camera_.cx) / camera_.fx * z,
+                                                  (v - camera_.cy) / camera_.fy * z, z});
+                const fields::Vec3 from = sensor.position;
+                const auto tau = static_cast<float>(
+                    field.integrate(from, {from[0] + ray[0], from[1] + ray[1], from[2] + ray[2]}));
+                for (std::uint32_t y = by * kFieldBlock; y < std::min(h, (by + 1) * kFieldBlock);
+                     ++y) {
+                    for (std::uint32_t x = bx * kFieldBlock;
+                         x < std::min(w, (bx + 1) * kFieldBlock); ++x) {
+                        fieldDepth_[static_cast<std::size_t>(y) * w + x] = tau;
+                    }
+                }
+            }
+        });
+    }
+
+    bool weather_{false};
+    SignalId extinction_, contamination_, fogField_;
+    fields::FieldSignal fogFieldSignal_;
+    std::vector<float> fieldDepth_;
 };
 }  // namespace
 
