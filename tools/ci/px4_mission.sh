@@ -48,12 +48,15 @@ cleanup() {
     for pid in $px4 $server; do kill -KILL "$pid" 2>/dev/null || true; done
 }
 trap cleanup EXIT
+trap 'exit 130' INT TERM  # Ctrl+C: stop everything (the EXIT trap does)
+echo "watch it: ros2 run lagrange_viewer lagrange_viewer --connect unix:$socket"
 sleep 4
 (cd "$build/rootfs" && PX4_SYS_AUTOSTART=22100 PX4_SIM_MODEL=lagrange_quad_x500 \
     exec ../bin/px4 -d ../etc >"$OUT/px4.log" 2>&1) &
 px4=$!
 status=0
-timeout 360 "$python" bridges/mavlink/px4/fly_square_mission.py --timeout 300 | tee "$OUT/mission.log" ||
+# --foreground: the mission stays in the terminal's process group, so Ctrl+C reaches it.
+timeout --foreground 360 "$python" bridges/mavlink/px4/fly_square_mission.py --timeout 300 | tee "$OUT/mission.log" ||
     status=$?
 echo "logs in $OUT"
 exit "$status"

@@ -44,6 +44,8 @@ cleanup() {
     for pid in $copter_pid $server; do kill -KILL "$pid" 2>/dev/null || true; done
 }
 trap cleanup EXIT
+trap 'exit 130' INT TERM  # Ctrl+C: stop everything (the EXIT trap does)
+echo "watch it: ros2 run lagrange_viewer lagrange_viewer --connect unix:$socket"
 sleep 4
 work=$(mktemp -d)  # ArduPilot keeps its parameters (eeprom.bin) in its working directory
 (cd "$work" && exec "$copter" --model JSON:127.0.0.1 --home "47.397742,8.545594,488,0" -w \
@@ -52,7 +54,8 @@ work=$(mktemp -d)  # ArduPilot keeps its parameters (eeprom.bin) in its working 
 copter_pid=$!
 status=0
 mission_timeout=${MISSION_TIMEOUT:-300}
-timeout $((mission_timeout + 60)) "$python" "$(dirname "$params")/fly_square_mission.py" --timeout "$mission_timeout" |
+# --foreground: the mission stays in the terminal's process group, so Ctrl+C reaches it.
+timeout --foreground $((mission_timeout + 60)) "$python" "$(dirname "$params")/fly_square_mission.py" --timeout "$mission_timeout" |
     tee "$OUT/mission.log" || status=$?
 echo "logs in $OUT"
 exit "$status"
