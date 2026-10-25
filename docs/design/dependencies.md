@@ -157,6 +157,8 @@ reads recordings. See open question Q4 for how the mock server gets scene conten
 | `rmw_fastrtps_cpp`, `rmw_zenoh_cpp` | tested RMWs | 9.4.10, 0.10.6 | |
 | `nav2_map_server`, `nav2_planner`, `nav2_navfn_planner`, `nav2_controller`, `nav2_regulated_pure_pursuit_controller`, `nav2_behaviors`, `nav2_bt_navigator`, `nav2_waypoint_follower`, `nav2_lifecycle_manager`, `nav2_simple_commander` | `lagrange_demos` (exec only) | 1.5.1 | Apache-2.0 (map_server, navfn also BSD-3-Clause). Not `nav2_bringup`: not installed by default, and the demo starts the nodes itself |
 | `robot_state_publisher`, `launch_ros` | `lagrange_demos` (exec only) | 3.5.6, 0.29.9 | BSD, Apache-2.0 |
+| `mavlink` | `lagrange_mavlink` (PX4 SITL bridge): the generated C headers of `common.xml` | 2026.9.9 | The generator is (L)GPL-3; generated code embedded in a binary is MIT under the package's generator-output exception (`share/mavlink/COPYING.txt`), so no LGPL code is in what we ship. Header-only |
+| PX4 Autopilot (not a build dependency) | the v0.4 mission: SITL built from source, v1.17.0 (the latest stable release, 13 May 2026) | v1.17.0 | BSD-3-Clause. Built on the host under `~/PX4-Autopilot` (`make px4_sitl_default`, Python deps from its `Tools/setup/requirements.txt`); run as its own process, never linked |
 | Test-only: `moveit`, `ros2_controllers`, `mavros` | integration tests and demos | 2.15.2, 6.9.0, 2.15.1 | `<test_depend>` or demo packages only |
 
 The viewer package (`lagrange_viewer`) depends on `ament_cmake` and `ament_index_cpp` for build
