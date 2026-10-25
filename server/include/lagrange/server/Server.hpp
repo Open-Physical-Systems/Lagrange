@@ -30,6 +30,10 @@ struct ServerOptions {
     /// The site's air density, kg/m³ (--air-density; a profile's rotor_aero.air_density
     /// overrides it). A site parameter with no default: rotors do not run without it.
     std::optional<double> airDensityKgM3;
+    /// Where world ENU (0, 0, 0) is on the Earth (--geo-origin; a profile's world.geo_origin
+    /// overrides it). A site parameter with no default: GNSS, magnetometers and barometers do
+    /// not run without it.
+    std::optional<coords::Geodetic> geoOrigin;
     /// Bench mode (--bench): physics replaced by this recording's rigid-body signals, replayed
     /// open loop (the replay substitute); empty = none. A profile's rigid_body replay source
     /// overrides it.

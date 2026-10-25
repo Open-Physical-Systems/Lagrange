@@ -5,9 +5,11 @@
 #include <atomic>
 #include <cmath>
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <numbers>
 #include <string_view>
 
 #include <ament_index_cpp/get_package_share_path.hpp>
@@ -108,6 +110,9 @@ void printServerOptions(std::FILE* out) {
         "            and body motion, open loop (electrical, thermal, sensors live)\n"
         "  --ambient-temperature K  the site's air temperature: runs the thermal domain\n"
         "            (no default; a profile's thermal.ambient_temperature also sets it)\n"
+        "  --geo-origin LAT,LON,HEIGHT  where the world's origin is on the Earth (degrees,\n"
+        "            degrees, m above WGS84), for GNSS, magnetometers and barometers (no default;\n"
+        "            a profile's world.geo_origin also sets it)\n"
         "  --air-density KG_M3  the site's air density, for rotors (ISA sea level: 1.225; no\n"
         "            default; a profile's rotor_aero.air_density also sets it)\n"
         "  --domain D=off  replace domain D (rigid_body, electrical, thermal, sensors) by its\n"
@@ -232,6 +237,17 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--ambient-temperature needs a temperature in K";
             }
             options.ambientTemperatureK = kelvin;
+        } else if (arg == "--geo-origin") {
+            const char* text = value();
+            double lat = 0.0, lon = 0.0, height = 0.0;
+            char tail = 0;
+            if (text == nullptr ||
+                std::sscanf(text, "%lf,%lf,%lf%c", &lat, &lon, &height, &tail) != 3 ||
+                std::abs(lat) > 90.0 || std::abs(lon) > 180.0) {
+                return "--geo-origin needs LAT,LON,HEIGHT (degrees, degrees, m above WGS84)";
+            }
+            constexpr double kDegree = std::numbers::pi / 180.0;
+            options.geoOrigin = coords::Geodetic{lat * kDegree, lon * kDegree, height};
         } else if (arg == "--air-density") {
             const char* text = value();
             char* end = nullptr;

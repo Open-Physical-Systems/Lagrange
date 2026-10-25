@@ -1,3 +1,4 @@
+#include "GeoSensors.hpp"
 #include "lagrange/module/StateIO.hpp"
 #include "lagrange/random/Philox.hpp"
 #include "lagrange/sensors/ImuNoise.hpp"
@@ -727,8 +728,13 @@ std::vector<std::unique_ptr<IModule>> createModules(
                 modules.push_back(std::make_unique<Camera>(
                     world, s, groundTruth || groundTruthCameras, cameraScene));
                 break;
+            case SensorType::Gnss:
+            case SensorType::Magnetometer:
+            case SensorType::Barometer:
+                break;  // createGeoSensors, below
         }
     }
+    createGeoSensors(world, groundTruth, modules);
     return modules;
 }
 

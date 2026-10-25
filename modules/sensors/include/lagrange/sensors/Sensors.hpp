@@ -49,6 +49,14 @@ struct CameraScene {
                                                              const std::string& preferredDevice,
                                                              std::string& error);
 
+/// The ICAO standard atmosphere in the troposphere (ICAO Doc 7488/3): static pressure (Pa) and
+/// temperature (K) at `altitudeM` above mean sea level, up to 11 km. What the barometer reads.
+struct Atmosphere {
+    double pressurePa;
+    double temperatureK;
+};
+[[nodiscard]] Atmosphere standardAtmosphere(double altitudeM);
+
 /// One module per sensor of the world (sensors.md §3): its rate is the sensor's update rate,
 /// so its signals have that native rate. Domain "sensors", name "<type>_<sensor name>".
 ///

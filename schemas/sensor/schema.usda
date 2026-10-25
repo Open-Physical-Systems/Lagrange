@@ -175,3 +175,58 @@ class "CameraSensorAPI_1" (
         doc = "OpenCV order: k1, k2, p1, p2, k3 for plumb_bob; k1 to k4 for equidistant."
     )
 }
+
+class "GnssAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A GNSS receiver: WGS84 position and ENU velocity of the antenna (the prim's origin),
+    placed on the Earth through the world's geo origin. Noise is white, per fix. Apply with
+    SensorAPI_1."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double sensor:gnss:horizontalNoiseStd = 0 (
+        lagrangeUnit = "m"
+        doc = "Standard deviation of each horizontal position component."
+    )
+    double sensor:gnss:verticalNoiseStd = 0 (
+        lagrangeUnit = "m"
+        doc = "Standard deviation of the height."
+    )
+    double sensor:gnss:velocityNoiseStd = 0 (
+        lagrangeUnit = "m/s"
+        doc = "Standard deviation of each velocity component."
+    )
+}
+
+class "MagnetometerAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A three-axis magnetometer: the Earth's main field (World Magnetic Model) in the prim's
+    frame. Noise is white, per sample. Apply with SensorAPI_1."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double sensor:magnetometer:noiseStd = 0 (
+        lagrangeUnit = "T"
+        doc = "Standard deviation of each axis."
+    )
+}
+
+class "BarometerAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A barometer: static pressure and air temperature at the prim's height (the standard
+    atmosphere until a weather model gives the site's). Noise is white, per sample. Apply with
+    SensorAPI_1."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double sensor:barometer:noiseStd = 0 (
+        lagrangeUnit = "Pa"
+        doc = "Standard deviation of the pressure."
+    )
+}

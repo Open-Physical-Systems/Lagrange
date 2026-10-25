@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <jsoncons/json.hpp>
 #include <jsoncons_ext/jsonschema/jsonschema.hpp>
+#include <numbers>
 
 #include <yaml-cpp/yaml.h>
 
@@ -265,8 +266,26 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
             warning(check, "/time/end", "not applied yet: the run does not stop by itself");
         }
     }
-    for (const char* key : {"environment", "seed", "deterministic", "tier", "batch", "world",
-                            "bridges", "scenario", "record"}) {
+    if (profile.contains("world") && profile["world"].is_object()) {
+        const jsoncons::json& world = profile["world"];
+        if (world.contains("geo_origin") && world["geo_origin"].is_object()) {
+            const jsoncons::json& g = world["geo_origin"];
+            if (g.contains("latitude") && g.contains("longitude") && g.contains("height")) {
+                constexpr double kDegree = std::numbers::pi / 180.0;
+                settings.geoOrigin = coords::Geodetic{g["latitude"].as<double>() * kDegree,
+                                                      g["longitude"].as<double>() * kDegree,
+                                                      g["height"].as<double>()};
+            }
+        }
+        for (const auto& member : world.object_range()) {
+            if (member.key() != "geo_origin") {
+                warning(check, "/world/" + std::string(member.key()),
+                        "not applied by this server yet");
+            }
+        }
+    }
+    for (const char* key : {"environment", "seed", "deterministic", "tier", "batch", "bridges",
+                            "scenario", "record"}) {
         if (profile.contains(key)) {
             warning(check, std::string("/") + key,
                     std::string("not applied by this server yet") +

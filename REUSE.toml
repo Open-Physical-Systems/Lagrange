@@ -17,3 +17,9 @@ path = ["modules/electrical/test/data/lg_hg2/*.csv", "modules/electrical/test/da
 precedence = "override"
 SPDX-FileCopyrightText = "2020 Phillip Kollmeyer, Mina Naguib, Michael Skells (McMaster University), doi:10.17632/b5mj79w5w9.2"
 SPDX-License-Identifier = "CC-BY-4.0"
+
+[[annotations]]
+path = ["modules/sensors/data/wmm2025/*.COF", "modules/sensors/data/wmm2025/*.txt", "modules/sensors/src/generated/Wmm2025Coefficients.inc"]
+precedence = "override"
+SPDX-FileCopyrightText = "NOAA National Centers for Environmental Information and the British Geological Survey (World Magnetic Model 2025, U.S. Government work)"
+SPDX-License-Identifier = "LicenseRef-USGov-PublicDomain"

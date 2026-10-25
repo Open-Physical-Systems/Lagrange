@@ -264,6 +264,17 @@ private:
             camera.CreateClippingRangeAttr().Set(
                 GfVec2f(static_cast<float>(get("near_clip", 0.05)),
                         static_cast<float>(get("far_clip", 100.0))));
+        } else if (sensors.type[s] == SensorType::Gnss) {
+            prim.ApplyAPI(TfToken("GnssAPI_1"));
+            real("sensor:gnss:horizontalNoiseStd", get("horizontal_noise", 0.0));
+            real("sensor:gnss:verticalNoiseStd", get("vertical_noise", 0.0));
+            real("sensor:gnss:velocityNoiseStd", get("velocity_noise", 0.0));
+        } else if (sensors.type[s] == SensorType::Magnetometer) {
+            prim.ApplyAPI(TfToken("MagnetometerAPI_1"));
+            real("sensor:magnetometer:noiseStd", get("noise", 0.0));
+        } else if (sensors.type[s] == SensorType::Barometer) {
+            prim.ApplyAPI(TfToken("BarometerAPI_1"));
+            real("sensor:barometer:noiseStd", get("noise", 0.0));
         } else {
             prim.ApplyAPI(TfToken("ImuAPI_1"));
             real("sensor:imu:accelNoiseStd", get("accel_noise", 0.0));
