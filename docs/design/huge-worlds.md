@@ -212,7 +212,7 @@ flowchart LR
 |---|---|---|
 | GeoTIFF / DEM | GDAL 3.12.2, PROJ 9.7.1 (apt) | Reprojected to the world ENU frame. Vertical datum handled explicitly: orthometric heights are converted to ellipsoidal with a geoid grid if the user supplies one, otherwise the tool refuses unless `--assume-ellipsoidal` is given |
 | OSM | a PBF reader (candidate: libosmium; license and packaging TODO(verify)) | Buildings extruded from `height` / `building:levels`; roads as ribbons draped on the terrain. Data is ODbL: outputs carry attribution, and derived tiles are not committed to the main repo |
-| OpenDRIVE | own reader or a permissively licensed library (candidates to evaluate in v0.6; TODO(verify)) | Reference line, lanes, elevation, superelevation → mesh + lane tables for traffic and for ground-truth lane signals |
+| OpenDRIVE | own reader (`io/opendrive/`, v0.6; formats.md §3.11) | Reference line, lanes, elevation → mesh + `RoadLaneAPI_1` lanes for traffic; superelevation not yet |
 | OGC 3D Tiles | own reader for `tileset.json` + glTF through Assimp or a glTF library (TODO(verify)) | Photogrammetry tiles are visual only; they get no collision unless the user requests a simplified collision bake |
 | WGS84 ↔ ENU | GeographicLib 2.7 (apt) for geodesy; our `coords::GeoOrigin` for the hot path | Conversion code is tested against GeographicLib |
 

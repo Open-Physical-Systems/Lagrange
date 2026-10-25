@@ -8,6 +8,8 @@
 #include "lagrange/importers/Importers.hpp"
 #include "lagrange/mavlink/ArduPilotJson.hpp"
 #include "lagrange/mavlink/Px4Lockstep.hpp"
+#include "lagrange/opendrive/OpenDrive.hpp"
+#include "lagrange/openscenario/Scenario.hpp"
 #include "lagrange/proto/Connection.hpp"
 #include "lagrange/proto/Framing.hpp"
 #include "lagrange/recording/Recording.hpp"
@@ -20,6 +22,7 @@
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
+#include "lagrange/server/CarDrive.hpp"
 #include "lagrange/server/DiffDrive.hpp"
 #include "lagrange/server/Multicopter.hpp"
 #include "lagrange/server/Profile.hpp"
@@ -29,9 +32,12 @@
 #include "lagrange/services/WrenchSum.hpp"
 #include "lagrange/stage/Stage.hpp"
 #include "lagrange/thermal/ThermalNetwork.hpp"
+#include "lagrange/traffic/Traffic.hpp"
+#include "lagrange/vehicle_dynamics/VehicleDynamics.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
 #include "lagrange/weather/Weather.hpp"
 #include "lagrange/world/LidarLayout.hpp"
+#include "lagrange/world/RoadLanes.hpp"
 
 #include <algorithm>
 #include <array>
@@ -66,7 +72,7 @@ using Clock = std::chrono::steady_clock;
 
 constexpr std::uint32_t kProtocolMajor = 0;  // the mock server's version (server.py)
 constexpr std::uint32_t kProtocolMinor = 1;
-constexpr char kServerName[] = "lagrange_server 0.1.0";
+constexpr char kServerName[] = "lagrange_server " LAGRANGE_VERSION;
 constexpr std::int64_t kStatusPeriodNs = 100'000'000;  // 10 Hz, as the mock server
 constexpr std::int64_t kStatsPeriodNs = 1'000'000'000;
 constexpr std::int64_t kFieldPeriodNs = 500'000'000;  // field slices: twice a second
@@ -507,6 +513,62 @@ struct Server::Impl {
             }
             next->add(std::move(drive));
             next->add(std::make_unique<DiffDriveController>(driveSettings()));
+        } else if (hasVehicles()) {
+            // A road vehicle: /cmd_vel through the car's driver to throttle, brake and
+            // steering; until the first command, its demo circle.
+            std::function<std::optional<CarCommand>()> external;
+            if (bridge) {
+                external = [this]() -> std::optional<CarCommand> {
+                    const auto command = bridge->latestCommand(std::chrono::milliseconds(500));
+                    if (!command) {
+                        return std::nullopt;
+                    }
+                    return CarCommand{command->linearMps, command->angularRadps,
+                                      command->steeringAngle};
+                };
+            }
+            next->add(std::make_unique<CarController>(external, options.demoDrive));
+        }
+        // The scenario's runner: its entities, its storyboard.
+        if (scenario) {
+            ModuleConfigData runner;
+            const World& world = robot.world;
+            for (std::size_t b = 0; b < world.bodies.names.size(); ++b) {
+                if (world.bodies.parent[b] == kWorldBody && !world.bodies.kinematic[b] &&
+                    movingBodies(world)[b]) {
+                    runner.values["ego_body"] = world.bodies.names[b];
+                    break;
+                }
+            }
+            next->add(
+                std::make_unique<openscenario::ScenarioRunner>(*scenario, options.scenarioEgo),
+                ModuleConfig(runner));
+        }
+        // Traffic (domains/traffic.md): moves the agents addAgents made, around the robots.
+        if (hasTraffic()) {
+            ModuleConfigData traffic;
+            traffic.values["seed"] = static_cast<std::int64_t>(options.trafficSeed);
+            std::vector<std::string> egos;
+            const World& world = robot.world;
+            const std::vector<bool> moving = movingBodies(world);
+            for (std::size_t b = 0; b < world.bodies.names.size(); ++b) {
+                if (world.bodies.parent[b] == kWorldBody && moving[b] &&
+                    !world.bodies.kinematic[b]) {
+                    egos.push_back(world.bodies.names[b]);
+                }
+            }
+            traffic.values["ego_bodies"] = egos;
+            next->add(std::make_unique<traffic::Traffic>(off("traffic")), ModuleConfig(traffic));
+        }
+        // Road vehicles (domains/vehicle_dynamics.md): before the electrical domain, which turns
+        // their drive and steering commands into joint torques.
+        if (hasVehicles()) {
+            auto [ground, friction] = groundQuery();
+            ModuleConfigData vehicle;
+            vehicle.values["tire_model"] = appliedTireModel.value_or("pacejka");
+            next->add(std::make_unique<vehicle_dynamics::VehicleDynamics>(
+                          off("vehicle_dynamics"), std::move(ground), std::move(friction)),
+                      ModuleConfig(vehicle));
         }
         // The electrical domain turns the controllers' torque commands into joint torques: the
         // network when the robot has motors (from USD or an overlay), else its ideal substitute
@@ -711,6 +773,44 @@ struct Server::Impl {
         settings.emiCoupling = appliedEmiCoupling;
         return settings;
     }
+    /// Whether the world has traffic agents.
+    bool hasTraffic() const {
+        return std::ranges::any_of(robot.world.bodies.names, [](const std::string& n) {
+            return n.starts_with("traffic_vehicle_") || n.starts_with("traffic_pedestrian_");
+        });
+    }
+    /// Whether the stage has road vehicles.
+    bool hasVehicles() const { return !WorldView(robot.world).instancesOf("VehicleAPI_1").empty(); }
+    /// A scene query over what wheels roll on: the fixed scenery's shapes and the ground
+    /// plane, with each shape's friction coefficient.
+    std::pair<std::shared_ptr<const services::SceneQuery>, std::vector<double>> groundQuery()
+        const {
+        const World& world = robot.world;
+        const std::vector<Pose> rest = restPoses(world);
+        const std::vector<bool> moving = movingBodies(world);
+        std::vector<sensors::ShapeCaster::Shape> shapes;
+        std::vector<double> friction;
+        for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
+            const BodyId owner = world.colliders.body[c];
+            if (owner != kWorldBody && moving[owner.index]) {
+                continue;
+            }
+            sensors::ShapeCaster::Shape shape;
+            shape.type = world.colliders.shape[c];
+            shape.size = world.colliders.size[c];
+            shape.pose = owner == kWorldBody
+                             ? world.colliders.poseInBody[c]
+                             : compose(rest[owner.index], world.colliders.poseInBody[c]);
+            shape.hull = shape.type == ShapeType::ConvexHull
+                             ? &world.hulls.at(world.colliders.hull[c])
+                             : nullptr;
+            shapes.push_back(shape);
+            friction.push_back(world.colliders.friction[c]);
+        }
+        auto caster = std::make_shared<sensors::ShapeCaster>();
+        caster->update(shapes);
+        return {std::move(caster), std::move(friction)};
+    }
     /// Whether the stage has radio links or CAN buses.
     bool hasComms() const {
         const WorldView world(robot.world);
@@ -787,6 +887,10 @@ struct Server::Impl {
     std::optional<std::string> rigidBodyReplay;             // --bench, or an applied profile
     std::optional<std::int64_t> rigidBodyDtNs;              // from an applied profile
     std::optional<std::string> rigidBodyBackend;            // from an applied profile
+    std::optional<std::string> appliedTireModel;            // vehicle_dynamics.tire_model
+    std::optional<openscenario::Scenario> scenario;         // --scenario
+    SignalId scenarioState, scenarioTime;                   // its runner's, when it has one
+    bool scenarioEnded{false};                              // logged once
     std::optional<std::int64_t> electricalDtNs;             // from an applied profile
     std::optional<ProfileSettings> pending;  // applied without restart: used at the next reset
 
@@ -798,6 +902,9 @@ struct Server::Impl {
         }
         scheduler = std::move(*made);
         driveCommand = drive;  // only now: a failed build leaves the run as it was
+        scenarioState = scheduler->bus().find("scenario/state");
+        scenarioTime = scheduler->bus().find("scenario/time");
+        scenarioEnded = false;
         bodyPose.assign(robot.world.bodies.names.size(), SignalId{});
         for (std::size_t b = 0; b < bodyPose.size(); ++b) {
             bodyPose[b] = scheduler->bus().find("body/" + robot.world.bodies.names[b] + "/pose");
@@ -988,6 +1095,15 @@ struct Server::Impl {
             tickNs.push_back(nanosSince(tickStart, Clock::now()));
             capture();
             record();
+            if (scenarioState.valid() && !scenarioEnded &&
+                scheduler->bus().read(scenarioState) == 1.0) {
+                scenarioEnded = true;
+                char line[96];
+                std::snprintf(line, sizeof(line),
+                              "the scenario ended at its stop trigger, t = %.2f s",
+                              scheduler->bus().read(scenarioTime));
+                log(v1::LOG_LEVEL_INFO, "scenario", line);
+            }
             if (replay) {
                 if (scheduler->now().ns % kCheckpointNs == 0) {
                     checkpoint();
@@ -1861,6 +1977,14 @@ struct Server::Impl {
                     text += "]";
                 }
                 yaml += "  emi: " + text + "}\n";
+            } else if (std::string_view(row.domain) == "vehicle_dynamics" && hasVehicles()) {
+                yaml += substituted("vehicle_dynamics")
+                            ? "  vehicle_dynamics: {enabled: false, substitute: ideal}\n"
+                            : "  vehicle_dynamics: {enabled: true, tire_model: " +
+                                  appliedTireModel.value_or("pacejka") + "}\n";
+            } else if (std::string_view(row.domain) == "traffic" && hasTraffic()) {
+                yaml += substituted("traffic") ? "  traffic: {enabled: false, substitute: zero}\n"
+                                               : "  traffic: {enabled: true, backend: builtin}\n";
             } else if (std::string_view(row.domain) == "comms" && hasComms()) {
                 yaml += substituted("comms") ? "  comms: {enabled: false, substitute: ideal}\n"
                                              : "  comms: {enabled: true}\n";
@@ -2624,6 +2748,12 @@ struct Server::Impl {
         if (hasComms()) {
             context.modules.insert("comms");
         }
+        if (hasVehicles()) {
+            context.modules.insert("vehicle_dynamics");
+        }
+        if (hasTraffic()) {
+            context.modules.insert("traffic");
+        }
         for (const auto& [key, value] : options.weather) {
             context.weatherKnown.insert(key);
         }
@@ -2751,6 +2881,7 @@ struct Server::Impl {
         options.substituted = settings.substituted;
         rigidBodyDtNs = settings.rigidBodyDtNs;
         rigidBodyBackend = settings.rigidBodyBackend;
+        appliedTireModel = settings.tireModel;
         electricalDtNs = settings.electricalDtNs;
         thermalDtNs = settings.thermalDtNs;
         speedPrediction = settings.speedPrediction;
@@ -3636,11 +3767,48 @@ Status Server::load() {
         }
         return {};
     }
+    // A scenario: its roads, and where the ego starts.
+    std::optional<Model> scenarioRoads;
+    if (!s.options.scenarioPath.empty()) {
+        auto scenario = openscenario::read(s.options.scenarioPath);
+        if (!scenario) {
+            return Status::error(StatusCode::InvalidConfig, scenario.error());
+        }
+        s.scenario = std::move(*scenario);
+        if (!s.scenario->roadNetwork.empty()) {
+            auto network = opendrive::read(s.scenario->roadNetwork);
+            if (!network) {
+                return Status::error(StatusCode::InvalidConfig, network.error());
+            }
+            auto roads = opendrive::toModel(*network);
+            if (!roads) {
+                return Status::error(StatusCode::InvalidConfig, roads.error());
+            }
+            const RoadLanes lanes = roadLanesOf(WorldView(roads->world));
+            for (const openscenario::Action& a : s.scenario->init) {
+                if (a.entity == s.options.scenarioEgo &&
+                    a.kind == openscenario::Action::Kind::Teleport) {
+                    if (const auto pose = openscenario::poseOf(a.position, lanes)) {
+                        s.options.spawn.position = {(*pose)[0], (*pose)[1], (*pose)[2]};
+                        s.options.spawn.orientation = {std::cos((*pose)[3] / 2.0), 0.0, 0.0,
+                                                       std::sin((*pose)[3] / 2.0)};
+                    }
+                }
+            }
+            if (s.options.worldPath.empty()) {
+                scenarioRoads = std::move(*roads);
+            }
+        }
+        s.options.demoDrive = false;  // the ego waits for the system under test
+    }
     auto robot = loadModel(s.options.robotPath, {.spawn = s.options.spawn});
     if (!robot) {
         return Status::error(StatusCode::InvalidConfig, robot.error());
     }
     s.robot = std::move(robot.value());
+    if (scenarioRoads) {
+        appendModel(s.robot, *scenarioRoads);
+    }
     if (!s.options.overlayPath.empty()) {
         if (auto applied = stage::applyOverlay(s.robot, s.options.overlayPath); !applied) {
             return Status::error(StatusCode::InvalidConfig, applied.error());
@@ -3665,6 +3833,7 @@ Status Server::load() {
         settings.stampedCmdVel = s.options.stampedCmdVel;
         settings.topicLinks = s.options.linkTopics;
         settings.controllersOwnState = !s.options.ros2ControlParams.empty();
+        settings.ackermannCmd = !WorldView(s.robot.world).instancesOf("VehicleAPI_1").empty();
         s.bridge = std::make_unique<ros2::Bridge>(settings);
         if (!s.options.ros2ControlParams.empty()) {
             if (importers::formatOf(s.options.robotPath) != importers::Format::Urdf) {
@@ -3691,6 +3860,35 @@ Status Server::load() {
         if (auto added = addModel(s.robot, s.options.worldPath); !added) {
             return Status::error(StatusCode::InvalidConfig, added.error());
         }
+    }
+    if (s.scenario) {
+        if (auto added = openscenario::addEntities(s.robot, *s.scenario, s.options.scenarioEgo);
+            !added) {
+            return Status::error(StatusCode::InvalidConfig,
+                                 s.options.scenarioPath + ": " + added.error());
+        }
+        s.log(v1::LOG_LEVEL_INFO, "scenario",
+              s.options.scenarioPath + " · " + std::to_string(s.scenario->entities.size()) +
+                  " entities, " + s.options.scenarioEgo + " is the robot");
+    }
+    // Traffic agents on the world's road lanes, away from the robots (traffic.md); not with a
+    // scenario, which says who is on the road.
+    if (!s.scenario && !WorldView(s.robot.world).instancesOf("RoadLaneAPI_1").empty() &&
+        s.options.trafficVehicles + s.options.trafficPedestrians > 0) {
+        std::vector<traffic::Vec3> robots;
+        for (std::size_t b = 0; b < s.robot.world.bodies.names.size(); ++b) {
+            if (s.robot.world.bodies.parent[b] == kWorldBody) {
+                robots.push_back(s.robot.bodyRestPose[b].position);
+            }
+        }
+        const auto made = traffic::addAgents(
+            s.robot,
+            {s.options.trafficVehicles, s.options.trafficPedestrians, s.options.trafficSeed},
+            robots);
+        s.log(v1::LOG_LEVEL_INFO, "traffic",
+              std::to_string(made[0]) + " vehicles and " + std::to_string(made[1]) +
+                  " pedestrians on the road lanes (seed " + std::to_string(s.options.trafficSeed) +
+                  ")");
     }
     s.shift = recentre(s.robot);
     if (Status status = s.placeLidar(); !status.ok()) {
@@ -3816,6 +4014,13 @@ Status Server::start() {
                   (!s.options.demoDrive ? "; it stands still until /cmd_vel arrives"
                    : s.bridge           ? "; a figure-eight demo drives until /cmd_vel arrives"
                                         : "; a figure-eight demo drives"));
+    } else if (s.hasVehicles()) {
+        s.log(v1::LOG_LEVEL_INFO, "controller",
+              std::string("car: the driver turns /cmd_vel (speed, turn rate) or /ackermann_cmd "
+                          "(steering angle, speed) into throttle, brake and steering") +
+                  (s.options.demoDrive ? "; until the first command it drives a 5 m circle round "
+                                         "the origin"
+                                       : "; it stands still until /cmd_vel arrives"));
     } else if (s.options.ardupilotPort) {
         s.log(v1::LOG_LEVEL_INFO, "controller",
               "ArduPilot SITL flies it through its JSON interface on UDP port " +
@@ -3837,8 +4042,8 @@ Status Server::start() {
     for (std::size_t i = 0; i < s.robot.world.sensors.names.size(); ++i) {
         const World::Sensors& sensors = s.robot.world.sensors;
         char line[160];
-        constexpr std::array<const char*, 6> kKinds{"IMU",  "lidar",        "camera",
-                                                    "GNSS", "magnetometer", "barometer"};
+        constexpr std::array<const char*, 7> kKinds{"IMU",          "lidar",     "camera", "GNSS",
+                                                    "magnetometer", "barometer", "radar"};
         const char* kind = kKinds.at(static_cast<std::size_t>(sensors.type[i]));
         std::snprintf(line, sizeof(line), "%s %s on %s at %.0f Hz", kind, sensors.names[i].c_str(),
                       s.robot.world.bodies.names[sensors.body[i].index].c_str(), sensors.rateHz[i]);

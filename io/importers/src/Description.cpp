@@ -537,6 +537,10 @@ private:
                 prim.typeName = "Barometer";
                 prim.apiSchemas = {"SensorAPI_1", "BarometerAPI_1"};
                 break;
+            case SensorType::Radar:
+                prim.typeName = "Radar";
+                prim.apiSchemas = {"SensorAPI_1", "RadarAPI_1"};
+                break;
         }
         prim.body = body.index;
         prim.offset = mount;

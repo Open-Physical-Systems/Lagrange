@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_tutorial</name>
-  <version>0.5.0</version>
+  <version>0.6.0</version>
   <description>The code of the user guide (docs/guide/): the Odometer module of "Writing a module", a program that runs it on the sample AMR, and tests that keep both working.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>

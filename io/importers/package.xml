@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_importers</name>
-  <version>0.5.0</version>
+  <version>0.6.0</version>
   <description>Reads SDFormat and MJCF robot and world descriptions into Lagrange's world tables and scene, for the server to run and for lagrange_import to write as USD.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>

@@ -91,3 +91,50 @@ not link the backend (invariant 1).
 | Braking distance, dry and wet | `v² / (2·μ·g)` with ABS off and tyre curves on | 5 % |
 | Energy | drivetrain power balance | 1 % |
 | Sim-vs-real | a public vehicle-dynamics dataset with IMU, wheel speeds and steering (to be selected; license check) | reported per manoeuvre |
+
+## 8. Status (v0.6)
+
+`lagrange_vehicle_dynamics` (`modules/vehicle_dynamics/`): `VehicleDynamics` at 1 ms, a raycast
+vehicle on top of any rigid-body backend, and its `ideal` substitute (kinematic bicycle). Q10
+is settled for now: the model is our own, with no PhysX vehicle SDK.
+
+- **Wheels and suspension.** Each `WheelAPI_1` wheel is a spin joint under the chassis,
+  possibly through a steering knuckle. A ray down the chassis's up axis from its suspension
+  mount finds the ground through `services::SceneQuery`, and the spring, damper and bump stop
+  act along it.
+  - The model's wheel positions are the ride height: each spring is preloaded with its static
+    share of the weight, by the centre of mass between the axles.
+  - The ground is taken as level at the contact, since a ray gives no normal.
+  - Anti-roll bars move load across an axle in proportion to the travel difference.
+- **Tyres** (`Tyre.hpp`).
+  - `pacejka` (default): MF-Tyre 5.2 pure slip with load dependence and its combined-slip
+    weighting, from `.tir` files. Camber, shifts, conicity, ply steer, the aligning moment and
+    turn slip are not applied; the curves are made odd so the forces oppose the slip.
+  - `linear`: slip stiffnesses on a friction ellipse.
+  - Slip comes from first-order relaxation states integrated exactly over the step, with
+    damping blended in below 3 m/s.
+  - μ = the tyre's × the ground shape's friction × `env/friction_scale`.
+- **Brakes.** Torque per wheel by the axle bias, never more than stops the wheel within the
+  step, optional slip-limiting ABS.
+- **Steering.** Ackermann road-wheel angles from the bicycle angle (rate limit, first-order
+  lag). The steering joints are turned by a PD at 15 Hz; they are visual, since the tyre forces
+  use the computed angles.
+- **Powertrain.**
+  - `electric`: throttle × `vehicle:maxDriveTorque`, split equally (an open differential), as
+    `torque_command` to the driven wheels' motors or the electrical substitute.
+  - `ice_map`: full-throttle torque map, a clutch that slips below idle, an automatic gearbox
+    with shift speeds, final drive and efficiency; reverse is first gear backwards.
+- **Validation** (`test_vehicle_dynamics`, on MuJoCo):
+  - ride height and static loads;
+  - braking distance from 20 m/s within 5 % of v²/(2μg) (3.2 % long);
+  - steady-state yaw rate within 3 % of the linear bicycle model with its understeer gradient
+    (1.4 %);
+  - gear shifting;
+  - the ideal substitute.
+  - The Magic Formula's peak, slope and asymptote are exact (`test_tyre`).
+- **Owed:**
+  - a comparison with a published MF parameter set (no openly licensed `.tir` was found; the
+    sample `assets/tyres/generic_205_55R16.tir` is illustrative);
+  - the ISO manoeuvres as scenarios;
+  - sloped ground;
+  - the kinematic suspension.

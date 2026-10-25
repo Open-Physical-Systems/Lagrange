@@ -1,0 +1,147 @@
+#usda 1.0
+(
+    defaultPrim = "sedan"
+    doc = """The sample sedan as a vehicle (domains/vehicle_dynamics.md): sedan_base.usda (made from
+    sedan.urdf by lagrange_import) at its ride height, with VehicleAPI_1 on the chassis and
+    WheelAPI_1 on the four spin joints. Electric, rear-wheel drive, 2000 N·m at the rear wheels
+    (a 150 kW motor through a 9:1 reduction), Magic Formula tyres from
+    assets/tyres/generic_205_55R16.tir. Illustrative values, not a real product."""
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    subLayers = [@./sedan_base.usda@]
+    upAxis = "Z"
+)
+
+over "sedan"
+{
+    double3 xformOp:translate = (0, 0, 0.316)    # the wheel centres' height at ride height
+
+    over "base_link" (
+        prepend apiSchemas = ["VehicleAPI_1"]
+    )
+    {
+        uniform token vehicle:powertrain = "electric"
+        double vehicle:maxDriveTorque = 2000           # N·m at the rear wheels
+        double vehicle:maxSteerAngle = 0.6             # rad, inner road wheel
+        double vehicle:steerRate = 0.8                 # rad/s
+        double vehicle:maxBrakeTorque = 8000           # N·m over the four wheels
+        double vehicle:brakeBias = 0.65
+        bool vehicle:abs = true
+        double vehicle:antiRollStiffnessFront = 20000  # N/m
+        double vehicle:antiRollStiffnessRear = 10000   # N/m
+
+        # A 77 GHz front radar behind the bumper: ±45° by ±7.5°, 2° resolution, 150 m.
+        # Illustrative values, not a product's datasheet.
+        def Xform "front_radar" (
+            prepend apiSchemas = ["SensorAPI_1", "RadarAPI_1"]
+        )
+        {
+            double sensor:rate = 20
+            double sensor:radar:rangeMax = 150
+            double sensor:radar:azimuthFov = 1.5708
+            double sensor:radar:elevationFov = 0.2618
+            double sensor:radar:azimuthResolution = 0.035
+            double sensor:radar:rangeResolution = 0.2
+            double sensor:radar:velocityResolution = 0.1
+            double sensor:radar:txPower = 0.01           # W (10 dBm)
+            double sensor:radar:antennaGain = 100        # 20 dBi
+            # Effective noise after processing: k·T·B·F over 1 GHz with F = 10 dB is 4e-11 W, less
+            # 40 dB of coherent gain over the chirps and samples (illustrative).
+            double sensor:radar:noiseFloor = 4e-15       # W
+            double sensor:radar:detectionThreshold = 10  # 10 dB
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (2.3, 0, 0.1)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+        }
+
+        # The front camera's sensor model (sensors.md §2): a rolling-shutter automotive imager
+        # with auto exposure, a mild barrel lens and vignetting. Illustrative values, not a
+        # product's datasheet.
+        over "camera_link"
+        {
+            over "front_camera"
+            {
+                uniform token sensor:camera:shutter = "rolling"
+                double sensor:camera:rollingShutterTime = 0.02     # s, first row to last
+                double sensor:camera:exposureTime = 0.01           # s, the longest
+                bool sensor:camera:autoExposure = true
+                double sensor:camera:electronRate = 2000000        # e⁻/s at full white
+                double sensor:camera:readNoiseStd = 3              # e⁻
+                double sensor:camera:fullWellCapacity = 10000      # e⁻
+                int sensor:camera:bitDepth = 12
+                uniform token sensor:camera:distortionModel = "plumb_bob"
+                double[] sensor:camera:distortionCoeffs = [-0.12, 0.02, 0, 0, 0]
+                double sensor:camera:vignetting = 0.5
+            }
+        }
+    }
+
+    over "joints"
+    {
+        over "front_left_spin" (
+            prepend apiSchemas = ["WheelAPI_1"]
+        )
+        {
+            double wheel:radius = 0.316
+            double wheel:width = 0.205
+            uniform token wheel:axle = "front"
+            bool wheel:steered = true
+            bool wheel:driven = false
+            rel wheel:steerJoint = </sedan/joints/front_left_steer>
+            asset wheel:tyre = @../../tyres/generic_205_55R16.tir@
+            double wheel:restLength = 0.25        # m, mount to wheel centre at ride height
+            double wheel:travel = 0.09            # m to the bump stop
+            double wheel:springStiffness = 30000  # N/m at the wheel
+            double wheel:damping = 3000           # N·s/m
+        }
+
+        over "front_right_spin" (
+            prepend apiSchemas = ["WheelAPI_1"]
+        )
+        {
+            double wheel:radius = 0.316
+            double wheel:width = 0.205
+            uniform token wheel:axle = "front"
+            bool wheel:steered = true
+            bool wheel:driven = false
+            rel wheel:steerJoint = </sedan/joints/front_right_steer>
+            asset wheel:tyre = @../../tyres/generic_205_55R16.tir@
+            double wheel:restLength = 0.25        # m, mount to wheel centre at ride height
+            double wheel:travel = 0.09            # m to the bump stop
+            double wheel:springStiffness = 30000  # N/m at the wheel
+            double wheel:damping = 3000           # N·s/m
+        }
+
+        over "rear_left_spin" (
+            prepend apiSchemas = ["WheelAPI_1"]
+        )
+        {
+            double wheel:radius = 0.316
+            double wheel:width = 0.205
+            uniform token wheel:axle = "rear"
+            bool wheel:steered = false
+            bool wheel:driven = true
+            asset wheel:tyre = @../../tyres/generic_205_55R16.tir@
+            double wheel:restLength = 0.25        # m, mount to wheel centre at ride height
+            double wheel:travel = 0.09            # m to the bump stop
+            double wheel:springStiffness = 30000  # N/m at the wheel
+            double wheel:damping = 3000           # N·s/m
+        }
+
+        over "rear_right_spin" (
+            prepend apiSchemas = ["WheelAPI_1"]
+        )
+        {
+            double wheel:radius = 0.316
+            double wheel:width = 0.205
+            uniform token wheel:axle = "rear"
+            bool wheel:steered = false
+            bool wheel:driven = true
+            asset wheel:tyre = @../../tyres/generic_205_55R16.tir@
+            double wheel:restLength = 0.25        # m, mount to wheel centre at ride height
+            double wheel:travel = 0.09            # m to the bump stop
+            double wheel:springStiffness = 30000  # N/m at the wheel
+            double wheel:damping = 3000           # N·s/m
+        }
+    }
+}

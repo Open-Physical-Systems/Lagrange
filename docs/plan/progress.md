@@ -11,8 +11,8 @@ flowchart LR
     v03["v0.3<br/>arms + electrical<br/>MoveIt 2<br/><b>released 2026-10-25</b>"]:::done
     v04["v0.4<br/>drones<br/>PX4 / ArduPilot SITL<br/><b>released 2026-10-25</b>"]:::done
     v05["v0.5<br/>weather + EMI + comms<br/><b>released 2026-10-25</b>"]:::done
-    v06["v0.6<br/>cars, autonomous cars<br/>OpenDRIVE, Autoware<br/><b>next</b>"]:::now
-    v07["v0.7<br/>huge worlds"]:::todo
+    v06["v0.6<br/>cars, autonomous cars<br/>OpenDRIVE, Autoware<br/><b>released 2026-10-25</b>"]:::done
+    v07["v0.7<br/>huge worlds<br/><b>next</b>"]:::now
     v10["v1.0<br/>stable schemas + plugin ABI<br/>ros-lyrical-* debs"]:::todo
     v01 --> v02 --> v03 --> v04 --> v05 --> v06 --> v07 --> v10
 
@@ -117,6 +117,69 @@ E8). Release notes and acceptance evidence: `docs/release/v0.3.0.md`. Owed withi
 a motor heat run (Q16; the battery is checked against published cell data since 2026-10-25,
 from 35 % state of charge up), the drive-design
 review of the motor constants, FMI 2.0 FMUs (Q8), Jolt's wheel slip. Released as `v0.3.0` on 2026-10-25 at the owner's request, after v0.2.0.
+
+## v0.6 status (2026-10-25)
+
+Every v0.6 plan step is done. Release notes (draft) and acceptance evidence:
+`docs/release/v0.6.0.md`. Left out by the owner's decision: the PhysX backend, SUMO and esmini.
+Owed within the epics: a published MF tyre set and the ISO manoeuvres, zero-copy ROS output,
+hardware ray-query radar and an RTF metric, the ASAM example scenarios and catalogs, the
+pedestrian fundamental diagram, lights drawn and pedestrians crossing, and a run with Autoware
+itself. Released as `v0.6.0` on 2026-10-25 at the owner's request.
+
+## v0.6 plan (2026-10-25)
+
+The owner started v0.6 (cars and autonomous cars; roadmap §7) on 2026-10-25 with `/loop finish
+v0.6`. Gated merges are pre-approved as in v0.5. No new external engines: PhysX 5, SUMO and
+esmini are not added. Autoware: a bridge on Autoware's topics, tested with a stand-in, with the
+fallback documented if Autoware is not available for Lyrical.
+
+1. Schemas: `VehicleAPI_1` (chassis: powertrain, steering, brakes) and `WheelAPI_1` (wheel
+   joints: radius, tyre, suspension, steered, driven, braked); traffic-light and road-network
+   schemas as the later steps need them (vehicle library **done** 2026-10-25)
+2. Tyre models: linear and Pacejka Magic Formula with `.tir` import, checked against a
+   published parameter set (**done** 2026-10-25, but the published-set comparison is owed: no
+   openly licensed `.tir` was found; the curves' analytic properties are checked)
+3. `modules/vehicle_dynamics`: wheel-ground queries through `services::SceneQuery`, suspension,
+   tyres, brakes, Ackermann steering, electric and engine-map powertrains, the `ideal`
+   (kinematic bicycle) substitute; ISO manoeuvres and braking distance as tests (module
+   **done** 2026-10-25, vehicle_dynamics.md §8: braking distance and steady cornering checked;
+   the server wiring comes with the sample sedan; ISO manoeuvres owed)
+4. Sample sedan and a city block world, profiles, driving over ROS 2 (`/cmd_vel` or an Ackermann
+   command) (**done** 2026-10-25: `assets/robots/sedan/` (URDF, imported USD, vehicle layer),
+   `assets/worlds/city_block/`, `profiles/examples/sedan_city.yaml`; `/cmd_vel` through the car
+   controller, a closed-loop demo circle until the first command; the loader names robots by
+   their top prim. An Ackermann message type is owed)
+5. `io/opendrive`: road network to USD meshes and lane tables (own reader) (**done** 2026-10-25:
+   `lagrange_opendrive` and `lagrange_opendrive_import`, `RoadLaneAPI_1` (new `road` schema
+   library), formats.md §3.11; the city block's roads from `city_block.xodr`, lanes checked to
+   meet end to start. Owed: superelevation, lane heights, objects and signals; driving on
+   elevated roads)
+6. `modules/traffic`, `builtin` backend: lane-following vehicles, social-force pedestrians,
+   traffic lights, as kinematic bodies (**done** 2026-10-25: `lagrange_traffic`, traffic.md §8;
+   kinematic bodies in MuJoCo and Jolt; `--traffic`; the city block runs 8 vehicles and 6
+   pedestrians by default. Owed: lights drawn, pedestrians crossing, priority rules)
+7. `io/openscenario`: a built-in runner for a subset of OpenSCENARIO 1.x (**done** 2026-10-25:
+   `lagrange_openscenario`, `--scenario`, traffic.md §8.1; the lane graph moved to
+   `core/world/RoadLanes.hpp`; `RoadLaneAPI_1` gained the section's s range; sample
+   `assets/scenarios/cut_in.xosc`. Owed: catalogs, routing and trajectories, the ASAM examples)
+8. Sensors: radar; camera model (exposure, noise, distortion, rolling shutter) (radar **done**
+   2026-10-25: `RadarAPI_1`, `lagrange_sensors`' radar by ray launching, sensors.md §2, the
+   sedan's front radar, `/<name>/detections`. Owed: rain attenuation, multipath) (camera model
+   **done** 2026-10-25: `CameraModel` (lens, vignetting, rotational rolling shutter, exposure and
+   noise, auto exposure), sensors.md §2, the sedan's front camera. Owed: motion blur, a light
+   model, demosaicing)
+9. Autoware bridge (interface and stand-in test) (**done** 2026-10-25: `lagrange_autoware`
+   (`bridges/autoware`): Autoware's control, gear, indicator commands and control-mode service
+   to the server's new `/ackermann_cmd`, and the vehicle reports and kinematic state back;
+   built only with `autoware_msgs` 1.11.0 (no Lyrical binary of `autoware_vehicle_msgs`);
+   stand-in test and a hand run with the sedan; docs/guide/autoware.md has the fallback. Owed:
+   a run with Autoware itself once it is released for Lyrical)
+10. Tutorial, release notes (**done** 2026-10-25: `docs/guide/tutorial-cars.md`, run by
+    `tools/ci/tutorial_cars.sh`; `docs/release/v0.6.0.md` drafted, not released)
+
+Owed by the owner's decision: the PhysX backend, SUMO co-simulation, esmini. Zero-copy ROS
+output (CUDA `rosidl::Buffer`) when the steps above leave time.
 
 ## v0.5 status (2026-10-25)
 
@@ -391,6 +454,10 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 | electrical network (fallback doc fix) | `schemas/` (documentation of `elec:backEmfConstant`'s fallback corrected to Kt/1.5 for dq machines; changelog entry) | No attribute changed; the network refuses an authored Ke that disagrees with Kt by over 3 % |
 | raster camera sensor | `schemas/` (`CameraSensorAPI_1` in the sensor library, from formats.md §3.8, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-24 for autonomous work. Applied to a UsdGeomCamera, whose lens gives the field of view |
 | geo sensor schemas | `schemas/` (`GnssAPI_1`, `MagnetometerAPI_1`, `BarometerAPI_1` in the sensor library, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4 |
+| v0.6 road schema | `schemas/` (new `road` library: `RoadLaneAPI_1` with `lane:sStart`/`lane:sEnd`, formats.md §3.11; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.6. New library, nothing to migrate |
+| v0.6 radar schema | `schemas/` (`RadarAPI_1` in the sensor library, formats.md §3.8; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.6. New schema, nothing to migrate |
+| v0.6 camera schema additions | `schemas/` (`CameraSensorAPI_1`: `electronRate`, `vignetting`, formats.md §3.8; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.6. Additions, nothing to migrate |
+| v0.6 vehicle schemas | `schemas/` (new `vehicle` library: `VehicleAPI_1`, `WheelAPI_1`, formats.md §3.10; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.6. New library, nothing to migrate |
 | v0.5 schema libraries | `schemas/` (new `weather`, `emi`, `sensor_material`, `comms` libraries: `WeatherAPI_1`, `EmiSourceAPI_1`, `EmiSusceptibilityAPI_1`, `SensorMaterialAPI_1` from formats.md §3.4, §3.5, §3.7, and new `RadioLinkAPI_1`, `CanBusAPI_1` (§3.9); changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.5. Additions to the drafts listed in the changelog |
 | propeller files on rotors | `schemas/` (`RotorAPI_1`: `aero:rotor:propeller` replaces the unused `aero:rotor:bladeTable`, new `aero:rotor:mount`, `aero:rotor:direction` documented as the motor's sense; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4. `RotorAPI_1` is unreleased, so no migration |
 | aerodynamics schemas | `schemas/` (new `schemas/aero` library: `AeroAPI_1`, `RotorAPI_1` from formats.md §3.3, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4. Two documentation additions to the draft, listed in the changelog |

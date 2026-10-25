@@ -570,6 +570,8 @@ const char* sensorSchema(SensorType kind) {
             return "MagnetometerAPI_1";
         case SensorType::Barometer:
             return "BarometerAPI_1";
+        case SensorType::Radar:
+            return "RadarAPI_1";
         case SensorType::Imu:
             break;
     }
@@ -696,6 +698,9 @@ Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
     const std::size_t firstJoint = robot.world.joints.names.size();
     Builder builder(*model, options, robot, std::filesystem::path(path).parent_path().string());
     builder.setActuated(commandedJoints(path));
+    // This URDF's bodies are one robot, named after it.
+    const auto robotIndex = static_cast<std::uint32_t>(robot.world.robots.size());
+    robot.world.robots.push_back(model->getName().empty() ? "robot" : model->getName());
 
     ScenePrim top;
     top.name = model->getName().empty() ? "robot" : model->getName();
@@ -718,6 +723,9 @@ Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
         robot.world.addJoint(root->name + "_floating", JointType::Free,
                              BodyId{static_cast<std::uint32_t>(firstBody)}, {0.0, 0.0, 1.0}, false);
         robot.scene.prims[topPrim].body = static_cast<std::uint32_t>(firstBody);
+    }
+    for (std::size_t b = firstBody; b < robot.world.bodies.names.size(); ++b) {
+        robot.world.bodies.robot[b] = robotIndex;
     }
     for (std::size_t j = firstJoint; j < robot.world.joints.names.size(); ++j) {
         robot.jointPrim.push_back(robot.bodyPrim.at(robot.world.joints.child[j].index));
@@ -812,6 +820,20 @@ std::array<double, 3> recentre(Robot& robot, double rebaseDistanceM) {
             prim.offset.position[2] -= shift[2];
         } else {
             move(prim.offset);
+        }
+    }
+    // Prims fixed in the world (EMI sources, radios), and road lanes' centre lines.
+    for (std::size_t p = 0; p < world.prims.body.size(); ++p) {
+        if (world.prims.body[p] == kWorldBody) {
+            move(world.prims.poseInBody[p]);
+        }
+    }
+    for (SchemaInstance& instance : world.schemaInstances) {
+        if (const auto it = instance.realArrays.find("lane:centreLine");
+            it != instance.realArrays.end()) {
+            for (std::size_t i = 0; i < it->second.size(); ++i) {
+                it->second[i] -= shift.at(i % 3);
+            }
         }
     }
     coords::applyRebase(world.region, shift);

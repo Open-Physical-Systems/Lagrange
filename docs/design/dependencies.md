@@ -159,6 +159,8 @@ reads recordings. See open question Q4 for how the mock server gets scene conten
 | `robot_state_publisher`, `launch_ros` | `lagrange_demos` (exec only) | 3.5.6, 0.29.9 | BSD, Apache-2.0 |
 | `mavlink` | `lagrange_mavlink` (PX4 SITL bridge): the generated C headers of `common.xml` | 2026.9.9 | The generator is (L)GPL-3; generated code embedded in a binary is MIT under the package's generator-output exception (`share/mavlink/COPYING.txt`), so no LGPL code is in what we ship. Header-only |
 | PX4 Autopilot (not a build dependency) | the v0.4 mission: SITL built from source, v1.17.0 (the latest stable release, 13 May 2026) | v1.17.0 | BSD-3-Clause. Built on the host under `~/PX4-Autopilot` (`make px4_sitl_default`, Python deps from its `Tools/setup/requirements.txt`); run as its own process, never linked |
+| `ackermann_msgs` | `lagrange_ros2` (`/ackermann_cmd` for road vehicles), `lagrange_autoware` | 2.0.2 | BSD (package.xml) |
+| `autoware_control_msgs`, `autoware_vehicle_msgs` | `lagrange_autoware` (optional: built only when both are found, asked for with `LAGRANGE_AUTOWARE=on`) | `autoware_control_msgs` 1.11.0 as `ros-lyrical-autoware-control-msgs`; `autoware_vehicle_msgs` has no Lyrical binary (apt, 2026-10-25), so both are built from the `autoware_msgs` 1.11.0 tag in an underlay | Apache-2.0 (the repository's `LICENSE` at 1.11.0, checked 2026-10-25). Messages only; Autoware itself runs as its own processes (docs/guide/autoware.md) |
 | Test-only: `moveit`, `ros2_controllers`, `mavros` | integration tests and demos | 2.15.2, 6.9.0, 2.15.1 | `<test_depend>` or demo packages only |
 
 The viewer package (`lagrange_viewer`) depends on `ament_cmake` and `ament_index_cpp` for build

@@ -139,6 +139,13 @@ Status MujocoBackend::declare(const WorldView& world, const ModuleConfig& config
             spec(base + "/twist", SignalType::Wrench, units::m_per_s, "world_local"));
         s.acceleration = declarer.output(
             spec(base + "/acceleration", SignalType::Wrench, units::m_per_s2, "body"));
+        if (b < bodies.kinematic.size() && bodies.kinematic[b]) {
+            // Optional: without a command it stays where it is.
+            SignalSpec command =
+                spec(base + "/pose_command", SignalType::Pose, units::m, "world_local");
+            command.optional = true;
+            s.poseCommand = declarer.input(command);
+        }
         bodies_.push_back(s);
     }
     SignalSpec friction = spec("env/friction_scale", SignalType::Scalar, units::one);
@@ -188,6 +195,15 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
                 std::copy(bodies.inertiaLocal[b].begin(), bodies.inertiaLocal[b].end(),
                           body->fullinertia);
                 body->explicitinertial = 1;
+            }
+            if (b < bodies.kinematic.size() && bodies.kinematic[b]) {
+                if (parent != kWorldBody) {
+                    mj_deleteSpec(spec);
+                    return Status::error(
+                        StatusCode::InvalidConfig,
+                        "kinematic body \"" + bodies.names[b] + "\" must hang from the world");
+                }
+                body->mocap = 1;  // moved by its pose command
             }
             made[b] = body;
             progress = true;
@@ -316,7 +332,10 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
     }
     for (BodySignals& s : bodies_) {
         s.mujocoBody = mj_name2id(model_, mjOBJ_BODY, bodies.names[s.body].c_str());
+        s.mocap = model_->body_mocapid[s.mujocoBody];
     }
+    dt_ = dt.seconds();
+    lastKinematicPose_.assign(bodies_.size(), {});
     baseFriction_.resize(static_cast<std::size_t>(model_->ngeom));
     for (int g = 0; g < model_->ngeom; ++g) {
         baseFriction_[static_cast<std::size_t>(g)] = model_->geom_friction[3 * g];
@@ -338,6 +357,14 @@ Status MujocoBackend::step(const StepContext& /*context*/, SignalBus& bus) {
     for (const BodySignals& s : bodies_) {
         const std::span<const double> wrench = bus.readN(s.externalWrench);
         std::copy(wrench.begin(), wrench.end(), data_->xfrc_applied + 6 * s.mujocoBody);
+        if (s.mocap >= 0 && s.poseCommand.valid()) {
+            const std::span<const double> p = bus.readN(s.poseCommand);
+            const double norm = p[3] * p[3] + p[4] * p[4] + p[5] * p[5] + p[6] * p[6];
+            if (norm > 0.5) {  // an unset (zero) command keeps the body where it is
+                std::copy_n(p.begin(), 3, data_->mocap_pos + 3 * s.mocap);
+                std::copy_n(p.begin() + 3, 4, data_->mocap_quat + 4 * s.mocap);
+            }
+        }
     }
     const double scale = bus.read(frictionScale_);
     if (scale != appliedFrictionScale_) {
@@ -378,12 +405,38 @@ void MujocoBackend::writeOutputs(SignalBus& bus) const {
         bus.write(s.effectiveInertia, data_->M[last]);
         bus.write(s.constraintTorque, data_->qfrc_constraint[dof]);
     }
-    for (const BodySignals& s : bodies_) {
+    for (std::size_t i = 0; i < bodies_.size(); ++i) {
+        const BodySignals& s = bodies_[i];
         const int b = s.mujocoBody;
         std::array<double, 7> pose{};
         std::copy_n(data_->xpos + 3 * b, 3, pose.begin());
         std::copy_n(data_->xquat + 4 * b, 4, pose.begin() + 3);
         bus.writeN(s.pose, pose);
+        if (s.mocap >= 0) {
+            // A kinematic body's twist from its last two poses; no acceleration.
+            std::array<double, 7>& last = lastKinematicPose_[i];
+            std::array<double, 6> twist{};
+            if (last[3] != 0.0 || last[4] != 0.0 || last[5] != 0.0 || last[6] != 0.0) {
+                for (std::size_t k = 0; k < 3; ++k) {
+                    twist[k] = (pose[k] - last[k]) / dt_;
+                }
+                // ω = 2·(q·conj(q_last)).vec / dt, small-angle.
+                const std::array<double, 4> q{pose[3], pose[4], pose[5], pose[6]};
+                const std::array<double, 4> r{last[3], -last[4], -last[5], -last[6]};
+                const double w = q[0] * r[0] - q[1] * r[1] - q[2] * r[2] - q[3] * r[3];
+                const double sign = w < 0.0 ? -1.0 : 1.0;
+                twist[3] =
+                    sign * 2.0 * (q[0] * r[1] + q[1] * r[0] + q[2] * r[3] - q[3] * r[2]) / dt_;
+                twist[4] =
+                    sign * 2.0 * (q[0] * r[2] - q[1] * r[3] + q[2] * r[0] + q[3] * r[1]) / dt_;
+                twist[5] =
+                    sign * 2.0 * (q[0] * r[3] + q[1] * r[2] - q[2] * r[1] + q[3] * r[0]) / dt_;
+            }
+            last = pose;
+            bus.writeN(s.twist, twist);
+            bus.writeN(s.acceleration, std::array<double, 6>{});
+            continue;
+        }
 
         // MuJoCo gives (angular, linear); the Wrench layout is (linear, angular).
         std::array<double, 6> motion{};

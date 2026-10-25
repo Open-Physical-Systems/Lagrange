@@ -51,6 +51,8 @@ struct ProfileSettings {
     std::map<std::string, ConfigValue, std::less<>> weather;
     /// domains.emi.coupling: the victims the EMI domain disturbs (all when absent).
     std::optional<std::vector<std::string>> emiCoupling;
+    /// domains.vehicle_dynamics.tire_model: pacejka or linear.
+    std::optional<std::string> tireModel;
     std::optional<double> realTimeFactor;  // time.real_time_factor (0: as fast as possible)
 };
 

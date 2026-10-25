@@ -1,0 +1,56 @@
+[MDI_HEADER]
+FILE_TYPE                ='tir'
+FILE_VERSION             = 3.0
+FILE_FORMAT              ='ASCII'
+! Lagrange sample tyre (domains/vehicle_dynamics.md): a generic 205/55 R16 passenger-car tyre
+! for the Magic Formula of MF-Tyre 5.2. ILLUSTRATIVE: these coefficients were written for the
+! sample sedan to give a plausible dry-asphalt tyre (peak friction about 1.0, cornering
+! stiffness about 70 kN/rad at the nominal load); they are not fitted to measurements of any
+! real tyre. Combined-slip coefficients only; no camber, shifts or aligning moment.
+$-----------------------------------------------------------------------------------units
+[UNITS]
+LENGTH                   ='meter'
+FORCE                    ='newton'
+ANGLE                    ='radians'
+MASS                     ='kg'
+TIME                     ='second'
+$-------------------------------------------------------------------------------dimension
+[DIMENSION]
+UNLOADED_RADIUS          = 0.3159              $Free tyre radius
+WIDTH                    = 0.205               $Nominal section width
+$------------------------------------------------------------------------------vertical
+[VERTICAL]
+FNOMIN                   = 4000                $Nominal wheel load
+$-----------------------------------------------------------------------longitudinal
+[LONGITUDINAL_COEFFICIENTS]
+PCX1                     = 1.65                $Shape factor Cfx
+PDX1                     = 1.05                $Longitudinal friction Mux at Fznom
+PDX2                     = -0.08               $Variation of friction Mux with load
+PEX1                     = 0.20                $Longitudinal curvature Efx at Fznom
+PEX2                     = 0.10                $Variation of curvature Efx with load
+PEX3                     = 0.0                 $Variation of curvature Efx with load squared
+PEX4                     = 0.0                 $Factor in curvature Efx while driving
+PKX1                     = 21.0                $Longitudinal slip stiffness Kfx/Fz at Fznom
+PKX2                     = 0.0                 $Variation of slip stiffness Kfx/Fz with load
+PKX3                     = -0.30               $Exponent in slip stiffness Kfx/Fz with load
+RBX1                     = 20.0                $Slope factor for combined slip Fx reduction
+RBX2                     = -15.0               $Variation of slope Fx reduction with kappa
+RCX1                     = 1.0                 $Shape factor for combined slip Fx reduction
+REX1                     = 0.0                 $Curvature factor of combined Fx
+REX2                     = 0.0                 $Curvature factor of combined Fx with load
+$-----------------------------------------------------------------------------lateral
+[LATERAL_COEFFICIENTS]
+PCY1                     = 1.30                $Shape factor Cfy for lateral forces
+PDY1                     = 1.00                $Lateral friction Muy
+PDY2                     = -0.10               $Variation of friction Muy with load
+PEY1                     = -0.80               $Lateral curvature Efy at Fznom
+PEY2                     = -0.30               $Variation of curvature Efy with load
+PEY3                     = 0.0                 $Zero order camber dependency of curvature Efy
+PKY1                     = -17.5               $Maximum value of stiffness Kfy/Fznom
+PKY2                     = 1.9                 $Load at which Kfy reaches maximum value
+RBY1                     = 15.0                $Slope factor for combined Fy reduction
+RBY2                     = 10.0                 $Variation of slope Fy reduction with alpha
+RBY3                     = 0.0                 $Shift term for alpha in slope Fy reduction
+RCY1                     = 1.0                 $Shape factor for combined Fy reduction
+REY1                     = 0.0                 $Curvature factor of combined Fy
+REY2                     = 0.0                 $Curvature factor of combined Fy with load

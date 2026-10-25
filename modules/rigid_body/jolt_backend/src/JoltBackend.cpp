@@ -265,6 +265,7 @@ struct JoltBackend::Impl {
     struct Body {
         std::uint32_t body{0};
         SignalId pose, twist, acceleration, externalWrench;
+        SignalId poseCommand;               // kinematic bodies only
         std::array<double, 6> lastTwist{};  // world, at the body origin: for the acceleration
     };
     std::vector<Body> bodies;
@@ -576,6 +577,12 @@ Status JoltBackend::declare(const WorldView& world, const ModuleConfig& config,
             spec(base + "/acceleration", SignalType::Wrench, units::m_per_s2, "body"));
         out.externalWrench = declarer.input(
             flowInput(base + "/external_wrench", SignalType::Wrench, units::N, "world_local"));
+        if (b < bodies.kinematic.size() && bodies.kinematic[b]) {
+            SignalSpec command =
+                spec(base + "/pose_command", SignalType::Pose, units::m, "world_local");
+            command.optional = true;  // without a command it stays where it is
+            out.poseCommand = declarer.input(command);
+        }
         s.bodies.push_back(out);
     }
     SignalSpec friction = spec("env/friction_scale", SignalType::Scalar, units::one);
@@ -724,8 +731,11 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalBus& 
             shape = JPH::OffsetCenterOfMassShapeSettings(offset, made.Get()).Create().Get();
         }
         const Pose& at = rest[s.groups[g].root];
-        JPH::BodyCreationSettings settings(shape, JPH::RVec3(jv(at.position)), jq(at.orientation),
-                                           JPH::EMotionType::Dynamic, kMovingLayer);
+        const std::uint32_t root = s.groups[g].root;
+        const bool kinematic = root < bodies.kinematic.size() && bodies.kinematic[root];
+        JPH::BodyCreationSettings settings(
+            shape, JPH::RVec3(jv(at.position)), jq(at.orientation),
+            kinematic ? JPH::EMotionType::Kinematic : JPH::EMotionType::Dynamic, kMovingLayer);
         settings.mOverrideMassProperties = JPH::EOverrideMassProperties::MassAndInertiaProvided;
         settings.mMassPropertiesOverride.mMass = static_cast<float>(mass);
         JPH::Mat44 tensorJ = JPH::Mat44::sZero();
@@ -917,6 +927,21 @@ Status JoltBackend::step(const StepContext& context, SignalBus& bus) {
             bi.AddForce(id, jv({w[0], w[1], w[2]}));
             bi.AddTorque(id, jv({w[3], w[4], w[5]}));
         }
+    }
+
+    // Kinematic bodies move to their pose command over the step.
+    for (const Impl::Body& b : s.bodies) {
+        if (!b.poseCommand.valid()) {
+            continue;
+        }
+        const std::span<const double> p = bus.readN(b.poseCommand);
+        if (p[3] * p[3] + p[4] * p[4] + p[5] * p[5] + p[6] * p[6] < 0.5) {
+            continue;  // unset: stay
+        }
+        const JPH::BodyID id = s.groups.at(static_cast<std::size_t>(s.groupOf[b.body])).id;
+        // The body's origin is its group's root frame (a kinematic body hangs from the world).
+        bi.MoveKinematic(id, JPH::RVec3(jv({p[0], p[1], p[2]})), jq({p[3], p[4], p[5], p[6]}),
+                         static_cast<float>(context.dt.seconds()));
     }
 
     // env/friction_scale (wet floors, ...): every body's friction, as MuJoCo scales its geoms'.

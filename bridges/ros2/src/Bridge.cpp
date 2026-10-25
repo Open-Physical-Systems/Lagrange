@@ -42,6 +42,7 @@
 #include <thread>
 #include <variant>
 
+#include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
@@ -108,8 +109,13 @@ struct Bridge::Impl {
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr description;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmdVel;
     rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmdVelStamped;
+    rclcpp::Subscription<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr ackermannCmd;
 
     void take(const geometry_msgs::msg::Twist& twist) {
+        take(CmdVel{twist.linear.x, twist.angular.z, twist.linear.y, twist.linear.z, {}});
+    }
+
+    void take(const CmdVel& next) {
         const std::lock_guard<std::mutex> lock(commandMutex);
         auto delay = std::chrono::nanoseconds(0);
         if (commandGate.mapped) {
@@ -120,7 +126,6 @@ struct Bridge::Impl {
             }
             delay = std::chrono::nanoseconds(std::llround(commandGate.latency * 1e9));
         }
-        const CmdVel next{twist.linear.x, twist.angular.z, twist.linear.y, twist.linear.z};
         if (delay.count() > 0) {
             // The previous command stays in force until this one arrives.
             lateCommand = next;
@@ -241,6 +246,16 @@ struct Bridge::Impl {
     std::vector<Camera> cameras;
     std::vector<Imu> imus;
     std::vector<Geo> geos;
+    /// A radar's detections as sensor_msgs/PointCloud2 (x, y, z, velocity, rcs, snr: float32),
+    /// in the radar's frame, one point per detection (domains/sensors.md).
+    struct Radar {
+        std::string frame;
+        std::string topic;
+        SignalId detections, count;
+        SimTime sent{-1};
+        rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr publisher;
+    };
+    std::vector<Radar> radars;
     SignalId basePose, baseTwist;
     SimTime lastClock{-1};
     SimTime lastState{-1};
@@ -319,8 +334,15 @@ struct Bridge::Impl {
         out.info.header.frame_id = out.frame;
         out.info.width = static_cast<std::uint32_t>(width);
         out.info.height = static_cast<std::uint32_t>(height);
-        out.info.distortion_model = "plumb_bob";
-        out.info.d = {0.0, 0.0, 0.0, 0.0, 0.0};
+        // The lens of the sensor model (CameraModel.hpp), in the same OpenCV order.
+        const double lens = get("distortion_model", 0.0);
+        out.info.distortion_model = lens == 2.0 ? "equidistant" : "plumb_bob";
+        out.info.d.assign(lens == 2.0 ? 4 : 5, 0.0);
+        if (lens > 0.0) {
+            for (std::size_t k = 0; k < out.info.d.size(); ++k) {
+                out.info.d[k] = get(("distortion_k" + std::to_string(k + 1)).c_str(), 0.0);
+            }
+        }
         out.info.k = {f, 0.0, (width - 1.0) / 2.0, 0.0, f, (height - 1.0) / 2.0, 0.0, 0.0, 1.0};
         out.info.r = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
         out.info.p = {
@@ -447,6 +469,12 @@ Bridge::Bridge(BridgeSettings settings)
         s.cmdVel = s.node->create_subscription<geometry_msgs::msg::Twist>(
             "/cmd_vel", 10, [&s](const geometry_msgs::msg::Twist& twist) { s.take(twist); });
     }
+    if (settings_.ackermannCmd && !settings_.controllersOwnState) {
+        s.ackermannCmd = s.node->create_subscription<ackermann_msgs::msg::AckermannDriveStamped>(
+            "/ackermann_cmd", 10, [&s](const ackermann_msgs::msg::AckermannDriveStamped& drive) {
+                s.take(CmdVel{drive.drive.speed, 0.0, 0.0, 0.0, drive.drive.steering_angle});
+            });
+    }
     s.executor.add_node(s.node);
     s.spinner = std::thread([&s] { s.executor.spin(); });
 }
@@ -510,6 +538,7 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
     std::vector<Impl::Camera> cameras;
     std::vector<Impl::Imu> imus;
     std::vector<Impl::Geo> geos;
+    std::vector<Impl::Radar> radars;
     for (std::size_t i = 0; i < sensors.names.size(); ++i) {
         const std::string& name = sensors.names[i];
         geometry_msgs::msg::TransformStamped mount;
@@ -615,6 +644,22 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
                 }
             }
             geos.push_back(std::move(geo));
+        } else if (sensors.type[i] == SensorType::Radar) {
+            Impl::Radar radar;
+            radar.frame = name;
+            radar.topic = "/" + name + "/detections";
+            radar.detections = bus.find("sensor/" + name + "/detections");
+            radar.count = bus.find("sensor/" + name + "/count");
+            for (const Impl::Radar& old : s.radars) {
+                if (old.topic == radar.topic) {
+                    radar.publisher = old.publisher;
+                }
+            }
+            if (!radar.publisher) {
+                radar.publisher = s.node->create_publisher<sensor_msgs::msg::PointCloud2>(
+                    radar.topic, rclcpp::SensorDataQoS());
+            }
+            radars.push_back(std::move(radar));
         } else if (sensors.type[i] == SensorType::Imu) {
             Impl::Imu imu;
             imu.frame = name;
@@ -640,6 +685,7 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
     s.cameras = std::move(cameras);
     s.imus = std::move(imus);
     s.geos = std::move(geos);
+    s.radars = std::move(radars);
     s.lastClock = SimTime{-1};
     s.lastState = SimTime{-1};
     if (!mounts.transforms.empty()) {
@@ -800,6 +846,51 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
         }
         s.deliver(imu.topic, imu.publisher, message);
         s.counters[imu.topic].add(330);
+    }
+
+    for (Impl::Radar& radar : s.radars) {
+        if (!radar.detections.valid() || bus.stamp(radar.detections) == radar.sent) {
+            continue;
+        }
+        radar.sent = bus.stamp(radar.detections);
+        using sensor_msgs::msg::PointField;
+        sensor_msgs::msg::PointCloud2 cloud;
+        cloud.header.stamp = stampOf(radar.sent);
+        cloud.header.frame_id = radar.frame;
+        constexpr std::array<const char*, 6> kFields{"x", "y", "z", "velocity", "rcs", "snr"};
+        for (std::uint32_t f = 0; f < kFields.size(); ++f) {
+            PointField field;
+            field.name = kFields[f];
+            field.offset = 4 * f;
+            field.datatype = PointField::FLOAT32;
+            field.count = 1;
+            cloud.fields.push_back(field);
+        }
+        const std::span<const double> d = bus.readN(radar.detections);
+        const auto n = static_cast<std::uint32_t>(bus.read(radar.count));
+        cloud.height = 1;
+        cloud.width = n;
+        cloud.point_step = 4 * kFields.size();
+        cloud.row_step = cloud.point_step * n;
+        cloud.is_dense = true;
+        cloud.is_bigendian = false;
+        cloud.data.assign(static_cast<std::size_t>(cloud.row_step), 0);
+        for (std::uint32_t i = 0; i < n; ++i) {
+            // range, azimuth, elevation, radial velocity, rcs, snr → x, y, z, ...
+            const double r = d[6 * i];
+            const double az = d[6 * i + 1];
+            const double el = d[6 * i + 2];
+            const std::array<float, 6> values{static_cast<float>(r * std::cos(el) * std::cos(az)),
+                                              static_cast<float>(r * std::cos(el) * std::sin(az)),
+                                              static_cast<float>(r * std::sin(el)),
+                                              static_cast<float>(d[6 * i + 3]),
+                                              static_cast<float>(d[6 * i + 4]),
+                                              static_cast<float>(d[6 * i + 5])};
+            std::memcpy(cloud.data.data() + static_cast<std::size_t>(i) * cloud.point_step,
+                        values.data(), sizeof(values));
+        }
+        s.deliver(radar.topic, radar.publisher, std::move(cloud));
+        s.counters[radar.topic].add(24 * n + 64);
     }
 
     for (Impl::Geo& geo : s.geos) {

@@ -1,0 +1,17 @@
+#usda 1.0
+(
+    defaultPrim = "city_block"
+    doc = """A city block for the car samples (robot-classes.md, v0.6): a four-way junction with four
+    arms (two lanes each way, sidewalks, 50 km/h) and the buildings and poles around it. The roads
+    are city_block_roads.usda, converted from city_block.xodr (made by city_block_xodr.py) by
+    lagrange_opendrive_import --root roads --step 1, with RoadLaneAPI_1 lanes for traffic; the
+    buildings are city_block_buildings.usda, imported from city_block.urdf. The roads lie on the
+    ground plane that the loader adds."""
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    subLayers = [
+        @./city_block_buildings.usda@,
+        @./city_block_roads.usda@
+    ]
+    upAxis = "Z"
+)

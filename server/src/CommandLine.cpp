@@ -127,7 +127,12 @@ void printServerOptions(std::FILE* out) {
         "            (W/m²), sky_temperature (K), fog_field and wind_field (.nvdb files);\n"
         "            a profile's weather keys also set them\n"
         "  --domain D=off  replace domain D (rigid_body, electrical, thermal, weather, emi,\n"
-        "            comms, sensors) by its substitute\n"
+        "            comms, vehicle_dynamics, traffic, sensors) by its substitute\n"
+        "  --scenario FILE.xosc  run an OpenSCENARIO scenario (a subset of 1.x); its roads are "
+        "the\n"
+        "            world unless --world is given; its entity Ego (--scenario-ego) is the robot\n"
+        "  --traffic vehicles=N,pedestrians=M,seed=S  the builtin traffic on a world with road\n"
+        "            lanes (default 8, 6, 1; 0 and 0: none)\n"
         "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
         "            TwistStamped\n"
         "  --no-demo  stand still until the first /cmd_vel instead of driving the demo\n"
@@ -168,6 +173,7 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--world needs a file, or none";
             }
             options.worldPath = std::string_view(path) == "none" ? "" : path;
+            out.worldGiven = true;
         } else if (arg == "--overlay") {
             const char* path = value();
             if (path == nullptr) {
@@ -283,6 +289,47 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--air-density needs a density in kg/m³";
             }
             options.airDensityKgM3 = rho;
+        } else if (arg == "--scenario") {
+            const char* text = value();
+            if (text == nullptr) {
+                return "--scenario needs an OpenSCENARIO file (.xosc)";
+            }
+            options.scenarioPath = text;
+        } else if (arg == "--scenario-ego") {
+            const char* text = value();
+            if (text == nullptr) {
+                return "--scenario-ego needs the scenario entity that is the robot";
+            }
+            options.scenarioEgo = text;
+        } else if (arg == "--traffic") {
+            const char* text = value();
+            if (text == nullptr) {
+                return "--traffic needs vehicles=N,pedestrians=M,seed=S";
+            }
+            std::string_view rest = text;
+            while (!rest.empty()) {
+                const std::size_t comma = rest.find(',');
+                const std::string_view item = rest.substr(0, comma);
+                rest = comma == std::string_view::npos ? "" : rest.substr(comma + 1);
+                const std::size_t equals = item.find('=');
+                const std::string key(item.substr(0, equals));
+                const std::string number =
+                    equals == std::string_view::npos ? "" : std::string(item.substr(equals + 1));
+                char* end = nullptr;
+                const long long n = std::strtoll(number.c_str(), &end, 10);
+                if (number.empty() || *end != '\0' || n < 0) {
+                    return "--traffic: " + std::string(item) + " is not KEY=N (N ≥ 0)";
+                }
+                if (key == "vehicles") {
+                    options.trafficVehicles = static_cast<int>(n);
+                } else if (key == "pedestrians") {
+                    options.trafficPedestrians = static_cast<int>(n);
+                } else if (key == "seed") {
+                    options.trafficSeed = static_cast<std::uint64_t>(n);
+                } else {
+                    return "--traffic takes vehicles, pedestrians and seed, not " + key;
+                }
+            }
         } else if (arg == "--link-topics") {
             // A YAML map from a link (the receiving radio's prim) to the topics on it.
             const char* text = value();
@@ -371,10 +418,10 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 equals == std::string_view::npos ? "" : setting.substr(equals + 1);
             if ((domain != "rigid_body" && domain != "sensors" && domain != "electrical" &&
                  domain != "thermal" && domain != "weather" && domain != "emi" &&
-                 domain != "comms") ||
+                 domain != "comms" && domain != "vehicle_dynamics" && domain != "traffic") ||
                 (state != "on" && state != "off")) {
-                return "--domain takes rigid_body, electrical, thermal, weather, emi, comms or "
-                       "sensors =on|off";
+                return "--domain takes rigid_body, electrical, thermal, weather, emi, comms, "
+                       "vehicle_dynamics, traffic or sensors =on|off";
             }
             if (state == "off") {
                 options.substituted.insert(domain);
@@ -407,6 +454,9 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
     }
     if (thermalAsked && !options.ambientTemperatureK) {
         return "--domain thermal=on needs the site's ambient temperature: --ambient-temperature K";
+    }
+    if (!options.scenarioPath.empty() && !out.worldGiven) {
+        options.worldPath.clear();  // the scenario's own road network is the world
     }
     if (out.robotGiven && !out.overlayGiven &&
         std::filesystem::path(options.robotPath).filename() != "amr_diffdrive.urdf") {

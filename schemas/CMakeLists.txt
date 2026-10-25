@@ -17,6 +17,8 @@ set(LAGRANGE_SCHEMA_LIBRARIES
     emi
     sensor_material
     comms
+    vehicle
+    road
 )
 set(usd_env
     "PXR_PLUGINPATH_NAME=${CMAKE_CURRENT_SOURCE_DIR}/metadata"

@@ -264,6 +264,39 @@ private:
             camera.CreateClippingRangeAttr().Set(
                 GfVec2f(static_cast<float>(get("near_clip", 0.05)),
                         static_cast<float>(get("far_clip", 100.0))));
+            const auto token = [&prim](const char* name, const char* value) {
+                prim.CreateAttribute(TfToken(name), SdfValueTypeNames->Token, false,
+                                     SdfVariabilityUniform)
+                    .Set(TfToken(value));
+            };
+            if (const auto it = settings.find("rolling_shutter_time"); it != settings.end()) {
+                token("sensor:camera:shutter", "rolling");
+                real("sensor:camera:rollingShutterTime", it->second);
+            }
+            if (const double model = get("distortion_model", 0.0); model > 0.0) {
+                token("sensor:camera:distortionModel", model == 1.0 ? "plumb_bob" : "equidistant");
+                VtArray<double> coeffs;
+                for (int k = 1; k <= (model == 1.0 ? 5 : 4); ++k) {
+                    coeffs.push_back(get(("distortion_k" + std::to_string(k)).c_str(), 0.0));
+                }
+                prim.CreateAttribute(TfToken("sensor:camera:distortionCoeffs"),
+                                     SdfValueTypeNames->DoubleArray)
+                    .Set(coeffs);
+            }
+            if (const auto it = settings.find("vignetting"); it != settings.end()) {
+                real("sensor:camera:vignetting", it->second);
+            }
+            if (const auto it = settings.find("exposure_time"); it != settings.end()) {
+                real("sensor:camera:exposureTime", it->second);
+                prim.CreateAttribute(TfToken("sensor:camera:autoExposure"), SdfValueTypeNames->Bool)
+                    .Set(get("auto_exposure", 0.0) != 0.0);
+                real("sensor:camera:electronRate", get("electron_rate", 0.0));
+                real("sensor:camera:gain", get("gain", 1.0));
+                real("sensor:camera:readNoiseStd", get("read_noise", 2.0));
+                real("sensor:camera:fullWellCapacity", get("full_well", 10000.0));
+                prim.CreateAttribute(TfToken("sensor:camera:bitDepth"), SdfValueTypeNames->Int)
+                    .Set(static_cast<int>(get("bit_depth", 8.0)));
+            }
         } else if (sensors.type[s] == SensorType::Gnss) {
             prim.ApplyAPI(TfToken("GnssAPI_1"));
             real("sensor:gnss:horizontalNoiseStd", get("horizontal_noise", 0.0));
@@ -275,6 +308,25 @@ private:
         } else if (sensors.type[s] == SensorType::Barometer) {
             prim.ApplyAPI(TfToken("BarometerAPI_1"));
             real("sensor:barometer:noiseStd", get("noise", 0.0));
+        } else if (sensors.type[s] == SensorType::Radar) {
+            prim.ApplyAPI(TfToken("RadarAPI_1"));
+            for (const auto& [key, attribute] :
+                 {std::pair{"carrier_frequency", "sensor:radar:carrierFrequency"},
+                  std::pair{"max_range", "sensor:radar:rangeMax"},
+                  std::pair{"azimuth_fov", "sensor:radar:azimuthFov"},
+                  std::pair{"elevation_fov", "sensor:radar:elevationFov"},
+                  std::pair{"azimuth_resolution", "sensor:radar:azimuthResolution"},
+                  std::pair{"range_resolution", "sensor:radar:rangeResolution"},
+                  std::pair{"velocity_resolution", "sensor:radar:velocityResolution"},
+                  std::pair{"tx_power", "sensor:radar:txPower"},
+                  std::pair{"antenna_gain", "sensor:radar:antennaGain"},
+                  std::pair{"noise_floor", "sensor:radar:noiseFloor"},
+                  std::pair{"detection_threshold", "sensor:radar:detectionThreshold"}}) {
+                if (const auto it = sensors.settings[s].find(key);
+                    it != sensors.settings[s].end()) {
+                    real(attribute, it->second);
+                }
+            }
         } else {
             prim.ApplyAPI(TfToken("ImuAPI_1"));
             real("sensor:imu:accelNoiseStd", get("accel_noise", 0.0));

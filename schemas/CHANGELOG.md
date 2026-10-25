@@ -5,6 +5,25 @@ every schema is version 1 and may change without a migration.
 
 ## Unreleased
 
+- **`CameraSensorAPI_1`** gains `electronRate` (e⁻/s at the renderer's full white: the light
+  level the raster level does not model) and `vignetting` (fraction of the cos⁴θ fall-off) for
+  the v0.6 sensor model (formats.md §3.8); `exposureTime` is now the longest exposure with
+  `autoExposure`. Additions with no effect on existing files.
+
+- **`RadarAPI_1`** in the sensor library for v0.6 (formats.md §3.8): carrier frequency, range,
+  fields of view, resolutions, transmit power, antenna gain, effective noise floor, detection
+  threshold; `bandwidth` as drafted is left out (the range resolution stands for it).
+
+- **Road library** for v0.6 (formats.md §3.11): `RoadLaneAPI_1`, one lane of a road network
+  (centre line in the direction of travel, widths, type, speed limit, OpenDRIVE road and lane
+  ids, the section's range along the road, successors and predecessors), written by the
+  OpenDRIVE importer.
+
+- **Vehicle library** for v0.6 (formats.md §3.10): `VehicleAPI_1` on a chassis body
+  (powertrain, steering, brakes, anti-roll bars, the engine map and gears of an `ice_map`
+  powertrain) and `WheelAPI_1` on a wheel's spin joint (radius, axle, steered and driven, tyre
+  file or linear stiffnesses, friction, relaxation length, suspension).
+
 - **Weather, EMI, sensor-material and comms libraries** for v0.5: `WeatherAPI_1`,
   `EmiSourceAPI_1`, `EmiSusceptibilityAPI_1`, `SensorMaterialAPI_1` as drafted in formats.md
   §3.4, §3.5 and §3.7, and new `RadioLinkAPI_1` and `CanBusAPI_1` (§3.9). Additions to the

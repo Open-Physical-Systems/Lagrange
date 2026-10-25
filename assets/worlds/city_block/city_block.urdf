@@ -1,0 +1,235 @@
+<?xml version="1.0"?>
+<!--
+  The city block's buildings (robot-classes.md, v0.6): twelve buildings set back from the
+  roads and four poles at the junction's corners, fixed to the ground (root link "world"),
+  primitives only. The roads come from city_block.xodr; city_block.usda puts the two together.
+-->
+<robot name="city_block">
+  <material name="building"><color rgba="0.72 0.68 0.6 1"/></material>
+  <material name="metal"><color rgba="0.35 0.36 0.38 1"/></material>
+  <link name="world"/>
+  <link name="building_ne_tower">
+    <visual>
+      <geometry><box size="16 16 30"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="16 16 30"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_ne_tower_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_ne_tower"/>
+    <origin xyz="22 22 15.15"/>
+  </joint>
+  <link name="building_ne_low">
+    <visual>
+      <geometry><box size="20 14 9"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="20 14 9"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_ne_low_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_ne_low"/>
+    <origin xyz="46 21 4.65"/>
+  </joint>
+  <link name="building_ne_rear">
+    <visual>
+      <geometry><box size="30 18 14"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="30 18 14"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_ne_rear_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_ne_rear"/>
+    <origin xyz="32 46 7.15"/>
+  </joint>
+  <link name="building_nw_hall">
+    <visual>
+      <geometry><box size="22 18 12"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="22 18 12"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_nw_hall_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_nw_hall"/>
+    <origin xyz="-25 23 6.15"/>
+  </joint>
+  <link name="building_nw_flats">
+    <visual>
+      <geometry><box size="16 26 18"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="16 26 18"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_nw_flats_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_nw_flats"/>
+    <origin xyz="-48 33 9.15"/>
+  </joint>
+  <link name="building_nw_shop">
+    <visual>
+      <geometry><box size="14 10 6"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="14 10 6"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_nw_shop_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_nw_shop"/>
+    <origin xyz="-21 46 3.15"/>
+  </joint>
+  <link name="building_sw_office">
+    <visual>
+      <geometry><box size="18 18 22"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="18 18 22"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_sw_office_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_sw_office"/>
+    <origin xyz="-23 -23 11.15"/>
+  </joint>
+  <link name="building_sw_depot">
+    <visual>
+      <geometry><box size="28 16 8"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="28 16 8"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_sw_depot_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_sw_depot"/>
+    <origin xyz="-40 -48 4.15"/>
+  </joint>
+  <link name="building_sw_block">
+    <visual>
+      <geometry><box size="12 12 15"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="12 12 15"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_sw_block_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_sw_block"/>
+    <origin xyz="-48 -21 7.65"/>
+  </joint>
+  <link name="building_se_mall">
+    <visual>
+      <geometry><box size="26 20 10"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="26 20 10"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_se_mall_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_se_mall"/>
+    <origin xyz="27 -24 5.15"/>
+  </joint>
+  <link name="building_se_tower">
+    <visual>
+      <geometry><box size="14 14 40"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="14 14 40"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_se_tower_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_se_tower"/>
+    <origin xyz="48 -45 20.15"/>
+  </joint>
+  <link name="building_se_house">
+    <visual>
+      <geometry><box size="10 10 7"/></geometry>
+      <material name="building"/>
+    </visual>
+    <collision>
+      <geometry><box size="10 10 7"/></geometry>
+    </collision>
+  </link>
+  <joint name="building_se_house_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="building_se_house"/>
+    <origin xyz="22 -48 3.65"/>
+  </joint>
+  <link name="pole_0">
+    <visual>
+      <geometry><box size="0.25 0.25 6"/></geometry>
+      <material name="metal"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.25 0.25 6"/></geometry>
+    </collision>
+  </link>
+  <joint name="pole_0_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="pole_0"/>
+    <origin xyz="11 11 3.15"/>
+  </joint>
+  <link name="pole_1">
+    <visual>
+      <geometry><box size="0.25 0.25 6"/></geometry>
+      <material name="metal"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.25 0.25 6"/></geometry>
+    </collision>
+  </link>
+  <joint name="pole_1_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="pole_1"/>
+    <origin xyz="-11 11 3.15"/>
+  </joint>
+  <link name="pole_2">
+    <visual>
+      <geometry><box size="0.25 0.25 6"/></geometry>
+      <material name="metal"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.25 0.25 6"/></geometry>
+    </collision>
+  </link>
+  <joint name="pole_2_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="pole_2"/>
+    <origin xyz="-11 -11 3.15"/>
+  </joint>
+  <link name="pole_3">
+    <visual>
+      <geometry><box size="0.25 0.25 6"/></geometry>
+      <material name="metal"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.25 0.25 6"/></geometry>
+    </collision>
+  </link>
+  <joint name="pole_3_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="pole_3"/>
+    <origin xyz="11 -11 3.15"/>
+  </joint>
+</robot>

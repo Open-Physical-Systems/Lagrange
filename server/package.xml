@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_server</name>
-  <version>0.5.0</version>
+  <version>0.6.0</version>
   <description>The Lagrange simulation server: loads a robot, runs the modules on the scheduler against the wall clock, and serves the viewer protocol.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
@@ -25,6 +25,10 @@
   <depend>lagrange_fields</depend>
   <depend>lagrange_emi</depend>
   <depend>lagrange_comms</depend>
+  <depend>lagrange_vehicle_dynamics</depend>
+  <depend>lagrange_traffic</depend>
+  <depend>lagrange_opendrive</depend>
+  <depend>lagrange_openscenario</depend>
   <depend>lagrange_mavlink</depend>
   <depend>lagrange_recording</depend>
   <depend>lagrange_gpu</depend>

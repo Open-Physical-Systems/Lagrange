@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_rigid_body_substitutes</name>
-  <version>0.5.0</version>
+  <version>0.6.0</version>
   <description>Substitutes for the rigid_body domain (CLAUDE.md §11.2): the robot held fixed at its rest pose.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>

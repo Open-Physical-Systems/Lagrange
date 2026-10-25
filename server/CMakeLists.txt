@@ -17,6 +17,10 @@ find_package(lagrange_weather REQUIRED)
 find_package(lagrange_fields REQUIRED)
 find_package(lagrange_emi REQUIRED)
 find_package(lagrange_comms REQUIRED)
+find_package(lagrange_vehicle_dynamics REQUIRED)
+find_package(lagrange_traffic REQUIRED)
+find_package(lagrange_opendrive REQUIRED)
+find_package(lagrange_openscenario REQUIRED)
 find_package(lagrange_mavlink REQUIRED)
 find_package(lagrange_recording REQUIRED)
 find_package(lagrange_meshes REQUIRED)
@@ -44,6 +48,7 @@ add_library(
     src/Server.cpp
     src/Robot.cpp
     src/DiffDrive.cpp
+    src/CarDrive.cpp
     src/Multicopter.cpp
     src/MapExport.cpp
     src/Profile.cpp
@@ -83,6 +88,10 @@ target_link_libraries(
         lagrange_fields::lagrange_fields
         lagrange_emi::lagrange_emi
         lagrange_comms::lagrange_comms
+        lagrange_vehicle_dynamics::lagrange_vehicle_dynamics
+        lagrange_traffic::lagrange_traffic
+        lagrange_opendrive::lagrange_opendrive
+        lagrange_openscenario::lagrange_openscenario
         lagrange_mavlink::lagrange_mavlink
         lagrange_recording::lagrange_recording
         lagrange_meshes::lagrange_meshes
@@ -124,6 +133,11 @@ string(
     "\\1"
     LAGRANGE_PACKAGE_VERSION
     "${_lagrange_version_line}"
+)
+# The server names itself with the package's version in the protocol's hello and recordings.
+target_compile_definitions(
+    lagrange_server
+    PRIVATE LAGRANGE_VERSION="${LAGRANGE_PACKAGE_VERSION}"
 )
 add_executable(lagrange_cli src/cli.cpp)
 set_target_properties(lagrange_cli PROPERTIES OUTPUT_NAME lagrange)
@@ -182,7 +196,7 @@ if(BUILD_TESTING)
         test/test_multicopter.cpp
         test/test_toggles.cpp
         test/test_usd_assets.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road"
         TIMEOUT 120
     )
     target_link_libraries(
@@ -212,6 +226,9 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_AMR_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.overlay.yaml"
             LAGRANGE_TEST_AMR_POWERED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive_powered.usda"
             LAGRANGE_TEST_AMR_WIFI_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive_wifi.usda"
+            LAGRANGE_TEST_SEDAN_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/sedan/sedan.usda"
+            LAGRANGE_TEST_CUT_IN="${CMAKE_CURRENT_SOURCE_DIR}/../assets/scenarios/cut_in.xosc"
+            LAGRANGE_TEST_CITY_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/city_block/city_block.usda"
             LAGRANGE_TEST_WAREHOUSE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.usda"
             LAGRANGE_TEST_ARM6_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.urdf"
             LAGRANGE_TEST_ARM6_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.overlay.yaml"
@@ -222,12 +239,19 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_POWER_LINE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/power_line/power_line.usda"
             LAGRANGE_TEST_QUAD_INVERTED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500_inverted/quad_x500_inverted.usda"
     )
+    ament_add_gtest(test_command_line test/test_command_line.cpp)
+    target_link_libraries(test_command_line lagrange_server_cli)
+    target_include_directories(
+        test_command_line
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    lagrange_target_defaults(test_command_line)
     # The arm with ros2_control in the loop: the standard spawner and joint_trajectory_controller.
     find_package(trajectory_msgs REQUIRED)
     ament_add_gtest(
         test_arm
         test/test_arm.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road"
         TIMEOUT 180
     )
     target_link_libraries(

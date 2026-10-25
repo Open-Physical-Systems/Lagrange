@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_recording</name>
-  <version>0.5.0</version>
+  <version>0.6.0</version>
   <description>Lagrange recordings (MCAP): reading them, and the replay substitute that stands in for a domain with a recorded run (bench mode).</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>

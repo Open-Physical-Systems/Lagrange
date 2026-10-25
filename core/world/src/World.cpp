@@ -69,6 +69,7 @@ BodyId World::addBody(std::string name, BodyId parentBody, const Pose& poseInPar
     bodies.inertiaLocal.push_back(inertia);
     bodies.prim.push_back(body);
     bodies.robot.push_back(0);
+    bodies.kinematic.push_back(false);
     bodies.parent.push_back(parentBody);
     bodies.poseInParent.push_back(poseInParentBody);
     return BodyId{static_cast<std::uint32_t>(bodies.names.size() - 1)};

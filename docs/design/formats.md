@@ -584,8 +584,8 @@ agreed):
 |---|---|
 | `SensorAPI_1` (common) | `sensor:rate` (Hz, —), `sensor:latency` (s, 0), `sensor:jitter` (s, 0), `sensor:frameId` (string, prim name), `sensor:topic` (string, derived), `sensor:powerPort` (rel, none) |
 | `LidarAPI_1` | `sensor:lidar:wavelength` (m, 9.05e-7), `channels` (int, —), `horizontalSamples` (int, —), `verticalFov` (rad[2], —), `horizontalFov` (rad[2], (−π, π)), `rangeMin`/`rangeMax` (m, —), `rangeNoiseStd` (m, 0.02), `beamDivergence` (rad, 0.003), `returnMode` (token: `strongest`, `last`, `dual`), `scanPattern` (token: `rotating`, `solid_state`, `custom`), `rotationRate` (Hz, = rate), `motionDistortion` (bool, true) |
-| `CameraSensorAPI_1` | on a `UsdGeomCamera`: `sensor:camera:width`/`height` (int, —), `shutter` (token: `global`, `rolling`), `rollingShutterTime` (s, 0), `exposureTime` (s, —), `autoExposure` (bool, false), `gain` (1, 1), `readNoiseStd` (electrons, 2), `fullWellCapacity` (electrons, 10000), `bitDepth` (int, 8), `distortionModel` (token: `none`, `plumb_bob`, `equidistant`), `distortionCoeffs` (double[], []) |
-| `RadarAPI_1` | `sensor:radar:carrierFrequency` (Hz, 7.7e10), `bandwidth` (Hz, —), `rangeMax` (m, —), `azimuthFov`/`elevationFov` (rad, —), `rangeResolution` (m, derived), `velocityResolution` (m/s, —), `txPower` (W, —), `noiseFloor` (W, —) |
+| `CameraSensorAPI_1` | on a `UsdGeomCamera`: `sensor:camera:width`/`height` (int, —), `shutter` (token: `global`, `rolling`), `rollingShutterTime` (s, 0), `exposureTime` (s, —; the longest with auto exposure), `autoExposure` (bool, false), `electronRate` (1/s, —: e⁻ per second at the renderer's full white), `vignetting` (1, 0: fraction of cos⁴θ), `gain` (1, 1), `readNoiseStd` (electrons, 2), `fullWellCapacity` (electrons, 10000), `bitDepth` (int, 8), `distortionModel` (token: `none`, `plumb_bob`, `equidistant`), `distortionCoeffs` (double[], []) |
+| `RadarAPI_1` | `sensor:radar:carrierFrequency` (Hz, 7.7e10), `rangeMax` (m, —), `azimuthFov`/`elevationFov` (rad, —), `azimuthResolution` (rad, 0.035), `rangeResolution` (m, 0.2), `velocityResolution` (m/s, 0.1), `txPower` (W, —), `antennaGain` (linear, 1), `noiseFloor` (W, —: effective, after processing gain), `detectionThreshold` (linear SNR, 10) |
 | `ImuAPI_1` | v0.2 implements per-sample white noise, `sensor:imu:accelNoiseStd` (m/s², 0) and `gyroNoiseStd` (rad/s, 0), plus the bias instabilities: densities need half powers in the unit grammar. Draft: `sensor:imu:accelNoiseDensity` (m/s²/√Hz, —), `accelBiasInstability` (m/s², —), `accelRandomWalk` (m/s³/√Hz, —), `gyroNoiseDensity` (rad/s/√Hz, —), `gyroBiasInstability` (rad/s, —), `gyroRandomWalk` (rad/s²/√Hz, —), `accelRange` (m/s², —), `gyroRange` (rad/s, —) |
 | `GnssAPI_1` | `sensor:gnss:horizontalStd` (m, —), `verticalStd` (m, —), `velocityStd` (m/s, —), `multipathModel` (token: `none`, `urban`), `minElevation` (rad, 0.17) |
 | `MagnetometerAPI_1` | `sensor:mag:noiseStd` (T, —), `hardIron` (T[3], 0), `softIron` (double[9], identity), `earthFieldModel` (token: `constant`, `wmm`), `earthField` (T[3], — when `constant`; site parameter, no fallback) |
@@ -616,6 +616,80 @@ shadowing spread is given in decibels, as path-loss models state it.
 
 **`CanBusAPI_1`** (single-apply, on a bus prim): `can:bitRate` (double, 1/s, required) and
 `can:frameBits` (int, fallback 108: an 11-bit identifier and 8 data bytes, before stuffing).
+
+### 3.10 `schemas/vehicle/schema.usda`
+
+Defined in v0.6 (`domains/vehicle_dynamics.md`). A road vehicle is a chassis body with wheels
+on revolute spin joints; the module finds the ground under each wheel by a ray and models the
+suspension and tyres itself, so wheel bodies carry no collision shapes.
+
+**`VehicleAPI_1`** (single-apply, on the chassis body).
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `vehicle:powertrain` | token | — | `electric` | `electric` or `ice_map` |
+| `vehicle:maxDriveTorque` | double | N·m | — | electric: total at the driven wheels at full throttle |
+| `vehicle:maxSteerAngle` | double | rad | — | Inner road wheel. Required with a steered wheel |
+| `vehicle:steerRate` | double | rad/s | `1.0` | Rate limit |
+| `vehicle:steerTimeConstant` | double | s | `0.05` | First-order lag |
+| `vehicle:maxBrakeTorque` | double | N·m | — | Total at full pedal. Required |
+| `vehicle:brakeBias` | double | 1 | `0.6` | Front fraction |
+| `vehicle:abs` | bool | — | `false` | Slip-limiting anti-lock braking |
+| `vehicle:engineSpeeds`, `vehicle:engineTorques` | double[] | rad/s, N·m | — | ice_map: full-throttle curve |
+| `vehicle:engineIdleSpeed` | double | rad/s | `80` | ice_map |
+| `vehicle:gearRatios` | double[] | 1 | — | ice_map: forward gears |
+| `vehicle:finalDriveRatio` | double | 1 | `1.0` | ice_map |
+| `vehicle:shiftUpSpeed`, `vehicle:shiftDownSpeed` | double | rad/s | `600`, `250` | ice_map: automatic shifts |
+| `vehicle:driveEfficiency` | double | 1 | `0.92` | ice_map |
+| `vehicle:antiRollStiffnessFront`, `...Rear` | double | N/m | `0` | Per metre of travel difference across the axle |
+
+**`WheelAPI_1`** (single-apply, on a wheel's spin joint).
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `wheel:radius` | double | m | — | Loaded rolling radius. Required |
+| `wheel:width` | double | m | `0.2` | |
+| `wheel:axle` | token | — | — | `front` or `rear`. Required |
+| `wheel:steered`, `wheel:driven` | bool | — | `false` | |
+| `wheel:steerJoint` | rel | — | — | A steered wheel's steering joint |
+| `wheel:tyre` | asset | — | — | `.tir` Magic Formula file (pacejka fidelity) |
+| `wheel:longitudinalStiffness` | double | N | — | linear fidelity, per unit slip ratio |
+| `wheel:corneringStiffness` | double | N/rad | — | linear fidelity |
+| `wheel:friction` | double | 1 | `1.0` | Peak μ on the reference surface |
+| `wheel:relaxationLength` | double | m | `0.3` | Lateral transient |
+| `wheel:restLength` | double | m | — | Mount to wheel centre at ride height (the model's wheel position; the spring is preloaded with its static load there). Required |
+| `wheel:travel` | double | m | — | From ride height to the bump stop. Required |
+| `wheel:springStiffness` | double | N/m | — | Required |
+| `wheel:damping` | double | N·s/m | — | Required |
+
+### 3.11 `schemas/road/schema.usda`
+
+Defined in v0.6 and written by the OpenDRIVE importer (`io/opendrive/`, `lagrange_opendrive_import`).
+
+**`RoadLaneAPI_1`** (single-apply, on an Xform per lane and lane section).
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `lane:centreLine` | double[] | m | — | x y z of each centre-line point, in the direction of travel. Required |
+| `lane:width` | double[] | m | — | Width at each point |
+| `lane:type` | token | — | `driving` | `driving`, `sidewalk`, `biking`, `parking`, `other` |
+| `lane:speedLimit` | double | m/s | `0` | 0: none given |
+| `lane:road`, `lane:lane` | int | 1 | `0` | OpenDRIVE road and lane ids |
+| `lane:sStart`, `lane:sEnd` | double | m | `0` | The lane section's range along its road (OpenDRIVE s) |
+| `lane:junction` | bool | — | `false` | A junction's connecting road |
+| `lane:successors`, `lane:predecessors` | rel | — | — | Lanes it continues into, and those leading into it |
+
+**OpenDRIVE import** (v0.6). An own reader covers the subset that carries geometry and lanes:
+- **Reference lines:** line, arc, spiral (clothoid, by Gauss–Legendre integration), poly3 and
+  paramPoly3 (both by arc length).
+- **Roads:** elevation, lane offset, lane sections with width polynomials, road marks.
+- **Links:** lane, road and junction links.
+
+Superelevation, lane heights, objects and signals are not read yet. Road surfaces become meshes
+per lane type, road marks become thin meshes (broken marks are 3 m on and 6 m off,
+illustrative), and every driving, biking, parking or sidewalk lane becomes a `RoadLaneAPI_1`
+prim with its links. The surfaces have no colliders: they lie 1 cm above the ground plane that
+the loader adds, so roads with elevation are drawn but not yet driven on.
 
 ## 4. Sample robot: differential-drive AMR
 
