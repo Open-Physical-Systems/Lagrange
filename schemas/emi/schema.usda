@@ -1,0 +1,125 @@
+#usda 1.0
+(
+    """Lagrange EMI schemas (RFC 0002, docs/design/formats.md section 3.5). Codeless. EmiSourceAPI_1
+    makes a prim a source of electromagnetic disturbance; EmiSusceptibilityAPI_1 makes a sensor,
+    bus or radio prim a victim with its calibration (modules/emi)."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeEmi"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "EmiSourceAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A source of low-frequency magnetic or radio-frequency electric field: a power line, a
+    motor drive, a transmitter or a welder."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token emi:sourceType (
+        allowedTokens = ["power_line", "motor_drive", "transmitter", "welder", "custom"]
+        doc = "power_line, motor_drive, transmitter, welder or custom. Required."
+    )
+    double emi:frequency (
+        lagrangeUnit = "Hz"
+        doc = "Fundamental frequency. Site parameter (50 or 60 Hz mains): no fallback."
+    )
+    double emi:current (
+        lagrangeUnit = "A"
+        doc = "RMS current, for power_line and welder."
+    )
+    double emi:radiatedPower (
+        lagrangeUnit = "W"
+        doc = "Equivalent isotropically radiated power, for transmitter."
+    )
+    double[] emi:harmonics = [] (
+        lagrangeUnit = "1"
+        doc = "Relative amplitudes of harmonics 2, 3, ..."
+    )
+    double emi:dutyCycle = 1 (
+        lagrangeUnit = "1"
+        doc = "Fraction of time on, for intermittent sources (welders)."
+    )
+    double emi:bandwidth = 0 (
+        lagrangeUnit = "Hz"
+        doc = "Occupied bandwidth, for transmitter."
+    )
+    double3 emi:direction = (1, 0, 0) (
+        lagrangeUnit = "1"
+        doc = "For power_line: the conductor's direction in the prim's frame; for motor_drive and welder: the dipole axis."
+    )
+    double emi:dipoleMomentPerAmpere = 0 (
+        lagrangeUnit = "m2"
+        doc = "For motor_drive and welder: magnetic dipole moment per ampere of current."
+    )
+    asset emi:fieldMap (
+        doc = "NanoVDB vector grid of B (T) or E (V/m), at emi:current or emi:radiatedPower."
+    )
+    uniform token emi:fieldMapQuantity = "B" (
+        allowedTokens = ["B", "E"]
+        doc = "What emi:fieldMap holds: B or E."
+    )
+    rel emi:drivenBy (
+        doc = "A prim whose current scales the source at runtime (a motor)."
+    )
+}
+
+class "EmiSusceptibilityAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A victim of electromagnetic disturbance (a magnetometer, an IMU, an encoder, a CAN bus or a
+    radio) with its per-robot calibration parameters."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token emi:victimType (
+        allowedTokens = ["magnetometer", "imu_adc", "encoder", "can_bus", "radio"]
+        doc = "magnetometer, imu_adc, encoder, can_bus or radio. Required."
+    )
+    double emi:magneticGain = 1 (
+        lagrangeUnit = "1"
+        doc = "Magnetometer: fraction of the disturbance field that appears in the reading."
+    )
+    double emi:accelNoisePerField = 0 (
+        lagrangeUnit = "(m/s2)/(V/m)"
+        doc = "IMU: accelerometer noise RMS added per unit RMS E-field."
+    )
+    double emi:gyroNoisePerField = 0 (
+        lagrangeUnit = "(rad/s)/(V/m)"
+        doc = "IMU: gyro noise RMS added per unit RMS E-field."
+    )
+    double emi:encoderGlitchField (
+        lagrangeUnit = "V/m"
+        doc = "Encoder: field at which the glitch probability per edge is 50 %."
+    )
+    double emi:canErrorField (
+        lagrangeUnit = "V/m"
+        doc = "CAN bus: field at which the bit-error rate reaches canErrorRateAtField."
+    )
+    double emi:canErrorRateAtField = 0.00001 (
+        lagrangeUnit = "1"
+        doc = "CAN bus: the bit-error rate at canErrorField."
+    )
+    double emi:receiverNoiseFigure = 1 (
+        lagrangeUnit = "1"
+        doc = "Radio: linear noise figure of the receiver."
+    )
+    double emi:couplingLoopArea = 0 (
+        lagrangeUnit = "m2"
+        doc = "Effective loop area of the harness for the induced voltage V = ω·B·A."
+    )
+    double emi:shieldingEffectiveness = 1 (
+        lagrangeUnit = "1"
+        doc = "Linear field attenuation factor, at least 1."
+    )
+}
