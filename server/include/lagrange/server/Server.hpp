@@ -41,6 +41,11 @@ struct ServerOptions {
     std::map<std::string, std::string, std::less<>> weatherFiles;
     /// --link-topics: ROS topics that ride on radio links, topic → link (domains/comms.md).
     std::map<std::string, std::string> linkTopics;
+    /// --traffic: the builtin traffic's agents when the world has road lanes (RoadLaneAPI_1);
+    /// set when the server starts.
+    int trafficVehicles{8};
+    int trafficPedestrians{6};
+    std::uint64_t trafficSeed{1};
     /// Where world ENU (0, 0, 0) is on the Earth (--geo-origin; a profile's world.geo_origin
     /// overrides it). A site parameter with no default: GNSS, magnetometers and barometers do
     /// not run without it.

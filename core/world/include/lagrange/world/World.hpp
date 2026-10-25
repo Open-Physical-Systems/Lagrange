@@ -97,8 +97,11 @@ struct World {
         std::vector<std::array<double, 6>> inertiaLocal;  // kg·m², (xx, yy, zz, xy, xz, yz)
         std::vector<PrimId> prim;
         std::vector<std::uint32_t> robot;  // index into robots
-        std::vector<BodyId> parent;        // kWorldBody for a root
-        std::vector<Pose> poseInParent;    // with every joint at zero
+        /// Moved by a pose command (body/<b>/pose_command), not by forces: traffic agents. A
+        /// kinematic body hangs from the world and pushes what it meets without being pushed.
+        std::vector<bool> kinematic;
+        std::vector<BodyId> parent;      // kWorldBody for a root
+        std::vector<Pose> poseInParent;  // with every joint at zero
     } bodies;
 
     struct Joints {  // every vector has one entry per joint

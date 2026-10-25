@@ -30,6 +30,7 @@
 #include "lagrange/services/WrenchSum.hpp"
 #include "lagrange/stage/Stage.hpp"
 #include "lagrange/thermal/ThermalNetwork.hpp"
+#include "lagrange/traffic/Traffic.hpp"
 #include "lagrange/vehicle_dynamics/VehicleDynamics.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
 #include "lagrange/weather/Weather.hpp"
@@ -524,6 +525,22 @@ struct Server::Impl {
             }
             next->add(std::make_unique<CarController>(external, options.demoDrive));
         }
+        // Traffic (domains/traffic.md): moves the agents addAgents made, around the robots.
+        if (hasTraffic()) {
+            ModuleConfigData traffic;
+            traffic.values["seed"] = static_cast<std::int64_t>(options.trafficSeed);
+            std::vector<std::string> egos;
+            const World& world = robot.world;
+            const std::vector<bool> moving = movingBodies(world);
+            for (std::size_t b = 0; b < world.bodies.names.size(); ++b) {
+                if (world.bodies.parent[b] == kWorldBody && moving[b] &&
+                    !world.bodies.kinematic[b]) {
+                    egos.push_back(world.bodies.names[b]);
+                }
+            }
+            traffic.values["ego_bodies"] = egos;
+            next->add(std::make_unique<traffic::Traffic>(off("traffic")), ModuleConfig(traffic));
+        }
         // Road vehicles (domains/vehicle_dynamics.md): before the electrical domain, which turns
         // their drive and steering commands into joint torques.
         if (hasVehicles()) {
@@ -736,6 +753,12 @@ struct Server::Impl {
         settings.weather = appliedWeather;
         settings.emiCoupling = appliedEmiCoupling;
         return settings;
+    }
+    /// Whether the world has traffic agents.
+    bool hasTraffic() const {
+        return std::ranges::any_of(robot.world.bodies.names, [](const std::string& n) {
+            return n.starts_with("traffic_vehicle_") || n.starts_with("traffic_pedestrian_");
+        });
     }
     /// Whether the stage has road vehicles.
     bool hasVehicles() const { return !WorldView(robot.world).instancesOf("VehicleAPI_1").empty(); }
@@ -1925,6 +1948,9 @@ struct Server::Impl {
                             ? "  vehicle_dynamics: {enabled: false, substitute: ideal}\n"
                             : "  vehicle_dynamics: {enabled: true, tire_model: " +
                                   appliedTireModel.value_or("pacejka") + "}\n";
+            } else if (std::string_view(row.domain) == "traffic" && hasTraffic()) {
+                yaml += substituted("traffic") ? "  traffic: {enabled: false, substitute: zero}\n"
+                                               : "  traffic: {enabled: true, backend: builtin}\n";
             } else if (std::string_view(row.domain) == "comms" && hasComms()) {
                 yaml += substituted("comms") ? "  comms: {enabled: false, substitute: ideal}\n"
                                              : "  comms: {enabled: true}\n";
@@ -2690,6 +2716,9 @@ struct Server::Impl {
         }
         if (hasVehicles()) {
             context.modules.insert("vehicle_dynamics");
+        }
+        if (hasTraffic()) {
+            context.modules.insert("traffic");
         }
         for (const auto& [key, value] : options.weather) {
             context.weatherKnown.insert(key);
@@ -3759,6 +3788,24 @@ Status Server::load() {
         if (auto added = addModel(s.robot, s.options.worldPath); !added) {
             return Status::error(StatusCode::InvalidConfig, added.error());
         }
+    }
+    // Traffic agents on the world's road lanes, away from the robots (traffic.md).
+    if (!WorldView(s.robot.world).instancesOf("RoadLaneAPI_1").empty() &&
+        s.options.trafficVehicles + s.options.trafficPedestrians > 0) {
+        std::vector<traffic::Vec3> robots;
+        for (std::size_t b = 0; b < s.robot.world.bodies.names.size(); ++b) {
+            if (s.robot.world.bodies.parent[b] == kWorldBody) {
+                robots.push_back(s.robot.bodyRestPose[b].position);
+            }
+        }
+        const auto made = traffic::addAgents(
+            s.robot,
+            {s.options.trafficVehicles, s.options.trafficPedestrians, s.options.trafficSeed},
+            robots);
+        s.log(v1::LOG_LEVEL_INFO, "traffic",
+              std::to_string(made[0]) + " vehicles and " + std::to_string(made[1]) +
+                  " pedestrians on the road lanes (seed " + std::to_string(s.options.trafficSeed) +
+                  ")");
     }
     s.shift = recentre(s.robot);
     if (Status status = s.placeLidar(); !status.ok()) {

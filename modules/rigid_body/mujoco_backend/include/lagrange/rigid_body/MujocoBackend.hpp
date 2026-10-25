@@ -67,13 +67,19 @@ private:
     struct BodySignals {
         std::uint32_t body{0};
         SignalId externalWrench, pose, twist, acceleration;
+        SignalId poseCommand;  // kinematic bodies only
         int mujocoBody{0};
+        int mocap{-1};  // its mocap index, for a kinematic body
     };
 
     void writeOutputs(SignalBus& bus) const;
 
     std::vector<JointSignals> joints_;
     std::vector<BodySignals> bodies_;
+    // Kinematic bodies' poses at the previous output, for their twist (MuJoCo's mocap bodies
+    // have no velocity of their own).
+    mutable std::vector<std::array<double, 7>> lastKinematicPose_;
+    double dt_{0.001};
     SignalId frictionScale_;
     double appliedFrictionScale_{1.0};
     std::vector<double> baseFriction_;  // per geom, sliding coefficient at scale 1

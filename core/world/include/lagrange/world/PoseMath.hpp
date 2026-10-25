@@ -92,8 +92,9 @@ inline constexpr std::array<double, 4> kSensorFromOptical = {0.5, -0.5, 0.5, -0.
         changed = false;
         for (std::size_t b = 0; b < bodies.names.size(); ++b) {
             const BodyId parent = bodies.parent[b];
-            const bool value = jointed[b] || (parent != kWorldBody &&
-                                              parent.index < moving.size() && moving[parent.index]);
+            const bool value =
+                jointed[b] || (b < bodies.kinematic.size() && bodies.kinematic[b]) ||
+                (parent != kWorldBody && parent.index < moving.size() && moving[parent.index]);
             if (value && !moving[b]) {
                 moving[b] = true;
                 changed = true;

@@ -147,7 +147,9 @@ fallback documented if Autoware is not available for Lyrical.
    meet end to start. Owed: superelevation, lane heights, objects and signals; driving on
    elevated roads)
 6. `modules/traffic`, `builtin` backend: lane-following vehicles, social-force pedestrians,
-   traffic lights, as kinematic bodies
+   traffic lights, as kinematic bodies (**done** 2026-10-25: `lagrange_traffic`, traffic.md §8;
+   kinematic bodies in MuJoCo and Jolt; `--traffic`; the city block runs 8 vehicles and 6
+   pedestrians by default. Owed: lights drawn, pedestrians crossing, priority rules)
 7. `io/openscenario`: a built-in runner for a subset of OpenSCENARIO 1.x
 8. Sensors: radar; camera model (exposure, noise, distortion, rolling shutter)
 9. Autoware bridge (interface and stand-in test)

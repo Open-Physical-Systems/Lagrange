@@ -52,5 +52,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(lagrange_core)
+ament_export_dependencies(lagrange_core tinyxml2)
 ament_package()

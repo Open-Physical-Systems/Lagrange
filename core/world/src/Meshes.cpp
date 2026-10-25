@@ -169,6 +169,7 @@ void appendModel(Model& model, const Model& other) {
         w.addBody(o.bodies.names[b], map(o.bodies.parent[b]), o.bodies.poseInParent[b],
                   o.bodies.mass[b], o.bodies.comLocal[b], o.bodies.inertiaLocal[b]);
         w.bodies.robot.back() = robotOffset + o.bodies.robot[b];
+        w.bodies.kinematic.back() = o.bodies.kinematic[b];
         model.bodyRestPose.push_back(other.bodyRestPose[b]);
     }
     for (std::size_t j = 0; j < o.joints.names.size(); ++j) {
