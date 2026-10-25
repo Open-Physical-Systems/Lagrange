@@ -27,6 +27,9 @@ struct ServerOptions {
     /// thermal.ambient_temperature overrides it). A site parameter with no default: without it
     /// the thermal domain does not run (CLAUDE.md §10).
     std::optional<double> ambientTemperatureK;
+    /// The site's air density, kg/m³ (--air-density; a profile's rotor_aero.air_density
+    /// overrides it). A site parameter with no default: rotors do not run without it.
+    std::optional<double> airDensityKgM3;
     /// Bench mode (--bench): physics replaced by this recording's rigid-body signals, replayed
     /// open loop (the replay substitute); empty = none. A profile's rigid_body replay source
     /// overrides it.

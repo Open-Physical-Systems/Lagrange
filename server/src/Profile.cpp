@@ -144,6 +144,15 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 domain["ambient_temperature"].is_number()) {
                 settings.ambientTemperatureK = domain["ambient_temperature"].as<double>();
             }
+            if (name == "rotor_aero" && domain.contains("air_density") &&
+                domain["air_density"].is_number()) {
+                settings.airDensityKgM3 = domain["air_density"].as<double>();
+            }
+            if (name == "rotor_aero" && context.modules.contains("rotor_aero") &&
+                !settings.airDensityKgM3 && !context.airDensityKnown) {
+                error(check, at + "/air_density",
+                      "the rotors need the site's air density (kg/m³); it has no default");
+            }
             if (name == "thermal" && enabled && context.modules.contains("thermal") &&
                 !settings.ambientTemperatureK && !context.ambientKnown) {
                 error(check, at + "/ambient_temperature",

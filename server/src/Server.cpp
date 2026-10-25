@@ -10,9 +10,11 @@
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/ros2/Bridge.hpp"
 #include "lagrange/ros2_control/ControllerHost.hpp"
+#include "lagrange/rotor_aero/RotorAero.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/server/DiffDrive.hpp"
+#include "lagrange/server/Multicopter.hpp"
 #include "lagrange/server/Profile.hpp"
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/server/Server.hpp"
@@ -375,7 +377,7 @@ constexpr std::array<DomainRow, 13> kDomains{{
     {"comms", "ideal", "ideal"},
     {"traffic", "zero", "constant"},
     {"vehicle_dynamics", "ideal", "ideal"},
-    {"rotor_aero", "zero", "constant"},
+    {"rotor_aero", "ideal", "ideal"},  // a drone cannot fly on zero (aerodynamics.md §5)
     {"hydrodynamics", "zero", "constant"},
 }};
 
@@ -526,6 +528,25 @@ struct Server::Impl {
                 next->add(std::make_unique<thermal::ThermalNetwork>(), ModuleConfig(heat));
             }
         }
+        // Rotors after electrical: the rotor joints' load torque and the thrust on their links.
+        // They need the site's air density; without one they do not run (as thermal without
+        // the ambient temperature) and the server says so at load.
+        if (hasRotors() && !settings.airDensityKgM3) {
+            services::log(services::LogLevel::Warning, "rotor_aero",
+                          "the rotors do not run without the site's air density: "
+                          "--air-density or the profile's rotor_aero.air_density (kg/m³)");
+        }
+        if (hasRotors() && settings.airDensityKgM3) {
+            ModuleConfigData air;
+            air.values.emplace(rotor_aero::kAirDensityKey, *settings.airDensityKgM3);
+            next->add(std::make_unique<rotor_aero::RotorAero>(off("rotor_aero")),
+                      ModuleConfig(air));
+            if (!controllers && !bridge && MulticopterController::canFly(WorldView(robot.world))) {
+                next->add(
+                    std::make_unique<MulticopterController>(MulticopterController::Settings{}),
+                    ModuleConfig(air));
+            }
+        }
         ModuleConfigData sensing;
         sensing.tier =
             rayContext ? static_cast<CapabilityTier>(rayContext->tier()) : CapabilityTier::Tier0;
@@ -563,6 +584,7 @@ struct Server::Impl {
             settings.rigidBodyReplay = options.benchReplayPath;  // --bench
         }
         settings.ambientTemperatureK = ambient();
+        settings.airDensityKgM3 = appliedAirDensity ? appliedAirDensity : options.airDensityKgM3;
         return settings;
     }
     /// The ambient temperature the run uses: an applied profile's, else the command line's.
@@ -571,6 +593,7 @@ struct Server::Impl {
     }
     std::optional<std::int64_t> thermalDtNs;        // from an applied profile
     std::optional<double> appliedAmbientK;          // from an applied profile
+    std::optional<double> appliedAirDensity;        // from an applied profile
     std::optional<bool> speedPrediction;            // from an applied profile
     std::optional<std::string> electricalFidelity;  // from an applied profile
     std::optional<std::string> rigidBodyReplay;     // --bench, or an applied profile
@@ -1433,6 +1456,7 @@ struct Server::Impl {
     bool hasThermalNodes() const {
         return !WorldView(robot.world).instancesOf("ThermalAPI_1").empty();
     }
+    bool hasRotors() const { return !WorldView(robot.world).instancesOf("RotorAPI_1").empty(); }
     bool hasMotors() const {
         return !WorldView(robot.world).instancesOf("ElectricalMotorAPI_1").empty();
     }
@@ -1596,6 +1620,15 @@ struct Server::Impl {
             } else if (std::string_view(row.domain) == "sensors" && hasSensors() &&
                        !substituted("sensors")) {
                 yaml += "  sensors: {enabled: true}\n";
+            } else if (std::string_view(row.domain) == "rotor_aero" && hasRotors()) {
+                const std::optional<double> rho =
+                    appliedAirDensity ? appliedAirDensity : options.airDensityKgM3;
+                char text[160];
+                std::snprintf(text, sizeof(text), "{enabled: %s, %s%s%.9g}",
+                              substituted("rotor_aero") ? "false" : "true",
+                              substituted("rotor_aero") ? "substitute: ideal, " : "",
+                              rho ? "air_density: " : "dt: ", rho ? *rho : 0.001);
+                yaml += "  rotor_aero: " + std::string(text) + "\n";
             } else if (std::string_view(row.domain) == "comms" ||
                        std::string_view(row.domain) == "traffic" ||
                        std::string_view(row.domain) == "vehicle_dynamics" ||
@@ -2328,7 +2361,11 @@ struct Server::Impl {
         if (hasThermalNodes()) {
             context.modules.insert("thermal");
         }
+        if (hasRotors()) {
+            context.modules.insert("rotor_aero");
+        }
         context.ambientKnown = options.ambientTemperatureK.has_value();
+        context.airDensityKnown = options.airDensityKgM3.has_value();
         for (const DomainRow& row : kDomains) {
             context.substitutes[row.domain] = {row.substitute, row.substituteKind};
             if (std::string_view(row.domain) == "rigid_body") {
@@ -2437,6 +2474,9 @@ struct Server::Impl {
         const std::optional<double> previousAmbient = appliedAmbientK;
         if (settings.ambientTemperatureK) {
             appliedAmbientK = settings.ambientTemperatureK;
+        }
+        if (settings.airDensityKgM3) {
+            appliedAirDensity = settings.airDensityKgM3;
         }
         pending.reset();
         if (Status status = restart(); !status.ok()) {
@@ -3220,6 +3260,10 @@ Status Server::start() {
                   (!s.options.demoDrive ? "; it stands still until /cmd_vel arrives"
                    : s.bridge           ? "; a figure-eight demo drives until /cmd_vel arrives"
                                         : "; a figure-eight demo drives"));
+    } else if (MulticopterController::canFly(WorldView(s.robot.world))) {
+        s.log(v1::LOG_LEVEL_INFO, "controller",
+              "multicopter: the built-in controller takes off after 1 s and hovers 2 m above the "
+              "start (until an autopilot flies it)");
     } else {
         s.log(v1::LOG_LEVEL_WARN, "controller",
               "no demo driver: it needs exactly two actuated wheel joints, the robot has " +

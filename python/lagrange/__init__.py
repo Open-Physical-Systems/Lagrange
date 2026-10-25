@@ -20,7 +20,7 @@ __path__ = pkgutil.extend_path(__path__, __name__)
 
 from lagrange._lagrange import Simulation
 
-__all__ = ["Simulation", "sample_robot", "sample_world"]
+__all__ = ["Simulation", "sample_profile", "sample_quadcopter", "sample_robot", "sample_world"]
 
 
 def sample_robot() -> str:
@@ -28,6 +28,16 @@ def sample_robot() -> str:
     return (
         get_package_share_directory("lagrange_assets") + "/robots/amr_diffdrive/amr_diffdrive.urdf"
     )
+
+
+def sample_quadcopter() -> str:
+    """The sample quadcopter (USD, with its rotors, motors and battery) from lagrange_assets."""
+    return get_package_share_directory("lagrange_assets") + "/robots/quad_x500/quad_x500.usda"
+
+
+def sample_profile(name: str) -> str:
+    """An example profile from lagrange_profiles, e.g. "quad_x500_hover"."""
+    return get_package_share_directory("lagrange_profiles") + f"/examples/{name}.yaml"
 
 
 def sample_world() -> str:
