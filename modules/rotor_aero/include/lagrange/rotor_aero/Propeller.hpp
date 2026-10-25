@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <optional>
 #include <string>
 #include <vector>
@@ -116,7 +117,10 @@ struct Air {
 /// momentum change of the air through it, with Prandtl tip and hub losses. `omega` (rad/s) is the
 /// speed of rotation in the propeller's hand (negative: turning the wrong way) and `axialSpeed`
 /// (m/s) the speed of the air arriving at the disc from the front, along the thrust direction
-/// (flight speed; negative: the air comes from behind, as in a descent).
+/// (flight speed; negative: the air comes from behind, as in a descent). `edgewiseSpeed` (m/s,
+/// ≥ 0) is the air's speed across the disc (forward flight, side wind): the blades' loads are
+/// averaged round the disc, each meeting ω·r + V_e·sin ψ, with Glauert's mass flow through each
+/// annulus, which gives the in-plane H-force, the hub's rolling moment and the change of thrust.
 ///
 /// Momentum theory has no steady solution in the vortex-ring state (descent at about the induced
 /// velocity); there the annulus takes the blade-element forces with no induced velocity, the
@@ -128,8 +132,15 @@ struct BemLoad {
     double inducedVelocity{0.0};  // m/s, thrust-weighted mean axial induced velocity
     double thrustRadius{0.0};     // m, thrust-weighted mean radius: where the thrust acts
     bool vortexRing{false};
+    // In edgewise flow, in the plane of the disc, along e1 (the way the edgewise air moves past
+    // the propeller) and e2 = t × e1 with t the thrust direction, both in the propeller's hand
+    // (a cw propeller's e2 is the mirror image): the in-plane force (N; the H-force along e1) and
+    // the thrust's moment about the hub (N·m; the advancing blade's extra lift rolls it about e1).
+    std::array<double, 2> inPlane{};
+    std::array<double, 2> hubMoment{};
 };
-[[nodiscard]] BemLoad bemLoad(const Propeller& p, double omega, double axialSpeed, const Air& air);
+[[nodiscard]] BemLoad bemLoad(const Propeller& p, double omega, double axialSpeed, const Air& air,
+                              double edgewiseSpeed = 0.0);
 
 /// A propeller's loads tabulated once (aerodynamics.md §2.1): blade-element momentum theory over
 /// the full circle of inflow angles θ = atan2(V, ΩR) at 0.25° steps (turning either way, stopped,
@@ -140,7 +151,11 @@ struct BemLoad {
 class PropellerTable {
 public:
     [[nodiscard]] static PropellerTable build(const Propeller& p, bool compressible);
-    [[nodiscard]] BemLoad at(double omega, double axialSpeed, const Air& air) const;
+    /// The loads at `edgewiseSpeed` too: the edgewise table (inflow angle in 1° steps, edgewise
+    /// angle atan2(V_e, √(Ω²R² + V_a²)) from 0 to 40° in 5° steps, held beyond) adds what edgewise
+    /// flow changes to the axial loads, and gives the in-plane force and hub moment.
+    [[nodiscard]] BemLoad at(double omega, double axialSpeed, const Air& air,
+                             double edgewiseSpeed = 0.0) const;
     [[nodiscard]] bool empty() const { return rows_.empty(); }
 
 private:
@@ -148,9 +163,14 @@ private:
         double thrust, torque, induced, thrustRadius;  // thrustRadius as a fraction of R
         bool vortexRing;
     };
+    [[nodiscard]] BemLoad axial(double omega, double axialSpeed, const Air& air) const;
+    struct EdgeRow {
+        double thrust, torque, inPlane0, inPlane1, moment0, moment1;
+    };
     double radius_{0.0};
     int machs_{1};
-    std::vector<Row> rows_;  // per Mach number, per inflow angle
+    std::vector<Row> rows_;       // per Mach number, per inflow angle
+    std::vector<EdgeRow> edges_;  // per edgewise angle, per inflow angle (incompressible)
 };
 
 /// The propeller's blades and hub as a triangle mesh in its own frame: thrust along +z, the first

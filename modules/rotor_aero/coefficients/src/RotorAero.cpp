@@ -68,6 +68,14 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
     bem_ = !ideal_ && config.get<std::string>("fidelity").value_or("coefficients") == "bem";
     speedOfSound_ = std::max(0.0, config.get<double>("speed_of_sound").value_or(0.0));
     gravity_ = world.gravityLocal();
+    wind_ = bem_ && config.get<bool>("wind").value_or(false);
+    if (wind_) {
+        SignalSpec wind = scalar("env/wind/velocity", units::m_per_s);
+        wind.type = SignalType::Vec3;
+        wind.frame = "world_local";
+        wind.feedback = true;
+        windIn_ = d.input(wind);
+    }
     std::map<std::string, std::shared_ptr<const PropellerTable>> tables;  // by file
     groundEffect_ = !ideal_ && config.get<bool>("ground_effect").value_or(true);
 
@@ -236,14 +244,40 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
                                          r.mountSign * jointAxis[2]};
         Load load;
         double induced = 0.0;
+        std::array<double, 3> inPlane{};    // N, world: the rotor's in-plane force (bem)
+        std::array<double, 3> hubMoment{};  // N·m, world: its hub moment (bem)
         if (r.propeller) {
             // The propeller's rotation in its own hand about its thrust direction, and the
             // hub's speed into the air along it (the air arriving from the front).
             const double spin = r.handSign * r.mountSign * omega;
+            // The hub's velocity through the air: axial along the thrust, the rest across the disc.
             const std::span<const double> hubTwist = bus.readN(r.twist);
-            const double axial =
-                hubTwist[0] * axis[0] + hubTwist[1] * axis[1] + hubTwist[2] * axis[2];
-            BemLoad bem = r.propeller->at(spin, axial, {rho_, speedOfSound_});
+            std::array<double, 3> through{hubTwist[0], hubTwist[1], hubTwist[2]};
+            if (wind_) {
+                const std::span<const double> w = bus.readN(windIn_);
+                for (std::size_t k = 0; k < 3; ++k) {
+                    through[k] -= w[k];
+                }
+            }
+            const double axial = through[0] * axis[0] + through[1] * axis[1] + through[2] * axis[2];
+            const std::array<double, 3> across{through[0] - axial * axis[0],
+                                               through[1] - axial * axis[1],
+                                               through[2] - axial * axis[2]};
+            const double edgewise = std::hypot(across[0], across[1], across[2]);
+            BemLoad bem = r.propeller->at(spin, axial, {rho_, speedOfSound_}, edgewise);
+            if (edgewise > 0.0) {
+                // e1: the way the air moves across the disc; e2 = t × e1 in the propeller's hand.
+                const std::array<double, 3> e1{-across[0] / edgewise, -across[1] / edgewise,
+                                               -across[2] / edgewise};
+                const std::array<double, 3> t2 = cross(axis, e1);
+                // A cw propeller is the mirror image of a ccw one: e2 turns over, and with it
+                // the sense of a moment (a pseudovector), so its rolling moment is the other way.
+                const double hand = r.handSign;
+                for (std::size_t k = 0; k < 3; ++k) {
+                    inPlane[k] = bem.inPlane[0] * e1[k] + bem.inPlane[1] * hand * t2[k];
+                    hubMoment[k] = hand * bem.hubMoment[0] * e1[k] + bem.hubMoment[1] * t2[k];
+                }
+            }
             if (r.folding) {
                 // Blades on their hinges: coned or folded, the disc gives the axial share.
                 const double gravityAlong =
@@ -283,13 +317,15 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
             target *= groundEffect(r.params.radius, height);
         }
         r.thrust = keep * r.thrust + (1.0 - keep) * target;
-        const std::array<double, 3> force{r.thrust * axis[0], r.thrust * axis[1],
-                                          r.thrust * axis[2]};
+        const std::array<double, 3> force{r.thrust * axis[0] + inPlane[0],
+                                          r.thrust * axis[1] + inPlane[1],
+                                          r.thrust * axis[2] + inPlane[2]};
         // Applied at the link's origin; the backend takes torques about the centre of mass.
         const std::array<double, 3> com = rotate(hub.orientation, r.com);
         const std::array<double, 3> moment = cross({-com[0], -com[1], -com[2]}, force);
-        bus.writeN(r.wrenchOut, std::array<double, 6>{force[0], force[1], force[2], moment[0],
-                                                      moment[1], moment[2]});
+        bus.writeN(r.wrenchOut,
+                   std::array<double, 6>{force[0], force[1], force[2], moment[0] + hubMoment[0],
+                                         moment[1] + hubMoment[1], moment[2] + hubMoment[2]});
         const double area = std::numbers::pi * r.params.radius * r.params.radius;
         bus.write(r.thrustOut, r.thrust);
         bus.write(r.torqueOut, load.torque);

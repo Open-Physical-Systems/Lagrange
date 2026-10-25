@@ -535,6 +535,7 @@ struct Server::Impl {
                 next->add(std::make_unique<thermal::ThermalNetwork>(), ModuleConfig(heat));
             }
         }
+        bool windInRun = false;
         // Link drag against the wind (an AeroAPI_1 robot, with the site's air density): the
         // aerodynamics config's own density, else rotor_aero's.
         if (!WorldView(robot.world).instancesOf("AeroAPI_1").empty() && !off("aerodynamics")) {
@@ -545,6 +546,7 @@ struct Server::Impl {
             }
             if (aero.values.contains("air_density")) {
                 next->add(std::make_unique<aerodynamics::AeroDrag>(), ModuleConfig(aero));
+                windInRun = true;
             }
         }
         // Rotors after electrical: the rotor joints' load torque and the thrust on their links.
@@ -558,6 +560,8 @@ struct Server::Impl {
         if (hasRotors() && settings.airDensityKgM3) {
             ModuleConfigData air;
             air.values.insert(settings.rotorAero.begin(), settings.rotorAero.end());
+            // The rotors fly in the aerodynamics domain's wind when it is in the run.
+            air.values.emplace("wind", windInRun);
             air.values.emplace(rotor_aero::kAirDensityKey, *settings.airDensityKgM3);
             next->add(std::make_unique<rotor_aero::RotorAero>(off("rotor_aero")),
                       ModuleConfig(air));

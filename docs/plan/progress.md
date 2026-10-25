@@ -178,7 +178,10 @@ step resting on the ones before:
    spin, drawn as hinged scene prims (`ScenePrim::hinge`); `generic_10in_folding_*` and
    `quad_x500_folding.overlay.yaml`; `generic_10in_3blade_*`; `quad_x500_inverted`, motors under
    the arms with pushers, hovers as the sample does); (d) edgewise flow in forward flight
-   (H-force, flapping) and wind at the rotors
+   (H-force, flapping) and wind at the rotors (**done** 2026-10-25: blade loads averaged round
+   the disc with Glauert's mass flow, tabulated in normalised form; the H-force matches classical
+   rotor theory within 1 %; `env/wind/velocity` from the aerodynamics domain reaches the rotors;
+   the sample holds its spot in 8 m/s gusts at `bem`. Wake skew and flapping: not yet)
 
 ## Defaults taken during the autonomous run
 

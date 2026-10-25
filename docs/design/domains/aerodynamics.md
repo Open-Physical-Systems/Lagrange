@@ -67,9 +67,20 @@ propeller file (formats.md §3.3.1) named by the rotor's `aero:rotor:propeller`.
   torque are the open propeller's times `cos β`; `rotor/<j>/blade_angle` drives the drawn
   blades. Quasi-static is right when the blade's flapping frequency (about Ω) is far above the
   vehicle's; hinge friction and the blades' own dynamics at spin-up are not modelled.
-- **Inputs.** The axial speed is the hub's velocity along the thrust direction (still air).
-- **Limits.** No edgewise flow yet (forward flight's in-plane velocity, the H-force and blade
-  flapping), no wind at the rotors, no stall delay on rotating blades (so thrust near the
+- **Edgewise flow and wind.** The hub's velocity through the air (its own, less
+  `env/wind/velocity` from the aerodynamics domain when that is in the run) splits into the
+  axial speed and the edgewise speed `V_e` across the disc. Edgewise, each blade element meets
+  `ω·r + V_e·sin ψ` at azimuth ψ (its radial share left out, the independence principle), the
+  annulus' induced velocity is uniform round it with Glauert's mass flow `√(V_e² + (V + w)²)`,
+  and the loads are averaged over 12 azimuths: the change of thrust (translational lift), the
+  in-plane H-force along the edgewise air, and the hub moment of the advancing blade's extra
+  lift (a cw propeller's the other way, so counter-rotating pairs cancel it). Tabulated at load
+  over the inflow angle (1°) and the edgewise angle `atan(V_e/√(Ω²R² + V_a²))` (0–40° in 5°
+  steps), normalised by `V_e/U0` (in-plane loads) and `(V_e/U0)²` (changes of thrust and torque),
+  in parallel threads; about 1 s per propeller.
+- **Limits.** No wake skew (the inflow's fore-aft gradient in forward flight, which gives a
+  pitching moment), no blade flapping of rigid propellers beyond the hub moment, no stall delay
+  on rotating blades (so thrust near the
   static condition of a highly pitched propeller is under-predicted; §7.1), no Reynolds-number
   effects beyond what the file's section data are for.
 
@@ -91,6 +102,7 @@ d.input ({.name = "env/wind/mean",           .type = SignalType::Vec3,    .unit 
 d.input ({.name = "env/wind/velocity_field", .type = SignalType::Field3D, .unit = units::m_per_s, .optional = true});
 d.input ({.name = "env/air_density",         .type = SignalType::Scalar,  .unit = units::kg_per_m3});
 d.output({.name = "env/wind/gust",           .type = SignalType::Vec3,    .unit = units::m_per_s});   // turbulence at the robot
+d.output({.name = "env/wind/velocity",       .type = SignalType::Vec3,    .unit = units::m_per_s});   // mean + gust: the air at the robot
 
 // modules/rotor_aero — declare()
 for (auto& r : world.instancesOf("RotorAPI_1")) {
@@ -104,7 +116,7 @@ for (auto& r : world.instancesOf("RotorAPI_1")) {
     d.output({.name = fmt("rotor/{}/induced_velocity", j), .type = SignalType::Scalar, .unit = units::m_per_s});
 }
 d.input({.name = "env/air_density", .type = SignalType::Scalar, .unit = units::kg_per_m3});
-d.input({.name = "env/wind/gust",   .type = SignalType::Vec3,   .unit = units::m_per_s, .optional = true});
+d.input({.name = "env/wind/velocity", .type = SignalType::Vec3, .unit = units::m_per_s, .feedback = true});  // as built: when config "wind" says the aerodynamics domain runs
 ```
 
 Several modules produce wrenches on the same body (aero, rotor, hydro). The single-writer rule
@@ -121,7 +133,8 @@ Aerodynamics: default 1 ms for drones (same as physics), 10 ms for ground vehicl
 
 ## 5. Substitutes and contract
 
-Aerodynamics contract: `body/{b}/aero_wrench`, `body/{b}/airspeed`, `env/wind/gust`.
+Aerodynamics contract: `body/{b}/aero_wrench`, `body/{b}/airspeed`, `env/wind/gust`,
+`env/wind/velocity`.
 Rotor contract: `rotor/{j}/wrench`, `rotor/{j}/aero_torque`.
 
 | Domain | Token | Kind | Behaviour |
@@ -152,6 +165,8 @@ profile validator rejects it with that explanation.
 | Static thrust and torque vs speed | published propeller test data (candidate: the UIUC propeller database; check its terms of use before redistributing any data) | 5 % with coefficients taken from the same dataset |
 | `bem` against measured propellers | NACA Report 640 (1938, public domain): propeller 5868-9, two blades, Clark Y, at 15° and 25°; §7.1 | CT within 8 %, CP within 6 % (or 0.003) over the attached-flow range |
 | `bem` against momentum theory | ideal rotor (many blades, ideal twist, no drag): uniform inflow, figure of merit 1 | 3–4 % |
+| `bem` edgewise H-force | classical rotor theory, `C_H = σ·c_d0·μ/4` (Johnson 1980 §5.4; Leishman 2006 §3.4), blades that only drag, μ = 0.1 | 1 % |
+| `bem` in wind | moving through still air equals standing still in the wind; the sample quadcopter holds its spot in 8 m/s with gusts (`quad_x500_gusty.yaml` with `fidelity: bem`) | 1e-12; within 0.1 m |
 | Ground effect | Cheeseman–Bennett curve and published small-rotor ground-effect measurements | 10 % for `z/R` in 0.5–3 |
 | Field sampling | analytic field baked to VDB | interpolation error bound from grid spacing |
 | Hover power and step response of the sample quadcopter | flight log of a comparable real vehicle (to be sourced; Q16) | reported, with tolerance set from data spread |
@@ -196,8 +211,10 @@ model has no stall-delay correction yet, so that range is not part of the test.
   digit sections from the file's thickness and drawing camber);
   checked against NACA Report 640 (§7.1). The built-in controller and the autopilot bridges'
   ESCs turn a pusher's motor the right way about its joint axis.
-- Not yet: advance-ratio corrections at the `coefficients` fidelity, edgewise flow and blade
-  flapping at `bem`, wind at the rotors.
+- Edgewise flow and wind at the rotors at `bem` (§2.1): in 8 m/s with gusts the sample
+  quadcopter holds its spot within 9 cm and 6 cm of height, at 175 W against 193 W in still air
+  (translational lift).
+- Not yet: advance-ratio corrections at the `coefficients` fidelity, wake skew and flapping.
 
 `lagrange_aerodynamics` (`modules/aerodynamics/`): `AeroDrag` at the `drag` fidelity over
 `AeroAPI_1` links: per-axis drag at the centre of pressure and angular damping against the air,
