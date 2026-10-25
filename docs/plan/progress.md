@@ -11,7 +11,7 @@ flowchart LR
     v03["v0.3<br/>arms + electrical<br/>MoveIt 2<br/><b>released 2026-10-25</b>"]:::done
     v04["v0.4<br/>drones<br/>PX4 / ArduPilot SITL<br/><b>released 2026-10-25</b>"]:::done
     v05["v0.5<br/>weather + EMI + comms<br/><b>released 2026-10-25</b>"]:::done
-    v06["v0.6<br/>cars, autonomous cars<br/>OpenDRIVE, Autoware<br/><b>next</b>"]:::now
+    v06["v0.6<br/>cars, autonomous cars<br/>OpenDRIVE, Autoware<br/><b>in progress</b>"]:::now
     v07["v0.7<br/>huge worlds"]:::todo
     v10["v1.0<br/>stable schemas + plugin ABI<br/>ros-lyrical-* debs"]:::todo
     v01 --> v02 --> v03 --> v04 --> v05 --> v06 --> v07 --> v10
@@ -117,6 +117,34 @@ E8). Release notes and acceptance evidence: `docs/release/v0.3.0.md`. Owed withi
 a motor heat run (Q16; the battery is checked against published cell data since 2026-10-25,
 from 35 % state of charge up), the drive-design
 review of the motor constants, FMI 2.0 FMUs (Q8), Jolt's wheel slip. Released as `v0.3.0` on 2026-10-25 at the owner's request, after v0.2.0.
+
+## v0.6 plan (2026-10-25)
+
+The owner started v0.6 (cars and autonomous cars; roadmap §7) on 2026-10-25 with `/loop finish
+v0.6`. Gated merges are pre-approved as in v0.5. No new external engines: PhysX 5, SUMO and
+esmini are not added. Autoware: a bridge on Autoware's topics, tested with a stand-in, with the
+fallback documented if Autoware is not available for Lyrical.
+
+1. Schemas: `VehicleAPI_1` (chassis: powertrain, steering, brakes) and `WheelAPI_1` (wheel
+   joints: radius, tyre, suspension, steered, driven, braked); traffic-light and road-network
+   schemas as the later steps need them
+2. Tyre models: linear and Pacejka Magic Formula with `.tir` import, checked against a
+   published parameter set
+3. `modules/vehicle_dynamics`: wheel-ground queries through `services::SceneQuery`, suspension,
+   tyres, brakes, Ackermann steering, electric and engine-map powertrains, the `ideal`
+   (kinematic bicycle) substitute; ISO manoeuvres and braking distance as tests
+4. Sample sedan and a city block world, profiles, driving over ROS 2 (`/cmd_vel` or an Ackermann
+   command)
+5. `io/opendrive`: road network to USD meshes and lane tables (own reader)
+6. `modules/traffic`, `builtin` backend: lane-following vehicles, social-force pedestrians,
+   traffic lights, as kinematic bodies
+7. `io/openscenario`: a built-in runner for a subset of OpenSCENARIO 1.x
+8. Sensors: radar; camera model (exposure, noise, distortion, rolling shutter)
+9. Autoware bridge (interface and stand-in test)
+10. Tutorial, release notes
+
+Owed by the owner's decision: the PhysX backend, SUMO co-simulation, esmini. Zero-copy ROS
+output (CUDA `rosidl::Buffer`) when the steps above leave time.
 
 ## v0.5 status (2026-10-25)
 
