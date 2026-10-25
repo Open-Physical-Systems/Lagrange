@@ -5,6 +5,33 @@ Notable changes to Lagrange are recorded here. Each release section is generated
 titles merged into `dev`; do not edit it by hand. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v0.3.0...v0.4.0) (2026-10-25)
+
+
+### Features
+
+* **bridge/mavlink:** fly the sample quadcopter with ardupilot sitl through its json interface ([#117](https://github.com/Open-Physical-Systems/Lagrange/issues/117)) ([0040a80](https://github.com/Open-Physical-Systems/Lagrange/commit/0040a80dbd7c01bd4b64eba5aa7e9957467b18f6))
+* **bridge/mavlink:** fly the sample quadcopter with px4 sitl in lockstep ([#114](https://github.com/Open-Physical-Systems/Lagrange/issues/114)) ([3c7f02e](https://github.com/Open-Physical-Systems/Lagrange/commit/3c7f02e9972315da2e759e2dccf41a602ddc0cad))
+* **bridge/ros2:** publish gnss, magnetometer and barometer ([#123](https://github.com/Open-Physical-Systems/Lagrange/issues/123)) ([6e7c461](https://github.com/Open-Physical-Systems/Lagrange/commit/6e7c461ef739fd7558da1e7ebc353fd8b5c69e59))
+* **io:** open field world for the drone samples ([#122](https://github.com/Open-Physical-Systems/Lagrange/issues/122)) ([6e46a93](https://github.com/Open-Physical-Systems/Lagrange/commit/6e46a935b5baeddbfc3ff77debf72d6f3f8096dd))
+* **mod/aerodynamics:** link drag against a gusty wind with dryden turbulence ([#113](https://github.com/Open-Physical-Systems/Lagrange/issues/113)) ([dbf22dc](https://github.com/Open-Physical-Systems/Lagrange/commit/dbf22dce3f1c134ed8ec9123cc17d53e57947865))
+* **mod/rotor_aero:** blade-element momentum on propellers as built ([#118](https://github.com/Open-Physical-Systems/Lagrange/issues/118)) ([edcb6db](https://github.com/Open-Physical-Systems/Lagrange/commit/edcb6db1934e150518f3281cd7a6d1cbb52c0bf3))
+* **mod/rotor_aero:** draw propellers as their blades and fly the sample on them ([#119](https://github.com/Open-Physical-Systems/Lagrange/issues/119)) ([ef4feac](https://github.com/Open-Physical-Systems/Lagrange/commit/ef4feacb7ae2d90af50c8957252f7251740bc685))
+* **mod/rotor_aero:** edgewise flow and wind at the rotors ([#121](https://github.com/Open-Physical-Systems/Lagrange/issues/121)) ([86cc2be](https://github.com/Open-Physical-Systems/Lagrange/commit/86cc2be3e0ed499d33193e98bf46c352868228bc))
+* **mod/rotor_aero:** folding blades, three-blade propellers and pusher motors ([#120](https://github.com/Open-Physical-Systems/Lagrange/issues/120)) ([01b3d79](https://github.com/Open-Physical-Systems/Lagrange/commit/01b3d797569e6466d1bf97b779646c47108f11b0))
+* **mod/rotor_aero:** propeller thrust and torque from coefficients with ground effect ([#109](https://github.com/Open-Physical-Systems/Lagrange/issues/109)) ([a801cf1](https://github.com/Open-Physical-Systems/Lagrange/commit/a801cf1c57289c92e6004ff08b8093e347c56993))
+* **mod/sensors:** gnss, magnetometer and barometer on the world's geo origin ([#112](https://github.com/Open-Physical-Systems/Lagrange/issues/112)) ([304b55e](https://github.com/Open-Physical-Systems/Lagrange/commit/304b55e39583556b00137732644c3b40b770b98d))
+* **schemas:** aerodynamics schema library with AeroAPI_1 and RotorAPI_1 ([#108](https://github.com/Open-Physical-Systems/Lagrange/issues/108)) ([877acfe](https://github.com/Open-Physical-Systems/Lagrange/commit/877acfec0302fd42b14cbf67dfccc1bfd08ee36b))
+* **server:** sample quadcopter that takes off and hovers on its rotors ([#110](https://github.com/Open-Physical-Systems/Lagrange/issues/110)) ([8022dd1](https://github.com/Open-Physical-Systems/Lagrange/commit/8022dd14b46ad57694b4b650367c7b70d22877aa))
+
+### Bug fixes
+
+* **server:** hover the quadcopter with ros on, and let ctrl+c stop the missions ([#125](https://github.com/Open-Physical-Systems/Lagrange/issues/125)) ([b3f89b1](https://github.com/Open-Physical-Systems/Lagrange/commit/b3f89b182bbfe616b38565dda08ec2c8d64aa576))
+
+### Documentation
+
+* **docs:** drone tutorial from hover to a px4 mission ([#116](https://github.com/Open-Physical-Systems/Lagrange/issues/116)) ([da6c89d](https://github.com/Open-Physical-Systems/Lagrange/commit/da6c89df1a58bba611255eb524a06b0e099ac793))
+
 ## [0.3.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v0.2.0...v0.3.0) (2026-10-25)
 
 

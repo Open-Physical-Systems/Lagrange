@@ -9,8 +9,8 @@ flowchart LR
     v01["v0.1<br/>viewer, protocol,<br/>mock server<br/><b>released 2026-10-14</b>"]:::done
     v02["v0.2<br/>simulation core + AMR<br/>ROS 2, Nav2<br/><b>released 2026-10-25</b>"]:::done
     v03["v0.3<br/>arms + electrical<br/>MoveIt 2<br/><b>released 2026-10-25</b>"]:::done
-    v04["v0.4<br/>drones<br/>PX4 / ArduPilot SITL<br/><b>next</b>"]:::now
-    v05["v0.5<br/>weather + EMI"]:::todo
+    v04["v0.4<br/>drones<br/>PX4 / ArduPilot SITL<br/><b>released 2026-10-25</b>"]:::done
+    v05["v0.5<br/>weather + EMI<br/><b>next</b>"]:::now
     v06["v0.6<br/>cars, autonomous cars<br/>OpenDRIVE, Autoware"]:::todo
     v07["v0.7<br/>huge worlds"]:::todo
     v10["v1.0<br/>stable schemas + plugin ABI<br/>ros-lyrical-* debs"]:::todo
@@ -117,6 +117,14 @@ E8). Release notes and acceptance evidence: `docs/release/v0.3.0.md`. Owed withi
 a motor heat run (Q16; the battery is checked against published cell data since 2026-10-25,
 from 35 % state of charge up), the drive-design
 review of the motor constants, FMI 2.0 FMUs (Q8), Jolt's wheel slip. Released as `v0.3.0` on 2026-10-25 at the owner's request, after v0.2.0.
+
+## v0.4 status (2026-10-25)
+
+Every v0.4 epic is done or moved: field sampling to v0.5 with the fields infrastructure, rebase
+in flight to v0.7 with C5. Release notes and acceptance evidence: `docs/release/v0.4.0.md`.
+Owed within the epics: small-propeller test data (the UIUC database states no licence),
+measured ground effect, stall delay, the Dryden spectrum's periodogram check, the tutorial's
+SITL steps in the container. Released as `v0.4.0` on 2026-10-25 at the owner's request.
 
 ## v0.4 plan (2026-10-25)
 
