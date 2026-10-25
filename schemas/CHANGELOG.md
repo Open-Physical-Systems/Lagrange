@@ -5,6 +5,11 @@ every schema is version 1 and may change without a migration.
 
 ## Unreleased
 
+- **`CameraSensorAPI_1`** gains `electronRate` (e⁻/s at the renderer's full white: the light
+  level the raster level does not model) and `vignetting` (fraction of the cos⁴θ fall-off) for
+  the v0.6 sensor model (formats.md §3.8); `exposureTime` is now the longest exposure with
+  `autoExposure`. Additions with no effect on existing files.
+
 - **`RadarAPI_1`** in the sensor library for v0.6 (formats.md §3.8): carrier frequency, range,
   fields of view, resolutions, transmit power, antenna gain, effective noise floor, detection
   threshold; `bandwidth` as drafted is left out (the range resolution stands for it).

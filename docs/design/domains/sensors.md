@@ -34,6 +34,21 @@ Each sensor has `ground_truth` (the substitute) and one or more physical levels.
 | `sensor_model` | Adds exposure (scene radiance → electrons with exposure time and gain), photon shot noise and read noise, quantisation to bit depth, lens distortion (plumb-bob or equidistant), vignetting, motion blur from per-pixel velocity, rolling shutter by rendering row bands at different times |
 | `rt` (Tier 2) | Ray-traced shadows and reflections for the above |
 
+Status of `sensor_model` in v0.6 (`modules/sensors/include/lagrange/sensors/CameraModel.hpp`, CPU
+after the raster render, every tier with a Vulkan device): each part runs when
+`CameraSensorAPI_1` asks for it. Lens distortion (plumb_bob, equidistant) by remapping a wider
+pinhole render (at most twice the size); vignetting as a fraction of cos⁴θ; a rotational
+rolling shutter (each row from the camera's orientation at its exposure, the angular velocity
+held over the frame; translation left out); exposure as e = L·electronRate·t from the render's
+linear value, Poisson shot and Gaussian read noise, full well, gain and bit depth (EMVA 1288's
+linear model), then display encoding again; auto exposure aims the mean at 18 % of full scale
+(`sensor/<n>/exposure_time`). camera_info carries the distortion. Checked in
+`test_camera_model`: OpenCV's lens formulas and their inverse, the photon-transfer variance
+within 3 %, cos⁴θ, the skew of a vertical line under a pan, exposure and auto exposure. The sample
+sedan's front camera uses all of it. Owed: motion blur, a light model (absolute radiance),
+colour filter array and demosaicing, translation in the rolling shutter, importing SDFormat
+`<distortion>` and `<noise>`.
+
 **Radar**: ray-launched returns with radar cross-section from `sensmat:radarCrossSectionDensity`,
 radial velocity from relative motion, a range–Doppler–azimuth detection list after a
 constant-false-alarm threshold; rain attenuation from weather. Raw ADC cubes are not produced.

@@ -53,6 +53,27 @@ over "sedan"
             double3 xformOp:translate = (2.3, 0, 0.1)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
         }
+
+        # The front camera's sensor model (sensors.md §2): a rolling-shutter automotive imager
+        # with auto exposure, a mild barrel lens and vignetting. Illustrative values, not a
+        # product's datasheet.
+        over "camera_link"
+        {
+            over "front_camera"
+            {
+                uniform token sensor:camera:shutter = "rolling"
+                double sensor:camera:rollingShutterTime = 0.02     # s, first row to last
+                double sensor:camera:exposureTime = 0.01           # s, the longest
+                bool sensor:camera:autoExposure = true
+                double sensor:camera:electronRate = 2000000        # e⁻/s at full white
+                double sensor:camera:readNoiseStd = 3              # e⁻
+                double sensor:camera:fullWellCapacity = 10000      # e⁻
+                int sensor:camera:bitDepth = 12
+                uniform token sensor:camera:distortionModel = "plumb_bob"
+                double[] sensor:camera:distortionCoeffs = [-0.12, 0.02, 0, 0, 0]
+                double sensor:camera:vignetting = 0.5
+            }
+        }
     }
 
     over "joints"

@@ -2,6 +2,7 @@
 #include "lagrange/fields/Field.hpp"
 #include "lagrange/module/StateIO.hpp"
 #include "lagrange/random/Philox.hpp"
+#include "lagrange/sensors/CameraModel.hpp"
 #include "lagrange/sensors/ImuNoise.hpp"
 #include "lagrange/sensors/Radar.hpp"
 #include "lagrange/sensors/Sensors.hpp"
@@ -681,6 +682,49 @@ public:
         camera_.cy = (height - 1.0) / 2.0;
         camera_.near = setting(sensors, sensor_, "near_clip", 0.05);
         far_ = setting(sensors, sensor_, "far_clip", 100.0);
+        // The sensor model (CameraModel.hpp): lens, vignetting, rolling shutter, exposure.
+        CameraModelConfig model;
+        model.width = camera_.width;
+        model.height = camera_.height;
+        model.fx = camera_.fx;
+        model.fy = camera_.fy;
+        model.cx = camera_.cx;
+        model.cy = camera_.cy;
+        const double lens = setting(sensors, sensor_, "distortion_model", 0.0);
+        model.lens.model = lens == 1.0   ? Lens::Model::PlumbBob
+                           : lens == 2.0 ? Lens::Model::Equidistant
+                                         : Lens::Model::None;
+        for (std::size_t k = 0; k < model.lens.k.size(); ++k) {
+            model.lens.k[k] =
+                setting(sensors, sensor_, ("distortion_k" + std::to_string(k + 1)).c_str(), 0.0);
+        }
+        model.vignetting = setting(sensors, sensor_, "vignetting", 0.0);
+        model.rollingShutterTime = setting(sensors, sensor_, "rolling_shutter_time", 0.0);
+        if (const double time = setting(sensors, sensor_, "exposure_time", 0.0); time > 0.0) {
+            Exposure e;
+            e.time = time;
+            e.autoExposure = setting(sensors, sensor_, "auto_exposure", 0.0) != 0.0;
+            e.electronRate = setting(sensors, sensor_, "electron_rate", 0.0);
+            e.gain = setting(sensors, sensor_, "gain", 1.0);
+            e.readNoise = setting(sensors, sensor_, "read_noise", 2.0);
+            e.fullWell = setting(sensors, sensor_, "full_well", 10000.0);
+            e.bitDepth = static_cast<int>(setting(sensors, sensor_, "bit_depth", 8.0));
+            if (e.electronRate <= 0.0 || e.gain <= 0.0 || e.readNoise < 0.0 || e.fullWell <= 0.0 ||
+                e.bitDepth < 1 || e.bitDepth > 16) {
+                return Status::error(StatusCode::InvalidConfig,
+                                     "camera " + name_ + ": exposure settings out of range");
+            }
+            model.exposure = e;
+        }
+        if (model.vignetting < 0.0 || model.vignetting > 1.0 || model.rollingShutterTime < 0.0) {
+            return Status::error(
+                StatusCode::InvalidConfig,
+                "camera " + name_ + ": vignetting or rolling shutter out of range");
+        }
+        model_ = std::make_unique<CameraModel>(model);
+        if (!model_->active()) {
+            model_.reset();
+        }
 
         const World& raw = world.raw();
         const std::vector<bool> moving = movingBodies(raw);
@@ -693,6 +737,11 @@ public:
             }
         };
         watch(body_);
+        if (model_ && model_->renderCamera().width > 0 && model.rollingShutterTime > 0.0 &&
+            body_ < moving.size() && moving[body_] && !groundTruth_) {
+            twist_ = d.input(spec("body/" + raw.bodies.names[body_] + "/twist", SignalType::Wrench,
+                                  units::m_per_s, "world_local"));
+        }
         if (scene_ && !groundTruth_) {
             for (const CameraScene::Drawable& drawable : scene_->drawables) {
                 if (drawable.body != kNoIndex) {
@@ -708,6 +757,10 @@ public:
         image_ = image("image", Unit{});
         depth_ = image("depth", units::m);
         instance_ = image("instance", Unit{});
+        if (model_ && model.exposure) {
+            exposureOut_ =
+                d.output(spec("sensor/" + name_ + "/exposure_time", SignalType::Scalar, units::s));
+        }
         // The weather's veil (config "weather"): visible extinction and the lens's contamination.
         weather_ = config.get<bool>("weather").value_or(false) && !groundTruth_;
         if (weather_) {
@@ -733,15 +786,16 @@ public:
                                          " needs a Vulkan device, and none was usable (set the "
                                          "sensors domain to ground_truth to run without one)");
             }
+            const gpu::PinholeCamera& render = model_ ? model_->renderCamera() : camera_;
             renderer_ =
-                std::make_unique<gpu::RasterCamera>(scene_->raster, camera_.width, camera_.height);
+                std::make_unique<gpu::RasterCamera>(scene_->raster, render.width, render.height);
             instances_.resize(scene_->drawables.size());
         }
         publish(bus);  // empty images until the first frame
         return {};
     }
 
-    Status step(const StepContext&, SignalBus& bus) override {
+    Status step(const StepContext& context, SignalBus& bus) override {
         if (groundTruth_) {
             publish(bus);
             return {};
@@ -757,7 +811,25 @@ public:
             instances_[k] = {drawable.mesh,  pose.position,  pose.orientation,
                              drawable.scale, drawable.color, drawable.prim};
         }
-        renderer_->render(instances_, camera_, images_);
+        if (model_) {
+            gpu::PinholeCamera render = model_->renderCamera();
+            render.near = camera_.near;
+            render.position = camera_.position;
+            render.orientation = camera_.orientation;
+            renderer_->render(instances_, render, rendered_);
+            std::array<double, 3> omega{};
+            if (twist_.valid()) {
+                const std::span<const double> t = bus.readN(twist_);
+                omega = rotate(conjugate(camera_.orientation), {t[3], t[4], t[5]});
+            }
+            if (exposureOut_.valid()) {
+                bus.write(exposureOut_, model_->exposureTime());
+            }
+            model_->apply(rendered_, omega, context.seed, context.stepIndex, sensor_ << 16U,
+                          images_);
+        } else {
+            renderer_->render(instances_, camera_, images_);
+        }
         for (float& depth : images_.depth) {
             if (depth > far_) {
                 depth = std::numeric_limits<float>::infinity();
@@ -804,8 +876,29 @@ private:
         return {{v[0], v[1], v[2]}, {v[3], v[4], v[5], v[6]}};
     }
 
+public:
+    Status saveState(StateWriter& writer) const override {
+        writer.put(model_ ? model_->exposureTime() : 0.0);
+        return {};
+    }
+
+    Status restoreState(StateReader& reader) override {
+        double exposure = 0.0;
+        if (!reader.get(exposure)) {
+            return Status::error(StatusCode::Internal, "camera " + name_ + ": truncated state");
+        }
+        if (model_) {
+            model_->setExposureTime(exposure);
+        }
+        return {};
+    }
+
+private:
     std::shared_ptr<const CameraScene> scene_;
-    gpu::PinholeCamera camera_;
+    gpu::PinholeCamera camera_;           // the output's pinhole (before the sensor model)
+    std::unique_ptr<CameraModel> model_;  // null when no part of the sensor model is on
+    gpu::RasterImages rendered_;          // the render the sensor model remaps
+    SignalId twist_, exposureOut_;
     double far_{100.0};
     std::vector<Pose> rest_;
     std::vector<SignalId> poses_;

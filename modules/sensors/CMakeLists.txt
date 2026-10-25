@@ -18,6 +18,7 @@ add_library(
     src/Wmm.cpp
     src/GeoSensors.cpp
     src/Radar.cpp
+    src/CameraModel.cpp
     src/WeatherEffects.cpp
 )
 lagrange_target_defaults(lagrange_sensors)
@@ -79,6 +80,9 @@ if(BUILD_TESTING)
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
     )
     lagrange_target_defaults(test_radar)
+    ament_add_gtest(test_camera_model test/test_camera_model.cpp)
+    target_link_libraries(test_camera_model lagrange_sensors)
+    lagrange_target_defaults(test_camera_model)
     ament_add_gtest(test_imu_noise test/test_imu_noise.cpp TIMEOUT 120)
     target_link_libraries(test_imu_noise lagrange_sensors)
     lagrange_target_defaults(test_imu_noise)
