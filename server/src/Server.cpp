@@ -889,6 +889,8 @@ struct Server::Impl {
     std::optional<std::string> rigidBodyBackend;            // from an applied profile
     std::optional<std::string> appliedTireModel;            // vehicle_dynamics.tire_model
     std::optional<openscenario::Scenario> scenario;         // --scenario
+    SignalId scenarioState, scenarioTime;                   // its runner's, when it has one
+    bool scenarioEnded{false};                              // logged once
     std::optional<std::int64_t> electricalDtNs;             // from an applied profile
     std::optional<ProfileSettings> pending;  // applied without restart: used at the next reset
 
@@ -900,6 +902,9 @@ struct Server::Impl {
         }
         scheduler = std::move(*made);
         driveCommand = drive;  // only now: a failed build leaves the run as it was
+        scenarioState = scheduler->bus().find("scenario/state");
+        scenarioTime = scheduler->bus().find("scenario/time");
+        scenarioEnded = false;
         bodyPose.assign(robot.world.bodies.names.size(), SignalId{});
         for (std::size_t b = 0; b < bodyPose.size(); ++b) {
             bodyPose[b] = scheduler->bus().find("body/" + robot.world.bodies.names[b] + "/pose");
@@ -1090,6 +1095,15 @@ struct Server::Impl {
             tickNs.push_back(nanosSince(tickStart, Clock::now()));
             capture();
             record();
+            if (scenarioState.valid() && !scenarioEnded &&
+                scheduler->bus().read(scenarioState) == 1.0) {
+                scenarioEnded = true;
+                char line[96];
+                std::snprintf(line, sizeof(line),
+                              "the scenario ended at its stop trigger, t = %.2f s",
+                              scheduler->bus().read(scenarioTime));
+                log(v1::LOG_LEVEL_INFO, "scenario", line);
+            }
             if (replay) {
                 if (scheduler->now().ns % kCheckpointNs == 0) {
                     checkpoint();

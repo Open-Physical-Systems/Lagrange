@@ -173,6 +173,7 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--world needs a file, or none";
             }
             options.worldPath = std::string_view(path) == "none" ? "" : path;
+            out.worldGiven = true;
         } else if (arg == "--overlay") {
             const char* path = value();
             if (path == nullptr) {
@@ -453,6 +454,9 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
     }
     if (thermalAsked && !options.ambientTemperatureK) {
         return "--domain thermal=on needs the site's ambient temperature: --ambient-temperature K";
+    }
+    if (!options.scenarioPath.empty() && !out.worldGiven) {
+        options.worldPath.clear();  // the scenario's own road network is the world
     }
     if (out.robotGiven && !out.overlayGiven &&
         std::filesystem::path(options.robotPath).filename() != "amr_diffdrive.urdf") {

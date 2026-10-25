@@ -15,6 +15,7 @@ struct CommandLine {
     ServerOptions options;
     std::string exportMap;  // --export-map
     bool robotGiven{false};
+    bool worldGiven{false};  // --world, even `none`
     bool overlayGiven{false};
     bool help{false};
     std::vector<std::string> positional;  // when allowed
