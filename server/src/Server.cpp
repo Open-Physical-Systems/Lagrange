@@ -1,4 +1,5 @@
 #include "Recorder.hpp"
+#include "lagrange/aerodynamics/Aerodynamics.hpp"
 #include "lagrange/electrical/IdealTorqueSource.hpp"
 #include "lagrange/electrical/Network.hpp"
 #include "lagrange/importers/Importers.hpp"
@@ -530,6 +531,18 @@ struct Server::Impl {
                 next->add(std::make_unique<thermal::ThermalNetwork>(), ModuleConfig(heat));
             }
         }
+        // Link drag against the wind (an AeroAPI_1 robot, with the site's air density): the
+        // aerodynamics config's own density, else rotor_aero's.
+        if (!WorldView(robot.world).instancesOf("AeroAPI_1").empty() && !off("aerodynamics")) {
+            ModuleConfigData aero;
+            aero.values.insert(settings.aerodynamics.begin(), settings.aerodynamics.end());
+            if (!aero.values.contains("air_density") && settings.airDensityKgM3) {
+                aero.values.emplace("air_density", *settings.airDensityKgM3);
+            }
+            if (aero.values.contains("air_density")) {
+                next->add(std::make_unique<aerodynamics::AeroDrag>(), ModuleConfig(aero));
+            }
+        }
         // Rotors after electrical: the rotor joints' load torque and the thrust on their links.
         // They need the site's air density; without one they do not run (as thermal without
         // the ambient temperature) and the server says so at load.
@@ -588,23 +601,25 @@ struct Server::Impl {
         settings.ambientTemperatureK = ambient();
         settings.airDensityKgM3 = appliedAirDensity ? appliedAirDensity : options.airDensityKgM3;
         settings.geoOrigin = appliedGeoOrigin ? appliedGeoOrigin : options.geoOrigin;
+        settings.aerodynamics = appliedAerodynamics;
         return settings;
     }
     /// The ambient temperature the run uses: an applied profile's, else the command line's.
     std::optional<double> ambient() const {
         return appliedAmbientK ? appliedAmbientK : options.ambientTemperatureK;
     }
-    std::optional<std::int64_t> thermalDtNs;           // from an applied profile
-    std::optional<double> appliedAmbientK;             // from an applied profile
-    std::optional<double> appliedAirDensity;           // from an applied profile
-    std::optional<coords::Geodetic> appliedGeoOrigin;  // from an applied profile
-    std::optional<bool> speedPrediction;               // from an applied profile
-    std::optional<std::string> electricalFidelity;     // from an applied profile
-    std::optional<std::string> rigidBodyReplay;        // --bench, or an applied profile
-    std::optional<std::int64_t> rigidBodyDtNs;         // from an applied profile
-    std::optional<std::string> rigidBodyBackend;       // from an applied profile
-    std::optional<std::int64_t> electricalDtNs;        // from an applied profile
-    std::optional<ProfileSettings> pending;  // applied without restart: used at the next reset
+    std::optional<std::int64_t> thermalDtNs;                              // from an applied profile
+    std::optional<double> appliedAmbientK;                                // from an applied profile
+    std::optional<double> appliedAirDensity;                              // from an applied profile
+    std::optional<coords::Geodetic> appliedGeoOrigin;                     // from an applied profile
+    std::map<std::string, ConfigValue, std::less<>> appliedAerodynamics;  // its wind
+    std::optional<bool> speedPrediction;                                  // from an applied profile
+    std::optional<std::string> electricalFidelity;                        // from an applied profile
+    std::optional<std::string> rigidBodyReplay;   // --bench, or an applied profile
+    std::optional<std::int64_t> rigidBodyDtNs;    // from an applied profile
+    std::optional<std::string> rigidBodyBackend;  // from an applied profile
+    std::optional<std::int64_t> electricalDtNs;   // from an applied profile
+    std::optional<ProfileSettings> pending;       // applied without restart: used at the next reset
 
     Status build() {
         DriveCommand* drive = nullptr;
@@ -2368,6 +2383,9 @@ struct Server::Impl {
         if (hasRotors()) {
             context.modules.insert("rotor_aero");
         }
+        if (!WorldView(robot.world).instancesOf("AeroAPI_1").empty()) {
+            context.modules.insert("aerodynamics");
+        }
         context.ambientKnown = options.ambientTemperatureK.has_value();
         context.airDensityKnown = options.airDensityKgM3.has_value();
         for (const DomainRow& row : kDomains) {
@@ -2485,6 +2503,7 @@ struct Server::Impl {
         if (settings.geoOrigin) {
             appliedGeoOrigin = settings.geoOrigin;
         }
+        appliedAerodynamics = settings.aerodynamics;
         pending.reset();
         if (Status status = restart(); !status.ok()) {
             // Keep the run going on the profile it had.

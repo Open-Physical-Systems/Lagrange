@@ -20,6 +20,7 @@
   <test_depend>lagrange_models</test_depend>
   <depend>lagrange_thermal</depend>
   <depend>lagrange_rotor_aero</depend>
+  <depend>lagrange_aerodynamics</depend>
   <depend>lagrange_recording</depend>
   <depend>lagrange_gpu</depend>
   <depend>lagrange_meshes</depend>

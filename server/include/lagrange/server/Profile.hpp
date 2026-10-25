@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lagrange/module/ModuleConfig.hpp"
 #include "lagrange/world/coords/Frames.hpp"
 
 #include <cstdint>
@@ -38,7 +39,9 @@ struct ProfileSettings {
     std::optional<double> ambientTemperatureK;  // domains.thermal.ambient_temperature
     std::optional<double> airDensityKgM3;       // domains.rotor_aero.air_density
     std::optional<coords::Geodetic> geoOrigin;  // world.geo_origin (radians, m)
-    std::optional<double> realTimeFactor;       // time.real_time_factor (0: as fast as possible)
+    /// domains.aerodynamics: the wind and air density keys, as the module's config takes them.
+    std::map<std::string, ConfigValue, std::less<>> aerodynamics;
+    std::optional<double> realTimeFactor;  // time.real_time_factor (0: as fast as possible)
 };
 
 struct ProfileIssue {

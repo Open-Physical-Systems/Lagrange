@@ -132,7 +132,18 @@ profile validator rejects it with that explanation.
   the design's clamp at 0.25 R is where the formula diverges.
 - Not yet: advance-ratio corrections in forward flight, blade flapping, `bem`.
 
+`lagrange_aerodynamics` (`modules/aerodynamics/`): `AeroDrag` at the `drag` fidelity over
+`AeroAPI_1` links: per-axis drag at the centre of pressure and angular damping against the air,
+which is the mean wind of a logarithmic profile plus Dryden turbulence (MIL-F-8785C low altitude,
+its forming filters integrated exactly over the step). Until the weather domain gives the site's
+wind (v0.5), the wind is the aerodynamics domain's config: `wind_speed` at
+`wind_reference_height`, `wind_from`, the terrain's `roughness_length` and `turbulence`, all
+without defaults; the air density as for the rotors. Not yet: lift tables, VDB wind fields, the
+gust in the rotors' inflow.
+
 | §7 check | Status | Test |
 |---|---|---|
+| Terminal velocity | met, sphere within 0.5 % | `test_aerodynamics` |
+| Turbulence spectra | variances of the three components within 5 % of σ² over 4000 correlation times, longitudinal autocorrelation within 0.03 of e^(−τV/L); the periodogram band test is owed | `test_aerodynamics` |
 | Static thrust and torque | closed form met exactly; published propeller data owed (with the sample quadcopter's propeller) | `test_rotor_aero` |
 | Ground effect | Cheeseman–Bennett met exactly for z/R 0.5 to 3; published small-rotor measurements owed | `test_rotor_aero` |

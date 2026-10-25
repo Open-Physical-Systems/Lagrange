@@ -91,3 +91,20 @@ def test_the_sample_quadcopter_takes_off_and_hovers() -> None:
     assert thrust == pytest.approx(2.0 * 9.80665, rel=0.01)
     power = sim.read("battery/battery/power")[0]
     assert 150.0 < power < 250.0, f"hover power {power:.0f} W"
+
+
+def test_the_quadcopter_holds_its_position_in_gusty_wind() -> None:
+    # v0.4: link drag, the logarithmic wind profile and Dryden turbulence.
+    sim = lagrange.Simulation(
+        lagrange.sample_quadcopter(), world=None, profile=lagrange.sample_profile("quad_x500_gusty")
+    )
+    start = sim.read("body/base_link/pose")
+    gusts = []
+    for t in range(5, 21):
+        sim.step_until(float(t))
+        pose = sim.read("body/base_link/pose")
+        assert math.hypot(pose[0] - start[0], pose[1] - start[1]) < 0.3
+        assert pose[2] - start[2] == pytest.approx(2.0, abs=0.1)
+        gusts.append(sim.read("env/wind/gust")[0])
+    assert max(gusts) - min(gusts) > 1.0, "the turbulence varies"
+    assert sim.read("body/base_link/airspeed")[0] > 2.0, "the wind blows on it"
