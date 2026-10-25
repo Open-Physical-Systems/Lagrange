@@ -143,7 +143,7 @@ agree.
 | RL step response of the d and q axes | closed form | 0.1 % at 10 steps per time constant |
 | DC motor no-load speed, stall current, torque-speed line | closed form from `R`, `Kt`, `V` | 0.5 % |
 | Coupled motor + inertia step (coupling test) | monolithic stiff ODE solution | 2 % RMS (architecture §8) |
-| Battery ECM pulse discharge | published cell characterisation data with OCV and pulse tests (candidate: an openly licensed Li-ion cell dataset; to be selected and its license checked) | terminal-voltage RMS error < 20 mV per cell |
+| Battery ECM pulse discharge | published cell characterisation data with OCV and pulse tests: LG HG2 cell, Kollmeyer et al., doi:10.17632/b5mj79w5w9.2, CC BY 4.0 (HPPC and C/20 at 25 °C) | terminal-voltage RMS error < 20 mV per cell |
 | Energy balance | battery energy out = mechanical work + losses + stored | closed to 0.5 % over a drive cycle |
 | Netlist round trip | exported netlist run in ngspice (averaged sources) vs runtime | bus voltage within 1 % |
 | Brownout scenario | scripted stall of both AMR motors on a low battery | bus trips, `load/computer/powered` goes false, recovers after load removal |
@@ -203,7 +203,7 @@ battery FMUs, motors on prismatic joints, and the rotor inertia in Jolt.
 | RL step response, d and q | met (exact up to rounding) | `test_models` `RlStepResponseMatchesTheClosedForm` |
 | DC motor no-load speed, stall current, torque-speed line | met, 0.5 % | `BrushedDcTorqueSpeedLineMatchesTheClosedForm` |
 | Coupled motor + inertia | met, < 2 % RMS in speed and current against a monolithic 1 µs solution, inertias 6e-7 to 1e-2 kg·m², no growth | `test_coupling`, `CoSimulatedWithPhysicsAtOneMillisecond...` |
-| Battery ECM pulse | closed form met exactly; the published-dataset comparison is owed (dataset not chosen) | `PulseDischargeMatchesTheClosedForm` |
+| Battery ECM pulse | closed form met exactly; against the LG HG2 HPPC pulses, one fitted parameter set: 5.4 to 6.2 mV RMS on held-out blocks from 46 to 89 % state of charge, 21.5 mV at 24 % (not met: r0 and the OCV slope rise below about 35 %; a state-of-charge-dependent r0 is the next step). 25 °C only | `PulseDischargeMatchesTheClosedForm`, `test_battery_dataset` (data and fit in `test/data/lg_hg2`) |
 | Energy balance over a drive cycle | met, 0.5 % | `test_network` `EnergyBalancesOverADriveCycle` |
 | Netlist round trip | met: with a drive cycle sagging a weak pack's bus by 2.4 V, ngspice's bus voltage is within 0.05 % of the network's (sag within 0.16 % RMS) | `test_export` (needs ngspice) |
 | Brownout scenario | met | `AStalledAmrOnALowBatteryBrownsOutAndRecovers` |
