@@ -1,0 +1,60 @@
+#usda 1.0
+(
+    defaultPrim = "open_field"
+    doc = """The open field with an overhead power line (domains/emi.md): one conductor 10 m up,
+    along y, 6 m east of the landing pad, between two poles. Its field disturbs a magnetometer
+    that flies near it (assets/robots/quad_x500/quad_x500_emi.usda). The line, conductor and poles
+    are drawn, not collided with."""
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    subLayers = [
+        @../open_field/open_field.usda@
+    ]
+    upAxis = "Z"
+)
+
+over "open_field"
+{
+    def Xform "power_line_01" (
+        prepend apiSchemas = ["EmiSourceAPI_1"]
+    )
+    {
+        uniform token emi:sourceType = "power_line"
+        # Site parameter: the grid frequency where the scene is. 60 Hz: western Japan (Kyushu,
+        # Kansai), the Americas; eastern Japan and Europe run at 50 Hz. Never a code default.
+        double emi:frequency = 60
+        double emi:current = 400
+        double[] emi:harmonics = [0, 0.05]
+        double3 emi:direction = (0, 1, 0)
+        double3 xformOp:translate = (6, 0, 10)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        def Cylinder "conductor"
+        {
+            uniform token axis = "Y"
+            double height = 60
+            double radius = 0.02
+            color3f[] primvars:displayColor = [(0.2, 0.2, 0.22)]
+        }
+    }
+
+    def Cylinder "pole_north"
+    {
+        uniform token axis = "Z"
+        double height = 10.5
+        double radius = 0.15
+        color3f[] primvars:displayColor = [(0.45, 0.36, 0.26)]
+        double3 xformOp:translate = (6, 25, 5.25)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Cylinder "pole_south"
+    {
+        uniform token axis = "Z"
+        double height = 10.5
+        double radius = 0.15
+        color3f[] primvars:displayColor = [(0.45, 0.36, 0.26)]
+        double3 xformOp:translate = (6, -25, 5.25)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}

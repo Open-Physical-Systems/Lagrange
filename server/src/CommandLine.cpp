@@ -124,8 +124,8 @@ void printServerOptions(std::FILE* out) {
         "            dust_concentration (kg/m³), dust_median_diameter (m), solar_irradiance\n"
         "            (W/m²), sky_temperature (K), fog_field and wind_field (.nvdb files);\n"
         "            a profile's weather keys also set them\n"
-        "  --domain D=off  replace domain D (rigid_body, electrical, thermal, sensors) by its\n"
-        "            substitute\n"
+        "  --domain D=off  replace domain D (rigid_body, electrical, thermal, weather, emi,\n"
+        "            sensors) by its substitute\n"
         "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
         "            TwistStamped\n"
         "  --no-demo  stand still until the first /cmd_vel instead of driving the demo\n"
@@ -343,9 +343,10 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             const std::string_view state =
                 equals == std::string_view::npos ? "" : setting.substr(equals + 1);
             if ((domain != "rigid_body" && domain != "sensors" && domain != "electrical" &&
-                 domain != "thermal") ||
+                 domain != "thermal" && domain != "weather" && domain != "emi") ||
                 (state != "on" && state != "off")) {
-                return "--domain takes rigid_body, electrical, thermal or sensors =on|off";
+                return "--domain takes rigid_body, electrical, thermal, weather, emi or sensors "
+                       "=on|off";
             }
             if (state == "off") {
                 options.substituted.insert(domain);

@@ -79,7 +79,9 @@ Expected<std::shared_ptr<const Field>, std::string> Field::load(const std::strin
 double Field::sampleScalar(const Vec3& world) const {
     if (impl_->scalar != nullptr) {
         const nanovdb::FloatGrid& grid = *impl_->scalar;
-        const auto sampler = nanovdb::createSampler<1>(grid.getAccessor());
+        // The sampler keeps a reference to the accessor: it must outlive the sampler.
+        const auto accessor = grid.getAccessor();
+        const auto sampler = nanovdb::createSampler<1>(accessor);
         return sampler(grid.worldToIndexF(nanovdb::Vec3f(static_cast<float>(world[0]),
                                                          static_cast<float>(world[1]),
                                                          static_cast<float>(world[2]))));
@@ -93,7 +95,8 @@ Vec3 Field::sampleVector(const Vec3& world) const {
         return {};
     }
     const nanovdb::Vec3fGrid& grid = *impl_->vector;
-    const auto sampler = nanovdb::createSampler<1>(grid.getAccessor());
+    const auto accessor = grid.getAccessor();
+    const auto sampler = nanovdb::createSampler<1>(accessor);
     const nanovdb::Vec3f v = sampler(grid.worldToIndexF(nanovdb::Vec3f(
         static_cast<float>(world[0]), static_cast<float>(world[1]), static_cast<float>(world[2]))));
     return {v[0], v[1], v[2]};

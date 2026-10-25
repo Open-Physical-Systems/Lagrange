@@ -207,6 +207,7 @@ void appendModel(Model& model, const Model& other) {
     };
     for (SchemaInstance instance : o.schemaInstances) {
         instance.prim = mapPrim(instance.prim);
+        instance.body = map(instance.body);
         for (auto& [name, targets] : instance.relationships) {
             for (PrimId& target : targets) {
                 target = mapPrim(target);

@@ -60,6 +60,10 @@ struct SchemaInstance {
     std::string schema;    // "ElectricalMotorAPI_1"
     std::string instance;  // a multiple-apply schema's instance ("dc_out"); empty otherwise
     PrimId prim;
+    /// Where the prim is: the nearest body at or above it (kWorldBody for fixed scenery) and
+    /// its pose in that body's frame (region-local for kWorldBody), with every joint at zero.
+    BodyId body{kWorldBody};
+    Pose poseInBody;
     std::map<std::string, double, std::less<>> reals;
     std::map<std::string, std::int64_t, std::less<>> integers;
     std::map<std::string, std::string, std::less<>> tokens;

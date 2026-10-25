@@ -1,0 +1,25 @@
+# profiles/examples/quad_x500_power_line.yaml — the sample quadcopter hovering 2 m up next to a
+# 60 Hz, 400 A overhead power line (assets/worlds/power_line/power_line.usda): the EMI domain
+# adds the line's field to the magnetometer (sampled at 100 Hz, so the 60 Hz field aliases to
+# 40 Hz) and E-field noise to the IMU. The grid frequency is the scene's site parameter. Run:
+#   ros2 run lagrange_server lagrange run profiles/examples/quad_x500_power_line.yaml \
+#       --robot assets/robots/quad_x500/quad_x500_emi.usda \
+#       --world assets/worlds/power_line/power_line.usda
+schema_version: 1
+stage: robots/quad_x500/quad_x500_emi.usda
+
+world:
+  geo_origin: { latitude: 33.590355, longitude: 130.401716, height: 20.0 }  # Fukuoka: 60 Hz
+
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: true,  fidelity: averaged, dt: 0.00005 }
+  thermal:      { enabled: false, substitute: ambient }
+  aerodynamics: { enabled: false, substitute: zero }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: true,  coupling: [magnetometer, imu] }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: true }
+  rotor_aero:   { enabled: true,  fidelity: coefficients, ground_effect: true, air_density: 1.225 }
+
+time: { real_time_factor: 1.0 }
