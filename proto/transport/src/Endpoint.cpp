@@ -1,5 +1,6 @@
 #include "lagrange/proto/Endpoint.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <cstdlib>
 #include <unistd.h>
@@ -10,6 +11,7 @@ namespace {
 
 constexpr std::string_view kUnixPrefix = "unix:";
 constexpr std::string_view kTcpPrefix = "tcp://";
+constexpr std::string_view kTlsPrefix = "tls://";
 
 std::optional<std::uint16_t> parsePort(std::string_view text) {
     unsigned value = 0;
@@ -33,10 +35,11 @@ std::optional<Endpoint> parseEndpoint(std::string_view text) {
     if (text.starts_with('/')) {
         return Endpoint::unixSocket(std::string(text));
     }
-    if (!text.starts_with(kTcpPrefix)) {
+    const bool tls = text.starts_with(kTlsPrefix);
+    if (!tls && !text.starts_with(kTcpPrefix)) {
         return std::nullopt;
     }
-    text.remove_prefix(kTcpPrefix.size());
+    text.remove_prefix(kTcpPrefix.size());  // the same length as kTlsPrefix
 
     std::string_view host;
     std::string_view port;
@@ -79,7 +82,7 @@ std::optional<Endpoint> parseEndpoint(std::string_view text) {
         }
         portNumber = *parsed;
     }
-    return Endpoint::tcp(std::string(host), portNumber);
+    return Endpoint::tcp(std::string(host), portNumber, tls);
 }
 
 std::string toString(const Endpoint& endpoint) {
@@ -87,8 +90,28 @@ std::string toString(const Endpoint& endpoint) {
         return std::string(kUnixPrefix) + endpoint.address;
     }
     const bool ipv6 = endpoint.address.find(':') != std::string::npos;
-    return std::string(kTcpPrefix) + (ipv6 ? "[" + endpoint.address + "]" : endpoint.address) +
-           ":" + std::to_string(endpoint.port);
+    return std::string(endpoint.tls ? kTlsPrefix : kTcpPrefix) +
+           (ipv6 ? "[" + endpoint.address + "]" : endpoint.address) + ":" +
+           std::to_string(endpoint.port);
+}
+
+bool isLoopback(const Endpoint& endpoint) {
+    if (endpoint.kind == Endpoint::Kind::Unix) {
+        return true;
+    }
+    const std::string& host = endpoint.address;
+    return host == "localhost" || host == "::1" || host.rfind("127.", 0) == 0;
+}
+
+bool sameSecret(std::string_view a, std::string_view b) {
+    unsigned char difference = a.size() == b.size() ? 0 : 1;
+    const std::size_t n = std::max(a.size(), b.size());
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto x = static_cast<unsigned char>(i < a.size() ? a[i] : 0);
+        const auto y = static_cast<unsigned char>(i < b.size() ? b[i] : 0);
+        difference = static_cast<unsigned char>(difference | (x ^ y));
+    }
+    return difference == 0;
 }
 
 std::string defaultUnixSocketPath(std::string_view instance) {

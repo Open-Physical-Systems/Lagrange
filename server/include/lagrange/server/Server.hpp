@@ -65,6 +65,12 @@ struct ServerOptions {
     /// overrides it.
     std::string benchReplayPath;
     Pose spawn;  // where the robot starts, world ENU (LoadOptions::spawn)
+    /// Security of TCP endpoints (v1.0, docs/design/security.md): a tls:// endpoint needs a
+    /// certificate chain and key (PEM); a shared token, when given, must arrive in every TCP
+    /// client's ClientHello. Listening beyond loopback without a token is refused.
+    std::string tlsCertificate;
+    std::string tlsKey;
+    std::string authToken;
     /// More robots in the same run (--add-robot), after the robot. Their names are prefixed
     /// with `name` (prefixModel) and their joints are passive: nothing drives them yet.
     struct ExtraRobot {

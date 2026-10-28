@@ -169,6 +169,7 @@ if(BUILD_TESTING)
         client/test/test_profile_session.cpp
         client/test/test_recent_list.cpp
         client/test/test_scene_store.cpp
+        client/test/test_scene_fuzz.cpp
         client/test/test_scope_buffer.cpp
         client/test/test_scope_session.cpp
         client/test/test_viewer_client.cpp
@@ -183,6 +184,11 @@ if(BUILD_TESTING)
         lagrange_viewer_render
         Threads::Threads
     )
+    target_compile_definitions(
+        test_viewer_client
+        PRIVATE
+            LAGRANGE_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../proto/test/golden"
+    )
     lagrange_target_defaults(test_viewer_client)
 
     find_package(ament_cmake_pytest REQUIRED)
@@ -194,6 +200,15 @@ if(BUILD_TESTING)
         LAGRANGE_VIEWER=$<TARGET_FILE:lagrange_viewer>
         ASAN_OPTIONS=${LAGRANGE_GPU_TEST_ASAN_OPTIONS}
     )
+endif()
+
+option(LAGRANGE_BUILD_FUZZERS "Build libFuzzer targets (needs Clang)" OFF)
+if(LAGRANGE_BUILD_FUZZERS)
+    add_executable(fuzz_scene_builder client/fuzz/fuzz_scene_builder.cpp)
+    target_link_libraries(fuzz_scene_builder PRIVATE lagrange_viewer_client)
+    target_compile_options(fuzz_scene_builder PRIVATE -fsanitize=fuzzer)
+    target_link_options(fuzz_scene_builder PRIVATE -fsanitize=fuzzer)
+    lagrange_target_defaults(fuzz_scene_builder)
 endif()
 
 ament_package()

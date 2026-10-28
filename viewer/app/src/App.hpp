@@ -9,6 +9,8 @@ namespace lagrange::viewer {
 
 struct Options {
     std::string endpoint;    ///< Empty: the default Unix socket.
+    std::string tlsCa;       ///< CA file for a tls:// server; empty: $LAGRANGE_TLS_CA or system.
+    std::string authToken;   ///< Token for a TCP server; empty: $LAGRANGE_AUTH_TOKEN.
     std::string gpu;         ///< Device index or part of its name; empty: automatic.
     bool validation{false};  ///< Vulkan validation layers.
     bool headless{false};    ///< No window: render offscreen, then exit.
