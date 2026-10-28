@@ -23,6 +23,8 @@ void usage() {
         "  --workspace <name>     workspace to show at start-up: scene, domains or signals\n"
         "  --shading <mode>       viewport shading at start-up: lit, unlit, wireframe, collision\n"
         "                         or thermal\n"
+        "  --follow <m>[,<deg>]   start with the follow camera, this far from the robot (and this\n"
+        "                         far above the horizon)\n"
         "  --launcher             start on the launcher (the default when no --connect is given)\n"
         "  --start-local          press the launcher's Start local simulator: run lagrange_server\n"
         "                         on the --connect endpoint (or the default socket) and connect\n"
@@ -36,6 +38,9 @@ void usage() {
         "                         with a window: close after N frames\n"
         "  --wait-ms <N>          headless: how long to wait for the scene (default 5000)\n"
         "  --screenshot <file>    headless: write the last frame as a PNG\n"
+        "  --record-frames <dir>  headless: write a frame sequence (frame_00000.png, ...) to dir\n"
+        "  --record-fps <N>       headless: frames per second written by --record-frames "
+        "(default 15)\n"
         "  --help\n");
 }
 
@@ -73,6 +78,24 @@ int main(int argc, char** argv) {
             options.waitMs = static_cast<std::uint32_t>(std::strtoul(value(), nullptr, 10));
         } else if (arg == "--screenshot") {
             options.screenshot = value();
+        } else if (arg == "--follow") {
+            char* rest = nullptr;
+            options.followDistance = std::strtod(value(), &rest);
+            if (rest != nullptr && *rest == ',') {
+                options.followPitchDeg = std::strtod(rest + 1, nullptr);
+            }
+            if (!(options.followDistance > 0.0)) {
+                std::fputs("error: --follow expects a distance in metres\n", stderr);
+                return 2;
+            }
+        } else if (arg == "--record-frames") {
+            options.recordFrames = value();
+        } else if (arg == "--record-fps") {
+            options.recordFps = static_cast<std::uint32_t>(std::strtoul(value(), nullptr, 10));
+            if (options.recordFps == 0) {
+                std::fputs("error: --record-fps must be at least 1\n", stderr);
+                return 2;
+            }
         } else if (arg == "--set-domain") {
             const std::string edit = value();
             const std::size_t equals = edit.find('=');

@@ -20,6 +20,7 @@ struct RenderOptions {
     bool grid{true};
     bool axes{true};     ///< The frame's X, Y and Z axes at its origin.
     bool sensors{true};  ///< Sensor frustums: each lidar's coverage fan and latest returns.
+    bool follow{false};  ///< The camera keeps looking at the robot, or at the selection.
 
     Shading shading{Shading::Lit};
     bool wireframeAvailable{false};  ///< Set from SceneRenderer::wireframeSupported().
