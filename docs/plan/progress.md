@@ -1,6 +1,6 @@
 # Progress
 
-Where the project stands against the [roadmap](roadmap.md). Updated 2026-10-29.
+Where the project stands against the [roadmap](roadmap.md). Updated 2026-10-29: v1.0.0 released.
 
 ## The releases
 
@@ -13,7 +13,7 @@ flowchart LR
     v05["v0.5<br/>weather + EMI + comms<br/><b>released 2026-10-25</b>"]:::done
     v06["v0.6<br/>cars, autonomous cars<br/>OpenDRIVE, Autoware<br/><b>released 2026-10-25</b>"]:::done
     v07["v0.7<br/>huge worlds<br/><b>released 2026-10-29</b>"]:::done
-    v10["v1.0<br/>stable schemas + plugin ABI<br/>ros-lyrical-* debs<br/><b>next</b>"]:::now
+    v10["v1.0<br/>stable schemas + plugin ABI<br/>ros-lyrical-* debs<br/><b>released 2026-10-29</b>"]:::done
     v01 --> v02 --> v03 --> v04 --> v05 --> v06 --> v07 --> v10
 
     classDef done fill:#1f6f43,stroke:#2ea043,color:#fff
@@ -117,6 +117,17 @@ E8). Release notes and acceptance evidence: `docs/release/v0.3.0.md`. Owed withi
 a motor heat run (Q16; the battery is checked against published cell data since 2026-10-25,
 from 35 % state of charge up), the drive-design
 review of the motor constants, FMI 2.0 FMUs (Q8), Jolt's wheel slip. Released as `v0.3.0` on 2026-10-25 at the owner's request, after v0.2.0.
+
+## v1.0 status (2026-10-29)
+
+Every v1.0 plan step is done (#167 to #172): RFC 0007 and the freeze checks, recording
+migrations and the old-release samples, TLS and token authentication with the scene builder's
+fuzz harness, the validation report and the LTS policy, and the binary packages (46 debs built
+by bloom, the clean-machine install test passed). Release notes and acceptance evidence:
+`docs/release/v1.0.0.md`. Owed: publishing and signing (the owner's), `buf breaking` and
+`abidiff` runs, long fuzzing campaigns, an advisory scan of the vendored packages, sim-vs-real
+data beyond the battery (Q16), radiation (post-1.0). Released as `v1.0.0` on 2026-10-29, with
+`release/1.x` branched from `main`.
 
 ## v1.0 plan (2026-10-29)
 

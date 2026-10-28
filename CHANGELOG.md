@@ -5,6 +5,21 @@ Notable changes to Lagrange are recorded here. Each release section is generated
 titles merged into `dev`; do not edit it by hand. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v0.7.0...v1.0.0) (2026-10-29)
+
+
+### Features
+
+* **core:** freeze the plugin ABI at 1.0 and the schemas for 1.x ([#168](https://github.com/Open-Physical-Systems/Lagrange/issues/168)) ([52e18fe](https://github.com/Open-Physical-Systems/Lagrange/commit/52e18feadc365dfa48210937b60ed235bcb52fb8))
+* **packaging:** local debs, the release image, a wheel and an SBOM ([#172](https://github.com/Open-Physical-Systems/Lagrange/issues/172)) ([551f357](https://github.com/Open-Physical-Systems/Lagrange/commit/551f35728e2d64926d85aa4accec8e994ba43d94))
+* **proto:** tls and token authentication for the viewer protocol ([#170](https://github.com/Open-Physical-Systems/Lagrange/issues/170)) ([f0cc287](https://github.com/Open-Physical-Systems/Lagrange/commit/f0cc28791cee21fcf2dd9a260b2b9ba3e047bbba))
+* **tools:** check recordings and the samples of every release since v0.5 ([#169](https://github.com/Open-Physical-Systems/Lagrange/issues/169)) ([e00db7c](https://github.com/Open-Physical-Systems/Lagrange/commit/e00db7c8c960a05b5938c8965a9697379bc4470e))
+
+### Documentation
+
+* the v1.0 validation report and the long-term support policy ([#171](https://github.com/Open-Physical-Systems/Lagrange/issues/171)) ([6577ae7](https://github.com/Open-Physical-Systems/Lagrange/commit/6577ae73234f7cb6ae6acc522ae0ccb808d022d6))
+* **plan:** the v1.0 plan and RFC 0007, the freeze ([#167](https://github.com/Open-Physical-Systems/Lagrange/issues/167)) ([6bf1a77](https://github.com/Open-Physical-Systems/Lagrange/commit/6bf1a77562d078d670b0f343dbf3d5113933468b))
+
 ## [0.7.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v0.6.0...v0.7.0) (2026-10-29)
 
 
