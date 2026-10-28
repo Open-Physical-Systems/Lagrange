@@ -34,6 +34,10 @@ struct Interest {
 struct StreamingSettings {
     double loadRadius{0.0};    ///< m: tiles nearer than this to an interest are loaded. Required.
     double unloadRadius{0.0};  ///< m: loaded tiles stay until farther than this (> loadRadius).
+    /// m: tiles with colliders are loaded only this near an interest (physics needs them only
+    /// around the robots, and they are the heavy ones); 0: the load radius. Coarser tiles
+    /// without colliders cover the rest.
+    double collisionRadius{0.0};
     /// A tile is fine enough at distance d when geometricError <= errorPerMetre * d. A robot
     /// takes the finest tiles within its reach whatever this says.
     double errorPerMetre{0.002};

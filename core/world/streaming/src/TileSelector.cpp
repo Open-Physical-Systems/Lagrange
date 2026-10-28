@@ -49,6 +49,9 @@ TileSelector::TileSelector(std::vector<TileInfo> tiles, StreamingSettings settin
     if (settings_.unloadRadius < settings_.loadRadius) {
         settings_.unloadRadius = settings_.loadRadius;
     }
+    if (!(settings_.collisionRadius > 0.0) || settings_.collisionRadius > settings_.loadRadius) {
+        settings_.collisionRadius = settings_.loadRadius;
+    }
     // Children: the tiles of the next finer level present that overlap a tile's footprint.
     // Levels need not be consecutive; tiles are bucketed by level and searched per bucket.
     std::map<std::int32_t, std::vector<std::uint32_t>> byLevel;
@@ -123,14 +126,17 @@ StreamingPlan TileSelector::update(std::span<const Interest> interests, double t
 
     // Wanted tiles: refine from the roots (tiles with no coarser tile over them) down.
     std::vector<bool> wanted(n, false);
-    const auto candidate = [&](std::uint32_t t) { return nearest[t] <= settings_.loadRadius; };
+    const auto candidate = [&](std::uint32_t t) {
+        return nearest[t] <=
+               (tiles_[t].hasCollision ? settings_.collisionRadius : settings_.loadRadius);
+    };
     const auto needsFiner = [&](std::uint32_t t) {
         const TileInfo& tile = tiles_[t];
         if (children_[t].empty()) {
             return false;
         }
         // A robot near a tile without colliders needs the finer ones that have them.
-        if (!tile.hasCollision && nearestRobot[t] <= settings_.loadRadius) {
+        if (!tile.hasCollision && nearestRobot[t] <= settings_.collisionRadius) {
             return true;
         }
         // Hysteresis on the level of detail: while finer tiles are loaded, keep them until the
@@ -177,7 +183,7 @@ StreamingPlan TileSelector::update(std::span<const Interest> interests, double t
     }
     // Collision tiles a robot can reach are wanted however they were reached.
     for (std::uint32_t i = 0; i < n; ++i) {
-        if (tiles_[i].hasCollision && nearestRobot[i] <= settings_.loadRadius) {
+        if (tiles_[i].hasCollision && nearestRobot[i] <= settings_.collisionRadius) {
             wanted[i] = true;
         }
     }
@@ -190,7 +196,12 @@ StreamingPlan TileSelector::update(std::span<const Interest> interests, double t
             continue;
         }
         bool drop = false;
-        if (nearest[i] > settings_.unloadRadius) {
+        // A collision tile leaves beyond the collision radius stretched as the unload radius is.
+        const double away = tiles_[i].hasCollision
+                                ? settings_.collisionRadius * settings_.unloadRadius /
+                                      std::max(settings_.loadRadius, 1e-9)
+                                : settings_.unloadRadius;
+        if (nearest[i] > away) {
             if (settings_.deterministic) {
                 drop = true;
             } else {
@@ -199,7 +210,8 @@ StreamingPlan TileSelector::update(std::span<const Interest> interests, double t
                 }
                 drop = timeS - farSince_[i] >= settings_.unloadDelayS;
             }
-        } else if (nearest[i] <= settings_.loadRadius) {
+        } else if (nearest[i] <=
+                   (tiles_[i].hasCollision ? settings_.collisionRadius : settings_.loadRadius)) {
             // Inside the radius and not wanted: finer tiles replace it once they are all loaded,
             // or a coarser tile does once it is loaded (it was too fine for the distance).
             bool replacements = false;
@@ -246,7 +258,7 @@ StreamingPlan TileSelector::update(std::span<const Interest> interests, double t
         // The robots' ground first, whatever it costs; then the rest, nearest first, as far as
         // the budget goes.
         const auto needed = [&](std::uint32_t t) {
-            return tiles_[t].hasCollision && nearestRobot[t] <= settings_.loadRadius;
+            return tiles_[t].hasCollision && nearestRobot[t] <= settings_.collisionRadius;
         };
         std::vector<bool> keep(n, false);
         for (const std::uint32_t t : plan.load) {

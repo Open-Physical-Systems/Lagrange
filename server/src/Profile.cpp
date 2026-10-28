@@ -355,8 +355,12 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
             if (streaming.contains("unload_radius")) {
                 settings.streamingUnloadRadius = streaming["unload_radius"].as<double>();
             }
+            if (streaming.contains("collision_radius")) {
+                settings.streamingCollisionRadius = streaming["collision_radius"].as<double>();
+            }
             for (const auto& member : streaming.object_range()) {
-                if (member.key() != "load_radius" && member.key() != "unload_radius") {
+                if (member.key() != "load_radius" && member.key() != "unload_radius" &&
+                    member.key() != "collision_radius") {
                     warning(check, "/world/streaming/" + std::string(member.key()),
                             "not applied by this server yet");
                 }

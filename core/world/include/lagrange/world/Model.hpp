@@ -73,6 +73,10 @@ struct Model {
     std::vector<std::string> notes;           // what was skipped or approximated, for the user
     /// The stage's tiles (WorldTileAPI_1), left unloaded for streaming; bounds in world ENU.
     std::vector<streaming::TileInfo> tiles;
+    /// False for a world with its own ground (terrain tiles): the infinite ground plane of the
+    /// model it joins is taken away (appendModel). From the layer's customLayerData
+    /// `lagrangeGroundPlane`.
+    bool groundPlane{true};
 };
 
 /// The visible ground: a 50 m slab in the floor colour of the mock server, as the last root prim
@@ -82,7 +86,8 @@ void addGroundPrim(Model& model);
 
 /// Adds `other` to `model`: a second robot, or a world's scenery loaded separately. Indices are
 /// renumbered; `other`'s ground (plane colliders on the world and its root prim "ground") is
-/// left out, since `model` has one. Its prims go after `model`'s, before the ground slab.
+/// left out, since `model` has one. Its prims go after `model`'s, before the ground slab. When
+/// `other` has groundPlane false, `model`'s plane and ground slab are taken away instead.
 void appendModel(Model& model, const Model& other);
 
 /// Makes a robot's names unique before it joins another model (a second robot of the same

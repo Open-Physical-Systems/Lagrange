@@ -39,11 +39,12 @@ struct ProfileSettings {
     std::optional<std::string> electricalFidelity;  // domains.electrical.fidelity
     /// Bench mode: the recording that replaces physics (rigid_body substitute replay, source).
     std::optional<std::string> rigidBodyReplay;
-    std::optional<double> ambientTemperatureK;    // domains.thermal.ambient_temperature
-    std::optional<double> airDensityKgM3;         // domains.rotor_aero.air_density
-    std::optional<coords::Geodetic> geoOrigin;    // world.geo_origin (radians, m)
-    std::optional<double> streamingLoadRadius;    // world.streaming.load_radius, m
-    std::optional<double> streamingUnloadRadius;  // world.streaming.unload_radius, m
+    std::optional<double> ambientTemperatureK;       // domains.thermal.ambient_temperature
+    std::optional<double> airDensityKgM3;            // domains.rotor_aero.air_density
+    std::optional<coords::Geodetic> geoOrigin;       // world.geo_origin (radians, m)
+    std::optional<double> streamingLoadRadius;       // world.streaming.load_radius, m
+    std::optional<double> streamingUnloadRadius;     // world.streaming.unload_radius, m
+    std::optional<double> streamingCollisionRadius;  // world.streaming.collision_radius, m
     /// domains.aerodynamics: the wind and air density keys, as the module's config takes them.
     std::map<std::string, ConfigValue, std::less<>> aerodynamics;
     /// domains.rotor_aero but the air density: fidelity, ground_effect, inflow_time_constant,

@@ -1222,6 +1222,11 @@ Expected<Model, std::string> loadStage(const std::string& path, const ReadOption
     if (auto read = reader.read(); !read) {
         return Unexpected{read.error()};
     }
+    const VtDictionary layerData = stage->GetRootLayer()->GetCustomLayerData();
+    if (const auto it = layerData.find("lagrangeGroundPlane");
+        it != layerData.end() && it->second.IsHolding<bool>()) {
+        model.groundPlane = it->second.UncheckedGet<bool>();
+    }
     if (options.tile.empty()) {
         auto tiles = readTiles(stage, path);
         if (!tiles) {
@@ -1232,7 +1237,7 @@ Expected<Model, std::string> loadStage(const std::string& path, const ReadOption
         return Unexpected{path + ": tile " + options.tile +
                           " holds rigid bodies; a tile holds static scenery only"};
     }
-    if (options.addGround && !reader.hasPlane()) {
+    if (options.addGround && !reader.hasPlane() && model.groundPlane) {
         // As the URDF loader: the infinite plane first among the colliders, the slab last.
         World& w = model.world;
         w.colliders.body.insert(w.colliders.body.begin(), kWorldBody);

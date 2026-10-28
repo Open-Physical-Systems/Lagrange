@@ -1010,6 +1010,7 @@ and requires a whole number of nanoseconds (architecture §2).
             "enabled": { "type": "boolean", "default": false },
             "load_radius":   { "type": "number", "exclusiveMinimum": 0, "description": "m" },
             "unload_radius": { "type": "number", "exclusiveMinimum": 0, "description": "m" },
+            "collision_radius": { "type": "number", "exclusiveMinimum": 0, "description": "m: tiles with colliders load only this near a robot (default 300)" },
             "active_region_radius": { "type": "number", "exclusiveMinimum": 0, "description": "m" },
             "rebase_distance": { "type": "number", "exclusiveMinimum": 0, "default": 1000, "description": "m" }
           }

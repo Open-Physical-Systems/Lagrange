@@ -275,8 +275,24 @@ void appendModel(Model& model, const Model& other) {
     for (const std::uint32_t p : other.sensorPrim) {
         model.sensorPrim.push_back(p == kNoIndex ? kNoIndex : primMap[p]);
     }
-    if (ground) {
+    if (ground && other.groundPlane) {
         prims.push_back(std::move(*ground));
+    }
+    if (!other.groundPlane) {
+        // The joining world brings its own ground: no infinite plane under its terrain.
+        World::Colliders& c = w.colliders;
+        for (std::size_t i = c.body.size(); i-- > 0;) {
+            if (c.body[i] == kWorldBody && c.shape[i] == ShapeType::Plane) {
+                const auto at = static_cast<std::ptrdiff_t>(i);
+                c.body.erase(c.body.begin() + at);
+                c.shape.erase(c.shape.begin() + at);
+                c.size.erase(c.size.begin() + at);
+                c.poseInBody.erase(c.poseInBody.begin() + at);
+                c.friction.erase(c.friction.begin() + at);
+                c.hull.erase(c.hull.begin() + at);
+            }
+        }
+        model.groundPlane = false;
     }
 }
 
