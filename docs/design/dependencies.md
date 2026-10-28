@@ -60,10 +60,18 @@ and licenses come from `docs/plan/verification.md` (checked 2026-10-13). A cell 
 | Google Benchmark | performance benchmarks (`lagrange_benchmarks`) | apt `libbenchmark-dev` (rosdep `benchmark`) | 1.9.1 | Apache-2.0 (checked in `/usr/share/doc/libbenchmark-dev/copyright` of 1.9.1-1build1, 2026-10-24) | Low | Benchmarks only, not in the product |
 | nanobind | Python bindings (`lagrange_python`) | apt `nanobind-dev` (rosdep `nanobind-dev`) | 2.11.0 | BSD-3-Clause (checked in `/usr/share/doc/nanobind-dev/copyright`, 2026-10-25) | Low | Build time only |
 | CoACD | collision bake tool | `coacd_vendor` | TODO(verify) | MIT | Medium | Offline tool; V-HACD (BSD-3-Clause) is the alternative |
-| GDAL, PROJ | geospatial | apt | 3.12.2, 9.7.1 | MIT-style (TODO(verify) each) | Low | Tools only |
+| GDAL, PROJ | elevation models and coordinate reference systems (`lagrange_geospatial`: `lagrange_build_world`) | apt `libgdal-dev` (rosdep `libgdal-dev`), PROJ through it | 3.12.2, 9.7.1 | Expat (MIT) for both, from `/usr/share/doc/libgdal-dev/copyright` and `/usr/share/doc/libproj-dev/copyright` (verified 2026-10-29) | Low | Offline world building only; the simulator does not link them |
+| proj-data (EGM96 geoid grid `egm96_15.gtx`) | orthometric to ellipsoidal heights for elevation models | apt `proj-data` (own rosdep key, `packaging/rosdep/lagrange.yaml`) | 9.7.1 | Expat for the package (`/usr/share/doc/proj-data/copyright`); the EGM96 grid is NGA's (US Government work) | Low | Read at world-building time |
 | GeographicLib | `lagrange_core` tests (coordinate conversions) | apt `libgeographiclib-dev`, rosdep `geographiclib` | 2.7 | MIT (Expat) for the library; `kissfft.hh` BSD-3-Clause; Debian packaging files GPL-3+, not linked (verified in the package's `copyright` file, 2026-10-14) | Low | Test dependency only; later geospatial tools |
 | nanobind | Python bindings | apt `nanobind-dev` | 2.11.0 | BSD-3-Clause | Low | rosdep key `nanobind-dev` |
 | mp-units | optional compile-time units inside modules | `ros-lyrical-mp-units-vendor` | 2.5.0 | MIT (TODO(verify)) | Low | Not used for the runtime `Unit` check (Q6) |
+
+Open data the sample worlds are built from (downloaded at build time, never committed):
+
+| Data | Used by | Licence | Notice |
+|---|---|---|---|
+| Copernicus DEM GLO-30 (AWS open data, `copernicus-dem-30m`) | `tools/ci/build_sample_world.sh` | Licence for Copernicus DEM instance COP-DEM-GLO-30-F (free; reproduction, distribution and adaptation allowed; read 2026-10-29) | "produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved" and the no-liability sentence of its article 6(c), both written to the world's ATTRIBUTION.md |
+| OpenStreetMap (Overpass API) | the same | ODbL 1.0 | "© OpenStreetMap contributors", in ATTRIBUTION.md; the world is a produced work |
 
 Separate processes and offline tools (not linked, not required to build):
 

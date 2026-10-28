@@ -93,6 +93,9 @@ struct SchemaAttribute {
 
 struct WriteOptions {
     std::string doc;  // the layer's documentation string
+    /// Where static colliders (on the world, not on a body) are written: a scope at the top by
+    /// default; a path under the default prim for a layer used as a payload (a world tile).
+    std::string staticColliders{"/colliders"};
 };
 
 /// Writes a model as a USD layer that loadStage reads back to the same model: the importers'

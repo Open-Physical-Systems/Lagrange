@@ -101,8 +101,12 @@ std::string primName(const std::string& name) {
 
 class Writer {
 public:
-    Writer(const Model& model, UsdStageRefPtr stage, std::filesystem::path directory)
-        : m_(model), stage_(std::move(stage)), directory_(std::move(directory)) {}
+    Writer(const Model& model, UsdStageRefPtr stage, std::filesystem::path directory,
+           std::string staticColliders)
+        : m_(model)
+        , stage_(std::move(stage))
+        , directory_(std::move(directory))
+        , staticColliders_(std::move(staticColliders)) {}
 
     Expected<void, std::string> write() {
         const std::vector<bool> moving = movingBodies(m_.world);
@@ -366,8 +370,8 @@ private:
         return {};
     }
 
-    /// The prim a collider is written under: its body's prim, or a "colliders" scope at the
-    /// top of its model for static geometry.
+    /// The prim a collider is written under: its body's prim, or a scope for static geometry
+    /// (WriteOptions::staticColliders).
     SdfPath colliderParent(BodyId body) {
         if (body != kWorldBody && rigid_[body.index]) {
             return paths_[primOfBody_[body.index]];
@@ -375,7 +379,7 @@ private:
         if (body != kWorldBody && primOfBody_[body.index] != kNoIndex) {
             return paths_[primOfBody_[body.index]];  // static scenery: under its own prim
         }
-        const SdfPath scope = SdfPath("/colliders");
+        const SdfPath scope = SdfPath(staticColliders_);
         UsdGeomScope::Define(stage_, scope);
         return scope;
     }
@@ -707,6 +711,7 @@ private:
     const Model& m_;
     UsdStageRefPtr stage_;
     std::filesystem::path directory_;
+    std::string staticColliders_;               // WriteOptions::staticColliders
     std::map<std::size_t, SdfPath> jointPath_;  // world joint -> its prim
     std::vector<bool> rigid_;
     std::vector<std::uint32_t> primOfBody_;
@@ -729,7 +734,8 @@ Expected<void, std::string> writeStage(const Model& model, const std::string& pa
     if (!options.doc.empty()) {
         stage->GetRootLayer()->SetDocumentation(options.doc);
     }
-    Writer writer(model, stage, std::filesystem::absolute(path).parent_path());
+    Writer writer(model, stage, std::filesystem::absolute(path).parent_path(),
+                  options.staticColliders);
     if (auto written = writer.write(); !written) {
         return written;
     }

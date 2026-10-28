@@ -1044,8 +1044,9 @@ TEST(Streaming, TheTilesAroundTheRobotAreLoadedAndTheRunIsDeterministic) {
     };
     const auto a = run(5'000'000'000);
     const World& world = a->world();
-    // The buildings of the tiles within 600 m: each fine tile holds up to 9 boxes.
-    EXPECT_GT(world.colliders.body.size(), 100U);
+    // The buildings of the collision tiles within 300 m (world.streaming.collision_radius's
+    // default): each holds up to 9 boxes.
+    EXPECT_GT(world.colliders.body.size(), 50U);
     double farthest = 0.0;
     for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
         if (world.colliders.shape[c] == ShapeType::Box) {
@@ -1054,7 +1055,7 @@ TEST(Streaming, TheTilesAroundTheRobotAreLoadedAndTheRunIsDeterministic) {
                                                      p[1] + world.region.worldEnu[1] - 1036.0));
         }
     }
-    EXPECT_LT(farthest, 600.0 + 256.0 * std::sqrt(2.0)) << "only tiles within the load radius";
+    EXPECT_LT(farthest, 300.0 + 256.0 * std::sqrt(2.0)) << "only tiles within the radius";
     const auto b = run(5'000'000'000);
     const auto ha = a->stateHash();
     const auto hb = b->stateHash();

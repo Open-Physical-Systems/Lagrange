@@ -303,6 +303,32 @@ flowchart LR
 
 Every generated world has an `ATTRIBUTION.md` listing sources and licenses, written by the tool.
 
+### 4.1 Status in v0.7
+
+Built (`lagrange_geospatial`, `io/geospatial/`):
+- `lagrange_build_world OUT_DIR --origin LAT,LON,HEIGHT|ground --size M [--dem FILE]...
+  [--geoid FILE | --assume-ellipsoidal] [--osm FILE.osm]... [--tiles3d TILESET.json]...` writes
+  the layout of section 2: two levels (coarse visual tiles, fine tiles with colliders), `.usdc`
+  tiles, a root `.usda` and `ATTRIBUTION.md`.
+- Elevation through GDAL (any raster, any CRS PROJ knows; bilinear between pixel centres). The
+  vertical datum is never guessed (section 4's rule): a geoid undulation raster (`egm96_15.gtx`
+  from proj-data) or `--assume-ellipsoidal`. Each vertex's height is the geodetic point under
+  its east/north position (fixed-point iteration, so curvature is right).
+- Terrain collision: two triangular prisms per collision cell (convex hulls; the world tables
+  have no heightfield yet). They load only within `world.streaming.collision_radius` (300 m) of
+  a robot; coarse tiles cover the rest. A world with terrain says so in its layer
+  (`lagrangeGroundPlane = 0`), and the infinite ground plane is taken away.
+- OpenStreetMap XML: buildings (closed ways; height from `height`, `building:levels` x 3 m or
+  9 m) as walls and roofs, with colliders over the ear-clipped footprint's triangles; roads as
+  ribbons draped on the terrain (visual). Multipolygon relations are not read.
+- 3D Tiles: leaf content (glb, glTF, b3dm with RTC_CENTER) through Assimp, transforms
+  accumulated into ECEF, then ENU; visual only.
+- `tools/ci/build_sample_world.sh` builds the 40 km sample (roadmap §8): Copernicus DEM GLO-30
+  around the PX4 home in Zurich, OpenStreetMap for the central 4 km, then drives the AMR on it
+  headless. Nothing it writes is committed (licences: `dependencies.md`).
+
+Not yet: GeoTIFF heightfield colliders, OSM PBF (libosmium), re-tiling 3D Tiles, land use.
+
 ## 5. Sensors and rendering at scale
 
 - GPU scenes use camera-relative (or sensor-relative) transforms: the model matrix sent to the

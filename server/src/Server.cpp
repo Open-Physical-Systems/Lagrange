@@ -780,6 +780,7 @@ struct Server::Impl {
         settings.geoOrigin = appliedGeoOrigin ? appliedGeoOrigin : options.geoOrigin;
         settings.streamingLoadRadius = appliedLoadRadius;
         settings.streamingUnloadRadius = appliedUnloadRadius;
+        settings.streamingCollisionRadius = appliedCollisionRadius;
         settings.aerodynamics = appliedAerodynamics;
         settings.rotorAero = appliedRotorAero;
         settings.weather = appliedWeather;
@@ -891,6 +892,7 @@ struct Server::Impl {
     std::optional<coords::Geodetic> appliedGeoOrigin;  // from an applied profile
     std::optional<double> appliedLoadRadius;    // world.streaming.load_radius of an applied profile
     std::optional<double> appliedUnloadRadius;  // world.streaming.unload_radius
+    std::optional<double> appliedCollisionRadius;  // world.streaming.collision_radius
     std::map<std::string, ConfigValue, std::less<>> appliedAerodynamics;  // its wind
     std::map<std::string, ConfigValue, std::less<>> appliedRotorAero;     // its rotor settings
     std::map<std::string, ConfigValue, std::less<>> appliedWeather;       // its weather
@@ -2592,8 +2594,9 @@ struct Server::Impl {
     }
 
     static constexpr std::size_t kTileWorkers = 4;
-    static constexpr double kDefaultLoadRadiusM = 600.0;    // world.streaming.load_radius
-    static constexpr double kDefaultUnloadRadiusM = 800.0;  // world.streaming.unload_radius
+    static constexpr double kDefaultLoadRadiusM = 600.0;       // world.streaming.load_radius
+    static constexpr double kDefaultUnloadRadiusM = 800.0;     // world.streaming.unload_radius
+    static constexpr double kDefaultCollisionRadiusM = 300.0;  // world.streaming.collision_radius
     // How far ahead a robot's ground must be in physics: this, plus half a second of travel.
     static constexpr double kGroundMarginM = 5.0;
 
@@ -2621,13 +2624,17 @@ struct Server::Impl {
         settings.loadRadius = active().streamingLoadRadius.value_or(kDefaultLoadRadiusM);
         settings.unloadRadius = active().streamingUnloadRadius.value_or(
             std::max(kDefaultUnloadRadiusM, settings.loadRadius * 4.0 / 3.0));
+        settings.collisionRadius =
+            active().streamingCollisionRadius.value_or(kDefaultCollisionRadiusM);
         settings.deterministic = true;  // camera hints are not used yet (huge-worlds.md §2)
         baseExtent = extentOf(robot);
         tileSelector = std::make_unique<streaming::TileSelector>(robot.tiles, settings);
         char text[160];
         std::snprintf(text, sizeof text,
-                      "%zu streamed tiles (WorldTileAPI_1): load radius %.0f m, unload %.0f m",
-                      robot.tiles.size(), settings.loadRadius, settings.unloadRadius);
+                      "%zu streamed tiles (WorldTileAPI_1): load radius %.0f m, unload %.0f m, "
+                      "colliders within %.0f m",
+                      robot.tiles.size(), settings.loadRadius, settings.unloadRadius,
+                      std::min(settings.collisionRadius, settings.loadRadius));
         log(v1::LOG_LEVEL_INFO, "streaming", text);
         return updateTiles(true);
     }
@@ -3191,9 +3198,11 @@ struct Server::Impl {
             appliedGeoOrigin = settings.geoOrigin;
         }
         if (settings.streamingLoadRadius != appliedLoadRadius ||
-            settings.streamingUnloadRadius != appliedUnloadRadius) {
+            settings.streamingUnloadRadius != appliedUnloadRadius ||
+            settings.streamingCollisionRadius != appliedCollisionRadius) {
             appliedLoadRadius = settings.streamingLoadRadius;
             appliedUnloadRadius = settings.streamingUnloadRadius;
+            appliedCollisionRadius = settings.streamingCollisionRadius;
             if (Status status = restartStreaming(); !status.ok()) {
                 return status;
             }

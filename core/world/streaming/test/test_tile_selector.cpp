@@ -221,5 +221,22 @@ TEST(TileSelector, TheBudgetKeepsTheTilesARobotNeeds) {
     EXPECT_GT(needed, 16U) << "the robot's tiles load even over the budget";
 }
 
+TEST(TileSelector, CollisionTilesStayWithinTheCollisionRadius) {
+    StreamingSettings s = settings();
+    s.collisionRadius = 200.0;
+    TileSelector selector(pyramid(), s);
+    const std::vector<Interest> robot{{Interest::Kind::Robot, {4000.0, 4000.0, 0.0}}};
+    settle(selector, robot, 0.0);
+    for (std::uint32_t i = 0; i < selector.tiles().size(); ++i) {
+        const TileInfo& t = selector.tiles()[i];
+        const double d = horizontalDistance(robot[0].position, t.boundsMin, t.boundsMax);
+        if (t.hasCollision) {
+            EXPECT_EQ(selector.isLoaded(i), d <= 200.0) << t.path;
+        }
+    }
+    EXPECT_TRUE(covered(selector, robot[0].position, 600.0)) << "coarser tiles fill the rest";
+    EXPECT_TRUE(selector.physicsReady(robot[0].position, 5.0));
+}
+
 }  // namespace
 }  // namespace lagrange::streaming
