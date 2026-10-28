@@ -1,0 +1,53 @@
+#usda 1.0
+(
+    """Lagrange world schemas (RFC 0002, docs/design/huge-worlds.md section 2). Codeless.
+    WorldTileAPI_1 makes a prim one tile of a large world: a payload the server loads and
+    unloads while the simulation runs, near the robots that need it."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeWorld"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "WorldTileAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """One tile of a tiled world, on a prim whose payload holds the tile's content
+    (terrain, buildings, roads, props), authored relative to the prim's own translation. The
+    stage opens with every payload unloaded; the server loads a tile when a robot comes within
+    the streaming load radius and drops it beyond the unload radius."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    int world:tile:level = 0 (
+        lagrangeUnit = "1"
+        doc = "Level of detail: 0 is the coarsest. A finer level replaces the coarser tiles it overlaps once loaded."
+    )
+    int2 world:tile:index = (0, 0) (
+        lagrangeUnit = "1"
+        doc = "Index of the tile in its level's grid, east then north."
+    )
+    double3 world:tile:boundsMin = (0, 0, 0) (
+        lagrangeUnit = "m"
+        doc = "Lower corner of the tile's content, in the stage's frame (world ENU). Required."
+    )
+    double3 world:tile:boundsMax = (0, 0, 0) (
+        lagrangeUnit = "m"
+        doc = "Upper corner of the tile's content, in the stage's frame (world ENU). Required."
+    )
+    double world:tile:geometricError = 0 (
+        lagrangeUnit = "m"
+        doc = "How far the tile's geometry may be from the true surface; the selection compares it with the distance to the nearest interest source."
+    )
+    bool world:tile:hasCollision = false (
+        doc = "The tile has colliders: robots may only enter it once they are in the physics backend."
+    )
+}
