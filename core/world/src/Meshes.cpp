@@ -280,6 +280,63 @@ void appendModel(Model& model, const Model& other) {
     }
 }
 
+void prefixModel(Model& model, const std::string& prefix, bool passive) {
+    World& w = model.world;
+    const std::string front = prefix + "_";
+    for (std::string& name : w.bodies.names) {
+        name = front + name;
+    }
+    for (std::string& name : w.joints.names) {
+        name = front + name;
+    }
+    for (std::string& name : w.sensors.names) {
+        name = front + name;
+    }
+    for (std::string& name : model.actuatedJoints) {
+        name = front + name;
+    }
+    if (passive) {
+        std::fill(w.joints.actuated.begin(), w.joints.actuated.end(), false);
+        model.actuatedJoints.clear();
+    }
+    // Paths: the top prim of each tree is renamed, the rest follows.
+    const auto rename = [&prefix](std::string& path) {
+        const std::size_t second = path.find('/', 1);
+        path = "/" + prefix + (second == std::string::npos ? "" : path.substr(second));
+    };
+    for (ScenePrim& prim : model.scene.prims) {
+        if (prim.name == "ground" && prim.parent == kNoIndex) {
+            continue;
+        }
+        rename(prim.path);
+        if (prim.parent == kNoIndex) {
+            prim.name = prefix;
+        }
+    }
+    for (std::size_t p = 0; p < w.prims.paths.size(); ++p) {
+        rename(w.prims.paths[p]);
+    }
+    for (std::size_t b = 0; b < w.bodies.prim.size(); ++b) {
+        if (w.bodies.prim[b].index < w.prims.instanceNames.size()) {
+            w.prims.instanceNames[w.bodies.prim[b].index] = w.bodies.names[b];
+        }
+    }
+    for (std::size_t j = 0; j < w.joints.prim.size(); ++j) {
+        if (w.joints.prim[j].index < w.prims.instanceNames.size()) {
+            w.prims.instanceNames[w.joints.prim[j].index] = w.joints.names[j];
+        }
+    }
+    for (std::size_t s = 0; s < w.sensors.prim.size(); ++s) {
+        if (w.sensors.prim[s].index < w.prims.instanceNames.size()) {
+            w.prims.instanceNames[w.sensors.prim[s].index] = w.sensors.names[s];
+        }
+    }
+    if (w.robots.size() <= 1) {
+        w.robots = {prefix};
+    }
+    model.name = prefix;
+}
+
 ModelExtent extentOf(const Model& model) {
     return {model.world.colliders.body.size(), model.world.hulls.size(), model.scene.prims.size(),
             model.scene.meshes.size(), model.scene.materials.size()};

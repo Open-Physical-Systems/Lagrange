@@ -85,6 +85,13 @@ void addGroundPrim(Model& model);
 /// left out, since `model` has one. Its prims go after `model`'s, before the ground slab.
 void appendModel(Model& model, const Model& other);
 
+/// Makes a robot's names unique before it joins another model (a second robot of the same
+/// kind): bodies, joints and sensors get `prefix` + "_" + their name (signals follow:
+/// body/<prefix>_base_link/pose), its top prim and every path under it take `prefix` as the
+/// top prim's name, and with `passive` its joints are no longer actuated (no controller drives
+/// them). `prefix` must be a valid prim and signal name.
+void prefixModel(Model& model, const std::string& prefix, bool passive);
+
 /// How much of a model's static content there is: what a streamed tile is appended after.
 struct ModelExtent {
     std::size_t colliders{0};
