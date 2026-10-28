@@ -8,13 +8,16 @@ find_package(lagrange_cmake REQUIRED)
 
 ament_python_install_package(${PROJECT_NAME})
 install(
-    PROGRAMS scripts/migrate_schema scripts/migrate_profile
+    PROGRAMS
+        scripts/migrate_schema
+        scripts/migrate_profile
+        scripts/migrate_recording
     DESTINATION lib/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)
     find_package(ament_cmake_pytest REQUIRED)
-    foreach(_test schema profile)
+    foreach(_test schema profile recording old_releases)
         ament_add_pytest_test(
             test_${_test}
             test/test_${_test}.py

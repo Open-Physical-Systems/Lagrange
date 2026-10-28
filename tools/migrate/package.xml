@@ -12,9 +12,11 @@
   <buildtool_depend>lagrange_cmake</buildtool_depend>
   <exec_depend>openusd_vendor</exec_depend>
   <exec_depend>python3-jsonschema</exec_depend>
+  <exec_depend>python3-mcap-pip</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>lagrange_assets</test_depend>
+  <test_depend>lagrange_mock_server</test_depend>
   <test_depend>lagrange_profiles</test_depend>
   <test_depend>lagrange_schemas</test_depend>
 
