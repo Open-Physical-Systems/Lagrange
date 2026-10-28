@@ -99,7 +99,8 @@ double lowestPoint(ShapeType shape, const std::array<double, 3>& size, const Pos
         case ShapeType::Sphere:
             return centre - size[0];
         case ShapeType::Box:
-        case ShapeType::ConvexHull:  // its bounding box: never above the hull's lowest point
+        case ShapeType::ConvexHull:   // its bounding box: never above the hull's lowest point
+        case ShapeType::HeightField:  // likewise
             return centre - (std::abs(up[0]) * size[0] + std::abs(up[1]) * size[1] +
                              std::abs(up[2]) * size[2]);
         case ShapeType::Cylinder: {

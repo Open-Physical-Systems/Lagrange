@@ -186,6 +186,11 @@ void appendModel(Model& model, const Model& other) {
         if (o.colliders.body[c] == kWorldBody && o.colliders.shape[c] == ShapeType::Plane) {
             continue;
         }
+        if (o.colliders.shape[c] == ShapeType::HeightField) {
+            w.addHeightFieldCollider(o.heightfields.at(o.colliders.hull[c]),
+                                     o.colliders.poseInBody[c], o.colliders.friction[c]);
+            continue;
+        }
         if (o.colliders.shape[c] == ShapeType::ConvexHull) {
             w.addHullCollider(map(o.colliders.body[c]), o.hulls.at(o.colliders.hull[c]),
                               o.colliders.poseInBody[c], o.colliders.friction[c]);
@@ -354,8 +359,9 @@ void prefixModel(Model& model, const std::string& prefix, bool passive) {
 }
 
 ModelExtent extentOf(const Model& model) {
-    return {model.world.colliders.body.size(), model.world.hulls.size(), model.scene.prims.size(),
-            model.scene.meshes.size(), model.scene.materials.size()};
+    return {model.world.colliders.body.size(), model.world.hulls.size(),
+            model.world.heightfields.size(),   model.scene.prims.size(),
+            model.scene.meshes.size(),         model.scene.materials.size()};
 }
 
 void truncateModel(Model& model, const ModelExtent& extent) {
@@ -367,6 +373,7 @@ void truncateModel(Model& model, const ModelExtent& extent) {
     c.friction.resize(extent.colliders);
     c.hull.resize(extent.colliders);
     model.world.hulls.resize(extent.hulls);
+    model.world.heightfields.resize(extent.heightfields);
     model.scene.prims.resize(extent.prims);
     model.scene.meshes.resize(extent.meshes);
     model.scene.materials.resize(extent.materials);
@@ -392,6 +399,11 @@ void appendTile(Model& model, const Model& tile, const std::string& tilePath,
     for (std::size_t c = 0; c < o.colliders.body.size(); ++c) {
         // A tile's own ground plane is the world's, which is there already.
         if (o.colliders.body[c] != kWorldBody || o.colliders.shape[c] == ShapeType::Plane) {
+            continue;
+        }
+        if (o.colliders.shape[c] == ShapeType::HeightField) {
+            w.addHeightFieldCollider(o.heightfields.at(o.colliders.hull[c]),
+                                     local(o.colliders.poseInBody[c]), o.colliders.friction[c]);
             continue;
         }
         if (o.colliders.shape[c] == ShapeType::ConvexHull) {

@@ -129,6 +129,60 @@ void World::addHullCollider(BodyId onBody, ConvexHull hull, const Pose& poseInOw
     hulls.push_back(std::move(hull));
 }
 
+void World::addHeightFieldCollider(HeightField field, const Pose& poseInWorld,
+                                   double slidingFriction) {
+    double top = 0.0;
+    for (const double h : field.heights) {
+        top = std::max(top, std::abs(h));
+    }
+    const std::array<double, 3> half{(field.columns - 1) * field.cellX / 2.0,
+                                     (field.rows - 1) * field.cellY / 2.0, top};
+    addCollider(kWorldBody, ShapeType::HeightField, half, poseInWorld, slidingFriction);
+    colliders.hull.back() = static_cast<std::uint32_t>(heightfields.size());
+    heightfields.push_back(std::move(field));
+}
+
+std::optional<double> HeightField::heightAt(double x, double y) const {
+    if (columns < 2 || rows < 2 || !(cellX > 0.0) || !(cellY > 0.0)) {
+        return std::nullopt;
+    }
+    const double u = x / cellX + (columns - 1) / 2.0;
+    const double v = y / cellY + (rows - 1) / 2.0;
+    if (u < 0.0 || v < 0.0 || u > columns - 1 || v > rows - 1) {
+        return std::nullopt;
+    }
+    const auto c = std::min(static_cast<std::uint32_t>(u), columns - 2);
+    const auto r = std::min(static_cast<std::uint32_t>(v), rows - 2);
+    const double fu = u - c;
+    const double fv = v - r;
+    const auto at = [this](std::uint32_t cc, std::uint32_t rr) {
+        return heights[static_cast<std::size_t>(rr) * columns + cc];
+    };
+    // Two triangles per cell, split along (c, r)-(c + 1, r + 1).
+    if (fu >= fv) {
+        return at(c, r) + fu * (at(c + 1, r) - at(c, r)) + fv * (at(c + 1, r + 1) - at(c + 1, r));
+    }
+    return at(c, r) + fv * (at(c, r + 1) - at(c, r)) + fu * (at(c + 1, r + 1) - at(c, r + 1));
+}
+
+ConvexHull HeightField::triangles() const {
+    ConvexHull out;
+    for (std::uint32_t r = 0; r < rows; ++r) {
+        for (std::uint32_t c = 0; c < columns; ++c) {
+            out.points.push_back({(c - (columns - 1) / 2.0) * cellX, (r - (rows - 1) / 2.0) * cellY,
+                                  heights[static_cast<std::size_t>(r) * columns + c]});
+        }
+    }
+    for (std::uint32_t r = 0; r + 1 < rows; ++r) {
+        for (std::uint32_t c = 0; c + 1 < columns; ++c) {
+            const std::uint32_t a = r * columns + c;
+            out.triangles.push_back({a, a + 1, a + columns + 1});
+            out.triangles.push_back({a, a + columns + 1, a + columns});
+        }
+    }
+    return out;
+}
+
 std::string_view WorldView::primPath(PrimId prim) const {
     return prim.index < world_->prims.paths.size()
                ? std::string_view(world_->prims.paths[prim.index])

@@ -42,14 +42,42 @@ struct Pose {
 /// Collision shapes. Sizes follow MuJoCo's conventions: sphere {radius}, capsule and cylinder
 /// {radius, half length}, box {half extents}, plane {half extents x, y, grid spacing}. A convex
 /// hull's points are in World::hulls (Colliders::hull); its size is the half extents of their
-/// bounding box about the shape origin.
-enum class ShapeType : std::uint8_t { Plane, Sphere, Capsule, Cylinder, Box, ConvexHull };
+/// bounding box about the shape origin. A height field's grid is in World::heightfields (the
+/// same Colliders::hull index); its size is half its extent in x and y and its largest |z|.
+/// Height fields are static: on the world only.
+enum class ShapeType : std::uint8_t {
+    Plane,
+    Sphere,
+    Capsule,
+    Cylinder,
+    Box,
+    ConvexHull,
+    HeightField
+};
 
 /// A convex hull collider (formats.md §2: collision geometry is convex hulls, never render
 /// meshes): its vertices and its outward-wound triangles, in the shape's frame, m.
 struct ConvexHull {
     std::vector<std::array<double, 3>> points;
     std::vector<std::array<std::uint32_t, 3>> triangles;
+};
+
+/// Terrain as a regular grid of heights (huge-worlds.md §4): `columns` x `rows` samples, cellX
+/// and cellY apart, centred on the shape's origin; heights[row * columns + column] is z in the
+/// shape's frame at x = (column - (columns - 1) / 2) cellX, y = (row - (rows - 1) / 2) cellY.
+/// Each cell is two triangles split along the diagonal from its (column, row) corner to its
+/// (column + 1, row + 1) corner, the surface every backend and sensor uses.
+struct HeightField {
+    std::uint32_t columns{0};
+    std::uint32_t rows{0};
+    double cellX{0.0};  // m
+    double cellY{0.0};
+    std::vector<double> heights;  // m
+
+    /// z of the surface above (x, y) in the shape's frame; empty outside the grid.
+    [[nodiscard]] std::optional<double> heightAt(double x, double y) const;
+    /// The surface as triangles (counter-clockwise from above) on its sample points.
+    [[nodiscard]] ConvexHull triangles() const;  // points and triangles; not convex
 };
 
 enum class SensorType : std::uint8_t { Imu, Lidar, Camera, Gnss, Magnetometer, Barometer, Radar };
@@ -130,6 +158,7 @@ struct World {
         std::vector<std::uint32_t> hull;  // index into hulls for a ConvexHull, else kNoHull
     } colliders;
     std::vector<ConvexHull> hulls;
+    std::vector<HeightField> heightfields;  // ShapeType::HeightField, by Colliders::hull
 
     /// Sensors mounted on bodies (from SensorAPI schemas; from <sensor> blocks of a URDF until
     /// the stage loader exists). Sensor frame: x forward, z up.
@@ -174,6 +203,8 @@ struct World {
     /// A convex hull collider; its size is computed from the points.
     void addHullCollider(BodyId onBody, ConvexHull hull, const Pose& poseInOwner,
                          double slidingFriction);
+    /// A height field on the world (terrain), its grid centred at `poseInWorld`.
+    void addHeightFieldCollider(HeightField field, const Pose& poseInWorld, double slidingFriction);
 };
 
 /// Read-only access to the world for modules (declare and init).

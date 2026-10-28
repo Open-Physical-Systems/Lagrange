@@ -147,6 +147,9 @@ public:
         shapes_.clear();
         for (std::size_t c = 0; c < colliders.body.size(); ++c) {
             const BodyId owner = colliders.body[c];
+            if (colliders.shape[c] == ShapeType::HeightField) {
+                continue;  // terrain is ground clutter, as the ground plane is (Radar.hpp)
+            }
             Shape shape{colliders.shape[c],
                         colliders.size[c],
                         colliders.poseInBody[c],

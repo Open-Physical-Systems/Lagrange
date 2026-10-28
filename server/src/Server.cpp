@@ -159,7 +159,8 @@ void setInline(v1::DataRef& ref, const std::vector<T>& values) {
 
 /// A collider's shape as a mesh at its size (World::Colliders conventions: half extents, radius
 /// and half length), for drawing; empty for a plane.
-TriMesh colliderMesh(ShapeType shape, const std::array<double, 3>& size, const ConvexHull* hull) {
+TriMesh colliderMesh(ShapeType shape, const std::array<double, 3>& size, const ConvexHull* hull,
+                     const HeightField* field = nullptr) {
     constexpr int kSegments = 24;  // round shapes: enough to read the shape, cheap to draw
     constexpr int kRings = 12;
     const auto append = [](TriMesh& to, const TriMesh& from, double dz) {
@@ -177,6 +178,38 @@ TriMesh colliderMesh(ShapeType shape, const std::array<double, 3>& size, const C
     switch (shape) {
         case ShapeType::Plane:
             return {};
+        case ShapeType::HeightField: {
+            TriMesh mesh;
+            if (field == nullptr) {
+                return mesh;
+            }
+            const ConvexHull surface = field->triangles();
+            std::vector<std::array<double, 3>> normals(surface.points.size());
+            for (const auto& t : surface.triangles) {
+                const auto& a = surface.points[t[0]];
+                const auto& b = surface.points[t[1]];
+                const auto& c = surface.points[t[2]];
+                const std::array<double, 3> n{
+                    (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]),
+                    (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]),
+                    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])};
+                for (const std::uint32_t k : t) {
+                    for (std::size_t i = 0; i < 3; ++i) {
+                        normals[k].at(i) += n.at(i);
+                    }
+                }
+                mesh.indices.insert(mesh.indices.end(), {t[0], t[1], t[2]});
+            }
+            for (std::size_t v = 0; v < surface.points.size(); ++v) {
+                const double len = std::hypot(normals[v][0], normals[v][1], normals[v][2]);
+                for (std::size_t i = 0; i < 3; ++i) {
+                    mesh.positions.push_back(static_cast<float>(surface.points[v].at(i)));
+                    mesh.normals.push_back(len > 0.0 ? static_cast<float>(normals[v].at(i) / len)
+                                                     : (i == 2 ? 1.0F : 0.0F));
+                }
+            }
+            return mesh;
+        }
         case ShapeType::Sphere:
             return sphereMesh(size[0], kSegments, kRings);
         case ShapeType::Box:
@@ -818,6 +851,9 @@ struct Server::Impl {
             shape.hull = shape.type == ShapeType::ConvexHull
                              ? &world.hulls.at(world.colliders.hull[c])
                              : nullptr;
+            shape.field = shape.type == ShapeType::HeightField
+                              ? &world.heightfields.at(world.colliders.hull[c])
+                              : nullptr;
             shapes.push_back(shape);
             friction.push_back(world.colliders.friction[c]);
         }
@@ -853,6 +889,9 @@ struct Server::Impl {
             shape.hull = shape.type == ShapeType::ConvexHull
                              ? &world.hulls.at(world.colliders.hull[c])
                              : nullptr;
+            shape.field = shape.type == ShapeType::HeightField
+                              ? &world.heightfields.at(world.colliders.hull[c])
+                              : nullptr;
             shapes.push_back(shape);
         }
         if (shapes.empty()) {
@@ -1491,7 +1530,8 @@ struct Server::Impl {
         for (std::size_t k = 0; k < c.body.size(); ++k) {
             const TriMesh mesh = colliderMesh(
                 c.shape[k], c.size[k],
-                c.shape[k] == ShapeType::ConvexHull ? &world.hulls.at(c.hull[k]) : nullptr);
+                c.shape[k] == ShapeType::ConvexHull ? &world.hulls.at(c.hull[k]) : nullptr,
+                c.shape[k] == ShapeType::HeightField ? &world.heightfields.at(c.hull[k]) : nullptr);
             if (mesh.indices.empty()) {
                 continue;
             }
@@ -1836,6 +1876,11 @@ struct Server::Impl {
                     "lidar on the CPU (Tier 0: exact casts, Embree culling, all cores)");
             }
             return {};
+        }
+        if (!robot.world.heightfields.empty() || !robot.tiles.empty()) {
+            return Status::error(StatusCode::InvalidConfig,
+                                 "--lidar gpu does not see height fields (terrain) yet: drop "
+                                 "it, the CPU lidar sees them exactly");
         }
         std::string reason;
         auto made = gpu::RayContext::create(options.gpu, reason);

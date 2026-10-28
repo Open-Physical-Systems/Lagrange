@@ -106,8 +106,13 @@ TEST(WorldBuilder, TerrainFollowsTheElevationModelInTheEnuFrame) {
         options, origin, {.x0 = 0.0, .y0 = 0.0, .size = 128.0, .cell = 8.0, .collisionCell = 16.0});
     ASSERT_TRUE(tile) << tile.error();
     ASSERT_EQ(tile->scene.meshes.size(), 1U);
-    // 2 prisms per 16 m collision cell of a 128 m tile.
-    EXPECT_EQ(tile->world.colliders.body.size(), 2U * 8U * 8U);
+    // One height field of 9 x 9 samples (16 m collision cells of a 128 m tile).
+    ASSERT_EQ(tile->world.colliders.body.size(), 1U);
+    ASSERT_EQ(tile->world.heightfields.size(), 1U);
+    EXPECT_EQ(tile->world.heightfields[0].columns, 9U);
+    EXPECT_NEAR(*tile->world.heightfields[0].heightAt(0.0, 0.0),
+                tile->scene.meshes[0].positions[3 * (8 * 17 + 8) + 2], 1e-4)
+        << "the field's centre sample is the mesh's centre vertex";
     // Each vertex's height: the geodetic point under it, on the model, in ENU.
     const TriMesh& mesh = tile->scene.meshes[0];
     for (std::size_t v = 0; v < mesh.positions.size() / 3; v += 37) {
@@ -179,8 +184,8 @@ TEST(WorldBuilder, BuildingsAndRoadsFromOpenStreetMap) {
         buildTile(options, origin,
                   {.x0 = -64.0, .y0 = -64.0, .size = 128.0, .cell = 16.0, .collisionCell = 16.0});
     ASSERT_TRUE(tile) << tile.error();
-    // Terrain 2 x 8 x 8 prisms, and the building (convex) as one hull of 8 corners.
-    ASSERT_EQ(tile->world.colliders.body.size(), 2U * 64U + 1U);
+    // Terrain as one height field, and the building (convex) as one hull of 8 corners.
+    ASSERT_EQ(tile->world.colliders.body.size(), 2U);
     EXPECT_EQ(tile->world.hulls.back().points.size(), 8U);
     bool building = false;
     bool roads = false;
@@ -233,7 +238,8 @@ TEST(WorldBuilder, WritesAStreamedWorldTheServerReads) {
         read.tile = t.path;
         const auto content = stage::loadStage(report->rootPath, read);
         ASSERT_TRUE(content) << content.error();
-        EXPECT_GE(content->world.colliders.body.size(), 2U * 8U * 8U) << t.path;
+        ASSERT_EQ(content->world.heightfields.size(), 1U) << t.path << ": read back from USD";
+        EXPECT_EQ(content->world.heightfields[0].columns, 9U);
         // Colliders where the tile is.
         for (const Pose& pose : content->world.colliders.poseInBody) {
             EXPECT_GE(pose.position[0], t.boundsMin[0] - 1e-6);

@@ -21,8 +21,8 @@ namespace lagrange::geospatial {
 /// frame; the server's --geo-origin must be the same point). Two levels:
 /// - level 0, coarse tiles: terrain on a coarse grid and buildings as blocks, visual only;
 /// - level 1, fine tiles: terrain on a fine grid and buildings and roads, with colliders: the
-///   terrain as two triangular prisms per collision cell, each building as prisms over the
-///   triangles of its footprint (convex pieces, CLAUDE.md §4).
+///   terrain as a height field on the collision grid, each building as one convex prism (or,
+///   for a concave footprint, prisms over its triangles; convex pieces, CLAUDE.md §4).
 struct WorldOptions {
     coords::Geodetic origin;     ///< The world's geo origin (rad, rad, m). Required.
     double size{0.0};            ///< m: the square's side. Required.

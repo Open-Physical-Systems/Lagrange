@@ -22,7 +22,8 @@ inline constexpr double kNoHit = std::numeric_limits<double>::infinity();
 /// it leaves it.
 [[nodiscard]] double raycast(ShapeType shape, const std::array<double, 3>& size,
                              const Pose& shapePose, const std::array<double, 3>& origin,
-                             const std::array<double, 3>& dir, const ConvexHull* hull = nullptr);
+                             const std::array<double, 3>& dir, const ConvexHull* hull = nullptr,
+                             const HeightField* field = nullptr);
 
 /// The face planes of a hull, each turned so that the hull's centroid is inside: unit outward
 /// normal n and offset c with n·x <= c inside. Independent of the triangles' winding.

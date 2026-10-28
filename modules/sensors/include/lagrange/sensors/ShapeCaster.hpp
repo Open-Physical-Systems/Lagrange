@@ -25,8 +25,9 @@ public:
     struct Shape {
         ShapeType type{ShapeType::Box};
         std::array<double, 3> size{};
-        Pose pose;                        // world_local
-        const ConvexHull* hull{nullptr};  // a ConvexHull's points; must outlive the caster
+        Pose pose;                          // world_local
+        const ConvexHull* hull{nullptr};    // a ConvexHull's points; must outlive the caster
+        const HeightField* field{nullptr};  // a HeightField's grid; must outlive the caster
     };
 
     ShapeCaster();
