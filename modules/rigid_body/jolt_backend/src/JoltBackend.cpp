@@ -1027,9 +1027,36 @@ void JoltBackend::shutdown() {
 }
 
 // Jolt's own state recorder: positions, velocities, contacts and constraint state.
+namespace {
+
+/// The moving bodies and their contacts with each other: static scenery is rebuilt from the
+/// world, so a state still fits after streamed tiles changed the scenery (huge-worlds.md §2).
+/// Contacts with scenery are left out and found again on the next step.
+class MovingBodies final : public JPH::StateRecorderFilter {
+public:
+    explicit MovingBodies(const JPH::BodyLockInterface& locks) : locks_(locks) {}
+    [[nodiscard]] bool ShouldSaveBody(const JPH::Body& body) const override {
+        return !body.IsStatic();
+    }
+    [[nodiscard]] bool ShouldSaveContact(const JPH::BodyID& a,
+                                         const JPH::BodyID& b) const override {
+        return moving(a) && moving(b);
+    }
+
+private:
+    [[nodiscard]] bool moving(const JPH::BodyID& id) const {
+        const JPH::BodyLockRead lock(locks_, id);
+        return lock.Succeeded() && !lock.GetBody().IsStatic();
+    }
+    const JPH::BodyLockInterface& locks_;
+};
+
+}  // namespace
+
 Status JoltBackend::saveState(StateWriter& writer) const {
     JPH::StateRecorderImpl recorder;
-    impl_->system->SaveState(recorder);
+    const MovingBodies filter(impl_->system->GetBodyLockInterfaceNoLock());
+    impl_->system->SaveState(recorder, JPH::EStateRecorderState::All, &filter);
     const std::string bytes = recorder.GetData();
     writer.putString(bytes);
     // What the finite-difference accelerations and the friction scale need besides.

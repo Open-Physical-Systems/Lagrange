@@ -54,6 +54,11 @@ if(BUILD_TESTING)
         TIMEOUT 120
     )
     target_link_libraries(test_stage lagrange_stage openusd_vendor::usd)
+    target_compile_definitions(
+        test_stage
+        PRIVATE
+            LAGRANGE_TEST_TILED_TOWN="${CMAKE_CURRENT_SOURCE_DIR}/../../assets/worlds/tiled_town/tiled_town.usda"
+    )
     lagrange_target_defaults(test_stage)
 endif()
 

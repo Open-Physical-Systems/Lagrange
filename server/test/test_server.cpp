@@ -1026,5 +1026,42 @@ TEST(FloatingOrigin, TheServerRebasesWhenTheRobotDrivesFar) {
     EXPECT_LT(largestStep, 0.1);
 }
 
+// huge-worlds.md §6 (v0.7): a streamed world. The AMR starts in a street of the tiled town;
+// the tiles around it are in physics before the first step, the far ones are not, and two
+// headless runs load the same tiles at the same times (deterministic tile selection).
+TEST(Streaming, TheTilesAroundTheRobotAreLoadedAndTheRunIsDeterministic) {
+    const auto run = [](std::int64_t untilNs) {
+        ServerOptions options;
+        options.robotPath = LAGRANGE_TEST_AMR_URDF;
+        options.worldPath = LAGRANGE_TEST_TILED_TOWN;
+        options.realTimeFactor = 0.0;
+        options.ros = false;
+        options.spawn.position = {1036.0, 1036.0, 0.0};  // a street: x and y in [1024, 1048]
+        auto server = std::make_unique<Server>(options);
+        EXPECT_TRUE(server->load().ok());
+        EXPECT_TRUE(server->stepUntil(SimTime{untilNs}).ok());
+        return server;
+    };
+    const auto a = run(5'000'000'000);
+    const World& world = a->world();
+    // The buildings of the tiles within 600 m: each fine tile holds up to 9 boxes.
+    EXPECT_GT(world.colliders.body.size(), 100U);
+    double farthest = 0.0;
+    for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
+        if (world.colliders.shape[c] == ShapeType::Box) {
+            const std::array<double, 3>& p = world.colliders.poseInBody[c].position;
+            farthest = std::max(farthest, std::hypot(p[0] + world.region.worldEnu[0] - 1036.0,
+                                                     p[1] + world.region.worldEnu[1] - 1036.0));
+        }
+    }
+    EXPECT_LT(farthest, 600.0 + 256.0 * std::sqrt(2.0)) << "only tiles within the load radius";
+    const auto b = run(5'000'000'000);
+    const auto ha = a->stateHash();
+    const auto hb = b->stateHash();
+    ASSERT_TRUE(ha && hb);
+    EXPECT_EQ(*ha, *hb);
+    EXPECT_EQ(a->world().colliders.body.size(), b->world().colliders.body.size());
+}
+
 }  // namespace
 }  // namespace lagrange::server

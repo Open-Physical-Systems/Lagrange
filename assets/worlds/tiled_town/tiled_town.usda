@@ -1,0 +1,967 @@
+#usda 1.0
+(
+    defaultPrim = "tiled_town"
+    doc = """The tiled town (huge-worlds.md section 2), written by make_tiled_town.py:
+    a 2048 m square town streamed in tiles. 4 coarse tiles of 1024 m (visual only)
+    and 64 tiles of 256 m with the buildings as colliders; the server loads them
+    around the robot as it drives. The ground is the plane the loader adds."""
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "tiled_town"
+{
+    def Xform "L0_0_0" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L0_0_0.usda@
+    )
+    {
+        int world:tile:level = 0
+        int2 world:tile:index = (0, 0)
+        double3 world:tile:boundsMin = (0.0, 0.0, 0)
+        double3 world:tile:boundsMax = (1024.0, 1024.0, 60.0)
+        double world:tile:geometricError = 8.0
+        bool world:tile:hasCollision = false
+        double3 xformOp:translate = (0.0, 0.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L0_0_1" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L0_0_1.usda@
+    )
+    {
+        int world:tile:level = 0
+        int2 world:tile:index = (0, 1)
+        double3 world:tile:boundsMin = (0.0, 1024.0, 0)
+        double3 world:tile:boundsMax = (1024.0, 2048.0, 60.0)
+        double world:tile:geometricError = 8.0
+        bool world:tile:hasCollision = false
+        double3 xformOp:translate = (0.0, 1024.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L0_1_0" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L0_1_0.usda@
+    )
+    {
+        int world:tile:level = 0
+        int2 world:tile:index = (1, 0)
+        double3 world:tile:boundsMin = (1024.0, 0.0, 0)
+        double3 world:tile:boundsMax = (2048.0, 1024.0, 60.0)
+        double world:tile:geometricError = 8.0
+        bool world:tile:hasCollision = false
+        double3 xformOp:translate = (1024.0, 0.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L0_1_1" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L0_1_1.usda@
+    )
+    {
+        int world:tile:level = 0
+        int2 world:tile:index = (1, 1)
+        double3 world:tile:boundsMin = (1024.0, 1024.0, 0)
+        double3 world:tile:boundsMax = (2048.0, 2048.0, 60.0)
+        double world:tile:geometricError = 8.0
+        bool world:tile:hasCollision = false
+        double3 xformOp:translate = (1024.0, 1024.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_0_0" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_0_0.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (0, 0)
+        double3 world:tile:boundsMin = (0.0, 0.0, 0)
+        double3 world:tile:boundsMax = (256.0, 256.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (0.0, 0.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_0_1" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_0_1.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (0, 1)
+        double3 world:tile:boundsMin = (0.0, 256.0, 0)
+        double3 world:tile:boundsMax = (256.0, 512.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (0.0, 256.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_0_2" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_0_2.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (0, 2)
+        double3 world:tile:boundsMin = (0.0, 512.0, 0)
+        double3 world:tile:boundsMax = (256.0, 768.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (0.0, 512.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_0_3" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_0_3.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (0, 3)
+        double3 world:tile:boundsMin = (0.0, 768.0, 0)
+        double3 world:tile:boundsMax = (256.0, 1024.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (0.0, 768.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_0_4" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_0_4.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (0, 4)
+        double3 world:tile:boundsMin = (0.0, 1024.0, 0)
+        double3 world:tile:boundsMax = (256.0, 1280.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (0.0, 1024.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_0_5" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_0_5.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (0, 5)
+        double3 world:tile:boundsMin = (0.0, 1280.0, 0)
+        double3 world:tile:boundsMax = (256.0, 1536.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (0.0, 1280.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_0_6" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_0_6.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (0, 6)
+        double3 world:tile:boundsMin = (0.0, 1536.0, 0)
+        double3 world:tile:boundsMax = (256.0, 1792.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (0.0, 1536.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_0_7" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_0_7.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (0, 7)
+        double3 world:tile:boundsMin = (0.0, 1792.0, 0)
+        double3 world:tile:boundsMax = (256.0, 2048.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (0.0, 1792.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_1_0" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_1_0.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (1, 0)
+        double3 world:tile:boundsMin = (256.0, 0.0, 0)
+        double3 world:tile:boundsMax = (512.0, 256.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (256.0, 0.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_1_1" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_1_1.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (1, 1)
+        double3 world:tile:boundsMin = (256.0, 256.0, 0)
+        double3 world:tile:boundsMax = (512.0, 512.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (256.0, 256.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_1_2" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_1_2.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (1, 2)
+        double3 world:tile:boundsMin = (256.0, 512.0, 0)
+        double3 world:tile:boundsMax = (512.0, 768.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (256.0, 512.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_1_3" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_1_3.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (1, 3)
+        double3 world:tile:boundsMin = (256.0, 768.0, 0)
+        double3 world:tile:boundsMax = (512.0, 1024.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (256.0, 768.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_1_4" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_1_4.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (1, 4)
+        double3 world:tile:boundsMin = (256.0, 1024.0, 0)
+        double3 world:tile:boundsMax = (512.0, 1280.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (256.0, 1024.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_1_5" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_1_5.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (1, 5)
+        double3 world:tile:boundsMin = (256.0, 1280.0, 0)
+        double3 world:tile:boundsMax = (512.0, 1536.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (256.0, 1280.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_1_6" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_1_6.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (1, 6)
+        double3 world:tile:boundsMin = (256.0, 1536.0, 0)
+        double3 world:tile:boundsMax = (512.0, 1792.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (256.0, 1536.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_1_7" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_1_7.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (1, 7)
+        double3 world:tile:boundsMin = (256.0, 1792.0, 0)
+        double3 world:tile:boundsMax = (512.0, 2048.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (256.0, 1792.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_2_0" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_2_0.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (2, 0)
+        double3 world:tile:boundsMin = (512.0, 0.0, 0)
+        double3 world:tile:boundsMax = (768.0, 256.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (512.0, 0.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_2_1" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_2_1.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (2, 1)
+        double3 world:tile:boundsMin = (512.0, 256.0, 0)
+        double3 world:tile:boundsMax = (768.0, 512.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (512.0, 256.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_2_2" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_2_2.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (2, 2)
+        double3 world:tile:boundsMin = (512.0, 512.0, 0)
+        double3 world:tile:boundsMax = (768.0, 768.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (512.0, 512.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_2_3" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_2_3.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (2, 3)
+        double3 world:tile:boundsMin = (512.0, 768.0, 0)
+        double3 world:tile:boundsMax = (768.0, 1024.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (512.0, 768.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_2_4" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_2_4.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (2, 4)
+        double3 world:tile:boundsMin = (512.0, 1024.0, 0)
+        double3 world:tile:boundsMax = (768.0, 1280.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (512.0, 1024.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_2_5" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_2_5.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (2, 5)
+        double3 world:tile:boundsMin = (512.0, 1280.0, 0)
+        double3 world:tile:boundsMax = (768.0, 1536.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (512.0, 1280.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_2_6" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_2_6.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (2, 6)
+        double3 world:tile:boundsMin = (512.0, 1536.0, 0)
+        double3 world:tile:boundsMax = (768.0, 1792.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (512.0, 1536.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_2_7" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_2_7.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (2, 7)
+        double3 world:tile:boundsMin = (512.0, 1792.0, 0)
+        double3 world:tile:boundsMax = (768.0, 2048.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (512.0, 1792.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_3_0" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_3_0.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (3, 0)
+        double3 world:tile:boundsMin = (768.0, 0.0, 0)
+        double3 world:tile:boundsMax = (1024.0, 256.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (768.0, 0.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_3_1" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_3_1.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (3, 1)
+        double3 world:tile:boundsMin = (768.0, 256.0, 0)
+        double3 world:tile:boundsMax = (1024.0, 512.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (768.0, 256.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_3_2" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_3_2.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (3, 2)
+        double3 world:tile:boundsMin = (768.0, 512.0, 0)
+        double3 world:tile:boundsMax = (1024.0, 768.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (768.0, 512.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_3_3" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_3_3.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (3, 3)
+        double3 world:tile:boundsMin = (768.0, 768.0, 0)
+        double3 world:tile:boundsMax = (1024.0, 1024.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (768.0, 768.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_3_4" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_3_4.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (3, 4)
+        double3 world:tile:boundsMin = (768.0, 1024.0, 0)
+        double3 world:tile:boundsMax = (1024.0, 1280.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (768.0, 1024.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_3_5" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_3_5.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (3, 5)
+        double3 world:tile:boundsMin = (768.0, 1280.0, 0)
+        double3 world:tile:boundsMax = (1024.0, 1536.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (768.0, 1280.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_3_6" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_3_6.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (3, 6)
+        double3 world:tile:boundsMin = (768.0, 1536.0, 0)
+        double3 world:tile:boundsMax = (1024.0, 1792.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (768.0, 1536.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_3_7" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_3_7.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (3, 7)
+        double3 world:tile:boundsMin = (768.0, 1792.0, 0)
+        double3 world:tile:boundsMax = (1024.0, 2048.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (768.0, 1792.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_4_0" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_4_0.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (4, 0)
+        double3 world:tile:boundsMin = (1024.0, 0.0, 0)
+        double3 world:tile:boundsMax = (1280.0, 256.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1024.0, 0.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_4_1" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_4_1.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (4, 1)
+        double3 world:tile:boundsMin = (1024.0, 256.0, 0)
+        double3 world:tile:boundsMax = (1280.0, 512.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1024.0, 256.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_4_2" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_4_2.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (4, 2)
+        double3 world:tile:boundsMin = (1024.0, 512.0, 0)
+        double3 world:tile:boundsMax = (1280.0, 768.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1024.0, 512.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_4_3" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_4_3.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (4, 3)
+        double3 world:tile:boundsMin = (1024.0, 768.0, 0)
+        double3 world:tile:boundsMax = (1280.0, 1024.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1024.0, 768.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_4_4" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_4_4.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (4, 4)
+        double3 world:tile:boundsMin = (1024.0, 1024.0, 0)
+        double3 world:tile:boundsMax = (1280.0, 1280.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1024.0, 1024.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_4_5" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_4_5.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (4, 5)
+        double3 world:tile:boundsMin = (1024.0, 1280.0, 0)
+        double3 world:tile:boundsMax = (1280.0, 1536.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1024.0, 1280.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_4_6" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_4_6.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (4, 6)
+        double3 world:tile:boundsMin = (1024.0, 1536.0, 0)
+        double3 world:tile:boundsMax = (1280.0, 1792.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1024.0, 1536.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_4_7" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_4_7.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (4, 7)
+        double3 world:tile:boundsMin = (1024.0, 1792.0, 0)
+        double3 world:tile:boundsMax = (1280.0, 2048.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1024.0, 1792.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_5_0" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_5_0.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (5, 0)
+        double3 world:tile:boundsMin = (1280.0, 0.0, 0)
+        double3 world:tile:boundsMax = (1536.0, 256.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1280.0, 0.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_5_1" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_5_1.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (5, 1)
+        double3 world:tile:boundsMin = (1280.0, 256.0, 0)
+        double3 world:tile:boundsMax = (1536.0, 512.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1280.0, 256.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_5_2" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_5_2.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (5, 2)
+        double3 world:tile:boundsMin = (1280.0, 512.0, 0)
+        double3 world:tile:boundsMax = (1536.0, 768.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1280.0, 512.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_5_3" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_5_3.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (5, 3)
+        double3 world:tile:boundsMin = (1280.0, 768.0, 0)
+        double3 world:tile:boundsMax = (1536.0, 1024.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1280.0, 768.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_5_4" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_5_4.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (5, 4)
+        double3 world:tile:boundsMin = (1280.0, 1024.0, 0)
+        double3 world:tile:boundsMax = (1536.0, 1280.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1280.0, 1024.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_5_5" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_5_5.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (5, 5)
+        double3 world:tile:boundsMin = (1280.0, 1280.0, 0)
+        double3 world:tile:boundsMax = (1536.0, 1536.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1280.0, 1280.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_5_6" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_5_6.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (5, 6)
+        double3 world:tile:boundsMin = (1280.0, 1536.0, 0)
+        double3 world:tile:boundsMax = (1536.0, 1792.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1280.0, 1536.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_5_7" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_5_7.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (5, 7)
+        double3 world:tile:boundsMin = (1280.0, 1792.0, 0)
+        double3 world:tile:boundsMax = (1536.0, 2048.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1280.0, 1792.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_6_0" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_6_0.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (6, 0)
+        double3 world:tile:boundsMin = (1536.0, 0.0, 0)
+        double3 world:tile:boundsMax = (1792.0, 256.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1536.0, 0.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_6_1" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_6_1.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (6, 1)
+        double3 world:tile:boundsMin = (1536.0, 256.0, 0)
+        double3 world:tile:boundsMax = (1792.0, 512.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1536.0, 256.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_6_2" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_6_2.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (6, 2)
+        double3 world:tile:boundsMin = (1536.0, 512.0, 0)
+        double3 world:tile:boundsMax = (1792.0, 768.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1536.0, 512.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_6_3" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_6_3.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (6, 3)
+        double3 world:tile:boundsMin = (1536.0, 768.0, 0)
+        double3 world:tile:boundsMax = (1792.0, 1024.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1536.0, 768.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_6_4" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_6_4.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (6, 4)
+        double3 world:tile:boundsMin = (1536.0, 1024.0, 0)
+        double3 world:tile:boundsMax = (1792.0, 1280.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1536.0, 1024.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_6_5" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_6_5.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (6, 5)
+        double3 world:tile:boundsMin = (1536.0, 1280.0, 0)
+        double3 world:tile:boundsMax = (1792.0, 1536.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1536.0, 1280.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_6_6" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_6_6.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (6, 6)
+        double3 world:tile:boundsMin = (1536.0, 1536.0, 0)
+        double3 world:tile:boundsMax = (1792.0, 1792.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1536.0, 1536.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_6_7" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_6_7.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (6, 7)
+        double3 world:tile:boundsMin = (1536.0, 1792.0, 0)
+        double3 world:tile:boundsMax = (1792.0, 2048.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1536.0, 1792.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_7_0" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_7_0.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (7, 0)
+        double3 world:tile:boundsMin = (1792.0, 0.0, 0)
+        double3 world:tile:boundsMax = (2048.0, 256.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1792.0, 0.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_7_1" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_7_1.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (7, 1)
+        double3 world:tile:boundsMin = (1792.0, 256.0, 0)
+        double3 world:tile:boundsMax = (2048.0, 512.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1792.0, 256.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_7_2" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_7_2.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (7, 2)
+        double3 world:tile:boundsMin = (1792.0, 512.0, 0)
+        double3 world:tile:boundsMax = (2048.0, 768.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1792.0, 512.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_7_3" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_7_3.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (7, 3)
+        double3 world:tile:boundsMin = (1792.0, 768.0, 0)
+        double3 world:tile:boundsMax = (2048.0, 1024.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1792.0, 768.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_7_4" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_7_4.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (7, 4)
+        double3 world:tile:boundsMin = (1792.0, 1024.0, 0)
+        double3 world:tile:boundsMax = (2048.0, 1280.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1792.0, 1024.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_7_5" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_7_5.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (7, 5)
+        double3 world:tile:boundsMin = (1792.0, 1280.0, 0)
+        double3 world:tile:boundsMax = (2048.0, 1536.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1792.0, 1280.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_7_6" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_7_6.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (7, 6)
+        double3 world:tile:boundsMin = (1792.0, 1536.0, 0)
+        double3 world:tile:boundsMax = (2048.0, 1792.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1792.0, 1536.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "L1_7_7" (
+        prepend apiSchemas = ["WorldTileAPI_1"]
+        prepend payload = @./tiles/L1_7_7.usda@
+    )
+    {
+        int world:tile:level = 1
+        int2 world:tile:index = (7, 7)
+        double3 world:tile:boundsMin = (1792.0, 1792.0, 0)
+        double3 world:tile:boundsMax = (2048.0, 2048.0, 60.0)
+        double world:tile:geometricError = 0.5
+        bool world:tile:hasCollision = true
+        double3 xformOp:translate = (1792.0, 1792.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}

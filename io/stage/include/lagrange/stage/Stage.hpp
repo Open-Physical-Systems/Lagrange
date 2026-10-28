@@ -12,6 +12,10 @@ struct ReadOptions {
     double defaultFriction{1.0};  // Coulomb coefficient of colliders without a physics material
     bool addGround{true};         // add the ground plane and slab when the stage has no plane
     double groundFriction{1.0};
+    /// Empty: read the stage with its tiles (WorldTileAPI_1 prims) unloaded and listed in
+    /// Model::tiles. A tile's path: read only that tile, its payload loaded (static scenery
+    /// only), for the server's streaming.
+    std::string tile;
 };
 
 /// Reads a USD stage (RFC 0002) into world tables and a scene: invariant 5, USD is read once
