@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_ros2_control</name>
-  <version>0.6.0</version>
+  <version>0.7.0</version>
   <description>ros2_control for the Lagrange simulator: the LagrangeSystem hardware plugin and a controller manager stepped by the scheduler in lockstep, with a joint servo for velocity and position commands.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>

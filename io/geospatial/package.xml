@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_geospatial</name>
-  <version>0.6.0</version>
+  <version>0.7.0</version>
   <description>Large worlds from open data (v0.7): terrain from elevation models through GDAL and PROJ, buildings and roads from OpenStreetMap, 3D Tiles for show, written as streamed WorldTileAPI_1 tiles (lagrange_build_world).</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
