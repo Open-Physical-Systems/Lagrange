@@ -6,18 +6,37 @@
 
 Lagrange is an open-source (Apache-2.0) robot simulator for ROS 2 Lyrical Luth on Ubuntu 26.04.
 Its aim is multi-physics that can be switched on and off: rigid-body motion, electrical, thermal,
-aerodynamics, weather, EMI and sensors are separate domains on a unit-checked signal bus, and any
-of them can be disabled or replaced by ideal, constant or replayed data.
+aerodynamics, weather, EMI, comms, vehicle dynamics, traffic and sensors are separate domains on a
+unit-checked signal bus, and any of them can be disabled or replaced by ideal, constant or
+replayed data. A native Vulkan viewer shows the run; it talks to the simulator only through a
+protocol, never by linking it.
 
-**Status: early development (v0.2 in progress).** The simulator runs a differential-drive AMR
-with MuJoCo physics, an IMU and 2D/3D lidars (on the CPU, or on the GPU with a compute kernel),
-switchable domains with substitutes, profiles, MCAP recording and a ROS 2 bridge that Nav2
-drives. Electrical, thermal and the other domains have their formats and substitutes, but no
-models yet.
+**Status: v0.6.0** ([release notes](docs/release/v0.6.0.md)). Pre-1.0: schemas, protocol and
+plugin ABI may still change between releases, always with a migration tool. Next: v0.7, huge
+worlds ([progress](docs/plan/progress.md)).
 
 <p align="center">
-  <img src="docs/imgs/tutorial-scene.png" alt="The Lagrange viewer showing the simulated AMR in the sample warehouse with its lidar returns" width="820">
+  <img src="docs/imgs/sedan-city.gif" alt="The sample sedan driving round the city block junction among simulated traffic, in the Lagrange viewer's follow camera" width="646">
+  <br><sub>The sample sedan on Magic Formula tyres, among IDM traffic in an OpenDRIVE city block
+  (<code>lagrange_server --robot assets/robots/sedan/sedan.usda --world assets/worlds/city_block/city_block.usda</code>).</sub>
 </p>
+
+<p align="center">
+  <img src="docs/imgs/viewer-sedan.png" alt="The Lagrange viewer: scene tree, the viewport with the sedan and its roof lidar's returns, timeline and console" width="820">
+</p>
+
+## What it simulates
+
+| Robot class | Since | Sample | Highlights |
+|---|---|---|---|
+| Mobile robots (AMR) | v0.2 | `amr_diffdrive` in the small warehouse | MuJoCo or Jolt physics, IMU, 2D/3D lidar on CPU or GPU, Nav2, ros2_control |
+| Robot arms | v0.3 | `arm6` work cell | MoveIt 2, motor drives, battery and bus at 100 µs, motor heating and derating |
+| Drones | v0.4 | `quad_x500` on the open field | Rotor aerodynamics (coefficients or blade element), wind, PX4 and ArduPilot SITL in lockstep |
+| Any robot outdoors | v0.5 | `amr_fog.yaml`, the power line | Weather (fog, rain, dust, NanoVDB fields), EMI from power lines and drives, Wi-Fi and CAN links |
+| Cars, autonomous cars | v0.6 | `sedan` in the city block | Tyres, suspension, powertrain, OpenDRIVE roads, traffic and pedestrians, OpenSCENARIO, radar, camera sensor model, Autoware interface |
+
+Everything runs headless too: from Python (`import lagrange`), from the `lagrange` command, or
+recorded to MCAP and replayed.
 
 ## Where to read
 
@@ -25,7 +44,8 @@ models yet.
 |---|---|
 | **User guide: tutorial, concepts, profiles, writing a module, CLI** | [docs/guide/](docs/guide/README.md) |
 | Vision, scope and release metrics | [docs/plan/00-overview.md](docs/plan/00-overview.md) |
-| Roadmap and v0.1/v0.2 issues | [docs/plan/roadmap.md](docs/plan/roadmap.md) |
+| Roadmap and progress | [docs/plan/roadmap.md](docs/plan/roadmap.md), [docs/plan/progress.md](docs/plan/progress.md) |
+| Release notes | [docs/release/](docs/release/) |
 | Architecture | [docs/design/architecture.md](docs/design/architecture.md) |
 | Formats, USD schemas, profiles | [docs/design/formats.md](docs/design/formats.md) |
 | Viewer and protocol | [docs/design/viewer.md](docs/design/viewer.md), [docs/design/protocol.md](docs/design/protocol.md) |
@@ -57,29 +77,45 @@ If you prefer not to install pip packages into the system Python, create a virtu
 with `--system-site-packages`, install `mcap` there, and pass
 `-DPython3_EXECUTABLE=<venv>/bin/python` to `colcon build`.
 
+Optional: `lagrange_autoware` builds only with the Autoware messages
+([docs/guide/autoware.md](docs/guide/autoware.md)); the PX4 and ArduPilot missions need their
+SITL builds ([drone tutorial](docs/guide/tutorial-drone.md)).
+
 Packages:
 
 | Package | Directory | Content |
 |---|---|---|
 | `lagrange_cmake` | `cmake/` | Shared build options |
-| `lagrange_core` | `core/` | Units, signal bus, multirate scheduler, time, random numbers, world state, coordinates |
-| `lagrange_gpu` | `gpu/` | Vulkan device layer, capability tiers, Slang kernels, the GPU ray caster |
-| `lagrange_rigid_body_mujoco` | `modules/rigid_body/mujoco_backend/` | The rigid-body domain on MuJoCo |
-| `lagrange_rigid_body_substitutes` | `modules/rigid_body/substitutes/` | Fixed robot and other rigid-body substitutes |
-| `lagrange_sensors` | `modules/sensors/` | IMU and lidar, their noise models and ground-truth substitutes |
-| `lagrange_meshes` | `io/meshes/` | glTF, OBJ, STL and Collada import |
-| `lagrange_ros2` | `bridges/ros2/` | The ROS 2 bridge: topics, `/clock`, `simulation_interfaces` services |
-| `lagrange_server` | `server/` | The simulator (`lagrange_server`) and the `lagrange` command |
+| `lagrange_core` | `core/` | Units, signal bus, multirate scheduler, time, random numbers, world state, coordinates, plugin C ABI |
+| `lagrange_schemas` | `schemas/` | The OpenUSD applied schemas (electrical, thermal, aero, weather, EMI, comms, sensors, vehicle, road) |
 | `lagrange_profiles` | `profiles/` | Profile schema and examples |
 | `lagrange_proto` | `proto/` | Viewer protocol messages, framing, socket transport, shared memory |
+| `lagrange_gpu` | `gpu/` | Vulkan device layer, capability tiers, Slang kernels, the GPU ray caster |
+| `lagrange_stage` | `io/stage/` | USD stage → world tables and scene, and back |
+| `lagrange_importers` | `io/importers/` | SDFormat and MJCF readers (URDF in `lagrange_stage`) |
+| `lagrange_meshes` | `io/meshes/` | glTF, OBJ, STL and Collada import |
+| `lagrange_recording` | `io/recording/` | MCAP reading and the replay substitute |
+| `lagrange_fields` | `io/fields/` | NanoVDB fields, OpenFOAM wind import |
+| `lagrange_opendrive` | `io/opendrive/` | OpenDRIVE reader and road import to USD |
+| `lagrange_openscenario` | `io/openscenario/` | OpenSCENARIO 1.x subset runner |
+| `lagrange_rigid_body_mujoco`, `_jolt`, `_substitutes` | `modules/rigid_body/` | The rigid-body domain on MuJoCo or Jolt, and its substitutes |
+| `lagrange_electrical` | `modules/electrical/` | Batteries, buses, motor drives, FMU host |
+| `lagrange_thermal` | `modules/thermal/` | Lumped thermal networks |
+| `lagrange_aerodynamics`, `lagrange_rotor_aero` | `modules/` | Link drag, wind and turbulence; rotors |
+| `lagrange_weather`, `lagrange_emi`, `lagrange_comms` | `modules/` | Weather, EMI fields, radio and CAN links |
+| `lagrange_vehicle_dynamics`, `lagrange_traffic` | `modules/` | Road vehicles; traffic agents and pedestrians |
+| `lagrange_sensors` | `modules/sensors/` | IMU, lidar, camera, radar, GNSS, magnetometer, barometer |
+| `lagrange_models` | `models/` | Component FMUs |
+| `lagrange_ros2`, `lagrange_ros2_control` | `bridges/` | The ROS 2 bridge; the ros2_control hardware plugin |
+| `lagrange_mavlink`, `lagrange_autoware` | `bridges/` | PX4 and ArduPilot SITL; the Autoware vehicle interface |
+| `lagrange_server` | `server/` | The simulator (`lagrange_server`) and the `lagrange` command |
 | `lagrange_viewer` | `viewer/` | The desktop viewer |
-| `imgui_vendor` | `vendor/imgui_vendor/` | Dear ImGui (docking branch), pinned upstream release |
 | `lagrange_mock_server` | `mock_server/` | Replay server for recordings; a test tool |
-| `lagrange_assets` | `assets/` | The sample robots and worlds |
-| `lagrange_demos` | `demos/` | The Nav2 warehouse demo |
 | `lagrange_python` | `python/` | Python bindings: run a simulation headless, step it, read signals |
-| `lagrange_tutorial` | `tests/tutorial/` | The user guide's code and its tests |
-| `lagrange_benchmarks` | `tests/benchmarks/` | Performance benchmarks |
+| `lagrange_assets`, `lagrange_demos` | `assets/`, `demos/` | Sample robots and worlds; the Nav2 and MoveIt demos |
+| `lagrange_collision_bake`, `lagrange_migrate` | `tools/` | Convex decomposition; schema and profile migrations |
+| `lagrange_tutorial`, `lagrange_benchmarks` | `tests/` | The user guide's code; performance benchmarks |
+| `*_vendor` | `vendor/` | Pinned OpenUSD, Jolt, FMI Library, Dear ImGui and ImPlot |
 
 ## Run the simulator
 
@@ -89,9 +125,32 @@ ros2 run lagrange_server lagrange_server &      # the sample AMR in the sample w
 ros2 run lagrange_viewer lagrange_viewer --connect unix:$XDG_RUNTIME_DIR/lagrange/default.sock
 ```
 
-The robot drives a figure-eight until it gets `/cmd_vel`. For a walk through everything (ROS 2,
-profiles, recording, substitutes, your own module, Nav2), follow the
-[tutorial](docs/guide/tutorial-amr.md).
+The robot drives a figure-eight until it gets `/cmd_vel`. The other samples:
+
+```bash
+# the sedan in the city block, with traffic (drive it with /ackermann_cmd or /cmd_vel)
+ros2 run lagrange_server lagrange_server --robot assets/robots/sedan/sedan.usda \
+    --world assets/worlds/city_block/city_block.usda
+# the quadcopter, hovering 2 m up (fly it with /cmd_vel)
+ros2 run lagrange_server lagrange_server --robot assets/robots/quad_x500/quad_x500.usda \
+    --world assets/worlds/open_field/open_field.usda --air-density 1.225 \
+    --geo-origin 47.397742,8.545594,488
+# the arm work cell with MoveIt 2
+ros2 launch lagrange_demos arm6_workcell.launch.py viewer:=true
+```
+
+One tutorial per robot class walks through everything (ROS 2, profiles, recording, substitutes,
+the stacks that drive it):
+[AMR and Nav2](docs/guide/tutorial-amr.md) ·
+[arm and MoveIt 2](docs/guide/tutorial-arm.md) ·
+[drone and PX4/ArduPilot](docs/guide/tutorial-drone.md) ·
+[weather, EMI and comms](docs/guide/tutorial-environment.md) ·
+[cars, scenarios and Autoware](docs/guide/tutorial-cars.md).
+The scripts in `tools/ci/` (`tutorial_amr.sh`, `tutorial_drone.sh`, `tutorial_environment.sh`,
+`tutorial_cars.sh`, and `arm_scenario.sh` for the arm) run them headless and check every step.
+
+To record a clip like the one above: `lagrange_viewer --headless --follow 30,55
+--record-frames DIR --record-fps 10 --frames 100` writes PNG frames of a running simulation.
 
 ## The viewer and the mock server
 

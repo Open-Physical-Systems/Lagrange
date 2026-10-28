@@ -22,6 +22,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <numbers>
 #include <signal.h>
 #include <spawn.h>
 #include <sys/wait.h>
@@ -623,6 +624,11 @@ public:
     }
     void setInitialSelection(std::string path) { selectPath_ = std::move(path); }
     void setCursors(bool on) { cursorsWanted_ = on; }
+    /// Start with the follow camera at this distance (m) from the robot; 0: frame the scene.
+    void setFollow(double distance, double pitchDeg) {
+        followDistance_ = distance;
+        followPitchDeg_ = pitchDeg;
+    }
     void setShading(const std::string& name) {
         if (name == "unlit") {
             renderOptions_.shading = Shading::Unlit;
@@ -688,6 +694,13 @@ private:
             size = std::max(size, high.at(k) - low.at(k));
         }
         camera_.distance = std::clamp(size * 1.6, 0.3, 500.0);
+        if (followDistance_ > 0.0) {
+            camera_.distance = followDistance_;
+            if (followPitchDeg_ != 0.0) {
+                camera_.pitch = followPitchDeg_ * std::numbers::pi / 180.0;
+            }
+            renderOptions_.follow = true;
+        }
     }
 
     const gpu::Device& device_;
@@ -695,6 +708,8 @@ private:
     SceneRenderer renderer_;
     std::vector<std::unique_ptr<Panel>> panels_;
     Camera camera_;
+    double followDistance_{0.0};
+    double followPitchDeg_{0.0};
     std::uint32_t selectedPrim_{kNone};
     std::shared_ptr<const SceneFrame> scene_;
     VkDescriptorSet texture_{VK_NULL_HANDLE};
@@ -820,6 +835,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setInitialSelection(options.selectPath);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);
+        ui.setFollow(options.followDistance, options.followPitchDeg);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize =
@@ -830,7 +846,18 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         // Frames are counted from the moment the scene is there; before that we keep
         // drawing (the "not connected" state) until the deadline.
         const std::uint32_t wanted = options.frames != 0 ? options.frames : 120;
-        while (rendered < wanted) {
+        // --record-frames writes a frame at a fixed wall-clock rate once the scene is there;
+        // --frames then counts the frames written, so the clip's length is frames / fps.
+        const bool recording = !options.recordFrames.empty();
+        if (recording) {
+            std::error_code ignored;
+            std::filesystem::create_directories(options.recordFrames, ignored);
+        }
+        const auto framePeriod = std::chrono::duration_cast<Clock::duration>(
+            std::chrono::duration<double>(1.0 / std::max(options.recordFps, 1U)));
+        auto nextFrame = Clock::time_point{};
+        std::uint32_t written = 0;
+        while ((recording ? written : rendered) < wanted) {
             // With --open, wait for the requested file's scene, not the one served before it.
             const auto current = client.scene();
             // The launcher needs no scene: it is what is shown before connecting.
@@ -864,6 +891,22 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             first = false;
             if (haveScene) {
                 ++rendered;
+                if (recording && Clock::now() >= nextFrame) {
+                    nextFrame =
+                        (nextFrame == Clock::time_point{} ? Clock::now() : nextFrame) + framePeriod;
+                    char name[32];
+                    std::snprintf(name, sizeof(name), "frame_%05u.png", written);
+                    const std::string file =
+                        (std::filesystem::path(options.recordFrames) / name).string();
+                    const std::vector<std::uint8_t> pixels = gpu::readbackRgba8(
+                        *device, target, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                    if (!gpu::writePng(file, extent.width, extent.height, pixels)) {
+                        std::fprintf(stderr, "error: cannot write %s\n", file.c_str());
+                        exitCode = 5;
+                        break;
+                    }
+                    ++written;
+                }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(8));
         }
@@ -1144,6 +1187,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setInitialSelection(options.selectPath);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);
+        ui.setFollow(options.followDistance, options.followPitchDeg);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);
         // The file dialog reports its result on a callback that may run on another thread.
         struct Chosen {
