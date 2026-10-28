@@ -49,6 +49,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <map>
 #include <memory>
 #include <optional>
@@ -428,6 +429,16 @@ struct Server::Impl {
     std::string schemaText;
     std::array<double, 3> shift{};  // world ENU of the region-local origin (moves at a rebase)
 
+    // Streamed tiles (huge-worlds.md §2): the selection, what was there before any tile (the
+    // robot, the world's other scenery), the loaded tiles' content in world ENU, and the loads
+    // under way on worker threads (at most kTileWorkers at once, the rest queued).
+    std::unique_ptr<streaming::TileSelector> tileSelector;
+    ModelExtent baseExtent;
+    std::map<std::uint32_t, std::shared_ptr<const Model>> tileContent;
+    std::map<std::uint32_t, std::future<Expected<Model, std::string>>> tileLoads;
+    std::deque<std::uint32_t> tileQueue;
+    bool waitingForTiles{false};  // a served run holds until the robot's ground is loaded
+
     Clock::time_point lastWall{Clock::now()};
     Clock::time_point lastStatus{Clock::now()};
     Clock::time_point lastStats{Clock::now()};
@@ -767,6 +778,8 @@ struct Server::Impl {
         settings.ambientTemperatureK = ambient();
         settings.airDensityKgM3 = appliedAirDensity ? appliedAirDensity : options.airDensityKgM3;
         settings.geoOrigin = appliedGeoOrigin ? appliedGeoOrigin : options.geoOrigin;
+        settings.streamingLoadRadius = appliedLoadRadius;
+        settings.streamingUnloadRadius = appliedUnloadRadius;
         settings.aerodynamics = appliedAerodynamics;
         settings.rotorAero = appliedRotorAero;
         settings.weather = appliedWeather;
@@ -872,10 +885,12 @@ struct Server::Impl {
     std::optional<double> ambient() const {
         return appliedAmbientK ? appliedAmbientK : options.ambientTemperatureK;
     }
-    std::optional<std::int64_t> thermalDtNs;                              // from an applied profile
-    std::optional<double> appliedAmbientK;                                // from an applied profile
-    std::optional<double> appliedAirDensity;                              // from an applied profile
-    std::optional<coords::Geodetic> appliedGeoOrigin;                     // from an applied profile
+    std::optional<std::int64_t> thermalDtNs;           // from an applied profile
+    std::optional<double> appliedAmbientK;             // from an applied profile
+    std::optional<double> appliedAirDensity;           // from an applied profile
+    std::optional<coords::Geodetic> appliedGeoOrigin;  // from an applied profile
+    std::optional<double> appliedLoadRadius;    // world.streaming.load_radius of an applied profile
+    std::optional<double> appliedUnloadRadius;  // world.streaming.unload_radius
     std::map<std::string, ConfigValue, std::less<>> appliedAerodynamics;  // its wind
     std::map<std::string, ConfigValue, std::less<>> appliedRotorAero;     // its rotor settings
     std::map<std::string, ConfigValue, std::less<>> appliedWeather;       // its weather
@@ -1086,6 +1101,15 @@ struct Server::Impl {
         // Never owe more than 100 ms: a run that cannot keep up falls behind real time.
         owedNs = std::min<std::int64_t>(owedNs + simNs, 100'000'000);
         const Clock::time_point began = Clock::now();
+        if (waitingForTiles) {
+            if (Status status = updateTiles(false); !status.ok()) {
+                return status;
+            }
+            if (waitingForTiles) {
+                owedNs = 0;
+                return {};
+            }
+        }
         while (owedNs >= tick) {
             owedNs -= tick;
             const Clock::time_point tickStart = Clock::now();
@@ -1095,8 +1119,12 @@ struct Server::Impl {
             tickNs.push_back(nanosSince(tickStart, Clock::now()));
             capture();
             record();
-            if (Status status = rebaseIfFar(); !status.ok()) {
+            if (Status status = worldUpdate(false); !status.ok()) {
                 return status;
+            }
+            if (waitingForTiles) {
+                owedNs = 0;  // hold: the robot's ground is not in physics yet
+                break;
             }
             if (scenarioState.valid() && !scenarioEnded &&
                 scheduler->bus().read(scenarioState) == 1.0) {
@@ -2254,7 +2282,7 @@ struct Server::Impl {
                         }
                         capture();
                         record();
-                        if (Status status = rebaseIfFar(); !status.ok()) {
+                        if (Status status = worldUpdate(false); !status.ok()) {
                             fail(status);
                             break;
                         }
@@ -2563,6 +2591,204 @@ struct Server::Impl {
         return {};
     }
 
+    static constexpr std::size_t kTileWorkers = 4;
+    static constexpr double kDefaultLoadRadiusM = 600.0;    // world.streaming.load_radius
+    static constexpr double kDefaultUnloadRadiusM = 800.0;  // world.streaming.unload_radius
+    // How far ahead a robot's ground must be in physics: this, plus half a second of travel.
+    static constexpr double kGroundMarginM = 5.0;
+
+    /// The robot's first body in world ENU.
+    [[nodiscard]] std::array<double, 3> focusWorld() const {
+        std::array<double, 3> p = robot.bodyRestPose.empty() ? std::array<double, 3>{}
+                                                             : robot.bodyRestPose.front().position;
+        if (scheduler && !bodyPose.empty() && bodyPose.front().valid()) {
+            const std::span<const double> pose = scheduler->bus().readN(bodyPose.front());
+            p = {pose[0], pose[1], pose[2]};
+        }
+        for (std::size_t i = 0; i < 3; ++i) {
+            p.at(i) += robot.world.region.worldEnu.at(i);
+        }
+        return p;
+    }
+
+    /// Starts streaming when the loaded stages have tiles: the base extent, the selection, and
+    /// the tiles around the robot's start, loaded before the run is built.
+    Status startStreaming() {
+        if (robot.tiles.empty()) {
+            return {};
+        }
+        streaming::StreamingSettings settings;
+        settings.loadRadius = active().streamingLoadRadius.value_or(kDefaultLoadRadiusM);
+        settings.unloadRadius = active().streamingUnloadRadius.value_or(
+            std::max(kDefaultUnloadRadiusM, settings.loadRadius * 4.0 / 3.0));
+        settings.deterministic = true;  // camera hints are not used yet (huge-worlds.md §2)
+        baseExtent = extentOf(robot);
+        tileSelector = std::make_unique<streaming::TileSelector>(robot.tiles, settings);
+        char text[160];
+        std::snprintf(text, sizeof text,
+                      "%zu streamed tiles (WorldTileAPI_1): load radius %.0f m, unload %.0f m",
+                      robot.tiles.size(), settings.loadRadius, settings.unloadRadius);
+        log(v1::LOG_LEVEL_INFO, "streaming", text);
+        return updateTiles(true);
+    }
+
+    /// Streaming again from nothing, with the radii of the profile now applied.
+    Status restartStreaming() {
+        if (!tileSelector) {
+            return {};
+        }
+        for (auto& [id, load] : tileLoads) {
+            (void)id;
+            load.wait();
+        }
+        tileLoads.clear();
+        tileQueue.clear();
+        tileContent.clear();
+        truncateModel(robot, baseExtent);
+        tileSelector.reset();
+        return startStreaming();
+    }
+
+    /// One streaming update: finished loads join the world, the selection runs on the robot's
+    /// position, tiles leave or start loading. With `wait` (headless and deterministic runs) the
+    /// loads finish here, so the tile set is a function of the robot's path; a served run takes
+    /// them as they come and holds while the robot's ground is missing. When the tiles in the
+    /// world changed, the run is rebuilt on them and carries its state over.
+    Status updateTiles(bool wait) {
+        if (!tileSelector) {
+            return {};
+        }
+        bool changed = collectTiles(false);
+        const std::vector<streaming::Interest> interests{
+            {streaming::Interest::Kind::Robot, focusWorld()}};
+        const double now = scheduler ? scheduler->now().seconds() : 0.0;
+        const streaming::StreamingPlan plan = tileSelector->update(interests, now);
+        for (const std::uint32_t id : plan.unload) {
+            tileContent.erase(id);
+            tileSelector->unloaded(id);
+            changed = true;
+        }
+        tileQueue.insert(tileQueue.end(), plan.load.begin(), plan.load.end());
+        startTileLoads();
+        if (wait) {
+            while (!tileLoads.empty() || !tileQueue.empty()) {
+                changed = collectTiles(true) || changed;
+                startTileLoads();
+            }
+        }
+        if (changed) {
+            if (Status status = attachTiles(); !status.ok()) {
+                return status;
+            }
+            char text[96];
+            std::snprintf(text, sizeof text, "%zu tiles loaded, %zu loading", tileContent.size(),
+                          tileLoads.size() + tileQueue.size());
+            log(v1::LOG_LEVEL_DEBUG, "streaming", text);
+        }
+        const double margin = kGroundMarginM + 0.5 * robotSpeed();
+        const bool ready = tileSelector->physicsReady(focusWorld(), margin);
+        if (ready != !waitingForTiles) {
+            waitingForTiles = !ready;
+            log(v1::LOG_LEVEL_INFO, "streaming",
+                ready ? "the robot's ground is loaded: the run goes on"
+                      : "waiting for the tiles under the robot to load");
+        }
+        return {};
+    }
+
+    [[nodiscard]] double robotSpeed() const {
+        if (!scheduler || robot.world.bodies.names.empty()) {
+            return 0.0;
+        }
+        const SignalId twist =
+            scheduler->bus().find("body/" + robot.world.bodies.names.front() + "/twist");
+        if (!twist.valid()) {
+            return 0.0;
+        }
+        const std::span<const double> v = scheduler->bus().readN(twist);
+        return std::hypot(v[0], v[1]);
+    }
+
+    void startTileLoads() {
+        while (tileLoads.size() < kTileWorkers && !tileQueue.empty()) {
+            const std::uint32_t id = tileQueue.front();
+            tileQueue.pop_front();
+            const streaming::TileInfo& tile = tileSelector->tiles().at(id);
+            tileLoads.emplace(
+                id, std::async(std::launch::async, [source = tile.source, path = tile.path] {
+                    stage::ReadOptions read;
+                    read.addGround = false;
+                    read.tile = path;
+                    return stage::loadStage(source, read);
+                }));
+        }
+    }
+
+    /// Takes the finished loads (all of them, waiting, with `wait`). True if any joined.
+    bool collectTiles(bool wait) {
+        bool changed = false;
+        for (auto it = tileLoads.begin(); it != tileLoads.end();) {
+            if (!wait &&
+                it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+                ++it;
+                continue;
+            }
+            Expected<Model, std::string> loaded = it->second.get();
+            if (loaded) {
+                tileContent[it->first] = std::make_shared<const Model>(std::move(*loaded));
+                tileSelector->loaded(it->first);
+                changed = true;
+            } else {
+                // Left out of the world; asked for again at a later update.
+                tileSelector->unloaded(it->first);
+                log(v1::LOG_LEVEL_ERROR, "streaming", loaded.error());
+            }
+            it = tileLoads.erase(it);
+        }
+        return changed;
+    }
+
+    /// Puts the loaded tiles into the world tables and the scene, in tile order, after what was
+    /// there before; rebuilds a running scheduler keeping its state.
+    Status attachTiles() {
+        truncateModel(robot, baseExtent);
+        const std::vector<streaming::TileInfo>& tiles = tileSelector->tiles();
+        for (const auto& [id, content] : tileContent) {
+            // Loaded finer tiles over this one replace it where they are.
+            std::vector<std::array<double, 4>> covered;
+            for (const auto& [other, unused] : tileContent) {
+                (void)unused;
+                const streaming::TileInfo& t = tiles.at(other);
+                if (t.level > tiles.at(id).level) {
+                    covered.push_back(
+                        {t.boundsMin[0], t.boundsMin[1], t.boundsMax[0], t.boundsMax[1]});
+                }
+            }
+            appendTile(robot, *content, tiles.at(id).path, robot.world.region.worldEnu, covered);
+        }
+        if (!scheduler) {
+            return {};
+        }
+        if (Status status = rebuildKeepingState(); !status.ok()) {
+            return Status::error(status.code, "streaming: " + status.message);
+        }
+        resyncViewers();
+        return {};
+    }
+
+    /// After a tick: every 100 ms of simulated time, the floating origin and the streamed
+    /// tiles. A run without ROS (headless, deterministic) waits for its tile loads in the step,
+    /// so its tile set depends only on the robot's path; a run with ROS takes them as they come.
+    Status worldUpdate(bool headless) {
+        if (scheduler->now().ns % kRebaseCheckNs != 0) {
+            return {};
+        }
+        if (Status status = rebaseIfFar(); !status.ok()) {
+            return status;
+        }
+        return replay ? Status{} : updateTiles(headless || !bridge);
+    }
+
     /// Floating origin during a run (huge-worlds.md §1.2): every 100 ms of simulated time, if
     /// the robot is farther than kRebaseDistanceM from the region origin, the origin moves to
     /// its whole-metre position. The world tables shift, the run is rebuilt on them, and its
@@ -2776,7 +3002,7 @@ struct Server::Impl {
             }
             capture();
             record();
-            if (Status status = rebaseIfFar(); !status.ok()) {
+            if (Status status = worldUpdate(false); !status.ok()) {
                 fail(status);
                 return status;
             }
@@ -2963,6 +3189,14 @@ struct Server::Impl {
         }
         if (settings.geoOrigin) {
             appliedGeoOrigin = settings.geoOrigin;
+        }
+        if (settings.streamingLoadRadius != appliedLoadRadius ||
+            settings.streamingUnloadRadius != appliedUnloadRadius) {
+            appliedLoadRadius = settings.streamingLoadRadius;
+            appliedUnloadRadius = settings.streamingUnloadRadius;
+            if (Status status = restartStreaming(); !status.ok()) {
+                return status;
+            }
         }
         appliedAerodynamics = settings.aerodynamics;
         appliedRotorAero = settings.rotorAero;
@@ -3958,6 +4192,9 @@ Status Server::load() {
                   ")");
     }
     s.shift = recentre(s.robot);
+    if (Status status = s.startStreaming(); !status.ok()) {
+        return status;
+    }
     if (Status status = s.placeLidar(); !status.ok()) {
         return status;
     }
@@ -3993,7 +4230,7 @@ Status Server::stepUntil(SimTime t) {
         if (Status status = impl_->scheduler->stepTick(); !status.ok()) {
             return status;
         }
-        if (Status status = impl_->rebaseIfFar(); !status.ok()) {
+        if (Status status = impl_->worldUpdate(true); !status.ok()) {
             return status;
         }
     }

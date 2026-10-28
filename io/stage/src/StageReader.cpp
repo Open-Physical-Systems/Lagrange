@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <deque>
+#include <filesystem>
 #include <limits>
 #include <map>
 #include <numbers>
@@ -21,10 +22,14 @@
 #include <pxr/base/gf/quatd.h>
 #include <pxr/base/gf/quatf.h>
 #include <pxr/base/gf/vec2d.h>
+#include <pxr/base/gf/vec2i.h>
 #include <pxr/base/gf/vec3d.h>
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/tf/token.h>
 #include <pxr/base/vt/array.h>
+#include <pxr/usd/sdf/layerUtils.h>
+#include <pxr/usd/sdf/listOp.h>
+#include <pxr/usd/sdf/payload.h>
 #include <pxr/usd/usd/primRange.h>
 #include <pxr/usd/usd/schemaRegistry.h>
 #include <pxr/usd/usd/stage.h>
@@ -1092,9 +1097,122 @@ private:
 
 }  // namespace
 
+namespace {
+
+const TfToken kWorldTileApi("WorldTileAPI_1");
+
+bool isTile(const UsdPrim& prim) {
+    const TfTokenVector applied = prim.GetAppliedSchemas();
+    return std::find(applied.begin(), applied.end(), kWorldTileApi) != applied.end();
+}
+
+/// Loads every payload of the stage except the tiles' (and what is under them), which the
+/// server streams (huge-worlds.md §2).
+void loadAllButTiles(const UsdStageRefPtr& stage) {
+    constexpr int kNestedPayloadPasses = 8;  // payloads inside payloads, as deep as this
+    for (int pass = 0; pass < kNestedPayloadPasses; ++pass) {
+        std::vector<SdfPath> load;
+        UsdPrimRange range = UsdPrimRange::Stage(stage, UsdPrimIsActive && UsdPrimIsDefined);
+        for (auto it = range.begin(); it != range.end(); ++it) {
+            if (isTile(*it)) {
+                it.PruneChildren();
+                continue;
+            }
+            if (it->HasAuthoredPayloads() && !it->IsLoaded()) {
+                load.push_back(it->GetPath());
+            }
+        }
+        if (load.empty()) {
+            return;
+        }
+        for (const SdfPath& path : load) {
+            stage->Load(path, UsdLoadWithoutDescendants);
+        }
+    }
+}
+
+/// Bytes of the files a prim's payloads name: the memory estimate of a tile.
+std::uint64_t payloadBytes(const UsdPrim& prim) {
+    std::uint64_t bytes = 0;
+    for (const SdfPrimSpecHandle& spec : prim.GetPrimStack()) {
+        SdfPayloadListOp payloads;
+        if (!spec->HasField(SdfFieldKeys->Payload) ||
+            !spec->GetLayer()->HasField(spec->GetPath(), SdfFieldKeys->Payload, &payloads)) {
+            continue;
+        }
+        for (const SdfPayload& payload : payloads.GetAppliedItems()) {
+            const std::string file =
+                SdfComputeAssetPathRelativeToLayer(spec->GetLayer(), payload.GetAssetPath());
+            std::error_code error;
+            const std::uintmax_t size = std::filesystem::file_size(file, error);
+            bytes += error ? 0 : static_cast<std::uint64_t>(size);
+        }
+    }
+    return bytes;
+}
+
+/// The WorldTileAPI_1 prims of a stage opened with their payloads unloaded.
+Expected<std::vector<streaming::TileInfo>, std::string> readTiles(const UsdStageRefPtr& stage,
+                                                                  const std::string& source) {
+    std::vector<streaming::TileInfo> tiles;
+    std::string errors;
+    for (const UsdPrim& prim :
+         UsdPrimRange::Stage(stage, UsdPrimIsActive && UsdPrimIsDefined && !UsdPrimIsAbstract)) {
+        if (!isTile(prim)) {
+            continue;
+        }
+        streaming::TileInfo tile;
+        tile.path = prim.GetPath().GetString();
+        tile.source = source;
+        int level = 0;
+        prim.GetAttribute(TfToken("world:tile:level")).Get(&level);
+        tile.level = level;
+        GfVec3d lo(0.0);
+        GfVec3d hi(0.0);
+        const bool haveBounds = prim.GetAttribute(TfToken("world:tile:boundsMin")).Get(&lo) &&
+                                prim.GetAttribute(TfToken("world:tile:boundsMax")).Get(&hi);
+        prim.GetAttribute(TfToken("world:tile:geometricError")).Get(&tile.geometricError);
+        prim.GetAttribute(TfToken("world:tile:hasCollision")).Get(&tile.hasCollision);
+        if (!haveBounds || !(hi[0] > lo[0] && hi[1] > lo[1] && hi[2] >= lo[2])) {
+            errors += "\n  " + tile.path +
+                      ": WorldTileAPI_1 needs world:tile:boundsMin below world:tile:boundsMax";
+            continue;
+        }
+        tile.boundsMin = {lo[0], lo[1], lo[2]};
+        tile.boundsMax = {hi[0], hi[1], hi[2]};
+        tile.bytes = payloadBytes(prim);
+        tiles.push_back(std::move(tile));
+    }
+    if (!errors.empty()) {
+        return Unexpected{"the stage's tiles cannot be streamed:" + errors};
+    }
+    return tiles;
+}
+
+}  // namespace
+
 Expected<Model, std::string> loadStage(const std::string& path, const ReadOptions& options) {
     registerSchemaLibraries();
-    const UsdStageRefPtr stage = UsdStage::Open(path);
+    UsdStageRefPtr stage;
+    if (options.tile.empty()) {
+        // Tiles stay unloaded: the server streams them (WorldTileAPI_1, huge-worlds.md §2).
+        stage = UsdStage::Open(path, UsdStage::LoadNone);
+        if (stage) {
+            loadAllButTiles(stage);
+        }
+    } else {
+        // One tile: the stage masked to it, with its payload (and only its) loaded, so USD
+        // composes its transforms and materials as in the whole stage.
+        const SdfPath tile(options.tile);
+        stage = UsdStage::OpenMasked(path, UsdStagePopulationMask({tile}), UsdStage::LoadNone);
+        if (stage) {
+            const UsdPrim prim = stage->GetPrimAtPath(tile);
+            if (!prim || !isTile(prim)) {
+                return Unexpected{path + ": " + options.tile + " is not a WorldTileAPI_1 prim"};
+            }
+            stage->Load(tile);
+        }
+    }
     if (!stage) {
         return Unexpected{"cannot open " + path + " as a USD stage"};
     }
@@ -1103,6 +1221,16 @@ Expected<Model, std::string> loadStage(const std::string& path, const ReadOption
     Reader reader(stage, options, model);
     if (auto read = reader.read(); !read) {
         return Unexpected{read.error()};
+    }
+    if (options.tile.empty()) {
+        auto tiles = readTiles(stage, path);
+        if (!tiles) {
+            return Unexpected{tiles.error()};
+        }
+        model.tiles = std::move(*tiles);
+    } else if (!model.world.bodies.names.empty()) {
+        return Unexpected{path + ": tile " + options.tile +
+                          " holds rigid bodies; a tile holds static scenery only"};
     }
     if (options.addGround && !reader.hasPlane()) {
         // As the URDF loader: the infinite plane first among the colliders, the slab last.

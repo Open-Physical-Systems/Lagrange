@@ -11,6 +11,7 @@ namespace lagrange::streaming {
 /// One tile of a tiled world (WorldTileAPI_1, huge-worlds.md §2), as the selection sees it.
 struct TileInfo {
     std::string path;                   ///< The tile prim's path, for the loader.
+    std::string source;                 ///< The stage file the tile belongs to.
     std::int32_t level{0};              ///< Level of detail; 0 is the coarsest.
     std::array<double, 3> boundsMin{};  ///< World ENU, m.
     std::array<double, 3> boundsMax{};

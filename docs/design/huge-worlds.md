@@ -168,6 +168,42 @@ Streaming manager (`core/world/streaming/`):
 | Determinism | In deterministic mode the tile set is a pure function of robot positions (no camera hints, no time-based hysteresis; distance hysteresis only) |
 | Protocol | The viewer receives tile prims as `SceneDelta.added` / `removed`; meshes through the shared-memory scene region |
 
+### 2.1 Status in v0.7
+
+Built:
+- `WorldTileAPI_1` (`schemas/world`).
+- `stage::loadStage` opens a stage with its tiles' payloads unloaded (every other payload
+  loaded) and lists the tiles in `Model::tiles`. With `ReadOptions::tile` it reads one tile:
+  the stage masked to that prim, its payload alone loaded, so USD composes it as in the whole
+  stage. A tile holds static scenery only.
+- `streaming::TileSelector` (`core/world/streaming`) chooses the tiles: refinement by
+  geometric error per metre from the coarsest level down, the collision tiles a robot can
+  reach, coarse tiles kept until their finer replacements are loaded, distance hysteresis plus
+  a 5 s delay (none in deterministic mode), a memory budget that never drops a robot's ground,
+  and `physicsReady()`.
+- The server streams for any loaded stage with tiles. Every 100 ms of simulated time (with
+  the rebase check) it runs the selection on the robot's position and loads tiles on up to
+  four worker threads. When the loaded set changes, the world tables are put back to what they
+  were before any tile (`truncateModel`), the loaded tiles appended in order (`appendTile`,
+  moved into the region frame, a coarse tile's prims left out where a loaded finer tile is),
+  and the run rebuilt keeping its state. Jolt saves only its moving bodies' state for this, so
+  a state fits a world whose scenery changed.
+- Physics-ready gating: a run with ROS takes loads as they finish and holds (no steps) while
+  a collision tile within 5 m plus half a second of travel of the robot is missing. A run without
+  ROS (headless, Python, `lagrange determinism`) waits for its loads in the step, so its tile
+  set depends only on the robot's path: `Streaming.TheTilesAroundTheRobotAreLoadedAnd
+  TheRunIsDeterministic` runs the sample twice and compares state hashes.
+- Profile keys `world.streaming.load_radius` and `unload_radius` (defaults 600 m and 800 m).
+- Sample: `assets/worlds/tiled_town/` (written by `make_tiled_town.py`), a 2048 m town in 4
+  coarse tiles of 1024 m and 64 collision tiles of 256 m.
+
+Not yet:
+- Interest from sensors' ranges and viewer cameras (protocol hints): only the robot's position.
+- Memory budgets from the profile; the selector supports them, the server passes none.
+- A tile change rebuilds the run (tens of milliseconds for the sample, more for big tiles); an
+  in-place add and remove of static geometry in the backends would avoid it.
+- Lanes, EMI sources and other schema instances in tiles are not taken (static scenery only).
+
 ## 3. Active regions and simplified distant agents
 
 A **region** is a bubble of full simulation around one or more robots. Outside all regions the

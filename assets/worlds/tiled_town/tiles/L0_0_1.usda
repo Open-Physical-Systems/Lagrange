@@ -1,0 +1,202 @@
+#usda 1.0
+(
+    defaultPrim = "tile"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "tile"
+{
+    def Xform "quarter_0_0"
+    {
+        double3 xformOp:translate = (140.00, 140.00, 11.14)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual"
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.60, 0.60, 0.63)]
+            float3 xformOp:scale = (232.00, 232.00, 22.27)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "quarter_0_1"
+    {
+        double3 xformOp:translate = (140.00, 396.00, 11.63)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual"
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.60, 0.60, 0.63)]
+            float3 xformOp:scale = (232.00, 232.00, 23.27)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "quarter_0_2"
+    {
+        double3 xformOp:translate = (140.00, 652.00, 14.79)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual"
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.60, 0.60, 0.63)]
+            float3 xformOp:scale = (232.00, 232.00, 29.58)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "quarter_0_3"
+    {
+        double3 xformOp:translate = (140.00, 908.00, 12.46)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual"
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.60, 0.60, 0.63)]
+            float3 xformOp:scale = (232.00, 232.00, 24.91)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "quarter_1_0"
+    {
+        double3 xformOp:translate = (396.00, 140.00, 6.56)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual"
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.60, 0.60, 0.63)]
+            float3 xformOp:scale = (232.00, 232.00, 13.13)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "quarter_1_1"
+    {
+        double3 xformOp:translate = (396.00, 396.00, 11.27)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual"
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.60, 0.60, 0.63)]
+            float3 xformOp:scale = (232.00, 232.00, 22.53)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "quarter_1_2"
+    {
+        double3 xformOp:translate = (396.00, 652.00, 12.87)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual"
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.60, 0.60, 0.63)]
+            float3 xformOp:scale = (232.00, 232.00, 25.74)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "quarter_1_3"
+    {
+        double3 xformOp:translate = (396.00, 908.00, 7.08)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual"
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.60, 0.60, 0.63)]
+            float3 xformOp:scale = (232.00, 232.00, 14.17)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "quarter_2_0"
+    {
+        double3 xformOp:translate = (652.00, 140.00, 14.01)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual"
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.60, 0.60, 0.63)]
+            float3 xformOp:scale = (232.00, 232.00, 28.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "quarter_2_1"
+    {
+        double3 xformOp:translate = (652.00, 396.00, 9.62)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual"
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.60, 0.60, 0.63)]
+            float3 xformOp:scale = (232.00, 232.00, 19.23)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "quarter_2_2"
+    {
+        double3 xformOp:translate = (652.00, 652.00, 7.82)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual"
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.60, 0.60, 0.63)]
+            float3 xformOp:scale = (232.00, 232.00, 15.63)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "quarter_2_3"
+    {
+        double3 xformOp:translate = (652.00, 908.00, 9.50)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual"
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.60, 0.60, 0.63)]
+            float3 xformOp:scale = (232.00, 232.00, 19.00)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "quarter_3_0"
+    {
+        double3 xformOp:translate = (908.00, 140.00, 11.87)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual"
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.60, 0.60, 0.63)]
+            float3 xformOp:scale = (232.00, 232.00, 23.75)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "quarter_3_1"
+    {
+        double3 xformOp:translate = (908.00, 396.00, 15.51)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual"
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.60, 0.60, 0.63)]
+            float3 xformOp:scale = (232.00, 232.00, 31.03)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "quarter_3_2"
+    {
+        double3 xformOp:translate = (908.00, 652.00, 7.72)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual"
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.60, 0.60, 0.63)]
+            float3 xformOp:scale = (232.00, 232.00, 15.44)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+    def Xform "quarter_3_3"
+    {
+        double3 xformOp:translate = (908.00, 908.00, 9.16)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "visual"
+        {
+            double size = 1
+            color3f[] primvars:displayColor = [(0.60, 0.60, 0.63)]
+            float3 xformOp:scale = (232.00, 232.00, 18.33)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+}

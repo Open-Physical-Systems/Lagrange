@@ -820,5 +820,60 @@ apply:
     EXPECT_NE(version.error().find("schema_version must be 1"), std::string::npos);
 }
 
+// Streamed worlds (huge-worlds.md §2): a stage with WorldTileAPI_1 prims opens with their
+// payloads unloaded and lists them; one tile reads alone, its content placed where the whole
+// stage puts it.
+TEST(StageReader, TilesStayUnloadedAndReadOneByOne) {
+    ReadOptions read;
+    read.addGround = false;
+    const auto town = loadStage(LAGRANGE_TEST_TILED_TOWN, read);
+    ASSERT_TRUE(town) << town.error();
+    ASSERT_EQ(town->tiles.size(), 68U);
+    EXPECT_TRUE(town->world.colliders.body.empty()) << "no tile's buildings yet";
+    const streaming::TileInfo* fine = nullptr;
+    for (const streaming::TileInfo& t : town->tiles) {
+        if (t.path == "/tiled_town/L1_2_3") {
+            fine = &t;
+        }
+    }
+    ASSERT_NE(fine, nullptr);
+    EXPECT_EQ(fine->level, 1);
+    EXPECT_TRUE(fine->hasCollision);
+    EXPECT_EQ(fine->boundsMin, (std::array<double, 3>{512.0, 768.0, 0.0}));
+    EXPECT_EQ(fine->boundsMax, (std::array<double, 3>{768.0, 1024.0, 60.0}));
+    EXPECT_DOUBLE_EQ(fine->geometricError, 0.5);
+    EXPECT_GT(fine->bytes, 500U) << "the payload file's size";
+    EXPECT_EQ(fine->source, LAGRANGE_TEST_TILED_TOWN);
+
+    read.tile = fine->path;
+    const auto tile = loadStage(LAGRANGE_TEST_TILED_TOWN, read);
+    ASSERT_TRUE(tile) << tile.error();
+    EXPECT_TRUE(tile->tiles.empty());
+    ASSERT_FALSE(tile->world.colliders.body.empty());
+    for (std::size_t c = 0; c < tile->world.colliders.body.size(); ++c) {
+        const std::array<double, 3>& p = tile->world.colliders.poseInBody[c].position;
+        EXPECT_GE(p[0], 512.0);
+        EXPECT_LE(p[0], 768.0);
+        EXPECT_GE(p[1], 768.0);
+        EXPECT_LE(p[1], 1024.0);
+    }
+
+    // Appended to a model in a region 500 m east: under the tile prim, moved into the region.
+    Model world = *town;
+    const ModelExtent base = extentOf(world);
+    appendTile(world, *tile, fine->path, {500.0, 0.0, 0.0});
+    EXPECT_EQ(world.world.colliders.body.size(), tile->world.colliders.body.size());
+    EXPECT_NEAR(world.world.colliders.poseInBody[0].position[0],
+                tile->world.colliders.poseInBody[0].position[0] - 500.0, 1e-12);
+    bool underTile = false;
+    for (const ScenePrim& prim : world.scene.prims) {
+        underTile = underTile || prim.path == fine->path + "/building_0/visual";
+    }
+    EXPECT_TRUE(underTile);
+    truncateModel(world, base);
+    EXPECT_TRUE(world.world.colliders.body.empty());
+    EXPECT_EQ(world.scene.prims.size(), town->scene.prims.size());
+}
+
 }  // namespace
 }  // namespace lagrange::stage
