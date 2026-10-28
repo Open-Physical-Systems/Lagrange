@@ -11,12 +11,15 @@ unit-checked signal bus, and any of them can be disabled or replaced by ideal, c
 replayed data. A native Vulkan viewer shows the run; it talks to the simulator only through a
 protocol, never by linking it.
 
-**Status: v0.7.0** ([release notes](docs/release/v0.7.0.md)). Pre-1.0: schemas, protocol and
-plugin ABI may still change between releases, always with a migration tool. Next: v1.0, the
-stable release ([progress](docs/plan/progress.md)).
+**Status: v1.0.0, stable** ([release notes](docs/release/v1.0.0.md)). The USD schemas, the
+plugin C ABI, the viewer protocol, profiles and recordings are frozen for 1.x and change only by
+addition ([RFC 0007](rfcs/0007-v1-freeze.md)); 1.x is supported on `release/1.x` until ROS 2
+Lyrical's end of life in May 2031 ([GOVERNANCE.md](GOVERNANCE.md)). What each model is checked
+against: the [validation report](docs/validation/report.md).
 
 <p align="center">
   <img src="docs/imgs/sedan-city.gif" alt="The sample sedan driving round the city block junction among simulated traffic, in the Lagrange viewer's follow camera" width="646">
+  <br><b><a href="https://github.com/Open-Physical-Systems/Lagrange/releases/download/v1.0.0/lagrange-sedan-city.mp4">▶ Watch 20 s of the whole viewer (MP4, 6 MB)</a></b>
   <br><sub>The sample sedan on Magic Formula tyres, among IDM traffic in an OpenDRIVE city block
   (<code>lagrange_server --robot assets/robots/sedan/sedan.usda --world assets/worlds/city_block/city_block.usda</code>).</sub>
 </p>
@@ -60,6 +63,21 @@ recorded to MCAP and replayed.
 | Viewer and protocol | [docs/design/viewer.md](docs/design/viewer.md), [docs/design/protocol.md](docs/design/protocol.md) |
 | Design proposals | [rfcs/](rfcs/) |
 | Decisions and open questions | [docs/plan/open-questions.md](docs/plan/open-questions.md) |
+
+## Install
+
+The packages are built as `ros-lyrical-*` debs; until they are published on the ROS buildfarm,
+build them yourself from a clone of this repository and install them on any Ubuntu 26.04 machine
+with ROS 2 Lyrical (about an hour, with podman; `packaging/README.md`):
+
+```bash
+packaging/debs/build_debs.sh ~/lagrange_debs          # every package, in a clean container
+sudo apt install ~/lagrange_debs/*.deb
+PIP_BREAK_SYSTEM_PACKAGES=1 pip3 install -c packaging/pip-constraints.txt mcap coacd
+packaging/test_install.sh ~/lagrange_debs              # optional: the clean-machine test
+```
+
+Or build from source:
 
 ## Build
 
@@ -161,7 +179,9 @@ The scripts in `tools/ci/` (`tutorial_amr.sh`, `tutorial_drone.sh`, `tutorial_en
 `tutorial_cars.sh`, `tutorial_huge_worlds.sh`, and `arm_scenario.sh` for the arm) run them headless and check every step.
 
 To record a clip like the one above: `lagrange_viewer --headless --follow 30,55
---record-frames DIR --record-fps 10 --frames 100` writes PNG frames of a running simulation.
+--record-frames DIR --record-fps 10 --frames 100` writes PNG frames of a running simulation;
+the video is 500 frames at 25 fps, `ffmpeg -framerate 25 -i DIR/frame_%05d.png -c:v libx264
+-pix_fmt yuv420p -crf 23 clip.mp4`.
 
 ## The viewer and the mock server
 

@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_weather</name>
-  <version>0.7.0</version>
+  <version>1.0.0</version>
   <description>The weather domain: the site's atmosphere, fog, rain and dust extinction, wet friction and lens contamination (v0.5).</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>

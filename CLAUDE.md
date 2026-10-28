@@ -57,11 +57,12 @@ Consequences:
 
 ## 2. Current phase
 
-**v0.2 (simulation core + AMR), v0.3 (arms, electrical, thermal), v0.4 (drones), v0.5
-(weather, EMI, comms), v0.6 (cars, autonomous cars) and v0.7 (huge worlds) are released** as
-`v0.2.0` to `v0.7.0` (v0.2 to v0.6 on 2026-10-25, v0.7 on 2026-10-29; `docs/release/`; v0.1.0 on
-2026-10-14). Status and owed items: `docs/plan/progress.md`. Next by the roadmap: **v1.0
-stability** (`docs/plan/roadmap.md` §9).
+**v1.0.0 is released (2026-10-29), the first stable release**, after v0.2 to v0.7 (v0.2 to v0.6
+on 2026-10-25, v0.7 and v1.0 on 2026-10-29; `docs/release/`; v0.1.0 on 2026-10-14). 1.x is
+frozen by RFC 0007: schemas, plugin ABI, protocol, profiles and recordings change only by
+addition; fixes are backported to `release/1.x` (`GOVERNANCE.md`). Status and owed items:
+`docs/plan/progress.md`. Next: the owed 1.x items and post-1.0 work (radiation, other robot
+classes) by the roadmap; other platforms only through an RFC.
 
 - The protocol stays v1; the v0.1 viewer connects to the C++ server unchanged.
 - RFC 0001 (module interface), 0002 (USD schemas) and 0005 (profile format) are accepted; work
