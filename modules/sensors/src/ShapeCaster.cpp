@@ -69,7 +69,8 @@ double boundingRadius(ShapeType type, const std::array<double, 3>& size) {
         case ShapeType::Cylinder:
             return std::hypot(size[0], size[1]);
         case ShapeType::Box:
-        case ShapeType::ConvexHull:  // its size bounds every point's coordinates
+        case ShapeType::ConvexHull:   // its size bounds every point's coordinates
+        case ShapeType::HeightField:  // likewise
             return std::sqrt(size[0] * size[0] + size[1] * size[1] + size[2] * size[2]);
     }
     return std::numeric_limits<double>::infinity();
@@ -87,7 +88,7 @@ struct ShapeCaster::Impl {
 
     [[nodiscard]] double exact(std::uint32_t k, const Query& q) const {
         const Shape& s = shapes[k];
-        return raycast(s.type, s.size, s.pose, q.origin, q.dir, s.hull);
+        return raycast(s.type, s.size, s.pose, q.origin, q.dir, s.hull, s.field);
     }
 
     static void bounds(const RTCBoundsFunctionArguments* args) {
@@ -274,7 +275,8 @@ double distanceToShape(ShapeType type, const std::array<double, 3>& size, const 
             return std::max(q[2], 0.0);
         case ShapeType::Sphere:
             return std::max(std::hypot(q[0], q[1], q[2]) - size[0], 0.0);
-        case ShapeType::Box: {
+        case ShapeType::Box:
+        case ShapeType::HeightField: {  // its box: a lower bound of the distance
             const double dx = std::max(std::abs(q[0]) - size[0], 0.0);
             const double dy = std::max(std::abs(q[1]) - size[1], 0.0);
             const double dz = std::max(std::abs(q[2]) - size[2], 0.0);

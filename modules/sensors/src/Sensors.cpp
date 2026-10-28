@@ -147,6 +147,109 @@ double convexHull(const Vec3& o, const Vec3& d, const ConvexHull& hull) {
     return exit > 0.0 ? exit : kNoHit;
 }
 
+/// Ray against one triangle (Moller-Trumbore), either side; kNoHit when it misses.
+double triangle(const Vec3& o, const Vec3& d, const Vec3& a, const Vec3& b, const Vec3& c) {
+    constexpr double kParallel = 1e-15;
+    const Vec3 e1{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+    const Vec3 e2{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+    const Vec3 p{d[1] * e2[2] - d[2] * e2[1], d[2] * e2[0] - d[0] * e2[2],
+                 d[0] * e2[1] - d[1] * e2[0]};
+    const double det = dot(e1, p);
+    if (std::abs(det) < kParallel) {
+        return kNoHit;
+    }
+    const Vec3 s{o[0] - a[0], o[1] - a[1], o[2] - a[2]};
+    const double u = dot(s, p) / det;
+    if (u < 0.0 || u > 1.0) {
+        return kNoHit;
+    }
+    const Vec3 q{s[1] * e1[2] - s[2] * e1[1], s[2] * e1[0] - s[0] * e1[2],
+                 s[0] * e1[1] - s[1] * e1[0]};
+    const double v = dot(d, q) / det;
+    if (v < 0.0 || u + v > 1.0) {
+        return kNoHit;
+    }
+    const double t = dot(e2, q) / det;
+    return t > 0.0 ? t : kNoHit;
+}
+
+/// Ray against a height field: clipped to the grid's box, then the cells under the ray in
+/// order (a 2D walk), two triangles each, split as HeightField says.
+double heightField(const Vec3& o, const Vec3& d, const std::array<double, 3>& half,
+                   const HeightField& field) {
+    // The grid's box, a little taller than its heights.
+    double enter = 0.0;
+    double exit = kNoHit;
+    const std::array<double, 3> lo{-half[0], -half[1], -half[2] - 1.0};
+    const std::array<double, 3> hi{half[0], half[1], half[2] + 1.0};
+    for (std::size_t i = 0; i < 3; ++i) {
+        if (d.at(i) == 0.0) {
+            if (o.at(i) < lo.at(i) || o.at(i) > hi.at(i)) {
+                return kNoHit;
+            }
+            continue;
+        }
+        double t0 = (lo.at(i) - o.at(i)) / d.at(i);
+        double t1 = (hi.at(i) - o.at(i)) / d.at(i);
+        if (t0 > t1) {
+            std::swap(t0, t1);
+        }
+        enter = std::max(enter, t0);
+        exit = std::min(exit, t1);
+    }
+    if (enter > exit) {
+        return kNoHit;
+    }
+    const auto columns = static_cast<std::int64_t>(field.columns);
+    const auto rows = static_cast<std::int64_t>(field.rows);
+    const auto point = [&](std::int64_t c, std::int64_t r) -> Vec3 {
+        return {(static_cast<double>(c) - static_cast<double>(columns - 1) / 2.0) * field.cellX,
+                (static_cast<double>(r) - static_cast<double>(rows - 1) / 2.0) * field.cellY,
+                field.heights[static_cast<std::size_t>(r * columns + c)]};
+    };
+    // Cell coordinates along the ray: u = x / cellX + (columns - 1) / 2, likewise v.
+    const auto cellOf = [&](double t) {
+        const double u = (o[0] + t * d[0]) / field.cellX + static_cast<double>(columns - 1) / 2.0;
+        const double v = (o[1] + t * d[1]) / field.cellY + static_cast<double>(rows - 1) / 2.0;
+        return std::array<std::int64_t, 2>{
+            std::clamp<std::int64_t>(static_cast<std::int64_t>(std::floor(u)), 0, columns - 2),
+            std::clamp<std::int64_t>(static_cast<std::int64_t>(std::floor(v)), 0, rows - 2)};
+    };
+    std::array<std::int64_t, 2> cell = cellOf(enter);
+    const std::array<std::int64_t, 2> step{d[0] > 0.0 ? 1 : -1, d[1] > 0.0 ? 1 : -1};
+    // The ray's parameter at the next cell border in x and in y, and between borders.
+    const auto border = [&](std::size_t axis, std::int64_t index) {
+        const double size = axis == 0 ? field.cellX : field.cellY;
+        const double count = axis == 0 ? static_cast<double>(columns) : static_cast<double>(rows);
+        const double at = (static_cast<double>(index) - (count - 1) / 2.0) * size;
+        return d.at(axis) == 0.0 ? kNoHit : (at - o.at(axis)) / d.at(axis);
+    };
+    std::array<double, 2> next{border(0, cell[0] + (step[0] > 0 ? 1 : 0)),
+                               border(1, cell[1] + (step[1] > 0 ? 1 : 0))};
+    const std::array<double, 2> delta{d[0] == 0.0 ? kNoHit : field.cellX / std::abs(d[0]),
+                                      d[1] == 0.0 ? kNoHit : field.cellY / std::abs(d[1])};
+    for (std::int64_t guard = 0; guard < columns + rows; ++guard) {
+        const Vec3 a = point(cell[0], cell[1]);
+        const Vec3 b = point(cell[0] + 1, cell[1]);
+        const Vec3 c = point(cell[0] + 1, cell[1] + 1);
+        const Vec3 e = point(cell[0], cell[1] + 1);
+        const double t = std::min(triangle(o, d, a, b, c), triangle(o, d, a, c, e));
+        if (t < kNoHit) {
+            return t;
+        }
+        const std::size_t axis = next[0] < next[1] ? 0 : 1;
+        if (next.at(axis) > exit) {
+            break;
+        }
+        cell.at(axis) += step.at(axis);
+        if (cell[0] < 0 || cell[1] < 0 || cell[0] > columns - 2 || cell[1] > rows - 2) {
+            break;
+        }
+        next.at(axis) += delta.at(axis);
+    }
+    return kNoHit;
+}
+
 }  // namespace
 
 void facePlanes(const ConvexHull& hull, std::vector<std::array<double, 4>>& out) {
@@ -182,7 +285,7 @@ void facePlanes(const ConvexHull& hull, std::vector<std::array<double, 4>>& out)
 
 double raycast(ShapeType shape, const std::array<double, 3>& size, const Pose& shapePose,
                const std::array<double, 3>& origin, const std::array<double, 3>& dir,
-               const ConvexHull* hull) {
+               const ConvexHull* hull, const HeightField* field) {
     // Into the shape's frame.
     const std::array<double, 4> inverse = conjugate(shapePose.orientation);
     const Vec3 o =
@@ -210,6 +313,8 @@ double raycast(ShapeType shape, const std::array<double, 3>& size, const Pose& s
                              sphere({o[0], o[1], o[2] + size[1]}, d, size[0])});
         case ShapeType::ConvexHull:
             return hull != nullptr ? convexHull(o, d, *hull) : kNoHit;
+        case ShapeType::HeightField:
+            return field != nullptr ? heightField(o, d, size, *field) : kNoHit;
     }
     return kNoHit;
 }
@@ -348,10 +453,15 @@ public:
         const World::Colliders& colliders = world.colliders();
         for (std::size_t c = 0; c < colliders.body.size(); ++c) {
             const BodyId owner = colliders.body[c];
-            Shape shape{colliders.shape[c], colliders.size[c], colliders.poseInBody[c],
+            Shape shape{colliders.shape[c],
+                        colliders.size[c],
+                        colliders.poseInBody[c],
                         owner == kWorldBody ? -1 : static_cast<int>(owner.index),
                         colliders.shape[c] == ShapeType::ConvexHull
                             ? &world.raw().hulls.at(colliders.hull[c])
+                            : nullptr,
+                        colliders.shape[c] == ShapeType::HeightField
+                            ? &world.raw().heightfields.at(colliders.hull[c])
                             : nullptr};
             // Geometry that never moves is placed in the world once.
             if (owner == kWorldBody) {
@@ -455,13 +565,15 @@ private:
         Pose pose;  // world pose when body < 0, else pose in the body
         int body;
         const ConvexHull* hull;  // in the world tables, which outlive the run
+        const HeightField* field;
     };
 
     /// Tier 0: exact casts in double, culled by Embree (ShapeCaster), beams in parallel. Each
     /// beam is independent, so the result does not depend on the threads.
     void castOnCpu(const Pose& sensor) {
         for (std::size_t k = 0; k < shapes_.size(); ++k) {
-            casterShapes_[k] = {shapes_[k].type, shapes_[k].size, placed_[k], shapes_[k].hull};
+            casterShapes_[k] = {shapes_[k].type, shapes_[k].size, placed_[k], shapes_[k].hull,
+                                shapes_[k].field};
         }
         caster_.update(casterShapes_);
         tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {

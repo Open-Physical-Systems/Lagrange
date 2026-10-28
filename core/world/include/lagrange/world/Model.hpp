@@ -101,6 +101,7 @@ void prefixModel(Model& model, const std::string& prefix, bool passive);
 struct ModelExtent {
     std::size_t colliders{0};
     std::size_t hulls{0};
+    std::size_t heightfields{0};
     std::size_t prims{0};
     std::size_t meshes{0};
     std::size_t materials{0};

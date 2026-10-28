@@ -314,10 +314,16 @@ Built (`lagrange_geospatial`, `io/geospatial/`):
   vertical datum is never guessed (section 4's rule): a geoid undulation raster (`egm96_15.gtx`
   from proj-data) or `--assume-ellipsoidal`. Each vertex's height is the geodetic point under
   its east/north position (fixed-point iteration, so curvature is right).
-- Terrain collision: two triangular prisms per collision cell (convex hulls; the world tables
-  have no heightfield yet). They load only within `world.streaming.collision_radius` (300 m) of
-  a robot; coarse tiles cover the rest. A world with terrain says so in its layer
-  (`lagrangeGroundPlane = 0`), and the infinite ground plane is taken away.
+- Terrain collision: one height field per fine tile on the collision grid
+  (`ShapeType::HeightField`, `World::heightfields`): MuJoCo `hfield`, Jolt `HeightFieldShape`,
+  the CPU lidar and radar casters (exact: the ray clipped to the grid, cells walked in order,
+  two triangles each), the viewer's collision shading, and USD (a grid mesh with
+  `lagrange:heightField:columns` and `rows`). The GPU lidar does not see height fields yet:
+  `--lidar gpu` is refused on a streamed world. Radar treats terrain as ground clutter. Collision
+  tiles load only within `world.streaming.collision_radius` (300 m) of a robot; coarse tiles
+  cover the rest. A world with terrain says so in its layer (`lagrangeGroundPlane = 0`), and
+  the infinite ground plane is taken away. (Terrain as convex prisms took a minute to load on
+  MuJoCo: its spec API names meshes in quadratic time.)
 - OpenStreetMap XML: buildings (closed ways; height from `height`, `building:levels` x 3 m or
   9 m) as walls and roofs, with colliders over the ear-clipped footprint's triangles; roads as
   ribbons draped on the terrain (visual). Multipolygon relations are not read.
@@ -327,7 +333,7 @@ Built (`lagrange_geospatial`, `io/geospatial/`):
   around the PX4 home in Zurich, OpenStreetMap for the central 4 km, then drives the AMR on it
   headless. Nothing it writes is committed (licences: `dependencies.md`).
 
-Not yet: GeoTIFF heightfield colliders, OSM PBF (libosmium), re-tiling 3D Tiles, land use.
+Not yet: height fields in the GPU lidar, OSM PBF (libosmium), re-tiling 3D Tiles, land use.
 
 ## 5. Sensors and rendering at scale
 

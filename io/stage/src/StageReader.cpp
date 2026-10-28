@@ -939,6 +939,13 @@ private:
         if (prim.HasAPI<UsdPhysicsMeshCollisionAPI>()) {
             UsdPhysicsMeshCollisionAPI(prim).GetApproximationAttr().Get(&approximation);
         }
+        int columns = 0;
+        int rows = 0;
+        if (prim.GetAttribute(TfToken("lagrange:heightField:columns")).Get(&columns) &&
+            prim.GetAttribute(TfToken("lagrange:heightField:rows")).Get(&rows)) {
+            addHeightField(prim, body, pose, scale, friction, columns, rows);
+            return;
+        }
         if (approximation != UsdPhysicsTokens->convexHull) {
             note(path + ": a mesh collider with approximation \"" + approximation.GetString() +
                  "\" is not used; bake it into convex hulls with `ros2 run "
@@ -980,6 +987,38 @@ private:
             return;
         }
         m_.world.addHullCollider(body, std::move(hull), pose, friction);
+    }
+
+    /// A terrain grid written as a mesh (StageWriter): its points in row order become a height
+    /// field again, on the world only.
+    void addHeightField(const UsdPrim& prim, BodyId body, const Pose& pose,
+                        const std::array<double, 3>& scale, double friction, int columns,
+                        int rows) {
+        const std::string path = prim.GetPath().GetString();
+        VtVec3fArray points;
+        UsdGeomMesh(prim).GetPointsAttr().Get(&points);
+        if (columns < 2 || rows < 2 ||
+            points.size() != static_cast<std::size_t>(columns) * static_cast<std::size_t>(rows)) {
+            errors_.push_back(path + ": a height field needs columns x rows points");
+            return;
+        }
+        if (body != kWorldBody) {
+            errors_.push_back(path + ": a height field is terrain: it cannot be on a body");
+            return;
+        }
+        HeightField field;
+        field.columns = static_cast<std::uint32_t>(columns);
+        field.rows = static_cast<std::uint32_t>(rows);
+        field.cellX = (points[1][0] - points[0][0]) * scale[0];
+        field.cellY = (points[static_cast<std::size_t>(columns)][1] - points[0][1]) * scale[1];
+        for (const GfVec3f& p : points) {
+            field.heights.push_back(p[2] * scale[2]);
+        }
+        if (!(field.cellX > 0.0) || !(field.cellY > 0.0)) {
+            errors_.push_back(path + ": a height field's points must go up in x and y");
+            return;
+        }
+        m_.world.addHeightFieldCollider(std::move(field), pose, friction);
     }
 
     /// Whether every point lies on the inner side of every face plane (within 1e-6 of the

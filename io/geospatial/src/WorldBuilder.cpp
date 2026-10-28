@@ -177,6 +177,17 @@ public:
         high_ = std::max(high_, top);
     }
 
+    /// Terrain collision: a height field centred at (cx, cy) in world ENU.
+    void heightField(HeightField field, double cx, double cy) {
+        for (const double h : field.heights) {
+            low_ = std::min(low_, h);
+            high_ = std::max(high_, h);
+        }
+        Pose pose;
+        pose.position = {cx - x0_, cy - y0_, 0.0};
+        m_.world.addHeightFieldCollider(std::move(field), pose, 1.0);
+    }
+
     Model& model() { return m_; }
     [[nodiscard]] double low() const { return std::isfinite(low_) ? low_ : 0.0; }
     [[nodiscard]] double high() const { return std::isfinite(high_) ? high_ : 0.0; }
@@ -319,20 +330,19 @@ Expected<Model, std::string> buildTile(const WorldOptions& options, const coords
     }
     tile.mesh("terrain", grid, indices, kTerrainColor);
     if (t.collisionCell > 0.0) {
+        // Terrain collision: one height field on the grid's every n-th sample.
         const int every = std::max(1, static_cast<int>(std::lround(t.collisionCell / step)));
-        for (int j = 0; j < cells; j += every) {
-            for (int i = 0; i < cells; i += every) {
-                const int i1 = std::min(cells, i + every);
-                const int j1 = std::min(cells, j + every);
-                const Vec3& a = grid[at(i, j)];
-                const Vec3& b = grid[at(i1, j)];
-                const Vec3& c = grid[at(i1, j1)];
-                const Vec3& d = grid[at(i, j1)];
-                const double bottom = std::min({a[2], b[2], c[2], d[2]}) - kPrismDepthM;
-                tile.prism(a, b, c, bottom);
-                tile.prism(a, c, d, bottom);
+        HeightField field;
+        field.columns = static_cast<std::uint32_t>(cells / every + 1);
+        field.rows = field.columns;
+        field.cellX = step * every;
+        field.cellY = step * every;
+        for (int j = 0; j <= cells; j += every) {
+            for (int i = 0; i <= cells; i += every) {
+                field.heights.push_back(grid[at(i, j)][2]);
             }
         }
+        tile.heightField(std::move(field), t.x0 + t.size / 2.0, t.y0 + t.size / 2.0);
     }
 
     // Buildings whose footprint's centre is in the tile.

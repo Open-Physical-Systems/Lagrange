@@ -16,7 +16,7 @@ format in `rfcs/0005-sim-profile-format.md`. This document expands CLAUDE.md §4
 | Recordings | MCAP, Protobuf-encoded messages | `io/recording/` | replay substitutes, mock server, viewer | Section 7 |
 | Mesh import | glTF 2.0, OBJ, STL, DAE | — | `io/importers/` only | Never loaded at runtime |
 | Materials | UsdPreviewSurface (baseline); MaterialX (optional, later) | importers | viewer renderer, camera sensor | Section 8 |
-| Collision geometry | Convex hulls in USD (`UsdPhysicsMeshCollisionAPI`, approximation `convexDecomposition` baked to explicit hull prims) | `tools/collision_bake` | rigid-body backends | Never the render mesh |
+| Collision geometry | Convex hulls in USD (`UsdPhysicsMeshCollisionAPI`, approximation `convexDecomposition` baked to explicit hull prims); terrain as height fields (a grid mesh, approximation `none`, with `int lagrange:heightField:columns` and `rows`, points in row order from -x -y; v0.7) | `tools/collision_bake`, `lagrange_build_world` | rigid-body backends, sensors | Never the render mesh |
 | UI↔server protocol | Protobuf (proto3) | server, mock server | viewer | `docs/design/protocol.md` |
 | Robot description import | URDF/xacro, SDFormat, MJCF | — | `io/importers/` → USD | Section 9 |
 | Roads, scenarios | OpenDRIVE, OpenSCENARIO | — | `io/opendrive/`, `io/openscenario/` | v0.6 |

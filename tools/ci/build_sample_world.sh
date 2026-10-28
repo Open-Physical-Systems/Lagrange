@@ -47,7 +47,7 @@ rm -rf "$out"
 time ros2 run lagrange_geospatial lagrange_build_world "$out" --name zurich_40km \
     --origin "$lat,$lon,ground" --size 40960 \
     --dem "$dem" --geoid "$geoid" --osm "$osm" \
-    --fine-tile 1024 --fine-cell 32 --collision-cell 32 --coarse-tile 4096 --coarse-cell 128 \
+    --fine-tile 512 --fine-cell 16 --collision-cell 32 --coarse-tile 4096 --coarse-cell 128 \
     --attribution "Elevation: produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved. The organisations in charge of the Copernicus programme by law or by delegation do not incur any liability for any use of the Copernicus WorldDEM-30." \
     --attribution "Geoid: EGM96 15' grid of PROJ's proj-data (US National Geospatial-Intelligence Agency), used for the Copernicus heights' EGM2008 geoid: they differ by under a metre here."
 du -sh "$out"

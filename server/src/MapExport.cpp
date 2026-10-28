@@ -30,6 +30,7 @@ bool inside(ShapeType shape, const std::array<double, 3>& size, const std::array
             return p[0] * p[0] + p[1] * p[1] + (p[2] - z) * (p[2] - z) <= size[0] * size[0];
         }
         case ShapeType::Plane:
+        case ShapeType::HeightField:
             return false;
     }
     return false;
@@ -80,7 +81,9 @@ Expected<void, std::string> exportOccupancyMap(const World& world, const std::st
     double minX = 0.0, minY = 0.0, maxX = 0.0, maxY = 0.0;
     for (std::size_t c = 0; c < colliders.body.size(); ++c) {
         const BodyId owner = colliders.body[c];
+        // The ground (planes, terrain) is where the robot drives, not an obstacle.
         if (colliders.shape[c] == ShapeType::Plane ||
+            colliders.shape[c] == ShapeType::HeightField ||
             (owner != kWorldBody && moving[owner.index])) {
             continue;
         }

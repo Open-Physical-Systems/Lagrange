@@ -31,6 +31,45 @@ Pose turned(double angle, double x, double y, double z) {
 
 // --- ray casts against closed forms ---------------------------------------------------------
 
+// Terrain (huge-worlds.md §4.1): rays against a height field hit the surface heightAt() says,
+// from above at any angle, across cells, and miss outside the grid.
+TEST(Raycast, HeightFieldsAreHitWhereTheirSurfaceIs) {
+    HeightField field;
+    field.columns = 21;
+    field.rows = 17;
+    field.cellX = 2.0;
+    field.cellY = 1.5;
+    for (std::uint32_t r = 0; r < field.rows; ++r) {
+        for (std::uint32_t c = 0; c < field.columns; ++c) {
+            field.heights.push_back(std::sin(0.4 * c) + 0.5 * std::cos(0.7 * r));
+        }
+    }
+    const Pose pose{{100.0, -40.0, 5.0}, {1.0, 0.0, 0.0, 0.0}};
+    const std::array<double, 3> half{10 * 2.0, 8 * 1.5, 1.5};
+    for (const double x : {-17.3, -4.1, 0.0, 6.6, 19.2}) {
+        for (const double y : {-11.0, -2.25, 3.3, 9.9}) {
+            const double t = raycast(ShapeType::HeightField, half, pose,
+                                     {100.0 + x, -40.0 + y, 20.0}, {0, 0, -1}, nullptr, &field);
+            EXPECT_NEAR(20.0 - t, 5.0 + *field.heightAt(x, y), 1e-9) << x << ", " << y;
+        }
+    }
+    // A slanted ray from the side: where it meets the surface, the surface is.
+    const std::array<double, 3> from{100.0 - 30.0, -40.0 - 3.0, 9.0};
+    std::array<double, 3> d{1.0, 0.2, -0.15};
+    const double n = std::hypot(d[0], d[1], d[2]);
+    for (double& v : d) {
+        v /= n;
+    }
+    const double t = raycast(ShapeType::HeightField, half, pose, from, d, nullptr, &field);
+    ASSERT_LT(t, kNoHit);
+    const std::array<double, 3> hit{from[0] + t * d[0], from[1] + t * d[1], from[2] + t * d[2]};
+    EXPECT_NEAR(hit[2], 5.0 + *field.heightAt(hit[0] - 100.0, hit[1] + 40.0), 1e-9);
+    // Outside the grid, nothing.
+    EXPECT_EQ(raycast(ShapeType::HeightField, half, pose, {200.0, -40.0, 20.0}, {0, 0, -1}, nullptr,
+                      &field),
+              kNoHit);
+}
+
 TEST(Raycast, AConvexHullOfABoxCastsAsTheBox) {
     // The face-plane test against the closed form, from random outside points and directions.
     const std::array<double, 3> half{0.4, 0.25, 0.6};

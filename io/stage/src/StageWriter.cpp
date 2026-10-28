@@ -464,6 +464,42 @@ private:
                     gprim = mesh;
                     break;
                 }
+                case ShapeType::HeightField: {
+                    // A grid mesh the reader turns back into a height field: its sample
+                    // counts in lagrange:heightField:columns and rows, its points in row order.
+                    const HeightField& field = m_.world.heightfields.at(colliders.hull[c]);
+                    const ConvexHull surface = field.triangles();
+                    UsdGeomMesh mesh = UsdGeomMesh::Define(stage_, path);
+                    VtVec3fArray points;
+                    for (const auto& p : surface.points) {
+                        points.push_back(GfVec3f(static_cast<float>(p[0]), static_cast<float>(p[1]),
+                                                 static_cast<float>(p[2])));
+                    }
+                    VtIntArray counts(surface.triangles.size(), 3);
+                    VtIntArray indices;
+                    for (const auto& t : surface.triangles) {
+                        for (const std::uint32_t i : t) {
+                            indices.push_back(static_cast<int>(i));
+                        }
+                    }
+                    mesh.CreatePointsAttr().Set(points);
+                    mesh.CreateFaceVertexCountsAttr().Set(counts);
+                    mesh.CreateFaceVertexIndicesAttr().Set(indices);
+                    setTransform(mesh, pose);
+                    UsdPhysicsMeshCollisionAPI::Apply(mesh.GetPrim())
+                        .CreateApproximationAttr()
+                        .Set(UsdPhysicsTokens->none);
+                    mesh.GetPrim()
+                        .CreateAttribute(TfToken("lagrange:heightField:columns"),
+                                         SdfValueTypeNames->Int, false, SdfVariabilityUniform)
+                        .Set(static_cast<int>(field.columns));
+                    mesh.GetPrim()
+                        .CreateAttribute(TfToken("lagrange:heightField:rows"),
+                                         SdfValueTypeNames->Int, false, SdfVariabilityUniform)
+                        .Set(static_cast<int>(field.rows));
+                    gprim = mesh;
+                    break;
+                }
                 case ShapeType::Plane:
                     continue;  // only the ground is a plane
             }
