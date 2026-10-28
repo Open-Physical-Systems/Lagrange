@@ -5,6 +5,23 @@ Notable changes to Lagrange are recorded here. Each release section is generated
 titles merged into `dev`; do not edit it by hand. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v0.6.0...v0.7.0) (2026-10-29)
+
+
+### Features
+
+* **core:** height field terrain ([#163](https://github.com/Open-Physical-Systems/Lagrange/issues/163)) ([8e6163e](https://github.com/Open-Physical-Systems/Lagrange/commit/8e6163ec4b569308632c9bd50716439bb614fd62))
+* **core:** move the floating origin during a run ([#158](https://github.com/Open-Physical-Systems/Lagrange/issues/158)) ([9095dfe](https://github.com/Open-Physical-Systems/Lagrange/commit/9095dfed8c7afa77093e7bc9697d2343e6a093db))
+* **core:** tile selection for streamed worlds and the world tile schema ([#159](https://github.com/Open-Physical-Systems/Lagrange/issues/159)) ([ccd7132](https://github.com/Open-Physical-Systems/Lagrange/commit/ccd7132942da9e331d630bad3dc66d1112c4548c))
+* **io:** build large worlds from open data ([#162](https://github.com/Open-Physical-Systems/Lagrange/issues/162)) ([37586f3](https://github.com/Open-Physical-Systems/Lagrange/commit/37586f34daf0e36b16f9172951e98acb3c5a2b52))
+* **server:** active regions for robots far apart ([#161](https://github.com/Open-Physical-Systems/Lagrange/issues/161)) ([3f25d49](https://github.com/Open-Physical-Systems/Lagrange/commit/3f25d49490570d18404ad9e28fbfab2acb604a2a))
+* **server:** stream the tiles of a large world around the robot ([#160](https://github.com/Open-Physical-Systems/Lagrange/issues/160)) ([2734bc4](https://github.com/Open-Physical-Systems/Lagrange/commit/2734bc415cf511fddbe4a0a45a747427ab3aed29))
+* **viewer:** streamed tiles in the world workspace and the camera as a hint ([#164](https://github.com/Open-Physical-Systems/Lagrange/issues/164)) ([3d0f70a](https://github.com/Open-Physical-Systems/Lagrange/commit/3d0f70a9d33d8a751c3e350977a8c8ff637b6def))
+
+### Documentation
+
+* bring the readme up to v0.6 with a clip of the sedan in traffic ([#157](https://github.com/Open-Physical-Systems/Lagrange/issues/157)) ([ba6cb9a](https://github.com/Open-Physical-Systems/Lagrange/commit/ba6cb9ae2e45c85d7f8315271f9e0ed489e8ea2e))
+
 ## [0.6.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v0.5.0...v0.6.0) (2026-10-25)
 
 

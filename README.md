@@ -11,9 +11,9 @@ unit-checked signal bus, and any of them can be disabled or replaced by ideal, c
 replayed data. A native Vulkan viewer shows the run; it talks to the simulator only through a
 protocol, never by linking it.
 
-**Status: v0.6.0** ([release notes](docs/release/v0.6.0.md)). Pre-1.0: schemas, protocol and
-plugin ABI may still change between releases, always with a migration tool. Next: v0.7, huge
-worlds ([progress](docs/plan/progress.md)).
+**Status: v0.7.0** ([release notes](docs/release/v0.7.0.md)). Pre-1.0: schemas, protocol and
+plugin ABI may still change between releases, always with a migration tool. Next: v1.0, the
+stable release ([progress](docs/plan/progress.md)).
 
 <p align="center">
   <img src="docs/imgs/sedan-city.gif" alt="The sample sedan driving round the city block junction among simulated traffic, in the Lagrange viewer's follow camera" width="646">
@@ -34,6 +34,15 @@ worlds ([progress](docs/plan/progress.md)).
 | Drones | v0.4 | `quad_x500` on the open field | Rotor aerodynamics (coefficients or blade element), wind, PX4 and ArduPilot SITL in lockstep |
 | Any robot outdoors | v0.5 | `amr_fog.yaml`, the power line | Weather (fog, rain, dust, NanoVDB fields), EMI from power lines and drives, Wi-Fi and CAN links |
 | Cars, autonomous cars | v0.6 | `sedan` in the city block | Tyres, suspension, powertrain, OpenDRIVE roads, traffic and pedestrians, OpenSCENARIO, radar, camera sensor model, Autoware interface |
+| Any robot, anywhere | v0.7 | the tiled town, the 40 km Zurich world | Worlds streamed in tiles, a floating origin that follows the robot, robots far apart in regions of their own, worlds built from elevation models and OpenStreetMap, terrain as height fields |
+
+<p align="center">
+  <img src="docs/imgs/zurich-40km.png" alt="The sample AMR in the 40 km Zurich world: terrain, buildings and roads streamed around it" width="820">
+  <br><sub>The 40 km Zurich world, built by <code>tools/ci/build_sample_world.sh</code>. Terrain produced using
+  Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018
+  provided under COPERNICUS by the European Union and ESA; all rights reserved. Buildings and
+  roads © OpenStreetMap contributors (ODbL).</sub>
+</p>
 
 Everything runs headless too: from Python (`import lagrange`), from the `lagrange` command, or
 recorded to MCAP and replayed.
@@ -87,7 +96,7 @@ Packages:
 |---|---|---|
 | `lagrange_cmake` | `cmake/` | Shared build options |
 | `lagrange_core` | `core/` | Units, signal bus, multirate scheduler, time, random numbers, world state, coordinates, plugin C ABI |
-| `lagrange_schemas` | `schemas/` | The OpenUSD applied schemas (electrical, thermal, aero, weather, EMI, comms, sensors, vehicle, road) |
+| `lagrange_schemas` | `schemas/` | The OpenUSD applied schemas (electrical, thermal, aero, weather, EMI, comms, sensors, vehicle, road, world) |
 | `lagrange_profiles` | `profiles/` | Profile schema and examples |
 | `lagrange_proto` | `proto/` | Viewer protocol messages, framing, socket transport, shared memory |
 | `lagrange_gpu` | `gpu/` | Vulkan device layer, capability tiers, Slang kernels, the GPU ray caster |
@@ -97,6 +106,7 @@ Packages:
 | `lagrange_recording` | `io/recording/` | MCAP reading and the replay substitute |
 | `lagrange_fields` | `io/fields/` | NanoVDB fields, OpenFOAM wind import |
 | `lagrange_opendrive` | `io/opendrive/` | OpenDRIVE reader and road import to USD |
+| `lagrange_geospatial` | `io/geospatial/` | Worlds from elevation models, OpenStreetMap and 3D Tiles (`lagrange_build_world`) |
 | `lagrange_openscenario` | `io/openscenario/` | OpenSCENARIO 1.x subset runner |
 | `lagrange_rigid_body_mujoco`, `_jolt`, `_substitutes` | `modules/rigid_body/` | The rigid-body domain on MuJoCo or Jolt, and its substitutes |
 | `lagrange_electrical` | `modules/electrical/` | Batteries, buses, motor drives, FMU host |
@@ -145,9 +155,10 @@ the stacks that drive it):
 [arm and MoveIt 2](docs/guide/tutorial-arm.md) ·
 [drone and PX4/ArduPilot](docs/guide/tutorial-drone.md) ·
 [weather, EMI and comms](docs/guide/tutorial-environment.md) ·
-[cars, scenarios and Autoware](docs/guide/tutorial-cars.md).
+[cars, scenarios and Autoware](docs/guide/tutorial-cars.md) ·
+[huge worlds](docs/guide/tutorial-huge-worlds.md).
 The scripts in `tools/ci/` (`tutorial_amr.sh`, `tutorial_drone.sh`, `tutorial_environment.sh`,
-`tutorial_cars.sh`, and `arm_scenario.sh` for the arm) run them headless and check every step.
+`tutorial_cars.sh`, `tutorial_huge_worlds.sh`, and `arm_scenario.sh` for the arm) run them headless and check every step.
 
 To record a clip like the one above: `lagrange_viewer --headless --follow 30,55
 --record-frames DIR --record-fps 10 --frames 100` writes PNG frames of a running simulation.
