@@ -154,7 +154,7 @@ TEST(PluginAbi, BadLibrariesAreRefusedWithAReason) {
 
     auto other = PluginLibrary::open(LAGRANGE_SAMPLE_PLUGIN_OTHER_MAJOR);
     ASSERT_FALSE(other);
-    EXPECT_NE(other.error().find("offers no module for plugin ABI 0.x"), std::string::npos)
+    EXPECT_NE(other.error().find("offers no module for plugin ABI 1.x"), std::string::npos)
         << other.error();
 }
 

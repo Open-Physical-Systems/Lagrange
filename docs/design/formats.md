@@ -1555,9 +1555,9 @@ torque source. The viewer's domain panel shows why the electrical toggle is unav
 |---|---|---|---|
 | USD schemas | family + integer suffix (`ElectricalMotorAPI_1`) | Within a version: only additions with fallbacks. Renames, unit changes, removed attributes, changed fallbacks → new version | `migrate_schema` (package `lagrange_migrate`, `tools/migrate/`) rewrites `apiSchemas` and attributes; one function per (family, from version) |
 | Profiles | `schema_version` integer | Same as above | `migrate_profile` (`lagrange_migrate`); version 0 is a profile without `schema_version` |
-| Protocol | package `lagrange.viewer.v1` + handshake `(major, minor)` | `buf breaking` with the `WIRE_JSON` rule set against `main` | none; old clients are refused at handshake with a readable message |
+| Protocol | package `lagrange.viewer.v1` + handshake `(major, minor)` | `buf breaking` with the `FILE` rule set against the `v1.0.0` tag (RFC 0007; `WIRE_JSON` before 1.0) | none; old clients are refused at handshake with a readable message |
 | Recordings | `RunMeta.format_version` + embedded schemas | Readers accept all older versions of the same major | `tools/mcap_upgrade` only on a major change |
-| Plugin ABI | `LAGRANGE_PLUGIN_ABI_MAJOR/MINOR` | architecture §13 | none |
+| Plugin ABI | `LAGRANGE_PLUGIN_ABI_MAJOR/MINOR` (1.0 at v1.0) | append only within a major (RFC 0007): `core/plugin_abi/test/test_abi_layout.c` pins sizes and offsets, `tools/ci/abi_check.sh` runs `abidiff` against the 1.0 baseline | none |
 | FMU map files | `schema_version` | as profiles | `migrate_profile --fmu-map` (not built: no FMU map files exist yet) |
 
 Loader behaviour: `core/stage/` supports the current and the previous version of each schema
@@ -1568,8 +1568,10 @@ Every schema change needs: an RFC or a PR note (CLAUDE.md §9), a migration func
 that round-trips a sample file, an entry in `schemas/CHANGELOG.md`, and two approvals including a
 core maintainer.
 
-Until v1.0 all schemas are version 1 and may change without a migration, and the documentation
-says so. The migration machinery is built in v0.3 and exercised with a synthetic `_0 → _1`
+From v1.0 the schemas, the plugin ABI, the protocol, profiles and recordings are frozen for the
+1.x line (RFC 0007): they change only by addition, and `schemas/test/frozen_1_0.json` lists every
+schema attribute as it was at 1.0. Before v1.0 all schemas were version 1 and could change
+without a migration. The migration machinery is built in v0.3 and exercised with a synthetic `_0 → _1`
 migration so that it is proven before it is needed: the family `ExampleMotorAPI`, which no real
 file uses (`tools/migrate/test/test_schema.py`). The stage loader notes a prim that applies an
 older version of a registered family with the command that migrates it, and refuses two versions

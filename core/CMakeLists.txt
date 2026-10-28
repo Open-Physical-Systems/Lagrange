@@ -90,6 +90,23 @@ if(BUILD_TESTING)
         lagrange_target_defaults(${name})
     endforeach()
 
+    # The plugin C ABI 1.0 pinned (RFC 0007): sizes and offsets as static assertions in C99, so
+    # the build itself fails when a struct changes other than by appending.
+    add_executable(test_abi_layout plugin_abi/test/test_abi_layout.c)
+    target_include_directories(
+        test_abi_layout
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/plugin_abi/include
+    )
+    set_target_properties(
+        test_abi_layout
+        PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+    )
+    target_compile_options(
+        test_abi_layout
+        PRIVATE -pedantic -Wall -Wextra -Werror
+    )
+    add_test(NAME test_abi_layout COMMAND test_abi_layout)
+
     # The plugin C ABI: a C99 sample (strict, so the header stays plain C), built twice: once
     # for this ABI major and once for another, which the host must refuse.
     foreach(variant IN ITEMS current other_major)
