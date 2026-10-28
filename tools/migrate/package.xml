@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_migrate</name>
-  <version>0.7.0</version>
+  <version>1.0.0</version>
   <description>Migration tools for Lagrange's versioned files: USD schemas (migrate_schema) and simulation profiles (migrate_profile), formats.md section 10.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
@@ -12,9 +12,11 @@
   <buildtool_depend>lagrange_cmake</buildtool_depend>
   <exec_depend>openusd_vendor</exec_depend>
   <exec_depend>python3-jsonschema</exec_depend>
+  <exec_depend>python3-mcap-pip</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>lagrange_assets</test_depend>
+  <test_depend>lagrange_mock_server</test_depend>
   <test_depend>lagrange_profiles</test_depend>
   <test_depend>lagrange_schemas</test_depend>
 

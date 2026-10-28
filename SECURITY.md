@@ -7,9 +7,15 @@ Do not open a public issue. Use GitHub's private vulnerability reporting for thi
 
 ## Supported versions
 
-There are no releases yet. Once releases exist, this section will list which ones receive fixes.
+| Version | Fixes |
+|---|---|
+| 1.x (`release/1.x`) | Security fixes until ROS 2 Lyrical's end of life (May 2031), RFC 0007 |
+| 0.x | None: update to 1.x |
 
-## Known limitations
+## Using Lagrange safely
 
-The viewer protocol has no authentication before v1.0. The server listens on a Unix socket or on
-localhost by default. Do not expose it to an untrusted network.
+The viewer protocol listens on a Unix socket (mode 0600) by default. Over a network, use a
+`tls://` endpoint with a certificate and an authentication token (`--auth-token-file`); the
+server refuses to listen beyond loopback without a token. Plugins and FMUs are programs: load
+only those you trust. The threat model, fuzzing and dependency review are in
+`docs/design/security.md`.

@@ -7,8 +7,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <system_error>
 #include <vector>
 
@@ -16,12 +18,41 @@ namespace google::protobuf {
 class MessageLite;
 }  // namespace google::protobuf
 
+struct ssl_st;
+struct ssl_ctx_st;
+
 namespace lagrange::proto {
 
 /// Most file descriptors that may accompany one frame.
 inline constexpr std::size_t kMaxFdsPerFrame = 8;
 /// Most received file descriptors a connection holds before the caller takes them.
 inline constexpr std::size_t kMaxPendingReceivedFds = 32;
+
+/// TLS for tls:// endpoints (OpenSSL, TLS 1.2 or newer). A server context holds the
+/// certificate chain and key it presents; a client context verifies the server's certificate
+/// against a CA file, or the system's trust store, and the endpoint's host name or address.
+class TlsContext {
+public:
+    [[nodiscard]] static std::shared_ptr<TlsContext> server(const std::string& certificateFile,
+                                                            const std::string& keyFile,
+                                                            std::string& error);
+    /// `caFile` empty: the system's default trust store.
+    [[nodiscard]] static std::shared_ptr<TlsContext> client(const std::string& caFile,
+                                                            std::string& error);
+    ~TlsContext();
+    TlsContext(const TlsContext&) = delete;
+    TlsContext& operator=(const TlsContext&) = delete;
+    TlsContext(TlsContext&&) = delete;
+    TlsContext& operator=(TlsContext&&) = delete;
+
+    [[nodiscard]] ssl_ctx_st* get() const { return context_; }
+    [[nodiscard]] bool isServer() const { return server_; }
+
+private:
+    TlsContext(ssl_ctx_st* context, bool server) : context_(context), server_(server) {}
+    ssl_ctx_st* context_;
+    bool server_;
+};
 
 enum class IoStatus : std::uint8_t {
     Ok,          ///< Progress was made.
@@ -43,12 +74,22 @@ public:
 
     /// Starts a non-blocking connect. On return the state is Connecting or Connected, or
     /// Closed with `ec` set. For Tcp with a host name this performs a (blocking) name lookup.
+    /// A tls:// endpoint needs a client `tls` context; the handshake runs in flush() and
+    /// receive() once connected, and its failure is reported there (tlsError() says why).
     [[nodiscard]] static Connection startConnect(const Endpoint& endpoint, std::error_code& ec,
-                                                 std::uint32_t maxFrameSize = kDefaultMaxFrameSize);
+                                                 std::uint32_t maxFrameSize = kDefaultMaxFrameSize,
+                                                 std::shared_ptr<TlsContext> tls = nullptr);
 
-    /// Wraps an already connected socket (from Listener::accept).
+    /// Wraps an already connected socket (from Listener::accept); with a server `tls`
+    /// context, TLS is negotiated before any frame.
     [[nodiscard]] static Connection adopt(UniqueFd socket, Endpoint::Kind kind,
-                                          std::uint32_t maxFrameSize = kDefaultMaxFrameSize);
+                                          std::uint32_t maxFrameSize = kDefaultMaxFrameSize,
+                                          std::shared_ptr<TlsContext> tls = nullptr);
+
+    /// True when TLS protects the connection (possibly still negotiating).
+    [[nodiscard]] bool secure() const { return static_cast<bool>(ssl_); }
+    /// Why the TLS handshake or a TLS read or write failed; empty otherwise.
+    [[nodiscard]] const std::string& tlsError() const { return tlsError_; }
 
     [[nodiscard]] State state() const { return state_; }
     [[nodiscard]] int fd() const { return socket_.get(); }
@@ -85,6 +126,15 @@ public:
     void close();
 
 private:
+    struct SslDeleter {
+        void operator()(ssl_st* ssl) const;
+    };
+    /// Runs the TLS handshake until it is done; Ok when it is (or there is no TLS).
+    [[nodiscard]] IoStatus tlsHandshake(std::error_code& ec);
+    [[nodiscard]] IoStatus tlsFailure(std::error_code& ec, int result);
+    [[nodiscard]] IoStatus flushTls(std::error_code& ec);
+    [[nodiscard]] IoStatus receiveTls(std::error_code& ec);
+
     struct FdBatch {
         std::uint64_t streamOffset;  // offset in the outgoing byte stream of the frame's first byte
         std::vector<UniqueFd> fds;
@@ -103,6 +153,12 @@ private:
     FrameReader reader_{kDefaultMaxFrameSize};
     std::vector<UniqueFd> receivedFds_;
     std::vector<std::byte> scratch_;  // receive buffer, allocated on first use
+
+    std::shared_ptr<TlsContext> tlsContext_;  // keeps the context alive for ssl_
+    std::unique_ptr<ssl_st, SslDeleter> ssl_;
+    bool tlsReady_{false};
+    bool tlsWantsWrite_{false};  // the handshake waits for the socket to be writable
+    std::string tlsError_;
 };
 
 /// A listening socket. Unix socket files are created with mode 0600 and removed on
@@ -128,8 +184,10 @@ public:
     [[nodiscard]] const Endpoint& endpoint() const { return endpoint_; }
 
     /// Accepts one pending connection without blocking. Empty with no error if none is pending.
+    /// With a server `tls` context the connection negotiates TLS first.
     [[nodiscard]] std::optional<Connection> accept(
-        std::error_code& ec, std::uint32_t maxFrameSize = kDefaultMaxFrameSize);
+        std::error_code& ec, std::uint32_t maxFrameSize = kDefaultMaxFrameSize,
+        std::shared_ptr<TlsContext> tls = nullptr);
 
     void close();
 

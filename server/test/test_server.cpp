@@ -1064,5 +1064,73 @@ TEST(Streaming, TheTilesAroundTheRobotAreLoadedAndTheRunIsDeterministic) {
     EXPECT_EQ(a->world().colliders.body.size(), b->world().colliders.body.size());
 }
 
+// v1.0 security (docs/design/security.md): a server on tls:// with a token greets a client
+// that sends the token, refuses one that does not, and will not listen beyond this machine
+// without a token at all.
+TEST(Security, TlsWithATokenGreetsOnlyClientsThatHaveIt) {
+    char made[] = "/tmp/lagrange-tls-test-XXXXXX";
+    ASSERT_NE(::mkdtemp(made), nullptr);
+    const std::string dir = made;
+    const std::string make =
+        "openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 "
+        "-subj /CN=localhost -addext subjectAltName=IP:127.0.0.1 -keyout " +
+        dir + "/key.pem -out " + dir + "/cert.pem 2>/dev/null";
+    ASSERT_EQ(std::system(make.c_str()), 0) << "openssl could not make a test certificate";
+    ServerOptions options;
+    options.endpoint = proto::Endpoint::tcp("127.0.0.1", 0, true);
+    options.tlsCertificate = dir + "/cert.pem";
+    options.tlsKey = dir + "/key.pem";
+    options.authToken = "s3cret-token";
+    options.robotPath = LAGRANGE_TEST_AMR_URDF;
+    options.ros = false;
+    options.startPaused = true;
+    Server server(options);
+    const Status started = server.start();
+    ASSERT_TRUE(started.ok()) << started.message;
+    std::string error;
+    const auto trust = proto::TlsContext::client(dir + "/cert.pem", error);
+    ASSERT_TRUE(trust) << error;
+
+    const auto greet = [&](const std::string& token) -> v1::ServerHello {
+        std::error_code ec;
+        proto::Connection client = proto::Connection::startConnect(
+            server.endpoint(), ec, proto::kDefaultMaxFrameSize, trust);
+        v1::Envelope hello;
+        hello.mutable_client_hello()->mutable_version()->set_major(0);
+        hello.mutable_client_hello()->mutable_version()->set_minor(1);
+        hello.mutable_client_hello()->set_auth_token(token);
+        EXPECT_TRUE(client.queue(hello));
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < deadline) {
+            server.runOnce(1);
+            if (client.state() == proto::Connection::State::Connecting) {
+                (void)client.finishConnect(ec);
+            }
+            (void)client.flush(ec);
+            (void)client.receive(ec);
+            const proto::FrameReader::Result frame = client.next();
+            v1::Envelope reply;
+            if (frame.status == proto::FrameReader::Status::Frame &&
+                proto::parsePayload(frame.payload, reply) && reply.has_server_hello()) {
+                return reply.server_hello();
+            }
+        }
+        ADD_FAILURE() << "no ServerHello: " << client.tlsError();
+        return {};
+    };
+    EXPECT_EQ(greet("s3cret-token").refusal(), "");  // over TLS: a plain client gets nothing
+    EXPECT_NE(greet("wrong").refusal().find("authentication failed"), std::string::npos);
+    EXPECT_NE(greet("").refusal().find("authentication failed"), std::string::npos);
+
+    ServerOptions open = options;
+    open.endpoint = proto::Endpoint::tcp("0.0.0.0", 0, false);
+    open.authToken.clear();
+    Server exposed(open);
+    const Status refused = exposed.start();
+    EXPECT_FALSE(refused.ok());
+    EXPECT_NE(refused.message.find("--auth-token-file"), std::string::npos) << refused.message;
+    std::filesystem::remove_all(dir);
+}
+
 }  // namespace
 }  // namespace lagrange::server

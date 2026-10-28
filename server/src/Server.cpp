@@ -462,6 +462,7 @@ struct Server::Impl {
     std::deque<v1::LogRecord> logs;
     std::string schemaText;
     std::array<double, 3> shift{};  // world ENU of the region-local origin (moves at a rebase)
+    std::shared_ptr<proto::TlsContext> tls;  // tls:// endpoints: the server's certificate
 
     // Streamed tiles (huge-worlds.md §2): the selection, what was there before any tile (the
     // robot, the world's other scenery), the loaded tiles' content in world ENU, and the loads
@@ -2228,6 +2229,14 @@ struct Server::Impl {
             session.send(reply);
             return false;
         }
+        if (!options.authToken.empty() && session.connection.kind() == proto::Endpoint::Kind::Tcp &&
+            !proto::sameSecret(client.auth_token(), options.authToken)) {
+            hello.set_refusal(
+                "authentication failed: this server needs its token "
+                "(the viewer's --auth-token-file or LAGRANGE_AUTH_TOKEN)");
+            session.send(reply);
+            return false;
+        }
         hello.set_session_id(nextSessionId++);
         v1::Capabilities& caps = *hello.mutable_capabilities();
         caps.set_can_step(true);
@@ -3961,7 +3970,8 @@ struct Server::Impl {
     void accept() {
         for (;;) {
             std::error_code ec;
-            std::optional<proto::Connection> connection = listener.accept(ec);
+            std::optional<proto::Connection> connection =
+                listener.accept(ec, proto::kDefaultMaxFrameSize, tls);
             if (!connection) {
                 return;
             }
@@ -4446,6 +4456,23 @@ Status Server::start() {
     if (!s.options.recordPath.empty()) {
         if (Status status = s.startRecording(s.options.recordPath); !status.ok()) {
             return status;
+        }
+    }
+    const proto::Endpoint& endpoint = s.options.endpoint;
+    if (endpoint.kind == proto::Endpoint::Kind::Tcp && s.options.authToken.empty() &&
+        !proto::isLoopback(endpoint)) {
+        return Status::error(StatusCode::InvalidConfig,
+                             "listening on " + proto::toString(endpoint) +
+                                 " is open beyond this machine: give --auth-token-file FILE "
+                                 "(and preferably a tls:// endpoint with --tls-cert and "
+                                 "--tls-key)");
+    }
+    if (endpoint.tls) {
+        std::string reason;
+        s.tls = proto::TlsContext::server(s.options.tlsCertificate, s.options.tlsKey, reason);
+        if (!s.tls) {
+            return Status::error(StatusCode::InvalidConfig,
+                                 "a tls:// endpoint needs --tls-cert and --tls-key: " + reason);
         }
     }
     std::error_code ec;

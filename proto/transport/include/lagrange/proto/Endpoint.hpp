@@ -18,20 +18,28 @@ struct Endpoint {
     Kind kind{Kind::Unix};
     std::string address;    ///< Socket path (Unix) or host name / IP address (Tcp).
     std::uint16_t port{0};  ///< Tcp only. 0 lets the system choose when listening.
+    bool tls{false};        ///< Tcp only: TLS over the connection (tls://host:port).
 
     static Endpoint unixSocket(std::string path) { return {Kind::Unix, std::move(path), 0}; }
-    static Endpoint tcp(std::string host, std::uint16_t port) {
-        return {Kind::Tcp, std::move(host), port};
+    static Endpoint tcp(std::string host, std::uint16_t port, bool tls = false) {
+        return {Kind::Tcp, std::move(host), port, tls};
     }
 
     friend bool operator==(const Endpoint&, const Endpoint&) = default;
 };
 
 /// Parses "unix:/run/user/1000/lagrange/default.sock", "/abs/path.sock",
-/// "tcp://host:port", "tcp://host" (default port) or "tcp://[::1]:47610".
+/// "tcp://host:port", "tcp://host" (default port) or "tcp://[::1]:47610", and the same with
+/// "tls://" for TCP with TLS.
 [[nodiscard]] std::optional<Endpoint> parseEndpoint(std::string_view text);
 
 [[nodiscard]] std::string toString(const Endpoint& endpoint);
+
+/// True for a Unix socket and for TCP on a loopback address (127.0.0.0/8, ::1, "localhost").
+[[nodiscard]] bool isLoopback(const Endpoint& endpoint);
+
+/// Compares two secrets in time that depends only on their lengths (an authentication token).
+[[nodiscard]] bool sameSecret(std::string_view a, std::string_view b);
 
 /// $XDG_RUNTIME_DIR/lagrange/<instance>.sock, or /tmp/lagrange-<uid>/<instance>.sock when
 /// XDG_RUNTIME_DIR is not set.

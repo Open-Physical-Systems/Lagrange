@@ -1,6 +1,7 @@
 #include "lagrange/proto/Connection.hpp"
 
 #include <algorithm>
+#include <arpa/inet.h>
 #include <array>
 #include <cerrno>
 #include <cstring>
@@ -8,6 +9,9 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+#include <openssl/x509v3.h>
 #include <poll.h>
 #include <string>
 #include <sys/socket.h>
@@ -75,7 +79,156 @@ bool resolve(const Endpoint& endpoint, bool passive, AddressList& out, std::erro
 
 // --- Connection -------------------------------------------------------------------------
 
-Connection Connection::adopt(UniqueFd socket, Endpoint::Kind kind, std::uint32_t maxFrameSize) {
+// --- TLS ----------------------------------------------------------------------------------
+
+namespace {
+
+/// The newest OpenSSL error as text, and the queue cleared.
+std::string sslErrorText() {
+    std::string text;
+    while (const unsigned long code = ERR_get_error()) {
+        std::array<char, 256> buffer{};
+        ERR_error_string_n(code, buffer.data(), buffer.size());
+        text = buffer.data();
+    }
+    return text.empty() ? std::string("TLS failed") : text;
+}
+
+/// A context for TLS 1.2 or newer.
+SSL_CTX* newContext(const SSL_METHOD* method) {
+    SSL_CTX* context = SSL_CTX_new(method);
+    if (context != nullptr) {
+        SSL_CTX_set_min_proto_version(context, TLS1_2_VERSION);
+        SSL_CTX_set_mode(context,
+                         SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+    }
+    return context;
+}
+
+}  // namespace
+
+std::shared_ptr<TlsContext> TlsContext::server(const std::string& certificateFile,
+                                               const std::string& keyFile, std::string& error) {
+    SSL_CTX* context = newContext(TLS_server_method());
+    if (context == nullptr) {
+        error = sslErrorText();
+        return nullptr;
+    }
+    if (SSL_CTX_use_certificate_chain_file(context, certificateFile.c_str()) != 1 ||
+        SSL_CTX_use_PrivateKey_file(context, keyFile.c_str(), SSL_FILETYPE_PEM) != 1 ||
+        SSL_CTX_check_private_key(context) != 1) {
+        error = certificateFile + ", " + keyFile + ": " + sslErrorText();
+        SSL_CTX_free(context);
+        return nullptr;
+    }
+    return std::shared_ptr<TlsContext>(new TlsContext(context, true));
+}
+
+std::shared_ptr<TlsContext> TlsContext::client(const std::string& caFile, std::string& error) {
+    SSL_CTX* context = newContext(TLS_client_method());
+    if (context == nullptr) {
+        error = sslErrorText();
+        return nullptr;
+    }
+    const int loaded = caFile.empty()
+                           ? SSL_CTX_set_default_verify_paths(context)
+                           : SSL_CTX_load_verify_locations(context, caFile.c_str(), nullptr);
+    if (loaded != 1) {
+        error = (caFile.empty() ? std::string("the system's trust store") : caFile) + ": " +
+                sslErrorText();
+        SSL_CTX_free(context);
+        return nullptr;
+    }
+    SSL_CTX_set_verify(context, SSL_VERIFY_PEER, nullptr);
+    return std::shared_ptr<TlsContext>(new TlsContext(context, false));
+}
+
+TlsContext::~TlsContext() {
+    SSL_CTX_free(context_);
+}
+
+void Connection::SslDeleter::operator()(ssl_st* ssl) const {
+    SSL_free(ssl);
+}
+
+IoStatus Connection::tlsFailure(std::error_code& ec, int result) {
+    const int reason = SSL_get_error(ssl_.get(), result);
+    if (reason == SSL_ERROR_WANT_READ) {
+        tlsWantsWrite_ = false;
+        return IoStatus::WouldBlock;
+    }
+    if (reason == SSL_ERROR_WANT_WRITE) {
+        tlsWantsWrite_ = true;
+        return IoStatus::WouldBlock;
+    }
+    if (reason == SSL_ERROR_ZERO_RETURN) {
+        close();
+        return IoStatus::Closed;
+    }
+    if (reason == SSL_ERROR_SYSCALL && ERR_peek_error() == 0) {
+        // The peer went away without a TLS close.
+        close();
+        return IoStatus::Closed;
+    }
+    tlsError_ = sslErrorText();
+    const long verify = SSL_get_verify_result(ssl_.get());
+    if (verify != X509_V_OK) {
+        tlsError_ += std::string(" (certificate: ") + X509_verify_cert_error_string(verify) + ")";
+    }
+    ec = std::make_error_code(std::errc::protocol_error);
+    close();
+    return IoStatus::Error;
+}
+
+IoStatus Connection::tlsHandshake(std::error_code& ec) {
+    if (!ssl_ || tlsReady_) {
+        return IoStatus::Ok;
+    }
+    const int result = SSL_do_handshake(ssl_.get());
+    if (result == 1) {
+        tlsReady_ = true;
+        tlsWantsWrite_ = false;
+        return IoStatus::Ok;
+    }
+    return tlsFailure(ec, result);
+}
+
+IoStatus Connection::flushTls(std::error_code& ec) {
+    while (outPos_ < out_.size()) {
+        const auto length =
+            static_cast<int>(std::min<std::size_t>(out_.size() - outPos_, 1U << 30U));
+        const int sent = SSL_write(ssl_.get(), out_.data() + outPos_, length);
+        if (sent <= 0) {
+            return tlsFailure(ec, sent);
+        }
+        outPos_ += static_cast<std::size_t>(sent);
+        sentTotal_ += static_cast<std::uint64_t>(sent);
+    }
+    out_.clear();
+    outPos_ = 0;
+    return IoStatus::Ok;
+}
+
+IoStatus Connection::receiveTls(std::error_code& ec) {
+    std::size_t total = 0;
+    while (total < kReceiveBudgetPerCall) {
+        const int received =
+            SSL_read(ssl_.get(), scratch_.data(), static_cast<int>(scratch_.size()));
+        if (received <= 0) {
+            const IoStatus status = tlsFailure(ec, received);
+            if (status == IoStatus::WouldBlock) {
+                return total > 0 ? IoStatus::Ok : IoStatus::WouldBlock;
+            }
+            return total > 0 && status == IoStatus::Closed ? IoStatus::Ok : status;
+        }
+        reader_.feed(std::span{scratch_}.first(static_cast<std::size_t>(received)));
+        total += static_cast<std::size_t>(received);
+    }
+    return IoStatus::Ok;
+}
+
+Connection Connection::adopt(UniqueFd socket, Endpoint::Kind kind, std::uint32_t maxFrameSize,
+                             std::shared_ptr<TlsContext> tls) {
     Connection connection;
     connection.socket_ = std::move(socket);
     connection.kind_ = kind;
@@ -85,13 +238,27 @@ Connection Connection::adopt(UniqueFd socket, Endpoint::Kind kind, std::uint32_t
     if (connection.socket_.valid() && kind == Endpoint::Kind::Tcp) {
         setNoDelay(connection.socket_.get());
     }
+    if (tls && connection.socket_.valid()) {
+        connection.ssl_.reset(SSL_new(tls->get()));
+        if (!connection.ssl_ || SSL_set_fd(connection.ssl_.get(), connection.socket_.get()) != 1) {
+            connection.tlsError_ = sslErrorText();
+            connection.close();
+            return connection;
+        }
+        SSL_set_accept_state(connection.ssl_.get());
+        connection.tlsContext_ = std::move(tls);
+    }
     return connection;
 }
 
 Connection Connection::startConnect(const Endpoint& endpoint, std::error_code& ec,
-                                    std::uint32_t maxFrameSize) {
+                                    std::uint32_t maxFrameSize, std::shared_ptr<TlsContext> tls) {
     ec.clear();
     Connection connection;
+    if (endpoint.tls && (!tls || tls->isServer())) {
+        ec = std::make_error_code(std::errc::invalid_argument);  // tls:// needs a client context
+        return connection;
+    }
     connection.kind_ = endpoint.kind;
     connection.maxFrameSize_ = maxFrameSize;
     connection.reader_ = FrameReader(maxFrameSize);
@@ -126,6 +293,29 @@ Connection Connection::startConnect(const Endpoint& endpoint, std::error_code& e
         rc = ::connect(connection.socket_.get(), info->ai_addr, info->ai_addrlen);
     }
 
+    if (endpoint.tls && connection.socket_.valid() && (rc == 0 || errno == EINPROGRESS)) {
+        const int saved = errno;
+        connection.ssl_.reset(SSL_new(tls->get()));
+        SSL* ssl = connection.ssl_.get();
+        // The certificate must name the endpoint: its host name, or its IP address.
+        in6_addr scratch{};
+        const bool literal = ::inet_pton(AF_INET, endpoint.address.c_str(), &scratch) == 1 ||
+                             ::inet_pton(AF_INET6, endpoint.address.c_str(), &scratch) == 1;
+        if (ssl == nullptr || SSL_set_fd(ssl, connection.socket_.get()) != 1 ||
+            (literal
+                 ? X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(ssl), endpoint.address.c_str()) != 1
+                 : (SSL_set_tlsext_host_name(ssl, endpoint.address.c_str()) != 1 ||
+                    SSL_set1_host(ssl, endpoint.address.c_str()) != 1))) {
+            connection.tlsError_ = sslErrorText();
+            ec = std::make_error_code(std::errc::protocol_error);
+            connection.socket_.reset();
+            connection.ssl_.reset();
+            return connection;
+        }
+        SSL_set_connect_state(ssl);
+        connection.tlsContext_ = std::move(tls);
+        errno = saved;
+    }
     if (rc == 0) {
         connection.state_ = State::Connected;
         if (connection.kind_ == Endpoint::Kind::Tcp) {
@@ -145,6 +335,9 @@ short Connection::pollEvents() const {
         case State::Connecting:
             return POLLOUT;
         case State::Connected:
+            if (ssl_ && !tlsReady_) {
+                return tlsWantsWrite_ ? POLLOUT : POLLIN;
+            }
             return static_cast<short>(POLLIN | (pendingOutputBytes() > 0 ? POLLOUT : 0));
         case State::Closed:
             break;
@@ -213,6 +406,12 @@ IoStatus Connection::flush(std::error_code& ec) {
     ec.clear();
     if (state_ != State::Connected) {
         return state_ == State::Connecting ? IoStatus::WouldBlock : IoStatus::Closed;
+    }
+    if (ssl_) {
+        if (const IoStatus status = tlsHandshake(ec); status != IoStatus::Ok) {
+            return status;
+        }
+        return flushTls(ec);
     }
     while (outPos_ < out_.size()) {
         std::size_t length = out_.size() - outPos_;
@@ -290,6 +489,12 @@ IoStatus Connection::receive(std::error_code& ec) {
     if (scratch_.size() != kReceiveChunk) {
         scratch_.resize(kReceiveChunk);
     }
+    if (ssl_) {
+        if (const IoStatus status = tlsHandshake(ec); status != IoStatus::Ok) {
+            return status;
+        }
+        return receiveTls(ec);
+    }
     std::size_t total = 0;
     while (total < kReceiveBudgetPerCall) {
         alignas(cmsghdr) std::array<char, CMSG_SPACE(kMaxFdsPerFrame * sizeof(int))> control{};
@@ -363,6 +568,11 @@ std::vector<UniqueFd> Connection::takeReceivedFds() {
 }
 
 void Connection::close() {
+    if (ssl_ && tlsReady_ && socket_.valid()) {
+        (void)SSL_shutdown(ssl_.get());  // best effort: tell the peer, do not wait for it
+    }
+    ssl_.reset();
+    tlsReady_ = false;
     socket_.reset();
     state_ = State::Closed;
     out_.clear();
@@ -486,11 +696,12 @@ Listener Listener::listen(const Endpoint& endpoint, std::error_code& ec, int bac
         }
     }
     listener.socket_ = std::move(socket);
-    listener.endpoint_ = Endpoint::tcp(endpoint.address, port);
+    listener.endpoint_ = Endpoint::tcp(endpoint.address, port, endpoint.tls);
     return listener;
 }
 
-std::optional<Connection> Listener::accept(std::error_code& ec, std::uint32_t maxFrameSize) {
+std::optional<Connection> Listener::accept(std::error_code& ec, std::uint32_t maxFrameSize,
+                                           std::shared_ptr<TlsContext> tls) {
     ec.clear();
     if (!socket_.valid()) {
         ec = std::make_error_code(std::errc::bad_file_descriptor);
@@ -499,7 +710,7 @@ std::optional<Connection> Listener::accept(std::error_code& ec, std::uint32_t ma
     for (;;) {
         UniqueFd peer(::accept4(socket_.get(), nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC));
         if (peer.valid()) {
-            return Connection::adopt(std::move(peer), endpoint_.kind, maxFrameSize);
+            return Connection::adopt(std::move(peer), endpoint_.kind, maxFrameSize, std::move(tls));
         }
         if (errno == EINTR || errno == ECONNABORTED) {
             continue;

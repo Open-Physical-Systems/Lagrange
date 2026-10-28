@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <numbers>
 #include <set>
 #include <string_view>
@@ -91,6 +92,9 @@ void printServerOptions(std::FILE* out) {
         "  --overlay FILE.yaml  apply schemas (motors, battery, bus) to the robot, or\n"
         "            none (default: the sample AMR's power system, for the sample only)\n"
         "  --listen  unix:/path.sock or tcp://host:port (default: %s)\n"
+        "  --tls-cert FILE --tls-key FILE  certificate chain and key (PEM) for a tls:// --listen\n"
+        "  --auth-token-file FILE  TCP clients must send this token (first line of FILE);\n"
+        "                         required to listen beyond loopback\n"
         "  --spawn X,Y[,Z[,YAW]]  start the robot there (m, world ENU; heading in rad)\n"
         "  --add-robot NAME=FILE@X,Y[,Z[,YAW]]  one more robot in the run, its names prefixed\n"
         "                         with NAME, passive (repeatable)\n"
@@ -187,10 +191,30 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             const char* text = value();
             const auto endpoint = text != nullptr ? proto::parseEndpoint(text) : std::nullopt;
             if (!endpoint) {
-                return "--listen needs an endpoint such as unix:/tmp/l.sock or "
-                       "tcp://127.0.0.1:47610";
+                return "--listen needs an endpoint such as unix:/tmp/l.sock, "
+                       "tcp://127.0.0.1:47610 or tls://0.0.0.0:47610";
             }
             options.endpoint = *endpoint;
+        } else if (arg == "--tls-cert") {
+            const char* text = value();
+            if (text == nullptr) {
+                return "--tls-cert needs a PEM file (the certificate chain)";
+            }
+            options.tlsCertificate = text;
+        } else if (arg == "--tls-key") {
+            const char* text = value();
+            if (text == nullptr) {
+                return "--tls-key needs a PEM file (the private key)";
+            }
+            options.tlsKey = text;
+        } else if (arg == "--auth-token-file") {
+            const char* text = value();
+            std::ifstream in(text != nullptr ? text : "");
+            std::string token;
+            if (!in || !std::getline(in, token) || token.empty()) {
+                return "--auth-token-file needs a readable file whose first line is the token";
+            }
+            options.authToken = token;
         } else if (arg == "--spawn") {
             const auto spawn = parseSpawn(value());
             if (!spawn) {

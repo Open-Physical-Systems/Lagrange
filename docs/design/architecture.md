@@ -969,7 +969,7 @@ LAGRANGE_EXPORT const lagrange_module_api* lagrange_plugin_get_module(uint32_t h
 
 ABI policy:
 
-- The ABI is declared unstable (`MAJOR 0`) until v1.0. The sketch shows the v1 shape.
+- The ABI was unstable (`MAJOR 0`) until v1.0; from v1.0 it is `MAJOR 1`, frozen for 1.x (RFC 0007): append only, with `shift_origin` added at 1.0 for the floating origin.
 - `tests/abi/` builds a C-only plugin with `-std=c99 -pedantic` and a plugin compiled against the
   previous minor header, and loads both.
 - `abidiff` (libabigail) runs in CI against the last release for `core/plugin_abi/` headers.

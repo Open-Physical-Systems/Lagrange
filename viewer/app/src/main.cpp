@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <string>
 
 namespace {
@@ -13,6 +14,9 @@ void usage() {
         "Usage: lagrange_viewer [options]\n"
         "\n"
         "  --connect <endpoint>   unix:/path/to.sock or tcp://host:port\n"
+        "  --tls-ca <file>        CA certificates (PEM) for a tls:// server (default: the "
+        "system's)\n"
+        "  --auth-token-file <f>  the token a TCP server asks for (first line of the file)\n"
         "                         (default: the Unix socket in $XDG_RUNTIME_DIR/lagrange)\n"
         "  --gpu <index|name>     Vulkan device to use (see lagrange_gpu_info)\n"
         "  --validation           enable Vulkan validation layers\n"
@@ -66,6 +70,15 @@ int main(int argc, char** argv) {
         }
         if (arg == "--connect") {
             options.endpoint = value();
+        } else if (arg == "--tls-ca") {
+            options.tlsCa = value();
+        } else if (arg == "--auth-token-file") {
+            std::ifstream in(value());
+            if (!in || !std::getline(in, options.authToken) || options.authToken.empty()) {
+                std::fputs("error: --auth-token-file needs a file whose first line is the token\n",
+                           stderr);
+                return 2;
+            }
         } else if (arg == "--gpu") {
             options.gpu = value();
         } else if (arg == "--validation") {

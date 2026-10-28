@@ -14,6 +14,9 @@ message ClientHello {
   bool wants_shm = 3; // only honoured on Unix sockets
   repeated string compression = 4; // "zstd"; empty = none
   string locale = 5; // "ja_JP", for server-side message text (later)
+  // A server listening on TCP may require this shared secret (lagrange_server
+  // --auth-token-file); compared in constant time. Send it over tls:// only (v1.0).
+  string auth_token = 6;
 }
 
 enum ServerKind {

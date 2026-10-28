@@ -158,6 +158,7 @@ static const lagrange_module_api kModule = {
     save_state,
     restore_state,
     last_error,
+    NULL, /* shift_origin: it keeps no positions */
 };
 
 /* A second module: one output per prim carrying TestMotorAPI, named after the prim and set
@@ -239,6 +240,7 @@ static const lagrange_module_api kProbe = {
     probe_declare,
     probe_init,
     probe_step,
+    NULL,
     NULL,
     NULL,
     NULL,
