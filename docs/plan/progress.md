@@ -118,6 +118,25 @@ a motor heat run (Q16; the battery is checked against published cell data since 
 from 35 % state of charge up), the drive-design
 review of the motor constants, FMI 2.0 FMUs (Q8), Jolt's wheel slip. Released as `v0.3.0` on 2026-10-25 at the owner's request, after v0.2.0.
 
+## v1.0 plan (2026-10-29)
+
+Under the same 2026-10-29 mandate (roadmap §9). Publishing outside GitHub (the ROS buildfarm,
+container registries, PyPI, Sigstore) is the owner's: the packages are built and checked
+locally.
+
+1. The freeze: RFC 0007 (accepted, owner-delegated); schemas checked against a frozen list,
+   plugin ABI major 1 (with `shift_origin` for rebases) pinned by a layout test and `abidiff`,
+   protocol and profile rules
+2. Migration tools: recordings too, and every sample and fixture of earlier releases migrated
+   in tests
+3. Security: protocol authentication and TLS for TCP, fuzzing of every decoder, a dependency
+   audit
+4. Binary packages built locally: `.deb`s by bloom, the container image, a Python wheel, an
+   SBOM; a clean-machine install test in a container
+5. Documentation: a validation report per domain, the LTS policy in `GOVERNANCE.md`, a
+   tutorial per robot class run by a script
+6. Release v1.0.0 and branch `release/1.x`
+
 ## v0.7 status (2026-10-29)
 
 The owner ran `/loop finish until last version` on 2026-10-29: gated merges and the v1.0
@@ -468,6 +487,7 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 | electrical network (fallback doc fix) | `schemas/` (documentation of `elec:backEmfConstant`'s fallback corrected to Kt/1.5 for dq machines; changelog entry) | No attribute changed; the network refuses an authored Ke that disagrees with Kt by over 3 % |
 | raster camera sensor | `schemas/` (`CameraSensorAPI_1` in the sensor library, from formats.md §3.8, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-24 for autonomous work. Applied to a UsdGeomCamera, whose lens gives the field of view |
 | geo sensor schemas | `schemas/` (`GnssAPI_1`, `MagnetometerAPI_1`, `BarometerAPI_1` in the sensor library, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4 |
+| RFC 0007 v1.0 freeze | `rfcs/` (the rules for schemas, plugin ABI, protocol, profiles and recordings in 1.x; LTS on `release/1.x`) | Accepted under the owner's 2026-10-29 pre-approval of the freeze RFC; for the owner's review |
 | v0.7 camera interest | `proto/` (`Command.set_camera_interest` 55, `SetCameraInterest`; protocol.md) | Pre-approved by the owner on 2026-10-29 for v0.7 and v1.0. New message only; `buf` is not installed here, so `buf breaking` was not run |
 | v0.7 world schema | `schemas/` (new `world` library: `WorldTileAPI_1`, huge-worlds.md §2, RFC 0002's list; changelog entry) | Pre-approved by the owner on 2026-10-29 for v0.7 and v1.0. New library, nothing to migrate |
 | v0.7 floating origin in the protocol and recordings | `proto/` (`LocalFrame.region_enu` 6, the region origin in world ENU; recordings' `/lagrange/scene/frame` channel, documented in `record.proto`; protocol.md §4, formats.md §7) | Pre-approved by the owner on 2026-10-29 for v0.7 and v1.0. New field and channel only; `buf` is not installed here, so `buf breaking` was not run |
