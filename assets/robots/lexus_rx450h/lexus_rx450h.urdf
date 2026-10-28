@@ -1,0 +1,175 @@
+<?xml version="1.0"?>
+<!--
+  Lexus RX 450h (AL20, 2015-2022), the car of Autoware's sample vehicle. Dimensions are
+  Autoware's (sample_vehicle_launch, vehicle_info.param.yaml): wheelbase 2.79 m, track 1.64 m,
+  wheel radius 0.383 m, tyre width 0.235 m, overhangs 1.0 m front and 1.1 m rear. The 2,790 mm
+  wheelbase and the 4,890 mm by 1,895 mm body match the published AL20 figures (Wikipedia, "Lexus
+  RX (AL20)"); the mass, 2100 kg, lies in the AL20's published 1,915 to 2,210 kg kerb weight
+  range; the inertia is a box's of the body's size and the centre of mass sits a little ahead of
+  mid-wheelbase (front engine), both estimates.
+
+  The body is Autoware's lexus.dae (Apache-2.0), too large for this repository: fetch it with
+  `ros2 run lagrange_assets fetch_assets lexus_rx450h`. Without it the car runs and shows only
+  its sensors. The mesh includes the wheels, so they do not turn or steer on screen. As in the
+  sample sedan, the wheels carry no collision shapes (vehicle dynamics casts rays for the ground)
+  and base_link's origin is at the wheel centres' height, between the axles. Vehicle dynamics,
+  tyres and powertrain come from lexus_rx450h.overlay.yaml.
+-->
+<robot name="lexus_rx450h">
+  <material name="sensor"><color rgba="0.15 0.15 0.16 1"/></material>
+
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0.2 0 0.22"/>
+      <mass value="2100"/>
+      <inertia ixx="1022" iyy="4578" izz="4813" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <!-- Autoware's placement of the mesh (Y up, x backwards, origin mid-wheelbase on the
+           ground), moved down to the ground from the wheel centres. -->
+      <origin xyz="0 0 -0.383" rpy="1.5707963 0 3.1415927"/>
+      <geometry><mesh filename="lagrange-asset://lexus_rx450h/lexus.dae"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="-0.05 0 0.37"/>
+      <geometry><box size="4.89 1.85 1.3"/></geometry>
+    </collision>
+  </link>
+
+  <link name="front_left_knuckle">
+    <inertial><mass value="8"/><inertia ixx="0.08" iyy="0.08" izz="0.08" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="front_left_steer" type="revolute">
+    <parent link="base_link"/><child link="front_left_knuckle"/>
+    <origin xyz="1.395 0.820 0"/><axis xyz="0 0 1"/>
+    <limit lower="-0.70" upper="0.70" effort="3000" velocity="3"/>
+  </joint>
+  <link name="front_left_wheel">
+    <!-- 235/65 R18 tyre on an alloy wheel; drawn by the body mesh, which includes the wheels. -->
+    <inertial><mass value="25"/><inertia ixx="1.0" iyy="1.8" izz="1.0" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="front_left_spin" type="continuous">
+    <parent link="front_left_knuckle"/><child link="front_left_wheel"/>
+    <origin xyz="0 0 0"/><axis xyz="0 1 0"/>
+  </joint>
+  <link name="front_right_knuckle">
+    <inertial><mass value="8"/><inertia ixx="0.08" iyy="0.08" izz="0.08" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="front_right_steer" type="revolute">
+    <parent link="base_link"/><child link="front_right_knuckle"/>
+    <origin xyz="1.395 -0.820 0"/><axis xyz="0 0 1"/>
+    <limit lower="-0.70" upper="0.70" effort="3000" velocity="3"/>
+  </joint>
+  <link name="front_right_wheel">
+    <!-- 235/65 R18 tyre on an alloy wheel; drawn by the body mesh, which includes the wheels. -->
+    <inertial><mass value="25"/><inertia ixx="1.0" iyy="1.8" izz="1.0" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="front_right_spin" type="continuous">
+    <parent link="front_right_knuckle"/><child link="front_right_wheel"/>
+    <origin xyz="0 0 0"/><axis xyz="0 1 0"/>
+  </joint>
+  <link name="rear_left_wheel">
+    <!-- 235/65 R18 tyre on an alloy wheel; drawn by the body mesh, which includes the wheels. -->
+    <inertial><mass value="25"/><inertia ixx="1.0" iyy="1.8" izz="1.0" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="rear_left_spin" type="continuous">
+    <parent link="base_link"/><child link="rear_left_wheel"/>
+    <origin xyz="-1.395 0.820 0"/><axis xyz="0 1 0"/>
+  </joint>
+  <link name="rear_right_wheel">
+    <!-- 235/65 R18 tyre on an alloy wheel; drawn by the body mesh, which includes the wheels. -->
+    <inertial><mass value="25"/><inertia ixx="1.0" iyy="1.8" izz="1.0" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="rear_right_spin" type="continuous">
+    <parent link="base_link"/><child link="rear_right_wheel"/>
+    <origin xyz="-1.395 -0.820 0"/><axis xyz="0 1 0"/>
+  </joint>
+
+  <!-- Sensors: a 32-ring 3D lidar on a roof mount, a forward camera behind the windscreen, an
+       IMU. Illustrative placement and parameters, not Autoware's sample sensor kit. -->
+  <link name="lidar_link">
+    <inertial><mass value="1"/><inertia ixx="0.01" iyy="0.01" izz="0.01" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual>
+      <geometry><cylinder radius="0.06" length="0.08"/></geometry>
+      <material name="sensor"/>
+    </visual>
+  </link>
+  <joint name="lidar_mount" type="fixed">
+    <parent link="base_link"/><child link="lidar_link"/>
+    <origin xyz="0 0 1.38"/>
+  </joint>
+  <link name="camera_link">
+    <inertial><mass value="0.2"/><inertia ixx="0.001" iyy="0.001" izz="0.001" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="camera_mount" type="fixed">
+    <parent link="base_link"/><child link="camera_link"/>
+    <origin xyz="0.75 0 1.15"/>
+  </joint>
+  <gazebo reference="lidar_link">
+    <sensor name="roof_lidar" type="gpu_lidar">
+      <update_rate>10</update_rate>
+      <lidar>
+        <scan>
+          <horizontal><samples>1024</samples><min_angle>-3.14159</min_angle><max_angle>3.14159</max_angle></horizontal>
+          <vertical><samples>32</samples><min_angle>-0.4363</min_angle><max_angle>0.2618</max_angle></vertical>
+        </scan>
+        <range><min>0.5</min><max>100.0</max></range>
+        <noise><type>gaussian</type><stddev>0.02</stddev></noise>
+      </lidar>
+    </sensor>
+  </gazebo>
+  <gazebo reference="camera_link">
+    <sensor name="front_camera" type="camera">
+      <update_rate>10</update_rate>
+      <camera>
+        <horizontal_fov>1.2</horizontal_fov>
+        <image><width>960</width><height>540</height></image>
+        <clip><near>0.1</near><far>200</far></clip>
+      </camera>
+    </sensor>
+  </gazebo>
+  <gazebo reference="base_link">
+    <sensor name="imu" type="imu">
+      <update_rate>100</update_rate>
+      <imu>
+        <angular_velocity><z><noise type="gaussian"><stddev>0.002</stddev></noise></z></angular_velocity>
+        <linear_acceleration><x><noise type="gaussian"><stddev>0.02</stddev></noise></x></linear_acceleration>
+      </imu>
+    </sensor>
+  </gazebo>
+
+  <!-- Which joints take commands: vehicle dynamics drives the wheels and the steering. -->
+  <ros2_control name="LagrangeSystem" type="system">
+    <hardware><plugin>lagrange_ros2_control/LagrangeSystem</plugin></hardware>
+    <joint name="front_left_steer">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="front_right_steer">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="front_left_spin">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="front_right_spin">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="rear_left_spin">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="rear_right_spin">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+</robot>

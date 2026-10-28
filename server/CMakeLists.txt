@@ -49,6 +49,7 @@ add_library(
     src/Robot.cpp
     src/DiffDrive.cpp
     src/CarDrive.cpp
+    src/SwerveDrive.cpp
     src/Multicopter.cpp
     src/MapExport.cpp
     src/Profile.cpp
@@ -217,6 +218,7 @@ if(BUILD_TESTING)
         test_server
         PRIVATE
             LAGRANGE_TEST_AMR_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.urdf"
+            LAGRANGE_TEST_AMR_FMS_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_fms/amr_fms.urdf"
             LAGRANGE_TEST_SCHEMA="${CMAKE_CURRENT_SOURCE_DIR}/../profiles/schema.json"
             LAGRANGE_TEST_PROFILES="${CMAKE_CURRENT_SOURCE_DIR}/../profiles/examples"
             LAGRANGE_TEST_WAREHOUSE_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.urdf"

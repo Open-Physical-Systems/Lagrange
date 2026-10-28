@@ -28,6 +28,7 @@
 #include "lagrange/server/Profile.hpp"
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/server/Server.hpp"
+#include "lagrange/server/SwerveDrive.hpp"
 #include "lagrange/services/Log.hpp"
 #include "lagrange/services/WrenchSum.hpp"
 #include "lagrange/stage/Stage.hpp"
@@ -563,6 +564,30 @@ struct Server::Impl {
             }
             next->add(std::move(drive));
             next->add(std::make_unique<DiffDriveController>(driveSettings()));
+        } else if (const auto swerve = swerveSettings()) {
+            // A swerve base: /cmd_vel's forward, sideways and turn rates to every module.
+            std::function<std::optional<VelocityCommand>()> external;
+            if (bridge) {
+                external = [this]() -> std::optional<VelocityCommand> {
+                    const auto command = bridge->latestCommand(std::chrono::milliseconds(500));
+                    if (!command) {
+                        return std::nullopt;
+                    }
+                    return VelocityCommand{command->linearMps, command->angularRadps,
+                                           command->lateralMps};
+                };
+            }
+            DriveCommand::Settings demo;
+            demo.demo = options.demoDrive;
+            demo.lateral = true;
+            demo.speedMps = 0.4;
+            demo.turnRadiusM = 0.5;
+            auto drive = std::make_unique<DriveCommand>(demo, external);
+            if (driveOut != nullptr) {
+                *driveOut = drive.get();
+            }
+            next->add(std::move(drive));
+            next->add(std::make_unique<SwerveController>(*swerve));
         } else if (hasVehicles()) {
             // A road vehicle: /cmd_vel through the car's driver to throttle, brake and
             // steering; until the first command, its demo circle.
@@ -1023,6 +1048,11 @@ struct Server::Impl {
         settings.trackWidthM =
             std::hypot(a.position[0] - b.position[0], a.position[1] - b.position[1]);
         return settings;
+    }
+
+    /// A swerve base's modules, when the robot is one (findSwerveModules).
+    std::optional<SwerveController::Settings> swerveSettings() const {
+        return findSwerveModules(robot);
     }
 
     /// The latest scan of each lidar and image of each camera to the viewers that watch it.
@@ -3887,11 +3917,13 @@ struct Server::Impl {
                 continue;
             }
             if (session->congested()) {
-                // Skipping a delta breaks the sequence on purpose: the viewer asks for a snapshot.
+                // Skip this step's delta but keep the sequence: every delta carries the absolute
+                // pose of every moving prim, so the next one replaces it. Breaking the sequence
+                // would make the viewer ask for a snapshot, which in a large world (thousands of
+                // meshes) congests the connection again: it never caught up.
                 ++session->droppedBlocks;
                 if (session->hasSnapshot) {
                     ++session->droppedDeltas;
-                    ++session->sequence;
                 }
                 continue;
             }
@@ -4512,6 +4544,13 @@ Status Server::start() {
                   (!s.options.demoDrive ? "; it stands still until /cmd_vel arrives"
                    : s.bridge           ? "; a figure-eight demo drives until /cmd_vel arrives"
                                         : "; a figure-eight demo drives"));
+    } else if (const auto swerve = s.swerveSettings()) {
+        s.log(v1::LOG_LEVEL_INFO, "controller",
+              "swerve drive on " + std::to_string(swerve->modules.size()) +
+                  " modules: /cmd_vel's forward, sideways (linear.y) and turn rates" +
+                  (!s.options.demoDrive ? "; it stands still until /cmd_vel arrives"
+                   : s.bridge           ? "; a square and a turn on the spot until /cmd_vel arrives"
+                                        : "; a square and a turn on the spot"));
     } else if (s.hasVehicles()) {
         s.log(v1::LOG_LEVEL_INFO, "controller",
               std::string("car: the driver turns /cmd_vel (speed, turn rate) or /ackermann_cmd "

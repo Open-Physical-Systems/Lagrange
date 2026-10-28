@@ -1498,7 +1498,7 @@ in the server (or mock server) and receives the result through the protocol.
 | URDF / xacro | `urdfdom` (ROS package `urdf`), `xacro` executable | links, joints (all standard types), inertials, visual/collision geometry (primitives + meshes via Assimp), materials, mimic joints, limits including URDF 1.2 acceleration/jerk, `<ros2_control>` blocks → joint interfaces | `<gazebo>` extension blocks: mapped where a rule exists (sensors, friction), otherwise listed in the report; transmissions other than simple reductions |
 | SDFormat | `sdformat_vendor` (0.3.4 in Lyrical) | models, links, joints, sensors (lidar, camera, imu, gps/navsat, magnetometer), lights, nested models, `<include>` of local URIs | Gazebo system plugins (reported, not converted), Fuel URIs without a local cache, heightmaps (v0.7) |
 | MJCF | MuJoCo's own parser (`mj_loadXML`) then model traversal | bodies, joints, geoms, actuators (motor, position, velocity), sensors that have an equivalent, tendons (fixed) | spatial tendons, flex/deformables, plugin-defined elements |
-| glTF 2.0 / OBJ / STL / DAE | Assimp 6.0.4 (apt) | meshes, node hierarchy, PBR/Phong materials, textures | animations, skins, morph targets |
+| glTF 2.0 / OBJ / STL / DAE | Assimp 6.0.4 (apt) | meshes, node hierarchy, PBR/Phong materials, textures (baked into colours, below) | animations, skins, morph targets |
 
 Meshes in v0.2: `lagrange_meshes` (`io/meshes/`) reads glTF, OBJ, STL and Collada through
 Assimp into triangles grouped by material, with the node hierarchy baked in, Collada units
@@ -1544,6 +1544,16 @@ declaration in `io/stage/include/lagrange/stage/Stage.hpp`); `lagrange_server --
 robot keeps them in USD. Values are checked as the stage loader checks a stage, and every
 problem is reported together. Overlays add schema instances; they do not yet create simulated
 sensors, so lidars on an MJCF robot still need USD for now.
+
+**Meshes too large for the repository** (no file over 1 MB, CLAUDE.md §9) are fetched, not committed:
+`assets/external_assets.yaml` lists each file with its upstream repository, pinned commit,
+SHA-256 and licence, and `ros2 run lagrange_assets fetch_assets [ID...]` downloads them into
+`$LAGRANGE_ASSET_DIR` (default `~/.local/share/lagrange/assets/<id>/`) with the licence and a
+NOTICE. Robot files name them `lagrange-asset://<id>/<file>`; an asset that is not fetched is a
+note, and the link shows a magenta box in its place. **Textures** are not drawn: the importer
+bakes a textured part into parts of one colour each (each triangle takes the texture's colour
+under it, PNG or JPEG, embedded or a file next to the mesh; the triangles are grouped into 16
+colours at most by k-means), which keeps the viewer protocol unchanged.
 
 Without an overlay, an imported robot runs with the electrical domain substituted by the ideal
 torque source. The viewer's domain panel shows why the electrical toggle is unavailable

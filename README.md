@@ -28,6 +28,47 @@ against: the [validation report](docs/validation/report.md).
   <img src="docs/imgs/viewer-sedan.png" alt="The Lagrange viewer: scene tree, the viewport with the sedan and its roof lidar's returns, timeline and console" width="820">
 </p>
 
+## Real robots in real places
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/imgs/lexus-tokyo.gif" alt="A Lexus RX 450h driving down Koen-dori in Nishi-Shinjuku, Tokyo, among the district's buildings" width="100%">
+      <br><sub><b>Lexus RX 450h on Koen-dori, Nishi-Shinjuku, Tokyo</b>, at 10 m/s along the
+      street's OpenStreetMap centreline. Body mesh and dimensions from Autoware's sample vehicle
+      (Apache-2.0); buildings and roads © OpenStreetMap contributors (ODbL).</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/imgs/x500-zurich.gif" alt="A Holybro X500 V2 quadcopter flying over Zurich's streets and buildings" width="100%">
+      <br><sub><b>Holybro X500 V2 over Zurich</b>, from PX4's default home, flown by
+      <code>/cmd_vel</code>. Frame, motor and propeller meshes, mass and inertia from PX4's model
+      (BSD-3-Clause); terrain produced using Copernicus WorldDEM-30 (notice above); buildings and
+      roads © OpenStreetMap contributors (ODbL).</sub>
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="docs/imgs/amr-fms-warehouse.png" alt="The AMR_FMS swerve AMR in its 60 by 40 m warehouse" width="520">
+  <br><sub><b>The AMR_FMS swerve AMR</b> in its 60 m × 40 m warehouse: four steered wheels on the
+  built-in swerve controller (<code>/cmd_vel</code> with sideways speed).</sub>
+</p>
+
+```bash
+ros2 run lagrange_assets fetch_assets        # the large meshes: pinned upstream commits, SHA-256 checked
+tools/ci/build_sample_world.sh --place tokyo # or zurich: worlds from open data (network)
+ros2 run lagrange_server lagrange_server --robot assets/robots/lexus_rx450h/lexus_rx450h.urdf \
+    --overlay assets/robots/lexus_rx450h/lexus_rx450h.overlay.yaml \
+    --world ~/.cache/lagrange/worlds/tokyo_shinjuku_10km/tokyo_shinjuku_10km.usda \
+    --geo-origin 35.689568,139.691717,68.5 --spawn -124.86,294.15,0.3,-1.3746
+ros2 run lagrange_server lagrange_server --robot assets/robots/holybro_x500_v2/holybro_x500_v2.urdf \
+    --overlay assets/robots/holybro_x500_v2/holybro_x500_v2.overlay.yaml \
+    --world ~/.cache/lagrange/worlds/zurich_40km/zurich_40km.usda \
+    --geo-origin 47.397742,8.545594,535.82 --air-density 1.225
+ros2 run lagrange_server lagrange_server --robot assets/robots/amr_fms/amr_fms.urdf \
+    --world assets/worlds/amr_fms_warehouse/warehouse.sdf --spawn 26,8,0,3.1416
+```
+
 ## What it simulates
 
 | Robot class | Since | Sample | Highlights |
