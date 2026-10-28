@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_stage</name>
-  <version>0.6.0</version>
+  <version>0.7.0</version>
   <description>Reads OpenUSD stages into Lagrange's world tables and scene (invariant 5: USD is read once, at load), and writes them back for the importers.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>

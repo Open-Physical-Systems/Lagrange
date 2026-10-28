@@ -347,8 +347,27 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                                                       g["height"].as<double>()};
             }
         }
+        if (world.contains("streaming") && world["streaming"].is_object()) {
+            const jsoncons::json& streaming = world["streaming"];
+            if (streaming.contains("load_radius")) {
+                settings.streamingLoadRadius = streaming["load_radius"].as<double>();
+            }
+            if (streaming.contains("unload_radius")) {
+                settings.streamingUnloadRadius = streaming["unload_radius"].as<double>();
+            }
+            if (streaming.contains("collision_radius")) {
+                settings.streamingCollisionRadius = streaming["collision_radius"].as<double>();
+            }
+            for (const auto& member : streaming.object_range()) {
+                if (member.key() != "load_radius" && member.key() != "unload_radius" &&
+                    member.key() != "collision_radius") {
+                    warning(check, "/world/streaming/" + std::string(member.key()),
+                            "not applied by this server yet");
+                }
+            }
+        }
         for (const auto& member : world.object_range()) {
-            if (member.key() != "geo_origin") {
+            if (member.key() != "geo_origin" && member.key() != "streaming") {
                 warning(check, "/world/" + std::string(member.key()),
                         "not applied by this server yet");
             }

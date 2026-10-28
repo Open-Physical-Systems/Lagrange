@@ -1,9 +1,11 @@
 #pragma once
 
 #include "lagrange/world/World.hpp"
+#include "lagrange/world/streaming/TileSelector.hpp"
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -69,6 +71,12 @@ struct Model {
     std::vector<std::uint32_t> sensorPrim;    // scene prim of each sensor
     std::vector<std::string> actuatedJoints;  // joints driven by torque, in file order
     std::vector<std::string> notes;           // what was skipped or approximated, for the user
+    /// The stage's tiles (WorldTileAPI_1), left unloaded for streaming; bounds in world ENU.
+    std::vector<streaming::TileInfo> tiles;
+    /// False for a world with its own ground (terrain tiles): the infinite ground plane of the
+    /// model it joins is taken away (appendModel). From the layer's customLayerData
+    /// `lagrangeGroundPlane`.
+    bool groundPlane{true};
 };
 
 /// The visible ground: a 50 m slab in the floor colour of the mock server, as the last root prim
@@ -78,7 +86,40 @@ void addGroundPrim(Model& model);
 
 /// Adds `other` to `model`: a second robot, or a world's scenery loaded separately. Indices are
 /// renumbered; `other`'s ground (plane colliders on the world and its root prim "ground") is
-/// left out, since `model` has one. Its prims go after `model`'s, before the ground slab.
+/// left out, since `model` has one. Its prims go after `model`'s, before the ground slab. When
+/// `other` has groundPlane false, `model`'s plane and ground slab are taken away instead.
 void appendModel(Model& model, const Model& other);
+
+/// Makes a robot's names unique before it joins another model (a second robot of the same
+/// kind): bodies, joints and sensors get `prefix` + "_" + their name (signals follow:
+/// body/<prefix>_base_link/pose), its top prim and every path under it take `prefix` as the
+/// top prim's name, and with `passive` its joints are no longer actuated (no controller drives
+/// them). `prefix` must be a valid prim and signal name.
+void prefixModel(Model& model, const std::string& prefix, bool passive);
+
+/// How much of a model's static content there is: what a streamed tile is appended after.
+struct ModelExtent {
+    std::size_t colliders{0};
+    std::size_t hulls{0};
+    std::size_t heightfields{0};
+    std::size_t prims{0};
+    std::size_t meshes{0};
+    std::size_t materials{0};
+};
+[[nodiscard]] ModelExtent extentOf(const Model& model);
+/// Drops everything appended after `extent` (the tiles), keeping what came before.
+void truncateModel(Model& model, const ModelExtent& extent);
+
+/// Adds a streamed tile's static content (stage::loadStage with ReadOptions::tile, in world ENU)
+/// to `model`, moved into the region frame whose origin is `regionOrigin`: its colliders on the
+/// world, and its scene prims under `model`'s prim of the same tile path (left in the scene,
+/// empty, while the tile was unloaded). Bodies, joints, sensors and schema instances of the
+/// tile are not taken (a tile is scenery). Appended at the end, after the ground slab, so that
+/// truncateModel() takes it out again. Scene prims whose origin lies in one of `covered`
+/// (world ENU boxes, min x, min y, max x, max y: loaded finer tiles over a coarse one) are left
+/// out with what is under them, so the finer tiles replace the coarse one where they are.
+void appendTile(Model& model, const Model& tile, const std::string& tilePath,
+                const std::array<double, 3>& regionOrigin,
+                std::span<const std::array<double, 4>> covered = {});
 
 }  // namespace lagrange

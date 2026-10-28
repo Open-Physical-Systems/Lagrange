@@ -145,10 +145,10 @@ public:
         const bool hasSelection = context.selectedPrim < context.scene->statics->prims.size();
         // Follow camera: keep looking at the selection, or at the robot when nothing is
         // selected. Panning by hand turns it off.
-        if (follow_) {
+        if (context.renderOptions->follow) {
             if (ImGui::IsItemActive() && (ImGui::IsMouseDragging(ImGuiMouseButton_Middle) ||
                                           ImGui::IsMouseDragging(ImGuiMouseButton_Right))) {
-                follow_ = false;
+                context.renderOptions->follow = false;
             } else if (const std::uint32_t target =
                            hasSelection ? context.selectedPrim : robotPrim(*context.scene);
                        target != kNone) {
@@ -168,8 +168,9 @@ public:
         }
         char text[160];
         std::snprintf(text, sizeof(text), "%s · %s   %.1f ms   %u draws   %s",
-                      follow_ ? "Follow" : "Perspective", shadingName(context),
-                      static_cast<double>(context.frameMs), context.drawCalls, tier);
+                      context.renderOptions->follow ? "Follow" : "Perspective",
+                      shadingName(context), static_cast<double>(context.frameMs), context.drawCalls,
+                      tier);
         thermal(context, draw, origin, available);
         overlayBox(draw, ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)), text, nullptr);
 
@@ -411,7 +412,8 @@ private:
         overlays += context.renderOptions->sensors ? 1 : 0;
         char overlayLabel[40];
         std::snprintf(overlayLabel, sizeof(overlayLabel), "Overlays · %d###overlays", overlays);
-        const char* camera = follow_ ? "Follow###camera" : "Perspective###camera";
+        const char* camera =
+            context.renderOptions->follow ? "Follow###camera" : "Perspective###camera";
         const float gap = px(4.0F);
         const float width = widgets::MenuButtonWidth("Thermal") + widgets::MenuButtonWidth(camera) +
                             widgets::MenuButtonWidth(overlayLabel) + gap * 2.0F;
@@ -462,12 +464,13 @@ private:
             ImGui::OpenPopup("##camera");
         }
         if (ImGui::BeginPopup("##camera")) {
-            if (ImGui::MenuItem("Perspective", nullptr, !follow_)) {
-                follow_ = false;
+            if (ImGui::MenuItem("Perspective", nullptr, !context.renderOptions->follow)) {
+                context.renderOptions->follow = false;
             }
             ImGui::MenuItem("Orthographic", nullptr, false, false);  // not built yet
-            if (ImGui::MenuItem("Follow the robot or the selection", nullptr, follow_)) {
-                follow_ = !follow_;
+            if (ImGui::MenuItem("Follow the robot or the selection", nullptr,
+                                context.renderOptions->follow)) {
+                context.renderOptions->follow = !context.renderOptions->follow;
             }
             ImGui::EndPopup();
         }
@@ -612,7 +615,6 @@ private:
         }
     }
 
-    bool follow_{false};
     std::uint64_t tagScene_{0};
     std::int64_t tagTimeNs_{0};
     std::array<double, 3> tagPosition_{};

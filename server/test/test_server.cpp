@@ -991,5 +991,78 @@ TEST_F(ServerTest, SeekingASimulationIsRefused) {
     EXPECT_NE(received_.back().command_result().error().find("--replay"), std::string::npos);
 }
 
+// huge-worlds.md §1.4: the floating origin follows the robot during a run. The sample AMR
+// starts 999.5 m east of the origin (no rebase at load: within 1000 m) and drives its demo
+// figure-eight; once it is past 1000 m the server moves the region origin to its whole-metre
+// position, between ticks, and the run goes on in the new frame without a jump.
+TEST(FloatingOrigin, TheServerRebasesWhenTheRobotDrivesFar) {
+    ServerOptions options;
+    options.robotPath = LAGRANGE_TEST_AMR_URDF;
+    options.realTimeFactor = 0.0;
+    options.ros = false;
+    options.spawn.position = {999.5, 0.0, 0.0};
+    Server server(options);
+    ASSERT_TRUE(server.load().ok());
+    EXPECT_EQ(server.world().region.rebaseCount, 0U);
+    std::array<double, 3> last{};
+    double largestStep = 0.0;
+    for (std::int64_t t = 100'000'000; t <= 20'000'000'000; t += 100'000'000) {
+        ASSERT_TRUE(server.stepUntil(SimTime{t}).ok());
+        const std::vector<double> pose = server.read("body/base_link/pose");
+        std::array<double, 3> world{};
+        for (std::size_t i = 0; i < 3; ++i) {
+            world.at(i) = pose.at(i) + server.world().region.worldEnu.at(i);
+        }
+        if (t > 100'000'000) {
+            largestStep = std::max(largestStep, std::hypot(world[0] - last[0], world[1] - last[1]));
+        }
+        last = world;
+    }
+    ASSERT_GE(server.world().region.rebaseCount, 1U) << "the robot crossed 1000 m";
+    EXPECT_EQ(server.world().region.worldEnu[1], 0.0);
+    EXPECT_GE(server.world().region.worldEnu[0], 1000.0);
+    EXPECT_LT(std::abs(server.read("body/base_link/pose").at(0)), 1000.0);
+    // At most the demo's speed times 100 ms: no jump in world ENU across the rebase.
+    EXPECT_LT(largestStep, 0.1);
+}
+
+// huge-worlds.md §6 (v0.7): a streamed world. The AMR starts in a street of the tiled town;
+// the tiles around it are in physics before the first step, the far ones are not, and two
+// headless runs load the same tiles at the same times (deterministic tile selection).
+TEST(Streaming, TheTilesAroundTheRobotAreLoadedAndTheRunIsDeterministic) {
+    const auto run = [](std::int64_t untilNs) {
+        ServerOptions options;
+        options.robotPath = LAGRANGE_TEST_AMR_URDF;
+        options.worldPath = LAGRANGE_TEST_TILED_TOWN;
+        options.realTimeFactor = 0.0;
+        options.ros = false;
+        options.spawn.position = {1036.0, 1036.0, 0.0};  // a street: x and y in [1024, 1048]
+        auto server = std::make_unique<Server>(options);
+        EXPECT_TRUE(server->load().ok());
+        EXPECT_TRUE(server->stepUntil(SimTime{untilNs}).ok());
+        return server;
+    };
+    const auto a = run(5'000'000'000);
+    const World& world = a->world();
+    // The buildings of the collision tiles within 300 m (world.streaming.collision_radius's
+    // default): each holds up to 9 boxes.
+    EXPECT_GT(world.colliders.body.size(), 50U);
+    double farthest = 0.0;
+    for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
+        if (world.colliders.shape[c] == ShapeType::Box) {
+            const std::array<double, 3>& p = world.colliders.poseInBody[c].position;
+            farthest = std::max(farthest, std::hypot(p[0] + world.region.worldEnu[0] - 1036.0,
+                                                     p[1] + world.region.worldEnu[1] - 1036.0));
+        }
+    }
+    EXPECT_LT(farthest, 300.0 + 256.0 * std::sqrt(2.0)) << "only tiles within the radius";
+    const auto b = run(5'000'000'000);
+    const auto ha = a->stateHash();
+    const auto hb = b->stateHash();
+    ASSERT_TRUE(ha && hb);
+    EXPECT_EQ(*ha, *hb);
+    EXPECT_EQ(a->world().colliders.body.size(), b->world().colliders.body.size());
+}
+
 }  // namespace
 }  // namespace lagrange::server

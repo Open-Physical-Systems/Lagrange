@@ -84,13 +84,40 @@ warehouse authored 500 km out gives bit-identical poses and lidar ranges within 
 rounding of the authored coordinates) after 10 s; without the floating origin it is off by
 5e-7 m in pose and 8e-5 m in range.
 
+### 1.4 Rebase during a run (v0.7)
+
+Every 100 ms of simulated time the server compares the robot's first body with the region
+origin. Beyond 1000 m (`kRebaseDistanceM`) it moves the origin to the body's whole-metre position:
+
+1. it saves the run's state (`Scheduler::saveState`);
+2. `shiftRegion` moves the world tables and the scene by the offset, as `recentre` does at load;
+3. it rebuilds the run on them, so static geometry (MuJoCo's model, Jolt's scenery, the lidar
+   casters, fields loaded with `Field::load(path, region)`) is built in the new frame;
+4. it restores the state and calls `Scheduler::shiftOrigin`, which moves the region-local
+   `Pose` values on the bus (outputs, held inputs, window sums) and calls every module's
+   `IModule::shiftOrigin`: MuJoCo's free joints and mocap bodies, Jolt's bodies, the
+   multicopter's home and setpoint, ArduPilot's start point. Traffic, scenarios and the vehicle
+   model keep lane coordinates and need nothing.
+
+Consumers:
+- the viewer gets a new snapshot whose `LocalFrame` has the new `region_enu` and
+  `rebase_count`, and moves its camera by the difference, so the view does not jump;
+- the ROS bridge keeps `/odom`, its TF, `/ground_truth/odom` and entity states in the region of
+  the first build (it adds the accumulated offset), so Nav2 and TF see no jump;
+- a recording gets a `LocalFrame` on `/lagrange/scene/frame` at each rebase. A replay does not
+  rebase: it shows the recorded poses as they are.
+
+`FloatingOrigin.ARebaseDuringTheRunKeepsTheTrajectoryOn{Mujoco,Jolt}` (`server/test/
+test_robot.cpp`) rebase the warehouse demo by (37, -12, 0) m at 5 s: at 10 s the pose matches the
+run that was never rebased within 1e-9 m on MuJoCo (double) and 1e-4 m on Jolt (float).
+
 Not yet done:
-- Rebasing during a run, when the robot drives more than `rebase_distance` away (needs the
-  backend shift above).
-- The viewer cannot show world coordinates for a world that is not georeferenced. `LocalFrame`
-  carries an ECEF anchor and `rebase_count`, but no region offset; adding one is a `proto/`
-  change.
-- The ROS bridge does not publish `map → region`, and MCAP recordings do not store the origin.
+- Third-party plugins (the C ABI) are not told about a rebase; a plugin that keeps world
+  positions must read them from the bus.
+- `rebase_distance` from the profile (`world.streaming.rebase_distance`) is not read; the
+  distance is the constant.
+- A rebase rebuilds the run, which takes about as long as loading it (tens of milliseconds for
+  the samples); with huge worlds that is once per kilometre.
 
 ## 2. Tile streaming
 
@@ -141,6 +168,48 @@ Streaming manager (`core/world/streaming/`):
 | Determinism | In deterministic mode the tile set is a pure function of robot positions (no camera hints, no time-based hysteresis; distance hysteresis only) |
 | Protocol | The viewer receives tile prims as `SceneDelta.added` / `removed`; meshes through the shared-memory scene region |
 
+### 2.1 Status in v0.7
+
+Built:
+- `WorldTileAPI_1` (`schemas/world`).
+- `stage::loadStage` opens a stage with its tiles' payloads unloaded (every other payload
+  loaded) and lists the tiles in `Model::tiles`. With `ReadOptions::tile` it reads one tile:
+  the stage masked to that prim, its payload alone loaded, so USD composes it as in the whole
+  stage. A tile holds static scenery only.
+- `streaming::TileSelector` (`core/world/streaming`) chooses the tiles: refinement by
+  geometric error per metre from the coarsest level down, the collision tiles a robot can
+  reach, coarse tiles kept until their finer replacements are loaded, distance hysteresis plus
+  a 5 s delay (none in deterministic mode), a memory budget that never drops a robot's ground,
+  and `physicsReady()`.
+- The server streams for any loaded stage with tiles. Every 100 ms of simulated time (with
+  the rebase check) it runs the selection on the robot's position and loads tiles on up to
+  four worker threads. When the loaded set changes, the world tables are put back to what they
+  were before any tile (`truncateModel`), the loaded tiles appended in order (`appendTile`,
+  moved into the region frame, a coarse tile's prims left out where a loaded finer tile is),
+  and the run rebuilt keeping its state. Jolt saves only its moving bodies' state for this, so
+  a state fits a world whose scenery changed.
+- Physics-ready gating: a run with ROS takes loads as they finish and holds (no steps) while
+  a collision tile within 5 m plus half a second of travel of the robot is missing. A run without
+  ROS (headless, Python, `lagrange determinism`) waits for its loads in the step, so its tile
+  set depends only on the robot's path: `Streaming.TheTilesAroundTheRobotAreLoadedAnd
+  TheRunIsDeterministic` runs the sample twice and compares state hashes.
+- Profile keys `world.streaming.load_radius` and `unload_radius` (defaults 600 m and 800 m).
+- The World workspace shows the loaded tiles on the finest tiles' grid (`WorldState`: loaded
+  collision tiles level of detail 0, others 2), the robot's active radius, the floating origin
+  in world ENU with its rebase count and last rebase, the georeference, host memory and the
+  load queue.
+- Sample: `assets/worlds/tiled_town/` (written by `make_tiled_town.py`), a 2048 m town in 4
+  coarse tiles of 1024 m and 64 collision tiles of 256 m.
+
+Not yet:
+- Interest from sensors' ranges. Viewer cameras are hints (`SetCameraInterest`, sent when the
+  camera moved 10 m, at most twice a second) in runs with ROS; runs without ROS are
+  deterministic and follow the robot only.
+- Memory budgets from the profile; the selector supports them, the server passes none.
+- A tile change rebuilds the run (tens of milliseconds for the sample, more for big tiles); an
+  in-place add and remove of static geometry in the backends would avoid it.
+- Lanes, EMI sources and other schema instances in tiles are not taken (static scenery only).
+
 ## 3. Active regions and simplified distant agents
 
 A **region** is a bubble of full simulation around one or more robots. Outside all regions the
@@ -189,6 +258,28 @@ constraints now: modules talk only through the signal bus (invariant 1), signals
 id, cross-region interaction happens only through the traffic/agent hand-off and environment
 fields, and the hand-off record (`AgentRecord`) is a serialisable value type.
 
+### 3.1 Status in v0.7
+
+Built:
+- `regions::RegionPlanner` (`core/world/regions`): robots within two region radii of each other
+  (directly or through others) share a region; robots that shared one stay together until
+  farther apart than 2.5 radii (`splitFactor` 1.25). Deterministic. `regions::AgentRecord` is
+  the hand-off value (base pose and twist in world ENU, joint positions and velocities).
+- More robots in one run: `lagrange_server --add-robot NAME=FILE@X,Y[,Z[,YAW]]` (repeatable).
+  An added robot's bodies, joints and sensors are prefixed `NAME_` (`prefixModel`), and its
+  joints are passive: nothing drives it yet.
+- `server::RegionHost`: one `Server` run per region, each with its own floating origin, physics
+  scene and streamed tiles, stepped in lockstep 100 ms at a time; headless (no ROS, no
+  viewers). `Regions.RobotsTenKilometresApartRunInTheirOwnRegions` (`server/test/
+  test_regions.cpp`): two AMRs 10 km apart get two regions, and the one 10 km out drives
+  exactly as a lone AMR at the origin (1e-9 m).
+
+Not yet:
+- Moving a robot between regions while running (merge and split with an `AgentRecord`
+  hand-off): `RegionHost::stepUntil` stops with `Unsupported` when robots meet or part.
+- Agent levels of detail (`AgentLod`): traffic agents are kinematic in every region.
+- Serving a multi-region run to viewers and ROS; the `lagrange` command has no regions mode.
+
 ## 4. Geospatial pipeline
 
 Offline tools in `io/geospatial/`, run by the user or by `tools/build_world`. Output is the tiled
@@ -217,6 +308,38 @@ flowchart LR
 | WGS84 ↔ ENU | GeographicLib 2.7 (apt) for geodesy; our `coords::GeoOrigin` for the hot path | Conversion code is tested against GeographicLib |
 
 Every generated world has an `ATTRIBUTION.md` listing sources and licenses, written by the tool.
+
+### 4.1 Status in v0.7
+
+Built (`lagrange_geospatial`, `io/geospatial/`):
+- `lagrange_build_world OUT_DIR --origin LAT,LON,HEIGHT|ground --size M [--dem FILE]...
+  [--geoid FILE | --assume-ellipsoidal] [--osm FILE.osm]... [--tiles3d TILESET.json]...` writes
+  the layout of section 2: two levels (coarse visual tiles, fine tiles with colliders), `.usdc`
+  tiles, a root `.usda` and `ATTRIBUTION.md`.
+- Elevation through GDAL (any raster, any CRS PROJ knows; bilinear between pixel centres). The
+  vertical datum is never guessed (section 4's rule): a geoid undulation raster (`egm96_15.gtx`
+  from proj-data) or `--assume-ellipsoidal`. Each vertex's height is the geodetic point under
+  its east/north position (fixed-point iteration, so curvature is right).
+- Terrain collision: one height field per fine tile on the collision grid
+  (`ShapeType::HeightField`, `World::heightfields`): MuJoCo `hfield`, Jolt `HeightFieldShape`,
+  the CPU lidar and radar casters (exact: the ray clipped to the grid, cells walked in order,
+  two triangles each), the viewer's collision shading, and USD (a grid mesh with
+  `lagrange:heightField:columns` and `rows`). The GPU lidar does not see height fields yet:
+  `--lidar gpu` is refused on a streamed world. Radar treats terrain as ground clutter. Collision
+  tiles load only within `world.streaming.collision_radius` (300 m) of a robot; coarse tiles
+  cover the rest. A world with terrain says so in its layer (`lagrangeGroundPlane = 0`), and
+  the infinite ground plane is taken away. (Terrain as convex prisms took a minute to load on
+  MuJoCo: its spec API names meshes in quadratic time.)
+- OpenStreetMap XML: buildings (closed ways; height from `height`, `building:levels` x 3 m or
+  9 m) as walls and roofs, with colliders over the ear-clipped footprint's triangles; roads as
+  ribbons draped on the terrain (visual). Multipolygon relations are not read.
+- 3D Tiles: leaf content (glb, glTF, b3dm with RTC_CENTER) through Assimp, transforms
+  accumulated into ECEF, then ENU; visual only.
+- `tools/ci/build_sample_world.sh` builds the 40 km sample (roadmap §8): Copernicus DEM GLO-30
+  around the PX4 home in Zurich, OpenStreetMap for the central 4 km, then drives the AMR on it
+  headless. Nothing it writes is committed (licences: `dependencies.md`).
+
+Not yet: height fields in the GPU lidar, OSM PBF (libosmium), re-tiling 3D Tiles, land use.
 
 ## 5. Sensors and rendering at scale
 

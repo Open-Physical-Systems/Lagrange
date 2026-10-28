@@ -7,6 +7,7 @@
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/util/GridBuilder.h>
+#include <nanovdb/util/GridChecksum.h>
 #include <nanovdb/util/GridHandle.h>
 #include <nanovdb/util/HostBuffer.h>
 #include <nanovdb/util/IO.h>
@@ -61,9 +62,35 @@ std::shared_ptr<const Field> Field::fromBytes(std::vector<std::byte> bytes) {
     return nullptr;
 }
 
-Expected<std::shared_ptr<const Field>, std::string> Field::load(const std::string& path) {
+namespace {
+
+/// Moves a grid by -origin: its index-to-world translation (single and double precision) and
+/// its world bounds. The checksum is recomputed, since the header changed.
+template <typename ValueT>
+void moveGrid(nanovdb::NanoGrid<ValueT>& grid, const Vec3& origin) {
+    auto* data = grid.data();
+    for (std::size_t i = 0; i < 3; ++i) {
+        data->mMap.mVecD[i] -= origin.at(i);
+        data->mMap.mVecF[i] = static_cast<float>(data->mMap.mVecD[i]);
+        data->mWorldBBox[0][static_cast<int>(i)] -= origin.at(i);
+        data->mWorldBBox[1][static_cast<int>(i)] -= origin.at(i);
+    }
+    nanovdb::updateChecksum(grid);
+}
+
+}  // namespace
+
+Expected<std::shared_ptr<const Field>, std::string> Field::load(const std::string& path,
+                                                                const Vec3& regionOrigin) {
     try {
-        const auto handle = nanovdb::io::readGrid(path);
+        auto handle = nanovdb::io::readGrid(path);
+        if (regionOrigin != Vec3{}) {
+            if (auto* g = handle.grid<float>()) {
+                moveGrid(*g, regionOrigin);
+            } else if (auto* v = handle.grid<nanovdb::Vec3f>()) {
+                moveGrid(*v, regionOrigin);
+            }
+        }
         std::vector<std::byte> bytes(handle.size());
         std::memcpy(bytes.data(), handle.data(), handle.size());
         auto field = fromBytes(std::move(bytes));

@@ -151,6 +151,12 @@ public:
 
     Status saveState(StateWriter&) const override { return {}; }
     Status restoreState(StateReader&) override { return {}; }
+    // The start NED is measured from moves with the region (the link outlives rebuilds).
+    void shiftOrigin(const std::array<double, 3>& shift) override {
+        for (std::size_t i = 0; i < 3; ++i) {
+            link_->home.at(i) -= shift.at(i);
+        }
+    }
 
 private:
     /// The JSON line for ArduPilot: FRD body rates and specific force, NED position and

@@ -173,6 +173,12 @@ bool SceneBuilder::applySnapshot(const v1::SceneSnapshot& snapshot, std::string&
         statics->colliders.push_back(collider);
     }
     statics->stagePath = snapshot.stage_path();
+    statics->rebaseCount = snapshot.frame().rebase_count();
+    if (snapshot.frame().region_enu_size() == 3) {
+        for (int i = 0; i < 3; ++i) {
+            statics->regionEnu.at(static_cast<std::size_t>(i)) = snapshot.frame().region_enu(i);
+        }
+    }
     statics->generation = ++generation_;
     frame->statics = std::move(statics);
     frame->sequence = snapshot.sequence();

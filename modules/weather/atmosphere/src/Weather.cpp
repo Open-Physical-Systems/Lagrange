@@ -203,7 +203,7 @@ Status Weather::declare(const WorldView& world, const ModuleConfig& config, Sign
         if (path.empty() || clear_) {
             return {};
         }
-        auto loaded = fields::Field::load(path);
+        auto loaded = fields::Field::load(path, world.raw().region.worldEnu);
         if (!loaded) {
             return Status::error(StatusCode::InvalidConfig, loaded.error());
         }

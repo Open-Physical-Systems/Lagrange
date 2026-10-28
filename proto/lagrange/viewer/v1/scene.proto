@@ -11,6 +11,9 @@ message LocalFrame {
   double ecef_z = 3; // m; all zero if not georeferenced
   repeated double enu_from_ecef = 4; // 9 values, row-major
   uint64 rebase_count = 5; // increments at each rebase
+  // World ENU of the region-local origin, m (3 values; the floating origin, huge-worlds.md
+  // section 1.2). Region-local positions plus this are world ENU. Empty from older servers.
+  repeated double region_enu = 6;
 }
 
 message Prim {

@@ -11,6 +11,8 @@ set(LAGRANGE_CORE_PARTS
     random
     world
     world/coords
+    world/streaming
+    world/regions
     module
     scheduler
     plugin_abi
@@ -27,6 +29,8 @@ add_library(
     world/src/Meshes.cpp
     world/src/RoadLanes.cpp
     world/coords/src/Frames.cpp
+    world/streaming/src/TileSelector.cpp
+    world/regions/src/RegionPlanner.cpp
     module/src/Module.cpp
     scheduler/src/Scheduler.cpp
     plugin_abi/src/PluginLibrary.cpp
@@ -77,6 +81,8 @@ if(BUILD_TESTING)
             services/test/test_services.cpp
             services/test/test_consumer_ring.cpp
             services/test/test_determinism_check.cpp
+            world/streaming/test/test_tile_selector.cpp
+            world/regions/test/test_region_planner.cpp
     )
         get_filename_component(name ${test} NAME_WE)
         ament_add_gtest(${name} ${test})

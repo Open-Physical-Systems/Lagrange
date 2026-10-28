@@ -64,7 +64,15 @@ struct ServerOptions {
     /// open loop (the replay substitute); empty = none. A profile's rigid_body replay source
     /// overrides it.
     std::string benchReplayPath;
-    Pose spawn;                     // where the robot starts, world ENU (LoadOptions::spawn)
+    Pose spawn;  // where the robot starts, world ENU (LoadOptions::spawn)
+    /// More robots in the same run (--add-robot), after the robot. Their names are prefixed
+    /// with `name` (prefixModel) and their joints are passive: nothing drives them yet.
+    struct ExtraRobot {
+        std::string name;
+        std::string path;
+        Pose spawn;  // world ENU
+    };
+    std::vector<ExtraRobot> extraRobots;
     std::string profileSchemaPath;  // profiles/schema.json, sent to viewers; empty = none
     /// What a profile's `stage` must say to apply to this run; empty: robotPath. `lagrange run`
     /// sets it to the stage as the profile writes it.

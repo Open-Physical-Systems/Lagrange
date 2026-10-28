@@ -6,6 +6,7 @@
 //   sim.read("body/base_link/pose")
 #include "lagrange/server/Server.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <memory>
@@ -29,9 +30,20 @@ namespace {
 class Simulation {
 public:
     Simulation(const std::string& robot, const std::optional<std::string>& world,
-               const std::optional<std::string>& profile, const std::string& lidar) {
+               const std::optional<std::string>& profile, const std::string& lidar,
+               const std::optional<std::vector<double>>& spawn) {
         lagrange::server::ServerOptions options;
         options.robotPath = robot;
+        if (spawn) {
+            // x, y[, z[, yaw]] in world ENU, as --spawn.
+            if (spawn->size() < 2 || spawn->size() > 4) {
+                throw std::invalid_argument("spawn is (x, y[, z[, yaw]])");
+            }
+            options.spawn.position = {(*spawn)[0], (*spawn)[1],
+                                      spawn->size() > 2 ? (*spawn)[2] : 0.0};
+            const double yaw = spawn->size() > 3 ? (*spawn)[3] : 0.0;
+            options.spawn.orientation = {std::cos(yaw / 2.0), 0.0, 0.0, std::sin(yaw / 2.0)};
+        }
         options.worldPath = world.value_or("");
         options.ros = false;
         options.demoDrive = true;
@@ -99,6 +111,11 @@ public:
     }
 
     [[nodiscard]] std::vector<std::string> bodies() const { return server_->world().bodies.names; }
+    [[nodiscard]] std::vector<double> regionOrigin() const {
+        const auto& r = server_->world().region;
+        return {r.worldEnu[0], r.worldEnu[1], r.worldEnu[2]};
+    }
+    [[nodiscard]] std::size_t colliders() const { return server_->world().colliders.body.size(); }
     [[nodiscard]] std::vector<std::string> joints() const { return server_->world().joints.names; }
 
     [[nodiscard]] std::uint64_t stateHash() const {
@@ -141,8 +158,10 @@ NB_MODULE(_lagrange, m) {
                            "A run without ROS or viewers, stepped from Python. The robot and "
                            "world are URDF, SDFormat, MJCF or USD files.")
         .def(nb::init<const std::string&, const std::optional<std::string>&,
-                      const std::optional<std::string>&, const std::string&>(),
-             "robot"_a, "world"_a = nb::none(), "profile"_a = nb::none(), "lidar"_a = "cpu")
+                      const std::optional<std::string>&, const std::string&,
+                      const std::optional<std::vector<double>>&>(),
+             "robot"_a, "world"_a = nb::none(), "profile"_a = nb::none(), "lidar"_a = "cpu",
+             "spawn"_a = nb::none())
         .def("step_until", &Simulation::stepUntil, "seconds"_a,
              "Advance to this simulated time (s), as fast as possible.")
         .def_prop_ro("time", &Simulation::time, "Simulated time (s).")
@@ -152,6 +171,11 @@ NB_MODULE(_lagrange, m) {
              "Every signal on the bus: dicts with name, unit and components.")
         .def("bodies", &Simulation::bodies)
         .def("joints", &Simulation::joints)
+        .def("region_origin", &Simulation::regionOrigin,
+             "World ENU of the region-local frame (the floating origin), m. Poses read from "
+             "signals are relative to it.")
+        .def("colliders", &Simulation::colliders,
+             "How many collision shapes the world has now (streamed tiles come and go).")
         .def("state_hash", &Simulation::stateHash,
              "Hash of the whole state: equal hashes mean equal runs.");
 }

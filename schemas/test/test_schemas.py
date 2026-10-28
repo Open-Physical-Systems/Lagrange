@@ -35,6 +35,7 @@ EXPECTED = {
     "comms": ["RadioLinkAPI_1", "CanBusAPI_1"],
     "vehicle": ["VehicleAPI_1", "WheelAPI_1"],
     "road": ["RoadLaneAPI_1"],
+    "world": ["WorldTileAPI_1"],
 }
 
 

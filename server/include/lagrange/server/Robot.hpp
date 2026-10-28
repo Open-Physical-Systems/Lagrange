@@ -63,6 +63,12 @@ inline constexpr double kRebaseDistanceM = 1000.0;
 /// loaded. Returns the shift (zeros when nothing moved).
 std::array<double, 3> recentre(Robot& robot, double rebaseDistanceM = kRebaseDistanceM);
 
+/// The part of recentre() that moves the world: every position held in the world frame loses
+/// `shift` (whole metres, world ENU) and world.region records it. The server also calls it
+/// during a run, when the robot has driven more than kRebaseDistanceM from the region origin,
+/// and then carries the run's state over (Scheduler::shiftOrigin).
+void shiftRegion(Robot& robot, const std::array<double, 3>& shift);
+
 /// A robot from a URDF, an SDFormat or MJCF file (lagrange_importers, told apart by their root
 /// element) or a USD stage (.usd, .usda, .usdc: lagrange_stage), with the ground added unless
 /// the file has a ground plane of its own.

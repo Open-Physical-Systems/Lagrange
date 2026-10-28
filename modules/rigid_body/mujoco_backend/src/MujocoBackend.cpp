@@ -13,6 +13,11 @@ namespace lagrange::rigid_body {
 
 namespace {
 
+// A height field's base: the solid box under its lowest sample (MuJoCo hfield size[3]), and
+// the least elevation range given to a flat field (MuJoCo needs a positive one).
+constexpr double kHeightFieldBaseM = 1.0;
+constexpr double kMinHeightFieldRangeM = 1e-3;
+
 using namespace literals;
 
 constexpr std::uint32_t kStateVersion = 1;
@@ -53,6 +58,8 @@ mjtGeom geomType(ShapeType shape) {
             return mjGEOM_BOX;
         case ShapeType::ConvexHull:
             return mjGEOM_MESH;  // MuJoCo collides with the convex hull of a mesh's vertices
+        case ShapeType::HeightField:
+            return mjGEOM_HFIELD;
     }
     return mjGEOM_SPHERE;
 }
@@ -281,6 +288,37 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
             mjs_setString(geom->meshname, name.c_str());
         }
         setPose(geom->pos, geom->quat, colliders.poseInBody[c]);
+        if (colliders.shape[c] == ShapeType::HeightField) {
+            // MuJoCo's height field: elevations scaled to [0, size[2]] above the geom's origin,
+            // on a base box size[3] deep, rows along y from -y, columns along x from -x.
+            const HeightField& field = world.raw().heightfields.at(colliders.hull[c]);
+            const auto [lowest, highest] =
+                std::minmax_element(field.heights.begin(), field.heights.end());
+            const double low = *lowest;
+            const double range = std::max(*highest - low, kMinHeightFieldRangeM);
+            std::vector<float> elevation;
+            elevation.reserve(field.heights.size());
+            for (const double h : field.heights) {
+                elevation.push_back(static_cast<float>((h - low) / range));
+            }
+            mjsHField* hfield = mjs_addHField(spec);
+            const std::string name = "hfield_" + std::to_string(c);
+            mjs_setName(hfield->element, name.c_str());
+            hfield->nrow = static_cast<int>(field.rows);
+            hfield->ncol = static_cast<int>(field.columns);
+            hfield->size[0] = colliders.size[c][0];
+            hfield->size[1] = colliders.size[c][1];
+            hfield->size[2] = range;
+            hfield->size[3] = kHeightFieldBaseM;
+            mjs_setFloat(hfield->userdata, elevation.data(), static_cast<int>(elevation.size()));
+            mjs_setString(geom->hfieldname, name.c_str());
+            // The field's origin is its lowest sample: move the geom down to it.
+            const std::array<double, 3> up =
+                rotate(colliders.poseInBody[c].orientation, {0.0, 0.0, low});
+            for (std::size_t i = 0; i < 3; ++i) {
+                geom->pos[i] += up.at(i);
+            }
+        }
         geom->friction[0] = colliders.friction[c];
         // Geoms carry collision only; mass and inertia come from the body tables.
         geom->mass = 0.0;
@@ -473,6 +511,30 @@ Status MujocoBackend::saveState(StateWriter& writer) const {
     writer.put(appliedFrictionScale_);
     writer.putDoubles(state);
     return {};
+}
+
+void MujocoBackend::shiftOrigin(const std::array<double, 3>& shift) {
+    if (model_ == nullptr) {
+        return;
+    }
+    // Free bodies (floating bases) and mocap bodies (kinematic agents) are the only positions
+    // in the world frame; everything else is relative to a parent. Fixed geometry was built in
+    // the new frame already.
+    for (int j = 0; j < model_->njnt; ++j) {
+        if (model_->jnt_type[j] == mjJNT_FREE) {
+            double* position = data_->qpos + model_->jnt_qposadr[j];
+            for (std::size_t i = 0; i < 3; ++i) {
+                position[i] -= shift.at(i);
+            }
+        }
+    }
+    for (int m = 0; m < model_->nmocap; ++m) {
+        for (std::size_t i = 0; i < 3; ++i) {
+            data_->mocap_pos[3 * m + i] -= shift.at(i);
+        }
+    }
+    mj_step1(model_, data_);
+    mj_rnePostConstraint(model_, data_);
 }
 
 Status MujocoBackend::restoreState(StateReader& reader) {

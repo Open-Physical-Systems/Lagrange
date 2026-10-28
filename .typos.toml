@@ -10,6 +10,7 @@ thr = "thr"     # PX4 parameter names: THR_MDL_FAC, MPC_THR_HOVER
 ned = "ned"     # north-east-down, the aerospace navigation frame
 parm = "parm"   # ArduPilot parameter files (.parm)
 thst = "thst"   # ArduPilot parameter names: MOT_THST_HOVER
+nd = "nd"       # OpenStreetMap XML: a way's node reference element <nd ref=...>
 
 [default.extend-identifiers]
 # POSIX msghdr field.

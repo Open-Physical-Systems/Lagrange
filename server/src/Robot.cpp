@@ -99,7 +99,8 @@ double lowestPoint(ShapeType shape, const std::array<double, 3>& size, const Pos
         case ShapeType::Sphere:
             return centre - size[0];
         case ShapeType::Box:
-        case ShapeType::ConvexHull:  // its bounding box: never above the hull's lowest point
+        case ShapeType::ConvexHull:   // its bounding box: never above the hull's lowest point
+        case ShapeType::HeightField:  // likewise
             return centre - (std::abs(up[0]) * size[0] + std::abs(up[1]) * size[1] +
                              std::abs(up[2]) * size[2]);
         case ShapeType::Cylinder: {
@@ -775,15 +776,19 @@ Expected<Robot, std::string> loadUrdf(const std::string& path, const LoadOptions
 }
 
 std::array<double, 3> recentre(Robot& robot, double rebaseDistanceM) {
-    World& world = robot.world;
-    if (world.bodies.names.empty()) {
+    if (robot.world.bodies.names.empty()) {
         return {0.0, 0.0, 0.0};
     }
     const std::array<double, 3> shift =
         coords::rebaseShift(robot.bodyRestPose.front().position, rebaseDistanceM);
-    if (shift == std::array<double, 3>{0.0, 0.0, 0.0}) {
-        return shift;
+    if (shift != std::array<double, 3>{0.0, 0.0, 0.0}) {
+        shiftRegion(robot, shift);
     }
+    return shift;
+}
+
+void shiftRegion(Robot& robot, const std::array<double, 3>& shift) {
+    World& world = robot.world;
     const auto move = [&shift](Pose& pose) {
         for (std::size_t i = 0; i < 3; ++i) {
             pose.position.at(i) -= shift.at(i);
@@ -837,7 +842,6 @@ std::array<double, 3> recentre(Robot& robot, double rebaseDistanceM) {
         }
     }
     coords::applyRebase(world.region, shift);
-    return shift;
 }
 
 bool isUsd(const std::string& path) {

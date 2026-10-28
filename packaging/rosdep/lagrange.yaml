@@ -21,3 +21,5 @@ libvulkan-memory-allocator-dev:
   ubuntu: [libvulkan-memory-allocator-dev]
 mesa-vulkan-drivers:
   ubuntu: [mesa-vulkan-drivers]
+proj-data:
+  ubuntu: [proj-data]

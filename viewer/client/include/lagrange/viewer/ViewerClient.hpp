@@ -586,6 +586,9 @@ public:
     /// off until a panel that shows them asks. Remembered across reconnects.
     void setRosGraphWanted(bool wanted);
     void setWorldWanted(bool wanted);
+    /// Where the camera is (region-local, m), for a streamed world's tile selection. Cheap to
+    /// call every frame: sent only when it moved 10 m or more and at most twice a second.
+    void setCameraInterest(const std::array<double, 3>& eye);
     /// The latest of each, or nullptr.
     [[nodiscard]] std::shared_ptr<const RosGraphInfo> rosGraph() const { return rosGraph_.load(); }
     [[nodiscard]] std::shared_ptr<const WorldInfo> world() const { return world_.load(); }
@@ -674,6 +677,8 @@ private:
     std::vector<WatchedField> fields_;  // guarded by sensorMutex_
     std::atomic<bool> rosGraphWanted_{false};
     std::atomic<bool> worldWanted_{false};
+    std::array<double, 3> sentEye_{1e300, 1e300, 1e300};  // UI thread only
+    std::chrono::steady_clock::time_point sentEyeAt_{};
     std::atomic<std::shared_ptr<const EnvironmentInfo>> environment_;
     std::atomic<std::shared_ptr<const RosGraphInfo>> rosGraph_;
     std::atomic<std::shared_ptr<const WorldInfo>> world_;

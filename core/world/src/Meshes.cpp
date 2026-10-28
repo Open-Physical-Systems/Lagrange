@@ -2,6 +2,7 @@
 // meshes.py, so a robot looks the same whichever server shows it.
 #include "lagrange/world/Model.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <numbers>
@@ -185,6 +186,11 @@ void appendModel(Model& model, const Model& other) {
         if (o.colliders.body[c] == kWorldBody && o.colliders.shape[c] == ShapeType::Plane) {
             continue;
         }
+        if (o.colliders.shape[c] == ShapeType::HeightField) {
+            w.addHeightFieldCollider(o.heightfields.at(o.colliders.hull[c]),
+                                     o.colliders.poseInBody[c], o.colliders.friction[c]);
+            continue;
+        }
         if (o.colliders.shape[c] == ShapeType::ConvexHull) {
             w.addHullCollider(map(o.colliders.body[c]), o.hulls.at(o.colliders.hull[c]),
                               o.colliders.poseInBody[c], o.colliders.friction[c]);
@@ -235,6 +241,7 @@ void appendModel(Model& model, const Model& other) {
     model.actuatedJoints.insert(model.actuatedJoints.end(), other.actuatedJoints.begin(),
                                 other.actuatedJoints.end());
     model.notes.insert(model.notes.end(), other.notes.begin(), other.notes.end());
+    model.tiles.insert(model.tiles.end(), other.tiles.begin(), other.tiles.end());
 
     // The scene: keep `model`'s ground slab last.
     std::vector<ScenePrim>& prims = model.scene.prims;
@@ -273,8 +280,198 @@ void appendModel(Model& model, const Model& other) {
     for (const std::uint32_t p : other.sensorPrim) {
         model.sensorPrim.push_back(p == kNoIndex ? kNoIndex : primMap[p]);
     }
-    if (ground) {
+    if (ground && other.groundPlane) {
         prims.push_back(std::move(*ground));
+    }
+    if (!other.groundPlane) {
+        // The joining world brings its own ground: no infinite plane under its terrain.
+        World::Colliders& c = w.colliders;
+        for (std::size_t i = c.body.size(); i-- > 0;) {
+            if (c.body[i] == kWorldBody && c.shape[i] == ShapeType::Plane) {
+                const auto at = static_cast<std::ptrdiff_t>(i);
+                c.body.erase(c.body.begin() + at);
+                c.shape.erase(c.shape.begin() + at);
+                c.size.erase(c.size.begin() + at);
+                c.poseInBody.erase(c.poseInBody.begin() + at);
+                c.friction.erase(c.friction.begin() + at);
+                c.hull.erase(c.hull.begin() + at);
+            }
+        }
+        model.groundPlane = false;
+    }
+}
+
+void prefixModel(Model& model, const std::string& prefix, bool passive) {
+    World& w = model.world;
+    const std::string front = prefix + "_";
+    for (std::string& name : w.bodies.names) {
+        name = front + name;
+    }
+    for (std::string& name : w.joints.names) {
+        name = front + name;
+    }
+    for (std::string& name : w.sensors.names) {
+        name = front + name;
+    }
+    for (std::string& name : model.actuatedJoints) {
+        name = front + name;
+    }
+    if (passive) {
+        std::fill(w.joints.actuated.begin(), w.joints.actuated.end(), false);
+        model.actuatedJoints.clear();
+    }
+    // Paths: the top prim of each tree is renamed, the rest follows.
+    const auto rename = [&prefix](std::string& path) {
+        const std::size_t second = path.find('/', 1);
+        path = "/" + prefix + (second == std::string::npos ? "" : path.substr(second));
+    };
+    for (ScenePrim& prim : model.scene.prims) {
+        if (prim.name == "ground" && prim.parent == kNoIndex) {
+            continue;
+        }
+        rename(prim.path);
+        if (prim.parent == kNoIndex) {
+            prim.name = prefix;
+        }
+    }
+    for (std::size_t p = 0; p < w.prims.paths.size(); ++p) {
+        rename(w.prims.paths[p]);
+    }
+    for (std::size_t b = 0; b < w.bodies.prim.size(); ++b) {
+        if (w.bodies.prim[b].index < w.prims.instanceNames.size()) {
+            w.prims.instanceNames[w.bodies.prim[b].index] = w.bodies.names[b];
+        }
+    }
+    for (std::size_t j = 0; j < w.joints.prim.size(); ++j) {
+        if (w.joints.prim[j].index < w.prims.instanceNames.size()) {
+            w.prims.instanceNames[w.joints.prim[j].index] = w.joints.names[j];
+        }
+    }
+    for (std::size_t s = 0; s < w.sensors.prim.size(); ++s) {
+        if (w.sensors.prim[s].index < w.prims.instanceNames.size()) {
+            w.prims.instanceNames[w.sensors.prim[s].index] = w.sensors.names[s];
+        }
+    }
+    if (w.robots.size() <= 1) {
+        w.robots = {prefix};
+    }
+    model.name = prefix;
+}
+
+ModelExtent extentOf(const Model& model) {
+    return {model.world.colliders.body.size(), model.world.hulls.size(),
+            model.world.heightfields.size(),   model.scene.prims.size(),
+            model.scene.meshes.size(),         model.scene.materials.size()};
+}
+
+void truncateModel(Model& model, const ModelExtent& extent) {
+    World::Colliders& c = model.world.colliders;
+    c.body.resize(extent.colliders);
+    c.shape.resize(extent.colliders);
+    c.size.resize(extent.colliders);
+    c.poseInBody.resize(extent.colliders);
+    c.friction.resize(extent.colliders);
+    c.hull.resize(extent.colliders);
+    model.world.hulls.resize(extent.hulls);
+    model.world.heightfields.resize(extent.heightfields);
+    model.scene.prims.resize(extent.prims);
+    model.scene.meshes.resize(extent.meshes);
+    model.scene.materials.resize(extent.materials);
+}
+
+void appendTile(Model& model, const Model& tile, const std::string& tilePath,
+                const std::array<double, 3>& regionOrigin,
+                std::span<const std::array<double, 4>> covered) {
+    const auto isCovered = [covered](const Pose& world) {
+        return std::any_of(covered.begin(), covered.end(), [&world](const auto& box) {
+            return world.position[0] >= box[0] && world.position[1] >= box[1] &&
+                   world.position[0] <= box[2] && world.position[1] <= box[3];
+        });
+    };
+    const auto local = [&regionOrigin](Pose pose) {
+        for (std::size_t i = 0; i < 3; ++i) {
+            pose.position.at(i) -= regionOrigin.at(i);
+        }
+        return pose;
+    };
+    World& w = model.world;
+    const World& o = tile.world;
+    for (std::size_t c = 0; c < o.colliders.body.size(); ++c) {
+        // A tile's own ground plane is the world's, which is there already.
+        if (o.colliders.body[c] != kWorldBody || o.colliders.shape[c] == ShapeType::Plane) {
+            continue;
+        }
+        if (o.colliders.shape[c] == ShapeType::HeightField) {
+            w.addHeightFieldCollider(o.heightfields.at(o.colliders.hull[c]),
+                                     local(o.colliders.poseInBody[c]), o.colliders.friction[c]);
+            continue;
+        }
+        if (o.colliders.shape[c] == ShapeType::ConvexHull) {
+            w.addHullCollider(kWorldBody, o.hulls.at(o.colliders.hull[c]),
+                              local(o.colliders.poseInBody[c]), o.colliders.friction[c]);
+        } else {
+            w.addCollider(kWorldBody, o.colliders.shape[c], o.colliders.size[c],
+                          local(o.colliders.poseInBody[c]), o.colliders.friction[c]);
+        }
+    }
+
+    std::uint32_t anchor = kNoIndex;  // the tile's prim in `model`
+    for (std::uint32_t p = 0; p < model.scene.prims.size() && anchor == kNoIndex; ++p) {
+        if (model.scene.prims[p].path == tilePath) {
+            anchor = p;
+        }
+    }
+    // The tile prim itself is not in the scene while its payload is unloaded: it comes with
+    // the tile, under its parent prim.
+    if (anchor == kNoIndex) {
+        for (const ScenePrim& from : tile.scene.prims) {
+            if (from.path != tilePath) {
+                continue;
+            }
+            ScenePrim prim = from;
+            prim.mesh = kNoIndex;
+            prim.material = kNoIndex;
+            prim.offset = local(from.offset);
+            prim.parent = kNoIndex;
+            const std::string parentPath = tilePath.substr(0, tilePath.rfind('/'));
+            for (std::uint32_t p = 0; p < model.scene.prims.size(); ++p) {
+                if (model.scene.prims[p].path == parentPath) {
+                    prim.parent = p;
+                }
+            }
+            model.scene.prims.push_back(std::move(prim));
+            anchor = static_cast<std::uint32_t>(model.scene.prims.size() - 1);
+        }
+    }
+    const auto meshOffset = static_cast<std::uint32_t>(model.scene.meshes.size());
+    const auto materialOffset = static_cast<std::uint32_t>(model.scene.materials.size());
+    model.scene.meshes.insert(model.scene.meshes.end(), tile.scene.meshes.begin(),
+                              tile.scene.meshes.end());
+    model.scene.materials.insert(model.scene.materials.end(), tile.scene.materials.begin(),
+                                 tile.scene.materials.end());
+    const std::string prefix = tilePath + "/";
+    std::vector<std::uint32_t> primMap(tile.scene.prims.size(), kNoIndex);
+    for (std::size_t p = 0; p < tile.scene.prims.size(); ++p) {
+        const ScenePrim& from = tile.scene.prims[p];
+        if (from.path == tilePath) {
+            primMap[p] = anchor;  // a mesh on the tile prim itself is left out
+            continue;
+        }
+        if (from.path.rfind(prefix, 0) != 0 || from.body != kNoIndex) {
+            continue;  // the tile's ancestors (in `model` already), or not scenery
+        }
+        // Under a loaded finer tile; its children go with it (their parent is not mapped).
+        if ((from.parent != kNoIndex && primMap[from.parent] == kNoIndex) ||
+            isCovered(from.offset)) {
+            continue;
+        }
+        ScenePrim prim = from;
+        prim.parent = from.parent == kNoIndex ? anchor : primMap[from.parent];
+        prim.offset = local(from.offset);
+        prim.mesh = from.mesh == kNoIndex ? kNoIndex : from.mesh + meshOffset;
+        prim.material = from.material == kNoIndex ? kNoIndex : from.material + materialOffset;
+        model.scene.prims.push_back(std::move(prim));
+        primMap[p] = static_cast<std::uint32_t>(model.scene.prims.size() - 1);
     }
 }
 

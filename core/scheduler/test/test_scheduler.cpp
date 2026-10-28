@@ -704,6 +704,63 @@ TEST(State, SaveRunRestoreRunIsIdentical) {
     EXPECT_EQ(scheduler.stateHash().value(), first);
 }
 
+// The floating origin (huge-worlds.md §1.2): a rebase moves region-local poses on the bus,
+// what readers hold of them, and what modules keep, but no other values.
+TEST(State, ShiftOriginMovesRegionPosesOnly) {
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    auto writer = std::make_unique<TestModule>("physics", "writer", Duration{1'000'000});
+    writer->onDeclare = [](SignalDeclarer& d, TestModule& m) {
+        SignalSpec pose;
+        pose.name = "body/base/pose";
+        pose.type = SignalType::Pose;
+        pose.unit = units::m;
+        pose.frame = "world_local";
+        m.ids.push_back(d.output(pose));
+        SignalSpec mount = pose;
+        mount.name = "sensor/lidar/mount";
+        mount.frame = "body:base";
+        m.ids.push_back(d.output(mount));
+        SignalSpec velocity;
+        velocity.name = "body/base/velocity";
+        velocity.type = SignalType::Vec3;
+        velocity.unit = units::m_per_s;
+        velocity.frame = "world_local";
+        m.ids.push_back(d.output(velocity));
+    };
+    writer->onStep = [](const StepContext&, SignalBus& bus, TestModule& m) {
+        const std::array<double, 7> pose{1002.5, -3.25, 0.5, 1.0, 0.0, 0.0, 0.0};
+        bus.writeN(m.ids[0], pose);
+        bus.writeN(m.ids[1], pose);
+        const std::array<double, 3> velocity{1.0, 2.0, 3.0};
+        bus.writeN(m.ids[2], velocity);
+        return Status{};
+    };
+    auto reader = std::make_unique<TestModule>("sensors", "reader", Duration{10'000'000});
+    reader->onDeclare = [](SignalDeclarer& d, TestModule& m) {
+        SignalSpec pose;
+        pose.name = "body/base/pose";
+        pose.type = SignalType::Pose;
+        pose.unit = units::m;
+        pose.frame = "world_local";
+        m.ids.push_back(d.input(pose));
+    };
+    scheduler.add(std::move(writer));
+    scheduler.add(std::move(reader));
+    const World world = emptyWorld();
+    ASSERT_TRUE(scheduler.wire(WorldView(world)));
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{20'000'000}).ok());
+
+    scheduler.shiftOrigin({1000.0, -4.0, 0.0});
+    const SignalBus& bus = scheduler.bus();
+    const std::span<const double> pose = bus.readN(bus.find("body/base/pose"));
+    EXPECT_EQ(pose[0], 2.5);
+    EXPECT_EQ(pose[1], 0.75);
+    EXPECT_EQ(pose[2], 0.5);
+    EXPECT_EQ(pose[3], 1.0);
+    EXPECT_EQ(bus.readN(bus.find("sensor/lidar/mount"))[0], 1002.5) << "a body-frame pose stays";
+    EXPECT_EQ(bus.readN(bus.find("body/base/velocity"))[0], 1.0) << "a vector stays";
+}
+
 TEST(State, ModulesWithoutStateCannotBeHashed) {
     class Stateless final : public IModule {
     public:

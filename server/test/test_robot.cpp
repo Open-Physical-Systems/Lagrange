@@ -1,4 +1,5 @@
 #include "lagrange/electrical/IdealTorqueSource.hpp"
+#include "lagrange/rigid_body/JoltBackend.hpp"
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/Sensors.hpp"
@@ -387,6 +388,94 @@ TEST(FloatingOrigin, AWorld500KmOutSimulatesLikeOneAtTheOrigin) {
         EXPECT_NEAR(b.ranges[i], a.ranges[i], 1e-9) << "beam " << i;
     }
     EXPECT_GT(returns, a.ranges.size() / 2) << "the lidar sees the warehouse";
+}
+
+/// The demo's modules (physics on `backend`, sensors, the figure-eight drive) wired on `robot`.
+std::unique_ptr<Scheduler> demoScheduler(const Robot& robot, const std::string& backend) {
+    auto scheduler = std::make_unique<Scheduler>(SchedulerOptions{.deterministic = true});
+    if (backend == "jolt") {
+        scheduler->add(std::make_unique<rigid_body::JoltBackend>());
+    } else {
+        scheduler->add(std::make_unique<rigid_body::MujocoBackend>());
+    }
+    for (auto& module : sensors::createSensorModules(robot.world)) {
+        scheduler->add(std::move(module));
+    }
+    scheduler->add(std::make_unique<DriveCommand>(DriveCommand::Settings{}, nullptr));
+    DiffDriveController::Settings settings;
+    settings.leftJoint = robot.actuatedJoints[0];
+    settings.rightJoint = robot.actuatedJoints[1];
+    scheduler->add(std::make_unique<DiffDriveController>(settings));
+    scheduler->add(std::make_unique<electrical::IdealTorqueSource>());
+    auto wired = scheduler->wire(WorldView(robot.world));
+    EXPECT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    return scheduler;
+}
+
+std::vector<double> busValues(const SignalBus& bus, const std::string& name) {
+    const SignalId id = bus.find(name);
+    EXPECT_TRUE(id.valid()) << name;
+    const std::span<const double> v = id.valid() ? bus.readN(id) : std::span<const double>{};
+    return {v.begin(), v.end()};
+}
+
+// huge-worlds.md §6 (v0.2 row, done in v0.7 with the rebase during a run): moving the region
+// origin halfway through a run does not change what happens. At 5 s the world is shifted by a
+// whole-metre offset, the run rebuilt on it and its state carried over and shifted
+// (Scheduler::shiftOrigin), as the server does when the robot drives far; at 10 s the pose,
+// moved back by the offset, and the lidar ranges match a run that was never rebased.
+// MuJoCo computes in double: within 1e-9 m (rounding at a few metres), ranges too. Jolt
+// computes in float: the pose within 1e-4 m, and the ranges within 5 mm (measured 2 mm: a heading
+// off by 1e-4 rad moves a grazing beam's hit by millimetres along the wall).
+void expectRebaseKeepsTheRun(const std::string& backend, double tolerance, double rangeTolerance) {
+    const std::array<double, 3> offset{37.0, -12.0, 0.0};
+    const Robot start = amrInWarehouse({0.0, 0.0, 0.0}, "warehouse_rebase_" + backend + ".urdf");
+    const auto plain = demoScheduler(start, backend);
+    ASSERT_TRUE(plain->stepUntil(SimTime{10'000'000'000}).ok());
+
+    Robot robot = start;
+    auto first = demoScheduler(robot, backend);
+    ASSERT_TRUE(first->stepUntil(SimTime{5'000'000'000}).ok());
+    StateWriter saved;
+    ASSERT_TRUE(first->saveState(saved).ok());
+    shiftRegion(robot, offset);
+    EXPECT_EQ(robot.world.region.worldEnu, offset);
+    EXPECT_EQ(robot.world.region.rebaseCount, 1U);
+    auto second = demoScheduler(robot, backend);
+    StateReader reader(saved.bytes());
+    ASSERT_TRUE(second->restoreState(reader).ok());
+    second->shiftOrigin(offset);
+    const std::vector<double> shifted = busValues(second->bus(), "body/base_link/pose");
+    const std::vector<double> before = busValues(first->bus(), "body/base_link/pose");
+    for (std::size_t i = 0; i < 3; ++i) {
+        EXPECT_NEAR(shifted[i] + offset.at(i), before[i], 1e-12) << "the bus pose moved with it";
+    }
+    ASSERT_TRUE(second->stepUntil(SimTime{10'000'000'000}).ok());
+
+    const std::vector<double> a = busValues(plain->bus(), "body/base_link/pose");
+    const std::vector<double> b = busValues(second->bus(), "body/base_link/pose");
+    EXPECT_GT(std::hypot(a[0], a[1]), 0.5) << "the robot drove";
+    for (std::size_t i = 0; i < 7; ++i) {
+        EXPECT_NEAR(b[i] + (i < 3 ? offset.at(i) : 0.0), a[i], tolerance) << "pose " << i;
+    }
+    const std::vector<double> ra = busValues(plain->bus(), "sensor/front_lidar/ranges");
+    const std::vector<double> rb = busValues(second->bus(), "sensor/front_lidar/ranges");
+    ASSERT_EQ(ra.size(), rb.size());
+    for (std::size_t i = 0; i < ra.size(); ++i) {
+        if (std::isinf(ra[i])) {
+            EXPECT_TRUE(std::isinf(rb[i])) << "beam " << i;
+        } else {
+            EXPECT_NEAR(rb[i], ra[i], rangeTolerance) << "beam " << i;
+        }
+    }
+}
+
+TEST(FloatingOrigin, ARebaseDuringTheRunKeepsTheTrajectoryOnMujoco) {
+    expectRebaseKeepsTheRun("mujoco", 1e-9, 1e-9);
+}
+
+TEST(FloatingOrigin, ARebaseDuringTheRunKeepsTheTrajectoryOnJolt) {
+    expectRebaseKeepsTheRun("jolt", 1e-4, 5e-3);
 }
 
 TEST(FloatingOrigin, ARobotNearTheOriginStaysWhereItWas) {

@@ -5,6 +5,10 @@ every schema is version 1 and may change without a migration.
 
 ## Unreleased
 
+- **World library** for v0.7 (huge-worlds.md §2): `WorldTileAPI_1`, one tile of a tiled world
+  (level, index, bounds in world ENU, geometric error, whether it has colliders) on a prim whose
+  payload holds the tile. New library, nothing to migrate.
+
 - **`CameraSensorAPI_1`** gains `electronRate` (e⁻/s at the renderer's full white: the light
   level the raster level does not model) and `vignetting` (fraction of the cos⁴θ fall-off) for
   the v0.6 sensor model (formats.md §3.8); `exposureTime` is now the longest exposure with

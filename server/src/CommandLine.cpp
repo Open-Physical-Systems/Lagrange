@@ -92,6 +92,8 @@ void printServerOptions(std::FILE* out) {
         "            none (default: the sample AMR's power system, for the sample only)\n"
         "  --listen  unix:/path.sock or tcp://host:port (default: %s)\n"
         "  --spawn X,Y[,Z[,YAW]]  start the robot there (m, world ENU; heading in rad)\n"
+        "  --add-robot NAME=FILE@X,Y[,Z[,YAW]]  one more robot in the run, its names prefixed\n"
+        "                         with NAME, passive (repeatable)\n"
         "  --lidar auto|cpu|gpu  where lidars cast: auto (default) and cpu use the\n"
         "            exact CPU caster; gpu the compute kernel on a hardware GPU\n"
         "  --gpu DEVICE  Vulkan device for the lidar and cameras (index or part of its name)\n"
@@ -195,6 +197,19 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--spawn needs X,Y[,Z[,YAW]]";
             }
             options.spawn = *spawn;
+        } else if (arg == "--add-robot") {
+            const char* raw = value();
+            const std::string text = raw != nullptr ? raw : "";
+            const std::size_t equals = text.find('=');
+            const std::size_t at = text.rfind('@');
+            const auto spawn =
+                at == std::string::npos ? std::nullopt : parseSpawn(text.c_str() + at + 1);
+            if (equals == std::string::npos || equals == 0 || at == std::string::npos ||
+                at < equals + 2 || !spawn) {
+                return "--add-robot needs NAME=FILE@X,Y[,Z[,YAW]]";
+            }
+            options.extraRobots.push_back(
+                {text.substr(0, equals), text.substr(equals + 1, at - equals - 1), *spawn});
         } else if (arg == "--lidar") {
             const char* text = value();
             const std::string_view where = text != nullptr ? text : "";

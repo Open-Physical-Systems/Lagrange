@@ -49,8 +49,10 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <map>
 #include <memory>
+#include <numbers>
 #include <optional>
 #include <poll.h>
 #include <set>
@@ -158,7 +160,8 @@ void setInline(v1::DataRef& ref, const std::vector<T>& values) {
 
 /// A collider's shape as a mesh at its size (World::Colliders conventions: half extents, radius
 /// and half length), for drawing; empty for a plane.
-TriMesh colliderMesh(ShapeType shape, const std::array<double, 3>& size, const ConvexHull* hull) {
+TriMesh colliderMesh(ShapeType shape, const std::array<double, 3>& size, const ConvexHull* hull,
+                     const HeightField* field = nullptr) {
     constexpr int kSegments = 24;  // round shapes: enough to read the shape, cheap to draw
     constexpr int kRings = 12;
     const auto append = [](TriMesh& to, const TriMesh& from, double dz) {
@@ -176,6 +179,38 @@ TriMesh colliderMesh(ShapeType shape, const std::array<double, 3>& size, const C
     switch (shape) {
         case ShapeType::Plane:
             return {};
+        case ShapeType::HeightField: {
+            TriMesh mesh;
+            if (field == nullptr) {
+                return mesh;
+            }
+            const ConvexHull surface = field->triangles();
+            std::vector<std::array<double, 3>> normals(surface.points.size());
+            for (const auto& t : surface.triangles) {
+                const auto& a = surface.points[t[0]];
+                const auto& b = surface.points[t[1]];
+                const auto& c = surface.points[t[2]];
+                const std::array<double, 3> n{
+                    (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]),
+                    (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]),
+                    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])};
+                for (const std::uint32_t k : t) {
+                    for (std::size_t i = 0; i < 3; ++i) {
+                        normals[k].at(i) += n.at(i);
+                    }
+                }
+                mesh.indices.insert(mesh.indices.end(), {t[0], t[1], t[2]});
+            }
+            for (std::size_t v = 0; v < surface.points.size(); ++v) {
+                const double len = std::hypot(normals[v][0], normals[v][1], normals[v][2]);
+                for (std::size_t i = 0; i < 3; ++i) {
+                    mesh.positions.push_back(static_cast<float>(surface.points[v].at(i)));
+                    mesh.normals.push_back(len > 0.0 ? static_cast<float>(normals[v].at(i) / len)
+                                                     : (i == 2 ? 1.0F : 0.0F));
+                }
+            }
+            return mesh;
+        }
         case ShapeType::Sphere:
             return sphereMesh(size[0], kSegments, kRings);
         case ShapeType::Box:
@@ -426,7 +461,21 @@ struct Server::Impl {
     std::vector<Captured> captured;   // by signal index; empty values when nobody subscribes
     std::deque<v1::LogRecord> logs;
     std::string schemaText;
-    std::array<double, 3> shift{};  // world ENU of the region-local origin at load
+    std::array<double, 3> shift{};  // world ENU of the region-local origin (moves at a rebase)
+
+    // Streamed tiles (huge-worlds.md §2): the selection, what was there before any tile (the
+    // robot, the world's other scenery), the loaded tiles' content in world ENU, and the loads
+    // under way on worker threads (at most kTileWorkers at once, the rest queued).
+    std::unique_ptr<streaming::TileSelector> tileSelector;
+    ModelExtent baseExtent;
+    std::map<std::uint32_t, std::shared_ptr<const Model>> tileContent;
+    std::map<std::uint32_t, std::future<Expected<Model, std::string>>> tileLoads;
+    std::deque<std::uint32_t> tileQueue;
+    bool waitingForTiles{false};  // a served run holds until the robot's ground is loaded
+    // A viewer's camera (world ENU), a streaming hint for runs that are not deterministic.
+    std::optional<std::array<double, 3>> cameraInterest;
+    std::uint64_t tilesGeneration{0};  // bumped whenever the tiles in the world change
+    SimTime lastRebase{};              // simulated time of the last rebase during the run
 
     Clock::time_point lastWall{Clock::now()};
     Clock::time_point lastStatus{Clock::now()};
@@ -767,6 +816,9 @@ struct Server::Impl {
         settings.ambientTemperatureK = ambient();
         settings.airDensityKgM3 = appliedAirDensity ? appliedAirDensity : options.airDensityKgM3;
         settings.geoOrigin = appliedGeoOrigin ? appliedGeoOrigin : options.geoOrigin;
+        settings.streamingLoadRadius = appliedLoadRadius;
+        settings.streamingUnloadRadius = appliedUnloadRadius;
+        settings.streamingCollisionRadius = appliedCollisionRadius;
         settings.aerodynamics = appliedAerodynamics;
         settings.rotorAero = appliedRotorAero;
         settings.weather = appliedWeather;
@@ -804,6 +856,9 @@ struct Server::Impl {
             shape.hull = shape.type == ShapeType::ConvexHull
                              ? &world.hulls.at(world.colliders.hull[c])
                              : nullptr;
+            shape.field = shape.type == ShapeType::HeightField
+                              ? &world.heightfields.at(world.colliders.hull[c])
+                              : nullptr;
             shapes.push_back(shape);
             friction.push_back(world.colliders.friction[c]);
         }
@@ -839,6 +894,9 @@ struct Server::Impl {
             shape.hull = shape.type == ShapeType::ConvexHull
                              ? &world.hulls.at(world.colliders.hull[c])
                              : nullptr;
+            shape.field = shape.type == ShapeType::HeightField
+                              ? &world.heightfields.at(world.colliders.hull[c])
+                              : nullptr;
             shapes.push_back(shape);
         }
         if (shapes.empty()) {
@@ -872,10 +930,13 @@ struct Server::Impl {
     std::optional<double> ambient() const {
         return appliedAmbientK ? appliedAmbientK : options.ambientTemperatureK;
     }
-    std::optional<std::int64_t> thermalDtNs;                              // from an applied profile
-    std::optional<double> appliedAmbientK;                                // from an applied profile
-    std::optional<double> appliedAirDensity;                              // from an applied profile
-    std::optional<coords::Geodetic> appliedGeoOrigin;                     // from an applied profile
+    std::optional<std::int64_t> thermalDtNs;           // from an applied profile
+    std::optional<double> appliedAmbientK;             // from an applied profile
+    std::optional<double> appliedAirDensity;           // from an applied profile
+    std::optional<coords::Geodetic> appliedGeoOrigin;  // from an applied profile
+    std::optional<double> appliedLoadRadius;    // world.streaming.load_radius of an applied profile
+    std::optional<double> appliedUnloadRadius;  // world.streaming.unload_radius
+    std::optional<double> appliedCollisionRadius;  // world.streaming.collision_radius
     std::map<std::string, ConfigValue, std::less<>> appliedAerodynamics;  // its wind
     std::map<std::string, ConfigValue, std::less<>> appliedRotorAero;     // its rotor settings
     std::map<std::string, ConfigValue, std::less<>> appliedWeather;       // its weather
@@ -1086,6 +1147,15 @@ struct Server::Impl {
         // Never owe more than 100 ms: a run that cannot keep up falls behind real time.
         owedNs = std::min<std::int64_t>(owedNs + simNs, 100'000'000);
         const Clock::time_point began = Clock::now();
+        if (waitingForTiles) {
+            if (Status status = updateTiles(false); !status.ok()) {
+                return status;
+            }
+            if (waitingForTiles) {
+                owedNs = 0;
+                return {};
+            }
+        }
         while (owedNs >= tick) {
             owedNs -= tick;
             const Clock::time_point tickStart = Clock::now();
@@ -1095,6 +1165,13 @@ struct Server::Impl {
             tickNs.push_back(nanosSince(tickStart, Clock::now()));
             capture();
             record();
+            if (Status status = worldUpdate(false); !status.ok()) {
+                return status;
+            }
+            if (waitingForTiles) {
+                owedNs = 0;  // hold: the robot's ground is not in physics yet
+                break;
+            }
             if (scenarioState.valid() && !scenarioEnded &&
                 scheduler->bus().read(scenarioState) == 1.0) {
                 scenarioEnded = true;
@@ -1316,16 +1393,25 @@ struct Server::Impl {
         return snapshotAt(++session.sequence);
     }
 
+    /// The region frame: where the floating origin is and how often it moved.
+    [[nodiscard]] v1::LocalFrame localFrame() const {
+        v1::LocalFrame frame;
+        frame.set_rebase_count(robot.world.region.rebaseCount);
+        for (const double v : robot.world.region.worldEnu) {
+            frame.add_region_enu(v);
+        }
+        for (const double v : {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}) {
+            frame.add_enu_from_ecef(v);
+        }
+        return frame;
+    }
+
     v1::Envelope snapshotAt(std::uint64_t sequence) {
         v1::Envelope envelope;
         v1::SceneSnapshot& snap = *envelope.mutable_snapshot();
         snap.set_sequence(sequence);
         snap.mutable_sim_time()->set_ns(scheduler->now().ns);
-        v1::LocalFrame& frame = *snap.mutable_frame();
-        frame.set_rebase_count(robot.world.region.rebaseCount);
-        for (const double v : {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}) {
-            frame.add_enu_from_ecef(v);
-        }
+        *snap.mutable_frame() = localFrame();
         std::vector<std::uint32_t> children(robot.scene.prims.size(), 0);
         for (const ScenePrim& prim : robot.scene.prims) {
             if (prim.parent != kNoIndex) {
@@ -1449,7 +1535,8 @@ struct Server::Impl {
         for (std::size_t k = 0; k < c.body.size(); ++k) {
             const TriMesh mesh = colliderMesh(
                 c.shape[k], c.size[k],
-                c.shape[k] == ShapeType::ConvexHull ? &world.hulls.at(c.hull[k]) : nullptr);
+                c.shape[k] == ShapeType::ConvexHull ? &world.hulls.at(c.hull[k]) : nullptr,
+                c.shape[k] == ShapeType::HeightField ? &world.heightfields.at(c.hull[k]) : nullptr);
             if (mesh.indices.empty()) {
                 continue;
             }
@@ -1794,6 +1881,11 @@ struct Server::Impl {
                     "lidar on the CPU (Tier 0: exact casts, Embree culling, all cores)");
             }
             return {};
+        }
+        if (!robot.world.heightfields.empty() || !robot.tiles.empty()) {
+            return Status::error(StatusCode::InvalidConfig,
+                                 "--lidar gpu does not see height fields (terrain) yet: drop "
+                                 "it, the CPU lidar sees them exactly");
         }
         std::string reason;
         auto made = gpu::RayContext::create(options.gpu, reason);
@@ -2242,6 +2334,10 @@ struct Server::Impl {
                         }
                         capture();
                         record();
+                        if (Status status = worldUpdate(false); !status.ok()) {
+                            fail(status);
+                            break;
+                        }
                     }
                     emit();
                 }
@@ -2299,6 +2395,17 @@ struct Server::Impl {
                     session.send(rosGraph());
                 }
                 break;
+            case v1::Command::kSetCameraInterest: {
+                const v1::SetCameraInterest& hint = command.set_camera_interest();
+                if (hint.enabled()) {
+                    const std::array<double, 3>& region = robot.world.region.worldEnu;
+                    cameraInterest = std::array<double, 3>{
+                        hint.x() + region[0], hint.y() + region[1], hint.z() + region[2]};
+                } else {
+                    cameraInterest.reset();
+                }
+                break;
+            }
             case v1::Command::kSetWorld:
                 session.wantsWorld = command.set_world().enabled();
                 if (session.wantsWorld) {
@@ -2369,7 +2476,8 @@ struct Server::Impl {
     std::vector<SignalId> replayPose;            // per scene prim: its recorded pose, if any
     google::protobuf::RepeatedPtrField<v1::ElectricalNet> replayNets;  // from its snapshot
     static constexpr std::int64_t kCheckpointNs = 1'000'000'000;       // a saved state a second
-    std::map<std::int64_t, std::vector<std::byte>> checkpoints;        // by simulated time
+    static constexpr std::int64_t kRebaseCheckNs = 100'000'000;  // floating-origin check, 10 Hz
+    std::map<std::int64_t, std::vector<std::byte>> checkpoints;  // by simulated time
 
     /// Loads the recording: its scene as the model, its domains as replay substitutes.
     Status loadReplay() {
@@ -2546,6 +2654,262 @@ struct Server::Impl {
         return {};
     }
 
+    static constexpr std::size_t kTileWorkers = 4;
+    static constexpr double kDefaultLoadRadiusM = 600.0;       // world.streaming.load_radius
+    static constexpr double kDefaultUnloadRadiusM = 800.0;     // world.streaming.unload_radius
+    static constexpr double kDefaultCollisionRadiusM = 300.0;  // world.streaming.collision_radius
+    // How far ahead a robot's ground must be in physics: this, plus half a second of travel.
+    static constexpr double kGroundMarginM = 5.0;
+
+    /// The robot's first body in world ENU.
+    [[nodiscard]] std::array<double, 3> focusWorld() const {
+        std::array<double, 3> p = robot.bodyRestPose.empty() ? std::array<double, 3>{}
+                                                             : robot.bodyRestPose.front().position;
+        if (scheduler && !bodyPose.empty() && bodyPose.front().valid()) {
+            const std::span<const double> pose = scheduler->bus().readN(bodyPose.front());
+            p = {pose[0], pose[1], pose[2]};
+        }
+        for (std::size_t i = 0; i < 3; ++i) {
+            p.at(i) += robot.world.region.worldEnu.at(i);
+        }
+        return p;
+    }
+
+    /// Starts streaming when the loaded stages have tiles: the base extent, the selection, and
+    /// the tiles around the robot's start, loaded before the run is built.
+    Status startStreaming() {
+        if (robot.tiles.empty()) {
+            return {};
+        }
+        streaming::StreamingSettings settings;
+        settings.loadRadius = active().streamingLoadRadius.value_or(kDefaultLoadRadiusM);
+        settings.unloadRadius = active().streamingUnloadRadius.value_or(
+            std::max(kDefaultUnloadRadiusM, settings.loadRadius * 4.0 / 3.0));
+        settings.collisionRadius =
+            active().streamingCollisionRadius.value_or(kDefaultCollisionRadiusM);
+        // A run without ROS (headless, Python) is deterministic: its tiles follow the robot
+        // only. A run with ROS takes viewer cameras as hints too (SetCameraInterest).
+        settings.deterministic = !bridge;
+        baseExtent = extentOf(robot);
+        tileSelector = std::make_unique<streaming::TileSelector>(robot.tiles, settings);
+        char text[160];
+        std::snprintf(text, sizeof text,
+                      "%zu streamed tiles (WorldTileAPI_1): load radius %.0f m, unload %.0f m, "
+                      "colliders within %.0f m",
+                      robot.tiles.size(), settings.loadRadius, settings.unloadRadius,
+                      std::min(settings.collisionRadius, settings.loadRadius));
+        log(v1::LOG_LEVEL_INFO, "streaming", text);
+        return updateTiles(true);
+    }
+
+    /// Streaming again from nothing, with the radii of the profile now applied.
+    Status restartStreaming() {
+        if (!tileSelector) {
+            return {};
+        }
+        for (auto& [id, load] : tileLoads) {
+            (void)id;
+            load.wait();
+        }
+        tileLoads.clear();
+        tileQueue.clear();
+        tileContent.clear();
+        truncateModel(robot, baseExtent);
+        tileSelector.reset();
+        return startStreaming();
+    }
+
+    /// One streaming update: finished loads join the world, the selection runs on the robot's
+    /// position, tiles leave or start loading. With `wait` (headless and deterministic runs) the
+    /// loads finish here, so the tile set is a function of the robot's path; a served run takes
+    /// them as they come and holds while the robot's ground is missing. When the tiles in the
+    /// world changed, the run is rebuilt on them and carries its state over.
+    Status updateTiles(bool wait) {
+        if (!tileSelector) {
+            return {};
+        }
+        bool changed = collectTiles(false);
+        std::vector<streaming::Interest> interests{
+            {streaming::Interest::Kind::Robot, focusWorld()}};
+        if (cameraInterest) {
+            interests.push_back({streaming::Interest::Kind::Camera, *cameraInterest});
+        }
+        const double now = scheduler ? scheduler->now().seconds() : 0.0;
+        const streaming::StreamingPlan plan = tileSelector->update(interests, now);
+        for (const std::uint32_t id : plan.unload) {
+            tileContent.erase(id);
+            tileSelector->unloaded(id);
+            changed = true;
+        }
+        tileQueue.insert(tileQueue.end(), plan.load.begin(), plan.load.end());
+        startTileLoads();
+        if (wait) {
+            while (!tileLoads.empty() || !tileQueue.empty()) {
+                changed = collectTiles(true) || changed;
+                startTileLoads();
+            }
+        }
+        if (changed) {
+            if (Status status = attachTiles(); !status.ok()) {
+                return status;
+            }
+            char text[96];
+            std::snprintf(text, sizeof text, "%zu tiles loaded, %zu loading", tileContent.size(),
+                          tileLoads.size() + tileQueue.size());
+            log(v1::LOG_LEVEL_DEBUG, "streaming", text);
+        }
+        const double margin = kGroundMarginM + 0.5 * robotSpeed();
+        const bool ready = tileSelector->physicsReady(focusWorld(), margin);
+        if (ready != !waitingForTiles) {
+            waitingForTiles = !ready;
+            log(v1::LOG_LEVEL_INFO, "streaming",
+                ready ? "the robot's ground is loaded: the run goes on"
+                      : "waiting for the tiles under the robot to load");
+        }
+        return {};
+    }
+
+    [[nodiscard]] double robotSpeed() const {
+        if (!scheduler || robot.world.bodies.names.empty()) {
+            return 0.0;
+        }
+        const SignalId twist =
+            scheduler->bus().find("body/" + robot.world.bodies.names.front() + "/twist");
+        if (!twist.valid()) {
+            return 0.0;
+        }
+        const std::span<const double> v = scheduler->bus().readN(twist);
+        return std::hypot(v[0], v[1]);
+    }
+
+    void startTileLoads() {
+        while (tileLoads.size() < kTileWorkers && !tileQueue.empty()) {
+            const std::uint32_t id = tileQueue.front();
+            tileQueue.pop_front();
+            const streaming::TileInfo& tile = tileSelector->tiles().at(id);
+            tileLoads.emplace(
+                id, std::async(std::launch::async, [source = tile.source, path = tile.path] {
+                    stage::ReadOptions read;
+                    read.addGround = false;
+                    read.tile = path;
+                    return stage::loadStage(source, read);
+                }));
+        }
+    }
+
+    /// Takes the finished loads (all of them, waiting, with `wait`). True if any joined.
+    bool collectTiles(bool wait) {
+        bool changed = false;
+        for (auto it = tileLoads.begin(); it != tileLoads.end();) {
+            if (!wait &&
+                it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+                ++it;
+                continue;
+            }
+            Expected<Model, std::string> loaded = it->second.get();
+            if (loaded) {
+                tileContent[it->first] = std::make_shared<const Model>(std::move(*loaded));
+                tileSelector->loaded(it->first);
+                changed = true;
+            } else {
+                // Left out of the world; asked for again at a later update.
+                tileSelector->unloaded(it->first);
+                log(v1::LOG_LEVEL_ERROR, "streaming", loaded.error());
+            }
+            it = tileLoads.erase(it);
+        }
+        return changed;
+    }
+
+    /// Puts the loaded tiles into the world tables and the scene, in tile order, after what was
+    /// there before; rebuilds a running scheduler keeping its state.
+    Status attachTiles() {
+        truncateModel(robot, baseExtent);
+        const std::vector<streaming::TileInfo>& tiles = tileSelector->tiles();
+        for (const auto& [id, content] : tileContent) {
+            // Loaded finer tiles over this one replace it where they are.
+            std::vector<std::array<double, 4>> covered;
+            for (const auto& [other, unused] : tileContent) {
+                (void)unused;
+                const streaming::TileInfo& t = tiles.at(other);
+                if (t.level > tiles.at(id).level) {
+                    covered.push_back(
+                        {t.boundsMin[0], t.boundsMin[1], t.boundsMax[0], t.boundsMax[1]});
+                }
+            }
+            appendTile(robot, *content, tiles.at(id).path, robot.world.region.worldEnu, covered);
+        }
+        ++tilesGeneration;
+        if (!scheduler) {
+            return {};
+        }
+        if (Status status = rebuildKeepingState(); !status.ok()) {
+            return Status::error(status.code, "streaming: " + status.message);
+        }
+        resyncViewers();
+        return {};
+    }
+
+    /// After a tick: every 100 ms of simulated time, the floating origin and the streamed
+    /// tiles. A run without ROS (headless, deterministic) waits for its tile loads in the step,
+    /// so its tile set depends only on the robot's path; a run with ROS takes them as they come.
+    Status worldUpdate(bool headless) {
+        if (scheduler->now().ns % kRebaseCheckNs != 0) {
+            return {};
+        }
+        if (Status status = rebaseIfFar(); !status.ok()) {
+            return status;
+        }
+        return replay ? Status{} : updateTiles(headless || !bridge);
+    }
+
+    /// Floating origin during a run (huge-worlds.md §1.2): every 100 ms of simulated time, if
+    /// the robot is farther than kRebaseDistanceM from the region origin, the origin moves to
+    /// its whole-metre position. The world tables shift, the run is rebuilt on them, and its
+    /// state is carried over and shifted (Scheduler::shiftOrigin). The check runs at fixed
+    /// simulated times, so a deterministic run stays deterministic.
+    Status rebaseIfFar() {
+        // A replay shows the recorded frame as it was recorded.
+        if (replay || bodyPose.empty() || !bodyPose.front().valid() ||
+            scheduler->now().ns % kRebaseCheckNs != 0) {
+            return {};
+        }
+        const std::span<const double> pose = scheduler->bus().readN(bodyPose.front());
+        const std::array<double, 3> offset =
+            coords::rebaseShift({pose[0], pose[1], pose[2]}, kRebaseDistanceM);
+        if (offset == std::array<double, 3>{0.0, 0.0, 0.0}) {
+            return {};
+        }
+        StateWriter saved;
+        if (Status status = scheduler->saveState(saved); !status.ok()) {
+            return Status::error(status.code, "floating origin: " + status.message);
+        }
+        shiftRegion(robot, offset);
+        if (Status status = build(); !status.ok()) {
+            return Status::error(status.code, "floating origin: " + status.message);
+        }
+        StateReader reader(saved.bytes());
+        if (Status status = scheduler->restoreState(reader); !status.ok()) {
+            return Status::error(status.code, "floating origin: " + status.message);
+        }
+        scheduler->shiftOrigin(offset);
+        shift = robot.world.region.worldEnu;
+        lastRebase = scheduler->now();
+        if (recorder) {
+            recorder->frame(scheduler->now(), localFrame());
+        }
+        char text[200];
+        std::snprintf(
+            text, sizeof text,
+            "floating origin moved by (%.0f, %.0f, %.0f) m at t = %.3f s: the "
+            "region-local frame is now at (%.0f, %.0f, %.0f) m in world ENU (rebase %llu)",
+            offset[0], offset[1], offset[2], scheduler->now().seconds(), shift[0], shift[1],
+            shift[2], static_cast<unsigned long long>(robot.world.region.rebaseCount));
+        log(v1::LOG_LEVEL_INFO, "stage", text);
+        resyncViewers();
+        return {};
+    }
+
     /// The world prim standing for a scene prim, by path; kNoPrim if there is none.
     [[nodiscard]] std::uint32_t worldPrimOf(std::uint32_t scenePrim) const {
         if (scenePrim >= robot.scene.prims.size()) {
@@ -2713,6 +3077,10 @@ struct Server::Impl {
             }
             capture();
             record();
+            if (Status status = worldUpdate(false); !status.ok()) {
+                fail(status);
+                return status;
+            }
             if (bridge) {
                 bridge->publish(scheduler->bus(), scheduler->now());
             }
@@ -2896,6 +3264,16 @@ struct Server::Impl {
         }
         if (settings.geoOrigin) {
             appliedGeoOrigin = settings.geoOrigin;
+        }
+        if (settings.streamingLoadRadius != appliedLoadRadius ||
+            settings.streamingUnloadRadius != appliedUnloadRadius ||
+            settings.streamingCollisionRadius != appliedCollisionRadius) {
+            appliedLoadRadius = settings.streamingLoadRadius;
+            appliedUnloadRadius = settings.streamingUnloadRadius;
+            appliedCollisionRadius = settings.streamingCollisionRadius;
+            if (Status status = restartStreaming(); !status.ok()) {
+                return status;
+            }
         }
         appliedAerodynamics = settings.aerodynamics;
         appliedRotorAero = settings.rotorAero;
@@ -3296,7 +3674,18 @@ struct Server::Impl {
         v1::Envelope envelope;
         v1::WorldState& world = *envelope.mutable_world();
         world.mutable_sim_time()->set_ns(scheduler->now().ns);
-        world.mutable_geo_origin()->set_valid(false);
+        const std::array<double, 3>& region = robot.world.region.worldEnu;
+        if (const auto& geo = robot.world.geoOrigin) {
+            constexpr double kDegree = 180.0 / std::numbers::pi;
+            v1::WorldState::GeoOrigin& g = *world.mutable_geo_origin();
+            g.set_valid(true);
+            g.set_latitude_deg(geo->latitudeRad * kDegree);
+            g.set_longitude_deg(geo->longitudeRad * kDegree);
+            g.set_height_m(geo->heightM);
+        } else {
+            world.mutable_geo_origin()->set_valid(false);
+        }
+        streamedTiles(world);
         v1::WorldState::Agent& agent = *world.add_agents();
         agent.set_name(robot.name);
         agent.set_prim(robot.bodyPrim.empty() ? kNoIndex : robot.bodyPrim[0]);
@@ -3304,8 +3693,8 @@ struct Server::Impl {
         const SignalBus& bus = scheduler->bus();
         if (!bodyPose.empty() && bodyPose[0].valid()) {
             const std::span<const double> pose = bus.readN(bodyPose[0]);
-            agent.set_x(pose[0]);
-            agent.set_y(pose[1]);
+            agent.set_x(pose[0] + region[0]);  // world ENU (the WorldState's frame)
+            agent.set_y(pose[1] + region[1]);
             const SignalId twist = bus.find("body/" + robot.world.bodies.names[0] + "/twist");
             if (twist.valid()) {
                 const std::span<const double> v = bus.readN(twist);
@@ -3314,10 +3703,69 @@ struct Server::Impl {
         }
         agent.set_status("focus");
         agent.set_focus(true);
+        if (tileSelector) {
+            // Full physics around it: where its collision tiles are loaded.
+            agent.set_active_radius_m(
+                active().streamingCollisionRadius.value_or(kDefaultCollisionRadiusM));
+        }
         v1::WorldState::FloatingOrigin& origin = *world.mutable_floating_origin();
         origin.set_anchor(robot.name);
-        origin.set_recenter_threshold_m(1000.0);  // huge-worlds.md §1.2 default
+        origin.set_recenter_threshold_m(kRebaseDistanceM);
+        origin.set_x(region[0]);
+        origin.set_y(region[1]);
+        origin.set_z(region[2]);
+        origin.set_recenters(robot.world.region.rebaseCount);
+        origin.mutable_last_recenter()->set_ns(lastRebase.ns);
         return envelope;
+    }
+
+    /// The streamed tiles for the World workspace, on the grid of the finest tiles: loaded
+    /// collision tiles are level of detail 0 (physics and sensors), loaded tiles without
+    /// colliders level 2 (render only), where no finer loaded tile covers them.
+    void streamedTiles(v1::WorldState& world) const {
+        if (!tileSelector) {
+            return;
+        }
+        const std::vector<streaming::TileInfo>& tiles = tileSelector->tiles();
+        double cell = 0.0;
+        for (const streaming::TileInfo& t : tiles) {
+            const double size = t.boundsMax[0] - t.boundsMin[0];
+            cell = cell == 0.0 ? size : std::min(cell, size);
+        }
+        if (!(cell > 0.0)) {
+            return;
+        }
+        world.set_tile_size_m(cell);
+        world.set_tiles_generation(tilesGeneration);
+        std::map<std::pair<std::int64_t, std::int64_t>, std::pair<std::int32_t, std::uint8_t>>
+            cells;
+        for (const auto& [id, content] : tileContent) {
+            (void)content;
+            const streaming::TileInfo& t = tiles.at(id);
+            const std::uint8_t lod = t.hasCollision ? 0 : 2;
+            const auto x0 = static_cast<std::int64_t>(std::floor(t.boundsMin[0] / cell + 0.5));
+            const auto y0 = static_cast<std::int64_t>(std::floor(t.boundsMin[1] / cell + 0.5));
+            const auto x1 = static_cast<std::int64_t>(std::floor(t.boundsMax[0] / cell + 0.5));
+            const auto y1 = static_cast<std::int64_t>(std::floor(t.boundsMax[1] / cell + 0.5));
+            for (std::int64_t x = x0; x < x1; ++x) {
+                for (std::int64_t y = y0; y < y1; ++y) {
+                    auto [it, added] = cells.try_emplace({x, y}, t.level, lod);
+                    if (!added && t.level > it->second.first) {
+                        it->second = {t.level, lod};  // the finer tile is what is shown
+                    }
+                }
+            }
+        }
+        std::string lods;
+        for (const auto& [index, value] : cells) {
+            world.add_tile_x(static_cast<std::int32_t>(index.first));
+            world.add_tile_y(static_cast<std::int32_t>(index.second));
+            lods.push_back(static_cast<char>(value.second));
+        }
+        world.set_tile_lod(lods);
+        v1::WorldState::Streaming& streaming = *world.mutable_streaming();
+        streaming.set_host_cache_bytes(tileSelector->loadedBytes());
+        streaming.set_load_queue(static_cast<std::uint32_t>(tileLoads.size() + tileQueue.size()));
     }
 
     /// The values of the prim's schemas of ours, numbers editable (SetAttribute).
@@ -3814,6 +4262,17 @@ Status Server::load() {
             return Status::error(StatusCode::InvalidConfig, applied.error());
         }
     }
+    // More robots in the run (huge-worlds.md §3: robots whose bubbles overlap share a region).
+    for (const ServerOptions::ExtraRobot& extra : s.options.extraRobots) {
+        auto other = loadModel(extra.path, {.spawn = extra.spawn});
+        if (!other) {
+            return Status::error(StatusCode::InvalidConfig, extra.name + ": " + other.error());
+        }
+        prefixModel(*other, extra.name, true);
+        appendModel(s.robot, *other);
+        s.log(v1::LOG_LEVEL_INFO, "stage",
+              "robot " + extra.name + " from " + extra.path + " (passive: nothing drives it)");
+    }
     // Motors' rotors turn with their joints: physics gets their reflected inertia.
     electrical::applyRotorInertia(s.robot.world);
     // Propellers with a propeller file are drawn as their blades.
@@ -3891,6 +4350,9 @@ Status Server::load() {
                   ")");
     }
     s.shift = recentre(s.robot);
+    if (Status status = s.startStreaming(); !status.ok()) {
+        return status;
+    }
     if (Status status = s.placeLidar(); !status.ok()) {
         return status;
     }
@@ -3921,7 +4383,16 @@ Status Server::stepUntil(SimTime t) {
     if (!impl_->scheduler) {
         return Status::error(StatusCode::Internal, "stepUntil before load()");
     }
-    return impl_->scheduler->stepUntil(t);
+    // Tick by tick, so the floating origin follows the robot as in a served run.
+    while (impl_->scheduler->now() < t) {
+        if (Status status = impl_->scheduler->stepTick(); !status.ok()) {
+            return status;
+        }
+        if (Status status = impl_->worldUpdate(true); !status.ok()) {
+            return status;
+        }
+    }
+    return {};
 }
 
 std::vector<Server::SignalEntry> Server::signals() const {

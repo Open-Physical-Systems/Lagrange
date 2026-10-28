@@ -1,6 +1,6 @@
 # Progress
 
-Where the project stands against the [roadmap](roadmap.md). Updated 2026-10-25.
+Where the project stands against the [roadmap](roadmap.md). Updated 2026-10-29.
 
 ## The releases
 
@@ -12,8 +12,8 @@ flowchart LR
     v04["v0.4<br/>drones<br/>PX4 / ArduPilot SITL<br/><b>released 2026-10-25</b>"]:::done
     v05["v0.5<br/>weather + EMI + comms<br/><b>released 2026-10-25</b>"]:::done
     v06["v0.6<br/>cars, autonomous cars<br/>OpenDRIVE, Autoware<br/><b>released 2026-10-25</b>"]:::done
-    v07["v0.7<br/>huge worlds<br/><b>next</b>"]:::now
-    v10["v1.0<br/>stable schemas + plugin ABI<br/>ros-lyrical-* debs"]:::todo
+    v07["v0.7<br/>huge worlds<br/><b>released 2026-10-29</b>"]:::done
+    v10["v1.0<br/>stable schemas + plugin ABI<br/>ros-lyrical-* debs<br/><b>next</b>"]:::now
     v01 --> v02 --> v03 --> v04 --> v05 --> v06 --> v07 --> v10
 
     classDef done fill:#1f6f43,stroke:#2ea043,color:#fff
@@ -117,6 +117,20 @@ E8). Release notes and acceptance evidence: `docs/release/v0.3.0.md`. Owed withi
 a motor heat run (Q16; the battery is checked against published cell data since 2026-10-25,
 from 35 % state of charge up), the drive-design
 review of the motor constants, FMI 2.0 FMUs (Q8), Jolt's wheel slip. Released as `v0.3.0` on 2026-10-25 at the owner's request, after v0.2.0.
+
+## v0.7 status (2026-10-29)
+
+The owner ran `/loop finish until last version` on 2026-10-29: gated merges and the v1.0
+freeze RFC pre-approved, each version released when done, packages built locally and
+published by the owner, radiation after 1.0. v0.7 steps, all merged (#157 to #164):
+the README with a clip of the sedan; the floating origin during the run; tile selection and
+`WorldTileAPI_1`; tile streaming in the server; active regions; worlds from open data; height
+field terrain; the World workspace's data and camera hints, with the huge-worlds tutorial.
+Release notes and acceptance evidence: `docs/release/v0.7.0.md`. Owed within the epics: robots
+moving between regions while running, agent levels of detail, renderer scale (per-tile
+acceleration structures, instancing, incremental tile deltas, the frame budget while
+streaming), memory budgets from profiles, height fields in the GPU lidar. Released as `v0.7.0`
+on 2026-10-29.
 
 ## v0.6 status (2026-10-25)
 
@@ -454,6 +468,9 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
 | electrical network (fallback doc fix) | `schemas/` (documentation of `elec:backEmfConstant`'s fallback corrected to Kt/1.5 for dq machines; changelog entry) | No attribute changed; the network refuses an authored Ke that disagrees with Kt by over 3 % |
 | raster camera sensor | `schemas/` (`CameraSensorAPI_1` in the sensor library, from formats.md §3.8, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-24 for autonomous work. Applied to a UsdGeomCamera, whose lens gives the field of view |
 | geo sensor schemas | `schemas/` (`GnssAPI_1`, `MagnetometerAPI_1`, `BarometerAPI_1` in the sensor library, under the accepted RFC 0002; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.4 |
+| v0.7 camera interest | `proto/` (`Command.set_camera_interest` 55, `SetCameraInterest`; protocol.md) | Pre-approved by the owner on 2026-10-29 for v0.7 and v1.0. New message only; `buf` is not installed here, so `buf breaking` was not run |
+| v0.7 world schema | `schemas/` (new `world` library: `WorldTileAPI_1`, huge-worlds.md §2, RFC 0002's list; changelog entry) | Pre-approved by the owner on 2026-10-29 for v0.7 and v1.0. New library, nothing to migrate |
+| v0.7 floating origin in the protocol and recordings | `proto/` (`LocalFrame.region_enu` 6, the region origin in world ENU; recordings' `/lagrange/scene/frame` channel, documented in `record.proto`; protocol.md §4, formats.md §7) | Pre-approved by the owner on 2026-10-29 for v0.7 and v1.0. New field and channel only; `buf` is not installed here, so `buf breaking` was not run |
 | v0.6 road schema | `schemas/` (new `road` library: `RoadLaneAPI_1` with `lane:sStart`/`lane:sEnd`, formats.md §3.11; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.6. New library, nothing to migrate |
 | v0.6 radar schema | `schemas/` (`RadarAPI_1` in the sensor library, formats.md §3.8; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.6. New schema, nothing to migrate |
 | v0.6 camera schema additions | `schemas/` (`CameraSensorAPI_1`: `electronRate`, `vignetting`, formats.md §3.8; changelog entry) | Pre-approved by the owner on 2026-10-25 for v0.6. Additions, nothing to migrate |

@@ -16,7 +16,7 @@ format in `rfcs/0005-sim-profile-format.md`. This document expands CLAUDE.md §4
 | Recordings | MCAP, Protobuf-encoded messages | `io/recording/` | replay substitutes, mock server, viewer | Section 7 |
 | Mesh import | glTF 2.0, OBJ, STL, DAE | — | `io/importers/` only | Never loaded at runtime |
 | Materials | UsdPreviewSurface (baseline); MaterialX (optional, later) | importers | viewer renderer, camera sensor | Section 8 |
-| Collision geometry | Convex hulls in USD (`UsdPhysicsMeshCollisionAPI`, approximation `convexDecomposition` baked to explicit hull prims) | `tools/collision_bake` | rigid-body backends | Never the render mesh |
+| Collision geometry | Convex hulls in USD (`UsdPhysicsMeshCollisionAPI`, approximation `convexDecomposition` baked to explicit hull prims); terrain as height fields (a grid mesh, approximation `none`, with `int lagrange:heightField:columns` and `rows`, points in row order from -x -y; v0.7) | `tools/collision_bake`, `lagrange_build_world` | rigid-body backends, sensors | Never the render mesh |
 | UI↔server protocol | Protobuf (proto3) | server, mock server | viewer | `docs/design/protocol.md` |
 | Robot description import | URDF/xacro, SDFormat, MJCF | — | `io/importers/` → USD | Section 9 |
 | Roads, scenarios | OpenDRIVE, OpenSCENARIO | — | `io/opendrive/`, `io/openscenario/` | v0.6 |
@@ -1010,6 +1010,7 @@ and requires a whole number of nanoseconds (architecture §2).
             "enabled": { "type": "boolean", "default": false },
             "load_radius":   { "type": "number", "exclusiveMinimum": 0, "description": "m" },
             "unload_radius": { "type": "number", "exclusiveMinimum": 0, "description": "m" },
+            "collision_radius": { "type": "number", "exclusiveMinimum": 0, "description": "m: tiles with colliders load only this near a robot (default 300)" },
             "active_region_radius": { "type": "number", "exclusiveMinimum": 0, "description": "m" },
             "rebase_distance": { "type": "number", "exclusiveMinimum": 0, "default": 1000, "description": "m" }
           }
@@ -1447,6 +1448,7 @@ drive, hand-written in C, Apache-2.0), which matches the built-in brushed model 
 | `/lagrange/scene/delta` | `SceneDelta` | transform and attribute changes |
 | `/lagrange/signals/<dt>ns` | `SignalBlock` | signals grouped by writer step size, e.g. `/lagrange/signals/100000ns` |
 | `/lagrange/state_hash` | `StateHash` | determinism check values |
+| `/lagrange/scene/frame` | `LocalFrame` | the region frame from that time on, at each rebase of the floating origin (v0.7); positions recorded after it are in the new frame |
 | `/lagrange/log` | `LogRecord` | console messages |
 | ROS topics (optional) | CDR, as rosbag2 writes them | when `record.ros_topics` is used (later) |
 

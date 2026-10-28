@@ -27,6 +27,7 @@
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/EmptyShape.h>
+#include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/Shape/PlaneShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
@@ -147,7 +148,8 @@ Mat3 moved(const Mat3& local, const Mat3& r, double mass, const Vec3& offset) {
 const JPH::Quat kYToZ = JPH::Quat::sRotation(JPH::Vec3::sAxisX(), 0.5F * JPH::JPH_PI);
 
 JPH::ShapeSettings::ShapeResult shapeFor(ShapeType type, const std::array<double, 3>& size,
-                                         const ConvexHull* hull) {
+                                         const ConvexHull* hull,
+                                         const HeightField* field = nullptr) {
     const auto f = [](double v) { return static_cast<float>(v); };
     switch (type) {
         case ShapeType::Sphere:
@@ -180,8 +182,35 @@ JPH::ShapeSettings::ShapeResult shapeFor(ShapeType type, const std::array<double
                        points, std::min(JPH::cDefaultConvexRadius, 0.1F * smallest))
                 .Create();
         }
+        case ShapeType::HeightField: {
+            // Jolt's height field lies in its x z plane with heights along y; shapeRotation
+            // turns y up (kYToZ), which takes z to -y, so the rows go in reverse.
+            JPH::ShapeSettings::ShapeResult result;
+            if (field->columns != field->rows || field->columns < 4) {
+                result.SetError("a height field for Jolt needs a square grid of 4 samples or more");
+                return result;
+            }
+            const std::uint32_t n = field->columns;
+            std::vector<float> samples(static_cast<std::size_t>(n) * n);
+            for (std::uint32_t k = 0; k < n; ++k) {
+                for (std::uint32_t x = 0; x < n; ++x) {
+                    samples[static_cast<std::size_t>(k) * n + x] =
+                        f(field->heights[static_cast<std::size_t>(n - 1 - k) * n + x]);
+                }
+            }
+            const double half = static_cast<double>(n - 1) / 2.0;  // n is unsigned: no -(n - 1)
+            const JPH::Vec3 offset(f(-half * field->cellX), 0.0F, f(-half * field->cellY));
+            const JPH::Vec3 scale(f(field->cellX), 1.0F, f(field->cellY));
+            return JPH::HeightFieldShapeSettings(samples.data(), offset, scale, n).Create();
+        }
     }
     return {};
+}
+
+const HeightField* fieldOf(const World& world, std::size_t c) {
+    return world.colliders.shape[c] == ShapeType::HeightField
+               ? &world.heightfields.at(world.colliders.hull[c])
+               : nullptr;
 }
 
 const ConvexHull* hullOf(const World& world, std::size_t c) {
@@ -192,7 +221,10 @@ const ConvexHull* hullOf(const World& world, std::size_t c) {
 
 JPH::Quat shapeRotation(ShapeType type, const std::array<double, 4>& q) {
     const JPH::Quat r = jq(q);
-    return type == ShapeType::Capsule || type == ShapeType::Cylinder ? r * kYToZ : r;
+    return type == ShapeType::Capsule || type == ShapeType::Cylinder ||
+                   type == ShapeType::HeightField
+               ? r * kYToZ
+               : r;
 }
 
 SignalSpec spec(std::string name, SignalType type, Unit unit, std::string frame = {}) {
@@ -705,8 +737,8 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalBus& 
                 continue;
             }
             const Pose p = compose(s.inGroup[owner.index], world.colliders.poseInBody[c]);
-            const auto shape =
-                shapeFor(world.colliders.shape[c], world.colliders.size[c], hullOf(world, c));
+            const auto shape = shapeFor(world.colliders.shape[c], world.colliders.size[c],
+                                        hullOf(world, c), fieldOf(world, c));
             if (shape.HasError()) {
                 return Status::error(StatusCode::InvalidConfig,
                                      "jolt: collider of " + bodies.names[owner.index] + ": " +
@@ -773,8 +805,8 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalBus& 
         const Pose p = owner == kWorldBody
                            ? world.colliders.poseInBody[c]
                            : compose(rest[owner.index], world.colliders.poseInBody[c]);
-        const auto shape =
-            shapeFor(world.colliders.shape[c], world.colliders.size[c], hullOf(world, c));
+        const auto shape = shapeFor(world.colliders.shape[c], world.colliders.size[c],
+                                    hullOf(world, c), fieldOf(world, c));
         if (shape.HasError()) {
             return Status::error(StatusCode::InvalidConfig,
                                  "jolt: " + std::string(shape.GetError().c_str()));
@@ -1027,9 +1059,36 @@ void JoltBackend::shutdown() {
 }
 
 // Jolt's own state recorder: positions, velocities, contacts and constraint state.
+namespace {
+
+/// The moving bodies and their contacts with each other: static scenery is rebuilt from the
+/// world, so a state still fits after streamed tiles changed the scenery (huge-worlds.md §2).
+/// Contacts with scenery are left out and found again on the next step.
+class MovingBodies final : public JPH::StateRecorderFilter {
+public:
+    explicit MovingBodies(const JPH::BodyLockInterface& locks) : locks_(locks) {}
+    [[nodiscard]] bool ShouldSaveBody(const JPH::Body& body) const override {
+        return !body.IsStatic();
+    }
+    [[nodiscard]] bool ShouldSaveContact(const JPH::BodyID& a,
+                                         const JPH::BodyID& b) const override {
+        return moving(a) && moving(b);
+    }
+
+private:
+    [[nodiscard]] bool moving(const JPH::BodyID& id) const {
+        const JPH::BodyLockRead lock(locks_, id);
+        return lock.Succeeded() && !lock.GetBody().IsStatic();
+    }
+    const JPH::BodyLockInterface& locks_;
+};
+
+}  // namespace
+
 Status JoltBackend::saveState(StateWriter& writer) const {
     JPH::StateRecorderImpl recorder;
-    impl_->system->SaveState(recorder);
+    const MovingBodies filter(impl_->system->GetBodyLockInterfaceNoLock());
+    impl_->system->SaveState(recorder, JPH::EStateRecorderState::All, &filter);
     const std::string bytes = recorder.GetData();
     writer.putString(bytes);
     // What the finite-difference accelerations and the friction scale need besides.
@@ -1043,6 +1102,18 @@ Status JoltBackend::saveState(StateWriter& writer) const {
         writer.putDoubles(b.lastTwist);
     }
     return {};
+}
+
+void JoltBackend::shiftOrigin(const std::array<double, 3>& shift) {
+    // Every body, scenery included: a restored state puts the scenery back where it was in the
+    // old frame, so all of it moves by -shift together (exact: whole metres).
+    JPH::BodyIDVector ids;
+    impl_->system->GetBodies(ids);
+    JPH::BodyInterface& bi = impl_->system->GetBodyInterfaceNoLock();
+    const JPH::RVec3 offset(jv(shift));
+    for (const JPH::BodyID id : ids) {
+        bi.SetPosition(id, bi.GetPosition(id) - offset, JPH::EActivation::DontActivate);
+    }
 }
 
 Status JoltBackend::restoreState(StateReader& reader) {

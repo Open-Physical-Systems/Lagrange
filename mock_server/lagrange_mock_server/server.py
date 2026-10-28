@@ -532,6 +532,8 @@ class MockServer:
                     )
                     session.world_tiles_sent = True
                     session.send(envelope_pb2.Envelope(world=world))
+            elif kind == "set_camera_interest":
+                pass  # a hint for streamed worlds; the mock server streams nothing
             elif kind == "validate_profile":
                 result.command_result.validation.CopyFrom(
                     profile.check(command.validate_profile.yaml).to_proto()
