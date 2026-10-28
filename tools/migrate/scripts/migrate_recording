@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+"""Checks Lagrange recordings (MCAP) against the newest format version."""
+
+import sys
+
+from lagrange_migrate.recording import main
+
+sys.exit(main())
