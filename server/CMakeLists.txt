@@ -53,6 +53,7 @@ add_library(
     src/MapExport.cpp
     src/Profile.cpp
     src/Recorder.cpp
+    src/RegionHost.cpp
 )
 lagrange_target_defaults(lagrange_server)
 target_include_directories(
@@ -192,6 +193,7 @@ if(BUILD_TESTING)
         test/test_backends.cpp
         test/test_recorder.cpp
         test/test_robot.cpp
+        test/test_regions.cpp
         test/test_server.cpp
         test/test_multicopter.cpp
         test/test_toggles.cpp

@@ -4115,6 +4115,17 @@ Status Server::load() {
             return Status::error(StatusCode::InvalidConfig, applied.error());
         }
     }
+    // More robots in the run (huge-worlds.md §3: robots whose bubbles overlap share a region).
+    for (const ServerOptions::ExtraRobot& extra : s.options.extraRobots) {
+        auto other = loadModel(extra.path, {.spawn = extra.spawn});
+        if (!other) {
+            return Status::error(StatusCode::InvalidConfig, extra.name + ": " + other.error());
+        }
+        prefixModel(*other, extra.name, true);
+        appendModel(s.robot, *other);
+        s.log(v1::LOG_LEVEL_INFO, "stage",
+              "robot " + extra.name + " from " + extra.path + " (passive: nothing drives it)");
+    }
     // Motors' rotors turn with their joints: physics gets their reflected inertia.
     electrical::applyRotorInertia(s.robot.world);
     // Propellers with a propeller file are drawn as their blades.

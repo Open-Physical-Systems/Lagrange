@@ -252,6 +252,28 @@ constraints now: modules talk only through the signal bus (invariant 1), signals
 id, cross-region interaction happens only through the traffic/agent hand-off and environment
 fields, and the hand-off record (`AgentRecord`) is a serialisable value type.
 
+### 3.1 Status in v0.7
+
+Built:
+- `regions::RegionPlanner` (`core/world/regions`): robots within two region radii of each other
+  (directly or through others) share a region; robots that shared one stay together until
+  farther apart than 2.5 radii (`splitFactor` 1.25). Deterministic. `regions::AgentRecord` is
+  the hand-off value (base pose and twist in world ENU, joint positions and velocities).
+- More robots in one run: `lagrange_server --add-robot NAME=FILE@X,Y[,Z[,YAW]]` (repeatable).
+  An added robot's bodies, joints and sensors are prefixed `NAME_` (`prefixModel`), and its
+  joints are passive: nothing drives it yet.
+- `server::RegionHost`: one `Server` run per region, each with its own floating origin, physics
+  scene and streamed tiles, stepped in lockstep 100 ms at a time; headless (no ROS, no
+  viewers). `Regions.RobotsTenKilometresApartRunInTheirOwnRegions` (`server/test/
+  test_regions.cpp`): two AMRs 10 km apart get two regions, and the one 10 km out drives
+  exactly as a lone AMR at the origin (1e-9 m).
+
+Not yet:
+- Moving a robot between regions while running (merge and split with an `AgentRecord`
+  hand-off): `RegionHost::stepUntil` stops with `Unsupported` when robots meet or part.
+- Agent levels of detail (`AgentLod`): traffic agents are kinematic in every region.
+- Serving a multi-region run to viewers and ROS; the `lagrange` command has no regions mode.
+
 ## 4. Geospatial pipeline
 
 Offline tools in `io/geospatial/`, run by the user or by `tools/build_world`. Output is the tiled
