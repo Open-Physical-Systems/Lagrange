@@ -1,0 +1,178 @@
+<?xml version="1.0"?>
+<!-- Holybro X500 V2, the quadcopter of PX4's Gazebo models (PX4-gazebo-models, x500_base,
+     BSD-3-Clause): its frame, motor and propeller meshes, and its mass, inertia and rotor
+     positions (2.0 kg, 0.174 m from the centre on each axis, 60 mm above the frame). The meshes
+     are too large for this repository: fetch them with
+     `ros2 run lagrange_assets fetch_assets holybro_x500_v2`; without them the drone flies and
+     shows its collision boxes in their place. The legs are PX4's collision boxes. Rotors are
+     numbered and turn as in the sample quad_x500 (PX4's Quadrotor X, rotor_1 is PX4's rotor_0):
+     rotor_1 front-right CCW, rotor_2 rear-left CCW, rotor_3 front-left CW, rotor_4 rear-right CW
+     (x forward, y left, z up). Propulsion, power and sensors: holybro_x500_v2.overlay.yaml. -->
+<robot name="holybro_x500_v2">
+  <material name="prop"><color rgba="0.08 0.08 0.09 1"/></material>
+
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="2.0"/>
+      <inertia ixx="0.021667" iyy="0.021667" izz="0.04" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.025" rpy="0 0 3.1415927"/>
+      <geometry><mesh filename="lagrange-asset://holybro_x500_v2/NXP-HGD-CF.dae"/></geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.174 -0.174 0.032" rpy="0 0 -0.45"/>
+      <geometry><mesh filename="lagrange-asset://holybro_x500_v2/5010Base.dae"/></geometry>
+    </visual>
+    <visual>
+      <origin xyz="-0.174 0.174 0.032" rpy="0 0 -0.45"/>
+      <geometry><mesh filename="lagrange-asset://holybro_x500_v2/5010Base.dae"/></geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.174 0.174 0.032" rpy="0 0 -0.45"/>
+      <geometry><mesh filename="lagrange-asset://holybro_x500_v2/5010Base.dae"/></geometry>
+    </visual>
+    <visual>
+      <origin xyz="-0.174 -0.174 0.032" rpy="0 0 -0.45"/>
+      <geometry><mesh filename="lagrange-asset://holybro_x500_v2/5010Base.dae"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.007"/>
+      <geometry><box size="0.353553 0.353553 0.05"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 -0.098 -0.123" rpy="-0.35 0 0"/>
+      <geometry><box size="0.015 0.015 0.21"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 0.098 -0.123" rpy="0.35 0 0"/>
+      <geometry><box size="0.015 0.015 0.21"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 -0.132 -0.2195"/>
+      <geometry><box size="0.25 0.015 0.015"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 0.132 -0.2195"/>
+      <geometry><box size="0.25 0.015 0.015"/></geometry>
+    </collision>
+  </link>
+
+  <link name="rotor_1_link">
+    <!-- Propeller and motor bell, as PX4's rotor_0: 16 g; inertia from PX4's model. -->
+    <inertial>
+      <mass value="0.016077"/>
+      <inertia ixx="3.8465e-07" iyy="2.6116e-05" izz="2.6499e-05" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.022 -0.146385 -0.016"/>
+      <geometry><mesh filename="lagrange-asset://holybro_x500_v2/1345_prop_ccw.stl" scale="0.846154 0.846154 0.846154"/></geometry>
+      <material name="prop"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 -0.032"/>
+      <geometry><mesh filename="lagrange-asset://holybro_x500_v2/5010Bell.dae"/></geometry>
+    </visual>
+  </link>
+  <joint name="rotor_1_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="rotor_1_link"/>
+    <origin xyz="0.174 -0.174 0.06"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+  <link name="rotor_2_link">
+    <!-- Propeller and motor bell, as PX4's rotor_1: 16 g; inertia from PX4's model. -->
+    <inertial>
+      <mass value="0.016077"/>
+      <inertia ixx="3.8465e-07" iyy="2.6116e-05" izz="2.6499e-05" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.022 -0.146385 -0.016"/>
+      <geometry><mesh filename="lagrange-asset://holybro_x500_v2/1345_prop_ccw.stl" scale="0.846154 0.846154 0.846154"/></geometry>
+      <material name="prop"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 -0.032"/>
+      <geometry><mesh filename="lagrange-asset://holybro_x500_v2/5010Bell.dae"/></geometry>
+    </visual>
+  </link>
+  <joint name="rotor_2_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="rotor_2_link"/>
+    <origin xyz="-0.174 0.174 0.06"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+  <link name="rotor_3_link">
+    <!-- Propeller and motor bell, as PX4's rotor_2: 16 g; inertia from PX4's model. -->
+    <inertial>
+      <mass value="0.016077"/>
+      <inertia ixx="3.8465e-07" iyy="2.6116e-05" izz="2.6499e-05" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.022 -0.146385 -0.016"/>
+      <geometry><mesh filename="lagrange-asset://holybro_x500_v2/1345_prop_cw.stl" scale="0.846154 0.846154 0.846154"/></geometry>
+      <material name="prop"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 -0.032"/>
+      <geometry><mesh filename="lagrange-asset://holybro_x500_v2/5010Bell.dae"/></geometry>
+    </visual>
+  </link>
+  <joint name="rotor_3_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="rotor_3_link"/>
+    <origin xyz="0.174 0.174 0.06"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+  <link name="rotor_4_link">
+    <!-- Propeller and motor bell, as PX4's rotor_3: 16 g; inertia from PX4's model. -->
+    <inertial>
+      <mass value="0.016077"/>
+      <inertia ixx="3.8465e-07" iyy="2.6116e-05" izz="2.6499e-05" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.022 -0.146385 -0.016"/>
+      <geometry><mesh filename="lagrange-asset://holybro_x500_v2/1345_prop_cw.stl" scale="0.846154 0.846154 0.846154"/></geometry>
+      <material name="prop"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 -0.032"/>
+      <geometry><mesh filename="lagrange-asset://holybro_x500_v2/5010Bell.dae"/></geometry>
+    </visual>
+  </link>
+  <joint name="rotor_4_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="rotor_4_link"/>
+    <origin xyz="-0.174 -0.174 0.06"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+
+  <!-- The motors take torque commands (from the built-in controller, or an autopilot through
+       the MAVLink bridge), which the electrical domain turns into motor torque. -->
+  <ros2_control name="LagrangeSystem" type="system">
+    <hardware>
+      <plugin>lagrange_ros2_control/LagrangeSystem</plugin>
+    </hardware>
+    <joint name="rotor_1_joint">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="rotor_2_joint">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="rotor_3_joint">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="rotor_4_joint">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+</robot>

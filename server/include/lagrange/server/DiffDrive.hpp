@@ -8,18 +8,23 @@
 
 namespace lagrange::server {
 
-/// A velocity command for a ground robot: forward speed and turn rate.
+/// A velocity command for a ground robot: forward speed, turn rate and, for a robot that moves
+/// sideways (a swerve base), the speed to the left.
 struct VelocityCommand {
     double linearMps{0.0};
     double angularRadps{0.0};
+    double lateralMps{0.0};
 };
 
 /// Writes the base velocity command: base/command/linear_velocity (m/s) and
-/// base/command/angular_velocity (rad/s).
+/// base/command/angular_velocity (rad/s), and with Settings::lateral also
+/// base/command/lateral_velocity (m/s, to the left).
 ///
 /// The command comes from `external` (the ROS 2 bridge's /cmd_vel), which returns nothing
 /// while no fresh command exists. Until the first external command, the module plays a demo:
-/// a figure-eight (a left loop, then a right one). After it, a missing command means stop.
+/// a figure-eight (a left loop, then a right one), or with Settings::lateral a square driven
+/// without turning (forward, left, back, right) and then a full turn on the spot. After it, a
+/// missing command means stop.
 /// With an external source the module is not deterministic (its input comes from outside).
 class DriveCommand final : public IModule {
 public:
@@ -28,6 +33,7 @@ public:
         double turnRadiusM{1.2};  // demo loop radius
         double rampSeconds{2.0};  // demo time to full speed
         bool demo{true};          // play the figure-eight until an external command arrives
+        bool lateral{false};      // the robot moves sideways: write the lateral velocity
     };
 
     DriveCommand(Settings settings, std::function<std::optional<VelocityCommand>()> external);
@@ -49,7 +55,7 @@ private:
     std::function<std::optional<VelocityCommand>()> external_;
     bool externalSeen_{false};
     const char* source_{"demo"};
-    SignalId linear_, angular_;
+    SignalId linear_, angular_, lateral_;
 };
 
 /// Turns the base velocity command into wheel torque commands (joint/<j>/torque_command) for a

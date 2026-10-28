@@ -1,0 +1,44 @@
+# Assets too large for this repository (CLAUDE.md §9: no file over 1 MB), fetched from a pinned
+# upstream commit and checked by SHA-256: `ros2 run lagrange_assets fetch_assets [ID...]`. They
+# land in $LAGRANGE_ASSET_DIR (default ~/.local/share/lagrange/assets) under their id, with the
+# licence and a NOTICE, and robot files name them `lagrange-asset://<id>/<file>`.
+schema_version: 1
+assets:
+  lexus_rx450h:
+    description: Lexus RX 450h (AL20) body mesh and texture, Autoware's sample vehicle
+    license: Apache-2.0
+    source: https://github.com/autowarefoundation/sample_vehicle_launch
+    commit: 93fb2600d3429059e428e0a54a97478080475b5d
+    license_url: https://raw.githubusercontent.com/autowarefoundation/sample_vehicle_launch/93fb2600d3429059e428e0a54a97478080475b5d/LICENSE
+    files:
+      lexus.dae:
+        path: sample_vehicle_description/mesh/lexus.dae
+        sha256: fccd51c2dc92a8215fbddc5006724f527484190065e6a0a43d0632ed15a458b4
+      lexus.jpg:
+        path: sample_vehicle_description/mesh/lexus.jpg
+        sha256: ae5addb7b0129661cea728ffd6547a0575724bc5b8e54cea3dfc7eceace22df4
+  holybro_x500_v2:
+    description: Holybro X500 V2 frame, 2216-class motors and 13-inch propellers, PX4's Gazebo model
+    license: BSD-3-Clause
+    source: https://github.com/PX4/PX4-gazebo-models
+    commit: e5997f455e33ec071c7c677fc59a65781de496a4
+    license_url: https://raw.githubusercontent.com/PX4/PX4-gazebo-models/e5997f455e33ec071c7c677fc59a65781de496a4/models/x500_base/LICENSE
+    files:
+      NXP-HGD-CF.dae:
+        path: models/x500_base/meshes/NXP-HGD-CF.dae
+        sha256: 7321861b113866996dfa79b403def5666d4b796810840d2c057c7b51fc315b0a
+      CF.png:
+        path: models/x500_base/meshes/CF.png
+        sha256: 3a56ec48eeaaf7774e8d3e8e5e88f6973bfa5652c610974c3eb2dbec6ec85944
+      5010Base.dae:
+        path: models/x500_base/meshes/5010Base.dae
+        sha256: 798396a1945c7ff55a0840b77869e27affdd35fed0d784fff96b68f50f160ea0
+      5010Bell.dae:
+        path: models/x500_base/meshes/5010Bell.dae
+        sha256: b90a1b2dd63a8ebbe1f3339ed18cef23673e0d8f03314fd9b9533a68b6b66668
+      1345_prop_ccw.stl:
+        path: models/x500_base/meshes/1345_prop_ccw.stl
+        sha256: ba197e0961117a3462b555d65edf3433ba8ff5691624100a185242cb5f456244
+      1345_prop_cw.stl:
+        path: models/x500_base/meshes/1345_prop_cw.stl
+        sha256: 7aa4b61c1ddc5304c9c1f5602eacf5e2ec5eafb95dd1f2a3368342f256122fc0

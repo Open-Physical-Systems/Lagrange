@@ -1,0 +1,77 @@
+# Vehicle dynamics of the Lexus RX 450h sample (lexus_rx450h.urdf; formats.md §9,
+# domains/vehicle_dynamics.md), applied by `lagrange_server --overlay` and `lagrange_import
+# --overlay`. From Autoware's sample vehicle (sample_vehicle_launch: vehicle_info.param.yaml and
+# simulator_model.param.yaml): the 0.70 rad steering limit, the 0.27 s steering time constant,
+# the wheel radius and width. Estimates, not Lexus data: all-wheel drive as one electric
+# powertrain with 3200 N·m at the wheels (about 4 m/s² from rest for 2,100 kg; the real car is a
+# power-split hybrid of 230 kW), the brakes, the suspension and the anti-roll stiffness (scaled
+# from the sample sedan for the heavier car). Tyres: generic_235_65R18.tir (illustrative).
+schema_version: 1
+apply:
+  - prim: base_link
+    schemas:
+      VehicleAPI_1:
+        vehicle:powertrain: electric
+        vehicle:maxDriveTorque: 3200            # N·m at the wheels, all four
+        vehicle:maxSteerAngle: 0.70             # rad, inner road wheel (Autoware)
+        vehicle:steerRate: 0.8                  # rad/s
+        vehicle:steerTimeConstant: 0.27         # s (Autoware's simulator model)
+        vehicle:maxBrakeTorque: 12000           # N·m over the four wheels
+        vehicle:brakeBias: 0.65
+        vehicle:abs: true
+        vehicle:antiRollStiffnessFront: 30000   # N/m
+        vehicle:antiRollStiffnessRear: 15000    # N/m
+  - prim: front_left_spin
+    schemas:
+      WheelAPI_1:
+        wheel:radius: 0.383
+        wheel:width: 0.235
+        wheel:axle: front
+        wheel:steered: true
+        wheel:driven: true
+        wheel:steerJoint: front_left_steer
+        wheel:tyre: ../../tyres/generic_235_65R18.tir
+        wheel:restLength: 0.30                  # m, mount to wheel centre at ride height
+        wheel:travel: 0.10                      # m to the bump stop
+        wheel:springStiffness: 45000            # N/m at the wheel
+        wheel:damping: 4500                     # N·s/m
+  - prim: front_right_spin
+    schemas:
+      WheelAPI_1:
+        wheel:radius: 0.383
+        wheel:width: 0.235
+        wheel:axle: front
+        wheel:steered: true
+        wheel:driven: true
+        wheel:steerJoint: front_right_steer
+        wheel:tyre: ../../tyres/generic_235_65R18.tir
+        wheel:restLength: 0.30                  # m, mount to wheel centre at ride height
+        wheel:travel: 0.10                      # m to the bump stop
+        wheel:springStiffness: 45000            # N/m at the wheel
+        wheel:damping: 4500                     # N·s/m
+  - prim: rear_left_spin
+    schemas:
+      WheelAPI_1:
+        wheel:radius: 0.383
+        wheel:width: 0.235
+        wheel:axle: rear
+        wheel:steered: false
+        wheel:driven: true
+        wheel:tyre: ../../tyres/generic_235_65R18.tir
+        wheel:restLength: 0.30                  # m, mount to wheel centre at ride height
+        wheel:travel: 0.10                      # m to the bump stop
+        wheel:springStiffness: 45000            # N/m at the wheel
+        wheel:damping: 4500                     # N·s/m
+  - prim: rear_right_spin
+    schemas:
+      WheelAPI_1:
+        wheel:radius: 0.383
+        wheel:width: 0.235
+        wheel:axle: rear
+        wheel:steered: false
+        wheel:driven: true
+        wheel:tyre: ../../tyres/generic_235_65R18.tir
+        wheel:restLength: 0.30                  # m, mount to wheel centre at ride height
+        wheel:travel: 0.10                      # m to the bump stop
+        wheel:springStiffness: 45000            # N/m at the wheel
+        wheel:damping: 4500                     # N·s/m

@@ -11,6 +11,8 @@
   <depend>lagrange_core</depend>
   <depend>ament_index_cpp</depend>
   <depend>assimp</depend>
+  <depend>libpng-dev</depend>
+  <depend>libjpeg</depend>
   <test_depend>ament_cmake_gtest</test_depend>
   <export>
     <build_type>ament_cmake</build_type>

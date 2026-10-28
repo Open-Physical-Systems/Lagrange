@@ -44,7 +44,7 @@ Every message on the stream is:
 | S→C | `SignalCatalog` | after hello and when wiring changes | medium |
 | C→S | `Subscribe` / `Unsubscribe` | scopes opened/closed | small |
 | S→C | `SignalBlock` | per subscription, batched (default every 20 ms) | medium |
-| S→C | `SceneSnapshot` | on request and after a dropped delta | large (chunked/shm) |
+| S→C | `SceneSnapshot` | on request and after a delta out of sequence | large (chunked/shm) |
 | S→C | `SceneDelta` | at viewport rate (default 60 Hz) | medium |
 | S→C | `Blob` | chunks of meshes, textures, images | large |
 | C→S | `Command` | user actions | small |
@@ -694,6 +694,10 @@ Resynchronisation rules:
 
 - `SceneDelta.base_sequence` not equal to the client's sequence → the client drops deltas and
   sends `RequestSnapshot`.
+- A congested server skips deltas without breaking the sequence (`dropped_deltas` counts them):
+  its deltas carry the absolute pose of every moving prim and nothing else, so the next delta
+  replaces a skipped one. A server whose deltas carry added or removed prims must instead
+  break the sequence when it skips one.
 - `SignalBlock.catalog_generation` older than the client's → the block is discarded.
 - `SignalRun.first_index` not contiguous with the previous run → the scope draws a gap marker
   and the dropped-sample counter in the status bar increases. This is how the "no dropped

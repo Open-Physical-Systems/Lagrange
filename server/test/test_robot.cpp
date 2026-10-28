@@ -5,6 +5,7 @@
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/server/DiffDrive.hpp"
 #include "lagrange/server/Robot.hpp"
+#include "lagrange/server/SwerveDrive.hpp"
 #include "lagrange/stage/Stage.hpp"
 
 #include <algorithm>
@@ -238,6 +239,48 @@ TEST(AmrSimulation, TheDriverMovesTheRobotAndItStaysUpright) {
     const double left = bus.read(bus.find("joint/left_wheel_joint/velocity"));
     const double right = bus.read(bus.find("joint/right_wheel_joint/velocity"));
     EXPECT_NEAR((left + right) / 2.0 * 0.1, 0.6, 0.06);
+}
+
+// The AMR_FMS swerve base: its four modules are found, and the built-in swerve controller moves
+// it sideways without turning, then turns it on the spot without moving.
+TEST(SwerveSimulation, TheBaseMovesSidewaysAndTurnsOnTheSpot) {
+    auto loaded = loadUrdf(LAGRANGE_TEST_AMR_FMS_URDF);
+    ASSERT_TRUE(loaded) << loaded.error();
+    const Robot& robot = *loaded;
+    const auto swerve = findSwerveModules(robot);
+    ASSERT_TRUE(swerve);
+    ASSERT_EQ(swerve->modules.size(), 4U);
+    EXPECT_NEAR(swerve->wheelRadiusM, 0.0625, 1e-9);
+    EXPECT_FALSE(findSwerveModules(amr())) << "a differential drive is not a swerve base";
+
+    const auto run = [&](VelocityCommand command, double seconds) {
+        // An external command makes the run non-deterministic by declaration only.
+        Scheduler scheduler(SchedulerOptions{.deterministic = false});
+        scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+        DriveCommand::Settings settings;
+        settings.lateral = true;
+        scheduler.add(std::make_unique<DriveCommand>(
+            settings, [command]() -> std::optional<VelocityCommand> { return command; }));
+        scheduler.add(std::make_unique<SwerveController>(*swerve));
+        scheduler.add(std::make_unique<electrical::IdealTorqueSource>());
+        auto wired = scheduler.wire(WorldView(robot.world));
+        EXPECT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+        EXPECT_TRUE(scheduler.stepUntil(SimTime{static_cast<std::int64_t>(seconds * 1e9)}).ok());
+        const SignalBus& bus = scheduler.bus();
+        const std::span<const double> pose = bus.readN(bus.find("body/base_link/pose"));
+        const double yaw = 2.0 * std::atan2(pose[6], pose[3]);  // upright: w, z only
+        return std::array<double, 3>{pose[0], pose[1], yaw};
+    };
+    // 0.3 m/s to the left for 4 s: about 1.2 m, less the time the modules take to steer.
+    const auto sideways = run({0.0, 0.0, 0.3}, 4.0);
+    EXPECT_NEAR(sideways[1], 1.15, 0.1);
+    EXPECT_NEAR(sideways[0], 0.0, 0.05);
+    EXPECT_NEAR(sideways[2], 0.0, 0.05);
+    // 0.5 rad/s for 3 s about the modules' centre: 1.5 rad less the first few tenths of a second
+    // in which each module steers 45° to its tangent, and the centre stays.
+    const auto turned = run({0.0, 0.5, 0.0}, 3.0);
+    EXPECT_NEAR(turned[2], 1.35, 0.08);
+    EXPECT_LT(std::hypot(turned[0], turned[1]), 0.1);
 }
 
 // --no-demo (the Nav2 launch): the robot waits at its start pose for the first /cmd_vel.
