@@ -1,0 +1,21 @@
+# The released simulator as an image built from the ros-lyrical-* debs alone (roadmap §9): no
+# sources, no compiler. It is also the clean-machine install test: packaging/test_install.sh
+# builds it from the debs of packaging/debs/build_debs.sh and runs the checks in it.
+#
+#   podman build -f packaging/container/Containerfile.release -t lagrange:1.0.0 DEB_DIR
+#   podman run --rm lagrange:1.0.0                 # the sample AMR, headless, for 10 s
+#
+# DEB_DIR is the build context: it holds the .debs and pip-constraints.txt.
+FROM docker.io/library/ros:lyrical-ros-base-resolute
+
+ENV ROS_DISTRO=lyrical DEBIAN_FRONTEND=noninteractive
+COPY *.deb /tmp/debs/
+COPY pip-constraints.txt /tmp/
+# apt resolves the debs' dependencies from Ubuntu and ROS; the two Python packages that are
+# not in Ubuntu (mcap, coacd) come from pip, at the pinned versions.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends /tmp/debs/*.deb python3-pip \
+    && PIP_BREAK_SYSTEM_PACKAGES=1 pip3 install --no-cache-dir -c /tmp/pip-constraints.txt \
+        mcap coacd \
+    && rm -rf /var/lib/apt/lists/* /tmp/debs
+CMD ["bash", "-c", "source /opt/ros/lyrical/setup.bash && ros2 run lagrange_server lagrange info && python3 -c 'import lagrange; s = lagrange.Simulation(lagrange.sample_robot(), world=lagrange.sample_world()); s.step_until(10.0); print(s.read(\"body/base_link/pose\"))'"]

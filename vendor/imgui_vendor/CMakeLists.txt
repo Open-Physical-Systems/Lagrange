@@ -14,6 +14,10 @@ set(IMGUI_SHA256
 )
 
 include(FetchContent)
+# A vendor package downloads its pinned, hash-checked sources by design (as ExternalProject
+# does for the others). Debian's CMake helper disconnects FetchContent for a .deb build
+# (FETCHCONTENT_FULLY_DISCONNECTED=ON), so reconnect it for these two archives.
+set(FETCHCONTENT_FULLY_DISCONNECTED OFF)
 FetchContent_Declare(
     imgui_src
     URL "https://github.com/ocornut/imgui/archive/${IMGUI_COMMIT}.tar.gz"
