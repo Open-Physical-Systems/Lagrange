@@ -303,6 +303,43 @@ std::uint32_t SignalBus::addInput(SignalSpec spec, std::uint32_t reader) {
     return static_cast<std::uint32_t>(inputs_.size() - 1);
 }
 
+namespace {
+
+// A Pose value is a position in the region-local frame unless its spec names a body frame.
+bool regionPose(const SignalSpec& spec) {
+    return spec.type == SignalType::Pose && (spec.frame.empty() || spec.frame == "world_local");
+}
+
+}  // namespace
+
+void SignalBus::shiftOrigin(const std::array<double, 3>& shift) {
+    for (const SignalRecord& record : signals_) {
+        if (!regionPose(record.spec)) {
+            continue;
+        }
+        for (std::uint32_t env = 0; env < batchCount_; ++env) {
+            const std::size_t at = record.offset + env * record.components;
+            for (std::size_t i = 0; i < 3; ++i) {
+                committed_[at + i] -= shift.at(i);
+                previous_[at + i] -= shift.at(i);
+                pending_[at + i] -= shift.at(i);
+            }
+        }
+    }
+    for (const InputSlot& slot : inputs_) {
+        if (!regionPose(slot.spec) || slot.components == 0) {
+            continue;
+        }
+        for (std::uint32_t env = 0; env < batchCount_; ++env) {
+            const std::size_t at = slot.offset + env * slot.components;
+            for (std::size_t i = 0; i < 3; ++i) {
+                inputValues_[at + i] -= shift.at(i);
+                windowSums_[at + i] -= shift.at(i) * slot.windowWeight;
+            }
+        }
+    }
+}
+
 void SignalBus::allocate(std::uint32_t batchCount) {
     batchCount_ = std::max<std::uint32_t>(batchCount, 1);
     std::size_t values = 0;

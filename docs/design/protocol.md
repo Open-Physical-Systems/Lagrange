@@ -237,6 +237,7 @@ message LocalFrame {
   double ecef_x = 1; double ecef_y = 2; double ecef_z = 3;   // m; all zero if not georeferenced
   repeated double enu_from_ecef = 4;                         // 9 values, row-major
   uint64 rebase_count = 5;                                   // increments at each rebase
+  repeated double region_enu = 6;  // 3 values: world ENU of the region-local origin, m (v0.7)
 }
 
 message Prim {

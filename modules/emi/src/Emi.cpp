@@ -196,7 +196,7 @@ Expected<std::vector<Source>, std::string> sourcesOf(const WorldView& world) {
             return Unexpected{where + "a transmitter needs emi:frequency and emi:radiatedPower"};
         }
         if (const auto map = inst->assetPath("emi:fieldMap")) {
-            auto field = fields::Field::load(std::string(*map));
+            auto field = fields::Field::load(std::string(*map), world.raw().region.worldEnu);
             if (!field) {
                 return Unexpected{where + field.error()};
             }

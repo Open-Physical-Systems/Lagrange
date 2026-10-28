@@ -41,6 +41,7 @@ public:
     void shutdown() override;
     Status saveState(StateWriter& writer) const override;
     Status restoreState(StateReader& reader) override;
+    void shiftOrigin(const std::array<double, 3>& shift) override;
 
     struct Impl;
 

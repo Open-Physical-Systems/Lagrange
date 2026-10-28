@@ -327,6 +327,13 @@ Status MulticopterController::saveState(StateWriter& writer) const {
     return {};
 }
 
+void MulticopterController::shiftOrigin(const std::array<double, 3>& shift) {
+    for (std::size_t i = 0; i < 3; ++i) {
+        home_.at(i) -= shift.at(i);
+        setpoint_.at(i) -= shift.at(i);
+    }
+}
+
 Status MulticopterController::restoreState(StateReader& reader) {
     bool ok = reader.get(homed_);
     for (double& v : home_) {

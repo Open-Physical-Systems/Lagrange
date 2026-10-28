@@ -140,6 +140,9 @@ public:
     /// All modules' state, the bus and time. Fails if a module cannot save its state.
     Status saveState(StateWriter& writer) const;
     Status restoreState(StateReader& reader);
+    /// Floating-origin rebase between ticks: moves the bus's region-local poses and every
+    /// module's kept positions by -shift (IModule::shiftOrigin).
+    void shiftOrigin(const std::array<double, 3>& shift);
     /// XXH3-64 of the saved state; equal hashes mean equal runs (determinism tests).
     [[nodiscard]] Expected<std::uint64_t, Status> stateHash() const;
 

@@ -475,6 +475,30 @@ Status MujocoBackend::saveState(StateWriter& writer) const {
     return {};
 }
 
+void MujocoBackend::shiftOrigin(const std::array<double, 3>& shift) {
+    if (model_ == nullptr) {
+        return;
+    }
+    // Free bodies (floating bases) and mocap bodies (kinematic agents) are the only positions
+    // in the world frame; everything else is relative to a parent. Fixed geometry was built in
+    // the new frame already.
+    for (int j = 0; j < model_->njnt; ++j) {
+        if (model_->jnt_type[j] == mjJNT_FREE) {
+            double* position = data_->qpos + model_->jnt_qposadr[j];
+            for (std::size_t i = 0; i < 3; ++i) {
+                position[i] -= shift.at(i);
+            }
+        }
+    }
+    for (int m = 0; m < model_->nmocap; ++m) {
+        for (std::size_t i = 0; i < 3; ++i) {
+            data_->mocap_pos[3 * m + i] -= shift.at(i);
+        }
+    }
+    mj_step1(model_, data_);
+    mj_rnePostConstraint(model_, data_);
+}
+
 Status MujocoBackend::restoreState(StateReader& reader) {
     if (model_ == nullptr) {
         return Status::error(StatusCode::Internal, "restoreState before init");

@@ -374,9 +374,20 @@ public:
         scene_ = client_.scene();
         // Re-aim the camera whenever a different stage is shown (first scene, or a file was
         // opened), but not when the same stage is merely re-sent after a seek.
+        if (scene_ && scene_->statics->stagePath == framedStage_ &&
+            scene_->statics->rebaseCount != framedRebase_) {
+            // The floating origin moved: keep looking at the same place in the world.
+            for (std::size_t k = 0; k < 3; ++k) {
+                camera_.target.at(k) += framedRegion_.at(k) - scene_->statics->regionEnu.at(k);
+            }
+            framedRegion_ = scene_->statics->regionEnu;
+            framedRebase_ = scene_->statics->rebaseCount;
+        }
         if (scene_ && scene_->statics->stagePath != framedStage_) {
             frameScene(*scene_);
             framedStage_ = scene_->statics->stagePath;
+            framedRegion_ = scene_->statics->regionEnu;
+            framedRebase_ = scene_->statics->rebaseCount;
             selectedPrim_ = kNone;
             // A prim asked for on the command line is selected in the first stage shown.
             for (std::uint32_t i = 0; !selectPath_.empty() && i < scene_->statics->prims.size();
@@ -709,6 +720,8 @@ private:
     std::vector<std::unique_ptr<Panel>> panels_;
     Camera camera_;
     double followDistance_{0.0};
+    std::array<double, 3> framedRegion_{};  // the region origin the camera is placed in
+    std::uint64_t framedRebase_{0};
     double followPitchDeg_{0.0};
     std::uint32_t selectedPrim_{kNone};
     std::shared_ptr<const SceneFrame> scene_;

@@ -16,7 +16,8 @@ namespace lagrange::server {
 /// Writes a run to an MCAP file in the recording format of docs/design/formats.md §7 (roadmap
 /// 0.2-E4), the one the mock server replays: /lagrange/meta (RunMeta), /lagrange/catalog
 /// (SignalCatalog), /lagrange/scene/snapshot (SceneSnapshot), /lagrange/signals/<dt>ns
-/// (SignalBlock, 100 ms of samples each), /lagrange/state_hash (StateHash), zstd chunks.
+/// (SignalBlock, 100 ms of samples each), /lagrange/state_hash (StateHash),
+/// /lagrange/scene/frame (LocalFrame, at each rebase of the floating origin), zstd chunks.
 ///
 /// The server thread adds samples; serialised messages go to a writer thread, so the disk never
 /// blocks a tick. Every signal is uniformly sampled from t = 0: a sample that is missing (a
@@ -36,6 +37,8 @@ public:
     /// Sample `index` (time index x dt) of signal `id`. Indices only grow; a gap is NaN.
     void add(std::uint32_t id, std::uint64_t index, std::span<const double> values);
     void stateHash(SimTime t, std::uint64_t hash);
+    /// The region frame from `t` on, after the floating origin moved (huge-worlds.md §1.2).
+    void frame(SimTime t, const viewer::v1::LocalFrame& frame);
     /// Writes the blocks whose 100 ms span ended at or before `now`.
     void flush(SimTime now);
     /// Writes what is left and the final RunMeta (with the duration), then closes the file.

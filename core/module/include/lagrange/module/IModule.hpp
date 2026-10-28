@@ -8,6 +8,7 @@
 #include "lagrange/time/SimTime.hpp"
 #include "lagrange/world/World.hpp"
 
+#include <array>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -95,6 +96,11 @@ public:
     virtual Status restoreState(StateReader& /*reader*/) {
         return Status::error(StatusCode::Unsupported, "restoreState not implemented");
     }
+    /// Floating-origin rebase between ticks (huge-worlds.md §1.2): the region origin moved by
+    /// `shift` (whole metres, world ENU), so every region-local position the module keeps in
+    /// its dynamic state moves by -shift. The world it was initialised with is already in the
+    /// new frame. Modules that keep no positions need not override it.
+    virtual void shiftOrigin(const std::array<double, 3>& /*shift*/) {}
 };
 
 }  // namespace lagrange

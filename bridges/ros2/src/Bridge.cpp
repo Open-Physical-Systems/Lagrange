@@ -3,6 +3,8 @@
 #include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -13,6 +15,7 @@
 #include <map>
 #include <mutex>
 #include <numbers>
+#include <optional>
 #include <random>
 #include <regex>
 #include <set>
@@ -97,6 +100,15 @@ struct TopicCounter {
 
 struct Bridge::Impl {
     rclcpp::Node::SharedPtr node;
+    // The floating origin (huge-worlds.md §1.2): poses on the bus are region-local, and the
+    // region moves when the robot drives far. ROS sees them in the region of the first attach,
+    // so /odom, its TF, ground truth and entity states stay continuous across a rebase.
+    std::optional<std::array<double, 3>> firstRegion;
+    std::array<std::atomic<double>, 3> regionOffset{};  // region now minus firstRegion, m
+
+    [[nodiscard]] std::array<double, 3> offset() const {
+        return {regionOffset[0].load(), regionOffset[1].load(), regionOffset[2].load()};
+    }
     rclcpp::executors::SingleThreadedExecutor executor;
     std::thread spinner;
 
@@ -488,6 +500,12 @@ Bridge::~Bridge() {
 
 void Bridge::attach(const World& world, const SignalBus& bus) {
     Impl& s = *impl_;
+    if (!s.firstRegion) {
+        s.firstRegion = world.region.worldEnu;
+    }
+    for (std::size_t i = 0; i < 3; ++i) {
+        s.regionOffset.at(i).store(world.region.worldEnu.at(i) - s.firstRegion->at(i));
+    }
     s.joints.clear();
     for (const std::string& name : world.joints.names) {
         const SignalId position = bus.find("joint/" + name + "/position");
@@ -737,9 +755,10 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
             odom.header.stamp = stampOf(now);
             odom.header.frame_id = settings_.odomFrame;
             odom.child_frame_id = settings_.baseLink;
-            odom.pose.pose.position.x = pose[0];
-            odom.pose.pose.position.y = pose[1];
-            odom.pose.pose.position.z = pose[2];
+            const std::array<double, 3> offset = s.offset();
+            odom.pose.pose.position.x = pose[0] + offset[0];
+            odom.pose.pose.position.y = pose[1] + offset[1];
+            odom.pose.pose.position.z = pose[2] + offset[2];
             odom.pose.pose.orientation.w = pose[3];
             odom.pose.pose.orientation.x = pose[4];
             odom.pose.pose.orientation.y = pose[5];
@@ -769,9 +788,9 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
                 geometry_msgs::msg::TransformStamped base;
                 base.header = odom.header;
                 base.child_frame_id = settings_.baseLink;
-                base.transform.translation.x = pose[0];
-                base.transform.translation.y = pose[1];
-                base.transform.translation.z = pose[2];
+                base.transform.translation.x = odom.pose.pose.position.x;
+                base.transform.translation.y = odom.pose.pose.position.y;
+                base.transform.translation.z = odom.pose.pose.position.z;
                 base.transform.rotation = odom.pose.pose.orientation;
                 tf.transforms.push_back(base);
                 s.deliver("/tf", s.tf, tf);
@@ -1096,13 +1115,14 @@ rclcpp::ServiceBase::SharedPtr unsupported(rclcpp::Node& node, const std::string
                                     });
 }
 
-si::msg::EntityState stateMessage(const EntityMotion& motion, SimTime now) {
+si::msg::EntityState stateMessage(const EntityMotion& motion, SimTime now,
+                                  const std::array<double, 3>& offset) {
     si::msg::EntityState state;
     state.header.stamp = stampOf(now);
     state.header.frame_id = "world";
-    state.pose.position.x = motion.pose.position[0];
-    state.pose.position.y = motion.pose.position[1];
-    state.pose.position.z = motion.pose.position[2];
+    state.pose.position.x = motion.pose.position[0] + offset[0];
+    state.pose.position.y = motion.pose.position[1] + offset[1];
+    state.pose.position.z = motion.pose.position[2] + offset[2];
     state.pose.orientation.w = motion.pose.orientation[0];
     state.pose.orientation.x = motion.pose.orientation[1];
     state.pose.orientation.y = motion.pose.orientation[2];
@@ -1243,7 +1263,8 @@ void Bridge::serveSimulation(SimulationHandler& handler) {
                 for (const EntityDescription& entity : std::get<0>(matched)) {
                     if (const auto motion = h->entityMotion(entity.name)) {
                         states.first.push_back(entity.name);
-                        states.second.push_back(stateMessage(*motion, impl_->lastClock));
+                        states.second.push_back(
+                            stateMessage(*motion, impl_->lastClock, impl_->offset()));
                     }
                 }
                 return states;
@@ -1267,7 +1288,7 @@ void Bridge::serveSimulation(SimulationHandler& handler) {
             const std::string name = request->entity;
             const auto motion = s.onMain([h, this, name]() -> std::optional<si::msg::EntityState> {
                 if (const auto found = h->entityMotion(name)) {
-                    return stateMessage(*found, impl_->lastClock);
+                    return stateMessage(*found, impl_->lastClock, impl_->offset());
                 }
                 return std::nullopt;
             });
