@@ -84,13 +84,40 @@ warehouse authored 500 km out gives bit-identical poses and lidar ranges within 
 rounding of the authored coordinates) after 10 s; without the floating origin it is off by
 5e-7 m in pose and 8e-5 m in range.
 
+### 1.4 Rebase during a run (v0.7)
+
+Every 100 ms of simulated time the server compares the robot's first body with the region
+origin. Beyond 1000 m (`kRebaseDistanceM`) it moves the origin to the body's whole-metre position:
+
+1. it saves the run's state (`Scheduler::saveState`);
+2. `shiftRegion` moves the world tables and the scene by the offset, as `recentre` does at load;
+3. it rebuilds the run on them, so static geometry (MuJoCo's model, Jolt's scenery, the lidar
+   casters, fields loaded with `Field::load(path, region)`) is built in the new frame;
+4. it restores the state and calls `Scheduler::shiftOrigin`, which moves the region-local
+   `Pose` values on the bus (outputs, held inputs, window sums) and calls every module's
+   `IModule::shiftOrigin`: MuJoCo's free joints and mocap bodies, Jolt's bodies, the
+   multicopter's home and setpoint, ArduPilot's start point. Traffic, scenarios and the vehicle
+   model keep lane coordinates and need nothing.
+
+Consumers:
+- the viewer gets a new snapshot whose `LocalFrame` has the new `region_enu` and
+  `rebase_count`, and moves its camera by the difference, so the view does not jump;
+- the ROS bridge keeps `/odom`, its TF, `/ground_truth/odom` and entity states in the region of
+  the first build (it adds the accumulated offset), so Nav2 and TF see no jump;
+- a recording gets a `LocalFrame` on `/lagrange/scene/frame` at each rebase. A replay does not
+  rebase: it shows the recorded poses as they are.
+
+`FloatingOrigin.ARebaseDuringTheRunKeepsTheTrajectoryOn{Mujoco,Jolt}` (`server/test/
+test_robot.cpp`) rebase the warehouse demo by (37, -12, 0) m at 5 s: at 10 s the pose matches the
+run that was never rebased within 1e-9 m on MuJoCo (double) and 1e-4 m on Jolt (float).
+
 Not yet done:
-- Rebasing during a run, when the robot drives more than `rebase_distance` away (needs the
-  backend shift above).
-- The viewer cannot show world coordinates for a world that is not georeferenced. `LocalFrame`
-  carries an ECEF anchor and `rebase_count`, but no region offset; adding one is a `proto/`
-  change.
-- The ROS bridge does not publish `map → region`, and MCAP recordings do not store the origin.
+- Third-party plugins (the C ABI) are not told about a rebase; a plugin that keeps world
+  positions must read them from the bus.
+- `rebase_distance` from the profile (`world.streaming.rebase_distance`) is not read; the
+  distance is the constant.
+- A rebase rebuilds the run, which takes about as long as loading it (tens of milliseconds for
+  the samples); with huge worlds that is once per kilometre.
 
 ## 2. Tile streaming
 

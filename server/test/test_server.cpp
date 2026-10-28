@@ -991,5 +991,40 @@ TEST_F(ServerTest, SeekingASimulationIsRefused) {
     EXPECT_NE(received_.back().command_result().error().find("--replay"), std::string::npos);
 }
 
+// huge-worlds.md §1.4: the floating origin follows the robot during a run. The sample AMR
+// starts 999.5 m east of the origin (no rebase at load: within 1000 m) and drives its demo
+// figure-eight; once it is past 1000 m the server moves the region origin to its whole-metre
+// position, between ticks, and the run goes on in the new frame without a jump.
+TEST(FloatingOrigin, TheServerRebasesWhenTheRobotDrivesFar) {
+    ServerOptions options;
+    options.robotPath = LAGRANGE_TEST_AMR_URDF;
+    options.realTimeFactor = 0.0;
+    options.ros = false;
+    options.spawn.position = {999.5, 0.0, 0.0};
+    Server server(options);
+    ASSERT_TRUE(server.load().ok());
+    EXPECT_EQ(server.world().region.rebaseCount, 0U);
+    std::array<double, 3> last{};
+    double largestStep = 0.0;
+    for (std::int64_t t = 100'000'000; t <= 20'000'000'000; t += 100'000'000) {
+        ASSERT_TRUE(server.stepUntil(SimTime{t}).ok());
+        const std::vector<double> pose = server.read("body/base_link/pose");
+        std::array<double, 3> world{};
+        for (std::size_t i = 0; i < 3; ++i) {
+            world.at(i) = pose.at(i) + server.world().region.worldEnu.at(i);
+        }
+        if (t > 100'000'000) {
+            largestStep = std::max(largestStep, std::hypot(world[0] - last[0], world[1] - last[1]));
+        }
+        last = world;
+    }
+    ASSERT_GE(server.world().region.rebaseCount, 1U) << "the robot crossed 1000 m";
+    EXPECT_EQ(server.world().region.worldEnu[1], 0.0);
+    EXPECT_GE(server.world().region.worldEnu[0], 1000.0);
+    EXPECT_LT(std::abs(server.read("body/base_link/pose").at(0)), 1000.0);
+    // At most the demo's speed times 100 ms: no jump in world ENU across the rebase.
+    EXPECT_LT(largestStep, 0.1);
+}
+
 }  // namespace
 }  // namespace lagrange::server

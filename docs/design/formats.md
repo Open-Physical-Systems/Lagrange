@@ -1447,6 +1447,7 @@ drive, hand-written in C, Apache-2.0), which matches the built-in brushed model 
 | `/lagrange/scene/delta` | `SceneDelta` | transform and attribute changes |
 | `/lagrange/signals/<dt>ns` | `SignalBlock` | signals grouped by writer step size, e.g. `/lagrange/signals/100000ns` |
 | `/lagrange/state_hash` | `StateHash` | determinism check values |
+| `/lagrange/scene/frame` | `LocalFrame` | the region frame from that time on, at each rebase of the floating origin (v0.7); positions recorded after it are in the new frame |
 | `/lagrange/log` | `LogRecord` | console messages |
 | ROS topics (optional) | CDR, as rosbag2 writes them | when `record.ros_topics` is used (later) |
 

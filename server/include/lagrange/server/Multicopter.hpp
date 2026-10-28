@@ -60,6 +60,7 @@ public:
     Status step(const StepContext& context, SignalBus& bus) override;
     Status saveState(StateWriter& writer) const override;
     Status restoreState(StateReader& reader) override;
+    void shiftOrigin(const std::array<double, 3>& shift) override;
 
     /// Whether `world` is a multicopter this controller can fly: three or more RotorAPI_1
     /// joints, all on one body.

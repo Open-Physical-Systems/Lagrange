@@ -426,7 +426,7 @@ struct Server::Impl {
     std::vector<Captured> captured;   // by signal index; empty values when nobody subscribes
     std::deque<v1::LogRecord> logs;
     std::string schemaText;
-    std::array<double, 3> shift{};  // world ENU of the region-local origin at load
+    std::array<double, 3> shift{};  // world ENU of the region-local origin (moves at a rebase)
 
     Clock::time_point lastWall{Clock::now()};
     Clock::time_point lastStatus{Clock::now()};
@@ -1095,6 +1095,9 @@ struct Server::Impl {
             tickNs.push_back(nanosSince(tickStart, Clock::now()));
             capture();
             record();
+            if (Status status = rebaseIfFar(); !status.ok()) {
+                return status;
+            }
             if (scenarioState.valid() && !scenarioEnded &&
                 scheduler->bus().read(scenarioState) == 1.0) {
                 scenarioEnded = true;
@@ -1316,16 +1319,25 @@ struct Server::Impl {
         return snapshotAt(++session.sequence);
     }
 
+    /// The region frame: where the floating origin is and how often it moved.
+    [[nodiscard]] v1::LocalFrame localFrame() const {
+        v1::LocalFrame frame;
+        frame.set_rebase_count(robot.world.region.rebaseCount);
+        for (const double v : robot.world.region.worldEnu) {
+            frame.add_region_enu(v);
+        }
+        for (const double v : {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}) {
+            frame.add_enu_from_ecef(v);
+        }
+        return frame;
+    }
+
     v1::Envelope snapshotAt(std::uint64_t sequence) {
         v1::Envelope envelope;
         v1::SceneSnapshot& snap = *envelope.mutable_snapshot();
         snap.set_sequence(sequence);
         snap.mutable_sim_time()->set_ns(scheduler->now().ns);
-        v1::LocalFrame& frame = *snap.mutable_frame();
-        frame.set_rebase_count(robot.world.region.rebaseCount);
-        for (const double v : {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}) {
-            frame.add_enu_from_ecef(v);
-        }
+        *snap.mutable_frame() = localFrame();
         std::vector<std::uint32_t> children(robot.scene.prims.size(), 0);
         for (const ScenePrim& prim : robot.scene.prims) {
             if (prim.parent != kNoIndex) {
@@ -2242,6 +2254,10 @@ struct Server::Impl {
                         }
                         capture();
                         record();
+                        if (Status status = rebaseIfFar(); !status.ok()) {
+                            fail(status);
+                            break;
+                        }
                     }
                     emit();
                 }
@@ -2369,7 +2385,8 @@ struct Server::Impl {
     std::vector<SignalId> replayPose;            // per scene prim: its recorded pose, if any
     google::protobuf::RepeatedPtrField<v1::ElectricalNet> replayNets;  // from its snapshot
     static constexpr std::int64_t kCheckpointNs = 1'000'000'000;       // a saved state a second
-    std::map<std::int64_t, std::vector<std::byte>> checkpoints;        // by simulated time
+    static constexpr std::int64_t kRebaseCheckNs = 100'000'000;  // floating-origin check, 10 Hz
+    std::map<std::int64_t, std::vector<std::byte>> checkpoints;  // by simulated time
 
     /// Loads the recording: its scene as the model, its domains as replay substitutes.
     Status loadReplay() {
@@ -2546,6 +2563,52 @@ struct Server::Impl {
         return {};
     }
 
+    /// Floating origin during a run (huge-worlds.md §1.2): every 100 ms of simulated time, if
+    /// the robot is farther than kRebaseDistanceM from the region origin, the origin moves to
+    /// its whole-metre position. The world tables shift, the run is rebuilt on them, and its
+    /// state is carried over and shifted (Scheduler::shiftOrigin). The check runs at fixed
+    /// simulated times, so a deterministic run stays deterministic.
+    Status rebaseIfFar() {
+        // A replay shows the recorded frame as it was recorded.
+        if (replay || bodyPose.empty() || !bodyPose.front().valid() ||
+            scheduler->now().ns % kRebaseCheckNs != 0) {
+            return {};
+        }
+        const std::span<const double> pose = scheduler->bus().readN(bodyPose.front());
+        const std::array<double, 3> offset =
+            coords::rebaseShift({pose[0], pose[1], pose[2]}, kRebaseDistanceM);
+        if (offset == std::array<double, 3>{0.0, 0.0, 0.0}) {
+            return {};
+        }
+        StateWriter saved;
+        if (Status status = scheduler->saveState(saved); !status.ok()) {
+            return Status::error(status.code, "floating origin: " + status.message);
+        }
+        shiftRegion(robot, offset);
+        if (Status status = build(); !status.ok()) {
+            return Status::error(status.code, "floating origin: " + status.message);
+        }
+        StateReader reader(saved.bytes());
+        if (Status status = scheduler->restoreState(reader); !status.ok()) {
+            return Status::error(status.code, "floating origin: " + status.message);
+        }
+        scheduler->shiftOrigin(offset);
+        shift = robot.world.region.worldEnu;
+        if (recorder) {
+            recorder->frame(scheduler->now(), localFrame());
+        }
+        char text[200];
+        std::snprintf(
+            text, sizeof text,
+            "floating origin moved by (%.0f, %.0f, %.0f) m at t = %.3f s: the "
+            "region-local frame is now at (%.0f, %.0f, %.0f) m in world ENU (rebase %llu)",
+            offset[0], offset[1], offset[2], scheduler->now().seconds(), shift[0], shift[1],
+            shift[2], static_cast<unsigned long long>(robot.world.region.rebaseCount));
+        log(v1::LOG_LEVEL_INFO, "stage", text);
+        resyncViewers();
+        return {};
+    }
+
     /// The world prim standing for a scene prim, by path; kNoPrim if there is none.
     [[nodiscard]] std::uint32_t worldPrimOf(std::uint32_t scenePrim) const {
         if (scenePrim >= robot.scene.prims.size()) {
@@ -2713,6 +2776,10 @@ struct Server::Impl {
             }
             capture();
             record();
+            if (Status status = rebaseIfFar(); !status.ok()) {
+                fail(status);
+                return status;
+            }
             if (bridge) {
                 bridge->publish(scheduler->bus(), scheduler->now());
             }
@@ -3921,7 +3988,16 @@ Status Server::stepUntil(SimTime t) {
     if (!impl_->scheduler) {
         return Status::error(StatusCode::Internal, "stepUntil before load()");
     }
-    return impl_->scheduler->stepUntil(t);
+    // Tick by tick, so the floating origin follows the robot as in a served run.
+    while (impl_->scheduler->now() < t) {
+        if (Status status = impl_->scheduler->stepTick(); !status.ok()) {
+            return status;
+        }
+        if (Status status = impl_->rebaseIfFar(); !status.ok()) {
+            return status;
+        }
+    }
+    return {};
 }
 
 std::vector<Server::SignalEntry> Server::signals() const {

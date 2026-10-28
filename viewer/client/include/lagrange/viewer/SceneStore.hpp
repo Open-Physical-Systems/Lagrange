@@ -96,6 +96,9 @@ struct SceneStatics {
     std::vector<ColliderData> colliders;
     std::string stagePath;
     std::uint64_t generation{0};  // increases with every snapshot; GPU caches key on it
+    /// The floating origin: world ENU of the region-local frame (m), and how often it moved.
+    std::array<double, 3> regionEnu{};
+    std::uint64_t rebaseCount{0};
 };
 
 /// One consistent state of the scene. Immutable.

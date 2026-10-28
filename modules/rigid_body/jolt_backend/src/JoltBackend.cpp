@@ -1045,6 +1045,18 @@ Status JoltBackend::saveState(StateWriter& writer) const {
     return {};
 }
 
+void JoltBackend::shiftOrigin(const std::array<double, 3>& shift) {
+    // Every body, scenery included: a restored state puts the scenery back where it was in the
+    // old frame, so all of it moves by -shift together (exact: whole metres).
+    JPH::BodyIDVector ids;
+    impl_->system->GetBodies(ids);
+    JPH::BodyInterface& bi = impl_->system->GetBodyInterfaceNoLock();
+    const JPH::RVec3 offset(jv(shift));
+    for (const JPH::BodyID id : ids) {
+        bi.SetPosition(id, bi.GetPosition(id) - offset, JPH::EActivation::DontActivate);
+    }
+}
+
 Status JoltBackend::restoreState(StateReader& reader) {
     std::string bytes;
     if (!reader.getString(bytes)) {

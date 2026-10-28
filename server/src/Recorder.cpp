@@ -193,6 +193,7 @@ void Recorder::begin(const record::v1::RunMeta& meta, const v1::SignalCatalog& c
         s.channel("/lagrange/signals/" + std::to_string(dt) + "ns", v1::SignalBlock::descriptor());
     }
     s.channel("/lagrange/state_hash", record::v1::StateHash::descriptor());
+    s.channel("/lagrange/scene/frame", v1::LocalFrame::descriptor());
     s.push(metaChannel, 0, meta);
     s.push(catalogChannel, 0, catalog);
     s.push(snapshotChannel, 0, snapshot);
@@ -217,6 +218,10 @@ void Recorder::stateHash(SimTime t, std::uint64_t hash) {
     message.mutable_sim_time()->set_ns(t.ns);
     message.set_hash(hash);
     impl_->push(impl_->channels.at("/lagrange/state_hash"), t.ns, message);
+}
+
+void Recorder::frame(SimTime t, const v1::LocalFrame& frame) {
+    impl_->push(impl_->channels.at("/lagrange/scene/frame"), t.ns, frame);
 }
 
 void Recorder::flush(SimTime now) {

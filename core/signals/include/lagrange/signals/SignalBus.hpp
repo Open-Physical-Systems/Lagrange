@@ -106,6 +106,9 @@ private:
 
     // Called by the scheduler.
     std::uint32_t addSignal(SignalSpec spec, std::uint32_t writer);
+    /// Floating-origin rebase: moves every region-local Pose value (outputs, held inputs and
+    /// window sums) by -shift, so that they are in the new region frame.
+    void shiftOrigin(const std::array<double, 3>& shift);
     std::uint32_t addInput(SignalSpec spec, std::uint32_t reader);
     void allocate(std::uint32_t batchCount);
     void commit(std::uint32_t signal, SimTime stamp, std::uint64_t tick, Duration writerStep);

@@ -52,6 +52,7 @@ public:
 
     Status saveState(StateWriter& writer) const override;
     Status restoreState(StateReader& reader) override;
+    void shiftOrigin(const std::array<double, 3>& shift) override;
 
     /// The compiled model, for tests and tools; null before init().
     [[nodiscard]] const mjModel_* model() const { return model_; }

@@ -17,8 +17,9 @@ using Vec3 = std::array<double, 3>;
 
 /// A volumetric field (formats: OpenVDB's NanoVDB, CLAUDE.md §4): a NanoVDB grid of float
 /// (scalar: fog extinction, dose) or Vec3f (vector: wind, B, E) values, sampled trilinearly in
-/// world coordinates (the grid's own index-to-world map, region-local metres). Outside its
-/// active voxels a field is its background value, zero.
+/// world coordinates (the grid's own index-to-world map, region-local metres). A file is
+/// authored in the stage's frame (world ENU); load() moves it into the region frame. Outside
+/// its active voxels a field is its background value, zero.
 ///
 /// The grid is one block of memory, kept as bytes: the same bytes go onto the signal bus as a
 /// Field3D buffer (encoding "nanovdb") and to the GPU later (PNanoVDB), unchanged.
@@ -26,9 +27,10 @@ class Field {
 public:
     enum class Kind { Scalar, Vector };
 
-    /// The first grid of a .nvdb file.
+    /// The first grid of a .nvdb file, authored in world ENU, moved into the region frame
+    /// whose origin is `regionOrigin` (world ENU, m; World::region.worldEnu).
     [[nodiscard]] static Expected<std::shared_ptr<const Field>, std::string> load(
-        const std::string& path);
+        const std::string& path, const Vec3& regionOrigin = {});
     /// A grid from its bytes (a Field3D buffer); null when they are not a float or Vec3f grid.
     [[nodiscard]] static std::shared_ptr<const Field> fromBytes(std::vector<std::byte> bytes);
 

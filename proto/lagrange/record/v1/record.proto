@@ -14,6 +14,8 @@ import "lagrange/viewer/v1/common.proto";
 //   /lagrange/scene/snapshot  SceneSnapshot    one message at time 0
 //   /lagrange/signals/<dt>    SignalBlock      one channel per writer step size, in time order
 //   /lagrange/state_hash      StateHash        optional
+//   /lagrange/scene/frame     LocalFrame       at each rebase of the floating origin: positions
+//                                              recorded from then on are in this region frame
 
 // First message of every recording.
 message RunMeta {

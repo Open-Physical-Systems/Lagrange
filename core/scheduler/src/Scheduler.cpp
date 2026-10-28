@@ -633,6 +633,13 @@ Status Scheduler::saveState(StateWriter& writer) const {
     return {};
 }
 
+void Scheduler::shiftOrigin(const std::array<double, 3>& shift) {
+    bus_.shiftOrigin(shift);
+    for (const std::uint32_t index : order_) {
+        entries_[index].module->shiftOrigin(shift);
+    }
+}
+
 Status Scheduler::restoreState(StateReader& reader) {
     const auto corrupt = [](std::string what) {
         return Status::error(StatusCode::InvalidConfig, "saved state does not match: " + what);
