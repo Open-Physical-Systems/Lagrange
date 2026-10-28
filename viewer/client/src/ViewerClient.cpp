@@ -434,6 +434,27 @@ void ViewerClient::setRosGraphWanted(bool wanted) {
     }
 }
 
+void ViewerClient::setCameraInterest(const std::array<double, 3>& eye) {
+    constexpr double kMovedM = 10.0;
+    constexpr auto kEvery = std::chrono::milliseconds(500);
+    const auto now = std::chrono::steady_clock::now();
+    const double moved =
+        std::hypot(eye[0] - sentEye_[0], eye[1] - sentEye_[1], eye[2] - sentEye_[2]);
+    if (moved < kMovedM || now - sentEyeAt_ < kEvery) {
+        return;
+    }
+    sentEye_ = eye;
+    sentEyeAt_ = now;
+    auto envelope = std::make_unique<v1::Envelope>();
+    envelope->mutable_command()->set_request_id(nextRequestId_++);
+    v1::SetCameraInterest& hint = *envelope->mutable_command()->mutable_set_camera_interest();
+    hint.set_enabled(true);
+    hint.set_x(eye[0]);
+    hint.set_y(eye[1]);
+    hint.set_z(eye[2]);
+    enqueue(std::move(envelope));
+}
+
 void ViewerClient::setWorldWanted(bool wanted) {
     if (worldWanted_.exchange(wanted) != wanted) {
         sendViewRequests();

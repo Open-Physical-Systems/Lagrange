@@ -194,11 +194,17 @@ Built:
   set depends only on the robot's path: `Streaming.TheTilesAroundTheRobotAreLoadedAnd
   TheRunIsDeterministic` runs the sample twice and compares state hashes.
 - Profile keys `world.streaming.load_radius` and `unload_radius` (defaults 600 m and 800 m).
+- The World workspace shows the loaded tiles on the finest tiles' grid (`WorldState`: loaded
+  collision tiles level of detail 0, others 2), the robot's active radius, the floating origin
+  in world ENU with its rebase count and last rebase, the georeference, host memory and the
+  load queue.
 - Sample: `assets/worlds/tiled_town/` (written by `make_tiled_town.py`), a 2048 m town in 4
   coarse tiles of 1024 m and 64 collision tiles of 256 m.
 
 Not yet:
-- Interest from sensors' ranges and viewer cameras (protocol hints): only the robot's position.
+- Interest from sensors' ranges. Viewer cameras are hints (`SetCameraInterest`, sent when the
+  camera moved 10 m, at most twice a second) in runs with ROS; runs without ROS are
+  deterministic and follow the robot only.
 - Memory budgets from the profile; the selector supports them, the server passes none.
 - A tile change rebuilds the run (tens of milliseconds for the sample, more for big tiles); an
   in-place add and remove of static geometry in the backends would avoid it.

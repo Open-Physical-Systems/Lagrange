@@ -428,6 +428,9 @@ public:
             profileSession_.apply(client_);
             applyProfile_ = false;
         }
+        if (scene_) {
+            client_.setCameraInterest(camera_.eye());  // for streamed worlds; rate-limited
+        }
         PanelContext context{client_,         scene_,  client_.status(), client_.connection(),
                              client_.stats(), camera_, selectedPrim_};
         context.catalog = client_.catalog();
