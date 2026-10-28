@@ -77,7 +77,12 @@ target_include_directories(
     SYSTEM
     PRIVATE ${LAGRANGE_XXHASH_INCLUDE_DIR}
 )
-target_link_libraries(lagrange_proto_transport PUBLIC lagrange_proto_framing)
+find_package(OpenSSL REQUIRED)
+target_link_libraries(
+    lagrange_proto_transport
+    PUBLIC lagrange_proto_framing
+    PRIVATE OpenSSL::SSL OpenSSL::Crypto
+)
 
 # Python modules, generated into the build tree and installed as the namespace package
 # lagrange.viewer.v1 (no __init__.py, so other packages can also provide lagrange.*).
@@ -167,6 +172,8 @@ if(BUILD_TESTING)
         test_transport
         lagrange_proto_transport
         Threads::Threads
+        OpenSSL::SSL
+        OpenSSL::Crypto
     )
     lagrange_target_defaults(test_transport)
 
@@ -195,5 +202,5 @@ if(LAGRANGE_BUILD_FUZZERS)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(Protobuf)
+ament_export_dependencies(Protobuf OpenSSL)
 ament_package()

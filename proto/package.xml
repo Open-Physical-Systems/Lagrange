@@ -13,6 +13,7 @@
 
   <build_depend>libxxhash-dev</build_depend>
   <depend>protobuf-dev</depend>
+  <depend>libssl-dev</depend>
   <exec_depend>python3-protobuf</exec_depend>
 
   <test_depend>ament_cmake_gtest</test_depend>

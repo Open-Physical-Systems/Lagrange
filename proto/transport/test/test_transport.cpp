@@ -8,6 +8,9 @@
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/x509v3.h>
 #include <poll.h>
 #include <string>
 #include <sys/socket.h>
@@ -32,6 +35,7 @@ using lagrange::proto::parsePayload;
 using lagrange::proto::ShmArena;
 using lagrange::proto::ShmReader;
 using lagrange::proto::ShmSlot;
+using lagrange::proto::TlsContext;
 namespace v1 = lagrange::viewer::v1;
 
 // A private directory for socket files, removed afterwards.
@@ -556,6 +560,133 @@ TEST(Backoff, DoublesUpToTheMaximumAndResets) {
     EXPECT_EQ(backoff.next(), 500ms);
     backoff.reset();
     EXPECT_EQ(backoff.next(), 100ms);
+}
+
+// --- TLS (tls:// endpoints) ------------------------------------------------------------------
+
+/// A self-signed certificate for 127.0.0.1 and localhost, valid for an hour, and its key, as
+/// PEM files: its own CA for the client's verification.
+void writeCertificate(const std::string& certificateFile, const std::string& keyFile) {
+    EVP_PKEY* key = EVP_EC_gen("P-256");
+    ASSERT_NE(key, nullptr);
+    X509* certificate = X509_new();
+    X509_set_version(certificate, 2);
+    ASN1_INTEGER_set(X509_get_serialNumber(certificate), 1);
+    X509_gmtime_adj(X509_getm_notBefore(certificate), 0);
+    X509_gmtime_adj(X509_getm_notAfter(certificate), 3600);
+    X509_set_pubkey(certificate, key);
+    X509_NAME* name = X509_get_subject_name(certificate);
+    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+                               reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0);
+    X509_set_issuer_name(certificate, name);
+    X509V3_CTX context;
+    X509V3_set_ctx_nodb(&context);
+    X509V3_set_ctx(&context, certificate, certificate, nullptr, nullptr, 0);
+    for (const auto& [nid, value] : {std::pair{NID_subject_alt_name, "IP:127.0.0.1,DNS:localhost"},
+                                     std::pair{NID_basic_constraints, "critical,CA:TRUE"}}) {
+        X509_EXTENSION* extension = X509V3_EXT_conf_nid(nullptr, &context, nid, value);
+        ASSERT_NE(extension, nullptr);
+        X509_add_ext(certificate, extension, -1);
+        X509_EXTENSION_free(extension);
+    }
+    ASSERT_GT(X509_sign(certificate, key, EVP_sha256()), 0);
+    BIO* out = BIO_new_file(certificateFile.c_str(), "w");
+    PEM_write_bio_X509(out, certificate);
+    BIO_free(out);
+    out = BIO_new_file(keyFile.c_str(), "w");
+    PEM_write_bio_PrivateKey(out, key, nullptr, nullptr, 0, nullptr, nullptr);
+    BIO_free(out);
+    X509_free(certificate);
+    EVP_PKEY_free(key);
+}
+
+/// A TLS client connected to a TLS listener and accepted (the handshake runs in the pumps).
+struct TlsLink {
+    Listener listener;
+    Connection client;
+    Connection server;
+};
+
+void connectTls(const std::shared_ptr<TlsContext>& serverContext,
+                const std::shared_ptr<TlsContext>& clientContext, TlsLink& link) {
+    std::error_code ec;
+    link.listener = Listener::listen(Endpoint::tcp("127.0.0.1", 0, true), ec);
+    ASSERT_TRUE(link.listener.valid()) << ec.message();
+    ASSERT_TRUE(link.listener.endpoint().tls);
+    link.client = Connection::startConnect(link.listener.endpoint(), ec,
+                                           lagrange::proto::kDefaultMaxFrameSize, clientContext);
+    ASSERT_NE(link.client.state(), Connection::State::Closed) << ec.message();
+    std::optional<Connection> accepted;
+    ASSERT_TRUE(pump({&link.client}, [&] {
+        if (!accepted) {
+            accepted =
+                link.listener.accept(ec, lagrange::proto::kDefaultMaxFrameSize, serverContext);
+        }
+        return accepted.has_value() && link.client.state() == Connection::State::Connected;
+    }));
+    link.server = std::move(*accepted);
+}
+
+TEST(Tls, FramesTravelBothWaysEncrypted) {
+    TempDir dir;
+    ASSERT_NO_FATAL_FAILURE(writeCertificate(dir.file("cert.pem"), dir.file("key.pem")));
+    std::string error;
+    const auto serverContext = TlsContext::server(dir.file("cert.pem"), dir.file("key.pem"), error);
+    ASSERT_TRUE(serverContext) << error;
+    const auto clientContext = TlsContext::client(dir.file("cert.pem"), error);
+    ASSERT_TRUE(clientContext) << error;
+    TlsLink link;
+    ASSERT_NO_FATAL_FAILURE(connectTls(serverContext, clientContext, link));
+    EXPECT_TRUE(link.client.secure());
+    EXPECT_TRUE(link.server.secure());
+
+    v1::Envelope hello;
+    hello.mutable_client_hello()->set_client_name(std::string(200'000, 'x'));  // many records
+    ASSERT_TRUE(link.client.queue(hello));
+    v1::Envelope got;
+    ASSERT_TRUE(pump({&link.client, &link.server}, [&] {
+        const auto r = link.server.next();
+        return r.status == FrameReader::Status::Frame && parsePayload(r.payload, got);
+    }));
+    EXPECT_EQ(got.client_hello().client_name().size(), 200'000U);
+    v1::Envelope reply;
+    reply.mutable_server_hello()->set_server_name("tls-server");
+    ASSERT_TRUE(link.server.queue(reply));
+    ASSERT_TRUE(pump({&link.client, &link.server}, [&] {
+        const auto r = link.client.next();
+        return r.status == FrameReader::Status::Frame && parsePayload(r.payload, got);
+    }));
+    EXPECT_EQ(got.server_hello().server_name(), "tls-server");
+}
+
+TEST(Tls, AServerTheClientDoesNotTrustIsRefused) {
+    TempDir dir;
+    ASSERT_NO_FATAL_FAILURE(writeCertificate(dir.file("cert.pem"), dir.file("key.pem")));
+    ASSERT_NO_FATAL_FAILURE(writeCertificate(dir.file("other.pem"), dir.file("other.key")));
+    std::string error;
+    const auto serverContext = TlsContext::server(dir.file("cert.pem"), dir.file("key.pem"), error);
+    const auto stranger = TlsContext::client(dir.file("other.pem"), error);  // another CA
+    ASSERT_TRUE(serverContext && stranger) << error;
+    TlsLink link;
+    ASSERT_NO_FATAL_FAILURE(connectTls(serverContext, stranger, link));
+    v1::Envelope hello;
+    hello.mutable_client_hello()->set_client_name("must not arrive");
+    ASSERT_TRUE(link.client.queue(hello));
+    ASSERT_TRUE(pump({&link.client, &link.server},
+                     [&] { return link.client.state() == Connection::State::Closed; }));
+    EXPECT_NE(link.client.tlsError().find("certificate"), std::string::npos)
+        << link.client.tlsError();
+    EXPECT_NE(link.server.next().status, FrameReader::Status::Frame);
+}
+
+TEST(Tls, ATlsEndpointNeedsAClientContext) {
+    std::error_code ec;
+    const auto endpoint = parseEndpoint("tls://127.0.0.1:47999");
+    ASSERT_TRUE(endpoint && endpoint->tls);
+    EXPECT_EQ(lagrange::proto::toString(*endpoint), "tls://127.0.0.1:47999");
+    const Connection c = Connection::startConnect(*endpoint, ec);
+    EXPECT_EQ(c.state(), Connection::State::Closed);
+    EXPECT_EQ(ec, std::make_error_code(std::errc::invalid_argument));
 }
 
 }  // namespace

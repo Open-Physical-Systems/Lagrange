@@ -824,6 +824,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
     }
 
     ViewerClient client(endpoint);
+    client.setSecurity(options.tlsCa, options.authToken);
     if (!options.launcher && !options.startLocal) {
         client.start();
         if (!options.openPath.empty()) {
@@ -1163,6 +1164,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
     const bool launcher = options.launcher || options.startLocal ||
                           (options.endpoint.empty() && options.openPath.empty());
     ViewerClient client(endpoint);
+    client.setSecurity(options.tlsCa, options.authToken);
     if (!launcher) {
         client.start();
         if (!options.openPath.empty()) {

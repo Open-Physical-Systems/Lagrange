@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lagrange/proto/Connection.hpp"
 #include "lagrange/proto/Endpoint.hpp"
 #include "lagrange/proto/UniqueFd.hpp"
 #include "lagrange/viewer/SceneStore.hpp"
@@ -512,6 +513,10 @@ class ViewerClient {
 public:
     explicit ViewerClient(proto::Endpoint endpoint);
     ~ViewerClient();
+    /// Before start(): the CA file that verifies a tls:// server (empty: the system's trust
+    /// store) and the token a TCP server may require. Both default to $LAGRANGE_TLS_CA and
+    /// $LAGRANGE_AUTH_TOKEN.
+    void setSecurity(std::string caFile, std::string authToken);
     ViewerClient(const ViewerClient&) = delete;
     ViewerClient& operator=(const ViewerClient&) = delete;
 
@@ -628,6 +633,9 @@ private:
     struct Worker;  // socket and builder; lives on the worker thread
 
     proto::Endpoint endpoint_;
+    std::string tlsCaFile_;
+    std::string authToken_;
+    std::shared_ptr<proto::TlsContext> tls_;  // tls:// only; made on the first connect
     std::thread thread_;
     std::atomic<bool> stopRequested_{false};
     proto::UniqueFd wakeFd_;  // eventfd: commands were queued or stop was requested

@@ -149,6 +149,7 @@ message ClientHello {
   bool wants_shm = 3;                // only honoured on Unix sockets
   repeated string compression = 4;   // "zstd"; empty = none
   string locale = 5;                 // "ja_JP", for server-side message text (later)
+  string auth_token = 6;   // v1.0: the token a TCP server requires (security.md)
 }
 
 enum ServerKind {

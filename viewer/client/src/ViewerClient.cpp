@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <poll.h>
@@ -71,10 +72,28 @@ struct ViewerClient::Worker {
     std::chrono::steady_clock::time_point nextAttempt{};
 };
 
+void ViewerClient::setSecurity(std::string caFile, std::string authToken) {
+    if (!caFile.empty()) {
+        tlsCaFile_ = std::move(caFile);
+    }
+    if (!authToken.empty()) {
+        authToken_ = std::move(authToken);
+    }
+    tls_.reset();
+}
+
 ViewerClient::ViewerClient(proto::Endpoint endpoint)
     : endpoint_(std::move(endpoint))
     , wakeFd_(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC))
     , worker_(std::make_unique<Worker>()) {
+    // NOLINTBEGIN(concurrency-mt-unsafe): read at construction, before the worker starts.
+    if (const char* ca = std::getenv("LAGRANGE_TLS_CA")) {
+        tlsCaFile_ = ca;
+    }
+    if (const char* token = std::getenv("LAGRANGE_AUTH_TOKEN")) {
+        authToken_ = token;
+    }
+    // NOLINTEND(concurrency-mt-unsafe)
     status_.store(std::make_shared<const ServerStatus>());
     notice_.store(std::make_shared<const Notice>());
     logs_.store(std::make_shared<const LogBook>());
@@ -1095,11 +1114,17 @@ void ViewerClient::run() {
             w.catalog.reset();  // the next server may number its signals differently
             w.byId.clear();
             std::error_code ec;
-            w.connection = proto::Connection::startConnect(endpoint_, ec);
+            std::string tlsProblem;
+            if (endpoint_.tls && !tls_) {
+                tls_ = proto::TlsContext::client(tlsCaFile_, tlsProblem);
+            }
+            w.connection =
+                proto::Connection::startConnect(endpoint_, ec, proto::kDefaultMaxFrameSize, tls_);
             w.nextAttempt = now + w.backoff.next();
             if (w.connection.state() == proto::Connection::State::Closed) {
                 if (w.info.state != ConnectionState::Refused) {
-                    publish(ConnectionState::Disconnected, ec.message());
+                    publish(ConnectionState::Disconnected,
+                            tlsProblem.empty() ? ec.message() : "TLS: " + tlsProblem);
                 }
             } else {
                 publish(ConnectionState::Connecting);
@@ -1131,6 +1156,9 @@ void ViewerClient::run() {
             hello.mutable_client_hello()->mutable_version()->set_major(kProtocolMajor);
             hello.mutable_client_hello()->mutable_version()->set_minor(kProtocolMinor);
             hello.mutable_client_hello()->set_client_name("lagrange_viewer");
+            if (endpoint_.kind == proto::Endpoint::Kind::Tcp && !authToken_.empty()) {
+                hello.mutable_client_hello()->set_auth_token(authToken_);
+            }
             (void)w.connection.queue(hello);
             w.helloSent = true;
             publish(ConnectionState::Handshaking);
@@ -1160,10 +1188,12 @@ void ViewerClient::run() {
             }
             if (received == proto::IoStatus::Closed || received == proto::IoStatus::Error) {
                 if (w.info.state != ConnectionState::Refused) {
-                    publish(ConnectionState::Disconnected,
-                            received == proto::IoStatus::Error
-                                ? ec.message()
-                                : "the server closed the connection");
+                    publish(
+                        ConnectionState::Disconnected,
+                        received == proto::IoStatus::Error
+                            ? (w.connection.tlsError().empty() ? ec.message()
+                                                               : "TLS: " + w.connection.tlsError())
+                            : "the server closed the connection");
                 }
             }
         }
