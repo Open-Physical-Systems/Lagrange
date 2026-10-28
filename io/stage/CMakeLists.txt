@@ -50,7 +50,7 @@ if(BUILD_TESTING)
         test_stage
         test/test_stage.cpp
         ENV
-            "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road"
+            "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/world"
         TIMEOUT 120
     )
     target_link_libraries(test_stage lagrange_stage openusd_vendor::usd)
