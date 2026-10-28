@@ -222,8 +222,9 @@ which is the mean wind of a logarithmic profile plus Dryden turbulence (MIL-F-87
 its forming filters integrated exactly over the step). Until the weather domain gives the site's
 wind (v0.5), the wind is the aerodynamics domain's config: `wind_speed` at
 `wind_reference_height`, `wind_from`, the terrain's `roughness_length` and `turbulence`, all
-without defaults; the air density as for the rotors. Not yet: lift tables, VDB wind fields, the
-gust in the rotors' inflow.
+without defaults; the air density as for the rotors. Not yet: lift tables, the gust in the
+rotors' inflow. (NanoVDB wind grids drive link drag since v0.5:
+`Aerodynamics.InsideAWindGridTheGridIsTheWind`.)
 
 | §7 check | Status | Test |
 |---|---|---|

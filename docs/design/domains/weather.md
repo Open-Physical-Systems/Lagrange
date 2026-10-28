@@ -126,8 +126,9 @@ Weather effects on sensors are statistical. Each validation states the quantity 
   (`env/extinction/field`, `env/wind/velocity_field`). Samples: `assets/fields/` (synthetic, by
   `lagrange_make_fields`): a 10 m-visibility bank across the warehouse aisle hides the far wall
   from 109 of the front lidar's 720 beams.
-- Not yet: rigid body's wet friction, the viewer's field overlays, radar attenuation, a weather
-  time series, rain streaks in the camera.
+- Not yet: radar attenuation, a weather time series, rain streaks in the camera. (Wet friction
+  is applied by MuJoCo and Jolt through `env/friction_scale`, and the viewer shows the field
+  overlays, since v0.5.)
 - Offline CFD: `lagrange_foam_to_vdb` turns an OpenFOAM case's cell velocities (ASCII `U`, and
   the cell centres `C` from `postProcess -func writeCellCentres`) into a wind grid: the mean of
   the cells in each voxel (voxel k covers [k·h, (k + 1)·h) after `--offset`, so cells of size h

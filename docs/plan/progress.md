@@ -134,7 +134,8 @@ locally.
 4. Binary packages built locally: `.deb`s by bloom, the container image, a Python wheel, an
    SBOM; a clean-machine install test in a container
 5. Documentation: a validation report per domain, the LTS policy in `GOVERNANCE.md`, a
-   tutorial per robot class run by a script
+   tutorial per robot class run by a script (report and LTS policy **done** 2026-10-29:
+   `docs/validation/report.md`, `GOVERNANCE.md`)
 6. Release v1.0.0 and branch `release/1.x`
 
 ## v0.7 status (2026-10-29)
