@@ -52,6 +52,7 @@
 #include <future>
 #include <map>
 #include <memory>
+#include <numbers>
 #include <optional>
 #include <poll.h>
 #include <set>
@@ -471,6 +472,10 @@ struct Server::Impl {
     std::map<std::uint32_t, std::future<Expected<Model, std::string>>> tileLoads;
     std::deque<std::uint32_t> tileQueue;
     bool waitingForTiles{false};  // a served run holds until the robot's ground is loaded
+    // A viewer's camera (world ENU), a streaming hint for runs that are not deterministic.
+    std::optional<std::array<double, 3>> cameraInterest;
+    std::uint64_t tilesGeneration{0};  // bumped whenever the tiles in the world change
+    SimTime lastRebase{};              // simulated time of the last rebase during the run
 
     Clock::time_point lastWall{Clock::now()};
     Clock::time_point lastStatus{Clock::now()};
@@ -2390,6 +2395,17 @@ struct Server::Impl {
                     session.send(rosGraph());
                 }
                 break;
+            case v1::Command::kSetCameraInterest: {
+                const v1::SetCameraInterest& hint = command.set_camera_interest();
+                if (hint.enabled()) {
+                    const std::array<double, 3>& region = robot.world.region.worldEnu;
+                    cameraInterest = std::array<double, 3>{
+                        hint.x() + region[0], hint.y() + region[1], hint.z() + region[2]};
+                } else {
+                    cameraInterest.reset();
+                }
+                break;
+            }
             case v1::Command::kSetWorld:
                 session.wantsWorld = command.set_world().enabled();
                 if (session.wantsWorld) {
@@ -2671,7 +2687,9 @@ struct Server::Impl {
             std::max(kDefaultUnloadRadiusM, settings.loadRadius * 4.0 / 3.0));
         settings.collisionRadius =
             active().streamingCollisionRadius.value_or(kDefaultCollisionRadiusM);
-        settings.deterministic = true;  // camera hints are not used yet (huge-worlds.md §2)
+        // A run without ROS (headless, Python) is deterministic: its tiles follow the robot
+        // only. A run with ROS takes viewer cameras as hints too (SetCameraInterest).
+        settings.deterministic = !bridge;
         baseExtent = extentOf(robot);
         tileSelector = std::make_unique<streaming::TileSelector>(robot.tiles, settings);
         char text[160];
@@ -2711,8 +2729,11 @@ struct Server::Impl {
             return {};
         }
         bool changed = collectTiles(false);
-        const std::vector<streaming::Interest> interests{
+        std::vector<streaming::Interest> interests{
             {streaming::Interest::Kind::Robot, focusWorld()}};
+        if (cameraInterest) {
+            interests.push_back({streaming::Interest::Kind::Camera, *cameraInterest});
+        }
         const double now = scheduler ? scheduler->now().seconds() : 0.0;
         const streaming::StreamingPlan plan = tileSelector->update(interests, now);
         for (const std::uint32_t id : plan.unload) {
@@ -2818,6 +2839,7 @@ struct Server::Impl {
             }
             appendTile(robot, *content, tiles.at(id).path, robot.world.region.worldEnu, covered);
         }
+        ++tilesGeneration;
         if (!scheduler) {
             return {};
         }
@@ -2872,6 +2894,7 @@ struct Server::Impl {
         }
         scheduler->shiftOrigin(offset);
         shift = robot.world.region.worldEnu;
+        lastRebase = scheduler->now();
         if (recorder) {
             recorder->frame(scheduler->now(), localFrame());
         }
@@ -3651,7 +3674,18 @@ struct Server::Impl {
         v1::Envelope envelope;
         v1::WorldState& world = *envelope.mutable_world();
         world.mutable_sim_time()->set_ns(scheduler->now().ns);
-        world.mutable_geo_origin()->set_valid(false);
+        const std::array<double, 3>& region = robot.world.region.worldEnu;
+        if (const auto& geo = robot.world.geoOrigin) {
+            constexpr double kDegree = 180.0 / std::numbers::pi;
+            v1::WorldState::GeoOrigin& g = *world.mutable_geo_origin();
+            g.set_valid(true);
+            g.set_latitude_deg(geo->latitudeRad * kDegree);
+            g.set_longitude_deg(geo->longitudeRad * kDegree);
+            g.set_height_m(geo->heightM);
+        } else {
+            world.mutable_geo_origin()->set_valid(false);
+        }
+        streamedTiles(world);
         v1::WorldState::Agent& agent = *world.add_agents();
         agent.set_name(robot.name);
         agent.set_prim(robot.bodyPrim.empty() ? kNoIndex : robot.bodyPrim[0]);
@@ -3659,8 +3693,8 @@ struct Server::Impl {
         const SignalBus& bus = scheduler->bus();
         if (!bodyPose.empty() && bodyPose[0].valid()) {
             const std::span<const double> pose = bus.readN(bodyPose[0]);
-            agent.set_x(pose[0]);
-            agent.set_y(pose[1]);
+            agent.set_x(pose[0] + region[0]);  // world ENU (the WorldState's frame)
+            agent.set_y(pose[1] + region[1]);
             const SignalId twist = bus.find("body/" + robot.world.bodies.names[0] + "/twist");
             if (twist.valid()) {
                 const std::span<const double> v = bus.readN(twist);
@@ -3669,10 +3703,69 @@ struct Server::Impl {
         }
         agent.set_status("focus");
         agent.set_focus(true);
+        if (tileSelector) {
+            // Full physics around it: where its collision tiles are loaded.
+            agent.set_active_radius_m(
+                active().streamingCollisionRadius.value_or(kDefaultCollisionRadiusM));
+        }
         v1::WorldState::FloatingOrigin& origin = *world.mutable_floating_origin();
         origin.set_anchor(robot.name);
-        origin.set_recenter_threshold_m(1000.0);  // huge-worlds.md §1.2 default
+        origin.set_recenter_threshold_m(kRebaseDistanceM);
+        origin.set_x(region[0]);
+        origin.set_y(region[1]);
+        origin.set_z(region[2]);
+        origin.set_recenters(robot.world.region.rebaseCount);
+        origin.mutable_last_recenter()->set_ns(lastRebase.ns);
         return envelope;
+    }
+
+    /// The streamed tiles for the World workspace, on the grid of the finest tiles: loaded
+    /// collision tiles are level of detail 0 (physics and sensors), loaded tiles without
+    /// colliders level 2 (render only), where no finer loaded tile covers them.
+    void streamedTiles(v1::WorldState& world) const {
+        if (!tileSelector) {
+            return;
+        }
+        const std::vector<streaming::TileInfo>& tiles = tileSelector->tiles();
+        double cell = 0.0;
+        for (const streaming::TileInfo& t : tiles) {
+            const double size = t.boundsMax[0] - t.boundsMin[0];
+            cell = cell == 0.0 ? size : std::min(cell, size);
+        }
+        if (!(cell > 0.0)) {
+            return;
+        }
+        world.set_tile_size_m(cell);
+        world.set_tiles_generation(tilesGeneration);
+        std::map<std::pair<std::int64_t, std::int64_t>, std::pair<std::int32_t, std::uint8_t>>
+            cells;
+        for (const auto& [id, content] : tileContent) {
+            (void)content;
+            const streaming::TileInfo& t = tiles.at(id);
+            const std::uint8_t lod = t.hasCollision ? 0 : 2;
+            const auto x0 = static_cast<std::int64_t>(std::floor(t.boundsMin[0] / cell + 0.5));
+            const auto y0 = static_cast<std::int64_t>(std::floor(t.boundsMin[1] / cell + 0.5));
+            const auto x1 = static_cast<std::int64_t>(std::floor(t.boundsMax[0] / cell + 0.5));
+            const auto y1 = static_cast<std::int64_t>(std::floor(t.boundsMax[1] / cell + 0.5));
+            for (std::int64_t x = x0; x < x1; ++x) {
+                for (std::int64_t y = y0; y < y1; ++y) {
+                    auto [it, added] = cells.try_emplace({x, y}, t.level, lod);
+                    if (!added && t.level > it->second.first) {
+                        it->second = {t.level, lod};  // the finer tile is what is shown
+                    }
+                }
+            }
+        }
+        std::string lods;
+        for (const auto& [index, value] : cells) {
+            world.add_tile_x(static_cast<std::int32_t>(index.first));
+            world.add_tile_y(static_cast<std::int32_t>(index.second));
+            lods.push_back(static_cast<char>(value.second));
+        }
+        world.set_tile_lod(lods);
+        v1::WorldState::Streaming& streaming = *world.mutable_streaming();
+        streaming.set_host_cache_bytes(tileSelector->loadedBytes());
+        streaming.set_load_queue(static_cast<std::uint32_t>(tileLoads.size() + tileQueue.size()));
     }
 
     /// The values of the prim's schemas of ours, numbers editable (SetAttribute).

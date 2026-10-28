@@ -626,6 +626,7 @@ For the Environment, ROS 2 and World workspaces. Again new messages and new fiel
 | `EnvironmentState` with the fields that can be sliced | `session.proto`, `Envelope` 44 | Environment workspace |
 | `FieldSlice`, `SubscribeField` | `session.proto`, `Envelope` 45; `command.proto` 53 | field overlays and the probe |
 | `WorldState`, `SetWorldEnabled` | `session.proto`, `Envelope` 46; `command.proto` 54 | World workspace |
+| `SetCameraInterest` | `command.proto` 55 (v0.7) | the viewer's camera as a hint for a streamed world's tile selection, at most twice a second; ignored by deterministic runs |
 | `RosGraph`: nodes with their topics, `Control`, distro, domain, a `note`; `Topic`: bandwidth, origin, status | `session.proto` | ROS 2 workspace |
 
 Rules that go with them:

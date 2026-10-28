@@ -27,6 +27,7 @@ __all__ = [
     "sample_quadcopter",
     "sample_robot",
     "sample_sedan",
+    "sample_tiled_town",
     "sample_world",
 ]
 
@@ -56,6 +57,11 @@ def sample_city() -> str:
 def sample_profile(name: str) -> str:
     """An example profile from lagrange_profiles, e.g. "quad_x500_hover"."""
     return get_package_share_directory("lagrange_profiles") + f"/examples/{name}.yaml"
+
+
+def sample_tiled_town() -> str:
+    """The tiled town (USD, streamed in 68 tiles: huge-worlds.md section 2) from lagrange_assets."""
+    return get_package_share_directory("lagrange_assets") + "/worlds/tiled_town/tiled_town.usda"
 
 
 def sample_world() -> str:

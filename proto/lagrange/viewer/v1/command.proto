@@ -33,6 +33,7 @@ message Command {
     SetOverlays set_overlays = 52;
     SubscribeField subscribe_field = 53;
     SetWorldEnabled set_world = 54;
+    SetCameraInterest set_camera_interest = 55;
   }
 }
 
@@ -113,6 +114,15 @@ message SubscribeField {
 // Start or stop receiving WorldState. Off by default: most stages are small.
 message SetWorldEnabled {
   bool enabled = 1;
+}
+// Where the viewer's camera looks from, for streamed worlds (huge-worlds.md section 2): tiles
+// near it are loaded for show. A hint only: deterministic runs ignore it. Sent at most a few
+// times a second, while the camera moves; `enabled` false withdraws it.
+message SetCameraInterest {
+  bool enabled = 1;
+  double x = 2; // region-local frame, m (the frame of the scene's transforms)
+  double y = 3;
+  double z = 4;
 }
 message SetRosGraphEnabled {
   bool enabled = 1;
