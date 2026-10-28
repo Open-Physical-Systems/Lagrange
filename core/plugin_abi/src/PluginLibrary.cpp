@@ -3,6 +3,8 @@
 #include "lagrange/services/Log.hpp"
 #include "lagrange_plugin.h"
 
+#include <array>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <dlfcn.h>
@@ -287,6 +289,13 @@ public:
         std::vector<std::uint8_t> bytes(size);
         reader.getBytes(bytes.data(), bytes.size());
         return status(api_->restore_state(self_, bytes.data(), bytes.size()));
+    }
+    void shiftOrigin(const std::array<double, 3>& shift) override {
+        // Appended in ABI 1.0: only when the plugin's table is long enough to have it.
+        if (api_->struct_size >= offsetof(lagrange_module_api, shift_origin) + sizeof(void*) &&
+            api_->shift_origin != nullptr) {
+            api_->shift_origin(self_, shift.data());
+        }
     }
 
 private:

@@ -1,0 +1,1546 @@
+{
+ "AeroAPI_1": {
+  "aero:angularDamping": {
+   "fallback": "(0, 0, 0)",
+   "tokens": [],
+   "type": "double3",
+   "unit": "N.m.s/rad"
+  },
+  "aero:centerOfPressure": {
+   "fallback": "(0, 0, 0)",
+   "tokens": [],
+   "type": "double3",
+   "unit": "m"
+  },
+  "aero:coeffTable": {
+   "fallback": null,
+   "tokens": [],
+   "type": "asset",
+   "unit": ""
+  },
+  "aero:dragCoeff": {
+   "fallback": "(1, 1, 1)",
+   "tokens": [],
+   "type": "double3",
+   "unit": "1"
+  },
+  "aero:liftSlope": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1/rad"
+  },
+  "aero:model": {
+   "fallback": "drag_box",
+   "tokens": [
+    "drag_box",
+    "drag_lift_table",
+    "none"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "aero:referenceArea": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double3",
+   "unit": "m2"
+  }
+ },
+ "BarometerAPI_1": {
+  "sensor:barometer:noiseStd": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "Pa"
+  }
+ },
+ "BatteryAPI_1": {
+  "elec:battery:behaviorModel": {
+   "fallback": null,
+   "tokens": [],
+   "type": "asset",
+   "unit": ""
+  },
+  "elec:battery:c1": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "F"
+  },
+  "elec:battery:c2": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "F"
+  },
+  "elec:battery:capacity": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "C"
+  },
+  "elec:battery:chemistry": {
+   "fallback": "li_ion_nmc",
+   "tokens": [
+    "li_ion_nmc",
+    "lfp",
+    "lead_acid",
+    "custom"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "elec:battery:cutoffVoltage": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "V"
+  },
+  "elec:battery:initialSoc": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "elec:battery:maxChargeCurrent": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "A"
+  },
+  "elec:battery:ocvSoc": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double[]",
+   "unit": "1"
+  },
+  "elec:battery:ocvVoltage": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double[]",
+   "unit": "V"
+  },
+  "elec:battery:parallelCells": {
+   "fallback": "1",
+   "tokens": [],
+   "type": "int",
+   "unit": "1"
+  },
+  "elec:battery:r0": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "ohm"
+  },
+  "elec:battery:r0TempCoeff": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1/K"
+  },
+  "elec:battery:r1": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "ohm"
+  },
+  "elec:battery:r2": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "ohm"
+  },
+  "elec:battery:referenceTemperature": {
+   "fallback": "298.15",
+   "tokens": [],
+   "type": "double",
+   "unit": "K"
+  },
+  "elec:battery:seriesCells": {
+   "fallback": null,
+   "tokens": [],
+   "type": "int",
+   "unit": "1"
+  }
+ },
+ "CameraSensorAPI_1": {
+  "sensor:camera:autoExposure": {
+   "fallback": "False",
+   "tokens": [],
+   "type": "bool",
+   "unit": ""
+  },
+  "sensor:camera:bitDepth": {
+   "fallback": "8",
+   "tokens": [],
+   "type": "int",
+   "unit": "1"
+  },
+  "sensor:camera:distortionCoeffs": {
+   "fallback": "[]",
+   "tokens": [],
+   "type": "double[]",
+   "unit": "1"
+  },
+  "sensor:camera:distortionModel": {
+   "fallback": "none",
+   "tokens": [
+    "none",
+    "plumb_bob",
+    "equidistant"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "sensor:camera:electronRate": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "1/s"
+  },
+  "sensor:camera:exposureTime": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "s"
+  },
+  "sensor:camera:fullWellCapacity": {
+   "fallback": "10000.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "sensor:camera:gain": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "sensor:camera:height": {
+   "fallback": null,
+   "tokens": [],
+   "type": "int",
+   "unit": "1"
+  },
+  "sensor:camera:readNoiseStd": {
+   "fallback": "2.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "sensor:camera:rollingShutterTime": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "s"
+  },
+  "sensor:camera:shutter": {
+   "fallback": "global",
+   "tokens": [
+    "global",
+    "rolling"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "sensor:camera:vignetting": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "sensor:camera:width": {
+   "fallback": null,
+   "tokens": [],
+   "type": "int",
+   "unit": "1"
+  }
+ },
+ "CanBusAPI_1": {
+  "can:bitRate": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "1/s"
+  },
+  "can:frameBits": {
+   "fallback": "108",
+   "tokens": [],
+   "type": "int",
+   "unit": "1"
+  }
+ },
+ "ElectricalBusAPI_1": {
+  "elec:bus:brakeResistor": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "ohm"
+  },
+  "elec:bus:capacitance": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "F"
+  },
+  "elec:bus:overvoltageTrip": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "V"
+  },
+  "elec:bus:undervoltageTrip": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "V"
+  }
+ },
+ "ElectricalConverterAPI_1": {
+  "elec:conv:efficiency": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "elec:conv:input": {
+   "type": "relationship"
+  },
+  "elec:conv:maxOutputCurrent": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "A"
+  },
+  "elec:conv:output": {
+   "type": "relationship"
+  },
+  "elec:conv:outputVoltage": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "V"
+  }
+ },
+ "ElectricalLoadAPI_1": {
+  "elec:load:minVoltage": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "V"
+  },
+  "elec:load:model": {
+   "fallback": "constant_power",
+   "tokens": [
+    "constant_power",
+    "resistive",
+    "signal"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "elec:load:power": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "W"
+  },
+  "elec:powerPort": {
+   "type": "relationship"
+  }
+ },
+ "ElectricalMotorAPI_1": {
+  "elec:backEmfConstant": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "V.s/rad"
+  },
+  "elec:behaviorModel": {
+   "fallback": null,
+   "tokens": [],
+   "type": "asset",
+   "unit": ""
+  },
+  "elec:controlMode": {
+   "fallback": "torque",
+   "tokens": [
+    "torque",
+    "velocity",
+    "voltage"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "elec:currentLoopBandwidth": {
+   "fallback": "6283.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "rad/s"
+  },
+  "elec:gearEfficiency": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "elec:gearRatio": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "elec:inductance": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "H"
+  },
+  "elec:inductanceQ": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "H"
+  },
+  "elec:joint": {
+   "type": "relationship"
+  },
+  "elec:maxCurrent": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "A"
+  },
+  "elec:motorType": {
+   "fallback": "pmsm",
+   "tokens": [
+    "pmsm",
+    "bldc",
+    "dc_brushed"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "elec:polePairs": {
+   "fallback": "1",
+   "tokens": [],
+   "type": "int",
+   "unit": "1"
+  },
+  "elec:powerPort": {
+   "type": "relationship"
+  },
+  "elec:pwmFrequency": {
+   "fallback": "20000.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "Hz"
+  },
+  "elec:referenceTemperature": {
+   "fallback": "298.15",
+   "tokens": [],
+   "type": "double",
+   "unit": "K"
+  },
+  "elec:resistanceTempCoeff": {
+   "fallback": "0.00393",
+   "tokens": [],
+   "type": "double",
+   "unit": "1/K"
+  },
+  "elec:rotorInertia": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "kg.m2"
+  },
+  "elec:rotorIntegration": {
+   "fallback": "mechanical",
+   "tokens": [
+    "mechanical",
+    "electrical"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "elec:torqueConstant": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "N.m/A"
+  },
+  "elec:windingResistance": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "ohm"
+  }
+ },
+ "EmiSourceAPI_1": {
+  "emi:bandwidth": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "Hz"
+  },
+  "emi:current": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "A"
+  },
+  "emi:dipoleMomentPerAmpere": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "m2"
+  },
+  "emi:direction": {
+   "fallback": "(1, 0, 0)",
+   "tokens": [],
+   "type": "double3",
+   "unit": "1"
+  },
+  "emi:drivenBy": {
+   "type": "relationship"
+  },
+  "emi:dutyCycle": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "emi:fieldMap": {
+   "fallback": null,
+   "tokens": [],
+   "type": "asset",
+   "unit": ""
+  },
+  "emi:fieldMapQuantity": {
+   "fallback": "B",
+   "tokens": [
+    "B",
+    "E"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "emi:frequency": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "Hz"
+  },
+  "emi:harmonics": {
+   "fallback": "[]",
+   "tokens": [],
+   "type": "double[]",
+   "unit": "1"
+  },
+  "emi:radiatedPower": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "W"
+  },
+  "emi:sourceType": {
+   "fallback": null,
+   "tokens": [
+    "power_line",
+    "motor_drive",
+    "transmitter",
+    "welder",
+    "custom"
+   ],
+   "type": "token",
+   "unit": ""
+  }
+ },
+ "EmiSusceptibilityAPI_1": {
+  "emi:accelNoisePerField": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "(m/s2)/(V/m)"
+  },
+  "emi:canErrorField": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "V/m"
+  },
+  "emi:canErrorRateAtField": {
+   "fallback": "1e-05",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "emi:couplingLoopArea": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "m2"
+  },
+  "emi:encoderGlitchField": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "V/m"
+  },
+  "emi:gyroNoisePerField": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "(rad/s)/(V/m)"
+  },
+  "emi:magneticGain": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "emi:receiverNoiseFigure": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "emi:shieldingEffectiveness": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "emi:victimType": {
+   "fallback": null,
+   "tokens": [
+    "magnetometer",
+    "imu_adc",
+    "encoder",
+    "can_bus",
+    "radio"
+   ],
+   "type": "token",
+   "unit": ""
+  }
+ },
+ "GnssAPI_1": {
+  "sensor:gnss:horizontalNoiseStd": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  },
+  "sensor:gnss:velocityNoiseStd": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "m/s"
+  },
+  "sensor:gnss:verticalNoiseStd": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  }
+ },
+ "ImuAPI_1": {
+  "sensor:imu:accelBiasInstability": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "m/s2"
+  },
+  "sensor:imu:accelNoiseStd": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "m/s2"
+  },
+  "sensor:imu:gyroBiasInstability": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "rad/s"
+  },
+  "sensor:imu:gyroNoiseStd": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "rad/s"
+  }
+ },
+ "LidarAPI_1": {
+  "sensor:lidar:beamDivergence": {
+   "fallback": "0.003",
+   "tokens": [],
+   "type": "double",
+   "unit": "rad"
+  },
+  "sensor:lidar:channels": {
+   "fallback": "1",
+   "tokens": [],
+   "type": "int",
+   "unit": "1"
+  },
+  "sensor:lidar:horizontalFov": {
+   "fallback": "(-3.141592653589793, 3.141592653589793)",
+   "tokens": [],
+   "type": "double2",
+   "unit": "rad"
+  },
+  "sensor:lidar:horizontalSamples": {
+   "fallback": null,
+   "tokens": [],
+   "type": "int",
+   "unit": "1"
+  },
+  "sensor:lidar:rangeMax": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  },
+  "sensor:lidar:rangeMin": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  },
+  "sensor:lidar:rangeNoiseStd": {
+   "fallback": "0.02",
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  },
+  "sensor:lidar:returnMode": {
+   "fallback": "strongest",
+   "tokens": [
+    "strongest",
+    "last",
+    "dual"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "sensor:lidar:scanPattern": {
+   "fallback": "rotating",
+   "tokens": [
+    "rotating",
+    "solid_state",
+    "custom"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "sensor:lidar:verticalFov": {
+   "fallback": "(0, 0)",
+   "tokens": [],
+   "type": "double2",
+   "unit": "rad"
+  },
+  "sensor:lidar:wavelength": {
+   "fallback": "9.05e-07",
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  }
+ },
+ "MagnetometerAPI_1": {
+  "sensor:magnetometer:noiseStd": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "T"
+  }
+ },
+ "PortAPI_1": {
+  "elec:port:__INSTANCE_NAME__:connectedTo": {
+   "type": "relationship"
+  },
+  "elec:port:__INSTANCE_NAME__:kind": {
+   "fallback": "dc",
+   "tokens": [
+    "dc",
+    "ac1",
+    "ac3",
+    "signal"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "elec:port:__INSTANCE_NAME__:maxCurrent": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "A"
+  },
+  "elec:port:__INSTANCE_NAME__:nominalVoltage": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "V"
+  },
+  "elec:port:__INSTANCE_NAME__:wireInductance": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "H"
+  },
+  "elec:port:__INSTANCE_NAME__:wireResistance": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "ohm"
+  }
+ },
+ "RadioLinkAPI_1": {
+  "comms:bandwidth": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "Hz"
+  },
+  "comms:frequency": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "Hz"
+  },
+  "comms:maxRetries": {
+   "fallback": "0",
+   "tokens": [],
+   "type": "int",
+   "unit": "1"
+  },
+  "comms:modulation": {
+   "fallback": "qpsk",
+   "tokens": [
+    "bpsk",
+    "qpsk",
+    "qam16",
+    "qam64"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "comms:noiseFigure": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "comms:packetBits": {
+   "fallback": "12000",
+   "tokens": [],
+   "type": "int",
+   "unit": "1"
+  },
+  "comms:pathLossExponent": {
+   "fallback": "2.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "comms:referenceDistance": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  },
+  "comms:rxAntennaGain": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "comms:shadowingCorrelationDistance": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  },
+  "comms:shadowingStd": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "comms:transmitter": {
+   "type": "relationship"
+  },
+  "comms:txAntennaGain": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "comms:txPower": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "W"
+  },
+  "comms:wallLoss": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  }
+ },
+ "RoadLaneAPI_1": {
+  "lane:centreLine": {
+   "fallback": "[]",
+   "tokens": [],
+   "type": "double[]",
+   "unit": "m"
+  },
+  "lane:junction": {
+   "fallback": "False",
+   "tokens": [],
+   "type": "bool",
+   "unit": ""
+  },
+  "lane:lane": {
+   "fallback": "0",
+   "tokens": [],
+   "type": "int",
+   "unit": "1"
+  },
+  "lane:predecessors": {
+   "type": "relationship"
+  },
+  "lane:road": {
+   "fallback": "0",
+   "tokens": [],
+   "type": "int",
+   "unit": "1"
+  },
+  "lane:sEnd": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  },
+  "lane:sStart": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  },
+  "lane:speedLimit": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "m/s"
+  },
+  "lane:successors": {
+   "type": "relationship"
+  },
+  "lane:type": {
+   "fallback": "driving",
+   "tokens": [
+    "driving",
+    "sidewalk",
+    "biking",
+    "parking",
+    "other"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "lane:width": {
+   "fallback": "[]",
+   "tokens": [],
+   "type": "double[]",
+   "unit": "m"
+  }
+ },
+ "RotorAPI_1": {
+  "aero:rotor:bladeCount": {
+   "fallback": null,
+   "tokens": [],
+   "type": "int",
+   "unit": "1"
+  },
+  "aero:rotor:direction": {
+   "fallback": null,
+   "tokens": [
+    "cw",
+    "ccw"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "aero:rotor:mount": {
+   "fallback": "puller",
+   "tokens": [
+    "puller",
+    "pusher"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "aero:rotor:powerCoeff": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "aero:rotor:propeller": {
+   "fallback": null,
+   "tokens": [],
+   "type": "asset",
+   "unit": ""
+  },
+  "aero:rotor:radius": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  },
+  "aero:rotor:thrustCoeff": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  }
+ },
+ "SensorAPI_1": {
+  "sensor:frameId": {
+   "fallback": "",
+   "tokens": [],
+   "type": "string",
+   "unit": ""
+  },
+  "sensor:jitter": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "s"
+  },
+  "sensor:latency": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "s"
+  },
+  "sensor:rate": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "Hz"
+  },
+  "sensor:topic": {
+   "fallback": "",
+   "tokens": [],
+   "type": "string",
+   "unit": ""
+  }
+ },
+ "SensorMaterialAPI_1": {
+  "sensmat:conductivity": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "S/m"
+  },
+  "sensmat:frictionWetScale": {
+   "fallback": "0.7",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "sensmat:radarCrossSectionDensity": {
+   "fallback": "0.1",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "sensmat:radarRoughness": {
+   "fallback": "0.001",
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  },
+  "sensmat:reflectivity1550": {
+   "fallback": "0.5",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "sensmat:reflectivity905": {
+   "fallback": "0.5",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "sensmat:relativePermeability": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "sensmat:relativePermittivity": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "sensmat:retroreflective": {
+   "fallback": "False",
+   "tokens": [],
+   "type": "bool",
+   "unit": ""
+  },
+  "sensmat:specularFraction905": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "sensmat:thermalEmissivity": {
+   "fallback": "0.9",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "sensmat:transmission905": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  }
+ },
+ "ThermalAPI_1": {
+  "thermal:convectionArea": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "m2"
+  },
+  "thermal:convectionCoeff": {
+   "fallback": "10.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "W/(m2.K)"
+  },
+  "thermal:deratingStart": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "K"
+  },
+  "thermal:emissivity": {
+   "fallback": "0.9",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "thermal:forcedConvectionExponent": {
+   "fallback": "0.8",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "thermal:heatCapacity": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "J/K"
+  },
+  "thermal:initialTemperature": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "K"
+  },
+  "thermal:maxTemperature": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "K"
+  },
+  "thermal:radiativeArea": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "m2"
+  },
+  "thermal:solarAbsorptivity": {
+   "fallback": "0.7",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "thermal:solarArea": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "m2"
+  }
+ },
+ "ThermalLinkAPI_1": {
+  "thermal:link:__INSTANCE_NAME__:conductance": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "W/K"
+  },
+  "thermal:link:__INSTANCE_NAME__:target": {
+   "type": "relationship"
+  }
+ },
+ "VehicleAPI_1": {
+  "vehicle:abs": {
+   "fallback": "False",
+   "tokens": [],
+   "type": "bool",
+   "unit": ""
+  },
+  "vehicle:antiRollStiffnessFront": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "N/m"
+  },
+  "vehicle:antiRollStiffnessRear": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "N/m"
+  },
+  "vehicle:brakeBias": {
+   "fallback": "0.6",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "vehicle:driveEfficiency": {
+   "fallback": "0.92",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "vehicle:engineIdleSpeed": {
+   "fallback": "80.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "rad/s"
+  },
+  "vehicle:engineSpeeds": {
+   "fallback": "[]",
+   "tokens": [],
+   "type": "double[]",
+   "unit": "rad/s"
+  },
+  "vehicle:engineTorques": {
+   "fallback": "[]",
+   "tokens": [],
+   "type": "double[]",
+   "unit": "N.m"
+  },
+  "vehicle:finalDriveRatio": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "vehicle:gearRatios": {
+   "fallback": "[]",
+   "tokens": [],
+   "type": "double[]",
+   "unit": "1"
+  },
+  "vehicle:maxBrakeTorque": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "N.m"
+  },
+  "vehicle:maxDriveTorque": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "N.m"
+  },
+  "vehicle:maxSteerAngle": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "rad"
+  },
+  "vehicle:powertrain": {
+   "fallback": "electric",
+   "tokens": [
+    "electric",
+    "ice_map"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "vehicle:shiftDownSpeed": {
+   "fallback": "250.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "rad/s"
+  },
+  "vehicle:shiftUpSpeed": {
+   "fallback": "600.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "rad/s"
+  },
+  "vehicle:steerRate": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "rad/s"
+  },
+  "vehicle:steerTimeConstant": {
+   "fallback": "0.05",
+   "tokens": [],
+   "type": "double",
+   "unit": "s"
+  }
+ },
+ "WeatherAPI_1": {
+  "weather:ambientTemperature": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "K"
+  },
+  "weather:dustConcentration": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "kg/m3"
+  },
+  "weather:dustMedianDiameter": {
+   "fallback": "1e-05",
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  },
+  "weather:fogField": {
+   "fallback": null,
+   "tokens": [],
+   "type": "asset",
+   "unit": ""
+  },
+  "weather:meanWind": {
+   "fallback": "(0, 0, 0)",
+   "tokens": [],
+   "type": "double3",
+   "unit": "m/s"
+  },
+  "weather:pressure": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "Pa"
+  },
+  "weather:rainRate": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "m/s"
+  },
+  "weather:relativeHumidity": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "weather:roughnessLength": {
+   "fallback": "0.03",
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  },
+  "weather:skyTemperature": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "K"
+  },
+  "weather:solarIrradiance": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "W/m2"
+  },
+  "weather:sunDirection": {
+   "fallback": "(0, 0, 1)",
+   "tokens": [],
+   "type": "double3",
+   "unit": "1"
+  },
+  "weather:turbulenceIntensity": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "weather:turbulenceModel": {
+   "fallback": "none",
+   "tokens": [
+    "none",
+    "dryden",
+    "von_karman"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "weather:visibility": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  },
+  "weather:windField": {
+   "fallback": null,
+   "tokens": [],
+   "type": "asset",
+   "unit": ""
+  },
+  "weather:windReferenceHeight": {
+   "fallback": "10.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  }
+ },
+ "WheelAPI_1": {
+  "wheel:axle": {
+   "fallback": null,
+   "tokens": [
+    "front",
+    "rear"
+   ],
+   "type": "token",
+   "unit": ""
+  },
+  "wheel:corneringStiffness": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "N/rad"
+  },
+  "wheel:damping": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "N.s/m"
+  },
+  "wheel:driven": {
+   "fallback": "False",
+   "tokens": [],
+   "type": "bool",
+   "unit": ""
+  },
+  "wheel:friction": {
+   "fallback": "1.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "1"
+  },
+  "wheel:longitudinalStiffness": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "N"
+  },
+  "wheel:radius": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  },
+  "wheel:relaxationLength": {
+   "fallback": "0.3",
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  },
+  "wheel:restLength": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  },
+  "wheel:springStiffness": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "N/m"
+  },
+  "wheel:steerJoint": {
+   "type": "relationship"
+  },
+  "wheel:steered": {
+   "fallback": "False",
+   "tokens": [],
+   "type": "bool",
+   "unit": ""
+  },
+  "wheel:travel": {
+   "fallback": null,
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  },
+  "wheel:tyre": {
+   "fallback": null,
+   "tokens": [],
+   "type": "asset",
+   "unit": ""
+  },
+  "wheel:width": {
+   "fallback": "0.2",
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  }
+ },
+ "WorldTileAPI_1": {
+  "world:tile:boundsMax": {
+   "fallback": "(0, 0, 0)",
+   "tokens": [],
+   "type": "double3",
+   "unit": "m"
+  },
+  "world:tile:boundsMin": {
+   "fallback": "(0, 0, 0)",
+   "tokens": [],
+   "type": "double3",
+   "unit": "m"
+  },
+  "world:tile:geometricError": {
+   "fallback": "0.0",
+   "tokens": [],
+   "type": "double",
+   "unit": "m"
+  },
+  "world:tile:hasCollision": {
+   "fallback": "False",
+   "tokens": [],
+   "type": "bool",
+   "unit": ""
+  },
+  "world:tile:index": {
+   "fallback": "(0, 0)",
+   "tokens": [],
+   "type": "int2",
+   "unit": "1"
+  },
+  "world:tile:level": {
+   "fallback": "0",
+   "tokens": [],
+   "type": "int",
+   "unit": "1"
+  }
+ }
+}

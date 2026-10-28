@@ -1,7 +1,9 @@
 """Repository checks of the schema libraries (RFC 0002): every schema registers, carries a
 version USD understands, and every numeric attribute states its unit in lagrangeUnit."""
 
+import json
 import os
+from pathlib import Path
 
 import pytest
 from pxr import Sdf, Usd
@@ -119,3 +121,61 @@ def test_motor_constants_carry_their_units():
         "elec:backEmfConstant": "V.s/rad",
         "elec:rotorInertia": "kg.m2",
     }
+
+
+# RFC 0007: the schemas are frozen at 1.0. Every attribute of every schema at v1.0.0 is listed
+# in frozen_1_0.json with its type, fallback, unit and allowed tokens; within 1.x an attribute
+# may be added, and allowed tokens appended, but nothing listed may change or go.
+FROZEN = Path(__file__).parent / "frozen_1_0.json"
+
+
+def describe_schemas():
+    registry = Usd.SchemaRegistry()
+    out = {}
+    for library in libraries():
+        for name in EXPECTED[library]:
+            definition = registry.FindAppliedAPIPrimDefinition(name)
+            attributes = {}
+            for prop in sorted(definition.GetPropertyNames()):
+                attribute = definition.GetAttributeDefinition(prop)
+                if attribute:
+                    fallback = attribute.GetFallbackValue()
+                    attributes[prop] = {
+                        "type": str(attribute.GetTypeName()),
+                        "fallback": None if fallback is None else str(fallback),
+                        "unit": attribute.GetMetadata("lagrangeUnit") or "",
+                        "tokens": [str(t) for t in (attribute.GetMetadata("allowedTokens") or [])],
+                    }
+                else:
+                    attributes[prop] = {"type": "relationship"}
+            out[name] = attributes
+    return out
+
+
+def test_nothing_frozen_at_1_0_has_changed():
+    current = describe_schemas()
+    if os.environ.get("LAGRANGE_WRITE_FROZEN") == "1":
+        with FROZEN.open("w") as f:
+            json.dump(current, f, indent=1, sort_keys=True)
+            f.write("\n")
+    with FROZEN.open() as f:
+        frozen = json.load(f)
+    problems = []
+    for schema, attributes in frozen.items():
+        if schema not in current:
+            problems.append(f"{schema} is gone")
+            continue
+        for prop, was in attributes.items():
+            now = current[schema].get(prop)
+            if now is None:
+                problems.append(f"{schema}.{prop} is gone")
+                continue
+            for key in ("type", "fallback", "unit"):
+                if was.get(key) != now.get(key):
+                    problems.append(f"{schema}.{prop} {key}: {was.get(key)} -> {now.get(key)}")
+            if now.get("tokens", [])[: len(was.get("tokens", []))] != was.get("tokens", []):
+                problems.append(f"{schema}.{prop}: allowed tokens changed, not appended")
+    assert not problems, (
+        "schemas changed after the 1.0 freeze (RFC 0007: add a *_2 schema and a migration "
+        f"instead): {problems}"
+    )

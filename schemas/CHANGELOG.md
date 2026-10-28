@@ -1,9 +1,15 @@
 # Schema changelog
 
 Every change to a schema library (RFC 0002, "Versioning and migration"). Until product v1.0
-every schema is version 1 and may change without a migration.
+every schema was version 1 and could change without a migration. From v1.0 they are frozen
+(RFC 0007): within 1.x an attribute may be added and allowed tokens appended; anything else is
+a `*_2` schema with a migration. `schemas/test/frozen_1_0.json` lists every attribute at 1.0
+and `test_schemas.py` checks it.
 
 ## Unreleased
+
+- **Frozen at 1.0** (RFC 0007): the 27 schemas and 240 properties listed in
+  `schemas/test/frozen_1_0.json`.
 
 - **World library** for v0.7 (huge-worlds.md §2): `WorldTileAPI_1`, one tile of a tiled world
   (level, index, bounds in world ENU, geometric error, whether it has colliders) on a prim whose

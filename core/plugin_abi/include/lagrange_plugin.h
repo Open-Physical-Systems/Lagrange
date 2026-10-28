@@ -10,8 +10,9 @@
  *
  * Versioning: a host loads only plugins built for the same MAJOR. MINOR grows when fields are
  * appended to structs or functions to tables; every struct starts with struct_size so that
- * either side can tell an older, shorter struct. The ABI is MAJOR 0, unstable, until product
- * v1.0. */
+ * either side can tell an older, shorter struct. MAJOR 1 is frozen for the 1.x releases
+ * (RFC 0007): within it the ABI changes only by appending; core/plugin_abi/test/
+ * test_abi_layout.c pins every size and offset of 1.0. */
 #ifndef LAGRANGE_PLUGIN_H
 #define LAGRANGE_PLUGIN_H
 
@@ -22,8 +23,8 @@
 extern "C" {
 #endif
 
-#define LAGRANGE_PLUGIN_ABI_MAJOR 0u
-#define LAGRANGE_PLUGIN_ABI_MINOR 1u
+#define LAGRANGE_PLUGIN_ABI_MAJOR 1u
+#define LAGRANGE_PLUGIN_ABI_MINOR 0u
 
 #define LAGRANGE_EXPORT __attribute__((visibility("default")))
 
@@ -150,6 +151,10 @@ typedef struct lagrange_module_api {
     lagrange_status (*restore_state)(void* self, const uint8_t* buffer, size_t size);
     /* Optional: the reason for the last non-OK status, or NULL. */
     const char* (*last_error)(const void* self);
+    /* Optional: the floating origin moved by `shift` (m, world ENU, whole metres) between two
+     * steps (docs/design/huge-worlds.md section 1.4): positions the module keeps in its state in
+     * the region frame move by -shift. Pose signals on the bus are moved by the host. */
+    void (*shift_origin)(void* self, const double shift[3]);
 } lagrange_module_api;
 
 /* The single symbol a plugin exports. Returns NULL when it does not support host_abi_major, and
