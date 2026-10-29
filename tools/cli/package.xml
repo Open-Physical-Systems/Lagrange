@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>lagrange</name>
+  <version>1.0.0</version>
+  <description>The `lagrange` command: runs the simulator and its viewer together (like `gazebo`), either one alone, the sample robots by name, and the lagrange_server tools (run, validate, graph, determinism, export, info).</description>
+  <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>python3</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>lagrange_server</exec_depend>
+  <exec_depend>lagrange_viewer</exec_depend>
+  <exec_depend>lagrange_assets</exec_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
