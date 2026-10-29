@@ -1,11 +1,23 @@
 # The `lagrange` command
 
-`lagrange` runs, checks and inspects simulations from the command line. It is installed with
-the simulator (package `lagrange_server`):
+`lagrange` is on the PATH once ROS is sourced (package `lagrange`, `tools/cli/`). Without a
+command it runs the simulator and its viewer together, like `gazebo`:
 
 ```bash
 source /opt/ros/lyrical/setup.bash && source install/setup.bash
-ros2 run lagrange_server lagrange <command> [arguments]
+lagrange [SAMPLE | ROBOT [WORLD]] [SERVER OPTIONS] [-- VIEWER OPTIONS]
+lagrange --server-only ...         # the server alone, headless
+lagrange viewer [VIEWER OPTIONS]   # the viewer alone
+lagrange samples                   # amr (default), sedan, quad, lexus, x500, swerve
+```
+
+The server listens on a socket of its own for the run (`$XDG_RUNTIME_DIR/lagrange/run-PID.sock`,
+unless `--listen` is given), so it never meets another simulator on the default socket; closing
+the viewer stops it, and Ctrl-C stops both. The commands below are the simulator's tools; they
+are also `ros2 run lagrange_server lagrange <command>`:
+
+```bash
+lagrange <command> [arguments]
 ```
 
 | Command | What it does |

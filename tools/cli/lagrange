@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+"""lagrange: the simulator and its viewer from one command, like `gazebo`.
+
+lagrange [SAMPLE | ROBOT [WORLD]] [SERVER OPTIONS] [-- VIEWER OPTIONS]
+    the server and the viewer together; closing the viewer stops the server
+lagrange --server-only ...      the server alone, headless (like gzserver)
+lagrange viewer [VIEWER OPTIONS]  the viewer alone (like gzclient)
+lagrange samples                the sample names
+lagrange run|validate|graph|determinism|export|info ...
+    the lagrange_server tools (as `ros2 run lagrange_server lagrange ...`)
+"""
+
+import os
+import signal
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+TOOLS = {"run", "validate", "graph", "determinism", "export", "info"}
+SERVER_START_SECONDS = 300.0  # large worlds and vehicles take a while to load
+STOP_SECONDS = 10.0
+
+
+def executable(package: str, name: str) -> str:
+    from ament_index_python.packages import PackageNotFoundError, get_package_prefix
+
+    try:
+        path = Path(get_package_prefix(package)) / "lib" / package / name
+    except PackageNotFoundError:
+        sys.exit(f"lagrange: {package} is not installed (source the ROS setup that has it)")
+    if not os.access(path, os.X_OK):
+        sys.exit(f"lagrange: {path} is missing")
+    return str(path)
+
+
+def asset(relative: str) -> str:
+    from ament_index_python.packages import get_package_share_directory
+
+    return str(Path(get_package_share_directory("lagrange_assets")) / relative)
+
+
+# name: (description, server arguments, viewer arguments, fetched asset or None)
+def samples() -> dict[str, tuple[str, list[str], list[str], str | None]]:
+    quad_site = ["--air-density", "1.225", "--geo-origin", "47.397742,8.545594,488"]
+    return {
+        "amr": ("the sample AMR in the small warehouse (the default)", [], [], None),
+        "sedan": (
+            "the sample sedan in the city block, with traffic",
+            [
+                "--robot",
+                asset("robots/sedan/sedan.usda"),
+                "--world",
+                asset("worlds/city_block/city_block.usda"),
+            ],
+            ["--follow", "30,55"],
+            None,
+        ),
+        "quad": (
+            "the sample 500 mm quadcopter on the open field",
+            [
+                "--robot",
+                asset("robots/quad_x500/quad_x500.usda"),
+                "--world",
+                asset("worlds/open_field/open_field.usda"),
+                *quad_site,
+            ],
+            ["--follow", "4,25"],
+            None,
+        ),
+        "lexus": (
+            "the Lexus RX 450h (Autoware's model) in the city block",
+            [
+                "--robot",
+                asset("robots/lexus_rx450h/lexus_rx450h.urdf"),
+                "--overlay",
+                asset("robots/lexus_rx450h/lexus_rx450h.overlay.yaml"),
+                "--world",
+                asset("worlds/city_block/city_block.usda"),
+            ],
+            ["--follow", "12,25"],
+            "lexus_rx450h",
+        ),
+        "x500": (
+            "the Holybro X500 V2 (PX4's model) on the open field",
+            [
+                "--robot",
+                asset("robots/holybro_x500_v2/holybro_x500_v2.urdf"),
+                "--overlay",
+                asset("robots/holybro_x500_v2/holybro_x500_v2.overlay.yaml"),
+                "--world",
+                asset("worlds/open_field/open_field.usda"),
+                *quad_site,
+            ],
+            ["--follow", "4,25"],
+            "holybro_x500_v2",
+        ),
+        "swerve": (
+            "the AMR_FMS swerve AMR in its 60 m x 40 m warehouse",
+            [
+                "--robot",
+                asset("robots/amr_fms/amr_fms.urdf"),
+                "--world",
+                asset("worlds/amr_fms_warehouse/warehouse.sdf"),
+                "--spawn",
+                "26,8,0,3.1416",
+            ],
+            ["--follow", "3.5,30"],
+            None,
+        ),
+    }
+
+
+def asset_fetched(asset_id: str) -> bool:
+    root = os.environ.get("LAGRANGE_ASSET_DIR") or str(
+        Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+        / "lagrange"
+        / "assets"
+    )
+    return (Path(root) / asset_id / "NOTICE").is_file()
+
+
+def usage() -> None:
+    print(__doc__.strip().split("\n", 1)[1].strip("\n"))
+    print("\nSamples:", ", ".join(samples()), "(lagrange samples)")
+    print("Server options: lagrange_server --help; viewer options: lagrange viewer --help.")
+    print(
+        "Examples:\n  lagrange\n  lagrange sedan\n  lagrange robot.urdf world.sdf --spawn 2,0"
+        "\n  lagrange --robot robot.usda --world none -- --follow 5"
+    )
+
+
+def own_endpoint() -> str:
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/lagrange-{os.getuid()}"
+    directory = Path(runtime) / "lagrange"
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return f"unix:{directory}/run-{os.getpid()}.sock"
+
+
+def reachable(endpoint: str) -> bool:
+    if endpoint.startswith("unix:"):
+        return Path(endpoint[5:]).exists()
+    address = endpoint.split("://", 1)[-1]
+    host, _, port = address.rpartition(":")
+    try:
+        with socket.create_connection((host or "127.0.0.1", int(port)), timeout=0.5):
+            return True
+    except (OSError, ValueError):
+        return False
+
+
+def stop(process: subprocess.Popen[bytes]) -> int:
+    if process.poll() is None:
+        process.send_signal(signal.SIGTERM)
+        try:
+            process.wait(timeout=STOP_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()  # ROS shared memory may need `fastdds shm clean` after this
+    return process.wait()
+
+
+def main(argv: list[str]) -> int:
+    if argv and argv[0] in ("-h", "--help", "help"):
+        usage()
+        return 0
+    if argv and argv[0] in TOOLS:
+        os.execv(executable("lagrange_server", "lagrange"), ["lagrange", *argv])
+    if argv and argv[0] == "viewer":
+        viewer = executable("lagrange_viewer", "lagrange_viewer")
+        os.execv(viewer, [viewer, *argv[1:]])
+    if argv and argv[0] == "server":
+        argv = ["--server-only", *argv[1:]]
+    if argv and argv[0] == "samples":
+        for name, (text, *_rest) in samples().items():
+            print(f"  {name:8} {text}")
+        return 0
+
+    server_args, viewer_args = argv, []
+    if "--" in argv:
+        cut = argv.index("--")
+        server_args, viewer_args = argv[:cut], argv[cut + 1 :]
+    server_only = False
+    for flag in ("--server-only", "-s"):
+        while flag in server_args:
+            server_args.remove(flag)
+            server_only = True
+
+    # A sample by name, or a robot file and a world file as the first words.
+    words = []
+    while server_args and not server_args[0].startswith("-"):
+        words.append(server_args.pop(0))
+    chosen = samples()
+    if words and words[0] in chosen:
+        _text, sample_server, sample_viewer, fetched = chosen[words.pop(0)]
+        if fetched and not asset_fetched(fetched):
+            print(
+                f"lagrange: the meshes of this sample are not fetched; it runs with boxes "
+                f"in their place (ros2 run lagrange_assets fetch_assets {fetched})",
+                file=sys.stderr,
+            )
+        server_args = [*sample_server, *server_args]
+        viewer_args = [*sample_viewer, *viewer_args]
+    if len(words) > 2:
+        sys.exit(f"lagrange: unexpected '{words[2]}' (lagrange --help)")
+    for flag, word in zip(("--robot", "--world"), words, strict=False):
+        if word not in chosen and not Path(word).exists():
+            sys.exit(f"lagrange: no sample or file '{word}' (lagrange samples)")
+        server_args = [flag, word, *server_args]
+
+    server = executable("lagrange_server", "lagrange_server")
+    if server_only:
+        os.execv(server, [server, *server_args])
+
+    # The server listens on an endpoint of this run unless told otherwise, so that it never
+    # meets another simulator on the default socket.
+    if "--listen" in server_args:
+        endpoint = server_args[server_args.index("--listen") + 1]
+    else:
+        endpoint = own_endpoint()
+        server_args = [*server_args, "--listen", endpoint]
+    if "--connect" not in viewer_args:
+        viewer_args = ["--connect", endpoint, *viewer_args]
+
+    server_process = subprocess.Popen([server, *server_args])
+    deadline = time.monotonic() + SERVER_START_SECONDS
+    while not reachable(endpoint):
+        if server_process.poll() is not None:
+            return server_process.returncode or 1
+        if time.monotonic() > deadline:
+            print("lagrange: the server did not start listening", file=sys.stderr)
+            return stop(server_process) or 1
+        time.sleep(0.1)
+
+    # Ctrl-C reaches both processes (same terminal); wait for them instead of dying first.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    viewer_process = subprocess.Popen(
+        [executable("lagrange_viewer", "lagrange_viewer"), *viewer_args],
+        preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
+    )
+    while viewer_process.poll() is None and server_process.poll() is None:
+        time.sleep(0.2)
+    server_ended_first = server_process.poll() is not None
+    viewer_status = stop(viewer_process)
+    server_status = stop(server_process)
+    if endpoint.startswith("unix:"):
+        Path(endpoint[5:]).unlink(missing_ok=True)
+    if server_ended_first:
+        print(f"lagrange: the server stopped (exit {server_status})", file=sys.stderr)
+        return server_status or 1
+    return viewer_status
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

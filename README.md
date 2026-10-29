@@ -189,12 +189,17 @@ Packages:
 ## Run the simulator
 
 ```bash
-source install/setup.bash
-ros2 run lagrange_server lagrange_server &      # the sample AMR in the sample warehouse
-ros2 run lagrange_viewer lagrange_viewer --connect unix:$XDG_RUNTIME_DIR/lagrange/default.sock
+source install/setup.bash          # or /opt/ros/lyrical/setup.bash with the debs installed
+lagrange                           # the server and the viewer: the sample AMR in the warehouse
+lagrange sedan                     # a sample by name: amr, sedan, quad, lexus, x500, swerve
+lagrange robot.urdf world.sdf      # your own robot and world (URDF, SDFormat, MJCF or USD)
+lagrange --server-only sedan       # headless, like gzserver; `lagrange viewer` is the viewer alone
 ```
 
-The robot drives a figure-eight until it gets `/cmd_vel`. The other samples:
+Closing the viewer stops the server. Options before `--` go to the server (`--spawn`,
+`--physics jolt`, `--no-ros`, ...; `lagrange_server --help`), after it to the viewer
+(`lagrange sedan -- --follow 20`). The robot drives a figure-eight until it gets `/cmd_vel`.
+The same samples with the server alone:
 
 ```bash
 # the sedan in the city block, with traffic (drive it with /ackermann_cmd or /cmd_vel)
