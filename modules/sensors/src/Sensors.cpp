@@ -1083,6 +1083,8 @@ std::vector<std::unique_ptr<IModule>> createModules(
             case SensorType::Magnetometer:
             case SensorType::Barometer:
                 break;  // createGeoSensors, below
+            case SensorType::Custom:
+                break;  // a plugin implements it (RFC 0008 §3)
         }
     }
     createGeoSensors(world, groundTruth, modules);

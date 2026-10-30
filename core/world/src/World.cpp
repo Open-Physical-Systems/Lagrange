@@ -105,6 +105,18 @@ void World::addSensor(std::string name, SensorType sensorType, BodyId onBody, co
     sensors.rateHz.push_back(updateRateHz);
     sensors.prim.push_back(sensor);
     sensors.settings.push_back(std::move(sensorSettings));
+    sensors.kind.emplace_back();
+    sensors.text.emplace_back();
+}
+
+void World::addCustomSensor(std::string name, std::string sensorKind, BodyId onBody,
+                            const Pose& pose, double updateRateHz,
+                            std::map<std::string, double, std::less<>> sensorSettings,
+                            std::map<std::string, std::string, std::less<>> textSettings) {
+    addSensor(std::move(name), SensorType::Custom, onBody, pose, updateRateHz,
+              std::move(sensorSettings));
+    sensors.kind.back() = std::move(sensorKind);
+    sensors.text.back() = std::move(textSettings);
 }
 
 void World::addCollider(BodyId onBody, ShapeType shapeType, const std::array<double, 3>& shapeSize,

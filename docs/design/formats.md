@@ -589,6 +589,7 @@ agreed):
 | `ImuAPI_1` | v0.2 implements per-sample white noise, `sensor:imu:accelNoiseStd` (m/s², 0) and `gyroNoiseStd` (rad/s, 0), plus the bias instabilities: densities need half powers in the unit grammar. Draft: `sensor:imu:accelNoiseDensity` (m/s²/√Hz, —), `accelBiasInstability` (m/s², —), `accelRandomWalk` (m/s³/√Hz, —), `gyroNoiseDensity` (rad/s/√Hz, —), `gyroBiasInstability` (rad/s, —), `gyroRandomWalk` (rad/s²/√Hz, —), `accelRange` (m/s², —), `gyroRange` (rad/s, —) |
 | `GnssAPI_1` | `sensor:gnss:horizontalStd` (m, —), `verticalStd` (m, —), `velocityStd` (m/s, —), `multipathModel` (token: `none`, `urban`), `minElevation` (rad, 0.17) |
 | `MagnetometerAPI_1` | `sensor:mag:noiseStd` (T, —), `hardIron` (T[3], 0), `softIron` (double[9], identity), `earthFieldModel` (token: `constant`, `wmm`), `earthField` (T[3], — when `constant`; site parameter, no fallback) |
+| `CustomSensorAPI_1` | (RFC 0008 §3) `sensor:custom:kind` (string, —: what a plugin looks for), and any number of `sensor:custom:param:<name>` (double or string; `:` in the name is `/` in the parameter path). From URDF and SDFormat, every `<sensor>` of a type Lagrange does not simulate becomes one: its leaf elements are its parameters by path (`<range><max>` is `range/max`; a first element named as the type is left out) |
 
 ### 3.9 `schemas/comms/schema.usda`
 

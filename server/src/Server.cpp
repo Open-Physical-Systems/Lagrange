@@ -5258,6 +5258,14 @@ Status Server::start() {
         char line[160];
         constexpr std::array<const char*, 7> kKinds{"IMU",          "lidar",     "camera", "GNSS",
                                                     "magnetometer", "barometer", "radar"};
+        if (sensors.type[i] == SensorType::Custom) {
+            s.log(v1::LOG_LEVEL_INFO, "sensors",
+                  "custom sensor " + sensors.names[i] + " (" + sensors.kind[i] + ") on " +
+                      s.robot.world.bodies.names[sensors.body[i].index] +
+                      (s.plugins.empty() ? ": no plugin is loaded to implement it"
+                                         : ": a plugin implements it"));
+            continue;
+        }
         const char* kind = kKinds.at(static_cast<std::size_t>(sensors.type[i]));
         std::snprintf(line, sizeof(line), "%s %s on %s at %.0f Hz", kind, sensors.names[i].c_str(),
                       s.robot.world.bodies.names[sensors.body[i].index].c_str(), sensors.rateHz[i]);

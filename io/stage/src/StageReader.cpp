@@ -859,11 +859,40 @@ private:
             scene.typeName = "Imu";
             settings = {{"accel_noise", real("sensor:imu:accelNoiseStd").value_or(0.0)},
                         {"gyro_noise", real("sensor:imu:gyroNoiseStd").value_or(0.0)}};
+        } else if (prim.HasAPI(TfToken("CustomSensorAPI_1"))) {
+            // A sensor a plugin implements (RFC 0008 §3): its kind, and its parameters as
+            // sensor:custom:param:<path> attributes (":" in the path is "/" in the world).
+            const std::optional<std::string> kind =
+                valueOf<std::string>(prim.GetAttribute(TfToken("sensor:custom:kind")));
+            if (!kind || kind->empty()) {
+                errors_.push_back(path + ": sensor:custom:kind is required");
+                return {};
+            }
+            std::map<std::string, std::string, std::less<>> text;
+            constexpr std::string_view kParam = "sensor:custom:param:";
+            for (const UsdAttribute& attribute : prim.GetAuthoredAttributes()) {
+                const std::string name = attribute.GetName().GetString();
+                if (!name.starts_with(kParam)) {
+                    continue;
+                }
+                std::string key = name.substr(kParam.size());
+                std::replace(key.begin(), key.end(), ':', '/');
+                if (const auto number = valueOf<double>(attribute)) {
+                    settings[key] = *number;
+                } else if (const auto words = valueOf<std::string>(attribute)) {
+                    text[key] = *words;
+                }
+            }
+            scene.typeName = "CustomSensor";
+            m_.world.addCustomSensor(prim.GetName().GetString(), *kind, BodyId{body}, mount, *rate,
+                                     settings, text);
+            worldPrim_[prim.GetPath()] = m_.world.sensors.prim.back();
+            return {};
         } else {
             note(path +
                  ": a sensor without LidarAPI_1, ImuAPI_1, CameraSensorAPI_1, GnssAPI_1, "
-                 "MagnetometerAPI_1, BarometerAPI_1 or RadarAPI_1 is not "
-                 "simulated yet");
+                 "MagnetometerAPI_1, BarometerAPI_1, RadarAPI_1 or CustomSensorAPI_1 is not "
+                 "simulated");
             scene.typeName = "Xform";
             return {};
         }

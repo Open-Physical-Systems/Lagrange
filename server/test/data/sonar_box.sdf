@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<!-- A box with a sonar, a sensor type Lagrange does not simulate: a custom sensor (RFC 0008 §3). -->
+<sdf version="1.9">
+  <model name="sonar_box">
+    <link name="base_link">
+      <inertial><mass>5.0</mass></inertial>
+      <collision name="c"><geometry><box><size>0.4 0.4 0.2</size></box></geometry></collision>
+      <sensor name="front_sonar" type="sonar">
+        <pose>0.2 0 0 0 0 0</pose>
+        <update_rate>10</update_rate>
+        <sonar><min>0.1</min><max>5</max><radius>0.3</radius></sonar>
+      </sensor>
+    </link>
+  </model>
+</sdf>

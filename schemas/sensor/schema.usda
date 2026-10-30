@@ -300,3 +300,19 @@ class "RadarAPI_1" (
         doc = "Signal-to-noise ratio a detection needs (linear; 10: 10 dB)."
     )
 }
+
+class "CustomSensorAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A sensor that Lagrange does not simulate itself: a plugin implements its kind
+    (RFC 0008 section 3). Its parameters are attributes named sensor:custom:param:<name>, of type
+    double or string, any number of them (a ':' in <name> stands for '/' in the parameter's path:
+    sensor:custom:param:range:max is "range/max"). Apply with SensorAPI_1."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    string sensor:custom:kind (
+        doc = """The kind of sensor ("sonar", "tof", "gas"): what a plugin looks for. Required."""
+    )
+}
