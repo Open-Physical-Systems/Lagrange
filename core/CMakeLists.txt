@@ -68,6 +68,27 @@ install(
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin
 )
+# lagrange_tof: the time-of-flight sensor plugin (RFC 0008, the plugin guide's example), in
+# C99 against the C ABI alone. Installed with an entry in the lagrange_plugins resource index,
+# so `lagrange_server --plugin lagrange_tof` finds it.
+add_library(lagrange_tof MODULE plugin_abi/samples/tof_sensor.c)
+target_include_directories(
+    lagrange_tof
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/plugin_abi/include
+)
+set_target_properties(
+    lagrange_tof
+    PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+)
+target_compile_options(lagrange_tof PRIVATE -pedantic -Wall -Wextra -Werror)
+target_link_libraries(lagrange_tof PRIVATE m)
+install(TARGETS lagrange_tof LIBRARY DESTINATION lib)
+ament_index_register_resource(
+    lagrange_plugins
+    PACKAGE_NAME lagrange_tof
+    CONTENT "lib/liblagrange_tof.so"
+)
+
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
     foreach(

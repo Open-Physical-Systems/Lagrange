@@ -305,6 +305,9 @@ std::uint32_t worldSensorCount(const lagrange_world* w) {
 const char* sensorKind(const World::Sensors& sensors, std::size_t s) {
     static constexpr std::array<const char*, 7> kKinds{
         "imu", "lidar", "camera", "gnss", "magnetometer", "barometer", "radar"};
+    if (sensors.type[s] == SensorType::Custom) {
+        return s < sensors.kind.size() ? sensors.kind[s].c_str() : "custom";
+    }
     const auto type = static_cast<std::size_t>(sensors.type[s]);
     return type < kKinds.size() ? kKinds.at(type) : "unknown";
 }
@@ -336,11 +339,16 @@ int worldSensorParamReal(const lagrange_world* w, std::uint32_t s, const char* k
 }
 int worldSensorParamString(const lagrange_world* w, std::uint32_t s, const char* key,
                            const char** out) {
-    (void)w;
-    (void)s;
-    (void)key;
-    (void)out;
-    return 0;  // text parameters come with custom sensors (RFC 0008 §3)
+    const World::Sensors& sensors = world(w).raw().sensors;
+    if (s >= sensors.text.size() || key == nullptr || out == nullptr) {
+        return 0;
+    }
+    const auto it = sensors.text[s].find(key);
+    if (it == sensors.text[s].end()) {
+        return 0;
+    }
+    *out = it->second.c_str();
+    return 1;
 }
 int worldSite(const lagrange_world* w, lagrange_site_info* out) {
     const World& raw = world(w).raw();

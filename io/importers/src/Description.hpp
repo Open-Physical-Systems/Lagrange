@@ -42,6 +42,8 @@ struct SensorDesc {
     Pose pose;  // in the link frame
     double rateHz{10.0};
     std::map<std::string, double, std::less<>> settings;  // as World::Sensors::settings
+    std::string kind;  // a custom sensor's (RFC 0008 §3), as World::Sensors::kind
+    std::map<std::string, std::string, std::less<>> text;  // its text parameters
 };
 
 struct LinkDesc {

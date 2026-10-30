@@ -300,6 +300,7 @@ if(BUILD_TESTING)
         test_server
         PRIVATE
             LAGRANGE_TEST_PLUGIN_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_plugins"
+            LAGRANGE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/test/data"
     )
     ament_add_gtest(test_command_line test/test_command_line.cpp)
     target_link_libraries(test_command_line lagrange_server_cli)

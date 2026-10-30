@@ -331,6 +331,20 @@ private:
                     real(attribute, it->second);
                 }
             }
+        } else if (sensors.type[s] == SensorType::Custom) {
+            prim.ApplyAPI(TfToken("CustomSensorAPI_1"));
+            prim.CreateAttribute(TfToken("sensor:custom:kind"), SdfValueTypeNames->String)
+                .Set(sensors.kind[s]);
+            const auto param = [](std::string key) {
+                std::replace(key.begin(), key.end(), '/', ':');
+                return TfToken("sensor:custom:param:" + key);
+            };
+            for (const auto& [key, value] : sensors.settings[s]) {
+                prim.CreateAttribute(param(key), SdfValueTypeNames->Double).Set(value);
+            }
+            for (const auto& [key, value] : sensors.text[s]) {
+                prim.CreateAttribute(param(key), SdfValueTypeNames->String).Set(value);
+            }
         } else {
             prim.ApplyAPI(TfToken("ImuAPI_1"));
             real("sensor:imu:accelNoiseStd", get("accel_noise", 0.0));

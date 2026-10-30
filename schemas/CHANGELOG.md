@@ -8,6 +8,10 @@ and `test_schemas.py` checks it.
 
 ## Unreleased
 
+- **`CustomSensorAPI_1`** in the sensor library (RFC 0008 §3): a sensor a plugin implements, by
+  its `sensor:custom:kind`, with free `sensor:custom:param:<name>` attributes. A new schema under
+  the 1.x rules (RFC 0007); nothing in `frozen_1_0.json` changes.
+
 - **Frozen at 1.0** (RFC 0007): the 27 schemas and 240 properties listed in
   `schemas/test/frozen_1_0.json`.
 

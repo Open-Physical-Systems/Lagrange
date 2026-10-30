@@ -105,6 +105,28 @@ lidar's caster). C++ plugins can read the whole world into plain containers with
 `lagrange/plugin_sdk/World.hpp`. The server logs every module it loaded and what it is for. A profile applied from the viewer can
 configure loaded plugins but never load one.
 
+### Custom sensors
+
+A robot file can carry sensors Lagrange does not simulate itself, for a plugin to implement. In
+URDF (`<gazebo reference>`) and SDFormat, a `<sensor>` of any other type (`sonar`, `tof`,
+`gas`) becomes a custom sensor of that kind, with its pose, rate and every leaf element as a
+parameter by its path (`<tof><range><max>4</max></range></tof>` is `range/max = 4`; the first
+element named as the type is left out). In USD it is `CustomSensorAPI_1` with
+`sensor:custom:kind` and `sensor:custom:param:range:max`. A plugin finds its sensors with
+`world_sensor` (`kind`) and reads the parameters with `world_sensor_param_real` and
+`world_sensor_param_string`.
+
+The time-of-flight plugin that comes with Lagrange implements kind `tof`:
+
+```bash
+lagrange --robot my_robot.urdf --plugin lagrange_tof
+# sensor/<name>/range (m, +inf when nothing is in range) and sensor/<name>/valid on the bus
+```
+
+Its parameters are `range/min`, `range/max`, `fov` (a 5 × 5 grid of rays over a square field of
+view; 0 for one ray) and `noise/stddev`; its source, `core/plugin_abi/samples/tof_sensor.c`, is the
+example of the plugin guide.
+
 ## Profiles and stages
 
 A profile (RFC 0005) chooses which domains run, which substitutes replace the others, and the

@@ -1,8 +1,12 @@
 #include "lagrange/server/Plugins.hpp"
+#include "lagrange/server/Robot.hpp"
 #include "lagrange/server/Server.hpp"
+#include "lagrange/stage/Stage.hpp"
+#include "lagrange/world/PoseMath.hpp"
 
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -141,6 +145,66 @@ TEST_F(Plugins, TheSdkReadsTheWholeWorld) {
         mass += m;
     }
     EXPECT_DOUBLE_EQ(server.read("sdk/mass").at(0), mass);
+}
+
+// Custom sensors (RFC 0008 §3): a <sensor> of a type Lagrange does not simulate is kept, with
+// its parameters by path, for a plugin to implement.
+TEST_F(Plugins, UnknownSensorTypesBecomeCustomSensors) {
+    const auto urdf = loadModel(LAGRANGE_TEST_DATA "/tof_box.urdf");
+    ASSERT_TRUE(urdf) << urdf.error();
+    const World::Sensors& sensors = urdf->world.sensors;
+    ASSERT_EQ(sensors.names.size(), 1U);
+    EXPECT_EQ(sensors.type[0], SensorType::Custom);
+    EXPECT_EQ(sensors.kind[0], "tof");
+    EXPECT_EQ(sensors.rateHz[0], 50.0);
+    EXPECT_EQ(sensors.settings[0].at("range/max"), 4.0);
+    EXPECT_EQ(sensors.settings[0].at("fov"), 0.0);
+    EXPECT_EQ(sensors.text[0].at("noise/type"), "gaussian");
+
+    const auto sdf = loadModel(LAGRANGE_TEST_DATA "/sonar_box.sdf");
+    ASSERT_TRUE(sdf) << sdf.error();
+    ASSERT_EQ(sdf->world.sensors.names.size(), 1U);
+    EXPECT_EQ(sdf->world.sensors.type[0], SensorType::Custom);
+    EXPECT_EQ(sdf->world.sensors.kind[0], "sonar");
+    EXPECT_EQ(sdf->world.sensors.settings[0].at("max"), 5.0);
+    EXPECT_EQ(sdf->world.sensors.settings[0].at("radius"), 0.3);
+
+    // Through USD and back: CustomSensorAPI_1 keeps the kind and every parameter.
+    const std::string usda =
+        (std::filesystem::temp_directory_path() / "lagrange_tof_box.usda").string();
+    ASSERT_TRUE(stage::writeStage(*urdf, usda));
+    const auto back = loadModel(usda);
+    ASSERT_TRUE(back) << back.error();
+    ASSERT_EQ(back->world.sensors.names.size(), 1U);
+    EXPECT_EQ(back->world.sensors.type[0], SensorType::Custom);
+    EXPECT_EQ(back->world.sensors.kind[0], "tof");
+    EXPECT_EQ(back->world.sensors.settings[0], sensors.settings[0]);
+    EXPECT_EQ(back->world.sensors.text[0], sensors.text[0]);
+    std::filesystem::remove(usda);
+}
+
+// The time-of-flight plugin (core/plugin_abi/samples/tof_sensor.c, found by name in the
+// lagrange_plugins index): its range to the ground is the exact distance along its beam, and it
+// does not see its own body.
+TEST_F(Plugins, TheTofPluginMeasuresTheGround) {
+    ServerOptions options = amr({"lagrange_tof"});
+    options.robotPath = LAGRANGE_TEST_DATA "/tof_box.urdf";
+    options.overlayPath.clear();
+    Server server(options);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{2'000'000'000}).ok());  // it has settled
+    const std::vector<double> body = server.read("body/base_link/pose");
+    ASSERT_EQ(body.size(), 7U);
+    const Pose base{{body[0], body[1], body[2]}, {body[3], body[4], body[5], body[6]}};
+    const Pose sensor = compose(base, server.world().sensors.poseInBody[0]);
+    const std::array<double, 3> beam = rotate(sensor.orientation, {1.0, 0.0, 0.0});
+    ASSERT_LT(beam[2], -0.4) << "it looks down";
+    const double expected = -sensor.position[2] / beam[2];  // to the plane z = 0
+    const std::vector<double> range = server.read("sensor/front_tof/range");
+    ASSERT_EQ(range.size(), 1U);
+    EXPECT_NEAR(range[0], expected, 1e-6);
+    EXPECT_EQ(server.read("sensor/front_tof/valid").at(0), 1.0);
 }
 
 TEST_F(Plugins, LoadingFailuresNameTheLibrary) {

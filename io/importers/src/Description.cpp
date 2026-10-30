@@ -508,7 +508,12 @@ private:
                    const Pose& frame) {
         const Pose mount = relative(frame, sensor.pose);
         const std::string name = unique(m_.world.sensors.names, sensor.name);
-        m_.world.addSensor(name, sensor.type, body, mount, sensor.rateHz, sensor.settings);
+        if (sensor.type == SensorType::Custom) {
+            m_.world.addCustomSensor(name, sensor.kind, body, mount, sensor.rateHz, sensor.settings,
+                                     sensor.text);
+        } else {
+            m_.world.addSensor(name, sensor.type, body, mount, sensor.rateHz, sensor.settings);
+        }
         ScenePrim prim;
         prim.name = name;
         prim.parent = linkPrim;
@@ -540,6 +545,10 @@ private:
             case SensorType::Radar:
                 prim.typeName = "Radar";
                 prim.apiSchemas = {"SensorAPI_1", "RadarAPI_1"};
+                break;
+            case SensorType::Custom:
+                prim.typeName = "CustomSensor";
+                prim.apiSchemas = {"SensorAPI_1", "CustomSensorAPI_1"};
                 break;
         }
         prim.body = body.index;

@@ -336,6 +336,40 @@ private:
         link.visuals.push_back(out);
     }
 
+    /// A custom sensor's parameters: every leaf element under <sensor> by its path, as the URDF
+    /// reader does (numbers into settings, the rest into text; a first element named as the type
+    /// is left out of the path).
+    static void customParameters(const sdf::ElementPtr& element, const std::string& prefix,
+                                 const std::string& type, SensorDesc& out) {
+        static const std::set<std::string, std::less<>> kNotParameters{
+            "pose",  "update_rate", "always_on",      "visualize",
+            "topic", "plugin",      "enable_metrics", "frame_id"};
+        for (sdf::ElementPtr child = element->GetFirstElement(); child != nullptr;
+             child = child->GetNextElement()) {
+            const std::string name = child->GetName();
+            if (prefix.empty() && kNotParameters.contains(name)) {
+                continue;
+            }
+            const std::string path =
+                prefix.empty() && name == type ? "" : (prefix.empty() ? name : prefix + "/" + name);
+            if (child->GetFirstElement() != nullptr) {
+                customParameters(child, path, type, out);
+                continue;
+            }
+            if (path.empty() || !child->GetValue()) {
+                continue;
+            }
+            const std::string value = child->GetValue()->GetAsString();
+            char* end = nullptr;
+            const double number = std::strtod(value.c_str(), &end);
+            if (!value.empty() && end != value.c_str() && *end == '\0') {
+                out.settings[path] = number;
+            } else {
+                out.text[path] = value;
+            }
+        }
+    }
+
     void readSensor(const sdf::Sensor& sensor, LinkDesc& link) {
         SensorDesc out;
         out.name = sensor.Name();
@@ -380,9 +414,13 @@ private:
             out.settings["horizontal_fov"] = camera->HorizontalFov().Radian();
             out.settings["near_clip"] = camera->NearClip();
             out.settings["far_clip"] = camera->FarClip();
+        } else if (!sensor.TypeStr().empty() && sensor.Element() != nullptr) {
+            // Any other type is a custom sensor that a plugin implements (RFC 0008 §3).
+            out.type = SensorType::Custom;
+            out.kind = sensor.TypeStr();
+            customParameters(sensor.Element(), "", out.kind, out);
         } else {
-            detail::note(model_, "sensor '" + sensor.Name() + "' of type '" + sensor.TypeStr() +
-                                     "' is not simulated yet");
+            detail::note(model_, "sensor '" + sensor.Name() + "' has no type; skipped");
             return;
         }
         link.sensors.push_back(std::move(out));

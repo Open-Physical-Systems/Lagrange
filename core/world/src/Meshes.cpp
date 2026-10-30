@@ -203,6 +203,10 @@ void appendModel(Model& model, const Model& other) {
     for (std::size_t s = 0; s < o.sensors.names.size(); ++s) {
         w.addSensor(o.sensors.names[s], o.sensors.type[s], map(o.sensors.body[s]),
                     o.sensors.poseInBody[s], o.sensors.rateHz[s], o.sensors.settings[s]);
+        if (s < o.sensors.kind.size()) {
+            w.sensors.kind.back() = o.sensors.kind[s];
+            w.sensors.text.back() = o.sensors.text[s];
+        }
     }
     // Schema instances: bodies, joints and sensors got new prims above; any other prim (a bus,
     // a battery) is added as it was.

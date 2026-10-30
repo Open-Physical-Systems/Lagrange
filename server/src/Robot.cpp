@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -573,10 +574,47 @@ const char* sensorSchema(SensorType kind) {
             return "BarometerAPI_1";
         case SensorType::Radar:
             return "RadarAPI_1";
+        case SensorType::Custom:
+            return "CustomSensorAPI_1";
         case SensorType::Imu:
             break;
     }
     return "ImuAPI_1";
+}
+
+/// A custom sensor's parameters (RFC 0008 §3): every leaf element under <sensor> by its path
+/// ("range/max"), numbers into `numbers` and the rest into `text`; a first element named as the
+/// sensor's type is left out of the path (<sonar><max> is "max"). Pose, rate and Gazebo's own
+/// elements are not parameters.
+void customParameters(const tinyxml2::XMLElement* element, const std::string& prefix,
+                      const std::string& type, std::map<std::string, double, std::less<>>& numbers,
+                      std::map<std::string, std::string, std::less<>>& text) {
+    static const std::set<std::string, std::less<>> kNotParameters{
+        "pose", "update_rate", "always_on", "visualize", "topic", "plugin", "enable_metrics"};
+    for (const tinyxml2::XMLElement* child = element->FirstChildElement(); child != nullptr;
+         child = child->NextSiblingElement()) {
+        const std::string name = child->Name();
+        if (prefix.empty() && kNotParameters.contains(name)) {
+            continue;
+        }
+        const std::string path =
+            prefix.empty() && name == type ? "" : (prefix.empty() ? name : prefix + "/" + name);
+        if (child->FirstChildElement() != nullptr) {
+            customParameters(child, path, type, numbers, text);
+            continue;
+        }
+        const char* value = child->GetText();
+        if (value == nullptr || path.empty()) {
+            continue;
+        }
+        char* end = nullptr;
+        const double number = std::strtod(value, &end);
+        if (end != value && *end == '\0') {
+            numbers[path] = number;
+        } else {
+            text[path] = value;
+        }
+    }
 }
 
 /// Gazebo sensor blocks: <gazebo reference="link"><sensor name type>...</sensor></gazebo>.
@@ -662,13 +700,22 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
                 settings["near_clip"] = childNumber(camera, {"clip", "near"}, 0.05);
                 settings["far_clip"] = childNumber(camera, {"clip", "far"}, 100.0);
                 typeName = "Camera";
+            } else if (!type.empty()) {
+                // Any other type is a custom sensor that a plugin implements (RFC 0008 §3).
+                kind = SensorType::Custom;
+                typeName = "CustomSensor";
             } else {
-                robot.notes.push_back("sensor '" + std::string(name) + "' of type '" + type +
-                                      "' is not simulated yet");
+                robot.notes.push_back("sensor '" + std::string(name) + "' has no type; skipped");
                 continue;
             }
             const auto bodyId = BodyId{static_cast<std::uint32_t>(body)};
-            world.addSensor(name, kind, bodyId, mount, rate, settings);
+            if (kind == SensorType::Custom) {
+                std::map<std::string, std::string, std::less<>> text;
+                customParameters(sensor, "", type, settings, text);
+                world.addCustomSensor(name, type, bodyId, mount, rate, settings, text);
+            } else {
+                world.addSensor(name, kind, bodyId, mount, rate, settings);
+            }
             ScenePrim prim;
             prim.name = name;
             prim.parent = robot.bodyPrim[body];
