@@ -469,6 +469,9 @@ Bridge::Bridge(BridgeSettings settings)
             "/cmd_vel", 10, [&s](const geometry_msgs::msg::Twist& twist) { s.take(twist); });
     }
     setRobot(settings_.baseLink, settings_.robotDescription, settings_.ackermannCmd);
+    if (!settings_.signalTopics.publish.empty() || !settings_.signalTopics.subscribe.empty()) {
+        signalTopics_ = std::make_unique<SignalTopics>(*s.node, settings_.signalTopics);
+    }
     s.executor.add_node(s.node);
     s.spinner = std::thread([&s] { s.executor.spin(); });
 }
@@ -510,8 +513,13 @@ Bridge::~Bridge() {
     }
 }
 
+std::unique_ptr<IModule> Bridge::topicInputs() const {
+    return signalTopics_ ? signalTopics_->inputModule() : nullptr;
+}
+
 void Bridge::attach(const World& world, const SignalBus& bus) {
     Impl& s = *impl_;
+    topicProblems_ = signalTopics_ ? signalTopics_->attach(bus) : std::vector<std::string>{};
     if (!s.firstRegion) {
         s.firstRegion = world.region.worldEnu;
     }
@@ -735,6 +743,9 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
         s.commandGate.up = bus.read(it->second.up) > 0.5;
         s.commandGate.loss = bus.read(it->second.loss);
         s.commandGate.latency = bus.read(it->second.latency);
+    }
+    if (signalTopics_) {
+        signalTopics_->publish(bus, now);
     }
     if (now != s.lastClock) {
         rosgraph_msgs::msg::Clock clock;

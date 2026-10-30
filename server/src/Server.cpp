@@ -887,6 +887,12 @@ struct Server::Impl {
                                                                !options.cameras)) {
             next->add(std::move(sensor), ModuleConfig(sensing));
         }
+        // Topics written into signals (--ros-topics subscribe), for plugins to read.
+        if (bridge) {
+            if (auto inputs = bridge->topicInputs()) {
+                next->add(std::move(inputs));
+            }
+        }
         // Plugins' own domains (RFC 0008): each runs unless --domain <d>=off.
         for (const PluginModule& module : plugins) {
             if (!isBuiltInDomain(module.domain) && !module.substitute &&
@@ -1101,6 +1107,13 @@ struct Server::Impl {
         (void)scheduler->takeCosts();
         if (bridge) {
             bridge->attach(robot.world, scheduler->bus());
+            if (!bridge->topicProblems().empty()) {
+                std::string message = "--ros-topics:";
+                for (const std::string& problem : bridge->topicProblems()) {
+                    message += "\n  " + problem;
+                }
+                return Status::error(StatusCode::InvalidConfig, message);
+            }
         }
         lidarSent.assign(robot.world.sensors.names.size(), SimTime{-1});
         if (replay) {
@@ -5004,6 +5017,10 @@ Status Server::load() {
         return Status::error(StatusCode::InvalidConfig,
                              "--ros2-control needs the ROS 2 bridge: drop --no-ros");
     }
+    if (!s.options.ros && !s.options.rosTopicsPath.empty()) {
+        return Status::error(StatusCode::InvalidConfig,
+                             "--ros-topics needs the ROS 2 bridge: drop --no-ros");
+    }
     auto composed = s.composeModel(true);
     if (!composed) {
         return composed.error();
@@ -5015,6 +5032,13 @@ Status Server::load() {
         settings.robotDescription = s.robotDescription();
         settings.stampedCmdVel = s.options.stampedCmdVel;
         settings.topicLinks = s.options.linkTopics;
+        if (!s.options.rosTopicsPath.empty()) {
+            auto maps = ros2::readTopicMaps(s.options.rosTopicsPath);
+            if (!maps) {
+                return Status::error(StatusCode::InvalidConfig, maps.error());
+            }
+            settings.signalTopics = std::move(*maps);
+        }
         settings.controllersOwnState = !s.options.ros2ControlParams.empty();
         settings.ackermannCmd = !WorldView(s.robot.world).instancesOf("VehicleAPI_1").empty();
         s.bridge = std::make_unique<ros2::Bridge>(settings);

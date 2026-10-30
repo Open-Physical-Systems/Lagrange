@@ -85,6 +85,9 @@ struct ServerOptions {
     /// names found as lib<name>.so in $LAGRANGE_PLUGIN_PATH or the lagrange_plugins resource
     /// index (RFC 0008). Only these can be loaded: a profile from a viewer never adds one.
     std::vector<std::string> plugins;
+    /// --ros-topics FILE.yaml: signals published on ROS topics and topics written into signals
+    /// (RFC 0008 §4; ros2::readTopicMaps); empty = none.
+    std::string rosTopicsPath;
     std::string profileSchemaPath;  // profiles/schema.json, sent to viewers; empty = none
     /// What a profile's `stage` must say to apply to this run; empty: robotPath. `lagrange run`
     /// sets it to the stage as the profile writes it.

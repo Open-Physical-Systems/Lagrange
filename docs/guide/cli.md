@@ -127,6 +127,33 @@ Its parameters are `range/min`, `range/max`, `fov` (a 5 × 5 grid of rays over a
 view; 0 for one ray) and `noise/stddev`; its source, `core/plugin_abi/samples/tof_sensor.c`, is the
 example of the plugin guide.
 
+### Plugin outputs on ROS 2
+
+A plugin writes signals; `--ros-topics FILE.yaml` puts them on ROS topics, and topics into
+signals, without the plugin linking ROS:
+
+```yaml
+publish:
+  - {signal: sensor/front_tof/range, topic: /front_tof/range, type: sensor_msgs/msg/Range,
+     frame: front_tof, params: {min_range: 0.02, max_range: 4.0, field_of_view: 0.44}}
+  - {signal: acme/gas/ppm, topic: /gas, type: std_msgs/msg/Float64}
+subscribe:
+  - {topic: /acme/valve, type: std_msgs/msg/Float64, signal: acme/valve/command, unit: "1"}
+```
+
+```bash
+lagrange --robot my_robot.urdf --plugin lagrange_tof --ros-topics topics.yaml
+```
+
+A signal is published each time its writer commits it, stamped with simulation time. Published
+types: `std_msgs` Float64, Float64MultiArray, Bool, Int64; `sensor_msgs` Range, Temperature (the
+signal in K, the message in °C), FluidPressure, Illuminance, RelativeHumidity, LaserScan (ranges,
+with `angle_min`/`angle_max`/`range_min`/`range_max` in `params`), PointCloud2 (x, y, z triples);
+`geometry_msgs` PoseStamped, TwistStamped, WrenchStamped, Vector3Stamped. A subscribed topic
+(`std_msgs` Float64, Float64MultiArray with `size`, Bool, Int64) becomes a signal in `unit`, held
+between messages and 0 until the first. A signal that is missing, or whose size or unit the
+message cannot carry, stops the start with the entry named.
+
 ## Profiles and stages
 
 A profile (RFC 0005) chooses which domains run, which substitutes replace the others, and the
