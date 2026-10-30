@@ -234,6 +234,16 @@ To record a clip like the one above: `lagrange_viewer --headless --follow 30,55
 the video is 500 frames at 25 fps, `ffmpeg -framerate 25 -i DIR/frame_%05d.png -c:v libx264
 -pix_fmt yuv420p -crf 23 clip.mp4`.
 
+## Extend it with plugins
+
+Sensors, domains and physics engines can be added without changing Lagrange: a plugin is a
+shared library against one C header (`lagrange_plugin.h`, stable for 1.x), loaded with
+`lagrange --plugin NAME`. It sees the world and casts rays at the scene, implements custom
+sensors declared in URDF, SDFormat or USD, and reaches ROS 2 through `--ros-topics`; a physics
+engine plugin is checked by a conformance suite. Start from `tools/templates/lagrange_plugin_template`
+and [Writing a plugin](docs/guide/writing-a-plugin.md); `lagrange_tof` (a time-of-flight
+sensor) and `lagrange_jolt` (the Jolt engine) are the worked examples.
+
 ## The viewer and the mock server
 
 The viewer also works without the simulator: the mock server replays recordings and a built-in
