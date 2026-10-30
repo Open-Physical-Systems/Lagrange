@@ -255,7 +255,7 @@ if(BUILD_TESTING)
         lagrange_core::lagrange_core
         INTERFACE_INCLUDE_DIRECTORIES
     )
-    foreach(plugin IN ITEMS acme_probe ideal_torque_source)
+    foreach(plugin IN ITEMS acme_probe scene_probe ideal_torque_source)
         if(plugin STREQUAL "ideal_torque_source")
             set(_source
                 ${CMAKE_CURRENT_SOURCE_DIR}/../core/plugin_abi/samples/ideal_torque_source.c
@@ -284,6 +284,18 @@ if(BUILD_TESTING)
         )
         add_dependencies(test_server test_plugin_${plugin})
     endforeach()
+    # A C++ plugin on the header-only SDK, which needs nothing of Lagrange's but its headers.
+    add_library(test_plugin_sdk_probe MODULE test/plugins/sdk_probe.cpp)
+    target_include_directories(test_plugin_sdk_probe PRIVATE ${_core_includes})
+    set_target_properties(
+        test_plugin_sdk_probe
+        PROPERTIES
+            CXX_STANDARD 20
+            OUTPUT_NAME sdk_probe
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/test_plugins
+    )
+    target_compile_options(test_plugin_sdk_probe PRIVATE -Wall -Wextra -Werror)
+    add_dependencies(test_server test_plugin_sdk_probe)
     target_compile_definitions(
         test_server
         PRIVATE

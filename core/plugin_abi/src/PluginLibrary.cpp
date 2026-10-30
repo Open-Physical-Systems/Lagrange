@@ -1,8 +1,10 @@
 // The host side of the plugin C ABI: dlopen, the host function table, and the IModule adapter.
 #include "lagrange/plugin_abi/PluginLibrary.hpp"
 #include "lagrange/services/Log.hpp"
+#include "lagrange/world/PoseMath.hpp"
 #include "lagrange_plugin.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdio>
@@ -23,11 +25,21 @@ namespace {
 SignalDeclarer& declarer(lagrange_declarer* d) {
     return *reinterpret_cast<SignalDeclarer*>(d);
 }
+/// What a plugin's `lagrange_bus*` points to: the bus, and the module's services and world for
+/// the scene queries (ABI 1.1). Made on the stack for each call into the plugin.
+struct BusContext {
+    SignalBus* bus;
+    const PluginServices* services;
+    const World* world;  // null until init()
+};
 SignalBus& bus(lagrange_bus* b) {
-    return *reinterpret_cast<SignalBus*>(b);
+    return *reinterpret_cast<BusContext*>(b)->bus;
 }
 const SignalBus& bus(const lagrange_bus* b) {
-    return *reinterpret_cast<const SignalBus*>(b);
+    return *reinterpret_cast<const BusContext*>(b)->bus;
+}
+const BusContext& context(const lagrange_bus* b) {
+    return *reinterpret_cast<const BusContext*>(b);
 }
 const WorldView& world(const lagrange_world* w) {
     return *reinterpret_cast<const WorldView*>(w);
@@ -38,7 +50,7 @@ const ModuleConfig& config(const lagrange_config* c) {
 lagrange_declarer* opaque(SignalDeclarer& d) {
     return reinterpret_cast<lagrange_declarer*>(&d);
 }
-lagrange_bus* opaque(SignalBus& b) {
+lagrange_bus* opaque(BusContext& b) {
     return reinterpret_cast<lagrange_bus*>(&b);
 }
 const lagrange_world* opaque(const WorldView& w) {
@@ -177,6 +189,233 @@ void log(int level, const char* message) {
     services::log(clamped, "plugin", message != nullptr ? message : "");
 }
 
+// ABI 1.1 (RFC 0008): the world's tables and the scene.
+
+/// Fills the plugin's struct as far as both sides know it.
+template <typename T>
+int fill(const T& host, T* out) {
+    if (out == nullptr || out->struct_size == 0) {
+        return 0;
+    }
+    const std::size_t size = std::min<std::size_t>(out->struct_size, sizeof(T));
+    const std::uint32_t theirs = out->struct_size;
+    std::memcpy(out, &host, size);
+    out->struct_size = theirs;
+    return 1;
+}
+void putPose(const Pose& pose, double out[7]) {
+    std::copy(pose.position.begin(), pose.position.end(), out);
+    std::copy(pose.orientation.begin(), pose.orientation.end(), out + 3);
+}
+std::uint32_t bodyIndex(BodyId body) {
+    return body == kWorldBody ? LAGRANGE_WORLD_BODY : body.index;
+}
+/// Rest poses of the world's bodies, computed once per world for the getters.
+const std::vector<Pose>& restPosesOf(const World& w) {
+    thread_local const World* cached = nullptr;
+    thread_local std::size_t cachedCount = 0;
+    thread_local std::vector<Pose> poses;
+    if (cached != &w || cachedCount != w.bodies.names.size()) {
+        poses = restPoses(w);
+        cached = &w;
+        cachedCount = w.bodies.names.size();
+    }
+    return poses;
+}
+std::uint32_t worldBodyCount(const lagrange_world* w) {
+    return static_cast<std::uint32_t>(world(w).raw().bodies.names.size());
+}
+int worldBody(const lagrange_world* w, std::uint32_t b, lagrange_body_info* out) {
+    const World& raw = world(w).raw();
+    const World::Bodies& bodies = raw.bodies;
+    if (b >= bodies.names.size()) {
+        return 0;
+    }
+    lagrange_body_info info{};
+    info.struct_size = sizeof info;
+    info.name = bodies.names[b].c_str();
+    info.parent = bodyIndex(bodies.parent[b]);
+    info.robot = b < bodies.robot.size() ? bodies.robot[b] : 0;
+    info.mass = bodies.mass[b];
+    std::copy(bodies.comLocal[b].begin(), bodies.comLocal[b].end(), info.com);
+    std::copy(bodies.inertiaLocal[b].begin(), bodies.inertiaLocal[b].end(), info.inertia);
+    putPose(bodies.poseInParent[b], info.pose_in_parent);
+    putPose(restPosesOf(raw)[b], info.rest_pose);
+    info.kinematic = b < bodies.kinematic.size() && bodies.kinematic[b] ? 1 : 0;
+    return fill(info, out);
+}
+int worldJoint(const lagrange_world* w, std::uint32_t j, lagrange_joint_info* out) {
+    const World::Joints& joints = world(w).raw().joints;
+    if (j >= joints.names.size()) {
+        return 0;
+    }
+    lagrange_joint_info info{};
+    info.struct_size = sizeof info;
+    info.name = joints.names[j].c_str();
+    info.type = static_cast<lagrange_joint_type>(joints.type[j]);
+    info.parent = bodyIndex(joints.parent[j]);
+    info.child = bodyIndex(joints.child[j]);
+    std::copy(joints.axis[j].begin(), joints.axis[j].end(), info.axis);
+    info.lower = joints.lowerLimit[j];
+    info.upper = joints.upperLimit[j];
+    info.effort_limit = joints.effortLimit[j];
+    info.velocity_limit = joints.velocityLimit[j];
+    info.armature = joints.armature[j];
+    info.initial_position = j < joints.initialPosition.size() ? joints.initialPosition[j] : 0.0;
+    info.actuated = joints.actuated[j] ? 1 : 0;
+    return fill(info, out);
+}
+std::uint32_t worldColliderCount(const lagrange_world* w) {
+    return static_cast<std::uint32_t>(world(w).raw().colliders.body.size());
+}
+int worldCollider(const lagrange_world* w, std::uint32_t c, lagrange_collider_info* out) {
+    const World& raw = world(w).raw();
+    const World::Colliders& colliders = raw.colliders;
+    if (c >= colliders.body.size()) {
+        return 0;
+    }
+    lagrange_collider_info info{};
+    info.struct_size = sizeof info;
+    info.body = bodyIndex(colliders.body[c]);
+    info.shape = static_cast<lagrange_shape_type>(colliders.shape[c]);
+    std::copy(colliders.size[c].begin(), colliders.size[c].end(), info.size);
+    putPose(colliders.poseInBody[c], info.pose);
+    info.friction = colliders.friction[c];
+    if (colliders.shape[c] == ShapeType::ConvexHull && colliders.hull[c] < raw.hulls.size()) {
+        const ConvexHull& hull = raw.hulls[colliders.hull[c]];
+        info.point_count = static_cast<std::uint32_t>(hull.points.size());
+        info.points = hull.points.empty() ? nullptr : hull.points.front().data();
+        info.triangle_count = static_cast<std::uint32_t>(hull.triangles.size());
+        info.triangles = hull.triangles.empty() ? nullptr : hull.triangles.front().data();
+    }
+    if (colliders.shape[c] == ShapeType::HeightField &&
+        colliders.hull[c] < raw.heightfields.size()) {
+        const HeightField& field = raw.heightfields[colliders.hull[c]];
+        info.columns = field.columns;
+        info.rows = field.rows;
+        info.cell[0] = field.cellX;
+        info.cell[1] = field.cellY;
+        info.heights = field.heights.empty() ? nullptr : field.heights.data();
+    }
+    return fill(info, out);
+}
+std::uint32_t worldSensorCount(const lagrange_world* w) {
+    return static_cast<std::uint32_t>(world(w).raw().sensors.names.size());
+}
+const char* sensorKind(const World::Sensors& sensors, std::size_t s) {
+    static constexpr std::array<const char*, 7> kKinds{
+        "imu", "lidar", "camera", "gnss", "magnetometer", "barometer", "radar"};
+    const auto type = static_cast<std::size_t>(sensors.type[s]);
+    return type < kKinds.size() ? kKinds.at(type) : "unknown";
+}
+int worldSensor(const lagrange_world* w, std::uint32_t s, lagrange_sensor_info* out) {
+    const World::Sensors& sensors = world(w).raw().sensors;
+    if (s >= sensors.names.size()) {
+        return 0;
+    }
+    lagrange_sensor_info info{};
+    info.struct_size = sizeof info;
+    info.name = sensors.names[s].c_str();
+    info.kind = sensorKind(sensors, s);
+    info.body = bodyIndex(sensors.body[s]);
+    putPose(sensors.poseInBody[s], info.pose_in_body);
+    info.rate = sensors.rateHz[s];
+    return fill(info, out);
+}
+int worldSensorParamReal(const lagrange_world* w, std::uint32_t s, const char* key, double* out) {
+    const World::Sensors& sensors = world(w).raw().sensors;
+    if (s >= sensors.names.size() || key == nullptr || out == nullptr) {
+        return 0;
+    }
+    const auto it = sensors.settings[s].find(key);
+    if (it == sensors.settings[s].end()) {
+        return 0;
+    }
+    *out = it->second;
+    return 1;
+}
+int worldSensorParamString(const lagrange_world* w, std::uint32_t s, const char* key,
+                           const char** out) {
+    (void)w;
+    (void)s;
+    (void)key;
+    (void)out;
+    return 0;  // text parameters come with custom sensors (RFC 0008 §3)
+}
+int worldSite(const lagrange_world* w, lagrange_site_info* out) {
+    const World& raw = world(w).raw();
+    lagrange_site_info info{};
+    info.struct_size = sizeof info;
+    std::copy(raw.gravityLocal.begin(), raw.gravityLocal.end(), info.gravity);
+    std::copy(raw.region.worldEnu.begin(), raw.region.worldEnu.end(), info.region_origin);
+    return fill(info, out);
+}
+
+/// The scene for this call, or null when the host gave none.
+const services::SceneQuery* sceneOf(const lagrange_bus* b) {
+    const BusContext& c = context(b);
+    if (c.services == nullptr || !c.services->scene) {
+        return nullptr;
+    }
+    return c.services->scene(*c.bus);
+}
+void putHit(const BusContext& c, const services::RayHit& hit, lagrange_ray_hit* out) {
+    lagrange_ray_hit info{};
+    info.struct_size = sizeof info;
+    info.distance = hit.distance;
+    info.collider = hit.hit() ? hit.shape : LAGRANGE_INVALID_SIGNAL;
+    info.body = LAGRANGE_WORLD_BODY;
+    if (hit.hit() && c.world != nullptr && hit.shape < c.world->colliders.body.size()) {
+        info.body = bodyIndex(c.world->colliders.body[hit.shape]);
+    }
+    (void)fill(info, out);
+}
+int sceneRay(const lagrange_bus* b, const double origin[3], const double dir[3], double maxDistance,
+             lagrange_ray_hit* out) {
+    const services::SceneQuery* scene = origin != nullptr && dir != nullptr ? sceneOf(b) : nullptr;
+    const services::RayHit hit =
+        scene != nullptr
+            ? scene->ray({origin[0], origin[1], origin[2]}, {dir[0], dir[1], dir[2]}, maxDistance)
+            : services::RayHit{};
+    putHit(context(b), hit, out);
+    return hit.hit() ? 1 : 0;
+}
+std::uint32_t sceneRays(const lagrange_bus* b, std::uint32_t count, const double* origins,
+                        const double* dirs, double maxDistance, lagrange_ray_hit* out) {
+    if (origins == nullptr || dirs == nullptr || out == nullptr) {
+        return 0;
+    }
+    const services::SceneQuery* scene = sceneOf(b);
+    const std::size_t stride = std::max<std::size_t>(out[0].struct_size, 1);
+    auto* bytes = reinterpret_cast<std::uint8_t*>(out);
+    std::uint32_t hits = 0;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        const double* o = origins + 3 * static_cast<std::size_t>(i);
+        const double* d = dirs + 3 * static_cast<std::size_t>(i);
+        const services::RayHit hit =
+            scene != nullptr ? scene->ray({o[0], o[1], o[2]}, {d[0], d[1], d[2]}, maxDistance)
+                             : services::RayHit{};
+        auto* slot = reinterpret_cast<lagrange_ray_hit*>(bytes + i * stride);
+        slot->struct_size = static_cast<std::uint32_t>(stride);
+        putHit(context(b), hit, slot);
+        hits += hit.hit() ? 1 : 0;
+    }
+    return hits;
+}
+std::uint32_t sceneOverlapSphere(const lagrange_bus* b, const double center[3], double radius,
+                                 std::uint32_t* colliders, std::uint32_t capacity) {
+    const services::SceneQuery* scene = center != nullptr ? sceneOf(b) : nullptr;
+    if (scene == nullptr) {
+        return 0;
+    }
+    const std::vector<std::uint32_t> found =
+        scene->overlapSphere({center[0], center[1], center[2]}, radius);
+    if (colliders != nullptr) {
+        std::copy_n(found.begin(), std::min<std::size_t>(found.size(), capacity), colliders);
+    }
+    return static_cast<std::uint32_t>(found.size());
+}
+
 constexpr lagrange_host_api kHostApi{
     sizeof(lagrange_host_api),
     LAGRANGE_PLUGIN_ABI_MAJOR,
@@ -195,6 +434,19 @@ constexpr lagrange_host_api kHostApi{
     configGetReal,
     configGetString,
     log,
+    worldBodyCount,
+    worldBody,
+    worldJoint,
+    worldColliderCount,
+    worldCollider,
+    worldSensorCount,
+    worldSensor,
+    worldSensorParamReal,
+    worldSensorParamString,
+    worldSite,
+    sceneRay,
+    sceneRays,
+    sceneOverlapSphere,
 };
 
 }  // namespace
@@ -222,8 +474,8 @@ namespace {
 class PluginModule final : public IModule {
 public:
     PluginModule(std::shared_ptr<PluginLibrary::Handle> library, const lagrange_module_api* api,
-                 void* self)
-        : library_(std::move(library)), api_(api), self_(self) {}
+                 void* self, PluginServices services)
+        : library_(std::move(library)), api_(api), self_(self), services_(std::move(services)) {}
     PluginModule(const PluginModule&) = delete;
     PluginModule& operator=(const PluginModule&) = delete;
     PluginModule(PluginModule&&) = delete;
@@ -247,12 +499,15 @@ public:
         return status(api_->declare(self_, opaque(world), opaque(config), opaque(declarer)));
     }
     Status init(const WorldView& world, const ModuleConfig& config, SignalBus& bus) override {
-        return status(api_->init(self_, opaque(world), opaque(config), opaque(bus)));
+        world_ = &world.raw();
+        BusContext call{&bus, &services_, world_};
+        return status(api_->init(self_, opaque(world), opaque(config), opaque(call)));
     }
     Status step(const StepContext& context, SignalBus& bus) override {
         const lagrange_step_context c{sizeof(lagrange_step_context), context.t.ns, context.dt.ns,
                                       context.stepIndex, context.seed};
-        return status(api_->step(self_, &c, opaque(bus)));
+        BusContext call{&bus, &services_, world_};
+        return status(api_->step(self_, &c, opaque(call)));
     }
     void shutdown() override {
         if (api_->shutdown != nullptr) {
@@ -314,6 +569,8 @@ private:
     std::shared_ptr<PluginLibrary::Handle> library_;
     const lagrange_module_api* api_;
     void* self_;
+    PluginServices services_;
+    const World* world_{nullptr};
 };
 
 }  // namespace
@@ -366,13 +623,13 @@ std::string PluginLibrary::label(std::size_t index) const {
     return std::string(api->domain) + "/" + api->name;
 }
 
-std::unique_ptr<IModule> PluginLibrary::create(std::size_t index) const {
+std::unique_ptr<IModule> PluginLibrary::create(std::size_t index, PluginServices services) const {
     const lagrange_module_api* api = handle_->modules.at(index);
     void* self = api->create(&kHostApi);
     if (self == nullptr) {
         return nullptr;
     }
-    return std::make_unique<PluginModule>(handle_, api, self);
+    return std::make_unique<PluginModule>(handle_, api, self, std::move(services));
 }
 
 }  // namespace lagrange

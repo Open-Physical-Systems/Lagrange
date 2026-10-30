@@ -21,6 +21,7 @@
 #include "lagrange/ros2_control/ControllerHost.hpp"
 #include "lagrange/rotor_aero/RotorAero.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
+#include "lagrange/sensors/BodyScene.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
 #include "lagrange/server/CarDrive.hpp"
@@ -553,6 +554,13 @@ struct Server::Impl {
         auto next = std::make_unique<Scheduler>(
             SchedulerOptions{.deterministic = !bridge && !rayContext && !rendering &&
                                               !options.px4Port && !options.ardupilotPort});
+        // What plugin modules get from the host (ABI 1.1): the run's colliders for their ray and
+        // overlap queries, placed at the bus's body poses when they ask.
+        PluginServices pluginServices;
+        if (!plugins.empty()) {
+            auto scene = std::make_shared<sensors::BodyScene>(robot.world);
+            pluginServices.scene = [scene](const SignalBus& bus) { return &scene->at(bus); };
+        }
         // A plugin substitute the profile names for a domain (domains.<d>.substitute: <name>).
         const auto pluginSubstitute = [&](const char* domain) -> const PluginModule* {
             const auto token = settings.substituteTokens.find(domain);
@@ -566,7 +574,8 @@ struct Server::Impl {
             if (module == nullptr) {
                 return false;
             }
-            next->add(module->create(), pluginConfig(*module, std::move(data), settings));
+            next->add(module->create(pluginServices),
+                      pluginConfig(*module, std::move(data), settings));
             return true;
         };
         if (off("rigid_body") && addPluginSubstitute("rigid_body")) {
@@ -589,7 +598,7 @@ struct Server::Impl {
                 next->add(std::make_unique<rigid_body::MujocoBackend>(), ModuleConfig(physics));
             } else if (const PluginModule* engine =
                            pluginModule("rigid_body", physics.backend, false)) {
-                next->add(engine->create(), pluginConfig(*engine, physics, settings));
+                next->add(engine->create(pluginServices), pluginConfig(*engine, physics, settings));
             } else {
                 return Unexpected{"no rigid body backend " + physics.backend +
                                   ": mujoco, jolt, or a plugin's (--plugin)"};
@@ -882,7 +891,7 @@ struct Server::Impl {
         for (const PluginModule& module : plugins) {
             if (!isBuiltInDomain(module.domain) && !module.substitute &&
                 !settings.substituted.contains(module.domain)) {
-                next->add(module.create(), pluginConfig(module, {}, settings));
+                next->add(module.create(pluginServices), pluginConfig(module, {}, settings));
             }
         }
         // Always last: it sums the body/<b>/wrench/<source> written by the modules above.

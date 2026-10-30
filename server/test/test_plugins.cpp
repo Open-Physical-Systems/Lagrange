@@ -95,6 +95,54 @@ TEST_F(Plugins, APluginSubstituteStandsInForABuiltInDomain) {
     EXPECT_NE(torque[0], 0.0) << "the drive commands a torque and the plugin passes it on";
 }
 
+// ABI 1.1 (RFC 0008 §2): a plugin reads the world's tables and casts rays at the scene, with the
+// robot's colliders where physics put them.
+TEST_F(Plugins, APluginSeesTheWorldAndCastsRays) {
+    ServerOptions options = amr({"scene_probe"});
+    Server server(options);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{1'000'000'000}).ok());
+    const World& world = server.world();
+    const auto value = [&server](const std::string& name) {
+        const std::vector<double> v = server.read(name);
+        return v.empty() ? -1e9 : v[0];
+    };
+    EXPECT_EQ(value("probe/world/bodies"), static_cast<double>(world.bodies.names.size()));
+    EXPECT_EQ(value("probe/world/colliders"), static_cast<double>(world.colliders.body.size()));
+    EXPECT_EQ(value("probe/world/sensors"), static_cast<double>(world.sensors.names.size()));
+    EXPECT_EQ(value("probe/world/lidars"), 2.0) << "the AMR's front and top lidars";
+    EXPECT_EQ(value("probe/world/actuated"), 2.0) << "its two wheels";
+    EXPECT_DOUBLE_EQ(value("probe/site/gravity_z"), world.gravityLocal[2]);
+
+    EXPECT_NEAR(value("probe/ray/ground"), 5.0, 1e-9) << "the ground plane, 5 m down";
+    const double robot = value("probe/ray/robot");
+    EXPECT_GT(robot, 3.5);
+    EXPECT_LT(robot, 5.0) << "the ray meets the robot before its origin";
+    const double body = value("probe/ray/robot_body");
+    ASSERT_GE(body, 0.0);
+    ASSERT_LT(body, static_cast<double>(world.bodies.names.size()));
+    EXPECT_EQ(value("probe/rays/hits"), 2.0) << "down and back hit; up and sideways do not";
+    EXPECT_GE(value("probe/overlap"), 1.0) << "the base's own collider holds its origin";
+}
+
+// The C++ SDK reads the same world through the C ABI.
+TEST_F(Plugins, TheSdkReadsTheWholeWorld) {
+    Server server(amr({"sdk_probe"}));
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    const World& world = server.world();
+    EXPECT_EQ(server.read("sdk/bodies").at(0), static_cast<double>(world.bodies.names.size()));
+    EXPECT_EQ(server.read("sdk/joints").at(0), static_cast<double>(world.joints.names.size()));
+    EXPECT_EQ(server.read("sdk/colliders").at(0), static_cast<double>(world.colliders.body.size()));
+    EXPECT_EQ(server.read("sdk/sensors").at(0), static_cast<double>(world.sensors.names.size()));
+    double mass = 0.0;
+    for (const double m : world.bodies.mass) {
+        mass += m;
+    }
+    EXPECT_DOUBLE_EQ(server.read("sdk/mass").at(0), mass);
+}
+
 TEST_F(Plugins, LoadingFailuresNameTheLibrary) {
     Server missing(amr({"no_such_plugin"}));
     const Status status = missing.load();
