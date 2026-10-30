@@ -69,6 +69,19 @@
         }
       }
     },
+    "plugins": {
+      "type": "array",
+      "description": "Plugin libraries (RFC 0008): loaded when the server starts, never by a viewer.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["library"],
+        "properties": {
+          "library": { "type": "string", "minLength": 1, "description": "A path, or a name found as lib<name>.so in LAGRANGE_PLUGIN_PATH or the lagrange_plugins resource index." },
+          "config": { "type": "object", "description": "What the library's modules read with config_get_real and config_get_string." }
+        }
+      }
+    },
     "bridges": {
       "type": "object",
       "additionalProperties": false,
@@ -129,6 +142,9 @@
     "substitute": {
       "oneOf": [
         { "enum": ["ideal", "zero", "clear", "ambient", "ground_truth", "fixed", "load_profile", "replay"] },
+        { "type": "string", "pattern": "^[a-z][a-z0-9_]*$",
+          "not": { "enum": ["ideal", "zero", "clear", "ambient", "ground_truth", "fixed", "load_profile", "replay"] },
+          "description": "A substitute module of a loaded plugin, by its name (RFC 0008)." },
         {
           "type": "object",
           "additionalProperties": false,
@@ -168,7 +184,7 @@
     "rigid_body": {
       "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
       "properties": {
-        "backend": { "enum": ["physx", "mujoco", "jolt"] },
+        "backend": { "type": "string", "minLength": 1, "examples": ["mujoco", "jolt"], "description": "mujoco, jolt, or a rigid_body module of a loaded plugin (RFC 0008)." },
         "solver_iterations": { "type": "integer", "minimum": 1 },
         "gpu": { "type": "boolean", "default": false },
         "load_profile": { "type": "string", "description": "CSV torque-vs-speed table for the load_profile substitute." }

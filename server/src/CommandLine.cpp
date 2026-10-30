@@ -97,12 +97,14 @@ void printServerOptions(std::FILE* out) {
         "  --auth-token-file FILE  TCP clients must send this token (first line of FILE);\n"
         "                         required to listen beyond loopback\n"
         "  --spawn X,Y[,Z[,YAW]]  start the robot there (m, world ENU; heading in rad)\n"
+        "  --plugin LIB  load a plugin library (RFC 0008): a path, or NAME for lib<NAME>.so in\n"
+        "            $LAGRANGE_PLUGIN_PATH or the lagrange_plugins resource index (repeatable)\n"
         "  --add-robot NAME=FILE@X,Y[,Z[,YAW]]  one more robot in the run, its names prefixed\n"
         "                         with NAME, passive (repeatable)\n"
         "  --lidar auto|cpu|gpu  where lidars cast: auto (default) and cpu use the\n"
         "            exact CPU caster; gpu the compute kernel on a hardware GPU\n"
         "  --gpu DEVICE  Vulkan device for the lidar and cameras (index or part of its name)\n"
-        "  --physics mujoco|jolt  rigid-body backend (default mujoco)\n"
+        "  --physics mujoco|jolt|NAME  rigid-body backend (default mujoco), or a plugin's\n"
         "  --replay FILE.mcap  replay a recording instead of simulating (the viewer can seek;\n"
         "            no ROS bridge)\n"
         "  --session FILE.usda  where the viewer's edits are saved when it asks (default:\n"
@@ -263,8 +265,8 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
         } else if (arg == "--physics") {
             const char* text = value();
             const std::string_view backend = text != nullptr ? text : "";
-            if (backend != "mujoco" && backend != "jolt") {
-                return "--physics needs mujoco or jolt";
+            if (backend.empty()) {
+                return "--physics needs mujoco, jolt or a plugin's backend";
             }
             options.physics = std::string(backend);
         } else if (arg == "--gpu") {
@@ -456,12 +458,13 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             const std::string domain(setting.substr(0, equals));
             const std::string_view state =
                 equals == std::string_view::npos ? "" : setting.substr(equals + 1);
-            if ((domain != "rigid_body" && domain != "sensors" && domain != "electrical" &&
-                 domain != "thermal" && domain != "weather" && domain != "emi" &&
-                 domain != "comms" && domain != "vehicle_dynamics" && domain != "traffic") ||
-                (state != "on" && state != "off")) {
+            // Any other name is a plugin's domain (RFC 0008), checked once the plugins load.
+            const bool named = !domain.empty() && std::ranges::all_of(domain, [](char c) {
+                return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+            });
+            if (!named || (state != "on" && state != "off")) {
                 return "--domain takes rigid_body, electrical, thermal, weather, emi, comms, "
-                       "vehicle_dynamics, traffic or sensors =on|off";
+                       "vehicle_dynamics, traffic, sensors or a plugin's domain =on|off";
             }
             if (state == "off") {
                 options.substituted.insert(domain);
@@ -469,6 +472,13 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 options.substituted.erase(domain);
             }
             thermalAsked = domain == "thermal" ? state == "on" : thermalAsked;
+        } else if (arg == "--plugin") {
+            const char* library = value();
+            if (library == nullptr) {
+                return "--plugin needs a library: a path, or a name in LAGRANGE_PLUGIN_PATH or "
+                       "the lagrange_plugins index";
+            }
+            options.plugins.emplace_back(library);
         } else if (arg == "--cmd-vel-unstamped") {
             options.stampedCmdVel = false;
         } else if (arg == "--ros2-control") {

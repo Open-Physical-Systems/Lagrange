@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(lagrange_server VERSION 0.0.0 LANGUAGES CXX)
+project(lagrange_server VERSION 0.0.0 LANGUAGES C CXX)
 
 find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)
@@ -55,6 +55,7 @@ add_library(
     src/Profile.cpp
     src/Recorder.cpp
     src/RegionHost.cpp
+    src/Plugins.cpp
 )
 lagrange_target_defaults(lagrange_server)
 target_include_directories(
@@ -105,6 +106,7 @@ target_link_libraries(
         tinyxml2::tinyxml2
         yaml-cpp::yaml-cpp
         mcap_vendor::mcap
+        ament_index_cpp::ament_index_cpp
 )
 
 # The command line that lagrange_server and lagrange share.
@@ -197,6 +199,7 @@ if(BUILD_TESTING)
         test/test_regions.cpp
         test/test_server.cpp
         test/test_spawn.cpp
+        test/test_plugins.cpp
         test/test_multicopter.cpp
         test/test_toggles.cpp
         test/test_usd_assets.cpp
@@ -244,6 +247,47 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_QUAD_EMI_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500_emi.usda"
             LAGRANGE_TEST_POWER_LINE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/power_line/power_line.usda"
             LAGRANGE_TEST_QUAD_INVERTED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500_inverted/quad_x500_inverted.usda"
+    )
+    # Plugins for the server tests (RFC 0008), in C99 against the installed header: one with a
+    # domain of its own, and the ABI sample (an electrical substitute).
+    get_target_property(
+        _core_includes
+        lagrange_core::lagrange_core
+        INTERFACE_INCLUDE_DIRECTORIES
+    )
+    foreach(plugin IN ITEMS acme_probe ideal_torque_source)
+        if(plugin STREQUAL "ideal_torque_source")
+            set(_source
+                ${CMAKE_CURRENT_SOURCE_DIR}/../core/plugin_abi/samples/ideal_torque_source.c
+            )
+        else()
+            set(_source test/plugins/${plugin}.c)
+        endif()
+        add_library(test_plugin_${plugin} MODULE ${_source})
+        target_include_directories(
+            test_plugin_${plugin}
+            PRIVATE ${_core_includes}
+        )
+        set_target_properties(
+            test_plugin_${plugin}
+            PROPERTIES
+                C_STANDARD 99
+                C_STANDARD_REQUIRED ON
+                C_EXTENSIONS OFF
+                OUTPUT_NAME ${plugin}
+                LIBRARY_OUTPUT_DIRECTORY
+                    ${CMAKE_CURRENT_BINARY_DIR}/test_plugins
+        )
+        target_compile_options(
+            test_plugin_${plugin}
+            PRIVATE -pedantic -Wall -Wextra -Werror
+        )
+        add_dependencies(test_server test_plugin_${plugin})
+    endforeach()
+    target_compile_definitions(
+        test_server
+        PRIVATE
+            LAGRANGE_TEST_PLUGIN_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_plugins"
     )
     ament_add_gtest(test_command_line test/test_command_line.cpp)
     target_link_libraries(test_command_line lagrange_server_cli)
