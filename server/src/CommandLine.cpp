@@ -97,6 +97,8 @@ void printServerOptions(std::FILE* out) {
         "  --auth-token-file FILE  TCP clients must send this token (first line of FILE);\n"
         "                         required to listen beyond loopback\n"
         "  --spawn X,Y[,Z[,YAW]]  start the robot there (m, world ENU; heading in rad)\n"
+        "  --ros-topics FILE.yaml  publish signals on ROS topics and write topics into signals\n"
+        "            (publish: [{signal, topic, type, frame, params}], subscribe: [...])\n"
         "  --plugin LIB  load a plugin library (RFC 0008): a path, or NAME for lib<NAME>.so in\n"
         "            $LAGRANGE_PLUGIN_PATH or the lagrange_plugins resource index (repeatable)\n"
         "  --add-robot NAME=FILE@X,Y[,Z[,YAW]]  one more robot in the run, its names prefixed\n"
@@ -472,6 +474,13 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 options.substituted.erase(domain);
             }
             thermalAsked = domain == "thermal" ? state == "on" : thermalAsked;
+        } else if (arg == "--ros-topics") {
+            const char* path = value();
+            if (path == nullptr) {
+                return "--ros-topics needs a YAML file: publish: [{signal, topic, type}], "
+                       "subscribe: [...]";
+            }
+            options.rosTopicsPath = path;
         } else if (arg == "--plugin") {
             const char* library = value();
             if (library == nullptr) {

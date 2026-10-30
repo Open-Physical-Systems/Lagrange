@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lagrange/ros2/SignalTopics.hpp"
 #include "lagrange/signals/SignalBus.hpp"
 #include "lagrange/time/SimTime.hpp"
 #include "lagrange/world/World.hpp"
@@ -31,6 +32,8 @@ struct BridgeSettings {
     /// mapped topic is lost with the link's link/<l>/packet_error_rate (always while the link is
     /// down) and the rest arrive link/<l>/latency later; incoming /cmd_vel likewise.
     std::map<std::string, std::string> topicLinks;
+    /// Signals published on topics and topics written into signals (--ros-topics, RFC 0008 §4).
+    TopicMaps signalTopics;
 };
 
 /// A /cmd_vel message: forward speed and turn rate.
@@ -199,6 +202,11 @@ public:
     /// run, or deleted). Call before attach().
     void setRobot(const std::string& baseLink, const std::string& robotDescription,
                   bool ackermannCmd);
+    /// What does not fit in the --ros-topics map after the last attach(): an unknown signal, or
+    /// one the message cannot carry. The server refuses to run with any.
+    [[nodiscard]] const std::vector<std::string>& topicProblems() const { return topicProblems_; }
+    /// The module that writes the subscribed topics into their signals (nullptr when none).
+    [[nodiscard]] std::unique_ptr<IModule> topicInputs() const;
     /// Messages lost on a link so far, by topic (the topics of BridgeSettings::topicLinks).
     [[nodiscard]] std::map<std::string, std::uint64_t> droppedOnLinks() const;
     /// The ROS graph as this node sees it. Cold path: about once a second.
@@ -218,6 +226,8 @@ public:
 private:
     struct Impl;
     BridgeSettings settings_;
+    std::unique_ptr<SignalTopics> signalTopics_;
+    std::vector<std::string> topicProblems_;
     std::unique_ptr<Impl> impl_;
 };
 

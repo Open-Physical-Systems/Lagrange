@@ -332,6 +332,27 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_WORKCELL_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_arm6.urdf"
     )
     lagrange_target_defaults(test_arm)
+    # --ros-topics end to end (RFC 0008 §4): the lagrange_tof plugin's range on a ROS topic.
+    find_package(sensor_msgs REQUIRED)
+    find_package(std_msgs REQUIRED)
+    ament_add_gtest(
+        test_ros_topics
+        test/test_ros_topics.cpp
+        ENV ROS_DOMAIN_ID=88
+        TIMEOUT 120
+    )
+    target_link_libraries(
+        test_ros_topics
+        lagrange_server
+        rclcpp::rclcpp
+        ${sensor_msgs_TARGETS}
+        ${std_msgs_TARGETS}
+    )
+    target_compile_definitions(
+        test_ros_topics
+        PRIVATE LAGRANGE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/test/data"
+    )
+    lagrange_target_defaults(test_ros_topics)
     lagrange_target_defaults(test_server)
     # The installed tool end to end: exit 0 for the valid example, 1 for an invalid one.
     set(_lagrange_cli_robot
