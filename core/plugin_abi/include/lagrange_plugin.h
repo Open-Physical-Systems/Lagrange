@@ -12,7 +12,11 @@
  * appended to structs or functions to tables; every struct starts with struct_size so that
  * either side can tell an older, shorter struct. MAJOR 1 is frozen for the 1.x releases
  * (RFC 0007): within it the ABI changes only by appending; core/plugin_abi/test/
- * test_abi_layout.c pins every size and offset of 1.0. */
+ * test_abi_layout.c pins every size and offset of 1.0.
+ *
+ * 1.1 (RFC 0008) appends to lagrange_host_api what a plugin needs to see the scene: the world's
+ * bodies, joints, colliders and sensors, and ray and overlap queries. A 1.1 plugin checks the
+ * host's struct_size (or abi_minor) before calling them, so it can still run on a 1.0 host. */
 #ifndef LAGRANGE_PLUGIN_H
 #define LAGRANGE_PLUGIN_H
 
@@ -24,7 +28,7 @@ extern "C" {
 #endif
 
 #define LAGRANGE_PLUGIN_ABI_MAJOR 1u
-#define LAGRANGE_PLUGIN_ABI_MINOR 0u
+#define LAGRANGE_PLUGIN_ABI_MINOR 1u
 
 #define LAGRANGE_EXPORT __attribute__((visibility("default")))
 
@@ -92,6 +96,95 @@ typedef struct lagrange_declarer lagrange_declarer;
 /* Returned by declare_input/declare_output for an invalid declaration. */
 #define LAGRANGE_INVALID_SIGNAL 0xFFFFFFFFu
 
+/* ABI 1.1 (RFC 0008): the world, read with the world_* functions in declare() and init(). Each
+ * getter fills the struct the plugin passes as far as both sides know it: the plugin sets
+ * struct_size, the host fills that many bytes at most. Poses are x, y, z, then the unit
+ * quaternion w, x, y, z; lengths in m, masses in kg, angles in rad, in the region-local frame.
+ * Strings and arrays stay valid until the run ends. */
+#define LAGRANGE_WORLD_BODY 0xFFFFFFFFu /* "no body": the world itself, fixed scenery */
+
+typedef enum lagrange_joint_type {
+    LAGRANGE_JOINT_FIXED = 0,
+    LAGRANGE_JOINT_REVOLUTE = 1,
+    LAGRANGE_JOINT_PRISMATIC = 2,
+    LAGRANGE_JOINT_SPHERICAL = 3,
+    LAGRANGE_JOINT_FREE = 4,
+    LAGRANGE_JOINT_CONTINUOUS = 5
+} lagrange_joint_type;
+
+typedef enum lagrange_shape_type {
+    LAGRANGE_SHAPE_PLANE = 0,       /* size[0] 0: infinite; else half-extents x, y */
+    LAGRANGE_SHAPE_SPHERE = 1,      /* size[0] radius */
+    LAGRANGE_SHAPE_CAPSULE = 2,     /* size[0] radius, size[1] half-length (along z) */
+    LAGRANGE_SHAPE_CYLINDER = 3,    /* size[0] radius, size[1] half-length (along z) */
+    LAGRANGE_SHAPE_BOX = 4,         /* half-extents */
+    LAGRANGE_SHAPE_CONVEX_HULL = 5, /* points and triangles */
+    LAGRANGE_SHAPE_HEIGHT_FIELD = 6 /* columns x rows heights on a cell grid */
+} lagrange_shape_type;
+
+typedef struct lagrange_body_info {
+    uint32_t struct_size;
+    const char* name;
+    uint32_t parent; /* LAGRANGE_WORLD_BODY for a root */
+    uint32_t robot;  /* which robot (or scenery) it belongs to */
+    double mass;
+    double com[3];            /* in the body frame */
+    double inertia[6];        /* about the centre of mass, body axes: xx, yy, zz, xy, xz, yz */
+    double pose_in_parent[7]; /* with every joint at zero */
+    double rest_pose[7];      /* in the world, with every joint at zero */
+    uint8_t kinematic;        /* moved by body/<b>/pose_command, not by forces */
+} lagrange_body_info;
+
+typedef struct lagrange_joint_info {
+    uint32_t struct_size;
+    const char* name;
+    lagrange_joint_type type;
+    uint32_t parent, child; /* bodies; parent LAGRANGE_WORLD_BODY for a root */
+    double axis[3];         /* in the child body's frame */
+    double lower, upper;    /* equal: unlimited */
+    double effort_limit, velocity_limit, armature, initial_position;
+    uint8_t actuated;
+} lagrange_joint_info;
+
+typedef struct lagrange_collider_info {
+    uint32_t struct_size;
+    uint32_t body; /* LAGRANGE_WORLD_BODY for fixed scenery */
+    lagrange_shape_type shape;
+    double size[3];
+    double pose[7]; /* in the body (in the world for fixed scenery) */
+    double friction;
+    uint32_t point_count, triangle_count; /* a convex hull: x, y, z per point */
+    const double* points;
+    const uint32_t* triangles; /* three point indices each, outward */
+    uint32_t columns, rows;    /* a height field: heights[row * columns + column] */
+    double cell[2];
+    const double* heights;
+} lagrange_collider_info;
+
+typedef struct lagrange_sensor_info {
+    uint32_t struct_size;
+    const char* name;
+    const char* kind; /* "imu", "lidar", "camera", "gnss", "magnetometer", "barometer",
+                         "radar", or a custom sensor's kind */
+    uint32_t body;
+    double pose_in_body[7];
+    double rate; /* Hz */
+} lagrange_sensor_info;
+
+typedef struct lagrange_site_info {
+    uint32_t struct_size;
+    double gravity[3];       /* m/s², region-local frame */
+    double region_origin[3]; /* world ENU of the region-local frame, m */
+} lagrange_site_info;
+
+/* ABI 1.1: what a ray met (scene_ray, scene_rays). */
+typedef struct lagrange_ray_hit {
+    uint32_t struct_size;
+    double distance;   /* m along the unit direction; +inf when nothing is hit */
+    uint32_t collider; /* as world_collider; LAGRANGE_INVALID_SIGNAL when nothing is hit */
+    uint32_t body;     /* the collider's body, or LAGRANGE_WORLD_BODY */
+} lagrange_ray_hit;
+
 /* Functions the host gives to the plugin (in create()). */
 typedef struct lagrange_host_api {
     uint32_t struct_size;
@@ -124,6 +217,38 @@ typedef struct lagrange_host_api {
     int (*config_get_string)(const lagrange_config*, const char* key, const char** out);
 
     void (*log)(int level, const char* message); /* 0 debug, 1 info, 2 warning, 3 error */
+
+    /* ABI 1.1 (RFC 0008). The world, in declare() and init(): counts, and getters that return 1
+     * and fill `out` for a valid index (0 otherwise). */
+    uint32_t (*world_body_count)(const lagrange_world*);
+    int (*world_body)(const lagrange_world*, uint32_t body, lagrange_body_info* out);
+    int (*world_joint)(const lagrange_world*, uint32_t joint, lagrange_joint_info* out);
+    uint32_t (*world_collider_count)(const lagrange_world*);
+    int (*world_collider)(const lagrange_world*, uint32_t collider, lagrange_collider_info* out);
+    uint32_t (*world_sensor_count)(const lagrange_world*);
+    int (*world_sensor)(const lagrange_world*, uint32_t sensor, lagrange_sensor_info* out);
+    /* A sensor's parameters by name ("max_range", "range/max"); 1 if present with that type. */
+    int (*world_sensor_param_real)(const lagrange_world*, uint32_t sensor, const char* key,
+                                   double* out);
+    int (*world_sensor_param_string)(const lagrange_world*, uint32_t sensor, const char* key,
+                                     const char** out);
+    int (*world_site)(const lagrange_world*, lagrange_site_info* out);
+
+    /* The scene, in step(): every collider at the body poses committed on the bus when the call
+     * is made (a module that needs moving bodies where physics just put them declares their
+     * body/<b>/pose inputs, which orders it after physics). Exact and deterministic: ties go to
+     * the lower collider index; safe from several threads during one step. `dir` is a unit
+     * vector, region-local frame. */
+    int (*scene_ray)(const lagrange_bus*, const double origin[3], const double dir[3],
+                     double max_distance, lagrange_ray_hit* out); /* 1 if something is hit */
+    /* `count` rays: origins and dirs hold 3 doubles per ray; out holds `count` hits, each with
+     * the plugin's struct_size in out[0].struct_size. Returns how many hit. */
+    uint32_t (*scene_rays)(const lagrange_bus*, uint32_t count, const double* origins,
+                           const double* dirs, double max_distance, lagrange_ray_hit* out);
+    /* Colliders within `radius` of `center` (touching counts), in ascending order: writes at
+     * most `capacity`, returns how many there are. */
+    uint32_t (*scene_overlap_sphere)(const lagrange_bus*, const double center[3], double radius,
+                                     uint32_t* colliders, uint32_t capacity);
 } lagrange_host_api;
 
 /* Functions the plugin gives to the host. `self` is what create() returned. */

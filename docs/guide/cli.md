@@ -97,7 +97,12 @@ What a module does depends on its domain:
   substitute: acme_bench}`;
 - **`rigid_body`, as a backend**: `--physics NAME` or `rigid_body: {backend: NAME}`.
 
-The server logs every module it loaded and what it is for. A profile applied from the viewer can
+A plugin built for ABI 1.1 also sees the scene: every body, joint, collider and sensor of the
+world (`world_body`, `world_joint`, `world_collider`, `world_sensor`, `world_site`, filling
+versioned structs), and in `step` ray and overlap queries against every collider where physics
+put it (`scene_ray`, `scene_rays`, `scene_overlap_sphere`; exact and deterministic, the CPU
+lidar's caster). C++ plugins can read the whole world into plain containers with the header-only
+`lagrange/plugin_sdk/World.hpp`. The server logs every module it loaded and what it is for. A profile applied from the viewer can
 configure loaded plugins but never load one.
 
 ## Profiles and stages

@@ -2,8 +2,10 @@
 
 #include "lagrange/module/Expected.hpp"
 #include "lagrange/module/IModule.hpp"
+#include "lagrange/services/SceneQuery.hpp"
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -11,6 +13,14 @@
 struct lagrange_module_api;
 
 namespace lagrange {
+
+/// What the host gives a plugin module beyond the bus and the world (ABI 1.1, RFC 0008).
+struct PluginServices {
+    /// The collision shapes for scene_ray and scene_overlap_sphere, placed at the body poses
+    /// committed on the bus (shape index = collider index); null, or returning null, when the
+    /// host has no scene: the queries then report nothing.
+    std::function<const services::SceneQuery*(const SignalBus&)> scene;
+};
 
 /// A shared object holding modules built against the C ABI (lagrange_plugin.h, invariant 10).
 /// Each module it holds becomes an IModule through an adapter, so the scheduler wires and steps
@@ -28,7 +38,8 @@ public:
     /// "domain/name" of module `index`.
     [[nodiscard]] std::string label(std::size_t index) const;
     /// A new instance of module `index`; nullptr when its create() fails.
-    [[nodiscard]] std::unique_ptr<IModule> create(std::size_t index) const;
+    [[nodiscard]] std::unique_ptr<IModule> create(std::size_t index,
+                                                  PluginServices services = {}) const;
 
     struct Handle;
 

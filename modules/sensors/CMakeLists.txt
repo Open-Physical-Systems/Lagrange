@@ -15,6 +15,7 @@ add_library(
     src/Sensors.cpp
     src/ImuNoise.cpp
     src/ShapeCaster.cpp
+    src/BodyScene.cpp
     src/Wmm.cpp
     src/GeoSensors.cpp
     src/Radar.cpp

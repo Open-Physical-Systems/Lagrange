@@ -22,8 +22,10 @@ struct PluginModule {
     PluginLibrary file;
     std::size_t index{0};
 
-    /// A new instance for a run.
-    [[nodiscard]] std::unique_ptr<IModule> create() const { return file.create(index); }
+    /// A new instance for a run, with the host's services (the scene for ray queries).
+    [[nodiscard]] std::unique_ptr<IModule> create(PluginServices services = {}) const {
+        return file.create(index, std::move(services));
+    }
 };
 
 /// The file a plugin library name stands for: a path as given (it has a '/' or ends in .so), or
