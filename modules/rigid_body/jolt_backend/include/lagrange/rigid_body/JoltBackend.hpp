@@ -3,6 +3,7 @@
 #include "lagrange/module/IModule.hpp"
 
 #include <memory>
+#include <span>
 
 namespace lagrange::rigid_body {
 
@@ -42,6 +43,28 @@ public:
     Status saveState(StateWriter& writer) const override;
     Status restoreState(StateReader& reader) override;
     void shiftOrigin(const std::array<double, 3>& shift) override;
+
+    /// What the engine reads and writes signals through: the scheduler's declarer and bus in
+    /// the server, the C ABI in the lagrange_jolt plugin (RFC 0008 §5), so both run the same
+    /// engine code. input and output are called in declare, the rest in init and step.
+    class SignalIo {
+    public:
+        SignalIo() = default;
+        SignalIo(const SignalIo&) = delete;
+        SignalIo& operator=(const SignalIo&) = delete;
+        SignalIo(SignalIo&&) = delete;
+        SignalIo& operator=(SignalIo&&) = delete;
+        virtual ~SignalIo() = default;
+        virtual SignalId input(SignalSpec spec) = 0;
+        virtual SignalId output(SignalSpec spec) = 0;
+        [[nodiscard]] virtual double read(SignalId id) const = 0;
+        [[nodiscard]] virtual std::span<const double> readN(SignalId id) const = 0;
+        virtual void write(SignalId id, double value) = 0;
+        virtual void writeN(SignalId id, std::span<const double> values) = 0;
+    };
+    Status declare(const WorldView& world, const ModuleConfig& config, SignalIo& io);
+    Status init(const WorldView& world, const ModuleConfig& config, SignalIo& io);
+    Status step(const StepContext& context, SignalIo& io);
 
     struct Impl;
 

@@ -154,6 +154,17 @@ with `angle_min`/`angle_max`/`range_min`/`range_max` in `params`), PointCloud2 (
 between messages and 0 until the first. A signal that is missing, or whose size or unit the
 message cannot carry, stops the start with the entry named.
 
+### Physics engines as plugins
+
+A plugin module of domain `rigid_body` is a physics backend: `lagrange --plugin LIB --physics
+NAME`. What it must output and accept is `docs/design/domains/rigid_body.md` §8, and the
+conformance suite checks it:
+
+```bash
+LAGRANGE_CONFORMANCE=my_engine@libmy_engine.so ros2 run lagrange_server lagrange_physics_conformance
+lagrange --plugin lagrange_jolt --physics jolt_abi     # Jolt through the C ABI, the worked example
+```
+
 ## Profiles and stages
 
 A profile (RFC 0005) chooses which domains run, which substitutes replace the others, and the

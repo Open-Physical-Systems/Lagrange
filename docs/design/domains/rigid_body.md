@@ -99,3 +99,47 @@ actuated joint; `body/{b}/pose`, `body/{b}/twist`, `body/{b}/acceleration` for e
 | `effective_inertia` | analytic two-link arm inertia matrix diagonal | 1e-9 relative |
 | Determinism | two runs, same seed | bit-identical state hash (MuJoCo backend) |
 | AMR drive test (v0.2) | sim-vs-real: recorded wheel odometry of a real differential-drive robot driving a square. Dataset to be recorded or sourced (open question Q16) | position error after 10 m within the spread of repeated real runs |
+
+## 8. Backends as plugins: the contract and the conformance suite (RFC 0008 §5)
+
+A plugin module with `domain = "rigid_body"` is a backend, picked by `--physics NAME` or a
+profile's `rigid_body: {backend: NAME}`. Its contract is §3 and §5, binding:
+
+- **Outputs**, per hinge and slide joint: `joint/<j>/position`, `velocity`; for actuated joints
+  also `acceleration`, `effective_inertia`, `constraint_torque`. Per moving body (its joint to the
+  world, or one of its ancestors', is not fixed): `body/<b>/pose`, `twist` (world_local),
+  `acceleration` (proper acceleration, body frame: what an IMU feels).
+- **Inputs**: `joint/<j>/torque` and `load_torque` (window average, optional);
+  `body/<b>/external_wrench` (world_local, at the body origin, optional);
+  `body/<b>/pose_command` for kinematic bodies (optional: without one the body stays);
+  `env/friction_scale` (optional, default 1).
+- **Behaviour**: free root bodies; every `ShapeType`, or a refusal in `declare` that names the
+  shape; no collisions between bodies of one kinematic tree, and collisions between separate
+  trees (a world file's loose objects share a robot index but not a tree); joint limits;
+  armature; `World::Joints::initialPosition` (or a warning that it starts at zero);
+  `shift_origin`; and, for a backend that says it is deterministic, `save_state` and
+  `restore_state` that restore a run bit for bit.
+
+The conformance suite, `ros2 run lagrange_server lagrange_physics_conformance`
+(`server/test/physics_conformance.cpp`), checks a backend against it. It runs the backends in
+`LAGRANGE_CONFORMANCE` (`NAME` or `NAME@PLUGIN`, comma-separated; default
+`mujoco,jolt,jolt_abi@lagrange_jolt`); a third-party engine runs it as
+`LAGRANGE_CONFORMANCE=my_engine@libmy_engine.so`:
+
+| Test | Requirement |
+|---|---|
+| A falling box | dropped from 1 m, rests at its half height within 5 mm after 3 s |
+| A pendulum | period of the physical pendulum, `2π √(I / (m g d))·(1 + θ₀²/16)`, within 0.5 % |
+| A box on a slope | friction 1: holds at 30° (moves < 1 cm in 1.4 s), slides at 60° (> 0.3 m) |
+| A stack of three boxes | stands for 10 s: the top box within 1 cm of its place |
+| The sample AMR's loop | over 10 s, the distance driven within 5 % of MuJoCo's, the end within 10 % of it |
+| Determinism and state | two runs bit-identical; a saved state restored runs on bit-identically |
+
+MuJoCo, Jolt and `jolt_abi` (the same Jolt engine as a plugin through the C ABI,
+`modules/rigid_body/jolt_backend/src/jolt_plugin.cpp`, `--plugin lagrange_jolt`) pass it; Jolt and
+`jolt_abi` give identical numbers. On Jolt the AMR's loop ends 5.3 % of its 5.4 m from MuJoCo's
+end (heading drift from its per-body friction). Writing the suite found two Jolt bugs, both
+fixed: loose objects of one world file passed through each other (collisions were filtered by
+robot index instead of by tree), and a restored state lost its contacts with the static scenery.
+Restored contacts now include the scenery whenever it is unchanged; it changes between a save
+and a restore only when streamed tiles come or go.

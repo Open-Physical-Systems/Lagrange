@@ -5142,6 +5142,26 @@ std::vector<double> Server::read(const std::string& name) const {
     return {values.begin(), values.end()};
 }
 
+Expected<std::vector<std::byte>, Status> Server::saveState() const {
+    if (!impl_->scheduler) {
+        return Unexpected{Status::error(StatusCode::Internal, "saveState() before load()")};
+    }
+    StateWriter writer;
+    if (Status status = impl_->scheduler->saveState(writer); !status.ok()) {
+        return Unexpected{status};
+    }
+    const std::span<const std::byte> bytes = writer.bytes();
+    return std::vector<std::byte>(bytes.begin(), bytes.end());
+}
+
+Status Server::restoreState(std::span<const std::byte> state) {
+    if (!impl_->scheduler) {
+        return Status::error(StatusCode::Internal, "restoreState() before load()");
+    }
+    StateReader reader(state);
+    return impl_->scheduler->restoreState(reader);
+}
+
 Expected<std::string, Status> Server::spawnRobot(const std::string& path, const std::string& name,
                                                  const Pose& spawn) {
     if (!impl_->scheduler) {
