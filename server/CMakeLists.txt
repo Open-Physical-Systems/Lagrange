@@ -196,6 +196,7 @@ if(BUILD_TESTING)
         test/test_robot.cpp
         test/test_regions.cpp
         test/test_server.cpp
+        test/test_spawn.cpp
         test/test_multicopter.cpp
         test/test_toggles.cpp
         test/test_usd_assets.cpp

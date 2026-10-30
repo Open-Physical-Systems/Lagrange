@@ -509,6 +509,23 @@ Status Scheduler::stepTick() {
     return {};
 }
 
+Status Scheduler::startAt(SimTime t) {
+    if (!wired_ || tick_ != 0) {
+        return Status::error(StatusCode::Internal, "startAt() needs a freshly wired scheduler");
+    }
+    if (t.ns < 0 || t.ns % baseTick_.ns != 0) {
+        return Status::error(StatusCode::InvalidConfig, "startAt(): " + formatTime(t) +
+                                                            " is not a whole number of base ticks");
+    }
+    now_ = t;
+    tick_ = static_cast<std::uint64_t>(t.ns / baseTick_.ns);
+    for (const std::uint32_t index : order_) {
+        Entry& entry = entries_[index];
+        entry.stepIndex = static_cast<std::uint64_t>(t.ns / entry.dt.ns);
+    }
+    return {};
+}
+
 Status Scheduler::stepUntil(SimTime t) {
     while (now_ < t) {
         if (Status status = stepTick(); !status.ok()) {

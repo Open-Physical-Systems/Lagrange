@@ -194,11 +194,16 @@ lagrange                           # the server and the viewer: the sample AMR i
 lagrange sedan                     # a sample by name: amr, sedan, quad, lexus, x500, swerve
 lagrange robot.urdf world.sdf      # your own robot and world (URDF, SDFormat, MJCF or USD)
 lagrange --server-only sedan       # headless, like gzserver; `lagrange viewer` is the viewer alone
+lagrange empty                     # no robot: the ground only, then from another terminal
+lagrange spawn robot.urdf --at 2,0 #   add robots while it runs (lagrange delete /robot)
 ```
 
 Closing the viewer stops the server. Options before `--` go to the server (`--spawn`,
 `--physics jolt`, `--no-ros`, ...; `lagrange_server --help`), after it to the viewer
 (`lagrange sedan -- --follow 20`). The robot drives a figure-eight until it gets `/cmd_vel`.
+Robots can be spawned into a running simulation, as in Gazebo: with `lagrange spawn`, the
+viewer's File → Add robot (Ctrl+O), or the standard ROS 2 `/spawn_entity` and `/delete_entity`
+services ([docs/guide/cli.md](docs/guide/cli.md#spawning-robots)).
 The same samples with the server alone:
 
 ```bash

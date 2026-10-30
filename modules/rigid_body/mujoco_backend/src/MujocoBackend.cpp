@@ -379,6 +379,15 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
         baseFriction_[static_cast<std::size_t>(g)] = model_->geom_friction[3 * g];
     }
 
+    // Joints that start away from zero (a run rebuilt mid-way keeps its robots' poses).
+    for (std::size_t j = 0; j < joints.names.size(); ++j) {
+        const double start = j < joints.initialPosition.size() ? joints.initialPosition[j] : 0.0;
+        const int id = start != 0.0 ? mj_name2id(model_, mjOBJ_JOINT, joints.names[j].c_str()) : -1;
+        if (id >= 0 &&
+            (model_->jnt_type[id] == mjJNT_HINGE || model_->jnt_type[id] == mjJNT_SLIDE)) {
+            data_->qpos[model_->jnt_qposadr[id]] = start;
+        }
+    }
     // Kinematics of the initial state, so the first outputs are defined.
     mj_step1(model_, data_);
     writeOutputs(bus);

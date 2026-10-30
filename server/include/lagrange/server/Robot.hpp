@@ -45,6 +45,13 @@ inline constexpr double kRebaseDistanceM = 1000.0;
 [[nodiscard]] Expected<Robot, std::string> loadUrdf(const std::string& path,
                                                     const LoadOptions& options = {});
 
+/// No robot: the ground plane and its slab only, what an empty run starts from (--robot none).
+[[nodiscard]] Robot emptyModel(const LoadOptions& options = {});
+
+/// Gives a loaded robot's top prim (and the paths under it) the name `name`; bodies, joints and
+/// sensors keep theirs, so its signals and ROS names stay those of its file.
+void renameRobot(Robot& robot, const std::string& name);
+
 /// Adds another URDF to a loaded robot: a second robot, or static scenery (a root link named
 /// "world", as in assets/worlds). Its prims go under their own top prim, after the others.
 ///

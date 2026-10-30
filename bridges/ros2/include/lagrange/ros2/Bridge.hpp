@@ -76,13 +76,36 @@ enum class SimResult : std::uint8_t {
     NotFound = 2,
     IncorrectState = 3,
     Failed = 4,
-    AlreadyInTargetState = 101,
+    AlreadyInTargetState = 101,  // set_simulation_state
     IncorrectTransition = 103,
+    NameNotUnique = 101,  // spawn_entity
+    NameInvalid = 102,
+    UnsupportedFormat = 103,
+    NoResource = 104,
+    NamespaceInvalid = 105,
+    ResourceParseError = 106,
+    InvalidPose = 109,
 };
 
 struct SimOutcome {
     SimResult result{SimResult::Ok};
     std::string message;
+};
+
+/// A simulation_interfaces SpawnEntity request.
+struct SpawnRequest {
+    std::string name;  // empty: the simulator picks one (with allowRenaming)
+    bool allowRenaming{false};
+    std::string uri;       // a file: a path, file://PATH or package://PACKAGE/PATH
+    std::string resource;  // or the file's text, when uri is empty
+    std::string entityNamespace;
+    Pose pose;          // in `frame`
+    std::string frame;  // "" or "world"
+};
+
+struct SpawnOutcome {
+    SimOutcome outcome;
+    std::string entityName;  // as get_entities lists it
 };
 
 /// simulation_interfaces/SimulationState values this server can be in or be asked for.
@@ -124,6 +147,18 @@ public:
     virtual SimOutcome reset() = 0;
     [[nodiscard]] virtual std::vector<EntityDescription> entities() = 0;
     [[nodiscard]] virtual std::optional<EntityMotion> entityMotion(const std::string& name) = 0;
+    /// Adds a robot to the running simulation (spawn_entity).
+    virtual SpawnOutcome spawn(const SpawnRequest& request) {
+        (void)request;
+        return {{SimResult::Unsupported, "spawning is not supported"}, ""};
+    }
+    /// Takes a spawned or loaded robot out (delete_entity).
+    virtual SimOutcome remove(const std::string& name) {
+        (void)name;
+        return {SimResult::Unsupported, "deleting is not supported"};
+    }
+    /// Takes every spawned robot out (reset_simulation with SCOPE_SPAWNED).
+    virtual SimOutcome removeSpawned() { return {}; }
 };
 
 /// The ROS 2 bridge (roadmap 0.2-F1, F2): an rclcpp node in the server process.
@@ -159,6 +194,11 @@ public:
     void publish(const SignalBus& bus, SimTime now);
     /// The newest /cmd_vel if it arrived less than `maxAge` ago (wall clock).
     [[nodiscard]] std::optional<CmdVel> latestCommand(std::chrono::milliseconds maxAge) const;
+    /// The robot that /odom, /ground_truth/odom, the odom TF, /robot_description and
+    /// /ackermann_cmd are about, when it changes during the run (a robot spawned into an empty
+    /// run, or deleted). Call before attach().
+    void setRobot(const std::string& baseLink, const std::string& robotDescription,
+                  bool ackermannCmd);
     /// Messages lost on a link so far, by topic (the topics of BridgeSettings::topicLinks).
     [[nodiscard]] std::map<std::string, std::uint64_t> droppedOnLinks() const;
     /// The ROS graph as this node sees it. Cold path: about once a second.
@@ -167,7 +207,8 @@ public:
 
     /// Offers the simulation_interfaces services (roadmap 0.2-F4) under the root namespace:
     /// get_simulator_features, get_simulation_state, set_simulation_state, step_simulation,
-    /// reset_simulation, get_entities, get_entities_states, get_entity_state, get_entity_info.
+    /// reset_simulation, get_entities, get_entities_states, get_entity_state, get_entity_info,
+    /// spawn_entity, spawn_entities, delete_entity.
     /// The other services of the standard answer RESULT_FEATURE_UNSUPPORTED with a reason.
     /// Requests wait for handleRequests(); `handler` must outlive the bridge.
     void serveSimulation(SimulationHandler& handler);

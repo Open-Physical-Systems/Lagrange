@@ -3,7 +3,7 @@
 <package format="3">
   <name>lagrange</name>
   <version>1.0.0</version>
-  <description>The `lagrange` command: runs the simulator and its viewer together (like `gazebo`), either one alone, the sample robots by name, and the lagrange_server tools (run, validate, graph, determinism, export, info).</description>
+  <description>The `lagrange` command: runs the simulator and its viewer together (like `gazebo`), either one alone, the sample robots by name, robots spawned into a running simulation, and the lagrange_server tools (run, validate, graph, determinism, export, info).</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
 
@@ -13,6 +13,8 @@
   <exec_depend>lagrange_server</exec_depend>
   <exec_depend>lagrange_viewer</exec_depend>
   <exec_depend>lagrange_assets</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>simulation_interfaces</exec_depend>
   <test_depend>ament_cmake_pytest</test_depend>
 
   <export>

@@ -32,6 +32,21 @@ def test_signals_carry_units(sim: lagrange.Simulation) -> None:
         sim.read("no/such/signal")
 
 
+def test_robots_spawn_into_an_empty_run_and_go() -> None:
+    sim = lagrange.Simulation(None, world=lagrange.sample_world())
+    assert "base_link" not in sim.bodies()
+    sim.step_until(0.5)
+    assert sim.spawn(lagrange.sample_robot(), at=[1.0, 0.0]) == "/amr_diffdrive"
+    assert sim.time == pytest.approx(0.5), "time goes on"
+    assert sim.spawn(lagrange.sample_robot(), "mate", at=[1.0, 3.0, 0.0, math.pi]) == "/mate"
+    assert "mate_base_link" in sim.bodies()
+    sim.step_until(2.0)
+    sim.delete("/mate")
+    assert "mate_base_link" not in sim.bodies()
+    with pytest.raises(RuntimeError, match="no robot named"):
+        sim.delete("/mate")
+
+
 def test_world_queries() -> None:
     sim = lagrange.Simulation(lagrange.sample_robot(), world=None)
     assert "base_link" in sim.bodies()

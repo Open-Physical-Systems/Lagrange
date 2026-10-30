@@ -1262,7 +1262,8 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
             ImGui::Render();
             if (ui.takeOpenFileRequest()) {
                 static const SDL_DialogFileFilter kFilters[] = {
-                    {"Robots and recordings", "urdf;xacro;mcap"}, {"All files", "*"}};
+                    {"Robots and recordings", "urdf;sdf;xml;usd;usda;usdc;mcap"},
+                    {"All files", "*"}};
                 SDL_ShowOpenFileDialog(
                     [](void* user, const char* const* files, int /*filter*/) {
                         auto* result = static_cast<Chosen*>(user);

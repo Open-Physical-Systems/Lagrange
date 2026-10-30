@@ -8,7 +8,10 @@ source /opt/ros/lyrical/setup.bash && source install/setup.bash
 lagrange [SAMPLE | ROBOT [WORLD]] [SERVER OPTIONS] [-- VIEWER OPTIONS]
 lagrange --server-only ...         # the server alone, headless
 lagrange viewer [VIEWER OPTIONS]   # the viewer alone
-lagrange samples                   # amr (default), sedan, quad, lexus, x500, swerve
+lagrange samples                   # amr (default), sedan, quad, lexus, x500, swerve, empty
+lagrange empty                     # no robot, no world: the ground only
+lagrange spawn FILE [--name NAME] [--at X,Y[,Z[,YAW]]]   # a robot into the running simulator
+lagrange delete NAME               # and out again
 ```
 
 The server listens on a socket of its own for the run (`$XDG_RUNTIME_DIR/lagrange/run-PID.sock`,
@@ -38,6 +41,41 @@ instead of MuJoCo; MuJoCo stays the default and the reference (rigid_body.md §7
 them (motors, battery, bus on a URDF; [formats.md §9](../design/formats.md#9-importers)). The
 sample AMR gets its power system from `amr_diffdrive.overlay.yaml` by default; another `--robot`
 gets no overlay unless one is given, and `--overlay none` turns it off.
+
+## Spawning robots
+
+Like Gazebo, the simulator can start without a robot (`lagrange empty`, or `--robot none` with
+any world) and take robots while it runs. Three ways do the same thing:
+
+- `lagrange spawn robot.urdf --at 2,0` from a terminal (it prints the entity name, `/robot`);
+  `lagrange delete /robot` takes it out;
+- the viewer's **File → Add robot or open recording** (Ctrl+O): the robot goes to the origin of
+  an empty run, else 3 m beside the robots there are;
+- the standard ROS 2 services of `simulation_interfaces`: `/spawn_entity`, `/spawn_entities`,
+  `/delete_entity`, and `/reset_simulation` with `SCOPE_SPAWNED`, from any language:
+
+```bash
+ros2 service call /spawn_entity simulation_interfaces/srv/SpawnEntity \
+  "{name: mate, entity_resource: {uri: $PWD/assets/robots/amr_diffdrive/amr_diffdrive.urdf},
+    initial_pose: {header: {frame_id: world}, pose: {position: {x: 0.0, y: 4.0}}}}"
+ros2 service call /delete_entity simulation_interfaces/srv/DeleteEntity "{entity: /mate}"
+```
+
+The file is a URDF, SDFormat, MJCF or USD path (`file://` and `package://` URIs too), or its text
+in `resource_string`; xacro is run first (`xacro robot.urdf.xacro > robot.urdf`). The pose is in
+the frame `world`, the frame of `/odom`'s origin; the robot is placed as `--spawn` places it, its
+lowest collision shape just above z.
+
+- **The first robot in a run without one is the robot**: `/cmd_vel`, `/odom`, `/joint_states`,
+  `/robot_description` and its sensors' topics are its, and the demo driver drives it. Robots
+  after it are passive, with their names prefixed (`mate_base_link`), as `--add-robot` makes
+  them; `entity_namespace` is not supported yet.
+- **A spawn or a delete rebuilds the run** with the new set of robots. Time goes on (`/clock` never
+  jumps back), every body keeps its pose and, with MuJoCo, every joint its position; velocities
+  start from rest, and the modules' own state (controllers, batteries, filters) starts again.
+  A recording stops at the change. `reset_simulation` goes back to t = 0 with the robots there
+  are, where they were spawned.
+- Any robot can be deleted, the one the simulator started with too; the world's scenery cannot.
 
 ## Profiles and stages
 

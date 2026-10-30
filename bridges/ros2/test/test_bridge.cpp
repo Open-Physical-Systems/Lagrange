@@ -11,11 +11,13 @@
 #include <memory>
 #include <numbers>
 #include <optional>
+#include <simulation_interfaces/srv/delete_entity.hpp>
 #include <simulation_interfaces/srv/get_entities.hpp>
 #include <simulation_interfaces/srv/get_entity_state.hpp>
 #include <simulation_interfaces/srv/get_simulation_state.hpp>
 #include <simulation_interfaces/srv/reset_simulation.hpp>
 #include <simulation_interfaces/srv/set_simulation_state.hpp>
+#include <simulation_interfaces/srv/spawn_entities.hpp>
 #include <simulation_interfaces/srv/spawn_entity.hpp>
 #include <simulation_interfaces/srv/step_simulation.hpp>
 
@@ -274,8 +276,18 @@ public:
     SimState state{SimState::Playing};
     std::uint64_t stepped{0};
     int resets{0};
+    std::vector<SpawnRequest> spawns;
+    std::vector<std::string> removed;
 
     SimState simulationState() override { return state; }
+    SpawnOutcome spawn(const SpawnRequest& request) override {
+        spawns.push_back(request);
+        return {{}, "/" + request.name};
+    }
+    SimOutcome remove(const std::string& name) override {
+        removed.push_back(name);
+        return name == "/robot" ? SimOutcome{} : SimOutcome{SimResult::NotFound, "no " + name};
+    }
     SimOutcome setSimulationState(SimState target) override {
         if (target == state) {
             return {SimResult::AlreadyInTargetState, ""};
@@ -372,9 +384,37 @@ TEST_F(SimulationServicesTest, PausesStepsAndResets) {
         si::msg::Result::RESULT_OK);
     EXPECT_EQ(fake_.resets, 1);
 
-    const auto spawn = call<si::srv::SpawnEntity>("/spawn_entity", si::srv::SpawnEntity::Request());
-    EXPECT_EQ(spawn->result.result, si::msg::Result::RESULT_FEATURE_UNSUPPORTED);
-    EXPECT_FALSE(spawn->result.error_message.empty());
+    si::srv::SpawnEntity::Request spawn;
+    spawn.name = "mate";
+    spawn.entity_resource.uri = "/robots/amr.urdf";
+    spawn.initial_pose.header.frame_id = "world";
+    spawn.initial_pose.pose.position.x = 2.0;
+    spawn.initial_pose.pose.orientation.w = 1.0;
+    const auto spawned = call<si::srv::SpawnEntity>("/spawn_entity", spawn);
+    EXPECT_EQ(spawned->result.result, si::msg::Result::RESULT_OK);
+    EXPECT_EQ(spawned->entity_name, "/mate");
+    ASSERT_EQ(fake_.spawns.size(), 1U);
+    EXPECT_EQ(fake_.spawns[0].uri, "/robots/amr.urdf");
+    EXPECT_EQ(fake_.spawns[0].frame, "world");
+    EXPECT_EQ(fake_.spawns[0].pose.position[0], 2.0);
+    EXPECT_EQ(fake_.spawns[0].pose.orientation[0], 1.0);
+
+    si::srv::SpawnEntities::Request many;
+    many.spawn_requests.resize(2);
+    many.spawn_requests[0].name = "a";
+    many.spawn_requests[1].name = "b";
+    const auto both = call<si::srv::SpawnEntities>("/spawn_entities", many);
+    EXPECT_EQ(both->result.result, si::msg::Result::RESULT_OK);
+    ASSERT_EQ(both->results.size(), 2U);
+    EXPECT_EQ(both->results[1].entity_name, "/b");
+
+    si::srv::DeleteEntity::Request gone;
+    gone.entity = "/robot";
+    EXPECT_EQ(call<si::srv::DeleteEntity>("/delete_entity", gone)->result.result,
+              si::msg::Result::RESULT_OK);
+    gone.entity = "/nobody";
+    EXPECT_EQ(call<si::srv::DeleteEntity>("/delete_entity", gone)->result.result,
+              si::msg::Result::RESULT_NOT_FOUND);
 }
 
 TEST_F(SimulationServicesTest, ListsAndFiltersEntitiesAndReportsTheirState) {
