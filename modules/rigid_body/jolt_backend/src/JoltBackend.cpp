@@ -542,8 +542,58 @@ Duration JoltBackend::preferredStep() const {
     return 1_ms;
 }
 
+namespace {
+
+/// The scheduler's declarer and bus as the engine's SignalIo, inside the server.
+class DeclarerIo final : public JoltBackend::SignalIo {
+public:
+    explicit DeclarerIo(SignalDeclarer& declarer) : declarer_(declarer) {}
+    SignalId input(SignalSpec spec) override { return declarer_.input(std::move(spec)); }
+    SignalId output(SignalSpec spec) override { return declarer_.output(std::move(spec)); }
+    [[nodiscard]] double read(SignalId) const override { return 0.0; }
+    [[nodiscard]] std::span<const double> readN(SignalId) const override { return {}; }
+    void write(SignalId, double) override {}
+    void writeN(SignalId, std::span<const double>) override {}
+
+private:
+    SignalDeclarer& declarer_;
+};
+
+class BusIo final : public JoltBackend::SignalIo {
+public:
+    explicit BusIo(SignalBus& bus) : bus_(bus) {}
+    SignalId input(SignalSpec) override { return {}; }
+    SignalId output(SignalSpec) override { return {}; }
+    [[nodiscard]] double read(SignalId id) const override { return bus_.read(id); }
+    [[nodiscard]] std::span<const double> readN(SignalId id) const override {
+        return bus_.readN(id);
+    }
+    void write(SignalId id, double value) override { bus_.write(id, value); }
+    void writeN(SignalId id, std::span<const double> values) override { bus_.writeN(id, values); }
+
+private:
+    SignalBus& bus_;
+};
+
+}  // namespace
+
 Status JoltBackend::declare(const WorldView& world, const ModuleConfig& config,
                             SignalDeclarer& declarer) {
+    DeclarerIo io(declarer);
+    return declare(world, config, io);
+}
+
+Status JoltBackend::init(const WorldView& world, const ModuleConfig& config, SignalBus& bus) {
+    BusIo io(bus);
+    return init(world, config, io);
+}
+
+Status JoltBackend::step(const StepContext& context, SignalBus& bus) {
+    BusIo io(bus);
+    return step(context, io);
+}
+
+Status JoltBackend::declare(const WorldView& world, const ModuleConfig& config, SignalIo& io) {
     Impl& s = *impl_;
     if (!config.fidelity().empty() && config.fidelity() != "articulated") {
         return Status::error(StatusCode::InvalidConfig,
@@ -572,24 +622,21 @@ Status JoltBackend::declare(const WorldView& world, const ModuleConfig& config,
         Impl::Joint out;
         out.joint = j;
         out.prismatic = prismatic;
-        out.position = declarer.output(
+        out.position = io.output(
             spec(base + "/position", SignalType::Scalar, prismatic ? units::m : units::rad));
-        out.velocity = declarer.output(spec(base + "/velocity", SignalType::Scalar,
-                                            prismatic ? units::m_per_s : units::rad_per_s));
+        out.velocity = io.output(spec(base + "/velocity", SignalType::Scalar,
+                                      prismatic ? units::m_per_s : units::rad_per_s));
         if (joints.actuated[j]) {
             // As MujocoBackend: what a motor needs from the joint it drives.
             const Unit effort = prismatic ? units::N : units::N_m;
-            out.torque = declarer.input(flowInput(base + "/torque", SignalType::Scalar, effort));
-            out.loadTorque =
-                declarer.input(flowInput(base + "/load_torque", SignalType::Scalar, effort));
-            out.acceleration =
-                declarer.output(spec(base + "/acceleration", SignalType::Scalar,
-                                     prismatic ? units::m_per_s2 : units::rad_per_s2));
-            out.effectiveInertia =
-                declarer.output(spec(base + "/effective_inertia", SignalType::Scalar,
-                                     prismatic ? units::kg : units::kg_m2));
+            out.torque = io.input(flowInput(base + "/torque", SignalType::Scalar, effort));
+            out.loadTorque = io.input(flowInput(base + "/load_torque", SignalType::Scalar, effort));
+            out.acceleration = io.output(spec(base + "/acceleration", SignalType::Scalar,
+                                              prismatic ? units::m_per_s2 : units::rad_per_s2));
+            out.effectiveInertia = io.output(spec(base + "/effective_inertia", SignalType::Scalar,
+                                                  prismatic ? units::kg : units::kg_m2));
             out.constraintTorque =
-                declarer.output(spec(base + "/constraint_torque", SignalType::Scalar, effort));
+                io.output(spec(base + "/constraint_torque", SignalType::Scalar, effort));
         }
         s.joints.push_back(out);
     }
@@ -602,29 +649,29 @@ Status JoltBackend::declare(const WorldView& world, const ModuleConfig& config,
         const std::string base = "body/" + std::string(world.signalInstanceName(bodies.prim[b]));
         Impl::Body out;
         out.body = b;
-        out.pose = declarer.output(spec(base + "/pose", SignalType::Pose, units::m, "world_local"));
-        out.twist = declarer.output(
-            spec(base + "/twist", SignalType::Wrench, units::m_per_s, "world_local"));
-        out.acceleration = declarer.output(
-            spec(base + "/acceleration", SignalType::Wrench, units::m_per_s2, "body"));
-        out.externalWrench = declarer.input(
+        out.pose = io.output(spec(base + "/pose", SignalType::Pose, units::m, "world_local"));
+        out.twist =
+            io.output(spec(base + "/twist", SignalType::Wrench, units::m_per_s, "world_local"));
+        out.acceleration =
+            io.output(spec(base + "/acceleration", SignalType::Wrench, units::m_per_s2, "body"));
+        out.externalWrench = io.input(
             flowInput(base + "/external_wrench", SignalType::Wrench, units::N, "world_local"));
         if (b < bodies.kinematic.size() && bodies.kinematic[b]) {
             SignalSpec command =
                 spec(base + "/pose_command", SignalType::Pose, units::m, "world_local");
             command.optional = true;  // without a command it stays where it is
-            out.poseCommand = declarer.input(command);
+            out.poseCommand = io.input(command);
         }
         s.bodies.push_back(out);
     }
     SignalSpec friction = spec("env/friction_scale", SignalType::Scalar, units::one);
     friction.optional = true;
     friction.defaultValue = 1.0;
-    s.frictionScale = declarer.input(friction);
+    s.frictionScale = io.input(friction);
     return {};
 }
 
-Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalBus& bus) {
+Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalIo& io) {
     initJolt();
     Impl& s = *impl_;
     const World& world = view.raw();
@@ -680,12 +727,19 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalBus& 
     s.hasArmature = false;
     JPH::BodyInterface& bi = s.system->GetBodyInterfaceNoLock();
 
-    // Bodies of one robot do not collide with each other (as MujocoBackend).
+    // Bodies of one kinematic tree do not collide with each other (as MujocoBackend); separate
+    // trees do, even when a world file's loose objects share one robot index.
+    const auto treeOf = [&bodies](std::uint32_t b) {
+        while (bodies.parent[b] != kWorldBody) {
+            b = bodies.parent[b].index;
+        }
+        return b;
+    };
     JPH::Ref<JPH::GroupFilterTable> filter = new JPH::GroupFilterTable(
         static_cast<JPH::uint>(std::max<std::size_t>(s.groups.size(), 1)));
     for (std::size_t a = 0; a < s.groups.size(); ++a) {
         for (std::size_t b = a + 1; b < s.groups.size(); ++b) {
-            if (bodies.robot[s.groups[a].root] == bodies.robot[s.groups[b].root]) {
+            if (treeOf(s.groups[a].root) == treeOf(s.groups[b].root)) {
                 filter->DisableCollision(static_cast<JPH::CollisionGroup::SubGroupID>(a),
                                          static_cast<JPH::CollisionGroup::SubGroupID>(b));
             }
@@ -884,13 +938,13 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalBus& 
 
     // Initial outputs: the rest state.
     for (Impl::Joint& j : s.joints) {
-        bus.write(j.position, 0.0);
-        bus.write(j.velocity, 0.0);
+        io.write(j.position, 0.0);
+        io.write(j.velocity, 0.0);
         if (j.acceleration.valid()) {
-            bus.write(j.acceleration, 0.0);
-            bus.write(j.constraintTorque, 0.0);
+            io.write(j.acceleration, 0.0);
+            io.write(j.constraintTorque, 0.0);
             const std::uint32_t child = world.joints.child[j.joint].index;
-            bus.write(
+            io.write(
                 j.effectiveInertia,
                 j.armature +
                     s.subtreeInertia(j, rotate(rest[child].orientation, world.joints.axis[j.joint]),
@@ -902,18 +956,18 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalBus& 
         const std::array<double, 7> pose{p.position[0],    p.position[1],    p.position[2],
                                          p.orientation[0], p.orientation[1], p.orientation[2],
                                          p.orientation[3]};
-        bus.writeN(b.pose, pose);
-        bus.writeN(b.twist, std::array<double, 6>{});
+        io.writeN(b.pose, pose);
+        io.writeN(b.twist, std::array<double, 6>{});
         b.lastTwist = {};
         // At rest: the proper acceleration holds the body up against gravity.
         const Vec3 up =
             rotate(conjugate(p.orientation), {-s.gravity[0], -s.gravity[1], -s.gravity[2]});
-        bus.writeN(b.acceleration, std::array<double, 6>{up[0], up[1], up[2], 0.0, 0.0, 0.0});
+        io.writeN(b.acceleration, std::array<double, 6>{up[0], up[1], up[2], 0.0, 0.0, 0.0});
     }
     return {};
 }
 
-Status JoltBackend::step(const StepContext& context, SignalBus& bus) {
+Status JoltBackend::step(const StepContext& context, SignalIo& io) {
     Impl& s = *impl_;
     JPH::BodyInterface& bi = s.system->GetBodyInterfaceNoLock();
     const JPH::BodyLockInterfaceNoLock& lock = s.system->GetBodyLockInterfaceNoLock();
@@ -928,7 +982,7 @@ Status JoltBackend::step(const StepContext& context, SignalBus& bus) {
             continue;
         }
         const double tau =
-            (j.torque.valid() ? bus.read(j.torque) + bus.read(j.loadTorque) : 0.0) + rotor;
+            (j.torque.valid() ? io.read(j.torque) + io.read(j.loadTorque) : 0.0) + rotor;
         JPH::Vec3 axis;
         if (j.prismatic) {
             axis = static_cast<JPH::SliderConstraint&>(*j.constraint)
@@ -952,7 +1006,7 @@ Status JoltBackend::step(const StepContext& context, SignalBus& bus) {
     }
     // External wrenches, at the centre of mass.
     for (const Impl::Body& b : s.bodies) {
-        const std::span<const double> w = bus.readN(b.externalWrench);
+        const std::span<const double> w = io.readN(b.externalWrench);
         if (w.size() == 6 && (w[0] != 0.0 || w[1] != 0.0 || w[2] != 0.0 || w[3] != 0.0 ||
                               w[4] != 0.0 || w[5] != 0.0)) {
             const JPH::BodyID id = s.groups.at(static_cast<std::size_t>(s.groupOf[b.body])).id;
@@ -966,7 +1020,7 @@ Status JoltBackend::step(const StepContext& context, SignalBus& bus) {
         if (!b.poseCommand.valid()) {
             continue;
         }
-        const std::span<const double> p = bus.readN(b.poseCommand);
+        const std::span<const double> p = io.readN(b.poseCommand);
         if (p[3] * p[3] + p[4] * p[4] + p[5] * p[5] + p[6] * p[6] < 0.5) {
             continue;  // unset: stay
         }
@@ -977,7 +1031,7 @@ Status JoltBackend::step(const StepContext& context, SignalBus& bus) {
     }
 
     // env/friction_scale (wet floors, ...): every body's friction, as MuJoCo scales its geoms'.
-    if (const double scale = bus.read(s.frictionScale); scale != s.appliedFrictionScale) {
+    if (const double scale = io.read(s.frictionScale); scale != s.appliedFrictionScale) {
         s.applyFrictionScale(scale);
     }
 
@@ -995,24 +1049,24 @@ Status JoltBackend::step(const StepContext& context, SignalBus& bus) {
         double limitLambda = 0.0;
         if (j.prismatic) {
             const auto& slider = static_cast<JPH::SliderConstraint&>(*j.constraint);
-            bus.write(j.position, slider.GetCurrentPosition());
+            io.write(j.position, slider.GetCurrentPosition());
             limitLambda = slider.GetTotalLambdaPositionLimits();
         } else {
             const auto& hinge = static_cast<JPH::HingeConstraint&>(*j.constraint);
-            bus.write(j.position, hinge.GetCurrentAngle());
+            io.write(j.position, hinge.GetCurrentAngle());
             limitLambda = hinge.GetTotalLambdaRotationLimits();
         }
         velocity = s.jointVelocity(j, axis);
-        bus.write(j.velocity, velocity);
+        io.write(j.velocity, velocity);
         j.lastAcceleration = (velocity - j.lastVelocity) / dt;
         if (j.acceleration.valid()) {
             // Jolt has no joint-space acceleration: the change of velocity over the step.
-            bus.write(j.acceleration, j.lastAcceleration);
+            io.write(j.acceleration, j.lastAcceleration);
             // The limit's impulse over the step, on the child along the axis. Contacts are not
             // projected onto the joint (MuJoCo's qfrc_constraint includes them).
-            bus.write(j.constraintTorque, limitLambda / dt);
+            io.write(j.constraintTorque, limitLambda / dt);
             const Vec3 anchor = s.anchorOf(j);
-            bus.write(j.effectiveInertia, j.armature + s.subtreeInertia(j, dv(axis), anchor));
+            io.write(j.effectiveInertia, j.armature + s.subtreeInertia(j, dv(axis), anchor));
         }
         j.lastVelocity = velocity;
     }
@@ -1024,11 +1078,11 @@ Status JoltBackend::step(const StepContext& context, SignalBus& bus) {
         const std::array<double, 7> pose{p.position[0],    p.position[1],    p.position[2],
                                          p.orientation[0], p.orientation[1], p.orientation[2],
                                          p.orientation[3]};
-        bus.writeN(b.pose, pose);
+        io.writeN(b.pose, pose);
         const Vec3 v = dv(JPH::Vec3(body->GetPointVelocity(JPH::RVec3(jv(p.position)))));
         const Vec3 w = dv(body->GetAngularVelocity());
         const std::array<double, 6> twist{v[0], v[1], v[2], w[0], w[1], w[2]};
-        bus.writeN(b.twist, twist);
+        io.writeN(b.twist, twist);
         // The proper acceleration at the body origin in the body frame, as an IMU feels it
         // (MuJoCo's cacc): the change of velocity over the step, less gravity.
         const std::array<double, 4> toBody = conjugate(p.orientation);
@@ -1038,8 +1092,8 @@ Status JoltBackend::step(const StepContext& context, SignalBus& bus) {
         const Vec3 angular =
             rotate(toBody, {(w[0] - b.lastTwist[3]) / dt, (w[1] - b.lastTwist[4]) / dt,
                             (w[2] - b.lastTwist[5]) / dt});
-        bus.writeN(b.acceleration, std::array<double, 6>{linear[0], linear[1], linear[2],
-                                                         angular[0], angular[1], angular[2]});
+        io.writeN(b.acceleration, std::array<double, 6>{linear[0], linear[1], linear[2], angular[0],
+                                                        angular[1], angular[2]});
         b.lastTwist = twist;
     }
     return {};
@@ -1064,15 +1118,18 @@ namespace {
 /// The moving bodies and their contacts with each other: static scenery is rebuilt from the
 /// world, so a state still fits after streamed tiles changed the scenery (huge-worlds.md §2).
 /// Contacts with scenery are left out and found again on the next step.
+/// The moving bodies' state; their contacts with each other, and with `ground` also those with
+/// the static scenery (whose bodies are the same only while the scenery is).
 class MovingBodies final : public JPH::StateRecorderFilter {
 public:
-    explicit MovingBodies(const JPH::BodyLockInterface& locks) : locks_(locks) {}
+    MovingBodies(const JPH::BodyLockInterface& locks, bool ground)
+        : locks_(locks), ground_(ground) {}
     [[nodiscard]] bool ShouldSaveBody(const JPH::Body& body) const override {
         return !body.IsStatic();
     }
     [[nodiscard]] bool ShouldSaveContact(const JPH::BodyID& a,
                                          const JPH::BodyID& b) const override {
-        return moving(a) && moving(b);
+        return ground_ ? moving(a) || moving(b) : moving(a) && moving(b);
     }
 
 private:
@@ -1081,16 +1138,48 @@ private:
         return lock.Succeeded() && !lock.GetBody().IsStatic();
     }
     const JPH::BodyLockInterface& locks_;
+    bool ground_;
 };
+
+/// The static scenery as Jolt has it: its bodies' ids and positions (FNV-1a). A saved state's
+/// contacts with static bodies are restored only into the same scenery.
+std::uint64_t sceneryPrint(JPH::PhysicsSystem& system) {
+    JPH::BodyIDVector ids;
+    system.GetBodies(ids);
+    std::uint64_t hash = 0xcbf29ce484222325ULL;
+    const auto mix = [&hash](const void* data, std::size_t size) {
+        const auto* bytes = static_cast<const unsigned char*>(data);
+        for (std::size_t i = 0; i < size; ++i) {
+            hash = (hash ^ bytes[i]) * 0x100000001b3ULL;
+        }
+    };
+    const JPH::BodyLockInterface& locks = system.GetBodyLockInterfaceNoLock();
+    for (const JPH::BodyID& id : ids) {
+        const JPH::BodyLockRead lock(locks, id);
+        if (!lock.Succeeded() || !lock.GetBody().IsStatic()) {
+            continue;
+        }
+        const std::uint32_t value = id.GetIndexAndSequenceNumber();
+        mix(&value, sizeof value);
+        const JPH::RVec3 at = lock.GetBody().GetPosition();
+        const std::array<double, 3> p{at.GetX(), at.GetY(), at.GetZ()};
+        mix(p.data(), sizeof p);
+    }
+    return hash;
+}
 
 }  // namespace
 
 Status JoltBackend::saveState(StateWriter& writer) const {
-    JPH::StateRecorderImpl recorder;
-    const MovingBodies filter(impl_->system->GetBodyLockInterfaceNoLock());
-    impl_->system->SaveState(recorder, JPH::EStateRecorderState::All, &filter);
-    const std::string bytes = recorder.GetData();
-    writer.putString(bytes);
+    // Twice: with the contacts on the static scenery, restored when the scenery is the same (a
+    // checkpoint), and without, for a rebuilt run whose scenery changed (streamed tiles).
+    for (const bool ground : {true, false}) {
+        JPH::StateRecorderImpl recorder;
+        const MovingBodies filter(impl_->system->GetBodyLockInterfaceNoLock(), ground);
+        impl_->system->SaveState(recorder, JPH::EStateRecorderState::All, &filter);
+        writer.putString(recorder.GetData());
+    }
+    writer.put(sceneryPrint(*impl_->system));
     // What the finite-difference accelerations and the friction scale need besides.
     writer.put(impl_->appliedFrictionScale);
     for (const Impl::Joint& j : impl_->joints) {
@@ -1117,9 +1206,14 @@ void JoltBackend::shiftOrigin(const std::array<double, 3>& shift) {
 }
 
 Status JoltBackend::restoreState(StateReader& reader) {
+    std::string withGround;
     std::string bytes;
-    if (!reader.getString(bytes)) {
+    std::uint64_t scenery = 0;
+    if (!reader.getString(withGround) || !reader.getString(bytes) || !reader.get(scenery)) {
         return Status::error(StatusCode::Internal, "jolt: short state");
+    }
+    if (scenery == sceneryPrint(*impl_->system)) {
+        bytes = std::move(withGround);
     }
     JPH::StateRecorderImpl recorder;
     recorder.WriteBytes(bytes.data(), bytes.size());

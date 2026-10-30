@@ -20,6 +20,21 @@ target_link_libraries(
     PRIVATE Jolt::Jolt
 )
 
+# lagrange_jolt: the same engine as a plugin through the C ABI (RFC 0008 §5), backend jolt_abi,
+# found by `--plugin lagrange_jolt` through the lagrange_plugins resource index.
+add_library(lagrange_jolt MODULE src/jolt_plugin.cpp)
+lagrange_target_defaults(lagrange_jolt)
+target_link_libraries(
+    lagrange_jolt
+    PRIVATE lagrange_rigid_body_jolt lagrange_core::lagrange_core
+)
+install(TARGETS lagrange_jolt LIBRARY DESTINATION lib)
+ament_index_register_resource(
+    lagrange_plugins
+    PACKAGE_NAME lagrange_jolt
+    CONTENT "lib/liblagrange_jolt.so"
+)
+
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
 install(
     TARGETS lagrange_rigid_body_jolt

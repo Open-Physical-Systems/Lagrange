@@ -332,6 +332,22 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_WORKCELL_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_arm6.urdf"
     )
     lagrange_target_defaults(test_arm)
+    # The rigid-body conformance suite (RFC 0008 §5), also installed for third-party backends.
+    ament_add_gtest(
+        lagrange_physics_conformance
+        test/physics_conformance.cpp
+        TIMEOUT 300
+    )
+    target_link_libraries(
+        lagrange_physics_conformance
+        lagrange_server
+        ament_index_cpp::ament_index_cpp
+    )
+    lagrange_target_defaults(lagrange_physics_conformance)
+    install(
+        TARGETS lagrange_physics_conformance
+        DESTINATION lib/${PROJECT_NAME}
+    )
     # --ros-topics end to end (RFC 0008 §4): the lagrange_tof plugin's range on a ROS topic.
     find_package(sensor_msgs REQUIRED)
     find_package(std_msgs REQUIRED)

@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -160,6 +161,10 @@ public:
     /// After load(), without start(): advances the simulation to `t` as fast as it can (no
     /// viewers, no wall clock), for headless checks such as `lagrange determinism`.
     Status stepUntil(SimTime t);
+    /// After load(): the run's whole state (time, every module, the bus), to restore later in
+    /// the same run (Scheduler::saveState); the physics conformance suite checks backends with it.
+    [[nodiscard]] Expected<std::vector<std::byte>, Status> saveState() const;
+    Status restoreState(std::span<const std::byte> state);
     /// After load(): the hash of the run's whole state (Scheduler::stateHash).
     [[nodiscard]] Expected<std::uint64_t, Status> stateHash() const;
 
