@@ -26,6 +26,7 @@
 #include "lagrange/server/CarDrive.hpp"
 #include "lagrange/server/DiffDrive.hpp"
 #include "lagrange/server/Multicopter.hpp"
+#include "lagrange/server/Plugins.hpp"
 #include "lagrange/server/Profile.hpp"
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/server/Server.hpp"
@@ -496,6 +497,30 @@ struct Server::Impl {
     // --- simulation ----------------------------------------------------------------------
 
     /// The modules for `settings`, wired: the run itself (build) or a profile's preview.
+    /// The plugin module `name` of `domain` (a backend, or with `substitute` a substitute).
+    [[nodiscard]] const PluginModule* pluginModule(std::string_view domain, std::string_view name,
+                                                   bool substitute) const {
+        for (const PluginModule& module : plugins) {
+            if (module.domain == domain && module.name == name && module.substitute == substitute) {
+                return &module;
+            }
+        }
+        return nullptr;
+    }
+
+    /// `data` with the profile's config for the module's library (plugins[].config).
+    static ModuleConfig pluginConfig(const PluginModule& module, ModuleConfigData data,
+                                     const ProfileSettings& settings) {
+        for (const ProfileSettings::Plugin& plugin : settings.plugins) {
+            if (plugin.library == module.library) {
+                for (const auto& [key, value] : plugin.config) {
+                    data.values.insert_or_assign(key, value);
+                }
+            }
+        }
+        return ModuleConfig(std::move(data));
+    }
+
     Expected<std::unique_ptr<Scheduler>, std::string> makeScheduler(const ProfileSettings& settings,
                                                                     DriveCommand** driveOut) {
         const auto off = [&settings](const char* domain) {
@@ -528,7 +553,25 @@ struct Server::Impl {
         auto next = std::make_unique<Scheduler>(
             SchedulerOptions{.deterministic = !bridge && !rayContext && !rendering &&
                                               !options.px4Port && !options.ardupilotPort});
-        if (off("rigid_body") && settings.rigidBodyReplay) {
+        // A plugin substitute the profile names for a domain (domains.<d>.substitute: <name>).
+        const auto pluginSubstitute = [&](const char* domain) -> const PluginModule* {
+            const auto token = settings.substituteTokens.find(domain);
+            return token == settings.substituteTokens.end()
+                       ? nullptr
+                       : pluginModule(domain, token->second, true);
+        };
+        // Adds the plugin substitute chosen for `domain`; false when there is none.
+        const auto addPluginSubstitute = [&](const char* domain, ModuleConfigData data = {}) {
+            const PluginModule* module = pluginSubstitute(domain);
+            if (module == nullptr) {
+                return false;
+            }
+            next->add(module->create(), pluginConfig(*module, std::move(data), settings));
+            return true;
+        };
+        if (off("rigid_body") && addPluginSubstitute("rigid_body")) {
+            // the plugin stands in for physics
+        } else if (off("rigid_body") && settings.rigidBodyReplay) {
             // Bench mode: physics replayed from a recording, open loop.
             next->add(std::make_unique<recording::ReplaySubstitute>("rigid_body",
                                                                     *settings.rigidBodyReplay));
@@ -542,8 +585,14 @@ struct Server::Impl {
             }
             if (physics.backend == "jolt") {
                 next->add(std::make_unique<rigid_body::JoltBackend>(), ModuleConfig(physics));
-            } else {
+            } else if (physics.backend == "mujoco") {
                 next->add(std::make_unique<rigid_body::MujocoBackend>(), ModuleConfig(physics));
+            } else if (const PluginModule* engine =
+                           pluginModule("rigid_body", physics.backend, false)) {
+                next->add(engine->create(), pluginConfig(*engine, physics, settings));
+            } else {
+                return Unexpected{"no rigid body backend " + physics.backend +
+                                  ": mujoco, jolt, or a plugin's (--plugin)"};
             }
         }
         if (controllers) {
@@ -637,7 +686,10 @@ struct Server::Impl {
                 }
             }
             traffic.values["ego_bodies"] = egos;
-            next->add(std::make_unique<traffic::Traffic>(off("traffic")), ModuleConfig(traffic));
+            if (!(off("traffic") && addPluginSubstitute("traffic", traffic))) {
+                next->add(std::make_unique<traffic::Traffic>(off("traffic")),
+                          ModuleConfig(traffic));
+            }
         }
         // Road vehicles (domains/vehicle_dynamics.md): before the electrical domain, which turns
         // their drive and steering commands into joint torques.
@@ -645,9 +697,11 @@ struct Server::Impl {
             auto [ground, friction] = groundQuery();
             ModuleConfigData vehicle;
             vehicle.values["tire_model"] = appliedTireModel.value_or("pacejka");
-            next->add(std::make_unique<vehicle_dynamics::VehicleDynamics>(
-                          off("vehicle_dynamics"), std::move(ground), std::move(friction)),
-                      ModuleConfig(vehicle));
+            if (!(off("vehicle_dynamics") && addPluginSubstitute("vehicle_dynamics", vehicle))) {
+                next->add(std::make_unique<vehicle_dynamics::VehicleDynamics>(
+                              off("vehicle_dynamics"), std::move(ground), std::move(friction)),
+                          ModuleConfig(vehicle));
+            }
         }
         // The electrical domain turns the controllers' torque commands into joint torques: the
         // network when the robot has motors (from USD or an overlay), else its ideal substitute
@@ -675,7 +729,7 @@ struct Server::Impl {
                     next->add(std::make_unique<electrical::FmuComponent>(std::move(binding)));
                 }
             }
-        } else {
+        } else if (!addPluginSubstitute("electrical")) {
             next->add(std::make_unique<electrical::IdealTorqueSource>());
         }
         // Thermal, after electrical: it reads the losses. It needs the site's ambient
@@ -688,7 +742,9 @@ struct Server::Impl {
             if (settings.thermalDtNs) {
                 heat.dt = Duration{*settings.thermalDtNs};
             }
-            if (off("thermal")) {
+            if (off("thermal") && addPluginSubstitute("thermal", heat)) {
+                // the plugin stands in for the thermal network
+            } else if (off("thermal")) {
                 next->add(std::make_unique<thermal::AmbientTemperature>(), ModuleConfig(heat));
             } else {
                 next->add(std::make_unique<thermal::ThermalNetwork>(), ModuleConfig(heat));
@@ -714,7 +770,9 @@ struct Server::Impl {
             }
             const ModuleConfig config(weather);
             if (weather::Weather::hasSite(WorldView(robot.world), config)) {
-                next->add(std::make_unique<weather::Weather>(off("weather")), config);
+                if (!(off("weather") && addPluginSubstitute("weather", weather))) {
+                    next->add(std::make_unique<weather::Weather>(off("weather")), config);
+                }
                 weatherInRun = true;
             }
         }
@@ -799,12 +857,16 @@ struct Server::Impl {
             if (settings.emiCoupling) {
                 emi.values["coupling"] = *settings.emiCoupling;
             }
-            next->add(std::make_unique<emi::Emi>(off("emi")), ModuleConfig(emi));
+            if (!(off("emi") && addPluginSubstitute("emi", emi))) {
+                next->add(std::make_unique<emi::Emi>(off("emi")), ModuleConfig(emi));
+            }
         }
         // Comms (domains/comms.md) when the stage has radio links or CAN buses: after EMI, whose
         // interference and bit errors it reads; walls are the fixed scenery's shapes.
         if (hasComms()) {
-            next->add(std::make_unique<comms::Comms>(off("comms"), fixedScenery()));
+            if (!(off("comms") && addPluginSubstitute("comms"))) {
+                next->add(std::make_unique<comms::Comms>(off("comms"), fixedScenery()));
+            }
         }
         ModuleConfigData sensing;
         sensing.values["weather"] = weatherInRun;
@@ -815,6 +877,13 @@ struct Server::Impl {
                                 : sensors::createSensorModules(robot.world, rayContext, cameraScene,
                                                                !options.cameras)) {
             next->add(std::move(sensor), ModuleConfig(sensing));
+        }
+        // Plugins' own domains (RFC 0008): each runs unless --domain <d>=off.
+        for (const PluginModule& module : plugins) {
+            if (!isBuiltInDomain(module.domain) && !module.substitute &&
+                !settings.substituted.contains(module.domain)) {
+                next->add(module.create(), pluginConfig(module, {}, settings));
+            }
         }
         // Always last: it sums the body/<b>/wrench/<source> written by the modules above.
         next->add(std::make_unique<services::WrenchSum>());
@@ -853,6 +922,8 @@ struct Server::Impl {
         settings.rotorAero = appliedRotorAero;
         settings.weather = appliedWeather;
         settings.emiCoupling = appliedEmiCoupling;
+        settings.substituteTokens = appliedSubstituteTokens;
+        settings.plugins = appliedPlugins;
         return settings;
     }
     /// Whether the world has traffic agents.
@@ -972,17 +1043,20 @@ struct Server::Impl {
     std::map<std::string, ConfigValue, std::less<>> appliedWeather;       // its weather
     std::optional<std::vector<std::string>> appliedEmiCoupling;           // its EMI victims
     std::shared_ptr<mavlink::Px4Link> px4Link;  // PX4's connection, across rebuilds of the run
-    std::shared_ptr<mavlink::ArduPilotLink> ardupilotLink;  // ArduPilot's, likewise
-    std::optional<bool> speedPrediction;                    // from an applied profile
-    std::optional<std::string> electricalFidelity;          // from an applied profile
-    std::optional<std::string> rigidBodyReplay;             // --bench, or an applied profile
-    std::optional<std::int64_t> rigidBodyDtNs;              // from an applied profile
-    std::optional<std::string> rigidBodyBackend;            // from an applied profile
-    std::optional<std::string> appliedTireModel;            // vehicle_dynamics.tire_model
-    std::optional<openscenario::Scenario> scenario;         // --scenario
-    SignalId scenarioState, scenarioTime;                   // its runner's, when it has one
-    bool scenarioEnded{false};                              // logged once
-    std::optional<std::int64_t> electricalDtNs;             // from an applied profile
+    std::shared_ptr<mavlink::ArduPilotLink> ardupilotLink;       // ArduPilot's, likewise
+    std::optional<bool> speedPrediction;                         // from an applied profile
+    std::optional<std::string> electricalFidelity;               // from an applied profile
+    std::optional<std::string> rigidBodyReplay;                  // --bench, or an applied profile
+    std::optional<std::int64_t> rigidBodyDtNs;                   // from an applied profile
+    std::optional<std::string> rigidBodyBackend;                 // from an applied profile
+    std::optional<std::string> appliedTireModel;                 // vehicle_dynamics.tire_model
+    std::optional<openscenario::Scenario> scenario;              // --scenario
+    std::vector<PluginModule> plugins;                           // --plugin (RFC 0008)
+    std::map<std::string, std::string> appliedSubstituteTokens;  // from an applied profile
+    std::vector<ProfileSettings::Plugin> appliedPlugins;         // its plugins' config
+    SignalId scenarioState, scenarioTime;                        // its runner's, when it has one
+    bool scenarioEnded{false};                                   // logged once
+    std::optional<std::int64_t> electricalDtNs;                  // from an applied profile
     std::optional<ProfileSettings> pending;  // applied without restart: used at the next reset
 
     Status build() {
@@ -3658,6 +3732,14 @@ struct Server::Impl {
                 context.substitutes[row.domain].insert("replay");  // bench mode
             }
         }
+        for (const PluginModule& module : plugins) {
+            if (module.substitute) {
+                context.substitutes[module.domain].insert(module.name);
+            } else if (module.domain == "rigid_body") {
+                context.rigidBodyBackends.insert(module.name);
+            }
+        }
+        context.pluginLibraries.insert(options.plugins.begin(), options.plugins.end());
         return context;
     }
 
@@ -3794,6 +3876,10 @@ struct Server::Impl {
         appliedRotorAero = settings.rotorAero;
         appliedWeather = settings.weather;
         appliedEmiCoupling = settings.emiCoupling;
+        const auto previousTokens = appliedSubstituteTokens;
+        const auto previousPlugins = appliedPlugins;
+        appliedSubstituteTokens = settings.substituteTokens;
+        appliedPlugins = settings.plugins;
         pending.reset();
         if (Status status = restart(); !status.ok()) {
             // Keep the run going on the profile it had.
@@ -3806,6 +3892,8 @@ struct Server::Impl {
             electricalFidelity = previous.electricalFidelity;
             rigidBodyReplay = previous.rigidBodyReplay;
             appliedAmbientK = previousAmbient;
+            appliedSubstituteTokens = previousTokens;
+            appliedPlugins = previousPlugins;
             (void)restart();
             return status;
         }
@@ -4826,6 +4914,35 @@ Status Server::load() {
                                                        v1::LOG_LEVEL_WARN, v1::LOG_LEVEL_ERROR};
             s.log(kLevels[static_cast<int>(level)], std::string(source), std::string(text));
         });
+    // Plugins (RFC 0008): loaded once, at start, from what the person starting the server named.
+    auto loaded = loadPlugins(s.options.plugins);
+    if (!loaded) {
+        return Status::error(StatusCode::InvalidConfig, loaded.error());
+    }
+    s.plugins = std::move(*loaded);
+    for (const PluginModule& module : s.plugins) {
+        const std::string role =
+            !isBuiltInDomain(module.domain)
+                ? "its own domain; --domain " + module.domain + "=off turns it off"
+            : module.substitute
+                ? "a substitute: domains." + module.domain + ".substitute: " + module.name
+            : module.domain == "rigid_body"
+                ? "a rigid body backend: --physics " + module.name
+                : "not used: a built-in domain takes plugin substitutes and, for rigid_body, "
+                  "backends";
+        s.log(v1::LOG_LEVEL_INFO, "plugins",
+              module.domain + "/" + module.name + " from " + module.path + " (" + role + ")" +
+                  (module.deterministic ? "" : "; not deterministic"));
+    }
+    for (const std::string& domain : s.options.substituted) {
+        if (!isBuiltInDomain(domain) &&
+            std::ranges::none_of(s.plugins, [&domain](const PluginModule& module) {
+                return module.domain == domain;
+            })) {
+            s.log(v1::LOG_LEVEL_WARN, "plugins",
+                  "--domain " + domain + "=off: no module has that domain");
+        }
+    }
     if (!s.options.replayPath.empty()) {
         if (Status status = s.loadReplay(); !status.ok()) {
             return status;

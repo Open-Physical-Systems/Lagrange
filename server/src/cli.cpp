@@ -100,9 +100,32 @@ std::optional<fs::path> findStage(const std::string& stage, const fs::path& prof
     return std::nullopt;
 }
 
-/// Points the run at the profile's stage. Returns the error, if any.
+/// The profile's plugin libraries (RFC 0008): a profile read at start loads them.
+std::vector<std::string> pluginsOf(const std::string& yaml) {
+    std::vector<std::string> libraries;
+    try {
+        const YAML::Node root = YAML::Load(yaml);
+        if (root.IsMap() && root["plugins"] && root["plugins"].IsSequence()) {
+            for (const YAML::Node& entry : root["plugins"]) {
+                if (entry.IsMap() && entry["library"] && entry["library"].IsScalar()) {
+                    libraries.push_back(entry["library"].as<std::string>());
+                }
+            }
+        }
+    } catch (const YAML::Exception&) {
+        // checkProfile reports the parse error with its position.
+    }
+    return libraries;
+}
+
+/// Points the run at the profile's stage and loads its plugins. Returns the error, if any.
 std::optional<std::string> useStage(CommandLine& line, const std::string& yaml,
                                     const fs::path& profile) {
+    for (std::string& library : pluginsOf(yaml)) {
+        if (std::ranges::find(line.options.plugins, library) == line.options.plugins.end()) {
+            line.options.plugins.push_back(std::move(library));
+        }
+    }
     const std::string stage = stageOf(yaml);
     if (stage.empty()) {
         return std::nullopt;

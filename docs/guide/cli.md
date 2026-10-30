@@ -77,6 +77,29 @@ lowest collision shape just above z.
   are, where they were spawned.
 - Any robot can be deleted, the one the simulator started with too; the world's scenery cannot.
 
+## Plugins
+
+A plugin is a shared library built against the C ABI (`lagrange_plugin.h`, RFC 0001 and 0008)
+that holds one or more modules. Load it when the server starts:
+
+```bash
+lagrange --plugin libacme_sonar.so            # a path
+lagrange --plugin acme_sonar                  # lib<name>.so in $LAGRANGE_PLUGIN_PATH, then the
+                                              # lagrange_plugins resource of a colcon package
+lagrange run profile.yaml                     # with plugins: [{library: acme_sonar, config: {...}}]
+```
+
+What a module does depends on its domain:
+
+- **a domain of its own** (`acme_sonar`): it runs in every run; `--domain acme_sonar=off` turns it
+  off. Its settings are the profile's `plugins[].config` (`config_get_real`, `config_get_string`);
+- **a built-in domain, as a substitute**: the profile names it, `electrical: {enabled: false,
+  substitute: acme_bench}`;
+- **`rigid_body`, as a backend**: `--physics NAME` or `rigid_body: {backend: NAME}`.
+
+The server logs every module it loaded and what it is for. A profile applied from the viewer can
+configure loaded plugins but never load one.
+
 ## Profiles and stages
 
 A profile (RFC 0005) chooses which domains run, which substitutes replace the others, and the

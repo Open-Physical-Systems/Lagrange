@@ -296,7 +296,7 @@ TEST(Backends, AProfileChoosesTheBackend) {
     ASSERT_TRUE(server->stepUntil(SimTime{1'000'000'000}).ok());
     const Status physx = server->applyProfile(profile("physx"));
     ASSERT_FALSE(physx.ok());
-    EXPECT_NE(physx.message.find("mujoco and jolt"), std::string::npos) << physx.message;
+    EXPECT_NE(physx.message.find("jolt, mujoco"), std::string::npos) << physx.message;
 }
 
 TEST(Backends, JoltRunsAreDeterministicThroughTheServer) {

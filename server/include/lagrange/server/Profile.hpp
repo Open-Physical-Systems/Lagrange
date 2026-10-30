@@ -26,6 +26,11 @@ struct ProfileContext {
     /// Weather keys known without the profile (--weather, a WeatherAPI_1 prim): a profile that
     /// runs the weather must give the rest of temperature, pressure and relative_humidity.
     std::set<std::string> weatherKnown;
+    /// The rigid body backends this server has: mujoco, jolt and the loaded plugins' (RFC 0008).
+    std::set<std::string> rigidBodyBackends{"jolt", "mujoco"};
+    /// The plugin libraries loaded at start, by the name the command line or profile gave and by
+    /// resolved path: a profile can only name these (a viewer never loads code, RFC 0008 §1).
+    std::set<std::string> pluginLibraries;
 };
 
 /// The settings of a valid profile that the server applies.
@@ -57,6 +62,16 @@ struct ProfileSettings {
     /// domains.vehicle_dynamics.tire_model: pacejka or linear.
     std::optional<std::string> tireModel;
     std::optional<double> realTimeFactor;  // time.real_time_factor (0: as fast as possible)
+    /// domains.<d>.substitute of each disabled domain that names one: a plugin substitute is
+    /// picked by its module name (RFC 0008 §1).
+    std::map<std::string, std::string> substituteTokens;
+    /// plugins: each library as given and its config (free-form; what the plugin's modules read
+    /// with config_get_real and config_get_string).
+    struct Plugin {
+        std::string library;
+        std::map<std::string, ConfigValue, std::less<>> config;
+    };
+    std::vector<Plugin> plugins;
 };
 
 struct ProfileIssue {
