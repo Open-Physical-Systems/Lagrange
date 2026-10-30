@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft (2026-10-30), for the owner's review |
+| Status | Accepted (2026-10-30) by the owner, with the proposed answer to each unresolved question; gated merges of its steps pre-approved |
 | Created | 2026-10-30 |
 | Affects | `core/plugin_abi/` (ABI 1.1, additions only), `server/`, `profiles/schema.json` (additions), `schemas/sensor/` (one new schema), `io/importers/`, `bridges/ros2/`, `docs/guide/` |
 | Builds on | RFC 0001 (module interface, C ABI), RFC 0005 (profiles), RFC 0007 (the 1.x freeze) |
@@ -220,7 +220,9 @@ ABI, with no new dependency.
 | Write a Lagrange physics engine | Years of work against mature open engines (invariant 12); the plugin path lets whoever needs a special solver bring it |
 | Expose USD to plugins | Invariant 5: USD is for authoring; plugins read the flat tables |
 
-## Unresolved questions
+## Resolutions on acceptance (2026-10-30)
+
+The owner accepted this RFC with the proposed answer to each question below.
 
 1. **Hit details.** Should `lagrange_ray_hit` also carry the surface normal and the material
    (`SensorMaterialAPI_1` reflectivity)? Proposed: yes, appended in this RFC if the caster can give
