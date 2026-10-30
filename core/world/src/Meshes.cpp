@@ -181,6 +181,7 @@ void appendModel(Model& model, const Model& other) {
         w.joints.effortLimit.back() = o.joints.effortLimit[j];
         w.joints.velocityLimit.back() = o.joints.velocityLimit[j];
         w.joints.armature.back() = o.joints.armature[j];
+        w.joints.initialPosition.back() = o.joints.initialPosition[j];
     }
     for (std::size_t c = 0; c < o.colliders.body.size(); ++c) {
         if (o.colliders.body[c] == kWorldBody && o.colliders.shape[c] == ShapeType::Plane) {

@@ -455,22 +455,9 @@ Bridge::Bridge(BridgeSettings settings)
     if (!settings_.controllersOwnState) {
         s.jointStates = s.node->create_publisher<sensor_msgs::msg::JointState>("/joint_states", 10);
     }
-    if (!settings_.baseLink.empty()) {
-        s.groundTruth = s.node->create_publisher<nav_msgs::msg::Odometry>("/ground_truth/odom", 10);
-    }
-    if (!settings_.baseLink.empty() && !settings_.controllersOwnState) {
-        s.odom = s.node->create_publisher<nav_msgs::msg::Odometry>("/odom", 10);
-    }
     s.tf = s.node->create_publisher<tf2_msgs::msg::TFMessage>("/tf", rclcpp::QoS(100));
     s.tfStatic = s.node->create_publisher<tf2_msgs::msg::TFMessage>(
         "/tf_static", rclcpp::QoS(1).transient_local().reliable());
-    if (!settings_.robotDescription.empty()) {
-        s.description = s.node->create_publisher<std_msgs::msg::String>(
-            "/robot_description", rclcpp::QoS(1).transient_local().reliable());
-        std_msgs::msg::String text;
-        text.data = settings_.robotDescription;
-        s.description->publish(text);
-    }
     if (settings_.controllersOwnState) {
         // diff_drive_controller (or another) takes the commands.
     } else if (settings_.stampedCmdVel) {
@@ -481,14 +468,39 @@ Bridge::Bridge(BridgeSettings settings)
         s.cmdVel = s.node->create_subscription<geometry_msgs::msg::Twist>(
             "/cmd_vel", 10, [&s](const geometry_msgs::msg::Twist& twist) { s.take(twist); });
     }
-    if (settings_.ackermannCmd && !settings_.controllersOwnState) {
+    setRobot(settings_.baseLink, settings_.robotDescription, settings_.ackermannCmd);
+    s.executor.add_node(s.node);
+    s.spinner = std::thread([&s] { s.executor.spin(); });
+}
+
+void Bridge::setRobot(const std::string& baseLink, const std::string& robotDescription,
+                      bool ackermannCmd) {
+    Impl& s = *impl_;
+    settings_.baseLink = baseLink;
+    settings_.robotDescription = robotDescription;
+    settings_.ackermannCmd = ackermannCmd;
+    // Topics come when a robot needs them and stay: subscribers keep their connections.
+    if (!baseLink.empty() && !s.groundTruth) {
+        s.groundTruth = s.node->create_publisher<nav_msgs::msg::Odometry>("/ground_truth/odom", 10);
+    }
+    if (!baseLink.empty() && !settings_.controllersOwnState && !s.odom) {
+        s.odom = s.node->create_publisher<nav_msgs::msg::Odometry>("/odom", 10);
+    }
+    if (!robotDescription.empty()) {
+        if (!s.description) {
+            s.description = s.node->create_publisher<std_msgs::msg::String>(
+                "/robot_description", rclcpp::QoS(1).transient_local().reliable());
+        }
+        std_msgs::msg::String text;
+        text.data = robotDescription;
+        s.description->publish(text);
+    }
+    if (ackermannCmd && !settings_.controllersOwnState && !s.ackermannCmd) {
         s.ackermannCmd = s.node->create_subscription<ackermann_msgs::msg::AckermannDriveStamped>(
             "/ackermann_cmd", 10, [&s](const ackermann_msgs::msg::AckermannDriveStamped& drive) {
                 s.take(CmdVel{drive.drive.speed, 0.0, 0.0, 0.0, drive.drive.steering_angle});
             });
     }
-    s.executor.add_node(s.node);
-    s.spinner = std::thread([&s] { s.executor.spin(); });
 }
 
 Bridge::~Bridge() {
@@ -1115,6 +1127,22 @@ rclcpp::ServiceBase::SharedPtr unsupported(rclcpp::Node& node, const std::string
                                     });
 }
 
+/// From a SpawnEntity request, or one of SpawnEntities' (the same fields).
+template <typename Message>
+SpawnRequest spawnRequest(const Message& in) {
+    SpawnRequest out;
+    out.name = in.name;
+    out.allowRenaming = in.allow_renaming;
+    out.uri = in.entity_resource.uri;
+    out.resource = in.entity_resource.resource_string;
+    out.entityNamespace = in.entity_namespace;
+    out.frame = in.initial_pose.header.frame_id;
+    const geometry_msgs::msg::Pose& p = in.initial_pose.pose;
+    out.pose.position = {p.position.x, p.position.y, p.position.z};
+    out.pose.orientation = {p.orientation.w, p.orientation.x, p.orientation.y, p.orientation.z};
+    return out;
+}
+
 si::msg::EntityState stateMessage(const EntityMotion& motion, SimTime now,
                                   const std::array<double, 3>& offset) {
     si::msg::EntityState state;
@@ -1165,10 +1193,19 @@ void Bridge::serveSimulation(SimulationHandler& handler) {
                 SimulatorFeatures::SIMULATION_STATE_PAUSE,
                 SimulatorFeatures::STEP_SIMULATION_SINGLE,
                 SimulatorFeatures::STEP_SIMULATION_MULTIPLE,
+                SimulatorFeatures::SPAWNING,
+                SimulatorFeatures::SPAWNING_RESOURCE_STRING,
+                SimulatorFeatures::SPAWNING_ENTITIES,
+                SimulatorFeatures::DELETING,
+                SimulatorFeatures::SIMULATION_RESET_SPAWNED,
             };
+            response->features.spawn_formats = {"urdf", "sdf", "mjcf", "usd"};
             response->features.custom_info =
-                "Lagrange: entities are the robot and the fixed scenery objects; a step is one "
-                "base tick of the scheduler; reset restarts time and state together.";
+                "Lagrange: entities are the robots and the fixed scenery objects; a step is one "
+                "base tick of the scheduler; reset restarts time and state together. A robot "
+                "spawned into a run without one is the robot ROS drives; later ones are passive. "
+                "Spawning or deleting rebuilds the run: time and poses go on, velocities start "
+                "from rest.";
         }));
 
     s.services.push_back(node.create_service<si::srv::GetSimulationState>(
@@ -1216,8 +1253,8 @@ void Bridge::serveSimulation(SimulationHandler& handler) {
             const std::uint8_t scope = request->scope;
             const std::uint8_t timeAndState = Reset::SCOPE_TIME | Reset::SCOPE_STATE;
             if (scope == Reset::SCOPE_SPAWNED) {
-                // Nothing can be spawned yet, so there is nothing to remove.
-                response->result.result = si::msg::Result::RESULT_OK;
+                const auto outcome = s.onMain([h] { return h->removeSpawned(); });
+                outcome ? setResult(response->result, *outcome) : timedOut(response->result);
                 return;
             }
             if (scope != Reset::SCOPE_DEFAULT && (scope & timeAndState) != timeAndState) {
@@ -1323,13 +1360,50 @@ void Bridge::serveSimulation(SimulationHandler& handler) {
             }
             setResult(response->result, {SimResult::NotFound, "no entity named '" + name + "'"});
         }));
-    const std::string noSpawning = "spawning and deleting entities is not supported yet";
+    s.services.push_back(node.create_service<si::srv::SpawnEntity>(
+        "spawn_entity", [&s, h](const std::shared_ptr<si::srv::SpawnEntity::Request>& request,
+                                const std::shared_ptr<si::srv::SpawnEntity::Response>& response) {
+            const SpawnRequest asked = spawnRequest(*request);
+            const auto spawned = s.onMain([h, asked] { return h->spawn(asked); });
+            if (!spawned) {
+                timedOut(response->result);
+                return;
+            }
+            setResult(response->result, spawned->outcome);
+            response->entity_name = spawned->entityName;
+        }));
+    s.services.push_back(node.create_service<si::srv::SpawnEntities>(
+        "spawn_entities",
+        [&s, h](const std::shared_ptr<si::srv::SpawnEntities::Request>& request,
+                const std::shared_ptr<si::srv::SpawnEntities::Response>& response) {
+            bool failed = false;
+            for (const auto& one : request->spawn_requests) {
+                const SpawnRequest asked = spawnRequest(one);
+                const auto spawned = s.onMain([h, asked] { return h->spawn(asked); });
+                si::msg::SpawnResult& result = response->results.emplace_back();
+                if (!spawned) {
+                    timedOut(result.result);
+                } else {
+                    setResult(result.result, spawned->outcome);
+                    result.entity_name = spawned->entityName;
+                }
+                failed = failed || result.result.result != si::msg::Result::RESULT_OK;
+            }
+            response->result.result = failed
+                                          ? si::srv::SpawnEntities::Response::ENTITIES_SPAWN_FAILED
+                                          : si::msg::Result::RESULT_OK;
+        }));
+    s.services.push_back(node.create_service<si::srv::DeleteEntity>(
+        "delete_entity", [&s, h](const std::shared_ptr<si::srv::DeleteEntity::Request>& request,
+                                 const std::shared_ptr<si::srv::DeleteEntity::Response>& response) {
+            const std::string name = request->entity;
+            const auto outcome = s.onMain([h, name] { return h->remove(name); });
+            outcome ? setResult(response->result, *outcome) : timedOut(response->result);
+        }));
     const std::string noWorlds = "this server runs the world it was started with";
     const std::string noEditing = "entity state and info are read-only in this version";
-    s.services.push_back(unsupported<si::srv::SpawnEntity>(node, "spawn_entity", noSpawning));
-    s.services.push_back(unsupported<si::srv::SpawnEntities>(node, "spawn_entities", noSpawning));
-    s.services.push_back(unsupported<si::srv::DeleteEntity>(node, "delete_entity", noSpawning));
-    s.services.push_back(unsupported<si::srv::GetSpawnables>(node, "get_spawnables", noSpawning));
+    s.services.push_back(unsupported<si::srv::GetSpawnables>(
+        node, "get_spawnables", "spawn any URDF, SDFormat, MJCF or USD file by its path"));
     s.services.push_back(unsupported<si::srv::SetEntityState>(node, "set_entity_state", noEditing));
     s.services.push_back(unsupported<si::srv::SetEntityInfo>(node, "set_entity_info", noEditing));
     s.services.push_back(unsupported<si::srv::GetEntityBounds>(

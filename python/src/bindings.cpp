@@ -29,20 +29,13 @@ namespace {
 /// One run, without ROS and without viewers, stepped only when Python asks.
 class Simulation {
 public:
-    Simulation(const std::string& robot, const std::optional<std::string>& world,
+    Simulation(const std::optional<std::string>& robot, const std::optional<std::string>& world,
                const std::optional<std::string>& profile, const std::string& lidar,
                const std::optional<std::vector<double>>& spawn) {
         lagrange::server::ServerOptions options;
-        options.robotPath = robot;
+        options.robotPath = robot.value_or("");  // None: an empty run to spawn robots into
         if (spawn) {
-            // x, y[, z[, yaw]] in world ENU, as --spawn.
-            if (spawn->size() < 2 || spawn->size() > 4) {
-                throw std::invalid_argument("spawn is (x, y[, z[, yaw]])");
-            }
-            options.spawn.position = {(*spawn)[0], (*spawn)[1],
-                                      spawn->size() > 2 ? (*spawn)[2] : 0.0};
-            const double yaw = spawn->size() > 3 ? (*spawn)[3] : 0.0;
-            options.spawn.orientation = {std::cos(yaw / 2.0), 0.0, 0.0, std::sin(yaw / 2.0)};
+            options.spawn = poseOf(*spawn, "spawn");
         }
         options.worldPath = world.value_or("");
         options.ros = false;
@@ -88,6 +81,21 @@ public:
         }
     }
 
+    std::string spawnRobot(const std::string& path, const std::string& name,
+                           const std::vector<double>& at) {
+        auto spawned = server_->spawnRobot(path, name, poseOf(at, "at"));
+        if (!spawned) {
+            throw std::runtime_error(spawned.error().message);
+        }
+        return *spawned;
+    }
+
+    void removeRobot(const std::string& name) {
+        if (const lagrange::Status status = server_->removeRobot(name); !status.ok()) {
+            throw std::runtime_error(status.message);
+        }
+    }
+
     [[nodiscard]] double time() const { return server_->now().seconds(); }
 
     [[nodiscard]] std::vector<double> read(const std::string& name) const {
@@ -127,6 +135,18 @@ public:
     }
 
 private:
+    /// x, y[, z[, yaw]] in world ENU, as --spawn.
+    static lagrange::Pose poseOf(const std::vector<double>& xyzYaw, const char* what) {
+        if (xyzYaw.size() < 2 || xyzYaw.size() > 4) {
+            throw std::invalid_argument(std::string(what) + " is (x, y[, z[, yaw]])");
+        }
+        lagrange::Pose pose;
+        pose.position = {xyzYaw[0], xyzYaw[1], xyzYaw.size() > 2 ? xyzYaw[2] : 0.0};
+        const double yaw = xyzYaw.size() > 3 ? xyzYaw[3] : 0.0;
+        pose.orientation = {std::cos(yaw / 2.0), 0.0, 0.0, std::sin(yaw / 2.0)};
+        return pose;
+    }
+
     /// The profile's `stage:` line, so that the profile applies to the robot given here.
     static std::string stageOf(const std::string& yaml) {
         std::istringstream lines(yaml);
@@ -157,11 +177,17 @@ NB_MODULE(_lagrange, m) {
     nb::class_<Simulation>(m, "Simulation",
                            "A run without ROS or viewers, stepped from Python. The robot and "
                            "world are URDF, SDFormat, MJCF or USD files.")
-        .def(nb::init<const std::string&, const std::optional<std::string>&,
+        .def(nb::init<const std::optional<std::string>&, const std::optional<std::string>&,
                       const std::optional<std::string>&, const std::string&,
                       const std::optional<std::vector<double>>&>(),
              "robot"_a, "world"_a = nb::none(), "profile"_a = nb::none(), "lidar"_a = "cpu",
              "spawn"_a = nb::none())
+        .def("spawn", &Simulation::spawnRobot, "path"_a, "name"_a = "",
+             "at"_a = std::vector<double>{0.0, 0.0},
+             "Add a robot to the run at (x, y[, z[, yaw]]); returns its entity name. In a run "
+             "without a robot (robot=None) it is the robot; later ones are passive. Time and "
+             "poses go on; velocities start from rest.")
+        .def("delete", &Simulation::removeRobot, "name"_a, "Take a robot out of the run.")
         .def("step_until", &Simulation::stepUntil, "seconds"_a,
              "Advance to this simulated time (s), as fast as possible.")
         .def_prop_ro("time", &Simulation::time, "Simulated time (s).")

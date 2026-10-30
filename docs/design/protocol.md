@@ -485,6 +485,10 @@ message ImportRobot {
   repeated string xacro_args = 5;
 }
 message OpenRecording { string path = 1; }
+// ImportRobot on lagrange_server (can_import): the robot at `path` is spawned into the running
+// simulation, as simulation_interfaces' spawn_entity does (docs/guide/cli.md "Spawning
+// robots"); the result carries the path in imported_stage_path. `content`, `overlay_path` and
+// `xacro_args` are refused for now.
 
 message ValidateProfile { string yaml = 1; }
 message ApplyProfile { string yaml = 1; bool restart = 2; }

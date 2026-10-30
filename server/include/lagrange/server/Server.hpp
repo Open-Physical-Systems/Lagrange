@@ -19,7 +19,9 @@ namespace lagrange::server {
 
 struct ServerOptions {
     proto::Endpoint endpoint;
-    std::string robotPath;  // URDF of the robot to simulate
+    /// The robot to simulate (URDF, SDFormat, MJCF or USD); empty: none, an empty run that
+    /// robots are spawned into (Server::spawnRobot, simulation_interfaces' spawn_entity).
+    std::string robotPath;
     std::string worldPath;  // URDF of static scenery (root link "world"); empty = none
     /// Overlay file applied to the robot (docs/design/formats.md §9: motors, battery, bus);
     /// empty = none
@@ -163,6 +165,16 @@ public:
     [[nodiscard]] std::vector<SignalEntry> signals() const;
     /// After load(): the latest value of a signal; empty for an unknown name.
     [[nodiscard]] std::vector<double> read(const std::string& name) const;
+    /// After load(): adds a robot to the run (URDF, SDFormat, MJCF or USD) at `spawn` (world
+    /// ENU, as --spawn) and returns its entity name ("/name"). In a run without a robot it
+    /// becomes the robot (ROS drives it); otherwise it is passive, its names prefixed with
+    /// `name` (as --add-robot). The run is rebuilt: time goes on, every body keeps its pose and
+    /// (MuJoCo) every joint its position, velocities start from rest. `name` empty: from the
+    /// file name, made unique.
+    Expected<std::string, Status> spawnRobot(const std::string& path, const std::string& name,
+                                             const Pose& spawn);
+    /// After load(): takes a robot out of the run by its entity name, rebuilt likewise.
+    Status removeRobot(const std::string& name);
     /// After load(): the simulated time.
     [[nodiscard]] SimTime now() const;
     /// After load(): the world (bodies, joints, colliders, sensors) as loaded.

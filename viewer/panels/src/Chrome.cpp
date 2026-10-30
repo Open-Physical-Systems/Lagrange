@@ -301,7 +301,8 @@ void drawMenuBar(PanelContext& context) {
         ImGui::EndMenu();
     };
     if (menu("File")) {
-        if (ImGui::MenuItem("Open robot or recording...", "Ctrl+O", false, context.canOpenFiles)) {
+        if (ImGui::MenuItem("Add robot or open recording...", "Ctrl+O", false,
+                            context.canOpenFiles)) {
             context.openFileRequested = true;
         }
         if (ImGui::MenuItem("Disconnect and show the launcher")) {

@@ -761,6 +761,37 @@ Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
     return {};
 }
 
+Robot emptyModel(const LoadOptions& options) {
+    Robot robot;
+    robot.world.addCollider(kWorldBody, ShapeType::Plane, {0.0, 0.0, 1.0}, Pose{},
+                            options.groundFriction);
+    addGroundPrim(robot);
+    return robot;
+}
+
+void renameRobot(Robot& robot, const std::string& name) {
+    const auto rename = [&name](std::string& path) {
+        const std::size_t second = path.find('/', 1);
+        path = "/" + name + (second == std::string::npos ? "" : path.substr(second));
+    };
+    for (ScenePrim& prim : robot.scene.prims) {
+        if (prim.name == "ground" && prim.parent == kNoIndex) {
+            continue;
+        }
+        rename(prim.path);
+        if (prim.parent == kNoIndex) {
+            prim.name = name;
+        }
+    }
+    for (std::string& path : robot.world.prims.paths) {
+        rename(path);
+    }
+    if (robot.world.robots.size() <= 1) {
+        robot.world.robots = {name};
+    }
+    robot.name = name;
+}
+
 Expected<Robot, std::string> loadUrdf(const std::string& path, const LoadOptions& options) {
     Robot robot;
     robot.sourcePath = path;

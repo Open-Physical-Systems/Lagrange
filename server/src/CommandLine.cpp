@@ -86,7 +86,8 @@ CommandLine defaultCommandLine() {
 void printServerOptions(std::FILE* out) {
     std::fprintf(
         out,
-        "  --robot   URDF, SDFormat, MJCF or USD to simulate (default: the sample AMR)\n"
+        "  --robot   URDF, SDFormat, MJCF or USD to simulate, or none to start without a\n"
+        "            robot and spawn one later (default: the sample AMR)\n"
         "  --world   fixed scenery in any of those formats, or none (default: the sample\n"
         "            warehouse)\n"
         "  --overlay FILE.yaml  apply schemas (motors, battery, bus) to the robot, or\n"
@@ -169,9 +170,9 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
         } else if (arg == "--robot") {
             const char* path = value();
             if (path == nullptr) {
-                return "--robot needs a file";
+                return "--robot needs a file, or none";
             }
-            options.robotPath = path;
+            options.robotPath = std::string_view(path) == "none" ? "" : path;
             out.robotGiven = true;
         } else if (arg == "--world") {
             const char* path = value();
@@ -488,7 +489,7 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             return "unknown option " + std::string(arg);
         }
     }
-    if (options.robotPath.empty()) {
+    if (options.robotPath.empty() && !out.robotGiven) {
         return "no --robot given and lagrange_assets is not installed";
     }
     if (thermalAsked && !options.ambientTemperatureK) {
@@ -509,7 +510,9 @@ int serve(CommandLine& line, int argc, char** argv, const std::string* profileYa
     ServerOptions& options = line.options;
     if (!line.exportMap.empty()) {
         // Only the fixed scenery is mapped; the robot is loaded for its frame of reference.
-        auto robot = loadModel(options.robotPath, {.spawn = options.spawn});
+        auto robot = options.robotPath.empty()
+                         ? Expected<Robot, std::string>(emptyModel())
+                         : loadModel(options.robotPath, {.spawn = options.spawn});
         if (robot && !options.worldPath.empty()) {
             if (auto added = addModel(*robot, options.worldPath); !added) {
                 std::fprintf(stderr, "%s: %s\n", program, added.error().c_str());

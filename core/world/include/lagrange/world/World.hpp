@@ -144,6 +144,9 @@ struct World {
         /// Inertia added at the joint by what drives it: a motor's rotor reflected through its
         /// gear, N²·J_rotor (kg·m², or kg for a slide). Physics adds it to the joint's mass.
         std::vector<double> armature;
+        /// Where the joint starts, rad or m (0 by default): a run rebuilt mid-way, when robots
+        /// are spawned or deleted, starts the others' joints where they were.
+        std::vector<double> initialPosition;
         std::vector<PrimId> prim;
         std::vector<bool> actuated;  // a motor or controller drives it
     } joints;

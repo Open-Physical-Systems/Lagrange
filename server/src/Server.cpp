@@ -8,6 +8,7 @@
 #include "lagrange/importers/Importers.hpp"
 #include "lagrange/mavlink/ArduPilotJson.hpp"
 #include "lagrange/mavlink/Px4Lockstep.hpp"
+#include "lagrange/meshes/MeshImport.hpp"
 #include "lagrange/opendrive/OpenDrive.hpp"
 #include "lagrange/openscenario/Scenario.hpp"
 #include "lagrange/proto/Connection.hpp"
@@ -50,7 +51,9 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
+#include <limits>
 #include <map>
 #include <memory>
 #include <numbers>
@@ -60,6 +63,7 @@
 #include <span>
 #include <sstream>
 #include <string>
+#include <tinyxml2.h>
 #include <tuple>
 #include <unistd.h>
 #include <utility>
@@ -2002,7 +2006,13 @@ struct Server::Impl {
 
     /// The stage as profiles name it (ServerOptions::stageName).
     std::string stageName() const {
-        return options.stageName.empty() ? robot.sourcePath : options.stageName;
+        if (!options.stageName.empty()) {
+            return options.stageName;
+        }
+        if (!robot.sourcePath.empty()) {
+            return robot.sourcePath;
+        }
+        return options.worldPath.empty() ? "none" : options.worldPath;  // a run without a robot
     }
 
     std::string profileYaml() const {
@@ -2271,6 +2281,7 @@ struct Server::Impl {
         v1::Capabilities& caps = *hello.mutable_capabilities();
         caps.set_can_step(true);
         caps.set_can_seek(replay.has_value());
+        caps.set_can_import(!replay.has_value());  // ImportRobot spawns into the run
         caps.set_tier(0);
         session.send(reply);
         session.greeted = true;
@@ -2428,6 +2439,28 @@ struct Server::Impl {
                 r.set_ok(false);
                 r.set_error("moving prims is not supported by this server yet");
                 break;
+            case v1::Command::kImportRobot: {
+                const v1::ImportRobot& request = command.import_robot();
+                if (request.path().empty()) {
+                    r.set_ok(false);
+                    r.set_error("name the robot file by its path on the server's machine");
+                    break;
+                }
+                if (!request.overlay_path().empty() || !request.xacro_args().empty()) {
+                    r.set_ok(false);
+                    r.set_error("overlays and xacro arguments are not taken when importing yet");
+                    break;
+                }
+                const ros2::SpawnOutcome outcome =
+                    spawn(request.path(), "", true, importPose(), false);
+                if (outcome.outcome.result != ros2::SimResult::Ok) {
+                    r.set_ok(false);
+                    r.set_error(outcome.outcome.message);
+                } else {
+                    r.set_imported_stage_path(request.path());
+                }
+                break;
+            }
             case v1::Command::kSetRosGraph:
                 session.wantsRosGraph = command.set_ros_graph().enabled();
                 if (session.wantsRosGraph) {
@@ -3083,10 +3116,453 @@ struct Server::Impl {
         return {};
     }
 
+    /// A robot spawned during the run (spawnRobot): loaded again whenever the run is composed.
+    struct Spawned {
+        std::string name;  // its top prim's name, unique in the run
+        std::string path;
+        Pose spawn;             // world ENU, as --spawn
+        bool primary{false};    // spawned into a run without a robot: the one ROS drives
+        bool temporary{false};  // `path` was written from a resource string: removed with it
+    };
+    std::vector<Spawned> spawned;
+    std::optional<Model> scenarioRoads;  // the scenario's road network, when it is the world
+    std::array<double, 3> rosOrigin{};   // world ENU of the ROS world frame: the first region
+    bool composedMidRun{false};          // the model carries poses of a run rebuilt mid-way
+
+    /// The robot ROS drives: the --robot file, or the one spawned into a run without one.
+    [[nodiscard]] const Spawned* spawnedPrimary() const {
+        for (const Spawned& candidate : spawned) {
+            if (candidate.primary) {
+                return &candidate;
+            }
+        }
+        return nullptr;
+    }
+    [[nodiscard]] std::string primaryPath() const {
+        const Spawned* primary = spawnedPrimary();
+        return primary != nullptr ? primary->path : options.robotPath;
+    }
+    /// The robot's root body, for /odom; empty without a robot.
+    [[nodiscard]] std::string baseLink() const {
+        return primaryPath().empty() || robot.world.bodies.names.empty()
+                   ? ""
+                   : robot.world.bodies.names.front();
+    }
+    /// /robot_description is URDF; a robot from another format has none to publish.
+    [[nodiscard]] std::string robotDescription() const {
+        const std::string path = primaryPath();
+        return !path.empty() && importers::formatOf(path) == importers::Format::Urdf
+                   ? readFile(path)
+                   : "";
+    }
+
+    /// The model of the run from its files: the robot (or the bare ground), the scenario's
+    /// roads, the overlay, the other robots (--add-robot, then the spawned ones), the world,
+    /// the scenario's entities and the traffic. `announce` logs what was added (at load).
+    Expected<Robot, Status> composeModel(bool announce) {
+        const auto invalid = [](std::string message) {
+            return Unexpected{Status::error(StatusCode::InvalidConfig, std::move(message))};
+        };
+        Robot model;
+        const Spawned* primary = spawnedPrimary();
+        if (primary != nullptr) {
+            auto loaded = loadModel(primary->path, {.spawn = primary->spawn});
+            if (!loaded) {
+                return invalid(primary->name + ": " + loaded.error());
+            }
+            model = std::move(*loaded);
+            renameRobot(model, primary->name);
+        } else if (!options.robotPath.empty()) {
+            auto loaded = loadModel(options.robotPath, {.spawn = options.spawn});
+            if (!loaded) {
+                return invalid(loaded.error());
+            }
+            model = std::move(*loaded);
+        } else {
+            model = emptyModel();
+        }
+        if (scenarioRoads) {
+            appendModel(model, *scenarioRoads);
+        }
+        if (!options.robotPath.empty() && !options.overlayPath.empty()) {
+            if (auto applied = stage::applyOverlay(model, options.overlayPath); !applied) {
+                return invalid(applied.error());
+            }
+        }
+        // More robots in the run (huge-worlds.md §3: robots whose bubbles overlap share a region).
+        for (const ServerOptions::ExtraRobot& extra : options.extraRobots) {
+            auto other = loadModel(extra.path, {.spawn = extra.spawn});
+            if (!other) {
+                return invalid(extra.name + ": " + other.error());
+            }
+            prefixModel(*other, extra.name, true);
+            appendModel(model, *other);
+            if (announce) {
+                log(v1::LOG_LEVEL_INFO, "stage",
+                    "robot " + extra.name + " from " + extra.path +
+                        " (passive: nothing drives it)");
+            }
+        }
+        for (const Spawned& passive : spawned) {
+            if (passive.primary) {
+                continue;
+            }
+            auto other = loadModel(passive.path, {.spawn = passive.spawn});
+            if (!other) {
+                return invalid(passive.name + ": " + other.error());
+            }
+            prefixModel(*other, passive.name, true);
+            appendModel(model, *other);
+        }
+        // Motors' rotors turn with their joints: physics gets their reflected inertia.
+        electrical::applyRotorInertia(model.world);
+        // Propellers with a propeller file are drawn as their blades.
+        rotor_aero::addPropellerBlades(model);
+        if (!options.worldPath.empty()) {
+            if (auto added = addModel(model, options.worldPath); !added) {
+                return invalid(added.error());
+            }
+        }
+        if (scenario) {
+            if (auto added = openscenario::addEntities(model, *scenario, options.scenarioEgo);
+                !added) {
+                return invalid(options.scenarioPath + ": " + added.error());
+            }
+            if (announce) {
+                log(v1::LOG_LEVEL_INFO, "scenario",
+                    options.scenarioPath + " · " + std::to_string(scenario->entities.size()) +
+                        " entities, " + options.scenarioEgo + " is the robot");
+            }
+        }
+        // Traffic agents on the world's road lanes, away from the robots (traffic.md); not with
+        // a scenario, which says who is on the road.
+        if (!scenario && !WorldView(model.world).instancesOf("RoadLaneAPI_1").empty() &&
+            options.trafficVehicles + options.trafficPedestrians > 0) {
+            std::vector<traffic::Vec3> robots;
+            for (std::size_t b = 0; b < model.world.bodies.names.size(); ++b) {
+                if (model.world.bodies.parent[b] == kWorldBody) {
+                    robots.push_back(model.bodyRestPose[b].position);
+                }
+            }
+            const auto made = traffic::addAgents(
+                model, {options.trafficVehicles, options.trafficPedestrians, options.trafficSeed},
+                robots);
+            if (announce) {
+                log(v1::LOG_LEVEL_INFO, "traffic",
+                    std::to_string(made[0]) + " vehicles and " + std::to_string(made[1]) +
+                        " pedestrians on the road lanes (seed " +
+                        std::to_string(options.trafficSeed) + ")");
+            }
+        }
+        return model;
+    }
+
+    /// Where the run is, for a rebuild that changes its bodies: the time, the world pose of
+    /// every free root body and the position of every joint, by name.
+    struct Carried {
+        SimTime now;
+        std::map<std::string, Pose> roots;  // world ENU
+        std::map<std::string, double> joints;
+    };
+    [[nodiscard]] Carried carry() const {
+        Carried carried;
+        carried.now = scheduler->now();
+        const SignalBus& bus = scheduler->bus();
+        const World::Bodies& bodies = robot.world.bodies;
+        for (std::size_t b = 0; b < bodies.names.size() && b < bodyPose.size(); ++b) {
+            if (bodies.parent[b] != kWorldBody || !bodyPose[b].valid()) {
+                continue;
+            }
+            const std::span<const double> p = bus.readN(bodyPose[b]);
+            Pose pose{{p[0], p[1], p[2]}, {p[3], p[4], p[5], p[6]}};
+            for (std::size_t i = 0; i < 3; ++i) {
+                pose.position.at(i) += robot.world.region.worldEnu.at(i);
+            }
+            carried.roots.emplace(bodies.names[b], pose);
+        }
+        for (const std::string& name : robot.world.joints.names) {
+            if (const SignalId id = bus.find("joint/" + name + "/position"); id.valid()) {
+                carried.joints.emplace(name, bus.read(id));
+            }
+        }
+        return carried;
+    }
+
+    /// Puts a freshly composed model (world ENU, before recentre) where the run was.
+    static void place(Robot& model, const Carried& carried) {
+        World& world = model.world;
+        const World::Bodies& bodies = world.bodies;
+        std::vector<std::optional<Pose>> moves(bodies.names.size());  // per root: new ∘ old⁻¹
+        for (std::size_t b = 0; b < bodies.names.size(); ++b) {
+            const auto it = carried.roots.find(bodies.names[b]);
+            if (bodies.parent[b] != kWorldBody || it == carried.roots.end()) {
+                continue;
+            }
+            const Pose& old = model.bodyRestPose[b];
+            const std::array<double, 4> back = conjugate(old.orientation);
+            const std::array<double, 3> p = rotate(back, old.position);
+            moves[b] = compose(it->second, Pose{{-p[0], -p[1], -p[2]}, back});
+            world.bodies.poseInParent[b] = it->second;
+        }
+        for (std::size_t b = 0; b < bodies.names.size(); ++b) {
+            std::size_t root = b;
+            while (bodies.parent[root] != kWorldBody) {
+                root = bodies.parent[root].index;
+            }
+            if (moves[root]) {
+                model.bodyRestPose[b] = compose(*moves[root], model.bodyRestPose[b]);
+            }
+        }
+        for (std::size_t j = 0; j < world.joints.names.size(); ++j) {
+            if (const auto it = carried.joints.find(world.joints.names[j]);
+                it != carried.joints.end()) {
+                world.joints.initialPosition[j] = it->second;
+            }
+        }
+    }
+
+    /// Makes a composed model (world ENU) the run's, built and started at `at`.
+    Status install(Robot model, SimTime at) {
+        for (auto& [id, load] : tileLoads) {
+            (void)id;
+            load.wait();
+        }
+        tileLoads.clear();
+        tileQueue.clear();
+        tileContent.clear();
+        tileSelector.reset();
+        robot = std::move(model);
+        shift = recentre(robot);
+        if (Status status = startStreaming(); !status.ok()) {
+            return status;
+        }
+        if (Status status = placeLidar(); !status.ok()) {
+            return status;
+        }
+        placeCameras();
+        if (bridge) {
+            bridge->setRobot(baseLink(), robotDescription(),
+                             !WorldView(robot.world).instancesOf("VehicleAPI_1").empty());
+        }
+        if (Status status = build(); !status.ok()) {
+            return status;
+        }
+        // A whole number of base ticks: the new run's tick may be longer than the old one's.
+        const std::int64_t tick = scheduler->baseTick().ns;
+        return scheduler->startAt(SimTime{(at.ns + tick - 1) / tick * tick});
+    }
+
+    /// Rebuilds the run from its files after the robots changed, where it was. On failure the
+    /// change is undone by `undo` and the run rebuilt as it was.
+    Status recompose(const std::function<void()>& undo) {
+        const Carried carried = carry();
+        auto composed = composeModel(false);
+        Status status = composed ? Status{} : composed.error();
+        if (status.ok()) {
+            place(*composed, carried);
+            stopRecording("the robots changed");
+            status = install(std::move(*composed), carried.now);
+            if (status.ok() && physicsBackend() == "jolt" && !carried.joints.empty()) {
+                log(v1::LOG_LEVEL_WARN, "stage",
+                    "Jolt starts joints at zero: the robots' joints were reset by the rebuild");
+            }
+        }
+        if (!status.ok()) {
+            undo();
+            if (composed) {  // the run was taken down: put the previous one back
+                auto previous = composeModel(false);
+                if (!previous) {
+                    fail(previous.error());
+                    return status;
+                }
+                place(*previous, carried);
+                if (Status back = install(std::move(*previous), carried.now); !back.ok()) {
+                    fail(back);
+                }
+            }
+            return status;
+        }
+        composedMidRun = true;
+        error.clear();
+        owedNs = 0;
+        lastWall = Clock::now();
+        ++catalogGeneration;
+        for (auto& session : sessions) {
+            if (!session->greeted) {
+                continue;
+            }
+            session->subscriptions.clear();
+            session->sensors.clear();
+            session->send(catalog());
+            session->send(snapshot(*session));
+            session->send(profileState({}));  // its stage and domains follow the robots
+        }
+        broadcast(statusEnvelope());
+        return {};
+    }
+
+    [[nodiscard]] static bool validName(std::string_view name) {
+        return !name.empty() &&
+               (std::isalpha(static_cast<unsigned char>(name[0])) != 0 || name[0] == '_') &&
+               std::ranges::all_of(name, [](char c) {
+                   return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+               });
+    }
+    [[nodiscard]] bool nameTaken(const std::string& name) const {
+        return std::ranges::any_of(robot.scene.prims, [&name](const ScenePrim& prim) {
+            return prim.parent == kNoIndex && prim.name == name;
+        });
+    }
+
+    /// spawnRobot, with the simulation_interfaces result code.
+    ros2::SpawnOutcome spawn(const std::string& path, std::string name, bool allowRenaming,
+                             const Pose& at, bool temporary) {
+        using ros2::SimResult;
+        const auto refuse = [&](SimResult code, std::string message) {
+            if (temporary) {
+                std::filesystem::remove(path);
+            }
+            return ros2::SpawnOutcome{{code, std::move(message)}, ""};
+        };
+        if (replay) {
+            return refuse(SimResult::Failed, "a replay shows the recorded robots only");
+        }
+        if (!std::filesystem::is_regular_file(path)) {
+            return refuse(SimResult::ResourceParseError, "no file " + path);
+        }
+        if (importers::formatOf(path) == importers::Format::Unknown && !isUsd(path)) {
+            return refuse(SimResult::UnsupportedFormat,
+                          path + " is not URDF, SDFormat, MJCF or USD (xacro: run xacro first)");
+        }
+        if (!name.empty() && !validName(name)) {
+            return refuse(SimResult::NameInvalid,
+                          "'" + name +
+                              "' is not a valid name: letters, digits and _, not first "
+                              "a digit");
+        }
+        if (name.empty() || nameTaken(name)) {
+            if (!name.empty() && !allowRenaming) {
+                return refuse(SimResult::NameNotUnique, "an entity is already named " + name);
+            }
+            std::string base = name;
+            if (base.empty()) {  // from the file name
+                for (const char c : std::filesystem::path(path).stem().string()) {
+                    base += std::isalnum(static_cast<unsigned char>(c)) != 0 ? c : '_';
+                }
+                if (!validName(base)) {
+                    base = "robot_" + base;
+                }
+            }
+            name = base;
+            for (int n = 2; nameTaken(name); ++n) {
+                name = base + "_" + std::to_string(n);
+            }
+        }
+        const bool primary = primaryPath().empty();
+        spawned.push_back({name, path, at, primary, temporary});
+        if (Status status = recompose([this] {
+                if (spawned.back().temporary) {
+                    std::filesystem::remove(spawned.back().path);
+                }
+                spawned.pop_back();
+            });
+            !status.ok()) {
+            return {{SimResult::ResourceParseError, status.message}, ""};
+        }
+        log(v1::LOG_LEVEL_INFO, "stage",
+            "spawned " + name + " from " + path +
+                (primary ? " (the robot: ROS drives it)" : " (passive: nothing drives it)"));
+        return {{}, "/" + name};
+    }
+
+    /// removeRobot, with the simulation_interfaces result code.
+    ros2::SimOutcome remove(std::string name) {
+        using ros2::SimResult;
+        if (name.starts_with('/')) {
+            name.erase(0, 1);
+        }
+        if (replay) {
+            return {SimResult::Failed, "a replay shows the recorded robots only"};
+        }
+        const auto spawnedAt = std::ranges::find(spawned, name, &Spawned::name);
+        const auto extraAt =
+            std::ranges::find(options.extraRobots, name, &ServerOptions::ExtraRobot::name);
+        const bool startupRobot = spawnedPrimary() == nullptr && !options.robotPath.empty() &&
+                                  !robot.scene.prims.empty() &&
+                                  robot.scene.prims.front().name == name;
+        if (startupRobot || (spawnedAt != spawned.end() && spawnedAt->primary)) {
+            if (controllers) {
+                return {SimResult::Failed, "ros2_control drives " + name +
+                                               ": it stays (start without --ros2-control)"};
+            }
+        }
+        if (spawnedAt != spawned.end()) {
+            const Spawned removed = *spawnedAt;
+            const auto index = spawnedAt - spawned.begin();
+            spawned.erase(spawnedAt);
+            if (Status status =
+                    recompose([&] { spawned.insert(spawned.begin() + index, removed); });
+                !status.ok()) {
+                return {SimResult::Failed, status.message};
+            }
+            if (removed.temporary) {
+                std::filesystem::remove(removed.path);
+            }
+        } else if (extraAt != options.extraRobots.end()) {
+            const ServerOptions::ExtraRobot removed = *extraAt;
+            const auto index = extraAt - options.extraRobots.begin();
+            options.extraRobots.erase(extraAt);
+            if (Status status = recompose([&] {
+                    options.extraRobots.insert(options.extraRobots.begin() + index, removed);
+                });
+                !status.ok()) {
+                return {SimResult::Failed, status.message};
+            }
+        } else if (startupRobot) {
+            const std::string removed = options.robotPath;
+            options.robotPath.clear();
+            if (Status status = recompose([&] { options.robotPath = removed; }); !status.ok()) {
+                return {SimResult::Failed, status.message};
+            }
+        } else {
+            return {SimResult::NotFound,
+                    "no robot named " + name + " (the world's scenery cannot be deleted)"};
+        }
+        log(v1::LOG_LEVEL_INFO, "stage", "deleted " + name);
+        return {};
+    }
+
+    /// Where the viewer's Import robot puts a robot: at the origin of an empty run, else 3 m
+    /// to the side of the robots there are.
+    [[nodiscard]] Pose importPose() const {
+        Pose at;
+        at.position = rosOrigin;
+        at.position[2] = 0.0;
+        double side = -std::numeric_limits<double>::infinity();
+        for (std::size_t b = 0; b < robot.world.bodies.names.size(); ++b) {
+            if (robot.world.bodies.parent[b] == kWorldBody && b < bodyPose.size() &&
+                bodyPose[b].valid()) {
+                side = std::max(side, scheduler->bus().readN(bodyPose[b])[1]);
+            }
+        }
+        if (std::isfinite(side)) {
+            at.position[1] = side + robot.world.region.worldEnu[1] + 3.0;
+        }
+        return at;
+    }
+
     Status restart() {
         stopRecording("the run was reset");
         const bool wasRunning = state == v1::RUN_STATE_RUNNING;
-        if (Status status = build(); !status.ok()) {
+        Status status;
+        if (composedMidRun) {  // back to where the robots were authored, not where they were
+            auto fresh = composeModel(false);
+            status = fresh ? install(std::move(*fresh), SimTime{0}) : fresh.error();
+            composedMidRun = !status.ok();
+        } else {
+            status = build();
+        }
+        if (!status.ok()) {
             fail(status);
             return status;
         }
@@ -4052,6 +4528,40 @@ namespace {
 ///
 /// Entities are named by scene path: each top-level model with a body of its own (the robot),
 /// and each child of a fixed model (the scenery: "/warehouse_small/pallet"), plus the ground.
+/// A robot given as text (spawn_entity's resource_string) written to a file the loaders read:
+/// its extension from its content (URDF, SDFormat, MJCF or USD text).
+Expected<std::string, std::string> writeResource(const std::string& text) {
+    std::string extension;
+    if (text.starts_with("#usda")) {
+        extension = ".usda";
+    } else {
+        tinyxml2::XMLDocument document;
+        if (document.Parse(text.c_str(), text.size()) != tinyxml2::XML_SUCCESS ||
+            document.RootElement() == nullptr) {
+            return Unexpected{std::string("the resource string is neither XML nor USD text")};
+        }
+        const std::string_view root = document.RootElement()->Name();
+        extension = root == "robot"    ? ".urdf"
+                    : root == "sdf"    ? ".sdf"
+                    : root == "mujoco" ? ".xml"
+                                       : "";
+        if (extension.empty()) {
+            return Unexpected{"<" + std::string(root) +
+                              "> is not URDF, SDFormat or MJCF (xacro: run xacro first)"};
+        }
+    }
+    static int written = 0;
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / ("lagrange-spawn-" + std::to_string(::getpid()) +
+                                                  "-" + std::to_string(++written) + extension);
+    std::ofstream out(path);
+    out << text;
+    if (!out) {
+        return Unexpected{"cannot write " + path.string()};
+    }
+    return path.string();
+}
+
 class SimulationControl final : public ros2::SimulationHandler {
 public:
     explicit SimulationControl(Server::Impl& server) : s_(server) {}
@@ -4138,6 +4648,72 @@ public:
             }
         }
         return out;
+    }
+
+    ros2::SpawnOutcome spawn(const ros2::SpawnRequest& request) override {
+        using ros2::SimResult;
+        if (!request.entityNamespace.empty()) {
+            return {{SimResult::NamespaceInvalid,
+                     "namespaces are not supported: the first robot uses the root topics, the "
+                     "others are passive"},
+                    ""};
+        }
+        if (!request.frame.empty() && request.frame != "world") {
+            return {{SimResult::InvalidPose,
+                     "poses are in the frame 'world' (the frame of /odom's origin), not " +
+                         request.frame},
+                    ""};
+        }
+        Pose at = request.pose;
+        const std::array<double, 4>& q = at.orientation;
+        const double norm = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+        if (!std::isfinite(norm) ||
+            !std::ranges::all_of(at.position, [](double v) { return std::isfinite(v); })) {
+            return {{SimResult::InvalidPose, "the pose is not finite"}, ""};
+        }
+        if (norm < 1e-9) {
+            at.orientation = {1.0, 0.0, 0.0, 0.0};  // an unset quaternion: no rotation
+        } else {
+            for (double& c : at.orientation) {
+                c /= norm;
+            }
+        }
+        for (std::size_t i = 0; i < 3; ++i) {
+            at.position.at(i) += s_.rosOrigin.at(i);  // the ROS world frame is the first region
+        }
+        std::string path;
+        bool temporary = false;
+        if (!request.uri.empty()) {
+            auto resolved =
+                meshes::resolveMeshUri(request.uri, std::filesystem::current_path().string());
+            if (!resolved) {
+                return {{SimResult::ResourceParseError, resolved.error()}, ""};
+            }
+            path = *resolved;
+        } else if (!request.resource.empty()) {
+            auto written = writeResource(request.resource);
+            if (!written) {
+                return {{SimResult::UnsupportedFormat, written.error()}, ""};
+            }
+            path = *written;
+            temporary = true;
+        } else {
+            return {{SimResult::NoResource, "give the robot file as uri or resource_string"}, ""};
+        }
+        return s_.spawn(path, request.name, request.allowRenaming || request.name.empty(), at,
+                        temporary);
+    }
+
+    ros2::SimOutcome remove(const std::string& name) override { return s_.remove(name); }
+
+    ros2::SimOutcome removeSpawned() override {
+        while (!s_.spawned.empty()) {
+            const ros2::SimOutcome outcome = s_.remove(s_.spawned.back().name);
+            if (outcome.result != ros2::SimResult::Ok) {
+                return outcome;
+            }
+        }
+        return {};
     }
 
     std::optional<ros2::EntityMotion> entityMotion(const std::string& name) override {
@@ -4230,6 +4806,12 @@ Server::~Server() {
     if (impl_->scheduler) {
         impl_->stopRecording("the server stopped");
     }
+    for (const Impl::Spawned& robot : impl_->spawned) {
+        if (robot.temporary) {
+            std::error_code ignored;
+            std::filesystem::remove(robot.path, ignored);
+        }
+    }
 }
 
 Status Server::load() {
@@ -4291,46 +4873,20 @@ Status Server::load() {
         }
         s.options.demoDrive = false;  // the ego waits for the system under test
     }
-    auto robot = loadModel(s.options.robotPath, {.spawn = s.options.spawn});
-    if (!robot) {
-        return Status::error(StatusCode::InvalidConfig, robot.error());
-    }
-    s.robot = std::move(robot.value());
-    if (scenarioRoads) {
-        appendModel(s.robot, *scenarioRoads);
-    }
-    if (!s.options.overlayPath.empty()) {
-        if (auto applied = stage::applyOverlay(s.robot, s.options.overlayPath); !applied) {
-            return Status::error(StatusCode::InvalidConfig, applied.error());
-        }
-    }
-    // More robots in the run (huge-worlds.md §3: robots whose bubbles overlap share a region).
-    for (const ServerOptions::ExtraRobot& extra : s.options.extraRobots) {
-        auto other = loadModel(extra.path, {.spawn = extra.spawn});
-        if (!other) {
-            return Status::error(StatusCode::InvalidConfig, extra.name + ": " + other.error());
-        }
-        prefixModel(*other, extra.name, true);
-        appendModel(s.robot, *other);
-        s.log(v1::LOG_LEVEL_INFO, "stage",
-              "robot " + extra.name + " from " + extra.path + " (passive: nothing drives it)");
-    }
-    // Motors' rotors turn with their joints: physics gets their reflected inertia.
-    electrical::applyRotorInertia(s.robot.world);
-    // Propellers with a propeller file are drawn as their blades.
-    rotor_aero::addPropellerBlades(s.robot);
+    s.scenarioRoads = std::move(scenarioRoads);
     if (!s.options.ros && !s.options.ros2ControlParams.empty()) {
         return Status::error(StatusCode::InvalidConfig,
                              "--ros2-control needs the ROS 2 bridge: drop --no-ros");
     }
+    auto composed = s.composeModel(true);
+    if (!composed) {
+        return composed.error();
+    }
+    s.robot = std::move(*composed);
     if (s.options.ros) {
         ros2::BridgeSettings settings;
-        settings.baseLink = s.robot.world.bodies.names.empty() ? "" : s.robot.world.bodies.names[0];
-        // /robot_description is URDF; a robot from another format has none to publish.
-        settings.robotDescription =
-            importers::formatOf(s.options.robotPath) == importers::Format::Urdf
-                ? readFile(s.options.robotPath)
-                : "";
+        settings.baseLink = s.baseLink();
+        settings.robotDescription = s.robotDescription();
         settings.stampedCmdVel = s.options.stampedCmdVel;
         settings.topicLinks = s.options.linkTopics;
         settings.controllersOwnState = !s.options.ros2ControlParams.empty();
@@ -4357,41 +4913,13 @@ Status Server::load() {
         s.simulation = std::make_unique<SimulationControl>(s);
         s.bridge->serveSimulation(*s.simulation);
     }
-    if (!s.options.worldPath.empty()) {
-        if (auto added = addModel(s.robot, s.options.worldPath); !added) {
-            return Status::error(StatusCode::InvalidConfig, added.error());
-        }
-    }
-    if (s.scenario) {
-        if (auto added = openscenario::addEntities(s.robot, *s.scenario, s.options.scenarioEgo);
-            !added) {
-            return Status::error(StatusCode::InvalidConfig,
-                                 s.options.scenarioPath + ": " + added.error());
-        }
-        s.log(v1::LOG_LEVEL_INFO, "scenario",
-              s.options.scenarioPath + " · " + std::to_string(s.scenario->entities.size()) +
-                  " entities, " + s.options.scenarioEgo + " is the robot");
-    }
-    // Traffic agents on the world's road lanes, away from the robots (traffic.md); not with a
-    // scenario, which says who is on the road.
-    if (!s.scenario && !WorldView(s.robot.world).instancesOf("RoadLaneAPI_1").empty() &&
-        s.options.trafficVehicles + s.options.trafficPedestrians > 0) {
-        std::vector<traffic::Vec3> robots;
-        for (std::size_t b = 0; b < s.robot.world.bodies.names.size(); ++b) {
-            if (s.robot.world.bodies.parent[b] == kWorldBody) {
-                robots.push_back(s.robot.bodyRestPose[b].position);
-            }
-        }
-        const auto made = traffic::addAgents(
-            s.robot,
-            {s.options.trafficVehicles, s.options.trafficPedestrians, s.options.trafficSeed},
-            robots);
-        s.log(v1::LOG_LEVEL_INFO, "traffic",
-              std::to_string(made[0]) + " vehicles and " + std::to_string(made[1]) +
-                  " pedestrians on the road lanes (seed " + std::to_string(s.options.trafficSeed) +
-                  ")");
-    }
     s.shift = recentre(s.robot);
+    s.rosOrigin = s.shift;
+    if (s.options.robotPath.empty()) {
+        s.log(v1::LOG_LEVEL_INFO, "stage",
+              "no robot: spawn one with the viewer's Import robot, `lagrange spawn FILE` or "
+              "the spawn_entity service");
+    }
     if (Status status = s.startStreaming(); !status.ok()) {
         return status;
     }
@@ -4464,6 +4992,28 @@ std::vector<double> Server::read(const std::string& name) const {
     return {values.begin(), values.end()};
 }
 
+Expected<std::string, Status> Server::spawnRobot(const std::string& path, const std::string& name,
+                                                 const Pose& spawn) {
+    if (!impl_->scheduler) {
+        return Unexpected{Status::error(StatusCode::Internal, "spawnRobot() before load()")};
+    }
+    const ros2::SpawnOutcome outcome = impl_->spawn(path, name, false, spawn, false);
+    if (outcome.outcome.result != ros2::SimResult::Ok) {
+        return Unexpected{Status::error(StatusCode::InvalidConfig, outcome.outcome.message)};
+    }
+    return outcome.entityName;
+}
+
+Status Server::removeRobot(const std::string& name) {
+    if (!impl_->scheduler) {
+        return Status::error(StatusCode::Internal, "removeRobot() before load()");
+    }
+    const ros2::SimOutcome outcome = impl_->remove(name);
+    return outcome.result == ros2::SimResult::Ok
+               ? Status{}
+               : Status::error(StatusCode::InvalidConfig, outcome.message);
+}
+
 SimTime Server::now() const {
     return impl_->scheduler ? impl_->scheduler->now() : SimTime{};
 }
@@ -4516,8 +5066,9 @@ Status Server::start() {
     }
     const World& world = s.robot.world;
     s.log(v1::LOG_LEVEL_INFO, "stage",
-          "loaded " + s.robot.sourcePath + " · " + std::to_string(world.bodies.names.size()) +
-              " bodies, " + std::to_string(world.joints.names.size()) + " joints, " +
+          "loaded " + (s.robot.sourcePath.empty() ? "no robot" : s.robot.sourcePath) + " · " +
+              std::to_string(world.bodies.names.size()) + " bodies, " +
+              std::to_string(world.joints.names.size()) + " joints, " +
               std::to_string(s.robot.scene.prims.size()) + " prims");
     if (s.robot.world.region.rebaseCount > 0) {
         char text[160];
@@ -4571,7 +5122,7 @@ Status Server::start() {
               std::string("multicopter: the built-in controller takes off after 1 s and hovers 2 m "
                           "above the start") +
                   (s.bridge ? "; /cmd_vel flies it (forward, left, up m/s; yaw rate rad/s)" : ""));
-    } else {
+    } else if (!s.primaryPath().empty()) {
         s.log(v1::LOG_LEVEL_WARN, "controller",
               "no demo driver: it needs exactly two actuated wheel joints, the robot has " +
                   std::to_string(s.robot.actuatedJoints.size()));
