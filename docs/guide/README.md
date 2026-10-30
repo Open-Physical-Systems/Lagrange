@@ -12,7 +12,9 @@
 | [Concepts](concepts.md) | Domains and substitutes, signals and units, the multirate scheduler, capability tiers, determinism, coordinates |
 | [Profiles](profiles.md) | The YAML that says what a run simulates; what v0.2 applies; the errors |
 | [Writing a module](writing-a-module.md) | The module interface, worked through with a wheel odometer |
-| [The `lagrange` command](cli.md) | `run`, `validate`, `graph`, `info` |
+| [Writing a plugin](writing-a-plugin.md) | A plugin from the template: the C ABI, seeing the scene, a custom time-of-flight sensor, ROS topics, a physics engine and its conformance suite |
+| [The `lagrange` command](cli.md) | Run the simulator and viewer, spawn robots, load plugins; `run`, `validate`, `graph`, `info` |
 
 The tutorial runs end to end in `tools/ci/tutorial_amr.sh`, and the module chapter's code is
-built and tested in `tests/tutorial/`, so both stay in step with the code.
+built and tested in `tests/tutorial/`, so both stay in step with the code. The plugin chapter's
+template is built and tested in a scratch workspace by `tools/ci/check_plugin_template.sh`.

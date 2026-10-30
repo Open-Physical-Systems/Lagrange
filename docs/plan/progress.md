@@ -118,6 +118,16 @@ a motor heat run (Q16; the battery is checked against published cell data since 
 from 35 % state of charge up), the drive-design
 review of the motor constants, FMI 2.0 FMUs (Q8), Jolt's wheel slip. Released as `v0.3.0` on 2026-10-25 at the owner's request, after v0.2.0.
 
+## After v1.0 (2026-10-30, on `dev`, unreleased)
+
+- Real-model samples (#175), the `lagrange` command (#176), starting without a robot and
+  spawning robots at run time through `simulation_interfaces`, the viewer and the CLI (#177).
+- RFC 0008, plugins in the server, accepted by the owner (#178) and done in six steps:
+  loading (#179), ABI 1.1 world and scene queries with the C++ SDK (#180), custom sensors and
+  `lagrange_tof` (#181), `--ros-topics` (#182), the rigid-body contract, the conformance suite and
+  `lagrange_jolt` (#183, which also fixed two Jolt bugs), and the plugin guide with its template.
+- Next: walking humans, as a plugin on this interface.
+
 ## v1.0 status (2026-10-29)
 
 Every v1.0 plan step is done (#167 to #172): RFC 0007 and the freeze checks, recording
