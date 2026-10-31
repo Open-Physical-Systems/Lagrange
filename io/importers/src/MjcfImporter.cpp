@@ -139,9 +139,30 @@ bool geomOf(const mjModel& m, int g, Geom& geom, Model& model, std::map<int, std
             geom.size = {1.0, 1.0, 1.0};  // the compiled vertices are already scaled
             return true;
         }
+        case mjGEOM_HFIELD: {
+            const int h = m.geom_dataid[g];
+            if (h < 0) {
+                return false;
+            }
+            HeightField field;
+            field.columns = static_cast<std::uint32_t>(m.hfield_ncol[h]);
+            field.rows = static_cast<std::uint32_t>(m.hfield_nrow[h]);
+            const mjtNum* extent = m.hfield_size + 4 * static_cast<std::ptrdiff_t>(h);
+            field.cellX = 2.0 * extent[0] / std::max<int>(m.hfield_ncol[h] - 1, 1);
+            field.cellY = 2.0 * extent[1] / std::max<int>(m.hfield_nrow[h] - 1, 1);
+            const float* data = m.hfield_data + m.hfield_adr[h];
+            field.heights.reserve(static_cast<std::size_t>(field.columns) * field.rows);
+            for (std::uint32_t i = 0; i < field.columns * field.rows; ++i) {
+                field.heights.push_back(data[i] * extent[2]);  // data is 0 to 1
+            }
+            geom.type = GeomType::HeightField;
+            geom.mesh = static_cast<std::uint32_t>(d.heightFields.size());
+            d.heightFields.push_back(std::move(field));
+            return true;
+        }
         default:
-            detail::note(model, "geom '" + nameOf(m, mjOBJ_GEOM, g) +
-                                    "' is a height field or SDF, which is not supported");
+            detail::note(
+                model, "geom '" + nameOf(m, mjOBJ_GEOM, g) + "' is an SDF, which is not supported");
             return false;
     }
 }
@@ -310,6 +331,12 @@ Expected<Model, std::string> importMjcf(const std::string& path, const ImportOpt
         if (visible) {
             VisualDesc visual;
             visual.geom = geom;
+            if (geom.type == GeomType::HeightField) {
+                d.meshes.push_back(flatMesh(d.heightFields[geom.mesh].triangles()));
+                visual.geom.type = GeomType::Mesh;
+                visual.geom.mesh = static_cast<std::uint32_t>(d.meshes.size() - 1);
+                visual.geom.size = {1.0, 1.0, 1.0};
+            }
             visual.material = materialId >= 0 ? nameOf(m, mjOBJ_MATERIAL, materialId) : "";
             visual.rgba = {rgba[0], rgba[1], rgba[2], rgba[3]};
             link.visuals.push_back(visual);

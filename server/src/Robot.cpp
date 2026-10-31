@@ -193,8 +193,13 @@ public:
             addJoint(*joint, body);
         }
 
+        // Static: welded all the way to a fixed root.
+        bool isStatic = fixedBase_;
+        for (const urdf::Link* up = &link; up != nullptr && isStatic; up = up->getParent().get()) {
+            isStatic = up->parent_joint == nullptr || up->parent_joint->type == urdf::Joint::FIXED;
+        }
         for (const urdf::CollisionSharedPtr& collision : link.collision_array) {
-            addCollider(link.name, *collision, body);
+            addCollider(link.name, *collision, body, isStatic);
         }
 
         ScenePrim prim;
@@ -284,7 +289,47 @@ private:
         }
     }
 
-    void addCollider(const std::string& link, const urdf::Collision& collision, BodyId body) {
+    /// A mesh file's parts as one convex hull (several `<collision>` or collision_bake for more).
+    void addMeshCollider(const std::string& link, const urdf::Mesh& file, BodyId body,
+                         const Pose& pose, double friction, bool isStatic) {
+        auto path = meshes::resolveMeshUri(file.filename, baseDirectory_);
+        auto imported = path
+                            ? meshes::importMesh(*path)
+                            : Expected<meshes::ImportedMesh, std::string>(Unexpected{path.error()});
+        if (!imported) {
+            note(imported.error() + ": no collider for link '" + link + "'");
+            return;
+        }
+        TriMesh whole;
+        for (const meshes::MeshPart& part : imported->parts) {
+            const auto first = static_cast<std::uint32_t>(whole.positions.size() / 3);
+            whole.positions.insert(whole.positions.end(), part.positions.begin(),
+                                   part.positions.end());
+            for (const std::uint32_t index : part.indices) {
+                whole.indices.push_back(first + index);
+            }
+        }
+        const std::array<double, 3> scale{file.scale.x, file.scale.y, file.scale.z};
+        std::optional<ConvexHull> hull = convexHullOf(whole, scale);
+        if (!hull) {
+            note("the collision mesh of link '" + link + "' is flat: it has no volume, skipped");
+            return;
+        }
+        if (hullFill(whole, scale, *hull) < kConcaveFill) {
+            if (isStatic) {
+                note("the collision mesh of link '" + link +
+                     "' is concave and its hull would block what is inside it: it is skipped; "
+                     "split it with collision_bake");
+                return;
+            }
+            note("the collision mesh of link '" + link +
+                 "' is concave: it collides as its convex hull; split it with collision_bake");
+        }
+        robot_.world.addHullCollider(body, std::move(*hull), pose, friction);
+    }
+
+    void addCollider(const std::string& link, const urdf::Collision& collision, BodyId body,
+                     bool isStatic) {
         const urdf::Geometry* geometry = collision.geometry.get();
         if (geometry == nullptr) {
             return;
@@ -318,9 +363,12 @@ private:
                                   {capsule.radius, capsule.length / 2.0, 0.0}, pose, friction);
                 break;
             }
+            case urdf::Geometry::MESH: {
+                const auto& file = static_cast<const urdf::Mesh&>(*geometry);
+                addMeshCollider(link, file, body, pose, friction, isStatic);
+                break;
+            }
             default:
-                note("collision meshes are not used yet (link '" + link +
-                     "'): convex decomposition comes with the collision bake tool");
                 break;
         }
     }
@@ -650,6 +698,17 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
                 if (owner != kWorldBody && owner.index >= firstBody &&
                     world.bodies.names[owner.index] == reference) {
                     world.colliders.material[c] = index;
+                }
+            }
+        }
+        // Gazebo's friction of a link's surfaces.
+        if (const double mu = childNumber(gazebo, {"mu1"}, -1.0);
+            mu >= 0.0 && reference != nullptr) {
+            for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
+                const BodyId owner = world.colliders.body[c];
+                if (owner != kWorldBody && owner.index >= firstBody &&
+                    world.bodies.names[owner.index] == reference) {
+                    world.colliders.friction[c] = mu;
                 }
             }
         }

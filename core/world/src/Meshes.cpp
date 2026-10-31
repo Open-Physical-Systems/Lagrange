@@ -8,6 +8,7 @@
 #include <numbers>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace lagrange {
 
@@ -25,6 +26,265 @@ std::uint32_t vertexCount(const TriMesh& mesh) {
 }
 
 }  // namespace
+
+namespace {
+
+using Point = std::array<double, 3>;
+
+Point minus(const Point& a, const Point& b) {
+    return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
+}
+Point crossOf(const Point& a, const Point& b) {
+    return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+}
+double dotOf(const Point& a, const Point& b) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+struct HullFace {
+    std::array<std::uint32_t, 3> v;
+    Point normal;  // unit, outward
+    double offset;
+};
+
+/// The farthest vertex in each of kMaxHullPoints directions spread over the sphere (a Fibonacci
+/// lattice), in the order of the vertices. Measured in the points' bounding box scaled to a cube,
+/// so that a flat shape keeps its faces as well as its rim.
+std::vector<Point> farthestPoints(const std::vector<Point>& points) {
+    Point lo = points.front();
+    Point hi = points.front();
+    for (const Point& p : points) {
+        for (std::size_t k = 0; k < 3; ++k) {
+            lo.at(k) = std::min(lo.at(k), p.at(k));
+            hi.at(k) = std::max(hi.at(k), p.at(k));
+        }
+    }
+    Point inverse{};
+    for (std::size_t k = 0; k < 3; ++k) {
+        inverse.at(k) = hi.at(k) > lo.at(k) ? 1.0 / (hi.at(k) - lo.at(k)) : 0.0;
+    }
+    const auto reach = [&](const Point& p, const Point& direction) {
+        return (p[0] - lo[0]) * inverse[0] * direction[0] +
+               (p[1] - lo[1]) * inverse[1] * direction[1] +
+               (p[2] - lo[2]) * inverse[2] * direction[2];
+    };
+    const double golden = std::numbers::pi * (3.0 - std::sqrt(5.0));
+    std::vector<bool> keep(points.size(), false);
+    for (std::size_t k = 0; k < kMaxHullPoints; ++k) {
+        const double z = 1.0 - 2.0 * (static_cast<double>(k) + 0.5) / kMaxHullPoints;
+        const double r = std::sqrt(1.0 - z * z);
+        const double a = golden * static_cast<double>(k);
+        const Point direction{r * std::cos(a), r * std::sin(a), z};
+        std::size_t best = 0;
+        for (std::size_t i = 1; i < points.size(); ++i) {
+            if (reach(points[i], direction) > reach(points[best], direction)) {
+                best = i;
+            }
+        }
+        keep[best] = true;
+    }
+    std::vector<Point> out;
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        if (keep[i]) {
+            out.push_back(points[i]);
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
+std::optional<ConvexHull> convexHullOf(const TriMesh& mesh, const std::array<double, 3>& scale) {
+    std::vector<Point> points;
+    points.reserve(mesh.positions.size() / 3);
+    for (std::size_t i = 0; i + 2 < mesh.positions.size(); i += 3) {
+        points.push_back({mesh.positions[i] * scale[0], mesh.positions[i + 1] * scale[1],
+                          mesh.positions[i + 2] * scale[2]});
+    }
+    // A mesh repeats its vertices per face: once each, keeping the first's place.
+    std::vector<Point> sorted = points;
+    std::sort(sorted.begin(), sorted.end());
+    sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+    if (sorted.size() < 4) {
+        return std::nullopt;
+    }
+    std::vector<bool> seen(sorted.size(), false);
+    std::vector<Point> unique;
+    unique.reserve(sorted.size());
+    for (const Point& p : points) {
+        const auto at = static_cast<std::size_t>(std::lower_bound(sorted.begin(), sorted.end(), p) -
+                                                 sorted.begin());
+        if (!seen[at]) {
+            seen[at] = true;
+            unique.push_back(p);
+        }
+    }
+    points = std::move(unique);
+    if (points.size() > kMaxHullPoints) {
+        points = farthestPoints(points);
+    }
+    // A first tetrahedron, of the farthest points: along x, from that line, from that plane.
+    std::size_t a = 0;
+    std::size_t b = 0;
+    for (std::size_t i = 1; i < points.size(); ++i) {
+        a = points[i][0] < points[a][0] ? i : a;
+        b = points[i][0] > points[b][0] ? i : b;
+    }
+    double extent = 0.0;
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        const Point d = minus(points[i], points[a]);
+        const double length = dotOf(d, d);
+        if (length > extent) {
+            extent = length;
+            b = i;
+        }
+    }
+    extent = std::sqrt(extent);
+    const double tolerance = 1e-6 * extent;
+    if (extent <= 0.0) {
+        return std::nullopt;
+    }
+    std::size_t c = a;
+    double farthest = 0.0;
+    const Point ab = minus(points[b], points[a]);
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        const Point across = crossOf(ab, minus(points[i], points[a]));
+        const double area = std::sqrt(dotOf(across, across)) / extent;
+        if (area > farthest) {
+            farthest = area;
+            c = i;
+        }
+    }
+    if (farthest <= tolerance) {
+        return std::nullopt;
+    }
+    Point up = crossOf(ab, minus(points[c], points[a]));
+    const double upLength = std::sqrt(dotOf(up, up));
+    up = {up[0] / upLength, up[1] / upLength, up[2] / upLength};
+    std::size_t d = a;
+    farthest = 0.0;
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        const double height = std::abs(dotOf(up, minus(points[i], points[a])));
+        if (height > farthest) {
+            farthest = height;
+            d = i;
+        }
+    }
+    if (farthest <= tolerance) {
+        return std::nullopt;
+    }
+    const Point inside{(points[a][0] + points[b][0] + points[c][0] + points[d][0]) / 4.0,
+                       (points[a][1] + points[b][1] + points[c][1] + points[d][1]) / 4.0,
+                       (points[a][2] + points[b][2] + points[c][2] + points[d][2]) / 4.0};
+    const auto face = [&](std::uint32_t p, std::uint32_t q, std::uint32_t r) {
+        Point n = crossOf(minus(points[q], points[p]), minus(points[r], points[p]));
+        const double length = std::sqrt(dotOf(n, n));
+        if (length > 0.0) {
+            n = {n[0] / length, n[1] / length, n[2] / length};
+        }
+        HullFace f{{p, q, r}, n, dotOf(n, points[p])};
+        if (dotOf(n, inside) > f.offset) {  // wound inward: turn it round
+            f.v = {p, r, q};
+            f.normal = {-n[0], -n[1], -n[2]};
+            f.offset = -f.offset;
+        }
+        return f;
+    };
+    const auto ia = static_cast<std::uint32_t>(a);
+    const auto ib = static_cast<std::uint32_t>(b);
+    const auto ic = static_cast<std::uint32_t>(c);
+    const auto id = static_cast<std::uint32_t>(d);
+    std::vector<HullFace> faces{face(ia, ib, ic), face(ia, ib, id), face(ia, ic, id),
+                                face(ib, ic, id)};
+    // Each point outside the hull so far replaces the faces it sees by a fan from their rim.
+    for (std::uint32_t p = 0; p < points.size(); ++p) {
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> edges;
+        std::vector<HullFace> kept;
+        kept.reserve(faces.size());
+        for (const HullFace& f : faces) {
+            if (dotOf(f.normal, points[p]) - f.offset > tolerance) {
+                for (std::size_t e = 0; e < 3; ++e) {
+                    edges.emplace_back(f.v.at(e), f.v.at((e + 1) % 3));
+                }
+            } else {
+                kept.push_back(f);
+            }
+        }
+        if (edges.empty()) {
+            continue;
+        }
+        for (const auto& [from, to] : edges) {
+            if (std::find(edges.begin(), edges.end(), std::pair{to, from}) == edges.end()) {
+                kept.push_back(face(from, to, p));
+            }
+        }
+        faces = std::move(kept);
+    }
+    // Only the points on the hull, in their order.
+    std::vector<std::uint32_t> index(points.size(), kNoIndex);
+    for (const HullFace& f : faces) {
+        for (const std::uint32_t v : f.v) {
+            index[v] = 0;
+        }
+    }
+    ConvexHull hull;
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        if (index[i] == 0) {
+            index[i] = static_cast<std::uint32_t>(hull.points.size());
+            hull.points.push_back(points[i]);
+        }
+    }
+    for (const HullFace& f : faces) {
+        hull.triangles.push_back({index[f.v[0]], index[f.v[1]], index[f.v[2]]});
+    }
+    return hull;
+}
+
+ConvexHull ellipsoidHull(const std::array<double, 3>& radii) {
+    constexpr int kSegments = 24;  // 218 points: under kMaxHullPoints
+    constexpr int kRings = 10;
+    return convexHullOf(sphereMesh(1.0, kSegments, kRings), radii).value_or(ConvexHull{});
+}
+
+double hullFill(const TriMesh& mesh, const std::array<double, 3>& scale, const ConvexHull& hull) {
+    double hullVolume = 0.0;
+    for (const auto& t : hull.triangles) {
+        hullVolume += dotOf(hull.points[t[0]], crossOf(hull.points[t[1]], hull.points[t[2]])) / 6.0;
+    }
+    double meshVolume = 0.0;
+    const auto at = [&](std::uint32_t i) -> Point {
+        return {mesh.positions[3 * i] * scale[0], mesh.positions[3 * i + 1] * scale[1],
+                mesh.positions[3 * i + 2] * scale[2]};
+    };
+    for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+        meshVolume +=
+            dotOf(at(mesh.indices[i]), crossOf(at(mesh.indices[i + 1]), at(mesh.indices[i + 2]))) /
+            6.0;
+    }
+    return hullVolume > 0.0 ? std::abs(meshVolume) / hullVolume : 0.0;
+}
+
+TriMesh flatMesh(const ConvexHull& surface) {
+    TriMesh out;
+    for (const auto& t : surface.triangles) {
+        const Point& p = surface.points[t[0]];
+        const Point& q = surface.points[t[1]];
+        const Point& r = surface.points[t[2]];
+        Point n = crossOf(minus(q, p), minus(r, p));
+        const double length = std::sqrt(dotOf(n, n));
+        if (length > 0.0) {
+            n = {n[0] / length, n[1] / length, n[2] / length};
+        }
+        for (const Point* v : {&p, &q, &r}) {
+            out.indices.push_back(static_cast<std::uint32_t>(out.positions.size() / 3));
+            for (std::size_t k = 0; k < 3; ++k) {
+                out.positions.push_back(static_cast<float>(v->at(k)));
+                out.normals.push_back(static_cast<float>(n.at(k)));
+            }
+        }
+    }
+    return out;
+}
 
 ConvexHull boxHull(const std::array<double, 3>& half) {
     ConvexHull hull;

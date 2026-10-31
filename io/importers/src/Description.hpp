@@ -13,11 +13,21 @@
 
 namespace lagrange::importers::detail {
 
-enum class GeomType : std::uint8_t { Box, Sphere, Capsule, Cylinder, Plane, Ellipsoid, Mesh };
+enum class GeomType : std::uint8_t {
+    Box,
+    Sphere,
+    Capsule,
+    Cylinder,
+    Plane,
+    Ellipsoid,
+    Mesh,
+    HeightField
+};
 
 /// A shape. Sizes follow ShapeType (MuJoCo's conventions): box half extents, sphere {radius},
 /// capsule and cylinder {radius, half length}, plane {half x, half y} (0 for unbounded),
-/// ellipsoid {radii}. A mesh is Description::meshes[mesh], scaled by `size`.
+/// ellipsoid {radii}. A mesh is Description::meshes[mesh], scaled by `size`; a height field is
+/// Description::heightFields[mesh], static and only ever a collider.
 struct Geom {
     GeomType type{GeomType::Box};
     std::array<double, 3> size{};
@@ -79,6 +89,7 @@ struct Description {
     std::vector<LinkDesc> links;
     std::vector<JointDesc> joints;
     std::vector<TriMesh> meshes;
+    std::vector<HeightField> heightFields;
 };
 
 /// Adds a description to a model: one body per link, its frame at the anchor of the link's joint
