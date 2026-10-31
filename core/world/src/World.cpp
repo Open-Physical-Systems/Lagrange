@@ -164,6 +164,38 @@ bool surfaceMaterialPreset(std::string_view name, SurfaceMaterial& out) {
     return false;
 }
 
+void hullFacePlanes(const ConvexHull& hull, std::vector<std::array<double, 4>>& out) {
+    out.clear();
+    std::array<double, 3> centre{};
+    for (const auto& p : hull.points) {
+        for (std::size_t i = 0; i < 3; ++i) {
+            centre.at(i) += p.at(i) / static_cast<double>(hull.points.size());
+        }
+    }
+    for (const auto& t : hull.triangles) {
+        const std::array<double, 3>& a = hull.points.at(t[0]);
+        const std::array<double, 3>& b = hull.points.at(t[1]);
+        const std::array<double, 3>& c = hull.points.at(t[2]);
+        const std::array<double, 3> u{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+        const std::array<double, 3> v{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+        std::array<double, 3> n{u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
+                                u[0] * v[1] - u[1] * v[0]};
+        const double length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        if (length <= 0.0) {
+            continue;  // a degenerate triangle has no plane
+        }
+        for (double& x : n) {
+            x /= length;
+        }
+        double offset = n[0] * a[0] + n[1] * a[1] + n[2] * a[2];
+        if (n[0] * centre[0] + n[1] * centre[1] + n[2] * centre[2] > offset) {
+            n = {-n[0], -n[1], -n[2]};
+            offset = -offset;
+        }
+        out.push_back({n[0], n[1], n[2], offset});
+    }
+}
+
 void World::addHullCollider(BodyId onBody, ConvexHull hull, const Pose& poseInOwner,
                             double slidingFriction) {
     std::array<double, 3> half{};
@@ -174,6 +206,9 @@ void World::addHullCollider(BodyId onBody, ConvexHull hull, const Pose& poseInOw
     }
     addCollider(onBody, ShapeType::ConvexHull, half, poseInOwner, slidingFriction);
     colliders.hull.back() = static_cast<std::uint32_t>(hulls.size());
+    if (hull.faces.empty()) {
+        hullFacePlanes(hull, hull.faces);
+    }
     hulls.push_back(std::move(hull));
 }
 

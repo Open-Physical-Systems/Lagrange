@@ -987,8 +987,10 @@ struct Server::Impl {
     /// --joint-control applies to a plain robot. A road vehicle's wheels belong to the vehicle
     /// domain and a multicopter's to the rotors, so those keep their controllers.
     bool jointControlled() const {
-        return options.jointControl && !controllers && !hasVehicles() && !hasRotors();
+        return options.jointControl && !controllers && jointControllable;
     }
+    // Of the robot itself: a passive car spawned beside an arm takes nothing from the arm.
+    bool jointControllable{true};
     std::shared_ptr<JointTargets> jointTargets = std::make_shared<JointTargets>();
     std::optional<double> appliedGravity;  // m/s², downward (setSite); else the file's
 
@@ -996,6 +998,14 @@ struct Server::Impl {
     Status storeSite(const std::string& name, double value) {
         if (!std::isfinite(value)) {
             return Status::error(StatusCode::InvalidConfig, name + " is not a finite number");
+        }
+        const bool positive = name == "temperature" || name == "air_density" ||
+                              name == "pressure" || name == "visibility";
+        const bool notNegative = name == "wind_speed" || name == "rain_rate";
+        if ((positive && value <= 0.0) || (notNegative && value < 0.0) ||
+            (name == "relative_humidity" && (value < 0.0 || value > 1.0))) {
+            return Status::error(StatusCode::InvalidConfig,
+                                 name + " = " + std::to_string(value) + " is out of range");
         }
         if (name == "gravity") {
             appliedGravity = value;
@@ -1027,6 +1037,15 @@ struct Server::Impl {
         if (replay) {
             return Status::error(StatusCode::Unsupported, "a replay shows what was recorded");
         }
+        // A change the run cannot take is taken back.
+        const auto before =
+            std::make_tuple(appliedGravity, appliedAmbientK, appliedAirDensity, appliedAerodynamics,
+                            appliedWeather, options.ambientTemperatureK, robot.world.gravityLocal);
+        const auto takeBack = [&] {
+            std::tie(appliedGravity, appliedAmbientK, appliedAirDensity, appliedAerodynamics,
+                     appliedWeather, options.ambientTemperatureK, robot.world.gravityLocal) =
+                before;
+        };
         if (Status status = storeSite(name, value); !status.ok()) {
             return status;
         }
@@ -1037,6 +1056,14 @@ struct Server::Impl {
         StateWriter saved;
         const bool savedOk = scheduler->saveState(saved).ok();
         if (Status status = build(); !status.ok()) {
+            takeBack();
+            if (Status again = build(); !again.ok()) {
+                return again;
+            }
+            StateReader back(saved.bytes());
+            if (savedOk) {
+                (void)scheduler->restoreState(back);
+            }
             return status;
         }
         StateReader reader(saved.bytes());
@@ -3432,8 +3459,9 @@ struct Server::Impl {
         }
         // Joint control: every hinge and slide of the robot takes a command, whatever its file
         // says (a plain URDF has no <ros2_control> block to say so).
-        if (options.jointControl && WorldView(model.world).instancesOf("VehicleAPI_1").empty() &&
-            WorldView(model.world).instancesOf("RotorAPI_1").empty()) {
+        jointControllable = WorldView(model.world).instancesOf("VehicleAPI_1").empty() &&
+                            WorldView(model.world).instancesOf("RotorAPI_1").empty();
+        if (options.jointControl && jointControllable) {
             World::Joints& joints = model.world.joints;
             for (std::size_t j = 0; j < joints.names.size(); ++j) {
                 if ((joints.type[j] == JointType::Revolute ||
@@ -5492,12 +5520,22 @@ Status Server::setSite(const std::string& name, double value) {
 }
 
 bool Server::commandJoint(const std::string& joint, const std::string& mode, double value) {
-    // A joint that copies another takes no commands.
+    // A joint that copies another takes no commands, and a motor only what its mode follows.
     const World::Joints& joints = world().joints;
     const auto named = std::find(joints.names.begin(), joints.names.end(), joint);
     if (named != joints.names.end() &&
         joints.mimic[static_cast<std::size_t>(named - joints.names.begin())] != kNoMimic) {
         return false;
+    }
+    if (!impl_->options.substituted.contains("electrical")) {
+        const auto modes = electrical::driveModes(WorldView(world()));
+        if (const auto drive = modes.find(joint); drive != modes.end()) {
+            const bool fits = drive->second == "voltage" ? mode == "voltage" || mode == "effort"
+                                                         : mode == "velocity" || mode == "position";
+            if (!fits) {
+                return false;
+            }
+        }
     }
     JointTarget target;
     target.value = value;

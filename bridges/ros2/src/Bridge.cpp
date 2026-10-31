@@ -1293,9 +1293,13 @@ void Bridge::serveSimulation(SimulationHandler& handler) {
             rcl_interfaces::msg::SetParametersResult result;
             result.successful = true;
             for (const rclcpp::Parameter& parameter : parameters) {
-                if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE ||
-                    std::isnan(parameter.as_double())) {
+                if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) {
                     continue;
+                }
+                if (std::isnan(parameter.as_double())) {
+                    result.successful = false;
+                    result.reason = parameter.get_name() + " is not a number";
+                    return result;
                 }
                 const std::string name = parameter.get_name();
                 const double value = parameter.as_double();

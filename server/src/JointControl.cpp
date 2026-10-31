@@ -1,4 +1,5 @@
 #include "lagrange/server/JointControl.hpp"
+#include "lagrange/services/Log.hpp"
 
 #include <algorithm>
 #include <numbers>
@@ -23,6 +24,11 @@ SignalSpec spec(std::string name, Unit unit) {
 void JointTargets::set(const std::string& joint, JointTarget target) {
     const std::lock_guard<std::mutex> lock(mutex_);
     targets_[joint] = target;
+}
+
+void JointTargets::replace(std::map<std::string, JointTarget> targets) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    targets_ = std::move(targets);
 }
 
 std::map<std::string, JointTarget> JointTargets::all() const {
@@ -98,10 +104,20 @@ Status JointControl::step(const StepContext&, SignalBus& bus) {
                 using Mode = JointTarget::Mode;
                 if (j.mode == "voltage") {
                     out = t.mode == Mode::Voltage || t.mode == Mode::Effort ? t.value : 0.0;
+                    if (out == 0.0 && t.mode != Mode::Voltage && t.mode != Mode::Effort &&
+                        t.mode != Mode::None && !warned_.contains(j.name)) {
+                        warned_.insert(j.name);
+                        services::log(services::LogLevel::Warning, "joint_control",
+                                      j.name + ": a voltage motor takes volts (the effort field)");
+                    }
                 } else if (t.mode == Mode::Velocity) {
                     out = t.value;
                 } else if (t.mode == Mode::Position) {
                     out = omega * (t.value - bus.read(j.position));
+                } else if (t.mode != Mode::None && !warned_.contains(j.name)) {
+                    warned_.insert(j.name);
+                    services::log(services::LogLevel::Warning, "joint_control",
+                                  j.name + ": a velocity motor takes position or velocity targets");
                 }
             }
             bus.write(j.torque, out);
@@ -134,12 +150,31 @@ Status JointControl::step(const StepContext&, SignalBus& bus) {
     return {};
 }
 
-// The targets come from outside and outlive a rebuilt run.
-Status JointControl::saveState(StateWriter&) const {
+// A checkpoint holds what the joints were told, so that going back to it replays the same run.
+Status JointControl::saveState(StateWriter& writer) const {
+    const std::map<std::string, JointTarget> targets = targets_->all();
+    writer.put<std::uint64_t>(targets.size());
+    for (const auto& [name, target] : targets) {
+        writer.putString(name);
+        writer.put(target);
+    }
     return {};
 }
 
-Status JointControl::restoreState(StateReader&) {
+Status JointControl::restoreState(StateReader& reader) {
+    std::uint64_t count = 0;
+    std::map<std::string, JointTarget> targets;
+    bool ok = reader.get(count);
+    for (std::uint64_t k = 0; ok && k < count; ++k) {
+        std::string name;
+        JointTarget target;
+        ok = reader.getString(name) && reader.get(target);
+        targets[name] = target;
+    }
+    if (!ok) {
+        return Status::error(StatusCode::InvalidConfig, "joint control: bad state");
+    }
+    targets_->replace(std::move(targets));
     return {};
 }
 

@@ -1,6 +1,8 @@
 // Motors in velocity and voltage mode, and on prismatic joints, against the closed forms of a
 // brushed DC motor (electrical.md): stall I = V / R, no-load speed V / (N Ke).
+#include "lagrange/server/Robot.hpp"
 #include "lagrange/server/Server.hpp"
+#include "lagrange/stage/Stage.hpp"
 
 #include <cmath>
 #include <filesystem>
@@ -190,6 +192,72 @@ TEST(MotorModes, ElectricalOffTheJointStillGoes) {
     ASSERT_TRUE(server.commandJoint("move", "velocity", 2.0));
     ASSERT_TRUE(server.stepUntil(SimTime{2'000'000'000}).ok());
     EXPECT_NEAR(server.read("joint/move/velocity").at(0), 2.0, 0.02);
+}
+
+// A passive copy of a robot with a velocity motor: nothing commands it, and the run starts.
+TEST(MotorModes, APassiveRobotsMotorsNeedNoCommand) {
+    ServerOptions o = rig("continuous", "0 0 1", "velocity", 10.0);
+    ServerOptions::ExtraRobot extra;
+    extra.name = "mate";
+    auto powered = loadUrdf(o.robotPath, {});
+    ASSERT_TRUE(powered) << powered.error();
+    const auto applied = stage::applyOverlay(*powered, o.overlayPath);
+    ASSERT_TRUE(applied) << applied.error();
+    const std::string usda = scratch("mate.usda").string();
+    ASSERT_TRUE(stage::writeStage(*powered, usda));
+    extra.path = usda;
+    extra.spawn = Pose{{5.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0}};
+    o.extraRobots.push_back(extra);
+    Server server(o);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{100'000'000}).ok());
+}
+
+TEST(MotorModes, ACommandTheMotorCannotFollowIsRefused) {
+    Server velocity(rig("continuous", "0 0 1", "velocity", 10.0));
+    ASSERT_TRUE(velocity.load().ok());
+    EXPECT_FALSE(velocity.commandJoint("move", "effort", 1.0));
+    EXPECT_FALSE(velocity.commandJoint("move", "voltage", 1.0));
+    EXPECT_TRUE(velocity.commandJoint("move", "position", 1.0));
+    Server voltage(rig("continuous", "0 0 1", "voltage", 10.0));
+    ASSERT_TRUE(voltage.load().ok());
+    EXPECT_FALSE(voltage.commandJoint("move", "velocity", 1.0));
+    EXPECT_TRUE(voltage.commandJoint("move", "effort", 1.0));
+}
+
+// Going back to a checkpoint goes back to what the joints were told then.
+TEST(MotorModes, ARestoreBringsBackTheTargets) {
+    ServerOptions o = rig("continuous", "0 0 1", "velocity", 10.0);
+    Server server(o);
+    ASSERT_TRUE(server.load().ok());
+    ASSERT_TRUE(server.commandJoint("move", "velocity", 1.0));
+    ASSERT_TRUE(server.stepUntil(SimTime{500'000'000}).ok());
+    const auto saved = server.saveState();
+    ASSERT_TRUE(saved);
+    ASSERT_TRUE(server.stepUntil(SimTime{1'000'000'000}).ok());
+    const double first = server.read("joint/move/position").at(0);
+    ASSERT_TRUE(server.restoreState(*saved).ok());
+    ASSERT_TRUE(server.commandJoint("move", "velocity", -5.0));
+    ASSERT_TRUE(server.restoreState(*saved).ok());
+    ASSERT_TRUE(server.stepUntil(SimTime{1'000'000'000}).ok());
+    EXPECT_EQ(server.read("joint/move/position").at(0), first);
+}
+
+// A passive car beside an arm leaves the arm its joint commands.
+TEST(MotorModes, APassiveCarLeavesJointControlOn) {
+    ServerOptions o = rig("continuous", "0 0 1", "velocity", 10.0);
+    ServerOptions::ExtraRobot car;
+    car.name = "car";
+    car.path = LAGRANGE_TEST_SEDAN_USDA;
+    car.spawn = Pose{{20.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0}};
+    o.extraRobots.push_back(car);
+    Server server(o);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.commandJoint("move", "velocity", 1.0));
+    ASSERT_TRUE(server.stepUntil(SimTime{2'000'000'000}).ok());
+    EXPECT_NEAR(server.read("joint/move/velocity").at(0), 1.0, 0.05);
 }
 
 }  // namespace

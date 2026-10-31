@@ -72,13 +72,13 @@ CPU on all tiers. `buoyancy_mesh` with large hulls may use a compute kernel on T
 `WaterAPI_1`, `--water` or the run file's `water:` make a box of still water: `lagrange_hydrodynamics`'s
 `Water`, not Fossen's model. Every moving, non-kinematic body with colliders gets buoyancy and quadratic
 drag (`Cd`, illustrative) on cells sampled in its colliders, so a hull tilts and rights itself:
-`body/<b>/wrench/water`, `body/<b>/submerged`. A convex hull counts as its box, an upper bound of its
-volume. `simulate: {water: false}` or `--domain hydrodynamics=off` turns the forces off.
+`body/<b>/wrench/water`, `body/<b>/submerged`. The frontal area for drag is taken as a box's, so it is
+approximate for other shapes. `simulate: {water: false}` or `--domain hydrodynamics=off` turns the forces off.
 
 Not modelled: added mass, waves, currents, a hull's waterplane beyond the cells, wet friction on what
 drives through. Water has no collider, and a robot on the ground under it stays on the ground. It is
 drawn as an opaque sheet (the viewer has no transparency), and cameras see that sheet. A lidar
 sees its surface as a mirror: `water:reflectivity` straight back near normal, no return at a slant,
-and no return from the bottom, as near-infrared is absorbed. The GPU lidar tier does not see water.
+and no return from the bottom, as near-infrared is absorbed. Both lidar tiers see it.
 
-Checked against Archimedes (`server/test/test_water.cpp`): a floating box's draft.
+Checked against the closed forms (`server/test/test_water.cpp`): a floating box's draft, an off-centre hull's, and a sinking box's terminal speed.

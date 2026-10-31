@@ -313,6 +313,9 @@ Expected<Model, std::string> importMjcf(const std::string& path, const ImportOpt
     for (int e = 0; e < static_cast<int>(m.neq); ++e) {
         const mjtNum* data = m.eq_data + static_cast<std::ptrdiff_t>(mjNEQDATA) * e;
         const std::string name = nameOf(m, mjOBJ_EQUALITY, e);
+        if (m.eq_active0[e] == 0) {
+            continue;  // off in the file
+        }
         if (m.eq_type[e] != mjEQ_JOINT || m.eq_obj2id[e] < 0) {
             detail::note(model,
                          "equality '" + name + "' is not a joint copying a joint; it is not used");

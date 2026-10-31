@@ -498,7 +498,11 @@ def main(argv: list[str]) -> int:
     if words and words[0].endswith((".yaml", ".yml")) and Path(words[0]).is_file():
         if len(words) > 1:
             sys.exit(f"lagrange: unexpected '{words[1]}' after a run file")
-        server_args = [*run_file_args(words.pop(0)), *server_args]
+        run_file = words.pop(0)
+        try:
+            server_args = [*run_file_args(run_file), *server_args]
+        except (TypeError, ValueError, KeyError, AttributeError) as bad:
+            sys.exit(f"lagrange: {run_file}: a key has a value of the wrong kind: {bad}")
     elif words:
         # Your own robot: on an empty ground unless a world is named, and still until you
         # command it. The samples' warehouse and demo drive are for the samples.

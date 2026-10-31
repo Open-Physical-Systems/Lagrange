@@ -610,6 +610,12 @@ void prefixModel(Model& model, const std::string& prefix, bool passive) {
     }
     if (passive) {
         std::fill(w.joints.actuated.begin(), w.joints.actuated.end(), false);
+        // Nothing commands a passive robot: its motors make no torque, in any mode.
+        for (SchemaInstance& instance : w.schemaInstances) {
+            if (instance.schema == "ElectricalMotorAPI_1") {
+                instance.tokens["elec:controlMode"] = "torque";
+            }
+        }
         model.actuatedJoints.clear();
     }
     // Paths: the top prim of each tree is renamed, the rest follows.
@@ -648,6 +654,15 @@ void prefixModel(Model& model, const std::string& prefix, bool passive) {
         w.robots = {prefix};
     }
     model.name = prefix;
+    // Components (a motor, a bus, a battery): their signals must not meet another robot's.
+    for (const SchemaInstance& instance : w.schemaInstances) {
+        if (instance.prim.index < w.prims.instanceNames.size()) {
+            std::string& name = w.prims.instanceNames[instance.prim.index];
+            if (!name.starts_with(front)) {
+                name.insert(0, front);
+            }
+        }
+    }
 }
 
 ModelExtent extentOf(const Model& model) {

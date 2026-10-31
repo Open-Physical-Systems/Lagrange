@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,7 @@ struct JointTarget {
 class JointTargets {
 public:
     void set(const std::string& joint, JointTarget target);
+    void replace(std::map<std::string, JointTarget> targets);
     [[nodiscard]] std::map<std::string, JointTarget> all() const;
 
 private:
@@ -60,6 +62,7 @@ private:
     };
     std::shared_ptr<JointTargets> targets_;
     std::map<std::string, std::string> driveModes_;
+    std::set<std::string> warned_;  // joints told what their motor cannot follow
     std::vector<Joint> joints_;
 };
 

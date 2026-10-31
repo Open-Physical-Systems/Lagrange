@@ -342,9 +342,10 @@ void RayScan::cast(std::span<const CastShape> shapes,
     s.reserve(s.shapes, s.shapeData.size() * sizeof(GpuShape));
     s.reserve(s.nodes, tree.size() * sizeof(GpuNode));
     s.reserve(s.faces, s.faceData.size() * sizeof(float));
-    std::memcpy(s.shapes.mapped, s.shapeData.data(), s.shapeData.size() * sizeof(GpuShape));
-    std::memcpy(s.nodes.mapped, tree.data(), tree.size() * sizeof(GpuNode));
-    std::memcpy(s.faces.mapped, s.faceData.data(), s.faceData.size() * sizeof(float));
+    // An empty vector's data() may be null, which memcpy may not be given even for no bytes.
+    std::copy(s.shapeData.begin(), s.shapeData.end(), static_cast<GpuShape*>(s.shapes.mapped));
+    std::copy(tree.begin(), tree.end(), static_cast<GpuNode*>(s.nodes.mapped));
+    std::copy(s.faceData.begin(), s.faceData.end(), static_cast<float*>(s.faces.mapped));
     flush(device, s.shapes);
     flush(device, s.nodes);
     flush(device, s.faces);
