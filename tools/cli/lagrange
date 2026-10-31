@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """lagrange: the simulator and its viewer from one command, like `gazebo`.
 
-lagrange [SAMPLE | ROBOT [WORLD]] [SERVER OPTIONS] [-- VIEWER OPTIONS]
-    the server and the viewer together; closing the viewer stops the server
+lagrange [SAMPLE | ROBOT [WORLD] | RUN.yaml] [SERVER OPTIONS] [-- VIEWER OPTIONS]
+    the server and the viewer together; closing the viewer stops the server. Your robot starts
+    still, on an empty ground unless you name a world. RUN.yaml says it all in one file
+    (docs/guide/run-file.md)
 lagrange --server-only ...      the server alone, headless (like gzserver)
 lagrange viewer [VIEWER OPTIONS]  the viewer alone (like gzclient)
 lagrange samples                the sample names
@@ -24,7 +26,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 TOOLS = {"run", "validate", "graph", "determinism", "export", "info"}
 SERVER_START_SECONDS = 300.0  # large worlds and vehicles take a while to load
@@ -270,6 +272,122 @@ def delete(argv: list[str]) -> int:
     return 0
 
 
+# The run file (docs/guide/run-file.md): one YAML file for a whole run.
+DOMAIN_OFF = {
+    "physics": "rigid_body",
+    "sensors": "sensors",
+    "electrical": "electrical",
+    "thermal": "thermal",
+    "weather": "weather",
+    "emi": "emi",
+    "comms": "comms",
+    "vehicle_dynamics": "vehicle_dynamics",
+    "traffic": "traffic",
+    "humans": "humans",
+}
+RUN_KEYS = {
+    "robot",
+    "world",
+    "overlay",
+    "spawn",
+    "simulate",
+    "site",
+    "physics",
+    "time",
+    "plugins",
+    "ros_topics",
+    "ros",
+    "humans",
+    "record",
+}
+SITE_OPTIONS = {
+    "temperature": "--ambient-temperature",
+    "air_density": "--air-density",
+}
+WEATHER_KEYS = {"pressure", "relative_humidity", "visibility", "rain_rate"}
+
+
+def run_file_args(path: str) -> list[str]:
+    """The server options a run file stands for. Exits naming what is wrong in it."""
+    try:
+        import yaml
+    except ImportError:
+        sys.exit("lagrange: a run file needs PyYAML (apt install python3-yaml)")
+
+    def fail(message: str) -> NoReturn:
+        sys.exit(f"lagrange: {path}: {message}")
+
+    try:
+        run = yaml.safe_load(Path(path).read_text())
+    except (OSError, yaml.YAMLError) as error:
+        fail(str(error))
+    if not isinstance(run, dict):
+        fail("a run file is a mapping: robot: my_robot.urdf")
+    if unknown := set(run) - RUN_KEYS:
+        fail(f"unknown key {sorted(unknown)[0]}; a run file has {', '.join(sorted(RUN_KEYS))}")
+    if "robot" not in run and "world" not in run:
+        fail("name a robot or a world: robot: my_robot.urdf")
+    base = Path(path).resolve().parent
+
+    def file_of(key: str, value: Any) -> str:
+        found = base / str(value)
+        if not found.is_file():
+            fail(f"{key}: no file {found}")
+        return str(found)
+
+    args: list[str] = []
+    args += ["--robot", file_of("robot", run["robot"])] if "robot" in run else ["--robot", "none"]
+    args += ["--world", file_of("world", run["world"])] if "world" in run else ["--world", "none"]
+    if "overlay" in run:
+        args += ["--overlay", file_of("overlay", run["overlay"])]
+    if "spawn" in run:
+        spawn_at = run["spawn"]
+        if not isinstance(spawn_at, list) or not 2 <= len(spawn_at) <= 4:
+            fail("spawn: [x, y] or [x, y, z] or [x, y, z, yaw]")
+        args += ["--spawn", ",".join(str(float(v)) for v in spawn_at)]
+    for name, wanted in (run.get("simulate") or {}).items():
+        if name not in DOMAIN_OFF:
+            fail(f"simulate: unknown {name}; one of {', '.join(sorted(DOMAIN_OFF))}")
+        if not isinstance(wanted, bool):
+            fail(f"simulate: {name} is true or false")
+        args += ["--domain", f"{DOMAIN_OFF[name]}={'on' if wanted else 'off'}"]
+    site = dict(run.get("site") or {})
+    weather = {key: site.pop(key) for key in list(site) if key in WEATHER_KEYS}
+    if weather:
+        if "temperature" not in site or "pressure" not in weather:
+            fail("site: weather needs temperature, pressure and relative_humidity")
+        items = {"temperature": site["temperature"], **weather}
+        args += ["--weather", ",".join(f"{key}={value}" for key, value in items.items())]
+    if "geo_origin" in site:
+        origin = site.pop("geo_origin")
+        args += ["--geo-origin", ",".join(str(float(v)) for v in origin)]
+    for key, value in site.items():
+        if key not in SITE_OPTIONS:
+            known = sorted({*SITE_OPTIONS, *WEATHER_KEYS, "geo_origin"})
+            fail(f"site: unknown {key}; one of {', '.join(known)}")
+        args += [SITE_OPTIONS[key], str(float(value))]
+    if "physics" in run:
+        args += ["--physics", str(run["physics"])]
+    timing = run.get("time") or {}
+    if unknown := set(timing) - {"real_time_factor", "paused"}:
+        fail(f"time: unknown {sorted(unknown)[0]}; one of paused, real_time_factor")
+    if "real_time_factor" in timing:
+        args += ["--rtf", str(float(timing["real_time_factor"]))]
+    if timing.get("paused"):
+        args.append("--paused")
+    for library in run.get("plugins") or []:
+        args += ["--plugin", str(library)]
+    if "ros_topics" in run:
+        args += ["--ros-topics", file_of("ros_topics", run["ros_topics"])]
+    if run.get("ros") is False:
+        args.append("--no-ros")
+    if "humans" in run:
+        args += ["--humans", str(run["humans"])]
+    if "record" in run:
+        args += ["--record", str(base / str(run["record"]))]
+    return args + ["--no-demo"]
+
+
 def main(argv: list[str]) -> int:
     if argv and argv[0] in ("-h", "--help", "help"):
         usage()
@@ -317,6 +435,17 @@ def main(argv: list[str]) -> int:
         viewer_args = [*sample_viewer, *viewer_args]
     if len(words) > 2:
         sys.exit(f"lagrange: unexpected '{words[2]}' (lagrange --help)")
+    if words and words[0].endswith((".yaml", ".yml")) and Path(words[0]).is_file():
+        if len(words) > 1:
+            sys.exit(f"lagrange: unexpected '{words[1]}' after a run file")
+        server_args = [*run_file_args(words.pop(0)), *server_args]
+    elif words:
+        # Your own robot: on an empty ground unless a world is named, and still until you
+        # command it. The samples' warehouse and demo drive are for the samples.
+        if len(words) == 1 and "--world" not in server_args:
+            server_args = ["--world", "none", *server_args]
+        if "--no-demo" not in server_args:
+            server_args = ["--no-demo", *server_args]
     for flag, word in zip(("--robot", "--world"), words, strict=False):
         if word not in chosen and not Path(word).exists():
             sys.exit(f"lagrange: no sample or file '{word}' (lagrange samples)")
