@@ -273,3 +273,18 @@ material (`sensmat:preset`, then any authored attribute), or in URDF:
 Presets (`default`, `water`, `glass`, `mirror`, `asphalt`, `concrete`, `white_paint`, `black_rubber`,
 `retroreflector`) are illustrative orders of magnitude, not measurements. The formula is tested against
 its closed form; a real lidar's intensity channel has not been compared with it.
+
+## Lidar motion distortion (as built)
+
+A rotating lidar's columns fire one after another through the scan, so a moving robot's scan skews.
+Column `c` of `n` fires at the fraction `(c + 1) / n` of the scan, from the sensor's pose at that moment,
+interpolated between the last scan's end and this one's (linear position, slerp). So a motion that
+changes within one scan is smoothed over it. On by default on both lidar tiers
+(`sensor:lidar:motionDistortion`, or `<ray><motion_distortion>0</motion_distortion></ray>` in a URDF's
+`<gazebo>` sensor; an SDFormat file cannot turn it off yet). Only the sensor's motion counts: other bodies stay where they are at the scan's end, and
+every lidar sweeps once per output, whatever `sensor:lidar:rotationRate` says. The first scan of a run has
+no motion to use.
+
+So that the scan can be undone, `/scan` is stamped when its first column fired, with `time_increment`
+and `scan_time`, and `/points` the same with a `time` field (float32, s after the stamp). With distortion off,
+the stamp is the scan's end and those are zero (`scan_time` stays).

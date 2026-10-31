@@ -66,6 +66,11 @@ public:
     RayScan(const RayScan&) = delete;
     RayScan& operator=(const RayScan&) = delete;
 
+    /// Each beam's direction and start for the next casts, in the sensor's frame (at rest: the
+    /// directions given at construction, from the sensor's origin): a moving sensor's sweep.
+    void setBeams(std::span<const std::array<float, 3>> directions,
+                  std::span<const std::array<float, 3>> origins);
+
     /// Casts every beam of a sensor with world orientation `sensorOrientation` (unit quaternion
     /// w, x, y, z) against `shapes` and waits for the result: one hit per beam in `hits`. Builds
     /// the bounding-volume hierarchy over the bounded shapes on the CPU each call (shapes move

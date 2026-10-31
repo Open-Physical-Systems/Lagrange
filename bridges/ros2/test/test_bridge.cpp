@@ -193,7 +193,7 @@ TEST_F(CloudBridgeTest, PublishesA3dLidarAsAnOrganisedPointCloud) {
     EXPECT_EQ(cloud->header.frame_id, "front_lidar");
     EXPECT_EQ(cloud->height, 2U);
     EXPECT_EQ(cloud->width, 2U);
-    ASSERT_EQ(cloud->fields.size(), 5U);
+    ASSERT_EQ(cloud->fields.size(), 6U);
     EXPECT_EQ(cloud->fields[4].name, "ring");
     const auto point = [&](std::size_t i) {
         std::array<float, 3> xyz{};
