@@ -8,6 +8,9 @@ and `test_schemas.py` checks it.
 
 ## Unreleased
 
+- **`SensorMaterialAPI_1`** gains `sensmat:preset` (a named surface for lidars). An addition; lidars
+  now read the schema's reflectivity, specular fraction, transmission and retroreflective values.
+
 - **Human library** (RFC 0009): `HumanAPI_1`, a person who walks (height, speed, behaviour,
   waypoints). New library, nothing to migrate.
 

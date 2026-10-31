@@ -1295,16 +1295,21 @@ struct Server::Impl {
             lidarSent[s] = bus.stamp(id);
             const LidarLayout layout = LidarLayout::from(table.settings[s]);
             const std::span<const double> ranges = bus.readN(id);
+            const SignalId intensityId = bus.find("sensor/" + table.names[s] + "/intensities");
+            const std::span<const double> intensities =
+                intensityId.valid() ? bus.readN(intensityId) : std::span<const double>();
             std::vector<float> points;
             for (std::uint32_t i = 0; i < ranges.size() && i < layout.beams(); ++i) {
                 if (!std::isfinite(ranges[i])) {
                     continue;
                 }
-                // Sensor frame, as the mock server sends. Intensity: no reflectivity model yet.
+                // Sensor frame, as the mock server sends.
                 const std::array<double, 3> d = layout.direction(i);
-                points.insert(points.end(), {static_cast<float>(ranges[i] * d[0]),
-                                             static_cast<float>(ranges[i] * d[1]),
-                                             static_cast<float>(ranges[i] * d[2]), 1.0F});
+                points.insert(
+                    points.end(),
+                    {static_cast<float>(ranges[i] * d[0]), static_cast<float>(ranges[i] * d[1]),
+                     static_cast<float>(ranges[i] * d[2]),
+                     i < intensities.size() ? static_cast<float>(intensities[i]) : 1.0F});
             }
             v1::Envelope envelope;
             v1::SensorFrame& frame = *envelope.mutable_sensor_frame();

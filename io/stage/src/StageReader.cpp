@@ -156,6 +156,22 @@ std::optional<T> valueOf(const UsdAttribute& attribute) {
     return std::nullopt;
 }
 
+/// Tags the colliders added while it lives (one prim's, however many shapes) with a surface.
+struct MaterialScope {
+    World& world;
+    std::size_t from;
+    std::uint32_t material;
+    MaterialScope(World& w, std::size_t first, std::uint32_t surface)
+        : world(w), from(first), material(surface) {}
+    MaterialScope(const MaterialScope&) = delete;
+    MaterialScope& operator=(const MaterialScope&) = delete;
+    ~MaterialScope() {
+        for (std::size_t c = from; c < world.colliders.material.size(); ++c) {
+            world.colliders.material[c] = material;
+        }
+    }
+};
+
 class Reader {
 public:
     Reader(UsdStageRefPtr stage, const ReadOptions& options, Model& model)
@@ -902,6 +918,53 @@ private:
         return {};
     }
 
+    /// The surface of a collider: SensorMaterialAPI_1 on the prim, an ancestor or its bound
+    /// material; preset first, then what is authored. kNoMaterial when there is none.
+    std::uint32_t surfaceOf(const UsdPrim& collider) {
+        const TfToken api("SensorMaterialAPI_1");
+        UsdPrim tagged;
+        const UsdShadeMaterial bound = UsdShadeMaterialBindingAPI(collider).ComputeBoundMaterial();
+        if (bound && bound.GetPrim().HasAPI(api)) {
+            tagged = bound.GetPrim();
+        }
+        for (UsdPrim p = collider; !tagged && p && !p.IsPseudoRoot(); p = p.GetParent()) {
+            if (p.HasAPI(api)) {
+                tagged = p;
+            }
+        }
+        if (!tagged) {
+            return kNoMaterial;
+        }
+        if (const auto known = surfaceIndex_.find(tagged.GetPath()); known != surfaceIndex_.end()) {
+            return known->second;
+        }
+        SurfaceMaterial material;
+        TfToken preset;
+        if (tagged.GetAttribute(TfToken("sensmat:preset")).Get(&preset) &&
+            !surfaceMaterialPreset(preset.GetString(), material) && preset != "none") {
+            errors_.push_back(tagged.GetPath().GetString() + ": no sensmat:preset " +
+                              preset.GetString());
+        }
+        const auto authored = [&tagged](const char* name, double& out) {
+            const UsdAttribute attribute = tagged.GetAttribute(TfToken(name));
+            if (attribute && attribute.HasAuthoredValue()) {
+                attribute.Get(&out);
+            }
+        };
+        authored("sensmat:reflectivity905", material.reflectivity905);
+        authored("sensmat:reflectivity1550", material.reflectivity1550);
+        authored("sensmat:specularFraction905", material.specular);
+        authored("sensmat:transmission905", material.transmission);
+        if (const UsdAttribute retro = tagged.GetAttribute(TfToken("sensmat:retroreflective"));
+            retro && retro.HasAuthoredValue()) {
+            retro.Get(&material.retroreflective);
+        }
+        m_.world.surfaceMaterials.push_back(material);
+        const auto index = static_cast<std::uint32_t>(m_.world.surfaceMaterials.size() - 1);
+        surfaceIndex_.emplace(tagged.GetPath(), index);
+        return index;
+    }
+
     void buildColliders() {
         World& w = m_.world;
         const SdfPath none;
@@ -914,6 +977,7 @@ private:
             if (!enabled) {
                 continue;
             }
+            const MaterialScope scope(w, w.colliders.body.size(), surfaceOf(prim));
             const SdfPath bodyPath = bodyOf(prim);
             const BodyId body = bodyPath.IsEmpty() ? kWorldBody : BodyId{bodyIndex_.at(bodyPath)};
             const Placement placement = world(prim);
@@ -1157,6 +1221,7 @@ private:
     const ReadOptions& options_;
     Model& m_;
     std::vector<UsdPrim> bodyPrims_;
+    std::map<SdfPath, std::uint32_t> surfaceIndex_;
     std::map<SdfPath, std::uint32_t> bodyIndex_;
     std::map<SdfPath, PrimId> worldPrim_;  // USD prim -> world prim, for schema instances
     std::vector<UsdPhysicsJoint> joints_;
@@ -1315,6 +1380,7 @@ Expected<Model, std::string> loadStage(const std::string& path, const ReadOption
         w.colliders.poseInBody.insert(w.colliders.poseInBody.begin(), Pose{});
         w.colliders.friction.insert(w.colliders.friction.begin(), options.groundFriction);
         w.colliders.hull.insert(w.colliders.hull.begin(), kNoHull);
+        w.colliders.material.insert(w.colliders.material.begin(), kNoMaterial);
         addGroundPrim(model);
     }
     const UsdPrim root = stage->GetDefaultPrim();
