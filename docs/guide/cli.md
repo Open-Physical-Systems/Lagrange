@@ -5,7 +5,7 @@ command it runs the simulator and its viewer together, like `gazebo`:
 
 ```bash
 source /opt/ros/lyrical/setup.bash && source install/setup.bash
-lagrange [SAMPLE | ROBOT [WORLD]] [SERVER OPTIONS] [-- VIEWER OPTIONS]
+lagrange [SAMPLE | ROBOT [WORLD] | RUN.yaml] [SERVER OPTIONS] [-- VIEWER OPTIONS]
 lagrange --server-only ...         # the server alone, headless
 lagrange viewer [VIEWER OPTIONS]   # the viewer alone
 lagrange samples                   # amr (default), sedan, quad, lexus, x500, swerve, people, empty

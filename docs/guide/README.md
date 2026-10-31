@@ -10,6 +10,7 @@
 | [Tutorial: a car in a city block](tutorial-cars.md) | The sedan's layers, OpenDRIVE roads, traffic, radar and camera, an OpenSCENARIO cut-in, driving over `/ackermann_cmd` |
 | [Tutorial: people around your robot](tutorial-humans.md) | A crowd, spawning a person, your own person with waypoints, how close a robot came, and what people do not do |
 | [Autoware with a simulated car](autoware.md) | The vehicle interface (`lagrange_autoware`), building it with the Autoware messages, the sedan launch, and what to do while Autoware is not on Lyrical |
+| [The run file](run-file.md) | One YAML file for a whole run: robot, world, what to simulate, the site. Start here for your own robot |
 | [Concepts](concepts.md) | Domains and substitutes, signals and units, the multirate scheduler, capability tiers, determinism, coordinates |
 | [Profiles](profiles.md) | The YAML that says what a run simulates; what v0.2 applies; the errors |
 | [Writing a module](writing-a-module.md) | The module interface, worked through with a wheel odometer |

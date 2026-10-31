@@ -201,7 +201,9 @@ Packages:
 source install/setup.bash          # or /opt/ros/lyrical/setup.bash with the debs installed
 lagrange                           # the server and the viewer: the sample AMR in the warehouse
 lagrange sedan                     # a sample by name: amr, sedan, quad, lexus, x500, swerve, people
-lagrange robot.urdf world.sdf      # your own robot and world (URDF, SDFormat, MJCF or USD)
+lagrange robot.urdf                # your own robot on an empty ground, still until you command it
+lagrange robot.usda world.sdf      # and a world (URDF, SDFormat, MJCF or USD)
+lagrange run.yaml                  # or say it all in one file: docs/guide/run-file.md
 lagrange --server-only sedan       # headless, like gzserver; `lagrange viewer` is the viewer alone
 lagrange empty                     # no robot: the ground only, then from another terminal
 lagrange spawn robot.urdf --at 2,0 #   add robots while it runs (lagrange delete /robot)

@@ -95,3 +95,37 @@ def test_robots_are_spawned_into_an_empty_run_and_deleted(tmp_path: Path) -> Non
         server.terminate()
         log = server.communicate(timeout=30)[0]
     assert "spawned amr_diffdrive" in log and "deleted mate" in log, log
+
+
+def run_file(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "run.yaml"
+    path.write_text(text)
+    return path
+
+
+AMR = Path(__file__).resolve().parents[3] / "assets/robots/amr_diffdrive/amr_diffdrive.urdf"
+
+
+def test_a_run_file_runs_a_robot_with_nothing_else(tmp_path: Path) -> None:
+    path = run_file(tmp_path, f"robot: {AMR}\nros: false\n")
+    env = {**os.environ, "XDG_RUNTIME_DIR": str(tmp_path)}
+    result = subprocess.run(
+        [CLI, str(path), "--", "--headless", "--frames", "3", "--wait-ms", "60000"],
+        capture_output=True,
+        text=True,
+        timeout=150,
+        env=env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "amr_diffdrive" in result.stdout + result.stderr
+    assert "warehouse" not in result.stdout + result.stderr, "no world unless one is named"
+
+
+def test_a_run_file_says_what_is_wrong_in_it(tmp_path: Path) -> None:
+    assert "unknown key robt" in run(str(run_file(tmp_path, "robt: x.urdf\n"))).stderr
+    assert (
+        "name a robot or a world" in run(str(run_file(tmp_path, "time: {paused: true}\n"))).stderr
+    )
+    assert "no file" in run(str(run_file(tmp_path, "robot: missing.urdf\n"))).stderr
+    bad = run(str(run_file(tmp_path, f"robot: {AMR}\nsimulate: {{ghosts: true}}\n")))
+    assert "unknown ghosts" in bad.stderr
