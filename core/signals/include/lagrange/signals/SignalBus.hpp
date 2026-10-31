@@ -47,6 +47,9 @@ public:
     /// Writes an output owned by the module being stepped.
     void write(SignalId id, double value, std::uint32_t env = 0);
     void writeN(SignalId id, std::span<const double> values, std::uint32_t env = 0);
+    /// This step has no new value of an output of the module being stepped: it does not commit,
+    /// so its stamp and readers stay as they are. For outputs that come irregularly (a delay line).
+    void hold(SignalId id);
 
     [[nodiscard]] BufferHandle readBuffer(SignalId id, std::uint32_t env = 0) const;
     void writeBuffer(SignalId id, BufferHandle handle, std::uint32_t env = 0);
@@ -122,6 +125,7 @@ private:
     std::uint32_t batchCount_{1};
     std::vector<SignalRecord> signals_;
     std::vector<InputSlot> inputs_;
+    std::vector<std::uint8_t> held_;  // per signal: hold() was called, until its commit
     std::vector<double> committed_, previous_, pending_;  // numeric outputs
     std::vector<std::uint64_t> committedHandles_, previousHandles_, pendingHandles_;
     struct KeptBuffer {

@@ -13,6 +13,7 @@ find_package(TBB REQUIRED)
 add_library(
     lagrange_sensors
     src/Sensors.cpp
+    src/DelayLine.cpp
     src/ImuNoise.cpp
     src/ShapeCaster.cpp
     src/BodyScene.cpp

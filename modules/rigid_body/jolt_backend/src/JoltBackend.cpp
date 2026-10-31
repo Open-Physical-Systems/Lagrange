@@ -10,6 +10,7 @@
 #include <cmath>
 #include <mutex>
 #include <numbers>
+#include <numeric>
 #include <span>
 #include <sstream>
 #include <string>
@@ -981,16 +982,58 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalIo& i
                 .SetMotorState(JPH::EMotorState::Position);
         }
     }
+    // Joints where a rebuilt run left them (World::Joints::initialPosition). The constraints above
+    // measure from the rest poses, so the bodies move only now: deepest joint first, each by its
+    // axis at rest, and the joints above then carry the result along.
+    std::vector<std::size_t> deepestFirst(s.joints.size());
+    std::iota(deepestFirst.begin(), deepestFirst.end(), std::size_t{0});
+    const auto depth = [&](std::size_t index) {
+        int d = 0;
+        const std::uint32_t child = world.joints.child[s.joints[index].joint].index;
+        for (BodyId b{child}; b != kWorldBody; b = bodies.parent[b.index]) {
+            ++d;
+        }
+        return d;
+    };
+    std::stable_sort(deepestFirst.begin(), deepestFirst.end(),
+                     [&](std::size_t a, std::size_t b) { return depth(a) > depth(b); });
+    JPH::BodyInterface& placed = s.system->GetBodyInterfaceNoLock();
+    for (const std::size_t index : deepestFirst) {
+        Impl::Joint& j = s.joints[index];
+        const double q = j.joint < world.joints.initialPosition.size()
+                             ? world.joints.initialPosition[j.joint]
+                             : 0.0;
+        if (q == 0.0) {
+            continue;
+        }
+        j.angle = q;
+        const Pose& at = rest[world.joints.child[j.joint].index];
+        const JPH::Vec3 axis = jv(rotate(at.orientation, world.joints.axis[j.joint])).Normalized();
+        const JPH::RVec3 anchor(jv(at.position));
+        const JPH::Quat turn = JPH::Quat::sRotation(axis, static_cast<float>(q));
+        for (const std::int32_t g : j.subtree) {
+            const JPH::BodyID id = s.groups.at(static_cast<std::size_t>(g)).id;
+            JPH::RVec3 position = placed.GetPosition(id);
+            JPH::Quat rotation = placed.GetRotation(id);
+            if (j.prismatic) {
+                position += static_cast<float>(q) * axis;
+            } else {
+                position = anchor + turn * JPH::Vec3(position - anchor);
+                rotation = (turn * rotation).Normalized();
+            }
+            placed.SetPositionAndRotation(id, position, rotation, JPH::EActivation::DontActivate);
+        }
+    }
     s.system->OptimizeBroadPhase();
 
-    // Initial outputs: the rest state.
+    // Initial outputs: the rest state, joints as placed.
     for (Impl::Joint& j : s.joints) {
         const std::uint32_t child = world.joints.child[j.joint].index;
         j.restInertia =
             j.armature +
             s.subtreeInertia(j, rotate(rest[child].orientation, world.joints.axis[j.joint]),
                              rest[child].position);
-        io.write(j.position, 0.0);
+        io.write(j.position, j.angle);
         io.write(j.velocity, 0.0);
         if (j.acceleration.valid()) {
             io.write(j.acceleration, 0.0);
@@ -999,7 +1042,10 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalIo& i
         }
     }
     for (Impl::Body& b : s.bodies) {
-        const Pose& p = rest[b.body];
+        const JPH::BodyID root = s.groups.at(static_cast<std::size_t>(s.groupOf[b.body])).id;
+        const Pose p =
+            compose({dv(JPH::Vec3(placed.GetPosition(root))), dq(placed.GetRotation(root))},
+                    s.inGroup[b.body]);
         const std::array<double, 7> pose{p.position[0],    p.position[1],    p.position[2],
                                          p.orientation[0], p.orientation[1], p.orientation[2],
                                          p.orientation[3]};

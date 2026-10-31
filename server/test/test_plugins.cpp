@@ -208,6 +208,23 @@ TEST_F(Plugins, TheTofPluginMeasuresTheGround) {
     EXPECT_EQ(server.read("sensor/front_tof/valid").at(0), 1.0);
 }
 
+// A plugin's sensor is delayed like any other, and what arrives is what was sampled then.
+TEST_F(Plugins, APluginSensorCanBeDelayed) {
+    ServerOptions options = amr({"lagrange_tof"});
+    options.robotPath = LAGRANGE_TEST_DATA "/tof_box.urdf";
+    options.overlayPath.clear();
+    options.sensorTiming.push_back({"front_tof", 0.1, 0.0});
+    Server server(options);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{2'000'000'000}).ok());
+    const double stamp = server.read("sensor/front_tof/delayed/stamp").at(0);
+    EXPECT_GE(stamp, 2.0 - 0.1 - 0.02 - 0.002);  // 50 Hz, and the 1 ms tick
+    EXPECT_LE(stamp, 2.0 - 0.1 + 1e-9);
+    EXPECT_NEAR(server.read("sensor/front_tof/delayed/range").at(0),
+                server.read("sensor/front_tof/range").at(0), 0.05);
+}
+
 TEST_F(Plugins, LoadingFailuresNameTheLibrary) {
     Server missing(amr({"no_such_plugin"}));
     const Status status = missing.load();
