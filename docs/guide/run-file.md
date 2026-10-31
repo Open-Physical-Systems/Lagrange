@@ -54,6 +54,8 @@ ros: true
 ros_topics: topics.yaml     # plugin signals on ROS: writing-a-plugin.md
 plugins: [lagrange_tof]
 humans: 6,radius=7          # people: tutorial-humans.md
+sensor_timing:              # how late a sensor's ROS messages arrive, in s
+  imu: {latency: 0.002, jitter: 0.0005}
 water:                      # still water: it floats what enters it, and lidars see it as water
   - {at: [0, 0, 0.5], size: [12, 8], depth: 0.5}    # x, y, surface height
 record: run.mcap

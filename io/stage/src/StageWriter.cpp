@@ -236,6 +236,12 @@ private:
                 "cannot apply SensorAPI_1: is lagrange_schemas on PXR_PLUGINPATH_NAME?")};
         }
         real("sensor:rate", sensors.rateHz[s]);
+        if (get("latency", 0.0) > 0.0) {
+            real("sensor:latency", get("latency", 0.0));
+        }
+        if (get("jitter", 0.0) > 0.0) {
+            real("sensor:jitter", get("jitter", 0.0));
+        }
         if (sensors.type[s] == SensorType::Lidar) {
             prim.ApplyAPI(TfToken("LidarAPI_1"));
             prim.CreateAttribute(TfToken("sensor:lidar:channels"), SdfValueTypeNames->Int)

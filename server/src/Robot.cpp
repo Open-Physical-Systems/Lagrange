@@ -682,6 +682,11 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
             const double rate = childNumber(sensor, {"update_rate"}, 10.0);
             std::map<std::string, double, std::less<>> settings;
             SensorType kind = SensorType::Imu;
+            for (const char* key : {"latency", "jitter"}) {
+                if (const double value = childNumber(sensor, {key}, 0.0); value > 0.0) {
+                    settings[key] = value;
+                }
+            }
             std::string typeName;
             if (type == "imu") {
                 const tinyxml2::XMLElement* imu = sensor->FirstChildElement("imu");

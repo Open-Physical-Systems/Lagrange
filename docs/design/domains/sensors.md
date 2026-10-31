@@ -88,10 +88,14 @@ sky directions as a stand-in for satellites), optional `urban` multipath bias.
 evaluated at the geo-origin; the model coefficients are a data file with an epoch), rotated into
 the body frame, soft- and hard-iron distortion, noise, plus `emi/{p}/b_field`.
 
-**Timing** (all sensors, from `SensorAPI`): a sample is taken at `k / rate` plus jitter
-(Gaussian, truncated), and delivered `latency` later. The message timestamp is the sampling
-time. Sampling instants are aligned to the scheduler tick that follows them; the alignment error
-is at most one base tick and is reported in the sensor's metadata signal.
+**Timing** (all sensors, from `SensorAPI`), as built: a sample is taken on the scheduler at
+`k / rate`, and its ROS message goes out `latency` plus jitter later (Gaussian, cut at 3σ, never
+out of order, on the simulation's clock), still stamped with the sampling time. Set it with
+`sensor:latency` and `sensor:jitter`, `<latency>` and `<jitter>` in a URDF's `<gazebo>` sensor,
+`--sensor-timing NAME=LATENCY[,JITTER]` or the run file's `sensor_timing:`. Only ROS topics are
+late: signals on the bus (and so other modules, plugins, recordings, Python and the viewer) have
+the sample at once, `/ground_truth` and `/tf` stay on time, and sampling instants themselves do not
+jitter. Messages go out on the bridge's publish, so a delay rounds up to its next tick.
 
 ## 3. Signals
 

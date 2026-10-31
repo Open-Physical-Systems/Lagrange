@@ -156,6 +156,14 @@ struct Bridge::Impl {
         std::uint64_t dropped{0};
     };
     std::map<std::string, Gate> gates;  // by topic
+    /// A sensor's topic with sensor:latency and sensor:jitter (s): when its messages go out.
+    struct SensorDelay {
+        double latency{0.0}, jitter{0.0};
+        SimTime last{0};  // a sensor's output stays in order, whatever the jitter
+    };
+    std::map<std::string, SensorDelay> sensorDelays;  // by topic
+    std::mt19937_64 timingRng{0x74696d65U};
+    std::normal_distribution<double> timingNoise;
     struct Pending {
         SimTime at;
         std::function<void()> send;
@@ -179,17 +187,30 @@ struct Bridge::Impl {
     template <class Publisher, class Message>
     void deliver(const std::string& topic, const Publisher& publisher, Message&& message) {
         const auto it = gates.find(topic);
-        if (it == gates.end() || gateBus == nullptr) {
+        const auto timed = sensorDelays.find(topic);
+        const bool gated = it != gates.end();
+        if ((!gated && timed == sensorDelays.end()) || gateBus == nullptr) {
             publisher->publish(std::forward<Message>(message));
             return;
         }
-        Gate& gate = it->second;
-        if (gateBus->read(gate.up) < 0.5 || uniform(rng) < gateBus->read(gate.loss)) {
-            ++gate.dropped;
-            return;
+        std::int64_t delay = 0;
+        if (gated) {
+            Gate& gate = it->second;
+            if (gateBus->read(gate.up) < 0.5 || uniform(rng) < gateBus->read(gate.loss)) {
+                ++gate.dropped;
+                return;
+            }
+            delay = static_cast<std::int64_t>(std::llround(gateBus->read(gate.latency) * 1e9));
         }
-        const auto delay =
-            static_cast<std::int64_t>(std::llround(gateBus->read(gate.latency) * 1e9));
+        if (timed != sensorDelays.end()) {
+            SensorDelay& sensor = timed->second;
+            // Gaussian, cut at three sigma; never before it was sampled, nor before the last one.
+            const double late =
+                sensor.latency + sensor.jitter * std::clamp(timingNoise(timingRng), -3.0, 3.0);
+            delay += static_cast<std::int64_t>(std::llround(std::max(late, 0.0) * 1e9));
+            delay = std::max(delay, sensor.last.ns - gateNow.ns);
+            sensor.last = SimTime{gateNow.ns + delay};
+        }
         if (delay <= 0 && pending.empty()) {
             publisher->publish(std::forward<Message>(message));
             return;
@@ -579,6 +600,18 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
     // Topics on radio links: the comms domain's link signals (none without it).
     s.gates.clear();
     s.pending.clear();
+    s.sensorDelays.clear();
+    s.timingRng.seed(0x74696d65U);
+    s.timingNoise.reset();
+    const auto timed = [&s](const auto& set, const std::string& topic) {
+        const auto value = [&set](const char* key) {
+            const auto it = set.find(key);
+            return it == set.end() ? 0.0 : it->second;
+        };
+        if (value("latency") > 0.0 || value("jitter") > 0.0) {
+            s.sensorDelays[topic] = {value("latency"), value("jitter")};
+        }
+    };
     s.gateBus = nullptr;
     {
         const std::lock_guard<std::mutex> lock(s.commandMutex);
@@ -647,6 +680,7 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             } else {
                 lidar.topic = scanners == 1 ? "/scan" : "/" + name + "/scan";
             }
+            timed(settings, lidar.topic);
             lidar.ranges = bus.find("sensor/" + name + "/ranges");
             lidar.intensities = bus.find("sensor/" + name + "/intensities");
             lidar.minRange = get("min_range", 0.1);
@@ -669,6 +703,10 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             }
             lidars.push_back(std::move(lidar));
         } else if (sensors.type[i] == SensorType::Camera) {
+            for (const char* topic :
+                 {"/camera_info", "/depth/camera_info", "/image_raw", "/depth/image_raw"}) {
+                timed(settings, "/" + name + topic);
+            }
             cameras.push_back(s.camera(name, settings));
             geometry_msgs::msg::TransformStamped optical;
             optical.header.frame_id = name;
@@ -686,6 +724,9 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             Impl::Geo geo;
             geo.type = sensors.type[i];
             geo.name = name;
+            for (const char* topic : {"/fix", "/field", "/pressure", "/temperature"}) {
+                timed(settings, "/" + name + topic);
+            }
             const std::string base = "sensor/" + name + "/";
             for (const Impl::Geo& old : s.geos) {
                 if (old.name == name) {  // keep subscribers across attach() calls
@@ -730,6 +771,7 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             Impl::Radar radar;
             radar.frame = name;
             radar.topic = "/" + name + "/detections";
+            timed(settings, radar.topic);
             radar.detections = bus.find("sensor/" + name + "/detections");
             radar.count = bus.find("sensor/" + name + "/count");
             for (const Impl::Radar& old : s.radars) {
@@ -746,6 +788,7 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             Impl::Imu imu;
             imu.frame = name;
             imu.topic = imuCount == 1 ? "/imu" : "/" + name + "/imu";
+            timed(settings, imu.topic);
             imu.force = bus.find("sensor/" + name + "/specific_force");
             imu.rate = bus.find("sensor/" + name + "/angular_rate");
             imu.orientation = bus.find("sensor/" + name + "/orientation");
