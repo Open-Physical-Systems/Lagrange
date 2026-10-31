@@ -92,6 +92,20 @@ enum class SensorType : std::uint8_t {
     Custom
 };
 
+/// What a lidar sees of a surface (SensorMaterialAPI_1; docs/design/domains/sensors.md §2).
+struct SurfaceMaterial {
+    double reflectivity905{0.5};   // of the diffuse and specular parts together, at 905 nm
+    double reflectivity1550{0.5};  // at 1550 nm
+    double specular{0.0};          // fraction that is mirror-like: comes back only near normal
+    double transmission{0.0};      // fraction of beams that go through (glass)
+    bool retroreflective{false};   // comes back at any angle, strongly (road signs, vests)
+};
+inline constexpr std::uint32_t kNoMaterial = 0xFFFF'FFFFU;
+
+/// A named surface (sensmat:preset, <sensor_material preset=...>): false for an unknown name. The
+/// numbers are illustrative orders of magnitude, not measurements; give your own where it matters.
+[[nodiscard]] bool surfaceMaterialPreset(std::string_view name, SurfaceMaterial& out);
+
 /// One applied API schema on one prim, with its attribute values read once at load.
 /// Lookups are by name, so they belong in declare() and init(), never in step().
 struct SchemaInstance {
@@ -169,7 +183,10 @@ struct World {
         std::vector<Pose> poseInBody;
         std::vector<double> friction;     // Coulomb coefficient, sliding
         std::vector<std::uint32_t> hull;  // index into hulls for a ConvexHull, else kNoHull
+        /// Index into surfaceMaterials, else kNoMaterial: the defaults, and always a return.
+        std::vector<std::uint32_t> material;
     } colliders;
+    std::vector<SurfaceMaterial> surfaceMaterials;
     std::vector<ConvexHull> hulls;
     std::vector<HeightField> heightfields;  // ShapeType::HeightField, by Colliders::hull
 

@@ -248,3 +248,28 @@ they are left out and the server logs why.
 Not yet: GNSS outages, multipath and latency; crustal field, hard- and soft-iron effects; the
 geoid (ellipsoidal height stands for altitude above mean sea level); the site's weather instead of
 the standard day (v0.5); URDF and SDFormat `<sensor type="gps|magnetometer|altimeter">` import.
+
+## Lidar intensity from materials (as built)
+
+`sensor/<name>/intensities` holds each beam's intensity next to `ranges`; it reaches `/scan`'s
+`intensities`, `/points`' `intensity` and the viewer. It is the reflected power relative to a white
+wall head-on at 1 m, capped at 1: `ρ·((1−s)·cos θ + s·lobe(θ))·(1 m / r)²`, with ρ the reflectivity at the
+lidar's wavelength (905 or 1550 nm), θ the incidence angle from the true surface normal, s the
+specular fraction and `lobe` a mirror's, 2° wide (illustrative). A retroreflector gives `100·ρ·(1 m / r)²` at any angle.
+A beam passes a surface with `transmission` by chance (seeded per step and beam; CPU only: the GPU tier gets the first hit).
+A surface with a material gives no return when its power is under what the lidar needs at its
+range limit for a target of `max_range_reflectivity` (default 0.1), so water and dark surfaces drop
+out at a slant or from far. Surfaces with no material keep ρ = 0.5 and always return.
+
+Give a surface a material with `SensorMaterialAPI_1` on a collider prim, an ancestor or its bound
+material (`sensmat:preset`, then any authored attribute), or in URDF:
+
+```xml
+<gazebo reference="deck">
+  <sensor_material preset="asphalt" reflectivity_905="0.12"/>
+</gazebo>
+```
+
+Presets (`default`, `water`, `glass`, `mirror`, `asphalt`, `concrete`, `white_paint`, `black_rubber`,
+`retroreflector`) are illustrative orders of magnitude, not measurements. The formula is tested against
+its closed form; a real lidar's intensity channel has not been compared with it.

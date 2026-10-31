@@ -216,7 +216,7 @@ struct Bridge::Impl {
     struct Lidar {
         std::string frame;
         std::string topic;
-        SignalId ranges;
+        SignalId ranges, intensities;
         LidarLayout layout;
         double minRange{0.0}, maxRange{0.0}, rateHz{10.0};
         SimTime sent{-1};
@@ -286,7 +286,8 @@ struct Bridge::Impl {
     /// (uint16), in the sensor frame, organised as rings x columns with NaN where no return.
     /// In Lyrical, PointCloud2::data is a rosidl::Buffer with the CPU backend; a CUDA backend
     /// can replace it without touching this code: docs/plan/spikes/0.2-F7-rosidl-buffer.md.
-    void publishCloud(const Lidar& lidar, std::span<const double> ranges) {
+    void publishCloud(const Lidar& lidar, std::span<const double> ranges,
+                      std::span<const double> intensities) {
         using sensor_msgs::msg::PointField;
         sensor_msgs::msg::PointCloud2 cloud;
         cloud.header.stamp = stampOf(lidar.sent);
@@ -318,10 +319,11 @@ struct Bridge::Impl {
         for (std::uint32_t i = 0; i < beams; ++i) {
             const std::array<double, 3> d = lidar.layout.direction(i);
             const bool hit = std::isfinite(ranges[i]);
-            const std::array<float, 4> values{hit ? static_cast<float>(ranges[i] * d[0]) : nan,
-                                              hit ? static_cast<float>(ranges[i] * d[1]) : nan,
-                                              hit ? static_cast<float>(ranges[i] * d[2]) : nan,
-                                              hit ? 1.0F : 0.0F};  // no reflectivity model yet
+            const std::array<float, 4> values{
+                hit ? static_cast<float>(ranges[i] * d[0]) : nan,
+                hit ? static_cast<float>(ranges[i] * d[1]) : nan,
+                hit ? static_cast<float>(ranges[i] * d[2]) : nan,
+                hit && i < intensities.size() ? static_cast<float>(intensities[i]) : 0.0F};
             const auto ring = static_cast<std::uint16_t>(i / lidar.layout.horizontal);
             std::uint8_t* point = cloud.data.data() + static_cast<std::size_t>(i) * kStride;
             std::memcpy(point, values.data(), sizeof(values));
@@ -633,6 +635,7 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
                 lidar.topic = scanners == 1 ? "/scan" : "/" + name + "/scan";
             }
             lidar.ranges = bus.find("sensor/" + name + "/ranges");
+            lidar.intensities = bus.find("sensor/" + name + "/intensities");
             lidar.minRange = get("min_range", 0.1);
             lidar.maxRange = get("max_range", 30.0);
             lidar.rateHz = sensors.rateHz[i];
@@ -856,7 +859,7 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
         lidar.sent = bus.stamp(lidar.ranges);
         const std::span<const double> ranges = bus.readN(lidar.ranges);
         if (lidar.cloudPublisher) {
-            s.publishCloud(lidar, ranges);
+            s.publishCloud(lidar, ranges, values(bus, lidar.intensities));
             continue;
         }
         sensor_msgs::msg::LaserScan scan;
@@ -874,6 +877,10 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
         scan.ranges.reserve(ranges.size());
         for (const double r : ranges) {
             scan.ranges.push_back(static_cast<float>(r));
+        }
+        if (lidar.intensities.valid()) {
+            const std::span<const double> intensities = bus.readN(lidar.intensities);
+            scan.intensities.assign(intensities.begin(), intensities.end());
         }
         s.deliver(lidar.topic, lidar.publisher, scan);
         s.counters[lidar.topic].add(ranges.size() * 4 + 64);

@@ -629,6 +629,30 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
                                                              : nullptr;
          gazebo != nullptr; gazebo = gazebo->NextSiblingElement("gazebo")) {
         const char* reference = gazebo->Attribute("reference");
+        // <sensor_material preset="asphalt" reflectivity_905="0.1" reflectivity_1550="0.1"
+        // specular="0" transmission="0" retroreflective="false"/>: what a lidar sees of the link.
+        if (const tinyxml2::XMLElement* surface = gazebo->FirstChildElement("sensor_material");
+            surface != nullptr && reference != nullptr) {
+            SurfaceMaterial material;
+            if (const char* preset = surface->Attribute("preset");
+                preset != nullptr && !surfaceMaterialPreset(preset, material)) {
+                robot.notes.push_back(std::string("no sensor_material preset ") + preset);
+            }
+            surface->QueryDoubleAttribute("reflectivity_905", &material.reflectivity905);
+            surface->QueryDoubleAttribute("reflectivity_1550", &material.reflectivity1550);
+            surface->QueryDoubleAttribute("specular", &material.specular);
+            surface->QueryDoubleAttribute("transmission", &material.transmission);
+            surface->QueryBoolAttribute("retroreflective", &material.retroreflective);
+            world.surfaceMaterials.push_back(material);
+            const auto index = static_cast<std::uint32_t>(world.surfaceMaterials.size() - 1);
+            for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
+                const BodyId owner = world.colliders.body[c];
+                if (owner != kWorldBody && owner.index >= firstBody &&
+                    world.bodies.names[owner.index] == reference) {
+                    world.colliders.material[c] = index;
+                }
+            }
+        }
         for (const tinyxml2::XMLElement* sensor = gazebo->FirstChildElement("sensor");
              sensor != nullptr; sensor = sensor->NextSiblingElement("sensor")) {
             const std::string type =

@@ -200,6 +200,22 @@ void appendModel(Model& model, const Model& other) {
         w.addCollider(map(o.colliders.body[c]), o.colliders.shape[c], o.colliders.size[c],
                       o.colliders.poseInBody[c], o.colliders.friction[c]);
     }
+    // Their surfaces: the colliders above in order, each with its material appended.
+    {
+        const auto materialOffset = static_cast<std::uint32_t>(w.surfaceMaterials.size());
+        w.surfaceMaterials.insert(w.surfaceMaterials.end(), o.surfaceMaterials.begin(),
+                                  o.surfaceMaterials.end());
+        std::size_t added = w.colliders.material.size();
+        for (std::size_t c = o.colliders.body.size(); c-- > 0;) {
+            if (o.colliders.body[c] == kWorldBody && o.colliders.shape[c] == ShapeType::Plane) {
+                continue;
+            }
+            --added;
+            if (o.colliders.material[c] != kNoMaterial) {
+                w.colliders.material[added] = o.colliders.material[c] + materialOffset;
+            }
+        }
+    }
     for (std::size_t s = 0; s < o.sensors.names.size(); ++s) {
         w.addSensor(o.sensors.names[s], o.sensors.type[s], map(o.sensors.body[s]),
                     o.sensors.poseInBody[s], o.sensors.rateHz[s], o.sensors.settings[s]);
@@ -302,6 +318,7 @@ void appendModel(Model& model, const Model& other) {
                 c.size.erase(c.size.begin() + at);
                 c.poseInBody.erase(c.poseInBody.begin() + at);
                 c.friction.erase(c.friction.begin() + at);
+                c.material.erase(c.material.begin() + at);
                 c.hull.erase(c.hull.begin() + at);
             }
         }
@@ -379,6 +396,7 @@ void truncateModel(Model& model, const ModelExtent& extent) {
     c.size.resize(extent.colliders);
     c.poseInBody.resize(extent.colliders);
     c.friction.resize(extent.colliders);
+    c.material.resize(extent.colliders);
     c.hull.resize(extent.colliders);
     model.world.hulls.resize(extent.hulls);
     model.world.heightfields.resize(extent.heightfields);
@@ -420,6 +438,12 @@ void appendTile(Model& model, const Model& tile, const std::string& tilePath,
         } else {
             w.addCollider(kWorldBody, o.colliders.shape[c], o.colliders.size[c],
                           local(o.colliders.poseInBody[c]), o.colliders.friction[c]);
+        }
+        // A tile's surface: one table entry per collider that has one (tiles are truncated away
+        // and the table only grows by what they name; a run has few tiles with materials).
+        if (o.colliders.material[c] != kNoMaterial) {
+            w.surfaceMaterials.push_back(o.surfaceMaterials.at(o.colliders.material[c]));
+            w.colliders.material.back() = static_cast<std::uint32_t>(w.surfaceMaterials.size() - 1);
         }
     }
 

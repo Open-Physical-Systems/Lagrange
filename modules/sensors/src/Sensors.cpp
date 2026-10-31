@@ -417,6 +417,14 @@ public:
             out.arrayLength = samples_;
             return out;
         }());
+        intensities_ = d.output([&] {
+            SignalSpec out =
+                spec("sensor/" + name_ + "/intensities", SignalType::ScalarArray, units::one);
+            out.arrayLength = samples_;
+            return out;
+        }());
+        wavelength1550_ = setting(sensors, sensor_, "wavelength", 905e-9) > 1.2e-6;
+        referenceReflectivity_ = setting(sensors, sensor_, "max_range_reflectivity", 0.1);
         // In the weather domain's air (config "weather": it runs): extinction at the lidar's
         // wavelength, the fog's share of it, the rain rate and the window's contamination.
         weather_ = config.get<bool>("weather").value_or(false) && !groundTruth_;
@@ -462,6 +470,9 @@ public:
                             : nullptr,
                         colliders.shape[c] == ShapeType::HeightField
                             ? &world.raw().heightfields.at(colliders.hull[c])
+                            : nullptr,
+                        colliders.material[c] != kNoMaterial
+                            ? &world.raw().surfaceMaterials.at(colliders.material[c])
                             : nullptr};
             // Geometry that never moves is placed in the world once.
             if (owner == kWorldBody) {
@@ -493,13 +504,17 @@ public:
             castShapes_.resize(shapes_.size());
             hits_.resize(samples_);
         }
+        hitShape_.assign(samples_, kNoShapeHit);
+        intensity_.assign(samples_, 0.0);
         bus.writeN(ranges_, buffer_);
+        bus.writeN(intensities_, intensity_);
         return {};
     }
 
     Status step(const StepContext& context, SignalBus& bus) override {
         if (groundTruth_) {
             bus.writeN(ranges_, buffer_);  // no rendering: no returns (+inf from init)
+            bus.writeN(intensities_, intensity_);
             return {};
         }
         const Pose sensor = compose(bodyPose(bus, body_), mount_);
@@ -513,10 +528,34 @@ public:
             castOnGpu(sensor);
             for (std::uint32_t i = 0; i < samples_; ++i) {
                 nearest_[i] = static_cast<double>(hits_[i].range);
+                hitShape_[i] = hits_[i].shape == gpu::kNoShape ? kNoShapeHit : hits_[i].shape;
             }
         } else {
-            castOnCpu(sensor);
+            castOnCpu(context, sensor);
         }
+        // What each hit returns, from its surface; a surface too faint for the lidar drops out.
+        tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
+            intensity_[i] = 0.0;
+            if (hitShape_[i] == kNoShapeHit || !std::isfinite(nearest_[i])) {
+                return;
+            }
+            const Shape& shape = shapes_[hitShape_[i]];
+            const Vec3 dir = rotate(sensor.orientation, layout_.direction(i));
+            const Vec3 at{sensor.position[0] + dir[0] * nearest_[i],
+                          sensor.position[1] + dir[1] * nearest_[i],
+                          sensor.position[2] + dir[2] * nearest_[i]};
+            const Vec3 n = surfaceNormal(shape.type, shape.size, placed_[hitShape_[i]], at,
+                                         shape.hull, shape.field);
+            const double cosine = -(dir[0] * n[0] + dir[1] * n[1] + dir[2] * n[2]);
+            static const SurfaceMaterial kDefault{};
+            const LidarReturn back = lidarReturn(
+                shape.material != nullptr ? *shape.material : kDefault, shape.material != nullptr,
+                wavelength1550_, cosine, nearest_[i], maxRange_, referenceReflectivity_);
+            intensity_[i] = back.intensity;
+            if (!back.detected) {
+                nearest_[i] = kNoHit;
+            }
+        });
         if (weather_) {
             // A fog field: its optical depth along each beam up to the hit, and its value at the
             // sensor for the clutter near it (taken as the extinction at the lidar's wavelength).
@@ -554,7 +593,13 @@ public:
             }
             buffer_[i] = std::clamp(nearest, minRange_, maxRange_);
         }
+        for (std::uint32_t i = 0; i < samples_; ++i) {
+            if (!std::isfinite(buffer_[i])) {
+                intensity_[i] = 0.0;
+            }
+        }
         bus.writeN(ranges_, buffer_);
+        bus.writeN(intensities_, intensity_);
         return {};
     }
 
@@ -566,19 +611,47 @@ private:
         int body;
         const ConvexHull* hull;  // in the world tables, which outlive the run
         const HeightField* field;
+        const SurfaceMaterial* material;  // in the world tables, or none
     };
 
     /// Tier 0: exact casts in double, culled by Embree (ShapeCaster), beams in parallel. Each
     /// beam is independent, so the result does not depend on the threads.
-    void castOnCpu(const Pose& sensor) {
+    void castOnCpu(const StepContext& context, const Pose& sensor) {
         for (std::size_t k = 0; k < shapes_.size(); ++k) {
             casterShapes_[k] = {shapes_[k].type, shapes_[k].size, placed_[k], shapes_[k].hull,
                                 shapes_[k].field};
         }
         caster_.update(casterShapes_);
         tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
-            nearest_[i] =
-                caster_.cast(sensor.position, rotate(sensor.orientation, layout_.direction(i)));
+            const Vec3 dir = rotate(sensor.orientation, layout_.direction(i));
+            Vec3 from = sensor.position;
+            double travelled = 0.0;
+            nearest_[i] = std::numeric_limits<double>::infinity();
+            hitShape_[i] = kNoShapeHit;
+            // Through what the beam passes (glass): by chance, (seed, step, beam).
+            for (int passes = 0; passes < kMaxPasses; ++passes) {
+                const services::RayHit hit = caster_.castHit(from, dir);
+                if (!hit.hit()) {
+                    return;
+                }
+                const SurfaceMaterial* m = shapes_[hit.shape].material;
+                if (m != nullptr && m->transmission > 0.0) {
+                    random::Stream rng(
+                        context.seed, context.stepIndex,
+                        kTransmissionStream + i + static_cast<std::uint32_t>(passes));
+                    if (rng.uniform() < m->transmission) {
+                        // Past both of its faces; a thick pane's far face comes next.
+                        travelled += hit.distance + kPastSurfaceM;
+                        from = {sensor.position[0] + dir[0] * travelled,
+                                sensor.position[1] + dir[1] * travelled,
+                                sensor.position[2] + dir[2] * travelled};
+                        continue;
+                    }
+                }
+                nearest_[i] = travelled + hit.distance;
+                hitShape_[i] = hit.shape;
+                return;
+            }
         });
     }
 
@@ -606,7 +679,16 @@ private:
         return {{v[0], v[1], v[2]}, {v[3], v[4], v[5], v[6]}};
     }
 
-    static constexpr std::uint32_t kWeatherStream = 0x8000'0000U;  // + beam
+    static constexpr std::uint32_t kWeatherStream = 0x8000'0000U;       // + beam
+    static constexpr std::uint32_t kTransmissionStream = 0x4000'0000U;  // + beam + pass
+    static constexpr std::uint32_t kNoShapeHit = 0xFFFF'FFFFU;
+    static constexpr int kMaxPasses = 6;
+    static constexpr double kPastSurfaceM = 1e-4;
+    SignalId intensities_;
+    std::vector<std::uint32_t> hitShape_;
+    std::vector<double> intensity_;
+    bool wavelength1550_{false};
+    double referenceReflectivity_{0.1};
     bool weather_{false};
     LidarClutter clutter_;
     SignalId extinction_, fogExtinction_, rainRate_, contamination_, fogField_;
