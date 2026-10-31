@@ -62,7 +62,13 @@ inline constexpr std::uint32_t kNoMimic = 0xFFFF'FFFFU;
 struct ConvexHull {
     std::vector<std::array<double, 3>> points;
     std::vector<std::array<std::uint32_t, 3>> triangles;
+    /// Each triangle's plane, unit outward normal and offset (n·p ≤ offset inside), as
+    /// World::addHullCollider stores it: rays test these for every beam.
+    std::vector<std::array<double, 4>> faces;
 };
+
+/// The face planes of a hull, each turned so that the hull's centre is inside.
+void hullFacePlanes(const ConvexHull& hull, std::vector<std::array<double, 4>>& out);
 
 /// Terrain as a regular grid of heights (huge-worlds.md §4): `columns` x `rows` samples, cellX
 /// and cellY apart, centred on the shape's origin; heights[row * columns + column] is z in the

@@ -114,8 +114,11 @@ double box(const Vec3& o, const Vec3& d, const Vec3& half) {
 
 /// Ray against a convex polyhedron, as the intersection of its faces' half-spaces.
 double convexHull(const Vec3& o, const Vec3& d, const ConvexHull& hull) {
-    thread_local std::vector<std::array<double, 4>> planes;
-    facePlanes(hull, planes);
+    thread_local std::vector<std::array<double, 4>> computed;  // for a hull not in world tables
+    if (hull.faces.empty()) {
+        hullFacePlanes(hull, computed);
+    }
+    const std::vector<std::array<double, 4>>& planes = hull.faces.empty() ? computed : hull.faces;
     if (planes.empty()) {
         return kNoHit;
     }
@@ -253,34 +256,7 @@ double heightField(const Vec3& o, const Vec3& d, const std::array<double, 3>& ha
 }  // namespace
 
 void facePlanes(const ConvexHull& hull, std::vector<std::array<double, 4>>& out) {
-    out.clear();
-    Vec3 centre{};
-    for (const auto& p : hull.points) {
-        for (std::size_t i = 0; i < 3; ++i) {
-            centre.at(i) += p.at(i) / static_cast<double>(hull.points.size());
-        }
-    }
-    for (const auto& t : hull.triangles) {
-        const Vec3& a = hull.points.at(t[0]);
-        const Vec3& b = hull.points.at(t[1]);
-        const Vec3& c = hull.points.at(t[2]);
-        const Vec3 u{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
-        const Vec3 v{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
-        Vec3 n{u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
-        const double length = std::sqrt(dot(n, n));
-        if (length <= 0.0) {
-            continue;  // a degenerate triangle has no plane
-        }
-        for (double& x : n) {
-            x /= length;
-        }
-        double offset = dot(n, a);
-        if (dot(n, centre) > offset) {
-            n = {-n[0], -n[1], -n[2]};
-            offset = -offset;
-        }
-        out.push_back({n[0], n[1], n[2], offset});
-    }
+    hullFacePlanes(hull, out);
 }
 
 double raycast(ShapeType shape, const std::array<double, 3>& size, const Pose& shapePose,
@@ -508,6 +484,10 @@ public:
                                     &waterMaterials_.back()});
         }
         placed_.resize(shapes_.size());
+        beamDirection_.resize(samples_);
+        for (std::uint32_t i = 0; i < samples_; ++i) {
+            beamDirection_[i] = layout_.direction(i);
+        }
         buffer_.assign(samples_, kNoHit);
         nearest_.assign(samples_, kNoHit);
         casterShapes_.resize(shapes_.size());
@@ -566,7 +546,7 @@ public:
             }
             const Shape& shape = shapes_[hitShape_[i]];
             const Pose& from = columnPose_[i % layout_.horizontal];
-            const Vec3 dir = rotate(from.orientation, layout_.direction(i));
+            const Vec3 dir = rotate(from.orientation, beamDirection_[i]);
             const Vec3 at{from.position[0] + dir[0] * nearest_[i],
                           from.position[1] + dir[1] * nearest_[i],
                           from.position[2] + dir[2] * nearest_[i]};
@@ -599,14 +579,19 @@ public:
                 double depth = 0.0;
                 if (field && std::isfinite(nearest_[i])) {
                     const Pose& from = columnPose_[i % layout_.horizontal];
-                    const Vec3 dir = rotate(from.orientation, layout_.direction(i));
+                    const Vec3 dir = rotate(from.orientation, beamDirection_[i]);
                     const double to = std::min(nearest_[i], maxRange_);
                     const Vec3& o = from.position;
                     depth = field->integrate(
                         o, {o[0] + dir[0] * to, o[1] + dir[1] * to, o[2] + dir[2] * to});
                 }
+                const double hit = nearest_[i];
                 nearest_[i] =
-                    weatherRange(nearest_[i], minRange_, maxRange_, w, clutter_, u1, u2, u3, depth);
+                    weatherRange(hit, minRange_, maxRange_, w, clutter_, u1, u2, u3, depth);
+                if (nearest_[i] < hit) {  // clutter, not the surface: as faint as the air is
+                    const double r = std::max(nearest_[i], 1.0);
+                    intensity_[i] = clutter_.reflectivity / (r * r);
+                }
             });
         }
         for (std::uint32_t i = 0; i < samples_; ++i) {
@@ -719,22 +704,21 @@ private:
         caster_.update(casterShapes_);
         tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
             const Pose& start = columnPose_[i % layout_.horizontal];
-            const Vec3 dir = rotate(start.orientation, layout_.direction(i));
+            const Vec3 dir = rotate(start.orientation, beamDirection_[i]);
             Vec3 from = start.position;
             double travelled = 0.0;
             nearest_[i] = std::numeric_limits<double>::infinity();
             hitShape_[i] = kNoShapeHit;
             // Through what the beam passes (glass): by chance, (seed, step, beam).
-            for (int passes = 0; passes < kMaxPasses; ++passes) {
+            for (std::uint32_t passes = 0; passes < kMaxPasses; ++passes) {
                 const services::RayHit hit = caster_.castHit(from, dir);
                 if (!hit.hit()) {
                     return;
                 }
                 const SurfaceMaterial* m = shapes_[hit.shape].material;
                 if (m != nullptr && m->transmission > 0.0) {
-                    random::Stream rng(
-                        context.seed, context.stepIndex,
-                        kTransmissionStream + i + static_cast<std::uint32_t>(passes));
+                    random::Stream rng(context.seed, context.stepIndex,
+                                       kTransmissionStream + i * kMaxPasses + passes);
                     if (rng.uniform() < m->transmission) {
                         // Past both of its faces; a thick pane's far face comes next.
                         travelled += hit.distance + kPastSurfaceM;
@@ -772,7 +756,7 @@ private:
             beamOrigins_.resize(samples_);
             for (std::uint32_t i = 0; i < samples_; ++i) {
                 const Pose& from = columnPose_[i % layout_.horizontal];
-                const Vec3 world = rotate(from.orientation, layout_.direction(i));
+                const Vec3 world = rotate(from.orientation, beamDirection_[i]);
                 const Vec3 d = rotate(back, world);
                 const Vec3 o = rotate(back, {from.position[0] - sensor.position[0],
                                              from.position[1] - sensor.position[1],
@@ -797,9 +781,9 @@ private:
     }
 
     static constexpr std::uint32_t kWeatherStream = 0x8000'0000U;       // + beam
-    static constexpr std::uint32_t kTransmissionStream = 0x4000'0000U;  // + beam + pass
+    static constexpr std::uint32_t kTransmissionStream = 0x4000'0000U;  // + beam × passes + pass
     static constexpr std::uint32_t kNoShapeHit = 0xFFFF'FFFFU;
-    static constexpr int kMaxPasses = 6;
+    static constexpr std::uint32_t kMaxPasses = 6;
     static constexpr double kPastSurfaceM = 1e-4;
     bool distort_{true};
     bool hasScanEnd_{false};
@@ -807,6 +791,7 @@ private:
     bool beamsMoved_{false};  // the GPU's beams are not the sensor's at rest
     Pose scanEnd_;
     std::vector<Pose> columnPose_;
+    std::vector<Vec3> beamDirection_;  // per beam, sensor frame
     std::vector<std::array<float, 3>> beamDirections_, beamOrigins_;
     SignalId intensities_;
     std::vector<SurfaceMaterial> waterMaterials_;  // reserved before shapes_ point into it

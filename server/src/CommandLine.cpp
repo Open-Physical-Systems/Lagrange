@@ -538,18 +538,27 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             const std::size_t equals = pair.find('=');
             double latency = 0.0;
             double jitter = 0.0;
-            if (equals == std::string::npos || equals == 0 ||
-                std::sscanf(pair.c_str() + equals + 1, "%lf,%lf", &latency, &jitter) < 1 ||
-                latency < 0.0 || jitter < 0.0) {
+            int used = 0;
+            const char* numbers = pair.c_str() + equals + 1;
+            const int read =
+                equals == std::string::npos || equals == 0
+                    ? 0
+                    : std::sscanf(numbers, "%lf%n,%lf%n", &latency, &used, &jitter, &used);
+            if (read < 1 || numbers[used] != '\0' || !std::isfinite(latency) ||
+                !std::isfinite(jitter) || latency < 0.0 || jitter < 0.0) {
                 return "--sensor-timing needs NAME=LATENCY[,JITTER], in seconds";
             }
             options.sensorTiming.push_back({pair.substr(0, equals), latency, jitter});
         } else if (arg == "--water") {
             const char* text = value();
             std::array<double, 6> v{};
-            if (text == nullptr || std::sscanf(text, "%lf,%lf,%lf,%lf,%lf,%lf", &v[0], &v[1], &v[2],
-                                               &v[3], &v[4], &v[5]) != 6) {
-                return "--water needs X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH";
+            int used = 0;
+            if (text == nullptr ||
+                std::sscanf(text, "%lf,%lf,%lf,%lf,%lf,%lf%n", &v[0], &v[1], &v[2], &v[3], &v[4],
+                            &v[5], &used) != 6 ||
+                text[used] != '\0' || !std::isfinite(v[0] + v[1] + v[2]) || !(v[3] > 0.0) ||
+                !(v[4] > 0.0) || !(v[5] > 0.0) || !std::isfinite(v[3] + v[4] + v[5])) {
+                return "--water needs X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH, the last three positive";
             }
             options.water.push_back({{v[0], v[1], v[2]}, v[3], v[4], v[5]});
         } else if (arg == "--joint-control") {

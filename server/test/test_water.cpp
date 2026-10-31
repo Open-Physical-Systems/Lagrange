@@ -1,7 +1,9 @@
 // Water: buoyancy against Archimedes, and what a lidar sees of it.
 #include "lagrange/server/Server.hpp"
 
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -45,7 +47,8 @@ TEST(Water, ABoxFloatsAtItsDraft) {
         Server server(pool(32.0, 2.6, physics));
         const Status loaded = server.load();
         ASSERT_TRUE(loaded.ok()) << loaded.message;
-        ASSERT_TRUE(server.stepUntil(SimTime{20'000'000'000}).ok());
+        // Quadratic drag alone calms a small bob slowly: no waves carry its energy away.
+        ASSERT_TRUE(server.stepUntil(SimTime{90'000'000'000}).ok());
         const std::string name = server.world().bodies.names.at(0);
         EXPECT_NEAR(server.read("body/" + name + "/pose").at(2), 2.0, 0.01) << physics;
         EXPECT_NEAR(server.read("body/" + name + "/submerged").at(0), 0.5, 0.03) << physics;
@@ -70,6 +73,76 @@ TEST(Water, HeavyThingsSinkLightOnesRiseAndDragLimitsTheSpeed) {
     EXPECT_NEAR(off.read("body/" + off.world().bodies.names.at(0) + "/pose").at(2), 0.2, 0.01);
 }
 
+// Terminal speed in the water: (m − ρV) g = ½ ρ Cd A v², with A the face it falls on. Deep enough
+// that it gets there; well above the ground.
+TEST(Water, ASinkingBoxReachesItsTerminalSpeed) {
+    ServerOptions o = pool(80.0, 49.0, "mujoco");
+    o.water = {{{0.0, 0.0, 50.0}, 10.0, 10.0, 50.0}};
+    Server server(o);
+    ASSERT_TRUE(server.load().ok());
+    ASSERT_TRUE(server.stepUntil(SimTime{10'000'000'000}).ok());
+    const std::string name = server.world().bodies.names.at(0);
+    constexpr double kG = 9.80665;
+    const double expected = std::sqrt(2.0 * (80.0 - 1000.0 * 0.064) * kG / (1000.0 * 1.0 * 0.16));
+    EXPECT_NEAR(std::abs(server.read("body/" + name + "/twist").at(2)), expected, 0.03 * expected);
+}
+
+// A hull whose origin is at one end: it floats level, at the draft of its true volume.
+TEST(Water, AnOffCentreHullFloatsLevel) {
+    const std::filesystem::path stl =
+        std::filesystem::temp_directory_path() /
+        ("lagrange_water_hull_" + std::to_string(::getpid()) + ".stl");
+    {
+        // x 0 to 2, y ±0.5, z ±0.125: flat, as a square log at this density rolls onto a corner.
+        using P = std::array<float, 3>;
+        const auto at = [](int x, int y, int z) {
+            return P{x != 0 ? 2.0F : 0.0F, y != 0 ? 0.5F : -0.5F, z != 0 ? 0.125F : -0.125F};
+        };
+        const std::vector<std::array<P, 3>> triangles{
+            {at(0, 0, 0), at(0, 1, 0), at(1, 1, 0)}, {at(0, 0, 0), at(1, 1, 0), at(1, 0, 0)},
+            {at(0, 0, 1), at(1, 0, 1), at(1, 1, 1)}, {at(0, 0, 1), at(1, 1, 1), at(0, 1, 1)},
+            {at(0, 0, 0), at(1, 0, 0), at(1, 0, 1)}, {at(0, 0, 0), at(1, 0, 1), at(0, 0, 1)},
+            {at(0, 1, 0), at(0, 1, 1), at(1, 1, 1)}, {at(0, 1, 0), at(1, 1, 1), at(1, 1, 0)},
+            {at(0, 0, 0), at(0, 0, 1), at(0, 1, 1)}, {at(0, 0, 0), at(0, 1, 1), at(0, 1, 0)},
+            {at(1, 0, 0), at(1, 1, 0), at(1, 1, 1)}, {at(1, 0, 0), at(1, 1, 1), at(1, 0, 1)}};
+        std::ofstream file(stl, std::ios::binary);
+        const std::array<char, 80> header{};
+        file.write(header.data(), header.size());
+        const auto count = static_cast<std::uint32_t>(triangles.size());
+        file.write(reinterpret_cast<const char*>(&count), sizeof(count));
+        for (const auto& t : triangles) {
+            const P normal{};
+            file.write(reinterpret_cast<const char*>(normal.data()), sizeof(normal));
+            file.write(reinterpret_cast<const char*>(t.data()), sizeof(t));
+            const std::uint16_t attribute = 0;
+            file.write(reinterpret_cast<const char*>(&attribute), sizeof(attribute));
+        }
+    }
+    const std::filesystem::path urdf = stl.string() + ".urdf";
+    // 250 kg with its centre of mass at the box's middle: half of its 0.5 m³ under water.
+    std::ofstream(urdf) << R"(<?xml version="1.0"?><robot name="barge"><link name="hull"><inertial>
+<origin xyz="1 0 0"/><mass value="250"/><inertia ixx="10" iyy="85" izz="85" ixy="0" ixz="0" iyz="0"/>
+</inertial><collision><geometry><mesh filename="file://)"
+                        << stl.string() << R"("/></geometry></collision></link></robot>)";
+    ServerOptions o;
+    o.robotPath = urdf.string();
+    o.worldPath.clear();
+    o.water.push_back({{0.0, 0.0, 2.0}, 20.0, 20.0, 2.0});
+    o.spawn = Pose{{0.0, 0.0, 2.1}, {1.0, 0.0, 0.0, 0.0}};
+    o.demoDrive = false;
+    o.ros = false;
+    o.realTimeFactor = 0.0;
+    Server server(o);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{90'000'000'000}).ok());
+    EXPECT_NEAR(server.read("body/hull/submerged").at(0), 0.5, 0.03);
+    const std::vector<double> pose = server.read("body/hull/pose");
+    EXPECT_NEAR(pose.at(2), 2.0, 0.02);
+    EXPECT_NEAR(pose.at(4), 0.0, 0.02) << "level across";
+    EXPECT_NEAR(pose.at(5), 0.0, 0.02) << "level along: its origin is at one end";
+}
+
 /// A lidar 2 m above the water, its 21 beams fanned ±0.3 rad about straight down.
 std::string lidarOverWater() {
     const std::filesystem::path path =
@@ -86,24 +159,30 @@ ixz="0" iyz="0"/></inertial></link><joint name="fix" type="fixed"><parent link="
 }
 
 // Straight down a lidar sees the surface, faintly; at a slant, nothing: not even the ground under
-// the water, whatever the ground would give.
+// the water, whatever the ground would give. On either lidar tier.
 TEST(Water, ALidarSeesAMirror) {
-    ServerOptions o;
-    o.robotPath = lidarOverWater();
-    o.water.push_back({{0.0, 0.0, 0.5}, 20.0, 20.0, 0.5});
-    o.ros = false;
-    o.realTimeFactor = 0.0;
-    Server server(o);
-    const Status loaded = server.load();
-    ASSERT_TRUE(loaded.ok()) << loaded.message;
-    ASSERT_TRUE(server.stepUntil(SimTime{200'000'000}).ok());
-    const std::vector<double> ranges = server.read("sensor/down/ranges");
-    const std::vector<double> intensities = server.read("sensor/down/intensities");
-    ASSERT_EQ(ranges.size(), 21U);
-    EXPECT_NEAR(ranges[10], 2.0, 1e-6) << "the middle beam: the surface";
-    EXPECT_NEAR(intensities[10], 0.02 / 4.0, 1e-6);
-    EXPECT_FALSE(std::isfinite(ranges[0])) << "a slant beam goes away";
-    EXPECT_FALSE(std::isfinite(ranges[20]));
+    for (const auto tier : {ServerOptions::Lidar::Cpu, ServerOptions::Lidar::Gpu}) {
+        ServerOptions o;
+        o.robotPath = lidarOverWater();
+        o.water.push_back({{0.0, 0.0, 0.5}, 20.0, 20.0, 0.5});
+        o.ros = false;
+        o.realTimeFactor = 0.0;
+        o.lidar = tier;
+        Server server(o);
+        const Status loaded = server.load();
+        if (!loaded.ok() && tier == ServerOptions::Lidar::Gpu) {
+            GTEST_SKIP() << loaded.message;
+        }
+        ASSERT_TRUE(loaded.ok()) << loaded.message;
+        ASSERT_TRUE(server.stepUntil(SimTime{200'000'000}).ok());
+        const std::vector<double> ranges = server.read("sensor/down/ranges");
+        const std::vector<double> intensities = server.read("sensor/down/intensities");
+        ASSERT_EQ(ranges.size(), 21U);
+        EXPECT_NEAR(ranges[10], 2.0, 1e-6) << "the middle beam: the surface";
+        EXPECT_NEAR(intensities[10], 0.02 / 4.0, 1e-6);
+        EXPECT_FALSE(std::isfinite(ranges[0])) << "a slant beam goes away";
+        EXPECT_FALSE(std::isfinite(ranges[20]));
+    }
 }
 
 }  // namespace

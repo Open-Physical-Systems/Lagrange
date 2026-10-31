@@ -63,7 +63,7 @@ lagrange::World worldOf(const lagrange::plugin_sdk::World& in) {
         const auto shape = static_cast<lagrange::ShapeType>(collider.shape);
         if (shape == lagrange::ShapeType::ConvexHull) {
             out.addHullCollider(bodyOf(collider.body),
-                                lagrange::ConvexHull{collider.points, collider.triangles},
+                                lagrange::ConvexHull{collider.points, collider.triangles, {}},
                                 poseOf(collider.pose), collider.friction);
         } else if (shape == lagrange::ShapeType::HeightField) {
             lagrange::HeightField field;

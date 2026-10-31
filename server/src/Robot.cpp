@@ -723,6 +723,10 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
             surface->QueryDoubleAttribute("specular", &material.specular);
             surface->QueryDoubleAttribute("transmission", &material.transmission);
             surface->QueryBoolAttribute("retroreflective", &material.retroreflective);
+            material.reflectivity905 = std::max(material.reflectivity905, 0.0);
+            material.reflectivity1550 = std::max(material.reflectivity1550, 0.0);
+            material.specular = std::clamp(material.specular, 0.0, 1.0);
+            material.transmission = std::clamp(material.transmission, 0.0, 1.0);
             world.surfaceMaterials.push_back(material);
             const auto index = static_cast<std::uint32_t>(world.surfaceMaterials.size() - 1);
             for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {

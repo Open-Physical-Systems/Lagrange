@@ -21,25 +21,50 @@ SignalSpec spec(std::string name, SignalType type, Unit unit, std::string frame 
     return s;
 }
 
-/// Half extents of a shape's box, its volume, and whether a point of its frame is inside.
+/// A shape's bounds in its frame, and its volume.
 struct ShapeBox {
-    std::array<double, 3> half{};
+    std::array<double, 3> lo{}, hi{};
     double volume{0.0};
 };
 
-ShapeBox boxOf(ShapeType type, const std::array<double, 3>& s) {
+ShapeBox boxOf(ShapeType type, const std::array<double, 3>& s, const ConvexHull* hull) {
     constexpr double kPi = std::numbers::pi;
+    const auto centred = [](double x, double y, double z, double volume) {
+        return ShapeBox{{-x, -y, -z}, {x, y, z}, volume};
+    };
     switch (type) {
         case ShapeType::Sphere:
-            return {{s[0], s[0], s[0]}, 4.0 / 3.0 * kPi * s[0] * s[0] * s[0]};
+            return centred(s[0], s[0], s[0], 4.0 / 3.0 * kPi * s[0] * s[0] * s[0]);
         case ShapeType::Capsule:
-            return {{s[0], s[0], s[1] + s[0]}, kPi * s[0] * s[0] * (2.0 * s[1] + 4.0 / 3.0 * s[0])};
+            return centred(s[0], s[0], s[1] + s[0],
+                           kPi * s[0] * s[0] * (2.0 * s[1] + 4.0 / 3.0 * s[0]));
         case ShapeType::Cylinder:
-            return {{s[0], s[0], s[1]}, kPi * s[0] * s[0] * 2.0 * s[1]};
+            return centred(s[0], s[0], s[1], kPi * s[0] * s[0] * 2.0 * s[1]);
         case ShapeType::Box:
-            return {s, 8.0 * s[0] * s[1] * s[2]};
-        case ShapeType::ConvexHull:  // as its box: an upper bound of its volume
-            return {s, 8.0 * s[0] * s[1] * s[2]};
+            return centred(s[0], s[1], s[2], 8.0 * s[0] * s[1] * s[2]);
+        case ShapeType::ConvexHull: {
+            if (hull == nullptr || hull->points.empty()) {
+                return {};
+            }
+            ShapeBox box{hull->points.front(), hull->points.front(), 0.0};
+            for (const auto& p : hull->points) {
+                for (std::size_t k = 0; k < 3; ++k) {
+                    box.lo.at(k) = std::min(box.lo.at(k), p.at(k));
+                    box.hi.at(k) = std::max(box.hi.at(k), p.at(k));
+                }
+            }
+            for (const auto& t : hull->triangles) {  // the divergence theorem, outward triangles
+                const auto& a = hull->points.at(t[0]);
+                const auto& b = hull->points.at(t[1]);
+                const auto& c = hull->points.at(t[2]);
+                box.volume +=
+                    (a[0] * (b[1] * c[2] - b[2] * c[1]) + a[1] * (b[2] * c[0] - b[0] * c[2]) +
+                     a[2] * (b[0] * c[1] - b[1] * c[0])) /
+                    6.0;
+            }
+            box.volume = std::abs(box.volume);
+            return box;
+        }
         case ShapeType::Plane:
         case ShapeType::HeightField:
             break;
@@ -47,8 +72,16 @@ ShapeBox boxOf(ShapeType type, const std::array<double, 3>& s) {
     return {};
 }
 
-bool inside(ShapeType type, const std::array<double, 3>& s, const std::array<double, 3>& q) {
+bool inside(ShapeType type, const std::array<double, 3>& s, const std::array<double, 3>& q,
+            const ConvexHull* hull) {
     switch (type) {
+        case ShapeType::ConvexHull:
+            for (const auto& face : hull->faces) {
+                if (face[0] * q[0] + face[1] * q[1] + face[2] * q[2] > face[3]) {
+                    return false;
+                }
+            }
+            return true;
         case ShapeType::Sphere:
             return std::hypot(q[0], q[1], q[2]) <= s[0];
         case ShapeType::Capsule: {
@@ -157,7 +190,9 @@ Status Water::declare(const WorldView& world, const ModuleConfig&, SignalDeclare
             }
             const ShapeType type = raw.colliders.shape[c];
             const std::array<double, 3>& size = raw.colliders.size[c];
-            const ShapeBox box = boxOf(type, size);
+            const ConvexHull* hull =
+                type == ShapeType::ConvexHull ? &raw.hulls.at(raw.colliders.hull[c]) : nullptr;
+            const ShapeBox box = boxOf(type, size, hull);
             if (box.volume <= 0.0) {
                 continue;
             }
@@ -166,14 +201,14 @@ Status Water::declare(const WorldView& world, const ModuleConfig&, SignalDeclare
                 for (int j = 0; j < kCells; ++j) {
                     for (int k = 0; k < kCells; ++k) {
                         const std::array<double, 3> q{
-                            box.half[0] * ((i + 0.5) * 2.0 / kCells - 1.0),
-                            box.half[1] * ((j + 0.5) * 2.0 / kCells - 1.0),
-                            box.half[2] * ((k + 0.5) * 2.0 / kCells - 1.0)};
-                        if (inside(type, size, q)) {
+                            box.lo[0] + (box.hi[0] - box.lo[0]) * (i + 0.5) / kCells,
+                            box.lo[1] + (box.hi[1] - box.lo[1]) * (j + 0.5) / kCells,
+                            box.lo[2] + (box.hi[2] - box.lo[2]) * (k + 0.5) / kCells};
+                        if (inside(type, size, q, hull)) {
                             cells.push_back(
                                 {compose(raw.colliders.poseInBody[c], Pose{q, {1.0, 0.0, 0.0, 0.0}})
                                      .position,
-                                 0.0, 2.0 * box.half[2] / kCells});
+                                 0.0, (box.hi[2] - box.lo[2]) / kCells});
                         }
                     }
                 }
@@ -241,7 +276,8 @@ Status Water::step(const StepContext&, SignalBus& bus) {
                     const std::array<double, 3> speed{v[0] + around[0], v[1] + around[1],
                                                       v[2] + around[2]};
                     const double magnitude = std::hypot(speed[0], speed[1], speed[2]);
-                    const double area = std::pow(volume, 2.0 / 3.0);
+                    // The cells' share of the frontal area: a stack of kCells makes one face.
+                    const double area = std::pow(volume, 2.0 / 3.0) / kCells;
                     const double dragGain = 0.5 * water.density * water.drag * area * magnitude;
                     const std::array<double, 3> force{
                         -water.density * gravity_[0] * volume - dragGain * speed[0],
