@@ -231,6 +231,24 @@ public:
     }
 
     void setFixedBase(bool fixed) { fixedBase_ = fixed; }
+    /// `<mimic>`, once every joint is there; such a joint takes no commands.
+    void resolveMimics() {
+        World::Joints& joints = robot_.world.joints;
+        for (const Mimic& mimic : mimics_) {
+            const auto leader = std::find(joints.names.begin(), joints.names.end(), mimic.joint);
+            if (leader == joints.names.end()) {
+                note("joint '" + joints.names[mimic.follower] + "' mimics '" + mimic.joint +
+                     "', which is no moving joint of this robot; it moves on its own");
+                continue;
+            }
+            joints.mimic[mimic.follower] =
+                static_cast<std::uint32_t>(leader - joints.names.begin());
+            joints.mimicMultiplier[mimic.follower] = mimic.multiplier;
+            joints.mimicOffset[mimic.follower] = mimic.offset;
+            joints.actuated[mimic.follower] = false;
+            std::erase(robot_.actuatedJoints, joints.names[mimic.follower]);
+        }
+    }
     void setActuated(std::set<std::string> joints) { actuated_ = std::move(joints); }
 
 private:
@@ -283,6 +301,14 @@ private:
             }
             world.joints.effortLimit.back() = joint.limits->effort;
             world.joints.velocityLimit.back() = joint.limits->velocity;
+        }
+        if (joint.dynamics) {
+            world.joints.damping.back() = joint.dynamics->damping;
+            world.joints.friction.back() = joint.dynamics->friction;
+        }
+        if (joint.mimic) {
+            mimics_.push_back({world.joints.names.size() - 1, joint.mimic->joint_name,
+                               joint.mimic->multiplier, joint.mimic->offset});
         }
         if (actuated) {
             robot_.actuatedJoints.push_back(joint.name);
@@ -520,6 +546,12 @@ private:
     std::map<std::string, std::uint32_t> meshes_;
     std::set<std::string> actuated_;
     bool fixedBase_{false};
+    struct Mimic {
+        std::size_t follower;
+        std::string joint;
+        double multiplier, offset;
+    };
+    std::vector<Mimic> mimics_;
 };
 
 }  // namespace
@@ -863,6 +895,7 @@ Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
                              BodyId{static_cast<std::uint32_t>(firstBody)}, {0.0, 0.0, 1.0}, false);
         robot.scene.prims[topPrim].body = static_cast<std::uint32_t>(firstBody);
     }
+    builder.resolveMimics();
     for (std::size_t b = firstBody; b < robot.world.bodies.names.size(); ++b) {
         robot.world.bodies.robot[b] = robotIndex;
     }

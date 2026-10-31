@@ -275,7 +275,8 @@ TEST(SwerveSimulation, TheBaseMovesSidewaysAndTurnsOnTheSpot) {
     const auto sideways = run({0.0, 0.0, 0.3}, 4.0);
     EXPECT_NEAR(sideways[1], 1.15, 0.1);
     EXPECT_NEAR(sideways[0], 0.0, 0.05);
-    EXPECT_NEAR(sideways[2], 0.0, 0.05);
+    // A little yaw while the modules steer, against the damping its URDF gives their joints.
+    EXPECT_NEAR(sideways[2], 0.0, 0.06);
     // 0.5 rad/s for 3 s about the modules' centre: 1.5 rad less the first few tenths of a second
     // in which each module steers 45° to its tangent, and the centre stays.
     const auto turned = run({0.0, 0.5, 0.0}, 3.0);

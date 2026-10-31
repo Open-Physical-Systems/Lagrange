@@ -135,6 +135,8 @@ typedef struct lagrange_body_info {
     uint8_t kinematic;        /* moved by body/<b>/pose_command, not by forces */
 } lagrange_body_info;
 
+#define LAGRANGE_NO_MIMIC 0xFFFFFFFFu
+
 typedef struct lagrange_joint_info {
     uint32_t struct_size;
     const char* name;
@@ -144,6 +146,10 @@ typedef struct lagrange_joint_info {
     double lower, upper;    /* equal: unlimited */
     double effort_limit, velocity_limit, armature, initial_position;
     uint8_t actuated;
+    /* Appended after ABI 1.1's first release: check struct_size. */
+    double damping, friction; /* N·m·s/rad or N·s/m; N·m or N */
+    uint32_t mimic;           /* the joint this one copies; LAGRANGE_NO_MIMIC for none */
+    double mimic_multiplier, mimic_offset; /* position = multiplier × mimic's + offset */
 } lagrange_joint_info;
 
 typedef struct lagrange_collider_info {

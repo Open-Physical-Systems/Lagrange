@@ -2,12 +2,15 @@
 // field, Gazebo's friction.
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/server/Server.hpp"
+#include "lagrange/stage/Stage.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <tuple>
 #include <unistd.h>
 #include <vector>
 
@@ -257,6 +260,162 @@ elevation="0 0 0 0 0 0 0 0 1"/></asset><worldbody>
     ASSERT_TRUE(loaded.ok()) << loaded.message;
     ASSERT_TRUE(server.stepUntil(SimTime{2'000'000'000}).ok());
     EXPECT_NEAR(server.read("body/ball/pose").at(2), 1.2, 0.01);
+}
+
+/// A joint about z (so gravity does nothing to it) with a known inertia, or along x.
+std::string spinner(const std::string& type, const std::string& axis, const std::string& dynamics) {
+    const std::filesystem::path path = scratch(type + "_spinner.urdf");
+    std::ofstream(path) << R"(<?xml version="1.0"?><robot name="rig"><link name="world"/>
+<link name="head"><inertial><mass value="2"/><inertia ixx="1" iyy="1" izz="1" ixy="0" ixz="0"
+iyz="0"/></inertial></link><joint name="move" type=")"
+                        << type << R"("><parent link="world"/><child link="head"/>
+<origin xyz="0 0 1"/><axis xyz=")"
+                        << axis
+                        << R"("/><limit lower="-1000" upper="1000" effort="100" velocity="1000"/>)"
+                        << dynamics << "</joint></robot>";
+    return path.string();
+}
+
+ServerOptions driven(const std::string& robot, const std::string& physics) {
+    ServerOptions o = dropped(robot, physics);
+    o.jointControl = true;
+    o.demoDrive = false;
+    if (physics == "jolt_abi") {
+        o.plugins = {"lagrange_jolt"};
+    }
+    return o;
+}
+
+// Against the closed form under a constant effort: v(t) = F/d (1 - exp(-d t / I)), for a hinge
+// (I = 1 kg m2) and a slide (I = 2 kg, its mass); dry friction takes f off F, and holds below it.
+TEST(JointDynamics, DampingAndFrictionMatchTheClosedForm) {
+    for (const char* physics : {"mujoco", "jolt", "jolt_abi"}) {
+        for (const auto& [type, axis, inertia] :
+             {std::tuple<const char*, const char*, double>{"continuous", "0 0 1", 1.0},
+              std::tuple<const char*, const char*, double>{"prismatic", "1 0 0", 2.0}}) {
+            const std::string where = std::string(physics) + " " + type;
+            const double d = 0.5;
+            const double tau = 2.0;
+            const double t = 2.0;
+            Server damped(driven(spinner(type, axis, R"(<dynamics damping="0.5"/>)"), physics));
+            const Status loaded = damped.load();
+            ASSERT_TRUE(loaded.ok()) << where << ": " << loaded.message;
+            ASSERT_TRUE(damped.commandJoint("move", "effort", tau));
+            ASSERT_TRUE(damped.stepUntil(SimTime{2'000'000'000}).ok());
+            EXPECT_NEAR(damped.read("joint/move/velocity").at(0),
+                        tau / d * (1.0 - std::exp(-d * t / inertia)), 0.03)
+                << where;
+
+            Server rubbing(driven(spinner(type, axis, R"(<dynamics friction="0.5"/>)"), physics));
+            ASSERT_TRUE(rubbing.load().ok()) << where;
+            ASSERT_TRUE(rubbing.commandJoint("move", "effort", tau));
+            ASSERT_TRUE(rubbing.stepUntil(SimTime{1'000'000'000}).ok());
+            EXPECT_NEAR(rubbing.read("joint/move/velocity").at(0), (tau - 0.5) / inertia, 0.05)
+                << where;
+
+            Server held(driven(spinner(type, axis, R"(<dynamics friction="0.5"/>)"), physics));
+            ASSERT_TRUE(held.load().ok()) << where;
+            ASSERT_TRUE(held.commandJoint("move", "effort", 0.3));
+            ASSERT_TRUE(held.stepUntil(SimTime{1'000'000'000}).ok());
+            EXPECT_NEAR(held.read("joint/move/velocity").at(0), 0.0, 0.02) << where;
+        }
+    }
+}
+
+std::string gears() {
+    const std::filesystem::path path = scratch("gears.urdf");
+    const auto link = [](const char* name) {
+        return std::string("<link name=\"") + name +
+               R"("><inertial><mass value="1"/><inertia ixx="0.1" iyy="0.1" izz="0.1" ixy="0"
+ixz="0" iyz="0"/></inertial></link>)";
+    };
+    std::ofstream(path) << R"(<?xml version="1.0"?><robot name="gears"><link name="world"/>)"
+                        << link("a") << link("b") << R"(
+<joint name="leader" type="continuous"><parent link="world"/><child link="a"/>
+<origin xyz="0 0 1"/><axis xyz="0 0 1"/><limit effort="100" velocity="100"/></joint>
+<joint name="follower" type="continuous"><parent link="world"/><child link="b"/>
+<origin xyz="1 0 1"/><axis xyz="0 0 1"/><limit effort="100" velocity="100"/>
+<mimic joint="leader" multiplier="2" offset="0.1"/></joint></robot>)";
+    return path.string();
+}
+
+TEST(JointDynamics, AMimicJointCopiesItsLeaderAndTakesNoCommands) {
+    for (const char* physics : {"mujoco", "jolt", "jolt_abi"}) {
+        Server server(driven(gears(), physics));
+        const Status loaded = server.load();
+        ASSERT_TRUE(loaded.ok()) << physics << ": " << loaded.message;
+        EXPECT_FALSE(server.commandJoint("follower", "velocity", 1.0)) << physics;
+        ASSERT_TRUE(server.commandJoint("leader", "velocity", 1.0));
+        ASSERT_TRUE(server.stepUntil(SimTime{3'000'000'000}).ok());
+        const double leader = server.read("joint/leader/position").at(0);
+        EXPECT_GT(leader, 2.0) << physics;
+        EXPECT_NEAR(server.read("joint/follower/position").at(0), 2.0 * leader + 0.1, 0.02)
+            << physics;
+    }
+}
+
+TEST(JointDynamics, SurviveTheTripThroughUsd) {
+    auto source =
+        loadUrdf(spinner("prismatic", "1 0 0", R"(<dynamics damping="0.5" friction="0.2"/>)"), {});
+    ASSERT_TRUE(source) << source.error();
+    const std::string usda = scratch("spinner.usda").string();
+    ASSERT_TRUE(stage::writeStage(*source, usda));
+    auto back = loadModel(usda);
+    ASSERT_TRUE(back) << back.error();
+    ASSERT_EQ(back->world.joints.names.size(), 1U);
+    EXPECT_DOUBLE_EQ(back->world.joints.damping[0], 0.5);
+    EXPECT_DOUBLE_EQ(back->world.joints.friction[0], 0.2);
+
+    auto geared = loadUrdf(gears(), {});
+    ASSERT_TRUE(geared) << geared.error();
+    const std::string usdGears = scratch("gears.usda").string();
+    ASSERT_TRUE(stage::writeStage(*geared, usdGears));
+    auto gearsBack = loadModel(usdGears);
+    ASSERT_TRUE(gearsBack) << gearsBack.error();
+    const World::Joints& joints = gearsBack->world.joints;
+    const auto follower = static_cast<std::size_t>(
+        std::find(joints.names.begin(), joints.names.end(), "follower") - joints.names.begin());
+    ASSERT_LT(follower, joints.names.size());
+    ASSERT_NE(joints.mimic[follower], kNoMimic);
+    EXPECT_EQ(joints.names[joints.mimic[follower]], "leader");
+    EXPECT_DOUBLE_EQ(joints.mimicMultiplier[follower], 2.0);
+    EXPECT_DOUBLE_EQ(joints.mimicOffset[follower], 0.1);
+}
+
+TEST(JointDynamics, SdfAndMjcfCarryThem) {
+    const std::filesystem::path sdfPath = scratch("axis.sdf");
+    std::ofstream(sdfPath) << R"(<?xml version="1.0"?><sdf version="1.11"><model name="m">
+<link name="a"><inertial><mass>1</mass></inertial></link>
+<link name="b"><inertial><mass>1</mass></inertial></link>
+<joint name="ja" type="revolute"><parent>world</parent><child>a</child><axis><xyz>0 0 1</xyz>
+<dynamics><damping>0.7</damping><friction>0.3</friction></dynamics>
+<limit><lower>-1</lower><upper>1</upper></limit></axis></joint>
+<joint name="jb" type="revolute"><parent>world</parent><child>b</child><axis><xyz>0 0 1</xyz>
+<limit><lower>-1</lower><upper>1</upper></limit>
+<mimic joint="ja"><multiplier>3</multiplier><offset>0.2</offset><reference>0</reference></mimic>
+</axis></joint></model></sdf>)";
+    auto sdf = loadModel(sdfPath.string());
+    ASSERT_TRUE(sdf) << sdf.error();
+    ASSERT_EQ(sdf->world.joints.names.size(), 2U);
+    EXPECT_DOUBLE_EQ(sdf->world.joints.damping[0], 0.7);
+    EXPECT_DOUBLE_EQ(sdf->world.joints.friction[0], 0.3);
+    EXPECT_EQ(sdf->world.joints.mimic[1], 0U);
+    EXPECT_DOUBLE_EQ(sdf->world.joints.mimicMultiplier[1], 3.0);
+    EXPECT_DOUBLE_EQ(sdf->world.joints.mimicOffset[1], 0.2);
+
+    const std::filesystem::path xml = scratch("gear.xml");
+    std::ofstream(xml) << R"(<mujoco><worldbody><body name="a"><joint name="ja" axis="0 0 1"
+damping="0.7" frictionloss="0.3"/><geom type="sphere" size="0.1"/></body><body name="b" pos="1 0 0">
+<joint name="jb" axis="0 0 1"/><geom type="sphere" size="0.1"/></body></worldbody><equality>
+<joint joint1="jb" joint2="ja" polycoef="0.2 3 0 0 0"/></equality></mujoco>)";
+    auto mjcf = loadModel(xml.string());
+    ASSERT_TRUE(mjcf) << mjcf.error();
+    ASSERT_EQ(mjcf->world.joints.names.size(), 2U);
+    EXPECT_DOUBLE_EQ(mjcf->world.joints.damping[0], 0.7);
+    EXPECT_DOUBLE_EQ(mjcf->world.joints.friction[0], 0.3);
+    EXPECT_EQ(mjcf->world.joints.mimic[1], 0U);
+    EXPECT_DOUBLE_EQ(mjcf->world.joints.mimicMultiplier[1], 3.0);
+    EXPECT_DOUBLE_EQ(mjcf->world.joints.mimicOffset[1], 0.2);
 }
 
 }  // namespace

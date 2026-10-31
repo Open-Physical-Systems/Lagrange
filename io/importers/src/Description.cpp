@@ -216,6 +216,7 @@ public:
         if (roots == 1 && floating < d_.links.size()) {
             m_.scene.prims[topPrim_].body = bodyOf_[floating].index;
         }
+        resolveMimics();
         return {};
     }
 
@@ -249,6 +250,30 @@ private:
         return body;
     }
 
+    std::map<std::string, std::uint32_t> jointNames_;  // by the description's name
+
+    /// `mimic`, once every joint is there; such a joint takes no commands.
+    void resolveMimics() {
+        World::Joints& joints = m_.world.joints;
+        for (const JointDesc& joint : d_.joints) {
+            if (joint.mimic.empty() || !jointNames_.contains(joint.name)) {
+                continue;
+            }
+            const std::uint32_t follower = jointNames_.at(joint.name);
+            const auto leader = jointNames_.find(joint.mimic);
+            if (leader == jointNames_.end()) {
+                note(m_, "joint '" + joint.name + "' mimics '" + joint.mimic +
+                             "', which is no moving joint here; it moves on its own");
+                continue;
+            }
+            joints.mimic[follower] = leader->second;
+            joints.mimicMultiplier[follower] = joint.mimicMultiplier;
+            joints.mimicOffset[follower] = joint.mimicOffset;
+            joints.actuated[follower] = false;
+            std::erase(m_.actuatedJoints, joints.names[follower]);
+        }
+    }
+
     void addJoint(const JointDesc& joint, BodyId body) {
         const bool actuated = joint.actuated && joint.type != JointType::Free;
         const std::string name = unique(m_.world.joints.names, joint.name);
@@ -259,6 +284,9 @@ private:
         }
         m_.world.joints.effortLimit.back() = joint.effort;
         m_.world.joints.velocityLimit.back() = joint.velocity;
+        m_.world.joints.damping.back() = joint.damping;
+        m_.world.joints.friction.back() = joint.friction;
+        jointNames_[joint.name] = static_cast<std::uint32_t>(m_.world.joints.names.size() - 1);
         m_.jointPrim.push_back(kNoIndex);  // set once the child's prim exists
         if (actuated) {
             m_.actuatedJoints.push_back(name);

@@ -20,6 +20,7 @@ set(LAGRANGE_SCHEMA_LIBRARIES
     vehicle
     road
     human
+    joint
     water
     world
 )

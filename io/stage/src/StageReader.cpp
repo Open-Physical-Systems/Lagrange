@@ -376,6 +376,18 @@ private:
                 std::string("the joints form a loop; kinematic loops are not supported")};
         }
         (void)w;
+        // Joints that copy another, now that all are there; they take no commands.
+        for (const auto& [follower, leader] : mimics_) {
+            const auto found = std::find(w.joints.names.begin(), w.joints.names.end(), leader);
+            if (found == w.joints.names.end()) {
+                note("joint " + w.joints.names[follower] + " mimics " + leader +
+                     ", which is no moving joint here; it moves on its own");
+                continue;
+            }
+            w.joints.mimic[follower] = static_cast<std::uint32_t>(found - w.joints.names.begin());
+            w.joints.actuated[follower] = false;
+            std::erase(m_.actuatedJoints, w.joints.names[follower]);
+        }
         return {};
     }
 
@@ -484,6 +496,20 @@ private:
         worldPrim_[prim.GetPath()] = w.joints.prim.back();
         w.joints.lowerLimit.back() = lower;
         w.joints.upperLimit.back() = upper;
+        if (prim.HasAPI(TfToken("JointDynamicsAPI_1"))) {
+            const auto real = [&prim](const char* attribute, double fallback) {
+                return valueOf<double>(prim.GetAttribute(TfToken(attribute))).value_or(fallback);
+            };
+            w.joints.damping.back() = real("joint:damping", 0.0);
+            w.joints.friction.back() = real("joint:friction", 0.0);
+            w.joints.mimicMultiplier.back() = real("joint:mimicMultiplier", 1.0);
+            w.joints.mimicOffset.back() = real("joint:mimicOffset", 0.0);
+            if (const std::optional<std::string> leader =
+                    valueOf<std::string>(prim.GetAttribute(TfToken("joint:mimic")));
+                leader && !leader->empty()) {
+                mimics_.emplace_back(w.joints.names.size() - 1, *leader);
+            }
+        }
         if (driven) {
             const TfToken instance =
                 type == JointType::Prismatic ? UsdPhysicsTokens->linear : UsdPhysicsTokens->angular;
@@ -1240,6 +1266,7 @@ private:
     std::map<SdfPath, std::uint32_t> bodyIndex_;
     std::map<SdfPath, PrimId> worldPrim_;  // USD prim -> world prim, for schema instances
     std::vector<UsdPhysicsJoint> joints_;
+    std::vector<std::pair<std::size_t, std::string>> mimics_;  // joint index, the one it copies
     std::vector<std::string> errors_;
     bool hasPlane_{false};
 };

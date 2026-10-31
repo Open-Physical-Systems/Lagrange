@@ -433,6 +433,7 @@ void appendModel(Model& model, const Model& other) {
         w.bodies.kinematic.back() = o.bodies.kinematic[b];
         model.bodyRestPose.push_back(other.bodyRestPose[b]);
     }
+    const auto firstJoint = static_cast<std::uint32_t>(w.joints.names.size());
     for (std::size_t j = 0; j < o.joints.names.size(); ++j) {
         w.addJoint(o.joints.names[j], o.joints.type[j], map(o.joints.child[j]), o.joints.axis[j],
                    o.joints.actuated[j]);
@@ -441,6 +442,12 @@ void appendModel(Model& model, const Model& other) {
         w.joints.effortLimit.back() = o.joints.effortLimit[j];
         w.joints.velocityLimit.back() = o.joints.velocityLimit[j];
         w.joints.armature.back() = o.joints.armature[j];
+        w.joints.damping.back() = o.joints.damping[j];
+        w.joints.friction.back() = o.joints.friction[j];
+        w.joints.mimic.back() =
+            o.joints.mimic[j] == kNoMimic ? kNoMimic : firstJoint + o.joints.mimic[j];
+        w.joints.mimicMultiplier.back() = o.joints.mimicMultiplier[j];
+        w.joints.mimicOffset.back() = o.joints.mimicOffset[j];
         w.joints.initialPosition.back() = o.joints.initialPosition[j];
     }
     for (std::size_t c = 0; c < o.colliders.body.size(); ++c) {

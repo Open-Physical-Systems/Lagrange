@@ -263,6 +263,11 @@ int worldJoint(const lagrange_world* w, std::uint32_t j, lagrange_joint_info* ou
     info.armature = joints.armature[j];
     info.initial_position = j < joints.initialPosition.size() ? joints.initialPosition[j] : 0.0;
     info.actuated = joints.actuated[j] ? 1 : 0;
+    info.damping = joints.damping[j];
+    info.friction = joints.friction[j];
+    info.mimic = joints.mimic[j];
+    info.mimic_multiplier = joints.mimicMultiplier[j];
+    info.mimic_offset = joints.mimicOffset[j];
     return fill(info, out);
 }
 std::uint32_t worldColliderCount(const lagrange_world* w) {

@@ -79,6 +79,10 @@ struct JointDesc {
     double effort{0.0};                         // N·m or N; 0 for unlimited
     double velocity{0.0};                       // rad/s or m/s; 0 for unlimited
     bool actuated{false};
+    double damping{0.0};   // N·m·s/rad or N·s/m
+    double friction{0.0};  // N·m or N
+    std::string mimic;     // the joint this one copies, or empty; takes no commands
+    double mimicMultiplier{1.0}, mimicOffset{0.0};
 };
 
 /// One model: a top prim with its links. A link that is no joint's child is welded to the world;

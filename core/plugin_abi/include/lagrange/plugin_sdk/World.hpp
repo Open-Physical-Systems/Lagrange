@@ -47,6 +47,9 @@ struct Joint {
     double lower{0.0}, upper{0.0};  // rad or m; equal: unlimited
     double effortLimit{0.0}, velocityLimit{0.0}, armature{0.0}, initialPosition{0.0};
     bool actuated{false};
+    double damping{0.0}, friction{0.0};
+    std::uint32_t mimic{LAGRANGE_NO_MIMIC};
+    double mimicMultiplier{1.0}, mimicOffset{0.0};
 };
 
 struct Collider {
@@ -128,6 +131,12 @@ struct World {
             joint.armature = in.armature;
             joint.initialPosition = in.initial_position;
             joint.actuated = in.actuated != 0;
+            // An older host fills less: these stay at their defaults.
+            joint.damping = in.damping;
+            joint.friction = in.friction;
+            joint.mimic = in.struct_size >= sizeof in ? in.mimic : LAGRANGE_NO_MIMIC;
+            joint.mimicMultiplier = in.struct_size >= sizeof in ? in.mimic_multiplier : 1.0;
+            joint.mimicOffset = in.mimic_offset;
             out.joints.push_back(std::move(joint));
         }
         for (std::uint32_t c = 0; c < host.world_collider_count(world); ++c) {
