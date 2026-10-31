@@ -19,6 +19,7 @@ set(LAGRANGE_SCHEMA_LIBRARIES
     comms
     vehicle
     road
+    human
     world
 )
 set(usd_env

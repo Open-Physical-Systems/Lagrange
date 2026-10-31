@@ -178,6 +178,7 @@ TEST_F(Plugins, UnknownSensorTypesBecomeCustomSensors) {
     ASSERT_EQ(back->world.sensors.names.size(), 1U);
     EXPECT_EQ(back->world.sensors.type[0], SensorType::Custom);
     EXPECT_EQ(back->world.sensors.kind[0], "tof");
+    EXPECT_EQ(back->sensorPrim.size(), back->world.sensors.names.size()) << "a prim per sensor";
     EXPECT_EQ(back->world.sensors.settings[0], sensors.settings[0]);
     EXPECT_EQ(back->world.sensors.text[0], sensors.text[0]);
     std::filesystem::remove(usda);

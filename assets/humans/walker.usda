@@ -1,0 +1,15 @@
+#usda 1.0
+(
+    defaultPrim = "walker"
+    doc = "A person who walks a 4 m square round the world origin, for ever (RFC 0009)."
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "walker" (
+    prepend apiSchemas = ["HumanAPI_1"]
+)
+{
+    uniform token human:behavior = "waypoints"
+    double[] human:waypoints = [2, -2, 2, 2, -2, 2, -2, -2]
+}
