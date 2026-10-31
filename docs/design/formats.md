@@ -1513,8 +1513,8 @@ collision meshes collide as their convex hull (concave ones on fixed links are s
 scene as the URDF loader, and `lagrange_import` writes any of the three as USD
 (`io/importers/include/lagrange/importers/Importers.hpp` lists the rules). Not yet: mesh visuals in SDFormat
 and MJCF (the URDF loader reads them through `lagrange_meshes`), cameras and other
-sensors without a Lagrange model, joints between the models of an SDFormat world, and MJCF
-tendons, flex and servo actuators (their joints take torque commands instead). Each is listed in
+sensors without a Lagrange model, URDF planar joints, and MJCF
+tendons, flex, servo actuators (their joints take torque commands instead) and equalities other than one joint copying another. Each is listed in
 the import report. MJCF has no lidar; lidars on an MJCF robot come from an overlay (0.2-G2).
 
 Electrical, thermal and EMI data do not exist in URDF/SDF/MJCF. Importers accept an optional
