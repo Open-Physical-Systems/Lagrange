@@ -92,10 +92,18 @@ the body frame, soft- and hard-iron distortion, noise, plus `emi/{p}/b_field`.
 `k / rate`, and its ROS message goes out `latency` plus jitter later (Gaussian, cut at 3σ, never
 out of order, on the simulation's clock), still stamped with the sampling time. Set it with
 `sensor:latency` and `sensor:jitter`, `<latency>` and `<jitter>` in a URDF's `<gazebo>` sensor,
-`--sensor-timing NAME=LATENCY[,JITTER]` or the run file's `sensor_timing:`. Only ROS topics are
-late: signals on the bus (and so other modules, plugins, recordings, Python and the viewer) have
-the sample at once, `/ground_truth` and `/tf` stay on time, and sampling instants themselves do not
-jitter. Messages go out on the bridge's publish, so a delay rounds up to its next tick.
+`--sensor-timing NAME=LATENCY[,JITTER]` or the run file's `sensor_timing:`. The sensor's own
+`sensor/<n>/<q>` stay on time as the ground truth, as do `/ground_truth` and `/tf`; every other
+consumer can have what the robot gets: `lagrange_sensors`' delay line (`sensors::DelayLine`, only
+for sensors with a delay) writes `sensor/<n>/delayed/<q>` for each of its numbers and images, and
+`sensor/<n>/delayed/stamp` (s), the sampling time of what is there now, -1 before the first
+arrives. Plugins read those like any signal, recordings and Python get them, and the viewer's
+lidar points and camera image are the delayed ones. The delay line ticks at 1 kHz, so a delay
+rounds up to the next millisecond, and a signal commits only when a value arrives (`SignalBus::hold`).
+Each sample's delay is a function of the run seed, the sensor and
+the sampling time, so runs and restored checkpoints repeat; the ROS bridge draws its own jitter
+(same latency and spread, other numbers) and goes out on its publish tick. Sampling instants do
+not jitter.
 
 ## 3. Signals
 

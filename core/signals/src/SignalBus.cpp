@@ -255,6 +255,12 @@ std::span<double> SignalBus::writeBatch(SignalId id) {
     return {pending_.data() + index, signals_[id.index].components * batchCount_};
 }
 
+void SignalBus::hold(SignalId id) {
+    if (!id.isInput() && id.valid() && id.index < held_.size()) {
+        held_[id.index] = 1;
+    }
+}
+
 SimTime SignalBus::stamp(SignalId id) const {
     if (id.isInput()) {
         if (id.slot() >= inputs_.size() || inputs_[id.slot()].signal == kNoModule) {
@@ -342,6 +348,7 @@ void SignalBus::shiftOrigin(const std::array<double, 3>& shift) {
 
 void SignalBus::allocate(std::uint32_t batchCount) {
     batchCount_ = std::max<std::uint32_t>(batchCount, 1);
+    held_.assign(signals_.size(), 0);
     std::size_t values = 0;
     std::size_t handles = 0;
     for (SignalRecord& record : signals_) {
@@ -394,6 +401,10 @@ void SignalBus::allocate(std::uint32_t batchCount) {
 
 void SignalBus::commit(std::uint32_t signal, SimTime stamp, std::uint64_t tick,
                        Duration writerStep) {
+    if (held_[signal] != 0) {
+        held_[signal] = 0;
+        return;
+    }
     SignalRecord& record = signals_[signal];
     const auto begin = static_cast<std::ptrdiff_t>(record.offset);
     if (record.components == 0) {

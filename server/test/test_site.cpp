@@ -93,5 +93,83 @@ TEST(Site, AValueThatBringsADomainInRebuildsTheRun) {
     EXPECT_GT(server.read("body/base_link/pose").at(2), 0.5) << "it takes off";
 }
 
+// A checkpoint holds the site: restoring it brings back the gravity and weather of its moment, also
+// when the run has changed them since, and the run then repeats exactly.
+TEST(Site, ACheckpointHoldsTheSite) {
+    for (const char* physics : {"mujoco", "jolt"}) {
+        ServerOptions o;
+        o.worldPath = fallingBox();
+        o.ros = false;
+        o.realTimeFactor = 0.0;
+        o.physics = physics;
+        Server server(o);
+        ASSERT_TRUE(server.load().ok());
+        const std::string name = server.world().bodies.names.at(0);
+        const std::string twist = "body/" + name + "/twist";
+        ASSERT_TRUE(server.setSite("gravity", 1.62).ok());
+        ASSERT_TRUE(server.stepUntil(SimTime{1'000'000'000}).ok());
+        const auto saved = server.saveState();
+        ASSERT_TRUE(saved) << saved.error().message;
+        const double speed = server.read(twist).at(2);
+
+        ASSERT_TRUE(server.setSite("gravity", 20.0).ok());
+        ASSERT_TRUE(server.stepUntil(SimTime{1'500'000'000}).ok());
+        const Status restored = server.restoreState(*saved);
+        ASSERT_TRUE(restored.ok()) << restored.message;
+        EXPECT_EQ(server.now().ns, 1'000'000'000);
+        EXPECT_DOUBLE_EQ(server.read(twist).at(2), speed) << physics;
+        EXPECT_DOUBLE_EQ(server.world().gravityLocal[2], -1.62);
+        ASSERT_TRUE(server.stepUntil(SimTime{2'000'000'000}).ok());
+        EXPECT_NEAR(server.read(twist).at(2), speed - 1.62, 0.05)
+            << physics << ": moon gravity again, not the 20 of later";
+    }
+}
+
+// What was not set at the checkpoint is not set after it: rain that came later goes away, and with
+// a domain that came later the restore is still whole.
+TEST(Site, ACheckpointTakesBackWhatCameLater) {
+    ServerOptions o;
+    o.robotPath = LAGRANGE_TEST_AMR_URDF;
+    o.ros = false;
+    o.realTimeFactor = 0.0;
+    o.site = {{"temperature", 290.0}, {"pressure", 101325.0}, {"relative_humidity", 0.5}};
+    Server server(o);
+    ASSERT_TRUE(server.load().ok());
+    ASSERT_TRUE(server.stepUntil(SimTime{200'000'000}).ok());
+    const auto saved = server.saveState();
+    ASSERT_TRUE(saved);
+    ASSERT_TRUE(server.setSite("rain_rate", 2.8e-6).ok());
+    ASSERT_TRUE(server.setSite("temperature", 310.0).ok());
+    ASSERT_TRUE(server.stepUntil(SimTime{400'000'000}).ok());
+    EXPECT_GT(server.read("env/rain_rate").at(0), 0.0);
+    const Status restored = server.restoreState(*saved);
+    ASSERT_TRUE(restored.ok()) << restored.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{500'000'000}).ok());
+    EXPECT_EQ(server.read("env/rain_rate").at(0), 0.0);
+    EXPECT_NEAR(server.read("env/air_temperature").at(0), 290.0, 1e-9);
+}
+
+// On Jolt too, a rebuild that changes the modules keeps the joints where they were.
+TEST(Site, ARebuildOnJoltKeepsTheJoints) {
+    ServerOptions o;
+    o.robotPath = LAGRANGE_TEST_AMR_URDF;
+    o.ros = false;
+    o.realTimeFactor = 0.0;
+    o.physics = "jolt";
+    Server server(o);
+    ASSERT_TRUE(server.load().ok());
+    ASSERT_TRUE(server.stepUntil(SimTime{3'000'000'000}).ok());
+    const double wheel = server.read("joint/left_wheel_joint/position").at(0);
+    const std::vector<double> pose = server.read("body/left_wheel/pose");
+    ASSERT_GT(std::abs(wheel), 0.5) << "it has turned";
+    const auto mate = server.spawnRobot(LAGRANGE_TEST_AMR_URDF, "mate", Pose{{0.0, 5.0, 0.0}, {}});
+    ASSERT_TRUE(mate) << mate.error().message;
+    EXPECT_NEAR(server.read("joint/left_wheel_joint/position").at(0), wheel, 1e-3);
+    const std::vector<double> after = server.read("body/left_wheel/pose");
+    for (std::size_t i = 0; i < 3; ++i) {
+        EXPECT_NEAR(after[i], pose[i], 1e-3) << i;
+    }
+}
+
 }  // namespace
 }  // namespace lagrange::server

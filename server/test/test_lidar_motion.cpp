@@ -1,11 +1,15 @@
 // Lidar motion distortion, against the closed form: a moving lidar and a wall (sensors.md).
 #include "lagrange/server/Server.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <string>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -151,6 +155,97 @@ TEST(LidarMotion, ARestoredRunSweepsTheSame) {
     ASSERT_EQ(first.size(), again.size());
     for (std::size_t i = 0; i < first.size(); ++i) {
         EXPECT_EQ(first[i], again[i]) << i;
+    }
+}
+
+// sensor/<n>/delayed/*: each scan arrives its latency late, unchanged, with its sampling time, at
+// the bus stamp of its arrival; the sensor's own output stays on time. A run repeats and a restored
+// run goes on as if it had not stopped, jitter included.
+TEST(SensorDelay, TheDelayedSignalIsTheScanOfThen) {
+    ServerOptions o = options(robotOn("prismatic", "1 0 0", ""), ServerOptions::Lidar::Cpu);
+    o.sensorTiming.push_back({"front", 0.03, 0.0});
+    Server server(o);
+    ASSERT_TRUE(server.load().ok());
+    ASSERT_TRUE(server.commandJoint("move", "velocity", 1.0));
+    EXPECT_EQ(server.read("sensor/front/delayed/stamp").at(0), -1.0) << "nothing has arrived";
+
+    std::map<std::int64_t, std::vector<double>> scans;  // by the time sampled
+    int arrivals = 0;
+    double lastStamp = -1.0;
+    for (std::int64_t ms = 1; ms <= 1000; ++ms) {
+        ASSERT_TRUE(server.stepUntil(SimTime{ms * 1'000'000}).ok());
+        if (ms % 100 == 0) {
+            scans[ms] = server.read("sensor/front/ranges");
+        }
+        const double stamp = server.read("sensor/front/delayed/stamp").at(0);
+        if (stamp != lastStamp) {
+            lastStamp = stamp;
+            ++arrivals;
+            const auto sampled = static_cast<std::int64_t>(std::llround(stamp * 1000.0));
+            EXPECT_EQ(ms, sampled + 30) << "30 ms late";
+            ASSERT_TRUE(scans.contains(sampled));
+            EXPECT_EQ(server.read("sensor/front/delayed/ranges"), scans[sampled]);
+        }
+    }
+    EXPECT_GE(arrivals, 9);
+    EXPECT_NE(server.read("sensor/front/delayed/ranges"), server.read("sensor/front/ranges"))
+        << "the robot moves, so a late scan differs";
+}
+
+TEST(SensorDelay, JitterStaysInItsBoundsAndRepeats) {
+    const auto run = [] {
+        ServerOptions o = options(robotOn("prismatic", "1 0 0", ""), ServerOptions::Lidar::Cpu);
+        o.sensorTiming.push_back({"front", 0.04, 0.005});
+        Server server(o);
+        EXPECT_TRUE(server.load().ok());
+        std::vector<std::int64_t> delays;
+        double lastStamp = -1.0;
+        std::vector<std::byte> saved;
+        for (std::int64_t ms = 1; ms <= 2000; ++ms) {
+            EXPECT_TRUE(server.stepUntil(SimTime{ms * 1'000'000}).ok());
+            const double stamp = server.read("sensor/front/delayed/stamp").at(0);
+            if (stamp != lastStamp) {
+                lastStamp = stamp;
+                delays.push_back(ms - std::llround(stamp * 1000.0));
+            }
+            if (ms == 1000) {
+                saved = *server.saveState();
+            }
+        }
+        EXPECT_TRUE(server.restoreState(saved).ok());
+        lastStamp = server.read("sensor/front/delayed/stamp").at(0);
+        std::vector<std::int64_t> again;
+        for (std::int64_t ms = 1001; ms <= 2000; ++ms) {
+            EXPECT_TRUE(server.stepUntil(SimTime{ms * 1'000'000}).ok());
+            const double stamp = server.read("sensor/front/delayed/stamp").at(0);
+            if (stamp != lastStamp) {
+                lastStamp = stamp;
+                again.push_back(ms - std::llround(stamp * 1000.0));
+            }
+        }
+        return std::pair{delays, again};
+    };
+    const auto [delays, again] = run();
+    ASSERT_GE(delays.size(), 15U);
+    for (const std::int64_t late : delays) {
+        EXPECT_GE(late, 25);  // 40 ms - 3 sigma
+        EXPECT_LE(late, 56);  // 40 ms + 3 sigma, rounded up to the tick
+    }
+    EXPECT_GT(*std::max_element(delays.begin(), delays.end()),
+              *std::min_element(delays.begin(), delays.end()))
+        << "it jitters";
+    EXPECT_EQ(run().first, delays) << "and repeats";
+    // The last late values after the restore are those of the first time.
+    ASSERT_FALSE(again.empty());
+    EXPECT_TRUE(std::equal(again.rbegin(), again.rend(), delays.rbegin()));
+}
+
+// No sensor asks: no module, no signals.
+TEST(SensorDelay, NoDelayNoSignals) {
+    Server server(options(robotOn("prismatic", "1 0 0", ""), ServerOptions::Lidar::Cpu));
+    ASSERT_TRUE(server.load().ok());
+    for (const auto& signal : server.signals()) {
+        EXPECT_EQ(signal.name.find("/delayed/"), std::string::npos) << signal.name;
     }
 }
 

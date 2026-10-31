@@ -25,6 +25,7 @@
 #include "lagrange/rotor_aero/RotorAero.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/BodyScene.hpp"
+#include "lagrange/sensors/DelayLine.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
 #include "lagrange/server/CarDrive.hpp"
@@ -937,6 +938,10 @@ struct Server::Impl {
                 next->add(module.create(pluginServices), pluginConfig(module, {}, settings));
             }
         }
+        // After every sensor, the plugins' too: their outputs as the robot gets them.
+        if (sensors::DelayLine::needed(WorldView(robot.world))) {
+            next->add(std::make_unique<sensors::DelayLine>());
+        }
         // Always last: it sums the body/<b>/wrench/<source> written by the modules above.
         next->add(std::make_unique<services::WrenchSum>());
         auto wired = next->wire(WorldView(robot.world));
@@ -1094,6 +1099,123 @@ struct Server::Impl {
         char line[96];
         std::snprintf(line, sizeof line, "%s = %g", name.c_str(), value);
         log(v1::LOG_LEVEL_INFO, "site", line);
+        broadcast(environmentState());
+        return {};
+    }
+
+    /// The site of a checkpoint (Server::saveState): every value setSite can change.
+    using SiteTable = std::map<std::string, ConfigValue, std::less<>>;
+    using SiteNow = std::tuple<std::optional<double>, std::optional<double>, std::optional<double>,
+                               SiteTable, SiteTable, std::optional<double>, std::array<double, 3>>;
+    SiteNow siteNow() const {
+        return {appliedGravity,          appliedAmbientK, appliedAirDensity,
+                appliedAerodynamics,     appliedWeather,  options.ambientTemperatureK,
+                robot.world.gravityLocal};
+    }
+    void saveSite(StateWriter& writer) const {
+        const auto optional = [&writer](const std::optional<double>& value) {
+            writer.put(value.has_value());
+            writer.put(value.value_or(0.0));
+        };
+        const auto table = [&writer](const SiteTable& values) {
+            writer.put<std::uint64_t>(values.size());
+            for (const auto& [name, value] : values) {
+                writer.putString(name);
+                writer.put<std::uint64_t>(value.index());
+                std::visit(
+                    [&writer]<class T>(const T& v) {
+                        if constexpr (std::is_same_v<T, std::string>) {
+                            writer.putString(v);
+                        } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
+                            writer.put<std::uint64_t>(v.size());
+                            for (const std::string& item : v) {
+                                writer.putString(item);
+                            }
+                        } else {
+                            writer.put(v);
+                        }
+                    },
+                    value);
+            }
+        };
+        optional(appliedGravity);
+        optional(appliedAmbientK);
+        optional(appliedAirDensity);
+        table(appliedAerodynamics);
+        table(appliedWeather);
+        optional(options.ambientTemperatureK);
+        writer.put(robot.world.gravityLocal);
+    }
+    /// Puts back a checkpoint's site. A different one rebuilds the run, which the state read next
+    /// then overwrites; the same one costs nothing.
+    Status restoreSite(StateReader& reader) {
+        const auto optional = [&reader](std::optional<double>& out) {
+            bool has = false;
+            double value = 0.0;
+            reader.get(has);
+            reader.get(value);
+            out = has ? std::optional<double>(value) : std::nullopt;
+        };
+        const auto table = [&reader](SiteTable& out) {
+            std::uint64_t size = 0;
+            reader.get(size);
+            for (std::uint64_t i = 0; i < size && !reader.failed(); ++i) {
+                std::string name;
+                std::uint64_t index = 0;
+                reader.getString(name);
+                reader.get(index);
+                if (index == 0) {
+                    bool v = false;
+                    reader.get(v);
+                    out[name] = v;
+                } else if (index == 1) {
+                    std::int64_t v = 0;
+                    reader.get(v);
+                    out[name] = v;
+                } else if (index == 2) {
+                    double v = 0.0;
+                    reader.get(v);
+                    out[name] = v;
+                } else if (index == 3) {
+                    std::string v;
+                    reader.getString(v);
+                    out[name] = std::move(v);
+                } else {
+                    std::uint64_t count = 0;
+                    reader.get(count);
+                    std::vector<std::string> v;
+                    for (std::uint64_t k = 0; k < count && !reader.failed(); ++k) {
+                        reader.getString(v.emplace_back());
+                    }
+                    out[name] = std::move(v);
+                }
+            }
+        };
+        SiteNow saved;
+        auto& [gravity, ambient, density, aero, weather, temperature, local] = saved;
+        optional(gravity);
+        optional(ambient);
+        optional(density);
+        table(aero);
+        table(weather);
+        optional(temperature);
+        reader.get(local);
+        if (reader.failed()) {
+            return Status::error(StatusCode::InvalidConfig, "a checkpoint with no site in it");
+        }
+        if (saved == siteNow()) {
+            return {};
+        }
+        appliedGravity = gravity;
+        appliedAmbientK = ambient;
+        appliedAirDensity = density;
+        appliedAerodynamics = std::move(aero);
+        appliedWeather = std::move(weather);
+        options.ambientTemperatureK = temperature;
+        robot.world.gravityLocal = local;
+        if (Status status = build(); !status.ok()) {
+            return status;
+        }
         broadcast(environmentState());
         return {};
     }
@@ -1323,14 +1445,15 @@ struct Server::Impl {
             if (table.type[s] != SensorType::Lidar) {
                 continue;
             }
-            const SignalId id = bus.find("sensor/" + table.names[s] + "/ranges");
-            if (!watched || !id.valid() || bus.stamp(id) == lidarSent[s]) {
+            const SignalId id = shownSignal(table.names[s], "ranges");
+            const SimTime sampled = shownStamp(table.names[s], id);
+            if (!watched || !id.valid() || sampled == lidarSent[s]) {
                 continue;
             }
-            lidarSent[s] = bus.stamp(id);
+            lidarSent[s] = sampled;
             const LidarLayout layout = LidarLayout::from(table.settings[s]);
             const std::span<const double> ranges = bus.readN(id);
-            const SignalId intensityId = bus.find("sensor/" + table.names[s] + "/intensities");
+            const SignalId intensityId = shownSignal(table.names[s], "intensities");
             const std::span<const double> intensities =
                 intensityId.valid() ? bus.readN(intensityId) : std::span<const double>();
             std::vector<float> points;
@@ -1366,15 +1489,33 @@ struct Server::Impl {
     }
     std::vector<SimTime> lidarSent;  // per sensor: stamp of the last frame sent (lidar, camera)
 
+    /// What a viewer sees of a sensor is what the robot gets: its delayed output if it has one.
+    SignalId shownSignal(const std::string& sensor, const std::string& quantity) const {
+        const SignalBus& bus = scheduler->bus();
+        const SignalId late = bus.find("sensor/" + sensor + "/delayed/" + quantity);
+        return late.valid() ? late : bus.find("sensor/" + sensor + "/" + quantity);
+    }
+    /// When the value of shownSignal was sampled: not its bus stamp, which says when it arrived.
+    /// Before the first sample arrives it is time zero.
+    SimTime shownStamp(const std::string& sensor, SignalId id) const {
+        const SignalBus& bus = scheduler->bus();
+        const SignalId late = bus.find("sensor/" + sensor + "/delayed/stamp");
+        if (!late.valid()) {
+            return id.valid() ? bus.stamp(id) : SimTime{};
+        }
+        return SimTime{std::max<std::int64_t>(std::llround(bus.read(late) * 1e9), 0)};
+    }
+
     /// A camera's colour image (rgba8, inline), once per new frame. An empty buffer (the
     /// ground-truth substitute, or before the first frame) is not sent.
     void sendImage(std::size_t s, const std::string& path) {
         const SignalBus& bus = scheduler->bus();
-        const SignalId id = bus.find("sensor/" + robot.world.sensors.names[s] + "/image");
-        if (!id.valid() || bus.stamp(id) == lidarSent[s]) {
+        const SignalId id = shownSignal(robot.world.sensors.names[s], "image");
+        const SimTime sampled = shownStamp(robot.world.sensors.names[s], id);
+        if (!id.valid() || sampled == lidarSent[s]) {
             return;
         }
-        lidarSent[s] = bus.stamp(id);
+        lidarSent[s] = sampled;
         const std::shared_ptr<const Buffer> image = bus.buffer(bus.readBuffer(id));
         if (!image || image->bytes.empty()) {
             return;
@@ -5513,6 +5654,7 @@ Expected<std::vector<std::byte>, Status> Server::saveState() const {
         return Unexpected{Status::error(StatusCode::Internal, "saveState() before load()")};
     }
     StateWriter writer;
+    impl_->saveSite(writer);
     if (Status status = impl_->scheduler->saveState(writer); !status.ok()) {
         return Unexpected{status};
     }
@@ -5525,6 +5667,9 @@ Status Server::restoreState(std::span<const std::byte> state) {
         return Status::error(StatusCode::Internal, "restoreState() before load()");
     }
     StateReader reader(state);
+    if (Status status = impl_->restoreSite(reader); !status.ok()) {
+        return status;
+    }
     return impl_->scheduler->restoreState(reader);
 }
 
