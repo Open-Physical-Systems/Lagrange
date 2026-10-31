@@ -639,6 +639,8 @@ public:
     void setInitialSelection(std::string path) { selectPath_ = std::move(path); }
     void setCursors(bool on) { cursorsWanted_ = on; }
     /// Start with the follow camera at this distance (m) from the robot; 0: frame the scene.
+    /// Where the camera looks from at the start: target (m), distance (m), yaw and pitch (deg).
+    void setCamera(const std::optional<std::array<double, 6>>& view) { startView_ = view; }
     void setFollow(double distance, double pitchDeg) {
         followDistance_ = distance;
         followPitchDeg_ = pitchDeg;
@@ -715,8 +717,15 @@ private:
             }
             renderOptions_.follow = true;
         }
+        if (startView_) {
+            camera_.target = {(*startView_)[0], (*startView_)[1], (*startView_)[2]};
+            camera_.distance = (*startView_)[3];
+            camera_.yaw = (*startView_)[4] * std::numbers::pi / 180.0;
+            camera_.pitch = (*startView_)[5] * std::numbers::pi / 180.0;
+        }
     }
 
+    std::optional<std::array<double, 6>> startView_;
     const gpu::Device& device_;
     ViewerClient& client_;
     SceneRenderer renderer_;
@@ -853,6 +862,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);
         ui.setFollow(options.followDistance, options.followPitchDeg);
+        ui.setCamera(options.camera);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize =
@@ -1206,6 +1216,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);
         ui.setFollow(options.followDistance, options.followPitchDeg);
+        ui.setCamera(options.camera);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);
         // The file dialog reports its result on a callback that may run on another thread.
         struct Chosen {

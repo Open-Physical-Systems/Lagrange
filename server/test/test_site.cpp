@@ -93,6 +93,32 @@ TEST(Site, AValueThatBringsADomainInRebuildsTheRun) {
     EXPECT_GT(server.read("body/base_link/pose").at(2), 0.5) << "it takes off";
 }
 
+// The wind speed alone is enough, as the guide says: the rest of the wind has its conventions. A
+// wind from the west pushes a hovering quadcopter east, and it goes away again when set to 0.
+TEST(Site, WindSpeedAloneIsEnoughAndItPushes) {
+    ServerOptions o;
+    o.robotPath = LAGRANGE_TEST_QUAD_USDA;
+    o.ros = false;
+    o.realTimeFactor = 0.0;
+    o.airDensityKgM3 = 1.225;
+    Server server(o);
+    ASSERT_TRUE(server.load().ok());
+    ASSERT_TRUE(server.stepUntil(SimTime{3'000'000'000}).ok());
+    const Status set = server.setSite("wind_speed", 10.0);
+    ASSERT_TRUE(set.ok()) << set.message;
+    ASSERT_TRUE(server.setSite("wind_from", 270.0).ok());
+    const double then = server.read("body/base_link/pose").at(2);
+    EXPECT_GT(then, 0.5) << "still in the air: the wind does not restart the run";
+    ASSERT_TRUE(server.stepUntil(SimTime{3'100'000'000}).ok());
+    const std::string drag = "body/base_link/wrench/aero";
+    ASSERT_EQ(server.read(drag).size(), 6U);
+    EXPECT_GT(server.read(drag)[0], 0.1) << "blowing towards +x";
+    const Status calm = server.setSite("wind_speed", 0.0);
+    ASSERT_TRUE(calm.ok()) << calm.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{3'200'000'000}).ok());
+    EXPECT_LT(std::abs(server.read(drag)[0]), 0.1) << "only its own slow drift";
+}
+
 // A checkpoint holds the site: restoring it brings back the gravity and weather of its moment, also
 // when the run has changed them since, and the run then repeats exactly.
 TEST(Site, ACheckpointHoldsTheSite) {

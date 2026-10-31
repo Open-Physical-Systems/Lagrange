@@ -1,0 +1,8 @@
+# One file for a whole run: lagrange run.yaml
+robot: ../../../assets/robots/amr_diffdrive/amr_diffdrive.urdf
+world: ../../../assets/worlds/warehouse_small/warehouse_small.usda
+control: builtin
+site:
+  gravity: 9.81
+sensor_timing:
+  imu: {latency: 0.002, jitter: 0.0005}

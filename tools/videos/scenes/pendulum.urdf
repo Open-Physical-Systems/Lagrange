@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<!-- A 1.5 m pendulum released from level: its swing shows gravity at a glance. -->
+<robot name="pendulum">
+  <link name="world"/>
+  <link name="post">
+    <visual><origin xyz="0 0 1"/><geometry><box size="0.12 0.12 2"/></geometry>
+      <material name="post"><color rgba="0.35 0.38 0.42 1"/></material></visual>
+  </link>
+  <joint name="post_fix" type="fixed"><parent link="world"/><child link="post"/></joint>
+  <link name="arm">
+    <inertial><origin xyz="1.5 0 0"/><mass value="2"/>
+      <inertia ixx="0.01" iyy="0.01" izz="0.01" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><origin xyz="0.75 0 0"/><geometry><box size="1.5 0.03 0.03"/></geometry>
+      <material name="rod"><color rgba="0.8 0.8 0.8 1"/></material></visual>
+    <visual><origin xyz="1.5 0 0"/><geometry><sphere radius="0.14"/></geometry>
+      <material name="bob"><color rgba="0.95 0.45 0.15 1"/></material></visual>
+  </link>
+  <joint name="swing" type="continuous"><parent link="post"/><child link="arm"/>
+    <origin xyz="0 0.1 2"/><axis xyz="0 1 0"/></joint>
+</robot>
