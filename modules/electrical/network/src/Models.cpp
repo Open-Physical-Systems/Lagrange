@@ -134,7 +134,11 @@ MotorOutputs stepMotor(const MotorParams& p, MotorState& s, const MotorInputs& i
         vq = p.inductanceQ * wc * eq + s.integralQ + p.torqueConstant * motorVelocity;
         magnitude = std::abs(vq);
     }
-    if (magnitude > limitVoltage) {
+    if (in.voltageMode) {
+        vd = 0.0;
+        vq = std::clamp(in.voltageCommand, -limitVoltage, limitVoltage);
+        s.integralD = s.integralQ = 0.0;
+    } else if (magnitude > limitVoltage) {
         // Saturated: scale the vector onto the limit and hold the integrators (anti-windup by
         // conditional integration).
         const double scale = limitVoltage / magnitude;

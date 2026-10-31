@@ -23,6 +23,8 @@ constexpr double kDefaultBusCapacitanceF = 1e-6;
 // How far an authored backEmfConstant may differ from the one the torque constant implies
 // before the two are taken to be in different conventions (RMS, line-line): datasheets round.
 constexpr double kBackEmfTolerance = 0.03;
+// elec:velocityLoopBandwidth's fallback, rad/s: 10 Hz (illustrative, as the schema says).
+constexpr double kVelocityLoopRadS = 62.83;
 // A tripped drive resets once its command is this small (N·m): the controller asks for nothing.
 constexpr double kResetTorqueNm = 1e-6;
 // Ports followed from a component to its bus.
@@ -35,6 +37,9 @@ double jointInertia(const WorldView& world, std::size_t j) {
     const World::Joints& joints = world.joints();
     const World::Bodies& bodies = world.bodies();
     const std::size_t b = joints.child[j].index;
+    if (joints.type[j] == JointType::Prismatic) {  // what it moves: the child's mass
+        return joints.armature[j] + (b < bodies.mass.size() ? bodies.mass[b] : 0.0);
+    }
     const std::array<double, 3>& a = joints.axis[j];
     const double norm = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
     if (b >= bodies.mass.size() || norm <= 0.0) {
@@ -84,6 +89,18 @@ SignalSpec optionalInput(std::string name, Unit unit, double fallback) {
 }
 
 }  // namespace
+
+std::map<std::string, std::string> driveModes(const WorldView& world) {
+    std::map<std::string, std::string> out;
+    for (const SchemaInstance* s : world.instancesOf("ElectricalMotorAPI_1")) {
+        const std::string mode(s->token("elec:controlMode").value_or("torque"));
+        const auto joint = s->rel("elec:joint");
+        if (mode != "torque" && joint.size() == 1) {
+            out[std::string(world.signalInstanceName(joint[0]))] = mode;
+        }
+    }
+    return out;
+}
 
 ModuleInfo ElectricalNetwork::info() const {
     return {"electrical", "averaged_network", 0, 1, false, true, CapabilityTier::Tier0};
@@ -291,8 +308,10 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
                 continue;
             }
         }
-        if (s->token("elec:controlMode").value_or("torque") != "torque") {
-            problems.add(where, "only elec:controlMode torque is simulated yet");
+        motor.mode = std::string(s->token("elec:controlMode").value_or("torque"));
+        motor.velocityBandwidth = s->real("elec:velocityLoopBandwidth").value_or(kVelocityLoopRadS);
+        if (motor.velocityBandwidth <= 0.0) {
+            problems.add(where, "elec:velocityLoopBandwidth must be positive");
             continue;
         }
         motor.joint = name(joint[0]);
@@ -301,11 +320,8 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
             problems.add(where, "elec:joint " + path(joint[0]) + " is not a joint of the robot");
             continue;
         }
-        if (joints.type[static_cast<std::size_t>(j - joints.names.begin())] ==
-            JointType::Prismatic) {
-            problems.add(where, "motors on prismatic joints are not simulated yet");
-            continue;
-        }
+        motor.slide =
+            joints.type[static_cast<std::size_t>(j - joints.names.begin())] == JointType::Prismatic;
         const auto bus = busThrough(s, "elec:powerPort");
         if (!bus) {
             continue;
@@ -406,20 +422,29 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
     for (Motor& m : motors_) {
         const std::string joint = "joint/" + m.joint + "/";
         const std::string motor = "motor/" + m.name + "/";
-        // A drive nothing commands makes no torque (a robot without a controller).
-        SignalSpec command = scalar(joint + "torque_command", units::N_m);
-        command.optional = true;
-        m.command = d.input(command);
-        SignalSpec velocity = scalar(joint + "velocity", units::rad_per_s);
+        const Unit effort = m.slide ? units::N : units::N_m;
+        const Unit speed = m.slide ? units::m_per_s : units::rad_per_s;
+        if (m.mode == "velocity") {
+            m.velocityCommand = d.input(scalar(joint + "velocity_command", speed));
+        } else if (m.mode == "voltage") {
+            m.voltageCommand = d.input(scalar(joint + "voltage_command", units::V));
+        } else {
+            // A drive nothing commands makes no torque (a robot without a controller).
+            SignalSpec command = scalar(joint + "torque_command", effort);
+            command.optional = true;
+            m.command = d.input(command);
+        }
+        SignalSpec velocity = scalar(joint + "velocity", speed);
         // Predicting, the drive integrates between samples itself and needs the sample as is.
         velocity.hold = predict_ ? Hold::ZeroOrder : Hold::LinearExtrapolate;
         velocity.feedback = true;
         m.velocity = d.input(velocity);
-        m.effectiveInertia = d.input(optionalInput(joint + "effective_inertia", units::kg_m2, 0.0));
+        m.effectiveInertia = d.input(
+            optionalInput(joint + "effective_inertia", m.slide ? units::kg : units::kg_m2, 0.0));
         m.temperature =
             d.input(optionalInput("thermal/" + m.name + "/temperature", units::K, kAmbientK));
         m.derating = d.input(optionalInput("thermal/" + m.name + "/derating", units::one, 1.0));
-        m.torque = d.output(scalar(joint + "torque", units::N_m));
+        m.torque = d.output(scalar(joint + "torque", effort));
         m.currentD = d.output(scalar(motor + "current_d", units::A));
         m.currentQ = d.output(scalar(motor + "current_q", units::A));
         m.voltageD = d.output(scalar(motor + "voltage_d", units::V));
@@ -633,7 +658,9 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
     for (Motor& m : motors_) {
         const Bus& node = buses_[m.bus];
         MotorInputs in;
-        in.torqueCommand = bus.read(m.command);
+        if (m.mode == "torque") {
+            in.torqueCommand = bus.read(m.command);
+        }
         const double sample = bus.read(m.velocity);
         if (predict_) {
             // Resync to physics every H; estimate the load from the last window:
@@ -658,10 +685,39 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
         } else {
             in.jointVelocity = sample;
         }
+        // A velocity or voltage drive resets once it is asked for nothing, as a torque one does.
+        double asked = in.torqueCommand;
+        if (m.mode == "velocity") {
+            asked = bus.read(m.velocityCommand);
+        } else if (m.mode == "voltage") {
+            asked = bus.read(m.voltageCommand);
+        }
         if (node.brownout) {
             m.tripped = true;
-        } else if (m.tripped && std::abs(in.torqueCommand) < kResetTorqueNm) {
+        } else if (m.tripped && std::abs(asked) < kResetTorqueNm) {
             m.tripped = false;
+        }
+        if (m.mode == "voltage") {
+            in.voltageMode = true;
+            in.voltageCommand = asked;
+        } else if (m.mode == "velocity") {
+            // PI on the inertia the joint turns: J s² + Kp s + Ki with both poles at the bandwidth
+            // over 2, so Kp = J ω, Ki = J ω² / 4. Held by what the drive can give.
+            const double effective = bus.read(m.effectiveInertia);
+            const double inertia = effective > 0.0 ? effective : m.worldInertia;
+            const double kp = inertia * m.velocityBandwidth;
+            const double ki = kp * m.velocityBandwidth / 4.0;
+            const double limit = m.params.gearRatio * m.params.gearEfficiency *
+                                 m.params.torqueConstant * m.params.maxCurrent *
+                                 std::clamp(bus.read(m.derating), 0.0, 1.0);
+            const double error = asked - in.jointVelocity;
+            const double wanted = kp * error + m.velocityIntegral;
+            if (m.tripped) {
+                m.velocityIntegral = 0.0;
+            } else if (std::abs(wanted) < limit) {  // anti-windup: hold it at the limit
+                m.velocityIntegral += ki * error * dt;
+            }
+            in.torqueCommand = std::clamp(wanted, -limit, limit);
         }
         const bool overvoltageOff = node.overvoltageTripped && node.brakeResistance <= 0.0;
         const bool off = m.tripped || overvoltageOff;
@@ -774,6 +830,7 @@ Status ElectricalNetwork::saveState(StateWriter& writer) const {
     for (const Motor& m : motors_) {
         writer.put(m.state);
         writer.put(m.tripped);
+        writer.put(m.velocityIntegral);
         writer.put(m.predicted);
         writer.put(m.loadEstimate);
         writer.put(m.lastSample);
@@ -801,9 +858,9 @@ Status ElectricalNetwork::saveState(StateWriter& writer) const {
 Status ElectricalNetwork::restoreState(StateReader& reader) {
     bool ok = true;
     for (Motor& m : motors_) {
-        ok = ok && reader.get(m.state) && reader.get(m.tripped) && reader.get(m.predicted) &&
-             reader.get(m.loadEstimate) && reader.get(m.lastSample) && reader.get(m.torqueSum) &&
-             reader.get(m.stepsSince) && reader.get(m.synced);
+        ok = ok && reader.get(m.state) && reader.get(m.tripped) && reader.get(m.velocityIntegral) &&
+             reader.get(m.predicted) && reader.get(m.loadEstimate) && reader.get(m.lastSample) &&
+             reader.get(m.torqueSum) && reader.get(m.stepsSince) && reader.get(m.synced);
     }
     for (Battery& b : batteries_) {
         ok = ok && reader.get(b.state.soc) && reader.get(b.state.v1) && reader.get(b.state.v2) &&

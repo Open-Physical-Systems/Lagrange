@@ -30,7 +30,9 @@ std::map<std::string, JointTarget> JointTargets::all() const {
     return targets_;
 }
 
-JointControl::JointControl(std::shared_ptr<JointTargets> targets) : targets_(std::move(targets)) {}
+JointControl::JointControl(std::shared_ptr<JointTargets> targets,
+                           std::map<std::string, std::string> driveModes)
+    : targets_(std::move(targets)), driveModes_(std::move(driveModes)) {}
 
 ModuleInfo JointControl::info() const {
     return {"controller", "joint_control", 1, 0};  // deterministic given its commands
@@ -60,7 +62,16 @@ Status JointControl::declare(const WorldView& world, const ModuleConfig&, Signal
         out.position = d.input(position);
         out.velocity = d.input(velocity);
         out.inertia = d.input(inertia);
-        out.torque = d.output(spec(base + "/torque_command", slide ? units::N : units::N_m));
+        const auto drive = driveModes_.find(out.name);
+        out.mode = drive == driveModes_.end() ? "torque" : drive->second;
+        if (out.mode == "velocity") {
+            out.torque = d.output(
+                spec(base + "/velocity_command", slide ? units::m_per_s : units::rad_per_s));
+        } else if (out.mode == "voltage") {
+            out.torque = d.output(spec(base + "/voltage_command", units::V));
+        } else {
+            out.torque = d.output(spec(base + "/torque_command", slide ? units::N : units::N_m));
+        }
         joints_.push_back(std::move(out));
     }
     return {};
@@ -79,6 +90,23 @@ Status JointControl::step(const StepContext&, SignalBus& bus) {
     for (const Joint& j : joints_) {
         const auto it = targets.find(j.name);
         double torque = 0.0;
+        if (j.mode != "torque") {
+            // The motor closes the loop: it is told a speed, or volts.
+            double out = 0.0;
+            if (it != targets.end()) {
+                const JointTarget& t = it->second;
+                using Mode = JointTarget::Mode;
+                if (j.mode == "voltage") {
+                    out = t.mode == Mode::Voltage || t.mode == Mode::Effort ? t.value : 0.0;
+                } else if (t.mode == Mode::Velocity) {
+                    out = t.value;
+                } else if (t.mode == Mode::Position) {
+                    out = omega * (t.value - bus.read(j.position));
+                }
+            }
+            bus.write(j.torque, out);
+            continue;
+        }
         if (it != targets.end()) {
             const double inertia = bus.read(j.inertia);
             const JointTarget& t = it->second;
@@ -93,6 +121,7 @@ Status JointControl::step(const StepContext&, SignalBus& bus) {
                 case JointTarget::Mode::Effort:
                     torque = t.value;
                     break;
+                case JointTarget::Mode::Voltage:  // no motor to take volts
                 case JointTarget::Mode::None:
                     break;
             }

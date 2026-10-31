@@ -8,6 +8,8 @@ and `test_schemas.py` checks it.
 
 ## Unreleased
 
+- **`ElectricalMotorAPI_1`**: `elec:velocityLoopBandwidth`; `elec:controlMode` `velocity` and `voltage` now simulated, on prismatic joints too. Addition, nothing to migrate.
+
 - **Joint library**: `JointDynamicsAPI_1` on a physics joint: damping, dry friction and copying another joint (mimic).
   New library, nothing to migrate.
 

@@ -16,5 +16,5 @@ electrical schematics in the run file (later).
 | 6 | **Lidar motion distortion.** A moving robot's scan skews | done |
 | 7 | **Sensor timing.** Latency and jitter | done |
 | 8 | **Importer audit.** URDF damping and friction, mimic joints, ellipsoid colliders, SDF joints between models, MJCF types | todo |
-| 9 | **Motor models.** Velocity and voltage control, motors on prismatic joints | todo |
+| 9 | **Motor models.** Velocity and voltage control, motors on prismatic joints | done |
 | 10 | **Code check**, if time is left: check everything, make the optimizations found | todo |
