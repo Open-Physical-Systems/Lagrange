@@ -7,7 +7,19 @@ lagrange my_robot.urdf            # URDF, or USD, SDFormat, MJCF
 lagrange my_robot.usda world.usda # and a world
 ```
 
-It starts on an empty ground (or in the world you named), still until you command it.
+It starts on an empty ground (or in the world you named), still until you command it. Lagrange is
+the low level: your code drives each joint, by position, velocity or effort:
+
+```bash
+ros2 topic pub /joint_commands sensor_msgs/msg/JointState \
+  "{name: [left_wheel, elbow], velocity: [3.0, .nan], position: [.nan, 0.5]}"
+```
+
+For each name it takes the position if given (not NaN), else the velocity, else the effort. Position
+and velocity loops are built in (8 Hz, critically damped on the joint's inertia, so no tuning, and a
+position loop holding against gravity sags slightly); effort goes straight to the joint, limited by
+its effort limit. A joint not yet commanded gets no torque. Road vehicles and multicopters keep
+their own controllers: `/cmd_vel` or `/ackermann_cmd`.
 
 To keep a run's settings, put them in one file and run that:
 
@@ -33,6 +45,7 @@ site:
   geo_origin: [47.3977, 8.5456, 488]  # latitude, longitude, height: GNSS and the compass run
 
 physics: mujoco             # or jolt
+control: joints             # each joint on /joint_commands; builtin: the robot's own controller
 time: { real_time_factor: 1.0, paused: false }
 ros: true
 ros_topics: topics.yaml     # plugin signals on ROS: writing-a-plugin.md

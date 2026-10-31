@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -14,6 +15,14 @@
 #include <vector>
 
 namespace lagrange::ros2 {
+
+/// One joint's command from /joint_commands.
+struct JointCommand {
+    enum class Mode : std::uint8_t { Position, Velocity, Effort };
+    std::string joint;
+    Mode mode{Mode::Position};
+    double value{0.0};
+};
 
 struct BridgeSettings {
     std::string nodeName{"lagrange_ros2_bridge"};
@@ -34,6 +43,9 @@ struct BridgeSettings {
     std::map<std::string, std::string> topicLinks;
     /// Signals published on topics and topics written into signals (--ros-topics, RFC 0008 §4).
     TopicMaps signalTopics;
+    /// Set: /joint_commands (sensor_msgs/JointState) drives joints one by one: for each name,
+    /// its position if given and finite, else its velocity, else its effort. On ROS's thread.
+    std::function<void(const JointCommand&)> jointCommands;
 };
 
 /// A /cmd_vel message: forward speed and turn rate.

@@ -57,6 +57,7 @@ add_library(
     src/Recorder.cpp
     src/RegionHost.cpp
     src/Plugins.cpp
+    src/JointControl.cpp
 )
 lagrange_target_defaults(lagrange_server)
 target_include_directories(
@@ -201,6 +202,7 @@ if(BUILD_TESTING)
         test/test_regions.cpp
         test/test_server.cpp
         test/test_spawn.cpp
+        test/test_joint_control.cpp
         test/test_humans_run.cpp
         test/test_plugins.cpp
         test/test_multicopter.cpp

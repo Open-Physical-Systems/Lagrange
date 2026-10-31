@@ -119,6 +119,7 @@ struct Bridge::Impl {
     rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tf;
     rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tfStatic;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr description;
+    rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr jointCommands;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmdVel;
     rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmdVelStamped;
     rclcpp::Subscription<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr ackermannCmd;
@@ -469,6 +470,31 @@ Bridge::Bridge(BridgeSettings settings)
             "/cmd_vel", 10, [&s](const geometry_msgs::msg::Twist& twist) { s.take(twist); });
     }
     setRobot(settings_.baseLink, settings_.robotDescription, settings_.ackermannCmd);
+    if (settings_.jointCommands) {
+        s.jointCommands = s.node->create_subscription<sensor_msgs::msg::JointState>(
+            "/joint_commands", 10,
+            [send = settings_.jointCommands](const sensor_msgs::msg::JointState& state) {
+                for (std::size_t i = 0; i < state.name.size(); ++i) {
+                    const auto given = [i](const std::vector<double>& field) {
+                        return i < field.size() && std::isfinite(field[i]);
+                    };
+                    JointCommand command;
+                    command.joint = state.name[i];
+                    if (given(state.position)) {
+                        command.value = state.position[i];
+                    } else if (given(state.velocity)) {
+                        command.mode = JointCommand::Mode::Velocity;
+                        command.value = state.velocity[i];
+                    } else if (given(state.effort)) {
+                        command.mode = JointCommand::Mode::Effort;
+                        command.value = state.effort[i];
+                    } else {
+                        continue;
+                    }
+                    send(command);
+                }
+            });
+    }
     if (!settings_.signalTopics.publish.empty() || !settings_.signalTopics.subscribe.empty()) {
         signalTopics_ = std::make_unique<SignalTopics>(*s.node, settings_.signalTopics);
     }
