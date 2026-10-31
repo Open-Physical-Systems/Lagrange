@@ -10,7 +10,8 @@ namespace lagrange::hydrodynamics {
 
 namespace {
 
-constexpr int kCells = 6;  // a side, per collider
+constexpr int kCells = 6;           // a side, per collider
+constexpr double kCellReach = 2.0;  // a cell's corner is within this many of its sides, generously
 
 SignalSpec spec(std::string name, SignalType type, Unit unit, std::string frame = {}) {
     SignalSpec s;
@@ -93,6 +94,18 @@ bool inside(ShapeType type, const std::array<double, 3>& s, const std::array<dou
         default:
             return true;
     }
+}
+
+/// A point of a body in the world: the rotation of `compose`, without building a quaternion.
+std::array<double, 3> placed(const Pose& pose, const std::array<double, 3>& point) {
+    const auto& q = pose.orientation;
+    const std::array<double, 3> u{q[1], q[2], q[3]};
+    const std::array<double, 3> t{2.0 * (u[1] * point[2] - u[2] * point[1]),
+                                  2.0 * (u[2] * point[0] - u[0] * point[2]),
+                                  2.0 * (u[0] * point[1] - u[1] * point[0])};
+    return {pose.position[0] + point[0] + q[0] * t[0] + u[1] * t[2] - u[2] * t[1],
+            pose.position[1] + point[1] + q[0] * t[1] + u[2] * t[0] - u[0] * t[2],
+            pose.position[2] + point[2] + q[0] * t[2] + u[0] * t[1] - u[1] * t[0]};
 }
 
 std::array<double, 3> cross(const std::array<double, 3>& a, const std::array<double, 3>& b) {
@@ -215,6 +228,9 @@ Status Water::declare(const WorldView& world, const ModuleConfig&, SignalDeclare
             }
             for (Cell& cell : cells) {
                 cell.volume = box.volume / static_cast<double>(cells.size());
+                cell.area = std::pow(cell.volume, 2.0 / 3.0) / kCells;
+                body.reach = std::max(body.reach, std::hypot(cell.at[0], cell.at[1], cell.at[2]) +
+                                                      std::cbrt(cell.volume) * kCellReach);
             }
             body.volume += box.volume;
             body.cells.insert(body.cells.end(), cells.begin(), cells.end());
@@ -250,14 +266,20 @@ Status Water::step(const StepContext&, SignalBus& bus) {
         const std::span<const double> v = bus.readN(body.twist);
         std::array<double, 6> wrench{};
         double under = 0.0;
-        if (p.size() == 7 && v.size() == 6) {
+        // Most bodies are nowhere near water most of the time.
+        const bool near =
+            p.size() == 7 && std::any_of(waters_.begin(), waters_.end(), [&](const WaterBody& w) {
+                return std::abs(p[0] - w.surface[0]) <= w.sizeX / 2.0 + body.reach &&
+                       std::abs(p[1] - w.surface[1]) <= w.sizeY / 2.0 + body.reach &&
+                       p[2] - body.reach <= w.surface[2] &&
+                       p[2] + body.reach >= w.surface[2] - w.depth;
+            });
+        if (near && v.size() == 6) {
             const Pose pose{{p[0], p[1], p[2]}, {p[3], p[4], p[5], p[6]}};
-            const std::array<double, 3> com =
-                compose(pose, Pose{body.com, {1.0, 0.0, 0.0, 0.0}}).position;
+            const std::array<double, 3> com = placed(pose, body.com);
             const std::array<double, 3> spin{v[3], v[4], v[5]};
             for (const Cell& cell : body.cells) {
-                const std::array<double, 3> at =
-                    compose(pose, Pose{cell.at, {1.0, 0.0, 0.0, 0.0}}).position;
+                const std::array<double, 3> at = placed(pose, cell.at);
                 for (const WaterBody& water : waters_) {
                     const double top = water.surface[2];
                     if (std::abs(at[0] - water.surface[0]) > water.sizeX / 2.0 ||
@@ -277,7 +299,8 @@ Status Water::step(const StepContext&, SignalBus& bus) {
                                                       v[2] + around[2]};
                     const double magnitude = std::hypot(speed[0], speed[1], speed[2]);
                     // The cells' share of the frontal area: a stack of kCells makes one face.
-                    const double area = std::pow(volume, 2.0 / 3.0) / kCells;
+                    const double area =
+                        fraction >= 1.0 ? cell.area : std::pow(volume, 2.0 / 3.0) / kCells;
                     const double dragGain = 0.5 * water.density * water.drag * area * magnitude;
                     const std::array<double, 3> force{
                         -water.density * gravity_[0] * volume - dragGain * speed[0],

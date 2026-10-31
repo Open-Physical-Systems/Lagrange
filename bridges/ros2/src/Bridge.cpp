@@ -72,6 +72,7 @@ namespace lagrange::ros2 {
 namespace {
 
 using Clock = std::chrono::steady_clock;
+constexpr std::int64_t kMinClockPeriodNs = 1'000'000;
 
 builtin_interfaces::msg::Time stampOf(SimTime t) {
     builtin_interfaces::msg::Time stamp;
@@ -216,14 +217,15 @@ struct Bridge::Impl {
             return;
         }
         auto held = std::make_shared<std::decay_t<Message>>(std::forward<Message>(message));
-        pending.push_back({SimTime{gateNow.ns + delay},
-                           [publisher, held]() { publisher->publish(std::move(*held)); }});
+        // In the order they fall due, and among equals in the order they were sent.
+        const SimTime due{gateNow.ns + delay};
+        pending.insert(std::upper_bound(pending.begin(), pending.end(), due,
+                                        [](SimTime at, const Pending& p) { return at < p.at; }),
+                       Pending{due, [publisher, held]() { publisher->publish(std::move(*held)); }});
     }
 
     /// Sends the late messages that are due by `now`, oldest first.
     void flush(SimTime now) {
-        std::stable_sort(pending.begin(), pending.end(),
-                         [](const Pending& a, const Pending& b) { return a.at < b.at; });
         while (!pending.empty() && pending.front().at <= now) {
             pending.front().send();
             pending.pop_front();
@@ -239,6 +241,7 @@ struct Bridge::Impl {
         std::string topic;
         SignalId ranges, intensities;
         LidarLayout layout;
+        std::vector<std::array<double, 3>> directions;  // of each beam, for the cloud
         double minRange{0.0}, maxRange{0.0}, rateHz{10.0};
         double sweep{0.0};  // s from the first column's firing to the scan's end + one column
         SimTime sent{-1};
@@ -348,7 +351,7 @@ struct Bridge::Impl {
         cloud.data.assign(static_cast<std::size_t>(cloud.row_step) * cloud.height, 0);
         const float nan = std::numeric_limits<float>::quiet_NaN();
         for (std::uint32_t i = 0; i < beams; ++i) {
-            const std::array<double, 3> d = lidar.layout.direction(i);
+            const std::array<double, 3>& d = lidar.directions[i];
             const bool hit = std::isfinite(ranges[i]);
             const std::array<float, 4> values{
                 hit ? static_cast<float>(ranges[i] * d[0]) : nan,
@@ -675,6 +678,10 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             Impl::Lidar lidar;
             lidar.frame = name;
             lidar.layout = LidarLayout::from(settings);
+            lidar.directions.resize(lidar.layout.is3d() ? lidar.layout.beams() : 0);
+            for (std::uint32_t beam = 0; beam < lidar.directions.size(); ++beam) {
+                lidar.directions[beam] = lidar.layout.direction(beam);
+            }
             if (lidar.layout.is3d()) {
                 lidar.topic = clouds == 1 ? "/points" : "/" + name + "/points";
             } else {
@@ -834,7 +841,9 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
     if (signalTopics_) {
         signalTopics_->publish(bus, now);
     }
-    if (now != s.lastClock) {
+    // At most every millisecond: at the electrical step's 10 kHz the clock alone would cost more
+    // than the simulation, and nothing that follows it can use it finer.
+    if (s.lastClock.ns < 0 || now.ns - s.lastClock.ns >= kMinClockPeriodNs || now < s.lastClock) {
         rosgraph_msgs::msg::Clock clock;
         clock.clock = stampOf(now);
         s.clock->publish(clock);

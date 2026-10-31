@@ -4,6 +4,7 @@
 #include "lagrange/electrical/Models.hpp"
 #include "lagrange/module/IModule.hpp"
 
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -96,7 +97,7 @@ private:
         std::size_t bus{0};
         bool tripped{false};  // undervoltage fault, latched
         bool slide{false};    // on a prismatic joint: force, m/s, kg at the joint
-        std::string mode{"torque"};
+        enum class Mode : std::uint8_t { Torque, Velocity, Voltage } mode{Mode::Torque};
         double velocityBandwidth{0.0};  // rad/s
         double velocityIntegral{0.0};   // N·m or N, the speed loop's
         SignalId velocityCommand, voltageCommand;

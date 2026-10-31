@@ -1396,13 +1396,26 @@ struct Server::Impl {
         }
     }
 
+    /// Which signals capture() looks at, from what viewers ask for. It runs at the base rate over
+    /// few of them; viewers change their minds between batches of ticks, not within one.
+    void refreshCaptured() {
+        capturedWanted.clear();
+        for (std::uint32_t k = 0; k < captured.size(); ++k) {
+            if (captured[k].components != 0 && wanted(captured[k].id.index)) {
+                capturedWanted.push_back(k);
+            }
+        }
+    }
+    std::vector<std::uint32_t> capturedWanted;
+
     /// Records the samples committed in the last tick of every signal a viewer subscribes to.
     void capture() {
         const SignalBus& bus = scheduler->bus();
-        for (Captured& c : captured) {
-            if (c.components == 0 || !wanted(c.id.index)) {
-                continue;
+        for (const std::uint32_t k : capturedWanted) {
+            if (k >= captured.size()) {
+                continue;  // the run was rebuilt in this batch of ticks
             }
+            Captured& c = captured[k];
             const SimTime stamp = bus.stamp(c.id);
             if (stamp == c.lastStamp) {
                 continue;
@@ -1445,6 +1458,7 @@ struct Server::Impl {
                 return {};
             }
         }
+        refreshCaptured();
         while (owedNs >= tick) {
             owedNs -= tick;
             const Clock::time_point tickStart = Clock::now();
@@ -2636,6 +2650,7 @@ struct Server::Impl {
                             fail(status);
                             break;
                         }
+                        refreshCaptured();
                         capture();
                         record();
                         if (Status status = worldUpdate(false); !status.ok()) {
@@ -3985,6 +4000,7 @@ struct Server::Impl {
                 fail(status);
                 return status;
             }
+            refreshCaptured();
             capture();
             record();
             if (Status status = worldUpdate(false); !status.ok()) {

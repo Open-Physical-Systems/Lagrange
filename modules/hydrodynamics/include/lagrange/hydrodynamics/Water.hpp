@@ -54,6 +54,7 @@ private:
     struct Cell {
         std::array<double, 3> at;  // in the body's frame
         double volume;             // m³
+        double area{0.0};          // m², its share of the frontal area, all under water
         double height;             // m, of the cell, for how much of it is under the surface
     };
     struct Body {
@@ -61,6 +62,7 @@ private:
         std::array<double, 3> com{};
         std::vector<Cell> cells;
         double volume{0.0};
+        double reach{0.0};  // m, of its farthest cell from its origin
     };
     std::vector<WaterBody> waters_;
     std::vector<Body> bodies_;
