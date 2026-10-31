@@ -418,5 +418,47 @@ damping="0.7" frictionloss="0.3"/><geom type="sphere" size="0.1"/></body><body n
     EXPECT_DOUBLE_EQ(mjcf->world.joints.mimicOffset[1], 0.2);
 }
 
+// Gazebo's world joint: a pendulum hung from a static model swings about the joint; its own model
+// is no longer floating.
+TEST(SdfWorldJoints, JoinModelsIntoOneTree) {
+    const std::filesystem::path path = scratch("hung.sdf");
+    std::ofstream(path) << R"(<?xml version="1.0"?><sdf version="1.11"><world name="w">
+<model name="post"><static>true</static><pose>0 0 2 0 0 0</pose><link name="top"><collision name="c">
+<geometry><box><size>0.1 0.1 0.1</size></box></geometry></collision></link></model>
+<model name="bob"><pose>0.5 0 2 0 0 0</pose><link name="ball"><inertial><mass>1</mass><inertia>
+<ixx>0.001</ixx><iyy>0.001</iyy><izz>0.001</izz></inertia></inertial></link></model>
+<joint name="hang" type="revolute"><pose relative_to="post::top">0 0 0 0 0 0</pose>
+<parent>post::top</parent><child>bob::ball</child><axis><xyz>0 1 0</xyz>
+<limit><lower>-10</lower><upper>10</upper></limit></axis></joint>
+</world></sdf>)";
+    auto model = loadModel(path.string());
+    ASSERT_TRUE(model) << model.error();
+    ASSERT_EQ(model->world.joints.names.size(), 1U);
+    ServerOptions o;
+    o.robotPath.clear();
+    o.worldPath = path.string();
+    o.ros = false;
+    o.realTimeFactor = 0.0;
+    Server server(o);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    std::string ball;
+    for (const std::string& name : server.world().bodies.names) {
+        ball = name.find("ball") != std::string::npos ? name : ball;
+    }
+    ASSERT_FALSE(ball.empty());
+    const std::string joint = "joint/" + server.world().joints.names.at(0) + "/position";
+    double swing = 0.0;
+    for (std::int64_t ms = 50; ms <= 400; ms += 50) {
+        ASSERT_TRUE(server.stepUntil(SimTime{ms * 1'000'000}).ok());
+        // A joint's body has its frame at the joint: it stays at the top of the post.
+        const std::vector<double> pose = server.read("body/" + ball + "/pose");
+        EXPECT_NEAR(pose.at(0), 0.0, 1e-3) << ms;
+        EXPECT_NEAR(pose.at(2), 2.0, 1e-3) << ms;
+        swing = std::max(swing, std::abs(server.read(joint).at(0)));
+    }
+    EXPECT_GT(swing, 0.5) << "it swings";
+}
+
 }  // namespace
 }  // namespace lagrange::server

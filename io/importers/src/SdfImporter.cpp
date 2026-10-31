@@ -175,6 +175,10 @@ public:
         }
     }
 
+    /// A joint of the world, between links named `model::link` (the descriptions' links are
+    /// already named so, flattened).
+    void readWorldJoint(const sdf::Joint& joint, Description& d) { readJoint(joint, "", d); }
+
 private:
     void readJoint(const sdf::Joint& joint, const std::string& scope, Description& d) {
         JointDesc out;
@@ -454,6 +458,99 @@ sdf::ParserConfig parserConfig(const std::string& path) {
     return config;
 }
 
+/// Joints between a world's models: the models they join become one description, their links and
+/// joints named `model_link`, so that the joined robot is one tree. A joint to the world holds its
+/// model where the joint says, in place of floating.
+void joinModels(const sdf::World& world, Reader& reader, std::vector<Description>& descriptions,
+                Model& model) {
+    const auto modelOf = [](const std::string& link) {
+        const std::size_t at = link.find("::");
+        return at == std::string::npos ? std::string() : link.substr(0, at);
+    };
+    const auto prefixed = [](Description& d) {
+        const std::string prefix = d.name + "_";
+        for (detail::LinkDesc& link : d.links) {
+            link.name = prefix + link.name;
+        }
+        for (detail::JointDesc& joint : d.joints) {
+            joint.name = prefix + joint.name;
+            joint.child = prefix + joint.child;
+            joint.parent = joint.parent.empty() ? joint.parent : prefix + joint.parent;
+            joint.mimic = joint.mimic.empty() ? joint.mimic : prefix + joint.mimic;
+        }
+    };
+    const auto find = [&descriptions](const std::string& name) {
+        return std::find_if(descriptions.begin(), descriptions.end(),
+                            [&name](const Description& d) { return d.name == name; });
+    };
+    std::map<std::string, std::string> holder;  // each joined model: the description now holding it
+    const auto holderOf = [&](const std::string& name) {
+        const auto it = holder.find(name);
+        if (it != holder.end()) {
+            return it->second;
+        }
+        const auto d = find(name);
+        if (d != descriptions.end()) {
+            prefixed(*d);
+            holder[name] = name;
+            return name;
+        }
+        return std::string();
+    };
+    for (std::uint64_t j = 0; j < world.JointCount(); ++j) {
+        const sdf::Joint& joint = *world.JointByIndex(j);
+        std::string parent;
+        std::string child;
+        if (sdf::Errors errors = joint.ResolveParentLink(parent); !errors.empty()) {
+            detail::note(model, "joint '" + joint.Name() + "': " + errorText(errors));
+            continue;
+        }
+        if (sdf::Errors errors = joint.ResolveChildLink(child); !errors.empty()) {
+            detail::note(model, "joint '" + joint.Name() + "': " + errorText(errors));
+            continue;
+        }
+        const std::string to = holderOf(modelOf(child));
+        const std::string from = parent == "world" ? to : holderOf(modelOf(parent));
+        if (to.empty() || from.empty()) {
+            detail::note(model,
+                         "joint '" + joint.Name() + "' joins no links of this world's models");
+            continue;
+        }
+        const auto target = find(from);
+        if (from != to) {  // the child's whole model moves in with the parent's
+            const auto moved = find(to);
+            const auto firstMesh = static_cast<std::uint32_t>(target->meshes.size());
+            for (detail::LinkDesc& link : moved->links) {
+                for (detail::VisualDesc& visual : link.visuals) {
+                    if (visual.geom.mesh != kNoIndex) {
+                        visual.geom.mesh += firstMesh;
+                    }
+                }
+                for (detail::CollisionDesc& collision : link.collisions) {
+                    if (collision.geom.mesh != kNoIndex) {
+                        collision.geom.mesh += firstMesh;
+                    }
+                }
+                target->links.push_back(std::move(link));
+            }
+            std::move(moved->joints.begin(), moved->joints.end(),
+                      std::back_inserter(target->joints));
+            std::move(moved->meshes.begin(), moved->meshes.end(),
+                      std::back_inserter(target->meshes));
+            for (auto& [name, now] : holder) {
+                now = now == to ? from : now;
+            }
+            descriptions.erase(moved);
+        }
+        const auto into = find(from);
+        const std::string childLink = flat(child);
+        std::erase_if(into->joints, [&childLink](const detail::JointDesc& existing) {
+            return existing.type == JointType::Free && existing.child == childLink;
+        });
+        reader.readWorldJoint(joint, *into);
+    }
+}
+
 }  // namespace
 
 Expected<Model, std::string> importSdf(const std::string& path, const ImportOptions& options) {
@@ -494,9 +591,7 @@ Expected<Model, std::string> importSdf(const std::string& path, const ImportOpti
             reader.finish(d);
             descriptions.push_back(std::move(d));
         }
-        if (world.JointCount() > 0) {
-            detail::note(model, "joints between the models of a world are not supported yet");
-        }
+        joinModels(world, reader, descriptions, model);
     } else {
         return Unexpected{path + " has no <model> and no <world>"};
     }
