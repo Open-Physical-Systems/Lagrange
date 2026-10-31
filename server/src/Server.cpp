@@ -63,6 +63,7 @@
 #include <numbers>
 #include <optional>
 #include <poll.h>
+#include <random>
 #include <set>
 #include <span>
 #include <sstream>
@@ -3393,6 +3394,63 @@ struct Server::Impl {
                 specs[i].start = compose(file.spawn, specs[i].start);
                 people.push_back(std::move(specs[i]));
             }
+        }
+        // A crowd (--humans): wandering, clear of each other, the robots and the scenery.
+        std::mt19937_64 crowdRandom(options.humanSeed);
+        std::uniform_real_distribution<double> unit(0.0, 1.0);
+        const auto clear = [&](double x, double y) {
+            constexpr double kFromRobot = 1.5;  // m
+            constexpr double kFromWall = 0.6;   // m
+            constexpr double kChest = 1.0;      // m above the ground
+            const World& w = model.world;
+            for (std::size_t b = 0; b < w.bodies.names.size(); ++b) {
+                const std::array<double, 3>& q = model.bodyRestPose[b].position;
+                if (std::hypot(q[0] - x, q[1] - y) < kFromRobot) {
+                    return false;
+                }
+            }
+            for (std::size_t c = 0; c < w.colliders.body.size(); ++c) {
+                const ShapeType shape = w.colliders.shape[c];
+                if (w.colliders.body[c] != kWorldBody || shape == ShapeType::Plane ||
+                    shape == ShapeType::HeightField) {
+                    continue;
+                }
+                const ConvexHull* hull =
+                    shape == ShapeType::ConvexHull ? &w.hulls.at(w.colliders.hull[c]) : nullptr;
+                if (sensors::distanceToShape(shape, w.colliders.size[c], w.colliders.poseInBody[c],
+                                             {x, y, kChest}, hull) < kFromWall) {
+                    return false;
+                }
+            }
+            return std::ranges::none_of(people, [&](const humans::Spec& other) {
+                return std::hypot(other.start.position[0] - x, other.start.position[1] - y) <
+                       kFromRobot;
+            });
+        };
+        for (int i = 0; i < options.humanCount; ++i) {
+            for (int attempt = 0; attempt < 400; ++attempt) {
+                const double r = options.humanRadius * std::sqrt(unit(crowdRandom));
+                const double a = 2.0 * std::numbers::pi * unit(crowdRandom);
+                const double heading = 2.0 * std::numbers::pi * unit(crowdRandom);
+                const double x = options.spawn.position[0] + r * std::cos(a);
+                const double y = options.spawn.position[1] + r * std::sin(a);
+                if (!clear(x, y)) {
+                    continue;
+                }
+                humans::Spec spec;
+                spec.name = "person_" + std::to_string(i);
+                spec.behavior = "wander";
+                spec.wanderRadius = options.humanRadius / 2.0;
+                spec.seed = static_cast<std::int64_t>(options.humanSeed) + i;
+                spec.start.position = {x, y, options.spawn.position[2]};
+                spec.start.orientation = {std::cos(heading / 2.0), 0.0, 0.0,
+                                          std::sin(heading / 2.0)};
+                people.push_back(std::move(spec));
+                break;
+            }
+        }
+        if (announce && std::cmp_less(0, options.humanCount)) {
+            log(v1::LOG_LEVEL_INFO, "humans", std::to_string(people.size()) + " people in the run");
         }
         for (humans::Spec& person : people) {
             humans::addHuman(model, std::move(person));

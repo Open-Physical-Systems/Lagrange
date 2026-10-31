@@ -9,6 +9,7 @@
 #include <gz/math/Inertial.hh>
 #include <gz/math/Pose3.hh>
 #include <limits>
+#include <sdf/Actor.hh>
 #include <sdf/Camera.hh>
 #include <sdf/Collision.hh>
 #include <sdf/Element.hh>
@@ -492,7 +493,8 @@ Expected<Model, std::string> importSdf(const std::string& path, const ImportOpti
     } else {
         return Unexpected{path + " has no <model> and no <world>"};
     }
-    if (descriptions.empty()) {
+    const std::uint64_t actors = root.WorldCount() > 0 ? root.WorldByIndex(0)->ActorCount() : 0;
+    if (descriptions.empty() && actors == 0) {
         return Unexpected{path + " has no models"};
     }
 
@@ -510,7 +512,43 @@ Expected<Model, std::string> importSdf(const std::string& path, const ImportOpti
             return Unexpected{path + ": " + built.error()};
         }
     }
-    model.name = model.scene.prims.front().name;
+    model.name = model.scene.prims.empty() ? std::string("actors") : model.scene.prims.front().name;
+    // Actors (Gazebo's people) become HumanAPI_1 prims, which the server expands (RFC 0009 §2):
+    // their script's waypoints, walked at its mean speed; skin and animation files are ignored.
+    for (std::uint64_t a = 0; a < actors; ++a) {
+        const sdf::Actor& actor = *root.WorldByIndex(0)->ActorByIndex(a);
+        const Pose start = poseOf(actor.RawPose());
+        SchemaInstance human;
+        human.schema = "HumanAPI_1";
+        human.prim = model.world.addPrim("/" + actor.Name(), actor.Name());
+        model.world.prims.poseInBody.at(human.prim.index) = start;
+        human.integers["human:loop"] = actor.ScriptLoop() ? 1 : 0;
+        std::vector<double> waypoints;
+        double distance = 0.0;
+        double seconds = 0.0;
+        std::array<double, 2> last{start.position[0], start.position[1]};
+        for (std::uint64_t t = 0; t < actor.TrajectoryCount(); ++t) {
+            const sdf::Trajectory& trajectory = *actor.TrajectoryByIndex(t);
+            double firstTime = 0.0;
+            double lastTime = 0.0;
+            for (std::uint64_t w = 0; w < trajectory.WaypointCount(); ++w) {
+                const sdf::Waypoint& waypoint = *trajectory.WaypointByIndex(w);
+                const std::array<double, 3> at = compose(start, poseOf(waypoint.Pose())).position;
+                distance += std::hypot(at[0] - last[0], at[1] - last[1]);
+                last = {at[0], at[1]};
+                waypoints.insert(waypoints.end(), {at[0], at[1]});
+                firstTime = w == 0 ? waypoint.Time() : firstTime;
+                lastTime = waypoint.Time();
+            }
+            seconds += lastTime - firstTime;
+        }
+        human.tokens["human:behavior"] = waypoints.empty() ? "stand" : "waypoints";
+        human.realArrays["human:waypoints"] = std::move(waypoints);
+        if (seconds > 0.0 && distance > 0.0) {
+            human.reals["human:walkSpeed"] = distance / seconds;
+        }
+        model.world.schemaInstances.push_back(std::move(human));
+    }
     if (addGround) {
         addGroundPrim(model);
     }

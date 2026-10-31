@@ -220,6 +220,81 @@ TEST(Humans, ARobotCannotPushAPerson) {
         << "the person got in the way";
 }
 
+// RFC 0009 validation "Sensors": a lidar scanning at shin height sees two legs apart, then
+// passing each other, as a person crosses in front of it. A capsule would stay one blob.
+TEST(Humans, ALidarSeesTwoLegsThatScissor) {
+    ServerOptions o = run(LAGRANGE_TEST_AMR_URDF);
+    o.overlayPath.clear();
+    o.demoDrive = false;
+    Server server(o);
+    ASSERT_TRUE(server.load().ok());
+    ASSERT_TRUE(
+        server.spawnRobot(person("uniform token human:behavior = \"waypoints\"\n"
+                                 "double[] human:waypoints = [2.5, 20]\nint human:loop = 0\n"
+                                 "double human:walkSpeed = 1.0"),
+                          "ana", at(2.5, -3.0)));
+    std::size_t fewest = 99;
+    std::size_t most = 0;
+    for (std::int64_t t = 20; t <= 60; ++t) {  // crossing in front
+        ASSERT_TRUE(server.stepUntil(SimTime{t * 100'000'000}).ok());
+        const std::vector<double> ranges = server.read("sensor/front_lidar/ranges");
+        ASSERT_FALSE(ranges.empty());
+        std::size_t clusters = 0;
+        bool inside = false;
+        double last = 0.0;
+        for (const double r : ranges) {
+            const bool hit = std::isfinite(r);
+            if (hit && (!inside || std::abs(r - last) > 0.3)) {
+                ++clusters;
+            }
+            inside = hit;
+            last = r;
+        }
+        if (clusters > 0) {
+            fewest = std::min(fewest, clusters);
+            most = std::max(most, clusters);
+        }
+    }
+    EXPECT_EQ(most, 2U) << "two legs apart";
+    EXPECT_EQ(fewest, 1U) << "one blob as they pass, side on";
+}
+
+// SDFormat <actor> (RFC 0009 §2): Gazebo's people walk their trajectory here, at its speed.
+TEST(Humans, AGazeboActorWalksItsTrajectory) {
+    const std::string world = write(
+        "actor.sdf",
+        "<?xml version=\"1.0\"?><sdf version=\"1.9\"><world name=\"w\"><actor name=\"bob\">"
+        "<pose>1 2 0 0 0 0</pose><script><loop>false</loop><trajectory id=\"0\" type=\"walk\">"
+        "<waypoint><time>0</time><pose>0 0 0 0 0 0</pose></waypoint>"
+        "<waypoint><time>10</time><pose>10 0 0 0 0 0</pose></waypoint>"
+        "</trajectory></script></actor></world></sdf>\n");
+    ServerOptions o = run();
+    o.worldPath = world;
+    Server server(o);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    EXPECT_NEAR(server.read("human/bob/pose").at(0), 1.0, 1e-6);
+    EXPECT_NEAR(server.read("human/bob/pose").at(1), 2.0, 1e-6);
+    ASSERT_TRUE(server.stepUntil(SimTime{6'000'000'000}).ok());
+    EXPECT_NEAR(server.read("human/bob/pose").at(0), 1.0 + 1.0 * 5.5, 1.0) << "1 m/s, as scripted";
+    ASSERT_TRUE(server.stepUntil(SimTime{15'000'000'000}).ok());
+    EXPECT_NEAR(server.read("human/bob/pose").at(0), 11.0, 0.4) << "stops at the end";
+}
+
+// --humans: a crowd placed clear of the walls and each other.
+TEST(Humans, ACrowdIsPlacedClear) {
+    ServerOptions o = run(LAGRANGE_TEST_AMR_URDF);
+    o.overlayPath.clear();
+    o.worldPath = LAGRANGE_TEST_WAREHOUSE_URDF;
+    o.humanCount = 6;
+    o.humanRadius = 7.0;
+    Server server(o);
+    ASSERT_TRUE(server.load().ok());
+    EXPECT_EQ(server.read("human/person_5/speed").size(), 1U);
+    ASSERT_TRUE(server.stepUntil(SimTime{10'000'000'000}).ok());
+    EXPECT_GT(server.read("human/person_0/nearest_robot").at(0), 0.0);
+}
+
 // RFC 0009 §7: off, nobody is there.
 TEST(Humans, OffThereIsNobody) {
     ServerOptions o = run();

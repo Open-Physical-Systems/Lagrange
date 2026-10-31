@@ -21,7 +21,7 @@ def test_help_names_the_samples() -> None:
 def test_samples_are_listed() -> None:
     result = run("samples")
     assert result.returncode == 0
-    for name in ("amr", "sedan", "quad", "lexus", "x500", "swerve"):
+    for name in ("amr", "sedan", "quad", "lexus", "x500", "swerve", "people"):
         assert name in result.stdout
 
 

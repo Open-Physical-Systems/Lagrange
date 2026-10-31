@@ -54,6 +54,12 @@ def samples() -> dict[str, tuple[str, list[str], list[str], str | None]]:
     quad_site = ["--air-density", "1.225", "--geo-origin", "47.397742,8.545594,488"]
     return {
         "amr": ("the sample AMR in the small warehouse (the default)", [], [], None),
+        "people": (
+            "the sample AMR in the warehouse, with people walking round it",
+            ["--humans", "6,radius=7"],
+            ["--follow", "9,35"],
+            None,
+        ),
         "empty": (
             "no robot and no world: the ground only, to spawn robots into",
             ["--robot", "none", "--world", "none"],
