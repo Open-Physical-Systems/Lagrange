@@ -156,8 +156,18 @@ void addHuman(Model& model, Spec spec) {
             return prim.parent == kNoIndex && prim.name == name;
         });
     };
+    // The bare prim a stage left for this person, if any, becomes the person's top prim.
+    std::uint32_t topPrim = kNoIndex;
+    const std::vector<ScenePrim>& existing = model.scene.prims;
+    for (std::uint32_t p = 0; p < existing.size(); ++p) {
+        if (existing[p].parent == kNoIndex && existing[p].name == spec.name &&
+            existing[p].body == kNoIndex && existing[p].mesh == kNoIndex &&
+            std::ranges::none_of(existing, [p](const ScenePrim& c) { return c.parent == p; })) {
+            topPrim = p;
+        }
+    }
     const std::string base = spec.name;
-    for (int n = 2; taken(spec.name); ++n) {
+    for (int n = 2; topPrim == kNoIndex && taken(spec.name); ++n) {
         spec.name = base + "_" + std::to_string(n);
     }
     const Proportions body(spec.height);
@@ -167,8 +177,12 @@ void addHuman(Model& model, Spec spec) {
     top.name = spec.name;
     top.path = "/" + spec.name;
     top.typeName = "Xform";
-    model.scene.prims.push_back(top);
-    const auto topPrim = static_cast<std::uint32_t>(model.scene.prims.size() - 1);
+    if (topPrim == kNoIndex) {
+        model.scene.prims.push_back(top);
+        topPrim = static_cast<std::uint32_t>(model.scene.prims.size() - 1);
+    } else {
+        top.path = model.scene.prims[topPrim].path;
+    }
     std::array<std::uint32_t, kColours.size()> materials{};
     for (std::size_t c = 0; c < kColours.size(); ++c) {
         model.scene.materials.push_back({spec.name + "_" + std::to_string(c), kColours.at(c)});
@@ -203,7 +217,7 @@ void addHuman(Model& model, Spec spec) {
     }
     SchemaInstance instance;
     instance.schema = "HumanAPI_1";
-    instance.prim = w.addPrim(top.path, spec.name);
+    instance.prim = w.addPrim("/" + spec.name, spec.name);
     instance.reals["human:height"] = spec.height;
     instance.reals["human:walkSpeed"] = spec.walkSpeed;
     instance.reals["human:dwell"] = spec.dwell;

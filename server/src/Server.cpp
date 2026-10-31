@@ -6,6 +6,7 @@
 #include "lagrange/emi/Emi.hpp"
 #include "lagrange/fields/Field.hpp"
 #include "lagrange/humans/Body.hpp"
+#include "lagrange/humans/Humans.hpp"
 #include "lagrange/importers/Importers.hpp"
 #include "lagrange/mavlink/ArduPilotJson.hpp"
 #include "lagrange/mavlink/Px4Lockstep.hpp"
@@ -431,7 +432,7 @@ struct DomainRow {
     const char* substitute;
     const char* substituteKind;
 };
-constexpr std::array<DomainRow, 13> kDomains{{
+constexpr std::array<DomainRow, 14> kDomains{{
     {"rigid_body", "fixed", "constant"},
     {"electrical", "ideal", "ideal"},
     {"thermal", "ambient", "constant"},
@@ -442,6 +443,7 @@ constexpr std::array<DomainRow, 13> kDomains{{
     {"sensors", "ground_truth", "ideal"},
     {"comms", "ideal", "ideal"},
     {"traffic", "zero", "constant"},
+    {"humans", "zero", "constant"},
     {"vehicle_dynamics", "ideal", "ideal"},
     {"rotor_aero", "ideal", "ideal"},  // a drone cannot fly on zero (aerodynamics.md §5)
     {"hydrodynamics", "zero", "constant"},
@@ -701,6 +703,27 @@ struct Server::Impl {
                           ModuleConfig(traffic));
             }
         }
+        // People (RFC 0009): moved like traffic agents, around the robots.
+        if (hasHumans()) {
+            ModuleConfigData people;
+            std::vector<std::string> robots;
+            const World& world = robot.world;
+            const std::vector<bool> moving = movingBodies(world);
+            for (std::size_t b = 0; b < world.bodies.names.size(); ++b) {
+                if (world.bodies.parent[b] == kWorldBody && moving[b] &&
+                    !world.bodies.kinematic[b]) {
+                    robots.push_back(world.bodies.names[b]);
+                }
+            }
+            people.values["robot_bodies"] = robots;
+            auto [ground, friction] = groundQuery();
+            (void)friction;
+            if (!(off("humans") && addPluginSubstitute("humans", people))) {
+                next->add(std::make_unique<humans::Humans>(off("humans"), fixedScenery(),
+                                                           std::move(ground)),
+                          ModuleConfig(people));
+            }
+        }
         // Road vehicles (domains/vehicle_dynamics.md): before the electrical domain, which turns
         // their drive and steering commands into joint torques.
         if (hasVehicles()) {
@@ -948,6 +971,8 @@ struct Server::Impl {
             return n.starts_with("traffic_vehicle_") || n.starts_with("traffic_pedestrian_");
         });
     }
+    /// Whether the run has people.
+    bool hasHumans() const { return !WorldView(robot.world).instancesOf("HumanAPI_1").empty(); }
     /// Whether the stage has road vehicles.
     bool hasVehicles() const { return !WorldView(robot.world).instancesOf("VehicleAPI_1").empty(); }
     /// A scene query over what wheels roll on: the fixed scenery's shapes and the ground
@@ -3761,6 +3786,9 @@ struct Server::Impl {
         }
         if (hasTraffic()) {
             context.modules.insert("traffic");
+        }
+        if (hasHumans()) {
+            context.modules.insert("humans");
         }
         for (const auto& [key, value] : options.weather) {
             context.weatherKnown.insert(key);
