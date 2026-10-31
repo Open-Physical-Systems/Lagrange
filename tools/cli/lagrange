@@ -16,7 +16,8 @@ lagrange spawn FILE [--name NAME] [--at X,Y[,Z[,YAW]]]
     ROS drives, later ones are passive
 lagrange delete NAME            takes a robot out again (delete_entity)
 lagrange set NAME=VALUE ...     changes the site while running: gravity (m/s²), wind_speed (m/s),
-    wind_from (degrees), temperature (K), air_density, pressure, relative_humidity, rain_rate, visibility
+    wind_from (degrees), temperature (K), air_density, pressure, relative_humidity, rain_rate,
+    visibility
 lagrange run|validate|graph|determinism|export|info ...
     the lagrange_server tools (as `ros2 run lagrange_server lagrange ...`)
 """
