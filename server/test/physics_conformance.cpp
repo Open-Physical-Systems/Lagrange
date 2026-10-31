@@ -128,6 +128,16 @@ TEST_P(Conformance, AFallingBoxComesToRest) {
     EXPECT_LT(std::abs(server.read(twist).at(2)), 0.01) << "at rest";
 }
 
+// A falling body gains speed at g: nothing damps it.
+TEST_P(Conformance, FreeFallIsFree) {
+    Server server(options("", world("fall", box("box", 0.0, 0.0, 100.0))));
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{2'000'000'000}).ok());
+    const std::string twist = "body/" + server.world().bodies.names[0] + "/twist";
+    EXPECT_NEAR(server.read(twist).at(2), -2.0 * 9.80665, 0.02) << "within 0.1 %";
+}
+
 // A pendulum swings with the period of a physical pendulum: T = 2π √(I / (m g d)) times
 // (1 + θ₀²/16) for the amplitude θ₀ (the first term of the series for the exact period).
 TEST_P(Conformance, APendulumSwingsWithItsPeriod) {

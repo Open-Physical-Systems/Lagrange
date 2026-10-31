@@ -15,6 +15,8 @@ lagrange spawn FILE [--name NAME] [--at X,Y[,Z[,YAW]]]
     simulation_interfaces spawn_entity service; the first one in an empty run is the robot
     ROS drives, later ones are passive
 lagrange delete NAME            takes a robot out again (delete_entity)
+lagrange set NAME=VALUE ...     changes the site while running: gravity (m/s²), wind_speed (m/s),
+    wind_from (degrees), temperature (K), air_density, pressure, relative_humidity, rain_rate, visibility
 lagrange run|validate|graph|determinism|export|info ...
     the lagrange_server tools (as `ros2 run lagrange_server lagrange ...`)
 """
@@ -301,11 +303,17 @@ RUN_KEYS = {
     "record",
     "control",
 }
-SITE_OPTIONS = {
-    "temperature": "--ambient-temperature",
-    "air_density": "--air-density",
+SITE_KEYS = {
+    "gravity",
+    "wind_speed",
+    "wind_from",
+    "temperature",
+    "air_density",
+    "pressure",
+    "relative_humidity",
+    "rain_rate",
+    "visibility",
 }
-WEATHER_KEYS = {"pressure", "relative_humidity", "visibility", "rain_rate"}
 
 
 def run_file_args(path: str) -> list[str]:
@@ -353,20 +361,13 @@ def run_file_args(path: str) -> list[str]:
             fail(f"simulate: {name} is true or false")
         args += ["--domain", f"{DOMAIN_OFF[name]}={'on' if wanted else 'off'}"]
     site = dict(run.get("site") or {})
-    weather = {key: site.pop(key) for key in list(site) if key in WEATHER_KEYS}
-    if weather:
-        if "temperature" not in site or "pressure" not in weather:
-            fail("site: weather needs temperature, pressure and relative_humidity")
-        items = {"temperature": site["temperature"], **weather}
-        args += ["--weather", ",".join(f"{key}={value}" for key, value in items.items())]
     if "geo_origin" in site:
         origin = site.pop("geo_origin")
         args += ["--geo-origin", ",".join(str(float(v)) for v in origin)]
     for key, value in site.items():
-        if key not in SITE_OPTIONS:
-            known = sorted({*SITE_OPTIONS, *WEATHER_KEYS, "geo_origin"})
-            fail(f"site: unknown {key}; one of {', '.join(known)}")
-        args += [SITE_OPTIONS[key], str(float(value))]
+        if key not in SITE_KEYS:
+            fail(f"site: unknown {key}; one of {', '.join(sorted({*SITE_KEYS, 'geo_origin'}))}")
+        args += ["--site", f"{key}={float(value)}"]
     if "physics" in run:
         args += ["--physics", str(run["physics"])]
     timing = run.get("time") or {}
@@ -392,7 +393,47 @@ def run_file_args(path: str) -> list[str]:
     return [*args, *(["--joint-control"] if control == "joints" else []), "--no-demo"]
 
 
+def set_site(argv: list[str]) -> int:
+    try:
+        import rclpy
+        from rcl_interfaces.msg import Parameter, ParameterType
+        from rcl_interfaces.srv import SetParameters
+    except ImportError:
+        sys.exit("lagrange: rclpy is missing (source the ROS 2 setup first)")
+    if not argv:
+        sys.exit("lagrange: set needs NAME=VALUE, such as gravity=1.62")
+    parameters = []
+    for item in argv:
+        name, _, value = item.partition("=")
+        try:
+            number = float(value)
+        except ValueError:
+            sys.exit(f"lagrange: set: {item} is not NAME=VALUE")
+        parameter = Parameter(name=name)
+        parameter.value.type = ParameterType.PARAMETER_DOUBLE
+        parameter.value.double_value = number
+        parameters.append(parameter)
+    rclpy.init()
+    try:
+        node = rclpy.create_node("lagrange_cli")
+        client = node.create_client(SetParameters, "/lagrange_ros2_bridge/set_parameters")
+        if not client.wait_for_service(timeout_sec=SERVICE_WAIT_SECONDS):
+            sys.exit("lagrange: no simulator with ROS is running")
+        future = client.call_async(SetParameters.Request(parameters=parameters))
+        rclpy.spin_until_future_complete(node, future, timeout_sec=60.0)
+        results = future.result().results if future.done() else []
+        for parameter, result in zip(parameters, results, strict=False):
+            if not result.successful:
+                print(f"lagrange: {parameter.name}: {result.reason}", file=sys.stderr)
+                return 1
+        return 0 if results else 1
+    finally:
+        rclpy.try_shutdown()
+
+
 def main(argv: list[str]) -> int:
+    if argv and argv[0] == "set":
+        return set_site(argv[1:])
     if argv and argv[0] in ("-h", "--help", "help"):
         usage()
         return 0

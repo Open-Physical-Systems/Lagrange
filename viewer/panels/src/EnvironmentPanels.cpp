@@ -95,6 +95,23 @@ void row(const char* label, const char* unit, const char* format, double value) 
 
 // --- what the environment is --------------------------------------------------------------
 
+void siteRow(PanelContext& context, const char* label, const char* unit, const char* key,
+             double shown) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine(px(128.0F));
+    ImGui::SetNextItemWidth(px(100.0F));
+    ImGui::PushID(key);
+    double value = shown;
+    if (ImGui::InputDouble("##site", &value, 0.0, 0.0, "%.3f",
+                           ImGuiInputTextFlags_EnterReturnsTrue)) {
+        context.client.setAttribute(kNone, std::string("site:") + key, value, false);
+    }
+    ImGui::PopID();
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", unit);
+}
+
 class EnvironmentPanel final : public Panel {
 public:
     [[nodiscard]] const char* title() const override { return "Environment"; }
@@ -130,6 +147,16 @@ public:
             const DomainView* view = context.profileSession->find(name);
             return view == nullptr || view->enabled;
         };
+
+        // The site, changed live: Enter applies, and the run goes on (Server::setSite).
+        if (widgets::SectionHeader("Site", nullptr, true, nullptr)) {
+            ImGui::Indent(pad);
+            siteRow(context, "gravity", "m/s²", "gravity", info.gravity);
+            siteRow(context, "temperature", "K", "temperature", info.ambientTemperatureK);
+            siteRow(context, "wind speed", "m/s", "wind_speed", info.windSpeed);
+            siteRow(context, "wind from", "deg", "wind_from", info.windFromDeg);
+            ImGui::Unindent(pad);
+        }
 
         const ImVec4 thermal = widgets::domainColor("thermal");
         if (widgets::SectionHeader("Time and sun", nullptr, true, &thermal)) {

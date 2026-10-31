@@ -269,6 +269,8 @@ struct WiringInfo {
 
 /// The environment the simulation uses, and the fields it can slice. Immutable once published.
 struct EnvironmentInfo {
+    double gravity{0.0};      ///< m/s², downward
+    double windFromDeg{0.0};  ///< compass: where the wind comes from
     struct EmiSource {
         std::string name;
         std::uint32_t prim{kNone};

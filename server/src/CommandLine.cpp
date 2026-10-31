@@ -100,6 +100,8 @@ void printServerOptions(std::FILE* out) {
         "  --ros-topics FILE.yaml  publish signals on ROS topics and write topics into signals\n"
         "            (publish: [{signal, topic, type, frame, params}], subscribe: [...])\n"
         "  --humans N[,seed=S][,radius=M]  N people wandering round the middle of the run\n"
+        "  --site NAME=VALUE  gravity, wind_speed, wind_from, temperature, air_density, pressure,\n"
+        "            relative_humidity, rain_rate, visibility; also while running: lagrange set\n"
         "  --joint-control  drive every moving joint on its own from /joint_commands\n"
         "            (sensor_msgs/JointState: position, velocity or effort), no robot controller\n"
         "  --plugin LIB  load a plugin library (RFC 0008): a path, or NAME for lib<NAME>.so in\n"
@@ -515,6 +517,18 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                        "subscribe: [...]";
             }
             options.rosTopicsPath = path;
+        } else if (arg == "--site") {
+            const char* text = value();
+            const std::string item = text != nullptr ? text : "";
+            const std::size_t equals = item.find('=');
+            char* end = nullptr;
+            const double number =
+                equals == std::string::npos ? 0.0 : std::strtod(item.c_str() + equals + 1, &end);
+            if (equals == std::string::npos || equals == 0 || end == item.c_str() + equals + 1 ||
+                *end != '\0') {
+                return "--site needs NAME=VALUE, such as gravity=1.62";
+            }
+            options.site[item.substr(0, equals)] = number;
         } else if (arg == "--joint-control") {
             options.jointControl = true;
         } else if (arg == "--plugin") {

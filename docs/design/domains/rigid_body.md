@@ -128,6 +128,7 @@ The conformance suite, `ros2 run lagrange_server lagrange_physics_conformance`
 
 | Test | Requirement |
 |---|---|
+| Free fall | speed after 2 s within 0.1 % of 2 g: nothing damps it |
 | A falling box | dropped from 1 m, rests at its half height within 5 mm after 3 s |
 | A pendulum | period of the physical pendulum, `2π √(I / (m g d))·(1 + θ₀²/16)`, within 0.5 % |
 | A box on a slope | friction 1: holds at 30° (moves < 1 cm in 1.4 s), slides at 60° (> 0.3 m) |
@@ -139,7 +140,7 @@ MuJoCo, Jolt and `jolt_abi` (the same Jolt engine as a plugin through the C ABI,
 `modules/rigid_body/jolt_backend/src/jolt_plugin.cpp`, `--plugin lagrange_jolt`) pass it; Jolt and
 `jolt_abi` give identical numbers. On Jolt the AMR's loop ends 5.3 % of its 5.4 m from MuJoCo's
 end (heading drift from its per-body friction). Writing the suite found two Jolt bugs, both
-fixed: loose objects of one world file passed through each other (collisions were filtered by
+fixed (a third, Jolt's default body damping, came up later and is fixed too): loose objects of one world file passed through each other (collisions were filtered by
 robot index instead of by tree), and a restored state lost its contacts with the static scenery.
 Restored contacts now include the scenery whenever it is unchanged; it changes between a save
 and a restore only when streamed tiles come or go.

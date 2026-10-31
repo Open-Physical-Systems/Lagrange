@@ -37,7 +37,10 @@ simulate:                   # what you leave out runs if the robot has what it n
   electrical: false         # the ideal torque source: pure physics and navigation testing
   sensors: true
 
-site:
+site:                       # also changed while running: lagrange set gravity=1.62 wind_speed=5
+  gravity: 9.80665          # m/s², downward
+  wind_speed: 3.0           # m/s; acts on links with AeroAPI_1 and on rotors
+  wind_from: 270            # degrees, compass: where it blows from
   temperature: 293.15       # K
   air_density: 1.225        # kg/m³: rotors fly
   pressure: 101325          # Pa, with temperature and relative_humidity: the weather runs
@@ -60,6 +63,13 @@ file stops the start and says which key.
 
 Electrical needs a power system on the robot: an overlay (`overlay: power.yaml`,
 [formats.md §9](../design/formats.md#9-importers)) or USD electrical schemas.
+
+## Changing the site while it runs
+
+From a terminal `lagrange set gravity=1.62 wind_speed=5`, or from any ROS tool `ros2 param set
+/lagrange_ros2_bridge gravity 1.62`, or in the viewer's Environment workspace. The run goes on from
+where it is. A value that brings a domain in (the first air density starts the rotors) rebuilds the
+run keeping time and poses, with velocities from rest.
 
 A [profile](profiles.md) is the detailed form, for step sizes and fidelity per domain, run with
 `lagrange run profile.yaml`.

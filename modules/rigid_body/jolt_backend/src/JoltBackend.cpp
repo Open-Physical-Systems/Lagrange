@@ -842,6 +842,9 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalIo& i
             filter, static_cast<JPH::CollisionGroup::GroupID>(bodies.robot[s.groups[g].root]),
             static_cast<JPH::CollisionGroup::SubGroupID>(g));
         settings.mAllowSleeping = false;  // a robot waiting for a command must not doze off
+        // Jolt damps every body by default (0.05 /s, a game's value); physics has no such drag.
+        settings.mLinearDamping = 0.0F;
+        settings.mAngularDamping = 0.0F;
         // Jolt clamps the angular velocity after adding forces and before solving constraints
         // (default 0.25 rev per frame at 60 Hz, a game's value): a joint torque on a link with
         // little inertia about its centre spins it far past that before the hinge takes over,
@@ -1234,6 +1237,8 @@ Status JoltBackend::restoreState(StateReader& reader) {
         return Status::error(StatusCode::Internal, "jolt: short state");
     }
     impl_->applyFrictionScale(scale);
+    // A saved state holds the gravity it ran under; the run's may have changed (setSite).
+    impl_->system->SetGravity(jv(impl_->gravity));
     return {};
 }
 
