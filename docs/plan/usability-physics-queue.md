@@ -12,7 +12,7 @@ electrical schematics in the run file (later).
 | 2 | **Any robot, joint by joint.** Low-level joint commands (position, velocity, effort) over ROS for any robot, with no controller or demo driver needed | done |
 | 3 | **Runtime site parameters.** Gravity, wind speed, temperature and the like, easy to change while running (viewer, command line, ROS) | done |
 | 4 | **Lidar intensity from materials.** Reflectivity, incidence angle and range, with parameters users can set | done |
-| 5 | **Water.** Water in a world: drawn, seen by sensors as water is (a lidar's return off water), and floating or dragging what enters it | todo |
+| 5 | **Water.** Water in a world: drawn, seen by sensors as water is (a lidar's return off water), and floating or dragging what enters it | done |
 | 6 | **Lidar motion distortion.** A moving robot's scan skews | todo |
 | 7 | **Sensor timing.** Latency and jitter | todo |
 | 8 | **Importer audit.** URDF damping and friction, mimic joints, ellipsoid colliders, SDF joints between models, MJCF types | todo |

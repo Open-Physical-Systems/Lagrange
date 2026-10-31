@@ -20,6 +20,7 @@ set(LAGRANGE_SCHEMA_LIBRARIES
     vehicle
     road
     human
+    water
     world
 )
 set(usd_env

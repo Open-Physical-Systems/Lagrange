@@ -1,0 +1,50 @@
+#usda 1.0
+(
+    """Lagrange water schema. Codeless. WaterAPI_1 makes a prim a body of still water: its origin
+    is the middle of the surface, and it is drawn, seen by lidars, and floats what enters it."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeWater"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "WaterAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A box of still water on an Xform prim whose origin is the middle of its surface."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double water:sizeX = 10 (
+        lagrangeUnit = "m"
+        doc = "Length along x."
+    )
+    double water:sizeY = 10 (
+        lagrangeUnit = "m"
+        doc = "Length along y."
+    )
+    double water:depth = 2 (
+        lagrangeUnit = "m"
+        doc = "From the surface down."
+    )
+    double water:density = 1000 (
+        lagrangeUnit = "kg/m3"
+        doc = "Fresh water about 1000, sea water about 1025: a site parameter."
+    )
+    double water:dragCoefficient = 1 (
+        lagrangeUnit = "1"
+        doc = "Quadratic drag on what moves in it (illustrative)."
+    )
+    double water:reflectivity = 0.02 (
+        lagrangeUnit = "1"
+        doc = "What comes straight back to a lidar (Fresnel at normal incidence, n = 1.33)."
+    )
+}

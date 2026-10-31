@@ -97,6 +97,12 @@ struct ServerOptions {
     /// --joint-control: every moving joint of the robot is driven on its own, from
     /// /joint_commands (sensor_msgs/JointState) or commandJoint, with no robot controller.
     bool jointControl{false};
+    /// --water X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH: a body of still water (m); the surface at LEVEL.
+    struct Water {
+        std::array<double, 3> surface{};
+        double sizeX{10.0}, sizeY{10.0}, depth{2.0};
+    };
+    std::vector<Water> water;
     /// --site NAME=VALUE: the site at the start, as Server::setSite takes them.
     std::map<std::string, double> site;
     std::string profileSchemaPath;  // profiles/schema.json, sent to viewers; empty = none
