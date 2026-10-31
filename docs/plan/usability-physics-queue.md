@@ -17,4 +17,14 @@ electrical schematics in the run file (later).
 | 7 | **Sensor timing.** Latency and jitter | done |
 | 8 | **Importer audit.** URDF damping and friction, mimic joints, ellipsoid colliders, SDF joints between models, MJCF types | todo |
 | 9 | **Motor models.** Velocity and voltage control, motors on prismatic joints | done |
-| 10 | **Code check**, if time is left: check everything, make the optimizations found | todo |
+| 10 | **Code check**, if time is left: check everything, make the optimizations found | done |
+
+Code check, as run on 2026-11-01. Fixed in #202 to #205. Sanitizers: ASan and UBSan report nothing in
+Lagrange's code. TSan reports only inside ROS 2 control, Fast CDR and Vulkan's validation layer; its
+reports through TBB and OpenUSD, which are not instrumented here, were set aside unread, and
+`test_server` did not finish under it, so it does not clear those paths.
+
+Looked at and left, with the reason: camera frames are copied a few times per frame, small next to
+rendering, and readers hold them by shared pointer; bus commits copy large arrays, a change to the core
+of the bus for a gain nobody has measured. No profiler runs on this machine (perf and ptrace are
+blocked), so the performance work rests on reading the code and on before-and-after speeds.

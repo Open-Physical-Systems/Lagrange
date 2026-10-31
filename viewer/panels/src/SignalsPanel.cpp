@@ -151,8 +151,13 @@ public:
             char meta[24];
             std::snprintf(meta, sizeof(meta), "%zu", group.rows.size());
             if (widgets::SectionHeader(name, meta)) {
-                for (const Row& entry : group.rows) {
-                    row(context, session, catalog, entry);
+                // Only the rows in view: a big robot has thousands.
+                ImGuiListClipper clipper;
+                clipper.Begin(static_cast<int>(group.rows.size()));
+                while (clipper.Step()) {
+                    for (int k = clipper.DisplayStart; k < clipper.DisplayEnd; ++k) {
+                        row(context, session, catalog, group.rows[static_cast<std::size_t>(k)]);
+                    }
                 }
             }
         }
