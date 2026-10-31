@@ -8,7 +8,7 @@ source /opt/ros/lyrical/setup.bash && source install/setup.bash
 lagrange [SAMPLE | ROBOT [WORLD]] [SERVER OPTIONS] [-- VIEWER OPTIONS]
 lagrange --server-only ...         # the server alone, headless
 lagrange viewer [VIEWER OPTIONS]   # the viewer alone
-lagrange samples                   # amr (default), sedan, quad, lexus, x500, swerve, empty
+lagrange samples                   # amr (default), sedan, quad, lexus, x500, swerve, people, empty
 lagrange empty                     # no robot, no world: the ground only
 lagrange spawn FILE [--name NAME] [--at X,Y[,Z[,YAW]]]   # a robot into the running simulator
 lagrange delete NAME               # and out again

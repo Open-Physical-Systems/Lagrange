@@ -8,6 +8,7 @@
 | [Tutorial: huge worlds](tutorial-huge-worlds.md) | A world streamed in tiles, the floating origin, robots far apart, a world built from an elevation model and OpenStreetMap |
 | [Tutorial: the sample arm with MoveIt 2](tutorial-arm.md) | A 6-DoF arm on a 48 V bus, MoveIt 2 pick-and-place, motor heating and derating |
 | [Tutorial: a car in a city block](tutorial-cars.md) | The sedan's layers, OpenDRIVE roads, traffic, radar and camera, an OpenSCENARIO cut-in, driving over `/ackermann_cmd` |
+| [Tutorial: people around your robot](tutorial-humans.md) | A crowd, spawning a person, your own person with waypoints, how close a robot came, and what people do not do |
 | [Autoware with a simulated car](autoware.md) | The vehicle interface (`lagrange_autoware`), building it with the Autoware messages, the sedan launch, and what to do while Autoware is not on Lyrical |
 | [Concepts](concepts.md) | Domains and substitutes, signals and units, the multirate scheduler, capability tiers, determinism, coordinates |
 | [Profiles](profiles.md) | The YAML that says what a run simulates; what v0.2 applies; the errors |

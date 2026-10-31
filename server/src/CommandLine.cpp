@@ -99,6 +99,7 @@ void printServerOptions(std::FILE* out) {
         "  --spawn X,Y[,Z[,YAW]]  start the robot there (m, world ENU; heading in rad)\n"
         "  --ros-topics FILE.yaml  publish signals on ROS topics and write topics into signals\n"
         "            (publish: [{signal, topic, type, frame, params}], subscribe: [...])\n"
+        "  --humans N[,seed=S][,radius=M]  N people wandering round the middle of the run\n"
         "  --plugin LIB  load a plugin library (RFC 0008): a path, or NAME for lib<NAME>.so in\n"
         "            $LAGRANGE_PLUGIN_PATH or the lagrange_plugins resource index (repeatable)\n"
         "  --add-robot NAME=FILE@X,Y[,Z[,YAW]]  one more robot in the run, its names prefixed\n"
@@ -345,6 +346,37 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--scenario-ego needs the scenario entity that is the robot";
             }
             options.scenarioEgo = text;
+        } else if (arg == "--humans") {
+            const char* text = value();
+            std::string_view rest = text != nullptr ? text : "";
+            bool first = true;
+            while (!rest.empty()) {
+                const std::size_t comma = rest.find(',');
+                const std::string item(rest.substr(0, comma));
+                rest = comma == std::string_view::npos ? "" : rest.substr(comma + 1);
+                const std::size_t equals = item.find('=');
+                const std::string key = equals == std::string::npos ? "" : item.substr(0, equals);
+                const std::string number =
+                    equals == std::string::npos ? item : item.substr(equals + 1);
+                char* end = nullptr;
+                const double n = std::strtod(number.c_str(), &end);
+                if (number.empty() || *end != '\0' || n < 0.0) {
+                    return "--humans needs N[,seed=S][,radius=M]";
+                }
+                if (key.empty() && first) {
+                    options.humanCount = static_cast<int>(n);
+                } else if (key == "seed") {
+                    options.humanSeed = static_cast<std::uint64_t>(n);
+                } else if (key == "radius" && n > 0.0) {
+                    options.humanRadius = n;
+                } else {
+                    return "--humans needs N[,seed=S][,radius=M]";
+                }
+                first = false;
+            }
+            if (first) {
+                return "--humans needs N[,seed=S][,radius=M]";
+            }
         } else if (arg == "--traffic") {
             const char* text = value();
             if (text == nullptr) {

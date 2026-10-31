@@ -53,6 +53,11 @@ struct ServerOptions {
     int trafficVehicles{8};
     int trafficPedestrians{6};
     std::uint64_t trafficSeed{1};
+    /// --humans N[,seed=S][,radius=M]: N people wandering within `radius` of the middle, placed
+    /// clear of each other, the robots and the scenery (RFC 0009).
+    int humanCount{0};
+    std::uint64_t humanSeed{1};
+    double humanRadius{10.0};  // m
     /// Where world ENU (0, 0, 0) is on the Earth (--geo-origin; a profile's world.geo_origin
     /// overrides it). A site parameter with no default: GNSS, magnetometers and barometers do
     /// not run without it.

@@ -126,7 +126,8 @@ review of the motor constants, FMI 2.0 FMUs (Q8), Jolt's wheel slip. Released as
   loading (#179), ABI 1.1 world and scene queries with the C++ SDK (#180), custom sensors and
   `lagrange_tof` (#181), `--ros-topics` (#182), the rigid-body contract, the conformance suite and
   `lagrange_jolt` (#183, which also fixed two Jolt bugs), and the plugin guide with its template.
-- Next: walking humans, as a plugin on this interface.
+- RFC 0009, walking humans, accepted by the owner (#185): the body (#186), walk cycle and
+  steering (#187), crowds, `<actor>` import and the tutorial. Built in, not a plugin (RFC §1).
 
 ## v1.0 status (2026-10-29)
 

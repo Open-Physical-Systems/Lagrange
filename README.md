@@ -69,6 +69,15 @@ ros2 run lagrange_server lagrange_server --robot assets/robots/amr_fms/amr_fms.u
     --world assets/worlds/amr_fms_warehouse/warehouse.sdf --spawn 26,8,0,3.1416
 ```
 
+### People
+
+![People walking round the sample AMR, seen by its lidars](docs/imgs/people-warehouse.gif)
+
+`lagrange people`, or `--humans N` with any robot and world, or `lagrange spawn
+assets/humans/walker.usda`: people with a walk cycle who follow waypoints or wander and steer round
+robots, walls and each other. Lidars see their legs scissor. They are moved, not simulated:
+contact is one-way and nothing balances ([tutorial](docs/guide/tutorial-humans.md)).
+
 ## What it simulates
 
 | Robot class | Since | Sample | Highlights |
@@ -191,7 +200,7 @@ Packages:
 ```bash
 source install/setup.bash          # or /opt/ros/lyrical/setup.bash with the debs installed
 lagrange                           # the server and the viewer: the sample AMR in the warehouse
-lagrange sedan                     # a sample by name: amr, sedan, quad, lexus, x500, swerve
+lagrange sedan                     # a sample by name: amr, sedan, quad, lexus, x500, swerve, people
 lagrange robot.urdf world.sdf      # your own robot and world (URDF, SDFormat, MJCF or USD)
 lagrange --server-only sedan       # headless, like gzserver; `lagrange viewer` is the viewer alone
 lagrange empty                     # no robot: the ground only, then from another terminal
@@ -225,7 +234,8 @@ the stacks that drive it):
 [drone and PX4/ArduPilot](docs/guide/tutorial-drone.md) ·
 [weather, EMI and comms](docs/guide/tutorial-environment.md) ·
 [cars, scenarios and Autoware](docs/guide/tutorial-cars.md) ·
-[huge worlds](docs/guide/tutorial-huge-worlds.md).
+[huge worlds](docs/guide/tutorial-huge-worlds.md) ·
+[people around your robot](docs/guide/tutorial-humans.md).
 The scripts in `tools/ci/` (`tutorial_amr.sh`, `tutorial_drone.sh`, `tutorial_environment.sh`,
 `tutorial_cars.sh`, `tutorial_huge_worlds.sh`, and `arm_scenario.sh` for the arm) run them headless and check every step.
 
