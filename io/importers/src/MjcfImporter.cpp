@@ -296,6 +296,8 @@ Expected<Model, std::string> importMjcf(const std::string& path, const ImportOpt
             }
             joint.actuated = actuated[j];
             joint.effort = effort[j];
+            joint.damping = m.dof_damping[m.jnt_dofadr[j]];
+            joint.friction = m.dof_frictionloss[m.jnt_dofadr[j]];
             const int address = m.jnt_qposadr[j];
             if ((joint.type == JointType::Revolute || joint.type == JointType::Continuous ||
                  joint.type == JointType::Prismatic) &&
@@ -304,6 +306,29 @@ Expected<Model, std::string> importMjcf(const std::string& path, const ImportOpt
                                         "' has a reference position; its rest pose is at ref");
             }
             d.joints.push_back(std::move(joint));
+        }
+    }
+
+    // Equalities: a joint copying another is a mimic; what else ties bodies is not held.
+    for (int e = 0; e < static_cast<int>(m.neq); ++e) {
+        const mjtNum* data = m.eq_data + static_cast<std::ptrdiff_t>(mjNEQDATA) * e;
+        const std::string name = nameOf(m, mjOBJ_EQUALITY, e);
+        if (m.eq_type[e] != mjEQ_JOINT || m.eq_obj2id[e] < 0) {
+            detail::note(model,
+                         "equality '" + name + "' is not a joint copying a joint; it is not used");
+            continue;
+        }
+        if (data[2] != 0.0 || data[3] != 0.0 || data[4] != 0.0) {
+            detail::note(model, "equality '" + name + "' is a polynomial; its linear part is used");
+        }
+        const std::string copy = nameOf(m, mjOBJ_JOINT, m.eq_obj1id[e]);
+        for (JointDesc& joint : d.joints) {
+            if (joint.name == copy) {
+                joint.mimic = nameOf(m, mjOBJ_JOINT, m.eq_obj2id[e]);
+                joint.mimicOffset = data[0];
+                joint.mimicMultiplier = data[1];
+                joint.actuated = false;
+            }
         }
     }
 

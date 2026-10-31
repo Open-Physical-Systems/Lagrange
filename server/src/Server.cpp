@@ -3436,7 +3436,7 @@ struct Server::Impl {
                 if ((joints.type[j] == JointType::Revolute ||
                      joints.type[j] == JointType::Continuous ||
                      joints.type[j] == JointType::Prismatic) &&
-                    !joints.actuated[j]) {
+                    !joints.actuated[j] && joints.mimic[j] == kNoMimic) {
                     joints.actuated[j] = true;
                     model.actuatedJoints.push_back(joints.names[j]);
                 }
@@ -5489,6 +5489,13 @@ Status Server::setSite(const std::string& name, double value) {
 }
 
 bool Server::commandJoint(const std::string& joint, const std::string& mode, double value) {
+    // A joint that copies another takes no commands.
+    const World::Joints& joints = world().joints;
+    const auto named = std::find(joints.names.begin(), joints.names.end(), joint);
+    if (named != joints.names.end() &&
+        joints.mimic[static_cast<std::size_t>(named - joints.names.begin())] != kNoMimic) {
+        return false;
+    }
     JointTarget target;
     target.value = value;
     if (mode == "position") {

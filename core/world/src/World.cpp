@@ -89,6 +89,11 @@ JointId World::addJoint(std::string name, JointType jointType, BodyId childBody,
     joints.effortLimit.push_back(0.0);
     joints.velocityLimit.push_back(0.0);
     joints.armature.push_back(0.0);
+    joints.damping.push_back(0.0);
+    joints.friction.push_back(0.0);
+    joints.mimic.push_back(kNoMimic);
+    joints.mimicMultiplier.push_back(1.0);
+    joints.mimicOffset.push_back(0.0);
     joints.initialPosition.push_back(0.0);
     joints.prim.push_back(joint);
     joints.actuated.push_back(isActuated);

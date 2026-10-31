@@ -55,6 +55,8 @@ enum class ShapeType : std::uint8_t {
     HeightField
 };
 
+inline constexpr std::uint32_t kNoMimic = 0xFFFF'FFFFU;
+
 /// A convex hull collider (formats.md §2: collision geometry is convex hulls, never render
 /// meshes): its vertices and its outward-wound triangles, in the shape's frame, m.
 struct ConvexHull {
@@ -168,6 +170,13 @@ struct World {
         /// Inertia added at the joint by what drives it: a motor's rotor reflected through its
         /// gear, N²·J_rotor (kg·m², or kg for a slide). Physics adds it to the joint's mass.
         std::vector<double> armature;
+        /// Viscous damping (N·m·s/rad or N·s/m) and dry friction (N·m or N) at the joint.
+        std::vector<double> damping, friction;
+        /// A joint that copies another: position = multiplier × mimic's + offset (rad or m);
+        /// kNoMimic for the others. It takes no commands. MuJoCo couples both ways, as gears do;
+        /// Jolt only moves the copy.
+        std::vector<std::uint32_t> mimic;
+        std::vector<double> mimicMultiplier, mimicOffset;
         /// Where the joint starts, rad or m (0 by default): a run rebuilt mid-way, when robots
         /// are spawned or deleted, starts the others' joints where they were.
         std::vector<double> initialPosition;

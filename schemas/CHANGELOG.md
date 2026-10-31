@@ -8,6 +8,9 @@ and `test_schemas.py` checks it.
 
 ## Unreleased
 
+- **Joint library**: `JointDynamicsAPI_1` on a physics joint: damping, dry friction and copying another joint (mimic).
+  New library, nothing to migrate.
+
 - **`LidarAPI_1`**: `sensor:lidar:motionDistortion` (bool, default true), as `formats.md` already listed it.
   Addition, nothing to migrate.
 

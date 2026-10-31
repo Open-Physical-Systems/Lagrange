@@ -257,11 +257,26 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
         if (j < joints.armature.size()) {
             joint->armature = joints.armature[j];  // a motor's reflected rotor inertia
         }
+        joint->damping[0] = joints.damping[j];
+        joint->frictionloss = joints.friction[j];
         if (joints.type[j] != JointType::Continuous &&
             joints.lowerLimit[j] < joints.upperLimit[j]) {
             joint->limited = mjLIMITED_TRUE;
             joint->range[0] = joints.lowerLimit[j];
             joint->range[1] = joints.upperLimit[j];
+        }
+    }
+
+    // A joint that copies another: y = data[0] + data[1] x, a gear both ways.
+    for (std::size_t j = 0; j < joints.names.size(); ++j) {
+        if (joints.mimic[j] != kNoMimic) {
+            mjsEquality* copy = mjs_addEquality(spec, nullptr);
+            copy->type = mjEQ_JOINT;
+            copy->objtype = mjOBJ_JOINT;
+            mjs_setString(copy->name1, joints.names[j].c_str());
+            mjs_setString(copy->name2, joints.names[joints.mimic[j]].c_str());
+            copy->data[0] = joints.mimicOffset[j];
+            copy->data[1] = joints.mimicMultiplier[j];
         }
     }
 

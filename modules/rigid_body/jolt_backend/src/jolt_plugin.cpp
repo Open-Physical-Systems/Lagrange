@@ -53,6 +53,11 @@ lagrange::World worldOf(const lagrange::plugin_sdk::World& in) {
         out.joints.velocityLimit.back() = joint.velocityLimit;
         out.joints.armature.back() = joint.armature;
         out.joints.initialPosition.back() = joint.initialPosition;
+        out.joints.damping.back() = joint.damping;
+        out.joints.friction.back() = joint.friction;
+        out.joints.mimic.back() = joint.mimic;
+        out.joints.mimicMultiplier.back() = joint.mimicMultiplier;
+        out.joints.mimicOffset.back() = joint.mimicOffset;
     }
     for (const auto& collider : in.colliders) {
         const auto shape = static_cast<lagrange::ShapeType>(collider.shape);

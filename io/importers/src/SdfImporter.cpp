@@ -220,6 +220,13 @@ private:
                 break;
         }
         if (axis != nullptr) {
+            out.damping = axis->Damping();
+            out.friction = axis->Friction();
+            if (const std::optional<sdf::MimicConstraint> mimic = axis->Mimic(); mimic) {
+                out.mimic = flat(scope + mimic->Joint());
+                out.mimicMultiplier = mimic->Multiplier();
+                out.mimicOffset = mimic->Offset() - mimic->Multiplier() * mimic->Reference();
+            }
             gz::math::Vector3d xyz = axis->Xyz();
             if (sdf::Errors errors = axis->ResolveXyz(xyz); !errors.empty()) {
                 detail::note(model_, "joint '" + joint.Name() + "': " + errorText(errors));

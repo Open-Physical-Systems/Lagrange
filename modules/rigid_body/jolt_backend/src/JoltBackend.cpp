@@ -47,6 +47,12 @@ namespace {
 using Vec3 = std::array<double, 3>;
 using Mat3 = std::array<std::array<double, 3>, 3>;
 
+// How stiffly a joint follows the one it copies (a Jolt motor's spring, under its 500 Hz limit at
+// 1 ms; chosen by the test against the closed form, not measured).
+constexpr float kMimicMotorHz = 100.0F;
+// Explicit damping d is stable for d dt / I < 2; half of that leaves a margin.
+constexpr double kMaxDampingShare = 1.0;
+
 // Share of a step's new armature torque estimate taken (JoltBackend::Impl::updateArmatureTorques).
 constexpr double kArmatureRelaxation = 0.5;
 
@@ -285,7 +291,12 @@ struct JoltBackend::Impl {
         JPH::BodyID child;
         std::int32_t childGroup{-1};
         std::vector<std::int32_t> subtree;  // groups that move with the joint (child included)
-        double armature{0.0};               // kg·m² or kg: the rotor inertia the joint drives
+        double angle{0.0};                  // rad, a hinge's position, counting turns
+        double damping{0.0};                // N·m·s/rad or N·s/m
+        double restInertia{0.0};            // kg·m² or kg moved by it, at rest
+        std::int32_t mimic{-1};             // in joints: the one this one copies
+        double mimicMultiplier{1.0}, mimicOffset{0.0};
+        double armature{0.0};  // kg·m² or kg: the rotor inertia the joint drives
         SignalId position, velocity, torque, loadTorque;
         SignalId acceleration, effectiveInertia, constraintTorque;
         double lastVelocity{0.0};      // at the end of the previous step: for the acceleration
@@ -883,9 +894,11 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalIo& i
         j.childGroup = s.groupOf[child];
         j.child = s.groups.at(static_cast<std::size_t>(j.childGroup)).id;
         j.armature = world.joints.armature[j.joint];
+        j.damping = world.joints.damping[j.joint];
         j.lastVelocity = 0.0;
         j.lastAcceleration = 0.0;
         j.armatureTorque = 0.0;
+        j.angle = 0.0;
         s.hasArmature = s.hasArmature || j.armature > 0.0;
         // The groups that move with this joint: those whose root descends from its child.
         j.subtree.clear();
@@ -922,6 +935,8 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalIo& i
                 slider.mLimitsMin = static_cast<float>(lower);
                 slider.mLimitsMax = static_cast<float>(upper);
             }
+            slider.mMaxFrictionForce = static_cast<float>(world.joints.friction[j.joint]);
+            slider.mMotorSettings.mSpringSettings.mFrequency = kMimicMotorHz;
             j.constraint = slider.Create(parentBody, childBody);
         } else {
             JPH::HingeConstraintSettings hinge;
@@ -933,25 +948,51 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalIo& i
                 hinge.mLimitsMin = static_cast<float>(lower);
                 hinge.mLimitsMax = static_cast<float>(upper);
             }
+            hinge.mMaxFrictionTorque = static_cast<float>(world.joints.friction[j.joint]);
+            hinge.mMotorSettings.mSpringSettings.mFrequency = kMimicMotorHz;
             j.constraint = hinge.Create(parentBody, childBody);
         }
         s.system->AddConstraint(j.constraint);
+    }
+    // A joint that copies another: a position motor on its constraint, moved every step.
+    for (Impl::Joint& j : s.joints) {
+        j.mimic = -1;
+        j.mimicMultiplier = world.joints.mimicMultiplier[j.joint];
+        j.mimicOffset = world.joints.mimicOffset[j.joint];
+        if (world.joints.mimic[j.joint] == kNoMimic) {
+            continue;
+        }
+        for (std::size_t m = 0; m < s.joints.size(); ++m) {
+            if (s.joints[m].joint == world.joints.mimic[j.joint]) {
+                j.mimic = static_cast<std::int32_t>(m);
+            }
+        }
+        if (j.mimic < 0) {
+            continue;
+        }
+        if (j.prismatic) {
+            static_cast<JPH::SliderConstraint&>(*j.constraint)
+                .SetMotorState(JPH::EMotorState::Position);
+        } else {
+            static_cast<JPH::HingeConstraint&>(*j.constraint)
+                .SetMotorState(JPH::EMotorState::Position);
+        }
     }
     s.system->OptimizeBroadPhase();
 
     // Initial outputs: the rest state.
     for (Impl::Joint& j : s.joints) {
+        const std::uint32_t child = world.joints.child[j.joint].index;
+        j.restInertia =
+            j.armature +
+            s.subtreeInertia(j, rotate(rest[child].orientation, world.joints.axis[j.joint]),
+                             rest[child].position);
         io.write(j.position, 0.0);
         io.write(j.velocity, 0.0);
         if (j.acceleration.valid()) {
             io.write(j.acceleration, 0.0);
             io.write(j.constraintTorque, 0.0);
-            const std::uint32_t child = world.joints.child[j.joint].index;
-            io.write(
-                j.effectiveInertia,
-                j.armature +
-                    s.subtreeInertia(j, rotate(rest[child].orientation, world.joints.axis[j.joint]),
-                                     rest[child].position));
+            io.write(j.effectiveInertia, j.restInertia);
         }
     }
     for (Impl::Body& b : s.bodies) {
@@ -980,12 +1021,34 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
         s.updateArmatureTorques();
     }
     for (Impl::Joint& j : s.joints) {
+        if (j.mimic >= 0) {
+            const Impl::Joint& leader = s.joints[static_cast<std::size_t>(j.mimic)];
+            const double leaderAt =
+                leader.prismatic
+                    ? static_cast<JPH::SliderConstraint&>(*leader.constraint).GetCurrentPosition()
+                    : leader.angle;
+            const double target = j.mimicMultiplier * leaderAt + j.mimicOffset;
+            if (j.prismatic) {
+                static_cast<JPH::SliderConstraint&>(*j.constraint)
+                    .SetTargetPosition(static_cast<float>(target));
+            } else {
+                static_cast<JPH::HingeConstraint&>(*j.constraint)
+                    .SetTargetAngle(
+                        static_cast<float>(std::remainder(target, 2.0 * std::numbers::pi)));
+            }
+        }
         const double rotor = j.armatureTorque;
-        if (!j.torque.valid() && rotor == 0.0) {
+        // Explicit damping: never more than a step can take without turning the joint round.
+        const double damper =
+            j.damping > 0.0
+                ? -std::min(j.damping, kMaxDampingShare * j.restInertia / context.dt.seconds()) *
+                      j.lastVelocity
+                : 0.0;
+        if (!j.torque.valid() && rotor == 0.0 && damper == 0.0) {
             continue;
         }
         const double tau =
-            (j.torque.valid() ? io.read(j.torque) + io.read(j.loadTorque) : 0.0) + rotor;
+            (j.torque.valid() ? io.read(j.torque) + io.read(j.loadTorque) : 0.0) + rotor + damper;
         JPH::Vec3 axis;
         if (j.prismatic) {
             axis = static_cast<JPH::SliderConstraint&>(*j.constraint)
@@ -1056,7 +1119,10 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
             limitLambda = slider.GetTotalLambdaPositionLimits();
         } else {
             const auto& hinge = static_cast<JPH::HingeConstraint&>(*j.constraint);
-            io.write(j.position, hinge.GetCurrentAngle());
+            // Jolt's angle wraps at ±π; a joint's position counts turns, as MuJoCo's does.
+            j.angle += std::remainder(static_cast<double>(hinge.GetCurrentAngle()) - j.angle,
+                                      2.0 * std::numbers::pi);
+            io.write(j.position, j.angle);
             limitLambda = hinge.GetTotalLambdaRotationLimits();
         }
         velocity = s.jointVelocity(j, axis);
@@ -1189,6 +1255,7 @@ Status JoltBackend::saveState(StateWriter& writer) const {
         writer.put(j.lastVelocity);
         writer.put(j.lastAcceleration);
         writer.put(j.armatureTorque);
+        writer.put(j.angle);
     }
     for (const Impl::Body& b : impl_->bodies) {
         writer.putDoubles(b.lastTwist);
@@ -1228,7 +1295,7 @@ Status JoltBackend::restoreState(StateReader& reader) {
     bool ok = reader.get(scale);
     for (Impl::Joint& j : impl_->joints) {
         ok = ok && reader.get(j.lastVelocity) && reader.get(j.lastAcceleration) &&
-             reader.get(j.armatureTorque);
+             reader.get(j.armatureTorque) && reader.get(j.angle);
     }
     for (Impl::Body& b : impl_->bodies) {
         ok = ok && reader.getDoubles(b.lastTwist);

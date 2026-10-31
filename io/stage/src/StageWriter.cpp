@@ -636,6 +636,26 @@ private:
             joint.CreateLocalRot0Attr().Set(quatf(multiply(inParent.orientation, turn)));
             joint.CreateLocalPos1Attr().Set(GfVec3f(0.0F));
             joint.CreateLocalRot1Attr().Set(quatf(turn));
+            if (hasJoint) {
+                const std::size_t j = found->second;
+                const World::Joints& table = world.joints;
+                if (table.damping[j] > 0.0 || table.friction[j] > 0.0 ||
+                    table.mimic[j] != kNoMimic) {
+                    UsdPrim prim = joint.GetPrim();
+                    prim.ApplyAPI(TfToken("JointDynamicsAPI_1"));
+                    const auto real = [&prim](const char* name, double value) {
+                        prim.CreateAttribute(TfToken(name), SdfValueTypeNames->Double).Set(value);
+                    };
+                    real("joint:damping", table.damping[j]);
+                    real("joint:friction", table.friction[j]);
+                    if (table.mimic[j] != kNoMimic) {
+                        prim.CreateAttribute(TfToken("joint:mimic"), SdfValueTypeNames->String)
+                            .Set(table.names[table.mimic[j]]);
+                        real("joint:mimicMultiplier", table.mimicMultiplier[j]);
+                        real("joint:mimicOffset", table.mimicOffset[j]);
+                    }
+                }
+            }
             if (hasJoint && world.joints.actuated[found->second]) {
                 const TfToken drive = type == JointType::Prismatic ? UsdPhysicsTokens->linear
                                                                    : UsdPhysicsTokens->angular;
