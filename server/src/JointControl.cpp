@@ -24,11 +24,22 @@ SignalSpec spec(std::string name, Unit unit) {
 void JointTargets::set(const std::string& joint, JointTarget target) {
     const std::lock_guard<std::mutex> lock(mutex_);
     targets_[joint] = target;
+    version_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void JointTargets::refresh(std::uint64_t& seen, std::map<std::string, JointTarget>& out) const {
+    if (version_.load(std::memory_order_relaxed) == seen) {
+        return;
+    }
+    const std::lock_guard<std::mutex> lock(mutex_);
+    seen = version_.load(std::memory_order_relaxed);
+    out = targets_;
 }
 
 void JointTargets::replace(std::map<std::string, JointTarget> targets) {
     const std::lock_guard<std::mutex> lock(mutex_);
     targets_ = std::move(targets);
+    version_.fetch_add(1, std::memory_order_relaxed);
 }
 
 std::map<std::string, JointTarget> JointTargets::all() const {
@@ -92,7 +103,9 @@ Status JointControl::init(const WorldView&, const ModuleConfig&, SignalBus& bus)
 
 Status JointControl::step(const StepContext&, SignalBus& bus) {
     const double omega = 2.0 * std::numbers::pi * kBandwidthHz;
-    const std::map<std::string, JointTarget> targets = targets_->all();
+    // Copied only when someone has told a joint something new.
+    targets_->refresh(seenTargets_, currentTargets_);
+    const std::map<std::string, JointTarget>& targets = currentTargets_;
     for (const Joint& j : joints_) {
         const auto it = targets.find(j.name);
         double torque = 0.0;

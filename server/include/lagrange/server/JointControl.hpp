@@ -2,6 +2,8 @@
 
 #include "lagrange/module/IModule.hpp"
 
+#include <atomic>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -23,11 +25,14 @@ class JointTargets {
 public:
     void set(const std::string& joint, JointTarget target);
     void replace(std::map<std::string, JointTarget> targets);
+    /// Copies the targets into `out` if they changed since version `seen`.
+    void refresh(std::uint64_t& seen, std::map<std::string, JointTarget>& out) const;
     [[nodiscard]] std::map<std::string, JointTarget> all() const;
 
 private:
     mutable std::mutex mutex_;
     std::map<std::string, JointTarget> targets_;
+    std::atomic<std::uint64_t> version_{1};
 };
 
 /// The simulator at its lowest level: every moving joint driven on its own, by position, velocity
@@ -61,6 +66,8 @@ private:
         std::string mode{"torque"};  // what `torque` above commands: torque, velocity or voltage
     };
     std::shared_ptr<JointTargets> targets_;
+    std::uint64_t seenTargets_{0};
+    std::map<std::string, JointTarget> currentTargets_;
     std::map<std::string, std::string> driveModes_;
     std::set<std::string> warned_;  // joints told what their motor cannot follow
     std::vector<Joint> joints_;

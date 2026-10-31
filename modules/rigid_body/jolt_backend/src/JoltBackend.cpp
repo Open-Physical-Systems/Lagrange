@@ -331,6 +331,7 @@ struct JoltBackend::Impl {
     /// the whole chain at once. They go through Jolt's solver like any joint torque, so the
     /// constraints stay consistent. A floating base (an AMR's wheels) makes M approximate.
     void updateArmatureTorques();
+    std::vector<double> armatureMatrix, armatureForces;  // its scratch, kept between steps
     bool hasArmature{false};
 
     /// Joint-space inertia M(a, b): what joint a feels when joint b accelerates (0 unless one's
@@ -458,8 +459,10 @@ void JoltBackend::Impl::updateArmatureTorques() {
     const std::size_t n = joints.size();
     // A = M + D and the right-hand side D-weighted F, solved by Gaussian elimination with
     // partial pivoting (a few joints per robot).
-    std::vector<double> a(n * n, 0.0);
-    std::vector<double> f(n, 0.0);
+    std::vector<double>& a = armatureMatrix;
+    std::vector<double>& f = armatureForces;
+    a.assign(n * n, 0.0);
+    f.assign(n, 0.0);
     for (std::size_t r = 0; r < n; ++r) {
         for (std::size_t c = r; c < n; ++c) {
             const double m = jointInertia(joints[r], joints[c]);

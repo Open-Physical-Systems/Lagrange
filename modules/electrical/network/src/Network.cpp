@@ -308,7 +308,10 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
                 continue;
             }
         }
-        motor.mode = std::string(s->token("elec:controlMode").value_or("torque"));
+        const std::string_view control = s->token("elec:controlMode").value_or("torque");
+        motor.mode = control == "velocity"  ? Motor::Mode::Velocity
+                     : control == "voltage" ? Motor::Mode::Voltage
+                                            : Motor::Mode::Torque;
         motor.velocityBandwidth = s->real("elec:velocityLoopBandwidth").value_or(kVelocityLoopRadS);
         if (motor.velocityBandwidth <= 0.0) {
             problems.add(where, "elec:velocityLoopBandwidth must be positive");
@@ -424,9 +427,9 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
         const std::string motor = "motor/" + m.name + "/";
         const Unit effort = m.slide ? units::N : units::N_m;
         const Unit speed = m.slide ? units::m_per_s : units::rad_per_s;
-        if (m.mode == "velocity") {
+        if (m.mode == Motor::Mode::Velocity) {
             m.velocityCommand = d.input(scalar(joint + "velocity_command", speed));
-        } else if (m.mode == "voltage") {
+        } else if (m.mode == Motor::Mode::Voltage) {
             m.voltageCommand = d.input(scalar(joint + "voltage_command", units::V));
         } else {
             // A drive nothing commands makes no torque (a robot without a controller).
@@ -658,7 +661,7 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
     for (Motor& m : motors_) {
         const Bus& node = buses_[m.bus];
         MotorInputs in;
-        if (m.mode == "torque") {
+        if (m.mode == Motor::Mode::Torque) {
             in.torqueCommand = bus.read(m.command);
         }
         const double sample = bus.read(m.velocity);
@@ -687,9 +690,9 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
         }
         // A velocity or voltage drive resets once it is asked for nothing, as a torque one does.
         double asked = in.torqueCommand;
-        if (m.mode == "velocity") {
+        if (m.mode == Motor::Mode::Velocity) {
             asked = bus.read(m.velocityCommand);
-        } else if (m.mode == "voltage") {
+        } else if (m.mode == Motor::Mode::Voltage) {
             asked = bus.read(m.voltageCommand);
         }
         if (node.brownout) {
@@ -697,10 +700,10 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
         } else if (m.tripped && std::abs(asked) < kResetTorqueNm) {
             m.tripped = false;
         }
-        if (m.mode == "voltage") {
+        if (m.mode == Motor::Mode::Voltage) {
             in.voltageMode = true;
             in.voltageCommand = asked;
-        } else if (m.mode == "velocity") {
+        } else if (m.mode == Motor::Mode::Velocity) {
             // PI on the inertia the joint turns: J s² + Kp s + Ki with both poles at the bandwidth
             // over 2, so Kp = J ω, Ki = J ω² / 4. Held by what the drive can give.
             const double effective = bus.read(m.effectiveInertia);
