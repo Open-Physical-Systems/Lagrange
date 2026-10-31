@@ -829,11 +829,14 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
             info->localTimeHours = source.local_time_hours();
             info->sunElevationDeg = source.sun_elevation_deg();
             info->ambientTemperatureK = source.ambient_temperature_k();
+            info->gravity = source.gravity_m_per_s2();
             info->rainMmPerH = source.weather().rain_mm_per_h();
             info->fogVisibilityM = source.weather().fog_visibility_m();
             info->dustMgPerM3 = source.weather().dust_mg_per_m3();
             info->surfaceWetness = source.weather().surface_wetness();
             info->windSpeed = source.wind().speed_m_per_s();
+            info->windFromDeg =
+                std::fmod(90.0 - source.wind().direction_deg() + 180.0 + 720.0, 360.0);
             info->windDirectionDeg = source.wind().direction_deg();
             info->gustIntensity = source.wind().gust_intensity();
             info->windField = source.wind().field();

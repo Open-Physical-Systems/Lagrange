@@ -203,6 +203,7 @@ if(BUILD_TESTING)
         test/test_server.cpp
         test/test_spawn.cpp
         test/test_joint_control.cpp
+        test/test_site.cpp
         test/test_humans_run.cpp
         test/test_plugins.cpp
         test/test_multicopter.cpp

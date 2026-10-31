@@ -97,6 +97,8 @@ struct ServerOptions {
     /// --joint-control: every moving joint of the robot is driven on its own, from
     /// /joint_commands (sensor_msgs/JointState) or commandJoint, with no robot controller.
     bool jointControl{false};
+    /// --site NAME=VALUE: the site at the start, as Server::setSite takes them.
+    std::map<std::string, double> site;
     std::string profileSchemaPath;  // profiles/schema.json, sent to viewers; empty = none
     /// What a profile's `stage` must say to apply to this run; empty: robotPath. `lagrange run`
     /// sets it to the stage as the profile writes it.
@@ -193,6 +195,13 @@ public:
     /// file name, made unique.
     Expected<std::string, Status> spawnRobot(const std::string& path, const std::string& name,
                                              const Pose& spawn);
+    /// After load(): changes the site while it runs and the run goes on from where it is:
+    /// "gravity" (m/s², downward), "wind_speed" (m/s, at the reference height), "wind_from"
+    /// (degrees, compass: where it blows from), "temperature" (K), "air_density" (kg/m³),
+    /// "pressure" (Pa), "relative_humidity" (0..1), "rain_rate" (m/s), "visibility" (m).
+    /// Wind acts on links with AeroAPI_1 and on rotors; a value that brings a domain in or
+    /// takes one out (the first air density) rebuilds the run keeping time and poses.
+    Status setSite(const std::string& name, double value);
     /// With joint control: drive a joint by "position" (rad, m), "velocity" (rad/s, m/s) or
     /// "effort" (N·m, N). False for another mode.
     bool commandJoint(const std::string& joint, const std::string& mode, double value);

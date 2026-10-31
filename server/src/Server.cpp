@@ -982,6 +982,87 @@ struct Server::Impl {
         return options.jointControl && !controllers && !hasVehicles() && !hasRotors();
     }
     std::shared_ptr<JointTargets> jointTargets = std::make_shared<JointTargets>();
+    std::optional<double> appliedGravity;  // m/s², downward (setSite); else the file's
+
+    /// Stores one site value for the next build. An error names what can be set.
+    Status storeSite(const std::string& name, double value) {
+        if (!std::isfinite(value)) {
+            return Status::error(StatusCode::InvalidConfig, name + " is not a finite number");
+        }
+        if (name == "gravity") {
+            appliedGravity = value;
+        } else if (name == "temperature") {
+            appliedAmbientK = value;
+            options.ambientTemperatureK = value;
+            appliedWeather["temperature"] = value;
+        } else if (name == "air_density") {
+            appliedAirDensity = value;
+            appliedAerodynamics["air_density"] = value;
+        } else if (name == "wind_speed" || name == "wind_from") {
+            appliedAerodynamics[name] = value;
+        } else if (name == "pressure" || name == "relative_humidity" || name == "rain_rate" ||
+                   name == "visibility") {
+            appliedWeather[name] = value;
+        } else {
+            return Status::error(StatusCode::InvalidConfig,
+                                 "no site value " + name +
+                                     "; one of gravity, wind_speed, wind_from, temperature, "
+                                     "air_density, pressure, relative_humidity, rain_rate, "
+                                     "visibility");
+        }
+        return {};
+    }
+
+    /// Changes the site in a running simulation. Same modules: the run's whole state carries
+    /// over. Others (the first air density brings the rotors): time and poses do.
+    Status setSite(const std::string& name, double value) {
+        if (replay) {
+            return Status::error(StatusCode::Unsupported, "a replay shows what was recorded");
+        }
+        if (Status status = storeSite(name, value); !status.ok()) {
+            return status;
+        }
+        if (name == "gravity") {
+            robot.world.gravityLocal = {0.0, 0.0, -value};
+        }
+        const Carried carried = carry();
+        StateWriter saved;
+        const bool savedOk = scheduler->saveState(saved).ok();
+        if (Status status = build(); !status.ok()) {
+            return status;
+        }
+        StateReader reader(saved.bytes());
+        if (!savedOk || !scheduler->restoreState(reader).ok()) {
+            auto composed = composeModel(false);
+            if (!composed) {
+                return composed.error();
+            }
+            place(*composed, carried);
+            stopRecording("the site changed which domains run");
+            if (Status status = install(std::move(*composed), carried.now); !status.ok()) {
+                return status;
+            }
+            composedMidRun = true;
+            ++catalogGeneration;
+            for (auto& session : sessions) {
+                if (session->greeted) {
+                    session->subscriptions.clear();
+                    session->sensors.clear();
+                    session->send(catalog());
+                    session->send(snapshot(*session));
+                    session->send(profileState({}));
+                }
+            }
+        }
+        owedNs = 0;
+        lastWall = Clock::now();
+        char line[96];
+        std::snprintf(line, sizeof line, "%s = %g", name.c_str(), value);
+        log(v1::LOG_LEVEL_INFO, "site", line);
+        broadcast(environmentState());
+        return {};
+    }
+
     /// Whether the run has people.
     bool hasHumans() const { return !WorldView(robot.world).instancesOf("HumanAPI_1").empty(); }
     /// Whether the stage has road vehicles.
@@ -2546,6 +2627,16 @@ struct Server::Impl {
                 attributes(command.get_attributes(), *r.mutable_attributes());
                 break;
             case v1::Command::kSetAttribute:
+                // No prim: a site value (site:gravity), from the Environment panel.
+                if (command.set_attribute().prim() == kNoIndex &&
+                    command.set_attribute().attribute().name().starts_with("site:")) {
+                    const v1::Attribute& site = command.set_attribute().attribute();
+                    if (Status status = setSite(site.name().substr(5), site.real()); !status.ok()) {
+                        r.set_ok(false);
+                        r.set_error(status.message);
+                    }
+                    break;
+                }
                 if (Status status = setAttribute(command.set_attribute()); !status.ok()) {
                     r.set_ok(false);
                     r.set_error(status.message);
@@ -3322,6 +3413,9 @@ struct Server::Impl {
             if (auto applied = stage::applyOverlay(model, options.overlayPath); !applied) {
                 return invalid(applied.error());
             }
+        }
+        if (appliedGravity) {
+            model.world.gravityLocal = {0.0, 0.0, -*appliedGravity};
         }
         // Joint control: every hinge and slide of the robot takes a command, whatever its file
         // says (a plain URDF has no <ros2_control> block to say so).
@@ -4230,6 +4324,7 @@ struct Server::Impl {
             return v != nullptr ? std::filesystem::path(*v).filename().string() : std::string();
         };
         const bool weather = weatherRuns() && !substituted("weather");
+        env.set_gravity_m_per_s2(-robot.world.gravityLocal[2]);
         if (const auto t = ambient() ? ambient() : number("temperature")) {
             env.set_ambient_temperature_k(*t);
         }
@@ -4956,6 +5051,12 @@ public:
 
     ros2::SimOutcome remove(const std::string& name) override { return s_.remove(name); }
 
+    ros2::SimOutcome setSite(const std::string& name, double value) override {
+        const Status status = s_.setSite(name, value);
+        return status.ok() ? ros2::SimOutcome{}
+                           : ros2::SimOutcome{ros2::SimResult::Failed, status.message};
+    }
+
     ros2::SimOutcome removeSpawned() override {
         while (!s_.spawned.empty()) {
             const ros2::SimOutcome outcome = s_.remove(s_.spawned.back().name);
@@ -5098,6 +5199,11 @@ Status Server::load() {
                                                        v1::LOG_LEVEL_WARN, v1::LOG_LEVEL_ERROR};
             s.log(kLevels[static_cast<int>(level)], std::string(source), std::string(text));
         });
+    for (const auto& [name, value] : s.options.site) {
+        if (Status status = s.storeSite(name, value); !status.ok()) {
+            return status;
+        }
+    }
     // Plugins (RFC 0008): loaded once, at start, from what the person starting the server named.
     auto loaded = loadPlugins(s.options.plugins);
     if (!loaded) {
@@ -5333,6 +5439,13 @@ Status Server::restoreState(std::span<const std::byte> state) {
     }
     StateReader reader(state);
     return impl_->scheduler->restoreState(reader);
+}
+
+Status Server::setSite(const std::string& name, double value) {
+    if (!impl_->scheduler) {
+        return Status::error(StatusCode::Internal, "setSite() before load()");
+    }
+    return impl_->setSite(name, value);
 }
 
 bool Server::commandJoint(const std::string& joint, const std::string& mode, double value) {

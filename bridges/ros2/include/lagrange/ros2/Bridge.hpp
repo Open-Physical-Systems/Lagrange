@@ -172,6 +172,12 @@ public:
         (void)name;
         return {SimResult::Unsupported, "deleting is not supported"};
     }
+    /// Changes a site value while running (ROS parameters of the bridge's node).
+    virtual SimOutcome setSite(const std::string& name, double value) {
+        (void)name;
+        (void)value;
+        return {SimResult::Unsupported, "the site cannot be changed"};
+    }
     /// Takes every spawned robot out (reset_simulation with SCOPE_SPAWNED).
     virtual SimOutcome removeSpawned() { return {}; }
 };

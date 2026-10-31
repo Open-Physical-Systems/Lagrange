@@ -265,6 +265,7 @@ message EnvironmentState {
   repeated EmiSource emi_sources = 7;
   repeated Field fields = 8;
   bool synthetic = 9; // values made up by a server that has no environment model
+  double gravity_m_per_s2 = 10; // downward
 }
 
 // A horizontal slice of a field, for an overlay. Sent for subscribed fields when it changes

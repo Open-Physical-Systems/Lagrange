@@ -120,6 +120,7 @@ struct Bridge::Impl {
     rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tfStatic;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr description;
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr jointCommands;
+    rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr siteParameters;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmdVel;
     rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmdVelStamped;
     rclcpp::Subscription<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr ackermannCmd;
@@ -1215,6 +1216,33 @@ void Bridge::serveSimulation(SimulationHandler& handler) {
     SimulationHandler* h = &handler;
     rclcpp::Node& node = *s.node;
     using si::msg::SimulatorFeatures;
+
+    // The site, as parameters: ros2 param set /lagrange_ros2_bridge gravity 1.62 (lagrange set).
+    // NaN: as the run started.
+    for (const char* name : {"gravity", "wind_speed", "wind_from", "temperature", "air_density",
+                             "pressure", "relative_humidity", "rain_rate", "visibility"}) {
+        node.declare_parameter(name, std::numeric_limits<double>::quiet_NaN());
+    }
+    s.siteParameters = node.add_on_set_parameters_callback(
+        [&s, h](const std::vector<rclcpp::Parameter>& parameters) {
+            rcl_interfaces::msg::SetParametersResult result;
+            result.successful = true;
+            for (const rclcpp::Parameter& parameter : parameters) {
+                if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE ||
+                    std::isnan(parameter.as_double())) {
+                    continue;
+                }
+                const std::string name = parameter.get_name();
+                const double value = parameter.as_double();
+                const auto outcome = s.onMain([h, name, value] { return h->setSite(name, value); });
+                if (!outcome || outcome->result != SimResult::Ok) {
+                    result.successful = false;
+                    result.reason = outcome ? outcome->message : "the simulator did not answer";
+                    break;
+                }
+            }
+            return result;
+        });
 
     s.services.push_back(node.create_service<si::srv::GetSimulatorFeatures>(
         "get_simulator_features",
