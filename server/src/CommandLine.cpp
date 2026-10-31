@@ -102,6 +102,8 @@ void printServerOptions(std::FILE* out) {
         "  --humans N[,seed=S][,radius=M]  N people wandering round the middle of the run\n"
         "  --site NAME=VALUE  gravity, wind_speed, wind_from, temperature, air_density, pressure,\n"
         "            relative_humidity, rain_rate, visibility; also while running: lagrange set\n"
+        "  --sensor-timing NAME=LATENCY[,JITTER]  delay a sensor's ROS messages, in s "
+        "(repeatable)\n"
         "  --water X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH  a body of still water (repeatable)\n"
         "  --joint-control  drive every moving joint on its own from /joint_commands\n"
         "            (sensor_msgs/JointState: position, velocity or effort), no robot controller\n"
@@ -530,6 +532,18 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--site needs NAME=VALUE, such as gravity=1.62";
             }
             options.site[item.substr(0, equals)] = number;
+        } else if (arg == "--sensor-timing") {
+            const char* text = value();
+            const std::string pair = text != nullptr ? text : "";
+            const std::size_t equals = pair.find('=');
+            double latency = 0.0;
+            double jitter = 0.0;
+            if (equals == std::string::npos || equals == 0 ||
+                std::sscanf(pair.c_str() + equals + 1, "%lf,%lf", &latency, &jitter) < 1 ||
+                latency < 0.0 || jitter < 0.0) {
+                return "--sensor-timing needs NAME=LATENCY[,JITTER], in seconds";
+            }
+            options.sensorTiming.push_back({pair.substr(0, equals), latency, jitter});
         } else if (arg == "--water") {
             const char* text = value();
             std::array<double, 6> v{};

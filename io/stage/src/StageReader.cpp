@@ -726,6 +726,14 @@ private:
             return Unexpected{path + ": sensor:rate is required"};
         }
         std::map<std::string, double, std::less<>> settings;
+        const auto addTiming = [&] {
+            for (const auto& [attribute, key] :
+                 {std::pair{"sensor:latency", "latency"}, std::pair{"sensor:jitter", "jitter"}}) {
+                if (const std::optional<double> value = real(attribute); value && *value > 0.0) {
+                    settings[key] = *value;
+                }
+            }
+        };
         SensorType type = SensorType::Imu;
         Pose mount = scene.offset;
         if (prim.HasAPI(TfToken("CameraSensorAPI_1"))) {
@@ -906,6 +914,7 @@ private:
                 }
             }
             scene.typeName = "CustomSensor";
+            addTiming();
             m_.world.addCustomSensor(prim.GetName().GetString(), *kind, BodyId{body}, mount, *rate,
                                      settings, text);
             worldPrim_[prim.GetPath()] = m_.world.sensors.prim.back();
@@ -918,6 +927,7 @@ private:
             scene.typeName = "Xform";
             return {};
         }
+        addTiming();
         m_.world.addSensor(prim.GetName().GetString(), type, BodyId{body}, mount, *rate, settings);
         worldPrim_[prim.GetPath()] = m_.world.sensors.prim.back();
         return {};

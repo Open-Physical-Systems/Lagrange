@@ -3507,6 +3507,19 @@ struct Server::Impl {
                         std::to_string(options.trafficSeed) + ")");
             }
         }
+        for (const ServerOptions::SensorTiming& timing : options.sensorTiming) {
+            const std::vector<std::string>& names = model.world.sensors.names;
+            const auto it = std::find(names.begin(), names.end(), timing.sensor);
+            if (it == names.end()) {
+                return Unexpected{
+                    Status::error(StatusCode::InvalidConfig,
+                                  "--sensor-timing: no sensor named " + timing.sensor)};
+            }
+            auto& settings =
+                model.world.sensors.settings[static_cast<std::size_t>(it - names.begin())];
+            settings["latency"] = timing.latency;
+            settings["jitter"] = timing.jitter;
+        }
         // Water: from the files and --water, with no collider.
         std::vector<hydrodynamics::WaterBody> waters = hydrodynamics::takeWater(model);
         for (std::size_t w = 0; w < options.water.size(); ++w) {

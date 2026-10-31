@@ -103,6 +103,12 @@ struct ServerOptions {
         double sizeX{10.0}, sizeY{10.0}, depth{2.0};
     };
     std::vector<Water> water;
+    /// --sensor-timing NAME=LATENCY[,JITTER]: s, of a sensor's messages on ROS (sensors.md).
+    struct SensorTiming {
+        std::string sensor;
+        double latency{0.0}, jitter{0.0};
+    };
+    std::vector<SensorTiming> sensorTiming;
     /// --site NAME=VALUE: the site at the start, as Server::setSite takes them.
     std::map<std::string, double> site;
     std::string profileSchemaPath;  // profiles/schema.json, sent to viewers; empty = none

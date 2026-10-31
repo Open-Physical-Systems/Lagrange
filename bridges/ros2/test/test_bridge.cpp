@@ -211,6 +211,40 @@ TEST_F(CloudBridgeTest, PublishesA3dLidarAsAnOrganisedPointCloud) {
     EXPECT_EQ(ring, 1U);
 }
 
+// sensor:latency: the scan goes out that much later, on the simulation's clock, stamped when it
+// was sampled. With jitter, in order and within 3 sigma.
+TEST_F(BridgeTest, ASensorsMessagesArriveLate) {
+    const auto measure = [this](double latency, double jitter) {
+        world_.sensors.settings[0]["latency"] = latency;
+        world_.sensors.settings[0]["jitter"] = jitter;
+        world_.sensors.settings[0]["motion_distortion"] = 0.0;
+        bridge_->attach(world_, scheduler_.bus());
+        std::vector<std::int64_t> late;
+        std::int64_t lastStamp = -1;
+        const auto subscription = listener_->create_subscription<sensor_msgs::msg::LaserScan>(
+            "/scan", rclcpp::SensorDataQoS(), [&](const sensor_msgs::msg::LaserScan& scan) {
+                const std::int64_t stamp = rclcpp::Time(scan.header.stamp).nanoseconds();
+                EXPECT_GT(stamp, lastStamp) << "in order";
+                lastStamp = stamp;
+                late.push_back(scheduler_.now().ns - stamp);
+            });
+        EXPECT_TRUE(run([&late] { return late.size() >= 12; }));
+        return late;
+    };
+    for (const std::int64_t delay : measure(0.05, 0.0)) {
+        EXPECT_GE(delay, 50'000'000);
+        EXPECT_LT(delay, 80'000'000);
+    }
+    const std::vector<std::int64_t> noisy = measure(0.05, 0.01);  // well over the 10 ms ticks
+    bool varies = false;
+    for (const std::int64_t delay : noisy) {
+        EXPECT_GE(delay, 20'000'000);   // 3 sigma
+        EXPECT_LT(delay, 130'000'000);  // 3 sigma, and in order behind a late one
+        varies = varies || delay != noisy.front();
+    }
+    EXPECT_TRUE(varies);
+}
+
 TEST_F(BridgeTest, TakesVelocityCommandsAndExpiresThem) {
     auto publisher = listener_->create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel", 10);
     geometry_msgs::msg::TwistStamped twist;

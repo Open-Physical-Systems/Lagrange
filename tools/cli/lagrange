@@ -305,6 +305,7 @@ RUN_KEYS = {
     "record",
     "control",
     "water",
+    "sensor_timing",
 }
 SITE_KEYS = {
     "gravity",
@@ -388,6 +389,11 @@ def run_file_args(path: str) -> list[str]:
         args.append("--no-ros")
     if "humans" in run:
         args += ["--humans", str(run["humans"])]
+    for name, timing in (run.get("sensor_timing") or {}).items():
+        if not isinstance(timing, dict) or set(timing) - {"latency", "jitter"}:
+            fail("sensor_timing: each sensor is {latency: s, jitter: s}")
+        delay = f"{float(timing.get('latency', 0))},{float(timing.get('jitter', 0))}"
+        args += ["--sensor-timing", f"{name}={delay}"]
     for body in run.get("water") or []:
         missing = {"at", "size", "depth"} - set(body)
         if missing or len(body["at"]) != 3 or len(body["size"]) != 2:
