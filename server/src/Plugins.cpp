@@ -49,10 +49,10 @@ Expected<std::string, std::string> resolvePlugin(const std::string& library) {
 }
 
 bool isBuiltInDomain(std::string_view domain) {
-    static constexpr std::array<std::string_view, 13> kDomains{
-        "rigid_body",    "electrical", "thermal", "aerodynamics",     "weather",
-        "emi",           "radiation",  "sensors", "vehicle_dynamics", "rotor_aero",
-        "hydrodynamics", "traffic",    "comms"};
+    static constexpr std::array<std::string_view, 14> kDomains{
+        "rigid_body", "electrical", "thermal",          "aerodynamics", "weather",       "emi",
+        "radiation",  "sensors",    "vehicle_dynamics", "rotor_aero",   "hydrodynamics", "traffic",
+        "comms",      "humans"};
     return std::ranges::find(kDomains, domain) != kDomains.end();
 }
 

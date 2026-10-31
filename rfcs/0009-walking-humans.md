@@ -82,12 +82,14 @@ person: contact is one-way, as with traffic. A person weighs nothing in physics.
 
 ### 4. The walk cycle
 
-Hip, knee, ankle, shoulder and elbow angles are periodic functions of the gait phase, fitted to
-published normal-walking data (TODO(verify): Winter's sagittal-plane tables) and stored as Fourier
-coefficients, plus a pelvis bob. Cadence and step length follow from speed by the walk ratio
-(TODO(verify): Sekiya and Nagasaki 1998, step length over cadence nearly constant). Starting and
-stopping blend to and from a standing pose. Forward kinematics gives the segment poses; the stance
-foot's slip is what the tests measure.
+Each stance foot is planted on the ground and the leg solved to reach it (two-link inverse
+kinematics); the foot rolls from heel to flat to toe; the swing foot follows an arc to the next
+footfall; arms swing with the opposite leg; the pelvis bobs. Cadence and step length follow from
+speed by the walk ratio (0.006 to 0.007 m per step/min when walking freely; Sekiya et al. 1996).
+Starting and stopping blend to and from a standing pose. As built, this replaces the Fourier fit
+to published angle tables this RFC first proposed: the tables could not be sourced, and planting
+the foot rules out skating by construction. The resulting joint ranges are compared to the
+widely reported ones in the tests (`TODO(verify)` against Winter's tables).
 
 ### 5. Steering
 

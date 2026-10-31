@@ -224,6 +224,9 @@ void appendModel(Model& model, const Model& other) {
         if (worldPrimMap[p.index].index == kNoIndex) {
             worldPrimMap[p.index] =
                 w.addPrim(o.prims.paths[p.index], o.prims.instanceNames[p.index]);
+            // Where it is (EMI sources, radios, people): its body and pose come with it.
+            w.prims.body.at(worldPrimMap[p.index].index) = map(o.prims.body.at(p.index));
+            w.prims.poseInBody.at(worldPrimMap[p.index].index) = o.prims.poseInBody.at(p.index);
         }
         return worldPrimMap[p.index];
     };
