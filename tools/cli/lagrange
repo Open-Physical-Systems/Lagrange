@@ -4,8 +4,8 @@
 
 lagrange [SAMPLE | ROBOT [WORLD] | RUN.yaml] [SERVER OPTIONS] [-- VIEWER OPTIONS]
     the server and the viewer together; closing the viewer stops the server. Your robot starts
-    still, on an empty ground unless you name a world. RUN.yaml says it all in one file
-    (docs/guide/run-file.md)
+    still, on an empty ground unless you name a world, each joint commanded on /joint_commands.
+    RUN.yaml says it all in one file (docs/guide/run-file.md)
 lagrange --server-only ...      the server alone, headless (like gzserver)
 lagrange viewer [VIEWER OPTIONS]  the viewer alone (like gzclient)
 lagrange samples                the sample names
@@ -299,6 +299,7 @@ RUN_KEYS = {
     "ros",
     "humans",
     "record",
+    "control",
 }
 SITE_OPTIONS = {
     "temperature": "--ambient-temperature",
@@ -385,7 +386,10 @@ def run_file_args(path: str) -> list[str]:
         args += ["--humans", str(run["humans"])]
     if "record" in run:
         args += ["--record", str(base / str(run["record"]))]
-    return args + ["--no-demo"]
+    control = run.get("control", "joints")
+    if control not in ("joints", "builtin"):
+        fail("control: joints (each joint on its own, /joint_commands) or builtin")
+    return [*args, *(["--joint-control"] if control == "joints" else []), "--no-demo"]
 
 
 def main(argv: list[str]) -> int:
@@ -445,7 +449,7 @@ def main(argv: list[str]) -> int:
         if len(words) == 1 and "--world" not in server_args:
             server_args = ["--world", "none", *server_args]
         if "--no-demo" not in server_args:
-            server_args = ["--no-demo", *server_args]
+            server_args = ["--no-demo", "--joint-control", *server_args]
     for flag, word in zip(("--robot", "--world"), words, strict=False):
         if word not in chosen and not Path(word).exists():
             sys.exit(f"lagrange: no sample or file '{word}' (lagrange samples)")

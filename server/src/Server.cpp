@@ -28,6 +28,7 @@
 #include "lagrange/sensors/ShapeCaster.hpp"
 #include "lagrange/server/CarDrive.hpp"
 #include "lagrange/server/DiffDrive.hpp"
+#include "lagrange/server/JointControl.hpp"
 #include "lagrange/server/Multicopter.hpp"
 #include "lagrange/server/Plugins.hpp"
 #include "lagrange/server/Profile.hpp"
@@ -608,7 +609,9 @@ struct Server::Impl {
                                   ": mujoco, jolt, or a plugin's (--plugin)"};
             }
         }
-        if (controllers) {
+        if (jointControlled()) {
+            next->add(std::make_unique<JointControl>(jointTargets));
+        } else if (controllers) {
             // ros2_control drives the joints; the controller manager outlives this scheduler.
             next->add(ros2_control::createControlModule(*controllers, controlJoints));
         } else if (robot.actuatedJoints.size() == 2) {
@@ -865,7 +868,8 @@ struct Server::Impl {
                 px4.port = *options.px4Port;
                 px4.airDensity = *settings.airDensityKgM3;
                 next->add(mavlink::createPx4Lockstep(px4, px4Link));
-            } else if (!controllers && MulticopterController::canFly(WorldView(robot.world))) {
+            } else if (!controllers && !jointControlled() &&
+                       MulticopterController::canFly(WorldView(robot.world))) {
                 // The built-in controller hovers it, and with ROS flies it by /cmd_vel: forward,
                 // left and up in m/s, yaw rate in rad/s; without a command for 0.5 s it holds.
                 MulticopterController::CommandSource commands;
@@ -972,6 +976,12 @@ struct Server::Impl {
             return n.starts_with("traffic_vehicle_") || n.starts_with("traffic_pedestrian_");
         });
     }
+    /// --joint-control applies to a plain robot. A road vehicle's wheels belong to the vehicle
+    /// domain and a multicopter's to the rotors, so those keep their controllers.
+    bool jointControlled() const {
+        return options.jointControl && !controllers && !hasVehicles() && !hasRotors();
+    }
+    std::shared_ptr<JointTargets> jointTargets = std::make_shared<JointTargets>();
     /// Whether the run has people.
     bool hasHumans() const { return !WorldView(robot.world).instancesOf("HumanAPI_1").empty(); }
     /// Whether the stage has road vehicles.
@@ -3313,6 +3323,21 @@ struct Server::Impl {
                 return invalid(applied.error());
             }
         }
+        // Joint control: every hinge and slide of the robot takes a command, whatever its file
+        // says (a plain URDF has no <ros2_control> block to say so).
+        if (options.jointControl && WorldView(model.world).instancesOf("VehicleAPI_1").empty() &&
+            WorldView(model.world).instancesOf("RotorAPI_1").empty()) {
+            World::Joints& joints = model.world.joints;
+            for (std::size_t j = 0; j < joints.names.size(); ++j) {
+                if ((joints.type[j] == JointType::Revolute ||
+                     joints.type[j] == JointType::Continuous ||
+                     joints.type[j] == JointType::Prismatic) &&
+                    !joints.actuated[j]) {
+                    joints.actuated[j] = true;
+                    model.actuatedJoints.push_back(joints.names[j]);
+                }
+            }
+        }
         // More robots in the run (huge-worlds.md §3: robots whose bubbles overlap share a region).
         for (const ServerOptions::ExtraRobot& extra : options.extraRobots) {
             auto other = loadModel(extra.path, {.spawn = extra.spawn});
@@ -5169,6 +5194,17 @@ Status Server::load() {
         settings.robotDescription = s.robotDescription();
         settings.stampedCmdVel = s.options.stampedCmdVel;
         settings.topicLinks = s.options.linkTopics;
+        if (s.options.jointControl) {
+            settings.jointCommands = [targets = s.jointTargets](const ros2::JointCommand& c) {
+                JointTarget target;
+                target.value = c.value;
+                target.mode =
+                    c.mode == ros2::JointCommand::Mode::Position   ? JointTarget::Mode::Position
+                    : c.mode == ros2::JointCommand::Mode::Velocity ? JointTarget::Mode::Velocity
+                                                                   : JointTarget::Mode::Effort;
+                targets->set(c.joint, target);
+            };
+        }
         if (!s.options.rosTopicsPath.empty()) {
             auto maps = ros2::readTopicMaps(s.options.rosTopicsPath);
             if (!maps) {
@@ -5297,6 +5333,22 @@ Status Server::restoreState(std::span<const std::byte> state) {
     }
     StateReader reader(state);
     return impl_->scheduler->restoreState(reader);
+}
+
+bool Server::commandJoint(const std::string& joint, const std::string& mode, double value) {
+    JointTarget target;
+    target.value = value;
+    if (mode == "position") {
+        target.mode = JointTarget::Mode::Position;
+    } else if (mode == "velocity") {
+        target.mode = JointTarget::Mode::Velocity;
+    } else if (mode == "effort") {
+        target.mode = JointTarget::Mode::Effort;
+    } else {
+        return false;
+    }
+    impl_->jointTargets->set(joint, target);
+    return true;
 }
 
 Expected<std::string, Status> Server::spawnRobot(const std::string& path, const std::string& name,

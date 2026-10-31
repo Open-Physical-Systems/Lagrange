@@ -100,6 +100,8 @@ void printServerOptions(std::FILE* out) {
         "  --ros-topics FILE.yaml  publish signals on ROS topics and write topics into signals\n"
         "            (publish: [{signal, topic, type, frame, params}], subscribe: [...])\n"
         "  --humans N[,seed=S][,radius=M]  N people wandering round the middle of the run\n"
+        "  --joint-control  drive every moving joint on its own from /joint_commands\n"
+        "            (sensor_msgs/JointState: position, velocity or effort), no robot controller\n"
         "  --plugin LIB  load a plugin library (RFC 0008): a path, or NAME for lib<NAME>.so in\n"
         "            $LAGRANGE_PLUGIN_PATH or the lagrange_plugins resource index (repeatable)\n"
         "  --add-robot NAME=FILE@X,Y[,Z[,YAW]]  one more robot in the run, its names prefixed\n"
@@ -513,6 +515,8 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                        "subscribe: [...]";
             }
             options.rosTopicsPath = path;
+        } else if (arg == "--joint-control") {
+            options.jointControl = true;
         } else if (arg == "--plugin") {
             const char* library = value();
             if (library == nullptr) {

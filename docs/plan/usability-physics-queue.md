@@ -9,7 +9,7 @@ electrical schematics in the run file (later).
 | # | Item | State |
 |---|---|---|
 | 1 | **One run file.** `lagrange run.yaml`: robot (URDF or USD), optional world, and what to simulate. Robot-only needs no domain list; a robot or world on the command line needs no file at all | done |
-| 2 | **Any robot, joint by joint.** Low-level joint commands (position, velocity, effort) over ROS for any robot, with no controller or demo driver needed | todo |
+| 2 | **Any robot, joint by joint.** Low-level joint commands (position, velocity, effort) over ROS for any robot, with no controller or demo driver needed | done |
 | 3 | **Runtime site parameters.** Gravity, wind speed, temperature and the like, easy to change while running (viewer, command line, ROS) | todo |
 | 4 | **Lidar intensity from materials.** Reflectivity, incidence angle and range, with parameters users can set | todo |
 | 5 | **Water.** Water in a world: drawn, seen by sensors as water is (a lidar's return off water), and floating or dragging what enters it | todo |

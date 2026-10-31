@@ -94,6 +94,9 @@ struct ServerOptions {
     /// --ros-topics FILE.yaml: signals published on ROS topics and topics written into signals
     /// (RFC 0008 §4; ros2::readTopicMaps); empty = none.
     std::string rosTopicsPath;
+    /// --joint-control: every moving joint of the robot is driven on its own, from
+    /// /joint_commands (sensor_msgs/JointState) or commandJoint, with no robot controller.
+    bool jointControl{false};
     std::string profileSchemaPath;  // profiles/schema.json, sent to viewers; empty = none
     /// What a profile's `stage` must say to apply to this run; empty: robotPath. `lagrange run`
     /// sets it to the stage as the profile writes it.
@@ -190,6 +193,9 @@ public:
     /// file name, made unique.
     Expected<std::string, Status> spawnRobot(const std::string& path, const std::string& name,
                                              const Pose& spawn);
+    /// With joint control: drive a joint by "position" (rad, m), "velocity" (rad/s, m/s) or
+    /// "effort" (N·m, N). False for another mode.
+    bool commandJoint(const std::string& joint, const std::string& mode, double value);
     /// After load(): takes a robot out of the run by its entity name, rebuilt likewise.
     Status removeRobot(const std::string& name);
     /// After load(): the simulated time.
