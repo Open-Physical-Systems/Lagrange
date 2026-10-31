@@ -1507,12 +1507,12 @@ applied and Collada's `<up_axis>` ignored (the geometry keeps its authored axes,
 expect). `package://`, `file://` and relative references resolve through the ament index. The
 URDF loader uses it for visual meshes: one prim per material, coloured by the URDF material when
 there is one and by the file's otherwise. Textures are not imported yet (a note says so), and
-collision meshes still wait for the convex decomposition of roadmap 0.2-B8.
+collision meshes collide as their convex hull (concave ones on fixed links are skipped; `collision_bake` splits them).
 
 **Status in v0.2.** `lagrange_importers` reads SDFormat and MJCF into the same world tables and
 scene as the URDF loader, and `lagrange_import` writes any of the three as USD
 (`io/importers/include/lagrange/importers/Importers.hpp` lists the rules). Not yet: mesh visuals in SDFormat
-and MJCF (the URDF loader reads them through `lagrange_meshes`), mesh colliders (collision bake), ellipsoid colliders, cameras and other
+and MJCF (the URDF loader reads them through `lagrange_meshes`), cameras and other
 sensors without a Lagrange model, joints between the models of an SDFormat world, and MJCF
 tendons, flex and servo actuators (their joints take torque commands instead). Each is listed in
 the import report. MJCF has no lidar; lidars on an MJCF robot come from an overlay (0.2-G2).

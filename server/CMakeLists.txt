@@ -207,6 +207,7 @@ if(BUILD_TESTING)
         test/test_joint_control.cpp
         test/test_site.cpp
         test/test_water.cpp
+        test/test_importer_audit.cpp
         test/test_lidar_motion.cpp
         test/test_lidar_materials.cpp
         test/test_humans_run.cpp

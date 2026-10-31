@@ -398,13 +398,43 @@ private:
                 return false;
             }
             case GeomType::Ellipsoid:
-                note(m_, "ellipsoid colliders are not supported yet; the one on link '" +
-                             link.name + "' is skipped");
+                m_.world.addHullCollider(body, ellipsoidHull(geom.size), pose, collision.friction);
+                return true;
+            case GeomType::Mesh: {
+                if (geom.mesh == kNoIndex || geom.mesh >= d_.meshes.size()) {
+                    return false;
+                }
+                const TriMesh& mesh = d_.meshes[geom.mesh];
+                std::optional<ConvexHull> hull = convexHullOf(mesh, geom.size);
+                if (!hull) {
+                    note(m_, "the collision mesh of link '" + link.name +
+                                 "' is flat: it has no volume and is skipped");
+                    return false;
+                }
+                if (hullFill(mesh, geom.size, *hull) < kConcaveFill) {
+                    if (isStatic) {
+                        note(m_, "the collision mesh of link '" + link.name +
+                                     "' is concave and its hull would block what is inside it: it "
+                                     "is skipped; split it with collision_bake");
+                        return false;
+                    }
+                    note(m_, "the collision mesh of link '" + link.name +
+                                 "' is concave: it collides as its convex hull; split it with "
+                                 "collision_bake");
+                }
+                m_.world.addHullCollider(body, std::move(*hull), pose, collision.friction);
+                return true;
+            }
+            case GeomType::HeightField: {
+                if (!isStatic || geom.mesh >= d_.heightFields.size()) {
+                    note(m_, "a height field on the moving link '" + link.name + "' is skipped");
+                    return false;
+                }
+                m_.world.addHeightFieldCollider(d_.heightFields[geom.mesh],
+                                                compose(m_.bodyRestPose[body.index], pose),
+                                                collision.friction);
                 return false;
-            case GeomType::Mesh:
-                note(m_, "collision meshes are not used yet (link '" + link.name +
-                             "'): convex decomposition comes with the collision bake tool");
-                return false;
+            }
         }
         return false;
     }
@@ -465,6 +495,8 @@ private:
                 pose = compose(pose, Pose{{0.0, 0.0, -kPlaneThicknessM / 2.0}, {1, 0, 0, 0}});
                 break;
             }
+            case GeomType::HeightField:  // drawn as the mesh the reader made of it
+                return;
             case GeomType::Mesh:
                 if (geom.mesh == kNoIndex || geom.mesh >= d_.meshes.size()) {
                     note(m_,
