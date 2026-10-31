@@ -8,6 +8,9 @@ and `test_schemas.py` checks it.
 
 ## Unreleased
 
+- **`LidarAPI_1`**: `sensor:lidar:motionDistortion` (bool, default true), as `formats.md` already listed it.
+  Addition, nothing to migrate.
+
 - **Water library**: `WaterAPI_1`, a box of still water (size, depth, density, drag, reflectivity). New
   library, nothing to migrate.
 

@@ -250,6 +250,11 @@ private:
             real("sensor:lidar:rangeMin", get("min_range", 0.1));
             real("sensor:lidar:rangeMax", get("max_range", 30.0));
             real("sensor:lidar:rangeNoiseStd", get("range_noise", 0.0));
+            if (get("motion_distortion", 1.0) == 0.0) {
+                prim.CreateAttribute(TfToken("sensor:lidar:motionDistortion"),
+                                     SdfValueTypeNames->Bool)
+                    .Set(false);
+            }
         } else if (sensors.type[s] == SensorType::Camera) {
             prim.ApplyAPI(TfToken("CameraSensorAPI_1"));
             const double width = get("width", 640.0);

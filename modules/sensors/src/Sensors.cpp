@@ -392,6 +392,7 @@ public:
         minRange_ = setting(sensors, sensor_, "min_range", 0.1);
         maxRange_ = setting(sensors, sensor_, "max_range", 30.0);
         noise_ = setting(sensors, sensor_, "range_noise", 0.0);
+        distort_ = setting(sensors, sensor_, "motion_distortion", 1.0) != 0.0 && !groundTruth_;
         if (samples_ == 0) {
             return Status::error(StatusCode::InvalidConfig, "lidar " + name_ + " has no samples");
         }
@@ -541,6 +542,7 @@ public:
             return {};
         }
         const Pose sensor = compose(bodyPose(bus, body_), mount_);
+        sweep(sensor);
         // Place every shape once per scan, not once per beam.
         for (std::size_t k = 0; k < shapes_.size(); ++k) {
             const Shape& shape = shapes_[k];
@@ -554,7 +556,7 @@ public:
                 hitShape_[i] = hits_[i].shape == gpu::kNoShape ? kNoShapeHit : hits_[i].shape;
             }
         } else {
-            castOnCpu(context, sensor);
+            castOnCpu(context);
         }
         // What each hit returns, from its surface; a surface too faint for the lidar drops out.
         tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
@@ -563,10 +565,11 @@ public:
                 return;
             }
             const Shape& shape = shapes_[hitShape_[i]];
-            const Vec3 dir = rotate(sensor.orientation, layout_.direction(i));
-            const Vec3 at{sensor.position[0] + dir[0] * nearest_[i],
-                          sensor.position[1] + dir[1] * nearest_[i],
-                          sensor.position[2] + dir[2] * nearest_[i]};
+            const Pose& from = columnPose_[i % layout_.horizontal];
+            const Vec3 dir = rotate(from.orientation, layout_.direction(i));
+            const Vec3 at{from.position[0] + dir[0] * nearest_[i],
+                          from.position[1] + dir[1] * nearest_[i],
+                          from.position[2] + dir[2] * nearest_[i]};
             const Vec3 n = surfaceNormal(shape.type, shape.size, placed_[hitShape_[i]], at,
                                          shape.hull, shape.field);
             const double cosine = -(dir[0] * n[0] + dir[1] * n[1] + dir[2] * n[2]);
@@ -595,10 +598,12 @@ public:
                 const double u3 = rng.uniform();
                 double depth = 0.0;
                 if (field && std::isfinite(nearest_[i])) {
-                    const Vec3 dir = rotate(sensor.orientation, layout_.direction(i));
+                    const Pose& from = columnPose_[i % layout_.horizontal];
+                    const Vec3 dir = rotate(from.orientation, layout_.direction(i));
                     const double to = std::min(nearest_[i], maxRange_);
+                    const Vec3& o = from.position;
                     depth = field->integrate(
-                        at, {at[0] + dir[0] * to, at[1] + dir[1] * to, at[2] + dir[2] * to});
+                        o, {o[0] + dir[0] * to, o[1] + dir[1] * to, o[2] + dir[2] * to});
                 }
                 nearest_[i] =
                     weatherRange(nearest_[i], minRange_, maxRange_, w, clutter_, u1, u2, u3, depth);
@@ -623,10 +628,77 @@ public:
         }
         bus.writeN(ranges_, buffer_);
         bus.writeN(intensities_, intensity_);
+        scanEnd_ = sensor;
+        hasScanEnd_ = true;
         return {};
     }
 
+    // Where the last scan ended is where this one starts.
+    Status saveState(StateWriter& writer) const override {
+        writer.put(hasScanEnd_);
+        writer.put(scanEnd_);
+        return {};
+    }
+    Status restoreState(StateReader& reader) override {
+        if (!reader.get(hasScanEnd_) || !reader.get(scanEnd_)) {
+            return Status::error(StatusCode::InvalidConfig, "lidar " + name_ + ": bad state");
+        }
+        return {};
+    }
+    void shiftOrigin(const std::array<double, 3>& shift) override {
+        for (std::size_t i = 0; i < 3; ++i) {
+            scanEnd_.position.at(i) -= shift.at(i);
+        }
+    }
+
 private:
+    /// Where the sensor is as each column fires: a rotating lidar's columns fire one after another
+    /// through the scan, the last at the scan's end. Between the last scan's end and this one's the
+    /// sensor is taken to move evenly. Only the sensor moves: everything else stays where it is at
+    /// the scan's end.
+    void sweep(const Pose& sensor) {
+        const std::uint32_t columns = layout_.horizontal;
+        columnPose_.resize(columns);
+        if (!distort_ || !hasScanEnd_) {
+            std::fill(columnPose_.begin(), columnPose_.end(), sensor);
+            moving_ = false;
+            return;
+        }
+        std::array<double, 4> to = sensor.orientation;
+        double dot = 0.0;
+        for (std::size_t k = 0; k < 4; ++k) {
+            dot += scanEnd_.orientation.at(k) * to.at(k);
+        }
+        if (dot < 0.0) {  // the short way round
+            dot = -dot;
+            for (double& v : to) {
+                v = -v;
+            }
+        }
+        const double angle = std::acos(std::min(dot, 1.0));
+        moving_ = angle != 0.0 || scanEnd_.position != sensor.position;
+        for (std::uint32_t c = 0; c < columns; ++c) {
+            const double f = static_cast<double>(c + 1) / columns;
+            Pose& pose = columnPose_[c];
+            for (std::size_t k = 0; k < 3; ++k) {
+                pose.position.at(k) =
+                    scanEnd_.position.at(k) + (sensor.position.at(k) - scanEnd_.position.at(k)) * f;
+            }
+            // Slerp; nearly equal, the straight line (its sine would divide by nothing).
+            const double a = angle > 1e-9 ? std::sin((1.0 - f) * angle) / std::sin(angle) : 1.0 - f;
+            const double b = angle > 1e-9 ? std::sin(f * angle) / std::sin(angle) : f;
+            double norm = 0.0;
+            for (std::size_t k = 0; k < 4; ++k) {
+                pose.orientation.at(k) = a * scanEnd_.orientation.at(k) + b * to.at(k);
+                norm += pose.orientation.at(k) * pose.orientation.at(k);
+            }
+            norm = std::sqrt(norm);
+            for (double& v : pose.orientation) {
+                v /= norm;
+            }
+        }
+    }
+
     struct Shape {
         ShapeType type;
         std::array<double, 3> size;
@@ -639,15 +711,16 @@ private:
 
     /// Tier 0: exact casts in double, culled by Embree (ShapeCaster), beams in parallel. Each
     /// beam is independent, so the result does not depend on the threads.
-    void castOnCpu(const StepContext& context, const Pose& sensor) {
+    void castOnCpu(const StepContext& context) {
         for (std::size_t k = 0; k < shapes_.size(); ++k) {
             casterShapes_[k] = {shapes_[k].type, shapes_[k].size, placed_[k], shapes_[k].hull,
                                 shapes_[k].field};
         }
         caster_.update(casterShapes_);
         tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
-            const Vec3 dir = rotate(sensor.orientation, layout_.direction(i));
-            Vec3 from = sensor.position;
+            const Pose& start = columnPose_[i % layout_.horizontal];
+            const Vec3 dir = rotate(start.orientation, layout_.direction(i));
+            Vec3 from = start.position;
             double travelled = 0.0;
             nearest_[i] = std::numeric_limits<double>::infinity();
             hitShape_[i] = kNoShapeHit;
@@ -665,9 +738,9 @@ private:
                     if (rng.uniform() < m->transmission) {
                         // Past both of its faces; a thick pane's far face comes next.
                         travelled += hit.distance + kPastSurfaceM;
-                        from = {sensor.position[0] + dir[0] * travelled,
-                                sensor.position[1] + dir[1] * travelled,
-                                sensor.position[2] + dir[2] * travelled};
+                        from = {start.position[0] + dir[0] * travelled,
+                                start.position[1] + dir[1] * travelled,
+                                start.position[2] + dir[2] * travelled};
                         continue;
                     }
                 }
@@ -691,6 +764,27 @@ private:
             out.orientation = placed_[k].orientation;
             out.faces = hullFaces_[k];
         }
+        // The beams of a moving sensor, in the frame of its pose at the scan's end.
+        if (moving_ || beamsMoved_) {
+            const std::array<double, 4> back{sensor.orientation[0], -sensor.orientation[1],
+                                             -sensor.orientation[2], -sensor.orientation[3]};
+            beamDirections_.resize(samples_);
+            beamOrigins_.resize(samples_);
+            for (std::uint32_t i = 0; i < samples_; ++i) {
+                const Pose& from = columnPose_[i % layout_.horizontal];
+                const Vec3 world = rotate(from.orientation, layout_.direction(i));
+                const Vec3 d = rotate(back, world);
+                const Vec3 o = rotate(back, {from.position[0] - sensor.position[0],
+                                             from.position[1] - sensor.position[1],
+                                             from.position[2] - sensor.position[2]});
+                beamDirections_[i] = {static_cast<float>(d[0]), static_cast<float>(d[1]),
+                                      static_cast<float>(d[2])};
+                beamOrigins_[i] = {static_cast<float>(o[0]), static_cast<float>(o[1]),
+                                   static_cast<float>(o[2])};
+            }
+            scan_->setBeams(beamDirections_, beamOrigins_);
+            beamsMoved_ = moving_;
+        }
         scan_->cast(castShapes_, sensor.orientation, hits_);
     }
 
@@ -707,6 +801,13 @@ private:
     static constexpr std::uint32_t kNoShapeHit = 0xFFFF'FFFFU;
     static constexpr int kMaxPasses = 6;
     static constexpr double kPastSurfaceM = 1e-4;
+    bool distort_{true};
+    bool hasScanEnd_{false};
+    bool moving_{false};      // this scan's sensor moved
+    bool beamsMoved_{false};  // the GPU's beams are not the sensor's at rest
+    Pose scanEnd_;
+    std::vector<Pose> columnPose_;
+    std::vector<std::array<float, 3>> beamDirections_, beamOrigins_;
     SignalId intensities_;
     std::vector<SurfaceMaterial> waterMaterials_;  // reserved before shapes_ point into it
     std::vector<std::uint32_t> hitShape_;

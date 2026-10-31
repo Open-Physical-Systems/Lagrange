@@ -712,6 +712,9 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
                     childNumber(ray, {"scan", "vertical", "min_angle"}, 0.0);
                 settings["vertical_max_angle"] =
                     childNumber(ray, {"scan", "vertical", "max_angle"}, 0.0);
+                if (childNumber(ray, {"motion_distortion"}, 1.0) == 0.0) {
+                    settings["motion_distortion"] = 0.0;
+                }
                 typeName = "Lidar";
             } else if (type == "camera" || type == "depth" || type == "depth_camera" ||
                        type == "rgbd_camera") {

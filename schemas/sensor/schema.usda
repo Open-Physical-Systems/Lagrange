@@ -81,6 +81,9 @@ class "LidarAPI_1" (
         lagrangeUnit = "m"
         doc = "Standard deviation of Gaussian range noise."
     )
+    bool sensor:lidar:motionDistortion = true (
+        doc = "Each column fires from where the sensor is at its moment in the scan."
+    )
     double sensor:lidar:wavelength = 9.05e-7 (
         lagrangeUnit = "m"
     )

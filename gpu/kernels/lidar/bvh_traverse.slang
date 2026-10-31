@@ -55,7 +55,7 @@ struct Params {
 
 [[vk::binding(0, 0)]] StructuredBuffer<Shape> shapes;
 [[vk::binding(1, 0)]] StructuredBuffer<Node> nodes;
-[[vk::binding(2, 0)]] StructuredBuffer<float4> directions;  // per beam, sensor frame
+[[vk::binding(2, 0)]] StructuredBuffer<float4> directions;  // per beam, sensor frame: direction, start
 [[vk::binding(3, 0)]] RWStructuredBuffer<Hit> hits;
 [[vk::binding(4, 0)]] StructuredBuffer<float4> faces;  // hull face planes, shape frame
 [[vk::push_constant]] ConstantBuffer<Params> params;
@@ -197,9 +197,10 @@ float convexHull(float3 o, float3 d, uint first, uint count) {
     return exit > 0.0 ? exit : kNoHit;
 }
 
-// The ray leaves the sensor along `local` (the beam in the sensor frame).
-float intersect(Shape s, float3 local) {
-    const float3 o = s.origin;
+// The ray leaves `start` along `local` (the beam, both in the sensor frame).
+float intersect(Shape s, float3 local, float3 start) {
+    const float3 o = s.origin + float3(dot(s.row0.xyz, start), dot(s.row1.xyz, start),
+                                       dot(s.row2.xyz, start));
     const float3 d =
         float3(dot(s.row0.xyz, local), dot(s.row1.xyz, local), dot(s.row2.xyz, local));
     switch (s.type) {
@@ -229,9 +230,9 @@ float intersect(Shape s, float3 local) {
 }
 
 // Entry distance of the ray into a node's box, or kNoHit if it misses or starts beyond `limit`.
-float enterBox(Node n, float3 inverse, float limit) {
-    const float3 t0 = n.lo * inverse;
-    const float3 t1 = n.hi * inverse;
+float enterBox(Node n, float3 from, float3 inverse, float limit) {
+    const float3 t0 = (n.lo - from) * inverse;
+    const float3 t1 = (n.hi - from) * inverse;
     const float3 near = min(t0, t1);
     const float3 far = max(t0, t1);
     const float enter = max(max(near.x, near.y), max(near.z, 0.0));
@@ -246,14 +247,17 @@ void castRays(uint3 id: SV_DispatchThreadID) {
     if (ray >= params.rays) {
         return;
     }
-    const float3 local = directions[ray].xyz;
+    const float3 local = directions[2 * ray].xyz;
+    const float3 start = directions[2 * ray + 1].xyz;
+    const float3 from = float3(dot(params.rot0.xyz, start), dot(params.rot1.xyz, start),
+                               dot(params.rot2.xyz, start));
     const float3 dir = float3(dot(params.rot0.xyz, local), dot(params.rot1.xyz, local),
                               dot(params.rot2.xyz, local));
     Hit hit;
     hit.range = kNoHit;
     hit.shape = kNone;
     for (uint p = 0; p < params.planes; ++p) {
-        const float t = intersect(shapes[p], local);
+        const float t = intersect(shapes[p], local, start);
         if (t < hit.range) {
             hit.range = t;
             hit.shape = p;
@@ -269,12 +273,12 @@ void castRays(uint3 id: SV_DispatchThreadID) {
         stack[top++] = 0;
         while (top > 0) {
             const Node node = nodes[stack[--top]];
-            if (enterBox(node, inverse, hit.range) == kNoHit) {
+            if (enterBox(node, from, inverse, hit.range) == kNoHit) {
                 continue;
             }
             if (node.left < 0) {
                 const uint s = uint(-1 - node.left);
-                const float t = intersect(shapes[s], local);
+                const float t = intersect(shapes[s], local, start);
                 if (t < hit.range) {
                     hit.range = t;
                     hit.shape = s;

@@ -219,6 +219,7 @@ struct Bridge::Impl {
         SignalId ranges, intensities;
         LidarLayout layout;
         double minRange{0.0}, maxRange{0.0}, rateHz{10.0};
+        double sweep{0.0};  // s from the first column's firing to the scan's end + one column
         SimTime sent{-1};
         rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr publisher;         // 2D
         rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr cloudPublisher;  // 3D
@@ -282,15 +283,23 @@ struct Bridge::Impl {
 
     std::map<std::string, TopicCounter> counters;  // by topic, the bridge's own
 
-    /// A 3D lidar's scan as sensor_msgs/PointCloud2: x, y, z, intensity (float32) and ring
-    /// (uint16), in the sensor frame, organised as rings x columns with NaN where no return.
+    /// When a scan's first column fired: the stamp of a swept scan, as LaserScan has it.
+    static SimTime firstBeam(const Lidar& lidar) {
+        const double before =
+            lidar.sweep * (lidar.layout.horizontal - 1.0) / lidar.layout.horizontal;
+        return SimTime{std::max<std::int64_t>(lidar.sent.ns - std::llround(before * 1e9), 0)};
+    }
+
+    /// A 3D lidar's scan as sensor_msgs/PointCloud2: x, y, z, intensity (float32), ring (uint16)
+    /// and time (float32, s after the stamp, when that column fired), in the sensor frame,
+    /// organised as rings x columns with NaN where no return.
     /// In Lyrical, PointCloud2::data is a rosidl::Buffer with the CPU backend; a CUDA backend
     /// can replace it without touching this code: docs/plan/spikes/0.2-F7-rosidl-buffer.md.
     void publishCloud(const Lidar& lidar, std::span<const double> ranges,
                       std::span<const double> intensities) {
         using sensor_msgs::msg::PointField;
         sensor_msgs::msg::PointCloud2 cloud;
-        cloud.header.stamp = stampOf(lidar.sent);
+        cloud.header.stamp = stampOf(firstBeam(lidar));
         cloud.header.frame_id = lidar.frame;
         cloud.height = lidar.layout.vertical;
         cloud.width = lidar.layout.horizontal;
@@ -307,7 +316,8 @@ struct Bridge::Impl {
         field("z", 8, PointField::FLOAT32);
         field("intensity", 12, PointField::FLOAT32);
         field("ring", 16, PointField::UINT16);
-        constexpr std::uint32_t kStride = 20;  // 18 bytes of fields, padded to 4
+        field("time", 20, PointField::FLOAT32);
+        constexpr std::uint32_t kStride = 24;
         cloud.point_step = kStride;
         cloud.row_step = kStride * cloud.width;
         cloud.is_dense = false;
@@ -328,6 +338,9 @@ struct Bridge::Impl {
             std::uint8_t* point = cloud.data.data() + static_cast<std::size_t>(i) * kStride;
             std::memcpy(point, values.data(), sizeof(values));
             std::memcpy(point + 16, &ring, sizeof(ring));
+            const auto fired = static_cast<float>(lidar.sweep * (i % lidar.layout.horizontal) /
+                                                  lidar.layout.horizontal);
+            std::memcpy(point + 20, &fired, sizeof(fired));
         }
         counters[lidar.topic].add(cloud.data.size() + 128);
         deliver(lidar.topic, lidar.cloudPublisher, std::move(cloud));
@@ -639,6 +652,7 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             lidar.minRange = get("min_range", 0.1);
             lidar.maxRange = get("max_range", 30.0);
             lidar.rateHz = sensors.rateHz[i];
+            lidar.sweep = get("motion_distortion", 1.0) != 0.0 ? 1.0 / lidar.rateHz : 0.0;
             // Reuse the publisher across attach() calls: a new one would drop subscribers.
             for (const Impl::Lidar& old : s.lidars) {
                 if (old.topic == lidar.topic) {
@@ -863,8 +877,9 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
             continue;
         }
         sensor_msgs::msg::LaserScan scan;
-        scan.header.stamp = stampOf(lidar.sent);
+        scan.header.stamp = stampOf(Impl::firstBeam(lidar));
         scan.header.frame_id = lidar.frame;
+        scan.time_increment = static_cast<float>(lidar.sweep / lidar.layout.horizontal);
         scan.angle_min = static_cast<float>(lidar.layout.minAngle);
         scan.angle_max = static_cast<float>(lidar.layout.maxAngle);
         scan.angle_increment =

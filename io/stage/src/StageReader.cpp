@@ -835,6 +835,11 @@ private:
                         {"min_range", *rangeMin},
                         {"max_range", *rangeMax},
                         {"range_noise", real("sensor:lidar:rangeNoiseStd").value_or(0.0)}};
+            if (const std::optional<bool> distortion =
+                    valueOf<bool>(prim.GetAttribute(TfToken("sensor:lidar:motionDistortion")));
+                distortion && !*distortion) {
+                settings["motion_distortion"] = 0.0;
+            }
         } else if (prim.HasAPI(TfToken("GnssAPI_1"))) {
             type = SensorType::Gnss;
             scene.typeName = "Gnss";
