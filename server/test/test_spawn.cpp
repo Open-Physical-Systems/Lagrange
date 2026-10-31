@@ -102,5 +102,30 @@ TEST(Spawn, OthersKeepTheirPosesAcrossSpawnAndDelete) {
     ASSERT_TRUE(server.stepUntil(SimTime{4'500'000'000}).ok());
 }
 
+// A person spawned into an empty run is not the robot (RFC 0009 §8): the robot spawned next is,
+// unprefixed, and is the first body; the person stands where asked and can be deleted.
+TEST(Spawn, APersonIsNeverTheRobot) {
+    Server server(emptyRun());
+    ASSERT_TRUE(server.load().ok());
+    const auto person = server.spawnRobot(LAGRANGE_TEST_ADULT_USDA, "ana", at(3.0, 0.0));
+    ASSERT_TRUE(person) << person.error().message;
+    EXPECT_EQ(*person, "/ana");
+    ASSERT_TRUE(hasBody(server, "human_ana_pelvis"));
+    ASSERT_TRUE(server.stepUntil(SimTime{500'000'000}).ok());
+    const std::vector<double> pelvis = server.read("body/human_ana_pelvis/pose");
+    ASSERT_EQ(pelvis.size(), 7U);
+    EXPECT_NEAR(pelvis[0], 3.0, 1e-9);
+    EXPECT_NEAR(pelvis[2], 0.53 * 1.75, 1e-9) << "standing, not falling";
+
+    const auto robot = server.spawnRobot(LAGRANGE_TEST_AMR_URDF, "", at(0.0, 0.0));
+    ASSERT_TRUE(robot) << robot.error().message;
+    EXPECT_EQ(server.world().bodies.names.front(), "base_link") << "the robot comes first";
+    EXPECT_NEAR(server.read("body/human_ana_pelvis/pose").at(0), 3.0, 1e-9);
+
+    ASSERT_TRUE(server.removeRobot("/ana").ok());
+    EXPECT_FALSE(hasBody(server, "human_ana_pelvis"));
+    EXPECT_TRUE(hasBody(server, "base_link"));
+}
+
 }  // namespace
 }  // namespace lagrange::server

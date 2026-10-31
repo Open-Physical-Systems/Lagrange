@@ -618,6 +618,7 @@ private:
                 continue;
             }
             ScenePrim scene;
+            bool addedSensor = false;
             scene.name = prim.GetName().GetString();
             scene.path = prim.GetPath().GetString();
             scene.parent = parent == primIndex.end() ? kNoIndex : parent->second;
@@ -670,9 +671,11 @@ private:
                                static_cast<float>(placement.scale[2])};
                 scene.offset = compose(scene.offset, turn);
             } else if (prim.HasAPI(TfToken("SensorAPI_1"))) {
+                const std::size_t before = m_.world.sensors.names.size();
                 if (auto status = addSensor(prim, body, scene); !status) {
                     return status;
                 }
+                addedSensor = m_.world.sensors.names.size() > before;
             } else {
                 scene.typeName = "Xform";
             }
@@ -682,9 +685,7 @@ private:
             if (bodyIndex_.contains(prim.GetPath())) {
                 m_.bodyPrim[bodyIndex_.at(prim.GetPath())] = index;
             }
-            if (m_.scene.prims[index].typeName == "Lidar" ||
-                m_.scene.prims[index].typeName == "Imu" ||
-                m_.scene.prims[index].typeName == "Camera") {
+            if (addedSensor) {  // one entry per sensor of every kind, in the table's order
                 m_.sensorPrim.push_back(index);
             }
         }

@@ -19,6 +19,7 @@ find_package(lagrange_emi REQUIRED)
 find_package(lagrange_comms REQUIRED)
 find_package(lagrange_vehicle_dynamics REQUIRED)
 find_package(lagrange_traffic REQUIRED)
+find_package(lagrange_humans REQUIRED)
 find_package(lagrange_opendrive REQUIRED)
 find_package(lagrange_openscenario REQUIRED)
 find_package(lagrange_mavlink REQUIRED)
@@ -93,6 +94,7 @@ target_link_libraries(
         lagrange_comms::lagrange_comms
         lagrange_vehicle_dynamics::lagrange_vehicle_dynamics
         lagrange_traffic::lagrange_traffic
+        lagrange_humans::lagrange_humans
         lagrange_opendrive::lagrange_opendrive
         lagrange_openscenario::lagrange_openscenario
         lagrange_mavlink::lagrange_mavlink
@@ -203,7 +205,7 @@ if(BUILD_TESTING)
         test/test_multicopter.cpp
         test/test_toggles.cpp
         test/test_usd_assets.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/world"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/world"
         TIMEOUT 120
     )
     target_link_libraries(
@@ -221,6 +223,7 @@ if(BUILD_TESTING)
     target_compile_definitions(
         test_server
         PRIVATE
+            LAGRANGE_TEST_ADULT_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/humans/adult.usda"
             LAGRANGE_TEST_AMR_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.urdf"
             LAGRANGE_TEST_AMR_FMS_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_fms/amr_fms.urdf"
             LAGRANGE_TEST_SCHEMA="${CMAKE_CURRENT_SOURCE_DIR}/../profiles/schema.json"
@@ -314,7 +317,7 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_arm
         test/test_arm.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/world"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/world"
         TIMEOUT 180
     )
     target_link_libraries(

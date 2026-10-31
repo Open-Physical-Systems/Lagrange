@@ -5,6 +5,7 @@
 #include "lagrange/electrical/Network.hpp"
 #include "lagrange/emi/Emi.hpp"
 #include "lagrange/fields/Field.hpp"
+#include "lagrange/humans/Body.hpp"
 #include "lagrange/importers/Importers.hpp"
 #include "lagrange/mavlink/ArduPilotJson.hpp"
 #include "lagrange/mavlink/Px4Lockstep.hpp"
@@ -3219,6 +3220,7 @@ struct Server::Impl {
         Pose spawn;             // world ENU, as --spawn
         bool primary{false};    // spawned into a run without a robot: the one ROS drives
         bool temporary{false};  // `path` was written from a resource string: removed with it
+        bool human{false};      // a file of people (RFC 0009 §8): never the robot
     };
     std::vector<Spawned> spawned;
     std::optional<Model> scenarioRoads;  // the scenario's road network, when it is the world
@@ -3300,7 +3302,7 @@ struct Server::Impl {
             }
         }
         for (const Spawned& passive : spawned) {
-            if (passive.primary) {
+            if (passive.primary || passive.human) {
                 continue;
             }
             auto other = loadModel(passive.path, {.spawn = passive.spawn});
@@ -3349,6 +3351,26 @@ struct Server::Impl {
                         " pedestrians on the road lanes (seed " +
                         std::to_string(options.trafficSeed) + ")");
             }
+        }
+        // People last, so that the first bodies stay the robot's (RFC 0009 §8).
+        std::vector<humans::Spec> people = humans::takeSpecs(model);
+        for (const Spawned& file : spawned) {
+            if (!file.human) {
+                continue;
+            }
+            auto loaded = loadModel(file.path);
+            if (!loaded) {
+                return invalid(file.name + ": " + loaded.error());
+            }
+            std::vector<humans::Spec> specs = humans::takeSpecs(*loaded);
+            for (std::size_t i = 0; i < specs.size(); ++i) {
+                specs[i].name = i == 0 ? file.name : file.name + "_" + std::to_string(i + 1);
+                specs[i].start = compose(file.spawn, specs[i].start);
+                people.push_back(std::move(specs[i]));
+            }
+        }
+        for (humans::Spec& person : people) {
+            humans::addHuman(model, std::move(person));
         }
         return model;
     }
@@ -3554,8 +3576,13 @@ struct Server::Impl {
                 name = base + "_" + std::to_string(n);
             }
         }
-        const bool primary = primaryPath().empty();
-        spawned.push_back({name, path, at, primary, temporary});
+        // A file of people is not the robot, however empty the run (RFC 0009 §8).
+        bool human = false;
+        if (auto file = loadModel(path); file && file->world.bodies.names.empty()) {
+            human = !humans::takeSpecs(*file).empty();
+        }
+        const bool primary = !human && primaryPath().empty();
+        spawned.push_back({name, path, at, primary, temporary, human});
         if (Status status = recompose([this] {
                 if (spawned.back().temporary) {
                     std::filesystem::remove(spawned.back().path);
@@ -3567,7 +3594,9 @@ struct Server::Impl {
         }
         log(v1::LOG_LEVEL_INFO, "stage",
             "spawned " + name + " from " + path +
-                (primary ? " (the robot: ROS drives it)" : " (passive: nothing drives it)"));
+                (human     ? " (a person)"
+                 : primary ? " (the robot: ROS drives it)"
+                           : " (passive: nothing drives it)"));
         return {{}, "/" + name};
     }
 
@@ -4834,6 +4863,15 @@ public:
             }
             ros2::EntityMotion motion;
             const ScenePrim& prim = prims[p];
+            if (isPerson(prim.name)) {  // where the pelvis is
+                const SignalId id =
+                    s_.scheduler->bus().find("body/" + humans::segmentBody(prim.name, 0) + "/pose");
+                if (id.valid()) {
+                    const std::span<const double> v = s_.scheduler->bus().readN(id);
+                    motion.pose = Pose{{v[0], v[1], v[2]}, {v[3], v[4], v[5], v[6]}};
+                }
+                return motion;
+            }
             if (prim.body == kNoIndex) {
                 motion.pose = prim.offset;  // fixed: the offset is its world pose
                 return motion;
@@ -4869,11 +4907,24 @@ public:
     }
 
 private:
+    /// Whether a top prim is a person: HumanAPI_1 sits on a world prim of its name.
+    [[nodiscard]] bool isPerson(const std::string& name) const {
+        const World& world = s_.robot.world;
+        return std::ranges::any_of(world.schemaInstances, [&](const SchemaInstance& instance) {
+            return instance.schema == "HumanAPI_1" &&
+                   world.prims.instanceNames.at(instance.prim.index) == name;
+        });
+    }
+
     /// The entity prim `p` stands for, if it is one.
     std::optional<ros2::EntityDescription> describe(std::size_t p) const {
         const std::vector<ScenePrim>& prims = s_.robot.scene.prims;
         const ScenePrim& prim = prims[p];
         if (prim.parent == kNoIndex) {
+            if (isPerson(prim.name)) {
+                return ros2::EntityDescription{prim.path, ros2::EntityCategory::Human,
+                                               "person " + prim.name};
+            }
             if (prim.body != kNoIndex) {
                 const bool driven = !s_.robot.actuatedJoints.empty();
                 return ros2::EntityDescription{

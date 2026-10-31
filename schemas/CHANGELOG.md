@@ -8,6 +8,9 @@ and `test_schemas.py` checks it.
 
 ## Unreleased
 
+- **Human library** (RFC 0009): `HumanAPI_1`, a person who walks (height, speed, behaviour,
+  waypoints). New library, nothing to migrate.
+
 - **`CustomSensorAPI_1`** in the sensor library (RFC 0008 §3): a sensor a plugin implements, by
   its `sensor:custom:kind`, with free `sensor:custom:param:<name>` attributes. A new schema under
   the 1.x rules (RFC 0007); nothing in `frozen_1_0.json` changes.
