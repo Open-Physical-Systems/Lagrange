@@ -7,6 +7,10 @@ Iris Xe, about 12 minutes for all).
 
 | Video | Shows | Command in the clip |
 |---|---|---|
+| [realistic_water.mp4](realistic_water.mp4) | The sea: waves, sun glitter, reflections, foam round a floating crate | `--water` |
+| [realistic_water_wind.mp4](realistic_water_wind.mp4) | The same sea getting rough as the wind rises | `lagrange set wind_speed=14` |
+| [realistic_materials.mp4](realistic_materials.mp4) | Chrome to rubber, in sun and shadow, with a pane of glass | `<visual_material preset="chrome"/>` |
+| [realistic_warehouse.mp4](realistic_warehouse.mp4) | A robot in the sample warehouse | `lagrange ROBOT WORLD` |
 | [gravity.mp4](gravity.mp4) | A pendulum under Earth, Moon and Jupiter gravity, changed while it swings | `lagrange set gravity=1.62` |
 | [wind.mp4](wind.mp4) | A hovering quadcopter leaning into 6 and 14 m/s of wind, and calm again | `lagrange set wind_speed=6 wind_from=270` |
 | [plugin.mp4](plugin.mp4) | A time-of-flight sensor from a shared library, its range on the scope | `--plugin lagrange_tof` |

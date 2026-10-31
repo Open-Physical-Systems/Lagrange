@@ -1,3 +1,4 @@
+#include "RealisticPass.hpp"
 #include "lagrange/gpu/Device.hpp"
 #include "lagrange/gpu/Raster.hpp"
 #include "lagrange/viewer/SceneRenderer.hpp"
@@ -137,6 +138,7 @@ SceneRenderer::SceneRenderer(const gpu::Device& device) : device_(device), meshe
 
 SceneRenderer::~SceneRenderer() {
     vkDeviceWaitIdle(device_.device());
+    realistic_.reset();
     meshes_.clear();
     gpu::destroy(device_, gridMinor_);
     gpu::destroy(device_, gridMajor_);
@@ -198,8 +200,12 @@ bool SceneRenderer::resize(VkExtent2D extent) {
                                 VK_IMAGE_ASPECT_COLOR_BIT);
     depth_ =
         gpu::createImage2D(device_, extent, kDepthFormat,
-                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                           VK_IMAGE_ASPECT_DEPTH_BIT);
     colorInitialised_ = false;
+    if (realistic_) {
+        realistic_->resize(extent, depth_);
+    }
     return true;
 }
 
@@ -231,18 +237,31 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
     gpu::transitionImage(commands, depth_.image, VK_IMAGE_ASPECT_DEPTH_BIT,
                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
 
+    // Realistic: its passes draw everything but the overlays, which go on the final image.
+    const bool realistic = options.shading == Shading::Realistic;
+    std::uint32_t realisticDraws = 0;
+    if (realistic) {
+        if (!realistic_) {
+            realistic_ = std::make_unique<RealisticPass>(device_);
+            realistic_->resize(extent, depth_);
+        }
+        realisticDraws =
+            realistic_->record(commands, frame, camera, options, meshes_, color_, depth_);
+    }
+
     VkRenderingAttachmentInfo colorAttachment{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     colorAttachment.imageView = color_.view;
     colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.loadOp = realistic ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     // Design (.vp): #091120. The target is UNORM and shaders encode for display, so the
     // clear colour is given in display values.
     colorAttachment.clearValue.color = {{9.0F / 255.0F, 17.0F / 255.0F, 32.0F / 255.0F, 1.0F}};
     VkRenderingAttachmentInfo depthAttachment{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     depthAttachment.imageView = depth_.view;
-    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.imageLayout = realistic ? VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL
+                                            : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthAttachment.loadOp = realistic ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
     depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     depthAttachment.clearValue.depthStencil = {0.0F, 0};  // reversed depth: far is 0
     VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
@@ -260,12 +279,12 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
     vkCmdSetViewport(commands, 0, 1, &viewport);
     vkCmdSetScissor(commands, 0, 1, &scissor);
 
-    lastDrawCount_ = 0;
+    lastDrawCount_ = realisticDraws;
     const VkShaderStageFlags stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     const VkDeviceSize zero = 0;
 
     // --- meshes ---------------------------------------------------------------------------
-    if (frame != nullptr && frame->statics) {
+    if (!realistic && frame != nullptr && frame->statics) {
         VkPipeline pipeline = unlitPipeline_;
         VkPipelineLayout layout = unlitLayout_;
         if (options.shading == Shading::Lit) {

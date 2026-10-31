@@ -93,6 +93,18 @@ flowchart LR
 - Passes are described by a small `FrameGraph` (pass name, attachments, read/write resources) so
   that later passes (shadow map, ray-traced ambient occlusion on Tier 2, thermal false colour)
   are additions, not rewrites.
+- **Realistic shading** (`Shading::Realistic`, `RealisticPass`, `gpu/kernels/camera/realistic.slang`;
+  the default on a GPU, Lit stays for inspection and for software devices). In order: the sun's depth
+  (two cascades), the scene turned over the water's surface at half size (what the water reflects),
+  the scene in HDR (Cook-Torrance GGX from each material's metallic and roughness, sky light by
+  Lazarov's split-sum, grain where a surface is rough), sky, water, see-through things, then ambient
+  occlusion, bloom, ACES tone map and FXAA, with overlays drawn on top. A water prim is one with
+  `WaterAPI_1`: Gerstner waves whose height follows the site's wind, ripples, Fresnel reflection,
+  depth-based colour, caustics, foam where it meets things. Limits: what the water looks like does
+  not reach physics, which stays a flat surface, so things float level on the drawn waves and leave
+  no wake; one water body is drawn as water, others as glass; the sun has a fixed place; no textures;
+  about 15 ms a frame at 1080p on an Iris Xe. The camera sensor keeps `mesh.slang`, a departure from
+  invariant 13 for this shading only (Lit is still the same code as the camera).
 - An id buffer (`R32_UINT`, prim id) is rendered for the pixel under the cursor only (scissored
   1×1 readback) for picking.
 - MSAA 4× on Tier 1 and 2; off on lavapipe.

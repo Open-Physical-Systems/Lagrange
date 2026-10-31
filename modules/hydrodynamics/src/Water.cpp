@@ -140,13 +140,16 @@ std::vector<WaterBody> takeWater(Model& model) {
 }
 
 void addWater(Model& model, const WaterBody& water) {
-    constexpr float kSheet = 0.01F;  // m, the drawn surface's thickness
+    // Its whole body, surface on top: the viewer draws the top as water and the rest as its sides.
+    const double kSheet = std::max(water.depth, 0.01);
     model.scene.meshes.push_back(boxMesh(water.sizeX, water.sizeY, kSheet));
-    model.scene.materials.push_back({water.name, {0.08F, 0.28F, 0.42F, 0.8F}});
+    model.scene.materials.push_back(
+        {water.name, {0.08F, 0.28F, 0.42F, 0.8F}, SurfaceLook{0.0F, 0.04F, {0.0F, 0.0F, 0.0F}}});
     ScenePrim prim;
     prim.name = water.name;
     prim.path = "/" + water.name;
     prim.typeName = "Mesh";
+    prim.apiSchemas.emplace_back("WaterAPI_1");  // the viewer draws it as water
     prim.mesh = static_cast<std::uint32_t>(model.scene.meshes.size() - 1);
     prim.material = static_cast<std::uint32_t>(model.scene.materials.size() - 1);
     prim.offset.position = water.surface;

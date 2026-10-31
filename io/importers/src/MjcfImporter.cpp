@@ -367,6 +367,14 @@ Expected<Model, std::string> importMjcf(const std::string& path, const ImportOpt
             }
             visual.material = materialId >= 0 ? nameOf(m, mjOBJ_MATERIAL, materialId) : "";
             visual.rgba = {rgba[0], rgba[1], rgba[2], rgba[3]};
+            if (materialId >= 0) {
+                // MuJoCo's shininess is 0 (dull) to 1; emission a multiple of the colour.
+                SurfaceLook look;
+                look.roughness = 1.0F - m.mat_shininess[materialId];
+                const float glow = m.mat_emission[materialId];
+                look.emissive = {rgba[0] * glow, rgba[1] * glow, rgba[2] * glow};
+                visual.look = look;
+            }
             link.visuals.push_back(visual);
         }
     }

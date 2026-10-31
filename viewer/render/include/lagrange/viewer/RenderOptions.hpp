@@ -8,6 +8,7 @@ namespace lagrange::viewer {
 
 /// How the viewport colours meshes (design 02-scene: the shading menu).
 enum class Shading : std::uint8_t {
+    Realistic,  ///< Sky and sun with shadows, materials that reflect, water (RealisticPass).
     Lit,        ///< Material colour, one directional light and sky ambient.
     Unlit,      ///< Material colour as it is.
     Thermal,    ///< Temperature on the design's thermal colour map; unlit.
@@ -24,6 +25,8 @@ struct RenderOptions {
 
     Shading shading{Shading::Lit};
     bool wireframeAvailable{false};  ///< Set from SceneRenderer::wireframeSupported().
+    bool realisticAvailable{false};  ///< Set on a GPU: a software device would crawl.
+    float windSpeed{0.0F};           ///< m/s, the site's: how rough the water is drawn.
     /// Thermal shading: per scene prim, the temperature (K) its meshes take (NaN: none, drawn
     /// dim grey), and the range the colour map spans.
     std::vector<float> temperature;

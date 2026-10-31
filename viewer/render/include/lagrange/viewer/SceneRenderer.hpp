@@ -20,6 +20,8 @@ class Device;
 
 namespace lagrange::viewer {
 
+class RealisticPass;
+
 /// Lines that change every frame (sensor overlays): pairs of points relative to `origin`,
 /// drawn unlit in `color` (display values, like the design tokens).
 struct OverlayLines {
@@ -58,6 +60,7 @@ public:
 
 private:
     void createPipelines();
+    std::unique_ptr<RealisticPass> realistic_;  // made when first used
     void uploadMeshes(const SceneStatics& statics);
 
     const gpu::Device& device_;

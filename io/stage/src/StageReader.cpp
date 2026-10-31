@@ -551,14 +551,45 @@ private:
         return rgba;
     }
 
-    std::uint32_t material(const std::array<float, 4>& rgba) {
+    /// The look of a bound UsdPreviewSurface: its name, and its inputs if it sets any.
+    std::pair<std::string, std::optional<SurfaceLook>> lookOfPrim(const UsdPrim& prim) {
+        const UsdShadeMaterial bound = UsdShadeMaterialBindingAPI(prim).ComputeBoundMaterial();
+        if (!bound) {
+            return {prim.GetName().GetString(), std::nullopt};
+        }
+        const std::string name = bound.GetPrim().GetName().GetString();
+        const UsdShadeShader surface = bound.ComputeSurfaceSource();
+        if (!surface) {
+            return {name, std::nullopt};
+        }
+        SurfaceLook look;
+        bool told = false;
+        const auto real = [&](const char* input, float& out) {
+            if (const UsdShadeInput in = surface.GetInput(TfToken(input)); in && in.Get(&out)) {
+                told = true;
+            }
+        };
+        real("metallic", look.metallic);
+        real("roughness", look.roughness);
+        GfVec3f glow;
+        if (const UsdShadeInput in = surface.GetInput(TfToken("emissiveColor"));
+            in && in.Get(&glow)) {
+            look.emissive = {glow[0], glow[1], glow[2]};
+            told = true;
+        }
+        return {name, told ? std::optional<SurfaceLook>(look) : std::nullopt};
+    }
+
+    std::uint32_t material(const std::array<float, 4>& rgba, const std::string& named,
+                           const std::optional<SurfaceLook>& look) {
         for (std::uint32_t i = 0; i < m_.scene.materials.size(); ++i) {
-            if (m_.scene.materials[i].rgba == rgba) {
+            const SceneMaterial& known = m_.scene.materials[i];
+            if (known.rgba == rgba && known.look == look &&
+                (look || lookOf(known) == lookOf({named, rgba}))) {
                 return i;
             }
         }
-        m_.scene.materials.push_back(
-            {"material_" + std::to_string(m_.scene.materials.size()), rgba});
+        m_.scene.materials.push_back({named, rgba, look});
         return static_cast<std::uint32_t>(m_.scene.materials.size() - 1);
     }
 
@@ -707,7 +738,8 @@ private:
                     scene.mesh = static_cast<std::uint32_t>(m_.scene.meshes.size() - 1);
                     meshKey.emplace(key, scene.mesh);
                 }
-                scene.material = material(colorOf(prim));
+                const auto [surfaceName, look] = lookOfPrim(prim);
+                scene.material = material(colorOf(prim), surfaceName, look);
                 scene.scale = {static_cast<float>(placement.scale[0]),
                                static_cast<float>(placement.scale[1]),
                                static_cast<float>(placement.scale[2])};

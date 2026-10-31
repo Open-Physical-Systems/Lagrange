@@ -23,6 +23,7 @@
 #include <sdf/Material.hh>
 #include <sdf/Model.hh>
 #include <sdf/ParserConfig.hh>
+#include <sdf/Pbr.hh>
 #include <sdf/Plugin.hh>
 #include <sdf/Root.hh>
 #include <sdf/Sensor.hh>
@@ -344,6 +345,21 @@ private:
             const gz::math::Color color = material->Diffuse();
             out.rgba = {color.R(), color.G(), color.B(),
                         color.A() * (1.0F - visual.Transparency())};
+            const gz::math::Color glow = material->Emissive();
+            SurfaceLook look;
+            look.emissive = {glow.R(), glow.G(), glow.B()};
+            bool told = glow.R() > 0.0F || glow.G() > 0.0F || glow.B() > 0.0F;
+            if (const sdf::Pbr* pbr = material->PbrMaterial(); pbr != nullptr) {
+                if (const sdf::PbrWorkflow* metal = pbr->Workflow(sdf::PbrWorkflowType::METAL);
+                    metal != nullptr) {
+                    look.metallic = static_cast<float>(metal->Metalness());
+                    look.roughness = static_cast<float>(metal->Roughness());
+                    told = true;
+                }
+            }
+            if (told) {
+                out.look = look;
+            }
         }
         link.visuals.push_back(out);
     }

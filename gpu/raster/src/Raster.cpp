@@ -59,6 +59,10 @@ void buildPipeline(const Device& device, const PipelineSpec& spec, VkPipelineLay
     VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &range;
+    if (spec.setLayout != VK_NULL_HANDLE) {
+        layoutInfo.setLayoutCount = 1;
+        layoutInfo.pSetLayouts = &spec.setLayout;
+    }
     vkCreatePipelineLayout(device.device(), &layoutInfo, nullptr, &layout);
 
     VkShaderModule vertex = createShaderModule(device, spec.vertex);
@@ -79,9 +83,9 @@ void buildPipeline(const Device& device, const PipelineSpec& spec, VkPipelineLay
     }};
     VkPipelineVertexInputStateCreateInfo vertexInput{
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.vertexBindingDescriptionCount = spec.stride != 0 ? 1 : 0;  // 0: no vertex buffer
     vertexInput.pVertexBindingDescriptions = &binding;
-    vertexInput.vertexAttributeDescriptionCount = spec.hasNormal ? 2 : 1;
+    vertexInput.vertexAttributeDescriptionCount = spec.stride == 0 ? 0 : (spec.hasNormal ? 2 : 1);
     vertexInput.pVertexAttributeDescriptions = attributes.data();
 
     VkPipelineInputAssemblyStateCreateInfo assembly{
@@ -101,7 +105,7 @@ void buildPipeline(const Device& device, const PipelineSpec& spec, VkPipelineLay
     multisample.rasterizationSamples = spec.samples;
     VkPipelineDepthStencilStateCreateInfo depth{
         VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-    depth.depthTestEnable = VK_TRUE;
+    depth.depthTestEnable = spec.depthTest ? VK_TRUE : VK_FALSE;
     depth.depthWriteEnable = spec.depthWrite ? VK_TRUE : VK_FALSE;
     depth.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;  // reversed depth
     std::vector<VkPipelineColorBlendAttachmentState> blendAttachments(spec.colorFormats.size());

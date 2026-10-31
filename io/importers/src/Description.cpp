@@ -478,13 +478,16 @@ private:
         return id;
     }
 
-    std::uint32_t material(const std::string& name, const std::array<float, 4>& rgba) {
+    std::uint32_t material(const std::string& name, const std::array<float, 4>& rgba,
+                           const std::optional<SurfaceLook>& look = std::nullopt) {
+        const std::string called = name.empty() ? "default" : name;
         for (std::uint32_t i = 0; i < m_.scene.materials.size(); ++i) {
-            if (m_.scene.materials[i].rgba == rgba) {
+            const SceneMaterial& known = m_.scene.materials[i];
+            if (known.rgba == rgba && lookOf(known) == lookOf({called, rgba, look})) {
                 return i;
             }
         }
-        m_.scene.materials.push_back({name.empty() ? "default" : name, rgba});
+        m_.scene.materials.push_back({called, rgba, look});
         return static_cast<std::uint32_t>(m_.scene.materials.size() - 1);
     }
 
@@ -544,7 +547,7 @@ private:
         prim.parent = linkPrim;
         prim.typeName = "Mesh";
         prim.mesh = meshId;
-        prim.material = material(visual.material, visual.rgba);
+        prim.material = material(visual.material, visual.rgba, visual.look);
         prim.body = body.index;
         prim.offset = pose;
         prim.scale = scale;

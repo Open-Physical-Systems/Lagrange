@@ -32,6 +32,8 @@ void usage() {
         "                         far above the horizon)\n"
         "  --camera <x,y,z,m,yaw,pitch>  start the camera looking at x,y,z from m metres away, at\n"
         "                         these angles in degrees\n"
+        "  --shading <mode>       realistic (the default on a GPU), lit (without one), unlit, ...\n"
+        "  --overlays <list>      show these from the start: grid,axes,sensors\n"
         "  --launcher             start on the launcher (the default when no --connect is given)\n"
         "  --start-local          press the launcher's Start local simulator: run lagrange_server\n"
         "                         on the --connect endpoint (or the default socket) and connect\n"
@@ -144,6 +146,8 @@ int main(int argc, char** argv) {
             options.workspace = value();
         } else if (arg == "--shading") {
             options.shading = value();
+        } else if (arg == "--overlays") {
+            options.overlays = value();
         } else if (arg == "--open") {
             options.openPath = value();
         } else if (arg == "--scope") {

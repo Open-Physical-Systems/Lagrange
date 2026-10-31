@@ -155,7 +155,8 @@ public:
 
     std::uint32_t material(const std::string& name, const std::array<float, 4>& rgba) {
         for (std::uint32_t i = 0; i < robot_.scene.materials.size(); ++i) {
-            if (robot_.scene.materials[i].rgba == rgba) {
+            if (robot_.scene.materials[i].rgba == rgba &&
+                lookOf(robot_.scene.materials[i]) == lookOf({name, rgba})) {
                 return i;
             }
         }
@@ -735,6 +736,40 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
                     world.bodies.names[owner.index] == reference) {
                     world.colliders.material[c] = index;
                 }
+            }
+        }
+        // <visual_material preset="steel" metallic="1" roughness="0.3" emissive="1 0.2 0"/>: how
+        // the link looks, over whatever its <material> says.
+        if (const tinyxml2::XMLElement* looks = gazebo->FirstChildElement("visual_material");
+            looks != nullptr && reference != nullptr) {
+            SurfaceLook look;
+            if (const char* preset = looks->Attribute("preset");
+                preset != nullptr && !surfaceLookPreset(preset, look)) {
+                robot.notes.push_back(std::string("no visual_material preset ") + preset);
+            }
+            looks->QueryFloatAttribute("metallic", &look.metallic);
+            looks->QueryFloatAttribute("roughness", &look.roughness);
+            look.metallic = std::clamp(look.metallic, 0.0F, 1.0F);
+            look.roughness = std::clamp(look.roughness, 0.0F, 1.0F);
+            if (const char* glow = looks->Attribute("emissive"); glow != nullptr) {
+                std::istringstream(glow) >> look.emissive[0] >> look.emissive[1] >>
+                    look.emissive[2];
+            }
+            std::size_t linked = 0;
+            for (ScenePrim& prim : robot.scene.prims) {
+                if (prim.mesh == kNoIndex || prim.material == kNoIndex || prim.body == kNoIndex ||
+                    prim.body < firstBody || world.bodies.names[prim.body] != reference) {
+                    continue;
+                }
+                SceneMaterial own = robot.scene.materials[prim.material];
+                own.look = look;
+                robot.scene.materials.push_back(std::move(own));
+                prim.material = static_cast<std::uint32_t>(robot.scene.materials.size() - 1);
+                ++linked;
+            }
+            if (linked == 0) {
+                robot.notes.push_back(std::string("visual_material: no visual on link ") +
+                                      reference);
             }
         }
         // Gazebo's friction of a link's surfaces.

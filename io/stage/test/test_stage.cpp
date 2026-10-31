@@ -100,7 +100,8 @@ Model sampleModel() {
     m.bodyPrim = {basePrim, wheelPrim, liftPrim, mastPrim};
     m.jointPrim = {basePrim, wheelPrim, liftPrim};
     m.scene.meshes.push_back(boxMesh(0.6, 0.4, 0.2));
-    m.scene.materials.push_back({"paint", {0.2F, 0.4F, 0.6F, 1.0F}});
+    m.scene.materials.push_back(
+        {"paint", {0.2F, 0.4F, 0.6F, 1.0F}, SurfaceLook{0.25F, 0.15F, {0.5F, 0.0F, 0.0F}}});
     const std::uint32_t visual = prim("visual", basePrim, "Mesh", base.index);
     m.scene.prims[visual].mesh = 0;
     m.scene.prims[visual].material = 0;
@@ -254,6 +255,8 @@ TEST(StageRoundTrip, AModelReadsBackAsItWasWritten) {
     for (const ScenePrim& p : m.scene.prims) {
         if (p.name == "visual") {
             EXPECT_EQ(m.scene.materials[p.material].rgba, original.scene.materials[0].rgba);
+            ASSERT_TRUE(m.scene.materials[p.material].look.has_value()) << "the file gave one";
+            EXPECT_EQ(*m.scene.materials[p.material].look, *original.scene.materials[0].look);
             EXPECT_EQ(m.scene.meshes[p.mesh].indices.size(),
                       original.scene.meshes[0].indices.size());
         }
