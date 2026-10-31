@@ -356,7 +356,7 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
         } else if (arg == "--humans") {
             const char* text = value();
             std::string_view rest = text != nullptr ? text : "";
-            bool first = true;
+            bool firstItem = true;
             while (!rest.empty()) {
                 const std::size_t comma = rest.find(',');
                 const std::string item(rest.substr(0, comma));
@@ -370,7 +370,7 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 if (number.empty() || *end != '\0' || n < 0.0) {
                     return "--humans needs N[,seed=S][,radius=M]";
                 }
-                if (key.empty() && first) {
+                if (key.empty() && firstItem) {
                     options.humanCount = static_cast<int>(n);
                 } else if (key == "seed") {
                     options.humanSeed = static_cast<std::uint64_t>(n);
@@ -379,9 +379,9 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 } else {
                     return "--humans needs N[,seed=S][,radius=M]";
                 }
-                first = false;
+                firstItem = false;
             }
-            if (first) {
+            if (firstItem) {
                 return "--humans needs N[,seed=S][,radius=M]";
             }
         } else if (arg == "--traffic") {
