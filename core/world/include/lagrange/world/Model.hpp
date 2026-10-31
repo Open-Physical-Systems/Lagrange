@@ -66,10 +66,29 @@ struct ScenePrim {
     std::array<double, 3> hingeAxis{0.0, 1.0, 0.0};
 };
 
+/// How a surface looks: glTF's metallic-roughness model, which UsdPreviewSurface and SDFormat's
+/// <pbr> also use. Roughness 0 is a mirror, 1 fully matte.
+struct SurfaceLook {
+    float metallic{0.0F};
+    float roughness{0.6F};
+    std::array<float, 3> emissive{0.0F, 0.0F, 0.0F};  // linear RGB, added to what is reflected
+    friend bool operator==(const SurfaceLook&, const SurfaceLook&) = default;
+};
+
+/// The look of a named kind of surface: "steel", "rubber", "glass", ... Illustrative values in the
+/// ranges of the usual PBR material charts, not measurements. False for a name it does not know.
+[[nodiscard]] bool surfaceLookPreset(std::string_view name, SurfaceLook& out);
+
 struct SceneMaterial {
     std::string name;
     std::array<float, 4> rgba{0.7F, 0.7F, 0.72F, 1.0F};
+    /// The look the file gave. Empty: from a word of the material's name that names a kind of
+    /// surface ("rubber", "front_steel_plate"), else the default.
+    std::optional<SurfaceLook> look{};
 };
+
+/// What is drawn for a material: its look, or the one its name suggests.
+[[nodiscard]] SurfaceLook lookOf(const SceneMaterial& material);
 
 struct Scene {
     std::vector<ScenePrim> prims;

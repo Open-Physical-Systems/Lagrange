@@ -689,6 +689,42 @@ def test_collision_shading_draws_the_simulators_colliders(socket_dir):
     assert shapes > 2000, f"no colliders drawn ({shapes} pixels)"
 
 
+def test_realistic_shading_draws_sky_and_water(socket_dir):
+    """Shading::Realistic on any device: every pass runs with no validation error, above the horizon
+    is a sky and below it water, both blue, the water's top darker than the sky's."""
+    socket = socket_dir / "real.sock"
+    server = subprocess.Popen(
+        [local_server(), "--no-ros", "--robot", "none", "--world", "none",
+         "--water", "0,0,1,600,600,1", "--listen", f"unix:{socket}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )  # fmt: skip
+    image = socket_dir / "realistic.png"
+    try:
+        result = run_viewer(
+            "--connect", f"unix:{socket}", "--frames", "6", "--size", "1600x1000",
+            "--workspace", "scene", "--shading", "realistic", "--camera", "0,0,1,8,-145,6",
+            "--screenshot", str(image),
+        )  # fmt: skip
+    finally:
+        server.terminate()
+        server.wait(10)
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    _width, _height, rows = read_png(image)
+    # The middle of the viewport, a column: sky in its upper part, water in its lower.
+    column = 800 * 4
+    sky = [rows[y][column : column + 4] for y in range(200, 240)]
+    water = [rows[y][column : column + 4] for y in range(560, 620)]
+    for r, g, b, _a in sky:
+        assert b > r, f"not a sky: {r, g, b}"
+    mean = [sum(p[k] for p in water) / len(water) for k in range(3)]
+    assert mean[2] > mean[0] + 10, f"not water: {mean}"
+    spread = max(sum(p[:3]) for p in water) - min(sum(p[:3]) for p in water)
+    assert spread > 5, "flat: no waves"
+
+
 def test_thermal_shading_colours_the_simulators_robot_by_temperature(socket_dir):
     """Design 02-scene's Thermal shading on the simulator's thermal network (v0.3).
 

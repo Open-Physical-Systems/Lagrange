@@ -48,6 +48,8 @@ struct PipelineSpec {
     bool blend{true};  // alpha blending on the first attachment
     VkSampleCountFlagBits samples{VK_SAMPLE_COUNT_1_BIT};
     VkPolygonMode polygonMode{VK_POLYGON_MODE_FILL};  // LINE needs Device::nonSolidFill()
+    VkDescriptorSetLayout setLayout{VK_NULL_HANDLE};  // set 0, if the shaders have one
+    bool depthTest{true};
 };
 
 inline constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;

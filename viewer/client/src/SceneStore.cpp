@@ -93,6 +93,9 @@ bool SceneBuilder::applySnapshot(const v1::SceneSnapshot& snapshot, std::string&
         }
         material.metallic = source.metallic();
         material.roughness = source.roughness();
+        for (int k = 0; k < 3 && k < source.emissive_size(); ++k) {
+            material.emissive.at(static_cast<std::size_t>(k)) = source.emissive(k);
+        }
     }
 
     statics->prims.resize(primCount);

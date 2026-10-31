@@ -219,6 +219,8 @@ public:
 private:
     static const char* shadingName(const PanelContext& context) {
         switch (context.renderOptions->shading) {
+            case Shading::Realistic:
+                return "Realistic";
             case Shading::Unlit:
                 return "Unlit";
             case Shading::Thermal:
@@ -415,7 +417,8 @@ private:
         const char* camera =
             context.renderOptions->follow ? "Follow###camera" : "Perspective###camera";
         const float gap = px(4.0F);
-        const float width = widgets::MenuButtonWidth("Thermal") + widgets::MenuButtonWidth(camera) +
+        const float width = widgets::MenuButtonWidth("Realistic") +
+                            widgets::MenuButtonWidth(camera) +
                             widgets::MenuButtonWidth(overlayLabel) + gap * 2.0F;
         if (!widgets::BeginPanelTools("##viewport-tools", width)) {
             return;
@@ -427,6 +430,10 @@ private:
         }
         if (ImGui::BeginPopup("##shading")) {
             Shading& mode = context.renderOptions->shading;
+            if (ImGui::MenuItem("Realistic", nullptr, mode == Shading::Realistic,
+                                context.renderOptions->realisticAvailable)) {
+                mode = Shading::Realistic;
+            }
             if (ImGui::MenuItem("Lit", nullptr, mode == Shading::Lit)) {
                 mode = Shading::Lit;
             }

@@ -1922,7 +1922,12 @@ struct Server::Impl {
             for (const float c : material.rgba) {
                 out.add_base_color(c);
             }
-            out.set_roughness(0.6F);
+            const SurfaceLook look = lookOf(material);
+            out.set_metallic(look.metallic);
+            out.set_roughness(look.roughness);
+            for (const float c : look.emissive) {
+                out.add_emissive(c);
+            }
         }
         if (replay) {
             *snap.mutable_nets() = replayNets;  // the recorded power system

@@ -121,6 +121,97 @@ ARM = asset("robots/arm6/arm6.urdf")
 
 CLIPS: list[Clip] = [
     Clip(
+        "realistic_water",
+        "Water that looks like water: waves, glitter, reflections, foam",
+        14,
+        [
+            [
+                "--robot",
+                "none",
+                "--world",
+                scene("crates_deep.sdf"),
+                "--water",
+                "0,0,8,3000,3000,8",
+                "--site",
+                "wind_speed=2",
+            ]
+        ],
+        [
+            Pane(
+                "",
+                (0, 0, 1280, 720),
+                (1920, 1080, (289, 127, 1569, 847)),
+                view(0, 0, 8.5, 11, -145, 10),
+            )
+        ],
+        [
+            Step(
+                0,
+                "lagrange --water 0,0,8,3000,3000,8    A wooden crate floats, a steel one has sunk",
+            )
+        ],
+    ),
+    Clip(
+        "realistic_water_wind",
+        "The wind makes the sea rough",
+        16,
+        [
+            [
+                "--robot",
+                "none",
+                "--world",
+                scene("crates_deep.sdf"),
+                "--water",
+                "0,0,8,3000,3000,8",
+                "--site",
+                "wind_speed=1",
+            ]
+        ],
+        [
+            Pane(
+                "",
+                (0, 0, 1280, 720),
+                (1920, 1080, (289, 127, 1569, 847)),
+                view(0, 0, 8.5, 14, -125, 13),
+            )
+        ],
+        [
+            Step(0, "Calm"),
+            Step(5, "lagrange set wind_speed=8", lagrange_set("wind_speed=8")),
+            Step(10, "lagrange set wind_speed=14", lagrange_set("wind_speed=14")),
+        ],
+    ),
+    Clip(
+        "realistic_materials",
+        "Materials: chrome, steel, gold, lacquer, plastic, rubber, concrete, wood, glass",
+        12,
+        [["--robot", "none", "--world", scene("materials.urdf")]],
+        [
+            Pane(
+                "",
+                (0, 0, 1280, 720),
+                (1920, 1080, (289, 127, 1569, 847)),
+                view(1, -1, 0.6, 9, -95, 14),
+            )
+        ],
+        [Step(0, '<gazebo reference="ball"><visual_material preset="chrome"/></gazebo>')],
+    ),
+    Clip(
+        "realistic_warehouse",
+        "A robot in the sample warehouse, with sun, shadows and sky",
+        12,
+        [["--robot", AMR, "--world", WAREHOUSE]],
+        [
+            Pane(
+                "",
+                (0, 0, 1280, 720),
+                (1920, 1080, (289, 127, 1569, 847)),
+                ["--workspace", "Scene", "--follow", "4,20"],
+            )
+        ],
+        [Step(0, "lagrange amr_diffdrive.urdf warehouse_small.usda")],
+    ),
+    Clip(
         "gravity",
         "Gravity, changed while it runs",
         26,
@@ -206,7 +297,7 @@ CLIPS: list[Clip] = [
             Pane(
                 "lidar returns, as they arrive (0.4 s late)",
                 LEFT,
-                viewer=["--workspace", "Scene", "--follow", "9,60"],
+                viewer=["--workspace", "Scene", "--follow", "9,60", "--overlays", "sensors"],
             ),
             Pane(
                 "yaw rate: on time and delayed (rad/s)",
@@ -273,7 +364,7 @@ CLIPS: list[Clip] = [
             Pane(
                 "3D view: returns are crosses",
                 HALF_L,
-                viewer=["--workspace", "Scene", "--follow", "8,45"],
+                viewer=["--workspace", "Scene", "--follow", "8,45", "--overlays", "sensors"],
             ),
             Pane("what the lidar sees", HALF_R, BIRD, ["--workspace", "Sensors"]),
         ],
@@ -466,6 +557,8 @@ def picture(clip: Clip, frames: list[Image.Image | None], line: str, out: Path) 
             whole.paste(part.resize(size, Image.Resampling.LANCZOS),
                         (x + (width - size[0]) // 2, y + (height - size[1]) // 2))  # fmt: skip
         width_of_label = int(draw.textlength(pane.label, font=font(15)))
+        if not pane.label:
+            continue
         draw.rectangle((x + 8, y + 8, x + 16 + width_of_label, y + 30),
                        fill=(12, 16, 24))  # fmt: skip
         draw.text((x + 12, y + 10), pane.label, font=font(15), fill=(235, 235, 235))

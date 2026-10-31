@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<!-- A wooden crate and a steel one, both 0.4 m cubes, held above the sea. -->
+<sdf version="1.9"><world name="crates">
+  <model name="wood"><pose>-1.5 0 10 0 0 0</pose><link name="link">
+    <inertial><mass>32</mass><inertia><ixx>0.85</ixx><iyy>0.85</iyy><izz>0.85</izz></inertia></inertial>
+    <collision name="c"><geometry><box><size>0.4 0.4 0.4</size></box></geometry></collision>
+    <visual name="v"><geometry><box><size>0.4 0.4 0.4</size></box></geometry>
+      <material><diffuse>0.75 0.55 0.3 1</diffuse></material></visual></link></model>
+  <model name="steel"><pose>1.5 0 10 0 0 0</pose><link name="link">
+    <inertial><mass>200</mass><inertia><ixx>5.3</ixx><iyy>5.3</iyy><izz>5.3</izz></inertia></inertial>
+    <collision name="c"><geometry><box><size>0.4 0.4 0.4</size></box></geometry></collision>
+    <visual name="v"><geometry><box><size>0.4 0.4 0.4</size></box></geometry>
+      <material><diffuse>0.6 0.62 0.66 1</diffuse></material></visual></link></model>
+</world></sdf>

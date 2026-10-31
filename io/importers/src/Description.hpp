@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -39,6 +40,7 @@ struct VisualDesc {
     Geom geom;
     std::string material;
     std::array<float, 4> rgba{0.70F, 0.70F, 0.72F, 1.0F};
+    std::optional<SurfaceLook> look{};  // the file's, if it says
 };
 
 struct CollisionDesc {

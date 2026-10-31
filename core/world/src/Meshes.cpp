@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <numbers>
 #include <optional>
@@ -787,6 +788,55 @@ void appendTile(Model& model, const Model& tile, const std::string& tilePath,
         model.scene.prims.push_back(std::move(prim));
         primMap[p] = static_cast<std::uint32_t>(model.scene.prims.size() - 1);
     }
+}
+
+bool surfaceLookPreset(std::string_view name, SurfaceLook& out) {
+    struct Row {
+        std::string_view name;
+        float metallic, roughness;
+    };
+    static constexpr std::array<Row, 34> kLooks{{
+        {"chrome", 1.0F, 0.05F},    {"mirror", 1.0F, 0.02F},   {"gold", 1.0F, 0.2F},
+        {"copper", 1.0F, 0.3F},     {"brass", 1.0F, 0.3F},     {"steel", 1.0F, 0.35F},
+        {"stainless", 1.0F, 0.25F}, {"metal", 1.0F, 0.4F},     {"aluminium", 1.0F, 0.4F},
+        {"aluminum", 1.0F, 0.4F},   {"iron", 1.0F, 0.55F},     {"glass", 0.0F, 0.03F},
+        {"paint", 0.0F, 0.3F},      {"carpaint", 0.0F, 0.12F}, {"lacquer", 0.0F, 0.1F},
+        {"ceramic", 0.0F, 0.12F},   {"glossy", 0.0F, 0.12F},   {"plastic", 0.0F, 0.42F},
+        {"matte", 0.0F, 0.8F},      {"wood", 0.0F, 0.6F},      {"rubber", 0.0F, 0.88F},
+        {"tyre", 0.0F, 0.88F},      {"tire", 0.0F, 0.88F},     {"wheel", 0.0F, 0.85F},
+        {"concrete", 0.0F, 0.92F},  {"floor", 0.0F, 0.85F},    {"ground", 0.0F, 0.92F},
+        {"asphalt", 0.0F, 0.95F},   {"road", 0.0F, 0.95F},     {"brick", 0.0F, 0.9F},
+        {"fabric", 0.0F, 0.95F},    {"cloth", 0.0F, 0.95F},    {"skin", 0.0F, 0.55F},
+        {"grass", 0.0F, 0.95F},
+    }};
+    for (const Row& row : kLooks) {
+        if (row.name == name) {
+            out.metallic = row.metallic;
+            out.roughness = row.roughness;
+            return true;
+        }
+    }
+    return false;
+}
+
+SurfaceLook lookOf(const SceneMaterial& material) {
+    if (material.look) {
+        return *material.look;
+    }
+    SurfaceLook look;
+    std::string word;
+    for (std::size_t i = 0; i <= material.name.size(); ++i) {
+        const char c = i < material.name.size() ? material.name[i] : ' ';
+        if (std::isalnum(static_cast<unsigned char>(c)) != 0) {
+            word += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        } else {
+            if (surfaceLookPreset(word, look)) {
+                return look;
+            }
+            word.clear();
+        }
+    }
+    return look;
 }
 
 }  // namespace lagrange

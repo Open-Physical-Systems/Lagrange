@@ -200,6 +200,7 @@ private:
                 if (rgba[3] < 1.0F) {
                     usd.CreateDisplayOpacityAttr().Set(VtArray<float>{rgba[3]});
                 }
+                bindLook(usd.GetPrim(), m_.scene.materials[prim.material]);
             }
             return {};
         }
@@ -532,6 +533,35 @@ private:
             UsdPhysicsCollisionAPI::Apply(gprim.GetPrim());
             bindFriction(gprim.GetPrim(), colliders.friction[c]);
         }
+    }
+
+    /// A UsdPreviewSurface for a look the file gave, shared by the meshes that have it. A material
+    /// without one is left to its name, which is not written; nor is it needed by old samples.
+    void bindLook(const UsdPrim& prim, const SceneMaterial& material) {
+        if (!material.look) {
+            return;
+        }
+        const std::string token = TfMakeValidIdentifier(material.name);
+        const SdfPath path = SdfPath("/looks").AppendChild(TfToken(token));
+        if (!stage_->GetPrimAtPath(path)) {
+            UsdGeomScope::Define(stage_, SdfPath("/looks"));
+            UsdShadeMaterial looks = UsdShadeMaterial::Define(stage_, path);
+            UsdShadeShader shader =
+                UsdShadeShader::Define(stage_, path.AppendChild(TfToken("surface")));
+            shader.CreateIdAttr().Set(TfToken("UsdPreviewSurface"));
+            shader.CreateInput(TfToken("diffuseColor"), SdfValueTypeNames->Color3f)
+                .Set(GfVec3f(material.rgba[0], material.rgba[1], material.rgba[2]));
+            shader.CreateInput(TfToken("metallic"), SdfValueTypeNames->Float)
+                .Set(material.look->metallic);
+            shader.CreateInput(TfToken("roughness"), SdfValueTypeNames->Float)
+                .Set(material.look->roughness);
+            shader.CreateInput(TfToken("emissiveColor"), SdfValueTypeNames->Color3f)
+                .Set(GfVec3f(material.look->emissive[0], material.look->emissive[1],
+                             material.look->emissive[2]));
+            looks.CreateSurfaceOutput().ConnectToSource(
+                shader.CreateOutput(TfToken("surface"), SdfValueTypeNames->Token));
+        }
+        UsdShadeMaterialBindingAPI::Apply(prim).Bind(UsdShadeMaterial::Get(stage_, path));
     }
 
     /// A physics material with the friction, shared by every collider that has it; none for the

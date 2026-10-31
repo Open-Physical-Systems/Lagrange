@@ -34,6 +34,7 @@ struct Options {
     bool startLocal{false};    ///< Start lagrange_server from the launcher, then connect.
     bool cursors{false};       ///< Show the scope's A and B cursors from the start.
     std::string shading;       ///< Viewport shading at start-up: lit, unlit or thermal.
+    std::string overlays;      ///< --overlays: grid,axes,sensors shown from the start.
     std::optional<std::array<double, 6>> camera;  ///< --camera: target, distance, yaw, pitch.
     double followDistance{0.0};  ///< > 0: start with the follow camera this far (m) away.
     double followPitchDeg{0.0};  ///< With followDistance: the camera's elevation; 0: default.

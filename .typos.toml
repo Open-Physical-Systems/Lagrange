@@ -13,5 +13,7 @@ thst = "thst"   # ArduPilot parameter names: MOT_THST_HOVER
 nd = "nd"       # OpenStreetMap XML: a way's node reference element <nd ref=...>
 
 [default.extend-identifiers]
+# SDFormat PbrWorkflow::Metalness.
+Metalness = "Metalness"
 # POSIX msghdr field.
 msg_controllen = "msg_controllen"

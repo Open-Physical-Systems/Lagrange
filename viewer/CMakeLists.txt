@@ -33,6 +33,7 @@ add_library(
     STATIC
     render/src/Camera.cpp
     render/src/Picking.cpp
+    render/src/RealisticPass.cpp
     render/src/SceneRenderer.cpp
 )
 lagrange_target_defaults(lagrange_viewer_render)
@@ -80,6 +81,70 @@ lagrange_add_slang_shader(
     ENTRY fsMain
     STAGE fragment
     SYMBOL kLineFragment
+)
+
+lagrange_add_slang_shader(
+    lagrange_viewer_render
+    SOURCE ${_kernels}/camera/realistic.slang
+    ENTRY vsMesh
+    STAGE vertex
+    SYMBOL kRealMeshVertex
+)
+lagrange_add_slang_shader(
+    lagrange_viewer_render
+    SOURCE ${_kernels}/camera/realistic.slang
+    ENTRY fsMesh
+    STAGE fragment
+    SYMBOL kRealMeshFragment
+)
+lagrange_add_slang_shader(
+    lagrange_viewer_render
+    SOURCE ${_kernels}/camera/realistic.slang
+    ENTRY vsShadow
+    STAGE vertex
+    SYMBOL kRealShadowVertex
+)
+lagrange_add_slang_shader(
+    lagrange_viewer_render
+    SOURCE ${_kernels}/camera/realistic.slang
+    ENTRY fsShadow
+    STAGE fragment
+    SYMBOL kRealShadowFragment
+)
+lagrange_add_slang_shader(
+    lagrange_viewer_render
+    SOURCE ${_kernels}/camera/realistic.slang
+    ENTRY vsScreen
+    STAGE vertex
+    SYMBOL kRealScreenVertex
+)
+lagrange_add_slang_shader(
+    lagrange_viewer_render
+    SOURCE ${_kernels}/camera/realistic.slang
+    ENTRY fsSky
+    STAGE fragment
+    SYMBOL kRealSkyFragment
+)
+lagrange_add_slang_shader(
+    lagrange_viewer_render
+    SOURCE ${_kernels}/camera/realistic.slang
+    ENTRY fsComposite
+    STAGE fragment
+    SYMBOL kRealCompositeFragment
+)
+lagrange_add_slang_shader(
+    lagrange_viewer_render
+    SOURCE ${_kernels}/camera/realistic.slang
+    ENTRY vsWater
+    STAGE vertex
+    SYMBOL kRealWaterVertex
+)
+lagrange_add_slang_shader(
+    lagrange_viewer_render
+    SOURCE ${_kernels}/camera/realistic.slang
+    ENTRY fsWater
+    STAGE fragment
+    SYMBOL kRealWaterFragment
 )
 
 # The design system: theme, fonts and the widgets every panel is built from

@@ -504,6 +504,9 @@ public:
     void renderScene(VkCommandBuffer commands) {
         textures_.record(commands);
         buildSensorOverlays();
+        if (const auto environment = client_.environment()) {
+            renderOptions_.windSpeed = static_cast<float>(environment->windSpeed);
+        }
         renderer_.render(commands, scene_.get(), camera_, renderOptions_, sensorOverlays_);
     }
 
@@ -645,8 +648,26 @@ public:
         followDistance_ = distance;
         followPitchDeg_ = pitchDeg;
     }
+    /// Overlays to show from the start, whatever the shading turned off ("grid,axes,sensors").
+    void setOverlays(const std::string& names) {
+        renderOptions_.grid = renderOptions_.grid || names.find("grid") != std::string::npos;
+        renderOptions_.axes = renderOptions_.axes || names.find("axes") != std::string::npos;
+        renderOptions_.sensors =
+            renderOptions_.sensors || names.find("sensors") != std::string::npos;
+    }
     void setShading(const std::string& name) {
-        if (name == "unlit") {
+        renderOptions_.realisticAvailable = device_.tier() != gpu::CapabilityTier::Tier0;
+        // A GPU shows the world as it would look, a software device keeps the quick view.
+        const bool realistic =
+            name == "realistic" || (name.empty() && renderOptions_.realisticAvailable);
+        if (realistic) {
+            renderOptions_.shading = Shading::Realistic;
+            renderOptions_.grid = false;
+            renderOptions_.axes = false;
+            renderOptions_.sensors = false;
+        } else if (name == "lit") {
+            renderOptions_.shading = Shading::Lit;
+        } else if (name == "unlit") {
             renderOptions_.shading = Shading::Unlit;
         } else if (name == "collision") {
             renderOptions_.shading = Shading::Collision;
@@ -861,6 +882,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setInitialSelection(options.selectPath);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);
+        ui.setOverlays(options.overlays);
         ui.setFollow(options.followDistance, options.followPitchDeg);
         ui.setCamera(options.camera);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);
@@ -1215,6 +1237,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setInitialSelection(options.selectPath);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);
+        ui.setOverlays(options.overlays);
         ui.setFollow(options.followDistance, options.followPitchDeg);
         ui.setCamera(options.camera);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);

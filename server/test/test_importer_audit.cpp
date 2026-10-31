@@ -155,6 +155,39 @@ ServerOptions dropped(const std::string& robot, const std::string& physics) {
 }
 
 // A robot whose only collision is a mesh once fell through the ground.
+// A material's name is enough to look like it; the file's own values win.
+TEST(SurfaceLooks, FromAWordOfTheNameUnlessTheFileSays) {
+    EXPECT_GT(lookOf({"front_Steel_plate", {}}).metallic, 0.5F);
+    EXPECT_GT(lookOf({"rubber", {}}).roughness, 0.8F);
+    EXPECT_LT(lookOf({"glass_door", {}}).roughness, 0.1F);
+    EXPECT_EQ(lookOf({"gusteel", {}}), SurfaceLook{}) << "whole words only";
+    SceneMaterial told{"steel", {}};
+    told.look = SurfaceLook{0.0F, 0.9F, {0.0F, 0.0F, 0.0F}};
+    EXPECT_EQ(lookOf(told).metallic, 0.0F);
+}
+
+TEST(SurfaceLooks, AUrdfLinkSaysHowItLooks) {
+    const std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                       ("lagrange_look_" + std::to_string(::getpid()) + ".urdf");
+    std::ofstream(path) << R"(<?xml version="1.0"?><robot name="r"><link name="a">
+<visual><geometry><box size="1 1 1"/></geometry></visual></link>
+<gazebo reference="a"><visual_material preset="chrome" roughness="0.2" emissive="1 0 0"/></gazebo>
+</robot>)";
+    const auto model = loadModel(path.string());
+    ASSERT_TRUE(model) << model.error();
+    bool seen = false;
+    for (const ScenePrim& prim : model->scene.prims) {
+        if (prim.mesh != kNoIndex && prim.material != kNoIndex && prim.name != "ground") {
+            const SurfaceLook look = lookOf(model->scene.materials[prim.material]);
+            EXPECT_EQ(look.metallic, 1.0F);
+            EXPECT_EQ(look.roughness, 0.2F);
+            EXPECT_EQ(look.emissive[0], 1.0F);
+            seen = true;
+        }
+    }
+    EXPECT_TRUE(seen);
+}
+
 TEST(MeshColliders, AUrdfMeshCollidesOnBothEngines) {
     std::vector<Triangle> box;
     addBox(box, {-0.2F, -0.2F, -0.1F}, {0.2F, 0.2F, 0.1F});
