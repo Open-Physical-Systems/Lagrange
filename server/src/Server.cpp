@@ -1023,6 +1023,12 @@ struct Server::Impl {
             appliedAerodynamics["air_density"] = value;
         } else if (name == "wind_speed" || name == "wind_from") {
             appliedAerodynamics[name] = value;
+            // A wind needs all of these; what is not given is the convention for measuring wind:
+            // from the north, 10 m up (WMO No. 8), over open grassland (z0 = 0.03 m, Davenport).
+            appliedAerodynamics.try_emplace("wind_speed", 0.0);
+            appliedAerodynamics.try_emplace("wind_from", 0.0);
+            appliedAerodynamics.try_emplace("wind_reference_height", 10.0);
+            appliedAerodynamics.try_emplace("roughness_length", 0.03);
         } else if (name == "pressure" || name == "relative_humidity" || name == "rain_rate" ||
                    name == "visibility") {
             appliedWeather[name] = value;
@@ -1072,7 +1078,12 @@ struct Server::Impl {
             return status;
         }
         StateReader reader(saved.bytes());
-        if (!savedOk || !scheduler->restoreState(reader).ok()) {
+        const Status carriedOver =
+            savedOk ? scheduler->restoreState(reader)
+                    : Status::error(StatusCode::Unsupported, "a module saves no state");
+        if (!carriedOver.ok()) {
+            log(v1::LOG_LEVEL_INFO, "site",
+                name + " rebuilds the run, velocities from rest: " + carriedOver.message);
             auto composed = composeModel(false);
             if (!composed) {
                 return composed.error();

@@ -52,6 +52,20 @@ public:
         if (context.initialScopeSignals != nullptr && !context.initialScopeSignals->empty() &&
             context.catalog) {
             for (const std::string& name : *context.initialScopeSignals) {
+                // "body/b/pose.x": one component of a signal, by its name.
+                const std::size_t dot = name.rfind('.');
+                const SignalInfo* whole =
+                    dot == std::string::npos ? nullptr : context.catalog->find(name.substr(0, dot));
+                std::uint32_t component = 0;
+                if (context.catalog->find(name) == nullptr && whole != nullptr) {
+                    const auto it = std::find(whole->componentNames.begin(),
+                                              whole->componentNames.end(), name.substr(dot + 1));
+                    if (it != whole->componentNames.end()) {
+                        component = static_cast<std::uint32_t>(it - whole->componentNames.begin());
+                        session.add(context.client, *context.catalog, whole->name, component);
+                        continue;
+                    }
+                }
                 session.add(context.client, *context.catalog, name, 0);
             }
             context.initialScopeSignals->clear();

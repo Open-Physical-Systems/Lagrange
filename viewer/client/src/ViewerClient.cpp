@@ -785,10 +785,10 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
             auto catalog = std::make_shared<SignalCatalog>();
             catalog->generation = envelope.catalog().generation();
             for (const v1::SignalInfo& source : envelope.catalog().signals()) {
-                // Ids must be dense so that they can index tables directly. Arrays may be wide
-                // (a 2D lidar scan has a range per beam) but are bounded: the scope keeps a
-                // buffer per component.
-                constexpr std::uint32_t kMaxComponents = 4096;
+                // Ids must be dense so that they can index tables directly, so a bad entry ends
+                // the list. Arrays may be wide (a 3D lidar has a range per beam: 128 × 4096 is a
+                // big one) but are bounded; the scope keeps a buffer per component it plots.
+                constexpr std::uint32_t kMaxComponents = 1U << 20U;
                 if (source.id() != catalog->signals.size() || source.native_dt_ns() <= 0 ||
                     source.components() == 0 || source.components() > kMaxComponents) {
                     break;

@@ -73,8 +73,10 @@ Electrical needs a power system on the robot: an overlay (`overlay: power.yaml`,
 From a terminal `lagrange set gravity=1.62 wind_speed=5`, or from any ROS tool `ros2 param set
 /lagrange_ros2_bridge gravity 1.62`, or in the viewer's Environment workspace. The run goes on from
 where it is. A value that brings a domain in (the first air density starts the rotors) rebuilds the
-run keeping time and poses, with velocities from rest (on Jolt, the joints go back to their rest
-positions: it has no `initialPosition` yet).
+run keeping time, poses and joint positions, with velocities from rest. `wind_speed` alone is enough:
+unless given, a wind comes from the north (`wind_from`, degrees), measured 10 m up over open
+grassland (the aerodynamics profile's `wind_reference_height`, `roughness_length`). A checkpoint
+(`Server::saveState`) holds these values, and restoring it puts them back.
 
 A [profile](profiles.md) is the detailed form, for step sizes and fidelity per domain, run with
 `lagrange run profile.yaml`.

@@ -1,6 +1,7 @@
 #include "App.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -29,6 +30,8 @@ void usage() {
         "                         or thermal\n"
         "  --follow <m>[,<deg>]   start with the follow camera, this far from the robot (and this\n"
         "                         far above the horizon)\n"
+        "  --camera <x,y,z,m,yaw,pitch>  start the camera looking at x,y,z from m metres away, at\n"
+        "                         these angles in degrees\n"
         "  --launcher             start on the launcher (the default when no --connect is given)\n"
         "  --start-local          press the launcher's Start local simulator: run lagrange_server\n"
         "                         on the --connect endpoint (or the default socket) and connect\n"
@@ -101,6 +104,15 @@ int main(int argc, char** argv) {
                 std::fputs("error: --follow expects a distance in metres\n", stderr);
                 return 2;
             }
+        } else if (arg == "--camera") {
+            std::array<double, 6> view{};
+            if (std::sscanf(value(), "%lf,%lf,%lf,%lf,%lf,%lf", &view[0], &view[1], &view[2],
+                            &view[3], &view[4], &view[5]) != 6 ||
+                !(view[3] > 0.0)) {
+                std::fputs("error: --camera expects x,y,z,distance,yaw,pitch\n", stderr);
+                return 2;
+            }
+            options.camera = view;
         } else if (arg == "--record-frames") {
             options.recordFrames = value();
         } else if (arg == "--record-fps") {

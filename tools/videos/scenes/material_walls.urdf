@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<!-- Four walls of different lidar materials around the robot. -->
+<robot name="material_walls">
+  <link name="world"/>
+  <link name="retroreflector"><collision><geometry><box size="6 0.2 2"/></geometry></collision>
+    <visual><geometry><box size="6 0.2 2"/></geometry><material name="retroreflector"><color rgba="0.95 0.85 0.1 1"/></material></visual></link>
+  <joint name="retroreflector_fix" type="fixed"><parent link="world"/><child link="retroreflector"/><origin xyz="0 5 1"/></joint>
+  <gazebo reference="retroreflector"><sensor_material preset="retroreflector"/></gazebo>
+  <link name="white_paint"><collision><geometry><box size="0.2 6 2"/></geometry></collision>
+    <visual><geometry><box size="0.2 6 2"/></geometry><material name="white_paint"><color rgba="0.95 0.95 0.95 1"/></material></visual></link>
+  <joint name="white_paint_fix" type="fixed"><parent link="world"/><child link="white_paint"/><origin xyz="5 0 1"/></joint>
+  <gazebo reference="white_paint"><sensor_material preset="white_paint"/></gazebo>
+  <link name="asphalt"><collision><geometry><box size="6 0.2 2"/></geometry></collision>
+    <visual><geometry><box size="6 0.2 2"/></geometry><material name="asphalt"><color rgba="0.3 0.3 0.32 1"/></material></visual></link>
+  <joint name="asphalt_fix" type="fixed"><parent link="world"/><child link="asphalt"/><origin xyz="0 -5 1"/></joint>
+  <gazebo reference="asphalt"><sensor_material preset="asphalt"/></gazebo>
+  <link name="black_rubber"><collision><geometry><box size="0.2 6 2"/></geometry></collision>
+    <visual><geometry><box size="0.2 6 2"/></geometry><material name="black_rubber"><color rgba="0.06 0.06 0.06 1"/></material></visual></link>
+  <joint name="black_rubber_fix" type="fixed"><parent link="world"/><child link="black_rubber"/><origin xyz="-5 0 1"/></joint>
+  <gazebo reference="black_rubber"><sensor_material preset="black_rubber"/></gazebo>
+</robot>
