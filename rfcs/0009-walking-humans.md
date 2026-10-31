@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft (2026-10-31), for the owner's review |
+| Status | Accepted (2026-10-31) by the owner, with the proposed answer to each question below; gated merges of its steps pre-approved |
 | Created | 2026-10-31 |
 | Affects | `schemas/` (one new library), `modules/humans/` (new), `io/stage/`, `io/importers/`, `server/`, `profiles/schema.json` (additions), `assets/humans/`, `docs/` |
 | Builds on | RFC 0001 (modules), RFC 0002 (schemas), RFC 0005 (profiles), RFC 0007 (the 1.x freeze), #177 (spawning) |
@@ -169,7 +169,9 @@ without a prefix on its entity name, and the next real robot still becomes the d
 | Skinned mesh | Needs skinning in the renderer and the camera raster, and colliders separately anyway |
 | Extend traffic's pedestrians | They depend on road lanes; a separate domain can be toggled alone |
 
-## Unresolved questions
+## Resolutions on acceptance (2026-10-31)
+
+The owner accepted this RFC with the proposed answer to each question below.
 
 1. **Traffic's pedestrians.** Should they get these bodies too? Proposed: not now; capsules stay
    the default and a later option can swap them, since 14 bodies times a crowd costs real time.
