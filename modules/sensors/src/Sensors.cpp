@@ -483,6 +483,29 @@ public:
             }
             shapes_.push_back(shape);
         }
+        // Water is no collider, but a lidar sees its surface: a mirror (or a box of depth below it,
+        // from under water). What enters it is absorbed: no return from the bottom.
+        waterMaterials_.clear();
+        const std::vector<const SchemaInstance*> waters = world.instancesOf("WaterAPI_1");
+        waterMaterials_.reserve(waters.size());
+        for (const SchemaInstance* w : waters) {
+            SurfaceMaterial surface;
+            (void)surfaceMaterialPreset("water", surface);
+            surface.reflectivity905 = surface.reflectivity1550 =
+                w->real("water:reflectivity").value_or(surface.reflectivity905);
+            waterMaterials_.push_back(surface);
+            const double depth = w->real("water:depth").value_or(2.0);
+            Pose pose = world.raw().prims.poseInBody.at(w->prim.index);
+            pose.position[2] -= depth / 2.0;
+            shapes_.push_back(Shape{ShapeType::Box,
+                                    {w->real("water:sizeX").value_or(10.0) / 2.0,
+                                     w->real("water:sizeY").value_or(10.0) / 2.0, depth / 2.0},
+                                    pose,
+                                    -1,
+                                    nullptr,
+                                    nullptr,
+                                    &waterMaterials_.back()});
+        }
         placed_.resize(shapes_.size());
         buffer_.assign(samples_, kNoHit);
         nearest_.assign(samples_, kNoHit);
@@ -685,6 +708,7 @@ private:
     static constexpr int kMaxPasses = 6;
     static constexpr double kPastSurfaceM = 1e-4;
     SignalId intensities_;
+    std::vector<SurfaceMaterial> waterMaterials_;  // reserved before shapes_ point into it
     std::vector<std::uint32_t> hitShape_;
     std::vector<double> intensity_;
     bool wavelength1550_{false};

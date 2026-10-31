@@ -102,6 +102,7 @@ void printServerOptions(std::FILE* out) {
         "  --humans N[,seed=S][,radius=M]  N people wandering round the middle of the run\n"
         "  --site NAME=VALUE  gravity, wind_speed, wind_from, temperature, air_density, pressure,\n"
         "            relative_humidity, rain_rate, visibility; also while running: lagrange set\n"
+        "  --water X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH  a body of still water (repeatable)\n"
         "  --joint-control  drive every moving joint on its own from /joint_commands\n"
         "            (sensor_msgs/JointState: position, velocity or effort), no robot controller\n"
         "  --plugin LIB  load a plugin library (RFC 0008): a path, or NAME for lib<NAME>.so in\n"
@@ -529,6 +530,14 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--site needs NAME=VALUE, such as gravity=1.62";
             }
             options.site[item.substr(0, equals)] = number;
+        } else if (arg == "--water") {
+            const char* text = value();
+            std::array<double, 6> v{};
+            if (text == nullptr || std::sscanf(text, "%lf,%lf,%lf,%lf,%lf,%lf", &v[0], &v[1], &v[2],
+                                               &v[3], &v[4], &v[5]) != 6) {
+                return "--water needs X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH";
+            }
+            options.water.push_back({{v[0], v[1], v[2]}, v[3], v[4], v[5]});
         } else if (arg == "--joint-control") {
             options.jointControl = true;
         } else if (arg == "--plugin") {

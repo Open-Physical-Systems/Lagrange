@@ -1,0 +1,18 @@
+#usda 1.0
+(
+    defaultPrim = "pond"
+    doc = "A pond: 12 m by 8 m of still water, its surface 0.5 m above the ground, for trying out water."
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "pond" (
+    prepend apiSchemas = ["WaterAPI_1"]
+)
+{
+    double3 xformOp:translate = (0, 0, 0.5)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+    double water:sizeX = 12
+    double water:sizeY = 8
+    double water:depth = 0.5
+}

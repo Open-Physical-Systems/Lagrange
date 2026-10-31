@@ -277,6 +277,7 @@ def delete(argv: list[str]) -> int:
 
 # The run file (docs/guide/run-file.md): one YAML file for a whole run.
 DOMAIN_OFF = {
+    "water": "hydrodynamics",
     "physics": "rigid_body",
     "sensors": "sensors",
     "electrical": "electrical",
@@ -303,6 +304,7 @@ RUN_KEYS = {
     "humans",
     "record",
     "control",
+    "water",
 }
 SITE_KEYS = {
     "gravity",
@@ -386,6 +388,12 @@ def run_file_args(path: str) -> list[str]:
         args.append("--no-ros")
     if "humans" in run:
         args += ["--humans", str(run["humans"])]
+    for body in run.get("water") or []:
+        missing = {"at", "size", "depth"} - set(body)
+        if missing or len(body["at"]) != 3 or len(body["size"]) != 2:
+            fail("water: each is {at: [x, y, surface height], size: [x, y], depth: m}")
+        numbers = [*body["at"], *body["size"], body["depth"]]
+        args += ["--water", ",".join(str(float(v)) for v in numbers)]
     if "record" in run:
         args += ["--record", str(base / str(run["record"]))]
     control = run.get("control", "joints")

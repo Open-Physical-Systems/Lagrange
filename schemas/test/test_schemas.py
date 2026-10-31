@@ -38,6 +38,7 @@ EXPECTED = {
     "vehicle": ["VehicleAPI_1", "WheelAPI_1"],
     "road": ["RoadLaneAPI_1"],
     "human": ["HumanAPI_1"],
+    "water": ["WaterAPI_1"],
     "world": ["WorldTileAPI_1"],
 }
 

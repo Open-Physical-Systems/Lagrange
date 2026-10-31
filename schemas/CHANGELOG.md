@@ -8,6 +8,9 @@ and `test_schemas.py` checks it.
 
 ## Unreleased
 
+- **Water library**: `WaterAPI_1`, a box of still water (size, depth, density, drag, reflectivity). New
+  library, nothing to migrate.
+
 - **`SensorMaterialAPI_1`** gains `sensmat:preset` (a named surface for lidars). An addition; lidars
   now read the schema's reflectivity, specular fraction, transmission and retroreflective values.
 

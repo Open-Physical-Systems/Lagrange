@@ -7,6 +7,7 @@
 #include "lagrange/fields/Field.hpp"
 #include "lagrange/humans/Body.hpp"
 #include "lagrange/humans/Humans.hpp"
+#include "lagrange/hydrodynamics/Water.hpp"
 #include "lagrange/importers/Importers.hpp"
 #include "lagrange/mavlink/ArduPilotJson.hpp"
 #include "lagrange/mavlink/Px4Lockstep.hpp"
@@ -706,6 +707,10 @@ struct Server::Impl {
                 next->add(std::make_unique<traffic::Traffic>(off("traffic")),
                           ModuleConfig(traffic));
             }
+        }
+        // Water: floats and drags what enters it; off, it is only a surface to the sensors.
+        if (!WorldView(robot.world).instancesOf("WaterAPI_1").empty() && !off("hydrodynamics")) {
+            next->add(std::make_unique<hydrodynamics::Water>());
         }
         // People (RFC 0009): moved like traffic agents, around the robots.
         if (hasHumans()) {
@@ -3502,6 +3507,20 @@ struct Server::Impl {
                         std::to_string(options.trafficSeed) + ")");
             }
         }
+        // Water: from the files and --water, with no collider.
+        std::vector<hydrodynamics::WaterBody> waters = hydrodynamics::takeWater(model);
+        for (std::size_t w = 0; w < options.water.size(); ++w) {
+            hydrodynamics::WaterBody body;
+            body.name = "water_" + std::to_string(w);
+            body.surface = options.water[w].surface;
+            body.sizeX = options.water[w].sizeX;
+            body.sizeY = options.water[w].sizeY;
+            body.depth = options.water[w].depth;
+            waters.push_back(std::move(body));
+        }
+        for (const hydrodynamics::WaterBody& body : waters) {
+            hydrodynamics::addWater(model, body);
+        }
         // People last, so that the first bodies stay the robot's (RFC 0009 §8).
         std::vector<humans::Spec> people = humans::takeSpecs(model);
         for (const Spawned& file : spawned) {
@@ -3971,6 +3990,9 @@ struct Server::Impl {
         }
         if (hasHumans()) {
             context.modules.insert("humans");
+        }
+        if (!WorldView(robot.world).instancesOf("WaterAPI_1").empty()) {
+            context.modules.insert("hydrodynamics");
         }
         for (const auto& [key, value] : options.weather) {
             context.weatherKnown.insert(key);
