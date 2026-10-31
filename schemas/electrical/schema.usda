@@ -178,7 +178,7 @@ class "ElectricalMotorAPI_1" (
     )
     double elec:gearRatio = 1 (
         lagrangeUnit = "1"
-        doc = "Motor revolutions per joint revolution."
+        doc = "Motor revolutions per joint revolution; on a slide, motor radians per metre of travel."
     )
     double elec:gearEfficiency = 1 (
         lagrangeUnit = "1"
@@ -198,7 +198,11 @@ class "ElectricalMotorAPI_1" (
     )
     uniform token elec:controlMode = "torque" (
         allowedTokens = ["torque", "velocity", "voltage"]
-        doc = "What the joint's torque_command signal means."
+        doc = "Which command the drive follows: joint/<j>/torque_command, velocity_command or voltage_command."
+    )
+    double elec:velocityLoopBandwidth = 62.83 (
+        lagrangeUnit = "rad/s"
+        doc = "Speed loop of a velocity-mode drive; critically damped at half of this (illustrative)."
     )
     double elec:currentLoopBandwidth = 6283 (
         lagrangeUnit = "rad/s"

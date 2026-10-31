@@ -611,7 +611,10 @@ struct Server::Impl {
             }
         }
         if (jointControlled()) {
-            next->add(std::make_unique<JointControl>(jointTargets));
+            // Off, nothing simulates the motors: every joint takes a torque.
+            next->add(std::make_unique<JointControl>(
+                jointTargets, off("electrical") ? std::map<std::string, std::string>{}
+                                                : electrical::driveModes(WorldView(robot.world))));
         } else if (controllers) {
             // ros2_control drives the joints; the controller manager outlives this scheduler.
             next->add(ros2_control::createControlModule(*controllers, controlJoints));
@@ -5504,6 +5507,8 @@ bool Server::commandJoint(const std::string& joint, const std::string& mode, dou
         target.mode = JointTarget::Mode::Velocity;
     } else if (mode == "effort") {
         target.mode = JointTarget::Mode::Effort;
+    } else if (mode == "voltage") {
+        target.mode = JointTarget::Mode::Voltage;
     } else {
         return false;
     }

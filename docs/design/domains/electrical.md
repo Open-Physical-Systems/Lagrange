@@ -195,8 +195,19 @@ Choices made while implementing, beyond §2:
   converter per output bus. Signals `converter/<c>/output_current`, `input_current` and
   `loss_power`; `test_network` checks regulation, the power drawn and the current limit.
 
-Not yet: `velocity` and `voltage` control modes,
-battery FMUs, motors on prismatic joints, and the rotor inertia in Jolt.
+`elec:controlMode` (as built): `torque` follows `joint/<j>/torque_command`; `velocity` follows
+`joint/<j>/velocity_command` through a PI speed loop in the drive, critically damped on the joint's
+inertia (`elec:velocityLoopBandwidth`, illustrative), held by the current limit; `voltage` puts
+`joint/<j>/voltage_command` on the winding, limited by the bus, with no current loop and so no current
+limit. Those two commands are required: `--joint-control` writes them (`Server::commandJoint`, and
+`/joint_commands`, whose `effort` field carries volts for a voltage motor), a plugin or `--ros-topics`
+can too, and the built-in drive controllers and ros2_control, which write torques, stop the start with
+`MissingInput`. On a prismatic joint the drive is linear: `elec:gearRatio` is motor radians per metre
+(2π over a screw's lead), and torque, speed and inertia at the joint are force, m/s and mass.
+Checked against the closed forms: stall and no-load in voltage mode, steady speed under load in
+velocity mode, on a hinge and a slide (`server/test/test_motor_modes.cpp`).
+
+Not yet: battery FMUs and the rotor inertia in Jolt.
 
 | §8 check | Status | Test |
 |---|---|---|

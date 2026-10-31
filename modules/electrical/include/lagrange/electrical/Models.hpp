@@ -15,7 +15,9 @@ struct MotorParams {
     double inductanceQ{0.0};     // H
     double torqueConstant{0.0};  // N·m per peak q-axis ampere (brushed: per ampere), motor shaft
     int polePairs{1};
-    double gearRatio{1.0};                // motor revolutions per joint revolution
+    /// Motor revolutions per joint revolution; on a slide, motor radians per metre of travel
+    /// (2π / a screw's lead). Joint torque, speed and inertia are then force, m/s and mass.
+    double gearRatio{1.0};
     double gearEfficiency{1.0};           // 0..1
     double maxCurrent{0.0};               // A, peak
     double referenceTemperature{298.15};  // K
@@ -37,7 +39,11 @@ struct MotorState {
 };
 
 struct MotorInputs {
-    double torqueCommand{0.0};   // N·m at the joint
+    double torqueCommand{0.0};  // N·m at the joint
+    /// Voltage mode: the q-axis (brushed: armature) voltage as asked, V, held to what the bus
+    /// gives, with no current loop and so no current limit, as bare PWM has none.
+    bool voltageMode{false};
+    double voltageCommand{0.0};
     double jointVelocity{0.0};   // rad/s
     double busVoltage{0.0};      // V
     double temperature{298.15};  // K, of the winding

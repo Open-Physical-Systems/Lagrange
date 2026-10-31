@@ -12,9 +12,9 @@ namespace lagrange::server {
 
 /// What a joint was last told (--joint-control, /joint_commands, Server::commandJoint).
 struct JointTarget {
-    enum class Mode : std::uint8_t { None, Position, Velocity, Effort };
+    enum class Mode : std::uint8_t { None, Position, Velocity, Effort, Voltage };
     Mode mode{Mode::None};
-    double value{0.0};  // rad or m; rad/s or m/s; N·m or N
+    double value{0.0};  // rad or m; rad/s or m/s; N·m or N; V
 };
 
 /// The commands waiting for the module, written by ROS's thread or the caller's.
@@ -36,7 +36,11 @@ private:
 /// A joint not yet commanded gets no torque.
 class JointControl final : public IModule {
 public:
-    explicit JointControl(std::shared_ptr<JointTargets> targets);
+    /// `driveModes`: joints whose motor follows a velocity or a voltage (electrical::driveModes)
+    /// are told that, not a torque. A velocity motor takes position and velocity targets; a voltage
+    /// motor takes volts, as a voltage target or in /joint_commands' effort field.
+    explicit JointControl(std::shared_ptr<JointTargets> targets,
+                          std::map<std::string, std::string> driveModes = {});
 
     [[nodiscard]] ModuleInfo info() const override;
     [[nodiscard]] Duration preferredStep() const override;
@@ -52,8 +56,10 @@ private:
         std::string name;
         SignalId position, velocity, inertia, torque;
         double limit{0.0};
+        std::string mode{"torque"};  // what `torque` above commands: torque, velocity or voltage
     };
     std::shared_ptr<JointTargets> targets_;
+    std::map<std::string, std::string> driveModes_;
     std::vector<Joint> joints_;
 };
 

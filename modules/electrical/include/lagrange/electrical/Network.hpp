@@ -4,6 +4,7 @@
 #include "lagrange/electrical/Models.hpp"
 #include "lagrange/module/IModule.hpp"
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -49,8 +50,17 @@ namespace lagrange::electrical {
 /// by the caller from motorFmuBindings); the network takes its motor/<m>/bus_current into the
 /// bus and leaves its joint to it. At `averaged` the behaviour models are ignored.
 ///
-/// Not yet: velocity and voltage control modes, battery FMUs, motors on prismatic joints.
-/// Default step 100 µs.
+/// elec:controlMode: `torque` reads joint/<j>/torque_command; `velocity` reads
+/// joint/<j>/velocity_command through the drive's own PI speed loop, critically damped at
+/// elec:velocityLoopBandwidth on the joint's inertia, over the current loops; `voltage` reads
+/// joint/<j>/voltage_command straight to the winding. Those two commands are required inputs: a
+/// controller writing only torque commands stops the start with MissingInput. On a prismatic
+/// joint everything at the joint is linear (MotorParams::gearRatio).
+///
+/// Not yet: battery FMUs. Default step 100 µs.
+/// The joints whose motor is not in torque mode, with its mode: "velocity" or "voltage".
+[[nodiscard]] std::map<std::string, std::string> driveModes(const WorldView& world);
+
 class ElectricalNetwork final : public IModule {
 public:
     /// H/τm above which the exchange is refused without and with speed prediction
@@ -84,7 +94,12 @@ private:
         MotorParams params;
         MotorState state;
         std::size_t bus{0};
-        bool tripped{false};       // undervoltage fault, latched
+        bool tripped{false};  // undervoltage fault, latched
+        bool slide{false};    // on a prismatic joint: force, m/s, kg at the joint
+        std::string mode{"torque"};
+        double velocityBandwidth{0.0};  // rad/s
+        double velocityIntegral{0.0};   // N·m or N, the speed loop's
+        SignalId velocityCommand, voltageCommand;
         double worldInertia{0.0};  // kg·m², the joint's at rest, from the world
         // Speed prediction between physics updates.
         double predicted{0.0}, loadEstimate{0.0}, lastSample{0.0}, torqueSum{0.0};
