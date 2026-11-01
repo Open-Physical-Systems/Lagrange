@@ -1293,8 +1293,9 @@ void Bridge::serveSimulation(SimulationHandler& handler) {
 
     // The site, as parameters: ros2 param set /lagrange_ros2_bridge gravity 1.62 (lagrange set).
     // NaN: as the run started.
-    for (const char* name : {"gravity", "wind_speed", "wind_from", "temperature", "air_density",
-                             "pressure", "relative_humidity", "rain_rate", "visibility"}) {
+    for (const char* name :
+         {"gravity", "wind_speed", "wind_from", "temperature", "air_density", "pressure",
+          "relative_humidity", "rain_rate", "visibility", "snow_rate", "snow_cover"}) {
         node.declare_parameter(name, std::numeric_limits<double>::quiet_NaN());
     }
     s.siteParameters = node.add_on_set_parameters_callback(

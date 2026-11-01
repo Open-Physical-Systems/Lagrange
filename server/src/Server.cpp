@@ -1007,9 +1007,10 @@ struct Server::Impl {
         }
         const bool positive = name == "temperature" || name == "air_density" ||
                               name == "pressure" || name == "visibility";
-        const bool notNegative = name == "wind_speed" || name == "rain_rate";
+        const bool notNegative = name == "wind_speed" || name == "rain_rate" || name == "snow_rate";
         if ((positive && value <= 0.0) || (notNegative && value < 0.0) ||
-            (name == "relative_humidity" && (value < 0.0 || value > 1.0))) {
+            ((name == "relative_humidity" || name == "snow_cover") &&
+             (value < 0.0 || value > 1.0))) {
             return Status::error(StatusCode::InvalidConfig,
                                  name + " = " + std::to_string(value) + " is out of range");
         }
@@ -1031,14 +1032,15 @@ struct Server::Impl {
             appliedAerodynamics.try_emplace("wind_reference_height", 10.0);
             appliedAerodynamics.try_emplace("roughness_length", 0.03);
         } else if (name == "pressure" || name == "relative_humidity" || name == "rain_rate" ||
-                   name == "visibility") {
+                   name == "visibility" || name == "snow_rate" || name == "snow_cover") {
             appliedWeather[name] = value;
         } else {
-            return Status::error(StatusCode::InvalidConfig,
-                                 "no site value " + name +
-                                     "; one of gravity, wind_speed, wind_from, temperature, "
-                                     "air_density, pressure, relative_humidity, rain_rate, "
-                                     "visibility");
+            return Status::error(
+                StatusCode::InvalidConfig,
+                "no site value " + name +
+                    "; one of gravity, wind_speed, wind_from, temperature, "
+                    "air_density, pressure, relative_humidity, rain_rate, snow_rate, snow_cover, "
+                    "visibility");
         }
         return {};
     }

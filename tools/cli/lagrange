@@ -59,7 +59,7 @@ _AIR = "pressure=101325"
 SEASONS = {
     "summer": f"temperature=299,{_AIR},relative_humidity=0.5",
     "fall": f"temperature=285,{_AIR},relative_humidity=0.65",
-    "winter": f"temperature=268,{_AIR},relative_humidity=0.8",
+    "winter": f"temperature=268,{_AIR},relative_humidity=0.8,snow_rate=2.8e-7,snow_cover=1",
     "rainy": f"temperature=291,{_AIR},relative_humidity=0.95,rain_rate=2e-6",  # about 7 mm/h
 }
 
@@ -356,6 +356,8 @@ SITE_KEYS = {
     "relative_humidity",
     "rain_rate",
     "visibility",
+    "snow_rate",
+    "snow_cover",
 }
 
 

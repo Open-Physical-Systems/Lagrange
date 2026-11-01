@@ -163,8 +163,8 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
             if (name == "weather") {
                 for (const char* key :
                      {"temperature", "pressure", "relative_humidity", "visibility", "rain_rate",
-                      "dust_concentration", "dust_median_diameter", "solar_irradiance",
-                      "sky_temperature"}) {
+                      "snow_rate", "snow_cover", "dust_concentration", "dust_median_diameter",
+                      "solar_irradiance", "sky_temperature"}) {
                     if (domain.contains(key) && domain[key].is_number()) {
                         settings.weather[key] = domain[key].as<double>();
                     }

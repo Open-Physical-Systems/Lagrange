@@ -1397,6 +1397,11 @@ Status Traffic::declare(const WorldView& world, const ModuleConfig& config, Sign
     crossingsOut_ = d.output(crossingTable);
     count_ = d.output(spec("traffic/agent_count", SignalType::Int, units::one));
     laneChangesOut_ = d.output(spec("traffic/lane_changes", SignalType::Int, units::one));
+    SignalSpec grip = spec("env/friction_scale", SignalType::Scalar, units::one);
+    grip.optional = true;
+    grip.defaultValue = 1.0;
+    grip.feedback = true;
+    friction_ = d.input(grip);
     SignalSpec table = spec("traffic/agents", SignalType::ScalarArray, units::one);
     table.arrayLength = static_cast<std::uint32_t>(std::max<std::size_t>(start_.size(), 1) * 8);
     table_ = d.output(table);
@@ -1621,6 +1626,13 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
             a.next = choose(a, i, current->successors);
         }
         const double v0 = current->speedLimit > 0.0 ? current->speedLimit : kDefaultSpeed;
+        // Slower on what is slippery: down to half speed on ice (illustrative), and gentler.
+        const double grip = std::clamp(bus.read(friction_), 0.05, 1.0);
+        const double v0Now = v0 * (0.5 + (0.5 * grip));
+        Idm idm = idm_;
+        idm.a *= std::max(grip, 0.3);
+        idm.b *= std::max(grip, 0.3);
+        idm.T /= std::max(grip, 0.5);
         double gap = std::numeric_limits<double>::infinity();
         double leaderSpeed = 0.0;
         const auto consider = [&](double g, double v) {
@@ -1734,7 +1746,7 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
         constexpr double kSideSpeed = 1.1;  // m/s (a lane in about 3 s, illustrative)
         a.sideRate = std::clamp(-a.offset / dt, -kSideSpeed, kSideSpeed);
         a.offset += a.sideRate * dt;
-        const double accel = std::max(idmAcceleration(idm_, a.speed, v0, gap, leaderSpeed), -8.0);
+        const double accel = std::max(idmAcceleration(idm, a.speed, v0Now, gap, leaderSpeed), -8.0);
         a.speed = std::max(0.0, a.speed + accel * dt);
         a.s += a.speed * dt;
         a.wheel = std::fmod(a.wheel - (a.speed * dt / a.tyre), 2.0 * std::numbers::pi);
