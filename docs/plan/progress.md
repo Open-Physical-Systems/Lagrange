@@ -545,3 +545,12 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
   with the built-in controller (Nav2's controller server never got `/odom`). So it is not
   ros2_control's: some process occasionally never discovers another's endpoint during the
   crowded start-up. The image defaults to the built-in controller.
+
+## Sanitizer record, 2026-11-01
+
+The town with 24 cars and 36 people, a headless viewer in the rainy season, and the ROS bridge on:
+ASan and UBSan with leak checks report nothing in the server; the viewer reports only a 208-byte leak
+in the GPU driver with no project frames. TSan (`tools/ci/tsan.supp`) reports nothing in the viewer and 4
+warnings in the server, all while the stage loads, on OpenUSD's own worker threads: taken as false
+alarms because OpenUSD and TBB are not instrumented, and not proven otherwise. These are one run each,
+not a proof.
