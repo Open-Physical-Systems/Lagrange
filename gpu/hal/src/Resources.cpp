@@ -1,7 +1,9 @@
 #include "lagrange/gpu/Device.hpp"
 #include "lagrange/gpu/Resources.hpp"
 
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -88,6 +90,92 @@ Image createImage2D(const Device& device, VkExtent2D extent, VkFormat format,
     viewInfo.format = format;
     viewInfo.subresourceRange = {aspect, 0, 1, 0, 1};
     vkCreateImageView(device.device(), &viewInfo, nullptr, &image.view);
+    return image;
+}
+
+Image createTextureArray(const Device& device, std::uint32_t size, VkFormat format,
+                         std::span<const std::vector<std::uint8_t>> layers) {
+    const auto count = static_cast<std::uint32_t>(layers.size());
+    const std::uint32_t mips = std::bit_width(size);
+    VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    info.imageType = VK_IMAGE_TYPE_2D;
+    info.format = format;
+    info.extent = {size, size, 1};
+    info.mipLevels = mips;
+    info.arrayLayers = count;
+    info.samples = VK_SAMPLE_COUNT_1_BIT;
+    info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                 VK_IMAGE_USAGE_SAMPLED_BIT;
+    VmaAllocationCreateInfo allocation{};
+    allocation.usage = VMA_MEMORY_USAGE_AUTO;
+    Image image;
+    image.format = format;
+    image.extent = {size, size};
+    vmaCreateImage(device.allocator(), &info, &allocation, &image.image, &image.allocation,
+                   nullptr);
+    const VkDeviceSize layerBytes = VkDeviceSize{size} * size * 4;
+    Buffer staging =
+        createBuffer(device, layerBytes * count, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
+    for (std::uint32_t l = 0; l < count; ++l) {
+        std::memcpy(static_cast<std::byte*>(staging.mapped) + (layerBytes * l), layers[l].data(),
+                    layerBytes);
+    }
+    vmaFlushAllocation(device.allocator(), staging.allocation, 0, VK_WHOLE_SIZE);
+    device.submitAndWait([&](VkCommandBuffer commands) {
+        const auto barrier = [&](std::uint32_t mip, std::uint32_t levels, VkImageLayout from,
+                                 VkImageLayout to, VkAccessFlags before, VkAccessFlags after,
+                                 VkPipelineStageFlags fromStage, VkPipelineStageFlags toStage) {
+            VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            b.srcAccessMask = before;
+            b.dstAccessMask = after;
+            b.oldLayout = from;
+            b.newLayout = to;
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image = image.image;
+            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, mip, levels, 0, count};
+            vkCmdPipelineBarrier(commands, fromStage, toStage, 0, 0, nullptr, 0, nullptr, 1, &b);
+        };
+        barrier(0, mips, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, count};
+        region.imageExtent = {size, size, 1};
+        vkCmdCopyBufferToImage(commands, staging.buffer, image.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        for (std::uint32_t mip = 1; mip < mips; ++mip) {
+            barrier(mip - 1, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT);
+            VkImageBlit blit{};
+            const auto from = static_cast<std::int32_t>(std::max(size >> (mip - 1), 1U));
+            const auto to = static_cast<std::int32_t>(std::max(size >> mip, 1U));
+            blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, mip - 1, 0, count};
+            blit.srcOffsets[1] = {from, from, 1};
+            blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, mip, 0, count};
+            blit.dstOffsets[1] = {to, to, 1};
+            vkCmdBlitImage(commands, image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image.image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+        }
+        barrier(0, mips - 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT,
+                VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        barrier(mips - 1, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    });
+    destroy(device, staging);
+    VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    view.image = image.image;
+    view.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    view.format = format;
+    view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, count};
+    vkCreateImageView(device.device(), &view, nullptr, &image.view);
     return image;
 }
 

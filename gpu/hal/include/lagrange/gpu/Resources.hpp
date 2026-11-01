@@ -44,6 +44,10 @@ void invalidate(const Device& device, const Buffer& buffer);
 [[nodiscard]] Image createImage2D(const Device& device, VkExtent2D extent, VkFormat format,
                                   VkImageUsageFlags usage, VkImageAspectFlags aspect,
                                   VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
+/// A sampled 2D array with a full mip chain, from tightly packed RGBA8 layers of `size` x `size`
+/// pixels, each `size` * `size` * 4 bytes. Left in SHADER_READ_ONLY_OPTIMAL.
+[[nodiscard]] Image createTextureArray(const Device& device, std::uint32_t size, VkFormat format,
+                                       std::span<const std::vector<std::uint8_t>> layers);
 void destroy(const Device& device, Image& image);
 
 [[nodiscard]] VkShaderModule createShaderModule(const Device& device,

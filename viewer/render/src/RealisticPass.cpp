@@ -1,4 +1,5 @@
 #include "RealisticPass.hpp"
+#include "SurfaceTextures.hpp"
 #include "lagrange/gpu/Device.hpp"
 #include "shaders/kRealCompositeFragment.hpp"
 #include "shaders/kRealMeshFragment.hpp"
@@ -163,8 +164,32 @@ RealisticPass::RealisticPass(const gpu::Device& device) : device_(device) {
     sampler.magFilter = VK_FILTER_NEAREST;
     sampler.minFilter = VK_FILTER_NEAREST;
     vkCreateSampler(d, &sampler, nullptr, &nearest_);
+    sampler.magFilter = VK_FILTER_LINEAR;
+    sampler.minFilter = VK_FILTER_LINEAR;
+    sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler.maxLod = VK_LOD_CLAMP_NONE;
+    sampler.anisotropyEnable = device_.samplerAnisotropy() ? VK_TRUE : VK_FALSE;
+    sampler.maxAnisotropy = 8.0F;
+    vkCreateSampler(d, &sampler, nullptr, &repeat_);
 
-    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
+    // Photographs of surfaces; without them a grey layer, and the shader's own patterns.
+    SurfaceTextures textures = loadSurfaceTextures(surfaceTextureDirectory());
+    hasTextures_ = textures.complete;
+    if (hasTextures_) {
+        albedo_ = gpu::createTextureArray(device_, SurfaceTextures::kSize, VK_FORMAT_R8G8B8A8_SRGB,
+                                          textures.albedo);
+        normal_ = gpu::createTextureArray(device_, SurfaceTextures::kSize, VK_FORMAT_R8G8B8A8_UNORM,
+                                          textures.normal);
+    } else {
+        const std::vector<std::vector<std::uint8_t>> grey{{128, 128, 255, 255}};
+        albedo_ = gpu::createTextureArray(device_, 1, VK_FORMAT_R8G8B8A8_SRGB, grey);
+        normal_ = gpu::createTextureArray(device_, 1, VK_FORMAT_R8G8B8A8_UNORM, grey);
+    }
+
+    std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
     for (std::uint32_t b = 0; b < bindings.size(); ++b) {
         bindings.at(b).binding = b;
         bindings.at(b).descriptorCount = 1;
@@ -178,7 +203,7 @@ RealisticPass::RealisticPass(const gpu::Device& device) : device_(device) {
     vkCreateDescriptorSetLayout(d, &layout, nullptr, &setLayout_);
 
     const std::array<VkDescriptorPoolSize, 2> sizes{
-        {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 12}}};
+        {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 18}}};
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.maxSets = 3;
     poolInfo.poolSizeCount = sizes.size();
@@ -212,6 +237,9 @@ RealisticPass::~RealisticPass() {
         vkDestroyPipelineLayout(d, p->layout, nullptr);
     }
     vkDestroyDescriptorPool(d, pool_, nullptr);
+    vkDestroySampler(d, repeat_, nullptr);
+    gpu::destroy(device_, albedo_);
+    gpu::destroy(device_, normal_);
     vkDestroyDescriptorSetLayout(d, setLayout_, nullptr);
     vkDestroySampler(d, linear_, nullptr);
     vkDestroySampler(d, nearest_, nullptr);
@@ -292,13 +320,15 @@ void RealisticPass::descriptors(const gpu::Image& depth) {
         const VkDescriptorBufferInfo uniform{frames_.buffer, offset, sizeof(Frame)};
         const VkImageLayout read = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         const VkImageLayout readDepth = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
-        const std::array<VkDescriptorImageInfo, 4> images{{
+        const std::array<VkDescriptorImageInfo, 6> images{{
             {nearest_, shadow_.view, readDepth},
             {linear_, scene.view, read},
             {nearest_, depth.view, readDepth},
             {linear_, mirror_.view, read},
+            {repeat_, albedo_.view, read},
+            {repeat_, normal_.view, read},
         }};
-        std::array<VkWriteDescriptorSet, 5> writes{};
+        std::array<VkWriteDescriptorSet, 7> writes{};
         for (std::uint32_t b = 0; b < writes.size(); ++b) {
             VkWriteDescriptorSet& w = writes.at(b);
             w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -388,6 +418,7 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
             break;
     }
     main.mode[2] = season;
+    main.mode[3] = hasTextures_ ? 1.0F : 0.0F;
     const double seconds = frame != nullptr ? static_cast<double>(frame->simTimeNs) * 1e-9 : 0.0;
     // Wrapped so that a float holds it: noise and waves repeat every 1024 m and 17 minutes.
     main.worldWrap = {f(std::fmod(eye[0], 1024.0)), f(std::fmod(eye[1], 1024.0)),
@@ -407,7 +438,7 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
                    1.0F / static_cast<float>(extent.width),
                    1.0F / static_cast<float>(extent.height)};
     Frame mirrorFrame = main;
-    mirrorFrame.mode = {1.0F, water ? f(water->top) : 0.0F, season, 0.0F};
+    mirrorFrame.mode = {1.0F, water ? f(water->top) : 0.0F, season, hasTextures_ ? 1.0F : 0.0F};
     mirrorFrame.sunDirection[2] = -main.sunDirection[2];
     auto* mapped = static_cast<std::byte*>(frames_.mapped);
     std::memcpy(mapped, &main, sizeof(Frame));

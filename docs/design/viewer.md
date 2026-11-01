@@ -619,9 +619,11 @@ be shared. The viewer does not host RViz display plugins. Interoperation is thro
 
 ## Seasons and procedural surfaces
 
-The realistic view has no textures. `surfacePatternOf` takes a pattern from a word of a material's
-name (brick, asphalt, pavement, plaster, concrete, lawn, leaves, road_paint, window_glass, bark,
-roof_felt) and `realistic.slang` draws it from world position. `Season` (`--season`, the Shading
+`surfacePatternOf` takes a surface from a word of a material's name (brick, asphalt, pavement,
+plaster, concrete, lawn, leaves, road_paint, window_glass, bark, roof_felt). Brick, asphalt, pavement,
+plaster, concrete, lawn, bark and roofing use photographs (`viewer/assets/textures`, CC0), tiled by
+world position and tinted to the material's own colour, so meshes need no texture coordinates; a
+viewer without the files, and the other kinds, use shader patterns. `Season` (`--season`, the Shading
 menu) changes the sun, sky, haze, surfaces, puddles and falling rain or snow; all by eye and drawn
 only. Rain's effect on sensors and grip comes from the weather domain, which `lagrange --season`
 sets. Snow has no such model yet, and water does not freeze. The camera sensor draws with

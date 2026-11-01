@@ -23,7 +23,7 @@ struct Frame
     float4 waterRect;         // xy centre relative to the eye; zw half sizes
     float4 screen;            // xy: size in pixels; zw: 1 / size
     float4 mode;              // x: 1 in the mirror pass (y: the plane's relative height there);
-                              // z: the season
+                              // z: the season; w: 1 with surfaceAlbedo's photographs
 };
 
 [[vk::binding(0)]] ConstantBuffer<Frame> frame;
@@ -31,6 +31,8 @@ struct Frame
 [[vk::binding(2)]] Sampler2D sceneColor;  // HDR, what was drawn before the water
 [[vk::binding(3)]] Sampler2D sceneDepth;
 [[vk::binding(4)]] Sampler2D mirrorColor; // what the water reflects; alpha 0 where only sky
+[[vk::binding(5)]] Sampler2DArray surfaceAlbedo;  // photographs of surfaces, one layer per kind
+[[vk::binding(6)]] Sampler2DArray surfaceNormal;  // their bumps, OpenGL convention
 
 struct Push
 {
@@ -326,6 +328,42 @@ float joint(float2 f, float2 width)
     return e.x * e.y;
 }
 
+// A photograph tiled every `tile` metres (a power of two, so that it survives the 1024 m wrap of
+// `world`), keeping the material's own colour: its average becomes `albedo`.
+void imageSurface(float layer, float tile, float bump, float3 world, inout float3 N, inout float3 albedo)
+{
+    float2 uv = surfaceCoords(world, N) / tile;
+    float3 a = abs(N);
+    float3 T = a.z > 0.7 ? float3(1, 0, 0) : a.x > a.y ? float3(0, 1, 0) : float3(1, 0, 0);
+    float3 B = a.z > 0.7 ? float3(0, 1, 0) : float3(0, 0, 1);
+    float3 picture = surfaceAlbedo.Sample(float3(uv, layer)).rgb;
+    float3 average = surfaceAlbedo.SampleLevel(float3(0.5, 0.5, layer), 20.0).rgb;
+    float3 bumps = surfaceNormal.Sample(float3(uv, layer)).rgb * 2.0 - 1.0;
+    // Mostly its light and dark, a little of its hue: the material says what colour it is.
+    float3 ratio = picture / max(average, float3(0.02));
+    float light = dot(ratio, float3(0.299, 0.587, 0.114));
+    albedo *= lerp(float3(light), ratio, 0.2);
+    N = normalize(N + (T * bumps.x + B * bumps.y) * bump);
+    albedo *= 0.84 + 0.32 * fbm(world * 0.23, 3);  // no two tiles alike from afar
+}
+
+// Layer and tile of a kind that has a photograph: 0 when it has none.
+float2 imageOf(int kind)
+{
+    switch (kind)
+    {
+    case 1: return float2(0.0, 2.0);   // brick
+    case 2: return float2(1.0, 4.0);   // asphalt
+    case 3: return float2(2.0, 2.0);   // pavement
+    case 4: return float2(3.0, 4.0);   // plaster
+    case 5: return float2(4.0, 4.0);   // concrete
+    case 6: return float2(5.0, 4.0);   // lawn
+    case 10: return float2(6.0, 1.0);  // bark
+    case 11: return float2(7.0, 4.0);  // roof
+    default: return float2(0.0, 0.0);
+    }
+}
+
 void surfacePattern(float pattern, float3 world, float distance, inout float3 N, inout float3 albedo,
                     inout float metallic, inout float roughness)
 {
@@ -336,7 +374,10 @@ void surfacePattern(float pattern, float3 world, float distance, inout float3 N,
     float mid = fbm(world * 1.9, 3);
     float wall = 1.0 - smoothstep(0.3, 0.7, abs(N.z));
     int kind = int(pattern + 0.5);
-    if (kind == 1)  // brick: running bond, 225 x 75 mm with a 10 mm joint
+    float2 image = imageOf(kind);
+    if (frame.mode.w > 0.5 && image.y > 0.0)
+        imageSurface(image.x, image.y, kind == 6 ? 1.0 : 0.7, world, N, albedo);
+    else if (kind == 1)  // brick: running bond, 225 x 75 mm with a 10 mm joint
     {
         float2 size = float2(0.235, 0.085);
         float row = floor(uv.y / size.y);
@@ -412,8 +453,8 @@ void surfacePattern(float pattern, float3 world, float distance, inout float3 N,
     {
         float2 pane = floor(uv / float2(1.6, 3.3));
         float room = hash2(pane);
-        float lit = step(0.88, room);
-        albedo = lerp(float3(0.015, 0.02, 0.028), float3(0.75, 0.58, 0.34), lit * 0.28);
+        float lit = step(0.93, room);
+        albedo = lerp(float3(0.015, 0.02, 0.028), float3(0.75, 0.58, 0.34), lit * 0.09);
         metallic = 0.55;
         // Old float glass is not flat: the reflection wobbles from pane to pane.
         roughness = 0.03 + 0.05 * room;
