@@ -230,5 +230,4 @@ of the formula and ngspice within 0.1 %. It covers a battery port's harness (`wi
 battery's terminals and the bus; the batteries' other ports and loads' and drives' do not count), a resistive load, a constant-power load, an RC
 pair's transient, two batteries in parallel, the charge drained, and a PMSM or brushed motor
 turning a flywheel. It does not cover switching, thermal effects, a sloped voltage curve, trips,
-regeneration or converters. The network only runs for a robot with a motor, so circuits without
-one carry an idle motor.
+regeneration or converters.

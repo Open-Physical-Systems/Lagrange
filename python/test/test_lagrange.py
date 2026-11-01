@@ -123,3 +123,44 @@ def test_the_quadcopter_holds_its_position_in_gusty_wind() -> None:
         gusts.append(sim.read("env/wind/gust")[0])
     assert max(gusts) - min(gusts) > 1.0, "the turbulence varies"
     assert sim.read("body/base_link/airspeed")[0] > 2.0, "the wind blows on it"
+
+
+def _usd_arm(folder, joints: int, hinges_driven: bool = True) -> str:
+    """A chain of links in USD with no joint to the world, as CAD exports it."""
+    drive = '( prepend apiSchemas = ["PhysicsDriveAPI:angular"] )' if hinges_driven else ""
+    force = "float drive:angular:physics:maxForce = 500" if hinges_driven else ""
+    body = ['#usda 1.0\n(\n    defaultPrim = "arm"\n    metersPerUnit = 1\n    upAxis = "Z"\n)']
+    body.append('def Xform "arm"\n{')
+    for i in range(joints + 1):
+        body.append(
+            f'def Xform "link{i}" '
+            '( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )'
+            f"\n{{\nfloat physics:mass = 1\ndouble3 xformOp:translate = (0, 0, {0.5 + i * 0.2})\n"
+            'uniform token[] xformOpOrder = ["xformOp:translate"]\n}'
+        )
+    for i in range(joints):
+        body.append(
+            f'def PhysicsRevoluteJoint "joint{i}" {drive}\n{{\n'
+            f"rel physics:body0 = </arm/link{i}>\nrel physics:body1 = </arm/link{i + 1}>\n"
+            f'uniform token physics:axis = "Z"\n{force}\n}}'
+        )
+    body.append("}")
+    path = folder / "arm.usda"
+    path.write_text("\n".join(body) + "\n")
+    return str(path)
+
+
+def test_a_usd_arm_with_no_world_joint_stands(tmp_path) -> None:
+    sim = lagrange.Simulation(_usd_arm(tmp_path, 4), world=None)
+    sim.step_until(1.0)
+    pose = sim.read("body/link1/pose")  # its base is welded: only what moves has a pose
+    assert abs(pose[2] - 0.7) < 1e-3, pose
+
+
+def test_a_usd_chain_too_short_or_undriven_still_falls(tmp_path) -> None:
+    sim = lagrange.Simulation(_usd_arm(tmp_path, 2), world=None)
+    sim.step_until(0.3)
+    assert sim.read("body/link0/pose")[2] < 0.4
+    sim = lagrange.Simulation(_usd_arm(tmp_path, 4, hinges_driven=False), world=None)
+    sim.step_until(0.3)
+    assert sim.read("body/link0/pose")[2] < 0.4

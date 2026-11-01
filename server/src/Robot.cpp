@@ -90,6 +90,8 @@ std::set<std::string> commandedJoints(const std::string& path) {
     return joints;
 }
 
+constexpr int kArmJoints = 3;  // a chain this long is an arm, not a wheel or a door
+
 /// How many driven joints follow one another below `link`; -1 when they branch or one is passive.
 int drivenChainBelow(const urdf::ModelInterface& model, const urdf::Link& link) {
     int below = 0;
@@ -942,7 +944,6 @@ Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
     // A root link named "world" is the ROS convention for something bolted to the ground.
     // So is a single chain of three or more driven joints, an arm: nothing on it could carry it
     // around, and most arm URDFs leave out the "world" link.
-    constexpr int kArmJoints = 3;
     const bool worldRoot = root->name == "world";
     const bool arm = !worldRoot && drivenChainBelow(*model, *root) >= kArmJoints;
     const bool fixedBase = worldRoot || arm;
@@ -1204,6 +1205,48 @@ Expected<Robot, std::string> placed(Expected<Robot, std::string> model, const Po
     return model;
 }
 
+/// How many driven joints follow one another below `body` in the world tables; -1 as
+/// drivenChainBelow: a branch, or a movable joint nothing can drive.
+int drivenChainBelow(const World& world, BodyId body) {
+    const World::Joints& joints = world.joints;
+    int below = 0;
+    for (std::size_t j = 0; j < joints.names.size(); ++j) {
+        if (joints.parent[j] != body || joints.child[j] == body) {
+            continue;
+        }
+        const int chain = drivenChainBelow(world, joints.child[j]);
+        const bool movable = joints.type[j] != JointType::Fixed;
+        if (chain < 0 || (movable && joints.effortLimit[j] <= 0.0 && !joints.actuated[j])) {
+            return -1;
+        }
+        const int here = chain + (movable ? 1 : 0);
+        if (here > 0 && below > 0) {
+            return -1;
+        }
+        below = std::max(below, here);
+    }
+    return below;
+}
+
+/// USD and SDFormat say a body with no joint to the world floats, which an arm imported from CAD
+/// never means: as in a URDF, one chain of driven joints gets a fixed base. A free joint someone
+/// wrote (MJCF's <freejoint>) stays.
+Expected<Robot, std::string> armFixed(Expected<Robot, std::string> model) {
+    if (!model) {
+        return model;
+    }
+    World::Joints& joints = model->world.joints;
+    for (std::size_t j = 0; j < joints.names.size(); ++j) {
+        if (joints.type[j] == JointType::Free && joints.names[j].ends_with("_floating") &&
+            drivenChainBelow(model->world, joints.child[j]) >= kArmJoints) {
+            joints.type[j] = JointType::Fixed;
+            model->notes.push_back("one chain of driven joints: " + joints.names[j] +
+                                   " is fixed where it starts, as an arm");
+        }
+    }
+    return model;
+}
+
 }  // namespace
 
 Expected<Robot, std::string> loadModel(const std::string& path, const LoadOptions& options) {
@@ -1214,10 +1257,10 @@ Expected<Robot, std::string> loadModel(const std::string& path, const LoadOption
             stage::ReadOptions read;
             read.defaultFriction = options.surfaceFriction;
             read.groundFriction = options.groundFriction;
-            return placed(stage::loadStage(path, read), options.spawn);
+            return placed(armFixed(stage::loadStage(path, read)), options.spawn);
         }
         case importers::Format::Sdf:
-            return placed(importers::importSdf(path, import), options.spawn);
+            return placed(armFixed(importers::importSdf(path, import)), options.spawn);
         case importers::Format::Mjcf:
             return placed(importers::importMjcf(path, import), options.spawn);
         case importers::Format::Urdf:
