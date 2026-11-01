@@ -655,6 +655,7 @@ public:
     void setFocusPanel(std::string title) { focusPanel_ = std::move(title); }
     void setExportNetlist(std::string path) { exportNetlist_ = std::move(path); }
     void setCursors(bool on) { cursorsWanted_ = on; }
+    [[nodiscard]] Shading shading() const { return renderOptions_.shading; }
     /// Start with the follow camera at this distance (m) from the robot; 0: frame the scene.
     /// Where the camera looks from at the start: target (m), distance (m), yaw and pitch (deg).
     void setCamera(const std::optional<std::array<double, 6>>& view) { startView_ = view; }
@@ -867,6 +868,74 @@ std::string jsonEscape(const std::string& text) {
 
 // --- headless ---------------------------------------------------------------------------
 
+/// --input: mouse and keyboard at given frames, so that a headless run can press what a user
+/// presses. "FRAME:click:X,Y" (down and up on the next frames), "FRAME:move:X,Y", "FRAME:down",
+/// "FRAME:up", "FRAME:text:WORDS", "FRAME:wheel:N", ";" between them; pixels of the window.
+struct InputEvent {
+    std::uint32_t frame{0};
+    std::string kind;
+    float x{0.0F};
+    float y{0.0F};
+    std::string text;
+};
+
+std::vector<InputEvent> parseInput(const std::string& script) {
+    std::vector<InputEvent> events;
+    std::size_t from = 0;
+    while (from < script.size()) {
+        std::size_t end = script.find(';', from);
+        end = end == std::string::npos ? script.size() : end;
+        const std::string item = script.substr(from, end - from);
+        from = end + 1;
+        const std::size_t a = item.find(':');
+        if (a == std::string::npos) {
+            continue;
+        }
+        InputEvent event;
+        event.frame = static_cast<std::uint32_t>(std::strtoul(item.c_str(), nullptr, 10));
+        const std::size_t b = item.find(':', a + 1);
+        event.kind = item.substr(a + 1, b == std::string::npos ? b : b - a - 1);
+        const std::string rest = b == std::string::npos ? std::string{} : item.substr(b + 1);
+        event.text = rest;
+        std::sscanf(rest.c_str(), "%f,%f", &event.x, &event.y);
+        if (event.kind == "click") {
+            InputEvent move = event;
+            move.kind = "move";
+            events.push_back(move);
+            InputEvent down = event;
+            down.kind = "down";
+            down.frame = event.frame + 1;
+            events.push_back(down);
+            InputEvent up = event;
+            up.kind = "up";
+            up.frame = event.frame + 2;
+            events.push_back(up);
+        } else {
+            events.push_back(std::move(event));
+        }
+    }
+    return events;
+}
+
+void applyInput(const std::vector<InputEvent>& events, std::uint32_t frame, ImGuiIO& io) {
+    for (const InputEvent& event : events) {
+        if (event.frame != frame) {
+            continue;
+        }
+        if (event.kind == "move") {
+            io.AddMousePosEvent(event.x, event.y);
+        } else if (event.kind == "down") {
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        } else if (event.kind == "up") {
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        } else if (event.kind == "wheel") {
+            io.AddMouseWheelEvent(0.0F, event.x);
+        } else if (event.kind == "text") {
+            io.AddInputCharactersUTF8(event.text.c_str());
+        }
+    }
+}
+
 int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspace workspace) {
     gpu::DeviceDesc desc;
     desc.applicationName = "lagrange_viewer";
@@ -933,6 +1002,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         }
         const auto framePeriod = std::chrono::duration_cast<Clock::duration>(
             std::chrono::duration<double>(1.0 / std::max(options.recordFps, 1U)));
+        const std::vector<InputEvent> input = parseInput(options.input);
         auto nextFrame = Clock::time_point{};
         std::uint32_t written = 0;
         while ((recording ? written : rendered) < wanted) {
@@ -951,6 +1021,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
                 break;
             }
             ui.prepare();
+            applyInput(input, rendered, io);
             io.DeltaTime = 1.0F / 60.0F;
             ImGui_ImplVulkan_NewFrame();
             ImGui::NewFrame();
@@ -1035,7 +1106,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             "\"log_lines\": %llu, \"attributes\": %zu, \"wiring_nodes\": %zu, "
             "\"wiring_wires\": %zu, \"events\": %zu, \"server_stats\": %s, "
             "\"environment_fields\": %zu, \"ros_topics\": %zu, \"ros_nodes\": %zu, "
-            "\"world_tiles\": %zu, \"world_agents\": %zu}\n",
+            "\"world_tiles\": %zu, \"world_agents\": %zu, \"shading\": %d}\n",
             jsonEscape(client.notice().text).c_str(), client.notice().error ? "true" : "false",
             rendered, static_cast<unsigned long long>(stats.snapshots),
             static_cast<unsigned long long>(stats.deltas),
@@ -1058,7 +1129,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             client.rosGraph() ? client.rosGraph()->topics.size() : std::size_t{0},
             client.rosGraph() ? client.rosGraph()->nodes.size() : std::size_t{0},
             client.world() ? client.world()->tiles.size() : std::size_t{0},
-            client.world() ? client.world()->agents.size() : std::size_t{0});
+            client.world() ? client.world()->agents.size() : std::size_t{0},
+            static_cast<int>(ui.shading()));
         if (device->validationErrorCount() != 0 && exitCode == 0) {
             exitCode = 6;
         }
