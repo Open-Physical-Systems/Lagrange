@@ -33,8 +33,9 @@ public:
     Simulation(const std::optional<std::string>& robot, const std::optional<std::string>& world,
                const std::optional<std::string>& profile, const std::string& lidar,
                const std::optional<std::vector<double>>& spawn,
-               const std::optional<std::array<int, 3>>& traffic) {
+               const std::optional<std::array<int, 3>>& traffic, bool jointControl) {
         lagrange::server::ServerOptions options;
+        options.jointControl = jointControl;
         options.robotPath = robot.value_or("");  // None: an empty run to spawn robots into
         if (spawn) {
             options.spawn = poseOf(*spawn, "spawn");
@@ -113,6 +114,10 @@ public:
         return values;
     }
 
+    bool commandJoint(const std::string& joint, const std::string& mode, double value) {
+        return server_->commandJoint(joint, mode, value);
+    }
+
     [[nodiscard]] nb::list signals() const {
         nb::list out;
         for (const auto& signal : server_->signals()) {
@@ -187,9 +192,9 @@ NB_MODULE(_lagrange, m) {
         .def(nb::init<const std::optional<std::string>&, const std::optional<std::string>&,
                       const std::optional<std::string>&, const std::string&,
                       const std::optional<std::vector<double>>&,
-                      const std::optional<std::array<int, 3>>&>(),
+                      const std::optional<std::array<int, 3>>&, bool>(),
              "robot"_a, "world"_a = nb::none(), "profile"_a = nb::none(), "lidar"_a = "cpu",
-             "spawn"_a = nb::none(), "traffic"_a = nb::none())
+             "spawn"_a = nb::none(), "traffic"_a = nb::none(), "joint_control"_a = false)
         .def("spawn", &Simulation::spawnRobot, "path"_a, "name"_a = "",
              "at"_a = std::vector<double>{0.0, 0.0},
              "Add a robot to the run at (x, y[, z[, yaw]]); returns its entity name. In a run "
@@ -198,6 +203,14 @@ NB_MODULE(_lagrange, m) {
         .def("delete", &Simulation::removeRobot, "name"_a, "Take a robot out of the run.")
         .def("step_until", &Simulation::stepUntil, "seconds"_a,
              "Advance to this simulated time (s), as fast as possible.")
+        .def(
+            "command_joint",
+            [](Simulation& sim, const std::string& joint, const std::string& mode, double value) {
+                return sim.commandJoint(joint, mode, value);
+            },
+            "joint"_a, "mode"_a, "value"_a,
+            "With joint_control=True: hold a joint at this position, velocity or effort. False "
+            "if it takes no such command.")
         .def_prop_ro("time", &Simulation::time, "Simulated time (s).")
         .def("read", &Simulation::read, "name"_a,
              "Latest value of a signal (all its components). KeyError for an unknown name.")

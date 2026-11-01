@@ -219,3 +219,14 @@ Not yet: battery FMUs and the rotor inertia in Jolt.
 | Netlist round trip | met: with a drive cycle sagging a weak pack's bus by 2.4 V, ngspice's bus voltage is within 0.05 % of the network's (sag within 0.16 % RMS) | `test_export` (needs ngspice) |
 | Brownout scenario | met | `AStalledAmrOnALowBatteryBrownsOutAndRecovers` |
 | Sim-vs-real | owed: needs the bench recording (Q16) | — |
+
+## 10. Hand check
+
+`tools/ci/check_electrical.py` draws simple circuits and works each out three ways, independently:
+a closed-form formula, ngspice on a netlist written by the script (not `lagrange export`), and a
+Lagrange run of a robot imported with `lagrange_import --overlay`. Lagrange must stay within 0.5 %
+of the formula and ngspice within 0.1 %. It covers a resistive load, a constant-power load, an RC
+pair's transient, two batteries in parallel, the charge drained, and a PMSM or brushed motor
+turning a flywheel. It does not cover switching, thermal effects, a sloped voltage curve, trips,
+regeneration or converters. The network only runs for a robot with a motor, so circuits without
+one carry an idle motor.
