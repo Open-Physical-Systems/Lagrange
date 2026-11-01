@@ -224,7 +224,7 @@ sensors read body poses (and the IMU also twist and acceleration) at their own r
 lagrange check robot.urdf [--overlay power.cir]
 ```
 
-For a robot fixed to the ground it lists each joint: the mass beyond it, the gravity torque at the pose the file starts in, the worst case with every link straight out sideways, its effort limit and what its motor can give. It exits with 1 when a joint cannot hold the robot where it starts. CAD exports often have masses far off, so an arm lying on the ground usually shows here first.
+For a robot fixed to the ground it lists each joint: the mass beyond it, the gravity torque at the pose the file starts in, the worst case with every link straight out sideways, its effort limit and what its motor can give. It also lists each link's mass against the volume of its collision shapes, a lower bound on its density, and says when no solid could be that dense. It exits with 1 when a joint cannot hold the robot where it starts. CAD exports often have masses far off, so an arm lying on the ground usually shows here first.
 
 ## Splitting concave collision meshes
 

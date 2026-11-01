@@ -27,4 +27,19 @@ struct JointLoad {
 /// its joints do not carry its weight in the same way.
 [[nodiscard]] std::vector<JointLoad> jointLoads(const World& world);
 
+/// A link's mass against the space its collision shapes take. Hulls fill in what is hollow, so the
+/// density is a lower bound for a mesh; it tells a CAD export's wrong density from a heavy part.
+struct LinkDensity {
+    std::string name;
+    double mass{0.0};    ///< kg
+    double volume{0.0};  ///< m³ of its collision shapes; 0 when it has none
+    /// mass / volume in kg/m³, when it has a volume; 0 otherwise.
+    [[nodiscard]] double density() const { return volume > 0.0 ? mass / volume : 0.0; }
+};
+
+/// Above this no solid material is (osmium is 22,590 kg/m³): the mass or the shape is wrong.
+inline constexpr double kDensestSolid = 22600.0;
+
+[[nodiscard]] std::vector<LinkDensity> linkDensities(const World& world);
+
 }  // namespace lagrange::server

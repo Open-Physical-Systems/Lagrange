@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <numbers>
 
 namespace lagrange::server {
 
@@ -33,7 +34,59 @@ bool isMovable(JointType type) {
            type == JointType::Prismatic;
 }
 
+/// By the divergence theorem, from any point: tetrahedra from it to each outward triangle.
+double hullVolume(const ConvexHull& hull) {
+    double sum = 0.0;
+    if (hull.points.empty()) {
+        return 0.0;
+    }
+    const Vec3& origin = hull.points.front();
+    for (const auto& t : hull.triangles) {
+        const Vec3 a = minus(hull.points[t[0]], origin);
+        const Vec3 b = minus(hull.points[t[1]], origin);
+        const Vec3 c = minus(hull.points[t[2]], origin);
+        sum += dot(a, cross(b, c)) / 6.0;
+    }
+    return std::abs(sum);
+}
+
+double colliderVolume(const World& world, std::size_t c) {
+    const World::Colliders& colliders = world.colliders;
+    const std::array<double, 3>& size = colliders.size[c];
+    switch (colliders.shape[c]) {
+        case ShapeType::Box:
+            return 8.0 * size[0] * size[1] * size[2];  // half extents
+        case ShapeType::Sphere:
+            return 4.0 / 3.0 * std::numbers::pi * size[0] * size[0] * size[0];
+        case ShapeType::Cylinder:
+            return std::numbers::pi * size[0] * size[0] * 2.0 * size[1];  // radius, half length
+        case ShapeType::Capsule:
+            return std::numbers::pi * size[0] * size[0] * 2.0 * size[1] +
+                   4.0 / 3.0 * std::numbers::pi * size[0] * size[0] * size[0];
+        case ShapeType::ConvexHull:
+            return hullVolume(world.hulls.at(colliders.hull[c]));
+        default:
+            return 0.0;
+    }
+}
+
 }  // namespace
+
+std::vector<LinkDensity> linkDensities(const World& world) {
+    std::vector<LinkDensity> out;
+    for (std::size_t b = 0; b < world.bodies.names.size(); ++b) {
+        LinkDensity link;
+        link.name = world.bodies.names[b];
+        link.mass = world.bodies.mass[b];
+        for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
+            if (world.colliders.body[c].index == b && world.colliders.body[c] != kWorldBody) {
+                link.volume += colliderVolume(world, c);
+            }
+        }
+        out.push_back(std::move(link));
+    }
+    return out;
+}
 
 std::vector<JointLoad> jointLoads(const World& world) {
     const World::Bodies& bodies = world.bodies;
