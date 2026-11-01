@@ -40,6 +40,7 @@ void usage() {
         "  --start-local          press the launcher's Start local simulator: run lagrange_server\n"
         "                         on the --connect endpoint (or the default socket) and connect\n"
         "  --cursors              show the scope's A and B cursors from the start\n"
+        "  --export-netlist <f>   write the stage's power system to this netlist file\n"
         "  --panel <title>        bring this panel in front of its tabs, e.g. Circuit\n"
         "  --select <prim path>   select this prim once the scene arrived, e.g. /amr/base_link\n"
         "  --set-domain <d>=on|off  switch a domain in the profile being edited (repeatable)\n"
@@ -141,6 +142,8 @@ int main(int argc, char** argv) {
             options.startLocal = true;
         } else if (arg == "--cursors") {
             options.cursors = true;
+        } else if (arg == "--export-netlist") {
+            options.exportNetlist = value();
         } else if (arg == "--panel") {
             options.focusPanel = value();
         } else if (arg == "--select") {

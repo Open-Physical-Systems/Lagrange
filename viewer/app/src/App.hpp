@@ -40,6 +40,7 @@ struct Options {
     double followDistance{0.0};  ///< > 0: start with the follow camera this far (m) away.
     double followPitchDeg{0.0};  ///< With followDistance: the camera's elevation; 0: default.
     std::string selectPath;      ///< Prim to select once the scene arrived, by its full path.
+    std::string exportNetlist;   ///< --export-netlist: write the stage's circuit to this file.
     std::string focusPanel;      ///< --panel: a panel to bring in front of its tabs, by title.
     std::string openPath;        ///< Robot description or recording to ask the server to load.
     std::uint32_t width{1600};

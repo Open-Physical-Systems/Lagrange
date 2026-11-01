@@ -1006,6 +1006,10 @@ std::vector<std::unique_ptr<Panel>> createElectricalPanels() {
     panels.push_back(std::make_unique<NetworkPanel>(state));
     panels.push_back(std::make_unique<SchematicPanel>(state));
     panels.push_back(std::make_unique<CircuitPanel>(state));
+    panels.push_back(createNetlistPanel([state](PanelContext& context) -> const Circuit* {
+        state->follow(context);
+        return state->nets.empty() ? nullptr : &state->circuit;
+    }));
     panels.push_back(std::make_unique<ElectricalScopesPanel>(state));
     return panels;
 }

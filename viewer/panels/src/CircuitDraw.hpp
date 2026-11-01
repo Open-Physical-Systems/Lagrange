@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <utility>
 
@@ -28,5 +29,11 @@ struct CircuitPick {
 std::optional<CircuitPick> drawCircuit(const Circuit& circuit, const PartCurrent& current,
                                        const BusVoltage& voltage,
                                        const std::optional<CircuitPick>& selected);
+
+/// The Netlist tab, starting from the running stage's circuit (null while there is none).
+struct PanelContext;
+class Panel;
+[[nodiscard]] std::unique_ptr<Panel> createNetlistPanel(
+    std::function<const Circuit*(PanelContext&)> running);
 
 }  // namespace lagrange::viewer

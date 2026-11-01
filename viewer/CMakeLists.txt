@@ -108,6 +108,7 @@ add_library(
     panels/src/DomainsPanel.cpp
     panels/src/ElectricalPanels.cpp
     panels/src/CircuitDraw.cpp
+    panels/src/NetlistPanel.cpp
     panels/src/EnvironmentPanels.cpp
     panels/src/InspectorPanel.cpp
     panels/src/Launcher.cpp
@@ -196,6 +197,7 @@ if(BUILD_TESTING)
     lagrange_target_defaults(test_viewer_client)
 
     find_package(ament_cmake_pytest REQUIRED)
+    ament_add_pytest_test(test_circuit_roundtrip test/test_circuit_roundtrip.py TIMEOUT 120)
     ament_add_pytest_test(
         test_headless
         test/test_headless.py
