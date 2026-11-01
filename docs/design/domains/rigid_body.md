@@ -144,3 +144,7 @@ fixed (a third, Jolt's default body damping, came up later and is fixed too): lo
 robot index instead of by tree), and a restored state lost its contacts with the static scenery.
 Restored contacts now include the scenery whenever it is unchanged; it changes between a save
 and a restore only when streamed tiles come or go.
+
+## Contact force
+
+`body/<b>/contact_force` (N, in the world frame) is the sum of what touches a moving body pushes it with, read from each step's contacts, for force sensing and foot contact. On a robot at rest the bodies' forces add up to its weight (`test_contact_forces_on_a_robot_at_rest_carry_its_weight`). MuJoCo only: Jolt's contact listener gives no impulses per step, so its run has no such signal, and `contact/points` above is not built.

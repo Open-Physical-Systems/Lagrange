@@ -146,6 +146,8 @@ Status MujocoBackend::declare(const WorldView& world, const ModuleConfig& config
             spec(base + "/twist", SignalType::Wrench, units::m_per_s, "world_local"));
         s.acceleration = declarer.output(
             spec(base + "/acceleration", SignalType::Wrench, units::m_per_s2, "body"));
+        s.contactForce = declarer.output(
+            spec(base + "/contact_force", SignalType::Vec3, units::N, "world_local"));
         if (b < bodies.kinematic.size() && bodies.kinematic[b]) {
             // Optional: without a command it stays where it is.
             SignalSpec command =
@@ -412,9 +414,33 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
         }
     }
     // Kinematics of the initial state, so the first outputs are defined.
+    contactForces_.assign(3 * static_cast<std::size_t>(model_->nbody), 0.0);
     mj_step1(model_, data_);
     writeOutputs(bus);
     return {};
+}
+
+/// What everything it touches pushes each body with, in the world frame, N: the last step's
+/// contacts, read before the next mj_step1 replaces them. mj_contactForce gives the force on
+/// geom2 in the contact's frame, whose rows are its axes in the world.
+void MujocoBackend::sumContactForces() {
+    contactForces_.assign(3 * static_cast<std::size_t>(model_->nbody), 0.0);
+    for (int c = 0; c < data_->ncon; ++c) {
+        const mjContact& contact = data_->contact[c];
+        if (contact.exclude != 0) {
+            continue;
+        }
+        std::array<mjtNum, 6> local{};
+        mj_contactForce(model_, data_, c, local.data());
+        std::array<mjtNum, 3> world{};
+        mju_mulMatTVec(world.data(), contact.frame, local.data(), 3, 3);
+        const auto one = static_cast<std::size_t>(model_->geom_bodyid[contact.geom[0]]);
+        const auto two = static_cast<std::size_t>(model_->geom_bodyid[contact.geom[1]]);
+        for (std::size_t k = 0; k < 3; ++k) {
+            contactForces_[3 * two + k] += world[k];
+            contactForces_[3 * one + k] -= world[k];
+        }
+    }
 }
 
 Status MujocoBackend::step(const StepContext& /*context*/, SignalBus& bus) {
@@ -447,6 +473,7 @@ Status MujocoBackend::step(const StepContext& /*context*/, SignalBus& bus) {
     // mj_step1 ran at the end of the previous step (or in init); finish this one and prepare
     // the next, so the outputs are the state at the end of the step.
     mj_step2(model_, data_);
+    sumContactForces();
     if (data_->warning[mjWARN_BADQACC].number > 0) {
         data_->warning[mjWARN_BADQACC].number = 0;
         return Status::error(StatusCode::Diverged,
@@ -482,6 +509,7 @@ void MujocoBackend::writeOutputs(SignalBus& bus) const {
         std::copy_n(data_->xpos + 3 * b, 3, pose.begin());
         std::copy_n(data_->xquat + 4 * b, 4, pose.begin() + 3);
         bus.writeN(s.pose, pose);
+        bus.writeN(s.contactForce, std::span<const double>(&contactForces_[3 * s.mujocoBody], 3));
         if (s.mocap >= 0) {
             // A kinematic body's twist from its last two poses; no acceleration.
             std::array<double, 7>& last = lastKinematicPose_[i];
