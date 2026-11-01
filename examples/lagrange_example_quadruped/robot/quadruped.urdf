@@ -1,0 +1,138 @@
+<?xml version="1.0"?>
+<!-- A small four-legged robot of 9 kg body and three driven joints a leg, all primitives: legs branch,
+     so its base stays free. Sizes are illustrative, not a real product. -->
+<robot name="quadruped">
+  <link name="base_link">
+    <inertial><mass value="9"/><inertia ixx="0.06" iyy="0.2" izz="0.24" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><geometry><box size="0.5 0.22 0.1"/></geometry></visual>
+    <collision><geometry><box size="0.5 0.22 0.1"/></geometry></collision>
+  </link>
+  <link name="front_left_hip">
+    <inertial><mass value="0.5"/><inertia ixx="0.001" iyy="0.001" izz="0.001" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><origin rpy="1.5708 0 0"/><geometry><cylinder radius="0.035" length="0.05"/></geometry></visual>
+  </link>
+  <joint name="front_left_hip_joint" type="revolute">
+    <parent link="base_link"/><child link="front_left_hip"/>
+    <origin xyz="0.22 0.13 0"/><axis xyz="1 0 0"/>
+    <limit lower="-0.6" upper="0.6" effort="40" velocity="20"/>
+    <dynamics damping="0.05"/>
+  </joint>
+  <link name="front_left_thigh">
+    <inertial><origin xyz="0 0 -0.1"/><mass value="0.8"/><inertia ixx="0.003" iyy="0.003" izz="0.0005" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><origin xyz="0 0 -0.1"/><geometry><cylinder radius="0.02" length="0.2"/></geometry></visual>
+  </link>
+  <joint name="front_left_thigh_joint" type="revolute">
+    <parent link="front_left_hip"/><child link="front_left_thigh"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.6" upper="1.6" effort="40" velocity="20"/>
+    <dynamics damping="0.05"/>
+  </joint>
+  <link name="front_left_shin">
+    <inertial><origin xyz="0 0 -0.1"/><mass value="0.3"/><inertia ixx="0.001" iyy="0.001" izz="0.0002" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><origin xyz="0 0 -0.1"/><geometry><cylinder radius="0.015" length="0.2"/></geometry></visual>
+    <visual><origin xyz="0 0 -0.2"/><geometry><sphere radius="0.025"/></geometry></visual>
+    <collision><origin xyz="0 0 -0.2"/><geometry><sphere radius="0.025"/></geometry></collision>
+  </link>
+  <joint name="front_left_knee_joint" type="revolute">
+    <parent link="front_left_thigh"/><child link="front_left_shin"/>
+    <origin xyz="0 0 -0.2"/><axis xyz="0 1 0"/>
+    <limit lower="-2.6" upper="0" effort="40" velocity="20"/>
+    <dynamics damping="0.05"/>
+  </joint>
+  <link name="front_right_hip">
+    <inertial><mass value="0.5"/><inertia ixx="0.001" iyy="0.001" izz="0.001" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><origin rpy="1.5708 0 0"/><geometry><cylinder radius="0.035" length="0.05"/></geometry></visual>
+  </link>
+  <joint name="front_right_hip_joint" type="revolute">
+    <parent link="base_link"/><child link="front_right_hip"/>
+    <origin xyz="0.22 -0.13 0"/><axis xyz="1 0 0"/>
+    <limit lower="-0.6" upper="0.6" effort="40" velocity="20"/>
+    <dynamics damping="0.05"/>
+  </joint>
+  <link name="front_right_thigh">
+    <inertial><origin xyz="0 0 -0.1"/><mass value="0.8"/><inertia ixx="0.003" iyy="0.003" izz="0.0005" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><origin xyz="0 0 -0.1"/><geometry><cylinder radius="0.02" length="0.2"/></geometry></visual>
+  </link>
+  <joint name="front_right_thigh_joint" type="revolute">
+    <parent link="front_right_hip"/><child link="front_right_thigh"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.6" upper="1.6" effort="40" velocity="20"/>
+    <dynamics damping="0.05"/>
+  </joint>
+  <link name="front_right_shin">
+    <inertial><origin xyz="0 0 -0.1"/><mass value="0.3"/><inertia ixx="0.001" iyy="0.001" izz="0.0002" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><origin xyz="0 0 -0.1"/><geometry><cylinder radius="0.015" length="0.2"/></geometry></visual>
+    <visual><origin xyz="0 0 -0.2"/><geometry><sphere radius="0.025"/></geometry></visual>
+    <collision><origin xyz="0 0 -0.2"/><geometry><sphere radius="0.025"/></geometry></collision>
+  </link>
+  <joint name="front_right_knee_joint" type="revolute">
+    <parent link="front_right_thigh"/><child link="front_right_shin"/>
+    <origin xyz="0 0 -0.2"/><axis xyz="0 1 0"/>
+    <limit lower="-2.6" upper="0" effort="40" velocity="20"/>
+    <dynamics damping="0.05"/>
+  </joint>
+  <link name="rear_left_hip">
+    <inertial><mass value="0.5"/><inertia ixx="0.001" iyy="0.001" izz="0.001" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><origin rpy="1.5708 0 0"/><geometry><cylinder radius="0.035" length="0.05"/></geometry></visual>
+  </link>
+  <joint name="rear_left_hip_joint" type="revolute">
+    <parent link="base_link"/><child link="rear_left_hip"/>
+    <origin xyz="-0.22 0.13 0"/><axis xyz="1 0 0"/>
+    <limit lower="-0.6" upper="0.6" effort="40" velocity="20"/>
+    <dynamics damping="0.05"/>
+  </joint>
+  <link name="rear_left_thigh">
+    <inertial><origin xyz="0 0 -0.1"/><mass value="0.8"/><inertia ixx="0.003" iyy="0.003" izz="0.0005" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><origin xyz="0 0 -0.1"/><geometry><cylinder radius="0.02" length="0.2"/></geometry></visual>
+  </link>
+  <joint name="rear_left_thigh_joint" type="revolute">
+    <parent link="rear_left_hip"/><child link="rear_left_thigh"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.6" upper="1.6" effort="40" velocity="20"/>
+    <dynamics damping="0.05"/>
+  </joint>
+  <link name="rear_left_shin">
+    <inertial><origin xyz="0 0 -0.1"/><mass value="0.3"/><inertia ixx="0.001" iyy="0.001" izz="0.0002" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><origin xyz="0 0 -0.1"/><geometry><cylinder radius="0.015" length="0.2"/></geometry></visual>
+    <visual><origin xyz="0 0 -0.2"/><geometry><sphere radius="0.025"/></geometry></visual>
+    <collision><origin xyz="0 0 -0.2"/><geometry><sphere radius="0.025"/></geometry></collision>
+  </link>
+  <joint name="rear_left_knee_joint" type="revolute">
+    <parent link="rear_left_thigh"/><child link="rear_left_shin"/>
+    <origin xyz="0 0 -0.2"/><axis xyz="0 1 0"/>
+    <limit lower="-2.6" upper="0" effort="40" velocity="20"/>
+    <dynamics damping="0.05"/>
+  </joint>
+  <link name="rear_right_hip">
+    <inertial><mass value="0.5"/><inertia ixx="0.001" iyy="0.001" izz="0.001" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><origin rpy="1.5708 0 0"/><geometry><cylinder radius="0.035" length="0.05"/></geometry></visual>
+  </link>
+  <joint name="rear_right_hip_joint" type="revolute">
+    <parent link="base_link"/><child link="rear_right_hip"/>
+    <origin xyz="-0.22 -0.13 0"/><axis xyz="1 0 0"/>
+    <limit lower="-0.6" upper="0.6" effort="40" velocity="20"/>
+    <dynamics damping="0.05"/>
+  </joint>
+  <link name="rear_right_thigh">
+    <inertial><origin xyz="0 0 -0.1"/><mass value="0.8"/><inertia ixx="0.003" iyy="0.003" izz="0.0005" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><origin xyz="0 0 -0.1"/><geometry><cylinder radius="0.02" length="0.2"/></geometry></visual>
+  </link>
+  <joint name="rear_right_thigh_joint" type="revolute">
+    <parent link="rear_right_hip"/><child link="rear_right_thigh"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.6" upper="1.6" effort="40" velocity="20"/>
+    <dynamics damping="0.05"/>
+  </joint>
+  <link name="rear_right_shin">
+    <inertial><origin xyz="0 0 -0.1"/><mass value="0.3"/><inertia ixx="0.001" iyy="0.001" izz="0.0002" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><origin xyz="0 0 -0.1"/><geometry><cylinder radius="0.015" length="0.2"/></geometry></visual>
+    <visual><origin xyz="0 0 -0.2"/><geometry><sphere radius="0.025"/></geometry></visual>
+    <collision><origin xyz="0 0 -0.2"/><geometry><sphere radius="0.025"/></geometry></collision>
+  </link>
+  <joint name="rear_right_knee_joint" type="revolute">
+    <parent link="rear_right_thigh"/><child link="rear_right_shin"/>
+    <origin xyz="0 0 -0.2"/><axis xyz="0 1 0"/>
+    <limit lower="-2.6" upper="0" effort="40" velocity="20"/>
+    <dynamics damping="0.05"/>
+  </joint>
+</robot>

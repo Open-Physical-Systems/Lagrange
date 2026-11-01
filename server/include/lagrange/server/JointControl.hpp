@@ -48,7 +48,8 @@ public:
     /// are told that, not a torque. A velocity motor takes position and velocity targets; a voltage
     /// motor takes volts, as a voltage target or in /joint_commands' effort field.
     explicit JointControl(std::shared_ptr<JointTargets> targets,
-                          std::map<std::string, std::string> driveModes = {});
+                          std::map<std::string, std::string> driveModes = {},
+                          double bandwidthHz = 8.0);
 
     [[nodiscard]] ModuleInfo info() const override;
     [[nodiscard]] Duration preferredStep() const override;
@@ -69,6 +70,7 @@ private:
         std::string mode{"torque"};  // what `torque` above commands: torque, velocity or voltage
     };
     std::shared_ptr<JointTargets> targets_;
+    double bandwidthHz_;  // of the position and velocity loops (a choice, stable at 1 kHz to 50 Hz)
     std::uint64_t seenTargets_{0};
     std::map<std::string, JointTarget> currentTargets_;
     std::map<std::string, std::string> driveModes_;

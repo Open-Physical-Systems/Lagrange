@@ -97,6 +97,8 @@ struct ServerOptions {
     /// --joint-control: every moving joint of the robot is driven on its own, from
     /// /joint_commands (sensor_msgs/JointState) or commandJoint, with no robot controller.
     bool jointControl{false};
+    /// Bandwidth of its position and velocity loops, Hz.
+    double jointLoopHz{8.0};
     /// --water X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH: a body of still water (m); the surface at LEVEL.
     struct Water {
         std::array<double, 3> surface{};

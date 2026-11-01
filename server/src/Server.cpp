@@ -614,8 +614,10 @@ struct Server::Impl {
         if (jointControlled()) {
             // Off, nothing simulates the motors: every joint takes a torque.
             next->add(std::make_unique<JointControl>(
-                jointTargets, off("electrical") ? std::map<std::string, std::string>{}
-                                                : electrical::driveModes(WorldView(robot.world))));
+                jointTargets,
+                off("electrical") ? std::map<std::string, std::string>{}
+                                  : electrical::driveModes(WorldView(robot.world)),
+                options.jointLoopHz));
         } else if (controllers) {
             // ros2_control drives the joints; the controller manager outlives this scheduler.
             next->add(ros2_control::createControlModule(*controllers, controlJoints));

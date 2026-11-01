@@ -47,7 +47,7 @@ packages run through launch files, and the C plugin path works without linking L
 | 3 | **Concave collision meshes are hulls at import.** A hollow link blocks what should pass through it; `collision_bake` splits them only in USD, and the import had already made them hulls | CoACD bake tool | Medium |
 | 4 | **Most models have no measured reference.** CLAUDE.md §10 asks for one "where possible"; `docs/validation/report.md` says sim against real "mostly does not exist" | Battery (LG HG2), rotor (NACA 640), WMM, ICAO; the rest closed-form or between engines | Large, needs recordings (Q16) |
 | 5 | **Common sensors missing.** No built-in force-torque, tactile, ultrasonic, event or thermal camera; labels are rendered but go nowhere | IMU, lidar, camera, GNSS, magnetometer, barometer, radar, Custom by plugin | Small each, schema change each |
-| 6 | **Legged robots absent.** A class users ask for first after arms | No sample, no controller; only human gait | Medium |
+| 6 | **Legged robots have no controller.** A class users ask for first after arms | `lagrange_example_quadruped` trots open loop; no balance control, no terrain or contact sensing | Medium |
 | 7 | **Electrical elements between buses.** A fuse, a relay or a real harness cannot be read from a schematic, and most real schematics have them | Averaged network of buses | Medium, needs an RFC for a nodal solver |
 | 8 | **Tier 2 is thin.** Hardware ray-traced lidar is detected and not used; batched physics absent | Tier 1 BVH lidar, raster camera | Large |
 | 9 | **Regions are headless only.** No ROS or viewer, no robot moving between regions | `RegionHost` in one process | Large |
