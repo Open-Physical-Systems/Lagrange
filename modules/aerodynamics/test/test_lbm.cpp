@@ -141,6 +141,29 @@ TEST(WindTunnel, ACubeGivesItsDragAndItsFiles) {
     EXPECT_FALSE(runWindTunnel(empty, options, ""));
 }
 
+// A road moving with the wind disturbs nothing: uniform flow stays uniform over it.
+TEST(Lbm, ARollingRoadLeavesTheWindAlone) {
+    LbmConfig config;
+    config.nx = 40;
+    config.ny = 12;
+    config.nz = 20;
+    config.cellSize = 0.05;
+    config.windSpeed = 10.0;
+    LbmTunnel tunnel(config);
+    for (std::size_t y = 0; y < config.ny; ++y) {
+        for (std::size_t x = 0; x < config.nx; ++x) {
+            tunnel.setRollingFloor(x, y, 0);
+            tunnel.setRollingFloor(x, y, config.nz - 1);  // and above, as sides wrap in z
+        }
+    }
+    tunnel.step(2000);
+    for (const std::size_t z : {std::size_t{1}, std::size_t{10}}) {
+        const auto u = tunnel.velocity(tunnel.index(20, 6, z));
+        EXPECT_NEAR(u[0], 10.0, 1e-2) << z;
+        EXPECT_NEAR(u[2], 0.0, 1e-2) << z;
+    }
+}
+
 TEST(Lbm, TheSameRunGivesTheSameBits) {
     LbmConfig config;
     config.nx = 40;
