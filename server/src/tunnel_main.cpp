@@ -30,6 +30,8 @@ int main(int argc, char** argv) {
             useGpu = false;
         } else if (arg == "--ground") {
             options.ground = true;
+        } else if (arg == "--mean-passes" && more) {
+            options.meanPasses = std::atof(argv[++i]);
         } else if (arg == "--out" && more) {
             out = argv[++i];
         } else if (robot.empty() && !arg.starts_with("--")) {
@@ -42,7 +44,7 @@ int main(int argc, char** argv) {
     if (robot.empty()) {
         std::fprintf(stderr,
                      "usage: lagrange tunnel ROBOT [--speed M_S] [--yaw DEG] [--cells N] "
-                     "[--passes N] [--ground] [--cpu] [--out DIR]\n");
+                     "[--passes N] [--mean-passes N] [--ground] [--cpu] [--out DIR]\n");
         return 2;
     }
     auto model = lagrange::server::loadModel(robot);
@@ -83,7 +85,8 @@ int main(int argc, char** argv) {
                 result->cellSize * 1000.0, result->steps);
     std::printf("frontal area %.4f m2, blockage %.1f %%\n", result->frontalArea,
                 result->blockage * 100.0);
-    std::printf("Cd %.3f   Cl %.3f   Cy %.3f\n", result->dragCoefficient, result->liftCoefficient,
+    std::printf("Cd %.3f (moves by %.3f as the wake sheds)   Cl %.3f   Cy %.3f\n",
+                result->dragCoefficient, result->dragSpread, result->liftCoefficient,
                 result->sideCoefficient);
     std::printf("%-24s %10s %10s %10s\n", "link", "drag N", "side N", "lift N");
     for (const auto& link : result->links) {

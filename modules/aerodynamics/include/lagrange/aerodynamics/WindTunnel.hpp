@@ -25,6 +25,7 @@ struct WindTunnelOptions {
     double yawDegrees{0.0};        ///< The robot turned about z, with the wind along +x.
     std::size_t maxCells{800000};  ///< The grid is as fine as this allows.
     double passes{3.0};            ///< How many times the air crosses the tunnel before averaging.
+    double meanPasses{2.0};        ///< And how many it is averaged over: a wake sheds slowly.
     double airDensity{1.2};        ///< kg/m³
     double viscosity{1.5e-5};      ///< m²/s
     /// A rolling road under the robot's lowest point, as for a car; else free air around it.
@@ -44,6 +45,9 @@ struct WindTunnelResult {
     std::array<double, 3> force{};
     double frontalArea{0.0};  ///< m²
     double dragCoefficient{0.0};
+    /// How much the drag coefficient moved between the averaging's windows (standard deviation):
+    /// the wake sheds, so one number hides this.
+    double dragSpread{0.0};
     double liftCoefficient{0.0};
     double sideCoefficient{0.0};
     double dynamicPressure{0.0};  ///< Pa

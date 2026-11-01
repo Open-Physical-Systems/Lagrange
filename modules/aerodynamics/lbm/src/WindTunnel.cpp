@@ -410,13 +410,18 @@ Expected<WindTunnelResult, std::string> runWindTunnel(const World& world,
     }
     tunnel.startAveraging();
     std::vector<LbmTunnel::Load> mean(linkOfSolid.size());
-    for (std::size_t i = 0; i < 10; ++i) {
-        tunnel.step(pass / 10);
-        done += pass / 10;
+    constexpr int kWindows = 10;
+    const auto window =
+        static_cast<std::size_t>(options.meanPasses * static_cast<double>(pass) / kWindows);
+    std::array<double, kWindows> windowDrag{};
+    for (std::size_t i = 0; i < kWindows; ++i) {
+        tunnel.step(window);
+        done += window;
         for (std::size_t b = 0; b < mean.size(); ++b) {
+            windowDrag.at(i) += tunnel.loads()[b].force[0];
             for (std::size_t k = 0; k < 3; ++k) {
-                mean[b].force.at(k) += tunnel.loads()[b].force.at(k) / 10.0;
-                mean[b].torque.at(k) += tunnel.loads()[b].torque.at(k) / 10.0;
+                mean[b].force.at(k) += tunnel.loads()[b].force.at(k) / kWindows;
+                mean[b].torque.at(k) += tunnel.loads()[b].torque.at(k) / kWindows;
             }
         }
         if (progress) {
@@ -444,6 +449,12 @@ Expected<WindTunnelResult, std::string> runWindTunnel(const World& world,
     const double reference = result.dynamicPressure * result.frontalArea;
     result.dragCoefficient = result.force[0] / reference;
     result.sideCoefficient = result.force[1] / reference;
+    double variance = 0.0;
+    for (const double drag : windowDrag) {
+        const double off = drag / reference - result.dragCoefficient;
+        variance += off * off / kWindows;
+    }
+    result.dragSpread = std::sqrt(variance);
     result.liftCoefficient = result.force[2] / reference;
 
     if (outputDirectory.empty()) {
@@ -637,6 +648,7 @@ Expected<WindTunnelResult, std::string> runWindTunnel(const World& world,
            << ",\n  \"reynolds\": " << result.reynolds
            << ",\n  \"frontal_area_m2\": " << result.frontalArea
            << ",\n  \"drag_coefficient\": " << result.dragCoefficient
+           << ",\n  \"drag_spread\": " << result.dragSpread
            << ",\n  \"lift_coefficient\": " << result.liftCoefficient
            << ",\n  \"side_coefficient\": " << result.sideCoefficient << ",\n  \"force_n\": ["
            << result.force[0] << ", " << result.force[1] << ", " << result.force[2]
