@@ -776,7 +776,12 @@ private:
             } else {
                 wire(draw, ImVec2(busX, midY), ImVec2(min.x, midY), amperes, off);
             }
-            node(context, draw, statics, terminal, entry, values, min, nodeH, volts, amperes);
+            const std::vector<CircuitBus>& buses = state_->circuit.buses;
+            const std::string detail = netIndex < buses.size() && t < buses[netIndex].parts.size()
+                                           ? buses[netIndex].parts[t].detail
+                                           : std::string{};
+            node(context, draw, statics, terminal, entry, values,
+                 detail.empty() ? terminal.port : detail, min, nodeH, volts, amperes);
             dragNode(statics, terminal.prim);
         }
         // Design: the bus's limits under its bar, with its capacitance after them.
@@ -888,8 +893,8 @@ private:
     /// A component (design: .node): bg2 box with a 24 px header and mono rows of live values.
     static void node(PanelContext& context, ImDrawList* draw, const SceneStatics& statics,
                      const NetTerminal& terminal, const TerminalLive& live,
-                     const std::string& values, const ImVec2& min, float height, double volts,
-                     double amperes) {
+                     const std::string& values, const std::string& detail, const ImVec2& min,
+                     float height, double volts, double amperes) {
         const ImVec2 max(min.x + px(kNodeWidth), min.y + height);
         ImGui::SetCursorScreenPos(min);
         ImGui::PushID(static_cast<int>(terminal.prim));
@@ -915,11 +920,10 @@ private:
         draw->AddText(fonts.sansSemiBold, label,
                       ImVec2(min.x + px(22.0F), min.y + (px(kHeader) - label) * 0.5F - px(1.0F)),
                       u32(c::t1), statics.prims[terminal.prim].name.c_str());
-        const float portWidth =
-            fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, terminal.port.c_str()).x;
+        const float portWidth = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, detail.c_str()).x;
         draw->AddText(fonts.mono, small,
                       ImVec2(max.x - portWidth - px(8.0F), min.y + (px(kHeader) - small) * 0.5F),
-                      u32(c::t3), terminal.port.c_str());
+                      u32(c::t3), detail.c_str());
 
         // First row: terminal voltage, current and power.
         char text[64];

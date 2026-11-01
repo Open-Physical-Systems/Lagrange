@@ -18,6 +18,10 @@ lagrange delete NAME            takes a robot out again (delete_entity)
 lagrange set NAME=VALUE ...     changes the site while running: gravity (m/s²), wind_speed (m/s),
     wind_from (degrees), temperature (K), air_density, pressure, relative_humidity, rain_rate,
     visibility
+lagrange check ROBOT [--overlay FILE]
+    what each joint of a robot on the ground must hold against gravity, against its limits
+lagrange bake ROBOT.urdf [-o OUT.urdf]
+    a new URDF with its concave collision meshes split into convex parts
 lagrange run|validate|graph|determinism|export|info ...
     the lagrange_server tools (as `ros2 run lagrange_server lagrange ...`)
 """

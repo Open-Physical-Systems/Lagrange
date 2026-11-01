@@ -21,6 +21,7 @@ struct CircuitPart {
     std::string name;
     std::uint32_t prim{kNone};  ///< kNone in a part the editor added.
     std::string currentSignal;
+    std::string detail;  ///< Short words for its node's header: "16S LFP"; may be empty.
 
     // Battery, for the whole pack.
     double voltage{0.0};                           ///< V

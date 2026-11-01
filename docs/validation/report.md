@@ -49,7 +49,7 @@ published curves only, which is risk R12 in `docs/plan/risks.md`.
 | Traffic and scenarios | IDM equilibrium; light cycle; sample scenario timeline | IDM, lights, determinism met; fundamental diagram owed | `test_traffic`, `test_openscenario`, `test_opendrive` | not applicable / none yet |
 | Huge worlds | Same world at the origin; GeographicLib | Bit-identical poses at 500 km; rebase within 1e-9 m (MuJoCo), 1e-4 m (Jolt) | `test_robot`, `test_frames`, `test_regions`, `test_tile_selector` | not applicable |
 | Radiation | — | Not built; `zero` substitute only | — | none |
-| Hydrodynamics | — | Not built (post-1.0); `zero` substitute only | — | none |
+| Hydrodynamics | Still water: buoyancy and drag (`lagrange_hydrodynamics`), the closed-form checks of hydrodynamics.md §9 | Not Fossen: no added mass, waves or currents | closed form | none measured |
 
 ## Rigid body
 

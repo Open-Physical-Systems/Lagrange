@@ -554,3 +554,13 @@ in the GPU driver with no project frames. TSan (`tools/ci/tsan.supp`) reports no
 warnings in the server, all while the stage loads, on OpenUSD's own worker threads: taken as false
 alarms because OpenUSD and TBB are not instrumented, and not proven otherwise. These are one run each,
 not a proof.
+
+## Sanitizer record, 2026-11-02
+
+ASan and UBSan with leak checks (`detect_odr_violation=0`: VMA's header is both in the server's library
+and its tools; a D-Bus leak suppressed), on `dev` after #229. `test_stage`, `test_electrical`'s tests
+and 159 of `test_server`'s pass with no report in Lagrange's code; the leak it ends on, 1,248 bytes
+through unloaded libraries, has no project frames. Eleven of the twelve examples through their launch
+files report nothing. Not cleared: `ArmServerTest` (does not finish on software Vulkan in 120 s), and
+ros2_control, whose controller takes over 10 s to load under ASan so that its spawner gives up, in
+`test_arm` and `lagrange_example_ros2_control`. One run each, not a proof.

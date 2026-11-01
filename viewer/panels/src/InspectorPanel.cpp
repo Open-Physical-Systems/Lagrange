@@ -8,12 +8,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
 #include <numbers>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <imgui.h>
@@ -95,7 +97,13 @@ public:
 
         header(context, prim, transform);
 
-        if (widgets::SectionHeader("Live", liveMeta(context))) {
+        // Design 04-electrical: a battery's state as cards, and where it is on its curve.
+        const bool battery = workspace_ == Workspace::Electrical &&
+                             std::find(prim.apiSchemas.begin(), prim.apiSchemas.end(),
+                                       "BatteryAPI_1") != prim.apiSchemas.end();
+        if (battery) {
+            batteryPanels(context);
+        } else if (widgets::SectionHeader("Live", liveMeta(context))) {
             live(context);
         }
         if (widgets::SectionHeader("Transform", "region frame · m · deg")) {
@@ -125,6 +133,175 @@ public:
     }
 
 private:
+    /// A signal of the prim on show by the end of its name; NaN when there is none or no sample.
+    [[nodiscard]] double liveValue(std::string_view ending) const {
+        for (const Live& entry : live_) {
+            if (entry.name.ends_with(ending) && entry.buffer) {
+                return entry.buffer->latest();
+            }
+        }
+        return NAN;
+    }
+
+    /// One of the State cards: a caption, a large number, a line under it.
+    static void stateCard(const ImVec2& min, const ImVec2& size, const char* caption,
+                          const char* value, const char* below, float meter) {
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        const theme::Fonts& fonts = theme::fonts();
+        const ImVec2 max(min.x + size.x, min.y + size.y);
+        const auto u32 = [](const ImVec4& color) { return ImGui::ColorConvertFloat4ToU32(color); };
+        draw->AddRectFilled(min, max, u32(theme::c::bg0), px(3.0F));
+        draw->AddRect(min, max, u32(theme::c::line), px(3.0F));
+        const float x = min.x + px(8.0F);
+        draw->AddText(fonts.sans, px(theme::kCaptionSize), ImVec2(x, min.y + px(6.0F)),
+                      u32(theme::c::t3), caption);
+        draw->AddText(fonts.mono, px(16.0F), ImVec2(x, min.y + px(21.0F)), u32(theme::c::t1),
+                      value);
+        if (meter >= 0.0F) {
+            const ImVec2 a(x, min.y + px(45.0F));
+            const ImVec2 b(max.x - px(8.0F), min.y + px(49.0F));
+            draw->AddRectFilled(a, b, u32(theme::c::bg4), px(2.0F));
+            draw->AddRectFilled(a, ImVec2(a.x + (b.x - a.x) * std::min(meter, 1.0F), b.y),
+                                u32(theme::c::ok), px(2.0F));
+        } else {
+            draw->AddText(fonts.mono, px(theme::kCaptionSize), ImVec2(x, min.y + px(43.0F)),
+                          u32(theme::c::t3), below);
+        }
+    }
+
+    /// The design's State cards and OCV(SoC) plot. What the run does not model, it does not show.
+    void batteryPanels(PanelContext& context) {
+        const std::shared_ptr<const PrimAttributes> answer = context.client.attributes();
+        const auto numbers = [&answer](std::string_view name) -> std::vector<double> {
+            if (answer) {
+                for (const AttributeInfo& a : answer->attributes) {
+                    if (a.name == name) {
+                        return a.numbers;
+                    }
+                }
+            }
+            return {};
+        };
+        const std::vector<double> socs = numbers("elec:battery:ocvSoc");
+        std::vector<double> volts = numbers("elec:battery:ocvVoltage");
+        const std::vector<double> series = numbers("elec:battery:seriesCells");
+        const double cells = series.empty() ? 1.0 : series[0];
+        for (double& v : volts) {
+            v *= cells;
+        }
+        const double soc = liveValue("/soc");
+        const double terminal = liveValue("/terminal_voltage");
+        const double amperes = liveValue("/current");
+        const double watts = liveValue("/power");
+        const double kelvin = liveValue("/temperature");
+        double ocv = NAN;
+        if (!std::isnan(soc) && socs.size() == volts.size() && !socs.empty()) {
+            ocv = volts.front();
+            for (std::size_t i = 1; i < socs.size(); ++i) {
+                if (soc >= socs[i - 1]) {
+                    const double t = (soc - socs[i - 1]) / std::max(socs[i] - socs[i - 1], 1e-9);
+                    ocv = volts[i - 1] + std::min(t, 1.0) * (volts[i] - volts[i - 1]);
+                }
+            }
+        }
+        if (widgets::SectionHeader("State", "live")) {
+            const ImVec2 origin = ImGui::GetCursorScreenPos();
+            const float pad = px(8.0F);
+            const float gap = px(6.0F);
+            const float width = (ImGui::GetContentRegionAvail().x - pad * 2.0F - gap) * 0.5F;
+            const float height = px(58.0F);
+            char value[48];
+            char below[64];
+            std::snprintf(value, sizeof(value), "%.1f %%", soc * 100.0);
+            stateCard(ImVec2(origin.x + pad, origin.y + pad), ImVec2(width, height),
+                      "state of charge", value, "", static_cast<float>(soc));
+            std::snprintf(value, sizeof(value), "%.2f V", terminal);
+            std::snprintf(below, sizeof(below), "OCV %.2f · sag %.2f", ocv, ocv - terminal);
+            stateCard(ImVec2(origin.x + pad + width + gap, origin.y + pad), ImVec2(width, height),
+                      "terminal · OCV", value, below, -1.0F);
+            std::snprintf(value, sizeof(value), "%.2f A", amperes);
+            std::snprintf(below, sizeof(below), "%.0f W %s", std::abs(watts),
+                          amperes < 0.0 ? "charge" : "discharge");
+            stateCard(ImVec2(origin.x + pad, origin.y + pad + height + gap), ImVec2(width, height),
+                      "current · power", value, below, -1.0F);
+            if (std::isnan(kelvin)) {
+                std::snprintf(value, sizeof(value), "-");
+                std::snprintf(below, sizeof(below), "thermal domain off");
+            } else {
+                std::snprintf(value, sizeof(value), "%.1f °C", kelvin - 273.15);
+                below[0] = '\0';
+            }
+            stateCard(ImVec2(origin.x + pad + width + gap, origin.y + pad + height + gap),
+                      ImVec2(width, height), "cell temp", value, below, -1.0F);
+            ImGui::Dummy(ImVec2(0.0F, pad * 2.0F + height * 2.0F + gap));
+        }
+        if (socs.size() >= 2 && socs.size() == volts.size()) {
+            char meta[48];
+            std::snprintf(meta, sizeof(meta), "%.0fS", cells);
+            if (widgets::SectionHeader("OCV(SoC)", meta)) {
+                ocvPlot(socs, volts, soc, ocv);
+            }
+        }
+        ImGui::Indent(px(8.0F));
+        if (widgets::Button("Plot all battery signals") && context.initialScopeSignals != nullptr) {
+            for (const Live& entry : live_) {
+                context.initialScopeSignals->push_back(entry.name);
+            }
+            *context.workspace = Workspace::Signals;
+        }
+        ImGui::Unindent(px(8.0F));
+    }
+
+    static void ocvPlot(const std::vector<double>& socs, const std::vector<double>& volts,
+                        double soc, double ocv) {
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        const theme::Fonts& fonts = theme::fonts();
+        const auto u32 = [](const ImVec4& color) { return ImGui::ColorConvertFloat4ToU32(color); };
+        const float pad = px(8.0F);
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
+        const ImVec2 min(origin.x + pad, origin.y + pad);
+        const ImVec2 max(origin.x + ImGui::GetContentRegionAvail().x - pad, min.y + px(96.0F));
+        draw->AddRectFilled(min, max, u32(theme::c::bg0));
+        draw->AddRect(min, max, u32(theme::c::line));
+        const auto [lowest, highest] = std::minmax_element(volts.begin(), volts.end());
+        const double span = std::max(*highest - *lowest, 1e-3);
+        const float left = min.x + px(34.0F);
+        const float right = max.x - px(8.0F);
+        const float top = min.y + px(14.0F);
+        const float bottom = max.y - px(16.0F);
+        const auto at = [&](double x, double v) {
+            return ImVec2(left + static_cast<float>(x) * (right - left),
+                          bottom - static_cast<float>((v - *lowest) / span) * (bottom - top));
+        };
+        const float small = px(9.0F);
+        char text[48];
+        for (const double v : {*lowest, (*lowest + *highest) * 0.5, *highest}) {
+            const ImVec2 y = at(0.0, v);
+            draw->AddLine(ImVec2(left, y.y), ImVec2(right, y.y), u32(theme::c::line));
+            std::snprintf(text, sizeof(text), "%.0f", v);
+            draw->AddText(fonts.mono, small, ImVec2(min.x + px(4.0F), y.y - small * 0.5F),
+                          u32(theme::c::t3), text);
+        }
+        draw->AddText(fonts.mono, small, ImVec2(left, bottom + px(3.0F)), u32(theme::c::t3), "0 %");
+        draw->AddText(fonts.mono, small, ImVec2(right - px(24.0F), bottom + px(3.0F)),
+                      u32(theme::c::t3), "100");
+        const ImVec4 line = theme::kDomainColor[static_cast<int>(theme::Domain::Electrical)];
+        for (std::size_t i = 1; i < socs.size(); ++i) {
+            draw->AddLine(at(socs[i - 1], volts[i - 1]), at(socs[i], volts[i]), u32(line),
+                          px(1.5F));
+        }
+        if (!std::isnan(soc) && !std::isnan(ocv)) {
+            const ImVec2 here = at(soc, ocv);
+            draw->AddCircleFilled(here, px(3.5F), u32(theme::c::accent));
+            std::snprintf(text, sizeof(text), "%.1f %% · %.1f V", soc * 100.0, ocv);
+            const float width = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, text).x;
+            draw->AddText(fonts.mono, small,
+                          ImVec2(std::min(here.x, right - width) - px(8.0F), min.y + px(3.0F)),
+                          u32(theme::c::accent), text);
+        }
+        ImGui::Dummy(ImVec2(0.0F, pad * 2.0F + px(96.0F)));
+    }
+
     struct Live {
         std::string name;   // full signal name
         std::string label;  // its last part, as a row label
