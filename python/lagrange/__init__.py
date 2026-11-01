@@ -28,6 +28,7 @@ __all__ = [
     "sample_robot",
     "sample_sedan",
     "sample_tiled_town",
+    "sample_town",
     "sample_world",
 ]
 
@@ -47,6 +48,11 @@ def sample_quadcopter() -> str:
 def sample_sedan() -> str:
     """The sample sedan (USD, a vehicle on Magic Formula tyres) from lagrange_assets."""
     return get_package_share_directory("lagrange_assets") + "/robots/sedan/sedan.usda"
+
+
+def sample_town() -> str:
+    """The sample town (USD: a road grid, crossings, buildings, a park) from lagrange_assets."""
+    return get_package_share_directory("lagrange_assets") + "/worlds/town/town.usda"
 
 
 def sample_city() -> str:

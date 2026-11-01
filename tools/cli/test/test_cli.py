@@ -21,7 +21,7 @@ def test_help_names_the_samples() -> None:
 def test_samples_are_listed() -> None:
     result = run("samples")
     assert result.returncode == 0
-    for name in ("amr", "sedan", "quad", "lexus", "x500", "swerve", "people"):
+    for name in ("amr", "sedan", "quad", "lexus", "x500", "swerve", "people", "town"):
         assert name in result.stdout
 
 
@@ -129,3 +129,8 @@ def test_a_run_file_says_what_is_wrong_in_it(tmp_path: Path) -> None:
     assert "no file" in run(str(run_file(tmp_path, "robot: missing.urdf\n"))).stderr
     bad = run(str(run_file(tmp_path, f"robot: {AMR}\nsimulate: {{ghosts: true}}\n")))
     assert "unknown ghosts" in bad.stderr
+
+
+def test_an_unknown_season_is_refused() -> None:
+    result = run("town", "--season", "monsoon")
+    assert result.returncode != 0 and "summer" in result.stderr

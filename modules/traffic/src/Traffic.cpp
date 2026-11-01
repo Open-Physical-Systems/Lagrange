@@ -10,6 +10,8 @@
 #include <map>
 #include <numbers>
 #include <random>
+#include <span>
+#include <tuple>
 
 namespace lagrange::traffic {
 
@@ -32,6 +34,19 @@ constexpr double kAvoidRadius = 15.0;         // m kept free around the robots
 constexpr double kEntryClearance = 15.0;      // m: an entry is free when nothing is closer
 constexpr double kEntrySpeed = 8.0;           // m/s, a vehicle coming in at the network's edge
 constexpr double kYieldMargin = 5.0;          // m before the line where right of way is decided
+constexpr double kBoxSpeed = 2.0;             // m/s: slower than this, a car beyond is in the way
+constexpr double kBoxRoom = 9.0;              // m past a junction a car needs free to enter it
+constexpr double kPatience = 6.0;             // s a walker waits before pressing all the same
+constexpr double kPressChance = 0.6;          // that a walker presses as soon as it arrives
+constexpr double kPressTime = 1.5;            // s at the button
+constexpr double kCrossChance = 0.5;          // that a walker at a corner takes a crossing
+constexpr double kWalkLookAhead = 2.5;        // m, how far ahead a walker's goal is
+constexpr double kWalkArrived = 0.9;          // m from a lane's end or a spot that counts as there
+constexpr double kPoleRadius = 0.06;          // m
+constexpr double kLampHeight = 3.4;           // m, the middle of a vehicle signal
+constexpr double kWalkLampHeight = 2.5;       // m, the middle of a pedestrian signal
+constexpr double kButtonHeight = 1.05;        // m
+constexpr double kNominalLampMass = 0.1;      // kg; kinematic bodies are not moved by forces
 constexpr std::uint32_t kAgentClassCar = 0;
 constexpr std::uint32_t kAgentClassPedestrian = 1;
 
@@ -76,46 +91,94 @@ bool crosses(const std::vector<Vec3>& a, const std::vector<Vec3>& b) {
 LaneGraph lanesOf(const WorldView& world) {
     LaneGraph g;
     g.lanes = roadLanesOf(world).lanes;
-    // Junctions: groups of junction lanes reachable from each other's entries share one; each
-    // approach (a lane into a junction) gets a signal group by its heading at the stop line.
+    // Junctions: driving lanes of a junction leave the same lane, end on the same lane, or cross.
+    // (Not "the same road": on a road network a road joins two junctions.)
+    // Each approach (a lane into a junction) gets a signal group by its heading at the stop line.
     g.signalGroup.assign(g.lanes.size(), -1);
     g.junctionOf.assign(g.lanes.size(), -1);
     std::vector<int> junctionOfLane(g.lanes.size(), -1);
+    const auto driven = [&g](std::size_t i) { return g.lanes[i].junction && !g.lanes[i].sidewalk; };
+    const auto shares = [](const std::vector<std::size_t>& a, const std::vector<std::size_t>& b) {
+        return std::ranges::any_of(a, [&b](std::size_t s) { return std::ranges::count(b, s) > 0; });
+    };
     for (std::size_t i = 0; i < g.lanes.size(); ++i) {
-        if (!g.lanes[i].junction || junctionOfLane[i] >= 0) {
+        if (!driven(i) || junctionOfLane[i] >= 0) {
             continue;
         }
-        // Flood over junction lanes sharing an approach road or an exit road.
         std::vector<std::size_t> stack{i};
         junctionOfLane[i] = g.junctions;
-        const auto visit = [&](std::size_t sibling) {
-            if (g.lanes[sibling].junction && junctionOfLane[sibling] < 0) {
-                junctionOfLane[sibling] = g.junctions;
-                stack.push_back(sibling);
-            }
-        };
         while (!stack.empty()) {
-            const std::size_t k = stack.back();
+            const Lane& lane = g.lanes[stack.back()];
             stack.pop_back();
-            for (const bool before : {true, false}) {
-                for (const std::size_t outer :
-                     before ? g.lanes[k].predecessors : g.lanes[k].successors) {
-                    // Every lane of that road, and where its lanes lead or come from.
-                    for (const Lane& other : g.lanes) {
-                        if (other.junction || other.road != g.lanes[outer].road) {
-                            continue;
-                        }
-                        for (const std::size_t sibling :
-                             before ? other.successors : other.predecessors) {
-                            visit(sibling);
-                        }
-                    }
+            for (std::size_t k = 0; k < g.lanes.size(); ++k) {
+                if (driven(k) && junctionOfLane[k] < 0 &&
+                    (shares(lane.predecessors, g.lanes[k].predecessors) ||
+                     shares(lane.successors, g.lanes[k].successors) ||
+                     crosses(lane.points, g.lanes[k].points))) {
+                    junctionOfLane[k] = g.junctions;
+                    stack.push_back(k);
                 }
             }
         }
         ++g.junctions;
     }
+    // A junction has lights when its lanes conflict; a crossing (below) gives it lights as well.
+    g.signalled.assign(static_cast<std::size_t>(g.junctions), false);
+    for (std::size_t i = 0; i < g.lanes.size(); ++i) {
+        for (std::size_t k = i + 1; k < g.lanes.size(); ++k) {
+            if (driven(i) && driven(k) && junctionOfLane[i] == junctionOfLane[k] &&
+                g.lanes[i].predecessors != g.lanes[k].predecessors &&
+                (shares(g.lanes[i].successors, g.lanes[k].successors) ||
+                 crosses(g.lanes[i].points, g.lanes[k].points))) {
+                g.signalled[static_cast<std::size_t>(junctionOfLane[i])] = true;
+            }
+        }
+    }
+    // Crossings: sidewalk lanes over a junction's driving lanes.
+    for (std::size_t i = 0; i < g.lanes.size(); ++i) {
+        if (!g.lanes[i].sidewalk) {
+            continue;
+        }
+        LaneGraph::Crossing crossing;
+        crossing.lane = i;
+        for (std::size_t k = 0; k < g.lanes.size(); ++k) {
+            if (driven(k) && crosses(g.lanes[i].points, g.lanes[k].points)) {
+                crossing.junction = junctionOfLane[k];
+                const Vec3& middle = g.lanes[i].points[g.lanes[i].points.size() / 2];
+                crossing.over.emplace_back(k, g.lanes[k].project(middle).first);
+            }
+        }
+        if (crossing.junction >= 0) {
+            g.signalled[static_cast<std::size_t>(crossing.junction)] = true;
+            g.crossings.push_back(std::move(crossing));
+        }
+    }
+    // The walkers' network: sidewalk lanes whose ends touch.
+    g.walkLinks.assign(g.lanes.size(), {});
+    constexpr double kTouch = 0.5;  // m
+    const auto touches = [](const Vec3& a, const Vec3& b) { return distance2d(a, b) < kTouch; };
+    for (std::size_t i = 0; i < g.lanes.size(); ++i) {
+        if (!g.lanes[i].sidewalk) {
+            continue;
+        }
+        for (std::size_t k = 0; k < g.lanes.size(); ++k) {
+            if (k == i || !g.lanes[k].sidewalk) {
+                continue;
+            }
+            const std::vector<Vec3>& a = g.lanes[i].points;
+            const std::vector<Vec3>& b = g.lanes[k].points;
+            if (touches(a.front(), b.front()) || touches(a.front(), b.back())) {
+                g.walkLinks[i][0].push_back(k);
+            }
+            if (touches(a.back(), b.front()) || touches(a.back(), b.back())) {
+                g.walkLinks[i][1].push_back(k);
+            }
+        }
+    }
     for (int j = 0; j < g.junctions; ++j) {
+        if (!g.signalled[static_cast<std::size_t>(j)]) {
+            continue;
+        }
         // Approaches into junction j and their headings at the stop line.
         std::vector<std::pair<std::size_t, double>> approaches;
         for (std::size_t i = 0; i < g.lanes.size(); ++i) {
@@ -167,6 +230,280 @@ double idmAcceleration(const Idm& p, double v, double v0, double gap, double lea
     return p.a * (free - ratio * ratio);
 }
 
+namespace {
+
+/// A rotation by `yaw` about z, then the local x seen along it.
+Vec3 along(double yaw, double forward, double left, double up) {
+    return {(std::cos(yaw) * forward) - (std::sin(yaw) * left),
+            (std::sin(yaw) * forward) + (std::cos(yaw) * left), up};
+}
+
+Vec3 plus(const Vec3& a, const Vec3& b) {
+    return {a[0] + b[0], a[1] + b[1], a[2] + b[2]};
+}
+
+/// A vehicle's approach: the signal head stands on the right of the lane's end.
+struct Head {
+    Vec3 at;     // the housing's middle
+    double yaw;  // the way it faces
+};
+Head vehicleHead(const Lane& lane) {
+    const auto [end, yaw] = lane.at(lane.length());
+    return {plus(end, along(yaw, 0.0, -(lane.width / 2.0 + 0.6), kLampHeight)),
+            yaw + std::numbers::pi};
+}
+/// A crossing's end (0 start, 1 end): the signal there faces those about to come from the other.
+Head walkHead(const Lane& lane, int end) {
+    const auto [p, yaw] = lane.at(end == 0 ? 0.0 : lane.length());
+    const double side = lane.width / 2.0 + 0.4;
+    return {plus(p, along(yaw, 0.0, end == 0 ? -side : side, kWalkLampHeight)),
+            end == 0 ? yaw : yaw + std::numbers::pi};
+}
+/// Where a walker stands to press the button at a crossing's end.
+std::array<double, 2> buttonSpot(const Lane& lane, int end) {
+    const auto [p, yaw] = lane.at(end == 0 ? 0.0 : lane.length());
+    // Beside the pole, on the side away from the road, an arm's length off.
+    const double side = lane.width / 2.0 + 0.1;
+    const Vec3 at = plus(p, along(yaw, end == 0 ? -0.6 : 0.6, end == 0 ? -side : side, 0.0));
+    return {at[0], at[1]};
+}
+
+void pushMesh(TriMesh& out, const TriMesh& part, const Pose& pose) {
+    const auto base = static_cast<std::uint32_t>(out.positions.size() / 3);
+    for (std::size_t i = 0; i + 2 < part.positions.size(); i += 3) {
+        const Vec3 p = plus(pose.position,
+                            rotate(pose.orientation, {static_cast<double>(part.positions[i]),
+                                                      static_cast<double>(part.positions[i + 1]),
+                                                      static_cast<double>(part.positions[i + 2])}));
+        const auto n = rotate(pose.orientation, {static_cast<double>(part.normals[i]),
+                                                 static_cast<double>(part.normals[i + 1]),
+                                                 static_cast<double>(part.normals[i + 2])});
+        for (int k = 0; k < 3; ++k) {
+            out.positions.push_back(static_cast<float>(p.at(k)));
+            out.normals.push_back(static_cast<float>(n.at(k)));
+        }
+    }
+    for (const std::uint32_t index : part.indices) {
+        out.indices.push_back(base + index);
+    }
+}
+
+Pose boxAt(double x, double y, double z) {
+    Pose pose;
+    pose.position = {x, y, z};
+    return pose;
+}
+
+/// One flat-shaded quad, wound so its normal is (b − a) × (c − a).
+void quad(TriMesh& m, const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d) {
+    const Vec3 u{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+    const Vec3 v{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+    Vec3 n{(u[1] * v[2]) - (u[2] * v[1]), (u[2] * v[0]) - (u[0] * v[2]),
+           (u[0] * v[1]) - (u[1] * v[0])};
+    const double length = std::max(std::hypot(n[0], n[1], n[2]), 1e-9);
+    const auto base = static_cast<std::uint32_t>(m.positions.size() / 3);
+    for (const Vec3* p : {&a, &b, &c, &d}) {
+        for (int k = 0; k < 3; ++k) {
+            m.positions.push_back(static_cast<float>(p->at(k)));
+            m.normals.push_back(static_cast<float>(n.at(k) / length));
+        }
+    }
+    m.indices.insert(m.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+}
+
+/// A side profile (x, z) extruded across the width, the top surface and both sides.
+void extrude(TriMesh& m, const std::vector<std::array<double, 2>>& top, double halfWidth,
+             double bottom) {
+    for (std::size_t i = 0; i + 1 < top.size(); ++i) {
+        const auto& p = top[i];
+        const auto& q = top[i + 1];
+        quad(m, {p[0], halfWidth, p[1]}, {p[0], -halfWidth, p[1]}, {q[0], -halfWidth, q[1]},
+             {q[0], halfWidth, q[1]});
+        quad(m, {p[0], -halfWidth, bottom}, {q[0], -halfWidth, bottom}, {q[0], -halfWidth, q[1]},
+             {p[0], -halfWidth, p[1]});
+        quad(m, {q[0], halfWidth, bottom}, {p[0], halfWidth, bottom}, {p[0], halfWidth, p[1]},
+             {q[0], halfWidth, q[1]});
+    }
+}
+
+/// How one kind of car is drawn, all within the agent's box: paint, glass, tyres and lamps, about
+/// the box's middle.
+struct CarMeshes {
+    TriMesh paint, glass, tyres, head, tail;
+};
+CarMeshes carMeshes(int kind) {
+    const double l = kCarSize[0] / 2.0;
+    const double w = kCarSize[1] / 2.0;
+    const double h = kCarSize[2] / 2.0;
+    const double floor = -h + 0.18;
+    const double belt = kind == 2 ? 0.05 : -0.08;  // above the box's middle
+    const double roof = kind == 0 ? h - 0.08 : h;
+    // Front to back along −x: the bonnet, the screen's foot, the roof, the rear screen.
+    const double screen = kind == 1 ? 0.9 : kind == 2 ? 1.25 : 0.75;
+    const double rearFoot = kind == 0 ? -1.45 : kind == 1 ? -l + 0.2 : -l + 0.12;
+    const double rearTop = kind == 0 ? -0.75 : kind == 1 ? -l + 0.55 : -l + 0.25;
+    const double roofFront = screen - (kind == 2 ? 0.55 : 0.75);
+    CarMeshes m;
+    std::vector<std::array<double, 2>> body{
+        {l, floor + 0.12}, {l, belt - 0.14}, {l - 0.2, belt - 0.04}, {screen, belt}};
+    body.push_back({rearFoot, belt});
+    if (kind == 0) {
+        body.push_back({-l + 0.1, belt + 0.02});
+    }
+    body.push_back({-l, belt - 0.08});
+    body.push_back({-l, floor + 0.1});
+    // Clockwise from above seen along +y, so the top quad's normal points up.
+    std::reverse(body.begin(), body.end());
+    extrude(m.paint, body, w, floor);
+    quad(m.paint, {l, w, floor + 0.12}, {l, w, belt - 0.14}, {l, -w, belt - 0.14},
+         {l, -w, floor + 0.12});
+    quad(m.paint, {-l, -w, floor + 0.1}, {-l, -w, belt - 0.08}, {-l, w, belt - 0.08},
+         {-l, w, floor + 0.1});
+    // The cabin: glass all round, a painted roof on it.
+    const double b = w - 0.06;
+    const double t = w - 0.22;
+    quad(m.glass, {screen, b, belt}, {screen, -b, belt}, {roofFront, -t, roof},
+         {roofFront, t, roof});
+    quad(m.glass, {rearFoot, -b, belt}, {rearFoot, b, belt}, {rearTop, t, roof},
+         {rearTop, -t, roof});
+    quad(m.glass, {rearFoot, b, belt}, {screen, b, belt}, {roofFront, t, roof}, {rearTop, t, roof});
+    quad(m.glass, {screen, -b, belt}, {rearFoot, -b, belt}, {rearTop, -t, roof},
+         {roofFront, -t, roof});
+    quad(m.paint, {roofFront, t, roof}, {roofFront, -t, roof}, {rearTop, -t, roof},
+         {rearTop, t, roof});
+    // Wheels: axles along y.
+    constexpr double kTyre = 0.33;  // m
+    Pose wheel;
+    wheel.orientation = {std::cos(std::numbers::pi / 4.0), std::sin(std::numbers::pi / 4.0), 0.0,
+                         0.0};
+    const TriMesh tyre = cylinderMesh(kTyre, 0.22, 16);
+    for (const double x : {l - 0.85, -l + 0.85}) {
+        for (const double y : {w - 0.1, -w + 0.1}) {
+            wheel.position = {x, y, -h + kTyre};
+            pushMesh(m.tyres, tyre, wheel);
+        }
+    }
+    const TriMesh lamp = boxMesh(0.03, 0.34, 0.1);
+    for (const double y : {w - 0.25, -w + 0.25}) {
+        pushMesh(m.head, lamp, boxAt(l + 0.005, y, belt - 0.26));
+        pushMesh(m.tail, lamp, boxAt(-l - 0.005, y, belt - 0.2));
+    }
+    return m;
+}
+
+/// A little person for a pedestrian signal, flat, facing +x: standing, or in mid stride.
+TriMesh figureMesh(bool walking) {
+    TriMesh m;
+    const auto part = [&m](double sy, double sz, double y, double z, double lean) {
+        Pose pose = boxAt(0.0, y, z);
+        pose.orientation = {std::cos(lean / 2.0), std::sin(lean / 2.0), 0.0, 0.0};
+        pushMesh(m, boxMesh(0.01, sy, sz), pose);
+    };
+    part(0.05, 0.05, 0.0, 0.09, 0.0);  // head
+    part(0.06, 0.1, 0.0, 0.0, 0.0);    // trunk
+    if (walking) {
+        part(0.025, 0.11, 0.03, -0.1, -0.5);
+        part(0.025, 0.11, -0.03, -0.1, 0.5);
+        part(0.02, 0.09, 0.05, 0.0, -0.7);
+        part(0.02, 0.09, -0.05, 0.0, 0.7);
+    } else {
+        part(0.025, 0.11, 0.015, -0.1, 0.0);
+        part(0.025, 0.11, -0.015, -0.1, 0.0);
+        part(0.02, 0.09, 0.05, 0.0, 0.0);
+        part(0.02, 0.09, -0.05, 0.0, 0.0);
+    }
+    return m;
+}
+
+}  // namespace
+
+std::vector<SignalLamp> signalLamps(const LaneGraph& g) {
+    std::vector<SignalLamp> lamps;
+    const auto lamp = [&lamps](std::string name, LampKind kind, std::size_t lane, const Head& head,
+                               double up, double front) {
+        SignalLamp out;
+        out.name = std::move(name);
+        out.kind = kind;
+        out.lane = lane;
+        out.lit.position = plus(head.at, along(head.yaw, front, 0.0, up));
+        out.lit.orientation = yawQuat(head.yaw);
+        out.dark.position = plus(head.at, along(head.yaw, 0.0, 0.0, up));
+        out.dark.orientation = out.lit.orientation;
+        lamps.push_back(std::move(out));
+    };
+    constexpr double kSpacing = 0.33;  // m between a vehicle signal's lamps
+    constexpr double kFront = 0.112;   // m, a lit lamp from the housing's middle
+    for (std::size_t i = 0; i < g.lanes.size(); ++i) {
+        if (g.signalGroup[i] < 0) {
+            continue;
+        }
+        const Head head = vehicleHead(g.lanes[i]);
+        const std::string base = "traffic_lamp_" + std::to_string(i);
+        lamp(base + "_red", LampKind::Red, i, head, kSpacing, kFront);
+        lamp(base + "_yellow", LampKind::Yellow, i, head, 0.0, kFront);
+        lamp(base + "_green", LampKind::Green, i, head, -kSpacing, kFront);
+    }
+    for (std::size_t c = 0; c < g.crossings.size(); ++c) {
+        const Lane& lane = g.lanes[g.crossings[c].lane];
+        for (int end = 0; end < 2; ++end) {
+            const Head head = walkHead(lane, end);
+            const std::string base =
+                "traffic_lamp_crossing_" + std::to_string(c) + "_" + std::to_string(end);
+            lamp(base + "_dont_walk", LampKind::DontWalk, c, head, 0.17, kFront);
+            lamp(base + "_walk", LampKind::Walk, c, head, -0.17, kFront);
+            Head button = head;
+            button.at[2] = kButtonHeight;
+            lamp(base + "_wait", LampKind::Wait, c, button, 0.0, 0.052);
+        }
+    }
+    return lamps;
+}
+
+std::vector<WalkerStart> walkersFor(const WorldView& world, int count, std::uint64_t seed,
+                                    const std::vector<Vec3>& avoid) {
+    std::vector<WalkerStart> out;
+    const LaneGraph g = lanesOf(world);
+    if (g.crossings.empty() || count <= 0) {
+        return out;
+    }
+    std::vector<std::size_t> walks;
+    for (std::size_t i = 0; i < g.lanes.size(); ++i) {
+        if (g.lanes[i].sidewalk && !g.lanes[i].junction && g.lanes[i].length() > 6.0) {
+            walks.push_back(i);
+        }
+    }
+    std::mt19937_64 rng(seed + 0x7A1C);
+    std::uniform_real_distribution<double> unit(0.0, 1.0);
+    for (int i = 0; i < count && !walks.empty(); ++i) {
+        for (int attempt = 0; attempt < 400; ++attempt) {
+            const Lane& lane =
+                g.lanes[walks[static_cast<std::size_t>(unit(rng) * walks.size()) % walks.size()]];
+            const auto [p, yaw] = lane.at(unit(rng) * lane.length());
+            const bool clear =
+                std::ranges::none_of(out,
+                                     [&p](const WalkerStart& o) {
+                                         return distance2d(o.ground.position, p) <
+                                                kPedestrianSpacing;
+                                     }) &&
+                std::ranges::none_of(avoid, [&p](const Vec3& q) { return distance2d(p, q) < 2.0; });
+            if (!clear) {
+                continue;
+            }
+            WalkerStart walker;
+            walker.name = "walker_" + std::to_string(i);
+            walker.ground.position = p;
+            walker.ground.orientation = yawQuat(yaw);
+            // Stature and walking speed spread as adults' do (illustrative).
+            walker.height = 1.55 + (0.35 * unit(rng));
+            walker.walkSpeed = 1.1 + (0.45 * unit(rng));
+            walker.seed = i + 1;
+            out.push_back(std::move(walker));
+            break;
+        }
+    }
+    return out;
+}
+
 std::array<int, 2> addAgents(Model& model, const Population& population,
                              const std::vector<Vec3>& avoid) {
     const LaneGraph g = lanesOf(WorldView(model.world));
@@ -188,18 +525,45 @@ std::array<int, 2> addAgents(Model& model, const Population& population,
     top.typeName = "Xform";
     model.scene.prims.push_back(top);
     const auto topPrim = static_cast<std::uint32_t>(model.scene.prims.size() - 1);
-    static constexpr std::array<std::array<float, 4>, 6> kPaint{{{0.85F, 0.85F, 0.87F, 1.0F},
-                                                                 {0.12F, 0.13F, 0.15F, 1.0F},
-                                                                 {0.2F, 0.32F, 0.58F, 1.0F},
-                                                                 {0.62F, 0.62F, 0.64F, 1.0F},
-                                                                 {0.55F, 0.12F, 0.1F, 1.0F},
-                                                                 {0.25F, 0.4F, 0.3F, 1.0F}}};
+    static constexpr std::array<std::array<float, 4>, 6> kPaint{{{0.8F, 0.8F, 0.82F, 1.0F},
+                                                                 {0.04F, 0.045F, 0.05F, 1.0F},
+                                                                 {0.06F, 0.14F, 0.42F, 1.0F},
+                                                                 {0.42F, 0.43F, 0.45F, 1.0F},
+                                                                 {0.48F, 0.03F, 0.03F, 1.0F},
+                                                                 {0.06F, 0.22F, 0.14F, 1.0F}}};
     const auto materialFor = [&model](const std::string& name, std::array<float, 4> rgba) {
         model.scene.materials.push_back({name, rgba});
         return static_cast<std::uint32_t>(model.scene.materials.size() - 1);
     };
-    const std::uint32_t carMesh = static_cast<std::uint32_t>(model.scene.meshes.size());
-    model.scene.meshes.push_back(boxMesh(kCarSize[0], kCarSize[1], kCarSize[2]));
+    const auto addMesh = [&model](TriMesh mesh) {
+        model.scene.meshes.push_back(std::move(mesh));
+        return static_cast<std::uint32_t>(model.scene.meshes.size() - 1);
+    };
+    struct CarKind {
+        std::uint32_t paint, glass, tyres, head, tail;
+    };
+    std::array<CarKind, 3> carKinds{};
+    for (int k = 0; k < 3; ++k) {
+        CarMeshes parts = carMeshes(k);
+        carKinds.at(static_cast<std::size_t>(k)) = {
+            addMesh(std::move(parts.paint)), addMesh(std::move(parts.glass)),
+            addMesh(std::move(parts.tyres)), addMesh(std::move(parts.head)),
+            addMesh(std::move(parts.tail))};
+    }
+    const std::uint32_t glassMaterial = materialFor("car_glass", {0.05F, 0.07F, 0.09F, 1.0F});
+    const std::uint32_t tyreMaterial = materialFor("tyre_rubber", {0.03F, 0.03F, 0.03F, 1.0F});
+    const auto glowing = [&model](const std::string& name, std::array<float, 3> colour,
+                                  float strength) {
+        SceneMaterial material;
+        material.name = name;
+        material.rgba = {colour[0], colour[1], colour[2], 1.0F};
+        material.look = SurfaceLook{
+            0.0F, 0.3F, {colour[0] * strength, colour[1] * strength, colour[2] * strength}};
+        model.scene.materials.push_back(std::move(material));
+        return static_cast<std::uint32_t>(model.scene.materials.size() - 1);
+    };
+    const std::uint32_t headMaterial = glowing("car_headlamp", {0.95F, 0.95F, 0.85F}, 0.6F);
+    const std::uint32_t tailMaterial = glowing("car_taillamp", {0.7F, 0.04F, 0.03F}, 0.4F);
     const std::uint32_t walkerMesh = static_cast<std::uint32_t>(model.scene.meshes.size());
     model.scene.meshes.push_back(cylinderMesh(kPedestrianRadius, kPedestrianHeight, 16));
     const std::uint32_t walkerMaterial = materialFor("pedestrian", {0.3F, 0.45F, 0.75F, 1.0F});
@@ -251,14 +615,30 @@ std::array<int, 2> addAgents(Model& model, const Population& population,
             prim.path = "/traffic/" + name;
             prim.parent = topPrim;
             prim.typeName = "Mesh";
-            prim.mesh = pedestrian ? walkerMesh : carMesh;
+            const CarKind& kind = carKinds.at(static_cast<std::size_t>(index) % carKinds.size());
+            prim.mesh = pedestrian ? walkerMesh : kind.paint;
             prim.material =
-                pedestrian
-                    ? walkerMaterial
-                    : materialFor(name, kPaint[static_cast<std::size_t>(index) % kPaint.size()]);
+                pedestrian ? walkerMaterial
+                           : materialFor(name + "_gloss_paint",
+                                         kPaint[static_cast<std::size_t>(index) % kPaint.size()]);
             prim.body = body.index;
             model.scene.prims.push_back(prim);
             model.bodyPrim.push_back(static_cast<std::uint32_t>(model.scene.prims.size() - 1));
+            if (!pedestrian) {
+                for (const auto& [part, mesh, material] :
+                     {std::tuple{"glass", kind.glass, glassMaterial},
+                      std::tuple{"tyres", kind.tyres, tyreMaterial},
+                      std::tuple{"headlamps", kind.head, headMaterial},
+                      std::tuple{"taillamps", kind.tail, tailMaterial}}) {
+                    ScenePrim piece = prim;
+                    piece.name = part;
+                    piece.path = prim.path + "/" + part;
+                    piece.parent = model.bodyPrim.back();
+                    piece.mesh = mesh;
+                    piece.material = material;
+                    model.scene.prims.push_back(std::move(piece));
+                }
+            }
             return true;
         }
         return false;
@@ -267,10 +647,442 @@ std::array<int, 2> addAgents(Model& model, const Population& population,
     for (int i = 0; i < population.vehicles; ++i) {
         made[0] += place(roads, kVehicleSpacing, false, made[0]) ? 1 : 0;
     }
-    for (int i = 0; i < population.pedestrians; ++i) {
+    // On a world with crossings pedestrians are walkers, which the caller adds as people.
+    for (int i = 0; g.crossings.empty() && i < population.pedestrians; ++i) {
         made[1] += place(walks, kPedestrianSpacing, true, made[1]) ? 1 : 0;
     }
+
+    // The signals: poles and housings as scenery, and the lamps that the module moves.
+    const std::uint32_t poleMaterial = materialFor("signal_pole_steel", {0.2F, 0.21F, 0.22F, 1.0F});
+    const std::uint32_t housingMaterial =
+        materialFor("signal_housing_plastic", {0.02F, 0.02F, 0.022F, 1.0F});
+    const std::uint32_t housingMesh = addMesh(boxMesh(0.2, 0.32, 1.02));
+    const std::uint32_t walkHousingMesh = addMesh(boxMesh(0.2, 0.26, 0.6));
+    const std::uint32_t buttonMesh = addMesh(boxMesh(0.1, 0.1, 0.16));
+    const std::uint32_t lensDisc = addMesh(cylinderMesh(0.105, 0.02, 20));
+    const std::uint32_t waitDisc = addMesh(cylinderMesh(0.022, 0.012, 12));
+    const std::uint32_t standing = addMesh(figureMesh(false));
+    const std::uint32_t striding = addMesh(figureMesh(true));
+    const std::uint32_t redLit = glowing("signal_red", {1.0F, 0.06F, 0.04F}, 6.0F);
+    const std::uint32_t yellowLit = glowing("signal_yellow", {1.0F, 0.62F, 0.05F}, 6.0F);
+    const std::uint32_t greenLit = glowing("signal_green", {0.08F, 1.0F, 0.42F}, 6.0F);
+    const std::uint32_t waitLit = glowing("signal_wait", {1.0F, 0.6F, 0.1F}, 4.0F);
+    const std::uint32_t redDark = materialFor("lens_dark_red", {0.1F, 0.015F, 0.012F, 1.0F});
+    const std::uint32_t yellowDark = materialFor("lens_dark_amber", {0.1F, 0.06F, 0.012F, 1.0F});
+    const std::uint32_t greenDark = materialFor("lens_dark_green", {0.012F, 0.08F, 0.04F, 1.0F});
+    const auto scenery = [&](const std::string& name, std::uint32_t mesh, std::uint32_t material,
+                             const Pose& pose) {
+        ScenePrim prim;
+        prim.name = name;
+        prim.path = "/traffic/" + name;
+        prim.parent = topPrim;
+        prim.typeName = "Mesh";
+        prim.mesh = mesh;
+        prim.material = material;
+        prim.offset = pose;
+        model.scene.prims.push_back(std::move(prim));
+    };
+    const auto pole = [&](const std::string& name, const Vec3& at, double height) {
+        Pose pose = boxAt(at[0], at[1], height / 2.0);
+        scenery(name, addMesh(cylinderMesh(kPoleRadius, height, 12)), poleMaterial, pose);
+        w.addCollider(kWorldBody, ShapeType::Cylinder, {kPoleRadius, height / 2.0, 0.0}, pose, 0.6);
+    };
+    const auto facing = [](const Head& head, double up, double front) {
+        Pose pose;
+        pose.position = plus(head.at, along(head.yaw, front, 0.0, up));
+        pose.orientation = yawQuat(head.yaw);
+        return pose;
+    };
+    const auto discPose = [&facing](const Head& head, double up, double front) {
+        // A disc's axis is z: turned to look along x.
+        Pose pose = facing(head, up, front);
+        pose = compose(pose, Pose{{0.0, 0.0, 0.0},
+                                  {std::cos(std::numbers::pi / 4.0), 0.0,
+                                   std::sin(std::numbers::pi / 4.0), 0.0}});
+        return pose;
+    };
+    for (std::size_t i = 0; i < g.lanes.size(); ++i) {
+        if (g.signalGroup[i] < 0) {
+            continue;
+        }
+        const Head head = vehicleHead(g.lanes[i]);
+        const std::string base = "signal_" + std::to_string(i);
+        pole(base + "_pole", {head.at[0], head.at[1], 0.0}, kLampHeight - 0.4);
+        scenery(base + "_housing", housingMesh, housingMaterial, facing(head, 0.0, 0.0));
+        scenery(base + "_lens_r", lensDisc, redDark, discPose(head, 0.33, 0.105));
+        scenery(base + "_lens_y", lensDisc, yellowDark, discPose(head, 0.0, 0.105));
+        scenery(base + "_lens_g", lensDisc, greenDark, discPose(head, -0.33, 0.105));
+    }
+    for (std::size_t c = 0; c < g.crossings.size(); ++c) {
+        for (int end = 0; end < 2; ++end) {
+            const Head head = walkHead(g.lanes[g.crossings[c].lane], end);
+            const std::string base = "crossing_" + std::to_string(c) + "_" + std::to_string(end);
+            pole(base + "_pole", {head.at[0], head.at[1], 0.0}, kWalkLampHeight);
+            scenery(base + "_housing", walkHousingMesh, housingMaterial, facing(head, 0.0, 0.0));
+            Head button = head;
+            button.at[2] = kButtonHeight;
+            scenery(base + "_button", buttonMesh, poleMaterial, facing(button, 0.0, 0.0));
+        }
+    }
+    for (const SignalLamp& lamp : signalLamps(g)) {
+        const BodyId body =
+            w.addBody(lamp.name, kWorldBody, lamp.dark, kNominalLampMass, {}, {1, 1, 1, 0, 0, 0});
+        w.bodies.robot.back() = robot;
+        w.bodies.kinematic.back() = true;
+        model.bodyRestPose.push_back(lamp.dark);
+        ScenePrim prim;
+        prim.name = lamp.name;
+        prim.path = "/traffic/" + lamp.name;
+        prim.parent = topPrim;
+        prim.typeName = "Mesh";
+        prim.body = body.index;
+        const Pose disc{
+            {0.0, 0.0, 0.0},
+            {std::cos(std::numbers::pi / 4.0), 0.0, std::sin(std::numbers::pi / 4.0), 0.0}};
+        switch (lamp.kind) {
+            case LampKind::Red:
+                prim.mesh = lensDisc;
+                prim.material = redLit;
+                prim.offset = disc;
+                break;
+            case LampKind::Yellow:
+                prim.mesh = lensDisc;
+                prim.material = yellowLit;
+                prim.offset = disc;
+                break;
+            case LampKind::Green:
+                prim.mesh = lensDisc;
+                prim.material = greenLit;
+                prim.offset = disc;
+                break;
+            case LampKind::DontWalk:
+                prim.mesh = standing;
+                prim.material = redLit;
+                break;
+            case LampKind::Walk:
+                prim.mesh = striding;
+                prim.material = greenLit;
+                break;
+            case LampKind::Wait:
+                prim.mesh = waitDisc;
+                prim.material = waitLit;
+                prim.offset = disc;
+                break;
+        }
+        model.scene.prims.push_back(std::move(prim));
+        model.bodyPrim.push_back(static_cast<std::uint32_t>(model.scene.prims.size() - 1));
+    }
     return made;
+}
+
+const Traffic::Controller* Traffic::controllerOf(int junction) const {
+    if (junction < 0) {
+        return nullptr;
+    }
+    const int c = controllerOfJunction_[static_cast<std::size_t>(junction)];
+    return c < 0 ? nullptr : &controllers_[static_cast<std::size_t>(c)];
+}
+
+Light Traffic::lightOf(std::size_t lane, double t) const {
+    const int group = graph_.signalGroup[lane];
+    const Controller* controller = controllerOf(graph_.junctionOf[lane]);
+    if (controller == nullptr) {
+        return lightAt(group, 2, t);
+    }
+    if (group != controller->group) {
+        return Light::Red;
+    }
+    switch (controller->phase) {
+        case Controller::Phase::Green:
+            return Light::Green;
+        case Controller::Phase::Yellow:
+            return Light::Yellow;
+        default:
+            return Light::Red;
+    }
+}
+
+Walk Traffic::walkOf(int junction, double /*t*/) const {
+    const Controller* controller = controllerOf(junction);
+    if (controller == nullptr) {
+        return Walk::DontWalk;
+    }
+    if (controller->phase == Controller::Phase::Walk) {
+        return Walk::Walk;
+    }
+    return controller->phase == Controller::Phase::Flash ? Walk::Flashing : Walk::DontWalk;
+}
+
+void Traffic::updateControllers(SignalBus& /*bus*/, double dt) {
+    using Phase = Controller::Phase;
+    for (Controller& c : controllers_) {
+        c.elapsed += dt;
+        const auto to = [&c](Phase phase) {
+            c.phase = phase;
+            c.elapsed = 0.0;
+        };
+        // Whether anything is still on what a crossing goes over, or on a crossing.
+        const auto vehiclesIn = [&] {
+            for (const LaneGraph::Crossing& crossing : graph_.crossings) {
+                if (crossing.junction != c.junction) {
+                    continue;
+                }
+                for (const auto& [lane, s] : crossing.over) {
+                    const std::size_t on = lane;
+                    if (std::ranges::any_of(agents_, [on](const Agent& a) {
+                            return !a.pedestrian && a.lane == on;
+                        })) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+        const auto peopleOn = [&] {
+            for (std::size_t k = 0; k < graph_.crossings.size(); ++k) {
+                if (graph_.crossings[k].junction == c.junction && onCrossing_[k] > 0) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        const auto nextGreen = [&] {
+            c.group = (c.group + 1) % c.groups;
+            to(Phase::Green);
+        };
+        switch (c.phase) {
+            case Phase::Green:
+                if (c.groups == 1 ? (c.requested && c.elapsed >= kMinGreenSeconds)
+                                  : (c.elapsed >= kGreenSeconds ||
+                                     (c.requested && c.elapsed >= kMinGreenSeconds))) {
+                    to(Phase::Yellow);
+                }
+                break;
+            case Phase::Yellow:
+                if (c.elapsed >= kYellowSeconds) {
+                    to(Phase::AllRed);
+                }
+                break;
+            case Phase::AllRed:
+                if (c.elapsed >= kAllRedSeconds) {
+                    if (c.requested) {
+                        to(Phase::Clearing);
+                    } else {
+                        nextGreen();
+                    }
+                }
+                break;
+            case Phase::Clearing:
+                if (!vehiclesIn() || c.elapsed >= kClearHoldSeconds) {
+                    c.requested = false;
+                    to(Phase::Walk);
+                }
+                break;
+            case Phase::Walk:
+                if (c.elapsed >= kWalkSeconds) {
+                    to(Phase::Flash);
+                }
+                break;
+            case Phase::Flash:
+                if (c.elapsed >= c.flash) {
+                    to(Phase::Emptying);
+                }
+                break;
+            case Phase::Emptying:
+                if (!peopleOn() || c.elapsed >= kClearHoldSeconds) {
+                    nextGreen();
+                }
+                break;
+        }
+    }
+}
+
+void Traffic::updateWalkers(SignalBus& bus, double dt, std::size_t /*agentCount*/) {
+    using State = Walker::State;
+    std::ranges::fill(onCrossing_, 0);
+    for (std::size_t i = 0; i < walkers_.size(); ++i) {
+        Walker& w = walkers_[i];
+        if (const std::span<const double> pose = bus.readN(w.pose); pose.size() == 7) {
+            w.x = pose[0];
+            w.y = pose[1];
+        }
+        w.timer += dt;
+        const auto draw = [&] {
+            random::Stream rng(seed_, ++w.decisions, static_cast<std::uint32_t>(i) + 0x10000U);
+            return rng.uniform();
+        };
+        const auto spotOf = [&](std::size_t crossing, bool forward) {
+            // Where it waits: the near end of the crossing, a little spread out.
+            const Lane& lane = graph_.lanes[graph_.crossings[crossing].lane];
+            const auto [p, yaw] = lane.at(forward ? 0.0 : lane.length());
+            return std::array<double, 2>{p[0] - (std::sin(yaw) * w.offset),
+                                         p[1] + (std::cos(yaw) * w.offset)};
+        };
+        const auto goTo = [&](double x, double y) {
+            bus.writeN(w.goal, std::array<double, 3>{x, y, 1.0});
+        };
+        const auto arrived = [&](double x, double y) {
+            return std::hypot(x - w.x, y - w.y) < kWalkArrived;
+        };
+        const auto along = [&](std::size_t laneIndex, bool forward) {
+            // Toward a point ahead on the lane, on the walker's own side of its middle.
+            const Lane& lane = graph_.lanes[laneIndex];
+            const double s = lane.project({w.x, w.y, 0.0}).first;
+            const auto [p, yaw] = lane.at(
+                std::clamp(s + (forward ? kWalkLookAhead : -kWalkLookAhead), 0.0, lane.length()));
+            const double left = forward ? w.offset : -w.offset;
+            goTo(p[0] - (std::sin(yaw) * left), p[1] + (std::cos(yaw) * left));
+            return forward ? lane.length() - s : s;
+        };
+        // Leaves a lane's end: the next sidewalk, or a crossing; `end` 1 is the lane's end.
+        const auto onward = [&](std::size_t from, int end) {
+            const std::vector<std::size_t>& next = graph_.walkLinks[from][end == 1 ? 1 : 0];
+            std::vector<std::size_t> plain;
+            std::vector<std::size_t> crossings;
+            for (std::size_t c = 0; c < graph_.crossings.size(); ++c) {
+                if (std::ranges::count(next, graph_.crossings[c].lane) > 0) {
+                    crossings.push_back(c);
+                }
+            }
+            for (const std::size_t lane : next) {
+                if (std::ranges::none_of(crossings, [&](std::size_t c) {
+                        return graph_.crossings[c].lane == lane;
+                    })) {
+                    plain.push_back(lane);
+                }
+            }
+            const Vec3 here =
+                graph_.lanes[from].points[end == 1 ? graph_.lanes[from].points.size() - 1 : 0];
+            if (!crossings.empty() && (plain.empty() || draw() < kCrossChance)) {
+                w.crossing = crossings[static_cast<std::size_t>(
+                                           draw() * static_cast<double>(crossings.size())) %
+                                       crossings.size()];
+                const Lane& lane = graph_.lanes[graph_.crossings[w.crossing].lane];
+                w.crossingForward =
+                    distance2d(lane.points.front(), here) < distance2d(lane.points.back(), here);
+                w.state = State::ToCrossing;
+                w.timer = 0.0;
+                return;
+            }
+            if (plain.empty()) {
+                w.forward = !w.forward;  // a dead end: turn back
+                return;
+            }
+            w.lane = plain[static_cast<std::size_t>(draw() * static_cast<double>(plain.size())) %
+                           plain.size()];
+            const Lane& lane = graph_.lanes[w.lane];
+            w.forward =
+                distance2d(lane.points.front(), here) < distance2d(lane.points.back(), here);
+            w.state = State::Along;
+            w.timer = 0.0;
+        };
+        switch (w.state) {
+            case State::Along: {
+                const double left = along(w.lane, w.forward);
+                if (left < kWalkArrived) {
+                    onward(w.lane, w.forward ? 1 : 0);
+                }
+                break;
+            }
+            case State::ToCrossing: {
+                const auto [x, y] = spotOf(w.crossing, w.crossingForward);
+                goTo(x, y);
+                if (arrived(x, y)) {
+                    w.state = State::Waiting;
+                    w.timer = 0.0;
+                    const LaneGraph::Crossing& crossing = graph_.crossings[w.crossing];
+                    const Controller* c = controllerOf(crossing.junction);
+                    if (c != nullptr && !c->requested &&
+                        walkOf(crossing.junction, 0.0) == Walk::DontWalk && draw() < kPressChance) {
+                        w.state = State::ToButton;
+                    }
+                }
+                break;
+            }
+            case State::ToButton: {
+                const Lane& lane = graph_.lanes[graph_.crossings[w.crossing].lane];
+                const auto [x, y] = buttonSpot(lane, w.crossingForward ? 0 : 1);
+                goTo(x, y);
+                if (arrived(x, y) || w.timer > 8.0) {
+                    w.state = State::Pressing;
+                    w.timer = 0.0;
+                }
+                break;
+            }
+            case State::Pressing:
+                goTo(w.x, w.y);
+                if (w.timer >= kPressTime) {
+                    const int c = controllerOfJunction_[static_cast<std::size_t>(
+                        graph_.crossings[w.crossing].junction)];
+                    controllers_[static_cast<std::size_t>(c)].requested = true;
+                    w.state = State::Waiting;
+                    w.timer = 0.0;
+                }
+                break;
+            case State::Waiting: {
+                const LaneGraph::Crossing& crossing = graph_.crossings[w.crossing];
+                const auto [x, y] = spotOf(w.crossing, w.crossingForward);
+                goTo(x, y);
+                const Walk walk = walkOf(crossing.junction, 0.0);
+                if (walk == Walk::Walk) {
+                    w.state = State::Crossing;
+                    w.timer = 0.0;
+                } else if (w.timer > kPatience && walk == Walk::DontWalk) {
+                    const Controller* c = controllerOf(crossing.junction);
+                    if (c != nullptr && !c->requested) {
+                        w.state = State::ToButton;  // nobody has pressed: it does
+                        w.timer = 0.0;
+                    }
+                }
+                break;
+            }
+            case State::Crossing: {
+                onCrossing_[w.crossing] += 1;
+                const std::size_t lane = graph_.crossings[w.crossing].lane;
+                if (along(lane, w.crossingForward) < kWalkArrived) {
+                    onward(lane, w.crossingForward ? 1 : 0);
+                }
+                break;
+            }
+        }
+    }
+}
+
+void Traffic::writeLamps(SignalBus& bus, double t) {
+    constexpr double kFlashPeriod = 1.0;  // s
+    const bool flashOn = std::fmod(t, kFlashPeriod) < kFlashPeriod / 2.0;
+    for (std::size_t l = 0; l < lamps_.size(); ++l) {
+        const SignalLamp& lamp = lamps_[l];
+        bool lit = false;
+        if (!zero_) {
+            switch (lamp.kind) {
+                case LampKind::Red:
+                    lit = lightOf(lamp.lane, t) == Light::Red;
+                    break;
+                case LampKind::Yellow:
+                    lit = lightOf(lamp.lane, t) == Light::Yellow;
+                    break;
+                case LampKind::Green:
+                    lit = lightOf(lamp.lane, t) == Light::Green;
+                    break;
+                default: {
+                    const int junction = graph_.crossings[lamp.lane].junction;
+                    const Walk walk = walkOf(junction, t);
+                    if (lamp.kind == LampKind::Walk) {
+                        lit = walk == Walk::Walk || (walk == Walk::Flashing && flashOn);
+                    } else if (lamp.kind == LampKind::DontWalk) {
+                        lit = walk == Walk::DontWalk;
+                    } else {
+                        const Controller* c = controllerOf(junction);
+                        lit = c != nullptr && c->requested;
+                    }
+                }
+            }
+        } else {
+            lit = lamp.kind == LampKind::Red || lamp.kind == LampKind::DontWalk;
+        }
+        bus.writeN(lampOut_[l].command, lit ? lampOut_[l].lit : lampOut_[l].dark);
+    }
 }
 
 ModuleInfo Traffic::info() const {
@@ -368,6 +1180,88 @@ Status Traffic::declare(const WorldView& world, const ModuleConfig& config, Sign
             entries_.push_back(i);
         }
     }
+    // The actuated junctions: those with crossings.
+    controllers_.clear();
+    controllerOfJunction_.assign(static_cast<std::size_t>(graph_.junctions), -1);
+    for (const LaneGraph::Crossing& crossing : graph_.crossings) {
+        const auto junction = static_cast<std::size_t>(crossing.junction);
+        if (controllerOfJunction_[junction] < 0) {
+            Controller controller;
+            controller.junction = crossing.junction;
+            for (std::size_t i = 0; i < graph_.lanes.size(); ++i) {
+                if (graph_.junctionOf[i] == crossing.junction) {
+                    controller.groups = std::max(controller.groups, graph_.signalGroup[i] + 1);
+                }
+            }
+            controllerOfJunction_[junction] = static_cast<int>(controllers_.size());
+            controllers_.push_back(controller);
+        }
+        Controller& controller =
+            controllers_[static_cast<std::size_t>(controllerOfJunction_[junction])];
+        controller.flash =
+            std::max(controller.flash, graph_.lanes[crossing.lane].length() / kClearanceSpeed);
+    }
+    onCrossing_.assign(graph_.crossings.size(), 0);
+    // The lamps.
+    lamps_ = signalLamps(graph_);
+    lampOut_.clear();
+    for (const SignalLamp& lamp : lamps_) {
+        LampOut out;
+        out.command = d.output(
+            spec("body/" + lamp.name + "/pose_command", SignalType::Pose, units::m, "world_local"));
+        const auto flat = [](const Pose& pose) {
+            return std::array<double, 7>{
+                pose.position[0],    pose.position[1],    pose.position[2],   pose.orientation[0],
+                pose.orientation[1], pose.orientation[2], pose.orientation[3]};
+        };
+        out.lit = flat(lamp.lit);
+        out.dark = flat(lamp.dark);
+        lampOut_.push_back(out);
+    }
+    // The walkers: people named walker_<i>, moved by the humans domain, sent by their goals.
+    walkersStart_.clear();
+    for (const SchemaInstance* s : world.instancesOf("HumanAPI_1")) {
+        const std::string& person = raw.prims.instanceNames.at(s->prim.index);
+        if (!person.starts_with("walker_") || graph_.crossings.empty()) {
+            continue;
+        }
+        Walker walker;
+        const std::string base = "human/" + person + "/";
+        SignalSpec goal = spec(base + "goal", SignalType::ScalarArray, units::one);
+        goal.arrayLength = 3;
+        walker.goal = d.output(goal);
+        SignalSpec pose = spec(base + "pose", SignalType::Pose, units::m, "world_local");
+        pose.feedback = true;
+        pose.optional = true;
+        walker.pose = d.input(pose);
+        const std::string pelvis = "human_" + person + "_pelvis";
+        for (std::size_t b = 0; b < raw.bodies.names.size(); ++b) {
+            if (raw.bodies.names[b] == pelvis) {
+                walker.x = raw.bodies.poseInParent[b].position[0];
+                walker.y = raw.bodies.poseInParent[b].position[1];
+            }
+        }
+        double best = std::numeric_limits<double>::infinity();
+        for (std::size_t i = 0; i < graph_.lanes.size(); ++i) {
+            const Lane& lane = graph_.lanes[i];
+            if (!lane.sidewalk || lane.junction) {
+                continue;
+            }
+            const double off = std::abs(lane.project({walker.x, walker.y, 0.0}).second);
+            if (off < best) {
+                best = off;
+                walker.lane = i;
+            }
+        }
+        random::Stream rng(seed_, 0, static_cast<std::uint32_t>(walkersStart_.size()) + 0x10000U);
+        walker.forward = rng.uniform() < 0.5;
+        walker.offset = (rng.uniform() - 0.5) * 1.6;
+        walkersStart_.push_back(walker);
+    }
+    SignalSpec crossingTable = spec("traffic/crossings", SignalType::ScalarArray, units::one);
+    crossingTable.arrayLength =
+        static_cast<std::uint32_t>(std::max<std::size_t>(graph_.crossings.size(), 1) * 3);
+    crossingsOut_ = d.output(crossingTable);
     count_ = d.output(spec("traffic/agent_count", SignalType::Int, units::one));
     SignalSpec table = spec("traffic/agents", SignalType::ScalarArray, units::one);
     table.arrayLength = static_cast<std::uint32_t>(std::max<std::size_t>(start_.size(), 1) * 8);
@@ -381,6 +1275,13 @@ Status Traffic::declare(const WorldView& world, const ModuleConfig& config, Sign
 
 Status Traffic::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     agents_ = start_;
+    walkers_ = walkersStart_;
+    for (Controller& controller : controllers_) {
+        controller.phase = Controller::Phase::Green;
+        controller.group = 0;
+        controller.elapsed = 0.0;
+        controller.requested = false;
+    }
     for (Agent& a : agents_) {
         place(a);
     }
@@ -445,6 +1346,8 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
         write(bus, t);
         return {};
     }
+    updateWalkers(bus, dt, agents_.size());
+    updateControllers(bus, dt);
     // The robots, as obstacles and leaders.
     std::vector<std::pair<Vec3, double>> egos;  // position, speed
     egos_.clear();
@@ -518,6 +1421,21 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
             }
         };
         const double half = kCarSize[0] / 2.0;
+        // Anyone still on a crossing ahead, whatever the lights say.
+        for (std::size_t k = 0; k < graph_.crossings.size(); ++k) {
+            if (onCrossing_[k] == 0) {
+                continue;
+            }
+            for (const auto& [over, s] : graph_.crossings[k].over) {
+                const double ahead = over == a.lane              ? s - a.s
+                                     : a.next && over == *a.next ? lane.length() - a.s + s
+                                                                 : -1.0;
+                constexpr double kFromCrossing = 2.5;  // m before its middle
+                if (ahead > half) {
+                    consider(std::max(ahead - half - kFromCrossing, 0.0), 0.0);
+                }
+            }
+        }
         for (std::size_t k = 0; k < agents_.size(); ++k) {
             const Agent& o = agents_[k];
             if (k == i || o.pedestrian) {
@@ -557,12 +1475,30 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
                     if (std::ranges::count(against, o.lane) > 0) {
                         yield = true;
                     } else if (o.next && std::ranges::count(against, *o.next) > 0 &&
-                               !graph_.lanes[o.lane].junction) {
+                               !graph_.lanes[o.lane].junction &&
+                               (graph_.signalGroup[o.lane] < 0 ||
+                                lightOf(o.lane, t) == Light::Green)) {
                         const double theirs = graph_.lanes[o.lane].length() - o.s;
                         yield =
                             theirs < toLine - 0.5 || (std::abs(theirs - toLine) <= 0.5 && k < i);
                         yield = yield && theirs < reach + kYieldMargin;
                     }
+                }
+                // Nor into the box when there is no room beyond it: a car waiting in a junction
+                // holds up everyone across it, and on a road grid that closes into a gridlock.
+                const Lane& through = graph_.lanes[*a.next];
+                for (std::size_t k = 0; k < agents_.size() && !yield; ++k) {
+                    const Agent& o = agents_[k];
+                    if (k == i || o.pedestrian || o.speed > kBoxSpeed ||
+                        through.successors.empty()) {
+                        continue;
+                    }
+                    const std::size_t exit = through.successors.front();
+                    const bool onExit = o.lane == exit && o.s < kBoxRoom;
+                    const bool toExit =
+                        graph_.lanes[o.lane].junction &&
+                        std::ranges::count(graph_.lanes[o.lane].successors, exit) > 0;
+                    yield = onExit || toExit;
                 }
                 if (yield) {
                     consider(std::max(toLine - half, 0.0), 0.0);
@@ -571,7 +1507,7 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
         }
         // Lights: stop at the line on red or yellow when there is room to.
         if (graph_.signalGroup[a.lane] >= 0) {
-            const Light light = lightAt(graph_.signalGroup[a.lane], 2, t);
+            const Light light = lightOf(a.lane, t);
             const double toLine = lane.length() - a.s - half;
             if (light != Light::Green && toLine > a.speed * a.speed / (2.0 * idm_.b) - 1.0) {
                 consider(std::max(toLine, 0.0), 0.0);
@@ -628,11 +1564,20 @@ void Traffic::write(SignalBus& bus, double t) {
     std::vector<double> lights;
     for (const std::size_t lane : lightLanes_) {
         lights.push_back(graph_.lanes[lane].road);
-        lights.push_back(zero_ ? 0.0
-                               : static_cast<double>(lightAt(graph_.signalGroup[lane], 2, t)));
+        lights.push_back(zero_ ? 0.0 : static_cast<double>(lightOf(lane, t)));
     }
     lights.resize(std::max<std::size_t>(lightLanes_.size(), 1) * 2, 0.0);
     bus.writeN(lights_, lights);
+    std::vector<double> crossings;
+    for (const LaneGraph::Crossing& crossing : graph_.crossings) {
+        const Controller* c = controllerOf(crossing.junction);
+        crossings.push_back(graph_.lanes[crossing.lane].road);
+        crossings.push_back(zero_ ? 0.0 : static_cast<double>(walkOf(crossing.junction, t)));
+        crossings.push_back(!zero_ && c != nullptr && c->requested ? 1.0 : 0.0);
+    }
+    crossings.resize(std::max<std::size_t>(graph_.crossings.size(), 1) * 3, 0.0);
+    bus.writeN(crossingsOut_, crossings);
+    writeLamps(bus, t);
 }
 
 Status Traffic::saveState(StateWriter& writer) const {
@@ -644,6 +1589,22 @@ Status Traffic::saveState(StateWriter& writer) const {
         writer.put(a.next.has_value());
         writer.put(a.next.value_or(0));
         writer.put(a.decisions);
+    }
+    for (const Controller& c : controllers_) {
+        writer.put(c.phase);
+        writer.put(c.group);
+        writer.put(c.elapsed);
+        writer.put(c.requested);
+    }
+    for (const Walker& w : walkers_) {
+        writer.put(w.state);
+        writer.put(w.lane);
+        writer.put(w.forward);
+        writer.put(w.crossing);
+        writer.put(w.crossingForward);
+        writer.put(w.offset);
+        writer.put(w.timer);
+        writer.put(w.decisions);
     }
     return {};
 }
@@ -659,6 +1620,19 @@ Status Traffic::restoreState(StateReader& reader) {
         }
         a.next = hasNext ? std::optional(next) : std::nullopt;
         place(a);
+    }
+    for (Controller& c : controllers_) {
+        if (!reader.get(c.phase) || !reader.get(c.group) || !reader.get(c.elapsed) ||
+            !reader.get(c.requested)) {
+            return Status::error(StatusCode::Internal, "traffic: truncated state");
+        }
+    }
+    for (Walker& w : walkers_) {
+        if (!reader.get(w.state) || !reader.get(w.lane) || !reader.get(w.forward) ||
+            !reader.get(w.crossing) || !reader.get(w.crossingForward) || !reader.get(w.offset) ||
+            !reader.get(w.timer) || !reader.get(w.decisions)) {
+            return Status::error(StatusCode::Internal, "traffic: truncated state");
+        }
     }
     return {};
 }

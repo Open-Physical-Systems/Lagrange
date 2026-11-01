@@ -11,6 +11,7 @@
 #include <fstream>
 #include <memory>
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
@@ -31,7 +32,8 @@ class Simulation {
 public:
     Simulation(const std::optional<std::string>& robot, const std::optional<std::string>& world,
                const std::optional<std::string>& profile, const std::string& lidar,
-               const std::optional<std::vector<double>>& spawn) {
+               const std::optional<std::vector<double>>& spawn,
+               const std::optional<std::array<int, 3>>& traffic) {
         lagrange::server::ServerOptions options;
         options.robotPath = robot.value_or("");  // None: an empty run to spawn robots into
         if (spawn) {
@@ -39,6 +41,11 @@ public:
         }
         options.worldPath = world.value_or("");
         options.ros = false;
+        if (traffic) {  // vehicles, pedestrians, seed
+            options.trafficVehicles = (*traffic)[0];
+            options.trafficPedestrians = (*traffic)[1];
+            options.trafficSeed = static_cast<std::uint64_t>((*traffic)[2]);
+        }
         options.demoDrive = true;
         if (lidar == "cpu" || lidar == "auto") {
             options.lidar = lagrange::server::ServerOptions::Lidar::Cpu;
@@ -179,9 +186,10 @@ NB_MODULE(_lagrange, m) {
                            "world are URDF, SDFormat, MJCF or USD files.")
         .def(nb::init<const std::optional<std::string>&, const std::optional<std::string>&,
                       const std::optional<std::string>&, const std::string&,
-                      const std::optional<std::vector<double>>&>(),
+                      const std::optional<std::vector<double>>&,
+                      const std::optional<std::array<int, 3>>&>(),
              "robot"_a, "world"_a = nb::none(), "profile"_a = nb::none(), "lidar"_a = "cpu",
-             "spawn"_a = nb::none())
+             "spawn"_a = nb::none(), "traffic"_a = nb::none())
         .def("spawn", &Simulation::spawnRobot, "path"_a, "name"_a = "",
              "at"_a = std::vector<double>{0.0, 0.0},
              "Add a robot to the run at (x, y[, z[, yaw]]); returns its entity name. In a run "

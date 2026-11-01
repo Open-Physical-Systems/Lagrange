@@ -1,0 +1,25 @@
+#usda 1.0
+(
+    defaultPrim = "town"
+    doc = """A small town for the traffic domain: a road grid with signalled junctions, zebra
+    crossings with buttons, two lone crossings, buildings, a park. Written by make_town.py; the
+    roads are town_roads.usda, converted from town.xodr. The roads lie on the ground plane that
+    the loader adds; the traffic module adds the signals, the cars and the people."""
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    subLayers = [
+        @./town_buildings_sw.usda@,
+        @./town_buildings_se.usda@,
+        @./town_buildings_ne.usda@,
+        @./town_buildings_outer_1.usda@,
+        @./town_buildings_outer_2.usda@,
+        @./town_street.usda@,
+        @./town_trees.usda@,
+        @./town_roads.usda@
+    ]
+    upAxis = "Z"
+)
+
+def Xform "town"
+{
+}

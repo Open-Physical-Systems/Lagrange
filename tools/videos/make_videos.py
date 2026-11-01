@@ -114,6 +114,7 @@ def tof_robot(work: Path) -> None:
 
 AMR = asset("robots/amr_diffdrive/amr_diffdrive.urdf")
 WAREHOUSE = asset("worlds/warehouse_small/warehouse_small.usda")
+TOWN = asset("worlds/town/town.usda")
 QUAD = asset("robots/quad_x500/quad_x500.usda")
 GEO = ["--air-density", "1.225"]
 TURN = joints(velocity={"turn": 6.28})
@@ -195,6 +196,96 @@ CLIPS: list[Clip] = [
             )
         ],
         [Step(0, '<gazebo reference="ball"><visual_material preset="chrome"/></gazebo>')],
+    ),
+    Clip(
+        "town_junction",
+        "The town: lights change, people press a button and cross, cars stop and go",
+        40,
+        [["--robot", "none", "--world", TOWN, "--traffic", "vehicles=24,pedestrians=36,seed=1"]],
+        [
+            Pane(
+                "",
+                (0, 0, 1280, 720),
+                (1920, 1080, (289, 127, 1569, 847)),
+                ["--workspace", "Scene", "--camera", "0,0,1,34,135,30"],
+            )
+        ],
+        [Step(0, "lagrange town")],
+    ),
+    Clip(
+        "town_street",
+        "The town at street level: a lone crossing with its signal",
+        30,
+        [["--robot", "none", "--world", TOWN, "--traffic", "vehicles=24,pedestrians=36,seed=1"]],
+        [
+            Pane(
+                "",
+                (0, 0, 1280, 720),
+                (1920, 1080, (289, 127, 1569, 847)),
+                ["--workspace", "Scene", "--camera", "-50,0,1,14,30,8"],
+            )
+        ],
+        [Step(0, "lagrange town")],
+    ),
+    Clip(
+        "town_summer",
+        "Summer",
+        14,
+        [["--robot", "none", "--world", TOWN, "--traffic", "vehicles=24,pedestrians=36,seed=1"]],
+        [
+            Pane(
+                "",
+                (0, 0, 1280, 720),
+                (1920, 1080, (289, 127, 1569, 847)),
+                ["--workspace", "Scene", "--season", "summer", "--camera", "0,-55,1,22,95,6"],
+            )
+        ],
+        [Step(0, "lagrange town --season summer")],
+    ),
+    Clip(
+        "town_fall",
+        "Fall: the leaves turn",
+        14,
+        [["--robot", "none", "--world", TOWN, "--traffic", "vehicles=24,pedestrians=36,seed=1"]],
+        [
+            Pane(
+                "",
+                (0, 0, 1280, 720),
+                (1920, 1080, (289, 127, 1569, 847)),
+                ["--workspace", "Scene", "--season", "fall", "--camera", "0,-55,1,22,95,6"],
+            )
+        ],
+        [Step(0, "lagrange town --season fall")],
+    ),
+    Clip(
+        "town_winter",
+        "Winter: snow on the street and the trees",
+        14,
+        [["--robot", "none", "--world", TOWN, "--traffic", "vehicles=24,pedestrians=36,seed=1"]],
+        [
+            Pane(
+                "",
+                (0, 0, 1280, 720),
+                (1920, 1080, (289, 127, 1569, 847)),
+                ["--workspace", "Scene", "--season", "winter", "--camera", "0,-55,1,22,95,6"],
+            )
+        ],
+        [Step(0, "lagrange town --season winter")],
+    ),
+    Clip(
+        "town_rainy",
+        "The rainy season: wet streets, puddles, rain",
+        14,
+        [["--robot", "none", "--world", TOWN, "--traffic", "vehicles=24,pedestrians=36,seed=1"]],
+        [
+            Pane(
+                "",
+                (0, 0, 1280, 720),
+                (1920, 1080, (289, 127, 1569, 847)),
+                ["--workspace", "Scene", "--season", "rainy", "--camera", "0,-55,1,22,95,6"],
+            )
+        ],
+        [Step(0, "lagrange town --season rainy")],
     ),
     Clip(
         "realistic_warehouse",

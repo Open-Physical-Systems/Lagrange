@@ -33,6 +33,7 @@ struct Options {
     bool launcher{false};      ///< Start on the launcher even when a server is named.
     bool startLocal{false};    ///< Start lagrange_server from the launcher, then connect.
     bool cursors{false};       ///< Show the scope's A and B cursors from the start.
+    std::string season;        ///< Start-up season: summer, fall, winter or rainy.
     std::string shading;       ///< Viewport shading at start-up: lit, unlit or thermal.
     std::string overlays;      ///< --overlays: grid,axes,sensors shown from the start.
     std::optional<std::array<double, 6>> camera;  ///< --camera: target, distance, yaw, pitch.

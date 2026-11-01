@@ -17,6 +17,10 @@ enum class Shading : std::uint8_t {
 };
 
 /// What the viewport draws besides the scene's meshes.
+/// What the realistic view shows of the year. Drawn only; the weather a season brings to physics
+/// and sensors is the site's (`lagrange --season`).
+enum class Season : int { Summer = 0, Fall = 1, Winter = 2, Rainy = 3 };
+
 struct RenderOptions {
     bool grid{true};
     bool axes{true};     ///< The frame's X, Y and Z axes at its origin.
@@ -26,7 +30,8 @@ struct RenderOptions {
     Shading shading{Shading::Lit};
     bool wireframeAvailable{false};  ///< Set from SceneRenderer::wireframeSupported().
     bool realisticAvailable{false};  ///< Set on a GPU: a software device would crawl.
-    float windSpeed{0.0F};           ///< m/s, the site's: how rough the water is drawn.
+    Season season{Season::Summer};
+    float windSpeed{0.0F};  ///< m/s, the site's: how rough the water is drawn.
     /// Thermal shading: per scene prim, the temperature (K) its meshes take (NaN: none, drawn
     /// dim grey), and the range the colour map spans.
     std::vector<float> temperature;

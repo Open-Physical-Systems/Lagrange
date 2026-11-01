@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include <imgui.h>
@@ -430,6 +431,19 @@ private:
         }
         if (ImGui::BeginPopup("##shading")) {
             Shading& mode = context.renderOptions->shading;
+            if (ImGui::BeginMenu("Season", mode == Shading::Realistic)) {
+                static constexpr std::array<std::pair<const char*, Season>, 4> kSeasons{
+                    {{"Summer", Season::Summer},
+                     {"Fall", Season::Fall},
+                     {"Winter", Season::Winter},
+                     {"Rainy", Season::Rainy}}};
+                for (const auto& [label, season] : kSeasons) {
+                    if (ImGui::MenuItem(label, nullptr, context.renderOptions->season == season)) {
+                        context.renderOptions->season = season;
+                    }
+                }
+                ImGui::EndMenu();
+            }
             if (ImGui::MenuItem("Realistic", nullptr, mode == Shading::Realistic,
                                 context.renderOptions->realisticAvailable)) {
                 mode = Shading::Realistic;
