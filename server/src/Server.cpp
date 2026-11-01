@@ -752,7 +752,7 @@ struct Server::Impl {
         // The electrical domain turns the controllers' torque commands into joint torques: the
         // network when the robot has motors (from USD or an overlay), else its ideal substitute
         // (domains/electrical.md §5).
-        if (hasMotors() && !off("electrical")) {
+        if (hasPowerSystem() && !off("electrical")) {
             ModuleConfigData power;
             power.fidelity = settings.electricalFidelity.value_or("averaged");
             // The physics step the joint speeds arrive at: speed prediction and the stability
@@ -2320,14 +2320,16 @@ struct Server::Impl {
     }
 
     bool hasSensors() const { return !robot.world.sensors.names.empty(); }
-    /// Motors to simulate: ElectricalMotorAPI_1 prims from USD or an overlay.
+    /// A power system to simulate: motors or a battery, from USD or an overlay.
     /// Thermal nodes: ThermalAPI_1 prims.
     bool hasThermalNodes() const {
         return !WorldView(robot.world).instancesOf("ThermalAPI_1").empty();
     }
     bool hasRotors() const { return !WorldView(robot.world).instancesOf("RotorAPI_1").empty(); }
-    bool hasMotors() const {
-        return !WorldView(robot.world).instancesOf("ElectricalMotorAPI_1").empty();
+    bool hasPowerSystem() const {
+        const WorldView view(robot.world);
+        return !view.instancesOf("ElectricalMotorAPI_1").empty() ||
+               !view.instancesOf("BatteryAPI_1").empty();
     }
 
     /// Picks where lidars cast (ServerOptions::lidar); logs the choice.
@@ -2476,7 +2478,7 @@ struct Server::Impl {
             } else if (std::string_view(row.domain) == "rigid_body" && rigidBodyReplay) {
                 yaml += "  rigid_body: {enabled: false, substitute: replay, source: " +
                         *rigidBodyReplay + "}\n";
-            } else if (std::string_view(row.domain) == "electrical" && hasMotors() &&
+            } else if (std::string_view(row.domain) == "electrical" && hasPowerSystem() &&
                        !substituted("electrical")) {
                 char dt[48];
                 std::snprintf(dt, sizeof(dt), "%.9g",
@@ -2601,7 +2603,7 @@ struct Server::Impl {
             }
             const bool physics = std::string_view(row.domain) == "rigid_body";
             const bool sensing = std::string_view(row.domain) == "sensors" && hasSensors();
-            const bool powered = std::string_view(row.domain) == "electrical" && hasMotors();
+            const bool powered = std::string_view(row.domain) == "electrical" && hasPowerSystem();
             const bool heated =
                 std::string_view(row.domain) == "thermal" && hasThermalNodes() && ambient();
             const bool built = physics || sensing || powered || heated;  // a module exists
@@ -2645,7 +2647,7 @@ struct Server::Impl {
                 const std::string_view domain = row.domain;
                 d.set_unavailable_reason(
                     domain == "electrical"
-                        ? "no ElectricalMotorAPI prims in the stage; the ideal torque source "
+                        ? "no motors or battery in the stage; the ideal torque source "
                           "stands in (an overlay file adds motors to a URDF robot)"
                     : domain == "thermal" && hasThermalNodes()
                         ? "needs the site's ambient temperature: thermal.ambient_temperature in "
@@ -4202,7 +4204,7 @@ struct Server::Impl {
         if (hasSensors()) {
             context.modules.insert("sensors");
         }
-        if (hasMotors()) {
+        if (hasPowerSystem()) {
             context.modules.insert("electrical");
         }
         if (hasThermalNodes()) {

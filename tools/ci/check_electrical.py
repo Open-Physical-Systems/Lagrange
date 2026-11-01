@@ -126,11 +126,6 @@ def motor_yaml(kind: str, r: float, kt: float, n: float, eta: float) -> str:
 """
 
 
-def idle_motor_yaml() -> str:
-    """The server runs the network only for a robot with a motor; this one is never commanded."""
-    return motor_yaml("pmsm", 0.1, 0.1, 1.0, 1.0)
-
-
 def urdf(inertia: float) -> str:
     """A flywheel about the vertical on a fixed base: gravity does no work on it."""
     i = inertia
@@ -155,7 +150,6 @@ def directives(pack: Pack) -> str:
 
 
 BUS_DIRECTIVE = "*lagrange bus dc undervoltage=0.5 overvoltage=1000\n"
-IDLE_MOTOR = "*lagrange motor spin node=dc name=drive r=0.1 l=0.0003 kt=0.1 imax=1000\n"
 
 
 def run_both(
@@ -286,8 +280,8 @@ def resistive(rng: random.Random, folder: Path) -> list[tuple[Check, float, floa
     ]
     elements = [*spice_pack(pack, pack.ocv), f"R_load dc 0 {load}"]
     checks[0].spice = run_spice(folder, elements, [0.2])[0]
-    overlay = bus_yaml() + battery_yaml(pack) + load_yaml("resistive", power) + idle_motor_yaml()
-    return run_both(folder, overlay, netlist_of(elements, pack) + IDLE_MOTOR, 1.0, checks)
+    overlay = bus_yaml() + battery_yaml(pack) + load_yaml("resistive", power)
+    return run_both(folder, overlay, netlist_of(elements, pack), 1.0, checks)
 
 
 def wire(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
@@ -311,7 +305,7 @@ def wire(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | N
         f"R_load dc 0 {load}",
     ]
     checks[0].spice = run_spice(folder, elements, [0.2])[0]
-    overlay = bus_yaml() + battery_yaml(pack) + load_yaml("resistive", power) + idle_motor_yaml()
+    overlay = bus_yaml() + battery_yaml(pack) + load_yaml("resistive", power)
     terminals = [
         Check("battery terminals (V)", "battery/a/terminal_voltage", 0.2, volts + amps * pack.wire),
         Check("battery heat (W)", "battery/a/loss_power", 0.2, amps**2 * pack.r0),
@@ -319,7 +313,7 @@ def wire(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | N
     file = folder / "terminals.overlay.yaml"
     file.write_text("schema_version: 1\napply:\n" + overlay)
     rows = compare(terminals, run_lagrange(folder, file, 1.0, terminals, None))
-    netlist = netlist_of(elements, pack) + IDLE_MOTOR
+    netlist = netlist_of(elements, pack)
     return rows + run_both(folder, overlay, netlist, 1.0, checks)
 
 
@@ -335,10 +329,8 @@ def constant_power(rng: random.Random, folder: Path) -> list[tuple[Check, float,
     source = f"B_load dc 0 I = {power} / max(V(dc), 0.001) * ((V(dc) >= 0) ? 1 : 0)"
     elements = [*spice_pack(pack, pack.ocv), source]
     checks[0].spice = run_spice(folder, elements, [0.2])[0]
-    overlay = (
-        bus_yaml() + battery_yaml(pack) + load_yaml("constant_power", power) + idle_motor_yaml()
-    )
-    return run_both(folder, overlay, netlist_of(elements, pack) + IDLE_MOTOR, 1.0, checks)
+    overlay = bus_yaml() + battery_yaml(pack) + load_yaml("constant_power", power)
+    return run_both(folder, overlay, netlist_of(elements, pack), 1.0, checks)
 
 
 def rc_pair(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
@@ -361,8 +353,8 @@ def rc_pair(rng: random.Random, folder: Path) -> list[tuple[Check, float, float 
     spice = run_spice(folder, elements, times)
     for check, value in zip(checks, spice, strict=True):
         check.spice = value
-    overlay = bus_yaml() + battery_yaml(pack) + load_yaml("resistive", power) + idle_motor_yaml()
-    return run_both(folder, overlay, netlist_of(elements, pack) + IDLE_MOTOR, 1.0, checks)
+    overlay = bus_yaml() + battery_yaml(pack) + load_yaml("resistive", power)
+    return run_both(folder, overlay, netlist_of(elements, pack), 1.0, checks)
 
 
 def two_batteries(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
@@ -380,14 +372,8 @@ def two_batteries(rng: random.Random, folder: Path) -> list[tuple[Check, float, 
     ]
     elements = [*spice_pack(a, start), *spice_pack(b, start), f"R_load dc 0 {load}"]
     checks[0].spice = run_spice(folder, elements, [0.2])[0]
-    overlay = (
-        bus_yaml()
-        + battery_yaml(a)
-        + battery_yaml(b)
-        + load_yaml("resistive", power)
-        + idle_motor_yaml()
-    )
-    return run_both(folder, overlay, netlist_of(elements, a, b) + IDLE_MOTOR, 1.0, checks)
+    overlay = bus_yaml() + battery_yaml(a) + battery_yaml(b) + load_yaml("resistive", power)
+    return run_both(folder, overlay, netlist_of(elements, a, b), 1.0, checks)
 
 
 def charge_drain(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
@@ -399,9 +385,9 @@ def charge_drain(rng: random.Random, folder: Path) -> list[tuple[Check, float, f
     checks = [
         Check("state of charge", "battery/a/soc", seconds, 1 - amps * seconds / pack.capacity)
     ]
-    overlay = bus_yaml() + battery_yaml(pack) + load_yaml("resistive", power) + idle_motor_yaml()
+    overlay = bus_yaml() + battery_yaml(pack) + load_yaml("resistive", power)
     elements = [*spice_pack(pack, pack.ocv), f"R_load dc 0 {load}"]
-    return run_both(folder, overlay, netlist_of(elements, pack) + IDLE_MOTOR, 1.0, checks)
+    return run_both(folder, overlay, netlist_of(elements, pack), 1.0, checks)
 
 
 def motor(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:

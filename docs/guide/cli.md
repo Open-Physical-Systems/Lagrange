@@ -227,6 +227,8 @@ sensors read body poses (and the IMU also twist and acceleration) at their own r
 - A URDF that is one chain of three or more driven joints is taken as an arm and its base is fixed
   where it starts, with or without a `world` root link. Anything that branches (wheels, legs, rotors)
   stays free.
+- The same for USD and SDFormat: a body with no joint to the world floats unless what hangs from it
+  is one such chain. MJCF's written `<freejoint>` stays free.
 - A `<lagrange>` block in the URDF naming a SPICE netlist gives it its power system
   (`<lagrange><schematic file="power.cir"/>...`, formats.md §9.2), with no `--overlay`.
 - On a robot fixed to the ground, a joint with no command yet holds its start position, up to its

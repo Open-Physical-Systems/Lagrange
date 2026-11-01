@@ -426,6 +426,15 @@ private:
                  " has no physics:mass; it was given 1 g (mass from density is not supported)");
             mass = kPlaceholderMassKg;
             inertia = {kPlaceholderInertia, kPlaceholderInertia, kPlaceholderInertia, 0, 0, 0};
+        } else if (inertia[0] <= 0.0 && inertia[1] <= 0.0 && inertia[2] <= 0.0) {
+            // A CAD export often gives the mass alone; the engines refuse no inertia at all.
+            note("rigid body " + prim.GetPath().GetString() +
+                 " has no physics:diagonalInertia; it is taken as a solid sphere of its mass, "
+                 "as dense as water");
+            constexpr double kWaterDensity = 1000.0;  // kg/m³
+            const double radius = std::cbrt(3.0 * mass / (4.0 * std::numbers::pi * kWaterDensity));
+            const double i = 0.4 * mass * radius * radius;  // solid sphere: 2/5 m r²
+            inertia = {i, i, i, 0, 0, 0};
         }
         const std::string name = prim.GetName().GetString();
         const BodyId body = w.addBody(name, parent, inParent, mass, com, inertia);

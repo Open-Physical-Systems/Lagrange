@@ -1560,7 +1560,7 @@ sensors, so lidars on an MJCF robot still need USD for now.
 | `*lagrange bus NODE undervoltage= overvoltage=` (V) | the bus's trips; required |
 | `*lagrange motor JOINT node= r= l= kt= imax= [name=] [type=] [gear=] [efficiency=] [pole_pairs=] [rotor_inertia=]` | `ElectricalMotorAPI_1`, named `JOINT_motor` unless `name=`; a drive is not a SPICE element |
 
-The first line is the title, as in SPICE; analysis commands and `.control` blocks are ignored. Everything else is refused with its line, every problem together, and nothing is left out in silence: diodes, transistors, inductors, subcircuits, switches, controlled and current sources, `.param`, `.include`, `.model`, sources other than DC, and elements between two buses. So is a drive of `lagrange export spice` (`V(p_drive)`), so an exported netlist does not read back yet. The network still runs only for a robot with a motor. `tools/ci/check_electrical.py` runs every circuit through this route and through an overlay.
+The first line is the title, as in SPICE; analysis commands and `.control` blocks are ignored. Everything else is refused with its line, every problem together, and nothing is left out in silence: diodes, transistors, inductors, subcircuits, switches, controlled and current sources, `.param`, `.include`, `.model`, sources other than DC, and elements between two buses. So is a drive of `lagrange export spice` (`V(p_drive)`), so an exported netlist does not read back yet.  `tools/ci/check_electrical.py` runs every circuit through this route and through an overlay.
 
 ### 9.2 A URDF that names its power system
 
