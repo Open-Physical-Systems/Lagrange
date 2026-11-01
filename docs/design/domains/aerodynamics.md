@@ -246,4 +246,15 @@ The CPU path holds a symmetric body's flow exactly symmetric, in which a wake ma
 `--frames N` writes about N PNG files of a slice through the body while averaging, coloured by the air's spin, so the wake is seen moving. `flow.nvdb` as `--weather wind_field=` reaches a run: the sample quadcopter in the sedan's flow drifted 8 m in 10 s and tilted, where it held still without it (one run by hand, 2026-11-02).
 
 
-Known defect, seen in these frames: a checkerboard of about 1 to 2 % of the wind speed upstream of the body that does not decay over a run (sedan, 25 m/s, 1.5M cells). BGK near relaxation time 0.5 hardly damps it. Its effect on the forces has not been measured.
+Known defect, seen in these frames: a checkerboard of about 1 to 2 % of the wind speed upstream of the body that does not decay over a run (sedan, 25 m/s). So the sedan's force is not settled: GPU at 1.5M cells gave Cd 1.35 with `--passes 2 --mean-passes 1` and Cd 3.73, moving by 1.07, with `--mean-passes 2`. Tried by hand on 2026-11-02, none adopted:
+
+| Change | Checkerboard | Cube (1.05) | Plate (1.17) | Sedan, CPU 300k |
+|---|---|---|---|---|
+| None | 44.8 | 1.03 | 0.97 | Cd 2.46, Cl 12.3 |
+| Regularized collision (Latt & Chopard 2006) | not measured | 1.44 | 0.85, test fails | Cd 3.97, Cl 109 (2 passes) |
+| Sponge, thin, outlet only | 44.5 to 46.2 | 1.03 | 0.97 | Cd 2.44 to 2.50, Cl 10.6 to 21.5 |
+| Sponge, both ends, 0.3 | 24.0 | 1.28 | 1.00 | Cd 1.85, Cl 8.5 |
+| Sponge plus viscosity floor 0.005 | 6.7 | 1.69 | 1.11 | Cd 2.50, Cl 4.0 |
+| Sponge plus viscosity floor 0.02 | 1.6 | not run | not run | Cd 5.12, Cl 4.8 |
+
+Checkerboard is the mean jump of red minus blue between neighbouring cells of a frame, out of 255, with spin colour as written by `--frames`. Damping removes it, and the more it does the further the cube moves from its measurement, so the cube's good number on the coarse grid may rest partly on the undamped flow. The outlet sponge does nothing to it, which points away from the outlet. The cause is not established.
