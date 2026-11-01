@@ -43,6 +43,25 @@ int main(int argc, char** argv) {
                     robot.c_str());
         return 0;
     }
+    std::printf("%-24s %10s %12s %14s\n", "link", "mass kg", "shapes litres", "at least kg/m3");
+    int impossible = 0;
+    for (const auto& link : lagrange::server::linkDensities(model->world)) {
+        const bool wrong = link.density() > lagrange::server::kDensestSolid;
+        impossible += wrong ? 1 : 0;
+        if (link.volume > 0.0) {
+            std::printf("%-24s %10.2f %12.2f %14.0f%s\n", link.name.c_str(), link.mass,
+                        link.volume * 1000.0, link.density(),
+                        wrong ? "  denser than any solid: check its mass or scale" : "");
+        } else {
+            std::printf("%-24s %10.2f %12s %14s\n", link.name.c_str(), link.mass, "-", "-");
+        }
+    }
+    std::printf(
+        "Steel is about 7,850 kg/m3, aluminium 2,700, plastic 1,000. Hulls fill in what is "
+        "hollow, so a real density can only be higher than this.\n\n");
+    if (impossible > 0) {
+        std::printf("%d link(s) are heavier than their shape can be.\n\n", impossible);
+    }
     int short_at_rest = 0;
     int short_worst = 0;
     std::printf("%-24s %10s %10s %10s %10s %10s\n", "joint", "carries kg", "at rest", "worst",

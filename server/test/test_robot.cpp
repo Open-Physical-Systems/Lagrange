@@ -143,6 +143,23 @@ TEST(JointLoads, AreTheWeightsMomentsAboutEachAxis) {
     std::filesystem::remove(file);
 }
 
+TEST(LinkDensities, AreMassOverTheShapesVolume) {
+    const auto file = std::filesystem::temp_directory_path() / "lagrange_density.urdf";
+    std::ofstream(file) << R"(<robot name="r"><link name="box">
+      <inertial><mass value="8"/><inertia ixx="1" iyy="1" izz="1" ixy="0" ixz="0" iyz="0"/></inertial>
+      <collision><geometry><box size="0.1 0.2 0.1"/></geometry></collision>
+      <collision><origin xyz="1 0 0"/><geometry><sphere radius="0.1"/></geometry></collision>
+    </link></robot>)";
+    auto robot = loadUrdf(file.string());
+    ASSERT_TRUE(robot) << robot.error();
+    const auto links = linkDensities(robot->world);
+    ASSERT_EQ(links.size(), 1U);
+    const double volume = 0.002 + 4.0 / 3.0 * std::numbers::pi * 0.001;
+    EXPECT_NEAR(links[0].volume, volume, 1e-9);
+    EXPECT_NEAR(links[0].density(), 8.0 / volume, 1e-6);
+    std::filesystem::remove(file);
+}
+
 TEST(ArmUrdf, IsFixedToTheGroundAndNoSwerveBase) {
     std::string text =
         "<robot name='cad_arm'><link name='base_link'><inertial><mass value='5'/>"
