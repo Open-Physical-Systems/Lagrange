@@ -3,13 +3,15 @@
 
 Each round draws new values for every circuit below. Each circuit is worked out three ways, none
 using another's result: a closed-form formula here, ngspice on a netlist written here, and
-Lagrange runs of a robot written here, its power system once from an overlay and once from the
-netlist itself. A difference over the tolerance fails the check (exit 1).
+Lagrange runs of a robot written here, its power system from an overlay, from the netlist, and
+from a <lagrange> block in the URDF naming the netlist. A difference over the tolerance fails
+the check (exit 1).
 
     tools/ci/check_electrical.py [--rounds N | --forever] [--seed S] [--verbose]
 
 Needs the workspace sourced and ngspice. The circuits:
 
+    wire          battery + harness + resistor: V = OCV * R / (R + r + w), terminals V + I w
     resistive     battery (OCV, r) + resistor: V = OCV * R / (R + r)
     constant_power battery + load of power P: V = (OCV + sqrt(OCV^2 - 4 P r)) / 2
     rc_pair       battery with an R1 C1 pair + resistor, at one time constant and at the end
@@ -51,6 +53,7 @@ class Pack:
     c1: float = 0.0  # F
     capacity: float = 3600.0  # C
     soc: float = 1.0
+    wire: float = 0.0  # ohm, the port's harness to the bus
 
 
 @dataclass
@@ -81,6 +84,7 @@ def battery_yaml(pack: Pack) -> str:
         elec:battery:maxChargeCurrent: 1000.0
       PortAPI_1:dc_out:
         elec:port:dc_out:connectedTo: power/dc
+        elec:port:dc_out:wireResistance: {pack.wire}
 """
 
 
@@ -170,7 +174,32 @@ def run_both(
     circuit.write_text("* bench\n" + BUS_DIRECTIVE + netlist + ".end\n")
     imported = [Check(c.what + " [netlist]", c.signal, c.time, c.formula) for c in checks]
     rows += compare(imported, run_lagrange(folder, circuit, inertia, imported, torque))
+    # The same netlist, named from the URDF: the directives move into its <lagrange> block.
+    lines = netlist.splitlines()
+    plain = [line for line in lines if not line.startswith("*lagrange")]
+    circuit.write_text("* bench\n" + "\n".join(plain) + "\n.end\n")
+    block = "".join(xml_of(line) for line in [BUS_DIRECTIVE.strip(), *lines])
+    tagged = folder / "tagged.urdf"
+    tagged.write_text(
+        urdf(inertia).replace(
+            "</robot>",
+            f'<lagrange><schematic file="power.cir"/>{block}</lagrange></robot>',
+        )
+    )
+    in_urdf = [Check(c.what + " [URDF]", c.signal, c.time, c.formula) for c in checks]
+    rows += compare(in_urdf, read_run(tagged, in_urdf, torque))
     return rows
+
+
+def xml_of(line: str) -> str:
+    """A *lagrange line as an element of the <lagrange> block; other lines as nothing."""
+    words = line.split()
+    if not words or words[0] != "*lagrange":
+        return ""
+    named_by = {"battery": "source", "bus": "node", "motor": "joint"}[words[1]]
+    values = dict(word.split("=") for word in words[3:])
+    attributes = " ".join(f'{key}="{value}"' for key, value in values.items())
+    return f'<{words[1]} {named_by}="{words[2]}" {attributes}/>'
 
 
 def run_lagrange(
@@ -189,7 +218,12 @@ def run_lagrange(
     )
     if done.returncode != 0:
         raise RuntimeError(done.stderr)
-    sim = lagrange.Simulation(str(usd), world=None, joint_control=torque is not None)
+    return read_run(usd, checks, torque)
+
+
+def read_run(robot: Path, checks: list[Check], torque: float | None) -> list[float]:
+    """Runs the robot and reads each check's signal at its time."""
+    sim = lagrange.Simulation(str(robot), world=None, joint_control=torque is not None)
     if torque is not None and not sim.command_joint("spin", "effort", torque):
         raise RuntimeError("the joint took no effort command")
     values = []
@@ -254,6 +288,39 @@ def resistive(rng: random.Random, folder: Path) -> list[tuple[Check, float, floa
     checks[0].spice = run_spice(folder, elements, [0.2])[0]
     overlay = bus_yaml() + battery_yaml(pack) + load_yaml("resistive", power) + idle_motor_yaml()
     return run_both(folder, overlay, netlist_of(elements, pack) + IDLE_MOTOR, 1.0, checks)
+
+
+def wire(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
+    pack = Pack("a", rng.uniform(12, 60), rng.uniform(0.02, 0.2))
+    pack.wire = rng.uniform(0.02, 0.5)
+    power = rng.uniform(50, 800)
+    start = pack.ocv  # with nothing drawn, the harness drops nothing
+    load = start**2 / power
+    amps = pack.ocv / (load + pack.r0 + pack.wire)
+    volts = amps * load
+    checks = [
+        Check("bus voltage (V)", BUS, 0.2, volts),
+        Check("battery current (A)", "battery/a/current", 0.2, amps),
+    ]
+    # Node a_b is the battery's terminal, the harness the resistor on to the bus.
+    elements = [
+        f"C_bus dc 0 {BUS_CAPACITANCE} IC={start}",
+        f"V_a a_a 0 DC {pack.ocv}",
+        f"R_a a_a a_b {pack.r0}",
+        f"Rw_a a_b dc {pack.wire}",
+        f"R_load dc 0 {load}",
+    ]
+    checks[0].spice = run_spice(folder, elements, [0.2])[0]
+    overlay = bus_yaml() + battery_yaml(pack) + load_yaml("resistive", power) + idle_motor_yaml()
+    terminals = [
+        Check("battery terminals (V)", "battery/a/terminal_voltage", 0.2, volts + amps * pack.wire),
+        Check("battery heat (W)", "battery/a/loss_power", 0.2, amps**2 * pack.r0),
+    ]
+    file = folder / "terminals.overlay.yaml"
+    file.write_text("schema_version: 1\napply:\n" + overlay)
+    rows = compare(terminals, run_lagrange(folder, file, 1.0, terminals, None))
+    netlist = netlist_of(elements, pack) + IDLE_MOTOR
+    return rows + run_both(folder, overlay, netlist, 1.0, checks)
 
 
 def constant_power(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
@@ -392,6 +459,7 @@ def error(value: float, formula: float) -> float:
 
 
 CIRCUITS = {
+    "wire": wire,
     "resistive": resistive,
     "constant_power": constant_power,
     "rc_pair": rc_pair,

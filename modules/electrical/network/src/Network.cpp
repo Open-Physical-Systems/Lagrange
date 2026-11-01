@@ -245,6 +245,12 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
             continue;
         }
         battery.bus = *bus;
+        if (const auto ports = portsOfPrim.find(s->prim.index); ports != portsOfPrim.end()) {
+            for (const SchemaInstance* port : ports->second) {
+                battery.wireResistance +=
+                    port->real("elec:port:" + port->instance + ":wireResistance").value_or(0.0);
+            }
+        }
         batteries_.push_back(std::move(battery));
     }
 
@@ -525,8 +531,9 @@ Status ElectricalNetwork::init(const WorldView&, const ModuleConfig&, SignalBus&
         for (const Battery& b : batteries_) {
             if (b.bus == i && !b.state.cut) {
                 const Thevenin t = theveninOf(b.params, b.state, kAmbientK);
-                conductance += 1.0 / t.resistance;
-                injected += t.emf / t.resistance;
+                const double r = t.resistance + b.wireResistance;
+                conductance += 1.0 / r;
+                injected += t.emf / r;
             }
         }
         node.voltage = conductance > 0.0 ? injected / conductance : 0.0;
@@ -615,8 +622,9 @@ void ElectricalNetwork::solveBus(std::size_t b, double dt, std::vector<double>& 
                 continue;
             }
             const Thevenin t = theveninOf(battery.params, battery.state, temperatures[i]);
-            conductance += 1.0 / t.resistance;
-            injected += t.emf / t.resistance;
+            const double r = t.resistance + battery.wireResistance;
+            conductance += 1.0 / r;
+            injected += t.emf / r;
         }
         voltage = std::max(0.0, injected / conductance);
         if (feeder != nullptr && voltage < feeder->outputVoltage) {
@@ -640,7 +648,7 @@ void ElectricalNetwork::solveBus(std::size_t b, double dt, std::vector<double>& 
                 continue;
             }
             const Thevenin t = theveninOf(battery.params, battery.state, temperatures[i]);
-            battery.current = (t.emf - voltage) / t.resistance;
+            battery.current = (t.emf - voltage) / (t.resistance + battery.wireResistance);
             if (battery.current < -battery.params.maxChargeCurrent) {
                 limited[i] = true;
                 changed = true;
@@ -811,10 +819,14 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
             advanceBattery(p, b.state, b.current, dt);
         }
         bus.write(b.soc, b.state.soc);
-        bus.write(b.terminalVoltage, b.state.cut ? 0.0 : buses_[b.bus].voltage);
+        // At its own terminals: the harness's drop is between them and the bus, and its loss is
+        // not the battery's heat.
+        const double terminal =
+            b.state.cut ? 0.0 : buses_[b.bus].voltage + b.current * b.wireResistance;
+        bus.write(b.terminalVoltage, terminal);
         bus.write(b.currentOut, b.current);
         bus.write(b.loss, loss);
-        bus.write(b.power, b.state.cut ? 0.0 : buses_[b.bus].voltage * b.current);
+        bus.write(b.power, terminal * b.current);
     }
     for (std::size_t k = 0; k < converters_.size(); ++k) {
         const Converter& c = converters_[k];

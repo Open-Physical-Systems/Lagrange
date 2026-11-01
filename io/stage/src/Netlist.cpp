@@ -153,7 +153,7 @@ struct Circuit {
 class Problems {
 public:
     void add(int line, const std::string& text) {
-        text_ += "\n  line " + std::to_string(line) + ": " + text;
+        text_ += line > 0 ? "\n  line " + std::to_string(line) + ": " + text : "\n  " + text;
     }
     void add(const std::string& text) { text_ += "\n  " + text; }
     [[nodiscard]] bool any() const { return !text_.empty(); }
@@ -492,9 +492,13 @@ bool isNetlistPath(const std::string& path) {
            extension == ".net" || extension == ".ckt";
 }
 
-Expected<YAML::Node, std::string> overlayOfNetlist(const std::string& text) {
+Expected<YAML::Node, std::string> overlayOfNetlist(const std::string& text,
+                                                   const std::vector<std::string>& extra) {
     Problems problems;
-    const Circuit c = readCircuit(text, problems);
+    Circuit c = readCircuit(text, problems);
+    for (const std::string& line : extra) {
+        readDirective(line, 0, c, problems);
+    }
 
     // Nodes something hangs on: a chain stops at the first of them.
     std::set<std::string> attached;
@@ -581,19 +585,18 @@ Expected<YAML::Node, std::string> overlayOfNetlist(const std::string& text) {
         if (const auto found = c.buses.find(node); found != c.buses.end()) {
             const std::string what = "bus " + node;
             refuseUnknownKeys(found->second, what, {"undervoltage", "overvoltage"}, problems);
-            if (const auto v = optionalValue(found->second, what, "undervoltage", problems)) {
+            if (const auto v = required(found->second, what, "undervoltage", "V", problems)) {
                 bus["elec:bus:undervoltageTrip"] = *v;
             }
-            if (const auto v = optionalValue(found->second, what, "overvoltage", problems)) {
+            if (const auto v = required(found->second, what, "overvoltage", "V", problems)) {
                 bus["elec:bus:overvoltageTrip"] = *v;
             }
+        } else {
+            problems.add("bus " + node + ": SPICE cannot say where it trips. Add: *lagrange bus " +
+                         node + " undervoltage=VOLTS overvoltage=VOLTS");
         }
         YAML::Node entry;
         entry["create"] = powerPath(name);
-        if (bus.size() == 0) {
-            // The schema with its fallbacks: an empty map, not a null.
-            bus = YAML::Node(YAML::NodeType::Map);
-        }
         entry["schemas"]["ElectricalBusAPI_1"] = bus;
         entries.push_back(entry);
     }

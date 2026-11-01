@@ -13,9 +13,11 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <tinyxml2.h>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -36,6 +38,54 @@ Robot amr() {
 
 // An arm's URDF as CAD exporters write it: no "world" link, every axis z in its own frame, and
 // ros2_control naming the joints. It must load as an arm, not as a swerve base or a loose body.
+TEST(LagrangeBlock, AUrdfNamesItsSchematicAndMotors) {
+    const auto dir = std::filesystem::temp_directory_path() / "lagrange_block_test";
+    std::filesystem::create_directories(dir / "power");
+    std::ofstream(dir / "power" / "p.cir")
+        << "title\nV_pack in 0 DC 24\nR_pack in dc 0.1\nC_bus dc 0 1m\nR_lamp dc 0 12\n.end\n";
+    const std::string links =
+        "<link name='world'/><joint name='m' type='fixed'><parent link='world'/><child "
+        "link='a'/></joint><link name='a'><inertial><mass value='1'/><inertia ixx='1' iyy='1' "
+        "izz='1' ixy='0' ixz='0' iyz='0'/></inertial></link><joint name='spin' "
+        "type='continuous'><parent link='a'/><child link='b'/><axis xyz='0 0 1'/></joint><link "
+        "name='b'><inertial><mass value='1'/><inertia ixx='1' iyy='1' izz='1' ixy='0' ixz='0' "
+        "iyz='0'/></inertial></link>";
+    const auto write = [&](const std::string& name, const std::string& block) {
+        const auto file = dir / name;
+        std::ofstream(file) << "<robot name='r'>" << links << block << "</robot>";
+        return file.string();
+    };
+    auto robot = loadUrdf(write("good.urdf", R"(<lagrange>
+        <schematic file="power/p.cir"/>
+        <battery source="V_pack" capacity="3600" cutoff="18" max_charge="5"/>
+        <bus node="dc" undervoltage="16" overvoltage="30"/>
+        <motor joint="spin" node="dc" r="0.2" l="0.001" kt="0.05" imax="10"/>
+    </lagrange>)"));
+    ASSERT_TRUE(robot) << robot.error();
+    const WorldView view(robot->world);
+    EXPECT_EQ(view.instancesOf("BatteryAPI_1").size(), 1U);
+    EXPECT_EQ(view.instancesOf("ElectricalLoadAPI_1").size(), 1U);
+    ASSERT_EQ(view.instancesOf("ElectricalMotorAPI_1").size(), 1U);
+    EXPECT_EQ(view.signalInstanceName(view.instancesOf("ElectricalMotorAPI_1")[0]->prim),
+              "spin_motor");
+    // Without a block a URDF has no power system, and mistakes in one stop the load.
+    auto plain = loadUrdf(write("plain.urdf", ""));
+    ASSERT_TRUE(plain) << plain.error();
+    EXPECT_TRUE(WorldView(plain->world).instancesOf("BatteryAPI_1").empty());
+    for (const auto& [block, expected] : std::vector<std::pair<std::string, std::string>>{
+             {"<lagrange/>", "needs <schematic"},
+             {"<lagrange><schematic file='missing.cir'/></lagrange>", "cannot read"},
+             {"<lagrange><schematic file='power/p.cir'/></lagrange>", "*lagrange battery V_pack"},
+             {"<lagrange><schematic file='power/p.cir'/><relay/></lagrange>", "<relay>"},
+             {"<lagrange><schematic file='power/p.cir'/><motor node='dc'/></lagrange>", "joint="},
+         }) {
+        auto refused = loadUrdf(write("bad.urdf", block));
+        ASSERT_FALSE(refused) << block;
+        EXPECT_NE(refused.error().find(expected), std::string::npos) << refused.error();
+    }
+    std::filesystem::remove_all(dir);
+}
+
 TEST(ArmUrdf, IsFixedToTheGroundAndNoSwerveBase) {
     std::string text =
         "<robot name='cad_arm'><link name='base_link'><inertial><mass value='5'/>"

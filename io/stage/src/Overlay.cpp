@@ -349,28 +349,10 @@ private:
 
 }  // namespace
 
-Expected<void, std::string> applyOverlay(Model& model, const std::string& path) {
-    registerSchemaLibraries();
-    YAML::Node root;
-    if (isNetlistPath(path)) {
-        std::ifstream in(path);
-        if (!in) {
-            return Unexpected{path + ": cannot read it"};
-        }
-        std::ostringstream text;
-        text << in.rdbuf();
-        auto overlay = overlayOfNetlist(text.str());
-        if (!overlay) {
-            return Unexpected{path + ": " + overlay.error()};
-        }
-        root = *overlay;
-    } else {
-        try {
-            root = YAML::LoadFile(path);
-        } catch (const YAML::Exception& e) {
-            return Unexpected{path + ": " + e.what()};
-        }
-    }
+namespace {
+
+Expected<void, std::string> applyRoot(Model& model, const std::string& path,
+                                      const YAML::Node& root) {
     Model changed = model;  // the model stays as it was when the overlay is refused
     Overlay overlay(changed, path);
     if (auto status = overlay.apply(root); !status) {
@@ -378,6 +360,38 @@ Expected<void, std::string> applyOverlay(Model& model, const std::string& path) 
     }
     model = std::move(changed);
     return {};
+}
+
+}  // namespace
+
+Expected<void, std::string> applyNetlist(Model& model, const std::string& path,
+                                         const std::vector<std::string>& directives) {
+    registerSchemaLibraries();
+    std::ifstream in(path);
+    if (!in) {
+        return Unexpected{path + ": cannot read it"};
+    }
+    std::ostringstream text;
+    text << in.rdbuf();
+    auto overlay = overlayOfNetlist(text.str(), directives);
+    if (!overlay) {
+        return Unexpected{path + ": " + overlay.error()};
+    }
+    return applyRoot(model, path, *overlay);
+}
+
+Expected<void, std::string> applyOverlay(Model& model, const std::string& path) {
+    if (isNetlistPath(path)) {
+        return applyNetlist(model, path);
+    }
+    registerSchemaLibraries();
+    YAML::Node root;
+    try {
+        root = YAML::LoadFile(path);
+    } catch (const YAML::Exception& e) {
+        return Unexpected{path + ": " + e.what()};
+    }
+    return applyRoot(model, path, root);
 }
 
 }  // namespace lagrange::stage
