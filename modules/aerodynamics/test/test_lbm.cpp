@@ -132,6 +132,29 @@ TEST(WindTunnel, FramesDoNotChangeTheForce) {
     std::filesystem::remove_all(out);
 }
 
+// A regression: the road once sat 2 % of the body below it, under a cell, so no air passed.
+TEST(WindTunnel, AirPassesBetweenABodyAndTheRoad) {
+    World world;
+    const BodyId body = world.addBody("box", kWorldBody, Pose{}, 1.0, {}, {1, 1, 1, 0, 0, 0});
+    world.addCollider(body, ShapeType::Box, {1.0, 0.25, 0.25}, Pose{}, 1.0);
+    const auto out = std::filesystem::temp_directory_path() / "lagrange_tunnel_road_test";
+    WindTunnelOptions options;
+    options.speed = 10.0;
+    options.maxCells = 40000;
+    options.passes = 1.0;
+    options.ground = true;
+    auto own = runWindTunnel(world, options, out.string());
+    ASSERT_TRUE(own) << own.error();
+    EXPECT_NEAR(own->clearance, 2.0 * own->cellSize, 0.2 * own->cellSize);
+    // On the road it read about 9; a coarse grid with two cells of gap still reads high.
+    EXPECT_LT(own->dragCoefficient, 5.0);
+    options.clearance = 0.5;
+    auto asked = runWindTunnel(world, options, out.string());
+    ASSERT_TRUE(asked) << asked.error();
+    EXPECT_DOUBLE_EQ(asked->clearance, 0.5);
+    std::filesystem::remove_all(out);
+}
+
 TEST(WindTunnel, AGridStudySaysWhenItIsNotSettled) {
     EXPECT_FALSE(gridStudyVerdict({}).settled);
     EXPECT_FALSE(gridStudyVerdict({{100, 1.0, 0.0, 0.0}}).settled);
