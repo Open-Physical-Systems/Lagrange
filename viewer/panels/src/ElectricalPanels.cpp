@@ -4,6 +4,7 @@
 // Everything is built from the stage's electrical nets (SceneStatics::nets) and from signals:
 // nothing here knows a particular robot.
 #include "ScopePlots.hpp"
+#include "lagrange/viewer/Circuit.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Widgets.hpp"
@@ -14,6 +15,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -95,6 +97,20 @@ public:
             scene_ = scene;
             catalog_ = catalog;
             subscribe(context);
+            if (context.scene) {
+                context.client.requestAttributesOf(circuitPrims(*context.scene->statics));
+            }
+        }
+        // What the nets are made of: their values, as they arrive.
+        if (const auto known = context.client.attributesOf();
+            context.scene && (known != attributes_ || scene_ != circuitScene_)) {
+            attributes_ = known;
+            circuitScene_ = scene_;
+            circuit = circuitOf(*context.scene->statics,
+                                [&known](std::uint32_t prim) -> const PrimAttributes* {
+                                    const auto found = known->find(prim);
+                                    return found != known->end() ? &found->second : nullptr;
+                                });
         }
         if (const int frame = ImGui::GetFrameCount(); frame != frame_) {
             frame_ = frame;
@@ -103,10 +119,14 @@ public:
     }
 
     std::vector<NetLive> nets;  // parallel to SceneStatics::nets
+    Circuit circuit;            // buses parallel to SceneStatics::nets, parts to their terminals
     ScopeSession scopes;
     ScopePlotter plotter;
 
 private:
+    std::shared_ptr<const std::map<std::uint32_t, PrimAttributes>> attributes_;
+    std::uint64_t circuitScene_{0};
+
     void subscribe(PanelContext& context) {
         for (const NetLive& net : nets) {
             context.client.unsubscribe(net.voltage);
@@ -531,7 +551,7 @@ public:
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.45F);  // design: greyed out when off
         }
         for (std::size_t n = 0; n < statics.nets.size() && n < state_->nets.size(); ++n) {
-            const ImVec2 extent = net(context, draw, statics, statics.nets[n], state_->nets[n],
+            const ImVec2 extent = net(context, draw, statics, n, state_->nets[n],
                                       ImVec2(origin.x + px(24.0F), origin.y + top), off);
             top += extent.y + px(56.0F);
             width = std::max(width, extent.x);
@@ -601,20 +621,30 @@ private:
         }
     }
 
-    static float nodeHeight(const TerminalLive& live) {
-        return px(kHeader) + px(8.0F) + px(kLine) * static_cast<float>(1 + live.signals.size()) +
+    static float nodeHeight(const TerminalLive& live, const std::string& values) {
+        return px(kHeader) + px(8.0F) +
+               px(kLine) * static_cast<float>(1 + live.signals.size() + (values.empty() ? 0 : 1)) +
                px(6.0F);
+    }
+
+    /// The values of a net's terminal (its schematic node's last row), when they have arrived.
+    [[nodiscard]] std::string valuesOf(std::size_t net, std::size_t terminal) const {
+        const std::vector<CircuitBus>& buses = state_->circuit.buses;
+        return net < buses.size() && terminal < buses[net].parts.size()
+                   ? partValues(buses[net].parts[terminal])
+                   : std::string{};
     }
 
     /// Draws one net at `at`. Returns the size it took.
     ImVec2 net(PanelContext& context, ImDrawList* draw, const SceneStatics& statics,
-               const ElectricalNet& net, const NetLive& live, const ImVec2& at, bool off) {
+               std::size_t netIndex, const NetLive& live, const ImVec2& at, bool off) {
+        const ElectricalNet& net = statics.nets[netIndex];
         // Heights of the two columns.
         float sources = 0.0F;
         float loads = 0.0F;
         for (std::size_t t = 0; t < net.terminals.size(); ++t) {
             float& column = net.terminals[t].isSource() ? sources : loads;
-            column += nodeHeight(live.terminals[t]) + px(kGap);
+            column += nodeHeight(live.terminals[t], valuesOf(netIndex, t)) + px(kGap);
         }
         sources = std::max(sources - px(kGap), 0.0F);
         loads = std::max(loads - px(kGap), 0.0F);
@@ -646,7 +676,8 @@ private:
             const NetTerminal& terminal = net.terminals[t];
             const TerminalLive& entry = live.terminals[t];
             const bool source = terminal.isSource();
-            const float nodeH = nodeHeight(entry);
+            const std::string values = valuesOf(netIndex, t);
+            const float nodeH = nodeHeight(entry, values);
             const ImVec2 min(source ? at.x : loadX, source ? sourceY : loadY);
             (source ? sourceY : loadY) += nodeH + px(kGap);
             const double amperes = latest(entry.current);
@@ -658,9 +689,23 @@ private:
             } else {
                 wire(draw, ImVec2(busX, midY), ImVec2(min.x, midY), amperes, off);
             }
-            node(context, draw, statics, terminal, entry, min, nodeH, volts, amperes);
+            node(context, draw, statics, terminal, entry, values, min, nodeH, volts, amperes);
         }
-        return {loadX + px(kNodeWidth) - at.x, height};
+        // Design: the bus's limits under its bar, with its capacitance after them.
+        float below = 0.0F;
+        if (netIndex < state_->circuit.buses.size()) {
+            const std::string limits = busValues(state_->circuit.buses[netIndex]);
+            if (!limits.empty()) {
+                const float small = px(theme::kCaptionSize);
+                const float limitsWidth =
+                    fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, limits.c_str()).x;
+                below = px(24.0F);
+                draw->AddText(fonts.mono, small,
+                              ImVec2(busX - limitsWidth * 0.5F, at.y + height + px(8.0F)),
+                              u32(c::t3), limits.c_str());
+            }
+        }
+        return {loadX + px(kNodeWidth) - at.x, height + below};
     }
 
     /// A wire: width follows |I|, dashes move along the current, blue and reversed for
@@ -715,8 +760,9 @@ private:
 
     /// A component (design: .node): bg2 box with a 24 px header and mono rows of live values.
     static void node(PanelContext& context, ImDrawList* draw, const SceneStatics& statics,
-                     const NetTerminal& terminal, const TerminalLive& live, const ImVec2& min,
-                     float height, double volts, double amperes) {
+                     const NetTerminal& terminal, const TerminalLive& live,
+                     const std::string& values, const ImVec2& min, float height, double volts,
+                     double amperes) {
         const ImVec2 max(min.x + px(kNodeWidth), min.y + height);
         ImGui::SetCursorScreenPos(min);
         ImGui::PushID(static_cast<int>(terminal.prim));
@@ -786,6 +832,12 @@ private:
                                         px(3.0F));
                 }
             }
+        }
+        // Last, what the component is: its values from the stage, which do not move.
+        if (!values.empty()) {
+            y += px(kLine);
+            draw->AddText(fonts.mono, small, ImVec2(min.x + px(10.0F), y + px(1.0F)), u32(c::t2),
+                          values.c_str());
         }
         draw->PopClipRect();
     }

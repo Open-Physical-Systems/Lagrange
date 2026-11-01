@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -117,6 +118,7 @@ struct AttributeInfo {
     Kind kind{Kind::Token};
     bool editable{false};
     std::vector<std::uint32_t> targets;  ///< Prims a relationship points at.
+    std::vector<double> numbers;         ///< The value of a real, integer or array, in full.
 
     /// "elec" for "elec:windingResistance"; empty when the name has no namespace.
     [[nodiscard]] std::string_view group() const {
@@ -564,6 +566,15 @@ public:
     [[nodiscard]] std::shared_ptr<const LogBook> logs() const { return logs_.load(); }
     /// Asks for the attributes of one prim. Returns the request id.
     std::uint64_t requestAttributes(std::uint32_t prim);
+    /// Asks for the attributes of many prims at once. The answer goes to attributesOf() only, so
+    /// it does not disturb what the inspector waits for.
+    void requestAttributesOf(const std::vector<std::uint32_t>& prims);
+    /// Every prim's latest attributes from any request; never null. Replaced as a whole when an
+    /// answer arrives, so a pointer that compares equal has the same contents.
+    [[nodiscard]] std::shared_ptr<const std::map<std::uint32_t, PrimAttributes>> attributesOf()
+        const {
+        return attributesByPrim_.load();
+    }
     /// The latest attributes answer, or nullptr.
     [[nodiscard]] std::shared_ptr<const PrimAttributes> attributes() const {
         return attributes_.load();
@@ -660,6 +671,9 @@ private:
     std::atomic<std::shared_ptr<const RecordingFacts>> recording_;
     std::atomic<std::uint64_t> statisticsSerial_{0};
     std::atomic<std::shared_ptr<const PrimAttributes>> attributes_;
+    std::atomic<std::shared_ptr<const std::map<std::uint32_t, PrimAttributes>>> attributesByPrim_{
+        std::make_shared<const std::map<std::uint32_t, PrimAttributes>>()};
+    std::atomic<std::uint64_t> manyAttributesRequest_{0};
     std::atomic<std::shared_ptr<const ProfileCheck>> profileCheck_;
     std::atomic<std::uint64_t> profileSerial_{0};
     void post(bool error, std::string text);
