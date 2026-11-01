@@ -67,16 +67,18 @@ private:
     };
     struct BodySignals {
         std::uint32_t body{0};
-        SignalId externalWrench, pose, twist, acceleration;
+        SignalId externalWrench, pose, twist, acceleration, contactForce;
         SignalId poseCommand;  // kinematic bodies only
         int mujocoBody{0};
         int mocap{-1};  // its mocap index, for a kinematic body
     };
 
     void writeOutputs(SignalBus& bus) const;
+    void sumContactForces();
 
     std::vector<JointSignals> joints_;
     std::vector<BodySignals> bodies_;
+    std::vector<double> contactForces_;  // N, world frame, 3 per MuJoCo body, the last step's
     // Kinematic bodies' poses at the previous output, for their twist (MuJoCo's mocap bodies
     // have no velocity of their own).
     mutable std::vector<std::array<double, 7>> lastKinematicPose_;

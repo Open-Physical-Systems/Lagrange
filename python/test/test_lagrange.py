@@ -176,3 +176,16 @@ def test_save_state_goes_back_and_repeats() -> None:
     assert abs(sim.time - 0.2) < 1e-9
     sim.step_until(0.5)
     assert sim.state_hash() == first
+
+
+def test_contact_forces_on_a_robot_at_rest_carry_its_weight() -> None:
+    sim = lagrange.Simulation(lagrange.sample_robot(), world=None)
+    sim.step_until(0.0)
+    names = [s["name"] for s in sim.signals() if s["name"].endswith("/contact_force")]
+    assert names
+    gravity = 9.80665
+    robot_kg = 20.0 + 2 * 1.5 + 2 * (0.1 + 0.2) + 0.3 + 0.5  # the bodies of amr_diffdrive.urdf
+    sim.step_until(0.5)
+    # The sample's first half second is spent still: its demo starts after that.
+    up = sum(sim.read(name)[2] for name in names)
+    assert up == pytest.approx(robot_kg * gravity, rel=0.1)
