@@ -12,7 +12,7 @@ Backend order proposed (open question Q9):
 |---|---|---|---|---|
 | MuJoCo | v0.2 default and deterministic CPU reference | Apache-2.0 | `ros-lyrical-mujoco-vendor` or `libmujoco-dev` 3.5.0 | CPU (MuJoCo Warp is Python/Warp, not linked) |
 | Jolt | second CPU backend; large scenes with many free bodies | MIT | `jolt_vendor` (v5.6.0 upstream) | CPU |
-| PhysX 5 | vehicles (v0.6), GPU batches (Tier 2) | BSD-3-Clause | `physx_vendor` | CUDA only |
+| PhysX 5 | not built, by the owner's v0.6 decision; planned for vehicles and GPU batches (Tier 2) | BSD-3-Clause | none | CUDA only |
 
 MuJoCo is first because it is packaged for Lyrical, has no GPU or CUDA build requirement, and its
 MJCF parser is also needed by the importer.

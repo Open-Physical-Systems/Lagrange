@@ -89,6 +89,18 @@ CircuitPart partOf(const SceneStatics& statics, const NetTerminal& terminal,
             const double scale = series / parallel;
             part.soc = real(a, "elec:battery:initialSoc", 1.0);
             part.voltage = packVoltage(a, part.soc, series, part);
+            // The design's "13S NMC" in the node's header.
+            char pack[32];
+            std::snprintf(pack, sizeof(pack), "%.0fS", series);
+            part.detail = pack;
+            if (const AttributeInfo* chemistry = find(a, "elec:battery:chemistry");
+                chemistry != nullptr && series > 1.0) {
+                std::string upper = chemistry->value;
+                std::transform(upper.begin(), upper.end(), upper.begin(), [](unsigned char c) {
+                    return static_cast<char>(c == '_' ? ' ' : std::toupper(c));
+                });
+                part.detail += " " + upper;
+            }
             part.r0 = real(a, "elec:battery:r0") * scale;
             for (const AttributeInfo& attribute : a.attributes) {
                 if (attribute.name.starts_with("elec:port:") &&
@@ -261,7 +273,7 @@ std::string partValues(const CircuitPart& part) {
             if (part.voltage > 0.0) {
                 out = engineering(part.voltage, "V") + " · r0 " + engineering(part.r0, "Ω");
                 for (const auto& [r, c] : part.pairs) {
-                    out += " · " + engineering(r, "Ω") + "‖" + engineering(c, "F");
+                    out += " · " + engineering(r, "Ω") + " || " + engineering(c, "F");
                 }
             }
             break;

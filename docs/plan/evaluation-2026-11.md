@@ -55,15 +55,16 @@ packages run through launch files, and the C plugin path works without linking L
 | 11 | **Radiation has no module.** The zero substitute only, though it is a named domain | Design document | Medium |
 | 12 | **Release gaps.** Binary packages are built locally, publishing and signing are the owner's | `packaging/` | The owner's |
 
-Smaller things seen on the way: `docs/validation/report.md` says hydrodynamics is not built, which is
-stale; `rigid_body.md` and invariant 12 still list PhysX, dropped by the owner at v0.6; TSan did not
-finish `test_server` and has not been rerun since; Export Modelica needs a protocol command;
-`lagrange export spice` drives do not read back into the importer.
+Smaller things seen on the way: invariant 12 still lists PhysX, dropped by the owner at v0.6; under
+ASan a controller takes over 10 s to load, so the spawner gives up and ros2_control is not cleared by
+the sanitizers; `test_server`'s wrist camera test does not finish under ASan on software Vulkan;
+Export Modelica needs a protocol command; `lagrange export spice` drives do not read back into the
+importer.
 
 ## Recommendation
 
-Do 1, 2 (the wrapper over processes) and 3 next: small, and they remove things users hit on their first
-day. Then 5 and 6 to widen what the simulator can be used for. Ask the owner about 4, since recordings
+1, 2 (the wrapper over processes) and 3 were done the same night (#232, #233, #234), and 6 has a
+first example (#235). Next, 5 widens what the simulator can be used for. Ask the owner about 4, since recordings
 need hardware, and about 7 before writing its RFC. Leave GPU batched physics until someone needs
 thousands of environments: integrating MuJoCo Warp or similar is a project of its own, and its status
 has to be verified first (`TODO(verify)`).

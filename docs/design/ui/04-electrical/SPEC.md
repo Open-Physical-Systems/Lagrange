@@ -70,7 +70,8 @@ right 340 px : "Inspector" | "History"
 
 ### Inspector (battery shown)
 - State cards (2×2): state of charge with a meter, terminal V and OCV with sag, current and
-  power, cell temperature and state of health.
+  power, cell temperature and state of health. State of health is not modelled, so that card shows the cell
+  temperature alone, or that the thermal domain is off.
 - An OCV(SoC) mini plot with the current operating point in accent.
 - `BatteryAPI_v1` fields: capacity, R0, R1·C1, R2·C2, behaviorModel FMU, parameter source.
 - Footer: "Plot all battery signals", "Open FMU".
