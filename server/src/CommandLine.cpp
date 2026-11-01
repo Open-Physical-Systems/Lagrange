@@ -107,6 +107,8 @@ void printServerOptions(std::FILE* out) {
         "(repeatable)\n"
         "  --water X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH  a body of still water (repeatable)\n"
         "  --joint-control  drive every moving joint on its own from /joint_commands\n"
+        "  --joint-loop-hz HZ  bandwidth of its position and velocity loops (default 8); more\n"
+        "                   holds stiffer, as a leg carrying a body needs\n"
         "            (sensor_msgs/JointState: position, velocity or effort), no robot controller\n"
         "  --plugin LIB  load a plugin library (RFC 0008): a path, or NAME for lib<NAME>.so in\n"
         "            $LAGRANGE_PLUGIN_PATH or the lagrange_plugins resource index (repeatable)\n"
@@ -589,6 +591,12 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             options.water.push_back({{v[0], v[1], v[2]}, v[3], v[4], v[5]});
         } else if (arg == "--joint-control") {
             options.jointControl = true;
+        } else if (arg == "--joint-loop-hz") {
+            const char* hz = value();
+            if (hz == nullptr || std::atof(hz) <= 0.0) {
+                return "--joint-loop-hz needs a bandwidth above zero, in Hz";
+            }
+            options.jointLoopHz = std::atof(hz);
         } else if (arg == "--plugin") {
             const char* library = value();
             if (library == nullptr) {

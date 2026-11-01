@@ -10,9 +10,6 @@ namespace lagrange::server {
 
 namespace {
 
-constexpr double kBandwidthHz =
-    8.0;  // of the position and velocity loops (a choice, stable at 1 kHz)
-
 SignalSpec spec(std::string name, Unit unit) {
     SignalSpec s;
     s.name = std::move(name);
@@ -50,8 +47,8 @@ std::map<std::string, JointTarget> JointTargets::all() const {
 }
 
 JointControl::JointControl(std::shared_ptr<JointTargets> targets,
-                           std::map<std::string, std::string> driveModes)
-    : targets_(std::move(targets)), driveModes_(std::move(driveModes)) {}
+                           std::map<std::string, std::string> driveModes, double bandwidthHz)
+    : targets_(std::move(targets)), bandwidthHz_(bandwidthHz), driveModes_(std::move(driveModes)) {}
 
 ModuleInfo JointControl::info() const {
     return {"controller", "joint_control", 1, 0};  // deterministic given its commands
@@ -118,7 +115,7 @@ Status JointControl::init(const WorldView&, const ModuleConfig&, SignalBus& bus)
 }
 
 Status JointControl::step(const StepContext& context, SignalBus& bus) {
-    const double omega = 2.0 * std::numbers::pi * kBandwidthHz;
+    const double omega = 2.0 * std::numbers::pi * bandwidthHz_;
     // Copied only when someone has told a joint something new.
     targets_->refresh(seenTargets_, currentTargets_);
     const std::map<std::string, JointTarget>& targets = currentTargets_;

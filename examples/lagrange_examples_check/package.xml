@@ -20,6 +20,7 @@
   <test_depend>lagrange_example_ros2_control</test_depend>
   <test_depend>lagrange_example_plugin</test_depend>
   <test_depend>lagrange_example_rl</test_depend>
+  <test_depend>lagrange_example_quadruped</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>
 
   <export>
