@@ -84,6 +84,18 @@ std::string localTime() {
 }
 
 /// What this machine offers, for the launcher's system check. Probed locally.
+/// Where the viewer keeps its files, made if it is not there.
+std::string configDirectory() {
+    const std::string configHome = environment("XDG_CONFIG_HOME");
+    const std::string home = environment("HOME");
+    std::string directory =
+        (configHome.empty() ? (home.empty() ? std::string(".") : home) + "/.config" : configHome) +
+        "/lagrange";
+    std::error_code ec;
+    std::filesystem::create_directories(directory, ec);
+    return directory;
+}
+
 SystemInfo systemInfo(const gpu::Device& device, float displayScale) {
     SystemInfo info;
     const gpu::DeviceInfo& gpuInfo = device.info();
@@ -110,13 +122,7 @@ SystemInfo systemInfo(const gpu::Device& device, float displayScale) {
     info.rosDistro = environment("ROS_DISTRO");
     info.rmw = environment("RMW_IMPLEMENTATION");
     info.rosDomain = environment("ROS_DOMAIN_ID");
-    const std::string configHome = environment("XDG_CONFIG_HOME");
-    const std::string home = environment("HOME");
-    info.configDirectory =
-        (configHome.empty() ? (home.empty() ? std::string(".") : home) + "/.config" : configHome) +
-        "/lagrange";
-    std::error_code ec;
-    std::filesystem::create_directories(info.configDirectory, ec);
+    info.configDirectory = configDirectory();
     return info;
 }
 
@@ -439,6 +445,10 @@ public:
         context.initialScopeSignals = &scopeSignals_;
         context.workspace = &workspace_;
         context.focusPanel = &focusPanel_;
+        if (configDirectory_.empty()) {
+            configDirectory_ = configDirectory();
+        }
+        context.configDirectory = configDirectory_;
         context.exportNetlist = &exportNetlist_;
         context.profileSession = &profileSession_;
         context.scopeSession = &scopeSession_;
@@ -796,6 +806,7 @@ private:
     bool applyProfile_{false};
     std::string selectPath_;
     std::string focusPanel_;
+    std::string configDirectory_;
     std::string exportNetlist_;
     bool cursorsWanted_{false};
     bool openFileRequested_{false};

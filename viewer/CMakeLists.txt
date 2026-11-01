@@ -20,6 +20,7 @@ add_library(
     client/src/ScopeSession.cpp
     client/src/ViewerClient.cpp
     client/src/Circuit.cpp
+    client/src/SchematicLayout.cpp
 )
 lagrange_target_defaults(lagrange_viewer_client)
 target_include_directories(lagrange_viewer_client PUBLIC client/include)
@@ -170,6 +171,7 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_viewer_client
         client/test/test_circuit.cpp
+        client/test/test_schematic_layout.cpp
         client/test/test_profile_draft.cpp
         client/test/test_profile_session.cpp
         client/test/test_recent_list.cpp

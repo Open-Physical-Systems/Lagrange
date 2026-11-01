@@ -12,6 +12,7 @@ enum class Shading : std::uint8_t {
     Lit,        ///< Material colour, one directional light and sky ambient.
     Unlit,      ///< Material colour as it is.
     Thermal,    ///< Temperature on the design's thermal colour map; unlit.
+    Current,    ///< Electrical's 3D overlay: meshes tinted by their motor's current; unlit.
     Wireframe,  ///< Triangle edges in the material colour, unlit (when the device can).
     Collision,  ///< The collision shapes the server sends, lit, in place of the visuals.
 };
@@ -37,7 +38,16 @@ struct RenderOptions {
     std::vector<float> temperature;
     float temperatureLow{0.0F};
     float temperatureHigh{1.0F};
+    /// Current shading: per scene prim, its share of the largest current, -1..1, negative when
+    /// reversed (NaN: no motor, its own colour dimmed).
+    std::vector<float> current;
+    /// What the Viewport goes back to after the Electrical overlay took the shading.
+    Shading beforeCurrent{Shading::Lit};
 };
+
+/// The Current shading's colour at `share` (-1..1), as linear RGB: the electrical
+/// colour at 1, regeneration's blue at -1; a motor at rest is faintly tinted.
+[[nodiscard]] std::array<float, 3> currentColor(float share);
 
 /// The design's thermal colour map (design tokens colormap.thermal, "inferno") at `t` in
 /// [0, 1], as linear RGB for the mesh shader.

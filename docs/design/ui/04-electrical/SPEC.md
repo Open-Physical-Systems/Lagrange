@@ -30,7 +30,13 @@ right 340 px : "Inspector" | "History"
   proportional to |I|. Regen current is drawn blue with reversed arrows. Current labels sit on
   the wires. Motors show their mechanical output (τ → wheel) in rigid-body gray.
 - Header: "Auto-layout", "Export SPICE" (ngspice netlist), "Export Modelica".
-- The 3D overlay tab tints wires and motors in the viewport by current.
+- The 3D overlay tab tints wires and motors in the viewport by current. A motor's tint is on the
+  link it turns, and what that link carries; a wire is a line over the image from the bus to that
+  link, in the wire colours and width (robots have no wire geometry). A part with no place of its
+  own is listed in the corner with its current. Other meshes keep their colour, dimmed. Dragging
+  orbits.
+- Dragging a node moves it, kept per stage in the viewer's config directory; Auto-layout puts them
+  back, disabled while none has moved.
 
 ### Circuit (proposed; the owner asked for it, 2026-11-01)
 - A tab next to Schematic, not in the reference image. The same power system as a circuit

@@ -88,6 +88,10 @@ public:
             ImGui::End();
             return;
         }
+        // The Electrical workspace's overlay lends itself the shading while it is in front.
+        if (context.renderOptions->shading == Shading::Current) {
+            context.renderOptions->shading = context.renderOptions->beforeCurrent;
+        }
         const ImVec2 available = ImGui::GetContentRegionAvail();
         const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
         context.requestedViewportWidth =
@@ -224,6 +228,8 @@ private:
                 return "Realistic";
             case Shading::Unlit:
                 return "Unlit";
+            case Shading::Current:
+                return "Current";
             case Shading::Thermal:
                 return "Thermal";
             case Shading::Wireframe:
