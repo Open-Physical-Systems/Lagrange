@@ -432,6 +432,32 @@ def test_circuit_tab_draws_the_rails_and_wires(socket_dir):
     assert yellow > 1000, f"rails and wires not drawn ({yellow} pixels)"
 
 
+def test_overlay_tab_draws_wires_over_the_view(socket_dir):
+    """04-electrical, 3D overlay: the robot with a wire from each part to its bus."""
+    image = socket_dir / "overlay.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "60",
+            "--size",
+            "1600x1000",
+            "--workspace",
+            "electrical",
+            "--panel",
+            "3D overlay",
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout.strip().splitlines()[-1])["validation_errors"] == 0
+    _width, _height, rows = read_png(image)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    yellow = sum(1 for r, g, b, _a in pixels if r > 235 and 185 < g < 215 and 50 < b < 90)
+    assert yellow > 50, f"no wires over the view ({yellow} pixels)"
+
+
 def test_launcher_is_shown_without_a_server(socket_dir):
     """Design 01-launcher: the first screen needs no server and makes no connection."""
     image = socket_dir / "launcher.png"

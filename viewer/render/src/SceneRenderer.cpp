@@ -21,6 +21,8 @@ constexpr VkFormat kColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
 using gpu::kDepthFormat;
 constexpr int kGridHalfCells = 20;  // lines every metre, 20 m to each side
 constexpr int kGridMajorEvery = 5;
+constexpr float kCurrentTintFloor = 0.12F;
+constexpr float kUntintedShade = 0.35F;  // what the Current shading leaves of other colours
 constexpr float kNoTemperature = 0.02F;  // linear grey of meshes without a thermal node
 // Collision shading: the design tokens' rigid-body domain colour, #9AACC6, as linear RGB.
 constexpr std::array<float, 4> kColliderColor{0.3231F, 0.4179F, 0.5647F, 1.0F};
@@ -95,6 +97,21 @@ gpu::Buffer lineBuffer(const gpu::Device& device, const std::vector<float>& vert
 }
 
 }  // namespace
+
+std::array<float, 3> currentColor(float share) {
+    // Design tokens: electrical #F5C842 and info #5AA2FF, as linear RGB.
+    constexpr std::array<float, 3> kForward{0.913F, 0.578F, 0.054F};
+    constexpr std::array<float, 3> kReversed{0.102F, 0.361F, 1.0F};
+    // A motor at rest still reads as a motor: its tint starts above nothing.
+    const float t =
+        kCurrentTintFloor + (1.0F - kCurrentTintFloor) * std::clamp(std::abs(share), 0.0F, 1.0F);
+    const std::array<float, 3>& end = share < 0.0F ? kReversed : kForward;
+    std::array<float, 3> rgb{};
+    for (std::size_t k = 0; k < 3; ++k) {
+        rgb.at(k) = kNoTemperature + (end.at(k) - kNoTemperature) * t;
+    }
+    return rgb;
+}
 
 std::array<float, 3> thermalColor(float t) {
     // Design tokens colormap.thermal ("inferno"), sRGB.
@@ -333,6 +350,18 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
                         std::max(options.temperatureHigh - options.temperatureLow, 1e-3F);
                     const std::array<float, 3> rgb =
                         thermalColor((t - options.temperatureLow) / span);
+                    push.baseColor = {rgb[0], rgb[1], rgb[2], 1.0F};
+                }
+            }
+            if (options.shading == Shading::Current) {
+                const float share = i < options.current.size() ? options.current[i] : NAN;
+                if (std::isnan(share)) {
+                    // Not a motor's: its own colour, dimmed, so the robot stays readable.
+                    for (std::size_t k = 0; k < 3; ++k) {
+                        push.baseColor.at(k) *= kUntintedShade;
+                    }
+                } else {
+                    const std::array<float, 3> rgb = currentColor(share);
                     push.baseColor = {rgb[0], rgb[1], rgb[2], 1.0F};
                 }
             }

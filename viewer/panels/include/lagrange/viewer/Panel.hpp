@@ -115,6 +115,7 @@ struct PanelContext {
     bool canOpenFiles{false};
     bool openFileRequested{false};
 
+    std::string configDirectory;  ///< Where the viewer keeps its files, connected or not.
     /// A panel to bring in front of its tabs, by title; emptied once done. May be null.
     std::string* focusPanel{nullptr};
     /// A file to write the stage's circuit to as a netlist; emptied once done. May be null.

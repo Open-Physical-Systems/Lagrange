@@ -115,6 +115,7 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         ImGui::DockBuilderDockWindow("Schematic", centre);
         ImGui::DockBuilderDockWindow("Circuit", centre);
         ImGui::DockBuilderDockWindow("Netlist", centre);
+        ImGui::DockBuilderDockWindow("3D overlay", centre);
         ImGui::DockBuilderDockWindow("Scopes", scopes);
         ImGui::DockBuilderDockWindow("###InspectorElectrical", right);
     } else if (workspace == Workspace::Performance) {
