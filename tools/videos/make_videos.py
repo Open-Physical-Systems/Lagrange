@@ -112,6 +112,16 @@ def tof_robot(work: Path) -> None:
     (work / "amr_tof.urdf").write_text(urdf)
 
 
+def ahmed_tunnel(work: Path, cells: int = 2000000, frames: int = 0) -> None:
+    """An Ahmed body through lagrange tunnel, in work/tunnel."""
+    maker = asset("robots/ahmed_body/make_ahmed_body.py")
+    subprocess.run([sys.executable, maker, "25", str(work / "ahmed")], check=True)
+    command = ["lagrange", "tunnel", str(work / "ahmed.urdf"), "--speed", "40", "--ground",
+               "--clearance", "0.05", "--cells", str(cells), "--passes", "2", "--mean-passes", "2",
+               "--frames", str(frames), "--out", str(work / "tunnel")]  # fmt: skip
+    subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 AMR = asset("robots/amr_diffdrive/amr_diffdrive.urdf")
 WAREHOUSE = asset("worlds/warehouse_small/warehouse_small.usda")
 TOWN = asset("worlds/town/town.usda")
@@ -121,6 +131,22 @@ TURN = joints(velocity={"turn": 6.28})
 ARM = asset("robots/arm6/arm6.urdf")
 
 CLIPS: list[Clip] = [
+    Clip(
+        "wind_tunnel_flow",
+        "lagrange tunnel: streamlines, a slice and surface pressure on an Ahmed body, as a world",
+        8,
+        [["--robot", "none", "--world", "tunnel/flow_view.usda", "--paused"]],
+        [
+            Pane(
+                "",
+                (0, 0, 1280, 720),
+                (1920, 1080, (289, 127, 1569, 847)),
+                view(1.2, 0, 0.5, 3.0, -145, 22),
+            ),
+        ],
+        [Step(0, "lagrange tunnel ahmed.urdf --speed 40 --ground --clearance 0.05")],
+        ahmed_tunnel,
+    ),
     Clip(
         "realistic_water",
         "Water that looks like water: waves, glitter, reflections, foam",
@@ -789,6 +815,35 @@ def record(clip: Clip, out_dir: Path, keep: bool) -> None:
         shutil.rmtree(work)
 
 
+def wind_tunnel_wake(out_dir: Path, keep: bool) -> None:
+    """The wake moving: lagrange tunnel's own frames under the band the other clips have."""
+    print("wind_tunnel_wake", flush=True)
+    work = Path(tempfile.mkdtemp(prefix="lagrange_video_wake_"))
+    ahmed_tunnel(work, frames=200)
+    finished = work / "finished"
+    finished.mkdir()
+    title = "lagrange tunnel --frames: the air's spin behind an Ahmed body, 40 m/s over a road"
+    line = (
+        "A coarse grid: it shows where the air goes. Its Cd, 1.12, is far from the measured 0.298"
+    )
+    for index, frame in enumerate(sorted((work / "tunnel" / "frames").glob("*.png"))):
+        image = Image.open(frame).convert("RGB")
+        scale = min(SIZE[0] / image.width, SIZE[1] / image.height)
+        size = (round(image.width * scale), round(image.height * scale))
+        whole = Image.new("RGB", (SIZE[0], size[1] + 64), (16, 18, 22))
+        whole.paste(image.resize(size, Image.Resampling.NEAREST), ((SIZE[0] - size[0]) // 2, 0))
+        draw = ImageDraw.Draw(whole)
+        draw.text((16, size[1] + 6), title, font=font(20), fill=(235, 235, 235))
+        draw.text((16, size[1] + 34), line, font=font(17), fill=(120, 200, 255))
+        whole.save(finished / f"c_{index:05d}.png")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    encode(finished, FPS, out_dir / "wind_tunnel_wake.mp4")
+    if keep:
+        print(f"  frames in {finished}")
+    else:
+        shutil.rmtree(work)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("clips", nargs="*", help="names; all by default")
@@ -797,11 +852,13 @@ def main() -> int:
     args = parser.parse_args()
     known = {clip.name: clip for clip in CLIPS}
     for name in args.clips:
-        if name not in known:
+        if name not in known and name != "wind_tunnel_wake":
             raise SystemExit(f"no clip {name}; one of {', '.join(known)}")
     for clip in CLIPS:
         if not args.clips or clip.name in args.clips:
             record(clip, args.out, args.keep)
+    if not args.clips or "wind_tunnel_wake" in args.clips:
+        wind_tunnel_wake(args.out, args.keep)
     return 0
 
 
