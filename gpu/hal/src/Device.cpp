@@ -359,6 +359,8 @@ std::unique_ptr<Device> Device::create(const DeviceDesc& desc, std::string& erro
     VkPhysicalDeviceFeatures core{};
     core.fillModeNonSolid = supported.fillModeNonSolid;  // the viewer's wireframe shading
     self->nonSolidFill_ = supported.fillModeNonSolid == VK_TRUE;
+    core.samplerAnisotropy = supported.samplerAnisotropy;  // textures seen at a grazing angle
+    self->anisotropy_ = supported.samplerAnisotropy == VK_TRUE;
     VkDeviceCreateInfo deviceInfo{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     deviceInfo.pNext = &features13;
     deviceInfo.pEnabledFeatures = &core;

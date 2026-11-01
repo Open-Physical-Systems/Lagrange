@@ -61,6 +61,9 @@ private:
     gpu::Buffer frames_;  // host-visible: the main Frame, then the mirror pass's
     VkSampler linear_{VK_NULL_HANDLE};
     VkSampler nearest_{VK_NULL_HANDLE};
+    VkSampler repeat_{VK_NULL_HANDLE};
+    gpu::Image albedo_, normal_;
+    bool hasTextures_{false};
     VkDescriptorSetLayout setLayout_{VK_NULL_HANDLE};
     VkDescriptorPool pool_{VK_NULL_HANDLE};
     VkDescriptorSet mainSet_{VK_NULL_HANDLE};

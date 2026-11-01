@@ -88,6 +88,7 @@ public:
     /// Whether pipelines may draw polygons as lines (VkPhysicalDeviceFeatures::fillModeNonSolid,
     /// enabled when the device has it).
     [[nodiscard]] bool nonSolidFill() const { return nonSolidFill_; }
+    [[nodiscard]] bool samplerAnisotropy() const { return anisotropy_; }
     /// Number of validation errors reported so far (0 when validation is off).
     [[nodiscard]] std::uint32_t validationErrorCount() const;
 
@@ -112,6 +113,7 @@ private:
     std::vector<DeviceInfo> allDevices_;
     bool validation_{false};
     bool nonSolidFill_{false};
+    bool anisotropy_{false};
 };
 
 [[nodiscard]] const char* toString(CapabilityTier tier);

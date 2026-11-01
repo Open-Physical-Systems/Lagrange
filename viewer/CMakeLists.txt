@@ -6,6 +6,7 @@ find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_proto REQUIRED)
 find_package(lagrange_gpu REQUIRED)
 find_package(imgui_vendor REQUIRED)
+find_package(JPEG REQUIRED)
 find_package(SDL3 REQUIRED)
 
 # Protocol client and scene store. No Vulkan, no ImGui: testable without a display.
@@ -35,6 +36,7 @@ add_library(
     render/src/Picking.cpp
     render/src/RealisticPass.cpp
     render/src/SceneRenderer.cpp
+    render/src/SurfaceTextures.cpp
 )
 lagrange_target_defaults(lagrange_viewer_render)
 lagrange_target_vulkan_warnings(lagrange_viewer_render)
@@ -45,6 +47,12 @@ target_link_libraries(
         lagrange_viewer_client
         lagrange_gpu::lagrange_gpu
         lagrange_gpu::lagrange_gpu_raster
+    PRIVATE JPEG::JPEG
+)
+target_compile_definitions(
+    lagrange_viewer_render
+    PRIVATE
+        LAGRANGE_VIEWER_SOURCE_TEXTURES="${CMAKE_CURRENT_SOURCE_DIR}/assets/textures"
 )
 set(_kernels "${LAGRANGE_GPU_KERNELS_DIR}")
 lagrange_add_slang_shader(
@@ -217,6 +225,13 @@ target_compile_definitions(
 )
 
 install(TARGETS lagrange_viewer RUNTIME DESTINATION lib/${PROJECT_NAME})
+install(
+    DIRECTORY assets/textures/
+    DESTINATION share/${PROJECT_NAME}/textures
+    FILES_MATCHING
+    PATTERN "*.jpg"
+    PATTERN "SOURCES.md"
+)
 install(
     DIRECTORY assets/fonts/
     DESTINATION share/${PROJECT_NAME}/fonts
