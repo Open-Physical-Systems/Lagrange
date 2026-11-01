@@ -133,7 +133,7 @@ void branch(ImDrawList* draw, const CircuitPart& part, float x, float rail, doub
     const float end = rail + px(kBranch);
 
     // The symbols of the branch, top to bottom.
-    enum class Symbol : std::uint8_t { Resistor, Pair, Battery, Motor, Power };
+    enum class Symbol : std::uint8_t { Resistor, Pair, Battery, Motor, Power, Converter };
     std::vector<Symbol> symbols;
     switch (part.kind) {
         case CircuitPart::Kind::Battery:
@@ -146,6 +146,9 @@ void branch(ImDrawList* draw, const CircuitPart& part, float x, float rail, doub
             break;
         case CircuitPart::Kind::PowerLoad:
             symbols.push_back(Symbol::Power);
+            break;
+        case CircuitPart::Kind::Converter:
+            symbols.push_back(Symbol::Converter);
             break;
         default:
             symbols.push_back(Symbol::Resistor);
@@ -169,6 +172,9 @@ void branch(ImDrawList* draw, const CircuitPart& part, float x, float rail, doub
                 break;
             case Symbol::Motor:
                 circled(symbolPen, x, y, next, "M");
+                break;
+            case Symbol::Converter:
+                circled(symbolPen, x, y, next, "DC");
                 break;
             case Symbol::Power:
                 circled(symbolPen, x, y, next, "P");
@@ -212,6 +218,12 @@ void branch(ImDrawList* draw, const CircuitPart& part, float x, float rail, doub
     draw->PopClipRect();
 }
 
+/// A battery, or a converter on the bus it regulates.
+bool feeds(const CircuitPart& part) {
+    return part.kind == CircuitPart::Kind::Battery ||
+           (part.kind == CircuitPart::Kind::Converter && !part.inputBus.empty());
+}
+
 /// The bus's capacitor as a branch of its own.
 void capacitorBranch(ImDrawList* draw, const CircuitBus& bus, float x, float rail, bool selected) {
     const Pen wirePen{draw, u32(kWire), px(1.5F)};
@@ -241,17 +253,16 @@ std::optional<CircuitPick> drawCircuit(const Circuit& circuit, const PartCurrent
     float widest = 0.0F;
     for (std::size_t b = 0; b < circuit.buses.size(); ++b) {
         const CircuitBus& bus = circuit.buses[b];
-        // Batteries first, then the bus's capacitor, then what it feeds.
+        // What feeds it first, then the bus's capacitor, then what it feeds.
         std::vector<std::size_t> order;
         for (std::size_t p = 0; p < bus.parts.size(); ++p) {
-            if (bus.parts[p].kind == CircuitPart::Kind::Battery) {
+            if (feeds(bus.parts[p])) {
                 order.push_back(p);
             }
         }
         const std::size_t batteries = order.size();
         for (std::size_t p = 0; p < bus.parts.size(); ++p) {
-            if (bus.parts[p].kind != CircuitPart::Kind::Battery &&
-                bus.parts[p].kind != CircuitPart::Kind::Other) {
+            if (!feeds(bus.parts[p]) && bus.parts[p].kind != CircuitPart::Kind::Other) {
                 order.push_back(p);
             }
         }

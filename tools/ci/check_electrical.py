@@ -17,6 +17,9 @@ Needs the workspace sourced and ngspice. The circuits:
     rc_pair       battery with an R1 C1 pair + resistor, at one time constant and at the end
     two_batteries two batteries + resistor: V = (V1/r1 + V2/r2) / (1/r1 + 1/r2 + 1/R)
     charge_drain  state of charge after a steady current: SoC = SoC0 - I t / Q
+    converter     battery + DC-DC + resistor on its rail: the rail holds, P_in = V^2 / R / eta,
+                  then as constant_power
+    sloped        a half-charged battery with a sloped curve: V = OCV(SoC) R / (R + r)
     motor         torque on a free flywheel: w = tau t / J, i = tau / (N eta Kt),
                   P = k R i^2 + Kt i N w (k 1.5 for a PMSM, 1 for brushed), then as constant_power
 """
@@ -190,7 +193,7 @@ def xml_of(line: str) -> str:
     words = line.split()
     if not words or words[0] != "*lagrange":
         return ""
-    named_by = {"battery": "source", "bus": "node", "motor": "joint"}[words[1]]
+    named_by = {"battery": "source", "bus": "node", "motor": "joint", "converter": "name"}[words[1]]
     values = dict(word.split("=") for word in words[3:])
     attributes = " ".join(f'{key}="{value}"' for key, value in values.items())
     return f'<{words[1]} {named_by}="{words[2]}" {attributes}/>'
@@ -333,6 +336,77 @@ def constant_power(rng: random.Random, folder: Path) -> list[tuple[Check, float,
     return run_both(folder, overlay, netlist_of(elements, pack), 1.0, checks)
 
 
+def converter(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
+    pack = Pack("a", rng.uniform(36, 60), rng.uniform(0.02, 0.2))
+    rail = rng.uniform(5, 24)
+    load = rng.uniform(4, 20)
+    eta = rng.uniform(0.8, 0.98)
+    power = rail**2 / load / eta
+    volts = (pack.ocv + math.sqrt(pack.ocv**2 - 4 * power * pack.r0)) / 2
+    checks = [
+        Check("rail voltage (V)", "bus/rail/voltage", 0.3, rail),
+        Check("load current (A)", "load/load/current", 0.3, rail / load),
+        Check("battery bus (V)", BUS, 0.3, volts),
+        Check("battery current (A)", "battery/a/current", 0.3, power / volts),
+    ]
+    elements = [
+        *spice_pack(pack, pack.ocv),
+        f"V_rail rail 0 DC {rail}",
+        f"B_rail_in dc 0 I = -I(V_rail) * {rail} / {eta} / max(V(dc), 0.001) * "
+        "((V(dc) >= 0) ? 1 : 0)",
+        f"R_load rail 0 {load}",
+    ]
+    checks[2].spice = run_spice(folder, elements, [0.3])[0]
+    rail_bus = f"""  - create: power/rail
+    schemas:
+      ElectricalBusAPI_1:
+        elec:bus:capacitance: {BUS_CAPACITANCE}
+        elec:bus:undervoltageTrip: 0.5
+        elec:bus:overvoltageTrip: 1000.0
+  - create: power/load
+    schemas:
+      ElectricalLoadAPI_1:
+        elec:load:model: resistive
+        elec:load:power: {rail**2 / load}
+        elec:powerPort: power/rail
+  - create: power/dcdc
+    schemas:
+      ElectricalConverterAPI_1:
+        elec:conv:outputVoltage: {rail}
+        elec:conv:maxOutputCurrent: 1000.0
+        elec:conv:efficiency: {eta}
+        elec:conv:input: power/dc
+        elec:conv:output: power/rail
+"""
+    notes = (
+        "*lagrange bus rail undervoltage=0.5 overvoltage=1000\n"
+        "*lagrange converter dcdc source=V_rail in=dc max_current=1000 "
+        f"efficiency={eta} input_sink=B_rail_in\n"
+    )
+    overlay = bus_yaml() + battery_yaml(pack) + rail_bus
+    return run_both(folder, overlay, netlist_of(elements, pack) + notes, 1.0, checks)
+
+
+def sloped(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
+    low, high = sorted((rng.uniform(30, 44), rng.uniform(46, 58)))
+    pack = Pack("a", (low + high) / 2.0, rng.uniform(0.02, 0.3), soc=0.5, capacity=1e7)
+    power = rng.uniform(50, 500)
+    load = pack.ocv**2 / power
+    volts = pack.ocv * load / (load + pack.r0)
+    checks = [Check("bus voltage (V)", BUS, 0.2, volts)]
+    elements = [*spice_pack(pack, pack.ocv), f"R_load dc 0 {load}"]
+    checks[0].spice = run_spice(folder, elements, [0.2])[0]
+    overlay = (
+        bus_yaml()
+        + battery_yaml(pack).replace(f"[{pack.ocv}, {pack.ocv}]", f"[{low}, {high}]")
+        + load_yaml("resistive", power)
+    )
+    netlist = netlist_of(elements, pack).replace(
+        "soc=0.5\n", f"soc=0.5 ocv_soc=0,1 ocv={low},{high}\n"
+    )
+    return run_both(folder, overlay, netlist, 1.0, checks)
+
+
 def rc_pair(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
     pack = Pack("a", rng.uniform(12, 60), rng.uniform(0.02, 0.2))
     pack.r1 = rng.uniform(0.05, 0.5)
@@ -451,6 +525,8 @@ CIRCUITS = {
     "rc_pair": rc_pair,
     "two_batteries": two_batteries,
     "charge_drain": charge_drain,
+    "converter": converter,
+    "sloped": sloped,
     "motor": motor,
 }
 

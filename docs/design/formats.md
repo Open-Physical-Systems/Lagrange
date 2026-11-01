@@ -1556,7 +1556,8 @@ sensors, so lidars on an MJCF robot still need USD for now.
 | The node a chain reaches, with the `C n 0 c` on it | `ElectricalBusAPI_1`, named after the node |
 | `R n 0 r` | `ElectricalLoadAPI_1` `resistive`, its power `V²/r` at the bus's start voltage |
 | `B n 0 I = P / max(V(n), e) [* ((V(n) >= m) ? 1 : 0)]` | `ElectricalLoadAPI_1` `constant_power` |
-| `*lagrange battery ELEMENT capacity= cutoff= max_charge= [soc=]` (C, V, A) | what SPICE cannot say about a battery; required |
+| `*lagrange battery ELEMENT capacity= cutoff= max_charge= [soc=] [ocv_soc=0,0.5,1 ocv=44,48,54]` (C, V, A) | what SPICE cannot say about a battery; required. A curve is for the whole pack and must give the source's voltage at its `soc`, or ngspice and the run would answer for different batteries |
+| `*lagrange converter NAME source=V_x in=BUS max_current= [efficiency=] [input_sink=B_y]` | `ElectricalConverterAPI_1`: `V_x` from its output to ground stands for it in ngspice and sets its voltage; `B_y`, what it draws from `in` there, is read by ngspice only (`I = -I(V_x) * 12 / 0.9 / max(V(dc), 0.001)`). One per output bus |
 | `*lagrange bus NODE undervoltage= overvoltage=` (V) | the bus's trips; required |
 | `*lagrange motor JOINT node= r= l= kt= imax= [name=] [type=] [gear=] [efficiency=] [pole_pairs=] [rotor_inertia=]` | `ElectricalMotorAPI_1`, named `JOINT_motor` unless `name=`; a drive is not a SPICE element |
 

@@ -33,13 +33,13 @@ bool hasSchema(const PrimData& prim, std::string_view schema) {
            prim.apiSchemas.end();
 }
 
-/// A pack's open-circuit voltage at its state of charge, and whether the curve is flat.
-std::pair<double, bool> packVoltage(const PrimAttributes& prim, double soc, double cells) {
+/// A pack's open-circuit voltage at its state of charge, and its curve when it is not flat.
+double packVoltage(const PrimAttributes& prim, double soc, double cells, CircuitPart& part) {
     const AttributeInfo* socs = find(prim, "elec:battery:ocvSoc");
     const AttributeInfo* volts = find(prim, "elec:battery:ocvVoltage");
     if (socs == nullptr || volts == nullptr || volts->numbers.empty() ||
         socs->numbers.size() != volts->numbers.size()) {
-        return {0.0, false};
+        return 0.0;
     }
     const std::vector<double>& x = socs->numbers;
     const std::vector<double>& y = volts->numbers;
@@ -52,7 +52,14 @@ std::pair<double, bool> packVoltage(const PrimAttributes& prim, double soc, doub
         const auto k = static_cast<std::size_t>(upper - x.begin());
         cell = y[k - 1] + (soc - x[k - 1]) / (x[k] - x[k - 1]) * (y[k] - y[k - 1]);
     }
-    return {cell * cells, *high > *low};
+    if (*high > *low) {
+        part.ocvSoc = x;
+        part.ocvVolts.clear();
+        for (const double v : y) {
+            part.ocvVolts.push_back(v * cells);
+        }
+    }
+    return cell * cells;
 }
 
 CircuitPart partOf(const SceneStatics& statics, const NetTerminal& terminal,
@@ -68,6 +75,8 @@ CircuitPart partOf(const SceneStatics& statics, const NetTerminal& terminal,
         part.kind = CircuitPart::Kind::Motor;
     } else if (hasSchema(prim, "ElectricalLoadAPI_1")) {
         part.kind = CircuitPart::Kind::PowerLoad;
+    } else if (hasSchema(prim, "ElectricalConverterAPI_1")) {
+        part.kind = CircuitPart::Kind::Converter;
     }
     if (attributes == nullptr) {
         return part;
@@ -79,9 +88,7 @@ CircuitPart partOf(const SceneStatics& statics, const NetTerminal& terminal,
             const double parallel = std::max(real(a, "elec:battery:parallelCells", 1.0), 1.0);
             const double scale = series / parallel;
             part.soc = real(a, "elec:battery:initialSoc", 1.0);
-            const auto [voltage, sloped] = packVoltage(a, part.soc, series);
-            part.voltage = voltage;
-            part.sloped = sloped;
+            part.voltage = packVoltage(a, part.soc, series, part);
             part.r0 = real(a, "elec:battery:r0") * scale;
             for (const AttributeInfo& attribute : a.attributes) {
                 if (attribute.name.starts_with("elec:port:") &&
@@ -133,6 +140,23 @@ CircuitPart partOf(const SceneStatics& statics, const NetTerminal& terminal,
             part.efficiency = real(a, "elec:gearEfficiency", 1.0);
             part.rotorInertia = real(a, "elec:rotorInertia");
             part.polePairs = static_cast<int>(real(a, "elec:polePairs", 1.0));
+            break;
+        }
+        case CircuitPart::Kind::Converter: {
+            part.outputVolts = real(a, "elec:conv:outputVoltage");
+            part.maxOutput = real(a, "elec:conv:maxOutputCurrent");
+            part.efficiency = real(a, "elec:conv:efficiency", 1.0);
+            // On its output net it names where it draws from; on its input net it is only a load.
+            if (terminal.isSource()) {
+                if (const AttributeInfo* input = find(a, "elec:conv:input");
+                    input != nullptr && !input->targets.empty()) {
+                    for (const ElectricalNet& net : statics.nets) {
+                        if (net.busPrim == input->targets[0]) {
+                            part.inputBus = net.name;
+                        }
+                    }
+                }
+            }
             break;
         }
         default:
@@ -251,6 +275,12 @@ std::string partValues(const CircuitPart& part) {
                 out = engineering(part.power, "W") + " constant";
             }
             break;
+        case CircuitPart::Kind::Converter:
+            if (part.outputVolts > 0.0) {
+                out =
+                    engineering(part.outputVolts, "V") + " · efficiency " + number(part.efficiency);
+            }
+            break;
         case CircuitPart::Kind::Motor:
             if (part.torqueConstant > 0.0) {
                 out = engineering(part.windingResistance, "Ω") + " · " +
@@ -279,6 +309,11 @@ std::string busValues(const CircuitBus& bus) {
 }
 
 double startVoltage(const CircuitBus& bus) {
+    for (const CircuitPart& part : bus.parts) {
+        if (part.kind == CircuitPart::Kind::Converter && !part.inputBus.empty()) {
+            return part.outputVolts;  // it regulates its output from the start
+        }
+    }
     double current = 0.0;
     double conductance = 0.0;
     for (const CircuitPart& part : bus.parts) {
@@ -310,7 +345,12 @@ std::vector<std::string> circuitProblems(const Circuit& circuit) {
             problems.push_back("bus " + bus.name + ": set undervoltage and a higher overvoltage");
         }
         for (const CircuitPart& part : bus.parts) {
-            claim(part.name);
+            // A converter is a terminal on both its buses; its input side is not a new name.
+            const bool inputSide =
+                part.kind == CircuitPart::Kind::Converter && part.inputBus.empty();
+            if (!inputSide) {
+                claim(part.name);
+            }
             const std::string what = part.name + ": ";
             switch (part.kind) {
                 case CircuitPart::Kind::Battery:
@@ -330,6 +370,18 @@ std::vector<std::string> circuitProblems(const Circuit& circuit) {
                 case CircuitPart::Kind::PowerLoad:
                     if (part.power <= 0.0) {
                         problems.push_back(what + "set its power");
+                    }
+                    break;
+                case CircuitPart::Kind::Converter:
+                    if (!inputSide) {
+                        fed = true;
+                        if (part.outputVolts <= 0.0 || part.maxOutput <= 0.0 ||
+                            part.efficiency <= 0.0 || part.efficiency > 1.0 ||
+                            part.inputBus == bus.name) {
+                            problems.push_back(what +
+                                               "set its voltage, max current, efficiency up to 1 "
+                                               "and another bus to draw from");
+                        }
                     }
                     break;
                 case CircuitPart::Kind::Motor:
@@ -369,10 +421,6 @@ std::string netlistOf(const Circuit& circuit, const std::string& title) {
             const std::string id = identifier(part.name);
             switch (part.kind) {
                 case CircuitPart::Kind::Battery: {
-                    if (part.sloped) {
-                        out << "* " << part.name
-                            << ": its voltage curve held at the charge it starts with\n";
-                    }
                     out << "V_" << id << " " << id << "_in 0 DC " << number(part.voltage) << "\n";
                     std::string at = id + "_in";
                     for (std::size_t i = 0; i < part.pairs.size(); ++i) {
@@ -386,8 +434,20 @@ std::string netlistOf(const Circuit& circuit, const std::string& title) {
                     out << "R_" << id << " " << at << " " << node << " " << number(part.r0) << "\n";
                     notes << "*lagrange battery V_" << id << " capacity=" << number(part.capacity)
                           << " cutoff=" << number(part.cutoff)
-                          << " max_charge=" << number(part.maxCharge) << " soc=" << number(part.soc)
-                          << "\n";
+                          << " max_charge=" << number(part.maxCharge)
+                          << " soc=" << number(part.soc);
+                    if (!part.ocvSoc.empty()) {
+                        const auto list = [&notes](const std::vector<double>& values) {
+                            for (std::size_t i = 0; i < values.size(); ++i) {
+                                notes << (i == 0 ? "" : ",") << number(values[i]);
+                            }
+                        };
+                        notes << " ocv_soc=";
+                        list(part.ocvSoc);
+                        notes << " ocv=";
+                        list(part.ocvVolts);
+                    }
+                    notes << "\n";
                     break;
                 }
                 case CircuitPart::Kind::Resistor:
@@ -397,6 +457,21 @@ std::string netlistOf(const Circuit& circuit, const std::string& title) {
                     out << "B_" << id << " " << node << " 0 I = " << number(part.power)
                         << " / max(V(" << node << "), 0.001) * ((V(" << node
                         << ") >= " << number(part.minVoltage) << ") ? 1 : 0)\n";
+                    break;
+                case CircuitPart::Kind::Converter:
+                    if (!part.inputBus.empty()) {
+                        const std::string in = nodeName(part.inputBus);
+                        out << "V_" << id << " " << node << " 0 DC " << number(part.outputVolts)
+                            << "\n"
+                            << "B_" << id << "_in " << in << " 0 I = -I(V_" << id << ") * "
+                            << number(part.outputVolts) << " / " << number(part.efficiency)
+                            << " / max(V(" << in << "), 0.001) * ((V(" << in
+                            << ") >= 0) ? 1 : 0)\n";
+                        notes << "*lagrange converter " << id << " source=V_" << id << " in=" << in
+                              << " max_current=" << number(part.maxOutput)
+                              << " efficiency=" << number(part.efficiency) << " input_sink=B_" << id
+                              << "_in\n";
+                    }
                     break;
                 case CircuitPart::Kind::Motor:
                     notes << "*lagrange motor " << part.joint << " node=" << node << " name=" << id

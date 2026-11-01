@@ -18,6 +18,8 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <optional>
@@ -611,6 +613,7 @@ private:
             layoutPath_ = context.configDirectory + "/schematic_layouts.tsv";
             layouts_ = loadSchematicLayouts(layoutPath_);
         }
+        configDirectory_ = context.configDirectory;
         if (context.scene) {
             stage_ = context.scene->statics->stagePath;
         }
@@ -641,12 +644,24 @@ private:
         }
         ImGui::EndDisabled();
         ImGui::SameLine(0.0F, gap);
-        // A netlist needs the component models; the viewer only has the topology.
-        ImGui::BeginDisabled(true);
-        widgets::Button("Export SPICE");
+        // Beside the viewer's other files, named after the stage.
+        const std::vector<std::string> problems = circuitProblems(state_->circuit);
+        ImGui::BeginDisabled(!problems.empty());
+        if (widgets::Button("Export SPICE")) {
+            exportSpice();
+        }
+        ImGui::EndDisabled();
+        if (!problems.empty()) {
+            ImGui::SetItemTooltip("%s", problems.front().c_str());
+        } else if (!exported_.empty()) {
+            ImGui::SetItemTooltip("%s", exported_.c_str());
+        }
         ImGui::SameLine(0.0F, gap);
+        // The model needs what the server has, over a command the protocol does not have yet.
+        ImGui::BeginDisabled(true);
         widgets::Button("Export Modelica");
         ImGui::EndDisabled();
+        ImGui::SetItemTooltip("lagrange export modelica --robot FILE");
         widgets::EndPanelTools();
     }
 
@@ -801,6 +816,16 @@ private:
         if (ImGui::IsItemDeactivated()) {
             saveLayouts();
         }
+    }
+
+    void exportSpice() {
+        const std::filesystem::path stage(stage_);
+        const std::filesystem::path file =
+            std::filesystem::path(configDirectory_) / (stage.stem().string() + ".cir");
+        std::ofstream out(file);
+        out << netlistOf(state_->circuit, stage_);
+        out.close();
+        exported_ = out ? "Wrote " + file.string() : "Could not write " + file.string();
     }
 
     void saveLayouts() const {
@@ -962,6 +987,8 @@ private:
     SchematicLayouts layouts_;
     std::string layoutPath_;
     std::string stage_;
+    std::string configDirectory_;
+    std::string exported_;
 };
 
 // --- Circuit --------------------------------------------------------------------------------
@@ -1025,7 +1052,7 @@ private:
     static std::string slopedNote(const Circuit& circuit) {
         for (const CircuitBus& bus : circuit.buses) {
             for (const CircuitPart& part : bus.parts) {
-                if (part.sloped) {
+                if (!part.ocvSoc.empty()) {
                     return "A battery's voltage is the one it starts at; it follows its charge in "
                            "the run.";
                 }

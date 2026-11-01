@@ -362,7 +362,10 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
                                         "): the exchange would be unstable. Use a physics dt "
                                         "below " +
                                         std::to_string(limit * tau * 1e3) + " ms" +
-                                        (predict_ ? "" : ", or turn speed_prediction on"));
+                                        (predict_ ? "" : ", or turn speed_prediction on") +
+                                        ", or give the motor its elec:rotorInertia (netlist: "
+                                        "rotor_inertia=), which a high gear makes the larger "
+                                        "part of what it turns");
                 continue;
             }
         }
