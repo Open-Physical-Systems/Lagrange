@@ -197,6 +197,8 @@ Packages:
 
 ## Examples
 
+The tutorials are in [`docs/guide/`](docs/guide), among them [a power system from a schematic](docs/guide/tutorial-power.md).
+
 [`examples/`](examples) has one ROS 2 package per use: your own robot, an arm, a power system from a schematic, a lidar, fog, a quadcopter, a car in the town, spawning robots, ros2_control and a C plugin. Each runs Lagrange through a launch file:
 
 ```bash

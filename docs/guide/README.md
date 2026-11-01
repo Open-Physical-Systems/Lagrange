@@ -4,6 +4,7 @@
 |---|---|
 | [Tutorial: an AMR in a warehouse](tutorial-amr.md) | Run, watch, drive over ROS 2, record, substitute a domain, add a module, Nav2. Start here |
 | [Tutorial: a quadcopter, from hover to a PX4 mission](tutorial-drone.md) | The sample quadcopter's files and site, hover, gusty wind, PX4 SITL in lockstep, a low battery |
+- [A robot's power system from a schematic](tutorial-power.md)
 | [Tutorial: weather, interference and radio links](tutorial-environment.md) | Fog and rain on the lidars, fog and wind fields (and wind from OpenFOAM), a power line next to a magnetometer, Wi-Fi through a wall |
 | [Tutorial: huge worlds](tutorial-huge-worlds.md) | A world streamed in tiles, the floating origin, robots far apart, a world built from an elevation model and OpenStreetMap |
 | [Tutorial: the sample arm with MoveIt 2](tutorial-arm.md) | A 6-DoF arm on a 48 V bus, MoveIt 2 pick-and-place, motor heating and derating |
