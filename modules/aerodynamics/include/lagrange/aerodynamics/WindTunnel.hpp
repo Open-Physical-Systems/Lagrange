@@ -23,6 +23,8 @@ struct WindTunnelOptions {
     double passes{3.0};            ///< How many times the air crosses the tunnel before averaging.
     double airDensity{1.2};        ///< kg/m³
     double viscosity{1.5e-5};      ///< m²/s
+    /// A rolling road under the robot's lowest point, as for a car; else free air around it.
+    bool ground{false};
 };
 
 struct LinkLoad {

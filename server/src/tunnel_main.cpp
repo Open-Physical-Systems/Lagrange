@@ -21,6 +21,8 @@ int main(int argc, char** argv) {
             options.maxCells = static_cast<std::size_t>(std::atof(argv[++i]));
         } else if (arg == "--passes" && more) {
             options.passes = std::atof(argv[++i]);
+        } else if (arg == "--ground") {
+            options.ground = true;
         } else if (arg == "--out" && more) {
             out = argv[++i];
         } else if (robot.empty() && !arg.starts_with("--")) {
@@ -33,7 +35,7 @@ int main(int argc, char** argv) {
     if (robot.empty()) {
         std::fprintf(stderr,
                      "usage: lagrange tunnel ROBOT [--speed M_S] [--yaw DEG] [--cells N] "
-                     "[--passes N] [--out DIR]\n");
+                     "[--passes N] [--ground] [--out DIR]\n");
         return 2;
     }
     auto model = lagrange::server::loadModel(robot);

@@ -58,6 +58,10 @@ void LbmTunnel::setSolid(std::size_t x, std::size_t y, std::size_t z, std::uint1
     }
 }
 
+void LbmTunnel::setRollingFloor(std::size_t x, std::size_t y, std::size_t z) {
+    solid_[index(x, y, z)] = kRollingFloor;
+}
+
 void LbmTunnel::setLatticeFlow(std::size_t cell, double density,
                                const std::array<double, 3>& velocity) {
     for (int i = 0; i < kQ; ++i) {
@@ -126,14 +130,20 @@ void LbmTunnel::stepOnce(std::vector<Load>& sum) {
                     }
                     const auto source = static_cast<std::size_t>(sx + nx * (sy + ny * sz));
                     const std::uint16_t solid = solid_[source];
-                    if (solid != kFluid) {
+                    if (solid == kRollingFloor) {
+                        // Bounce-back off a wall moving at the wind's speed (Ladd 1994).
+                        in[i] = f_[cell * kQ + kOpposite[i]] + 6.0 * kWeight[i] * kCx[i] * inletU;
+                    } else if (solid != kFluid) {
                         // Half-way bounce-back: what left here towards the solid comes back.
                         const double back = f_[cell * kQ + kOpposite[i]];
                         in[i] = back;
-                        // The solid takes twice that momentum along the way it was going.
-                        const double px = -kCx[i] * 2.0 * back;
-                        const double py = -kCy[i] * 2.0 * back;
-                        const double pz = -kCz[i] * 2.0 * back;
+                        // The solid takes twice that momentum along the way it was going. Less the
+                        // resting state's: a face pressed on the road has no air under it, and only
+                        // pressure above the inlet's is a force (gauge pressure).
+                        const double gauge = back - kWeight[i];
+                        const double px = -kCx[i] * 2.0 * gauge;
+                        const double py = -kCy[i] * 2.0 * gauge;
+                        const double pz = -kCz[i] * 2.0 * gauge;
                         Load& load = slab[solid];
                         load.force[0] += px;
                         load.force[1] += py;

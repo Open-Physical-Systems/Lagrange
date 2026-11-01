@@ -11,7 +11,7 @@ Or for your own robot, no launch file: `lagrange tunnel robot.urdf --speed 20`.
 
 It writes `report.json`, `flow.vti` for ParaView, `flow.nvdb` to use as wind in a run (`--weather ...,wind_field=flow.nvdb`) and `flow_view.usda`, the world you see.
 
-How far to trust it: the solver is lattice Boltzmann with an eddy viscosity, on a uniform grid, with no wall model and periodic sides, in free air with no ground. A shear wave decays at the exact rate, a cube reads Cd 1.03 against the measured 1.05, and a sphere at Re 20 to 50 reads about 25 % over the Schiller-Naumann curve on a 10-cell sphere. At a robot's Reynolds numbers it gives the size of the force and which shape or angle is better, not an engineering number.
+How far to trust it: the solver is lattice Boltzmann with an eddy viscosity, on a uniform grid, with no wall model and periodic sides, in free air, or over a rolling road with `--ground`. A shear wave decays at the exact rate, a cube reads Cd 1.03 against the measured 1.05, and a sphere at Re 20 to 50 reads about 25 % over the Schiller-Naumann curve on a 10-cell sphere. At a robot's Reynolds numbers it gives the size of the force and which shape or angle is better, not an engineering number.
 
 On the example's default 150,000 cells the arms are a cell thick, which reads high (Cd 2.1 here); give more `cells` to see it fall.
 

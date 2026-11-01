@@ -235,7 +235,7 @@ rotors' inflow. (NanoVDB wind grids drive link drag since v0.5:
 
 ## 10. Wind tunnel (fidelity `lbm`, offline)
 
-`lagrange tunnel` puts a robot's collision shapes in a uniform grid and runs air past them: D3Q19 lattice Boltzmann, BGK with a Smagorinsky eddy viscosity (Hou et al. 1996), half-way bounce-back, forces by momentum exchange, inlet at equilibrium, zero-gradient outlet, periodic sides. CPU, threaded by z slabs and bit-reproducible (invariant 7). Not yet: the GPU path this document plans, a moving box around a robot in a run, ground, a wall model, local refinement.
+`lagrange tunnel` puts a robot's collision shapes in a uniform grid and runs air past them: D3Q19 lattice Boltzmann, BGK with a Smagorinsky eddy viscosity (Hou et al. 1996), half-way bounce-back, forces by momentum exchange, inlet at equilibrium, zero-gradient outlet, periodic sides, and with `--ground` a rolling road under the lowest point (bounce-back off a moving wall, Ladd 1994), as a car is tested. CPU, threaded by z slabs and bit-reproducible (invariant 7). Not yet: the GPU path this document plans, a moving box around a robot in a run, a wall model, local refinement.
 
 What it is checked against (`test_lbm`): the exact decay of a shear wave within 1 %; a sphere at Re 20 and 50 on 10 cells across in a box of 40, 25 % over Schiller and Naumann, from blockage and the staircase surface (`DISABLED_ASpheresDragComesCloserWithAFinerGrid` for a finer grid); a plate and a cube face-on at high Reynolds number, 0.97 and 1.03 against Hoerner's 1.17 and 1.05. At high Reynolds numbers with no wall model, agreement on bluff bodies comes from their separating at sharp edges, and a streamlined body would not be right. No measured data of a robot exists (the project has none).
 

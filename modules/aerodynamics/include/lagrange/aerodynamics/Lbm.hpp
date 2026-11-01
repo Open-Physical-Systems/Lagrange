@@ -71,10 +71,15 @@ public:
     [[nodiscard]] std::array<double, 3> meanVelocity(std::size_t cell) const;  ///< m/s
     [[nodiscard]] double meanPressure(std::size_t cell) const;                 ///< Pa
 
+    /// Marks a cell as road moving with the wind, as a rolling road does: the air keeps its speed
+    /// at it, with no boundary layer of its own growing along it. It takes no load.
+    void setRollingFloor(std::size_t x, std::size_t y, std::size_t z);
+
     /// Whether anything has gone non-finite: the flow is too fast or the grid too coarse.
     [[nodiscard]] bool diverged() const;
 
     static constexpr std::uint16_t kFluid = 0xFFFF;
+    static constexpr std::uint16_t kRollingFloor = 0xFFFE;
 
 private:
     void stepOnce(std::vector<Load>& sum);

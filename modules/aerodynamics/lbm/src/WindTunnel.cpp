@@ -304,7 +304,9 @@ Expected<WindTunnelResult, std::string> runWindTunnel(const World& world,
     }
     const Vec3 span = minus(high, low);
     const double size = std::max({span[0], span[1], span[2]});
-    const Vec3 boxLow{low[0] - kAhead * size, low[1] - kSideways * size, low[2] - kSideways * size};
+    // With a road, the tunnel's floor is one cell's room below the lowest point (set below).
+    const Vec3 boxLow{low[0] - kAhead * size, low[1] - kSideways * size,
+                      options.ground ? low[2] - 0.02 * size : low[2] - kSideways * size};
     const Vec3 boxHigh{high[0] + kBehind * size, high[1] + kSideways * size,
                        high[2] + kSideways * size};
     const Vec3 box = minus(boxHigh, boxLow);
@@ -359,12 +361,23 @@ Expected<WindTunnelResult, std::string> runWindTunnel(const World& world,
             }
         }
     }
-    // Frontal area: the cells seen along the wind.
+    if (options.ground) {
+        for (std::size_t y = 0; y < config.ny; ++y) {
+            for (std::size_t x = 0; x < config.nx; ++x) {
+                tunnel.setRollingFloor(x, y, 0);
+            }
+        }
+    }
+    // Frontal area: the cells seen along the wind (the road is not part of it).
     std::size_t shadow = 0;
     for (std::size_t z = 0; z < config.nz; ++z) {
         for (std::size_t y = 0; y < config.ny; ++y) {
             for (std::size_t x = 0; x < config.nx; ++x) {
-                if (tunnel.isSolid(tunnel.index(x, y, z))) {
+                if (z > 0 && tunnel.isSolid(tunnel.index(x, y, z))) {
+                    ++shadow;
+                    break;
+                }
+                if (z == 0 && !options.ground && tunnel.isSolid(tunnel.index(x, y, z))) {
                     ++shadow;
                     break;
                 }
