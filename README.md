@@ -78,6 +78,20 @@ assets/humans/walker.usda`: people with a walk cycle who follow waypoints or wan
 robots, walls and each other. Lidars see their legs scissor. They are moved, not simulated:
 contact is one-way and nothing balances ([tutorial](docs/guide/tutorial-humans.md)).
 
+### Wind tunnel
+
+![The air's spin behind an Ahmed body, moving, in a slice through it](docs/imgs/wind-tunnel-wake.gif)
+
+`lagrange tunnel ROBOT` blows air past a robot's collision shapes with a lattice Boltzmann solver,
+on the GPU when there is one. It writes forces per link, ParaView and NanoVDB fields, a world of
+streamlines to open in the viewer, and, with `--frames`, pictures of the wake moving. `--study`
+says whether the grid still changes the answer, and `flow.nvdb` can blow on a robot in a run
+([videos](docs/videos/README.md)).
+
+Use it to see where the air goes, not for a drag number: on a 2M-cell grid an Ahmed body reads
+Cd 1.12 against a measured 0.298, and the grid study does not settle
+([what was checked](docs/design/domains/aerodynamics.md)). The sample cars collide as one box each.
+
 ## What it simulates
 
 | Robot class | Since | Sample | Highlights |
@@ -199,7 +213,7 @@ Packages:
 
 The tutorials are in [`docs/guide/`](docs/guide), among them [a power system from a schematic](docs/guide/tutorial-power.md).
 
-[`examples/`](examples) has one ROS 2 package per use: your own robot, an arm, a power system from a schematic, a lidar, fog, a quadcopter, a car in the town, spawning robots, ros2_control and a C plugin. Each runs Lagrange through a launch file:
+[`examples/`](examples) has one ROS 2 package per use: your own robot, an arm, a power system from a schematic, a lidar, fog, a quadcopter, a car in the town, spawning robots, ros2_control, a C plugin, learning, a trotting quadruped, a camera and a wind tunnel. Each runs Lagrange through a launch file:
 
 ```bash
 ros2 launch lagrange_example_diff_drive drive.launch.py
