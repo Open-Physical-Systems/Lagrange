@@ -48,7 +48,7 @@ packages run through launch files, and the C plugin path works without linking L
 | 4 | **Most models have no measured reference.** CLAUDE.md §10 asks for one "where possible"; `docs/validation/report.md` says sim against real "mostly does not exist" | Battery (LG HG2), rotor (NACA 640), WMM, ICAO; the rest closed-form or between engines | Large, needs recordings (Q16) |
 | 5 | **Common sensors missing.** No built-in force-torque, tactile, ultrasonic, event or thermal camera (MuJoCo gives `body/<b>/contact_force`) | IMU, lidar, camera, GNSS, magnetometer, barometer, radar, Custom by plugin | Small each, schema change each |
 | 6 | **Legged robots have no controller.** A class users ask for first after arms | `lagrange_example_quadruped` trots open loop; no balance control, no terrain or contact sensing | Medium |
-| 7 | **Electrical elements between buses.** A fuse, a relay or a real harness cannot be read from a schematic, and most real schematics have them | Averaged network of buses | Medium, needs an RFC for a nodal solver |
+| 7 | **Electrical elements between buses.** A fuse, a relay or a real harness cannot be read from a schematic, and most real schematics have them | Averaged network of buses | Medium; drafted as `rfcs/0010-electrical-nodes.md`, waiting on the owner |
 | 8 | **Tier 2 is thin.** Hardware ray-traced lidar is detected and not used; batched physics absent | Tier 1 BVH lidar, raster camera | Large |
 | 9 | **Regions are headless only.** No ROS or viewer, no robot moving between regions | `RegionHost` in one process | Large |
 | 10 | **Marine is buoyancy and drag.** No added mass, waves or currents; not Fossen as the plan says | `lagrange_hydrodynamics` | Medium |
@@ -65,6 +65,6 @@ importer.
 
 1, 2 (the wrapper over processes) and 3 were done the same night (#232, #233, #234), and 6 has a
 first example (#235). Next, 5 widens what the simulator can be used for. Ask the owner about 4, since recordings
-need hardware, and about 7 before writing its RFC. Leave GPU batched physics until someone needs
+need hardware, and about 7, whose draft RFC has questions for them. Leave GPU batched physics until someone needs
 thousands of environments: integrating MuJoCo Warp or similar is a project of its own, and its status
 has to be verified first (`TODO(verify)`).
