@@ -253,10 +253,10 @@ struct Bridge::Impl {
     struct Camera {
         std::string frame;  // "<sensor>_optical"
         std::string ns;     // "/<sensor>"
-        SignalId image, depth;
+        SignalId image, depth, instance;
         sensor_msgs::msg::CameraInfo info;
         SimTime sent{-1};
-        rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr color, depthImage;
+        rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr color, depthImage, instanceImage;
         rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr colorInfo, depthInfo;
     };
     struct Imu {
@@ -405,6 +405,7 @@ struct Bridge::Impl {
             if (old.ns == out.ns) {
                 out.color = old.color;
                 out.depthImage = old.depthImage;
+                out.instanceImage = old.instanceImage;
                 out.colorInfo = old.colorInfo;
                 out.depthInfo = old.depthInfo;
             }
@@ -416,6 +417,8 @@ struct Bridge::Impl {
                 node->create_publisher<sensor_msgs::msg::CameraInfo>(out.ns + "/camera_info", qos);
             out.depthImage =
                 node->create_publisher<sensor_msgs::msg::Image>(out.ns + "/depth/image_raw", qos);
+            out.instanceImage = node->create_publisher<sensor_msgs::msg::Image>(
+                out.ns + "/instance/image_raw", qos);
             out.depthInfo = node->create_publisher<sensor_msgs::msg::CameraInfo>(
                 out.ns + "/depth/camera_info", qos);
         }
@@ -459,6 +462,21 @@ struct Bridge::Impl {
             image.data.assign(in, in + depth->bytes.size());
             counters[camera.ns + "/depth/image_raw"].add(image.data.size() + 64);
             deliver(camera.ns + "/depth/image_raw", camera.depthImage, std::move(image));
+        }
+        // Which thing each pixel shows: the scene prim's index, -1 for none. The bytes are the
+        // r32u of the buffer; 0xFFFFFFFF reads as -1 in 32SC1, the nearest encoding ROS has.
+        const std::shared_ptr<const Buffer> instance = bus.buffer(bus.readBuffer(camera.instance));
+        if (instance && !instance->bytes.empty()) {
+            sensor_msgs::msg::Image image;
+            image.header = camera.info.header;
+            image.width = instance->width;
+            image.height = instance->height;
+            image.encoding = "32SC1";
+            image.step = instance->width * 4;
+            const auto* in = reinterpret_cast<const std::uint8_t*>(instance->bytes.data());
+            image.data.assign(in, in + instance->bytes.size());
+            counters[camera.ns + "/instance/image_raw"].add(image.data.size() + 64);
+            deliver(camera.ns + "/instance/image_raw", camera.instanceImage, std::move(image));
         }
     }
 
@@ -710,8 +728,8 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             }
             lidars.push_back(std::move(lidar));
         } else if (sensors.type[i] == SensorType::Camera) {
-            for (const char* topic :
-                 {"/camera_info", "/depth/camera_info", "/image_raw", "/depth/image_raw"}) {
+            for (const char* topic : {"/camera_info", "/depth/camera_info", "/image_raw",
+                                      "/depth/image_raw", "/instance/image_raw"}) {
                 timed(settings, "/" + name + topic);
             }
             cameras.push_back(s.camera(name, settings));
@@ -725,6 +743,7 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             mounts.transforms.push_back(optical);
             cameras.back().image = bus.find("sensor/" + name + "/image");
             cameras.back().depth = bus.find("sensor/" + name + "/depth");
+            cameras.back().instance = bus.find("sensor/" + name + "/instance");
         } else if (sensors.type[i] == SensorType::Gnss ||
                    sensors.type[i] == SensorType::Magnetometer ||
                    sensors.type[i] == SensorType::Barometer) {

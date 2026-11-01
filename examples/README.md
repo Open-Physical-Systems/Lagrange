@@ -17,6 +17,7 @@ ros2 launch lagrange_example_diff_drive drive.launch.py
 | [`lagrange_example_arm`](lagrange_example_arm) | An arm from a URDF | `--joint-control`, `/joint_commands`, `/joint_states` |
 | [`lagrange_example_power`](lagrange_example_power) | A power system from a schematic | `<lagrange><schematic>`, `--ros-topics`, `bus/dc/voltage` |
 | [`lagrange_example_lidar`](lagrange_example_lidar) | A simulated lidar | `/scan`, `lagrange_assets` |
+| [`lagrange_example_camera`](lagrange_example_camera) | A simulated camera | Colour, depth and instance images on ROS 2 |
 | [`lagrange_example_weather`](lagrange_example_weather) | Fog on a sensor | `--weather` |
 | [`lagrange_example_quadcopter`](lagrange_example_quadcopter) | A quadcopter | `--air-density`, `--geo-origin`, `/cmd_vel` |
 | [`lagrange_example_car`](lagrange_example_car) | A car in the town | `--spawn`, `--traffic`, `/cmd_vel` |
