@@ -13,6 +13,7 @@
   <depend>lagrange_core</depend>
   <depend>lagrange_fields</depend>
   <depend>tbb</depend>
+  <depend>lagrange_gpu</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
 

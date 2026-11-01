@@ -7,7 +7,7 @@ ros2 launch lagrange_example_wind_tunnel tunnel.launch.py speed:=15 yaw:=20
 ros2 launch lagrange_example_wind_tunnel tunnel.launch.py viewer:=false once:=true
 ```
 
-Or for your own robot, no launch file: `lagrange tunnel robot.urdf --speed 20`.
+Or for your own robot, no launch file: `lagrange tunnel robot.urdf --speed 20`. On a GPU it uses 4 million cells unless told, on the CPU 800,000. The sample sedan over a road, 2.5 million cells, takes 1.6 minutes on an RTX 4060 laptop GPU.
 
 It writes `report.json`, `flow.vti` for ParaView, `flow.nvdb` to use as wind in a run (`--weather ...,wind_field=flow.nvdb`) and `flow_view.usda`, the world you see.
 

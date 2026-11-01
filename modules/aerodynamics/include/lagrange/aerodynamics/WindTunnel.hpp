@@ -14,6 +14,10 @@
 #include <string>
 #include <vector>
 
+namespace lagrange::gpu {
+class Device;
+}
+
 namespace lagrange::aerodynamics {
 
 struct WindTunnelOptions {
@@ -25,6 +29,8 @@ struct WindTunnelOptions {
     double viscosity{1.5e-5};      ///< m²/s
     /// A rolling road under the robot's lowest point, as for a car; else free air around it.
     bool ground{false};
+    /// Where to step it: null for the CPU reference.
+    const gpu::Device* device{nullptr};
 };
 
 struct LinkLoad {

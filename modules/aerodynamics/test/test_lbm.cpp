@@ -3,11 +3,13 @@
 #include "lagrange/aerodynamics/Lbm.hpp"
 #include "lagrange/aerodynamics/WindTunnel.hpp"
 #include "lagrange/fields/Field.hpp"
+#include "lagrange/gpu/Device.hpp"
 
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <numbers>
+#include <string>
 
 #include <gtest/gtest.h>
 
@@ -162,6 +164,52 @@ TEST(Lbm, ARollingRoadLeavesTheWindAlone) {
         EXPECT_NEAR(u[0], 10.0, 1e-2) << z;
         EXPECT_NEAR(u[2], 0.0, 1e-2) << z;
     }
+}
+
+// The GPU kernel is the same update as the CPU reference: the same drag on the same plate, here on
+// whatever device is there (software Vulkan in CI).
+TEST(Lbm, TheGpuAgreesWithTheCpu) {
+    std::string error;
+    auto device = gpu::Device::create(gpu::DeviceDesc{}, error);
+    if (!device) {
+        GTEST_SKIP() << error;
+    }
+    LbmConfig config;
+    config.nx = 40;
+    config.ny = 24;
+    config.nz = 24;
+    config.cellSize = 0.02;
+    config.windSpeed = 5.0;
+    const auto run = [&config](const gpu::Device* on) {
+        LbmTunnel tunnel(config);
+        for (std::size_t z = 8; z < 16; ++z) {
+            for (std::size_t y = 8; y < 16; ++y) {
+                tunnel.setSolid(12, y, z, 0);
+            }
+        }
+        if (on != nullptr) {
+            tunnel.useGpu(*on);
+            EXPECT_TRUE(tunnel.onGpu());
+        }
+        tunnel.step(600);
+        std::array<double, 4> out{};
+        out[0] = tunnel.velocity(tunnel.index(30, 12, 12))[0];
+        out[1] = tunnel.velocity(tunnel.index(14, 10, 12))[0];
+        out[2] = tunnel.pressure(tunnel.index(11, 12, 12));
+        tunnel.startAveraging();
+        tunnel.step(200);
+        out[3] = tunnel.loads()[0].force[0];
+        return out;
+    };
+    const auto cpu = run(nullptr);
+    const auto gpu = run(device.get());
+    std::printf("cpu %.4f N, gpu %.4f N (a mean over samples, against over every step)\n", cpu[3],
+                gpu[3]);
+    // The same state, to what float adds up to over 600 steps.
+    EXPECT_NEAR(gpu[0], cpu[0], 1e-3 * std::abs(cpu[0]));
+    EXPECT_NEAR(gpu[1], cpu[1], 1e-3 * std::abs(cpu[1]));
+    EXPECT_NEAR(gpu[2], cpu[2], 1e-2 * std::abs(cpu[2]));
+    EXPECT_NEAR(gpu[3], cpu[3], 0.1 * std::abs(cpu[3]));
 }
 
 TEST(Lbm, TheSameRunGivesTheSameBits) {

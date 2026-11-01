@@ -1,15 +1,19 @@
 // lagrange tunnel ROBOT [--speed M_S] [--yaw DEG] [--cells N] [--out DIR]: air past a robot.
 #include "lagrange/aerodynamics/WindTunnel.hpp"
+#include "lagrange/gpu/Device.hpp"
 #include "lagrange/server/Robot.hpp"
 
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <string>
 
 int main(int argc, char** argv) {
     lagrange::aerodynamics::WindTunnelOptions options;
     std::string robot;
     std::string out = "tunnel";
+    bool useGpu = true;
+    bool cellsGiven = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         const bool more = i + 1 < argc;
@@ -19,8 +23,11 @@ int main(int argc, char** argv) {
             options.yawDegrees = std::atof(argv[++i]);
         } else if (arg == "--cells" && more) {
             options.maxCells = static_cast<std::size_t>(std::atof(argv[++i]));
+            cellsGiven = true;
         } else if (arg == "--passes" && more) {
             options.passes = std::atof(argv[++i]);
+        } else if (arg == "--cpu") {
+            useGpu = false;
         } else if (arg == "--ground") {
             options.ground = true;
         } else if (arg == "--out" && more) {
@@ -35,7 +42,7 @@ int main(int argc, char** argv) {
     if (robot.empty()) {
         std::fprintf(stderr,
                      "usage: lagrange tunnel ROBOT [--speed M_S] [--yaw DEG] [--cells N] "
-                     "[--passes N] [--ground] [--out DIR]\n");
+                     "[--passes N] [--ground] [--cpu] [--out DIR]\n");
         return 2;
     }
     auto model = lagrange::server::loadModel(robot);
@@ -43,6 +50,21 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "lagrange tunnel: %s\n", model.error().c_str());
         return 2;
     }
+    // On the GPU when there is a real one; a software device is slower than the CPU reference.
+    std::unique_ptr<lagrange::gpu::Device> device;
+    if (useGpu) {
+        std::string error;
+        lagrange::gpu::DeviceDesc desc;
+        device = lagrange::gpu::Device::create(desc, error);
+        if (device && device->info().isSoftware) {
+            device.reset();
+        }
+    }
+    options.device = device.get();
+    if (!cellsGiven && device) {
+        options.maxCells = 4000000;  // about 500 million cell updates a second on an RTX 4060
+    }
+    std::fprintf(stderr, "on %s\n", device ? device->info().name.c_str() : "the CPU");
     int last = -1;
     auto result =
         lagrange::aerodynamics::runWindTunnel(model->world, options, out, [&last](double share) {
