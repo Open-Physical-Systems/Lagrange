@@ -18,6 +18,19 @@ Headless, from Python, CPU lidar, 5 s of simulated time:
 So one AMR is fast enough to train on with processes in parallel, and a car in the town runs at about
 twice real time on one process. There is no batched path: nothing runs thousands of copies on one GPU.
 
+`lagrange.envs.ParallelEnvs`, steps of 20 ms per second in total:
+
+| Processes | Arm with no sensors | Sample arm with its wrist camera |
+|---|---|---|
+| 1 | 14,300 | 1,400 |
+| 2 | 25,500 | 2,000 |
+| 4 | 45,100 | 2,300 |
+| 8 | 28,600 | 2,400 |
+| 16 | 34,500 | 2,500 |
+
+Past 4 processes it does not rise: this laptop's other cores are slower and everything waits for the
+slowest each step. With a camera, rendering sets the limit however many processes there are.
+
 ## Where it is strong
 
 Multi-domain coupling is the wedge and it is real: electrical, thermal, weather, EMI and comms reach

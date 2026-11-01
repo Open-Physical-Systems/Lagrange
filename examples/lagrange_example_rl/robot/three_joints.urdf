@@ -1,0 +1,64 @@
+<?xml version="1.0"?>
+<!-- An arm with no "world" link, as CAD exports it. One chain of three or more driven joints:
+     Lagrange fixes its base where it starts. Sizes are illustrative. -->
+<robot name="three_joints">
+  <link name="base_link">
+    <inertial>
+      <mass value="5"/>
+      <inertia ixx="0.05" iyy="0.05" izz="0.05" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual><geometry><cylinder radius="0.08" length="0.1"/></geometry></visual>
+    <collision><geometry><cylinder radius="0.08" length="0.1"/></geometry></collision>
+  </link>
+  <link name="link_1">
+    <inertial>
+      <origin xyz="0 0 0.15"/>
+      <mass value="2"/>
+      <inertia ixx="0.03" iyy="0.03" izz="0.005" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual><origin xyz="0 0 0.15"/><geometry><cylinder radius="0.04" length="0.3"/></geometry></visual>
+    <collision><origin xyz="0 0 0.15"/><geometry><cylinder radius="0.04" length="0.3"/></geometry></collision>
+  </link>
+  <joint name="joint_1" type="revolute">
+    <parent link="base_link"/>
+    <child link="link_1"/>
+    <origin xyz="0 0 0.1"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-2.5" upper="2.5" effort="80" velocity="3"/>
+    <dynamics damping="0.5"/>
+  </joint>
+  <link name="link_2">
+    <inertial>
+      <origin xyz="0 0 0.2"/>
+      <mass value="2"/>
+      <inertia ixx="0.03" iyy="0.03" izz="0.005" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual><origin xyz="0 0 0.2"/><geometry><cylinder radius="0.04" length="0.4"/></geometry></visual>
+    <collision><origin xyz="0 0 0.2"/><geometry><cylinder radius="0.04" length="0.4"/></geometry></collision>
+  </link>
+  <joint name="joint_2" type="revolute">
+    <parent link="link_1"/>
+    <child link="link_2"/>
+    <origin xyz="0 0 0.3"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.5" upper="2.5" effort="80" velocity="3"/>
+    <dynamics damping="0.5"/>
+  </joint>
+  <link name="link_3">
+    <inertial>
+      <origin xyz="0 0 0.15"/>
+      <mass value="2"/>
+      <inertia ixx="0.03" iyy="0.03" izz="0.005" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual><origin xyz="0 0 0.15"/><geometry><cylinder radius="0.04" length="0.3"/></geometry></visual>
+    <collision><origin xyz="0 0 0.15"/><geometry><cylinder radius="0.04" length="0.3"/></geometry></collision>
+  </link>
+  <joint name="joint_3" type="revolute">
+    <parent link="link_2"/>
+    <child link="link_3"/>
+    <origin xyz="0 0 0.4"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.5" upper="2.5" effort="80" velocity="3"/>
+    <dynamics damping="0.5"/>
+  </joint>
+</robot>

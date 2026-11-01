@@ -118,6 +118,28 @@ public:
         return server_->commandJoint(joint, mode, value);
     }
 
+    [[nodiscard]] nb::bytes saveState() const {
+        auto state = server_->saveState();
+        if (!state) {
+            throw std::runtime_error(state.error().message);
+        }
+        return nb::bytes(reinterpret_cast<const char*>(state->data()), state->size());
+    }
+
+    void restoreState(const nb::bytes& state) {
+        const std::span<const std::byte> bytes(reinterpret_cast<const std::byte*>(state.c_str()),
+                                               state.size());
+        if (const lagrange::Status status = server_->restoreState(bytes); !status.ok()) {
+            throw std::runtime_error(status.message);
+        }
+    }
+
+    void setSite(const std::string& name, double value) {
+        if (const lagrange::Status status = server_->setSite(name, value); !status.ok()) {
+            throw std::runtime_error(status.message);
+        }
+    }
+
     [[nodiscard]] nb::list signals() const {
         nb::list out;
         for (const auto& signal : server_->signals()) {
@@ -211,6 +233,11 @@ NB_MODULE(_lagrange, m) {
             "joint"_a, "mode"_a, "value"_a,
             "With joint_control=True: hold a joint at this position, velocity or effort. False "
             "if it takes no such command.")
+        .def("save_state", &Simulation::saveState,
+             "The whole state as bytes: restore_state goes back to it and the run repeats.")
+        .def("restore_state", &Simulation::restoreState, "state"_a)
+        .def("set_site", &Simulation::setSite, "name"_a, "value"_a,
+             "Change a site parameter while running: gravity, wind_speed, temperature, ...")
         .def_prop_ro("time", &Simulation::time, "Simulated time (s).")
         .def("read", &Simulation::read, "name"_a,
              "Latest value of a signal (all its components). KeyError for an unknown name.")

@@ -164,3 +164,15 @@ def test_a_usd_chain_too_short_or_undriven_still_falls(tmp_path) -> None:
     sim = lagrange.Simulation(_usd_arm(tmp_path, 4, hinges_driven=False), world=None)
     sim.step_until(0.3)
     assert sim.read("body/link0/pose")[2] < 0.4
+
+
+def test_save_state_goes_back_and_repeats() -> None:
+    sim = lagrange.Simulation(lagrange.sample_robot(), world=None)
+    sim.step_until(0.2)
+    state = sim.save_state()
+    sim.step_until(0.5)
+    first = sim.state_hash()
+    sim.restore_state(state)
+    assert abs(sim.time - 0.2) < 1e-9
+    sim.step_until(0.5)
+    assert sim.state_hash() == first

@@ -22,6 +22,7 @@ if(BUILD_TESTING)
     find_package(ament_cmake_pytest REQUIRED)
     ament_add_pytest_test(test_lagrange test/test_lagrange.py TIMEOUT 120)
     ament_add_pytest_test(test_town test/test_town.py TIMEOUT 600)
+    ament_add_pytest_test(test_envs test/test_envs.py TIMEOUT 180)
     ament_add_pytest_test(test_electrical_check test/test_electrical_check.py TIMEOUT 120)
 endif()
 
