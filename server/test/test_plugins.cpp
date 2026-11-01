@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -206,6 +207,38 @@ TEST_F(Plugins, TheTofPluginMeasuresTheGround) {
     ASSERT_EQ(range.size(), 1U);
     EXPECT_NEAR(range[0], expected, 1e-6);
     EXPECT_EQ(server.read("sensor/front_tof/valid").at(0), 1.0);
+}
+
+// An ultrasonic sensor takes the nearest thing in its cone, and reads nothing inside its dead zone.
+TEST_F(Plugins, TheUltrasonicKindHasACone) {
+    const auto write = [](const char* name, double height) {
+        const auto file = std::filesystem::temp_directory_path() / name;
+        std::ofstream(file) << "<robot name='r'><link name='base_link'><inertial><mass value='5'/>"
+                               "<inertia ixx='1' iyy='1' izz='1' ixy='0' ixz='0' iyz='0'/>"
+                               "</inertial><collision><geometry><box size='0.4 0.4 0.2'/>"
+                               "</geometry></collision></link><gazebo reference='base_link'>"
+                               "<sensor name='sonar' type='ultrasonic'><pose>0.25 0 "
+                            << height
+                            << " 0 1.5708 0</pose><update_rate>50</update_rate><ultrasonic/>"
+                               "</sensor></gazebo></robot>";
+        return file.string();
+    };
+    const auto read = [&](const char* name, double height) {
+        ServerOptions options = amr({"lagrange_tof"});
+        options.robotPath = write(name, height);
+        options.overlayPath.clear();
+        Server server(options);
+        EXPECT_TRUE(server.load().ok());
+        EXPECT_TRUE(server.stepUntil(SimTime{1'000'000'000}).ok());
+        return std::array{server.read("sensor/sonar/range").at(0),
+                          server.read("sensor/sonar/valid").at(0)};
+    };
+    // The box's lowest face is on the ground, so its centre is 0.1 m up: 0.5 m above that.
+    const auto far = read("lagrange_sonar_far.urdf", 0.5);
+    EXPECT_EQ(far[1], 1.0);
+    EXPECT_NEAR(far[0], 0.6, 0.02);
+    const auto close = read("lagrange_sonar_close.urdf", 0.0);  // 0.1 m: inside the 0.2 m dead zone
+    EXPECT_EQ(close[1], 0.0);
 }
 
 // A plugin's sensor is delayed like any other, and what arrives is what was sampled then.

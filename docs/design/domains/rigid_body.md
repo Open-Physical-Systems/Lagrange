@@ -148,3 +148,5 @@ and a restore only when streamed tiles come or go.
 ## Contact force
 
 `body/<b>/contact_force` (N, in the world frame) is the sum of what touches a moving body pushes it with, read from each step's contacts, for force sensing and foot contact. On a robot at rest the bodies' forces add up to its weight (`test_contact_forces_on_a_robot_at_rest_carry_its_weight`). MuJoCo only: Jolt's contact listener gives no impulses per step, so its run has no such signal, and `contact/points` above is not built.
+
+`joint/<j>/reaction` (Wrench, world frame, linear then angular) is what the parent does to the child at the joint, including what its motor applies, as a force-torque sensor there reads it. Checked on a hinge holding a known weight (`test_a_joints_reaction_is_what_it_carries`). MuJoCo only.

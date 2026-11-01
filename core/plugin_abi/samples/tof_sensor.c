@@ -1,6 +1,8 @@
 /* lagrange_tof: a time-of-flight range sensor as a plugin in C99 (RFC 0008, the worked example of
- * docs/guide/writing-a-plugin.md). It implements every custom sensor of kind "tof", as a URDF
- * gives one:
+ * docs/guide/writing-a-plugin.md). It also implements kind "ultrasonic": a wide cone (fov 0.5 rad
+ * unless given) and a dead zone (range/min 0.2 m unless given), inside which it reads nothing, as a
+ * sonar's own ringing hides what is close. It implements every custom sensor of kind "tof", as a
+ * URDF gives one:
  *
  *     <gazebo reference="base_link">
  *       <sensor name="front_tof" type="tof">
@@ -120,7 +122,12 @@ static lagrange_status declare(void* p, const lagrange_world* world, const lagra
         tof* t;
         memset(&info, 0, sizeof info);
         info.struct_size = sizeof info;
-        if (!h->world_sensor(world, s, &info) || strcmp(info.kind, "tof") != 0) {
+        int ultrasonic;
+        if (!h->world_sensor(world, s, &info)) {
+            continue;
+        }
+        ultrasonic = strcmp(info.kind, "ultrasonic") == 0;
+        if (!ultrasonic && strcmp(info.kind, "tof") != 0) {
             continue;
         }
         if (self->count == MAX_SENSORS) {
@@ -134,9 +141,9 @@ static lagrange_status declare(void* p, const lagrange_world* world, const lagra
         t->body = info.body;
         memcpy(t->mount, info.pose_in_body, sizeof t->mount);
         memcpy(t->rest, body.rest_pose, sizeof t->rest);
-        t->min_range = param(h, world, s, "range/min", 0.02);
+        t->min_range = param(h, world, s, "range/min", ultrasonic ? 0.2 : 0.02);
         t->max_range = param(h, world, s, "range/max", 4.0);
-        t->fov = param(h, world, s, "fov", 0.0);
+        t->fov = param(h, world, s, "fov", ultrasonic ? 0.5 : 0.0);
         t->noise = param(h, world, s, "noise/stddev", 0.0);
         t->every =
             info.rate > 0.0 ? (uint32_t)floor(1e9 / (info.rate * (double)TOF_STEP_NS) + 0.5) : 1;
