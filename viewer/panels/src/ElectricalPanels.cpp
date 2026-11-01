@@ -8,6 +8,7 @@
 #include "lagrange/viewer/Circuit.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
+#include "lagrange/viewer/Picking.hpp"
 #include "lagrange/viewer/RenderOptions.hpp"
 #include "lagrange/viewer/SchematicLayout.hpp"
 #include "lagrange/viewer/Widgets.hpp"
@@ -1113,6 +1114,17 @@ public:
             "##overlay", available,
             ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
         camera(context, available);
+        // A click that was not a drag selects what is under it, as in the Viewport.
+        if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
+            ImGui::GetMouseDragDelta(ImGuiMouseButton_Left).x == 0.0F &&
+            ImGui::GetMouseDragDelta(ImGuiMouseButton_Left).y == 0.0F) {
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            const double aspect = static_cast<double>(available.x) / std::max(available.y, 1.0F);
+            context.selectedPrim = pickPrim(
+                *context.scene,
+                context.camera.ray((mouse.x - origin.x) / available.x * 2.0 - 1.0,
+                                   (mouse.y - origin.y) / available.y * 2.0 - 1.0, aspect));
+        }
         tint(context);
         wires(context, origin, available);
         if (electricalOff(context)) {

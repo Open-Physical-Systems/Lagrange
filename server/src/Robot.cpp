@@ -1036,15 +1036,19 @@ void renameRobot(Robot& robot, const std::string& name) {
     robot.name = name;
 }
 
-/// A URDF's power system: <lagrange><schematic file=".."/> and optional <battery source=..>,
-/// <bus node=..>, <motor joint=..> (formats.md §9.2), whose attributes are a netlist's *lagrange
-/// lines. Other URDF readers skip the unknown element.
+/// A robot file's power system: <lagrange><schematic file=".."/> and optional <battery source=..>,
+/// <bus node=..>, <motor joint=..>, <converter name=..> (formats.md §9.2), whose attributes are a
+/// netlist's *lagrange lines; under <robot> in a URDF, <model> in SDFormat. Other readers skip the
+/// unknown element.
 Expected<void, std::string> applyLagrangeBlock(Robot& robot, const std::string& path) {
     tinyxml2::XMLDocument document;
     if (document.LoadFile(path.c_str()) != tinyxml2::XML_SUCCESS) {
         return {};  // the URDF parser has said what is wrong with it
     }
     const tinyxml2::XMLElement* top = document.FirstChildElement("robot");
+    if (const tinyxml2::XMLElement* sdf = document.FirstChildElement("sdf"); sdf != nullptr) {
+        top = sdf->FirstChildElement("model");
+    }
     const tinyxml2::XMLElement* block =
         top != nullptr ? top->FirstChildElement("lagrange") : nullptr;
     if (block == nullptr) {
@@ -1259,8 +1263,15 @@ Expected<Robot, std::string> loadModel(const std::string& path, const LoadOption
             read.groundFriction = options.groundFriction;
             return placed(armFixed(stage::loadStage(path, read)), options.spawn);
         }
-        case importers::Format::Sdf:
-            return placed(armFixed(importers::importSdf(path, import)), options.spawn);
+        case importers::Format::Sdf: {
+            auto sdf = placed(armFixed(importers::importSdf(path, import)), options.spawn);
+            if (sdf) {
+                if (auto power = applyLagrangeBlock(*sdf, path); !power) {
+                    return Unexpected{power.error()};
+                }
+            }
+            return sdf;
+        }
         case importers::Format::Mjcf:
             return placed(importers::importMjcf(path, import), options.spawn);
         case importers::Format::Urdf:

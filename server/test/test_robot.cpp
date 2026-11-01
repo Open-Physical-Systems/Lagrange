@@ -87,6 +87,26 @@ TEST(LagrangeBlock, AUrdfNamesItsSchematicAndMotors) {
     std::filesystem::remove_all(dir);
 }
 
+TEST(LagrangeBlock, AnSdfModelNamesItsSchematicToo) {
+    const auto dir = std::filesystem::temp_directory_path() / "lagrange_block_sdf";
+    std::filesystem::create_directories(dir);
+    std::ofstream(dir / "p.cir")
+        << "t\nV_pack in 0 DC 24\nR_pack in dc 0.1\nR_lamp dc 0 12\n.end\n";
+    std::ofstream(dir / "r.sdf") << R"(<sdf version="1.9"><model name="r">
+      <link name="base"><inertial><mass>1</mass>
+        <inertia><ixx>1</ixx><iyy>1</iyy><izz>1</izz></inertia></inertial></link>
+      <lagrange>
+        <schematic file="p.cir"/>
+        <battery source="V_pack" capacity="3600" cutoff="18" max_charge="5"/>
+        <bus node="dc" undervoltage="16" overvoltage="30"/>
+      </lagrange>
+    </model></sdf>)";
+    auto robot = loadModel((dir / "r.sdf").string());
+    ASSERT_TRUE(robot) << robot.error();
+    EXPECT_EQ(WorldView(robot->world).instancesOf("BatteryAPI_1").size(), 1U);
+    std::filesystem::remove_all(dir);
+}
+
 TEST(JointLoads, AreTheWeightsMomentsAboutEachAxis) {
     // base -(vertical pan)- a -(horizontal hinge)- b, whose 3 kg centre is 0.5 m out sideways and
     // the 1 kg of a's own centre is on the hinge's height: 0.5 * 3 * g at the hinge.

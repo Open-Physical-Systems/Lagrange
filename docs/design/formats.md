@@ -1565,7 +1565,7 @@ The first line is the title, as in SPICE; analysis commands and `.control` block
 
 ### 9.2 A URDF that names its power system
 
-A `<lagrange>` block in a URDF gives the robot its power system with no `--overlay`; URDF readers such as urdfdom skip the unknown element, so the file stays valid for other tools:
+A `<lagrange>` block in a URDF (under `<robot>`), or an SDFormat file (under `<model>`), gives the robot its power system with no `--overlay`; URDF readers such as urdfdom skip the unknown element, so the file stays valid for other tools:
 
 ```xml
 <lagrange>
@@ -1576,7 +1576,7 @@ A `<lagrange>` block in a URDF gives the robot its power system with no `--overl
 </lagrange>
 ```
 
-The attributes are the keys of §9.1's `*lagrange` lines, which the netlist may hold instead; a mistake stops the load with its message. `lagrange_import` keeps the result in the USD it writes. Adding `--overlay` to a robot with a block is refused for anything it applies twice. Names and values cannot hold spaces. SDFormat and MJCF have no such block yet.
+The attributes are the keys of §9.1's `*lagrange` lines, which the netlist may hold instead; a mistake stops the load with its message. `lagrange_import` keeps the result in the USD it writes. Adding `--overlay` to a robot with a block is refused for anything it applies twice. Names and values cannot hold spaces. MJCF has no such block: its parser refuses elements it does not know, so use `--overlay`.
 
 **Meshes too large for the repository** (no file over 1 MB, CLAUDE.md §9) are fetched, not committed:
 `assets/external_assets.yaml` lists each file with its upstream repository, pinned commit,
