@@ -34,6 +34,14 @@ Each sensor has `ground_truth` (the substitute) and one or more physical levels.
 | `sensor_model` | Adds exposure (scene radiance → electrons with exposure time and gain), photon shot noise and read noise, quantisation to bit depth, lens distortion (plumb-bob or equidistant), vignetting, motion blur from per-pixel velocity, rolling shutter by rendering row bands at different times |
 | `rt` (Tier 2) | Ray-traced shadows and reflections for the above |
 
+**Colour look.** On a GPU a camera's colour comes from the viewport's realistic renderer: sun shadows,
+sky, materials, photo textures, water, and the season (`--camera-look realistic|simple`,
+`--camera-season`). A software device keeps the simple shading. Depth and instance ids are the same
+either way (`RasterLook` test in `test_raster`). It is drawn by eye, not calibrated: exposure and
+colour response are not those of any real camera, and rain and snow are in the picture only when the
+season says so, separately from the `--weather` fog veil. With the sedan and the full town on an Iris
+Xe the run went at about 1.3× real time, against 1.4× with the simple look.
+
 Status of `sensor_model` in v0.6 (`modules/sensors/include/lagrange/sensors/CameraModel.hpp`, CPU
 after the raster render, every tier with a Vulkan device): each part runs when
 `CameraSensorAPI_1` asks for it. Lens distortion (plumb_bob, equidistant) by remapping a wider

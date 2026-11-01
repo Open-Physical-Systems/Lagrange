@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace lagrange::viewer::v1 {
@@ -37,12 +36,7 @@ struct MaterialData {
     float metallic{0.0F};
     float roughness{0.5F};
     std::array<float, 3> emissive{0.0F, 0.0F, 0.0F};
-    /// What the realistic shader draws on it, from a word of its name; 0: nothing of its own.
-    float pattern{0.0F};
 };
-
-/// The pattern value (realistic.slang's surfacePattern) of a material named `name`.
-[[nodiscard]] float surfacePatternOf(std::string_view name);
 
 struct PrimData {
     std::uint32_t parent{kNone};

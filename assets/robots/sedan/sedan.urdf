@@ -138,7 +138,7 @@
   </link>
   <joint name="camera_mount" type="fixed">
     <parent link="base_link"/><child link="camera_link"/>
-    <origin xyz="0.8 0 0.85"/>
+    <origin xyz="0.95 0 0.85"/>
   </joint>
   <gazebo reference="lidar_link">
     <sensor name="roof_lidar" type="gpu_lidar">

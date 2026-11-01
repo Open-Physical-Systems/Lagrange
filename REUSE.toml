@@ -25,7 +25,7 @@ SPDX-FileCopyrightText = "NOAA National Centers for Environmental Information an
 SPDX-License-Identifier = "LicenseRef-USGov-PublicDomain"
 
 [[annotations]]
-path = ["viewer/assets/textures/**"]
+path = ["gpu/assets_textures/**"]
 precedence = "override"
 SPDX-FileCopyrightText = "ambientCG contributors"
 SPDX-License-Identifier = "CC0-1.0"

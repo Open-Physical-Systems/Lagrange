@@ -66,7 +66,7 @@ def Xform "sedan" (
             float physics:mass = 0.2
             quatf physics:principalAxes = (1, 0, 0, 0)
             quatd xformOp:orient = (1, 0, 0, 0)
-            double3 xformOp:translate = (0.8, 0, 0.8500000000000001)
+            double3 xformOp:translate = (0.95, 0, 0.8500000000000001)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
             def Camera "front_camera" (
@@ -360,7 +360,7 @@ def Xform "sedan" (
         {
             rel physics:body0 = </sedan/base_link>
             rel physics:body1 = </sedan/base_link/camera_link>
-            point3f physics:localPos0 = (0.8, 0, 0.85)
+            point3f physics:localPos0 = (0.95, 0, 0.85)
             point3f physics:localPos1 = (0, 0, 0)
             quatf physics:localRot0 = (1, 0, 0, 0)
             quatf physics:localRot1 = (1, 0, -0, 0)

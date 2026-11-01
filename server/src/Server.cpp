@@ -2379,7 +2379,8 @@ struct Server::Impl {
             return;
         }
         std::string reason;
-        cameraScene = sensors::createCameraScene(robot, options.gpu, reason);
+        cameraScene = sensors::createCameraScene(robot, options.gpu, reason,
+                                                 {options.cameraRealistic, options.cameraSeason});
         if (!cameraScene) {
             log(v1::LOG_LEVEL_WARN, "sensors",
                 "cameras need a Vulkan device and none is usable (" + reason +

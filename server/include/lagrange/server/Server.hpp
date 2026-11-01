@@ -136,7 +136,11 @@ struct ServerOptions {
     /// deterministic, the fastest for scans of tens of thousands of beams); Gpu on a hardware
     /// GPU's compute kernel (Tier 1), which makes the run non-deterministic.
     enum class Lidar : std::uint8_t { Auto, Cpu, Gpu } lidar{Lidar::Auto};
-    std::string gpu;  // Vulkan device for the lidar and cameras (index or part of its name)
+    // How cameras draw colour: the viewport's realistic renderer on a GPU, else the simple shading,
+    // which a software device always uses. Depth and instance id do not change.
+    bool cameraRealistic{true};
+    int cameraSeason{0};  // 0 summer, 1 fall, 2 winter, 3 rainy
+    std::string gpu;      // Vulkan device for the lidar and cameras (index or part of its name)
     /// Render cameras (on `gpu`, or a software device without one), which makes the run
     /// non-deterministic; false: cameras publish their ground truth (empty images), as for
     /// `lagrange determinism`.

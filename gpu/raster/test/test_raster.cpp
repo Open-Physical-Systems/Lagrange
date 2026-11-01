@@ -231,5 +231,56 @@ TEST_F(Raster, LargeWorldCoordinatesRenderAsAtTheOrigin) {
     EXPECT_LT(differing, near.instance.size() / 10'000);  // edge pixels at most
 }
 
+// The realistic look changes colour only: depth and instance ids are the same, sky and ground are
+// drawn, and with no GPU the camera keeps its simple shading (sensors.md).
+TEST(RasterLook, RealisticChangesColourOnly) {
+    const std::vector<float> positions{-50, -50, 0, 50, -50, 0, 50, 50, 0, -50, 50, 0};
+    const std::vector<float> normals{0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1};
+    const std::vector<std::uint32_t> indices{0, 1, 2, 0, 2, 3};
+    const std::vector<MeshSource> meshes{{positions, normals, indices}};
+    PinholeCamera camera;
+    camera.width = 320;
+    camera.height = 240;
+    camera.fx = camera.fy = 200.0;
+    camera.cx = 159.5;
+    camera.cy = 119.5;
+    camera.position = {0.0, 0.0, 2.0};
+    // Looking along +x: optical z = x, optical x = -y, optical y = -z.
+    camera.orientation = {0.5, -0.5, 0.5, -0.5};
+    RasterInstance floor;
+    floor.id = 7;
+    floor.pattern = 2.0F;  // asphalt
+    floor.roughness = 0.9F;
+    const std::vector<RasterInstance> instances{floor};
+    const auto render = [&](RasterLook look, bool& realistic, RasterImages& out) {
+        std::string error;
+        auto scene = RasterScene::create("", meshes, error, look);
+        ASSERT_TRUE(scene) << error;
+        realistic = scene->realistic();
+        RasterCamera renderer(scene, camera.width, camera.height);
+        renderer.render(instances, camera, out, 1.0);
+    };
+    RasterImages simple;
+    RasterImages realistic;
+    bool isSimple = true;
+    bool isRealistic = false;
+    render({}, isSimple, simple);
+    EXPECT_FALSE(isSimple);
+    render({.realistic = true}, isRealistic, realistic);
+    if (!isRealistic) {
+        GTEST_SKIP() << "a software device keeps the simple shading";
+    }
+    EXPECT_EQ(simple.instance, realistic.instance);
+    EXPECT_EQ(simple.depth, realistic.depth);
+    EXPECT_NE(simple.rgba, realistic.rgba);
+    const auto pixel = [&](std::uint32_t x, std::uint32_t y) {
+        return &realistic.rgba[4 * ((std::size_t{y} * camera.width) + x)];
+    };
+    const std::uint8_t* sky = pixel(160, 10);
+    const std::uint8_t* ground = pixel(160, 220);
+    EXPECT_GT(sky[2], sky[0]);                          // blue overhead
+    EXPECT_GT(sky[2] - sky[0], ground[2] - ground[0]);  // and bluer than the grey floor
+}
+
 }  // namespace
 }  // namespace lagrange::gpu

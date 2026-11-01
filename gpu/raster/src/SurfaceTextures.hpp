@@ -4,7 +4,7 @@
 #include <filesystem>
 #include <vector>
 
-namespace lagrange::viewer {
+namespace lagrange::gpu {
 
 /// Photographs of surfaces for the realistic view, one layer per kind, in the order of the layers
 /// that realistic.slang's imageSurface takes. Each layer is tightly packed RGBA8.
@@ -21,4 +21,4 @@ struct SurfaceTextures {
 /// Where the viewer's textures are: installed next to the program, else in the source tree.
 [[nodiscard]] std::filesystem::path surfaceTextureDirectory();
 
-}  // namespace lagrange::viewer
+}  // namespace lagrange::gpu

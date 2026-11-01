@@ -508,7 +508,7 @@ def main(argv: list[str]) -> int:
         if name not in SEASONS:
             sys.exit(f"lagrange: --season takes {', '.join(SEASONS)}, not '{name}'")
         del server_args[at : at + 2]
-        server_args += ["--weather", SEASONS[name]]
+        server_args += ["--weather", SEASONS[name], "--camera-season", name]
         viewer_args = ["--season", name, *viewer_args]
 
     # A sample by name, or a robot file and a world file as the first words.
