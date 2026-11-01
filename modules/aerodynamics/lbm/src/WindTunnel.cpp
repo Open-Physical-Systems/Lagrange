@@ -527,29 +527,29 @@ Expected<WindTunnelResult, std::string> runWindTunnel(const World& world,
         std::filesystem::create_directories(std::filesystem::path(outputDirectory) / "frames", ec);
     }
     for (std::size_t i = 0; i < kWindows; ++i) {
-        if (framesPerWindow > 0 && !outputDirectory.empty()) {
-            // Loads of a window from the last piece of it are as good: it is one mean among ten.
-            for (std::size_t f = 0; f < framesPerWindow; ++f) {
-                // The last frame of a window takes what division left over.
-                tunnel.step(f + 1 == framesPerWindow
-                                ? window - (framesPerWindow - 1) * (window / framesPerWindow)
-                                : window / framesPerWindow);
+        // A window's loads are the mean of its pieces, however many frames cut it up.
+        const std::size_t pieces =
+            framesPerWindow > 0 && !outputDirectory.empty() ? framesPerWindow : 1;
+        for (std::size_t f = 0; f < pieces; ++f) {
+            const std::size_t steps =
+                f + 1 == pieces ? window - (pieces - 1) * (window / pieces) : window / pieces;
+            tunnel.step(steps);
+            const double share = static_cast<double>(steps) / static_cast<double>(window);
+            for (std::size_t b = 0; b < mean.size(); ++b) {
+                windowDrag.at(i) += tunnel.loads()[b].force[0] * share;
+                for (std::size_t k = 0; k < 3; ++k) {
+                    mean[b].force.at(k) += tunnel.loads()[b].force.at(k) * share / kWindows;
+                    mean[b].torque.at(k) += tunnel.loads()[b].torque.at(k) * share / kWindows;
+                }
+            }
+            if (framesPerWindow > 0 && !outputDirectory.empty()) {
                 char name[32];
                 std::snprintf(name, sizeof(name), "%05zu.png", frame++);
                 writeSpinFrame(std::filesystem::path(outputDirectory) / "frames" / name, tunnel,
                                frameY, options.speed, size);
             }
-        } else {
-            tunnel.step(window);
         }
         done += window;
-        for (std::size_t b = 0; b < mean.size(); ++b) {
-            windowDrag.at(i) += tunnel.loads()[b].force[0];
-            for (std::size_t k = 0; k < 3; ++k) {
-                mean[b].force.at(k) += tunnel.loads()[b].force.at(k) / kWindows;
-                mean[b].torque.at(k) += tunnel.loads()[b].torque.at(k) / kWindows;
-            }
-        }
         if (progress) {
             progress(static_cast<double>(kChunks + i + 1) / (kChunks + 10));
         }
@@ -787,6 +787,24 @@ Expected<WindTunnelResult, std::string> runWindTunnel(const World& world,
     }
     report << "\n  }\n}\n";
     return result;
+}
+
+GridStudyVerdict gridStudyVerdict(const std::vector<GridStudyRow>& rows) {
+    GridStudyVerdict verdict;
+    if (rows.size() < 2 || rows.back().dragCoefficient == 0.0) {
+        return verdict;
+    }
+    const GridStudyRow& last = rows.back();
+    const double size = std::abs(last.dragCoefficient);
+    verdict.dragChange =
+        std::abs(last.dragCoefficient - rows[rows.size() - 2].dragCoefficient) / size;
+    verdict.dragMoves = last.dragSpread / size;
+    verdict.liftChange =
+        std::abs(last.liftCoefficient - rows[rows.size() - 2].liftCoefficient) / size;
+    verdict.settled = verdict.dragChange <= kGridSettledShare &&
+                      verdict.dragMoves <= kGridSettledShare &&
+                      verdict.liftChange <= kGridSettledShare;
+    return verdict;
 }
 
 }  // namespace lagrange::aerodynamics

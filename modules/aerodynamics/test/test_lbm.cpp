@@ -112,6 +112,38 @@ TEST(Lbm, DISABLED_ASpheresDragComesCloserWithAFinerGrid) {
     }
 }
 
+// A regression: frames once kept only each window's last piece of force.
+TEST(WindTunnel, FramesDoNotChangeTheForce) {
+    World world;
+    const BodyId body = world.addBody("cube", kWorldBody, Pose{}, 1.0, {}, {1, 1, 1, 0, 0, 0});
+    world.addCollider(body, ShapeType::Box, {0.25, 0.25, 0.25}, Pose{}, 1.0);
+    const auto out = std::filesystem::temp_directory_path() / "lagrange_tunnel_frames_test";
+    WindTunnelOptions options;
+    options.speed = 10.0;
+    options.maxCells = 20000;
+    options.passes = 1.0;
+    auto plain = runWindTunnel(world, options, out.string());
+    options.frames = 30;
+    auto framed = runWindTunnel(world, options, out.string());
+    ASSERT_TRUE(plain) << plain.error();
+    ASSERT_TRUE(framed) << framed.error();
+    EXPECT_NEAR(framed->dragCoefficient, plain->dragCoefficient, 1e-9);
+    EXPECT_NEAR(framed->dragSpread, plain->dragSpread, 1e-9);
+    std::filesystem::remove_all(out);
+}
+
+TEST(WindTunnel, AGridStudySaysWhenItIsNotSettled) {
+    EXPECT_FALSE(gridStudyVerdict({}).settled);
+    EXPECT_FALSE(gridStudyVerdict({{100, 1.0, 0.0, 0.0}}).settled);
+    const auto good =
+        gridStudyVerdict({{100, 1.5, 0.1, 0.0}, {200, 1.02, 0.01, 0.0}, {400, 1.0, 0.02, 0.0}});
+    EXPECT_TRUE(good.settled);
+    EXPECT_NEAR(good.dragChange, 0.02, 1e-12);
+    EXPECT_FALSE(gridStudyVerdict({{200, 1.5, 0.01, 0.0}, {400, 1.0, 0.01, 0.0}}).settled);  // grid
+    EXPECT_FALSE(gridStudyVerdict({{200, 1.0, 0.01, 0.0}, {400, 1.0, 0.2, 0.0}}).settled);   // time
+    EXPECT_FALSE(gridStudyVerdict({{200, 1.0, 0.01, 2.0}, {400, 1.0, 0.01, 0.3}}).settled);  // lift
+}
+
 // The whole tunnel on a cube in a URDF's shapes: what it writes, and a cube's size of drag.
 TEST(WindTunnel, ACubeGivesItsDragAndItsFiles) {
     World world;

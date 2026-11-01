@@ -246,15 +246,16 @@ The CPU path holds a symmetric body's flow exactly symmetric, in which a wake ma
 `--frames N` writes about N PNG files of a slice through the body while averaging, coloured by the air's spin, so the wake is seen moving. `flow.nvdb` as `--weather wind_field=` reaches a run: the sample quadcopter in the sedan's flow drifted 8 m in 10 s and tilted, where it held still without it (one run by hand, 2026-11-02).
 
 
-Known defect, seen in these frames: a checkerboard of about 1 to 2 % of the wind speed upstream of the body that does not decay over a run (sedan, 25 m/s). So the sedan's force is not settled: GPU at 1.5M cells gave Cd 1.35 with `--passes 2 --mean-passes 1` and Cd 3.73, moving by 1.07, with `--mean-passes 2`. Tried by hand on 2026-11-02, none adopted:
+Known defect, seen in these frames: a checkerboard of about 1 to 2 % of the wind speed upstream of the body that does not decay over a run (sedan, 25 m/s). An empty tunnel does not have it, and starting the wind gradually does not change it, so it comes from the body, not the start. Tried by hand on 2026-11-02, none adopted:
 
-| Change | Checkerboard | Cube (1.05) | Plate (1.17) | Sedan, CPU 300k |
-|---|---|---|---|---|
-| None | 44.8 | 1.03 | 0.97 | Cd 2.46, Cl 12.3 |
-| Regularized collision (Latt & Chopard 2006) | not measured | 1.44 | 0.85, test fails | Cd 3.97, Cl 109 (2 passes) |
-| Sponge, thin, outlet only | 44.5 to 46.2 | 1.03 | 0.97 | Cd 2.44 to 2.50, Cl 10.6 to 21.5 |
-| Sponge, both ends, 0.3 | 24.0 | 1.28 | 1.00 | Cd 1.85, Cl 8.5 |
-| Sponge plus viscosity floor 0.005 | 6.7 | 1.69 | 1.11 | Cd 2.50, Cl 4.0 |
-| Sponge plus viscosity floor 0.02 | 1.6 | not run | not run | Cd 5.12, Cl 4.8 |
+| Change | Checkerboard | Cube (1.05) | Plate (1.17) |
+|---|---|---|---|
+| None | 44.8 | 1.03 | 0.97 |
+| Regularized collision (Latt & Chopard 2006) | not measured | 1.44 | 0.85, test fails |
+| Sponge, thin, outlet only | 44.5 to 46.2 | 1.03 | 0.97 |
+| Sponge, both ends, 0.3 | 24.0 | 1.28 | 1.00 |
+| Sponge plus viscosity floor 0.005 | 6.7 | 1.69 | 1.11 |
 
-Checkerboard is the mean jump of red minus blue between neighbouring cells of a frame, out of 255, with spin colour as written by `--frames`. Damping removes it, and the more it does the further the cube moves from its measurement, so the cube's good number on the coarse grid may rest partly on the undamped flow. The outlet sponge does nothing to it, which points away from the outlet. The cause is not established.
+Checkerboard is the mean jump of red minus blue between neighbouring cells of a frame, out of 255, on the sedan at 300k cells on the CPU. Damping removes it, and the more it does the further the cube moves from its measurement, so the cube's good number on the coarse grid may rest partly on the undamped flow. Its effect on forces is not known. Sedan forces from those trials are left out: they were measured with `--frames`, which then kept only part of each window's force (fixed, `FramesDoNotChangeTheForce`).
+
+`--study` runs the air on a quarter, a half and all the cells and says whether Cd and Cl stopped changing (5 %, a rule of thumb). The sedan at 25 m/s over a road on the GPU, one run, 750k, 1.5M, 3M cells: Cd 1.82, 1.35, 1.31; Cl 11.9, 2.14, 0.34; NOT SETTLED, by lift. Settled would only mean that the grid stopped mattering: Cd 1.31 is far above a production car's, about 0.3, so without a wall model on these grids the number stays a bluff body's.
