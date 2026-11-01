@@ -224,7 +224,8 @@ Not yet: battery FMUs and the rotor inertia in Jolt.
 
 `tools/ci/check_electrical.py` draws simple circuits and works each out three ways, independently:
 a closed-form formula, ngspice on a netlist written by the script (not `lagrange export`), and a
-Lagrange run of a robot imported with `lagrange_import --overlay`. Lagrange must stay within 0.5 %
+Lagrange run of a robot imported with `lagrange_import --overlay`, once from an overlay file and
+once from the netlist (formats.md §9.1). Lagrange must stay within 0.5 %
 of the formula and ngspice within 0.1 %. It covers a resistive load, a constant-power load, an RC
 pair's transient, two batteries in parallel, the charge drained, and a PMSM or brushed motor
 turning a flywheel. It does not cover switching, thermal effects, a sloped voltage curve, trips,

@@ -1546,6 +1546,22 @@ robot keeps them in USD. Values are checked as the stage loader checks a stage, 
 problem is reported together. Overlays add schema instances; they do not yet create simulated
 sensors, so lidars on an MJCF robot still need USD for now.
 
+### 9.1 A SPICE netlist as an overlay
+
+`--overlay` also takes a netlist (`.cir`, `.sp`, `.spice`, `.net`, `.ckt`, `io/stage/src/Netlist.cpp`), so one file is the circuit for ngspice and the power system of a run. It becomes the same schemas an overlay file makes, at load. A netlist from KiCad comes through `kicad-cli sch export netlist --format spice`.
+
+| In the netlist | In the run |
+|---|---|
+| `V n 0 [DC] v` then a series chain to a node: resistors, resistor-capacitor pairs (at most two) | `BatteryAPI_1`, one cell of a flat voltage `v`; the plain resistors add up to `r0` |
+| The node a chain reaches, with the `C n 0 c` on it | `ElectricalBusAPI_1`, named after the node |
+| `R n 0 r` | `ElectricalLoadAPI_1` `resistive`, its power `V²/r` at the bus's start voltage |
+| `B n 0 I = P / max(V(n), e) [* ((V(n) >= m) ? 1 : 0)]` | `ElectricalLoadAPI_1` `constant_power` |
+| `*lagrange battery ELEMENT capacity= cutoff= max_charge= [soc=]` (C, V, A) | what SPICE cannot say about a battery; required |
+| `*lagrange bus NODE [undervoltage=] [overvoltage=]` (V) | the bus's trips |
+| `*lagrange motor JOINT node= r= l= kt= imax= [name=] [type=] [gear=] [efficiency=] [pole_pairs=] [rotor_inertia=]` | `ElectricalMotorAPI_1`, named `JOINT_motor` unless `name=`; a drive is not a SPICE element |
+
+The first line is the title, as in SPICE; analysis commands and `.control` blocks are ignored. Everything else is refused with its line, every problem together, and nothing is left out in silence: diodes, transistors, inductors, subcircuits, switches, controlled and current sources, `.param`, `.include`, `.model`, sources other than DC, and elements between two buses. So is a drive of `lagrange export spice` (`V(p_drive)`), so an exported netlist does not read back yet. The network still runs only for a robot with a motor. `tools/ci/check_electrical.py` runs every circuit through this route and through an overlay.
+
 **Meshes too large for the repository** (no file over 1 MB, CLAUDE.md §9) are fetched, not committed:
 `assets/external_assets.yaml` lists each file with its upstream repository, pinned commit,
 SHA-256 and licence, and `ros2 run lagrange_assets fetch_assets [ID...]` downloads them into

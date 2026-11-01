@@ -787,6 +787,130 @@ apply:
         << again.error();
 }
 
+TEST(Netlist, ABatteryRcPairLoadAndMotorBecomeSchemas) {
+    auto model = loadStage(writeText("netbot.usda", R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 10
+    }
+    def Xform "wheel" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 1
+    }
+    def PhysicsRevoluteJoint "Wheel_J" ( prepend apiSchemas = ["PhysicsDriveAPI:angular"] )
+    {
+        rel physics:body0 = </bot/base>
+        rel physics:body1 = </bot/wheel>
+        uniform token physics:axis = "Y"
+    }
+}
+)")
+                               .string());
+    ASSERT_TRUE(model) << model.error();
+    // The first line is a title, whatever it looks like. r0 is split in two on purpose.
+    const auto netlist = writeText("net.cir", R"(R1 this is the title
+V_pack in 0 DC 24
+R_a in x 50m
+R_b x y 50m ; two in series are one r0
+R_pair y DC 0.2
+C_pair y dc 2
++ IC=0
+C_bus dc 0 470u IC=24
+R_lamp dc 0 12
+B_pc dc 0 I = 30 / max(V(dc), 0.001) * ((V(dc) >= 18) ? 1 : 0)
+*lagrange battery V_pack capacity=3.6k cutoff=18 max_charge=5 soc=0.5
+*lagrange bus dc undervoltage=16 overvoltage=30
+*lagrange motor Wheel_J node=dc r=0.2 l=1m kt=0.05 imax=10 gear=20 efficiency=0.9 type=dc_brushed
+.tran 1m 1 uic
+.control
+run
+.endc
+.end
+)");
+    const auto applied = applyOverlay(*model, netlist.string());
+    ASSERT_TRUE(applied) << applied.error();
+    const World& w = model->world;
+    const WorldView view(w);
+    const SchemaInstance* battery = only(w, "BatteryAPI_1");
+    ASSERT_NE(battery, nullptr);
+    EXPECT_EQ(view.signalInstanceName(battery->prim), "pack");
+    EXPECT_DOUBLE_EQ(*battery->real("elec:battery:r0"), 0.1);
+    EXPECT_DOUBLE_EQ(*battery->real("elec:battery:r1"), 0.2);
+    EXPECT_DOUBLE_EQ(*battery->real("elec:battery:c1"), 2.0);
+    EXPECT_DOUBLE_EQ(*battery->real("elec:battery:capacity"), 3600.0);
+    EXPECT_DOUBLE_EQ(*battery->real("elec:battery:initialSoc"), 0.5);
+    const SchemaInstance* bus = only(w, "ElectricalBusAPI_1");
+    ASSERT_NE(bus, nullptr);
+    EXPECT_EQ(view.signalInstanceName(bus->prim), "dc");
+    EXPECT_DOUBLE_EQ(*bus->real("elec:bus:capacitance"), 470e-6);
+    EXPECT_DOUBLE_EQ(*bus->real("elec:bus:undervoltageTrip"), 16.0);
+    std::size_t loads = 0;
+    for (const SchemaInstance* load : view.instancesOf("ElectricalLoadAPI_1")) {
+        ++loads;
+        if (view.signalInstanceName(load->prim) == "lamp") {
+            EXPECT_EQ(load->token("elec:load:model"), "resistive");
+            EXPECT_DOUBLE_EQ(*load->real("elec:load:power"), 24.0 * 24.0 / 12.0);
+        } else {
+            EXPECT_EQ(load->token("elec:load:model"), "constant_power");
+            EXPECT_DOUBLE_EQ(*load->real("elec:load:power"), 30.0);
+            EXPECT_DOUBLE_EQ(*load->real("elec:load:minVoltage"), 18.0);
+        }
+    }
+    EXPECT_EQ(loads, 2U);
+    const SchemaInstance* motor = only(w, "ElectricalMotorAPI_1");
+    ASSERT_NE(motor, nullptr);
+    EXPECT_EQ(view.signalInstanceName(motor->prim), "Wheel_J_motor");
+    EXPECT_EQ(view.signalInstanceName(motor->rel("elec:joint")[0]), "Wheel_J");
+    EXPECT_DOUBLE_EQ(*motor->real("elec:gearRatio"), 20.0);
+}
+
+TEST(Netlist, RefusesWhatItCannotSimulateEveryProblemTogether) {
+    auto model = loadStage(writeText("netbad.usda", kPowered).string());
+    ASSERT_TRUE(model) << model.error();
+    const std::size_t instances = model->world.schemaInstances.size();
+    const auto netlist = writeText("bad.cir", R"(title
+V1 a 0 PULSE(0 12 0 1u)
+V2 in 0 12
+R2 in dc 0.1
+R3 dc other 1
+D1 dc 0 mydiode
+L1 dc 0 1m
+Xchip dc 0 regulator
+.include parts.lib
+C9 lonely 0 1u
+B2 dc 0 V = 5
+*lagrange motor spin node=dc r=1
+*lagrange gizmo a b=1
+)");
+    const auto applied = applyOverlay(*model, netlist.string());
+    ASSERT_FALSE(applied);
+    for (const char* expected :
+         {"only a DC voltage", "D1: a diode is not simulated", "L1: an inductor is not simulated",
+          "Xchip: a subcircuit is not simulated", ".include is not read", "constant-power",
+          "needs l=", "not battery, bus or motor", "line 3"}) {
+        EXPECT_NE(applied.error().find(expected), std::string::npos)
+            << expected << " in " << applied.error();
+    }
+    EXPECT_EQ(model->world.schemaInstances.size(), instances);
+}
+
+TEST(Netlist, ABatteryNeedsWhatSpiceCannotSay) {
+    auto model = loadStage(writeText("netcap.usda", kPowered).string());
+    ASSERT_TRUE(model) << model.error();
+    const auto applied = applyOverlay(
+        *model, writeText("nocap.cir", "t\nV1 in 0 12\nR1 in dc 0.1\nR2 dc 0 10\n.end\n").string());
+    ASSERT_FALSE(applied);
+    EXPECT_NE(applied.error().find("*lagrange battery V1 capacity="), std::string::npos)
+        << applied.error();
+}
+
 TEST(Overlay, RefusesMistakesTogetherAndLeavesTheModelAsItWas) {
     auto model = loadStage(writeText("powered.usda", kPowered).string());
     ASSERT_TRUE(model) << model.error();

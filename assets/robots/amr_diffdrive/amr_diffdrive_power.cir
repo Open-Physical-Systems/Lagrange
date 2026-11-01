@@ -1,0 +1,18 @@
+Sample AMR power system as a netlist: runs in ngspice, and in Lagrange with --overlay
+* lagrange_server --robot amr_diffdrive.urdf --overlay amr_diffdrive_power.cir
+* ngspice amr_diffdrive_power.cir gives V(dc) = 51.2 * 19.86 / (19.86 + 0.1) = 50.94 V.
+* Illustrative values, not a real product.
+V_pack in 0 DC 51.2
+R_pack in dc 0.1
+C_bus dc 0 4.7m IC=51.2
+R_lights dc 0 19.86
+*lagrange battery V_pack capacity=72000 cutoff=44.8 max_charge=10
+*lagrange bus dc undervoltage=42 overvoltage=60
+*lagrange motor left_wheel_joint node=dc r=0.12 l=0.31m kt=0.085 imax=8 gear=20 efficiency=0.92 pole_pairs=4
+*lagrange motor right_wheel_joint node=dc r=0.12 l=0.31m kt=0.085 imax=8 gear=20 efficiency=0.92 pole_pairs=4
+.tran 1m 0.2 uic
+.control
+run
+print v(dc)[length(v(dc))-1]
+.endc
+.end
