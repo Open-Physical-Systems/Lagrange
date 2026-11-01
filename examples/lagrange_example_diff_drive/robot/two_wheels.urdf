@@ -1,0 +1,52 @@
+<?xml version="1.0"?>
+<!-- The smallest robot Lagrange drives by /cmd_vel: a box on two wheels, with a ball at the front
+     and the back, 5 mm off the ground so that the wheels carry the weight, to keep it level. The <ros2_control> block says which joints are driven: two
+     wheel joints are its built-in drive. Sizes are illustrative. -->
+<robot name="two_wheels">
+  <link name="base_link">
+    <inertial>
+      <mass value="10"/>
+      <inertia ixx="0.15" iyy="0.3" izz="0.4" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual><geometry><box size="0.5 0.3 0.12"/></geometry></visual>
+    <collision><geometry><box size="0.5 0.3 0.12"/></geometry></collision>
+    <collision><origin xyz="0.2 0 -0.06"/><geometry><sphere radius="0.035"/></geometry></collision>
+    <collision><origin xyz="-0.2 0 -0.06"/><geometry><sphere radius="0.035"/></geometry></collision>
+  </link>
+  <gazebo reference="base_link"><mu1>0.05</mu1></gazebo>
+  <link name="left_wheel">
+    <inertial>
+      <mass value="1"/>
+      <inertia ixx="0.003" iyy="0.005" izz="0.003" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual><origin rpy="1.5708 0 0"/><geometry><cylinder radius="0.1" length="0.04"/></geometry></visual>
+    <collision><origin rpy="1.5708 0 0"/><geometry><cylinder radius="0.1" length="0.04"/></geometry></collision>
+  </link>
+  <joint name="left_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="left_wheel"/>
+    <origin xyz="0 0.18 0"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="10" velocity="20"/>
+  </joint>
+  <link name="right_wheel">
+    <inertial>
+      <mass value="1"/>
+      <inertia ixx="0.003" iyy="0.005" izz="0.003" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual><origin rpy="1.5708 0 0"/><geometry><cylinder radius="0.1" length="0.04"/></geometry></visual>
+    <collision><origin rpy="1.5708 0 0"/><geometry><cylinder radius="0.1" length="0.04"/></geometry></collision>
+  </link>
+  <joint name="right_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="right_wheel"/>
+    <origin xyz="0 -0.18 0"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="10" velocity="20"/>
+  </joint>
+  <ros2_control name="wheels" type="system">
+    <hardware><plugin>lagrange_ros2_control/LagrangeSystem</plugin></hardware>
+    <joint name="left_wheel_joint"><command_interface name="velocity"/></joint>
+    <joint name="right_wheel_joint"><command_interface name="velocity"/></joint>
+  </ros2_control>
+</robot>

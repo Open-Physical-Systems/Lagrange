@@ -195,6 +195,14 @@ Packages:
 | `lagrange_tutorial`, `lagrange_benchmarks` | `tests/` | The user guide's code; performance benchmarks |
 | `*_vendor` | `vendor/` | Pinned OpenUSD, Jolt, FMI Library, Dear ImGui and ImPlot |
 
+## Examples
+
+[`examples/`](examples) has one ROS 2 package per use: your own robot, an arm, a power system from a schematic, a lidar, fog, a quadcopter, a car in the town, spawning robots, ros2_control and a C plugin. Each runs Lagrange through a launch file:
+
+```bash
+ros2 launch lagrange_example_diff_drive drive.launch.py
+```
+
 ## Run the simulator
 
 ```bash
