@@ -409,9 +409,19 @@ Expected<WindTunnelResult, std::string> runWindTunnel(const World& world,
     }
     const Vec3 span = minus(high, low);
     const double size = std::max({span[0], span[1], span[2]});
-    // With a road, the tunnel's floor is one cell's room below the lowest point (set below).
+    // With a road, the bottom layer of cells is the road, its surface a cell above the box's floor
+    // (bounce-back is half-way between cell centres). The cell comes from the box, so from a box
+    // with no gap: the gap is small against the box and changes it little.
+    double clearance = options.clearance;
+    double firstCell = 0.0;
+    if (options.ground) {
+        firstCell =
+            std::cbrt((span[0] + (kAhead + kBehind) * size) * (span[1] + 2.0 * kSideways * size) *
+                      (span[2] + kSideways * size) / static_cast<double>(options.maxCells));
+        clearance = std::max(clearance, 2.0 * firstCell);
+    }
     const Vec3 boxLow{low[0] - kAhead * size, low[1] - kSideways * size,
-                      options.ground ? low[2] - 0.02 * size : low[2] - kSideways * size};
+                      options.ground ? low[2] - clearance - firstCell : low[2] - kSideways * size};
     const Vec3 boxHigh{high[0] + kBehind * size, high[1] + kSideways * size,
                        high[2] + kSideways * size};
     const Vec3 box = minus(boxHigh, boxLow);
@@ -556,6 +566,7 @@ Expected<WindTunnelResult, std::string> runWindTunnel(const World& world,
     }
 
     WindTunnelResult result;
+    result.clearance = options.ground ? clearance : 0.0;
     result.frontalArea = static_cast<double>(shadow) * cell * cell;
     result.dynamicPressure = 0.5 * options.airDensity * options.speed * options.speed;
     result.reynolds = options.speed * size / options.viscosity;

@@ -38,6 +38,8 @@ int main(int argc, char** argv) {
             options.meanPasses = std::atof(argv[++i]);
         } else if (arg == "--frames" && more) {
             options.frames = static_cast<std::size_t>(std::atof(argv[++i]));
+        } else if (arg == "--clearance" && more) {
+            options.clearance = std::atof(argv[++i]);
         } else if (arg == "--study") {
             study = true;
         } else if (arg == "--out" && more) {
@@ -52,7 +54,8 @@ int main(int argc, char** argv) {
     if (robot.empty()) {
         std::fprintf(stderr,
                      "usage: lagrange tunnel ROBOT [--speed M_S] [--yaw DEG] [--cells N] "
-                     "[--passes N] [--mean-passes N] [--ground] [--frames N] [--study] [--cpu] "
+                     "[--passes N] [--mean-passes N] [--ground] [--clearance M] [--frames N] "
+                     "[--study] [--cpu] "
                      "[--out DIR]\n");
         return 2;
     }
@@ -115,6 +118,10 @@ int main(int argc, char** argv) {
                 result->cellSize * 1000.0, result->steps);
     std::printf("frontal area %.4f m2, blockage %.1f %%\n", result->frontalArea,
                 result->blockage * 100.0);
+    if (options.ground) {
+        std::printf("road %.1f mm below its lowest point, %.1f cells\n", result->clearance * 1000.0,
+                    result->clearance / result->cellSize);
+    }
     std::printf("Cd %.3f (moves by %.3f as the wake sheds)   Cl %.3f   Cy %.3f\n",
                 result->dragCoefficient, result->dragSpread, result->liftCoefficient,
                 result->sideCoefficient);
