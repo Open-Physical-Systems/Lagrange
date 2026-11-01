@@ -115,6 +115,8 @@ struct PanelContext {
     bool canOpenFiles{false};
     bool openFileRequested{false};
 
+    /// A panel to bring in front of its tabs, by title; emptied once done. May be null.
+    std::string* focusPanel{nullptr};
     Workspace* workspace{nullptr};            ///< The workspace shown; never null in draw().
     ProfileSession* profileSession{nullptr};  ///< Profile being edited; never null in draw().
     ScopeSession* scopeSession{nullptr};      ///< What is plotted; never null in draw().

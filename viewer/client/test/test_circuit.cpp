@@ -95,6 +95,18 @@ TEST(Circuit, PacksAndLoadsBecomeWhatTheirNodesShow) {
     EXPECT_TRUE(circuitProblems(circuit).empty());
 }
 
+TEST(Circuit, AMotorNamesItsJointNotTheLinkItsRelationshipPointsAt) {
+    const Fixture f;
+    const Circuit circuit = circuitOf(
+        f.statics,
+        [&f](std::uint32_t prim) -> const PrimAttributes* {
+            const auto found = f.attributes.find(prim);
+            return found != f.attributes.end() ? &found->second : nullptr;
+        },
+        [](std::uint32_t) { return std::string("wheel_joint"); });
+    EXPECT_EQ(circuit.buses[0].parts[2].joint, "wheel_joint");
+}
+
 TEST(Circuit, APartWithoutAttributesYetShowsNoValues) {
     Fixture f;
     f.attributes.clear();

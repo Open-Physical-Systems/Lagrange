@@ -32,6 +32,17 @@ right 340 px : "Inspector" | "History"
 - Header: "Auto-layout", "Export SPICE" (ngspice netlist), "Export Modelica".
 - The 3D overlay tab tints wires and motors in the viewport by current.
 
+### Circuit (proposed; the owner asked for it, 2026-11-01)
+- A tab next to Schematic, not in the reference image. The same power system as a circuit
+  diagram: each bus is a yellow rail with a branch per component hanging down to a ground symbol,
+  batteries first, then the bus's capacitor, then what it feeds.
+- Symbols in `t1`: a battery (long plate positive) under a resistor for its r0, RC pairs side by
+  side, a capacitor, a resistor, a circled M for a motor, a circled P for a constant-power load.
+  Wires in the electrical colour, blue when the current is reversed. No animation.
+- Beside each branch in sans 600 its name, in mono its current, then its values one per line. Above
+  the rail in mono its name and voltage, then its limits.
+- Clicking a branch or bus selects that prim, as the Schematic does.
+
 ### Scopes (ImPlot; see Signals for the full engine)
 - Stacked plots sharing the X axis: `bus/dc_48v/voltage`, `motor/*/iq` (left and right),
   `battery/power`. Titles are right-aligned inside each plot.

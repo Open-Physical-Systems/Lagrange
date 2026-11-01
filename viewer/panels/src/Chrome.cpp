@@ -113,6 +113,7 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
             centre, ImGuiDir_Down, fraction(372.0F, size.y), nullptr, &centre);
         ImGui::DockBuilderDockWindow("Network", left);
         ImGui::DockBuilderDockWindow("Schematic", centre);
+        ImGui::DockBuilderDockWindow("Circuit", centre);
         ImGui::DockBuilderDockWindow("Scopes", scopes);
         ImGui::DockBuilderDockWindow("###InspectorElectrical", right);
     } else if (workspace == Workspace::Performance) {
@@ -861,6 +862,15 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
     }
     if (built && shown == Workspace::Domains) {
         ImGui::SetWindowFocus("Wiring");
+    }
+    if (built && shown == Workspace::Electrical) {
+        ImGui::SetWindowFocus("Schematic");
+    }
+    // A panel asked for on the command line, in front once it exists.
+    if (context.focusPanel != nullptr && !context.focusPanel->empty() &&
+        ImGui::FindWindowByName(context.focusPanel->c_str()) != nullptr) {
+        ImGui::SetWindowFocus(context.focusPanel->c_str());
+        context.focusPanel->clear();
     }
 }
 

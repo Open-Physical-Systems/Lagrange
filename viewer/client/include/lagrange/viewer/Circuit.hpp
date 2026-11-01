@@ -69,8 +69,13 @@ using AttributesOf = std::function<const PrimAttributes*(std::uint32_t)>;
 /// The prims whose attributes circuitOf reads.
 [[nodiscard]] std::vector<std::uint32_t> circuitPrims(const SceneStatics& statics);
 
+/// The name of the joint a prim stands for in the scene (a joint has no prim of its own: its
+/// relationships point at its moving link), or empty. From the signals named joint/<name>/...
+using JointOf = std::function<std::string(std::uint32_t)>;
+
 /// The circuit of a scene's nets. A prim without attributes yet is a part with no values.
-[[nodiscard]] Circuit circuitOf(const SceneStatics& statics, const AttributesOf& attributes);
+[[nodiscard]] Circuit circuitOf(const SceneStatics& statics, const AttributesOf& attributes,
+                                const JointOf& jointOf = {});
 
 /// "4.7 mF", "100 mΩ": a value with an SI prefix.
 [[nodiscard]] std::string engineering(double value, const char* unit);
