@@ -226,6 +226,17 @@ lagrange check robot.urdf [--overlay power.cir]
 
 For a robot fixed to the ground it lists each joint: the mass beyond it, the gravity torque at the pose the file starts in, the worst case with every link straight out sideways, its effort limit and what its motor can give. It exits with 1 when a joint cannot hold the robot where it starts. CAD exports often have masses far off, so an arm lying on the ground usually shows here first.
 
+## Splitting concave collision meshes
+
+A collision mesh collides as its convex hull, which fills in what is hollow. For a URDF:
+
+```bash
+lagrange bake robot.urdf            # writes robot_baked.urdf and robot_baked_collision/ beside it
+lagrange robot_baked.urdf
+```
+
+Each concave mesh becomes several `<collision>` elements, one per convex part (CoACD, `pip install coacd`). Your file is not changed. For a USD stage with mesh colliders, `collision_bake` does the same.
+
 ## Importing a robot
 
 `lagrange robot.urdf` needs no setup:

@@ -44,7 +44,7 @@ packages run through launch files, and the C plugin path works without linking L
 |---|---|---|---|
 | 1 | **Nothing tests the viewer's mouse.** Buttons, dragging and forms ship checked by screenshot only | Headless screenshots, no input | Small |
 | 2 | **No reinforcement-learning path.** Isaac Lab, MuJoCo Playground and others start here | One `Simulation`; no Gymnasium wrapper, no parallel environments, no domain randomization; the profile's `batch` key does nothing | Small for a wrapper over processes; very large for GPU batches |
-| 3 | **Concave collision meshes are hulls at import.** A hollow link blocks what should pass through it; `collision_bake` splits them but only works on USD by hand | CoACD bake tool | Medium |
+| 3 | **Concave collision meshes are hulls at import.** A hollow link blocks what should pass through it; `collision_bake` splits them only in USD, and the import had already made them hulls | CoACD bake tool | Medium |
 | 4 | **Most models have no measured reference.** CLAUDE.md §10 asks for one "where possible"; `docs/validation/report.md` says sim against real "mostly does not exist" | Battery (LG HG2), rotor (NACA 640), WMM, ICAO; the rest closed-form or between engines | Large, needs recordings (Q16) |
 | 5 | **Common sensors missing.** No built-in force-torque, tactile, ultrasonic, event or thermal camera; labels are rendered but go nowhere | IMU, lidar, camera, GNSS, magnetometer, barometer, radar, Custom by plugin | Small each, schema change each |
 | 6 | **Legged robots absent.** A class users ask for first after arms | No sample, no controller; only human gait | Medium |

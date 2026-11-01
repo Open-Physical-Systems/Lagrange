@@ -7,13 +7,23 @@ find_package(ament_cmake_python REQUIRED)
 find_package(lagrange_cmake REQUIRED)
 
 ament_python_install_package(${PROJECT_NAME})
-install(PROGRAMS scripts/collision_bake DESTINATION lib/${PROJECT_NAME})
+install(
+    PROGRAMS scripts/collision_bake scripts/bake_urdf
+    DESTINATION lib/${PROJECT_NAME}
+)
 
 if(BUILD_TESTING)
     find_package(ament_cmake_pytest REQUIRED)
     ament_add_pytest_test(
         test_bake
         test/test_bake.py
+        TIMEOUT 300
+        APPEND_ENV
+        PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    ament_add_pytest_test(
+        test_bake_urdf
+        test/test_bake_urdf.py
         TIMEOUT 300
         APPEND_ENV
         PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}

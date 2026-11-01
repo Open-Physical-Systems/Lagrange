@@ -370,11 +370,11 @@ private:
             if (isStatic) {
                 note("the collision mesh of link '" + link +
                      "' is concave and its hull would block what is inside it: it is skipped; "
-                     "split it with collision_bake");
+                     "`lagrange bake` splits it");
                 return;
             }
             note("the collision mesh of link '" + link +
-                 "' is concave: it collides as its convex hull; split it with collision_bake");
+                 "' is concave: it collides as its convex hull; `lagrange bake` splits it");
         }
         robot_.world.addHullCollider(body, std::move(*hull), pose, friction);
     }
