@@ -90,6 +90,28 @@ std::set<std::string> commandedJoints(const std::string& path) {
     return joints;
 }
 
+/// How many driven joints follow one another below `link`; -1 when they branch or one is passive.
+int drivenChainBelow(const urdf::ModelInterface& model, const urdf::Link& link) {
+    int below = 0;
+    for (const urdf::JointSharedPtr& joint : link.child_joints) {
+        const urdf::LinkConstSharedPtr child = model.getLink(joint->child_link_name);
+        if (!child) {
+            continue;
+        }
+        const int chain = drivenChainBelow(model, *child);
+        const bool movable = joint->type != urdf::Joint::FIXED;
+        if (chain < 0 || (movable && (!joint->limits || joint->limits->effort <= 0.0))) {
+            return -1;
+        }
+        const int here = chain + (movable ? 1 : 0);
+        if (here > 0 && below > 0) {
+            return -1;  // a branch: wheels, legs, rotors
+        }
+        below = std::max(below, here);
+    }
+    return below;
+}
+
 /// Lowest z of a collider in world coordinates, from its shape's support along -z.
 double lowestPoint(ShapeType shape, const std::array<double, 3>& size, const Pose& world) {
     const std::array<double, 9> r = matrix(world.orientation);
@@ -918,9 +940,20 @@ Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
     const std::uint32_t topPrim = builder.addPrim(std::move(top));
 
     // A root link named "world" is the ROS convention for something bolted to the ground.
-    const bool fixedBase = root->name == "world";
+    // So is a single chain of three or more driven joints, an arm: nothing on it could carry it
+    // around, and most arm URDFs leave out the "world" link.
+    constexpr int kArmJoints = 3;
+    const bool worldRoot = root->name == "world";
+    const bool arm = !worldRoot && drivenChainBelow(*model, *root) >= kArmJoints;
+    const bool fixedBase = worldRoot || arm;
     builder.setFixedBase(fixedBase);
-    if (fixedBase) {
+    if (arm) {
+        builder.addLink(*root, kWorldBody, topPrim, options.spawn, nullptr);
+        robot.world.bodies.poseInParent[firstBody] = options.spawn;
+        robot.notes.push_back("'" + model->getName() +
+                              "' is one chain of driven joints, an arm: its base is fixed where it "
+                              "starts (a root link named \"world\" says the same)");
+    } else if (worldRoot) {
         for (const urdf::JointSharedPtr& joint : root->child_joints) {
             const urdf::LinkConstSharedPtr link = model->getLink(joint->child_link_name);
             if (link) {

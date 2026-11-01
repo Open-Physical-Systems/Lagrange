@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -61,6 +62,8 @@ public:
 private:
     struct Joint {
         std::string name;
+        std::optional<double> hold;  // where it stays until told otherwise; empty: free
+        double stuck{0.0};           // s stopped at its limit, off target (only for a log line)
         SignalId position, velocity, inertia, torque;
         double limit{0.0};
         std::string mode{"torque"};  // what `torque` above commands: torque, velocity or voltage

@@ -25,6 +25,16 @@ double value(const Server& s, const std::string& name) {
     return s.read(name).at(0);
 }
 
+// A robot fixed to the ground stays up with nothing told to it, as servos hold.
+TEST(JointControl, AGroundedJointHoldsUntilTold) {
+    Server server(arm("mujoco"));
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{3'000'000'000}).ok());
+    EXPECT_NEAR(value(server, "joint/shoulder_to_forearm/position"), 0.0, 0.05);
+    EXPECT_NEAR(value(server, "joint/base_to_shoulder/position"), 0.0, 0.05);
+}
+
 // A plain URDF: position holds near the target against gravity, on either engine.
 TEST(JointControl, PositionReachesTheTargetOnAPlainUrdf) {
     for (const char* physics : {"mujoco", "jolt"}) {
