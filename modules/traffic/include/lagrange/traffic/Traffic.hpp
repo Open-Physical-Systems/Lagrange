@@ -138,8 +138,8 @@ struct Idm {
 /// for, and take a random successor at a lane's end (seeded per agent and decision); at the
 /// network's edge they come back in at the start of a free entry lane. Into a junction they
 /// wait while a junction lane that crosses or merges with theirs is taken, or while a vehicle
-/// nearer its own line is about to take one (first come, first served; no priority rules). No
-/// lane changes.
+/// nearer its own line is about to take one (first come, first served; no priority rules). On roads
+/// with several lanes each way they change lanes to get past something slow.
 /// Pedestrians walk their sidewalk at 1.34 m/s (Weidmann 1993), turn back at its ends, and keep
 /// away from each other and from the robot sideways by a social force (Helbing and Molnár 1995:
 /// A·exp(−d/B), A = 2 m/s², B = 0.3 m). On a world with crossings, walkers (HumanAPI_1 people named
@@ -184,7 +184,9 @@ private:
         double tyre{0.33};               // m, its wheels' radius
         double wheel{0.0};               // rad, how far they have turned
         bool braking{false};
-        int turning{0};  // +1 left, -1 right, 0 straight on
+        double changeWait{0.0};  // s until it may change lanes again
+        double sideRate{0.0};    // m/s toward the lane's middle after changing into it
+        int turning{0};          // +1 left, -1 right, 0 straight on
         SignalId wheelOut, brakeOut, leftOut, rightOut;
         SignalId poseCommand;
         Vec3 position{};
@@ -234,6 +236,9 @@ private:
     [[nodiscard]] Walk walkOf(int junction, double t) const;
     [[nodiscard]] const Controller* controllerOf(int junction) const;
     void writeLamps(SignalBus& bus, double t);
+    /// Moves a vehicle held up by a slower leader to a neighbouring lane if that is better and
+    /// safe (the safety criterion of MOBIL, Kesting, Treiber and Helbing 2007).
+    void considerLaneChange(Agent& a, std::size_t index, double gap, double leaderSpeed, double v0);
     void place(Agent& a);
     std::size_t choose(Agent& a, std::size_t agentIndex, const std::vector<std::size_t>& options);
     /// Brings a vehicle back in at the start of a free entry lane; false when none is free.
@@ -259,7 +264,9 @@ private:
     std::vector<SignalLamp> lamps_;
     std::vector<LampOut> lampOut_;
     std::vector<int> onCrossing_;  // per crossing: how many walkers are on it
-    SignalId crossingsOut_;
+    SignalId crossingsOut_, laneChangesOut_;
+    RoadLanes roads_;  // the same lanes as graph_, for finding neighbours
+    std::int64_t laneChanges_{0};
 };
 
 }  // namespace lagrange::traffic
