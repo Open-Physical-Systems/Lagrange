@@ -221,6 +221,111 @@ private:
     std::array<std::vector<Vec3>, kColours> bands_;
 };
 
+void appendBigEndian(std::vector<std::uint8_t>& out, std::uint32_t value) {
+    for (int shift = 24; shift >= 0; shift -= 8) {
+        out.push_back(static_cast<std::uint8_t>(value >> shift));
+    }
+}
+
+std::uint32_t crc32(const std::uint8_t* data, std::size_t size) {
+    std::uint32_t crc = 0xFFFFFFFFU;
+    for (std::size_t i = 0; i < size; ++i) {
+        crc ^= data[i];
+        for (int bit = 0; bit < 8; ++bit) {
+            crc = (crc >> 1) ^ (0xEDB88320U & (0U - (crc & 1U)));
+        }
+    }
+    return ~crc;
+}
+
+/// An RGB image as a PNG, its data stored rather than compressed: no library, and frames are read
+/// once by an encoder.
+void writePng(const std::filesystem::path& file, std::size_t width, std::size_t height,
+              const std::vector<std::uint8_t>& rgb) {
+    std::vector<std::uint8_t> raw;
+    raw.reserve((width * 3 + 1) * height);
+    for (std::size_t y = 0; y < height; ++y) {
+        raw.push_back(0);  // no filter
+        raw.insert(raw.end(), rgb.begin() + static_cast<std::ptrdiff_t>(y * width * 3),
+                   rgb.begin() + static_cast<std::ptrdiff_t>((y + 1) * width * 3));
+    }
+    std::vector<std::uint8_t> z{0x78, 0x01};
+    std::uint32_t a = 1;
+    std::uint32_t b = 0;
+    for (const std::uint8_t byte : raw) {
+        a = (a + byte) % 65521U;
+        b = (b + a) % 65521U;
+    }
+    constexpr std::size_t kBlock = 65535;
+    for (std::size_t at = 0; at < raw.size(); at += kBlock) {
+        const std::size_t n = std::min(kBlock, raw.size() - at);
+        z.push_back(at + n == raw.size() ? 1 : 0);
+        z.push_back(static_cast<std::uint8_t>(n));
+        z.push_back(static_cast<std::uint8_t>(n >> 8));
+        z.push_back(static_cast<std::uint8_t>(~n));
+        z.push_back(static_cast<std::uint8_t>((~n) >> 8));
+        z.insert(z.end(), raw.begin() + static_cast<std::ptrdiff_t>(at),
+                 raw.begin() + static_cast<std::ptrdiff_t>(at + n));
+    }
+    appendBigEndian(z, (b << 16) | a);
+    std::ofstream out(file, std::ios::binary);
+    out.write("\x89PNG\r\n\x1a\n", 8);
+    const auto chunk = [&out](const char* type, const std::vector<std::uint8_t>& body) {
+        std::vector<std::uint8_t> head;
+        appendBigEndian(head, static_cast<std::uint32_t>(body.size()));
+        out.write(reinterpret_cast<const char*>(head.data()), 4);
+        std::vector<std::uint8_t> checked(type, type + 4);
+        checked.insert(checked.end(), body.begin(), body.end());
+        out.write(reinterpret_cast<const char*>(checked.data()),
+                  static_cast<std::streamsize>(checked.size()));
+        std::vector<std::uint8_t> tail;
+        appendBigEndian(tail, crc32(checked.data(), checked.size()));
+        out.write(reinterpret_cast<const char*>(tail.data()), 4);
+    };
+    std::vector<std::uint8_t> header;
+    appendBigEndian(header, static_cast<std::uint32_t>(width));
+    appendBigEndian(header, static_cast<std::uint32_t>(height));
+    header.insert(header.end(), {8, 2, 0, 0, 0});  // 8 bits, RGB
+    chunk("IHDR", header);
+    chunk("IDAT", z);
+    chunk("IEND", {});
+}
+
+/// The air's spin about y in the slice at `y`: blue one way, red the other, the solid dark.
+void writeSpinFrame(const std::filesystem::path& file, const LbmTunnel& tunnel, std::size_t y,
+                    double speed, double size) {
+    const LbmConfig& c = tunnel.config();
+    constexpr std::size_t kScale = 3;
+    const std::size_t width = c.nx * kScale;
+    const std::size_t height = c.nz * kScale;
+    std::vector<std::uint8_t> rgb(width * height * 3);
+    const double scale = 0.25 * size / speed;  // a spin of 4 U / L fills the colour map
+    for (std::size_t z = 0; z < c.nz; ++z) {
+        for (std::size_t x = 0; x < c.nx; ++x) {
+            Vec3 colour{0.08, 0.08, 0.1};
+            const std::size_t cell = tunnel.index(x, y, z);
+            if (!tunnel.isSolid(cell) && x > 0 && x + 1 < c.nx && z > 0 && z + 1 < c.nz) {
+                const double dudz = (tunnel.velocity(tunnel.index(x, y, z + 1))[0] -
+                                     tunnel.velocity(tunnel.index(x, y, z - 1))[0]);
+                const double dwdx = (tunnel.velocity(tunnel.index(x + 1, y, z))[2] -
+                                     tunnel.velocity(tunnel.index(x - 1, y, z))[2]);
+                const double spin = (dudz - dwdx) / (2.0 * c.cellSize);
+                colour = diverging(0.5 + 0.5 * spin * scale);
+            }
+            for (std::size_t py = 0; py < kScale; ++py) {
+                for (std::size_t px = 0; px < kScale; ++px) {
+                    const std::size_t at =
+                        3 * ((height - 1 - (z * kScale + py)) * width + x * kScale + px);
+                    for (std::size_t k = 0; k < 3; ++k) {
+                        rgb[at + k] = static_cast<std::uint8_t>(colour.at(k) * 255.0);
+                    }
+                }
+            }
+        }
+    }
+    writePng(file, width, height, rgb);
+}
+
 /// ParaView's ImageData, the mean flow, with raw binary arrays appended.
 void writeVti(const std::filesystem::path& file, const LbmTunnel& tunnel, const Vec3& origin) {
     const LbmConfig& c = tunnel.config();
@@ -414,8 +519,29 @@ Expected<WindTunnelResult, std::string> runWindTunnel(const World& world,
     const auto window =
         static_cast<std::size_t>(options.meanPasses * static_cast<double>(pass) / kWindows);
     std::array<double, kWindows> windowDrag{};
+    const std::size_t framesPerWindow = options.frames / kWindows;
+    std::size_t frame = 0;
+    const auto frameY = static_cast<std::size_t>(((low[1] + high[1]) / 2.0 - boxLow[1]) / cell);
+    if (framesPerWindow > 0 && !outputDirectory.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(outputDirectory) / "frames", ec);
+    }
     for (std::size_t i = 0; i < kWindows; ++i) {
-        tunnel.step(window);
+        if (framesPerWindow > 0 && !outputDirectory.empty()) {
+            // Loads of a window from the last piece of it are as good: it is one mean among ten.
+            for (std::size_t f = 0; f < framesPerWindow; ++f) {
+                // The last frame of a window takes what division left over.
+                tunnel.step(f + 1 == framesPerWindow
+                                ? window - (framesPerWindow - 1) * (window / framesPerWindow)
+                                : window / framesPerWindow);
+                char name[32];
+                std::snprintf(name, sizeof(name), "%05zu.png", frame++);
+                writeSpinFrame(std::filesystem::path(outputDirectory) / "frames" / name, tunnel,
+                               frameY, options.speed, size);
+            }
+        } else {
+            tunnel.step(window);
+        }
         done += window;
         for (std::size_t b = 0; b < mean.size(); ++b) {
             windowDrag.at(i) += tunnel.loads()[b].force[0];

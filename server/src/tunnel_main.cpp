@@ -32,6 +32,8 @@ int main(int argc, char** argv) {
             options.ground = true;
         } else if (arg == "--mean-passes" && more) {
             options.meanPasses = std::atof(argv[++i]);
+        } else if (arg == "--frames" && more) {
+            options.frames = static_cast<std::size_t>(std::atof(argv[++i]));
         } else if (arg == "--out" && more) {
             out = argv[++i];
         } else if (robot.empty() && !arg.starts_with("--")) {
@@ -42,9 +44,10 @@ int main(int argc, char** argv) {
         }
     }
     if (robot.empty()) {
-        std::fprintf(stderr,
-                     "usage: lagrange tunnel ROBOT [--speed M_S] [--yaw DEG] [--cells N] "
-                     "[--passes N] [--mean-passes N] [--ground] [--cpu] [--out DIR]\n");
+        std::fprintf(
+            stderr,
+            "usage: lagrange tunnel ROBOT [--speed M_S] [--yaw DEG] [--cells N] "
+            "[--passes N] [--mean-passes N] [--ground] [--frames N] [--cpu] [--out DIR]\n");
         return 2;
     }
     auto model = lagrange::server::loadModel(robot);
@@ -100,7 +103,8 @@ int main(int argc, char** argv) {
         "engineering number: compare shapes and angles rather than trust the third digit.\n"
         "See the flow:     lagrange --robot none --world %s/flow_view.usda\n"
         "In ParaView:      %s/flow.vti\n"
-        "As wind in a run: --weather ...,wind_field=%s/flow.nvdb\n",
+        "As wind in a run: --weather ...,wind_field=%s/flow.nvdb\n"
+        "Wake pictures:    --frames 200 writes frames/*.png, one per moment\n",
         out.c_str(), out.c_str(), out.c_str());
     return 0;
 }
