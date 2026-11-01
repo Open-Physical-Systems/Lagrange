@@ -871,6 +871,64 @@ run
     EXPECT_DOUBLE_EQ(*motor->real("elec:gearRatio"), 20.0);
 }
 
+TEST(Netlist, ACurveAndAConverter) {
+    const char* const bot = R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 10
+    }
+}
+)";
+    auto model = loadStage(writeText("netconv.usda", bot).string());
+    ASSERT_TRUE(model) << model.error();
+    const auto netlist = writeText("conv.cir", R"(title
+V_pack in 0 DC 48
+R_pack in dc 0.05
+C_dc dc 0 1m
+V_rail rail 0 DC 12
+B_rail_in dc 0 I = -I(V_rail) * 12 / 0.9 / max(V(dc), 0.001)
+R_lamp rail 0 6
+*lagrange battery V_pack capacity=3600 cutoff=30 max_charge=5 soc=0.5 ocv_soc=0,1 ocv=44,52
+*lagrange bus dc undervoltage=25 overvoltage=60
+*lagrange bus rail undervoltage=9 overvoltage=15
+*lagrange converter dcdc source=V_rail in=dc max_current=5 efficiency=0.9 input_sink=B_rail_in
+.end
+)");
+    const auto applied = applyOverlay(*model, netlist.string());
+    ASSERT_TRUE(applied) << applied.error();
+    const SchemaInstance* converter = only(model->world, "ElectricalConverterAPI_1");
+    ASSERT_NE(converter, nullptr);
+    EXPECT_DOUBLE_EQ(*converter->real("elec:conv:outputVoltage"), 12.0);
+    EXPECT_DOUBLE_EQ(*converter->real("elec:conv:efficiency"), 0.9);
+    const SchemaInstance* battery = only(model->world, "BatteryAPI_1");
+    ASSERT_NE(battery, nullptr);
+    ASSERT_EQ(battery->realArray("elec:battery:ocvVoltage").size(), 2U);
+    EXPECT_DOUBLE_EQ(battery->realArray("elec:battery:ocvVoltage")[1], 52.0);
+    // The lamp hangs on the rail: its power is at 12 V.
+    const SchemaInstance* lamp = only(model->world, "ElectricalLoadAPI_1");
+    ASSERT_NE(lamp, nullptr);
+    EXPECT_DOUBLE_EQ(*lamp->real("elec:load:power"), 24.0);
+
+    auto again = loadStage(writeText("netcurve.usda", bot).string());
+    ASSERT_TRUE(again) << again.error();
+    const auto refused =
+        applyOverlay(*again, writeText("badcurve.cir",
+                                       "t\nV1 in 0 40\nR1 in dc 0.1\nR2 dc 0 10\n*lagrange "
+                                       "battery V1 capacity=1 cutoff=1 max_charge=1 soc=0.5 "
+                                       "ocv_soc=0,1 ocv=44,52\n*lagrange bus dc undervoltage=1 "
+                                       "overvoltage=99\n")
+                                 .string());
+    ASSERT_FALSE(refused);
+    EXPECT_NE(refused.error().find("its curve gives"), std::string::npos) << refused.error();
+}
+
 TEST(Netlist, RefusesWhatItCannotSimulateEveryProblemTogether) {
     auto model = loadStage(writeText("netbad.usda", kPowered).string());
     ASSERT_TRUE(model) << model.error();
@@ -894,7 +952,7 @@ B2 dc 0 V = 5
     for (const char* expected :
          {"only a DC voltage", "D1: a diode is not simulated", "L1: an inductor is not simulated",
           "Xchip: a subcircuit is not simulated", ".include is not read", "constant-power",
-          "needs l=", "not battery, bus or motor", "line 3"}) {
+          "needs l=", "not battery, bus, motor or converter", "line 3"}) {
         EXPECT_NE(applied.error().find(expected), std::string::npos)
             << expected << " in " << applied.error();
     }

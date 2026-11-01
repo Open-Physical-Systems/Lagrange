@@ -20,7 +20,8 @@ namespace lagrange::stage {
 
 namespace {
 
-constexpr std::size_t kMaxRcPairs = 2;  // the battery model's r1 c1 and r2 c2
+constexpr std::size_t kMaxRcPairs = 2;     // the battery model's r1 c1 and r2 c2
+constexpr double kCurveAgreement = 0.001;  // of the voltage: a source and its curve at its soc
 
 std::string lower(std::string text) {
     std::transform(text.begin(), text.end(), text.begin(),
@@ -148,6 +149,8 @@ struct Circuit {
     std::map<std::string, Directive> batteries;  // by lower-case element name
     std::map<std::string, Directive> buses;      // by node
     std::vector<Directive> motors;
+    std::vector<Directive> converters;
+    std::map<std::string, std::pair<int, std::string>> otherSinks;  // B sources, by lower-case name
 };
 
 class Problems {
@@ -209,10 +212,11 @@ void readElement(const std::string& text, int line, Circuit& c, Problems& proble
         const auto power = std::regex_match(low, m, form) ? number(m[3].str()) : std::nullopt;
         if (!power || m[1].str() != m[4].str() || !isGround(m[2].str()) ||
             (m[5].matched && m[5].str() != m[1].str())) {
-            problems.add(line,
-                         name +
-                             ": only a constant-power source is simulated: "
-                             "I = P / max(V(n), e), with an optional * ((V(n) >= m) ? 1 : 0)");
+            // A converter's input_sink may name it; known only after every line is read.
+            c.otherSinks[lower(name)] = {
+                line, name +
+                          ": only a constant-power source is simulated: "
+                          "I = P / max(V(n), e), with an optional * ((V(n) >= m) ? 1 : 0)"};
             return;
         }
         Sink sink;
@@ -269,7 +273,9 @@ void readElement(const std::string& text, int line, Circuit& c, Problems& proble
 void readDirective(const std::string& text, int line, Circuit& c, Problems& problems) {
     const std::vector<std::string> words = split(text);
     if (words.size() < 3) {
-        problems.add(line, "*lagrange needs: battery ELEMENT, bus NODE or motor JOINT, and values");
+        problems.add(line,
+                     "*lagrange needs: battery ELEMENT, bus NODE, motor JOINT or converter NAME, "
+                     "and values");
         return;
     }
     Directive d;
@@ -287,8 +293,11 @@ void readDirective(const std::string& text, int line, Circuit& c, Problems& prob
     } else if (kind == "motor") {
         d.plain.push_back(words[2]);  // joint names keep their case
         c.motors.push_back(std::move(d));
+    } else if (kind == "converter") {
+        d.plain.push_back(words[2]);
+        c.converters.push_back(std::move(d));
     } else {
-        problems.add(line, "*lagrange " + words[1] + ": not battery, bus or motor");
+        problems.add(line, "*lagrange " + words[1] + ": not battery, bus, motor or converter");
     }
 }
 
@@ -349,6 +358,33 @@ Circuit readCircuit(const std::string& text, Problems& problems) {
     return c;
 }
 
+/// "0,0.5,1" as numbers; nothing when one of them is not a number.
+std::optional<std::vector<double>> numbersOf(const std::string& text) {
+    std::vector<double> out;
+    std::istringstream in(text);
+    for (std::string item; std::getline(in, item, ',');) {
+        const auto value = number(item);
+        if (!value) {
+            return std::nullopt;
+        }
+        out.push_back(*value);
+    }
+    return out;
+}
+
+/// A curve's value at x, straight between its points.
+double curveAt(const std::vector<double>& x, const std::vector<double>& y, double at) {
+    if (at <= x.front()) {
+        return y.front();
+    }
+    for (std::size_t i = 1; i < x.size(); ++i) {
+        if (at <= x[i]) {
+            return y[i - 1] + (at - x[i - 1]) / (x[i] - x[i - 1]) * (y[i] - y[i - 1]);
+        }
+    }
+    return y.back();
+}
+
 struct Battery {
     const Element* source{nullptr};
     std::string bus;
@@ -358,10 +394,14 @@ struct Battery {
 
 /// Follows each source's series chain to the node it feeds, marking what it uses.
 std::vector<Battery> followChains(const Circuit& c, std::set<const Element*>& used,
-                                  const std::set<std::string>& attached, Problems& problems) {
+                                  const std::set<std::string>& attached,
+                                  const std::set<std::string>& converterSources,
+                                  Problems& problems) {
     std::set<std::string> sourceNodes;
     for (const Element& v : c.sources) {
-        sourceNodes.insert(v.a);
+        if (!converterSources.contains(lower(v.name))) {
+            sourceNodes.insert(v.a);
+        }
     }
     // A node's elements between two nodes, neither of them ground.
     const auto between = [&c, &used](const std::string& node) {
@@ -382,6 +422,9 @@ std::vector<Battery> followChains(const Circuit& c, std::set<const Element*>& us
     };
     std::vector<Battery> out;
     for (const Element& v : c.sources) {
+        if (converterSources.contains(lower(v.name))) {
+            continue;
+        }
         if (!isGround(v.b)) {
             problems.add(v.line, v.name + ": a battery's minus side must be ground, node 0");
             continue;
@@ -524,13 +567,64 @@ Expected<YAML::Node, std::string> overlayOfNetlist(const std::string& text,
     }
 
     std::set<const Element*> used;
-    const std::vector<Battery> batteries = followChains(c, used, attached, problems);
+    // Converters: the source that stands for one in ngspice, and what it draws there.
+    struct Converter {
+        const Directive* directive{nullptr};
+        const Element* source{nullptr};
+        std::string input;
+    };
+    std::vector<Converter> converters;
+    std::set<std::string> converterSources;
+    for (const Directive& d : c.converters) {
+        const std::string what = "converter " + d.plain[0];
+        refuseUnknownKeys(d, what, {"source", "in", "max_current", "efficiency", "input_sink"},
+                          problems);
+        const auto source = d.keys.find("source");
+        const auto in = d.keys.find("in");
+        if (source == d.keys.end() || in == d.keys.end()) {
+            problems.add(d.line, what +
+                                     " needs source= (the V element of its output) and in= "
+                                     "(the bus it draws from)");
+            continue;
+        }
+        const auto element =
+            std::find_if(c.sources.begin(), c.sources.end(),
+                         [&](const Element& v) { return lower(v.name) == lower(source->second); });
+        if (element == c.sources.end() || !isGround(element->b)) {
+            problems.add(d.line, what + ": source=" + source->second +
+                                     " must be a V element from its output to ground");
+            continue;
+        }
+        converterSources.insert(lower(source->second));
+        attached.insert(element->a);
+        attached.insert(lower(in->second));
+        converters.push_back({&d, &*element, lower(in->second)});
+        if (const auto sink = d.keys.find("input_sink"); sink != d.keys.end()) {
+            c.otherSinks.erase(lower(sink->second));
+        }
+    }
+    for (const auto& [name, problem] : c.otherSinks) {
+        problems.add(problem.first, problem.second);
+    }
+
+    const std::vector<Battery> batteries =
+        followChains(c, used, attached, converterSources, problems);
     if (c.sources.empty()) {
         problems.add("no voltage source: a netlist needs a battery to feed its bus");
     }
     std::set<std::string> buses;
     for (const Battery& b : batteries) {
         buses.insert(b.bus);
+    }
+    for (const Converter& converter : converters) {
+        buses.insert(converter.source->a);
+    }
+    for (const Converter& converter : converters) {
+        if (!buses.contains(converter.input)) {
+            problems.add(converter.directive->line,
+                         "converter " + converter.directive->plain[0] +
+                             ": no battery feeds its in=" + converter.input);
+        }
     }
     for (const std::vector<Element>* list : {&c.resistors, &c.capacitors}) {
         for (const Element& e : *list) {
@@ -554,7 +648,12 @@ Expected<YAML::Node, std::string> overlayOfNetlist(const std::string& text,
         sums[b.bus].first += b.source->value / b.r0;
         sums[b.bus].second += 1.0 / b.r0;
     }
-    const auto startVoltage = [&sums](const std::string& bus) {
+    const auto startVoltage = [&sums, &converters](const std::string& bus) {
+        for (const Converter& converter : converters) {
+            if (converter.source->a == bus) {
+                return converter.source->value;  // it regulates the bus from the start
+            }
+        }
         const auto& [current, conductance] = sums.at(bus);
         return current / conductance;
     };
@@ -619,7 +718,8 @@ Expected<YAML::Node, std::string> overlayOfNetlist(const std::string& text,
         }
         const Directive& d = directive->second;
         const std::string what = "battery " + v.name;
-        refuseUnknownKeys(d, what, {"capacity", "cutoff", "max_charge", "soc"}, problems);
+        refuseUnknownKeys(d, what, {"capacity", "cutoff", "max_charge", "soc", "ocv_soc", "ocv"},
+                          problems);
         const auto capacity = required(d, what, "capacity", "C", problems);
         const auto cutoff = required(d, what, "cutoff", "V", problems);
         const auto charge = required(d, what, "max_charge", "A", problems);
@@ -633,11 +733,40 @@ Expected<YAML::Node, std::string> overlayOfNetlist(const std::string& text,
         battery["elec:battery:seriesCells"] = 1;
         battery["elec:battery:capacity"] = *capacity;
         battery["elec:battery:initialSoc"] = soc.value_or(1.0);
-        // A DC source holds one voltage whatever the charge.
-        battery["elec:battery:ocvSoc"].push_back(0.0);
-        battery["elec:battery:ocvSoc"].push_back(1.0);
-        battery["elec:battery:ocvVoltage"].push_back(v.value);
-        battery["elec:battery:ocvVoltage"].push_back(v.value);
+        // A DC source holds one voltage whatever the charge, unless a curve says otherwise.
+        std::vector<double> curveSoc{0.0, 1.0};
+        std::vector<double> curveVolts{v.value, v.value};
+        const auto curveX = d.keys.find("ocv_soc");
+        const auto curveY = d.keys.find("ocv");
+        if ((curveX == d.keys.end()) != (curveY == d.keys.end())) {
+            problems.add(d.line, what + ": ocv_soc= and ocv= go together");
+        } else if (curveX != d.keys.end()) {
+            const auto x = numbersOf(curveX->second);
+            const auto y = numbersOf(curveY->second);
+            if (!x || !y || x->size() != y->size() || x->size() < 2 ||
+                !std::is_sorted(x->begin(), x->end())) {
+                problems.add(d.line, what +
+                                         ": ocv_soc= and ocv= need the same number of values, "
+                                         "with ocv_soc rising");
+            } else {
+                // The netlist's voltage and the curve must agree where the run starts, or
+                // ngspice and the run answer for different batteries.
+                const double start = curveAt(*x, *y, soc.value_or(1.0));
+                if (std::abs(start - v.value) > kCurveAgreement * v.value) {
+                    problems.add(v.line, v.name + " is " + std::to_string(v.value) +
+                                             " V but its curve gives " + std::to_string(start) +
+                                             " V at its soc");
+                }
+                curveSoc = *x;
+                curveVolts = *y;
+            }
+        }
+        for (const double value : curveSoc) {
+            battery["elec:battery:ocvSoc"].push_back(value);
+        }
+        for (const double value : curveVolts) {
+            battery["elec:battery:ocvVoltage"].push_back(value);
+        }
         battery["elec:battery:r0"] = b.r0;
         for (std::size_t i = 0; i < b.pairs.size(); ++i) {
             const std::string n = std::to_string(i + 1);
@@ -692,6 +821,30 @@ Expected<YAML::Node, std::string> overlayOfNetlist(const std::string& text,
             continue;
         }
         addLoad(s.element, s.element.a, "constant_power", s.element.value, s.minVoltage);
+    }
+
+    for (const Converter& converter : converters) {
+        const Directive& d = *converter.directive;
+        const std::string what = "converter " + d.plain[0];
+        const auto most = required(d, what, "max_current", "A", problems);
+        const auto efficiency = optionalValue(d, what, "efficiency", problems);
+        if (!most || !buses.contains(converter.input)) {
+            continue;
+        }
+        const std::string name = primName(d.plain[0], 'c');
+        claim(name, d.line);
+        YAML::Node schema;
+        schema["elec:conv:outputVoltage"] = converter.source->value;
+        schema["elec:conv:maxOutputCurrent"] = *most;
+        if (efficiency) {
+            schema["elec:conv:efficiency"] = *efficiency;
+        }
+        schema["elec:conv:input"] = powerPath(busName.at(converter.input));
+        schema["elec:conv:output"] = powerPath(busName.at(converter.source->a));
+        YAML::Node entry;
+        entry["create"] = powerPath(name);
+        entry["schemas"]["ElectricalConverterAPI_1"] = schema;
+        entries.push_back(entry);
     }
 
     for (const Directive& m : c.motors) {

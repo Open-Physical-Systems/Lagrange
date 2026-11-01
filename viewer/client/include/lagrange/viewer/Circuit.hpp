@@ -16,7 +16,7 @@
 namespace lagrange::viewer {
 
 struct CircuitPart {
-    enum class Kind : std::uint8_t { Battery, Resistor, PowerLoad, Motor, Other };
+    enum class Kind : std::uint8_t { Battery, Resistor, PowerLoad, Motor, Converter, Other };
     Kind kind{Kind::Other};
     std::string name;
     std::uint32_t prim{kNone};  ///< kNone in a part the editor added.
@@ -30,7 +30,8 @@ struct CircuitPart {
     double cutoff{0.0};                            ///< V
     double maxCharge{0.0};                         ///< A
     double soc{1.0};
-    bool sloped{false};  ///< Its voltage curve is not flat: `voltage` holds at the present charge.
+    std::vector<double> ocvSoc;    ///< Its voltage curve, for the pack; empty when flat.
+    std::vector<double> ocvVolts;  ///< V
 
     double resistance{0.0};  ///< Resistor: ohm
     double power{0.0};       ///< PowerLoad: W
@@ -47,6 +48,11 @@ struct CircuitPart {
     double efficiency{1.0};
     double rotorInertia{0.0};  ///< kg m²
     int polePairs{1};
+
+    // Converter: on its output bus it feeds, on its input bus it draws.
+    std::string inputBus;     ///< The bus it draws from; only on the output bus's part.
+    double outputVolts{0.0};  ///< V
+    double maxOutput{0.0};    ///< A
 };
 
 struct CircuitBus {

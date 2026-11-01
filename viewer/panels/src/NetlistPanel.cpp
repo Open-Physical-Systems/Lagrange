@@ -134,6 +134,19 @@ private:
             addPart(CircuitPart::Kind::Motor, "motor");
         }
         ImGui::SameLine();
+        if (widgets::Button("+ DC-DC")) {
+            addPart(CircuitPart::Kind::Converter, "dcdc");
+            // It feeds the selected bus, from the first other one until told.
+            CircuitBus& bus = draft_.buses[selected_->bus];
+            for (const CircuitBus& other : draft_.buses) {
+                if (other.name != bus.name) {
+                    bus.parts.back().inputBus = other.name;
+                    break;
+                }
+            }
+            bus.parts.back().efficiency = 0.9;
+        }
+        ImGui::SameLine();
         if (widgets::Button("Remove", widgets::ButtonKind::Ghost)) {
             remove();
         }
@@ -186,6 +199,16 @@ private:
             case CircuitPart::Kind::PowerLoad:
                 number("power", part.power, "W");
                 number("off below", part.minVoltage, "V");
+                break;
+            case CircuitPart::Kind::Converter:
+                if (part.inputBus.empty() && part.outputVolts > 0.0) {
+                    widgets::Caption("It draws here. Its values are on the bus it feeds.");
+                    break;
+                }
+                text("draws from", part.inputBus);
+                number("output", part.outputVolts, "V");
+                number("max current", part.maxOutput, "A");
+                number("efficiency", part.efficiency, "");
                 break;
             case CircuitPart::Kind::Motor:
                 text("joint", part.joint);

@@ -83,7 +83,8 @@ TEST(Circuit, PacksAndLoadsBecomeWhatTheirNodesShow) {
     const CircuitPart& pack = bus.parts[0];
     EXPECT_EQ(pack.kind, CircuitPart::Kind::Battery);
     EXPECT_DOUBLE_EQ(pack.voltage, 16.0 * 3.2);
-    EXPECT_TRUE(pack.sloped);
+    ASSERT_EQ(pack.ocvVolts.size(), 2U);
+    EXPECT_DOUBLE_EQ(pack.ocvVolts[1], 16.0 * 3.4);
     EXPECT_DOUBLE_EQ(pack.r0, 0.01 * 8.0 + 0.05);  // scaled by 16s2p, and its harness
     ASSERT_EQ(pack.pairs.size(), 1U);
     EXPECT_DOUBLE_EQ(pack.pairs[0].first, 0.16);
@@ -131,9 +132,47 @@ TEST(Circuit, TheNetlistHasEveryPartAndNoteOfTheCurve) {
     for (const char* expected :
          {"V_pack pack_in 0 DC 51.2", "R_pack_rc1", "R_pack ", "C_dc dc 0 0.0047", "R_lamp dc 0",
           "*lagrange battery V_pack capacity=72000", "*lagrange bus dc undervoltage=42",
-          "*lagrange motor wheel node=dc name=drive", "held at the charge", ".end"}) {
+          "*lagrange motor wheel node=dc name=drive", "ocv_soc=0,1 ocv=48,54.4", ".end"}) {
         EXPECT_NE(text.find(expected), std::string::npos) << expected << " in\n" << text;
     }
+}
+
+TEST(Circuit, AConverterIsWrittenOnceFromItsOutputBus) {
+    Circuit circuit;
+    CircuitBus high;
+    high.name = "dc";
+    high.undervoltage = 30.0;
+    high.overvoltage = 60.0;
+    CircuitPart pack;
+    pack.kind = CircuitPart::Kind::Battery;
+    pack.name = "pack";
+    pack.voltage = 48.0;
+    pack.r0 = 0.05;
+    pack.capacity = 1000.0;
+    pack.maxCharge = 5.0;
+    high.parts.push_back(pack);
+    CircuitPart in;
+    in.kind = CircuitPart::Kind::Converter;
+    in.name = "dcdc";
+    in.efficiency = 0.9;
+    high.parts.push_back(in);
+    CircuitBus rail;
+    rail.name = "rail";
+    rail.undervoltage = 9.0;
+    rail.overvoltage = 15.0;
+    CircuitPart out = in;
+    out.inputBus = "dc";
+    out.outputVolts = 12.0;
+    out.maxOutput = 5.0;
+    rail.parts.push_back(out);
+    EXPECT_DOUBLE_EQ(startVoltage(rail), 12.0);
+    circuit.buses = {high, rail};
+    EXPECT_TRUE(circuitProblems(circuit).empty());
+    const std::string text = netlistOf(circuit, "t");
+    EXPECT_NE(text.find("V_dcdc rail 0 DC 12"), std::string::npos) << text;
+    EXPECT_NE(text.find("*lagrange converter dcdc source=V_dcdc in=dc max_current=5"),
+              std::string::npos)
+        << text;
 }
 
 TEST(Circuit, ProblemsAreWhatTheImporterWouldRefuse) {
