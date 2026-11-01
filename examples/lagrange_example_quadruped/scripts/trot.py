@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stands the robot up and trots forward: feet on an ellipse, leg angles by inverse kinematics, sent
 as positions; Lagrange's joint loops hold them at 1 kHz. An illustration, not a locomotion
-controller: it has no balance feedback, and only the gait keeps it up."""
+controller: only its heading is fed back; no balance, and only the gait keeps it up."""
 
 import contextlib
 import math
@@ -20,6 +20,7 @@ HEIGHT = 0.28  # m from hip to foot
 STRIDE = 0.05  # m, half of it each way
 LIFT = 0.05  # m
 PERIOD = 0.4  # s
+HEADING_GAIN = 3.0  # share of the stride per radian off
 RISE_SECONDS = 1.5
 STAND_SECONDS = 3.0
 WALK_DISTANCE = 1.0  # m
@@ -47,9 +48,12 @@ class Trot(Node):
         self.start = None
         self.first_stamp = None
         self.next_log = 0.0
+        self.yaw = 0.0
 
     def on_odom(self, odom: Odometry) -> None:
         self.position = odom.pose.pose.position
+        q = odom.pose.pose.orientation
+        self.yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y**2 + q.z**2))
 
     def targets(self, t: float) -> dict[str, float]:
         out = {}
@@ -61,11 +65,14 @@ class Trot(Node):
             x, z = 0.0, height
             if walking:
                 phase = ((t - STAND_SECONDS) / PERIOD + PHASE[leg]) % 1.0
+                # Heading: longer strides on the side it has turned towards bring it back.
+                towards = 1.0 if leg.endswith("left") else -1.0
+                stride = STRIDE * (1.0 + towards * max(-0.8, min(0.8, HEADING_GAIN * self.yaw)))
                 if phase < 0.5:  # on the ground: the foot goes back under the body
-                    x = STRIDE * (1.0 - 4.0 * phase)
+                    x = stride * (1.0 - 4.0 * phase)
                 else:  # in the air: forward and up
                     swing = (phase - 0.5) * 2.0
-                    x = STRIDE * (2.0 * swing - 1.0)
+                    x = stride * (2.0 * swing - 1.0)
                     z = HEIGHT - LIFT * math.sin(math.pi * swing)
             thigh, knee = leg_angles(x, z)
             out[f"{leg}_hip_joint"] = 0.0
