@@ -218,6 +218,14 @@ cycle. `core/wrench_sum` adds up external forces on the
 bodies (none in this world). The
 sensors read body poses (and the IMU also twist and acceleration) at their own rates.
 
+## Checking a robot before running it
+
+```bash
+lagrange check robot.urdf [--overlay power.cir]
+```
+
+For a robot fixed to the ground it lists each joint: the mass beyond it, the gravity torque at the pose the file starts in, the worst case with every link straight out sideways, its effort limit and what its motor can give. It exits with 1 when a joint cannot hold the robot where it starts. CAD exports often have masses far off, so an arm lying on the ground usually shows here first.
+
 ## Importing a robot
 
 `lagrange robot.urdf` needs no setup:

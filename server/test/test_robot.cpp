@@ -5,6 +5,7 @@
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/server/DiffDrive.hpp"
 #include "lagrange/server/Robot.hpp"
+#include "lagrange/server/RobotCheck.hpp"
 #include "lagrange/server/SwerveDrive.hpp"
 #include "lagrange/stage/Stage.hpp"
 
@@ -84,6 +85,42 @@ TEST(LagrangeBlock, AUrdfNamesItsSchematicAndMotors) {
         EXPECT_NE(refused.error().find(expected), std::string::npos) << refused.error();
     }
     std::filesystem::remove_all(dir);
+}
+
+TEST(JointLoads, AreTheWeightsMomentsAboutEachAxis) {
+    // base -(vertical pan)- a -(horizontal hinge)- b, whose 3 kg centre is 0.5 m out sideways and
+    // the 1 kg of a's own centre is on the hinge's height: 0.5 * 3 * g at the hinge.
+    const auto file = std::filesystem::temp_directory_path() / "lagrange_loads.urdf";
+    std::ofstream(file) << R"(<robot name="r"><link name="world"/>
+      <joint name="m" type="fixed"><parent link="world"/><child link="base"/></joint>
+      <link name="base"><inertial><mass value="5"/>
+        <inertia ixx="1" iyy="1" izz="1" ixy="0" ixz="0" iyz="0"/></inertial></link>
+      <joint name="pan" type="revolute"><parent link="base"/><child link="a"/>
+        <origin xyz="0 0 0.2"/><axis xyz="0 0 1"/>
+        <limit lower="-1" upper="1" effort="100" velocity="1"/></joint>
+      <link name="a"><inertial><mass value="1"/>
+        <inertia ixx="1" iyy="1" izz="1" ixy="0" ixz="0" iyz="0"/></inertial></link>
+      <joint name="hinge" type="revolute"><parent link="a"/><child link="b"/>
+        <origin xyz="0 0 0.3"/><axis xyz="0 1 0"/>
+        <limit lower="-1" upper="1" effort="10" velocity="1"/></joint>
+      <link name="b"><inertial><origin xyz="0.5 0 0"/><mass value="3"/>
+        <inertia ixx="1" iyy="1" izz="1" ixy="0" ixz="0" iyz="0"/></inertial></link>
+    </robot>)";
+    auto robot = loadUrdf(file.string());
+    ASSERT_TRUE(robot) << robot.error();
+    const auto loads = jointLoads(robot->world);
+    ASSERT_EQ(loads.size(), 2U);
+    constexpr double kG = 9.80665;
+    EXPECT_EQ(loads[0].name, "pan");
+    EXPECT_NEAR(loads[0].massCarried, 4.0, 1e-9);
+    EXPECT_NEAR(loads[0].atRest, 0.0, 1e-9);  // a vertical axis carries no weight
+    EXPECT_NEAR(loads[0].worst, 0.0, 1e-9);   // and nothing above it tilts it
+    EXPECT_EQ(loads[1].name, "hinge");
+    EXPECT_NEAR(loads[1].massCarried, 3.0, 1e-9);
+    EXPECT_NEAR(loads[1].atRest, 0.5 * 3.0 * kG, 1e-6);
+    EXPECT_NEAR(loads[1].worst, 0.5 * 3.0 * kG, 1e-6);
+    EXPECT_DOUBLE_EQ(loads[1].effortLimit, 10.0);
+    std::filesystem::remove(file);
 }
 
 TEST(ArmUrdf, IsFixedToTheGroundAndNoSwerveBase) {
