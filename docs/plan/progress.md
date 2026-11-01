@@ -564,3 +564,5 @@ through unloaded libraries, has no project frames. Eleven of the twelve examples
 files report nothing. Not cleared: `ArmServerTest` (does not finish on software Vulkan in 120 s), and
 ros2_control, whose controller takes over 10 s to load under ASan so that its spawner gives up, in
 `test_arm` and `lagrange_example_ros2_control`. One run each, not a proof.
+
+TSan the same night (`tools/ci/tsan.supp`): the power, arm, plugin and quadruped examples through their launch files report nothing; the lidar example reported one data race inside libstdc++ with no frames kept, in one of two runs, not reproduced and not explained. `test_viewer_client`'s circuit tests report nothing. `test_server` was not run under TSan.
