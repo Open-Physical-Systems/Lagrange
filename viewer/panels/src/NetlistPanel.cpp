@@ -147,6 +147,18 @@ private:
             bus.parts.back().efficiency = 0.9;
         }
         ImGui::SameLine();
+        if (widgets::Button("+ Fuse")) {
+            addBranch("fuse");
+        }
+        ImGui::SameLine();
+        if (widgets::Button("+ Switch")) {
+            addBranch("switch");
+        }
+        ImGui::SameLine();
+        if (widgets::Button("+ Diode")) {
+            addBranch("diode");
+        }
+        ImGui::SameLine();
         if (widgets::Button("Remove", widgets::ButtonKind::Ghost)) {
             remove();
         }
@@ -199,6 +211,19 @@ private:
             case CircuitPart::Kind::PowerLoad:
                 number("power", part.power, "W");
                 number("off below", part.minVoltage, "V");
+                break;
+            case CircuitPart::Kind::Branch:
+                if (part.inputBus.empty()) {
+                    widgets::Caption("It leaves here. Its values are on the bus it feeds.");
+                    break;
+                }
+                text("from bus", part.inputBus);
+                number("resistance", part.resistance, "ohm");
+                if (part.branchKind == "fuse") {
+                    number("rating", part.i2t, "A2 s");
+                } else if (part.branchKind == "diode") {
+                    number("forward drop", part.forwardDrop, "V");
+                }
                 break;
             case CircuitPart::Kind::Converter:
                 if (part.inputBus.empty() && part.outputVolts > 0.0) {
@@ -286,6 +311,21 @@ private:
         part.name = uniqueName(base);
         bus.parts.push_back(std::move(part));
         select(CircuitPick{selected_->bus, bus.parts.size() - 1});
+    }
+
+    /// A part between buses, on the selected bus, from the first other one until told.
+    void addBranch(const char* kind) {
+        addPart(CircuitPart::Kind::Branch, kind);
+        CircuitBus& bus = draft_.buses[selected_->bus];
+        CircuitPart& part = bus.parts.back();
+        part.branchKind = kind;
+        part.detail = kind;
+        for (const CircuitBus& other : draft_.buses) {
+            if (other.name != bus.name) {
+                part.inputBus = other.name;
+                break;
+            }
+        }
     }
 
     void remove() {

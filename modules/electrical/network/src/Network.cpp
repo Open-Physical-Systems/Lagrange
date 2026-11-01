@@ -15,6 +15,8 @@ using namespace literals;
 
 namespace {
 
+constexpr double kDiodeOnMargin = 1e-9;  // V past its drop before an off diode turns on
+
 constexpr std::string_view kSource = "electrical/averaged_network";
 constexpr double kAmbientK = 298.15;  // K: the temperature inputs' default (25 °C), as the schemas'
                                       // referenceTemperature fallback
@@ -377,12 +379,13 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
         load.name = name(s->prim);
         const auto power = s->real("elec:load:power");
         const std::string_view model = s->token("elec:load:model").value_or("constant_power");
-        if (!power) {
+        load.resistive = model == "resistive";
+        load.givenResistance = load.resistive ? s->real("elec:load:resistance").value_or(0.0) : 0.0;
+        if (!power && load.givenResistance <= 0.0) {
             problems.add(path(s->prim), "a load needs elec:load:power");
             continue;
         }
-        load.power = *power;
-        load.resistive = model == "resistive";
+        load.power = power.value_or(0.0);
         load.minVoltage = s->real("elec:load:minVoltage").value_or(0.0);
         const auto bus = busThrough(s, "elec:powerPort");
         if (!bus) {
@@ -425,6 +428,40 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
         converter.input = *in;
         converter.output = *out;
         converters_.push_back(std::move(converter));
+    }
+    branches_.clear();
+    for (const SchemaInstance* s : world.instancesOf("ElectricalBranchAPI_1")) {
+        Branch branch;
+        branch.name = name(s->prim);
+        const std::string_view kind = s->token("elec:branch:kind").value_or("resistor");
+        branch.kind = kind == "fuse"     ? Branch::Kind::Fuse
+                      : kind == "switch" ? Branch::Kind::Switch
+                      : kind == "diode"  ? Branch::Kind::Diode
+                                         : Branch::Kind::Resistor;
+        branch.resistance = s->real("elec:branch:resistance").value_or(0.0);
+        branch.i2tRating = s->real("elec:branch:i2tRating").value_or(0.0);
+        branch.forwardDrop = s->real("elec:branch:forwardDrop").value_or(0.0);
+        branch.closedAtStart = s->token("elec:branch:initialState").value_or("closed") != "open";
+        if (branch.resistance <= 0.0) {
+            problems.add(path(s->prim), "a branch needs elec:branch:resistance above zero");
+            continue;
+        }
+        if (branch.kind == Branch::Kind::Fuse && branch.i2tRating <= 0.0) {
+            problems.add(path(s->prim), "a fuse needs elec:branch:i2tRating above zero");
+            continue;
+        }
+        const auto in = busThrough(s, "elec:branch:input");
+        const auto out = busThrough(s, "elec:branch:output");
+        if (!in || !out) {
+            continue;
+        }
+        if (*in == *out) {
+            problems.add(path(s->prim), "a branch's two ends are the same bus");
+            continue;
+        }
+        branch.input = *in;
+        branch.output = *out;
+        branches_.push_back(std::move(branch));
     }
     if (Status status = problems.status(); !status.ok()) {
         return status;
@@ -484,6 +521,19 @@ Status ElectricalNetwork::declare(const WorldView& world, const ModuleConfig& co
         bus.voltageOut = d.output(scalar("bus/" + bus.name + "/voltage", units::V));
         bus.brownoutOut = d.output(scalar("bus/" + bus.name + "/brownout", units::one));
     }
+    for (Branch& b : branches_) {
+        const std::string branch = "branch/" + b.name + "/";
+        if (b.kind == Branch::Kind::Switch) {
+            SignalSpec command = scalar(branch + "command", units::one);  // above 0.5: closed
+            command.optional = true;
+            command.defaultValue = b.closedAtStart ? 1.0 : 0.0;
+            b.command = d.input(command);
+        }
+        b.currentOut = d.output(scalar(branch + "current", units::A));
+        b.voltageOut = d.output(scalar(branch + "voltage", units::V));
+        b.stateOut = d.output(scalar(branch + "state", units::one));  // 1: conducting
+        b.lossOut = d.output(scalar(branch + "loss_power", units::W));
+    }
     for (Converter& c : converters_) {
         const std::string converter = "converter/" + c.name + "/";
         c.outputCurrent = d.output(scalar(converter + "output_current", units::A));
@@ -520,6 +570,14 @@ Status ElectricalNetwork::init(const WorldView&, const ModuleConfig&, SignalBus&
     batteryTemperature_.assign(batteries_.size(), kAmbientK);
     converterInput_.assign(converters_.size(), 0.0);
     limitedScratch_.assign(batteries_.size(), false);
+    feederState_.assign(converters_.size(), 0);
+    linkBusesByBranches();
+    for (Branch& b : branches_) {
+        b.blown = false;
+        b.i2t = 0.0;
+        b.current = 0.0;
+        b.conducting = b.kind != Branch::Kind::Switch || b.closedAtStart;
+    }
     for (Battery& b : batteries_) {
         b.state = BatteryState{};
         b.state.soc = std::clamp(b.initialSoc, 0.0, 1.0);
@@ -543,6 +601,7 @@ Status ElectricalNetwork::init(const WorldView&, const ModuleConfig&, SignalBus&
         node.brownout = node.voltage < node.undervoltage;
         node.overvoltageTripped = false;
     }
+    startThroughBranches();
     // A converter's output bus starts regulated when its input is up (input buses first: a
     // chain of converters is in declaration order).
     for (Converter& c : converters_) {
@@ -557,14 +616,23 @@ Status ElectricalNetwork::init(const WorldView&, const ModuleConfig&, SignalBus&
             bus.write(id, 0.0);
         }
     }
+    startThroughBranches();  // what hangs behind a converter's output
+    for (Branch& b : branches_) {
+        for (const SignalId id : {b.currentOut, b.voltageOut, b.lossOut}) {
+            bus.write(id, 0.0);
+        }
+        bus.write(b.stateOut, b.conducting ? 1.0 : 0.0);
+    }
     for (const Bus& node : buses_) {
         bus.write(node.voltageOut, node.voltage);
         bus.write(node.brownoutOut, node.brownout ? 1.0 : 0.0);
     }
     for (Load& l : loads_) {
-        // A resistive load draws its power at the voltage its bus starts at.
+        // A resistive load is its resistance, or its power at the voltage its bus starts at.
         const double v = buses_[l.bus].voltage;
-        l.resistance = v > 0.0 && l.power > 0.0 ? v * v / l.power : 0.0;
+        l.resistance = l.givenResistance > 0.0    ? l.givenResistance
+                       : v > 0.0 && l.power > 0.0 ? v * v / l.power
+                                                  : 0.0;
         bus.write(l.currentOut, 0.0);
         bus.write(l.poweredOut, 0.0);
     }
@@ -590,6 +658,268 @@ Status ElectricalNetwork::init(const WorldView&, const ModuleConfig&, SignalBus&
         bus.write(p.torque, 0.0);
     }
     return {};
+}
+
+void ElectricalNetwork::linkBusesByBranches() {
+    groups_.clear();
+    groupOfBus_.assign(buses_.size(), -1);
+    std::size_t largest = 0;
+    for (std::size_t start = 0; start < buses_.size(); ++start) {
+        const bool joined = std::ranges::any_of(
+            branches_, [start](const Branch& b) { return b.input == start || b.output == start; });
+        if (!joined || groupOfBus_[start] >= 0) {
+            continue;
+        }
+        const int id = static_cast<int>(groups_.size());
+        std::vector<std::size_t> group{start};
+        groupOfBus_[start] = id;
+        for (std::size_t at = 0; at < group.size(); ++at) {
+            for (const Branch& b : branches_) {
+                const std::size_t node = group[at];
+                const std::size_t other = b.input == node ? b.output : b.input;
+                if ((b.input == node || b.output == node) && groupOfBus_[other] < 0) {
+                    groupOfBus_[other] = id;
+                    group.push_back(other);
+                }
+            }
+        }
+        largest = std::max(largest, group.size());
+        groups_.push_back(std::move(group));
+    }
+    groupMatrix_.assign(largest * largest, 0.0);
+    groupRhs_.assign(largest, 0.0);
+    groupOld_.assign(largest, 0.0);
+}
+
+/// A bus with no battery of its own starts at what reaches it through conducting branches, with
+/// nothing drawn yet: the same voltage, less a diode's drop.
+void ElectricalNetwork::startThroughBranches() {
+    for (std::size_t pass = 0; pass < branches_.size(); ++pass) {
+        for (const Branch& b : branches_) {
+            if (!b.conducting) {
+                continue;
+            }
+            Bus& in = buses_[b.input];
+            Bus& out = buses_[b.output];
+            if (b.kind == Branch::Kind::Diode) {
+                if (out.voltage <= 0.0 && in.voltage > b.forwardDrop) {
+                    out.voltage = in.voltage - b.forwardDrop;
+                }
+            } else if (out.voltage <= 0.0 && in.voltage > 0.0) {
+                out.voltage = in.voltage;
+            } else if (in.voltage <= 0.0 && out.voltage > 0.0) {
+                in.voltage = out.voltage;
+            }
+        }
+    }
+    for (Bus& node : buses_) {
+        node.brownout = node.voltage < node.undervoltage;
+    }
+}
+
+void ElectricalNetwork::solveGroup(std::size_t g, double dt, std::vector<double>& temperatures) {
+    const std::vector<std::size_t>& group = groups_[g];
+    const std::size_t n = group.size();
+    const auto rowOf = [&group](std::size_t bus) {
+        for (std::size_t k = 0; k < group.size(); ++k) {
+            if (group[k] == bus) {
+                return k;
+            }
+        }
+        return group.size();
+    };
+    for (std::size_t k = 0; k < n; ++k) {
+        groupOld_[k] = buses_[group[k]].voltage;
+    }
+    for (std::size_t i = 0; i < batteries_.size(); ++i) {
+        if (groupOfBus_[batteries_[i].bus] == static_cast<int>(g)) {
+            limitedScratch_[i] = false;
+        }
+    }
+    for (std::size_t k = 0; k < converters_.size(); ++k) {
+        const Converter& c = converters_[k];
+        if (groupOfBus_[c.output] == static_cast<int>(g)) {
+            feederState_[k] = 0;
+            converters_[k].current = 0.0;
+        }
+    }
+    // The current into each bus but for what is solved here: its capacitor, batteries and sinks.
+    // Each pass builds the system and solves it, then sees whether anything changed state.
+    const std::size_t passes = batteries_.size() + branches_.size() + 2 * converters_.size() + 2;
+    for (std::size_t pass = 0; pass <= passes; ++pass) {
+        std::fill(groupMatrix_.begin(), groupMatrix_.begin() + static_cast<std::ptrdiff_t>(n * n),
+                  0.0);
+        const auto a = [this, n](std::size_t r, std::size_t c) -> double& {
+            return groupMatrix_[r * n + c];
+        };
+        for (std::size_t k = 0; k < n; ++k) {
+            const Bus& node = buses_[group[k]];
+            const double companion = node.capacitance / dt;
+            a(k, k) = companion;
+            groupRhs_[k] = companion * groupOld_[k] - node.sink;
+            if (node.overvoltageTripped && node.brakeResistance > 0.0) {
+                a(k, k) += 1.0 / node.brakeResistance;
+            }
+        }
+        for (std::size_t i = 0; i < batteries_.size(); ++i) {
+            const Battery& battery = batteries_[i];
+            const std::size_t k = rowOf(battery.bus);
+            if (k == n || battery.state.cut) {
+                continue;
+            }
+            if (limitedScratch_[i]) {
+                groupRhs_[k] -= battery.params.maxChargeCurrent;
+                continue;
+            }
+            const Thevenin t = theveninOf(battery.params, battery.state, temperatures[i]);
+            const double r = t.resistance + battery.wireResistance;
+            a(k, k) += 1.0 / r;
+            groupRhs_[k] += t.emf / r;
+        }
+        for (const Branch& b : branches_) {
+            const std::size_t i = rowOf(b.input);
+            const std::size_t o = rowOf(b.output);
+            if (i == n || !b.conducting) {
+                continue;
+            }
+            const double conductance = 1.0 / b.resistance;
+            const double drop = b.kind == Branch::Kind::Diode ? b.forwardDrop : 0.0;
+            a(i, i) += conductance;
+            a(o, o) += conductance;
+            a(i, o) -= conductance;
+            a(o, i) -= conductance;
+            // The current (Vi - Vo - drop) * conductance leaves i and enters o.
+            groupRhs_[i] += conductance * drop;
+            groupRhs_[o] -= conductance * drop;
+        }
+        for (std::size_t c = 0; c < converters_.size(); ++c) {
+            const std::size_t k = rowOf(converters_[c].output);
+            if (k == n) {
+                continue;
+            }
+            if (feederState_[c] == 2) {
+                groupRhs_[k] += converters_[c].maxCurrent;
+            } else if (feederState_[c] == 1) {
+                // The rail holds its set point: this row is the equation V = set point.
+                for (std::size_t m = 0; m < n; ++m) {
+                    a(k, m) = m == k ? 1.0 : 0.0;
+                }
+                groupRhs_[k] = converters_[c].outputVoltage;
+            }
+        }
+        // Gaussian elimination with partial pivoting, on the scratch matrix.
+        for (std::size_t col = 0; col < n; ++col) {
+            std::size_t pivot = col;
+            for (std::size_t r = col + 1; r < n; ++r) {
+                if (std::abs(a(r, col)) > std::abs(a(pivot, col))) {
+                    pivot = r;
+                }
+            }
+            if (pivot != col) {
+                for (std::size_t m = 0; m < n; ++m) {
+                    std::swap(a(col, m), a(pivot, m));
+                }
+                std::swap(groupRhs_[col], groupRhs_[pivot]);
+            }
+            for (std::size_t r = col + 1; r < n; ++r) {
+                const double factor = a(r, col) / a(col, col);
+                if (factor != 0.0) {
+                    for (std::size_t m = col; m < n; ++m) {
+                        a(r, m) -= factor * a(col, m);
+                    }
+                    groupRhs_[r] -= factor * groupRhs_[col];
+                }
+            }
+        }
+        for (std::size_t r = n; r-- > 0;) {
+            double sum = groupRhs_[r];
+            for (std::size_t m = r + 1; m < n; ++m) {
+                sum -= a(r, m) * groupRhs_[m];
+            }
+            groupRhs_[r] = sum / a(r, r);
+        }
+        const auto voltageOf = [this, &rowOf](std::size_t bus) {
+            return std::max(0.0, groupRhs_[rowOf(bus)]);
+        };
+
+        bool changed = false;
+        for (std::size_t i = 0; i < batteries_.size(); ++i) {
+            Battery& battery = batteries_[i];
+            if (rowOf(battery.bus) == n || battery.state.cut) {
+                continue;
+            }
+            if (limitedScratch_[i]) {
+                battery.current = -battery.params.maxChargeCurrent;
+                continue;
+            }
+            const Thevenin t = theveninOf(battery.params, battery.state, temperatures[i]);
+            battery.current =
+                (t.emf - voltageOf(battery.bus)) / (t.resistance + battery.wireResistance);
+            if (battery.current < -battery.params.maxChargeCurrent) {
+                limitedScratch_[i] = true;
+                changed = true;
+            }
+        }
+        for (Branch& b : branches_) {
+            if (rowOf(b.input) == n) {
+                continue;
+            }
+            const double across = voltageOf(b.input) - voltageOf(b.output);
+            if (b.kind == Branch::Kind::Diode) {
+                const bool forward = b.conducting ? across - b.forwardDrop >= 0.0
+                                                  : across - b.forwardDrop > kDiodeOnMargin;
+                if (forward != b.conducting) {
+                    b.conducting = forward;
+                    changed = true;
+                }
+            }
+            const double drop = b.kind == Branch::Kind::Diode ? b.forwardDrop : 0.0;
+            b.current = b.conducting ? (across - drop) / b.resistance : 0.0;
+        }
+        for (std::size_t c = 0; c < converters_.size(); ++c) {
+            Converter& converter = converters_[c];
+            const std::size_t k = rowOf(converter.output);
+            if (k == n) {
+                continue;
+            }
+            const Bus& in = buses_[converter.input];
+            const bool available = !in.brownout && in.voltage > 0.0;
+            // What the converter must deliver: all that leaves its bus, less what else enters.
+            const Bus& node = buses_[converter.output];
+            const double v = voltageOf(converter.output);
+            double needed = node.capacitance / dt * (v - groupOld_[k]) + node.sink;
+            for (const Branch& b : branches_) {
+                needed += b.input == converter.output ? b.current : 0.0;
+                needed -= b.output == converter.output ? b.current : 0.0;
+            }
+            for (const Battery& battery : batteries_) {
+                needed -= battery.bus == converter.output ? battery.current : 0.0;
+            }
+            std::uint8_t next = feederState_[c];
+            if (feederState_[c] == 0 && available && v < converter.outputVoltage - 1e-9) {
+                next = 1;
+            } else if (feederState_[c] == 1 && (!available || needed <= 0.0)) {
+                next = 0;
+            } else if (feederState_[c] == 1 && needed > converter.maxCurrent) {
+                next = 2;
+            } else if (feederState_[c] == 2 && !available) {
+                next = 0;
+            }
+            converter.current = next == 1   ? std::clamp(needed, 0.0, converter.maxCurrent)
+                                : next == 2 ? converter.maxCurrent
+                                            : 0.0;
+            if (next != feederState_[c]) {
+                feederState_[c] = next;
+                changed = true;
+            }
+        }
+        if (!changed || pass == passes) {
+            for (std::size_t k = 0; k < n; ++k) {
+                buses_[group[k]].voltage = std::max(0.0, groupRhs_[k]);
+            }
+            break;
+        }
+    }
 }
 
 void ElectricalNetwork::solveBus(std::size_t b, double dt, std::vector<double>& temperatures) {
@@ -789,8 +1119,21 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
         batteryTemperature_[i] = bus.read(batteries_[i].temperature);
         batteries_[i].current = 0.0;
     }
+    // What a switch was told and whether a fuse still holds: its state for this step's solve.
+    for (Branch& b : branches_) {
+        if (b.kind == Branch::Kind::Switch) {
+            b.conducting = bus.read(b.command) > 0.5;
+        } else if (b.kind == Branch::Kind::Fuse) {
+            b.conducting = !b.blown;
+        }
+    }
+    for (std::size_t g = 0; g < groups_.size(); ++g) {
+        solveGroup(g, dt, batteryTemperature_);
+    }
     for (std::size_t b = 0; b < buses_.size(); ++b) {
-        solveBus(b, dt, batteryTemperature_);
+        if (groupOfBus_[b] < 0) {
+            solveBus(b, dt, batteryTemperature_);
+        }
         Bus& node = buses_[b];
         if (node.voltage < node.undervoltage) {
             node.brownout = true;
@@ -804,6 +1147,16 @@ Status ElectricalNetwork::step(const StepContext& context, SignalBus& bus) {
         }
         bus.write(node.voltageOut, node.voltage);
         bus.write(node.brownoutOut, node.brownout ? 1.0 : 0.0);
+    }
+    for (Branch& b : branches_) {
+        if (b.kind == Branch::Kind::Fuse && !b.blown) {
+            b.i2t += b.current * b.current * dt;
+            b.blown = b.i2t >= b.i2tRating;  // open from the next step, until the run restarts
+        }
+        bus.write(b.currentOut, b.current);
+        bus.write(b.voltageOut, buses_[b.input].voltage - buses_[b.output].voltage);
+        bus.write(b.stateOut, b.conducting ? 1.0 : 0.0);
+        bus.write(b.lossOut, b.current * b.current * b.resistance);
     }
     for (std::size_t i = 0; i < batteries_.size(); ++i) {
         Battery& b = batteries_[i];
@@ -870,6 +1223,12 @@ Status ElectricalNetwork::saveState(StateWriter& writer) const {
     for (const Converter& c : converters_) {
         writer.put(c.current);
     }
+    for (const Branch& b : branches_) {
+        writer.put(b.conducting);
+        writer.put(b.blown);
+        writer.put(b.i2t);
+        writer.put(b.current);
+    }
     return {};
 }
 
@@ -890,6 +1249,10 @@ Status ElectricalNetwork::restoreState(StateReader& reader) {
     }
     for (Converter& c : converters_) {
         ok = ok && reader.get(c.current);
+    }
+    for (Branch& b : branches_) {
+        ok = ok && reader.get(b.conducting) && reader.get(b.blown) && reader.get(b.i2t) &&
+             reader.get(b.current);
     }
     return ok ? Status{} : Status::error(StatusCode::InvalidConfig, "electrical state truncated");
 }

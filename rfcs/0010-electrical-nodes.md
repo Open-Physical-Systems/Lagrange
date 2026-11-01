@@ -1,6 +1,6 @@
 # RFC 0010: Components between buses, and a schematic's parts
 
-- Status: Draft, waiting on the owner
+- Status: Accepted by the owner, 2026-11-02, with our own solver
 - Date: 2026-11-02
 - Touches: `schemas/electrical`, `modules/electrical/network`, `io/stage/src/Netlist.cpp`, the viewer's Circuit tab
 
@@ -16,7 +16,7 @@ Add one schema, `ElectricalBranchAPI_1`, for a two-terminal part between two bus
 |---|---|---|
 | `resistor` | Ohm's law | `resistance` |
 | `fuse` | Resistor until `I²t` reaches its rating, then open until reset | `resistance`, `i2tRating` |
-| `switch` | Resistor or open, by the signal `branch/<b>/command` | `resistance`, `openResistance` |
+| `switch` | Resistor or open, by the signal `branch/<b>/command` | `resistance`, `initialState` |
 | `diode` | Piecewise: `forwardDrop` and `resistance` one way, open the other | `forwardDrop`, `resistance` |
 
 The network solves all connected buses together. Each step is one sparse linear system, nodal analysis with the capacitors' backward-Euler companions as today, with a few Newton or active-set passes for what is piecewise (diodes, batteries at their charge limit). Bus voltages stay states at 100 µs. Signals add `branch/<b>/current`, `/voltage`, `/state`. Disabling the domain still leaves the ideal torque source. The netlist importer reads `R` between two buses as a resistor, `D` with a `.model` as a diode, `S` as a switch, and `*lagrange fuse R_x i2t=` for a fuse.

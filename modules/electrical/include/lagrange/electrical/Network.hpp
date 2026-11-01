@@ -133,7 +133,8 @@ private:
         std::string name;
         bool resistive{false};
         double power{0.0}, minVoltage{0.0};
-        double resistance{0.0};  // ohm, resistive loads: set at init from the bus voltage
+        double givenResistance{0.0};  // ohm, elec:load:resistance; 0: from the power
+        double resistance{0.0};       // ohm, resistive loads: set at init
         std::size_t bus{0};
         SignalId demand, currentOut, poweredOut;
     };
@@ -143,6 +144,20 @@ private:
         double outputVoltage{0.0}, efficiency{1.0}, maxCurrent{0.0};
         double current{0.0};  // A delivered to the output bus this step
         SignalId outputCurrent, inputCurrent, loss;
+    };
+    struct Branch {  // a part between two buses (RFC 0010)
+        enum class Kind : std::uint8_t { Resistor, Fuse, Switch, Diode } kind{Kind::Resistor};
+        std::string name;
+        std::size_t input{0}, output{0};  // buses; positive current flows from input to output
+        double resistance{0.0};           // ohm
+        double i2tRating{0.0};            // A²·s
+        double forwardDrop{0.0};          // V
+        bool closedAtStart{true};
+        bool conducting{true};  // this step: a closed switch, an unblown fuse, a forward diode
+        bool blown{false};
+        double i2t{0.0};      // A²·s so far
+        double current{0.0};  // A this step
+        SignalId command, currentOut, voltageOut, stateOut, lossOut;
     };
     struct FmuMotor {  // a motor its FMU simulates
         std::string name;
@@ -155,12 +170,22 @@ private:
     };
 
     void solveBus(std::size_t b, double dt, std::vector<double>& temperatures);
+    /// The buses that branches join, as one linear system with a few passes for what switches
+    /// state: diodes, batteries at their charge limit, converters regulating or at their limit.
+    void solveGroup(std::size_t group, double dt, std::vector<double>& temperatures);
+    void linkBusesByBranches();
+    void startThroughBranches();
 
     std::vector<Motor> motors_;
     std::vector<Battery> batteries_;
     std::vector<Bus> buses_;
     std::vector<Load> loads_;
     std::vector<Converter> converters_;
+    std::vector<Branch> branches_;
+    std::vector<std::vector<std::size_t>> groups_;  // buses joined by branches, each group's
+    std::vector<int> groupOfBus_;                   // index in groups_, -1 for a bus on its own
+    std::vector<double> groupMatrix_, groupRhs_, groupOld_;  // sized in init: no allocation in step
+    std::vector<std::uint8_t> feederState_;  // per converter: 0 off, 1 regulating, 2 at its limit
     std::vector<Passthrough> ideal_;
     std::vector<FmuMotor> fmuMotors_;
     std::vector<double> batteryTemperature_;  // K, read each step
