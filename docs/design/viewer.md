@@ -625,6 +625,6 @@ plaster, concrete, lawn, bark and roofing use photographs (`gpu/assets_textures`
 world position and tinted to the material's own colour, so meshes need no texture coordinates; a
 viewer without the files, and the other kinds, use shader patterns. `Season` (`--season`, the Shading
 menu) changes the sun, sky, haze, surfaces, puddles and falling rain or snow; all by eye and drawn
-only. Rain's effect on sensors and grip comes from the weather domain, which `lagrange --season`
-sets. Snow has no such model yet, and water does not freeze. Camera sensors share all of this through
+only. The effect of rain and snow on sensors and grip comes from the weather domain, which
+`lagrange --season` sets. Water does not freeze. Camera sensors share all of this through
 `gpu::RealisticRenderer` (`--camera-look`, `--camera-season`).

@@ -140,6 +140,54 @@ TEST(Weather, PublishesTheAtmosphereAndItsExtinction) {
     EXPECT_GT(r.read("sensor/lidar/contamination"), 0.0);
 }
 
+// Against the range of published friction values (Weather.hpp): dry asphalt about 0.85.
+TEST(Winter, GripIsInThePublishedRanges) {
+    constexpr double kDryAsphalt = 0.85;
+    EXPECT_EQ(frictionScale(0.0, 0.0, 268.0), 1.0);
+    const double snow = kDryAsphalt * frictionScale(0.0, 1.0, 268.0);
+    EXPECT_GE(snow, 0.20);
+    EXPECT_LE(snow, 0.35);
+    const double ice = kDryAsphalt * frictionScale(1.0, 0.0, 268.0);
+    EXPECT_GE(ice, 0.08);
+    EXPECT_LE(ice, 0.15);
+    EXPECT_GT(frictionScale(1.0, 0.0, 285.0), frictionScale(1.0, 0.0, 268.0));  // wet, not ice
+    // Half a covering between bare and covered.
+    EXPECT_LT(frictionScale(0.0, 0.5, 268.0), 1.0);
+    EXPECT_GT(frictionScale(0.0, 0.5, 268.0), kSnowFrictionScale);
+}
+
+TEST(Winter, SnowfallIsTheVisibilityItWasGiven) {
+    // Koschmieder: V = 3.912 / sigma. 1 mm/h: 1 km.
+    EXPECT_NEAR(3.912 / snowExtinction(1.0 * kMmph), 1000.0, 1e-6);
+    EXPECT_EQ(snowExtinction(0.0), 0.0);
+}
+
+TEST(Winter, SnowLiesBelowFreezingAndMeltsAbove) {
+    const World world = site();
+    ModuleConfigData c = siteConfig();
+    c.values["temperature"] = 268.0;
+    c.values["snow_rate"] = 1.0 * kMmph;
+    Fixture r = run(world, c);
+    ASSERT_TRUE(r.scheduler->stepUntil(SimTime{120'000'000'000}).ok());
+    const double covered = r.read("env/snow_cover");
+    EXPECT_GT(covered, 0.1);
+    EXPECT_LT(r.read("env/friction_scale"), 1.0);
+    EXPECT_GT(r.read("env/extinction/visible"), 0.003);
+    EXPECT_GT(r.read("sensor/lidar/contamination"), 0.0);
+
+    ModuleConfigData warm = siteConfig();
+    warm.values["temperature"] = 285.0;
+    warm.values["snow_cover"] = 1.0;
+    Fixture m = run(world, warm);
+    ASSERT_TRUE(m.scheduler->stepUntil(SimTime{1'000'000'000}).ok());
+    const double early = m.read("env/snow_cover");
+    EXPECT_NEAR(early, 1.0, 0.01);
+    EXPECT_NEAR(m.read("env/friction_scale"), kSnowFrictionScale, 0.02);
+    ASSERT_TRUE(m.scheduler->stepUntil(SimTime{300'000'000'000}).ok());
+    EXPECT_LT(m.read("env/snow_cover"), early);
+    EXPECT_GT(m.read("env/friction_scale"), kSnowFrictionScale);
+}
+
 TEST(Weather, ClearHasNoFogRainOrDust) {
     const World world = site();
     ModuleConfigData c = siteConfig();

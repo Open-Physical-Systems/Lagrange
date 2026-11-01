@@ -139,7 +139,9 @@ struct Idm {
 /// network's edge they come back in at the start of a free entry lane. Into a junction they
 /// wait while a junction lane that crosses or merges with theirs is taken, or while a vehicle
 /// nearer its own line is about to take one (first come, first served; no priority rules). On roads
-/// with several lanes each way they change lanes to get past something slow.
+/// with several lanes each way they change lanes to get past something slow. With less grip
+/// (env/friction_scale) they accelerate, brake and drive more gently; they do not skid: agents are
+/// kinematic.
 /// Pedestrians walk their sidewalk at 1.34 m/s (Weidmann 1993), turn back at its ends, and keep
 /// away from each other and from the robot sideways by a social force (Helbing and Molnár 1995:
 /// A·exp(−d/B), A = 2 m/s², B = 0.3 m). On a world with crossings, walkers (HumanAPI_1 people named
@@ -264,7 +266,7 @@ private:
     std::vector<SignalLamp> lamps_;
     std::vector<LampOut> lampOut_;
     std::vector<int> onCrossing_;  // per crossing: how many walkers are on it
-    SignalId crossingsOut_, laneChangesOut_;
+    SignalId crossingsOut_, laneChangesOut_, friction_;
     RoadLanes roads_;  // the same lanes as graph_, for finding neighbours
     std::int64_t laneChanges_{0};
 };

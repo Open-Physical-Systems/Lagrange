@@ -466,9 +466,10 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--weather needs KEY=VALUE,... (temperature=288.15,pressure=101325,...)";
             }
             static const std::set<std::string, std::less<>> kKeys{
-                "temperature",          "pressure",         "relative_humidity",
-                "visibility",           "rain_rate",        "dust_concentration",
-                "dust_median_diameter", "solar_irradiance", "sky_temperature"};
+                "temperature",      "pressure",       "relative_humidity",
+                "visibility",       "rain_rate",      "dust_concentration",
+                "snow_rate",        "snow_cover",     "dust_median_diameter",
+                "solar_irradiance", "sky_temperature"};
             std::string list(text);
             std::size_t at = 0;
             while (at <= list.size()) {

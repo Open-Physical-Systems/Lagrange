@@ -420,6 +420,9 @@ public:
             SignalSpec rain = in("env/rain_rate");
             rain.unit = units::m_per_s;
             rainRate_ = d.input(rain);
+            SignalSpec snow = in("env/snow_rate");
+            snow.unit = units::m_per_s;
+            snowRate_ = d.input(snow);
             SignalSpec dirt = in("sensor/" + name_ + "/contamination");
             dirt.unit = units::one;
             contamination_ = d.input(dirt);
@@ -570,7 +573,8 @@ public:
             const fields::Vec3 at = sensor.position;
             const double local = field ? field->sampleScalar(at) : 0.0;
             const SensorWeather w{bus.read(extinction_), bus.read(fogExtinction_) + local,
-                                  bus.read(rainRate_), bus.read(contamination_)};
+                                  bus.read(rainRate_) + (kSnowClutter * bus.read(snowRate_)),
+                                  bus.read(contamination_)};
             tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
                 // Its own stream, so that the range noise below is the same with or without.
                 random::Stream rng(context.seed, context.stepIndex, kWeatherStream + i);
@@ -802,7 +806,10 @@ private:
     double referenceReflectivity_{0.1};
     bool weather_{false};
     LidarClutter clutter_;
-    SignalId extinction_, fogExtinction_, rainRate_, contamination_, fogField_;
+    SignalId extinction_, fogExtinction_, rainRate_, snowRate_, contamination_, fogField_;
+    // Flakes return more false echoes than the same water as drops: taken as this much rain
+    // (illustrative, of the order lidar snow studies show; sensors.md).
+    static constexpr double kSnowClutter = 3.0;
     fields::FieldSignal fogFieldSignal_;
     LidarLayout layout_;
     std::uint32_t samples_{0};  // beams, all rings
