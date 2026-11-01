@@ -103,8 +103,8 @@ flowchart LR
   depth-based colour, caustics, foam where it meets things. Limits: what the water looks like does
   not reach physics, which stays a flat surface, so things float level on the drawn waves and leave
   no wake; one water body is drawn as water, others as glass; the sun has a fixed place; no textures;
-  about 15 ms a frame at 1080p on an Iris Xe. The camera sensor keeps `mesh.slang`, a departure from
-  invariant 13 for this shading only (Lit is still the same code as the camera).
+  about 15 ms a frame at 1080p on an Iris Xe. Camera sensors draw colour with the same `gpu::RealisticRenderer` on a
+  GPU (invariant 13); a software device keeps `mesh.slang`, and depth and instance ids always do.
 - An id buffer (`R32_UINT`, prim id) is rendered for the pixel under the cursor only (scissored
   1×1 readback) for picking.
 - MSAA 4× on Tier 1 and 2; off on lavapipe.
@@ -621,10 +621,10 @@ be shared. The viewer does not host RViz display plugins. Interoperation is thro
 
 `surfacePatternOf` takes a surface from a word of a material's name (brick, asphalt, pavement,
 plaster, concrete, lawn, leaves, road_paint, window_glass, bark, roof_felt). Brick, asphalt, pavement,
-plaster, concrete, lawn, bark and roofing use photographs (`viewer/assets/textures`, CC0), tiled by
+plaster, concrete, lawn, bark and roofing use photographs (`gpu/assets_textures`, CC0), tiled by
 world position and tinted to the material's own colour, so meshes need no texture coordinates; a
 viewer without the files, and the other kinds, use shader patterns. `Season` (`--season`, the Shading
 menu) changes the sun, sky, haze, surfaces, puddles and falling rain or snow; all by eye and drawn
 only. Rain's effect on sensors and grip comes from the weather domain, which `lagrange --season`
-sets. Snow has no such model yet, and water does not freeze. The camera sensor draws with
-`mesh.slang`, so it shows neither patterns nor seasons.
+sets. Snow has no such model yet, and water does not freeze. Camera sensors share all of this through
+`gpu::RealisticRenderer` (`--camera-look`, `--camera-season`).

@@ -10,7 +10,7 @@
 #include <string_view>
 #include <system_error>
 
-namespace lagrange::viewer {
+namespace lagrange::gpu {
 
 namespace {
 
@@ -88,16 +88,8 @@ SurfaceTextures loadSurfaceTextures(const std::filesystem::path& directory) {
 
 std::filesystem::path surfaceTextureDirectory() {
     std::error_code ec;
-    const std::filesystem::path self = std::filesystem::read_symlink("/proc/self/exe", ec);
-    if (!ec) {
-        // Installed layout: <prefix>/lib/lagrange_viewer/lagrange_viewer.
-        const std::filesystem::path installed =
-            self.parent_path() / "../../share/lagrange_viewer/textures";
-        if (std::filesystem::is_directory(installed, ec)) {
-            return installed;
-        }
-    }
-    return LAGRANGE_VIEWER_SOURCE_TEXTURES;
+    const std::filesystem::path installed = LAGRANGE_GPU_TEXTURES;
+    return std::filesystem::is_directory(installed, ec) ? installed : LAGRANGE_GPU_SOURCE_TEXTURES;
 }
 
-}  // namespace lagrange::viewer
+}  // namespace lagrange::gpu

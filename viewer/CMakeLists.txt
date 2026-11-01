@@ -6,7 +6,6 @@ find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_proto REQUIRED)
 find_package(lagrange_gpu REQUIRED)
 find_package(imgui_vendor REQUIRED)
-find_package(JPEG REQUIRED)
 find_package(SDL3 REQUIRED)
 
 # Protocol client and scene store. No Vulkan, no ImGui: testable without a display.
@@ -36,7 +35,6 @@ add_library(
     render/src/Picking.cpp
     render/src/RealisticPass.cpp
     render/src/SceneRenderer.cpp
-    render/src/SurfaceTextures.cpp
 )
 lagrange_target_defaults(lagrange_viewer_render)
 lagrange_target_vulkan_warnings(lagrange_viewer_render)
@@ -47,12 +45,6 @@ target_link_libraries(
         lagrange_viewer_client
         lagrange_gpu::lagrange_gpu
         lagrange_gpu::lagrange_gpu_raster
-    PRIVATE JPEG::JPEG
-)
-target_compile_definitions(
-    lagrange_viewer_render
-    PRIVATE
-        LAGRANGE_VIEWER_SOURCE_TEXTURES="${CMAKE_CURRENT_SOURCE_DIR}/assets/textures"
 )
 set(_kernels "${LAGRANGE_GPU_KERNELS_DIR}")
 lagrange_add_slang_shader(
@@ -89,70 +81,6 @@ lagrange_add_slang_shader(
     ENTRY fsMain
     STAGE fragment
     SYMBOL kLineFragment
-)
-
-lagrange_add_slang_shader(
-    lagrange_viewer_render
-    SOURCE ${_kernels}/camera/realistic.slang
-    ENTRY vsMesh
-    STAGE vertex
-    SYMBOL kRealMeshVertex
-)
-lagrange_add_slang_shader(
-    lagrange_viewer_render
-    SOURCE ${_kernels}/camera/realistic.slang
-    ENTRY fsMesh
-    STAGE fragment
-    SYMBOL kRealMeshFragment
-)
-lagrange_add_slang_shader(
-    lagrange_viewer_render
-    SOURCE ${_kernels}/camera/realistic.slang
-    ENTRY vsShadow
-    STAGE vertex
-    SYMBOL kRealShadowVertex
-)
-lagrange_add_slang_shader(
-    lagrange_viewer_render
-    SOURCE ${_kernels}/camera/realistic.slang
-    ENTRY fsShadow
-    STAGE fragment
-    SYMBOL kRealShadowFragment
-)
-lagrange_add_slang_shader(
-    lagrange_viewer_render
-    SOURCE ${_kernels}/camera/realistic.slang
-    ENTRY vsScreen
-    STAGE vertex
-    SYMBOL kRealScreenVertex
-)
-lagrange_add_slang_shader(
-    lagrange_viewer_render
-    SOURCE ${_kernels}/camera/realistic.slang
-    ENTRY fsSky
-    STAGE fragment
-    SYMBOL kRealSkyFragment
-)
-lagrange_add_slang_shader(
-    lagrange_viewer_render
-    SOURCE ${_kernels}/camera/realistic.slang
-    ENTRY fsComposite
-    STAGE fragment
-    SYMBOL kRealCompositeFragment
-)
-lagrange_add_slang_shader(
-    lagrange_viewer_render
-    SOURCE ${_kernels}/camera/realistic.slang
-    ENTRY vsWater
-    STAGE vertex
-    SYMBOL kRealWaterVertex
-)
-lagrange_add_slang_shader(
-    lagrange_viewer_render
-    SOURCE ${_kernels}/camera/realistic.slang
-    ENTRY fsWater
-    STAGE fragment
-    SYMBOL kRealWaterFragment
 )
 
 # The design system: theme, fonts and the widgets every panel is built from
@@ -225,13 +153,6 @@ target_compile_definitions(
 )
 
 install(TARGETS lagrange_viewer RUNTIME DESTINATION lib/${PROJECT_NAME})
-install(
-    DIRECTORY assets/textures/
-    DESTINATION share/${PROJECT_NAME}/textures
-    FILES_MATCHING
-    PATTERN "*.jpg"
-    PATTERN "SOURCES.md"
-)
 install(
     DIRECTORY assets/fonts/
     DESTINATION share/${PROJECT_NAME}/fonts

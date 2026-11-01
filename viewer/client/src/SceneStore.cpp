@@ -7,27 +7,6 @@
 
 namespace lagrange::viewer {
 
-float surfacePatternOf(std::string_view name) {
-    static constexpr std::array<std::pair<std::string_view, float>, 11> kWords{
-        {{"brick", 1.0F},
-         {"asphalt", 2.0F},
-         {"pavement", 3.0F},
-         {"plaster", 4.0F},
-         {"concrete", 5.0F},
-         {"lawn", 6.0F},
-         {"leaves", 7.0F},
-         {"road_paint", 8.0F},
-         {"window_glass", 9.0F},
-         {"bark", 10.0F},
-         {"roof_felt", 11.0F}}};
-    for (const auto& [word, value] : kWords) {
-        if (name.find(word) != std::string_view::npos) {
-            return value;
-        }
-    }
-    return 0.0F;
-}
-
 namespace {
 
 constexpr std::size_t kSnapshotTransformBytes = 52;  // 3 f64 + 4 f32 + 3 f32
@@ -116,7 +95,6 @@ bool SceneBuilder::applySnapshot(const v1::SceneSnapshot& snapshot, std::string&
         }
         material.metallic = source.metallic();
         material.roughness = source.roughness();
-        material.pattern = surfacePatternOf(material.name);
         for (int k = 0; k < 3 && k < source.emissive_size(); ++k) {
             material.emissive.at(static_cast<std::size_t>(k)) = source.emissive(k);
         }

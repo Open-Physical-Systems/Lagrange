@@ -108,6 +108,20 @@ struct RasterInstance {
     std::array<float, 3> scale{1, 1, 1};
     std::array<float, 4> color{0.8F, 0.8F, 0.8F, 1.0F};  // linear RGB
     std::uint32_t id{0};                                 // instance id, written to `instance`
+    // For the realistic look.
+    float metallic{0.0F};
+    float roughness{0.6F};
+    float pattern{0.0F};
+    std::array<float, 3> emissive{0.0F, 0.0F, 0.0F};
+    bool ground{false};
+    bool water{false};
+    std::array<float, 6> box{};  // water: the mesh's bounds, min then max
+};
+
+/// How a run's cameras draw colour. Depth and instance id are the same either way.
+struct RasterLook {
+    bool realistic{false};  // the viewport's realistic renderer; ignored on a software device
+    int season{0};          // as RealisticSettings::season
 };
 
 struct RasterImages {
@@ -124,7 +138,8 @@ public:
     /// machine without a GPU) and uploads `meshes`. Returns nullptr with a reason in `error`.
     [[nodiscard]] static std::shared_ptr<RasterScene> create(const std::string& preferredDevice,
                                                              std::span<const MeshSource> meshes,
-                                                             std::string& error);
+                                                             std::string& error,
+                                                             RasterLook look = {});
     ~RasterScene();
     RasterScene(const RasterScene&) = delete;
     RasterScene& operator=(const RasterScene&) = delete;
@@ -135,6 +150,8 @@ public:
     /// average, as a sensor pixel integrates the light over its area; depth and instance id
     /// take one sample.
     [[nodiscard]] std::uint32_t samples() const;
+    /// Whether colour comes from the realistic renderer.
+    [[nodiscard]] bool realistic() const;
 
 private:
     RasterScene();
@@ -153,8 +170,9 @@ public:
 
     /// Draws `instances` as seen by `camera` (whose size must be this camera's) and waits for
     /// the images.
+    /// `seconds` is the sim time: what moves in the realistic look (water, clouds).
     void render(std::span<const RasterInstance> instances, const PinholeCamera& camera,
-                RasterImages& out);
+                RasterImages& out, double seconds = 0.0);
 
 private:
     struct Impl;

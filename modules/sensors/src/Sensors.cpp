@@ -1,5 +1,6 @@
 #include "GeoSensors.hpp"
 #include "lagrange/fields/Field.hpp"
+#include "lagrange/gpu/Realistic.hpp"
 #include "lagrange/module/StateIO.hpp"
 #include "lagrange/random/Philox.hpp"
 #include "lagrange/sensors/CameraModel.hpp"
@@ -1052,6 +1053,17 @@ public:
                     watch(drawable.body);
                 }
             }
+            hinges_.clear();
+            for (const CameraScene::Drawable& drawable : scene_->drawables) {
+                SignalId id;
+                if (!drawable.hinge.empty()) {
+                    SignalSpec angle = spec(drawable.hinge, SignalType::Scalar, units::rad);
+                    angle.feedback = true;
+                    angle.optional = true;
+                    id = d.input(angle);
+                }
+                hinges_.push_back(id);
+            }
         }
         const auto image = [&](const char* what, Unit unit) {
             SignalSpec out =
@@ -1109,18 +1121,37 @@ public:
         camera_.orientation = multiply(sensor.orientation, kSensorFromOptical);
         for (std::size_t k = 0; k < instances_.size(); ++k) {
             const CameraScene::Drawable& drawable = scene_->drawables[k];
-            const Pose pose = drawable.body == kNoIndex
-                                  ? drawable.offset
-                                  : compose(bodyPose(bus, drawable.body), drawable.offset);
-            instances_[k] = {drawable.mesh,  pose.position,  pose.orientation,
-                             drawable.scale, drawable.color, drawable.prim};
+            Pose pose = drawable.body == kNoIndex
+                            ? drawable.offset
+                            : compose(bodyPose(bus, drawable.body), drawable.offset);
+            if (hinges_[k].valid()) {
+                const double half = bus.read(hinges_[k]) / 2.0;
+                const std::array<double, 3>& a = drawable.hingeAxis;
+                pose = compose(pose, Pose{{0.0, 0.0, 0.0},
+                                          {std::cos(half), std::sin(half) * a[0],
+                                           std::sin(half) * a[1], std::sin(half) * a[2]}});
+            }
+            gpu::RasterInstance& instance = instances_[k];
+            instance.mesh = drawable.mesh;
+            instance.position = pose.position;
+            instance.rotation = pose.orientation;
+            instance.scale = drawable.scale;
+            instance.color = drawable.color;
+            instance.id = drawable.prim;
+            instance.metallic = drawable.metallic;
+            instance.roughness = drawable.roughness;
+            instance.pattern = drawable.pattern;
+            instance.emissive = drawable.emissive;
+            instance.ground = drawable.ground;
+            instance.water = drawable.water;
+            instance.box = drawable.box;
         }
         if (model_) {
             gpu::PinholeCamera render = model_->renderCamera();
             render.near = camera_.near;
             render.position = camera_.position;
             render.orientation = camera_.orientation;
-            renderer_->render(instances_, render, rendered_);
+            renderer_->render(instances_, render, rendered_, context.t.seconds());
             std::array<double, 3> omega{};
             if (twist_.valid()) {
                 const std::span<const double> t = bus.readN(twist_);
@@ -1132,7 +1163,7 @@ public:
             model_->apply(rendered_, omega, context.seed, context.stepIndex, sensor_ << 16U,
                           images_);
         } else {
-            renderer_->render(instances_, camera_, images_);
+            renderer_->render(instances_, camera_, images_, context.t.seconds());
         }
         for (float& depth : images_.depth) {
             if (depth > far_) {
@@ -1199,6 +1230,7 @@ public:
 
 private:
     std::shared_ptr<const CameraScene> scene_;
+    std::vector<SignalId> hinges_;        // per drawable; invalid: rigid
     gpu::PinholeCamera camera_;           // the output's pinhole (before the sensor model)
     std::unique_ptr<CameraModel> model_;  // null when no part of the sensor model is on
     gpu::RasterImages rendered_;          // the render the sensor model remaps
@@ -1297,7 +1329,7 @@ std::vector<std::unique_ptr<IModule>> createSensorSubstitutes(const World& world
 
 std::shared_ptr<CameraScene> createCameraScene(const Model& model,
                                                const std::string& preferredDevice,
-                                               std::string& error) {
+                                               std::string& error, gpu::RasterLook look) {
     auto scene = std::make_shared<CameraScene>();
     std::vector<gpu::MeshSource> meshes;
     meshes.reserve(model.scene.meshes.size());
@@ -1315,12 +1347,32 @@ std::shared_ptr<CameraScene> createCameraScene(const Model& model,
         drawable.offset = prim.offset;
         drawable.scale = prim.scale;
         if (prim.material != kNoIndex) {
-            drawable.color = model.scene.materials[prim.material].rgba;
+            const SceneMaterial& material = model.scene.materials[prim.material];
+            drawable.color = material.rgba;
+            const SurfaceLook surface = lookOf(material);
+            drawable.metallic = surface.metallic;
+            drawable.roughness = surface.roughness;
+            drawable.emissive = surface.emissive;
+            drawable.pattern = gpu::surfacePatternOf(material.name);
         }
         drawable.prim = p;
+        drawable.hinge = prim.hinge;
+        drawable.hingeAxis = prim.hingeAxis;
+        drawable.ground = prim.name == "ground";
+        drawable.water = std::ranges::find(prim.apiSchemas, "WaterAPI_1") != prim.apiSchemas.end();
+        if (drawable.water) {
+            const std::vector<float>& points = model.scene.meshes[prim.mesh].positions;
+            drawable.box = {1e30F, 1e30F, 1e30F, -1e30F, -1e30F, -1e30F};
+            for (std::size_t i = 0; i + 2 < points.size(); i += 3) {
+                for (std::size_t k = 0; k < 3; ++k) {
+                    drawable.box.at(k) = std::min(drawable.box.at(k), points[i + k]);
+                    drawable.box.at(k + 3) = std::max(drawable.box.at(k + 3), points[i + k]);
+                }
+            }
+        }
         scene->drawables.push_back(drawable);
     }
-    scene->raster = gpu::RasterScene::create(preferredDevice, meshes, error);
+    scene->raster = gpu::RasterScene::create(preferredDevice, meshes, error, look);
     return scene->raster ? scene : nullptr;
 }
 

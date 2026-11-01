@@ -114,6 +114,9 @@ void printServerOptions(std::FILE* out) {
         "  --lidar auto|cpu|gpu  where lidars cast: auto (default) and cpu use the\n"
         "            exact CPU caster; gpu the compute kernel on a hardware GPU\n"
         "  --gpu DEVICE  Vulkan device for the lidar and cameras (index or part of its name)\n"
+        "  --camera-look realistic|simple  how cameras draw colour (default realistic on a GPU;\n"
+        "            a software device stays simple; depth and instance id do not change)\n"
+        "  --camera-season summer|fall|winter|rainy  the year in the realistic look\n"
         "  --physics mujoco|jolt|NAME  rigid-body backend (default mujoco), or a plugin's\n"
         "  --replay FILE.mcap  replay a recording instead of simulating (the viewer can seek;\n"
         "            no ROS bridge)\n"
@@ -279,6 +282,27 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--physics needs mujoco, jolt or a plugin's backend";
             }
             options.physics = std::string(backend);
+        } else if (arg == "--camera-look") {
+            const char* look = value();
+            if (look == nullptr ||
+                (std::string_view(look) != "realistic" && std::string_view(look) != "simple")) {
+                return "--camera-look takes realistic or simple";
+            }
+            options.cameraRealistic = std::string_view(look) == "realistic";
+        } else if (arg == "--camera-season") {
+            const char* season = value();
+            const std::string_view name = season != nullptr ? season : "";
+            if (name == "summer") {
+                options.cameraSeason = 0;
+            } else if (name == "fall") {
+                options.cameraSeason = 1;
+            } else if (name == "winter") {
+                options.cameraSeason = 2;
+            } else if (name == "rainy") {
+                options.cameraSeason = 3;
+            } else {
+                return "--camera-season takes summer, fall, winter or rainy";
+            }
         } else if (arg == "--gpu") {
             const char* device = value();
             if (device == nullptr) {

@@ -10,7 +10,6 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>lagrange_cmake</buildtool_depend>
 
-  <depend>libjpeg</depend>
   <depend>lagrange_proto</depend>
   <depend>lagrange_gpu</depend>
   <depend>imgui_vendor</depend>

@@ -1,6 +1,6 @@
-#include "RealisticPass.hpp"
 #include "SurfaceTextures.hpp"
 #include "lagrange/gpu/Device.hpp"
+#include "lagrange/gpu/Realistic.hpp"
 #include "shaders/kRealCompositeFragment.hpp"
 #include "shaders/kRealMeshFragment.hpp"
 #include "shaders/kRealMeshVertex.hpp"
@@ -15,10 +15,11 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-namespace lagrange::viewer {
+namespace lagrange::gpu {
 
 namespace {
 
@@ -30,7 +31,7 @@ constexpr std::uint32_t kWaterGrid = 256;    // kGrid in realistic.slang
 
 // Must match Frame and Push in realistic.slang.
 struct Frame {
-    Mat4 viewProjection;
+    std::array<float, 16> viewProjection;
     std::array<float, 4> sunDirection;
     std::array<float, 4> sunColor;
     std::array<float, 4> worldWrap;
@@ -65,7 +66,7 @@ constexpr float kExposure = 0.72F;
 constexpr std::array<float, 4> kGroundColor{0.24F, 0.235F, 0.225F, 1.0F};
 constexpr float kGroundReach = 40.0F;  // the ground runs on to the haze, as drawn only
 
-std::array<float, 12> rows(const Transform& t, const std::array<double, 3>& eye) {
+std::array<float, 12> rows(const RealisticDraw& t, const std::array<double, 3>& eye) {
     const float w = t.rotation[0];
     const float x = t.rotation[1];
     const float y = t.rotation[2];
@@ -144,14 +145,53 @@ Cascade cascade(const std::array<double, 3>& center, const std::array<double, 3>
     return out;
 }
 
-bool isWater(const PrimData& prim) {
-    return std::find(prim.apiSchemas.begin(), prim.apiSchemas.end(), "WaterAPI_1") !=
-           prim.apiSchemas.end();
-}
-
 }  // namespace
 
-RealisticPass::RealisticPass(const gpu::Device& device) : device_(device) {
+float surfacePatternOf(std::string_view name) {
+    static constexpr std::array<std::pair<std::string_view, float>, 11> kWords{
+        {{"brick", 1.0F},
+         {"asphalt", 2.0F},
+         {"pavement", 3.0F},
+         {"plaster", 4.0F},
+         {"concrete", 5.0F},
+         {"lawn", 6.0F},
+         {"leaves", 7.0F},
+         {"road_paint", 8.0F},
+         {"window_glass", 9.0F},
+         {"bark", 10.0F},
+         {"roof_felt", 11.0F}}};
+    for (const auto& [word, value] : kWords) {
+        if (name.find(word) != std::string_view::npos) {
+            return value;
+        }
+    }
+    return 0.0F;
+}
+
+RealisticTextures::RealisticTextures(const Device& device) : device_(device) {
+    // Without the photographs a grey layer, and the shader's own patterns.
+    SurfaceTextures textures = loadSurfaceTextures(surfaceTextureDirectory());
+    complete_ = textures.complete;
+    if (complete_) {
+        albedo_ = createTextureArray(device_, SurfaceTextures::kSize, VK_FORMAT_R8G8B8A8_SRGB,
+                                     textures.albedo);
+        normal_ = createTextureArray(device_, SurfaceTextures::kSize, VK_FORMAT_R8G8B8A8_UNORM,
+                                     textures.normal);
+    } else {
+        const std::vector<std::vector<std::uint8_t>> grey{{128, 128, 255, 255}};
+        albedo_ = createTextureArray(device_, 1, VK_FORMAT_R8G8B8A8_SRGB, grey);
+        normal_ = createTextureArray(device_, 1, VK_FORMAT_R8G8B8A8_UNORM, grey);
+    }
+}
+
+RealisticTextures::~RealisticTextures() {
+    destroy(device_, albedo_);
+    destroy(device_, normal_);
+}
+
+RealisticRenderer::RealisticRenderer(const Device& device,
+                                     std::shared_ptr<const RealisticTextures> textures)
+    : device_(device), textures_(std::move(textures)) {
     VkDevice d = device_.device();
     VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     sampler.magFilter = VK_FILTER_LINEAR;
@@ -174,20 +214,6 @@ RealisticPass::RealisticPass(const gpu::Device& device) : device_(device) {
     sampler.anisotropyEnable = device_.samplerAnisotropy() ? VK_TRUE : VK_FALSE;
     sampler.maxAnisotropy = 8.0F;
     vkCreateSampler(d, &sampler, nullptr, &repeat_);
-
-    // Photographs of surfaces; without them a grey layer, and the shader's own patterns.
-    SurfaceTextures textures = loadSurfaceTextures(surfaceTextureDirectory());
-    hasTextures_ = textures.complete;
-    if (hasTextures_) {
-        albedo_ = gpu::createTextureArray(device_, SurfaceTextures::kSize, VK_FORMAT_R8G8B8A8_SRGB,
-                                          textures.albedo);
-        normal_ = gpu::createTextureArray(device_, SurfaceTextures::kSize, VK_FORMAT_R8G8B8A8_UNORM,
-                                          textures.normal);
-    } else {
-        const std::vector<std::vector<std::uint8_t>> grey{{128, 128, 255, 255}};
-        albedo_ = gpu::createTextureArray(device_, 1, VK_FORMAT_R8G8B8A8_SRGB, grey);
-        normal_ = gpu::createTextureArray(device_, 1, VK_FORMAT_R8G8B8A8_UNORM, grey);
-    }
 
     std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
     for (std::uint32_t b = 0; b < bindings.size(); ++b) {
@@ -220,16 +246,15 @@ RealisticPass::RealisticPass(const gpu::Device& device) : device_(device) {
     mirrorSet_ = sets[1];
     compositeSet_ = sets[2];
 
-    frames_ =
-        gpu::createBuffer(device_, 2 * kFrameStride, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+    frames_ = createBuffer(device_, 2 * kFrameStride, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
     shadow_ =
-        gpu::createImage2D(device_, {2 * kShadowSize, kShadowSize}, gpu::kDepthFormat,
-                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                           VK_IMAGE_ASPECT_DEPTH_BIT);
+        createImage2D(device_, {2 * kShadowSize, kShadowSize}, kDepthFormat,
+                      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                      VK_IMAGE_ASPECT_DEPTH_BIT);
     pipelines();
 }
 
-RealisticPass::~RealisticPass() {
+RealisticRenderer::~RealisticRenderer() {
     VkDevice d = device_.device();
     vkDeviceWaitIdle(d);
     for (Pipeline* p : {&shadowPipe_, &opaque_, &transparent_, &sky_, &waterPipe_, &composite_}) {
@@ -238,85 +263,81 @@ RealisticPass::~RealisticPass() {
     }
     vkDestroyDescriptorPool(d, pool_, nullptr);
     vkDestroySampler(d, repeat_, nullptr);
-    gpu::destroy(device_, albedo_);
-    gpu::destroy(device_, normal_);
     vkDestroyDescriptorSetLayout(d, setLayout_, nullptr);
     vkDestroySampler(d, linear_, nullptr);
     vkDestroySampler(d, nearest_, nullptr);
-    gpu::destroy(device_, frames_);
-    gpu::destroy(device_, shadow_);
-    gpu::destroy(device_, hdr_);
-    gpu::destroy(device_, hdrCopy_);
-    gpu::destroy(device_, mirror_);
-    gpu::destroy(device_, mirrorDepth_);
+    destroy(device_, frames_);
+    destroy(device_, shadow_);
+    destroy(device_, hdr_);
+    destroy(device_, hdrCopy_);
+    destroy(device_, mirror_);
+    destroy(device_, mirrorDepth_);
 }
 
-void RealisticPass::pipelines() {
-    gpu::PipelineSpec mesh;
+void RealisticRenderer::pipelines() {
+    PipelineSpec mesh;
     mesh.vertex = kRealMeshVertex;
     mesh.fragment = kRealMeshFragment;
     mesh.pushSize = sizeof(Push);
     mesh.colorFormats = std::span{&kHdrFormat, 1};
     mesh.blend = false;
     mesh.setLayout = setLayout_;
-    gpu::buildPipeline(device_, mesh, opaque_.layout, opaque_.pipeline);
+    buildPipeline(device_, mesh, opaque_.layout, opaque_.pipeline);
 
-    gpu::PipelineSpec glass = mesh;
+    PipelineSpec glass = mesh;
     glass.blend = true;
     glass.depthWrite = false;
-    gpu::buildPipeline(device_, glass, transparent_.layout, transparent_.pipeline);
+    buildPipeline(device_, glass, transparent_.layout, transparent_.pipeline);
 
-    gpu::PipelineSpec sun = mesh;
+    PipelineSpec sun = mesh;
     sun.vertex = kRealShadowVertex;
     sun.fragment = kRealShadowFragment;
     sun.colorFormats = {};
-    gpu::buildPipeline(device_, sun, shadowPipe_.layout, shadowPipe_.pipeline);
+    buildPipeline(device_, sun, shadowPipe_.layout, shadowPipe_.pipeline);
 
-    gpu::PipelineSpec sky = mesh;
+    PipelineSpec sky = mesh;
     sky.vertex = kRealScreenVertex;
     sky.fragment = kRealSkyFragment;
     sky.stride = 0;
     sky.depthWrite = false;
-    gpu::buildPipeline(device_, sky, sky_.layout, sky_.pipeline);
+    buildPipeline(device_, sky, sky_.layout, sky_.pipeline);
 
-    gpu::PipelineSpec water = sky;
+    PipelineSpec water = sky;
     water.vertex = kRealWaterVertex;
     water.fragment = kRealWaterFragment;
-    gpu::buildPipeline(device_, water, waterPipe_.layout, waterPipe_.pipeline);
+    buildPipeline(device_, water, waterPipe_.layout, waterPipe_.pipeline);
 
-    gpu::PipelineSpec composite = sky;
+    PipelineSpec composite = sky;
     composite.fragment = kRealCompositeFragment;
     composite.colorFormats = std::span{&kFinalFormat, 1};
     composite.depthTest = false;
-    gpu::buildPipeline(device_, composite, composite_.layout, composite_.pipeline);
+    buildPipeline(device_, composite, composite_.layout, composite_.pipeline);
 }
 
-void RealisticPass::resize(VkExtent2D extent, const gpu::Image& depth) {
+void RealisticRenderer::resize(VkExtent2D extent, const Image& depth) {
     vkDeviceWaitIdle(device_.device());
-    gpu::destroy(device_, hdr_);
-    gpu::destroy(device_, hdrCopy_);
-    gpu::destroy(device_, mirror_);
-    gpu::destroy(device_, mirrorDepth_);
+    destroy(device_, hdr_);
+    destroy(device_, hdrCopy_);
+    destroy(device_, mirror_);
+    destroy(device_, mirrorDepth_);
     const VkImageUsageFlags attachment =
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    hdr_ =
-        gpu::createImage2D(device_, extent, kHdrFormat,
-                           attachment | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
-    hdrCopy_ = gpu::createImage2D(device_, extent, kHdrFormat,
-                                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                                  VK_IMAGE_ASPECT_COLOR_BIT);
+    hdr_ = createImage2D(device_, extent, kHdrFormat, attachment | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                         VK_IMAGE_ASPECT_COLOR_BIT);
+    hdrCopy_ = createImage2D(device_, extent, kHdrFormat,
+                             VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                             VK_IMAGE_ASPECT_COLOR_BIT);
     const VkExtent2D half{std::max<std::uint32_t>(extent.width / 2, 1),
                           std::max<std::uint32_t>(extent.height / 2, 1)};
-    mirror_ = gpu::createImage2D(device_, half, kHdrFormat, attachment, VK_IMAGE_ASPECT_COLOR_BIT);
+    mirror_ = createImage2D(device_, half, kHdrFormat, attachment, VK_IMAGE_ASPECT_COLOR_BIT);
     mirrorDepth_ =
-        gpu::createImage2D(device_, half, gpu::kDepthFormat,
-                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+        createImage2D(device_, half, kDepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                      VK_IMAGE_ASPECT_DEPTH_BIT);
     descriptors(depth);
-    first_ = true;
 }
 
-void RealisticPass::descriptors(const gpu::Image& depth) {
-    const auto write = [&](VkDescriptorSet set, VkDeviceSize offset, const gpu::Image& scene) {
+void RealisticRenderer::descriptors(const Image& depth) {
+    const auto write = [&](VkDescriptorSet set, VkDeviceSize offset, const Image& scene) {
         const VkDescriptorBufferInfo uniform{frames_.buffer, offset, sizeof(Frame)};
         const VkImageLayout read = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         const VkImageLayout readDepth = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
@@ -325,8 +346,8 @@ void RealisticPass::descriptors(const gpu::Image& depth) {
             {linear_, scene.view, read},
             {nearest_, depth.view, readDepth},
             {linear_, mirror_.view, read},
-            {repeat_, albedo_.view, read},
-            {repeat_, normal_.view, read},
+            {repeat_, textures_->albedo_.view, read},
+            {repeat_, textures_->normal_.view, read},
         }};
         std::array<VkWriteDescriptorSet, 7> writes{};
         for (std::uint32_t b = 0; b < writes.size(); ++b) {
@@ -350,87 +371,77 @@ void RealisticPass::descriptors(const gpu::Image& depth) {
     write(compositeSet_, 0, hdr_);
 }
 
-std::optional<RealisticPass::Water> RealisticPass::findWater(
-    const SceneFrame& frame, const std::array<double, 3>& eye) const {
-    const SceneStatics& statics = *frame.statics;
-    for (std::size_t i = 0; i < statics.prims.size(); ++i) {
-        const PrimData& prim = statics.prims[i];
-        if (!prim.visible || prim.mesh == kNone || !isWater(prim) ||
-            prim.mesh >= statics.meshes.size()) {
-            continue;
-        }
-        const Transform& at = frame.transforms[i];
-        const std::array<float, 6>& box = statics.meshes[prim.mesh].aabb;
-        Water water;
-        water.prim = i;
-        for (std::size_t k = 0; k < 2; ++k) {
-            const double middle = (box.at(k) + box.at(k + 3)) / 2.0 * at.scale.at(k);
-            water.center.at(k) = at.position.at(k) + middle - eye.at(k);
-            water.half.at(k) = (box.at(k + 3) - box.at(k)) / 2.0 * at.scale.at(k);
-        }
-        water.top = at.position[2] + box[5] * at.scale[2] - eye[2];
-        water.bottom = at.position[2] + box[2] * at.scale[2] - eye[2];
-        return water;
-    }
-    return std::nullopt;
-}
-
-std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* frame,
-                                    const Camera& camera, const RenderOptions& options,
-                                    gpu::MeshSet& meshes, const gpu::Image& color,
-                                    const gpu::Image& depth) {
+std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
+                                        std::span<const RealisticDraw> items,
+                                        const RealisticView& view,
+                                        const RealisticSettings& settings, const MeshSet& meshes,
+                                        const Image& color, const Image& depth) {
     const VkExtent2D extent = color.extent;
-    const double aspect = static_cast<double>(extent.width) / extent.height;
-    const std::array<double, 3> eye = camera.eye();
-    const std::array<std::array<double, 3>, 3> axes = camera.axes();
-    const std::array<double, 3> toTarget{camera.target[0] - eye[0], camera.target[1] - eye[1],
-                                         camera.target[2] - eye[2]};
-    const double near = std::clamp(camera.distance * 1.8, 8.0, 60.0);
+    const std::array<double, 3>& eye = view.eye;
+    const std::array<double, 3> toTarget{view.focus[0] - eye[0], view.focus[1] - eye[1],
+                                         view.focus[2] - eye[2]};
+    const double near = std::clamp(view.focusDistance * 1.8, 8.0, 60.0);
     const Cascade nearCascade = cascade(toTarget, eye, near, true);
     const Cascade farCascade = cascade(toTarget, eye, near * 7.0, false);
     const auto f = [](double v) { return static_cast<float>(v); };
 
-    const std::optional<Water> water =
-        frame != nullptr && frame->statics ? findWater(*frame, eye) : std::nullopt;
+    // The first body of water is drawn as water; any others as what they are made of.
+    std::optional<Water> water;
+    for (std::size_t i = 0; i < items.size() && !water; ++i) {
+        if (!items[i].water) {
+            continue;
+        }
+        const RealisticDraw& at = items[i];
+        const std::array<float, 6>& box = at.box;
+        Water found;
+        found.draw = i;
+        for (std::size_t k = 0; k < 2; ++k) {
+            const double middle = (box.at(k) + box.at(k + 3)) / 2.0 * at.scale.at(k);
+            found.center.at(k) = at.position.at(k) + middle - eye.at(k);
+            found.half.at(k) = (box.at(k + 3) - box.at(k)) / 2.0 * at.scale.at(k);
+        }
+        found.top = at.position[2] + box[5] * at.scale[2] - eye[2];
+        found.bottom = at.position[2] + box[2] * at.scale[2] - eye[2];
+        water = found;
+    }
 
     Frame main{};
-    main.viewProjection = camera.viewProjection(aspect);
+    main.viewProjection = view.viewProjection;
     const double sunNorm = std::sqrt(kSun[0] * kSun[0] + kSun[1] * kSun[1] + kSun[2] * kSun[2]);
     main.sunDirection = {f(kSun[0] / sunNorm), f(kSun[1] / sunNorm), f(kSun[2] / sunNorm),
                          kSunStrength};
     main.sunColor = {kSunColor[0], kSunColor[1], kSunColor[2], kExposure};
     // Sun and exposure through the year, by eye: a drawing choice as kSun is.
-    const float season = static_cast<float>(static_cast<int>(options.season));
-    switch (options.season) {
-        case Season::Summer:
-            break;
-        case Season::Fall:
+    const float season = static_cast<float>(settings.season);
+    switch (settings.season) {
+        case 1:  // fall
             main.sunDirection[3] = 3.4F;
             main.sunColor = {1.0F, 0.84F, 0.64F, kExposure};
             break;
-        case Season::Winter:
+        case 2:  // winter
             main.sunDirection[3] = 1.1F;
             main.sunColor = {0.95F, 0.96F, 1.0F, kExposure * 0.85F};
             break;
-        case Season::Rainy:
+        case 3:  // the rainy season
             main.sunDirection[3] = 0.25F;
             main.sunColor = {0.85F, 0.9F, 1.0F, kExposure * 1.05F};
             break;
+        default:
+            break;
     }
     main.mode[2] = season;
-    main.mode[3] = hasTextures_ ? 1.0F : 0.0F;
-    const double seconds = frame != nullptr ? static_cast<double>(frame->simTimeNs) * 1e-9 : 0.0;
+    main.mode[3] = textures_->complete() ? 1.0F : 0.0F;
+    const double seconds = settings.seconds;
     // Wrapped so that a float holds it: noise and waves repeat every 1024 m and 17 minutes.
     main.worldWrap = {f(std::fmod(eye[0], 1024.0)), f(std::fmod(eye[1], 1024.0)),
                       f(std::fmod(eye[2], 1024.0)), f(std::fmod(seconds, 1024.0))};
-    const double tanHalf = std::tan(camera.verticalFov / 2.0);
-    main.cameraRight = {f(axes[0][0]), f(axes[0][1]), f(axes[0][2]), f(tanHalf * aspect)};
-    main.cameraUp = {f(axes[1][0]), f(axes[1][1]), f(axes[1][2]), f(tanHalf)};
-    main.cameraForward = {f(axes[2][0]), f(axes[2][1]), f(axes[2][2]), f(camera.nearPlane)};
+    main.cameraRight = {f(view.right[0]), f(view.right[1]), f(view.right[2]), f(view.tanHalfX)};
+    main.cameraUp = {f(view.up[0]), f(view.up[1]), f(view.up[2]), f(view.tanHalfY)};
+    main.cameraForward = {f(view.forward[0]), f(view.forward[1]), f(view.forward[2]), f(view.near)};
     main.shadow0 = nearCascade.atlas;
     main.shadow1 = farCascade.atlas;
     if (water) {
-        main.water = {f(water->top), options.windSpeed, 1.0F, f(water->bottom)};
+        main.water = {f(water->top), settings.windSpeed, 1.0F, f(water->bottom)};
         main.waterRect = {f(water->center[0]), f(water->center[1]), f(water->half[0]),
                           f(water->half[1])};
     }
@@ -438,12 +449,13 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
                    1.0F / static_cast<float>(extent.width),
                    1.0F / static_cast<float>(extent.height)};
     Frame mirrorFrame = main;
-    mirrorFrame.mode = {1.0F, water ? f(water->top) : 0.0F, season, hasTextures_ ? 1.0F : 0.0F};
+    mirrorFrame.mode = {1.0F, water ? f(water->top) : 0.0F, season,
+                        textures_->complete() ? 1.0F : 0.0F};
     mirrorFrame.sunDirection[2] = -main.sunDirection[2];
     auto* mapped = static_cast<std::byte*>(frames_.mapped);
     std::memcpy(mapped, &main, sizeof(Frame));
     std::memcpy(mapped + kFrameStride, &mirrorFrame, sizeof(Frame));
-    gpu::flush(device_, frames_);
+    flush(device_, frames_);
 
     std::uint32_t draws = 0;
     const VkShaderStageFlags stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -464,9 +476,9 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
         vkCmdSetViewport(commands, 0, 1, &viewport);
         vkCmdSetScissor(commands, 0, 1, &scissor);
     };
-    const auto begin = [&](const gpu::Image* target, VkImageView depthView,
-                           VkImageLayout depthLayout, VkAttachmentLoadOp depthLoad, VkExtent2D size,
-                           VkAttachmentLoadOp load, std::array<float, 4> clear = {}) {
+    const auto begin = [&](const Image* target, VkImageView depthView, VkImageLayout depthLayout,
+                           VkAttachmentLoadOp depthLoad, VkExtent2D size, VkAttachmentLoadOp load,
+                           std::array<float, 4> clear = {}) {
         VkRenderingAttachmentInfo colorInfo{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
         if (target != nullptr) {
             colorInfo.imageView = target->view;
@@ -493,22 +505,13 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
 
     // What is drawn as a mesh, opaque or see-through, with its look.
     const auto pushFor = [&](std::size_t i, std::array<float, 12> model) {
-        const SceneStatics& statics = *frame->statics;
-        const PrimData& prim = statics.prims[i];
+        const RealisticDraw& item = items[i];
         Push push{};
         push.model = model;
-        push.baseColor = {0.8F, 0.8F, 0.8F, 1.0F};
-        push.surface = {0.0F, 0.6F, 0.0F, 0.0F};
-        if (prim.material != kNone) {
-            const MaterialData& material = statics.materials[prim.material];
-            push.baseColor = material.baseColor;
-            push.surface[0] = material.metallic;
-            push.surface[1] = material.roughness;
-            push.surface[3] = material.pattern;
-            push.emissive = {material.emissive[0], material.emissive[1], material.emissive[2],
-                             0.0F};
-        }
-        if (prim.name == "ground") {
+        push.baseColor = item.baseColor;
+        push.surface = {item.metallic, item.roughness, 0.0F, item.pattern};
+        push.emissive = {item.emissive[0], item.emissive[1], item.emissive[2], 0.0F};
+        if (item.ground) {
             push.baseColor = kGroundColor;
             for (std::size_t row = 0; row < 3; ++row) {
                 push.model.at(row * 4) *= kGroundReach;
@@ -521,21 +524,13 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
                                                  : rough * (1.0F - 0.7F * push.surface[0]);
         return push;
     };
-    const auto drawable = [&](std::size_t i) {
-        const PrimData& prim = frame->statics->prims[i];
-        return prim.visible && prim.mesh != kNone && !(water && water->prim == i);
-    };
-    const auto opaque = [&](std::size_t i) {
-        const SceneStatics& statics = *frame->statics;
-        const PrimData& prim = statics.prims[i];
-        return prim.material == kNone || statics.materials[prim.material].baseColor[3] >= 1.0F;
-    };
-    const bool hasScene = frame != nullptr && frame->statics != nullptr;
-    const std::size_t primCount = hasScene ? frame->statics->prims.size() : 0;
+    const auto drawable = [&](std::size_t i) { return !(water && water->draw == i); };
+    const auto opaque = [&](std::size_t i) { return items[i].baseColor[3] >= 1.0F; };
+    const std::size_t primCount = items.size();
 
     // --- the sun's depth ---------------------------------------------------------------------
-    gpu::transitionImage(commands, shadow_.image, VK_IMAGE_ASPECT_DEPTH_BIT,
-                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+    transitionImage(commands, shadow_.image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
     begin(nullptr, shadow_.view, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
           VK_ATTACHMENT_LOAD_OP_CLEAR, shadow_.extent, VK_ATTACHMENT_LOAD_OP_DONT_CARE);
     bind(shadowPipe_, mainSet_);
@@ -543,53 +538,53 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
         region({kShadowSize, kShadowSize}, {left ? 0 : static_cast<std::int32_t>(kShadowSize), 0});
         const std::array<float, 12>& sun = left ? nearCascade.clip : farCascade.clip;
         for (std::size_t i = 0; i < primCount; ++i) {
-            if (!drawable(i) || !opaque(i) || frame->statics->prims[i].name == "ground") {
+            if (!drawable(i) || !opaque(i) || items[i].ground) {
                 continue;
             }
-            Push push = pushFor(i, times(sun, rows(frame->transforms[i], eye)));
+            Push push = pushFor(i, times(sun, rows(items[i], eye)));
             vkCmdPushConstants(commands, shadowPipe_.layout, stages, 0, sizeof(push), &push);
-            meshes.draw(commands, frame->statics->prims[i].mesh);
+            meshes.draw(commands, items[i].mesh);
         }
     }
     vkCmdEndRendering(commands);
-    gpu::transitionImage(commands, shadow_.image, VK_IMAGE_ASPECT_DEPTH_BIT,
-                         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                         VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
+    transitionImage(commands, shadow_.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+                    VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                    VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
 
     // --- what the water reflects: the scene turned over its surface ---------------------------
-    gpu::transitionImage(commands, mirror_.image, VK_IMAGE_ASPECT_COLOR_BIT,
-                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    gpu::transitionImage(commands, mirrorDepth_.image, VK_IMAGE_ASPECT_DEPTH_BIT,
-                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+    transitionImage(commands, mirror_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    transitionImage(commands, mirrorDepth_.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
     begin(&mirror_, mirrorDepth_.view, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
           VK_ATTACHMENT_LOAD_OP_CLEAR, mirror_.extent, VK_ATTACHMENT_LOAD_OP_CLEAR);
     if (water) {
         bind(opaque_, mirrorSet_);
         const float plane = f(water->top);
         for (std::size_t i = 0; i < primCount; ++i) {
-            if (!drawable(i) || !opaque(i) || frame->statics->prims[i].name == "ground") {
+            if (!drawable(i) || !opaque(i) || items[i].ground) {
                 continue;
             }
-            std::array<float, 12> model = rows(frame->transforms[i], eye);
+            std::array<float, 12> model = rows(items[i], eye);
             for (std::size_t c = 0; c < 4; ++c) {
                 model.at(8 + c) = -model.at(8 + c);
             }
             model[11] += 2.0F * plane;
             Push push = pushFor(i, model);
             vkCmdPushConstants(commands, opaque_.layout, stages, 0, sizeof(push), &push);
-            if (meshes.draw(commands, frame->statics->prims[i].mesh)) {
+            if (meshes.draw(commands, items[i].mesh)) {
                 ++draws;
             }
         }
     }
     vkCmdEndRendering(commands);
-    gpu::transitionImage(commands, mirror_.image, VK_IMAGE_ASPECT_COLOR_BIT,
-                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    transitionImage(commands, mirror_.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     // --- the scene ---------------------------------------------------------------------------
-    gpu::transitionImage(commands, hdr_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
-                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    transitionImage(commands, hdr_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     begin(&hdr_, depth.view, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_ATTACHMENT_LOAD_OP_CLEAR,
           extent, VK_ATTACHMENT_LOAD_OP_CLEAR);
     bind(opaque_, mainSet_);
@@ -597,40 +592,40 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
         if (!drawable(i) || !opaque(i)) {
             continue;
         }
-        Push push = pushFor(i, rows(frame->transforms[i], eye));
+        Push push = pushFor(i, rows(items[i], eye));
         vkCmdPushConstants(commands, opaque_.layout, stages, 0, sizeof(push), &push);
-        if (meshes.draw(commands, frame->statics->prims[i].mesh)) {
+        if (meshes.draw(commands, items[i].mesh)) {
             ++draws;
         }
     }
     bind(sky_, mainSet_);
     vkCmdDraw(commands, 3, 1, 0, 0);
     vkCmdEndRendering(commands);
-    gpu::transitionImage(commands, depth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
-                         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                         VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
+    transitionImage(commands, depth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+                    VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                    VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
 
     // --- water: reads what is below it, so from a copy ----------------------------------------
     const auto toRead = [&](VkImageLayout from) {
-        gpu::transitionImage(commands, hdr_.image, VK_IMAGE_ASPECT_COLOR_BIT, from,
-                             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        transitionImage(commands, hdr_.image, VK_IMAGE_ASPECT_COLOR_BIT, from,
+                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     };
     if (water) {
         toRead(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        gpu::transitionImage(commands, hdrCopy_.image, VK_IMAGE_ASPECT_COLOR_BIT,
-                             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        transitionImage(commands, hdrCopy_.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         VkImageCopy copy{};
         copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         copy.dstSubresource = copy.srcSubresource;
         copy.extent = {extent.width, extent.height, 1};
         vkCmdCopyImage(commands, hdr_.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, hdrCopy_.image,
                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-        gpu::transitionImage(commands, hdrCopy_.image, VK_IMAGE_ASPECT_COLOR_BIT,
-                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        gpu::transitionImage(commands, hdr_.image, VK_IMAGE_ASPECT_COLOR_BIT,
-                             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        transitionImage(commands, hdrCopy_.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        transitionImage(commands, hdr_.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     }
     begin(&hdr_, depth.view, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL, VK_ATTACHMENT_LOAD_OP_LOAD,
           extent, VK_ATTACHMENT_LOAD_OP_LOAD);
@@ -643,7 +638,7 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
     std::vector<std::pair<double, std::size_t>> glass;
     for (std::size_t i = 0; i < primCount; ++i) {
         if (drawable(i) && !opaque(i)) {
-            const std::array<double, 3>& p = frame->transforms[i].position;
+            const std::array<double, 3>& p = items[i].position;
             const std::array<double, 3> d{p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]};
             glass.emplace_back(-(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]), i);
         }
@@ -652,17 +647,17 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
     if (!glass.empty()) {
         bind(transparent_, mainSet_);
         for (const auto& [distance, i] : glass) {
-            Push push = pushFor(i, rows(frame->transforms[i], eye));
+            Push push = pushFor(i, rows(items[i], eye));
             vkCmdPushConstants(commands, transparent_.layout, stages, 0, sizeof(push), &push);
-            if (meshes.draw(commands, frame->statics->prims[i].mesh)) {
+            if (meshes.draw(commands, items[i].mesh)) {
                 ++draws;
             }
         }
     }
     vkCmdEndRendering(commands);
-    gpu::transitionImage(commands, hdr_.image, VK_IMAGE_ASPECT_COLOR_BIT,
-                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    transitionImage(commands, hdr_.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     // --- the final image ---------------------------------------------------------------------
     begin(&color, depth.view, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL, VK_ATTACHMENT_LOAD_OP_LOAD,
@@ -670,8 +665,7 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
     bind(composite_, compositeSet_);
     vkCmdDraw(commands, 3, 1, 0, 0);
     vkCmdEndRendering(commands);
-    first_ = false;
     return draws;
 }
 
-}  // namespace lagrange::viewer
+}  // namespace lagrange::gpu
