@@ -242,3 +242,8 @@ What it is checked against (`test_lbm`): the exact decay of a shear wave within 
 The flow world is plain meshes in bands of a colour, one prim per band named after its range, so it needs no protocol change: the viewport reads its colour scales from those names (`FlowLegend.cpp`).
 
 The CPU path holds a symmetric body's flow exactly symmetric, in which a wake may not shed at all; the GPU's rounding breaks the symmetry and it sheds, as a real wake does, so the two can differ by more than either's numbers suggest (a pod on 150,000 cells: 2.11 steady on the CPU, 2.2 to 2.5 shedding on the GPU). `dragSpread` says how much the coefficient moved between windows, and `--mean-passes` averages longer.
+
+`--frames N` writes about N PNG files of a slice through the body while averaging, coloured by the air's spin, so the wake is seen moving. `flow.nvdb` as `--weather wind_field=` reaches a run: the sample quadcopter in the sedan's flow drifted 8 m in 10 s and tilted, where it held still without it (one run by hand, 2026-11-02).
+
+
+Known defect, seen in these frames: a checkerboard of about 1 to 2 % of the wind speed upstream of the body that does not decay over a run (sedan, 25 m/s, 1.5M cells). BGK near relaxation time 0.5 hardly damps it. Its effect on the forces has not been measured.

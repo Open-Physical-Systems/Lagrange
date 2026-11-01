@@ -5,9 +5,11 @@
 #include "lagrange/fields/Field.hpp"
 #include "lagrange/gpu/Device.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <numbers>
 #include <string>
 
@@ -120,6 +122,7 @@ TEST(WindTunnel, ACubeGivesItsDragAndItsFiles) {
     options.speed = 10.0;
     options.maxCells = 40000;
     options.passes = 2.0;
+    options.frames = 20;
     auto result = runWindTunnel(world, options, out.string());
     ASSERT_TRUE(result) << result.error();
     // A cube face-on has a Cd of about 1.05 (Hoerner); a coarse grid with blockage reads high.
@@ -132,6 +135,12 @@ TEST(WindTunnel, ACubeGivesItsDragAndItsFiles) {
     for (const char* file : {"flow.vti", "flow.nvdb", "flow_view.usda", "report.json"}) {
         EXPECT_TRUE(std::filesystem::exists(out / file)) << file;
     }
+    // A PNG a reader takes: its signature, and as many as asked.
+    std::ifstream frame(out / "frames" / "00000.png", std::ios::binary);
+    std::array<char, 4> signature{};
+    frame.read(signature.data(), 4);
+    EXPECT_EQ(signature[1], 'P');
+    EXPECT_TRUE(std::filesystem::exists(out / "frames" / "00019.png"));
     auto field = fields::Field::load((out / "flow.nvdb").string());
     ASSERT_TRUE(field) << field.error();
     // Far ahead of the cube, the air is at the tunnel's speed.

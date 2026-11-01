@@ -30,6 +30,9 @@ struct WindTunnelOptions {
     double viscosity{1.5e-5};      ///< m²/s
     /// A rolling road under the robot's lowest point, as for a car; else free air around it.
     bool ground{false};
+    /// Pictures of the wake moving: this many PNG files of a slice through the body, in frames/ of
+    /// the output, while it averages. 0: none. Colour is the air's spin about the slice's normal.
+    std::size_t frames{0};
     /// Where to step it: null for the CPU reference.
     const gpu::Device* device{nullptr};
 };
