@@ -220,7 +220,11 @@ Not yet: battery FMUs and the rotor inertia in Jolt.
 | Brownout scenario | met | `AStalledAmrOnALowBatteryBrownsOutAndRecovers` |
 | Sim-vs-real | owed: needs the bench recording (Q16) | — |
 
-## 10. Hand check
+## 10. Parts between buses (RFC 0010)
+
+`ElectricalBranchAPI_1` joins two buses with a resistor, a fuse (open from the step `∫I²dt` reaches its rating, until the run restarts), a switch (`branch/<b>/command` above 0.5 is closed) or a diode (a forward drop and a resistance, open backward). Buses joined this way are solved together each step, by nodal analysis with the capacitors' backward-Euler companions, dense with partial pivoting, repeating while a diode, a battery at its charge limit or a converter changes state. A bus with no branch keeps the single-bus solve, so nothing changes for it. Signals: `branch/<b>/current`, `/voltage`, `/state`, `/loss_power`. A bus behind a part starts at what reaches it with nothing drawn.
+
+## 11. Hand check
 
 `tools/ci/check_electrical.py` draws simple circuits and works each out three ways, independently:
 a closed-form formula, ngspice on a netlist written by the script (not `lagrange export`), and a

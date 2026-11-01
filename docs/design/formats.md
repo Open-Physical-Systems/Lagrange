@@ -1557,11 +1557,14 @@ sensors, so lidars on an MJCF robot still need USD for now.
 | `R n 0 r` | `ElectricalLoadAPI_1` `resistive`, its power `V²/r` at the bus's start voltage |
 | `B n 0 I = P / max(V(n), e) [* ((V(n) >= m) ? 1 : 0)]` | `ElectricalLoadAPI_1` `constant_power` |
 | `*lagrange battery ELEMENT capacity= cutoff= max_charge= [soc=] [ocv_soc=0,0.5,1 ocv=44,48,54]` (C, V, A) | what SPICE cannot say about a battery; required. A curve is for the whole pack and must give the source's voltage at its `soc`, or ngspice and the run would answer for different batteries |
+| `R a b r` between two buses, where a chain does not take it | `ElectricalBranchAPI_1` `resistor` |
+| `*lagrange fuse R_x i2t=` (A²s), `*lagrange switch R_x [closed=0]` on such a resistor | a `fuse`, or a `switch` on `branch/<name>/command` |
+| `D a b MODEL` with `*lagrange diode D_x drop= r=` (V, Ω) | a `diode`: a drop and a resistance forward, open backward; the SPICE model is for ngspice only |
 | `*lagrange converter NAME source=V_x in=BUS max_current= [efficiency=] [input_sink=B_y]` | `ElectricalConverterAPI_1`: `V_x` from its output to ground stands for it in ngspice and sets its voltage; `B_y`, what it draws from `in` there, is read by ngspice only (`I = -I(V_x) * 12 / 0.9 / max(V(dc), 0.001)`). One per output bus |
 | `*lagrange bus NODE undervoltage= overvoltage=` (V) | the bus's trips; required |
 | `*lagrange motor JOINT node= r= l= kt= imax= [name=] [type=] [gear=] [efficiency=] [pole_pairs=] [rotor_inertia=]` | `ElectricalMotorAPI_1`, named `JOINT_motor` unless `name=`; a drive is not a SPICE element |
 
-The first line is the title, as in SPICE; analysis commands and `.control` blocks are ignored. Everything else is refused with its line, every problem together, and nothing is left out in silence: diodes, transistors, inductors, subcircuits, switches, controlled and current sources, `.param`, `.include`, `.model`, sources other than DC, and elements between two buses. So is a drive of `lagrange export spice` (`V(p_drive)`), so an exported netlist does not read back yet.  `tools/ci/check_electrical.py` runs every circuit through this route and through an overlay.
+The first line is the title, as in SPICE; analysis commands and `.control` blocks are ignored. Everything else is refused with its line, every problem together, and nothing is left out in silence: transistors, inductors, subcircuits, SPICE switches, controlled and current sources, `.param`, `.include`, sources other than DC, a diode with no `*lagrange diode`, and a capacitor between two buses. So is a drive of `lagrange export spice` (`V(p_drive)`), so an exported netlist does not read back yet.  `tools/ci/check_electrical.py` runs every circuit through this route and through an overlay.
 
 ### 9.2 A URDF that names its power system
 

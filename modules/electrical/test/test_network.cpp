@@ -438,6 +438,103 @@ TEST(ElectricalNetwork, RegenerationIntoAFullBatteryRaisesTheBusUntilTheBrakeRes
     }
 }
 
+/// Writes a switch's command: closed for the first half second, then open. Keeps what it reads.
+class SwitchBench final : public IModule {
+public:
+    double current{0.0}, nearVolts{0.0}, farVolts{0.0};
+    [[nodiscard]] ModuleInfo info() const override {
+        return {"test", "switch_bench", 1, 0, false, true, CapabilityTier::Tier0};
+    }
+    [[nodiscard]] Duration preferredStep() const override { return 100_us; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        const auto spec = [](std::string name, Unit unit) {
+            SignalSpec s;
+            s.name = std::move(name);
+            s.unit = unit;
+            return s;
+        };
+        command_ = d.output(spec("branch/relay/command", units::one));
+        const auto input = [&](std::string name, Unit unit) {
+            SignalSpec s = spec(std::move(name), unit);
+            s.feedback = true;
+            return d.input(s);
+        };
+        current_ = input("branch/relay/current", units::A);
+        near_ = input("bus/near/voltage", units::V);
+        far_ = input("bus/far/voltage", units::V);
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        bus.write(command_, 1.0);
+        return {};
+    }
+    Status step(const StepContext& c, SignalBus& bus) override {
+        bus.write(command_, c.t.seconds() < 0.5 ? 1.0 : 0.0);
+        current = bus.read(current_);
+        nearVolts = bus.read(near_);
+        farVolts = bus.read(far_);
+        return {};
+    }
+    Status saveState(StateWriter&) const override { return {}; }
+    Status restoreState(StateReader&) override { return {}; }
+
+private:
+    SignalId command_, current_, near_, far_;
+};
+
+TEST(ElectricalNetwork, ASwitchFollowsItsCommandBetweenBuses) {
+    World w;
+    const auto add = [&w](std::string schema, PrimId prim) -> SchemaInstance& {
+        w.schemaInstances.push_back({});
+        SchemaInstance& s = w.schemaInstances.back();
+        s.schema = std::move(schema);
+        s.prim = prim;
+        return s;
+    };
+    const PrimId near = w.addPrim("/r/near", "near");
+    const PrimId far = w.addPrim("/r/far", "far");
+    for (const PrimId bus : {near, far}) {
+        add("ElectricalBusAPI_1", bus).reals = {{"elec:bus:capacitance", 1e-3},
+                                                {"elec:bus:undervoltageTrip", 0.0},
+                                                {"elec:bus:overvoltageTrip", 100.0}};
+    }
+    const PrimId pack = w.addPrim("/r/pack", "pack");
+    SchemaInstance& battery = add("BatteryAPI_1", pack);
+    battery.integers = {{"elec:battery:seriesCells", 1}};
+    battery.reals = {{"elec:battery:capacity", 1e6},
+                     {"elec:battery:r0", 0.1},
+                     {"elec:battery:cutoffVoltage", 1.0},
+                     {"elec:battery:maxChargeCurrent", 10.0}};
+    battery.realArrays = {{"elec:battery:ocvSoc", {0.0, 1.0}},
+                          {"elec:battery:ocvVoltage", {24.0, 24.0}}};
+    SchemaInstance& port = add("PortAPI_1", pack);
+    port.instance = "dc_out";
+    port.relationships = {{"elec:port:dc_out:connectedTo", {near}}};
+    SchemaInstance& relay = add("ElectricalBranchAPI_1", w.addPrim("/r/relay", "relay"));
+    relay.tokens = {{"elec:branch:kind", "switch"}};
+    relay.reals = {{"elec:branch:resistance", 0.1}};
+    relay.relationships = {{"elec:branch:input", {near}}, {"elec:branch:output", {far}}};
+    SchemaInstance& load = add("ElectricalLoadAPI_1", w.addPrim("/r/lamp", "lamp"));
+    load.tokens = {{"elec:load:model", "resistive"}};
+    load.reals = {{"elec:load:resistance", 11.8}};
+    load.relationships = {{"elec:powerPort", {far}}};
+
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<ElectricalNetwork>());
+    auto owned = std::make_unique<SwitchBench>();
+    const SwitchBench* bench = owned.get();
+    scheduler.add(std::move(owned));
+    auto wired = scheduler.wire(WorldView(w));
+    ASSERT_TRUE(wired) << to_string(wired.error().front());
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{400'000'000}).ok());
+    EXPECT_NEAR(bench->current, 2.0, 1e-3);  // 24 / (0.1 + 0.1 + 11.8)
+    EXPECT_NEAR(bench->farVolts, 23.6, 1e-2);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{800'000'000}).ok());
+    EXPECT_EQ(bench->current, 0.0);
+    EXPECT_NEAR(bench->nearVolts, 24.0, 1e-6);
+    EXPECT_NEAR(bench->farVolts, 0.0, 1e-3);
+}
+
 TEST(ElectricalNetwork, JointsWithoutAMotorAreDrivenIdeally) {
     Power power;
     power.liftJoint = true;

@@ -175,6 +175,43 @@ TEST(Circuit, AConverterIsWrittenOnceFromItsOutputBus) {
         << text;
 }
 
+TEST(Circuit, APartBetweenBusesIsWrittenFromItsOutput) {
+    Circuit circuit;
+    CircuitBus near;
+    near.name = "dc";
+    near.undervoltage = 30.0;
+    near.overvoltage = 60.0;
+    CircuitPart pack;
+    pack.kind = CircuitPart::Kind::Battery;
+    pack.name = "pack";
+    pack.voltage = 48.0;
+    pack.r0 = 0.05;
+    pack.capacity = 1000.0;
+    pack.maxCharge = 5.0;
+    near.parts.push_back(pack);
+    CircuitPart in;
+    in.kind = CircuitPart::Kind::Branch;
+    in.name = "f1";
+    in.branchKind = "fuse";
+    in.outputBus = "main";
+    near.parts.push_back(in);
+    CircuitBus far;
+    far.name = "main";
+    far.undervoltage = 30.0;
+    far.overvoltage = 60.0;
+    CircuitPart out = in;
+    out.outputBus.clear();
+    out.inputBus = "dc";
+    out.resistance = 0.01;
+    out.i2t = 500.0;
+    far.parts.push_back(out);
+    circuit.buses = {near, far};
+    EXPECT_TRUE(circuitProblems(circuit).empty());
+    const std::string text = netlistOf(circuit, "t");
+    EXPECT_NE(text.find("R_f1 dc main 0.01"), std::string::npos) << text;
+    EXPECT_NE(text.find("*lagrange fuse R_f1 i2t=500"), std::string::npos) << text;
+}
+
 TEST(Circuit, ProblemsAreWhatTheImporterWouldRefuse) {
     Circuit circuit;
     EXPECT_FALSE(circuitProblems(circuit).empty());

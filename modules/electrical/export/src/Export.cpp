@@ -32,17 +32,24 @@ struct Topology {
     struct Load {
         std::string name;
         bool resistive{false};
-        double power{0.0}, minVoltage{0.0};
+        double power{0.0}, minVoltage{0.0}, resistance{0.0};
         std::size_t bus{0};
     };
     struct Drive {
         std::string name;
         std::size_t bus{0};
     };
+    struct Branch {
+        std::string name, kind;
+        std::size_t input{0}, output{0};
+        double resistance{0.0}, drop{0.0};
+        bool open{false};
+    };
     std::vector<Bus> buses;
     std::vector<Battery> batteries;
     std::vector<Load> loads;
     std::vector<Drive> drives;
+    std::vector<Branch> branches;
 };
 
 std::string identifier(std::string_view name) {
@@ -143,6 +150,7 @@ Expected<Topology, std::string> readTopology(const WorldView& world) {
         l.power = s->real("elec:load:power").value_or(0.0);
         l.minVoltage = s->real("elec:load:minVoltage").value_or(0.0);
         l.resistive = s->token("elec:load:model").value_or("constant_power") == "resistive";
+        l.resistance = s->real("elec:load:resistance").value_or(0.0);
         const auto bus = through(s);
         if (!bus) {
             problems += "\n  " + std::string(world.primPath(s->prim)) + ": no bus";
@@ -158,6 +166,25 @@ Expected<Topology, std::string> readTopology(const WorldView& world) {
             continue;
         }
         t.drives.push_back({std::string(world.signalInstanceName(s->prim)), *bus});
+    }
+    for (const SchemaInstance* s : world.instancesOf("ElectricalBranchAPI_1")) {
+        Topology::Branch b;
+        b.name = std::string(world.signalInstanceName(s->prim));
+        b.kind = std::string(s->token("elec:branch:kind").value_or("resistor"));
+        b.resistance = s->real("elec:branch:resistance").value_or(0.0);
+        b.drop = s->real("elec:branch:forwardDrop").value_or(0.0);
+        b.open = s->token("elec:branch:initialState").value_or("closed") == "open";
+        const auto in = s->rel("elec:branch:input");
+        const auto out = s->rel("elec:branch:output");
+        const auto from = in.empty() ? std::nullopt : busOf(in[0]);
+        const auto to = out.empty() ? std::nullopt : busOf(out[0]);
+        if (!from || !to) {
+            problems += "\n  " + std::string(world.primPath(s->prim)) + ": no bus at each end";
+            continue;
+        }
+        b.input = *from;
+        b.output = *to;
+        t.branches.push_back(std::move(b));
     }
     if (!problems.empty()) {
         return Unexpected{"the network cannot be exported:" + problems};
@@ -239,7 +266,7 @@ Expected<std::string, std::string> spiceNetlist(const WorldView& world,
         if (l.resistive) {
             const double v = t.buses[l.bus].initialVoltage;
             out << "* load " << l.name << " (resistive)\nR_" << identifier(l.name) << " " << bus
-                << " 0 " << number(v * v / l.power) << "\n";
+                << " 0 " << number(l.resistance > 0.0 ? l.resistance : v * v / l.power) << "\n";
         } else {
             out << "* load " << l.name << " (constant power, off below " << number(l.minVoltage)
                 << " V)\nB_" << identifier(l.name) << " " << bus << " 0 I = " << number(l.power)
@@ -266,6 +293,22 @@ Expected<std::string, std::string> spiceNetlist(const WorldView& world,
         out << "B_" << id << " " << bus << " 0 I = V(p_" << id << ") / max(V(" << bus << "), "
             << number(kMinVoltage) << ")\n";
     }
+    // Parts between buses, as they stand at the start: a fuse or closed switch is its resistance,
+    // a diode its drop and resistance behind an ideal diode.
+    for (const Topology::Branch& b : t.branches) {
+        const std::string id = identifier(b.name);
+        const std::string in = node(b.input);
+        const std::string to = node(b.output);
+        out << "* " << b.kind << " " << b.name << "\n";
+        if (b.kind == "diode") {
+            out << "V_" << id << "_drop " << in << " " << id << "_a DC " << number(b.drop) << "\n"
+                << "R_" << id << " " << id << "_a " << id << "_k " << number(b.resistance) << "\n"
+                << "D_" << id << " " << id << "_k " << to << " D_" << id << "_ideal\n"
+                << ".model D_" << id << "_ideal D(Is=1e-9 N=0.002)\n";
+        } else if (!b.open) {
+            out << "R_" << id << " " << in << " " << to << " " << number(b.resistance) << "\n";
+        }
+    }
     out << ".tran " << number(options.step) << " " << number(options.duration) << " uic\n";
     if (!options.writeData.empty()) {
         out << ".control\nrun\nwrdata " << options.writeData;
@@ -285,6 +328,12 @@ Expected<std::string, std::string> modelicaModel(const WorldView& world,
         return Unexpected{read.error()};
     }
     const Topology& t = *read;
+    for (const Topology::Branch& b : t.branches) {
+        if (b.kind == "diode") {
+            return Unexpected{"the Modelica export has no diode yet: " + b.name +
+                              "; use the SPICE export"};
+        }
+    }
     const std::string model = identifier(options.title);
     std::ostringstream decl;
     std::ostringstream eq;
@@ -332,12 +381,22 @@ Expected<std::string, std::string> modelicaModel(const WorldView& world,
         }
         eq << "  connect(" << at << ", " << bus(b.bus) << ");\n";
     }
+    for (const Topology::Branch& b : t.branches) {
+        if (!b.open) {
+            const std::string id = identifier(b.name);
+            decl << "  Basic.Resistor " << id << "(R=" << number(b.resistance) << ");\n";
+            eq << "  connect(" << id << ".p, " << bus(b.input) << ");\n"
+               << "  connect(" << id << ".n, " << bus(b.output) << ");\n";
+        }
+    }
     for (const Topology::Load& l : t.loads) {
         const std::string id = identifier(l.name);
         const std::string v = identifier(t.buses[l.bus].name) + ".v";
         if (l.resistive) {
             const double v0 = t.buses[l.bus].initialVoltage;
-            decl << "  Basic.Resistor " << id << "(R=" << number(v0 * v0 / l.power) << ");\n";
+            decl << "  Basic.Resistor " << id
+                 << "(R=" << number(l.resistance > 0.0 ? l.resistance : v0 * v0 / l.power)
+                 << ");\n";
             eq << "  connect(" << id << ".p, " << bus(l.bus) << ");\n"
                << "  connect(" << id << ".n, ground.p);\n";
         } else {

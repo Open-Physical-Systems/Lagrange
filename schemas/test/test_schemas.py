@@ -28,6 +28,7 @@ EXPECTED = {
         "ElectricalBusAPI_1",
         "ElectricalLoadAPI_1",
         "ElectricalConverterAPI_1",
+        "ElectricalBranchAPI_1",
     ],
     "thermal": ["ThermalAPI_1", "ThermalLinkAPI_1"],
     "aero": ["AeroAPI_1", "RotorAPI_1"],

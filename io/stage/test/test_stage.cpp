@@ -856,7 +856,7 @@ run
         ++loads;
         if (view.signalInstanceName(load->prim) == "lamp") {
             EXPECT_EQ(load->token("elec:load:model"), "resistive");
-            EXPECT_DOUBLE_EQ(*load->real("elec:load:power"), 24.0 * 24.0 / 12.0);
+            EXPECT_DOUBLE_EQ(*load->real("elec:load:resistance"), 12.0);
         } else {
             EXPECT_EQ(load->token("elec:load:model"), "constant_power");
             EXPECT_DOUBLE_EQ(*load->real("elec:load:power"), 30.0);
@@ -911,10 +911,9 @@ R_lamp rail 0 6
     ASSERT_NE(battery, nullptr);
     ASSERT_EQ(battery->realArray("elec:battery:ocvVoltage").size(), 2U);
     EXPECT_DOUBLE_EQ(battery->realArray("elec:battery:ocvVoltage")[1], 52.0);
-    // The lamp hangs on the rail: its power is at 12 V.
     const SchemaInstance* lamp = only(model->world, "ElectricalLoadAPI_1");
     ASSERT_NE(lamp, nullptr);
-    EXPECT_DOUBLE_EQ(*lamp->real("elec:load:power"), 24.0);
+    EXPECT_DOUBLE_EQ(*lamp->real("elec:load:resistance"), 6.0);
 
     auto again = loadStage(writeText("netcurve.usda", bot).string());
     ASSERT_TRUE(again) << again.error();
@@ -927,6 +926,64 @@ R_lamp rail 0 6
                                  .string());
     ASSERT_FALSE(refused);
     EXPECT_NE(refused.error().find("its curve gives"), std::string::npos) << refused.error();
+}
+
+TEST(Netlist, PartsBetweenBuses) {
+    auto model = loadStage(writeText("netparts.usda", R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 10
+    }
+}
+)")
+                               .string());
+    ASSERT_TRUE(model) << model.error();
+    const std::size_t before = model->world.schemaInstances.size();
+    const auto netlist = writeText("parts.cir", R"(title
+V_pack in 0 DC 48
+R_pack in dc 0.05
+C_dc dc 0 1m
+R_fuse dc main 0.01
+R_relay main aux 0.02
+D_or aux low Dmodel
+R_lamp low 0 6
+R_harness main far 0.1
+R_end far 0 20
+.model Dmodel D(Is=1e-12)
+*lagrange battery V_pack capacity=3600 cutoff=30 max_charge=5
+*lagrange bus dc undervoltage=25 overvoltage=60
+*lagrange bus main undervoltage=25 overvoltage=60
+*lagrange bus aux undervoltage=25 overvoltage=60
+*lagrange bus low undervoltage=25 overvoltage=60
+*lagrange bus far undervoltage=25 overvoltage=60
+*lagrange fuse R_fuse i2t=500
+*lagrange switch R_relay closed=0
+*lagrange diode D_or drop=0.7 r=0.02
+.end
+)");
+    const auto applied = applyOverlay(*model, netlist.string());
+    ASSERT_TRUE(applied) << applied.error();
+    std::map<std::string, const SchemaInstance*> parts;
+    const WorldView view(model->world);
+    for (const SchemaInstance* s : view.instancesOf("ElectricalBranchAPI_1")) {
+        parts[std::string(view.signalInstanceName(s->prim))] = s;
+    }
+    ASSERT_EQ(parts.size(), 4U);
+    EXPECT_EQ(parts.at("fuse")->token("elec:branch:kind"), "fuse");
+    EXPECT_DOUBLE_EQ(*parts.at("fuse")->real("elec:branch:i2tRating"), 500.0);
+    EXPECT_EQ(parts.at("relay")->token("elec:branch:kind"), "switch");
+    EXPECT_EQ(parts.at("relay")->token("elec:branch:initialState"), "open");
+    EXPECT_DOUBLE_EQ(*parts.at("or")->real("elec:branch:forwardDrop"), 0.7);
+    EXPECT_DOUBLE_EQ(*parts.at("or")->real("elec:branch:resistance"), 0.02);
+    EXPECT_EQ(parts.at("harness")->token("elec:branch:kind"), "resistor");
+    EXPECT_GT(model->world.schemaInstances.size(), before);
 }
 
 TEST(Netlist, RefusesWhatItCannotSimulateEveryProblemTogether) {
@@ -952,7 +1009,7 @@ B2 dc 0 V = 5
     for (const char* expected :
          {"only a DC voltage", "D1: a diode is not simulated", "L1: an inductor is not simulated",
           "Xchip: a subcircuit is not simulated", ".include is not read", "constant-power",
-          "needs l=", "not battery, bus, motor or converter", "line 3"}) {
+          "needs l=", "not battery, bus, motor, converter, fuse, switch or diode", "line 3"}) {
         EXPECT_NE(applied.error().find(expected), std::string::npos)
             << expected << " in " << applied.error();
     }

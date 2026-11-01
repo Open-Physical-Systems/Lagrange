@@ -77,6 +77,8 @@ CircuitPart partOf(const SceneStatics& statics, const NetTerminal& terminal,
         part.kind = CircuitPart::Kind::PowerLoad;
     } else if (hasSchema(prim, "ElectricalConverterAPI_1")) {
         part.kind = CircuitPart::Kind::Converter;
+    } else if (hasSchema(prim, "ElectricalBranchAPI_1")) {
+        part.kind = CircuitPart::Kind::Branch;
     }
     if (attributes == nullptr) {
         return part;
@@ -128,7 +130,8 @@ CircuitPart partOf(const SceneStatics& statics, const NetTerminal& terminal,
             part.minVoltage = real(a, "elec:load:minVoltage");
             const AttributeInfo* model = find(a, "elec:load:model");
             if (model != nullptr && model->value == "resistive") {
-                part.kind = CircuitPart::Kind::Resistor;  // its resistance needs the bus: below
+                part.kind = CircuitPart::Kind::Resistor;
+                part.resistance = real(a, "elec:load:resistance");  // or from the bus: below
             }
             break;
         }
@@ -152,6 +155,33 @@ CircuitPart partOf(const SceneStatics& statics, const NetTerminal& terminal,
             part.efficiency = real(a, "elec:gearEfficiency", 1.0);
             part.rotorInertia = real(a, "elec:rotorInertia");
             part.polePairs = static_cast<int>(real(a, "elec:polePairs", 1.0));
+            break;
+        }
+        case CircuitPart::Kind::Branch: {
+            const AttributeInfo* kind = find(a, "elec:branch:kind");
+            part.branchKind = kind != nullptr ? kind->value : "resistor";
+            part.detail = part.branchKind;
+            part.resistance = real(a, "elec:branch:resistance");
+            part.i2t = real(a, "elec:branch:i2tRating");
+            part.forwardDrop = real(a, "elec:branch:forwardDrop");
+            const AttributeInfo* state = find(a, "elec:branch:initialState");
+            part.startsOpen = state != nullptr && state->value == "open";
+            const auto busNamed = [&statics](const AttributeInfo* rel) {
+                if (rel != nullptr && !rel->targets.empty()) {
+                    for (const ElectricalNet& net : statics.nets) {
+                        if (net.busPrim == rel->targets[0]) {
+                            return net.name;
+                        }
+                    }
+                }
+                return std::string{};
+            };
+            // Written from its output's part, as a converter is; each end names the other.
+            if (terminal.isSource()) {
+                part.inputBus = busNamed(find(a, "elec:branch:input"));
+            } else {
+                part.outputBus = busNamed(find(a, "elec:branch:output"));
+            }
             break;
         }
         case CircuitPart::Kind::Converter: {
@@ -238,7 +268,8 @@ Circuit circuitOf(const SceneStatics& statics, const AttributesOf& attributes,
         }
         const double start = startVoltage(bus);
         for (CircuitPart& part : bus.parts) {
-            if (part.kind == CircuitPart::Kind::Resistor && part.power > 0.0) {
+            if (part.kind == CircuitPart::Kind::Resistor && part.resistance <= 0.0 &&
+                part.power > 0.0) {
                 part.resistance = start * start / part.power;
             }
         }
@@ -285,6 +316,20 @@ std::string partValues(const CircuitPart& part) {
         case CircuitPart::Kind::PowerLoad:
             if (part.power > 0.0) {
                 out = engineering(part.power, "W") + " constant";
+            }
+            break;
+        case CircuitPart::Kind::Branch:
+            if (part.resistance > 0.0) {
+                out = engineering(part.resistance, "Ω");
+                if (part.branchKind == "fuse") {
+                    out += " · " + number(part.i2t) + " A²s";
+                } else if (part.branchKind == "diode") {
+                    out += " · drop " + engineering(part.forwardDrop, "V");
+                } else if (part.startsOpen) {
+                    out += " · open";
+                }
+                out +=
+                    part.inputBus.empty() ? " · to " + part.outputBus : " · from " + part.inputBus;
             }
             break;
         case CircuitPart::Kind::Converter:
@@ -358,8 +403,9 @@ std::vector<std::string> circuitProblems(const Circuit& circuit) {
         }
         for (const CircuitPart& part : bus.parts) {
             // A converter is a terminal on both its buses; its input side is not a new name.
-            const bool inputSide =
-                part.kind == CircuitPart::Kind::Converter && part.inputBus.empty();
+            const bool inputSide = (part.kind == CircuitPart::Kind::Converter ||
+                                    part.kind == CircuitPart::Kind::Branch) &&
+                                   part.inputBus.empty();
             if (!inputSide) {
                 claim(part.name);
             }
@@ -382,6 +428,18 @@ std::vector<std::string> circuitProblems(const Circuit& circuit) {
                 case CircuitPart::Kind::PowerLoad:
                     if (part.power <= 0.0) {
                         problems.push_back(what + "set its power");
+                    }
+                    break;
+                case CircuitPart::Kind::Branch:
+                    if (!inputSide) {
+                        fed = true;
+                        if (part.resistance <= 0.0 || part.inputBus == bus.name ||
+                            (part.branchKind == "fuse" && part.i2t <= 0.0)) {
+                            problems.push_back(what + "set its resistance, a fuse its rating, " +
+                                               "and another bus at its other end");
+                        }
+                    } else {
+                        fed = true;  // what feeds it is checked on the other side
                     }
                     break;
                 case CircuitPart::Kind::Converter:
@@ -469,6 +527,28 @@ std::string netlistOf(const Circuit& circuit, const std::string& title) {
                     out << "B_" << id << " " << node << " 0 I = " << number(part.power)
                         << " / max(V(" << node << "), 0.001) * ((V(" << node
                         << ") >= " << number(part.minVoltage) << ") ? 1 : 0)\n";
+                    break;
+                case CircuitPart::Kind::Branch:
+                    if (!part.inputBus.empty()) {
+                        const std::string in = nodeName(part.inputBus);
+                        if (part.branchKind == "diode") {
+                            out << "D_" << id << " " << in << " " << node << " D_" << id
+                                << "_model\n.model D_" << id << "_model D(Is=1e-12)\n";
+                            notes << "*lagrange diode D_" << id
+                                  << " drop=" << number(part.forwardDrop)
+                                  << " r=" << number(part.resistance) << "\n";
+                        } else {
+                            out << "R_" << id << " " << in << " " << node << " "
+                                << number(part.resistance) << "\n";
+                            if (part.branchKind == "fuse") {
+                                notes << "*lagrange fuse R_" << id << " i2t=" << number(part.i2t)
+                                      << "\n";
+                            } else if (part.branchKind == "switch") {
+                                notes << "*lagrange switch R_" << id
+                                      << " closed=" << (part.startsOpen ? 0 : 1) << "\n";
+                            }
+                        }
+                    }
                     break;
                 case CircuitPart::Kind::Converter:
                     if (!part.inputBus.empty()) {

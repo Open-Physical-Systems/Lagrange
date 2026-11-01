@@ -150,6 +150,9 @@ struct Circuit {
     std::map<std::string, Directive> buses;      // by node
     std::vector<Directive> motors;
     std::vector<Directive> converters;
+    std::map<std::string, Directive> branches;       // fuse, switch, diode, by lower-case element
+    std::map<std::string, std::string> branchKinds;  // by lower-case element
+    std::vector<Element> diodes;
     std::map<std::string, std::pair<int, std::string>> otherSinks;  // B sources, by lower-case name
 };
 
@@ -192,7 +195,7 @@ bool isAnalysis(const std::string& command) {
     static const std::set<std::string> analysis{
         ".tran",  ".op",      ".dc",   ".ac",    ".options", ".option", ".print", ".plot",
         ".probe", ".save",    ".temp", ".title", ".end",     ".ends",   ".ic",    ".nodeset",
-        ".meas",  ".measure", ".four", ".noise", ".sens",    ".tf",     ".width",
+        ".meas",  ".measure", ".four", ".noise", ".sens",    ".tf",     ".width", ".model",
     };
     return analysis.contains(command);
 }
@@ -230,6 +233,15 @@ void readElement(const std::string& text, int line, Circuit& c, Problems& proble
             sink.minVoltage = *least;
         }
         c.sinks.push_back(std::move(sink));
+        return;
+    }
+    if (kind == 'd') {
+        // Its model is what SPICE says of it; the run takes *lagrange diode, checked below.
+        if (words.size() < 4) {
+            problems.add(line, name + ": needs two nodes and a model");
+            return;
+        }
+        c.diodes.push_back({name, lower(words[1]), lower(words[2]), 0.0, line});
         return;
     }
     if (kind != 'r' && kind != 'c' && kind != 'v') {
@@ -296,8 +308,12 @@ void readDirective(const std::string& text, int line, Circuit& c, Problems& prob
     } else if (kind == "converter") {
         d.plain.push_back(words[2]);
         c.converters.push_back(std::move(d));
+    } else if (kind == "fuse" || kind == "switch" || kind == "diode") {
+        c.branchKinds[lower(words[2])] = kind;
+        c.branches[lower(words[2])] = std::move(d);
     } else {
-        problems.add(line, "*lagrange " + words[1] + ": not battery, bus, motor or converter");
+        problems.add(line, "*lagrange " + words[1] +
+                               ": not battery, bus, motor, converter, fuse, switch or diode");
     }
 }
 
@@ -408,7 +424,8 @@ std::vector<Battery> followChains(const Circuit& c, std::set<const Element*>& us
         std::map<std::string, std::vector<const Element*>> neighbours;
         for (const std::vector<Element>* list : {&c.resistors, &c.capacitors}) {
             for (const Element& e : *list) {
-                if (used.contains(&e) || isGround(e.a) || isGround(e.b)) {
+                if (used.contains(&e) || isGround(e.a) || isGround(e.b) ||
+                    c.branchKinds.contains(lower(e.name))) {
                     continue;
                 }
                 if (e.a == node) {
@@ -555,6 +572,17 @@ Expected<YAML::Node, std::string> overlayOfNetlist(const std::string& text,
     for (const Sink& s : c.sinks) {
         attached.insert(s.element.a);
     }
+    // A fuse, switch or diode is a part between buses: a chain stops at each of its ends.
+    for (const Element& e : c.resistors) {
+        if (c.branchKinds.contains(lower(e.name))) {
+            attached.insert(e.a);
+            attached.insert(e.b);
+        }
+    }
+    for (const Element& d : c.diodes) {
+        attached.insert(d.a);
+        attached.insert(d.b);
+    }
     std::map<const Directive*, std::string> motorNode;
     for (const Directive& m : c.motors) {
         const auto node = m.keys.find("node");
@@ -626,6 +654,58 @@ Expected<YAML::Node, std::string> overlayOfNetlist(const std::string& text,
                              ": no battery feeds its in=" + converter.input);
         }
     }
+    // What batteries and converters feed reaches further through parts between buses. A resistor
+    // the chains left between two nodes is one too.
+    struct BranchPart {
+        const Element* element{nullptr};
+        std::string kind;
+    };
+    std::vector<BranchPart> branchParts;
+    for (const Element& e : c.resistors) {
+        if (!used.contains(&e) && !isGround(e.a) && !isGround(e.b)) {
+            const auto kind = c.branchKinds.find(lower(e.name));
+            branchParts.push_back({&e, kind != c.branchKinds.end() ? kind->second : "resistor"});
+            used.insert(&e);
+        }
+    }
+    for (const Element& d : c.diodes) {
+        const auto kind = c.branchKinds.find(lower(d.name));
+        if (kind == c.branchKinds.end() || kind->second != "diode") {
+            problems.add(d.line, d.name + ": a diode is not simulated without *lagrange diode " +
+                                     d.name + " drop=VOLTS r=OHMS");
+        } else if (isGround(d.a) || isGround(d.b)) {
+            problems.add(d.line, d.name + ": a diode goes between two buses, not to ground");
+        } else {
+            branchParts.push_back({&d, "diode"});
+        }
+    }
+    for (bool grew = true; grew;) {
+        grew = false;
+        for (const BranchPart& part : branchParts) {
+            for (const auto& [from, to] : {std::pair{part.element->a, part.element->b},
+                                           std::pair{part.element->b, part.element->a}}) {
+                if (buses.contains(from) && !buses.contains(to)) {
+                    buses.insert(to);
+                    grew = true;
+                }
+            }
+        }
+    }
+    for (const BranchPart& part : branchParts) {
+        if (!buses.contains(part.element->a)) {
+            problems.add(part.element->line,
+                         part.element->name + ": no battery feeds either of its ends");
+        }
+    }
+    for (const auto& [element, directive] : c.branches) {
+        const bool found = std::any_of(
+            branchParts.begin(), branchParts.end(),
+            [&element](const BranchPart& part) { return lower(part.element->name) == element; });
+        if (!found) {
+            problems.add(directive.line,
+                         "*lagrange " + element + ": no such element between two nodes");
+        }
+    }
     for (const std::vector<Element>* list : {&c.resistors, &c.capacitors}) {
         for (const Element& e : *list) {
             if (used.contains(&e)) {
@@ -641,22 +721,6 @@ Expected<YAML::Node, std::string> overlayOfNetlist(const std::string& text,
             }
         }
     }
-
-    // The bus's start voltage, which the network starts from: a resistor is its power there.
-    std::map<std::string, std::pair<double, double>> sums;  // by bus: Σ V/r, Σ 1/r
-    for (const Battery& b : batteries) {
-        sums[b.bus].first += b.source->value / b.r0;
-        sums[b.bus].second += 1.0 / b.r0;
-    }
-    const auto startVoltage = [&sums, &converters](const std::string& bus) {
-        for (const Converter& converter : converters) {
-            if (converter.source->a == bus) {
-                return converter.source->value;  // it regulates the bus from the start
-            }
-        }
-        const auto& [current, conductance] = sums.at(bus);
-        return current / conductance;
-    };
 
     YAML::Node entries(YAML::NodeType::Sequence);
     std::set<std::string> names;
@@ -791,13 +855,14 @@ Expected<YAML::Node, std::string> overlayOfNetlist(const std::string& text,
         }
     }
 
+    // `power` is a resistive load's resistance.
     const auto addLoad = [&](const Element& e, const std::string& node, const std::string& model,
                              double power, double minVoltage) {
         const std::string name = elementName(e.name);
         claim(name, e.line);
         YAML::Node load;
         load["elec:load:model"] = model;
-        load["elec:load:power"] = power;
+        load[model == "resistive" ? "elec:load:resistance" : "elec:load:power"] = power;
         if (minVoltage > 0.0) {
             load["elec:load:minVoltage"] = minVoltage;
         }
@@ -810,8 +875,7 @@ Expected<YAML::Node, std::string> overlayOfNetlist(const std::string& text,
     for (const Element& e : c.resistors) {
         const std::string& node = isGround(e.a) ? e.b : e.a;
         if (!used.contains(&e) && isGround(e.a) != isGround(e.b) && buses.contains(node)) {
-            const double v = startVoltage(node);
-            addLoad(e, node, "resistive", v * v / e.value, 0.0);
+            addLoad(e, node, "resistive", e.value, 0.0);
         }
     }
     for (const Sink& s : c.sinks) {
@@ -821,6 +885,44 @@ Expected<YAML::Node, std::string> overlayOfNetlist(const std::string& text,
             continue;
         }
         addLoad(s.element, s.element.a, "constant_power", s.element.value, s.minVoltage);
+    }
+
+    for (const BranchPart& part : branchParts) {
+        const Element& e = *part.element;
+        if (!buses.contains(e.a) || !buses.contains(e.b)) {
+            continue;
+        }
+        const std::string name = elementName(e.name);
+        const std::string what = part.kind + " " + e.name;
+        claim(name, e.line);
+        YAML::Node schema;
+        schema["elec:branch:kind"] = part.kind;
+        schema["elec:branch:input"] = powerPath(busName.at(e.a));
+        schema["elec:branch:output"] = powerPath(busName.at(e.b));
+        double resistance = e.value;
+        const auto directive = c.branches.find(lower(e.name));
+        if (part.kind == "fuse") {
+            refuseUnknownKeys(directive->second, what, {"i2t"}, problems);
+            if (const auto v = required(directive->second, what, "i2t", "A2 s", problems)) {
+                schema["elec:branch:i2tRating"] = *v;
+            }
+        } else if (part.kind == "switch") {
+            refuseUnknownKeys(directive->second, what, {"closed"}, problems);
+            if (const auto v = optionalValue(directive->second, what, "closed", problems)) {
+                schema["elec:branch:initialState"] = *v > 0.5 ? "closed" : "open";
+            }
+        } else if (part.kind == "diode") {
+            refuseUnknownKeys(directive->second, what, {"drop", "r"}, problems);
+            const auto drop = required(directive->second, what, "drop", "V", problems);
+            const auto r = required(directive->second, what, "r", "ohm", problems);
+            schema["elec:branch:forwardDrop"] = drop.value_or(0.0);
+            resistance = r.value_or(0.0);
+        }
+        schema["elec:branch:resistance"] = resistance;
+        YAML::Node entry;
+        entry["create"] = powerPath(name);
+        entry["schemas"]["ElectricalBranchAPI_1"] = schema;
+        entries.push_back(entry);
     }
 
     for (const Converter& converter : converters) {

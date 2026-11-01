@@ -2100,6 +2100,18 @@ struct Server::Impl {
                     terminal.set_port("power");
                     terminal.set_current_signal(motor ? "motor/" + component + "/bus_current"
                                                       : "load/" + component + "/current");
+                } else if (s.schema == "ElectricalBranchAPI_1") {
+                    // A part between two buses, in both nets: positive current leaves its input
+                    // and feeds its output (a port named *_out, as a battery's).
+                    for (const auto& [side, port] :
+                         {std::pair{"input", "dc_in"}, std::pair{"output", "dc_out"}}) {
+                        if (connected(s.rel(std::string("elec:branch:") + side))) {
+                            v1::NetTerminal& terminal = *net.add_terminals();
+                            terminal.set_prim(scenePrimOf(s.prim));
+                            terminal.set_port(port);
+                            terminal.set_current_signal("branch/" + component + "/current");
+                        }
+                    }
                 } else if (s.schema == "ElectricalConverterAPI_1") {
                     // A DC-DC converter is a terminal on both its nets: a sink on its input
                     // net and a source (port named *_out, as a battery's) on its output net.

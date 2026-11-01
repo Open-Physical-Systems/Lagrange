@@ -1058,7 +1058,8 @@ Expected<void, std::string> applyLagrangeBlock(Robot& robot, const std::string& 
         return Unexpected{path + ": only one <lagrange> block"};
     }
     static const std::map<std::string, std::string, std::less<>> kNamedBy{
-        {"battery", "source"}, {"bus", "node"}, {"motor", "joint"}, {"converter", "name"}};
+        {"battery", "source"}, {"bus", "node"},       {"motor", "joint"},  {"converter", "name"},
+        {"fuse", "element"},   {"switch", "element"}, {"diode", "element"}};
     std::string schematic;
     std::vector<std::string> directives;
     for (const tinyxml2::XMLElement* e = block->FirstChildElement(); e != nullptr;

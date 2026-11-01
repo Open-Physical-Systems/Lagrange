@@ -20,6 +20,11 @@ Needs the workspace sourced and ngspice. The circuits:
     converter     battery + DC-DC + resistor on its rail: the rail holds, P_in = V^2 / R / eta,
                   then as constant_power
     sloped        a half-charged battery with a sloped curve: V = OCV(SoC) R / (R + r)
+    branch        battery + resistor between buses + load: V = OCV R / (R + r + b)
+    diode_on      the same through a diode: V = (OCV - drop) R / (R + r + d)
+    diode_off     a diode against the battery: nothing behind it
+    fuse          opens at t = I2t / I^2: conducting before, open after
+    switch_open   a switch that starts open: nothing behind it
     motor         torque on a free flywheel: w = tau t / J, i = tau / (N eta Kt),
                   P = k R i^2 + Kt i N w (k 1.5 for a PMSM, 1 for brushed), then as constant_power
 """
@@ -193,7 +198,15 @@ def xml_of(line: str) -> str:
     words = line.split()
     if not words or words[0] != "*lagrange":
         return ""
-    named_by = {"battery": "source", "bus": "node", "motor": "joint", "converter": "name"}[words[1]]
+    named_by = {
+        "battery": "source",
+        "bus": "node",
+        "motor": "joint",
+        "converter": "name",
+        "fuse": "element",
+        "switch": "element",
+        "diode": "element",
+    }[words[1]]
     values = dict(word.split("=") for word in words[3:])
     attributes = " ".join(f'{key}="{value}"' for key, value in values.items())
     return f'<{words[1]} {named_by}="{words[2]}" {attributes}/>'
@@ -232,6 +245,11 @@ def read_run(robot: Path, checks: list[Check], torque: float | None) -> list[flo
 
 def run_spice(folder: Path, elements: list[str], times: list[float]) -> list[float]:
     """The bus voltage at each time, from ngspice on the elements given (bus node `dc`)."""
+    return run_spice_at(folder, elements, times, "dc")
+
+
+def run_spice_at(folder: Path, elements: list[str], times: list[float], node: str) -> list[float]:
+    """The voltage of `node` at each time, from ngspice on the elements given."""
     end = max(times)
     # Finer than the bus's r * C, or a constant-power source's Newton steps can leave for its
     # negative-voltage solution.
@@ -245,7 +263,7 @@ def run_spice(folder: Path, elements: list[str], times: list[float]) -> list[flo
         f".tran {step:.6g} {end:.6g} 0 {step:.6g} uic",
         ".control",
         "run",
-        f"wrdata {data} v(dc)",
+        f"wrdata {data} v({node})",
         ".endc",
         ".end",
         "",
@@ -407,6 +425,161 @@ def sloped(rng: random.Random, folder: Path) -> list[tuple[Check, float, float |
     return run_both(folder, overlay, netlist, 1.0, checks)
 
 
+LOAD_BUS = "bus/far/voltage"
+
+
+def far_side(kind: str, resistance: float, load: float, extra: str = "") -> str:
+    """A bus `far`, a part from `dc` to it, and a resistor on it, as an overlay."""
+    return f"""  - create: power/far
+    schemas:
+      ElectricalBusAPI_1:
+        elec:bus:capacitance: {BUS_CAPACITANCE}
+        elec:bus:undervoltageTrip: 0.0
+        elec:bus:overvoltageTrip: 1000.0
+  - create: power/part
+    schemas:
+      ElectricalBranchAPI_1:
+        elec:branch:kind: {kind}
+        elec:branch:resistance: {resistance}
+        elec:branch:input: power/dc
+        elec:branch:output: power/far
+{extra}  - create: power/load
+    schemas:
+      ElectricalLoadAPI_1:
+        elec:load:model: resistive
+        elec:load:resistance: {load}
+        elec:powerPort: power/far
+"""
+
+
+FAR_DIRECTIVE = "*lagrange bus far undervoltage=0 overvoltage=1000\n"
+
+
+def far_elements(pack: Pack, load: float, part: str) -> list[str]:
+    return [
+        *spice_pack(pack, pack.ocv),
+        f"C_far far 0 {BUS_CAPACITANCE} IC=0",
+        part,
+        f"R_load far 0 {load}",
+    ]
+
+
+def branch(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
+    pack = Pack("a", rng.uniform(12, 60), rng.uniform(0.02, 0.3))
+    resistance = rng.uniform(0.05, 1.0)
+    load = rng.uniform(2, 30)
+    amps = pack.ocv / (pack.r0 + resistance + load)
+    checks = [
+        Check("far bus (V)", LOAD_BUS, 0.3, amps * load),
+        Check("near bus (V)", BUS, 0.3, amps * (load + resistance)),
+        Check("branch current (A)", "branch/part/current", 0.3, amps),
+        Check("branch loss (W)", "branch/part/loss_power", 0.3, amps**2 * resistance),
+    ]
+    elements = far_elements(pack, load, f"R_part dc far {resistance}")
+    spice = run_spice(folder, elements, [0.3])  # the near bus, v(dc)
+    checks[1].spice = spice[0]
+    overlay = bus_yaml() + battery_yaml(pack) + far_side("resistor", resistance, load)
+    netlist = netlist_of(elements, pack) + FAR_DIRECTIVE
+    return run_both(folder, overlay, netlist, 1.0, checks)
+
+
+def diode_on(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
+    pack = Pack("a", rng.uniform(24, 60), rng.uniform(0.02, 0.3))
+    drop = rng.uniform(0.3, 1.0)
+    resistance = rng.uniform(0.01, 0.2)
+    load = rng.uniform(4, 30)
+    amps = (pack.ocv - drop) / (pack.r0 + resistance + load)
+    checks = [
+        Check("far bus (V)", LOAD_BUS, 0.3, amps * load),
+        Check("diode current (A)", "branch/part/current", 0.3, amps),
+    ]
+    # In ngspice, an ideal diode with a source for its drop; its own curve is not the run's model.
+    spice_parts = [
+        f"V_drop dc mid DC {drop}",
+        f"R_part mid k {resistance}",
+        "D_ideal k far Dideal",
+        ".model Dideal D(Is=1e-9 N=0.002)",
+    ]
+    elements = far_elements(pack, load, spice_parts[0]) + spice_parts[1:]
+    checks[0].spice = run_spice_at(folder, elements, [0.3], "far")[0]
+    overlay = (
+        bus_yaml()
+        + battery_yaml(pack)
+        + far_side("diode", resistance, load, f"        elec:branch:forwardDrop: {drop}\n")
+    )
+    imported = [*far_elements(pack, load, "D_part dc far Dmodel"), ".model Dmodel D(Is=1e-12)"]
+    netlist = (
+        netlist_of(imported, pack)
+        + FAR_DIRECTIVE
+        + f"*lagrange diode D_part drop={drop} r={resistance}\n"
+    )
+    return run_both(folder, overlay, netlist, 1.0, checks)
+
+
+def diode_off(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
+    pack = Pack("a", rng.uniform(24, 60), rng.uniform(0.02, 0.3))
+    load = rng.uniform(4, 30)
+    checks = [
+        Check("near bus (V)", BUS, 0.3, pack.ocv),
+        Check("diode current (A)", "branch/part/current", 0.3, 0.0),
+    ]
+    # Its anode on the far side: the battery holds it off.
+    overlay = (
+        bus_yaml()
+        + battery_yaml(pack)
+        + far_side("diode", 0.05, load, "        elec:branch:forwardDrop: 0.7\n").replace(
+            "elec:branch:input: power/dc\n        elec:branch:output: power/far",
+            "elec:branch:input: power/far\n        elec:branch:output: power/dc",
+        )
+    )
+    imported = far_elements(pack, load, "D_part far dc Dmodel")
+    netlist = (
+        netlist_of(imported, pack) + FAR_DIRECTIVE + "*lagrange diode D_part drop=0.7 r=0.05\n"
+    )
+    return run_both(folder, overlay, netlist, 1.0, checks)
+
+
+def fuse(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
+    pack = Pack("a", rng.uniform(24, 60), rng.uniform(0.02, 0.2))
+    resistance = rng.uniform(0.01, 0.1)
+    load = rng.uniform(4, 20)
+    amps = pack.ocv / (pack.r0 + resistance + load)
+    opens_at = rng.uniform(0.3, 1.0)
+    rating = amps**2 * opens_at
+    checks = [
+        Check("fuse before (1: holds)", "branch/part/state", opens_at * 0.9, 1.0),
+        Check("current before (A)", "branch/part/current", opens_at * 0.9, amps),
+        Check("fuse after (1: holds)", "branch/part/state", opens_at * 1.1, 0.0),
+        Check("current after (A)", "branch/part/current", opens_at * 1.1, 0.0),
+    ]
+    overlay = (
+        bus_yaml()
+        + battery_yaml(pack)
+        + far_side("fuse", resistance, load, f"        elec:branch:i2tRating: {rating}\n")
+    )
+    elements = far_elements(pack, load, f"R_part dc far {resistance}")
+    netlist = netlist_of(elements, pack) + FAR_DIRECTIVE + f"*lagrange fuse R_part i2t={rating}\n"
+    return run_both(folder, overlay, netlist, 1.0, checks)
+
+
+def switch_open(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
+    pack = Pack("a", rng.uniform(24, 60), rng.uniform(0.02, 0.2))
+    load = rng.uniform(4, 20)
+    checks = [
+        Check("near bus (V)", BUS, 0.3, pack.ocv),
+        Check("switch current (A)", "branch/part/current", 0.3, 0.0),
+        Check("load current (A)", "load/load/current", 0.3, 0.0),
+    ]
+    overlay = (
+        bus_yaml()
+        + battery_yaml(pack)
+        + far_side("switch", 0.05, load, "        elec:branch:initialState: open\n")
+    )
+    elements = far_elements(pack, load, "R_part dc far 0.05")
+    netlist = netlist_of(elements, pack) + FAR_DIRECTIVE + "*lagrange switch R_part closed=0\n"
+    return run_both(folder, overlay, netlist, 1.0, checks)
+
+
 def rc_pair(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
     pack = Pack("a", rng.uniform(12, 60), rng.uniform(0.02, 0.2))
     pack.r1 = rng.uniform(0.05, 0.5)
@@ -515,7 +688,8 @@ def compare(checks: list[Check], values: list[float]) -> list[tuple[Check, float
 
 
 def error(value: float, formula: float) -> float:
-    return abs(value - formula) / max(abs(formula), 1e-9)
+    # What should be zero is compared in amps or volts rather than as a share of nothing.
+    return abs(value - formula) / max(abs(formula), 1.0)
 
 
 CIRCUITS = {
@@ -527,6 +701,11 @@ CIRCUITS = {
     "charge_drain": charge_drain,
     "converter": converter,
     "sloped": sloped,
+    "branch": branch,
+    "diode_on": diode_on,
+    "diode_off": diode_off,
+    "fuse": fuse,
+    "switch_open": switch_open,
     "motor": motor,
 }
 

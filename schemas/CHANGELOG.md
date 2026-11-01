@@ -8,6 +8,10 @@ and `test_schemas.py` checks it.
 
 ## Unreleased
 
+- **Electrical library** (RFC 0010): `ElectricalBranchAPI_1`, a resistor, fuse, switch or diode between two
+  buses; `elec:load:resistance` on `ElectricalLoadAPI_1`, for a resistive load given as a resistance.
+  Additions, nothing to migrate.
+
 - **`ElectricalMotorAPI_1`**: `elec:velocityLoopBandwidth`; `elec:controlMode` `velocity` and `voltage` now simulated, on prismatic joints too. Addition, nothing to migrate.
 
 - **Joint library**: `JointDynamicsAPI_1` on a physics joint: damping, dry friction and copying another joint (mimic).

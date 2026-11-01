@@ -16,7 +16,15 @@
 namespace lagrange::viewer {
 
 struct CircuitPart {
-    enum class Kind : std::uint8_t { Battery, Resistor, PowerLoad, Motor, Converter, Other };
+    enum class Kind : std::uint8_t {
+        Battery,
+        Resistor,
+        PowerLoad,
+        Motor,
+        Converter,
+        Branch,
+        Other
+    };
     Kind kind{Kind::Other};
     std::string name;
     std::uint32_t prim{kNone};  ///< kNone in a part the editor added.
@@ -51,7 +59,15 @@ struct CircuitPart {
     int polePairs{1};
 
     // Converter: on its output bus it feeds, on its input bus it draws.
-    std::string inputBus;     ///< The bus it draws from; only on the output bus's part.
+    std::string inputBus;   ///< The bus it draws from; only on the output bus's part.
+                            ///< A branch too, and its other end on its input bus's part.
+    std::string outputBus;  ///< A branch on its input bus: the bus it feeds.
+
+    // Branch: a part between two buses.
+    std::string branchKind;   ///< resistor, fuse, switch, diode
+    double i2t{0.0};          ///< A²·s, a fuse's
+    double forwardDrop{0.0};  ///< V, a diode's
+    bool startsOpen{false};   ///< A switch's
     double outputVolts{0.0};  ///< V
     double maxOutput{0.0};    ///< A
 };

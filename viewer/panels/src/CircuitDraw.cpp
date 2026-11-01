@@ -98,6 +98,34 @@ void circled(const Pen& pen, float x, float top, float bottom, const char* lette
                       letter);
 }
 
+/// `down`: current flows from the top; the bar is at the end it flows to.
+void diode(const Pen& pen, float x, float top, float bottom, bool down) {
+    const float middle = (top + bottom) * 0.5F;
+    const float half = px(8.0F);
+    const float tip = down ? half : -half;
+    pen.draw->AddLine(ImVec2(x, top), ImVec2(x, bottom), pen.color, pen.width);
+    pen.draw->AddTriangle(ImVec2(x - half, middle - tip), ImVec2(x + half, middle - tip),
+                          ImVec2(x, middle + tip), pen.color, pen.width);
+    pen.draw->AddLine(ImVec2(x - half, middle + tip), ImVec2(x + half, middle + tip), pen.color,
+                      pen.width);
+}
+
+void fuse(const Pen& pen, float x, float top, float bottom) {
+    const float middle = (top + bottom) * 0.5F;
+    pen.draw->AddLine(ImVec2(x, top), ImVec2(x, bottom), pen.color, pen.width);
+    pen.draw->AddRect(ImVec2(x - px(6.0F), middle - px(11.0F)),
+                      ImVec2(x + px(6.0F), middle + px(11.0F)), pen.color, 0.0F, 0, pen.width);
+}
+
+void switchOpen(const Pen& pen, float x, float top, float bottom) {
+    const float middle = (top + bottom) * 0.5F;
+    const float gap = px(9.0F);
+    pen.draw->AddLine(ImVec2(x, top), ImVec2(x, middle - gap), pen.color, pen.width);
+    pen.draw->AddLine(ImVec2(x, middle - gap), ImVec2(x + px(10.0F), middle + gap - px(3.0F)),
+                      pen.color, pen.width);
+    pen.draw->AddLine(ImVec2(x, middle + gap), ImVec2(x, bottom), pen.color, pen.width);
+}
+
 void ground(const Pen& pen, float x, float y) {
     const float step = px(4.0F);
     for (int i = 0; i < 3; ++i) {
@@ -133,7 +161,17 @@ void branch(ImDrawList* draw, const CircuitPart& part, float x, float rail, doub
     const float end = rail + px(kBranch);
 
     // The symbols of the branch, top to bottom.
-    enum class Symbol : std::uint8_t { Resistor, Pair, Battery, Motor, Power, Converter };
+    enum class Symbol : std::uint8_t {
+        Resistor,
+        Pair,
+        Battery,
+        Motor,
+        Power,
+        Converter,
+        Diode,
+        Fuse,
+        Switch
+    };
     std::vector<Symbol> symbols;
     switch (part.kind) {
         case CircuitPart::Kind::Battery:
@@ -149,6 +187,12 @@ void branch(ImDrawList* draw, const CircuitPart& part, float x, float rail, doub
             break;
         case CircuitPart::Kind::Converter:
             symbols.push_back(Symbol::Converter);
+            break;
+        case CircuitPart::Kind::Branch:
+            symbols.push_back(part.branchKind == "diode"    ? Symbol::Diode
+                              : part.branchKind == "fuse"   ? Symbol::Fuse
+                              : part.branchKind == "switch" ? Symbol::Switch
+                                                            : Symbol::Resistor);
             break;
         default:
             symbols.push_back(Symbol::Resistor);
@@ -176,6 +220,15 @@ void branch(ImDrawList* draw, const CircuitPart& part, float x, float rail, doub
             case Symbol::Converter:
                 circled(symbolPen, x, y, next, "DC");
                 break;
+            case Symbol::Diode:
+                diode(symbolPen, x, y, next, !part.inputBus.empty());
+                break;
+            case Symbol::Fuse:
+                fuse(symbolPen, x, y, next);
+                break;
+            case Symbol::Switch:
+                switchOpen(symbolPen, x, y, next);
+                break;
             case Symbol::Power:
                 circled(symbolPen, x, y, next, "P");
                 break;
@@ -183,7 +236,13 @@ void branch(ImDrawList* draw, const CircuitPart& part, float x, float rail, doub
         y = next;
     }
     draw->AddLine(ImVec2(x, y), ImVec2(x, end), wirePen.color, wirePen.width);
-    ground(Pen{draw, u32(c::t2), 1.0F}, x, end);
+    // A part between buses ends at the other bus, named in its values, not at ground.
+    if (part.kind == CircuitPart::Kind::Branch) {
+        draw->AddTriangleFilled(ImVec2(x - px(5.0F), end), ImVec2(x + px(5.0F), end),
+                                ImVec2(x, end + px(7.0F)), wirePen.color);
+    } else {
+        ground(Pen{draw, u32(c::t2), 1.0F}, x, end);
+    }
 
     const theme::Fonts& fonts = theme::fonts();
     const float label = px(theme::kLabelSize);
@@ -221,7 +280,8 @@ void branch(ImDrawList* draw, const CircuitPart& part, float x, float rail, doub
 /// A battery, or a converter on the bus it regulates.
 bool feeds(const CircuitPart& part) {
     return part.kind == CircuitPart::Kind::Battery ||
-           (part.kind == CircuitPart::Kind::Converter && !part.inputBus.empty());
+           ((part.kind == CircuitPart::Kind::Converter || part.kind == CircuitPart::Kind::Branch) &&
+            !part.inputBus.empty());
 }
 
 /// The bus's capacitor as a branch of its own.
