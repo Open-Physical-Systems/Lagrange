@@ -439,6 +439,7 @@ public:
         context.initialScopeSignals = &scopeSignals_;
         context.workspace = &workspace_;
         context.focusPanel = &focusPanel_;
+        context.exportNetlist = &exportNetlist_;
         context.profileSession = &profileSession_;
         context.scopeSession = &scopeSession_;
         context.renderOptions = &renderOptions_;
@@ -642,6 +643,7 @@ public:
     }
     void setInitialSelection(std::string path) { selectPath_ = std::move(path); }
     void setFocusPanel(std::string title) { focusPanel_ = std::move(title); }
+    void setExportNetlist(std::string path) { exportNetlist_ = std::move(path); }
     void setCursors(bool on) { cursorsWanted_ = on; }
     /// Start with the follow camera at this distance (m) from the robot; 0: frame the scene.
     /// Where the camera looks from at the start: target (m), distance (m), yaw and pitch (deg).
@@ -794,6 +796,7 @@ private:
     bool applyProfile_{false};
     std::string selectPath_;
     std::string focusPanel_;
+    std::string exportNetlist_;
     bool cursorsWanted_{false};
     bool openFileRequested_{false};
     std::string framedStage_{"\x01"};  // never a real stage path, so the first scene is framed
@@ -893,6 +896,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         }
         ui.setInitialSelection(options.selectPath);
         ui.setFocusPanel(options.focusPanel);
+        ui.setExportNetlist(options.exportNetlist);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);
         ui.setSeason(options.season);
@@ -1250,6 +1254,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setWorkspace(workspace);
         ui.setInitialSelection(options.selectPath);
         ui.setFocusPanel(options.focusPanel);
+        ui.setExportNetlist(options.exportNetlist);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);
         ui.setOverlays(options.overlays);

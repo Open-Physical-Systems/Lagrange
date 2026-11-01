@@ -785,7 +785,7 @@ bool PropertyRow(const char* label, const char* value, const char* unit, bool li
 }
 
 bool PropertyEdit(const char* label, char* buffer, std::size_t size, const char* unit, bool edited,
-                  const char* tooltip) {
+                  const char* tooltip, bool numeric) {
     ImGui::PushID(label);
     rowLabel(label);
     const theme::Fonts& fonts = theme::fonts();
@@ -813,9 +813,10 @@ bool PropertyEdit(const char* label, char* buffer, std::size_t size, const char*
     ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0, 0, 0, 0));
     ImGui::SetNextItemWidth(width - unitWidth);
-    const bool changed =
-        ImGui::InputText("##edit", buffer, size,
-                         ImGuiInputTextFlags_CharsScientific | ImGuiInputTextFlags_AutoSelectAll);
+    const bool changed = ImGui::InputText(
+        "##edit", buffer, size,
+        (numeric ? ImGuiInputTextFlags_CharsScientific : ImGuiInputTextFlags_None) |
+            ImGuiInputTextFlags_AutoSelectAll);
     if (tooltip != nullptr && *tooltip != '\0') {
         ImGui::SetItemTooltip("%s", tooltip);
     }

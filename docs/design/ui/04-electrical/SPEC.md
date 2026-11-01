@@ -43,6 +43,15 @@ right 340 px : "Inspector" | "History"
   the rail in mono its name and voltage, then its limits.
 - Clicking a branch or bus selects that prim, as the Schematic does.
 
+### Netlist (the design names this tab and shows nothing of it; proposed, the owner asked for it)
+- Starts with a copy of the robot's circuit. Toolbar: From this robot, New, + Bus, + Battery, + Resistor, + Power load, + Motor, Remove.
+- 300 px form of the selected part or bus's values (PropertyEdit), then its drawing as in Circuit.
+  Clicking a part or a bus's name selects it. Parts hang on buses: there are no free wires, so only
+  what the importer can simulate (formats.md §9.1) can be drawn.
+- Below, the netlist as read-only mono text, the file path, Save (Overwrite when the file exists,
+  disabled with the first problem beside it while the circuit cannot be simulated). It writes a
+  file on this machine; the running simulation does not change.
+
 ### Scopes (ImPlot; see Signals for the full engine)
 - Stacked plots sharing the X axis: `bus/dc_48v/voltage`, `motor/*/iq` (left and right),
   `battery/power`. Titles are right-aligned inside each plot.

@@ -117,6 +117,8 @@ struct PanelContext {
 
     /// A panel to bring in front of its tabs, by title; emptied once done. May be null.
     std::string* focusPanel{nullptr};
+    /// A file to write the stage's circuit to as a netlist; emptied once done. May be null.
+    std::string* exportNetlist{nullptr};
     Workspace* workspace{nullptr};            ///< The workspace shown; never null in draw().
     ProfileSession* profileSession{nullptr};  ///< Profile being edited; never null in draw().
     ScopeSession* scopeSession{nullptr};      ///< What is plotted; never null in draw().
