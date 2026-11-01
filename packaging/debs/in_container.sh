@@ -35,7 +35,7 @@ set +u
 source /opt/ros/lyrical/setup.bash
 set -u
 built=0
-for pkg in $(colcon list --base-paths src --topological-order --names-only); do
+for pkg in $(colcon list --base-paths src --topological-order --names-only --packages-skip-regex 'lagrange_example.*'); do
     path="$(colcon list --base-paths src --packages-select "$pkg" --paths-only)"
     echo "=== $pkg ($path)"
     # Built by an earlier run into /out: install it and go on (a resumed build).

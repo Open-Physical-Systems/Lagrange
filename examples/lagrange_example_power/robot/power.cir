@@ -1,0 +1,8 @@
+Power system of the example: runs in ngspice too, ngspice robot/power.cir
+* A 24 V battery with 100 mohm inside, a lamp of 12 ohm: V = 24 * 12 / (12 + 0.1) = 23.80 V.
+V_pack in 0 DC 24
+R_pack in dc 0.1
+C_bus dc 0 4.7m IC=24
+R_lamp dc 0 12
+.tran 1m 0.2 uic
+.end
