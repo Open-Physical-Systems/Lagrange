@@ -49,6 +49,7 @@ add_library(
     lagrange_server
     src/Server.cpp
     src/Robot.cpp
+    src/RobotCheck.cpp
     src/DiffDrive.cpp
     src/CarDrive.cpp
     src/SwerveDrive.cpp
@@ -173,8 +174,15 @@ target_link_libraries(
     PRIVATE lagrange_server lagrange_stage::lagrange_stage
 )
 
+add_executable(lagrange_check src/check_main.cpp)
+lagrange_target_defaults(lagrange_check)
+target_link_libraries(
+    lagrange_check
+    PRIVATE lagrange_server lagrange_stage::lagrange_stage
+)
+
 install(
-    TARGETS lagrange_server_main lagrange_cli lagrange_import
+    TARGETS lagrange_server_main lagrange_cli lagrange_import lagrange_check
     RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 # The library is exported so that programs can build a run with their own modules until

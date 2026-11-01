@@ -12,3 +12,5 @@ leak:JPH::RegisterTypesInternal
 # Mesa's and NVIDIA's Vulkan drivers, seen through libdrm and libdisplay-info.
 leak:libdrm.so
 leak:libdisplay-info.so
+# D-Bus's own message loader, reached through the desktop's libraries.
+leak:libdbus-1.so
