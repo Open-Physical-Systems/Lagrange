@@ -200,6 +200,7 @@ if(BUILD_TESTING)
 
     find_package(ament_cmake_pytest REQUIRED)
     ament_add_pytest_test(test_circuit_roundtrip test/test_circuit_roundtrip.py TIMEOUT 120)
+    ament_add_pytest_test(test_viewer_input test/test_viewer_input.py TIMEOUT 180)
     ament_add_pytest_test(
         test_headless
         test/test_headless.py
