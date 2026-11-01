@@ -63,6 +63,28 @@ struct WindTunnelResult {
 };
 
 /// Runs it. `progress` gets a share 0..1 now and then. Refuses a robot with no collision shapes.
+/// One grid of a grid independence study.
+struct GridStudyRow {
+    std::size_t cells{0};
+    double dragCoefficient{0.0};
+    double dragSpread{0.0};
+    double liftCoefficient{0.0};
+};
+
+/// What a study says of its finest grid.
+struct GridStudyVerdict {
+    double dragChange{0.0};  ///< of Cd between the last two grids, as a share of the last
+    double dragMoves{0.0};   ///< the last grid's spread, as a share of its Cd
+    double liftChange{0.0};  ///< of Cl between the last two grids, as a share of the last Cd
+    bool settled{false};     ///< all three within kGridSettledShare; says nothing of being right
+};
+
+/// A common rule of thumb for "grid independent" drag, not a standard: within 5 %.
+inline constexpr double kGridSettledShare = 0.05;
+
+/// Rows from coarse to fine; fewer than two is never settled.
+[[nodiscard]] GridStudyVerdict gridStudyVerdict(const std::vector<GridStudyRow>& rows);
+
 [[nodiscard]] Expected<WindTunnelResult, std::string> runWindTunnel(
     const World& world, const WindTunnelOptions& options, const std::string& outputDirectory,
     const std::function<void(double)>& progress = {});

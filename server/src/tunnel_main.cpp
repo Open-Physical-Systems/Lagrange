@@ -5,8 +5,11 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
+#include <vector>
 
 int main(int argc, char** argv) {
     lagrange::aerodynamics::WindTunnelOptions options;
@@ -14,6 +17,7 @@ int main(int argc, char** argv) {
     std::string out = "tunnel";
     bool useGpu = true;
     bool cellsGiven = false;
+    bool study = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         const bool more = i + 1 < argc;
@@ -34,6 +38,8 @@ int main(int argc, char** argv) {
             options.meanPasses = std::atof(argv[++i]);
         } else if (arg == "--frames" && more) {
             options.frames = static_cast<std::size_t>(std::atof(argv[++i]));
+        } else if (arg == "--study") {
+            study = true;
         } else if (arg == "--out" && more) {
             out = argv[++i];
         } else if (robot.empty() && !arg.starts_with("--")) {
@@ -44,10 +50,10 @@ int main(int argc, char** argv) {
         }
     }
     if (robot.empty()) {
-        std::fprintf(
-            stderr,
-            "usage: lagrange tunnel ROBOT [--speed M_S] [--yaw DEG] [--cells N] "
-            "[--passes N] [--mean-passes N] [--ground] [--frames N] [--cpu] [--out DIR]\n");
+        std::fprintf(stderr,
+                     "usage: lagrange tunnel ROBOT [--speed M_S] [--yaw DEG] [--cells N] "
+                     "[--passes N] [--mean-passes N] [--ground] [--frames N] [--study] [--cpu] "
+                     "[--out DIR]\n");
         return 2;
     }
     auto model = lagrange::server::loadModel(robot);
@@ -70,6 +76,27 @@ int main(int argc, char** argv) {
         options.maxCells = 4000000;  // about 500 million cell updates a second on an RTX 4060
     }
     std::fprintf(stderr, "on %s\n", device ? device->info().name.c_str() : "the CPU");
+    // A grid independence study: the same air on a quarter, a half and all the cells, finest last,
+    // so what follows reports the finest and its files are the ones left.
+    std::vector<lagrange::aerodynamics::GridStudyRow> rows;
+    if (study) {
+        for (const std::size_t divide : {std::size_t{4}, std::size_t{2}}) {
+            auto coarse = options;
+            coarse.maxCells = options.maxCells / divide;
+            coarse.frames = 0;
+            const std::string dir = out + "/grid_" + std::to_string(coarse.maxCells);
+            std::fprintf(stderr, "grid of %zu cells\n", coarse.maxCells);
+            auto run = lagrange::aerodynamics::runWindTunnel(model->world, coarse, dir);
+            if (!run) {
+                std::fprintf(stderr, "lagrange tunnel: %s\n", run.error().c_str());
+                return 1;
+            }
+            rows.push_back({run->grid[0] * run->grid[1] * run->grid[2], run->dragCoefficient,
+                            run->dragSpread, run->liftCoefficient});
+            std::error_code ignored;
+            std::filesystem::remove_all(dir, ignored);
+        }
+    }
     int last = -1;
     auto result =
         lagrange::aerodynamics::runWindTunnel(model->world, options, out, [&last](double share) {
@@ -98,6 +125,33 @@ int main(int argc, char** argv) {
     }
     std::printf("%-24s %10.2f %10.2f %10.2f\n", "total", result->force[0], result->force[1],
                 result->force[2]);
+    if (study) {
+        rows.push_back({result->grid[0] * result->grid[1] * result->grid[2],
+                        result->dragCoefficient, result->dragSpread, result->liftCoefficient});
+        const auto verdict = lagrange::aerodynamics::gridStudyVerdict(rows);
+        std::printf("\n%12s %8s %8s %8s\n", "cells", "Cd", "moves", "Cl");
+        std::ofstream json(out + "/study.json");
+        json << "{\"grids\": [";
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            const auto& row = rows[i];
+            std::printf("%12zu %8.3f %8.3f %8.3f\n", row.cells, row.dragCoefficient, row.dragSpread,
+                        row.liftCoefficient);
+            json << (i > 0 ? ", " : "") << "{\"cells\": " << row.cells
+                 << ", \"Cd\": " << row.dragCoefficient << ", \"moves\": " << row.dragSpread
+                 << ", \"Cl\": " << row.liftCoefficient << "}";
+        }
+        json << "], \"drag_change\": " << verdict.dragChange
+             << ", \"drag_moves\": " << verdict.dragMoves
+             << ", \"lift_change\": " << verdict.liftChange
+             << ", \"settled\": " << (verdict.settled ? "true" : "false") << "}\n";
+        std::printf(
+            "%s: on the last refinement Cd changed %.0f %% and Cl by %.0f %% of Cd; Cd moves %.0f "
+            "%% "
+            "in time (5 %% is a rule of thumb). Settled means the grid stopped mattering, not that "
+            "the number is right.\n",
+            verdict.settled ? "SETTLED" : "NOT SETTLED", verdict.dragChange * 100.0,
+            verdict.liftChange * 100.0, verdict.dragMoves * 100.0);
+    }
     std::printf(
         "\nA grid this coarse with no wall model gives a bluff body's size of force, not an "
         "engineering number: compare shapes and angles rather than trust the third digit.\n"
