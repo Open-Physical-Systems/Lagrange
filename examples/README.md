@@ -24,6 +24,7 @@ ros2 launch lagrange_example_diff_drive drive.launch.py
 | [`lagrange_example_spawn`](lagrange_example_spawn) | Adding and removing robots | `--robot none`, `--humans`, `/spawn_entity`, `/get_entities`, `/delete_entity` |
 | [`lagrange_example_ros2_control`](lagrange_example_ros2_control) | An arm through ros2_control | `--ros2-control`, `controller_manager` spawner, `FollowJointTrajectory` |
 | [`lagrange_example_quadruped`](lagrange_example_quadruped) | A trotting quadruped | `--joint-loop-hz`, position commands from a node |
+| [`lagrange_example_wind_tunnel`](lagrange_example_wind_tunnel) | A wind tunnel, as in CFD | `lagrange tunnel`: drag, lift, streamlines, surface pressure, ParaView |
 | [`lagrange_example_rl`](lagrange_example_rl) | Learning to control an arm | `lagrange.envs`: Gymnasium's interface, parallel processes, randomized gravity |
 | [`lagrange_example_plugin`](lagrange_example_plugin) | Your own module in C | `--plugin`, `--ros-topics`, the C ABI (`lagrange_plugin.h`) |
 

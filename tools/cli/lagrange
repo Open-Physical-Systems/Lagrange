@@ -22,6 +22,8 @@ lagrange check ROBOT [--overlay FILE]
     what each joint of a robot on the ground must hold against gravity, against its limits
 lagrange bake ROBOT.urdf [-o OUT.urdf]
     a new URDF with its concave collision meshes split into convex parts
+lagrange tunnel ROBOT [--speed M_S] [--yaw DEG] [--cells N] [--out DIR]
+    a wind tunnel: air past the robot, its drag and lift, and a world to look at the flow in
 lagrange run|validate|graph|determinism|export|info ...
     the lagrange_server tools (as `ros2 run lagrange_server lagrange ...`)
 """
@@ -505,6 +507,9 @@ def main(argv: list[str]) -> int:
     if argv and argv[0] == "bake":
         tool = executable("lagrange_collision_bake", "bake_urdf")
         os.execv(tool, ["lagrange bake", *argv[1:]])
+    if argv and argv[0] == "tunnel":
+        tool = executable("lagrange_server", "lagrange_tunnel")
+        os.execv(tool, ["lagrange tunnel", *argv[1:]])
     if argv and argv[0] == "viewer":
         viewer = executable("lagrange_viewer", "lagrange_viewer")
         os.execv(viewer, [viewer, *argv[1:]])

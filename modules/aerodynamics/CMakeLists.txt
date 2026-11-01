@@ -5,8 +5,14 @@ find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
 find_package(lagrange_fields REQUIRED)
+find_package(TBB REQUIRED)
 
-add_library(lagrange_aerodynamics drag/src/Aerodynamics.cpp)
+add_library(
+    lagrange_aerodynamics
+    drag/src/Aerodynamics.cpp
+    lbm/src/Lbm.cpp
+    lbm/src/WindTunnel.cpp
+)
 lagrange_target_defaults(lagrange_aerodynamics)
 target_include_directories(
     lagrange_aerodynamics
@@ -17,6 +23,7 @@ target_include_directories(
 target_link_libraries(
     lagrange_aerodynamics
     PUBLIC lagrange_core::lagrange_core lagrange_fields::lagrange_fields
+    PRIVATE TBB::tbb
 )
 
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
@@ -33,8 +40,11 @@ if(BUILD_TESTING)
     ament_add_gtest(test_aerodynamics test/test_aerodynamics.cpp)
     target_link_libraries(test_aerodynamics lagrange_aerodynamics)
     lagrange_target_defaults(test_aerodynamics)
+    ament_add_gtest(test_lbm test/test_lbm.cpp TIMEOUT 300)
+    target_link_libraries(test_lbm lagrange_aerodynamics)
+    lagrange_target_defaults(test_lbm)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(lagrange_core lagrange_fields)
+ament_export_dependencies(lagrange_core lagrange_fields TBB)
 ament_package()
