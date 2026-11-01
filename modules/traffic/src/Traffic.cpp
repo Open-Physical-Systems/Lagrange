@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <map>
 #include <numbers>
@@ -256,15 +257,18 @@ Head vehicleHead(const Lane& lane) {
 Head walkHead(const Lane& lane, int end) {
     const auto [p, yaw] = lane.at(end == 0 ? 0.0 : lane.length());
     const double side = lane.width / 2.0 + 0.4;
-    return {plus(p, along(yaw, 0.0, end == 0 ? -side : side, kWalkLampHeight)),
-            end == 0 ? yaw : yaw + std::numbers::pi};
+    // Back from the kerb, onto the pavement.
+    constexpr double kBack = 0.9;  // m
+    return {
+        plus(p, along(yaw, end == 0 ? -kBack : kBack, end == 0 ? -side : side, kWalkLampHeight)),
+        end == 0 ? yaw : yaw + std::numbers::pi};
 }
 /// Where a walker stands to press the button at a crossing's end.
 std::array<double, 2> buttonSpot(const Lane& lane, int end) {
     const auto [p, yaw] = lane.at(end == 0 ? 0.0 : lane.length());
     // Beside the pole, on the side away from the road, an arm's length off.
     const double side = lane.width / 2.0 + 0.1;
-    const Vec3 at = plus(p, along(yaw, end == 0 ? -0.6 : 0.6, end == 0 ? -side : side, 0.0));
+    const Vec3 at = plus(p, along(yaw, end == 0 ? -1.2 : 1.2, end == 0 ? -side : side, 0.0));
     return {at[0], at[1]};
 }
 
@@ -326,68 +330,124 @@ void extrude(TriMesh& m, const std::vector<std::array<double, 2>>& top, double h
     }
 }
 
-/// How one kind of car is drawn, all within the agent's box: paint, glass, tyres and lamps, about
-/// the box's middle.
+/// How one kind of vehicle is drawn, within its box and about the box's middle: paint, glass, tyres
+/// and lamps; hubs, brake lamps and indicators turn on hinges, so they are parts of their own.
+struct VehicleShape {
+    double belt;       // m above the middle, where the glass starts
+    double roofDrop;   // m under the box's top
+    double screen;     // x of the windscreen's foot
+    double roofFront;  // x where the roof starts
+    double rearFoot;   // x of the rear window's foot
+    double rearTop;    // x where the roof ends
+    double clearance;  // m under the body
+    double tyre;       // m, radius
+    double axle;       // m from the ends to the axles
+};
+const std::array<VehicleShape, 5> kShapes{{
+    {-0.08, 0.08, 0.75, 0.0, -1.45, -0.75, 0.18, 0.33, 0.85},
+    {-0.08, 0.0, 0.8, 0.05, -1.8, -1.45, 0.18, 0.32, 0.7},
+    {0.05, 0.0, 1.2, 0.6, -2.23, -2.1, 0.24, 0.37, 0.85},
+    {0.0, 0.0, 2.35, 1.7, -2.65, -2.62, 0.25, 0.37, 1.0},
+    {-0.25, 0.0, 4.4, 4.15, -4.4, -4.38, 0.32, 0.5, 1.7},
+}};
 struct CarMeshes {
     TriMesh paint, glass, tyres, head, tail;
+    TriMesh hub, brake, indicatorFront, indicatorRear;
+    Vec3 brakePivot{};
+    std::array<Vec3, 4> hubs{};
+    std::array<Vec3, 4> indicators{};  // front left, front right, rear left, rear right
 };
-CarMeshes carMeshes(int kind) {
-    const double l = kCarSize[0] / 2.0;
-    const double w = kCarSize[1] / 2.0;
-    const double h = kCarSize[2] / 2.0;
-    const double floor = -h + 0.18;
-    const double belt = kind == 2 ? 0.05 : -0.08;  // above the box's middle
-    const double roof = kind == 0 ? h - 0.08 : h;
-    // Front to back along −x: the bonnet, the screen's foot, the roof, the rear screen.
-    const double screen = kind == 1 ? 0.9 : kind == 2 ? 1.25 : 0.75;
-    const double rearFoot = kind == 0 ? -1.45 : kind == 1 ? -l + 0.2 : -l + 0.12;
-    const double rearTop = kind == 0 ? -0.75 : kind == 1 ? -l + 0.55 : -l + 0.25;
-    const double roofFront = screen - (kind == 2 ? 0.55 : 0.75);
+constexpr double kLampSink = 0.08;  // m from a lamp's hinge to the lamp: out when lit, in when not
+CarMeshes carMeshes(std::size_t kind) {
+    const VehicleShape& s = kShapes.at(kind);
+    const double l = kVehicleSizes.at(kind)[0] / 2.0;
+    const double w = kVehicleSizes.at(kind)[1] / 2.0;
+    const double h = kVehicleSizes.at(kind)[2] / 2.0;
+    const double floor = -h + s.clearance;
+    const double roof = h - s.roofDrop;
     CarMeshes m;
     std::vector<std::array<double, 2>> body{
-        {l, floor + 0.12}, {l, belt - 0.14}, {l - 0.2, belt - 0.04}, {screen, belt}};
-    body.push_back({rearFoot, belt});
+        {l, floor + 0.12}, {l, s.belt - 0.14}, {l - 0.2, s.belt - 0.04}, {s.screen, s.belt}};
+    body.push_back({s.rearFoot, s.belt});
     if (kind == 0) {
-        body.push_back({-l + 0.1, belt + 0.02});
+        body.push_back({-l + 0.1, s.belt + 0.02});
     }
-    body.push_back({-l, belt - 0.08});
+    body.push_back({-l, s.belt - 0.08});
     body.push_back({-l, floor + 0.1});
     // Clockwise from above seen along +y, so the top quad's normal points up.
     std::reverse(body.begin(), body.end());
     extrude(m.paint, body, w, floor);
-    quad(m.paint, {l, w, floor + 0.12}, {l, w, belt - 0.14}, {l, -w, belt - 0.14},
+    quad(m.paint, {l, w, floor + 0.12}, {l, w, s.belt - 0.14}, {l, -w, s.belt - 0.14},
          {l, -w, floor + 0.12});
-    quad(m.paint, {-l, -w, floor + 0.1}, {-l, -w, belt - 0.08}, {-l, w, belt - 0.08},
+    quad(m.paint, {-l, -w, floor + 0.1}, {-l, -w, s.belt - 0.08}, {-l, w, s.belt - 0.08},
          {-l, w, floor + 0.1});
-    // The cabin: glass all round, a painted roof on it.
+    // The cabin: glass all round, a painted roof on it, pillars between the windows.
     const double b = w - 0.06;
-    const double t = w - 0.22;
-    quad(m.glass, {screen, b, belt}, {screen, -b, belt}, {roofFront, -t, roof},
-         {roofFront, t, roof});
-    quad(m.glass, {rearFoot, -b, belt}, {rearFoot, b, belt}, {rearTop, t, roof},
-         {rearTop, -t, roof});
-    quad(m.glass, {rearFoot, b, belt}, {screen, b, belt}, {roofFront, t, roof}, {rearTop, t, roof});
-    quad(m.glass, {screen, -b, belt}, {rearFoot, -b, belt}, {rearTop, -t, roof},
-         {roofFront, -t, roof});
-    quad(m.paint, {roofFront, t, roof}, {roofFront, -t, roof}, {rearTop, -t, roof},
-         {rearTop, t, roof});
-    // Wheels: axles along y.
-    constexpr double kTyre = 0.33;  // m
+    const double t = w - (kind >= 3 ? 0.06 : 0.22);
+    quad(m.glass, {s.screen, b, s.belt}, {s.screen, -b, s.belt}, {s.roofFront, -t, roof},
+         {s.roofFront, t, roof});
+    quad(m.glass, {s.rearFoot, -b, s.belt}, {s.rearFoot, b, s.belt}, {s.rearTop, t, roof},
+         {s.rearTop, -t, roof});
+    quad(m.glass, {s.rearFoot, b, s.belt}, {s.screen, b, s.belt}, {s.roofFront, t, roof},
+         {s.rearTop, t, roof});
+    quad(m.glass, {s.screen, -b, s.belt}, {s.rearFoot, -b, s.belt}, {s.rearTop, -t, roof},
+         {s.roofFront, -t, roof});
+    quad(m.paint, {s.roofFront, t, roof}, {s.roofFront, -t, roof}, {s.rearTop, -t, roof},
+         {s.rearTop, t, roof});
+    const int pillars = kind == 4 ? 6 : kind == 3 ? 2 : 1;
+    for (int p = 1; p <= pillars; ++p) {
+        const double f = static_cast<double>(p) / (pillars + 1);
+        const double x0 = s.rearFoot + ((s.screen - s.rearFoot) * f);
+        const double x1 = s.rearTop + ((s.roofFront - s.rearTop) * f);
+        for (const double side : {1.0, -1.0}) {
+            const double y0 = side * (b + 0.005);
+            const double y1 = side * (t + 0.005);
+            const double half = 0.04;
+            if (side > 0.0) {
+                quad(m.paint, {x0 - half, y0, s.belt}, {x0 + half, y0, s.belt},
+                     {x1 + half, y1, roof}, {x1 - half, y1, roof});
+            } else {
+                quad(m.paint, {x0 + half, y0, s.belt}, {x0 - half, y0, s.belt},
+                     {x1 - half, y1, roof}, {x1 + half, y1, roof});
+            }
+        }
+    }
+    // Bumpers, sills and mirrors.
+    pushMesh(m.tyres, boxMesh(0.08, 2.0 * w, 0.2), boxAt(l - 0.02, 0.0, floor + 0.12));
+    pushMesh(m.tyres, boxMesh(0.08, 2.0 * w, 0.2), boxAt(-l + 0.02, 0.0, floor + 0.12));
+    pushMesh(m.tyres, boxMesh(2.0 * l - 0.2, 2.0 * w + 0.02, 0.1), boxAt(0.0, 0.0, floor + 0.04));
+    pushMesh(m.paint, boxMesh(0.12, 0.2, 0.1), boxAt(s.screen - 0.05, w + 0.08, s.belt + 0.08));
+    pushMesh(m.paint, boxMesh(0.12, 0.2, 0.1), boxAt(s.screen - 0.05, -w - 0.08, s.belt + 0.08));
+    // Wheels: axles along y; the hub turns, so that a wheel is seen to roll.
     Pose wheel;
     wheel.orientation = {std::cos(std::numbers::pi / 4.0), std::sin(std::numbers::pi / 4.0), 0.0,
                          0.0};
-    const TriMesh tyre = cylinderMesh(kTyre, 0.22, 16);
-    for (const double x : {l - 0.85, -l + 0.85}) {
+    const TriMesh tyre = cylinderMesh(s.tyre, 0.22, 20);
+    wheel.position = {};
+    pushMesh(m.hub, cylinderMesh(s.tyre * 0.58, 0.24, 14), wheel);
+    pushMesh(m.hub, boxMesh(s.tyre * 1.25, 0.25, 0.05), Pose{});
+    pushMesh(m.hub, boxMesh(0.05, 0.25, s.tyre * 1.25), Pose{});
+    std::size_t at = 0;
+    for (const double x : {l - s.axle, -l + s.axle}) {
         for (const double y : {w - 0.1, -w + 0.1}) {
-            wheel.position = {x, y, -h + kTyre};
+            wheel.position = {x, y, -h + s.tyre};
             pushMesh(m.tyres, tyre, wheel);
+            m.hubs.at(at++) = wheel.position;
         }
     }
+    const double lampZ = std::max(s.belt - 0.26, floor + 0.2);
     const TriMesh lamp = boxMesh(0.03, 0.34, 0.1);
+    const TriMesh small = boxMesh(0.03, 0.12, 0.09);
     for (const double y : {w - 0.25, -w + 0.25}) {
-        pushMesh(m.head, lamp, boxAt(l + 0.005, y, belt - 0.26));
-        pushMesh(m.tail, lamp, boxAt(-l - 0.005, y, belt - 0.2));
+        pushMesh(m.head, lamp, boxAt(l + 0.005, y, lampZ));
+        pushMesh(m.tail, lamp, boxAt(-l - 0.005, y, lampZ));
+        pushMesh(m.brake, lamp, boxAt(-kLampSink - 0.01, y, 0.0));
     }
+    m.brakePivot = {-l + kLampSink, 0.0, lampZ};
+    pushMesh(m.indicatorFront, small, boxAt(kLampSink + 0.01, 0.0, 0.0));
+    pushMesh(m.indicatorRear, small, boxAt(-kLampSink - 0.01, 0.0, 0.0));
+    m.indicators = {Vec3{l - kLampSink, w - 0.07, lampZ}, Vec3{l - kLampSink, -w + 0.07, lampZ},
+                    Vec3{-l + kLampSink, w - 0.07, lampZ}, Vec3{-l + kLampSink, -w + 0.07, lampZ}};
     return m;
 }
 
@@ -416,6 +476,16 @@ TriMesh figureMesh(bool walking) {
 }
 
 }  // namespace
+
+std::size_t vehicleKind(int index) {
+    if (index % 12 == 7) {
+        return 4;  // a bus
+    }
+    if (index % 7 == 3) {
+        return 3;  // a van
+    }
+    return static_cast<std::size_t>(index) % 3;
+}
 
 std::vector<SignalLamp> signalLamps(const LaneGraph& g) {
     std::vector<SignalLamp> lamps;
@@ -540,15 +610,25 @@ std::array<int, 2> addAgents(Model& model, const Population& population,
         return static_cast<std::uint32_t>(model.scene.meshes.size() - 1);
     };
     struct CarKind {
-        std::uint32_t paint, glass, tyres, head, tail;
+        std::uint32_t paint, glass, tyres, head, tail, hub, brake, front, rear;
+        std::array<Vec3, 4> hubs, indicators;
+        Vec3 brakePivot;
     };
-    std::array<CarKind, 3> carKinds{};
-    for (int k = 0; k < 3; ++k) {
+    std::array<CarKind, kVehicleSizes.size()> carKinds{};
+    for (std::size_t k = 0; k < carKinds.size(); ++k) {
         CarMeshes parts = carMeshes(k);
-        carKinds.at(static_cast<std::size_t>(k)) = {
-            addMesh(std::move(parts.paint)), addMesh(std::move(parts.glass)),
-            addMesh(std::move(parts.tyres)), addMesh(std::move(parts.head)),
-            addMesh(std::move(parts.tail))};
+        carKinds.at(k) = {addMesh(std::move(parts.paint)),
+                          addMesh(std::move(parts.glass)),
+                          addMesh(std::move(parts.tyres)),
+                          addMesh(std::move(parts.head)),
+                          addMesh(std::move(parts.tail)),
+                          addMesh(std::move(parts.hub)),
+                          addMesh(std::move(parts.brake)),
+                          addMesh(std::move(parts.indicatorFront)),
+                          addMesh(std::move(parts.indicatorRear)),
+                          parts.hubs,
+                          parts.indicators,
+                          parts.brakePivot};
     }
     const std::uint32_t glassMaterial = materialFor("car_glass", {0.05F, 0.07F, 0.09F, 1.0F});
     const std::uint32_t tyreMaterial = materialFor("tyre_rubber", {0.03F, 0.03F, 0.03F, 1.0F});
@@ -564,6 +644,9 @@ std::array<int, 2> addAgents(Model& model, const Population& population,
     };
     const std::uint32_t headMaterial = glowing("car_headlamp", {0.95F, 0.95F, 0.85F}, 0.6F);
     const std::uint32_t tailMaterial = glowing("car_taillamp", {0.7F, 0.04F, 0.03F}, 0.4F);
+    const std::uint32_t brakeMaterial = glowing("car_brake_lamp", {1.0F, 0.05F, 0.03F}, 4.0F);
+    const std::uint32_t amberMaterial = glowing("car_indicator", {1.0F, 0.5F, 0.03F}, 4.0F);
+    const std::uint32_t hubMaterial = materialFor("wheel_hub_steel", {0.45F, 0.46F, 0.48F, 1.0F});
     const std::uint32_t walkerMesh = static_cast<std::uint32_t>(model.scene.meshes.size());
     model.scene.meshes.push_back(cylinderMesh(kPedestrianRadius, kPedestrianHeight, 16));
     const std::uint32_t walkerMaterial = materialFor("pedestrian", {0.3F, 0.45F, 0.75F, 1.0F});
@@ -588,7 +671,8 @@ std::array<int, 2> addAgents(Model& model, const Population& population,
                 continue;
             }
             placed.push_back(p);
-            const double height = pedestrian ? kPedestrianHeight : kCarSize[2];
+            const std::array<double, 3> size = kVehicleSizes.at(vehicleKind(index));
+            const double height = pedestrian ? kPedestrianHeight : size[2];
             Pose pose;
             pose.position = {p[0], p[1], p[2] + height / 2.0};
             pose.orientation = yawQuat(yaw);
@@ -605,9 +689,8 @@ std::array<int, 2> addAgents(Model& model, const Population& population,
                               {kPedestrianRadius, height / 2.0 - kPedestrianRadius, 0.0}, Pose{},
                               0.8);
             } else {
-                w.addCollider(body, ShapeType::Box,
-                              {kCarSize[0] / 2.0, kCarSize[1] / 2.0, kCarSize[2] / 2.0}, Pose{},
-                              0.8);
+                w.addCollider(body, ShapeType::Box, {size[0] / 2.0, size[1] / 2.0, size[2] / 2.0},
+                              Pose{}, 0.8);
             }
             model.bodyRestPose.push_back(pose);
             ScenePrim prim;
@@ -615,7 +698,7 @@ std::array<int, 2> addAgents(Model& model, const Population& population,
             prim.path = "/traffic/" + name;
             prim.parent = topPrim;
             prim.typeName = "Mesh";
-            const CarKind& kind = carKinds.at(static_cast<std::size_t>(index) % carKinds.size());
+            const CarKind& kind = carKinds.at(vehicleKind(index));
             prim.mesh = pedestrian ? walkerMesh : kind.paint;
             prim.material =
                 pedestrian ? walkerMaterial
@@ -638,6 +721,31 @@ std::array<int, 2> addAgents(Model& model, const Population& population,
                     piece.material = material;
                     model.scene.prims.push_back(std::move(piece));
                 }
+                // What turns: on hinges driven by the module's signals.
+                const std::string signals = "traffic/vehicle/" + std::to_string(index) + "/";
+                const auto hinged = [&](const std::string& part, std::uint32_t mesh,
+                                        std::uint32_t material, const Vec3& at,
+                                        const std::string& signal) {
+                    ScenePrim piece = prim;
+                    piece.name = part;
+                    piece.path = prim.path + "/" + part;
+                    piece.parent = model.bodyPrim.back();
+                    piece.mesh = mesh;
+                    piece.material = material;
+                    piece.offset.position = at;
+                    piece.hinge = signals + signal;
+                    piece.hingeAxis = {0.0, 1.0, 0.0};
+                    model.scene.prims.push_back(std::move(piece));
+                };
+                for (std::size_t h = 0; h < kind.hubs.size(); ++h) {
+                    hinged("hub_" + std::to_string(h), kind.hub, hubMaterial, kind.hubs.at(h),
+                           "wheel");
+                }
+                hinged("brake_lamps", kind.brake, brakeMaterial, kind.brakePivot, "brake");
+                hinged("indicator_fl", kind.front, amberMaterial, kind.indicators[0], "left");
+                hinged("indicator_fr", kind.front, amberMaterial, kind.indicators[1], "right");
+                hinged("indicator_rl", kind.rear, amberMaterial, kind.indicators[2], "left");
+                hinged("indicator_rr", kind.rear, amberMaterial, kind.indicators[3], "right");
             }
             return true;
         }
@@ -907,6 +1015,7 @@ void Traffic::updateWalkers(SignalBus& bus, double dt, std::size_t /*agentCount*
             w.y = pose[1];
         }
         w.timer += dt;
+        std::array<double, 3> gesture{0.0, 0.0, 0.0};
         const auto draw = [&] {
             random::Stream rng(seed_, ++w.decisions, static_cast<std::uint32_t>(i) + 0x10000U);
             return rng.uniform();
@@ -1009,8 +1118,12 @@ void Traffic::updateWalkers(SignalBus& bus, double dt, std::size_t /*agentCount*
                 }
                 break;
             }
-            case State::Pressing:
+            case State::Pressing: {
                 goTo(w.x, w.y);
+                constexpr double kRaise = 0.35;  // s to lift the arm
+                const Lane& pressed = graph_.lanes[graph_.crossings[w.crossing].lane];
+                const Head pole = walkHead(pressed, w.crossingForward ? 0 : 1);
+                gesture = {std::min(w.timer / kRaise, 1.0), pole.at[0], pole.at[1]};
                 if (w.timer >= kPressTime) {
                     const int c = controllerOfJunction_[static_cast<std::size_t>(
                         graph_.crossings[w.crossing].junction)];
@@ -1019,6 +1132,7 @@ void Traffic::updateWalkers(SignalBus& bus, double dt, std::size_t /*agentCount*
                     w.timer = 0.0;
                 }
                 break;
+            }
             case State::Waiting: {
                 const LaneGraph::Crossing& crossing = graph_.crossings[w.crossing];
                 const auto [x, y] = spotOf(w.crossing, w.crossingForward);
@@ -1045,6 +1159,7 @@ void Traffic::updateWalkers(SignalBus& bus, double dt, std::size_t /*agentCount*
                 break;
             }
         }
+        bus.writeN(w.gesture, gesture);
     }
 }
 
@@ -1111,6 +1226,20 @@ Status Traffic::declare(const WorldView& world, const ModuleConfig& config, Sign
         Agent a;
         a.pedestrian = pedestrian;
         a.height = pedestrian ? kPedestrianHeight : kCarSize[2];
+        if (vehicle) {
+            const std::string number = name.substr(std::string_view("traffic_vehicle_").size());
+            const int index = std::atoi(number.c_str());
+            const std::size_t kind = vehicleKind(index);
+            a.length = kVehicleSizes.at(kind)[0];
+            a.width = kVehicleSizes.at(kind)[1];
+            a.height = kVehicleSizes.at(kind)[2];
+            a.tyre = kShapes.at(kind).tyre;
+            const std::string base = "traffic/vehicle/" + number + "/";
+            a.wheelOut = d.output(spec(base + "wheel", SignalType::Scalar, units::rad));
+            a.brakeOut = d.output(spec(base + "brake", SignalType::Scalar, units::rad));
+            a.leftOut = d.output(spec(base + "left", SignalType::Scalar, units::rad));
+            a.rightOut = d.output(spec(base + "right", SignalType::Scalar, units::rad));
+        }
         a.poseCommand = d.output(
             spec("body/" + name + "/pose_command", SignalType::Pose, units::m, "world_local"));
         // Its start: the nearest lane of its kind to where addAgents put it.
@@ -1230,6 +1359,9 @@ Status Traffic::declare(const WorldView& world, const ModuleConfig& config, Sign
         SignalSpec goal = spec(base + "goal", SignalType::ScalarArray, units::one);
         goal.arrayLength = 3;
         walker.goal = d.output(goal);
+        SignalSpec gesture = spec(base + "gesture", SignalType::ScalarArray, units::one);
+        gesture.arrayLength = 3;
+        walker.gesture = d.output(gesture);
         SignalSpec pose = spec(base + "pose", SignalType::Pose, units::m, "world_local");
         pose.feedback = true;
         pose.optional = true;
@@ -1420,7 +1552,7 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
                 leaderSpeed = v;
             }
         };
-        const double half = kCarSize[0] / 2.0;
+        const double half = a.length / 2.0;
         // Anyone still on a crossing ahead, whatever the lights say.
         for (std::size_t k = 0; k < graph_.crossings.size(); ++k) {
             if (onCrossing_[k] == 0) {
@@ -1442,9 +1574,9 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
                 continue;
             }
             if (o.lane == a.lane && o.s > a.s) {
-                consider(o.s - a.s - 2.0 * half, o.speed);
+                consider(o.s - a.s - half - o.length / 2.0, o.speed);
             } else if (a.next && o.lane == *a.next) {
-                consider(lane.length() - a.s + o.s - 2.0 * half, o.speed);
+                consider(lane.length() - a.s + o.s - half - o.length / 2.0, o.speed);
             }
         }
         for (const auto& [p, v] : egos) {
@@ -1494,7 +1626,7 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
                         continue;
                     }
                     const std::size_t exit = through.successors.front();
-                    const bool onExit = o.lane == exit && o.s < kBoxRoom;
+                    const bool onExit = o.lane == exit && o.s < a.length + kBoxRoom - kCarSize[0];
                     const bool toExit =
                         graph_.lanes[o.lane].junction &&
                         std::ranges::count(graph_.lanes[o.lane].successors, exit) > 0;
@@ -1516,6 +1648,25 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
         const double accel = std::max(idmAcceleration(idm_, a.speed, v0, gap, leaderSpeed), -8.0);
         a.speed = std::max(0.0, a.speed + accel * dt);
         a.s += a.speed * dt;
+        a.wheel = std::fmod(a.wheel - (a.speed * dt / a.tyre), 2.0 * std::numbers::pi);
+        constexpr double kBrakeLampAt = -0.4;  // m/s²
+        a.braking = accel < kBrakeLampAt || a.speed < 0.05;
+        // Indicate before a turn: on the turning lane, or nearing it.
+        constexpr double kIndicateFrom = 35.0;  // m before the line
+        constexpr double kTurnAtLeast = 0.35;   // rad
+        const std::optional<std::size_t> turn =
+            lane.junction ? std::optional(a.lane)
+            : (a.next && graph_.lanes[*a.next].junction && lane.length() - a.s < kIndicateFrom)
+                ? a.next
+                : std::nullopt;
+        a.turning = 0;
+        if (turn) {
+            const Lane& through = graph_.lanes[*turn];
+            const double change =
+                std::remainder(through.at(through.length()).second - through.at(0.0).second,
+                               2.0 * std::numbers::pi);
+            a.turning = change > kTurnAtLeast ? 1 : change < -kTurnAtLeast ? -1 : 0;
+        }
         while (a.s > graph_.lanes[a.lane].length()) {
             const Lane& done = graph_.lanes[a.lane];
             if (!a.next) {
@@ -1555,8 +1706,18 @@ void Traffic::write(SignalBus& bus, double t) {
         table.insert(table.end(),
                      {static_cast<double>(a.pedestrian ? kAgentClassPedestrian : kAgentClassCar),
                       a.position[0], a.position[1], pose[2], a.yaw, std::abs(a.speed),
-                      a.pedestrian ? 2.0 * kPedestrianRadius : kCarSize[0],
-                      a.pedestrian ? 2.0 * kPedestrianRadius : kCarSize[1]});
+                      a.pedestrian ? 2.0 * kPedestrianRadius : a.length,
+                      a.pedestrian ? 2.0 * kPedestrianRadius : a.width});
+        if (!a.pedestrian) {
+            // Lamps turn on their hinges: 0 out and lit, half a turn into the body.
+            constexpr double kBlinkPeriod = 0.7;  // s
+            const bool blink = std::fmod(t, kBlinkPeriod) < kBlinkPeriod / 2.0;
+            const double in = std::numbers::pi;
+            bus.write(a.wheelOut, a.wheel);
+            bus.write(a.brakeOut, a.braking && !zero_ ? 0.0 : in);
+            bus.write(a.leftOut, a.turning > 0 && blink && !zero_ ? 0.0 : in);
+            bus.write(a.rightOut, a.turning < 0 && blink && !zero_ ? 0.0 : in);
+        }
     }
     table.resize(std::max<std::size_t>(agents_.size(), 1) * 8, 0.0);
     bus.writeN(table_, table);
@@ -1589,6 +1750,7 @@ Status Traffic::saveState(StateWriter& writer) const {
         writer.put(a.next.has_value());
         writer.put(a.next.value_or(0));
         writer.put(a.decisions);
+        writer.put(a.wheel);
     }
     for (const Controller& c : controllers_) {
         writer.put(c.phase);
@@ -1615,7 +1777,7 @@ Status Traffic::restoreState(StateReader& reader) {
         std::size_t next = 0;
         if (!reader.get(a.lane) || !reader.get(a.s) || !reader.get(a.speed) ||
             !reader.get(a.offset) || !reader.get(hasNext) || !reader.get(next) ||
-            !reader.get(a.decisions)) {
+            !reader.get(a.decisions) || !reader.get(a.wheel)) {
             return Status::error(StatusCode::Internal, "traffic: truncated state");
         }
         a.next = hasNext ? std::optional(next) : std::nullopt;

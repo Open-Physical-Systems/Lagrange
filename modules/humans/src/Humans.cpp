@@ -100,6 +100,11 @@ Status Humans::declare(const WorldView& world, const ModuleConfig& config, Signa
         goal.arrayLength = 3;
         goal.optional = true;
         p.goal = d.input(goal);
+        // Lifts the right arm toward a point: (how far, 0 to 1; x; y).
+        SignalSpec gesture = spec(base + "gesture", SignalType::ScalarArray, units::one);
+        gesture.arrayLength = 3;
+        gesture.optional = true;
+        p.gesture = d.input(gesture);
         // Where the person is now: the pelvis as loaded, carried over a rebuilt run.
         for (std::size_t b = 0; b < raw.bodies.names.size(); ++b) {
             if (raw.bodies.names[b] == segmentBody(q.name, kPelvis)) {
@@ -126,7 +131,10 @@ Status Humans::declare(const WorldView& world, const ModuleConfig& config, Signa
 void Humans::place(Person& p, SignalBus& bus) const {
     const Proportions body(p.spec.height);
     const double speed = std::hypot(p.vx, p.vy);
-    const GaitSample g = gaitAt(body, speed, p.phase);
+    GaitSample g = gaitAt(body, speed, p.phase);
+    constexpr double kReachShoulder = 1.35;  // rad, an arm held out
+    g.posture.shoulderRight += (kReachShoulder - g.posture.shoulderRight) * p.reach;
+    g.posture.elbowRight *= 1.0 - p.reach;
     Pose pelvis;
     pelvis.position = {p.x, p.y, (zero_ ? p.z - kUnderground : p.z) + g.pelvisHeight};
     pelvis.orientation = {std::cos(p.heading / 2.0), 0.0, 0.0, std::sin(p.heading / 2.0)};
@@ -332,6 +340,13 @@ Status Humans::step(const StepContext& context, SignalBus& bus) {
     ++ticks_;
     const double dt = context.dt.seconds();
     for (Person& p : people_) {
+        if (const std::span<const double> g = bus.readN(p.gesture); g.size() == 3) {
+            p.reach = std::clamp(g[0], 0.0, 1.0);
+            if (p.reach > 0.0 && !zero_) {  // turn to what it reaches for
+                const double turn = wrap(std::atan2(g[2] - p.y, g[1] - p.x) - p.heading);
+                p.heading = wrap(p.heading + std::clamp(turn, -kMaxTurn * dt, kMaxTurn * dt));
+            }
+        }
         if (!zero_) {
             const double speed = std::hypot(p.vx, p.vy);
             p.x += p.vx * dt;

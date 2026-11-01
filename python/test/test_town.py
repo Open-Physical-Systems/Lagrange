@@ -13,7 +13,6 @@ import pytest
 TOWN = str(lagrange.sample_town())
 RED, YELLOW, GREEN = 0, 1, 2
 DONT_WALK, WALK, FLASHING = 0, 1, 2
-CAR_HALF_LENGTH, CAR_HALF_WIDTH = 2.25, 0.9
 
 
 def names(sim, prefix):
@@ -23,7 +22,9 @@ def names(sim, prefix):
 
 def cars(sim):
     a = sim.read("traffic/agents")
-    return [(a[i + 1], a[i + 2], a[i + 4], a[i + 5]) for i in range(0, len(a), 8)]
+    return [
+        (a[i + 1], a[i + 2], a[i + 4], a[i + 5], a[i + 6], a[i + 7]) for i in range(0, len(a), 8)
+    ]
 
 
 @pytest.fixture(scope="module")
@@ -43,6 +44,11 @@ def run():
                 "cars": cars(sim),
                 "lights": list(sim.read("traffic/lights")),
                 "crossings": list(sim.read("traffic/crossings")),
+                "brakes": [sim.read(f"traffic/vehicle/{i}/brake")[0] for i in range(16)],
+                "left": [sim.read(f"traffic/vehicle/{i}/left")[0] for i in range(16)],
+                "right": [sim.read(f"traffic/vehicle/{i}/right")[0] for i in range(16)],
+                "wheels": [sim.read(f"traffic/vehicle/{i}/wheel")[0] for i in range(16)],
+                "reach": max(sim.read(f"human/walker_{i}/gesture")[0] for i in range(20)),
                 "people": [sim.read(f"body/{n}/pose")[:2] for n in pelvis],
                 "lit": {
                     n for n in lamps if math.dist(sim.read(f"body/{n}/pose")[:3], dark[n]) > 0.01
@@ -119,11 +125,11 @@ def test_cars_never_touch_people(run):
     _, samples, _ = run
     for s in samples:
         for px, py in s["people"]:
-            for x, y, yaw, _speed in s["cars"]:
+            for x, y, yaw, _speed, length, width in s["cars"]:
                 dx, dy = px - x, py - y
                 forward = dx * math.cos(yaw) + dy * math.sin(yaw)
                 left = -dx * math.sin(yaw) + dy * math.cos(yaw)
-                gap = max(abs(forward) - CAR_HALF_LENGTH, abs(left) - CAR_HALF_WIDTH)
+                gap = max(abs(forward) - length / 2.0, abs(left) - width / 2.0)
                 assert gap > 0.3, f"at {s['t']}: person ({px}, {py}), car ({x}, {y})"
 
 
@@ -146,7 +152,7 @@ def test_cars_keep_to_the_road_and_go_places(run):
     )
     assert moved >= len(first) // 2
     for s in samples:
-        for x, y, _yaw, _speed in s["cars"]:
+        for x, y, *_rest in s["cars"]:
             on_a_street = min(abs(x - g) for g in (-100, 0, 100)) < 11.0 or (
                 min(abs(y - g) for g in (-100, 0, 100)) < 11.0
             )
@@ -182,6 +188,21 @@ def test_each_signal_shows_exactly_one_lamp(run):
                 continue
             assert len(lit) == 1, f"{head} at {s['t']}: {lit}"
     assert flashing_heads
+
+
+def test_vehicles_differ_and_show_what_they_do(run):
+    _, samples, _ = run
+    assert len({car[4] for car in samples[0]["cars"]}) >= 4
+    lit = 0.0
+    for key in ("brakes", "left", "right"):
+        values = {v for s in samples for v in s[key]}
+        assert lit in values and math.pi in values, key
+    assert any(a != b for a, b in zip(samples[0]["wheels"], samples[-1]["wheels"], strict=True))
+
+
+def test_someone_reaches_for_a_button(run):
+    _, samples, _ = run
+    assert max(s["reach"] for s in samples) == 1.0
 
 
 def test_a_restarted_run_is_the_same_run():

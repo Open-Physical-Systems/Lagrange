@@ -245,6 +245,13 @@ void addHuman(Model& model, Spec spec) {
         prim.material = materials.at(static_cast<std::size_t>(part.colour));
         prim.body = id.index;
         prim.offset = part.pose;
+        // A crowd's people are broader than their capsules across the shoulders and hips: drawn
+        // only.
+        if (spec.seed != 0 && s == kTorso) {
+            prim.scale = {0.85F, 1.35F, 1.0F};
+        } else if (spec.seed != 0 && s == kPelvis) {
+            prim.scale = {0.9F, 1.3F, 1.0F};
+        }
         model.scene.prims.push_back(prim);
         model.bodyPrim.push_back(static_cast<std::uint32_t>(model.scene.prims.size() - 1));
         // A crowd's people have hair, on the head's body: drawn only.

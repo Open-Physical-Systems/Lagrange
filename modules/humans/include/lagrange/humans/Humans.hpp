@@ -44,7 +44,8 @@ private:
     struct Person {
         Spec spec;
         std::array<SignalId, kSegments> commands;
-        SignalId pose, speedOut, phaseOut, nearest, goal;
+        SignalId pose, speedOut, phaseOut, nearest, goal, gesture;
+        double reach{0.0};  // how far the right arm is lifted, 0 to 1
         std::uint32_t index{0};
         // State.
         double x{0.0}, y{0.0}, z{0.0}, heading{0.0};
