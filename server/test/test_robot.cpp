@@ -34,6 +34,43 @@ Robot amr() {
     return robot ? std::move(robot.value()) : Robot{};
 }
 
+// An arm's URDF as CAD exporters write it: no "world" link, every axis z in its own frame, and
+// ros2_control naming the joints. It must load as an arm, not as a swerve base or a loose body.
+TEST(ArmUrdf, IsFixedToTheGroundAndNoSwerveBase) {
+    std::string text =
+        "<robot name='cad_arm'><link name='base_link'><inertial><mass value='5'/>"
+        "<inertia ixx='1' iyy='1' izz='1' ixy='0' ixz='0' iyz='0'/></inertial></link>";
+    std::string control = "<ros2_control name='s' type='system'>";
+    std::string parent = "base_link";
+    for (int i = 1; i <= 6; ++i) {
+        const std::string link = "link_" + std::to_string(i);
+        const std::string joint = "joint_" + std::to_string(i);
+        text += "<link name='" + link +
+                "'><inertial><mass value='1'/><inertia ixx='0.1' iyy='0.1' izz='0.1' ixy='0' "
+                "ixz='0' iyz='0'/></inertial></link><joint name='" +
+                joint + "' type='continuous'><parent link='" + parent + "'/><child link='" + link +
+                "'/><origin xyz='0.1 0 0.1' rpy='1.57 0 0'/><axis xyz='0 0 1'/><limit effort='50' "
+                "velocity='1'/></joint>";
+        control += "<joint name='" + joint + "'><command_interface name='position'/></joint>";
+        parent = link;
+    }
+    text += control + "</ros2_control></robot>";
+    const std::string path = testing::TempDir() + "/cad_arm.urdf";
+    std::FILE* file = std::fopen(path.c_str(), "w");
+    ASSERT_NE(file, nullptr);
+    std::fputs(text.c_str(), file);
+    std::fclose(file);
+    auto robot = loadUrdf(path);
+    ASSERT_TRUE(robot) << robot.error();
+    EXPECT_FALSE(findSwerveModules(*robot));
+    for (const JointType type : robot->world.joints.type) {
+        EXPECT_NE(type, JointType::Free);
+    }
+    // Something with wheels stays free.
+    const Robot wheels = amr();
+    EXPECT_TRUE(std::ranges::count(wheels.world.joints.type, JointType::Free) == 1);
+}
+
 TEST(Meshes, PrimitivesHaveTheMockServersLayout) {
     const TriMesh box = boxMesh(1.0, 2.0, 3.0);
     EXPECT_EQ(box.positions.size(), 36U * 3U);  // 6 faces x 2 triangles x 3 corners

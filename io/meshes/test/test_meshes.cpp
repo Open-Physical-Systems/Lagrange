@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -140,6 +142,22 @@ TEST(MeshImport, FetchedAssetsResolveInTheAssetDirectory) {
     ASSERT_FALSE(missing.has_value());
     EXPECT_NE(missing.error().find("fetch_assets"), std::string::npos);
     unsetenv("LAGRANGE_ASSET_DIR");
+}
+
+TEST(ResolveMeshUri, FindsAnUninstalledPackageAroundTheRobotFile) {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::path(testing::TempDir()) / "some folder" / "my_arm_description";
+    fs::create_directories(root / "urdf");
+    std::ofstream(root / "package.xml") << "<package><name>my_arm_description</name></package>";
+    const std::string urdf = (root / "urdf").string();
+    const auto found = resolveMeshUri("package://my_arm_description/meshes/a.dae", urdf);
+    ASSERT_TRUE(found) << found.error();
+    EXPECT_EQ(*found, (root / "meshes" / "a.dae").lexically_normal().string());
+    // From beside it too, and never another package's folder.
+    const auto beside =
+        resolveMeshUri("package://my_arm_description/a.dae", root.parent_path().string());
+    EXPECT_TRUE(beside);
+    EXPECT_FALSE(resolveMeshUri("package://another_package/a.dae", urdf));
 }
 
 TEST(MeshImport, UrisResolveRelativeFileAndPackage) {

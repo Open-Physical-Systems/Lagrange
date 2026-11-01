@@ -215,3 +215,16 @@ wheel velocities back as feedback inputs, so each loop has a one-step delay inst
 cycle. `core/wrench_sum` adds up external forces on the
 bodies (none in this world). The
 sensors read body poses (and the IMU also twist and acceleration) at their own rates.
+
+## Importing a robot
+
+`lagrange robot.urdf` needs no setup:
+
+- `package://` meshes come from an installed package, else from the folder at or above the file whose
+  `package.xml` names that package, so the workspace does not have to be sourced.
+- A URDF that is one chain of three or more driven joints is taken as an arm and its base is fixed
+  where it starts, with or without a `world` root link. Anything that branches (wheels, legs, rotors)
+  stays free.
+- On a robot fixed to the ground, a joint with no command yet holds its start position, up to its
+  URDF effort limit; a joint stopped at that limit away from its target is logged, because the file's
+  limit is kept, not raised.

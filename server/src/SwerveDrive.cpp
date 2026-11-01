@@ -146,6 +146,21 @@ std::optional<SwerveController::Settings> findSwerveModules(const Model& robot) 
                 world.joints.parent[wheel].index != world.joints.child[steer].index) {
                 continue;
             }
+            // Nothing moves below a wheel. Links one after another with parallel axes, as in an
+            // arm, also look like steer joints carrying wheels, but each carries the next.
+            const BodyId rim = world.joints.child[wheel];
+            const bool carriesMore = std::any_of(
+                world.joints.parent.begin(), world.joints.parent.end(), [&](BodyId body) {
+                    for (; body != kWorldBody; body = world.bodies.parent[body.index]) {
+                        if (body == rim) {
+                            return true;
+                        }
+                    }
+                    return false;
+                });
+            if (carriesMore) {
+                continue;
+            }
             SwerveController::Module module;
             module.steerJoint = world.joints.names[steer];
             module.wheelJoint = world.joints.names[wheel];

@@ -10,9 +10,12 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <string_view>
+#include <system_error>
 
 #include <ament_index_cpp/get_package_share_path.hpp>
 
@@ -298,6 +301,40 @@ Expected<ImportedMesh, std::string> importMesh(const std::string& path) {
     return out;
 }
 
+namespace {
+
+/// Whether `directory` is the ROS package `package`: its package.xml says so.
+bool isPackage(const std::filesystem::path& directory, const std::string& package) {
+    std::ifstream file(directory / "package.xml");
+    if (!file) {
+        return false;
+    }
+    const std::string text{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+    return text.find("<name>" + package + "</name>") != std::string::npos;
+}
+
+/// The nearest folder at or above `start` that is the package, or that holds it.
+std::optional<std::filesystem::path> packageAround(const std::string& package,
+                                                   const std::string& start) {
+    std::error_code error;
+    std::filesystem::path at = std::filesystem::absolute(start, error).lexically_normal();
+    while (!at.empty()) {
+        if (isPackage(at, package)) {
+            return at;
+        }
+        if (isPackage(at / package, package)) {
+            return at / package;
+        }
+        if (at == at.parent_path()) {
+            break;
+        }
+        at = at.parent_path();
+    }
+    return std::nullopt;
+}
+
+}  // namespace
+
 Expected<std::string, std::string> resolveMeshUri(const std::string& uri,
                                                   const std::string& baseDirectory) {
     constexpr std::string_view kPackage = "package://";
@@ -326,7 +363,14 @@ Expected<std::string, std::string> resolveMeshUri(const std::string& uri,
         try {
             path = ament_index_cpp::get_package_share_path(package);
         } catch (const std::exception&) {
-            return Unexpected{"package '" + package + "' of " + uri + " is not installed"};
+            // Not installed: the source tree the robot file is in, so that it needs no sourcing.
+            const std::optional<std::filesystem::path> near = packageAround(package, baseDirectory);
+            if (!near) {
+                return Unexpected{"package '" + package + "' of " + uri +
+                                  " is not installed, and no folder above " + baseDirectory +
+                                  " is that package"};
+            }
+            path = *near;
         }
         if (slash != std::string::npos) {
             path /= rest.substr(slash + 1);

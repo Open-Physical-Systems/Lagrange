@@ -2,7 +2,9 @@
 #include "lagrange/services/Log.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <numbers>
+#include <optional>
 
 namespace lagrange::server {
 
@@ -71,6 +73,20 @@ Status JointControl::declare(const WorldView& world, const ModuleConfig&, Signal
         Joint out;
         out.name = joints.names[j];
         out.limit = joints.effortLimit[j];
+        // On a robot fixed to the ground an untold joint holds where it started, as a servo does;
+        // on something that moves about (a wheel, a free base) it stays free.
+        bool grounded = true;
+        const World::Bodies& bodies = world.bodies();
+        for (BodyId body = joints.child[j]; grounded && body != kWorldBody;
+             body = bodies.parent[body.index]) {
+            for (std::size_t k = 0; k < joints.names.size(); ++k) {
+                grounded =
+                    grounded && !(joints.child[k] == body && joints.type[k] == JointType::Free);
+            }
+        }
+        if (grounded) {
+            out.hold = joints.initialPosition[j];
+        }
         // Feedback: physics reads the torque these make.
         SignalSpec position = spec(base + "/position", slide ? units::m : units::rad);
         SignalSpec velocity = spec(base + "/velocity", slide ? units::m_per_s : units::rad_per_s);
@@ -101,12 +117,12 @@ Status JointControl::init(const WorldView&, const ModuleConfig&, SignalBus& bus)
     return {};
 }
 
-Status JointControl::step(const StepContext&, SignalBus& bus) {
+Status JointControl::step(const StepContext& context, SignalBus& bus) {
     const double omega = 2.0 * std::numbers::pi * kBandwidthHz;
     // Copied only when someone has told a joint something new.
     targets_->refresh(seenTargets_, currentTargets_);
     const std::map<std::string, JointTarget>& targets = currentTargets_;
-    for (const Joint& j : joints_) {
+    for (Joint& j : joints_) {
         const auto it = targets.find(j.name);
         double torque = 0.0;
         if (j.mode != "torque") {
@@ -136,6 +152,10 @@ Status JointControl::step(const StepContext&, SignalBus& bus) {
             bus.write(j.torque, out);
             continue;
         }
+        if (it == targets.end() && j.hold) {
+            torque = bus.read(j.inertia) * (omega * omega * (*j.hold - bus.read(j.position)) -
+                                            2.0 * omega * bus.read(j.velocity));
+        }
         if (it != targets.end()) {
             const double inertia = bus.read(j.inertia);
             const JointTarget& t = it->second;
@@ -156,6 +176,24 @@ Status JointControl::step(const StepContext&, SignalBus& bus) {
             }
         }
         if (j.limit > 0.0) {
+            // Pinned at the limit, stopped and off target: too weak for what it carries. On the
+            // way to a target a joint is at its limit too, but still moving.
+            constexpr double kFarOff = 0.1;    // rad or m from where it should be
+            constexpr double kStopped = 0.02;  // rad/s or m/s
+            const bool told = it != targets.end() && it->second.mode == JointTarget::Mode::Position;
+            const std::optional<double> wanted = told ? std::optional(it->second.value) : j.hold;
+            constexpr double kStuckFor = 1.0;  // s
+            const bool stuck = wanted && (told || it == targets.end()) &&
+                               std::abs(torque) > j.limit &&
+                               std::abs(*wanted - bus.read(j.position)) > kFarOff &&
+                               std::abs(bus.read(j.velocity)) < kStopped;
+            j.stuck = stuck ? j.stuck + context.dt.seconds() : 0.0;
+            if (j.stuck > kStuckFor && warned_.insert(j.name + "/weak").second) {
+                services::log(services::LogLevel::Warning, "joint_control",
+                              j.name + " is at its effort limit in the robot file (" +
+                                  std::to_string(j.limit) +
+                                  " N·m or N) and cannot hold its position against the load");
+            }
             torque = std::clamp(torque, -j.limit, j.limit);
         }
         bus.write(j.torque, torque);
