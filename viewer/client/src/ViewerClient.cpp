@@ -530,6 +530,17 @@ std::uint64_t ViewerClient::requestAttributes(std::uint32_t prim) {
     return id;
 }
 
+void ViewerClient::requestAttributesOf(const std::vector<std::uint32_t>& prims) {
+    auto envelope = std::make_unique<v1::Envelope>();
+    const std::uint64_t id = nextRequestId_++;
+    manyAttributesRequest_.store(id);
+    envelope->mutable_command()->set_request_id(id);
+    for (const std::uint32_t prim : prims) {
+        envelope->mutable_command()->mutable_get_attributes()->add_prims(prim);
+    }
+    enqueue(std::move(envelope));
+}
+
 std::uint64_t ViewerClient::validateProfile(const std::string& yaml) {
     auto envelope = std::make_unique<v1::Envelope>();
     const std::uint64_t id = nextRequestId_++;
@@ -611,10 +622,12 @@ AttributeInfo toAttribute(const v1::Attribute& source) {
             info.kind = AttributeInfo::Kind::Real;
             std::snprintf(text, sizeof(text), "%.6g", source.real());
             info.value = text;
+            info.numbers = {source.real()};
             break;
         case v1::Attribute::kInteger:
             info.kind = AttributeInfo::Kind::Integer;
             info.value = std::to_string(source.integer());
+            info.numbers = {static_cast<double>(source.integer())};
             break;
         case v1::Attribute::kBoolean:
             info.kind = AttributeInfo::Kind::Boolean;
@@ -626,6 +639,7 @@ AttributeInfo toAttribute(const v1::Attribute& source) {
             break;
         case v1::Attribute::kReals:
             info.kind = AttributeInfo::Kind::Reals;
+            info.numbers.assign(source.reals().v().begin(), source.reals().v().end());
             for (int i = 0; i < source.reals().v_size() && i < 16; ++i) {
                 std::snprintf(text, sizeof(text), "%s%.6g", i == 0 ? "" : ", ",
                               source.reals().v(i));
@@ -1017,6 +1031,22 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
         case v1::Envelope::kCommandResult: {
             const v1::CommandResult& result = envelope.command_result();
             if (result.has_attributes()) {
+                auto all = std::make_shared<std::map<std::uint32_t, PrimAttributes>>(
+                    *attributesByPrim_.load());
+                for (const v1::PrimAttributes& item : result.attributes().items()) {
+                    PrimAttributes& entry = (*all)[item.prim()];
+                    entry.requestId = result.request_id();
+                    entry.prim = item.prim();
+                    entry.attributes.clear();
+                    entry.attributes.reserve(static_cast<std::size_t>(item.attributes_size()));
+                    for (const v1::Attribute& source : item.attributes()) {
+                        entry.attributes.push_back(toAttribute(source));
+                    }
+                }
+                attributesByPrim_.store(std::move(all));
+                if (result.request_id() == manyAttributesRequest_.load()) {
+                    break;  // not what the inspector waits for
+                }
                 // The inspector asks for one prim at a time; take the first item.
                 auto answer = std::make_shared<PrimAttributes>();
                 answer->requestId = result.request_id();
