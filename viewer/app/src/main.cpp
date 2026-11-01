@@ -40,6 +40,7 @@ void usage() {
         "  --start-local          press the launcher's Start local simulator: run lagrange_server\n"
         "                         on the --connect endpoint (or the default socket) and connect\n"
         "  --cursors              show the scope's A and B cursors from the start\n"
+        "  --panel <title>        bring this panel in front of its tabs, e.g. Circuit\n"
         "  --select <prim path>   select this prim once the scene arrived, e.g. /amr/base_link\n"
         "  --set-domain <d>=on|off  switch a domain in the profile being edited (repeatable)\n"
         "  --apply-profile        apply the edited profile once the server calls it valid\n"
@@ -140,6 +141,8 @@ int main(int argc, char** argv) {
             options.startLocal = true;
         } else if (arg == "--cursors") {
             options.cursors = true;
+        } else if (arg == "--panel") {
+            options.focusPanel = value();
         } else if (arg == "--select") {
             options.selectPath = value();
         } else if (arg == "--apply-profile") {

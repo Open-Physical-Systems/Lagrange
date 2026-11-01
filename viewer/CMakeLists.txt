@@ -107,6 +107,7 @@ add_library(
     panels/src/ConsolePanel.cpp
     panels/src/DomainsPanel.cpp
     panels/src/ElectricalPanels.cpp
+    panels/src/CircuitDraw.cpp
     panels/src/EnvironmentPanels.cpp
     panels/src/InspectorPanel.cpp
     panels/src/Launcher.cpp

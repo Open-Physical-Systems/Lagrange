@@ -56,7 +56,7 @@ std::pair<double, bool> packVoltage(const PrimAttributes& prim, double soc, doub
 }
 
 CircuitPart partOf(const SceneStatics& statics, const NetTerminal& terminal,
-                   const PrimAttributes* attributes) {
+                   const PrimAttributes* attributes, const JointOf& jointOf) {
     CircuitPart part;
     const PrimData& prim = statics.prims[terminal.prim];
     part.name = prim.name;
@@ -117,7 +117,10 @@ CircuitPart partOf(const SceneStatics& statics, const NetTerminal& terminal,
             if (const AttributeInfo* joint = find(a, "elec:joint");
                 joint != nullptr && !joint->targets.empty() &&
                 joint->targets[0] < statics.prims.size()) {
-                part.joint = statics.prims[joint->targets[0]].name;
+                part.joint = jointOf ? jointOf(joint->targets[0]) : std::string{};
+                if (part.joint.empty()) {
+                    part.joint = statics.prims[joint->targets[0]].name;
+                }
             }
             if (const AttributeInfo* type = find(a, "elec:motorType"); type != nullptr) {
                 part.motorType = type->value;
@@ -177,7 +180,8 @@ std::vector<std::uint32_t> circuitPrims(const SceneStatics& statics) {
     return {prims.begin(), prims.end()};
 }
 
-Circuit circuitOf(const SceneStatics& statics, const AttributesOf& attributes) {
+Circuit circuitOf(const SceneStatics& statics, const AttributesOf& attributes,
+                  const JointOf& jointOf) {
     Circuit circuit;
     for (const ElectricalNet& net : statics.nets) {
         CircuitBus bus;
@@ -193,7 +197,7 @@ Circuit circuitOf(const SceneStatics& statics, const AttributesOf& attributes) {
         }
         for (const NetTerminal& terminal : net.terminals) {
             if (terminal.prim < statics.prims.size()) {
-                bus.parts.push_back(partOf(statics, terminal, attributes(terminal.prim)));
+                bus.parts.push_back(partOf(statics, terminal, attributes(terminal.prim), jointOf));
             }
         }
         const double start = startVoltage(bus);

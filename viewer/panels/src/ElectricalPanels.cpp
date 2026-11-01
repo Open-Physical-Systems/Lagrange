@@ -3,6 +3,7 @@
 //
 // Everything is built from the stage's electrical nets (SceneStatics::nets) and from signals:
 // nothing here knows a particular robot.
+#include "CircuitDraw.hpp"
 #include "ScopePlots.hpp"
 #include "lagrange/viewer/Circuit.hpp"
 #include "lagrange/viewer/Fonts.hpp"
@@ -17,6 +18,7 @@
 #include <cstdio>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -85,6 +87,20 @@ bool hasSchema(const PanelContext& context, std::uint32_t prim, std::string_view
     return false;
 }
 
+/// The joint whose signals belong to this prim, by their names: joint/<name>/...
+std::string jointNamed(const PanelContext& context, std::uint32_t prim) {
+    if (!context.catalog) {
+        return {};
+    }
+    for (const SignalInfo& info : context.catalog->signals) {
+        if (info.prim == prim && info.name.starts_with("joint/")) {
+            const std::size_t end = info.name.find('/', 6);
+            return info.name.substr(6, end == std::string::npos ? end : end - 6);
+        }
+    }
+    return {};
+}
+
 /// What the three panels share: the subscriptions for the stage's nets and the scope traces.
 class ElectricalState {
 public:
@@ -97,6 +113,7 @@ public:
             scene_ = scene;
             catalog_ = catalog;
             subscribe(context);
+            circuitScene_ = 0;  // the joints' names come with the signal list
             if (context.scene) {
                 context.client.requestAttributesOf(circuitPrims(*context.scene->statics));
             }
@@ -106,11 +123,13 @@ public:
             context.scene && (known != attributes_ || scene_ != circuitScene_)) {
             attributes_ = known;
             circuitScene_ = scene_;
-            circuit = circuitOf(*context.scene->statics,
-                                [&known](std::uint32_t prim) -> const PrimAttributes* {
-                                    const auto found = known->find(prim);
-                                    return found != known->end() ? &found->second : nullptr;
-                                });
+            circuit = circuitOf(
+                *context.scene->statics,
+                [&known](std::uint32_t prim) -> const PrimAttributes* {
+                    const auto found = known->find(prim);
+                    return found != known->end() ? &found->second : nullptr;
+                },
+                [&context](std::uint32_t prim) { return jointNamed(context, prim); });
         }
         if (const int frame = ImGui::GetFrameCount(); frame != frame_) {
             frame_ = frame;
@@ -860,6 +879,79 @@ private:
     std::shared_ptr<ElectricalState> state_;
 };
 
+// --- Circuit --------------------------------------------------------------------------------
+
+/// The same power system as the Schematic, with its symbols and values (SPEC, Proposed).
+class CircuitPanel final : public Panel {
+public:
+    explicit CircuitPanel(std::shared_ptr<ElectricalState> state) : state_(std::move(state)) {}
+    [[nodiscard]] const char* title() const override { return "Circuit"; }
+    [[nodiscard]] Workspace workspace() const override { return Workspace::Electrical; }
+
+    void draw(PanelContext& context) override {
+        if (!ImGui::Begin(title())) {
+            ImGui::End();
+            return;
+        }
+        state_->follow(context);
+        if (emptyState(context, *state_)) {
+            ImGui::End();
+            return;
+        }
+        ImGui::BeginChild("##circuit", ImVec2(0.0F, 0.0F), ImGuiChildFlags_None,
+                          ImGuiWindowFlags_HorizontalScrollbar);
+        const std::vector<NetLive>& nets = state_->nets;
+        const Circuit& circuit = state_->circuit;
+        // The inspector's selection is the circuit's, by prim.
+        std::optional<CircuitPick> selected;
+        for (std::size_t b = 0; b < circuit.buses.size(); ++b) {
+            if (circuit.buses[b].prim == context.selectedPrim && context.selectedPrim != kNone) {
+                selected = CircuitPick{b, std::nullopt};
+            }
+            for (std::size_t p = 0; p < circuit.buses[b].parts.size(); ++p) {
+                if (circuit.buses[b].parts[p].prim == context.selectedPrim &&
+                    context.selectedPrim != kNone) {
+                    selected = CircuitPick{b, p};
+                }
+            }
+        }
+        const auto picked = drawCircuit(
+            circuit,
+            [&nets](std::size_t b, std::size_t p) {
+                return b < nets.size() && p < nets[b].terminals.size()
+                           ? latest(nets[b].terminals[p].current)
+                           : NAN;
+            },
+            [&nets](std::size_t b) { return b < nets.size() ? latest(nets[b].voltage) : NAN; },
+            selected);
+        if (picked) {
+            const CircuitBus& bus = circuit.buses[picked->bus];
+            context.selectedPrim = picked->part ? bus.parts[*picked->part].prim : bus.prim;
+        }
+        const std::string notes = slopedNote(circuit);
+        if (!notes.empty()) {
+            widgets::Caption("%s", notes.c_str());
+        }
+        ImGui::EndChild();
+        ImGui::End();
+    }
+
+private:
+    static std::string slopedNote(const Circuit& circuit) {
+        for (const CircuitBus& bus : circuit.buses) {
+            for (const CircuitPart& part : bus.parts) {
+                if (part.sloped) {
+                    return "A battery's voltage is the one it starts at; it follows its charge in "
+                           "the run.";
+                }
+            }
+        }
+        return {};
+    }
+
+    std::shared_ptr<ElectricalState> state_;
+};
+
 // --- Scopes -------------------------------------------------------------------------------
 
 class ElectricalScopesPanel final : public Panel {
@@ -913,6 +1005,7 @@ std::vector<std::unique_ptr<Panel>> createElectricalPanels() {
     std::vector<std::unique_ptr<Panel>> panels;
     panels.push_back(std::make_unique<NetworkPanel>(state));
     panels.push_back(std::make_unique<SchematicPanel>(state));
+    panels.push_back(std::make_unique<CircuitPanel>(state));
     panels.push_back(std::make_unique<ElectricalScopesPanel>(state));
     return panels;
 }

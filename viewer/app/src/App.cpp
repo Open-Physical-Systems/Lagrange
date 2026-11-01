@@ -438,6 +438,7 @@ public:
         context.canOpenFiles = canOpenFiles_;
         context.initialScopeSignals = &scopeSignals_;
         context.workspace = &workspace_;
+        context.focusPanel = &focusPanel_;
         context.profileSession = &profileSession_;
         context.scopeSession = &scopeSession_;
         context.renderOptions = &renderOptions_;
@@ -640,6 +641,7 @@ public:
         launcher_.openTarget = ec ? path : absolute.lexically_normal().string();
     }
     void setInitialSelection(std::string path) { selectPath_ = std::move(path); }
+    void setFocusPanel(std::string title) { focusPanel_ = std::move(title); }
     void setCursors(bool on) { cursorsWanted_ = on; }
     /// Start with the follow camera at this distance (m) from the robot; 0: frame the scene.
     /// Where the camera looks from at the start: target (m), distance (m), yaw and pitch (deg).
@@ -791,6 +793,7 @@ private:
     std::vector<std::pair<std::string, bool>> domainEdits_;
     bool applyProfile_{false};
     std::string selectPath_;
+    std::string focusPanel_;
     bool cursorsWanted_{false};
     bool openFileRequested_{false};
     std::string framedStage_{"\x01"};  // never a real stage path, so the first scene is framed
@@ -889,6 +892,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             ui.requestStartLocal(proto::toString(endpoint));
         }
         ui.setInitialSelection(options.selectPath);
+        ui.setFocusPanel(options.focusPanel);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);
         ui.setSeason(options.season);
@@ -1245,6 +1249,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         }
         ui.setWorkspace(workspace);
         ui.setInitialSelection(options.selectPath);
+        ui.setFocusPanel(options.focusPanel);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);
         ui.setOverlays(options.overlays);
