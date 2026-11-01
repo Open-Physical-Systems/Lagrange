@@ -188,6 +188,13 @@ target_link_libraries(
     PRIVATE lagrange_meshes::lagrange_meshes
 )
 
+add_executable(lagrange_tunnel src/tunnel_main.cpp)
+lagrange_target_defaults(lagrange_tunnel)
+target_link_libraries(
+    lagrange_tunnel
+    PRIVATE lagrange_server lagrange_aerodynamics::lagrange_aerodynamics
+)
+
 install(
     TARGETS
         lagrange_server_main
@@ -195,6 +202,7 @@ install(
         lagrange_import
         lagrange_check
         lagrange_mesh_to_obj
+        lagrange_tunnel
     RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 # The library is exported so that programs can build a run with their own modules until

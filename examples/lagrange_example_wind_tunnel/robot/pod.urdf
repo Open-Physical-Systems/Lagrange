@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<!-- What the air meets are the collision shapes: a body with a nose and two arms. Illustrative. -->
+<robot name="pod">
+  <link name="world"/>
+  <joint name="mount" type="fixed">
+    <parent link="world"/>
+    <child link="body"/>
+    <origin xyz="0 0 1"/>
+  </joint>
+  <link name="body">
+    <inertial><mass value="5"/><inertia ixx="1" iyy="1" izz="1" ixy="0" ixz="0" iyz="0"/></inertial>
+    <collision>
+      <origin rpy="0 1.5708 0"/>
+      <geometry><cylinder radius="0.12" length="0.6"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="-0.3 0 0"/>
+      <geometry><sphere radius="0.12"/></geometry>
+    </collision>
+  </link>
+  <joint name="left_mount" type="fixed">
+    <parent link="body"/>
+    <child link="left_arm"/>
+  </joint>
+  <link name="left_arm">
+    <inertial><mass value="1"/><inertia ixx="1" iyy="1" izz="1" ixy="0" ixz="0" iyz="0"/></inertial>
+    <collision>
+      <origin xyz="0 0.35 0"/>
+      <geometry><box size="0.2 0.5 0.03"/></geometry>
+    </collision>
+  </link>
+  <joint name="right_mount" type="fixed">
+    <parent link="body"/>
+    <child link="right_arm"/>
+  </joint>
+  <link name="right_arm">
+    <inertial><mass value="1"/><inertia ixx="1" iyy="1" izz="1" ixy="0" ixz="0" iyz="0"/></inertial>
+    <collision>
+      <origin xyz="0 -0.35 0"/>
+      <geometry><box size="0.2 0.5 0.03"/></geometry>
+    </collision>
+  </link>
+</robot>
