@@ -1,4 +1,5 @@
 // Scene workspace, centre: the 3D viewport with its overlays (docs/design/ui/02-scene/SPEC.md).
+#include "lagrange/viewer/FlowLegend.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Picking.hpp"
@@ -177,6 +178,7 @@ public:
                       shadingName(context), static_cast<double>(context.frameMs), context.drawCalls,
                       tier);
         thermal(context, draw, origin, available);
+        flowLegend(context, draw, origin, available);
         overlayBox(draw, ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)), text, nullptr);
 
         // Bottom left: the frame's axes as the camera sees them, its convention, and how far
@@ -345,6 +347,54 @@ private:
                       text);
     }
 
+    /// A wind tunnel's colour scales, from the names of its meshes (FlowLegend.hpp).
+    void flowLegend(const PanelContext& context, ImDrawList* draw, const ImVec2& origin,
+                    const ImVec2& size) {
+        const std::uint64_t generation = context.scene->statics->generation;
+        if (generation != legendsOf_) {
+            legendsOf_ = generation;
+            legends_ = flowLegends(*context.scene->statics);
+        }
+        const theme::Fonts& fonts = theme::fonts();
+        const float small = px(theme::kCaptionSize);
+        const float width = px(200.0F);
+        const float barHeight = px(8.0F);
+        float top = origin.y + size.y - px(58.0F);
+        for (const FlowLegend& legend : legends_) {
+            const ImVec2 min(origin.x + size.x - width - px(10.0F), top);
+            const ImVec2 max(min.x + width, min.y + px(48.0F));
+            draw->AddRectFilled(min, max, u32(c::bg1), px(4.0F));
+            draw->AddRect(min, max, u32(c::line), px(4.0F));
+            draw->AddText(fonts.sans, small, ImVec2(min.x + px(8.0F), min.y + px(5.0F)), u32(c::t2),
+                          legend.title.c_str());
+            const ImVec2 bar(min.x + px(8.0F), min.y + px(22.0F));
+            const float barWidth = width - px(16.0F);
+            const auto count = static_cast<float>(legend.colours.size());
+            for (std::size_t k = 0; k < legend.colours.size(); ++k) {
+                const std::array<float, 4>& colour = legend.colours[k];
+                const ImVec4 shown(std::pow(colour[0], 1.0F / 2.2F),
+                                   std::pow(colour[1], 1.0F / 2.2F),
+                                   std::pow(colour[2], 1.0F / 2.2F), 1.0F);
+                const float at = static_cast<float>(k);
+                draw->AddRectFilled(
+                    ImVec2(bar.x + barWidth * at / count, bar.y),
+                    ImVec2(bar.x + barWidth * (at + 1.0F) / count, bar.y + barHeight), u32(shown));
+            }
+            char text[32];
+            std::snprintf(text, sizeof(text), "%.2f", legend.low);
+            draw->AddText(fonts.mono, small, ImVec2(bar.x, bar.y + barHeight + px(3.0F)),
+                          u32(c::t3), text);
+            std::snprintf(text, sizeof(text), "%.2f", legend.high);
+            const float right = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, text).x;
+            draw->AddText(fonts.mono, small,
+                          ImVec2(bar.x + barWidth - right, bar.y + barHeight + px(3.0F)),
+                          u32(c::t3), text);
+            top -= px(56.0F);
+        }
+    }
+
+    std::vector<FlowLegend> legends_;
+    std::uint64_t legendsOf_{~0ULL};
     static constexpr float kMinimumSpanK = 10.0F;
     std::vector<Temperature> temperatures_;
     std::vector<float> own_;
