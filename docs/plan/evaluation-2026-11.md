@@ -46,7 +46,7 @@ packages run through launch files, and the C plugin path works without linking L
 | 2 | **No reinforcement-learning path.** Isaac Lab, MuJoCo Playground and others start here | One `Simulation`; no Gymnasium wrapper, no parallel environments, no domain randomization; the profile's `batch` key does nothing | Small for a wrapper over processes; very large for GPU batches |
 | 3 | **Concave collision meshes are hulls at import.** A hollow link blocks what should pass through it; `collision_bake` splits them only in USD, and the import had already made them hulls | CoACD bake tool | Medium |
 | 4 | **Most models have no measured reference.** CLAUDE.md §10 asks for one "where possible"; `docs/validation/report.md` says sim against real "mostly does not exist" | Battery (LG HG2), rotor (NACA 640), WMM, ICAO; the rest closed-form or between engines | Large, needs recordings (Q16) |
-| 5 | **Common sensors missing.** No built-in force-torque, tactile, ultrasonic, event or thermal camera (MuJoCo gives `body/<b>/contact_force`) | IMU, lidar, camera, GNSS, magnetometer, barometer, radar, Custom by plugin | Small each, schema change each |
+| 5 | **Common sensors missing.** No event or thermal camera; force-torque and contact only in MuJoCo (`joint/<j>/reaction`, `body/<b>/contact_force`); ultrasonic through the `lagrange_tof` plugin | IMU, lidar, camera, GNSS, magnetometer, barometer, radar, Custom by plugin | Small each, schema change each |
 | 6 | **Legged robots have no controller.** A class users ask for first after arms | `lagrange_example_quadruped` trots open loop; no balance control, no terrain or contact sensing | Medium |
 | 7 | **Electrical elements between buses.** A fuse, a relay or a real harness cannot be read from a schematic, and most real schematics have them | Averaged network of buses | Medium; drafted as `rfcs/0010-electrical-nodes.md`, waiting on the owner |
 | 8 | **Tier 2 is thin.** Hardware ray-traced lidar is detected and not used; batched physics absent | Tier 1 BVH lidar, raster camera | Large |
@@ -64,7 +64,6 @@ importer.
 ## Recommendation
 
 1, 2 (the wrapper over processes) and 3 were done the same night (#232, #233, #234), and 6 has a
-first example (#235). Next, 5 widens what the simulator can be used for. Ask the owner about 4, since recordings
-need hardware, and about 7, whose draft RFC has questions for them. Leave GPU batched physics until someone needs
+first example (#235). Next, 5 widens what the simulator can be used for. The owner has no hardware, so 4 stays formulas, ngspice and published data. and about 7, whose draft RFC has questions for them. Leave GPU batched physics until someone needs
 thousands of environments: integrating MuJoCo Warp or similar is a project of its own, and its status
 has to be verified first (`TODO(verify)`).

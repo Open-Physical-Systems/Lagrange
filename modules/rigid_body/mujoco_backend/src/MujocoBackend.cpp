@@ -114,6 +114,9 @@ Status MujocoBackend::declare(const WorldView& world, const ModuleConfig& config
             spec(base + "/position", SignalType::Scalar, prismatic ? units::m : units::rad));
         s.velocity = declarer.output(spec(base + "/velocity", SignalType::Scalar,
                                           prismatic ? units::m_per_s : units::rad_per_s));
+        // A force-torque sensor in the joint: what the parent does to the child, at the joint.
+        s.reaction =
+            declarer.output(spec(base + "/reaction", SignalType::Wrench, units::N, "world_local"));
         if (!actuated) {
             joints_.push_back(s);
             continue;
@@ -392,6 +395,7 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
         const int id = mj_name2id(model_, mjOBJ_JOINT, joints.names[s.joint].c_str());
         s.qposAddress = model_->jnt_qposadr[id];
         s.dofAddress = model_->jnt_dofadr[id];
+        s.mujocoBody = model_->jnt_bodyid[id];
     }
     for (BodySignals& s : bodies_) {
         s.mujocoBody = mj_name2id(model_, mjOBJ_BODY, bodies.names[s.body].c_str());
@@ -491,6 +495,25 @@ void MujocoBackend::writeOutputs(SignalBus& bus) const {
         const auto dof = static_cast<std::size_t>(s.dofAddress);
         bus.write(s.position, data_->qpos[s.qposAddress]);
         bus.write(s.velocity, data_->qvel[dof]);
+        // cfrc_int is torque then force, about the subtree's centre of mass of the tree's root,
+        // in world axes (mj_rnePostConstraint). Move the torque to the joint's body: τ + r × f.
+        {
+            const int b = s.mujocoBody;
+            const mjtNum* spatial = data_->cfrc_int + 6 * b;
+            const mjtNum* about = data_->subtree_com + 3 * model_->body_rootid[b];
+            const mjtNum* at = data_->xpos + 3 * b;
+            const std::array<double, 3> r{about[0] - at[0], about[1] - at[1], about[2] - at[2]};
+            const mjtNum* f = spatial + 3;
+            const std::array<double, 6> wrench{
+                f[0],
+                f[1],
+                f[2],
+                spatial[0] + r[1] * f[2] - r[2] * f[1],
+                spatial[1] + r[2] * f[0] - r[0] * f[2],
+                spatial[2] + r[0] * f[1] - r[1] * f[0],
+            };
+            bus.writeN(s.reaction, wrench);
+        }
         if (!s.torque.valid()) {
             continue;
         }

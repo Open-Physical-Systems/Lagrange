@@ -62,6 +62,8 @@ private:
         std::uint32_t joint{0};
         SignalId torque, loadTorque;
         SignalId position, velocity, acceleration, effectiveInertia, constraintTorque;
+        SignalId reaction;
+        int mujocoBody{0};  // the body the joint moves
         int qposAddress{0};
         int dofAddress{0};
     };

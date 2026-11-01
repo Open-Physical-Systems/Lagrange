@@ -189,3 +189,33 @@ def test_contact_forces_on_a_robot_at_rest_carry_its_weight() -> None:
     # The sample's first half second is spent still: its demo starts after that.
     up = sum(sim.read(name)[2] for name in names)
     assert up == pytest.approx(robot_kg * gravity, rel=0.1)
+
+
+def test_a_joints_reaction_is_what_it_carries() -> None:
+    # A hinge about y with 2 kg held 0.5 m out sideways, in a URDF written here.
+    import tempfile
+    from pathlib import Path
+
+    urdf = """<robot name="r"><link name="world"/>
+      <joint name="m" type="fixed"><parent link="world"/><child link="base"/>
+        <origin xyz="0 0 1"/></joint>
+      <link name="base"><inertial><mass value="1"/>
+        <inertia ixx="1" iyy="1" izz="1" ixy="0" ixz="0" iyz="0"/></inertial></link>
+      <joint name="hinge" type="revolute"><parent link="base"/><child link="arm"/>
+        <axis xyz="0 1 0"/><limit lower="-1" upper="1" effort="100" velocity="9"/></joint>
+      <link name="arm"><inertial><origin xyz="0.5 0 0"/><mass value="2"/>
+        <inertia ixx="0.1" iyy="0.1" izz="0.1" ixy="0" ixz="0" iyz="0"/></inertial></link>
+    </robot>"""
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "r.urdf"
+        path.write_text(urdf)
+        sim = lagrange.Simulation(str(path), world=None, joint_control=True)
+        sim.command_joint("hinge", "position", 0.0)
+        sim.step_until(3.0)
+    fx, fy, fz, tx, ty, tz = sim.read("joint/hinge/reaction")
+    weight = 2.0 * 9.80665
+    assert fz == pytest.approx(weight, rel=0.01)
+    assert abs(fx) < 0.1 and abs(fy) < 0.1
+    # The motor's torque, about y, holds the weight's moment.
+    assert abs(ty) == pytest.approx(0.5 * weight, rel=0.02)
+    assert abs(tx) < 0.1 and abs(tz) < 0.1
