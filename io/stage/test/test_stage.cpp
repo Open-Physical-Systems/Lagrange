@@ -909,6 +909,8 @@ TEST(Netlist, ABatteryNeedsWhatSpiceCannotSay) {
     ASSERT_FALSE(applied);
     EXPECT_NE(applied.error().find("*lagrange battery V1 capacity="), std::string::npos)
         << applied.error();
+    EXPECT_NE(applied.error().find("*lagrange bus dc undervoltage="), std::string::npos)
+        << applied.error();
 }
 
 TEST(Overlay, RefusesMistakesTogetherAndLeavesTheModelAsItWas) {

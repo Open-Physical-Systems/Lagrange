@@ -1557,10 +1557,25 @@ sensors, so lidars on an MJCF robot still need USD for now.
 | `R n 0 r` | `ElectricalLoadAPI_1` `resistive`, its power `V²/r` at the bus's start voltage |
 | `B n 0 I = P / max(V(n), e) [* ((V(n) >= m) ? 1 : 0)]` | `ElectricalLoadAPI_1` `constant_power` |
 | `*lagrange battery ELEMENT capacity= cutoff= max_charge= [soc=]` (C, V, A) | what SPICE cannot say about a battery; required |
-| `*lagrange bus NODE [undervoltage=] [overvoltage=]` (V) | the bus's trips |
+| `*lagrange bus NODE undervoltage= overvoltage=` (V) | the bus's trips; required |
 | `*lagrange motor JOINT node= r= l= kt= imax= [name=] [type=] [gear=] [efficiency=] [pole_pairs=] [rotor_inertia=]` | `ElectricalMotorAPI_1`, named `JOINT_motor` unless `name=`; a drive is not a SPICE element |
 
 The first line is the title, as in SPICE; analysis commands and `.control` blocks are ignored. Everything else is refused with its line, every problem together, and nothing is left out in silence: diodes, transistors, inductors, subcircuits, switches, controlled and current sources, `.param`, `.include`, `.model`, sources other than DC, and elements between two buses. So is a drive of `lagrange export spice` (`V(p_drive)`), so an exported netlist does not read back yet. The network still runs only for a robot with a motor. `tools/ci/check_electrical.py` runs every circuit through this route and through an overlay.
+
+### 9.2 A URDF that names its power system
+
+A `<lagrange>` block in a URDF gives the robot its power system with no `--overlay`; URDF readers such as urdfdom skip the unknown element, so the file stays valid for other tools:
+
+```xml
+<lagrange>
+  <schematic file="power/arm.cir"/>  <!-- relative to the URDF, or package:// -->
+  <battery source="V_pack" capacity="72000" cutoff="44.8" max_charge="10"/>
+  <bus node="dc" undervoltage="42" overvoltage="60"/>
+  <motor joint="shoulder" node="dc" r="0.12" l="0.00031" kt="0.085" imax="8" gear="20"/>
+</lagrange>
+```
+
+The attributes are the keys of §9.1's `*lagrange` lines, which the netlist may hold instead; a mistake stops the load with its message. `lagrange_import` keeps the result in the USD it writes. Adding `--overlay` to a robot with a block is refused for anything it applies twice. Names and values cannot hold spaces. SDFormat and MJCF have no such block yet.
 
 **Meshes too large for the repository** (no file over 1 MB, CLAUDE.md §9) are fetched, not committed:
 `assets/external_assets.yaml` lists each file with its upstream repository, pinned commit,

@@ -5,6 +5,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace lagrange::stage {
 
@@ -91,6 +92,11 @@ struct SchemaAttribute {
 /// together, and a refused overlay leaves the model unchanged. A SPICE netlist (.cir, .sp, .spice,
 /// .net, .ckt) is taken in its place: formats.md §9.1.
 [[nodiscard]] Expected<void, std::string> applyOverlay(Model& model, const std::string& path);
+
+/// A SPICE netlist as an overlay (formats.md §9.1), with more `*lagrange` lines from outside it,
+/// as a URDF's <lagrange> block gives.
+[[nodiscard]] Expected<void, std::string> applyNetlist(
+    Model& model, const std::string& path, const std::vector<std::string>& directives = {});
 
 struct WriteOptions {
     std::string doc;  // the layer's documentation string

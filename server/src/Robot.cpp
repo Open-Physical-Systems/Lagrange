@@ -1035,6 +1035,65 @@ void renameRobot(Robot& robot, const std::string& name) {
     robot.name = name;
 }
 
+/// A URDF's power system: <lagrange><schematic file=".."/> and optional <battery source=..>,
+/// <bus node=..>, <motor joint=..> (formats.md §9.2), whose attributes are a netlist's *lagrange
+/// lines. Other URDF readers skip the unknown element.
+Expected<void, std::string> applyLagrangeBlock(Robot& robot, const std::string& path) {
+    tinyxml2::XMLDocument document;
+    if (document.LoadFile(path.c_str()) != tinyxml2::XML_SUCCESS) {
+        return {};  // the URDF parser has said what is wrong with it
+    }
+    const tinyxml2::XMLElement* top = document.FirstChildElement("robot");
+    const tinyxml2::XMLElement* block =
+        top != nullptr ? top->FirstChildElement("lagrange") : nullptr;
+    if (block == nullptr) {
+        return {};
+    }
+    if (block->NextSiblingElement("lagrange") != nullptr) {
+        return Unexpected{path + ": only one <lagrange> block"};
+    }
+    static const std::map<std::string, std::string, std::less<>> kNamedBy{
+        {"battery", "source"}, {"bus", "node"}, {"motor", "joint"}};
+    std::string schematic;
+    std::vector<std::string> directives;
+    for (const tinyxml2::XMLElement* e = block->FirstChildElement(); e != nullptr;
+         e = e->NextSiblingElement()) {
+        const std::string kind = e->Name();
+        if (kind == "schematic") {
+            const char* file = e->Attribute("file");
+            if (file == nullptr || !schematic.empty()) {
+                return Unexpected{path + ": <lagrange> takes one <schematic file=\"...\"/>"};
+            }
+            schematic = file;
+            continue;
+        }
+        const auto named = kNamedBy.find(kind);
+        if (named == kNamedBy.end()) {
+            return Unexpected{path + ": <lagrange> does not take <" + kind + ">"};
+        }
+        const char* target = e->Attribute(named->second.c_str());
+        if (target == nullptr) {
+            return Unexpected{path + ": <" + kind + "> needs " + named->second + "=\"...\""};
+        }
+        std::string line = "*lagrange " + kind + " " + target;
+        for (const tinyxml2::XMLAttribute* a = e->FirstAttribute(); a != nullptr; a = a->Next()) {
+            if (a->Name() != named->second) {
+                line += " " + std::string(a->Name()) + "=" + a->Value();
+            }
+        }
+        directives.push_back(std::move(line));
+    }
+    if (schematic.empty()) {
+        return Unexpected{path + ": <lagrange> needs <schematic file=\"...\"/>"};
+    }
+    const auto found =
+        meshes::resolveMeshUri(schematic, std::filesystem::path(path).parent_path().string());
+    if (!found) {
+        return Unexpected{path + ": <schematic>: " + found.error()};
+    }
+    return stage::applyNetlist(robot, *found, directives);
+}
+
 Expected<Robot, std::string> loadUrdf(const std::string& path, const LoadOptions& options) {
     Robot robot;
     robot.sourcePath = path;
@@ -1046,6 +1105,9 @@ Expected<Robot, std::string> loadUrdf(const std::string& path, const LoadOptions
     robot.name = robot.scene.prims.front().name;
 
     addGroundPrim(robot);  // static scenery after the robot
+    if (auto power = applyLagrangeBlock(robot, path); !power) {
+        return Unexpected{power.error()};
+    }
     return robot;
 }
 
