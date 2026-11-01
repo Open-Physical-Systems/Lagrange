@@ -45,6 +45,9 @@ function(lagrange_target_defaults target)
                 -fno-omit-frame-pointer
                 # Jolt is built without RTTI, which UBSan's vptr check needs at link time.
                 $<$<COMPILE_LANGUAGE:CXX>:-fno-sanitize=vptr>
+                # GCC's flow analysis under sanitizers warns falsely inside std::regex.
+                -Wno-error=maybe-uninitialized
+                -Wno-error=uninitialized
         )
         target_link_options(
             ${target}
