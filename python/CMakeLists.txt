@@ -21,6 +21,7 @@ install(TARGETS _lagrange DESTINATION "${python_install_dir}/lagrange")
 if(BUILD_TESTING)
     find_package(ament_cmake_pytest REQUIRED)
     ament_add_pytest_test(test_lagrange test/test_lagrange.py TIMEOUT 120)
+    ament_add_pytest_test(test_town test/test_town.py TIMEOUT 600)
 endif()
 
 ament_package()

@@ -368,6 +368,14 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
         }
     }
 
+    // The broad phase's scratch grows with the square of the bodies, and running out of MuJoCo's
+    // default arena ends the process: a big crowd gets room. Small scenes keep their footprint.
+    constexpr std::size_t kManyBodies = 500;
+    constexpr std::size_t kBaseArena = std::size_t{32} << 20U;  // bytes
+    constexpr std::size_t kArenaPerPair = 4;                    // bytes per body squared
+    if (const std::size_t n = world.bodies().names.size(); n > kManyBodies) {
+        spec->memory = static_cast<mjtSize>(kBaseArena + (kArenaPerPair * n * n));
+    }
     mjModel* model = mj_compile(spec, nullptr);
     if (model == nullptr) {
         const std::string error = mjs_getError(spec);

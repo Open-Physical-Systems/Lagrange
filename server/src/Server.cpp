@@ -986,7 +986,8 @@ struct Server::Impl {
     /// Whether the world has traffic agents.
     bool hasTraffic() const {
         return std::ranges::any_of(robot.world.bodies.names, [](const std::string& n) {
-            return n.starts_with("traffic_vehicle_") || n.starts_with("traffic_pedestrian_");
+            return n.starts_with("traffic_vehicle_") || n.starts_with("traffic_pedestrian_") ||
+                   n.starts_with("traffic_lamp_");
         });
     }
     /// --joint-control applies to a plain robot. A road vehicle's wheels belong to the vehicle
@@ -3752,6 +3753,24 @@ struct Server::Impl {
                 specs[i].name = i == 0 ? file.name : file.name + "_" + std::to_string(i + 1);
                 specs[i].start = compose(file.spawn, specs[i].start);
                 people.push_back(std::move(specs[i]));
+            }
+        }
+        // Walkers on a world with crossings: people the traffic module sends along the sidewalks.
+        if (!scenario && options.trafficPedestrians > 0) {
+            std::vector<traffic::Vec3> taken;
+            for (std::size_t b = 0; b < model.world.bodies.names.size(); ++b) {
+                taken.push_back(model.bodyRestPose[b].position);
+            }
+            for (traffic::WalkerStart& walker :
+                 traffic::walkersFor(WorldView(model.world), options.trafficPedestrians,
+                                     options.trafficSeed, taken)) {
+                humans::Spec spec;
+                spec.name = std::move(walker.name);
+                spec.height = walker.height;
+                spec.walkSpeed = walker.walkSpeed;
+                spec.seed = walker.seed;
+                spec.start = walker.ground;
+                people.push_back(std::move(spec));
             }
         }
         // A crowd (--humans): wandering, clear of each other, the robots and the scenery.

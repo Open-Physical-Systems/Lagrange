@@ -32,6 +32,8 @@ void usage() {
         "                         far above the horizon)\n"
         "  --camera <x,y,z,m,yaw,pitch>  start the camera looking at x,y,z from m metres away, at\n"
         "                         these angles in degrees\n"
+        "  --season <name>        how the realistic view draws the year: summer, fall, winter, "
+        "rainy\n"
         "  --shading <mode>       realistic (the default on a GPU), lit (without one), unlit, ...\n"
         "  --overlays <list>      show these from the start: grid,axes,sensors\n"
         "  --launcher             start on the launcher (the default when no --connect is given)\n"
@@ -146,6 +148,8 @@ int main(int argc, char** argv) {
             options.workspace = value();
         } else if (arg == "--shading") {
             options.shading = value();
+        } else if (arg == "--season") {
+            options.season = value();
         } else if (arg == "--overlays") {
             options.overlays = value();
         } else if (arg == "--open") {

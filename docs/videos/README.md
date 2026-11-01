@@ -10,6 +10,12 @@ Iris Xe, about 12 minutes for all).
 | [realistic_water.mp4](realistic_water.mp4) | The sea: waves, sun glitter, reflections, foam round a floating crate | `--water` |
 | [realistic_water_wind.mp4](realistic_water_wind.mp4) | The same sea getting rough as the wind rises | `lagrange set wind_speed=14` |
 | [realistic_materials.mp4](realistic_materials.mp4) | Chrome to rubber, in sun and shadow, with a pane of glass | `<visual_material preset="chrome"/>` |
+| [town_junction.mp4](town_junction.mp4) | The town: lights change, people press a button and cross, cars stop and go | `lagrange town` |
+| [town_street.mp4](town_street.mp4) | Street level at a lone crossing with its signal | `lagrange town` |
+| [town_summer.mp4](town_summer.mp4) | Summer | `lagrange town --season summer` |
+| [town_fall.mp4](town_fall.mp4) | Fall | `lagrange town --season fall` |
+| [town_winter.mp4](town_winter.mp4) | Winter | `lagrange town --season winter` |
+| [town_rainy.mp4](town_rainy.mp4) | The rainy season | `lagrange town --season rainy` |
 | [realistic_warehouse.mp4](realistic_warehouse.mp4) | A robot in the sample warehouse | `lagrange ROBOT WORLD` |
 | [gravity.mp4](gravity.mp4) | A pendulum under Earth, Moon and Jupiter gravity, changed while it swings | `lagrange set gravity=1.62` |
 | [wind.mp4](wind.mp4) | A hovering quadcopter leaning into 6 and 14 m/s of wind, and calm again | `lagrange set wind_speed=6 wind_from=270` |

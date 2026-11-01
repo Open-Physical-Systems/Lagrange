@@ -655,6 +655,15 @@ public:
         renderOptions_.sensors =
             renderOptions_.sensors || names.find("sensors") != std::string::npos;
     }
+    void setSeason(const std::string& name) {
+        if (name == "fall") {
+            renderOptions_.season = Season::Fall;
+        } else if (name == "winter") {
+            renderOptions_.season = Season::Winter;
+        } else if (name == "rainy") {
+            renderOptions_.season = Season::Rainy;
+        }
+    }
     void setShading(const std::string& name) {
         renderOptions_.realisticAvailable = device_.tier() != gpu::CapabilityTier::Tier0;
         // A GPU shows the world as it would look, a software device keeps the quick view.
@@ -882,6 +891,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setInitialSelection(options.selectPath);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);
+        ui.setSeason(options.season);
         ui.setOverlays(options.overlays);
         ui.setFollow(options.followDistance, options.followPitchDeg);
         ui.setCamera(options.camera);

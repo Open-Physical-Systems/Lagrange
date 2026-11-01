@@ -30,6 +30,25 @@ constexpr std::array<std::array<float, 4>, 4> kColours{{
     {0.08F, 0.08F, 0.09F, 1.0F},  // shoes
 }};
 
+constexpr std::array<std::array<float, 4>, 5> kSkin{{{0.87F, 0.68F, 0.56F, 1.0F},
+                                                     {0.72F, 0.55F, 0.45F, 1.0F},
+                                                     {0.58F, 0.41F, 0.3F, 1.0F},
+                                                     {0.38F, 0.25F, 0.18F, 1.0F},
+                                                     {0.22F, 0.14F, 0.1F, 1.0F}}};
+constexpr std::array<std::array<float, 4>, 8> kShirts{{{0.24F, 0.36F, 0.55F, 1.0F},
+                                                       {0.7F, 0.14F, 0.13F, 1.0F},
+                                                       {0.85F, 0.84F, 0.8F, 1.0F},
+                                                       {0.12F, 0.13F, 0.15F, 1.0F},
+                                                       {0.18F, 0.42F, 0.3F, 1.0F},
+                                                       {0.8F, 0.58F, 0.15F, 1.0F},
+                                                       {0.45F, 0.3F, 0.55F, 1.0F},
+                                                       {0.5F, 0.52F, 0.55F, 1.0F}}};
+constexpr std::array<std::array<float, 4>, 5> kTrousers{{{0.16F, 0.17F, 0.22F, 1.0F},
+                                                         {0.1F, 0.16F, 0.32F, 1.0F},
+                                                         {0.3F, 0.26F, 0.2F, 1.0F},
+                                                         {0.45F, 0.42F, 0.36F, 1.0F},
+                                                         {0.08F, 0.08F, 0.09F, 1.0F}}};
+
 /// Radii are illustrative (no sensor resolves them more finely than a few centimetres).
 std::array<Shape, kSegments> shapes(const Proportions& b) {
     const double h = b.height;
@@ -183,9 +202,23 @@ void addHuman(Model& model, Spec spec) {
     } else {
         top.path = model.scene.prims[topPrim].path;
     }
+    // Clothes and skin by the person's seed, so that a crowd is not one person many times; seed 0
+    // is the default person.
+    std::array<std::array<float, 4>, 4> colours = kColours;
+    if (spec.seed != 0) {
+        const auto pick = [&spec](std::uint64_t salt, std::size_t size) {
+            return static_cast<std::size_t>(
+                       (static_cast<std::uint64_t>(spec.seed) * 2654435761ULL + salt * 40503ULL) >>
+                       7U) %
+                   size;
+        };
+        colours[0] = kSkin.at(pick(1, kSkin.size()));
+        colours[1] = kShirts.at(pick(2, kShirts.size()));
+        colours[2] = kTrousers.at(pick(3, kTrousers.size()));
+    }
     std::array<std::uint32_t, kColours.size()> materials{};
     for (std::size_t c = 0; c < kColours.size(); ++c) {
-        model.scene.materials.push_back({spec.name + "_" + std::to_string(c), kColours.at(c)});
+        model.scene.materials.push_back({spec.name + "_" + std::to_string(c), colours.at(c)});
         materials.at(c) = static_cast<std::uint32_t>(model.scene.materials.size() - 1);
     }
     const std::array<Shape, kSegments> parts = shapes(body);
@@ -214,6 +247,24 @@ void addHuman(Model& model, Spec spec) {
         prim.offset = part.pose;
         model.scene.prims.push_back(prim);
         model.bodyPrim.push_back(static_cast<std::uint32_t>(model.scene.prims.size() - 1));
+        // A crowd's people have hair, on the head's body: drawn only.
+        if (s == kHead && spec.seed != 0) {
+            const double r = 0.1 * spec.height / 1.75;
+            model.scene.materials.push_back(
+                {spec.name + "_hair",
+                 (spec.seed % 3) == 0   ? std::array<float, 4>{0.25F, 0.15F, 0.07F, 1.0F}
+                 : (spec.seed % 3) == 1 ? std::array<float, 4>{0.03F, 0.025F, 0.02F, 1.0F}
+                                        : std::array<float, 4>{0.42F, 0.4F, 0.38F, 1.0F}});
+            model.scene.meshes.push_back(sphereMesh(r, 12, 8));
+            ScenePrim hair = prim;
+            hair.name = "hair";
+            hair.path = top.path + "/hair";
+            hair.mesh = static_cast<std::uint32_t>(model.scene.meshes.size() - 1);
+            hair.material = static_cast<std::uint32_t>(model.scene.materials.size() - 1);
+            hair.offset = Pose{{-0.012 * spec.height / 1.75, 0.0, 0.135 * spec.height / 1.75},
+                               {1.0, 0.0, 0.0, 0.0}};
+            model.scene.prims.push_back(std::move(hair));
+        }
     }
     SchemaInstance instance;
     instance.schema = "HumanAPI_1";

@@ -369,6 +369,25 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
     main.sunDirection = {f(kSun[0] / sunNorm), f(kSun[1] / sunNorm), f(kSun[2] / sunNorm),
                          kSunStrength};
     main.sunColor = {kSunColor[0], kSunColor[1], kSunColor[2], kExposure};
+    // Sun and exposure through the year, by eye: a drawing choice as kSun is.
+    const float season = static_cast<float>(static_cast<int>(options.season));
+    switch (options.season) {
+        case Season::Summer:
+            break;
+        case Season::Fall:
+            main.sunDirection[3] = 3.4F;
+            main.sunColor = {1.0F, 0.84F, 0.64F, kExposure};
+            break;
+        case Season::Winter:
+            main.sunDirection[3] = 1.1F;
+            main.sunColor = {0.95F, 0.96F, 1.0F, kExposure * 0.85F};
+            break;
+        case Season::Rainy:
+            main.sunDirection[3] = 0.25F;
+            main.sunColor = {0.85F, 0.9F, 1.0F, kExposure * 1.05F};
+            break;
+    }
+    main.mode[2] = season;
     const double seconds = frame != nullptr ? static_cast<double>(frame->simTimeNs) * 1e-9 : 0.0;
     // Wrapped so that a float holds it: noise and waves repeat every 1024 m and 17 minutes.
     main.worldWrap = {f(std::fmod(eye[0], 1024.0)), f(std::fmod(eye[1], 1024.0)),
@@ -388,7 +407,7 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
                    1.0F / static_cast<float>(extent.width),
                    1.0F / static_cast<float>(extent.height)};
     Frame mirrorFrame = main;
-    mirrorFrame.mode = {1.0F, water ? f(water->top) : 0.0F, 0.0F, 0.0F};
+    mirrorFrame.mode = {1.0F, water ? f(water->top) : 0.0F, season, 0.0F};
     mirrorFrame.sunDirection[2] = -main.sunDirection[2];
     auto* mapped = static_cast<std::byte*>(frames_.mapped);
     std::memcpy(mapped, &main, sizeof(Frame));
@@ -454,6 +473,7 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
             push.baseColor = material.baseColor;
             push.surface[0] = material.metallic;
             push.surface[1] = material.roughness;
+            push.surface[3] = material.pattern;
             push.emissive = {material.emissive[0], material.emissive[1], material.emissive[2],
                              0.0F};
         }
@@ -466,7 +486,8 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
         }
         // Grain where rough, none where polished, little on metal.
         const float rough = std::clamp((push.surface[1] - 0.45F) / 0.4F, 0.0F, 1.0F);
-        push.surface[2] = rough * (1.0F - 0.7F * push.surface[0]);
+        push.surface[2] = push.surface[3] > 0.5F ? rough * 0.35F  // the pattern is the detail
+                                                 : rough * (1.0F - 0.7F * push.surface[0]);
         return push;
     };
     const auto drawable = [&](std::size_t i) {

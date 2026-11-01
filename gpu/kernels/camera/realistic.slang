@@ -22,7 +22,8 @@ struct Frame
                               // w: bottom of the water relative to the eye
     float4 waterRect;         // xy centre relative to the eye; zw half sizes
     float4 screen;            // xy: size in pixels; zw: 1 / size
-    float4 mode;              // x: 1 in the mirror pass (y: the plane's relative height there)
+    float4 mode;              // x: 1 in the mirror pass (y: the plane's relative height there);
+                              // z: the season
 };
 
 [[vk::binding(0)]] ConstantBuffer<Frame> frame;
@@ -35,7 +36,7 @@ struct Push
 {
     float4 model[3];  // rows; translation relative to the camera
     float4 baseColor; // linear RGB, alpha
-    float4 surface;   // metallic, roughness, detail (1: stone-like, 0: smooth), unused
+    float4 surface;   // metallic, roughness, detail (1: stone-like, 0: smooth), pattern
     float4 emissive;  // rgb
 };
 
@@ -101,6 +102,18 @@ float3 clearSky(float3 dir)
     return color;
 }
 
+// The season: 0 summer, 1 fall, 2 winter, 3 the rainy season.
+int seasonNow()
+{
+    return int(frame.mode.z + 0.5);
+}
+// How grey the sky is, 0 to 1.
+float overcast()
+{
+    int s = seasonNow();
+    return s == 3 ? 1.0 : s == 2 ? 0.7 : s == 1 ? 0.25 : 0.0;
+}
+
 // Clouds on a plane far overhead, drifting.
 float cloudAmount(float3 dir)
 {
@@ -108,7 +121,8 @@ float cloudAmount(float3 dir)
         return 0.0;
     float2 at = dir.xy / (dir.z + 0.12) * 1.3 + frame.worldWrap.w * float2(0.004, 0.002);
     float shape = fbm(float3(at, 0.0), 5);
-    return smoothstep(0.52, 0.74, shape) * smoothstep(0.03, 0.2, dir.z);
+    float low = lerp(0.52, 0.2, overcast());  // an overcast day's clouds meet
+    return smoothstep(low, low + 0.22, shape) * smoothstep(0.03, 0.2, dir.z);
 }
 
 // What comes from direction `dir`; `sharp` 1 with sun and clouds in detail, 0 for reflections off
@@ -121,15 +135,23 @@ float3 sky(float3 dir, float sharp)
     {
         float clouds = cloudAmount(dir) * sharp;
         float lit = 0.75 + 0.5 * saturate(dot(dir, frame.sunDirection.xyz));
-        clear = lerp(clear, float3(1.0, 1.0, 1.02) * 1.0 * lit, clouds);
+        float shade = lerp(1.0, 0.5, overcast());  // thick clouds are dark underneath
+        clear = lerp(clear, float3(1.0, 1.0, 1.02) * lit * shade, clouds);
     }
+    float3 grey = float3(0.5, 0.53, 0.57) * lerp(1.0, 0.72, step(2.5, frame.mode.z));
+    if (sharp <= 0.0)
+        clear = lerp(clear, grey, overcast());
+    else
+        clear = lerp(clear, grey, overcast() * 0.8);
+    horizonGround = lerp(horizonGround, grey, overcast());
     return lerp(horizonGround, clear, smoothstep(-0.03, 0.02, dir.z));
 }
 
 float3 fogged(float3 color, float3 relative)
 {
     float distance = length(relative);
-    float amount = 1.0 - exp(-distance * 0.0022);
+    int season = seasonNow();
+    float amount = 1.0 - exp(-distance * (season == 3 ? 0.005 : season == 2 ? 0.0028 : 0.0009));
     float3 dir = relative / max(distance, 1e-3);
     float3 far = sky(float3(dir.xy, max(dir.z, 0.03)), 0.0);
     return lerp(color, far, amount);
@@ -281,6 +303,229 @@ void surfaceDetail(float3 world, inout float3 N, inout float3 albedo, inout floa
     N = normalize(N - gradient * amount * 0.9);
 }
 
+// What a kind of surface looks like up close, in place of a photograph: drawn from the world
+// position, so it needs no texture coordinates and no asset. `pattern` is SurfacePattern's value.
+float hash2(float2 p)
+{
+    return hash(float3(p, 3.7));
+}
+
+// (along a wall or across a floor, up a wall or along a floor), metres.
+float2 surfaceCoords(float3 world, float3 N)
+{
+    float3 a = abs(N);
+    if (a.z > 0.7)
+        return world.xy;
+    return float2(a.x > a.y ? world.y : world.x, world.z);
+}
+
+// 0 in a joint of a width in cells, 1 on the face, for a cell coordinate's fraction.
+float joint(float2 f, float2 width)
+{
+    float2 e = smoothstep(float2(0.0), width, f) * smoothstep(float2(0.0), width, 1.0 - f);
+    return e.x * e.y;
+}
+
+void surfacePattern(float pattern, float3 world, float distance, inout float3 N, inout float3 albedo,
+                    inout float metallic, inout float roughness)
+{
+    float2 uv = surfaceCoords(world, N);
+    // Fine lines give way to their average with distance, before they shimmer.
+    float near = 1.0 - smoothstep(25.0, 70.0, distance);
+    float wide = fbm(world * 0.23, 4);
+    float mid = fbm(world * 1.9, 3);
+    float wall = 1.0 - smoothstep(0.3, 0.7, abs(N.z));
+    int kind = int(pattern + 0.5);
+    if (kind == 1)  // brick: running bond, 225 x 75 mm with a 10 mm joint
+    {
+        float2 size = float2(0.235, 0.085);
+        float row = floor(uv.y / size.y);
+        float2 cell = float2(uv.x / size.x + 0.5 * fmod(abs(row), 2.0), uv.y / size.y);
+        float2 id = floor(cell);
+        float face = joint(frac(cell), float2(0.03, 0.08));
+        float tint = hash2(id);
+        float3 brick = albedo * (0.72 + 0.56 * tint) * (0.85 + 0.3 * mid);
+        float3 mortar = float3(0.36, 0.34, 0.31);
+        float3 close = lerp(mortar, brick, face);
+        float3 far = lerp(mortar, albedo, 0.86) * (0.8 + 0.4 * wide);
+        albedo = lerp(far, close, near);
+        roughness = lerp(0.95, roughness, face);
+    }
+    else if (kind == 2)  // asphalt: stones in tar, patches, and pale wear
+    {
+        float stones = noise3(world * 42.0) * noise3(world * 17.0);
+        float patch = smoothstep(0.6, 0.62, fbm(world * 0.09 + 7.0, 3));
+        float crack = (1.0 - smoothstep(0.0, 0.0035, abs(fbm(world * 0.33, 4) - 0.5))) * smoothstep(0.52, 0.62, fbm(world * 0.07 + 3.0, 2));
+        albedo *= 0.82 + 0.3 * wide + 0.5 * stones * near;
+        albedo *= lerp(1.0, 0.8, patch);
+        albedo *= lerp(1.0, 0.6, crack * near);
+        roughness = saturate(roughness - 0.18 * patch);
+    }
+    else if (kind == 3)  // paving slabs: 600 mm, offset rows
+    {
+        float2 size = float2(0.6, 0.6);
+        float row = floor(uv.y / size.y);
+        float2 cell = float2(uv.x / size.x + 0.5 * fmod(abs(row), 2.0), uv.y / size.y);
+        float2 id = floor(cell);
+        float face = lerp(0.8, joint(frac(cell), float2(0.016)), near);
+        float gum = smoothstep(0.72, 0.76, noise3(world * 2.8));
+        albedo *= (0.86 + 0.2 * hash2(id) * near + 0.14 * wide) * lerp(0.5, 1.0, face);
+        albedo *= lerp(1.0, 0.72, gum * near);
+    }
+    else if (kind == 4)  // plaster: stucco, stains running down from what is above
+    {
+        float streak = fbm(float3(uv.x * 1.3, uv.x * 0.7, uv.y * 0.07), 4);
+        albedo *= 0.92 + 0.14 * (mid - 0.5) + 0.42 * (streak - 0.5) + 0.2 * (wide - 0.5);
+    }
+    else if (kind == 5)  // cast concrete: panels, tie holes, weather
+    {
+        float2 cell = uv / float2(3.0, 1.65);
+        float face = lerp(0.9, joint(frac(cell), float2(0.006, 0.01)), near);
+        float2 ties = frac(uv / float2(0.75, 0.55));
+        float tie = 1.0 - smoothstep(0.02, 0.035, length(ties - 0.5) * 0.75);
+        albedo *= (0.76 + 0.3 * hash2(floor(cell)) * 0.5 + 0.34 * wide) * lerp(0.45, 1.0, face);
+        albedo *= lerp(1.0, 0.55, tie * near);
+    }
+    else if (kind == 6)  // grass: blades of many greens, with dry patches
+    {
+        float blades = noise3(float3(world.xy * float2(38.0, 44.0), 1.0));
+        float dry = smoothstep(0.45, 0.7, fbm(world * 0.17, 4));
+        albedo = lerp(albedo, albedo * float3(1.75, 1.35, 0.8), dry);
+        albedo *= 0.55 + 0.75 * mid + 0.55 * blades * near;
+        N = normalize(N + float3(blades - 0.5, noise3(world * 31.0) - 0.5, 0.0) * 0.8 * near);
+    }
+    else if (kind == 7)  // leaves: clumps, light through the gaps
+    {
+        float clump = fbm(world * 3.1, 3);
+        float fine = fbm(world * 23.0, 2);
+        albedo *= 0.3 + 1.1 * clump + 0.8 * fine;
+        albedo = lerp(albedo, albedo * float3(1.45, 1.2, 0.55), smoothstep(0.55, 0.8, clump));
+        N = normalize(N + (float3(fbm(world * 9.0, 2), fbm(world * 9.0 + 9.0, 2), fbm(world * 9.0 + 17.0, 2)) - 0.5) * 1.6);
+    }
+    else if (kind == 8)  // road paint: worn through where wheels go
+    {
+        float wear = smoothstep(0.55, 0.72, fbm(world * 4.5, 4));
+        albedo *= lerp(1.0, 0.55, wear);
+        roughness = lerp(roughness, 0.95, wear);
+    }
+    else if (kind == 9)  // window glass: reflects the street, a dim room behind, some lit
+    {
+        float2 pane = floor(uv / float2(1.6, 3.3));
+        float room = hash2(pane);
+        float lit = step(0.88, room);
+        albedo = lerp(float3(0.015, 0.02, 0.028), float3(0.75, 0.58, 0.34), lit * 0.28);
+        metallic = 0.55;
+        // Old float glass is not flat: the reflection wobbles from pane to pane.
+        roughness = 0.03 + 0.05 * room;
+        float3 wobble = float3(noise3(float3(uv * 0.9, room * 9.0)) - 0.5, noise3(float3(uv * 0.9 + 5.0, room * 9.0)) - 0.5, 0.0);
+        N = normalize(N + wobble * 0.05);
+    }
+    else if (kind == 10)  // bark: furrows up the trunk
+    {
+        float furrow = noise3(float3(world.xy * 13.0, world.z * 1.3));
+        albedo *= 0.45 + 1.1 * furrow;
+    }
+    else if (kind == 11)  // roofing: gravel and tar seams
+    {
+        float2 cell = uv / float2(1.0, 4.0);
+        float face = lerp(0.9, joint(frac(cell), float2(0.008, 0.002)), near);
+        albedo *= (0.65 + 0.7 * noise3(world * 24.0) * near + 0.35 * wide) * lerp(0.5, 1.0, face);
+    }
+    // Dirt where walls meet the street, rain marks under what sticks out.
+    if (kind != 9 && kind != 6 && kind != 7 && wall > 0.5)
+    {
+        float foot = 1.0 - smoothstep(0.0, 0.9 + 0.5 * mid, world.z);
+        albedo *= lerp(1.0, 0.62, foot);
+    }
+}
+
+// What the season does to a surface, after its own pattern. Moving things (no pattern, usually)
+// get only what falls on them evenly, so that nothing crawls over a passing car.
+void seasonOf(float pattern, float3 world, inout float3 N, inout float3 albedo, inout float metallic,
+              inout float roughness, float glowing)
+{
+    int season = seasonNow();
+    int kind = int(pattern + 0.5);
+    float up = smoothstep(0.55, 0.85, N.z);
+    if (glowing > 0.01 || kind == 9)
+    {
+        if (season == 3)
+            roughness = min(roughness, 0.1);
+        return;
+    }
+    if (season == 1)
+    {
+        if (kind == 7)  // leaves: every tree its own turn of red, orange and gold
+        {
+            float tree = hash2(floor(world.xy / 9.0)) * 0.7 + 0.3 * fbm(world * 0.8, 2);
+            float3 turn = lerp(float3(0.5, 0.06, 0.03), float3(0.78, 0.28, 0.03), smoothstep(0.15, 0.42, tree));
+            turn = lerp(turn, float3(0.72, 0.5, 0.06), smoothstep(0.45, 0.72, tree));
+            albedo = turn * (dot(albedo, float3(0.33)) * 3.2 + 0.12);
+        }
+        else if (kind == 6)  // tired grass, leaves lying on it
+        {
+            albedo = lerp(albedo, albedo.ggg * float3(1.15, 0.85, 0.42), 0.65);
+            float fallen = smoothstep(0.62, 0.66, noise3(world * 4.5));
+            albedo = lerp(albedo, float3(0.6, 0.27, 0.05), fallen);
+        }
+        else if ((kind == 3 || kind == 2) && up > 0.5)  // leaves swept to the sides
+        {
+            float fallen = smoothstep(0.72, 0.75, noise3(world * 3.3)) * smoothstep(0.42, 0.6, fbm(world * 0.22, 2));
+            albedo = lerp(albedo, float3(0.58, 0.28, 0.06), fallen);
+        }
+    }
+    else if (season == 2)
+    {
+        const float3 snow = float3(0.86, 0.88, 0.92);
+        if (kind == 7)  // dark crowns under snow, thickest on top
+        {
+            float clump = fbm(world * 2.3, 3);
+            float laden = smoothstep(-0.25, 0.55, N.z + (clump - 0.5) * 1.1);
+            albedo = lerp(float3(0.045, 0.06, 0.045) * (0.6 + clump), snow, laden);
+            roughness = 0.85;
+            return;
+        }
+        float lies = up;
+        if (kind == 2)  // the road: slush, ploughed and driven through
+            lies *= 0.55 + 0.45 * smoothstep(0.42, 0.6, fbm(world * 0.7, 3));
+        if (kind == 8)
+            lies *= 0.35;
+        if (lies > 0.0)
+        {
+            float3 cover = kind == 2 ? float3(0.42, 0.43, 0.45) * (0.7 + 0.6 * fbm(world * 2.5, 3)) : snow;
+            albedo = lerp(albedo, cover, lies);
+            roughness = lerp(roughness, kind == 2 ? 0.4 : 0.75, lies);
+            metallic = lerp(metallic, 0.0, lies);
+            if (kind != 2)
+                N = normalize(N + (float3(noise3(world * 2.7), noise3(world * 2.7 + 5.0), 0.5) - 0.5) * 0.18 * lies);
+        }
+    }
+    else if (season == 3)
+    {
+        // Everything soaked: darker, and shining where it is level.
+        float porous = kind == 6 || kind == 7 ? 0.75 : 0.55;
+        albedo *= lerp(1.0, porous, 0.6 + 0.4 * up);
+        roughness *= lerp(0.72, 0.32, up);
+        if (up > 0.5 && (kind == 2 || kind == 3 || kind == 8))
+        {
+            float puddle = smoothstep(0.5, 0.56, fbm(world * 0.28 + 11.0, 4));
+            if (puddle > 0.0)
+            {
+                albedo *= lerp(1.0, 0.5, puddle);
+                roughness = lerp(roughness, 0.02, puddle);
+                // Rings where drops land.
+                float2 cell = floor(world.xy * 1.6);
+                float2 f = frac(world.xy * 1.6) - 0.5;
+                float born = hash2(cell);
+                float age = frac(frame.worldWrap.w * 0.8 + born * 7.0);
+                float ring = sin((length(f) - age * 0.55) * 60.0) * smoothstep(0.1, 0.0, abs(length(f) - age * 0.55)) * (1.0 - age);
+                float2 away = length(f) > 1e-3 ? f / length(f) : float2(0.0);
+                N = normalize(lerp(float3(0.0, 0.0, 1.0), N, 0.15 * (1.0 - puddle)) + float3(away * ring * 0.12, 0.0));
+            }
+        }
+    }
+}
+
 [shader("fragment")]
 float4 fsMesh(MeshOutput input, bool front : SV_IsFrontFace) : SV_Target
 {
@@ -293,10 +538,14 @@ float4 fsMesh(MeshOutput input, bool front : SV_IsFrontFace) : SV_Target
     float3 albedo = push.baseColor.rgb;
     float roughness = push.surface.y;
     float3 world = input.relative + frame.worldWrap.xyz;
+    float metallic = push.surface.x;
+    if (push.surface.w > 0.5)
+        surfacePattern(push.surface.w, world, length(input.relative), N, albedo, metallic, roughness);
     surfaceDetail(world, N, albedo, roughness);
+    seasonOf(push.surface.w, world, N, albedo, metallic, roughness, dot(push.emissive.rgb, float3(1.0)));
     if (push.baseColor.a < 1.0)
         albedo *= push.baseColor.a;  // glass shows little of its own colour, mostly reflections
-    float3 color = shadeSurface(input.relative, N, albedo, push.surface.x, roughness, push.emissive.rgb);
+    float3 color = shadeSurface(input.relative, N, albedo, metallic, roughness, push.emissive.rgb);
     if (frame.mode.x < 0.5)
         color = fogged(color, input.relative);
     float alpha = push.baseColor.a;
@@ -340,8 +589,9 @@ float4 fsSky(ScreenOutput input) : SV_Target
     float3 color = sky(dir, 1.0);
     float cosSun = dot(dir, frame.sunDirection.xyz);
     float disc = smoothstep(0.99994, 0.99998, cosSun);
-    color += frame.sunColor.rgb * disc * 60.0 * smoothstep(0.0, 0.03, dir.z) * (1.0 - cloudAmount(dir));
-    color += frame.sunColor.rgb * pow(saturate(cosSun), 900.0) * 0.5;  // the glow round it
+    float seen = 1.0 - overcast();
+    color += frame.sunColor.rgb * disc * 60.0 * smoothstep(0.0, 0.03, dir.z) * (1.0 - cloudAmount(dir)) * seen;
+    color += frame.sunColor.rgb * pow(saturate(cosSun), 900.0) * 0.5 * seen;  // the glow round it
     return float4(color, 1.0);
 }
 
@@ -413,6 +663,46 @@ float3 bloom(float2 uv)
 }
 
 // FXAA in the manner of Lottes (2009): smooths edges by their local contrast.
+// What falls between the eye and everything: streaks of rain, flakes of snow, on the screen.
+float3 falling(float2 uv)
+{
+    int season = seasonNow();
+    if (season != 2 && season != 3)
+        return float3(0.0);
+    float t = frame.worldWrap.w;
+    float aspect = frame.screen.x * frame.screen.w;
+    float sum = 0.0;
+    for (int layer = 0; layer < 3; ++layer)
+    {
+        float scale = 1.0 + float(layer) * 0.8;
+        float2 at = float2(uv.x * aspect, uv.y);
+        if (season == 3)
+        {
+            at.x += at.y * 0.06;  // blown a little
+            float2 grid = at * float2(150.0, 7.0) * scale;
+            float column = floor(grid.x);
+            float seed = hash2(float2(column, float(layer)));
+            float y = grid.y - t * (9.0 + 7.0 * seed) * 1.6 + seed * 37.0;
+            float cell = floor(y);
+            float drop = step(0.82, hash2(float2(column, cell)));
+            float fx = frac(grid.x) - 0.5;
+            float fy = frac(y);
+            sum += drop * smoothstep(0.32, 0.0, abs(fx)) * smoothstep(0.0, 0.25, fy) * smoothstep(1.0, 0.45, fy) * 0.1;
+        }
+        else
+        {
+            float2 grid = at * 34.0 * scale;
+            grid.y -= t * (0.9 + 0.3 * float(layer));
+            grid.x += sin(grid.y * 0.8 + float(layer) * 2.1 + t * 0.4) * 0.35;
+            float2 id = floor(grid);
+            float2 spot = float2(hash2(id + float(layer)), hash2(id + 17.0 + float(layer))) * 0.7 + 0.15;
+            float present = step(0.62, hash2(id + 41.0));
+            sum += present * smoothstep(0.09, 0.02, length(frac(grid) - spot)) * (0.6 - 0.15 * float(layer));
+        }
+    }
+    return float3(sum);
+}
+
 [shader("fragment")]
 float4 fsComposite(ScreenOutput input) : SV_Target
 {
@@ -431,7 +721,7 @@ float4 fsComposite(ScreenOutput input) : SV_Target
     float high = max(lumaC, max(max(lumaN, lumaS), max(lumaW, lumaE)));
     float range = high - low;
     if (range < max(0.04, high * 0.12))
-        return float4(center, 1.0);
+        return float4(center + falling(uv), 1.0);
     float2 dir = float2(lumaS - lumaN, lumaW - lumaE);
     float reduce = max(range * 0.25, 1.0 / 128.0);
     dir = clamp(dir / (min(abs(dir.x), abs(dir.y)) + reduce), -8.0, 8.0) * px;
@@ -441,7 +731,7 @@ float4 fsComposite(ScreenOutput input) : SV_Target
                                  sceneColor.SampleLevel(uv + dir * 0.5, 0.0).rgb);
     float lumaB = luminance(display(b));
     float3 smoothed = (lumaB < low || lumaB > high) ? a : b;
-    return float4(display(smoothed * ao + bloom(uv)), 1.0);
+    return float4(display(smoothed * ao + bloom(uv)) + falling(uv), 1.0);
 }
 
 // --- water ----------------------------------------------------------------------------------
