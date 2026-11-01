@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+import sys
+
+from lagrange_collision_bake.bake_urdf import main
+
+sys.exit(main())

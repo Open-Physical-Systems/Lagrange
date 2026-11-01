@@ -443,12 +443,11 @@ private:
                     if (isStatic) {
                         note(m_, "the collision mesh of link '" + link.name +
                                      "' is concave and its hull would block what is inside it: it "
-                                     "is skipped; split it with collision_bake");
+                                     "is skipped");
                         return false;
                     }
                     note(m_, "the collision mesh of link '" + link.name +
-                                 "' is concave: it collides as its convex hull; split it with "
-                                 "collision_bake");
+                                 "' is concave: it collides as its convex hull");
                 }
                 m_.world.addHullCollider(body, std::move(*hull), pose, collision.friction);
                 return true;

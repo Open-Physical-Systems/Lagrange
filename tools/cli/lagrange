@@ -498,6 +498,9 @@ def main(argv: list[str]) -> int:
     if argv and argv[0] == "check":
         tool = executable("lagrange_server", "lagrange_check")
         os.execv(tool, ["lagrange check", *argv[1:]])
+    if argv and argv[0] == "bake":
+        tool = executable("lagrange_collision_bake", "bake_urdf")
+        os.execv(tool, ["lagrange bake", *argv[1:]])
     if argv and argv[0] == "viewer":
         viewer = executable("lagrange_viewer", "lagrange_viewer")
         os.execv(viewer, [viewer, *argv[1:]])

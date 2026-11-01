@@ -181,8 +181,20 @@ target_link_libraries(
     PRIVATE lagrange_server lagrange_stage::lagrange_stage
 )
 
+add_executable(lagrange_mesh_to_obj src/mesh_main.cpp)
+lagrange_target_defaults(lagrange_mesh_to_obj)
+target_link_libraries(
+    lagrange_mesh_to_obj
+    PRIVATE lagrange_meshes::lagrange_meshes
+)
+
 install(
-    TARGETS lagrange_server_main lagrange_cli lagrange_import lagrange_check
+    TARGETS
+        lagrange_server_main
+        lagrange_cli
+        lagrange_import
+        lagrange_check
+        lagrange_mesh_to_obj
     RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 # The library is exported so that programs can build a run with their own modules until
