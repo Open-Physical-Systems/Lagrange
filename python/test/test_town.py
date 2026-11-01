@@ -190,6 +190,12 @@ def test_each_signal_shows_exactly_one_lamp(run):
     assert flashing_heads
 
 
+def test_no_lane_changes_on_single_lane_streets():
+    sim = lagrange.Simulation(None, world=TOWN, traffic=(16, 0, 6))
+    sim.step_until(60.0)
+    assert sim.read("traffic/lane_changes")[0] == 0.0
+
+
 def test_vehicles_differ_and_show_what_they_do(run):
     _, samples, _ = run
     assert len({car[4] for car in samples[0]["cars"]}) >= 4

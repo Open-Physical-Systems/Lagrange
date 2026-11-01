@@ -89,7 +89,7 @@ SUMO co-simulation is not built (the owner's v0.6 decision: no new external engi
     the network's edge.
   - Into a junction they stop on red and yellow, and wait while a crossing or merging junction
     lane is taken or a vehicle nearer its line is about to take one (first come, first served).
-  - No lane changes, no priority rules, no turn signals.
+  - No priority rules.
 - **Pedestrians.** They walk their sidewalk at 1.34 m/s (Weidmann 1993), turn back at its ends,
   and step aside from each other and from the robots by a social force (Helbing and Molnár 1995,
   A = 2 m/s², B = 0.3 m). On a world with crossings they are walking people instead (§8.2).
@@ -143,7 +143,12 @@ world gets the same behaviour:
 - **Vehicles' bodies.** Sedans, hatchbacks, SUVs, vans and buses by index (`kVehicleSizes`,
   illustrative), each with its own collider and gaps. Hubs turn by `traffic/vehicle/<i>/wheel`; brake
   lamps and indicators are parts on hinges (`/brake`, `/left`, `/right`: 0 lit, pi inside the body).
-- **Owed:** lane changes, parallel walk with turning traffic, the signals' timing for a real site.
+- **Lane changes.** On roads with several lanes each way a vehicle held up within 40 m moves over
+  when that gives at least 10 m more room and asks no more than 3 m/s² of braking of itself or of the
+  one behind it (the safety criterion of MOBIL, Kesting, Treiber and Helbing 2007), not within 30 m of
+  either end of the lane. `traffic/lane_changes` counts them. The town's streets have one lane each
+  way, so they happen on the city block, not there.
+- **Owed:** parallel walk with turning traffic, the signals' timing for a real site.
 
 ### 8.1 OpenSCENARIO runner (v0.6)
 

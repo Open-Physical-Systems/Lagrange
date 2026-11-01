@@ -1211,6 +1211,7 @@ Duration Traffic::preferredStep() const {
 
 Status Traffic::declare(const WorldView& world, const ModuleConfig& config, SignalDeclarer& d) {
     graph_ = lanesOf(world);
+    roads_ = roadLanesOf(world);
     seed_ = static_cast<std::uint64_t>(config.get<std::int64_t>("seed").value_or(1));
     const World& raw = world.raw();
     start_.clear();
@@ -1395,6 +1396,7 @@ Status Traffic::declare(const WorldView& world, const ModuleConfig& config, Sign
         static_cast<std::uint32_t>(std::max<std::size_t>(graph_.crossings.size(), 1) * 3);
     crossingsOut_ = d.output(crossingTable);
     count_ = d.output(spec("traffic/agent_count", SignalType::Int, units::one));
+    laneChangesOut_ = d.output(spec("traffic/lane_changes", SignalType::Int, units::one));
     SignalSpec table = spec("traffic/agents", SignalType::ScalarArray, units::one);
     table.arrayLength = static_cast<std::uint32_t>(std::max<std::size_t>(start_.size(), 1) * 8);
     table_ = d.output(table);
@@ -1408,6 +1410,7 @@ Status Traffic::declare(const WorldView& world, const ModuleConfig& config, Sign
 Status Traffic::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     agents_ = start_;
     walkers_ = walkersStart_;
+    laneChanges_ = 0;
     for (Controller& controller : controllers_) {
         controller.phase = Controller::Phase::Green;
         controller.group = 0;
@@ -1424,13 +1427,15 @@ Status Traffic::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
 void Traffic::place(Agent& a) {
     const Lane& lane = graph_.lanes[a.lane];
     auto [p, yaw] = lane.at(a.s);
+    // The offset is to the left of the lane's direction, whichever way a walker goes.
+    p[0] -= std::sin(yaw) * a.offset;
+    p[1] += std::cos(yaw) * a.offset;
     if (a.pedestrian) {
-        // The offset is to the left of the lane's direction, whichever way the walker goes.
-        p[0] -= std::sin(yaw) * a.offset;
-        p[1] += std::cos(yaw) * a.offset;
         if (a.speed < 0.0) {
             yaw += std::numbers::pi;
         }
+    } else {
+        yaw += std::atan2(a.sideRate, std::max(a.speed, 1.0));  // pointing where it is going
     }
     a.position = {p[0], p[1], p[2] + a.height / 2.0};
     a.yaw = yaw;
@@ -1471,6 +1476,76 @@ std::size_t Traffic::choose(Agent& a, std::size_t agentIndex,
                    options.size()];
 }
 
+void Traffic::considerLaneChange(Agent& a, std::size_t index, double gap, double leaderSpeed,
+                                 double v0) {
+    constexpr double kFromStart = 6.0;      // m: not while coming out of a junction
+    constexpr double kFromLine = 15.0;      // m: not at the line
+    constexpr double kHeldUpWithin = 40.0;  // m of gap
+    constexpr double kBetterBy = 10.0;      // m more room
+    constexpr double kMinFreeGap = 6.0;     // m, front and back
+    constexpr double kSafeBraking = -3.0;  // m/s², the most it may ask of the one behind it (MOBIL)
+    constexpr double kChangeEvery = 8.0;   // s
+    const Lane& lane = graph_.lanes[a.lane];
+    if (a.changeWait > 0.0 || lane.junction || lane.sidewalk || std::abs(a.offset) > 0.05 ||
+        a.s < kFromStart || lane.length() - a.s < kFromLine || gap > kHeldUpWithin ||
+        leaderSpeed > v0 - 2.0) {
+        return;
+    }
+    for (const int side : {1, -1}) {
+        const auto target = roads_.neighbour(a.lane, a.s, side);
+        if (!target) {
+            continue;
+        }
+        const auto [to, along] = *target;
+        if (graph_.lanes[to].sidewalk || graph_.lanes[to].junction) {
+            continue;  // beside the outer lane is the pavement
+        }
+        double front = std::numeric_limits<double>::infinity();
+        double frontSpeed = v0;
+        double back = std::numeric_limits<double>::infinity();
+        double backSpeed = 0.0;
+        for (const Agent& o : agents_) {
+            if (o.pedestrian || o.lane != to) {
+                continue;
+            }
+            if (o.s >= along) {
+                const double room = o.s - along - (a.length + o.length) / 2.0;
+                if (room < front) {
+                    front = room;
+                    frontSpeed = o.speed;
+                }
+            } else {
+                const double room = along - o.s - (a.length + o.length) / 2.0;
+                if (room < back) {
+                    back = room;
+                    backSpeed = o.speed;
+                }
+            }
+        }
+        const Lane& into = graph_.lanes[to];
+        const bool robotThere = std::ranges::any_of(egos_, [&](const Vec3& p) {
+            const auto [s, lateral] = into.project(p);
+            return std::abs(lateral) < kEgoLateral && std::abs(s - along) < kAvoidRadius;
+        });
+        const bool safe = !robotThere && front > kMinFreeGap && back > kMinFreeGap &&
+                          idmAcceleration(idm_, backSpeed, v0, back, a.speed) > kSafeBraking &&
+                          idmAcceleration(idm_, a.speed, v0, front, frontSpeed) > kSafeBraking;
+        if (!safe || front < gap + kBetterBy) {
+            continue;
+        }
+        a.offset = (side > 0 ? -1.0 : 1.0) * (lane.width + into.width) / 2.0;
+        a.lane = to;
+        a.s = along;
+        a.next.reset();
+        if (!into.successors.empty()) {
+            a.next = choose(a, index, into.successors);
+        }
+        a.changeWait = kChangeEvery;
+        ++laneChanges_;
+        return;
+    }
+}
+
 Status Traffic::step(const StepContext& context, SignalBus& bus) {
     const double dt = context.dt.seconds();
     const double t = context.t.seconds() + dt;
@@ -1491,8 +1566,9 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
     }
     for (std::size_t i = 0; i < agents_.size(); ++i) {
         Agent& a = agents_[i];
-        const Lane& lane = graph_.lanes[a.lane];
+        const Lane* lanePtr = &graph_.lanes[a.lane];
         if (a.pedestrian) {
+            const Lane& lane = *lanePtr;
             // Social force across the sidewalk from the other walkers and the robots.
             double push = 0.0;
             const double sideX = -std::sin(a.yaw);
@@ -1540,10 +1616,11 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
             continue;
         }
         // Vehicles: choose the next lane early, so a leader there is seen.
-        if (!a.next && !lane.successors.empty()) {
-            a.next = choose(a, i, lane.successors);
+        const Lane* current = lanePtr;
+        if (!a.next && !current->successors.empty()) {
+            a.next = choose(a, i, current->successors);
         }
-        const double v0 = lane.speedLimit > 0.0 ? lane.speedLimit : kDefaultSpeed;
+        const double v0 = current->speedLimit > 0.0 ? current->speedLimit : kDefaultSpeed;
         double gap = std::numeric_limits<double>::infinity();
         double leaderSpeed = 0.0;
         const auto consider = [&](double g, double v) {
@@ -1560,7 +1637,7 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
             }
             for (const auto& [over, s] : graph_.crossings[k].over) {
                 const double ahead = over == a.lane              ? s - a.s
-                                     : a.next && over == *a.next ? lane.length() - a.s + s
+                                     : a.next && over == *a.next ? current->length() - a.s + s
                                                                  : -1.0;
                 constexpr double kFromCrossing = 2.5;  // m before its middle
                 if (ahead > half) {
@@ -1576,7 +1653,7 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
             if (o.lane == a.lane && o.s > a.s) {
                 consider(o.s - a.s - half - o.length / 2.0, o.speed);
             } else if (a.next && o.lane == *a.next) {
-                consider(lane.length() - a.s + o.s - half - o.length / 2.0, o.speed);
+                consider(current->length() - a.s + o.s - half - o.length / 2.0, o.speed);
             }
         }
         for (const auto& [p, v] : egos) {
@@ -1585,16 +1662,24 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
                 if (std::abs(lateral) > kEgoLateral) {
                     continue;
                 }
-                const double ahead = l == a.lane ? s - a.s : lane.length() - a.s + s;
+                const double ahead = l == a.lane ? s - a.s : current->length() - a.s + s;
                 if (ahead > 0.0 && ahead < kLookAhead) {
                     consider(ahead - half - 2.5, v);  // the robot's half length, about a car's
                 }
             }
         }
+        // Into a free lane when held up by a vehicle or a robot, not by lights or right of way.
+        a.changeWait = std::max(a.changeWait - dt, 0.0);
+        const std::size_t laneBefore = a.lane;
+        considerLaneChange(a, i, gap, leaderSpeed, v0);
+        if (a.lane != laneBefore) {
+            gap = std::numeric_limits<double>::infinity();  // this step's leader is left behind
+            current = &graph_.lanes[a.lane];
+        }
         // Right of way into the junction: wait at the line while a conflicting junction lane is
         // taken, or while a vehicle nearer its own line is about to take one.
-        if (a.next && graph_.lanes[*a.next].junction && !lane.junction) {
-            const double toLine = lane.length() - a.s;
+        if (a.next && graph_.lanes[*a.next].junction && !current->junction) {
+            const double toLine = current->length() - a.s;
             const double reach = a.speed * a.speed / (2.0 * idm_.b) + kYieldMargin;
             if (toLine < reach + kYieldMargin) {
                 const std::vector<std::size_t>& against = conflicts_[*a.next];
@@ -1640,11 +1725,15 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
         // Lights: stop at the line on red or yellow when there is room to.
         if (graph_.signalGroup[a.lane] >= 0) {
             const Light light = lightOf(a.lane, t);
-            const double toLine = lane.length() - a.s - half;
+            const double toLine = current->length() - a.s - half;
             if (light != Light::Green && toLine > a.speed * a.speed / (2.0 * idm_.b) - 1.0) {
                 consider(std::max(toLine, 0.0), 0.0);
             }
         }
+        // Over to the middle of a lane changed into.
+        constexpr double kSideSpeed = 1.1;  // m/s (a lane in about 3 s, illustrative)
+        a.sideRate = std::clamp(-a.offset / dt, -kSideSpeed, kSideSpeed);
+        a.offset += a.sideRate * dt;
         const double accel = std::max(idmAcceleration(idm_, a.speed, v0, gap, leaderSpeed), -8.0);
         a.speed = std::max(0.0, a.speed + accel * dt);
         a.s += a.speed * dt;
@@ -1655,8 +1744,8 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
         constexpr double kIndicateFrom = 35.0;  // m before the line
         constexpr double kTurnAtLeast = 0.35;   // rad
         const std::optional<std::size_t> turn =
-            lane.junction ? std::optional(a.lane)
-            : (a.next && graph_.lanes[*a.next].junction && lane.length() - a.s < kIndicateFrom)
+            current->junction ? std::optional(a.lane)
+            : (a.next && graph_.lanes[*a.next].junction && current->length() - a.s < kIndicateFrom)
                 ? a.next
                 : std::nullopt;
         a.turning = 0;
@@ -1666,6 +1755,10 @@ Status Traffic::step(const StepContext& context, SignalBus& bus) {
                 std::remainder(through.at(through.length()).second - through.at(0.0).second,
                                2.0 * std::numbers::pi);
             a.turning = change > kTurnAtLeast ? 1 : change < -kTurnAtLeast ? -1 : 0;
+        }
+        if (std::abs(a.offset) > 0.2) {
+            a.turning =
+                a.offset < 0.0 ? 1 : -1;  // still moving over: left when right of the middle
         }
         while (a.s > graph_.lanes[a.lane].length()) {
             const Lane& done = graph_.lanes[a.lane];
@@ -1722,6 +1815,7 @@ void Traffic::write(SignalBus& bus, double t) {
     table.resize(std::max<std::size_t>(agents_.size(), 1) * 8, 0.0);
     bus.writeN(table_, table);
     bus.write(count_, zero_ ? 0.0 : static_cast<double>(agents_.size()));
+    bus.write(laneChangesOut_, static_cast<double>(laneChanges_));
     std::vector<double> lights;
     for (const std::size_t lane : lightLanes_) {
         lights.push_back(graph_.lanes[lane].road);
@@ -1751,7 +1845,9 @@ Status Traffic::saveState(StateWriter& writer) const {
         writer.put(a.next.value_or(0));
         writer.put(a.decisions);
         writer.put(a.wheel);
+        writer.put(a.changeWait);
     }
+    writer.put(laneChanges_);
     for (const Controller& c : controllers_) {
         writer.put(c.phase);
         writer.put(c.group);
@@ -1777,11 +1873,14 @@ Status Traffic::restoreState(StateReader& reader) {
         std::size_t next = 0;
         if (!reader.get(a.lane) || !reader.get(a.s) || !reader.get(a.speed) ||
             !reader.get(a.offset) || !reader.get(hasNext) || !reader.get(next) ||
-            !reader.get(a.decisions) || !reader.get(a.wheel)) {
+            !reader.get(a.decisions) || !reader.get(a.wheel) || !reader.get(a.changeWait)) {
             return Status::error(StatusCode::Internal, "traffic: truncated state");
         }
         a.next = hasNext ? std::optional(next) : std::nullopt;
         place(a);
+    }
+    if (!reader.get(laneChanges_)) {
+        return Status::error(StatusCode::Internal, "traffic: truncated state");
     }
     for (Controller& c : controllers_) {
         if (!reader.get(c.phase) || !reader.get(c.group) || !reader.get(c.elapsed) ||

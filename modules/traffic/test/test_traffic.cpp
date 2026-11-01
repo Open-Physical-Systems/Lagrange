@@ -70,6 +70,27 @@ std::unique_ptr<Run> run(const Population& population, bool zero = false) {
     return wired ? std::move(r) : nullptr;
 }
 
+TEST(CityBlock, VehiclesChangeLanesWithoutComingTooClose) {
+    const Population population{14, 0, 5};
+    auto r = run(population);
+    ASSERT_TRUE(r);
+    const SignalBus& bus = r->scheduler->bus();
+    const SignalId table = bus.find("traffic/agents");
+    double closest = INFINITY;
+    for (int step = 1; step <= 3000; ++step) {  // five minutes at 0.1 s
+        ASSERT_TRUE(r->scheduler->stepUntil(SimTime{step * 100'000'000LL}).ok());
+        const std::span<const double> a = bus.readN(table);
+        for (int i = 0; i < population.vehicles; ++i) {
+            for (int k = i + 1; k < population.vehicles; ++k) {
+                closest = std::min(
+                    closest, std::hypot(a[8 * i + 1] - a[8 * k + 1], a[8 * i + 2] - a[8 * k + 2]));
+            }
+        }
+    }
+    EXPECT_GT(bus.read(bus.find("traffic/lane_changes")), 0.0);
+    EXPECT_GT(closest, 2.0);  // side by side in neighbouring lanes is 3.5 m, less while moving over
+}
+
 TEST(CityBlock, VehiclesFollowKeepDistanceAndStopOnRed) {
     const Population population{8, 6, 3};
     auto r = run(population);
