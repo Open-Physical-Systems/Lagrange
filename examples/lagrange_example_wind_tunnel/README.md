@@ -1,6 +1,6 @@
 # A wind tunnel
 
-Air past a robot, as a mechanical engineer would look at it in CFD: drag and lift per link, then the flow in the viewer with streamlines and a slice coloured by speed, and the body coloured by its pressure coefficient (blue is suction, red is pressure). Each mesh's name in the Scene panel says what its colour means, such as `b19_P11p40_to_P12p00_mps`.
+Air past a robot, as a mechanical engineer would look at it in CFD: drag and lift per link, then the flow in the viewer with streamlines and a slice coloured by speed, and the body coloured by its pressure coefficient (blue is suction, red is pressure). The viewport shows a colour scale for each.
 
 ```bash
 ros2 launch lagrange_example_wind_tunnel tunnel.launch.py speed:=15 yaw:=20

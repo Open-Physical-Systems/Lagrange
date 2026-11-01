@@ -1,6 +1,6 @@
 # A wind tunnel: the solver runs first, then the flow opens in the viewer, with streamlines, a slice
-# of speed and the pressure on the body's skin. Each mesh's name in the Scene panel says what its
-# colour means. flow.vti opens in ParaView.
+# of speed and the pressure on the body's skin, with their colour scales. flow.vti opens in
+# ParaView.
 #
 #   ros2 launch lagrange_example_wind_tunnel tunnel.launch.py speed:=15
 #   ros2 launch lagrange_example_wind_tunnel tunnel.launch.py viewer:=false once:=true
