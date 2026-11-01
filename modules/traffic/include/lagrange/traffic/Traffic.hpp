@@ -83,6 +83,11 @@ struct Population {
 
 /// Agent dimensions (m): a mid-size car and a pedestrian (illustrative).
 inline constexpr std::array<double, 3> kCarSize{4.5, 1.8, 1.5};
+/// The body kinds of the traffic, length, width and height (m, illustrative): sedan, hatchback,
+/// SUV, van, bus. Which vehicle is which follows from its index.
+inline constexpr std::array<std::array<double, 3>, 5> kVehicleSizes{
+    {{4.5, 1.8, 1.5}, {4.0, 1.75, 1.5}, {4.7, 1.9, 1.75}, {5.4, 2.0, 2.3}, {9.0, 2.5, 3.1}}};
+[[nodiscard]] std::size_t vehicleKind(int index);
 inline constexpr double kPedestrianRadius = 0.3;
 inline constexpr double kPedestrianHeight = 1.75;
 
@@ -175,6 +180,12 @@ private:
         std::optional<std::size_t> next;  // the lane chosen after this one
         std::uint64_t decisions{0};
         double height{0.0};
+        double length{0.0}, width{0.0};  // m
+        double tyre{0.33};               // m, its wheels' radius
+        double wheel{0.0};               // rad, how far they have turned
+        bool braking{false};
+        int turning{0};  // +1 left, -1 right, 0 straight on
+        SignalId wheelOut, brakeOut, leftOut, rightOut;
         SignalId poseCommand;
         Vec3 position{};
         double yaw{0.0};
@@ -202,7 +213,7 @@ private:
             Waiting,
             Crossing
         };
-        SignalId goal, pose;
+        SignalId goal, pose, gesture;
         State state{State::Along};
         std::size_t lane{0};      // the sidewalk lane it is on
         bool forward{true};       // along the lane's direction

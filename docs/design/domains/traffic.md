@@ -130,8 +130,8 @@ world gets the same behaviour:
   crossing is empty (at most 10 s). `traffic/crossings` reports them. Timings are illustrative.
 - **Walkers** are `HumanAPI_1` people named `walker_<i>`, walked by `lagrange_humans` and sent by
   `human/<n>/goal`. At a crossing 60 % press on arrival and the others wait, pressing after 6 s if
-  nobody has. They start across only on walk. There is no arm movement at the button: the wait lamp
-  on the pole shows the press.
+  nobody has. They start across only on walk. They lift an arm to the button (`human/<n>/gesture`), and
+  the wait lamp on the pole shows the press.
 - **Vehicles** also stop for anyone on a crossing ahead, do not yield to a vehicle held at a red
   light, and do not enter a junction without 9 m free beyond it, which is what keeps a road grid out
   of gridlock.
@@ -140,8 +140,10 @@ world gets the same behaviour:
   road only after a walk light, no car within 0.3 m of a person, no car stopped over 90 s, cars on
   streets, people out of buildings, same seed same hash, robots spawned and removed. These check the
   logic; none compares against measured traffic.
-- **Owed:** lane changes, turn signals, brake lights, parallel walk with turning traffic, pressing
-  gestures, the signals' timing for a real site.
+- **Vehicles' bodies.** Sedans, hatchbacks, SUVs, vans and buses by index (`kVehicleSizes`,
+  illustrative), each with its own collider and gaps. Hubs turn by `traffic/vehicle/<i>/wheel`; brake
+  lamps and indicators are parts on hinges (`/brake`, `/left`, `/right`: 0 lit, pi inside the body).
+- **Owed:** lane changes, parallel walk with turning traffic, the signals' timing for a real site.
 
 ### 8.1 OpenSCENARIO runner (v0.6)
 
