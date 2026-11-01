@@ -269,4 +269,9 @@ The Ahmed body (Ahmed et al. 1984; L 1.044, W 0.389, H 0.288 m, 40 m/s, 50 mm ov
 | 25° | 2.30, 2.06, 1.12 | -0.37, -0.29, 0.93 | 0.298 (Strachan et al. 2007, quoted in arXiv 2001.11074) |
 | 35° | 2.28, 2.08, 1.14 | -0.33, -0.24, 0.91 | not verified |
 
-NOT SETTLED, and at the finest grid nearly four times the measurement. The two slants do not differ, so the drag crisis between them is not resolved. For a streamlined body use this tunnel for where the air goes and how shapes rank at most, not for a drag number.
+NOT SETTLED, and at the finest grid nearly four times the measurement.
+
+Finer, by hand with the same gap, GPU, one run each: 25° at 4M, 8M, 16M cells gives Cd 1.36, 1.31, 1.17; 35° at 4M, 8M gives 1.34, 1.33 (16M did not finish in the time given). So refining alone does not reach the measurement within what this machine holds (16M took 22 minutes and 5.9 GB of host memory).
+
+Part of the excess is wall friction. A plate 1.044 x 0.389 x 0.05 m along a 40 m/s wind in free air, removing one dynamic pressure on its end area, gives a friction coefficient of 0.037 at 1M cells and 0.014 at 4M, against about 0.0037 for a turbulent flat plate at this Reynolds number (Schlichting's 0.455 / (log10 Re)^2.58). Half-way bounce-back is a no-slip wall with no wall model, far from y+ of 1. On the Ahmed body's 12.6 wetted areas per frontal area, 0.014 alone is a Cd of about 0.18, so it explains some of the excess and not all.
+ The two slants do not differ, so the drag crisis between them is not resolved. For a streamlined body use this tunnel for where the air goes and how shapes rank at most, not for a drag number.
