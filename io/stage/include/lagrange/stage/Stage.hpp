@@ -88,7 +88,8 @@ struct SchemaAttribute {
 /// Values take the type of the schema's property. Asset paths are relative to the overlay file.
 /// The result is checked as loadStage checks a stage. New prims become Xform scene prims that
 /// move with their parent and world prims named after themselves. Every problem is reported
-/// together, and a refused overlay leaves the model unchanged.
+/// together, and a refused overlay leaves the model unchanged. A SPICE netlist (.cir, .sp, .spice,
+/// .net, .ckt) is taken in its place: formats.md §9.1.
 [[nodiscard]] Expected<void, std::string> applyOverlay(Model& model, const std::string& path);
 
 struct WriteOptions {

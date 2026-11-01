@@ -15,6 +15,7 @@ add_library(
     src/StageWriter.cpp
     src/Schemas.cpp
     src/Overlay.cpp
+    src/Netlist.cpp
 )
 add_library(lagrange::stage ALIAS lagrange_stage)
 target_include_directories(

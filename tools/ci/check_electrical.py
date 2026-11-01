@@ -2,8 +2,9 @@
 """Checks the electrical network on circuits simple enough to work out by hand.
 
 Each round draws new values for every circuit below. Each circuit is worked out three ways, none
-using another's result: a closed-form formula here, ngspice on a netlist written here, and a
-Lagrange run of a robot written here. A difference over the tolerance fails the check (exit 1).
+using another's result: a closed-form formula here, ngspice on a netlist written here, and
+Lagrange runs of a robot written here, its power system once from an overlay and once from the
+netlist itself. A difference over the tolerance fails the check (exit 1).
 
     tools/ci/check_electrical.py [--rounds N | --forever] [--seed S] [--verbose]
 
@@ -141,22 +142,53 @@ def urdf(inertia: float) -> str:
 """
 
 
+def directives(pack: Pack) -> str:
+    """What SPICE cannot say about a battery."""
+    return (
+        f"*lagrange battery V_{pack.name} capacity={pack.capacity} cutoff=0.1 "
+        f"max_charge=1000 soc={pack.soc}\n"
+    )
+
+
+BUS_DIRECTIVE = "*lagrange bus dc undervoltage=0.5 overvoltage=1000\n"
+IDLE_MOTOR = "*lagrange motor spin node=dc name=drive r=0.1 l=0.0003 kt=0.1 imax=1000\n"
+
+
+def run_both(
+    folder: Path,
+    overlay: str,
+    netlist: str,
+    inertia: float,
+    checks: list[Check],
+    torque: float | None = None,
+) -> list[tuple[Check, float, float | None]]:
+    """The checks from a run with the overlay, then from a run with the netlist in its place."""
+    file = folder / "bench.overlay.yaml"
+    file.write_text("schema_version: 1\napply:\n" + overlay)
+    rows = compare(checks, run_lagrange(folder, file, inertia, checks, torque))
+    circuit = folder / "power.cir"
+    circuit.write_text("* bench\n" + BUS_DIRECTIVE + netlist + ".end\n")
+    imported = [Check(c.what + " [netlist]", c.signal, c.time, c.formula) for c in checks]
+    rows += compare(imported, run_lagrange(folder, circuit, inertia, imported, torque))
+    return rows
+
+
 def run_lagrange(
-    folder: Path, overlay: str, inertia: float, checks: list[Check], torque: float | None
+    folder: Path, extras: Path, inertia: float, checks: list[Check], torque: float | None
 ) -> list[float]:
     """Builds the robot with the tool users have and reads each check's signal at its time."""
     robot = folder / "bench.urdf"
     robot.write_text(urdf(inertia))
-    extras = folder / "bench.overlay.yaml"
-    extras.write_text("schema_version: 1\napply:\n" + overlay)
     usd = folder / "bench.usda"
     tool = Path(get_package_prefix("lagrange_server")) / "lib/lagrange_server/lagrange_import"
-    subprocess.run(
+    done = subprocess.run(
         [str(tool), str(robot), str(usd), "--overlay", str(extras)],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
+    if done.returncode != 0:
+        raise RuntimeError(done.stderr)
     sim = lagrange.Simulation(str(usd), world=None, joint_control=torque is not None)
     if torque is not None and not sim.command_joint("spin", "effort", torque):
         raise RuntimeError("the joint took no effort command")
@@ -203,6 +235,10 @@ def spice_pack(pack: Pack, start: float) -> list[str]:
     return [f"C_bus dc 0 {BUS_CAPACITANCE} IC={start}"] * (n == "a") + lines
 
 
+def netlist_of(elements: list[str], *packs: Pack) -> str:
+    return "\n".join(elements) + "\n" + "".join(directives(p) for p in packs)
+
+
 def resistive(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
     pack = Pack("a", rng.uniform(12, 60), rng.uniform(0.02, 0.5))
     power = rng.uniform(50, 800)
@@ -214,10 +250,10 @@ def resistive(rng: random.Random, folder: Path) -> list[tuple[Check, float, floa
         Check("load current (A)", "load/load/current", 0.2, amps),
         Check("battery current (A)", "battery/a/current", 0.2, amps),
     ]
-    spice = run_spice(folder, [*spice_pack(pack, pack.ocv), f"R_load dc 0 {load}"], [0.2])
-    checks[0].spice = spice[0]
+    elements = [*spice_pack(pack, pack.ocv), f"R_load dc 0 {load}"]
+    checks[0].spice = run_spice(folder, elements, [0.2])[0]
     overlay = bus_yaml() + battery_yaml(pack) + load_yaml("resistive", power) + idle_motor_yaml()
-    return compare(checks, run_lagrange(folder, overlay, 1.0, checks, None))
+    return run_both(folder, overlay, netlist_of(elements, pack) + IDLE_MOTOR, 1.0, checks)
 
 
 def constant_power(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
@@ -228,14 +264,14 @@ def constant_power(rng: random.Random, folder: Path) -> list[tuple[Check, float,
         Check("bus voltage (V)", BUS, 0.2, volts),
         Check("load current (A)", "load/load/current", 0.2, power / volts),
     ]
-    # Raised over 10 ms: from nothing to all of it in one step, Newton leaves for the negative
-    # voltage. The value is read long after, where only the power matters.
-    source = [f"V_p p 0 PWL(0 0 0.01 {power})", "B_load dc 0 I = V(p) / max(V(dc), 0.001)"]
-    checks[0].spice = run_spice(folder, [*spice_pack(pack, pack.ocv), *source], [0.2])[0]
+    # As `lagrange export spice` writes it; the gate keeps Newton from the negative solution.
+    source = f"B_load dc 0 I = {power} / max(V(dc), 0.001) * ((V(dc) >= 0) ? 1 : 0)"
+    elements = [*spice_pack(pack, pack.ocv), source]
+    checks[0].spice = run_spice(folder, elements, [0.2])[0]
     overlay = (
         bus_yaml() + battery_yaml(pack) + load_yaml("constant_power", power) + idle_motor_yaml()
     )
-    return compare(checks, run_lagrange(folder, overlay, 1.0, checks, None))
+    return run_both(folder, overlay, netlist_of(elements, pack) + IDLE_MOTOR, 1.0, checks)
 
 
 def rc_pair(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
@@ -254,11 +290,12 @@ def rc_pair(rng: random.Random, folder: Path) -> list[tuple[Check, float, float 
 
     times = [tau, 8 * tau]
     checks = [Check(f"bus voltage at {t:.3g} s (V)", BUS, t, volts(t)) for t in times]
-    spice = run_spice(folder, [*spice_pack(pack, volts(0)), f"R_load dc 0 {load}"], times)
+    elements = [*spice_pack(pack, volts(0)), f"R_load dc 0 {load}"]
+    spice = run_spice(folder, elements, times)
     for check, value in zip(checks, spice, strict=True):
         check.spice = value
     overlay = bus_yaml() + battery_yaml(pack) + load_yaml("resistive", power) + idle_motor_yaml()
-    return compare(checks, run_lagrange(folder, overlay, 1.0, checks, None))
+    return run_both(folder, overlay, netlist_of(elements, pack) + IDLE_MOTOR, 1.0, checks)
 
 
 def two_batteries(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
@@ -283,7 +320,7 @@ def two_batteries(rng: random.Random, folder: Path) -> list[tuple[Check, float, 
         + load_yaml("resistive", power)
         + idle_motor_yaml()
     )
-    return compare(checks, run_lagrange(folder, overlay, 1.0, checks, None))
+    return run_both(folder, overlay, netlist_of(elements, a, b) + IDLE_MOTOR, 1.0, checks)
 
 
 def charge_drain(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
@@ -296,7 +333,8 @@ def charge_drain(rng: random.Random, folder: Path) -> list[tuple[Check, float, f
         Check("state of charge", "battery/a/soc", seconds, 1 - amps * seconds / pack.capacity)
     ]
     overlay = bus_yaml() + battery_yaml(pack) + load_yaml("resistive", power) + idle_motor_yaml()
-    return compare(checks, run_lagrange(folder, overlay, 1.0, checks, None))
+    elements = [*spice_pack(pack, pack.ocv), f"R_load dc 0 {load}"]
+    return run_both(folder, overlay, netlist_of(elements, pack) + IDLE_MOTOR, 1.0, checks)
 
 
 def motor(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | None]]:
@@ -330,14 +368,19 @@ def motor(rng: random.Random, folder: Path) -> list[tuple[Check, float, float | 
         ),
         Check("bus voltage (V)", BUS, seconds, volts(seconds)),
     ]
+    wiring = spice_pack(pack, pack.ocv)
     elements = [
-        *spice_pack(pack, pack.ocv),
+        *wiring,
         f"V_p p 0 PWL(0 {power(0)} {seconds} {power(seconds)})",
         "B_drive dc 0 I = V(p) / max(V(dc), 0.001)",
     ]
     checks[4].spice = run_spice(folder, elements, [seconds])[0]
     overlay = bus_yaml() + battery_yaml(pack) + motor_yaml(kind, r, kt, n, eta)
-    return compare(checks, run_lagrange(folder, overlay, inertia, checks, torque))
+    drive = (
+        f"*lagrange motor spin node=dc name=drive type={kind} r={r} l=0.0003 kt={kt} imax=1000 "
+        f"gear={n} efficiency={eta} pole_pairs=1\n"
+    )
+    return run_both(folder, overlay, netlist_of(wiring, pack) + drive, inertia, checks, torque)
 
 
 def compare(checks: list[Check], values: list[float]) -> list[tuple[Check, float, float | None]]:

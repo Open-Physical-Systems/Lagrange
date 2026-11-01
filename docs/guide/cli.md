@@ -40,7 +40,9 @@ instead of MuJoCo; MuJoCo stays the default and the reference (rigid_body.md §7
 `--overlay FILE.yaml` applies the project's schemas to a robot from a format that cannot carry
 them (motors, battery, bus on a URDF; [formats.md §9](../design/formats.md#9-importers)). The
 sample AMR gets its power system from `amr_diffdrive.overlay.yaml` by default; another `--robot`
-gets no overlay unless one is given, and `--overlay none` turns it off.
+gets no overlay unless one is given, and `--overlay none` turns it off. It also takes a SPICE
+netlist (`FILE.cir`, sample `assets/robots/amr_diffdrive/amr_diffdrive_power.cir`), the same file
+ngspice runs; what it can read is in formats.md §9.1.
 
 ## Spawning robots
 

@@ -1,12 +1,15 @@
 // Overlay files (docs/design/formats.md §9): the project's API schemas applied by name to a
 // model that came from a format without them (URDF, SDFormat, MJCF), or added to a USD one.
+#include "Netlist.hpp"
 #include "Schemas.hpp"
 #include "lagrange/stage/Stage.hpp"
 
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -349,10 +352,24 @@ private:
 Expected<void, std::string> applyOverlay(Model& model, const std::string& path) {
     registerSchemaLibraries();
     YAML::Node root;
-    try {
-        root = YAML::LoadFile(path);
-    } catch (const YAML::Exception& e) {
-        return Unexpected{path + ": " + e.what()};
+    if (isNetlistPath(path)) {
+        std::ifstream in(path);
+        if (!in) {
+            return Unexpected{path + ": cannot read it"};
+        }
+        std::ostringstream text;
+        text << in.rdbuf();
+        auto overlay = overlayOfNetlist(text.str());
+        if (!overlay) {
+            return Unexpected{path + ": " + overlay.error()};
+        }
+        root = *overlay;
+    } else {
+        try {
+            root = YAML::LoadFile(path);
+        } catch (const YAML::Exception& e) {
+            return Unexpected{path + ": " + e.what()};
+        }
     }
     Model changed = model;  // the model stays as it was when the overlay is refused
     Overlay overlay(changed, path);
