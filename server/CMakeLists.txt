@@ -192,7 +192,10 @@ add_executable(lagrange_tunnel src/tunnel_main.cpp)
 lagrange_target_defaults(lagrange_tunnel)
 target_link_libraries(
     lagrange_tunnel
-    PRIVATE lagrange_server lagrange_aerodynamics::lagrange_aerodynamics
+    PRIVATE
+        lagrange_server
+        lagrange_aerodynamics::lagrange_aerodynamics
+        lagrange_gpu::lagrange_gpu
 )
 
 install(

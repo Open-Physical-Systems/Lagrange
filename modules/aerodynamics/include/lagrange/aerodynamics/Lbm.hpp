@@ -8,7 +8,13 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
+
+namespace lagrange::gpu {
+class Device;
+class LbmStepper;
+}  // namespace lagrange::gpu
 
 namespace lagrange::aerodynamics {
 
@@ -37,6 +43,14 @@ public:
     };
 
     explicit LbmTunnel(const LbmConfig& config);
+    ~LbmTunnel();
+    LbmTunnel(const LbmTunnel&) = delete;
+    LbmTunnel& operator=(const LbmTunnel&) = delete;
+
+    /// Steps on this device from now on, in float, not bit-reproducible across devices. Call
+    /// after the solids are set. Loads and means are then sampled every few steps.
+    void useGpu(const gpu::Device& device);
+    [[nodiscard]] bool onGpu() const { return stepper_ != nullptr; }
 
     [[nodiscard]] const LbmConfig& config() const { return config_; }
     [[nodiscard]] double timeStep() const { return dt_; }  ///< s of air per step
@@ -83,6 +97,9 @@ public:
 
 private:
     void stepOnce(std::vector<Load>& sum);
+    void stepOnGpu(std::size_t steps, std::vector<Load>& sum);
+    void addLoadsFromState(std::vector<Load>& sum) const;
+    void sampleMean();
 
     LbmConfig config_;
     double dt_{0.0};
@@ -96,6 +113,7 @@ private:
     std::size_t samples_{0};
     std::vector<float> meanVelocity_;  // 3 per cell, m/s, summed
     std::vector<float> meanPressure_;  // per cell, Pa, summed
+    std::unique_ptr<gpu::LbmStepper> stepper_;
 };
 
 }  // namespace lagrange::aerodynamics

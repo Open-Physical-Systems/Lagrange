@@ -68,4 +68,4 @@ first example (#235). Next, 5 widens what the simulator can be used for. The own
 thousands of environments: integrating MuJoCo Warp or similar is a project of its own, and its status
 has to be verified first (`TODO(verify)`).
 
-Added the same night at the owner's wish: `lagrange tunnel`, a CFD-style wind tunnel on the CPU (#246 and after).
+Added the same night at the owner's wish: `lagrange tunnel`, a CFD-style wind tunnel, on the GPU when there is one (#246 and after).

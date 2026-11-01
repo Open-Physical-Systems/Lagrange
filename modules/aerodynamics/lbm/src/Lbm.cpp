@@ -2,6 +2,7 @@
 // (Springer, 2017): D3Q19 velocities and weights (ch. 3), half-way bounce-back and momentum
 // exchange (ch. 5, 11), and the Smagorinsky relaxation time of Hou et al. (1996).
 #include "lagrange/aerodynamics/Lbm.hpp"
+#include "lagrange/gpu/LbmStepper.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -13,6 +14,7 @@ namespace {
 
 constexpr int kQ = 19;
 constexpr std::size_t kStepsPerMeanSample = 10;
+constexpr std::size_t kGpuStepsPerSample = 25;  // copying the grid back is what costs
 constexpr std::array<int, kQ> kCx{0, 1, -1, 0, 0, 0, 0, 1, -1, 1, -1, 1, -1, 1, -1, 0, 0, 0, 0};
 constexpr std::array<int, kQ> kCy{0, 0, 0, 1, -1, 0, 0, 1, -1, -1, 1, 0, 0, 0, 0, 1, -1, 1, -1};
 constexpr std::array<int, kQ> kCz{0, 0, 0, 0, 0, 1, -1, 0, 0, 0, 0, 1, -1, -1, 1, 1, -1, -1, 1};
@@ -51,6 +53,24 @@ LbmTunnel::LbmTunnel(const LbmConfig& config) : config_(config) {
     }
 }
 
+LbmTunnel::~LbmTunnel() = default;
+
+void LbmTunnel::useGpu(const gpu::Device& device) {
+    gpu::LbmStepper::Settings settings;
+    settings.nx = config_.nx;
+    settings.ny = config_.ny;
+    settings.nz = config_.nz;
+    settings.periodic = config_.periodic;
+    settings.tau = static_cast<float>(tau_);
+    settings.inletU = static_cast<float>(config_.latticeSpeed);
+    settings.smagorinsky = static_cast<float>(config_.smagorinsky);
+    const std::vector<std::uint32_t> solid(solid_.begin(), solid_.end());
+    auto stepper = std::make_unique<gpu::LbmStepper>(device, settings, f_, solid);
+    if (stepper->valid()) {
+        stepper_ = std::move(stepper);
+    }
+}
+
 void LbmTunnel::setSolid(std::size_t x, std::size_t y, std::size_t z, std::uint16_t solid) {
     solid_[index(x, y, z)] = solid;
     if (loads_.size() <= solid) {
@@ -72,24 +92,111 @@ void LbmTunnel::setLatticeFlow(std::size_t cell, double density,
 
 void LbmTunnel::step(std::size_t steps) {
     std::vector<Load> sum(loads_.size());
+    if (stepper_) {
+        stepOnGpu(steps, sum);
+        return;
+    }
     for (std::size_t s = 0; s < steps; ++s) {
         stepOnce(sum);
         if (averaging_ && ++sinceSample_ >= kStepsPerMeanSample) {
             sinceSample_ = 0;
-            ++samples_;
-            tbb::parallel_for(std::size_t{0}, cells(), [this](std::size_t c) {
-                const std::array<double, 3> u = velocity(c);
-                for (std::size_t k = 0; k < 3; ++k) {
-                    meanVelocity_[3 * c + k] += static_cast<float>(u.at(k));
-                }
-                meanPressure_[c] += static_cast<float>(pressure(c));
-            });
+            sampleMean();
         }
     }
     for (std::size_t b = 0; b < loads_.size(); ++b) {
         for (std::size_t k = 0; k < 3; ++k) {
             loads_[b].force.at(k) = sum[b].force.at(k) / static_cast<double>(steps);
             loads_[b].torque.at(k) = sum[b].torque.at(k) / static_cast<double>(steps);
+        }
+    }
+}
+
+void LbmTunnel::sampleMean() {
+    ++samples_;
+    tbb::parallel_for(std::size_t{0}, cells(), [this](std::size_t c) {
+        const std::array<double, 3> u = velocity(c);
+        for (std::size_t k = 0; k < 3; ++k) {
+            meanVelocity_[3 * c + k] += static_cast<float>(u.at(k));
+        }
+        meanPressure_[c] += static_cast<float>(pressure(c));
+    });
+}
+
+void LbmTunnel::stepOnGpu(std::size_t steps, std::vector<Load>& sum) {
+    // Loads and means from the grid copied back every few steps: a mean over samples, not every
+    // step. Before averaging, one sample at the end, to see where it stands.
+    const std::size_t chunk = averaging_ ? kGpuStepsPerSample : steps;
+    std::size_t samples = 0;
+    for (std::size_t left = steps; left > 0;) {
+        const std::size_t now = std::min(left, chunk);
+        stepper_->step(now);
+        left -= now;
+        stepper_->read(f_);
+        addLoadsFromState(sum);
+        ++samples;
+        if (averaging_) {
+            sampleMean();
+        }
+    }
+    for (std::size_t b = 0; b < loads_.size(); ++b) {
+        for (std::size_t k = 0; k < 3; ++k) {
+            loads_[b].force.at(k) = sum[b].force.at(k) / static_cast<double>(samples);
+            loads_[b].torque.at(k) = sum[b].torque.at(k) / static_cast<double>(samples);
+        }
+    }
+}
+
+void LbmTunnel::addLoadsFromState(std::vector<Load>& sum) const {
+    const auto nx = static_cast<std::ptrdiff_t>(config_.nx);
+    const auto ny = static_cast<std::ptrdiff_t>(config_.ny);
+    const auto nz = static_cast<std::ptrdiff_t>(config_.nz);
+    const double dx = config_.cellSize;
+    std::vector<std::vector<Load>> slabs(static_cast<std::size_t>(nz),
+                                         std::vector<Load>(loads_.size()));
+    tbb::parallel_for(std::ptrdiff_t{0}, nz, [&](std::ptrdiff_t z) {
+        std::vector<Load>& slab = slabs[static_cast<std::size_t>(z)];
+        for (std::ptrdiff_t y = 0; y < ny; ++y) {
+            for (std::ptrdiff_t x = 0; x < nx; ++x) {
+                const auto cell = static_cast<std::size_t>(x + nx * (y + ny * z));
+                if (solid_[cell] != kFluid) {
+                    continue;
+                }
+                for (int i = 1; i < kQ; ++i) {
+                    const std::ptrdiff_t sx = x - kCx[i];
+                    if (sx < 0 || sx >= nx) {
+                        continue;
+                    }
+                    const std::ptrdiff_t sy = (y - kCy[i] + ny) % ny;
+                    const std::ptrdiff_t sz = (z - kCz[i] + nz) % nz;
+                    const std::uint16_t solid =
+                        solid_[static_cast<std::size_t>(sx + nx * (sy + ny * sz))];
+                    if (solid == kFluid || solid == kRollingFloor) {
+                        continue;
+                    }
+                    const double gauge = f_[cell * kQ + kOpposite[i]] - kWeight[i];
+                    const double px = -kCx[i] * 2.0 * gauge;
+                    const double py = -kCy[i] * 2.0 * gauge;
+                    const double pz = -kCz[i] * 2.0 * gauge;
+                    Load& load = slab[solid];
+                    load.force[0] += px;
+                    load.force[1] += py;
+                    load.force[2] += pz;
+                    const double rx = (static_cast<double>(x) + 0.5 - 0.5 * kCx[i]) * dx;
+                    const double ry = (static_cast<double>(y) + 0.5 - 0.5 * kCy[i]) * dx;
+                    const double rz = (static_cast<double>(z) + 0.5 - 0.5 * kCz[i]) * dx;
+                    load.torque[0] += ry * pz - rz * py;
+                    load.torque[1] += rz * px - rx * pz;
+                    load.torque[2] += rx * py - ry * px;
+                }
+            }
+        }
+    });
+    for (const std::vector<Load>& slab : slabs) {
+        for (std::size_t b = 0; b < sum.size(); ++b) {
+            for (std::size_t k = 0; k < 3; ++k) {
+                sum[b].force.at(k) += slab[b].force.at(k) * forceScale_;
+                sum[b].torque.at(k) += slab[b].torque.at(k) * forceScale_;
+            }
         }
     }
 }

@@ -63,6 +63,26 @@ lagrange_add_slang_shader(
     SYMBOL kBvhTraverse
 )
 
+# The wind tunnel's step: kernels/fields/lbm.slang and its host side.
+add_library(lagrange_gpu_fluids fluids/src/LbmStepper.cpp)
+add_library(lagrange::gpu_fluids ALIAS lagrange_gpu_fluids)
+lagrange_target_defaults(lagrange_gpu_fluids)
+lagrange_target_vulkan_warnings(lagrange_gpu_fluids)
+target_include_directories(
+    lagrange_gpu_fluids
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/fluids/include>
+        $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
+)
+target_link_libraries(lagrange_gpu_fluids PRIVATE lagrange_gpu)
+lagrange_add_slang_shader(
+    lagrange_gpu_fluids
+    SOURCE kernels/fields/lbm.slang
+    ENTRY stepCells
+    STAGE compute
+    SYMBOL kLbm
+)
+
 # The mesh pipeline shared by the viewer and the camera sensor, and the sensor's renderer:
 # kernels/camera/mesh.slang and its host side.
 find_package(JPEG REQUIRED)
@@ -193,6 +213,7 @@ target_link_libraries(lagrange_gpu_info PRIVATE lagrange_gpu)
 
 install(DIRECTORY hal/include/ DESTINATION include/${PROJECT_NAME})
 install(DIRECTORY raycast/include/ DESTINATION include/${PROJECT_NAME})
+install(DIRECTORY fluids/include/ DESTINATION include/${PROJECT_NAME})
 install(DIRECTORY raster/include/ DESTINATION include/${PROJECT_NAME})
 # Shader sources are installed so that other packages compile the same kernels (invariant 13).
 install(DIRECTORY kernels/ DESTINATION share/${PROJECT_NAME}/kernels)
@@ -201,7 +222,11 @@ install(
     DESTINATION share/${PROJECT_NAME}/cmake
 )
 install(
-    TARGETS lagrange_gpu lagrange_gpu_raycast lagrange_gpu_raster
+    TARGETS
+        lagrange_gpu
+        lagrange_gpu_raycast
+        lagrange_gpu_raster
+        lagrange_gpu_fluids
     EXPORT export_${PROJECT_NAME}
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib

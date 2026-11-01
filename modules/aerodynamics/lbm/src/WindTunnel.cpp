@@ -388,6 +388,9 @@ Expected<WindTunnelResult, std::string> runWindTunnel(const World& world,
         return Unexpected{std::string("the robot is thinner than a cell: give more --cells")};
     }
 
+    if (options.device != nullptr) {
+        tunnel.useGpu(*options.device);
+    }
     // Until the wake has formed, then the mean over one more pass.
     const auto pass =
         static_cast<std::size_t>(static_cast<double>(config.nx) / config.latticeSpeed);
