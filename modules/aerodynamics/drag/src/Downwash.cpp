@@ -1,4 +1,4 @@
-// Rotor downwash and ground outwash (Downwash.hpp; docs/design/domains/rotor_aero.md §9).
+// Rotor downwash and ground outwash (Downwash.hpp; docs/design/domains/rotor_aero.md §2).
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
 #include "lagrange/aerodynamics/Downwash.hpp"
 

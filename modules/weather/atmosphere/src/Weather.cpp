@@ -241,6 +241,15 @@ Status Weather::declare(const WorldView& world, const ModuleConfig& config, Sign
         !s.ok()) {
         return s;
     }
+    // Dust the rotors' outwash lifts off loose ground (the aerodynamics domain, rotor_aero.md §2).
+    downwashDustIn_ = SignalId{};
+    if (config.get<bool>("downwash_dust").value_or(false) && !clear_) {
+        SignalSpec lifted = spec("env/dust/downwash", SignalType::Scalar, units::kg_per_m3);
+        lifted.feedback = true;
+        downwashDustIn_ = d.input(lifted);
+        groundDustDiameter_ = config.get<double>("ground_dust_diameter").value_or(1e-4);
+    }
+    liftedDust_ = 0.0;
     fogFieldOut_ = d.output(spec("env/extinction/field", SignalType::Field3D, units::per_m));
     windFieldOut_ = d.output(
         spec("env/wind/velocity_field", SignalType::Field3D, units::m_per_s, "world_local"));
@@ -264,6 +273,7 @@ Status Weather::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
 
 Status Weather::step(const StepContext& context, SignalBus& bus) {
     const double dt = context.dt.seconds();
+    liftedDust_ = downwashDustIn_.valid() && dust_ ? bus.read(downwashDustIn_) : 0.0;
     if (wetFriction_ && s_.rainRate > 0.0) {
         // Wetting towards 1, faster in heavier rain up to kWettingRainRate.
         const double rate = std::min(s_.rainRate / kWettingRainRate, 1.0) / kWettingTimeS;
@@ -285,7 +295,8 @@ Status Weather::step(const StepContext& context, SignalBus& bus) {
     if (lens_) {
         const double rate =
             ((rain_ ? s_.rainRate : 0.0) + snowing) / kLensRainReference / kLensRainTimeS +
-            (dust_ ? s_.dustConcentration / kLensDustReference / kLensDustTimeS : 0.0);
+            (dust_ ? (s_.dustConcentration + liftedDust_) / kLensDustReference / kLensDustTimeS
+                   : 0.0);
         for (double& c : contamination_) {
             c = 1.0 - (1.0 - c) * std::exp(-rate * dt);
         }
@@ -304,7 +315,9 @@ void Weather::writeAll(SignalBus& bus) const {
     bus.write(irradianceOut_, s_.irradiance);
     bus.writeN(sunOut_, s_.sun);
     const double rain = rain_ ? rainExtinction(s_.rainRate) : 0.0;
-    const double dust = dust_ ? dustExtinction(s_.dustConcentration, s_.dustDiameter) : 0.0;
+    const double dust = dust_ ? dustExtinction(s_.dustConcentration, s_.dustDiameter) +
+                                    dustExtinction(liftedDust_, groundDustDiameter_)
+                              : 0.0;
     const auto total = [&](double wavelength) {
         return (fog_ ? fogExtinction(s_.visibility, wavelength) : 0.0) + rain + dust +
                (snow_ ? snowExtinction(snowRate_) : 0.0);

@@ -109,7 +109,12 @@ message SubscribeSensor {
 message SubscribeField {
   string field = 1;
   bool enabled = 2;
-  double height_m = 3; // z of the slice
+  double height_m = 3; // z of a horizontal slice
+  // Added after 1.0 (RFC 0007: by addition). Unset: horizontal, as before.
+  SliceOrientation orientation = 4;
+  // Also send a FieldVolume around the robot a few times a second, for drawing moving particles
+  // (aero/wind_speed: the air's velocity).
+  bool volume = 5;
 }
 // Start or stop receiving WorldState. Off by default: most stages are small.
 message SetWorldEnabled {

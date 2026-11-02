@@ -10,7 +10,7 @@ namespace lagrange::aerodynamics {
 
 struct Wind;
 
-/// Rotor downwash and ground outwash (docs/design/domains/rotor_aero.md §9): the air the rotors
+/// Rotor downwash and ground outwash (docs/design/domains/rotor_aero.md §2): the air the rotors
 /// push, as a velocity field the aerodynamics domain adds to the wind.
 ///
 /// Three regions, all from momentum-theory quantities the rotor domain already computes (the

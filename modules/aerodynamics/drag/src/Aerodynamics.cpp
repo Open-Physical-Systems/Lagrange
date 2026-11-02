@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <numbers>
 
 namespace lagrange::aerodynamics {
@@ -70,6 +71,82 @@ void lagPair(double& a, double& b, double h, double t, double n1, double n2) {
 }
 
 }  // namespace
+
+namespace {
+
+std::size_t rootOf(const World::Bodies& bodies, std::size_t b) {
+    for (std::size_t guard = 0; guard < bodies.parent.size(); ++guard) {
+        const BodyId p = bodies.parent[b];
+        if (p == kWorldBody) {
+            break;
+        }
+        b = p.index;
+    }
+    return b;
+}
+
+/// Root body → group, in the order the rotors come.
+std::map<std::size_t, std::size_t> rotorRoots(const WorldView& world) {
+    std::map<std::size_t, std::size_t> out;
+    const World::Joints& joints = world.joints();
+    for (const SchemaInstance* s : world.instancesOf("RotorAPI_1")) {
+        const auto j =
+            static_cast<std::size_t>(std::ranges::find(joints.prim, s->prim) - joints.prim.begin());
+        const auto radius = s->real("aero:rotor:radius");
+        if (j < joints.prim.size() && radius && *radius > 0.0) {
+            out.try_emplace(rootOf(world.bodies(), joints.child[j].index), out.size());
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
+std::vector<RotorSource> rotorSources(const WorldView& world) {
+    const std::map<std::size_t, std::size_t> roots = rotorRoots(world);
+    std::vector<RotorSource> out;
+    const World::Joints& joints = world.joints();
+    const World::Bodies& bodies = world.bodies();
+    for (const SchemaInstance* s : world.instancesOf("RotorAPI_1")) {
+        const auto j =
+            static_cast<std::size_t>(std::ranges::find(joints.prim, s->prim) - joints.prim.begin());
+        const auto radius = s->real("aero:rotor:radius");
+        if (j >= joints.prim.size() || !radius || *radius <= 0.0) {
+            continue;  // rotor_aero reports it
+        }
+        const std::size_t child = joints.child[j].index;
+        out.push_back({std::string(world.signalInstanceName(s->prim)),
+                       std::string(world.signalInstanceName(bodies.prim[child])), *radius,
+                       roots.at(rootOf(bodies, child))});
+    }
+    return out;
+}
+
+std::vector<std::size_t> rotorGroupOfBodies(const WorldView& world) {
+    const std::map<std::size_t, std::size_t> roots = rotorRoots(world);
+    const World::Bodies& bodies = world.bodies();
+    std::vector<std::size_t> out(bodies.prim.size(), Downwash::kNoGroup);
+    for (std::size_t b = 0; b < out.size(); ++b) {
+        if (const auto it = roots.find(rootOf(bodies, b)); it != roots.end()) {
+            out[b] = it->second;
+        }
+    }
+    return out;
+}
+
+double dustThreshold(double diameter, double rho, double gravity) {
+    return kBagnoldA * std::sqrt((kGrainDensity - rho) / rho * gravity * diameter);
+}
+
+double liftedDust(double peakOutwash, double diameter, double most, double rho, double gravity) {
+    const double friction = kWallJetFriction * peakOutwash;
+    const double threshold = dustThreshold(diameter, rho, gravity);
+    if (friction <= threshold || most <= 0.0) {
+        return 0.0;
+    }
+    const double ratio = threshold / friction;
+    return most * (1.0 - ratio * ratio);
+}
 
 double meanWindAt(const Wind& wind, double height) {
     if (wind.speed == 0.0 || height <= wind.roughnessLength) {
@@ -154,13 +231,91 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
     }
     wind_ = *wind;
     const World::Colliders& colliders = world.colliders();
+    hasGround_ = false;
     for (std::size_t c = 0; c < colliders.body.size(); ++c) {
         if (colliders.body[c] == kWorldBody && colliders.shape[c] == ShapeType::Plane) {
             groundPoint_ = colliders.poseInBody[c].position;
+            groundNormal_ = rotate(colliders.poseInBody[c].orientation, {0.0, 0.0, 1.0});
+            hasGround_ = true;
             break;
         }
     }
     const World::Bodies& bodies = world.bodies();
+    const Vec3 g = world.gravityLocal();
+    gravity_ = std::hypot(g[0], g[1], g[2]);
+    downwashOn_ = config.get<bool>("downwash").value_or(true);
+    rotors_.clear();
+    const std::vector<std::size_t> groupOfBody = rotorGroupOfBodies(world);
+    std::size_t groups = 0;
+    std::map<std::string, SignalId> twists;  // one input per body
+    const auto twistOf = [&](const std::string& body) {
+        auto it = twists.find(body);
+        if (it == twists.end()) {
+            SignalSpec t =
+                spec("body/" + body + "/twist", SignalType::Wrench, units::m_per_s, "world_local");
+            t.feedback = true;
+            it = twists.emplace(body, d.input(t)).first;
+        }
+        return it->second;
+    };
+    std::map<std::string, SignalId> poses;
+    const auto poseOf = [&](const std::string& body) {
+        auto it = poses.find(body);
+        if (it == poses.end()) {
+            SignalSpec p =
+                spec("body/" + body + "/pose", SignalType::Pose, units::m, "world_local");
+            p.feedback = true;
+            it = poses.emplace(body, d.input(p)).first;
+        }
+        return it->second;
+    };
+    if (downwashOn_) {
+        for (const RotorSource& source : rotorSources(world)) {
+            RotorLink r;
+            r.radius = source.radius;
+            r.group = source.group;
+            groups = std::max(groups, source.group + 1);
+            const std::string base = "rotor/" + source.joint + "/";
+            SignalSpec thrust = spec(base + "thrust", SignalType::Scalar, units::N);
+            thrust.feedback = true;
+            r.thrust = d.input(thrust);
+            SignalSpec induced =
+                spec(base + "induced_velocity", SignalType::Scalar, units::m_per_s);
+            induced.feedback = true;
+            r.induced = d.input(induced);
+            SignalSpec axis =
+                spec(base + "thrust_axis", SignalType::Vec3, units::one, "world_local");
+            axis.feedback = true;
+            r.axis = d.input(axis);
+            r.pose = poseOf(source.link);
+            r.twist = twistOf(source.link);
+            r.air = d.output(
+                spec(base + "air_velocity", SignalType::Vec3, units::m_per_s, "world_local"));
+            rotors_.push_back(r);
+        }
+    }
+    groupCount_ = groups;
+    if (hasGround_) {
+        downwash_.setGround(groundPoint_, groundNormal_);
+    } else {
+        downwash_.clearGround();
+    }
+    dustOut_ = SignalId{};
+    const auto dustDiameter = config.get<double>("ground_dust_diameter");
+    const auto dustMost = config.get<double>("ground_dust_concentration");
+    if (dustDiameter || dustMost) {
+        if (!dustDiameter || *dustDiameter <= 0.0 || !dustMost || *dustMost < 0.0 || rho_ <= 0.0) {
+            return Status::error(
+                StatusCode::InvalidConfig,
+                "loose ground dust needs ground_dust_diameter (m) and "
+                "ground_dust_concentration (kg/m³), together, and the air density");
+        }
+        dustDiameter_ = *dustDiameter;
+        dustMost_ = *dustMost;
+        if (!rotors_.empty()) {
+            dustOut_ = d.output(spec("env/dust/downwash", SignalType::Scalar, units::kg_per_m3));
+        }
+    }
     const std::vector<bool> moving = movingBodies(world.raw());
     for (const SchemaInstance* s : world.instancesOf("AeroAPI_1")) {
         const auto b =
@@ -190,12 +345,9 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
         link.centre = {cop[0] - com[0], cop[1] - com[1], cop[2] - com[2]};  // from the COM
         link.damping = vector("aero:angularDamping", {0.0, 0.0, 0.0});
         const std::string base = "body/" + link.name + "/";
-        SignalSpec pose = spec(base + "pose", SignalType::Pose, units::m, "world_local");
-        pose.feedback = true;
-        link.pose = d.input(pose);
-        SignalSpec twist = spec(base + "twist", SignalType::Wrench, units::m_per_s, "world_local");
-        twist.feedback = true;
-        link.twist = d.input(twist);
+        link.pose = poseOf(link.name);
+        link.twist = twistOf(link.name);
+        link.group = downwashOn_ ? groupOfBody[b] : Downwash::kNoGroup;
         link.wrench =
             d.output(spec(base + "wrench/aero", SignalType::Wrench, units::N, "world_local"));
         link.airspeed = d.output(spec(base + "airspeed", SignalType::Scalar, units::m_per_s));
@@ -223,6 +375,13 @@ Status AeroDrag::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     }
     bus.writeN(gust_, Vec3{});
     bus.writeN(windVelocity_, Vec3{});
+    for (const RotorLink& r : rotors_) {
+        bus.writeN(r.air, Vec3{});
+    }
+    if (dustOut_.valid()) {
+        bus.write(dustOut_, 0.0);
+    }
+    downwash_.update({});
     return {};
 }
 
@@ -234,6 +393,47 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
     const Vec3 left{-downwind[1], downwind[0], 0.0};
     const std::shared_ptr<const fields::Field> field =
         windField_.valid() ? windFieldSignal_.read(bus, windField_) : nullptr;
+    // The mean air at a point: the wind grid inside it, else the logarithmic profile.
+    const auto meanAir = [&](const Vec3& at) {
+        if (field) {
+            const auto& box = field->bounds();
+            if (at[0] >= box[0][0] && at[0] <= box[1][0] && at[1] >= box[0][1] &&
+                at[1] <= box[1][1] && at[2] >= box[0][2] && at[2] <= box[1][2]) {
+                return field->sampleVector(at);
+            }
+        }
+        const double mean = meanWindAt(wind_, at[2] - groundPoint_[2]);
+        return Vec3{mean * downwind[0], mean * downwind[1], 0.0};
+    };
+    // The rotors' wakes, from last step's thrust: one group per robot, leaning with the air.
+    std::vector<Downwash::Rotor> wakes;
+    std::vector<Vec3> relative(groupCount_, Vec3{});
+    std::vector<int> counted(groupCount_, 0);
+    for (const RotorLink& r : rotors_) {
+        const std::span<const double> p = bus.readN(r.pose);
+        const std::span<const double> v = bus.readN(r.twist);
+        const std::span<const double> a = bus.readN(r.axis);
+        Downwash::Rotor w;
+        w.hub = {p[0], p[1], p[2]};
+        w.thrustAxis = {a[0], a[1], a[2]};
+        w.radius = r.radius;
+        w.induced = bus.read(r.induced);
+        w.thrust = bus.read(r.thrust);
+        w.group = r.group;
+        wakes.push_back(w);
+        const Vec3 air = meanAir(w.hub);
+        for (std::size_t k = 0; k < 3; ++k) {
+            relative[r.group][k] += air[k] - v[k];
+        }
+        ++counted[r.group];
+    }
+    for (std::size_t g = 0; g < groupCount_; ++g) {
+        for (double& c : relative[g]) {
+            c /= std::max(counted[g], 1);
+        }
+    }
+    downwash_.update(wakes, relative);
+    Vec3 firstGust{};
     for (std::size_t i = 0; i < links_.size(); ++i) {
         Link& link = links_[i];
         const std::span<const double> p = bus.readN(link.pose);
@@ -243,16 +443,8 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
         const Vec3 omega{t[3], t[4], t[5]};
         const Vec3 spin = cross(omega, arm);
         const double height = p[2] - groundPoint_[2];
-        const double mean = meanWindAt(wind_, height);
-        Vec3 air{mean * downwind[0], mean * downwind[1], 0.0};
-        if (field) {
-            const fields::Vec3 at{p[0] + arm[0], p[1] + arm[1], p[2] + arm[2]};
-            const auto& box = field->bounds();
-            if (at[0] >= box[0][0] && at[0] <= box[1][0] && at[1] >= box[0][1] &&
-                at[1] <= box[1][1] && at[2] >= box[0][2] && at[2] <= box[1][2]) {
-                air = field->sampleVector(at);
-            }
-        }
+        const Vec3 at{p[0] + arm[0], p[1] + arm[1], p[2] + arm[2]};
+        Vec3 air = meanAir(at);
         Vec3 velocity{t[0] + spin[0], t[1] + spin[1], t[2] + spin[2]};
         if (wind_.dryden && wind_.speed > 0.0) {
             const double w20 = meanWindAt(wind_, kW20HeightM);
@@ -267,12 +459,18 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
             }
             air[2] += g[2];
             if (i == 0) {
-                bus.writeN(gust_, Vec3{g[0] * downwind[0] + g[1] * left[0],
-                                       g[0] * downwind[1] + g[1] * left[1], g[2]});
+                firstGust = {g[0] * downwind[0] + g[1] * left[0],
+                             g[0] * downwind[1] + g[1] * left[1], g[2]};
+                bus.writeN(gust_, firstGust);
             }
         }
         if (i == 0) {
             bus.writeN(windVelocity_, air);
+        }
+        // Other robots' rotors blow on it.
+        const Vec3 wake = downwash_.velocityAt(at, link.group);
+        for (std::size_t k = 0; k < 3; ++k) {
+            air[k] += wake[k];
         }
         // Drag in the body frame: −½·ρ·|v|·(Cd ∘ A ∘ v), v the link's velocity through the air.
         const Vec3 relative{velocity[0] - air[0], velocity[1] - air[1], velocity[2] - air[2]};
@@ -291,6 +489,19 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
         bus.writeN(link.wrench, std::array<double, 6>{f[0], f[1], f[2], moment[0] + tau[0],
                                                       moment[1] + tau[1], moment[2] + tau[2]});
         bus.write(link.airspeed, speed);
+    }
+    // Each rotor's air: the wind and gust plus the other robots' wakes at its hub.
+    for (std::size_t i = 0; i < rotors_.size(); ++i) {
+        const Vec3& hub = wakes[i].hub;
+        const Vec3 mean = meanAir(hub);
+        const Vec3 wake = downwash_.velocityAt(hub, rotors_[i].group);
+        bus.writeN(rotors_[i].air,
+                   Vec3{mean[0] + firstGust[0] + wake[0], mean[1] + firstGust[1] + wake[1],
+                        mean[2] + firstGust[2] + wake[2]});
+    }
+    if (dustOut_.valid()) {
+        bus.write(dustOut_,
+                  liftedDust(downwash_.peakOutwash(), dustDiameter_, dustMost_, rho_, gravity_));
     }
     return {};
 }

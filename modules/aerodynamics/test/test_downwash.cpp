@@ -1,4 +1,4 @@
-// Rotor downwash and outwash against their references (Downwash.hpp; rotor_aero.md §9):
+// Rotor downwash and outwash against their references (Downwash.hpp; rotor_aero.md §2):
 // actuator-disc momentum theory, the drone jet measured by Bauersfeld et al. (2024), and the
 // outwash measured by Tanner et al. (2015) and in flight tests they quote.
 #include "lagrange/aerodynamics/Aerodynamics.hpp"

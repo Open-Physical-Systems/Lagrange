@@ -149,7 +149,9 @@ void printServerOptions(std::FILE* out) {
         "  --weather K=V,...  the weather: temperature (K), pressure (Pa) and relative_humidity\n"
         "            (0-1), the site, no defaults; visibility (m, fog), rain_rate (m/s),\n"
         "            dust_concentration (kg/m³), dust_median_diameter (m), solar_irradiance\n"
-        "            (W/m²), sky_temperature (K), fog_field and wind_field (.nvdb files);\n"
+        "            (W/m²), sky_temperature (K), fog_field and wind_field (.nvdb files),\n"
+        "            ground_dust_diameter (m) and ground_dust_concentration (kg/m³): loose\n"
+        "            dust rotor outwash lifts;\n"
         "            a profile's weather keys also set them\n"
         "  --domain D=off  replace domain D (rigid_body, electrical, thermal, weather, emi,\n"
         "            comms, vehicle_dynamics, traffic, sensors) by its substitute\n"
@@ -468,11 +470,19 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             if (text == nullptr) {
                 return "--weather needs KEY=VALUE,... (temperature=288.15,pressure=101325,...)";
             }
-            static const std::set<std::string, std::less<>> kKeys{
-                "temperature",      "pressure",       "relative_humidity",
-                "visibility",       "rain_rate",      "dust_concentration",
-                "snow_rate",        "snow_cover",     "dust_median_diameter",
-                "solar_irradiance", "sky_temperature"};
+            static const std::set<std::string, std::less<>> kKeys{"temperature",
+                                                                  "pressure",
+                                                                  "relative_humidity",
+                                                                  "visibility",
+                                                                  "rain_rate",
+                                                                  "dust_concentration",
+                                                                  "snow_rate",
+                                                                  "snow_cover",
+                                                                  "dust_median_diameter",
+                                                                  "solar_irradiance",
+                                                                  "sky_temperature",
+                                                                  "ground_dust_diameter",
+                                                                  "ground_dust_concentration"};
             std::string list(text);
             std::size_t at = 0;
             while (at <= list.size()) {
@@ -494,7 +504,8 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                     return "--weather: \"" + item +
                            "\" is not KEY=VALUE with KEY one of temperature, pressure, "
                            "relative_humidity, visibility, rain_rate, dust_concentration, "
-                           "dust_median_diameter, solar_irradiance, sky_temperature, fog_field, "
+                           "dust_median_diameter, solar_irradiance, sky_temperature, "
+                           "ground_dust_diameter, ground_dust_concentration, fog_field, "
                            "wind_field";
                 }
                 options.weather[item.substr(0, equals)] = v;

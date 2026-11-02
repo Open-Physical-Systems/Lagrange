@@ -162,7 +162,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Domains and physics (14)</summary>
+<details><summary>Domains and physics (15)</summary>
 
 - [Domain design documents](docs/design/domains/README.md)
 - [Domain: aerodynamics, wind and rotor aero](docs/design/domains/aerodynamics.md)
@@ -173,6 +173,7 @@ recorded to MCAP and replayed.
 - [Domain: hydrodynamics (marine)](docs/design/domains/hydrodynamics.md)
 - [Domain: radiation](docs/design/domains/radiation.md)
 - [Domain: rigid body and articulations](docs/design/domains/rigid_body.md)
+- [Domain: rotor downwash and outwash](docs/design/domains/rotor_aero.md)
 - [Domain: sensors](docs/design/domains/sensors.md)
 - [Domain: thermal](docs/design/domains/thermal.md)
 - [Domain: traffic](docs/design/domains/traffic.md)

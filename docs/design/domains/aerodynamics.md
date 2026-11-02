@@ -89,6 +89,9 @@ clamped below that. Height `z` is found by a downward ray cast against collision
 
 ## 3. Signals
 
+The rotors' wakes (downwash, outwash, `rotor/{j}/air_velocity`, `rotor/{j}/thrust_axis`) are in
+[rotor_aero.md](rotor_aero.md).
+
 ```cpp
 // modules/aerodynamics — declare()
 for (auto& a : world.instancesOf("AeroAPI_1")) {
