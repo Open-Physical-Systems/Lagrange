@@ -80,7 +80,8 @@ Said plainly, so nobody reads more into these than is there:
   concentration curve) is our own choice, not checked against anything.
 - **The live box's unsteadiness**: the rotor speeds move about 1 % in hover with it; no measured
   spectrum to compare.
-- **Fountain lift on the frame** in the fitted model: our own OpenFOAM runs only (being added).
+- **Fountain lift on the frame** in the fitted model (rotor_aero.md §2.8): fitted to our own
+  OpenFOAM runs at five heights only (within 0.23 N), no measurement.
 - **Hydrodynamics beyond a sphere's added mass**: other shapes' added mass, rotational added
   inertia, wave radiation (Fossen's full model is planned, hydrodynamics.md).
 - **Lidar intensity**, **GNSS error statistics**, **sensor timing histograms**: no evidence found

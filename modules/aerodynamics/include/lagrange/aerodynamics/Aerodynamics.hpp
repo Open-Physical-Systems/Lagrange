@@ -85,6 +85,23 @@ inline constexpr double kWallInflowLength = 3.5;   // λ, rotor diameters
 inline constexpr double kWallReach = 10.0;         // diameters: beyond, nothing
 [[nodiscard]] double wallInflow(double gapOverDiameter);
 
+/// The fountain under a low multirotor (rotor_aero.md §2.8): near the ground its rotor jets meet
+/// under it and turn up, pushing its frame up, against the download it feels higher up. The
+/// change of the force on the frame from what it is 2 m up, as a share of the multirotor's
+/// thrust, at a height h of the rotor plane over the surface its wake meets, in motor-to-motor
+/// diagonals l: F·(exp(−(h/l)/λ) − exp(−R/λ)) below R = kFountainReach diagonals, none beyond,
+/// and held at its value at kFountainLowest below that (the lowest case run; no extrapolation).
+/// F and λ are a least-squares fit of the logarithm to `lagrange foam-hover` runs of the sample
+/// quadcopter at 0.5, 0.75, 1, 1.5 and 2 m (rotor_aero.md §7): 12.7, 7.4, 2.7 and 1.0 % of its
+/// thrust at h/l = 1, 1.5, 2 and 3, the fit within 0.23 N (1.2 % of the weight) of each. Our own
+/// CFD only, of one frame, no measurement; 2 m stands in for "high up", and the download there
+/// (9 % of the weight) is not in the model, the rotor data being of isolated rotors.
+inline constexpr double kFountainGain = 0.4634;    // F, share of thrust
+inline constexpr double kFountainLength = 0.7623;  // λ, diagonals
+inline constexpr double kFountainReach = 4.0;      // R, diagonals: 2 m for the sample
+inline constexpr double kFountainLowest = 1.0;     // diagonals: 0.5 m for the sample
+[[nodiscard]] double fountainLift(double heightOverDiagonal);
+
 /// Dust lifted by the outwash, kg/m³: `most`·(1 − (u*_t/u*)²) above the threshold, 0 below
 /// (behavioural, a range check). u* = kWallJetFriction·u_peak, u*_t = A·√((ρ_p − ρ)/ρ·g·d) with
 /// A = kBagnoldA (Bagnold, The Physics of Blown Sand and Desert Dunes, 1941).
