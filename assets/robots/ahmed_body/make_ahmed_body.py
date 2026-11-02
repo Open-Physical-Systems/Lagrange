@@ -2,7 +2,8 @@
 """Writes the Ahmed body: make_ahmed_body.py SLANT_DEGREES OUT_STEM (OUT_STEM.obj, OUT_STEM.urdf).
 
 The reference car shape of Ahmed, Ramm and Faltin (SAE 840300, 1984): length 1.044 m, width
-0.389 m, height 0.288 m, nose radius 0.1 m on all four front edges, slant length 0.222 m. No stilts. Run it 50 mm over the
+0.389 m, height 0.288 m, nose radius 0.1 m on all four front edges, slant length 0.222 m. No
+stilts. Run it 50 mm over the
 road: lagrange tunnel OUT_STEM.urdf --speed 40 --ground --clearance 0.05
 """
 
