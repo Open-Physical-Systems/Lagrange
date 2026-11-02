@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+"""lagrange_foam_compare FOAM_CASE TUNNEL_DIR OUT.png: surface pressure of the two CFD tools.
+
+Takes the slice through the middle of the body, finds the tunnel's air cells that touch the body,
+and reads the pressure coefficient there from both results. Draws both and their difference, marks
+where they differ most, and writes the numbers to OUT.json.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.spatial import cKDTree
+
+
+def read_vti(path: Path) -> dict:
+    data = path.read_bytes()
+    head = data[: data.index(b"_", data.index(b"<AppendedData"))].decode()
+    extent = [int(v) for v in re.search(r'WholeExtent="([^"]+)"', head).group(1).split()]
+    n = (extent[1] + 1, extent[3] + 1, extent[5] + 1)
+    origin = np.array([float(v) for v in re.search(r'Origin="([^"]+)"', head).group(1).split()])
+    spacing = float(re.search(r'Spacing="([^"]+)"', head).group(1).split()[0])
+    at = data.index(b"_", data.index(b"<AppendedData")) + 1
+    arrays = {}
+    for name, parts in (("velocity", 3), ("pressure", 1), ("solid", 1)):
+        size = int(np.frombuffer(data, dtype="<u8", count=1, offset=at)[0])
+        values = np.frombuffer(data, dtype="<f4", count=size // 4, offset=at + 8)
+        shape = (n[2], n[1], n[0], parts) if parts > 1 else (n[2], n[1], n[0])
+        arrays[name] = values.reshape(shape)
+        at += 8 + size
+    return {"n": n, "origin": origin, "cell": spacing, **arrays}
+
+
+def read_foam_list(path: Path, vector: bool) -> np.ndarray:
+    """A field's internal values from an ASCII OpenFOAM file."""
+    text = path.read_text()
+    start = text.index("internalField")
+    match = re.compile(r"nonuniform List<\w+>\s*(\d+)\s*\(").search(text, start)
+    if match is None:
+        raise SystemExit(f"{path} is not a nonuniform ASCII field")
+    count = int(match.group(1))
+    body = text[match.end() :]
+    if vector:
+        body = body.replace("(", " ").replace(")", " ")
+        return np.fromstring(body, sep=" ", count=3 * count).reshape(count, 3)
+    return np.fromstring(body, sep=" ", count=count)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("case", type=Path)
+    parser.add_argument("tunnel", type=Path)
+    parser.add_argument("out", type=Path)
+    parser.add_argument("--speed", type=float, required=True, help="the wind, m/s")
+    parser.add_argument("--density", type=float, default=1.2)
+    args = parser.parse_args()
+
+    tunnel = read_vti(args.tunnel / "flow.vti")
+    surface = json.loads((args.case / "surface.json").read_text())
+    low, high = np.array(surface["low"]), np.array(surface["high"])
+    cell = tunnel["cell"]
+    j = round(((low[1] + high[1]) / 2 - tunnel["origin"][1]) / cell)
+    solid = tunnel["solid"][:, j, :] > 0.5
+    # The road's layer is not the body.
+    z_low = int(max((low[2] - tunnel["origin"][2]) / cell - 1, 1))
+    near = np.zeros_like(solid)
+    body = solid.copy()
+    body[:z_low, :] = False
+    near[:-1, :] |= body[1:, :]
+    near[1:, :] |= body[:-1, :]
+    near[:, :-1] |= body[:, 1:]
+    near[:, 1:] |= body[:, :-1]
+    near &= ~solid
+    zs, xs = np.nonzero(near)
+    points = np.stack(
+        [
+            tunnel["origin"][0] + xs * cell,
+            np.full(xs.shape, tunnel["origin"][1] + j * cell),
+            tunnel["origin"][2] + zs * cell,
+        ],
+        axis=1,
+    )
+    q_pa = 0.5 * args.density * args.speed**2
+    cp_tunnel_raw = tunnel["pressure"][zs, j, xs] / q_pa
+
+    times = [p for p in args.case.iterdir() if p.name.isdigit() and p.name != "0"]
+    latest = max(times, key=lambda p: int(p.name))
+    centres = read_foam_list(latest / "C", vector=True)
+    pressure = read_foam_list(latest / "p", vector=False)
+    tree = cKDTree(centres)
+    _, nearest = tree.query(points)
+    cp_foam = pressure[nearest] / (0.5 * args.speed**2)
+
+    # The free stream ahead of the body, at its height, in each.
+    span = high - low
+    ahead = np.array([low[0] - 0.6 * span.max(), points[0, 1], (low[2] + high[2]) / 2])
+    i0 = round((ahead[0] - tunnel["origin"][0]) / cell)
+    k0 = round((ahead[2] - tunnel["origin"][2]) / cell)
+    window = tunnel["pressure"][k0 - 2 : k0 + 3, j, i0 - 2 : i0 + 3]
+    tunnel_free = float(window.mean()) / q_pa
+    foam_free = float(pressure[tree.query(ahead)[1]] / (0.5 * args.speed**2))
+    cp_tunnel = cp_tunnel_raw - tunnel_free
+    difference = cp_tunnel - (cp_foam - foam_free)
+
+    middle_x = (low[0] + high[0]) / 2
+    front = points[:, 0] < low[0] + 0.05 * span[0]
+    rear = points[:, 0] > high[0]
+    summary = {
+        "tunnel_cell_m": cell,
+        "free_stream_cp": {"tunnel": tunnel_free, "foam": foam_free},
+        "mean_cp_front_cells": {
+            "tunnel": float(cp_tunnel[front].mean()),
+            "foam": float((cp_foam - foam_free)[front].mean()),
+        },
+        "mean_cp_base_cells": {
+            "tunnel": float(cp_tunnel[rear].mean()),
+            "foam": float((cp_foam - foam_free)[rear].mean()),
+        },
+        "front_minus_base": {
+            "tunnel": float(cp_tunnel[front].mean() - cp_tunnel[rear].mean()),
+            "foam": float((cp_foam - foam_free)[front].mean() - (cp_foam - foam_free)[rear].mean()),
+        },
+        "largest_difference": {
+            "cp": float(difference[np.abs(difference).argmax()]),
+            "x_m": float(points[np.abs(difference).argmax(), 0]),
+            "z_m": float(points[np.abs(difference).argmax(), 2]),
+            "behind_nose_m": float(points[np.abs(difference).argmax(), 0] - low[0]),
+        },
+    }
+    args.out.with_suffix(".json").write_text(json.dumps(summary, indent=2) + "\n")
+
+    figure, axes = plt.subplots(3, 1, figsize=(11, 9.5), sharex=True, constrained_layout=True)
+    titles = (
+        ("lagrange tunnel", cp_tunnel, "coolwarm", (-1.5, 1.0)),
+        ("OpenFOAM", cp_foam - foam_free, "coolwarm", (-1.5, 1.0)),
+        ("tunnel minus OpenFOAM", difference, "PuOr", (-1.0, 1.0)),
+    )
+    for axis, (title, values, colours, limits) in zip(axes, titles, strict=True):
+        scatter = axis.scatter(points[:, 0], points[:, 2], c=values, s=18, cmap=colours,
+                               vmin=limits[0], vmax=limits[1])  # fmt: skip
+        figure.colorbar(scatter, ax=axis, label="Cp, from the free stream ahead")
+        axis.set_title(f"{title}: pressure beside the body, in the slice through its middle")
+        axis.set_aspect("equal")
+        axis.set_ylabel("z, m")
+    worst = summary["largest_difference"]
+    axes[2].annotate(
+        f"largest difference, Cp {worst['cp']:+.2f}\n"
+        f"{worst['behind_nose_m']:.2f} m behind the nose",
+        (worst["x_m"], worst["z_m"]),
+        xytext=(middle_x, high[2] + 0.25 * span[2]),
+        arrowprops={"arrowstyle": "->"},
+    )
+    axes[2].set_xlabel("x, m (wind goes this way)")
+    axes[2].set_ylim(top=high[2] + 0.5 * span[2])
+    figure.savefig(args.out, dpi=120)
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

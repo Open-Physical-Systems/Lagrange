@@ -1,0 +1,596 @@
+#!/usr/bin/env python3
+"""lagrange foam ROBOT: the robot's collision shapes through OpenFOAM, in a process of its own.
+
+Writes an ordinary OpenFOAM case (snappyHexMesh, simpleFoam, k-omega SST, wall functions), runs it
+with an installed OpenFOAM or the official container, and reads its forces back. OpenFOAM is GPL-3
+and stays a separate program: Lagrange exchanges only files with it.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+IMAGE = "docker.io/opencfd/openfoam-default:2512"
+NU = 1.5e-5  # m²/s, air at 20 °C
+RHO = 1.2  # kg/m³
+TURBULENCE_INTENSITY = 0.01  # of the wind, a quiet tunnel's order of size
+C_MU = 0.09  # k-omega SST (Menter 1994)
+AHEAD, BEHIND, ASIDE, ABOVE = 3.0, 8.0, 2.0, 3.0  # domain, in the body's longest size
+BASE_CELLS_PER_SIZE = 8
+
+HEADER = """FoamFile
+{{
+    version 2.0;
+    format ascii;
+    class {cls};
+    object {name};
+}}
+"""
+
+
+def foam_file(path: Path, name: str, body: str, cls: str = "dictionary") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(HEADER.format(cls=cls, name=name) + body)
+
+
+def read_stl(path: Path) -> list[tuple[tuple[float, float, float], ...]]:
+    corners = [
+        tuple(float(v) for v in line.split()[1:4])
+        for line in path.read_text().splitlines()
+        if line.strip().startswith("vertex")
+    ]
+    return [tuple(corners[i:i + 3]) for i in range(0, len(corners), 3)]  # fmt: skip
+
+
+def frontal_area(triangles: list, low: list[float], high: list[float], cells: int = 400) -> float:
+    """The shadow along the wind (+x), on a raster of the y-z bounds."""
+    dy = (high[1] - low[1]) / cells
+    dz = (high[2] - low[2]) / cells
+    seen: set[tuple[int, int]] = set()
+    for a, b, c in triangles:
+        det = (b[1] - a[1]) * (c[2] - a[2]) - (c[1] - a[1]) * (b[2] - a[2])
+        if abs(det) < 1e-14:
+            continue
+        ys = (a[1], b[1], c[1])
+        zs = (a[2], b[2], c[2])
+        for i in range(int((min(ys) - low[1]) / dy), min(int((max(ys) - low[1]) / dy) + 1, cells)):
+            y = low[1] + (i + 0.5) * dy
+            for j in range(
+                int((min(zs) - low[2]) / dz), min(int((max(zs) - low[2]) / dz) + 1, cells)
+            ):
+                z = low[2] + (j + 0.5) * dz
+                u = ((y - a[1]) * (c[2] - a[2]) - (c[1] - a[1]) * (z - a[2])) / det
+                v = ((b[1] - a[1]) * (z - a[2]) - (y - a[1]) * (b[2] - a[2])) / det
+                if u >= 0 and v >= 0 and u + v <= 1:
+                    seen.add((i, j))
+    return len(seen) * dy * dz
+
+
+def plan(surface: dict, area: float, args: argparse.Namespace) -> dict:
+    """Sizes of the case, all in metres."""
+    low, high = surface["low"], surface["high"]
+    size = max(h - b for h, b in zip(high, low, strict=True))
+    base = size / BASE_CELLS_PER_SIZE
+    clearance = args.clearance if args.clearance is not None else 0.0
+    if args.ground and clearance <= 0.0:
+        clearance = 2.0 * base / 2**args.refine
+    floor = low[2] - clearance if args.ground else low[2] - ABOVE * size
+    box_low = [low[0] - AHEAD * size, low[1] - ASIDE * size, floor]
+    box_high = [high[0] + BEHIND * size, high[1] + ASIDE * size, high[2] + ABOVE * size]
+    cells = [max(1, round((h - b) / base)) for h, b in zip(box_high, box_low, strict=True)]
+    k = 1.5 * (TURBULENCE_INTENSITY * args.speed) ** 2
+    length_scale = 0.05 * size
+    return {
+        "low": low, "high": high, "size": size, "base": base, "box_low": box_low,
+        "box_high": box_high, "cells": cells, "k": k,
+        "omega": math.sqrt(k) / (C_MU**0.25 * length_scale), "area": area, "clearance": clearance,
+        "surface_cell": base / 2**args.refine,
+    }  # fmt: skip
+
+
+def vector(v: list[float]) -> str:
+    return "(" + " ".join(f"{x:.9g}" for x in v) + ")"
+
+
+def write_system(case: Path, p: dict, links: list[str], args: argparse.Namespace) -> None:
+    lo, hi = p["box_low"], p["box_high"]
+    vertices = "\n".join(
+        vector([x, y, z]) for z in (lo[2], hi[2]) for y, x in
+        ((lo[1], lo[0]), (lo[1], hi[0]), (hi[1], hi[0]), (hi[1], lo[0]))
+    )  # fmt: skip
+    road = "wall" if args.ground else "patch"
+    foam_file(case / "system/blockMeshDict", "blockMeshDict", f"""scale 1;
+vertices
+(
+{vertices}
+);
+blocks (hex (0 1 2 3 4 5 6 7) {vector(p["cells"]).replace(".", "")} simpleGrading (1 1 1));
+boundary
+(
+    inlet {{ type patch; faces ((0 4 7 3)); }}
+    outlet {{ type patch; faces ((1 2 6 5)); }}
+    sides {{ type patch; faces ((0 1 5 4) (3 7 6 2)); }}
+    top {{ type patch; faces ((4 5 6 7)); }}
+    road {{ type {road}; faces ((0 3 2 1)); }}
+);
+""")  # fmt: skip
+    level = args.refine
+    geometry = "\n".join(
+        f'    "{link}.stl" {{ type triSurfaceMesh; name body_{link}; }}' for link in links
+    )
+    features = "\n".join(f'        {{ file "{link}.eMesh"; level {level}; }}' for link in links)
+    surfaces = "\n".join(
+        f"        body_{link} {{ level ({level - 1} {level}); "
+        f"patchInfo {{ type wall; inGroups (body); }} }}"
+        for link in links
+    )
+    size, low, high = p["size"], p["low"], p["high"]
+    wake_low = [low[0] - 0.2 * size, low[1] - 0.3 * size, p["box_low"][2]]
+    wake_high = [high[0] + 1.5 * size, high[1] + 0.3 * size, high[2] + 0.3 * size]
+    inside = [hi[0] - 0.123 * p["base"], hi[1] - 0.137 * p["base"], hi[2] - 0.151 * p["base"]]
+    foam_file(case / "system/snappyHexMeshDict", "snappyHexMeshDict", f"""castellatedMesh true;
+snap true;
+addLayers true;
+geometry
+{{
+{geometry}
+    wake {{ type box; min {vector(wake_low)}; max {vector(wake_high)}; }}
+}}
+castellatedMeshControls
+{{
+    maxLocalCells 2000000;
+    maxGlobalCells {args.max_cells};
+    minRefinementCells 10;
+    maxLoadUnbalance 0.10;
+    nCellsBetweenLevels 3;
+    features
+    (
+{features}
+    );
+    refinementSurfaces
+    {{
+{surfaces}
+    }}
+    resolveFeatureAngle 30;
+    refinementRegions
+    {{
+        wake {{ mode inside; levels ((1e15 {max(level - 2, 1)})); }}
+    }}
+    locationInMesh {vector(inside)};
+    allowFreeStandingZoneFaces true;
+}}
+snapControls
+{{
+    nSmoothPatch 3;
+    tolerance 2.0;
+    nSolveIter 30;
+    nRelaxIter 5;
+    nFeatureSnapIter 10;
+    implicitFeatureSnap false;
+    explicitFeatureSnap true;
+    multiRegionFeatureSnap false;
+}}
+addLayersControls
+{{
+    relativeSizes true;
+    layers {{ "body_.*" {{ nSurfaceLayers {args.layers}; }} }}
+    expansionRatio 1.2;
+    finalLayerThickness 0.5;
+    minThickness 0.1;
+    nGrow 0;
+    featureAngle 60;
+    slipFeatureAngle 30;
+    nRelaxIter 3;
+    nSmoothSurfaceNormals 1;
+    nSmoothNormals 3;
+    nSmoothThickness 10;
+    maxFaceThicknessRatio 0.5;
+    maxThicknessToMedialRatio 0.3;
+    minMedialAxisAngle 90;
+    nBufferCellsNoExtrude 0;
+    nLayerIter 30;
+}}
+meshQualityControls
+{{
+    #includeEtc "caseDicts/meshQualityDict"
+    minFaceWeight 0.02;
+    nSmoothScale 4;
+    errorReduction 0.75;
+}}
+mergeTolerance 1e-6;
+""")  # fmt: skip
+    entries = "\n".join(f'"{link}.stl" {{ extractionMethod extractFromSurface; '
+                        f"extractFromSurfaceCoeffs {{ includedAngle 150; }} "
+                        f"writeObj no; }}" for link in links)  # fmt: skip
+    foam_file(
+        case / "system/surfaceFeatureExtractDict", "surfaceFeatureExtractDict", entries + "\n"
+    )
+    foam_file(case / "system/decomposeParDict", "decomposeParDict",
+              f"numberOfSubdomains {args.procs};\nmethod scotch;\n")  # fmt: skip
+    centre = vector([(low[0] + high[0]) / 2, (low[1] + high[1]) / 2, p["box_low"][2]])
+    link_forces = "\n".join(
+        f"    forces_{link} {{ type forces; libs (forces); writeControl timeStep; "
+        f"writeInterval 1; patches (body_{link}); rho rhoInf; rhoInf {RHO}; CofR {centre}; }}"
+        for link in links
+    )
+    foam_file(case / "system/controlDict", "controlDict", f"""application simpleFoam;
+startFrom startTime;
+startTime 0;
+stopAt endTime;
+endTime {args.iterations};
+deltaT 1;
+writeControl timeStep;
+writeInterval {args.iterations};
+purgeWrite 1;
+writeFormat ascii;
+writePrecision 8;
+writeCompression off;
+timeFormat general;
+timePrecision 8;
+runTimeModifiable false;
+functions
+{{
+{link_forces}
+    forceCoeffs1
+    {{
+        type forceCoeffs;
+        libs (forces);
+        writeControl timeStep;
+        writeInterval 1;
+        patches (body);
+        rho rhoInf;
+        rhoInf {RHO};
+        liftDir (0 0 1);
+        dragDir (1 0 0);
+        CofR {vector([(low[0] + high[0]) / 2, (low[1] + high[1]) / 2, p["box_low"][2]])};
+        pitchAxis (0 1 0);
+        magUInf {args.speed};
+        lRef {high[0] - low[0]:.9g};
+        Aref {p["area"]:.9g};
+    }}
+}}
+""".replace("{link_forces}", link_forces))  # fmt: skip
+    foam_file(
+        case / "system/fvSchemes",
+        "fvSchemes",
+        """ddtSchemes { default steadyState; }
+gradSchemes { default Gauss linear; grad(U) cellLimited Gauss linear 1; }
+divSchemes
+{
+    default none;
+    div(phi,U) bounded Gauss linearUpwindV grad(U);
+    div(phi,k) bounded Gauss upwind;
+    div(phi,omega) bounded Gauss upwind;
+    div((nuEff*dev2(T(grad(U))))) Gauss linear;
+}
+laplacianSchemes { default Gauss linear corrected; }
+interpolationSchemes { default linear; }
+snGradSchemes { default corrected; }
+wallDist { method meshWave; }
+""",
+    )
+    smooth = "{ solver smoothSolver; smoother GaussSeidel; tolerance 1e-8; relTol 0.1; nSweeps 1; }"
+    foam_file(case / "system/fvSolution", "fvSolution", f"""solvers
+{{
+    p {{ solver GAMG; smoother GaussSeidel; tolerance 1e-7; relTol 0.01; }}
+    Phi {{ solver GAMG; smoother GaussSeidel; tolerance 1e-7; relTol 0.01; }}
+    U {smooth}
+    k {smooth}
+    omega {smooth}
+}}
+SIMPLE {{ nNonOrthogonalCorrectors 0; consistent yes; }}
+potentialFlow {{ nNonOrthogonalCorrectors 10; }}
+relaxationFactors {{ equations {{ U 0.9; k 0.7; omega 0.7; }} }}
+""")  # fmt: skip
+
+
+def write_fields(case: Path, p: dict, args: argparse.Namespace) -> None:
+    wind = f"({args.speed} 0 0)"
+    far = '    "(sides|top)" { type slip; }\n'
+    road_u = (f"road {{ type movingWallVelocity; value uniform {wind}; }}"
+              if args.ground else "road { type slip; }")  # fmt: skip
+
+    def scalar(name: str, dims: str, value: float, wall: str, road: str, inlet: str = "") -> None:
+        foam_file(case / "0" / name, name, f"""dimensions {dims};
+internalField uniform {value:.9g};
+boundaryField
+{{
+    inlet {inlet or "{ type fixedValue; value $internalField; }"}
+    outlet {{ type inletOutlet; inletValue $internalField; value $internalField; }}
+{far}    road {road if args.ground else "{ type slip; }"}
+    body {wall}
+}}
+""", "volScalarField")  # fmt: skip
+
+    foam_file(case / "0/U", "U", f"""dimensions [0 1 -1 0 0 0 0];
+internalField uniform {wind};
+boundaryField
+{{
+    inlet {{ type fixedValue; value $internalField; }}
+    outlet {{ type inletOutlet; inletValue uniform (0 0 0); value $internalField; }}
+{far}    {road_u}
+    body {{ type noSlip; }}
+}}
+""", "volVectorField")  # fmt: skip
+    k_wall = "{ type kqRWallFunction; value $internalField; }"
+    omega_wall = "{ type omegaWallFunction; value $internalField; }"
+    nut_wall = "{ type nutkWallFunction; value uniform 0; }"
+    scalar("k", "[0 2 -2 0 0 0 0]", p["k"], k_wall, k_wall)
+    scalar("omega", "[0 0 -1 0 0 0 0]", p["omega"], omega_wall, omega_wall)
+    scalar("nut", "[0 2 -1 0 0 0 0]", 0.0, nut_wall, nut_wall,
+           "{ type calculated; value uniform 0; }")  # fmt: skip
+    foam_file(case / "0/p", "p", f"""dimensions [0 2 -2 0 0 0 0];
+internalField uniform 0;
+boundaryField
+{{
+    inlet {{ type zeroGradient; }}
+    outlet {{ type fixedValue; value uniform 0; }}
+{far}    road {{ type {"zeroGradient" if args.ground else "slip"}; }}
+    body {{ type zeroGradient; }}
+}}
+""", "volScalarField")  # fmt: skip
+    (case / "0/nut").write_text((case / "0/nut").read_text().replace(
+        "outlet { type inletOutlet; inletValue $internalField; value $internalField; }",
+        "outlet { type calculated; value uniform 0; }"))  # fmt: skip
+    foam_file(case / "constant/transportProperties", "transportProperties",
+              f"transportModel Newtonian;\nnu {NU};\n")  # fmt: skip
+    foam_file(case / "constant/turbulenceProperties", "turbulenceProperties",
+              "simulationType RAS;\nRAS { RASModel kOmegaSST; turbulence on; }\n")  # fmt: skip
+
+
+ALLRUN = """#!/bin/bash
+# Runs this case in order; each step's log is log.<step>. Needs OpenFOAM's environment.
+set -e
+cd "$(dirname "$0")"
+run() {{ local n="$1"; shift; echo "$n"; "$@" > "log.$n" 2>&1; }}
+par() {{
+    local n="$1"
+    shift
+    echo "$n"
+    mpirun --allow-run-as-root --oversubscribe -np {procs} "$@" -parallel > "log.$n" 2>&1
+}}
+run surfaceFeatureExtract surfaceFeatureExtract
+run blockMesh blockMesh
+run decomposePar.mesh decomposePar -no-fields -force
+par snappyHexMesh snappyHexMesh -overwrite
+par checkMesh checkMesh -constant
+run reconstructParMesh reconstructParMesh -constant
+rm -rf processor*
+run decomposePar decomposePar -force
+par potentialFoam potentialFoam -writephi
+par simpleFoam simpleFoam
+run reconstructPar reconstructPar -latestTime
+run writeCellCentres postProcess -func writeCellCentres -latestTime
+rm -rf processor*
+"""
+
+
+def read_coefficients(case: Path) -> dict:
+    """Mean over the last fifth of the iterations, and how much they still move."""
+    files = sorted(case.glob("postProcessing/forceCoeffs1/*/coefficient*.dat"))
+    if not files:
+        raise SystemExit(f"no forces in {case}/postProcessing: see {case}/log.*")
+    names: list[str] = []
+    rows: list[list[float]] = []
+    for line in files[-1].read_text().splitlines():
+        if line.startswith("#"):
+            parts = line[1:].split()
+            if parts and parts[0] == "Time":
+                names = parts
+        elif line.strip():
+            rows.append([float(v) for v in line.split()])
+    tail = rows[-max(len(rows) // 5, 1) :]
+    out: dict = {"iterations": len(rows)}
+    for key, name in (("Cd", "drag_coefficient"), ("Cl", "lift_coefficient")):
+        values = [row[names.index(key)] for row in tail]
+        out[name] = sum(values) / len(values)
+        out[name.replace("coefficient", "moves")] = (max(values) - min(values)) / 2.0
+    return out
+
+
+def read_link_forces(case: Path) -> list[dict]:
+    """Each link's force in N, total, pressure and viscous, the mean of the last fifth."""
+    links = []
+    for folder in sorted(case.glob("postProcessing/forces_*")):
+        files = sorted(folder.glob("*/force*.dat"))
+        if not files:
+            continue
+        names: list[str] = []
+        rows: list[list[float]] = []
+        for line in files[-1].read_text().splitlines():
+            if line.startswith("#"):
+                parts = line[1:].split()
+                if parts and parts[0] == "Time":
+                    names = parts
+            elif line.strip():
+                rows.append([float(v) for v in line.replace("(", " ").replace(")", " ").split()])
+        if not rows:
+            continue
+        tail = rows[-max(len(rows) // 5, 1) :]
+        mean = [sum(column) / len(tail) for column in zip(*tail, strict=True)]
+        entry: dict = {"name": folder.name.removeprefix("forces_")}
+        for part in ("total", "pressure", "viscous"):
+            at = names.index(f"{part}_x") if f"{part}_x" in names else None
+            if at is not None:
+                entry[f"{part}_n"] = mean[at : at + 3]
+        links.append(entry)
+    return links
+
+
+def read_field(path: Path, vector: bool) -> tuple[list[float] | list[list[float]], dict]:
+    """An ASCII field's internal values, and each nonuniform patch's."""
+    import re
+
+    text = path.read_text()
+    pattern = re.compile(r"nonuniform List<\w+>\s*(\d+)\s*\(")
+
+    def values(at: int) -> tuple[list, int]:
+        match = pattern.search(text, at)
+        count = int(match.group(1))
+        end = text.index(";", match.end())
+        numbers = [
+            float(v) for v in text[match.end() : end].replace("(", " ").replace(")", " ").split()
+        ]
+        if vector:
+            return [numbers[k : k + 3] for k in range(0, 3 * count, 3)], end
+        return numbers[:count], end
+
+    internal, _ = values(text.index("internalField"))
+    patches = {}
+    for match in re.finditer(r"\n    (body_\w+)\n    \{", text):
+        block = text[match.end() : text.index("\n    }", match.end())]
+        if "nonuniform" in block:
+            patches[match.group(1)], _ = values(match.end())
+    return internal, patches
+
+
+def plot_pressure(case: Path, speed: float, out: Path) -> dict:
+    """The pressure coefficient on the body: from the side, from above, and along its middle."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from scipy.spatial import cKDTree
+
+    times = [d for d in case.iterdir() if d.name.isdigit() and d.name != "0"]
+    latest = max(times, key=lambda d: int(d.name))
+    centres, faces = read_field(latest / "C", vector=True)
+    pressure, _ = read_field(latest / "p", vector=False)
+    face = np.array([f for patch in faces.values() for f in patch])
+    # The wall's pressure is its cell's (zeroGradient), the nearest cell centre.
+    _, owner = cKDTree(np.array(centres)).query(face)
+    cp = np.array(pressure)[owner] / (0.5 * speed**2)
+    low, high = face.min(axis=0), face.max(axis=0)
+    middle = (low + high) / 2
+    figure = plt.figure(figsize=(12, 9), constrained_layout=True)
+    grid = figure.add_gridspec(3, 1)
+    side = figure.add_subplot(grid[0])
+    near = face[:, 1] <= middle[1]
+    order = np.argsort(face[near, 1])[::-1]
+    shown = side.scatter(face[near][order, 0], face[near][order, 2], c=cp[near][order], s=4,
+                         cmap="coolwarm", vmin=-1.5, vmax=1.0)  # fmt: skip
+    side.set_title("Pressure coefficient on the body, from the side")
+    side.set_aspect("equal")
+    side.set_ylabel("z, m")
+    above = figure.add_subplot(grid[1], sharex=side)
+    top = face[:, 2] >= middle[2]
+    order = np.argsort(face[top, 2])
+    above.scatter(face[top][order, 0], face[top][order, 1], c=cp[top][order], s=4,
+                  cmap="coolwarm", vmin=-1.5, vmax=1.0)  # fmt: skip
+    above.set_title("From above")
+    above.set_aspect("equal")
+    above.set_ylabel("y, m")
+    figure.colorbar(shown, ax=[side, above], label="Cp")
+    line = figure.add_subplot(grid[2], sharex=side)
+    band = 0.03 * (high[1] - low[1])
+    strip = np.abs(face[:, 1] - middle[1]) <= band
+    for name, pick, colour in (("top", face[:, 2] >= middle[2], "tab:red"),
+                               ("bottom", face[:, 2] < middle[2], "tab:blue")):  # fmt: skip
+        chosen = strip & pick
+        order = np.argsort(face[chosen, 0])
+        line.plot(face[chosen][order, 0], cp[chosen][order], ".", ms=3, color=colour, label=name)
+    line.invert_yaxis()
+    line.axhline(0, color="grey", lw=0.5)
+    line.set_title("Along the middle of the body (suction up)")
+    line.set_xlabel("x, m (wind goes this way)")
+    line.set_ylabel("Cp")
+    line.legend()
+    lowest = int(cp.argmin())
+    side.annotate(f"strongest suction, Cp {cp[lowest]:.2f}", (face[lowest, 0], face[lowest, 2]),
+                  xytext=(middle[0], high[2] + 0.15 * (high[2] - low[2])),
+                  arrowprops={"arrowstyle": "->"})  # fmt: skip
+    side.set_ylim(top=high[2] + 0.35 * (high[2] - low[2]))
+    figure.savefig(out, dpi=110)
+    return {"strongest_suction_cp": float(cp[lowest]), "at_m": face[lowest].tolist(),
+            "stagnation_cp": float(cp.max()), "faces": len(face)}  # fmt: skip
+
+
+def run_case(case: Path, args: argparse.Namespace) -> None:
+    if not args.container and shutil.which("simpleFoam"):
+        subprocess.run(["bash", str(case / "Allrun")], check=True)
+        return
+    engine = shutil.which("podman") or shutil.which("docker")
+    if engine is None:
+        raise SystemExit("no OpenFOAM: source one, or install podman to use its container")
+    case = case.resolve()
+    subprocess.run([engine, "run", "--rm", "-v", f"{case}:/case", "-w", "/case", args.image,
+                    "bash", "-lc", "/case/Allrun"], check=True)  # fmt: skip
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="lagrange foam", description=__doc__)
+    parser.add_argument("robot")
+    parser.add_argument(
+        "--speed", type=float, default=20.0, help="wind, m/s (also for --read-only)"
+    )
+    parser.add_argument("--yaw", type=float, default=0.0, help="degrees")
+    parser.add_argument("--ground", action="store_true", help="a moving road under it")
+    parser.add_argument("--clearance", type=float, help="m from its lowest point to the road")
+    parser.add_argument("--refine", type=int, default=4, help="levels of refinement at the surface")
+    parser.add_argument("--layers", type=int, default=3, help="prism layers on the body")
+    parser.add_argument("--iterations", type=int, default=1500)
+    parser.add_argument("--procs", type=int, default=8)
+    parser.add_argument("--max-cells", type=int, default=10_000_000)
+    parser.add_argument("--out", type=Path, default=Path("foam_case"))
+    parser.add_argument("--write-only", action="store_true", help="write the case, do not run it")
+    parser.add_argument("--read-only", action="store_true", help="read a finished case's forces")
+    parser.add_argument("--container", action="store_true", help="the container even if installed")
+    parser.add_argument("--image", default=IMAGE)
+    args = parser.parse_args()
+    case: Path = args.out
+    if not args.read_only:
+        if case.exists() and any(case.iterdir()):
+            raise SystemExit(f"{case} is not empty: name another with --out")
+        tri = case / "constant" / "triSurface"
+        tri.mkdir(parents=True)
+        tunnel = Path(sys.argv[0]).resolve().parent / "lagrange"
+        export = [str(tunnel), "tunnel", args.robot, "--yaw", str(args.yaw)]
+        export += ["--export-surface", str(tri)]
+        subprocess.run(export, check=True, stdout=subprocess.DEVNULL)
+        surface = json.loads((tri / "surface.json").read_text())
+        (tri / "surface.json").rename(case / "surface.json")
+        triangles = [t for link in surface["links"] for t in read_stl(tri / f"{link}.stl")]
+        p = plan(surface, frontal_area(triangles, surface["low"], surface["high"]), args)
+        write_system(case, p, surface["links"], args)
+        write_fields(case, p, args)
+        (case / "Allrun").write_text(ALLRUN.format(procs=args.procs))
+        (case / "Allrun").chmod(0o755)
+        (case / "case.foam").touch()
+        (case / "plan.json").write_text(json.dumps(p, indent=2) + "\n")
+        print(f"case in {case}: frontal area {p['area']:.4f} m2, cells near the body "
+              f"{p['surface_cell'] * 1000:.1f} mm")  # fmt: skip
+        if args.write_only:
+            print(f"Run it: {case}/Allrun, in OpenFOAM's environment")
+            return 0
+        run_case(case, args)
+    result = read_coefficients(case)
+    result["links"] = read_link_forces(case)
+    try:
+        result["pressure_plot"] = plot_pressure(case, args.speed, case / "pressure.png")
+    except (ImportError, ValueError, AttributeError, OSError) as error:
+        result["pressure_plot"] = f"not drawn: {error}"
+    (case / "report.json").write_text(json.dumps(result, indent=2) + "\n")
+    print(f"Cd {result['drag_coefficient']:.3f} (moves by {result['drag_moves']:.3f})   "
+          f"Cl {result['lift_coefficient']:.3f} (moves by {result['lift_moves']:.3f})   "
+          f"{result['iterations']} iterations")  # fmt: skip
+    for link in result["links"]:
+        if "total_n" in link:
+            drag, side, lift = link["total_n"]
+            print(
+                f"  {link['name']:<24} drag {drag:9.2f} N  side {side:9.2f} N  lift {lift:9.2f} N"
+            )
+    if (case / "pressure.png").exists():
+        print(f"Pressure on the body: {case}/pressure.png")
+    print(f"In ParaView: {case}/case.foam")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

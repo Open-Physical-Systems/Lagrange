@@ -822,9 +822,13 @@ def wind_tunnel_wake(out_dir: Path, keep: bool) -> None:
     ahmed_tunnel(work, frames=200)
     finished = work / "finished"
     finished.mkdir()
-    title = "lagrange tunnel --frames: the air's spin behind an Ahmed body, 40 m/s over a road"
+    title = (
+        "lagrange tunnel --frames: an Ahmed body, 40 m/s. "
+        "Top: speed, 0 to 56 m/s. Below: Cp, -1 to 1"
+    )
     line = (
-        "A coarse grid: it shows where the air goes. Its Cd, 1.12, is far from the measured 0.298"
+        "Coarse: for where the air goes. Cd 1.35 against a measured 0.29 to 0.30. "
+        "The stripes are a known defect"
     )
     for index, frame in enumerate(sorted((work / "tunnel" / "frames").glob("*.png"))):
         image = Image.open(frame).convert("RGB")

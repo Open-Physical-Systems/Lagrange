@@ -18,6 +18,7 @@ int main(int argc, char** argv) {
     bool useGpu = true;
     bool cellsGiven = false;
     bool study = false;
+    std::string exportDir;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         const bool more = i + 1 < argc;
@@ -38,8 +39,12 @@ int main(int argc, char** argv) {
             options.meanPasses = std::atof(argv[++i]);
         } else if (arg == "--frames" && more) {
             options.frames = static_cast<std::size_t>(std::atof(argv[++i]));
+        } else if (arg == "--frame-spin") {
+            options.frameSpin = true;
         } else if (arg == "--clearance" && more) {
             options.clearance = std::atof(argv[++i]);
+        } else if (arg == "--export-surface" && more) {
+            exportDir = argv[++i];
         } else if (arg == "--study") {
             study = true;
         } else if (arg == "--out" && more) {
@@ -52,17 +57,27 @@ int main(int argc, char** argv) {
         }
     }
     if (robot.empty()) {
-        std::fprintf(stderr,
-                     "usage: lagrange tunnel ROBOT [--speed M_S] [--yaw DEG] [--cells N] "
-                     "[--passes N] [--mean-passes N] [--ground] [--clearance M] [--frames N] "
-                     "[--study] [--cpu] "
-                     "[--out DIR]\n");
+        std::fprintf(
+            stderr,
+            "usage: lagrange tunnel ROBOT [--speed M_S] [--yaw DEG] [--cells N] "
+            "[--passes N] [--mean-passes N] [--ground] [--clearance M] [--frames N] [--frame-spin] "
+            "[--study] [--cpu] "
+            "[--out DIR]\n");
         return 2;
     }
     auto model = lagrange::server::loadModel(robot);
     if (!model) {
         std::fprintf(stderr, "lagrange tunnel: %s\n", model.error().c_str());
         return 2;
+    }
+    if (!exportDir.empty()) {
+        const std::string error = lagrange::aerodynamics::exportTunnelSurface(
+            model->world, options.yawDegrees, exportDir);
+        if (!error.empty()) {
+            std::fprintf(stderr, "lagrange tunnel: %s\n", error.c_str());
+            return 1;
+        }
+        return 0;
     }
     // On the GPU when there is a real one; a software device is slower than the CPU reference.
     std::unique_ptr<lagrange::gpu::Device> device;

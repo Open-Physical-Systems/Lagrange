@@ -34,9 +34,11 @@ struct WindTunnelOptions {
     /// it; that is also what a negative value gives. A model's z = 0 says nothing: a loaded robot
     /// may stand raised.
     double clearance{-1.0};
-    /// Pictures of the wake moving: this many PNG files of a slice through the body, in frames/ of
-    /// the output, while it averages. 0: none. Colour is the air's spin about the slice's normal.
+    /// Pictures of the wake moving: this many PNG files in frames/ of the output, while it
+    /// averages. 0: none. Speed in a slice along the body over pressure in a slice from above;
+    /// frames/legend.json holds their scales. `frameSpin`: the air's spin in the first slice alone.
     std::size_t frames{0};
+    bool frameSpin{false};
     /// Where to step it: null for the CPU reference.
     const gpu::Device* device{nullptr};
 };
@@ -68,6 +70,12 @@ struct WindTunnelResult {
 };
 
 /// Runs it. `progress` gets a share 0..1 now and then. Refuses a robot with no collision shapes.
+/// The collision shapes as they stand at rest, turned by `yawDegrees`, for another solver: one
+/// ASCII STL per link in `directory` and surface.json with their names and bounds. Empty when all
+/// went.
+[[nodiscard]] std::string exportTunnelSurface(const World& world, double yawDegrees,
+                                              const std::string& directory);
+
 /// One grid of a grid independence study.
 struct GridStudyRow {
     std::size_t cells{0};
