@@ -1,4 +1,4 @@
-# Validation report (v1.0)
+# Validation report (v1.0, brought up to date 2026-11-03)
 
 This report is the roadmap §9 deliverable "validation report per domain". It collects, for each
 domain, what the model is checked against, the tolerance, the result and the test that checks it.
@@ -29,10 +29,11 @@ published curves only, which is risk R12 in `docs/plan/risks.md`.
 
 | Domain | Checked against | Tolerance / result | Test | Sim-vs-real (measured data) |
 |---|---|---|---|---|
-| Rigid body | Closed-form mechanics; backend agreement MuJoCo vs Jolt | Energy drift < 0.1 % over 10 s; Coulomb angle within 1°; inertia 1e-9; backends within 2 % | `test_mujoco_validation`, `test_backends` | none yet (AMR square drive, Q16) |
+| Rigid body | Closed-form mechanics; backend agreement MuJoCo vs Jolt; contact force and joint reaction on both (Newton) | Energy drift < 0.1 % over 10 s; Coulomb angle within 1°; inertia 1e-9; backends within 2 %; weight held within 0.5 %, a swinging pivot's load within 1 % | `test_mujoco_validation`, `test_backends`, `lagrange_physics_conformance` | none yet (AMR square drive, Q16) |
 | Electrical | Closed forms; LG HG2 cell data (Kollmeyer et al.); ngspice | 0.1–0.5 % closed forms met; battery 5.4–6.2 mV RMS (46–89 % SoC), 21.5 mV at 24 % (target < 20 mV, not met) | `test_models`, `test_network`, `test_coupling`, `test_battery_dataset`, `test_export` | battery: published cell data; BLDC bench: none yet (Q16) |
 | Thermal | Closed forms | 0.1 %, 0.5 %, 0.5 K met; energy to 1e-9 | `test_lumped`, `test_thermal_network` | none yet (motor heat run, Q16) |
-| Rotor aero | NACA Report 640; momentum theory; classical H-force; Cheeseman–Bennett | CT within 8 %, CP within 6 %; H-force 1 %; ground effect exact to the curve | `test_bem`, `test_rotor_aero` | none yet (flight log, Q16) |
+| Rotor aero | NACA Report 640; momentum theory; classical H-force; Cheeseman–Bennett; NeuroBEM's vortex-ring fit; Hsiao and Chirarattananon's ceiling balance; downwash: Bauersfeld et al. 2024, Tanner et al. 2015, Kiran et al. 2025, own OpenFOAM | CT within 8 %, CP within 6 %; H-force 1 %; ground and ceiling effect exact to their curves; stacked drones 53 % kept at 4 l against 65 % measured (**12 points short**) | `test_bem`, `test_rotor_aero`, `test_downwash`, `test_downwash_pair` | none yet (flight log, Q16) |
+| Live air (lattice Boltzmann) | Momentum theory; own OpenFOAM hover cases | Momentum through a plane within 2 %; at 3 cm the centreline within 20 % and the outwash within 6 % of OpenFOAM; at 4 cm the outwash 19 % low | `test_lbm_box`, `test_lbm`, `tools/validation/lbm_hover.py` | none (OpenFOAM is a model too) |
 | Aerodynamics (drag, wind) | Closed form; Dryden (MIL-F-8785C) | Terminal velocity 0.5 %; turbulence variances 5 %; periodogram check owed | `test_aerodynamics` | none yet |
 | Weather | Koschmieder, Beer–Lambert, Marshall–Palmer, ICAO density | Exact; rain rate 5–18 % (target 5 %, not met; test at 20 %) | `test_weather` | none yet |
 | Sensor weather effects | Lidar equation, Koschmieder veil | Trends tested; fog clutter uncalibrated | `test_weather_effects` | none yet (fog/rain chamber data, DENSE) |
@@ -50,6 +51,47 @@ published curves only, which is risk R12 in `docs/plan/risks.md`.
 | Huge worlds | Same world at the origin; GeographicLib | Bit-identical poses at 500 km; rebase within 1e-9 m (MuJoCo), 1e-4 m (Jolt) | `test_robot`, `test_frames`, `test_regions`, `test_tile_selector` | not applicable |
 | Radiation | — | Not built; `zero` substitute only | — | none |
 | Hydrodynamics | Still water: buoyancy and drag (`lagrange_hydrodynamics`), the closed-form checks of hydrodynamics.md §9 | Not Fossen: no added mass, waves or currents | closed form | none measured |
+
+## Since v1.0 (to 2026-11-03)
+
+The models added after the v1.0 release, each with its reference, result and test. Where the
+reference is our own OpenFOAM run, that is a check between two models, not against the air.
+
+| Model | Reference | Result | Test |
+|---|---|---|---|
+| Rotor downwash, far jet | Bauersfeld et al. 2024 (arXiv:2403.13321), measured multirotor jets | fitted to it; its momentum flux carries the thrust within 5 %; our OpenFOAM hover centreline about 10 % under it | `test_downwash` |
+| Rotor downwash, ground outwash | Tanner et al. 2015 (NASA), 1.9 V_h at 1.7 R | fitted to it at one rotor height (1 R); between 1 R and 2 R the model's peak rises where the measurement fades (rotor_aero.md §6) | `test_downwash` |
+| Drone under a drone | Kiran, Ayanian and Breuer 2025 (RSS), stacked Crazyflies | 53 % of the thrust kept at 4 l (measured 65 %), 87 % at 19 l (measured 95–98 %): **short by 10–12 points** | `DownwashPair.TheLowerQuadcopterLosesThrustAsMeasured` |
+| A wall beside a drone | own OpenFOAM, four gaps | gain 0.0173 fitted; its fade length 3.5 ± 2.7 D is poorly fixed (Tanabe et al. say 1.5 D) | `DownwashPair.AWallStarves…` |
+| Live air box (`downwash_model: lbm`) | momentum theory; own OpenFOAM hover at 2 m and 0.5 m | momentum within 2 %; disc speed at its centre 23 % over ideal (blurred edge); at 4 cm through-disc air 15–20 % under OpenFOAM's, the low-hover fountain 5.8–7.4 m/s against 7.1 m/s | `test_lbm_box`, `DownwashPair.TheLiveAirBoxDrawsTheRotorsTogether`, rotor_aero.md §8 |
+| Vortex-ring state (`bem`) | Bauersfeld et al. 2021 (NeuroBEM, RSS) eqs. 18–19, after Hoffmann et al. 2007 | the fit exactly; thrust joins hover's within 0.1 %; a step of 10 % of hover thrust into the windmill-brake state | `Bem.TheVortexRing*` |
+| Ceiling effect | Hsiao and Chirarattananon 2019 (IEEE/ASME TMech) momentum balance | exact to it; their α0 = 1.6 is for a 23 mm propeller (TODO(verify) for larger ones) | `RotorAero.Ceiling*`, `RotorAero.UnderAFixedBox*` |
+| Contact force and joint reaction, Jolt | Newton's laws; MuJoCo | box weight within 0.5 %; swinging pivot 11.348 N against 11.349 N (energy) and MuJoCo's 11.349 N | `lagrange_physics_conformance` |
+| Wind tunnel (`lagrange tunnel`) | shear-wave decay; Schiller–Naumann sphere; Hoerner plate and cube; Ahmed body (SAE 840300) | shear wave 1 %; sphere 25 % over; plate 0.97 and cube 1.03 against 1.17 and 1.05; Ahmed body **over four times too high** (Cd 1.26 on 8M cells against 0.29) | `test_lbm`, cfd.md §5–6 |
+| OpenFOAM cases (`lagrange foam`) | Ahmed body at 25° | Cd 0.266–0.288 against 0.2875–0.298, but 8 % apart between two meshes; 35° not trustworthy yet | cfd.md §5 |
+| Components between buses (RFC 0010) | formulas; ngspice | Lagrange within 0.5 % of the formula, ngspice within 0.1 %, on random circuits | `tools/ci/check_electrical.py`, `test_electrical_check` |
+| Walking humans | social force (Helbing and Molnár 1995) as traffic uses it | behaviour tested (they walk, steer, stop); not against measured crowds | `test_humans` |
+
+### Models with no reference yet
+
+Said plainly, so nobody reads more into these than is there:
+
+- **Dust lifted by outwash**: the threshold is Bagnold's, but how much dust rises (the
+  concentration curve) is our own choice, not checked against anything.
+- **The live box's unsteadiness**: the rotor speeds move about 1 % in hover with it; no measured
+  spectrum to compare.
+- **Fountain lift on the frame** in the fitted model: our own OpenFOAM runs only (being added).
+- **Hydrodynamics beyond still water**: no added mass, waves or currents (Fossen's model is
+  planned, hydrodynamics.md).
+- **Lidar intensity**, **GNSS error statistics**, **sensor timing histograms**: no evidence found
+  (Sensors table below).
+- **Ultrasonic cone** (the `lagrange_tof` plugin): a geometric cone and dead zone, no datasheet
+  comparison.
+- **Realistic camera look**: a picture, not a radiometric model; only the pinhole geometry and
+  noise are checked.
+- **Radiation**: not built.
+- **Jolt's contact force on a group of fixed bodies** goes to the group's root body; which body
+  of the group was touched is not known.
 
 ## Rigid body
 
