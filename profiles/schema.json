@@ -216,7 +216,8 @@
         "wind_from": { "type": "number", "description": "degrees, meteorological: 0 from the north, 90 from the east" },
         "wind_reference_height": { "type": "number", "exclusiveMinimum": 0, "description": "m above the ground" },
         "roughness_length": { "type": "number", "exclusiveMinimum": 0, "description": "m, the terrain's z0 for the logarithmic profile (open flat terrain: about 0.03)" },
-        "turbulence": { "enum": ["none", "dryden"], "default": "none" }
+        "turbulence": { "enum": ["none", "dryden"], "default": "none" },
+        "downwash": { "type": "boolean", "default": true, "description": "Rotors' downwash and ground outwash blow on other robots and their rotors (rotor_aero.md §2)." }
       },
       "unevaluatedProperties": false
     },
@@ -234,6 +235,8 @@
         "snow_cover": { "type": "number", "minimum": 0, "maximum": 1, "description": "On the ground at the start." },
         "dust_concentration": { "type": "number", "minimum": 0, "description": "kg/m³ of airborne dust." },
         "dust_median_diameter": { "type": "number", "exclusiveMinimum": 0, "description": "m, the dust's median particle diameter." },
+        "ground_dust_diameter": { "type": "number", "exclusiveMinimum": 0, "description": "m, the loose grains on the ground that rotor outwash can lift (with ground_dust_concentration)." },
+        "ground_dust_concentration": { "type": "number", "minimum": 0, "description": "kg/m³, the most dust rotor outwash keeps in the air over this ground." },
         "solar_irradiance": { "type": "number", "minimum": 0, "description": "W/m², direct normal." },
         "sky_temperature": { "type": "number", "exclusiveMinimum": 0, "description": "K, for radiative exchange; default the air temperature." },
         "fog_field": { "type": "string", "description": "A NanoVDB file (.nvdb): a grid of fog extinction (1/m), added to the visibility's." },

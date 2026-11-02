@@ -40,12 +40,17 @@ ImVec4 viridis(float fraction) {
     return {a.x + (b.x - a.x) * blend, a.y + (b.y - a.y) * blend, a.z + (b.z - a.z) * blend, 1.0F};
 }
 
+/// The air's speed: wind, gusts and the rotors' wakes (server kAirField, rotor_aero.md §5). The
+/// only field with vertical slices and the airflow particles.
+constexpr const char* kAirField = "aero/wind_speed";
+
 /// What the three panels share: which field is shown and how.
 struct EnvironmentView {
     std::string field;  // name of the field shown; empty for none
     std::shared_ptr<FieldStream> stream;
     double heightM{0.1};
     float opacity{0.85F};
+    SliceOrientation orientation{SliceOrientation::Horizontal};
 
     /// Chooses the first available field when none is chosen, and keeps the stream open.
     void follow(PanelContext& context) {
@@ -70,8 +75,14 @@ struct EnvironmentView {
                 }
             }
         }
+        if (field != kAirField) {
+            orientation = SliceOrientation::Horizontal;  // only the air is sliced upright
+        }
         if (!field.empty()) {
-            stream = context.client.watchField(field, heightM);
+            // The app's particles watch the air's XZ slice with volumes: ask for the same.
+            const bool volume = field == kAirField && orientation == SliceOrientation::VerticalXZ &&
+                                context.renderOptions != nullptr && context.renderOptions->airflow;
+            stream = context.client.watchField(field, heightM, orientation, volume);
         }
     }
 };
@@ -282,20 +293,54 @@ public:
             ImGui::End();
             return;
         }
+        // --slice: a field and plane asked for on the command line.
+        if (context.fieldSlice != nullptr && !context.fieldSlice->empty() &&
+            context.client.environment()) {
+            std::string asked = *context.fieldSlice;
+            SliceOrientation plane = SliceOrientation::Horizontal;
+            if (const std::size_t colon = asked.rfind(':'); colon != std::string::npos) {
+                const std::string name = asked.substr(colon + 1);
+                plane = name == "xz"   ? SliceOrientation::VerticalXZ
+                        : name == "yz" ? SliceOrientation::VerticalYZ
+                                       : SliceOrientation::Horizontal;
+                asked.resize(colon);
+            }
+            view_->field = asked;
+            view_->orientation = plane;
+            view_->stream.reset();
+            context.fieldSlice->clear();
+        }
         view_->follow(context);
-        // Header: the height of the slice.
+        // Header: the plane (XY, XZ, YZ: design 07's slice choices; upright only for the air)
+        // and the height of a horizontal slice.
         if (widgets::BeginPanelTools("##slice-tools", px(150.0F))) {
+            static constexpr std::array<const char*, 3> kPlanes{"XY", "XZ", "YZ"};
+            int plane = static_cast<int>(view_->orientation);
+            ImGui::BeginDisabled(view_->field != kAirField);
+            if (widgets::Segmented("##plane", kPlanes.data(), static_cast<int>(kPlanes.size()),
+                                   &plane)) {
+                view_->orientation = static_cast<SliceOrientation>(plane);
+                view_->stream.reset();
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine(0.0F, px(12.0F));
             ImGui::AlignTextToFramePadding();
             widgets::Caption("height");
             ImGui::SameLine(0.0F, px(6.0F));
+            ImGui::BeginDisabled(view_->orientation != SliceOrientation::Horizontal);
             ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
-            ImGui::SetNextItemWidth(px(90.0F));
+            ImGui::SetNextItemWidth(px(160.0F));
+            // A slider from the ground to 10 m; Ctrl+click types any height.
             double height = view_->heightM;
-            if (ImGui::InputDouble("##height", &height, 0.0, 0.0, "%.2f m") &&
+            constexpr double kLowest = 0.0;
+            constexpr double kHighest = 10.0;
+            if (ImGui::SliderScalar("##height", ImGuiDataType_Double, &height, &kLowest, &kHighest,
+                                    "%.2f m") &&
                 std::isfinite(height)) {
                 view_->heightM = std::clamp(height, -100.0, 1000.0);
             }
             ImGui::PopFont();
+            ImGui::EndDisabled();
             widgets::EndPanelTools();
         }
         if (!context.client.environment() || view_->field.empty()) {
@@ -369,7 +414,12 @@ public:
                     continue;
                 }
                 const auto& position = context.scene->transforms[i].position;
-                const ImVec2 at = toScreen(position[0], position[1]);
+                ImVec2 at = toScreen(position[0], position[1]);
+                if (slice->orientation == SliceOrientation::VerticalXZ) {
+                    at = toScreen(position[0], position[2]);
+                } else if (slice->orientation == SliceOrientation::VerticalYZ) {
+                    at = toScreen(position[1], position[2]);
+                }
                 draw->AddCircleFilled(at, px(4.0F), u32(c::t1));
                 draw->AddCircle(at, px(7.0F), u32(c::accent), 0, px(1.5F));
                 draw->AddText(fonts.sans, small, ImVec2(at.x + px(10.0F), at.y - small * 0.5F),
@@ -389,8 +439,11 @@ public:
 
         // Top left: what the slice is.
         char text[160];
-        std::snprintf(text, sizeof(text), "%s  ·  %u × %u cells of %.2f m  ·  z %.2f m", label,
-                      slice->width, slice->height, slice->cellM, slice->heightM);
+        const char* plane = slice->orientation == SliceOrientation::VerticalXZ   ? "y"
+                            : slice->orientation == SliceOrientation::VerticalYZ ? "x"
+                                                                                 : "z";
+        std::snprintf(text, sizeof(text), "%s  ·  %u × %u cells of %.2f m  ·  %s %.2f m", label,
+                      slice->width, slice->height, slice->cellM, plane, slice->heightM);
         box(draw, ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)), text, c::t1);
 
         // Probe: the value under the cursor (design: crosshair with a tooltip).
@@ -405,7 +458,13 @@ public:
                 draw->AddLine(ImVec2(mouse.x, mouse.y - px(8.0F)),
                               ImVec2(mouse.x, mouse.y + px(8.0F)), u32(c::t1));
                 ImGui::BeginTooltip();
-                widgets::Mono(c::t3, "probe · x %.2f  y %.2f  z %.2f m", x, y, slice->heightM);
+                if (slice->orientation == SliceOrientation::VerticalXZ) {
+                    widgets::Mono(c::t3, "probe · x %.2f  y %.2f  z %.2f m", x, slice->heightM, y);
+                } else if (slice->orientation == SliceOrientation::VerticalYZ) {
+                    widgets::Mono(c::t3, "probe · x %.2f  y %.2f  z %.2f m", slice->heightM, x, y);
+                } else {
+                    widgets::Mono(c::t3, "probe · x %.2f  y %.2f  z %.2f m", x, y, slice->heightM);
+                }
                 widgets::Dot(field != nullptr ? widgets::domainColor(field->domain) : c::t2);
                 ImGui::SameLine(0.0F, px(6.0F));
                 widgets::Mono(c::t1, "%s  %.3g %s", label, static_cast<double>(value), unit);
@@ -497,6 +556,36 @@ public:
             // On the right: the unit, or why the field cannot be shown.
             const char* note =
                 field.available ? field.unit.c_str() : field.unavailableReason.c_str();
+            ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
+            const float width = ImGui::CalcTextSize(note).x;
+            ImGui::PopFont();
+            ImGui::SameLine();
+            widgets::AlignRight(width);
+            ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
+            ImGui::TextColored(c::t3, "%s", note);
+            ImGui::PopFont();
+            ImGui::PopID();
+        }
+        // Vectors combine with the slice (design 07): the air's motion as moving particles.
+        const auto air = std::ranges::find_if(
+            info.fields, [](const EnvironmentInfo::Field& f) { return f.name == kAirField; });
+        if (air != info.fields.end()) {
+            ImGui::PushID("airflow");
+            bool& on = context.renderOptions->airflow;
+            ImGui::BeginDisabled(!air->available);
+            if (!air->available) {
+                on = false;
+            }
+            widgets::Checkbox("##show", &on);
+            ImGui::EndDisabled();
+            ImGui::SameLine(0.0F, px(8.0F));
+            ImGui::AlignTextToFramePadding();
+            widgets::Swatch(widgets::domainColor(air->domain));
+            ImGui::SameLine(0.0F, px(8.0F));
+            ImGui::PushStyleColor(ImGuiCol_Text, air->available ? c::t1 : c::t3);
+            ImGui::TextUnformatted("airflow · particles");
+            ImGui::PopStyleColor();
+            const char* note = air->available ? "m/s" : air->unavailableReason.c_str();
             ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
             const float width = ImGui::CalcTextSize(note).x;
             ImGui::PopFont();

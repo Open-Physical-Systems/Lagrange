@@ -61,3 +61,10 @@ message Blob {
   bytes data = 3; // <= 4 MiB per chunk
   bool last = 4;
 }
+
+// Which plane a FieldSlice lies in (added after 1.0).
+enum SliceOrientation {
+  SLICE_ORIENTATION_HORIZONTAL = 0; // z = height_m; rows along +Y
+  SLICE_ORIENTATION_VERTICAL_XZ = 1; // through the robot, y = its y; rows along +Z
+  SLICE_ORIENTATION_VERTICAL_YZ = 2; // through the robot, x = its x; columns along +Y, rows +Z
+}

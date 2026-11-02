@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lagrange/aerodynamics/Downwash.hpp"
 #include "lagrange/fields/Field.hpp"
 #include "lagrange/module/Expected.hpp"
 #include "lagrange/module/IModule.hpp"
@@ -47,6 +48,30 @@ private:
     std::array<double, 5> state_{};  // u: 1, v: 2, w: 2
 };
 
+/// A rotor of the stage, for the downwash (rotor_aero.md §2): its RotorAPI_1 joint and link (as
+/// in signal names), radius, and group, its robot (the root body above it), numbered in the
+/// order robots' first rotors come.
+struct RotorSource {
+    std::string joint, link;
+    double radius{0.0};  // m
+    std::size_t group{0};
+};
+[[nodiscard]] std::vector<RotorSource> rotorSources(const WorldView& world);
+/// Every body's rotor group (Downwash::kNoGroup when its robot has no rotors), as rotorSources.
+[[nodiscard]] std::vector<std::size_t> rotorGroupOfBodies(const WorldView& world);
+
+/// Dust lifted by the outwash, kg/m³: `most`·(1 − (u*_t/u*)²) above the threshold, 0 below
+/// (behavioural, a range check). u* = kWallJetFriction·u_peak, u*_t = A·√((ρ_p − ρ)/ρ·g·d) with
+/// A = kBagnoldA (Bagnold, The Physics of Blown Sand and Desert Dunes, 1941).
+inline constexpr double kBagnoldA = 0.1;
+inline constexpr double kGrainDensity = 2650.0;  // kg/m³, quartz
+/// u*/u_m of a wall jet: √(c_f/2) with c_f ≈ 0.005 (TODO(verify): the radial wall jet's skin
+/// friction, e.g. Poreh et al. 1967).
+inline constexpr double kWallJetFriction = 0.05;
+[[nodiscard]] double dustThreshold(double diameter, double rho, double gravity);
+[[nodiscard]] double liftedDust(double peakOutwash, double diameter, double most, double rho,
+                                double gravity);
+
 /// The aerodynamics domain at the `drag` fidelity (docs/design/domains/aerodynamics.md): for
 /// every link with AeroAPI_1, the drag F = −½·ρ·|v_rel|·(Cd ∘ A ∘ v_rel) in the body frame at the
 /// centre of pressure and angular damping, against the air: the mean wind (Wind, logarithmic
@@ -54,7 +79,16 @@ private:
 /// body/<b>/airspeed, env/wind/gust (the turbulence at the first link) and env/wind/velocity
 /// (the air's velocity there, mean wind and gust, world frame: what the rotors fly in, at the
 /// first link's height). The air density is
-/// the config's "air_density", as rotor_aero. Not yet: lift tables, wind fields from VDB.
+/// the config's "air_density", as rotor_aero. Not yet: lift tables.
+///
+/// Downwash (config "downwash", default true; rotor_aero.md §2): for every RotorAPI_1 joint it
+/// reads rotor/<j>/thrust, rotor/<j>/induced_velocity, rotor/<j>/thrust_axis and its link's pose
+/// and twist, builds the rotors' wakes (Downwash, one group per robot) and adds them to the air
+/// at every link of another robot, and writes rotor/<j>/air_velocity (m/s, world: the wind and
+/// gust plus other robots' wakes at the hub) for the rotors. With the site's loose ground dust
+/// (config "ground_dust_diameter", m, and "ground_dust_concentration", kg/m³: the most the
+/// outwash keeps in the air there; site parameters, no defaults) it writes env/dust/downwash
+/// (kg/m³) once the outwash's friction velocity passes Bagnold's threshold for those grains.
 class AeroDrag final : public IModule {
 public:
     [[nodiscard]] ModuleInfo info() const override;
@@ -76,6 +110,12 @@ private:
         std::array<double, 3> area{}, cd{}, centre{}, damping{};
         SignalId pose, twist, wrench, airspeed;
         Dryden turbulence;
+        std::size_t group{Downwash::kNoGroup};  // its robot, when that robot has rotors
+    };
+    struct RotorLink {
+        double radius{0.0};
+        std::size_t group{0};
+        SignalId thrust, induced, axis, pose, twist, air;
     };
 
     double rho_{0.0};
@@ -86,6 +126,15 @@ private:
     SignalId windField_;  // the weather's wind grid, when it runs
     fields::FieldSignal windFieldSignal_;
     SignalId windVelocity_;
+    bool downwashOn_{true};
+    std::vector<RotorLink> rotors_;
+    std::size_t groupCount_{0};
+    Downwash downwash_;
+    std::array<double, 3> groundNormal_{0.0, 0.0, 1.0};
+    bool hasGround_{false};
+    double gravity_{9.80665};
+    double dustDiameter_{0.0}, dustMost_{0.0};
+    SignalId dustOut_;
 };
 
 }  // namespace lagrange::aerodynamics

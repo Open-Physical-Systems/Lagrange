@@ -30,6 +30,8 @@ Conventions used in the signal listings:
 | Electrical | `electrical.md` | v0.3 (thin slice in v0.2 proposed, Q3) | yes |
 | Thermal | `thermal.md` | v0.3 | yes (with electrical) |
 | Aerodynamics and rotor aero | `aerodynamics.md` | v0.4 | partly |
+| Rotor downwash and outwash | `rotor_aero.md` | after v1.0 | partly |
+| CFD (wind tunnel, OpenFOAM) | `cfd.md` | after v1.0 | partly |
 | Weather | `weather.md` | v0.5 | yes (sensor effects) |
 | EMI | `emi.md` | v0.5 | yes |
 | Radiation | `radiation.md` | after v0.7 (see roadmap) | yes |

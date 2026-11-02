@@ -95,7 +95,8 @@ inline constexpr double kLidar1550 = 1550e-9;         // m
 /// and the wind grid, m/s, from config "fog_field" and "wind_field" or the prim's
 /// weather:fogField and weather:windField, NanoVDB files; empty buffers without),
 /// env/rain_rate, env/friction_scale and sensor/<s>/contamination for every sensor. Default
-/// step 50 ms.
+/// step 50 ms. With config "downwash_dust" it reads env/dust/downwash (kg/m³, the dust rotor
+/// outwash lifts, of grains "ground_dust_diameter") and adds it to the air's dust.
 ///
 /// Wet friction and lens contamination are behavioural models (domains/weather.md §7: range
 /// checks, not point validations): surfaces wet with time constant kWettingTimeS once it rains
@@ -145,6 +146,9 @@ private:
     SignalId fogFieldOut_, windFieldOut_;
     std::shared_ptr<const fields::Field> fogField_, windField_;
     std::vector<SignalId> contaminationOut_;
+    SignalId downwashDustIn_;          // env/dust/downwash, with config "downwash_dust"
+    double liftedDust_{0.0};           // kg/m³, this step's
+    double groundDustDiameter_{1e-4};  // m, the lifted grains'
 };
 
 // Behavioural constants (see the class comment). Modelling choices, not measured values.

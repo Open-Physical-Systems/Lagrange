@@ -69,6 +69,8 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
     speedOfSound_ = std::max(0.0, config.get<double>("speed_of_sound").value_or(0.0));
     gravity_ = world.gravityLocal();
     wind_ = bem_ && config.get<bool>("wind").value_or(false);
+    // Each rotor's own air (the aerodynamics domain's wind plus other robots' downwash).
+    rotorAir_ = bem_ && config.get<bool>("rotor_air").value_or(false);
     if (wind_) {
         SignalSpec wind = scalar("env/wind/velocity", units::m_per_s);
         wind.type = SignalType::Vec3;
@@ -190,6 +192,17 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
         r.thrustOut = d.output(scalar(rotor + "thrust", units::N));
         r.torqueOut = d.output(scalar(rotor + "aero_torque", units::N_m));
         r.inducedOut = d.output(scalar(rotor + "induced_velocity", units::m_per_s));
+        SignalSpec thrustAxis = scalar(rotor + "thrust_axis", units::one);
+        thrustAxis.type = SignalType::Vec3;
+        thrustAxis.frame = "world_local";
+        r.axisOut = d.output(thrustAxis);
+        if (rotorAir_) {
+            SignalSpec air = scalar(rotor + "air_velocity", units::m_per_s);
+            air.type = SignalType::Vec3;
+            air.frame = "world_local";
+            air.feedback = true;
+            r.airIn = d.input(air);
+        }
         SignalSpec wrench = scalar("body/" + link + "/wrench/rotor", units::N);
         wrench.type = SignalType::Wrench;
         wrench.frame = "world_local";
@@ -217,6 +230,7 @@ Status RotorAero::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
             bus.write(id, 0.0);
         }
         bus.writeN(r.wrenchOut, std::array<double, 6>{});
+        bus.writeN(r.axisOut, std::array<double, 3>{});
         if (r.folding) {
             // Stopped: as its weight hangs it, with the link as it rests (axis in the world's
             // frame, as robots are built).
@@ -253,8 +267,8 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
             // The hub's velocity through the air: axial along the thrust, the rest across the disc.
             const std::span<const double> hubTwist = bus.readN(r.twist);
             std::array<double, 3> through{hubTwist[0], hubTwist[1], hubTwist[2]};
-            if (wind_) {
-                const std::span<const double> w = bus.readN(windIn_);
+            if (rotorAir_ || wind_) {
+                const std::span<const double> w = bus.readN(rotorAir_ ? r.airIn : windIn_);
                 for (std::size_t k = 0; k < 3; ++k) {
                     through[k] -= w[k];
                 }
@@ -328,6 +342,7 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
                                          moment[1] + hubMoment[1], moment[2] + hubMoment[2]});
         const double area = std::numbers::pi * r.params.radius * r.params.radius;
         bus.write(r.thrustOut, r.thrust);
+        bus.writeN(r.axisOut, axis);
         bus.write(r.torqueOut, load.torque);
         bus.write(r.loadOut, load.torque);
         bus.write(r.inducedOut,

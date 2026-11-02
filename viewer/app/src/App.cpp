@@ -23,6 +23,7 @@
 #include <memory>
 #include <mutex>
 #include <numbers>
+#include <random>
 #include <signal.h>
 #include <spawn.h>
 #include <sys/wait.h>
@@ -445,6 +446,7 @@ public:
         context.initialScopeSignals = &scopeSignals_;
         context.workspace = &workspace_;
         context.focusPanel = &focusPanel_;
+        context.fieldSlice = &slice_;
         if (configDirectory_.empty()) {
             configDirectory_ = configDirectory();
         }
@@ -516,10 +518,108 @@ public:
     void renderScene(VkCommandBuffer commands) {
         textures_.record(commands);
         buildSensorOverlays();
+        buildAirflow();
         if (const auto environment = client_.environment()) {
             renderOptions_.windSpeed = static_cast<float>(environment->windSpeed);
         }
-        renderer_.render(commands, scene_.get(), camera_, renderOptions_, sensorOverlays_);
+        overlays_.clear();
+        overlays_.insert(overlays_.end(), sensorOverlays_.begin(), sensorOverlays_.end());
+        overlays_.insert(overlays_.end(), airflowOverlays_.begin(), airflowOverlays_.end());
+        renderer_.render(commands, scene_.get(), camera_, renderOptions_, overlays_);
+    }
+
+    /// Airflow particles (rotor_aero.md §5): kAirParticles points moved through the server's
+    /// box of the air's velocity around the robot (FieldVolume of aero/wind_speed) and drawn as
+    /// streaks, one batch per colour of the design's field map (viridis) by speed. New ones are
+    /// placed where the air moves, so they gather in the downwash and outwash.
+    void buildAirflow() {
+        constexpr std::size_t kAirParticles = 1500;
+        constexpr float kLifeS = 2.5F;      // s before a particle starts again
+        constexpr float kTrailS = 0.06F;    // s of motion a streak shows
+        constexpr float kStillMps = 0.05F;  // slower than this: placed again
+        constexpr int kColours = 6;
+        static const std::array<ImVec4, 5> kStops{theme::hex(0x440154), theme::hex(0x3B528B),
+                                                  theme::hex(0x21918C), theme::hex(0x5EC962),
+                                                  theme::hex(0xFDE725)};
+        if (!renderOptions_.airflow) {
+            if (airStream_) {
+                (void)client_.watchField(kAirField, 0.0, SliceOrientation::VerticalXZ, false);
+                airStream_.reset();
+            }
+            airflowOverlays_.clear();
+            particles_.clear();
+            renderOptions_.airflowMax = 0.0F;
+            return;
+        }
+        if (!airStream_) {
+            airStream_ = client_.watchField(kAirField, 0.0, SliceOrientation::VerticalXZ, true);
+        }
+        const std::shared_ptr<const FieldVolumeData> volume = airStream_->latestVolume();
+        if (!volume) {
+            airflowOverlays_.clear();
+            return;
+        }
+        const float top = std::max(volume->valueMax, 0.5F);
+        renderOptions_.airflowMax = top;
+        std::uniform_real_distribution<double> unit(0.0, 1.0);
+        const std::array<double, 3> span{volume->cellM * (volume->nx - 1),
+                                         volume->cellM * (volume->ny - 1),
+                                         volume->cellM * (volume->nz - 1)};
+        const auto place = [&](Particle& p) {
+            std::array<float, 3> v{};
+            for (int attempt = 0; attempt < 12; ++attempt) {
+                for (std::size_t k = 0; k < 3; ++k) {
+                    p.at[k] = volume->origin[k] + unit(airRandom_) * span[k];
+                }
+                if (volume->sample(p.at, v) && std::hypot(v[0], v[1], v[2]) > 0.25F * top) {
+                    break;
+                }
+            }
+            p.age = static_cast<float>(unit(airRandom_)) * kLifeS;
+        };
+        if (particles_.size() != kAirParticles) {
+            particles_.resize(kAirParticles);
+            for (Particle& p : particles_) {
+                place(p);
+            }
+        }
+        const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.0F, 0.1F);
+        airflowOverlays_.resize(kColours);
+        for (int c = 0; c < kColours; ++c) {
+            const float t = (static_cast<float>(c) + 0.5F) / kColours * 4.0F;
+            const auto index = std::min(static_cast<std::size_t>(t), std::size_t{3});
+            const float blend = t - static_cast<float>(index);
+            const ImVec4& a = kStops.at(index);
+            const ImVec4& b = kStops.at(index + 1);
+            OverlayLines& lines = airflowOverlays_[static_cast<std::size_t>(c)];
+            lines.origin = volume->origin;
+            lines.color = {a.x + (b.x - a.x) * blend, a.y + (b.y - a.y) * blend,
+                           a.z + (b.z - a.z) * blend, 1.0F};
+            lines.vertices.clear();
+        }
+        for (Particle& p : particles_) {
+            std::array<float, 3> v{};
+            p.age += dt;
+            if (!volume->sample(p.at, v) || p.age > kLifeS) {
+                place(p);
+                continue;
+            }
+            const float speed = std::hypot(v[0], v[1], v[2]);
+            if (speed < kStillMps) {
+                place(p);
+                continue;
+            }
+            for (std::size_t k = 0; k < 3; ++k) {
+                p.at[k] += v[k] * dt;
+            }
+            const int c = std::clamp(static_cast<int>(speed / top * kColours), 0, kColours - 1);
+            std::vector<float>& out = airflowOverlays_[static_cast<std::size_t>(c)].vertices;
+            const std::array<float, 3> head{static_cast<float>(p.at[0] - volume->origin[0]),
+                                            static_cast<float>(p.at[1] - volume->origin[1]),
+                                            static_cast<float>(p.at[2] - volume->origin[2])};
+            out.insert(out.end(), {head[0] - v[0] * kTrailS, head[1] - v[1] * kTrailS,
+                                   head[2] - v[2] * kTrailS, head[0], head[1], head[2]});
+        }
     }
 
     /// Sensor frustums overlay: for each lidar of the scene, its coverage fan (spanning the
@@ -669,7 +769,11 @@ public:
         renderOptions_.axes = renderOptions_.axes || names.find("axes") != std::string::npos;
         renderOptions_.sensors =
             renderOptions_.sensors || names.find("sensors") != std::string::npos;
+        renderOptions_.airflow =
+            renderOptions_.airflow || names.find("airflow") != std::string::npos;
     }
+    /// The field and plane the Slice 2D panel starts on ("aero/wind_speed:xz").
+    void setSlice(std::string slice) { slice_ = std::move(slice); }
     void setSeason(const std::string& name) {
         if (name == "fall") {
             renderOptions_.season = Season::Fall;
@@ -797,6 +901,16 @@ private:
     std::uint64_t lidarGeneration_{0};  // statics generation lidars_ was built from
     std::vector<std::pair<std::uint32_t, std::shared_ptr<SensorStream>>> lidars_;  // prim, frames
     std::vector<OverlayLines> sensorOverlays_;
+    std::vector<OverlayLines> airflowOverlays_;
+    std::vector<OverlayLines> overlays_;  // both, as drawn
+    static constexpr const char* kAirField = "aero/wind_speed";
+    struct Particle {
+        std::array<double, 3> at{};  // region frame, m
+        float age{0.0F};             // s
+    };
+    std::shared_ptr<FieldStream> airStream_;
+    std::vector<Particle> particles_;
+    std::mt19937 airRandom_{20261102U};
     std::vector<std::int64_t> bookmarks_;
     LauncherState launcher_;
     LocalServer localServer_;
@@ -807,6 +921,7 @@ private:
     bool applyProfile_{false};
     std::string selectPath_;
     std::string focusPanel_;
+    std::string slice_;
     std::string configDirectory_;
     std::string exportNetlist_;
     bool cursorsWanted_{false};
@@ -976,6 +1091,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         }
         ui.setInitialSelection(options.selectPath);
         ui.setFocusPanel(options.focusPanel);
+        ui.setSlice(options.slice);
         ui.setExportNetlist(options.exportNetlist);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);
@@ -1337,6 +1453,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setWorkspace(workspace);
         ui.setInitialSelection(options.selectPath);
         ui.setFocusPanel(options.focusPanel);
+        ui.setSlice(options.slice);
         ui.setExportNetlist(options.exportNetlist);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);

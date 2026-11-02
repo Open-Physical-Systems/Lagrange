@@ -179,6 +179,7 @@ public:
                       tier);
         thermal(context, draw, origin, available);
         flowLegend(context, draw, origin, available);
+        airflowLegend(context, draw, origin, available);
         overlayBox(draw, ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)), text, nullptr);
 
         // Bottom left: the frame's axes as the camera sees them, its convention, and how far
@@ -391,6 +392,55 @@ private:
                           u32(c::t3), text);
             top -= px(56.0F);
         }
+    }
+
+    /// The airflow particles' colour scale (design 07-environment's field legend): air speed in
+    /// m/s on the field map (viridis), from still air to the fastest in the box.
+    void airflowLegend(const PanelContext& context, ImDrawList* draw, const ImVec2& origin,
+                       const ImVec2& size) {
+        const RenderOptions& options = *context.renderOptions;
+        if (!options.airflow || options.airflowMax <= 0.0F) {
+            return;
+        }
+        static const std::array<ImVec4, 5> kStops{theme::hex(0x440154), theme::hex(0x3B528B),
+                                                  theme::hex(0x21918C), theme::hex(0x5EC962),
+                                                  theme::hex(0xFDE725)};
+        const theme::Fonts& fonts = theme::fonts();
+        const float small = px(theme::kCaptionSize);
+        const float width = px(200.0F);
+        const float barHeight = px(8.0F);
+        // Above the wind tunnel's scales, when a tunnel world is shown too.
+        const float top =
+            origin.y + size.y - px(58.0F) - px(56.0F) * static_cast<float>(legends_.size());
+        const ImVec2 min(origin.x + size.x - width - px(10.0F), top);
+        const ImVec2 max(min.x + width, min.y + px(48.0F));
+        draw->AddRectFilled(min, max, u32(c::bg1), px(4.0F));
+        draw->AddRect(min, max, u32(c::line), px(4.0F));
+        draw->AddText(fonts.sans, small, ImVec2(min.x + px(8.0F), min.y + px(5.0F)), u32(c::t2),
+                      "air speed · m/s");
+        const ImVec2 bar(min.x + px(8.0F), min.y + px(22.0F));
+        const float barWidth = width - px(16.0F);
+        constexpr int kSteps = 32;
+        for (int k = 0; k < kSteps; ++k) {
+            const float t = (static_cast<float>(k) + 0.5F) / kSteps * 4.0F;
+            const auto index = std::min(static_cast<std::size_t>(t), std::size_t{3});
+            const float blend = t - static_cast<float>(index);
+            const ImVec4& a = kStops.at(index);
+            const ImVec4& b = kStops.at(index + 1);
+            const ImVec4 colour(a.x + (b.x - a.x) * blend, a.y + (b.y - a.y) * blend,
+                                a.z + (b.z - a.z) * blend, 1.0F);
+            const float x0 = bar.x + barWidth * static_cast<float>(k) / kSteps;
+            const float x1 = bar.x + barWidth * static_cast<float>(k + 1) / kSteps;
+            draw->AddRectFilled(ImVec2(x0, bar.y), ImVec2(x1, bar.y + barHeight), u32(colour));
+        }
+        draw->AddText(fonts.mono, small, ImVec2(bar.x, bar.y + barHeight + px(3.0F)), u32(c::t3),
+                      "0");
+        char text[32];
+        std::snprintf(text, sizeof(text), "%.1f", static_cast<double>(options.airflowMax));
+        const float right = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, text).x;
+        draw->AddText(fonts.mono, small,
+                      ImVec2(bar.x + barWidth - right, bar.y + barHeight + px(3.0F)), u32(c::t3),
+                      text);
     }
 
     std::vector<FlowLegend> legends_;

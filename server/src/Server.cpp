@@ -95,6 +95,16 @@ constexpr std::int64_t kFieldPeriodNs = 500'000'000;  // field slices: twice a s
 constexpr const char* kFogField = "weather/fog_density";
 constexpr const char* kWindField = "weather/wind";
 constexpr const char* kFluxField = "emi/flux_density";
+// The air's speed: wind, gusts and the rotors' downwash and outwash (rotor_aero.md §5).
+constexpr const char* kAirField = "aero/wind_speed";
+constexpr double kAirSliceCell = 0.1;  // m: a drone is about half a metre across
+// The air around the robot for the viewer's particles: 28 × 28 × 20 cells of 0.2 m, from 3.4 m
+// below the robot to 0.6 m above it, five times a second.
+constexpr std::uint32_t kVolumeNx = 28;
+constexpr std::uint32_t kVolumeNz = 20;
+constexpr double kVolumeCell = 0.2;   // m
+constexpr double kVolumeAbove = 0.6;  // m above the robot's origin
+constexpr std::int64_t kVolumePeriodNs = 200'000'000;
 constexpr std::uint32_t kSliceWidth = 64;   // cells along +X
 constexpr std::uint32_t kSliceHeight = 48;  // cells along +Y
 constexpr double kSliceCell = 0.5;          // m
@@ -421,7 +431,13 @@ struct Session {
     bool wantsRosGraph{false};
     bool wantsWorld{false};
     std::set<std::string> sensors;  // prim paths of the sensors whose frames this viewer wants
-    std::map<std::string, double> fields;  // fields whose slices this viewer wants: their height
+    struct FieldWant {
+        double height{0.0};  // m: z of a horizontal slice
+        bool volume{false};  // also FieldVolumes (aero/wind_speed)
+    };
+    // The slices this viewer wants: per field and orientation (a viewer may watch the air both
+    // from above and from the side).
+    std::map<std::pair<std::string, int>, FieldWant> fields;
 
     bool congested() const { return connection.pendingOutputBytes() > kMaxQueuedBytes; }
     void send(const v1::Envelope& envelope) {
@@ -496,6 +512,7 @@ struct Server::Impl {
     Clock::time_point lastStatus{Clock::now()};
     Clock::time_point lastStats{Clock::now()};
     Clock::time_point lastFields{Clock::now()};
+    Clock::time_point lastVolumes{Clock::now()};
     mutable fields::FieldSignal fogFieldSignal, windFieldSignal;
     mutable std::vector<emi::Source> cachedEmiSources;  // emiSources()
     mutable bool emiSourcesRead{false};
@@ -799,6 +816,7 @@ struct Server::Impl {
             }
         }
         bool weatherInRun = false;  // the sensors see the weather when it runs
+        std::map<std::string, ConfigValue, std::less<>> groundDust;  // --weather's ground dust
         // The weather (domains/weather.md): the site's atmosphere from --weather, a WeatherAPI_1
         // prim and the profile (the profile wins), the temperature falling back to the ambient
         // one. Without the site it does not run (nothing needs it yet); off, its clear substitute.
@@ -816,6 +834,23 @@ struct Server::Impl {
             if (!weather.values.contains("temperature") && settings.ambientTemperatureK) {
                 weather.values["temperature"] = *settings.ambientTemperatureK;
             }
+            // Dust the rotors' outwash lifts: the aerodynamics domain computes it when it runs
+            // with rotors (below), and the weather adds it to the air's.
+            for (const char* key : {"ground_dust_diameter", "ground_dust_concentration"}) {
+                if (const auto it = weather.values.find(key); it != weather.values.end()) {
+                    groundDust[key] = it->second;
+                }
+            }
+            const bool aeroDensity = settings.aerodynamics.contains("air_density") ||
+                                     settings.airDensityKgM3.has_value();
+            const auto dw = settings.aerodynamics.find("downwash");
+            const bool downwashWanted = dw == settings.aerodynamics.end() ||
+                                        !std::holds_alternative<bool>(dw->second) ||
+                                        std::get<bool>(dw->second);
+            if (groundDust.size() == 2 && hasRotors() && !off("aerodynamics") && aeroDensity &&
+                downwashWanted) {
+                weather.values["downwash_dust"] = true;
+            }
             const ModuleConfig config(weather);
             if (weather::Weather::hasSite(WorldView(robot.world), config)) {
                 if (!(off("weather") && addPluginSubstitute("weather", weather))) {
@@ -827,14 +862,22 @@ struct Server::Impl {
         bool windInRun = false;
         // Link drag against the wind (an AeroAPI_1 robot, with the site's air density): the
         // aerodynamics config's own density, else rotor_aero's.
-        if (!WorldView(robot.world).instancesOf("AeroAPI_1").empty() && !off("aerodynamics")) {
+        // Rotors too: the domain carries their downwash (rotor_aero.md §2).
+        bool downwashInRun = false;
+        if ((!WorldView(robot.world).instancesOf("AeroAPI_1").empty() || hasRotors()) &&
+            !off("aerodynamics")) {
             ModuleConfigData aero;
             aero.values.insert(settings.aerodynamics.begin(), settings.aerodynamics.end());
             aero.values["weather"] = weatherInRun;  // its wind grid, if any
+            for (const auto& [key, value] : groundDust) {
+                aero.values[key] = value;
+            }
             if (!aero.values.contains("air_density") && settings.airDensityKgM3) {
                 aero.values.emplace("air_density", *settings.airDensityKgM3);
             }
             if (aero.values.contains("air_density")) {
+                downwashInRun =
+                    hasRotors() && ModuleConfig(aero).get<bool>("downwash").value_or(true);
                 next->add(std::make_unique<aerodynamics::AeroDrag>(), ModuleConfig(aero));
                 windInRun = true;
             }
@@ -852,6 +895,7 @@ struct Server::Impl {
             air.values.insert(settings.rotorAero.begin(), settings.rotorAero.end());
             // The rotors fly in the aerodynamics domain's wind when it is in the run.
             air.values.emplace("wind", windInRun);
+            air.values.emplace("rotor_air", downwashInRun);
             air.values.emplace(rotor_aero::kAirDensityKey, *settings.airDensityKgM3);
             next->add(std::make_unique<rotor_aero::RotorAero>(off("rotor_aero")),
                       ModuleConfig(air));
@@ -2517,6 +2561,8 @@ struct Server::Impl {
             } else if (std::string_view(row.domain) == "sensors" && hasSensors() &&
                        !substituted("sensors")) {
                 yaml += "  sensors: {enabled: true}\n";
+            } else if (std::string_view(row.domain) == "aerodynamics" && aeroRuns()) {
+                yaml += "  aerodynamics: {enabled: true, fidelity: drag}\n";
             } else if (std::string_view(row.domain) == "rotor_aero" && hasRotors()) {
                 const std::optional<double> rho =
                     appliedAirDensity ? appliedAirDensity : options.airDensityKgM3;
@@ -2949,13 +2995,14 @@ struct Server::Impl {
                 break;
             case v1::Command::kSubscribeField: {
                 const v1::SubscribeField& f = command.subscribe_field();
+                const std::pair<std::string, int> key{f.field(), f.orientation()};
                 if (f.enabled()) {
-                    session.fields[f.field()] = f.height_m();
-                    if (auto slice = fieldSlice(f.field(), f.height_m())) {
+                    session.fields[key] = Session::FieldWant{f.height_m(), f.volume()};
+                    if (auto slice = fieldSlice(f.field(), f.height_m(), f.orientation())) {
                         session.send(*slice);
                     }
                 } else {
-                    session.fields.erase(f.field());
+                    session.fields.erase(key);
                 }
                 break;
             }
@@ -4227,8 +4274,8 @@ struct Server::Impl {
         if (hasRotors()) {
             context.modules.insert("rotor_aero");
         }
-        if (!WorldView(robot.world).instancesOf("AeroAPI_1").empty()) {
-            context.modules.insert("aerodynamics");
+        if (!WorldView(robot.world).instancesOf("AeroAPI_1").empty() || hasRotors()) {
+            context.modules.insert("aerodynamics");  // drag, and the rotors' downwash
         }
         context.modules.insert("weather");
         if (hasEmi()) {
@@ -4650,6 +4697,8 @@ struct Server::Impl {
         field(kWindField, "wind", "weather", units::m_per_s, 2,
               runWind().has_value() || (weather && !text("wind_field").empty()),
               "no wind: the aerodynamics domain's wind or a wind field");
+        field(kAirField, "air speed", "aerodynamics", units::m_per_s, 1, aeroRuns(),
+              "the aerodynamics domain does not run: it needs the site's air density");
         field(kFluxField, "|B|", "emi", units::T, 1, emiRuns(),
               hasEmi() ? "the EMI domain is off (zero substitute)"
                        : "the stage has no EMI sources (EmiSourceAPI_1)");
@@ -4710,9 +4759,220 @@ struct Server::Impl {
         return now;
     }
 
+    /// Whether the aerodynamics domain runs (its gust signal is on the bus).
+    bool aeroRuns() const {
+        return scheduler != nullptr && scheduler->bus().find("env/wind/gust").valid();
+    }
+
+    /// The rotors' wakes now, from the rotor signals on the bus (Downwash, rotor_aero.md §2).
+    aerodynamics::Downwash runDownwash() const {
+        aerodynamics::Downwash downwash;
+        const World::Colliders& colliders = robot.world.colliders;
+        for (std::size_t c = 0; c < colliders.body.size(); ++c) {
+            if (colliders.body[c] == kWorldBody && colliders.shape[c] == ShapeType::Plane) {
+                downwash.setGround(colliders.poseInBody[c].position,
+                                   rotate(colliders.poseInBody[c].orientation, {0.0, 0.0, 1.0}));
+                break;
+            }
+        }
+        if (scheduler == nullptr) {
+            return downwash;
+        }
+        const SignalBus& bus = scheduler->bus();
+        const auto vec = [&](const std::string& name, std::size_t n) {
+            const SignalId id = bus.find(name);
+            std::array<double, 7> out{};
+            if (id.valid()) {
+                const std::span<const double> v = bus.readN(id);
+                std::copy_n(v.begin(), std::min(n, v.size()), out.begin());
+            }
+            return out;
+        };
+        const std::optional<aerodynamics::Wind> wind = runWind();
+        std::vector<aerodynamics::Downwash::Rotor> rotors;
+        std::vector<std::array<double, 3>> relative;
+        std::vector<int> counted;
+        for (const aerodynamics::RotorSource& s :
+             aerodynamics::rotorSources(WorldView(robot.world))) {
+            const std::string base = "rotor/" + s.joint + "/";
+            aerodynamics::Downwash::Rotor r;
+            const auto pose = vec("body/" + s.link + "/pose", 3);
+            const auto twist = vec("body/" + s.link + "/twist", 3);
+            const auto axis = vec(base + "thrust_axis", 3);
+            r.hub = {pose[0], pose[1], pose[2]};
+            r.thrustAxis = {axis[0], axis[1], axis[2]};
+            r.radius = s.radius;
+            r.thrust = vec(base + "thrust", 1)[0];
+            r.induced = vec(base + "induced_velocity", 1)[0];
+            r.group = s.group;
+            rotors.push_back(r);
+            relative.resize(std::max(relative.size(), s.group + 1));
+            counted.resize(relative.size());
+            const double from = wind ? wind->fromDegrees * std::numbers::pi / 180.0 : 0.0;
+            const double mean = wind ? aerodynamics::meanWindAt(*wind, pose[2]) : 0.0;
+            relative[s.group][0] += -std::sin(from) * mean - twist[0];
+            relative[s.group][1] += -std::cos(from) * mean - twist[1];
+            relative[s.group][2] += -twist[2];
+            ++counted[s.group];
+        }
+        for (std::size_t g = 0; g < relative.size(); ++g) {
+            for (double& c : relative[g]) {
+                c /= std::max(counted[g], 1);
+            }
+        }
+        downwash.update(rotors, relative);
+        return downwash;
+    }
+
+    /// What the air does now: the wind, this step's gust and the rotors' wakes.
+    struct AirNow {
+        aerodynamics::Downwash downwash;
+        aerodynamics::Wind wind;
+        std::array<double, 3> gust{};
+        double groundZ{0.0};
+        std::array<double, 3> centre{};  // the robot's origin
+        [[nodiscard]] std::array<double, 3> at(const std::array<double, 3>& x) const {
+            return aerodynamics::windAt(wind, groundZ, gust, downwash, x);
+        }
+    };
+    AirNow airNow() const {
+        AirNow air;
+        air.downwash = runDownwash();
+        air.wind = runWind().value_or(aerodynamics::Wind{});
+        const SignalBus& bus = scheduler->bus();
+        if (const SignalId id = bus.find("env/wind/gust"); id.valid()) {
+            const std::span<const double> v = bus.readN(id);
+            air.gust = {v[0], v[1], v[2]};
+        }
+        for (std::size_t c = 0; c < robot.world.colliders.body.size(); ++c) {
+            if (robot.world.colliders.body[c] == kWorldBody &&
+                robot.world.colliders.shape[c] == ShapeType::Plane) {
+                air.groundZ = robot.world.colliders.poseInBody[c].position[2];
+                break;
+            }
+        }
+        Pose centre = robot.bodyRestPose.empty() ? Pose{} : robot.bodyRestPose[0];
+        if (!bodyPose.empty() && bodyPose[0].valid()) {
+            const std::span<const double> v = bus.readN(bodyPose[0]);
+            centre.position = {v[0], v[1], v[2]};
+        }
+        air.centre = centre.position;
+        return air;
+    }
+
+    /// A slice of the air's speed (kAirField): windAt at every cell, 3D magnitude. Horizontal
+    /// at `height`, or vertical through the robot, from the ground up.
+    std::optional<v1::Envelope> airSlice(double height, v1::SliceOrientation orientation) const {
+        if (!aeroRuns()) {
+            return std::nullopt;
+        }
+        const AirNow air = airNow();
+        const bool vertical = orientation != v1::SLICE_ORIENTATION_HORIZONTAL;
+        const bool alongY = orientation == v1::SLICE_ORIENTATION_VERTICAL_YZ;
+        v1::Envelope envelope;
+        v1::FieldSlice& slice = *envelope.mutable_field_slice();
+        slice.set_field(kAirField);
+        slice.mutable_sim_time()->set_ns(scheduler->now().ns);
+        slice.set_width(kSliceWidth);
+        slice.set_height(kSliceHeight);
+        slice.set_components(1);
+        slice.set_orientation(orientation);
+        slice.set_cell_m(kAirSliceCell);
+        const double first = alongY ? air.centre[1] : air.centre[0];
+        slice.set_origin_x(first - (kSliceWidth - 1) * kAirSliceCell / 2.0);
+        if (vertical) {
+            // From the ground (half a cell up) to 4.75 m above it.
+            slice.set_origin_y(air.groundZ + kAirSliceCell / 2.0);
+            slice.set_height_m(alongY ? air.centre[0] : air.centre[1]);
+        } else {
+            slice.set_origin_y(air.centre[1] - (kSliceHeight - 1) * kAirSliceCell / 2.0);
+            slice.set_height_m(height);
+        }
+        std::vector<float> values;
+        values.reserve(static_cast<std::size_t>(kSliceWidth) * kSliceHeight);
+        double lo = std::numeric_limits<double>::infinity();
+        double hi = 0.0;
+        for (std::uint32_t j = 0; j < kSliceHeight; ++j) {
+            for (std::uint32_t i = 0; i < kSliceWidth; ++i) {
+                const double u = slice.origin_x() + i * kAirSliceCell;
+                const double v = slice.origin_y() + j * kAirSliceCell;
+                std::array<double, 3> at{u, v, height};
+                if (vertical) {
+                    at = alongY ? std::array<double, 3>{slice.height_m(), u, v}
+                                : std::array<double, 3>{u, slice.height_m(), v};
+                }
+                const auto w = air.at(at);
+                const double m = std::hypot(w[0], w[1], w[2]);
+                values.push_back(static_cast<float>(m));
+                lo = std::min(lo, m);
+                hi = std::max(hi, m);
+            }
+        }
+        slice.set_value_min(static_cast<float>(lo));
+        slice.set_value_max(static_cast<float>(hi));
+        std::string bytes(reinterpret_cast<const char*>(values.data()),
+                          values.size() * sizeof(float));
+        slice.mutable_values()->set_size(bytes.size());
+        slice.mutable_values()->set_inline_(std::move(bytes));
+        return envelope;
+    }
+
+    /// The air's velocity in a box around the robot (kAirField only), for the viewer's
+    /// particles: kVolumeNx² × kVolumeNz cells, down to the ground.
+    std::optional<v1::Envelope> fieldVolume(const std::string& name) const {
+        if (name != kAirField || !aeroRuns()) {
+            return std::nullopt;
+        }
+        const AirNow air = airNow();
+        v1::Envelope envelope;
+        v1::FieldVolume& volume = *envelope.mutable_field_volume();
+        volume.set_field(name);
+        volume.mutable_sim_time()->set_ns(scheduler->now().ns);
+        volume.set_nx(kVolumeNx);
+        volume.set_ny(kVolumeNx);
+        volume.set_nz(kVolumeNz);
+        volume.set_cell_m(kVolumeCell);
+        volume.set_components(3);
+        volume.set_origin_x(air.centre[0] - (kVolumeNx - 1) * kVolumeCell / 2.0);
+        volume.set_origin_y(air.centre[1] - (kVolumeNx - 1) * kVolumeCell / 2.0);
+        const double top = air.centre[2] + kVolumeAbove;
+        volume.set_origin_z(
+            std::max(air.groundZ + kVolumeCell / 2.0, top - (kVolumeNz - 1) * kVolumeCell));
+        std::vector<float> values;
+        values.reserve(static_cast<std::size_t>(kVolumeNx) * kVolumeNx * kVolumeNz * 3);
+        double hi = 0.0;
+        for (std::uint32_t k = 0; k < kVolumeNz; ++k) {
+            for (std::uint32_t j = 0; j < kVolumeNx; ++j) {
+                for (std::uint32_t i = 0; i < kVolumeNx; ++i) {
+                    const auto w = air.at({volume.origin_x() + i * kVolumeCell,
+                                           volume.origin_y() + j * kVolumeCell,
+                                           volume.origin_z() + k * kVolumeCell});
+                    for (const double c : w) {
+                        values.push_back(static_cast<float>(c));
+                    }
+                    hi = std::max(hi, std::hypot(w[0], w[1], w[2]));
+                }
+            }
+        }
+        volume.set_value_max(static_cast<float>(hi));
+        std::string bytes(reinterpret_cast<const char*>(values.data()),
+                          values.size() * sizeof(float));
+        volume.mutable_values()->set_size(bytes.size());
+        volume.mutable_values()->set_inline_(std::move(bytes));
+        return envelope;
+    }
+
     /// A horizontal slice of `name` at height `height` around the robot, or nothing for a field
     /// the run does not have.
-    std::optional<v1::Envelope> fieldSlice(const std::string& name, double height) const {
+    std::optional<v1::Envelope> fieldSlice(
+        const std::string& name, double height,
+        v1::SliceOrientation orientation = v1::SLICE_ORIENTATION_HORIZONTAL) const {
+        if (name == kAirField) {
+            return airSlice(height, orientation);
+        }
+        if (orientation != v1::SLICE_ORIENTATION_HORIZONTAL) {
+            return std::nullopt;  // only the air has vertical slices
+        }
         if (scheduler == nullptr ||
             (name != kFogField && name != kWindField && name != kFluxField)) {
             return std::nullopt;
@@ -5984,9 +6244,25 @@ void Server::runOnce(int timeoutMs) {
             if (!session->greeted || session->congested()) {
                 continue;
             }
-            for (const auto& [name, height] : session->fields) {
-                if (auto slice = s.fieldSlice(name, height)) {
+            for (const auto& [key, want] : session->fields) {
+                if (auto slice = s.fieldSlice(key.first, want.height,
+                                              static_cast<v1::SliceOrientation>(key.second))) {
                     session->send(*slice);
+                }
+            }
+        }
+    }
+    if (nanosSince(s.lastVolumes, now) >= kVolumePeriodNs) {
+        s.lastVolumes = now;
+        for (auto& session : s.sessions) {
+            if (!session->greeted || session->congested()) {
+                continue;
+            }
+            for (const auto& [key, want] : session->fields) {
+                if (want.volume) {
+                    if (auto volume = s.fieldVolume(key.first)) {
+                        session->send(*volume);
+                    }
                 }
             }
         }

@@ -34,6 +34,8 @@ MAX_BYTES = 1_000_000
 VIEWPORT = (1920, 1080, (550, 127, 1310, 847))  # viewer size, crop: the middle of the 3D view
 SCOPE = (1151, 916, (316, 160, 836, 880))  # the scope, at one to one
 BIRD = (1920, 1080, (268, 126, 928, 618))  # the lidar's bird's-eye view
+ENVIRONMENT_SLICE = (1920, 1080, (655, 200, 1295, 920))  # Environment: middle of Slice 2D
+VIEWPORT_HALF = (1920, 1080, (610, 127, 1250, 847))  # the middle of the 3D view, 640 wide
 LEFT = (0, 0, 760, 720)
 RIGHT = (760, 0, 520, 720)
 HALF_L = (0, 0, 640, 720)
@@ -369,6 +371,34 @@ CLIPS: list[Clip] = [
             ),
             Step(14, "lagrange set wind_speed=14", lagrange_set("wind_speed=14")),
             Step(21, "lagrange set wind_speed=0", lagrange_set("wind_speed=0")),
+        ],
+    ),
+    Clip(
+        "drone_downwash",
+        "Rotor downwash: the air under a hovering quadcopter, live",
+        24,
+        [["--robot", QUAD, "--world", "none", *GEO, "--site", "wind_speed=0"]],
+        [
+            Pane(
+                "3D view: airflow particles",
+                HALF_L,
+                VIEWPORT_HALF,
+                ["--overlays", "airflow", *view(0, 0, 1.0, 6.0, -60, 12)],
+            ),
+            Pane(
+                "air speed through the drone (XZ)",
+                HALF_R,
+                ENVIRONMENT_SLICE,
+                ["--workspace", "Environment", "--slice", "aero/wind_speed:xz"],
+            ),
+        ],
+        [
+            Step(0, "Taking off: the rotors' jet reaches the ground and spreads as outwash"),
+            Step(
+                12,
+                "lagrange set wind_speed=4 wind_from=270    (the wake leans downwind)",
+                lagrange_set("wind_speed=4", "wind_from=270"),
+            ),
         ],
     ),
     Clip(

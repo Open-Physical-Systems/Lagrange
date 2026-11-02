@@ -155,6 +155,9 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 if (domain.contains("turbulence") && domain["turbulence"].is_string()) {
                     settings.aerodynamics["turbulence"] = domain["turbulence"].as<std::string>();
                 }
+                if (domain.contains("downwash") && domain["downwash"].is_bool()) {
+                    settings.aerodynamics["downwash"] = domain["downwash"].as<bool>();
+                }
             }
             if (name == "rotor_aero" && domain.contains("air_density") &&
                 domain["air_density"].is_number()) {
@@ -164,7 +167,8 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 for (const char* key :
                      {"temperature", "pressure", "relative_humidity", "visibility", "rain_rate",
                       "snow_rate", "snow_cover", "dust_concentration", "dust_median_diameter",
-                      "solar_irradiance", "sky_temperature"}) {
+                      "solar_irradiance", "sky_temperature", "ground_dust_diameter",
+                      "ground_dust_concentration"}) {
                     if (domain.contains(key) && domain[key].is_number()) {
                         settings.weather[key] = domain[key].as<double>();
                     }

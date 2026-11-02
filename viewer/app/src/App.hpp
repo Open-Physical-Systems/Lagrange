@@ -35,7 +35,8 @@ struct Options {
     bool cursors{false};       ///< Show the scope's A and B cursors from the start.
     std::string season;        ///< Start-up season: summer, fall, winter or rainy.
     std::string shading;       ///< Viewport shading at start-up: lit, unlit or thermal.
-    std::string overlays;      ///< --overlays: grid,axes,sensors shown from the start.
+    std::string overlays;      ///< --overlays: grid,axes,sensors,airflow shown from the start.
+    std::string slice;         ///< --slice: the Slice 2D panel's field and plane.
     std::optional<std::array<double, 6>> camera;  ///< --camera: target, distance, yaw, pitch.
     double followDistance{0.0};  ///< > 0: start with the follow camera this far (m) away.
     double followPitchDeg{0.0};  ///< With followDistance: the camera's elevation; 0: default.

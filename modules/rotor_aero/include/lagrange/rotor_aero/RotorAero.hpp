@@ -48,7 +48,8 @@ inline constexpr double kGroundEffectMinHeight = 0.5;  // ×R; the validated ran
 ///
 /// Per rotor joint j with child link c it reads joint/<j>/velocity and body/<c>/pose, and writes
 /// rotor/<j>/thrust (N), rotor/<j>/aero_torque (N·m, on the rotor about its axis),
-/// rotor/<j>/induced_velocity (m/s, momentum theory at the current thrust), the thrust as
+/// rotor/<j>/induced_velocity (m/s, momentum theory at the current thrust), rotor/<j>/thrust_axis
+/// (unit, world: where the thrust points, for the aerodynamics domain's downwash), the thrust as
 /// body/<c>/wrench/rotor (summed by WrenchSum into body/<c>/external_wrench; force applied at
 /// the link's origin, torque about its centre of mass) and the shaft torque as
 /// joint/<j>/load_torque. Default step 1 ms.
@@ -67,7 +68,9 @@ inline constexpr double kGroundEffectMinHeight = 0.5;  // ×R; the validated ran
 /// At `bem` the hub's velocity through the air (its own, less the wind env/wind/velocity when
 /// config "wind" is true: the aerodynamics domain is in the run) splits into the axial speed and
 /// the edgewise speed across the disc, whose in-plane H-force and hub moment go into the link's
-/// wrench with the thrust.
+/// wrench with the thrust. With config "rotor_air" (the aerodynamics domain computes it) each
+/// rotor reads its own air, rotor/<j>/air_velocity (the wind plus other robots' downwash at its
+/// hub), instead: a drone under another loses thrust in its wake.
 ///
 /// Not yet: blade flapping of rigid propellers beyond the hub moment, the wake's skew (inflow
 /// uniform per annulus), ground effect over scenery other than the ground plane.
@@ -102,12 +105,13 @@ private:
         std::optional<FoldingBlade> folding;              // folding blades
         double bladeAngle{0.0};                           // rad, last step's (folding)
         SignalId velocity, pose, twist, bladeAngleOut;
-        SignalId thrustOut, torqueOut, inducedOut, wrenchOut, loadOut;
+        SignalId thrustOut, torqueOut, inducedOut, wrenchOut, loadOut, axisOut, airIn;
     };
 
     bool ideal_;
     bool bem_{false};
     bool wind_{false};
+    bool rotorAir_{false};
     SignalId windIn_;
     double rho_{0.0};
     double speedOfSound_{0.0};         // m/s; 0: incompressible

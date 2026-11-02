@@ -94,6 +94,18 @@ separate GPL-3 program that it runs from an install or a container, and reads 0.
 slant, though not yet the measured change of drag with slant
 ([equations and what was measured](docs/design/domains/cfd.md)). The sample cars collide as one box each.
 
+### Rotor downwash
+
+![Airflow particles under a hovering quadcopter, and the air's speed through it](docs/imgs/drone-downwash.png)
+
+A drone's rotors push air down; Lagrange computes that air live and lets other robots feel it.
+The jet under each multirotor follows measurements under six drones (Bauersfeld et al. 2024),
+the outwash along the ground a NASA model rotor (Tanner et al. 2015). A quadcopter flown under
+another loses thrust, close to what Kiran et al. (2025) measured, and the outwash lifts dust
+that the cameras see. `lagrange quad -- --overlays airflow` shows it as moving particles
+([equations and validation](docs/design/domains/rotor_aero.md),
+[video](docs/videos/drone_downwash.mp4)).
+
 <p align="center">
   <img src="docs/imgs/lexus-speed-pressure.png" alt="Speed along the Lexus RX 450h and pressure seen from above, from the tunnel" width="640">
   <br><sub>The Lexus RX 450h's body mesh in the tunnel, 30 m/s
@@ -162,7 +174,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Domains and physics (14)</summary>
+<details><summary>Domains and physics (15)</summary>
 
 - [Domain design documents](docs/design/domains/README.md)
 - [Domain: aerodynamics, wind and rotor aero](docs/design/domains/aerodynamics.md)
@@ -173,6 +185,7 @@ recorded to MCAP and replayed.
 - [Domain: hydrodynamics (marine)](docs/design/domains/hydrodynamics.md)
 - [Domain: radiation](docs/design/domains/radiation.md)
 - [Domain: rigid body and articulations](docs/design/domains/rigid_body.md)
+- [Domain: rotor downwash and outwash](docs/design/domains/rotor_aero.md)
 - [Domain: sensors](docs/design/domains/sensors.md)
 - [Domain: thermal](docs/design/domains/thermal.md)
 - [Domain: traffic](docs/design/domains/traffic.md)
@@ -226,9 +239,10 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Plan and evaluation (14)</summary>
+<details><summary>Plan and evaluation (15)</summary>
 
 - [Project overview](docs/plan/00-overview.md)
+- [Rotor downwash and live airflow: progress](docs/plan/downwash-progress.md)
 - [What to develop next: an evaluation, 2026-11-01](docs/plan/evaluation-2026-11.md)
 - [Open questions and challenges to the plan](docs/plan/open-questions.md)
 - [Progress](docs/plan/progress.md)
