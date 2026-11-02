@@ -168,5 +168,74 @@ TEST(DownwashPair, TheLowerQuadcopterLosesThrustAsMeasured) {
     EXPECT_NEAR(lowerThrust(4.0 * kArm, false) / alone, 1.0, 1e-9);
 }
 
+/// One quadcopter beside a wall (a 3 m thick box, its face at x = face), its rotors' thrust
+/// (N) and the air going down through them (m/s), in addQuad's order.
+struct Beside {
+    std::vector<double> thrust, down, induced;
+};
+/// `onABody`: the wall on a fixed body of its own, as a URDF world's links load.
+Beside besideAWall(double face, bool onABody = false) {
+    World w;
+    auto plant = std::make_unique<Plant>();
+    addQuad(w, *plant, "quad", {0.0, 0.0, 100.0});
+    if (onABody) {
+        const BodyId tower = w.addBody("tower", kWorldBody, {{face + 1.5, 0.0, 50.0}}, 1000.0, {},
+                                       {1.0, 1.0, 1.0, 0, 0, 0});
+        w.addCollider(tower, ShapeType::Box, {1.5, 10.0, 110.0},
+                      Pose{{0.0, 0.0, -50.0}, {1.0, 0.0, 0.0, 0.0}}, 1.0);
+    } else {
+        w.addCollider(kWorldBody, ShapeType::Box, {1.5, 10.0, 110.0},
+                      Pose{{face + 1.5, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0}}, 1.0);
+    }
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::move(plant));
+    ModuleConfigData rotors;
+    rotors.values[rotor_aero::kAirDensityKey] = kRho;
+    rotors.values["fidelity"] = std::string("bem");
+    rotors.values["ground_effect"] = false;
+    rotors.values["rotor_air"] = true;
+    scheduler.add(std::make_unique<rotor_aero::RotorAero>(), ModuleConfig(rotors));
+    ModuleConfigData aero;
+    aero.values["air_density"] = kRho;
+    scheduler.add(std::make_unique<aerodynamics::AeroDrag>(), ModuleConfig(aero));
+    auto wired = scheduler.wire(WorldView(w));
+    EXPECT_TRUE(wired);
+    EXPECT_TRUE(scheduler.stepUntil(SimTime{20'000'000}).ok());
+    Beside out;
+    for (int i = 0; i < 4; ++i) {
+        const std::string j = "rotor/quad_prop" + std::to_string(i) + "_joint/";
+        out.thrust.push_back(scheduler.bus().read(scheduler.bus().find(j + "thrust")));
+        out.down.push_back(-scheduler.bus().readN(scheduler.bus().find(j + "air_velocity"))[2]);
+        out.induced.push_back(scheduler.bus().read(scheduler.bus().find(j + "induced_velocity")));
+    }
+    return out;
+}
+
+TEST(DownwashPair, AWallStarvesTheNearRotorsAndTheDroneRollsTowardsIt) {
+    // The sample's rotor tips reach 0.177 + 0.127 = 0.304 m along x; the wall 0.25 D from them.
+    constexpr double kDiameter = 2.0 * kRadius;
+    constexpr double kTips = kArm * 0.70710678 + kRadius;
+    const Beside near = besideAWall(kTips + 0.25 * kDiameter);
+    // Props 0 and 3 are at +x, by the wall; 1 and 2 away from it.
+    const double nearDown = (near.down[0] + near.down[3]) / 2.0;
+    const double farDown = (near.down[1] + near.down[2]) / 2.0;
+    // The CFD fit (rotor_aero.md §7): near less far, 3.4% of v_i at the wall, fading over 3.5 D.
+    const double induced = (near.induced[0] + near.induced[1]) / 2.0;
+    EXPECT_NEAR(nearDown - farDown, 0.0346 * std::exp(-0.25 / 3.5) * induced, 0.05);
+    EXPECT_GT(nearDown, 0.0);
+    EXPECT_LT(farDown, 0.0);
+    // Fixed-speed rotors: less thrust by the wall, so it rolls towards it.
+    EXPECT_LT(near.thrust[0], near.thrust[1]);
+    EXPECT_LT(near.thrust[3], near.thrust[2]);
+    // The same wall on a fixed body of its own (a URDF world's link) does the same.
+    const Beside body = besideAWall(kTips + 0.25 * kDiameter, true);
+    EXPECT_NEAR(body.down[0], near.down[0], 1e-9);
+    EXPECT_NEAR(body.thrust[3], near.thrust[3], 1e-9);
+    // Far from the wall nothing is left.
+    const Beside far = besideAWall(kTips + 12.0 * kDiameter);
+    EXPECT_NEAR(far.down[0], far.down[1], 1e-9);
+    EXPECT_NEAR(far.thrust[0], far.thrust[1], 1e-9);
+}
+
 }  // namespace
 }  // namespace lagrange

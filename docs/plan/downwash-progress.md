@@ -12,7 +12,8 @@ Work branch: `feat/rotor-downwash` (from `dev` after #259). Design: `docs/design
 | 5 | Live slice `aero/wind_speed` | done |
 | 6 | Protocol: slice orientation, FieldVolume | done (additions; golden frames regenerated) |
 | 7 | Viewer particles, "airflow · particles", legend, plane and height slider | done; particles move on the CPU, drawn by the GPU as overlay lines |
-| 8 | Actuator discs in tunnel/foam (optional) | todo |
+| 8 | Actuator discs in OpenFOAM (`lagrange foam-hover`) | done: open, 0.5 m, four wall gaps (rotor_aero.md §7); the LBM tunnel not done |
+| 10 | Buildings live (user, 2026-11-02) | done: roofs, walls, near-wall rotors fitted to the CFD; videos drone_building, drone_low_altitude |
 | 9 | Docs, tutorial step, video, README, CLAUDE.md | done: video `drone_downwash.mp4`, picture `drone-downwash.png` |
 
 ## Notes

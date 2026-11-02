@@ -104,7 +104,16 @@ the outwash along the ground a NASA model rotor (Tanner et al. 2015). A quadcopt
 another loses thrust, close to what Kiran et al. (2025) measured, and the outwash lifts dust
 that the cameras see. `lagrange quad -- --overlays airflow` shows it as moving particles
 ([equations and validation](docs/design/domains/rotor_aero.md),
-[video](docs/videos/drone_downwash.mp4)).
+[video](docs/videos/drone_downwash.mp4)). Buildings take part: a wake spreads over a roof and
+hugs a wall, and a wall beside a drone sends more air down through its near rotors, so it would
+roll towards the wall unless its controller spins them faster (calibrated on OpenFOAM runs that
+`lagrange foam-hover` makes)
+([beside a building](docs/videos/drone_building.mp4), [low](docs/videos/drone_low_altitude.mp4)).
+
+<p align="center">
+  <img src="docs/imgs/cfd-hover-wall-0.25.png" alt="OpenFOAM: a quadcopter 2 m up beside a 12 m building, the air through it, along the ground, and under it" width="760">
+  <br><sub><code>lagrange foam-hover</code>: the sample quadcopter beside a building in OpenFOAM. The wake hugs the wall.</sub>
+</p>
 
 <p align="center">
   <img src="docs/imgs/lexus-speed-pressure.png" alt="Speed along the Lexus RX 450h and pressure seen from above, from the tunnel" width="640">

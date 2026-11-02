@@ -1,0 +1,645 @@
+#!/usr/bin/env python3
+"""lagrange foam-hover ROBOT.urdf: a hovering multirotor's downwash through OpenFOAM.
+
+The offline check of the live downwash model (docs/design/domains/rotor_aero.md §7): the robot's
+collision boxes hover at a height over a ground wall, optionally beside a building, and each
+rotor is an actuator disc, a momentum source carrying its share of the weight
+(vectorSemiImplicitSource over a cylinder of cells). snappyHexMesh, simpleFoam, k-omega SST. It
+writes pictures of the air through the drone and along the ground, the speed under it against
+the jet Bauersfeld et al. (2024) measured, the air through each disc and the force on the frame.
+OpenFOAM is GPL-3 and stays a separate program: Lagrange exchanges only files with it.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import re
+import shutil
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+IMAGE = "docker.io/opencfd/openfoam-default:2512"
+NU = 1.5e-5  # m²/s, air at 20 °C
+RHO = 1.2  # kg/m³
+GRAVITY = 9.81  # m/s²
+BASE_CELL = 0.16  # m, the background mesh
+LEVELS = 3  # refinement round the drone: BASE_CELL / 2**LEVELS = 2 cm
+HALF_WIDTH = 4.0  # m, the domain each side of the drone
+ABOVE = 2.5  # m, open air over the drone
+# Bauersfeld, Muller, Ziegler, Coletti and Scaramuzza (2024), arXiv:2403.13321, eqs. 5, 6, 9.
+JET_DECAY, JET_ORIGIN, JET_SPREAD = 10.11, -5.817, 0.07668
+
+HEADER = """FoamFile
+{{
+    version 2.0;
+    format ascii;
+    class {cls};
+    object {name};
+}}
+"""
+
+
+def foam_file(path: Path, name: str, body: str, cls: str = "dictionary") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(HEADER.format(cls=cls, name=name) + body)
+
+
+def vector(v: list[float] | tuple[float, ...]) -> str:
+    return "(" + " ".join(f"{x + 0.0:.9g}" for x in v) + ")"  # + 0.0: no "-0"
+
+
+# --- the robot -----------------------------------------------------------------------------
+
+
+def rpy_matrix(r: float, p: float, y: float) -> list[list[float]]:
+    cr, sr, cp, sp, cy, sy = (math.cos(r), math.sin(r), math.cos(p), math.sin(p),
+                              math.cos(y), math.sin(y))  # fmt: skip
+    return [
+        [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+        [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+        [-sp, cp * sr, cp * cr],
+    ]
+
+
+def origin_of(element: ET.Element | None) -> tuple[list[float], list[list[float]]]:
+    if element is None:
+        return [0.0, 0.0, 0.0], rpy_matrix(0, 0, 0)
+    xyz = [float(v) for v in element.get("xyz", "0 0 0").split()]
+    rpy = [float(v) for v in element.get("rpy", "0 0 0").split()]
+    return xyz, rpy_matrix(*rpy)
+
+
+def read_multirotor(path: Path) -> dict:
+    """The root link's collision boxes (cylinders as their boxes), every rotor (a continuous
+    joint whose child is a thin cylinder: hub, radius) and the total mass, in the root frame."""
+    root = ET.parse(path).getroot()
+    links = {link.get("name"): link for link in root.findall("link")}
+    children = {j.find("child").get("link") for j in root.findall("joint")}
+    base = next(name for name in links if name not in children)
+    mass = sum(float(m.get("value")) for m in root.iter("mass"))
+    boxes = []
+    for collision in links[base].findall("collision"):
+        xyz, rot = origin_of(collision.find("origin"))
+        geometry = collision.find("geometry")
+        if (box := geometry.find("box")) is not None:
+            size = [float(v) for v in box.get("size").split()]
+        elif (cylinder := geometry.find("cylinder")) is not None:
+            r, h = float(cylinder.get("radius")), float(cylinder.get("length"))
+            size = [2 * r, 2 * r, h]
+        else:
+            continue
+        boxes.append({"centre": xyz, "rotation": rot, "size": size})
+    rotors = []
+    for joint in root.findall("joint"):
+        if joint.get("type") not in ("continuous", "revolute"):
+            continue
+        child = links[joint.find("child").get("link")]
+        cylinder = child.find(".//cylinder")
+        if cylinder is None or float(cylinder.get("length")) > 0.05:
+            continue
+        xyz, _ = origin_of(joint.find("origin"))
+        axis = [float(v) for v in (joint.find("axis").get("xyz") if joint.find("axis") is not None
+                                   else "0 0 1").split()]  # fmt: skip
+        rotors.append({"name": joint.get("name"), "hub": xyz, "axis": axis,
+                       "radius": float(cylinder.get("radius"))})  # fmt: skip
+    if not rotors:
+        raise SystemExit(f"{path}: no rotors (continuous joints with a thin cylinder child)")
+    return {"base": base, "mass": mass, "boxes": boxes, "rotors": rotors}
+
+
+def box_triangles(centre, rotation, size) -> list[tuple]:
+    half = [s / 2 for s in size]
+    corners = []
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            for sz in (-1, 1):
+                local = [sx * half[0], sy * half[1], sz * half[2]]
+                corners.append([centre[i] + sum(rotation[i][k] * local[k] for k in range(3))
+                                for i in range(3)])  # fmt: skip
+    # Corner index = 4·(x>0) + 2·(y>0) + (z>0); faces outward.
+    quads = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+    out = []
+    for a, b, c, d in quads:
+        out += [(corners[a], corners[b], corners[c]), (corners[a], corners[c], corners[d])]
+    return out
+
+
+def write_stl(path: Path, name: str, triangles: list[tuple]) -> None:
+    lines = [f"solid {name}"]
+    for a, b, c in triangles:
+        u = [b[i] - a[i] for i in range(3)]
+        v = [c[i] - a[i] for i in range(3)]
+        n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
+        length = math.sqrt(sum(x * x for x in n)) or 1.0
+        lines.append(f"  facet normal {' '.join(f'{x / length:.6g}' for x in n)}")
+        lines.append("    outer loop")
+        lines += [f"      vertex {p[0]:.9g} {p[1]:.9g} {p[2]:.9g}" for p in (a, b, c)]
+        lines.append("    endloop")
+        lines.append("  endfacet")
+    lines.append(f"endsolid {name}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n")
+
+
+# --- the case ------------------------------------------------------------------------------
+
+
+def write_case(case: Path, robot: dict, args: argparse.Namespace) -> dict:
+    """The drone with its rotor plane at args.height, discs, building; returns the plan."""
+    rotor_z = sum(r["hub"][2] for r in robot["rotors"]) / len(robot["rotors"])
+    lift = args.height - rotor_z  # where the root frame goes
+    drone = []
+    for b in robot["boxes"]:
+        centre = [b["centre"][0], b["centre"][1], b["centre"][2] + lift]
+        drone += box_triangles(centre, b["rotation"], b["size"])
+    write_stl(case / "constant/triSurface/drone.stl", "drone", drone)
+    thrust = robot["mass"] * GRAVITY / len(robot["rotors"])
+    discs = []
+    for r in robot["rotors"]:
+        hub = [r["hub"][0], r["hub"][1], r["hub"][2] + lift]
+        discs.append({"name": r["name"], "hub": hub, "axis": r["axis"], "radius": r["radius"],
+                      "thrust": thrust})  # fmt: skip
+    fine = BASE_CELL / 2**LEVELS
+    building = None
+    if args.building:
+        x0, y0, x1, y1, height = args.building
+        building = [x0, y0, 0.0, x1, y1, height]
+        write_stl(case / "constant/triSurface/building.stl", "building",
+                  box_triangles([(x0 + x1) / 2, (y0 + y1) / 2, height / 2], rpy_matrix(0, 0, 0),
+                                [x1 - x0, y1 - y0, height]))  # fmt: skip
+    top = max(args.height + ABOVE, (building[5] + 1.0) if building else 0.0)
+    low = [-HALF_WIDTH, -HALF_WIDTH, 0.0]
+    high = [HALF_WIDTH, HALF_WIDTH, top]
+    cells = [round((h - b) / BASE_CELL) for h, b in zip(high, low, strict=True)]
+    reach = max(math.hypot(d["hub"][0], d["hub"][1]) + d["radius"] for d in discs)
+    vertices = "\n".join(
+        vector([x, y, z]) for z in (low[2], high[2]) for y, x in
+        ((low[1], low[0]), (low[1], high[0]), (high[1], high[0]), (high[1], low[0]))
+    )  # fmt: skip
+    foam_file(case / "system/blockMeshDict", "blockMeshDict", f"""scale 1;
+vertices
+(
+{vertices}
+);
+blocks (hex (0 1 2 3 4 5 6 7) ({cells[0]} {cells[1]} {cells[2]}) simpleGrading (1 1 1));
+boundary
+(
+    open {{ type patch; faces ((0 4 7 3) (1 2 6 5) (0 1 5 4) (3 7 6 2) (4 5 6 7)); }}
+    ground {{ type wall; faces ((0 3 2 1)); }}
+);
+""")  # fmt: skip
+    near = reach + 0.25
+    column = reach + 0.8
+    geometry = ['    "drone.stl" { type triSurfaceMesh; name drone; }']
+    surfaces = [f"        drone {{ level ({LEVELS} {LEVELS}); "
+                "patchInfo { type wall; } }"]  # fmt: skip
+    if building:
+        geometry.append('    "building.stl" { type triSurfaceMesh; name building; }')
+        surfaces.append("        building { level (1 2); patchInfo { type wall; } }")
+    inside = [low[0] + 0.123 * BASE_CELL + BASE_CELL, low[1] + 0.137 * BASE_CELL + BASE_CELL,
+              top - 0.151 * BASE_CELL - BASE_CELL]  # fmt: skip
+    foam_file(case / "system/snappyHexMeshDict", "snappyHexMeshDict", f"""castellatedMesh true;
+snap true;
+addLayers false;
+geometry
+{{
+{chr(10).join(geometry)}
+    nearDrone {{ type box; min {vector([-near, -near, args.height - 0.35])};
+                 max {vector([near, near, args.height + 0.15])}; }}
+    wake {{ type box; min {vector([-column, -column, 0.0])};
+            max {vector([column, column, args.height + 0.3])}; }}
+    groundLayer {{ type box; min {vector([-2.5, -2.5, 0.0])}; max {vector([2.5, 2.5, 0.12])}; }}
+}}
+castellatedMeshControls
+{{
+    maxLocalCells 4000000;
+    maxGlobalCells {args.max_cells};
+    minRefinementCells 10;
+    maxLoadUnbalance 0.10;
+    nCellsBetweenLevels 3;
+    features ();
+    refinementSurfaces
+    {{
+{chr(10).join(surfaces)}
+    }}
+    resolveFeatureAngle 30;
+    refinementRegions
+    {{
+        nearDrone {{ mode inside; levels ((1e15 {LEVELS})); }}
+        wake {{ mode inside; levels ((1e15 {LEVELS - 1})); }}
+        groundLayer {{ mode inside; levels ((1e15 {LEVELS - 1})); }}
+    }}
+    locationInMesh {vector(inside)};
+    allowFreeStandingZoneFaces true;
+}}
+snapControls
+{{
+    nSmoothPatch 3;
+    tolerance 2.0;
+    nSolveIter 30;
+    nRelaxIter 5;
+    nFeatureSnapIter 10;
+    implicitFeatureSnap true;
+    explicitFeatureSnap false;
+    multiRegionFeatureSnap false;
+}}
+addLayersControls {{ layers {{}}; relativeSizes true; expansionRatio 1.2; finalLayerThickness 0.5;
+    minThickness 0.1; nGrow 0; featureAngle 60; nRelaxIter 3; nSmoothSurfaceNormals 1;
+    nSmoothNormals 3; nSmoothThickness 10; maxFaceThicknessRatio 0.5;
+    maxThicknessToMedialRatio 0.3; minMedialAxisAngle 90; nBufferCellsNoExtrude 0;
+    nLayerIter 30; }}
+meshQualityControls
+{{
+    #includeEtc "caseDicts/meshQualityDict"
+    minFaceWeight 0.02;
+    nSmoothScale 4;
+    errorReduction 0.75;
+}}
+mergeTolerance 1e-6;
+""")  # fmt: skip
+    # Each disc: a cylinder of cells two fine cells thick, made a zone, pushed by its thrust.
+    actions = []
+    sources = []
+    for i, d in enumerate(discs):
+        n = d["axis"]
+        half = fine
+        p1 = [d["hub"][k] - half * n[k] for k in range(3)]
+        p2 = [d["hub"][k] + half * n[k] for k in range(3)]
+        name = f"disc{i}"
+        actions.append(
+            f"    {{ name {name}; type cellSet; action new; source cylinderToCell; "
+            f"p1 {vector(p1)}; p2 {vector(p2)}; radius {d['radius']:.9g}; }}"
+        )
+        actions.append(
+            f"    {{ name {name}; type cellZoneSet; action new; source setToCellZone; "
+            f"set {name}; }}"
+        )
+        # Kinematic (incompressible): the force on the air over the density, total over the zone.
+        push = [-d["thrust"] / RHO * n[k] for k in range(3)]
+        sources.append(f"""{name}
+{{
+    type vectorSemiImplicitSource;
+    volumeMode absolute;
+    selectionMode cellZone;
+    cellZone {name};
+    sources {{ U ({vector(push)} 0); }}
+}}""")
+        d["zone"] = name
+    foam_file(case / "system/topoSetDict", "topoSetDict",
+              "actions\n(\n" + "\n".join(actions) + "\n);\n")  # fmt: skip
+    foam_file(case / "system/fvOptions", "fvOptions", "\n".join(sources) + "\n")
+    foam_file(case / "system/decomposeParDict", "decomposeParDict",
+              f"numberOfSubdomains {args.procs};\nmethod scotch;\n")  # fmt: skip
+    foam_file(case / "system/controlDict", "controlDict", f"""application simpleFoam;
+startFrom startTime;
+startTime 0;
+stopAt endTime;
+endTime {args.iterations};
+deltaT 1;
+writeControl timeStep;
+writeInterval {args.iterations};
+purgeWrite 1;
+writeFormat ascii;
+writePrecision 8;
+writeCompression off;
+timeFormat general;
+timePrecision 8;
+runTimeModifiable false;
+functions
+{{
+    forces_drone {{ type forces; libs (forces); writeControl timeStep; writeInterval 1;
+        patches (drone); rho rhoInf; rhoInf {RHO}; CofR {vector([0, 0, args.height])}; }}
+}}
+""")  # fmt: skip
+    foam_file(
+        case / "system/fvSchemes",
+        "fvSchemes",
+        """ddtSchemes { default steadyState; }
+gradSchemes { default Gauss linear; grad(U) cellLimited Gauss linear 1; }
+divSchemes
+{
+    default none;
+    div(phi,U) bounded Gauss linearUpwindV grad(U);
+    div(phi,k) bounded Gauss upwind;
+    div(phi,omega) bounded Gauss upwind;
+    div((nuEff*dev2(T(grad(U))))) Gauss linear;
+}
+laplacianSchemes { default Gauss linear limited 0.5; }
+interpolationSchemes { default linear; }
+snGradSchemes { default limited 0.5; }
+wallDist { method meshWave; }
+""",
+    )
+    smooth = "{ solver smoothSolver; smoother GaussSeidel; tolerance 1e-8; relTol 0.1; nSweeps 1; }"
+    foam_file(case / "system/fvSolution", "fvSolution", f"""solvers
+{{
+    p {{ solver GAMG; smoother GaussSeidel; tolerance 1e-7; relTol 0.01; }}
+    U {smooth}
+    k {smooth}
+    omega {smooth}
+}}
+SIMPLE {{ nNonOrthogonalCorrectors 1; consistent yes; }}
+relaxationFactors {{ fields {{ p 0.3; }} equations {{ U 0.7; k 0.5; omega 0.5; }} }}
+""")  # fmt: skip
+    k0, omega0 = 1e-4, 1.0
+
+    def field(name: str, cls: str, dims: str, value: str, open_bc: str, wall_bc: str) -> None:
+        foam_file(case / "0" / name, name, f"""dimensions {dims};
+internalField uniform {value};
+boundaryField
+{{
+    open {open_bc}
+    ground {wall_bc}
+    "(drone|building)" {wall_bc}
+}}
+""", cls)  # fmt: skip
+
+    field(
+        "U",
+        "volVectorField",
+        "[0 1 -1 0 0 0 0]",
+        "(0 0 0)",
+        "{ type pressureInletOutletVelocity; value uniform (0 0 0); }",
+        "{ type noSlip; }",
+    )
+    field(
+        "p",
+        "volScalarField",
+        "[0 2 -2 0 0 0 0]",
+        "0",
+        "{ type totalPressure; p0 uniform 0; value uniform 0; }",
+        "{ type zeroGradient; }",
+    )
+    field(
+        "k",
+        "volScalarField",
+        "[0 2 -2 0 0 0 0]",
+        f"{k0}",
+        "{ type inletOutlet; inletValue $internalField; value $internalField; }",
+        "{ type kqRWallFunction; value $internalField; }",
+    )
+    field(
+        "omega",
+        "volScalarField",
+        "[0 0 -1 0 0 0 0]",
+        f"{omega0}",
+        "{ type inletOutlet; inletValue $internalField; value $internalField; }",
+        "{ type omegaWallFunction; value $internalField; }",
+    )
+    field(
+        "nut",
+        "volScalarField",
+        "[0 2 -1 0 0 0 0]",
+        "0",
+        "{ type calculated; value uniform 0; }",
+        "{ type nutkWallFunction; value uniform 0; }",
+    )
+    foam_file(case / "constant/transportProperties", "transportProperties",
+              f"transportModel Newtonian;\nnu {NU};\n")  # fmt: skip
+    foam_file(case / "constant/turbulenceProperties", "turbulenceProperties",
+              "simulationType RAS;\nRAS { RASModel kOmegaSST; turbulence on; }\n")  # fmt: skip
+    (case / "Allrun").write_text(ALLRUN.format(procs=args.procs))
+    (case / "Allrun").chmod(0o755)
+    (case / "case.foam").touch()
+    plan = {"height": args.height, "mass": robot["mass"], "discs": discs, "building": building,
+            "domain": [low, high], "base_cell": BASE_CELL, "fine_cell": fine,
+            "motor_distance": 2 * sum(math.hypot(d["hub"][0], d["hub"][1]) for d in discs)
+            / len(discs)}  # fmt: skip
+    (case / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
+    return plan
+
+
+ALLRUN = """#!/bin/bash
+# Runs this case in order; each step's log is log.<step>. Needs OpenFOAM's environment.
+set -e
+cd "$(dirname "$0")"
+run() {{ local n="$1"; shift; echo "$n"; "$@" > "log.$n" 2>&1; }}
+par() {{
+    local n="$1"
+    shift
+    echo "$n"
+    mpirun --allow-run-as-root --oversubscribe -np {procs} "$@" -parallel > "log.$n" 2>&1
+}}
+run blockMesh blockMesh
+run decomposePar.mesh decomposePar -no-fields -force
+par snappyHexMesh snappyHexMesh -overwrite
+par checkMesh checkMesh -constant
+run reconstructParMesh reconstructParMesh -constant
+rm -rf processor*
+run topoSet topoSet
+run decomposePar decomposePar -force
+par simpleFoam simpleFoam
+run reconstructPar reconstructPar -latestTime
+run writeCellCentres postProcess -func writeCellCentres -latestTime
+rm -rf processor*
+"""
+
+
+def run_case(case: Path, args: argparse.Namespace) -> None:
+    if not args.container and shutil.which("simpleFoam"):
+        subprocess.run(["bash", str(case / "Allrun")], check=True)
+        return
+    engine = shutil.which("podman") or shutil.which("docker")
+    if engine is None:
+        raise SystemExit("no OpenFOAM: source one, or install podman to use its container")
+    case = case.resolve()
+    subprocess.run([engine, "run", "--rm", "-v", f"{case}:/case", "-w", "/case", args.image,
+                    "bash", "-lc", "/case/Allrun"], check=True)  # fmt: skip
+
+
+# --- reading it back ----------------------------------------------------------------------
+
+
+def read_internal(path: Path, vector_field: bool):
+    import numpy as np
+
+    text = path.read_text()
+    match = re.compile(r"internalField\s+nonuniform List<\w+>\s*(\d+)\s*\(").search(text)
+    count = int(match.group(1))
+    end = text.index(";", match.end())
+    numbers = np.array(text[match.end() : end].replace("(", " ").replace(")", " ").split(),
+                       dtype=float)  # fmt: skip
+    return numbers[: 3 * count].reshape(count, 3) if vector_field else numbers[:count]
+
+
+def latest_time(case: Path) -> Path:
+    times = [p for p in case.iterdir() if p.is_dir() and re.fullmatch(r"[0-9.]+", p.name)]
+    return max(times, key=lambda p: float(p.name))
+
+
+def read_force(case: Path) -> list[float]:
+    """The mean force on the frame over the last fifth of the iterations, N (pressure + viscous)."""
+    files = sorted((case / "postProcessing/forces_drone").glob("*/force.dat"))
+    rows = []
+    for line in files[-1].read_text().splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        values = [float(v) for v in line.replace("(", " ").replace(")", " ").split()]
+        rows.append(values[1:4])
+    tail = rows[len(rows) * 4 // 5 :]
+    return [sum(r[k] for r in tail) / len(tail) for k in range(3)]
+
+
+def jet_speed(hover_induced: float, motor_distance: float, s: float) -> float:
+    return hover_induced * JET_DECAY / (s / motor_distance - JET_ORIGIN)
+
+
+def analyse(case: Path, plan: dict, title: str) -> dict:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.patches import Rectangle
+    from scipy.spatial import cKDTree
+
+    time = latest_time(case)
+    centres = read_internal(time / "C", True)
+    velocity = read_internal(time / "U", True)
+    tree = cKDTree(centres)
+    discs = plan["discs"]
+    radius = discs[0]["radius"]
+    area = math.pi * radius * radius
+    hover_induced = math.sqrt(discs[0]["thrust"] / (2 * RHO * area))
+    h = plan["height"]
+
+    def sample(points):
+        _, index = tree.query(points)
+        return velocity[index]
+
+    # The air through each disc: the mean velocity of the cells in it.
+    through = []
+    for d in discs:
+        n = np.array(d["axis"])
+        rel = centres - np.array(d["hub"])
+        along = rel @ n
+        across = np.linalg.norm(rel - np.outer(along, n), axis=1)
+        inside = (np.abs(along) <= plan["fine_cell"]) & (across <= d["radius"])
+        mean = velocity[inside].mean(axis=0) if inside.any() else np.zeros(3)
+        through.append({"rotor": d["name"], "hub": d["hub"],
+                        "air_velocity": [round(float(v), 3) for v in mean],
+                        "down_through_disc": round(float(-(mean @ n)), 3)})  # fmt: skip
+    force = read_force(case)
+
+    # Pictures: through the drone (XZ), along the ground (XY), and the speed under it.
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6), dpi=110,
+                             gridspec_kw={"width_ratios": [1.25, 1, 0.8]})  # fmt: skip
+    fig.suptitle(title, fontsize=13)
+    span = 2.5 if not plan["building"] else max(2.5, plan["building"][3] + 0.5)
+    x = np.linspace(-span, span, 420)
+    z = np.linspace(0.005, min(h + 1.2, plan["domain"][1][2]), 300)
+    gx, gz = np.meshgrid(x, z)
+    u = sample(np.column_stack([gx.ravel(), np.zeros(gx.size), gz.ravel()])).reshape(*gx.shape, 3)
+    speed = np.linalg.norm(u, axis=2)
+    top = float(np.percentile(speed, 99.5))
+    ax = axes[0]
+    image = ax.pcolormesh(gx, gz, speed, cmap="viridis", vmin=0, vmax=top, shading="auto")
+    ax.streamplot(x, z, u[..., 0], u[..., 2], color="white", density=1.6, linewidth=0.5,
+                  arrowsize=0.6)  # fmt: skip
+    for d in discs:
+        if abs(d["hub"][1]) < 1e-9 or True:
+            ax.plot([d["hub"][0] - d["radius"], d["hub"][0] + d["radius"]],
+                    [d["hub"][2]] * 2, color="#ff8a3d", lw=2)  # fmt: skip
+    if plan["building"]:
+        x0, _, _, x1, _, height = plan["building"]
+        ax.add_patch(Rectangle((x0, 0), x1 - x0, height, color="#9aa4b2", zorder=3))
+    ax.set_aspect("equal")
+    ax.set_xlim(-span, span)
+    ax.set_ylim(0, z[-1])
+    ax.set_xlabel("x (m)")
+    ax.set_ylabel("height (m)")
+    ax.set_title("speed through the drone (y = 0), with streamlines")
+    fig.colorbar(image, ax=ax, label="m/s", shrink=0.8)
+
+    gy = np.linspace(-span, span, 300)
+    xx, yy = np.meshgrid(np.linspace(-span, span, 300), gy)
+    ground = sample(np.column_stack([xx.ravel(), yy.ravel(), np.full(xx.size, 0.03)]))
+    ground = ground.reshape(*xx.shape, 3)
+    gspeed = np.linalg.norm(ground, axis=2)
+    ax = axes[1]
+    image = ax.pcolormesh(xx, yy, gspeed, cmap="viridis", vmin=0, shading="auto")
+    ax.streamplot(xx[0], gy, ground[..., 0], ground[..., 1], color="white", density=1.2,
+                  linewidth=0.5, arrowsize=0.6)  # fmt: skip
+    if plan["building"]:
+        x0, y0, _, x1, y1, _ = plan["building"]
+        ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0, color="#9aa4b2", zorder=3))
+    ax.set_aspect("equal")
+    ax.set_xlim(-span, span)
+    ax.set_ylim(-span, span)
+    ax.set_xlabel("x (m)")
+    ax.set_ylabel("y (m)")
+    ax.set_title("outwash 3 cm above the ground")
+    fig.colorbar(image, ax=ax, label="m/s", shrink=0.8)
+
+    ax = axes[2]
+    depth = np.linspace(0.02, h - 0.01, 200)
+    centre_line = sample(np.column_stack([np.zeros_like(depth), np.zeros_like(depth), depth]))
+    ax.plot(-centre_line[:, 2], depth, label="OpenFOAM, under the centre")
+    l_motor = plan["motor_distance"]
+    s = h - depth
+    far = np.where(s / l_motor >= 2.5, jet_speed(hover_induced, l_motor, s), np.nan)
+    ax.plot(far, depth, "--", label="Bauersfeld et al. 2024 (s ≥ 2.5 l)")
+    ax.axhline(h, color="#ff8a3d", lw=1)
+    ax.set_xlabel("downward speed (m/s)")
+    ax.set_ylabel("height (m)")
+    ax.set_title(f"under the drone (hover v_i {hover_induced:.1f} m/s)")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    picture = case / "downwash.png"
+    fig.savefig(picture)
+    plt.close(fig)
+
+    peak_outwash = float(gspeed.max())
+    report = {"title": title, "height": h, "hover_induced": round(hover_induced, 3),
+              "frame_force_n": [round(v, 4) for v in force], "through_discs": through,
+              "peak_outwash_3cm": round(peak_outwash, 3),
+              "cells": len(centres), "picture": str(picture)}  # fmt: skip
+    (case / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+    return report
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("robot", type=Path, help="a multirotor URDF")
+    parser.add_argument("--height", type=float, default=2.0, help="m, rotor plane above ground")
+    parser.add_argument("--building", type=lambda t: [float(v) for v in t.split(",")],
+                        help="X0,Y0,X1,Y1,HEIGHT: a box building on the ground")  # fmt: skip
+    parser.add_argument("--iterations", type=int, default=2000)
+    parser.add_argument("--procs", type=int, default=8)
+    parser.add_argument("--max-cells", type=int, default=6_000_000)
+    parser.add_argument("--title", default="")
+    parser.add_argument("--out", type=Path, default=Path("foam_hover"))
+    parser.add_argument("--write-only", action="store_true")
+    parser.add_argument("--read-only", action="store_true")
+    parser.add_argument("--container", action="store_true")
+    parser.add_argument("--image", default=IMAGE)
+    args = parser.parse_args()
+    case = args.out
+    if not args.read_only:
+        if case.exists():
+            shutil.rmtree(case)
+        plan = write_case(case, read_multirotor(args.robot), args)
+        print(f"case in {case}: {len(plan['discs'])} discs of {plan['discs'][0]['thrust']:.2f} N, "
+              f"cells near the drone {plan['fine_cell'] * 100:.0f} cm")  # fmt: skip
+        if args.write_only:
+            return 0
+        run_case(case, args)
+    plan = json.loads((case / "plan.json").read_text())
+    title = args.title or f"{args.robot.stem} hovering {plan['height']:.2f} m up"
+    report = analyse(case, plan, title)
+    fx, fy, fz = report["frame_force_n"]
+    print(f"force on the frame from the air: {fx:+.3f} {fy:+.3f} {fz:+.3f} N")
+    for d in report["through_discs"]:
+        print(f"  {d['rotor']:<16} air down through the disc {d['down_through_disc']:.2f} m/s")
+    print(
+        f"peak outwash 3 cm up: {report['peak_outwash_3cm']:.2f} m/s; picture {report['picture']}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

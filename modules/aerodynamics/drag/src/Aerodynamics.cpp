@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <numbers>
 
@@ -132,6 +133,39 @@ std::vector<std::size_t> rotorGroupOfBodies(const WorldView& world) {
         }
     }
     return out;
+}
+
+std::vector<Downwash::Box> downwashObstacles(const World& world) {
+    // Boxes fixed to the world: on it, or on a body that does not move (a URDF world's links),
+    // placed through the chain of fixed parents.
+    const std::vector<bool> moving = movingBodies(world);
+    const World::Bodies& bodies = world.bodies;
+    const auto poseOf = [&](BodyId b) {
+        Pose pose{};
+        for (std::size_t guard = 0; b != kWorldBody && guard <= bodies.parent.size(); ++guard) {
+            pose = compose(bodies.poseInParent[b.index], pose);
+            b = bodies.parent[b.index];
+        }
+        return pose;
+    };
+    std::vector<Downwash::Box> out;
+    const World::Colliders& c = world.colliders;
+    for (std::size_t i = 0; i < c.body.size(); ++i) {
+        if (c.shape[i] != ShapeType::Box || (c.body[i] != kWorldBody && moving[c.body[i].index])) {
+            continue;
+        }
+        const Pose pose =
+            c.body[i] == kWorldBody ? c.poseInBody[i] : compose(poseOf(c.body[i]), c.poseInBody[i]);
+        out.push_back({pose.position, pose.orientation, c.size[i]});
+    }
+    return out;
+}
+
+double wallInflow(double gapOverDiameter) {
+    if (gapOverDiameter >= kWallReach) {
+        return 0.0;
+    }
+    return kWallInflowGain * std::exp(-std::max(gapOverDiameter, 0.0) / kWallInflowLength);
 }
 
 double dustThreshold(double diameter, double rho, double gravity) {
@@ -300,6 +334,7 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
     } else {
         downwash_.clearGround();
     }
+    downwash_.setObstacles(downwashObstacles(world.raw()));
     dustOut_ = SignalId{};
     const auto dustDiameter = config.get<double>("ground_dust_diameter");
     const auto dustMost = config.get<double>("ground_dust_concentration");
@@ -490,14 +525,53 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
                                                       moment[1] + tau[1], moment[2] + tau[2]});
         bus.write(link.airspeed, speed);
     }
-    // Each rotor's air: the wind and gust plus the other robots' wakes at its hub.
+    // Each rotor's air: the wind and gust plus the other robots' wakes at its hub, and a wall
+    // beside it: more air down through the rotors on its side, less on the far side (wallInflow).
+    struct WallSide {
+        double gap{std::numeric_limits<double>::infinity()};  // m, nearest rotor tip to the wall
+        double reach{0.0};  // m, the farthest hub towards the wall from the centre
+        Vec3 centre{}, towards{};
+    };
+    std::vector<WallSide> sides(groupCount_);
+    for (const Downwash::Group& g : downwash_.groups()) {
+        WallSide& side = sides[g.id];
+        Vec3 normal{};
+        const double distance = downwash_.nearestWall(g.centre, normal);
+        if (!std::isfinite(distance)) {
+            continue;
+        }
+        side.centre = g.centre;
+        side.towards = {-normal[0], -normal[1], -normal[2]};
+        double tip = 0.0;
+        for (const Downwash::Rotor& r : g.rotors) {
+            const double along = (r.hub[0] - g.centre[0]) * side.towards[0] +
+                                 (r.hub[1] - g.centre[1]) * side.towards[1] +
+                                 (r.hub[2] - g.centre[2]) * side.towards[2];
+            side.reach = std::max(side.reach, along);
+            tip = std::max(tip, along + r.radius);
+        }
+        side.gap = distance - tip;
+    }
     for (std::size_t i = 0; i < rotors_.size(); ++i) {
-        const Vec3& hub = wakes[i].hub;
-        const Vec3 mean = meanAir(hub);
-        const Vec3 wake = downwash_.velocityAt(hub, rotors_[i].group);
-        bus.writeN(rotors_[i].air,
-                   Vec3{mean[0] + firstGust[0] + wake[0], mean[1] + firstGust[1] + wake[1],
-                        mean[2] + firstGust[2] + wake[2]});
+        const Downwash::Rotor& w = wakes[i];
+        const Vec3 mean = meanAir(w.hub);
+        const Vec3 wake = downwash_.velocityAt(w.hub, rotors_[i].group);
+        Vec3 air{mean[0] + firstGust[0] + wake[0], mean[1] + firstGust[1] + wake[1],
+                 mean[2] + firstGust[2] + wake[2]};
+        const WallSide& side = sides[w.group];
+        if (w.thrust > 0.0 && std::isfinite(side.gap) && side.reach > 0.0) {
+            // +1 for a rotor as far towards the wall as any, −1 for one as far away.
+            const double share = ((w.hub[0] - side.centre[0]) * side.towards[0] +
+                                  (w.hub[1] - side.centre[1]) * side.towards[1] +
+                                  (w.hub[2] - side.centre[2]) * side.towards[2]) /
+                                 side.reach;
+            const double extra =
+                w.induced * wallInflow(side.gap / (2.0 * w.radius)) * std::clamp(share, -1.0, 1.0);
+            for (std::size_t k = 0; k < 3; ++k) {
+                air[k] -= extra * w.thrustAxis[k];
+            }
+        }
+        bus.writeN(rotors_[i].air, air);
     }
     if (dustOut_.valid()) {
         bus.write(dustOut_,

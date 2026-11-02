@@ -158,6 +158,23 @@ this one gets less thrust from its propellers (at the `bem` fidelity), and with
 `--weather ...,ground_dust_diameter=1e-4,ground_dust_concentration=1e-5` the outwash lifts
 dust that the cameras and lidars see.
 
+Beside a building, on blade-element rotors that feel the air:
+
+```bash
+lagrange run profiles/examples/quad_x500_downwash.yaml \
+    --robot assets/robots/quad_x500/quad_x500.usda \
+    --world assets/worlds/drone_building/drone_building.urdf
+```
+
+The quadcopter starts with its rotor tips 0.3 m from a 12 m wall, and its wake hugs the wall.
+The rotors next to the wall get about 0.09 m/s more air down through them than the far ones
+(plot `rotor/rotor_1_joint/air_velocity.z` against `rotor/rotor_2_joint/air_velocity.z`). At
+the same speed they would make less thrust and the drone would roll towards the wall, so the
+controller spins them faster to stay level (`joint/rotor_1_joint/velocity` against
+`joint/rotor_2_joint/velocity`). Over the roof, the wake spreads as it does on the ground. For
+the full flow, `lagrange foam-hover assets/robots/quad_x500/quad_x500.urdf --building
+0.6,-3.5,3.6,3.5,12` runs the same scene in OpenFOAM.
+
 ## 5. PX4 or ArduPilot flies it
 
 PX4 runs as its own program and talks to the simulator through its simulator interface: the

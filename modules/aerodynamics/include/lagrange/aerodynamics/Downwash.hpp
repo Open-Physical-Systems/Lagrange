@@ -62,6 +62,23 @@ public:
     void setGround(const Vec3& point, const Vec3& normal);
     void clearGround() { hasGround_ = false; }
 
+    /// Buildings and other fixed boxes (rotor_aero.md §2.6): a wake stops on the first surface
+    /// it meets (a roof as the ground) and spreads over it; nothing moves inside a box; a wall
+    /// beside a wake mirrors it (an image jet), so the air does not pass through. `half` is
+    /// half the box's size along its own axes.
+    struct Box {
+        Vec3 centre{};
+        std::array<double, 4> orientation{1.0, 0.0, 0.0, 0.0};  // w, x, y, z
+        Vec3 half{};
+    };
+    void setObstacles(std::vector<Box> boxes) { boxes_ = std::move(boxes); }
+    [[nodiscard]] const std::vector<Box>& obstacles() const { return boxes_; }
+    /// Whether `x` is inside one of the boxes.
+    [[nodiscard]] bool insideObstacle(const Vec3& x) const;
+    /// The nearest wall beside `x` (a box's upright face, `x` within its height and width):
+    /// distance (m) and its outward unit normal; distance infinite without one.
+    [[nodiscard]] double nearestWall(const Vec3& x, Vec3& normal) const;
+
     /// Takes this step's rotors and, per group, the air's velocity relative to the vehicle
     /// (m/s, world; for the skew), indexed by group (shorter: zero).
     void update(std::span<const Rotor> rotors, std::span<const Vec3> relativeAir = {});
@@ -82,6 +99,15 @@ public:
         double hoverInduced{0};  // U_H, m/s: rms of the rotors' v_i
         double length{0};        // l, m: motor-to-motor diagonal (2 R for a single rotor)
         std::vector<Rotor> rotors;
+        // Where the wake meets a surface (the ground or a box face), and the jet arriving there.
+        bool hits{false};
+        Vec3 hitPoint{}, hitNormal{};
+        int hitBox{-1};       // -1: the ground
+        int hitAxis{0};       // the box face's axis (0..2) ...
+        double hitSide{1.0};  // ... and side (±1)
+        double arriveSpeed{0.0}, arriveRadius{0.0};
+        // Upright walls beside the wake, mirrored: a point on each and its outward normal.
+        std::vector<std::pair<Vec3, Vec3>> walls;
     };
     [[nodiscard]] const std::vector<Group>& groups() const { return groups_; }
 
@@ -90,6 +116,9 @@ private:
     bool hasGround_{false};
     Vec3 groundPoint_{}, groundNormal_{0.0, 0.0, 1.0};
     std::vector<Group> groups_;
+    std::vector<Box> boxes_;
+    void findSurfaces(Group& g) const;
+    [[nodiscard]] bool onHitFace(const Group& g, const Vec3& x) const;
 };
 
 // --- The pieces, for tests and the docs ---------------------------------------------------

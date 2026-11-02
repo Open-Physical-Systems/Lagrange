@@ -59,6 +59,25 @@ struct RotorSource {
 [[nodiscard]] std::vector<RotorSource> rotorSources(const WorldView& world);
 /// Every body's rotor group (Downwash::kNoGroup when its robot has no rotors), as rotorSources.
 [[nodiscard]] std::vector<std::size_t> rotorGroupOfBodies(const WorldView& world);
+/// The fixed boxes of the scenery (static Box colliders: buildings, walls), for the downwash.
+[[nodiscard]] std::vector<Downwash::Box> downwashObstacles(const World& world);
+
+/// A wall beside a multirotor (rotor_aero.md §2.7): it starves the inflow on its side (Herz and
+/// McCrink, VFS Forum 81, 2025), so air goes down faster through the rotors next to it and
+/// slower through those away from it. Rotors at a fixed speed then make less thrust on the
+/// wall's side, and the drone rolls towards the wall (Tanabe et al., J. Robot. Mechatron. 30(3),
+/// 2018). Rotor i's extra downward air, as a share of its induced velocity, is
+/// A·exp(−(g/D)/λ)·s_i: g the gap between the nearest rotor tip and the wall, D the rotor
+/// diameter, s_i from +1 (the hub farthest towards the wall) to −1 (farthest away). A and λ are
+/// fitted to `lagrange foam-hover` runs of the sample quadcopter 2 m up beside a 12 m building at
+/// tip gaps of 0.25, 0.5, 1 and 2 D (rotor_aero.md §7): the near rotors' less the far rotors'
+/// inflow, against open air, was 3.4% of v_i at the wall, fading over 3.5 ± 2.7 D. The fading is
+/// poorly resolved by those runs (mesh noise about ±0.05 m/s, 0.8% of v_i); Tanabe et al. find
+/// the effect gone beyond 1.5 D.
+inline constexpr double kWallInflowGain = 0.0173;  // A: 0.0346 / 2 (near +A, far −A)
+inline constexpr double kWallInflowLength = 3.5;   // λ, rotor diameters
+inline constexpr double kWallReach = 10.0;         // diameters: beyond, nothing
+[[nodiscard]] double wallInflow(double gapOverDiameter);
 
 /// Dust lifted by the outwash, kg/m³: `most`·(1 − (u*_t/u*)²) above the threshold, 0 below
 /// (behavioural, a range check). u* = kWallJetFriction·u_peak, u*_t = A·√((ρ_p − ρ)/ρ·g·d) with

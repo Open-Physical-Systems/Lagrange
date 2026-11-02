@@ -188,5 +188,42 @@ TEST(Downwash, WindAtAddsTheProfileGustAndWakes) {
     EXPECT_NEAR(v[2], d.velocityAt(x)[2], 1e-12);
 }
 
+TEST(Downwash, ARoofStopsTheWakeAndCarriesTheOutwash) {
+    // A 4 m × 4 m building 10 m tall, the drone 1 m over its roof.
+    Downwash d;
+    d.setGround({0.0, 0.0, 0.0}, {0.0, 0.0, 1.0});
+    d.setObstacles({Downwash::Box{{0.0, 0.0, 5.0}, {1.0, 0.0, 0.0, 0.0}, {2.0, 2.0, 5.0}}});
+    d.update(offboard(11.0));
+    ASSERT_TRUE(d.groups()[0].hits);
+    EXPECT_EQ(d.groups()[0].hitBox, 0);
+    EXPECT_NEAR(d.groups()[0].hitPoint[2], 10.0, 1e-9);
+    EXPECT_LT(d.velocityAt({0.0, 0.0, 10.5})[2], -1.0);  // the jet above the roof
+    EXPECT_EQ(d.velocityAt({0.0, 0.0, 9.0})[2], 0.0);    // inside: still
+    EXPECT_EQ(d.velocityAt({3.0, 0.0, 5.0})[2], 0.0);    // beside it, under roof level
+    EXPECT_GT(d.velocityAt({0.8, 0.0, 10.02})[0], 0.5);  // outwash over the roof
+    EXPECT_EQ(d.velocityAt({2.5, 0.0, 10.02})[0], 0.0);  // past the roof's edge
+    EXPECT_EQ(d.peakOutwash(), 0.0);                     // no dust lifts from a roof
+}
+
+TEST(Downwash, AWallBesideTheWakeMirrorsIt) {
+    // A wall 0.6 m from the drone's axis (its face at x = 0.6), 20 m tall and wide.
+    Downwash open;
+    open.update(offboard(10.0));
+    Downwash walled;
+    walled.setObstacles({Downwash::Box{{5.6, 0.0, 10.0}, {1.0, 0.0, 0.0, 0.0}, {5.0, 10.0, 10.0}}});
+    walled.update(offboard(10.0));
+    ASSERT_EQ(walled.groups()[0].walls.size(), 1U);
+    const Vec3 nearWall{0.55, 0.0, 9.0};
+    // The image jet adds to the real one next to the wall, where the air cannot go through.
+    EXPECT_LT(walled.velocityAt(nearWall)[2], open.velocityAt(nearWall)[2] - 0.1);
+    EXPECT_EQ(walled.velocityAt({0.7, 0.0, 9.0})[2], 0.0);  // in the wall
+    // Far on the other side, the wall hardly matters.
+    EXPECT_NEAR(walled.velocityAt({-1.5, 0.0, 8.0})[2], open.velocityAt({-1.5, 0.0, 8.0})[2], 0.05);
+    Vec3 normal{};
+    EXPECT_NEAR(walled.nearestWall({0.0, 0.0, 10.0}, normal), 0.6, 1e-9);
+    EXPECT_NEAR(normal[0], -1.0, 1e-12);
+    EXPECT_TRUE(std::isinf(open.nearestWall({0.0, 0.0, 10.0}, normal)));
+}
+
 }  // namespace
 }  // namespace lagrange::aerodynamics

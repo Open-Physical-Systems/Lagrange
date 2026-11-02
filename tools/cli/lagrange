@@ -515,6 +515,9 @@ def main(argv: list[str]) -> int:
     if argv and argv[0] == "foam":
         tool = str(Path(__file__).resolve().parent / "lagrange_foam")
         os.execv(tool, ["lagrange foam", *argv[1:]])
+    if argv and argv[0] == "foam-hover":
+        tool = str(Path(__file__).resolve().parent / "lagrange_foam_hover")
+        os.execv(tool, ["lagrange foam-hover", *argv[1:]])
     if argv and argv[0] == "viewer":
         viewer = executable("lagrange_viewer", "lagrange_viewer")
         os.execv(viewer, [viewer, *argv[1:]])
