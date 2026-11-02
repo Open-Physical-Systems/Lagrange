@@ -70,6 +70,12 @@ public:
     void step(std::size_t steps);
     /// On the GPU, copies the velocity back so velocity() and velocityAt() see the present flow.
     void syncVelocity();
+    /// On the GPU, copies the populations back (for carryOver).
+    void syncPopulations();
+    /// Takes the flow of `old` where the two overlap, `old`'s cell (x, y, z) being this box's
+    /// (x − offset[0], ...): for a box moved with a drone. Call before useGpu; `old`'s populations
+    /// must be synced. The cells beyond `old` stay still.
+    void carryOver(const LbmBox& old, const std::array<long, 3>& offset);
 
     /// m/s at a cell; 0 in a solid.
     [[nodiscard]] std::array<double, 3> velocity(std::size_t cell) const;

@@ -98,4 +98,10 @@ struct DenseBox {
     const std::string& path, const std::string& name, const DenseBox& box,
     const std::function<Vec3(const Vec3&)>& value);
 
+/// The same, kept in memory: a vector field built from `value` at every voxel centre of `box`,
+/// for a field made while the run goes (the live air box, rotor_aero.md §8). Null when the box is
+/// empty.
+[[nodiscard]] std::shared_ptr<const Field> vectorField(
+    const std::string& name, const DenseBox& box, const std::function<Vec3(const Vec3&)>& value);
+
 }  // namespace lagrange::fields

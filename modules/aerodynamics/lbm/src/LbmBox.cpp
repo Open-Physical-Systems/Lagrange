@@ -187,6 +187,46 @@ void LbmBox::syncVelocity() {
     }
 }
 
+void LbmBox::syncPopulations() {
+    if (stepper_) {
+        stepper_->readPopulations(f_);
+    }
+}
+
+void LbmBox::carryOver(const LbmBox& old, const std::array<long, 3>& offset) {
+    const std::size_t count = cells();
+    const std::size_t oldCount = old.cells();
+    const std::array<long, 3> n{static_cast<long>(config_.nx), static_cast<long>(config_.ny),
+                                static_cast<long>(config_.nz)};
+    const std::array<long, 3> m{static_cast<long>(old.config_.nx),
+                                static_cast<long>(old.config_.ny),
+                                static_cast<long>(old.config_.nz)};
+    for (long z = 0; z < n[2]; ++z) {
+        for (long y = 0; y < n[1]; ++y) {
+            for (long x = 0; x < n[0]; ++x) {
+                const long ox = x + offset[0];
+                const long oy = y + offset[1];
+                const long oz = z + offset[2];
+                if (ox < 0 || oy < 0 || oz < 0 || ox >= m[0] || oy >= m[1] || oz >= m[2]) {
+                    continue;
+                }
+                const auto to = static_cast<std::size_t>(x + n[0] * (y + n[1] * z));
+                const auto from = static_cast<std::size_t>(ox + m[0] * (oy + m[1] * oz));
+                if (solid_[to] != 0 || old.solid_[from] != 0) {
+                    continue;
+                }
+                for (std::size_t i = 0; i < kQ; ++i) {
+                    f_[i * count + to] = old.f_[i * oldCount + from];
+                }
+                for (std::size_t k = 0; k < 3; ++k) {
+                    velocity_[k * count + to] = old.velocity_[k * oldCount + from];
+                }
+            }
+        }
+    }
+    next_ = f_;
+}
+
 void LbmBox::stepOnce() {
     const auto nx = static_cast<long>(config_.nx);
     const auto ny = static_cast<long>(config_.ny);

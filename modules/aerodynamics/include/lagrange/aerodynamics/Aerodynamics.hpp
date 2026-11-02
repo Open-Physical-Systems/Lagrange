@@ -1,13 +1,19 @@
 #pragma once
 
 #include "lagrange/aerodynamics/Downwash.hpp"
+#include "lagrange/aerodynamics/LiveAir.hpp"
 #include "lagrange/fields/Field.hpp"
 #include "lagrange/module/Expected.hpp"
 #include "lagrange/module/IModule.hpp"
 
 #include <array>
+#include <memory>
 #include <string>
 #include <vector>
+
+namespace lagrange::fields {
+class Field;
+}
 
 namespace lagrange::aerodynamics {
 
@@ -108,6 +114,14 @@ inline constexpr double kWallJetFriction = 0.05;
 /// (config "ground_dust_diameter", m, and "ground_dust_concentration", kg/m³: the most the
 /// outwash keeps in the air there; site parameters, no defaults) it writes env/dust/downwash
 /// (kg/m³) once the outwash's friction velocity passes Bagnold's threshold for those grains.
+///
+/// Config "downwash_model": "fitted" (the default, above) or "lbm" (rotor_aero.md §8): the first
+/// multirotor's air is computed live in a lattice Boltzmann box that follows it (LiveAir, on a
+/// hardware GPU; config "downwash_lbm_cell", m, default 0.04; "downwash_lbm_cpu": the CPU
+/// reference). Its rotors then fly in the box's air less their own (walls, ground, their other
+/// rotors), links of other robots in the box feel it, and the box goes out as aero/air_box
+/// (Field3D, every second cell). Outside the box, and for every other robot, the fitted model
+/// stays. Without a hardware GPU the fitted model runs instead.
 class AeroDrag final : public IModule {
 public:
     [[nodiscard]] ModuleInfo info() const override;
@@ -154,6 +168,15 @@ private:
     double gravity_{9.80665};
     double dustDiameter_{0.0}, dustMost_{0.0};
     SignalId dustOut_;
+    // The live air (downwash_model: lbm).
+    std::unique_ptr<LiveAir> live_;
+    std::size_t liveGroup_{Downwash::kNoGroup};  // the multirotor in the box
+    Downwash others_;                            // every other multirotor's fitted wake
+    SignalId airBox_;
+    std::shared_ptr<const fields::Field> published_;
+    bool lbmWanted_{false};
+    double lbmCell_{0.04};
+    bool lbmCpu_{false};
 };
 
 }  // namespace lagrange::aerodynamics

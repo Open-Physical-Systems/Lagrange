@@ -1,11 +1,13 @@
 // The aerodynamics domain: link drag, the mean wind profile and Dryden turbulence
 // (Aerodynamics.hpp; docs/design/domains/aerodynamics.md §2).
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
+#include "lagrange/fields/Field.hpp"
 #include "lagrange/random/Philox.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <map>
 #include <numbers>
@@ -278,6 +280,17 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
     const Vec3 g = world.gravityLocal();
     gravity_ = std::hypot(g[0], g[1], g[2]);
     downwashOn_ = config.get<bool>("downwash").value_or(true);
+    const std::string model = config.get<std::string>("downwash_model").value_or("fitted");
+    if (model != "fitted" && model != "lbm") {
+        return Status::error(StatusCode::InvalidConfig,
+                             "aerodynamics.downwash_model is fitted or lbm, not '" + model + "'");
+    }
+    lbmWanted_ = downwashOn_ && model == "lbm";
+    lbmCell_ = config.get<double>("downwash_lbm_cell").value_or(0.04);
+    lbmCpu_ = config.get<bool>("downwash_lbm_cpu").value_or(false);
+    if (lbmCell_ <= 0.0) {
+        return Status::error(StatusCode::InvalidConfig, "downwash_lbm_cell must be > 0 m");
+    }
     rotors_.clear();
     const std::vector<std::size_t> groupOfBody = rotorGroupOfBodies(world);
     std::size_t groups = 0;
@@ -335,6 +348,12 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
         downwash_.clearGround();
     }
     downwash_.setObstacles(downwashObstacles(world.raw()));
+    others_ = downwash_;
+    airBox_ = SignalId{};
+    if (lbmWanted_ && !rotors_.empty()) {
+        airBox_ =
+            d.output(spec("aero/air_box", SignalType::Field3D, units::m_per_s, "world_local"));
+    }
     dustOut_ = SignalId{};
     const auto dustDiameter = config.get<double>("ground_dust_diameter");
     const auto dustMost = config.get<double>("ground_dust_concentration");
@@ -417,6 +436,30 @@ Status AeroDrag::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
         bus.write(dustOut_, 0.0);
     }
     downwash_.update({});
+    others_.update({});
+    live_.reset();
+    published_.reset();
+    liveGroup_ = Downwash::kNoGroup;
+    if (airBox_.valid()) {
+        bus.publishBuffer(airBox_, fields::fieldBuffer(nullptr));
+        auto live = std::make_unique<LiveAir>();
+        LiveAir::Settings settings;
+        settings.cell = lbmCell_;
+        settings.airDensity = rho_;
+        settings.cpu = lbmCpu_;
+        std::string why;
+        if (live->start(settings, why)) {
+            live->setGround(hasGround_, groundPoint_[2]);
+            live->setObstacles(downwash_.obstacles());
+            live_ = std::move(live);
+            liveGroup_ = rotors_.front().group;
+        } else {
+            std::fprintf(stderr,
+                         "lagrange: aerodynamics: the live air box needs a hardware GPU: %s; the "
+                         "fitted downwash runs instead\n",
+                         why.c_str());
+        }
+    }
     return {};
 }
 
@@ -468,6 +511,55 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
         }
     }
     downwash_.update(wakes, relative);
+    // The live box: the boxed multirotor's rotors push its air; every other multirotor keeps its
+    // fitted wake (others_).
+    if (live_) {
+        std::vector<Downwash::Rotor> rest;
+        std::vector<LbmBox::Rotor> discs;
+        Vec3 centre{};
+        for (const Downwash::Rotor& w : wakes) {
+            if (w.group != liveGroup_) {
+                rest.push_back(w);
+                continue;
+            }
+            LbmBox::Rotor disc;
+            disc.centre = w.hub;
+            disc.axis = w.thrustAxis;
+            disc.radius = w.radius;
+            disc.thrust = std::max(0.0, w.thrust);
+            discs.push_back(disc);
+            for (std::size_t k = 0; k < 3; ++k) {
+                centre[k] += w.hub[k];
+            }
+        }
+        for (double& c : centre) {
+            c /= static_cast<double>(std::max<std::size_t>(discs.size(), 1));
+        }
+        others_.update(rest, relative);
+        live_->advance(dt, centre, discs);
+        if (airBox_.valid()) {
+            constexpr double kFieldInterval = 0.1;  // s: the viewer asks a few times a second
+            std::shared_ptr<const fields::Field> now = live_->field(kFieldInterval);
+            if (now != published_) {
+                published_ = now;
+                bus.publishBuffer(airBox_, fields::fieldBuffer(now.get()));
+            }
+        }
+    }
+    // Other robots' rotors at a point, for a link or rotor of `group`: the box inside it.
+    const auto wakeAt = [&](const Vec3& at, std::size_t group) {
+        if (live_ && live_->contains(at)) {
+            Vec3 w = others_.velocityAt(at, group);
+            if (group != liveGroup_) {
+                const Vec3 box = live_->velocityAt(at);
+                for (std::size_t k = 0; k < 3; ++k) {
+                    w[k] += box[k];
+                }
+            }
+            return w;
+        }
+        return downwash_.velocityAt(at, group);
+    };
     Vec3 firstGust{};
     for (std::size_t i = 0; i < links_.size(); ++i) {
         Link& link = links_[i];
@@ -503,7 +595,7 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
             bus.writeN(windVelocity_, air);
         }
         // Other robots' rotors blow on it.
-        const Vec3 wake = downwash_.velocityAt(at, link.group);
+        const Vec3 wake = wakeAt(at, link.group);
         for (std::size_t k = 0; k < 3; ++k) {
             air[k] += wake[k];
         }
@@ -555,11 +647,25 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
     for (std::size_t i = 0; i < rotors_.size(); ++i) {
         const Downwash::Rotor& w = wakes[i];
         const Vec3 mean = meanAir(w.hub);
-        const Vec3 wake = downwash_.velocityAt(w.hub, rotors_[i].group);
+        Vec3 wake = wakeAt(w.hub, rotors_[i].group);
+        const bool boxed = live_ && w.group == liveGroup_;
+        if (boxed) {
+            // The box's air over the disc less the disc's own: walls, ground and the other
+            // rotors of the drone are in it, so no fitted wall effect on top.
+            LbmBox::Rotor disc;
+            disc.centre = w.hub;
+            disc.axis = w.thrustAxis;
+            disc.radius = w.radius;
+            disc.thrust = std::max(0.0, w.thrust);
+            const Vec3 box = live_->airAtRotor(disc);
+            for (std::size_t k = 0; k < 3; ++k) {
+                wake[k] += box[k];
+            }
+        }
         Vec3 air{mean[0] + firstGust[0] + wake[0], mean[1] + firstGust[1] + wake[1],
                  mean[2] + firstGust[2] + wake[2]};
         const WallSide& side = sides[w.group];
-        if (w.thrust > 0.0 && std::isfinite(side.gap) && side.reach > 0.0) {
+        if (!boxed && w.thrust > 0.0 && std::isfinite(side.gap) && side.reach > 0.0) {
             // +1 for a rotor as far towards the wall as any, −1 for one as far away.
             const double share = ((w.hub[0] - side.centre[0]) * side.towards[0] +
                                   (w.hub[1] - side.centre[1]) * side.towards[1] +

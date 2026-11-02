@@ -23,3 +23,8 @@ stop for the owner except the profile key approved in item 2.
   (5.8–7.4 m/s up against OpenFOAM's 7.1); 5 cm and coarser merge the jets too early. Disc
   through-flow 15–20% under OpenFOAM's, low-hover outwash 22–38% under. Go at 4 cm as an option;
   rotor_aero.md §8.
+- Item 2 (01:52–): `downwash_model: lbm`. `LiveAir` follows the first multirotor; rotors get the
+  box's air less their own (calibrated on a lone disc); fitted model outside it, for other
+  multirotors and without a hardware GPU. The sample hovers at about 0.75x real time (steps
+  batched per 5 ms; per-ms submits made it 0.57x). Rotors see 1.1 m/s inwards, as OpenFOAM's
+  1.05. Video `drone_live_air.mp4`.
