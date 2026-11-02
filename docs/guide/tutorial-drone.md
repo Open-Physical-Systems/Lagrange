@@ -110,7 +110,7 @@ its hand. The viewer draws the rotors as these blades. Fly the quadcopter on the
 rotor's thrust and torque computed from its blades (blade-element momentum):
 
 ```bash
-lagrange run profiles/examples/quad_x500_bem.yaml \
+lagrange profiles/examples/quad_x500_bem.yaml \
     --robot assets/robots/quad_x500/quad_x500.usda --world none
 ```
 
@@ -134,7 +134,7 @@ and the motors upside down under the arms, the propellers pushing
 ## 4. Gusty wind
 
 ```bash
-lagrange run profiles/examples/quad_x500_gusty.yaml \
+lagrange profiles/examples/quad_x500_gusty.yaml \
     --robot assets/robots/quad_x500/quad_x500.usda --world none
 ```
 
@@ -161,7 +161,7 @@ dust that the cameras and lidars see.
 Beside a building, on blade-element rotors that feel the air:
 
 ```bash
-lagrange run profiles/examples/quad_x500_downwash.yaml \
+lagrange profiles/examples/quad_x500_downwash.yaml \
     --robot assets/robots/quad_x500/quad_x500.usda \
     --world assets/worlds/drone_building/drone_building.urdf
 ```
@@ -179,7 +179,7 @@ The fitted wake is a set of published rules. To compute the air itself instead, 
 hardware GPU:
 
 ```bash
-lagrange run profiles/examples/quad_x500_live_air.yaml \
+lagrange profiles/examples/quad_x500_live_air.yaml \
     --robot assets/robots/quad_x500/quad_x500.usda --world none
 ```
 

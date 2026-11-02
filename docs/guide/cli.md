@@ -5,7 +5,7 @@ command it runs the simulator and its viewer together, like `gazebo`:
 
 ```bash
 source /opt/ros/lyrical/setup.bash && source install/setup.bash
-lagrange [SAMPLE | ROBOT [WORLD] | RUN.yaml] [SERVER OPTIONS] [-- VIEWER OPTIONS]
+lagrange [SAMPLE | ROBOT [WORLD] | RUN.yaml | PROFILE.yaml] [SERVER OPTIONS] [-- VIEWER OPTIONS]
 lagrange --server-only ...         # the server alone, headless
 lagrange viewer [VIEWER OPTIONS]   # the viewer alone
 lagrange samples                   # amr (default), sedan, quad, lexus, x500, swerve, people, empty
@@ -13,6 +13,10 @@ lagrange empty                     # no robot, no world: the ground only
 lagrange spawn FILE [--name NAME] [--at X,Y[,Z[,YAW]]]   # a robot into the running simulator
 lagrange delete NAME               # and out again
 ```
+
+A simulation profile (a YAML file with `domains:`, [profiles](profiles.md)) runs as
+`lagrange run PROFILE` does, with the viewer: `lagrange profiles/examples/quad_x500_downwash.yaml
+--robot assets/robots/quad_x500/quad_x500.usda --world none`. `lagrange run` itself is headless.
 
 The server listens on a socket of its own for the run (`$XDG_RUNTIME_DIR/lagrange/run-PID.sock`,
 unless `--listen` is given), so it never meets another simulator on the default socket; closing

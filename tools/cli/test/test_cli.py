@@ -121,6 +121,36 @@ def test_a_run_file_runs_a_robot_with_nothing_else(tmp_path: Path) -> None:
     assert "warehouse" not in result.stdout + result.stderr, "no world unless one is named"
 
 
+PROFILES = Path(__file__).resolve().parents[3] / "profiles/examples"
+
+
+def test_a_profile_runs_with_the_viewer(tmp_path: Path) -> None:
+    # A simulation profile (it has domains:) runs as `lagrange run` does, in the viewer.
+    env = {**os.environ, "XDG_RUNTIME_DIR": str(tmp_path)}
+    result = subprocess.run(
+        [
+            CLI,
+            str(PROFILES / "amr_sample_urdf.yaml"),
+            "--world",
+            "none",
+            "--no-ros",
+            "--",
+            "--headless",
+            "--frames",
+            "3",
+            "--wait-ms",
+            "60000",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=150,
+        env=env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '"snapshots": 1' in result.stdout, result.stdout
+    assert "[profile]" in result.stdout + result.stderr, "the profile was applied"
+
+
 def test_a_run_file_says_what_is_wrong_in_it(tmp_path: Path) -> None:
     assert "unknown key robt" in run(str(run_file(tmp_path, "robt: x.urdf\n"))).stderr
     assert (
