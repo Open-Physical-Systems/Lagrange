@@ -286,7 +286,7 @@ recorded to MCAP and replayed.
 
 <details><summary>Validation (1)</summary>
 
-- [Validation report (v1.0)](docs/validation/report.md)
+- [Validation report (v1.0, brought up to date 2026-11-03)](docs/validation/report.md)
 
 </details>
 
