@@ -153,7 +153,8 @@ def main() -> int:
         axis.set_ylabel("z, m")
     worst = summary["largest_difference"]
     axes[2].annotate(
-        f"largest difference, Cp {worst['cp']:+.2f}\n{worst['behind_nose_m']:.2f} m behind the nose",
+        f"largest difference, Cp {worst['cp']:+.2f}\n"
+        f"{worst['behind_nose_m']:.2f} m behind the nose",
         (worst["x_m"], worst["z_m"]),
         xytext=(middle_x, high[2] + 0.25 * span[2]),
         arrowprops={"arrowstyle": "->"},
