@@ -328,6 +328,93 @@ void writeSpinFrame(const std::filesystem::path& file, const LbmTunnel& tunnel, 
     writePng(file, width, height, rgb);
 }
 
+/// A panel of a frame: values on a grid drawn smooth, solid cells flat and dark.
+struct FramePanel {
+    std::size_t width{0}, height{0};
+    std::vector<double> values;  // 0 to 1 along the colour map, row 0 at the bottom
+    std::vector<std::uint8_t> solid;
+};
+
+void drawPanel(const FramePanel& panel, std::size_t scale, std::vector<std::uint8_t>& rgb,
+               std::size_t imageWidth, std::size_t top) {
+    constexpr std::array<std::uint8_t, 3> kSolid{22, 22, 28};
+    const auto scaled = static_cast<double>(scale);
+    for (std::size_t py = 0; py < panel.height * scale; ++py) {
+        const double gy = (static_cast<double>(py) + 0.5) / scaled - 0.5;
+        const auto y0 = static_cast<std::size_t>(std::clamp(gy, 0.0, panel.height - 1.0));
+        const std::size_t y1 = std::min(y0 + 1, panel.height - 1);
+        const double fy = std::clamp(gy - static_cast<double>(y0), 0.0, 1.0);
+        for (std::size_t px = 0; px < panel.width * scale; ++px) {
+            const double gx = (static_cast<double>(px) + 0.5) / scaled - 0.5;
+            const auto x0 = static_cast<std::size_t>(std::clamp(gx, 0.0, panel.width - 1.0));
+            const std::size_t x1 = std::min(x0 + 1, panel.width - 1);
+            const double fx = std::clamp(gx - static_cast<double>(x0), 0.0, 1.0);
+            const std::size_t at = 3 * ((top + panel.height * scale - 1 - py) * imageWidth + px);
+            const std::size_t nearest = (fy < 0.5 ? y0 : y1) * panel.width + (fx < 0.5 ? x0 : x1);
+            if (panel.solid[nearest] != 0) {
+                std::copy(kSolid.begin(), kSolid.end(),
+                          rgb.begin() + static_cast<std::ptrdiff_t>(at));
+                continue;
+            }
+            // Blend over the fluid corners only, so no colour bleeds out of the body.
+            double sum = 0.0;
+            double weight = 0.0;
+            for (const auto& [i, w] : {std::pair{y0 * panel.width + x0, (1.0 - fx) * (1.0 - fy)},
+                                       std::pair{y0 * panel.width + x1, fx * (1.0 - fy)},
+                                       std::pair{y1 * panel.width + x0, (1.0 - fx) * fy},
+                                       std::pair{y1 * panel.width + x1, fx * fy}}) {
+                if (panel.solid[i] == 0) {
+                    sum += panel.values[i] * w;
+                    weight += w;
+                }
+            }
+            const Vec3 colour = diverging(sum / std::max(weight, 1e-9));
+            for (std::size_t k = 0; k < 3; ++k) {
+                rgb[at + k] = static_cast<std::uint8_t>(colour.at(k) * 255.0);
+            }
+        }
+    }
+}
+
+/// The picture of CFD reports: the wind's speed in a slice along the body, and over the road or
+/// under the body the pressure coefficient in a slice seen from above. legend.json gives the
+/// scales.
+void writeFlowFrame(const std::filesystem::path& file, const LbmTunnel& tunnel, std::size_t sliceY,
+                    std::size_t sliceZ, double speed) {
+    const LbmConfig& c = tunnel.config();
+    constexpr std::size_t kScale = 4;
+    constexpr double kTopSpeed = 1.4;  // of the wind, the top of the colour scale
+    constexpr std::size_t kGap = 2;    // cells between the panels
+    const double dynamicPressure = 0.5 * c.airDensity * speed * speed;
+    FramePanel side{c.nx, c.nz, std::vector<double>(c.nx * c.nz),
+                    std::vector<std::uint8_t>(c.nx * c.nz)};
+    for (std::size_t z = 0; z < c.nz; ++z) {
+        for (std::size_t x = 0; x < c.nx; ++x) {
+            const std::size_t cell = tunnel.index(x, sliceY, z);
+            const std::array<double, 3> u = tunnel.velocity(cell);
+            const double magnitude = std::sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+            side.values[z * c.nx + x] = magnitude / (kTopSpeed * speed);
+            side.solid[z * c.nx + x] = tunnel.isSolid(cell) ? 1 : 0;
+        }
+    }
+    FramePanel above{c.nx, c.ny, std::vector<double>(c.nx * c.ny),
+                     std::vector<std::uint8_t>(c.nx * c.ny)};
+    for (std::size_t y = 0; y < c.ny; ++y) {
+        for (std::size_t x = 0; x < c.nx; ++x) {
+            const std::size_t cell = tunnel.index(x, y, sliceZ);
+            above.values[y * c.nx + x] = 0.5 + 0.5 * tunnel.pressure(cell) / dynamicPressure;
+            above.solid[y * c.nx + x] = tunnel.isSolid(cell) ? 1 : 0;
+        }
+    }
+    const std::size_t width = c.nx * kScale;
+    const std::size_t gap = kGap * kScale;
+    const std::size_t height = (c.nz + c.ny) * kScale + gap;
+    std::vector<std::uint8_t> rgb(width * height * 3, 16);
+    drawPanel(side, kScale, rgb, width, 0);
+    drawPanel(above, kScale, rgb, width, c.nz * kScale + gap);
+    writePng(file, width, height, rgb);
+}
+
 /// ParaView's ImageData, the mean flow, with raw binary arrays appended.
 void writeVti(const std::filesystem::path& file, const LbmTunnel& tunnel, const Vec3& origin) {
     const LbmConfig& c = tunnel.config();
@@ -532,11 +619,22 @@ Expected<WindTunnelResult, std::string> runWindTunnel(const World& world,
         static_cast<std::size_t>(options.meanPasses * static_cast<double>(pass) / kWindows);
     std::array<double, kWindows> windowDrag{};
     const std::size_t framesPerWindow = options.frames / kWindows;
+    // The second slice: half a body's height is air beside it; with a road, just over the road.
+    const auto frameZ = std::min(
+        static_cast<std::size_t>(
+            ((options.ground ? low[2] - clearance / 2.0 : (low[2] + high[2]) / 2.0) - boxLow[2]) /
+            cell),
+        config.nz - 1);
     std::size_t frame = 0;
     const auto frameY = static_cast<std::size_t>(((low[1] + high[1]) / 2.0 - boxLow[1]) / cell);
     if (framesPerWindow > 0 && !outputDirectory.empty()) {
         std::error_code ec;
         std::filesystem::create_directories(std::filesystem::path(outputDirectory) / "frames", ec);
+        std::ofstream legend(std::filesystem::path(outputDirectory) / "frames" / "legend.json");
+        legend << "{\"top_panel\": \"speed, m/s\", \"top_min\": 0, \"top_max\": "
+               << 1.4 * options.speed
+               << ", \"bottom_panel\": \"pressure coefficient\", \"bottom_min\": -1, "
+                  "\"bottom_max\": 1, \"colours\": \"blue, white, red\"}\n";
     }
     for (std::size_t i = 0; i < kWindows; ++i) {
         // A window's loads are the mean of its pieces, however many frames cut it up.
@@ -557,8 +655,12 @@ Expected<WindTunnelResult, std::string> runWindTunnel(const World& world,
             if (framesPerWindow > 0 && !outputDirectory.empty()) {
                 char name[32];
                 std::snprintf(name, sizeof(name), "%05zu.png", frame++);
-                writeSpinFrame(std::filesystem::path(outputDirectory) / "frames" / name, tunnel,
-                               frameY, options.speed, size);
+                const auto picture = std::filesystem::path(outputDirectory) / "frames" / name;
+                if (options.frameSpin) {
+                    writeSpinFrame(picture, tunnel, frameY, options.speed, size);
+                } else {
+                    writeFlowFrame(picture, tunnel, frameY, frameZ, options.speed);
+                }
             }
         }
         done += window;

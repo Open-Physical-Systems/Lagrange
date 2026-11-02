@@ -34,9 +34,11 @@ struct WindTunnelOptions {
     /// it; that is also what a negative value gives. A model's z = 0 says nothing: a loaded robot
     /// may stand raised.
     double clearance{-1.0};
-    /// Pictures of the wake moving: this many PNG files of a slice through the body, in frames/ of
-    /// the output, while it averages. 0: none. Colour is the air's spin about the slice's normal.
+    /// Pictures of the wake moving: this many PNG files in frames/ of the output, while it
+    /// averages. 0: none. Speed in a slice along the body over pressure in a slice from above;
+    /// frames/legend.json holds their scales. `frameSpin`: the air's spin in the first slice alone.
     std::size_t frames{0};
+    bool frameSpin{false};
     /// Where to step it: null for the CPU reference.
     const gpu::Device* device{nullptr};
 };

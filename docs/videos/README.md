@@ -17,7 +17,7 @@ Iris Xe, about 12 minutes for all).
 | [town_winter.mp4](town_winter.mp4) | Winter | `lagrange town --season winter` |
 | [town_rainy.mp4](town_rainy.mp4) | The rainy season | `lagrange town --season rainy` |
 | [realistic_warehouse.mp4](realistic_warehouse.mp4) | A robot in the sample warehouse | `lagrange ROBOT WORLD` |
-| [wind_tunnel_wake.mp4](wind_tunnel_wake.mp4) | The air's spin behind an Ahmed body, moving, in a slice through it | `lagrange tunnel --frames 200` |
+| [wind_tunnel_wake.mp4](wind_tunnel_wake.mp4) | Speed in a slice along an Ahmed body, moving, over pressure seen from above | `lagrange tunnel --frames 200` |
 | [wind_tunnel_flow.mp4](wind_tunnel_flow.mp4) | The mean flow as a world: streamlines, a slice, surface pressure, colour scale | `lagrange --robot none --world DIR/flow_view.usda` |
 | [gravity.mp4](gravity.mp4) | A pendulum under Earth, Moon and Jupiter gravity, changed while it swings | `lagrange set gravity=1.62` |
 | [wind.mp4](wind.mp4) | A hovering quadcopter leaning into 6 and 14 m/s of wind, and calm again | `lagrange set wind_speed=6 wind_from=270` |
@@ -35,4 +35,4 @@ Iris Xe, about 12 minutes for all).
 In the lidar materials clip the viewer's lidar views draw two tones, strong and attenuated, not a
 colour scale. The presets' reflectivities are illustrative, not measured.
 
-The wind tunnel clips show where the air goes on a coarse grid. Their Cd, 1.12 at 2M cells, is far from the Ahmed body's measured 0.298 (`docs/design/domains/aerodynamics.md` §10). The checkerboard in the wake clip is a known defect of the flow, not of the video.
+The wind tunnel clips show where the air goes on a coarse grid. Their Cd, 1.12 at 2M cells, is far from the Ahmed body's measured 0.298 (`docs/design/domains/aerodynamics.md` §10). The stripes in its pressure panel are a known defect of the flow, not of the video ([cfd.md](../design/domains/cfd.md)).

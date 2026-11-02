@@ -57,6 +57,12 @@ repos:
       - id: reuse
   - repo: local
     hooks:
+      - id: docs-index
+        name: the README links every document
+        entry: python3 tools/ci/docs_index.py --check
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: position-types
         name: no float world or region positions (invariant 6)
         entry: python3 tools/lint/check_position_types.py

@@ -80,7 +80,7 @@ contact is one-way and nothing balances ([tutorial](docs/guide/tutorial-humans.m
 
 ### Wind tunnel
 
-![The air's spin behind an Ahmed body, moving, in a slice through it](docs/imgs/wind-tunnel-wake.gif)
+![Speed in a slice along an Ahmed body, moving, over pressure seen from above](docs/imgs/wind-tunnel-wake.gif)
 
 `lagrange tunnel ROBOT` blows air past a robot's collision shapes with a lattice Boltzmann solver,
 on the GPU when there is one. It writes forces per link, ParaView and NanoVDB fields, a world of
@@ -125,8 +125,159 @@ recorded to MCAP and replayed.
 | Architecture | [docs/design/architecture.md](docs/design/architecture.md) |
 | Formats, USD schemas, profiles | [docs/design/formats.md](docs/design/formats.md) |
 | Viewer and protocol | [docs/design/viewer.md](docs/design/viewer.md), [docs/design/protocol.md](docs/design/protocol.md) |
+| CFD: methods, equations, OpenFOAM and what was measured | [docs/design/domains/cfd.md](docs/design/domains/cfd.md) |
 | Design proposals | [rfcs/](rfcs/) |
 | Decisions and open questions | [docs/plan/open-questions.md](docs/plan/open-questions.md) |
+
+### Every document
+
+<!-- docs-index begin: written by tools/ci/docs_index.py -->
+
+<details><summary>User guide (16)</summary>
+
+- [User guide](docs/guide/README.md)
+- [Autoware with a simulated car](docs/guide/autoware.md)
+- [The `lagrange` command](docs/guide/cli.md)
+- [Concepts](docs/guide/concepts.md)
+- [Profiles](docs/guide/profiles.md)
+- [The run file](docs/guide/run-file.md)
+- [Tutorial: an AMR in a warehouse](docs/guide/tutorial-amr.md)
+- [Tutorial: the sample arm with MoveIt 2](docs/guide/tutorial-arm.md)
+- [Tutorial: a car in a city block](docs/guide/tutorial-cars.md)
+- [Tutorial: a quadcopter, from hover to a PX4 mission](docs/guide/tutorial-drone.md)
+- [Tutorial: weather, interference and radio links](docs/guide/tutorial-environment.md)
+- [Tutorial: huge worlds](docs/guide/tutorial-huge-worlds.md)
+- [Tutorial: people around your robot](docs/guide/tutorial-humans.md)
+- [Tutorial: a robot's power system from a schematic](docs/guide/tutorial-power.md)
+- [Writing a module](docs/guide/writing-a-module.md)
+- [Writing a plugin](docs/guide/writing-a-plugin.md)
+
+</details>
+
+<details><summary>Domains and physics (14)</summary>
+
+- [Domain design documents](docs/design/domains/README.md)
+- [Domain: aerodynamics, wind and rotor aero](docs/design/domains/aerodynamics.md)
+- [CFD: methods, equations and what was measured](docs/design/domains/cfd.md)
+- [Domain: comms](docs/design/domains/comms.md)
+- [Domain: electrical](docs/design/domains/electrical.md)
+- [Domain: electromagnetic interference (EMI)](docs/design/domains/emi.md)
+- [Domain: hydrodynamics (marine)](docs/design/domains/hydrodynamics.md)
+- [Domain: radiation](docs/design/domains/radiation.md)
+- [Domain: rigid body and articulations](docs/design/domains/rigid_body.md)
+- [Domain: sensors](docs/design/domains/sensors.md)
+- [Domain: thermal](docs/design/domains/thermal.md)
+- [Domain: traffic](docs/design/domains/traffic.md)
+- [Domain: vehicle dynamics](docs/design/domains/vehicle_dynamics.md)
+- [Domain: weather](docs/design/domains/weather.md)
+
+</details>
+
+<details><summary>Viewer UI design (26)</summary>
+
+- [Lagrange UI · 00 · Design system](docs/design/ui/00-design-system/README.md)
+- [00 · Design system: SPEC](docs/design/ui/00-design-system/SPEC.md)
+- [Lagrange UI · 01 · Launcher](docs/design/ui/01-launcher/README.md)
+- [01 · Launcher: SPEC](docs/design/ui/01-launcher/SPEC.md)
+- [Lagrange UI · 02 · Scene workspace](docs/design/ui/02-scene/README.md)
+- [02 · Scene workspace: SPEC (default workspace)](docs/design/ui/02-scene/SPEC.md)
+- [Lagrange UI · 03 · Domains & profile](docs/design/ui/03-domains/README.md)
+- [03 · Domains & profile: SPEC](docs/design/ui/03-domains/SPEC.md)
+- [Lagrange UI · 04 · Electrical workspace](docs/design/ui/04-electrical/README.md)
+- [04 · Electrical workspace: SPEC](docs/design/ui/04-electrical/SPEC.md)
+- [Lagrange UI · 05 · Signals & scopes](docs/design/ui/05-signals/README.md)
+- [05 · Signals & scopes: SPEC](docs/design/ui/05-signals/SPEC.md)
+- [Lagrange UI · 06 · Sensors workspace](docs/design/ui/06-sensors/README.md)
+- [06 · Sensors workspace: SPEC](docs/design/ui/06-sensors/SPEC.md)
+- [Lagrange UI · 07 · Environment & fields](docs/design/ui/07-environment/README.md)
+- [07 · Environment & fields: SPEC](docs/design/ui/07-environment/SPEC.md)
+- [Lagrange UI · 08 · Replay & validation](docs/design/ui/08-replay/README.md)
+- [08 · Replay & validation: SPEC](docs/design/ui/08-replay/SPEC.md)
+- [Lagrange UI · 09 · ROS 2 workspace](docs/design/ui/09-ros2/README.md)
+- [09 · ROS 2 workspace: SPEC](docs/design/ui/09-ros2/SPEC.md)
+- [Lagrange UI · 10 · World (huge worlds)](docs/design/ui/10-world/README.md)
+- [10 · World (huge worlds): SPEC](docs/design/ui/10-world/SPEC.md)
+- [Lagrange UI · 11 · Performance](docs/design/ui/11-performance/README.md)
+- [11 · Performance: SPEC](docs/design/ui/11-performance/SPEC.md)
+- [Lagrange viewer UI design](docs/design/ui/README.md)
+- [Lagrange viewer: shared UI conventions](docs/design/ui/shared/ui-conventions.md)
+
+</details>
+
+<details><summary>Design (9)</summary>
+
+- [Architecture](docs/design/architecture.md)
+- [Performance benchmarks](docs/design/benchmarks.md)
+- [Dependencies](docs/design/dependencies.md)
+- [Formats](docs/design/formats.md)
+- [Huge worlds](docs/design/huge-worlds.md)
+- [UI↔server protocol](docs/design/protocol.md)
+- [Robot classes](docs/design/robot-classes.md)
+- [Security review (v1.0)](docs/design/security.md)
+- [Viewer](docs/design/viewer.md)
+
+</details>
+
+<details><summary>Plan and evaluation (14)</summary>
+
+- [Project overview](docs/plan/00-overview.md)
+- [What to develop next: an evaluation, 2026-11-01](docs/plan/evaluation-2026-11.md)
+- [Open questions and challenges to the plan](docs/plan/open-questions.md)
+- [Progress](docs/plan/progress.md)
+- [Repository, CI, release and security plan](docs/plan/repo-tooling.md)
+- [Risk register](docs/plan/risks.md)
+- [Roadmap](docs/plan/roadmap.md)
+- [Spike 0.2-B1: OpenUSD v26.08 on Ubuntu 26.04](docs/plan/spikes/0.2-B1-openusd.md)
+- [Spike 0.2-C1: MuJoCo source and validation](docs/plan/spikes/0.2-C1-mujoco.md)
+- [Spike 0.2-C6: a second rigid-body backend on Jolt Physics](docs/plan/spikes/0.2-C6-jolt.md)
+- [Spike 0.2-F7: `rosidl::Buffer` (desk study)](docs/plan/spikes/0.2-F7-rosidl-buffer.md)
+- [Spike 0.2-H8: packaging trial](docs/plan/spikes/0.2-H8-packaging.md)
+- [Usability and sensor physics queue](docs/plan/usability-physics-queue.md)
+- [Verification record](docs/plan/verification.md)
+
+</details>
+
+<details><summary>Release notes (8)</summary>
+
+- [v0.2.0 compared with Gazebo Jetty: the sample AMR](docs/release/v0.2.0-comparison.md)
+- [Lagrange v0.2.0: simulation core and AMR (release notes, draft)](docs/release/v0.2.0.md)
+- [Lagrange v0.3.0: arms, electrical and thermal (release notes)](docs/release/v0.3.0.md)
+- [Lagrange v0.4.0: drones (release notes)](docs/release/v0.4.0.md)
+- [Lagrange v0.5.0: weather, interference and radio links (release notes)](docs/release/v0.5.0.md)
+- [Lagrange v0.6.0: cars and autonomous cars (release notes)](docs/release/v0.6.0.md)
+- [Lagrange v0.7.0: huge worlds (release notes)](docs/release/v0.7.0.md)
+- [Lagrange v1.0.0: stable (release notes)](docs/release/v1.0.0.md)
+
+</details>
+
+<details><summary>Validation (1)</summary>
+
+- [Validation report (v1.0)](docs/validation/report.md)
+
+</details>
+
+<details><summary>Videos (1)</summary>
+
+- [Feature videos](docs/videos/README.md)
+
+</details>
+
+<details><summary>Design proposals (RFCs) (10)</summary>
+
+- [RFC 0001: Module interface, signals and scheduling contract](rfcs/0001-module-interface.md)
+- [RFC 0002: USD custom schemas](rfcs/0002-usd-schemas.md)
+- [RFC 0003: UI↔server protocol](rfcs/0003-ui-server-protocol.md)
+- [RFC 0004: Capability tiers](rfcs/0004-capability-tiers.md)
+- [RFC 0005: Simulation profile format](rfcs/0005-sim-profile-format.md)
+- [RFC 0006: Native viewer stack](rfcs/0006-native-viewer-stack.md)
+- [RFC 0007: The v1.0 freeze](rfcs/0007-v1-freeze.md)
+- [RFC 0008: Plugins in the server: loading, scene access, custom sensors and physics backends](rfcs/0008-plugins-in-the-server.md)
+- [RFC 0009: Walking humans](rfcs/0009-walking-humans.md)
+- [RFC 0010: Components between buses, and a schematic's parts](rfcs/0010-electrical-nodes.md)
+
+</details>
+
+<!-- docs-index end -->
 
 ## Install
 
