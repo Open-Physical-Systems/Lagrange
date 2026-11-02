@@ -105,6 +105,11 @@ struct ServerOptions {
         double sizeX{10.0}, sizeY{10.0}, depth{2.0};
     };
     std::vector<Water> water;
+    /// --water-current VX,VY[,VZ]: m/s, world ENU, the water's steady current (hydrodynamics.md).
+    std::array<double, 3> waterCurrent{};
+    /// --water-waves AMPLITUDE,PERIOD[,TOWARDS]: m, s and degrees (0 = towards +x, 90 = +y):
+    /// one train of linear (Airy) waves on every body of water. Amplitude 0: none.
+    std::array<double, 3> waterWaves{};
     /// --sensor-timing NAME=LATENCY[,JITTER]: s, of a sensor's messages on ROS (sensors.md).
     struct SensorTiming {
         std::string sensor;

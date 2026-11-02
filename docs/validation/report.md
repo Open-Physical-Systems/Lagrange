@@ -50,7 +50,7 @@ published curves only, which is risk R12 in `docs/plan/risks.md`.
 | Traffic and scenarios | IDM equilibrium; light cycle; sample scenario timeline | IDM, lights, determinism met; fundamental diagram owed | `test_traffic`, `test_openscenario`, `test_opendrive` | not applicable / none yet |
 | Huge worlds | Same world at the origin; GeographicLib | Bit-identical poses at 500 km; rebase within 1e-9 m (MuJoCo), 1e-4 m (Jolt) | `test_robot`, `test_frames`, `test_regions`, `test_tile_selector` | not applicable |
 | Radiation | — | Not built; `zero` substitute only | — | none |
-| Hydrodynamics | Still water: buoyancy and drag (`lagrange_hydrodynamics`), the closed-form checks of hydrodynamics.md §9 | Not Fossen: no added mass, waves or currents | closed form | none measured |
+| Hydrodynamics | Buoyancy, drag, a sphere's added mass (Lamb), currents and linear (Airy) waves (`lagrange_hydrodynamics`), the closed-form checks of hydrodynamics.md §9 | released sphere's rise within 3 % of g(ρV − m)/(m + ½ρV); drift with a current within 0.02 m/s; heave on long waves within 1 cm of the amplitude. Not Fossen's full model (no rotational added inertia, no Coriolis terms, no radiation) | `test_water` | none measured |
 
 ## Since v1.0 (to 2026-11-03)
 
@@ -81,8 +81,8 @@ Said plainly, so nobody reads more into these than is there:
 - **The live box's unsteadiness**: the rotor speeds move about 1 % in hover with it; no measured
   spectrum to compare.
 - **Fountain lift on the frame** in the fitted model: our own OpenFOAM runs only (being added).
-- **Hydrodynamics beyond still water**: no added mass, waves or currents (Fossen's model is
-  planned, hydrodynamics.md).
+- **Hydrodynamics beyond a sphere's added mass**: other shapes' added mass, rotational added
+  inertia, wave radiation (Fossen's full model is planned, hydrodynamics.md).
 - **Lidar intensity**, **GNSS error statistics**, **sensor timing histograms**: no evidence found
   (Sensors table below).
 - **Ultrasonic cone** (the `lagrange_tof` plugin): a geometric cone and dead zone, no datasheet

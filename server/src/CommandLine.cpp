@@ -106,6 +106,8 @@ void printServerOptions(std::FILE* out) {
         "  --sensor-timing NAME=LATENCY[,JITTER]  delay a sensor's ROS messages, in s "
         "(repeatable)\n"
         "  --water X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH  a body of still water (repeatable)\n"
+        "  --water-current VX,VY[,VZ]  the water's current, m/s\n"
+        "  --water-waves AMPLITUDE,PERIOD[,TOWARDS_DEG]  linear waves on the water (m, s)\n"
         "  --joint-control  drive every moving joint on its own from /joint_commands\n"
         "  --joint-loop-hz HZ  bandwidth of its position and velocity loops (default 8); more\n"
         "                   holds stiffer, as a leg carrying a body needs\n"
@@ -600,6 +602,30 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--water needs X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH, the last three positive";
             }
             options.water.push_back({{v[0], v[1], v[2]}, v[3], v[4], v[5]});
+        } else if (arg == "--water-current") {
+            const char* text = value();
+            std::array<double, 3> v{};
+            int used = 0;
+            const int read = text == nullptr ? 0
+                                             : std::sscanf(text, "%lf,%lf%n,%lf%n", &v[0], &v[1],
+                                                           &used, &v[2], &used);
+            if (read < 2 || text[used] != '\0' || !std::isfinite(v[0] + v[1] + v[2])) {
+                return "--water-current needs VX,VY[,VZ] in m/s";
+            }
+            options.waterCurrent = v;
+        } else if (arg == "--water-waves") {
+            const char* text = value();
+            std::array<double, 3> v{};
+            int used = 0;
+            const int read = text == nullptr ? 0
+                                             : std::sscanf(text, "%lf,%lf%n,%lf%n", &v[0], &v[1],
+                                                           &used, &v[2], &used);
+            if (read < 2 || text[used] != '\0' || !(v[0] >= 0.0) || !(v[1] > 0.0) ||
+                !std::isfinite(v[0] + v[1] + v[2])) {
+                return "--water-waves needs AMPLITUDE,PERIOD[,TOWARDS_DEG], amplitude ≥ 0 m, "
+                       "period > 0 s";
+            }
+            options.waterWaves = v;
         } else if (arg == "--joint-control") {
             options.jointControl = true;
         } else if (arg == "--joint-loop-hz") {

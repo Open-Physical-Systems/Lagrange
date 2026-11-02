@@ -13,7 +13,7 @@ stop for the owner except the profile key approved in item 2.
 | 5 | Contact force and joint reaction in Jolt | the physics conformance test checks both engines | done (PR below) |
 | 6 | Scopes signal picker with search | follows `docs/design/ui/` and `.claude/rules/viewer-ui.md`; headless viewer test presses it | done (PR below) |
 | 7 | `docs/validation` page: every physical model, its reference, its error, its test | says which have none | done (PR below) |
-| 8 | Hydrodynamics: added mass, waves and currents (Fossen) | tested against closed-form results | |
+| 8 | Hydrodynamics: added mass, waves and currents (Fossen) | tested against closed-form results | done (PR below) |
 | 9 | Thermal camera (`ThermalCameraAPI_1`) | schema change: asks the owner first (the rules approve only item 2's profile key) | |
 
 ## Notes
@@ -45,3 +45,6 @@ stop for the owner except the profile key approved in item 2.
 - Item 7: `docs/validation/report.md` brought up to date: the models since v1.0 with their
   references and results (including the misses: Kiran 12 points short, the tunnel's Ahmed body
   over four times too high), and a plain list of the models with no reference yet.
+- Item 8: a sphere's added mass (Morison inertia terms, with a smoothing gain that keeps light
+  bodies stable), `--water-current`, `--water-waves` (Airy, finite depth). The existing draft test
+  needed a 20 s mean on Jolt: a half-dense cube is unstable upright and rolls slowly.

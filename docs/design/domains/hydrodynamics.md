@@ -75,10 +75,23 @@ drag (`Cd`, illustrative) on cells sampled in its colliders, so a hull tilts and
 `body/<b>/wrench/water`, `body/<b>/submerged`. The frontal area for drag is taken as a box's, so it is
 approximate for other shapes. `simulate: {water: false}` or `--domain hydrodynamics=off` turns the forces off.
 
-Not modelled: added mass, waves, currents, a hull's waterplane beyond the cells, wet friction on what
-drives through. Water has no collider, and a robot on the ground under it stays on the ground. It is
+The water can move: `--water-current VX,VY[,VZ]` (m/s) is a steady current, and
+`--water-waves AMPLITUDE,PERIOD[,TOWARDS_DEG]` one train of linear (Airy) waves, `ω² = g·k·tanh(k·d)`
+over the water's depth, the surface at `η = a·cos(k·x − ω·t)` and the water under it in the orbits of
+linear theory (Dean and Dalrymple, *Water Wave Mechanics for Engineers and Scientists*, 1991, ch. 3).
+Cells count as wet under the moving surface, and the drag works on a cell's speed through the water.
+A submerged body also gets Morison's inertia terms at its centre of mass: `ρ·V·a_w` from the water's
+acceleration and `m_a·(a_w − a_b)` from its added mass, `m_a = ½·ρ·V` (a sphere's in potential flow,
+Lamb, *Hydrodynamics*, §92) along every axis. The body's acceleration `a_b` is last step's, smoothed
+with gain `1/(1 + m_a/m)`: an explicit added mass larger than the body's own would otherwise diverge,
+and with this gain a steady push settles in one step on the exact `F/(m + m_a)`.
+
+Not modelled: an added mass for other shapes than a sphere (a cube's is larger, about 0.7·ρ·V
+TODO(verify)), added inertia in rotation and the Coriolis terms of Fossen's model, wave radiation
+and diffraction (the waves pass through bodies), a hull's waterplane beyond the cells, wet friction
+on what drives through. The viewer and the lidars still see a flat surface. Water has no collider, and a robot on the ground under it stays on the ground. It is
 drawn as an opaque sheet (the viewer has no transparency), and cameras see that sheet. A lidar
 sees its surface as a mirror: `water:reflectivity` straight back near normal, no return at a slant,
 and no return from the bottom, as near-infrared is absorbed. Both lidar tiers see it.
 
-Checked against the closed forms (`server/test/test_water.cpp`): a floating box's draft, an off-centre hull's, and a sinking box's terminal speed.
+Checked against the closed forms (`server/test/test_water.cpp`): a floating box's draft, an off-centre hull's, and a sinking box's terminal speed; a sphere half as dense as water released under it starts rising at `g(ρ_w·V − m)/(m + ½ρ_w·V)` = g/2 within 3% (without added mass it would be g), on MuJoCo and Jolt; a floating box in a 0.5 m/s current drifts with it within 0.02 m/s; a 0.4 m float on 0.1 m, 4 s waves (25 m long) heaves 0.1 m within 1 cm.
