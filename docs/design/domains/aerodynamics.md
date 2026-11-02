@@ -43,8 +43,17 @@ propeller file (formats.md §3.3.1) named by the rotor's `aero:rotor:propeller`.
   the blade-element forces equal the momentum change of the air through the annulus:
   `dT = 4πrρF·|V + w|·w`, `dQ = 4πr²ρF·|V + w|·w_t`, with Prandtl's tip-loss factor `F`. The
   axial balance is solved by bracketed root finding (Illinois), the swirl by a few fixed-point
-  passes. In descent through the rotor's own wake (the vortex-ring state, `−2w < V < 0`)
-  momentum theory has no valid solution; the result there is the momentum solution, flagged.
+  passes. In descent through the rotor's own wake (the vortex-ring state, `0 < V_d/v_h < 2`
+  with `V_d` the descent speed and `v_h` the induced velocity with no axial flow) momentum
+  theory has no valid solution. There each annulus takes its no-axial-flow induced velocity
+  scaled by the empirical quartic `ṽ/v_h = 1 + 1.125x − 1.372x² + 1.718x³ − 0.655x⁴`,
+  `x = V_d/v_h`, never under 1, as NeuroBEM does (Bauersfeld et al. 2021, RSS, eqs. 18–19,
+  after Hoffmann et al. 2007), and the result is flagged (`vortexRing`). The thrust joins
+  hover's at the state's start (within 0.1%) and comes within 10% of hover's thrust of the
+  windmill-brake state's at its end (a step of 497 N to 554 N for a 626 N hover); at a fixed
+  speed it rises about 5% at `x = 1` and falls about 20% under hover's near `x = 2`
+  (`test_bem`, NACA 5868 propeller). Before 2026-11-03 the annulus took no induced velocity
+  there, so a rotor sinking into its own wake made far too much thrust.
 - **Sections** over the full circle of angles of attack: linear lift with the Prandtl–Glauert
   factor when the speed of sound is given, a parabolic drag polar, a blend over 8° past stall
   into a flat plate (normal force `2·sin α`), which also covers reversed flow. So a propeller
@@ -86,6 +95,16 @@ propeller file (formats.md §3.3.1) named by the rotor's `aero:rotor:propeller`.
 
 Ground effect: Cheeseman–Bennett correction `T/T∞ = 1 / (1 − (R / 4z)²)` for `z/R > 0.25`,
 clamped below that. Height `z` is found by a downward ray cast against collision geometry.
+
+Ceiling effect (with `ground_effect`, both fidelities): a ray up each rotor's thrust axis finds
+the nearest fixed box of the scenery (a bridge deck, a ceiling) at distance `D`. Hsiao and
+Chirarattananon (2019, IEEE/ASME Trans. Mechatronics, arXiv:1905.04632) balance momentum under
+a flat ceiling: `½u² − u − α0·δ²/16 = 0`, `u = v∞/v_i`, `δ = R/D`, so `γ = u/2 =
+½ + ½·√(1 + α0·δ²/8)`, and the power for a thrust is `T^(3/2)/(γ·√(2ρA))`. At the same power
+the thrust is `γ^(2/3)` times the free thrust: +11% at half a radius, +3% at one radius, under
+1% beyond two. `α0 = 1.6` is their fit for a single 23 mm propeller (TODO(verify) for larger
+ones; their 50 mm propeller also needed a recirculation term); `δ` is held at 20, the edge of
+their data, and beyond 6 R the effect is left out (`test_rotor_aero`).
 
 ## 3. Signals
 

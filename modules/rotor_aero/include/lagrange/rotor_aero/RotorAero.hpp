@@ -40,6 +40,19 @@ struct Load {
 inline constexpr double kGroundEffectMinHeight = 0.5;  // ×R; the validated range starts here
 [[nodiscard]] double groundEffect(double radius, double height);
 
+/// Ceiling effect of Hsiao and Chirarattananon (2019, IEEE/ASME Trans. Mechatronics, "Ceiling
+/// effects for hybrid aerial–surface locomotion of small rotorcraft", arXiv:1905.04632, eqs. 5,
+/// 6 and 9, without recirculation): with the propeller a distance D under a flat ceiling,
+/// δ = R/D and γ = ½ + ½·√(1 + α0·δ²/8), the thrust at the same power is γ^(2/3) times the free
+/// thrust (their eq. 7: P = T^(3/2) / (γ·√(2ρA))), as the ground effect is taken at the same
+/// power. α0 = kCeilingAsymmetry, their fit for a single 23 mm propeller; TODO(verify) for
+/// larger propellers (their 50 mm one needed recirculation too). δ is held at kCeilingMaxRatio,
+/// the edge of their data, and beyond kCeilingReach·R the effect is left out.
+inline constexpr double kCeilingAsymmetry = 1.60;  // α0
+inline constexpr double kCeilingMaxRatio = 20.0;   // δ
+inline constexpr double kCeilingReach = 6.0;       // ×R
+[[nodiscard]] double ceilingEffect(double radius, double distance);
+
 /// The rotor_aero domain at the `coefficients` fidelity (docs/design/domains/aerodynamics.md):
 /// every joint with RotorAPI_1 is a propeller whose static thrust and shaft torque follow its
 /// coefficients, with a first-order inflow lag (config "inflow_time_constant", s; 0, the
@@ -120,6 +133,12 @@ private:
     bool groundEffect_{true};
     bool hasGround_{false};
     std::array<double, 3> groundPoint_{}, groundNormal_{0.0, 0.0, 1.0};
+    struct Ceiling {  // a fixed box of the scenery, world frame
+        std::array<double, 3> centre{};
+        std::array<double, 4> orientation{1.0, 0.0, 0.0, 0.0};
+        std::array<double, 3> half{};
+    };
+    std::vector<Ceiling> ceilings_;
     std::vector<Rotor> rotors_;
 };
 

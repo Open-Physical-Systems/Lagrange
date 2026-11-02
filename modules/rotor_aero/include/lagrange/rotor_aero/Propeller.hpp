@@ -122,9 +122,15 @@ struct Air {
 /// averaged round the disc, each meeting ω·r + V_e·sin ψ, with Glauert's mass flow through each
 /// annulus, which gives the in-plane H-force, the hub's rolling moment and the change of thrust.
 ///
-/// Momentum theory has no steady solution in the vortex-ring state (descent at about the induced
-/// velocity); there the annulus takes the blade-element forces with no induced velocity, the
-/// common engineering treatment, and `vortexRing` is set.
+/// Momentum theory has no steady solution in the vortex-ring state (descending at 0 < V/v_h < 2,
+/// v_h the induced velocity with no axial flow); there each annulus takes its no-axial-flow
+/// induced velocity scaled by vortexRingInduced, and `vortexRing` is set.
+/// The induced velocity in the vortex-ring state as a share of v_h, at a descent of x = V/v_h
+/// (0 < x < 2): the empirical quartic of Hoffmann et al. (2007, AIAA GNC, "Quadrotor helicopter
+/// flight dynamics and control: theory and experiment") as NeuroBEM uses it (Bauersfeld et al.
+/// 2021, RSS, eq. 19), never under 1 (their max(ṽ_i, v_h)).
+[[nodiscard]] double vortexRingInduced(double descentOverHover);
+
 struct BemLoad {
     double thrust{0.0};  // N, along the thrust direction
     double torque{0.0};  // N·m, the air's torque on the propeller about the thrust direction,

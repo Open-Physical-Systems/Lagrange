@@ -5,6 +5,7 @@
 #include "lagrange/world/PoseMath.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <numbers>
 #include <span>
 #include <string>
@@ -111,6 +112,37 @@ TEST(Bem, SlowDescentIsTheVortexRingState) {
     const BemLoad hover = bemLoad(p, 50.0, 0.0, kSeaLevel);
     EXPECT_FALSE(hover.vortexRing);
     EXPECT_TRUE(bemLoad(p, 50.0, -0.5 * hover.inducedVelocity, kSeaLevel).vortexRing);
+}
+
+// NeuroBEM's fit (Bauersfeld et al. 2021, eq. 19): 1 at the start of the vortex-ring state,
+// most near V = 1.5 v_h, back to v_h at the windmill-brake state.
+TEST(Bem, TheVortexRingFitIsNeuroBems) {
+    EXPECT_DOUBLE_EQ(vortexRingInduced(0.0), 1.0);
+    EXPECT_NEAR(vortexRingInduced(1.0), 1.0 + 1.125 - 1.372 + 1.718 - 0.655, 1e-12);  // 1.816
+    EXPECT_NEAR(vortexRingInduced(1.5), 2.083, 1e-3);
+    EXPECT_NEAR(vortexRingInduced(2.0), 1.026, 1e-3);
+    for (double x = 0.0; x <= 2.0; x += 0.05) {
+        EXPECT_GE(vortexRingInduced(x), 1.0) << x;
+    }
+}
+
+// In the vortex-ring state the rotor's induced velocity is the fit's share of v_h, and its
+// thrust joins hover's at the state's start and the windmill-brake state's at its end.
+TEST(Bem, TheVortexRingStateJoinsItsNeighbours) {
+    const Propeller p = naca5868(15.0);
+    const BemLoad hover = bemLoad(p, 50.0, 0.0, kSeaLevel);
+    const double vh = hover.inducedVelocity;
+    const BemLoad start = bemLoad(p, 50.0, -0.01 * vh, kSeaLevel);
+    EXPECT_TRUE(start.vortexRing);
+    EXPECT_NEAR(start.thrust, hover.thrust, 0.02 * hover.thrust);
+    const BemLoad middle = bemLoad(p, 50.0, -1.0 * vh, kSeaLevel);
+    EXPECT_NEAR(middle.inducedVelocity, vortexRingInduced(1.0) * vh, 0.05 * vh);
+    const BemLoad inside = bemLoad(p, 50.0, -1.99 * vh, kSeaLevel);
+    const BemLoad outside = bemLoad(p, 50.0, -2.01 * vh, kSeaLevel);
+    EXPECT_TRUE(inside.vortexRing);
+    std::printf("hover %.1f N, start %.1f, x=1 %.1f, x=1.99 %.1f, x=2.01 %.1f\n", hover.thrust,
+                start.thrust, middle.thrust, inside.thrust, outside.thrust);
+    EXPECT_NEAR(inside.thrust, outside.thrust, 0.15 * hover.thrust);
 }
 
 TEST(Section, LinearThenStalledThenAFlatPlate) {

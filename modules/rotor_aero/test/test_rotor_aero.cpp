@@ -207,6 +207,37 @@ TEST(RotorAero, NearTheGroundThrustRisesAsCheesemanBennettSays) {
     EXPECT_NEAR(rig.read("rotor/prop_joint/thrust") / free, 1.0 / (1.0 - 1.0 / 16.0), 1e-9);
 }
 
+// Hsiao and Chirarattananon (2019): the momentum balance under a ceiling (their eq. 5 with
+// eq. 9's α0) solved for γ, and the thrust at the same power γ^(2/3) of the free thrust.
+TEST(RotorAero, CeilingEffectFollowsHsiaoAndChirarattananon) {
+    for (const double dOverR : {0.25, 0.5, 1.0, 2.0}) {
+        const double delta = 1.0 / dOverR;
+        // ½u² − u − α0·δ²/16 = 0, u = v∞/v_i = 2γ.
+        const double u = 1.0 + std::sqrt(1.0 + kCeilingAsymmetry * delta * delta / 8.0);
+        EXPECT_NEAR(0.5 * u * u - u - kCeilingAsymmetry * delta * delta / 16.0, 0.0, 1e-12);
+        EXPECT_NEAR(ceilingEffect(kRadius, dOverR * kRadius), std::cbrt(u * u / 4.0), 1e-12);
+    }
+    EXPECT_NEAR(ceilingEffect(kRadius, 0.5 * kRadius), 1.111, 1e-3);  // half a radius: +11%
+    EXPECT_NEAR(ceilingEffect(kRadius, 2.0 * kRadius), 1.008, 1e-3);  // fades out
+    EXPECT_EQ(ceilingEffect(kRadius, 6.0 * kRadius), 1.0);
+}
+
+TEST(RotorAero, UnderAFixedBoxThrustRisesAsTheCeilingEffectSays) {
+    World world = propellerRig();
+    // A slab 2 m up, the rotor at 2 m − 0.5 R under its underside, far above the ground.
+    world.addCollider(kWorldBody, ShapeType::Box, {2.0, 2.0, 0.1},
+                      Pose{{0.0, 0.0, 2.1}, {1.0, 0.0, 0.0, 0.0}}, 1.0);
+    Rig rig = makeRig(world, withDensity());
+    ASSERT_TRUE(rig.scheduler->wire(WorldView(world)));
+    rig.plant->omega = 600.0;
+    rig.plant->pose = {{0.0, 0.0, 2.0 - 0.5 * kRadius}, {1.0, 0.0, 0.0, 0.0}};
+    ASSERT_TRUE(rig.scheduler->stepUntil(SimTime{5'000'000}).ok());
+    const double free = staticLoad({kRadius, kCt, kCp, 1.0}, 600.0, kRho).thrust;
+    const double ground = groundEffect(kRadius, 2.0 - 0.5 * kRadius);
+    EXPECT_NEAR(rig.read("rotor/prop_joint/thrust") / free,
+                ground * ceilingEffect(kRadius, 0.5 * kRadius), 1e-9);
+}
+
 TEST(RotorAero, ThrustLagsTheSpeedByTheInflowTimeConstant) {
     const World world = propellerRig();
     ModuleConfigData config = withDensity();

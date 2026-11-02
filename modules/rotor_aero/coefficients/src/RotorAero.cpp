@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <numbers>
 
@@ -42,6 +43,17 @@ double groundEffect(double radius, double height) {
     const double z = std::max(height, kGroundEffectMinHeight * radius);
     const double ratio = radius / (4.0 * z);
     return 1.0 / (1.0 - ratio * ratio);
+}
+
+double ceilingEffect(double radius, double distance) {
+    if (distance <= 0.0 || distance >= kCeilingReach * radius) {
+        return 1.0;
+    }
+    const double delta = std::min(radius / distance, kCeilingMaxRatio);
+    // Their momentum balance (eq. 5 with eq. 9's α0): ½u² − u − α0·δ²/16 = 0 for u = v∞/v_i,
+    // and γ = u/2.
+    const double gamma = 0.5 + 0.5 * std::sqrt(1.0 + kCeilingAsymmetry * delta * delta / 8.0);
+    return std::cbrt(gamma * gamma);
 }
 
 ModuleInfo RotorAero::info() const {
@@ -89,6 +101,26 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
             hasGround_ = true;
             groundPoint_ = colliders.poseInBody[c].position;
             groundNormal_ = rotate(colliders.poseInBody[c].orientation, {0.0, 0.0, 1.0});
+        }
+    }
+
+    // Ceilings: the fixed boxes of the scenery (on the world, or on a body that does not move,
+    // placed through its chain of fixed parents), for the ceiling effect.
+    ceilings_.clear();
+    {
+        const World& raw = world.raw();
+        const std::vector<bool> moving = movingBodies(raw);
+        for (std::size_t c = 0; c < colliders.body.size(); ++c) {
+            const BodyId b = colliders.body[c];
+            if (colliders.shape[c] != ShapeType::Box || (b != kWorldBody && moving[b.index])) {
+                continue;
+            }
+            Pose pose = colliders.poseInBody[c];
+            for (BodyId up = b; up != kWorldBody;) {
+                pose = compose(raw.bodies.poseInParent[up.index], pose);
+                up = raw.bodies.parent[up.index];
+            }
+            ceilings_.push_back({pose.position, pose.orientation, colliders.size[c]});
         }
     }
 
@@ -329,6 +361,38 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
             const double height = above[0] * groundNormal_[0] + above[1] * groundNormal_[1] +
                                   above[2] * groundNormal_[2];
             target *= groundEffect(r.params.radius, height);
+        }
+        if (groundEffect_ && !ceilings_.empty()) {
+            // The nearest fixed box straight up the thrust axis (slab test in its frame).
+            double nearest = std::numeric_limits<double>::infinity();
+            for (const Ceiling& box : ceilings_) {
+                const std::array<double, 4> back = conjugate(box.orientation);
+                const std::array<double, 3> o =
+                    rotate(back, {hub.position[0] - box.centre[0], hub.position[1] - box.centre[1],
+                                  hub.position[2] - box.centre[2]});
+                const std::array<double, 3> d = rotate(back, axis);
+                double enter = 0.0;
+                double leave = std::numeric_limits<double>::infinity();
+                for (std::size_t k = 0; k < 3 && enter <= leave; ++k) {
+                    if (std::abs(d[k]) < 1e-12) {
+                        if (std::abs(o[k]) > box.half[k]) {
+                            leave = -1.0;
+                        }
+                        continue;
+                    }
+                    double a = (-box.half[k] - o[k]) / d[k];
+                    double b = (box.half[k] - o[k]) / d[k];
+                    if (a > b) {
+                        std::swap(a, b);
+                    }
+                    enter = std::max(enter, a);
+                    leave = std::min(leave, b);
+                }
+                if (enter <= leave && enter > 0.0) {
+                    nearest = std::min(nearest, enter);
+                }
+            }
+            target *= ceilingEffect(r.params.radius, nearest);
         }
         r.thrust = keep * r.thrust + (1.0 - keep) * target;
         const std::array<double, 3> force{r.thrust * axis[0] + inPlane[0],

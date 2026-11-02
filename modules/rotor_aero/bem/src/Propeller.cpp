@@ -15,6 +15,9 @@ namespace lagrange::rotor_aero {
 namespace {
 
 constexpr double kDeg = std::numbers::pi / 180.0;
+// The vortex-ring state's end: descending at twice the induced velocity, the rotor reaches the
+// windmill-brake state, where momentum theory holds again (Bauersfeld et al. 2021, eq. 18).
+constexpr double kVortexRingEnd = 2.0;
 // Angle of attack (rad) over which a stalled section goes from its attached values to a flat
 // plate's. A modelling choice: real sections stall over a few degrees, depending on the section
 // and the Reynolds number.
@@ -259,18 +262,23 @@ Propeller withBladeAngle(Propeller p, double delta) {
     return p;
 }
 
+double vortexRingInduced(double x) {
+    const double fit = 1.0 + 1.125 * x - 1.372 * x * x + 1.718 * x * x * x - 0.655 * x * x * x * x;
+    return std::max(fit, 1.0);
+}
+
 BemLoad bemLoad(const Propeller& p, double omega, double axialSpeed, const Air& air,
                 double edgewiseSpeed) {
     BemLoad out;
     // Edgewise flow: the blade's loads averaged round the disc (azimuth ψ from the direction the
     // edgewise air moves, positive in the propeller's hand), with the inflow uniform per annulus.
     const int azimuths = edgewiseSpeed > 0.0 ? kAzimuths : 1;
-    const auto averaged = [&](const Element& e, double w, double swirl) {
+    const auto averaged = [&](const Element& e, double axial, double w, double swirl) {
         ElementLoad mean;
         mean.sinPhi = 0.0;
         for (int a = 0; a < azimuths; ++a) {
             const double psi = 2.0 * std::numbers::pi * (a + 0.5) / azimuths;
-            const ElementLoad l = elementLoad(e, p.blades, omega, axialSpeed, w, swirl, air,
+            const ElementLoad l = elementLoad(e, p.blades, omega, axial, w, swirl, air,
                                               edgewiseSpeed * std::sin(psi));
             mean.thrust += l.thrust / azimuths;
             mean.torque += l.torque / azimuths;
@@ -280,6 +288,21 @@ BemLoad bemLoad(const Propeller& p, double omega, double axialSpeed, const Air& 
     };
     if (p.stations.empty() || p.radius <= 0.0 || air.density <= 0.0) {
         return out;
+    }
+    // The vortex-ring state: descending at 0 < V/v_h < 2 (v_h the induced velocity at the same
+    // speed with no axial flow), momentum theory has no steady solution. There each annulus takes
+    // its no-axial-flow induced velocity scaled by the empirical fit (vortexRingInduced), as
+    // NeuroBEM does with a uniform one (Bauersfeld et al. 2021, eqs. 18 and 19).
+    double ringScale = 0.0;  // 0: momentum theory
+    if (axialSpeed < 0.0) {
+        const BemLoad still = bemLoad(p, omega, 0.0, air, edgewiseSpeed);
+        if (still.inducedVelocity > 0.0) {
+            const double x = -axialSpeed / still.inducedVelocity;
+            if (x < kVortexRingEnd) {
+                ringScale = vortexRingInduced(x);
+                out.vortexRing = true;
+            }
+        }
     }
     const double root = p.stations.front().radius * p.radius;
     const double dr = (p.radius - root) / kElements;
@@ -292,64 +315,73 @@ BemLoad bemLoad(const Propeller& p, double omega, double axialSpeed, const Air& 
         // Momentum per unit span through the annulus, at axial induced velocity w (air pushed
         // back) and swirl w_t: dT = 4πrρF·|V + w|·w, dQ = 4πr²ρF·|V + w|·w_t.
         // Edgewise, the mass flow is Glauert's: through the annulus at √(V_e² + (V + w)²).
-        const auto momentum = [&](double w, double sinPhi) {
+        const auto momentum = [&](double axial, double w, double sinPhi) {
             return 4.0 * std::numbers::pi * r * air.density *
-                   tipLoss(p.blades, r, p.radius, sinPhi) *
-                   std::hypot(edgewiseSpeed, axialSpeed + w);
+                   tipLoss(p.blades, r, p.radius, sinPhi) * std::hypot(edgewiseSpeed, axial + w);
+        };
+        // The annulus's induced velocity and swirl at axial speed `axial`.
+        const auto solve = [&](double axial, double& w, double& swirl, ElementLoad& load) {
+            swirl = 0.0;
+            w = 0.0;
+            const double span = 2.0 * (std::abs(omega) * r + std::abs(axial) + edgewiseSpeed) + 1.0;
+            for (int pass = 0; pass < kSwirlPasses; ++pass) {
+                const auto residual = [&](double wi) {
+                    const ElementLoad l = averaged(e, axial, wi, swirl);
+                    return l.thrust - momentum(axial, wi, l.sinPhi) * wi;
+                };
+                // The working state: the root on the side of w = 0 that the blade's thrust
+                // there points to (air pushed back for thrust, drawn forward for negative
+                // thrust).
+                const double g0 = residual(0.0);
+                double lo = 0.0;
+                double hi = g0 >= 0.0 ? span : -span;
+                if (g0 == 0.0 || (residual(hi) > 0.0) == (g0 > 0.0)) {
+                    w = 0.0;  // no momentum solution: blade forces with no induced velocity
+                    out.vortexRing = out.vortexRing || g0 != 0.0;
+                } else {
+                    // Illinois: regula falsi that halves the stale end's residual.
+                    double glo = g0;
+                    double ghi = residual(hi);
+                    int side = 0;
+                    for (int i = 0; i < kRootIterations; ++i) {
+                        w = (lo * ghi - hi * glo) / (ghi - glo);
+                        const double g = residual(w);
+                        if ((g > 0.0) == (glo > 0.0)) {
+                            lo = w;
+                            glo = g;
+                            if (side == -1) {
+                                ghi *= 0.5;
+                            }
+                            side = -1;
+                        } else {
+                            hi = w;
+                            ghi = g;
+                            if (side == 1) {
+                                glo *= 0.5;
+                            }
+                            side = 1;
+                        }
+                        if (std::abs(hi - lo) < kRootTolerance * span || g == 0.0) {
+                            break;
+                        }
+                    }
+                }
+                load = averaged(e, axial, w, swirl);
+                const double flux = momentum(axial, w, load.sinPhi) * r;
+                const double next = flux > 1e-9 ? load.torque / flux : 0.0;
+                swirl = std::clamp(next, -0.5 * std::abs(omega * r), 0.5 * std::abs(omega * r));
+            }
         };
         double swirl = 0.0;
         double w = 0.0;
         ElementLoad load;
-        const double span =
-            2.0 * (std::abs(omega) * r + std::abs(axialSpeed) + edgewiseSpeed) + 1.0;
-        for (int pass = 0; pass < kSwirlPasses; ++pass) {
-            const auto residual = [&](double wi) {
-                const ElementLoad l = averaged(e, wi, swirl);
-                return l.thrust - momentum(wi, l.sinPhi) * wi;
-            };
-            // The working state: the root on the side of w = 0 that the blade's thrust there
-            // points to (air pushed back for thrust, drawn forward for negative thrust).
-            const double g0 = residual(0.0);
-            double lo = 0.0;
-            double hi = g0 >= 0.0 ? span : -span;
-            if (g0 == 0.0 || (residual(hi) > 0.0) == (g0 > 0.0)) {
-                w = 0.0;  // no momentum solution: blade forces with no induced velocity
-                out.vortexRing = out.vortexRing || g0 != 0.0;
-            } else {
-                // Illinois: regula falsi that halves the stale end's residual.
-                double glo = g0;
-                double ghi = residual(hi);
-                int side = 0;
-                for (int i = 0; i < kRootIterations; ++i) {
-                    w = (lo * ghi - hi * glo) / (ghi - glo);
-                    const double g = residual(w);
-                    if ((g > 0.0) == (glo > 0.0)) {
-                        lo = w;
-                        glo = g;
-                        if (side == -1) {
-                            ghi *= 0.5;
-                        }
-                        side = -1;
-                    } else {
-                        hi = w;
-                        ghi = g;
-                        if (side == 1) {
-                            glo *= 0.5;
-                        }
-                        side = 1;
-                    }
-                    if (std::abs(hi - lo) < kRootTolerance * span || g == 0.0) {
-                        break;
-                    }
-                }
-            }
-            load = averaged(e, w, swirl);
-            const double flux = momentum(w, load.sinPhi) * r;
-            const double next = flux > 1e-9 ? load.torque / flux : 0.0;
-            swirl = std::clamp(next, -0.5 * std::abs(omega * r), 0.5 * std::abs(omega * r));
+        if (ringScale > 0.0) {
+            solve(0.0, w, swirl, load);
+            w *= ringScale;
+            load = averaged(e, axialSpeed, w, swirl);
+        } else {
+            solve(axialSpeed, w, swirl, load);
         }
-        // Descending into the wake the rotor makes (−2·w < V < 0): the vortex-ring state.
-        out.vortexRing = out.vortexRing || (axialSpeed < 0.0 && axialSpeed > -2.0 * w && w > 0.0);
         out.thrust += load.thrust * dr;
         out.torque += load.torque * dr;
         inducedThrust += load.thrust * dr * w;

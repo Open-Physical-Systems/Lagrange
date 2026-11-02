@@ -8,7 +8,7 @@ stop for the owner except the profile key approved in item 2.
 |---|---|---|---|
 | 1 | Live lattice Boltzmann airflow, the spike: a GPU box of about 4 m round a hovering quadcopter with its rotors as actuator discs | steps/s measured at 8, 5 and 3 cm cells on the RTX 4060 Laptop; jet and outwash compared with Bauersfeld 2024, Tanner 2015 and the OpenFOAM hover cases (`~/cfd/hover_open`, `hover_low`); a go/no-go with the numbers in `rotor_aero.md` | done: go at 4 cm (PR below) |
 | 2 | Live LBM downwash, `aerodynamics.downwash_model: lbm` (profile schema addition, approved) | coupled by signals only (rotor `air_velocity`, body forces); feeds `aero/wind_speed` and the particles; fitted model stays the default and the CPU fallback; tested against the same references; a video from a real run | |
-| 3 | Fitted model: vortex ring state, the low-hover fountain (fit to `~/cfd/hover_low`), the ceiling effect | each tested against its published source; TODO(verify) where it cannot be checked | |
+| 3 | Fitted model: vortex ring state, the low-hover fountain (fit to `~/cfd/hover_low`), the ceiling effect | each tested against its published source; TODO(verify) where it cannot be checked | vortex ring and ceiling done; fountain waiting on OpenFOAM heights |
 | 4 | `lagrange PROFILE.yaml --robot ... --world ...` opens the viewer like `lagrange quad` | the CLI test runs it; docs and tutorial updated | |
 | 5 | Contact force and joint reaction in Jolt | the physics conformance test checks both engines | |
 | 6 | Scopes signal picker with search | follows `docs/design/ui/` and `.claude/rules/viewer-ui.md`; headless viewer test presses it | |
@@ -28,3 +28,7 @@ stop for the owner except the profile key approved in item 2.
   multirotors and without a hardware GPU. The sample hovers at about 0.75x real time (steps
   batched per 5 ms; per-ms submits made it 0.57x). Rotors see 1.1 m/s inwards, as OpenFOAM's
   1.05. Video `drone_live_air.mp4`.
+- Item 3a (02:10–): vortex-ring state in `bem` from NeuroBEM eqs. 18–19 (checked in the paper's
+  text); ceiling effect from Hsiao and Chirarattananon's momentum balance (γ derived from their
+  eq. 5, since the extracted eq. 10 was garbled), α0 = 1.6 TODO(verify) for large propellers.
+  OpenFOAM hovers at 0.75, 1.0 and 1.5 m running for the fountain fit.
