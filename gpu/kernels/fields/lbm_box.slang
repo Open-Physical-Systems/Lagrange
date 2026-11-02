@@ -32,6 +32,7 @@ struct Params {
     float smagorinsky2;  // the constant squared
     int discs;
     int solids;  // 0: no solid cell in the box, so none is looked up
+    float4 ambient;  // the wind round the box, lattice units (w unused)
 };
 
 // A rotor: its centre (cells, from the box's corner) and radius (cells); the push on the air per
@@ -99,12 +100,19 @@ void stepCell(int x, int y, int z, int cell, out uint out[19]) {
         if (sz < 0 && params.floor != 0) {
             in[i] = load(kOpposite[i], cell, cells);  // the ground: half-way bounce-back
         } else if (sx < 0 || sy < 0 || sz < 0 || sx >= nx || sy >= ny || sz >= nz) {
-            // Open: ambient pressure, the flow carried on outwards; air drawn in comes by the
-            // pressure alone, since carrying an inward speed in feeds on itself.
-            float3 o = own;
-            if ((sx < 0 && o.x > 0.0) || (sx >= nx && o.x < 0.0)) o.x = 0.0;
-            if ((sy < 0 && o.y > 0.0) || (sy >= ny && o.y < 0.0)) o.y = 0.0;
-            if ((sz < 0 && o.z > 0.0) || (sz >= nz && o.z < 0.0)) o.z = 0.0;
+            // Open: ambient pressure. Where the wind blows in, the wind comes in; elsewhere the
+            // flow is carried on outwards, and air drawn in comes by the pressure alone (an
+            // inward speed carried in feeds on itself), relative to the wind.
+            const float3 wind = params.ambient.xyz;
+            const bool windIn = (sx < 0 && wind.x > 0.0) || (sx >= nx && wind.x < 0.0) ||
+                                (sy < 0 && wind.y > 0.0) || (sy >= ny && wind.y < 0.0) ||
+                                (sz < 0 && wind.z > 0.0) || (sz >= nz && wind.z < 0.0);
+            float3 o = windIn ? wind : own;
+            if (!windIn) {
+                if ((sx < 0 && o.x > wind.x) || (sx >= nx && o.x < wind.x)) o.x = wind.x;
+                if ((sy < 0 && o.y > wind.y) || (sy >= ny && o.y < wind.y)) o.y = wind.y;
+                if ((sz < 0 && o.z > wind.z) || (sz >= nz && o.z < wind.z)) o.z = wind.z;
+            }
             in[i] = equilibrium(i, 1.0, o);
         } else {
             const int source = sx + nx * (sy + ny * sz);

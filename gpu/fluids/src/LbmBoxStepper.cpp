@@ -105,6 +105,7 @@ struct Params {
     float tau, smagorinsky2;
     std::int32_t discs;
     std::int32_t solids;
+    std::array<float, 4> ambient;
 };
 
 void barrierAfter(VkCommandBuffer commands, VkPipelineStageFlags2 srcStage,
@@ -153,7 +154,8 @@ LbmBoxStepper::LbmBoxStepper(const Device& device, const Settings& settings,
         0,
         std::any_of(solid.begin(), solid.end(), [](std::uint32_t kind) { return kind != 0xFFFFU; })
             ? 1
-            : 0};
+            : 0,
+        {0.0F, 0.0F, 0.0F, 0.0F}};
     const std::size_t cells = settings.nx * settings.ny * settings.nz;
     s.cells = cells;
     if (settings.nx % 2 != 0) {
@@ -208,6 +210,10 @@ LbmBoxStepper::~LbmBoxStepper() {
 bool LbmBoxStepper::valid() const {
     return impl_->kernels[0].pipeline != VK_NULL_HANDLE &&
            impl_->kernels[1].pipeline != VK_NULL_HANDLE;
+}
+
+void LbmBoxStepper::setAmbient(const std::array<float, 3>& wind) {
+    impl_->params.ambient = {wind[0], wind[1], wind[2], 0.0F};
 }
 
 void LbmBoxStepper::setDiscs(std::span<const Disc> discs) {

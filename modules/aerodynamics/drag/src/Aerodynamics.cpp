@@ -545,6 +545,7 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
             c /= static_cast<double>(std::max<std::size_t>(discs.size(), 1));
         }
         others_.update(rest, relative);
+        live_->setAmbient(meanAir(centre));  // the mean wind at the drone blows through the box
         live_->advance(dt, centre, discs);
         if (airBox_.valid()) {
             constexpr double kFieldInterval = 0.1;  // s: the viewer asks a few times a second
