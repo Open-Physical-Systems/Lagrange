@@ -94,6 +94,12 @@ separate GPL-3 program that it runs from an install or a container, and reads 0.
 slant, though not yet the measured change of drag with slant
 ([equations and what was measured](docs/design/domains/cfd.md)). The sample cars collide as one box each.
 
+<p align="center">
+  <img src="docs/imgs/lexus-speed-pressure.png" alt="Speed along the Lexus RX 450h and pressure seen from above, from the tunnel" width="640">
+  <br><sub>The Lexus RX 450h's body mesh in the tunnel, 30 m/s
+  (<a href="docs/videos/wind_tunnel_lexus.mp4">video</a>). Cd 0.94 here and 0.24 in OpenFOAM, against 0.33 to 0.34 published.</sub>
+</p>
+
 ## What it simulates
 
 | Robot class | Since | Sample | Highlights |

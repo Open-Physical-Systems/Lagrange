@@ -189,6 +189,70 @@ separating off those sharp corners gave OpenFOAM a Cd stuck near 0.44 on any mes
 on 219k, 753k and 4.3M cells) and 0.51 to 0.53 at 35°. All Ahmed numbers before this correction are void,
 including those in [aerodynamics.md](aerodynamics.md) §10.
 
+## 6.1 Where the tunnel goes wrong: surface pressure
+
+`lagrange_foam_compare CASE TUNNEL_DIR OUT.png --speed U` reads $C_p$ beside the body from both tools, in
+the slice through its middle, each from its own free stream ahead of the body, and marks where they differ
+most. Ahmed body at 25°, tunnel on 8M cells, OpenFOAM on 750k:
+
+![Surface pressure of both tools on the Ahmed body](../../imgs/ahmed-cp-compare.png)
+
+| Where | Tunnel | OpenFOAM |
+|---|---|---|
+| Front face, mean | 0.42 | 0.31 |
+| Top and bottom faces, by eye from the figure | about −0.5 | about −0.1 |
+| Base, mean | −0.38 | −0.14 |
+| Front minus base | 0.80 | 0.45 |
+| Largest difference | Bottom nose shoulder, 0.08 m behind the nose, $C_p$ +1.50 | |
+
+```mermaid
+flowchart LR
+    A[Nose front: both agree] --> B[Nose shoulder: OpenFOAM has a strong suction peak, the tunnel does not]
+    B --> C[Long faces: the tunnel stays low, as if the air stayed detached]
+    C --> D[Base: stronger suction in the tunnel]
+    D --> E[More drag]
+```
+
+So the leading explanation is air leaving the staircase surface at the nose shoulder and not coming back,
+which the speed frames also show as a thick layer along the body. This is one slice, and front minus base
+at 0.80 does not by itself make a Cd of 1.26; the sides and friction are not in it. It is a lead, not yet
+proof, and it says nothing yet about whether the stripes contribute.
+
+## 6.2 A real car: the Lexus RX 450h
+
+The body mesh is Autoware's `lexus.dae` (`fetch_assets lexus_rx450h`), baked into 38 convex parts with
+`lagrange bake --threshold 0.04`, since the sample's own collision shape is one box. Wind 30 m/s, one run
+each. Published Cd: 0.33 for the RX (Lexus UK specification), 0.34 for the AL20 450h AWD (Ultimate Specs).
+
+| Tool | Cells | Frontal area | Road gap | Cd | Cl | Wall time |
+|---|---|---|---|---|---|---|
+| OpenFOAM | 966,776 | 2.66 m² | 20 mm | 0.241 ± 0.002 | 0.231 ± 0.016 | 21 min |
+| Tunnel | 8M | 2.73 m² | 137 mm | 0.942 ± 0.008 | 0.463 | 10 min |
+
+![Speed along the Lexus and pressure from above](../../imgs/lexus-speed-pressure.png)
+
+![Streamlines and surface pressure, from the front](../../imgs/lexus-flow-front.png)
+
+![Streamlines and surface pressure, from behind](../../imgs/lexus-flow-rear.png)
+
+![Surface pressure of both tools on the Lexus](../../imgs/lexus-cp-compare.png)
+
+Video: [wind_tunnel_lexus.mp4](../../videos/wind_tunnel_lexus.mp4).
+
+How to read these:
+
+- **OpenFOAM reads about 28 % below the published car.** The model has a smoothed underside, wheels that do
+  not turn, no air through the engine bay, and convex parts that may fill gaps. Which of these accounts for
+  how much has not been measured, and one mesh level says nothing about mesh independence. `checkMesh` also
+  reported one failed check, a single face of high skewness (4.3), which may affect the result.
+- **The tunnel reads nearly three times too high**, and the same pattern as the Ahmed body appears: lower
+  pressure along the hood and windscreen edge, largest difference $C_p$ −0.92 about 0.38 m behind the nose,
+  and base −0.32 against −0.01.
+- **The gaps differ.** The tunnel's minimum of two cells widened its gap from the 20 mm asked to 137 mm, so
+  the two runs are not the same geometry under the car.
+- **These are colour and streamline pictures of the convex parts**, not the car's textured look. The small
+  "flow 0.00 m/s" chip in the viewer is a selected prim's label, not the wind.
+
 ## 7. What was tried on the tunnel and not adopted
 
 Each was run by hand and left out because it moved references away from their measurements:
@@ -218,9 +282,7 @@ Cube and plate figures are at their test grids. Their measured values are 1.05 a
 
 ## 9. Next
 
-1. **Find where the tunnel's pressure drag comes from.** Compare surface $C_p$ on the same Ahmed body with
-   OpenFOAM's, face by face, and settle section 8's stripes and offset. This comes first because section 6
-   shows that resolution is not the main fault.
+1. **Test the nose shoulder directly.** Section 6.1 points there. Check it with a body-fitted boundary (interpolated bounce-back, Bouzidi et al. 2001) so a curve is no longer a staircase, and settle section 8's stripes and offset.
 2. **Finish the reference.** A finer OpenFOAM mesh at 25°, and the 35° reference checked at its source.
 3. **Local refinement**, below, only if step 1 leaves resolution as the limit.
 

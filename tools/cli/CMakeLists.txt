@@ -4,7 +4,7 @@ project(lagrange VERSION 1.0.0 LANGUAGES NONE)
 find_package(ament_cmake REQUIRED)
 
 # On the PATH once ROS is sourced: `lagrange` runs the server and the viewer together.
-install(PROGRAMS lagrange lagrange_foam DESTINATION bin)
+install(PROGRAMS lagrange lagrange_foam lagrange_foam_compare DESTINATION bin)
 
 if(BUILD_TESTING)
     find_package(ament_cmake_pytest REQUIRED)

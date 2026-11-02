@@ -76,3 +76,17 @@ def test_forces_are_the_mean_of_the_last_fifth(tmp_path: Path) -> None:
     assert abs(result["drag_moves"] - 0.05) < 1e-9
     assert result["lift_coefficient"] == 2.0
     assert result["iterations"] == 100
+
+
+def test_the_comparison_reads_both_formats(tmp_path: Path) -> None:
+    loader = importlib.machinery.SourceFileLoader(
+        "lagrange_foam_compare", str(CLI / "lagrange_foam_compare")
+    )
+    spec = importlib.util.spec_from_loader("lagrange_foam_compare", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    field = tmp_path / "p"
+    field.write_text("internalField nonuniform List<scalar> 2\n(\n1.5\n-2\n)\n;\n")
+    assert module.read_foam_list(field, vector=False).tolist() == [1.5, -2.0]
+    field.write_text("internalField nonuniform List<vector> 2\n(\n(1 2 3)\n(4 5 6)\n)\n;\n")
+    assert module.read_foam_list(field, vector=True).tolist() == [[1, 2, 3], [4, 5, 6]]
