@@ -118,6 +118,9 @@ struct PanelContext {
     std::string configDirectory;  ///< Where the viewer keeps its files, connected or not.
     /// A panel to bring in front of its tabs, by title; emptied once done. May be null.
     std::string* focusPanel{nullptr};
+    /// A field (and plane: ":xy", ":xz", ":yz") for the Slice 2D panel to show, as
+    /// "aero/wind_speed:xz"; emptied once done. May be null.
+    std::string* fieldSlice{nullptr};
     /// A file to write the stage's circuit to as a netlist; emptied once done. May be null.
     std::string* exportNetlist{nullptr};
     Workspace* workspace{nullptr};            ///< The workspace shown; never null in draw().

@@ -2561,6 +2561,8 @@ struct Server::Impl {
             } else if (std::string_view(row.domain) == "sensors" && hasSensors() &&
                        !substituted("sensors")) {
                 yaml += "  sensors: {enabled: true}\n";
+            } else if (std::string_view(row.domain) == "aerodynamics" && aeroRuns()) {
+                yaml += "  aerodynamics: {enabled: true, fidelity: drag}\n";
             } else if (std::string_view(row.domain) == "rotor_aero" && hasRotors()) {
                 const std::optional<double> rho =
                     appliedAirDensity ? appliedAirDensity : options.airDensityKgM3;
@@ -4272,8 +4274,8 @@ struct Server::Impl {
         if (hasRotors()) {
             context.modules.insert("rotor_aero");
         }
-        if (!WorldView(robot.world).instancesOf("AeroAPI_1").empty()) {
-            context.modules.insert("aerodynamics");
+        if (!WorldView(robot.world).instancesOf("AeroAPI_1").empty() || hasRotors()) {
+            context.modules.insert("aerodynamics");  // drag, and the rotors' downwash
         }
         context.modules.insert("weather");
         if (hasEmi()) {

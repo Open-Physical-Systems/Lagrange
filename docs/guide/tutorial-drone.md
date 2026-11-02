@@ -142,6 +142,22 @@ The wind grows with height (a logarithmic profile over open terrain), and turbul
 of a metre or two per second; `env/wind/gust` is the gust at the frame. The controller leans
 into it and stays within a few centimetres of its spot.
 
+### See the downwash
+
+```bash
+lagrange quad -- --overlays airflow --slice aero/wind_speed:xz
+```
+
+The rotors' air is simulated live: a column under each rotor that merges into one jet a metre
+below the drone and spreads along the ground as outwash
+([rotor_aero.md](../design/domains/rotor_aero.md)). In the 3D view the *airflow · particles*
+overlay moves particles through it, coloured by speed (legend in m/s). In the Environment
+workspace the Slice 2D panel cuts through the drone: XZ and YZ upright, XY at the height slider.
+`lagrange set wind_speed=4 wind_from=270` leans the wake downwind. A second drone flown under
+this one gets less thrust from its propellers (at the `bem` fidelity), and with
+`--weather ...,ground_dust_diameter=1e-4,ground_dust_concentration=1e-5` the outwash lifts
+dust that the cameras and lidars see.
+
 ## 5. PX4 or ArduPilot flies it
 
 PX4 runs as its own program and talks to the simulator through its simulator interface: the

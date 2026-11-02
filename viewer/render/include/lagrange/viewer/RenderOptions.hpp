@@ -43,6 +43,10 @@ struct RenderOptions {
     std::vector<float> current;
     /// What the Viewport goes back to after the Electrical overlay took the shading.
     Shading beforeCurrent{Shading::Lit};
+    /// Airflow particles (design 07-environment: the Overlays checklist): moved through the
+    /// server's aero/wind_speed volume around the robot and drawn as streaks coloured by speed.
+    bool airflow{false};
+    float airflowMax{0.0F};  ///< m/s, the speed the colour map tops out at (set by the app).
 };
 
 /// The Current shading's colour at `share` (-1..1), as linear RGB: the electrical

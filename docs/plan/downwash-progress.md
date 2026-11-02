@@ -7,13 +7,13 @@ Work branch: `feat/rotor-downwash` (from `dev` after #259). Design: `docs/design
 | 0 | Merge `feat/cfd-openfoam` into `dev` | done, #259 |
 | 1 | Near wake per rotor (actuator disc) and merged far jet (Bauersfeld et al. 2024) | done: `aerodynamics::Downwash` |
 | 2 | Ground outwash (Tanner et al. 2015 fit, wall-jet decay) | done: `outwashSpeed` |
-| 3 | `windAt`, downwash on bodies, per-rotor air for the rotors, dust to weather | `windAt` done; module wiring next |
-| 4 | Tests against references | `test_downwash` (8): momentum theory, jet decay and spread, momentum flux = thrust, outwash peak; drone-under-drone thrust loss next |
-| 5 | Live horizontal slice `aero/wind_speed` | todo |
-| 6 | Protocol: vertical slice orientation | todo |
-| 7 | Viewer particles, "Show airflow" | todo |
+| 3 | `windAt`, downwash on bodies, per-rotor air for the rotors, dust to weather | done: `AeroDrag`, `rotor/<j>/air_velocity`, `env/dust/downwash` |
+| 4 | Tests against references | done: `test_downwash` (8), `test_downwash_pair` (Kiran et al. 2025: 53% vs 65% at 4 l, 87% vs 95–98% at 19 l) |
+| 5 | Live slice `aero/wind_speed` | done |
+| 6 | Protocol: slice orientation, FieldVolume | done (additions; golden frames regenerated) |
+| 7 | Viewer particles, "airflow · particles", legend, plane and height slider | done; particles move on the CPU, drawn by the GPU as overlay lines |
 | 8 | Actuator discs in tunnel/foam (optional) | todo |
-| 9 | Docs, tutorial step, video, README, CLAUDE.md | todo |
+| 9 | Docs, tutorial step, video, README, CLAUDE.md | done: video `drone_downwash.mp4`, picture `drone-downwash.png` |
 
 ## Notes
 

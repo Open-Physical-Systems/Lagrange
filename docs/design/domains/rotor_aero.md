@@ -14,7 +14,7 @@ ground.
 | Merged jet below a multirotor | the same | done |
 | Outwash along the ground | the same; dust lifted for the weather | done |
 | Wake skew in wind and forward flight | the column's direction | done |
-| Live view of the air in the viewer | `aero/wind_speed` slice, particles | in progress |
+| Live view of the air in the viewer | `aero/wind_speed` slices, particles | done (§5) |
 | Inflow above the disc, swirl, unsteadiness | | not modelled |
 | Interference between rotors of one drone | | not modelled |
 | Walls, ceilings and scenery other than the ground plane | | not modelled |
@@ -175,7 +175,36 @@ mean jet of Bauersfeld et al. may still be too strong that far out for a drone a
 Crazyflie, or the unsteady wake may mix faster than its mean suggests. The test accepts 45–75%
 at 4 l and 85–100% at 19 l.
 
-## 5. Limits
+## 5. Seeing the air
+
+The server serves the air as the field `aero/wind_speed`. It is computed with the same `windAt`
+the aerodynamics domain uses, from the rotor signals on the bus. The viewer shows it in two
+ways, both in the Environment workspace (design `07-environment`):
+
+```mermaid
+flowchart LR
+    B["Signal bus:<br/>rotor/*/thrust, induced_velocity,<br/>thrust_axis, body poses"] --> S["Server: windAt"]
+    S -->|"FieldSlice, 2 Hz<br/>64 × 48 cells of 0.1 m"| P["Slice 2D panel<br/>XY at a height, or XZ / YZ<br/>through the robot"]
+    S -->|"FieldVolume, 5 Hz<br/>28 × 28 × 20 cells of 0.2 m"| V["Viewer: 1500 particles<br/>moved through the box,<br/>drawn as streaks on the GPU"]
+```
+
+- **Slices.** In the Overlays panel, tick *air speed*. The Slice 2D panel then shows its
+  magnitude on the field colour map (viridis). XY, XZ and YZ choose the plane. XY sits at the
+  height slider's value; XZ and YZ cut through the robot, from the ground up. The probe reads
+  the speed under the cursor.
+- **Particles.** Tick *airflow · particles*. The viewer asks for a box of the air's velocity
+  around the robot five times a second. It moves 1500 particles through the box, interpolating
+  trilinearly, and draws each one as a short streak coloured by its speed. The legend at the
+  viewport's bottom right gives the scale in m/s. New particles are placed where the air moves,
+  so they gather in the downwash and the outwash. Particles move on the CPU and are drawn as
+  overlay lines by the GPU renderer.
+
+From the command line: `lagrange_viewer --overlays airflow --slice aero/wind_speed:xz`.
+
+Protocol (added after 1.0, RFC 0007): `SubscribeField.orientation` and `.volume`,
+`FieldSlice.orientation`, `SliceOrientation`, and `FieldVolume` (envelope field 47).
+
+## 6. Limits
 
 - The outwash calibration is one rotor height (1 R). Between 1 R and 2 R the model's peak rises
   slightly with height, as the free wake still accelerates there. Tanner et al. saw the

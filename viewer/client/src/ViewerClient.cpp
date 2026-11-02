@@ -402,36 +402,75 @@ float FieldSliceData::sample(double x, double y) const {
     return std::sqrt(squares);
 }
 
-void ViewerClient::sendFieldSubscription(const std::string& name, double heightM) {
+bool FieldVolumeData::sample(const std::array<double, 3>& at, std::array<float, 3>& out) const {
+    if (cellM <= 0.0 || nx < 2 || ny < 2 || nz < 2) {
+        return false;
+    }
+    std::array<double, 3> f{};
+    std::array<std::uint32_t, 3> i{};
+    const std::array<std::uint32_t, 3> n{nx, ny, nz};
+    for (std::size_t k = 0; k < 3; ++k) {
+        const double g = (at[k] - origin[k]) / cellM;
+        if (!(g >= 0.0) || g > static_cast<double>(n[k] - 1)) {
+            return false;
+        }
+        i[k] = std::min(static_cast<std::uint32_t>(g), n[k] - 2);
+        f[k] = g - i[k];
+    }
+    out = {0.0F, 0.0F, 0.0F};
+    for (int corner = 0; corner < 8; ++corner) {
+        const std::uint32_t dx = corner & 1;
+        const std::uint32_t dy = (corner >> 1) & 1;
+        const std::uint32_t dz = (corner >> 2) & 1;
+        const double w = (dx != 0 ? f[0] : 1.0 - f[0]) * (dy != 0 ? f[1] : 1.0 - f[1]) *
+                         (dz != 0 ? f[2] : 1.0 - f[2]);
+        const std::size_t cell =
+            ((static_cast<std::size_t>(i[2] + dz) * ny + (i[1] + dy)) * nx + (i[0] + dx)) * 3;
+        for (std::size_t k = 0; k < 3; ++k) {
+            out[k] += static_cast<float>(w) * values[cell + k];
+        }
+    }
+    return true;
+}
+
+void ViewerClient::sendFieldSubscription(const std::string& name, double heightM,
+                                         SliceOrientation orientation, bool volume) {
     auto envelope = std::make_unique<v1::Envelope>();
     envelope->mutable_command()->set_request_id(nextRequestId_++);
     v1::SubscribeField* subscribe = envelope->mutable_command()->mutable_subscribe_field();
     subscribe->set_field(name);
     subscribe->set_enabled(true);
     subscribe->set_height_m(heightM);
+    subscribe->set_orientation(static_cast<v1::SliceOrientation>(orientation));
+    subscribe->set_volume(volume);
     enqueue(std::move(envelope));
 }
 
-std::shared_ptr<FieldStream> ViewerClient::watchField(const std::string& name, double heightM) {
+std::shared_ptr<FieldStream> ViewerClient::watchField(const std::string& name, double heightM,
+                                                      SliceOrientation orientation, bool volume) {
+    if (orientation != SliceOrientation::Horizontal) {
+        heightM = 0.0;  // a vertical slice goes through the robot
+    }
     std::shared_ptr<FieldStream> stream;
     bool changed = false;
     {
         const std::lock_guard lock(sensorMutex_);
         for (WatchedField& field : fields_) {
-            if (field.stream->name() == name) {
+            if (field.stream->name() == name && field.stream->orientation() == orientation) {
                 stream = field.stream;
-                changed = field.heightM != heightM;
+                changed = field.heightM != heightM || field.volume != volume;
                 field.heightM = heightM;
+                field.volume = volume;
             }
         }
         if (!stream) {
-            stream = std::make_shared<FieldStream>(name);
-            fields_.push_back({stream, heightM});
+            stream = std::make_shared<FieldStream>(name, orientation);
+            fields_.push_back({stream, heightM, volume});
             changed = true;
         }
     }
     if (changed) {
-        sendFieldSubscription(name, heightM);
+        sendFieldSubscription(name, heightM, orientation, volume);
     }
     return stream;
 }
@@ -487,7 +526,9 @@ void ViewerClient::handleFieldSlice(const v1::Envelope& envelope) {
     {
         const std::lock_guard lock(sensorMutex_);
         for (const WatchedField& field : fields_) {
-            if (field.stream->name() == slice.field()) {
+            if (field.stream->name() == slice.field() &&
+                static_cast<int>(field.stream->orientation()) ==
+                    static_cast<int>(slice.orientation())) {
                 stream = field.stream;
             }
         }
@@ -516,9 +557,46 @@ void ViewerClient::handleFieldSlice(const v1::Envelope& envelope) {
     data->valueMin = slice.value_min();
     data->valueMax = slice.value_max();
     data->values.resize(static_cast<std::size_t>(cells) * components);
+    data->orientation = static_cast<SliceOrientation>(slice.orientation());
     std::memcpy(data->values.data(), bytes.data(), bytes.size());
     stream->latest_.store(std::move(data));
     ++stream->slices_;
+}
+
+void ViewerClient::handleFieldVolume(const v1::Envelope& envelope) {
+    constexpr std::uint64_t kMaxCells = 256ULL * 256ULL * 256ULL;
+    const v1::FieldVolume& volume = envelope.field_volume();
+    std::shared_ptr<FieldStream> stream;
+    {
+        const std::lock_guard lock(sensorMutex_);
+        for (const WatchedField& field : fields_) {
+            if (field.volume && field.stream->name() == volume.field()) {
+                stream = field.stream;
+            }
+        }
+    }
+    if (!stream) {
+        return;
+    }
+    // From the network: every size is checked before the bytes are read.
+    const std::string& bytes = volume.values().inline_();
+    const std::uint64_t cells = static_cast<std::uint64_t>(volume.nx()) * volume.ny() * volume.nz();
+    if (cells == 0 || cells > kMaxCells || volume.components() != 3 || volume.cell_m() <= 0.0 ||
+        !std::isfinite(volume.cell_m()) || bytes.size() != cells * 3 * sizeof(float)) {
+        ++stream->rejected_;
+        return;
+    }
+    auto data = std::make_shared<FieldVolumeData>();
+    data->simTimeNs = volume.sim_time().ns();
+    data->nx = volume.nx();
+    data->ny = volume.ny();
+    data->nz = volume.nz();
+    data->origin = {volume.origin_x(), volume.origin_y(), volume.origin_z()};
+    data->cellM = volume.cell_m();
+    data->valueMax = volume.value_max();
+    data->values.resize(static_cast<std::size_t>(cells) * 3);
+    std::memcpy(data->values.data(), bytes.data(), bytes.size());
+    stream->volume_.store(std::move(data));
 }
 
 std::uint64_t ViewerClient::requestAttributes(std::uint32_t prim) {
@@ -735,15 +813,14 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
             logs_.store(std::make_shared<const LogBook>());
             subscribeSensors();  // a new connection knows nothing of earlier requests
             {
-                std::vector<std::pair<std::string, double>> wanted;
+                std::vector<WatchedField> wanted;
                 {
                     const std::lock_guard lock(sensorMutex_);
-                    for (const WatchedField& field : fields_) {
-                        wanted.emplace_back(field.stream->name(), field.heightM);
-                    }
+                    wanted = fields_;
                 }
-                for (const auto& [name, heightM] : wanted) {
-                    sendFieldSubscription(name, heightM);
+                for (const WatchedField& field : wanted) {
+                    sendFieldSubscription(field.stream->name(), field.heightM,
+                                          field.stream->orientation(), field.volume);
                 }
             }
             if (rosGraphWanted_ || worldWanted_) {
@@ -832,6 +909,9 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
             break;
         case v1::Envelope::kSensorFrame:
             handleSensorFrame(envelope);
+            break;
+        case v1::Envelope::kFieldVolume:
+            handleFieldVolume(envelope);
             break;
         case v1::Envelope::kFieldSlice:
             handleFieldSlice(envelope);
