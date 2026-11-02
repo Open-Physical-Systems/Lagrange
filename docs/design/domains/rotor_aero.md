@@ -190,6 +190,30 @@ The fade length is the weak part. Fitted to the near-minus-far difference, it is
 the near rotors alone show no fading out to 2 D within the mesh noise (±0.05 m/s, 0.8% of
 $v_i$). Tanabe et al. find the effect gone beyond 1.5 D. The model may therefore reach too far.
 
+### 2.8 The fountain under a low drone
+
+Low over the ground, a multirotor's rotor jets reach the ground before they merge. Their wall
+jets meet under it and turn up (§7), pushing the frame up, where higher up the frame sits in the
+jets and is pushed down (the download). The fitted model takes the change of that force from its
+value 2 m up, as a share $f$ of the multirotor's thrust, at the height $h$ of the rotor plane
+over the surface its wake meets (ground or roof), in motor-to-motor diagonals $l$:
+
+$$
+f = F\left(e^{-(h/l)/\lambda} - e^{-R/\lambda}\right), \qquad F = 0.463,\ \lambda = 0.762,\ R = 4,
+$$
+
+zero from $R$ diagonals up, and held at its value at $h/l = 1$ below that (the lowest case run).
+It is applied up the thrust axis on the multirotor's first aero link (`body/<b>/wrench/aero`).
+$F$ and $\lambda$ are a least-squares fit of $\ln f$ to the `lagrange foam-hover` runs of the
+sample at 0.5, 0.75, 1, 1.5 and 2 m (§7): 12.7, 7.4, 2.7 and 1.0% of its 19.6 N at $h/l$ = 1,
+1.5, 2 and 3. The fit is within 0.23 N of each (1.2% of the weight; `test_downwash`).
+
+This is our own CFD only, of one frame made of boxes, and no measurement. The download itself
+(1.86 N, 9% of the weight, 2 m up) is not in the model, since the rotor data are of isolated
+rotors; so a hovering drone needs that much less thrust here than a real one, at any height. What the
+model has is how it changes near the ground. The live box (§8) has no frame, so it has the
+fountain in the air but not this push on the frame; the push is applied in both models.
+
 ## 3. Signals
 
 | Signal | Unit | Writer | Reader |
@@ -282,9 +306,10 @@ Protocol (added after 1.0, RFC 0007): `SubscribeField.orientation` and `.volume`
 - The coefficient fidelity's rotors do not react to the air they sit in (as before); only `bem`
   rotors read `rotor/<j>/air_velocity`.
 - Near the ground, a multirotor's rotor jets meet along its arms and turn up under it (a
-  fountain). The CFD shows it at 0.5 m (§7), lifting the frame. The fitted model has no
-  interaction between the rotors of one drone, so neither the fountain nor the cross-shaped
-  outwash it gives. The lattice Boltzmann box (§8) has both.
+  fountain). The CFD shows it at 0.5 m (§7), lifting the frame. The fitted model has its push
+  on the frame (§2.8, from our CFD only) but not the flow: no interaction between the rotors of
+  one drone in the air, so not the cross-shaped outwash. The lattice Boltzmann box (§8) has the
+  flow.
 - Buildings are boxes only. The wake does not run down a wall it does not hit, separate off a
   roof's edge, or curl round a corner.
 - The air at a robot's links comes from other robots only. A drone's own frame does not feel
@@ -312,6 +337,9 @@ each:
 | Case | Air down through the discs | Peak outwash 3 cm up | Force of the air on the frame |
 |---|---|---|---|
 | 2 m up, open field | 7.41–7.47 m/s | 6.5 m/s | 1.86 N down (9% of the weight) |
+| 1.5 m up | 7.46–7.47 m/s | 7.2 m/s | 1.67 N down |
+| 1 m up | 7.49–7.50 m/s | 7.7 m/s | 1.34 N down |
+| 0.75 m up | 7.44–7.49 m/s | 8.0 m/s | 0.41 N down |
 | 0.5 m up | 7.48–7.55 m/s | 9.5 m/s | 0.63 N **up** |
 | 2 m, tips 0.25 D from a 12 m building | near 7.54, far 7.38 m/s | 7.7 m/s | 2.08 N down |
 | 2 m, 0.5 D | near 7.56, far 7.40 m/s | 6.9 m/s | 2.14 N down |
@@ -339,7 +367,8 @@ each:
   (0.02 N), so the pull towards the wall comes through the rotors.
 
 The live model covers the open-field jet within its references, the roof and wall-hugging wake
-(§2.6) and the near-wall rotors (§2.7). It does not have the fountain (§6).
+(§2.6), the near-wall rotors (§2.7) and the fountain's push on the frame (§2.8, fitted to the five
+heights above).
 
 ## 8. Live air: a lattice Boltzmann box
 

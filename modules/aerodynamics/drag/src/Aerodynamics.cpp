@@ -170,6 +170,15 @@ double wallInflow(double gapOverDiameter) {
     return kWallInflowGain * std::exp(-std::max(gapOverDiameter, 0.0) / kWallInflowLength);
 }
 
+double fountainLift(double heightOverDiagonal) {
+    if (heightOverDiagonal >= kFountainReach || heightOverDiagonal < 0.0) {
+        return 0.0;
+    }
+    const double x = std::max(heightOverDiagonal, kFountainLowest);
+    return kFountainGain *
+           (std::exp(-x / kFountainLength) - std::exp(-kFountainReach / kFountainLength));
+}
+
 double dustThreshold(double diameter, double rho, double gravity) {
     return kBagnoldA * std::sqrt((kGrainDensity - rho) / rho * gravity * diameter);
 }
@@ -560,6 +569,23 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
         }
         return downwash_.velocityAt(at, group);
     };
+    // The fountain under each low multirotor: a push up its thrust axis on its first link.
+    std::vector<Vec3> fountain(groupCount_, Vec3{});
+    for (const Downwash::Group& g : downwash_.groups()) {
+        if (!g.hits || g.length <= 0.0 || g.id >= groupCount_) {
+            continue;
+        }
+        const double height = (g.centre[0] - g.hitPoint[0]) * g.hitNormal[0] +
+                              (g.centre[1] - g.hitPoint[1]) * g.hitNormal[1] +
+                              (g.centre[2] - g.hitPoint[2]) * g.hitNormal[2];
+        double thrust = 0.0;
+        for (const Downwash::Rotor& r : g.rotors) {
+            thrust += std::max(0.0, r.thrust);
+        }
+        const double lift = fountainLift(height / g.length) * thrust;
+        fountain[g.id] = {-lift * g.down[0], -lift * g.down[1], -lift * g.down[2]};
+    }
+    std::vector<bool> fountainApplied(groupCount_, false);
     Vec3 firstGust{};
     for (std::size_t i = 0; i < links_.size(); ++i) {
         Link& link = links_[i];
@@ -610,8 +636,14 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
         const Vec3 omegaLocal = rotate(conjugate(q), omega);
         const Vec3 damping{-link.damping[0] * omegaLocal[0], -link.damping[1] * omegaLocal[1],
                            -link.damping[2] * omegaLocal[2]};
-        const Vec3 f = rotate(q, force);
+        Vec3 f = rotate(q, force);
         const Vec3 moment = cross(arm, f);
+        if (link.group < groupCount_ && !fountainApplied[link.group]) {
+            fountainApplied[link.group] = true;  // on its first link, at its centre of mass
+            for (std::size_t k = 0; k < 3; ++k) {
+                f[k] += fountain[link.group][k];
+            }
+        }
         const Vec3 tau = rotate(q, damping);
         bus.writeN(link.wrench, std::array<double, 6>{f[0], f[1], f[2], moment[0] + tau[0],
                                                       moment[1] + tau[1], moment[2] + tau[2]});

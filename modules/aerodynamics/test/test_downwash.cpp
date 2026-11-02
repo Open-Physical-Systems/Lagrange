@@ -4,6 +4,7 @@
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
 #include "lagrange/aerodynamics/Downwash.hpp"
 
+#include <array>
 #include <cmath>
 #include <numbers>
 #include <vector>
@@ -223,6 +224,23 @@ TEST(Downwash, AWallBesideTheWakeMirrorsIt) {
     EXPECT_NEAR(walled.nearestWall({0.0, 0.0, 10.0}, normal), 0.6, 1e-9);
     EXPECT_NEAR(normal[0], -1.0, 1e-12);
     EXPECT_TRUE(std::isinf(open.nearestWall({0.0, 0.0, 10.0}, normal)));
+}
+
+// The fountain's fit against the `lagrange foam-hover` runs it came from (rotor_aero.md §7):
+// the change of the force on the sample quadcopter's frame from 2 m up, as a share of its 19.62 N
+// thrust, at h/l = 1, 1.5, 2 and 3; within 0.25 N of each, nothing from 4 diagonals up.
+TEST(Downwash, TheFountainIsTheHoverCasesFit) {
+    constexpr double kThrust = 4.0 * 4.905;
+    constexpr double kDiagonal = 0.5006;
+    const std::vector<std::array<double, 2>> cases{
+        {0.5, 0.634 + 1.861}, {0.75, -0.407 + 1.861}, {1.0, -1.336 + 1.861}, {1.5, -1.667 + 1.861}};
+    for (const auto& [height, change] : cases) {
+        EXPECT_NEAR(fountainLift(height / kDiagonal) * kThrust, change, 0.25) << height << " m";
+    }
+    EXPECT_EQ(fountainLift(kFountainReach), 0.0);
+    EXPECT_NEAR(fountainLift(kFountainReach - 1e-9), 0.0, 1e-9) << "no step at its reach";
+    EXPECT_GT(fountainLift(1.0), fountainLift(1.5)) << "stronger lower";
+    EXPECT_EQ(fountainLift(0.2), fountainLift(kFountainLowest)) << "held below the lowest case";
 }
 
 }  // namespace
