@@ -88,7 +88,7 @@ Separate processes and offline tools (not linked, not required to build):
 | SUMO | traffic co-simulation over TraCI | apt `sumo` 1.25.0 | EPL-2.0 | Runtime-optional |
 | OpenModelica | author Modelica models and export FMUs | upstream v1.27.1, not in apt | OSMC-PL | FMI 3.0 export is experimental; redistribution of generated FMUs needs a license review (R5) |
 | ngspice | run exported netlists | apt `ngspice` 45.2 | BSD-style (TODO(verify)) | Offline |
-| OpenFOAM | produce wind fields | not checked | GPL-3.0 (TODO(verify)) | Offline; we consume files only |
+| OpenFOAM (openfoam.com) | CFD, `lagrange foam`; produce wind fields | container `opencfd/openfoam-default:2512`, run v2512; v2606 is out, its image not yet seen | GPL-3.0 (openfoam.com/documentation/licencing) | A separate program, never linked or shipped; we write its input files and read its output |
 | Geant4 | produce dose fields | not checked | Geant4 Software License (TODO(verify)) | Offline |
 | PX4, ArduPilot SITL | autopilots in the loop | upstream PX4 v1.17.0, ArduPilot Copter-4.7.2, built on the host | BSD-3-Clause (PX4 `LICENSE`), GPL-3.0 (ArduPilot `COPYING.txt`) | Separate processes over TCP 4560 (PX4) and UDP 9002 (ArduPilot JSON); nothing of either is linked or copied; airframe and parameter files in `bridges/mavlink/` are our own |
 | esmini | OpenSCENARIO reference / optional library | upstream | MPL-2.0 | Decision in v0.6 |

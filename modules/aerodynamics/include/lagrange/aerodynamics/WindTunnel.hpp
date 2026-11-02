@@ -68,6 +68,12 @@ struct WindTunnelResult {
 };
 
 /// Runs it. `progress` gets a share 0..1 now and then. Refuses a robot with no collision shapes.
+/// The collision shapes as they stand at rest, turned by `yawDegrees`, for another solver: one
+/// ASCII STL per link in `directory` and surface.json with their names and bounds. Empty when all
+/// went.
+[[nodiscard]] std::string exportTunnelSurface(const World& world, double yawDegrees,
+                                              const std::string& directory);
+
 /// One grid of a grid independence study.
 struct GridStudyRow {
     std::size_t cells{0};

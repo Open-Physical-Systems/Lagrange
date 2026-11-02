@@ -5,11 +5,13 @@
 #include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <numbers>
 #include <optional>
@@ -816,6 +818,82 @@ GridStudyVerdict gridStudyVerdict(const std::vector<GridStudyRow>& rows) {
                       verdict.dragMoves <= kGridSettledShare &&
                       verdict.liftChange <= kGridSettledShare;
     return verdict;
+}
+
+std::string exportTunnelSurface(const World& world, double yawDegrees,
+                                const std::string& directory) {
+    const double half = yawDegrees * std::numbers::pi / 360.0;
+    const Pose yaw{{0.0, 0.0, 0.0}, {std::cos(half), 0.0, 0.0, std::sin(half)}};
+    const std::vector<Pose> poses = restPoses(world);
+    const World::Colliders& colliders = world.colliders;
+    const std::filesystem::path dir(directory);
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    std::vector<std::string> names;
+    std::vector<std::ostringstream> links;
+    Vec3 low{std::numeric_limits<double>::max(), std::numeric_limits<double>::max(),
+             std::numeric_limits<double>::max()};
+    Vec3 high{-low[0], -low[1], -low[2]};
+    for (std::size_t c = 0; c < colliders.body.size(); ++c) {
+        if (colliders.body[c] == kWorldBody || colliders.shape[c] == ShapeType::Plane ||
+            colliders.shape[c] == ShapeType::HeightField) {
+            continue;
+        }
+        Solid s;
+        s.body = colliders.body[c].index;
+        s.shape = colliders.shape[c];
+        s.size = colliders.size[c];
+        s.pose = compose(yaw, compose(poses[s.body], colliders.poseInBody[c]));
+        s.hull = s.shape == ShapeType::ConvexHull ? &world.hulls.at(colliders.hull[c]) : nullptr;
+        std::string name = world.bodies.names[s.body];
+        std::ranges::replace_if(
+            name, [](char ch) { return std::isalnum(static_cast<unsigned char>(ch)) == 0; }, '_');
+        const auto found = std::ranges::find(names, name);
+        const auto at = static_cast<std::size_t>(found - names.begin());
+        if (found == names.end()) {
+            names.push_back(name);
+            links.emplace_back();
+        }
+        for (const auto& triangle : surfaceOf(s)) {
+            std::array<Vec3, 3> w{};
+            for (std::size_t k = 0; k < 3; ++k) {
+                w.at(k) = plus(rotate(s.pose.orientation, triangle.at(k)), s.pose.position);
+                for (std::size_t a = 0; a < 3; ++a) {
+                    low.at(a) = std::min(low.at(a), w.at(k).at(a));
+                    high.at(a) = std::max(high.at(a), w.at(k).at(a));
+                }
+            }
+            const Vec3 e1 = minus(w[1], w[0]);
+            const Vec3 e2 = minus(w[2], w[0]);
+            Vec3 n{e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2],
+                   e1[0] * e2[1] - e1[1] * e2[0]};
+            const double length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+            if (length == 0.0) {
+                continue;
+            }
+            std::ostringstream& out = links[at];
+            out << std::setprecision(12);
+            out << "facet normal " << n[0] / length << ' ' << n[1] / length << ' ' << n[2] / length
+                << "\nouter loop\n";
+            for (const Vec3& v : w) {
+                out << "vertex " << v[0] << ' ' << v[1] << ' ' << v[2] << '\n';
+            }
+            out << "endloop\nendfacet\n";
+        }
+    }
+    if (names.empty()) {
+        return "the robot has no collision shapes for the air to meet";
+    }
+    std::ofstream json(dir / "surface.json");
+    json << std::setprecision(12) << "{\"links\": [";
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        std::ofstream stl(dir / (names[i] + ".stl"));
+        stl << "solid " << names[i] << '\n' << links[i].str() << "endsolid " << names[i] << '\n';
+        json << (i > 0 ? ", " : "") << '"' << names[i] << '"';
+    }
+    json << "], \"low\": [" << low[0] << ", " << low[1] << ", " << low[2] << "], \"high\": ["
+         << high[0] << ", " << high[1] << ", " << high[2] << "]}\n";
+    return json ? std::string{} : "could not write " + directory;
 }
 
 }  // namespace lagrange::aerodynamics

@@ -22,6 +22,8 @@ lagrange check ROBOT [--overlay FILE]
     what each joint of a robot on the ground must hold against gravity, against its limits
 lagrange bake ROBOT.urdf [-o OUT.urdf]
     a new URDF with its concave collision meshes split into convex parts
+lagrange foam ROBOT [--speed M_S] [--ground] [--clearance M] [--out DIR]
+    the same air through OpenFOAM (GPL-3, a separate program): runs a case, reads its forces
 lagrange tunnel ROBOT [--speed M_S] [--yaw DEG] [--cells N] [--out DIR]
     a wind tunnel: air past the robot, its drag and lift, and a world to look at the flow in
 lagrange run|validate|graph|determinism|export|info ...
@@ -510,6 +512,9 @@ def main(argv: list[str]) -> int:
     if argv and argv[0] == "tunnel":
         tool = executable("lagrange_server", "lagrange_tunnel")
         os.execv(tool, ["lagrange tunnel", *argv[1:]])
+    if argv and argv[0] == "foam":
+        tool = str(Path(__file__).resolve().parent / "lagrange_foam")
+        os.execv(tool, ["lagrange foam", *argv[1:]])
     if argv and argv[0] == "viewer":
         viewer = executable("lagrange_viewer", "lagrange_viewer")
         os.execv(viewer, [viewer, *argv[1:]])
