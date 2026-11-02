@@ -823,6 +823,7 @@ struct Server::Impl {
             }
         }
         bool weatherInRun = false;  // the sensors see the weather when it runs
+        std::optional<double> siteTemperature = settings.ambientTemperatureK;  // K, thermal cameras
         std::map<std::string, ConfigValue, std::less<>> groundDust;  // --weather's ground dust
         // The weather (domains/weather.md): the site's atmosphere from --weather, a WeatherAPI_1
         // prim and the profile (the profile wins), the temperature falling back to the ambient
@@ -840,6 +841,11 @@ struct Server::Impl {
             }
             if (!weather.values.contains("temperature") && settings.ambientTemperatureK) {
                 weather.values["temperature"] = *settings.ambientTemperatureK;
+            }
+            if (const auto it = weather.values.find("temperature");
+                !siteTemperature && it != weather.values.end() &&
+                std::holds_alternative<double>(it->second)) {
+                siteTemperature = std::get<double>(it->second);
             }
             // Dust the rotors' outwash lifts: the aerodynamics domain computes it when it runs
             // with rotors (below), and the weather adds it to the air's.
@@ -970,6 +976,9 @@ struct Server::Impl {
         }
         ModuleConfigData sensing;
         sensing.values["weather"] = weatherInRun;
+        if (siteTemperature) {
+            sensing.values["ambient_temperature"] = *siteTemperature;
+        }
         sensing.tier =
             rayContext ? static_cast<CapabilityTier>(rayContext->tier()) : CapabilityTier::Tier0;
         for (auto& sensor : off("sensors")

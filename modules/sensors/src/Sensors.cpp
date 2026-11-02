@@ -8,6 +8,7 @@
 #include "lagrange/sensors/Radar.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
+#include "lagrange/sensors/ThermalCamera.hpp"
 #include "lagrange/sensors/WeatherEffects.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/PoseMath.hpp"
@@ -1080,12 +1081,18 @@ public:
         image_ = image("image", Unit{});
         depth_ = image("depth", units::m);
         instance_ = image("instance", Unit{});
+        if (setting(sensors, sensor_, "thermal", 0.0) != 0.0 && !groundTruth_) {
+            if (Status ok = declareThermal(world, config, d); !ok.ok()) {
+                return ok;
+            }
+        }
         if (model_ && model.exposure) {
             exposureOut_ =
                 d.output(spec("sensor/" + name_ + "/exposure_time", SignalType::Scalar, units::s));
         }
         // The weather's veil (config "weather"): visible extinction and the lens's contamination.
-        weather_ = config.get<bool>("weather").value_or(false) && !groundTruth_;
+        // A thermal camera sees through the visible veil; its own extinction is owed.
+        weather_ = config.get<bool>("weather").value_or(false) && !groundTruth_ && !thermal_;
         if (weather_) {
             SignalSpec e = spec("env/extinction/visible", SignalType::Scalar, units::per_m);
             e.feedback = true;
@@ -1188,6 +1195,9 @@ public:
             applyCameraWeather(images_.rgba, images_.depth, bus.read(extinction_),
                                bus.read(contamination_), fieldDepth_);
         }
+        if (thermal_) {
+            stepThermal(context, bus);
+        }
         publish(bus);
         return {};
     }
@@ -1208,6 +1218,173 @@ private:
         bus.publishBuffer(image_, buffer("rgba8", images_.rgba));
         bus.publishBuffer(depth_, buffer("r32f", images_.depth));
         bus.publishBuffer(instance_, buffer("r32u", images_.instance));
+        if (thermal_) {
+            bus.publishBuffer(temperatureOut_, buffer("r32f", temperatures_));
+        }
+    }
+
+    /// The thermal camera (ThermalCameraAPI_1): every drawable's temperature and emissivity, from
+    /// the thermal node it belongs to, a person's skin, or the ambient air.
+    Status declareThermal(const WorldView& world, const ModuleConfig& config, SignalDeclarer& d) {
+        const World::Sensors& sensors = world.sensors();
+        const std::optional<double> ambient = config.get<double>("ambient_temperature");
+        if (!ambient || *ambient <= 0.0) {
+            return Status::error(
+                StatusCode::InvalidConfig,
+                "thermal camera " + name_ +
+                    " needs the site's ambient temperature (--ambient-temperature, "
+                    "--weather temperature=K or the profile's "
+                    "thermal.ambient_temperature)");
+        }
+        thermal_ = true;
+        ambient_ = *ambient;
+        const double shortest = setting(sensors, sensor_, "thermal_band_min", 8e-6);
+        const double longest = setting(sensors, sensor_, "thermal_band_max", 14e-6);
+        netd_ = setting(sensors, sensor_, "thermal_netd", 0.05);
+        if (shortest <= 0.0 || longest <= shortest || netd_ < 0.0) {
+            return Status::error(StatusCode::InvalidConfig,
+                                 "thermal camera " + name_ + ": band or netd out of range");
+        }
+        band_ = std::make_unique<ThermalBand>(shortest, longest);
+        displayMin_ = setting(sensors, sensor_, "thermal_display_min", 0.0);
+        displayMax_ = setting(sensors, sensor_, "thermal_display_max", 0.0);
+        const double palette = setting(sensors, sensor_, "thermal_palette", 0.0);
+        palette_ = palette == 1.0   ? ThermalPalette::BlackHot
+                   : palette == 2.0 ? ThermalPalette::Ironbow
+                                    : ThermalPalette::WhiteHot;
+        temperatureOut_ = d.output(
+            spec("sensor/" + name_ + "/temperature", SignalType::Image, units::K, "optical"));
+        temperatures_.assign(std::size_t{camera_.width} * camera_.height, 0.0F);
+
+        // The thermal nodes: their prim's path and body, and their temperature signal.
+        const World& raw = world.raw();
+        struct Node {
+            std::string path;
+            BodyId body;
+            bool onLink{false};  // the node is its body's own prim
+            double emissivity{0.9};
+            SignalId temperature;
+        };
+        std::vector<Node> nodes;
+        for (const SchemaInstance* s : world.instancesOf("ThermalAPI_1")) {
+            if (s->prim.index >= raw.prims.paths.size()) {
+                continue;
+            }
+            Node node;
+            node.path = raw.prims.paths[s->prim.index];
+            node.body = raw.prims.body[s->prim.index];
+            node.onLink = node.body.index < raw.bodies.prim.size() &&
+                          raw.bodies.prim[node.body.index] == s->prim;
+            node.emissivity = s->real("thermal:emissivity").value_or(0.9);
+            SignalSpec t =
+                spec("thermal/" + std::string(world.signalInstanceName(s->prim)) + "/temperature",
+                     SignalType::Scalar, units::K);
+            t.feedback = true;
+            t.optional = true;
+            node.temperature = d.input(t);
+            nodes.push_back(std::move(node));
+        }
+        std::vector<std::string> people;  // body name prefixes of humans
+        for (const SchemaInstance* s : world.instancesOf("HumanAPI_1")) {
+            people.push_back("human_" + std::string(world.signalInstanceName(s->prim)) + "_");
+        }
+        surfaces_.clear();
+        if (!scene_) {
+            return {};
+        }
+        std::uint32_t prims = 0;
+        for (const CameraScene::Drawable& drawable : scene_->drawables) {
+            prims = std::max(prims, drawable.prim + 1);
+        }
+        surfaces_.assign(prims, Surface{});
+        for (const CameraScene::Drawable& drawable : scene_->drawables) {
+            Surface& surface = surfaces_[drawable.prim];
+            // The node whose prim holds this one (the longest path), else one on its body.
+            const Node* best = nullptr;
+            for (const Node& node : nodes) {
+                const bool under = !drawable.path.empty() && drawable.path.starts_with(node.path) &&
+                                   (drawable.path.size() == node.path.size() ||
+                                    drawable.path[node.path.size()] == '/');
+                if (under && (best == nullptr || node.path.size() > best->path.size())) {
+                    best = &node;
+                }
+            }
+            if (best == nullptr && drawable.body != kNoIndex) {
+                for (const Node& node : nodes) {
+                    if (node.body.index == drawable.body && (best == nullptr || node.onLink)) {
+                        best = &node;
+                    }
+                }
+            }
+            if (best != nullptr) {
+                surface.temperature = best->temperature;
+                surface.emissivity = best->emissivity;
+                continue;
+            }
+            if (drawable.body != kNoIndex && drawable.body < raw.bodies.names.size()) {
+                const std::string& body = raw.bodies.names[drawable.body];
+                for (const std::string& prefix : people) {
+                    if (body.starts_with(prefix)) {
+                        surface.fixed = kSkinTemperature;
+                        surface.emissivity = kSkinEmissivity;
+                    }
+                }
+            }
+        }
+        return {};
+    }
+
+    /// The temperature image and its palette, from the instance ids of the frame just drawn.
+    void stepThermal(const StepContext& context, const SignalBus& bus) {
+        // What each surface reads, once per frame: its own emission and the ambient surroundings
+        // it reflects. The clear sky where nothing is hit.
+        apparent_.assign(surfaces_.size(), ambient_);
+        for (std::size_t p = 0; p < surfaces_.size(); ++p) {
+            const Surface& surface = surfaces_[p];
+            double t = surface.fixed > 0.0 ? surface.fixed : ambient_;
+            if (surface.temperature.valid()) {
+                const double node = bus.read(surface.temperature);
+                if (std::isfinite(node) && node > 0.0) {
+                    t = node;
+                }
+            }
+            apparent_[p] = band_->apparent(t, surface.emissivity, ambient_);
+        }
+        const double sky = clearSkyTemperature(ambient_);
+        const std::uint32_t w = camera_.width;
+        const std::uint32_t h = camera_.height;
+        temperatures_.resize(std::size_t{w} * h);
+        tbb::parallel_for(std::uint32_t{0}, h, [&](std::uint32_t v) {
+            random::Stream rng(context.seed, context.stepIndex, (sensor_ << 16U) + v);
+            for (std::uint32_t u = 0; u < w; ++u) {
+                const std::size_t i = (std::size_t{v} * w) + u;
+                const std::uint32_t id =
+                    i < images_.instance.size() ? images_.instance[i] : gpu::kNoInstance;
+                const double t = id < apparent_.size() ? apparent_[id] : sky;
+                temperatures_[i] = static_cast<float>(t + (netd_ * rng.normal()));
+            }
+        });
+        double lo = displayMin_;
+        double hi = displayMax_;
+        if (!(hi > lo)) {
+            // Each frame's range, but never under kThermalSpan, so a scene all at one
+            // temperature shows as one colour, not as its noise stretched over the palette.
+            constexpr double kThermalSpan = 4.0;  // K, a display choice
+            const auto [a, b] = std::ranges::minmax(temperatures_);
+            lo = a;
+            hi = b;
+            if (hi - lo < kThermalSpan) {
+                const double mid = (lo + hi) / 2.0;
+                lo = mid - kThermalSpan / 2.0;
+                hi = mid + kThermalSpan / 2.0;
+            }
+        }
+        images_.rgba.resize(temperatures_.size() * 4);
+        for (std::size_t i = 0; i < temperatures_.size(); ++i) {
+            const std::array<std::uint8_t, 4> c =
+                paletteColour(palette_, (temperatures_[i] - lo) / (hi - lo));
+            std::ranges::copy(c, images_.rgba.begin() + static_cast<std::ptrdiff_t>(i * 4));
+        }
     }
 
     Pose bodyPose(const SignalBus& bus, std::uint32_t b) const {
@@ -1286,6 +1463,20 @@ private:
     SignalId extinction_, contamination_, fogField_;
     fields::FieldSignal fogFieldSignal_;
     std::vector<float> fieldDepth_;
+    // The thermal camera.
+    struct Surface {
+        SignalId temperature;  // a thermal node's
+        double fixed{0.0};     // K, a person's skin; 0: the ambient air
+        double emissivity{0.9};
+    };
+    bool thermal_{false};
+    double ambient_{0.0}, netd_{0.0}, displayMin_{0.0}, displayMax_{0.0};
+    ThermalPalette palette_{ThermalPalette::WhiteHot};
+    std::unique_ptr<ThermalBand> band_;
+    std::vector<Surface> surfaces_;  // by scene prim index
+    std::vector<double> apparent_;   // K, by scene prim index, this frame
+    std::vector<float> temperatures_;
+    SignalId temperatureOut_;
 };
 }  // namespace
 
@@ -1363,6 +1554,7 @@ std::shared_ptr<CameraScene> createCameraScene(const Model& model,
             drawable.pattern = gpu::surfacePatternOf(material.name);
         }
         drawable.prim = p;
+        drawable.path = prim.path;
         drawable.hinge = prim.hinge;
         drawable.hingeAxis = prim.hingeAxis;
         drawable.ground = prim.name == "ground";

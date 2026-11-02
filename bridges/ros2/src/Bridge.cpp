@@ -251,12 +251,13 @@ struct Bridge::Impl {
     /// A camera: colour (rgb8) and depth (32FC1, m; +inf where nothing is in range, REP 118)
     /// in its optical frame, each with its CameraInfo.
     struct Camera {
-        std::string frame;  // "<sensor>_optical"
-        std::string ns;     // "/<sensor>"
-        SignalId image, depth, instance;
+        std::string frame;                             // "<sensor>_optical"
+        std::string ns;                                // "/<sensor>"
+        SignalId image, depth, instance, temperature;  // temperature: a thermal camera's
         sensor_msgs::msg::CameraInfo info;
         SimTime sent{-1};
-        rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr color, depthImage, instanceImage;
+        rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr color, depthImage, instanceImage,
+            temperatureImage;
         rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr colorInfo, depthInfo;
     };
     struct Imu {
@@ -406,6 +407,7 @@ struct Bridge::Impl {
                 out.color = old.color;
                 out.depthImage = old.depthImage;
                 out.instanceImage = old.instanceImage;
+                out.temperatureImage = old.temperatureImage;
                 out.colorInfo = old.colorInfo;
                 out.depthInfo = old.depthInfo;
             }
@@ -421,6 +423,10 @@ struct Bridge::Impl {
                 out.ns + "/instance/image_raw", qos);
             out.depthInfo = node->create_publisher<sensor_msgs::msg::CameraInfo>(
                 out.ns + "/depth/camera_info", qos);
+        }
+        if (!out.temperatureImage && get("thermal", 0.0) != 0.0) {
+            out.temperatureImage = node->create_publisher<sensor_msgs::msg::Image>(
+                out.ns + "/temperature/image_raw", rclcpp::SensorDataQoS());
         }
         return out;
     }
@@ -477,6 +483,24 @@ struct Bridge::Impl {
             image.data.assign(in, in + instance->bytes.size());
             counters[camera.ns + "/instance/image_raw"].add(image.data.size() + 64);
             deliver(camera.ns + "/instance/image_raw", camera.instanceImage, std::move(image));
+        }
+        // A thermal camera's apparent temperatures, kelvin.
+        if (camera.temperatureImage && camera.temperature.valid()) {
+            const std::shared_ptr<const Buffer> kelvin =
+                bus.buffer(bus.readBuffer(camera.temperature));
+            if (kelvin && !kelvin->bytes.empty()) {
+                sensor_msgs::msg::Image image;
+                image.header = camera.info.header;
+                image.width = kelvin->width;
+                image.height = kelvin->height;
+                image.encoding = "32FC1";
+                image.step = kelvin->width * 4;
+                const auto* in = reinterpret_cast<const std::uint8_t*>(kelvin->bytes.data());
+                image.data.assign(in, in + kelvin->bytes.size());
+                counters[camera.ns + "/temperature/image_raw"].add(image.data.size() + 64);
+                deliver(camera.ns + "/temperature/image_raw", camera.temperatureImage,
+                        std::move(image));
+            }
         }
     }
 
@@ -728,8 +752,9 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             }
             lidars.push_back(std::move(lidar));
         } else if (sensors.type[i] == SensorType::Camera) {
-            for (const char* topic : {"/camera_info", "/depth/camera_info", "/image_raw",
-                                      "/depth/image_raw", "/instance/image_raw"}) {
+            for (const char* topic :
+                 {"/camera_info", "/depth/camera_info", "/image_raw", "/depth/image_raw",
+                  "/instance/image_raw", "/temperature/image_raw"}) {
                 timed(settings, "/" + name + topic);
             }
             cameras.push_back(s.camera(name, settings));
@@ -744,6 +769,7 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             cameras.back().image = bus.find("sensor/" + name + "/image");
             cameras.back().depth = bus.find("sensor/" + name + "/depth");
             cameras.back().instance = bus.find("sensor/" + name + "/instance");
+            cameras.back().temperature = bus.find("sensor/" + name + "/temperature");
         } else if (sensors.type[i] == SensorType::Gnss ||
                    sensors.type[i] == SensorType::Magnetometer ||
                    sensors.type[i] == SensorType::Barometer) {

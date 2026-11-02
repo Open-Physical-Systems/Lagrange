@@ -433,7 +433,8 @@ private:
         } else if (const sdf::Camera* camera = sensor.CameraSensor();
                    (sensor.Type() == sdf::SensorType::CAMERA ||
                     sensor.Type() == sdf::SensorType::DEPTH_CAMERA ||
-                    sensor.Type() == sdf::SensorType::RGBD_CAMERA) &&
+                    sensor.Type() == sdf::SensorType::RGBD_CAMERA ||
+                    sensor.Type() == sdf::SensorType::THERMAL_CAMERA) &&
                    camera != nullptr) {
             // One raster camera gives colour, depth and instance ids; it looks along x.
             out.type = SensorType::Camera;
@@ -442,6 +443,9 @@ private:
             out.settings["horizontal_fov"] = camera->HorizontalFov().Radian();
             out.settings["near_clip"] = camera->NearClip();
             out.settings["far_clip"] = camera->FarClip();
+            if (sensor.Type() == sdf::SensorType::THERMAL_CAMERA) {
+                out.settings["thermal"] = 1.0;  // ThermalCameraAPI_1's defaults
+            }
         } else if (!sensor.TypeStr().empty() && sensor.Element() != nullptr) {
             // Any other type is a custom sensor that a plugin implements (RFC 0008 §3).
             out.type = SensorType::Custom;

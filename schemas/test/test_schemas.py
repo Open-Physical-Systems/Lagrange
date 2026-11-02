@@ -17,6 +17,7 @@ EXPECTED = {
         "LidarAPI_1",
         "ImuAPI_1",
         "CameraSensorAPI_1",
+        "ThermalCameraAPI_1",
         "GnssAPI_1",
         "MagnetometerAPI_1",
         "BarometerAPI_1",

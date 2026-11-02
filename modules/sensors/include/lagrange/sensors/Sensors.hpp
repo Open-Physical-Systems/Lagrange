@@ -39,6 +39,7 @@ struct CameraScene {
         std::array<float, 3> scale{1, 1, 1};
         std::array<float, 4> color{0.8F, 0.8F, 0.8F, 1.0F};
         std::uint32_t prim{0};  // scene prim index: the instance id in sensor/<n>/instance
+        std::string path;       // the scene prim's, for the thermal camera's nodes
         // The realistic look.
         float metallic{0.0F};
         float roughness{0.6F};
