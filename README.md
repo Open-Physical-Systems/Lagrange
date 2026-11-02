@@ -226,9 +226,10 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Plan and evaluation (14)</summary>
+<details><summary>Plan and evaluation (15)</summary>
 
 - [Project overview](docs/plan/00-overview.md)
+- [Rotor downwash and live airflow: progress](docs/plan/downwash-progress.md)
 - [What to develop next: an evaluation, 2026-11-01](docs/plan/evaluation-2026-11.md)
 - [Open questions and challenges to the plan](docs/plan/open-questions.md)
 - [Progress](docs/plan/progress.md)
