@@ -423,3 +423,41 @@ So the box goes in as a choice (`aerodynamics.downwash_model: lbm`), with the ce
 (4 cm by default) and the fitted model the default, the CPU fallback and Tier 0's model. A finer
 box runs slower than real time, and the scheduler's real-time factor then drops; the run stays
 correct. Grid refinement (fine cells only near the rotors) would be the next speed-up.
+
+### 8.3 In a run: `downwash_model: lbm`
+
+`aerodynamics: { ..., downwash_model: lbm }` (`profiles/examples/quad_x500_live_air.yaml`) puts the
+run's first multirotor in a box of live air (`aerodynamics::LiveAir`, owned by `AeroDrag`):
+
+- **The box** is 3 m across, from 2 m under the drone (down to the ground, with a floor, when the
+  drone is within 2.5 m of it) to 1 m over it, in 4 cm cells (450k cells hovering 2 m up). It moves
+  with the drone, on the grid of cells, once the drone has drifted 6 cells; the flow is carried
+  over, and new cells start still. Scenery boxes (§2.6) are walls in it.
+- **The rotors** push it every 5 ms of air with their present thrust (`rotor/<j>/thrust`,
+  `thrust_axis`), as actuator discs.
+- **The air a rotor flies in** (`rotor/<j>/air_velocity`, what `bem` rotors read) is the box's air
+  over its disc less the disc's own: at the start the box runs a lone disc of the same radius in
+  still air and measures what share of momentum theory's induced velocity it makes, and that
+  share of the rotor's own induced velocity is taken off. What is left is everything else: the
+  other rotors of the drone, the ground, walls. So the fitted wall effect (§2.7) is not added on
+  top.
+- **Other robots** in the box feel its air (drag on their links, their rotors' air); outside it,
+  and for every other multirotor, the fitted model (§2) stays, and dust still follows the fitted
+  outwash (§2.5).
+- **The viewer** gets the box as `aero/air_box` (Field3D, every second cell, 8 cm, rebuilt every
+  0.1 s), which the server samples for `aero/wind_speed` slices and the particles inside the box.
+- **Speed**: the sample quadcopter hovering 2 m up runs at about 0.75× real time on the RTX 4060
+  Laptop GPU (the box's steps take 1.1 s per second of air). The scheduler's real-time factor
+  drops; the run stays correct.
+- **No hardware GPU** (Tier 0, or only a software device): the fitted model runs, with a line on
+  the console. `downwash_lbm_cpu: true` in the module's config runs the deterministic CPU
+  reference instead (slow; the tests use it, `DownwashPair.TheLiveAirBoxDrawsTheRotorsTogether`).
+  The GPU path is not bit-reproducible (invariant 7); the box is not in saved states, so a
+  restored run starts it still.
+
+Hovering 2 m up, each rotor of the sample flies in about 1.1 m/s of air drawn in towards the
+drone's centre and 0.3–0.5 m/s more down than a lone rotor: OpenFOAM's hover case (§7) had about
+1.05 m/s inwards at each disc. The flow is unsteady, so the rotor speeds the controller needs move
+by about 1% (543–564 rad/s) where the fitted model holds them constant.
+
+![Live air: hovering, then down to half a metre](../../videos/drone_live_air.mp4)

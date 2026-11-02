@@ -14,6 +14,7 @@ add_library(
     drag/src/Downwash.cpp
     lbm/src/Lbm.cpp
     lbm/src/LbmBox.cpp
+    lbm/src/LiveAir.cpp
     lbm/src/WindTunnel.cpp
 )
 lagrange_target_defaults(lagrange_aerodynamics)

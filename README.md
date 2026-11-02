@@ -109,6 +109,8 @@ hugs a wall, and a wall beside a drone sends more air down through its near roto
 roll towards the wall unless its controller spins them faster (calibrated on OpenFOAM runs that
 `lagrange foam-hover` makes)
 ([beside a building](docs/videos/drone_building.mp4), [low](docs/videos/drone_low_altitude.mp4)).
+With `downwash_model: lbm` the air round the drone is computed live instead, in a lattice
+Boltzmann box on the GPU that follows it ([live air](docs/videos/drone_live_air.mp4)).
 
 <p align="center">
   <img src="docs/imgs/cfd-hover-wall-0.25.png" alt="OpenFOAM: a quadcopter 2 m up beside a 12 m building, the air through it, along the ground, and under it" width="760">

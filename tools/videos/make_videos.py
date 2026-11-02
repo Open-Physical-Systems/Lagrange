@@ -135,6 +135,7 @@ TURN = joints(velocity={"turn": 6.28})
 ARM = asset("robots/arm6/arm6.urdf")
 BUILDING = asset("worlds/drone_building/drone_building.urdf")
 DOWNWASH = str(ROOT / "profiles/examples/quad_x500_downwash.yaml")
+LIVE_AIR = str(ROOT / "profiles/examples/quad_x500_live_air.yaml")
 
 
 def cmd_vel(x: float, z: float, seconds: float) -> list[str]:
@@ -477,6 +478,31 @@ CLIPS: list[Clip] = [
             Step(12, "Up past the roof (/cmd_vel 1.5 m/s up for 8 s)", cmd_vel(0.0, 1.5, 8.0)),
             Step(22, "Over the roof (1 m/s for 4 s)", cmd_vel(1.0, 0.0, 4.0)),
             Step(29, "On the roof the wake spreads as on the ground, and stops at its edges"),
+        ],
+    ),
+    Clip(
+        "drone_live_air",
+        "Live air: a lattice Boltzmann box round the drone, down to a low hover",
+        30,
+        [["@run", LIVE_AIR, "--robot", QUAD, "--world", "none"]],
+        [
+            Pane(
+                "3D view: particles in the live air",
+                HALF_L,
+                VIEWPORT_HALF,
+                ["--overlays", "airflow", *view(0, 0, 1.0, 6.0, -60, 12)],
+            ),
+            Pane(
+                "air speed through the drone (XZ)",
+                HALF_R,
+                ENVIRONMENT_SLICE,
+                ["--workspace", "Environment", "--slice", "aero/wind_speed:xz"],
+            ),
+        ],
+        [
+            Step(0, "downwash_model: lbm, the air computed every step in a 3 m box, 4 cm cells"),
+            Step(10, "Down to about half a metre (/cmd_vel, 0.5 m/s down for 3 s)", DESCEND),
+            Step(17, "Low: the jets hit the ground, meet under the drone and rise (the fountain)"),
         ],
     ),
     Clip(

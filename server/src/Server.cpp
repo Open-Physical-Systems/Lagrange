@@ -513,7 +513,7 @@ struct Server::Impl {
     Clock::time_point lastStats{Clock::now()};
     Clock::time_point lastFields{Clock::now()};
     Clock::time_point lastVolumes{Clock::now()};
-    mutable fields::FieldSignal fogFieldSignal, windFieldSignal;
+    mutable fields::FieldSignal fogFieldSignal, windFieldSignal, airBoxSignal;
     mutable std::vector<emi::Source> cachedEmiSources;  // emiSources()
     mutable bool emiSourcesRead{false};
     SimTime statsSimTime{};
@@ -4764,8 +4764,10 @@ struct Server::Impl {
         return scheduler != nullptr && scheduler->bus().find("env/wind/gust").valid();
     }
 
-    /// The rotors' wakes now, from the rotor signals on the bus (Downwash, rotor_aero.md §2).
-    aerodynamics::Downwash runDownwash() const {
+    /// The rotors' wakes now, from the rotor signals on the bus (Downwash, rotor_aero.md §2),
+    /// leaving out the multirotor `skipGroup` (the one in the live air box).
+    aerodynamics::Downwash runDownwash(
+        std::size_t skipGroup = aerodynamics::Downwash::kNoGroup) const {
         aerodynamics::Downwash downwash;
         const World::Colliders& colliders = robot.world.colliders;
         for (std::size_t c = 0; c < colliders.body.size(); ++c) {
@@ -4806,7 +4808,9 @@ struct Server::Impl {
             r.thrust = vec(base + "thrust", 1)[0];
             r.induced = vec(base + "induced_velocity", 1)[0];
             r.group = s.group;
-            rotors.push_back(r);
+            if (s.group != skipGroup) {
+                rotors.push_back(r);
+            }
             relative.resize(std::max(relative.size(), s.group + 1));
             counted.resize(relative.size());
             const double from = wind ? wind->fromDegrees * std::numbers::pi / 180.0 : 0.0;
@@ -4826,19 +4830,46 @@ struct Server::Impl {
     }
 
     /// What the air does now: the wind, this step's gust and the rotors' wakes.
+    /// With the live air box (aerodynamics.downwash_model: lbm, rotor_aero.md §8): its flow
+    /// (aero/air_box) inside it, with every other multirotor's fitted wake.
     struct AirNow {
         aerodynamics::Downwash downwash;
+        aerodynamics::Downwash others;  // without the boxed multirotor
+        std::shared_ptr<const fields::Field> box;
         aerodynamics::Wind wind;
         std::array<double, 3> gust{};
         double groundZ{0.0};
         std::array<double, 3> centre{};  // the robot's origin
         [[nodiscard]] std::array<double, 3> at(const std::array<double, 3>& x) const {
+            if (box) {
+                const auto& b = box->bounds();
+                const double half = box->voxelSize() / 2.0;
+                bool inside = true;
+                for (std::size_t k = 0; k < 3; ++k) {
+                    inside = inside && x[k] >= b[0][k] - half && x[k] <= b[1][k] + half;
+                }
+                if (inside) {
+                    std::array<double, 3> w = aerodynamics::windAt(wind, groundZ, gust, others, x);
+                    const std::array<double, 3> v = box->sampleVector(x);
+                    for (std::size_t k = 0; k < 3; ++k) {
+                        w[k] += v[k];
+                    }
+                    return w;
+                }
+            }
             return aerodynamics::windAt(wind, groundZ, gust, downwash, x);
         }
     };
     AirNow airNow() const {
         AirNow air;
         air.downwash = runDownwash();
+        if (const SignalId id = scheduler->bus().find("aero/air_box"); id.valid()) {
+            air.box = airBoxSignal.read(scheduler->bus(), id);
+            const auto sources = aerodynamics::rotorSources(WorldView(robot.world));
+            if (air.box && !sources.empty()) {
+                air.others = runDownwash(sources.front().group);
+            }
+        }
         air.wind = runWind().value_or(aerodynamics::Wind{});
         const SignalBus& bus = scheduler->bus();
         if (const SignalId id = bus.find("env/wind/gust"); id.valid()) {

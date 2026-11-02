@@ -158,6 +158,10 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 if (domain.contains("downwash") && domain["downwash"].is_bool()) {
                     settings.aerodynamics["downwash"] = domain["downwash"].as<bool>();
                 }
+                if (domain.contains("downwash_model") && domain["downwash_model"].is_string()) {
+                    settings.aerodynamics["downwash_model"] =
+                        domain["downwash_model"].as<std::string>();
+                }
             }
             if (name == "rotor_aero" && domain.contains("air_density") &&
                 domain["air_density"].is_number()) {

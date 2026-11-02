@@ -21,6 +21,7 @@ Iris Xe, about 12 minutes for all).
 | [wind_tunnel_lexus.mp4](wind_tunnel_lexus.mp4) | Speed along the Lexus RX 450h's body mesh, moving, over pressure from above. Made by hand, see cfd.md §6.2 | `lagrange tunnel --frames 200` |
 | [wind_tunnel_flow.mp4](wind_tunnel_flow.mp4) | The mean flow as a world: streamlines, a slice, surface pressure, colour scale | `lagrange --robot none --world DIR/flow_view.usda` |
 | [drone_low_altitude.mp4](drone_low_altitude.mp4) | The quadcopter coming down to half a metre: the outwash ring spreads wide | `/cmd_vel` down |
+| [drone_live_air.mp4](drone_live_air.mp4) | Live air: a lattice Boltzmann box round the drone (4 cm cells, on the GPU), hovering then down to half a metre, where the jets meet under it and rise | `lagrange run quad_x500_live_air.yaml`, `--world none` |
 | [drone_building.mp4](drone_building.mp4) | Beside a 12 m building and over its roof: the wake hugs the wall, spreads on the roof; the rotors by the wall make less thrust | `lagrange run quad_x500_downwash.yaml`, `drone_building.urdf` |
 | [drone_downwash.mp4](drone_downwash.mp4) | The air under a hovering quadcopter: particles in 3D and its speed through the drone, then leaning in wind | `--overlays airflow`, `lagrange set wind_speed=4` |
 | [gravity.mp4](gravity.mp4) | A pendulum under Earth, Moon and Jupiter gravity, changed while it swings | `lagrange set gravity=1.62` |

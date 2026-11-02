@@ -175,6 +175,21 @@ controller spins them faster to stay level (`joint/rotor_1_joint/velocity` again
 the full flow, `lagrange foam-hover assets/robots/quad_x500/quad_x500.urdf --building
 0.6,-3.5,3.6,3.5,12` runs the same scene in OpenFOAM.
 
+The fitted wake is a set of published rules. To compute the air itself instead, live, on a
+hardware GPU:
+
+```bash
+lagrange run profiles/examples/quad_x500_live_air.yaml \
+    --robot assets/robots/quad_x500/quad_x500.usda --world none
+```
+
+`downwash_model: lbm` puts the quadcopter in a 3 m box of air in 4 cm cells, worked out by the
+lattice Boltzmann method every few milliseconds, its rotors pushing it as discs. Flown down to
+half a metre, the four jets hit the ground, meet under the drone and rise between them, which the
+fitted model cannot do. It runs at about three quarters of real time on a laptop RTX 4060
+([rotor_aero.md §8](../design/domains/rotor_aero.md)); without a hardware GPU the fitted model
+runs instead.
+
 ## 5. PX4 or ArduPilot flies it
 
 PX4 runs as its own program and talks to the simulator through its simulator interface: the

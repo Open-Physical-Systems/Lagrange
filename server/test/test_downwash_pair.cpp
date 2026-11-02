@@ -5,6 +5,7 @@
 // Crazyflies 4 l apart (l the centre-to-motor distance) left the lower one 65% of its hover
 // thrust; beyond 19 l it had 95–98%.
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
+#include "lagrange/fields/Field.hpp"
 #include "lagrange/rotor_aero/RotorAero.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 
@@ -235,6 +236,50 @@ TEST(DownwashPair, AWallStarvesTheNearRotorsAndTheDroneRollsTowardsIt) {
     const Beside far = besideAWall(kTips + 12.0 * kDiameter);
     EXPECT_NEAR(far.down[0], far.down[1], 1e-9);
     EXPECT_NEAR(far.thrust[0], far.thrust[1], 1e-9);
+}
+
+// The live air box (downwash_model: lbm, rotor_aero.md §8) on the CPU reference, coarse: the
+// rotors of a hovering quadcopter draw air from round each other, inwards (OpenFOAM's hover case
+// had about 1 m/s inwards at each disc, rotor_aero.md §7), and the box goes out as aero/air_box
+// with the jet going down under the drone.
+TEST(DownwashPair, TheLiveAirBoxDrawsTheRotorsTogether) {
+    World w;
+    auto plant = std::make_unique<Plant>();
+    addQuad(w, *plant, "quad", {0.0, 0.0, 100.0});
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::move(plant));
+    ModuleConfigData rotors;
+    rotors.values[rotor_aero::kAirDensityKey] = kRho;
+    rotors.values["fidelity"] = std::string("bem");
+    rotors.values["ground_effect"] = false;
+    rotors.values["rotor_air"] = true;
+    scheduler.add(std::make_unique<rotor_aero::RotorAero>(), ModuleConfig(rotors));
+    ModuleConfigData aero;
+    aero.values["air_density"] = kRho;
+    aero.values["downwash_model"] = std::string("lbm");
+    aero.values["downwash_lbm_cell"] = 0.08;
+    aero.values["downwash_lbm_cpu"] = true;
+    scheduler.add(std::make_unique<aerodynamics::AeroDrag>(), ModuleConfig(aero));
+    auto wired = scheduler.wire(WorldView(w));
+    ASSERT_TRUE(wired) << to_string(wired.error().front());
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{600'000'000}).ok());
+    const SignalBus& bus = scheduler.bus();
+    for (int i = 0; i < 4; ++i) {
+        const double a = std::numbers::pi / 4.0 + i * std::numbers::pi / 2.0;
+        const auto air =
+            bus.readN(bus.find("rotor/quad_prop" + std::to_string(i) + "_joint/air_velocity"));
+        const double inwards = -(air[0] * std::cos(a) + air[1] * std::sin(a));
+        std::printf("rotor %d: air %.3f %.3f %.3f, inwards %.3f m/s\n", i, air[0], air[1], air[2],
+                    inwards);
+        EXPECT_GT(inwards, 0.3) << i;
+        EXPECT_LT(inwards, 2.5) << i;
+    }
+    fields::FieldSignal signal;
+    const auto box = signal.read(bus, bus.find("aero/air_box"));
+    ASSERT_NE(box, nullptr);
+    const auto under = box->sampleVector({0.0, 0.0, 99.3});
+    std::printf("0.7 m under the centre: %.2f m/s down\n", -under[2]);
+    EXPECT_LT(under[2], -2.0);
 }
 
 }  // namespace
