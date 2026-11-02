@@ -90,3 +90,34 @@ def test_the_comparison_reads_both_formats(tmp_path: Path) -> None:
     assert module.read_foam_list(field, vector=False).tolist() == [1.5, -2.0]
     field.write_text("internalField nonuniform List<vector> 2\n(\n(1 2 3)\n(4 5 6)\n)\n;\n")
     assert module.read_foam_list(field, vector=True).tolist() == [[1, 2, 3], [4, 5, 6]]
+
+
+def test_link_forces_are_read_per_link(tmp_path: Path) -> None:
+    folder = tmp_path / "postProcessing/forces_base_link/0"
+    folder.mkdir(parents=True)
+    rows = "\n".join(f"{i} (10 0 2) (8 0 2) (2 0 0)" for i in range(1, 11))
+    (folder / "force.dat").write_text(
+        "# Time total_x total_y total_z pressure_x pressure_y pressure_z"
+        " viscous_x viscous_y viscous_z\n" + rows + "\n"
+    )
+    links = foam().read_link_forces(tmp_path)
+    assert links == [{"name": "base_link", "total_n": [10.0, 0.0, 2.0],
+                      "pressure_n": [8.0, 0.0, 2.0], "viscous_n": [2.0, 0.0, 0.0]}]  # fmt: skip
+
+
+def test_a_case_asks_for_each_links_force(tmp_path: Path) -> None:
+    case = write_case(tmp_path)
+    assert "forces_base_link" in (case / "system/controlDict").read_text()
+
+
+def test_patch_values_are_read_by_name(tmp_path: Path) -> None:
+    field = tmp_path / "C"
+    field.write_text(
+        "internalField nonuniform List<vector> 1\n(\n(0 0 0)\n)\n;\nboundaryField\n{\n"
+        "    inlet\n    {\n        type calculated;\n        value uniform (0 0 0);\n    }\n"
+        "    body_wing\n    {\n        type calculated;\n"
+        "        value nonuniform List<vector> 2\n(\n(1 2 3)\n(4 5 6)\n)\n;\n    }\n}\n"
+    )
+    internal, patches = foam().read_field(field, vector=True)
+    assert internal == [[0.0, 0.0, 0.0]]
+    assert patches == {"body_wing": [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]}

@@ -2,7 +2,11 @@
 
 Computational fluid dynamics in Lagrange, as of 2026-11-02, on branch `feat/cfd-openfoam`. It has two
 tools, and this document says what each one does, which equations it solves, how far its numbers can
-be trusted, and what comes next. Short notes on the tunnel also live in
+be trusted, and what comes next.
+
+**Which to use (decided 2026-11-02):** `lagrange foam` for force numbers, `lagrange tunnel` for seeing
+and animating the flow. Sections 6 and 7 are why: OpenFOAM reaches the Ahmed body's measured drag at
+25° in minutes, and nothing tried on the tunnel brings its drag below about three times the measurement. Short notes on the tunnel also live in
 [aerodynamics.md](aerodynamics.md) §10.
 
 ## 1. Two tools
@@ -14,7 +18,7 @@ be trusted, and what comes next. Short notes on the tunnel also live in
 | Time | Transient: the wake moves | Steady: a mean flow |
 | Mesh | Uniform cubes, staircase surface | Refined near the body, fitted to it, with layers |
 | Needs | Nothing more | An installed OpenFOAM, or podman or docker and a 1.6 GB image |
-| Use it for | Seeing where the air goes, animations, a wind field | Force numbers, within section 6's limits |
+| Use it for | Seeing where the air goes, animations, a wind field | Force numbers, per link, and pressure on the body, within section 6's limits |
 
 ```mermaid
 flowchart LR
@@ -128,8 +132,21 @@ paraview case/case.foam
 ros2 run lagrange_fields lagrange_foam_to_vdb case/2000/C case/2000/U flow.nvdb --voxel 0.05
 ```
 
-Limits today: forces for the whole robot only, not per link; a capsule is exported as a cylinder;
-`--yaw` turns the shapes but the road's direction stays along the wind.
+What a run leaves in the case folder:
+
+| File | What |
+|---|---|
+| `report.json` | Cd and Cl with how much they still move; each link's force in N, total, pressure and viscous (`forces_<link>` function objects); the pressure plot's extremes |
+| `pressure.png` | $C_p$ on the body from the side and from above, and along its middle, the strongest suction marked |
+| `case.foam` | Open in ParaView |
+| `2000/C`, `2000/U` (the last iteration) | For `lagrange_foam_to_vdb`, a wind field for a run |
+
+`lagrange foam ROBOT --read-only --speed U --out CASE` redraws `pressure.png` and rereads the forces of a
+finished case. Wall pressure is taken from the nearest cell centre, which is what OpenFOAM's
+`zeroGradient` wall condition gives.
+
+Limits today: a capsule is exported as a cylinder; `--yaw` turns the shapes but the road's direction stays
+along the wind; wheels do not turn.
 
 ## 5. The test: the Ahmed body
 
@@ -140,7 +157,8 @@ $Re=2.8\times10^6$ on the length (ERCOFTAC case AC1-05 at this speed).
 
 Sources quote its measured drag differently: 0.2875 at 25° (SimScale's validation page, citing Ahmed
 1984, at 60 m/s) and 0.298 at 25° with a moving ground (Strachan et al. 2007, quoted in arXiv
-2001.11074). No figure for 35° has been checked yet: `TODO(verify)` against the source. Drag is
+2001.11074). No figure for 35° has been checked yet: `TODO(verify)` against the source (Lienhart & Becker, SAE
+2003-01-0656). A study quoted on the CFD-Wiki says drag is smaller at 35° than at 25°. Drag is
 known to fall past about 30°, the "drag crisis".
 
 ## 6. Results
@@ -238,6 +256,15 @@ each. Published Cd: 0.33 for the RX (Lexus UK specification), 0.34 for the AL20 
 ![Surface pressure of both tools on the Lexus](../../imgs/lexus-cp-compare.png)
 
 Video: [wind_tunnel_lexus.mp4](../../videos/wind_tunnel_lexus.mp4).
+
+OpenFOAM's pressure on the car, from `pressure.png`:
+
+![OpenFOAM's pressure coefficient on the Lexus body](../../imgs/lexus-foam-pressure.png)
+
+The front bumper and grille stand at stagnation ($C_p$ near 1), the hood's leading edge, the A-pillars and
+the mirrors show suction, and the tailgate sits near 0. The strongest suction marked, $C_p$ −4.1, is under a
+front wheel where the 20 mm gap to the road chokes the air, likely an effect of that gap rather than of the
+car.
 
 How to read these:
 

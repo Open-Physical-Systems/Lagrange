@@ -213,6 +213,12 @@ mergeTolerance 1e-6;
     )
     foam_file(case / "system/decomposeParDict", "decomposeParDict",
               f"numberOfSubdomains {args.procs};\nmethod scotch;\n")  # fmt: skip
+    centre = vector([(low[0] + high[0]) / 2, (low[1] + high[1]) / 2, p["box_low"][2]])
+    link_forces = "\n".join(
+        f"    forces_{link} {{ type forces; libs (forces); writeControl timeStep; "
+        f"writeInterval 1; patches (body_{link}); rho rhoInf; rhoInf {RHO}; CofR {centre}; }}"
+        for link in links
+    )
     foam_file(case / "system/controlDict", "controlDict", f"""application simpleFoam;
 startFrom startTime;
 startTime 0;
@@ -230,6 +236,7 @@ timePrecision 8;
 runTimeModifiable false;
 functions
 {{
+{link_forces}
     forceCoeffs1
     {{
         type forceCoeffs;
@@ -248,7 +255,7 @@ functions
         Aref {p["area"]:.9g};
     }}
 }}
-""")  # fmt: skip
+""".replace("{link_forces}", link_forces))  # fmt: skip
     foam_file(
         case / "system/fvSchemes",
         "fvSchemes",
@@ -387,6 +394,124 @@ def read_coefficients(case: Path) -> dict:
     return out
 
 
+def read_link_forces(case: Path) -> list[dict]:
+    """Each link's force in N, total, pressure and viscous, the mean of the last fifth."""
+    links = []
+    for folder in sorted(case.glob("postProcessing/forces_*")):
+        files = sorted(folder.glob("*/force*.dat"))
+        if not files:
+            continue
+        names: list[str] = []
+        rows: list[list[float]] = []
+        for line in files[-1].read_text().splitlines():
+            if line.startswith("#"):
+                parts = line[1:].split()
+                if parts and parts[0] == "Time":
+                    names = parts
+            elif line.strip():
+                rows.append([float(v) for v in line.replace("(", " ").replace(")", " ").split()])
+        if not rows:
+            continue
+        tail = rows[-max(len(rows) // 5, 1) :]
+        mean = [sum(column) / len(tail) for column in zip(*tail, strict=True)]
+        entry: dict = {"name": folder.name.removeprefix("forces_")}
+        for part in ("total", "pressure", "viscous"):
+            at = names.index(f"{part}_x") if f"{part}_x" in names else None
+            if at is not None:
+                entry[f"{part}_n"] = mean[at : at + 3]
+        links.append(entry)
+    return links
+
+
+def read_field(path: Path, vector: bool) -> tuple[list[float] | list[list[float]], dict]:
+    """An ASCII field's internal values, and each nonuniform patch's."""
+    import re
+
+    text = path.read_text()
+    pattern = re.compile(r"nonuniform List<\w+>\s*(\d+)\s*\(")
+
+    def values(at: int) -> tuple[list, int]:
+        match = pattern.search(text, at)
+        count = int(match.group(1))
+        end = text.index(";", match.end())
+        numbers = [
+            float(v) for v in text[match.end() : end].replace("(", " ").replace(")", " ").split()
+        ]
+        if vector:
+            return [numbers[k : k + 3] for k in range(0, 3 * count, 3)], end
+        return numbers[:count], end
+
+    internal, _ = values(text.index("internalField"))
+    patches = {}
+    for match in re.finditer(r"\n    (body_\w+)\n    \{", text):
+        block = text[match.end() : text.index("\n    }", match.end())]
+        if "nonuniform" in block:
+            patches[match.group(1)], _ = values(match.end())
+    return internal, patches
+
+
+def plot_pressure(case: Path, speed: float, out: Path) -> dict:
+    """The pressure coefficient on the body: from the side, from above, and along its middle."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from scipy.spatial import cKDTree
+
+    times = [d for d in case.iterdir() if d.name.isdigit() and d.name != "0"]
+    latest = max(times, key=lambda d: int(d.name))
+    centres, faces = read_field(latest / "C", vector=True)
+    pressure, _ = read_field(latest / "p", vector=False)
+    face = np.array([f for patch in faces.values() for f in patch])
+    # The wall's pressure is its cell's (zeroGradient), the nearest cell centre.
+    _, owner = cKDTree(np.array(centres)).query(face)
+    cp = np.array(pressure)[owner] / (0.5 * speed**2)
+    low, high = face.min(axis=0), face.max(axis=0)
+    middle = (low + high) / 2
+    figure = plt.figure(figsize=(12, 9), constrained_layout=True)
+    grid = figure.add_gridspec(3, 1)
+    side = figure.add_subplot(grid[0])
+    near = face[:, 1] <= middle[1]
+    order = np.argsort(face[near, 1])[::-1]
+    shown = side.scatter(face[near][order, 0], face[near][order, 2], c=cp[near][order], s=4,
+                         cmap="coolwarm", vmin=-1.5, vmax=1.0)  # fmt: skip
+    side.set_title("Pressure coefficient on the body, from the side")
+    side.set_aspect("equal")
+    side.set_ylabel("z, m")
+    above = figure.add_subplot(grid[1], sharex=side)
+    top = face[:, 2] >= middle[2]
+    order = np.argsort(face[top, 2])
+    above.scatter(face[top][order, 0], face[top][order, 1], c=cp[top][order], s=4,
+                  cmap="coolwarm", vmin=-1.5, vmax=1.0)  # fmt: skip
+    above.set_title("From above")
+    above.set_aspect("equal")
+    above.set_ylabel("y, m")
+    figure.colorbar(shown, ax=[side, above], label="Cp")
+    line = figure.add_subplot(grid[2], sharex=side)
+    band = 0.03 * (high[1] - low[1])
+    strip = np.abs(face[:, 1] - middle[1]) <= band
+    for name, pick, colour in (("top", face[:, 2] >= middle[2], "tab:red"),
+                               ("bottom", face[:, 2] < middle[2], "tab:blue")):  # fmt: skip
+        chosen = strip & pick
+        order = np.argsort(face[chosen, 0])
+        line.plot(face[chosen][order, 0], cp[chosen][order], ".", ms=3, color=colour, label=name)
+    line.invert_yaxis()
+    line.axhline(0, color="grey", lw=0.5)
+    line.set_title("Along the middle of the body (suction up)")
+    line.set_xlabel("x, m (wind goes this way)")
+    line.set_ylabel("Cp")
+    line.legend()
+    lowest = int(cp.argmin())
+    side.annotate(f"strongest suction, Cp {cp[lowest]:.2f}", (face[lowest, 0], face[lowest, 2]),
+                  xytext=(middle[0], high[2] + 0.15 * (high[2] - low[2])),
+                  arrowprops={"arrowstyle": "->"})  # fmt: skip
+    side.set_ylim(top=high[2] + 0.35 * (high[2] - low[2]))
+    figure.savefig(out, dpi=110)
+    return {"strongest_suction_cp": float(cp[lowest]), "at_m": face[lowest].tolist(),
+            "stagnation_cp": float(cp.max()), "faces": len(face)}  # fmt: skip
+
+
 def run_case(case: Path, args: argparse.Namespace) -> None:
     if not args.container and shutil.which("simpleFoam"):
         subprocess.run(["bash", str(case / "Allrun")], check=True)
@@ -402,7 +527,9 @@ def run_case(case: Path, args: argparse.Namespace) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(prog="lagrange foam", description=__doc__)
     parser.add_argument("robot")
-    parser.add_argument("--speed", type=float, default=20.0, help="wind, m/s")
+    parser.add_argument(
+        "--speed", type=float, default=20.0, help="wind, m/s (also for --read-only)"
+    )
     parser.add_argument("--yaw", type=float, default=0.0, help="degrees")
     parser.add_argument("--ground", action="store_true", help="a moving road under it")
     parser.add_argument("--clearance", type=float, help="m from its lowest point to the road")
@@ -444,10 +571,23 @@ def main() -> int:
             return 0
         run_case(case, args)
     result = read_coefficients(case)
+    result["links"] = read_link_forces(case)
+    try:
+        result["pressure_plot"] = plot_pressure(case, args.speed, case / "pressure.png")
+    except (ImportError, ValueError, AttributeError, OSError) as error:
+        result["pressure_plot"] = f"not drawn: {error}"
     (case / "report.json").write_text(json.dumps(result, indent=2) + "\n")
     print(f"Cd {result['drag_coefficient']:.3f} (moves by {result['drag_moves']:.3f})   "
           f"Cl {result['lift_coefficient']:.3f} (moves by {result['lift_moves']:.3f})   "
           f"{result['iterations']} iterations")  # fmt: skip
+    for link in result["links"]:
+        if "total_n" in link:
+            drag, side, lift = link["total_n"]
+            print(
+                f"  {link['name']:<24} drag {drag:9.2f} N  side {side:9.2f} N  lift {lift:9.2f} N"
+            )
+    if (case / "pressure.png").exists():
+        print(f"Pressure on the body: {case}/pressure.png")
     print(f"In ParaView: {case}/case.foam")
     return 0
 
