@@ -47,6 +47,10 @@ public:
     bool start(const Settings& settings, std::string& why);
     void setGround(bool has, double z);
     void setObstacles(std::vector<Downwash::Box> boxes);
+    /// The wind round the box (m/s, world), from the next advance: it blows through the box, so
+    /// the wake leans with it. What the box gives back (velocityAt, airAtRotor, field) is the
+    /// air's departure from this wind, so the wind is added once, by the caller.
+    void setAmbient(const Vec3& wind) { ambient_ = wind; }
 
     /// Moves the box with `centre` (the drone's, world) when it has drifted, pushes the rotors
     /// (world frame) and advances `dt` seconds of air.
@@ -54,7 +58,7 @@ public:
 
     [[nodiscard]] bool ready() const { return box_ != nullptr; }
     [[nodiscard]] bool contains(const Vec3& world) const;
-    /// m/s, world, at a point in the box.
+    /// m/s, world, at a point in the box: the air's velocity less the wind's.
     [[nodiscard]] Vec3 velocityAt(const Vec3& world) const;
     /// The box's air over a rotor's disc, less what the same disc makes alone in such a box: the
     /// air the rotor flies in from everything else (walls, ground, the drone's other rotors).
@@ -85,6 +89,7 @@ private:
     bool hasGround_{false};
     double groundZ_{0.0};
     std::vector<Downwash::Box> obstacles_;
+    Vec3 ambient_{};
     double pending_{0.0};     // s of air not yet stepped
     double sinceSync_{0.0};   // s since the velocity was copied back
     double sinceField_{1e9};  // s since the field was built

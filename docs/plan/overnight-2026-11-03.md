@@ -51,3 +51,5 @@ stop for the owner except the profile key approved in item 2.
 - Item 3b: fountain push on the frame, fitted to OpenFOAM at 0.5, 0.75, 1, 1.5 and 2 m
   (F 0.463, λ 0.762 diagonals, within 0.23 N), held below h/l = 1 rather than extrapolated
   (it gave 27% of thrust at take-off before the hold).
+- Extra (after item 8; item 9 needs the owner's approval of `ThermalCameraAPI_1`): the live air
+  box takes the mean wind through it, so its wake leans downwind in the flow itself.

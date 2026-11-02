@@ -123,6 +123,9 @@ void LiveAir::rebuild(const Vec3& centre) {
             }
         }
     }
+    // New cells start in the wind; where the old box was, its flow is carried over.
+    next->setAmbient(ambient_);
+    next->fillWithAmbient();
     if (box_) {
         box_->syncPopulations();
         box_->syncVelocity();
@@ -200,6 +203,7 @@ void LiveAir::advance(double dt, const Vec3& centre, std::span<const LbmBox::Rot
         }
     }
     box_->setRotors(local);
+    box_->setAmbient(ambient_);
     pending_ += dt;
     // The GPU's steps go in batches: a submit per module step costs more than the steps.
     const auto steps = pending_ >= kStepBatch
@@ -237,7 +241,9 @@ Vec3 LiveAir::velocityAt(const Vec3& world) const {
     if (!box_) {
         return {};
     }
-    return box_->velocityAt({world[0] - origin_[0], world[1] - origin_[1], world[2] - origin_[2]});
+    const Vec3 v =
+        box_->velocityAt({world[0] - origin_[0], world[1] - origin_[1], world[2] - origin_[2]});
+    return {v[0] - ambient_[0], v[1] - ambient_[1], v[2] - ambient_[2]};
 }
 
 Vec3 LiveAir::discMean(const LbmBox::Rotor& rotor) const {

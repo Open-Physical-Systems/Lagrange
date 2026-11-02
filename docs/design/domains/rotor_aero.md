@@ -464,6 +464,11 @@ run's first multirotor in a box of live air (`aerodynamics::LiveAir`, owned by `
   over, and new cells start still. Scenery boxes (§2.6) are walls in it.
 - **The rotors** push it every 5 ms of air with their present thrust (`rotor/<j>/thrust`,
   `thrust_axis`), as actuator discs.
+- **The wind** (the mean wind at the drone) blows through it: where it blows in, it comes in,
+  and new cells start in it, so the wake leans downwind in the flow itself (in `test_lbm_box` a
+  disc's jet half a metre down moves 0.43 m downwind in a 2 m/s crosswind). What the box gives
+  back is the air's departure from that wind, so the wind and the gusts are added once, as
+  before; the gusts do not blow through the box.
 - **The air a rotor flies in** (`rotor/<j>/air_velocity`, what `bem` rotors read) is the box's air
   over its disc less the disc's own: at the start the box runs a lone disc of the same radius in
   still air and measures what share of momentum theory's induced velocity it makes, and that

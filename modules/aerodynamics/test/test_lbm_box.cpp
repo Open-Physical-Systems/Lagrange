@@ -96,6 +96,55 @@ TEST(LbmBox, TheAirThroughADiscIsMomentumTheorys) {
     EXPECT_NEAR(flux, rotor.thrust, 0.1 * rotor.thrust);
 }
 
+// A steady wind blows through the box unchanged: in where it blows in, out where it leaves.
+TEST(LbmBox, AWindBlowsThroughTheBox) {
+    const LbmBoxConfig config = smallBox();
+    LbmBox air(config);
+    air.setAmbient({3.0, 1.0, 0.0});
+    air.fillWithAmbient();
+    air.step(300);
+    for (const std::size_t z : {std::size_t{4}, std::size_t{24}, std::size_t{44}}) {
+        const auto u = air.velocity(air.index(16, 16, z));
+        EXPECT_NEAR(u[0], 3.0, 0.05) << z;
+        EXPECT_NEAR(u[1], 1.0, 0.05) << z;
+        EXPECT_NEAR(u[2], 0.0, 0.05) << z;
+    }
+}
+
+// In a crosswind the jet under a disc leans downwind (wake skew; Leishman 2006 ch. 2: the wake
+// goes at the resultant of the wind and the induced flow): half a metre down, the centre of the
+// downward flow has moved downwind, and in still air it has not.
+TEST(LbmBox, AJetLeansDownwindInACrosswind) {
+    const LbmBoxConfig config = smallBox();
+    const auto centreOfJet = [&config](double wind) {
+        LbmBox air(config);
+        air.setAmbient({wind, 0.0, 0.0});
+        air.fillWithAmbient();
+        std::vector<LbmBox::Rotor> rotors{oneRotor(config, 4.0)};
+        air.setRotors(rotors);
+        air.step(static_cast<std::size_t>(std::lround(kSettle / air.timeStep())));
+        const auto z = static_cast<std::size_t>((rotors[0].centre[2] - 0.5) / config.cellSize);
+        double weight = 0.0;
+        double moment = 0.0;
+        for (std::size_t y = 0; y < config.ny; ++y) {
+            for (std::size_t x = 0; x < config.nx; ++x) {
+                const double w = -air.velocity(air.index(x, y, z))[2];
+                if (w > 0.5) {
+                    weight += w;
+                    moment += w * (static_cast<double>(x) + 0.5) * config.cellSize;
+                }
+            }
+        }
+        return moment / weight - rotors[0].centre[0];
+    };
+    const double still = centreOfJet(0.0);
+    const double windy = centreOfJet(2.0);
+    std::printf("jet centre half a metre down: %.3f m in still air, %.3f m in 2 m/s\n", still,
+                windy);
+    EXPECT_NEAR(still, 0.0, 0.03);
+    EXPECT_GT(windy, 0.1) << "downwind";
+}
+
 // The GPU step (half precision, float) and the CPU reference make the same jet.
 TEST(LbmBox, TheGpuAgreesWithTheCpu) {
     std::string error;

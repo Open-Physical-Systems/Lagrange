@@ -41,6 +41,8 @@ public:
     LbmBoxStepper& operator=(const LbmBoxStepper&) = delete;
 
     [[nodiscard]] bool valid() const;
+    /// The wind round the box from the next step on, lattice units.
+    void setAmbient(const std::array<float, 3>& wind);
     /// The rotors from the next step on; at most kMaxDiscs.
     void setDiscs(std::span<const Disc> discs);
     /// Advances `steps` steps and waits.

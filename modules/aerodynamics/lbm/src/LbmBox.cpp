@@ -93,6 +93,7 @@ void LbmBox::useGpu(const gpu::Device& device) {
     if (stepper->valid()) {
         stepper_ = std::move(stepper);
         pushDiscs();
+        setAmbient(ambient_);
     }
 }
 
@@ -187,6 +188,33 @@ void LbmBox::syncVelocity() {
     }
 }
 
+void LbmBox::setAmbient(const std::array<double, 3>& wind) {
+    ambient_ = wind;
+    if (stepper_) {
+        stepper_->setAmbient({static_cast<float>(wind[0] / speedScale_),
+                              static_cast<float>(wind[1] / speedScale_),
+                              static_cast<float>(wind[2] / speedScale_)});
+    }
+}
+
+void LbmBox::fillWithAmbient() {
+    const std::size_t count = cells();
+    const Vec u{ambient_[0] / speedScale_, ambient_[1] / speedScale_, ambient_[2] / speedScale_};
+    for (std::size_t c = 0; c < count; ++c) {
+        if (solid_[c] != 0) {
+            continue;
+        }
+        for (int i = 0; i < kQ; ++i) {
+            f_[static_cast<std::size_t>(i) * count + c] =
+                static_cast<float>(equilibrium(i, 1.0, u));
+        }
+        for (std::size_t k = 0; k < 3; ++k) {
+            velocity_[k * count + c] = static_cast<float>(u.at(k));
+        }
+    }
+    next_ = f_;
+}
+
 void LbmBox::syncPopulations() {
     if (stepper_) {
         stepper_->readPopulations(f_);
@@ -235,6 +263,10 @@ void LbmBox::stepOnce() {
     const double tau = tau_;
     const double c2 = config_.smagorinsky * config_.smagorinsky;
     const bool floor = config_.floor;
+    // The wind in lattice units, as the kernel's params.ambient (in float there).
+    const Vec wind{static_cast<float>(ambient_[0] / speedScale_),
+                   static_cast<float>(ambient_[1] / speedScale_),
+                   static_cast<float>(ambient_[2] / speedScale_)};
     tbb::parallel_for(0L, nz, [&](long z) {
         for (long y = 0; y < ny; ++y) {
             for (long x = 0; x < nx; ++x) {
@@ -253,16 +285,22 @@ void LbmBox::stepOnce() {
                     if (sz < 0 && floor) {
                         in[i] = f_[opposite * count + cell];
                     } else if (sx < 0 || sy < 0 || sz < 0 || sx >= nx || sy >= ny || sz >= nz) {
-                        // Open: ambient pressure, the flow carried on outwards only; air drawn
-                        // in comes by the pressure alone (an inward speed carried in feeds on
-                        // itself).
-                        Vec out = own;
+                        // Open: ambient pressure. Where the wind blows in, the wind comes in;
+                        // elsewhere the flow is carried on outwards and air drawn in comes by
+                        // the pressure alone (an inward speed carried in feeds on itself),
+                        // relative to the wind.
                         const std::array<long, 3> s{sx, sy, sz};
                         const std::array<long, 3> n{nx, ny, nz};
+                        bool windIn = false;
                         for (int k = 0; k < 3; ++k) {
-                            if ((s.at(k) < 0 && out.at(k) > 0.0) ||
-                                (s.at(k) >= n.at(k) && out.at(k) < 0.0)) {
-                                out.at(k) = 0.0;
+                            windIn = windIn || (s.at(k) < 0 && wind.at(k) > 0.0) ||
+                                     (s.at(k) >= n.at(k) && wind.at(k) < 0.0);
+                        }
+                        Vec out = windIn ? wind : own;
+                        for (int k = 0; k < 3 && !windIn; ++k) {
+                            if ((s.at(k) < 0 && out.at(k) > wind.at(k)) ||
+                                (s.at(k) >= n.at(k) && out.at(k) < wind.at(k))) {
+                                out.at(k) = wind.at(k);
                             }
                         }
                         in[i] = equilibrium(i, 1.0, out);

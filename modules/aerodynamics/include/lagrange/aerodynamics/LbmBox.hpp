@@ -66,6 +66,12 @@ public:
     void setSolid(std::size_t x, std::size_t y, std::size_t z);
     /// The rotors from the next step on.
     void setRotors(std::span<const Rotor> rotors);
+    /// The wind round the box (m/s, its frame): it comes in where it blows in, and the flow
+    /// leaving is carried on relative to it. Still air by default.
+    void setAmbient(const std::array<double, 3>& wind);
+    /// Sets every fluid cell to the wind, at rest pressure (for a box that starts in it).
+    void fillWithAmbient();
+    [[nodiscard]] const std::array<double, 3>& ambient() const { return ambient_; }
     /// Advances `steps` steps.
     void step(std::size_t steps);
     /// On the GPU, copies the velocity back so velocity() and velocityAt() see the present flow.
@@ -107,6 +113,7 @@ private:
         std::array<double, 3> push{};  // lattice force per unit weight
     };
     std::vector<Disc> discs_;
+    std::array<double, 3> ambient_{};  // m/s
     std::unique_ptr<gpu::LbmBoxStepper> stepper_;
 };
 
