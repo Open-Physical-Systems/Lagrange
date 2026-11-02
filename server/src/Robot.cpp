@@ -876,7 +876,7 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
                 }
                 typeName = "Lidar";
             } else if (type == "camera" || type == "depth" || type == "depth_camera" ||
-                       type == "rgbd_camera") {
+                       type == "rgbd_camera" || type == "thermal" || type == "thermal_camera") {
                 // One raster camera gives colour, depth and instance ids (sensors.md).
                 kind = SensorType::Camera;
                 const tinyxml2::XMLElement* camera = sensor->FirstChildElement("camera");
@@ -885,6 +885,9 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
                 settings["horizontal_fov"] = childNumber(camera, {"horizontal_fov"}, 1.047);
                 settings["near_clip"] = childNumber(camera, {"clip", "near"}, 0.05);
                 settings["far_clip"] = childNumber(camera, {"clip", "far"}, 100.0);
+                if (type == "thermal" || type == "thermal_camera") {
+                    settings["thermal"] = 1.0;  // ThermalCameraAPI_1's defaults
+                }
                 typeName = "Camera";
             } else if (!type.empty()) {
                 // Any other type is a custom sensor that a plugin implements (RFC 0008 §3).

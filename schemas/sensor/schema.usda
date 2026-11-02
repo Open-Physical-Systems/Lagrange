@@ -190,6 +190,45 @@ class "CameraSensorAPI_1" (
     )
 }
 
+class "ThermalCameraAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A thermal (long-wave infrared) camera: apply with CameraSensorAPI_1. Each pixel is
+    the apparent temperature of what it sees in the camera's band: the thing's own emission
+    (its ThermalAPI_1 node's temperature and emissivity, a person's skin, else the site's
+    ambient temperature) plus what it reflects of the surroundings, and the clear sky
+    (Swinbank 1963) where nothing is hit (docs/design/domains/sensors.md section 2, Thermal
+    camera). The camera's image becomes a palette of the temperatures; sensor/<n>/temperature
+    holds them, in kelvin. It needs the site's ambient temperature."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double sensor:thermal:bandMin = 0.000008 (
+        lagrangeUnit = "m"
+        doc = "Shortest wavelength of the band (8 µm: an uncooled microbolometer)."
+    )
+    double sensor:thermal:bandMax = 0.000014 (
+        lagrangeUnit = "m"
+        doc = "Longest wavelength of the band."
+    )
+    double sensor:thermal:netd = 0.05 (
+        lagrangeUnit = "K"
+        doc = "Noise-equivalent temperature difference: the noise of each pixel, 1 sigma."
+    )
+    double sensor:thermal:displayMin (
+        lagrangeUnit = "K"
+        doc = "Temperature drawn as the palette's coldest; unauthored: each frame's coldest."
+    )
+    double sensor:thermal:displayMax (
+        lagrangeUnit = "K"
+        doc = "Temperature drawn as the palette's hottest; unauthored: each frame's hottest."
+    )
+    uniform token sensor:thermal:palette = "white_hot" (
+        allowedTokens = ["white_hot", "black_hot", "ironbow"]
+    )
+}
+
 class "GnssAPI_1" (
     inherits = </APISchemaBase>
     doc = """A GNSS receiver: WGS84 position and ENU velocity of the antenna (the prim's origin),

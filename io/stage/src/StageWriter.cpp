@@ -313,6 +313,20 @@ private:
                 prim.CreateAttribute(TfToken("sensor:camera:bitDepth"), SdfValueTypeNames->Int)
                     .Set(static_cast<int>(get("bit_depth", 8.0)));
             }
+            if (get("thermal", 0.0) != 0.0) {
+                prim.ApplyAPI(TfToken("ThermalCameraAPI_1"));
+                real("sensor:thermal:bandMin", get("thermal_band_min", 8e-6));
+                real("sensor:thermal:bandMax", get("thermal_band_max", 14e-6));
+                real("sensor:thermal:netd", get("thermal_netd", 0.05));
+                if (settings.contains("thermal_display_min")) {
+                    real("sensor:thermal:displayMin", get("thermal_display_min", 0.0));
+                    real("sensor:thermal:displayMax", get("thermal_display_max", 0.0));
+                }
+                const double palette = get("thermal_palette", 0.0);
+                token("sensor:thermal:palette", palette == 1.0   ? "black_hot"
+                                                : palette == 2.0 ? "ironbow"
+                                                                 : "white_hot");
+            }
         } else if (sensors.type[s] == SensorType::Gnss) {
             prim.ApplyAPI(TfToken("GnssAPI_1"));
             real("sensor:gnss:horizontalNoiseStd", get("horizontal_noise", 0.0));

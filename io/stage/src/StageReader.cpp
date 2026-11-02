@@ -880,6 +880,23 @@ private:
                 settings["bit_depth"] =
                     valueOf<int>(prim.GetAttribute(TfToken("sensor:camera:bitDepth"))).value_or(8);
             }
+            // A thermal camera (ThermalCameraAPI_1): the band, noise and display.
+            if (prim.HasAPI(TfToken("ThermalCameraAPI_1"))) {
+                settings["thermal"] = 1.0;
+                settings["thermal_band_min"] = real("sensor:thermal:bandMin").value_or(8e-6);
+                settings["thermal_band_max"] = real("sensor:thermal:bandMax").value_or(14e-6);
+                settings["thermal_netd"] = real("sensor:thermal:netd").value_or(0.05);
+                const std::optional<double> lo = real("sensor:thermal:displayMin");
+                const std::optional<double> hi = real("sensor:thermal:displayMax");
+                if (lo && hi && *hi > *lo) {
+                    settings["thermal_display_min"] = *lo;
+                    settings["thermal_display_max"] = *hi;
+                }
+                const TfToken palette = token("sensor:thermal:palette");
+                settings["thermal_palette"] = palette == TfToken("black_hot") ? 1.0
+                                              : palette == TfToken("ironbow") ? 2.0
+                                                                              : 0.0;
+            }
             // The sensor looks along x; the USD camera along its -z.
             mount = compose(scene.offset, {{0, 0, 0}, conjugate(kSensorFromUsdCamera)});
         } else if (prim.HasAPI(TfToken("LidarAPI_1"))) {

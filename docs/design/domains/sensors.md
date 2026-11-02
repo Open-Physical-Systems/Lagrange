@@ -57,6 +57,48 @@ sedan's front camera uses all of it. Owed: motion blur, a light model (absolute 
 colour filter array and demosaicing, translation in the rolling shutter, importing SDFormat
 `<distortion>` and `<noise>`.
 
+**Thermal camera** (after v1.0, `ThermalCameraAPI_1` on a camera,
+`modules/sensors/include/lagrange/sensors/ThermalCamera.hpp`). A camera with it draws the same
+raster frame, and then reads each pixel's instance id as a surface of known temperature and
+emissivity:
+
+- a prim under a `ThermalAPI_1` node (the longest path that holds it), else a node on the same
+  body, is at that node's `thermal/<n>/temperature`, with its `thermal:emissivity`;
+- a person (`HumanAPI_1`) is at Fanger's mean skin temperature in comfort while walking slowly,
+  t_sk = 35.7 − 0.0275·M °C at M = 116 W/m² (Thermal Comfort, 1970): 32.5 °C, emissivity 0.98
+  (Steketee 1973). Clothing, cooler than skin, is not told apart;
+- everything else is at the site's ambient temperature, and so reads it whatever its emissivity;
+- where nothing is hit, the clear sky: T_sky = 0.0552·T_air^1.5 (Swinbank 1963), 16 K below 20 °C
+  air.
+
+What a surface sends is ε·B(T) + (1 − ε)·B(T_amb), with B Planck's radiance over the camera's band
+(`sensor:thermal:bandMin`/`bandMax`, 8–14 µm by default; the exact series of Widger and Woodall
+1976), and the camera reports the temperature a black body would need for it, as radiometric
+cameras do. Each pixel then gets Gaussian noise of `sensor:thermal:netd` (1 σ, Philox). Outputs:
+`sensor/<n>/temperature` (r32f, K) and `image`, the temperatures in a palette
+(`sensor:thermal:palette` white_hot, black_hot or ironbow, over `displayMin`/`displayMax` or each
+frame's range, at least 4 K); depth and instance are as for any camera. ROS: `/<name>/temperature/image_raw`
+(32FC1, K) beside `/<name>/image_raw`. URDF `<sensor type="thermal">` or `"thermal_camera"`, and
+SDFormat's `thermal_camera`, give a thermal camera with the defaults. It needs the site's
+temperature (`--ambient-temperature`, `--weather temperature=` or the profile's
+`thermal.ambient_temperature`) and refuses to start without it. Sample:
+`assets/robots/amr_diffdrive/amr_diffdrive_thermal.usda`.
+
+Checked in `test_thermal_camera`: the black-body fractions of Incropera et al. (Fundamentals of
+Heat and Mass Transfer, Table 12.1) at four λT within 1·10⁻⁵ (the table's C₂ is 14 388 µm·K,
+CODATA's 14 387.77), the band radiance against a direct integration of Planck's law within 10⁻⁹
+and Stefan–Boltzmann over all wavelengths within 10⁻⁶, the apparent temperature of a grey
+surface, Swinbank's sky, and a run that sees a 350 K node with ε 0.95 at its apparent temperature
+(about 2.6 K low), the air and the sky, with the noise at its NETD. Not modelled: the atmosphere's
+own absorption and emission (small over tens of metres in clear air, not in fog; the visible fog
+veil is left off for thermal cameras), the sun's heating of surfaces and the ground, the sky
+reflected in upward faces (surfaces reflect the ambient air), clouds, the optics' blur and the
+detector's fixed-pattern noise and drift. There is no measured thermal image to compare with.
+
+![The sample AMR's thermal camera on open ground: a person at skin temperature, 32.5 °C (white),
+the ground at the 20 °C air (red), the clear sky at 3.7 °C (black), ironbow
+palette](../../imgs/thermal-camera-person.png)
+
 **Radar**: ray-launched returns with radar cross-section from `sensmat:radarCrossSectionDensity`,
 radial velocity from relative motion, a range–Doppler–azimuth detection list after a
 constant-false-alarm threshold; rain attenuation from weather. Raw ADC cubes are not produced.

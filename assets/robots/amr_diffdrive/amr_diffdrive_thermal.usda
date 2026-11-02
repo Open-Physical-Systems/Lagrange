@@ -1,0 +1,41 @@
+#usda 1.0
+(
+    defaultPrim = "amr_diffdrive"
+    doc = """The sample AMR with its power system and a forward thermal camera (ThermalCameraAPI_1,
+    docs/design/domains/sensors.md section 2): 320 x 256 pixels, 50 degrees across, 8 to 14 um,
+    10 Hz, the size of the usual uncooled long-wave cores (9 Hz ones would round to 111 ms steps,
+    which do not fit the other modules'); its 50 mK noise is a typical
+    datasheet figure, not one product's (TODO(verify) against a datasheet). It sees people at
+    their skin temperature, its own warm chassis and motors as the thermal network heats them,
+    the air's temperature elsewhere, and the cold clear sky. Run it with the site's temperature:
+    lagrange assets/robots/amr_diffdrive/amr_diffdrive_thermal.usda
+    assets/worlds/warehouse_small/warehouse_small.usda --ambient-temperature 293.15 --humans 6"""
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    subLayers = [@./amr_diffdrive_powered.usda@]
+    upAxis = "Z"
+)
+
+over "amr_diffdrive"
+{
+    over "base_link"
+    {
+        def Camera "thermal_camera" (
+            prepend apiSchemas = ["SensorAPI_1", "CameraSensorAPI_1", "ThermalCameraAPI_1"]
+        )
+        {
+            float2 clippingRange = (0.1, 100)
+            float focalLength = 22.469
+            float horizontalAperture = 20.955
+            float verticalAperture = 16.764
+            int sensor:camera:width = 320
+            int sensor:camera:height = 256
+            double sensor:rate = 10
+            double sensor:thermal:netd = 0.05
+            uniform token sensor:thermal:palette = "ironbow"
+            quatd xformOp:orient = (0.5, 0.5, -0.5, -0.5)
+            double3 xformOp:translate = (0.26, 0, 0.16)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+        }
+    }
+}

@@ -71,6 +71,7 @@ reference is our own OpenFOAM run, that is a check between two models, not again
 | OpenFOAM cases (`lagrange foam`) | Ahmed body at 25° | Cd 0.266–0.288 against 0.2875–0.298, but 8 % apart between two meshes; 35° not trustworthy yet | cfd.md §5 |
 | Components between buses (RFC 0010) | formulas; ngspice | Lagrange within 0.5 % of the formula, ngspice within 0.1 %, on random circuits | `tools/ci/check_electrical.py`, `test_electrical_check` |
 | Walking humans | social force (Helbing and Molnár 1995) as traffic uses it | behaviour tested (they walk, steer, stop); not against measured crowds | `test_humans` |
+| Thermal camera | Incropera et al. Table 12.1 black-body fractions; Planck integrated directly; Stefan–Boltzmann; Swinbank 1963 clear sky | fractions within 1e-5, band radiance within 1e-9; a 350 K node of ε 0.95 read at its apparent temperature within the 50 mK noise; scene temperatures are assumptions (no sun, no atmosphere) | `test_thermal_camera` |
 
 ### Models with no reference yet
 
@@ -90,6 +91,9 @@ Said plainly, so nobody reads more into these than is there:
   comparison.
 - **Realistic camera look**: a picture, not a radiometric model; only the pinhole geometry and
   noise are checked.
+- **Thermal camera scenes**: the radiometry is checked, but what a surface's temperature is
+  (ambient for anything without a thermal node, no sun, no sky reflection, no atmosphere) and a
+  person's skin temperature are our assumptions; no thermal image of a real scene to compare.
 - **Radiation**: not built.
 - **Jolt's contact force on a group of fixed bodies** goes to the group's root body; which body
   of the group was touched is not known.

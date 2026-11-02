@@ -305,6 +305,54 @@ TEST(LoadUrdf, CameraSensorsLoadAndSurviveAUsdRoundTrip) {
     EXPECT_NEAR(std::abs(dot), 1.0, 1e-9);
 }
 
+TEST(LoadUrdf, AThermalCameraLoadsAndSurvivesAUsdRoundTrip) {
+    // Gazebo's sensor type "thermal" (and "thermal_camera") is a camera with ThermalCameraAPI_1.
+    const std::string urdf = ::testing::TempDir() + "/thermal_post.urdf";
+    {
+        std::ofstream out(urdf);
+        out << R"(<robot name="post">
+<link name="head"><inertial><mass value="1"/><inertia ixx="0.01" iyy="0.01" izz="0.01" ixy="0"
+ixz="0" iyz="0"/></inertial><visual><geometry><box size="0.1 0.1 0.1"/></geometry></visual></link>
+<gazebo reference="head"><sensor name="ir" type="thermal"><update_rate>10</update_rate>
+<camera><horizontal_fov>0.8</horizontal_fov><image><width>160</width><height>120</height>
+</image></camera></sensor></gazebo></robot>)";
+    }
+    Robot robot;
+    ASSERT_TRUE(addUrdf(robot, urdf));
+    World::Sensors& sensors = robot.world.sensors;
+    ASSERT_EQ(sensors.names.size(), 1U);
+    EXPECT_EQ(sensors.type[0], SensorType::Camera);
+    EXPECT_DOUBLE_EQ(sensors.settings[0].at("thermal"), 1.0);
+    sensors.settings[0]["thermal_netd"] = 0.03;
+    sensors.settings[0]["thermal_palette"] = 2.0;
+    sensors.settings[0]["thermal_display_min"] = 280.0;
+    sensors.settings[0]["thermal_display_max"] = 320.0;
+    const std::string usda = ::testing::TempDir() + "/thermal_post.usda";
+    ASSERT_TRUE(stage::writeStage(robot, usda));
+    const auto back = stage::loadStage(usda);
+    ASSERT_TRUE(back) << back.error();
+    const auto& read = back->world.sensors.settings.at(0);
+    EXPECT_DOUBLE_EQ(read.at("thermal"), 1.0);
+    EXPECT_NEAR(read.at("thermal_band_min"), 8e-6, 1e-12);
+    EXPECT_NEAR(read.at("thermal_band_max"), 14e-6, 1e-12);
+    EXPECT_DOUBLE_EQ(read.at("thermal_netd"), 0.03);
+    EXPECT_DOUBLE_EQ(read.at("thermal_palette"), 2.0);
+    EXPECT_DOUBLE_EQ(read.at("thermal_display_min"), 280.0);
+    EXPECT_DOUBLE_EQ(read.at("thermal_display_max"), 320.0);
+
+    // The sample: the AMR with a forward thermal camera.
+    const auto sample = stage::loadStage(LAGRANGE_TEST_AMR_THERMAL_USDA);
+    ASSERT_TRUE(sample) << sample.error();
+    const World::Sensors& its = sample->world.sensors;
+    const auto camera = std::ranges::find(its.names, "thermal_camera");
+    ASSERT_NE(camera, its.names.end());
+    const auto k = static_cast<std::size_t>(camera - its.names.begin());
+    EXPECT_DOUBLE_EQ(its.settings[k].at("thermal"), 1.0);
+    EXPECT_DOUBLE_EQ(its.settings[k].at("thermal_palette"), 2.0);
+    EXPECT_DOUBLE_EQ(its.settings[k].at("width"), 320.0);
+    EXPECT_FALSE(WorldView(sample->world).instancesOf("ThermalAPI_1").empty());
+}
+
 TEST(LoadUrdf, AWorldFileAddsFixedScenery) {
     Robot robot = amr();
     const std::size_t bodies = robot.world.bodies.names.size();
