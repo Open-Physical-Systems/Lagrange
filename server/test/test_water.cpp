@@ -1,6 +1,7 @@
 // Water: buoyancy against Archimedes, and what a lidar sees of it.
 #include "lagrange/server/Server.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -48,13 +49,17 @@ TEST(Water, ABoxFloatsAtItsDraft) {
         const Status loaded = server.load();
         ASSERT_TRUE(loaded.ok()) << loaded.message;
         // Quadratic drag alone calms a small bob slowly, as no waves carry its energy away, and
-        // Jolt damps it less than MuJoCo's implicit steps do: the mean over a few bobs.
+        // Jolt damps it less than MuJoCo's implicit steps do: the mean over a few bobs. A cube
+        // half as dense as water is unstable upright (its metacentric height BM − BG =
+        // 0.067 − 0.1 m is negative), so it also rolls slowly over towards a tilted float, its
+        // centre at the surface at any tilt (half a cube is under any plane through its centre);
+        // on Jolt that roll, with the added mass, takes several seconds: a 20 s mean.
         ASSERT_TRUE(server.stepUntil(SimTime{60'000'000'000}).ok());
         const std::string name = server.world().bodies.names.at(0);
         double height = 0.0;
         double wet = 0.0;
-        constexpr int kSamples = 128;
-        for (int k = 1; k <= kSamples; ++k) {  // 6.4 s, about five bobs
+        constexpr int kSamples = 400;
+        for (int k = 1; k <= kSamples; ++k) {  // 20 s
             ASSERT_TRUE(server.stepUntil(SimTime{60'000'000'000 + k * 50'000'000LL}).ok());
             height += server.read("body/" + name + "/pose").at(2) / kSamples;
             wet += server.read("body/" + name + "/submerged").at(0) / kSamples;
@@ -93,6 +98,85 @@ TEST(Water, ASinkingBoxReachesItsTerminalSpeed) {
     constexpr double kG = 9.80665;
     const double expected = std::sqrt(2.0 * (80.0 - 1000.0 * 0.064) * kG / (1000.0 * 1.0 * 0.16));
     EXPECT_NEAR(std::abs(server.read("body/" + name + "/twist").at(2)), expected, 0.03 * expected);
+}
+
+/// A world with a free sphere of `mass` kg and `radius` m, its centre at height z.
+std::string sphereWorld(double mass, double radius, double z) {
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() /
+        ("lagrange_water_sphere_" + std::to_string(::getpid()) + ".sdf");
+    const double i = 0.4 * mass * radius * radius;
+    std::ofstream(path)
+        << "<?xml version=\"1.0\"?><sdf version=\"1.9\"><world name=\"w\">"
+        << "<model name=\"ball\"><pose>0 0 " << z << " 0 0 0</pose>"
+        << "<link name=\"link\"><inertial><mass>" << mass << "</mass><inertia><ixx>" << i
+        << "</ixx><iyy>" << i << "</iyy><izz>" << i << "</izz></inertia>"
+        << "</inertial><collision name=\"c\"><geometry><sphere><radius>" << radius
+        << "</radius></sphere></geometry></collision></link></model></world></sdf>\n";
+    return path.string();
+}
+
+// Added mass (Lamb 1932 §92: ½ρV for a sphere): a sphere half as dense as water, released at
+// rest under water, starts rising at g(ρ_w V − m)/(m + ½ρ_w V) = g/2, not g as it would without.
+TEST(Water, AReleasedSphereRisesWithItsAddedMass) {
+    constexpr double kRadius = 0.1;
+    constexpr double kG = 9.80665;
+    const double volume = 4.0 / 3.0 * 3.14159265358979 * kRadius * kRadius * kRadius;
+    const double mass = 500.0 * volume;
+    for (const char* physics : {"mujoco", "jolt"}) {
+        ServerOptions o;
+        o.worldPath = sphereWorld(mass, kRadius, 1.0);
+        o.water.push_back({{0.0, 0.0, 2.0}, 10.0, 10.0, 2.0});
+        o.ros = false;
+        o.realTimeFactor = 0.0;
+        o.physics = physics;
+        Server server(o);
+        ASSERT_TRUE(server.load().ok());
+        ASSERT_TRUE(server.stepUntil(SimTime{40'000'000}).ok());  // 40 ms: drag still small
+        const std::string name = server.world().bodies.names.at(0);
+        const double rise = server.read("body/" + name + "/twist").at(2) / 0.04;
+        const double expected = kG * (1000.0 * volume - mass) / (mass + 0.5 * 1000.0 * volume);
+        EXPECT_NEAR(rise, expected, 0.03 * expected) << physics << ": without added mass " << kG;
+    }
+}
+
+// In a current the drag works on the speed through the water: a floating box drifts until it
+// moves with the water.
+TEST(Water, AFloatingBoxDriftsWithTheCurrent) {
+    ServerOptions o = pool(32.0, 2.0, "mujoco");
+    o.worldPath = boxWorld(32.0, 2.0);
+    o.water = {{{0.0, 0.0, 2.0}, 200.0, 200.0, 2.0}};
+    o.waterCurrent = {0.5, 0.0, 0.0};
+    Server server(o);
+    ASSERT_TRUE(server.load().ok());
+    ASSERT_TRUE(server.stepUntil(SimTime{40'000'000'000}).ok());
+    const std::vector<double> v =
+        server.read("body/" + server.world().bodies.names.at(0) + "/twist");
+    EXPECT_NEAR(v.at(0), 0.5, 0.02) << "with the water";
+    EXPECT_NEAR(v.at(1), 0.0, 0.02);
+}
+
+// Linear (Airy) waves much longer than a float: it rides them, heaving with the waves' own
+// amplitude (a heave response of 1 at long waves). 0.1 m, 4 s waves on 10 m of water are 25 m
+// long; the box is 0.4 m.
+TEST(Water, ASmallFloatRidesLongWaves) {
+    ServerOptions o = pool(32.0, 10.0, "mujoco");
+    o.worldPath = boxWorld(32.0, 10.0);
+    o.water = {{{0.0, 0.0, 10.0}, 200.0, 200.0, 10.0}};
+    o.waterWaves = {0.1, 4.0, 0.0};
+    Server server(o);
+    ASSERT_TRUE(server.load().ok());
+    ASSERT_TRUE(server.stepUntil(SimTime{20'000'000'000}).ok());
+    const std::string name = server.world().bodies.names.at(0);
+    double low = 1e9;
+    double high = -1e9;
+    for (int k = 1; k <= 240; ++k) {  // 12 s, three waves
+        ASSERT_TRUE(server.stepUntil(SimTime{20'000'000'000 + k * 50'000'000LL}).ok());
+        const double z = server.read("body/" + name + "/pose").at(2);
+        low = std::min(low, z);
+        high = std::max(high, z);
+    }
+    EXPECT_NEAR((high - low) / 2.0, 0.1, 0.01) << "heaves with the 0.1 m waves";
 }
 
 // A hull whose origin is at one end: it floats level, at the draft of its true volume.

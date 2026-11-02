@@ -10,7 +10,12 @@ namespace lagrange::hydrodynamics {
 
 namespace {
 
-constexpr int kCells = 6;           // a side, per collider
+constexpr int kCells = 6;  // a side, per collider
+// The added mass of a sphere in potential flow, as a share of the displaced water's mass
+// (Lamb, Hydrodynamics, 1932, §92); the same along every axis here.
+constexpr double kAddedMassShare = 0.5;
+// Beyond this k·d the water counts as deep: cosh and sinh of k(z + d) over sinh(k d) are e^(k z).
+constexpr double kDeepWater = 20.0;
 constexpr double kCellReach = 2.0;  // a cell's corner is within this many of its sides, generously
 
 SignalSpec spec(std::string name, SignalType type, Unit unit, std::string frame = {}) {
@@ -188,11 +193,38 @@ Duration Water::preferredStep() const {
     return Duration{1'000'000};
 }
 
-Status Water::declare(const WorldView& world, const ModuleConfig&, SignalDeclarer& d) {
+Status Water::declare(const WorldView& world, const ModuleConfig& config, SignalDeclarer& d) {
     waters_ = waterOf(world);
     bodies_.clear();
     const World& raw = world.raw();
     gravity_ = raw.gravityLocal;
+    current_ = {config.get<double>("current_x").value_or(0.0),
+                config.get<double>("current_y").value_or(0.0),
+                config.get<double>("current_z").value_or(0.0)};
+    waveAmplitude_ = std::max(0.0, config.get<double>("wave_amplitude").value_or(0.0));
+    const double period = config.get<double>("wave_period").value_or(0.0);
+    const double towards =
+        config.get<double>("wave_towards").value_or(0.0) * std::numbers::pi / 180.0;
+    waveHeading_ = {std::cos(towards), std::sin(towards)};
+    waveOmega_ = waveAmplitude_ > 0.0 && period > 0.0 ? 2.0 * std::numbers::pi / period : 0.0;
+    // The wavenumber of each body of water: ω² = g·k·tanh(k·d), by Newton from deep water's.
+    const double g = std::hypot(gravity_[0], gravity_[1], gravity_[2]);
+    wavenumbers_.assign(waters_.size(), 0.0);
+    for (std::size_t w = 0; w < waters_.size() && waveOmega_ > 0.0 && g > 0.0; ++w) {
+        const double d = waters_[w].depth;
+        double k = waveOmega_ * waveOmega_ / g;
+        for (int i = 0; i < 50; ++i) {
+            const double t = std::tanh(k * d);
+            const double f = g * k * t - waveOmega_ * waveOmega_;
+            const double slope = g * t + g * k * d * (1.0 - t * t);
+            const double step = f / slope;
+            k -= step;
+            if (std::abs(step) < 1e-12 * k) {
+                break;
+            }
+        }
+        wavenumbers_[w] = k;
+    }
     const std::vector<bool> moving = movingBodies(raw);
     for (std::uint32_t b = 0; b < raw.bodies.names.size(); ++b) {
         if (!moving[b] || raw.bodies.kinematic[b]) {
@@ -200,6 +232,7 @@ Status Water::declare(const WorldView& world, const ModuleConfig&, SignalDeclare
         }
         Body body;
         body.com = raw.bodies.comLocal[b];
+        body.mass = raw.bodies.mass[b];
         for (std::size_t c = 0; c < raw.colliders.body.size(); ++c) {
             if (raw.colliders.body[c] != BodyId{b}) {
                 continue;
@@ -256,25 +289,70 @@ Status Water::declare(const WorldView& world, const ModuleConfig&, SignalDeclare
 }
 
 Status Water::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
-    for (const Body& body : bodies_) {
+    for (Body& body : bodies_) {
+        body.lastVelocity = {};
+        body.acceleration = {};
+        body.started = false;
         bus.writeN(body.wrench, std::array<double, 6>{});
         bus.write(body.submerged, 0.0);
     }
     return {};
 }
 
-Status Water::step(const StepContext&, SignalBus& bus) {
-    for (const Body& body : bodies_) {
+Water::Flow Water::flowAt(const WaterBody& water, double wavenumber,
+                          const std::array<double, 3>& at, double t) const {
+    Flow flow;
+    flow.velocity = current_;
+    flow.surface = water.surface[2];
+    if (wavenumber <= 0.0) {
+        return flow;
+    }
+    // Linear (Airy) waves (Dean and Dalrymple 1991, ch. 3): phase θ = k·x − ω·t along the
+    // heading, z from the still surface (taken at most 0: linear theory stops there).
+    const double x =
+        (at[0] - water.surface[0]) * waveHeading_[0] + (at[1] - water.surface[1]) * waveHeading_[1];
+    const double phase = wavenumber * x - waveOmega_ * t;
+    const double z = std::min(at[2] - water.surface[2], 0.0);
+    const double kd = wavenumber * water.depth;
+    double along = 0.0;  // cosh k(z + d) / sinh k d
+    double up = 0.0;     // sinh k(z + d) / sinh k d
+    if (kd > kDeepWater) {
+        along = up = std::exp(wavenumber * z);
+    } else {
+        const double s = std::sinh(kd);
+        along = std::cosh(wavenumber * (z + water.depth)) / s;
+        up = std::sinh(wavenumber * (z + water.depth)) / s;
+    }
+    const double a = waveAmplitude_;
+    const double w = waveOmega_;
+    const double horizontal = a * w * along * std::cos(phase);
+    const double vertical = a * w * up * std::sin(phase);
+    const double horizontalRate = a * w * w * along * std::sin(phase);
+    const double verticalRate = -a * w * w * up * std::cos(phase);
+    flow.velocity[0] += horizontal * waveHeading_[0];
+    flow.velocity[1] += horizontal * waveHeading_[1];
+    flow.velocity[2] += vertical;
+    flow.acceleration = {horizontalRate * waveHeading_[0], horizontalRate * waveHeading_[1],
+                         verticalRate};
+    flow.surface += a * std::cos(phase);
+    return flow;
+}
+
+Status Water::step(const StepContext& context, SignalBus& bus) {
+    const double t = context.t.seconds();
+    const double dt = context.dt.seconds();
+    for (Body& body : bodies_) {
         const std::span<const double> p = bus.readN(body.pose);
         const std::span<const double> v = bus.readN(body.twist);
         std::array<double, 6> wrench{};
         double under = 0.0;
+        std::array<double, 3> waterAcceleration{};  // volume-weighted, over the submerged cells
         // Most bodies are nowhere near water most of the time.
         const bool near =
             p.size() == 7 && std::any_of(waters_.begin(), waters_.end(), [&](const WaterBody& w) {
                 return std::abs(p[0] - w.surface[0]) <= w.sizeX / 2.0 + body.reach &&
                        std::abs(p[1] - w.surface[1]) <= w.sizeY / 2.0 + body.reach &&
-                       p[2] - body.reach <= w.surface[2] &&
+                       p[2] - body.reach <= w.surface[2] + waveAmplitude_ &&
                        p[2] + body.reach >= w.surface[2] - w.depth;
             });
         if (near && v.size() == 6) {
@@ -283,12 +361,16 @@ Status Water::step(const StepContext&, SignalBus& bus) {
             const std::array<double, 3> spin{v[3], v[4], v[5]};
             for (const Cell& cell : body.cells) {
                 const std::array<double, 3> at = placed(pose, cell.at);
-                for (const WaterBody& water : waters_) {
-                    const double top = water.surface[2];
+                for (std::size_t w = 0; w < waters_.size(); ++w) {
+                    const WaterBody& water = waters_[w];
                     if (std::abs(at[0] - water.surface[0]) > water.sizeX / 2.0 ||
                         std::abs(at[1] - water.surface[1]) > water.sizeY / 2.0 ||
-                        at[2] - cell.height / 2.0 > top ||
-                        at[2] + cell.height / 2.0 < top - water.depth) {
+                        at[2] + cell.height / 2.0 < water.surface[2] - water.depth) {
+                        continue;
+                    }
+                    const Flow flow = flowAt(water, wavenumbers_[w], at, t);
+                    const double top = flow.surface;
+                    if (at[2] - cell.height / 2.0 > top) {
                         continue;
                     }
                     // How much of the cell is under the surface.
@@ -296,10 +378,15 @@ Status Water::step(const StepContext&, SignalBus& bus) {
                         std::clamp((top - (at[2] - cell.height / 2.0)) / cell.height, 0.0, 1.0);
                     const double volume = cell.volume * fraction;
                     under += volume;
+                    for (std::size_t k = 0; k < 3; ++k) {
+                        waterAcceleration.at(k) += volume * flow.acceleration.at(k);
+                    }
                     const std::array<double, 3> r{at[0] - p[0], at[1] - p[1], at[2] - p[2]};
                     const std::array<double, 3> around = cross(spin, r);
-                    const std::array<double, 3> speed{v[0] + around[0], v[1] + around[1],
-                                                      v[2] + around[2]};
+                    // Through the water: the cell's velocity less the water's there.
+                    const std::array<double, 3> speed{v[0] + around[0] - flow.velocity[0],
+                                                      v[1] + around[1] - flow.velocity[1],
+                                                      v[2] + around[2] - flow.velocity[2]};
                     const double magnitude = std::hypot(speed[0], speed[1], speed[2]);
                     // The cells' share of the frontal area: a stack of kCells makes one face.
                     const double area =
@@ -319,18 +406,73 @@ Status Water::step(const StepContext&, SignalBus& bus) {
                 }
             }
         }
+        // Morison's inertia terms at the centre of mass: the water's acceleration pushes the
+        // displaced volume, and the added mass resists the body's acceleration through it.
+        const double density = waters_.empty() ? 1000.0 : waters_.front().density;
+        const double added = kAddedMassShare * density * under;
+        if (v.size() == 6) {
+            const std::array<double, 3> now{v[0], v[1], v[2]};
+            const double gain = body.mass > 0.0 ? 1.0 / (1.0 + added / body.mass) : 1.0;
+            if (body.started && dt > 0.0) {
+                for (std::size_t k = 0; k < 3; ++k) {
+                    const double measured = (now.at(k) - body.lastVelocity.at(k)) / dt;
+                    body.acceleration.at(k) += gain * (measured - body.acceleration.at(k));
+                }
+            }
+            body.lastVelocity = now;
+            body.started = true;
+        }
+        if (under > 0.0) {
+            for (std::size_t k = 0; k < 3; ++k) {
+                const double aw = waterAcceleration.at(k) / under;
+                wrench.at(k) += density * under * aw + added * (aw - body.acceleration.at(k));
+            }
+        }
         bus.writeN(body.wrench, wrench);
         bus.write(body.submerged, under / body.volume);
     }
     return {};
 }
 
-// It keeps nothing between steps.
-Status Water::saveState(StateWriter&) const {
+// It keeps each body's last velocity and smoothed acceleration, for the added mass.
+Status Water::saveState(StateWriter& writer) const {
+    for (const Body& body : bodies_) {
+        for (const double x : body.lastVelocity) {
+            writer.put(x);
+        }
+        for (const double x : body.acceleration) {
+            writer.put(x);
+        }
+        writer.put(body.started ? 1.0 : 0.0);
+    }
     return {};
 }
 
-Status Water::restoreState(StateReader&) {
+Status Water::restoreState(StateReader& reader) {
+    for (Body& body : bodies_) {
+        double started = 0.0;
+        bool ok = true;
+        // A state saved before the water kept anything (1.0 to 1.x): start afresh.
+        if (!reader.get(body.lastVelocity[0])) {
+            for (Body& fresh : bodies_) {
+                fresh.lastVelocity = {};
+                fresh.acceleration = {};
+                fresh.started = false;
+            }
+            return {};
+        }
+        for (std::size_t k = 1; k < 3; ++k) {
+            ok = ok && reader.get(body.lastVelocity.at(k));
+        }
+        for (double& x : body.acceleration) {
+            ok = ok && reader.get(x);
+        }
+        ok = ok && reader.get(started);
+        if (!ok) {
+            return Status::error(StatusCode::InvalidConfig, "water state truncated");
+        }
+        body.started = started != 0.0;
+    }
     return {};
 }
 

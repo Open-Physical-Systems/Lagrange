@@ -1,8 +1,9 @@
 #pragma once
 
-// Water (docs/design/domains/hydrodynamics.md §9): a box of still water. Buoyancy and quadratic
-// drag on whatever moving bodies enter it, from cells sampled in their colliders. Not Fossen's
-// manoeuvring model: no added mass and no waves.
+// Water (docs/design/domains/hydrodynamics.md §9): a box of water. Buoyancy, quadratic drag and
+// added mass on whatever moving bodies enter it, from cells sampled in their colliders, in a
+// steady current and linear waves. Not Fossen's full manoeuvring model: the added mass is a
+// sphere's, the same along every axis, and it carries no Coriolis terms.
 
 #include "lagrange/module/IModule.hpp"
 #include "lagrange/world/Model.hpp"
@@ -37,8 +38,19 @@ void addWater(Model& model, const WaterBody& water);
 /// Writes body/<b>/wrench/water (world_local, about the centre of mass) for every moving,
 /// non-kinematic body with colliders, and body/<b>/submerged (the fraction of its colliders'
 /// volume under water), at 1 ms: buoyancy ρ g V at each submerged cell, and drag
-/// ½ ρ Cd A |v| v from the cell's velocity. Each collider is cut into cells (kCells a side, kept
-/// when their centre is inside it, scaled to the shape's true volume).
+/// ½ ρ Cd A |v| v from the cell's velocity through the water. Each collider is cut into cells
+/// (kCells a side, kept when their centre is inside it, scaled to the shape's true volume).
+///
+/// The water moves (config "current_x", "current_y", "current_z", m/s; "wave_amplitude", m,
+/// "wave_period", s, "wave_towards", degrees from +x): a steady current plus one train of linear
+/// (Airy) waves, ω² = g·k·tanh(k·d) over the body's depth d, the surface at η = a·cos(k·x − ω·t)
+/// and the water under it moving in the orbits of linear theory (Dean and Dalrymple, Water Wave
+/// Mechanics for Engineers and Scientists, 1991, ch. 3). Cells are under the moving surface; the
+/// drag is against the water's velocity there. A submerged body is also pushed by the water's
+/// acceleration and has added mass (Morison's inertia terms): ρ·V·a_w + m_a·(a_w − a_b), with
+/// m_a = ½·ρ·V the added mass of a sphere (potential flow), V the volume under water. a_b is
+/// the body's acceleration over the last step, smoothed with gain 1/(1 + m_a/m) so a light body
+/// (m_a > m) stays stable: for a steady push it settles in one step to the exact F/(m + m_a).
 class Water final : public IModule {
 public:
     [[nodiscard]] ModuleInfo info() const override;
@@ -63,10 +75,28 @@ private:
         std::vector<Cell> cells;
         double volume{0.0};
         double reach{0.0};  // m, of its farthest cell from its origin
+        double mass{0.0};   // kg
+        // For the added mass: the velocity of its origin at the last step, and its smoothed
+        // acceleration (world).
+        std::array<double, 3> lastVelocity{};
+        std::array<double, 3> acceleration{};
+        bool started{false};
     };
+    /// The water's velocity and acceleration at a point of `water` (m/s, m/s²), at time `t`, and
+    /// the surface's height there.
+    struct Flow {
+        std::array<double, 3> velocity{}, acceleration{};
+        double surface{0.0};
+    };
+    [[nodiscard]] Flow flowAt(const WaterBody& water, double wavenumber,
+                              const std::array<double, 3>& at, double t) const;
     std::vector<WaterBody> waters_;
+    std::vector<double> wavenumbers_;  // per water body, rad/m (0: no waves)
     std::vector<Body> bodies_;
     std::array<double, 3> gravity_{};
+    std::array<double, 3> current_{};
+    double waveAmplitude_{0.0}, waveOmega_{0.0};
+    std::array<double, 2> waveHeading_{1.0, 0.0};  // unit, horizontal
 };
 
 }  // namespace lagrange::hydrodynamics
