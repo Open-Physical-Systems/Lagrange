@@ -282,9 +282,9 @@ Protocol (added after 1.0, RFC 0007): `SubscribeField.orientation` and `.volume`
 - The coefficient fidelity's rotors do not react to the air they sit in (as before); only `bem`
   rotors read `rotor/<j>/air_velocity`.
 - Near the ground, a multirotor's rotor jets meet along its arms and turn up under it (a
-  fountain). The CFD shows it at 0.5 m (§7), lifting the frame. The live model has no
+  fountain). The CFD shows it at 0.5 m (§7), lifting the frame. The fitted model has no
   interaction between the rotors of one drone, so neither the fountain nor the cross-shaped
-  outwash it gives.
+  outwash it gives. The lattice Boltzmann box (§8) has both.
 - Buildings are boxes only. The wake does not run down a wall it does not hit, separate off a
   roof's edge, or curl round a corner.
 - The air at a robot's links comes from other robots only. A drone's own frame does not feel
@@ -340,3 +340,86 @@ each:
 
 The live model covers the open-field jet within its references, the roof and wall-hugging wake
 (§2.6) and the near-wall rotors (§2.7). It does not have the fountain (§6).
+
+## 8. Live air: a lattice Boltzmann box
+
+The fitted model (§2) is a set of rules, one per thing that has been measured. The alternative is
+to compute the air itself every step, near the drone, as `lagrange tunnel` does offline. This
+section measures whether that can run live, and how close it comes.
+
+`aerodynamics::LbmBox` (`modules/aerodynamics/lbm/src/LbmBox.cpp`, GPU step
+`gpu/kernels/fields/lbm_box.slang`) is a box of air round the drone:
+
+- D3Q19 lattice Boltzmann with the Smagorinsky eddy viscosity, as the tunnel (Krüger et al. 2017;
+  Hou et al. 1996).
+- Each rotor is an actuator disc: its thrust pushes the air through Guo's forcing (Guo, Zheng and
+  Shi 2002) over a disc one cell thick. The cells' weights are summed, so the air gets exactly
+  the thrust.
+- The sides and top are open at ambient pressure. Flow leaving carries on; air drawn in comes by
+  the pressure alone (carrying an inward speed in made the top of the box blow up). The bottom
+  is a no-slip ground, or open.
+- The GPU stores the populations in half precision, less their rest weights (FP16S, Lehmann et
+  al. 2022), two cells to a word. The step is bound by memory traffic, and this, with skipping the
+  solid lookups in a box without solids, took the 5 cm box from 1.05× to 1.9× real time.
+- The CPU path is the reference (invariant 7); `test_lbm_box` checks that the GPU agrees with it.
+
+`test_lbm_box` also checks momentum theory (Leishman eq. 2.14): the downward momentum through a
+plane 0.4 m under a lone disc carries its thrust within 2% (4.07 N of 4.00 N), and the speed at
+the disc's centre is 23% over the ideal induced velocity (the disc's edge blurred over cells).
+
+### 8.1 Speed and accuracy on an RTX 4060 Laptop GPU
+
+`tools/validation/lbm_hover.py CASE OUT` runs `lagrange_lbm_hover` (installed with
+`lagrange_aerodynamics`) with the rotors of a `lagrange foam-hover` case: a box 4 m × 4 m, from
+the ground to 1 m over the drone, 3 s of air (2 s for the low case), the last second averaged.
+Speeds are sampled the same way in both: over each disc's plane, under the drone's centre, and
+3 cm over the ground. (The disc numbers here sample points on the disc plane, so OpenFOAM's are
+lower than §7's cell averages.)
+
+2 m up (OpenFOAM: discs 6.89 m/s, outwash 6.49 m/s):
+
+| Cells | Cells in the box | Real time | Down through the discs | Peak outwash | Centreline against OpenFOAM | Jet against Bauersfeld |
+|---|---|---|---|---|---|---|
+| 8 cm | 95k | 9.8× | 5.24 m/s | 3.94 m/s | 72% | 21% |
+| 5 cm | 384k | 1.9× | 5.65 m/s | 4.20 m/s | 62% | 23% |
+| 4 cm | 750k | 0.60× | 5.77 m/s | 5.27 m/s | 51% | 26% |
+| 3 cm | 1.77M | 0.19× | 5.83 m/s | 6.89 m/s | 20% | 34% |
+
+0.5 m up (OpenFOAM: discs 5.30 m/s, outwash 9.44 m/s, the fountain rising at up to 7.1 m/s
+under the centre):
+
+| Cells | Real time | Down through the discs | Peak outwash | Fountain under the centre |
+|---|---|---|---|---|
+| 8 cm | 14.6× | 5.63 m/s | 5.19 m/s | up to 3.7 m/s, only near the drone |
+| 5 cm | 3.8× | 5.72 m/s | 5.29 m/s | up to 5.5 m/s |
+| 4 cm | 1.45× | 6.12 m/s | 5.86 m/s | up to 7.4 m/s |
+| 3 cm | 0.37× | 5.99 m/s | 7.31 m/s | up to 5.8 m/s |
+
+The centreline error is the mean difference under the drone's centre over the whole height,
+divided by OpenFOAM's mean there. Most of it is the first half metre under the drone, where
+OpenFOAM's frame (a solid there) makes the air rise between the rotors and the box has no frame.
+A 3 m box at 4 cm (427k cells) runs at 1.06× real time; at 3 cm (1M cells), 0.35×.
+
+![The live box against OpenFOAM, 2 m up](../../imgs/lbm-hover-open.png)
+
+![The live box against OpenFOAM, 0.5 m up](../../imgs/lbm-hover-low.png)
+
+### 8.2 Go, at 4 cm
+
+- **What it gets that the fitted model cannot.** At 4 cm and finer, the box makes the fountain
+  under a low drone (§6), rising at 5.8–7.4 m/s against OpenFOAM's 7.1 m/s, and at 3 cm its
+  outwash in the open is within 6% of OpenFOAM's (4 cm: 19% under). Nothing in it is fitted to a drone, so it will also make interactions
+  the rules don't have: two drones' wakes, a drone over a moving vehicle, wind round a building.
+- **What it costs.** On this laptop GPU, a 3 m box at 4 cm keeps up with real time. 3 cm, which
+  matches OpenFOAM's jet best (centreline within 20%), runs at a third of real time. 5 cm and
+  coarser merge the four jets too early (outwash 35–40% low): too coarse to be worth it over the
+  fitted model.
+- **What it does not get.** The air through the discs is 15–20% under OpenFOAM's: a disc 3 cells
+  across is blurred over its edge. In the low case the outwash is 22–38% under OpenFOAM's 9.4 m/s,
+  since a wall jet a few centimetres thick is one cell. Bauersfeld's far jet is matched to 21–34%,
+  no better than the fitted model, which was fitted to it.
+
+So the box goes in as a choice (`aerodynamics.downwash_model: lbm`), with the cell size a setting
+(4 cm by default) and the fitted model the default, the CPU fallback and Tier 0's model. A finer
+box runs slower than real time, and the scheduler's real-time factor then drops; the run stays
+correct. Grid refinement (fine cells only near the rotors) would be the next speed-up.
