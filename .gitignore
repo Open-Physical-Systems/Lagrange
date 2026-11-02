@@ -32,3 +32,4 @@ __pycache__/
 /assets/_fetched/
 # Viewer user state
 imgui.ini
+.VSCodeCounter/

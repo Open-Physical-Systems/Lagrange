@@ -153,6 +153,7 @@ All one run each, on this machine (20 threads, RTX 4060 laptop GPU), 2026-11-02.
 |---|---|---|---|---|
 | 25° | 219,379 | 0.474 ± 0.015 | 0.337 ± 0.116 | 6.5 min |
 | 25° | 753,328 | 0.445 ± 0.009 | 0.385 ± 0.083 | 28 min |
+| 25° | 4,263,208 | about 0.44, stopped at iteration 353 of 2000 | about 0.39, same | 30 min for those, stopped |
 | 35° | 221,169 | 0.511 ± 0.050 | 0.293 ± 0.193 | 6.6 min |
 | 35° | 754,615 | 0.529 ± 0.031 | 0.469 ± 0.132 | 36 min |
 
@@ -170,10 +171,15 @@ What this says:
 
 - **OpenFOAM is far closer on far fewer cells**, 0.445 on 753k against 1.17 on 16M. It is still about
   50 % above the measurement, so it is not validated either.
+- **OpenFOAM stops gaining from this refinement.** At 25°, Cd goes 0.474, 0.445, then about 0.44 on 4.3M
+  cells. That last run was stopped early, but its Cd had held between 0.43 and 0.44 since iteration 130.
+  So in this setup something other than cell count holds it near 0.44. Candidates, none measured: wall
+  functions while refining pushes the first cell's $y^+$ below their range, too few layers, the mesh
+  ahead of the slant, the missing stilts, or steady RANS itself.
 - **The drag crisis is not reproduced by either.** 35° reads above 25° in OpenFOAM, and level with it
   in the tunnel. Steady RANS with wall functions on these meshes may be the limit, and our model has
   no stilts; which of these matters has not been measured.
-- **The mesh is the main gap**, as far as these runs can tell: uniform cubes spend their cells on empty
+- **The mesh is the main gap between the two tools**, as far as these runs can tell: uniform cubes spend their cells on empty
   air and turn every surface into a staircase. Solver, turbulence model and wall treatment also differ,
   so this comparison cannot split the credit between them.
 
