@@ -11,7 +11,7 @@ stop for the owner except the profile key approved in item 2.
 | 3 | Fitted model: vortex ring state, the low-hover fountain (fit to `~/cfd/hover_low`), the ceiling effect | each tested against its published source; TODO(verify) where it cannot be checked | vortex ring and ceiling done; fountain waiting on OpenFOAM heights |
 | 4 | `lagrange PROFILE.yaml --robot ... --world ...` opens the viewer like `lagrange quad` | the CLI test runs it; docs and tutorial updated | done (PR below) |
 | 5 | Contact force and joint reaction in Jolt | the physics conformance test checks both engines | done (PR below) |
-| 6 | Scopes signal picker with search | follows `docs/design/ui/` and `.claude/rules/viewer-ui.md`; headless viewer test presses it | |
+| 6 | Scopes signal picker with search | follows `docs/design/ui/` and `.claude/rules/viewer-ui.md`; headless viewer test presses it | done (PR below) |
 | 7 | `docs/validation` page: every physical model, its reference, its error, its test | says which have none | |
 | 8 | Hydrodynamics: added mass, waves and currents (Fossen) | tested against closed-form results | |
 | 9 | Thermal camera (`ThermalCameraAPI_1`) | schema change: asks the owner first (the rules approve only item 2's profile key) | |
@@ -38,3 +38,7 @@ stop for the owner except the profile key approved in item 2.
   own basis, limits, motor) plus the applied effort; `body/<b>/contact_force` from Newton per
   group. Conformance on MuJoCo, Jolt and the Jolt plugin: a resting box's weight, a still and a
   swinging pendulum's pivot (11.348 N on Jolt, 11.349 N on MuJoCo and by energy).
+- Item 6: the Signals list already had search, a match count and domain chips (my plan said
+  otherwise: wrong). Added what the 05-signals design still lacked: the "unit: any" dropdown chip
+  (the designed ChevronDown icon; the ▾ glyph is not in IBM Plex) and dragging a row onto the
+  scope. `test_viewer_input` drags one.

@@ -87,6 +87,9 @@ public:
                                   const std::shared_ptr<const SensorImage>& image) = 0;
 };
 
+/// Drag-and-drop payload of a signal row (Signals list) dropped on a scope: "name\ncomponent".
+inline constexpr const char* kSignalPayload = "lagrange.signal";
+
 struct PanelContext {
     ViewerClient& client;
     std::shared_ptr<const SceneFrame> scene;  ///< Latest frame; may be null.

@@ -977,6 +977,34 @@ bool FilterChip(const char* label, const ImVec4& color, bool selected) {
     return clicked;
 }
 
+bool DropdownChip(const char* label, const ImVec4& color, bool selected) {
+    ImGui::PushFont(theme::fonts().sansMedium, theme::kCaptionSize);
+    const ImVec2 textSize = ImGui::CalcTextSize(label, nullptr, true);
+    const float chevron = px(10.0F);
+    const ImVec2 size(textSize.x + px(16.0F) + chevron + px(4.0F), px(20.0F));
+    if (ImGui::GetCursorPosX() > ImGui::GetStyle().WindowPadding.x + 1.0F &&
+        ImGui::GetContentRegionAvail().x < size.x) {
+        ImGui::NewLine();  // wrap
+    }
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const ImVec2 max(min.x + size.x, min.y + size.y);
+    const bool clicked = ImGui::InvisibleButton(label, size);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImVec4 tone = selected ? color : c::t3;
+    draw->AddRectFilled(
+        min, max, u32(withAlpha(tone, selected ? 0.16F : (ImGui::IsItemHovered() ? 0.12F : 0.06F))),
+        size.y * 0.5F);
+    draw->AddRect(min, max, u32(withAlpha(tone, selected ? 0.55F : 0.30F)), size.y * 0.5F);
+    const ImU32 ink = u32(selected ? color : c::t2);
+    draw->AddText(ImVec2(min.x + px(8.0F), min.y + (size.y - textSize.y) * 0.5F), ink, label,
+                  ImGui::FindRenderedTextEnd(label));
+    DrawIcon(draw, Icon::ChevronDown,
+             ImVec2(max.x - px(8.0F) - chevron, min.y + (size.y - chevron) * 0.5F), chevron, ink,
+             u32(c::bg2));
+    ImGui::PopFont();
+    return clicked;
+}
+
 void Meter(float fraction, const ImVec4& color, float width) {
     const float height = px(6.0F);
     const float line = ImGui::GetTextLineHeight();
