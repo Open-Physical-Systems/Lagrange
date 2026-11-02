@@ -248,12 +248,13 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Plan and evaluation (15)</summary>
+<details><summary>Plan and evaluation (16)</summary>
 
 - [Project overview](docs/plan/00-overview.md)
 - [Rotor downwash and live airflow: progress](docs/plan/downwash-progress.md)
 - [What to develop next: an evaluation, 2026-11-01](docs/plan/evaluation-2026-11.md)
 - [Open questions and challenges to the plan](docs/plan/open-questions.md)
+- [Overnight work, 2026-11-03 (until 07:00 JST)](docs/plan/overnight-2026-11-03.md)
 - [Progress](docs/plan/progress.md)
 - [Repository, CI, release and security plan](docs/plan/repo-tooling.md)
 - [Risk register](docs/plan/risks.md)

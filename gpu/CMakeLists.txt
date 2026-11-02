@@ -63,8 +63,13 @@ lagrange_add_slang_shader(
     SYMBOL kBvhTraverse
 )
 
-# The wind tunnel's step: kernels/fields/lbm.slang and its host side.
-add_library(lagrange_gpu_fluids fluids/src/LbmStepper.cpp)
+# The wind tunnel's step (kernels/fields/lbm.slang) and the air box round a multicopter
+# (kernels/fields/lbm_box.slang), and their host side.
+add_library(
+    lagrange_gpu_fluids
+    fluids/src/LbmStepper.cpp
+    fluids/src/LbmBoxStepper.cpp
+)
 add_library(lagrange::gpu_fluids ALIAS lagrange_gpu_fluids)
 lagrange_target_defaults(lagrange_gpu_fluids)
 lagrange_target_vulkan_warnings(lagrange_gpu_fluids)
@@ -81,6 +86,13 @@ lagrange_add_slang_shader(
     ENTRY stepCells
     STAGE compute
     SYMBOL kLbm
+)
+lagrange_add_slang_shader(
+    lagrange_gpu_fluids
+    SOURCE kernels/fields/lbm_box.slang
+    ENTRY stepCells
+    STAGE compute
+    SYMBOL kLbmBox
 )
 
 # The mesh pipeline shared by the viewer and the camera sensor, and the sensor's renderer:
