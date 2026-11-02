@@ -262,6 +262,8 @@ Checkerboard is the mean jump of red minus blue between neighbouring cells of a 
 
 `--ground` once put the road 2 % of the body below it, under a cell on these grids, so no air passed beneath and an Ahmed body read Cd 9.5 (0.78 in free air). `--clearance M` now sets the gap, never under two cells (`AirPassesBetweenABodyAndTheRoad`); forces over a road from before that are void.
 
+Every Ahmed body number in this section used a model with sharp side edges on its nose and is void; see [cfd.md](cfd.md) §6 for the corrected ones.
+
 The Ahmed body (Ahmed et al. 1984; L 1.044, W 0.389, H 0.288 m, 40 m/s, 50 mm over a moving road, one convex hull with no stilts) is the reference this tool does not yet meet. One run on the GPU, 0.5M, 1M, 2M cells; the gap is 2.2 cells on the finest and widened to two cells on the others:
 
 | Slant | Cd | Cl | Measured Cd |

@@ -827,7 +827,7 @@ def wind_tunnel_wake(out_dir: Path, keep: bool) -> None:
         "Top: speed, 0 to 56 m/s. Below: Cp, -1 to 1"
     )
     line = (
-        "Coarse: for where the air goes. Cd 1.12 against a measured 0.29 to 0.30. "
+        "Coarse: for where the air goes. Cd 1.35 against a measured 0.29 to 0.30. "
         "The stripes are a known defect"
     )
     for index, frame in enumerate(sorted((work / "tunnel" / "frames").glob("*.png"))):

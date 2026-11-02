@@ -88,9 +88,11 @@ streamlines to open in the viewer, and, with `--frames`, pictures of the wake mo
 says whether the grid still changes the answer, and `flow.nvdb` can blow on a robot in a run
 ([videos](docs/videos/README.md)).
 
-Use it to see where the air goes, not for a drag number: on a 2M-cell grid an Ahmed body reads
-Cd 1.12 against a measured 0.298, and the grid study does not settle
-([what was checked](docs/design/domains/aerodynamics.md)). The sample cars collide as one box each.
+Use it to see where the air goes, not for a drag number: an Ahmed body reads Cd 1.26 on 8M cells
+against a measured 0.29 to 0.30. `lagrange foam ROBOT` puts the same shapes through OpenFOAM, a
+separate GPL-3 program that it runs from an install or a container, and reads 0.27 to 0.29 at a 25°
+slant, though not yet the measured change of drag with slant
+([equations and what was measured](docs/design/domains/cfd.md)). The sample cars collide as one box each.
 
 ## What it simulates
 

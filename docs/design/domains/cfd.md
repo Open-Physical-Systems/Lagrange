@@ -14,7 +14,7 @@ be trusted, and what comes next. Short notes on the tunnel also live in
 | Time | Transient: the wake moves | Steady: a mean flow |
 | Mesh | Uniform cubes, staircase surface | Refined near the body, fitted to it, with layers |
 | Needs | Nothing more | An installed OpenFOAM, or podman or docker and a 1.6 GB image |
-| Use it for | Seeing where the air goes, animations, a wind field | Force numbers, as far as section 6 supports them |
+| Use it for | Seeing where the air goes, animations, a wind field | Force numbers, within section 6's limits |
 
 ```mermaid
 flowchart LR
@@ -134,7 +134,7 @@ Limits today: forces for the whole robot only, not per link; a capsule is export
 ## 5. The test: the Ahmed body
 
 The Ahmed body (Ahmed, Ramm & Faltin, SAE 840300, 1984) is the standard car-like reference: length
-1.044 m, width 0.389 m, height 0.288 m, nose radius 0.1 m, 50 mm over the floor. Our model, from
+1.044 m, width 0.389 m, height 0.288 m, a 0.1 m radius on all four front edges, 50 mm over the floor. Our model, from
 `assets/robots/ahmed_body/make_ahmed_body.py`, is one convex shape with no stilts, and 40 m/s gives
 $Re=2.8\times10^6$ on the length (ERCOFTAC case AC1-05 at this speed).
 
@@ -145,43 +145,49 @@ known to fall past about 30°, the "drag crisis".
 
 ## 6. Results
 
-All one run each, on this machine (20 threads, RTX 4060 laptop GPU), 2026-11-02.
+All one run each, on this machine (20 threads, RTX 4060 laptop GPU), 2026-11-02, on the corrected shape
+below. ± is half the range over the last fifth of the iterations.
 
-**OpenFOAM**, 2000 iterations on 12 processes; ± is how much it still moves:
+**OpenFOAM**, 1500 iterations on 12 processes:
 
-| Slant | Cells | Cd | Cl | Wall time |
-|---|---|---|---|---|
-| 25° | 219,379 | 0.474 ± 0.015 | 0.337 ± 0.116 | 6.5 min |
-| 25° | 753,328 | 0.445 ± 0.009 | 0.385 ± 0.083 | 28 min |
-| 25° | 4,263,208 | about 0.44, stopped at iteration 353 of 2000 | about 0.39, same | 30 min for those, stopped |
-| 35° | 221,169 | 0.511 ± 0.050 | 0.293 ± 0.193 | 6.6 min |
-| 35° | 754,615 | 0.529 ± 0.031 | 0.469 ± 0.132 | 36 min |
+| Slant | Cells | Cd | Cl | Body $y^+$, mean | Wall time |
+|---|---|---|---|---|---|
+| 25° | 218,981 | 0.288 ± 0.000 | 0.273 ± 0.000 | 150 | 4.8 min |
+| 25° | 749,791 | 0.266 ± 0.000 | 0.292 ± 0.000 | 109 | 19 min |
+| 35° | 220,736 | 0.344 ± 0.038 | 0.257 ± 0.120 | 149 | 5.3 min |
+| 35° | 750,247 | 0.358 ± 0.018 | 0.411 ± 0.075 | 109 | 21 min |
 
-**Our tunnel**, GPU; the gap is 2.2 cells on 2M and grows with the grid:
+Layers covered 77 to 88 % of the body. On 750k cells at 25°, drag is half friction and half pressure in
+OpenFOAM's split (`Cd(f)` 0.133, `Cd(r)` 0.133).
+
+**Our tunnel**, GPU; the road gap is 2.2 cells at 2M and 3.5 at 8M:
 
 | Slant | Cells | Cd | Cl |
 |---|---|---|---|
-| 25° | 2M | 1.12 | 0.93 |
-| 25° | 4M | 1.36 | 0.31 |
-| 25° | 8M | 1.31 | 0.38 |
-| 25° | 16M | 1.17 | 1.02 |
-| 35° | 8M | 1.33 | 0.37 |
+| 25° | 2M | 1.345 ± 0.031 | 0.27 |
+| 25° | 8M | 1.256 ± 0.013 | 0.37 |
+| 35° | 2M | 1.367 ± 0.026 | 0.27 |
+| 35° | 8M | 1.277 ± 0.028 | 0.34 |
 
 What this says:
 
-- **OpenFOAM is far closer on far fewer cells**, 0.445 on 753k against 1.17 on 16M. It is still about
-  50 % above the measurement, so it is not validated either.
-- **OpenFOAM stops gaining from this refinement.** At 25°, Cd goes 0.474, 0.445, then about 0.44 on 4.3M
-  cells. That last run was stopped early, but its Cd had held between 0.43 and 0.44 since iteration 130.
-  So in this setup something other than cell count holds it near 0.44. Candidates, none measured: wall
-  functions while refining pushes the first cell's $y^+$ below their range, too few layers, the mesh
-  ahead of the slant, the missing stilts, or steady RANS itself.
-- **The drag crisis is not reproduced by either.** 35° reads above 25° in OpenFOAM, and level with it
-  in the tunnel. Steady RANS with wall functions on these meshes may be the limit, and our model has
-  no stilts; which of these matters has not been measured.
-- **The mesh is the main gap between the two tools**, as far as these runs can tell: uniform cubes spend their cells on empty
-  air and turn every surface into a staircase. Solver, turbulence model and wall treatment also differ,
-  so this comparison cannot split the credit between them.
+- **OpenFOAM at 25° is at the measurement's size.** 0.288 and 0.266 against 0.2875 to 0.298. But it moved
+  8 % between the two meshes and away from the measurement, so this is agreement in size, not a
+  mesh-independent result. Finer meshes are not done on this shape.
+- **OpenFOAM at 35° is not trustworthy yet.** Drag reads above 25°, and the measured fall past about 30°
+  does not appear. It also still moves between iterations. Steady RANS is reported to struggle near this
+  angle, and the 35° reference is unverified.
+- **The tunnel is over four times too high, and the cause is not resolution alone.** OpenFOAM gets 0.29 on
+  219k cells; the tunnel gets 1.26 on 8M. Friction explains little of it: 0.014 from the plate times 12.6
+  wetted areas per frontal area is about 0.18. So most of the excess is pressure, which is where section
+  8's stripes and offset sit. Whether they cause it has not been measured.
+- **The cube's good number proves little.** It reads 1.03 against 1.05, on a body whose drag is nearly all
+  pressure with fixed separation lines, while this body's drag is wrong by a factor of four.
+
+**A bug on the way.** The first model rounded only the nose's top and bottom edges, not its sides. Air
+separating off those sharp corners gave OpenFOAM a Cd stuck near 0.44 on any mesh (0.474, 0.445, about 0.44
+on 219k, 753k and 4.3M cells) and 0.51 to 0.53 at 35°. All Ahmed numbers before this correction are void,
+including those in [aerodynamics.md](aerodynamics.md) §10.
 
 ## 7. What was tried on the tunnel and not adopted
 
@@ -210,7 +216,15 @@ Cube and plate figures are at their test grids. Their measured values are 1.05 a
   about 0.0037 for a turbulent flat plate.
 - **Lift is not settled** in either tool.
 
-## 9. Next: local refinement for the tunnel
+## 9. Next
+
+1. **Find where the tunnel's pressure drag comes from.** Compare surface $C_p$ on the same Ahmed body with
+   OpenFOAM's, face by face, and settle section 8's stripes and offset. This comes first because section 6
+   shows that resolution is not the main fault.
+2. **Finish the reference.** A finer OpenFOAM mesh at 25°, and the 35° reference checked at its source.
+3. **Local refinement**, below, only if step 1 leaves resolution as the limit.
+
+### Local refinement for the tunnel
 
 Finer cells only where the air needs them, by blocks at a 2:1 ratio. Keeping $\nu$ continuous across
 levels fixes the relaxation time, and the equilibrium part of a population carries over unchanged while

@@ -35,4 +35,4 @@ Iris Xe, about 12 minutes for all).
 In the lidar materials clip the viewer's lidar views draw two tones, strong and attenuated, not a
 colour scale. The presets' reflectivities are illustrative, not measured.
 
-The wind tunnel clips show where the air goes on a coarse grid. Their Cd, 1.12 at 2M cells, is far from the Ahmed body's measured 0.298 (`docs/design/domains/aerodynamics.md` §10). The stripes in its pressure panel are a known defect of the flow, not of the video ([cfd.md](../design/domains/cfd.md)).
+The wind tunnel clips show where the air goes on a coarse grid. Their Cd, 1.35 at 2M cells, is far from the Ahmed body's measured 0.29 to 0.30 (`docs/design/domains/aerodynamics.md` §10). The stripes in its pressure panel are a known defect of the flow, not of the video ([cfd.md](../design/domains/cfd.md)).
