@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -75,15 +76,31 @@ public:
             return;
         }
         toolbar(context, session);
+        ImGui::BeginChild("##plots");
         if (session.traces().empty()) {
             widgets::Caption("%s", context.catalog
-                                       ? "No signals plotted. Tick one in the Signals list."
+                                       ? "No signals plotted. Tick one in the Signals list, or "
+                                         "drag it here."
                                        : (context.connection.state == ConnectionState::Ready
                                               ? "Waiting for the signal list ..."
                                               : "Not connected. Signals appear when a "
                                                 "simulation server is reachable."));
         } else {
             plotter_.draw(session);
+        }
+        ImGui::EndChild();
+        // A signal row dropped here is plotted, on the plot of its unit.
+        if (context.catalog && ImGui::BeginDragDropTarget()) {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kSignalPayload)) {
+                const std::string text(static_cast<const char*>(payload->Data));
+                const std::size_t cut = text.rfind('\n');
+                if (cut != std::string::npos) {
+                    const auto component = static_cast<std::uint32_t>(
+                        std::strtoul(text.c_str() + cut + 1, nullptr, 10));
+                    session.add(context.client, *context.catalog, text.substr(0, cut), component);
+                }
+            }
+            ImGui::EndDragDropTarget();
         }
         ImGui::End();
     }

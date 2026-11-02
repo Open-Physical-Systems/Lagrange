@@ -128,6 +128,9 @@ bool Checkbox(const char* id, bool* value);
 
 /// A small toggle for a filter ("electrical", "rate >= 100 Hz"), in `color` when on.
 bool FilterChip(const char* label, const ImVec4& color, bool selected);
+/// The same chip opening a list ("unit: any ▾" in the Signals design), its chevron the designed
+/// ChevronDown icon. Returns true when clicked.
+bool DropdownChip(const char* label, const ImVec4& color, bool selected);
 
 /// A 6 px bar filled to `fraction` (0..1).
 void Meter(float fraction, const ImVec4& color, float width);

@@ -133,3 +133,21 @@ def test_leaving_the_overlay_gives_the_scene_its_shading_back(run_view) -> None:
     assert run_view(f"30:click:{OVERLAY_TAB}", 60)["shading"] == current
     assert run_view(f"30:click:{OVERLAY_TAB};50:click:{SCENE_WORKSPACE}", 90)["shading"] != current
     assert run_view(f"30:click:{OVERLAY_TAB};50:click:{SCHEMATIC_TAB}", 90)["shading"] != current
+
+
+# The Signals workspace (docs/design/ui/05-signals): the first signal row and the scope.
+FIRST_SIGNAL_ROW = (100, 250)
+SCOPE_PLOTS = (800, 500)
+
+
+def test_a_signal_dragged_onto_the_scope_is_plotted(run_view) -> None:
+    still = run_view("", 30, "--workspace", "signals")
+    assert still["samples"] == 0, "nothing plotted until a signal is chosen"
+    x, y = FIRST_SIGNAL_ROW
+    u, v = SCOPE_PLOTS
+    script = (
+        f"10:move:{x},{y};11:down:{x},{y};12:move:{x + 10},{y + 5};13:move:{x + 200},{y + 50};"
+        f"14:move:{u - 100},{v};15:move:{u},{v};17:up:{u},{v}"
+    )
+    dragged = run_view(script, 45, "--workspace", "signals")
+    assert dragged["samples"] > 0, "the dropped signal streams into the scope"

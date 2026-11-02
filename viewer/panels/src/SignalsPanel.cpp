@@ -127,6 +127,29 @@ public:
                 dirty_ = true;
             }
         }
+        // The unit: any, or one of those the catalog has (the design's "unit: any ▾").
+        ImGui::SameLine(0.0F, px(6.0F));
+        char unitText[64];
+        std::snprintf(unitText, sizeof(unitText), "unit: %s##unit",
+                      unit_.empty() ? "any" : (unit_ == "1" ? "-" : unit_.c_str()));
+        if (widgets::DropdownChip(unitText, c::info, !unit_.empty())) {
+            ImGui::OpenPopup("##units");
+        }
+        if (ImGui::BeginPopup("##units")) {
+            if (ImGui::Selectable("any", unit_.empty())) {
+                unit_.clear();
+                dirty_ = true;
+            }
+            ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
+            for (const std::string& u : units_) {
+                if (ImGui::Selectable(u == "1" ? "-" : u.c_str(), unit_ == u)) {
+                    unit_ = u;
+                    dirty_ = true;
+                }
+            }
+            ImGui::PopFont();
+            ImGui::EndPopup();
+        }
         ImGui::SameLine(0.0F, px(6.0F));
         if (widgets::FilterChip("rate ≥ 100 Hz", c::info, fastOnly_)) {
             fastOnly_ = !fastOnly_;
@@ -165,7 +188,8 @@ public:
             widgets::Caption("  No signal matches.");
         }
         ImGui::EndChild();
-        widgets::Caption("tick a signal to plot it  ·  %zu plotted", session.traces().size());
+        widgets::Caption("tick a signal or drag it onto a scope  ·  %zu plotted",
+                         session.traces().size());
         ImGui::End();
     }
 
@@ -203,6 +227,15 @@ private:
             }
         }
         groups_ = std::move(groups);
+        units_.clear();
+        for (const SignalInfo& info : catalog.signals) {
+            units_.push_back(info.unit);
+        }
+        std::ranges::sort(units_);
+        units_.erase(std::unique(units_.begin(), units_.end()), units_.end());
+        if (!unit_.empty() && !std::ranges::binary_search(units_, unit_)) {
+            unit_.clear();  // no longer in the run
+        }
     }
 
     void filter(const SignalCatalog& catalog) {
@@ -215,7 +248,8 @@ private:
                 continue;
             }
             for (const SignalInfo& info : catalog.signals) {
-                if (domainOf(info) != group.domain || (fastOnly_ && info.dtNs > kFastDtNs)) {
+                if (domainOf(info) != group.domain || (fastOnly_ && info.dtNs > kFastDtNs) ||
+                    (!unit_.empty() && info.unit != unit_)) {
                     continue;
                 }
                 if (search_[0] != '\0' && !containsNoCase(info.name, search_) &&
@@ -272,6 +306,16 @@ private:
             ImGui::SetTooltip("%s", name);
             toggled = toggled || ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
         }
+        // Dragged onto a scope, it is plotted there (on the plot of its unit).
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            char payload[256];
+            const int n = std::snprintf(payload, sizeof(payload), "%s\n%u", info.name.c_str(),
+                                        entry.component);
+            ImGui::SetDragDropPayload(kSignalPayload, payload,
+                                      static_cast<std::size_t>(std::max(n, 0)) + 1);
+            ImGui::TextUnformatted(name);
+            ImGui::EndDragDropSource();
+        }
         ImGui::PopFont();
         ImGui::SameLine(unitX);
         widgets::Mono(c::t3, "%s", info.unit == "1" ? "-" : info.unit.c_str());
@@ -295,6 +339,8 @@ private:
     std::size_t total_{0};
     std::size_t matches_{0};
     char search_[96]{};
+    std::vector<std::string> units_;  // of the catalog, sorted
+    std::string unit_;                // the unit filter; empty: any
     bool fastOnly_{false};
     bool dirty_{true};
 };
