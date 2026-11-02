@@ -4775,6 +4775,7 @@ struct Server::Impl {
                 break;
             }
         }
+        downwash.setObstacles(aerodynamics::downwashObstacles(robot.world));
         if (scheduler == nullptr) {
             return downwash;
         }

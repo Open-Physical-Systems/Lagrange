@@ -134,6 +134,24 @@ std::vector<std::size_t> rotorGroupOfBodies(const WorldView& world) {
     return out;
 }
 
+std::vector<Downwash::Box> downwashObstacles(const World& world) {
+    std::vector<Downwash::Box> out;
+    const World::Colliders& c = world.colliders;
+    for (std::size_t i = 0; i < c.body.size(); ++i) {
+        if (c.body[i] == kWorldBody && c.shape[i] == ShapeType::Box) {
+            out.push_back({c.poseInBody[i].position, c.poseInBody[i].orientation, c.size[i]});
+        }
+    }
+    return out;
+}
+
+double wallInflow(double gapOverDiameter) {
+    if (gapOverDiameter >= kWallReach) {
+        return 0.0;
+    }
+    return kWallInflowGain * std::exp(-std::max(gapOverDiameter, 0.0) / kWallInflowLength);
+}
+
 double dustThreshold(double diameter, double rho, double gravity) {
     return kBagnoldA * std::sqrt((kGrainDensity - rho) / rho * gravity * diameter);
 }
@@ -300,6 +318,7 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
     } else {
         downwash_.clearGround();
     }
+    downwash_.setObstacles(downwashObstacles(world.raw()));
     dustOut_ = SignalId{};
     const auto dustDiameter = config.get<double>("ground_dust_diameter");
     const auto dustMost = config.get<double>("ground_dust_concentration");
@@ -490,14 +509,23 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
                                                       moment[1] + tau[1], moment[2] + tau[2]});
         bus.write(link.airspeed, speed);
     }
-    // Each rotor's air: the wind and gust plus the other robots' wakes at its hub.
+    // Each rotor's air: the wind and gust plus the other robots' wakes at its hub, and a wall
+    // beside it drawing more air down through it (wallInflow).
     for (std::size_t i = 0; i < rotors_.size(); ++i) {
-        const Vec3& hub = wakes[i].hub;
-        const Vec3 mean = meanAir(hub);
-        const Vec3 wake = downwash_.velocityAt(hub, rotors_[i].group);
-        bus.writeN(rotors_[i].air,
-                   Vec3{mean[0] + firstGust[0] + wake[0], mean[1] + firstGust[1] + wake[1],
-                        mean[2] + firstGust[2] + wake[2]});
+        const Downwash::Rotor& w = wakes[i];
+        const Vec3 mean = meanAir(w.hub);
+        const Vec3 wake = downwash_.velocityAt(w.hub, rotors_[i].group);
+        Vec3 air{mean[0] + firstGust[0] + wake[0], mean[1] + firstGust[1] + wake[1],
+                 mean[2] + firstGust[2] + wake[2]};
+        Vec3 normal{};
+        const double gap = downwash_.nearestWall(w.hub, normal) - w.radius;
+        if (w.thrust > 0.0 && std::isfinite(gap)) {
+            const double extra = w.induced * wallInflow(gap / (2.0 * w.radius));
+            for (std::size_t k = 0; k < 3; ++k) {
+                air[k] -= extra * w.thrustAxis[k];
+            }
+        }
+        bus.writeN(rotors_[i].air, air);
     }
     if (dustOut_.valid()) {
         bus.write(dustOut_,

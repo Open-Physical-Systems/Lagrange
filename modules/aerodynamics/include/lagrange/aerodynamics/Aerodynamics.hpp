@@ -59,6 +59,21 @@ struct RotorSource {
 [[nodiscard]] std::vector<RotorSource> rotorSources(const WorldView& world);
 /// Every body's rotor group (Downwash::kNoGroup when its robot has no rotors), as rotorSources.
 [[nodiscard]] std::vector<std::size_t> rotorGroupOfBodies(const WorldView& world);
+/// The fixed boxes of the scenery (static Box colliders: buildings, walls), for the downwash.
+[[nodiscard]] std::vector<Downwash::Box> downwashObstacles(const World& world);
+
+/// A wall beside a rotor (rotor_aero.md §2.7): it starves the rotor's near side of inflow
+/// (Herz and McCrink, VFS Forum 81, 2025), so the air goes down through the disc faster; a
+/// rotor at a fixed speed then makes less thrust, and a multirotor's rotors nearer the wall less
+/// than the others, so it rolls towards the wall (Tanabe et al., J. Robot. Mechatron. 30(3),
+/// 2018, who also find it gone beyond about 1.5 rotor diameters). The extra downward air, as a
+/// share of the rotor's induced velocity, at a gap g between the rotor's tip and the wall:
+/// A·exp(−(g/D)/λ), fitted to `lagrange_foam_hover` runs of the sample quadcopter beside a
+/// building (rotor_aero.md §7), zero beyond kWallReach diameters.
+inline constexpr double kWallInflowGain = 0.0;    // A, set from the CFD fit
+inline constexpr double kWallInflowLength = 1.0;  // λ, rotor diameters
+inline constexpr double kWallReach = 3.0;         // diameters
+[[nodiscard]] double wallInflow(double gapOverDiameter);
 
 /// Dust lifted by the outwash, kg/m³: `most`·(1 − (u*_t/u*)²) above the threshold, 0 below
 /// (behavioural, a range check). u* = kWallJetFriction·u_peak, u*_t = A·√((ρ_p − ρ)/ρ·g·d) with
