@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -225,6 +226,89 @@ TEST_P(Conformance, AStackOfThreeBoxesStands) {
     }
     EXPECT_LT(std::hypot(top[0], top[1]), 0.01) << "the top box has not slid off";
     EXPECT_NEAR(top[2], 0.5, 0.01) << "nor fallen";
+}
+
+// What touches a box at rest holds up its weight (body/<b>/contact_force, N, world): the ground
+// under one box, and under a stack each box gets its own weight from its neighbours together.
+TEST_P(Conformance, WhatTouchesABoxAtRestHoldsUpItsWeight) {
+    Server server(options("", world("held", box("a", 0, 0, 0.1005) + box("b", 0, 0, 0.301))));
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{3'000'000'000}).ok());
+    for (const std::string& name : server.world().bodies.names) {
+        const std::vector<double> f = server.read("body/" + name + "/contact_force");
+        if (f.size() != 3) {
+            continue;
+        }
+        EXPECT_NEAR(f[0], 0.0, 0.05) << name;
+        EXPECT_NEAR(f[1], 0.0, 0.05) << name;
+        EXPECT_NEAR(f[2], 9.80665, 0.05) << name << ": 1 kg held up, within 0.5 %";
+    }
+}
+
+// A pendulum hanging still: its pivot holds up its weight, and with the bob straight under the
+// pivot there is no moment about it (joint/<j>/reaction: parent on child, world, at the child's
+// origin, here the pivot).
+TEST_P(Conformance, APivotHoldsUpAStillPendulum) {
+    std::ostringstream urdf;
+    urdf << R"(<?xml version="1.0"?><robot name="pendulum"><link name="world"/>)"
+         << R"(<link name="bob"><inertial><origin xyz="0 0 -0.5"/><mass value="2"/>)"
+         << R"(<inertia ixx="0.001" iyy="0.001" izz="0.001" ixy="0" ixz="0" iyz="0"/>)"
+         << R"(</inertial><collision><origin xyz="0 0 -0.5"/><geometry><sphere radius="0.05"/>)"
+         << R"(</geometry></collision></link><joint name="pivot" type="continuous">)"
+         << R"(<parent link="world"/><child link="bob"/><origin xyz="0 0 1.5"/>)"
+         << R"(<axis xyz="0 1 0"/></joint></robot>)";
+    Server server(options(write("still_pendulum.urdf", urdf.str()), ""));
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{1'000'000'000}).ok());
+    const std::vector<double> r = server.read("joint/pivot/reaction");
+    ASSERT_EQ(r.size(), 6U);
+    EXPECT_NEAR(r[0], 0.0, 0.02);
+    EXPECT_NEAR(r[1], 0.0, 0.02);
+    EXPECT_NEAR(r[2], 2.0 * 9.80665, 0.1) << "2 kg held up, within 0.5 %";
+    for (std::size_t k = 3; k < 6; ++k) {
+        EXPECT_NEAR(r[k], 0.0, 0.01) << "no moment, component " << k;
+    }
+}
+
+// Swinging, the pivot carries the weight and the pull that turns the bob: at the bottom
+// F = m·g + m·d·ω², with ω² = 2·m·g·d·(1 − cos θ₀) / I from the energy (d pivot to centre of
+// mass, I about the pivot).
+TEST_P(Conformance, APivotCarriesTheSwingAtTheBottom) {
+    constexpr double kMass = 1.0;
+    constexpr double kDistance = 0.5;
+    constexpr double kAmplitude = 0.4;  // rad
+    const double inertia = kMass * kDistance * kDistance + 0.001;
+    std::ostringstream urdf;
+    urdf << R"(<?xml version="1.0"?><robot name="pendulum"><link name="world"/>)"
+         << R"(<link name="bob"><inertial><origin xyz="0 0 -0.5"/><mass value="1"/>)"
+         << R"(<inertia ixx="0.001" iyy="0.001" izz="0.001" ixy="0" ixz="0" iyz="0"/>)"
+         << R"(</inertial><collision><origin xyz="0 0 -0.5"/><geometry><sphere radius="0.05"/>)"
+         << R"(</geometry></collision></link><joint name="pivot" type="continuous">)"
+         << R"(<parent link="world"/><child link="bob"/><origin xyz="0 0 1.5" rpy="0 )"
+         << kAmplitude << R"( 0"/><axis xyz="0 1 0"/></joint></robot>)";
+    Server server(options(write("swing.urdf", urdf.str()), ""));
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    // The first time through the bottom: where the angle (from the joint's start) is −θ₀.
+    double previous = server.read("joint/pivot/position").at(0);
+    double up = 0.0;
+    for (std::int64_t t = 1; t <= 2'000; ++t) {
+        ASSERT_TRUE(server.stepUntil(SimTime{t * 1'000'000}).ok());
+        const double angle = server.read("joint/pivot/position").at(0);
+        if ((previous + kAmplitude) * (angle + kAmplitude) <= 0.0 && t > 1) {
+            up = server.read("joint/pivot/reaction").at(2);
+            std::printf("bottom at %.3f s: %.3f N up\n", static_cast<double>(t) * 1e-3, up);
+            break;
+        }
+        previous = angle;
+    }
+    const double omega2 =
+        2.0 * kMass * 9.80665 * kDistance * (1.0 - std::cos(kAmplitude)) / inertia;
+    const double expected = kMass * 9.80665 + kMass * kDistance * omega2;
+    EXPECT_NEAR(up, expected, 0.01 * expected)
+        << "within 1 % (weight alone " << kMass * 9.80665 << " N)";
 }
 
 // The sample AMR's demo loop (articulated wheels, casters, a motor torque controller) drives

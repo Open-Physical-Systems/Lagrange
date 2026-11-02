@@ -10,7 +10,7 @@ stop for the owner except the profile key approved in item 2.
 | 2 | Live LBM downwash, `aerodynamics.downwash_model: lbm` (profile schema addition, approved) | coupled by signals only (rotor `air_velocity`, body forces); feeds `aero/wind_speed` and the particles; fitted model stays the default and the CPU fallback; tested against the same references; a video from a real run | |
 | 3 | Fitted model: vortex ring state, the low-hover fountain (fit to `~/cfd/hover_low`), the ceiling effect | each tested against its published source; TODO(verify) where it cannot be checked | vortex ring and ceiling done; fountain waiting on OpenFOAM heights |
 | 4 | `lagrange PROFILE.yaml --robot ... --world ...` opens the viewer like `lagrange quad` | the CLI test runs it; docs and tutorial updated | done (PR below) |
-| 5 | Contact force and joint reaction in Jolt | the physics conformance test checks both engines | |
+| 5 | Contact force and joint reaction in Jolt | the physics conformance test checks both engines | done (PR below) |
 | 6 | Scopes signal picker with search | follows `docs/design/ui/` and `.claude/rules/viewer-ui.md`; headless viewer test presses it | |
 | 7 | `docs/validation` page: every physical model, its reference, its error, its test | says which have none | |
 | 8 | Hydrodynamics: added mass, waves and currents (Fossen) | tested against closed-form results | |
@@ -34,3 +34,7 @@ stop for the owner except the profile key approved in item 2.
   OpenFOAM hovers at 0.75, 1.0 and 1.5 m running for the fountain fit.
 - Item 4: a YAML with `domains:` is a profile; `lagrange PROFILE.yaml` runs `lagrange run
   PROFILE` as the server with the viewer. `test_cli` runs one headless.
+- Item 5: Jolt's `joint/<j>/reaction` from its constraint impulses (point, rotation in Jolt's
+  own basis, limits, motor) plus the applied effort; `body/<b>/contact_force` from Newton per
+  group. Conformance on MuJoCo, Jolt and the Jolt plugin: a resting box's weight, a still and a
+  swinging pendulum's pivot (11.348 N on Jolt, 11.349 N on MuJoCo and by energy).
