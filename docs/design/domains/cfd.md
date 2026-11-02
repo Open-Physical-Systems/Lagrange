@@ -267,22 +267,40 @@ Each was run by hand and left out because it moved references away from their me
 | Pressure outlet with Guo's extrapolation only | Cube −6.20 | Worse |
 | Guo's extrapolation at both ends | Cube 0.88, plate 0.87 | Worse, and the plate's test fails |
 
+Two more were tried on the CPU after section 6.1 pointed at the nose shoulder. Ahmed body at 25°, 1M cells:
+
+| Change | Road gap | Cd | Cl | Cube | Plate |
+|---|---|---|---|---|---|
+| Neither | 2 cells | 1.19 | 0.79 | 1.03 | 0.97 |
+| Density correction | 2 cells | 1.19 | 0.80 | 1.02 | 0.96 |
+| Curved walls | 2 cells | 0.69 | 3.25 | 1.30 | 0.97 |
+| Curved walls and density correction | 2 cells | 0.74 | 3.30 | 1.28 | 0.96 |
+| Density correction | 200 mm | 1.17 | 0.13 | | |
+| Curved walls and density correction | 200 mm | 1.06 | 0.17 | | |
+
+**Curved walls** (interpolated bounce-back, Bouzidi, Firdaouss & Lallemand 2001) place the wall on the true surface along each link, for a surface a fraction $q$ along the link:
+
+$$f_i(\mathbf{x},t+1)=\begin{cases}2q\,f^*_{\bar i}(\mathbf{x})+(1-2q)\,f^*_{\bar i}(\mathbf{x}+\mathbf{c}_i), & q<\tfrac12\\[2pt]\dfrac{1}{2q}f^*_{\bar i}(\mathbf{x})+\dfrac{2q-1}{2q}f^*_i(\mathbf{x}), & q\ge\tfrac12\end{cases}$$
+
+The 0.69 looked like the breakthrough and is not one: it comes with lift 3.3 against OpenFOAM's 0.29 and high pressure under the body, and with room under the body the gain shrinks to 9 % (1.17 to 1.06). They also take the cube from 1.03 to 1.28, past its lift test. Not adopted. So a smoother wall alone does not explain the excess; section 6.1's shoulder remains where the tools differ, not yet why. The run with no road did not finish in the time given.
+
+**Density correction** subtracts the mean drift from all fluid cells every step, $f_i\leftarrow f_i-w_i(\bar\rho-1)$. It removes the free stream's negative $C_p$ offset and leaves cube, plate and drag about where they were, so the offset was not driving the drag. The stripes remain. It is CPU only so far, and the GPU would need its own version, so it is not adopted yet either.
+
 Cube and plate figures are at their test grids. Their measured values are 1.05 and 1.17; without these changes they read 1.03 and 0.97.
 
 ## 8. Known defects
 
 - **Stripes and offset.** The pressure panel shows stripes two cells wide starting at the inlet, and the
-  free stream reads a negative $C_p$ where it should be about 0. Nothing anchors pressure well: the
-  inlet fixes density and velocity together and the outlet fixes neither. This is the likeliest source of
-  the checkerboard seen in speed and spin, but that link is not proven. The obvious fixes in section 7
-  failed, so the right one is still open.
+  free stream reads a negative $C_p$ where it should be about 0. The offset is mean density drifting
+  (section 7 removes it on the CPU). The stripes' source is still open, as is their link to the
+  checkerboard in speed and spin.
 - **Wall friction too high.** A plate along the wind reads 0.037 at 1M cells and 0.014 at 4M, against
   about 0.0037 for a turbulent flat plate.
 - **Lift is not settled** in either tool.
 
 ## 9. Next
 
-1. **Test the nose shoulder directly.** Section 6.1 points there. Check it with a body-fitted boundary (interpolated bounce-back, Bouzidi et al. 2001) so a curve is no longer a staircase, and settle section 8's stripes and offset.
+1. **Decide what the tunnel is for.** Three changes meant to bring its drag down did not (sections 6 and 7). The owner's call: keep it for seeing the flow and use `lagrange foam` for numbers, or go on to a wall treatment using these true wall distances, whose outcome is uncertain.
 2. **Finish the reference.** A finer OpenFOAM mesh at 25°, and the 35° reference checked at its source.
 3. **Local refinement**, below, only if step 1 leaves resolution as the limit.
 
