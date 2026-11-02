@@ -17,7 +17,9 @@ ground.
 | Live view of the air in the viewer | `aero/wind_speed` slices, particles | done (§5) |
 | Inflow above the disc, swirl, unsteadiness | | not modelled |
 | Interference between rotors of one drone | | not modelled |
-| Walls, ceilings and scenery other than the ground plane | | not modelled |
+| Buildings: roofs, walls beside a wake (boxes of the scenery) | the same | done (§2.6) |
+| A wall beside a rotor: more inflow, less thrust, a roll towards it | the robot's own rotors | done (§2.7) |
+| Ceilings, scenery other than boxes and the ground plane | | not modelled |
 
 The model is `aerodynamics::Downwash` (`modules/aerodynamics/include/lagrange/aerodynamics/Downwash.hpp`),
 run by the aerodynamics domain (`AeroDrag`). It runs whenever the stage has rotors and the site
@@ -127,6 +129,67 @@ ground_dust_diameter=M,ground_dust_concentration=KG_M3`, or the same keys in the
 lidars see it and lenses get dirty. For 0.1 mm sand $u_{*t} \approx 0.15$ m/s, so an outwash
 peak of about 3 m/s starts lifting it.
 
+### 2.6 Buildings
+
+The scenery's fixed boxes (static `Box` colliders: buildings, walls, crates) are obstacles. The
+model handles three situations:
+
+```mermaid
+flowchart LR
+    W["Wake axis from the drone"] --> R{"First surface<br/>along it"}
+    R -->|ground| G["Outwash on the ground (§2.4)"]
+    R -->|roof| F["Outwash on the roof,<br/>up to its edges;<br/>no wake under it"]
+    W --> S{"Upright face within<br/>the jet's spread?"}
+    S -->|yes| I["Image jet mirrored<br/>in the wall"]
+    X["A point inside a box"] --> Z["still air"]
+```
+
+1. **Roofs.** The wake is cast along its (skewed) axis. Where it first meets a surface, the
+   ground or a box face, the jet stops as it does on the ground, and the outwash of §2.4 spreads
+   over that face. It stops at the face's edges, because a wall jet separates at an edge. Below
+   the face, behind it, the drone's wake is gone. Dust (§2.5) lifts only from the ground.
+2. **Walls beside a wake.** An upright face within the jet's spread is a mirror. Every point on
+   the drone's side gets the image jet's axial speed too, evaluated at the point's mirror image.
+   This is the method of images (as Cheeseman and Bennett treat the ground). It keeps the air
+   from going through the wall, so near the wall the downwash is stronger: the wake hugs it.
+   The spread used is twice the far jet's half-width where the wake ends, or 1.5 motor
+   distances plus two rotor radii if that is larger.
+3. **Inside a box** the air is still.
+
+### 2.7 A wall beside a rotor
+
+A wall beside a rotor restricts the inflow into the part of the disc next to it. Hovering takes
+more power (Herz and McCrink, VFS Forum 81, 2025). An isolated rotor near a side wall loses
+thrust and rolls towards the wall. A multirotor's rotors are at different distances from the
+wall, so the whole aircraft tilts towards it. Tanabe et al. (*J. Robot. Mechatron.* 30(3),
+2018, CFD) recommend keeping at least 1.5 rotor diameters from a side wall.
+
+Neither source gives numbers that can be used directly. The live model therefore takes them from
+`lagrange foam-hover` runs of the sample quadcopter beside a 12 m building, at several gaps
+(§7). The air going down through each disc beyond the open-air value is fitted as
+
+$$
+\frac{\Delta w_i}{v_i} = A\,e^{-(g/D)/\lambda}\,s_i, \qquad A = 0.0173,\ \lambda = 3.5,\ g < 10D
+$$
+
+The symbols are:
+
+- $g$: the gap between the drone's nearest rotor tip and the wall.
+- $D$: the rotor diameter.
+- $s_i$: runs from +1 for the hub farthest towards the wall to −1 for the one farthest away.
+
+The CFD saw the near rotors take about 2% more air and the far ones about 1.3% less. Each
+rotor's `rotor/<j>/air_velocity` carries its share. A blade-element rotor at a fixed speed in
+more downward air makes less thrust, so the drone rolls towards the wall, as the references
+describe. Flown by the built-in controller beside `drone_building`, with the tips 1.2 D from the
+wall, the near rotors get 0.088 m/s more air and the far ones 0.089 m/s less. The controller
+holds the drone level by spinning the near ones faster. All four then make the same thrust, and
+the drone drifts 0.5 mm towards the wall.
+
+The fade length is the weak part. Fitted to the near-minus-far difference, it is 3.5 ± 2.7 D;
+the near rotors alone show no fading out to 2 D within the mesh noise (±0.05 m/s, 0.8% of
+$v_i$). Tanabe et al. find the effect gone beyond 1.5 D. The model may therefore reach too far.
+
 ## 3. Signals
 
 | Signal | Unit | Writer | Reader |
@@ -175,6 +238,13 @@ mean jet of Bauersfeld et al. may still be too strong that far out for a drone a
 Crazyflie, or the unsteady wake may mix faster than its mean suggests. The test accepts 45–75%
 at 4 l and 85–100% at 19 l.
 
+`test_downwash` also checks buildings (§2.6). A wake over a roof stops on it, spreads over it
+and stops at its edges, and leaves still air inside and beneath. A wall beside a wake makes the
+air next to it go down faster, and makes no difference far on the other side.
+`test_downwash_pair` puts the quadcopter's rotors 0.25 D from a wall. The near rotors' air minus
+the far rotors' matches the CFD fit, the near rotors make less thrust (the roll towards the
+wall), and at 12 D nothing is left.
+
 ## 5. Seeing the air
 
 The server serves the air as the field `aero/wind_speed`. It is computed with the same `windAt`
@@ -211,5 +281,62 @@ Protocol (added after 1.0, RFC 0007): `SubscribeField.orientation` and `.volume`
   high-speed layer fade instead.
 - The coefficient fidelity's rotors do not react to the air they sit in (as before); only `bem`
   rotors read `rotor/<j>/air_velocity`.
+- Near the ground, a multirotor's rotor jets meet along its arms and turn up under it (a
+  fountain). The CFD shows it at 0.5 m (§7), lifting the frame. The live model has no
+  interaction between the rotors of one drone, so neither the fountain nor the cross-shaped
+  outwash it gives.
+- Buildings are boxes only. The wake does not run down a wall it does not hit, separate off a
+  roof's edge, or curl round a corner.
 - The air at a robot's links comes from other robots only. A drone's own frame does not feel
   its own downwash (download), since the rotor data hold the isolated rotor.
+
+## 7. Offline check: OpenFOAM
+
+`lagrange foam-hover ROBOT.urdf [--height M] [--building X0,Y0,X1,Y1,H]` (`tools/cli/lagrange_foam_hover`)
+writes and runs an OpenFOAM case of a hovering multirotor:
+
+- The robot's collision boxes, over a ground wall.
+- Each rotor is an actuator disc: a momentum source (`vectorSemiImplicitSource`) over a cylinder
+  of cells two cells thick, carrying its share of the weight.
+- Open boundaries on every other side (total pressure).
+- snappyHexMesh, cells of 2 cm round the drone and 4 cm in its wake and near the ground.
+- simpleFoam with k-omega SST, 1500 iterations.
+
+It draws three views: the air through the drone (XZ), the air along the ground, and the speed
+under the drone against Bauersfeld et al. It also reports the air through each disc and the
+force on the frame. OpenFOAM is GPL-3 and runs as a separate program (invariant 12).
+
+The sample quadcopter (2.0 kg, 0.254 m propellers, 4.91 N per rotor, $v_i$ 6.4 m/s), 412k cells
+each:
+
+| Case | Air down through the discs | Peak outwash 3 cm up | Force of the air on the frame |
+|---|---|---|---|
+| 2 m up, open field | 7.41–7.47 m/s | 6.5 m/s | 1.86 N down (9% of the weight) |
+| 0.5 m up | 7.48–7.55 m/s | 9.5 m/s | 0.63 N **up** |
+| 2 m, tips 0.25 D from a 12 m building | near 7.54, far 7.38 m/s | 7.7 m/s | 2.08 N down |
+| 2 m, 0.5 D | near 7.56, far 7.40 m/s | 6.9 m/s | 2.14 N down |
+| 2 m, 1 D | near 7.50, far 7.43 m/s | 6.6 m/s | 2.07 N down |
+| 2 m, 2 D | near 7.55, far 7.46 m/s | 6.5 m/s | 1.97 N down |
+
+![The quadcopter 2 m up in the open](../../imgs/cfd-hover-open.png)
+
+- **In the open**, the jet under the drone peaks at 6.7 m/s about 0.5 m above the ground.
+  Bauersfeld et al.'s fit gives 7.35 m/s there, about 10% more. Their measurements were also
+  taken in the open, with no ground in the fit. Between the four rotor columns, just under the
+  drone, the air rises: the known fountain of a multirotor.
+
+![The quadcopter 0.5 m up](../../imgs/cfd-hover-low.png)
+
+- **Low, at 0.5 m**, the rotor jets reach the ground before they merge. Their wall jets meet
+  along the arms in a cross and turn up under the drone at about 7 m/s. That lifts the frame
+  (0.63 N) instead of pressing it down, and the outwash is half as strong again (9.5 m/s).
+
+![The quadcopter 2 m up beside a 12 m building](../../imgs/cfd-hover-wall-0.25.png)
+
+- **Beside a building**, the wake hugs the wall, faster there (up to 8.7 m/s) than in the open.
+  It spreads along the foot of the wall rather than round the drone. The rotors near the wall
+  take more air through them and the far ones less (§2.7). The frame feels no side force
+  (0.02 N), so the pull towards the wall comes through the rotors.
+
+The live model covers the open-field jet within its references, the roof and wall-hugging wake
+(§2.6) and the near-wall rotors (§2.7). It does not have the fountain (§6).

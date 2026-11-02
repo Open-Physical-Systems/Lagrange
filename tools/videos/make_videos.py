@@ -65,7 +65,9 @@ class Clip:
     name: str
     title: str
     seconds: float
-    runs: list[list[str]]  # server arguments of each run; ["@cli", ...]: the lagrange command
+    # Server arguments of each run; ["@cli", ...]: the lagrange command; ["@run", PROFILE, ...]:
+    # lagrange run with a profile.
+    runs: list[list[str]]
     panes: list[Pane]
     steps: list[Step] = field(default_factory=list)
     write: Callable[[Path], None] | None = None  # files the runs need, in the working directory
@@ -131,6 +133,20 @@ QUAD = asset("robots/quad_x500/quad_x500.usda")
 GEO = ["--air-density", "1.225"]
 TURN = joints(velocity={"turn": 6.28})
 ARM = asset("robots/arm6/arm6.urdf")
+BUILDING = asset("worlds/drone_building/drone_building.urdf")
+DOWNWASH = str(ROOT / "profiles/examples/quad_x500_downwash.yaml")
+
+
+def cmd_vel(x: float, z: float, seconds: float) -> list[str]:
+    """The multicopter's /cmd_vel at 20 Hz for `seconds`: forward x, up z (m/s); then it holds."""
+    return ["ros2", "topic", "pub", "-r", "20", "-t", str(round(20 * seconds)), "-w", "1",
+            "/cmd_vel", "geometry_msgs/msg/TwistStamped",
+            f"{{twist: {{linear: {{x: {x}, z: {z}}}}}}}"]  # fmt: skip
+
+
+# The multicopter's /cmd_vel: 0.5 m/s down for 3 s (60 messages at 20 Hz), then it holds.
+DESCEND = ["ros2", "topic", "pub", "-r", "20", "-t", "60", "-w", "1", "/cmd_vel",
+           "geometry_msgs/msg/TwistStamped", "{twist: {linear: {z: -0.5}}}"]  # fmt: skip
 
 CLIPS: list[Clip] = [
     Clip(
@@ -399,6 +415,68 @@ CLIPS: list[Clip] = [
                 "lagrange set wind_speed=4 wind_from=270    (the wake leans downwind)",
                 lagrange_set("wind_speed=4", "wind_from=270"),
             ),
+        ],
+    ),
+    Clip(
+        "drone_low_altitude",
+        "Downwash near the ground: the outwash grows and the rotors need less speed",
+        28,
+        [["--robot", QUAD, "--world", "none", *GEO]],
+        [
+            Pane(
+                "3D view: airflow particles",
+                LEFT,
+                viewer=["--overlays", "airflow", *view(0, 0, 0.6, 5.0, -60, 10)],
+            ),
+            Pane(
+                "height (m), rotor speed (rad/s)",
+                RIGHT,
+                SCOPE,
+                scope("body/base_link/pose.z", "joint/rotor_1_joint/velocity"),
+            ),
+        ],
+        [
+            Step(0, "Hovering 2 m up: the jet has spread before it reaches the ground"),
+            Step(9, "Down to about half a metre (/cmd_vel, 0.5 m/s down for 3 s)", DESCEND),
+            Step(
+                15,
+                "Low: the outwash ring spreads wide; ground effect at 3.9 rotor radii is small"
+                " (rotor speed 0.2% lower)",
+            ),
+        ],
+    ),
+    Clip(
+        "drone_building",
+        "Downwash beside and over a 12 m building",
+        44,
+        [["@run", DOWNWASH, "--robot", QUAD, "--world", BUILDING]],
+        [
+            Pane(
+                "3D view: airflow particles",
+                LEFT,
+                viewer=["--overlays", "airflow", "--follow", "5,25"],
+            ),
+            Pane(
+                "air down through rotors 1 (by the wall) and 2 (m/s), their speeds",
+                RIGHT,
+                SCOPE,
+                scope(
+                    "rotor/rotor_1_joint/air_velocity.z",
+                    "rotor/rotor_2_joint/air_velocity.z",
+                    "joint/rotor_1_joint/velocity",
+                    "joint/rotor_2_joint/velocity",
+                ),
+            ),
+        ],
+        [
+            Step(
+                0,
+                "Rotor tips 0.3 m from the wall: more air down through the rotors by it, so to"
+                " stay level the controller spins them faster",
+            ),
+            Step(12, "Up past the roof (/cmd_vel 1.5 m/s up for 8 s)", cmd_vel(0.0, 1.5, 8.0)),
+            Step(22, "Over the roof (1 m/s for 4 s)", cmd_vel(1.0, 0.0, 4.0)),
+            Step(29, "On the roof the wake spreads as on the ground, and stops at its edges"),
         ],
     ),
     Clip(
@@ -780,6 +858,9 @@ def record(clip: Clip, out_dir: Path, keep: bool) -> None:
             socket = work / f"run{r}.sock"
             if args[0] == "@cli":
                 command = ["lagrange", *args[1:], "--server-only", "--listen", f"unix:{socket}"]
+            elif args[0] == "@run":  # a profile: lagrange run PROFILE ...
+                command = ["ros2", "run", "lagrange_server", "lagrange", "run", *args[1:],
+                           "--listen", f"unix:{socket}"]  # fmt: skip
             else:
                 command = ["ros2", "run", "lagrange_server", "lagrange_server",
                            "--listen", f"unix:{socket}", *args]  # fmt: skip

@@ -4882,8 +4882,8 @@ struct Server::Impl {
         const double first = alongY ? air.centre[1] : air.centre[0];
         slice.set_origin_x(first - (kSliceWidth - 1) * kAirSliceCell / 2.0);
         if (vertical) {
-            // From the ground (half a cell up) to 4.75 m above it.
-            slice.set_origin_y(air.groundZ + kAirSliceCell / 2.0);
+            // From 3.6 m under the robot (or the ground) up: the wake below it, a little above.
+            slice.set_origin_y(std::max(air.groundZ + kAirSliceCell / 2.0, air.centre[2] - 3.6));
             slice.set_height_m(alongY ? air.centre[0] : air.centre[1]);
         } else {
             slice.set_origin_y(air.centre[1] - (kSliceHeight - 1) * kAirSliceCell / 2.0);
