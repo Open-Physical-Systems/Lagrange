@@ -250,17 +250,33 @@ blade-element propellers, 0.25 m arms, 565 rad/s) and compares the lower one's t
 Kiran, Ayanian and Breuer (2025, RSS XXI, arXiv:2507.09463). They used stacked Crazyflies, with
 $l$ the centre-to-motor distance:
 
-| Gap below the upper drone | Kiran et al. (measured) | Lagrange |
-|---|---|---|
-| 4 l | 65% of hover thrust | 53% |
-| 19 l | 95–98% | 87% |
+| Gap below the upper drone | Kiran et al. (measured) | Lagrange, wakes at the hub (until 2026-11-03) | Lagrange, wakes over the disc |
+|---|---|---|---|
+| 4 l | 65% of hover thrust | 53% | 76% |
+| 19 l | 95–98% | 87% | 87% |
 
-The model loses more thrust than the measurements, by about 12 points at 4 l and about 10 at
-19 l. Some of that difference is expected: the Crazyflies ran at constant voltage, so their
-rotors sped up as the load fell, while the test holds rotor speed fixed. The rest is open. The
-mean jet of Bauersfeld et al. may still be too strong that far out for a drone as small as a
-Crazyflie, or the unsteady wake may mix faster than its mean suggests. The test accepts 45–75%
-at 4 l and 85–100% at 19 l.
+Two things were checked on 2026-11-03:
+
+- **Constant voltage.** Kiran et al. drove both drones "with a constant DC voltage supply (through a
+  tether) of 4 V" (their §II-A), so their rotors sped up as the load fell. With the sample's own
+  motor at constant voltage (`AtConstantVoltageTheLowerRotorsSpeedUpAndKeepMore`, R = 0.1 Ω,
+  kT = 0.0156 N·m/A) the lower drone keeps under one point more: this motor's speed hardly moves
+  with load. It does not explain the gap. The Crazyflie's coreless motors are softer, but their
+  constants are not in the paper.
+- **Where a rotor samples the wake.** A rotor flew in the other drones' air at its hub alone. At
+  4 l each lower rotor sits under an upper rotor's contracted column, 0.71 R across at nearly
+  2 v_i: the hub saw all of it, the outer half of the disc none. Each rotor now takes the mean over
+  its disc (18 points on 3 equal-area rings, the mean momentum theory's uniform loading implies).
+  That moved 4 l from 12 points too low to 11 too high; 19 l, where the merged jet is broad, did
+  not move.
+
+What is left at 4 l is most likely the near wake's shape: a sharp-edged column that mixes with
+nothing until the jets merge at 1.5 l. A real slipstream's shear layer grows (about 0.18 per unit
+distance for a plane mixing layer into still air, Brown and Roshko 1974; slower at first behind a
+rotor, whose tip vortices hold the wake together), which spreads the same momentum over more of a
+disc below and takes more thrust from it. At 19 l the merged jet of Bauersfeld et al. is still 8 to
+11 points too strong for a Crazyflie; their smallest drone weighed 0.23 kg, the Crazyflie 27 g. The
+tests accept 0.65 ± 0.12 at 4 l and 85–100% at 19 l.
 
 `test_downwash` also checks buildings (§2.6). A wake over a roof stops on it, spreads over it
 and stops at its edges, and leaves still air inside and beneath. A wall beside a wake makes the
