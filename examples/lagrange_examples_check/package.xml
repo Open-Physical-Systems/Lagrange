@@ -15,6 +15,7 @@
   <test_depend>lagrange_example_lidar</test_depend>
   <test_depend>lagrange_example_weather</test_depend>
   <test_depend>lagrange_example_quadcopter</test_depend>
+  <test_depend>lagrange_example_holybro</test_depend>
   <test_depend>lagrange_example_car</test_depend>
   <test_depend>lagrange_example_spawn</test_depend>
   <test_depend>lagrange_example_ros2_control</test_depend>

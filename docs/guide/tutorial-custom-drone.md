@@ -156,7 +156,15 @@ sequenceDiagram
 
 ## Step 2 · Fly it by hand
 
-Leave step 1 running. In a **second terminal** (do step 0's `source` lines first):
+One launch file does steps 1 and 2 together: the server, the viewer following the drone, and
+teleop in a window of its own. It is the example package
+[`lagrange_example_holybro`](../../examples/lagrange_example_holybro/README.md):
+
+```bash
+ros2 launch lagrange_example_holybro teleop.launch.py
+```
+
+Or by hand: leave step 1 running. In a **second terminal** (do step 0's `source` lines first):
 
 ```bash
 ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -p stamped:=true
