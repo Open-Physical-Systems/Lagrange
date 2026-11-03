@@ -164,7 +164,7 @@ recorded to MCAP and replayed.
 
 <!-- docs-index begin: written by tools/ci/docs_index.py -->
 
-<details><summary>User guide (16)</summary>
+<details><summary>User guide (17)</summary>
 
 - [User guide](docs/guide/README.md)
 - [Autoware with a simulated car](docs/guide/autoware.md)
@@ -175,6 +175,7 @@ recorded to MCAP and replayed.
 - [Tutorial: an AMR in a warehouse](docs/guide/tutorial-amr.md)
 - [Tutorial: the sample arm with MoveIt 2](docs/guide/tutorial-arm.md)
 - [Tutorial: a car in a city block](docs/guide/tutorial-cars.md)
+- [Tutorial: test your own drone, step by step](docs/guide/tutorial-custom-drone.md)
 - [Tutorial: a quadcopter, from hover to a PX4 mission](docs/guide/tutorial-drone.md)
 - [Tutorial: weather, interference and radio links](docs/guide/tutorial-environment.md)
 - [Tutorial: huge worlds](docs/guide/tutorial-huge-worlds.md)
