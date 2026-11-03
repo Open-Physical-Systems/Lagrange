@@ -95,3 +95,36 @@ sees its surface as a mirror: `water:reflectivity` straight back near normal, no
 and no return from the bottom, as near-infrared is absorbed. Both lidar tiers see it.
 
 Checked against the closed forms (`server/test/test_water.cpp`): a floating box's draft, an off-centre hull's, and a sinking box's terminal speed; a sphere half as dense as water released under it starts rising at `g(ρ_w·V − m)/(m + ½ρ_w·V)` = g/2 within 3% (without added mass it would be g), on MuJoCo and Jolt; a floating box in a 0.5 m/s current drifts with it within 0.02 m/s; a 0.4 m float on 0.1 m, 4 s waves (25 m long) heaves 0.1 m within 1 cm.
+
+### 9.1 A vehicle's own coefficients: Fossen's model (2026-11-03)
+
+A body named in `--hydro-coefficients FILE.yaml` (`ServerOptions::hydroCoefficients`; module
+config `fossen:<body>`) takes Fossen's model (Handbook of Marine Craft Hydrodynamics and Motion
+Control, 2011, ch. 6) instead of the cells' drag and the sphere's added mass, in its body frame on
+its velocity through the water ν_r = (u, v, w, p, q, r), scaled by the share of it under water:
+
+    τ = −M_A·ν̇_r − C_A(ν_r)·ν_r − (D + D_n(|ν_r|))·ν_r,   −C_A·ν = (ω × A_t·u, u × A_t·u + ω × A_r·ω)
+
+with a diagonal added mass M_A = diag(A_t, A_r), linear damping D and quadratic damping D_n, all
+measured for the vehicle. ν̇_r is smoothed per axis with gain 1/(1 + m_a/m), as the sphere's is.
+Buoyancy stays the cells', and the water's acceleration still pushes the displaced volume.
+
+The sample is the BlueROV2 Heavy (`assets/vehicles/bluerov2_heavy.hydro.yaml`, from von Benzon
+et al., J. Mar. Sci. Eng. 10, 1898, 2022, Table A1, CC BY 4.0: damping identified from open-loop
+runs in a pool and validated on repeat runs to about 10 %, added mass by Eidsvik's method).
+`TheBlueRov2ReachesItsTopSpeedsWithFossensModel` pushes it by its full thrust along each axis
+(gravity standing in for the thrusters: the vehicle weighted that much beyond its buoyancy and
+turned so the axis points down) in MuJoCo and Jolt:
+
+| Axis | Thrust | Top speed, their Table 4 | Lagrange | Start, F/(m + m_a) | Lagrange |
+|---|---|---|---|---|---|
+| Surge | 85 N | 0.72 m/s | 0.729 | 2.99 m/s² | 3.01 |
+| Sway | 85 N | 0.63 m/s | 0.626 | 2.91 m/s² | 2.95 |
+| Heave | 120 N | 0.71 m/s | 0.713 to 0.720 | 2.71 m/s² | 2.78 |
+
+What this shows is that the model is implemented as published: Table 4's speeds are their
+model's balance of damping and thrust (0.729, 0.626, 0.713 from Table A1), and their model is
+within about 10 % of the pool (Fig. 6), so ours is too to the same extent, for this vehicle. The
+coefficients belong on the vehicle in USD (a `HydrodynamicsAPI` schema, owed: a schema addition
+for the owner to approve); the file stands in until then. Not yet: off-diagonal added mass and
+damping, wave radiation and diffraction, thrusters as rotors in water.

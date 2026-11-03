@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -137,6 +138,74 @@ TEST(Water, AReleasedSphereRisesWithItsAddedMass) {
         const double rise = server.read("body/" + name + "/twist").at(2) / 0.04;
         const double expected = kG * (1000.0 * volume - mass) / (mass + 0.5 * 1000.0 * volume);
         EXPECT_NEAR(rise, expected, 0.03 * expected) << physics << ": without added mass " << kG;
+    }
+}
+
+/// The BlueROV2 Heavy (von Benzon et al., J. Mar. Sci. Eng. 2022, Table A1; a 0.2375 m cube
+/// displacing its 0.0134 m³) weighted `extra` N beyond its buoyancy, so that gravity pushes it as
+/// a thruster would, and turned so that its body axis `axis` (0 surge, 1 sway, 2 heave) points
+/// down: the speed it sinks at is that axis's.
+ServerOptions rov(double extra, int axis) {
+    constexpr double kG = 9.80665;
+    constexpr double kSide = 0.2375;  // m: 0.0134 m³
+    const double mass = (1000.0 * kSide * kSide * kSide * kG + extra) / kG;
+    // Body x or y down: pitch +90° or roll −90°; heave: z down, upside down (roll 180°).
+    const char* rpy = axis == 0 ? "0 1.5707963 0" : axis == 1 ? "-1.5707963 0 0" : "3.1415927 0 0";
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() /
+        ("lagrange_water_rov_" + std::to_string(::getpid()) + ".sdf");
+    std::ofstream(path) << "<?xml version=\"1.0\"?><sdf version=\"1.9\"><world name=\"w\">"
+                        << "<model name=\"rov\"><pose>0 0 20 " << rpy << "</pose>"
+                        << "<link name=\"link\"><inertial><mass>" << mass << "</mass><inertia>"
+                        << "<ixx>0.26</ixx><iyy>0.23</iyy><izz>0.37</izz></inertia></inertial>"
+                        << "<collision name=\"c\"><geometry><box><size>" << kSide << " " << kSide
+                        << " " << kSide << "</size></box></geometry></collision></link></model>"
+                        << "</world></sdf>\n";
+    ServerOptions o;
+    o.worldPath = path.string();
+    o.water.push_back({{0.0, 0.0, 22.0}, 20.0, 20.0, 22.0});  // 22 m deep, its floor the ground
+    o.ros = false;
+    o.realTimeFactor = 0.0;
+    // Their Table A1, as assets/vehicles/bluerov2_heavy.hydro.yaml.
+    o.hydroCoefficients["link"] =
+        "6.36,7.12,18.68,0.189,0.135,0.222,13.7,0,33,0,0.8,0,141,217,190,1.19,0.47,1.5";
+    return o;
+}
+
+// Fossen's model with a real vehicle's coefficients (hydrodynamics.md §9.1). Pushed by its full
+// thrust, 85 N in surge and sway and 120 N in heave (their Table 4), the BlueROV2 settles where
+// its identified damping balances it: their Table 4 gives 0.72, 0.63 and 0.71 m/s, which their
+// model's damping gives to 1 % (the model was checked against pool runs to about 10 %, their
+// Fig. 6). At release it accelerates at F/(m + m_a): the added mass halves heave's.
+TEST(Water, TheBlueRov2ReachesItsTopSpeedsWithFossensModel) {
+    struct Case {
+        int axis;
+        double thrust, topSpeed, addedMass;
+    };
+    for (const Case& c :
+         {Case{0, 85.0, 0.72, 6.36}, Case{1, 85.0, 0.63, 7.12}, Case{2, 120.0, 0.71, 18.68}}) {
+        for (const char* physics : {"mujoco", "jolt"}) {
+            ServerOptions o = rov(c.thrust, c.axis);
+            o.physics = physics;
+            Server server(o);
+            const Status loaded = server.load();
+            ASSERT_TRUE(loaded.ok()) << loaded.message;
+            const std::string name = server.world().bodies.names.at(0);
+            ASSERT_TRUE(server.stepUntil(SimTime{20'000'000}).ok());  // 20 ms: damping still small
+            const double start = -server.read("body/" + name + "/twist").at(2) / 0.02;
+            const double mass = server.world().bodies.mass.at(0);
+            ASSERT_TRUE(server.stepUntil(SimTime{6'000'000'000}).ok());
+            const double speed = -server.read("body/" + name + "/twist").at(2);
+            std::printf(
+                "BlueROV2 %s, axis %d, %.0f N: %.3f m/s (their Table 4: %.2f), starts at "
+                "%.2f m/s² (F/(m + m_a) %.2f, without added mass %.2f)\n",
+                physics, c.axis, c.thrust, speed, c.topSpeed, start,
+                c.thrust / (mass + c.addedMass), c.thrust / mass);
+            EXPECT_NEAR(speed, c.topSpeed, 0.03 * c.topSpeed) << physics << " axis " << c.axis;
+            EXPECT_NEAR(start, c.thrust / (mass + c.addedMass),
+                        0.1 * c.thrust / (mass + c.addedMass))
+                << physics << " axis " << c.axis;
+        }
     }
 }
 

@@ -1,0 +1,12 @@
+# Fossen coefficients of the BlueROV2 in its Heavy configuration, for --hydro-coefficients
+# (hydrodynamics.md §9.1). From M. von Benzon, F. F. Sørensen, E. Uth, J. Jouffroy, J. Liniger
+# and S. Pedersen, "An Open-Source Benchmark Simulator: Control of a BlueROV2 Underwater Robot",
+# J. Mar. Sci. Eng. 10(12), 1898, 2022, doi:10.3390/jmse10121898, Table A1 (CC BY 4.0): damping
+# identified from open-loop runs in a 6.1 m pool and validated on repeat runs (about 10 % in
+# surge and sway, their Fig. 6); added mass by Eidsvik's method from DNV data (their ref. 33).
+# Their vehicle: 13.5 kg, 0.0134 m³ displaced, inertia (0.26, 0.23, 0.37) kg·m² (CAD).
+# The key is the vehicle's body as the run names it (its main link, here base_link).
+base_link:
+  added_mass: [6.36, 7.12, 18.68, 0.189, 0.135, 0.222]       # kg, kg·m²
+  linear_damping: [13.7, 0.0, 33.0, 0.0, 0.8, 0.0]           # N·s/m, N·m·s
+  quadratic_damping: [141.0, 217.0, 190.0, 1.19, 0.47, 1.5]  # N·s²/m², N·m·s²

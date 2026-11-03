@@ -74,6 +74,7 @@ reference is our own OpenFOAM run, that is a check between two models, not again
 | Battery on drive cycles | LG HG2 UDDS, US06, LA92 (Kollmeyer et al., CC BY 4.0) | fitted to UDDS: LA92 11.7 mV, US06 20.1 mV RMS (target 20 mV; US06 not met by 0.1 mV); at 0 °C 145 mV | `BatteryDataset.TheEquivalentCircuitFollowsMeasuredDriveCycles` |
 | Planar pushing (MuJoCo, Jolt) | Yu et al. 2016 (IROS), 2000 measured pushes of rect1 on four surfaces; the quasi-static model they compare with (Lynch et al. 1992) | MuJoCo within 6 mm and 4–7° of the quasi-static model; 3–41 mm and 10–17° from the measured means (as the model is). **Jolt does not turn the block** (2° against 75°): its linear and torsional friction have separate budgets | `Conformance.APushedBlockMovesAsTheMcubeMeasurements` |
 | Quadrotor rotors in flight | NeuroBEM flights (Bauersfeld et al. 2021), 13 held-out segments, measured motor speeds and motion | `coefficients` F 1.46 N RMS (their quadratic fit 1.49); `bem` with their blade geometry and 2° fitted 1.12 N (their BEM 0.98, 14 % better; Mxy 41 % better: blade flapping) | `tools/validation/neurobem.sh` (downloads 627 MB), rotor_aero.md §9 |
+| Fossen hydrodynamics | BlueROV2 Heavy coefficients identified in a pool (von Benzon et al. 2022, CC BY 4.0) | top speeds at full thrust 0.729/0.626/0.713 m/s against their 0.72/0.63/0.71 (their model, itself within ~10 % of the pool); start acceleration F/(m + m_a) within 3 % | `Water.TheBlueRov2ReachesItsTopSpeedsWithFossensModel` |
 | Thermal camera | Incropera et al. Table 12.1 black-body fractions; Planck integrated directly; Stefan–Boltzmann; Swinbank 1963 clear sky | fractions within 1e-5, band radiance within 1e-9; a 350 K node of ε 0.95 read at its apparent temperature within the 50 mK noise; scene temperatures are assumptions (no sun, no atmosphere) | `test_thermal_camera` |
 
 ### Models with no reference yet
@@ -86,8 +87,8 @@ Said plainly, so nobody reads more into these than is there:
   spectrum to compare.
 - **Fountain lift on the frame** in the fitted model (rotor_aero.md §2.8): fitted to our own
   OpenFOAM runs at five heights only (within 0.23 N), no measurement.
-- **Hydrodynamics beyond a sphere's added mass**: other shapes' added mass, rotational added
-  inertia, wave radiation (Fossen's full model is planned, hydrodynamics.md).
+- **Hydrodynamics without a vehicle's own coefficients**: a body not in `--hydro-coefficients`
+  still takes a sphere's added mass and cell drag; wave radiation is not modelled.
 - **Lidar intensity**, **GNSS error statistics**, **sensor timing histograms**: no evidence found
   (Sensors table below).
 - **Ultrasonic cone** (the `lagrange_tof` plugin): a geometric cone and dead zone, no datasheet

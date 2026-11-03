@@ -107,6 +107,8 @@ void printServerOptions(std::FILE* out) {
         "(repeatable)\n"
         "  --water X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH  a body of still water (repeatable)\n"
         "  --water-current VX,VY[,VZ]  the water's current, m/s\n"
+        "  --hydro-coefficients FILE.yaml  vehicles' Fossen coefficients by body (added_mass,\n"
+        "            linear_damping, quadratic_damping: six each, surge to yaw)\n"
         "  --water-waves AMPLITUDE,PERIOD[,TOWARDS_DEG]  linear waves on the water (m, s)\n"
         "  --joint-control  drive every moving joint on its own from /joint_commands\n"
         "  --joint-loop-hz HZ  bandwidth of its position and velocity loops (default 8); more\n"
@@ -602,6 +604,32 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--water needs X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH, the last three positive";
             }
             options.water.push_back({{v[0], v[1], v[2]}, v[3], v[4], v[5]});
+        } else if (arg == "--hydro-coefficients") {
+            const char* text = value();
+            if (text == nullptr) {
+                return "--hydro-coefficients needs a YAML file";
+            }
+            try {
+                const YAML::Node file = YAML::LoadFile(text);
+                for (const auto& entry : file) {
+                    const std::string body = entry.first.as<std::string>();
+                    std::string numbers;
+                    for (const char* key : {"added_mass", "linear_damping", "quadratic_damping"}) {
+                        const YAML::Node list = entry.second[key];
+                        if (!list || !list.IsSequence() || list.size() != 6) {
+                            return std::string("--hydro-coefficients: ") + body + " needs " + key +
+                                   ": six numbers, surge, sway, heave, roll, pitch, yaw";
+                        }
+                        for (const auto& x : list) {
+                            numbers +=
+                                (numbers.empty() ? "" : ",") + std::to_string(x.as<double>());
+                        }
+                    }
+                    options.hydroCoefficients[body] = numbers;
+                }
+            } catch (const YAML::Exception& e) {
+                return std::string("--hydro-coefficients: ") + text + ": " + e.what();
+            }
         } else if (arg == "--water-current") {
             const char* text = value();
             std::array<double, 3> v{};

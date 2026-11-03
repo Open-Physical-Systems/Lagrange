@@ -110,6 +110,10 @@ struct ServerOptions {
     /// --water-waves AMPLITUDE,PERIOD[,TOWARDS]: m, s and degrees (0 = towards +x, 90 = +y):
     /// one train of linear (Airy) waves on every body of water. Amplitude 0: none.
     std::array<double, 3> waterWaves{};
+    /// --hydro-coefficients FILE.yaml: a vehicle's own Fossen coefficients per body (body name to
+    /// the 18 numbers of hydrodynamics::FossenCoefficients, comma-separated): those bodies take
+    /// Fossen's model in the water instead of the cells' drag (hydrodynamics.md §9.1).
+    std::map<std::string, std::string> hydroCoefficients;
     /// --sensor-timing NAME=LATENCY[,JITTER]: s, of a sensor's messages on ROS (sensors.md).
     struct SensorTiming {
         std::string sensor;
