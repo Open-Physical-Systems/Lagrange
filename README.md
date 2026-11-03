@@ -164,12 +164,13 @@ recorded to MCAP and replayed.
 
 <!-- docs-index begin: written by tools/ci/docs_index.py -->
 
-<details><summary>User guide (17)</summary>
+<details><summary>User guide (18)</summary>
 
 - [User guide](docs/guide/README.md)
 - [Autoware with a simulated car](docs/guide/autoware.md)
 - [The `lagrange` command](docs/guide/cli.md)
 - [Concepts](docs/guide/concepts.md)
+- [Installing Lagrange](docs/guide/install.md)
 - [Profiles](docs/guide/profiles.md)
 - [The run file](docs/guide/run-file.md)
 - [Tutorial: an AMR in a warehouse](docs/guide/tutorial-amr.md)
@@ -325,6 +326,8 @@ recorded to MCAP and replayed.
 <!-- docs-index end -->
 
 ## Install
+
+Step by step, with ROS 2 Lyrical itself, checks and fixes: [Installing Lagrange](docs/guide/install.md).
 
 The packages are built as `ros-lyrical-*` debs; until they are published on the ROS buildfarm,
 build them yourself from a clone of this repository and install them on any Ubuntu 26.04 machine

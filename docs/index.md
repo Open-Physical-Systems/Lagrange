@@ -31,6 +31,7 @@ More in the [feature videos](videos/README.md).
 
 | You want to | Read |
 |---|---|
+| Install it | [Installing Lagrange](guide/install.md): ROS 2 Lyrical, then from source, as debs or in a container |
 | See it run in five minutes | [Tutorial: an AMR in a warehouse](guide/tutorial-amr.md) |
 | Fly a drone, or test your own | [Tutorial: a quadcopter](guide/tutorial-drone.md), then [Test your own drone](guide/tutorial-custom-drone.md) |
 | Load your own robot | [The run file](guide/run-file.md) and [The `lagrange` command](guide/cli.md) |
@@ -43,6 +44,7 @@ More in the [feature videos](videos/README.md).
 :caption: User guide
 
 guide/README
+guide/install
 guide/tutorial-amr
 guide/tutorial-drone
 guide/tutorial-custom-drone

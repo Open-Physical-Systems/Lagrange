@@ -2,7 +2,8 @@
 
 | Page | What it covers |
 |---|---|
-| [Tutorial: an AMR in a warehouse](tutorial-amr.md) | Run, watch, drive over ROS 2, record, substitute a domain, add a module, Nav2. Start here |
+| [Installing Lagrange](install.md) | ROS 2 Lyrical, then Lagrange from source, as .deb packages or in a container; checks and fixes. Start here |
+| [Tutorial: an AMR in a warehouse](tutorial-amr.md) | Run, watch, drive over ROS 2, record, substitute a domain, add a module, Nav2. Then here |
 | [Tutorial: a quadcopter, from hover to a PX4 mission](tutorial-drone.md) | The sample quadcopter's files and site, hover, gusty wind, PX4 SITL in lockstep, a low battery |
 | [Tutorial: test your own drone, step by step](tutorial-custom-drone.md) | The Holybro X500 V2 from a hover to live computed air: overlay, teleop, blade elements, downwash, a building, checks |
 | [Tutorial: a robot's power system from a schematic](tutorial-power.md) | A SPICE netlist named from your URDF, seen in the viewer and checked by hand |
