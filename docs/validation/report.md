@@ -54,6 +54,10 @@ published curves only, which is risk R12 in `docs/plan/risks.md`.
 
 ## Since v1.0 (to 2026-11-03)
 
+`tools/ci/realism.sh` runs every check in this section that has measured data or a published
+reference, and writes the numbers to one page (`realism.md`); the nightly workflow's `realism`
+job runs it.
+
 The models added after the v1.0 release, each with its reference, result and test. Where the
 reference is our own OpenFOAM run, that is a check between two models, not against the air.
 
