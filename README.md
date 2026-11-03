@@ -186,6 +186,16 @@ recorded to MCAP and replayed.
 
 </details>
 
+<details><summary>Physics reference (5)</summary>
+
+- [Battery](docs/physics/battery.md)
+- [Downwash](docs/physics/downwash.md)
+- [Physics reference](docs/physics/index.md)
+- [Motors](docs/physics/motors.md)
+- [Rotors](docs/physics/rotors.md)
+
+</details>
+
 <details><summary>Domains and physics (15)</summary>
 
 - [Domain design documents](docs/design/domains/README.md)

@@ -13,6 +13,7 @@ BEGIN = "<!-- docs-index begin: written by tools/ci/docs_index.py -->"
 END = "<!-- docs-index end -->"
 GROUPS = (
     ("User guide", "docs/guide"),
+    ("Physics reference", "docs/physics"),
     ("Domains and physics", "docs/design/domains"),
     ("Viewer UI design", "docs/design/ui"),
     ("Design", "docs/design"),
@@ -22,6 +23,9 @@ GROUPS = (
     ("Videos", "docs/videos"),
     ("Design proposals (RFCs)", "rfcs"),
 )
+# The documentation site's own menu page and build output (tools/docs/build.sh), not documents.
+SITE_ONLY = ("docs/index.md",)
+SITE_BUILD = "docs/_build/"
 
 
 def title_of(path: Path) -> str:
@@ -40,6 +44,8 @@ def section() -> str:
     for folder in ("docs", "rfcs"):
         for path in sorted((ROOT / folder).rglob("*.md")):
             relative = path.relative_to(ROOT).as_posix()
+            if relative in SITE_ONLY or relative.startswith(SITE_BUILD):
+                continue
             if any(relative.startswith(f + "/") for _, f in GROUPS):
                 documents[group_of(relative)].append(f"- [{title_of(path)}]({relative})")
             else:

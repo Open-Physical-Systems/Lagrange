@@ -344,9 +344,9 @@ the rotor models against the NeuroBEM flights (627 MB, downloaded once).
 
 | Effect | Why not | What to use instead |
 |---|---|---|
-| Vortex ring state | the built-in controller caps descent at 2 m/s | PX4 or ArduPilot SITL (`tools/ci/px4_mission.sh`) |
+| Vortex ring state, fully | `bem` models it, but the built-in controller caps descent at 2 m/s, about 0.3 of the Holybro's hover induced velocity (6.4 m/s); the effect is strongest near 1 | PX4 or ArduPilot SITL (`tools/ci/px4_mission.sh`) |
 | A second drone under it | a robot added with `--add-robot` isn't flown and falls | `DownwashPair` tests in step 7 |
-| Ceiling effect | no sample world has an overhang | — |
+| Ceiling effect | it is modelled, but no sample world has an overhang to fly under | a world of your own with a fixed box overhead |
 | Power-line EMI | the Holybro overlay has no `EmiSusceptibilityAPI_1` | `lagrange profiles/examples/quad_x500_power_line.yaml --robot assets/robots/quad_x500/quad_x500_emi.usda --world assets/worlds/power_line/power_line.usda` |
 
 ## Your own drone

@@ -202,6 +202,10 @@ and resource lookup only. It does not depend on `rclcpp`, so it starts without a
 | typos | pre-commit | TODO(verify) | MIT or Apache-2.0 (TODO(verify)) | |
 | reuse | apt | 5.0.2 | mixed, includes GPL-3.0-or-later | Tool only |
 | commitizen | PyPI via pre-commit | 4.19.2 | MIT | Replaces commitlint (Node) (Q13) |
+| Sphinx | PyPI (`tools/docs/requirements.txt`) | 9.2.0 (2026-10-21) | BSD-2-Clause (PyPI, checked 2026-11-03) | Builds the documentation site (`docs/conf.py`, `tools/docs/build.sh`); not shipped. Chosen over Material for MkDocs, whose fixes end on 2026-11-05, and its successor Zensical, still alpha (0.0.74) |
+| MyST-Parser | PyPI | 5.1.0 | MIT | The site's Markdown, math and heading anchors |
+| Furo | PyPI | 2025.12.19 | MIT | The site's theme (pulls sphinx-basic-ng, beautifulsoup4, accessible-pygments) |
+| sphinxcontrib-mermaid | PyPI | 2.1.1 | BSD-2-Clause | Draws the ```mermaid blocks; the pages load Mermaid 11.12.1 (MIT) from jsDelivr in the reader's browser, and the math MathJax (Apache-2.0). Nothing of it is in the product |
 | release-please | GitHub Action | v17.11.2 | Apache-2.0 | Runs on GitHub's runners, not on developer machines |
 | ccache, sccache | apt | 4.12.3, 0.13.0 | GPL-3.0, Apache-2.0 (TODO(verify)) | Tools only |
 | libabigail (`abidiff`) | apt (TODO(verify)) | — | — | ABI checks from v0.9 |
