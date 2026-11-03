@@ -5,6 +5,8 @@ builds it from what the rotors already computed (`rotor/<j>/thrust`, `induced_ve
 `thrust_axis`). It runs whenever the run has rotors and an air density; the profile's
 `aerodynamics.downwash: false` turns it off.
 
+![Airflow particles under a hovering quadcopter, and the air's speed through it](../imgs/drone-downwash.png)
+
 Two models are available, picked by `aerodynamics.downwash_model`:
 
 | Model | What it is | Cost | Where |
@@ -64,6 +66,8 @@ measured its peak at 1.7–1.8 R from the axis, at about 1.9 times the hover ind
 just above the ground. The model scales that by the speed and width of the jet that actually
 arrives, so a higher drone gives a weaker, wider ring.
 
+![Coming down to half a metre: the outwash ring spreads wide](../videos/drone_low_altitude.mp4)
+
 ### 5. Buildings
 
 The scenery's fixed boxes are obstacles:
@@ -77,12 +81,18 @@ The scenery's fixed boxes are obstacles:
   near rotors took about 2 % more air and the far ones about 1.3 % less. The drone tilts
   towards the wall unless the controller corrects it.
 
+![OpenFOAM, which the wall fit comes from: the quadcopter 2 m up beside a 12 m building](../imgs/cfd-hover-wall-0.25.png)
+
+![The fitted model in a run: beside the building and over its roof](../videos/drone_building.mp4)
+
 ### 6. The fountain under a low drone
 
 Low over the ground, each rotor's jet hits the ground before merging. The four outwashes meet
 under the frame and push it up. The model adds that push as a share of the thrust, fitted to
 our OpenFOAM runs of the sample at 0.5 to 2 m: 12.7 % of the thrust at one diagonal up,
 fading to nothing by four.
+
+![OpenFOAM, the quadcopter 0.5 m up: the jets meet under it and turn up](../imgs/cfd-hover-low.png)
 
 ### 7. Who feels it
 
@@ -108,6 +118,12 @@ Here the air is computed rather than fitted. The box follows the drone, and each
 actuator disc that pushes on the air in its cells. The jets merging, the outwash and the
 fountain then come out of the flow itself. Outside the box, or without a hardware GPU, the
 fitted model is used.
+
+![Live air: hovering, then down to half a metre](../videos/drone_live_air.mp4)
+
+![The live box against OpenFOAM, 2 m up](../imgs/lbm-hover-open.png)
+
+![The live box against OpenFOAM, 0.5 m up](../imgs/lbm-hover-low.png)
 
 On an RTX 4060 Laptop GPU, at 4 cm cells, the box alone keeps up with real time, and a whole run
 of the hovering sample goes at about 0.75× real time. 3 cm cells match OpenFOAM best but run at

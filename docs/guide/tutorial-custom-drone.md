@@ -8,6 +8,10 @@ air. The same steps work for any multirotor of yours: swap in your URDF and over
 You need Lagrange built and the Holybro's meshes fetched once
 (`ros2 run lagrange_assets fetch_assets holybro_x500_v2`).
 
+![Airflow particles under a hovering quadcopter, and the air's speed through it](../imgs/drone-downwash.png)
+
+The videos below are of the sample quadcopter, `quad_x500`; the Holybro does the same.
+
 ## The whole path at a glance
 
 ```mermaid
@@ -244,6 +248,10 @@ flowchart TD
 - **Wind:** `lagrange set wind_speed=4 wind_from=270`, and the wake leans downwind.
 - **Low hover:** fly down to about 0.5 m. The outwash ring gets wider and faster.
 
+![The air under a hovering quadcopter: particles in 3D and its speed through the drone, then leaning in wind](../videos/drone_downwash.mp4)
+
+![Coming down to half a metre: the outwash ring spreads wide](../videos/drone_low_altitude.mp4)
+
 ## Step 5 · Downwash beside a building
 
 ```bash
@@ -274,6 +282,8 @@ flowchart LR
 - **Over the roof:** climb with `t` and fly over the roof. The wake stops on the roof and spreads
   over it instead of reaching the ground.
 
+![Beside a 12 m building and over its roof: the wake hugs the wall and spreads on the roof](../videos/drone_building.mp4)
+
 ## Step 6 · Live computed air (RTX GPU)
 
 ```bash
@@ -297,6 +307,8 @@ flowchart LR
 - **Speed:** it runs at about 0.75× real time on an RTX laptop GPU.
 - **Fountain:** fly down to 0.5 m. The four jets meet under the drone and some air rises up
   between them (the fountain). Steps 4 and 5 can't show this.
+![Live air: a lattice Boltzmann box round the drone, hovering, then down to half a metre where the jets meet under it and rise](../videos/drone_live_air.mp4)
+
 - **Fallback:** without a hardware GPU it prints `the live air box needs a hardware GPU` and
   uses step 4's model.
 

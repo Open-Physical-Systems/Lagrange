@@ -1,0 +1,30 @@
+/* The site's additions to the Furo theme (docs/conf.py). */
+pre.mermaid {
+  background: none;
+  border: none;
+  text-align: center;
+  overflow-x: auto;
+}
+pre.mermaid > svg {
+  max-width: 100%;
+  height: auto;
+}
+video.doc-video {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  border-radius: 6px;
+}
+p.doc-video-caption {
+  margin-top: 0.3em;
+  font-size: 0.9em;
+  color: var(--color-foreground-secondary);
+}
+td video.doc-video {
+  min-width: 220px;
+}
+/* Pictures in a table (the home page's gallery) fill their cells evenly. */
+td img {
+  width: 100%;
+  height: auto;
+}

@@ -4,6 +4,8 @@ Lagrange is an open-source (Apache-2.0), GPU-accelerated robot simulator for ROS
 Ubuntu 26.04. It runs rigid-body physics, electrical, thermal, aerodynamics, weather, EMI and
 sensors together, and you can turn each one off or swap it for a simpler stand-in.
 
+![The sample sedan driving round the city block junction among simulated traffic](imgs/sedan-city.gif)
+
 ```mermaid
 flowchart LR
     R["Your robot<br/>URDF, SDFormat, MJCF, USD"] --> S
@@ -13,6 +15,17 @@ flowchart LR
     S --> ROS["ROS 2<br/>/tf /odom /imu /scan ..."]
     S --> PY["Python<br/>lagrange.Simulation"]
 ```
+
+## A few things it does
+
+| | |
+|---|---|
+| ![A Holybro X500 V2 flying over Zurich](imgs/x500-zurich.gif) | ![A Lexus RX 450h in Nishi-Shinjuku, Tokyo](imgs/lexus-tokyo.gif) |
+| A Holybro X500 V2 over Zurich, a world built from open data | A Lexus RX 450h in Nishi-Shinjuku, Tokyo |
+| ![Airflow particles under a hovering quadcopter](imgs/drone-downwash.png) | ![People walking round the sample AMR, seen by its lidars](imgs/people-warehouse.gif) |
+| The air under a hovering quadcopter, live | People walking round the AMR, seen by its lidars |
+
+More in the [feature videos](videos/README.md).
 
 ## Where to start
 
