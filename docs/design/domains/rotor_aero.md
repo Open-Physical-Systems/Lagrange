@@ -511,3 +511,45 @@ drone's centre and 0.3–0.5 m/s more down than a lone rotor: OpenFOAM's hover c
 by about 1% (543–564 rad/s) where the fitted model holds them constant.
 
 ![Live air: hovering, then down to half a metre](../../videos/drone_live_air.mp4)
+
+## 9. Against measured flight: NeuroBEM
+
+Bauersfeld, Kaufmann, Foehn, Sun and Scaramuzza ("NeuroBEM: Hybrid Aerodynamic Quadrotor Model",
+RSS 2021) flew a 0.772 kg racing quadrotor (Armattan Chameleon 6" frame, 0.13 m arms, 5.1" three-
+blade propellers) for 75 minutes in a Vicon hangar at up to 65 km/h and published the logs at
+400 Hz: body velocity, angular rate, acceleration and the four measured motor speeds
+([dataset](https://rpg.ifi.uzh.ch/NeuroBEM.html); no licence stated, so it is downloaded, never
+committed). From the measured motion the force and torque on the vehicle are m·a and
+J·dω/dt + ω × Jω; `lagrange_rotor_replay` computes what Lagrange's rotors make from the measured
+motor speeds and motion, and `tools/validation/neurobem.sh` downloads the data, checks its SHA-256
+and runs the authors' 13 held-out test segments. Errors as their Table II gives them (RMS, N and
+N·m; F and M over the three axes):
+
+| Model | Fxy | Fz | Mxy | Mz | F | M |
+|---|---|---|---|---|---|---|
+| Their quadratic fit (Table II "Fit") | 1.536 | 1.381 | 0.104 | 0.033 | 1.486 | 0.087 |
+| Their blade-element model (Table II "BEM") | 0.803 | 1.265 | 0.090 | 0.017 | 0.982 | 0.074 |
+| Lagrange `coefficients`, CT 0.179 and CP 0.0022 fitted to the other 234 segments | 1.356 | 1.642 | 0.109 | 0.006 | 1.458 | 0.089 |
+| Lagrange `bem`, their measured blade geometry, nothing fitted | 1.142 | 2.088 | 0.115 | 0.009 | 1.524 | 0.094 |
+| Lagrange `bem`, blade angle +2.0° fitted to the other segments | 1.113 | 1.141 | 0.128 | 0.010 | 1.122 | 0.105 |
+
+The propeller (`assets/propellers/neurobem_5in_3blade_*.prop.yaml`) has the radius, blade angle
+(21.77° at the axis, −11° to the tip) and chord (17 to 7 mm) the authors measured; its sections
+are our low-Reynolds-number NACA 6412, an assumption (theirs are not published, and their lift and
+drag coefficients were identified for their own model, which has no tip loss). One parameter is
+fitted, as they fitted theirs on a test stand.
+
+- **The coefficient model is their quadratic fit**: 1.46 N against 1.49 N.
+- **`bem` cuts the force error by a quarter** (1.12 N, 15 % of the weight), most of it in Fz as
+  the vehicle climbs, descends and flies fast through its own inflow, and is best of all on yaw.
+- **It is 14 % behind their blade-element model on force, 41 % on Mxy.** The difference is in
+  the plane of the disc: they model blade flapping on a hinge spring identified from video of the
+  spinning propeller (coning, and its forward and sideways tilt in edgewise flow); ours are rigid
+  blades with a hub moment from the advancing blade's lift (aerodynamics.md §2.1). Neither model
+  has the frame's drag or the rotors' interference with each other.
+- **Unfitted, the geometry alone gives 1.52 N**: the 2° is the gap between a guessed section and
+  the real one, about what a NACA chart's zero-lift angle is uncertain by.
+
+Owed: blade flapping (coning and tilt), the frame's drag, a per-axis comparison of moments. The
+arm geometry and spin directions are from their trajectory code (`setupKingfisher.m`) and the
+logs; the rotors' height above the centre of mass is taken as zero.
