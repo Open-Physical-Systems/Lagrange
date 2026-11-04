@@ -70,6 +70,12 @@ click away): it applies at once, and the run goes on.
   can be typed in. Rain and fog act on the sensors (lidars, cameras), the surface's friction and
   the air's density; they don't push the drone.
 
+Or one click: the **Presets** tab beside Environment has whole weathers (clear and calm,
+breezy, strong wind, light rain, heavy rain, thunderstorm, fog, snow). Each sets the
+temperature, the air, rain, fog, snow and the wind's speed, and starts the weather if it was
+off; the wind keeps the direction you gave it. You can change any value after in the
+Environment tab.
+
 The viewer shows the pressure and humidity it sent (the server does not report them back), so
 a viewer opened later shows them empty.
 

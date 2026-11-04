@@ -160,6 +160,7 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         const ImGuiID right = ImGui::DockBuilderSplitNode(
             centre, ImGuiDir_Right, fraction(300.0F, size.x - px(320.0F)), nullptr, &centre);
         ImGui::DockBuilderDockWindow("###EnvironmentState", left);
+        ImGui::DockBuilderDockWindow("###EnvironmentPresets", left);
         ImGui::DockBuilderDockWindow("###FieldSlice", centre);
         ImGui::DockBuilderDockWindow("Overlays", right);
     } else if (workspace == Workspace::Ros2) {

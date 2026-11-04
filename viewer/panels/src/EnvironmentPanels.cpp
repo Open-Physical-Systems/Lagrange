@@ -159,8 +159,17 @@ std::optional<double> liveRow(const char* label, LiveField& field, const char* u
     return std::nullopt;
 }
 
+/// What this viewer sent of the site that the server does not report back (the air the weather
+/// needs), and the preset applied last; shared by the Environment and Presets tabs.
+struct SentSite {
+    std::optional<double> pressureHpa;
+    std::optional<double> humidityPercent;
+    std::string preset;  // the preset applied last; cleared by a value typed by hand
+};
+
 class EnvironmentPanel final : public Panel {
 public:
+    explicit EnvironmentPanel(std::shared_ptr<SentSite> sent) : sent_(std::move(sent)) {}
     [[nodiscard]] const char* title() const override { return "Environment"; }
     [[nodiscard]] Workspace workspace() const override { return Workspace::Environment; }
 
@@ -216,6 +225,7 @@ public:
             if (const auto v =
                     liveRow("ambient", ambient_, "°C", "the air's temperature at the site")) {
                 sendSite(context, "temperature", *v + 273.15);
+                sent_->preset.clear();
             }
             ImGui::Unindent(pad);
         }
@@ -227,13 +237,19 @@ public:
             // The air the weather needs: not sent back by the server, so the panel holds what
             // it sent.
             // While it runs, a change goes at once; before, Start sends them together.
+            pressure_.follow(sent_->pressureHpa, "%.1f");
+            humidity_.follow(sent_->humidityPercent, "%.0f");
             if (const auto v = liveRow("pressure", pressure_, "hPa", "sea level is about 1013");
                 v && weatherRuns) {
                 sendSite(context, "pressure", *v * 100.0);
+                sent_->pressureHpa = *v;
+                sent_->preset.clear();
             }
             if (const auto v = liveRow("humidity", humidity_, "%", "relative humidity, 0 to 100");
                 v && weatherRuns) {
                 sendSite(context, "relative_humidity", *v / 100.0);
+                sent_->humidityPercent = *v;
+                sent_->preset.clear();
             }
             if (!weatherRuns) {
                 widgets::Caption("The weather runs once the site has its air: an ambient");
@@ -245,12 +261,16 @@ public:
                 if (widgets::PrimaryButton("Start weather")) {
                     sendSite(context, "pressure", *hPa * 100.0);
                     sendSite(context, "relative_humidity", *percent / 100.0);
+                    sent_->pressureHpa = *hPa;
+                    sent_->humidityPercent = *percent;
                 }
+                widgets::Caption("Or pick a preset in the Presets tab.");
                 ImGui::EndDisabled();
             } else {
                 rain_.follow(info.rainMmPerH, "%.1f");
                 if (const auto v = liveRow("rain rate", rain_, "mm/h", "0 for none")) {
                     sendSite(context, "rain_rate", *v / kMmPerHourPerMps);
+                    sent_->preset.clear();
                 }
                 fog_.follow(
                     info.fogVisibilityM > 0.0 ? std::optional(info.fogVisibilityM) : std::nullopt,
@@ -258,6 +278,7 @@ public:
                 if (const auto v = liveRow("fog visibility", fog_, "m",
                                            "how far you can see; 10000 or more is clear air")) {
                     sendSite(context, "visibility", *v);
+                    sent_->preset.clear();
                 }
                 row("dust", "mg/m³", "%.1f", info.dustMgPerM3);
                 // Surface wetness, 0 dry to 1 standing water, as a meter.
@@ -295,6 +316,7 @@ public:
             if ((applied & 1) != 0) {
                 if (const auto v = windSpeed_.number()) {
                     sendSite(context, "wind_speed", *v);
+                    sent_->preset.clear();
                 }
             }
             if ((applied & 2) != 0) {
@@ -376,7 +398,100 @@ public:
 private:
     static constexpr double kMmPerHourPerMps = 3.6e6;  // mm/h in 1 m/s
 
+    std::shared_ptr<SentSite> sent_;
     LiveField ambient_, pressure_, humidity_, rain_, fog_, windSpeed_, windFrom_, gravity_;
+};
+
+// --- presets: a whole weather in one click -----------------------------------------------
+
+/// A weather: every site value it sets (the wind's direction stays as it is). The numbers are
+/// examples of each kind of weather, picked inside published bands, not measurements.
+struct WeatherPreset {
+    const char* name;
+    const char* description;
+    double temperatureC;
+    double pressureHpa;
+    double humidityPercent;
+    double rainMmPerH;
+    double visibilityM;  // fog: how far one can see
+    double snowMmPerH;   // as water
+    double snowCover;    // 0 bare ground .. 1 covered
+    double windMps;      // mean, 10 m up
+};
+
+// Sources of the bands: wind, the Beaufort scale (WMO No. 306 / Met Office): force 4 "moderate
+// breeze" 5.5–7.9 m/s, force 6 "strong breeze" 10.8–13.8, force 8 "gale" 17.2–20.7. Rain, the
+// AMS Glossary of Meteorology: light under 2.5 mm/h, heavy over 7.6 mm/h; a thunderstorm's
+// downpour 50 mm/h is illustrative. Fog, WMO No. 8: visibility under 1000 m; 200 m is thick fog,
+// illustrative. Clear air is given 20 km of visibility. Snow 1 mm/h as water, the --season
+// winter value. Pressure 1013.25 hPa is the ICAO standard atmosphere at sea level; temperatures
+// and humidities are illustrative for each weather.
+constexpr std::array<WeatherPreset, 8> kPresets{{
+    {"Clear and calm", "20 °C, dry, no wind", 20.0, 1013.25, 50.0, 0.0, 20000.0, 0.0, 0.0, 0.0},
+    {"Breezy", "7 m/s wind (Beaufort 4), dry", 20.0, 1013.25, 50.0, 0.0, 20000.0, 0.0, 0.0, 7.0},
+    {"Strong wind", "12 m/s wind (Beaufort 6), dry", 18.0, 1010.0, 55.0, 0.0, 20000.0, 0.0, 0.0,
+     12.0},
+    {"Light rain", "2 mm/h, 3 m/s wind, 15 °C", 15.0, 1008.0, 90.0, 2.0, 10000.0, 0.0, 0.0, 3.0},
+    {"Heavy rain", "25 mm/h, 6 m/s wind, 15 °C", 15.0, 1004.0, 95.0, 25.0, 5000.0, 0.0, 0.0, 6.0},
+    {"Thunderstorm", "50 mm/h, 18 m/s wind (gale)", 18.0, 1000.0, 95.0, 50.0, 3000.0, 0.0, 0.0,
+     18.0},
+    {"Fog", "200 m visibility, 1 m/s wind, 10 °C", 10.0, 1018.0, 100.0, 0.0, 200.0, 0.0, 0.0, 1.0},
+    {"Snow", "1 mm/h snow, ground covered, −3 °C", -3.0, 1015.0, 85.0, 0.0, 8000.0, 1.0, 1.0, 3.0},
+}};
+
+class PresetsPanel final : public Panel {
+public:
+    explicit PresetsPanel(std::shared_ptr<SentSite> sent) : sent_(std::move(sent)) {}
+    [[nodiscard]] const char* title() const override { return "Presets"; }
+    [[nodiscard]] Workspace workspace() const override { return Workspace::Environment; }
+
+    void draw(PanelContext& context) override {
+        const bool open = ImGui::Begin("Presets###EnvironmentPresets");
+        if (!open) {
+            ImGui::End();
+            return;
+        }
+        if (!context.client.environment()) {
+            emptyState(context);
+            ImGui::End();
+            return;
+        }
+        widgets::Caption("A whole weather in one click: the temperature, the air, rain, fog,");
+        widgets::Caption("snow and the wind's speed. The wind keeps its direction.");
+        ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+        const float width = ImGui::GetContentRegionAvail().x;
+        for (const WeatherPreset& preset : kPresets) {
+            if (widgets::OptionCard(preset.name, preset.name, preset.description,
+                                    sent_->preset == preset.name, ImVec2(width, px(58.0F)))) {
+                apply(context, preset);
+            }
+            ImGui::Dummy(ImVec2(0.0F, px(2.0F)));
+        }
+        if (!sent_->preset.empty()) {
+            widgets::Caption("Values typed in the Environment tab change it from there.");
+        }
+        ImGui::End();
+    }
+
+private:
+    static constexpr double kMmPerHourPerMps = 3.6e6;  // mm/h in 1 m/s
+
+    void apply(PanelContext& context, const WeatherPreset& p) {
+        // The air first, so that the weather runs before rain and fog are given to it.
+        sendSite(context, "temperature", p.temperatureC + 273.15);
+        sendSite(context, "pressure", p.pressureHpa * 100.0);
+        sendSite(context, "relative_humidity", p.humidityPercent / 100.0);
+        sendSite(context, "rain_rate", p.rainMmPerH / kMmPerHourPerMps);
+        sendSite(context, "visibility", p.visibilityM);
+        sendSite(context, "snow_rate", p.snowMmPerH / kMmPerHourPerMps);
+        sendSite(context, "snow_cover", p.snowCover);
+        sendSite(context, "wind_speed", p.windMps);
+        sent_->pressureHpa = p.pressureHpa;
+        sent_->humidityPercent = p.humidityPercent;
+        sent_->preset = p.name;
+    }
+
+    std::shared_ptr<SentSite> sent_;
 };
 
 // --- a slice of the chosen field ----------------------------------------------------------
@@ -744,7 +859,9 @@ private:
 std::vector<std::unique_ptr<Panel>> createEnvironmentPanels() {
     auto view = std::make_shared<EnvironmentView>();
     std::vector<std::unique_ptr<Panel>> panels;
-    panels.push_back(std::make_unique<EnvironmentPanel>());
+    auto sent = std::make_shared<SentSite>();
+    panels.push_back(std::make_unique<EnvironmentPanel>(sent));
+    panels.push_back(std::make_unique<PresetsPanel>(sent));
     panels.push_back(std::make_unique<FieldSlicePanel>(view));
     panels.push_back(std::make_unique<OverlaysPanel>(view));
     return panels;
