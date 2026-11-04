@@ -105,6 +105,16 @@ flowchart LR
   no wake; one water body is drawn as water, others as glass; the sun has a fixed place; no textures;
   about 15 ms a frame at 1080p on an Iris Xe. Camera sensors draw colour with the same `gpu::RealisticRenderer` on a
   GPU (invariant 13); a software device keeps `mesh.slang`, and depth and instance ids always do.
+  Rain and snow (`falling`, `fallingKind` in the shader): the run's rain from EnvironmentState and
+  its snow from the signals `env/snow_rate` and `env/snow_cover` (the environment message has no
+  snow; no protocol change) fall through the world as drops on a lattice that moves with the wind
+  and their fall speed (rain at Atlas's speed over Marshall–Palmer drops, as the aerodynamics
+  domain has it; snow at 1 m/s), walked along each pixel's ray up to what it sees, 22 m at most
+  (18 m for snow). Drops are streaks of a 1/30 s exposure, flakes swaying dots; how many are drawn
+  grows with the rate (a drawing choice: real rain has thousands of drops per m³). With Summer
+  picked, falling rain brings the rainy season's look and snow (or a third of the ground under it)
+  the winter's (`effectiveSeason`); a season picked by hand stays. Camera sensors do not see the
+  falling drops yet (their fog veil and lens drops are the sensors domain's).
 - An id buffer (`R32_UINT`, prim id) is rendered for the pixel under the cursor only (scissored
   1×1 readback) for picking.
 - MSAA 4× on Tier 1 and 2; off on lavapipe.

@@ -66,8 +66,11 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
     view.tanHalfX = view.tanHalfY * aspect;
     view.near = camera.nearPlane;
     gpu::RealisticSettings settings;
-    settings.season = static_cast<int>(options.season);
+    settings.season = static_cast<int>(effectiveSeason(options));
     settings.windSpeed = options.windSpeed;
+    settings.rainMmPerH = options.rainMmPerH;
+    settings.snowMmPerH = options.snowMmPerH;
+    settings.wind = options.wind;
     settings.seconds = frame != nullptr ? static_cast<double>(frame->simTimeNs) * 1e-9 : 0.0;
     return renderer_.record(commands, draws_, view, settings, meshes, color, depth);
 }

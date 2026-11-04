@@ -56,6 +56,11 @@ struct RealisticSettings {
     int season{0};          // 0 summer, 1 fall, 2 winter, 3 rainy
     float windSpeed{0.0F};  // m/s: how rough water is drawn
     double seconds{0.0};    // sim time
+    // What falls, drawn in the world: rain in mm/h, snow in mm/h of water, carried by the wind
+    // (m/s, world x and y, where it blows to).
+    float rainMmPerH{0.0F};
+    float snowMmPerH{0.0F};
+    std::array<float, 2> wind{};
 };
 
 /// The photographs of surfaces, shared by the renderers on a device.

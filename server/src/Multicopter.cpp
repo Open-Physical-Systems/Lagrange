@@ -201,6 +201,15 @@ Status MulticopterController::declare(const WorldView& world, const ModuleConfig
     twist.frame = "world_local";
     twist.feedback = true;
     twist_ = d.input(twist);
+    designDensity_ = *rho;
+    densityIn_ = SignalId{};
+    if (config.get<bool>("weather_air").value_or(false)) {  // rotor_aero::kWeatherAirKey
+        SignalSpec density;
+        density.name = "env/air_density";
+        density.unit = units::kg_per_m3;
+        density.feedback = true;
+        densityIn_ = d.input(density);
+    }
     return {};
 }
 
@@ -331,16 +340,22 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         torque[i] = inertia_[i] * (-wa * wa * errorR[i] - 2.0 * settings_.damping * wa * omega[i]);
     }
 
-    // Mixer and each rotor's speed loop.
+    // Mixer and each rotor's speed loop, for the air the rotors are in.
+    double airShare = 1.0;
+    if (densityIn_.valid()) {
+        if (const double rho = bus.read(densityIn_); rho > 0.0) {
+            airShare = rho / designDensity_;
+        }
+    }
     for (std::size_t i = 0; i < rotors_.size(); ++i) {
         const Rotor& r = rotors_[i];
         const std::array<double, 4>& m = mixer_[i];
         const double f =
             std::max(0.0, m[0] * thrust + m[1] * torque[0] + m[2] * torque[1] + m[3] * torque[2]);
-        const double speed = r.spin * std::sqrt(f / r.thrustPerOmega2);
+        const double speed = r.spin * std::sqrt(f / (r.thrustPerOmega2 * airShare));
         const double now = bus.read(r.velocity);
         // The propeller's drag at the wanted speed, plus a proportional correction.
-        const double feedForward = r.spin * r.torquePerOmega2 * speed * speed;
+        const double feedForward = r.spin * r.torquePerOmega2 * airShare * speed * speed;
         bus.write(r.command, feedForward + settings_.speedGain * (speed - now));
     }
     return {};

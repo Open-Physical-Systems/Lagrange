@@ -67,8 +67,20 @@ click away): it applies at once, and the run goes on.
 - **Weather**: it starts once the site has its air. Give the **ambient** temperature (Time and
   sun), the **pressure** (about 1013 hPa at sea level) and the **humidity**, then press **Start
   weather**. Then **rain rate** (mm/h) and **fog visibility** (m; 10000 or more is clear air)
-  can be typed in. Rain and fog act on the sensors (lidars, cameras), the surface's friction and
-  the air's density; they don't push the drone.
+  can be typed in. Rain and fog act on the sensors (lidars, cameras) and the surface's friction.
+
+What the weather does to the drone:
+
+- **The air's density** comes from the temperature, pressure and humidity, and the rotors fly
+  in it: in hot, thin air they spin faster for the same lift (about 5690 rpm at 40 °C and 950
+  hPa, 4990 rpm at −10 °C and 1030 hPa, for the sample X500) and the battery drains faster.
+- **Rain and snow** push it with the drops that hit it. That is real but small: heavy rain (25
+  mm/h) pushes the X500 down about 4 mN against its 20 N weight. The wind is what you will feel.
+- **Wind and gusts** as above. In the thunderstorm preset's 18 m/s (at 10 m; about 13 m/s at
+  2 m) the simulated controller still holds within about 0.2 m, leaning hard into it.
+
+In the realistic view (the default on a GPU) rain and snow fall through the scene, carried by
+the wind, and the ground turns wet or white with them.
 
 Or one click: the **Presets** tab beside Environment has whole weathers (clear and calm,
 breezy, strong wind, light rain, heavy rain, thunderstorm, fog, snow). Each sets the

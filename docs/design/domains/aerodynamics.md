@@ -151,6 +151,31 @@ it went to `joint/{j}/load_torque`, a joint torque whose reaction also reached t
 cancelled the motors' at steady speed: a held yaw rate then drove one pair of rotors nearly to a
 stop; `Multicopter.TakesOffByHandWithEveryStickAtOnce` flies the case.)
 
+### 3.1 The weather on a drone
+
+When the weather runs (the site's temperature, pressure and humidity are given), three things
+reach a multirotor, all through signals:
+
+- **Air density.** `rotor_aero`, the aerodynamics domain and the built-in multicopter controller
+  read the weather's `env/air_density` (moist air from temperature, pressure and humidity) every
+  step instead of the fixed `air_density` (config `weather_air`, set by the server when the
+  built-in weather or its clear substitute runs). Thrust and torque scale with it, so a rotor
+  turns faster in hot, thin air: ω ∝ ρ^−½ at the same thrust. The controller scales its mixer by
+  the same density, which is what a flight controller's hover-thrust estimate ends up doing (an
+  ideal one: no estimation lag). Measured on the sample quadcopter hovering 2 m up: 5690 rpm at
+  40 °C and 950 hPa (1.048 kg/m³), 4990 rpm at −10 °C and 1030 hPa (1.362 kg/m³), the ratio 1.140
+  being √(1.362/1.048).
+- **Rain and snow.** `env/rain_rate` and `env/snow_rate` push every AeroAPI_1 link with the
+  momentum of the drops that stop on it (`impactForce`, Aerodynamics.hpp: Marshall and Palmer
+  drop sizes, the fall speed of Atlas et al. 1973, inelastic impact as Haines and Luers 1983).
+  It is small, as it is in the air: 25 mm/h on the sample's 0.09 m² top is 3.7 mN against its
+  20 N weight; flying at 10 m/s through it adds a few mN of drag. Water lying on the frame, rain
+  on the propellers' lift and icing are not modelled.
+- **Wind.** As before: the mean wind, Dryden gusts and the weather's wind grid (§2).
+
+The viewer draws the same rain and snow in the realistic view: drops falling at the same speed
+through the world and carried by the run's wind (viewer.md §4.1).
+
 ## 4. Step size
 
 Aerodynamics: default 1 ms for drones (same as physics), 10 ms for ground vehicles. Rotor aero:
@@ -193,6 +218,9 @@ profile validator rejects it with that explanation.
 | `bem` edgewise H-force | classical rotor theory, `C_H = σ·c_d0·μ/4` (Johnson 1980 §5.4; Leishman 2006 §3.4), blades that only drag, μ = 0.1 | 1 % |
 | `bem` in wind | moving through still air equals standing still in the wind; the sample quadcopter holds its spot in 8 m/s with gusts (`quad_x500_gusty.yaml` with `fidelity: bem`) | 1e-12; within 0.1 m |
 | Ground effect | Cheeseman–Bennett curve and published small-rotor ground-effect measurements | 10 % for `z/R` in 0.5–3 |
+| Rain's fall speed | Atlas et al. 1973's v(D) against Gunn and Kinzer 1949's measured drops (1–4 mm); its mass-weighted mean over Marshall–Palmer drops, closed form against integration | 0.15 m/s; 1e-3 m/s |
+| Water in falling rain | Marshall and Palmer 1948, W = 0.089·R^0.84 g/m³ (1–100 mm/h); ours keeps the given rate at Atlas's speed, theirs carries more | within 20 %, lower (11–17 %) |
+| Rain's push, weather's air density | the momentum flux and drag by formula, through the module | 1e-9 N |
 | Field sampling | analytic field baked to VDB | interpolation error bound from grid spacing |
 | Hover power and step response of the sample quadcopter | flight log of a comparable real vehicle (to be sourced; Q16) | reported, with tolerance set from data spread |
 

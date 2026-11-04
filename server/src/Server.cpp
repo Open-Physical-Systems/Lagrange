@@ -827,6 +827,7 @@ struct Server::Impl {
             }
         }
         bool weatherInRun = false;  // the sensors see the weather when it runs
+        bool weatherAir = false;    // the built-in weather (or its clear substitute) runs
         std::optional<double> siteTemperature = settings.ambientTemperatureK;  // K, thermal cameras
         std::map<std::string, ConfigValue, std::less<>> groundDust;  // --weather's ground dust
         // The weather (domains/weather.md): the site's atmosphere from --weather, a WeatherAPI_1
@@ -872,6 +873,7 @@ struct Server::Impl {
             if (weather::Weather::hasSite(WorldView(robot.world), config)) {
                 if (!(off("weather") && addPluginSubstitute("weather", weather))) {
                     next->add(std::make_unique<weather::Weather>(off("weather")), config);
+                    weatherAir = true;  // its env/air_density, rain_rate and snow_rate
                 }
                 weatherInRun = true;
             }
@@ -885,7 +887,8 @@ struct Server::Impl {
             !off("aerodynamics")) {
             ModuleConfigData aero;
             aero.values.insert(settings.aerodynamics.begin(), settings.aerodynamics.end());
-            aero.values["weather"] = weatherInRun;  // its wind grid, if any
+            aero.values["weather"] = weatherInRun;    // its wind grid, if any
+            aero.values["weather_air"] = weatherAir;  // its air density, rain and snow
             for (const auto& [key, value] : groundDust) {
                 aero.values[key] = value;
             }
@@ -914,6 +917,8 @@ struct Server::Impl {
             air.values.emplace("wind", windInRun);
             air.values.emplace("rotor_air", downwashInRun);
             air.values.emplace(rotor_aero::kAirDensityKey, *settings.airDensityKgM3);
+            // With the weather the air's density is its own (temperature, pressure, humidity).
+            air.values.emplace(rotor_aero::kWeatherAirKey, weatherAir);
             next->add(std::make_unique<rotor_aero::RotorAero>(off("rotor_aero")),
                       ModuleConfig(air));
             if (options.ardupilotPort) {

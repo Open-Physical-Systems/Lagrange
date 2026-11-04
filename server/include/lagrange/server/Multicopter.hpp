@@ -91,6 +91,10 @@ private:
     double heading_{0.0};               // rad, the yaw it holds
     bool airborne_{false};              // waitForCommand: taken off, not landed since
     SignalId pose_, twist_;
+    // With the weather (config "weather_air"): its air density against the one the mixer was
+    // built for, as a flight controller's hover-thrust estimate follows the air (an ideal one).
+    SignalId densityIn_;
+    double designDensity_{0.0};
 };
 
 }  // namespace lagrange::server

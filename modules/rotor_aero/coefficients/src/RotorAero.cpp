@@ -90,6 +90,12 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
         wind.feedback = true;
         windIn_ = d.input(wind);
     }
+    densityIn_ = SignalId{};
+    if (config.get<bool>(kWeatherAirKey).value_or(false)) {
+        SignalSpec density = scalar("env/air_density", units::kg_per_m3);
+        density.feedback = true;
+        densityIn_ = d.input(density);
+    }
     std::map<std::string, std::shared_ptr<const PropellerTable>> tables;  // by file
     groundEffect_ = !ideal_ && config.get<bool>("ground_effect").value_or(true);
 
@@ -280,6 +286,11 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
     const double dt = context.dt.seconds();
     // The exact first-order response over the step to a thrust held at its new value.
     const double keep = lag_ > 0.0 ? std::exp(-dt / lag_) : 0.0;
+    if (densityIn_.valid()) {
+        if (const double rho = bus.read(densityIn_); rho > 0.0) {
+            rho_ = rho;  // the weather's air, once it has written it
+        }
+    }
     for (Rotor& r : rotors_) {
         const double omega = bus.read(r.velocity);
         const std::span<const double> v = bus.readN(r.pose);
