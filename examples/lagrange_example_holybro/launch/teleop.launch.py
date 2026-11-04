@@ -4,6 +4,14 @@
 #   ros2 launch lagrange_example_holybro teleop.launch.py
 #   ros2 launch lagrange_example_holybro teleop.launch.py teleop:=false   # teleop in your terminal
 #   ros2 launch lagrange_example_holybro teleop.launch.py viewer:=false once:=true
+#   ros2 launch lagrange_example_holybro teleop.launch.py air:=live      # air computed live (GPU)
+#   ros2 launch lagrange_example_holybro teleop.launch.py airflow:=false # no particles, no slice
+#
+# The downwash: with rotors and an air density, the aerodynamics domain always builds the wake
+# (air:=fitted, the fitted model of rotor_aero.md §2). air:=live runs the profile
+# quad_x500_live_air.yaml instead: the air in a lattice Boltzmann box that follows the drone, on
+# the GPU (rotor_aero.md §8), with blade-element rotors, which need propeller files. The viewer
+# shows it as particles (--overlays airflow) and a vertical slice of the air speed (--slice).
 #
 # The meshes come from PX4's repository, fetched once: ros2 run lagrange_assets fetch_assets
 # holybro_x500_v2. The rotors run only when the site's air density is given, GNSS only with its
@@ -22,6 +30,8 @@ from launch_ros.actions import Node
 # The viewer finds the server on this socket, one per example so that they can run side by side.
 ENDPOINT = "unix:/tmp/lagrange_example_holybro.sock"
 ROBOT = "holybro_x500_v2"
+# A 10 inch two-blade propeller, the Holybro's size, for the blade-element rotors of air:=live.
+PROPELLER = "generic_10in_2blade"
 
 
 def asset_dir() -> Path:
@@ -43,6 +53,21 @@ def terminal(command: str) -> list[str] | None:
     if shutil.which("xterm"):
         return ["xterm", "-e", "bash", "-c", command]
     return None
+
+
+def bem_overlay(assets: str) -> str:
+    """The robot's overlay with a propeller file for each rotor, written next to the socket."""
+    lines = []
+    for line in Path(f"{assets}/robots/{ROBOT}/{ROBOT}.overlay.yaml").read_text().splitlines():
+        lines.append(line)
+        key, _, hand = line.strip().partition(": ")
+        if key == "aero:rotor:direction":
+            indent = line[: len(line) - len(line.lstrip())]
+            prop = f"{assets}/propellers/{PROPELLER}_{hand}.prop.yaml"
+            lines.append(f"{indent}aero:rotor:propeller: {prop}")
+    out = Path(f"/tmp/lagrange_example_{ROBOT}_bem.overlay.yaml")
+    out.write_text("\n".join(lines) + "\n")
+    return str(out)
 
 
 def teleop(context) -> list:
@@ -74,28 +99,33 @@ def setup(context):
         )
     assets = get_package_share_directory("lagrange_assets")
     flag = {k: LaunchConfiguration(k).perform(context) == "true" for k in ("viewer", "once")}
+    air = LaunchConfiguration("air").perform(context)
+    if air not in ("fitted", "live"):
+        raise RuntimeError(f"air:={air}: fitted or live")
+    site = [
+        "--world",
+        f"{assets}/worlds/open_field/open_field.usda",
+        "--air-density",
+        "1.225",
+        "--geo-origin",
+        "47.397742,8.545594,488",
+        "--listen",
+        ENDPOINT,
+    ]
+    robot = f"{assets}/robots/{ROBOT}/{ROBOT}.urdf"
+    if air == "fitted":
+        # Lagrange itself: a plain ROS 2 executable with command-line options. The overlay adds
+        # motors, the 4S battery, rotors with APC 10x4.7 coefficients, and the sensors.
+        overlay = f"{assets}/robots/{ROBOT}/{ROBOT}.overlay.yaml"
+        server = ["lagrange_server", "--robot", robot, "--overlay", overlay, *site]
+    else:
+        # `lagrange run PROFILE`: the same server with a profile applied, here the live air box.
+        profiles = get_package_share_directory("lagrange_profiles")
+        profile = f"{profiles}/examples/quad_x500_live_air.yaml"
+        server = ["lagrange", "run", profile, "--robot", robot, "--overlay", bem_overlay(assets)]
+        server += site
     actions = [
-        # Lagrange itself: a plain ROS 2 executable with command-line options.
-        Node(
-            package="lagrange_server",
-            executable="lagrange_server",
-            arguments=[
-                "--robot",
-                f"{assets}/robots/{ROBOT}/{ROBOT}.urdf",
-                # Motors, the 4S battery, rotors with APC 10x4.7 coefficients, and the sensors.
-                "--overlay",
-                f"{assets}/robots/{ROBOT}/{ROBOT}.overlay.yaml",
-                "--world",
-                f"{assets}/worlds/open_field/open_field.usda",
-                "--air-density",
-                "1.225",
-                "--geo-origin",
-                "47.397742,8.545594,488",
-                "--listen",
-                ENDPOINT,
-            ],
-            output="screen",
-        ),
+        ExecuteProcess(cmd=["ros2", "run", "lagrange_server", *server], output="screen"),
         # Your code: an ordinary ROS 2 node, here one that reports the flight. When it finishes,
         # so does the launch.
         Node(
@@ -110,20 +140,12 @@ def setup(context):
         # Not a ROS node: a plain process, so no --ros-args are appended. The follow camera stays
         # 4 m behind the drone, 20 degrees above it. (--scope SIGNAL,... would open the
         # Signals workspace with those plotted instead of the 3D view.)
+        viewer = ["lagrange_viewer", "--connect", ENDPOINT, "--follow", "4,20"]
+        if LaunchConfiguration("airflow").perform(context) == "true":
+            field = "aero/air_box" if air == "live" else "aero/wind_speed"
+            viewer += ["--overlays", "airflow", "--slice", f"{field}:xz"]
         actions.append(
-            ExecuteProcess(
-                cmd=[
-                    "ros2",
-                    "run",
-                    "lagrange_viewer",
-                    "lagrange_viewer",
-                    "--connect",
-                    ENDPOINT,
-                    "--follow",
-                    "4,20",
-                ],
-                output="screen",
-            )
+            ExecuteProcess(cmd=["ros2", "run", "lagrange_viewer", *viewer], output="screen")
         )
     if LaunchConfiguration("teleop").perform(context) == "true" and not flag["once"]:
         actions += teleop(context)
@@ -138,6 +160,16 @@ def generate_launch_description():
                 "teleop",
                 default_value="true",
                 description="open teleop_twist_keyboard in a new terminal window",
+            ),
+            DeclareLaunchArgument(
+                "air",
+                default_value="fitted",
+                description="the downwash: fitted (the wake model) or live (computed, GPU)",
+            ),
+            DeclareLaunchArgument(
+                "airflow",
+                default_value="true",
+                description="show the air in the viewer: particles and a slice of its speed",
             ),
             DeclareLaunchArgument(
                 "once", default_value="false", description="stop when the node has its result"

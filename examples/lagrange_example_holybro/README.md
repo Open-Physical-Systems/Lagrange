@@ -20,6 +20,28 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -p stamped:=true
 ros2 launch lagrange_example_holybro teleop.launch.py viewer:=false once:=true  # headless: stops at its result
 ```
 
+## The downwash
+
+The viewer shows the air the rotors push down from the start: particles in the 3D view, coloured
+by speed, and a vertical slice of the air speed through the drone in the **Environment**
+workspace (top bar → Environment). Two ways to compute it:
+
+```bash
+ros2 launch lagrange_example_holybro teleop.launch.py              # air:=fitted, the default
+ros2 launch lagrange_example_holybro teleop.launch.py air:=live    # computed live, RTX GPU
+ros2 launch lagrange_example_holybro teleop.launch.py airflow:=false   # don't draw it
+```
+
+| `air:=` | What computes the air | Speed |
+|---|---|---|
+| `fitted` | the wake model fitted to measurements (jet, ground outwash, walls), from the rotors' thrust | real time, any machine |
+| `live` | a lattice Boltzmann box 3 m across that follows the drone, with blade-element rotors (`quad_x500_live_air.yaml`, a 10 inch propeller) | about 0.4–0.75× real time on an RTX 4060 Laptop; the fitted model without a hardware GPU |
+
+Fly low (`b`) to see the outwash ring spread on the ground, and forward (`i`) to see the wake
+lean back. How each is computed: [Downwash](../../docs/physics/downwash.md).
+
+## Keys
+
 Keys, with the teleop window focused, once the drone hovers:
 
 | Key | What it does | `/cmd_vel` |
@@ -52,7 +74,7 @@ Where to look: `launch/teleop.launch.py` (the server's options, the viewer's fol
 teleop window: ptyxis, gnome-terminal, konsole or xterm, whichever is installed),
 `scripts/watch.py`.
 
-What it shows: `--robot` with `--overlay`, `lagrange-asset://` meshes, `--air-density`,
+What it shows: `--robot` with `--overlay`, `lagrange run PROFILE` (air:=live), `--overlays airflow`, `--slice`, `lagrange-asset://` meshes, `--air-density`,
 `--geo-origin`, `--follow`, `teleop_twist_keyboard` with `stamped:=true`.
 
 For your own drone, change `ROBOT` and the overlay in the launch file. The
