@@ -238,5 +238,42 @@ TEST(Multicopter, WaitsOnTheGroundForACommandAndLands) {
     EXPECT_LT(bus.read(thrust), 0.05);
 }
 
+// From the ground with every stick at once (forward, sideways, up and turning, as a radio's
+// sticks often are at take-off): it lifts off straight, then flies, instead of the set point
+// running away sideways while its legs still hold it.
+TEST(Multicopter, TakesOffByHandWithEveryStickAtOnce) {
+    auto robot = loadModel(LAGRANGE_TEST_QUAD_USDA);
+    ASSERT_TRUE(robot) << robot.error();
+    Scheduler scheduler(SchedulerOptions{.deterministic = false});
+    scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+    ModuleConfigData power;
+    power.dt = 50_us;
+    power.values["exchange_step"] = 0.001;
+    scheduler.add(std::make_unique<electrical::ElectricalNetwork>(), ModuleConfig(power));
+    ModuleConfigData air;
+    air.values[rotor_aero::kAirDensityKey] = 1.225;
+    scheduler.add(std::make_unique<rotor_aero::RotorAero>(), ModuleConfig(air));
+    std::optional<MulticopterController::FlightCommand> command =
+        MulticopterController::FlightCommand{1.8, -0.75, 0.48, 0.27};
+    MulticopterController::Settings flight;
+    flight.waitForCommand = true;
+    scheduler.add(std::make_unique<MulticopterController>(flight, [&command] { return command; }),
+                  ModuleConfig(air));
+    scheduler.add(std::make_unique<services::WrenchSum>());
+    auto wired = scheduler.wire(WorldView(robot->world));
+    ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    const SignalBus& bus = scheduler.bus();
+    const SignalId pose = bus.find("body/base_link/pose");
+    const std::array<double, 3> start{bus.readN(pose)[0], bus.readN(pose)[1], bus.readN(pose)[2]};
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{4'000'000'000}).ok());
+    const std::span<const double> p = bus.readN(pose);
+    // 0.48 m/s up for 4 s, about 1.9 m; and well away from where it started, along its arc.
+    EXPECT_NEAR(p[2] - start[2], 1.9, 0.3);
+    EXPECT_GT(std::hypot(p[0] - start[0], p[1] - start[1]), 4.0);
+    // Upright: the body's z axis within 30° of vertical (q = w, x, y, z).
+    const double up = 1.0 - 2.0 * (p[4] * p[4] + p[5] * p[5]);
+    EXPECT_GT(up, std::cos(std::numbers::pi / 6.0));
+}
+
 }  // namespace
 }  // namespace lagrange::server

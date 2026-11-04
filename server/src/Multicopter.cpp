@@ -257,8 +257,13 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
     Vec3 wanted{};  // m/s, world: the velocity the set point moves at
     if (const std::optional<FlightCommand> command = commands_ ? commands_() : std::nullopt) {
         const double dt = context.dt.seconds();
-        double forward = command->forwardMps;
-        double left = command->leftMps;
+        // Taking off or landing by hand, near the ground, only up and down count: moving the set
+        // point sideways while the legs still hold the drone would tip it over on the ground.
+        const bool nearGround =
+            settings_.waitForCommand && position[2] < home_[2] + settings_.minHeightM;
+        double forward = nearGround ? 0.0 : command->forwardMps;
+        double left = nearGround ? 0.0 : command->leftMps;
+        const double yawRate = nearGround ? 0.0 : command->yawRateRadps;
         const double planar = std::hypot(forward, left);
         if (planar > settings_.maxHorizontalMps) {
             forward *= settings_.maxHorizontalMps / planar;
@@ -284,9 +289,7 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
             airborne_ = false;  // landed: rotors off until the next climb
             return grounded();
         }
-        heading_ += std::clamp(command->yawRateRadps, -settings_.maxYawRateRadps,
-                               settings_.maxYawRateRadps) *
-                    dt;
+        heading_ += std::clamp(yawRate, -settings_.maxYawRateRadps, settings_.maxYawRateRadps) * dt;
     }
     Vec3 force{};
     for (std::size_t i = 0; i < 3; ++i) {

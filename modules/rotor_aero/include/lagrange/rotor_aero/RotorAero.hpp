@@ -64,8 +64,10 @@ inline constexpr double kCeilingReach = 6.0;       // ×R
 /// rotor/<j>/induced_velocity (m/s, momentum theory at the current thrust), rotor/<j>/thrust_axis
 /// (unit, world: where the thrust points, for the aerodynamics domain's downwash), the thrust as
 /// body/<c>/wrench/rotor (summed by WrenchSum into body/<c>/external_wrench; force applied at
-/// the link's origin, torque about its centre of mass) and the shaft torque as
-/// joint/<j>/load_torque. Default step 1 ms.
+/// the link's origin, torque about its centre of mass) with the air's shaft torque in it, about
+/// the joint axis: the air turns the propeller alone, from outside, so the frame feels only the
+/// motor's reaction (which is how a multirotor yaws). joint/<j>/load_torque stays declared and
+/// is zero. Default step 1 ms.
 ///
 /// At the `bem` fidelity (config "fidelity": "bem") every rotor needs a propeller file
 /// (aero:rotor:propeller): its loads come from blade-element momentum theory on the propeller's

@@ -182,15 +182,17 @@ TEST(RotorAero, ThePropellerPushesItsLinkAlongTheTiltedAxis) {
     for (std::size_t i = 0; i < 3; ++i) {
         EXPECT_NEAR(w[i], thrust * axis[i], 1e-9) << i;
     }
-    // Lever arm: the force acts at the link's origin, 2 cm from its centre of mass.
+    // Lever arm: the force acts at the link's origin, 2 cm from its centre of mass; and the
+    // air's shaft torque, against the rotation, about the joint axis, on the propeller alone
+    // (not a joint torque, whose reaction would reach the frame).
+    const double shaft = rig.read("rotor/prop_joint/aero_torque");
+    EXPECT_LT(shaft, 0.0);
+    EXPECT_EQ(rig.read("joint/prop_joint/load_torque"), 0.0);
     const std::array<double, 3> com = rotate(rig.plant->pose.orientation, {0.02, 0.0, 0.0});
     const std::array<double, 3> f{w[0], w[1], w[2]};
-    EXPECT_NEAR(w[3], -(com[1] * f[2] - com[2] * f[1]), 1e-9);
-    EXPECT_NEAR(w[4], -(com[2] * f[0] - com[0] * f[2]), 1e-9);
-    EXPECT_NEAR(w[5], -(com[0] * f[1] - com[1] * f[0]), 1e-9);
-    // The shaft torque loads the joint against its rotation.
-    EXPECT_LT(rig.read("joint/prop_joint/load_torque"), 0.0);
-    EXPECT_EQ(rig.read("joint/prop_joint/load_torque"), rig.read("rotor/prop_joint/aero_torque"));
+    EXPECT_NEAR(w[3], -(com[1] * f[2] - com[2] * f[1]) + shaft * axis[0], 1e-9);
+    EXPECT_NEAR(w[4], -(com[2] * f[0] - com[0] * f[2]) + shaft * axis[1], 1e-9);
+    EXPECT_NEAR(w[5], -(com[0] * f[1] - com[1] * f[0]) + shaft * axis[2], 1e-9);
     // Momentum theory: v = sqrt(T / (2ρA)).
     EXPECT_NEAR(rig.read("rotor/prop_joint/induced_velocity"),
                 std::sqrt(thrust / (2.0 * kRho * std::numbers::pi * kRadius * kRadius)), 1e-9);
@@ -325,7 +327,9 @@ double bemThrust(const World& world, double omega, double climb = 0.0,
         *wrench = rig.wrench();
     }
     if (load != nullptr) {
-        *load = rig.read("joint/prop_joint/load_torque");
+        // The air's shaft torque about the joint axis (applied on the propeller, in its wrench).
+        EXPECT_EQ(rig.read("joint/prop_joint/load_torque"), 0.0);
+        *load = rig.read("rotor/prop_joint/aero_torque");
     }
     return rig.read("rotor/prop_joint/thrust");
 }
