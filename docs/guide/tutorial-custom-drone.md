@@ -157,7 +157,8 @@ sequenceDiagram
 ## Step 2 · Fly it by hand
 
 One launch file does steps 1 and 2 together: the server, the viewer following the drone, and
-teleop in a window of its own. It is the example package
+teleop in a window of its own. There the drone waits on the ground until you press `t`, and `b`
+lands it. It is the example package
 [`lagrange_example_holybro`](../../examples/lagrange_example_holybro/README.md):
 
 ```bash

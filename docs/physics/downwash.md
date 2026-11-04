@@ -143,5 +143,14 @@ a third of real time; 5 cm and coarser merge the jets too early to be worth it.
 Not modelled: inflow above the disc, swirl, unsteadiness, rotors of one drone affecting each
 other, and scenery other than boxes and the ground plane.
 
+The fitted model is **quasi-steady**: each step it builds the wake afresh from the rotors' thrust
+and the drone's velocity, with no memory. A wake leans back in forward flight (§3), but the air a
+moving drone left behind goes still at once instead of drifting down for a few seconds, and a
+sudden stop moves the whole wake at once. The live box (`lbm`) carries the air on from step to
+step, so it has that memory, inside its 3 m box.
+
+The viewer's airflow particles are tracers moved through this air, sent 20 times a second in a
+5.4 m box round the drone. They draw the field; they don't push anything themselves.
+
 The derivation, every constant and its source are in
 [rotor_aero.md](../design/domains/rotor_aero.md) §2, the live box in §8.

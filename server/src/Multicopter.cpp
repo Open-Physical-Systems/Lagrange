@@ -14,6 +14,12 @@ namespace {
 
 constexpr double kGravity = 9.80665;  // m/s², standard gravity (the world's gravity is along −z)
 constexpr const char* kAirDensityKey = "air_density";  // as lagrange::rotor_aero
+// Landing by hand (Settings::waitForCommand): the set point may go this far below the start, so
+// the drone presses onto the ground, and it counts as landed this close to its start height and
+// this slow vertically.
+constexpr double kLandBelowM = 0.05;  // m
+constexpr double kLandedM = 0.03;     // m
+constexpr double kLandedMps = 0.05;   // m/s
 
 using Vec3 = std::array<double, 3>;
 using Mat3 = std::array<Vec3, 3>;  // rows
@@ -215,14 +221,27 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         homed_ = true;
         setpoint_ = {home_[0], home_[1], home_[2] + settings_.altitudeM};
         heading_ = 0.0;
+        airborne_ = false;
     }
-    if (context.t.seconds() < settings_.takeoffAfterS) {
+    const Mat3 rot = rotation({p[3], p[4], p[5], p[6]});  // world from body
+    const auto grounded = [&]() {
         for (const Rotor& r : rotors_) {
             bus.write(r.command, 0.0);
         }
-        return {};
+        return Status{};
+    };
+    if (settings_.waitForCommand && !airborne_) {
+        // On the ground until a command asks to climb; then the set point starts where it is.
+        const std::optional<FlightCommand> command = commands_ ? commands_() : std::nullopt;
+        if (!command || command->upMps <= 0.0) {
+            return grounded();
+        }
+        airborne_ = true;
+        setpoint_ = position;
+        heading_ = std::atan2(rot[1][0], rot[0][0]);
+    } else if (!settings_.waitForCommand && context.t.seconds() < settings_.takeoffAfterS) {
+        return grounded();
     }
-    const Mat3 rot = rotation({p[3], p[4], p[5], p[6]});  // world from body
     const Vec3 velocity{v[0], v[1], v[2]};
     const Vec3 omegaWorld{v[3], v[4], v[5]};
     const Vec3 omega{dot({rot[0][0], rot[1][0], rot[2][0]}, omegaWorld),
@@ -252,9 +271,18 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         for (std::size_t i = 0; i < 3; ++i) {
             setpoint_[i] += wanted[i] * dt;
         }
-        if (setpoint_[2] < home_[2] + settings_.minHeightM) {
-            setpoint_[2] = home_[2] + settings_.minHeightM;
+        // Commanded by hand it may come down to the ground (a little below its start, so that
+        // it sits); else it stays minHeightM up.
+        const double floor =
+            settings_.waitForCommand ? home_[2] - kLandBelowM : home_[2] + settings_.minHeightM;
+        if (setpoint_[2] < floor) {
+            setpoint_[2] = floor;
             wanted[2] = 0.0;
+        }
+        if (settings_.waitForCommand && command->upMps < 0.0 && position[2] < home_[2] + kLandedM &&
+            std::abs(velocity[2]) < kLandedMps) {
+            airborne_ = false;  // landed: rotors off until the next climb
+            return grounded();
         }
         heading_ += std::clamp(command->yawRateRadps, -settings_.maxYawRateRadps,
                                settings_.maxYawRateRadps) *
@@ -324,6 +352,7 @@ Status MulticopterController::saveState(StateWriter& writer) const {
         writer.put(v);
     }
     writer.put(heading_);
+    writer.put(airborne_);
     return {};
 }
 
@@ -343,6 +372,7 @@ Status MulticopterController::restoreState(StateReader& reader) {
         ok = ok && reader.get(v);
     }
     ok = ok && reader.get(heading_);
+    ok = ok && reader.get(airborne_);
     return ok ? Status{} : Status::error(StatusCode::InvalidConfig, "controller state truncated");
 }
 

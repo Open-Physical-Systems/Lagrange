@@ -1,5 +1,6 @@
-# Your own drone, the Holybro X500 V2 (PX4's model), over the open field. It takes off by itself
-# and hovers 2 m up; teleop_twist_keyboard flies it over /cmd_vel, and the viewer follows it.
+# Your own drone, the Holybro X500 V2 (PX4's model), on the open field's landing pad. It waits on
+# the ground (--no-demo) until teleop_twist_keyboard asks it to climb (t), then flies by /cmd_vel,
+# and lands when brought down (b); the viewer follows it.
 #
 #   ros2 launch lagrange_example_holybro teleop.launch.py
 #   ros2 launch lagrange_example_holybro teleop.launch.py teleop:=false   # teleop in your terminal
@@ -111,6 +112,8 @@ def setup(context):
         "47.397742,8.545594,488",
         "--listen",
         ENDPOINT,
+        # On the ground until /cmd_vel asks it to climb, instead of taking off after 1 s.
+        "--no-demo",
     ]
     robot = f"{assets}/robots/{ROBOT}/{ROBOT}.urdf"
     if air == "fitted":

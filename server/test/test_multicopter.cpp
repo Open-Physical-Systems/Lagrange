@@ -183,5 +183,60 @@ TEST(Multicopter, FliesWhereItsVelocityCommandsSay) {
     EXPECT_NEAR(fly(3.0)[2] - turned[2], 1.0, 0.1);
 }
 
+// --no-demo (Settings::waitForCommand): it stays on the ground with its rotors still until a
+// command asks to climb, flies by commands only, and lands and stops its rotors when brought
+// down.
+TEST(Multicopter, WaitsOnTheGroundForACommandAndLands) {
+    auto robot = loadModel(LAGRANGE_TEST_QUAD_USDA);
+    ASSERT_TRUE(robot) << robot.error();
+    Scheduler scheduler(SchedulerOptions{.deterministic = false});
+    scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+    ModuleConfigData power;
+    power.dt = 50_us;
+    power.values["exchange_step"] = 0.001;
+    scheduler.add(std::make_unique<electrical::ElectricalNetwork>(), ModuleConfig(power));
+    ModuleConfigData air;
+    air.values[rotor_aero::kAirDensityKey] = 1.225;
+    scheduler.add(std::make_unique<rotor_aero::RotorAero>(), ModuleConfig(air));
+    std::optional<MulticopterController::FlightCommand> command;
+    MulticopterController::Settings flight;
+    flight.waitForCommand = true;
+    scheduler.add(std::make_unique<MulticopterController>(flight, [&command] { return command; }),
+                  ModuleConfig(air));
+    scheduler.add(std::make_unique<services::WrenchSum>());
+    auto wired = scheduler.wire(WorldView(robot->world));
+    ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    const SignalBus& bus = scheduler.bus();
+    const SignalId pose = bus.find("body/base_link/pose");
+    const SignalId thrust = bus.find("rotor/rotor_1_joint/thrust");
+    double t = 0.0;
+    const auto fly = [&](double seconds) {
+        t += seconds;
+        EXPECT_TRUE(scheduler.stepUntil(SimTime{static_cast<std::int64_t>(t * 1e9)}).ok());
+        return bus.readN(pose)[2];
+    };
+    const double ground = fly(0.001);
+    // No command, and a command that does not climb: it stays down, its rotors still.
+    EXPECT_NEAR(fly(3.0), ground, 0.01);
+    command = MulticopterController::FlightCommand{1.0, 0.0, 0.0, 0.0};
+    EXPECT_NEAR(fly(1.0), ground, 0.01);
+    EXPECT_NEAR(bus.read(thrust), 0.0, 1e-6);
+    // Up at 1 m/s for 2 s, then hold: it climbs from where it was, to about 2 m.
+    command = MulticopterController::FlightCommand{0.0, 0.0, 1.0, 0.0};
+    (void)fly(2.0);
+    command.reset();
+    const double up = fly(3.0);
+    EXPECT_NEAR(up - ground, 2.0, 0.25);
+    EXPECT_NEAR(fly(2.0), up, 0.05);  // holds without commands
+    // Down at 1 m/s until it is on the ground: it lands and its rotors stop.
+    command = MulticopterController::FlightCommand{0.0, 0.0, -1.0, 0.0};
+    EXPECT_NEAR(fly(6.0), ground, 0.03);
+    // Its rotors coast down once the motors stop: 2 s on, under 1 % of a hover's thrust each
+    // (about 5 N), and it stays down with no command.
+    command.reset();
+    EXPECT_NEAR(fly(2.0), ground, 0.03);
+    EXPECT_LT(bus.read(thrust), 0.05);
+}
+
 }  // namespace
 }  // namespace lagrange::server
