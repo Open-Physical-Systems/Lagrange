@@ -17,7 +17,7 @@ ros2 launch lagrange_example_holybro teleop.launch.py        # the Holybro, with
 | Topic | Type | When |
 |---|---|---|
 | `/cmd_vel` (`topic`) | `geometry_msgs/TwistStamped` (`stamped:=false`: `Twist`) | 50 times a second while armed; one zero command when disarmed, then nothing |
-| `/tx16s/joy` | `sensor_msgs/Joy` | always, 50 times a second: axes = the 16 controls in the order below, −1 to +1; buttons = each switch at its top position |
+| `/tx16s/joy` | `sensor_msgs/Joy` | always, 50 times a second: axes = the 17 controls (roll, pitch, throttle, yaw, SA–SH, S1, S2, LS, RS, 6POS), −1 to +1; buttons = SA–SH each at its top position, then the six buttons, the lit one 1 |
 
 `/cmd_vel` is what Lagrange's built-in controllers take: forward and left (m/s, in the robot's
 heading), up (m/s) and yaw rate (rad/s, counter-clockwise). A drone run with `--no-demo` waits
@@ -31,6 +31,7 @@ on the ground until it is told to climb.
 | left stick left/right (yaw) | `angular.z`, right turns clockwise |
 | SF | arm: up is armed |
 | SA | rate: down 30 %, middle 60 %, up 100 % of full stick |
+| buttons 1–6 (6POS) | nothing in `/cmd_vel`: one position of six in `/tx16s/joy`, for your own flight modes |
 
 At full stick and full rate: 5 m/s, 2 m/s up and 1.5 rad/s, the limits of Lagrange's
 multicopter controller (`max_horizontal`, `max_vertical`, `max_yaw_rate`). Mode 2 (throttle on
@@ -48,12 +49,13 @@ Click the window so it has the keyboard.
 | `↑` `↓` `←` `→` or `I` `K` `J` `L` | pitch and roll: forward, back, left, right |
 | `R` | rate (SA) |
 | `1` to `8` | switches SA to SH |
+| `F1` to `F6` | the six buttons under the screen (6POS): the one pressed stays lit |
 | `M` | stick mode 1 or 2 |
 | `Esc` | disarm at once |
 
 A held key pushes its stick to the end in about a third of a second; let go and it springs back
 to the centre, the throttle too. The mouse drags the sticks, pots and sliders and clicks the
-switches.
+switches and the six buttons.
 
 ## From a real TX16S
 
@@ -67,7 +69,10 @@ switches.
    | Source | Ail | Ele | Thr | Rud | SF | SA | SB | SC |
 
 3. Start the remote. Its panel shows the radio's name and a bar per axis. Move each stick and
-   switch and check the right bar moves the right way; if one is on another axis, or backwards,
+   switch and check the right bar moves the right way (to use the six buttons from the radio,
+   give the 6POS one of channels 1–8 in EdgeTX's mixer, say 8 instead of SC, and pick that axis
+   for `six_pos`: in classic mode only channels 1–8 are axes, TODO(verify)); if one is on another
+   axis, or backwards,
    open **Joystick map**, pick its axis or tick **inv**, and press **Save settings**.
 
 EdgeTX's "classic" joystick mode puts channels 1 to 8 on the HID axes X, Y, Z, Rx, Ry, Rz,
@@ -90,7 +95,7 @@ file the remote reads at start. Parameters on the command line still win over it
 | `frame_id` | `base_link` | the command's header frame |
 | `odom_topic` | `/odom` | the telemetry |
 | `max_horizontal`, `max_vertical`, `max_yaw_rate` | 5.0, 2.0, 1.5 | at full stick, full rate |
-| `map.<control>.axis`, `map.<control>.invert` | the table above | the joystick map; controls: roll, pitch, throttle, yaw, SA to SH, S1, S2, LS, RS |
+| `map.<control>.axis`, `map.<control>.invert` | the table above | the joystick map; controls: roll, pitch, throttle, yaw, SA to SH, S1, S2, LS, RS, six_pos |
 | `map.deadband` | 0.03 | of full scale, round the sticks' centres |
 
 ## Headless

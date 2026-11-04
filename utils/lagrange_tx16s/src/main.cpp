@@ -100,7 +100,8 @@ public:
                 shared_.radio[control] = -1.0;
             }
         }
-        shared_.radio[Control::SA] = 0.0;  // the middle rate
+        shared_.radio[Control::SA] = 0.0;   // the middle rate
+        Keyboard::press(0, shared_.radio);  // button 1
         if (stamped) {
             stampedOut_ = create_publisher<geometry_msgs::msg::TwistStamped>(topic_, 10);
         } else {
@@ -152,11 +153,17 @@ private:
         for (const double v : channels(radio)) {
             joy.axes.push_back(static_cast<float>(v));
         }
-        // Buttons: each 2- and 3-position switch at its top position.
+        // Buttons: each 2- and 3-position switch at its top position (SA–SH), then the six
+        // buttons, the lit one 1.
         for (std::size_t i = 0; i < kControls; ++i) {
-            if (positions(static_cast<Control>(i)) > 0) {
+            const int n = positions(static_cast<Control>(i));
+            if (n == 2 || n == 3) {
                 joy.buttons.push_back(radio.value.at(i) > 0.5 ? 1 : 0);
             }
+        }
+        const int lit = sixPosButton(radio[Control::SixPos]);
+        for (int k = 0; k < kSixPositions; ++k) {
+            joy.buttons.push_back(k == lit ? 1 : 0);
         }
         joy_->publish(joy);
     }
@@ -411,6 +418,8 @@ int main(int argc, char** argv) {
                     Keyboard::toggle(static_cast<Control>(static_cast<std::size_t>(Control::SA) +
                                                           (s - SDL_SCANCODE_1)),
                                      shared.radio);
+                } else if (s >= SDL_SCANCODE_F1 && s <= SDL_SCANCODE_F6) {
+                    Keyboard::press(static_cast<int>(s - SDL_SCANCODE_F1), shared.radio);
                 } else if (s == SDL_SCANCODE_ESCAPE) {
                     shared.radio[shared.mixer.armSwitch] = -1.0;  // disarm at once
                 }

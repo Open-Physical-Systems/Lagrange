@@ -32,14 +32,23 @@ enum class Control : std::size_t {
     S2,
     LS,  ///< side sliders, −1 to +1
     RS,
+    /// The six buttons under the screen, one six-position switch (EdgeTX's 6POS): the one
+    /// pressed last stays lit, the others go out. −1 to +1 in six steps (button k at −1 + 0.4·k,
+    /// k = 0–5: EdgeTX's −100, −60, −20, 20, 60, 100).
+    SixPos,
     Count,
 };
 inline constexpr std::size_t kControls = static_cast<std::size_t>(Control::Count);
 
 [[nodiscard]] std::string_view name(Control c);
 [[nodiscard]] std::optional<Control> controlNamed(std::string_view name);
-/// The positions a switch has: 3 for SA–SE and SG, 2 for SF and SH, 0 for the others.
+/// The positions a switch has: 3 for SA–SE and SG, 2 for SF and SH, 6 for the six buttons, 0 for
+/// the others.
 [[nodiscard]] int positions(Control c);
+inline constexpr int kSixPositions = 6;
+/// Which of the six buttons (0–5) a 6POS value is, the nearest one; and a button's value.
+[[nodiscard]] int sixPosButton(double value);
+[[nodiscard]] double sixPosValue(int button);
 
 /// The position of every control, each from −1 to +1 (a stick's up and right are +1).
 struct Radio {
@@ -78,8 +87,11 @@ public:
     /// pitch and roll, the left one's throttle and yaw, whatever the mode: the keys name what
     /// they do).
     void step(double dt, Radio& radio) const;
-    /// One step of a switch: −1 → 0 → +1 → −1 for three positions, −1 ↔ +1 for two.
+    /// One step of a switch: −1 → 0 → +1 → −1 for three positions, −1 ↔ +1 for two, the next
+    /// button (after the sixth, the first) for the six buttons.
     static void toggle(Control c, Radio& radio);
+    /// Presses one of the six buttons (0–5).
+    static void press(int button, Radio& radio);
 
 private:
     std::array<bool, static_cast<std::size_t>(Key::Count)> held_{};
@@ -136,7 +148,7 @@ struct Mixer {
     [[nodiscard]] std::array<double, 4> sticks(const Radio& radio) const;
 };
 
-/// The radio's channels as an EdgeTX model sends them: 1–4 AETR, then SA–SH, S1, S2, LS, RS,
+/// The radio's channels as an EdgeTX model sends them: 1–4 AETR, then SA–SH, S1, S2, LS, RS, 6POS,
 /// each −1 to +1 (for sensor_msgs/Joy).
 [[nodiscard]] std::array<double, kControls> channels(const Radio& radio);
 

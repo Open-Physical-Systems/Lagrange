@@ -277,13 +277,34 @@ void drawRemote(Radio& radio, const Mixer& mixer, const UiState& ui, const Telem
         radio[Control::Roll] = s[2];
         radio[mode2 ? Control::Pitch : Control::Throttle] = s[3];
     }
-    // Buttons under the screen, for the look only.
-    const std::array<const char*, 4> buttons{"SYS", "MDL", "TELE", "RTN"};
-    for (std::size_t i = 0; i < buttons.size(); ++i) {
-        const ImVec2 bc(mid.x + (static_cast<float>(i) - 1.5F) * w * 0.07F, bodyA.y + h * 0.53F);
-        dl->AddRectFilled(ImVec2(bc.x - 18, bc.y - 9), ImVec2(bc.x + 18, bc.y + 9), col(kGimbal),
-                          9.0F);
-        centredText(dl, bc, col(c::t3), buttons.at(i), 10.0F);
+    // The six buttons under the screen (6POS): the lit one is the position; a click presses it.
+    const int lit = sixPosButton(radio[Control::SixPos]);
+    for (int k = 0; k < kSixPositions; ++k) {
+        const ImVec2 bc(mid.x + (static_cast<float>(k) - 2.5F) * w * 0.045F, bodyA.y + h * 0.53F);
+        const ImVec2 lo(bc.x - 15, bc.y - 11);
+        const ImVec2 hi(bc.x + 15, bc.y + 11);
+        ImGui::SetCursorScreenPos(lo);
+        const std::string id = "##6pos" + std::to_string(k);
+        ImGui::InvisibleButton(id.c_str(), ImVec2(30, 22));
+        if (ImGui::IsItemClicked()) {
+            Keyboard::press(k, radio);
+        }
+        const bool on = k == lit;
+        dl->AddRectFilled(lo, hi, col(on ? c::accent : kGimbal), 6.0F);
+        dl->AddRect(lo, hi, col(ImGui::IsItemHovered() ? c::accentBorder : kCaseEdge), 6.0F);
+        const std::string label = std::to_string(k + 1);
+        centredText(dl, bc, col(on ? c::onAccent : c::t2), label.c_str(), 12.0F);
+    }
+    centredText(dl, ImVec2(mid.x, bodyA.y + h * 0.53F + 22), col(c::t3), "6POS", 10.0F);
+    // The menu keys beside the screen, under the pots, for the look only.
+    constexpr std::array<std::array<const char*, 2>, 2> kKeys{{{"SYS", "TELE"}, {"MDL", "RTN"}}};
+    for (std::size_t row = 0; row < kKeys.size(); ++row) {
+        const float y = bodyA.y + h * (0.24F + 0.09F * static_cast<float>(row));
+        for (std::size_t side = 0; side < 2; ++side) {
+            const float x = mid.x + (side == 0 ? -1.0F : 1.0F) * w * 0.205F;
+            dl->AddRectFilled(ImVec2(x - 18, y - 9), ImVec2(x + 18, y + 9), col(kGimbal), 9.0F);
+            centredText(dl, ImVec2(x, y), col(c::t3), kKeys.at(row).at(side), 10.0F);
+        }
     }
     centredText(dl, ImVec2(mid.x, bodyB.y - h * 0.08F), col(c::t3),
                 "TX16S-style  ·  lagrange_tx16s", 11.0F);
@@ -318,6 +339,7 @@ void drawPanel(Radio& radio, Mixer& mixer, UiState& ui, const std::optional<Comm
         ImGui::TextColored(c::t2, "arrows or IJKL pitch and roll");
         ImGui::TextColored(c::t2, "Space arm (SF)  R rate (SA)");
         ImGui::TextColored(c::t2, "1-8 switches SA-SH  M stick mode");
+        ImGui::TextColored(c::t2, "F1-F6 the six buttons (6POS)");
         ImGui::TextColored(c::t3, "or drag the sticks with the mouse");
     }
 

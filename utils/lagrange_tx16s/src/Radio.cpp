@@ -8,8 +8,8 @@ namespace lagrange::tx16s {
 namespace {
 
 constexpr std::array<std::string_view, kControls> kNames{
-    "roll", "pitch", "throttle", "yaw", "SA", "SB", "SC", "SD",
-    "SE",   "SF",    "SG",       "SH",  "S1", "S2", "LS", "RS",
+    "roll", "pitch", "throttle", "yaw", "SA", "SB", "SC", "SD",      "SE",
+    "SF",   "SG",    "SH",       "S1",  "S2", "LS", "RS", "six_pos",
 };
 constexpr double kAxisFull = 32767.0;  // SDL's axis range is −32768 to 32767
 
@@ -44,9 +44,20 @@ int positions(Control c) {
         case Control::SF:
         case Control::SH:
             return 2;
+        case Control::SixPos:
+            return kSixPositions;
         default:
             return 0;
     }
+}
+
+int sixPosButton(double value) {
+    const int k = static_cast<int>(std::lround((std::clamp(value, -1.0, 1.0) + 1.0) / 0.4));
+    return std::clamp(k, 0, kSixPositions - 1);
+}
+
+double sixPosValue(int button) {
+    return -1.0 + 0.4 * std::clamp(button, 0, kSixPositions - 1);
 }
 
 void Keyboard::step(double dt, Radio& radio) const {
@@ -69,7 +80,13 @@ void Keyboard::toggle(Control c, Radio& radio) {
         v = v < -0.5 ? 0.0 : (v < 0.5 ? 1.0 : -1.0);
     } else if (positions(c) == 2) {
         v = v > 0.0 ? -1.0 : 1.0;
+    } else if (positions(c) == kSixPositions) {
+        v = sixPosValue((sixPosButton(v) + 1) % kSixPositions);
     }
+}
+
+void Keyboard::press(int button, Radio& radio) {
+    radio[Control::SixPos] = sixPosValue(button);
 }
 
 JoystickMap JoystickMap::edgetxClassic() {
@@ -100,6 +117,8 @@ void JoystickMap::apply(const std::vector<int>& axes, Radio& radio) const {
             v = v < -0.33 ? -1.0 : (v > 0.33 ? 1.0 : 0.0);
         } else if (positions(control) == 2) {
             v = v > 0.0 ? 1.0 : -1.0;
+        } else if (positions(control) == kSixPositions) {
+            v = sixPosValue(sixPosButton(v));
         } else if (control <= Control::Yaw && std::abs(v) < deadband) {
             v = 0.0;  // the sticks rest near, not at, the centre
         }

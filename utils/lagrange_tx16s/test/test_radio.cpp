@@ -55,6 +55,29 @@ TEST(Keyboard, SwitchesStepThroughTheirPositions) {
     EXPECT_DOUBLE_EQ(radio[Control::S1], 0.4);
 }
 
+TEST(SixPos, OneButtonOfSixIsLit) {
+    Radio radio;
+    for (int k = 0; k < kSixPositions; ++k) {
+        Keyboard::press(k, radio);
+        EXPECT_EQ(sixPosButton(radio[Control::SixPos]), k);
+    }
+    EXPECT_DOUBLE_EQ(sixPosValue(0), -1.0);  // EdgeTX's −100 … +100 in steps of 40
+    EXPECT_DOUBLE_EQ(sixPosValue(5), 1.0);
+    EXPECT_NEAR(sixPosValue(2), -0.2, 1e-12);
+    Keyboard::toggle(Control::SixPos, radio);  // after the sixth, the first
+    EXPECT_EQ(sixPosButton(radio[Control::SixPos]), 0);
+    Keyboard::toggle(Control::SixPos, radio);
+    EXPECT_EQ(sixPosButton(radio[Control::SixPos]), 1);
+    // From a joystick axis: the nearest of the six levels.
+    JoystickMap map;
+    map.controls.at(static_cast<std::size_t>(Control::SixPos)).axis = 0;
+    map.apply({static_cast<int>(0.21 * 32767)}, radio);  // between 3 (−0.2) and 4 (+0.2)
+    EXPECT_EQ(sixPosButton(radio[Control::SixPos]), 3);
+    EXPECT_NEAR(radio[Control::SixPos], 0.2, 1e-12);
+    map.apply({-32768}, radio);
+    EXPECT_EQ(sixPosButton(radio[Control::SixPos]), 0);
+}
+
 TEST(JoystickMap, EdgetxClassicReadsAetrAndTheSwitches) {
     const JoystickMap map = JoystickMap::edgetxClassic();
     Radio radio;
