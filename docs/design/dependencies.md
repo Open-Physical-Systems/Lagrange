@@ -116,7 +116,9 @@ Separate processes and offline tools (not linked, not required to build):
 
 `imgui_vendor` builds one static library containing ImGui core, the SDL3 platform backend, the
 Vulkan renderer backend, `imgui_freetype`, ImPlot, imgui-node-editor and ImGuizmo, all from
-pinned commits, because they must agree on one ImGui version and one `imconfig.h`.
+pinned commits, because they must agree on one ImGui version and one `imconfig.h`. It also builds
+ImGui's SDL_Renderer backend (`imgui_impl_sdlrenderer3`, same archive, MIT) for the small tools in
+`utils/` that draw in 2D with SDL's own renderer (`lagrange_tx16s`); no new dependency.
 
 ## 4. OpenUSD build plan (highest build risk)
 

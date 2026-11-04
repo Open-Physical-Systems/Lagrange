@@ -158,6 +158,14 @@ target_compile_definitions(
 )
 
 install(TARGETS lagrange_viewer RUNTIME DESTINATION lib/${PROJECT_NAME})
+# The design's theme (header only, Dear ImGui and ImPlot), for the tools in utils/ that draw
+# with it: #include <lagrange/viewer/lagrange_theme.hpp>, fonts in share/lagrange_viewer/fonts.
+install(
+    FILES app/theme/include/lagrange/viewer/lagrange_theme.hpp
+    DESTINATION include/${PROJECT_NAME}/lagrange/viewer
+)
+ament_export_include_directories("include/${PROJECT_NAME}")
+ament_export_dependencies(imgui_vendor)
 install(
     DIRECTORY assets/fonts/
     DESTINATION share/${PROJECT_NAME}/fonts
