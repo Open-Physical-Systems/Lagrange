@@ -10,7 +10,9 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -106,21 +108,55 @@ void row(const char* label, const char* unit, const char* format, double value) 
 
 // --- what the environment is --------------------------------------------------------------
 
-void siteRow(PanelContext& context, const char* label, const char* unit, const char* key,
-             double shown) {
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
-    ImGui::SameLine(px(128.0F));
-    ImGui::SetNextItemWidth(px(100.0F));
-    ImGui::PushID(key);
-    double value = shown;
-    if (ImGui::InputDouble("##site", &value, 0.0, 0.0, "%.3f",
-                           ImGuiInputTextFlags_EnterReturnsTrue)) {
-        context.client.setAttribute(kNone, std::string("site:") + key, value, false);
+/// A field of the Environment panel that changes the site while the run goes on
+/// (Server::setSite): typing does not send; Enter or leaving the field does. The text follows the
+/// server's value whenever that value changes, so what is typed stays until it is sent.
+struct LiveField {
+    std::array<char, 32> text{};
+    double lastShown{std::nan("")};
+    bool editing{false};  // typed in on the last frame: never refilled under the cursor
+
+    /// Refills the text from `shown` (nullopt: unknown, empty) when the server's value moved.
+    void follow(std::optional<double> shown, const char* format) {
+        if (editing) {
+            return;  // lastShown stays, so the server's value is shown once typing ends
+        }
+        const double value = shown.value_or(std::nan(""));
+        const bool same = (std::isnan(value) && std::isnan(lastShown)) || value == lastShown;
+        if (same) {
+            return;
+        }
+        lastShown = value;
+        if (shown) {
+            std::snprintf(text.data(), text.size(), format, *shown);
+        } else {
+            text[0] = '\0';
+        }
     }
-    ImGui::PopID();
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s", unit);
+    /// The number typed, when there is one.
+    [[nodiscard]] std::optional<double> number() const {
+        char* end = nullptr;
+        const double v = std::strtod(text.data(), &end);
+        if (end == text.data() || !std::isfinite(v)) {
+            return std::nullopt;
+        }
+        return v;
+    }
+};
+
+void sendSite(PanelContext& context, const char* key, double value) {
+    context.client.setAttribute(kNone, std::string("site:") + key, value, false);
+}
+
+/// One editable row: returns the number when it was applied this frame.
+std::optional<double> liveRow(const char* label, LiveField& field, const char* unit,
+                              const char* tooltip) {
+    (void)widgets::PropertyEdit(label, field.text.data(), field.text.size(), unit, false, tooltip);
+    field.editing = ImGui::IsItemActive();
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        return field.number();
+    }
+    return std::nullopt;
 }
 
 class EnvironmentPanel final : public Panel {
@@ -159,15 +195,12 @@ public:
             return view == nullptr || view->enabled;
         };
 
-        // The site, changed live: Enter applies, and the run goes on (Server::setSite).
-        if (widgets::SectionHeader("Site", nullptr, true, nullptr)) {
-            ImGui::Indent(pad);
-            siteRow(context, "gravity", "m/s²", "gravity", info.gravity);
-            siteRow(context, "temperature", "K", "temperature", info.ambientTemperatureK);
-            siteRow(context, "wind speed", "m/s", "wind_speed", info.windSpeed);
-            siteRow(context, "wind from", "deg", "wind_from", info.windFromDeg);
-            ImGui::Unindent(pad);
-        }
+        // Every field below with a number in it changes the site live (Server::setSite):
+        // Enter or leaving the field sends it, and the run goes on with it.
+        const bool weatherRuns = std::ranges::any_of(
+            info.fields,
+            [](const EnvironmentInfo::Field& f) { return f.domain == "weather" && f.available; });
+        const bool ambientKnown = info.ambientTemperatureK > 0.0;
 
         const ImVec4 thermal = widgets::domainColor("thermal");
         if (widgets::SectionHeader("Time and sun", nullptr, true, &thermal)) {
@@ -177,47 +210,111 @@ public:
             std::snprintf(time, sizeof(time), "%02d:%02d", minutes / 60, minutes % 60);
             widgets::PropertyRow("local time", time, nullptr);
             row("sun elevation", "°", "%.1f", info.sunElevationDeg);
-            row("ambient", "°C", "%.1f", info.ambientTemperatureK - 273.15);
+            ambient_.follow(
+                ambientKnown ? std::optional(info.ambientTemperatureK - 273.15) : std::nullopt,
+                "%.1f");
+            if (const auto v =
+                    liveRow("ambient", ambient_, "°C", "the air's temperature at the site")) {
+                sendSite(context, "temperature", *v + 273.15);
+            }
             ImGui::Unindent(pad);
         }
+
         const ImVec4 weather = widgets::domainColor("weather");
-        if (widgets::SectionHeader("Weather", domainOn("weather") ? nullptr : "domain off", true,
+        if (widgets::SectionHeader("Weather", weatherRuns ? nullptr : "domain off", true,
                                    &weather)) {
             ImGui::Indent(pad);
-            row("rain rate", "mm/h", "%.1f", info.rainMmPerH);
-            if (info.fogVisibilityM > 0.0) {
-                row("fog visibility", "m", "%.0f", info.fogVisibilityM);
-            } else {
-                widgets::PropertyRow("fog visibility", "no fog", nullptr);
+            // The air the weather needs: not sent back by the server, so the panel holds what
+            // it sent.
+            // While it runs, a change goes at once; before, Start sends them together.
+            if (const auto v = liveRow("pressure", pressure_, "hPa", "sea level is about 1013");
+                v && weatherRuns) {
+                sendSite(context, "pressure", *v * 100.0);
             }
-            row("dust", "mg/m³", "%.1f", info.dustMgPerM3);
-            // Surface wetness, 0 dry to 1 standing water, as a meter.
-            ImGui::AlignTextToFramePadding();
-            ImGui::PushStyleColor(ImGuiCol_Text, c::t2);
-            ImGui::TextUnformatted("surface wetness");
-            ImGui::PopStyleColor();
-            char wet[16];
-            std::snprintf(wet, sizeof(wet), "%.2f", info.surfaceWetness);
-            ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
-            const float width = ImGui::CalcTextSize(wet).x;
-            ImGui::PopFont();
-            ImGui::SameLine();
-            widgets::AlignRight(px(120.0F) + px(8.0F) + width + pad);
-            widgets::Meter(static_cast<float>(info.surfaceWetness), weather, px(120.0F));
-            ImGui::SameLine(0.0F, px(8.0F));
-            widgets::Mono(c::t1, "%s", wet);
+            if (const auto v = liveRow("humidity", humidity_, "%", "relative humidity, 0 to 100");
+                v && weatherRuns) {
+                sendSite(context, "relative_humidity", *v / 100.0);
+            }
+            if (!weatherRuns) {
+                widgets::Caption("The weather runs once the site has its air: an ambient");
+                widgets::Caption("temperature (above), a pressure and a humidity.");
+                const auto hPa = pressure_.number();
+                const auto percent = humidity_.number();
+                const bool ready = ambientKnown && hPa && percent;
+                ImGui::BeginDisabled(!ready);
+                if (widgets::PrimaryButton("Start weather")) {
+                    sendSite(context, "pressure", *hPa * 100.0);
+                    sendSite(context, "relative_humidity", *percent / 100.0);
+                }
+                ImGui::EndDisabled();
+            } else {
+                rain_.follow(info.rainMmPerH, "%.1f");
+                if (const auto v = liveRow("rain rate", rain_, "mm/h", "0 for none")) {
+                    sendSite(context, "rain_rate", *v / kMmPerHourPerMps);
+                }
+                fog_.follow(
+                    info.fogVisibilityM > 0.0 ? std::optional(info.fogVisibilityM) : std::nullopt,
+                    "%.0f");
+                if (const auto v = liveRow("fog visibility", fog_, "m",
+                                           "how far you can see; 10000 or more is clear air")) {
+                    sendSite(context, "visibility", *v);
+                }
+                row("dust", "mg/m³", "%.1f", info.dustMgPerM3);
+                // Surface wetness, 0 dry to 1 standing water, as a meter.
+                ImGui::AlignTextToFramePadding();
+                ImGui::PushStyleColor(ImGuiCol_Text, c::t2);
+                ImGui::TextUnformatted("surface wetness");
+                ImGui::PopStyleColor();
+                char wet[16];
+                std::snprintf(wet, sizeof(wet), "%.2f", info.surfaceWetness);
+                ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
+                const float width = ImGui::CalcTextSize(wet).x;
+                ImGui::PopFont();
+                ImGui::SameLine();
+                widgets::AlignRight(px(120.0F) + px(8.0F) + width + pad);
+                widgets::Meter(static_cast<float>(info.surfaceWetness), weather, px(120.0F));
+                ImGui::SameLine(0.0F, px(8.0F));
+                widgets::Mono(c::t1, "%s", wet);
+            }
             ImGui::Unindent(pad);
         }
         const ImVec4 aero = widgets::domainColor("aerodynamics");
         if (widgets::SectionHeader("Wind", domainOn("aerodynamics") ? nullptr : "domain off", true,
                                    &aero)) {
             ImGui::Indent(pad);
-            row("mean", "m/s", "%.1f", info.windSpeed);
-            row("direction", "°", "%.0f", info.windDirectionDeg);
+            windSpeed_.follow(info.windSpeed, "%.1f");
+            windFrom_.follow(info.windFromDeg, "%.0f");
+            const int applied = widgets::PropertyEditPair(
+                "mean",
+                {windSpeed_.text.data(), windSpeed_.text.size(), "m/s", false,
+                 "mean speed, 10 m above the ground"},
+                {windFrom_.text.data(), windFrom_.text.size(), "° from", false,
+                 "where it comes from: 0 north, 90 east, 180 south, 270 west"});
+            windSpeed_.editing = (applied & 4) != 0;
+            windFrom_.editing = (applied & 8) != 0;
+            if ((applied & 1) != 0) {
+                if (const auto v = windSpeed_.number()) {
+                    sendSite(context, "wind_speed", *v);
+                }
+            }
+            if ((applied & 2) != 0) {
+                if (const auto v = windFrom_.number()) {
+                    sendSite(context, "wind_from", std::fmod(std::fmod(*v, 360.0) + 360.0, 360.0));
+                }
+            }
             row("gust intensity", nullptr, "%.2f", info.gustIntensity);
             widgets::PropertyRow(
                 "field", info.windField.empty() ? "none — uniform wind" : info.windField.c_str(),
                 nullptr);
+            ImGui::Unindent(pad);
+        }
+
+        if (widgets::SectionHeader("Site", nullptr, false, nullptr)) {
+            ImGui::Indent(pad);
+            gravity_.follow(info.gravity, "%.3f");
+            if (const auto v = liveRow("gravity", gravity_, "m/s²", "downward; Earth 9.807")) {
+                sendSite(context, "gravity", *v);
+            }
             ImGui::Unindent(pad);
         }
         const ImVec4 emi = widgets::domainColor("emi");
@@ -275,6 +372,11 @@ public:
                                false, &radiation);
         ImGui::End();
     }
+
+private:
+    static constexpr double kMmPerHourPerMps = 3.6e6;  // mm/h in 1 m/s
+
+    LiveField ambient_, pressure_, humidity_, rain_, fog_, windSpeed_, windFrom_, gravity_;
 };
 
 // --- a slice of the chosen field ----------------------------------------------------------

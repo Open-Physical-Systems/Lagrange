@@ -55,6 +55,24 @@ once instead of drifting down for a few seconds, and a sudden stop or turn moves
 at once. `air:=live` has that memory: the air in its box is a fluid that carries on moving.
 How each is computed: [Downwash](../../docs/physics/downwash.md).
 
+## Wind and weather, from the viewer
+
+In the viewer, open the **Environment** workspace (top bar). Type a value and press Enter (or
+click away): it applies at once, and the run goes on.
+
+- **Wind**: the **mean** row has two fields, the speed in m/s and where the wind comes from in
+  degrees (0 north, 90 east, 180 south, 270 west; the world's +y is north). An east wind pushes
+  the drone west. Lagrange's controller holds its position, so it leans into the wind rather
+  than drifts: at 5 m/s the Holybro sits about 1.5 cm downwind.
+- **Weather**: it starts once the site has its air. Give the **ambient** temperature (Time and
+  sun), the **pressure** (about 1013 hPa at sea level) and the **humidity**, then press **Start
+  weather**. Then **rain rate** (mm/h) and **fog visibility** (m; 10000 or more is clear air)
+  can be typed in. Rain and fog act on the sensors (lidars, cameras), the surface's friction and
+  the air's density; they don't push the drone.
+
+The viewer shows the pressure and humidity it sent (the server does not report them back), so
+a viewer opened later shows them empty.
+
 ## Flying it
 
 With the remote (the default), click its window so it has the keyboard, then:

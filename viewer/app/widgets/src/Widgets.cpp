@@ -784,12 +784,12 @@ bool PropertyRow(const char* label, const char* value, const char* unit, bool li
     return link && clicked;
 }
 
-bool PropertyEdit(const char* label, char* buffer, std::size_t size, const char* unit, bool edited,
-                  const char* tooltip, bool numeric) {
-    ImGui::PushID(label);
-    rowLabel(label);
+namespace {
+
+/// The editable 22 px value field of PropertyEdit, `width` wide at the cursor.
+bool editField(const char* id, char* buffer, std::size_t size, const char* unit, bool edited,
+               float width, bool numeric) {
     const theme::Fonts& fonts = theme::fonts();
-    const float width = std::max(ImGui::GetContentRegionAvail().x, px(40.0F));
     const ImVec2 min = ImGui::GetCursorScreenPos();
     const ImVec2 max(min.x + width, min.y + px(22.0F));
     ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -814,17 +814,61 @@ bool PropertyEdit(const char* label, char* buffer, std::size_t size, const char*
     ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0, 0, 0, 0));
     ImGui::SetNextItemWidth(width - unitWidth);
     const bool changed = ImGui::InputText(
-        "##edit", buffer, size,
+        id, buffer, size,
         (numeric ? ImGuiInputTextFlags_CharsScientific : ImGuiInputTextFlags_None) |
             ImGuiInputTextFlags_AutoSelectAll);
-    if (tooltip != nullptr && *tooltip != '\0') {
-        ImGui::SetItemTooltip("%s", tooltip);
-    }
     ImGui::PopStyleColor(3);
     ImGui::PopStyleVar(2);
     ImGui::PopFont();
+    return changed;
+}
+
+}  // namespace
+
+bool PropertyEdit(const char* label, char* buffer, std::size_t size, const char* unit, bool edited,
+                  const char* tooltip, bool numeric) {
+    ImGui::PushID(label);
+    rowLabel(label);
+    const float width = std::max(ImGui::GetContentRegionAvail().x, px(40.0F));
+    const bool changed = editField("##edit", buffer, size, unit, edited, width, numeric);
+    if (tooltip != nullptr && *tooltip != '\0') {
+        ImGui::SetItemTooltip("%s", tooltip);
+    }
     ImGui::PopID();
     return changed;
+}
+
+int PropertyEditPair(const char* label, EditField first, EditField second) {
+    ImGui::PushID(label);
+    rowLabel(label);
+    const float gap = px(6.0F);
+    const float width = std::max((ImGui::GetContentRegionAvail().x - gap) * 0.5F, px(40.0F));
+    const ImVec2 start = ImGui::GetCursorScreenPos();
+    int done = 0;
+    int index = 0;
+    for (const EditField* field : {&first, &second}) {
+        if (index == 1) {
+            // After the first field's box, not its text (which stops short of the unit).
+            ImGui::SameLine();
+            ImGui::SetCursorScreenPos(ImVec2(start.x + width + gap, start.y));
+        }
+        ImGui::PushID(index);
+        (void)editField("##edit", field->buffer, field->size, field->unit, field->edited, width,
+                        true);
+        if (field->tooltip != nullptr && *field->tooltip != '\0') {
+            ImGui::SetItemTooltip("%s", field->tooltip);
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            done |= 1 << index;
+        }
+        if (ImGui::IsItemActive()) {
+            done |= 4 << index;
+        }
+        ImGui::PopID();
+        ++index;
+    }
+    ImGui::PopID();
+    return done;
 }
 
 void Vec3Field(const char* label, const double value[3], const char* format) {

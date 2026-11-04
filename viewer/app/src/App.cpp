@@ -1025,6 +1025,15 @@ std::vector<InputEvent> parseInput(const std::string& script) {
             up.kind = "up";
             up.frame = event.frame + 2;
             events.push_back(up);
+        } else if (event.kind == "key") {
+            // A key pressed on this frame and let go on the next: enter, tab or escape.
+            InputEvent down = event;
+            down.kind = "keydown";
+            events.push_back(down);
+            InputEvent up = event;
+            up.kind = "keyup";
+            up.frame = event.frame + 1;
+            events.push_back(up);
         } else {
             events.push_back(std::move(event));
         }
@@ -1047,6 +1056,14 @@ void applyInput(const std::vector<InputEvent>& events, std::uint32_t frame, ImGu
             io.AddMouseWheelEvent(0.0F, event.x);
         } else if (event.kind == "text") {
             io.AddInputCharactersUTF8(event.text.c_str());
+        } else if (event.kind == "keydown" || event.kind == "keyup") {
+            const ImGuiKey key = event.text == "enter"    ? ImGuiKey_Enter
+                                 : event.text == "tab"    ? ImGuiKey_Tab
+                                 : event.text == "escape" ? ImGuiKey_Escape
+                                                          : ImGuiKey_None;
+            if (key != ImGuiKey_None) {
+                io.AddKeyEvent(key, event.kind == "keydown");
+            }
         }
     }
 }
