@@ -12,8 +12,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <numbers>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <imgui.h>
@@ -328,6 +330,7 @@ public:
             widgets::PropertyRow(
                 "field", info.windField.empty() ? "none — uniform wind" : info.windField.c_str(),
                 nullptr);
+            robotInTheWind(context);
             ImGui::Unindent(pad);
         }
 
@@ -397,6 +400,87 @@ public:
 
 private:
     static constexpr double kMmPerHourPerMps = 3.6e6;  // mm/h in 1 m/s
+
+    /// The robot in the wind: its speed over the ground, the air's speed past it and its tilt,
+    /// for the first body with an airspeed (body/<b>/airspeed, the aerodynamics domain's; the
+    /// robot ROS drives comes first). A drone holding its ground speed leans further into the
+    /// wind instead of slowing; these rows show it.
+    void robotInTheWind(PanelContext& context) {
+        const auto catalog = context.client.catalog();
+        if (catalog != robotCatalog_) {
+            robotCatalog_ = catalog;
+            for (auto& b : robotStreams_) {
+                if (b) {
+                    context.client.unsubscribe(b);
+                }
+                b.reset();
+            }
+            robotBody_.clear();
+            if (catalog) {
+                for (const SignalInfo& s : catalog->signals) {
+                    constexpr std::string_view kPrefix = "body/";
+                    constexpr std::string_view kSuffix = "/airspeed";
+                    const std::string_view n = s.name;
+                    if (n.starts_with(kPrefix) && n.ends_with(kSuffix) &&
+                        n.size() > kPrefix.size() + kSuffix.size()) {
+                        robotBody_ = std::string(
+                            n.substr(kPrefix.size(), n.size() - kPrefix.size() - kSuffix.size()));
+                        break;
+                    }
+                }
+            }
+            if (!robotBody_.empty()) {
+                const std::string base = "body/" + robotBody_ + "/";
+                robotStreams_ = {context.client.subscribe(base + "airspeed"),
+                                 context.client.subscribe(base + "twist", 0),
+                                 context.client.subscribe(base + "twist", 1),
+                                 context.client.subscribe(base + "pose", 4),
+                                 context.client.subscribe(base + "pose", 5)};
+            }
+        }
+        if (robotBody_.empty()) {
+            return;
+        }
+        // A stream older than a second (paused long, or gone) shows a dash.
+        const std::int64_t now = context.scene ? context.scene->simTimeNs : 0;
+        const auto value = [&](std::size_t i) -> std::optional<double> {
+            const auto& b = robotStreams_.at(i);
+            if (!b || b->newestTimeNs() < now - 1'000'000'000) {
+                return std::nullopt;
+            }
+            const double v = b->latest();
+            return std::isfinite(v) ? std::optional<double>(v) : std::nullopt;
+        };
+        const auto show = [](const char* label, std::optional<double> v, const char* format,
+                             const char* unit) {
+            char text[48];
+            if (v) {
+                std::snprintf(text, sizeof(text), format, *v);
+            } else {
+                std::snprintf(text, sizeof(text), "—");
+            }
+            widgets::PropertyRow(label, text, unit);
+        };
+        const auto air = value(0);
+        const auto vx = value(1);
+        const auto vy = value(2);
+        const auto qx = value(3);
+        const auto qy = value(4);
+        show("robot ground speed",
+             vx && vy ? std::optional<double>(std::hypot(*vx, *vy)) : std::nullopt, "%.2f", "m/s");
+        show("robot airspeed", air, "%.2f", "m/s");
+        std::optional<double> tilt;
+        if (qx && qy) {
+            // The body's up axis against the vertical: its z component is 1 − 2(x² + y²).
+            tilt = std::acos(std::clamp(1.0 - 2.0 * (*qx * *qx + *qy * *qy), -1.0, 1.0)) * 180.0 /
+                   std::numbers::pi;
+        }
+        show("robot tilt", tilt, "%.1f", "°");
+    }
+
+    std::shared_ptr<const SignalCatalog> robotCatalog_;
+    std::string robotBody_;
+    std::array<std::shared_ptr<ScopeBuffer>, 5> robotStreams_{};
 
     std::shared_ptr<SentSite> sent_;
     LiveField ambient_, pressure_, humidity_, rain_, fog_, windSpeed_, windFrom_, gravity_;

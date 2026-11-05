@@ -142,6 +142,20 @@ TEST(Mixer, TheModePutsTheThrottleOnItsStick) {
     EXPECT_DOUBLE_EQ(mixer.sticks(radio)[3], 0.8);  // right stick, up/down
 }
 
+// SB is the flight mode switch: up and middle (where it starts) position, down angle, named as
+// /flight_mode says them.
+TEST(Mixer, SbPicksTheFlightMode) {
+    const Mixer mixer;
+    Radio radio;
+    EXPECT_EQ(mixer.flightMode(radio), FlightMode::Position);
+    radio[Control::SB] = 1.0;
+    EXPECT_EQ(mixer.flightMode(radio), FlightMode::Position);
+    radio[Control::SB] = -1.0;
+    EXPECT_EQ(mixer.flightMode(radio), FlightMode::Angle);
+    EXPECT_EQ(flightModeName(FlightMode::Angle), "angle");
+    EXPECT_EQ(flightModeName(FlightMode::Position), "position");
+}
+
 TEST(Controls, HaveNamesBothWays) {
     for (std::size_t i = 0; i < kControls; ++i) {
         const auto c = static_cast<Control>(i);

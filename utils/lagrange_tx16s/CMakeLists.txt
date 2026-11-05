@@ -8,6 +8,7 @@ find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(imgui_vendor REQUIRED)
 find_package(lagrange_viewer REQUIRED) # the design's theme header and fonts
 find_package(SDL3 REQUIRED)
@@ -37,6 +38,7 @@ target_link_libraries(
         ${geometry_msgs_TARGETS}
         ${nav_msgs_TARGETS}
         ${sensor_msgs_TARGETS}
+        ${std_msgs_TARGETS}
 )
 
 install(TARGETS lagrange_tx16s RUNTIME DESTINATION lib/${PROJECT_NAME})

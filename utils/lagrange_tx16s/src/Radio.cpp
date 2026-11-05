@@ -154,6 +154,10 @@ std::array<double, 4> Mixer::sticks(const Radio& radio) const {
             radio[Control::Pitch]};
 }
 
+std::string_view flightModeName(FlightMode mode) {
+    return mode == FlightMode::Angle ? "angle" : "position";
+}
+
 std::array<double, kControls> channels(const Radio& radio) {
     return radio.value;
 }

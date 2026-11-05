@@ -12,13 +12,16 @@ struct ImFont;
 
 namespace lagrange::tx16s {
 
-/// What the radio's screen shows besides its own state: the robot's telemetry from /odom.
+/// What the radio's screen shows besides its own state: the robot's telemetry from /odom and
+/// /airspeed.
 struct Telemetry {
     bool have{false};
-    double height{0.0};   // m above where it started
-    double speed{0.0};    // m/s, horizontal
-    double climb{0.0};    // m/s
-    double heading{0.0};  // deg, counter-clockwise from +x
+    double height{0.0};              // m above where it started
+    double speed{0.0};               // m/s, horizontal, over the ground
+    double climb{0.0};               // m/s
+    double heading{0.0};             // deg, counter-clockwise from +x
+    double tilt{0.0};                // deg, of the body's up axis from the vertical
+    std::optional<double> airspeed;  // m/s, the air past it (wind included); none: no /airspeed
 };
 
 enum class Source { Keyboard, Joystick };

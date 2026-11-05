@@ -126,9 +126,17 @@ struct Command {
     double yawRate{0.0};  ///< counter-clockwise, seen from above
 };
 
+/// How Lagrange's multicopter flies the sticks, sent on /flight_mode ("position", "angle").
+/// Position: the sticks are speeds over the ground and it holds its place, leaning into the
+/// wind (GPS position mode). Angle: the right stick tilts it (full stick 30°) and the wind
+/// carries it; the throttle still climbs and holds the height.
+enum class FlightMode { Position, Angle };
+[[nodiscard]] std::string_view flightModeName(FlightMode mode);
+
 /// How the radio flies: the speeds at full stick (Lagrange's multicopter controller limits are
 /// 5 m/s, 2 m/s and 1.5 rad/s), the rates of switch SA (low, middle, high: a share of full),
-/// the arm switch (SF by default: up, +1, is armed) and the stick mode.
+/// the arm switch (SF by default: up, +1, is armed), the flight mode switch (SB by default: up or
+/// middle position, down angle) and the stick mode.
 struct Mixer {
     double maxHorizontal{5.0};  // m/s
     double maxVertical{2.0};    // m/s
@@ -136,9 +144,13 @@ struct Mixer {
     std::array<double, 3> rates{0.3, 0.6, 1.0};
     Control rateSwitch{Control::SA};
     Control armSwitch{Control::SF};
+    Control modeSwitch{Control::SB};
     StickMode mode{StickMode::Mode2};
 
     [[nodiscard]] bool armed(const Radio& radio) const { return radio[armSwitch] > 0.0; }
+    [[nodiscard]] FlightMode flightMode(const Radio& radio) const {
+        return radio[modeSwitch] < -0.5 ? FlightMode::Angle : FlightMode::Position;
+    }
     /// The rate SA picks: rates[0] at −1, [1] in the middle, [2] at +1.
     [[nodiscard]] double rate(const Radio& radio) const;
     /// The command of the sticks, or nothing while disarmed (then nothing is sent, and the

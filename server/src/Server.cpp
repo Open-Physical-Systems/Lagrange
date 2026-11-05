@@ -949,15 +949,25 @@ struct Server::Impl {
                        MulticopterController::canFly(WorldView(robot.world))) {
                 // The built-in controller hovers it, and with ROS flies it by /cmd_vel: forward,
                 // left and up in m/s, yaw rate in rad/s; without a command for 0.5 s it holds.
+                // /flight_mode angle: the sticks tilt it and the wind carries it; without a
+                // command it flies level, holding only its height.
                 MulticopterController::CommandSource commands;
                 if (bridge) {
                     commands = [this]() -> std::optional<MulticopterController::FlightCommand> {
+                        using Mode = MulticopterController::FlightCommand::Mode;
+                        const Mode mode = bridge->flightMode() == ros2::FlightMode::Angle
+                                              ? Mode::Angle
+                                              : Mode::Position;
                         const auto c = bridge->latestCommand(std::chrono::milliseconds(500));
                         if (!c) {
+                            if (mode == Mode::Angle) {
+                                return MulticopterController::FlightCommand{0.0, 0.0, 0.0, 0.0,
+                                                                            mode};
+                            }
                             return std::nullopt;
                         }
                         return MulticopterController::FlightCommand{
-                            c->linearMps, c->lateralMps, c->verticalMps, c->angularRadps};
+                            c->linearMps, c->lateralMps, c->verticalMps, c->angularRadps, mode};
                     };
                 }
                 MulticopterController::Settings flight;

@@ -17,6 +17,9 @@ namespace lagrange::server {
 /// ground instead until a command asks to climb, then flies by commands only, and lands and
 /// stops its rotors when commanded down to the ground.
 ///
+/// In angle mode (FlightCommand::Mode::Angle) the horizontal position loop is off: the command
+/// tilts it and the wind carries it; the height loop stays.
+///
 /// Cascade, every millisecond: position PD with gravity feed-forward gives the thrust vector;
 /// geometric attitude control on SO(3) (T. Lee, M. Leok, N. H. McClamroch, "Geometric tracking
 /// control of a quadrotor UAV on SE(3)", IEEE CDC 2010, eqs. 11-12) gives the body torques; a
@@ -38,16 +41,26 @@ public:
         double maxHorizontalMps{5.0};
         double maxVerticalMps{2.0};
         double maxYawRateRadps{1.5};
+        // Angle mode: the tilt at full stick (a command of maxHorizontalMps), the same as the
+        // limit position mode never asks beyond.
+        double maxAngleTiltRad{0.5235987755982988};  // 30°
         double minHeightM{0.3};      // m above the start the set point never goes below
         bool waitForCommand{false};  // on the ground until a command asks to climb
     };
 
     /// A velocity command: forward and left in the drone's heading frame, up, and yaw rate.
     struct FlightCommand {
+        /// Position: forward and left are speeds over the ground, and it holds where it is
+        /// (GPS position mode: it leans into the wind as far as it must). Angle: forward and left
+        /// over maxHorizontalMps are the share of full stick, which tilts it up to
+        /// maxAngleTiltRad; nothing holds it in place, so the wind carries it (angle mode with
+        /// altitude hold). Up and yaw rate are the same in both.
+        enum class Mode { Position, Angle };
         double forwardMps{0.0};
         double leftMps{0.0};
         double upMps{0.0};
         double yawRateRadps{0.0};
+        Mode mode{Mode::Position};
     };
     /// Where commands come from (ROS /cmd_vel); nullopt: none recent, hold where it is.
     using CommandSource = std::function<std::optional<FlightCommand>()>;

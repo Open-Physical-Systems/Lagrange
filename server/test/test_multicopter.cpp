@@ -3,6 +3,7 @@
 // quadcopter climbs at full throttle (the built-in controller asked for 1000 m) on a full and on
 // a 10 % battery: MuJoCo, the electrical network at 50 µs, the rotors. (At 3 % the pack sags
 // below the bus's undervoltage trip at full load: the drives trip and it does not take off.)
+#include "lagrange/aerodynamics/Aerodynamics.hpp"
 #include "lagrange/electrical/Network.hpp"
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/rotor_aero/RotorAero.hpp"
@@ -11,6 +12,7 @@
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/services/WrenchSum.hpp"
 
+#include <cmath>
 #include <numbers>
 #include <optional>
 #include <string>
@@ -181,6 +183,75 @@ TEST(Multicopter, FliesWhereItsVelocityCommandsSay) {
     (void)fly(1.0);
     command.reset();
     EXPECT_NEAR(fly(3.0)[2] - turned[2], 1.0, 0.1);
+}
+
+// Angle mode (FlightCommand::Mode::Angle), in a 6 m/s wind blowing towards +x: in position mode
+// it holds its place, leaning into the wind; in angle mode with the sticks centred it flies
+// level and the wind carries it downwind, its height still held; half stick forward tilts it
+// atan(tan 30° / 2) ≈ 16°; back in position mode it holds where it then is.
+TEST(Multicopter, AngleModeLetsTheWindCarryIt) {
+    auto robot = loadModel(LAGRANGE_TEST_QUAD_USDA);
+    ASSERT_TRUE(robot) << robot.error();
+    Scheduler scheduler(SchedulerOptions{.deterministic = false});
+    scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+    ModuleConfigData power;
+    power.dt = 50_us;
+    power.values["exchange_step"] = 0.001;
+    scheduler.add(std::make_unique<electrical::ElectricalNetwork>(), ModuleConfig(power));
+    ModuleConfigData aero;
+    aero.values["air_density"] = 1.225;
+    aero.values["wind_speed"] = 6.0;
+    aero.values["wind_from"] = 270.0;  // from the west: it blows towards +x
+    aero.values["wind_reference_height"] = 2.0;
+    aero.values["roughness_length"] = 0.03;
+    aero.values["downwash"] = false;
+    scheduler.add(std::make_unique<aerodynamics::AeroDrag>(), ModuleConfig(aero));
+    ModuleConfigData air;
+    air.values[rotor_aero::kAirDensityKey] = 1.225;
+    scheduler.add(std::make_unique<rotor_aero::RotorAero>(), ModuleConfig(air));
+    using Mode = MulticopterController::FlightCommand::Mode;
+    std::optional<MulticopterController::FlightCommand> command;
+    scheduler.add(std::make_unique<MulticopterController>(MulticopterController::Settings{},
+                                                          [&command] { return command; }),
+                  ModuleConfig(air));
+    scheduler.add(std::make_unique<services::WrenchSum>());
+    auto wired = scheduler.wire(WorldView(robot->world));
+    ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    const SignalBus& bus = scheduler.bus();
+    const SignalId pose = bus.find("body/base_link/pose");
+    double t = 0.0;
+    const auto fly = [&](double seconds) {
+        t += seconds;
+        EXPECT_TRUE(scheduler.stepUntil(SimTime{static_cast<std::int64_t>(t * 1e9)}).ok());
+        const std::span<const double> p = bus.readN(pose);
+        return std::array<double, 7>{p[0], p[1], p[2], p[3], p[4], p[5], p[6]};
+    };
+    // The tilt of the body's z axis from the vertical towards +x, degrees.
+    const auto leanX = [](const std::array<double, 7>& p) {
+        const double w = p[3], x = p[4], y = p[5], z = p[6];
+        return std::atan2(2.0 * (x * z + w * y), 1.0 - 2.0 * (x * x + y * y)) * 180.0 /
+               std::numbers::pi;
+    };
+    (void)fly(6.0);
+    const std::array<double, 7> held = fly(3.0);
+    EXPECT_NEAR(fly(2.0)[0], held[0], 0.05);  // position mode holds against the wind
+    EXPECT_LT(leanX(held), -1.0);             // leaning into it (towards −x)
+
+    command = MulticopterController::FlightCommand{0.0, 0.0, 0.0, 0.0, Mode::Angle};
+    const std::array<double, 7> start = fly(0.0);
+    const std::array<double, 7> drifted = fly(4.0);
+    EXPECT_GT(drifted[0] - start[0], 2.0);    // carried downwind
+    EXPECT_NEAR(drifted[2], start[2], 0.15);  // the height still held
+    EXPECT_NEAR(leanX(drifted), 0.0, 1.5);    // level
+
+    command = MulticopterController::FlightCommand{2.5, 0.0, 0.0, 0.0, Mode::Angle};
+    const double tilted = leanX(fly(1.0));
+    EXPECT_NEAR(tilted,
+                std::atan(std::tan(std::numbers::pi / 6.0) / 2.0) * 180.0 / std::numbers::pi, 2.0);
+
+    command.reset();  // position mode again: it stops and holds
+    const std::array<double, 7> stopping = fly(4.0);
+    EXPECT_NEAR(fly(3.0)[0], stopping[0], 0.1);
 }
 
 // --no-demo (Settings::waitForCommand): it stays on the ground with its rotors still until a

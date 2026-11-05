@@ -79,6 +79,15 @@ What the weather does to the drone:
 - **Wind and gusts** as above. In the thunderstorm preset's 18 m/s (at 10 m; about 13 m/s at
   2 m) the simulated controller still holds within about 0.2 m, leaning hard into it.
 
+Why flying with the wind and against it shows the same speed: in **Position** mode (the
+default) the sticks set the speed over the ground, as GPS position mode does on a real drone,
+and the controller leans as far as it must to keep it. The wind shows in the tilt and the
+airspeed instead: against a 10 m/s wind the sample X500 flies 3.5 m/s at 8.3° (10.8 m/s of air
+past it), with it 1.1°. The remote's screen shows `GND`, `AIR` and `TILT`, and the viewer's
+Environment workspace shows the same under Wind (robot ground speed, airspeed, tilt). To feel the
+wind, switch the remote to **Angle** mode (SB down, or `G`): the sticks tilt it, nothing holds
+it in place, and the wind carries it away.
+
 In the realistic view (the default on a GPU) rain and snow fall through the scene, carried by
 the wind, and the ground turns wet or white with them.
 
@@ -103,6 +112,7 @@ With the remote (the default), click its window so it has the keyboard, then:
 | right stick up / down | `↑` / `↓` or `I` / `K` | forward / back |
 | right stick left / right | `←` / `→` or `J` / `L` | left / right |
 | SA | `R` | rate: 30 %, 60 %, 100 % of full stick |
+| SB | `G` | flight mode: Position (speeds over the ground, holds its place) or Angle (the stick tilts it, the wind carries it) |
 | | `Esc` | disarm at once |
 
 The keyboard's sticks spring back to the centre when you let go, the throttle too: the centre
