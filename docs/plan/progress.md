@@ -1,6 +1,6 @@
 # Progress
 
-Where the project stands against the [roadmap](roadmap.md). Updated 2026-10-29: v1.0.0 released.
+Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-07: v1.1.0 released.
 
 ## The releases
 
@@ -14,7 +14,8 @@ flowchart LR
     v06["v0.6<br/>cars, autonomous cars<br/>OpenDRIVE, Autoware<br/><b>released 2026-10-25</b>"]:::done
     v07["v0.7<br/>huge worlds<br/><b>released 2026-10-29</b>"]:::done
     v10["v1.0<br/>stable schemas + plugin ABI<br/>ros-lyrical-* debs<br/><b>released 2026-10-29</b>"]:::done
-    v01 --> v02 --> v03 --> v04 --> v05 --> v06 --> v07 --> v10
+    v11["v1.1<br/>usability, plugins, humans,<br/>water, downwash, realism<br/><b>released 2026-11-07</b>"]:::done
+    v01 --> v02 --> v03 --> v04 --> v05 --> v06 --> v07 --> v10 --> v11
 
     classDef done fill:#1f6f43,stroke:#2ea043,color:#fff
     classDef now fill:#9a6700,stroke:#d29922,color:#fff

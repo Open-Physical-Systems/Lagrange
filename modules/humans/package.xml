@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_humans</name>
-  <version>1.0.0</version>
+  <version>1.1.0</version>
   <description>The humans domain (RFC 0009): people who walk, as kinematic segments that sensors see, with a walk cycle, waypoints, wandering and local steering.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>

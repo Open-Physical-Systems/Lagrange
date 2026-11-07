@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_vehicle_dynamics</name>
-  <version>1.0.0</version>
+  <version>1.1.0</version>
   <description>The vehicle dynamics domain: tyres (linear, Magic Formula), suspension, powertrain, brakes and steering of wheeled road vehicles (v0.6).</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
