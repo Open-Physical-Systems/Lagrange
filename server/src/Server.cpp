@@ -104,7 +104,8 @@ constexpr std::uint32_t kVolumeNx = 28;
 constexpr std::uint32_t kVolumeNz = 20;
 constexpr double kVolumeCell = 0.2;   // m
 constexpr double kVolumeAbove = 0.6;  // m above the robot's origin
-constexpr std::int64_t kVolumePeriodNs = 200'000'000;
+// 20 Hz: at 5 m/s a drone moves 0.25 m between boxes, so its wake keeps up with it on screen.
+constexpr std::int64_t kVolumePeriodNs = 50'000'000;
 constexpr std::uint32_t kSliceWidth = 64;   // cells along +X
 constexpr std::uint32_t kSliceHeight = 48;  // cells along +Y
 constexpr double kSliceCell = 0.5;          // m
@@ -954,8 +955,9 @@ struct Server::Impl {
                             c->linearMps, c->lateralMps, c->verticalMps, c->angularRadps};
                     };
                 }
-                next->add(std::make_unique<MulticopterController>(MulticopterController::Settings{},
-                                                                  std::move(commands)),
+                MulticopterController::Settings flight;
+                flight.waitForCommand = !options.demoDrive;  // --no-demo: it waits for you
+                next->add(std::make_unique<MulticopterController>(flight, std::move(commands)),
                           ModuleConfig(air));
             }
         }
@@ -6207,8 +6209,11 @@ Status Server::start() {
                   std::to_string(*s.options.px4Port) + " (lockstep once PX4 connects)");
     } else if (MulticopterController::canFly(WorldView(s.robot.world))) {
         s.log(v1::LOG_LEVEL_INFO, "controller",
-              std::string("multicopter: the built-in controller takes off after 1 s and hovers 2 m "
-                          "above the start") +
+              std::string(s.options.demoDrive
+                              ? "multicopter: the built-in controller takes off after 1 s and "
+                                "hovers 2 m above the start"
+                              : "multicopter: the built-in controller waits on the ground until "
+                                "/cmd_vel asks it to climb, and lands when brought down") +
                   (s.bridge ? "; /cmd_vel flies it (forward, left, up m/s; yaw rate rad/s)" : ""));
     } else if (!s.primaryPath().empty()) {
         s.log(v1::LOG_LEVEL_WARN, "controller",

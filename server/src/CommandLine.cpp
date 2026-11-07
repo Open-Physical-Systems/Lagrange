@@ -167,7 +167,7 @@ void printServerOptions(std::FILE* out) {
         "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
         "            TwistStamped\n"
         "  --no-demo  stand still until the first /cmd_vel instead of driving the demo\n"
-        "            figure-eight\n"
+        "            figure-eight; a multicopter waits on the ground until /cmd_vel climbs\n"
         "  --link-topics FILE.yaml  ROS topics that ride on radio links (LINK: [/topic, ...]):\n"
         "            lost and delayed as the comms domain's link quality says\n"
         "  --export-map FILE.yaml  write an occupancy map of the fixed scenery for\n"

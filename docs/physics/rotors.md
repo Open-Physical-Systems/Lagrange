@@ -13,7 +13,7 @@ flowchart LR
     F -->|bem| B["blade elements on 40 annuli<br/>from the propeller file"]
     C --> G["× ground effect<br/>× ceiling effect"]
     B --> G
-    G --> O["thrust on the body,<br/>drag torque on the joint and body"]
+    G --> O["thrust and drag torque<br/>on the propeller"]
     G --> S["rotor/&lt;j&gt;/thrust,<br/>induced_velocity, thrust_axis"]
 ```
 
@@ -28,7 +28,9 @@ $$
 
 The thrust points along the joint axis when the rotor turns its own way
 (`aero:rotor:direction`). The drag torque always opposes the rotation, which is what yaws a
-multirotor when its cw and ccw rotors turn at different speeds.
+multirotor when its cw and ccw rotors turn at different speeds. The air applies it to the
+propeller alone; the motor drives the propeller against it, and the motor's reaction on the
+frame is what turns the drone.
 
 These are static coefficients: thrust doesn't change with climb, descent or forward speed. A
 profile's `rotor_aero.inflow_time_constant` (s) can make the thrust follow its target with a

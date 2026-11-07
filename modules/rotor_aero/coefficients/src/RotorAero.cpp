@@ -401,14 +401,22 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
         // Applied at the link's origin; the backend takes torques about the centre of mass.
         const std::array<double, 3> com = rotate(hub.orientation, r.com);
         const std::array<double, 3> moment = cross({-com[0], -com[1], -com[2]}, force);
-        bus.writeN(r.wrenchOut,
-                   std::array<double, 6>{force[0], force[1], force[2], moment[0] + hubMoment[0],
-                                         moment[1] + hubMoment[1], moment[2] + hubMoment[2]});
+        // The air's torque acts on the propeller alone, from outside, about the joint axis. As a
+        // joint torque (load_torque) the frame would take it back as a reaction, so that a
+        // steady difference between the rotors' speeds would turn nothing: a multirotor yaws by
+        // the motors' reactions to the air's torque, which only reach the frame when the air's
+        // torque does not.
+        const std::array<double, 3> air{load.torque * jointAxis[0], load.torque * jointAxis[1],
+                                        load.torque * jointAxis[2]};
+        bus.writeN(r.wrenchOut, std::array<double, 6>{force[0], force[1], force[2],
+                                                      moment[0] + hubMoment[0] + air[0],
+                                                      moment[1] + hubMoment[1] + air[1],
+                                                      moment[2] + hubMoment[2] + air[2]});
         const double area = std::numbers::pi * r.params.radius * r.params.radius;
         bus.write(r.thrustOut, r.thrust);
         bus.writeN(r.axisOut, axis);
         bus.write(r.torqueOut, load.torque);
-        bus.write(r.loadOut, load.torque);
+        bus.write(r.loadOut, 0.0);  // in the wrench above instead
         bus.write(r.inducedOut,
                   r.propeller ? induced : std::sqrt(std::abs(r.thrust) / (2.0 * rho_ * area)));
     }

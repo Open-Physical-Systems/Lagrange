@@ -20,6 +20,7 @@ ros2 launch lagrange_example_diff_drive drive.launch.py
 | [`lagrange_example_camera`](lagrange_example_camera) | A simulated camera | Colour, depth and instance images on ROS 2 |
 | [`lagrange_example_weather`](lagrange_example_weather) | Fog on a sensor | `--weather` |
 | [`lagrange_example_quadcopter`](lagrange_example_quadcopter) | A quadcopter | `--air-density`, `--geo-origin`, `/cmd_vel` |
+| [`lagrange_example_holybro`](lagrange_example_holybro) | Your own drone (Holybro X500 V2) by keyboard | `--overlay`, `--follow`, `teleop_twist_keyboard` in its own window |
 | [`lagrange_example_car`](lagrange_example_car) | A car in the town | `--spawn`, `--traffic`, `/cmd_vel` |
 | [`lagrange_example_spawn`](lagrange_example_spawn) | Adding and removing robots | `--robot none`, `--humans`, `/spawn_entity`, `/get_entities`, `/delete_entity` |
 | [`lagrange_example_ros2_control`](lagrange_example_ros2_control) | An arm through ros2_control | `--ros2-control`, `controller_manager` spawner, `FollowJointTrajectory` |

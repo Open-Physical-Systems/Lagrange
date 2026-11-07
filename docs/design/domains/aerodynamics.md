@@ -144,9 +144,12 @@ d.input({.name = "env/wind/velocity", .type = SignalType::Vec3, .unit = units::m
 Several modules produce wrenches on the same body (aero, rotor, hydro). The single-writer rule
 forbids them all writing `body/{b}/external_wrench`. A small core module, `wrench_sum`, reads
 every `*/wrench` signal declared for a body and writes `body/{b}/external_wrench`. It is always
-loaded and has no substitute. The rotor's reaction torque on the motor shaft
-(`rotor/{j}/aero_torque`) is summed into the joint by the same mechanism through
-`joint/{j}/load_torque`.
+loaded and has no substitute. The air's torque on a propeller (`rotor/{j}/aero_torque`, about the
+joint axis) is in the same wrench, on the propeller's link: the air acts on the propeller alone,
+so the frame feels only the motor's reaction, which is how a multirotor yaws. (Until 2026-11-04
+it went to `joint/{j}/load_torque`, a joint torque whose reaction also reached the frame and
+cancelled the motors' at steady speed: a held yaw rate then drove one pair of rotors nearly to a
+stop; `Multicopter.TakesOffByHandWithEveryStickAtOnce` flies the case.)
 
 ## 4. Step size
 
@@ -220,8 +223,9 @@ model has no stall-delay correction yet, so that range is not part of the test.
 - The air density is a site parameter with no default (`rotor_aero.air_density`, kg/m³), as the
   ambient temperature is for thermal; the rotors refuse to start without it.
 - Thrust acts along the joint axis on the rotor's link, at the link's origin; the wrench goes to
-  `body/<link>/wrench/rotor` and `WrenchSum` adds it to the link's `external_wrench`. The shaft
-  torque is the joint's `load_torque`, opposing the rotation.
+  `body/<link>/wrench/rotor` and `WrenchSum` adds it to the link's `external_wrench`. The air's
+  shaft torque, opposing the rotation, is in that wrench too, about the joint axis (not the
+  joint's `load_torque`, which stays zero), so the frame gets only the motor's reaction.
 - Inflow lag: first order with config `inflow_time_constant` (s), exact over the step; 0 (no lag)
   unless set, because a published time constant for the sample propeller is not in hand.
 - Ground effect: Cheeseman–Bennett with the height above the world's ground plane only (scenery

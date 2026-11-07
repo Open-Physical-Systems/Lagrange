@@ -13,7 +13,9 @@ namespace lagrange::server {
 /// A built-in flight controller for multicopters, the counterpart of the AMR's demo drive: it
 /// flies the robot when no autopilot does (PX4 or ArduPilot through the MAVLink bridge). It
 /// holds a position set point: x and y where the robot starts, and `altitudeM` above the
-/// start once `takeoffAfterS` has passed.
+/// start once `takeoffAfterS` has passed. With `waitForCommand` (`--no-demo`) it stays on the
+/// ground instead until a command asks to climb, then flies by commands only, and lands and
+/// stops its rotors when commanded down to the ground.
 ///
 /// Cascade, every millisecond: position PD with gravity feed-forward gives the thrust vector;
 /// geometric attitude control on SO(3) (T. Lee, M. Leok, N. H. McClamroch, "Geometric tracking
@@ -36,7 +38,8 @@ public:
         double maxHorizontalMps{5.0};
         double maxVerticalMps{2.0};
         double maxYawRateRadps{1.5};
-        double minHeightM{0.3};  // m above the start the set point never goes below
+        double minHeightM{0.3};      // m above the start the set point never goes below
+        bool waitForCommand{false};  // on the ground until a command asks to climb
     };
 
     /// A velocity command: forward and left in the drone's heading frame, up, and yaw rate.
@@ -86,6 +89,7 @@ private:
     CommandSource commands_;
     std::array<double, 3> setpoint_{};  // world-local, m: where it holds or flies to
     double heading_{0.0};               // rad, the yaw it holds
+    bool airborne_{false};              // waitForCommand: taken off, not landed since
     SignalId pose_, twist_;
 };
 
