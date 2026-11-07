@@ -1,9 +1,10 @@
 # Your own drone, the Holybro X500 V2 (PX4's model), on the open field's landing pad. It waits on
-# the ground (--no-demo) until teleop_twist_keyboard asks it to climb (t), then flies by /cmd_vel,
+# the ground (--no-demo) until the remote asks it to climb, then flies by /cmd_vel,
 # and lands when brought down (b); the viewer follows it.
 #
-#   ros2 launch lagrange_example_holybro teleop.launch.py
-#   ros2 launch lagrange_example_holybro teleop.launch.py teleop:=false   # teleop in your terminal
+#   ros2 launch lagrange_example_holybro teleop.launch.py                 # the TX16S-style remote
+#   ros2 launch lagrange_example_holybro teleop.launch.py teleop:=keyboard  # teleop_twist_keyboard
+#   ros2 launch lagrange_example_holybro teleop.launch.py teleop:=false   # bring your own
 #   ros2 launch lagrange_example_holybro teleop.launch.py viewer:=false once:=true
 #   ros2 launch lagrange_example_holybro teleop.launch.py air:=live      # air computed live (GPU)
 #   ros2 launch lagrange_example_holybro teleop.launch.py airflow:=false # no particles, no slice
@@ -150,8 +151,18 @@ def setup(context):
         actions.append(
             ExecuteProcess(cmd=["ros2", "run", "lagrange_viewer", *viewer], output="screen")
         )
-    if LaunchConfiguration("teleop").perform(context) == "true" and not flag["once"]:
-        actions += teleop(context)
+    remote = LaunchConfiguration("teleop").perform(context)
+    if remote not in ("tx16s", "keyboard", "true", "false"):
+        raise RuntimeError(f"teleop:={remote}: tx16s, keyboard or false")
+    if not flag["once"]:
+        if remote == "tx16s":
+            # The TX16S-style remote (utils/lagrange_tx16s): a window of its own, a real radio
+            # over USB or the keyboard; arm with SF (Space), then the sticks fly it.
+            actions.append(
+                Node(package="lagrange_tx16s", executable="lagrange_tx16s", output="screen")
+            )
+        elif remote in ("keyboard", "true"):
+            actions += teleop(context)
     return actions
 
 
@@ -161,8 +172,9 @@ def generate_launch_description():
             DeclareLaunchArgument("viewer", default_value="true", description="open the viewer"),
             DeclareLaunchArgument(
                 "teleop",
-                default_value="true",
-                description="open teleop_twist_keyboard in a new terminal window",
+                default_value="tx16s",
+                description="what flies it: tx16s (the remote's window), keyboard "
+                "(teleop_twist_keyboard in a terminal) or false",
             ),
             DeclareLaunchArgument(
                 "air",
