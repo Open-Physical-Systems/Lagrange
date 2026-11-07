@@ -38,21 +38,33 @@ flowchart LR
 A value written by a slower or later module is read at its last update, so there is no loop
 inside one step. See [Concepts](../guide/concepts.md) for the scheduler and substitutes.
 
-## Drone models
+## Every model
 
 | Page | What it computes |
 |---|---|
+| [Rigid body](rigid-body.md) | MuJoCo and Jolt: joints with damping, friction and mimic, contacts and friction, mesh colliders as hulls, contact force and joint reaction |
+| [Vehicles and wheeled bases](vehicles.md) | A car's suspension, Magic Formula tyres, brakes, steering and powertrain; the diff-drive and swerve controllers |
+| [Water](water.md) | Buoyancy, drag, currents, waves, added mass and Fossen's model with a real vehicle's coefficients |
 | [Rotors](rotors.md) | Thrust and torque of each propeller: coefficients or blade elements, ground and ceiling effect, vortex ring state |
 | [Downwash](downwash.md) | The air a drone pushes: the jet under it, the outwash on the ground, walls and roofs, the live lattice Boltzmann box |
+| [Aerodynamics and wind](aerodynamics.md) | Drag on links, the wind and its gusts, wind fields, rain pushing links; the wind tunnel and OpenFOAM |
 | [Motors](motors.md) | Motor currents and torque from the bus voltage: the dq-frame model and its current loops |
 | [Battery](battery.md) | Terminal voltage and state of charge: the equivalent circuit, and how it compares with a real cell |
+| [Electrical network](electrical-network.md) | The buses, converters, fuses, switches and diodes between them, loads, and circuits from a netlist |
+| [Thermal](thermal.md) | Lumped heat networks: copper and drive losses, heating, cooling, derating |
+| [Sensors](sensors.md) | Lidar, camera, thermal camera, radar, IMU, GNSS, magnetometer, barometer, and sensor delays |
+| [Weather](weather.md) | Air density, fog, rain, snow and dust extinction, wet and icy friction, dirty lenses, fields |
+| [EMI and radio links](emi-and-radio.md) | Fields of power lines and motors and what they do to sensors; radio link budgets and CAN errors |
+| [Traffic](traffic.md) | Cars following lanes and lights, lane changes, crossings, pedestrians, OpenSCENARIO |
+| [Humans](humans.md) | People as moving capsules: walking with planted feet, steering round robots and each other |
 
-## Every domain
+Radiation is not built yet; its zero substitute stands in ([radiation.md](../design/domains/radiation.md)).
 
-The pages above cover the drone models so far. For the others, the design document is the
-reference for now:
+## Checked against
 
-| Domain | How it is computed | Checked against |
+Each page ends with what its model was checked against. In short:
+
+| Domain | Design document | Checked against |
 |---|---|---|
 | Rigid body | [rigid_body.md](../design/domains/rigid_body.md) | closed forms, MuJoCo against Jolt, the MCube pushing measurements |
 | Electrical | [electrical.md](../design/domains/electrical.md) | closed forms, ngspice, the LG HG2 cell |

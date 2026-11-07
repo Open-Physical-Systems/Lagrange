@@ -2,6 +2,7 @@
 
 | Page | What it covers |
 |---|---|
+| [Robots and worlds](robots.md) | Every sample robot and world, seen running, with the command that runs it |
 | [Installing Lagrange](install.md) | ROS 2 Lyrical, then Lagrange from source, as .deb packages or in a container; checks and fixes. Start here |
 | [Tutorial: an AMR in a warehouse](tutorial-amr.md) | Run, watch, drive over ROS 2, record, substitute a domain, add a module, Nav2. Then here |
 | [Tutorial: a quadcopter, from hover to a PX4 mission](tutorial-drone.md) | The sample quadcopter's files and site, hover, gusty wind, PX4 SITL in lockstep, a low battery |

@@ -149,6 +149,9 @@ recorded to MCAP and replayed.
 
 | Topic | File |
 |---|---|
+| **The documentation site: guide, physics reference, robots and worlds** | [open-physical-systems.github.io/Lagrange](https://open-physical-systems.github.io/Lagrange/) |
+| Every robot and world, with the command that runs it | [docs/guide/robots.md](docs/guide/robots.md) |
+| How each model computes, its equations and its checks | [docs/physics/](docs/physics/index.md) |
 | **User guide: tutorial, concepts, profiles, writing a module, CLI** | [docs/guide/](docs/guide/README.md) |
 | Vision, scope and release metrics | [docs/plan/00-overview.md](docs/plan/00-overview.md) |
 | Roadmap and progress | [docs/plan/roadmap.md](docs/plan/roadmap.md), [docs/plan/progress.md](docs/plan/progress.md) |
@@ -164,7 +167,7 @@ recorded to MCAP and replayed.
 
 <!-- docs-index begin: written by tools/ci/docs_index.py -->
 
-<details><summary>User guide (18)</summary>
+<details><summary>User guide (19)</summary>
 
 - [User guide](docs/guide/README.md)
 - [Autoware with a simulated car](docs/guide/autoware.md)
@@ -172,6 +175,7 @@ recorded to MCAP and replayed.
 - [Concepts](docs/guide/concepts.md)
 - [Installing Lagrange](docs/guide/install.md)
 - [Profiles](docs/guide/profiles.md)
+- [Robots and worlds](docs/guide/robots.md)
 - [The run file](docs/guide/run-file.md)
 - [Tutorial: an AMR in a warehouse](docs/guide/tutorial-amr.md)
 - [Tutorial: the sample arm with MoveIt 2](docs/guide/tutorial-arm.md)
@@ -187,13 +191,24 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Physics reference (5)</summary>
+<details><summary>Physics reference (16)</summary>
 
+- [Aerodynamics: drag, wind and the wind tunnel](docs/physics/aerodynamics.md)
 - [Battery](docs/physics/battery.md)
 - [Downwash](docs/physics/downwash.md)
+- [The electrical network: buses, converters and the parts between them](docs/physics/electrical-network.md)
+- [EMI and radio links](docs/physics/emi-and-radio.md)
+- [Humans: people who walk](docs/physics/humans.md)
 - [Physics reference](docs/physics/index.md)
 - [Motors](docs/physics/motors.md)
+- [Rigid body](docs/physics/rigid-body.md)
 - [Rotors](docs/physics/rotors.md)
+- [Sensors](docs/physics/sensors.md)
+- [Thermal](docs/physics/thermal.md)
+- [Traffic: cars, lights, crossings and scenarios](docs/physics/traffic.md)
+- [Vehicles and wheeled bases](docs/physics/vehicles.md)
+- [Water](docs/physics/water.md)
+- [Weather](docs/physics/weather.md)
 
 </details>
 
