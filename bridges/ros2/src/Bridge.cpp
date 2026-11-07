@@ -64,6 +64,7 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/point_field.hpp>
 #include <sensor_msgs/msg/temperature.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <tf2_msgs/msg/tf_message.hpp>
 
@@ -125,6 +126,8 @@ struct Bridge::Impl {
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmdVel;
     rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmdVelStamped;
     rclcpp::Subscription<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr ackermannCmd;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr flightModeIn;  // /flight_mode
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr airspeed;        // /airspeed
 
     void take(const geometry_msgs::msg::Twist& twist) {
         take(CmdVel{twist.linear.x, twist.angular.z, twist.linear.y, twist.linear.z, {}});
@@ -297,13 +300,15 @@ struct Bridge::Impl {
     };
     std::vector<Radar> radars;
     SignalId basePose, baseTwist;
+    SignalId baseAirspeed;  // body/<base>/airspeed, from the aerodynamics domain
     SimTime lastClock{-1};
     SimTime lastState{-1};
 
     mutable std::mutex commandMutex;
     std::optional<CmdVel> command;
     Clock::time_point commandAt;
-    std::optional<CmdVel> lateCommand;  // on its way over a radio link
+    std::optional<CmdVel> lateCommand;            // on its way over a radio link
+    FlightMode flightMode{FlightMode::Position};  // from /flight_mode, under commandMutex
     Clock::time_point lateAt;
 
     std::map<std::string, TopicCounter> counters;  // by topic, the bridge's own
@@ -552,6 +557,23 @@ Bridge::Bridge(BridgeSettings settings)
             "/cmd_vel", 10, [&s](const geometry_msgs::msg::Twist& twist) { s.take(twist); });
     }
     setRobot(settings_.baseLink, settings_.robotDescription, settings_.ackermannCmd);
+    if (!settings_.controllersOwnState) {
+        // A multicopter's flight mode, as a remote's mode switch sets it; latched, so one
+        // message from the remote is enough.
+        s.flightModeIn = s.node->create_subscription<std_msgs::msg::String>(
+            "/flight_mode", rclcpp::QoS(1).transient_local().reliable(),
+            [&s](const std_msgs::msg::String& mode) {
+                const std::optional<FlightMode> next = flightModeOf(mode.data);
+                if (!next) {
+                    RCLCPP_WARN(s.node->get_logger(),
+                                "/flight_mode '%s' is not position or angle: ignored",
+                                mode.data.c_str());
+                    return;
+                }
+                const std::lock_guard<std::mutex> lock(s.commandMutex);
+                s.flightMode = *next;
+            });
+    }
     if (settings_.jointCommands) {
         s.jointCommands = s.node->create_subscription<sensor_msgs::msg::JointState>(
             "/joint_commands", 10,
@@ -677,6 +699,10 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
     }
     s.basePose = bus.find("body/" + settings_.baseLink + "/pose");
     s.baseTwist = bus.find("body/" + settings_.baseLink + "/twist");
+    s.baseAirspeed = bus.find("body/" + settings_.baseLink + "/airspeed");
+    if (s.baseAirspeed.valid() && !s.airspeed) {
+        s.airspeed = s.node->create_publisher<std_msgs::msg::Float64>("/airspeed", 10);
+    }
 
     // Sensor frames are children of their links, at their mounts: published once, latched.
     tf2_msgs::msg::TFMessage mounts;
@@ -943,6 +969,12 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
             truth.header.frame_id = "world";
             s.deliver("/ground_truth/odom", s.groundTruth, truth);
             s.counters["/ground_truth/odom"].add(720);
+            if (s.airspeed && s.baseAirspeed.valid()) {
+                std_msgs::msg::Float64 air;
+                air.data = bus.read(s.baseAirspeed);
+                s.deliver("/airspeed", s.airspeed, air);
+                s.counters["/airspeed"].add(8);
+            }
             // With ros2_control, its controllers publish /odom and the odom TF.
             if (s.odom) {
                 s.deliver("/odom", s.odom, odom);
@@ -1162,6 +1194,21 @@ std::optional<CmdVel> Bridge::latestCommand(std::chrono::milliseconds maxAge) co
         return std::nullopt;
     }
     return impl_->command;
+}
+
+FlightMode Bridge::flightMode() const {
+    const std::lock_guard<std::mutex> lock(impl_->commandMutex);
+    return impl_->flightMode;
+}
+
+std::optional<FlightMode> flightModeOf(std::string_view name) {
+    if (name == "position") {
+        return FlightMode::Position;
+    }
+    if (name == "angle") {
+        return FlightMode::Angle;
+    }
+    return std::nullopt;
 }
 
 GraphSnapshot Bridge::graph() {

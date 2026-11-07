@@ -44,8 +44,9 @@ struct Frame {
     std::array<float, 4> waterRect;
     std::array<float, 4> screen;
     std::array<float, 4> mode;
+    std::array<float, 4> weather;  // rain mm/h, snow mm/h, wind x, y m/s
 };
-static_assert(sizeof(Frame) == 320);
+static_assert(sizeof(Frame) == 336);
 
 struct Push {
     std::array<float, 12> model;
@@ -431,6 +432,7 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
     }
     main.mode[2] = season;
     main.mode[3] = textures_->complete() ? 1.0F : 0.0F;
+    main.weather = {settings.rainMmPerH, settings.snowMmPerH, settings.wind[0], settings.wind[1]};
     const double seconds = settings.seconds;
     // Wrapped so that a float holds it: noise and waves repeat every 1024 m and 17 minutes.
     main.worldWrap = {f(std::fmod(eye[0], 1024.0)), f(std::fmod(eye[1], 1024.0)),

@@ -36,5 +36,19 @@ TEST(ThermalColour, BrightnessRisesWithTemperature) {
     }
 }
 
+TEST(WeatherLook, FallingWeatherBringsItsSeasonOnlyOverSummer) {
+    RenderOptions o;
+    EXPECT_EQ(effectiveSeason(o), Season::Summer);
+    o.rainMmPerH = 25.0F;
+    EXPECT_EQ(effectiveSeason(o), Season::Rainy);
+    o.snowMmPerH = 1.0F;  // sleet: snow wins, the ground whitens
+    EXPECT_EQ(effectiveSeason(o), Season::Winter);
+    o = RenderOptions{};
+    o.snowCover = 1.0F;  // snow lying after it stopped
+    EXPECT_EQ(effectiveSeason(o), Season::Winter);
+    o.season = Season::Fall;  // a season picked by hand stays
+    EXPECT_EQ(effectiveSeason(o), Season::Fall);
+}
+
 }  // namespace
 }  // namespace lagrange::viewer

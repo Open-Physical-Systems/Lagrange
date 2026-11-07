@@ -24,6 +24,7 @@ struct Frame
     float4 screen;            // xy: size in pixels; zw: 1 / size
     float4 mode;              // x: 1 in the mirror pass (y: the plane's relative height there);
                               // z: the season; w: 1 with surfaceAlbedo's photographs
+    float4 weather;           // x: rain, mm/h; y: snow, mm/h of water; zw: the wind, m/s, world
 };
 
 [[vk::binding(0)]] ConstantBuffer<Frame> frame;
@@ -113,7 +114,9 @@ int seasonNow()
 float overcast()
 {
     int s = seasonNow();
-    return s == 3 ? 1.0 : s == 2 ? 0.7 : s == 1 ? 0.25 : 0.0;
+    float season = s == 3 ? 1.0 : s == 2 ? 0.7 : s == 1 ? 0.25 : 0.0;
+    // Rain and snow come from cloud: a few mm/h is overcast.
+    return max(season, saturate(frame.weather.x / 4.0 + frame.weather.y * 0.7));
 }
 
 // Clouds on a plane far overhead, drifting.
@@ -703,47 +706,125 @@ float3 bloom(float2 uv)
     return min(sum / 14.0, float3(3.0, 3.0, 3.0));
 }
 
-// FXAA in the manner of Lottes (2009): smooths edges by their local contrast.
-// What falls between the eye and everything: streaks of rain, flakes of snow, on the screen.
-float3 falling(float2 uv)
+// What falls between the eye and everything: drops of rain and flakes of snow in the world, on a
+// lattice of cells that moves with them (the wind across, their fall speed down), one candidate
+// per cell, found by walking the eye's ray through the cells (Amanatides and Woo, 1987) up to
+// what the pixel sees. A drop is a short streak along its motion (what a camera's exposure
+// smears it into), a flake a soft dot that sways. How many are drawn grows with the rate; that
+// and their sizes are drawing choices, the real number of drops (thousands per m³) is not.
+// The season's look alone, with no weather, still brings some (rainy: rain, winter: snow).
+float fallingKind(float3 dir, float sceneM, float rate, float snowy)
 {
-    int season = seasonNow();
-    if (season != 2 && season != 3)
-        return float3(0.0);
+    // `snowy` 1 for snow, 0 for rain: a float, since a bool parameter's selects read as 0 here.
+    bool snow = snowy > 0.5;
     float t = frame.worldWrap.w;
-    float aspect = frame.screen.x * frame.screen.w;
+    float cellM = lerp(0.6, 0.5, snowy);
+    float farM = lerp(22.0, 18.0, snowy);
+    // Rain's mass-weighted fall speed at the rate (Atlas over Marshall and Palmer drops, as the
+    // aerodynamics domain has it); snow about 1 m/s.
+    float slope = 4.1 * pow(max(rate, 0.01), -0.21);
+    float fall = lerp(max(0.5, 9.65 - 10.3 * pow(slope / (slope + 0.6), 4.0)), 1.0, snowy);
+    float3 velocity = float3(frame.weather.z, frame.weather.w, -fall);
+    float present = saturate(0.1 + 0.16 * log2(1.0 + rate));
+    float pixel = 2.0 * frame.cameraUp.w * frame.screen.w;  // rad per pixel
+    float exposure = lerp(0.033, 0.0, snowy);  // s a streak shows: a 30 fps frame
+    float radius = lerp(0.004, 0.009, snowy);  // m, drawn
+    // The eye in the falling lattice's frame; the lattice repeats every 64 cells.
+    float period = 64.0 * cellM;
+    float3 o = fmod(frame.worldWrap.xyz - velocity * fmod(t, 600.0), period) + period;
+    float3 p = o / cellM;
+    float3 cell = floor(p);
+    float3 stepDir = sign(dir);
+    float3 inv = 1.0 / max(abs(dir), 1e-5);
+    float3 delta = inv * cellM;
+    float3 next = (stepDir * (cell - p) + max(stepDir, 0.0)) * delta;
     float sum = 0.0;
-    for (int layer = 0; layer < 3; ++layer)
+    float stopM = min(sceneM, farM);
+    float3 along = normalize(velocity);
+    float streak = length(velocity) * exposure;
+    for (int i = 0; i < 64; ++i)
     {
-        float scale = 1.0 + float(layer) * 0.8;
-        float2 at = float2(uv.x * aspect, uv.y);
-        if (season == 3)
+        float3 id = fmod(cell, 64.0);
+        if (hash(id + 0.37) < present)
         {
-            at.x += at.y * 0.06;  // blown a little
-            float2 grid = at * float2(150.0, 7.0) * scale;
-            float column = floor(grid.x);
-            float seed = hash2(float2(column, float(layer)));
-            float y = grid.y - t * (9.0 + 7.0 * seed) * 1.6 + seed * 37.0;
-            float cell = floor(y);
-            float drop = step(0.82, hash2(float2(column, cell)));
-            float fx = frac(grid.x) - 0.5;
-            float fy = frac(y);
-            sum += drop * smoothstep(0.32, 0.0, abs(fx)) * smoothstep(0.0, 0.25, fy) * smoothstep(1.0, 0.45, fy) * 0.1;
+            float3 jitter = float3(hash(id + 1.7), hash(id + 5.3), hash(id + 9.1)) * 0.8 + 0.1;
+            float3 centre = (cell + jitter) * cellM - o;  // relative to the eye
+            if (snow)
+            {
+                float phase = hash(id + 13.0) * 6.283;
+                centre.xy += 0.12 * cellM * float2(sin(t * 1.3 + phase), cos(t * 1.1 + phase));
+            }
+            // The streak's nearest point to the ray: the segment centre ± along·streak/2.
+            float3 a = centre - along * (streak * 0.5);
+            float3 ab = along * streak;
+            float3 w = a;
+            float b = dot(dir, ab);
+            float c = dot(ab, ab);
+            float d = dot(dir, w);
+            float e = dot(ab, w);
+            float denom = c - b * b;
+            float s = c > 1e-8 && denom > 1e-8 ? saturate((d * b - e) / denom) : 0.0;
+            float3 q = a + ab * s;
+            float tr = dot(q, dir);
+            if (tr > 0.05 && tr < stopM)
+            {
+                float miss = length(q - dir * tr);
+                float width = max(radius, tr * pixel);
+                // Smaller than a pixel: fainter, not wider.
+                float core = saturate(1.0 - miss / width);
+                float fade = saturate((stopM - tr) / (0.4 * stopM));
+                sum += core * core * pow(min(1.0, radius / (tr * pixel)), 0.6) * fade;
+            }
+        }
+        float nearest = min(next.x, min(next.y, next.z));
+        if (nearest > stopM)
+            break;
+        if (next.x <= nearest)
+        {
+            cell.x += stepDir.x;
+            next.x += delta.x;
+        }
+        else if (next.y <= nearest)
+        {
+            cell.y += stepDir.y;
+            next.y += delta.y;
         }
         else
         {
-            float2 grid = at * 34.0 * scale;
-            grid.y -= t * (0.9 + 0.3 * float(layer));
-            grid.x += sin(grid.y * 0.8 + float(layer) * 2.1 + t * 0.4) * 0.35;
-            float2 id = floor(grid);
-            float2 spot = float2(hash2(id + float(layer)), hash2(id + 17.0 + float(layer))) * 0.7 + 0.15;
-            float present = step(0.62, hash2(id + 41.0));
-            sum += present * smoothstep(0.09, 0.02, length(frac(grid) - spot)) * (0.6 - 0.15 * float(layer));
+            cell.z += stepDir.z;
+            next.z += delta.z;
         }
     }
-    return float3(sum);
+    return sum;
 }
 
+float3 falling(float2 uv, float depth)
+{
+    float rain = frame.weather.x;
+    float snow = frame.weather.y;
+    int season = seasonNow();
+    if (rain <= 0.0 && snow <= 0.0)
+    {
+        rain = season == 3 ? 4.0 : 0.0;
+        snow = season == 2 ? 1.0 : 0.0;
+    }
+    if (rain <= 0.0 && snow <= 0.0)
+        return float3(0.0);
+    float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    float3 dir = normalize(frame.cameraForward.xyz + ndc.x * frame.cameraRight.w * frame.cameraRight.xyz +
+                           ndc.y * frame.cameraUp.w * frame.cameraUp.xyz);
+    // Reversed depth with no far plane: the view depth is near / depth; the sky is endless.
+    float limit = depth > 0.0 ? frame.cameraForward.w / depth / max(dot(dir, frame.cameraForward.xyz), 1e-3)
+                              : 1e9;
+    float3 color = float3(0.0);
+    if (rain > 0.0)
+        color += float3(0.62, 0.67, 0.74) * min(fallingKind(dir, limit, rain, 0.0), 1.0);
+    if (snow > 0.0)
+        color += float3(0.95, 0.96, 1.0) * min(fallingKind(dir, limit, snow, 1.0), 1.0);
+    return color;
+}
+
+// FXAA in the manner of Lottes (2009): smooths edges by their local contrast.
 [shader("fragment")]
 float4 fsComposite(ScreenOutput input) : SV_Target
 {
@@ -762,7 +843,7 @@ float4 fsComposite(ScreenOutput input) : SV_Target
     float high = max(lumaC, max(max(lumaN, lumaS), max(lumaW, lumaE)));
     float range = high - low;
     if (range < max(0.04, high * 0.12))
-        return float4(center + falling(uv), 1.0);
+        return float4(center + falling(uv, depth), 1.0);
     float2 dir = float2(lumaS - lumaN, lumaW - lumaE);
     float reduce = max(range * 0.25, 1.0 / 128.0);
     dir = clamp(dir / (min(abs(dir.x), abs(dir.y)) + reduce), -8.0, 8.0) * px;
@@ -772,7 +853,7 @@ float4 fsComposite(ScreenOutput input) : SV_Target
                                  sceneColor.SampleLevel(uv + dir * 0.5, 0.0).rgb);
     float lumaB = luminance(display(b));
     float3 smoothed = (lumaB < low || lumaB > high) ? a : b;
-    return float4(display(smoothed * ao + bloom(uv)) + falling(uv), 1.0);
+    return float4(display(smoothed * ao + bloom(uv)) + falling(uv, depth), 1.0);
 }
 
 // --- water ----------------------------------------------------------------------------------

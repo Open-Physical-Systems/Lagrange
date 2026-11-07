@@ -519,13 +519,50 @@ public:
         textures_.record(commands);
         buildSensorOverlays();
         buildAirflow();
-        if (const auto environment = client_.environment()) {
-            renderOptions_.windSpeed = static_cast<float>(environment->windSpeed);
-        }
+        followWeather();
         overlays_.clear();
         overlays_.insert(overlays_.end(), sensorOverlays_.begin(), sensorOverlays_.end());
         overlays_.insert(overlays_.end(), airflowOverlays_.begin(), airflowOverlays_.end());
         renderer_.render(commands, scene_.get(), camera_, renderOptions_, overlays_);
+    }
+
+    /// The run's weather for the realistic view: wind and rain from the environment, snow from
+    /// the weather's signals (env/snow_rate, env/snow_cover), which the environment does not
+    /// carry. Subscribed when the catalog has them; a stream older than a second is no weather.
+    void followWeather() {
+        renderOptions_.rainMmPerH = 0.0F;
+        renderOptions_.snowMmPerH = 0.0F;
+        renderOptions_.snowCover = 0.0F;
+        renderOptions_.wind = {};
+        if (const auto environment = client_.environment()) {
+            renderOptions_.windSpeed = static_cast<float>(environment->windSpeed);
+            const double to = environment->windDirectionDeg * std::numbers::pi / 180.0;
+            renderOptions_.wind = {static_cast<float>(environment->windSpeed * std::cos(to)),
+                                   static_cast<float>(environment->windSpeed * std::sin(to))};
+            renderOptions_.rainMmPerH = static_cast<float>(environment->rainMmPerH);
+        }
+        const auto catalog = client_.catalog();
+        if (catalog != snowCatalog_) {
+            snowCatalog_ = catalog;
+            if (catalog && !snowRate_) {
+                snowRate_ = client_.subscribe("env/snow_rate");
+            }
+            if (catalog && !snowCover_) {
+                snowCover_ = client_.subscribe("env/snow_cover");
+            }
+        }
+        const std::int64_t now = scene_ ? scene_->simTimeNs : 0;
+        constexpr std::int64_t kStaleNs = 1'000'000'000;
+        const auto fresh = [&](const std::shared_ptr<ScopeBuffer>& b) {
+            if (!b || b->newestTimeNs() < now - kStaleNs) {
+                return 0.0F;
+            }
+            const double v = b->latest();
+            return std::isfinite(v) ? static_cast<float>(v) : 0.0F;
+        };
+        constexpr float kMmPerHourPerMps = 3.6e6F;
+        renderOptions_.snowMmPerH = fresh(snowRate_) * kMmPerHourPerMps;
+        renderOptions_.snowCover = fresh(snowCover_);
     }
 
     /// Airflow particles (rotor_aero.md §5): kAirParticles points moved through the server's
@@ -902,6 +939,8 @@ private:
     std::vector<std::pair<std::uint32_t, std::shared_ptr<SensorStream>>> lidars_;  // prim, frames
     std::vector<OverlayLines> sensorOverlays_;
     std::vector<OverlayLines> airflowOverlays_;
+    std::shared_ptr<const SignalCatalog> snowCatalog_;
+    std::shared_ptr<ScopeBuffer> snowRate_, snowCover_;
     std::vector<OverlayLines> overlays_;  // both, as drawn
     static constexpr const char* kAirField = "aero/wind_speed";
     struct Particle {
@@ -1025,6 +1064,15 @@ std::vector<InputEvent> parseInput(const std::string& script) {
             up.kind = "up";
             up.frame = event.frame + 2;
             events.push_back(up);
+        } else if (event.kind == "key") {
+            // A key pressed on this frame and let go on the next: enter, tab or escape.
+            InputEvent down = event;
+            down.kind = "keydown";
+            events.push_back(down);
+            InputEvent up = event;
+            up.kind = "keyup";
+            up.frame = event.frame + 1;
+            events.push_back(up);
         } else {
             events.push_back(std::move(event));
         }
@@ -1047,6 +1095,14 @@ void applyInput(const std::vector<InputEvent>& events, std::uint32_t frame, ImGu
             io.AddMouseWheelEvent(0.0F, event.x);
         } else if (event.kind == "text") {
             io.AddInputCharactersUTF8(event.text.c_str());
+        } else if (event.kind == "keydown" || event.kind == "keyup") {
+            const ImGuiKey key = event.text == "enter"    ? ImGuiKey_Enter
+                                 : event.text == "tab"    ? ImGuiKey_Tab
+                                 : event.text == "escape" ? ImGuiKey_Escape
+                                                          : ImGuiKey_None;
+            if (key != ImGuiKey_None) {
+                io.AddKeyEvent(key, event.kind == "keydown");
+            }
         }
     }
 }

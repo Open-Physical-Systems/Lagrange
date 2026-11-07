@@ -33,6 +33,14 @@ struct RenderOptions {
     bool realisticAvailable{false};  ///< Set on a GPU: a software device would crawl.
     Season season{Season::Summer};
     float windSpeed{0.0F};  ///< m/s, the site's: how rough the water is drawn.
+    /// The run's weather, drawn in the realistic view: rain (mm/h) and snow (mm/h of water)
+    /// falling through the world with the wind (m/s, world x and y, where it blows to), and the
+    /// snow on the ground (0-1). With Summer picked, falling weather brings its look: snow lying
+    /// or falling the winter's, rain the rainy season's.
+    float rainMmPerH{0.0F};
+    float snowMmPerH{0.0F};
+    float snowCover{0.0F};
+    std::array<float, 2> wind{};
     /// Thermal shading: per scene prim, the temperature (K) its meshes take (NaN: none, drawn
     /// dim grey), and the range the colour map spans.
     std::vector<float> temperature;
@@ -48,6 +56,20 @@ struct RenderOptions {
     bool airflow{false};
     float airflowMax{0.0F};  ///< m/s, the speed the colour map tops out at (set by the app).
 };
+
+/// The year the realistic view draws: the one picked, or with Summer (the default), the weather's:
+/// snow falling or lying (a third of the ground or more) the winter's, rain the rainy season's.
+[[nodiscard]] inline Season effectiveSeason(const RenderOptions& options) {
+    if (options.season != Season::Summer) {
+        return options.season;
+    }
+    constexpr float kLyingSnow = 0.3F;  // of the ground covered
+    constexpr float kSomeRain = 0.1F;   // mm/h
+    if (options.snowMmPerH > 0.0F || options.snowCover >= kLyingSnow) {
+        return Season::Winter;
+    }
+    return options.rainMmPerH >= kSomeRain ? Season::Rainy : Season::Summer;
+}
 
 /// The Current shading's colour at `share` (-1..1), as linear RGB: the electrical
 /// colour at 1, regeneration's blue at -1; a motor at rest is faintly tinted.

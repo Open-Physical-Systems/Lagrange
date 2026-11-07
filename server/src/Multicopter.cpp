@@ -201,6 +201,15 @@ Status MulticopterController::declare(const WorldView& world, const ModuleConfig
     twist.frame = "world_local";
     twist.feedback = true;
     twist_ = d.input(twist);
+    designDensity_ = *rho;
+    densityIn_ = SignalId{};
+    if (config.get<bool>("weather_air").value_or(false)) {  // rotor_aero::kWeatherAirKey
+        SignalSpec density;
+        density.name = "env/air_density";
+        density.unit = units::kg_per_m3;
+        density.feedback = true;
+        densityIn_ = d.input(density);
+    }
     return {};
 }
 
@@ -255,6 +264,8 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
     // A velocity command moves the set point (forward and left in the heading frame) and turns
     // the heading; without one it holds where it is.
     Vec3 wanted{};  // m/s, world: the velocity the set point moves at
+    bool angleMode = false;
+    std::array<double, 2> tilt{};  // angle mode: the stick's share towards world x and y
     if (const std::optional<FlightCommand> command = commands_ ? commands_() : std::nullopt) {
         const double dt = context.dt.seconds();
         // Taking off or landing by hand, near the ground, only up and down count: moving the set
@@ -273,6 +284,11 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         const double s = std::sin(heading_);
         wanted = {c * forward - s * left, s * forward + c * left,
                   std::clamp(command->upMps, -settings_.maxVerticalMps, settings_.maxVerticalMps)};
+        angleMode = command->mode == FlightCommand::Mode::Angle;
+        if (angleMode) {
+            tilt = {wanted[0] / settings_.maxHorizontalMps, wanted[1] / settings_.maxHorizontalMps};
+            wanted[0] = wanted[1] = 0.0;
+        }
         for (std::size_t i = 0; i < 3; ++i) {
             setpoint_[i] += wanted[i] * dt;
         }
@@ -291,11 +307,22 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         }
         heading_ += std::clamp(yawRate, -settings_.maxYawRateRadps, settings_.maxYawRateRadps) * dt;
     }
+    if (angleMode) {
+        // Nothing holds it in place: back in position mode it holds where it then is.
+        setpoint_[0] = position[0];
+        setpoint_[1] = position[1];
+    }
     Vec3 force{};
-    for (std::size_t i = 0; i < 3; ++i) {
+    for (std::size_t i = angleMode ? 2 : 0; i < 3; ++i) {
         force[i] = mass_ * (kp * (setpoint_[i] - position[i]) + kd * (wanted[i] - velocity[i]));
     }
     force[2] += mass_ * kGravity;
+    if (angleMode) {
+        // Tilted by the stick alone: full stick is maxAngleTiltRad; centred, it flies level.
+        const double lean = std::tan(settings_.maxAngleTiltRad);
+        force[0] = force[2] * lean * tilt[0];
+        force[1] = force[2] * lean * tilt[1];
+    }
     // Never ask for more than 30° of tilt.
     const double horizontal = std::hypot(force[0], force[1]);
     const double maxHorizontal = force[2] * std::tan(std::numbers::pi / 6.0);
@@ -331,16 +358,22 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         torque[i] = inertia_[i] * (-wa * wa * errorR[i] - 2.0 * settings_.damping * wa * omega[i]);
     }
 
-    // Mixer and each rotor's speed loop.
+    // Mixer and each rotor's speed loop, for the air the rotors are in.
+    double airShare = 1.0;
+    if (densityIn_.valid()) {
+        if (const double rho = bus.read(densityIn_); rho > 0.0) {
+            airShare = rho / designDensity_;
+        }
+    }
     for (std::size_t i = 0; i < rotors_.size(); ++i) {
         const Rotor& r = rotors_[i];
         const std::array<double, 4>& m = mixer_[i];
         const double f =
             std::max(0.0, m[0] * thrust + m[1] * torque[0] + m[2] * torque[1] + m[3] * torque[2]);
-        const double speed = r.spin * std::sqrt(f / r.thrustPerOmega2);
+        const double speed = r.spin * std::sqrt(f / (r.thrustPerOmega2 * airShare));
         const double now = bus.read(r.velocity);
         // The propeller's drag at the wanted speed, plus a proportional correction.
-        const double feedForward = r.spin * r.torquePerOmega2 * speed * speed;
+        const double feedForward = r.spin * r.torquePerOmega2 * airShare * speed * speed;
         bus.write(r.command, feedForward + settings_.speedGain * (speed - now));
     }
     return {};

@@ -38,6 +38,8 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joy.hpp>
+#include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/string.hpp>
 
 #include <lagrange/viewer/lagrange_theme.hpp>
 
@@ -110,6 +112,15 @@ public:
         joy_ = create_publisher<sensor_msgs::msg::Joy>("/tx16s/joy", 10);
         odom_ = create_subscription<nav_msgs::msg::Odometry>(
             odom, 10, [this](const nav_msgs::msg::Odometry& o) { onOdom(o); });
+        // Lagrange's multicopter: the flight mode (latched, sent when SB moves) and the air
+        // past it.
+        modeOut_ = create_publisher<std_msgs::msg::String>(
+            "/flight_mode", rclcpp::QoS(1).transient_local().reliable());
+        airspeed_ = create_subscription<std_msgs::msg::Float64>(
+            "/airspeed", 10, [this](const std_msgs::msg::Float64& air) {
+                const std::lock_guard<std::mutex> hold(shared_.lock);
+                shared_.telemetry.airspeed = air.data;
+            });
         timer_ = create_wall_timer(std::chrono::duration<double>(1.0 / kPublishHz),
                                    [this] { publish(); });
     }
@@ -121,10 +132,18 @@ private:
     void publish() {
         std::optional<Command> command;
         Radio radio;
+        FlightMode mode{FlightMode::Position};
         {
             const std::lock_guard<std::mutex> hold(shared_.lock);
             radio = shared_.radio;
             command = shared_.mixer.command(radio);
+            mode = shared_.mixer.flightMode(radio);
+        }
+        if (mode != sentMode_) {
+            std_msgs::msg::String name;
+            name.data = std::string(flightModeName(mode));
+            modeOut_->publish(name);
+            sentMode_ = mode;
         }
         const rclcpp::Time now = get_clock()->now();
         // While armed, the sticks' command, 50 times a second. Disarmed, one zero command (so
@@ -179,10 +198,20 @@ private:
         Telemetry& t = shared_.telemetry;
         t.have = true;
         t.height = p.z - *shared_.ground;
-        t.speed = std::hypot(v.x, v.y);
         t.climb = v.z;
         t.heading = std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z)) *
                     180.0 / 3.141592653589793;
+        // The body's up axis against the world's: its z component is 1 − 2(x² + y²).
+        t.tilt = std::acos(std::clamp(1.0 - 2.0 * (q.x * q.x + q.y * q.y), -1.0, 1.0)) * 180.0 /
+                 3.141592653589793;
+        // The ground speed from the body-frame twist turned to the world: the odometry gives
+        // it in the child frame, which tilts.
+        const double w = q.w, x = q.x, y = q.y, z = q.z;
+        const double vx =
+            (1 - 2 * (y * y + z * z)) * v.x + 2 * (x * y - w * z) * v.y + 2 * (x * z + w * y) * v.z;
+        const double vy =
+            2 * (x * y + w * z) * v.x + (1 - 2 * (x * x + z * z)) * v.y + 2 * (y * z - w * x) * v.z;
+        t.speed = std::hypot(vx, vy);
     }
 
     Shared& shared_;
@@ -190,6 +219,9 @@ private:
     std::string frame_;
     JoystickMap map_;
     bool wasArmed_{false};
+    std::optional<FlightMode> sentMode_;  // what /flight_mode last said
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr modeOut_;
+    rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr airspeed_;
     rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr stampedOut_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr plainOut_;
     rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr joy_;
@@ -411,6 +443,11 @@ int main(int argc, char** argv) {
                     Keyboard::toggle(shared.mixer.armSwitch, shared.radio);
                 } else if (s == SDL_SCANCODE_R) {
                     Keyboard::toggle(shared.mixer.rateSwitch, shared.radio);
+                } else if (s == SDL_SCANCODE_G) {
+                    // The flight mode switch: down is angle, the middle position.
+                    const Control sb = shared.mixer.modeSwitch;
+                    shared.radio[sb] =
+                        shared.mixer.flightMode(shared.radio) == FlightMode::Angle ? 0.0 : -1.0;
                 } else if (s == SDL_SCANCODE_M) {
                     shared.mixer.mode =
                         shared.mixer.mode == StickMode::Mode2 ? StickMode::Mode1 : StickMode::Mode2;

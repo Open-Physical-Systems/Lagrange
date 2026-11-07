@@ -16,6 +16,9 @@ namespace lagrange::rotor_aero {
 /// weather), so there is no default and the rotor modules refuse to start without it
 /// (CLAUDE.md §10). The ISA sea-level value is 1.225 kg/m³.
 inline constexpr const char* kAirDensityKey = "air_density";
+/// Config: true when the weather runs; the density is then the weather's env/air_density (from
+/// the site's temperature, pressure and humidity), read every step, "air_density" until it comes.
+inline constexpr const char* kWeatherAirKey = "weather_air";
 
 /// Rotor parameters, from RotorAPI_1 (formats.md §3.3).
 struct RotorParams {
@@ -128,6 +131,7 @@ private:
     bool wind_{false};
     bool rotorAir_{false};
     SignalId windIn_;
+    SignalId densityIn_;  // the weather's air density (kWeatherAirKey)
     double rho_{0.0};
     double speedOfSound_{0.0};         // m/s; 0: incompressible
     std::array<double, 3> gravity_{};  // m/s², world-local

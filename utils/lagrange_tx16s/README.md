@@ -2,7 +2,7 @@
 
 A window that looks and works like a RadioMaster TX16S. Fly any robot that takes `/cmd_vel` with
 it: from a real TX16S plugged in by USB, or from the keyboard and mouse. The radio's screen shows
-what it sends and the robot's telemetry from `/odom`.
+what it sends and the robot's telemetry from `/odom` and `/airspeed`.
 
 ![The remote, armed, with the sticks part way](../../docs/imgs/tx16s.png)
 
@@ -17,6 +17,7 @@ ros2 launch lagrange_example_holybro teleop.launch.py        # the Holybro, with
 | Topic | Type | When |
 |---|---|---|
 | `/cmd_vel` (`topic`) | `geometry_msgs/TwistStamped` (`stamped:=false`: `Twist`) | 50 times a second while armed; one zero command when disarmed, then nothing |
+| `/flight_mode` | `std_msgs/String`, latched | `position` or `angle`, when SB moves (and once at the start) |
 | `/tx16s/joy` | `sensor_msgs/Joy` | always, 50 times a second: axes = the 17 controls (roll, pitch, throttle, yaw, SA–SH, S1, S2, LS, RS, 6POS), −1 to +1; buttons = SA–SH each at its top position, then the six buttons, the lit one 1 |
 
 `/cmd_vel` is what Lagrange's built-in controllers take: forward and left (m/s, in the robot's
@@ -31,11 +32,31 @@ on the ground until it is told to climb.
 | left stick left/right (yaw) | `angular.z`, right turns clockwise |
 | SF | arm: up is armed |
 | SA | rate: down 30 %, middle 60 %, up 100 % of full stick |
+| SB | flight mode: up or middle **Position**, down **Angle** (`/flight_mode`) |
 | buttons 1–6 (6POS) | nothing in `/cmd_vel`: one position of six in `/tx16s/joy`, for your own flight modes |
 
 At full stick and full rate: 5 m/s, 2 m/s up and 1.5 rad/s, the limits of Lagrange's
 multicopter controller (`max_horizontal`, `max_vertical`, `max_yaw_rate`). Mode 2 (throttle on
 the left) by default; `mode:=1` or `M` swaps throttle and pitch.
+
+## Flight modes
+
+Lagrange's multicopter controller flies the sticks two ways. The mode shows at the top right of
+the radio's screen.
+
+- **Position** (the default, like GPS position mode): the sticks are speeds over the ground,
+  and with the sticks centred it holds its place. In wind it keeps the same ground speed both
+  ways and leans further into the wind instead. Against a 10 m/s wind (7.3 m/s at 2 m) the
+  sample X500 flies 3.5 m/s at 8.3° of tilt, 10.8 m/s of air past it; with the wind, 1.1°.
+- **Angle** (angle mode with altitude hold): the right stick tilts it, 30° at full stick and
+  full rate; centred, it flies level and nothing holds it in place, so the wind carries it
+  away. The throttle still climbs and holds the height. Without a command it stays level and
+  keeps drifting, even when disarmed in the air, so switch back to Position to stop.
+
+Below the line the screen shows the drone: `ALT` height, `GND` its speed over the ground,
+`AIR` the air's speed past it (from `/airspeed`, which Lagrange publishes for a robot whose
+base link has drag, wind and wakes included; `-` without it), `TILT` how far it leans, `VS`
+climb and `HDG` heading.
 
 ## From the keyboard
 
@@ -48,6 +69,7 @@ Click the window so it has the keyboard.
 | `A` / `D` | yaw: turn left / right |
 | `↑` `↓` `←` `→` or `I` `K` `J` `L` | pitch and roll: forward, back, left, right |
 | `R` | rate (SA) |
+| `G` | flight mode (SB): Position or Angle |
 | `1` to `8` | switches SA to SH |
 | `F1` to `F6` | the six buttons under the screen (6POS): the one pressed stays lit |
 | `M` | stick mode 1 or 2 |

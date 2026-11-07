@@ -193,6 +193,45 @@ double liftedDust(double peakOutwash, double diameter, double most, double rho, 
     return most * (1.0 - ratio * ratio);
 }
 
+double rainFallSpeed(double rainRate) {
+    constexpr double kMmPerHourPerMps = 3.6e6;
+    const double r = rainRate * kMmPerHourPerMps;
+    if (r <= 0.0) {
+        return kLeastFallSpeed;
+    }
+    // Marshall and Palmer's slope, mm⁻¹, and the mass-weighted Atlas speed over it, in closed
+    // form: ∫D³·v(D)·e^(−ΛD) dD / ∫D³·e^(−ΛD) dD = 9.65 − 10.3·(Λ/(Λ+0.6))⁴.
+    constexpr double kSlope = 4.1;  // mm⁻¹ at 1 mm/h
+    constexpr double kSlopeExp = -0.21;
+    constexpr double kAtlasTop = 9.65;   // m/s
+    constexpr double kAtlasSpan = 10.3;  // m/s
+    constexpr double kAtlasRate = 0.6;   // mm⁻¹
+    const double slope = kSlope * std::pow(r, kSlopeExp);
+    const double share = std::pow(slope / (slope + kAtlasRate), 4);
+    return std::max(kLeastFallSpeed, kAtlasTop - kAtlasSpan * share);
+}
+
+std::array<double, 2> fallingWater(double rainRate, double snowRate) {
+    const double rain = rainRate > 0.0 ? kWaterDensity * rainRate / rainFallSpeed(rainRate) : 0.0;
+    const double snow = snowRate > 0.0 ? kWaterDensity * snowRate / kSnowFallSpeed : 0.0;
+    return {rain, snow};
+}
+
+std::array<double, 3> impactForce(double water, const std::array<double, 3>& relative,
+                                  const std::array<double, 3>& area) {
+    const double speed = std::hypot(relative[0], relative[1], relative[2]);
+    if (water <= 0.0 || speed <= 0.0) {
+        return {};
+    }
+    // The box's area across the flow: Σ A_k·|u_k|/|u|; the flux through it, W·|u|·A⊥, each
+    // drop bringing its momentum u.
+    const double across = (area[0] * std::abs(relative[0]) + area[1] * std::abs(relative[1]) +
+                           area[2] * std::abs(relative[2])) /
+                          speed;
+    const double k = water * speed * across;
+    return {k * relative[0], k * relative[1], k * relative[2]};
+}
+
 double meanWindAt(const Wind& wind, double height) {
     if (wind.speed == 0.0 || height <= wind.roughnessLength) {
         return 0.0;
@@ -425,6 +464,19 @@ Status AeroDrag::declare(const WorldView& world, const ModuleConfig& config, Sig
         field.feedback = true;
         windField_ = d.input(field);
     }
+    // The weather's air and what falls through it, when it runs. Read a step late (feedback):
+    // the weather reads this domain's dust.
+    densityIn_ = rainIn_ = snowIn_ = SignalId{};
+    if (config.get<bool>("weather_air").value_or(false)) {
+        const auto weatherInput = [&](const char* name, const Unit& unit) {
+            SignalSpec in = spec(name, SignalType::Scalar, unit);
+            in.feedback = true;
+            return d.input(in);
+        };
+        densityIn_ = weatherInput("env/air_density", units::kg_per_m3);
+        rainIn_ = weatherInput("env/rain_rate", units::m_per_s);
+        snowIn_ = weatherInput("env/snow_rate", units::m_per_s);
+    }
     windVelocity_ =
         d.output(spec("env/wind/velocity", SignalType::Vec3, units::m_per_s, "world_local"));
     return {};
@@ -474,6 +526,16 @@ Status AeroDrag::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
 
 Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
     const double dt = context.dt.seconds();
+    std::array<double, 2> water{};  // rain, snow: kg/m³
+    double rainRate = 0.0;
+    if (densityIn_.valid()) {
+        if (const double rho = bus.read(densityIn_); rho > 0.0) {
+            rho_ = rho;
+        }
+        rainRate = bus.read(rainIn_);
+        water = fallingWater(rainRate, bus.read(snowIn_));
+    }
+    const std::array<double, 2> fallSpeed{rainFallSpeed(rainRate), kSnowFallSpeed};
     // The direction the wind blows towards, in ENU.
     const double from = wind_.fromDegrees * std::numbers::pi / 180.0;
     const Vec3 downwind{-std::sin(from), -std::cos(from), 0.0};
@@ -677,6 +739,18 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
         Vec3 force{};
         for (std::size_t k = 0; k < 3; ++k) {
             force[k] = -0.5 * rho_ * speed * link.cd[k] * link.area[k] * local[k];
+        }
+        // Rain and snow: drops moving with the air and falling, stopped by the link.
+        for (std::size_t kind = 0; kind < water.size(); ++kind) {
+            if (water.at(kind) <= 0.0) {
+                continue;
+            }
+            const Vec3 drops{air[0] - wake[0] - velocity[0], air[1] - wake[1] - velocity[1],
+                             air[2] - wake[2] - fallSpeed.at(kind) - velocity[2]};
+            const Vec3 hit = impactForce(water.at(kind), rotate(conjugate(q), drops), link.area);
+            for (std::size_t k = 0; k < 3; ++k) {
+                force[k] += hit[k];
+            }
         }
         const Vec3 omegaLocal = rotate(conjugate(q), omega);
         const Vec3 damping{-link.damping[0] * omegaLocal[0], -link.damping[1] * omegaLocal[1],

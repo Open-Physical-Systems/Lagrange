@@ -32,6 +32,12 @@ multirotor when its cw and ccw rotors turn at different speeds. The air applies 
 propeller alone; the motor drives the propeller against it, and the motor's reaction on the
 frame is what turns the drone.
 
+$\rho$ is the site's air density (`--air-density`), or with the weather running its own, from
+the temperature, pressure and humidity, read every step: on a hot day at altitude the rotors
+turn faster for the same thrust ($\omega \propto \rho^{-1/2}$), and draw more power. The
+built-in controller follows the same density. Rain pushes the frame down a few millinewtons
+([aerodynamics.md §3.1](../design/domains/aerodynamics.md)).
+
 These are static coefficients: thrust doesn't change with climb, descent or forward speed. A
 profile's `rotor_aero.inflow_time_constant` (s) can make the thrust follow its target with a
 first-order lag. The induced velocity that the downwash uses comes from momentum theory,

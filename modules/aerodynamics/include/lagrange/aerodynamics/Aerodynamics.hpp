@@ -114,6 +114,34 @@ inline constexpr double kWallJetFriction = 0.05;
 [[nodiscard]] double liftedDust(double peakOutwash, double diameter, double most, double rho,
                                 double gravity);
 
+/// Rain and snow on a body (aerodynamics.md §3.2). The falling water is a cloud of drops with
+/// a mass concentration W = ρ_w·R/v̄ (R the rate as a depth of water per second, v̄ the drops'
+/// fall speed), moving with the wind and down at v̄. Each drop that meets the body stops on it
+/// (an inelastic impact, as Haines and Luers, J. Aircraft 20(2), 1983, for rain on aircraft), so
+/// the body takes the momentum flux F = W·|u|·A_⊥(û)·u, u the drops' velocity relative to the
+/// body and A_⊥ its area across u, here the box Σ A_k·|û_k| of the link's reference areas.
+/// Rain's v̄ is the mass-weighted fall speed of the Marshall and Palmer drop sizes
+/// (J. Meteor. 5, 1948: N(D) = N0·exp(−Λ·D), N0 = 8000 m⁻³·mm⁻¹, Λ = 4.1·R^−0.21 mm⁻¹, R in
+/// mm/h) at the speed of Atlas, Srivastava and Sekhon (Rev. Geophys. 11(1), 1973: v(D) = 9.65 −
+/// 10.3·exp(−0.6·D) m/s, D in mm, their fit to Gunn and Kinzer 1949): in closed form v̄ = 9.65 −
+/// 10.3·(Λ/(Λ + 0.6))⁴, held at no less than kLeastFallSpeed for drizzle. Snow falls at
+/// kSnowFallSpeed. A drone feels little of it: 25 mm/h on the sample X500's 0.09 m² top is 4 mN.
+inline constexpr double kWaterDensity = 1000.0;  // kg/m³
+/// m/s: unrimed snow aggregates fall at about 1 m/s, nearly whatever their size (Locatelli and
+/// Hobbs, J. Geophys. Res. 79(15), 1974; TODO(verify) their fitted coefficients).
+inline constexpr double kSnowFallSpeed = 1.0;
+inline constexpr double kLeastFallSpeed = 0.5;  // m/s, the slowest drizzle drop counted
+/// Rain's mass-weighted fall speed, m/s, at a rate in m/s (of water depth).
+[[nodiscard]] double rainFallSpeed(double rainRate);
+/// Water in the air, kg/m³, of rain falling at `rainRate` and snow at `snowRate` (m/s of water
+/// depth), as {rain, snow}.
+[[nodiscard]] std::array<double, 2> fallingWater(double rainRate, double snowRate);
+/// The force on a box of reference areas `area` (m², along the body's x, y, z) from water of
+/// concentration `water` (kg/m³) moving at `relative` (m/s, the drops' velocity less the body's,
+/// in the body frame), N in the body frame.
+[[nodiscard]] std::array<double, 3> impactForce(double water, const std::array<double, 3>& relative,
+                                                const std::array<double, 3>& area);
+
 /// The aerodynamics domain at the `drag` fidelity (docs/design/domains/aerodynamics.md): for
 /// every link with AeroAPI_1, the drag F = −½·ρ·|v_rel|·(Cd ∘ A ∘ v_rel) in the body frame at the
 /// centre of pressure and angular damping, against the air: the mean wind (Wind, logarithmic
@@ -121,7 +149,9 @@ inline constexpr double kWallJetFriction = 0.05;
 /// body/<b>/airspeed, env/wind/gust (the turbulence at the first link) and env/wind/velocity
 /// (the air's velocity there, mean wind and gust, world frame: what the rotors fly in, at the
 /// first link's height). The air density is
-/// the config's "air_density", as rotor_aero. Not yet: lift tables.
+/// the config's "air_density", as rotor_aero; with config "weather_air" (the weather runs) it is
+/// the weather's env/air_density, from the site's temperature, pressure and humidity, and the
+/// weather's env/rain_rate and env/snow_rate push every link (impactForce). Not yet: lift tables.
 ///
 /// Downwash (config "downwash", default true; rotor_aero.md §2): for every RotorAPI_1 joint it
 /// reads rotor/<j>/thrust, rotor/<j>/induced_velocity, rotor/<j>/thrust_axis and its link's pose
@@ -176,6 +206,7 @@ private:
     SignalId windField_;  // the weather's wind grid, when it runs
     fields::FieldSignal windFieldSignal_;
     SignalId windVelocity_;
+    SignalId densityIn_, rainIn_, snowIn_;  // the weather's, when it runs
     bool downwashOn_{true};
     std::vector<RotorLink> rotors_;
     std::size_t groupCount_{0};

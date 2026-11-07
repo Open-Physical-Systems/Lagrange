@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lagrange::ros2 {
@@ -58,6 +59,14 @@ struct CmdVel {
     /// then stands for the turn rate.
     std::optional<double> steeringAngle;
 };
+
+/// A multicopter's flight mode, from /flight_mode (std_msgs/String "position" or "angle").
+/// Position: /cmd_vel's speeds are over the ground and it holds where it is, leaning into the
+/// wind (GPS position mode). Angle: forward and left are the tilt, as a share of full stick,
+/// with the height held; nothing holds it in place, so the wind carries it.
+enum class FlightMode { Position, Angle };
+/// "position" or "angle"; nullopt for anything else.
+[[nodiscard]] std::optional<FlightMode> flightModeOf(std::string_view name);
 
 /// What the viewer's ROS 2 workspace shows (lagrange.viewer.v1.RosGraph).
 struct GraphSnapshot {
@@ -192,7 +201,9 @@ public:
 /// lidars, and /imu (sensor_msgs/Imu), each named so when the robot has one of the kind and
 /// /<sensor>/scan, /<sensor>/points, /<sensor>/imu otherwise; and
 /// /robot_description, latched. It subscribes /cmd_vel: geometry_msgs/TwistStamped, which Nav2
-/// and ros2_control publish by default, or geometry_msgs/Twist (BridgeSettings::stampedCmdVel).
+/// and ros2_control publish by default, or geometry_msgs/Twist (BridgeSettings::stampedCmdVel);
+/// with an aerodynamic base link it publishes /airspeed (std_msgs/Float64, m/s: the speed of the
+/// air past the base link, wind and wakes included), and it subscribes /flight_mode.
 ///
 /// ROS callbacks run on the bridge's own executor thread; publish() runs on the caller's
 /// thread between ticks and never blocks on the network (rclcpp publishing is asynchronous).
@@ -215,6 +226,8 @@ public:
     void publish(const SignalBus& bus, SimTime now);
     /// The newest /cmd_vel if it arrived less than `maxAge` ago (wall clock).
     [[nodiscard]] std::optional<CmdVel> latestCommand(std::chrono::milliseconds maxAge) const;
+    /// The newest /flight_mode (Position until one comes).
+    [[nodiscard]] FlightMode flightMode() const;
     /// The robot that /odom, /ground_truth/odom, the odom TF, /robot_description and
     /// /ackermann_cmd are about, when it changes during the run (a robot spawned into an empty
     /// run, or deleted). Call before attach().

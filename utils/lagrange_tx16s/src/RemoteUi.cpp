@@ -180,6 +180,13 @@ void screen(ImVec2 a, ImVec2 b, const Radio& radio, const Mixer& mixer, const Ui
                   ui.source == Source::Joystick ? "USB" : "KEYBOARD",
                   mixer.mode == StickMode::Mode2 ? "M2" : "M1", r * 100.0);
     monoText(dl, ImVec2(a.x + pad, y), col(c::t2), text, 12.0F);
+    // The flight mode (SB), right-aligned: angle in the warning colour, since nothing then
+    // holds the drone in place.
+    const bool angle = mixer.flightMode(radio) == FlightMode::Angle;
+    const char* modeText = angle ? "ANGLE" : "POSITION";
+    const float modeWidth =
+        (gMono != nullptr ? gMono : ImGui::GetFont())->CalcTextSizeA(12.0F, 1e9F, 0.0F, modeText).x;
+    monoText(dl, ImVec2(b.x - pad - modeWidth, y), col(angle ? c::warn : c::t2), modeText, 12.0F);
     y += line;
     std::snprintf(text, sizeof text, "-> %s", ui.topic.c_str());
     monoText(dl, ImVec2(a.x + pad, y), col(c::t3), text, 12.0F);
@@ -195,7 +202,14 @@ void screen(ImVec2 a, ImVec2 b, const Radio& radio, const Mixer& mixer, const Ui
     dl->AddLine(ImVec2(a.x + pad, y), ImVec2(b.x - pad, y), col(c::line));
     y += 6;
     if (t.have) {
-        std::snprintf(text, sizeof text, "ALT %6.2f m   SPD %5.2f m/s", t.height, t.speed);
+        std::snprintf(text, sizeof text, "ALT %6.2f m   GND %5.2f m/s", t.height, t.speed);
+        monoText(dl, ImVec2(a.x + pad, y), col(c::info), text, 12.0F);
+        y += line;
+        if (t.airspeed) {
+            std::snprintf(text, sizeof text, "AIR %6.2f m/s TILT %4.1f deg", *t.airspeed, t.tilt);
+        } else {
+            std::snprintf(text, sizeof text, "AIR    -     TILT %4.1f deg", t.tilt);
+        }
         monoText(dl, ImVec2(a.x + pad, y), col(c::info), text, 12.0F);
         y += line;
         std::snprintf(text, sizeof text, "VS  %+6.2f m/s HDG %+6.1f deg", t.climb, t.heading);
@@ -338,6 +352,7 @@ void drawPanel(Radio& radio, Mixer& mixer, UiState& ui, const std::optional<Comm
         ImGui::TextColored(c::t2, "W/S throttle  A/D yaw");
         ImGui::TextColored(c::t2, "arrows or IJKL pitch and roll");
         ImGui::TextColored(c::t2, "Space arm (SF)  R rate (SA)");
+        ImGui::TextColored(c::t2, "G flight mode (SB): position / angle");
         ImGui::TextColored(c::t2, "1-8 switches SA-SH  M stick mode");
         ImGui::TextColored(c::t2, "F1-F6 the six buttons (6POS)");
         ImGui::TextColored(c::t3, "or drag the sticks with the mouse");

@@ -109,6 +109,21 @@ bool PropertyRow(const char* label, const char* value, const char* unit, bool li
 bool PropertyEdit(const char* label, char* buffer, std::size_t size, const char* unit, bool edited,
                   const char* tooltip = nullptr, bool numeric = true);
 
+/// One of the two fields of a PropertyEditPair.
+struct EditField {
+    char* buffer;
+    std::size_t size;
+    const char* unit;
+    bool edited{false};
+    const char* tooltip{nullptr};
+};
+
+/// A PropertyEdit row with two number fields side by side (the design's two-column `.f3` grid,
+/// e.g. the wind's mean speed and direction). Returns which were applied this frame (Enter or
+/// leaving the field after typing): bit 0 the first, bit 1 the second; and which is being typed
+/// in: bit 2 the first, bit 3 the second.
+int PropertyEditPair(const char* label, EditField first, EditField second);
+
 /// Three read-only number fields with coloured X / Y / Z labels.
 void Vec3Field(const char* label, const double value[3], const char* format = "%.3f");
 

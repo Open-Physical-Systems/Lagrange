@@ -55,6 +55,51 @@ once instead of drifting down for a few seconds, and a sudden stop or turn moves
 at once. `air:=live` has that memory: the air in its box is a fluid that carries on moving.
 How each is computed: [Downwash](../../docs/physics/downwash.md).
 
+## Wind and weather, from the viewer
+
+In the viewer, open the **Environment** workspace (top bar). Type a value and press Enter (or
+click away): it applies at once, and the run goes on.
+
+- **Wind**: the **mean** row has two fields, the speed in m/s and where the wind comes from in
+  degrees (0 north, 90 east, 180 south, 270 west; the world's +y is north). An east wind pushes
+  the drone west. Lagrange's controller holds its position, so it leans into the wind rather
+  than drifts: at 5 m/s the Holybro sits about 1.5 cm downwind.
+- **Weather**: it starts once the site has its air. Give the **ambient** temperature (Time and
+  sun), the **pressure** (about 1013 hPa at sea level) and the **humidity**, then press **Start
+  weather**. Then **rain rate** (mm/h) and **fog visibility** (m; 10000 or more is clear air)
+  can be typed in. Rain and fog act on the sensors (lidars, cameras) and the surface's friction.
+
+What the weather does to the drone:
+
+- **The air's density** comes from the temperature, pressure and humidity, and the rotors fly
+  in it: in hot, thin air they spin faster for the same lift (about 5690 rpm at 40 °C and 950
+  hPa, 4990 rpm at −10 °C and 1030 hPa, for the sample X500) and the battery drains faster.
+- **Rain and snow** push it with the drops that hit it. That is real but small: heavy rain (25
+  mm/h) pushes the X500 down about 4 mN against its 20 N weight. The wind is what you will feel.
+- **Wind and gusts** as above. In the thunderstorm preset's 18 m/s (at 10 m; about 13 m/s at
+  2 m) the simulated controller still holds within about 0.2 m, leaning hard into it.
+
+Why flying with the wind and against it shows the same speed: in **Position** mode (the
+default) the sticks set the speed over the ground, as GPS position mode does on a real drone,
+and the controller leans as far as it must to keep it. The wind shows in the tilt and the
+airspeed instead: against a 10 m/s wind the sample X500 flies 3.5 m/s at 8.3° (10.8 m/s of air
+past it), with it 1.1°. The remote's screen shows `GND`, `AIR` and `TILT`, and the viewer's
+Environment workspace shows the same under Wind (robot ground speed, airspeed, tilt). To feel the
+wind, switch the remote to **Angle** mode (SB down, or `G`): the sticks tilt it, nothing holds
+it in place, and the wind carries it away.
+
+In the realistic view (the default on a GPU) rain and snow fall through the scene, carried by
+the wind, and the ground turns wet or white with them.
+
+Or one click: the **Presets** tab beside Environment has whole weathers (clear and calm,
+breezy, strong wind, light rain, heavy rain, thunderstorm, fog, snow). Each sets the
+temperature, the air, rain, fog, snow and the wind's speed, and starts the weather if it was
+off; the wind keeps the direction you gave it. You can change any value after in the
+Environment tab.
+
+The viewer shows the pressure and humidity it sent (the server does not report them back), so
+a viewer opened later shows them empty.
+
 ## Flying it
 
 With the remote (the default), click its window so it has the keyboard, then:
@@ -67,6 +112,7 @@ With the remote (the default), click its window so it has the keyboard, then:
 | right stick up / down | `↑` / `↓` or `I` / `K` | forward / back |
 | right stick left / right | `←` / `→` or `J` / `L` | left / right |
 | SA | `R` | rate: 30 %, 60 %, 100 % of full stick |
+| SB | `G` | flight mode: Position (speeds over the ground, holds its place) or Angle (the stick tilts it, the wind carries it) |
 | | `Esc` | disarm at once |
 
 The keyboard's sticks spring back to the centre when you let go, the throttle too: the centre
