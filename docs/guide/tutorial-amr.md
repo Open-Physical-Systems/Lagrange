@@ -9,8 +9,8 @@ the commands here are known to work.
 
 ## Before you start
 
-You need Ubuntu 26.04 with ROS 2 Lyrical, and Lagrange built from source as in the
-[README](../../README.md#build). In every terminal:
+You need Ubuntu 26.04 with ROS 2 Lyrical, and Lagrange built from source as in
+[Installing Lagrange](install.md). In every terminal:
 
 ```bash
 source /opt/ros/lyrical/setup.bash

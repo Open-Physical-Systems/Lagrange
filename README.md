@@ -164,17 +164,19 @@ recorded to MCAP and replayed.
 
 <!-- docs-index begin: written by tools/ci/docs_index.py -->
 
-<details><summary>User guide (16)</summary>
+<details><summary>User guide (18)</summary>
 
 - [User guide](docs/guide/README.md)
 - [Autoware with a simulated car](docs/guide/autoware.md)
 - [The `lagrange` command](docs/guide/cli.md)
 - [Concepts](docs/guide/concepts.md)
+- [Installing Lagrange](docs/guide/install.md)
 - [Profiles](docs/guide/profiles.md)
 - [The run file](docs/guide/run-file.md)
 - [Tutorial: an AMR in a warehouse](docs/guide/tutorial-amr.md)
 - [Tutorial: the sample arm with MoveIt 2](docs/guide/tutorial-arm.md)
 - [Tutorial: a car in a city block](docs/guide/tutorial-cars.md)
+- [Tutorial: test your own drone, step by step](docs/guide/tutorial-custom-drone.md)
 - [Tutorial: a quadcopter, from hover to a PX4 mission](docs/guide/tutorial-drone.md)
 - [Tutorial: weather, interference and radio links](docs/guide/tutorial-environment.md)
 - [Tutorial: huge worlds](docs/guide/tutorial-huge-worlds.md)
@@ -182,6 +184,16 @@ recorded to MCAP and replayed.
 - [Tutorial: a robot's power system from a schematic](docs/guide/tutorial-power.md)
 - [Writing a module](docs/guide/writing-a-module.md)
 - [Writing a plugin](docs/guide/writing-a-plugin.md)
+
+</details>
+
+<details><summary>Physics reference (5)</summary>
+
+- [Battery](docs/physics/battery.md)
+- [Downwash](docs/physics/downwash.md)
+- [Physics reference](docs/physics/index.md)
+- [Motors](docs/physics/motors.md)
+- [Rotors](docs/physics/rotors.md)
 
 </details>
 
@@ -314,6 +326,8 @@ recorded to MCAP and replayed.
 <!-- docs-index end -->
 
 ## Install
+
+Step by step, with ROS 2 Lyrical itself, checks and fixes: [Installing Lagrange](docs/guide/install.md).
 
 The packages are built as `ros-lyrical-*` debs; until they are published on the ROS buildfarm,
 build them yourself from a clone of this repository and install them on any Ubuntu 26.04 machine

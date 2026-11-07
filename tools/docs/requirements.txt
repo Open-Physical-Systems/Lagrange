@@ -1,0 +1,5 @@
+# The documentation site's build tools (docs/conf.py; tools/docs/build.sh). Versions and licences
+# checked on PyPI on 2026-11-03 and recorded in docs/design/dependencies.md §6.
+sphinx==9.2.0                 # BSD-2-Clause
+myst-parser==5.1.0            # MIT: Markdown, math, heading anchors
+furo==2025.12.19              # MIT: the theme
