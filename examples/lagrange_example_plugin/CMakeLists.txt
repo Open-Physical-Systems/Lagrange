@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(lagrange_example_plugin VERSION 1.0.0 LANGUAGES C)
+project(lagrange_example_plugin VERSION 1.1.0 LANGUAGES C)
 
 find_package(ament_cmake REQUIRED)
 find_package(lagrange_core REQUIRED) # lagrange_plugin.h, the C ABI (header only)

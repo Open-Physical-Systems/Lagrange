@@ -57,8 +57,10 @@ Consequences:
 
 ## 2. Current phase
 
-**v1.0.0 is released (2026-10-29), the first stable release**, after v0.2 to v0.7 (v0.2 to v0.6
-on 2026-10-25, v0.7 and v1.0 on 2026-10-29; `docs/release/`; v0.1.0 on 2026-10-14). 1.x is
+**v1.1.0 is released (2026-11-07)**, the first feature release of 1.x, after v1.0.0, the first stable
+release (2026-10-29), and v0.2 to v0.7 (v0.2 to v0.6 on 2026-10-25, v0.7 on 2026-10-29;
+`docs/release/`; v0.1.0 on 2026-10-14). The documentation site is published to GitHub Pages from
+`main` by the `docs` workflow (https://open-physical-systems.github.io/Lagrange). 1.x is
 frozen by RFC 0007: schemas, plugin ABI, protocol, profiles and recordings change only by
 addition; fixes are backported to `release/1.x` (`GOVERNANCE.md`). Status and owed items:
 `docs/plan/progress.md`. Next: the owed 1.x items and post-1.0 work (radiation, other robot
