@@ -20,7 +20,7 @@ from sphinx.util.docutils import SphinxDirective
 DOCS = Path(__file__).resolve().parent
 REPO = DOCS.parent
 GITHUB = "https://github.com/Open-Physical-Systems/Lagrange"
-BRANCH = "dev"
+BRANCH = "main"  # the site is published from releases
 
 project = "Lagrange"
 author = "Open Physical Systems"

@@ -1,12 +1,13 @@
 # The documentation site: docs/ built by tools/docs/build.sh (Sphinx, docs/conf.py) and published
 # to GitHub Pages at https://open-physical-systems.github.io/Lagrange. Pull requests that touch
-# the docs build it with warnings as errors; pushes to dev also publish it. Needs the repository
+# the docs build it with warnings as errors; a release (a push to main) publishes it, so the site
+# shows the released version. Needs the repository
 # public (or a plan with Pages for private repositories) and Settings → Pages → Source: GitHub
 # Actions.
 name: docs
 on:
   push:
-    branches: [dev]
+    branches: [main]
     paths: [docs/**, tools/docs/**, .github/workflows/docs.yml]
   pull_request:
     branches: [dev]
@@ -14,7 +15,7 @@ on:
   workflow_dispatch:
 permissions: {}
 concurrency:
-  group: pages-${{ github.ref }}
+  group: pages
   cancel-in-progress: false  # never stop a deploy halfway
 
 jobs:
