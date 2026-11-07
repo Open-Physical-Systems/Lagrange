@@ -100,6 +100,39 @@ actuated joint; `body/{b}/pose`, `body/{b}/twist`, `body/{b}/acceleration` for e
 | Determinism | two runs, same seed | bit-identical state hash (MuJoCo backend) |
 | AMR drive test (v0.2) | sim-vs-real: recorded wheel odometry of a real differential-drive robot driving a square. Dataset to be recorded or sourced (open question Q16) | position error after 10 m within the spread of repeated real runs |
 
+### Pushing against measurement (2026-11-03)
+
+`APushedBlockMovesAsTheMcubeMeasurements` repeats the repeated-push experiment of Yu, Bauza, Fazeli
+and Rodriguez ("More than a Million Ways to Be Pushed", IROS 2016, §VII, Table IV): their
+stainless-steel square rect1 (0.837 kg, 90 mm, 13 mm thick) pushed 15 cm at 20 mm/s by a 9.5 mm
+rod, normal to a face, halfway between its centre and edge, on four surfaces whose friction they
+measured (abs 0.13, delrin 0.12, plywood 0.24, polyurethane 0.28; rod 0.25). Final (Δx, Δy, Δθ):
+
+| | abs | delrin | plywood | pu |
+|---|---|---|---|---|
+| Measured, mean of 2000 | (40.1, −67.6, 74.7) | (38.8, −50.7, 78.5) | (36.4, −93.6, 70.2) | (40.2, −85.0, 69.3) |
+| Quasi-static model (Lynch et al. 1992, run by Yu et al.) | (41.0, −98.1, 66.3) | | | |
+| MuJoCo | (38.7, −91.1, 61.8) | (38.6, −91.3, 61.7) | (39.4, −92.3, 59.9) | (39.6, −93.2, 59.0) |
+| Jolt | (6.0, −148.8, 1.9) | (8.5, −148.4, 2.6) | (0.2, −149.6, 0.3) | (0.6, −149.4, 0.7) |
+
+- **MuJoCo is the quasi-static theory's answer**: within 6 mm of Lynch et al.'s model, turning 4
+  to 7° less (a box on a plane rests on its four corners there, where the model spreads the
+  pressure evenly). Uniform Coulomb friction makes the path independent of the support's friction,
+  so it gives one answer for all four surfaces. Against the measurements it is 3 to 8 mm off on
+  plywood and polyurethane but 24 and 41 mm off on abs and delrin, and 10 to 17° short on all: as
+  the theory itself is (8 to 12° short, 6 to 48 mm off). What the surfaces do differently
+  (uneven pressure, anisotropy, friction that changes with speed and place, their §V) is not in
+  the model.
+- **Jolt holds the sliding block straight.** Jolt 5.6 keeps linear friction, at the centre of
+  the contact points, and friction about the contact normal on separate budgets (μ·Σλ and
+  μ·Σ dᵢ·λᵢ, `ContactConstraintManager`), so a block already sliding at full friction still
+  resists turning at full strength: it is carried 149 mm in front of the rod, turning 2°. Coulomb
+  friction couples the two (the limit surface, which Yu et al. measured). A known limitation of
+  the engine, reported, not asserted; use MuJoCo for pushing and manipulation.
+- **A bug found on the way.** Jolt gave a body whose colliders have no friction its default of
+  0.5 (`settings.mFriction = friction > 0 ? friction : 0.5`); a frictionless body now stays
+  frictionless (`AFrictionlessBoxSlidesAtGSinTheta`, all backends).
+
 ## 8. Backends as plugins: the contract and the conformance suite (RFC 0008 §5)
 
 A plugin module with `domain = "rigid_body"` is a backend, picked by `--physics NAME` or a

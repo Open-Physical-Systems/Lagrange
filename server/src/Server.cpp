@@ -740,6 +740,9 @@ struct Server::Impl {
             water.values["wave_amplitude"] = options.waterWaves[0];
             water.values["wave_period"] = options.waterWaves[1];
             water.values["wave_towards"] = options.waterWaves[2];
+            for (const auto& [body, coefficients] : options.hydroCoefficients) {
+                water.values["fossen:" + body] = coefficients;
+            }
             next->add(std::make_unique<hydrodynamics::Water>(), ModuleConfig(water));
         }
         // People (RFC 0009): moved like traffic agents, around the robots.

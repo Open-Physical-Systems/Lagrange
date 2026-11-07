@@ -30,7 +30,7 @@ published curves only, which is risk R12 in `docs/plan/risks.md`.
 | Domain | Checked against | Tolerance / result | Test | Sim-vs-real (measured data) |
 |---|---|---|---|---|
 | Rigid body | Closed-form mechanics; backend agreement MuJoCo vs Jolt; contact force and joint reaction on both (Newton) | Energy drift < 0.1 % over 10 s; Coulomb angle within 1°; inertia 1e-9; backends within 2 %; weight held within 0.5 %, a swinging pivot's load within 1 % | `test_mujoco_validation`, `test_backends`, `lagrange_physics_conformance` | none yet (AMR square drive, Q16) |
-| Electrical | Closed forms; LG HG2 cell data (Kollmeyer et al.); ngspice | 0.1–0.5 % closed forms met; battery 5.4–6.2 mV RMS (46–89 % SoC), 21.5 mV at 24 % (target < 20 mV, not met) | `test_models`, `test_network`, `test_coupling`, `test_battery_dataset`, `test_export` | battery: published cell data; BLDC bench: none yet (Q16) |
+| Electrical | Closed forms; LG HG2 cell data (Kollmeyer et al.); ngspice | 0.1–0.5 % closed forms met; battery 5.4–6.2 mV RMS (46–89 % SoC), 21.5 mV at 24 % (target < 20 mV, not met); drive cycles at 25 °C (fitted to UDDS, unseen LA92 11.7 mV, US06 20.1 mV, just over), 39–145 mV at 40 to 0 °C (no temperature dependence) | `test_models`, `test_network`, `test_coupling`, `test_battery_dataset`, `test_export` | battery: published cell data; BLDC bench: none yet (Q16) |
 | Thermal | Closed forms | 0.1 %, 0.5 %, 0.5 K met; energy to 1e-9 | `test_lumped`, `test_thermal_network` | none yet (motor heat run, Q16) |
 | Rotor aero | NACA Report 640; momentum theory; classical H-force; Cheeseman–Bennett; NeuroBEM's vortex-ring fit; Hsiao and Chirarattananon's ceiling balance; downwash: Bauersfeld et al. 2024, Tanner et al. 2015, Kiran et al. 2025, own OpenFOAM | CT within 8 %, CP within 6 %; H-force 1 %; ground and ceiling effect exact to their curves; stacked drones 53 % kept at 4 l against 65 % measured (**12 points short**) | `test_bem`, `test_rotor_aero`, `test_downwash`, `test_downwash_pair` | none yet (flight log, Q16) |
 | Live air (lattice Boltzmann) | Momentum theory; own OpenFOAM hover cases | Momentum through a plane within 2 %; at 3 cm the centreline within 20 % and the outwash within 6 % of OpenFOAM; at 4 cm the outwash 19 % low | `test_lbm_box`, `test_lbm`, `tools/validation/lbm_hover.py` | none (OpenFOAM is a model too) |
@@ -54,6 +54,10 @@ published curves only, which is risk R12 in `docs/plan/risks.md`.
 
 ## Since v1.0 (to 2026-11-03)
 
+`tools/ci/realism.sh` runs every check in this section that has measured data or a published
+reference, and writes the numbers to one page (`realism.md`); the nightly workflow's `realism`
+job runs it.
+
 The models added after the v1.0 release, each with its reference, result and test. Where the
 reference is our own OpenFOAM run, that is a check between two models, not against the air.
 
@@ -61,7 +65,7 @@ reference is our own OpenFOAM run, that is a check between two models, not again
 |---|---|---|---|
 | Rotor downwash, far jet | Bauersfeld et al. 2024 (arXiv:2403.13321), measured multirotor jets | fitted to it; its momentum flux carries the thrust within 5 %; our OpenFOAM hover centreline about 10 % under it | `test_downwash` |
 | Rotor downwash, ground outwash | Tanner et al. 2015 (NASA), 1.9 V_h at 1.7 R | fitted to it at one rotor height (1 R); between 1 R and 2 R the model's peak rises where the measurement fades (rotor_aero.md §6) | `test_downwash` |
-| Drone under a drone | Kiran, Ayanian and Breuer 2025 (RSS), stacked Crazyflies | 53 % of the thrust kept at 4 l (measured 65 %), 87 % at 19 l (measured 95–98 %): **short by 10–12 points** | `DownwashPair.TheLowerQuadcopterLosesThrustAsMeasured` |
+| Drone under a drone | Kiran, Ayanian and Breuer 2025 (RSS), stacked Crazyflies at constant voltage | 76 % of the thrust kept at 4 l (measured 65 %): **11 points over** since wakes are averaged over each disc (53 %, 12 under, when sampled at the hub); 87 % at 19 l (measured 95–98 %): **8–11 under**; constant voltage adds under one point | `DownwashPair.TheLowerQuadcopterLosesThrustAsMeasured`, `DownwashPair.AtConstantVoltage…` |
 | A wall beside a drone | own OpenFOAM, four gaps | gain 0.0173 fitted; its fade length 3.5 ± 2.7 D is poorly fixed (Tanabe et al. say 1.5 D) | `DownwashPair.AWallStarves…` |
 | Live air box (`downwash_model: lbm`) | momentum theory; own OpenFOAM hover at 2 m and 0.5 m | momentum within 2 %; disc speed at its centre 23 % over ideal (blurred edge); at 4 cm through-disc air 15–20 % under OpenFOAM's, the low-hover fountain 5.8–7.4 m/s against 7.1 m/s | `test_lbm_box`, `DownwashPair.TheLiveAirBoxDrawsTheRotorsTogether`, rotor_aero.md §8 |
 | Vortex-ring state (`bem`) | Bauersfeld et al. 2021 (NeuroBEM, RSS) eqs. 18–19, after Hoffmann et al. 2007 | the fit exactly; thrust joins hover's within 0.1 %; a step of 10 % of hover thrust into the windmill-brake state | `Bem.TheVortexRing*` |
@@ -71,6 +75,10 @@ reference is our own OpenFOAM run, that is a check between two models, not again
 | OpenFOAM cases (`lagrange foam`) | Ahmed body at 25° | Cd 0.266–0.288 against 0.2875–0.298, but 8 % apart between two meshes; 35° not trustworthy yet | cfd.md §5 |
 | Components between buses (RFC 0010) | formulas; ngspice | Lagrange within 0.5 % of the formula, ngspice within 0.1 %, on random circuits | `tools/ci/check_electrical.py`, `test_electrical_check` |
 | Walking humans | social force (Helbing and Molnár 1995) as traffic uses it | behaviour tested (they walk, steer, stop); not against measured crowds | `test_humans` |
+| Battery on drive cycles | LG HG2 UDDS, US06, LA92 (Kollmeyer et al., CC BY 4.0) | fitted to UDDS: LA92 11.7 mV, US06 20.1 mV RMS (target 20 mV; US06 not met by 0.1 mV); at 0 °C 145 mV | `BatteryDataset.TheEquivalentCircuitFollowsMeasuredDriveCycles` |
+| Planar pushing (MuJoCo, Jolt) | Yu et al. 2016 (IROS), 2000 measured pushes of rect1 on four surfaces; the quasi-static model they compare with (Lynch et al. 1992) | MuJoCo within 6 mm and 4–7° of the quasi-static model; 3–41 mm and 10–17° from the measured means (as the model is). **Jolt does not turn the block** (2° against 75°): its linear and torsional friction have separate budgets | `Conformance.APushedBlockMovesAsTheMcubeMeasurements` |
+| Quadrotor rotors in flight | NeuroBEM flights (Bauersfeld et al. 2021), 13 held-out segments, measured motor speeds and motion | `coefficients` F 1.46 N RMS (their quadratic fit 1.49); `bem` with their blade geometry and 2° fitted 1.12 N (their BEM 0.98, 14 % better; Mxy 41 % better: blade flapping) | `tools/validation/neurobem.sh` (downloads 627 MB), rotor_aero.md §9 |
+| Fossen hydrodynamics | BlueROV2 Heavy coefficients identified in a pool (von Benzon et al. 2022, CC BY 4.0) | top speeds at full thrust 0.729/0.626/0.713 m/s against their 0.72/0.63/0.71 (their model, itself within ~10 % of the pool); start acceleration F/(m + m_a) within 3 % | `Water.TheBlueRov2ReachesItsTopSpeedsWithFossensModel` |
 | Thermal camera | Incropera et al. Table 12.1 black-body fractions; Planck integrated directly; Stefan–Boltzmann; Swinbank 1963 clear sky | fractions within 1e-5, band radiance within 1e-9; a 350 K node of ε 0.95 read at its apparent temperature within the 50 mK noise; scene temperatures are assumptions (no sun, no atmosphere) | `test_thermal_camera` |
 
 ### Models with no reference yet
@@ -83,8 +91,8 @@ Said plainly, so nobody reads more into these than is there:
   spectrum to compare.
 - **Fountain lift on the frame** in the fitted model (rotor_aero.md §2.8): fitted to our own
   OpenFOAM runs at five heights only (within 0.23 N), no measurement.
-- **Hydrodynamics beyond a sphere's added mass**: other shapes' added mass, rotational added
-  inertia, wave radiation (Fossen's full model is planned, hydrodynamics.md).
+- **Hydrodynamics without a vehicle's own coefficients**: a body not in `--hydro-coefficients`
+  still takes a sphere's added mass and cell drag; wave radiation is not modelled.
 - **Lidar intensity**, **GNSS error statistics**, **sensor timing histograms**: no evidence found
   (Sensors table below).
 - **Ultrasonic cone** (the `lagrange_tof` plugin): a geometric cone and dead zone, no datasheet

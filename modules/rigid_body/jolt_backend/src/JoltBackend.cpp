@@ -862,7 +862,9 @@ Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalIo& i
         }
         tensorJ(3, 3) = 1.0F;
         settings.mMassPropertiesOverride.mInertia = tensorJ;
-        settings.mFriction = friction > 0.0F ? friction : 0.5F;
+        // A frictionless collider stays frictionless (MuJoCo keeps 0 too); only a body without
+        // colliders, which touches nothing, takes Jolt's default.
+        settings.mFriction = parts > 0 ? friction : 0.5F;
         s.groups[g].mass = mass;
         s.groups[g].inertia = inertia;
         s.groups[g].com = com;

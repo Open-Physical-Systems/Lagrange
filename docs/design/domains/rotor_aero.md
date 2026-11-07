@@ -250,17 +250,33 @@ blade-element propellers, 0.25 m arms, 565 rad/s) and compares the lower one's t
 Kiran, Ayanian and Breuer (2025, RSS XXI, arXiv:2507.09463). They used stacked Crazyflies, with
 $l$ the centre-to-motor distance:
 
-| Gap below the upper drone | Kiran et al. (measured) | Lagrange |
-|---|---|---|
-| 4 l | 65% of hover thrust | 53% |
-| 19 l | 95–98% | 87% |
+| Gap below the upper drone | Kiran et al. (measured) | Lagrange, wakes at the hub (until 2026-11-03) | Lagrange, wakes over the disc |
+|---|---|---|---|
+| 4 l | 65% of hover thrust | 53% | 76% |
+| 19 l | 95–98% | 87% | 87% |
 
-The model loses more thrust than the measurements, by about 12 points at 4 l and about 10 at
-19 l. Some of that difference is expected: the Crazyflies ran at constant voltage, so their
-rotors sped up as the load fell, while the test holds rotor speed fixed. The rest is open. The
-mean jet of Bauersfeld et al. may still be too strong that far out for a drone as small as a
-Crazyflie, or the unsteady wake may mix faster than its mean suggests. The test accepts 45–75%
-at 4 l and 85–100% at 19 l.
+Two things were checked on 2026-11-03:
+
+- **Constant voltage.** Kiran et al. drove both drones "with a constant DC voltage supply (through a
+  tether) of 4 V" (their §II-A), so their rotors sped up as the load fell. With the sample's own
+  motor at constant voltage (`AtConstantVoltageTheLowerRotorsSpeedUpAndKeepMore`, R = 0.1 Ω,
+  kT = 0.0156 N·m/A) the lower drone keeps under one point more: this motor's speed hardly moves
+  with load. It does not explain the gap. The Crazyflie's coreless motors are softer, but their
+  constants are not in the paper.
+- **Where a rotor samples the wake.** A rotor flew in the other drones' air at its hub alone. At
+  4 l each lower rotor sits under an upper rotor's contracted column, 0.71 R across at nearly
+  2 v_i: the hub saw all of it, the outer half of the disc none. Each rotor now takes the mean over
+  its disc (18 points on 3 equal-area rings, the mean momentum theory's uniform loading implies).
+  That moved 4 l from 12 points too low to 11 too high; 19 l, where the merged jet is broad, did
+  not move.
+
+What is left at 4 l is most likely the near wake's shape: a sharp-edged column that mixes with
+nothing until the jets merge at 1.5 l. A real slipstream's shear layer grows (about 0.18 per unit
+distance for a plane mixing layer into still air, Brown and Roshko 1974; slower at first behind a
+rotor, whose tip vortices hold the wake together), which spreads the same momentum over more of a
+disc below and takes more thrust from it. At 19 l the merged jet of Bauersfeld et al. is still 8 to
+11 points too strong for a Crazyflie; their smallest drone weighed 0.23 kg, the Crazyflie 27 g. The
+tests accept 0.65 ± 0.12 at 4 l and 85–100% at 19 l.
 
 `test_downwash` also checks buildings (§2.6). A wake over a roof stops on it, spreads over it
 and stops at its edges, and leaves still air inside and beneath. A wall beside a wake makes the
@@ -495,3 +511,45 @@ drone's centre and 0.3–0.5 m/s more down than a lone rotor: OpenFOAM's hover c
 by about 1% (543–564 rad/s) where the fitted model holds them constant.
 
 ![Live air: hovering, then down to half a metre](../../videos/drone_live_air.mp4)
+
+## 9. Against measured flight: NeuroBEM
+
+Bauersfeld, Kaufmann, Foehn, Sun and Scaramuzza ("NeuroBEM: Hybrid Aerodynamic Quadrotor Model",
+RSS 2021) flew a 0.772 kg racing quadrotor (Armattan Chameleon 6" frame, 0.13 m arms, 5.1" three-
+blade propellers) for 75 minutes in a Vicon hangar at up to 65 km/h and published the logs at
+400 Hz: body velocity, angular rate, acceleration and the four measured motor speeds
+([dataset](https://rpg.ifi.uzh.ch/NeuroBEM.html); no licence stated, so it is downloaded, never
+committed). From the measured motion the force and torque on the vehicle are m·a and
+J·dω/dt + ω × Jω; `lagrange_rotor_replay` computes what Lagrange's rotors make from the measured
+motor speeds and motion, and `tools/validation/neurobem.sh` downloads the data, checks its SHA-256
+and runs the authors' 13 held-out test segments. Errors as their Table II gives them (RMS, N and
+N·m; F and M over the three axes):
+
+| Model | Fxy | Fz | Mxy | Mz | F | M |
+|---|---|---|---|---|---|---|
+| Their quadratic fit (Table II "Fit") | 1.536 | 1.381 | 0.104 | 0.033 | 1.486 | 0.087 |
+| Their blade-element model (Table II "BEM") | 0.803 | 1.265 | 0.090 | 0.017 | 0.982 | 0.074 |
+| Lagrange `coefficients`, CT 0.179 and CP 0.0022 fitted to the other 234 segments | 1.356 | 1.642 | 0.109 | 0.006 | 1.458 | 0.089 |
+| Lagrange `bem`, their measured blade geometry, nothing fitted | 1.142 | 2.088 | 0.115 | 0.009 | 1.524 | 0.094 |
+| Lagrange `bem`, blade angle +2.0° fitted to the other segments | 1.113 | 1.141 | 0.128 | 0.010 | 1.122 | 0.105 |
+
+The propeller (`assets/propellers/neurobem_5in_3blade_*.prop.yaml`) has the radius, blade angle
+(21.77° at the axis, −11° to the tip) and chord (17 to 7 mm) the authors measured; its sections
+are our low-Reynolds-number NACA 6412, an assumption (theirs are not published, and their lift and
+drag coefficients were identified for their own model, which has no tip loss). One parameter is
+fitted, as they fitted theirs on a test stand.
+
+- **The coefficient model is their quadratic fit**: 1.46 N against 1.49 N.
+- **`bem` cuts the force error by a quarter** (1.12 N, 15 % of the weight), most of it in Fz as
+  the vehicle climbs, descends and flies fast through its own inflow, and is best of all on yaw.
+- **It is 14 % behind their blade-element model on force, 41 % on Mxy.** The difference is in
+  the plane of the disc: they model blade flapping on a hinge spring identified from video of the
+  spinning propeller (coning, and its forward and sideways tilt in edgewise flow); ours are rigid
+  blades with a hub moment from the advancing blade's lift (aerodynamics.md §2.1). Neither model
+  has the frame's drag or the rotors' interference with each other.
+- **Unfitted, the geometry alone gives 1.52 N**: the 2° is the gap between a guessed section and
+  the real one, about what a NACA chart's zero-lift angle is uncertain by.
+
+Owed: blade flapping (coning and tilt), the frame's drag, a per-axis comparison of moments. The
+arm geometry and spin directions are from their trajectory code (`setupKingfisher.m`) and the
+logs; the rotors' height above the centre of mass is taken as zero.

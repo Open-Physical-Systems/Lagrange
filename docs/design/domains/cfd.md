@@ -315,6 +315,28 @@ The 0.69 looked like the breakthrough and is not one: it comes with lift 3.3 aga
 
 Cube and plate figures are at their test grids. Their measured values are 1.05 and 1.17; without these changes they read 1.03 and 0.97.
 
+### Wall functions (2026-11-03)
+
+The friction defect below points at the boundary layer: next to a wall the Smagorinsky viscosity is
+about $C_s^2\Delta U$, so each wall cell behaves like laminar flow at a cell Reynolds number near
+$1/C_s^2\approx35$ whatever the true Reynolds number. A wall function should give the wall the log
+law's stress $\rho u_\tau^2$ instead, with $u_\tau$ from Spalding's law of the wall (J. Appl. Mech.
+28, 1961) at a cell further out. Four forms were built on the CPU and measured on a 1 m plate along a
+20 m/s wind at 1 cm cells (`DISABLED_AFlatPlatesFrictionAgainstTheTurbulentLaw`, the law 0.0042) and
+on a bluff plate facing the wind (measured Cd 1.17, 0.97 without any of them):
+
+| Form | Plate friction Cf | Bluff plate Cd | Why it fails |
+|---|---|---|---|
+| None | 0.0130 | 0.97 | 3.1 times the law |
+| Hand back what bounce-back takes beyond the law, as a force along the wall | runs away, Cf −0.063 | | the momentum handed back is bounced again next step |
+| Rebuild the wall cell at the law's velocity with the law's stress (after Malaspinas and Sagaut, Journal of Computational Physics 275, 2014) | 0.0046 | −2.86 | friction right, but pressure on the plate inverts (front $C_p$ −2.0): the rebuild discards what bounce-back needs at stagnation; easing it in per step did not cure it |
+| Partial slip, bounce-back mixed with mirroring (Succi, PRL 89, 2002), the share set by the law | 0.33 | 0.27 | the wall cell runs faster than the free stream: near free slip at τ ≈ 0.5 is unstable in BGK |
+| The wall cell's viscosity set so that bounce-back's friction is the law's, the next three cells given the log layer's $\kappa y u_\tau$ | 0.015–0.027 | 1.10–1.21 | below τ ≈ 0.501 the wall cells over-relax (ω ≈ 2) and bounce-back's momentum is then oscillation, not stress |
+
+None was kept. What would likely work is a wall cell whose collision stays stable as τ → ½ (two
+relaxation times with the wall placed exactly, or a regularized collision only there) under the
+log-layer viscosity, then the Ahmed body again; that is a research step, not a fix.
+
 ## 8. Known defects
 
 - **Stripes and offset.** The pressure panel shows stripes two cells wide starting at the inlet, and the
@@ -322,7 +344,10 @@ Cube and plate figures are at their test grids. Their measured values are 1.05 a
   (section 7 removes it on the CPU). The stripes' source is still open, as is their link to the
   checkerboard in speed and spin.
 - **Wall friction too high.** A plate along the wind reads 0.037 at 1M cells and 0.014 at 4M, against
-  about 0.0037 for a turbulent flat plate.
+  about 0.0037 for a turbulent flat plate. Those figures included the plate's blunt ends: measured
+  alone (2026-11-03, a 1 m plate at 1 cm cells, Re 1.3·10⁶), friction is Cf 0.0130 against the
+  turbulent law's 0.0042, 3.1 times, and the one-cell ends add another 0.010. Section 7 lists the
+  wall functions tried against it.
 - **Lift is not settled** in either tool.
 
 ## 9. Next

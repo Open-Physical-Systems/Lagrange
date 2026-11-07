@@ -1,0 +1,10 @@
+# Written by fit_ecm_drive.py from doi:10.17632/b5mj79w5w9.2 (CC BY 4.0), 25 degC: r0 and
+# two RC pairs fitted to the UDDS cycle above SoC 0.2; OCV and capacity as ecm_fit.txt.
+#   udds_25degC.csv: 7.41 mV RMS above SoC 0.35
+#   us06_25degC.csv: 20.05 mV RMS above SoC 0.35
+#   la92_25degC.csv: 11.73 mV RMS above SoC 0.35
+r0_ohm 0.0189393
+r1_ohm 0.0173121
+c1_F 1093.52
+r2_ohm 0.0451846
+c2_F 84686.6

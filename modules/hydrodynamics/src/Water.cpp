@@ -3,8 +3,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <numbers>
+#include <optional>
 #include <span>
+#include <sstream>
 
 namespace lagrange::hydrodynamics {
 
@@ -193,6 +196,38 @@ Duration Water::preferredStep() const {
     return Duration{1'000'000};
 }
 
+bool fossenFromConfig(const ModuleConfig& config, const std::string& body, FossenCoefficients& out,
+                      std::string& error) {
+    const std::optional<std::string> text = config.get<std::string>("fossen:" + body);
+    if (!text) {
+        return false;
+    }
+    std::vector<double> v;
+    std::string cell;
+    for (std::istringstream in(*text); std::getline(in, cell, ',');) {
+        char* end = nullptr;
+        const double x = std::strtod(cell.c_str(), &end);
+        if (end == cell.c_str() || !std::isfinite(x) || x < 0.0) {
+            error = "fossen:" + body + ": '" + cell + "' is not a number >= 0";
+            return false;
+        }
+        v.push_back(x);
+    }
+    if (v.size() != 18) {
+        error = "fossen:" + body +
+                " needs 18 numbers (added mass, linear and quadratic damping, "
+                "each surge, sway, heave, roll, pitch, yaw), not " +
+                std::to_string(v.size());
+        return false;
+    }
+    for (std::size_t k = 0; k < 6; ++k) {
+        out.addedMass.at(k) = v[k];
+        out.linearDamping.at(k) = v[6 + k];
+        out.quadraticDamping.at(k) = v[12 + k];
+    }
+    return true;
+}
+
 Status Water::declare(const WorldView& world, const ModuleConfig& config, SignalDeclarer& d) {
     waters_ = waterOf(world);
     bodies_.clear();
@@ -233,6 +268,13 @@ Status Water::declare(const WorldView& world, const ModuleConfig& config, Signal
         Body body;
         body.com = raw.bodies.comLocal[b];
         body.mass = raw.bodies.mass[b];
+        std::string problem;
+        body.fossen = fossenFromConfig(config, raw.bodies.names[b], body.coefficients, problem);
+        if (!problem.empty()) {
+            return Status::error(StatusCode::InvalidConfig, problem);
+        }
+        const std::array<double, 6>& inertia = raw.bodies.inertiaLocal[b];
+        body.rigid = {body.mass, body.mass, body.mass, inertia[0], inertia[1], inertia[2]};
         for (std::size_t c = 0; c < raw.colliders.body.size(); ++c) {
             if (raw.colliders.body[c] != BodyId{b}) {
                 continue;
@@ -293,6 +335,8 @@ Status Water::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
         body.lastVelocity = {};
         body.acceleration = {};
         body.started = false;
+        body.lastRelative = {};
+        body.relativeAcceleration = {};
         bus.writeN(body.wrench, std::array<double, 6>{});
         bus.write(body.submerged, 0.0);
     }
@@ -391,7 +435,8 @@ Status Water::step(const StepContext& context, SignalBus& bus) {
                     // The cells' share of the frontal area: a stack of kCells makes one face.
                     const double area =
                         fraction >= 1.0 ? cell.area : std::pow(volume, 2.0 / 3.0) / kCells;
-                    const double dragGain = 0.5 * water.density * water.drag * area * magnitude;
+                    const double dragGain =
+                        body.fossen ? 0.0 : 0.5 * water.density * water.drag * area * magnitude;
                     const std::array<double, 3> force{
                         -water.density * gravity_[0] * volume - dragGain * speed[0],
                         -water.density * gravity_[1] * volume - dragGain * speed[1],
@@ -409,7 +454,10 @@ Status Water::step(const StepContext& context, SignalBus& bus) {
         // Morison's inertia terms at the centre of mass: the water's acceleration pushes the
         // displaced volume, and the added mass resists the body's acceleration through it.
         const double density = waters_.empty() ? 1000.0 : waters_.front().density;
-        const double added = kAddedMassShare * density * under;
+        const double added = body.fossen ? 0.0 : kAddedMassShare * density * under;
+        if (body.fossen && v.size() == 6 && p.size() == 7) {
+            fossenWrench(body, p, v, t, dt, under, wrench);
+        }
         if (v.size() == 6) {
             const std::array<double, 3> now{v[0], v[1], v[2]};
             const double gain = body.mass > 0.0 ? 1.0 / (1.0 + added / body.mass) : 1.0;
@@ -434,6 +482,73 @@ Status Water::step(const StepContext& context, SignalBus& bus) {
     return {};
 }
 
+void Water::fossenWrench(Body& body, std::span<const double> p, std::span<const double> v, double t,
+                         double dt, double under, std::array<double, 6>& wrench) {
+    const Pose pose{{p[0], p[1], p[2]}, {p[3], p[4], p[5], p[6]}};
+    const std::array<double, 3> com = placed(pose, body.com);
+    const std::array<double, 4> toBody = conjugate(pose.orientation);
+    // The water's velocity at the centre of mass (the first water body that holds it).
+    std::array<double, 3> water{};
+    for (std::size_t w = 0; w < waters_.size(); ++w) {
+        const WaterBody& wb = waters_[w];
+        if (std::abs(com[0] - wb.surface[0]) <= wb.sizeX / 2.0 &&
+            std::abs(com[1] - wb.surface[1]) <= wb.sizeY / 2.0) {
+            water = flowAt(wb, wavenumbers_[w], com, t).velocity;
+            break;
+        }
+    }
+    const std::array<double, 3> omegaWorld{v[3], v[4], v[5]};
+    const std::array<double, 3> arm = rotate(pose.orientation, body.com);
+    const std::array<double, 3> spin = cross(omegaWorld, arm);
+    const std::array<double, 3> through = rotate(
+        toBody, {v[0] + spin[0] - water[0], v[1] + spin[1] - water[1], v[2] + spin[2] - water[2]});
+    const std::array<double, 3> omega = rotate(toBody, omegaWorld);
+    const std::array<double, 6> nu{through[0], through[1], through[2],
+                                   omega[0],   omega[1],   omega[2]};
+    const double share = body.volume > 0.0 ? std::clamp(under / body.volume, 0.0, 1.0) : 0.0;
+    const FossenCoefficients& c = body.coefficients;
+    std::array<double, 6> a{};
+    for (std::size_t k = 0; k < 6; ++k) {
+        a.at(k) = share * c.addedMass.at(k);
+    }
+    // ν̇_r, smoothed per axis so that a light body with much added mass stays stable.
+    if (body.started && dt > 0.0) {
+        for (std::size_t k = 0; k < 6; ++k) {
+            const double gain =
+                body.rigid.at(k) > 0.0 ? 1.0 / (1.0 + a.at(k) / body.rigid.at(k)) : 1.0;
+            const double measured = (nu.at(k) - body.lastRelative.at(k)) / dt;
+            body.relativeAcceleration.at(k) += gain * (measured - body.relativeAcceleration.at(k));
+        }
+    }
+    body.lastRelative = nu;
+    // −M_A·ν̇_r − C_A(ν_r)·ν_r − D(ν_r)·ν_r, body frame. With A_t, A_r the translational and
+    // rotational added masses: −C_A·ν = (ω × A_t·u, u × A_t·u + ω × A_r·ω).
+    const std::array<double, 3> u{nu[0], nu[1], nu[2]};
+    const std::array<double, 3> w{nu[3], nu[4], nu[5]};
+    const std::array<double, 3> au{a[0] * u[0], a[1] * u[1], a[2] * u[2]};
+    const std::array<double, 3> aw{a[3] * w[0], a[4] * w[1], a[5] * w[2]};
+    const std::array<double, 3> f1 = cross(w, au);
+    const std::array<double, 3> m1 = cross(u, au);
+    const std::array<double, 3> m2 = cross(w, aw);
+    std::array<double, 6> tau{};
+    for (std::size_t k = 0; k < 6; ++k) {
+        const double damping =
+            share * (c.linearDamping.at(k) + c.quadraticDamping.at(k) * std::abs(nu.at(k)));
+        tau.at(k) = -a.at(k) * body.relativeAcceleration.at(k) - damping * nu.at(k);
+    }
+    for (std::size_t k = 0; k < 3; ++k) {
+        tau.at(k) += f1.at(k);
+        tau.at(k + 3) += m1.at(k) + m2.at(k);
+    }
+    // Back to the world, the force at the centre of mass (wrench/water is about it).
+    const std::array<double, 3> force = rotate(pose.orientation, {tau[0], tau[1], tau[2]});
+    const std::array<double, 3> moment = rotate(pose.orientation, {tau[3], tau[4], tau[5]});
+    for (std::size_t k = 0; k < 3; ++k) {
+        wrench.at(k) += force.at(k);
+        wrench.at(k + 3) += moment.at(k);
+    }
+}
+
 // It keeps each body's last velocity and smoothed acceleration, for the added mass.
 Status Water::saveState(StateWriter& writer) const {
     for (const Body& body : bodies_) {
@@ -444,6 +559,17 @@ Status Water::saveState(StateWriter& writer) const {
             writer.put(x);
         }
         writer.put(body.started ? 1.0 : 0.0);
+    }
+    // Fossen's bodies after all the others, so that states without them still restore.
+    for (const Body& body : bodies_) {
+        if (body.fossen) {
+            for (const double x : body.lastRelative) {
+                writer.put(x);
+            }
+            for (const double x : body.relativeAcceleration) {
+                writer.put(x);
+            }
+        }
     }
     return {};
 }
@@ -472,6 +598,22 @@ Status Water::restoreState(StateReader& reader) {
             return Status::error(StatusCode::InvalidConfig, "water state truncated");
         }
         body.started = started != 0.0;
+    }
+    for (Body& body : bodies_) {
+        if (!body.fossen) {
+            continue;
+        }
+        bool fossenOk = true;
+        for (double& x : body.lastRelative) {
+            fossenOk = fossenOk && reader.get(x);
+        }
+        for (double& x : body.relativeAcceleration) {
+            fossenOk = fossenOk && reader.get(x);
+        }
+        if (!fossenOk) {  // saved before the body had its own coefficients
+            body.lastRelative = {};
+            body.relativeAcceleration = {};
+        }
     }
     return {};
 }

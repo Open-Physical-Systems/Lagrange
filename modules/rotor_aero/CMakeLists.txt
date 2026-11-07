@@ -26,6 +26,12 @@ target_link_libraries(
     PRIVATE yaml-cpp::yaml-cpp Threads::Threads
 )
 
+# Lagrange's rotors against measured flight (rotor_aero.md §9).
+add_executable(lagrange_rotor_replay bem/src/replay_main.cpp)
+lagrange_target_defaults(lagrange_rotor_replay)
+target_link_libraries(lagrange_rotor_replay lagrange_rotor_aero)
+install(TARGETS lagrange_rotor_replay DESTINATION lib/${PROJECT_NAME})
+
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
 install(
     TARGETS lagrange_rotor_aero

@@ -322,5 +322,41 @@ TEST(Lbm, ABluffPlatesDragIsTheRightSizeAtHighReynolds) {
     EXPECT_LT(cd, 1.7);
 }
 
+// A flat plate along the wind at Re 1.3·10⁶, against the turbulent law Cf = 0.455/(log₁₀ Re)^2.58
+// (Prandtl and Schlichting; Schlichting, Boundary-Layer Theory, ch. 21), 0.0042: by hand, it
+// records a known defect (cfd.md §8). The plate's two end cells are a solid of their own, so
+// that their pressure (a one-cell edge at stagnation adds about 0.01 to Cf here) stays out of
+// the friction. Measured 2026-11-03: Cf 0.0130, 3.1 times the law.
+TEST(Lbm, DISABLED_AFlatPlatesFrictionAgainstTheTurbulentLaw) {
+    LbmConfig config;
+    config.nx = 220;
+    config.ny = 4;
+    config.nz = 60;
+    config.cellSize = 0.01;
+    config.windSpeed = 20.0;
+    LbmTunnel tunnel(config);
+    const std::size_t from = 40;
+    const std::size_t length = 100;  // 1 m
+    for (std::size_t y = 0; y < config.ny; ++y) {
+        for (std::size_t x = from; x < from + length; ++x) {
+            tunnel.setSolid(x, y, 30, x == from || x + 1 == from + length ? 1 : 0);
+        }
+    }
+    tunnel.step(13000);
+    tunnel.step(2000);
+    ASSERT_FALSE(tunnel.diverged());
+    const double l = static_cast<double>(length) * config.cellSize;
+    const double w = static_cast<double>(config.ny) * config.cellSize;
+    const double q = 0.5 * config.airDensity * config.windSpeed * config.windSpeed;
+    const double re = config.windSpeed * l / config.kinematicViscosity;
+    const double cf = tunnel.loads()[0].force[0] / (q * 2.0 * l * w);
+    const double ends = tunnel.loads()[1].force[0] / (q * 2.0 * l * w);
+    const double law = 0.455 / std::pow(std::log10(re), 2.58);
+    std::printf(
+        "plate along the wind, Re %.3g: friction Cf %.5f (the turbulent law %.5f, %.1f "
+        "times), the ends' pressure %.5f more\n",
+        re, cf, law, cf / law, ends);
+}
+
 }  // namespace
 }  // namespace lagrange::aerodynamics

@@ -556,6 +556,50 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
             }
         }
     }
+    // The mean of `sample` over a disc of `radius` about `centre` facing `axis`: kDiscRings rings
+    // of kDiscSpokes points, each ring at the middle of an equal share of the area, so the mean is
+    // the area's (uniform disc loading, as momentum theory has it).
+    const auto discMean = [](const Vec3& centre, const Vec3& axis, double radius, auto sample) {
+        constexpr int kDiscRings = 3;
+        constexpr int kDiscSpokes = 6;
+        Vec3 a = axis;
+        const double n = std::hypot(a[0], a[1], a[2]);
+        if (!(n > 0.0) || !(radius > 0.0)) {
+            return sample(centre);
+        }
+        for (double& c : a) {
+            c /= n;
+        }
+        // Two directions across the disc.
+        const Vec3 helper = std::abs(a[2]) < 0.9 ? Vec3{0.0, 0.0, 1.0} : Vec3{1.0, 0.0, 0.0};
+        Vec3 u = cross(a, helper);
+        const double un = std::hypot(u[0], u[1], u[2]);
+        for (double& c : u) {
+            c /= un;
+        }
+        const Vec3 v = cross(a, u);
+        Vec3 sum{};
+        for (int ring = 0; ring < kDiscRings; ++ring) {
+            const double r = radius * std::sqrt((ring + 0.5) / kDiscRings);
+            for (int spoke = 0; spoke < kDiscSpokes; ++spoke) {
+                // Rings turned against each other so the points do not line up.
+                const double phi =
+                    2.0 * std::numbers::pi * (spoke + 0.5 * (ring % 2)) / kDiscSpokes;
+                const double cu = r * std::cos(phi);
+                const double cv = r * std::sin(phi);
+                const Vec3 value = sample(Vec3{centre[0] + cu * u[0] + cv * v[0],
+                                               centre[1] + cu * u[1] + cv * v[1],
+                                               centre[2] + cu * u[2] + cv * v[2]});
+                for (std::size_t k = 0; k < 3; ++k) {
+                    sum[k] += value[k];
+                }
+            }
+        }
+        for (double& c : sum) {
+            c /= kDiscRings * kDiscSpokes;
+        }
+        return sum;
+    };
     // Other robots' rotors at a point, for a link or rotor of `group`: the box inside it.
     const auto wakeAt = [&](const Vec3& at, std::size_t group) {
         if (live_ && live_->contains(at)) {
@@ -680,8 +724,12 @@ Status AeroDrag::step(const StepContext& context, SignalBus& bus) {
     for (std::size_t i = 0; i < rotors_.size(); ++i) {
         const Downwash::Rotor& w = wakes[i];
         const Vec3 mean = meanAir(w.hub);
-        Vec3 wake = wakeAt(w.hub, rotors_[i].group);
         const bool boxed = live_ && w.group == liveGroup_;
+        // Other robots' wakes over the whole disc, not at its hub alone: a column narrower than
+        // the disc (a rotor's contracted near wake is 0.71 R across) reaches only part of it.
+        Vec3 wake = boxed ? wakeAt(w.hub, rotors_[i].group)
+                          : discMean(w.hub, w.thrustAxis, w.radius,
+                                     [&](const Vec3& at) { return wakeAt(at, rotors_[i].group); });
         if (boxed) {
             // The box's air over the disc less the disc's own: walls, ground and the other
             // rotors of the drone are in it, so no fitted wall effect on top.

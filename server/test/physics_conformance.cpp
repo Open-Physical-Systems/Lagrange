@@ -373,6 +373,159 @@ TEST_P(Conformance, RunsAreDeterministicAndStateRestores) {
     EXPECT_EQ(server.stateHash().value(), straight) << "restored, it runs on the same";
 }
 
+/// The MCube pushing experiment (Yu, Bauza, Fazeli and Rodriguez, "More than a Million Ways to Be
+/// Pushed", IROS 2016, §VII and Table IV): the stainless-steel square rect1 (0.837 kg, 90 mm a
+/// side, 13 mm thick, 1.13 g·m² about its axis; their Table III) pushed 15 cm at 20 mm/s by a
+/// 9.5 mm steel rod, normal to a face, halfway between the face's centre and its edge, on four
+/// surfaces whose sliding friction they measured after break-in (§V: abs 0.13, delrin 0.12,
+/// plywood 0.24, pu 0.28); rod on block about 0.25. Returns the block's (Δx, Δy, Δθ) in mm, mm,
+/// degrees, pushed along −y from (0, 0, 0). Both engines take the larger of two surfaces'
+/// friction, so the block itself has none of its own.
+struct Push {
+    double dx, dy, dtheta;
+};
+Push pushRect1(const ServerOptions& base, double surfaceFriction) {
+    constexpr double kTop = 0.5;        // m, the table's top
+    constexpr double kSide = 0.090;     // m
+    constexpr double kThick = 0.013;    // m
+    constexpr double kRod = 0.00475;    // m, radius
+    constexpr double kOffset = 0.0225;  // m, halfway from the face's centre to its edge
+    constexpr double kTravel = 0.150;   // m
+    constexpr double kSpeed = 0.020;    // m/s
+    std::ostringstream models;
+    models << "<model name=\"table\"><static>true</static><pose>0 0 " << kTop / 2.0
+           << " 0 0 0</pose><link name=\"link\"><collision name=\"c\"><geometry><box><size>1 1 "
+           << kTop << "</size></box></geometry><surface><friction><ode><mu>" << surfaceFriction
+           << "</mu></ode></friction></surface></collision></link></model>";
+    models << "<model name=\"rect1\"><pose>0 0 " << kTop + kThick / 2.0 + 0.0005
+           << " 0 0 0</pose><link name=\"link\"><inertial><mass>0.837</mass><inertia>"
+           << "<ixx>0.000577</ixx><iyy>0.000577</iyy><izz>0.00113</izz></inertia></inertial>"
+           << "<collision name=\"c\"><geometry><box><size>" << kSide << " " << kSide << " "
+           << kThick << "</size></box></geometry><surface><friction><ode><mu>0</mu></ode>"
+           << "</friction></surface></collision></link></model>";
+    // The rod: on a slide along −y from a frame bolted to the world, its foot 3 mm above the
+    // table, starting against the block's +y face at x = −kOffset (the side the measured block
+    // turns towards).
+    std::ostringstream rig;
+    rig << "<robot name=\"pusher\"><link name=\"world\"/><link name=\"rail\"><inertial><mass "
+        << "value=\"1\"/><inertia ixx=\"0.01\" iyy=\"0.01\" izz=\"0.01\" ixy=\"0\" ixz=\"0\" "
+        << "iyz=\"0\"/></inertial></link><joint name=\"bolt\" type=\"fixed\"><parent "
+        << "link=\"world\"/><child link=\"rail\"/><origin xyz=\"" << -kOffset << " "
+        << kSide / 2.0 + kRod + 0.0002 << " " << kTop + 0.003 + 0.025 << "\"/></joint>"
+        << "<link name=\"rod\"><inertial><mass value=\"10\"/><inertia ixx=\"0.01\" iyy=\"0.01\" "
+        << "izz=\"0.01\" ixy=\"0\" ixz=\"0\" iyz=\"0\"/></inertial><collision><geometry>"
+        << "<cylinder radius=\"" << kRod << "\" length=\"0.05\"/></geometry></collision>"
+        << "</link><joint name=\"slide\" type=\"prismatic\"><parent link=\"rail\"/><child "
+        << "link=\"rod\"/><axis xyz=\"0 -1 0\"/><limit lower=\"-1\" upper=\"1\" effort=\"1000\" "
+        << "velocity=\"1\"/></joint><gazebo reference=\"rod\"><mu1>" << "0.25"
+        << "</mu1></gazebo></robot>";
+    ServerOptions o = base;
+    o.robotPath = write("pusher.urdf", rig.str());
+    o.worldPath = world("push", models.str());
+    o.jointControl = true;
+    o.jointLoopHz = 50.0;  // stiff: the 1 N push moves the 10 kg rod off its path by ~1 µm
+    Server server(o);
+    const Status loaded = server.load();
+    EXPECT_TRUE(loaded.ok()) << loaded.message;
+    if (!loaded.ok()) {
+        return {};
+    }
+    EXPECT_TRUE(server.stepUntil(SimTime{200'000'000}).ok());  // the block settles on the table
+    const auto bodyPose = [&]() {
+        for (const std::string& name : server.world().bodies.names) {
+            if (name.find("rect1") != std::string::npos) {
+                return server.read("body/" + name + "/pose");
+            }
+        }
+        return std::vector<double>(7, 0.0);
+    };
+    const std::vector<double> start = bodyPose();
+    constexpr std::int64_t kTick = 5'000'000;  // ns: the ramp's steps
+    const auto steps = static_cast<std::int64_t>(kTravel / kSpeed * 1e9) / kTick;
+    for (std::int64_t k = 1; k <= steps; ++k) {
+        server.commandJoint("slide", "position", kSpeed * static_cast<double>(k * kTick) * 1e-9);
+        EXPECT_TRUE(server.stepUntil(SimTime{200'000'000 + k * kTick}).ok());
+    }
+    const std::vector<double> end = bodyPose();
+    const auto yaw = [](const std::vector<double>& q) {
+        return std::atan2(2.0 * (q[3] * q[6] + q[4] * q[5]),
+                          1.0 - 2.0 * (q[5] * q[5] + q[6] * q[6]));
+    };
+    return {(end[0] - start[0]) * 1e3, (end[1] - start[1]) * 1e3,
+            (yaw(end) - yaw(start)) * 180.0 / std::numbers::pi};
+}
+
+// Against the pushing model the measurements were compared with, and the measurements themselves.
+// Under uniform Coulomb friction the path does not depend on the support's friction, only on the
+// rod's and the pressure under the block, so one deterministic answer stands for all four
+// surfaces: the quasi-static simulator of Lynch, Maekawa and Tanie (1992) the authors ran, which
+// gave (41.0 mm, −98.1 mm, 66.3°) (their Table IV). The engine must give that within 10 mm and
+// 8°: a box resting on a plane is held at its four corners in MuJoCo, where Lynch et al. spread
+// the pressure evenly, and friction at the corners (63.6 mm out, against 34.4 mm on average for
+// even pressure) holds it from turning a little more: it turns 4 to 7° less. The measured means
+// differ by surface (pressure, anisotropy, speed-dependent friction: their §V) and are printed:
+// rigid_body.md §7 has the numbers.
+//
+// Jolt (5.6) keeps linear friction and friction about the contact normal on separate budgets
+// (ContactConstraintManager: μ·Σλ for the one, μ·Σ dᵢ·λᵢ for the other), so a block sliding at its
+// full friction still resists turning at full strength and stays straight: a known limitation of
+// that engine's contact model, reported, not asserted.
+TEST_P(Conformance, APushedBlockMovesAsTheMcubeMeasurements) {
+    struct Measured {
+        const char* surface;
+        double friction, dx, dy, dtheta, translationStd, rotationStd;
+    };
+    const std::vector<Measured> table{{"abs", 0.13, 40.1, -67.6, 74.7, 5.5, 3.2},
+                                      {"delrin", 0.12, 38.8, -50.7, 78.5, 3.4, 1.3},
+                                      {"plywood", 0.24, 36.4, -93.6, 70.2, 8.1, 4.2},
+                                      {"pu", 0.28, 40.2, -85.0, 69.3, 11.7, 4.5}};
+    constexpr Push kQuasiStatic{41.0, -98.1, 66.3};  // Lynch et al., as run by Yu et al.
+    const bool jolt = GetParam().name.find("jolt") != std::string::npos;
+    for (const Measured& m : table) {
+        const Push p = pushRect1(options("", ""), m.friction);
+        std::printf(
+            "%s push on %s: (%.1f, %.1f, %.1f), measured (%.1f, %.1f, %.1f) ± (%.1f mm, "
+            "%.1f deg): %.1f mm and %+.1f deg off; the quasi-static model %.1f mm and "
+            "%+.1f deg off it\n",
+            GetParam().name.c_str(), m.surface, p.dx, p.dy, p.dtheta, m.dx, m.dy, m.dtheta,
+            m.translationStd, m.rotationStd, std::hypot(p.dx - m.dx, p.dy - m.dy),
+            p.dtheta - m.dtheta, std::hypot(kQuasiStatic.dx - m.dx, kQuasiStatic.dy - m.dy),
+            kQuasiStatic.dtheta - m.dtheta);
+        if (!jolt) {
+            EXPECT_LT(std::hypot(p.dx - kQuasiStatic.dx, p.dy - kQuasiStatic.dy), 10.0)
+                << m.surface;
+            EXPECT_LT(std::abs(p.dtheta - kQuasiStatic.dtheta), 8.0) << m.surface;
+        }
+    }
+}
+
+// A frictionless box on a frictionless 10° ramp slides down it at g·sin θ: a body whose
+// colliders have no friction keeps none (Jolt once gave such a body its default of 0.5).
+TEST_P(Conformance, AFrictionlessBoxSlidesAtGSinTheta) {
+    const double theta = 10.0 * std::numbers::pi / 180.0;
+    const double lift = 0.2 + 0.001;
+    std::string ramp = box("ramp", 0.0, 0.0, 2.5, theta, true, "4 2 0.2");
+    std::string block =
+        box("block", lift * std::sin(theta), 0.0, 2.5 + lift * std::cos(theta), theta);
+    const auto frictionless = [](std::string model) {
+        const std::string at = "</geometry>";
+        model.insert(model.find(at) + at.size(),
+                     "<surface><friction><ode><mu>0</mu></ode></friction></surface>");
+        return model;
+    };
+    Server server(options("", world("ice", frictionless(ramp) + frictionless(block))));
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{100'000'000}).ok());
+    const std::vector<double> a = pose(server, "block");
+    ASSERT_TRUE(server.stepUntil(SimTime{1'100'000'000}).ok());
+    const std::vector<double> b = pose(server, "block");
+    // From rest at 0.1 s it has slid about ½·g·sin θ·t² by 1.1 s (the first 0.1 s added a little).
+    const double slid = std::hypot(b[0] - a[0], b[2] - a[2]);
+    const double expected = 0.5 * 9.80665 * std::sin(theta) * (1.1 * 1.1 - 0.1 * 0.1);
+    EXPECT_NEAR(slid, expected, 0.15 * expected);
+}
+
 INSTANTIATE_TEST_SUITE_P(Backends, Conformance, ::testing::ValuesIn(backends()),
                          [](const ::testing::TestParamInfo<Backend>& param) {
                              return param.param.name;

@@ -1,0 +1,36 @@
+# The 5.1-inch three-blade propeller of the NeuroBEM quadrotor (Bauersfeld, Kaufmann, Foehn, Sun
+# and Scaramuzza, "NeuroBEM: Hybrid Aerodynamic Quadrotor Model", RSS 2021), from the geometry the
+# authors measured and published with their dataset (code/Matlab/BEM/subroutines/setParam.m:
+# radius 5.1 in / 2, three blades, blade angle 21.77 deg at the axis with a linear twist of
+# -11 deg to the tip, chord 17 mm at the axis falling linearly to 7 mm at the tip). Used by
+# lagrange_rotor_replay to check the bem fidelity against their flights (rotor_aero.md section 9).
+# Their identified lift and drag coefficients are for their own blade-element model, which has
+# no tip loss, and are not used: the sections here are the same low-Reynolds-number NACA 6412 as
+# the generic propellers (an assumption: the real sections are not published).
+format: lagrange-propeller-1
+name: NeuroBEM 5.1 in, 3 blades, cw
+diameter: 0.12954          # m
+blades: 3
+hand: cw
+aerofoils:
+  naca6412_low_re:
+    lift_slope: 5.73     # 1/rad (0.1 per degree), NACA Report 586 fig. 8, as the generic propellers
+    zero_lift_angle: -5.0  # deg
+    cl_max: 1.35
+    cl_min: -0.3         # TODO(verify): the chart's negative stall is off its range
+    cd_min: 0.023
+    cl_at_cd_min: 0.7
+    cd_lift: 0.016
+    camber: 0.06
+    camber_position: 0.4
+stations:
+  - {r: 0.15, chord: 0.2393, twist: 20.12, thickness: 0.14, aerofoil: naca6412_low_re}
+  - {r: 0.25, chord: 0.2239, twist: 19.02, thickness: 0.14, aerofoil: naca6412_low_re}
+  - {r: 0.35, chord: 0.2084, twist: 17.92, thickness: 0.11, aerofoil: naca6412_low_re}
+  - {r: 0.45, chord: 0.1930, twist: 16.82, thickness: 0.11, aerofoil: naca6412_low_re}
+  - {r: 0.55, chord: 0.1776, twist: 15.72, thickness: 0.11, aerofoil: naca6412_low_re}
+  - {r: 0.65, chord: 0.1621, twist: 14.62, thickness: 0.11, aerofoil: naca6412_low_re}
+  - {r: 0.75, chord: 0.1467, twist: 13.52, thickness: 0.11, aerofoil: naca6412_low_re}
+  - {r: 0.85, chord: 0.1312, twist: 12.42, thickness: 0.11, aerofoil: naca6412_low_re}
+  - {r: 0.95, chord: 0.1158, twist: 11.32, thickness: 0.11, aerofoil: naca6412_low_re}
+  - {r: 1.00, chord: 0.1081, twist: 10.77, thickness: 0.11, aerofoil: naca6412_low_re}
