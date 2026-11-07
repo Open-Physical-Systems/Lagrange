@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<!-- One ball and one block of each kind of surface, in a row, with a pane of glass in front. -->
+<robot name="materials">
+  <link name="world"/>
+  <link name="chrome_ball"><visual><origin xyz="0 0 0.6"/><geometry><sphere radius="0.6"/></geometry><material name="chrome"><color rgba="0.9 0.9 0.92 1"/></material></visual></link>
+  <joint name="chrome_ball_fix" type="fixed"><parent link="world"/><child link="chrome_ball"/><origin xyz="-6 0 0"/></joint>
+  <gazebo reference="chrome_ball"><visual_material preset="chrome"/></gazebo>
+  <link name="chrome_block"><visual><origin xyz="0 0 0.3"/><geometry><box size="1.2 1.2 0.6"/></geometry><material name="chrome_b"><color rgba="0.9 0.9 0.92 1"/></material></visual></link>
+  <joint name="chrome_block_fix" type="fixed"><parent link="world"/><child link="chrome_block"/><origin xyz="-6 -2 0"/></joint>
+  <gazebo reference="chrome_block"><visual_material preset="chrome"/></gazebo>
+  <link name="steel_ball"><visual><origin xyz="0 0 0.6"/><geometry><sphere radius="0.6"/></geometry><material name="steel"><color rgba="0.6 0.61 0.63 1"/></material></visual></link>
+  <joint name="steel_ball_fix" type="fixed"><parent link="world"/><child link="steel_ball"/><origin xyz="-4 0 0"/></joint>
+  <gazebo reference="steel_ball"><visual_material preset="steel"/></gazebo>
+  <link name="steel_block"><visual><origin xyz="0 0 0.3"/><geometry><box size="1.2 1.2 0.6"/></geometry><material name="steel_b"><color rgba="0.6 0.61 0.63 1"/></material></visual></link>
+  <joint name="steel_block_fix" type="fixed"><parent link="world"/><child link="steel_block"/><origin xyz="-4 -2 0"/></joint>
+  <gazebo reference="steel_block"><visual_material preset="steel"/></gazebo>
+  <link name="gold_ball"><visual><origin xyz="0 0 0.6"/><geometry><sphere radius="0.6"/></geometry><material name="gold"><color rgba="1 0.77 0.34 1"/></material></visual></link>
+  <joint name="gold_ball_fix" type="fixed"><parent link="world"/><child link="gold_ball"/><origin xyz="-2 0 0"/></joint>
+  <gazebo reference="gold_ball"><visual_material preset="gold"/></gazebo>
+  <link name="gold_block"><visual><origin xyz="0 0 0.3"/><geometry><box size="1.2 1.2 0.6"/></geometry><material name="gold_b"><color rgba="1 0.77 0.34 1"/></material></visual></link>
+  <joint name="gold_block_fix" type="fixed"><parent link="world"/><child link="gold_block"/><origin xyz="-2 -2 0"/></joint>
+  <gazebo reference="gold_block"><visual_material preset="gold"/></gazebo>
+  <link name="red_lacquer_ball"><visual><origin xyz="0 0 0.6"/><geometry><sphere radius="0.6"/></geometry><material name="red_lacquer"><color rgba="0.7 0.03 0.03 1"/></material></visual></link>
+  <joint name="red_lacquer_ball_fix" type="fixed"><parent link="world"/><child link="red_lacquer_ball"/><origin xyz="0 0 0"/></joint>
+  <gazebo reference="red_lacquer_ball"><visual_material preset="lacquer"/></gazebo>
+  <link name="red_lacquer_block"><visual><origin xyz="0 0 0.3"/><geometry><box size="1.2 1.2 0.6"/></geometry><material name="red_lacquer_b"><color rgba="0.7 0.03 0.03 1"/></material></visual></link>
+  <joint name="red_lacquer_block_fix" type="fixed"><parent link="world"/><child link="red_lacquer_block"/><origin xyz="0 -2 0"/></joint>
+  <gazebo reference="red_lacquer_block"><visual_material preset="lacquer"/></gazebo>
+  <link name="blue_plastic_ball"><visual><origin xyz="0 0 0.6"/><geometry><sphere radius="0.6"/></geometry><material name="blue_plastic"><color rgba="0.05 0.2 0.6 1"/></material></visual></link>
+  <joint name="blue_plastic_ball_fix" type="fixed"><parent link="world"/><child link="blue_plastic_ball"/><origin xyz="2 0 0"/></joint>
+  <gazebo reference="blue_plastic_ball"><visual_material preset="plastic"/></gazebo>
+  <link name="blue_plastic_block"><visual><origin xyz="0 0 0.3"/><geometry><box size="1.2 1.2 0.6"/></geometry><material name="blue_plastic_b"><color rgba="0.05 0.2 0.6 1"/></material></visual></link>
+  <joint name="blue_plastic_block_fix" type="fixed"><parent link="world"/><child link="blue_plastic_block"/><origin xyz="2 -2 0"/></joint>
+  <gazebo reference="blue_plastic_block"><visual_material preset="plastic"/></gazebo>
+  <link name="rubber_ball"><visual><origin xyz="0 0 0.6"/><geometry><sphere radius="0.6"/></geometry><material name="rubber"><color rgba="0.03 0.03 0.03 1"/></material></visual></link>
+  <joint name="rubber_ball_fix" type="fixed"><parent link="world"/><child link="rubber_ball"/><origin xyz="4 0 0"/></joint>
+  <gazebo reference="rubber_ball"><visual_material preset="rubber"/></gazebo>
+  <link name="rubber_block"><visual><origin xyz="0 0 0.3"/><geometry><box size="1.2 1.2 0.6"/></geometry><material name="rubber_b"><color rgba="0.03 0.03 0.03 1"/></material></visual></link>
+  <joint name="rubber_block_fix" type="fixed"><parent link="world"/><child link="rubber_block"/><origin xyz="4 -2 0"/></joint>
+  <gazebo reference="rubber_block"><visual_material preset="rubber"/></gazebo>
+  <link name="concrete_ball"><visual><origin xyz="0 0 0.6"/><geometry><sphere radius="0.6"/></geometry><material name="concrete"><color rgba="0.5 0.49 0.46 1"/></material></visual></link>
+  <joint name="concrete_ball_fix" type="fixed"><parent link="world"/><child link="concrete_ball"/><origin xyz="6 0 0"/></joint>
+  <gazebo reference="concrete_ball"><visual_material preset="concrete"/></gazebo>
+  <link name="concrete_block"><visual><origin xyz="0 0 0.3"/><geometry><box size="1.2 1.2 0.6"/></geometry><material name="concrete_b"><color rgba="0.5 0.49 0.46 1"/></material></visual></link>
+  <joint name="concrete_block_fix" type="fixed"><parent link="world"/><child link="concrete_block"/><origin xyz="6 -2 0"/></joint>
+  <gazebo reference="concrete_block"><visual_material preset="concrete"/></gazebo>
+  <link name="wood_ball"><visual><origin xyz="0 0 0.6"/><geometry><sphere radius="0.6"/></geometry><material name="wood"><color rgba="0.45 0.28 0.14 1"/></material></visual></link>
+  <joint name="wood_ball_fix" type="fixed"><parent link="world"/><child link="wood_ball"/><origin xyz="8 0 0"/></joint>
+  <gazebo reference="wood_ball"><visual_material preset="wood"/></gazebo>
+  <link name="wood_block"><visual><origin xyz="0 0 0.3"/><geometry><box size="1.2 1.2 0.6"/></geometry><material name="wood_b"><color rgba="0.45 0.28 0.14 1"/></material></visual></link>
+  <joint name="wood_block_fix" type="fixed"><parent link="world"/><child link="wood_block"/><origin xyz="8 -2 0"/></joint>
+  <gazebo reference="wood_block"><visual_material preset="wood"/></gazebo>
+  <link name="glass_pane"><visual><origin xyz="0 0 0.9"/><geometry><box size="3 0.04 1.8"/></geometry><material name="glass"><color rgba="0.8 0.9 0.92 0.18"/></material></visual></link>
+  <joint name="glass_fix" type="fixed"><parent link="world"/><child link="glass_pane"/><origin xyz="1 -3.5 0"/></joint>
+</robot>

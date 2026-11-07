@@ -13,13 +13,16 @@ find_package(TBB REQUIRED)
 add_library(
     lagrange_sensors
     src/Sensors.cpp
+    src/DelayLine.cpp
     src/ImuNoise.cpp
     src/ShapeCaster.cpp
+    src/BodyScene.cpp
     src/Wmm.cpp
     src/GeoSensors.cpp
     src/Radar.cpp
     src/CameraModel.cpp
     src/WeatherEffects.cpp
+    src/ThermalCamera.cpp
 )
 lagrange_target_defaults(lagrange_sensors)
 target_include_directories(
@@ -105,6 +108,15 @@ if(BUILD_TESTING)
     )
     target_link_libraries(test_camera lagrange_sensors)
     lagrange_target_defaults(test_camera)
+    ament_add_gtest(
+        test_thermal_camera
+        test/test_thermal_camera.cpp
+        TIMEOUT 120
+        ENV
+        ASAN_OPTIONS=${LAGRANGE_GPU_TEST_ASAN_OPTIONS}
+    )
+    target_link_libraries(test_thermal_camera lagrange_sensors)
+    lagrange_target_defaults(test_thermal_camera)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

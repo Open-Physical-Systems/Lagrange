@@ -3,9 +3,14 @@
 //
 // Everything is built from the stage's electrical nets (SceneStatics::nets) and from signals:
 // nothing here knows a particular robot.
+#include "CircuitDraw.hpp"
 #include "ScopePlots.hpp"
+#include "lagrange/viewer/Circuit.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
+#include "lagrange/viewer/Picking.hpp"
+#include "lagrange/viewer/RenderOptions.hpp"
+#include "lagrange/viewer/SchematicLayout.hpp"
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
@@ -14,7 +19,11 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -83,6 +92,20 @@ bool hasSchema(const PanelContext& context, std::uint32_t prim, std::string_view
     return false;
 }
 
+/// The joint whose signals belong to this prim, by their names: joint/<name>/...
+std::string jointNamed(const PanelContext& context, std::uint32_t prim) {
+    if (!context.catalog) {
+        return {};
+    }
+    for (const SignalInfo& info : context.catalog->signals) {
+        if (info.prim == prim && info.name.starts_with("joint/")) {
+            const std::size_t end = info.name.find('/', 6);
+            return info.name.substr(6, end == std::string::npos ? end : end - 6);
+        }
+    }
+    return {};
+}
+
 /// What the three panels share: the subscriptions for the stage's nets and the scope traces.
 class ElectricalState {
 public:
@@ -95,6 +118,23 @@ public:
             scene_ = scene;
             catalog_ = catalog;
             subscribe(context);
+            circuitScene_ = 0;  // the joints' names come with the signal list
+            if (context.scene) {
+                context.client.requestAttributesOf(circuitPrims(*context.scene->statics));
+            }
+        }
+        // What the nets are made of: their values, as they arrive.
+        if (const auto known = context.client.attributesOf();
+            context.scene && (known != attributes_ || scene_ != circuitScene_)) {
+            attributes_ = known;
+            circuitScene_ = scene_;
+            circuit = circuitOf(
+                *context.scene->statics,
+                [&known](std::uint32_t prim) -> const PrimAttributes* {
+                    const auto found = known->find(prim);
+                    return found != known->end() ? &found->second : nullptr;
+                },
+                [&context](std::uint32_t prim) { return jointNamed(context, prim); });
         }
         if (const int frame = ImGui::GetFrameCount(); frame != frame_) {
             frame_ = frame;
@@ -103,10 +143,14 @@ public:
     }
 
     std::vector<NetLive> nets;  // parallel to SceneStatics::nets
+    Circuit circuit;            // buses parallel to SceneStatics::nets, parts to their terminals
     ScopeSession scopes;
     ScopePlotter plotter;
 
 private:
+    std::shared_ptr<const std::map<std::uint32_t, PrimAttributes>> attributes_;
+    std::uint64_t circuitScene_{0};
+
     void subscribe(PanelContext& context) {
         for (const NetLive& net : nets) {
             context.client.unsubscribe(net.voltage);
@@ -505,6 +549,7 @@ public:
             return;
         }
         state_->follow(context);
+        followLayout(context);
         headerTools();
         if (!context.scene || context.scene->statics->nets.empty() || state_->nets.empty()) {
             ImGui::SetCursorPos(ImVec2(px(8.0F), px(8.0F)));
@@ -531,7 +576,7 @@ public:
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.45F);  // design: greyed out when off
         }
         for (std::size_t n = 0; n < statics.nets.size() && n < state_->nets.size(); ++n) {
-            const ImVec2 extent = net(context, draw, statics, statics.nets[n], state_->nets[n],
+            const ImVec2 extent = net(context, draw, statics, n, state_->nets[n],
                                       ImVec2(origin.x + px(24.0F), origin.y + top), off);
             top += extent.y + px(56.0F);
             width = std::max(width, extent.x);
@@ -559,30 +604,65 @@ private:
     static constexpr float kNodeWidth = 212.0F;
     static constexpr float kHeader = 24.0F;
     static constexpr float kLine = 19.0F;
-    static constexpr float kWire = 120.0F;  // length of a wire between a node and the bus
-    static constexpr float kGap = 22.0F;    // between stacked nodes
+    static constexpr float kWire = 120.0F;    // length of a wire between a node and the bus
+    static constexpr float kGap = 22.0F;      // between stacked nodes
+    static constexpr float kMinWire = 40.0F;  // the shortest a dragged node's wire gets
 
-    static void headerTools() {
+    /// The offsets of this stage's nodes, as they were left.
+    void followLayout(const PanelContext& context) {
+        if (layoutPath_.empty() && !context.configDirectory.empty()) {
+            layoutPath_ = context.configDirectory + "/schematic_layouts.tsv";
+            layouts_ = loadSchematicLayouts(layoutPath_);
+        }
+        configDirectory_ = context.configDirectory;
+        if (context.scene) {
+            stage_ = context.scene->statics->stagePath;
+        }
+    }
+
+    void headerTools() {
         // The design writes the "proportional to" sign; IBM Plex has no such glyph.
         const char* hint = "wire width follows |I| · dashes move with current";
         ImGui::PushFont(theme::fonts().sans, theme::kCaptionSize);
         const float hintWidth = ImGui::CalcTextSize(hint).x;
         ImGui::PopFont();
         const float gap = px(6.0F);
-        const float width = hintWidth + widgets::ButtonWidth("Export SPICE") +
-                            widgets::ButtonWidth("Export Modelica") + gap * 2.0F + px(8.0F);
+        const float width = hintWidth + widgets::ButtonWidth("Auto-layout") +
+                            widgets::ButtonWidth("Export SPICE") +
+                            widgets::ButtonWidth("Export Modelica") + gap * 3.0F + px(8.0F);
         if (!widgets::BeginPanelTools("##schematic-tools", width)) {
             return;
         }
         ImGui::AlignTextToFramePadding();
         widgets::Caption("%s", hint);
         ImGui::SameLine(0.0F, px(8.0F));
-        // A netlist needs the component models; the viewer only has the topology.
-        ImGui::BeginDisabled(true);
-        widgets::Button("Export SPICE");
+        // The design's automatic layout, undoing what was dragged. Nothing to undo: disabled.
+        const auto moved = layouts_.find(stage_);
+        ImGui::BeginDisabled(moved == layouts_.end() || moved->second.empty());
+        if (widgets::Button("Auto-layout", widgets::ButtonKind::Ghost)) {
+            layouts_.erase(stage_);
+            saveLayouts();
+        }
+        ImGui::EndDisabled();
         ImGui::SameLine(0.0F, gap);
+        // Beside the viewer's other files, named after the stage.
+        const std::vector<std::string> problems = circuitProblems(state_->circuit);
+        ImGui::BeginDisabled(!problems.empty());
+        if (widgets::Button("Export SPICE")) {
+            exportSpice();
+        }
+        ImGui::EndDisabled();
+        if (!problems.empty()) {
+            ImGui::SetItemTooltip("%s", problems.front().c_str());
+        } else if (!exported_.empty()) {
+            ImGui::SetItemTooltip("%s", exported_.c_str());
+        }
+        ImGui::SameLine(0.0F, gap);
+        // The model needs what the server has, over a command the protocol does not have yet.
+        ImGui::BeginDisabled(true);
         widgets::Button("Export Modelica");
         ImGui::EndDisabled();
+        ImGui::SetItemTooltip("lagrange export modelica --robot FILE");
         widgets::EndPanelTools();
     }
 
@@ -601,32 +681,72 @@ private:
         }
     }
 
-    static float nodeHeight(const TerminalLive& live) {
-        return px(kHeader) + px(8.0F) + px(kLine) * static_cast<float>(1 + live.signals.size()) +
+    static float nodeHeight(const TerminalLive& live, const std::string& values) {
+        return px(kHeader) + px(8.0F) +
+               px(kLine) * static_cast<float>(1 + live.signals.size() + (values.empty() ? 0 : 1)) +
                px(6.0F);
+    }
+
+    /// The values of a net's terminal (its schematic node's last row), when they have arrived.
+    [[nodiscard]] std::string valuesOf(std::size_t net, std::size_t terminal) const {
+        const std::vector<CircuitBus>& buses = state_->circuit.buses;
+        return net < buses.size() && terminal < buses[net].parts.size()
+                   ? partValues(buses[net].parts[terminal])
+                   : std::string{};
     }
 
     /// Draws one net at `at`. Returns the size it took.
     ImVec2 net(PanelContext& context, ImDrawList* draw, const SceneStatics& statics,
-               const ElectricalNet& net, const NetLive& live, const ImVec2& at, bool off) {
+               std::size_t netIndex, const NetLive& live, const ImVec2& at, bool off) {
+        const ElectricalNet& net = statics.nets[netIndex];
         // Heights of the two columns.
         float sources = 0.0F;
         float loads = 0.0F;
         for (std::size_t t = 0; t < net.terminals.size(); ++t) {
             float& column = net.terminals[t].isSource() ? sources : loads;
-            column += nodeHeight(live.terminals[t]) + px(kGap);
+            column += nodeHeight(live.terminals[t], valuesOf(netIndex, t)) + px(kGap);
         }
         sources = std::max(sources - px(kGap), 0.0F);
         loads = std::max(loads - px(kGap), 0.0F);
-        const float height = std::max({sources, loads, px(80.0F)});
+        float height = std::max({sources, loads, px(80.0F)});
         const float busX = at.x + px(kNodeWidth) + px(kWire);
         const float loadX = busX + px(kWire);
         const double volts = latest(live.voltage);
 
+        // Where each node goes: its place in the automatic layout, then where it was dragged.
+        struct Placed {
+            ImVec2 min;
+            float height{0.0F};
+        };
+        std::vector<Placed> placed(net.terminals.size());
+        const float baseHeight = height;
+        float sourceY = at.y + (baseHeight - sources) * 0.5F;
+        float loadY = at.y + (baseHeight - loads) * 0.5F;
+        float barTop = at.y;
+        float barBottom = at.y + baseHeight;
+        float right = loadX + px(kNodeWidth);
+        for (std::size_t t = 0; t < net.terminals.size(); ++t) {
+            const bool source = net.terminals[t].isSource();
+            const float nodeH = nodeHeight(live.terminals[t], valuesOf(netIndex, t));
+            ImVec2 min(source ? at.x : loadX, source ? sourceY : loadY);
+            (source ? sourceY : loadY) += nodeH + px(kGap);
+            const NodeOffset moved = offsetOf(statics, net.terminals[t].prim);
+            min.x += px(moved.x);
+            min.y = std::max(min.y + px(moved.y), at.y);  // not above the canvas: it cannot scroll
+            // A wire reaches the bus from its own side.
+            min.x = source ? std::min(min.x, busX - px(kNodeWidth) - px(kMinWire))
+                           : std::max(min.x, busX + px(kMinWire));
+            placed[t] = {min, nodeH};
+            barTop = std::min(barTop, min.y + nodeH * 0.5F - px(8.0F));
+            barBottom = std::max(barBottom, min.y + nodeH * 0.5F + px(8.0F));
+            right = std::max(right, min.x + px(kNodeWidth));
+        }
+        height = barBottom - at.y;
+
         // The bus: a vertical bar in the electrical colour, with its name and voltage above.
         const float barWidth = px(6.0F);
-        draw->AddRectFilled(ImVec2(busX - barWidth * 0.5F, at.y),
-                            ImVec2(busX + barWidth * 0.5F, at.y + height), u32(kDischarge),
+        draw->AddRectFilled(ImVec2(busX - barWidth * 0.5F, barTop),
+                            ImVec2(busX + barWidth * 0.5F, barBottom), u32(kDischarge),
                             barWidth * 0.5F);
         const theme::Fonts& fonts = theme::fonts();
         const float mono = px(theme::kMonoSize);
@@ -635,20 +755,18 @@ private:
         const float nameWidth = fonts.mono->CalcTextSizeA(mono, FLT_MAX, 0.0F, net.name.c_str()).x;
         const float valueWidth = fonts.mono->CalcTextSizeA(mono, FLT_MAX, 0.0F, text).x;
         const float labelX = busX - (nameWidth + px(8.0F) + valueWidth) * 0.5F;
-        draw->AddText(fonts.mono, mono, ImVec2(labelX, at.y - px(24.0F)), u32(kDischarge),
+        draw->AddText(fonts.mono, mono, ImVec2(labelX, barTop - px(24.0F)), u32(kDischarge),
                       net.name.c_str());
-        draw->AddText(fonts.mono, mono, ImVec2(labelX + nameWidth + px(8.0F), at.y - px(24.0F)),
+        draw->AddText(fonts.mono, mono, ImVec2(labelX + nameWidth + px(8.0F), barTop - px(24.0F)),
                       u32(c::t1), text);
 
-        float sourceY = at.y + (height - sources) * 0.5F;
-        float loadY = at.y + (height - loads) * 0.5F;
         for (std::size_t t = 0; t < net.terminals.size(); ++t) {
             const NetTerminal& terminal = net.terminals[t];
             const TerminalLive& entry = live.terminals[t];
             const bool source = terminal.isSource();
-            const float nodeH = nodeHeight(entry);
-            const ImVec2 min(source ? at.x : loadX, source ? sourceY : loadY);
-            (source ? sourceY : loadY) += nodeH + px(kGap);
+            const std::string values = valuesOf(netIndex, t);
+            const float nodeH = placed[t].height;
+            const ImVec2 min = placed[t].min;
             const double amperes = latest(entry.current);
             const float midY = min.y + nodeH * 0.5F;
             // The wire runs in the direction the current normally flows: source to bus, bus
@@ -658,9 +776,68 @@ private:
             } else {
                 wire(draw, ImVec2(busX, midY), ImVec2(min.x, midY), amperes, off);
             }
-            node(context, draw, statics, terminal, entry, min, nodeH, volts, amperes);
+            const std::vector<CircuitBus>& buses = state_->circuit.buses;
+            const std::string detail = netIndex < buses.size() && t < buses[netIndex].parts.size()
+                                           ? buses[netIndex].parts[t].detail
+                                           : std::string{};
+            node(context, draw, statics, terminal, entry, values,
+                 detail.empty() ? terminal.port : detail, min, nodeH, volts, amperes);
+            dragNode(statics, terminal.prim);
         }
-        return {loadX + px(kNodeWidth) - at.x, height};
+        // Design: the bus's limits under its bar, with its capacitance after them.
+        float below = 0.0F;
+        if (netIndex < state_->circuit.buses.size()) {
+            const std::string limits = busValues(state_->circuit.buses[netIndex]);
+            if (!limits.empty()) {
+                const float small = px(theme::kCaptionSize);
+                const float limitsWidth =
+                    fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, limits.c_str()).x;
+                below = px(24.0F);
+                draw->AddText(fonts.mono, small,
+                              ImVec2(busX - limitsWidth * 0.5F, barBottom + px(8.0F)), u32(c::t3),
+                              limits.c_str());
+            }
+        }
+        return {right - at.x, height + below};
+    }
+
+    [[nodiscard]] NodeOffset offsetOf(const SceneStatics& statics, std::uint32_t prim) const {
+        const auto layout = layouts_.find(stage_);
+        if (layout != layouts_.end()) {
+            if (const auto found = layout->second.find(statics.prims[prim].name);
+                found != layout->second.end()) {
+                return found->second;
+            }
+        }
+        return {};
+    }
+
+    /// The last item is a node's button: dragging it moves the node, in logical pixels.
+    void dragNode(const SceneStatics& statics, std::uint32_t prim) {
+        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+            NodeOffset& offset = layouts_[stage_][statics.prims[prim].name];
+            offset.x += ImGui::GetIO().MouseDelta.x / px(1.0F);
+            offset.y += ImGui::GetIO().MouseDelta.y / px(1.0F);
+        }
+        if (ImGui::IsItemDeactivated()) {
+            saveLayouts();
+        }
+    }
+
+    void exportSpice() {
+        const std::filesystem::path stage(stage_);
+        const std::filesystem::path file =
+            std::filesystem::path(configDirectory_) / (stage.stem().string() + ".cir");
+        std::ofstream out(file);
+        out << netlistOf(state_->circuit, stage_);
+        out.close();
+        exported_ = out ? "Wrote " + file.string() : "Could not write " + file.string();
+    }
+
+    void saveLayouts() const {
+        if (!layoutPath_.empty()) {
+            saveSchematicLayouts(layoutPath_, layouts_);
+        }
     }
 
     /// A wire: width follows |I|, dashes move along the current, blue and reversed for
@@ -715,7 +892,8 @@ private:
 
     /// A component (design: .node): bg2 box with a 24 px header and mono rows of live values.
     static void node(PanelContext& context, ImDrawList* draw, const SceneStatics& statics,
-                     const NetTerminal& terminal, const TerminalLive& live, const ImVec2& min,
+                     const NetTerminal& terminal, const TerminalLive& live,
+                     const std::string& values, const std::string& detail, const ImVec2& min,
                      float height, double volts, double amperes) {
         const ImVec2 max(min.x + px(kNodeWidth), min.y + height);
         ImGui::SetCursorScreenPos(min);
@@ -742,11 +920,10 @@ private:
         draw->AddText(fonts.sansSemiBold, label,
                       ImVec2(min.x + px(22.0F), min.y + (px(kHeader) - label) * 0.5F - px(1.0F)),
                       u32(c::t1), statics.prims[terminal.prim].name.c_str());
-        const float portWidth =
-            fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, terminal.port.c_str()).x;
+        const float portWidth = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, detail.c_str()).x;
         draw->AddText(fonts.mono, small,
                       ImVec2(max.x - portWidth - px(8.0F), min.y + (px(kHeader) - small) * 0.5F),
-                      u32(c::t3), terminal.port.c_str());
+                      u32(c::t3), detail.c_str());
 
         // First row: terminal voltage, current and power.
         char text[64];
@@ -787,6 +964,12 @@ private:
                 }
             }
         }
+        // Last, what the component is: its values from the stage, which do not move.
+        if (!values.empty()) {
+            y += px(kLine);
+            draw->AddText(fonts.mono, small, ImVec2(min.x + px(10.0F), y + px(1.0F)), u32(c::t2),
+                          values.c_str());
+        }
         draw->PopClipRect();
     }
 
@@ -806,6 +989,319 @@ private:
     }
 
     std::shared_ptr<ElectricalState> state_;
+    SchematicLayouts layouts_;
+    std::string layoutPath_;
+    std::string stage_;
+    std::string configDirectory_;
+    std::string exported_;
+};
+
+// --- Circuit --------------------------------------------------------------------------------
+
+/// The same power system as the Schematic, with its symbols and values (SPEC, Proposed).
+class CircuitPanel final : public Panel {
+public:
+    explicit CircuitPanel(std::shared_ptr<ElectricalState> state) : state_(std::move(state)) {}
+    [[nodiscard]] const char* title() const override { return "Circuit"; }
+    [[nodiscard]] Workspace workspace() const override { return Workspace::Electrical; }
+
+    void draw(PanelContext& context) override {
+        if (!ImGui::Begin(title())) {
+            ImGui::End();
+            return;
+        }
+        state_->follow(context);
+        if (emptyState(context, *state_)) {
+            ImGui::End();
+            return;
+        }
+        ImGui::BeginChild("##circuit", ImVec2(0.0F, 0.0F), ImGuiChildFlags_None,
+                          ImGuiWindowFlags_HorizontalScrollbar);
+        const std::vector<NetLive>& nets = state_->nets;
+        const Circuit& circuit = state_->circuit;
+        // The inspector's selection is the circuit's, by prim.
+        std::optional<CircuitPick> selected;
+        for (std::size_t b = 0; b < circuit.buses.size(); ++b) {
+            if (circuit.buses[b].prim == context.selectedPrim && context.selectedPrim != kNone) {
+                selected = CircuitPick{b, std::nullopt};
+            }
+            for (std::size_t p = 0; p < circuit.buses[b].parts.size(); ++p) {
+                if (circuit.buses[b].parts[p].prim == context.selectedPrim &&
+                    context.selectedPrim != kNone) {
+                    selected = CircuitPick{b, p};
+                }
+            }
+        }
+        const auto picked = drawCircuit(
+            circuit,
+            [&nets](std::size_t b, std::size_t p) {
+                return b < nets.size() && p < nets[b].terminals.size()
+                           ? latest(nets[b].terminals[p].current)
+                           : NAN;
+            },
+            [&nets](std::size_t b) { return b < nets.size() ? latest(nets[b].voltage) : NAN; },
+            selected);
+        if (picked) {
+            const CircuitBus& bus = circuit.buses[picked->bus];
+            context.selectedPrim = picked->part ? bus.parts[*picked->part].prim : bus.prim;
+        }
+        const std::string notes = slopedNote(circuit);
+        if (!notes.empty()) {
+            widgets::Caption("%s", notes.c_str());
+        }
+        ImGui::EndChild();
+        ImGui::End();
+    }
+
+private:
+    static std::string slopedNote(const Circuit& circuit) {
+        for (const CircuitBus& bus : circuit.buses) {
+            for (const CircuitPart& part : bus.parts) {
+                if (!part.ocvSoc.empty()) {
+                    return "A battery's voltage is the one it starts at; it follows its charge in "
+                           "the run.";
+                }
+            }
+        }
+        return {};
+    }
+
+    std::shared_ptr<ElectricalState> state_;
+};
+
+// --- 3D overlay -----------------------------------------------------------------------------
+
+/// The design's third tab: the robot with each motor's link tinted by its current, and a wire from
+/// each part to its bus whose width follows the current. Takes the shared view's shading while it
+/// is in front; the Viewport takes it back.
+class OverlayPanel final : public Panel {
+public:
+    explicit OverlayPanel(std::shared_ptr<ElectricalState> state) : state_(std::move(state)) {}
+    [[nodiscard]] const char* title() const override { return "3D overlay"; }
+    [[nodiscard]] Workspace workspace() const override { return Workspace::Electrical; }
+
+    void draw(PanelContext& context) override {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
+        const bool open = ImGui::Begin(
+            title(), nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        ImGui::PopStyleVar();
+        RenderOptions& options = *context.renderOptions;
+        if (!open) {
+            if (options.shading == Shading::Current) {
+                options.shading = options.beforeCurrent;
+            }
+            ImGui::End();
+            return;
+        }
+        state_->follow(context);
+        if (emptyState(context, *state_)) {
+            ImGui::SetCursorPos(ImVec2(px(8.0F), px(8.0F)));
+            ImGui::End();
+            return;
+        }
+        if (options.shading != Shading::Current) {
+            options.beforeCurrent = options.shading;
+            options.shading = Shading::Current;
+        }
+        const ImVec2 available = ImGui::GetContentRegionAvail();
+        const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
+        context.requestedViewportWidth =
+            static_cast<std::uint32_t>(std::max(available.x * scale.x, 1.0F));
+        context.requestedViewportHeight =
+            static_cast<std::uint32_t>(std::max(available.y * scale.y, 1.0F));
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
+        if (context.viewportTexture != 0) {
+            ImGui::Image(static_cast<ImTextureID>(context.viewportTexture), available);
+        }
+        ImGui::SetCursorScreenPos(origin);
+        ImGui::InvisibleButton(
+            "##overlay", available,
+            ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+        camera(context, available);
+        // A click that was not a drag selects what is under it, as in the Viewport.
+        if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
+            ImGui::GetMouseDragDelta(ImGuiMouseButton_Left).x == 0.0F &&
+            ImGui::GetMouseDragDelta(ImGuiMouseButton_Left).y == 0.0F) {
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            const double aspect = static_cast<double>(available.x) / std::max(available.y, 1.0F);
+            context.selectedPrim = pickPrim(
+                *context.scene,
+                context.camera.ray((mouse.x - origin.x) / available.x * 2.0 - 1.0,
+                                   (mouse.y - origin.y) / available.y * 2.0 - 1.0, aspect));
+        }
+        tint(context);
+        wires(context, origin, available);
+        if (electricalOff(context)) {
+            ImGui::SetCursorScreenPos(ImVec2(origin.x + px(12.0F), origin.y + px(10.0F)));
+            widgets::Pill("Electrical is off → ideal torque source. Currents are not simulated.",
+                          widgets::PillKind::Warn);
+        }
+        ImGui::End();
+    }
+
+private:
+    static constexpr double kOrbitRadiansPerPixel = 0.005;
+    static constexpr double kZoomPerWheelStep = 0.9;
+
+    static void camera(PanelContext& context, const ImVec2& size) {
+        const ImGuiIO& io = ImGui::GetIO();
+        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+            context.camera.orbit(-io.MouseDelta.x * kOrbitRadiansPerPixel,
+                                 io.MouseDelta.y * kOrbitRadiansPerPixel);
+        }
+        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
+            context.camera.pan(-io.MouseDelta.x / std::max(size.y, 1.0F),
+                               io.MouseDelta.y / std::max(size.y, 1.0F));
+        }
+        if (ImGui::IsItemHovered() && io.MouseWheel != 0.0F) {
+            context.camera.zoom(std::pow(kZoomPerWheelStep, io.MouseWheel));
+        }
+    }
+
+    /// Each motor's share of the largest current on the link it turns, and on what that link
+    /// carries until another motor's link.
+    void tint(PanelContext& context) {
+        const std::vector<PrimData>& prims = context.scene->statics->prims;
+        const auto known = context.client.attributesOf();
+        own_.assign(prims.size(), NAN);
+        double largest = kCurrentFloorAmperes;
+        const auto each = [this](const auto& visit) {
+            const std::vector<CircuitBus>& buses = state_->circuit.buses;
+            for (std::size_t b = 0; b < buses.size() && b < state_->nets.size(); ++b) {
+                for (std::size_t p = 0;
+                     p < buses[b].parts.size() && p < state_->nets[b].terminals.size(); ++p) {
+                    visit(buses[b].parts[p], latest(state_->nets[b].terminals[p].current));
+                }
+            }
+        };
+        each([&largest](const CircuitPart&, double amperes) {
+            if (!std::isnan(amperes)) {
+                largest = std::max(largest, std::abs(amperes));
+            }
+        });
+        each([&](const CircuitPart& part, double amperes) {
+            if (part.kind != CircuitPart::Kind::Motor) {
+                return;
+            }
+            const auto found = known->find(part.prim);
+            if (found == known->end()) {
+                return;
+            }
+            for (const AttributeInfo& a : found->second.attributes) {
+                if (a.name == "elec:joint" && !a.targets.empty() && a.targets[0] < prims.size()) {
+                    own_[a.targets[0]] =
+                        std::isnan(amperes) ? 0.0F : static_cast<float>(amperes / largest);
+                }
+            }
+        });
+        std::vector<float>& shares = context.renderOptions->current;
+        shares.assign(prims.size(), NAN);
+        for (std::uint32_t i = 0; i < prims.size(); ++i) {
+            for (std::uint32_t p = i; p != kNone && p < prims.size(); p = prims[p].parent) {
+                if (!std::isnan(own_[p])) {
+                    shares[i] = own_[p];
+                    break;
+                }
+            }
+        }
+    }
+
+    /// From each part to its bus, over the image: the same wire as the schematic's, in 3D.
+    void wires(PanelContext& context, const ImVec2& origin, const ImVec2& size) const {
+        const double aspect = static_cast<double>(size.x) / std::max(size.y, 1.0F);
+        const auto matrix = context.camera.viewProjection(aspect);
+        const std::array<double, 3> eye = context.camera.eye();
+        const auto& transforms = context.scene->transforms;
+        const auto project = [&](std::uint32_t prim) -> std::optional<ImVec2> {
+            if (prim >= transforms.size()) {
+                return std::nullopt;
+            }
+            const auto& p = transforms[prim].position;
+            const auto x = static_cast<float>(p[0] - eye[0]);
+            const auto y = static_cast<float>(p[1] - eye[1]);
+            const auto z = static_cast<float>(p[2] - eye[2]);
+            const float w = matrix[12] * x + matrix[13] * y + matrix[14] * z;
+            if (w <= 0.01F) {
+                return std::nullopt;  // behind the camera
+            }
+            const float nx = (matrix[0] * x + matrix[1] * y + matrix[2] * z) / w;
+            const float ny = (matrix[4] * x + matrix[5] * y + matrix[6] * z) / w;
+            return ImVec2(origin.x + (nx + 1.0F) * 0.5F * size.x,
+                          origin.y + (ny + 1.0F) * 0.5F * size.y);
+        };
+        const auto apart = [&transforms](std::uint32_t a, std::uint32_t b) {
+            if (a >= transforms.size() || b >= transforms.size()) {
+                return false;
+            }
+            double sum = 0.0;
+            for (std::size_t k = 0; k < 3; ++k) {
+                const double d = transforms[a].position.at(k) - transforms[b].position.at(k);
+                sum += d * d;
+            }
+            return sum > kSamePlaceMetres * kSamePlaceMetres;
+        };
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        draw->PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
+        const theme::Fonts& fonts = theme::fonts();
+        const float small = px(theme::kCaptionSize);
+        const auto known = context.client.attributesOf();
+        const std::vector<CircuitBus>& buses = state_->circuit.buses;
+        float listY = origin.y + px(10.0F);
+        for (std::size_t b = 0; b < buses.size() && b < state_->nets.size(); ++b) {
+            const auto bus = project(buses[b].prim);
+            for (std::size_t p = 0;
+                 p < buses[b].parts.size() && p < state_->nets[b].terminals.size(); ++p) {
+                const CircuitPart& part = buses[b].parts[p];
+                // A motor is where the link it turns is; its own prim is on the parent link.
+                std::uint32_t where = part.prim;
+                if (const auto found = known->find(part.prim); found != known->end()) {
+                    for (const AttributeInfo& a : found->second.attributes) {
+                        if (a.name == "elec:joint" && !a.targets.empty()) {
+                            where = a.targets[0];
+                        }
+                    }
+                }
+                const double amperes = latest(state_->nets[b].terminals[p].current);
+                const double magnitude = std::isnan(amperes) ? 0.0 : std::abs(amperes);
+                const ImU32 color = u32(amperes < 0.0 ? kRegen : kDischarge);
+                char text[96];
+                std::snprintf(text, sizeof(text), "%.2f A", magnitude);
+                const auto at = project(where);
+                if (bus && at && apart(where, buses[b].prim)) {
+                    const float width = std::clamp(
+                        px(1.5F) + static_cast<float>(magnitude) * px(0.35F), px(1.5F), px(6.0F));
+                    draw->AddLine(*bus, *at, color, width);
+                    draw->AddCircleFilled(*at, px(3.5F), color);
+                    draw->AddText(fonts.mono, small, ImVec2(at->x + px(6.0F), at->y - px(6.0F)),
+                                  u32(c::t1), text);
+                } else {
+                    // A battery or load placed nowhere of its own: named in the corner instead.
+                    draw->AddCircleFilled(ImVec2(origin.x + px(16.0F), listY + small * 0.5F),
+                                          px(3.5F), color);
+                    const std::string line = part.name + "  " + text;
+                    draw->AddText(fonts.mono, small, ImVec2(origin.x + px(26.0F), listY),
+                                  u32(c::t1), line.c_str());
+                    listY += px(16.0F);
+                }
+            }
+            if (bus) {
+                draw->AddCircleFilled(*bus, px(5.0F), u32(kDischarge));
+                char label[96];
+                number(latest(state_->nets[b].voltage), "%.1f V", label, sizeof(label));
+                const std::string name = buses[b].name + "  " + label;
+                draw->AddText(fonts.mono, px(theme::kMonoSize),
+                              ImVec2(bus->x + px(8.0F), bus->y - px(18.0F)), u32(c::t1),
+                              name.c_str());
+            }
+        }
+        draw->PopClipRect();
+    }
+
+    static constexpr double kSamePlaceMetres = 0.01;
+    // Below this the tint is not worth seeing: a stopped motor stays grey, not full colour.
+    static constexpr double kCurrentFloorAmperes = 0.5;
+    std::shared_ptr<ElectricalState> state_;
+    std::vector<float> own_;
 };
 
 // --- Scopes -------------------------------------------------------------------------------
@@ -861,6 +1357,12 @@ std::vector<std::unique_ptr<Panel>> createElectricalPanels() {
     std::vector<std::unique_ptr<Panel>> panels;
     panels.push_back(std::make_unique<NetworkPanel>(state));
     panels.push_back(std::make_unique<SchematicPanel>(state));
+    panels.push_back(std::make_unique<CircuitPanel>(state));
+    panels.push_back(std::make_unique<OverlayPanel>(state));
+    panels.push_back(createNetlistPanel([state](PanelContext& context) -> const Circuit* {
+        state->follow(context);
+        return state->nets.empty() ? nullptr : &state->circuit;
+    }));
     panels.push_back(std::make_unique<ElectricalScopesPanel>(state));
     return panels;
 }

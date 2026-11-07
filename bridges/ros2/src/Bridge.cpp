@@ -64,6 +64,7 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/point_field.hpp>
 #include <sensor_msgs/msg/temperature.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <tf2_msgs/msg/tf_message.hpp>
 
@@ -72,6 +73,7 @@ namespace lagrange::ros2 {
 namespace {
 
 using Clock = std::chrono::steady_clock;
+constexpr std::int64_t kMinClockPeriodNs = 1'000'000;
 
 builtin_interfaces::msg::Time stampOf(SimTime t) {
     builtin_interfaces::msg::Time stamp;
@@ -119,9 +121,13 @@ struct Bridge::Impl {
     rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tf;
     rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tfStatic;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr description;
+    rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr jointCommands;
+    rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr siteParameters;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmdVel;
     rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmdVelStamped;
     rclcpp::Subscription<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr ackermannCmd;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr flightModeIn;  // /flight_mode
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr airspeed;        // /airspeed
 
     void take(const geometry_msgs::msg::Twist& twist) {
         take(CmdVel{twist.linear.x, twist.angular.z, twist.linear.y, twist.linear.z, {}});
@@ -154,6 +160,14 @@ struct Bridge::Impl {
         std::uint64_t dropped{0};
     };
     std::map<std::string, Gate> gates;  // by topic
+    /// A sensor's topic with sensor:latency and sensor:jitter (s): when its messages go out.
+    struct SensorDelay {
+        double latency{0.0}, jitter{0.0};
+        SimTime last{0};  // a sensor's output stays in order, whatever the jitter
+    };
+    std::map<std::string, SensorDelay> sensorDelays;  // by topic
+    std::mt19937_64 timingRng{0x74696d65U};
+    std::normal_distribution<double> timingNoise;
     struct Pending {
         SimTime at;
         std::function<void()> send;
@@ -177,30 +191,44 @@ struct Bridge::Impl {
     template <class Publisher, class Message>
     void deliver(const std::string& topic, const Publisher& publisher, Message&& message) {
         const auto it = gates.find(topic);
-        if (it == gates.end() || gateBus == nullptr) {
+        const auto timed = sensorDelays.find(topic);
+        const bool gated = it != gates.end();
+        if ((!gated && timed == sensorDelays.end()) || gateBus == nullptr) {
             publisher->publish(std::forward<Message>(message));
             return;
         }
-        Gate& gate = it->second;
-        if (gateBus->read(gate.up) < 0.5 || uniform(rng) < gateBus->read(gate.loss)) {
-            ++gate.dropped;
-            return;
+        std::int64_t delay = 0;
+        if (gated) {
+            Gate& gate = it->second;
+            if (gateBus->read(gate.up) < 0.5 || uniform(rng) < gateBus->read(gate.loss)) {
+                ++gate.dropped;
+                return;
+            }
+            delay = static_cast<std::int64_t>(std::llround(gateBus->read(gate.latency) * 1e9));
         }
-        const auto delay =
-            static_cast<std::int64_t>(std::llround(gateBus->read(gate.latency) * 1e9));
+        if (timed != sensorDelays.end()) {
+            SensorDelay& sensor = timed->second;
+            // Gaussian, cut at three sigma; never before it was sampled, nor before the last one.
+            const double late =
+                sensor.latency + sensor.jitter * std::clamp(timingNoise(timingRng), -3.0, 3.0);
+            delay += static_cast<std::int64_t>(std::llround(std::max(late, 0.0) * 1e9));
+            delay = std::max(delay, sensor.last.ns - gateNow.ns);
+            sensor.last = SimTime{gateNow.ns + delay};
+        }
         if (delay <= 0 && pending.empty()) {
             publisher->publish(std::forward<Message>(message));
             return;
         }
         auto held = std::make_shared<std::decay_t<Message>>(std::forward<Message>(message));
-        pending.push_back({SimTime{gateNow.ns + delay},
-                           [publisher, held]() { publisher->publish(std::move(*held)); }});
+        // In the order they fall due, and among equals in the order they were sent.
+        const SimTime due{gateNow.ns + delay};
+        pending.insert(std::upper_bound(pending.begin(), pending.end(), due,
+                                        [](SimTime at, const Pending& p) { return at < p.at; }),
+                       Pending{due, [publisher, held]() { publisher->publish(std::move(*held)); }});
     }
 
     /// Sends the late messages that are due by `now`, oldest first.
     void flush(SimTime now) {
-        std::stable_sort(pending.begin(), pending.end(),
-                         [](const Pending& a, const Pending& b) { return a.at < b.at; });
         while (!pending.empty() && pending.front().at <= now) {
             pending.front().send();
             pending.pop_front();
@@ -214,9 +242,11 @@ struct Bridge::Impl {
     struct Lidar {
         std::string frame;
         std::string topic;
-        SignalId ranges;
+        SignalId ranges, intensities;
         LidarLayout layout;
+        std::vector<std::array<double, 3>> directions;  // of each beam, for the cloud
         double minRange{0.0}, maxRange{0.0}, rateHz{10.0};
+        double sweep{0.0};  // s from the first column's firing to the scan's end + one column
         SimTime sent{-1};
         rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr publisher;         // 2D
         rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr cloudPublisher;  // 3D
@@ -224,12 +254,13 @@ struct Bridge::Impl {
     /// A camera: colour (rgb8) and depth (32FC1, m; +inf where nothing is in range, REP 118)
     /// in its optical frame, each with its CameraInfo.
     struct Camera {
-        std::string frame;  // "<sensor>_optical"
-        std::string ns;     // "/<sensor>"
-        SignalId image, depth;
+        std::string frame;                             // "<sensor>_optical"
+        std::string ns;                                // "/<sensor>"
+        SignalId image, depth, instance, temperature;  // temperature: a thermal camera's
         sensor_msgs::msg::CameraInfo info;
         SimTime sent{-1};
-        rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr color, depthImage;
+        rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr color, depthImage, instanceImage,
+            temperatureImage;
         rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr colorInfo, depthInfo;
     };
     struct Imu {
@@ -269,25 +300,36 @@ struct Bridge::Impl {
     };
     std::vector<Radar> radars;
     SignalId basePose, baseTwist;
+    SignalId baseAirspeed;  // body/<base>/airspeed, from the aerodynamics domain
     SimTime lastClock{-1};
     SimTime lastState{-1};
 
     mutable std::mutex commandMutex;
     std::optional<CmdVel> command;
     Clock::time_point commandAt;
-    std::optional<CmdVel> lateCommand;  // on its way over a radio link
+    std::optional<CmdVel> lateCommand;            // on its way over a radio link
+    FlightMode flightMode{FlightMode::Position};  // from /flight_mode, under commandMutex
     Clock::time_point lateAt;
 
     std::map<std::string, TopicCounter> counters;  // by topic, the bridge's own
 
-    /// A 3D lidar's scan as sensor_msgs/PointCloud2: x, y, z, intensity (float32) and ring
-    /// (uint16), in the sensor frame, organised as rings x columns with NaN where no return.
+    /// When a scan's first column fired: the stamp of a swept scan, as LaserScan has it.
+    static SimTime firstBeam(const Lidar& lidar) {
+        const double before =
+            lidar.sweep * (lidar.layout.horizontal - 1.0) / lidar.layout.horizontal;
+        return SimTime{std::max<std::int64_t>(lidar.sent.ns - std::llround(before * 1e9), 0)};
+    }
+
+    /// A 3D lidar's scan as sensor_msgs/PointCloud2: x, y, z, intensity (float32), ring (uint16)
+    /// and time (float32, s after the stamp, when that column fired), in the sensor frame,
+    /// organised as rings x columns with NaN where no return.
     /// In Lyrical, PointCloud2::data is a rosidl::Buffer with the CPU backend; a CUDA backend
     /// can replace it without touching this code: docs/plan/spikes/0.2-F7-rosidl-buffer.md.
-    void publishCloud(const Lidar& lidar, std::span<const double> ranges) {
+    void publishCloud(const Lidar& lidar, std::span<const double> ranges,
+                      std::span<const double> intensities) {
         using sensor_msgs::msg::PointField;
         sensor_msgs::msg::PointCloud2 cloud;
-        cloud.header.stamp = stampOf(lidar.sent);
+        cloud.header.stamp = stampOf(firstBeam(lidar));
         cloud.header.frame_id = lidar.frame;
         cloud.height = lidar.layout.vertical;
         cloud.width = lidar.layout.horizontal;
@@ -304,7 +346,8 @@ struct Bridge::Impl {
         field("z", 8, PointField::FLOAT32);
         field("intensity", 12, PointField::FLOAT32);
         field("ring", 16, PointField::UINT16);
-        constexpr std::uint32_t kStride = 20;  // 18 bytes of fields, padded to 4
+        field("time", 20, PointField::FLOAT32);
+        constexpr std::uint32_t kStride = 24;
         cloud.point_step = kStride;
         cloud.row_step = kStride * cloud.width;
         cloud.is_dense = false;
@@ -314,16 +357,20 @@ struct Bridge::Impl {
         cloud.data.assign(static_cast<std::size_t>(cloud.row_step) * cloud.height, 0);
         const float nan = std::numeric_limits<float>::quiet_NaN();
         for (std::uint32_t i = 0; i < beams; ++i) {
-            const std::array<double, 3> d = lidar.layout.direction(i);
+            const std::array<double, 3>& d = lidar.directions[i];
             const bool hit = std::isfinite(ranges[i]);
-            const std::array<float, 4> values{hit ? static_cast<float>(ranges[i] * d[0]) : nan,
-                                              hit ? static_cast<float>(ranges[i] * d[1]) : nan,
-                                              hit ? static_cast<float>(ranges[i] * d[2]) : nan,
-                                              hit ? 1.0F : 0.0F};  // no reflectivity model yet
+            const std::array<float, 4> values{
+                hit ? static_cast<float>(ranges[i] * d[0]) : nan,
+                hit ? static_cast<float>(ranges[i] * d[1]) : nan,
+                hit ? static_cast<float>(ranges[i] * d[2]) : nan,
+                hit && i < intensities.size() ? static_cast<float>(intensities[i]) : 0.0F};
             const auto ring = static_cast<std::uint16_t>(i / lidar.layout.horizontal);
             std::uint8_t* point = cloud.data.data() + static_cast<std::size_t>(i) * kStride;
             std::memcpy(point, values.data(), sizeof(values));
             std::memcpy(point + 16, &ring, sizeof(ring));
+            const auto fired = static_cast<float>(lidar.sweep * (i % lidar.layout.horizontal) /
+                                                  lidar.layout.horizontal);
+            std::memcpy(point + 20, &fired, sizeof(fired));
         }
         counters[lidar.topic].add(cloud.data.size() + 128);
         deliver(lidar.topic, lidar.cloudPublisher, std::move(cloud));
@@ -364,6 +411,8 @@ struct Bridge::Impl {
             if (old.ns == out.ns) {
                 out.color = old.color;
                 out.depthImage = old.depthImage;
+                out.instanceImage = old.instanceImage;
+                out.temperatureImage = old.temperatureImage;
                 out.colorInfo = old.colorInfo;
                 out.depthInfo = old.depthInfo;
             }
@@ -375,8 +424,14 @@ struct Bridge::Impl {
                 node->create_publisher<sensor_msgs::msg::CameraInfo>(out.ns + "/camera_info", qos);
             out.depthImage =
                 node->create_publisher<sensor_msgs::msg::Image>(out.ns + "/depth/image_raw", qos);
+            out.instanceImage = node->create_publisher<sensor_msgs::msg::Image>(
+                out.ns + "/instance/image_raw", qos);
             out.depthInfo = node->create_publisher<sensor_msgs::msg::CameraInfo>(
                 out.ns + "/depth/camera_info", qos);
+        }
+        if (!out.temperatureImage && get("thermal", 0.0) != 0.0) {
+            out.temperatureImage = node->create_publisher<sensor_msgs::msg::Image>(
+                out.ns + "/temperature/image_raw", rclcpp::SensorDataQoS());
         }
         return out;
     }
@@ -419,6 +474,39 @@ struct Bridge::Impl {
             counters[camera.ns + "/depth/image_raw"].add(image.data.size() + 64);
             deliver(camera.ns + "/depth/image_raw", camera.depthImage, std::move(image));
         }
+        // Which thing each pixel shows: the scene prim's index, -1 for none. The bytes are the
+        // r32u of the buffer; 0xFFFFFFFF reads as -1 in 32SC1, the nearest encoding ROS has.
+        const std::shared_ptr<const Buffer> instance = bus.buffer(bus.readBuffer(camera.instance));
+        if (instance && !instance->bytes.empty()) {
+            sensor_msgs::msg::Image image;
+            image.header = camera.info.header;
+            image.width = instance->width;
+            image.height = instance->height;
+            image.encoding = "32SC1";
+            image.step = instance->width * 4;
+            const auto* in = reinterpret_cast<const std::uint8_t*>(instance->bytes.data());
+            image.data.assign(in, in + instance->bytes.size());
+            counters[camera.ns + "/instance/image_raw"].add(image.data.size() + 64);
+            deliver(camera.ns + "/instance/image_raw", camera.instanceImage, std::move(image));
+        }
+        // A thermal camera's apparent temperatures, kelvin.
+        if (camera.temperatureImage && camera.temperature.valid()) {
+            const std::shared_ptr<const Buffer> kelvin =
+                bus.buffer(bus.readBuffer(camera.temperature));
+            if (kelvin && !kelvin->bytes.empty()) {
+                sensor_msgs::msg::Image image;
+                image.header = camera.info.header;
+                image.width = kelvin->width;
+                image.height = kelvin->height;
+                image.encoding = "32FC1";
+                image.step = kelvin->width * 4;
+                const auto* in = reinterpret_cast<const std::uint8_t*>(kelvin->bytes.data());
+                image.data.assign(in, in + kelvin->bytes.size());
+                counters[camera.ns + "/temperature/image_raw"].add(image.data.size() + 64);
+                deliver(camera.ns + "/temperature/image_raw", camera.temperatureImage,
+                        std::move(image));
+            }
+        }
     }
 
     // simulation_interfaces: requests queued by the service callbacks for handleRequests().
@@ -455,22 +543,9 @@ Bridge::Bridge(BridgeSettings settings)
     if (!settings_.controllersOwnState) {
         s.jointStates = s.node->create_publisher<sensor_msgs::msg::JointState>("/joint_states", 10);
     }
-    if (!settings_.baseLink.empty()) {
-        s.groundTruth = s.node->create_publisher<nav_msgs::msg::Odometry>("/ground_truth/odom", 10);
-    }
-    if (!settings_.baseLink.empty() && !settings_.controllersOwnState) {
-        s.odom = s.node->create_publisher<nav_msgs::msg::Odometry>("/odom", 10);
-    }
     s.tf = s.node->create_publisher<tf2_msgs::msg::TFMessage>("/tf", rclcpp::QoS(100));
     s.tfStatic = s.node->create_publisher<tf2_msgs::msg::TFMessage>(
         "/tf_static", rclcpp::QoS(1).transient_local().reliable());
-    if (!settings_.robotDescription.empty()) {
-        s.description = s.node->create_publisher<std_msgs::msg::String>(
-            "/robot_description", rclcpp::QoS(1).transient_local().reliable());
-        std_msgs::msg::String text;
-        text.data = settings_.robotDescription;
-        s.description->publish(text);
-    }
     if (settings_.controllersOwnState) {
         // diff_drive_controller (or another) takes the commands.
     } else if (settings_.stampedCmdVel) {
@@ -481,14 +556,84 @@ Bridge::Bridge(BridgeSettings settings)
         s.cmdVel = s.node->create_subscription<geometry_msgs::msg::Twist>(
             "/cmd_vel", 10, [&s](const geometry_msgs::msg::Twist& twist) { s.take(twist); });
     }
-    if (settings_.ackermannCmd && !settings_.controllersOwnState) {
+    setRobot(settings_.baseLink, settings_.robotDescription, settings_.ackermannCmd);
+    if (!settings_.controllersOwnState) {
+        // A multicopter's flight mode, as a remote's mode switch sets it; latched, so one
+        // message from the remote is enough.
+        s.flightModeIn = s.node->create_subscription<std_msgs::msg::String>(
+            "/flight_mode", rclcpp::QoS(1).transient_local().reliable(),
+            [&s](const std_msgs::msg::String& mode) {
+                const std::optional<FlightMode> next = flightModeOf(mode.data);
+                if (!next) {
+                    RCLCPP_WARN(s.node->get_logger(),
+                                "/flight_mode '%s' is not position or angle: ignored",
+                                mode.data.c_str());
+                    return;
+                }
+                const std::lock_guard<std::mutex> lock(s.commandMutex);
+                s.flightMode = *next;
+            });
+    }
+    if (settings_.jointCommands) {
+        s.jointCommands = s.node->create_subscription<sensor_msgs::msg::JointState>(
+            "/joint_commands", 10,
+            [send = settings_.jointCommands](const sensor_msgs::msg::JointState& state) {
+                for (std::size_t i = 0; i < state.name.size(); ++i) {
+                    const auto given = [i](const std::vector<double>& field) {
+                        return i < field.size() && std::isfinite(field[i]);
+                    };
+                    JointCommand command;
+                    command.joint = state.name[i];
+                    if (given(state.position)) {
+                        command.value = state.position[i];
+                    } else if (given(state.velocity)) {
+                        command.mode = JointCommand::Mode::Velocity;
+                        command.value = state.velocity[i];
+                    } else if (given(state.effort)) {
+                        command.mode = JointCommand::Mode::Effort;
+                        command.value = state.effort[i];
+                    } else {
+                        continue;
+                    }
+                    send(command);
+                }
+            });
+    }
+    if (!settings_.signalTopics.publish.empty() || !settings_.signalTopics.subscribe.empty()) {
+        signalTopics_ = std::make_unique<SignalTopics>(*s.node, settings_.signalTopics);
+    }
+    s.executor.add_node(s.node);
+    s.spinner = std::thread([&s] { s.executor.spin(); });
+}
+
+void Bridge::setRobot(const std::string& baseLink, const std::string& robotDescription,
+                      bool ackermannCmd) {
+    Impl& s = *impl_;
+    settings_.baseLink = baseLink;
+    settings_.robotDescription = robotDescription;
+    settings_.ackermannCmd = ackermannCmd;
+    // Topics come when a robot needs them and stay: subscribers keep their connections.
+    if (!baseLink.empty() && !s.groundTruth) {
+        s.groundTruth = s.node->create_publisher<nav_msgs::msg::Odometry>("/ground_truth/odom", 10);
+    }
+    if (!baseLink.empty() && !settings_.controllersOwnState && !s.odom) {
+        s.odom = s.node->create_publisher<nav_msgs::msg::Odometry>("/odom", 10);
+    }
+    if (!robotDescription.empty()) {
+        if (!s.description) {
+            s.description = s.node->create_publisher<std_msgs::msg::String>(
+                "/robot_description", rclcpp::QoS(1).transient_local().reliable());
+        }
+        std_msgs::msg::String text;
+        text.data = robotDescription;
+        s.description->publish(text);
+    }
+    if (ackermannCmd && !settings_.controllersOwnState && !s.ackermannCmd) {
         s.ackermannCmd = s.node->create_subscription<ackermann_msgs::msg::AckermannDriveStamped>(
             "/ackermann_cmd", 10, [&s](const ackermann_msgs::msg::AckermannDriveStamped& drive) {
                 s.take(CmdVel{drive.drive.speed, 0.0, 0.0, 0.0, drive.drive.steering_angle});
             });
     }
-    s.executor.add_node(s.node);
-    s.spinner = std::thread([&s] { s.executor.spin(); });
 }
 
 Bridge::~Bridge() {
@@ -498,8 +643,13 @@ Bridge::~Bridge() {
     }
 }
 
+std::unique_ptr<IModule> Bridge::topicInputs() const {
+    return signalTopics_ ? signalTopics_->inputModule() : nullptr;
+}
+
 void Bridge::attach(const World& world, const SignalBus& bus) {
     Impl& s = *impl_;
+    topicProblems_ = signalTopics_ ? signalTopics_->attach(bus) : std::vector<std::string>{};
     if (!s.firstRegion) {
         s.firstRegion = world.region.worldEnu;
     }
@@ -517,6 +667,18 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
     // Topics on radio links: the comms domain's link signals (none without it).
     s.gates.clear();
     s.pending.clear();
+    s.sensorDelays.clear();
+    s.timingRng.seed(0x74696d65U);
+    s.timingNoise.reset();
+    const auto timed = [&s](const auto& set, const std::string& topic) {
+        const auto value = [&set](const char* key) {
+            const auto it = set.find(key);
+            return it == set.end() ? 0.0 : it->second;
+        };
+        if (value("latency") > 0.0 || value("jitter") > 0.0) {
+            s.sensorDelays[topic] = {value("latency"), value("jitter")};
+        }
+    };
     s.gateBus = nullptr;
     {
         const std::lock_guard<std::mutex> lock(s.commandMutex);
@@ -537,6 +699,10 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
     }
     s.basePose = bus.find("body/" + settings_.baseLink + "/pose");
     s.baseTwist = bus.find("body/" + settings_.baseLink + "/twist");
+    s.baseAirspeed = bus.find("body/" + settings_.baseLink + "/airspeed");
+    if (s.baseAirspeed.valid() && !s.airspeed) {
+        s.airspeed = s.node->create_publisher<std_msgs::msg::Float64>("/airspeed", 10);
+    }
 
     // Sensor frames are children of their links, at their mounts: published once, latched.
     tf2_msgs::msg::TFMessage mounts;
@@ -580,15 +746,22 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             Impl::Lidar lidar;
             lidar.frame = name;
             lidar.layout = LidarLayout::from(settings);
+            lidar.directions.resize(lidar.layout.is3d() ? lidar.layout.beams() : 0);
+            for (std::uint32_t beam = 0; beam < lidar.directions.size(); ++beam) {
+                lidar.directions[beam] = lidar.layout.direction(beam);
+            }
             if (lidar.layout.is3d()) {
                 lidar.topic = clouds == 1 ? "/points" : "/" + name + "/points";
             } else {
                 lidar.topic = scanners == 1 ? "/scan" : "/" + name + "/scan";
             }
+            timed(settings, lidar.topic);
             lidar.ranges = bus.find("sensor/" + name + "/ranges");
+            lidar.intensities = bus.find("sensor/" + name + "/intensities");
             lidar.minRange = get("min_range", 0.1);
             lidar.maxRange = get("max_range", 30.0);
             lidar.rateHz = sensors.rateHz[i];
+            lidar.sweep = get("motion_distortion", 1.0) != 0.0 ? 1.0 / lidar.rateHz : 0.0;
             // Reuse the publisher across attach() calls: a new one would drop subscribers.
             for (const Impl::Lidar& old : s.lidars) {
                 if (old.topic == lidar.topic) {
@@ -605,6 +778,11 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             }
             lidars.push_back(std::move(lidar));
         } else if (sensors.type[i] == SensorType::Camera) {
+            for (const char* topic :
+                 {"/camera_info", "/depth/camera_info", "/image_raw", "/depth/image_raw",
+                  "/instance/image_raw", "/temperature/image_raw"}) {
+                timed(settings, "/" + name + topic);
+            }
             cameras.push_back(s.camera(name, settings));
             geometry_msgs::msg::TransformStamped optical;
             optical.header.frame_id = name;
@@ -616,12 +794,17 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             mounts.transforms.push_back(optical);
             cameras.back().image = bus.find("sensor/" + name + "/image");
             cameras.back().depth = bus.find("sensor/" + name + "/depth");
+            cameras.back().instance = bus.find("sensor/" + name + "/instance");
+            cameras.back().temperature = bus.find("sensor/" + name + "/temperature");
         } else if (sensors.type[i] == SensorType::Gnss ||
                    sensors.type[i] == SensorType::Magnetometer ||
                    sensors.type[i] == SensorType::Barometer) {
             Impl::Geo geo;
             geo.type = sensors.type[i];
             geo.name = name;
+            for (const char* topic : {"/fix", "/field", "/pressure", "/temperature"}) {
+                timed(settings, "/" + name + topic);
+            }
             const std::string base = "sensor/" + name + "/";
             for (const Impl::Geo& old : s.geos) {
                 if (old.name == name) {  // keep subscribers across attach() calls
@@ -666,6 +849,7 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             Impl::Radar radar;
             radar.frame = name;
             radar.topic = "/" + name + "/detections";
+            timed(settings, radar.topic);
             radar.detections = bus.find("sensor/" + name + "/detections");
             radar.count = bus.find("sensor/" + name + "/count");
             for (const Impl::Radar& old : s.radars) {
@@ -682,6 +866,7 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             Impl::Imu imu;
             imu.frame = name;
             imu.topic = imuCount == 1 ? "/imu" : "/" + name + "/imu";
+            timed(settings, imu.topic);
             imu.force = bus.find("sensor/" + name + "/specific_force");
             imu.rate = bus.find("sensor/" + name + "/angular_rate");
             imu.orientation = bus.find("sensor/" + name + "/orientation");
@@ -724,7 +909,12 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
         s.commandGate.loss = bus.read(it->second.loss);
         s.commandGate.latency = bus.read(it->second.latency);
     }
-    if (now != s.lastClock) {
+    if (signalTopics_) {
+        signalTopics_->publish(bus, now);
+    }
+    // At most every millisecond: at the electrical step's 10 kHz the clock alone would cost more
+    // than the simulation, and nothing that follows it can use it finer.
+    if (s.lastClock.ns < 0 || now.ns - s.lastClock.ns >= kMinClockPeriodNs || now < s.lastClock) {
         rosgraph_msgs::msg::Clock clock;
         clock.clock = stampOf(now);
         s.clock->publish(clock);
@@ -779,6 +969,12 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
             truth.header.frame_id = "world";
             s.deliver("/ground_truth/odom", s.groundTruth, truth);
             s.counters["/ground_truth/odom"].add(720);
+            if (s.airspeed && s.baseAirspeed.valid()) {
+                std_msgs::msg::Float64 air;
+                air.data = bus.read(s.baseAirspeed);
+                s.deliver("/airspeed", s.airspeed, air);
+                s.counters["/airspeed"].add(8);
+            }
             // With ros2_control, its controllers publish /odom and the odom TF.
             if (s.odom) {
                 s.deliver("/odom", s.odom, odom);
@@ -806,12 +1002,13 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
         lidar.sent = bus.stamp(lidar.ranges);
         const std::span<const double> ranges = bus.readN(lidar.ranges);
         if (lidar.cloudPublisher) {
-            s.publishCloud(lidar, ranges);
+            s.publishCloud(lidar, ranges, values(bus, lidar.intensities));
             continue;
         }
         sensor_msgs::msg::LaserScan scan;
-        scan.header.stamp = stampOf(lidar.sent);
+        scan.header.stamp = stampOf(Impl::firstBeam(lidar));
         scan.header.frame_id = lidar.frame;
+        scan.time_increment = static_cast<float>(lidar.sweep / lidar.layout.horizontal);
         scan.angle_min = static_cast<float>(lidar.layout.minAngle);
         scan.angle_max = static_cast<float>(lidar.layout.maxAngle);
         scan.angle_increment =
@@ -824,6 +1021,10 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
         scan.ranges.reserve(ranges.size());
         for (const double r : ranges) {
             scan.ranges.push_back(static_cast<float>(r));
+        }
+        if (lidar.intensities.valid()) {
+            const std::span<const double> intensities = bus.readN(lidar.intensities);
+            scan.intensities.assign(intensities.begin(), intensities.end());
         }
         s.deliver(lidar.topic, lidar.publisher, scan);
         s.counters[lidar.topic].add(ranges.size() * 4 + 64);
@@ -995,6 +1196,21 @@ std::optional<CmdVel> Bridge::latestCommand(std::chrono::milliseconds maxAge) co
     return impl_->command;
 }
 
+FlightMode Bridge::flightMode() const {
+    const std::lock_guard<std::mutex> lock(impl_->commandMutex);
+    return impl_->flightMode;
+}
+
+std::optional<FlightMode> flightModeOf(std::string_view name) {
+    if (name == "position") {
+        return FlightMode::Position;
+    }
+    if (name == "angle") {
+        return FlightMode::Angle;
+    }
+    return std::nullopt;
+}
+
 GraphSnapshot Bridge::graph() {
     Impl& s = *impl_;
     GraphSnapshot out;
@@ -1115,6 +1331,22 @@ rclcpp::ServiceBase::SharedPtr unsupported(rclcpp::Node& node, const std::string
                                     });
 }
 
+/// From a SpawnEntity request, or one of SpawnEntities' (the same fields).
+template <typename Message>
+SpawnRequest spawnRequest(const Message& in) {
+    SpawnRequest out;
+    out.name = in.name;
+    out.allowRenaming = in.allow_renaming;
+    out.uri = in.entity_resource.uri;
+    out.resource = in.entity_resource.resource_string;
+    out.entityNamespace = in.entity_namespace;
+    out.frame = in.initial_pose.header.frame_id;
+    const geometry_msgs::msg::Pose& p = in.initial_pose.pose;
+    out.pose.position = {p.position.x, p.position.y, p.position.z};
+    out.pose.orientation = {p.orientation.w, p.orientation.x, p.orientation.y, p.orientation.z};
+    return out;
+}
+
 si::msg::EntityState stateMessage(const EntityMotion& motion, SimTime now,
                                   const std::array<double, 3>& offset) {
     si::msg::EntityState state;
@@ -1151,6 +1383,38 @@ void Bridge::serveSimulation(SimulationHandler& handler) {
     rclcpp::Node& node = *s.node;
     using si::msg::SimulatorFeatures;
 
+    // The site, as parameters: ros2 param set /lagrange_ros2_bridge gravity 1.62 (lagrange set).
+    // NaN: as the run started.
+    for (const char* name :
+         {"gravity", "wind_speed", "wind_from", "temperature", "air_density", "pressure",
+          "relative_humidity", "rain_rate", "visibility", "snow_rate", "snow_cover"}) {
+        node.declare_parameter(name, std::numeric_limits<double>::quiet_NaN());
+    }
+    s.siteParameters = node.add_on_set_parameters_callback(
+        [&s, h](const std::vector<rclcpp::Parameter>& parameters) {
+            rcl_interfaces::msg::SetParametersResult result;
+            result.successful = true;
+            for (const rclcpp::Parameter& parameter : parameters) {
+                if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) {
+                    continue;
+                }
+                if (std::isnan(parameter.as_double())) {
+                    result.successful = false;
+                    result.reason = parameter.get_name() + " is not a number";
+                    return result;
+                }
+                const std::string name = parameter.get_name();
+                const double value = parameter.as_double();
+                const auto outcome = s.onMain([h, name, value] { return h->setSite(name, value); });
+                if (!outcome || outcome->result != SimResult::Ok) {
+                    result.successful = false;
+                    result.reason = outcome ? outcome->message : "the simulator did not answer";
+                    break;
+                }
+            }
+            return result;
+        });
+
     s.services.push_back(node.create_service<si::srv::GetSimulatorFeatures>(
         "get_simulator_features",
         [](const std::shared_ptr<si::srv::GetSimulatorFeatures::Request>&,
@@ -1165,10 +1429,19 @@ void Bridge::serveSimulation(SimulationHandler& handler) {
                 SimulatorFeatures::SIMULATION_STATE_PAUSE,
                 SimulatorFeatures::STEP_SIMULATION_SINGLE,
                 SimulatorFeatures::STEP_SIMULATION_MULTIPLE,
+                SimulatorFeatures::SPAWNING,
+                SimulatorFeatures::SPAWNING_RESOURCE_STRING,
+                SimulatorFeatures::SPAWNING_ENTITIES,
+                SimulatorFeatures::DELETING,
+                SimulatorFeatures::SIMULATION_RESET_SPAWNED,
             };
+            response->features.spawn_formats = {"urdf", "sdf", "mjcf", "usd"};
             response->features.custom_info =
-                "Lagrange: entities are the robot and the fixed scenery objects; a step is one "
-                "base tick of the scheduler; reset restarts time and state together.";
+                "Lagrange: entities are the robots and the fixed scenery objects; a step is one "
+                "base tick of the scheduler; reset restarts time and state together. A robot "
+                "spawned into a run without one is the robot ROS drives; later ones are passive. "
+                "Spawning or deleting rebuilds the run: time and poses go on, velocities start "
+                "from rest.";
         }));
 
     s.services.push_back(node.create_service<si::srv::GetSimulationState>(
@@ -1216,8 +1489,8 @@ void Bridge::serveSimulation(SimulationHandler& handler) {
             const std::uint8_t scope = request->scope;
             const std::uint8_t timeAndState = Reset::SCOPE_TIME | Reset::SCOPE_STATE;
             if (scope == Reset::SCOPE_SPAWNED) {
-                // Nothing can be spawned yet, so there is nothing to remove.
-                response->result.result = si::msg::Result::RESULT_OK;
+                const auto outcome = s.onMain([h] { return h->removeSpawned(); });
+                outcome ? setResult(response->result, *outcome) : timedOut(response->result);
                 return;
             }
             if (scope != Reset::SCOPE_DEFAULT && (scope & timeAndState) != timeAndState) {
@@ -1323,13 +1596,50 @@ void Bridge::serveSimulation(SimulationHandler& handler) {
             }
             setResult(response->result, {SimResult::NotFound, "no entity named '" + name + "'"});
         }));
-    const std::string noSpawning = "spawning and deleting entities is not supported yet";
+    s.services.push_back(node.create_service<si::srv::SpawnEntity>(
+        "spawn_entity", [&s, h](const std::shared_ptr<si::srv::SpawnEntity::Request>& request,
+                                const std::shared_ptr<si::srv::SpawnEntity::Response>& response) {
+            const SpawnRequest asked = spawnRequest(*request);
+            const auto spawned = s.onMain([h, asked] { return h->spawn(asked); });
+            if (!spawned) {
+                timedOut(response->result);
+                return;
+            }
+            setResult(response->result, spawned->outcome);
+            response->entity_name = spawned->entityName;
+        }));
+    s.services.push_back(node.create_service<si::srv::SpawnEntities>(
+        "spawn_entities",
+        [&s, h](const std::shared_ptr<si::srv::SpawnEntities::Request>& request,
+                const std::shared_ptr<si::srv::SpawnEntities::Response>& response) {
+            bool failed = false;
+            for (const auto& one : request->spawn_requests) {
+                const SpawnRequest asked = spawnRequest(one);
+                const auto spawned = s.onMain([h, asked] { return h->spawn(asked); });
+                si::msg::SpawnResult& result = response->results.emplace_back();
+                if (!spawned) {
+                    timedOut(result.result);
+                } else {
+                    setResult(result.result, spawned->outcome);
+                    result.entity_name = spawned->entityName;
+                }
+                failed = failed || result.result.result != si::msg::Result::RESULT_OK;
+            }
+            response->result.result = failed
+                                          ? si::srv::SpawnEntities::Response::ENTITIES_SPAWN_FAILED
+                                          : si::msg::Result::RESULT_OK;
+        }));
+    s.services.push_back(node.create_service<si::srv::DeleteEntity>(
+        "delete_entity", [&s, h](const std::shared_ptr<si::srv::DeleteEntity::Request>& request,
+                                 const std::shared_ptr<si::srv::DeleteEntity::Response>& response) {
+            const std::string name = request->entity;
+            const auto outcome = s.onMain([h, name] { return h->remove(name); });
+            outcome ? setResult(response->result, *outcome) : timedOut(response->result);
+        }));
     const std::string noWorlds = "this server runs the world it was started with";
     const std::string noEditing = "entity state and info are read-only in this version";
-    s.services.push_back(unsupported<si::srv::SpawnEntity>(node, "spawn_entity", noSpawning));
-    s.services.push_back(unsupported<si::srv::SpawnEntities>(node, "spawn_entities", noSpawning));
-    s.services.push_back(unsupported<si::srv::DeleteEntity>(node, "delete_entity", noSpawning));
-    s.services.push_back(unsupported<si::srv::GetSpawnables>(node, "get_spawnables", noSpawning));
+    s.services.push_back(unsupported<si::srv::GetSpawnables>(
+        node, "get_spawnables", "spawn any URDF, SDFormat, MJCF or USD file by its path"));
     s.services.push_back(unsupported<si::srv::SetEntityState>(node, "set_entity_state", noEditing));
     s.services.push_back(unsupported<si::srv::SetEntityInfo>(node, "set_entity_info", noEditing));
     s.services.push_back(unsupported<si::srv::GetEntityBounds>(

@@ -604,7 +604,9 @@ private:
                         centre.push_back(pointAt(road, s, 0.5 * (ti + to)));
                         widths.push_back(std::abs(to - ti));
                     }
-                    if (const auto mat = laneMaterial(lane.type)) {
+                    // A sidewalk lane inside a junction is a path across what is drawn there.
+                    const bool path = road.junction >= 0 && laneToken(lane.type) == "sidewalk";
+                    if (const auto mat = laneMaterial(lane.type); mat && !path) {
                         strip(surfaces[*mat], inner, outer);
                     }
                     // Road marks on the lane's outer border.

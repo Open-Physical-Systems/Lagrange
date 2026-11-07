@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <numbers>
 
@@ -44,6 +45,17 @@ double groundEffect(double radius, double height) {
     return 1.0 / (1.0 - ratio * ratio);
 }
 
+double ceilingEffect(double radius, double distance) {
+    if (distance <= 0.0 || distance >= kCeilingReach * radius) {
+        return 1.0;
+    }
+    const double delta = std::min(radius / distance, kCeilingMaxRatio);
+    // Their momentum balance (eq. 5 with eq. 9's α0): ½u² − u − α0·δ²/16 = 0 for u = v∞/v_i,
+    // and γ = u/2.
+    const double gamma = 0.5 + 0.5 * std::sqrt(1.0 + kCeilingAsymmetry * delta * delta / 8.0);
+    return std::cbrt(gamma * gamma);
+}
+
 ModuleInfo RotorAero::info() const {
     if (ideal_) {
         return {"rotor_aero", "ideal", 0, 1, true, true, CapabilityTier::Tier0};
@@ -69,12 +81,20 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
     speedOfSound_ = std::max(0.0, config.get<double>("speed_of_sound").value_or(0.0));
     gravity_ = world.gravityLocal();
     wind_ = bem_ && config.get<bool>("wind").value_or(false);
+    // Each rotor's own air (the aerodynamics domain's wind plus other robots' downwash).
+    rotorAir_ = bem_ && config.get<bool>("rotor_air").value_or(false);
     if (wind_) {
         SignalSpec wind = scalar("env/wind/velocity", units::m_per_s);
         wind.type = SignalType::Vec3;
         wind.frame = "world_local";
         wind.feedback = true;
         windIn_ = d.input(wind);
+    }
+    densityIn_ = SignalId{};
+    if (config.get<bool>(kWeatherAirKey).value_or(false)) {
+        SignalSpec density = scalar("env/air_density", units::kg_per_m3);
+        density.feedback = true;
+        densityIn_ = d.input(density);
     }
     std::map<std::string, std::shared_ptr<const PropellerTable>> tables;  // by file
     groundEffect_ = !ideal_ && config.get<bool>("ground_effect").value_or(true);
@@ -87,6 +107,26 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
             hasGround_ = true;
             groundPoint_ = colliders.poseInBody[c].position;
             groundNormal_ = rotate(colliders.poseInBody[c].orientation, {0.0, 0.0, 1.0});
+        }
+    }
+
+    // Ceilings: the fixed boxes of the scenery (on the world, or on a body that does not move,
+    // placed through its chain of fixed parents), for the ceiling effect.
+    ceilings_.clear();
+    {
+        const World& raw = world.raw();
+        const std::vector<bool> moving = movingBodies(raw);
+        for (std::size_t c = 0; c < colliders.body.size(); ++c) {
+            const BodyId b = colliders.body[c];
+            if (colliders.shape[c] != ShapeType::Box || (b != kWorldBody && moving[b.index])) {
+                continue;
+            }
+            Pose pose = colliders.poseInBody[c];
+            for (BodyId up = b; up != kWorldBody;) {
+                pose = compose(raw.bodies.poseInParent[up.index], pose);
+                up = raw.bodies.parent[up.index];
+            }
+            ceilings_.push_back({pose.position, pose.orientation, colliders.size[c]});
         }
     }
 
@@ -190,6 +230,17 @@ Status RotorAero::declare(const WorldView& world, const ModuleConfig& config, Si
         r.thrustOut = d.output(scalar(rotor + "thrust", units::N));
         r.torqueOut = d.output(scalar(rotor + "aero_torque", units::N_m));
         r.inducedOut = d.output(scalar(rotor + "induced_velocity", units::m_per_s));
+        SignalSpec thrustAxis = scalar(rotor + "thrust_axis", units::one);
+        thrustAxis.type = SignalType::Vec3;
+        thrustAxis.frame = "world_local";
+        r.axisOut = d.output(thrustAxis);
+        if (rotorAir_) {
+            SignalSpec air = scalar(rotor + "air_velocity", units::m_per_s);
+            air.type = SignalType::Vec3;
+            air.frame = "world_local";
+            air.feedback = true;
+            r.airIn = d.input(air);
+        }
         SignalSpec wrench = scalar("body/" + link + "/wrench/rotor", units::N);
         wrench.type = SignalType::Wrench;
         wrench.frame = "world_local";
@@ -217,6 +268,7 @@ Status RotorAero::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
             bus.write(id, 0.0);
         }
         bus.writeN(r.wrenchOut, std::array<double, 6>{});
+        bus.writeN(r.axisOut, std::array<double, 3>{});
         if (r.folding) {
             // Stopped: as its weight hangs it, with the link as it rests (axis in the world's
             // frame, as robots are built).
@@ -234,6 +286,11 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
     const double dt = context.dt.seconds();
     // The exact first-order response over the step to a thrust held at its new value.
     const double keep = lag_ > 0.0 ? std::exp(-dt / lag_) : 0.0;
+    if (densityIn_.valid()) {
+        if (const double rho = bus.read(densityIn_); rho > 0.0) {
+            rho_ = rho;  // the weather's air, once it has written it
+        }
+    }
     for (Rotor& r : rotors_) {
         const double omega = bus.read(r.velocity);
         const std::span<const double> v = bus.readN(r.pose);
@@ -253,8 +310,8 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
             // The hub's velocity through the air: axial along the thrust, the rest across the disc.
             const std::span<const double> hubTwist = bus.readN(r.twist);
             std::array<double, 3> through{hubTwist[0], hubTwist[1], hubTwist[2]};
-            if (wind_) {
-                const std::span<const double> w = bus.readN(windIn_);
+            if (rotorAir_ || wind_) {
+                const std::span<const double> w = bus.readN(rotorAir_ ? r.airIn : windIn_);
                 for (std::size_t k = 0; k < 3; ++k) {
                     through[k] -= w[k];
                 }
@@ -316,6 +373,38 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
                                   above[2] * groundNormal_[2];
             target *= groundEffect(r.params.radius, height);
         }
+        if (groundEffect_ && !ceilings_.empty()) {
+            // The nearest fixed box straight up the thrust axis (slab test in its frame).
+            double nearest = std::numeric_limits<double>::infinity();
+            for (const Ceiling& box : ceilings_) {
+                const std::array<double, 4> back = conjugate(box.orientation);
+                const std::array<double, 3> o =
+                    rotate(back, {hub.position[0] - box.centre[0], hub.position[1] - box.centre[1],
+                                  hub.position[2] - box.centre[2]});
+                const std::array<double, 3> d = rotate(back, axis);
+                double enter = 0.0;
+                double leave = std::numeric_limits<double>::infinity();
+                for (std::size_t k = 0; k < 3 && enter <= leave; ++k) {
+                    if (std::abs(d[k]) < 1e-12) {
+                        if (std::abs(o[k]) > box.half[k]) {
+                            leave = -1.0;
+                        }
+                        continue;
+                    }
+                    double a = (-box.half[k] - o[k]) / d[k];
+                    double b = (box.half[k] - o[k]) / d[k];
+                    if (a > b) {
+                        std::swap(a, b);
+                    }
+                    enter = std::max(enter, a);
+                    leave = std::min(leave, b);
+                }
+                if (enter <= leave && enter > 0.0) {
+                    nearest = std::min(nearest, enter);
+                }
+            }
+            target *= ceilingEffect(r.params.radius, nearest);
+        }
         r.thrust = keep * r.thrust + (1.0 - keep) * target;
         const std::array<double, 3> force{r.thrust * axis[0] + inPlane[0],
                                           r.thrust * axis[1] + inPlane[1],
@@ -323,13 +412,22 @@ Status RotorAero::step(const StepContext& context, SignalBus& bus) {
         // Applied at the link's origin; the backend takes torques about the centre of mass.
         const std::array<double, 3> com = rotate(hub.orientation, r.com);
         const std::array<double, 3> moment = cross({-com[0], -com[1], -com[2]}, force);
-        bus.writeN(r.wrenchOut,
-                   std::array<double, 6>{force[0], force[1], force[2], moment[0] + hubMoment[0],
-                                         moment[1] + hubMoment[1], moment[2] + hubMoment[2]});
+        // The air's torque acts on the propeller alone, from outside, about the joint axis. As a
+        // joint torque (load_torque) the frame would take it back as a reaction, so that a
+        // steady difference between the rotors' speeds would turn nothing: a multirotor yaws by
+        // the motors' reactions to the air's torque, which only reach the frame when the air's
+        // torque does not.
+        const std::array<double, 3> air{load.torque * jointAxis[0], load.torque * jointAxis[1],
+                                        load.torque * jointAxis[2]};
+        bus.writeN(r.wrenchOut, std::array<double, 6>{force[0], force[1], force[2],
+                                                      moment[0] + hubMoment[0] + air[0],
+                                                      moment[1] + hubMoment[1] + air[1],
+                                                      moment[2] + hubMoment[2] + air[2]});
         const double area = std::numbers::pi * r.params.radius * r.params.radius;
         bus.write(r.thrustOut, r.thrust);
+        bus.writeN(r.axisOut, axis);
         bus.write(r.torqueOut, load.torque);
-        bus.write(r.loadOut, load.torque);
+        bus.write(r.loadOut, 0.0);  // in the wrench above instead
         bus.write(r.inducedOut,
                   r.propeller ? induced : std::sqrt(std::abs(r.thrust) / (2.0 * rho_ * area)));
     }

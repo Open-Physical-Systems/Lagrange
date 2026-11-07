@@ -89,13 +89,14 @@ SUMO co-simulation is not built (the owner's v0.6 decision: no new external engi
     the network's edge.
   - Into a junction they stop on red and yellow, and wait while a crossing or merging junction
     lane is taken or a vehicle nearer its line is about to take one (first come, first served).
-  - No lane changes, no priority rules, no turn signals.
+  - No priority rules.
 - **Pedestrians.** They walk their sidewalk at 1.34 m/s (Weidmann 1993), turn back at its ends,
   and step aside from each other and from the robots by a social force (Helbing and Molnár 1995,
-  A = 2 m/s², B = 0.3 m). They do not cross roads yet.
+  A = 2 m/s², B = 0.3 m). On a world with crossings they are walking people instead (§8.2).
 - **Lights.** Fixed cycle per junction, illustrative: approaches facing each other share a group,
-  and groups take turns at 20 s green, 3 s yellow and 2 s all red. They are not drawn yet. Their
-  states are `traffic/lights`.
+  and groups take turns at 20 s green, 3 s yellow and 2 s all red. Their states are
+  `traffic/lights`, and they are drawn (§8.2). A junction whose lanes do not conflict (a bend) has
+  none.
 - **Outputs.** `traffic/agents` (8 numbers per agent), `traffic/agent_count`, `traffic/lights`.
 - **Validation** (`test_traffic`, on MuJoCo with the city block):
   - the IDM's equilibrium gap;
@@ -109,6 +110,45 @@ SUMO co-simulation is not built (the owner's v0.6 decision: no new external engi
   - the fundamental-diagram check for pedestrians;
   - scenario conformance (with the OpenSCENARIO runner);
   - SUMO, esmini.
+
+### 8.2 Crossings, drawn signals and the town
+
+`assets/worlds/town` (`lagrange town`) is a 200 m road grid written by `make_town.py`: a crossroads,
+T junctions, bends and two lone crossings. Everything is derived from the lanes, so any OpenDRIVE
+world gets the same behaviour:
+
+- **Junctions** are the driving lanes that share an entry, share an exit or cross. (Grouping by road
+  would join a whole grid into one junction.)
+- **Crossings** are sidewalk lanes that go over a driving lane of a junction. Sidewalk lanes in a
+  junction are paths, not drawn surfaces. Walkers' sidewalks join where their ends touch.
+- **Signals** are drawn by `addAgents`: poles, housings, dark lenses, and lamps. A lamp is a
+  kinematic body without a collider that is either in front of its lens or inside the housing, so
+  viewers, camera sensors and recordings all see it with no protocol change.
+- **Actuated junctions** are those with crossings. A button cuts the green to 8 s (a lone crossing
+  stays green until asked); after yellow and all red, every vehicle stops for an exclusive walk of
+  7 s and a flashing clearance as long as the longest crossing takes at 1.2 m/s, held until the
+  crossing is empty (at most 10 s). `traffic/crossings` reports them. Timings are illustrative.
+- **Walkers** are `HumanAPI_1` people named `walker_<i>`, walked by `lagrange_humans` and sent by
+  `human/<n>/goal`. At a crossing 60 % press on arrival and the others wait, pressing after 6 s if
+  nobody has. They start across only on walk. They lift an arm to the button (`human/<n>/gesture`), and
+  the wait lamp on the pole shows the press.
+- **Vehicles** also stop for anyone on a crossing ahead, do not yield to a vehicle held at a red
+  light, and do not enter a junction without 9 m free beyond it, which is what keeps a road grid out
+  of gridlock.
+- **Validation** (`python/test/test_town.py`, four simulated minutes): every colour seen, no green
+  straight to red, one lamp per signal, no open vehicle light beside a walk light, people on the
+  road only after a walk light, no car within 0.3 m of a person, no car stopped over 90 s, cars on
+  streets, people out of buildings, same seed same hash, robots spawned and removed. These check the
+  logic; none compares against measured traffic.
+- **Vehicles' bodies.** Sedans, hatchbacks, SUVs, vans and buses by index (`kVehicleSizes`,
+  illustrative), each with its own collider and gaps. Hubs turn by `traffic/vehicle/<i>/wheel`; brake
+  lamps and indicators are parts on hinges (`/brake`, `/left`, `/right`: 0 lit, pi inside the body).
+- **Lane changes.** On roads with several lanes each way a vehicle held up within 40 m moves over
+  when that gives at least 10 m more room and asks no more than 3 m/s² of braking of itself or of the
+  one behind it (the safety criterion of MOBIL, Kesting, Treiber and Helbing 2007), not within 30 m of
+  either end of the lane. `traffic/lane_changes` counts them. The town's streets have one lane each
+  way, so they happen on the city block, not there.
+- **Owed:** parallel walk with turning traffic, the signals' timing for a real site.
 
 ### 8.1 OpenSCENARIO runner (v0.6)
 

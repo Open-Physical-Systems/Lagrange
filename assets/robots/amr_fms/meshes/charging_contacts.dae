@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset><contributor><authoring_tool>FreeCAD 1.1.4 + AMR_CAD export_dae.py</authoring_tool></contributor>
+    <created>2026-10-02T23:46:58Z</created><modified>2026-10-02T23:46:58Z</modified><unit name="meter" meter="1"/><up_axis>Z_UP</up_axis></asset>
+  <library_effects>
+    <effect id="black-effect"><profile_COMMON><technique sid="common"><phong><emission><color>0 0 0 1</color></emission><ambient><color>0.0352941 0.0364706 0.0388235 1</color></ambient><diffuse><color>0.117647 0.121569 0.129412 1</color></diffuse><specular><color>0.1 0.1 0.1 1</color></specular><shininess><float>16.0</float></shininess></phong></technique></profile_COMMON></effect>
+    <effect id="copper-effect"><profile_COMMON><technique sid="common"><phong><emission><color>0 0 0 1</color></emission><ambient><color>0.216471 0.135294 0.06 1</color></ambient><diffuse><color>0.721569 0.45098 0.2 1</color></diffuse><specular><color>0.35 0.35 0.35 1</color></specular><shininess><float>46.0</float></shininess></phong></technique></profile_COMMON></effect>
+  </library_effects>
+  <library_materials>
+    <material id="black" name="black"><instance_effect url="#black-effect"/></material>
+    <material id="copper" name="copper"><instance_effect url="#copper-effect"/></material>
+  </library_materials>
+  <library_geometries>
+    <geometry id="ChargeContactHousing-mesh" name="ChargeContactHousing"><mesh>
+      <source id="ChargeContactHousing-pos"><float_array id="ChargeContactHousing-pos-array" count="72">0.42 -0.08 0.03 0.439 -0.08 0.03 0.42 -0.08 0.06 0.439 -0.08 0.06 0.439 -0.08 0.03 0.439 0.08 0.03 0.439 -0.08 0.06 0.439 0.08 0.06 0.439 0.08 0.03 0.42 0.08 0.03 0.439 0.08 0.06 0.42 0.08 0.06 0.42 0.08 0.03 0.42 -0.08 0.03 0.42 0.08 0.06 0.42 -0.08 0.06 0.42 -0.08 0.03 0.439 0.08 0.03 0.439 -0.08 0.03 0.42 0.08 0.03 0.439 0.08 0.06 0.42 -0.08 0.06 0.439 -0.08 0.06 0.42 0.08 0.06</float_array><technique_common><accessor source="#ChargeContactHousing-pos-array" count="24" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+      <source id="ChargeContactHousing-nrm"><float_array id="ChargeContactHousing-nrm-array" count="72">0 -1 0 0 -1 0 0 -1 0 0 -1 0 1 0 0 1 0 0 1 0 0 1 0 0 0 1 0 0 1 0 0 1 0 0 1 0 -1 0 0 -1 0 0 -1 0 0 -1 0 0 0 0 -1 0 0 -1 0 0 -1 0 0 -1 0 0 1 0 0 1 0 0 1 0 0 1</float_array><technique_common><accessor source="#ChargeContactHousing-nrm-array" count="24" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+      <vertices id="ChargeContactHousing-vtx"><input semantic="POSITION" source="#ChargeContactHousing-pos"/><input semantic="NORMAL" source="#ChargeContactHousing-nrm"/></vertices>
+      <triangles material="black" count="12"><input semantic="VERTEX" source="#ChargeContactHousing-vtx" offset="0"/><p>0 1 2 2 1 3 4 5 6 6 5 7 8 9 10 10 9 11 12 13 14 14 13 15 16 17 18 19 17 16 20 21 22 20 23 21</p></triangles>
+    </mesh></geometry>
+    <geometry id="ChargePad_Plus-mesh" name="ChargePad_Plus"><mesh>
+      <source id="ChargePad_Plus-pos"><float_array id="ChargePad_Plus-pos-array" count="72">0.439 0.03 0.035 0.445 0.03 0.035 0.439 0.03 0.055 0.445 0.03 0.055 0.445 0.03 0.035 0.445 0.07 0.035 0.445 0.03 0.055 0.445 0.07 0.055 0.445 0.07 0.035 0.439 0.07 0.035 0.445 0.07 0.055 0.439 0.07 0.055 0.439 0.07 0.035 0.439 0.03 0.035 0.439 0.07 0.055 0.439 0.03 0.055 0.439 0.03 0.035 0.445 0.07 0.035 0.445 0.03 0.035 0.439 0.07 0.035 0.445 0.07 0.055 0.439 0.03 0.055 0.445 0.03 0.055 0.439 0.07 0.055</float_array><technique_common><accessor source="#ChargePad_Plus-pos-array" count="24" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+      <source id="ChargePad_Plus-nrm"><float_array id="ChargePad_Plus-nrm-array" count="72">0 -1 0 0 -1 0 0 -1 0 0 -1 0 1 0 0 1 0 0 1 0 0 1 0 0 0 1 0 0 1 0 0 1 0 0 1 0 -1 0 0 -1 0 0 -1 0 0 -1 0 0 0 0 -1 0 0 -1 0 0 -1 0 0 -1 0 0 1 0 0 1 0 0 1 0 0 1</float_array><technique_common><accessor source="#ChargePad_Plus-nrm-array" count="24" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+      <vertices id="ChargePad_Plus-vtx"><input semantic="POSITION" source="#ChargePad_Plus-pos"/><input semantic="NORMAL" source="#ChargePad_Plus-nrm"/></vertices>
+      <triangles material="copper" count="12"><input semantic="VERTEX" source="#ChargePad_Plus-vtx" offset="0"/><p>0 1 2 2 1 3 4 5 6 6 5 7 8 9 10 10 9 11 12 13 14 14 13 15 16 17 18 19 17 16 20 21 22 20 23 21</p></triangles>
+    </mesh></geometry>
+    <geometry id="ChargePad_Minus-mesh" name="ChargePad_Minus"><mesh>
+      <source id="ChargePad_Minus-pos"><float_array id="ChargePad_Minus-pos-array" count="72">0.439 -0.07 0.035 0.445 -0.07 0.035 0.439 -0.07 0.055 0.445 -0.07 0.055 0.445 -0.07 0.035 0.445 -0.03 0.035 0.445 -0.07 0.055 0.445 -0.03 0.055 0.445 -0.03 0.035 0.439 -0.03 0.035 0.445 -0.03 0.055 0.439 -0.03 0.055 0.439 -0.03 0.035 0.439 -0.07 0.035 0.439 -0.03 0.055 0.439 -0.07 0.055 0.439 -0.07 0.035 0.445 -0.03 0.035 0.445 -0.07 0.035 0.439 -0.03 0.035 0.445 -0.03 0.055 0.439 -0.07 0.055 0.445 -0.07 0.055 0.439 -0.03 0.055</float_array><technique_common><accessor source="#ChargePad_Minus-pos-array" count="24" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+      <source id="ChargePad_Minus-nrm"><float_array id="ChargePad_Minus-nrm-array" count="72">0 -1 0 0 -1 0 0 -1 0 0 -1 0 1 0 0 1 0 0 1 0 0 1 0 0 0 1 0 0 1 0 0 1 0 0 1 0 -1 0 0 -1 0 0 -1 0 0 -1 0 0 0 0 -1 0 0 -1 0 0 -1 0 0 -1 0 0 1 0 0 1 0 0 1 0 0 1</float_array><technique_common><accessor source="#ChargePad_Minus-nrm-array" count="24" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+      <vertices id="ChargePad_Minus-vtx"><input semantic="POSITION" source="#ChargePad_Minus-pos"/><input semantic="NORMAL" source="#ChargePad_Minus-nrm"/></vertices>
+      <triangles material="copper" count="12"><input semantic="VERTEX" source="#ChargePad_Minus-vtx" offset="0"/><p>0 1 2 2 1 3 4 5 6 6 5 7 8 9 10 10 9 11 12 13 14 14 13 15 16 17 18 19 17 16 20 21 22 20 23 21</p></triangles>
+    </mesh></geometry>
+  </library_geometries>
+  <library_visual_scenes><visual_scene id="Scene" name="charging_contacts">
+    <node id="ChargeContactHousing" name="ChargeContactHousing"><instance_geometry url="#ChargeContactHousing-mesh"><bind_material><technique_common><instance_material symbol="black" target="#black"/></technique_common></bind_material></instance_geometry></node>
+    <node id="ChargePad_Plus" name="ChargePad_Plus"><instance_geometry url="#ChargePad_Plus-mesh"><bind_material><technique_common><instance_material symbol="copper" target="#copper"/></technique_common></bind_material></instance_geometry></node>
+    <node id="ChargePad_Minus" name="ChargePad_Minus"><instance_geometry url="#ChargePad_Minus-mesh"><bind_material><technique_common><instance_material symbol="copper" target="#copper"/></technique_common></bind_material></instance_geometry></node>
+  </visual_scene></library_visual_scenes>
+  <scene><instance_visual_scene url="#Scene"/></scene>
+</COLLADA>

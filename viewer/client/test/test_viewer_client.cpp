@@ -298,6 +298,25 @@ TEST(ViewerClient, DifferentMajorVersionIsRefusedByTheClient) {
     client.stop();
 }
 
+// A 3D lidar's array is wide, and the signals after it are still in the list.
+TEST(ViewerClient, AWideSignalDoesNotEndTheCatalog) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+    v1::Envelope envelope = catalog(1);
+    envelope.mutable_catalog()->mutable_signals(1)->set_components(14400);
+    auto* after = envelope.mutable_catalog()->add_signals();
+    after->set_id(2);
+    after->set_name("sensor/imu/angular_rate");
+    after->set_components(3);
+    after->set_native_dt_ns(5'000'000);
+    server.send(envelope);
+    ASSERT_TRUE(server.pump([&] { return client.catalog() != nullptr; }));
+    ASSERT_EQ(client.catalog()->signals.size(), 3U);
+    EXPECT_NE(client.catalog()->find("sensor/imu/angular_rate"), nullptr);
+}
+
 TEST(ViewerClient, CommandsStatusAndCatalogTravel) {
     FakeServer server;
     ViewerClient client(server.endpoint());

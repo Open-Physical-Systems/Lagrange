@@ -105,9 +105,24 @@ bool PropertyRow(const char* label, const char* value, const char* unit, bool li
 
 /// A PropertyRow whose value can be typed: the same 22 px field on bg0 with the unit inside on
 /// the right; `edited` (an unapplied change) gives it the accent border (ui-conventions §2).
-/// Returns true when the text changed.
+/// Returns true when the text changed. `numeric` takes only what a number can hold.
 bool PropertyEdit(const char* label, char* buffer, std::size_t size, const char* unit, bool edited,
-                  const char* tooltip = nullptr);
+                  const char* tooltip = nullptr, bool numeric = true);
+
+/// One of the two fields of a PropertyEditPair.
+struct EditField {
+    char* buffer;
+    std::size_t size;
+    const char* unit;
+    bool edited{false};
+    const char* tooltip{nullptr};
+};
+
+/// A PropertyEdit row with two number fields side by side (the design's two-column `.f3` grid,
+/// e.g. the wind's mean speed and direction). Returns which were applied this frame (Enter or
+/// leaving the field after typing): bit 0 the first, bit 1 the second; and which is being typed
+/// in: bit 2 the first, bit 3 the second.
+int PropertyEditPair(const char* label, EditField first, EditField second);
 
 /// Three read-only number fields with coloured X / Y / Z labels.
 void Vec3Field(const char* label, const double value[3], const char* format = "%.3f");
@@ -128,6 +143,9 @@ bool Checkbox(const char* id, bool* value);
 
 /// A small toggle for a filter ("electrical", "rate >= 100 Hz"), in `color` when on.
 bool FilterChip(const char* label, const ImVec4& color, bool selected);
+/// The same chip opening a list ("unit: any ▾" in the Signals design), its chevron the designed
+/// ChevronDown icon. Returns true when clicked.
+bool DropdownChip(const char* label, const ImVec4& color, bool selected);
 
 /// A 6 px bar filled to `fraction` (0..1).
 void Meter(float fraction, const ImVec4& color, float width);

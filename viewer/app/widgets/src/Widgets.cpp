@@ -784,12 +784,12 @@ bool PropertyRow(const char* label, const char* value, const char* unit, bool li
     return link && clicked;
 }
 
-bool PropertyEdit(const char* label, char* buffer, std::size_t size, const char* unit, bool edited,
-                  const char* tooltip) {
-    ImGui::PushID(label);
-    rowLabel(label);
+namespace {
+
+/// The editable 22 px value field of PropertyEdit, `width` wide at the cursor.
+bool editField(const char* id, char* buffer, std::size_t size, const char* unit, bool edited,
+               float width, bool numeric) {
     const theme::Fonts& fonts = theme::fonts();
-    const float width = std::max(ImGui::GetContentRegionAvail().x, px(40.0F));
     const ImVec2 min = ImGui::GetCursorScreenPos();
     const ImVec2 max(min.x + width, min.y + px(22.0F));
     ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -813,17 +813,62 @@ bool PropertyEdit(const char* label, char* buffer, std::size_t size, const char*
     ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0, 0, 0, 0));
     ImGui::SetNextItemWidth(width - unitWidth);
-    const bool changed =
-        ImGui::InputText("##edit", buffer, size,
-                         ImGuiInputTextFlags_CharsScientific | ImGuiInputTextFlags_AutoSelectAll);
-    if (tooltip != nullptr && *tooltip != '\0') {
-        ImGui::SetItemTooltip("%s", tooltip);
-    }
+    const bool changed = ImGui::InputText(
+        id, buffer, size,
+        (numeric ? ImGuiInputTextFlags_CharsScientific : ImGuiInputTextFlags_None) |
+            ImGuiInputTextFlags_AutoSelectAll);
     ImGui::PopStyleColor(3);
     ImGui::PopStyleVar(2);
     ImGui::PopFont();
+    return changed;
+}
+
+}  // namespace
+
+bool PropertyEdit(const char* label, char* buffer, std::size_t size, const char* unit, bool edited,
+                  const char* tooltip, bool numeric) {
+    ImGui::PushID(label);
+    rowLabel(label);
+    const float width = std::max(ImGui::GetContentRegionAvail().x, px(40.0F));
+    const bool changed = editField("##edit", buffer, size, unit, edited, width, numeric);
+    if (tooltip != nullptr && *tooltip != '\0') {
+        ImGui::SetItemTooltip("%s", tooltip);
+    }
     ImGui::PopID();
     return changed;
+}
+
+int PropertyEditPair(const char* label, EditField first, EditField second) {
+    ImGui::PushID(label);
+    rowLabel(label);
+    const float gap = px(6.0F);
+    const float width = std::max((ImGui::GetContentRegionAvail().x - gap) * 0.5F, px(40.0F));
+    const ImVec2 start = ImGui::GetCursorScreenPos();
+    int done = 0;
+    int index = 0;
+    for (const EditField* field : {&first, &second}) {
+        if (index == 1) {
+            // After the first field's box, not its text (which stops short of the unit).
+            ImGui::SameLine();
+            ImGui::SetCursorScreenPos(ImVec2(start.x + width + gap, start.y));
+        }
+        ImGui::PushID(index);
+        (void)editField("##edit", field->buffer, field->size, field->unit, field->edited, width,
+                        true);
+        if (field->tooltip != nullptr && *field->tooltip != '\0') {
+            ImGui::SetItemTooltip("%s", field->tooltip);
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            done |= 1 << index;
+        }
+        if (ImGui::IsItemActive()) {
+            done |= 4 << index;
+        }
+        ImGui::PopID();
+        ++index;
+    }
+    ImGui::PopID();
+    return done;
 }
 
 void Vec3Field(const char* label, const double value[3], const char* format) {
@@ -972,6 +1017,34 @@ bool FilterChip(const char* label, const ImVec4& color, bool selected) {
     draw->AddRect(min, max, u32(withAlpha(tone, selected ? 0.55F : 0.30F)), size.y * 0.5F);
     draw->AddText(ImVec2(min.x + px(8.0F), min.y + (size.y - textSize.y) * 0.5F),
                   u32(selected ? color : c::t2), label, ImGui::FindRenderedTextEnd(label));
+    ImGui::PopFont();
+    return clicked;
+}
+
+bool DropdownChip(const char* label, const ImVec4& color, bool selected) {
+    ImGui::PushFont(theme::fonts().sansMedium, theme::kCaptionSize);
+    const ImVec2 textSize = ImGui::CalcTextSize(label, nullptr, true);
+    const float chevron = px(10.0F);
+    const ImVec2 size(textSize.x + px(16.0F) + chevron + px(4.0F), px(20.0F));
+    if (ImGui::GetCursorPosX() > ImGui::GetStyle().WindowPadding.x + 1.0F &&
+        ImGui::GetContentRegionAvail().x < size.x) {
+        ImGui::NewLine();  // wrap
+    }
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const ImVec2 max(min.x + size.x, min.y + size.y);
+    const bool clicked = ImGui::InvisibleButton(label, size);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImVec4 tone = selected ? color : c::t3;
+    draw->AddRectFilled(
+        min, max, u32(withAlpha(tone, selected ? 0.16F : (ImGui::IsItemHovered() ? 0.12F : 0.06F))),
+        size.y * 0.5F);
+    draw->AddRect(min, max, u32(withAlpha(tone, selected ? 0.55F : 0.30F)), size.y * 0.5F);
+    const ImU32 ink = u32(selected ? color : c::t2);
+    draw->AddText(ImVec2(min.x + px(8.0F), min.y + (size.y - textSize.y) * 0.5F), ink, label,
+                  ImGui::FindRenderedTextEnd(label));
+    DrawIcon(draw, Icon::ChevronDown,
+             ImVec2(max.x - px(8.0F) - chevron, min.y + (size.y - chevron) * 0.5F), chevron, ink,
+             u32(c::bg2));
     ImGui::PopFont();
     return clicked;
 }

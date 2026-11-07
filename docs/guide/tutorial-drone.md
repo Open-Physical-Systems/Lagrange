@@ -110,7 +110,7 @@ its hand. The viewer draws the rotors as these blades. Fly the quadcopter on the
 rotor's thrust and torque computed from its blades (blade-element momentum):
 
 ```bash
-lagrange run profiles/examples/quad_x500_bem.yaml \
+lagrange profiles/examples/quad_x500_bem.yaml \
     --robot assets/robots/quad_x500/quad_x500.usda --world none
 ```
 
@@ -134,13 +134,61 @@ and the motors upside down under the arms, the propellers pushing
 ## 4. Gusty wind
 
 ```bash
-lagrange run profiles/examples/quad_x500_gusty.yaml \
+lagrange profiles/examples/quad_x500_gusty.yaml \
     --robot assets/robots/quad_x500/quad_x500.usda --world none
 ```
 
 The wind grows with height (a logarithmic profile over open terrain), and turbulence adds gusts
 of a metre or two per second; `env/wind/gust` is the gust at the frame. The controller leans
 into it and stays within a few centimetres of its spot.
+
+### See the downwash
+
+```bash
+lagrange quad -- --overlays airflow --slice aero/wind_speed:xz
+```
+
+The rotors' air is simulated live: a column under each rotor that merges into one jet a metre
+below the drone and spreads along the ground as outwash
+([rotor_aero.md](../design/domains/rotor_aero.md)). In the 3D view the *airflow · particles*
+overlay moves particles through it, coloured by speed (legend in m/s). In the Environment
+workspace the Slice 2D panel cuts through the drone: XZ and YZ upright, XY at the height slider.
+`lagrange set wind_speed=4 wind_from=270` leans the wake downwind. A second drone flown under
+this one gets less thrust from its propellers (at the `bem` fidelity), and with
+`--weather ...,ground_dust_diameter=1e-4,ground_dust_concentration=1e-5` the outwash lifts
+dust that the cameras and lidars see.
+
+Beside a building, on blade-element rotors that feel the air:
+
+```bash
+lagrange profiles/examples/quad_x500_downwash.yaml \
+    --robot assets/robots/quad_x500/quad_x500.usda \
+    --world assets/worlds/drone_building/drone_building.urdf
+```
+
+The quadcopter starts with its rotor tips 0.3 m from a 12 m wall, and its wake hugs the wall.
+The rotors next to the wall get about 0.09 m/s more air down through them than the far ones
+(plot `rotor/rotor_1_joint/air_velocity.z` against `rotor/rotor_2_joint/air_velocity.z`). At
+the same speed they would make less thrust and the drone would roll towards the wall, so the
+controller spins them faster to stay level (`joint/rotor_1_joint/velocity` against
+`joint/rotor_2_joint/velocity`). Over the roof, the wake spreads as it does on the ground. For
+the full flow, `lagrange foam-hover assets/robots/quad_x500/quad_x500.urdf --building
+0.6,-3.5,3.6,3.5,12` runs the same scene in OpenFOAM.
+
+The fitted wake is a set of published rules. To compute the air itself instead, live, on a
+hardware GPU:
+
+```bash
+lagrange profiles/examples/quad_x500_live_air.yaml \
+    --robot assets/robots/quad_x500/quad_x500.usda --world none
+```
+
+`downwash_model: lbm` puts the quadcopter in a 3 m box of air in 4 cm cells, worked out by the
+lattice Boltzmann method every few milliseconds, its rotors pushing it as discs. Flown down to
+half a metre, the four jets hit the ground, meet under the drone and rise between them, which the
+fitted model cannot do. It runs at about three quarters of real time on a laptop RTX 4060
+([rotor_aero.md §8](../design/domains/rotor_aero.md)); without a hardware GPU the fitted model
+runs instead.
 
 ## 5. PX4 or ArduPilot flies it
 

@@ -63,9 +63,47 @@ lagrange_add_slang_shader(
     SYMBOL kBvhTraverse
 )
 
+# The wind tunnel's step (kernels/fields/lbm.slang) and the air box round a multicopter
+# (kernels/fields/lbm_box.slang), and their host side.
+add_library(
+    lagrange_gpu_fluids
+    fluids/src/LbmStepper.cpp
+    fluids/src/LbmBoxStepper.cpp
+)
+add_library(lagrange::gpu_fluids ALIAS lagrange_gpu_fluids)
+lagrange_target_defaults(lagrange_gpu_fluids)
+lagrange_target_vulkan_warnings(lagrange_gpu_fluids)
+target_include_directories(
+    lagrange_gpu_fluids
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/fluids/include>
+        $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
+)
+target_link_libraries(lagrange_gpu_fluids PRIVATE lagrange_gpu)
+lagrange_add_slang_shader(
+    lagrange_gpu_fluids
+    SOURCE kernels/fields/lbm.slang
+    ENTRY stepCells
+    STAGE compute
+    SYMBOL kLbm
+)
+lagrange_add_slang_shader(
+    lagrange_gpu_fluids
+    SOURCE kernels/fields/lbm_box.slang
+    ENTRY stepCells
+    STAGE compute
+    SYMBOL kLbmBox
+)
+
 # The mesh pipeline shared by the viewer and the camera sensor, and the sensor's renderer:
 # kernels/camera/mesh.slang and its host side.
-add_library(lagrange_gpu_raster raster/src/Raster.cpp)
+find_package(JPEG REQUIRED)
+add_library(
+    lagrange_gpu_raster
+    raster/src/Raster.cpp
+    raster/src/Realistic.cpp
+    raster/src/SurfaceTextures.cpp
+)
 add_library(lagrange::gpu_raster ALIAS lagrange_gpu_raster)
 lagrange_target_defaults(lagrange_gpu_raster)
 lagrange_target_vulkan_warnings(lagrange_gpu_raster)
@@ -75,7 +113,18 @@ target_include_directories(
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/raster/include>
         $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
 )
-target_link_libraries(lagrange_gpu_raster PUBLIC lagrange_gpu)
+target_link_libraries(
+    lagrange_gpu_raster
+    PUBLIC lagrange_gpu
+    PRIVATE JPEG::JPEG
+)
+# Photographs of surfaces: installed, else from the source tree when run from a build.
+target_compile_definitions(
+    lagrange_gpu_raster
+    PRIVATE
+        LAGRANGE_GPU_TEXTURES="${CMAKE_INSTALL_PREFIX}/share/${PROJECT_NAME}/textures"
+        LAGRANGE_GPU_SOURCE_TEXTURES="${CMAKE_CURRENT_SOURCE_DIR}/assets_textures"
+)
 lagrange_add_slang_shader(
     lagrange_gpu_raster
     SOURCE kernels/camera/mesh.slang
@@ -98,12 +147,85 @@ lagrange_add_slang_shader(
     SYMBOL kSensorLabels
 )
 
+lagrange_add_slang_shader(
+    lagrange_gpu_raster
+    SOURCE kernels/camera/realistic.slang
+    ENTRY vsMesh
+    STAGE vertex
+    SYMBOL kRealMeshVertex
+)
+lagrange_add_slang_shader(
+    lagrange_gpu_raster
+    SOURCE kernels/camera/realistic.slang
+    ENTRY fsMesh
+    STAGE fragment
+    SYMBOL kRealMeshFragment
+)
+lagrange_add_slang_shader(
+    lagrange_gpu_raster
+    SOURCE kernels/camera/realistic.slang
+    ENTRY vsShadow
+    STAGE vertex
+    SYMBOL kRealShadowVertex
+)
+lagrange_add_slang_shader(
+    lagrange_gpu_raster
+    SOURCE kernels/camera/realistic.slang
+    ENTRY fsShadow
+    STAGE fragment
+    SYMBOL kRealShadowFragment
+)
+lagrange_add_slang_shader(
+    lagrange_gpu_raster
+    SOURCE kernels/camera/realistic.slang
+    ENTRY vsScreen
+    STAGE vertex
+    SYMBOL kRealScreenVertex
+)
+lagrange_add_slang_shader(
+    lagrange_gpu_raster
+    SOURCE kernels/camera/realistic.slang
+    ENTRY fsSky
+    STAGE fragment
+    SYMBOL kRealSkyFragment
+)
+lagrange_add_slang_shader(
+    lagrange_gpu_raster
+    SOURCE kernels/camera/realistic.slang
+    ENTRY fsComposite
+    STAGE fragment
+    SYMBOL kRealCompositeFragment
+)
+lagrange_add_slang_shader(
+    lagrange_gpu_raster
+    SOURCE kernels/camera/realistic.slang
+    ENTRY vsWater
+    STAGE vertex
+    SYMBOL kRealWaterVertex
+)
+lagrange_add_slang_shader(
+    lagrange_gpu_raster
+    SOURCE kernels/camera/realistic.slang
+    ENTRY fsWater
+    STAGE fragment
+    SYMBOL kRealWaterFragment
+)
+
+install(
+    DIRECTORY assets_textures/
+    DESTINATION share/${PROJECT_NAME}/textures
+    FILES_MATCHING
+    PATTERN "*.jpg"
+    PATTERN "SOURCES.md"
+)
+
 add_executable(lagrange_gpu_info tools/gpu_info.cpp)
 lagrange_target_defaults(lagrange_gpu_info)
 target_link_libraries(lagrange_gpu_info PRIVATE lagrange_gpu)
 
 install(DIRECTORY hal/include/ DESTINATION include/${PROJECT_NAME})
 install(DIRECTORY raycast/include/ DESTINATION include/${PROJECT_NAME})
+install(DIRECTORY fluids/include/ DESTINATION include/${PROJECT_NAME})
 install(DIRECTORY raster/include/ DESTINATION include/${PROJECT_NAME})
 # Shader sources are installed so that other packages compile the same kernels (invariant 13).
 install(DIRECTORY kernels/ DESTINATION share/${PROJECT_NAME}/kernels)
@@ -112,7 +234,11 @@ install(
     DESTINATION share/${PROJECT_NAME}/cmake
 )
 install(
-    TARGETS lagrange_gpu lagrange_gpu_raycast lagrange_gpu_raster
+    TARGETS
+        lagrange_gpu
+        lagrange_gpu_raycast
+        lagrange_gpu_raster
+        lagrange_gpu_fluids
     EXPORT export_${PROJECT_NAME}
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
@@ -156,11 +282,22 @@ if(BUILD_TESTING)
         ENV
         ASAN_OPTIONS=${LAGRANGE_GPU_TEST_ASAN_OPTIONS}
     )
-    target_link_libraries(test_raster lagrange_gpu_raster opencv_core opencv_imgproc opencv_calib3d)
-    target_include_directories(test_raster SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(
+        test_raster
+        lagrange_gpu_raster
+        opencv_core
+        opencv_imgproc
+        opencv_calib3d
+    )
+    target_include_directories(
+        test_raster
+        SYSTEM
+        PRIVATE ${OpenCV_INCLUDE_DIRS}
+    )
     lagrange_target_defaults(test_raster)
 endif()
 
+ament_export_dependencies(JPEG)
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_dependencies(Vulkan ZLIB)
 ament_package(CONFIG_EXTRAS lagrange_gpu-extras.cmake)

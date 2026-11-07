@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -52,6 +53,20 @@ public:
         if (context.initialScopeSignals != nullptr && !context.initialScopeSignals->empty() &&
             context.catalog) {
             for (const std::string& name : *context.initialScopeSignals) {
+                // "body/b/pose.x": one component of a signal, by its name.
+                const std::size_t dot = name.rfind('.');
+                const SignalInfo* whole =
+                    dot == std::string::npos ? nullptr : context.catalog->find(name.substr(0, dot));
+                std::uint32_t component = 0;
+                if (context.catalog->find(name) == nullptr && whole != nullptr) {
+                    const auto it = std::find(whole->componentNames.begin(),
+                                              whole->componentNames.end(), name.substr(dot + 1));
+                    if (it != whole->componentNames.end()) {
+                        component = static_cast<std::uint32_t>(it - whole->componentNames.begin());
+                        session.add(context.client, *context.catalog, whole->name, component);
+                        continue;
+                    }
+                }
                 session.add(context.client, *context.catalog, name, 0);
             }
             context.initialScopeSignals->clear();
@@ -61,15 +76,31 @@ public:
             return;
         }
         toolbar(context, session);
+        ImGui::BeginChild("##plots");
         if (session.traces().empty()) {
             widgets::Caption("%s", context.catalog
-                                       ? "No signals plotted. Tick one in the Signals list."
+                                       ? "No signals plotted. Tick one in the Signals list, or "
+                                         "drag it here."
                                        : (context.connection.state == ConnectionState::Ready
                                               ? "Waiting for the signal list ..."
                                               : "Not connected. Signals appear when a "
                                                 "simulation server is reachable."));
         } else {
             plotter_.draw(session);
+        }
+        ImGui::EndChild();
+        // A signal row dropped here is plotted, on the plot of its unit.
+        if (context.catalog && ImGui::BeginDragDropTarget()) {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kSignalPayload)) {
+                const std::string text(static_cast<const char*>(payload->Data));
+                const std::size_t cut = text.rfind('\n');
+                if (cut != std::string::npos) {
+                    const auto component = static_cast<std::uint32_t>(
+                        std::strtoul(text.c_str() + cut + 1, nullptr, 10));
+                    session.add(context.client, *context.catalog, text.substr(0, cut), component);
+                }
+            }
+            ImGui::EndDragDropTarget();
         }
         ImGui::End();
     }

@@ -25,6 +25,10 @@ class "SensorMaterialAPI_1" (
     }
 )
 {
+    uniform token sensmat:preset = "none" (
+        allowedTokens = ["none", "default", "water", "glass", "mirror", "asphalt", "concrete", "white_paint", "black_rubber", "retroreflector"]
+        doc = "A named surface for lidars: authored attributes override its values."
+    )
     double sensmat:reflectivity905 = 0.5 (
         lagrangeUnit = "1"
         doc = "Diffuse reflectivity at 905 nm."

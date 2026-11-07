@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<!-- A flywheel on a geared DC motor, for the motor modes. -->
+<robot name="motor_rig"><link name="world"/>
+  <link name="base"><visual><origin xyz="0 0 0.5"/><geometry><box size="0.3 0.3 1"/></geometry>
+    <material name="b"><color rgba="0.35 0.38 0.42 1"/></material></visual></link>
+  <joint name="base_fix" type="fixed"><parent link="world"/><child link="base"/></joint>
+  <link name="wheel"><inertial><mass value="4"/><inertia ixx="0.08" iyy="0.08" izz="0.08" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><geometry><box size="1 0.1 0.1"/></geometry><material name="w"><color rgba="0.95 0.45 0.15 1"/></material></visual></link>
+  <joint name="spin" type="continuous"><parent link="base"/><child link="wheel"/>
+    <origin xyz="0 0.25 1"/><axis xyz="0 1 0"/><limit effort="0" velocity="0"/></joint>
+</robot>

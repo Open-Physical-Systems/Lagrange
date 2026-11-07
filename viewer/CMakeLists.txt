@@ -19,6 +19,9 @@ add_library(
     client/src/ScopeBuffer.cpp
     client/src/ScopeSession.cpp
     client/src/ViewerClient.cpp
+    client/src/Circuit.cpp
+    client/src/FlowLegend.cpp
+    client/src/SchematicLayout.cpp
 )
 lagrange_target_defaults(lagrange_viewer_client)
 target_include_directories(lagrange_viewer_client PUBLIC client/include)
@@ -33,6 +36,7 @@ add_library(
     STATIC
     render/src/Camera.cpp
     render/src/Picking.cpp
+    render/src/RealisticPass.cpp
     render/src/SceneRenderer.cpp
 )
 lagrange_target_defaults(lagrange_viewer_render)
@@ -105,6 +109,8 @@ add_library(
     panels/src/ConsolePanel.cpp
     panels/src/DomainsPanel.cpp
     panels/src/ElectricalPanels.cpp
+    panels/src/CircuitDraw.cpp
+    panels/src/NetlistPanel.cpp
     panels/src/EnvironmentPanels.cpp
     panels/src/InspectorPanel.cpp
     panels/src/Launcher.cpp
@@ -152,6 +158,14 @@ target_compile_definitions(
 )
 
 install(TARGETS lagrange_viewer RUNTIME DESTINATION lib/${PROJECT_NAME})
+# The design's theme (header only, Dear ImGui and ImPlot), for the tools in utils/ that draw
+# with it: #include <lagrange/viewer/lagrange_theme.hpp>, fonts in share/lagrange_viewer/fonts.
+install(
+    FILES app/theme/include/lagrange/viewer/lagrange_theme.hpp
+    DESTINATION include/${PROJECT_NAME}/lagrange/viewer
+)
+ament_export_include_directories("include/${PROJECT_NAME}")
+ament_export_dependencies(imgui_vendor)
 install(
     DIRECTORY assets/fonts/
     DESTINATION share/${PROJECT_NAME}/fonts
@@ -165,6 +179,9 @@ if(BUILD_TESTING)
     find_package(Threads REQUIRED)
     ament_add_gtest(
         test_viewer_client
+        client/test/test_circuit.cpp
+        client/test/test_flow_legend.cpp
+        client/test/test_schematic_layout.cpp
         client/test/test_profile_draft.cpp
         client/test/test_profile_session.cpp
         client/test/test_recent_list.cpp
@@ -192,6 +209,8 @@ if(BUILD_TESTING)
     lagrange_target_defaults(test_viewer_client)
 
     find_package(ament_cmake_pytest REQUIRED)
+    ament_add_pytest_test(test_circuit_roundtrip test/test_circuit_roundtrip.py TIMEOUT 120)
+    ament_add_pytest_test(test_viewer_input test/test_viewer_input.py TIMEOUT 180)
     ament_add_pytest_test(
         test_headless
         test/test_headless.py

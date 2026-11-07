@@ -1,0 +1,3 @@
+# The plugin's signal on a ROS topic; the plugin itself knows nothing of ROS.
+publish:
+  - {signal: my_sensor/distance, topic: /distance, type: std_msgs/msg/Float64}

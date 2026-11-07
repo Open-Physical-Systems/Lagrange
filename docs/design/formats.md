@@ -589,6 +589,7 @@ agreed):
 | `ImuAPI_1` | v0.2 implements per-sample white noise, `sensor:imu:accelNoiseStd` (m/s², 0) and `gyroNoiseStd` (rad/s, 0), plus the bias instabilities: densities need half powers in the unit grammar. Draft: `sensor:imu:accelNoiseDensity` (m/s²/√Hz, —), `accelBiasInstability` (m/s², —), `accelRandomWalk` (m/s³/√Hz, —), `gyroNoiseDensity` (rad/s/√Hz, —), `gyroBiasInstability` (rad/s, —), `gyroRandomWalk` (rad/s²/√Hz, —), `accelRange` (m/s², —), `gyroRange` (rad/s, —) |
 | `GnssAPI_1` | `sensor:gnss:horizontalStd` (m, —), `verticalStd` (m, —), `velocityStd` (m/s, —), `multipathModel` (token: `none`, `urban`), `minElevation` (rad, 0.17) |
 | `MagnetometerAPI_1` | `sensor:mag:noiseStd` (T, —), `hardIron` (T[3], 0), `softIron` (double[9], identity), `earthFieldModel` (token: `constant`, `wmm`), `earthField` (T[3], — when `constant`; site parameter, no fallback) |
+| `CustomSensorAPI_1` | (RFC 0008 §3) `sensor:custom:kind` (string, —: what a plugin looks for), and any number of `sensor:custom:param:<name>` (double or string; `:` in the name is `/` in the parameter path). From URDF and SDFormat, every `<sensor>` of a type Lagrange does not simulate becomes one: its leaf elements are its parameters by path (`<range><max>` is `range/max`; a first element named as the type is left out) |
 
 ### 3.9 `schemas/comms/schema.usda`
 
@@ -1498,7 +1499,7 @@ in the server (or mock server) and receives the result through the protocol.
 | URDF / xacro | `urdfdom` (ROS package `urdf`), `xacro` executable | links, joints (all standard types), inertials, visual/collision geometry (primitives + meshes via Assimp), materials, mimic joints, limits including URDF 1.2 acceleration/jerk, `<ros2_control>` blocks → joint interfaces | `<gazebo>` extension blocks: mapped where a rule exists (sensors, friction), otherwise listed in the report; transmissions other than simple reductions |
 | SDFormat | `sdformat_vendor` (0.3.4 in Lyrical) | models, links, joints, sensors (lidar, camera, imu, gps/navsat, magnetometer), lights, nested models, `<include>` of local URIs | Gazebo system plugins (reported, not converted), Fuel URIs without a local cache, heightmaps (v0.7) |
 | MJCF | MuJoCo's own parser (`mj_loadXML`) then model traversal | bodies, joints, geoms, actuators (motor, position, velocity), sensors that have an equivalent, tendons (fixed) | spatial tendons, flex/deformables, plugin-defined elements |
-| glTF 2.0 / OBJ / STL / DAE | Assimp 6.0.4 (apt) | meshes, node hierarchy, PBR/Phong materials, textures | animations, skins, morph targets |
+| glTF 2.0 / OBJ / STL / DAE | Assimp 6.0.4 (apt) | meshes, node hierarchy, PBR/Phong materials, textures (baked into colours, below) | animations, skins, morph targets |
 
 Meshes in v0.2: `lagrange_meshes` (`io/meshes/`) reads glTF, OBJ, STL and Collada through
 Assimp into triangles grouped by material, with the node hierarchy baked in, Collada units
@@ -1506,14 +1507,14 @@ applied and Collada's `<up_axis>` ignored (the geometry keeps its authored axes,
 expect). `package://`, `file://` and relative references resolve through the ament index. The
 URDF loader uses it for visual meshes: one prim per material, coloured by the URDF material when
 there is one and by the file's otherwise. Textures are not imported yet (a note says so), and
-collision meshes still wait for the convex decomposition of roadmap 0.2-B8.
+collision meshes collide as their convex hull (concave ones on fixed links are skipped; `collision_bake` splits them).
 
 **Status in v0.2.** `lagrange_importers` reads SDFormat and MJCF into the same world tables and
 scene as the URDF loader, and `lagrange_import` writes any of the three as USD
 (`io/importers/include/lagrange/importers/Importers.hpp` lists the rules). Not yet: mesh visuals in SDFormat
-and MJCF (the URDF loader reads them through `lagrange_meshes`), mesh colliders (collision bake), ellipsoid colliders, cameras and other
-sensors without a Lagrange model, joints between the models of an SDFormat world, and MJCF
-tendons, flex and servo actuators (their joints take torque commands instead). Each is listed in
+and MJCF (the URDF loader reads them through `lagrange_meshes`), cameras and other
+sensors without a Lagrange model, URDF planar joints, and MJCF
+tendons, flex, servo actuators (their joints take torque commands instead) and equalities other than one joint copying another. Each is listed in
 the import report. MJCF has no lidar; lidars on an MJCF robot come from an overlay (0.2-G2).
 
 Electrical, thermal and EMI data do not exist in URDF/SDF/MJCF. Importers accept an optional
@@ -1544,6 +1545,51 @@ declaration in `io/stage/include/lagrange/stage/Stage.hpp`); `lagrange_server --
 robot keeps them in USD. Values are checked as the stage loader checks a stage, and every
 problem is reported together. Overlays add schema instances; they do not yet create simulated
 sensors, so lidars on an MJCF robot still need USD for now.
+
+### 9.1 A SPICE netlist as an overlay
+
+`--overlay` also takes a netlist (`.cir`, `.sp`, `.spice`, `.net`, `.ckt`, `io/stage/src/Netlist.cpp`), so one file is the circuit for ngspice and the power system of a run. It becomes the same schemas an overlay file makes, at load. A netlist from KiCad comes through `kicad-cli sch export netlist --format spice`.
+
+| In the netlist | In the run |
+|---|---|
+| `V n 0 [DC] v` then a series chain to a node: resistors, resistor-capacitor pairs (at most two) | `BatteryAPI_1`, one cell of a flat voltage `v`; the plain resistors add up to `r0` |
+| The node a chain reaches, with the `C n 0 c` on it | `ElectricalBusAPI_1`, named after the node |
+| `R n 0 r` | `ElectricalLoadAPI_1` `resistive`, its power `V²/r` at the bus's start voltage |
+| `B n 0 I = P / max(V(n), e) [* ((V(n) >= m) ? 1 : 0)]` | `ElectricalLoadAPI_1` `constant_power` |
+| `*lagrange battery ELEMENT capacity= cutoff= max_charge= [soc=] [ocv_soc=0,0.5,1 ocv=44,48,54]` (C, V, A) | what SPICE cannot say about a battery; required. A curve is for the whole pack and must give the source's voltage at its `soc`, or ngspice and the run would answer for different batteries |
+| `R a b r` between two buses, where a chain does not take it | `ElectricalBranchAPI_1` `resistor` |
+| `*lagrange fuse R_x i2t=` (A²s), `*lagrange switch R_x [closed=0]` on such a resistor | a `fuse`, or a `switch` on `branch/<name>/command` |
+| `D a b MODEL` with `*lagrange diode D_x drop= r=` (V, Ω) | a `diode`: a drop and a resistance forward, open backward; the SPICE model is for ngspice only |
+| `*lagrange converter NAME source=V_x in=BUS max_current= [efficiency=] [input_sink=B_y]` | `ElectricalConverterAPI_1`: `V_x` from its output to ground stands for it in ngspice and sets its voltage; `B_y`, what it draws from `in` there, is read by ngspice only (`I = -I(V_x) * 12 / 0.9 / max(V(dc), 0.001)`). One per output bus |
+| `*lagrange bus NODE undervoltage= overvoltage=` (V) | the bus's trips; required |
+| `*lagrange motor JOINT node= r= l= kt= imax= [name=] [type=] [gear=] [efficiency=] [pole_pairs=] [rotor_inertia=]` | `ElectricalMotorAPI_1`, named `JOINT_motor` unless `name=`; a drive is not a SPICE element |
+
+The first line is the title, as in SPICE; analysis commands and `.control` blocks are ignored. Everything else is refused with its line, every problem together, and nothing is left out in silence: transistors, inductors, subcircuits, SPICE switches, controlled and current sources, `.param`, `.include`, sources other than DC, a diode with no `*lagrange diode`, and a capacitor between two buses. So is a drive of `lagrange export spice` (`V(p_drive)`), so an exported netlist does not read back yet.  `tools/ci/check_electrical.py` runs every circuit through this route and through an overlay.
+
+### 9.2 A URDF that names its power system
+
+A `<lagrange>` block in a URDF (under `<robot>`), or an SDFormat file (under `<model>`), gives the robot its power system with no `--overlay`; URDF readers such as urdfdom skip the unknown element, so the file stays valid for other tools:
+
+```xml
+<lagrange>
+  <schematic file="power/arm.cir"/>  <!-- relative to the URDF, or package:// -->
+  <battery source="V_pack" capacity="72000" cutoff="44.8" max_charge="10"/>
+  <bus node="dc" undervoltage="42" overvoltage="60"/>
+  <motor joint="shoulder" node="dc" r="0.12" l="0.00031" kt="0.085" imax="8" gear="20"/>
+</lagrange>
+```
+
+The attributes are the keys of §9.1's `*lagrange` lines, which the netlist may hold instead; a mistake stops the load with its message. `lagrange_import` keeps the result in the USD it writes. Adding `--overlay` to a robot with a block is refused for anything it applies twice. Names and values cannot hold spaces. MJCF has no such block: its parser refuses elements it does not know, so use `--overlay`.
+
+**Meshes too large for the repository** (no file over 1 MB, CLAUDE.md §9) are fetched, not committed:
+`assets/external_assets.yaml` lists each file with its upstream repository, pinned commit,
+SHA-256 and licence, and `ros2 run lagrange_assets fetch_assets [ID...]` downloads them into
+`$LAGRANGE_ASSET_DIR` (default `~/.local/share/lagrange/assets/<id>/`) with the licence and a
+NOTICE. Robot files name them `lagrange-asset://<id>/<file>`; an asset that is not fetched is a
+note, and the link shows a magenta box in its place. **Textures** are not drawn: the importer
+bakes a textured part into parts of one colour each (each triangle takes the texture's colour
+under it, PNG or JPEG, embedded or a file next to the mesh; the triangles are grouped into 16
+colours at most by k-means), which keeps the viewer protocol unchanged.
 
 Without an overlay, an imported robot runs with the electrical domain substituted by the ideal
 torque source. The viewer's domain panel shows why the electrical toggle is unavailable

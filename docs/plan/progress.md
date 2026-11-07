@@ -1,6 +1,6 @@
 # Progress
 
-Where the project stands against the [roadmap](roadmap.md). Updated 2026-10-29: v1.0.0 released.
+Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-07: v1.1.0 released.
 
 ## The releases
 
@@ -14,7 +14,8 @@ flowchart LR
     v06["v0.6<br/>cars, autonomous cars<br/>OpenDRIVE, Autoware<br/><b>released 2026-10-25</b>"]:::done
     v07["v0.7<br/>huge worlds<br/><b>released 2026-10-29</b>"]:::done
     v10["v1.0<br/>stable schemas + plugin ABI<br/>ros-lyrical-* debs<br/><b>released 2026-10-29</b>"]:::done
-    v01 --> v02 --> v03 --> v04 --> v05 --> v06 --> v07 --> v10
+    v11["v1.1<br/>usability, plugins, humans,<br/>water, downwash, realism<br/><b>released 2026-11-07</b>"]:::done
+    v01 --> v02 --> v03 --> v04 --> v05 --> v06 --> v07 --> v10 --> v11
 
     classDef done fill:#1f6f43,stroke:#2ea043,color:#fff
     classDef now fill:#9a6700,stroke:#d29922,color:#fff
@@ -117,6 +118,17 @@ E8). Release notes and acceptance evidence: `docs/release/v0.3.0.md`. Owed withi
 a motor heat run (Q16; the battery is checked against published cell data since 2026-10-25,
 from 35 % state of charge up), the drive-design
 review of the motor constants, FMI 2.0 FMUs (Q8), Jolt's wheel slip. Released as `v0.3.0` on 2026-10-25 at the owner's request, after v0.2.0.
+
+## After v1.0 (2026-10-30, on `dev`, unreleased)
+
+- Real-model samples (#175), the `lagrange` command (#176), starting without a robot and
+  spawning robots at run time through `simulation_interfaces`, the viewer and the CLI (#177).
+- RFC 0008, plugins in the server, accepted by the owner (#178) and done in six steps:
+  loading (#179), ABI 1.1 world and scene queries with the C++ SDK (#180), custom sensors and
+  `lagrange_tof` (#181), `--ros-topics` (#182), the rigid-body contract, the conformance suite and
+  `lagrange_jolt` (#183, which also fixed two Jolt bugs), and the plugin guide with its template.
+- RFC 0009, walking humans, accepted by the owner (#185): the body (#186), walk cycle and
+  steering (#187), crowds, `<actor>` import and the tutorial. Built in, not a plugin (RFC §1).
 
 ## v1.0 status (2026-10-29)
 
@@ -534,3 +546,24 @@ Then v0.3, epic by epic as in [roadmap.md §4](roadmap.md), in this order:
   with the built-in controller (Nav2's controller server never got `/odom`). So it is not
   ros2_control's: some process occasionally never discovers another's endpoint during the
   crowded start-up. The image defaults to the built-in controller.
+
+## Sanitizer record, 2026-11-01
+
+The town with 24 cars and 36 people, a headless viewer in the rainy season, and the ROS bridge on:
+ASan and UBSan with leak checks report nothing in the server; the viewer reports only a 208-byte leak
+in the GPU driver with no project frames. TSan (`tools/ci/tsan.supp`) reports nothing in the viewer and 4
+warnings in the server, all while the stage loads, on OpenUSD's own worker threads: taken as false
+alarms because OpenUSD and TBB are not instrumented, and not proven otherwise. These are one run each,
+not a proof.
+
+## Sanitizer record, 2026-11-02
+
+ASan and UBSan with leak checks (`detect_odr_violation=0`: VMA's header is both in the server's library
+and its tools; a D-Bus leak suppressed), on `dev` after #229. `test_stage`, `test_electrical`'s tests
+and 159 of `test_server`'s pass with no report in Lagrange's code; the leak it ends on, 1,248 bytes
+through unloaded libraries, has no project frames. Eleven of the twelve examples through their launch
+files report nothing. Not cleared: `ArmServerTest` (does not finish on software Vulkan in 120 s), and
+ros2_control, whose controller takes over 10 s to load under ASan so that its spawner gives up, in
+`test_arm` and `lagrange_example_ros2_control`. One run each, not a proof.
+
+TSan the same night (`tools/ci/tsan.supp`): the power, arm, plugin and quadruped examples through their launch files report nothing; the lidar example reported one data race inside libstdc++ with no frames kept, in one of two runs, not reproduced and not explained. `test_viewer_client`'s circuit tests report nothing. `test_server` was not run under TSan.

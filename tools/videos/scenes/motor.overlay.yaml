@@ -1,0 +1,37 @@
+schema_version: 1
+apply:
+  - create: power/battery
+    schemas:
+      BatteryAPI_1:
+        elec:battery:chemistry: lfp
+        elec:battery:seriesCells: 1
+        elec:battery:capacity: 3600000.0
+        elec:battery:ocvSoc: [0.0, 1.0]
+        elec:battery:ocvVoltage: [24.0, 24.0]
+        elec:battery:r0: 0.00001
+        elec:battery:cutoffVoltage: 1.0
+        elec:battery:maxChargeCurrent: 1000.0
+      PortAPI_1:dc_out:
+        elec:port:dc_out:nominalVoltage: 24.0
+        elec:port:dc_out:connectedTo: power/dc
+  - create: power/dc
+    schemas:
+      ElectricalBusAPI_1:
+        elec:bus:capacitance: 0.1
+        elec:bus:undervoltageTrip: 1.0
+        elec:bus:overvoltageTrip: 1000.0
+  - prim: spin
+    create_child: motor
+    schemas:
+      ElectricalMotorAPI_1:
+        elec:motorType: dc_brushed
+        elec:windingResistance: 0.5
+        elec:inductance: 0.0005
+        elec:torqueConstant: 0.05
+        elec:gearRatio: 10.0
+        elec:maxCurrent: 100.0
+        elec:referenceTemperature: 298.15
+        elec:resistanceTempCoeff: 0.0
+        elec:controlMode: voltage
+        elec:joint: spin
+        elec:powerPort: power/dc

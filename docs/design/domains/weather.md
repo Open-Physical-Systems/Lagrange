@@ -126,6 +126,14 @@ Weather effects on sensors are statistical. Each validation states the quantity 
   (`env/extinction/field`, `env/wind/velocity_field`). Samples: `assets/fields/` (synthetic, by
   `lagrange_make_fields`): a 10 m-visibility bank across the warehouse aisle hides the far wall
   from 109 of the front lidar's 720 beams.
+- Snow and ice (`snow_rate`, `snow_cover`; `lagrange --season winter`): extinction 1/m per mm/h of
+  3.912e-3, illustrative (1 km at 1 mm/h; Rasmussen et al. 1999 find 3 to 10 times the spread between
+  storms), lidar false returns as 3 times that rate of rain (illustrative), lens contamination, and
+  `env/friction_scale` to 0.3 of dry on snow and 0.13 on ice (wet below freezing). Range-checked in
+  `test_weather` against table values, 0.20 to 0.35 for packed snow and about 0.10 for ice; not point
+  validated. Tyres, MuJoCo and Jolt take it through `env/friction_scale`; traffic agents, being
+  kinematic, drive and brake more gently and never skid. Lidar returns off a snow-covered surface
+  keep the surface's reflectivity.
 - Not yet: radar attenuation, a weather time series, rain streaks in the camera. (Wet friction
   is applied by MuJoCo and Jolt through `env/friction_scale`, and the viewer shows the field
   overlays, since v0.5.)

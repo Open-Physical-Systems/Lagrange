@@ -265,6 +265,105 @@ std::vector<std::uint32_t> ShapeCaster::overlapSphere(const std::array<double, 3
     return out;
 }
 
+std::array<double, 3> surfaceNormal(ShapeType type, const std::array<double, 3>& size,
+                                    const Pose& pose, const std::array<double, 3>& point,
+                                    const ConvexHull* hull, const HeightField* field) {
+    const std::array<double, 3> q = rotate(
+        conjugate(pose.orientation),
+        {point[0] - pose.position[0], point[1] - pose.position[1], point[2] - pose.position[2]});
+    std::array<double, 3> n{0.0, 0.0, 1.0};
+    switch (type) {
+        case ShapeType::Plane:
+            break;
+        case ShapeType::Sphere:
+            n = q;
+            break;
+        case ShapeType::Box: {
+            // The face whose distance from the surface is smallest.
+            double best = std::numeric_limits<double>::infinity();
+            for (std::size_t i = 0; i < 3; ++i) {
+                const double gap = std::abs(std::abs(q.at(i)) - size.at(i));
+                if (gap < best) {
+                    best = gap;
+                    n = {0.0, 0.0, 0.0};
+                    n.at(i) = q.at(i) < 0.0 ? -1.0 : 1.0;
+                }
+            }
+            break;
+        }
+        case ShapeType::Capsule:
+            n = {q[0], q[1], q[2] - std::clamp(q[2], -size[1], size[1])};
+            break;
+        case ShapeType::Cylinder:
+            n = std::abs(std::abs(q[2]) - size[1]) < std::abs(std::hypot(q[0], q[1]) - size[0])
+                    ? std::array<double, 3>{0.0, 0.0, q[2] < 0.0 ? -1.0 : 1.0}
+                    : std::array<double, 3>{q[0], q[1], 0.0};
+            break;
+        case ShapeType::ConvexHull:
+            if (hull != nullptr) {
+                double best = -std::numeric_limits<double>::infinity();
+                for (const auto& t : hull->triangles) {
+                    const auto& a = hull->points.at(t[0]);
+                    const auto& b = hull->points.at(t[1]);
+                    const auto& c = hull->points.at(t[2]);
+                    const std::array<double, 3> u{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+                    const std::array<double, 3> v{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+                    std::array<double, 3> m{u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
+                                            u[0] * v[1] - u[1] * v[0]};
+                    const double length = std::hypot(m[0], m[1], m[2]);
+                    if (length <= 0.0) {
+                        continue;
+                    }
+                    m = {m[0] / length, m[1] / length, m[2] / length};
+                    const double along =
+                        (q[0] - a[0]) * m[0] + (q[1] - a[1]) * m[1] + (q[2] - a[2]) * m[2];
+                    if (along > best) {
+                        best = along;
+                        n = m;
+                    }
+                }
+            }
+            break;
+        case ShapeType::HeightField:
+            if (field != nullptr) {
+                const double h = std::max(field->cellX, 1e-3);
+                const double k = std::max(field->cellY, 1e-3);
+                const double x0 = field->heightAt(q[0] - h, q[1]).value_or(q[2]);
+                const double x1 = field->heightAt(q[0] + h, q[1]).value_or(q[2]);
+                const double y0 = field->heightAt(q[0], q[1] - k).value_or(q[2]);
+                const double y1 = field->heightAt(q[0], q[1] + k).value_or(q[2]);
+                n = {(x0 - x1) / (2.0 * h), (y0 - y1) / (2.0 * k), 1.0};
+            }
+            break;
+    }
+    const double length = std::hypot(n[0], n[1], n[2]);
+    if (length <= 0.0) {
+        return rotate(pose.orientation, {0.0, 0.0, 1.0});
+    }
+    return rotate(pose.orientation, {n[0] / length, n[1] / length, n[2] / length});
+}
+
+LidarReturn lidarReturn(const SurfaceMaterial& m, bool hasMaterial, bool wavelength1550,
+                        double cosIncidence, double range, double maxRange,
+                        double referenceReflectivity) {
+    const double rho = wavelength1550 ? m.reflectivity1550 : m.reflectivity905;
+    const double cosine = std::clamp(cosIncidence, 0.0, 1.0);
+    double power = 0.0;  // relative to a white wall, head-on, at any range
+    if (m.retroreflective) {
+        power = kRetroGain * rho;
+    } else {
+        const double angle = std::acos(cosine) / kSpecularLobeRad;
+        power = rho * ((1.0 - m.specular) * cosine + m.specular * std::exp(-angle * angle));
+    }
+    const double r = std::max(range, 1e-3);
+    LidarReturn out;
+    out.intensity = std::min(power * kIntensityReferenceM * kIntensityReferenceM / (r * r), 1.0);
+    if (hasMaterial && referenceReflectivity > 0.0) {
+        out.detected = power / (r * r) >= referenceReflectivity / (maxRange * maxRange);
+    }
+    return out;
+}
+
 double distanceToShape(ShapeType type, const std::array<double, 3>& size, const Pose& pose,
                        const std::array<double, 3>& point, const ConvexHull* hull) {
     const std::array<double, 3> q = rotate(

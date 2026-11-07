@@ -114,6 +114,9 @@ Status MujocoBackend::declare(const WorldView& world, const ModuleConfig& config
             spec(base + "/position", SignalType::Scalar, prismatic ? units::m : units::rad));
         s.velocity = declarer.output(spec(base + "/velocity", SignalType::Scalar,
                                           prismatic ? units::m_per_s : units::rad_per_s));
+        // A force-torque sensor in the joint: what the parent does to the child, at the joint.
+        s.reaction =
+            declarer.output(spec(base + "/reaction", SignalType::Wrench, units::N, "world_local"));
         if (!actuated) {
             joints_.push_back(s);
             continue;
@@ -146,6 +149,8 @@ Status MujocoBackend::declare(const WorldView& world, const ModuleConfig& config
             spec(base + "/twist", SignalType::Wrench, units::m_per_s, "world_local"));
         s.acceleration = declarer.output(
             spec(base + "/acceleration", SignalType::Wrench, units::m_per_s2, "body"));
+        s.contactForce = declarer.output(
+            spec(base + "/contact_force", SignalType::Vec3, units::N, "world_local"));
         if (b < bodies.kinematic.size() && bodies.kinematic[b]) {
             // Optional: without a command it stays where it is.
             SignalSpec command =
@@ -257,11 +262,26 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
         if (j < joints.armature.size()) {
             joint->armature = joints.armature[j];  // a motor's reflected rotor inertia
         }
+        joint->damping[0] = joints.damping[j];
+        joint->frictionloss = joints.friction[j];
         if (joints.type[j] != JointType::Continuous &&
             joints.lowerLimit[j] < joints.upperLimit[j]) {
             joint->limited = mjLIMITED_TRUE;
             joint->range[0] = joints.lowerLimit[j];
             joint->range[1] = joints.upperLimit[j];
+        }
+    }
+
+    // A joint that copies another: y = data[0] + data[1] x, a gear both ways.
+    for (std::size_t j = 0; j < joints.names.size(); ++j) {
+        if (joints.mimic[j] != kNoMimic) {
+            mjsEquality* copy = mjs_addEquality(spec, nullptr);
+            copy->type = mjEQ_JOINT;
+            copy->objtype = mjOBJ_JOINT;
+            mjs_setString(copy->name1, joints.names[j].c_str());
+            mjs_setString(copy->name2, joints.names[joints.mimic[j]].c_str());
+            copy->data[0] = joints.mimicOffset[j];
+            copy->data[1] = joints.mimicMultiplier[j];
         }
     }
 
@@ -353,6 +373,14 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
         }
     }
 
+    // The broad phase's scratch grows with the square of the bodies, and running out of MuJoCo's
+    // default arena ends the process: a big crowd gets room. Small scenes keep their footprint.
+    constexpr std::size_t kManyBodies = 500;
+    constexpr std::size_t kBaseArena = std::size_t{32} << 20U;  // bytes
+    constexpr std::size_t kArenaPerPair = 4;                    // bytes per body squared
+    if (const std::size_t n = world.bodies().names.size(); n > kManyBodies) {
+        spec->memory = static_cast<mjtSize>(kBaseArena + (kArenaPerPair * n * n));
+    }
     mjModel* model = mj_compile(spec, nullptr);
     if (model == nullptr) {
         const std::string error = mjs_getError(spec);
@@ -367,6 +395,7 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
         const int id = mj_name2id(model_, mjOBJ_JOINT, joints.names[s.joint].c_str());
         s.qposAddress = model_->jnt_qposadr[id];
         s.dofAddress = model_->jnt_dofadr[id];
+        s.mujocoBody = model_->jnt_bodyid[id];
     }
     for (BodySignals& s : bodies_) {
         s.mujocoBody = mj_name2id(model_, mjOBJ_BODY, bodies.names[s.body].c_str());
@@ -379,10 +408,43 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
         baseFriction_[static_cast<std::size_t>(g)] = model_->geom_friction[3 * g];
     }
 
+    // Joints that start away from zero (a run rebuilt mid-way keeps its robots' poses).
+    for (std::size_t j = 0; j < joints.names.size(); ++j) {
+        const double start = j < joints.initialPosition.size() ? joints.initialPosition[j] : 0.0;
+        const int id = start != 0.0 ? mj_name2id(model_, mjOBJ_JOINT, joints.names[j].c_str()) : -1;
+        if (id >= 0 &&
+            (model_->jnt_type[id] == mjJNT_HINGE || model_->jnt_type[id] == mjJNT_SLIDE)) {
+            data_->qpos[model_->jnt_qposadr[id]] = start;
+        }
+    }
     // Kinematics of the initial state, so the first outputs are defined.
+    contactForces_.assign(3 * static_cast<std::size_t>(model_->nbody), 0.0);
     mj_step1(model_, data_);
     writeOutputs(bus);
     return {};
+}
+
+/// What everything it touches pushes each body with, in the world frame, N: the last step's
+/// contacts, read before the next mj_step1 replaces them. mj_contactForce gives the force on
+/// geom2 in the contact's frame, whose rows are its axes in the world.
+void MujocoBackend::sumContactForces() {
+    contactForces_.assign(3 * static_cast<std::size_t>(model_->nbody), 0.0);
+    for (int c = 0; c < data_->ncon; ++c) {
+        const mjContact& contact = data_->contact[c];
+        if (contact.exclude != 0) {
+            continue;
+        }
+        std::array<mjtNum, 6> local{};
+        mj_contactForce(model_, data_, c, local.data());
+        std::array<mjtNum, 3> world{};
+        mju_mulMatTVec(world.data(), contact.frame, local.data(), 3, 3);
+        const auto one = static_cast<std::size_t>(model_->geom_bodyid[contact.geom[0]]);
+        const auto two = static_cast<std::size_t>(model_->geom_bodyid[contact.geom[1]]);
+        for (std::size_t k = 0; k < 3; ++k) {
+            contactForces_[3 * two + k] += world[k];
+            contactForces_[3 * one + k] -= world[k];
+        }
+    }
 }
 
 Status MujocoBackend::step(const StepContext& /*context*/, SignalBus& bus) {
@@ -415,6 +477,7 @@ Status MujocoBackend::step(const StepContext& /*context*/, SignalBus& bus) {
     // mj_step1 ran at the end of the previous step (or in init); finish this one and prepare
     // the next, so the outputs are the state at the end of the step.
     mj_step2(model_, data_);
+    sumContactForces();
     if (data_->warning[mjWARN_BADQACC].number > 0) {
         data_->warning[mjWARN_BADQACC].number = 0;
         return Status::error(StatusCode::Diverged,
@@ -432,6 +495,25 @@ void MujocoBackend::writeOutputs(SignalBus& bus) const {
         const auto dof = static_cast<std::size_t>(s.dofAddress);
         bus.write(s.position, data_->qpos[s.qposAddress]);
         bus.write(s.velocity, data_->qvel[dof]);
+        // cfrc_int is torque then force, about the subtree's centre of mass of the tree's root,
+        // in world axes (mj_rnePostConstraint). Move the torque to the joint's body: τ + r × f.
+        {
+            const int b = s.mujocoBody;
+            const mjtNum* spatial = data_->cfrc_int + 6 * b;
+            const mjtNum* about = data_->subtree_com + 3 * model_->body_rootid[b];
+            const mjtNum* at = data_->xpos + 3 * b;
+            const std::array<double, 3> r{about[0] - at[0], about[1] - at[1], about[2] - at[2]};
+            const mjtNum* f = spatial + 3;
+            const std::array<double, 6> wrench{
+                f[0],
+                f[1],
+                f[2],
+                spatial[0] + r[1] * f[2] - r[2] * f[1],
+                spatial[1] + r[2] * f[0] - r[0] * f[2],
+                spatial[2] + r[0] * f[1] - r[1] * f[0],
+            };
+            bus.writeN(s.reaction, wrench);
+        }
         if (!s.torque.valid()) {
             continue;
         }
@@ -450,6 +532,7 @@ void MujocoBackend::writeOutputs(SignalBus& bus) const {
         std::copy_n(data_->xpos + 3 * b, 3, pose.begin());
         std::copy_n(data_->xquat + 4 * b, 4, pose.begin() + 3);
         bus.writeN(s.pose, pose);
+        bus.writeN(s.contactForce, std::span<const double>(&contactForces_[3 * s.mujocoBody], 3));
         if (s.mocap >= 0) {
             // A kinematic body's twist from its last two poses; no acceleration.
             std::array<double, 7>& last = lastKinematicPose_[i];

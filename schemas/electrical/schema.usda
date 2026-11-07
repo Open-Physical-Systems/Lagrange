@@ -178,7 +178,7 @@ class "ElectricalMotorAPI_1" (
     )
     double elec:gearRatio = 1 (
         lagrangeUnit = "1"
-        doc = "Motor revolutions per joint revolution."
+        doc = "Motor revolutions per joint revolution; on a slide, motor radians per metre of travel."
     )
     double elec:gearEfficiency = 1 (
         lagrangeUnit = "1"
@@ -198,7 +198,11 @@ class "ElectricalMotorAPI_1" (
     )
     uniform token elec:controlMode = "torque" (
         allowedTokens = ["torque", "velocity", "voltage"]
-        doc = "What the joint's torque_command signal means."
+        doc = "Which command the drive follows: joint/<j>/torque_command, velocity_command or voltage_command."
+    )
+    double elec:velocityLoopBandwidth = 62.83 (
+        lagrangeUnit = "rad/s"
+        doc = "Speed loop of a velocity-mode drive; critically damped at half of this (illustrative)."
     )
     double elec:currentLoopBandwidth = 6283 (
         lagrangeUnit = "rad/s"
@@ -265,7 +269,11 @@ class "ElectricalLoadAPI_1" (
     )
     double elec:load:power (
         lagrangeUnit = "W"
-        doc = "Power drawn (resistive: at the bus's nominal voltage). Required."
+        doc = "Power drawn (resistive: at the voltage the bus starts at). Required unless a resistive load gives elec:load:resistance."
+    )
+    double elec:load:resistance = 0 (
+        lagrangeUnit = "ohm"
+        doc = "A resistive load's resistance, in place of elec:load:power; 0: from the power."
     )
     double elec:load:minVoltage = 0 (
         lagrangeUnit = "V"
@@ -273,6 +281,42 @@ class "ElectricalLoadAPI_1" (
     )
     rel elec:powerPort (
         doc = "The bus or port the load draws from. Required."
+    )
+}
+
+class "ElectricalBranchAPI_1" (
+    inherits = </APISchemaBase>
+    doc = "A two-terminal part between two buses: a resistor, fuse, switch or diode (RFC 0010)."
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token elec:branch:kind = "resistor" (
+        allowedTokens = ["resistor", "fuse", "switch", "diode"]
+        doc = "What it does between its two buses."
+    )
+    double elec:branch:resistance (
+        lagrangeUnit = "ohm"
+        doc = "Resistance while it conducts. Required, above zero."
+    )
+    double elec:branch:i2tRating = 0 (
+        lagrangeUnit = "A2.s"
+        doc = "A fuse opens when the integral of its current squared reaches this. Required for a fuse."
+    )
+    double elec:branch:forwardDrop = 0 (
+        lagrangeUnit = "V"
+        doc = "A diode's voltage drop while it conducts, from its input to its output."
+    )
+    uniform token elec:branch:initialState = "closed" (
+        allowedTokens = ["closed", "open"]
+        doc = "A switch's state until branch/<name>/command says otherwise."
+    )
+    rel elec:branch:input (
+        doc = "The bus at one end; a diode's anode. Positive current flows from here. Required."
+    )
+    rel elec:branch:output (
+        doc = "The bus at the other end; a diode's cathode. Required."
     )
 }
 

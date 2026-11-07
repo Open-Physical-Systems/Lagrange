@@ -1,18 +1,29 @@
 #pragma once
 
+#include "lagrange/ros2/SignalTopics.hpp"
 #include "lagrange/signals/SignalBus.hpp"
 #include "lagrange/time/SimTime.hpp"
 #include "lagrange/world/World.hpp"
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lagrange::ros2 {
+
+/// One joint's command from /joint_commands.
+struct JointCommand {
+    enum class Mode : std::uint8_t { Position, Velocity, Effort };
+    std::string joint;
+    Mode mode{Mode::Position};
+    double value{0.0};
+};
 
 struct BridgeSettings {
     std::string nodeName{"lagrange_ros2_bridge"};
@@ -31,6 +42,11 @@ struct BridgeSettings {
     /// mapped topic is lost with the link's link/<l>/packet_error_rate (always while the link is
     /// down) and the rest arrive link/<l>/latency later; incoming /cmd_vel likewise.
     std::map<std::string, std::string> topicLinks;
+    /// Signals published on topics and topics written into signals (--ros-topics, RFC 0008 §4).
+    TopicMaps signalTopics;
+    /// Set: /joint_commands (sensor_msgs/JointState) drives joints one by one: for each name,
+    /// its position if given and finite, else its velocity, else its effort. On ROS's thread.
+    std::function<void(const JointCommand&)> jointCommands;
 };
 
 /// A /cmd_vel message: forward speed and turn rate.
@@ -43,6 +59,14 @@ struct CmdVel {
     /// then stands for the turn rate.
     std::optional<double> steeringAngle;
 };
+
+/// A multicopter's flight mode, from /flight_mode (std_msgs/String "position" or "angle").
+/// Position: /cmd_vel's speeds are over the ground and it holds where it is, leaning into the
+/// wind (GPS position mode). Angle: forward and left are the tilt, as a share of full stick,
+/// with the height held; nothing holds it in place, so the wind carries it.
+enum class FlightMode { Position, Angle };
+/// "position" or "angle"; nullopt for anything else.
+[[nodiscard]] std::optional<FlightMode> flightModeOf(std::string_view name);
 
 /// What the viewer's ROS 2 workspace shows (lagrange.viewer.v1.RosGraph).
 struct GraphSnapshot {
@@ -76,13 +100,36 @@ enum class SimResult : std::uint8_t {
     NotFound = 2,
     IncorrectState = 3,
     Failed = 4,
-    AlreadyInTargetState = 101,
+    AlreadyInTargetState = 101,  // set_simulation_state
     IncorrectTransition = 103,
+    NameNotUnique = 101,  // spawn_entity
+    NameInvalid = 102,
+    UnsupportedFormat = 103,
+    NoResource = 104,
+    NamespaceInvalid = 105,
+    ResourceParseError = 106,
+    InvalidPose = 109,
 };
 
 struct SimOutcome {
     SimResult result{SimResult::Ok};
     std::string message;
+};
+
+/// A simulation_interfaces SpawnEntity request.
+struct SpawnRequest {
+    std::string name;  // empty: the simulator picks one (with allowRenaming)
+    bool allowRenaming{false};
+    std::string uri;       // a file: a path, file://PATH or package://PACKAGE/PATH
+    std::string resource;  // or the file's text, when uri is empty
+    std::string entityNamespace;
+    Pose pose;          // in `frame`
+    std::string frame;  // "" or "world"
+};
+
+struct SpawnOutcome {
+    SimOutcome outcome;
+    std::string entityName;  // as get_entities lists it
 };
 
 /// simulation_interfaces/SimulationState values this server can be in or be asked for.
@@ -124,6 +171,24 @@ public:
     virtual SimOutcome reset() = 0;
     [[nodiscard]] virtual std::vector<EntityDescription> entities() = 0;
     [[nodiscard]] virtual std::optional<EntityMotion> entityMotion(const std::string& name) = 0;
+    /// Adds a robot to the running simulation (spawn_entity).
+    virtual SpawnOutcome spawn(const SpawnRequest& request) {
+        (void)request;
+        return {{SimResult::Unsupported, "spawning is not supported"}, ""};
+    }
+    /// Takes a spawned or loaded robot out (delete_entity).
+    virtual SimOutcome remove(const std::string& name) {
+        (void)name;
+        return {SimResult::Unsupported, "deleting is not supported"};
+    }
+    /// Changes a site value while running (ROS parameters of the bridge's node).
+    virtual SimOutcome setSite(const std::string& name, double value) {
+        (void)name;
+        (void)value;
+        return {SimResult::Unsupported, "the site cannot be changed"};
+    }
+    /// Takes every spawned robot out (reset_simulation with SCOPE_SPAWNED).
+    virtual SimOutcome removeSpawned() { return {}; }
 };
 
 /// The ROS 2 bridge (roadmap 0.2-F1, F2): an rclcpp node in the server process.
@@ -136,7 +201,9 @@ public:
 /// lidars, and /imu (sensor_msgs/Imu), each named so when the robot has one of the kind and
 /// /<sensor>/scan, /<sensor>/points, /<sensor>/imu otherwise; and
 /// /robot_description, latched. It subscribes /cmd_vel: geometry_msgs/TwistStamped, which Nav2
-/// and ros2_control publish by default, or geometry_msgs/Twist (BridgeSettings::stampedCmdVel).
+/// and ros2_control publish by default, or geometry_msgs/Twist (BridgeSettings::stampedCmdVel);
+/// with an aerodynamic base link it publishes /airspeed (std_msgs/Float64, m/s: the speed of the
+/// air past the base link, wind and wakes included), and it subscribes /flight_mode.
 ///
 /// ROS callbacks run on the bridge's own executor thread; publish() runs on the caller's
 /// thread between ticks and never blocks on the network (rclcpp publishing is asynchronous).
@@ -159,6 +226,18 @@ public:
     void publish(const SignalBus& bus, SimTime now);
     /// The newest /cmd_vel if it arrived less than `maxAge` ago (wall clock).
     [[nodiscard]] std::optional<CmdVel> latestCommand(std::chrono::milliseconds maxAge) const;
+    /// The newest /flight_mode (Position until one comes).
+    [[nodiscard]] FlightMode flightMode() const;
+    /// The robot that /odom, /ground_truth/odom, the odom TF, /robot_description and
+    /// /ackermann_cmd are about, when it changes during the run (a robot spawned into an empty
+    /// run, or deleted). Call before attach().
+    void setRobot(const std::string& baseLink, const std::string& robotDescription,
+                  bool ackermannCmd);
+    /// What does not fit in the --ros-topics map after the last attach(): an unknown signal, or
+    /// one the message cannot carry. The server refuses to run with any.
+    [[nodiscard]] const std::vector<std::string>& topicProblems() const { return topicProblems_; }
+    /// The module that writes the subscribed topics into their signals (nullptr when none).
+    [[nodiscard]] std::unique_ptr<IModule> topicInputs() const;
     /// Messages lost on a link so far, by topic (the topics of BridgeSettings::topicLinks).
     [[nodiscard]] std::map<std::string, std::uint64_t> droppedOnLinks() const;
     /// The ROS graph as this node sees it. Cold path: about once a second.
@@ -167,7 +246,8 @@ public:
 
     /// Offers the simulation_interfaces services (roadmap 0.2-F4) under the root namespace:
     /// get_simulator_features, get_simulation_state, set_simulation_state, step_simulation,
-    /// reset_simulation, get_entities, get_entities_states, get_entity_state, get_entity_info.
+    /// reset_simulation, get_entities, get_entities_states, get_entity_state, get_entity_info,
+    /// spawn_entity, spawn_entities, delete_entity.
     /// The other services of the standard answer RESULT_FEATURE_UNSUPPORTED with a reason.
     /// Requests wait for handleRequests(); `handler` must outlive the bridge.
     void serveSimulation(SimulationHandler& handler);
@@ -177,6 +257,8 @@ public:
 private:
     struct Impl;
     BridgeSettings settings_;
+    std::unique_ptr<SignalTopics> signalTopics_;
+    std::vector<std::string> topicProblems_;
     std::unique_ptr<Impl> impl_;
 };
 

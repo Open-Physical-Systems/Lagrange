@@ -1,4 +1,5 @@
 // Scene workspace, centre: the 3D viewport with its overlays (docs/design/ui/02-scene/SPEC.md).
+#include "lagrange/viewer/FlowLegend.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Picking.hpp"
@@ -12,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include <imgui.h>
@@ -86,6 +88,10 @@ public:
         if (!open) {
             ImGui::End();
             return;
+        }
+        // The Electrical workspace's overlay lends itself the shading while it is in front.
+        if (context.renderOptions->shading == Shading::Current) {
+            context.renderOptions->shading = context.renderOptions->beforeCurrent;
         }
         const ImVec2 available = ImGui::GetContentRegionAvail();
         const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
@@ -172,6 +178,8 @@ public:
                       shadingName(context), static_cast<double>(context.frameMs), context.drawCalls,
                       tier);
         thermal(context, draw, origin, available);
+        flowLegend(context, draw, origin, available);
+        airflowLegend(context, draw, origin, available);
         overlayBox(draw, ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)), text, nullptr);
 
         // Bottom left: the frame's axes as the camera sees them, its convention, and how far
@@ -219,8 +227,12 @@ public:
 private:
     static const char* shadingName(const PanelContext& context) {
         switch (context.renderOptions->shading) {
+            case Shading::Realistic:
+                return "Realistic";
             case Shading::Unlit:
                 return "Unlit";
+            case Shading::Current:
+                return "Current";
             case Shading::Thermal:
                 return "Thermal";
             case Shading::Wireframe:
@@ -336,6 +348,103 @@ private:
                       text);
     }
 
+    /// A wind tunnel's colour scales, from the names of its meshes (FlowLegend.hpp).
+    void flowLegend(const PanelContext& context, ImDrawList* draw, const ImVec2& origin,
+                    const ImVec2& size) {
+        const std::uint64_t generation = context.scene->statics->generation;
+        if (generation != legendsOf_) {
+            legendsOf_ = generation;
+            legends_ = flowLegends(*context.scene->statics);
+        }
+        const theme::Fonts& fonts = theme::fonts();
+        const float small = px(theme::kCaptionSize);
+        const float width = px(200.0F);
+        const float barHeight = px(8.0F);
+        float top = origin.y + size.y - px(58.0F);
+        for (const FlowLegend& legend : legends_) {
+            const ImVec2 min(origin.x + size.x - width - px(10.0F), top);
+            const ImVec2 max(min.x + width, min.y + px(48.0F));
+            draw->AddRectFilled(min, max, u32(c::bg1), px(4.0F));
+            draw->AddRect(min, max, u32(c::line), px(4.0F));
+            draw->AddText(fonts.sans, small, ImVec2(min.x + px(8.0F), min.y + px(5.0F)), u32(c::t2),
+                          legend.title.c_str());
+            const ImVec2 bar(min.x + px(8.0F), min.y + px(22.0F));
+            const float barWidth = width - px(16.0F);
+            const auto count = static_cast<float>(legend.colours.size());
+            for (std::size_t k = 0; k < legend.colours.size(); ++k) {
+                const std::array<float, 4>& colour = legend.colours[k];
+                const ImVec4 shown(std::pow(colour[0], 1.0F / 2.2F),
+                                   std::pow(colour[1], 1.0F / 2.2F),
+                                   std::pow(colour[2], 1.0F / 2.2F), 1.0F);
+                const float at = static_cast<float>(k);
+                draw->AddRectFilled(
+                    ImVec2(bar.x + barWidth * at / count, bar.y),
+                    ImVec2(bar.x + barWidth * (at + 1.0F) / count, bar.y + barHeight), u32(shown));
+            }
+            char text[32];
+            std::snprintf(text, sizeof(text), "%.2f", legend.low);
+            draw->AddText(fonts.mono, small, ImVec2(bar.x, bar.y + barHeight + px(3.0F)),
+                          u32(c::t3), text);
+            std::snprintf(text, sizeof(text), "%.2f", legend.high);
+            const float right = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, text).x;
+            draw->AddText(fonts.mono, small,
+                          ImVec2(bar.x + barWidth - right, bar.y + barHeight + px(3.0F)),
+                          u32(c::t3), text);
+            top -= px(56.0F);
+        }
+    }
+
+    /// The airflow particles' colour scale (design 07-environment's field legend): air speed in
+    /// m/s on the field map (viridis), from still air to the fastest in the box.
+    void airflowLegend(const PanelContext& context, ImDrawList* draw, const ImVec2& origin,
+                       const ImVec2& size) {
+        const RenderOptions& options = *context.renderOptions;
+        if (!options.airflow || options.airflowMax <= 0.0F) {
+            return;
+        }
+        static const std::array<ImVec4, 5> kStops{theme::hex(0x440154), theme::hex(0x3B528B),
+                                                  theme::hex(0x21918C), theme::hex(0x5EC962),
+                                                  theme::hex(0xFDE725)};
+        const theme::Fonts& fonts = theme::fonts();
+        const float small = px(theme::kCaptionSize);
+        const float width = px(200.0F);
+        const float barHeight = px(8.0F);
+        // Above the wind tunnel's scales, when a tunnel world is shown too.
+        const float top =
+            origin.y + size.y - px(58.0F) - px(56.0F) * static_cast<float>(legends_.size());
+        const ImVec2 min(origin.x + size.x - width - px(10.0F), top);
+        const ImVec2 max(min.x + width, min.y + px(48.0F));
+        draw->AddRectFilled(min, max, u32(c::bg1), px(4.0F));
+        draw->AddRect(min, max, u32(c::line), px(4.0F));
+        draw->AddText(fonts.sans, small, ImVec2(min.x + px(8.0F), min.y + px(5.0F)), u32(c::t2),
+                      "air speed · m/s");
+        const ImVec2 bar(min.x + px(8.0F), min.y + px(22.0F));
+        const float barWidth = width - px(16.0F);
+        constexpr int kSteps = 32;
+        for (int k = 0; k < kSteps; ++k) {
+            const float t = (static_cast<float>(k) + 0.5F) / kSteps * 4.0F;
+            const auto index = std::min(static_cast<std::size_t>(t), std::size_t{3});
+            const float blend = t - static_cast<float>(index);
+            const ImVec4& a = kStops.at(index);
+            const ImVec4& b = kStops.at(index + 1);
+            const ImVec4 colour(a.x + (b.x - a.x) * blend, a.y + (b.y - a.y) * blend,
+                                a.z + (b.z - a.z) * blend, 1.0F);
+            const float x0 = bar.x + barWidth * static_cast<float>(k) / kSteps;
+            const float x1 = bar.x + barWidth * static_cast<float>(k + 1) / kSteps;
+            draw->AddRectFilled(ImVec2(x0, bar.y), ImVec2(x1, bar.y + barHeight), u32(colour));
+        }
+        draw->AddText(fonts.mono, small, ImVec2(bar.x, bar.y + barHeight + px(3.0F)), u32(c::t3),
+                      "0");
+        char text[32];
+        std::snprintf(text, sizeof(text), "%.1f", static_cast<double>(options.airflowMax));
+        const float right = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, text).x;
+        draw->AddText(fonts.mono, small,
+                      ImVec2(bar.x + barWidth - right, bar.y + barHeight + px(3.0F)), u32(c::t3),
+                      text);
+    }
+
+    std::vector<FlowLegend> legends_;
+    std::uint64_t legendsOf_{~0ULL};
     static constexpr float kMinimumSpanK = 10.0F;
     std::vector<Temperature> temperatures_;
     std::vector<float> own_;
@@ -415,7 +524,8 @@ private:
         const char* camera =
             context.renderOptions->follow ? "Follow###camera" : "Perspective###camera";
         const float gap = px(4.0F);
-        const float width = widgets::MenuButtonWidth("Thermal") + widgets::MenuButtonWidth(camera) +
+        const float width = widgets::MenuButtonWidth("Realistic") +
+                            widgets::MenuButtonWidth(camera) +
                             widgets::MenuButtonWidth(overlayLabel) + gap * 2.0F;
         if (!widgets::BeginPanelTools("##viewport-tools", width)) {
             return;
@@ -427,6 +537,23 @@ private:
         }
         if (ImGui::BeginPopup("##shading")) {
             Shading& mode = context.renderOptions->shading;
+            if (ImGui::BeginMenu("Season", mode == Shading::Realistic)) {
+                static constexpr std::array<std::pair<const char*, Season>, 4> kSeasons{
+                    {{"Summer", Season::Summer},
+                     {"Fall", Season::Fall},
+                     {"Winter", Season::Winter},
+                     {"Rainy", Season::Rainy}}};
+                for (const auto& [label, season] : kSeasons) {
+                    if (ImGui::MenuItem(label, nullptr, context.renderOptions->season == season)) {
+                        context.renderOptions->season = season;
+                    }
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::MenuItem("Realistic", nullptr, mode == Shading::Realistic,
+                                context.renderOptions->realisticAvailable)) {
+                mode = Shading::Realistic;
+            }
             if (ImGui::MenuItem("Lit", nullptr, mode == Shading::Lit)) {
                 mode = Shading::Lit;
             }

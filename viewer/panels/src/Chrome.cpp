@@ -113,6 +113,9 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
             centre, ImGuiDir_Down, fraction(372.0F, size.y), nullptr, &centre);
         ImGui::DockBuilderDockWindow("Network", left);
         ImGui::DockBuilderDockWindow("Schematic", centre);
+        ImGui::DockBuilderDockWindow("Circuit", centre);
+        ImGui::DockBuilderDockWindow("Netlist", centre);
+        ImGui::DockBuilderDockWindow("3D overlay", centre);
         ImGui::DockBuilderDockWindow("Scopes", scopes);
         ImGui::DockBuilderDockWindow("###InspectorElectrical", right);
     } else if (workspace == Workspace::Performance) {
@@ -157,6 +160,7 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         const ImGuiID right = ImGui::DockBuilderSplitNode(
             centre, ImGuiDir_Right, fraction(300.0F, size.x - px(320.0F)), nullptr, &centre);
         ImGui::DockBuilderDockWindow("###EnvironmentState", left);
+        ImGui::DockBuilderDockWindow("###EnvironmentPresets", left);
         ImGui::DockBuilderDockWindow("###FieldSlice", centre);
         ImGui::DockBuilderDockWindow("Overlays", right);
     } else if (workspace == Workspace::Ros2) {
@@ -301,7 +305,8 @@ void drawMenuBar(PanelContext& context) {
         ImGui::EndMenu();
     };
     if (menu("File")) {
-        if (ImGui::MenuItem("Open robot or recording...", "Ctrl+O", false, context.canOpenFiles)) {
+        if (ImGui::MenuItem("Add robot or open recording...", "Ctrl+O", false,
+                            context.canOpenFiles)) {
             context.openFileRequested = true;
         }
         if (ImGui::MenuItem("Disconnect and show the launcher")) {
@@ -860,6 +865,15 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
     }
     if (built && shown == Workspace::Domains) {
         ImGui::SetWindowFocus("Wiring");
+    }
+    if (built && shown == Workspace::Electrical) {
+        ImGui::SetWindowFocus("Schematic");
+    }
+    // A panel asked for on the command line, in front once it exists.
+    if (context.focusPanel != nullptr && !context.focusPanel->empty() &&
+        ImGui::FindWindowByName(context.focusPanel->c_str()) != nullptr) {
+        ImGui::SetWindowFocus(context.focusPanel->c_str());
+        context.focusPanel->clear();
     }
 }
 

@@ -57,8 +57,12 @@ the run keeps the profile it had.
 ```bash
 lagrange validate my_profile.yaml        # errors and warnings, with JSON pointers
 lagrange graph my_profile.yaml | dot -Tsvg -o wiring.svg
-lagrange run my_profile.yaml             # the simulator, with the profile applied
+lagrange run my_profile.yaml             # the simulator, with the profile applied, headless
 ```
+
+`lagrange my_profile.yaml --robot ROBOT --world WORLD` (the `lagrange` command of the
+[CLI page](cli.md)) runs the same with the viewer open, as `lagrange quad` does: a YAML file
+with `domains:` is a profile.
 
 `lagrange` here is `ros2 run lagrange_server lagrange` (see [the CLI page](cli.md)).
 

@@ -1,0 +1,25 @@
+# profiles/examples/quad_x500_downwash.yaml — the sample quadcopter with its downwash felt:
+# as quad_x500_bem.yaml (blade-element rotors, which react to the air they sit in), with the
+# aerodynamics domain on, so the rotors' wakes are computed live (rotor_aero.md §2): they
+# spread on the ground and on roofs, hug walls, push other robots, and each rotor flies in its
+# own air (other drones' wakes, and a wall beside it). Air density and speed of sound are this
+# scenario's site parameters (ISA sea level). Run beside a building:
+#   lagrange run profiles/examples/quad_x500_downwash.yaml \
+#       --robot assets/robots/quad_x500/quad_x500.usda \
+#       --world assets/worlds/drone_building/drone_building.urdf
+schema_version: 1
+stage: robots/quad_x500/quad_x500.usda
+
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: true,  fidelity: averaged, dt: 0.00005 }
+  thermal:      { enabled: false, substitute: ambient }
+  aerodynamics: { enabled: true,  fidelity: drag, air_density: 1.225, downwash: true }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: false, substitute: zero }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: true }
+  rotor_aero:   { enabled: true,  fidelity: bem, ground_effect: true, air_density: 1.225,
+                  speed_of_sound: 340.3 }
+
+time: { real_time_factor: 1.0 }

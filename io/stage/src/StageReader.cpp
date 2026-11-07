@@ -156,6 +156,22 @@ std::optional<T> valueOf(const UsdAttribute& attribute) {
     return std::nullopt;
 }
 
+/// Tags the colliders added while it lives (one prim's, however many shapes) with a surface.
+struct MaterialScope {
+    World& world;
+    std::size_t from;
+    std::uint32_t material;
+    MaterialScope(World& w, std::size_t first, std::uint32_t surface)
+        : world(w), from(first), material(surface) {}
+    MaterialScope(const MaterialScope&) = delete;
+    MaterialScope& operator=(const MaterialScope&) = delete;
+    ~MaterialScope() {
+        for (std::size_t c = from; c < world.colliders.material.size(); ++c) {
+            world.colliders.material[c] = material;
+        }
+    }
+};
+
 class Reader {
 public:
     Reader(UsdStageRefPtr stage, const ReadOptions& options, Model& model)
@@ -360,6 +376,18 @@ private:
                 std::string("the joints form a loop; kinematic loops are not supported")};
         }
         (void)w;
+        // Joints that copy another, now that all are there; they take no commands.
+        for (const auto& [follower, leader] : mimics_) {
+            const auto found = std::find(w.joints.names.begin(), w.joints.names.end(), leader);
+            if (found == w.joints.names.end()) {
+                note("joint " + w.joints.names[follower] + " mimics " + leader +
+                     ", which is no moving joint here; it moves on its own");
+                continue;
+            }
+            w.joints.mimic[follower] = static_cast<std::uint32_t>(found - w.joints.names.begin());
+            w.joints.actuated[follower] = false;
+            std::erase(m_.actuatedJoints, w.joints.names[follower]);
+        }
         return {};
     }
 
@@ -398,6 +426,15 @@ private:
                  " has no physics:mass; it was given 1 g (mass from density is not supported)");
             mass = kPlaceholderMassKg;
             inertia = {kPlaceholderInertia, kPlaceholderInertia, kPlaceholderInertia, 0, 0, 0};
+        } else if (inertia[0] <= 0.0 && inertia[1] <= 0.0 && inertia[2] <= 0.0) {
+            // A CAD export often gives the mass alone; the engines refuse no inertia at all.
+            note("rigid body " + prim.GetPath().GetString() +
+                 " has no physics:diagonalInertia; it is taken as a solid sphere of its mass, "
+                 "as dense as water");
+            constexpr double kWaterDensity = 1000.0;  // kg/m³
+            const double radius = std::cbrt(3.0 * mass / (4.0 * std::numbers::pi * kWaterDensity));
+            const double i = 0.4 * mass * radius * radius;  // solid sphere: 2/5 m r²
+            inertia = {i, i, i, 0, 0, 0};
         }
         const std::string name = prim.GetName().GetString();
         const BodyId body = w.addBody(name, parent, inParent, mass, com, inertia);
@@ -468,6 +505,20 @@ private:
         worldPrim_[prim.GetPath()] = w.joints.prim.back();
         w.joints.lowerLimit.back() = lower;
         w.joints.upperLimit.back() = upper;
+        if (prim.HasAPI(TfToken("JointDynamicsAPI_1"))) {
+            const auto real = [&prim](const char* attribute, double fallback) {
+                return valueOf<double>(prim.GetAttribute(TfToken(attribute))).value_or(fallback);
+            };
+            w.joints.damping.back() = real("joint:damping", 0.0);
+            w.joints.friction.back() = real("joint:friction", 0.0);
+            w.joints.mimicMultiplier.back() = real("joint:mimicMultiplier", 1.0);
+            w.joints.mimicOffset.back() = real("joint:mimicOffset", 0.0);
+            if (const std::optional<std::string> leader =
+                    valueOf<std::string>(prim.GetAttribute(TfToken("joint:mimic")));
+                leader && !leader->empty()) {
+                mimics_.emplace_back(w.joints.names.size() - 1, *leader);
+            }
+        }
         if (driven) {
             const TfToken instance =
                 type == JointType::Prismatic ? UsdPhysicsTokens->linear : UsdPhysicsTokens->angular;
@@ -509,14 +560,45 @@ private:
         return rgba;
     }
 
-    std::uint32_t material(const std::array<float, 4>& rgba) {
+    /// The look of a bound UsdPreviewSurface: its name, and its inputs if it sets any.
+    std::pair<std::string, std::optional<SurfaceLook>> lookOfPrim(const UsdPrim& prim) {
+        const UsdShadeMaterial bound = UsdShadeMaterialBindingAPI(prim).ComputeBoundMaterial();
+        if (!bound) {
+            return {prim.GetName().GetString(), std::nullopt};
+        }
+        const std::string name = bound.GetPrim().GetName().GetString();
+        const UsdShadeShader surface = bound.ComputeSurfaceSource();
+        if (!surface) {
+            return {name, std::nullopt};
+        }
+        SurfaceLook look;
+        bool told = false;
+        const auto real = [&](const char* input, float& out) {
+            if (const UsdShadeInput in = surface.GetInput(TfToken(input)); in && in.Get(&out)) {
+                told = true;
+            }
+        };
+        real("metallic", look.metallic);
+        real("roughness", look.roughness);
+        GfVec3f glow;
+        if (const UsdShadeInput in = surface.GetInput(TfToken("emissiveColor"));
+            in && in.Get(&glow)) {
+            look.emissive = {glow[0], glow[1], glow[2]};
+            told = true;
+        }
+        return {name, told ? std::optional<SurfaceLook>(look) : std::nullopt};
+    }
+
+    std::uint32_t material(const std::array<float, 4>& rgba, const std::string& named,
+                           const std::optional<SurfaceLook>& look) {
         for (std::uint32_t i = 0; i < m_.scene.materials.size(); ++i) {
-            if (m_.scene.materials[i].rgba == rgba) {
+            const SceneMaterial& known = m_.scene.materials[i];
+            if (known.rgba == rgba && known.look == look &&
+                (look || lookOf(known) == lookOf({named, rgba}))) {
                 return i;
             }
         }
-        m_.scene.materials.push_back(
-            {"material_" + std::to_string(m_.scene.materials.size()), rgba});
+        m_.scene.materials.push_back({named, rgba, look});
         return static_cast<std::uint32_t>(m_.scene.materials.size() - 1);
     }
 
@@ -618,6 +700,7 @@ private:
                 continue;
             }
             ScenePrim scene;
+            bool addedSensor = false;
             scene.name = prim.GetName().GetString();
             scene.path = prim.GetPath().GetString();
             scene.parent = parent == primIndex.end() ? kNoIndex : parent->second;
@@ -664,15 +747,18 @@ private:
                     scene.mesh = static_cast<std::uint32_t>(m_.scene.meshes.size() - 1);
                     meshKey.emplace(key, scene.mesh);
                 }
-                scene.material = material(colorOf(prim));
+                const auto [surfaceName, look] = lookOfPrim(prim);
+                scene.material = material(colorOf(prim), surfaceName, look);
                 scene.scale = {static_cast<float>(placement.scale[0]),
                                static_cast<float>(placement.scale[1]),
                                static_cast<float>(placement.scale[2])};
                 scene.offset = compose(scene.offset, turn);
             } else if (prim.HasAPI(TfToken("SensorAPI_1"))) {
+                const std::size_t before = m_.world.sensors.names.size();
                 if (auto status = addSensor(prim, body, scene); !status) {
                     return status;
                 }
+                addedSensor = m_.world.sensors.names.size() > before;
             } else {
                 scene.typeName = "Xform";
             }
@@ -682,9 +768,7 @@ private:
             if (bodyIndex_.contains(prim.GetPath())) {
                 m_.bodyPrim[bodyIndex_.at(prim.GetPath())] = index;
             }
-            if (m_.scene.prims[index].typeName == "Lidar" ||
-                m_.scene.prims[index].typeName == "Imu" ||
-                m_.scene.prims[index].typeName == "Camera") {
+            if (addedSensor) {  // one entry per sensor of every kind, in the table's order
                 m_.sensorPrim.push_back(index);
             }
         }
@@ -709,6 +793,14 @@ private:
             return Unexpected{path + ": sensor:rate is required"};
         }
         std::map<std::string, double, std::less<>> settings;
+        const auto addTiming = [&] {
+            for (const auto& [attribute, key] :
+                 {std::pair{"sensor:latency", "latency"}, std::pair{"sensor:jitter", "jitter"}}) {
+                if (const std::optional<double> value = real(attribute); value && *value > 0.0) {
+                    settings[key] = *value;
+                }
+            }
+        };
         SensorType type = SensorType::Imu;
         Pose mount = scene.offset;
         if (prim.HasAPI(TfToken("CameraSensorAPI_1"))) {
@@ -788,6 +880,23 @@ private:
                 settings["bit_depth"] =
                     valueOf<int>(prim.GetAttribute(TfToken("sensor:camera:bitDepth"))).value_or(8);
             }
+            // A thermal camera (ThermalCameraAPI_1): the band, noise and display.
+            if (prim.HasAPI(TfToken("ThermalCameraAPI_1"))) {
+                settings["thermal"] = 1.0;
+                settings["thermal_band_min"] = real("sensor:thermal:bandMin").value_or(8e-6);
+                settings["thermal_band_max"] = real("sensor:thermal:bandMax").value_or(14e-6);
+                settings["thermal_netd"] = real("sensor:thermal:netd").value_or(0.05);
+                const std::optional<double> lo = real("sensor:thermal:displayMin");
+                const std::optional<double> hi = real("sensor:thermal:displayMax");
+                if (lo && hi && *hi > *lo) {
+                    settings["thermal_display_min"] = *lo;
+                    settings["thermal_display_max"] = *hi;
+                }
+                const TfToken palette = token("sensor:thermal:palette");
+                settings["thermal_palette"] = palette == TfToken("black_hot") ? 1.0
+                                              : palette == TfToken("ironbow") ? 2.0
+                                                                              : 0.0;
+            }
             // The sensor looks along x; the USD camera along its -z.
             mount = compose(scene.offset, {{0, 0, 0}, conjugate(kSensorFromUsdCamera)});
         } else if (prim.HasAPI(TfToken("LidarAPI_1"))) {
@@ -818,6 +927,11 @@ private:
                         {"min_range", *rangeMin},
                         {"max_range", *rangeMax},
                         {"range_noise", real("sensor:lidar:rangeNoiseStd").value_or(0.0)}};
+            if (const std::optional<bool> distortion =
+                    valueOf<bool>(prim.GetAttribute(TfToken("sensor:lidar:motionDistortion")));
+                distortion && !*distortion) {
+                settings["motion_distortion"] = 0.0;
+            }
         } else if (prim.HasAPI(TfToken("GnssAPI_1"))) {
             type = SensorType::Gnss;
             scene.typeName = "Gnss";
@@ -859,17 +973,95 @@ private:
             scene.typeName = "Imu";
             settings = {{"accel_noise", real("sensor:imu:accelNoiseStd").value_or(0.0)},
                         {"gyro_noise", real("sensor:imu:gyroNoiseStd").value_or(0.0)}};
+        } else if (prim.HasAPI(TfToken("CustomSensorAPI_1"))) {
+            // A sensor a plugin implements (RFC 0008 §3): its kind, and its parameters as
+            // sensor:custom:param:<path> attributes (":" in the path is "/" in the world).
+            const std::optional<std::string> kind =
+                valueOf<std::string>(prim.GetAttribute(TfToken("sensor:custom:kind")));
+            if (!kind || kind->empty()) {
+                errors_.push_back(path + ": sensor:custom:kind is required");
+                return {};
+            }
+            std::map<std::string, std::string, std::less<>> text;
+            constexpr std::string_view kParam = "sensor:custom:param:";
+            for (const UsdAttribute& attribute : prim.GetAuthoredAttributes()) {
+                const std::string name = attribute.GetName().GetString();
+                if (!name.starts_with(kParam)) {
+                    continue;
+                }
+                std::string key = name.substr(kParam.size());
+                std::replace(key.begin(), key.end(), ':', '/');
+                if (const auto number = valueOf<double>(attribute)) {
+                    settings[key] = *number;
+                } else if (const auto words = valueOf<std::string>(attribute)) {
+                    text[key] = *words;
+                }
+            }
+            scene.typeName = "CustomSensor";
+            addTiming();
+            m_.world.addCustomSensor(prim.GetName().GetString(), *kind, BodyId{body}, mount, *rate,
+                                     settings, text);
+            worldPrim_[prim.GetPath()] = m_.world.sensors.prim.back();
+            return {};
         } else {
             note(path +
                  ": a sensor without LidarAPI_1, ImuAPI_1, CameraSensorAPI_1, GnssAPI_1, "
-                 "MagnetometerAPI_1, BarometerAPI_1 or RadarAPI_1 is not "
-                 "simulated yet");
+                 "MagnetometerAPI_1, BarometerAPI_1, RadarAPI_1 or CustomSensorAPI_1 is not "
+                 "simulated");
             scene.typeName = "Xform";
             return {};
         }
+        addTiming();
         m_.world.addSensor(prim.GetName().GetString(), type, BodyId{body}, mount, *rate, settings);
         worldPrim_[prim.GetPath()] = m_.world.sensors.prim.back();
         return {};
+    }
+
+    /// The surface of a collider: SensorMaterialAPI_1 on the prim, an ancestor or its bound
+    /// material; preset first, then what is authored. kNoMaterial when there is none.
+    std::uint32_t surfaceOf(const UsdPrim& collider) {
+        const TfToken api("SensorMaterialAPI_1");
+        UsdPrim tagged;
+        const UsdShadeMaterial bound = UsdShadeMaterialBindingAPI(collider).ComputeBoundMaterial();
+        if (bound && bound.GetPrim().HasAPI(api)) {
+            tagged = bound.GetPrim();
+        }
+        for (UsdPrim p = collider; !tagged && p && !p.IsPseudoRoot(); p = p.GetParent()) {
+            if (p.HasAPI(api)) {
+                tagged = p;
+            }
+        }
+        if (!tagged) {
+            return kNoMaterial;
+        }
+        if (const auto known = surfaceIndex_.find(tagged.GetPath()); known != surfaceIndex_.end()) {
+            return known->second;
+        }
+        SurfaceMaterial material;
+        TfToken preset;
+        if (tagged.GetAttribute(TfToken("sensmat:preset")).Get(&preset) &&
+            !surfaceMaterialPreset(preset.GetString(), material) && preset != "none") {
+            errors_.push_back(tagged.GetPath().GetString() + ": no sensmat:preset " +
+                              preset.GetString());
+        }
+        const auto authored = [&tagged](const char* name, double& out) {
+            const UsdAttribute attribute = tagged.GetAttribute(TfToken(name));
+            if (attribute && attribute.HasAuthoredValue()) {
+                attribute.Get(&out);
+            }
+        };
+        authored("sensmat:reflectivity905", material.reflectivity905);
+        authored("sensmat:reflectivity1550", material.reflectivity1550);
+        authored("sensmat:specularFraction905", material.specular);
+        authored("sensmat:transmission905", material.transmission);
+        if (const UsdAttribute retro = tagged.GetAttribute(TfToken("sensmat:retroreflective"));
+            retro && retro.HasAuthoredValue()) {
+            retro.Get(&material.retroreflective);
+        }
+        m_.world.surfaceMaterials.push_back(material);
+        const auto index = static_cast<std::uint32_t>(m_.world.surfaceMaterials.size() - 1);
+        surfaceIndex_.emplace(tagged.GetPath(), index);
+        return index;
     }
 
     void buildColliders() {
@@ -884,6 +1076,7 @@ private:
             if (!enabled) {
                 continue;
             }
+            const MaterialScope scope(w, w.colliders.body.size(), surfaceOf(prim));
             const SdfPath bodyPath = bodyOf(prim);
             const BodyId body = bodyPath.IsEmpty() ? kWorldBody : BodyId{bodyIndex_.at(bodyPath)};
             const Placement placement = world(prim);
@@ -1127,9 +1320,11 @@ private:
     const ReadOptions& options_;
     Model& m_;
     std::vector<UsdPrim> bodyPrims_;
+    std::map<SdfPath, std::uint32_t> surfaceIndex_;
     std::map<SdfPath, std::uint32_t> bodyIndex_;
     std::map<SdfPath, PrimId> worldPrim_;  // USD prim -> world prim, for schema instances
     std::vector<UsdPhysicsJoint> joints_;
+    std::vector<std::pair<std::size_t, std::string>> mimics_;  // joint index, the one it copies
     std::vector<std::string> errors_;
     bool hasPlane_{false};
 };
@@ -1285,6 +1480,7 @@ Expected<Model, std::string> loadStage(const std::string& path, const ReadOption
         w.colliders.poseInBody.insert(w.colliders.poseInBody.begin(), Pose{});
         w.colliders.friction.insert(w.colliders.friction.begin(), options.groundFriction);
         w.colliders.hull.insert(w.colliders.hull.begin(), kNoHull);
+        w.colliders.material.insert(w.colliders.material.begin(), kNoMaterial);
         addGroundPrim(model);
     }
     const UsdPrim root = stage->GetDefaultPrim();

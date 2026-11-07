@@ -265,6 +265,7 @@ message EnvironmentState {
   repeated EmiSource emi_sources = 7;
   repeated Field fields = 8;
   bool synthetic = 9; // values made up by a server that has no environment model
+  double gravity_m_per_s2 = 10; // downward
 }
 
 // A horizontal slice of a field, for an overlay. Sent for subscribed fields when it changes
@@ -282,6 +283,27 @@ message FieldSlice {
   float value_min = 10; // of the magnitude, over the slice
   float value_max = 11;
   DataRef values = 12; // float32, row-major from cell (0, 0), `components` per cell
+  // Added after 1.0. For a vertical slice, origin_x and cell (0, 0) are along the plane's first
+  // axis (+X, or +Y for VERTICAL_YZ), origin_y is the z of row 0, and height_m is where the
+  // plane cuts the other horizontal axis.
+  SliceOrientation orientation = 13;
+}
+
+// A small box of a vector field around the robot (added after 1.0), for particles the viewer
+// moves: sent for fields subscribed with `volume`, at most a few times a second.
+message FieldVolume {
+  string field = 1;
+  SimTime sim_time = 2;
+  uint32 nx = 3; // cells along +X
+  uint32 ny = 4;
+  uint32 nz = 5;
+  double origin_x = 6; // region frame, centre of cell (0, 0, 0)
+  double origin_y = 7;
+  double origin_z = 8;
+  double cell_m = 9;
+  uint32 components = 10; // 3: a vector, m/s
+  float value_max = 11; // of the magnitude
+  DataRef values = 12; // float32, x fastest, then y, then z, `components` per cell
 }
 
 // A large world: its tiles, the agents in it, the floating origin and the streaming budgets.

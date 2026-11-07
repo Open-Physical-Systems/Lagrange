@@ -195,8 +195,19 @@ Choices made while implementing, beyond §2:
   converter per output bus. Signals `converter/<c>/output_current`, `input_current` and
   `loss_power`; `test_network` checks regulation, the power drawn and the current limit.
 
-Not yet: `velocity` and `voltage` control modes,
-battery FMUs, motors on prismatic joints, and the rotor inertia in Jolt.
+`elec:controlMode` (as built): `torque` follows `joint/<j>/torque_command`; `velocity` follows
+`joint/<j>/velocity_command` through a PI speed loop in the drive, critically damped on the joint's
+inertia (`elec:velocityLoopBandwidth`, illustrative), held by the current limit; `voltage` puts
+`joint/<j>/voltage_command` on the winding, limited by the bus, with no current loop and so no current
+limit. Those two commands are required: `--joint-control` writes them (`Server::commandJoint`, and
+`/joint_commands`, whose `effort` field carries volts for a voltage motor), a plugin or `--ros-topics`
+can too, and the built-in drive controllers and ros2_control, which write torques, stop the start with
+`MissingInput`. On a prismatic joint the drive is linear: `elec:gearRatio` is motor radians per metre
+(2π over a screw's lead), and torque, speed and inertia at the joint are force, m/s and mass.
+Checked against the closed forms: stall and no-load in voltage mode, steady speed under load in
+velocity mode, on a hinge and a slide (`server/test/test_motor_modes.cpp`).
+
+Not yet: battery FMUs and the rotor inertia in Jolt.
 
 | §8 check | Status | Test |
 |---|---|---|
@@ -204,7 +215,24 @@ battery FMUs, motors on prismatic joints, and the rotor inertia in Jolt.
 | DC motor no-load speed, stall current, torque-speed line | met, 0.5 % | `BrushedDcTorqueSpeedLineMatchesTheClosedForm` |
 | Coupled motor + inertia | met, < 2 % RMS in speed and current against a monolithic 1 µs solution, inertias 6e-7 to 1e-2 kg·m², no growth; and (v0.4) the sample quadcopter's dq drive with the network at 50 µs on 1e-5 and 9e-5 kg·m² rotors | `test_coupling` (`Coupling`, `DroneCoupling`) |
 | Battery ECM pulse | closed form met exactly; against the LG HG2 HPPC pulses, one fitted parameter set: 5.4 to 6.2 mV RMS on held-out blocks from 46 to 89 % state of charge, 21.5 mV at 24 % (not met: r0 and the OCV slope rise below about 35 %; a state-of-charge-dependent r0 is the next step). 25 °C only | `PulseDischargeMatchesTheClosedForm`, `test_battery_dataset` (data and fit in `test/data/lg_hg2`) |
+| Battery ECM drive cycles | against the LG HG2 UDDS, US06 and LA92 cycles at 25 °C from full charge, r0 and RC pairs fitted to UDDS only: LA92 11.7 mV and US06 20.1 mV RMS above 35 % state of charge (unseen; US06 0.1 mV over the 20 mV, not met). The pulse fit gives 21.7 and 67.8 mV: its slow pair is not seen by 10 s pulses. At 40, 10 and 0 °C US06 reads 39, 61 and 145 mV: no temperature dependence but r0's | `TheEquivalentCircuitFollowsMeasuredDriveCycles` (data in `test/data/lg_hg2`) |
 | Energy balance over a drive cycle | met, 0.5 % | `test_network` `EnergyBalancesOverADriveCycle` |
 | Netlist round trip | met: with a drive cycle sagging a weak pack's bus by 2.4 V, ngspice's bus voltage is within 0.05 % of the network's (sag within 0.16 % RMS) | `test_export` (needs ngspice) |
 | Brownout scenario | met | `AStalledAmrOnALowBatteryBrownsOutAndRecovers` |
 | Sim-vs-real | owed: needs the bench recording (Q16) | — |
+
+## 10. Parts between buses (RFC 0010)
+
+`ElectricalBranchAPI_1` joins two buses with a resistor, a fuse (open from the step `∫I²dt` reaches its rating, until the run restarts), a switch (`branch/<b>/command` above 0.5 is closed) or a diode (a forward drop and a resistance, open backward). Buses joined this way are solved together each step, by nodal analysis with the capacitors' backward-Euler companions, dense with partial pivoting, repeating while a diode, a battery at its charge limit or a converter changes state. A bus with no branch keeps the single-bus solve, so nothing changes for it. Signals: `branch/<b>/current`, `/voltage`, `/state`, `/loss_power`. A bus behind a part starts at what reaches it with nothing drawn.
+
+## 11. Hand check
+
+`tools/ci/check_electrical.py` draws simple circuits and works each out three ways, independently:
+a closed-form formula, ngspice on a netlist written by the script (not `lagrange export`), and a
+Lagrange run of a robot imported with `lagrange_import --overlay`, once from an overlay file and
+once from the netlist (formats.md §9.1), and once from a URDF's `<lagrange>` block (§9.2). Lagrange must stay within 0.5 %
+of the formula and ngspice within 0.1 %. It covers a battery port's harness (`wireResistance`, in the bus's solution and between the
+battery's terminals and the bus; the batteries' other ports and loads' and drives' do not count), a resistive load, a constant-power load, an RC
+pair's transient, two batteries in parallel, the charge drained, and a PMSM or brushed motor
+turning a flywheel. It does not cover switching, thermal effects, a sloped voltage curve, trips,
+regeneration or converters.

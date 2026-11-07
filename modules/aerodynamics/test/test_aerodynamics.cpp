@@ -5,10 +5,12 @@
 #include "lagrange/random/Philox.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 
+#include <array>
 #include <cmath>
 #include <memory>
 #include <numbers>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -254,6 +256,136 @@ TEST(Aerodynamics, RefusesWithoutTheAirDensityOrAnIncompleteWind) {
     config.values["air_density"] = kRho;
     config.values["wind_speed"] = 5.0;  // no direction, height or roughness
     EXPECT_FALSE(AeroDrag::windOf(ModuleConfig(config)));
+}
+
+TEST(Precipitation, RainFallsAtAtlasSpeedOverMarshallPalmerDrops) {
+    // Atlas et al.'s fit against Gunn and Kinzer's measured drops (1949, Table 2; m/s at 1-4 mm).
+    const auto atlas = [](double mm) { return 9.65 - 10.3 * std::exp(-0.6 * mm); };
+    constexpr std::array<std::pair<double, double>, 4> kGunnKinzer{
+        {{1.0, 4.03}, {2.0, 6.49}, {3.0, 8.06}, {4.0, 8.83}}};
+    for (const auto& [mm, measured] : kGunnKinzer) {
+        EXPECT_NEAR(atlas(mm), measured, 0.15) << mm << " mm";
+    }
+    // The closed form against the mass-weighted mean, integrated over the drop sizes.
+    for (const double mmPerHour : {1.0, 10.0, 50.0}) {
+        const double slope = 4.1 * std::pow(mmPerHour, -0.21);  // mm⁻¹
+        double mass = 0.0;
+        double flux = 0.0;
+        constexpr double kStep = 1e-3;  // mm
+        for (double d = kStep / 2; d < 12.0; d += kStep) {
+            const double m = d * d * d * std::exp(-slope * d);
+            mass += m;
+            flux += m * atlas(d);
+        }
+        EXPECT_NEAR(rainFallSpeed(mmPerHour / 3.6e6), flux / mass, 1e-3) << mmPerHour;
+    }
+    EXPECT_GE(rainFallSpeed(1e-12), kLeastFallSpeed);
+}
+
+TEST(Precipitation, TheWaterInTheAirIsMarshallAndPalmers) {
+    // Their drops hold W = ρw·π·N0/Λ⁴, 0.089·R^0.84 g/m³; ours holds the rate given at Atlas's
+    // speed, which their drops overshoot (they carry more than R): within 20 %, lower.
+    for (const double mmPerHour : {1.0, 5.0, 25.0, 100.0}) {
+        const double theirs = 0.089 * std::pow(mmPerHour, 0.84) * 1e-3;  // kg/m³
+        const double ours = fallingWater(mmPerHour / 3.6e6, 0.0)[0];
+        EXPECT_NEAR(ours, theirs, 0.2 * theirs) << mmPerHour;
+        EXPECT_LT(ours, theirs);
+    }
+    // Snow, 1 mm/h of water falling at 1 m/s.
+    EXPECT_NEAR(fallingWater(0.0, 1.0 / 3.6e6)[1], 1000.0 / 3.6e6, 1e-12);
+}
+
+TEST(Precipitation, DropsBringTheirMomentumAcrossTheArea) {
+    const std::array<double, 3> box{0.04, 0.04, 0.09};
+    constexpr double kWater = 1e-3;
+    // Still, under rain at 6 m/s: W·v²·A_z, down.
+    const auto down = impactForce(kWater, {0.0, 0.0, -6.0}, box);
+    EXPECT_NEAR(down[2], -kWater * 36.0 * 0.09, 1e-12);
+    EXPECT_NEAR(down[0], 0.0, 1e-15);
+    // Flying into it at 8 m/s along x: the drops come at (−8, 0, −6), |u| = 10, across the box
+    // (0.04·8 + 0.09·6)/10.
+    const auto flying = impactForce(kWater, {-8.0, 0.0, -6.0}, box);
+    const double across = (0.04 * 8.0 + 0.09 * 6.0) / 10.0;
+    EXPECT_NEAR(flying[0], kWater * 10.0 * across * -8.0, 1e-12);
+    EXPECT_NEAR(flying[2], kWater * 10.0 * across * -6.0, 1e-12);
+    EXPECT_EQ(impactForce(0.0, {1.0, 0.0, 0.0}, box), (std::array<double, 3>{}));
+}
+
+/// The weather's air and what falls through it, constant.
+class Sky final : public IModule {
+public:
+    Sky(double density, double rain, double snow) : values_{density, rain, snow} {}
+    [[nodiscard]] ModuleInfo info() const override {
+        return {"test", "sky", 1, 0, false, true, CapabilityTier::Tier0};
+    }
+    [[nodiscard]] Duration preferredStep() const override { return 1_ms; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        const std::array<std::pair<const char*, Unit>, 3> names{
+            {{"env/air_density", units::kg_per_m3},
+             {"env/rain_rate", units::m_per_s},
+             {"env/snow_rate", units::m_per_s}}};
+        for (std::size_t i = 0; i < 3; ++i) {
+            SignalSpec s;
+            s.name = names.at(i).first;
+            s.unit = names.at(i).second;
+            out_.at(i) = d.output(s);
+        }
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        write(bus);
+        return {};
+    }
+    Status step(const StepContext&, SignalBus& bus) override {
+        write(bus);
+        return {};
+    }
+    Status saveState(StateWriter&) const override { return {}; }
+    Status restoreState(StateReader&) override { return {}; }
+
+private:
+    void write(SignalBus& bus) const {
+        for (std::size_t i = 0; i < 3; ++i) {
+            bus.write(out_.at(i), values_.at(i));
+        }
+    }
+    std::array<double, 3> values_;
+    std::array<SignalId, 3> out_{};
+};
+
+TEST(Precipitation, TheDomainUsesTheWeathersAirAndRain) {
+    const auto wrench = [](double density, double rain) {
+        const World world = sphere(1.0);
+        Scheduler scheduler(SchedulerOptions{.deterministic = true});
+        auto body = std::make_unique<Body>(1.0, true);
+        Body* ball = body.get();
+        ball->position = {0.0, 0.0, 30.0};
+        ball->velocity = {10.0, 0.0, 0.0};
+        scheduler.add(std::move(body));
+        scheduler.add(std::make_unique<Sky>(density, rain, 0.0));
+        ModuleConfigData config;
+        config.values["air_density"] = kRho;
+        config.values["weather_air"] = true;
+        scheduler.add(std::make_unique<AeroDrag>(), ModuleConfig(config));
+        EXPECT_TRUE(scheduler.wire(WorldView(world)));
+        EXPECT_TRUE(scheduler.stepUntil(SimTime{50'000'000}).ok());
+        return ball->lastWrench;
+    };
+    const double area = std::numbers::pi * 0.1 * 0.1;
+    // Dry: the drag of 10 m/s in the weather's air, not the config's.
+    const std::array<double, 6> dry = wrench(1.0, 0.0);
+    EXPECT_NEAR(dry[0], -0.5 * 1.0 * 0.47 * area * 100.0, 1e-9);
+    EXPECT_NEAR(dry[2], 0.0, 1e-12);
+    // 25 mm/h: the drops' push on top, and against the motion.
+    const double rate = 25.0 / 3.6e6;
+    const double v = rainFallSpeed(rate);
+    const double water = fallingWater(rate, 0.0)[0];
+    const std::array<double, 3> u{-10.0, 0.0, -v};
+    const auto hit = impactForce(water, u, {area, area, area});
+    const std::array<double, 6> wet = wrench(1.0, rate);
+    EXPECT_NEAR(wet[0] - dry[0], hit[0], 1e-9);
+    EXPECT_NEAR(wet[2], hit[2], 1e-9);
+    EXPECT_LT(wet[2], 0.0);
 }
 
 }  // namespace

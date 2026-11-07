@@ -3,6 +3,7 @@
 // Header-only xxHash, as in proto/transport: no library to link.
 #define XXH_INLINE_ALL
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <string>
 #include <utility>
@@ -88,6 +89,12 @@ JointId World::addJoint(std::string name, JointType jointType, BodyId childBody,
     joints.effortLimit.push_back(0.0);
     joints.velocityLimit.push_back(0.0);
     joints.armature.push_back(0.0);
+    joints.damping.push_back(0.0);
+    joints.friction.push_back(0.0);
+    joints.mimic.push_back(kNoMimic);
+    joints.mimicMultiplier.push_back(1.0);
+    joints.mimicOffset.push_back(0.0);
+    joints.initialPosition.push_back(0.0);
     joints.prim.push_back(joint);
     joints.actuated.push_back(isActuated);
     return JointId{static_cast<std::uint32_t>(joints.names.size() - 1)};
@@ -104,6 +111,18 @@ void World::addSensor(std::string name, SensorType sensorType, BodyId onBody, co
     sensors.rateHz.push_back(updateRateHz);
     sensors.prim.push_back(sensor);
     sensors.settings.push_back(std::move(sensorSettings));
+    sensors.kind.emplace_back();
+    sensors.text.emplace_back();
+}
+
+void World::addCustomSensor(std::string name, std::string sensorKind, BodyId onBody,
+                            const Pose& pose, double updateRateHz,
+                            std::map<std::string, double, std::less<>> sensorSettings,
+                            std::map<std::string, std::string, std::less<>> textSettings) {
+    addSensor(std::move(name), SensorType::Custom, onBody, pose, updateRateHz,
+              std::move(sensorSettings));
+    sensors.kind.back() = std::move(sensorKind);
+    sensors.text.back() = std::move(textSettings);
 }
 
 void World::addCollider(BodyId onBody, ShapeType shapeType, const std::array<double, 3>& shapeSize,
@@ -114,6 +133,67 @@ void World::addCollider(BodyId onBody, ShapeType shapeType, const std::array<dou
     colliders.poseInBody.push_back(poseInOwner);
     colliders.friction.push_back(slidingFriction);
     colliders.hull.push_back(kNoHull);
+    colliders.material.push_back(kNoMaterial);
+}
+
+bool surfaceMaterialPreset(std::string_view name, SurfaceMaterial& out) {
+    // reflectivity 905, 1550, specular, transmission, retroreflective; illustrative.
+    struct Row {
+        std::string_view name;
+        SurfaceMaterial material;
+    };
+    static constexpr std::array<Row, 9> kPresets{{
+        {"default", {0.5, 0.5, 0.0, 0.0, false}},
+        // A smooth water surface mirrors: about 2 % comes straight back at normal incidence
+        // (Fresnel, n = 1.33) and nothing at a slant, and water absorbs what enters.
+        {"water", {0.02, 0.02, 1.0, 0.0, false}},
+        {"glass", {0.08, 0.08, 0.9, 0.9, false}},
+        {"mirror", {0.9, 0.9, 1.0, 0.0, false}},
+        {"asphalt", {0.1, 0.1, 0.0, 0.0, false}},
+        {"concrete", {0.35, 0.3, 0.0, 0.0, false}},
+        {"white_paint", {0.8, 0.7, 0.05, 0.0, false}},
+        {"black_rubber", {0.05, 0.05, 0.0, 0.0, false}},
+        {"retroreflector", {0.9, 0.9, 0.0, 0.0, true}},
+    }};
+    for (const Row& row : kPresets) {
+        if (row.name == name) {
+            out = row.material;
+            return true;
+        }
+    }
+    return false;
+}
+
+void hullFacePlanes(const ConvexHull& hull, std::vector<std::array<double, 4>>& out) {
+    out.clear();
+    std::array<double, 3> centre{};
+    for (const auto& p : hull.points) {
+        for (std::size_t i = 0; i < 3; ++i) {
+            centre.at(i) += p.at(i) / static_cast<double>(hull.points.size());
+        }
+    }
+    for (const auto& t : hull.triangles) {
+        const std::array<double, 3>& a = hull.points.at(t[0]);
+        const std::array<double, 3>& b = hull.points.at(t[1]);
+        const std::array<double, 3>& c = hull.points.at(t[2]);
+        const std::array<double, 3> u{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+        const std::array<double, 3> v{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+        std::array<double, 3> n{u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
+                                u[0] * v[1] - u[1] * v[0]};
+        const double length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        if (length <= 0.0) {
+            continue;  // a degenerate triangle has no plane
+        }
+        for (double& x : n) {
+            x /= length;
+        }
+        double offset = n[0] * a[0] + n[1] * a[1] + n[2] * a[2];
+        if (n[0] * centre[0] + n[1] * centre[1] + n[2] * centre[2] > offset) {
+            n = {-n[0], -n[1], -n[2]};
+            offset = -offset;
+        }
+        out.push_back({n[0], n[1], n[2], offset});
+    }
 }
 
 void World::addHullCollider(BodyId onBody, ConvexHull hull, const Pose& poseInOwner,
@@ -126,6 +206,9 @@ void World::addHullCollider(BodyId onBody, ConvexHull hull, const Pose& poseInOw
     }
     addCollider(onBody, ShapeType::ConvexHull, half, poseInOwner, slidingFriction);
     colliders.hull.back() = static_cast<std::uint32_t>(hulls.size());
+    if (hull.faces.empty()) {
+        hullFacePlanes(hull, hull.faces);
+    }
     hulls.push_back(std::move(hull));
 }
 

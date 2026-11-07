@@ -17,6 +17,7 @@ EXPECTED = {
         "LidarAPI_1",
         "ImuAPI_1",
         "CameraSensorAPI_1",
+        "ThermalCameraAPI_1",
         "GnssAPI_1",
         "MagnetometerAPI_1",
         "BarometerAPI_1",
@@ -28,6 +29,7 @@ EXPECTED = {
         "ElectricalBusAPI_1",
         "ElectricalLoadAPI_1",
         "ElectricalConverterAPI_1",
+        "ElectricalBranchAPI_1",
     ],
     "thermal": ["ThermalAPI_1", "ThermalLinkAPI_1"],
     "aero": ["AeroAPI_1", "RotorAPI_1"],
@@ -37,6 +39,9 @@ EXPECTED = {
     "comms": ["RadioLinkAPI_1", "CanBusAPI_1"],
     "vehicle": ["VehicleAPI_1", "WheelAPI_1"],
     "road": ["RoadLaneAPI_1"],
+    "human": ["HumanAPI_1"],
+    "water": ["WaterAPI_1"],
+    "joint": ["JointDynamicsAPI_1"],
     "world": ["WorldTileAPI_1"],
 }
 

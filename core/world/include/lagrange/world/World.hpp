@@ -55,12 +55,20 @@ enum class ShapeType : std::uint8_t {
     HeightField
 };
 
+inline constexpr std::uint32_t kNoMimic = 0xFFFF'FFFFU;
+
 /// A convex hull collider (formats.md §2: collision geometry is convex hulls, never render
 /// meshes): its vertices and its outward-wound triangles, in the shape's frame, m.
 struct ConvexHull {
     std::vector<std::array<double, 3>> points;
     std::vector<std::array<std::uint32_t, 3>> triangles;
+    /// Each triangle's plane, unit outward normal and offset (n·p ≤ offset inside), as
+    /// World::addHullCollider stores it: rays test these for every beam.
+    std::vector<std::array<double, 4>> faces;
 };
+
+/// The face planes of a hull, each turned so that the hull's centre is inside.
+void hullFacePlanes(const ConvexHull& hull, std::vector<std::array<double, 4>>& out);
 
 /// Terrain as a regular grid of heights (huge-worlds.md §4): `columns` x `rows` samples, cellX
 /// and cellY apart, centred on the shape's origin; heights[row * columns + column] is z in the
@@ -80,7 +88,31 @@ struct HeightField {
     [[nodiscard]] ConvexHull triangles() const;  // points and triangles; not convex
 };
 
-enum class SensorType : std::uint8_t { Imu, Lidar, Camera, Gnss, Magnetometer, Barometer, Radar };
+/// Custom: a sensor Lagrange does not simulate itself; a plugin implements its kind (RFC 0008 §3).
+enum class SensorType : std::uint8_t {
+    Imu,
+    Lidar,
+    Camera,
+    Gnss,
+    Magnetometer,
+    Barometer,
+    Radar,
+    Custom
+};
+
+/// What a lidar sees of a surface (SensorMaterialAPI_1; docs/design/domains/sensors.md §2).
+struct SurfaceMaterial {
+    double reflectivity905{0.5};   // of the diffuse and specular parts together, at 905 nm
+    double reflectivity1550{0.5};  // at 1550 nm
+    double specular{0.0};          // fraction that is mirror-like: comes back only near normal
+    double transmission{0.0};      // fraction of beams that go through (glass)
+    bool retroreflective{false};   // comes back at any angle, strongly (road signs, vests)
+};
+inline constexpr std::uint32_t kNoMaterial = 0xFFFF'FFFFU;
+
+/// A named surface (sensmat:preset, <sensor_material preset=...>): false for an unknown name. The
+/// numbers are illustrative orders of magnitude, not measurements; give your own where it matters.
+[[nodiscard]] bool surfaceMaterialPreset(std::string_view name, SurfaceMaterial& out);
 
 /// One applied API schema on one prim, with its attribute values read once at load.
 /// Lookups are by name, so they belong in declare() and init(), never in step().
@@ -144,6 +176,16 @@ struct World {
         /// Inertia added at the joint by what drives it: a motor's rotor reflected through its
         /// gear, N²·J_rotor (kg·m², or kg for a slide). Physics adds it to the joint's mass.
         std::vector<double> armature;
+        /// Viscous damping (N·m·s/rad or N·s/m) and dry friction (N·m or N) at the joint.
+        std::vector<double> damping, friction;
+        /// A joint that copies another: position = multiplier × mimic's + offset (rad or m);
+        /// kNoMimic for the others. It takes no commands. MuJoCo couples both ways, as gears do;
+        /// Jolt only moves the copy.
+        std::vector<std::uint32_t> mimic;
+        std::vector<double> mimicMultiplier, mimicOffset;
+        /// Where the joint starts, rad or m (0 by default): a run rebuilt mid-way, when robots
+        /// are spawned or deleted, starts the others' joints where they were.
+        std::vector<double> initialPosition;
         std::vector<PrimId> prim;
         std::vector<bool> actuated;  // a motor or controller drives it
     } joints;
@@ -156,7 +198,10 @@ struct World {
         std::vector<Pose> poseInBody;
         std::vector<double> friction;     // Coulomb coefficient, sliding
         std::vector<std::uint32_t> hull;  // index into hulls for a ConvexHull, else kNoHull
+        /// Index into surfaceMaterials, else kNoMaterial: the defaults, and always a return.
+        std::vector<std::uint32_t> material;
     } colliders;
+    std::vector<SurfaceMaterial> surfaceMaterials;
     std::vector<ConvexHull> hulls;
     std::vector<HeightField> heightfields;  // ShapeType::HeightField, by Colliders::hull
 
@@ -174,6 +219,10 @@ struct World {
         /// "accel_noise" (m/s², 1 sigma), "gyro_noise" (rad/s, 1 sigma); camera "width",
         /// "height" (px), "horizontal_fov" (rad), "near_clip" (m), "far_clip" (m).
         std::vector<std::map<std::string, double, std::less<>>> settings;
+        /// A custom sensor's kind ("sonar", "tof"; empty for the built-in types) and its text
+        /// parameters (RFC 0008 §3); its numbers are in settings.
+        std::vector<std::string> kind;
+        std::vector<std::map<std::string, std::string, std::less<>>> text;
     } sensors;
 
     std::vector<std::string> robots;  // robot root prim names
@@ -198,6 +247,11 @@ struct World {
                      const std::array<double, 3>& jointAxis, bool isActuated);
     void addSensor(std::string name, SensorType sensorType, BodyId onBody, const Pose& pose,
                    double updateRateHz, std::map<std::string, double, std::less<>> sensorSettings);
+    /// A custom sensor of `sensorKind`, for a plugin to implement (RFC 0008 §3).
+    void addCustomSensor(std::string name, std::string sensorKind, BodyId onBody, const Pose& pose,
+                         double updateRateHz,
+                         std::map<std::string, double, std::less<>> sensorSettings,
+                         std::map<std::string, std::string, std::less<>> textSettings);
     void addCollider(BodyId onBody, ShapeType shapeType, const std::array<double, 3>& shapeSize,
                      const Pose& poseInOwner, double slidingFriction);
     /// A convex hull collider; its size is computed from the points.

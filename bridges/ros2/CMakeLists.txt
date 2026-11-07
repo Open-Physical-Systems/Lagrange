@@ -14,8 +14,9 @@ find_package(geometry_msgs REQUIRED)
 find_package(tf2_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(ackermann_msgs REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
-add_library(lagrange_ros2 src/Bridge.cpp)
+add_library(lagrange_ros2 src/Bridge.cpp src/SignalTopics.cpp)
 lagrange_target_defaults(lagrange_ros2)
 target_include_directories(
     lagrange_ros2
@@ -37,6 +38,7 @@ target_link_libraries(
         ${tf2_msgs_TARGETS}
         ${std_msgs_TARGETS}
         ${ackermann_msgs_TARGETS}
+        yaml-cpp::yaml-cpp
 )
 
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})

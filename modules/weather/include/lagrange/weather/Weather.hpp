@@ -55,6 +55,22 @@ inline constexpr double kMarshallPalmerN0 = 8.0e6;  // m⁻⁴ (8000 m⁻³·mm�
 inline constexpr double kDustParticleDensity = 2650.0;  // kg/m³, quartz, the main mineral of dust
 [[nodiscard]] double dustExtinction(double concentrationKgPerM3, double medianDiameterM);
 
+/// Falling snow's extinction (1/m) at a rate in m/s of melted water, wavelength-independent like
+/// rain's. Illustrative: 1 mm/h gives a visibility of 1 km by Koschmieder, the order of what
+/// weather services report; Rasmussen et al. (1999, J. Appl. Meteor. 38) find it varies 3 to 10
+/// times from storm to storm at one rate, with the crystals.
+inline constexpr double kSnowExtinctionPerMmph = 3.912 / 1000.0;  // 1/m per mm/h
+[[nodiscard]] double snowExtinction(double snowRateMps);
+
+/// How much grip a surface has left, of dry asphalt's (env/friction_scale). Range checks, not
+/// measurements: hard-packed snow is about 0.20 to 0.35 and ice about 0.10 against about 0.85 dry
+/// (engineering tables; 0.35 for cars braking on packed snow at -6 degC, TRB SR 115).
+inline constexpr double kFreezing = 273.15;        // K
+inline constexpr double kSnowFrictionScale = 0.3;  // of dry: about 0.25
+inline constexpr double kIceFrictionScale = 0.13;  // of dry: about 0.11
+/// `wetness` 0 to 1, `snowCover` 0 to 1, air temperature in K; wet below freezing is ice.
+[[nodiscard]] double frictionScale(double wetness, double snowCover, double temperatureK);
+
 /// Wavelengths of the extinction outputs.
 inline constexpr double kVisibleWavelength = 550e-9;  // m
 inline constexpr double kLidar905 = 905e-9;           // m
@@ -65,9 +81,11 @@ inline constexpr double kLidar1550 = 1550e-9;         // m
 /// The weather domain (domains/weather.md): the site's atmosphere and what it does to sensors and
 /// surfaces, from the world's WeatherAPI_1 prim and the module config ("temperature",
 /// "pressure", "relative_humidity" (site parameters, no defaults: without them the module does
-/// not start); "visibility", "rain_rate", "dust_concentration", "dust_median_diameter",
-/// "solar_irradiance", "sky_temperature"; the config wins over the prim). Config "effects"
-/// (fog, rain, dust, wet_friction, lens_contamination) selects effects; all by default.
+/// not start); "visibility", "rain_rate", "snow_rate" (m/s of melted water), "snow_cover" (0 to 1,
+/// on the ground at the start), "dust_concentration", "dust_median_diameter", "solar_irradiance",
+/// "sky_temperature"; the config wins over the prim). Config "effects" (fog, rain, snow, dust,
+/// wet_friction, lens_contamination) selects effects; all by default. Snow lies below freezing and
+/// melts above it; env/snow_rate and env/snow_cover say how much.
 ///
 /// Writes env/air_temperature, env/sky_temperature, env/pressure, env/relative_humidity,
 /// env/air_density, env/wind/mean (at the reference height, from the prim), env/solar_irradiance,
@@ -77,7 +95,8 @@ inline constexpr double kLidar1550 = 1550e-9;         // m
 /// and the wind grid, m/s, from config "fog_field" and "wind_field" or the prim's
 /// weather:fogField and weather:windField, NanoVDB files; empty buffers without),
 /// env/rain_rate, env/friction_scale and sensor/<s>/contamination for every sensor. Default
-/// step 50 ms.
+/// step 50 ms. With config "downwash_dust" it reads env/dust/downwash (kg/m³, the dust rotor
+/// outwash lifts, of grains "ground_dust_diameter") and adds it to the air's dust.
 ///
 /// Wet friction and lens contamination are behavioural models (domains/weather.md §7: range
 /// checks, not point validations): surfaces wet with time constant kWettingTimeS once it rains
@@ -114,8 +133,12 @@ private:
 
     bool clear_;
     State s_;
-    bool fog_{true}, rain_{true}, dust_{true}, wetFriction_{true}, lens_{true};
-    double wetness_{0.0};                // 0 dry … 1 wet
+    bool fog_{true}, rain_{true}, snow_{true}, dust_{true}, wetFriction_{true}, lens_{true};
+    double wetness_{0.0};    // 0 dry … 1 wet
+    double snowCover_{0.0};  // 0 bare … 1 covered
+    double snowRate_{0.0};   // m/s of melted water
+    double startCover_{0.0};
+    SignalId snowRateOut_, snowCoverOut_;
     std::vector<double> contamination_;  // per sensor, 0 … 1
     SignalId temperatureOut_, skyOut_, pressureOut_, humidityOut_, densityOut_, windOut_;
     SignalId irradianceOut_, sunOut_, visibleOut_, nir905Out_, nir1550Out_, rainOut_, frictionOut_;
@@ -123,6 +146,9 @@ private:
     SignalId fogFieldOut_, windFieldOut_;
     std::shared_ptr<const fields::Field> fogField_, windField_;
     std::vector<SignalId> contaminationOut_;
+    SignalId downwashDustIn_;          // env/dust/downwash, with config "downwash_dust"
+    double liftedDust_{0.0};           // kg/m³, this step's
+    double groundDustDiameter_{1e-4};  // m, the lifted grains'
 };
 
 // Behavioural constants (see the class comment). Modelling choices, not measured values.

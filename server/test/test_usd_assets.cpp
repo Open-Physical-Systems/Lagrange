@@ -214,6 +214,39 @@ std::map<std::string, std::string> electrical(const Robot& robot) {
     return out;
 }
 
+// The sensors an overlay adds to a robot file are the robot's sensors when it runs, as they are
+// once lagrange_import has written the two into USD: the sample quadcopter's URDF with its
+// overlay has the IMU, GNSS, magnetometer and barometer of quad_x500.usda. (They were once only
+// schemas on prims: a profile asking for the sensors domain then found none.)
+TEST(Overlay, ARobotFileWithAnOverlayHasTheOverlaysSensors) {
+    auto robot = loadModel(LAGRANGE_TEST_QUAD_URDF);
+    ASSERT_TRUE(robot) << robot.error();
+    ASSERT_TRUE(stage::applyOverlay(*robot, LAGRANGE_TEST_QUAD_OVERLAY));
+    auto usd = loadModel(LAGRANGE_TEST_QUAD_USDA);
+    ASSERT_TRUE(usd) << usd.error();
+    const World::Sensors& a = robot->world.sensors;
+    const World::Sensors& b = usd->world.sensors;
+    ASSERT_EQ(a.names.size(), 4U);
+    ASSERT_EQ(a.names.size(), b.names.size());
+    for (std::size_t i = 0; i < a.names.size(); ++i) {
+        const auto k =
+            static_cast<std::size_t>(std::ranges::find(b.names, a.names[i]) - b.names.begin());
+        ASSERT_LT(k, b.names.size()) << a.names[i];
+        EXPECT_EQ(a.type[i], b.type[k]) << a.names[i];
+        EXPECT_DOUBLE_EQ(a.rateHz[i], b.rateHz[k]) << a.names[i];
+        EXPECT_EQ(a.settings[i], b.settings[k]) << a.names[i];
+        EXPECT_EQ(robot->world.bodies.names[a.body[i].index],
+                  usd->world.bodies.names[b.body[k].index]);
+    }
+    // Written to USD and read back: each sensor once.
+    const std::filesystem::path out =
+        std::filesystem::path(::testing::TempDir()) / "quad_x500_overlay_sensors.usda";
+    ASSERT_TRUE(stage::writeStage(*robot, out.string()));
+    auto back = loadModel(out.string());
+    ASSERT_TRUE(back) << back.error();
+    EXPECT_EQ(back->world.sensors.names.size(), 4U);
+}
+
 TEST(Overlay, TheImportedAmrGainsThePowerSystemOfTheHandWrittenSample) {
     // Roadmap 0.2-G2: the URDF with the overlay applied, the hand-written USD sample, and the
     // URDF converted with lagrange_import --overlay carry the same motors, battery, bus and load.

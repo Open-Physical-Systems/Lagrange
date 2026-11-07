@@ -34,6 +34,14 @@ Each sensor has `ground_truth` (the substitute) and one or more physical levels.
 | `sensor_model` | Adds exposure (scene radiance → electrons with exposure time and gain), photon shot noise and read noise, quantisation to bit depth, lens distortion (plumb-bob or equidistant), vignetting, motion blur from per-pixel velocity, rolling shutter by rendering row bands at different times |
 | `rt` (Tier 2) | Ray-traced shadows and reflections for the above |
 
+**Colour look.** On a GPU a camera's colour comes from the viewport's realistic renderer: sun shadows,
+sky, materials, photo textures, water, and the season (`--camera-look realistic|simple`,
+`--camera-season`). A software device keeps the simple shading. Depth and instance ids are the same
+either way (`RasterLook` test in `test_raster`). It is drawn by eye, not calibrated: exposure and
+colour response are not those of any real camera, and rain and snow are in the picture only when the
+season says so, separately from the `--weather` fog veil. With the sedan and the full town on an Iris
+Xe the run went at about 1.3× real time, against 1.4× with the simple look.
+
 Status of `sensor_model` in v0.6 (`modules/sensors/include/lagrange/sensors/CameraModel.hpp`, CPU
 after the raster render, every tier with a Vulkan device): each part runs when
 `CameraSensorAPI_1` asks for it. Lens distortion (plumb_bob, equidistant) by remapping a wider
@@ -48,6 +56,48 @@ within 3 %, cos⁴θ, the skew of a vertical line under a pan, exposure and auto
 sedan's front camera uses all of it. Owed: motion blur, a light model (absolute radiance),
 colour filter array and demosaicing, translation in the rolling shutter, importing SDFormat
 `<distortion>` and `<noise>`.
+
+**Thermal camera** (after v1.0, `ThermalCameraAPI_1` on a camera,
+`modules/sensors/include/lagrange/sensors/ThermalCamera.hpp`). A camera with it draws the same
+raster frame, and then reads each pixel's instance id as a surface of known temperature and
+emissivity:
+
+- a prim under a `ThermalAPI_1` node (the longest path that holds it), else a node on the same
+  body, is at that node's `thermal/<n>/temperature`, with its `thermal:emissivity`;
+- a person (`HumanAPI_1`) is at Fanger's mean skin temperature in comfort while walking slowly,
+  t_sk = 35.7 − 0.0275·M °C at M = 116 W/m² (Thermal Comfort, 1970): 32.5 °C, emissivity 0.98
+  (Steketee 1973). Clothing, cooler than skin, is not told apart;
+- everything else is at the site's ambient temperature, and so reads it whatever its emissivity;
+- where nothing is hit, the clear sky: T_sky = 0.0552·T_air^1.5 (Swinbank 1963), 16 K below 20 °C
+  air.
+
+What a surface sends is ε·B(T) + (1 − ε)·B(T_amb), with B Planck's radiance over the camera's band
+(`sensor:thermal:bandMin`/`bandMax`, 8–14 µm by default; the exact series of Widger and Woodall
+1976), and the camera reports the temperature a black body would need for it, as radiometric
+cameras do. Each pixel then gets Gaussian noise of `sensor:thermal:netd` (1 σ, Philox). Outputs:
+`sensor/<n>/temperature` (r32f, K) and `image`, the temperatures in a palette
+(`sensor:thermal:palette` white_hot, black_hot or ironbow, over `displayMin`/`displayMax` or each
+frame's range, at least 4 K); depth and instance are as for any camera. ROS: `/<name>/temperature/image_raw`
+(32FC1, K) beside `/<name>/image_raw`. URDF `<sensor type="thermal">` or `"thermal_camera"`, and
+SDFormat's `thermal_camera`, give a thermal camera with the defaults. It needs the site's
+temperature (`--ambient-temperature`, `--weather temperature=` or the profile's
+`thermal.ambient_temperature`) and refuses to start without it. Sample:
+`assets/robots/amr_diffdrive/amr_diffdrive_thermal.usda`.
+
+Checked in `test_thermal_camera`: the black-body fractions of Incropera et al. (Fundamentals of
+Heat and Mass Transfer, Table 12.1) at four λT within 1·10⁻⁵ (the table's C₂ is 14 388 µm·K,
+CODATA's 14 387.77), the band radiance against a direct integration of Planck's law within 10⁻⁹
+and Stefan–Boltzmann over all wavelengths within 10⁻⁶, the apparent temperature of a grey
+surface, Swinbank's sky, and a run that sees a 350 K node with ε 0.95 at its apparent temperature
+(about 2.6 K low), the air and the sky, with the noise at its NETD. Not modelled: the atmosphere's
+own absorption and emission (small over tens of metres in clear air, not in fog; the visible fog
+veil is left off for thermal cameras), the sun's heating of surfaces and the ground, the sky
+reflected in upward faces (surfaces reflect the ambient air), clouds, the optics' blur and the
+detector's fixed-pattern noise and drift. There is no measured thermal image to compare with.
+
+![The sample AMR's thermal camera on open ground: a person at skin temperature, 32.5 °C (white),
+the ground at the 20 °C air (red), the clear sky at 3.7 °C (black), ironbow
+palette](../../imgs/thermal-camera-person.png)
 
 **Radar**: ray-launched returns with radar cross-section from `sensmat:radarCrossSectionDensity`,
 radial velocity from relative motion, a range–Doppler–azimuth detection list after a
@@ -88,10 +138,22 @@ sky directions as a stand-in for satellites), optional `urban` multipath bias.
 evaluated at the geo-origin; the model coefficients are a data file with an epoch), rotated into
 the body frame, soft- and hard-iron distortion, noise, plus `emi/{p}/b_field`.
 
-**Timing** (all sensors, from `SensorAPI`): a sample is taken at `k / rate` plus jitter
-(Gaussian, truncated), and delivered `latency` later. The message timestamp is the sampling
-time. Sampling instants are aligned to the scheduler tick that follows them; the alignment error
-is at most one base tick and is reported in the sensor's metadata signal.
+**Timing** (all sensors, from `SensorAPI`), as built: a sample is taken on the scheduler at
+`k / rate`, and its ROS message goes out `latency` plus jitter later (Gaussian, cut at 3σ, never
+out of order, on the simulation's clock), still stamped with the sampling time. Set it with
+`sensor:latency` and `sensor:jitter`, `<latency>` and `<jitter>` in a URDF's `<gazebo>` sensor,
+`--sensor-timing NAME=LATENCY[,JITTER]` or the run file's `sensor_timing:`. The sensor's own
+`sensor/<n>/<q>` stay on time as the ground truth, as do `/ground_truth` and `/tf`; every other
+consumer can have what the robot gets: `lagrange_sensors`' delay line (`sensors::DelayLine`, only
+for sensors with a delay) writes `sensor/<n>/delayed/<q>` for each of its numbers and images, and
+`sensor/<n>/delayed/stamp` (s), the sampling time of what is there now, -1 before the first
+arrives. Plugins read those like any signal, recordings and Python get them, and the viewer's
+lidar points and camera image are the delayed ones. The delay line ticks at 1 kHz, so a delay
+rounds up to the next millisecond, and a signal commits only when a value arrives (`SignalBus::hold`).
+Each sample's delay is a function of the run seed, the sensor and
+the sampling time, so runs and restored checkpoints repeat; the ROS bridge draws its own jitter
+(same latency and spread, other numbers) and goes out on its publish tick. Sampling instants do
+not jitter.
 
 ## 3. Signals
 
@@ -248,3 +310,43 @@ they are left out and the server logs why.
 Not yet: GNSS outages, multipath and latency; crustal field, hard- and soft-iron effects; the
 geoid (ellipsoidal height stands for altitude above mean sea level); the site's weather instead of
 the standard day (v0.5); URDF and SDFormat `<sensor type="gps|magnetometer|altimeter">` import.
+
+## Lidar intensity from materials (as built)
+
+`sensor/<name>/intensities` holds each beam's intensity next to `ranges`; it reaches `/scan`'s
+`intensities`, `/points`' `intensity` and the viewer. It is the reflected power relative to a white
+wall head-on at 1 m, capped at 1: `ρ·((1−s)·cos θ + s·lobe(θ))·(1 m / r)²`, with ρ the reflectivity at the
+lidar's wavelength (905 or 1550 nm), θ the incidence angle from the true surface normal, s the
+specular fraction and `lobe` a mirror's, 2° wide (illustrative). A retroreflector gives `100·ρ·(1 m / r)²` at any angle.
+A beam passes a surface with `transmission` by chance (seeded per step and beam; CPU only: the GPU tier gets the first hit).
+A surface with a material gives no return when its power is under what the lidar needs at its
+range limit for a target of `max_range_reflectivity` (default 0.1), so water and dark surfaces drop
+out at a slant or from far. Surfaces with no material keep ρ = 0.5 and always return.
+
+Give a surface a material with `SensorMaterialAPI_1` on a collider prim, an ancestor or its bound
+material (`sensmat:preset`, then any authored attribute), or in URDF:
+
+```xml
+<gazebo reference="deck">
+  <sensor_material preset="asphalt" reflectivity_905="0.12"/>
+</gazebo>
+```
+
+Presets (`default`, `water`, `glass`, `mirror`, `asphalt`, `concrete`, `white_paint`, `black_rubber`,
+`retroreflector`) are illustrative orders of magnitude, not measurements. The formula is tested against
+its closed form; a real lidar's intensity channel has not been compared with it.
+
+## Lidar motion distortion (as built)
+
+A rotating lidar's columns fire one after another through the scan, so a moving robot's scan skews.
+Column `c` of `n` fires at the fraction `(c + 1) / n` of the scan, from the sensor's pose at that moment,
+interpolated between the last scan's end and this one's (linear position, slerp). So a motion that
+changes within one scan is smoothed over it. On by default on both lidar tiers
+(`sensor:lidar:motionDistortion`, or `<ray><motion_distortion>0</motion_distortion></ray>` in a URDF's
+`<gazebo>` sensor; an SDFormat file cannot turn it off yet). Only the sensor's motion counts: other bodies stay where they are at the scan's end, and
+every lidar sweeps once per output, whatever `sensor:lidar:rotationRate` says. The first scan of a run has
+no motion to use.
+
+So that the scan can be undone, `/scan` is stamped when its first column fired, with `time_increment`
+and `scan_time`, and `/points` the same with a `time` field (float32, s after the stamp). With distortion off,
+the stamp is the scan's end and those are zero (`scan_time` stays).

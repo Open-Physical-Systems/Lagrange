@@ -39,6 +39,18 @@ struct CameraScene {
         std::array<float, 3> scale{1, 1, 1};
         std::array<float, 4> color{0.8F, 0.8F, 0.8F, 1.0F};
         std::uint32_t prim{0};  // scene prim index: the instance id in sensor/<n>/instance
+        std::string path;       // the scene prim's, for the thermal camera's nodes
+        // The realistic look.
+        float metallic{0.0F};
+        float roughness{0.6F};
+        float pattern{0.0F};
+        std::array<float, 3> emissive{0.0F, 0.0F, 0.0F};
+        bool ground{false};
+        bool water{false};
+        std::array<float, 6> box{};
+        // A part that turns on its body by a signal (ScenePrim::hinge); empty: rigid.
+        std::string hinge;
+        std::array<double, 3> hingeAxis{0.0, 1.0, 0.0};
     };
     std::shared_ptr<gpu::RasterScene> raster;
     std::vector<Drawable> drawables;
@@ -48,7 +60,8 @@ struct CameraScene {
 /// Returns nullptr with a reason in `error` when there is no usable Vulkan device.
 [[nodiscard]] std::shared_ptr<CameraScene> createCameraScene(const Model& model,
                                                              const std::string& preferredDevice,
-                                                             std::string& error);
+                                                             std::string& error,
+                                                             gpu::RasterLook look = {});
 
 /// The ICAO standard atmosphere in the troposphere (ICAO Doc 7488/3): static pressure (Pa) and
 /// temperature (K) at `altitudeM` above mean sea level, up to 11 km. What the barometer reads.

@@ -139,9 +139,30 @@ bool geomOf(const mjModel& m, int g, Geom& geom, Model& model, std::map<int, std
             geom.size = {1.0, 1.0, 1.0};  // the compiled vertices are already scaled
             return true;
         }
+        case mjGEOM_HFIELD: {
+            const int h = m.geom_dataid[g];
+            if (h < 0) {
+                return false;
+            }
+            HeightField field;
+            field.columns = static_cast<std::uint32_t>(m.hfield_ncol[h]);
+            field.rows = static_cast<std::uint32_t>(m.hfield_nrow[h]);
+            const mjtNum* extent = m.hfield_size + 4 * static_cast<std::ptrdiff_t>(h);
+            field.cellX = 2.0 * extent[0] / std::max<int>(m.hfield_ncol[h] - 1, 1);
+            field.cellY = 2.0 * extent[1] / std::max<int>(m.hfield_nrow[h] - 1, 1);
+            const float* data = m.hfield_data + m.hfield_adr[h];
+            field.heights.reserve(static_cast<std::size_t>(field.columns) * field.rows);
+            for (std::uint32_t i = 0; i < field.columns * field.rows; ++i) {
+                field.heights.push_back(data[i] * extent[2]);  // data is 0 to 1
+            }
+            geom.type = GeomType::HeightField;
+            geom.mesh = static_cast<std::uint32_t>(d.heightFields.size());
+            d.heightFields.push_back(std::move(field));
+            return true;
+        }
         default:
-            detail::note(model, "geom '" + nameOf(m, mjOBJ_GEOM, g) +
-                                    "' is a height field or SDF, which is not supported");
+            detail::note(
+                model, "geom '" + nameOf(m, mjOBJ_GEOM, g) + "' is an SDF, which is not supported");
             return false;
     }
 }
@@ -275,6 +296,8 @@ Expected<Model, std::string> importMjcf(const std::string& path, const ImportOpt
             }
             joint.actuated = actuated[j];
             joint.effort = effort[j];
+            joint.damping = m.dof_damping[m.jnt_dofadr[j]];
+            joint.friction = m.dof_frictionloss[m.jnt_dofadr[j]];
             const int address = m.jnt_qposadr[j];
             if ((joint.type == JointType::Revolute || joint.type == JointType::Continuous ||
                  joint.type == JointType::Prismatic) &&
@@ -283,6 +306,32 @@ Expected<Model, std::string> importMjcf(const std::string& path, const ImportOpt
                                         "' has a reference position; its rest pose is at ref");
             }
             d.joints.push_back(std::move(joint));
+        }
+    }
+
+    // Equalities: a joint copying another is a mimic; what else ties bodies is not held.
+    for (int e = 0; e < static_cast<int>(m.neq); ++e) {
+        const mjtNum* data = m.eq_data + static_cast<std::ptrdiff_t>(mjNEQDATA) * e;
+        const std::string name = nameOf(m, mjOBJ_EQUALITY, e);
+        if (m.eq_active0[e] == 0) {
+            continue;  // off in the file
+        }
+        if (m.eq_type[e] != mjEQ_JOINT || m.eq_obj2id[e] < 0) {
+            detail::note(model,
+                         "equality '" + name + "' is not a joint copying a joint; it is not used");
+            continue;
+        }
+        if (data[2] != 0.0 || data[3] != 0.0 || data[4] != 0.0) {
+            detail::note(model, "equality '" + name + "' is a polynomial; its linear part is used");
+        }
+        const std::string copy = nameOf(m, mjOBJ_JOINT, m.eq_obj1id[e]);
+        for (JointDesc& joint : d.joints) {
+            if (joint.name == copy) {
+                joint.mimic = nameOf(m, mjOBJ_JOINT, m.eq_obj2id[e]);
+                joint.mimicOffset = data[0];
+                joint.mimicMultiplier = data[1];
+                joint.actuated = false;
+            }
         }
     }
 
@@ -310,8 +359,22 @@ Expected<Model, std::string> importMjcf(const std::string& path, const ImportOpt
         if (visible) {
             VisualDesc visual;
             visual.geom = geom;
+            if (geom.type == GeomType::HeightField) {
+                d.meshes.push_back(flatMesh(d.heightFields[geom.mesh].triangles()));
+                visual.geom.type = GeomType::Mesh;
+                visual.geom.mesh = static_cast<std::uint32_t>(d.meshes.size() - 1);
+                visual.geom.size = {1.0, 1.0, 1.0};
+            }
             visual.material = materialId >= 0 ? nameOf(m, mjOBJ_MATERIAL, materialId) : "";
             visual.rgba = {rgba[0], rgba[1], rgba[2], rgba[3]};
+            if (materialId >= 0) {
+                // MuJoCo's shininess is 0 (dull) to 1; emission a multiple of the colour.
+                SurfaceLook look;
+                look.roughness = 1.0F - m.mat_shininess[materialId];
+                const float glow = m.mat_emission[materialId];
+                look.emissive = {rgba[0] * glow, rgba[1] * glow, rgba[2] * glow};
+                visual.look = look;
+            }
             link.visuals.push_back(visual);
         }
     }

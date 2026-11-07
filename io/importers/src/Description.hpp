@@ -8,16 +8,27 @@
 #include <array>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace lagrange::importers::detail {
 
-enum class GeomType : std::uint8_t { Box, Sphere, Capsule, Cylinder, Plane, Ellipsoid, Mesh };
+enum class GeomType : std::uint8_t {
+    Box,
+    Sphere,
+    Capsule,
+    Cylinder,
+    Plane,
+    Ellipsoid,
+    Mesh,
+    HeightField
+};
 
 /// A shape. Sizes follow ShapeType (MuJoCo's conventions): box half extents, sphere {radius},
 /// capsule and cylinder {radius, half length}, plane {half x, half y} (0 for unbounded),
-/// ellipsoid {radii}. A mesh is Description::meshes[mesh], scaled by `size`.
+/// ellipsoid {radii}. A mesh is Description::meshes[mesh], scaled by `size`; a height field is
+/// Description::heightFields[mesh], static and only ever a collider.
 struct Geom {
     GeomType type{GeomType::Box};
     std::array<double, 3> size{};
@@ -29,6 +40,7 @@ struct VisualDesc {
     Geom geom;
     std::string material;
     std::array<float, 4> rgba{0.70F, 0.70F, 0.72F, 1.0F};
+    std::optional<SurfaceLook> look{};  // the file's, if it says
 };
 
 struct CollisionDesc {
@@ -42,6 +54,8 @@ struct SensorDesc {
     Pose pose;  // in the link frame
     double rateHz{10.0};
     std::map<std::string, double, std::less<>> settings;  // as World::Sensors::settings
+    std::string kind;  // a custom sensor's (RFC 0008 §3), as World::Sensors::kind
+    std::map<std::string, std::string, std::less<>> text;  // its text parameters
 };
 
 struct LinkDesc {
@@ -67,6 +81,10 @@ struct JointDesc {
     double effort{0.0};                         // N·m or N; 0 for unlimited
     double velocity{0.0};                       // rad/s or m/s; 0 for unlimited
     bool actuated{false};
+    double damping{0.0};   // N·m·s/rad or N·s/m
+    double friction{0.0};  // N·m or N
+    std::string mimic;     // the joint this one copies, or empty; takes no commands
+    double mimicMultiplier{1.0}, mimicOffset{0.0};
 };
 
 /// One model: a top prim with its links. A link that is no joint's child is welded to the world;
@@ -77,6 +95,7 @@ struct Description {
     std::vector<LinkDesc> links;
     std::vector<JointDesc> joints;
     std::vector<TriMesh> meshes;
+    std::vector<HeightField> heightFields;
 };
 
 /// Adds a description to a model: one body per link, its frame at the anchor of the link's joint

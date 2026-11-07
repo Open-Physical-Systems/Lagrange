@@ -1,0 +1,56 @@
+# The documentation site: docs/ built by tools/docs/build.sh (Sphinx, docs/conf.py) and published
+# to GitHub Pages at https://open-physical-systems.github.io/Lagrange. Pull requests that touch
+# the docs build it with warnings as errors; a release (a push to main) publishes it, so the site
+# shows the released version. Needs the repository
+# public (or a plan with Pages for private repositories) and Settings → Pages → Source: GitHub
+# Actions.
+name: docs
+on:
+  push:
+    branches: [main]
+    paths: [docs/**, tools/docs/**, .github/workflows/docs.yml]
+  pull_request:
+    branches: [dev]
+    paths: [docs/**, tools/docs/**, .github/workflows/docs.yml]
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: pages
+  cancel-in-progress: false  # never stop a deploy halfway
+
+jobs:
+  build:
+    name: build the site
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: Build, warnings as errors
+        run: tools/docs/build.sh --check
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+        if: github.event_name != 'pull_request'
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: github.event_name != 'pull_request'
+        with:
+          path: docs/_build/html
+
+  deploy:
+    name: publish to GitHub Pages
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

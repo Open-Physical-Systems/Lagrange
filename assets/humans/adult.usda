@@ -1,0 +1,13 @@
+#usda 1.0
+(
+    defaultPrim = "adult"
+    doc = "A person standing (RFC 0009): lagrange spawn assets/humans/adult.usda --at 3,0"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "adult" (
+    prepend apiSchemas = ["HumanAPI_1"]
+)
+{
+}

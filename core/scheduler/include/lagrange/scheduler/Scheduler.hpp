@@ -135,6 +135,10 @@ public:
     /// Steps until now() >= t.
     Status stepUntil(SimTime t);
     [[nodiscard]] SimTime now() const { return now_; }
+    /// Starts a freshly wired run at `t` instead of 0 (a whole number of base ticks), with every
+    /// module's step count as if it had stepped since 0: a run rebuilt mid-way (robots spawned
+    /// or deleted) keeps its clock. Only before the first step.
+    Status startAt(SimTime t);
     [[nodiscard]] std::uint64_t tick() const { return tick_; }
 
     /// All modules' state, the bus and time. Fails if a module cannot save its state.

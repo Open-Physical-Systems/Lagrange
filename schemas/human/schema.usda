@@ -1,0 +1,59 @@
+#usda 1.0
+(
+    """Lagrange human schemas (RFC 0009). Codeless. HumanAPI_1 makes a prim a person who walks:
+    the loader expands it into kinematic segments, and the humans domain moves them."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeHuman"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "HumanAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A person (RFC 0009), on an Xform prim whose origin is on the ground between the feet,
+    +x forward."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double human:height = 1.75 (
+        lagrangeUnit = "m"
+        doc = "Stature: every segment is a fraction of it."
+    )
+    double human:walkSpeed = 1.34 (
+        lagrangeUnit = "m/s"
+        doc = "Preferred walking speed (Weidmann 1993)."
+    )
+    uniform token human:behavior = "stand" (
+        allowedTokens = ["stand", "waypoints", "wander"]
+        doc = "What the person does."
+    )
+    double[] human:waypoints = [] (
+        lagrangeUnit = "m"
+        doc = "x, y per waypoint, world ENU, for behavior waypoints."
+    )
+    int human:loop = 1 (
+        lagrangeUnit = "1"
+        doc = "1: back to the first waypoint after the last; 0: stay at the last."
+    )
+    double human:dwell = 0 (
+        lagrangeUnit = "s"
+        doc = "Pause at each waypoint."
+    )
+    double human:wanderRadius = 5 (
+        lagrangeUnit = "m"
+        doc = "How far from the start behavior wander goes."
+    )
+    int human:seed = 0 (
+        lagrangeUnit = "1"
+        doc = "Combined with the run's seed, for behavior wander."
+    )
+}

@@ -406,6 +406,58 @@ def test_electrical_workspace_draws_the_schematic_and_scopes(socket_dir):
     assert yellow > 1500, f"bus and wires not drawn ({yellow} pixels)"
 
 
+def test_circuit_tab_draws_the_rails_and_wires(socket_dir):
+    """04-electrical, Circuit (proposed): the same nets with their symbols, in its own tab."""
+    image = socket_dir / "circuit.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "60",
+            "--size",
+            "1600x1000",
+            "--workspace",
+            "electrical",
+            "--panel",
+            "Circuit",
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout.strip().splitlines()[-1])["validation_errors"] == 0
+    _width, _height, rows = read_png(image)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    yellow = sum(1 for r, g, b, _a in pixels if r > 235 and 185 < g < 215 and 50 < b < 90)
+    assert yellow > 1000, f"rails and wires not drawn ({yellow} pixels)"
+
+
+def test_overlay_tab_draws_wires_over_the_view(socket_dir):
+    """04-electrical, 3D overlay: the robot with a wire from each part to its bus."""
+    image = socket_dir / "overlay.png"
+    with ServerThread(str(socket_dir / "s.sock")) as server:
+        result = run_viewer(
+            "--connect",
+            f"unix:{server.endpoint.address}",
+            "--frames",
+            "60",
+            "--size",
+            "1600x1000",
+            "--workspace",
+            "electrical",
+            "--panel",
+            "3D overlay",
+            "--screenshot",
+            str(image),
+        )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout.strip().splitlines()[-1])["validation_errors"] == 0
+    _width, _height, rows = read_png(image)
+    pixels = [row[i : i + 4] for row in rows for i in range(0, len(row), 4)]
+    yellow = sum(1 for r, g, b, _a in pixels if r > 235 and 185 < g < 215 and 50 < b < 90)
+    assert yellow > 50, f"no wires over the view ({yellow} pixels)"
+
+
 def test_launcher_is_shown_without_a_server(socket_dir):
     """Design 01-launcher: the first screen needs no server and makes no connection."""
     image = socket_dir / "launcher.png"
@@ -687,6 +739,42 @@ def test_collision_shading_draws_the_simulators_colliders(socket_dir):
     # Lit faces of the rigid-body colour: grey-blue, blue the strongest.
     shapes = sum(1 for r, g, b, _a in pixels if b > 120 and b > r + 15 and g > r and r > 60)
     assert shapes > 2000, f"no colliders drawn ({shapes} pixels)"
+
+
+def test_realistic_shading_draws_sky_and_water(socket_dir):
+    """Shading::Realistic on any device: every pass runs with no validation error, above the horizon
+    is a sky and below it water, both blue, the water's top darker than the sky's."""
+    socket = socket_dir / "real.sock"
+    server = subprocess.Popen(
+        [local_server(), "--no-ros", "--robot", "none", "--world", "none",
+         "--water", "0,0,1,600,600,1", "--listen", f"unix:{socket}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )  # fmt: skip
+    image = socket_dir / "realistic.png"
+    try:
+        result = run_viewer(
+            "--connect", f"unix:{socket}", "--frames", "6", "--size", "1600x1000",
+            "--workspace", "scene", "--shading", "realistic", "--camera", "0,0,1,8,-145,6",
+            "--screenshot", str(image),
+        )  # fmt: skip
+    finally:
+        server.terminate()
+        server.wait(10)
+    assert result.returncode == 0, result.stderr
+    stats = json.loads(result.stdout.strip().splitlines()[-1])
+    assert stats["validation_errors"] == 0, result.stderr
+    _width, _height, rows = read_png(image)
+    # The middle of the viewport, a column: sky in its upper part, water in its lower.
+    column = 800 * 4
+    sky = [rows[y][column : column + 4] for y in range(200, 240)]
+    water = [rows[y][column : column + 4] for y in range(560, 620)]
+    for r, g, b, _a in sky:
+        assert b > r, f"not a sky: {r, g, b}"
+    mean = [sum(p[k] for p in water) / len(water) for k in range(3)]
+    assert mean[2] > mean[0] + 10, f"not water: {mean}"
+    spread = max(sum(p[:3]) for p in water) - min(sum(p[:3]) for p in water)
+    assert spread > 5, "flat: no waves"
 
 
 def test_thermal_shading_colours_the_simulators_robot_by_temperature(socket_dir):

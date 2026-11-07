@@ -29,8 +29,36 @@ right 340 px : "Inspector" | "History"
 - Wires: yellow; **width ∝ |I|**; dashes animate along the current direction at a speed
   proportional to |I|. Regen current is drawn blue with reversed arrows. Current labels sit on
   the wires. Motors show their mechanical output (τ → wheel) in rigid-body gray.
-- Header: "Auto-layout", "Export SPICE" (ngspice netlist), "Export Modelica".
-- The 3D overlay tab tints wires and motors in the viewport by current.
+- Header: "Auto-layout", "Export SPICE" (ngspice netlist), "Export Modelica". Export SPICE writes
+  `<stage>.cir` in the viewer's config directory, its tooltip saying where; it is disabled, with the
+  reason, while the circuit cannot be written. Export Modelica stays disabled: it needs the server.
+- The 3D overlay tab tints wires and motors in the viewport by current. A motor's tint is on the
+  link it turns, and what that link carries; a wire is a line over the image from the bus to that
+  link, in the wire colours and width (robots have no wire geometry). A part with no place of its
+  own is listed in the corner with its current. Other meshes keep their colour, dimmed. Dragging
+  orbits.
+- Dragging a node moves it, kept per stage in the viewer's config directory; Auto-layout puts them
+  back, disabled while none has moved.
+
+### Circuit (proposed; the owner asked for it, 2026-11-01)
+- A tab next to Schematic, not in the reference image. The same power system as a circuit
+  diagram: each bus is a yellow rail with a branch per component hanging down to a ground symbol,
+  batteries first, then the bus's capacitor, then what it feeds.
+- Symbols in `t1`: a battery (long plate positive) under a resistor for its r0, RC pairs side by
+  side, a capacitor, a resistor, a circled M for a motor, a circled P for a constant-power load.
+  Wires in the electrical colour, blue when the current is reversed. No animation.
+- Beside each branch in sans 600 its name, in mono its current, then its values one per line. Above
+  the rail in mono its name and voltage, then its limits.
+- Clicking a branch or bus selects that prim, as the Schematic does.
+
+### Netlist (the design names this tab and shows nothing of it; proposed, the owner asked for it)
+- Starts with a copy of the robot's circuit. Toolbar: From this robot, New, + Bus, + Battery, + Resistor, + Power load, + Motor, + DC-DC, Remove.
+- 300 px form of the selected part or bus's values (PropertyEdit), then its drawing as in Circuit.
+  Clicking a part or a bus's name selects it. Parts hang on buses: there are no free wires, so only
+  what the importer can simulate (formats.md §9.1) can be drawn.
+- Below, the netlist as read-only mono text, the file path, Save (Overwrite when the file exists,
+  disabled with the first problem beside it while the circuit cannot be simulated). It writes a
+  file on this machine; the running simulation does not change.
 
 ### Scopes (ImPlot; see Signals for the full engine)
 - Stacked plots sharing the X axis: `bus/dc_48v/voltage`, `motor/*/iq` (left and right),
@@ -42,7 +70,8 @@ right 340 px : "Inspector" | "History"
 
 ### Inspector (battery shown)
 - State cards (2×2): state of charge with a meter, terminal V and OCV with sag, current and
-  power, cell temperature and state of health.
+  power, cell temperature and state of health. State of health is not modelled, so that card shows the cell
+  temperature alone, or that the thermal domain is off.
 - An OCV(SoC) mini plot with the current operating point in accent.
 - `BatteryAPI_v1` fields: capacity, R0, R1·C1, R2·C2, behaviorModel FMU, parameter source.
 - Footer: "Plot all battery signals", "Open FMU".

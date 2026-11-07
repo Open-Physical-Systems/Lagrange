@@ -39,5 +39,6 @@ message Envelope {
     EnvironmentState environment = 44;
     FieldSlice field_slice = 45;
     WorldState world = 46;
+    FieldVolume field_volume = 47; // added after 1.0
   }
 }

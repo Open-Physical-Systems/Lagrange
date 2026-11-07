@@ -4,10 +4,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <numbers>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace lagrange {
 
@@ -25,6 +27,265 @@ std::uint32_t vertexCount(const TriMesh& mesh) {
 }
 
 }  // namespace
+
+namespace {
+
+using Point = std::array<double, 3>;
+
+Point minus(const Point& a, const Point& b) {
+    return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
+}
+Point crossOf(const Point& a, const Point& b) {
+    return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+}
+double dotOf(const Point& a, const Point& b) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+struct HullFace {
+    std::array<std::uint32_t, 3> v;
+    Point normal;  // unit, outward
+    double offset;
+};
+
+/// The farthest vertex in each of kMaxHullPoints directions spread over the sphere (a Fibonacci
+/// lattice), in the order of the vertices. Measured in the points' bounding box scaled to a cube,
+/// so that a flat shape keeps its faces as well as its rim.
+std::vector<Point> farthestPoints(const std::vector<Point>& points) {
+    Point lo = points.front();
+    Point hi = points.front();
+    for (const Point& p : points) {
+        for (std::size_t k = 0; k < 3; ++k) {
+            lo.at(k) = std::min(lo.at(k), p.at(k));
+            hi.at(k) = std::max(hi.at(k), p.at(k));
+        }
+    }
+    Point inverse{};
+    for (std::size_t k = 0; k < 3; ++k) {
+        inverse.at(k) = hi.at(k) > lo.at(k) ? 1.0 / (hi.at(k) - lo.at(k)) : 0.0;
+    }
+    const auto reach = [&](const Point& p, const Point& direction) {
+        return (p[0] - lo[0]) * inverse[0] * direction[0] +
+               (p[1] - lo[1]) * inverse[1] * direction[1] +
+               (p[2] - lo[2]) * inverse[2] * direction[2];
+    };
+    const double golden = std::numbers::pi * (3.0 - std::sqrt(5.0));
+    std::vector<bool> keep(points.size(), false);
+    for (std::size_t k = 0; k < kMaxHullPoints; ++k) {
+        const double z = 1.0 - 2.0 * (static_cast<double>(k) + 0.5) / kMaxHullPoints;
+        const double r = std::sqrt(1.0 - z * z);
+        const double a = golden * static_cast<double>(k);
+        const Point direction{r * std::cos(a), r * std::sin(a), z};
+        std::size_t best = 0;
+        for (std::size_t i = 1; i < points.size(); ++i) {
+            if (reach(points[i], direction) > reach(points[best], direction)) {
+                best = i;
+            }
+        }
+        keep[best] = true;
+    }
+    std::vector<Point> out;
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        if (keep[i]) {
+            out.push_back(points[i]);
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
+std::optional<ConvexHull> convexHullOf(const TriMesh& mesh, const std::array<double, 3>& scale) {
+    std::vector<Point> points;
+    points.reserve(mesh.positions.size() / 3);
+    for (std::size_t i = 0; i + 2 < mesh.positions.size(); i += 3) {
+        points.push_back({mesh.positions[i] * scale[0], mesh.positions[i + 1] * scale[1],
+                          mesh.positions[i + 2] * scale[2]});
+    }
+    // A mesh repeats its vertices per face: once each, keeping the first's place.
+    std::vector<Point> sorted = points;
+    std::sort(sorted.begin(), sorted.end());
+    sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+    if (sorted.size() < 4) {
+        return std::nullopt;
+    }
+    std::vector<bool> seen(sorted.size(), false);
+    std::vector<Point> unique;
+    unique.reserve(sorted.size());
+    for (const Point& p : points) {
+        const auto at = static_cast<std::size_t>(std::lower_bound(sorted.begin(), sorted.end(), p) -
+                                                 sorted.begin());
+        if (!seen[at]) {
+            seen[at] = true;
+            unique.push_back(p);
+        }
+    }
+    points = std::move(unique);
+    if (points.size() > kMaxHullPoints) {
+        points = farthestPoints(points);
+    }
+    // A first tetrahedron, of the farthest points: along x, from that line, from that plane.
+    std::size_t a = 0;
+    std::size_t b = 0;
+    for (std::size_t i = 1; i < points.size(); ++i) {
+        a = points[i][0] < points[a][0] ? i : a;
+        b = points[i][0] > points[b][0] ? i : b;
+    }
+    double extent = 0.0;
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        const Point d = minus(points[i], points[a]);
+        const double length = dotOf(d, d);
+        if (length > extent) {
+            extent = length;
+            b = i;
+        }
+    }
+    extent = std::sqrt(extent);
+    const double tolerance = 1e-6 * extent;
+    if (extent <= 0.0) {
+        return std::nullopt;
+    }
+    std::size_t c = a;
+    double farthest = 0.0;
+    const Point ab = minus(points[b], points[a]);
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        const Point across = crossOf(ab, minus(points[i], points[a]));
+        const double area = std::sqrt(dotOf(across, across)) / extent;
+        if (area > farthest) {
+            farthest = area;
+            c = i;
+        }
+    }
+    if (farthest <= tolerance) {
+        return std::nullopt;
+    }
+    Point up = crossOf(ab, minus(points[c], points[a]));
+    const double upLength = std::sqrt(dotOf(up, up));
+    up = {up[0] / upLength, up[1] / upLength, up[2] / upLength};
+    std::size_t d = a;
+    farthest = 0.0;
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        const double height = std::abs(dotOf(up, minus(points[i], points[a])));
+        if (height > farthest) {
+            farthest = height;
+            d = i;
+        }
+    }
+    if (farthest <= tolerance) {
+        return std::nullopt;
+    }
+    const Point inside{(points[a][0] + points[b][0] + points[c][0] + points[d][0]) / 4.0,
+                       (points[a][1] + points[b][1] + points[c][1] + points[d][1]) / 4.0,
+                       (points[a][2] + points[b][2] + points[c][2] + points[d][2]) / 4.0};
+    const auto face = [&](std::uint32_t p, std::uint32_t q, std::uint32_t r) {
+        Point n = crossOf(minus(points[q], points[p]), minus(points[r], points[p]));
+        const double length = std::sqrt(dotOf(n, n));
+        if (length > 0.0) {
+            n = {n[0] / length, n[1] / length, n[2] / length};
+        }
+        HullFace f{{p, q, r}, n, dotOf(n, points[p])};
+        if (dotOf(n, inside) > f.offset) {  // wound inward: turn it round
+            f.v = {p, r, q};
+            f.normal = {-n[0], -n[1], -n[2]};
+            f.offset = -f.offset;
+        }
+        return f;
+    };
+    const auto ia = static_cast<std::uint32_t>(a);
+    const auto ib = static_cast<std::uint32_t>(b);
+    const auto ic = static_cast<std::uint32_t>(c);
+    const auto id = static_cast<std::uint32_t>(d);
+    std::vector<HullFace> faces{face(ia, ib, ic), face(ia, ib, id), face(ia, ic, id),
+                                face(ib, ic, id)};
+    // Each point outside the hull so far replaces the faces it sees by a fan from their rim.
+    for (std::uint32_t p = 0; p < points.size(); ++p) {
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> edges;
+        std::vector<HullFace> kept;
+        kept.reserve(faces.size());
+        for (const HullFace& f : faces) {
+            if (dotOf(f.normal, points[p]) - f.offset > tolerance) {
+                for (std::size_t e = 0; e < 3; ++e) {
+                    edges.emplace_back(f.v.at(e), f.v.at((e + 1) % 3));
+                }
+            } else {
+                kept.push_back(f);
+            }
+        }
+        if (edges.empty()) {
+            continue;
+        }
+        for (const auto& [from, to] : edges) {
+            if (std::find(edges.begin(), edges.end(), std::pair{to, from}) == edges.end()) {
+                kept.push_back(face(from, to, p));
+            }
+        }
+        faces = std::move(kept);
+    }
+    // Only the points on the hull, in their order.
+    std::vector<std::uint32_t> index(points.size(), kNoIndex);
+    for (const HullFace& f : faces) {
+        for (const std::uint32_t v : f.v) {
+            index[v] = 0;
+        }
+    }
+    ConvexHull hull;
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        if (index[i] == 0) {
+            index[i] = static_cast<std::uint32_t>(hull.points.size());
+            hull.points.push_back(points[i]);
+        }
+    }
+    for (const HullFace& f : faces) {
+        hull.triangles.push_back({index[f.v[0]], index[f.v[1]], index[f.v[2]]});
+    }
+    return hull;
+}
+
+ConvexHull ellipsoidHull(const std::array<double, 3>& radii) {
+    constexpr int kSegments = 24;  // 218 points: under kMaxHullPoints
+    constexpr int kRings = 10;
+    return convexHullOf(sphereMesh(1.0, kSegments, kRings), radii).value_or(ConvexHull{});
+}
+
+double hullFill(const TriMesh& mesh, const std::array<double, 3>& scale, const ConvexHull& hull) {
+    double hullVolume = 0.0;
+    for (const auto& t : hull.triangles) {
+        hullVolume += dotOf(hull.points[t[0]], crossOf(hull.points[t[1]], hull.points[t[2]])) / 6.0;
+    }
+    double meshVolume = 0.0;
+    const auto at = [&](std::uint32_t i) -> Point {
+        return {mesh.positions[3 * i] * scale[0], mesh.positions[3 * i + 1] * scale[1],
+                mesh.positions[3 * i + 2] * scale[2]};
+    };
+    for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+        meshVolume +=
+            dotOf(at(mesh.indices[i]), crossOf(at(mesh.indices[i + 1]), at(mesh.indices[i + 2]))) /
+            6.0;
+    }
+    return hullVolume > 0.0 ? std::abs(meshVolume) / hullVolume : 0.0;
+}
+
+TriMesh flatMesh(const ConvexHull& surface) {
+    TriMesh out;
+    for (const auto& t : surface.triangles) {
+        const Point& p = surface.points[t[0]];
+        const Point& q = surface.points[t[1]];
+        const Point& r = surface.points[t[2]];
+        Point n = crossOf(minus(q, p), minus(r, p));
+        const double length = std::sqrt(dotOf(n, n));
+        if (length > 0.0) {
+            n = {n[0] / length, n[1] / length, n[2] / length};
+        }
+        for (const Point* v : {&p, &q, &r}) {
+            out.indices.push_back(static_cast<std::uint32_t>(out.positions.size() / 3));
+            for (std::size_t k = 0; k < 3; ++k) {
+                out.positions.push_back(static_cast<float>(v->at(k)));
+                out.normals.push_back(static_cast<float>(n.at(k)));
+            }
+        }
+    }
+    return out;
+}
 
 ConvexHull boxHull(const std::array<double, 3>& half) {
     ConvexHull hull;
@@ -173,6 +434,7 @@ void appendModel(Model& model, const Model& other) {
         w.bodies.kinematic.back() = o.bodies.kinematic[b];
         model.bodyRestPose.push_back(other.bodyRestPose[b]);
     }
+    const auto firstJoint = static_cast<std::uint32_t>(w.joints.names.size());
     for (std::size_t j = 0; j < o.joints.names.size(); ++j) {
         w.addJoint(o.joints.names[j], o.joints.type[j], map(o.joints.child[j]), o.joints.axis[j],
                    o.joints.actuated[j]);
@@ -181,6 +443,13 @@ void appendModel(Model& model, const Model& other) {
         w.joints.effortLimit.back() = o.joints.effortLimit[j];
         w.joints.velocityLimit.back() = o.joints.velocityLimit[j];
         w.joints.armature.back() = o.joints.armature[j];
+        w.joints.damping.back() = o.joints.damping[j];
+        w.joints.friction.back() = o.joints.friction[j];
+        w.joints.mimic.back() =
+            o.joints.mimic[j] == kNoMimic ? kNoMimic : firstJoint + o.joints.mimic[j];
+        w.joints.mimicMultiplier.back() = o.joints.mimicMultiplier[j];
+        w.joints.mimicOffset.back() = o.joints.mimicOffset[j];
+        w.joints.initialPosition.back() = o.joints.initialPosition[j];
     }
     for (std::size_t c = 0; c < o.colliders.body.size(); ++c) {
         if (o.colliders.body[c] == kWorldBody && o.colliders.shape[c] == ShapeType::Plane) {
@@ -199,9 +468,29 @@ void appendModel(Model& model, const Model& other) {
         w.addCollider(map(o.colliders.body[c]), o.colliders.shape[c], o.colliders.size[c],
                       o.colliders.poseInBody[c], o.colliders.friction[c]);
     }
+    // Their surfaces: the colliders above in order, each with its material appended.
+    {
+        const auto materialOffset = static_cast<std::uint32_t>(w.surfaceMaterials.size());
+        w.surfaceMaterials.insert(w.surfaceMaterials.end(), o.surfaceMaterials.begin(),
+                                  o.surfaceMaterials.end());
+        std::size_t added = w.colliders.material.size();
+        for (std::size_t c = o.colliders.body.size(); c-- > 0;) {
+            if (o.colliders.body[c] == kWorldBody && o.colliders.shape[c] == ShapeType::Plane) {
+                continue;
+            }
+            --added;
+            if (o.colliders.material[c] != kNoMaterial) {
+                w.colliders.material[added] = o.colliders.material[c] + materialOffset;
+            }
+        }
+    }
     for (std::size_t s = 0; s < o.sensors.names.size(); ++s) {
         w.addSensor(o.sensors.names[s], o.sensors.type[s], map(o.sensors.body[s]),
                     o.sensors.poseInBody[s], o.sensors.rateHz[s], o.sensors.settings[s]);
+        if (s < o.sensors.kind.size()) {
+            w.sensors.kind.back() = o.sensors.kind[s];
+            w.sensors.text.back() = o.sensors.text[s];
+        }
     }
     // Schema instances: bodies, joints and sensors got new prims above; any other prim (a bus,
     // a battery) is added as it was.
@@ -219,6 +508,9 @@ void appendModel(Model& model, const Model& other) {
         if (worldPrimMap[p.index].index == kNoIndex) {
             worldPrimMap[p.index] =
                 w.addPrim(o.prims.paths[p.index], o.prims.instanceNames[p.index]);
+            // Where it is (EMI sources, radios, people): its body and pose come with it.
+            w.prims.body.at(worldPrimMap[p.index].index) = map(o.prims.body.at(p.index));
+            w.prims.poseInBody.at(worldPrimMap[p.index].index) = o.prims.poseInBody.at(p.index);
         }
         return worldPrimMap[p.index];
     };
@@ -294,6 +586,7 @@ void appendModel(Model& model, const Model& other) {
                 c.size.erase(c.size.begin() + at);
                 c.poseInBody.erase(c.poseInBody.begin() + at);
                 c.friction.erase(c.friction.begin() + at);
+                c.material.erase(c.material.begin() + at);
                 c.hull.erase(c.hull.begin() + at);
             }
         }
@@ -318,6 +611,12 @@ void prefixModel(Model& model, const std::string& prefix, bool passive) {
     }
     if (passive) {
         std::fill(w.joints.actuated.begin(), w.joints.actuated.end(), false);
+        // Nothing commands a passive robot: its motors make no torque, in any mode.
+        for (SchemaInstance& instance : w.schemaInstances) {
+            if (instance.schema == "ElectricalMotorAPI_1") {
+                instance.tokens["elec:controlMode"] = "torque";
+            }
+        }
         model.actuatedJoints.clear();
     }
     // Paths: the top prim of each tree is renamed, the rest follows.
@@ -356,6 +655,15 @@ void prefixModel(Model& model, const std::string& prefix, bool passive) {
         w.robots = {prefix};
     }
     model.name = prefix;
+    // Components (a motor, a bus, a battery): their signals must not meet another robot's.
+    for (const SchemaInstance& instance : w.schemaInstances) {
+        if (instance.prim.index < w.prims.instanceNames.size()) {
+            std::string& name = w.prims.instanceNames[instance.prim.index];
+            if (!name.starts_with(front)) {
+                name.insert(0, front);
+            }
+        }
+    }
 }
 
 ModelExtent extentOf(const Model& model) {
@@ -371,6 +679,7 @@ void truncateModel(Model& model, const ModelExtent& extent) {
     c.size.resize(extent.colliders);
     c.poseInBody.resize(extent.colliders);
     c.friction.resize(extent.colliders);
+    c.material.resize(extent.colliders);
     c.hull.resize(extent.colliders);
     model.world.hulls.resize(extent.hulls);
     model.world.heightfields.resize(extent.heightfields);
@@ -412,6 +721,12 @@ void appendTile(Model& model, const Model& tile, const std::string& tilePath,
         } else {
             w.addCollider(kWorldBody, o.colliders.shape[c], o.colliders.size[c],
                           local(o.colliders.poseInBody[c]), o.colliders.friction[c]);
+        }
+        // A tile's surface: one table entry per collider that has one (tiles are truncated away
+        // and the table only grows by what they name; a run has few tiles with materials).
+        if (o.colliders.material[c] != kNoMaterial) {
+            w.surfaceMaterials.push_back(o.surfaceMaterials.at(o.colliders.material[c]));
+            w.colliders.material.back() = static_cast<std::uint32_t>(w.surfaceMaterials.size() - 1);
         }
     }
 
@@ -473,6 +788,55 @@ void appendTile(Model& model, const Model& tile, const std::string& tilePath,
         model.scene.prims.push_back(std::move(prim));
         primMap[p] = static_cast<std::uint32_t>(model.scene.prims.size() - 1);
     }
+}
+
+bool surfaceLookPreset(std::string_view name, SurfaceLook& out) {
+    struct Row {
+        std::string_view name;
+        float metallic, roughness;
+    };
+    static constexpr std::array<Row, 34> kLooks{{
+        {"chrome", 1.0F, 0.05F},    {"mirror", 1.0F, 0.02F},   {"gold", 1.0F, 0.2F},
+        {"copper", 1.0F, 0.3F},     {"brass", 1.0F, 0.3F},     {"steel", 1.0F, 0.35F},
+        {"stainless", 1.0F, 0.25F}, {"metal", 1.0F, 0.4F},     {"aluminium", 1.0F, 0.4F},
+        {"aluminum", 1.0F, 0.4F},   {"iron", 1.0F, 0.55F},     {"glass", 0.0F, 0.03F},
+        {"paint", 0.0F, 0.3F},      {"carpaint", 0.0F, 0.12F}, {"lacquer", 0.0F, 0.1F},
+        {"ceramic", 0.0F, 0.12F},   {"glossy", 0.0F, 0.12F},   {"plastic", 0.0F, 0.42F},
+        {"matte", 0.0F, 0.8F},      {"wood", 0.0F, 0.6F},      {"rubber", 0.0F, 0.88F},
+        {"tyre", 0.0F, 0.88F},      {"tire", 0.0F, 0.88F},     {"wheel", 0.0F, 0.85F},
+        {"concrete", 0.0F, 0.92F},  {"floor", 0.0F, 0.85F},    {"ground", 0.0F, 0.92F},
+        {"asphalt", 0.0F, 0.95F},   {"road", 0.0F, 0.95F},     {"brick", 0.0F, 0.9F},
+        {"fabric", 0.0F, 0.95F},    {"cloth", 0.0F, 0.95F},    {"skin", 0.0F, 0.55F},
+        {"grass", 0.0F, 0.95F},
+    }};
+    for (const Row& row : kLooks) {
+        if (row.name == name) {
+            out.metallic = row.metallic;
+            out.roughness = row.roughness;
+            return true;
+        }
+    }
+    return false;
+}
+
+SurfaceLook lookOf(const SceneMaterial& material) {
+    if (material.look) {
+        return *material.look;
+    }
+    SurfaceLook look;
+    std::string word;
+    for (std::size_t i = 0; i <= material.name.size(); ++i) {
+        const char c = i < material.name.size() ? material.name[i] : ' ';
+        if (std::isalnum(static_cast<unsigned char>(c)) != 0) {
+            word += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        } else {
+            if (surfaceLookPreset(word, look)) {
+                return look;
+            }
+            word.clear();
+        }
+    }
+    return look;
 }
 
 }  // namespace lagrange

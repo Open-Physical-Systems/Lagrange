@@ -158,3 +158,51 @@ jobs:
           ros2 run lagrange_server lagrange determinism \
             "$(ros2 pkg prefix lagrange_profiles)/share/lagrange_profiles/examples/amr_sample_urdf.yaml" \
             --seconds 60
+
+  realism:
+    name: realism (models against measured data, tools/ci/realism.sh)
+    runs-on: ubuntu-latest
+    container: ros:lyrical-ros-base-resolute
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: src/lagrange
+          persist-credentials: false
+      - name: Install dependencies
+        run: src/lagrange/tools/ci/install_deps.sh unzip
+      - name: Restore the OpenUSD underlay
+        id: openusd
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: openusd_ws/install
+          key: >-
+            openusd-${{ runner.arch }}-${{ hashFiles('src/lagrange/vendor/openusd_vendor/CMakeLists.txt',
+            'src/lagrange/vendor/openusd_vendor/cmake/**', 'src/lagrange/vendor/openusd_vendor/env-hooks/**') }}
+      - name: Build the OpenUSD underlay
+        if: steps.openusd.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          source "/opt/ros/$ROS_DISTRO/setup.bash"
+          colcon build --base-paths src/lagrange/vendor/openusd_vendor \
+            --build-base openusd_ws/build --install-base openusd_ws/install \
+            --event-handlers console_cohesion+
+      # The NeuroBEM flights (627 MB, no licence stated: fetched, never committed), by checksum.
+      - name: Restore the downloaded datasets
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/lagrange
+          key: realism-datasets-neurobem-a3e2e83d
+      - name: Build what the checks run, with their tests
+        shell: bash
+        run: |
+          source openusd_ws/install/setup.bash
+          colcon build --packages-up-to lagrange_server lagrange_sensors lagrange_electrical \
+            lagrange_aerodynamics lagrange_rotor_aero --packages-skip lagrange_viewer openusd_vendor \
+            --event-handlers console_cohesion+ --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - name: Run the realism checks
+        shell: bash
+        run: |
+          source install/setup.bash
+          LAGRANGE_BUILD_DIR="$PWD/build" src/lagrange/tools/ci/realism.sh realism-results

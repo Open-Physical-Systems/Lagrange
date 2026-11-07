@@ -1,12 +1,15 @@
 // Overlay files (docs/design/formats.md §9): the project's API schemas applied by name to a
 // model that came from a format without them (URDF, SDFormat, MJCF), or added to a USD one.
+#include "Netlist.hpp"
 #include "Schemas.hpp"
 #include "lagrange/stage/Stage.hpp"
 
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -19,6 +22,7 @@
 #include <pxr/usd/sdf/path.h>
 #include <pxr/usd/sdf/types.h>
 #include <pxr/usd/usd/attribute.h>
+#include <pxr/usd/usd/primRange.h>
 #include <pxr/usd/usd/relationship.h>
 #include <pxr/usd/usd/schemaRegistry.h>
 #include <pxr/usd/usd/stage.h>
@@ -71,6 +75,9 @@ public:
         }
         if (errors_.empty()) {
             collect();
+        }
+        if (errors_.empty()) {
+            addSensors();
         }
         if (!errors_.empty()) {
             std::string message = "the overlay cannot be applied:";
@@ -335,6 +342,86 @@ private:
         }
     }
 
+    /// Prims the overlay made sensors of (SensorAPI_1 and a sensor type) become the world's
+    /// sensors, as the stage reader makes them from a USD stage, so that a robot file with an
+    /// overlay runs the same as the USD lagrange_import writes from them. IMU, GNSS,
+    /// magnetometer and barometer take only attributes; a camera, lidar or radar needs more of
+    /// the stage than an overlay holds and is refused with a note to import the robot first.
+    void addSensors() {
+        for (const UsdPrim& prim : stage_->Traverse()) {
+            if (!prim.HasAPI(TfToken("SensorAPI_1"))) {
+                continue;
+            }
+            const std::string path = prim.GetPath().GetString();
+            const auto scene = scenePrimOf_.find(path);
+            const auto world = worldPrim_.find(path);
+            if (scene == scenePrimOf_.end() || world == worldPrim_.end()) {
+                continue;
+            }
+            if (std::ranges::find(m_.world.sensors.prim, world->second) !=
+                m_.world.sensors.prim.end()) {
+                continue;  // already a sensor (the overlay added schemas to it)
+            }
+            const auto real = [&prim](const char* name) -> std::optional<double> {
+                double v = 0.0;
+                const UsdAttribute a = prim.GetAttribute(TfToken(name));
+                if (a && a.HasAuthoredValue() && a.Get(&v)) {
+                    return v;
+                }
+                return std::nullopt;
+            };
+            SensorType type = SensorType::Imu;
+            std::map<std::string, double, std::less<>> settings;
+            if (prim.HasAPI(TfToken("ImuAPI_1"))) {
+                settings = {{"accel_noise", real("sensor:imu:accelNoiseStd").value_or(0.0)},
+                            {"gyro_noise", real("sensor:imu:gyroNoiseStd").value_or(0.0)}};
+            } else if (prim.HasAPI(TfToken("GnssAPI_1"))) {
+                type = SensorType::Gnss;
+                settings = {
+                    {"horizontal_noise", real("sensor:gnss:horizontalNoiseStd").value_or(0.0)},
+                    {"vertical_noise", real("sensor:gnss:verticalNoiseStd").value_or(0.0)},
+                    {"velocity_noise", real("sensor:gnss:velocityNoiseStd").value_or(0.0)}};
+            } else if (prim.HasAPI(TfToken("MagnetometerAPI_1"))) {
+                type = SensorType::Magnetometer;
+                settings = {{"noise", real("sensor:magnetometer:noiseStd").value_or(0.0)}};
+            } else if (prim.HasAPI(TfToken("BarometerAPI_1"))) {
+                type = SensorType::Barometer;
+                settings = {{"noise", real("sensor:barometer:noiseStd").value_or(0.0)}};
+            } else {
+                errors_.push_back(path +
+                                  ": an overlay on a robot file makes IMU, GNSS, magnetometer "
+                                  "and barometer sensors only; import the robot to USD "
+                                  "(lagrange_import ROBOT OUT.usda --overlay FILE) for others");
+                continue;
+            }
+            const std::optional<double> rate = real("sensor:rate");
+            if (!rate || *rate <= 0.0) {
+                errors_.push_back(path + ": sensor:rate is required and positive");
+                continue;
+            }
+            for (const auto& [attribute, key] :
+                 {std::pair{"sensor:latency", "latency"}, std::pair{"sensor:jitter", "jitter"}}) {
+                if (const std::optional<double> v = real(attribute); v && *v > 0.0) {
+                    settings[key] = *v;
+                }
+            }
+            ScenePrim& at = m_.scene.prims[scene->second];
+            if (at.body == kNoIndex) {
+                errors_.push_back(path + ": a sensor must be on a link");
+                continue;
+            }
+            // The world's prim for it, by the sensor's own name.
+            m_.world.addSensor(prim.GetName().GetString(), type, BodyId{at.body}, at.offset, *rate,
+                               settings);
+            m_.world.sensors.prim.back() = world->second;
+            at.typeName = type == SensorType::Imu            ? "Imu"
+                          : type == SensorType::Gnss         ? "Gnss"
+                          : type == SensorType::Magnetometer ? "Magnetometer"
+                                                             : "Barometer";
+            m_.sensorPrim.push_back(scene->second);
+        }
+    }
+
     Model& m_;
     std::filesystem::path file_;
     std::string rootPath_;
@@ -346,14 +433,10 @@ private:
 
 }  // namespace
 
-Expected<void, std::string> applyOverlay(Model& model, const std::string& path) {
-    registerSchemaLibraries();
-    YAML::Node root;
-    try {
-        root = YAML::LoadFile(path);
-    } catch (const YAML::Exception& e) {
-        return Unexpected{path + ": " + e.what()};
-    }
+namespace {
+
+Expected<void, std::string> applyRoot(Model& model, const std::string& path,
+                                      const YAML::Node& root) {
     Model changed = model;  // the model stays as it was when the overlay is refused
     Overlay overlay(changed, path);
     if (auto status = overlay.apply(root); !status) {
@@ -361,6 +444,38 @@ Expected<void, std::string> applyOverlay(Model& model, const std::string& path) 
     }
     model = std::move(changed);
     return {};
+}
+
+}  // namespace
+
+Expected<void, std::string> applyNetlist(Model& model, const std::string& path,
+                                         const std::vector<std::string>& directives) {
+    registerSchemaLibraries();
+    std::ifstream in(path);
+    if (!in) {
+        return Unexpected{path + ": cannot read it"};
+    }
+    std::ostringstream text;
+    text << in.rdbuf();
+    auto overlay = overlayOfNetlist(text.str(), directives);
+    if (!overlay) {
+        return Unexpected{path + ": " + overlay.error()};
+    }
+    return applyRoot(model, path, *overlay);
+}
+
+Expected<void, std::string> applyOverlay(Model& model, const std::string& path) {
+    if (isNetlistPath(path)) {
+        return applyNetlist(model, path);
+    }
+    registerSchemaLibraries();
+    YAML::Node root;
+    try {
+        root = YAML::LoadFile(path);
+    } catch (const YAML::Exception& e) {
+        return Unexpected{path + ": " + e.what()};
+    }
+    return applyRoot(model, path, root);
 }
 
 }  // namespace lagrange::stage

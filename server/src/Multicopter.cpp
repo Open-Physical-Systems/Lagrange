@@ -14,6 +14,12 @@ namespace {
 
 constexpr double kGravity = 9.80665;  // m/s², standard gravity (the world's gravity is along −z)
 constexpr const char* kAirDensityKey = "air_density";  // as lagrange::rotor_aero
+// Landing by hand (Settings::waitForCommand): the set point may go this far below the start, so
+// the drone presses onto the ground, and it counts as landed this close to its start height and
+// this slow vertically.
+constexpr double kLandBelowM = 0.05;  // m
+constexpr double kLandedM = 0.03;     // m
+constexpr double kLandedMps = 0.05;   // m/s
 
 using Vec3 = std::array<double, 3>;
 using Mat3 = std::array<Vec3, 3>;  // rows
@@ -195,6 +201,15 @@ Status MulticopterController::declare(const WorldView& world, const ModuleConfig
     twist.frame = "world_local";
     twist.feedback = true;
     twist_ = d.input(twist);
+    designDensity_ = *rho;
+    densityIn_ = SignalId{};
+    if (config.get<bool>("weather_air").value_or(false)) {  // rotor_aero::kWeatherAirKey
+        SignalSpec density;
+        density.name = "env/air_density";
+        density.unit = units::kg_per_m3;
+        density.feedback = true;
+        densityIn_ = d.input(density);
+    }
     return {};
 }
 
@@ -215,14 +230,27 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         homed_ = true;
         setpoint_ = {home_[0], home_[1], home_[2] + settings_.altitudeM};
         heading_ = 0.0;
+        airborne_ = false;
     }
-    if (context.t.seconds() < settings_.takeoffAfterS) {
+    const Mat3 rot = rotation({p[3], p[4], p[5], p[6]});  // world from body
+    const auto grounded = [&]() {
         for (const Rotor& r : rotors_) {
             bus.write(r.command, 0.0);
         }
-        return {};
+        return Status{};
+    };
+    if (settings_.waitForCommand && !airborne_) {
+        // On the ground until a command asks to climb; then the set point starts where it is.
+        const std::optional<FlightCommand> command = commands_ ? commands_() : std::nullopt;
+        if (!command || command->upMps <= 0.0) {
+            return grounded();
+        }
+        airborne_ = true;
+        setpoint_ = position;
+        heading_ = std::atan2(rot[1][0], rot[0][0]);
+    } else if (!settings_.waitForCommand && context.t.seconds() < settings_.takeoffAfterS) {
+        return grounded();
     }
-    const Mat3 rot = rotation({p[3], p[4], p[5], p[6]});  // world from body
     const Vec3 velocity{v[0], v[1], v[2]};
     const Vec3 omegaWorld{v[3], v[4], v[5]};
     const Vec3 omega{dot({rot[0][0], rot[1][0], rot[2][0]}, omegaWorld),
@@ -236,10 +264,17 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
     // A velocity command moves the set point (forward and left in the heading frame) and turns
     // the heading; without one it holds where it is.
     Vec3 wanted{};  // m/s, world: the velocity the set point moves at
+    bool angleMode = false;
+    std::array<double, 2> tilt{};  // angle mode: the stick's share towards world x and y
     if (const std::optional<FlightCommand> command = commands_ ? commands_() : std::nullopt) {
         const double dt = context.dt.seconds();
-        double forward = command->forwardMps;
-        double left = command->leftMps;
+        // Taking off or landing by hand, near the ground, only up and down count: moving the set
+        // point sideways while the legs still hold the drone would tip it over on the ground.
+        const bool nearGround =
+            settings_.waitForCommand && position[2] < home_[2] + settings_.minHeightM;
+        double forward = nearGround ? 0.0 : command->forwardMps;
+        double left = nearGround ? 0.0 : command->leftMps;
+        const double yawRate = nearGround ? 0.0 : command->yawRateRadps;
         const double planar = std::hypot(forward, left);
         if (planar > settings_.maxHorizontalMps) {
             forward *= settings_.maxHorizontalMps / planar;
@@ -249,22 +284,45 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         const double s = std::sin(heading_);
         wanted = {c * forward - s * left, s * forward + c * left,
                   std::clamp(command->upMps, -settings_.maxVerticalMps, settings_.maxVerticalMps)};
+        angleMode = command->mode == FlightCommand::Mode::Angle;
+        if (angleMode) {
+            tilt = {wanted[0] / settings_.maxHorizontalMps, wanted[1] / settings_.maxHorizontalMps};
+            wanted[0] = wanted[1] = 0.0;
+        }
         for (std::size_t i = 0; i < 3; ++i) {
             setpoint_[i] += wanted[i] * dt;
         }
-        if (setpoint_[2] < home_[2] + settings_.minHeightM) {
-            setpoint_[2] = home_[2] + settings_.minHeightM;
+        // Commanded by hand it may come down to the ground (a little below its start, so that
+        // it sits); else it stays minHeightM up.
+        const double floor =
+            settings_.waitForCommand ? home_[2] - kLandBelowM : home_[2] + settings_.minHeightM;
+        if (setpoint_[2] < floor) {
+            setpoint_[2] = floor;
             wanted[2] = 0.0;
         }
-        heading_ += std::clamp(command->yawRateRadps, -settings_.maxYawRateRadps,
-                               settings_.maxYawRateRadps) *
-                    dt;
+        if (settings_.waitForCommand && command->upMps < 0.0 && position[2] < home_[2] + kLandedM &&
+            std::abs(velocity[2]) < kLandedMps) {
+            airborne_ = false;  // landed: rotors off until the next climb
+            return grounded();
+        }
+        heading_ += std::clamp(yawRate, -settings_.maxYawRateRadps, settings_.maxYawRateRadps) * dt;
+    }
+    if (angleMode) {
+        // Nothing holds it in place: back in position mode it holds where it then is.
+        setpoint_[0] = position[0];
+        setpoint_[1] = position[1];
     }
     Vec3 force{};
-    for (std::size_t i = 0; i < 3; ++i) {
+    for (std::size_t i = angleMode ? 2 : 0; i < 3; ++i) {
         force[i] = mass_ * (kp * (setpoint_[i] - position[i]) + kd * (wanted[i] - velocity[i]));
     }
     force[2] += mass_ * kGravity;
+    if (angleMode) {
+        // Tilted by the stick alone: full stick is maxAngleTiltRad; centred, it flies level.
+        const double lean = std::tan(settings_.maxAngleTiltRad);
+        force[0] = force[2] * lean * tilt[0];
+        force[1] = force[2] * lean * tilt[1];
+    }
     // Never ask for more than 30° of tilt.
     const double horizontal = std::hypot(force[0], force[1]);
     const double maxHorizontal = force[2] * std::tan(std::numbers::pi / 6.0);
@@ -300,16 +358,22 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         torque[i] = inertia_[i] * (-wa * wa * errorR[i] - 2.0 * settings_.damping * wa * omega[i]);
     }
 
-    // Mixer and each rotor's speed loop.
+    // Mixer and each rotor's speed loop, for the air the rotors are in.
+    double airShare = 1.0;
+    if (densityIn_.valid()) {
+        if (const double rho = bus.read(densityIn_); rho > 0.0) {
+            airShare = rho / designDensity_;
+        }
+    }
     for (std::size_t i = 0; i < rotors_.size(); ++i) {
         const Rotor& r = rotors_[i];
         const std::array<double, 4>& m = mixer_[i];
         const double f =
             std::max(0.0, m[0] * thrust + m[1] * torque[0] + m[2] * torque[1] + m[3] * torque[2]);
-        const double speed = r.spin * std::sqrt(f / r.thrustPerOmega2);
+        const double speed = r.spin * std::sqrt(f / (r.thrustPerOmega2 * airShare));
         const double now = bus.read(r.velocity);
         // The propeller's drag at the wanted speed, plus a proportional correction.
-        const double feedForward = r.spin * r.torquePerOmega2 * speed * speed;
+        const double feedForward = r.spin * r.torquePerOmega2 * airShare * speed * speed;
         bus.write(r.command, feedForward + settings_.speedGain * (speed - now));
     }
     return {};
@@ -324,6 +388,7 @@ Status MulticopterController::saveState(StateWriter& writer) const {
         writer.put(v);
     }
     writer.put(heading_);
+    writer.put(airborne_);
     return {};
 }
 
@@ -343,6 +408,7 @@ Status MulticopterController::restoreState(StateReader& reader) {
         ok = ok && reader.get(v);
     }
     ok = ok && reader.get(heading_);
+    ok = ok && reader.get(airborne_);
     return ok ? Status{} : Status::error(StatusCode::InvalidConfig, "controller state truncated");
 }
 

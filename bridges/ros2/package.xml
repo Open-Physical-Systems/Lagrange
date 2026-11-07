@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_ros2</name>
-  <version>1.0.0</version>
+  <version>1.1.0</version>
   <description>The Lagrange ROS 2 bridge: publishes the simulation (clock, TF, odometry, joint states, laser scans, IMU) and takes velocity commands.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
@@ -21,6 +21,7 @@
   <depend>tf2_msgs</depend>
   <depend>std_msgs</depend>
   <depend>ackermann_msgs</depend>
+  <depend>yaml-cpp</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
 

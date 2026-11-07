@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -24,6 +25,24 @@ struct TriMesh {
 /// A box of half extents `half` about its origin as a convex hull: 8 corners, 12 triangles.
 [[nodiscard]] ConvexHull boxHull(const std::array<double, 3>& half);
 /// A cylinder along z, centred at the origin (the URDF convention).
+/// The convex hull of a mesh's vertices, scaled, in the mesh's frame. More than kMaxHullPoints
+/// vertices are first cut down to the farthest ones in that many directions. Empty when the
+/// vertices are flat or fewer than four: no volume to collide with.
+inline constexpr std::size_t kMaxHullPoints = 256;
+[[nodiscard]] std::optional<ConvexHull> convexHullOf(const TriMesh& mesh,
+                                                     const std::array<double, 3>& scale = {1.0, 1.0,
+                                                                                           1.0});
+/// An ellipsoid of these radii as a convex hull, about 1 % smaller than the real shape.
+[[nodiscard]] ConvexHull ellipsoidHull(const std::array<double, 3>& radii);
+/// How much of `hull` the closed mesh fills, 0 to 1: well under 1 is a concave mesh, whose hull
+/// also blocks what fits in its hollows. Meaningless for an open mesh.
+[[nodiscard]] double hullFill(const TriMesh& mesh, const std::array<double, 3>& scale,
+                              const ConvexHull& hull);
+/// Below this fill a mesh is called concave (illustrative: a solid part with some detail is above
+/// it, a room, a U or two parts in one file are below it).
+inline constexpr double kConcaveFill = 0.6;
+/// A triangle surface as a flat-shaded mesh, to draw it.
+[[nodiscard]] TriMesh flatMesh(const ConvexHull& surface);
 [[nodiscard]] TriMesh cylinderMesh(double radius, double length, int segments = 32);
 [[nodiscard]] TriMesh sphereMesh(double radius, int segments = 32, int rings = 16);
 
@@ -47,10 +66,29 @@ struct ScenePrim {
     std::array<double, 3> hingeAxis{0.0, 1.0, 0.0};
 };
 
+/// How a surface looks: glTF's metallic-roughness model, which UsdPreviewSurface and SDFormat's
+/// <pbr> also use. Roughness 0 is a mirror, 1 fully matte.
+struct SurfaceLook {
+    float metallic{0.0F};
+    float roughness{0.6F};
+    std::array<float, 3> emissive{0.0F, 0.0F, 0.0F};  // linear RGB, added to what is reflected
+    friend bool operator==(const SurfaceLook&, const SurfaceLook&) = default;
+};
+
+/// The look of a named kind of surface: "steel", "rubber", "glass", ... Illustrative values in the
+/// ranges of the usual PBR material charts, not measurements. False for a name it does not know.
+[[nodiscard]] bool surfaceLookPreset(std::string_view name, SurfaceLook& out);
+
 struct SceneMaterial {
     std::string name;
     std::array<float, 4> rgba{0.7F, 0.7F, 0.72F, 1.0F};
+    /// The look the file gave. Empty: from a word of the material's name that names a kind of
+    /// surface ("rubber", "front_steel_plate"), else the default.
+    std::optional<SurfaceLook> look{};
 };
+
+/// What is drawn for a material: its look, or the one its name suggests.
+[[nodiscard]] SurfaceLook lookOf(const SceneMaterial& material);
 
 struct Scene {
     std::vector<ScenePrim> prims;

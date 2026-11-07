@@ -86,22 +86,45 @@ CommandLine defaultCommandLine() {
 void printServerOptions(std::FILE* out) {
     std::fprintf(
         out,
-        "  --robot   URDF, SDFormat, MJCF or USD to simulate (default: the sample AMR)\n"
+        "  --robot   URDF, SDFormat, MJCF or USD to simulate, or none to start without a\n"
+        "            robot and spawn one later (default: the sample AMR)\n"
         "  --world   fixed scenery in any of those formats, or none (default: the sample\n"
         "            warehouse)\n"
-        "  --overlay FILE.yaml  apply schemas (motors, battery, bus) to the robot, or\n"
+        "  --overlay FILE.yaml|FILE.cir  apply schemas (motors, battery, bus), or a SPICE\n"
+        "                       netlist of them, to the robot, or\n"
         "            none (default: the sample AMR's power system, for the sample only)\n"
         "  --listen  unix:/path.sock or tcp://host:port (default: %s)\n"
         "  --tls-cert FILE --tls-key FILE  certificate chain and key (PEM) for a tls:// --listen\n"
         "  --auth-token-file FILE  TCP clients must send this token (first line of FILE);\n"
         "                         required to listen beyond loopback\n"
         "  --spawn X,Y[,Z[,YAW]]  start the robot there (m, world ENU; heading in rad)\n"
+        "  --ros-topics FILE.yaml  publish signals on ROS topics and write topics into signals\n"
+        "            (publish: [{signal, topic, type, frame, params}], subscribe: [...])\n"
+        "  --humans N[,seed=S][,radius=M]  N people wandering round the middle of the run\n"
+        "  --site NAME=VALUE  gravity, wind_speed, wind_from, temperature, air_density, pressure,\n"
+        "            relative_humidity, rain_rate, visibility; also while running: lagrange set\n"
+        "  --sensor-timing NAME=LATENCY[,JITTER]  delay a sensor's ROS messages, in s "
+        "(repeatable)\n"
+        "  --water X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH  a body of still water (repeatable)\n"
+        "  --water-current VX,VY[,VZ]  the water's current, m/s\n"
+        "  --hydro-coefficients FILE.yaml  vehicles' Fossen coefficients by body (added_mass,\n"
+        "            linear_damping, quadratic_damping: six each, surge to yaw)\n"
+        "  --water-waves AMPLITUDE,PERIOD[,TOWARDS_DEG]  linear waves on the water (m, s)\n"
+        "  --joint-control  drive every moving joint on its own from /joint_commands\n"
+        "  --joint-loop-hz HZ  bandwidth of its position and velocity loops (default 8); more\n"
+        "                   holds stiffer, as a leg carrying a body needs\n"
+        "            (sensor_msgs/JointState: position, velocity or effort), no robot controller\n"
+        "  --plugin LIB  load a plugin library (RFC 0008): a path, or NAME for lib<NAME>.so in\n"
+        "            $LAGRANGE_PLUGIN_PATH or the lagrange_plugins resource index (repeatable)\n"
         "  --add-robot NAME=FILE@X,Y[,Z[,YAW]]  one more robot in the run, its names prefixed\n"
         "                         with NAME, passive (repeatable)\n"
         "  --lidar auto|cpu|gpu  where lidars cast: auto (default) and cpu use the\n"
         "            exact CPU caster; gpu the compute kernel on a hardware GPU\n"
         "  --gpu DEVICE  Vulkan device for the lidar and cameras (index or part of its name)\n"
-        "  --physics mujoco|jolt  rigid-body backend (default mujoco)\n"
+        "  --camera-look realistic|simple  how cameras draw colour (default realistic on a GPU;\n"
+        "            a software device stays simple; depth and instance id do not change)\n"
+        "  --camera-season summer|fall|winter|rainy  the year in the realistic look\n"
+        "  --physics mujoco|jolt|NAME  rigid-body backend (default mujoco), or a plugin's\n"
         "  --replay FILE.mcap  replay a recording instead of simulating (the viewer can seek;\n"
         "            no ROS bridge)\n"
         "  --session FILE.usda  where the viewer's edits are saved when it asks (default:\n"
@@ -130,7 +153,9 @@ void printServerOptions(std::FILE* out) {
         "  --weather K=V,...  the weather: temperature (K), pressure (Pa) and relative_humidity\n"
         "            (0-1), the site, no defaults; visibility (m, fog), rain_rate (m/s),\n"
         "            dust_concentration (kg/m³), dust_median_diameter (m), solar_irradiance\n"
-        "            (W/m²), sky_temperature (K), fog_field and wind_field (.nvdb files);\n"
+        "            (W/m²), sky_temperature (K), fog_field and wind_field (.nvdb files),\n"
+        "            ground_dust_diameter (m) and ground_dust_concentration (kg/m³): loose\n"
+        "            dust rotor outwash lifts;\n"
         "            a profile's weather keys also set them\n"
         "  --domain D=off  replace domain D (rigid_body, electrical, thermal, weather, emi,\n"
         "            comms, vehicle_dynamics, traffic, sensors) by its substitute\n"
@@ -142,7 +167,7 @@ void printServerOptions(std::FILE* out) {
         "  --cmd-vel-unstamped  take /cmd_vel as geometry_msgs/Twist instead of\n"
         "            TwistStamped\n"
         "  --no-demo  stand still until the first /cmd_vel instead of driving the demo\n"
-        "            figure-eight\n"
+        "            figure-eight; a multicopter waits on the ground until /cmd_vel climbs\n"
         "  --link-topics FILE.yaml  ROS topics that ride on radio links (LINK: [/topic, ...]):\n"
         "            lost and delayed as the comms domain's link quality says\n"
         "  --export-map FILE.yaml  write an occupancy map of the fixed scenery for\n"
@@ -169,9 +194,9 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
         } else if (arg == "--robot") {
             const char* path = value();
             if (path == nullptr) {
-                return "--robot needs a file";
+                return "--robot needs a file, or none";
             }
-            options.robotPath = path;
+            options.robotPath = std::string_view(path) == "none" ? "" : path;
             out.robotGiven = true;
         } else if (arg == "--world") {
             const char* path = value();
@@ -262,10 +287,31 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
         } else if (arg == "--physics") {
             const char* text = value();
             const std::string_view backend = text != nullptr ? text : "";
-            if (backend != "mujoco" && backend != "jolt") {
-                return "--physics needs mujoco or jolt";
+            if (backend.empty()) {
+                return "--physics needs mujoco, jolt or a plugin's backend";
             }
             options.physics = std::string(backend);
+        } else if (arg == "--camera-look") {
+            const char* look = value();
+            if (look == nullptr ||
+                (std::string_view(look) != "realistic" && std::string_view(look) != "simple")) {
+                return "--camera-look takes realistic or simple";
+            }
+            options.cameraRealistic = std::string_view(look) == "realistic";
+        } else if (arg == "--camera-season") {
+            const char* season = value();
+            const std::string_view name = season != nullptr ? season : "";
+            if (name == "summer") {
+                options.cameraSeason = 0;
+            } else if (name == "fall") {
+                options.cameraSeason = 1;
+            } else if (name == "winter") {
+                options.cameraSeason = 2;
+            } else if (name == "rainy") {
+                options.cameraSeason = 3;
+            } else {
+                return "--camera-season takes summer, fall, winter or rainy";
+            }
         } else if (arg == "--gpu") {
             const char* device = value();
             if (device == nullptr) {
@@ -340,6 +386,37 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--scenario-ego needs the scenario entity that is the robot";
             }
             options.scenarioEgo = text;
+        } else if (arg == "--humans") {
+            const char* text = value();
+            std::string_view rest = text != nullptr ? text : "";
+            bool firstItem = true;
+            while (!rest.empty()) {
+                const std::size_t comma = rest.find(',');
+                const std::string item(rest.substr(0, comma));
+                rest = comma == std::string_view::npos ? "" : rest.substr(comma + 1);
+                const std::size_t equals = item.find('=');
+                const std::string key = equals == std::string::npos ? "" : item.substr(0, equals);
+                const std::string number =
+                    equals == std::string::npos ? item : item.substr(equals + 1);
+                char* end = nullptr;
+                const double n = std::strtod(number.c_str(), &end);
+                if (number.empty() || *end != '\0' || n < 0.0) {
+                    return "--humans needs N[,seed=S][,radius=M]";
+                }
+                if (key.empty() && firstItem) {
+                    options.humanCount = static_cast<int>(n);
+                } else if (key == "seed") {
+                    options.humanSeed = static_cast<std::uint64_t>(n);
+                } else if (key == "radius" && n > 0.0) {
+                    options.humanRadius = n;
+                } else {
+                    return "--humans needs N[,seed=S][,radius=M]";
+                }
+                firstItem = false;
+            }
+            if (firstItem) {
+                return "--humans needs N[,seed=S][,radius=M]";
+            }
         } else if (arg == "--traffic") {
             const char* text = value();
             if (text == nullptr) {
@@ -397,10 +474,19 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             if (text == nullptr) {
                 return "--weather needs KEY=VALUE,... (temperature=288.15,pressure=101325,...)";
             }
-            static const std::set<std::string, std::less<>> kKeys{
-                "temperature",          "pressure",         "relative_humidity",
-                "visibility",           "rain_rate",        "dust_concentration",
-                "dust_median_diameter", "solar_irradiance", "sky_temperature"};
+            static const std::set<std::string, std::less<>> kKeys{"temperature",
+                                                                  "pressure",
+                                                                  "relative_humidity",
+                                                                  "visibility",
+                                                                  "rain_rate",
+                                                                  "dust_concentration",
+                                                                  "snow_rate",
+                                                                  "snow_cover",
+                                                                  "dust_median_diameter",
+                                                                  "solar_irradiance",
+                                                                  "sky_temperature",
+                                                                  "ground_dust_diameter",
+                                                                  "ground_dust_concentration"};
             std::string list(text);
             std::size_t at = 0;
             while (at <= list.size()) {
@@ -422,7 +508,8 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                     return "--weather: \"" + item +
                            "\" is not KEY=VALUE with KEY one of temperature, pressure, "
                            "relative_humidity, visibility, rain_rate, dust_concentration, "
-                           "dust_median_diameter, solar_irradiance, sky_temperature, fog_field, "
+                           "dust_median_diameter, solar_irradiance, sky_temperature, "
+                           "ground_dust_diameter, ground_dust_concentration, fog_field, "
                            "wind_field";
                 }
                 options.weather[item.substr(0, equals)] = v;
@@ -455,12 +542,13 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             const std::string domain(setting.substr(0, equals));
             const std::string_view state =
                 equals == std::string_view::npos ? "" : setting.substr(equals + 1);
-            if ((domain != "rigid_body" && domain != "sensors" && domain != "electrical" &&
-                 domain != "thermal" && domain != "weather" && domain != "emi" &&
-                 domain != "comms" && domain != "vehicle_dynamics" && domain != "traffic") ||
-                (state != "on" && state != "off")) {
+            // Any other name is a plugin's domain (RFC 0008), checked once the plugins load.
+            const bool named = !domain.empty() && std::ranges::all_of(domain, [](char c) {
+                return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+            });
+            if (!named || (state != "on" && state != "off")) {
                 return "--domain takes rigid_body, electrical, thermal, weather, emi, comms, "
-                       "vehicle_dynamics, traffic or sensors =on|off";
+                       "vehicle_dynamics, traffic, sensors or a plugin's domain =on|off";
             }
             if (state == "off") {
                 options.substituted.insert(domain);
@@ -468,6 +556,119 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 options.substituted.erase(domain);
             }
             thermalAsked = domain == "thermal" ? state == "on" : thermalAsked;
+        } else if (arg == "--ros-topics") {
+            const char* path = value();
+            if (path == nullptr) {
+                return "--ros-topics needs a YAML file: publish: [{signal, topic, type}], "
+                       "subscribe: [...]";
+            }
+            options.rosTopicsPath = path;
+        } else if (arg == "--site") {
+            const char* text = value();
+            const std::string item = text != nullptr ? text : "";
+            const std::size_t equals = item.find('=');
+            char* end = nullptr;
+            const double number =
+                equals == std::string::npos ? 0.0 : std::strtod(item.c_str() + equals + 1, &end);
+            if (equals == std::string::npos || equals == 0 || end == item.c_str() + equals + 1 ||
+                *end != '\0') {
+                return "--site needs NAME=VALUE, such as gravity=1.62";
+            }
+            options.site[item.substr(0, equals)] = number;
+        } else if (arg == "--sensor-timing") {
+            const char* text = value();
+            const std::string pair = text != nullptr ? text : "";
+            const std::size_t equals = pair.find('=');
+            double latency = 0.0;
+            double jitter = 0.0;
+            int used = 0;
+            const char* numbers = pair.c_str() + equals + 1;
+            const int read =
+                equals == std::string::npos || equals == 0
+                    ? 0
+                    : std::sscanf(numbers, "%lf%n,%lf%n", &latency, &used, &jitter, &used);
+            if (read < 1 || numbers[used] != '\0' || !std::isfinite(latency) ||
+                !std::isfinite(jitter) || latency < 0.0 || jitter < 0.0) {
+                return "--sensor-timing needs NAME=LATENCY[,JITTER], in seconds";
+            }
+            options.sensorTiming.push_back({pair.substr(0, equals), latency, jitter});
+        } else if (arg == "--water") {
+            const char* text = value();
+            std::array<double, 6> v{};
+            int used = 0;
+            if (text == nullptr ||
+                std::sscanf(text, "%lf,%lf,%lf,%lf,%lf,%lf%n", &v[0], &v[1], &v[2], &v[3], &v[4],
+                            &v[5], &used) != 6 ||
+                text[used] != '\0' || !std::isfinite(v[0] + v[1] + v[2]) || !(v[3] > 0.0) ||
+                !(v[4] > 0.0) || !(v[5] > 0.0) || !std::isfinite(v[3] + v[4] + v[5])) {
+                return "--water needs X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH, the last three positive";
+            }
+            options.water.push_back({{v[0], v[1], v[2]}, v[3], v[4], v[5]});
+        } else if (arg == "--hydro-coefficients") {
+            const char* text = value();
+            if (text == nullptr) {
+                return "--hydro-coefficients needs a YAML file";
+            }
+            try {
+                const YAML::Node file = YAML::LoadFile(text);
+                for (const auto& entry : file) {
+                    const std::string body = entry.first.as<std::string>();
+                    std::string numbers;
+                    for (const char* key : {"added_mass", "linear_damping", "quadratic_damping"}) {
+                        const YAML::Node list = entry.second[key];
+                        if (!list || !list.IsSequence() || list.size() != 6) {
+                            return std::string("--hydro-coefficients: ") + body + " needs " + key +
+                                   ": six numbers, surge, sway, heave, roll, pitch, yaw";
+                        }
+                        for (const auto& x : list) {
+                            numbers +=
+                                (numbers.empty() ? "" : ",") + std::to_string(x.as<double>());
+                        }
+                    }
+                    options.hydroCoefficients[body] = numbers;
+                }
+            } catch (const YAML::Exception& e) {
+                return std::string("--hydro-coefficients: ") + text + ": " + e.what();
+            }
+        } else if (arg == "--water-current") {
+            const char* text = value();
+            std::array<double, 3> v{};
+            int used = 0;
+            const int read = text == nullptr ? 0
+                                             : std::sscanf(text, "%lf,%lf%n,%lf%n", &v[0], &v[1],
+                                                           &used, &v[2], &used);
+            if (read < 2 || text[used] != '\0' || !std::isfinite(v[0] + v[1] + v[2])) {
+                return "--water-current needs VX,VY[,VZ] in m/s";
+            }
+            options.waterCurrent = v;
+        } else if (arg == "--water-waves") {
+            const char* text = value();
+            std::array<double, 3> v{};
+            int used = 0;
+            const int read = text == nullptr ? 0
+                                             : std::sscanf(text, "%lf,%lf%n,%lf%n", &v[0], &v[1],
+                                                           &used, &v[2], &used);
+            if (read < 2 || text[used] != '\0' || !(v[0] >= 0.0) || !(v[1] > 0.0) ||
+                !std::isfinite(v[0] + v[1] + v[2])) {
+                return "--water-waves needs AMPLITUDE,PERIOD[,TOWARDS_DEG], amplitude ≥ 0 m, "
+                       "period > 0 s";
+            }
+            options.waterWaves = v;
+        } else if (arg == "--joint-control") {
+            options.jointControl = true;
+        } else if (arg == "--joint-loop-hz") {
+            const char* hz = value();
+            if (hz == nullptr || std::atof(hz) <= 0.0) {
+                return "--joint-loop-hz needs a bandwidth above zero, in Hz";
+            }
+            options.jointLoopHz = std::atof(hz);
+        } else if (arg == "--plugin") {
+            const char* library = value();
+            if (library == nullptr) {
+                return "--plugin needs a library: a path, or a name in LAGRANGE_PLUGIN_PATH or "
+                       "the lagrange_plugins index";
+            }
+            options.plugins.emplace_back(library);
         } else if (arg == "--cmd-vel-unstamped") {
             options.stampedCmdVel = false;
         } else if (arg == "--ros2-control") {
@@ -488,7 +689,7 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             return "unknown option " + std::string(arg);
         }
     }
-    if (options.robotPath.empty()) {
+    if (options.robotPath.empty() && !out.robotGiven) {
         return "no --robot given and lagrange_assets is not installed";
     }
     if (thermalAsked && !options.ambientTemperatureK) {
@@ -509,7 +710,9 @@ int serve(CommandLine& line, int argc, char** argv, const std::string* profileYa
     ServerOptions& options = line.options;
     if (!line.exportMap.empty()) {
         // Only the fixed scenery is mapped; the robot is loaded for its frame of reference.
-        auto robot = loadModel(options.robotPath, {.spawn = options.spawn});
+        auto robot = options.robotPath.empty()
+                         ? Expected<Robot, std::string>(emptyModel())
+                         : loadModel(options.robotPath, {.spawn = options.spawn});
         if (robot && !options.worldPath.empty()) {
             if (auto added = addModel(*robot, options.worldPath); !added) {
                 std::fprintf(stderr, "%s: %s\n", program, added.error().c_str());

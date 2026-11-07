@@ -40,11 +40,18 @@ function(lagrange_target_defaults target)
         string(REPLACE ";" "," _lagrange_sanitizers "${LAGRANGE_SANITIZER}")
         target_compile_options(
             ${target}
-            PRIVATE -fsanitize=${_lagrange_sanitizers} -fno-omit-frame-pointer
+            PRIVATE
+                -fsanitize=${_lagrange_sanitizers}
+                -fno-omit-frame-pointer
+                # Jolt is built without RTTI, which UBSan's vptr check needs at link time.
+                $<$<COMPILE_LANGUAGE:CXX>:-fno-sanitize=vptr>
+                # GCC's flow analysis under sanitizers warns falsely inside std::regex.
+                -Wno-error=maybe-uninitialized
+                -Wno-error=uninitialized
         )
         target_link_options(
             ${target}
-            PRIVATE -fsanitize=${_lagrange_sanitizers}
+            PRIVATE -fsanitize=${_lagrange_sanitizers} -fno-sanitize=vptr
         )
     endif()
 endfunction()

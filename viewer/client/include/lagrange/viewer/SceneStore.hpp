@@ -35,6 +35,7 @@ struct MaterialData {
     std::array<float, 4> baseColor{0.8F, 0.8F, 0.8F, 1.0F};
     float metallic{0.0F};
     float roughness{0.5F};
+    std::array<float, 3> emissive{0.0F, 0.0F, 0.0F};
 };
 
 struct PrimData {

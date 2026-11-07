@@ -240,12 +240,10 @@ RayScan::RayScan(std::shared_ptr<RayContext> context,
     : impl_(std::make_unique<Impl>()) {
     impl_->context = std::move(context);
     impl_->rays = static_cast<std::uint32_t>(directions.size());
-    std::vector<float> padded(std::max<std::size_t>(directions.size(), 1) * 4, 0.0F);
-    for (std::size_t i = 0; i < directions.size(); ++i) {
-        std::copy(directions[i].begin(), directions[i].end(), padded.begin() + 4 * i);
-    }
-    impl_->directions = createBufferWithData(impl_->device(), std::as_bytes(std::span(padded)),
-                                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    impl_->reserve(impl_->directions,
+                   std::max<std::size_t>(directions.size(), 1) * 8 * sizeof(float));
+    const std::vector<std::array<float, 3>> origins(directions.size(), {0.0F, 0.0F, 0.0F});
+    setBeams(directions, origins);
     impl_->reserve(impl_->hits, directions.size() * sizeof(CastHit));
 }
 
@@ -255,6 +253,21 @@ RayScan::~RayScan() {
          {&impl_->directions, &impl_->shapes, &impl_->nodes, &impl_->hits, &impl_->faces}) {
         destroy(device, *buffer);
     }
+}
+
+void RayScan::setBeams(std::span<const std::array<float, 3>> directions,
+                       std::span<const std::array<float, 3>> origins) {
+    Impl& s = *impl_;
+    const std::lock_guard lock(s.context->impl_->mutex);
+    const std::size_t count = std::min<std::size_t>({directions.size(), origins.size(), s.rays});
+    auto* out = static_cast<float*>(s.directions.mapped);
+    for (std::size_t i = 0; i < count; ++i) {
+        std::copy(directions[i].begin(), directions[i].end(), out + 8 * i);
+        out[8 * i + 3] = 0.0F;
+        std::copy(origins[i].begin(), origins[i].end(), out + 8 * i + 4);
+        out[8 * i + 7] = 0.0F;
+    }
+    flush(s.device(), s.directions);
 }
 
 void RayScan::cast(std::span<const CastShape> shapes,
@@ -329,9 +342,10 @@ void RayScan::cast(std::span<const CastShape> shapes,
     s.reserve(s.shapes, s.shapeData.size() * sizeof(GpuShape));
     s.reserve(s.nodes, tree.size() * sizeof(GpuNode));
     s.reserve(s.faces, s.faceData.size() * sizeof(float));
-    std::memcpy(s.shapes.mapped, s.shapeData.data(), s.shapeData.size() * sizeof(GpuShape));
-    std::memcpy(s.nodes.mapped, tree.data(), tree.size() * sizeof(GpuNode));
-    std::memcpy(s.faces.mapped, s.faceData.data(), s.faceData.size() * sizeof(float));
+    // An empty vector's data() may be null, which memcpy may not be given even for no bytes.
+    std::copy(s.shapeData.begin(), s.shapeData.end(), static_cast<GpuShape*>(s.shapes.mapped));
+    std::copy(tree.begin(), tree.end(), static_cast<GpuNode*>(s.nodes.mapped));
+    std::copy(s.faceData.begin(), s.faceData.end(), static_cast<float*>(s.faces.mapped));
     flush(device, s.shapes);
     flush(device, s.nodes);
     flush(device, s.faces);

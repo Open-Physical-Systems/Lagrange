@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -99,12 +102,62 @@ TEST(MeshImport, ColladaUnitsBecomeMetresAndZUpStaysUp) {
     EXPECT_NEAR(b.hi[2], 0.5F, 1e-6F);  // 50 cm, still along z
 }
 
+// A textured part is split by its texture's colours: the triangle on the red texel and the one
+// on the blue texel become two parts of those colours (PNG and JPEG textures).
+TEST(MeshImport, TexturesBakeIntoPartsOfTheirColours) {
+    for (const char* file : {"textured_quad.obj", "textured_quad_jpeg.obj"}) {
+        SCOPED_TRACE(file);
+        const auto mesh = importMesh(fixture(file));
+        ASSERT_TRUE(mesh.has_value()) << mesh.error();
+        ASSERT_EQ(mesh->parts.size(), 2U);
+        bool red = false;
+        bool blue = false;
+        for (const MeshPart& part : mesh->parts) {
+            expectWellFormed(part);
+            EXPECT_EQ(part.indices.size(), 3U);
+            EXPECT_TRUE(part.hasColor);
+            red = red || (part.rgba[0] > 0.8F && part.rgba[2] < 0.2F);
+            blue = blue || (part.rgba[2] > 0.8F && part.rgba[0] < 0.2F);
+        }
+        EXPECT_TRUE(red);
+        EXPECT_TRUE(blue);
+    }
+}
+
 TEST(MeshImport, MissingAndBrokenFilesAreErrors) {
     const auto missing = importMesh(fixture("nothing.stl"));
     ASSERT_FALSE(missing);
     EXPECT_NE(missing.error().find("cannot read"), std::string::npos);
     const auto broken = importMesh(fixture("cube.mtl"));  // not a mesh
     ASSERT_FALSE(broken);
+}
+
+TEST(MeshImport, FetchedAssetsResolveInTheAssetDirectory) {
+    const std::string dir = LAGRANGE_TEST_MESH_DIR;
+    ASSERT_EQ(setenv("LAGRANGE_ASSET_DIR", dir.c_str(), 1), 0);
+    const auto found = resolveMeshUri("lagrange-asset://cube.obj", "/elsewhere");
+    ASSERT_TRUE(found.has_value()) << found.error();
+    EXPECT_EQ(*found, dir + "/cube.obj");
+    const auto missing = resolveMeshUri("lagrange-asset://not_fetched/body.dae", "/elsewhere");
+    ASSERT_FALSE(missing.has_value());
+    EXPECT_NE(missing.error().find("fetch_assets"), std::string::npos);
+    unsetenv("LAGRANGE_ASSET_DIR");
+}
+
+TEST(ResolveMeshUri, FindsAnUninstalledPackageAroundTheRobotFile) {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::path(testing::TempDir()) / "some folder" / "my_arm_description";
+    fs::create_directories(root / "urdf");
+    std::ofstream(root / "package.xml") << "<package><name>my_arm_description</name></package>";
+    const std::string urdf = (root / "urdf").string();
+    const auto found = resolveMeshUri("package://my_arm_description/meshes/a.dae", urdf);
+    ASSERT_TRUE(found) << found.error();
+    EXPECT_EQ(*found, (root / "meshes" / "a.dae").lexically_normal().string());
+    // From beside it too, and never another package's folder.
+    const auto beside =
+        resolveMeshUri("package://my_arm_description/a.dae", root.parent_path().string());
+    EXPECT_TRUE(beside);
+    EXPECT_FALSE(resolveMeshUri("package://another_package/a.dae", urdf));
 }
 
 TEST(MeshImport, UrisResolveRelativeFileAndPackage) {

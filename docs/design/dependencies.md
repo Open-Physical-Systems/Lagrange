@@ -38,6 +38,7 @@ and licenses come from `docs/plan/verification.md` (checked 2026-10-13). A cell 
 | OpenVDB / NanoVDB | fields (`lagrange_fields`: NanoVDB only so far) | apt `libnanovdb-dev` (rosdep `libnanovdb-dev`); `libopenvdb-dev` not used yet | 10.0.1 | MPL-2.0 (checked: `/usr/share/doc/libnanovdb-dev/copyright` of 10.0.1-3 and the headers' SPDX lines, 2026-10-25; Apache-2.0 came with later upstream releases). Used unmodified as headers, which MPL-2.0 allows in an Apache-2.0 project | Medium | Three majors behind upstream (R10). Header-only, so a newer copy can be vendored alone if needed. The build also finds a local copy in `~/.local/nanovdb/include` until the package is installed |
 | FMI import library | `modules/electrical/fmu_host` | `fmilib_vendor` (Modelon FMI Library) | 3.0.4 | BSD-3-Clause-style | Medium | FMI 3.0 co-simulation coverage TODO(verify). Alternative: a thin in-house loader over the FMI 3.0 C headers (the headers are BSD-2-Clause; TODO(verify)) |
 | MCAP C++ | recording, replay, mock server | `ros-lyrical-mcap-vendor` | 0.33.3 | MIT | Low | Header-only library plus zstd/lz4 |
+| Gymnasium | optional base of `lagrange.envs.LagrangeEnv`; never required, checked against 1.4.0 | PyPI, not a package dependency | 1.4.0 | MIT | Low | `check_env` passes; numpy stands in when it is not installed |
 | MCAP Python (`mcap`) | mock server | PyPI, through the rosdep key `python3-mcap-pip` in `packaging/rosdep/lagrange.yaml`; version pinned in `packaging/pip-constraints.txt` | 1.5.0 | MIT (repository license; PyPI metadata has no license field) | Low | Not packaged for Ubuntu. Pulls `lz4` and `zstandard` from PyPI. Only the mock server needs it, which becomes a test tool in v0.2 |
 | zstd, lz4 | MCAP, protocol compression | apt | 1.5.7, 1.10.0 | BSD / BSD-2-Clause (TODO(verify)) | Low | |
 | Protobuf | protocol, recordings | apt `libprotobuf-dev`, `protobuf-compiler` | 3.21.12 | BSD-3-Clause (TODO(verify)) | Low | Old: proto3 only, no editions. rosdep key `protobuf-dev` |
@@ -60,6 +61,9 @@ and licenses come from `docs/plan/verification.md` (checked 2026-10-13). A cell 
 | Google Benchmark | performance benchmarks (`lagrange_benchmarks`) | apt `libbenchmark-dev` (rosdep `benchmark`) | 1.9.1 | Apache-2.0 (checked in `/usr/share/doc/libbenchmark-dev/copyright` of 1.9.1-1build1, 2026-10-24) | Low | Benchmarks only, not in the product |
 | nanobind | Python bindings (`lagrange_python`) | apt `nanobind-dev` (rosdep `nanobind-dev`) | 2.11.0 | BSD-3-Clause (checked in `/usr/share/doc/nanobind-dev/copyright`, 2026-10-25) | Low | Build time only |
 | CoACD | collision bake tool | `coacd_vendor` | TODO(verify) | MIT | Medium | Offline tool; V-HACD (BSD-3-Clause) is the alternative |
+| libpng | texture decoding in mesh import (`lagrange_meshes`: textures baked into colour parts) | apt `libpng-dev` (rosdep `libpng-dev`) | 1.6.57 | libpng licence (permissive; `/usr/share/doc/libpng-dev/copyright`, verified 2026-10-29) | Low | Import-time only, linked privately |
+| ambientCG textures | `gpu/assets_textures`: photographs of surfaces for the realistic renderer | committed, 1024 px JPG (`SOURCES.md`) | sets named there, fetched 2026-11-01 | CC0 1.0 (docs.ambientcg.com/license, verified 2026-11-01) | Low | Files, not code; the view draws procedural surfaces without them |
+| libjpeg-turbo | the same, for JPEG textures | apt `libjpeg-turbo8-dev` (rosdep `libjpeg`) | 2.1.5 | IJG (BSD-like), BSD-3-Clause and Zlib (`/usr/share/doc/libjpeg-turbo8-dev/copyright`, verified 2026-10-29) | Low | Import-time only, linked privately |
 | OpenSSL | TLS for the viewer protocol (`lagrange_proto` transport, `tls://` endpoints) | apt `libssl-dev` (rosdep `libssl-dev`) | 3.5.5 | Apache-2.0 (`/usr/share/doc/libssl-dev/copyright`, verified 2026-10-29) | Low | Linked privately by the transport |
 | GDAL, PROJ | elevation models and coordinate reference systems (`lagrange_geospatial`: `lagrange_build_world`) | apt `libgdal-dev` (rosdep `libgdal-dev`), PROJ through it | 3.12.2, 9.7.1 | Expat (MIT) for both, from `/usr/share/doc/libgdal-dev/copyright` and `/usr/share/doc/libproj-dev/copyright` (verified 2026-10-29) | Low | Offline world building only; the simulator does not link them |
 | proj-data (EGM96 geoid grid `egm96_15.gtx`) | orthometric to ellipsoidal heights for elevation models | apt `proj-data` (own rosdep key, `packaging/rosdep/lagrange.yaml`) | 9.7.1 | Expat for the package (`/usr/share/doc/proj-data/copyright`); the EGM96 grid is NGA's (US Government work) | Low | Read at world-building time |
@@ -73,6 +77,9 @@ Open data the sample worlds are built from (downloaded at build time, never comm
 |---|---|---|---|
 | Copernicus DEM GLO-30 (AWS open data, `copernicus-dem-30m`) | `tools/ci/build_sample_world.sh` | Licence for Copernicus DEM instance COP-DEM-GLO-30-F (free; reproduction, distribution and adaptation allowed; read 2026-10-29) | "produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved" and the no-liability sentence of its article 6(c), both written to the world's ATTRIBUTION.md |
 | OpenStreetMap (Overpass API) | the same | ODbL 1.0 | "© OpenStreetMap contributors", in ATTRIBUTION.md; the world is a produced work |
+| Lexus RX 450h body mesh (Autoware `sample_vehicle_launch`, commit 93fb260) | `assets/robots/lexus_rx450h`, fetched by `fetch_assets` (not in this repository) | Apache-2.0 (the repository's LICENSE, fetched with it) | LICENSE and NOTICE next to the fetched files |
+| Holybro X500 V2 meshes (PX4 `PX4-gazebo-models`, `x500_base`, commit e5997f4) | `assets/robots/holybro_x500_v2`, fetched by `fetch_assets` | BSD-3-Clause, © 2022 Rudis Laboratories (the model's LICENSE, fetched with it) | the same |
+| AMR_FMS swerve AMR and warehouse (the owner's AMR_FMS project) | `assets/robots/amr_fms`, `assets/worlds/amr_fms_warehouse` (copied, 2.3 MB in all, no file over 1 MB) | Apache-2.0 (its `package.xml`), same author | — |
 
 Separate processes and offline tools (not linked, not required to build):
 
@@ -81,7 +88,7 @@ Separate processes and offline tools (not linked, not required to build):
 | SUMO | traffic co-simulation over TraCI | apt `sumo` 1.25.0 | EPL-2.0 | Runtime-optional |
 | OpenModelica | author Modelica models and export FMUs | upstream v1.27.1, not in apt | OSMC-PL | FMI 3.0 export is experimental; redistribution of generated FMUs needs a license review (R5) |
 | ngspice | run exported netlists | apt `ngspice` 45.2 | BSD-style (TODO(verify)) | Offline |
-| OpenFOAM | produce wind fields | not checked | GPL-3.0 (TODO(verify)) | Offline; we consume files only |
+| OpenFOAM (openfoam.com) | CFD, `lagrange foam`; produce wind fields | container `opencfd/openfoam-default:2512`, run v2512; v2606 is out, its image not yet seen | GPL-3.0 (openfoam.com/documentation/licencing) | A separate program, never linked or shipped; we write its input files and read its output |
 | Geant4 | produce dose fields | not checked | Geant4 Software License (TODO(verify)) | Offline |
 | PX4, ArduPilot SITL | autopilots in the loop | upstream PX4 v1.17.0, ArduPilot Copter-4.7.2, built on the host | BSD-3-Clause (PX4 `LICENSE`), GPL-3.0 (ArduPilot `COPYING.txt`) | Separate processes over TCP 4560 (PX4) and UDP 9002 (ArduPilot JSON); nothing of either is linked or copied; airframe and parameter files in `bridges/mavlink/` are our own |
 | esmini | OpenSCENARIO reference / optional library | upstream | MPL-2.0 | Decision in v0.6 |
@@ -109,7 +116,9 @@ Separate processes and offline tools (not linked, not required to build):
 
 `imgui_vendor` builds one static library containing ImGui core, the SDL3 platform backend, the
 Vulkan renderer backend, `imgui_freetype`, ImPlot, imgui-node-editor and ImGuizmo, all from
-pinned commits, because they must agree on one ImGui version and one `imconfig.h`.
+pinned commits, because they must agree on one ImGui version and one `imconfig.h`. It also builds
+ImGui's SDL_Renderer backend (`imgui_impl_sdlrenderer3`, same archive, MIT) for the small tools in
+`utils/` that draw in 2D with SDL's own renderer (`lagrange_tx16s`); no new dependency.
 
 ## 4. OpenUSD build plan (highest build risk)
 
@@ -195,6 +204,10 @@ and resource lookup only. It does not depend on `rclcpp`, so it starts without a
 | typos | pre-commit | TODO(verify) | MIT or Apache-2.0 (TODO(verify)) | |
 | reuse | apt | 5.0.2 | mixed, includes GPL-3.0-or-later | Tool only |
 | commitizen | PyPI via pre-commit | 4.19.2 | MIT | Replaces commitlint (Node) (Q13) |
+| Sphinx | PyPI (`tools/docs/requirements.txt`) | 9.2.0 (2026-10-21) | BSD-2-Clause (PyPI, checked 2026-11-03) | Builds the documentation site (`docs/conf.py`, `tools/docs/build.sh`); not shipped. Chosen over Material for MkDocs, whose fixes end on 2026-11-05, and its successor Zensical, still alpha (0.0.74) |
+| MyST-Parser | PyPI | 5.1.0 | MIT | The site's Markdown, math and heading anchors |
+| Furo | PyPI | 2025.12.19 | MIT | The site's theme (pulls sphinx-basic-ng, beautifulsoup4, accessible-pygments) |
+| Mermaid | jsDelivr, in the reader's browser | 11.12.1 | MIT | Draws the site's ```mermaid blocks, loaded by `docs/_static/mermaid-init.js` (one diagram at a time; sphinxcontrib-mermaid 2.1.1's own loader mixed diagrams up on pages with several). The math is MathJax (Apache-2.0), loaded by Sphinx the same way. Neither is in the product |
 | release-please | GitHub Action | v17.11.2 | Apache-2.0 | Runs on GitHub's runners, not on developer machines |
 | ccache, sccache | apt | 4.12.3, 0.13.0 | GPL-3.0, Apache-2.0 (TODO(verify)) | Tools only |
 | libabigail (`abidiff`) | apt (TODO(verify)) | — | — | ABI checks from v0.9 |

@@ -155,6 +155,13 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 if (domain.contains("turbulence") && domain["turbulence"].is_string()) {
                     settings.aerodynamics["turbulence"] = domain["turbulence"].as<std::string>();
                 }
+                if (domain.contains("downwash") && domain["downwash"].is_bool()) {
+                    settings.aerodynamics["downwash"] = domain["downwash"].as<bool>();
+                }
+                if (domain.contains("downwash_model") && domain["downwash_model"].is_string()) {
+                    settings.aerodynamics["downwash_model"] =
+                        domain["downwash_model"].as<std::string>();
+                }
             }
             if (name == "rotor_aero" && domain.contains("air_density") &&
                 domain["air_density"].is_number()) {
@@ -163,8 +170,9 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
             if (name == "weather") {
                 for (const char* key :
                      {"temperature", "pressure", "relative_humidity", "visibility", "rain_rate",
-                      "dust_concentration", "dust_median_diameter", "solar_irradiance",
-                      "sky_temperature"}) {
+                      "snow_rate", "snow_cover", "dust_concentration", "dust_median_diameter",
+                      "solar_irradiance", "sky_temperature", "ground_dust_diameter",
+                      "ground_dust_concentration"}) {
                     if (domain.contains(key) && domain[key].is_number()) {
                         settings.weather[key] = domain[key].as<double>();
                     }
@@ -267,9 +275,14 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 }
                 if (name == "rigid_body" && domain.contains("backend")) {
                     const std::string backend = domain["backend"].as<std::string>();
-                    if (backend != "mujoco" && backend != "jolt") {
+                    if (!context.rigidBodyBackends.contains(backend)) {
+                        std::string choices;
+                        for (const std::string& option : context.rigidBodyBackends) {
+                            choices += (choices.empty() ? "" : ", ") + option;
+                        }
                         error(check, at + "/backend",
-                              "this server's rigid body backends are mujoco and jolt");
+                              "this server's rigid body backends are " + choices +
+                                  " (load another with --plugin)");
                     } else {
                         settings.rigidBodyBackend = backend;
                     }
@@ -316,6 +329,7 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                         ? substitute.as<std::string>()
                         : (substitute.contains("kind") ? substitute["kind"].as<std::string>()
                                                        : std::string());
+                settings.substituteTokens[name] = token;
                 const auto allowed = context.substitutes.find(name);
                 if (allowed != context.substitutes.end() && !allowed->second.contains(token)) {
                     std::string choices;
@@ -371,6 +385,39 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 warning(check, "/world/" + std::string(member.key()),
                         "not applied by this server yet");
             }
+        }
+    }
+    if (profile.contains("plugins") && profile["plugins"].is_array()) {
+        std::size_t index = 0;
+        for (const jsoncons::json& entry : profile["plugins"].array_range()) {
+            const std::string at = "/plugins/" + std::to_string(index++);
+            ProfileSettings::Plugin plugin;
+            plugin.library = entry["library"].as<std::string>();
+            if (!context.pluginLibraries.contains(plugin.library)) {
+                error(check, at + "/library",
+                      plugin.library +
+                          " is not loaded: plugins are loaded when the server starts "
+                          "(--plugin, or `lagrange run` with this profile), never by a viewer");
+            }
+            if (entry.contains("config")) {
+                for (const auto& member : entry["config"].object_range()) {
+                    const jsoncons::json& value = member.value();
+                    const std::string key(member.key());
+                    if (value.is_bool()) {
+                        plugin.config[key] = value.as<bool>();
+                    } else if (value.is_int64() || value.is_uint64()) {
+                        plugin.config[key] = value.as<std::int64_t>();
+                    } else if (value.is_number()) {
+                        plugin.config[key] = value.as<double>();
+                    } else if (value.is_string()) {
+                        plugin.config[key] = value.as<std::string>();
+                    } else {
+                        warning(check, at + "/config/" + key,
+                                "only numbers, booleans and strings reach a plugin");
+                    }
+                }
+            }
+            settings.plugins.push_back(std::move(plugin));
         }
     }
     for (const char* key : {"environment", "seed", "deterministic", "tier", "batch", "bridges",

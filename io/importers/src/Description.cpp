@@ -216,6 +216,7 @@ public:
         if (roots == 1 && floating < d_.links.size()) {
             m_.scene.prims[topPrim_].body = bodyOf_[floating].index;
         }
+        resolveMimics();
         return {};
     }
 
@@ -249,6 +250,30 @@ private:
         return body;
     }
 
+    std::map<std::string, std::uint32_t> jointNames_;  // by the description's name
+
+    /// `mimic`, once every joint is there; such a joint takes no commands.
+    void resolveMimics() {
+        World::Joints& joints = m_.world.joints;
+        for (const JointDesc& joint : d_.joints) {
+            if (joint.mimic.empty() || !jointNames_.contains(joint.name)) {
+                continue;
+            }
+            const std::uint32_t follower = jointNames_.at(joint.name);
+            const auto leader = jointNames_.find(joint.mimic);
+            if (leader == jointNames_.end()) {
+                note(m_, "joint '" + joint.name + "' mimics '" + joint.mimic +
+                             "', which is no moving joint here; it moves on its own");
+                continue;
+            }
+            joints.mimic[follower] = leader->second;
+            joints.mimicMultiplier[follower] = joint.mimicMultiplier;
+            joints.mimicOffset[follower] = joint.mimicOffset;
+            joints.actuated[follower] = false;
+            std::erase(m_.actuatedJoints, joints.names[follower]);
+        }
+    }
+
     void addJoint(const JointDesc& joint, BodyId body) {
         const bool actuated = joint.actuated && joint.type != JointType::Free;
         const std::string name = unique(m_.world.joints.names, joint.name);
@@ -259,6 +284,9 @@ private:
         }
         m_.world.joints.effortLimit.back() = joint.effort;
         m_.world.joints.velocityLimit.back() = joint.velocity;
+        m_.world.joints.damping.back() = joint.damping;
+        m_.world.joints.friction.back() = joint.friction;
+        jointNames_[joint.name] = static_cast<std::uint32_t>(m_.world.joints.names.size() - 1);
         m_.jointPrim.push_back(kNoIndex);  // set once the child's prim exists
         if (actuated) {
             m_.actuatedJoints.push_back(name);
@@ -398,13 +426,42 @@ private:
                 return false;
             }
             case GeomType::Ellipsoid:
-                note(m_, "ellipsoid colliders are not supported yet; the one on link '" +
-                             link.name + "' is skipped");
+                m_.world.addHullCollider(body, ellipsoidHull(geom.size), pose, collision.friction);
+                return true;
+            case GeomType::Mesh: {
+                if (geom.mesh == kNoIndex || geom.mesh >= d_.meshes.size()) {
+                    return false;
+                }
+                const TriMesh& mesh = d_.meshes[geom.mesh];
+                std::optional<ConvexHull> hull = convexHullOf(mesh, geom.size);
+                if (!hull) {
+                    note(m_, "the collision mesh of link '" + link.name +
+                                 "' is flat: it has no volume and is skipped");
+                    return false;
+                }
+                if (hullFill(mesh, geom.size, *hull) < kConcaveFill) {
+                    if (isStatic) {
+                        note(m_, "the collision mesh of link '" + link.name +
+                                     "' is concave and its hull would block what is inside it: it "
+                                     "is skipped");
+                        return false;
+                    }
+                    note(m_, "the collision mesh of link '" + link.name +
+                                 "' is concave: it collides as its convex hull");
+                }
+                m_.world.addHullCollider(body, std::move(*hull), pose, collision.friction);
+                return true;
+            }
+            case GeomType::HeightField: {
+                if (!isStatic || geom.mesh >= d_.heightFields.size()) {
+                    note(m_, "a height field on the moving link '" + link.name + "' is skipped");
+                    return false;
+                }
+                m_.world.addHeightFieldCollider(d_.heightFields[geom.mesh],
+                                                compose(m_.bodyRestPose[body.index], pose),
+                                                collision.friction);
                 return false;
-            case GeomType::Mesh:
-                note(m_, "collision meshes are not used yet (link '" + link.name +
-                             "'): convex decomposition comes with the collision bake tool");
-                return false;
+            }
         }
         return false;
     }
@@ -420,13 +477,16 @@ private:
         return id;
     }
 
-    std::uint32_t material(const std::string& name, const std::array<float, 4>& rgba) {
+    std::uint32_t material(const std::string& name, const std::array<float, 4>& rgba,
+                           const std::optional<SurfaceLook>& look = std::nullopt) {
+        const std::string called = name.empty() ? "default" : name;
         for (std::uint32_t i = 0; i < m_.scene.materials.size(); ++i) {
-            if (m_.scene.materials[i].rgba == rgba) {
+            const SceneMaterial& known = m_.scene.materials[i];
+            if (known.rgba == rgba && lookOf(known) == lookOf({called, rgba, look})) {
                 return i;
             }
         }
-        m_.scene.materials.push_back({name.empty() ? "default" : name, rgba});
+        m_.scene.materials.push_back({called, rgba, look});
         return static_cast<std::uint32_t>(m_.scene.materials.size() - 1);
     }
 
@@ -465,6 +525,8 @@ private:
                 pose = compose(pose, Pose{{0.0, 0.0, -kPlaneThicknessM / 2.0}, {1, 0, 0, 0}});
                 break;
             }
+            case GeomType::HeightField:  // drawn as the mesh the reader made of it
+                return;
             case GeomType::Mesh:
                 if (geom.mesh == kNoIndex || geom.mesh >= d_.meshes.size()) {
                     note(m_,
@@ -484,7 +546,7 @@ private:
         prim.parent = linkPrim;
         prim.typeName = "Mesh";
         prim.mesh = meshId;
-        prim.material = material(visual.material, visual.rgba);
+        prim.material = material(visual.material, visual.rgba, visual.look);
         prim.body = body.index;
         prim.offset = pose;
         prim.scale = scale;
@@ -508,7 +570,12 @@ private:
                    const Pose& frame) {
         const Pose mount = relative(frame, sensor.pose);
         const std::string name = unique(m_.world.sensors.names, sensor.name);
-        m_.world.addSensor(name, sensor.type, body, mount, sensor.rateHz, sensor.settings);
+        if (sensor.type == SensorType::Custom) {
+            m_.world.addCustomSensor(name, sensor.kind, body, mount, sensor.rateHz, sensor.settings,
+                                     sensor.text);
+        } else {
+            m_.world.addSensor(name, sensor.type, body, mount, sensor.rateHz, sensor.settings);
+        }
         ScenePrim prim;
         prim.name = name;
         prim.parent = linkPrim;
@@ -540,6 +607,10 @@ private:
             case SensorType::Radar:
                 prim.typeName = "Radar";
                 prim.apiSchemas = {"SensorAPI_1", "RadarAPI_1"};
+                break;
+            case SensorType::Custom:
+                prim.typeName = "CustomSensor";
+                prim.apiSchemas = {"SensorAPI_1", "CustomSensorAPI_1"};
                 break;
         }
         prim.body = body.index;

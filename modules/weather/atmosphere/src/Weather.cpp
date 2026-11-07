@@ -84,6 +84,16 @@ double rainExtinction(double rainRateMps) {
     return std::numbers::pi * kMarshallPalmerN0 / (slope * slope * slope);
 }
 
+double snowExtinction(double snowRateMps) {
+    return snowRateMps <= 0.0 ? 0.0 : kSnowExtinctionPerMmph * snowRateMps / kMpsPerMmph;
+}
+
+double frictionScale(double wetness, double snowCover, double temperatureK) {
+    const double wet = temperatureK <= kFreezing ? kIceFrictionScale : kWetFrictionScale;
+    const double bare = 1.0 - (wetness * (1.0 - wet));
+    return bare + (snowCover * (std::min(kSnowFrictionScale, bare) - bare));
+}
+
 double dustExtinction(double concentrationKgPerM3, double medianDiameterM) {
     if (concentrationKgPerM3 <= 0.0 || medianDiameterM <= 0.0) {
         return 0.0;
@@ -153,6 +163,8 @@ Status Weather::declare(const WorldView& world, const ModuleConfig& config, Sign
     if (!clear_) {
         s_.visibility = value("visibility", "weather:visibility", 0.0);
         s_.rainRate = std::max(0.0, value("rain_rate", "weather:rainRate", 0.0));
+        snowRate_ = std::max(0.0, config.get<double>("snow_rate").value_or(0.0));
+        startCover_ = std::clamp(config.get<double>("snow_cover").value_or(0.0), 0.0, 1.0);
         s_.dustConcentration =
             std::max(0.0, value("dust_concentration", "weather:dustConcentration", 0.0));
         s_.dustDiameter = value("dust_median_diameter", "weather:dustMedianDiameter", 1e-5);
@@ -172,6 +184,7 @@ Status Weather::declare(const WorldView& world, const ModuleConfig& config, Sign
         const auto has = [&](const char* e) { return std::ranges::count(*effects, e) > 0; };
         fog_ = has("fog");
         rain_ = has("rain");
+        snow_ = has("snow");
         dust_ = has("dust");
         wetFriction_ = has("wet_friction");
         lens_ = has("lens_contamination");
@@ -192,6 +205,8 @@ Status Weather::declare(const WorldView& world, const ModuleConfig& config, Sign
     fog1550Out_ = d.output(spec("env/extinction/fog_1550", SignalType::Scalar, units::per_m));
     rainOut_ = d.output(spec("env/rain_rate", SignalType::Scalar, units::m_per_s));
     frictionOut_ = d.output(spec("env/friction_scale", SignalType::Scalar, units::one));
+    snowRateOut_ = d.output(spec("env/snow_rate", SignalType::Scalar, units::m_per_s));
+    snowCoverOut_ = d.output(spec("env/snow_cover", SignalType::Scalar, units::one));
     // Fields: a fog grid (extinction, 1/m, scalar) and a wind grid (m/s, vector).
     const auto loadField = [&](const char* key, const char* attribute, fields::Field::Kind kind,
                                std::shared_ptr<const fields::Field>& out) -> Status {
@@ -226,6 +241,15 @@ Status Weather::declare(const WorldView& world, const ModuleConfig& config, Sign
         !s.ok()) {
         return s;
     }
+    // Dust the rotors' outwash lifts off loose ground (the aerodynamics domain, rotor_aero.md §2).
+    downwashDustIn_ = SignalId{};
+    if (config.get<bool>("downwash_dust").value_or(false) && !clear_) {
+        SignalSpec lifted = spec("env/dust/downwash", SignalType::Scalar, units::kg_per_m3);
+        lifted.feedback = true;
+        downwashDustIn_ = d.input(lifted);
+        groundDustDiameter_ = config.get<double>("ground_dust_diameter").value_or(1e-4);
+    }
+    liftedDust_ = 0.0;
     fogFieldOut_ = d.output(spec("env/extinction/field", SignalType::Field3D, units::per_m));
     windFieldOut_ = d.output(
         spec("env/wind/velocity_field", SignalType::Field3D, units::m_per_s, "world_local"));
@@ -239,6 +263,7 @@ Status Weather::declare(const WorldView& world, const ModuleConfig& config, Sign
 
 Status Weather::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     wetness_ = 0.0;
+    snowCover_ = snow_ ? startCover_ : 0.0;
     contamination_.assign(contaminationOut_.size(), 0.0);
     bus.publishBuffer(fogFieldOut_, fields::fieldBuffer(fogField_.get()));
     bus.publishBuffer(windFieldOut_, fields::fieldBuffer(windField_.get()));
@@ -248,6 +273,7 @@ Status Weather::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
 
 Status Weather::step(const StepContext& context, SignalBus& bus) {
     const double dt = context.dt.seconds();
+    liftedDust_ = downwashDustIn_.valid() && dust_ ? bus.read(downwashDustIn_) : 0.0;
     if (wetFriction_ && s_.rainRate > 0.0) {
         // Wetting towards 1, faster in heavier rain up to kWettingRainRate.
         const double rate = std::min(s_.rainRate / kWettingRainRate, 1.0) / kWettingTimeS;
@@ -255,10 +281,22 @@ Status Weather::step(const StepContext& context, SignalBus& bus) {
     } else {
         wetness_ *= std::exp(-dt / kDryingTimeS);
     }
+    // Snow builds up below freezing, about covered after 10 minutes at 1 mm/h, and melts above it
+    // in half an hour (behavioural, illustrative).
+    constexpr double kCoverTimeS = 600.0;
+    constexpr double kMeltTimeS = 1800.0;
+    const double snowing = snow_ ? snowRate_ : 0.0;
+    if (s_.temperature <= kFreezing) {
+        snowCover_ =
+            1.0 - ((1.0 - snowCover_) * std::exp(-(snowing / kMpsPerMmph) / kCoverTimeS * dt));
+    } else {
+        snowCover_ *= std::exp(-dt / kMeltTimeS);
+    }
     if (lens_) {
         const double rate =
-            (rain_ ? s_.rainRate / kLensRainReference / kLensRainTimeS : 0.0) +
-            (dust_ ? s_.dustConcentration / kLensDustReference / kLensDustTimeS : 0.0);
+            ((rain_ ? s_.rainRate : 0.0) + snowing) / kLensRainReference / kLensRainTimeS +
+            (dust_ ? (s_.dustConcentration + liftedDust_) / kLensDustReference / kLensDustTimeS
+                   : 0.0);
         for (double& c : contamination_) {
             c = 1.0 - (1.0 - c) * std::exp(-rate * dt);
         }
@@ -277,9 +315,12 @@ void Weather::writeAll(SignalBus& bus) const {
     bus.write(irradianceOut_, s_.irradiance);
     bus.writeN(sunOut_, s_.sun);
     const double rain = rain_ ? rainExtinction(s_.rainRate) : 0.0;
-    const double dust = dust_ ? dustExtinction(s_.dustConcentration, s_.dustDiameter) : 0.0;
+    const double dust = dust_ ? dustExtinction(s_.dustConcentration, s_.dustDiameter) +
+                                    dustExtinction(liftedDust_, groundDustDiameter_)
+                              : 0.0;
     const auto total = [&](double wavelength) {
-        return (fog_ ? fogExtinction(s_.visibility, wavelength) : 0.0) + rain + dust;
+        return (fog_ ? fogExtinction(s_.visibility, wavelength) : 0.0) + rain + dust +
+               (snow_ ? snowExtinction(snowRate_) : 0.0);
     };
     bus.write(visibleOut_, total(kVisibleWavelength));
     bus.write(nir905Out_, total(kLidar905));
@@ -287,7 +328,9 @@ void Weather::writeAll(SignalBus& bus) const {
     bus.write(fog905Out_, fog_ ? fogExtinction(s_.visibility, kLidar905) : 0.0);
     bus.write(fog1550Out_, fog_ ? fogExtinction(s_.visibility, kLidar1550) : 0.0);
     bus.write(rainOut_, rain_ ? s_.rainRate : 0.0);
-    bus.write(frictionOut_, 1.0 - wetness_ * (1.0 - kWetFrictionScale));
+    bus.write(frictionOut_, frictionScale(wetness_, snowCover_, s_.temperature));
+    bus.write(snowRateOut_, snow_ ? snowRate_ : 0.0);
+    bus.write(snowCoverOut_, snowCover_);
     for (std::size_t i = 0; i < contaminationOut_.size(); ++i) {
         bus.write(contaminationOut_[i], contamination_[i]);
     }
@@ -295,6 +338,7 @@ void Weather::writeAll(SignalBus& bus) const {
 
 Status Weather::saveState(StateWriter& writer) const {
     writer.put(wetness_);
+    writer.put(snowCover_);
     for (const double c : contamination_) {
         writer.put(c);
     }
@@ -302,7 +346,7 @@ Status Weather::saveState(StateWriter& writer) const {
 }
 
 Status Weather::restoreState(StateReader& reader) {
-    bool ok = reader.get(wetness_);
+    bool ok = reader.get(wetness_) && reader.get(snowCover_);
     for (double& c : contamination_) {
         ok = ok && reader.get(c);
     }

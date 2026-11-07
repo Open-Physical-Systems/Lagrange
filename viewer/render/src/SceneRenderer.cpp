@@ -1,3 +1,4 @@
+#include "RealisticPass.hpp"
 #include "lagrange/gpu/Device.hpp"
 #include "lagrange/gpu/Raster.hpp"
 #include "lagrange/viewer/SceneRenderer.hpp"
@@ -20,6 +21,8 @@ constexpr VkFormat kColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
 using gpu::kDepthFormat;
 constexpr int kGridHalfCells = 20;  // lines every metre, 20 m to each side
 constexpr int kGridMajorEvery = 5;
+constexpr float kCurrentTintFloor = 0.12F;
+constexpr float kUntintedShade = 0.35F;  // what the Current shading leaves of other colours
 constexpr float kNoTemperature = 0.02F;  // linear grey of meshes without a thermal node
 // Collision shading: the design tokens' rigid-body domain colour, #9AACC6, as linear RGB.
 constexpr std::array<float, 4> kColliderColor{0.3231F, 0.4179F, 0.5647F, 1.0F};
@@ -95,6 +98,21 @@ gpu::Buffer lineBuffer(const gpu::Device& device, const std::vector<float>& vert
 
 }  // namespace
 
+std::array<float, 3> currentColor(float share) {
+    // Design tokens: electrical #F5C842 and info #5AA2FF, as linear RGB.
+    constexpr std::array<float, 3> kForward{0.913F, 0.578F, 0.054F};
+    constexpr std::array<float, 3> kReversed{0.102F, 0.361F, 1.0F};
+    // A motor at rest still reads as a motor: its tint starts above nothing.
+    const float t =
+        kCurrentTintFloor + (1.0F - kCurrentTintFloor) * std::clamp(std::abs(share), 0.0F, 1.0F);
+    const std::array<float, 3>& end = share < 0.0F ? kReversed : kForward;
+    std::array<float, 3> rgb{};
+    for (std::size_t k = 0; k < 3; ++k) {
+        rgb.at(k) = kNoTemperature + (end.at(k) - kNoTemperature) * t;
+    }
+    return rgb;
+}
+
 std::array<float, 3> thermalColor(float t) {
     // Design tokens colormap.thermal ("inferno"), sRGB.
     static constexpr std::array<std::array<int, 3>, 6> kStops{{{0x00, 0x00, 0x04},
@@ -137,6 +155,7 @@ SceneRenderer::SceneRenderer(const gpu::Device& device) : device_(device), meshe
 
 SceneRenderer::~SceneRenderer() {
     vkDeviceWaitIdle(device_.device());
+    realistic_.reset();
     meshes_.clear();
     gpu::destroy(device_, gridMinor_);
     gpu::destroy(device_, gridMajor_);
@@ -198,8 +217,12 @@ bool SceneRenderer::resize(VkExtent2D extent) {
                                 VK_IMAGE_ASPECT_COLOR_BIT);
     depth_ =
         gpu::createImage2D(device_, extent, kDepthFormat,
-                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                           VK_IMAGE_ASPECT_DEPTH_BIT);
     colorInitialised_ = false;
+    if (realistic_) {
+        realistic_->resize(extent, depth_);
+    }
     return true;
 }
 
@@ -231,18 +254,31 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
     gpu::transitionImage(commands, depth_.image, VK_IMAGE_ASPECT_DEPTH_BIT,
                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
 
+    // Realistic: its passes draw everything but the overlays, which go on the final image.
+    const bool realistic = options.shading == Shading::Realistic;
+    std::uint32_t realisticDraws = 0;
+    if (realistic) {
+        if (!realistic_) {
+            realistic_ = std::make_unique<RealisticPass>(device_);
+            realistic_->resize(extent, depth_);
+        }
+        realisticDraws =
+            realistic_->record(commands, frame, camera, options, meshes_, color_, depth_);
+    }
+
     VkRenderingAttachmentInfo colorAttachment{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     colorAttachment.imageView = color_.view;
     colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.loadOp = realistic ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     // Design (.vp): #091120. The target is UNORM and shaders encode for display, so the
     // clear colour is given in display values.
     colorAttachment.clearValue.color = {{9.0F / 255.0F, 17.0F / 255.0F, 32.0F / 255.0F, 1.0F}};
     VkRenderingAttachmentInfo depthAttachment{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     depthAttachment.imageView = depth_.view;
-    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.imageLayout = realistic ? VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL
+                                            : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthAttachment.loadOp = realistic ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
     depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     depthAttachment.clearValue.depthStencil = {0.0F, 0};  // reversed depth: far is 0
     VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
@@ -260,12 +296,12 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
     vkCmdSetViewport(commands, 0, 1, &viewport);
     vkCmdSetScissor(commands, 0, 1, &scissor);
 
-    lastDrawCount_ = 0;
+    lastDrawCount_ = realisticDraws;
     const VkShaderStageFlags stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     const VkDeviceSize zero = 0;
 
     // --- meshes ---------------------------------------------------------------------------
-    if (frame != nullptr && frame->statics) {
+    if (!realistic && frame != nullptr && frame->statics) {
         VkPipeline pipeline = unlitPipeline_;
         VkPipelineLayout layout = unlitLayout_;
         if (options.shading == Shading::Lit) {
@@ -314,6 +350,18 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
                         std::max(options.temperatureHigh - options.temperatureLow, 1e-3F);
                     const std::array<float, 3> rgb =
                         thermalColor((t - options.temperatureLow) / span);
+                    push.baseColor = {rgb[0], rgb[1], rgb[2], 1.0F};
+                }
+            }
+            if (options.shading == Shading::Current) {
+                const float share = i < options.current.size() ? options.current[i] : NAN;
+                if (std::isnan(share)) {
+                    // Not a motor's: its own colour, dimmed, so the robot stays readable.
+                    for (std::size_t k = 0; k < 3; ++k) {
+                        push.baseColor.at(k) *= kUntintedShade;
+                    }
+                } else {
+                    const std::array<float, 3> rgb = currentColor(share);
                     push.baseColor = {rgb[0], rgb[1], rgb[2], 1.0F};
                 }
             }

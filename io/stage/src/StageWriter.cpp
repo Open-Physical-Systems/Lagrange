@@ -200,6 +200,7 @@ private:
                 if (rgba[3] < 1.0F) {
                     usd.CreateDisplayOpacityAttr().Set(VtArray<float>{rgba[3]});
                 }
+                bindLook(usd.GetPrim(), m_.scene.materials[prim.material]);
             }
             return {};
         }
@@ -236,6 +237,12 @@ private:
                 "cannot apply SensorAPI_1: is lagrange_schemas on PXR_PLUGINPATH_NAME?")};
         }
         real("sensor:rate", sensors.rateHz[s]);
+        if (get("latency", 0.0) > 0.0) {
+            real("sensor:latency", get("latency", 0.0));
+        }
+        if (get("jitter", 0.0) > 0.0) {
+            real("sensor:jitter", get("jitter", 0.0));
+        }
         if (sensors.type[s] == SensorType::Lidar) {
             prim.ApplyAPI(TfToken("LidarAPI_1"));
             prim.CreateAttribute(TfToken("sensor:lidar:channels"), SdfValueTypeNames->Int)
@@ -250,6 +257,11 @@ private:
             real("sensor:lidar:rangeMin", get("min_range", 0.1));
             real("sensor:lidar:rangeMax", get("max_range", 30.0));
             real("sensor:lidar:rangeNoiseStd", get("range_noise", 0.0));
+            if (get("motion_distortion", 1.0) == 0.0) {
+                prim.CreateAttribute(TfToken("sensor:lidar:motionDistortion"),
+                                     SdfValueTypeNames->Bool)
+                    .Set(false);
+            }
         } else if (sensors.type[s] == SensorType::Camera) {
             prim.ApplyAPI(TfToken("CameraSensorAPI_1"));
             const double width = get("width", 640.0);
@@ -301,6 +313,20 @@ private:
                 prim.CreateAttribute(TfToken("sensor:camera:bitDepth"), SdfValueTypeNames->Int)
                     .Set(static_cast<int>(get("bit_depth", 8.0)));
             }
+            if (get("thermal", 0.0) != 0.0) {
+                prim.ApplyAPI(TfToken("ThermalCameraAPI_1"));
+                real("sensor:thermal:bandMin", get("thermal_band_min", 8e-6));
+                real("sensor:thermal:bandMax", get("thermal_band_max", 14e-6));
+                real("sensor:thermal:netd", get("thermal_netd", 0.05));
+                if (settings.contains("thermal_display_min")) {
+                    real("sensor:thermal:displayMin", get("thermal_display_min", 0.0));
+                    real("sensor:thermal:displayMax", get("thermal_display_max", 0.0));
+                }
+                const double palette = get("thermal_palette", 0.0);
+                token("sensor:thermal:palette", palette == 1.0   ? "black_hot"
+                                                : palette == 2.0 ? "ironbow"
+                                                                 : "white_hot");
+            }
         } else if (sensors.type[s] == SensorType::Gnss) {
             prim.ApplyAPI(TfToken("GnssAPI_1"));
             real("sensor:gnss:horizontalNoiseStd", get("horizontal_noise", 0.0));
@@ -330,6 +356,20 @@ private:
                     it != sensors.settings[s].end()) {
                     real(attribute, it->second);
                 }
+            }
+        } else if (sensors.type[s] == SensorType::Custom) {
+            prim.ApplyAPI(TfToken("CustomSensorAPI_1"));
+            prim.CreateAttribute(TfToken("sensor:custom:kind"), SdfValueTypeNames->String)
+                .Set(sensors.kind[s]);
+            const auto param = [](std::string key) {
+                std::replace(key.begin(), key.end(), '/', ':');
+                return TfToken("sensor:custom:param:" + key);
+            };
+            for (const auto& [key, value] : sensors.settings[s]) {
+                prim.CreateAttribute(param(key), SdfValueTypeNames->Double).Set(value);
+            }
+            for (const auto& [key, value] : sensors.text[s]) {
+                prim.CreateAttribute(param(key), SdfValueTypeNames->String).Set(value);
             }
         } else {
             prim.ApplyAPI(TfToken("ImuAPI_1"));
@@ -509,6 +549,35 @@ private:
         }
     }
 
+    /// A UsdPreviewSurface for a look the file gave, shared by the meshes that have it. A material
+    /// without one is left to its name, which is not written; nor is it needed by old samples.
+    void bindLook(const UsdPrim& prim, const SceneMaterial& material) {
+        if (!material.look) {
+            return;
+        }
+        const std::string token = TfMakeValidIdentifier(material.name);
+        const SdfPath path = SdfPath("/looks").AppendChild(TfToken(token));
+        if (!stage_->GetPrimAtPath(path)) {
+            UsdGeomScope::Define(stage_, SdfPath("/looks"));
+            UsdShadeMaterial looks = UsdShadeMaterial::Define(stage_, path);
+            UsdShadeShader shader =
+                UsdShadeShader::Define(stage_, path.AppendChild(TfToken("surface")));
+            shader.CreateIdAttr().Set(TfToken("UsdPreviewSurface"));
+            shader.CreateInput(TfToken("diffuseColor"), SdfValueTypeNames->Color3f)
+                .Set(GfVec3f(material.rgba[0], material.rgba[1], material.rgba[2]));
+            shader.CreateInput(TfToken("metallic"), SdfValueTypeNames->Float)
+                .Set(material.look->metallic);
+            shader.CreateInput(TfToken("roughness"), SdfValueTypeNames->Float)
+                .Set(material.look->roughness);
+            shader.CreateInput(TfToken("emissiveColor"), SdfValueTypeNames->Color3f)
+                .Set(GfVec3f(material.look->emissive[0], material.look->emissive[1],
+                             material.look->emissive[2]));
+            looks.CreateSurfaceOutput().ConnectToSource(
+                shader.CreateOutput(TfToken("surface"), SdfValueTypeNames->Token));
+        }
+        UsdShadeMaterialBindingAPI::Apply(prim).Bind(UsdShadeMaterial::Get(stage_, path));
+    }
+
     /// A physics material with the friction, shared by every collider that has it; none for the
     /// default.
     void bindFriction(const UsdPrim& prim, double friction) {
@@ -611,6 +680,26 @@ private:
             joint.CreateLocalRot0Attr().Set(quatf(multiply(inParent.orientation, turn)));
             joint.CreateLocalPos1Attr().Set(GfVec3f(0.0F));
             joint.CreateLocalRot1Attr().Set(quatf(turn));
+            if (hasJoint) {
+                const std::size_t j = found->second;
+                const World::Joints& table = world.joints;
+                if (table.damping[j] > 0.0 || table.friction[j] > 0.0 ||
+                    table.mimic[j] != kNoMimic) {
+                    UsdPrim prim = joint.GetPrim();
+                    prim.ApplyAPI(TfToken("JointDynamicsAPI_1"));
+                    const auto real = [&prim](const char* name, double value) {
+                        prim.CreateAttribute(TfToken(name), SdfValueTypeNames->Double).Set(value);
+                    };
+                    real("joint:damping", table.damping[j]);
+                    real("joint:friction", table.friction[j]);
+                    if (table.mimic[j] != kNoMimic) {
+                        prim.CreateAttribute(TfToken("joint:mimic"), SdfValueTypeNames->String)
+                            .Set(table.names[table.mimic[j]]);
+                        real("joint:mimicMultiplier", table.mimicMultiplier[j]);
+                        real("joint:mimicOffset", table.mimicOffset[j]);
+                    }
+                }
+            }
             if (hasJoint && world.joints.actuated[found->second]) {
                 const TfToken drive = type == JointType::Prismatic ? UsdPhysicsTokens->linear
                                                                    : UsdPhysicsTokens->angular;

@@ -29,12 +29,15 @@ struct ImportedMesh {
 /// hierarchy is baked in, faces are triangulated, missing normals are generated (smooth below
 /// 30°), and the triangles are grouped by material. Collada's <up_axis> is ignored, so the
 /// geometry keeps the axes it was authored in, as ROS tools expect of meshes in URDF files.
-/// Textures, animations and skins are not imported (formats.md §9). Import-time only, never in
+/// Textures are baked into parts of one colour each (a texture's colours, grouped by k-means);
+/// animations and skins are not imported (formats.md §9). Import-time only, never in
 /// step() (CLAUDE.md §4).
 [[nodiscard]] Expected<ImportedMesh, std::string> importMesh(const std::string& path);
 
 /// The file a URDF/SDFormat mesh reference names: "package://pkg/rel" through the ament index,
-/// "file:///abs", or a path relative to `baseDirectory` (the directory of the robot file).
+/// "lagrange-asset://id/file" in the fetched assets ($LAGRANGE_ASSET_DIR, by default
+/// ~/.local/share/lagrange/assets; an error when not fetched), "file:///abs", or a path
+/// relative to `baseDirectory` (the directory of the robot file).
 [[nodiscard]] Expected<std::string, std::string> resolveMeshUri(const std::string& uri,
                                                                 const std::string& baseDirectory);
 

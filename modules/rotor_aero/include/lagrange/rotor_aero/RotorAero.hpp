@@ -16,6 +16,9 @@ namespace lagrange::rotor_aero {
 /// weather), so there is no default and the rotor modules refuse to start without it
 /// (CLAUDE.md §10). The ISA sea-level value is 1.225 kg/m³.
 inline constexpr const char* kAirDensityKey = "air_density";
+/// Config: true when the weather runs; the density is then the weather's env/air_density (from
+/// the site's temperature, pressure and humidity), read every step, "air_density" until it comes.
+inline constexpr const char* kWeatherAirKey = "weather_air";
 
 /// Rotor parameters, from RotorAPI_1 (formats.md §3.3).
 struct RotorParams {
@@ -40,6 +43,19 @@ struct Load {
 inline constexpr double kGroundEffectMinHeight = 0.5;  // ×R; the validated range starts here
 [[nodiscard]] double groundEffect(double radius, double height);
 
+/// Ceiling effect of Hsiao and Chirarattananon (2019, IEEE/ASME Trans. Mechatronics, "Ceiling
+/// effects for hybrid aerial–surface locomotion of small rotorcraft", arXiv:1905.04632, eqs. 5,
+/// 6 and 9, without recirculation): with the propeller a distance D under a flat ceiling,
+/// δ = R/D and γ = ½ + ½·√(1 + α0·δ²/8), the thrust at the same power is γ^(2/3) times the free
+/// thrust (their eq. 7: P = T^(3/2) / (γ·√(2ρA))), as the ground effect is taken at the same
+/// power. α0 = kCeilingAsymmetry, their fit for a single 23 mm propeller; TODO(verify) for
+/// larger propellers (their 50 mm one needed recirculation too). δ is held at kCeilingMaxRatio,
+/// the edge of their data, and beyond kCeilingReach·R the effect is left out.
+inline constexpr double kCeilingAsymmetry = 1.60;  // α0
+inline constexpr double kCeilingMaxRatio = 20.0;   // δ
+inline constexpr double kCeilingReach = 6.0;       // ×R
+[[nodiscard]] double ceilingEffect(double radius, double distance);
+
 /// The rotor_aero domain at the `coefficients` fidelity (docs/design/domains/aerodynamics.md):
 /// every joint with RotorAPI_1 is a propeller whose static thrust and shaft torque follow its
 /// coefficients, with a first-order inflow lag (config "inflow_time_constant", s; 0, the
@@ -48,10 +64,13 @@ inline constexpr double kGroundEffectMinHeight = 0.5;  // ×R; the validated ran
 ///
 /// Per rotor joint j with child link c it reads joint/<j>/velocity and body/<c>/pose, and writes
 /// rotor/<j>/thrust (N), rotor/<j>/aero_torque (N·m, on the rotor about its axis),
-/// rotor/<j>/induced_velocity (m/s, momentum theory at the current thrust), the thrust as
+/// rotor/<j>/induced_velocity (m/s, momentum theory at the current thrust), rotor/<j>/thrust_axis
+/// (unit, world: where the thrust points, for the aerodynamics domain's downwash), the thrust as
 /// body/<c>/wrench/rotor (summed by WrenchSum into body/<c>/external_wrench; force applied at
-/// the link's origin, torque about its centre of mass) and the shaft torque as
-/// joint/<j>/load_torque. Default step 1 ms.
+/// the link's origin, torque about its centre of mass) with the air's shaft torque in it, about
+/// the joint axis: the air turns the propeller alone, from outside, so the frame feels only the
+/// motor's reaction (which is how a multirotor yaws). joint/<j>/load_torque stays declared and
+/// is zero. Default step 1 ms.
 ///
 /// At the `bem` fidelity (config "fidelity": "bem") every rotor needs a propeller file
 /// (aero:rotor:propeller): its loads come from blade-element momentum theory on the propeller's
@@ -67,7 +86,9 @@ inline constexpr double kGroundEffectMinHeight = 0.5;  // ×R; the validated ran
 /// At `bem` the hub's velocity through the air (its own, less the wind env/wind/velocity when
 /// config "wind" is true: the aerodynamics domain is in the run) splits into the axial speed and
 /// the edgewise speed across the disc, whose in-plane H-force and hub moment go into the link's
-/// wrench with the thrust.
+/// wrench with the thrust. With config "rotor_air" (the aerodynamics domain computes it) each
+/// rotor reads its own air, rotor/<j>/air_velocity (the wind plus other robots' downwash at its
+/// hub), instead: a drone under another loses thrust in its wake.
 ///
 /// Not yet: blade flapping of rigid propellers beyond the hub moment, the wake's skew (inflow
 /// uniform per annulus), ground effect over scenery other than the ground plane.
@@ -102,13 +123,15 @@ private:
         std::optional<FoldingBlade> folding;              // folding blades
         double bladeAngle{0.0};                           // rad, last step's (folding)
         SignalId velocity, pose, twist, bladeAngleOut;
-        SignalId thrustOut, torqueOut, inducedOut, wrenchOut, loadOut;
+        SignalId thrustOut, torqueOut, inducedOut, wrenchOut, loadOut, axisOut, airIn;
     };
 
     bool ideal_;
     bool bem_{false};
     bool wind_{false};
+    bool rotorAir_{false};
     SignalId windIn_;
+    SignalId densityIn_;  // the weather's air density (kWeatherAirKey)
     double rho_{0.0};
     double speedOfSound_{0.0};         // m/s; 0: incompressible
     std::array<double, 3> gravity_{};  // m/s², world-local
@@ -116,6 +139,12 @@ private:
     bool groundEffect_{true};
     bool hasGround_{false};
     std::array<double, 3> groundPoint_{}, groundNormal_{0.0, 0.0, 1.0};
+    struct Ceiling {  // a fixed box of the scenery, world frame
+        std::array<double, 3> centre{};
+        std::array<double, 4> orientation{1.0, 0.0, 0.0, 0.0};
+        std::array<double, 3> half{};
+    };
+    std::vector<Ceiling> ceilings_;
     std::vector<Rotor> rotors_;
 };
 

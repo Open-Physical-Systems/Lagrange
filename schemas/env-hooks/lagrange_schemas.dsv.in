@@ -9,4 +9,7 @@ prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/sensor_mate
 prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/comms
 prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/vehicle
 prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/road
+prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/human
+prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/water
+prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/joint
 prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/world

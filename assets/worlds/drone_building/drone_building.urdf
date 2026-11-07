@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<!--
+  A tall building on open ground, for flying a drone beside it and over its roof
+  (docs/design/domains/rotor_aero.md §2.6: the downwash meets buildings). An 8 m x 8 m
+  block 12 m high whose west face is at x = 0.6, so the sample quadcopter, which starts
+  at the origin, hovers with its rotor tips 0.3 m from the wall; and a 4 m x 4 m
+  pavilion 3 m high to the north, at y = 6 to 10, to land on. Boxes only.
+-->
+<robot name="drone_building">
+  <material name="facade">
+    <color rgba="0.62 0.64 0.68 1"/>
+  </material>
+  <material name="pavilion">
+    <color rgba="0.70 0.55 0.40 1"/>
+  </material>
+  <link name="world"/>
+  <link name="tower">
+    <visual>
+      <geometry><box size="8 8 12"/></geometry>
+      <material name="facade"/>
+    </visual>
+    <collision>
+      <geometry><box size="8 8 12"/></geometry>
+    </collision>
+  </link>
+  <joint name="tower_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="tower"/>
+    <origin xyz="4.6 0 6"/>
+  </joint>
+  <link name="pavilion">
+    <visual>
+      <geometry><box size="4 4 3"/></geometry>
+      <material name="pavilion"/>
+    </visual>
+    <collision>
+      <geometry><box size="4 4 3"/></geometry>
+    </collision>
+  </link>
+  <joint name="pavilion_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="pavilion"/>
+    <origin xyz="-1 8 1.5"/>
+  </joint>
+</robot>

@@ -7,9 +7,10 @@ page true.
 
 Read [Concepts](concepts.md) first for signals, units and the scheduler.
 
-> **v0.2 limitation.** Modules are compiled into the program that runs them. Loading your module
-> into `lagrange_server` as a plugin needs the versioned C ABI (`core/plugin_abi/`), which comes
-> with a later release. Until then, you build a run in your own program, as below.
+> **Modules and plugins.** This chapter compiles the module into its own program with the C++
+> interface. To run a module inside `lagrange_server`, build it against the versioned C ABI
+> (`core/plugin_abi/include/lagrange_plugin.h`) as a shared library and load it with
+> `lagrange_server --plugin LIB`: [Writing a plugin](writing-a-plugin.md).
 
 ## 1. The interface
 

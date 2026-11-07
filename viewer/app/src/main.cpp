@@ -1,6 +1,7 @@
 #include "App.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -29,10 +30,22 @@ void usage() {
         "                         or thermal\n"
         "  --follow <m>[,<deg>]   start with the follow camera, this far from the robot (and this\n"
         "                         far above the horizon)\n"
+        "  --camera <x,y,z,m,yaw,pitch>  start the camera looking at x,y,z from m metres away, at\n"
+        "                         these angles in degrees\n"
+        "  --season <name>        how the realistic view draws the year: summer, fall, winter, "
+        "rainy\n"
+        "  --shading <mode>       realistic (the default on a GPU), lit (without one), unlit, ...\n"
+        "  --overlays <list>      show these from the start: grid,axes,sensors,airflow\n"
+        "  --slice <field>[:xy|xz|yz]  the Slice 2D panel's field and plane, e.g.\n"
+        "                         aero/wind_speed:xz\n"
         "  --launcher             start on the launcher (the default when no --connect is given)\n"
         "  --start-local          press the launcher's Start local simulator: run lagrange_server\n"
         "                         on the --connect endpoint (or the default socket) and connect\n"
         "  --cursors              show the scope's A and B cursors from the start\n"
+        "  --export-netlist <f>   write the stage's power system to this netlist file\n"
+        "  --input <script>       headless mouse and keyboard, by frame: "
+        "50:click:400,200;60:text:12;61:key:enter (keys: enter, tab, escape)\n"
+        "  --panel <title>        bring this panel in front of its tabs, e.g. Circuit\n"
         "  --select <prim path>   select this prim once the scene arrived, e.g. /amr/base_link\n"
         "  --set-domain <d>=on|off  switch a domain in the profile being edited (repeatable)\n"
         "  --apply-profile        apply the edited profile once the server calls it valid\n"
@@ -101,6 +114,15 @@ int main(int argc, char** argv) {
                 std::fputs("error: --follow expects a distance in metres\n", stderr);
                 return 2;
             }
+        } else if (arg == "--camera") {
+            std::array<double, 6> view{};
+            if (std::sscanf(value(), "%lf,%lf,%lf,%lf,%lf,%lf", &view[0], &view[1], &view[2],
+                            &view[3], &view[4], &view[5]) != 6 ||
+                !(view[3] > 0.0)) {
+                std::fputs("error: --camera expects x,y,z,distance,yaw,pitch\n", stderr);
+                return 2;
+            }
+            options.camera = view;
         } else if (arg == "--record-frames") {
             options.recordFrames = value();
         } else if (arg == "--record-fps") {
@@ -124,6 +146,12 @@ int main(int argc, char** argv) {
             options.startLocal = true;
         } else if (arg == "--cursors") {
             options.cursors = true;
+        } else if (arg == "--export-netlist") {
+            options.exportNetlist = value();
+        } else if (arg == "--input") {
+            options.input = value();
+        } else if (arg == "--panel") {
+            options.focusPanel = value();
         } else if (arg == "--select") {
             options.selectPath = value();
         } else if (arg == "--apply-profile") {
@@ -132,6 +160,12 @@ int main(int argc, char** argv) {
             options.workspace = value();
         } else if (arg == "--shading") {
             options.shading = value();
+        } else if (arg == "--season") {
+            options.season = value();
+        } else if (arg == "--overlays") {
+            options.overlays = value();
+        } else if (arg == "--slice") {
+            options.slice = value();
         } else if (arg == "--open") {
             options.openPath = value();
         } else if (arg == "--scope") {

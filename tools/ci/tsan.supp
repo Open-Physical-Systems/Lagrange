@@ -1,0 +1,9 @@
+# Thread sanitizer: OpenUSD, TBB, MuJoCo and Embree are not instrumented, so their locks are not seen.
+called_from_lib:libusd_ms.so
+called_from_lib:libtbb.so.12
+called_from_lib:libtbbmalloc.so.2
+race:libusd_ms.so
+race:libtbb.so.12
+race:pxr
+race:libmujoco
+race:libembree

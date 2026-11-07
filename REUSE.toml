@@ -23,3 +23,9 @@ path = ["modules/sensors/data/wmm2025/*.COF", "modules/sensors/data/wmm2025/*.tx
 precedence = "override"
 SPDX-FileCopyrightText = "NOAA National Centers for Environmental Information and the British Geological Survey (World Magnetic Model 2025, U.S. Government work)"
 SPDX-License-Identifier = "LicenseRef-USGov-PublicDomain"
+
+[[annotations]]
+path = ["gpu/assets_textures/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "ambientCG contributors"
+SPDX-License-Identifier = "CC0-1.0"

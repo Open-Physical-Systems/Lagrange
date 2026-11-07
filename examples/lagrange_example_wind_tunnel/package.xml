@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>lagrange_example_wind_tunnel</name>
+  <version>1.1.0</version>
+  <description>Lagrange example: air past a robot, its drag and lift, and the flow to look at, as in CFD.</description>
+  <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>lagrange_server</exec_depend>
+  <exec_depend>lagrange_viewer</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

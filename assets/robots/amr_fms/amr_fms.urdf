@@ -1,0 +1,575 @@
+<?xml version="1.0"?>
+<!--
+  The swerve AMR of the AMR_FMS project (same author as this sample, Apache-2.0): a 4-wheel
+  swerve base with a passive front rocker, a scissor lift and two 2D lidars (LDROBOT M10P
+  class). From AMR_FMS's amr_description/urdf/amr_sim.urdf (made there by
+  scripts/gen_sim_urdf.py from the CAD export), with its meshes in meshes/. Changes for
+  Lagrange: mesh paths relative to this file, the Gazebo system plugins removed (the built-in
+  swerve controller drives the base), and a ros2_control block that names the steer and wheel
+  joints as driven. The lift stays collapsed: its joints are not driven yet.
+-->
+<robot name="amr">
+  <link name="base_footprint">
+  </link>
+  <link name="base_link">
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/chassis_frame.dae" />
+      </geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/lift_base_frame.dae" />
+      </geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/lift_drive.dae" />
+      </geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/battery.dae" />
+      </geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/power_distribution.dae" />
+      </geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/charging_contacts.dae" />
+      </geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/shell.dae" />
+      </geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/skirt.dae" />
+      </geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/bumper_front.dae" />
+      </geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/bumper_rear.dae" />
+      </geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/light_strip.dae" />
+      </geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/service_panel.dae" />
+      </geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/e_stop.dae" />
+      </geometry>
+    </visual>
+    <visual>
+      <origin xyz="-0.26500 0.15500 0.10700" rpy="0.00000 0.00000 3.14159" />
+      <geometry>
+        <mesh filename="meshes/swerve_module_fixed.dae" />
+      </geometry>
+    </visual>
+    <visual>
+      <origin xyz="-0.26500 -0.15500 0.10700" rpy="0.00000 0.00000 3.14159" />
+      <geometry>
+        <mesh filename="meshes/swerve_module_fixed.dae" />
+      </geometry>
+    </visual>
+    <inertial>
+      <origin xyz="-0.03 0 0.12" rpy="0 0 0" />
+      <mass value="47.31" />
+      <inertia ixx="1.62" ixy="0" ixz="0" iyy="3.41" iyz="0" izz="4.45" />
+    </inertial>
+    <collision name="body">
+      <origin xyz="0 0 0.145" rpy="0 0 0" />
+      <geometry>
+        <box size="0.89 0.58 0.27" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="rocker_link">
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/front_rocker.dae" />
+      </geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.00000 0.15500 0.00700" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/swerve_module_fixed.dae" />
+      </geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.00000 -0.15500 0.00700" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/swerve_module_fixed.dae" />
+      </geometry>
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0.03" rpy="0 0 0" />
+      <mass value="8.2" />
+      <inertia ixx="0.145" ixy="0" ixz="0" iyy="0.034" iyz="0" izz="0.166" />
+    </inertial>
+  </link>
+  <link name="swerve_fl_steer_link">
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/swerve_steer.dae" />
+      </geometry>
+    </visual>
+    <inertial>
+      <origin xyz="0 0.04 -0.08" rpy="0 0 0" />
+      <mass value="3.3" />
+      <inertia ixx="0.0081" ixy="0" ixz="0" iyy="0.0061" iyz="0" izz="0.0087" />
+    </inertial>
+  </link>
+  <link name="swerve_fr_steer_link">
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/swerve_steer.dae" />
+      </geometry>
+    </visual>
+    <inertial>
+      <origin xyz="0 0.04 -0.08" rpy="0 0 0" />
+      <mass value="3.3" />
+      <inertia ixx="0.0081" ixy="0" ixz="0" iyy="0.0061" iyz="0" izz="0.0087" />
+    </inertial>
+  </link>
+  <link name="swerve_rl_steer_link">
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/swerve_steer.dae" />
+      </geometry>
+    </visual>
+    <inertial>
+      <origin xyz="0 0.04 -0.08" rpy="0 0 0" />
+      <mass value="3.3" />
+      <inertia ixx="0.0081" ixy="0" ixz="0" iyy="0.0061" iyz="0" izz="0.0087" />
+    </inertial>
+  </link>
+  <link name="swerve_rr_steer_link">
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/swerve_steer.dae" />
+      </geometry>
+    </visual>
+    <inertial>
+      <origin xyz="0 0.04 -0.08" rpy="0 0 0" />
+      <mass value="3.3" />
+      <inertia ixx="0.0081" ixy="0" ixz="0" iyy="0.0061" iyz="0" izz="0.0087" />
+    </inertial>
+  </link>
+  <link name="swerve_fl_wheel_link">
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/swerve_wheel.dae" />
+      </geometry>
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="1.3" />
+      <inertia ixx="0.00144" ixy="0" ixz="0" iyy="0.00254" iyz="0" izz="0.00144" />
+    </inertial>
+    <collision name="tyre">
+      <origin xyz="0 0 0" rpy="1.5708 0 0" />
+      <geometry>
+        <cylinder radius="0.0625" length="0.04" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="swerve_fr_wheel_link">
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/swerve_wheel.dae" />
+      </geometry>
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="1.3" />
+      <inertia ixx="0.00144" ixy="0" ixz="0" iyy="0.00254" iyz="0" izz="0.00144" />
+    </inertial>
+    <collision name="tyre">
+      <origin xyz="0 0 0" rpy="1.5708 0 0" />
+      <geometry>
+        <cylinder radius="0.0625" length="0.04" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="swerve_rl_wheel_link">
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/swerve_wheel.dae" />
+      </geometry>
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="1.3" />
+      <inertia ixx="0.00144" ixy="0" ixz="0" iyy="0.00254" iyz="0" izz="0.00144" />
+    </inertial>
+    <collision name="tyre">
+      <origin xyz="0 0 0" rpy="1.5708 0 0" />
+      <geometry>
+        <cylinder radius="0.0625" length="0.04" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="swerve_rr_wheel_link">
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/swerve_wheel.dae" />
+      </geometry>
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="1.3" />
+      <inertia ixx="0.00144" ixy="0" ixz="0" iyy="0.00254" iyz="0" izz="0.00144" />
+    </inertial>
+    <collision name="tyre">
+      <origin xyz="0 0 0" rpy="1.5708 0 0" />
+      <geometry>
+        <cylinder radius="0.0625" length="0.04" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="laser_front_right">
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/lidar_m10p.dae" />
+      </geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/lidar_bracket.dae" />
+      </geometry>
+    </visual>
+  </link>
+  <link name="laser_rear_left">
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/lidar_m10p.dae" />
+      </geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/lidar_bracket.dae" />
+      </geometry>
+    </visual>
+  </link>
+  <link name="lift_top_platform">
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/top_platform.dae" />
+      </geometry>
+    </visual>
+    <inertial>
+      <origin xyz="0 0 -0.0075" rpy="0 0 0" />
+      <mass value="15.6" />
+      <inertia ixx="0.3" ixy="0" ixz="0" iyy="0.75" iyz="0" izz="1.05" />
+    </inertial>
+    <collision name="platform">
+      <origin xyz="0 0 -0.0075" rpy="0 0 0" />
+      <geometry>
+        <box size="0.76 0.48 0.015" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="scissor_inner_link">
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/scissor_arm_inner.dae" />
+      </geometry>
+    </visual>
+    <inertial>
+      <origin xyz="0.195 0 0" rpy="0 0 0" />
+      <mass value="5.41" />
+      <inertia ixx="0.005" ixy="0" ixz="0" iyy="0.0685" iyz="0" izz="0.0685" />
+    </inertial>
+  </link>
+  <link name="lift_carriage_link">
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/lift_carriage.dae" />
+      </geometry>
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="1.4" />
+      <inertia ixx="0.002" ixy="0" ixz="0" iyy="0.002" iyz="0" izz="0.002" />
+    </inertial>
+  </link>
+  <link name="scissor_outer_link">
+    <visual>
+      <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
+      <geometry>
+        <mesh filename="meshes/scissor_arm_outer.dae" />
+      </geometry>
+    </visual>
+    <inertial>
+      <origin xyz="-0.195 0 0" rpy="0 0 0" />
+      <mass value="4.13" />
+      <inertia ixx="0.004" ixy="0" ixz="0" iyy="0.0523" iyz="0" izz="0.0523" />
+    </inertial>
+  </link>
+  <joint name="base_footprint_joint" type="fixed">
+    <parent link="base_footprint" />
+    <child link="base_link" />
+    <origin xyz="0.00000 0.00000 0.05000" rpy="0.00000 0.00000 0.00000" />
+  </joint>
+  <joint name="rocker_joint" type="revolute">
+    <parent link="base_link" />
+    <child link="rocker_link" />
+    <origin xyz="0.26500 0.00000 0.10000" rpy="0.00000 0.00000 0.00000" />
+    <axis xyz="1 0 0" />
+    <limit lower="-0.02618" upper="0.02618" effort="100" velocity="1" />
+    <dynamics damping="5.0" friction="0.0" />
+  </joint>
+  <joint name="swerve_fl_steer_joint" type="continuous">
+    <parent link="rocker_link" />
+    <child link="swerve_fl_steer_link" />
+    <origin xyz="0.00000 0.15500 0.00700" rpy="0.00000 0.00000 0.00000" />
+    <axis xyz="0 0 1" />
+    <limit effort="20.0" velocity="6.0" />
+    <dynamics damping="0.2" friction="0.0" />
+  </joint>
+  <joint name="swerve_fr_steer_joint" type="continuous">
+    <parent link="rocker_link" />
+    <child link="swerve_fr_steer_link" />
+    <origin xyz="0.00000 -0.15500 0.00700" rpy="0.00000 0.00000 0.00000" />
+    <axis xyz="0 0 1" />
+    <limit effort="20.0" velocity="6.0" />
+    <dynamics damping="0.2" friction="0.0" />
+  </joint>
+  <joint name="swerve_rl_steer_joint" type="continuous">
+    <parent link="base_link" />
+    <child link="swerve_rl_steer_link" />
+    <origin xyz="-0.26500 0.15500 0.10700" rpy="0.00000 0.00000 0.00000" />
+    <axis xyz="0 0 1" />
+    <limit effort="20.0" velocity="6.0" />
+    <dynamics damping="0.2" friction="0.0" />
+  </joint>
+  <joint name="swerve_rr_steer_joint" type="continuous">
+    <parent link="base_link" />
+    <child link="swerve_rr_steer_link" />
+    <origin xyz="-0.26500 -0.15500 0.10700" rpy="0.00000 0.00000 0.00000" />
+    <axis xyz="0 0 1" />
+    <limit effort="20.0" velocity="6.0" />
+    <dynamics damping="0.2" friction="0.0" />
+  </joint>
+  <joint name="swerve_fl_wheel_joint" type="continuous">
+    <parent link="swerve_fl_steer_link" />
+    <child link="swerve_fl_wheel_link" />
+    <origin xyz="0.00000 0.00000 -0.09450" rpy="0.00000 0.00000 0.00000" />
+    <axis xyz="0 1 0" />
+    <limit effort="8.0" velocity="24.0" />
+    <dynamics damping="0.01" friction="0.0" />
+  </joint>
+  <joint name="swerve_fr_wheel_joint" type="continuous">
+    <parent link="swerve_fr_steer_link" />
+    <child link="swerve_fr_wheel_link" />
+    <origin xyz="0.00000 0.00000 -0.09450" rpy="0.00000 0.00000 0.00000" />
+    <axis xyz="0 1 0" />
+    <limit effort="8.0" velocity="24.0" />
+    <dynamics damping="0.01" friction="0.0" />
+  </joint>
+  <joint name="swerve_rl_wheel_joint" type="continuous">
+    <parent link="swerve_rl_steer_link" />
+    <child link="swerve_rl_wheel_link" />
+    <origin xyz="0.00000 0.00000 -0.09450" rpy="0.00000 0.00000 0.00000" />
+    <axis xyz="0 1 0" />
+    <limit effort="8.0" velocity="24.0" />
+    <dynamics damping="0.01" friction="0.0" />
+  </joint>
+  <joint name="swerve_rr_wheel_joint" type="continuous">
+    <parent link="swerve_rr_steer_link" />
+    <child link="swerve_rr_wheel_link" />
+    <origin xyz="0.00000 0.00000 -0.09450" rpy="0.00000 0.00000 0.00000" />
+    <axis xyz="0 1 0" />
+    <limit effort="8.0" velocity="24.0" />
+    <dynamics damping="0.01" friction="0.0" />
+  </joint>
+  <joint name="laser_front_right_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="laser_front_right" />
+    <origin xyz="0.39500 -0.24000 0.14000" rpy="0.00000 0.00000 -0.78540" />
+  </joint>
+  <joint name="laser_rear_left_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="laser_rear_left" />
+    <origin xyz="-0.39500 0.24000 0.14000" rpy="0.00000 0.00000 2.35619" />
+  </joint>
+  <joint name="lift_joint" type="prismatic">
+    <parent link="base_link" />
+    <child link="lift_top_platform" />
+    <origin xyz="0.00000 0.00000 0.30094" rpy="0.00000 0.00000 0.00000" />
+    <axis xyz="0 0 1" />
+    <limit lower="0" upper="0.1500" effort="3000" velocity="0.05" />
+    <dynamics damping="50.0" friction="0.0" />
+  </joint>
+  <joint name="scissor_inner_joint" type="revolute">
+    <parent link="base_link" />
+    <child link="scissor_inner_link" />
+    <origin xyz="-0.18836 0.00000 0.16500" rpy="0 -0.26180 0" />
+    <axis xyz="0 -1 0" />
+    <limit lower="0.0" upper="0.43718" effort="300" velocity="1.0" />
+    <dynamics damping="1.0" friction="0.0" />
+  </joint>
+  <joint name="lift_carriage_joint" type="prismatic">
+    <parent link="base_link" />
+    <child link="lift_carriage_link" />
+    <origin xyz="0.18835 0.00000 0.16500" rpy="0.00000 0.00000 0.00000" />
+    <axis xyz="1 0 0" />
+    <limit lower="-0.07816" upper="0.0" effort="500" velocity="0.2" />
+    <dynamics damping="1.0" friction="0.0" />
+  </joint>
+  <joint name="scissor_outer_joint" type="revolute">
+    <parent link="lift_carriage_link" />
+    <child link="scissor_outer_link" />
+    <origin xyz="0.00000 0.00000 0.00000" rpy="0 0.26180 0" />
+    <axis xyz="0 1 0" />
+    <limit lower="0.0" upper="0.43718" effort="300" velocity="1.0" />
+    <dynamics damping="1.0" friction="0.0" />
+  </joint>
+  <gazebo reference="laser_front_right">
+    <sensor name="scan_front_right" type="gpu_lidar">
+      <topic>scan_front_right</topic>
+      <frame_id>laser_front_right</frame_id>
+      <update_rate>10</update_rate>
+      <always_on>1</always_on>
+      <visualize>false</visualize>
+      <lidar>
+        <scan>
+          <horizontal>
+            <samples>1228</samples>
+            <resolution>1</resolution>
+            <min_angle>-2.35619</min_angle>
+            <max_angle>2.35619</max_angle>
+          </horizontal>
+        </scan>
+        <range>
+          <min>0.1</min>
+          <max>10.0</max>
+          <resolution>0.01</resolution>
+        </range>
+      </lidar>
+    </sensor>
+  </gazebo>
+  <gazebo reference="laser_rear_left">
+    <sensor name="scan_rear_left" type="gpu_lidar">
+      <topic>scan_rear_left</topic>
+      <frame_id>laser_rear_left</frame_id>
+      <update_rate>10</update_rate>
+      <always_on>1</always_on>
+      <visualize>false</visualize>
+      <lidar>
+        <scan>
+          <horizontal>
+            <samples>1228</samples>
+            <resolution>1</resolution>
+            <min_angle>-2.35619</min_angle>
+            <max_angle>2.35619</max_angle>
+          </horizontal>
+        </scan>
+        <range>
+          <min>0.1</min>
+          <max>10.0</max>
+          <resolution>0.01</resolution>
+        </range>
+      </lidar>
+    </sensor>
+  </gazebo>
+  <gazebo reference="base_link">
+    <sensor name="imu" type="imu">
+      <topic>imu</topic>
+      <frame_id>base_link</frame_id>
+      <update_rate>100</update_rate>
+      <always_on>1</always_on>
+    </sensor>
+  </gazebo>
+  <!-- Which joints take commands: the swerve controller steers and drives the four modules. -->
+  <ros2_control name="LagrangeSystem" type="system">
+    <hardware><plugin>lagrange_ros2_control/LagrangeSystem</plugin></hardware>
+    <joint name="swerve_fl_steer_joint">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="swerve_fr_steer_joint">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="swerve_rl_steer_joint">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="swerve_rr_steer_joint">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="swerve_fl_wheel_joint">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="swerve_fr_wheel_joint">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="swerve_rl_wheel_joint">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="swerve_rr_wheel_joint">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+</robot>

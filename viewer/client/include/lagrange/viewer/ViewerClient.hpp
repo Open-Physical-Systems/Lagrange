@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -117,6 +118,7 @@ struct AttributeInfo {
     Kind kind{Kind::Token};
     bool editable{false};
     std::vector<std::uint32_t> targets;  ///< Prims a relationship points at.
+    std::vector<double> numbers;         ///< The value of a real, integer or array, in full.
 
     /// "elec" for "elec:windingResistance"; empty when the name has no namespace.
     [[nodiscard]] std::string_view group() const {
@@ -269,6 +271,8 @@ struct WiringInfo {
 
 /// The environment the simulation uses, and the fields it can slice. Immutable once published.
 struct EnvironmentInfo {
+    double gravity{0.0};      ///< m/s², downward
+    double windFromDeg{0.0};  ///< compass: where the wind comes from
     struct EmiSource {
         std::string name;
         std::uint32_t prim{kNone};
@@ -303,7 +307,12 @@ struct EnvironmentInfo {
     bool synthetic{false};
 };
 
-/// One horizontal slice of a field. Immutable.
+/// Which plane a slice lies in (protocol SliceOrientation).
+enum class SliceOrientation : int { Horizontal = 0, VerticalXZ = 1, VerticalYZ = 2 };
+
+/// One slice of a field. Immutable. Horizontal: cells along +X and +Y at z = heightM. Vertical:
+/// columns along +X (VerticalYZ: +Y), rows along +Z from originY, the plane at heightM on the
+/// other horizontal axis.
 struct FieldSliceData {
     std::int64_t simTimeNs{0};
     std::uint32_t width{0};
@@ -316,24 +325,49 @@ struct FieldSliceData {
     float valueMin{0.0F};
     float valueMax{0.0F};
     std::vector<float> values;  ///< Row-major from cell (0, 0), `components` per cell.
+    SliceOrientation orientation{SliceOrientation::Horizontal};
 
-    /// The magnitude at a point of the region frame, by the nearest cell. NaN outside.
+    /// The magnitude at a point of the slice's plane (its two axes), by the nearest cell. NaN
+    /// outside.
     [[nodiscard]] float sample(double x, double y) const;
+};
+
+/// A box of a vector field around the robot (protocol FieldVolume), for moving particles.
+/// Immutable.
+struct FieldVolumeData {
+    std::int64_t simTimeNs{0};
+    std::uint32_t nx{0}, ny{0}, nz{0};
+    std::array<double, 3> origin{};  ///< Region frame, centre of cell (0, 0, 0).
+    double cellM{0.0};
+    float valueMax{0.0F};
+    std::vector<float> values;  ///< x fastest, then y, then z; three per cell.
+
+    /// The vector at a point of the region frame, trilinear; false outside the box.
+    bool sample(const std::array<double, 3>& at, std::array<float, 3>& out) const;
 };
 
 /// The slices of one field the viewer watches.
 class FieldStream {
 public:
-    explicit FieldStream(std::string name) : name_(std::move(name)) {}
+    explicit FieldStream(std::string name,
+                         SliceOrientation orientation = SliceOrientation::Horizontal)
+        : name_(std::move(name)), orientation_(orientation) {}
     [[nodiscard]] const std::string& name() const { return name_; }
     [[nodiscard]] std::shared_ptr<const FieldSliceData> latest() const { return latest_.load(); }
+    /// The latest box, when the stream was asked for volumes.
+    [[nodiscard]] std::shared_ptr<const FieldVolumeData> latestVolume() const {
+        return volume_.load();
+    }
+    [[nodiscard]] SliceOrientation orientation() const { return orientation_; }
     [[nodiscard]] std::uint64_t slices() const { return slices_.load(); }
     [[nodiscard]] std::uint64_t rejected() const { return rejected_.load(); }
 
 private:
     friend class ViewerClient;
     std::string name_;
+    SliceOrientation orientation_{SliceOrientation::Horizontal};
     std::atomic<std::shared_ptr<const FieldSliceData>> latest_;
+    std::atomic<std::shared_ptr<const FieldVolumeData>> volume_;
     std::atomic<std::uint64_t> slices_{0};
     std::atomic<std::uint64_t> rejected_{0};
 };
@@ -562,6 +596,15 @@ public:
     [[nodiscard]] std::shared_ptr<const LogBook> logs() const { return logs_.load(); }
     /// Asks for the attributes of one prim. Returns the request id.
     std::uint64_t requestAttributes(std::uint32_t prim);
+    /// Asks for the attributes of many prims at once. The answer goes to attributesOf() only, so
+    /// it does not disturb what the inspector waits for.
+    void requestAttributesOf(const std::vector<std::uint32_t>& prims);
+    /// Every prim's latest attributes from any request; never null. Replaced as a whole when an
+    /// answer arrives, so a pointer that compares equal has the same contents.
+    [[nodiscard]] std::shared_ptr<const std::map<std::uint32_t, PrimAttributes>> attributesOf()
+        const {
+        return attributesByPrim_.load();
+    }
     /// The latest attributes answer, or nullptr.
     [[nodiscard]] std::shared_ptr<const PrimAttributes> attributes() const {
         return attributes_.load();
@@ -584,9 +627,12 @@ public:
     [[nodiscard]] std::shared_ptr<const EnvironmentInfo> environment() const {
         return environment_.load();
     }
-    /// Starts receiving slices of a field at a height. Asking again for the same field
-    /// returns the same stream (and moves the slice to the new height).
-    [[nodiscard]] std::shared_ptr<FieldStream> watchField(const std::string& name, double heightM);
+    /// Starts receiving slices of a field at a height (horizontal), or through the robot
+    /// (vertical), and with `volume` boxes of it around the robot too. Asking again for the same
+    /// field and orientation returns the same stream (and moves the slice to the new height).
+    [[nodiscard]] std::shared_ptr<FieldStream> watchField(
+        const std::string& name, double heightM,
+        SliceOrientation orientation = SliceOrientation::Horizontal, bool volume = false);
     /// Asks the server to send (or stop sending) its ROS graph and its world state. Both are
     /// off until a panel that shows them asks. Remembered across reconnects.
     void setRosGraphWanted(bool wanted);
@@ -658,6 +704,9 @@ private:
     std::atomic<std::shared_ptr<const RecordingFacts>> recording_;
     std::atomic<std::uint64_t> statisticsSerial_{0};
     std::atomic<std::shared_ptr<const PrimAttributes>> attributes_;
+    std::atomic<std::shared_ptr<const std::map<std::uint32_t, PrimAttributes>>> attributesByPrim_{
+        std::make_shared<const std::map<std::uint32_t, PrimAttributes>>()};
+    std::atomic<std::uint64_t> manyAttributesRequest_{0};
     std::atomic<std::shared_ptr<const ProfileCheck>> profileCheck_;
     std::atomic<std::uint64_t> profileSerial_{0};
     void post(bool error, std::string text);
@@ -676,11 +725,14 @@ private:
 
     void subscribeSensors();  // (re)sends the sensor subscriptions; worker thread
     void handleFieldSlice(const v1::Envelope& envelope);
-    void sendFieldSubscription(const std::string& name, double heightM);
+    void handleFieldVolume(const v1::Envelope& envelope);
+    void sendFieldSubscription(const std::string& name, double heightM,
+                               SliceOrientation orientation, bool volume);
     void sendViewRequests();  // ROS graph and world, as wanted
     struct WatchedField {
         std::shared_ptr<FieldStream> stream;
         double heightM{0.0};
+        bool volume{false};
     };
     std::vector<WatchedField> fields_;  // guarded by sensorMutex_
     std::atomic<bool> rosGraphWanted_{false};

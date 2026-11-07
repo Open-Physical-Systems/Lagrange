@@ -1,0 +1,45 @@
+#usda 1.0
+(
+    """Lagrange joint schema. Codeless. What UsdPhysics joints do not say: damping, dry friction,
+    and copying another joint."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeJoint"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "JointDynamicsAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """On a physics joint (revolute or prismatic): its dynamics."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double joint:damping = 0 (
+        lagrangeUnit = "N*m*s/rad or N*s/m"
+        doc = "Viscous, the first on a hinge, the second on a slide."
+    )
+    double joint:friction = 0 (
+        lagrangeUnit = "N*m or N"
+        doc = "Dry, the first on a hinge, the second on a slide."
+    )
+    string joint:mimic = "" (
+        doc = "The joint this one copies, by name; it then takes no commands."
+    )
+    double joint:mimicMultiplier = 1 (
+        lagrangeUnit = "1"
+        doc = "Position = multiplier * the other's + offset."
+    )
+    double joint:mimicOffset = 0 (
+        lagrangeUnit = "rad or m"
+        doc = "Position = multiplier * the other's + offset."
+    )
+}

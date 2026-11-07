@@ -11,11 +11,13 @@
 #include <memory>
 #include <numbers>
 #include <optional>
+#include <simulation_interfaces/srv/delete_entity.hpp>
 #include <simulation_interfaces/srv/get_entities.hpp>
 #include <simulation_interfaces/srv/get_entity_state.hpp>
 #include <simulation_interfaces/srv/get_simulation_state.hpp>
 #include <simulation_interfaces/srv/reset_simulation.hpp>
 #include <simulation_interfaces/srv/set_simulation_state.hpp>
+#include <simulation_interfaces/srv/spawn_entities.hpp>
 #include <simulation_interfaces/srv/spawn_entity.hpp>
 #include <simulation_interfaces/srv/step_simulation.hpp>
 
@@ -191,7 +193,7 @@ TEST_F(CloudBridgeTest, PublishesA3dLidarAsAnOrganisedPointCloud) {
     EXPECT_EQ(cloud->header.frame_id, "front_lidar");
     EXPECT_EQ(cloud->height, 2U);
     EXPECT_EQ(cloud->width, 2U);
-    ASSERT_EQ(cloud->fields.size(), 5U);
+    ASSERT_EQ(cloud->fields.size(), 6U);
     EXPECT_EQ(cloud->fields[4].name, "ring");
     const auto point = [&](std::size_t i) {
         std::array<float, 3> xyz{};
@@ -207,6 +209,40 @@ TEST_F(CloudBridgeTest, PublishesA3dLidarAsAnOrganisedPointCloud) {
     std::uint16_t ring = 0;
     std::memcpy(&ring, cloud->data.data() + 3 * cloud->point_step + 16, sizeof(ring));
     EXPECT_EQ(ring, 1U);
+}
+
+// sensor:latency: the scan goes out that much later, on the simulation's clock, stamped when it
+// was sampled. With jitter, in order and within 3 sigma.
+TEST_F(BridgeTest, ASensorsMessagesArriveLate) {
+    const auto measure = [this](double latency, double jitter) {
+        world_.sensors.settings[0]["latency"] = latency;
+        world_.sensors.settings[0]["jitter"] = jitter;
+        world_.sensors.settings[0]["motion_distortion"] = 0.0;
+        bridge_->attach(world_, scheduler_.bus());
+        std::vector<std::int64_t> late;
+        std::int64_t lastStamp = -1;
+        const auto subscription = listener_->create_subscription<sensor_msgs::msg::LaserScan>(
+            "/scan", rclcpp::SensorDataQoS(), [&](const sensor_msgs::msg::LaserScan& scan) {
+                const std::int64_t stamp = rclcpp::Time(scan.header.stamp).nanoseconds();
+                EXPECT_GT(stamp, lastStamp) << "in order";
+                lastStamp = stamp;
+                late.push_back(scheduler_.now().ns - stamp);
+            });
+        EXPECT_TRUE(run([&late] { return late.size() >= 12; }));
+        return late;
+    };
+    for (const std::int64_t delay : measure(0.05, 0.0)) {
+        EXPECT_GE(delay, 50'000'000);
+        EXPECT_LT(delay, 80'000'000);
+    }
+    const std::vector<std::int64_t> noisy = measure(0.05, 0.01);  // well over the 10 ms ticks
+    bool varies = false;
+    for (const std::int64_t delay : noisy) {
+        EXPECT_GE(delay, 20'000'000);   // 3 sigma
+        EXPECT_LT(delay, 130'000'000);  // 3 sigma, and in order behind a late one
+        varies = varies || delay != noisy.front();
+    }
+    EXPECT_TRUE(varies);
 }
 
 TEST_F(BridgeTest, TakesVelocityCommandsAndExpiresThem) {
@@ -274,8 +310,18 @@ public:
     SimState state{SimState::Playing};
     std::uint64_t stepped{0};
     int resets{0};
+    std::vector<SpawnRequest> spawns;
+    std::vector<std::string> removed;
 
     SimState simulationState() override { return state; }
+    SpawnOutcome spawn(const SpawnRequest& request) override {
+        spawns.push_back(request);
+        return {{}, "/" + request.name};
+    }
+    SimOutcome remove(const std::string& name) override {
+        removed.push_back(name);
+        return name == "/robot" ? SimOutcome{} : SimOutcome{SimResult::NotFound, "no " + name};
+    }
     SimOutcome setSimulationState(SimState target) override {
         if (target == state) {
             return {SimResult::AlreadyInTargetState, ""};
@@ -372,9 +418,37 @@ TEST_F(SimulationServicesTest, PausesStepsAndResets) {
         si::msg::Result::RESULT_OK);
     EXPECT_EQ(fake_.resets, 1);
 
-    const auto spawn = call<si::srv::SpawnEntity>("/spawn_entity", si::srv::SpawnEntity::Request());
-    EXPECT_EQ(spawn->result.result, si::msg::Result::RESULT_FEATURE_UNSUPPORTED);
-    EXPECT_FALSE(spawn->result.error_message.empty());
+    si::srv::SpawnEntity::Request spawn;
+    spawn.name = "mate";
+    spawn.entity_resource.uri = "/robots/amr.urdf";
+    spawn.initial_pose.header.frame_id = "world";
+    spawn.initial_pose.pose.position.x = 2.0;
+    spawn.initial_pose.pose.orientation.w = 1.0;
+    const auto spawned = call<si::srv::SpawnEntity>("/spawn_entity", spawn);
+    EXPECT_EQ(spawned->result.result, si::msg::Result::RESULT_OK);
+    EXPECT_EQ(spawned->entity_name, "/mate");
+    ASSERT_EQ(fake_.spawns.size(), 1U);
+    EXPECT_EQ(fake_.spawns[0].uri, "/robots/amr.urdf");
+    EXPECT_EQ(fake_.spawns[0].frame, "world");
+    EXPECT_EQ(fake_.spawns[0].pose.position[0], 2.0);
+    EXPECT_EQ(fake_.spawns[0].pose.orientation[0], 1.0);
+
+    si::srv::SpawnEntities::Request many;
+    many.spawn_requests.resize(2);
+    many.spawn_requests[0].name = "a";
+    many.spawn_requests[1].name = "b";
+    const auto both = call<si::srv::SpawnEntities>("/spawn_entities", many);
+    EXPECT_EQ(both->result.result, si::msg::Result::RESULT_OK);
+    ASSERT_EQ(both->results.size(), 2U);
+    EXPECT_EQ(both->results[1].entity_name, "/b");
+
+    si::srv::DeleteEntity::Request gone;
+    gone.entity = "/robot";
+    EXPECT_EQ(call<si::srv::DeleteEntity>("/delete_entity", gone)->result.result,
+              si::msg::Result::RESULT_OK);
+    gone.entity = "/nobody";
+    EXPECT_EQ(call<si::srv::DeleteEntity>("/delete_entity", gone)->result.result,
+              si::msg::Result::RESULT_NOT_FOUND);
 }
 
 TEST_F(SimulationServicesTest, ListsAndFiltersEntitiesAndReportsTheirState) {

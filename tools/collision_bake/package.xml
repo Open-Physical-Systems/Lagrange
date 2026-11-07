@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_collision_bake</name>
-  <version>1.0.0</version>
+  <version>1.1.0</version>
   <description>Collision bake: decomposes a USD stage's mesh colliders into convex hulls with CoACD (formats.md section 2).</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>

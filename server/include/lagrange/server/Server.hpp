@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -19,7 +20,9 @@ namespace lagrange::server {
 
 struct ServerOptions {
     proto::Endpoint endpoint;
-    std::string robotPath;  // URDF of the robot to simulate
+    /// The robot to simulate (URDF, SDFormat, MJCF or USD); empty: none, an empty run that
+    /// robots are spawned into (Server::spawnRobot, simulation_interfaces' spawn_entity).
+    std::string robotPath;
     std::string worldPath;  // URDF of static scenery (root link "world"); empty = none
     /// Overlay file applied to the robot (docs/design/formats.md §9: motors, battery, bus);
     /// empty = none
@@ -50,6 +53,11 @@ struct ServerOptions {
     int trafficVehicles{8};
     int trafficPedestrians{6};
     std::uint64_t trafficSeed{1};
+    /// --humans N[,seed=S][,radius=M]: N people wandering within `radius` of the middle, placed
+    /// clear of each other, the robots and the scenery (RFC 0009).
+    int humanCount{0};
+    std::uint64_t humanSeed{1};
+    double humanRadius{10.0};  // m
     /// Where world ENU (0, 0, 0) is on the Earth (--geo-origin; a profile's world.geo_origin
     /// overrides it). A site parameter with no default: GNSS, magnetometers and barometers do
     /// not run without it.
@@ -79,6 +87,41 @@ struct ServerOptions {
         Pose spawn;  // world ENU
     };
     std::vector<ExtraRobot> extraRobots;
+    /// Plugin libraries to load (--plugin; a profile's plugins for `lagrange run`): paths, or
+    /// names found as lib<name>.so in $LAGRANGE_PLUGIN_PATH or the lagrange_plugins resource
+    /// index (RFC 0008). Only these can be loaded: a profile from a viewer never adds one.
+    std::vector<std::string> plugins;
+    /// --ros-topics FILE.yaml: signals published on ROS topics and topics written into signals
+    /// (RFC 0008 §4; ros2::readTopicMaps); empty = none.
+    std::string rosTopicsPath;
+    /// --joint-control: every moving joint of the robot is driven on its own, from
+    /// /joint_commands (sensor_msgs/JointState) or commandJoint, with no robot controller.
+    bool jointControl{false};
+    /// Bandwidth of its position and velocity loops, Hz.
+    double jointLoopHz{8.0};
+    /// --water X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH: a body of still water (m); the surface at LEVEL.
+    struct Water {
+        std::array<double, 3> surface{};
+        double sizeX{10.0}, sizeY{10.0}, depth{2.0};
+    };
+    std::vector<Water> water;
+    /// --water-current VX,VY[,VZ]: m/s, world ENU, the water's steady current (hydrodynamics.md).
+    std::array<double, 3> waterCurrent{};
+    /// --water-waves AMPLITUDE,PERIOD[,TOWARDS]: m, s and degrees (0 = towards +x, 90 = +y):
+    /// one train of linear (Airy) waves on every body of water. Amplitude 0: none.
+    std::array<double, 3> waterWaves{};
+    /// --hydro-coefficients FILE.yaml: a vehicle's own Fossen coefficients per body (body name to
+    /// the 18 numbers of hydrodynamics::FossenCoefficients, comma-separated): those bodies take
+    /// Fossen's model in the water instead of the cells' drag (hydrodynamics.md §9.1).
+    std::map<std::string, std::string> hydroCoefficients;
+    /// --sensor-timing NAME=LATENCY[,JITTER]: s, of a sensor's messages on ROS (sensors.md).
+    struct SensorTiming {
+        std::string sensor;
+        double latency{0.0}, jitter{0.0};
+    };
+    std::vector<SensorTiming> sensorTiming;
+    /// --site NAME=VALUE: the site at the start, as Server::setSite takes them.
+    std::map<std::string, double> site;
     std::string profileSchemaPath;  // profiles/schema.json, sent to viewers; empty = none
     /// What a profile's `stage` must say to apply to this run; empty: robotPath. `lagrange run`
     /// sets it to the stage as the profile writes it.
@@ -104,7 +147,11 @@ struct ServerOptions {
     /// deterministic, the fastest for scans of tens of thousands of beams); Gpu on a hardware
     /// GPU's compute kernel (Tier 1), which makes the run non-deterministic.
     enum class Lidar : std::uint8_t { Auto, Cpu, Gpu } lidar{Lidar::Auto};
-    std::string gpu;  // Vulkan device for the lidar and cameras (index or part of its name)
+    // How cameras draw colour: the viewport's realistic renderer on a GPU, else the simple shading,
+    // which a software device always uses. Depth and instance id do not change.
+    bool cameraRealistic{true};
+    int cameraSeason{0};  // 0 summer, 1 fall, 2 winter, 3 rainy
+    std::string gpu;      // Vulkan device for the lidar and cameras (index or part of its name)
     /// Render cameras (on `gpu`, or a software device without one), which makes the run
     /// non-deterministic; false: cameras publish their ground truth (empty images), as for
     /// `lagrange determinism`.
@@ -151,6 +198,10 @@ public:
     /// After load(), without start(): advances the simulation to `t` as fast as it can (no
     /// viewers, no wall clock), for headless checks such as `lagrange determinism`.
     Status stepUntil(SimTime t);
+    /// After load(): the run's whole state (time, every module, the bus), to restore later in
+    /// the same run (Scheduler::saveState); the physics conformance suite checks backends with it.
+    [[nodiscard]] Expected<std::vector<std::byte>, Status> saveState() const;
+    Status restoreState(std::span<const std::byte> state);
     /// After load(): the hash of the run's whole state (Scheduler::stateHash).
     [[nodiscard]] Expected<std::uint64_t, Status> stateHash() const;
 
@@ -163,6 +214,26 @@ public:
     [[nodiscard]] std::vector<SignalEntry> signals() const;
     /// After load(): the latest value of a signal; empty for an unknown name.
     [[nodiscard]] std::vector<double> read(const std::string& name) const;
+    /// After load(): adds a robot to the run (URDF, SDFormat, MJCF or USD) at `spawn` (world
+    /// ENU, as --spawn) and returns its entity name ("/name"). In a run without a robot it
+    /// becomes the robot (ROS drives it); otherwise it is passive, its names prefixed with
+    /// `name` (as --add-robot). The run is rebuilt: time goes on, every body keeps its pose and
+    /// (MuJoCo) every joint its position, velocities start from rest. `name` empty: from the
+    /// file name, made unique.
+    Expected<std::string, Status> spawnRobot(const std::string& path, const std::string& name,
+                                             const Pose& spawn);
+    /// After load(): changes the site while it runs and the run goes on from where it is:
+    /// "gravity" (m/s², downward), "wind_speed" (m/s, at the reference height), "wind_from"
+    /// (degrees, compass: where it blows from), "temperature" (K), "air_density" (kg/m³),
+    /// "pressure" (Pa), "relative_humidity" (0..1), "rain_rate" (m/s), "visibility" (m).
+    /// Wind acts on links with AeroAPI_1 and on rotors; a value that brings a domain in or
+    /// takes one out (the first air density) rebuilds the run keeping time and poses.
+    Status setSite(const std::string& name, double value);
+    /// With joint control: drive a joint by "position" (rad, m), "velocity" (rad/s, m/s) or
+    /// "effort" (N·m, N). False for another mode.
+    bool commandJoint(const std::string& joint, const std::string& mode, double value);
+    /// After load(): takes a robot out of the run by its entity name, rebuilt likewise.
+    Status removeRobot(const std::string& name);
     /// After load(): the simulated time.
     [[nodiscard]] SimTime now() const;
     /// After load(): the world (bodies, joints, colliders, sensors) as loaded.

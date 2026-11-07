@@ -50,6 +50,8 @@ add_library(
     ${imgui_src_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_src_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
     ${imgui_src_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+    # SDL's own 2D renderer, for small tools that draw no 3D (utils/, e.g. lagrange_tx16s).
+    ${imgui_src_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp
     ${implot_src_SOURCE_DIR}/implot.cpp
     ${implot_src_SOURCE_DIR}/implot_items.cpp
 )
@@ -77,6 +79,7 @@ install(
         ${imgui_src_SOURCE_DIR}/imstb_truetype.h
         ${imgui_src_SOURCE_DIR}/backends/imgui_impl_sdl3.h
         ${imgui_src_SOURCE_DIR}/backends/imgui_impl_vulkan.h
+        ${imgui_src_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.h
         ${implot_src_SOURCE_DIR}/implot.h
         ${implot_src_SOURCE_DIR}/implot_internal.h
     DESTINATION include/${PROJECT_NAME}

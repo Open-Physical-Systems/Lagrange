@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -27,14 +29,21 @@ struct Options {
     /// Domain switches to flip in the profile draft once the server's profile arrived,
     /// as (domain, enabled). They are edits, not applied, unless applyProfile is set.
     std::vector<std::pair<std::string, bool>> domainEdits;
-    bool applyProfile{false};    ///< Apply the edited profile as soon as the server calls it valid.
-    bool launcher{false};        ///< Start on the launcher even when a server is named.
-    bool startLocal{false};      ///< Start lagrange_server from the launcher, then connect.
-    bool cursors{false};         ///< Show the scope's A and B cursors from the start.
-    std::string shading;         ///< Viewport shading at start-up: lit, unlit or thermal.
+    bool applyProfile{false};  ///< Apply the edited profile as soon as the server calls it valid.
+    bool launcher{false};      ///< Start on the launcher even when a server is named.
+    bool startLocal{false};    ///< Start lagrange_server from the launcher, then connect.
+    bool cursors{false};       ///< Show the scope's A and B cursors from the start.
+    std::string season;        ///< Start-up season: summer, fall, winter or rainy.
+    std::string shading;       ///< Viewport shading at start-up: lit, unlit or thermal.
+    std::string overlays;      ///< --overlays: grid,axes,sensors,airflow shown from the start.
+    std::string slice;         ///< --slice: the Slice 2D panel's field and plane.
+    std::optional<std::array<double, 6>> camera;  ///< --camera: target, distance, yaw, pitch.
     double followDistance{0.0};  ///< > 0: start with the follow camera this far (m) away.
     double followPitchDeg{0.0};  ///< With followDistance: the camera's elevation; 0: default.
     std::string selectPath;      ///< Prim to select once the scene arrived, by its full path.
+    std::string exportNetlist;   ///< --export-netlist: write the stage's circuit to this file.
+    std::string input;           ///< --input: headless mouse and keyboard, see parseInput.
+    std::string focusPanel;      ///< --panel: a panel to bring in front of its tabs, by title.
     std::string openPath;        ///< Robot description or recording to ask the server to load.
     std::uint32_t width{1600};
     std::uint32_t height{900};

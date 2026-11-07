@@ -1,5 +1,6 @@
 #include "lagrange/gpu/Device.hpp"
 #include "lagrange/gpu/Raster.hpp"
+#include "lagrange/gpu/Realistic.hpp"
 #include "shaders/kMeshVertex.hpp"
 #include "shaders/kSensorColor.hpp"
 #include "shaders/kSensorLabels.hpp"
@@ -59,6 +60,10 @@ void buildPipeline(const Device& device, const PipelineSpec& spec, VkPipelineLay
     VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &range;
+    if (spec.setLayout != VK_NULL_HANDLE) {
+        layoutInfo.setLayoutCount = 1;
+        layoutInfo.pSetLayouts = &spec.setLayout;
+    }
     vkCreatePipelineLayout(device.device(), &layoutInfo, nullptr, &layout);
 
     VkShaderModule vertex = createShaderModule(device, spec.vertex);
@@ -79,9 +84,9 @@ void buildPipeline(const Device& device, const PipelineSpec& spec, VkPipelineLay
     }};
     VkPipelineVertexInputStateCreateInfo vertexInput{
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.vertexBindingDescriptionCount = spec.stride != 0 ? 1 : 0;  // 0: no vertex buffer
     vertexInput.pVertexBindingDescriptions = &binding;
-    vertexInput.vertexAttributeDescriptionCount = spec.hasNormal ? 2 : 1;
+    vertexInput.vertexAttributeDescriptionCount = spec.stride == 0 ? 0 : (spec.hasNormal ? 2 : 1);
     vertexInput.pVertexAttributeDescriptions = attributes.data();
 
     VkPipelineInputAssemblyStateCreateInfo assembly{
@@ -101,7 +106,7 @@ void buildPipeline(const Device& device, const PipelineSpec& spec, VkPipelineLay
     multisample.rasterizationSamples = spec.samples;
     VkPipelineDepthStencilStateCreateInfo depth{
         VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-    depth.depthTestEnable = VK_TRUE;
+    depth.depthTestEnable = spec.depthTest ? VK_TRUE : VK_FALSE;
     depth.depthWriteEnable = spec.depthWrite ? VK_TRUE : VK_FALSE;
     depth.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;  // reversed depth
     std::vector<VkPipelineColorBlendAttachmentState> blendAttachments(spec.colorFormats.size());
@@ -212,6 +217,8 @@ struct RasterScene::Impl {
     Pipeline color;   // multisampled: the image
     Pipeline labels;  // one sample: depth and instance id, never blended across an edge
     VkSampleCountFlagBits samples{VK_SAMPLE_COUNT_1_BIT};
+    std::shared_ptr<const RealisticTextures> textures;  // with the realistic look
+    int season{0};
     std::mutex mutex;  // one render at a time on the queue
 };
 
@@ -249,13 +256,14 @@ RasterScene::~RasterScene() {
     VkDevice device = impl_->device->device();
     vkDeviceWaitIdle(device);
     impl_->meshes.reset();
+    impl_->textures.reset();
     destroy(device, impl_->color);
     destroy(device, impl_->labels);
 }
 
 std::shared_ptr<RasterScene> RasterScene::create(const std::string& preferredDevice,
                                                  std::span<const MeshSource> meshes,
-                                                 std::string& error) {
+                                                 std::string& error, RasterLook look) {
     DeviceDesc desc;
     desc.applicationName = "lagrange_camera";
     desc.preferredDevice = preferredDevice;
@@ -286,6 +294,10 @@ std::shared_ptr<RasterScene> RasterScene::create(const std::string& preferredDev
     impl.meshes = std::make_unique<MeshSet>(*device);
     impl.meshes->upload(meshes);
     impl.device = std::move(device);
+    if (look.realistic && !impl.device->info().isSoftware) {
+        impl.textures = std::make_shared<RealisticTextures>(*impl.device);
+        impl.season = look.season;
+    }
     return scene;
 }
 
@@ -301,6 +313,10 @@ std::uint32_t RasterScene::samples() const {
     return static_cast<std::uint32_t>(impl_->samples);
 }
 
+bool RasterScene::realistic() const {
+    return impl_->textures != nullptr;
+}
+
 // --- RasterCamera -----------------------------------------------------------------------------
 
 struct RasterCamera::Impl {
@@ -312,6 +328,9 @@ struct RasterCamera::Impl {
     std::array<Image, 2> labels;  // linear depth, instance id: read back
     Image labelDepth;             // depth buffer of the labels pass
     Buffer readback;
+    Image realisticDepth;  // with the realistic look: sampled by it
+    std::unique_ptr<RealisticRenderer> realistic;
+    std::vector<RealisticDraw> draws;
 };
 
 RasterCamera::RasterCamera(std::shared_ptr<RasterScene> scene, std::uint32_t width,
@@ -344,12 +363,23 @@ RasterCamera::RasterCamera(std::shared_ptr<RasterScene> scene, std::uint32_t wid
     const VkDeviceSize pixels = VkDeviceSize{extent.width} * extent.height;
     impl_->readback =
         createBuffer(device, pixels * kSensorBytesPerPixel, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+    if (impl_->scene->impl_->textures) {
+        impl_->realisticDepth =
+            createImage2D(device, extent, kDepthFormat,
+                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                          VK_IMAGE_ASPECT_DEPTH_BIT);
+        impl_->realistic =
+            std::make_unique<RealisticRenderer>(device, impl_->scene->impl_->textures);
+        impl_->realistic->resize(extent, impl_->realisticDepth);
+    }
 }
 
 RasterCamera::~RasterCamera() {
     const Device& device = *impl_->scene->impl_->device;
     const std::lock_guard<std::mutex> lock(impl_->scene->impl_->mutex);
     vkDeviceWaitIdle(device.device());
+    impl_->realistic.reset();
+    destroy(device, impl_->realisticDepth);
     for (Image* image : {&impl_->color, &impl_->colorResolved, &impl_->colorDepth,
                          &impl_->labels[0], &impl_->labels[1], &impl_->labelDepth}) {
         destroy(device, *image);
@@ -358,7 +388,7 @@ RasterCamera::~RasterCamera() {
 }
 
 void RasterCamera::render(std::span<const RasterInstance> instances, const PinholeCamera& camera,
-                          RasterImages& out) {
+                          RasterImages& out, double seconds) {
     RasterScene::Impl& scene = *impl_->scene->impl_;
     const Device& device = *scene.device;
     const VkExtent2D extent = impl_->extent;
@@ -448,6 +478,54 @@ void RasterCamera::render(std::span<const RasterInstance> instances, const Pinho
                             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
         }
 
+        if (impl_->realistic) {
+            impl_->draws.clear();
+            for (const RasterInstance& instance : instances) {
+                RealisticDraw draw;
+                draw.mesh = instance.mesh;
+                draw.position = instance.position;
+                for (std::size_t k = 0; k < 4; ++k) {
+                    draw.rotation.at(k) = static_cast<float>(instance.rotation.at(k));
+                }
+                draw.scale = instance.scale;
+                draw.baseColor = instance.color;
+                draw.metallic = instance.metallic;
+                draw.roughness = instance.roughness;
+                draw.pattern = instance.pattern;
+                draw.emissive = instance.emissive;
+                draw.ground = instance.ground;
+                draw.water = instance.water;
+                draw.box = instance.box;
+                impl_->draws.push_back(draw);
+            }
+            RealisticView view;
+            for (std::size_t row = 0; row < 4; ++row) {
+                for (std::size_t column = 0; column < 4; ++column) {
+                    view.viewProjection.at(row * 4 + column) =
+                        push.viewProjection.at(row).at(column);
+                }
+            }
+            view.eye = camera.position;
+            view.right = xAxis;
+            view.up = {-yAxis[0], -yAxis[1], -yAxis[2]};
+            view.forward = zAxis;
+            constexpr double kFocus = 12.0;  // m ahead: where the sharpest shadows are
+            view.focus = {camera.position[0] + kFocus * zAxis[0],
+                          camera.position[1] + kFocus * zAxis[1],
+                          camera.position[2] + kFocus * zAxis[2]};
+            view.focusDistance = kFocus;
+            view.tanHalfX = w / (2.0 * camera.fx);
+            view.tanHalfY = h / (2.0 * camera.fy);
+            view.near = camera.near;
+            RealisticSettings settings;
+            settings.season = scene.season;
+            settings.seconds = seconds;
+            transitionImage(commands, impl_->realisticDepth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+                            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+            impl_->realistic->record(commands, impl_->draws, view, settings, *scene.meshes,
+                                     impl_->colorResolved, impl_->realisticDepth);
+        }
+
         VkClearValue sky{};
         for (std::size_t c = 0; c < 3; ++c) {
             sky.color.float32[c] = std::pow(kSkyLinear.at(c), 1.0F / 2.2F);  // as the shader
@@ -461,7 +539,9 @@ void RasterCamera::render(std::span<const RasterInstance> instances, const Pinho
             color.resolveImageView = impl_->colorResolved.view;
             color.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         }
-        pass(commands, std::span{&color, 1}, depthAttachment(impl_->colorDepth), scene.color);
+        if (!impl_->realistic) {
+            pass(commands, std::span{&color, 1}, depthAttachment(impl_->colorDepth), scene.color);
+        }
 
         VkClearValue far{};
         far.color.float32[0] = std::numeric_limits<float>::infinity();

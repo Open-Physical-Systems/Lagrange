@@ -23,6 +23,7 @@
 #include <memory>
 #include <mutex>
 #include <numbers>
+#include <random>
 #include <signal.h>
 #include <spawn.h>
 #include <sys/wait.h>
@@ -84,6 +85,18 @@ std::string localTime() {
 }
 
 /// What this machine offers, for the launcher's system check. Probed locally.
+/// Where the viewer keeps its files, made if it is not there.
+std::string configDirectory() {
+    const std::string configHome = environment("XDG_CONFIG_HOME");
+    const std::string home = environment("HOME");
+    std::string directory =
+        (configHome.empty() ? (home.empty() ? std::string(".") : home) + "/.config" : configHome) +
+        "/lagrange";
+    std::error_code ec;
+    std::filesystem::create_directories(directory, ec);
+    return directory;
+}
+
 SystemInfo systemInfo(const gpu::Device& device, float displayScale) {
     SystemInfo info;
     const gpu::DeviceInfo& gpuInfo = device.info();
@@ -110,13 +123,7 @@ SystemInfo systemInfo(const gpu::Device& device, float displayScale) {
     info.rosDistro = environment("ROS_DISTRO");
     info.rmw = environment("RMW_IMPLEMENTATION");
     info.rosDomain = environment("ROS_DOMAIN_ID");
-    const std::string configHome = environment("XDG_CONFIG_HOME");
-    const std::string home = environment("HOME");
-    info.configDirectory =
-        (configHome.empty() ? (home.empty() ? std::string(".") : home) + "/.config" : configHome) +
-        "/lagrange";
-    std::error_code ec;
-    std::filesystem::create_directories(info.configDirectory, ec);
+    info.configDirectory = configDirectory();
     return info;
 }
 
@@ -438,6 +445,13 @@ public:
         context.canOpenFiles = canOpenFiles_;
         context.initialScopeSignals = &scopeSignals_;
         context.workspace = &workspace_;
+        context.focusPanel = &focusPanel_;
+        context.fieldSlice = &slice_;
+        if (configDirectory_.empty()) {
+            configDirectory_ = configDirectory();
+        }
+        context.configDirectory = configDirectory_;
+        context.exportNetlist = &exportNetlist_;
         context.profileSession = &profileSession_;
         context.scopeSession = &scopeSession_;
         context.renderOptions = &renderOptions_;
@@ -504,7 +518,145 @@ public:
     void renderScene(VkCommandBuffer commands) {
         textures_.record(commands);
         buildSensorOverlays();
-        renderer_.render(commands, scene_.get(), camera_, renderOptions_, sensorOverlays_);
+        buildAirflow();
+        followWeather();
+        overlays_.clear();
+        overlays_.insert(overlays_.end(), sensorOverlays_.begin(), sensorOverlays_.end());
+        overlays_.insert(overlays_.end(), airflowOverlays_.begin(), airflowOverlays_.end());
+        renderer_.render(commands, scene_.get(), camera_, renderOptions_, overlays_);
+    }
+
+    /// The run's weather for the realistic view: wind and rain from the environment, snow from
+    /// the weather's signals (env/snow_rate, env/snow_cover), which the environment does not
+    /// carry. Subscribed when the catalog has them; a stream older than a second is no weather.
+    void followWeather() {
+        renderOptions_.rainMmPerH = 0.0F;
+        renderOptions_.snowMmPerH = 0.0F;
+        renderOptions_.snowCover = 0.0F;
+        renderOptions_.wind = {};
+        if (const auto environment = client_.environment()) {
+            renderOptions_.windSpeed = static_cast<float>(environment->windSpeed);
+            const double to = environment->windDirectionDeg * std::numbers::pi / 180.0;
+            renderOptions_.wind = {static_cast<float>(environment->windSpeed * std::cos(to)),
+                                   static_cast<float>(environment->windSpeed * std::sin(to))};
+            renderOptions_.rainMmPerH = static_cast<float>(environment->rainMmPerH);
+        }
+        const auto catalog = client_.catalog();
+        if (catalog != snowCatalog_) {
+            snowCatalog_ = catalog;
+            if (catalog && !snowRate_) {
+                snowRate_ = client_.subscribe("env/snow_rate");
+            }
+            if (catalog && !snowCover_) {
+                snowCover_ = client_.subscribe("env/snow_cover");
+            }
+        }
+        const std::int64_t now = scene_ ? scene_->simTimeNs : 0;
+        constexpr std::int64_t kStaleNs = 1'000'000'000;
+        const auto fresh = [&](const std::shared_ptr<ScopeBuffer>& b) {
+            if (!b || b->newestTimeNs() < now - kStaleNs) {
+                return 0.0F;
+            }
+            const double v = b->latest();
+            return std::isfinite(v) ? static_cast<float>(v) : 0.0F;
+        };
+        constexpr float kMmPerHourPerMps = 3.6e6F;
+        renderOptions_.snowMmPerH = fresh(snowRate_) * kMmPerHourPerMps;
+        renderOptions_.snowCover = fresh(snowCover_);
+    }
+
+    /// Airflow particles (rotor_aero.md §5): kAirParticles points moved through the server's
+    /// box of the air's velocity around the robot (FieldVolume of aero/wind_speed) and drawn as
+    /// streaks, one batch per colour of the design's field map (viridis) by speed. New ones are
+    /// placed where the air moves, so they gather in the downwash and outwash.
+    void buildAirflow() {
+        constexpr std::size_t kAirParticles = 1500;
+        constexpr float kLifeS = 2.5F;      // s before a particle starts again
+        constexpr float kTrailS = 0.06F;    // s of motion a streak shows
+        constexpr float kStillMps = 0.05F;  // slower than this: placed again
+        constexpr int kColours = 6;
+        static const std::array<ImVec4, 5> kStops{theme::hex(0x440154), theme::hex(0x3B528B),
+                                                  theme::hex(0x21918C), theme::hex(0x5EC962),
+                                                  theme::hex(0xFDE725)};
+        if (!renderOptions_.airflow) {
+            if (airStream_) {
+                (void)client_.watchField(kAirField, 0.0, SliceOrientation::VerticalXZ, false);
+                airStream_.reset();
+            }
+            airflowOverlays_.clear();
+            particles_.clear();
+            renderOptions_.airflowMax = 0.0F;
+            return;
+        }
+        if (!airStream_) {
+            airStream_ = client_.watchField(kAirField, 0.0, SliceOrientation::VerticalXZ, true);
+        }
+        const std::shared_ptr<const FieldVolumeData> volume = airStream_->latestVolume();
+        if (!volume) {
+            airflowOverlays_.clear();
+            return;
+        }
+        const float top = std::max(volume->valueMax, 0.5F);
+        renderOptions_.airflowMax = top;
+        std::uniform_real_distribution<double> unit(0.0, 1.0);
+        const std::array<double, 3> span{volume->cellM * (volume->nx - 1),
+                                         volume->cellM * (volume->ny - 1),
+                                         volume->cellM * (volume->nz - 1)};
+        const auto place = [&](Particle& p) {
+            std::array<float, 3> v{};
+            for (int attempt = 0; attempt < 12; ++attempt) {
+                for (std::size_t k = 0; k < 3; ++k) {
+                    p.at[k] = volume->origin[k] + unit(airRandom_) * span[k];
+                }
+                if (volume->sample(p.at, v) && std::hypot(v[0], v[1], v[2]) > 0.25F * top) {
+                    break;
+                }
+            }
+            p.age = static_cast<float>(unit(airRandom_)) * kLifeS;
+        };
+        if (particles_.size() != kAirParticles) {
+            particles_.resize(kAirParticles);
+            for (Particle& p : particles_) {
+                place(p);
+            }
+        }
+        const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.0F, 0.1F);
+        airflowOverlays_.resize(kColours);
+        for (int c = 0; c < kColours; ++c) {
+            const float t = (static_cast<float>(c) + 0.5F) / kColours * 4.0F;
+            const auto index = std::min(static_cast<std::size_t>(t), std::size_t{3});
+            const float blend = t - static_cast<float>(index);
+            const ImVec4& a = kStops.at(index);
+            const ImVec4& b = kStops.at(index + 1);
+            OverlayLines& lines = airflowOverlays_[static_cast<std::size_t>(c)];
+            lines.origin = volume->origin;
+            lines.color = {a.x + (b.x - a.x) * blend, a.y + (b.y - a.y) * blend,
+                           a.z + (b.z - a.z) * blend, 1.0F};
+            lines.vertices.clear();
+        }
+        for (Particle& p : particles_) {
+            std::array<float, 3> v{};
+            p.age += dt;
+            if (!volume->sample(p.at, v) || p.age > kLifeS) {
+                place(p);
+                continue;
+            }
+            const float speed = std::hypot(v[0], v[1], v[2]);
+            if (speed < kStillMps) {
+                place(p);
+                continue;
+            }
+            for (std::size_t k = 0; k < 3; ++k) {
+                p.at[k] += v[k] * dt;
+            }
+            const int c = std::clamp(static_cast<int>(speed / top * kColours), 0, kColours - 1);
+            std::vector<float>& out = airflowOverlays_[static_cast<std::size_t>(c)].vertices;
+            const std::array<float, 3> head{static_cast<float>(p.at[0] - volume->origin[0]),
+                                            static_cast<float>(p.at[1] - volume->origin[1]),
+                                            static_cast<float>(p.at[2] - volume->origin[2])};
+            out.insert(out.end(), {head[0] - v[0] * kTrailS, head[1] - v[1] * kTrailS,
+                                   head[2] - v[2] * kTrailS, head[0], head[1], head[2]});
+        }
     }
 
     /// Sensor frustums overlay: for each lidar of the scene, its coverage fan (spanning the
@@ -637,14 +789,50 @@ public:
         launcher_.openTarget = ec ? path : absolute.lexically_normal().string();
     }
     void setInitialSelection(std::string path) { selectPath_ = std::move(path); }
+    void setFocusPanel(std::string title) { focusPanel_ = std::move(title); }
+    void setExportNetlist(std::string path) { exportNetlist_ = std::move(path); }
     void setCursors(bool on) { cursorsWanted_ = on; }
+    [[nodiscard]] Shading shading() const { return renderOptions_.shading; }
     /// Start with the follow camera at this distance (m) from the robot; 0: frame the scene.
+    /// Where the camera looks from at the start: target (m), distance (m), yaw and pitch (deg).
+    void setCamera(const std::optional<std::array<double, 6>>& view) { startView_ = view; }
     void setFollow(double distance, double pitchDeg) {
         followDistance_ = distance;
         followPitchDeg_ = pitchDeg;
     }
+    /// Overlays to show from the start, whatever the shading turned off ("grid,axes,sensors").
+    void setOverlays(const std::string& names) {
+        renderOptions_.grid = renderOptions_.grid || names.find("grid") != std::string::npos;
+        renderOptions_.axes = renderOptions_.axes || names.find("axes") != std::string::npos;
+        renderOptions_.sensors =
+            renderOptions_.sensors || names.find("sensors") != std::string::npos;
+        renderOptions_.airflow =
+            renderOptions_.airflow || names.find("airflow") != std::string::npos;
+    }
+    /// The field and plane the Slice 2D panel starts on ("aero/wind_speed:xz").
+    void setSlice(std::string slice) { slice_ = std::move(slice); }
+    void setSeason(const std::string& name) {
+        if (name == "fall") {
+            renderOptions_.season = Season::Fall;
+        } else if (name == "winter") {
+            renderOptions_.season = Season::Winter;
+        } else if (name == "rainy") {
+            renderOptions_.season = Season::Rainy;
+        }
+    }
     void setShading(const std::string& name) {
-        if (name == "unlit") {
+        renderOptions_.realisticAvailable = device_.tier() != gpu::CapabilityTier::Tier0;
+        // A GPU shows the world as it would look, a software device keeps the quick view.
+        const bool realistic =
+            name == "realistic" || (name.empty() && renderOptions_.realisticAvailable);
+        if (realistic) {
+            renderOptions_.shading = Shading::Realistic;
+            renderOptions_.grid = false;
+            renderOptions_.axes = false;
+            renderOptions_.sensors = false;
+        } else if (name == "lit") {
+            renderOptions_.shading = Shading::Lit;
+        } else if (name == "unlit") {
             renderOptions_.shading = Shading::Unlit;
         } else if (name == "collision") {
             renderOptions_.shading = Shading::Collision;
@@ -715,8 +903,15 @@ private:
             }
             renderOptions_.follow = true;
         }
+        if (startView_) {
+            camera_.target = {(*startView_)[0], (*startView_)[1], (*startView_)[2]};
+            camera_.distance = (*startView_)[3];
+            camera_.yaw = (*startView_)[4] * std::numbers::pi / 180.0;
+            camera_.pitch = (*startView_)[5] * std::numbers::pi / 180.0;
+        }
     }
 
+    std::optional<std::array<double, 6>> startView_;
     const gpu::Device& device_;
     ViewerClient& client_;
     SceneRenderer renderer_;
@@ -743,6 +938,18 @@ private:
     std::uint64_t lidarGeneration_{0};  // statics generation lidars_ was built from
     std::vector<std::pair<std::uint32_t, std::shared_ptr<SensorStream>>> lidars_;  // prim, frames
     std::vector<OverlayLines> sensorOverlays_;
+    std::vector<OverlayLines> airflowOverlays_;
+    std::shared_ptr<const SignalCatalog> snowCatalog_;
+    std::shared_ptr<ScopeBuffer> snowRate_, snowCover_;
+    std::vector<OverlayLines> overlays_;  // both, as drawn
+    static constexpr const char* kAirField = "aero/wind_speed";
+    struct Particle {
+        std::array<double, 3> at{};  // region frame, m
+        float age{0.0F};             // s
+    };
+    std::shared_ptr<FieldStream> airStream_;
+    std::vector<Particle> particles_;
+    std::mt19937 airRandom_{20261102U};
     std::vector<std::int64_t> bookmarks_;
     LauncherState launcher_;
     LocalServer localServer_;
@@ -752,6 +959,10 @@ private:
     std::vector<std::pair<std::string, bool>> domainEdits_;
     bool applyProfile_{false};
     std::string selectPath_;
+    std::string focusPanel_;
+    std::string slice_;
+    std::string configDirectory_;
+    std::string exportNetlist_;
     bool cursorsWanted_{false};
     bool openFileRequested_{false};
     std::string framedStage_{"\x01"};  // never a real stage path, so the first scene is framed
@@ -811,6 +1022,91 @@ std::string jsonEscape(const std::string& text) {
 
 // --- headless ---------------------------------------------------------------------------
 
+/// --input: mouse and keyboard at given frames, so that a headless run can press what a user
+/// presses. "FRAME:click:X,Y" (down and up on the next frames), "FRAME:move:X,Y", "FRAME:down",
+/// "FRAME:up", "FRAME:text:WORDS", "FRAME:wheel:N", ";" between them; pixels of the window.
+struct InputEvent {
+    std::uint32_t frame{0};
+    std::string kind;
+    float x{0.0F};
+    float y{0.0F};
+    std::string text;
+};
+
+std::vector<InputEvent> parseInput(const std::string& script) {
+    std::vector<InputEvent> events;
+    std::size_t from = 0;
+    while (from < script.size()) {
+        std::size_t end = script.find(';', from);
+        end = end == std::string::npos ? script.size() : end;
+        const std::string item = script.substr(from, end - from);
+        from = end + 1;
+        const std::size_t a = item.find(':');
+        if (a == std::string::npos) {
+            continue;
+        }
+        InputEvent event;
+        event.frame = static_cast<std::uint32_t>(std::strtoul(item.c_str(), nullptr, 10));
+        const std::size_t b = item.find(':', a + 1);
+        event.kind = item.substr(a + 1, b == std::string::npos ? b : b - a - 1);
+        const std::string rest = b == std::string::npos ? std::string{} : item.substr(b + 1);
+        event.text = rest;
+        std::sscanf(rest.c_str(), "%f,%f", &event.x, &event.y);
+        if (event.kind == "click") {
+            InputEvent move = event;
+            move.kind = "move";
+            events.push_back(move);
+            InputEvent down = event;
+            down.kind = "down";
+            down.frame = event.frame + 1;
+            events.push_back(down);
+            InputEvent up = event;
+            up.kind = "up";
+            up.frame = event.frame + 2;
+            events.push_back(up);
+        } else if (event.kind == "key") {
+            // A key pressed on this frame and let go on the next: enter, tab or escape.
+            InputEvent down = event;
+            down.kind = "keydown";
+            events.push_back(down);
+            InputEvent up = event;
+            up.kind = "keyup";
+            up.frame = event.frame + 1;
+            events.push_back(up);
+        } else {
+            events.push_back(std::move(event));
+        }
+    }
+    return events;
+}
+
+void applyInput(const std::vector<InputEvent>& events, std::uint32_t frame, ImGuiIO& io) {
+    for (const InputEvent& event : events) {
+        if (event.frame != frame) {
+            continue;
+        }
+        if (event.kind == "move") {
+            io.AddMousePosEvent(event.x, event.y);
+        } else if (event.kind == "down") {
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        } else if (event.kind == "up") {
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        } else if (event.kind == "wheel") {
+            io.AddMouseWheelEvent(0.0F, event.x);
+        } else if (event.kind == "text") {
+            io.AddInputCharactersUTF8(event.text.c_str());
+        } else if (event.kind == "keydown" || event.kind == "keyup") {
+            const ImGuiKey key = event.text == "enter"    ? ImGuiKey_Enter
+                                 : event.text == "tab"    ? ImGuiKey_Tab
+                                 : event.text == "escape" ? ImGuiKey_Escape
+                                                          : ImGuiKey_None;
+            if (key != ImGuiKey_None) {
+                io.AddKeyEvent(key, event.kind == "keydown");
+            }
+        }
+    }
+}
+
 int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspace workspace) {
     gpu::DeviceDesc desc;
     desc.applicationName = "lagrange_viewer";
@@ -850,9 +1146,15 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             ui.requestStartLocal(proto::toString(endpoint));
         }
         ui.setInitialSelection(options.selectPath);
+        ui.setFocusPanel(options.focusPanel);
+        ui.setSlice(options.slice);
+        ui.setExportNetlist(options.exportNetlist);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);
+        ui.setSeason(options.season);
+        ui.setOverlays(options.overlays);
         ui.setFollow(options.followDistance, options.followPitchDeg);
+        ui.setCamera(options.camera);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize =
@@ -872,6 +1174,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         }
         const auto framePeriod = std::chrono::duration_cast<Clock::duration>(
             std::chrono::duration<double>(1.0 / std::max(options.recordFps, 1U)));
+        const std::vector<InputEvent> input = parseInput(options.input);
         auto nextFrame = Clock::time_point{};
         std::uint32_t written = 0;
         while ((recording ? written : rendered) < wanted) {
@@ -890,6 +1193,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
                 break;
             }
             ui.prepare();
+            applyInput(input, rendered, io);
             io.DeltaTime = 1.0F / 60.0F;
             ImGui_ImplVulkan_NewFrame();
             ImGui::NewFrame();
@@ -974,7 +1278,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             "\"log_lines\": %llu, \"attributes\": %zu, \"wiring_nodes\": %zu, "
             "\"wiring_wires\": %zu, \"events\": %zu, \"server_stats\": %s, "
             "\"environment_fields\": %zu, \"ros_topics\": %zu, \"ros_nodes\": %zu, "
-            "\"world_tiles\": %zu, \"world_agents\": %zu}\n",
+            "\"world_tiles\": %zu, \"world_agents\": %zu, \"shading\": %d}\n",
             jsonEscape(client.notice().text).c_str(), client.notice().error ? "true" : "false",
             rendered, static_cast<unsigned long long>(stats.snapshots),
             static_cast<unsigned long long>(stats.deltas),
@@ -997,7 +1301,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             client.rosGraph() ? client.rosGraph()->topics.size() : std::size_t{0},
             client.rosGraph() ? client.rosGraph()->nodes.size() : std::size_t{0},
             client.world() ? client.world()->tiles.size() : std::size_t{0},
-            client.world() ? client.world()->agents.size() : std::size_t{0});
+            client.world() ? client.world()->agents.size() : std::size_t{0},
+            static_cast<int>(ui.shading()));
         if (device->validationErrorCount() != 0 && exitCode == 0) {
             exitCode = 6;
         }
@@ -1203,9 +1508,14 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         }
         ui.setWorkspace(workspace);
         ui.setInitialSelection(options.selectPath);
+        ui.setFocusPanel(options.focusPanel);
+        ui.setSlice(options.slice);
+        ui.setExportNetlist(options.exportNetlist);
         ui.setCursors(options.cursors);
         ui.setShading(options.shading);
+        ui.setOverlays(options.overlays);
         ui.setFollow(options.followDistance, options.followPitchDeg);
+        ui.setCamera(options.camera);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);
         // The file dialog reports its result on a callback that may run on another thread.
         struct Chosen {
@@ -1262,7 +1572,8 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
             ImGui::Render();
             if (ui.takeOpenFileRequest()) {
                 static const SDL_DialogFileFilter kFilters[] = {
-                    {"Robots and recordings", "urdf;xacro;mcap"}, {"All files", "*"}};
+                    {"Robots and recordings", "urdf;sdf;xml;usd;usda;usdc;mcap"},
+                    {"All files", "*"}};
                 SDL_ShowOpenFileDialog(
                     [](void* user, const char* const* files, int /*filter*/) {
                         auto* result = static_cast<Chosen*>(user);

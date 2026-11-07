@@ -1,0 +1,4 @@
+# Signals of the run on ROS 2 topics: any signal the Signals workspace lists.
+publish:
+  - {signal: bus/dc/voltage, topic: /power/bus_voltage, type: std_msgs/msg/Float64}
+  - {signal: battery/pack/current, topic: /power/battery_current, type: std_msgs/msg/Float64}

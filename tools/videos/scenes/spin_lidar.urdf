@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<!-- A lidar spinning at 1 turn/s in a 12 m by 12 m room. -->
+<robot name="spin"><link name="world"/>
+  <link name="head"><inertial><mass value="5"/><inertia ixx="1" iyy="1" izz="1" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><geometry><cylinder radius="0.15" length="0.2"/></geometry><material name="h"><color rgba="0.9 0.5 0.15 1"/></material></visual></link>
+  <joint name="turn" type="continuous"><parent link="world"/><child link="head"/><origin xyz="0 0 1"/><axis xyz="0 0 1"/></joint>
+  <gazebo reference="head"><sensor name="scanner" type="ray"><update_rate>5</update_rate><ray>
+    <scan><horizontal><samples>720</samples><min_angle>-3.14159</min_angle><max_angle>3.14159</max_angle></horizontal></scan>
+    <range><min>0.1</min><max>30</max></range></ray></sensor></gazebo>
+  <link name="wall0"><collision><geometry><box size="0.2 12 3"/></geometry></collision>
+    <visual><geometry><box size="0.2 12 3"/></geometry><material name="w0"><color rgba="0.5 0.55 0.6 1"/></material></visual></link>
+  <joint name="wall0_fix" type="fixed"><parent link="world"/><child link="wall0"/><origin xyz="6 0 1.5"/></joint>
+  <link name="wall1"><collision><geometry><box size="0.2 12 3"/></geometry></collision>
+    <visual><geometry><box size="0.2 12 3"/></geometry><material name="w1"><color rgba="0.5 0.55 0.6 1"/></material></visual></link>
+  <joint name="wall1_fix" type="fixed"><parent link="world"/><child link="wall1"/><origin xyz="-6 0 1.5"/></joint>
+  <link name="wall2"><collision><geometry><box size="12 0.2 3"/></geometry></collision>
+    <visual><geometry><box size="12 0.2 3"/></geometry><material name="w2"><color rgba="0.5 0.55 0.6 1"/></material></visual></link>
+  <joint name="wall2_fix" type="fixed"><parent link="world"/><child link="wall2"/><origin xyz="0 6 1.5"/></joint>
+  <link name="wall3"><collision><geometry><box size="12 0.2 3"/></geometry></collision>
+    <visual><geometry><box size="12 0.2 3"/></geometry><material name="w3"><color rgba="0.5 0.55 0.6 1"/></material></visual></link>
+  <joint name="wall3_fix" type="fixed"><parent link="world"/><child link="wall3"/><origin xyz="0 -6 1.5"/></joint>
+</robot>

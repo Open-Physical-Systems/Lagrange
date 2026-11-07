@@ -38,7 +38,8 @@
         "rotor_aero":       { "$ref": "#/$defs/rotor_aero" },
         "hydrodynamics":    { "$ref": "#/$defs/generic_domain" },
         "traffic":          { "$ref": "#/$defs/traffic" },
-        "comms":            { "$ref": "#/$defs/generic_domain" }
+        "comms":            { "$ref": "#/$defs/generic_domain" },
+        "humans":           { "$ref": "#/$defs/generic_domain" }
       }
     },
     "world": {
@@ -66,6 +67,19 @@
             "active_region_radius": { "type": "number", "exclusiveMinimum": 0, "description": "m" },
             "rebase_distance": { "type": "number", "exclusiveMinimum": 0, "default": 1000, "description": "m" }
           }
+        }
+      }
+    },
+    "plugins": {
+      "type": "array",
+      "description": "Plugin libraries (RFC 0008): loaded when the server starts, never by a viewer.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["library"],
+        "properties": {
+          "library": { "type": "string", "minLength": 1, "description": "A path, or a name found as lib<name>.so in LAGRANGE_PLUGIN_PATH or the lagrange_plugins resource index." },
+          "config": { "type": "object", "description": "What the library's modules read with config_get_real and config_get_string." }
         }
       }
     },
@@ -129,6 +143,9 @@
     "substitute": {
       "oneOf": [
         { "enum": ["ideal", "zero", "clear", "ambient", "ground_truth", "fixed", "load_profile", "replay"] },
+        { "type": "string", "pattern": "^[a-z][a-z0-9_]*$",
+          "not": { "enum": ["ideal", "zero", "clear", "ambient", "ground_truth", "fixed", "load_profile", "replay"] },
+          "description": "A substitute module of a loaded plugin, by its name (RFC 0008)." },
         {
           "type": "object",
           "additionalProperties": false,
@@ -168,7 +185,7 @@
     "rigid_body": {
       "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
       "properties": {
-        "backend": { "enum": ["physx", "mujoco", "jolt"] },
+        "backend": { "type": "string", "minLength": 1, "examples": ["mujoco", "jolt"], "description": "mujoco, jolt, or a rigid_body module of a loaded plugin (RFC 0008)." },
         "solver_iterations": { "type": "integer", "minimum": 1 },
         "gpu": { "type": "boolean", "default": false },
         "load_profile": { "type": "string", "description": "CSV torque-vs-speed table for the load_profile substitute." }
@@ -199,7 +216,9 @@
         "wind_from": { "type": "number", "description": "degrees, meteorological: 0 from the north, 90 from the east" },
         "wind_reference_height": { "type": "number", "exclusiveMinimum": 0, "description": "m above the ground" },
         "roughness_length": { "type": "number", "exclusiveMinimum": 0, "description": "m, the terrain's z0 for the logarithmic profile (open flat terrain: about 0.03)" },
-        "turbulence": { "enum": ["none", "dryden"], "default": "none" }
+        "turbulence": { "enum": ["none", "dryden"], "default": "none" },
+        "downwash": { "type": "boolean", "default": true, "description": "Rotors' downwash and ground outwash blow on other robots and their rotors (rotor_aero.md §2)." },
+        "downwash_model": { "enum": ["fitted", "lbm"], "default": "fitted", "description": "fitted: the published fits (rotor_aero.md §2). lbm: the first multirotor's air computed live in a lattice Boltzmann box on a hardware GPU, the fitted model elsewhere and without one (rotor_aero.md §8)." }
       },
       "unevaluatedProperties": false
     },
@@ -207,14 +226,18 @@
       "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
       "properties": {
         "effects": { "type": "array", "uniqueItems": true,
-          "items": { "enum": ["fog", "rain", "dust", "wet_friction", "lens_contamination"] } },
+          "items": { "enum": ["fog", "rain", "snow", "dust", "wet_friction", "lens_contamination"] } },
         "temperature": { "type": "number", "exclusiveMinimum": 0, "description": "K, the site's air temperature. No default (falls back to thermal's ambient temperature)." },
         "pressure": { "type": "number", "exclusiveMinimum": 0, "description": "Pa, the site's air pressure. No default." },
         "relative_humidity": { "type": "number", "minimum": 0, "maximum": 1, "description": "The site's relative humidity, 0 to 1. No default." },
         "visibility": { "type": "number", "exclusiveMinimum": 0, "description": "m, meteorological optical range: fog by Koschmieder." },
         "rain_rate": { "type": "number", "minimum": 0, "description": "m/s (1 mm/h = 2.778e-7 m/s)." },
+        "snow_rate": { "type": "number", "minimum": 0, "description": "m/s of melted water; lies below freezing." },
+        "snow_cover": { "type": "number", "minimum": 0, "maximum": 1, "description": "On the ground at the start." },
         "dust_concentration": { "type": "number", "minimum": 0, "description": "kg/m³ of airborne dust." },
         "dust_median_diameter": { "type": "number", "exclusiveMinimum": 0, "description": "m, the dust's median particle diameter." },
+        "ground_dust_diameter": { "type": "number", "exclusiveMinimum": 0, "description": "m, the loose grains on the ground that rotor outwash can lift (with ground_dust_concentration)." },
+        "ground_dust_concentration": { "type": "number", "minimum": 0, "description": "kg/m³, the most dust rotor outwash keeps in the air over this ground." },
         "solar_irradiance": { "type": "number", "minimum": 0, "description": "W/m², direct normal." },
         "sky_temperature": { "type": "number", "exclusiveMinimum": 0, "description": "K, for radiative exchange; default the air temperature." },
         "fog_field": { "type": "string", "description": "A NanoVDB file (.nvdb): a grid of fog extinction (1/m), added to the visibility's." },

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -89,6 +90,30 @@ std::set<std::string> commandedJoints(const std::string& path) {
     return joints;
 }
 
+constexpr int kArmJoints = 3;  // a chain this long is an arm, not a wheel or a door
+
+/// How many driven joints follow one another below `link`; -1 when they branch or one is passive.
+int drivenChainBelow(const urdf::ModelInterface& model, const urdf::Link& link) {
+    int below = 0;
+    for (const urdf::JointSharedPtr& joint : link.child_joints) {
+        const urdf::LinkConstSharedPtr child = model.getLink(joint->child_link_name);
+        if (!child) {
+            continue;
+        }
+        const int chain = drivenChainBelow(model, *child);
+        const bool movable = joint->type != urdf::Joint::FIXED;
+        if (chain < 0 || (movable && (!joint->limits || joint->limits->effort <= 0.0))) {
+            return -1;
+        }
+        const int here = chain + (movable ? 1 : 0);
+        if (here > 0 && below > 0) {
+            return -1;  // a branch: wheels, legs, rotors
+        }
+        below = std::max(below, here);
+    }
+    return below;
+}
+
 /// Lowest z of a collider in world coordinates, from its shape's support along -z.
 double lowestPoint(ShapeType shape, const std::array<double, 3>& size, const Pose& world) {
     const std::array<double, 9> r = matrix(world.orientation);
@@ -154,7 +179,8 @@ public:
 
     std::uint32_t material(const std::string& name, const std::array<float, 4>& rgba) {
         for (std::uint32_t i = 0; i < robot_.scene.materials.size(); ++i) {
-            if (robot_.scene.materials[i].rgba == rgba) {
+            if (robot_.scene.materials[i].rgba == rgba &&
+                lookOf(robot_.scene.materials[i]) == lookOf({name, rgba})) {
                 return i;
             }
         }
@@ -192,8 +218,13 @@ public:
             addJoint(*joint, body);
         }
 
+        // Static: welded all the way to a fixed root.
+        bool isStatic = fixedBase_;
+        for (const urdf::Link* up = &link; up != nullptr && isStatic; up = up->getParent().get()) {
+            isStatic = up->parent_joint == nullptr || up->parent_joint->type == urdf::Joint::FIXED;
+        }
         for (const urdf::CollisionSharedPtr& collision : link.collision_array) {
-            addCollider(link.name, *collision, body);
+            addCollider(link.name, *collision, body, isStatic);
         }
 
         ScenePrim prim;
@@ -225,6 +256,24 @@ public:
     }
 
     void setFixedBase(bool fixed) { fixedBase_ = fixed; }
+    /// `<mimic>`, once every joint is there; such a joint takes no commands.
+    void resolveMimics() {
+        World::Joints& joints = robot_.world.joints;
+        for (const Mimic& mimic : mimics_) {
+            const auto leader = std::find(joints.names.begin(), joints.names.end(), mimic.joint);
+            if (leader == joints.names.end()) {
+                note("joint '" + joints.names[mimic.follower] + "' mimics '" + mimic.joint +
+                     "', which is no moving joint of this robot; it moves on its own");
+                continue;
+            }
+            joints.mimic[mimic.follower] =
+                static_cast<std::uint32_t>(leader - joints.names.begin());
+            joints.mimicMultiplier[mimic.follower] = mimic.multiplier;
+            joints.mimicOffset[mimic.follower] = mimic.offset;
+            joints.actuated[mimic.follower] = false;
+            std::erase(robot_.actuatedJoints, joints.names[mimic.follower]);
+        }
+    }
     void setActuated(std::set<std::string> joints) { actuated_ = std::move(joints); }
 
 private:
@@ -278,12 +327,60 @@ private:
             world.joints.effortLimit.back() = joint.limits->effort;
             world.joints.velocityLimit.back() = joint.limits->velocity;
         }
+        if (joint.dynamics) {
+            world.joints.damping.back() = joint.dynamics->damping;
+            world.joints.friction.back() = joint.dynamics->friction;
+        }
+        if (joint.mimic) {
+            mimics_.push_back({world.joints.names.size() - 1, joint.mimic->joint_name,
+                               joint.mimic->multiplier, joint.mimic->offset});
+        }
         if (actuated) {
             robot_.actuatedJoints.push_back(joint.name);
         }
     }
 
-    void addCollider(const std::string& link, const urdf::Collision& collision, BodyId body) {
+    /// A mesh file's parts as one convex hull (several `<collision>` or collision_bake for more).
+    void addMeshCollider(const std::string& link, const urdf::Mesh& file, BodyId body,
+                         const Pose& pose, double friction, bool isStatic) {
+        auto path = meshes::resolveMeshUri(file.filename, baseDirectory_);
+        auto imported = path
+                            ? meshes::importMesh(*path)
+                            : Expected<meshes::ImportedMesh, std::string>(Unexpected{path.error()});
+        if (!imported) {
+            note(imported.error() + ": no collider for link '" + link + "'");
+            return;
+        }
+        TriMesh whole;
+        for (const meshes::MeshPart& part : imported->parts) {
+            const auto first = static_cast<std::uint32_t>(whole.positions.size() / 3);
+            whole.positions.insert(whole.positions.end(), part.positions.begin(),
+                                   part.positions.end());
+            for (const std::uint32_t index : part.indices) {
+                whole.indices.push_back(first + index);
+            }
+        }
+        const std::array<double, 3> scale{file.scale.x, file.scale.y, file.scale.z};
+        std::optional<ConvexHull> hull = convexHullOf(whole, scale);
+        if (!hull) {
+            note("the collision mesh of link '" + link + "' is flat: it has no volume, skipped");
+            return;
+        }
+        if (hullFill(whole, scale, *hull) < kConcaveFill) {
+            if (isStatic) {
+                note("the collision mesh of link '" + link +
+                     "' is concave and its hull would block what is inside it: it is skipped; "
+                     "`lagrange bake` splits it");
+                return;
+            }
+            note("the collision mesh of link '" + link +
+                 "' is concave: it collides as its convex hull; `lagrange bake` splits it");
+        }
+        robot_.world.addHullCollider(body, std::move(*hull), pose, friction);
+    }
+
+    void addCollider(const std::string& link, const urdf::Collision& collision, BodyId body,
+                     bool isStatic) {
         const urdf::Geometry* geometry = collision.geometry.get();
         if (geometry == nullptr) {
             return;
@@ -317,9 +414,12 @@ private:
                                   {capsule.radius, capsule.length / 2.0, 0.0}, pose, friction);
                 break;
             }
+            case urdf::Geometry::MESH: {
+                const auto& file = static_cast<const urdf::Mesh&>(*geometry);
+                addMeshCollider(link, file, body, pose, friction, isStatic);
+                break;
+            }
             default:
-                note("collision meshes are not used yet (link '" + link +
-                     "'): convex decomposition comes with the collision bake tool");
                 break;
         }
     }
@@ -471,6 +571,12 @@ private:
     std::map<std::string, std::uint32_t> meshes_;
     std::set<std::string> actuated_;
     bool fixedBase_{false};
+    struct Mimic {
+        std::size_t follower;
+        std::string joint;
+        double multiplier, offset;
+    };
+    std::vector<Mimic> mimics_;
 };
 
 }  // namespace
@@ -573,10 +679,47 @@ const char* sensorSchema(SensorType kind) {
             return "BarometerAPI_1";
         case SensorType::Radar:
             return "RadarAPI_1";
+        case SensorType::Custom:
+            return "CustomSensorAPI_1";
         case SensorType::Imu:
             break;
     }
     return "ImuAPI_1";
+}
+
+/// A custom sensor's parameters (RFC 0008 §3): every leaf element under <sensor> by its path
+/// ("range/max"), numbers into `numbers` and the rest into `text`; a first element named as the
+/// sensor's type is left out of the path (<sonar><max> is "max"). Pose, rate and Gazebo's own
+/// elements are not parameters.
+void customParameters(const tinyxml2::XMLElement* element, const std::string& prefix,
+                      const std::string& type, std::map<std::string, double, std::less<>>& numbers,
+                      std::map<std::string, std::string, std::less<>>& text) {
+    static const std::set<std::string, std::less<>> kNotParameters{
+        "pose", "update_rate", "always_on", "visualize", "topic", "plugin", "enable_metrics"};
+    for (const tinyxml2::XMLElement* child = element->FirstChildElement(); child != nullptr;
+         child = child->NextSiblingElement()) {
+        const std::string name = child->Name();
+        if (prefix.empty() && kNotParameters.contains(name)) {
+            continue;
+        }
+        const std::string path =
+            prefix.empty() && name == type ? "" : (prefix.empty() ? name : prefix + "/" + name);
+        if (child->FirstChildElement() != nullptr) {
+            customParameters(child, path, type, numbers, text);
+            continue;
+        }
+        const char* value = child->GetText();
+        if (value == nullptr || path.empty()) {
+            continue;
+        }
+        char* end = nullptr;
+        const double number = std::strtod(value, &end);
+        if (end != value && *end == '\0') {
+            numbers[path] = number;
+        } else {
+            text[path] = value;
+        }
+    }
 }
 
 /// Gazebo sensor blocks: <gazebo reference="link"><sensor name type>...</sensor></gazebo>.
@@ -591,6 +734,79 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
                                                              : nullptr;
          gazebo != nullptr; gazebo = gazebo->NextSiblingElement("gazebo")) {
         const char* reference = gazebo->Attribute("reference");
+        // <sensor_material preset="asphalt" reflectivity_905="0.1" reflectivity_1550="0.1"
+        // specular="0" transmission="0" retroreflective="false"/>: what a lidar sees of the link.
+        if (const tinyxml2::XMLElement* surface = gazebo->FirstChildElement("sensor_material");
+            surface != nullptr && reference != nullptr) {
+            SurfaceMaterial material;
+            if (const char* preset = surface->Attribute("preset");
+                preset != nullptr && !surfaceMaterialPreset(preset, material)) {
+                robot.notes.push_back(std::string("no sensor_material preset ") + preset);
+            }
+            surface->QueryDoubleAttribute("reflectivity_905", &material.reflectivity905);
+            surface->QueryDoubleAttribute("reflectivity_1550", &material.reflectivity1550);
+            surface->QueryDoubleAttribute("specular", &material.specular);
+            surface->QueryDoubleAttribute("transmission", &material.transmission);
+            surface->QueryBoolAttribute("retroreflective", &material.retroreflective);
+            material.reflectivity905 = std::max(material.reflectivity905, 0.0);
+            material.reflectivity1550 = std::max(material.reflectivity1550, 0.0);
+            material.specular = std::clamp(material.specular, 0.0, 1.0);
+            material.transmission = std::clamp(material.transmission, 0.0, 1.0);
+            world.surfaceMaterials.push_back(material);
+            const auto index = static_cast<std::uint32_t>(world.surfaceMaterials.size() - 1);
+            for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
+                const BodyId owner = world.colliders.body[c];
+                if (owner != kWorldBody && owner.index >= firstBody &&
+                    world.bodies.names[owner.index] == reference) {
+                    world.colliders.material[c] = index;
+                }
+            }
+        }
+        // <visual_material preset="steel" metallic="1" roughness="0.3" emissive="1 0.2 0"/>: how
+        // the link looks, over whatever its <material> says.
+        if (const tinyxml2::XMLElement* looks = gazebo->FirstChildElement("visual_material");
+            looks != nullptr && reference != nullptr) {
+            SurfaceLook look;
+            if (const char* preset = looks->Attribute("preset");
+                preset != nullptr && !surfaceLookPreset(preset, look)) {
+                robot.notes.push_back(std::string("no visual_material preset ") + preset);
+            }
+            looks->QueryFloatAttribute("metallic", &look.metallic);
+            looks->QueryFloatAttribute("roughness", &look.roughness);
+            look.metallic = std::clamp(look.metallic, 0.0F, 1.0F);
+            look.roughness = std::clamp(look.roughness, 0.0F, 1.0F);
+            if (const char* glow = looks->Attribute("emissive"); glow != nullptr) {
+                std::istringstream(glow) >> look.emissive[0] >> look.emissive[1] >>
+                    look.emissive[2];
+            }
+            std::size_t linked = 0;
+            for (ScenePrim& prim : robot.scene.prims) {
+                if (prim.mesh == kNoIndex || prim.material == kNoIndex || prim.body == kNoIndex ||
+                    prim.body < firstBody || world.bodies.names[prim.body] != reference) {
+                    continue;
+                }
+                SceneMaterial own = robot.scene.materials[prim.material];
+                own.look = look;
+                robot.scene.materials.push_back(std::move(own));
+                prim.material = static_cast<std::uint32_t>(robot.scene.materials.size() - 1);
+                ++linked;
+            }
+            if (linked == 0) {
+                robot.notes.push_back(std::string("visual_material: no visual on link ") +
+                                      reference);
+            }
+        }
+        // Gazebo's friction of a link's surfaces.
+        if (const double mu = childNumber(gazebo, {"mu1"}, -1.0);
+            mu >= 0.0 && reference != nullptr) {
+            for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
+                const BodyId owner = world.colliders.body[c];
+                if (owner != kWorldBody && owner.index >= firstBody &&
+                    world.bodies.names[owner.index] == reference) {
+                    world.colliders.friction[c] = mu;
+                }
+            }
+        }
         for (const tinyxml2::XMLElement* sensor = gazebo->FirstChildElement("sensor");
              sensor != nullptr; sensor = sensor->NextSiblingElement("sensor")) {
             const std::string type =
@@ -620,6 +836,11 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
             const double rate = childNumber(sensor, {"update_rate"}, 10.0);
             std::map<std::string, double, std::less<>> settings;
             SensorType kind = SensorType::Imu;
+            for (const char* key : {"latency", "jitter"}) {
+                if (const double value = childNumber(sensor, {key}, 0.0); value > 0.0) {
+                    settings[key] = value;
+                }
+            }
             std::string typeName;
             if (type == "imu") {
                 const tinyxml2::XMLElement* imu = sensor->FirstChildElement("imu");
@@ -650,9 +871,12 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
                     childNumber(ray, {"scan", "vertical", "min_angle"}, 0.0);
                 settings["vertical_max_angle"] =
                     childNumber(ray, {"scan", "vertical", "max_angle"}, 0.0);
+                if (childNumber(ray, {"motion_distortion"}, 1.0) == 0.0) {
+                    settings["motion_distortion"] = 0.0;
+                }
                 typeName = "Lidar";
             } else if (type == "camera" || type == "depth" || type == "depth_camera" ||
-                       type == "rgbd_camera") {
+                       type == "rgbd_camera" || type == "thermal" || type == "thermal_camera") {
                 // One raster camera gives colour, depth and instance ids (sensors.md).
                 kind = SensorType::Camera;
                 const tinyxml2::XMLElement* camera = sensor->FirstChildElement("camera");
@@ -661,14 +885,26 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
                 settings["horizontal_fov"] = childNumber(camera, {"horizontal_fov"}, 1.047);
                 settings["near_clip"] = childNumber(camera, {"clip", "near"}, 0.05);
                 settings["far_clip"] = childNumber(camera, {"clip", "far"}, 100.0);
+                if (type == "thermal" || type == "thermal_camera") {
+                    settings["thermal"] = 1.0;  // ThermalCameraAPI_1's defaults
+                }
                 typeName = "Camera";
+            } else if (!type.empty()) {
+                // Any other type is a custom sensor that a plugin implements (RFC 0008 §3).
+                kind = SensorType::Custom;
+                typeName = "CustomSensor";
             } else {
-                robot.notes.push_back("sensor '" + std::string(name) + "' of type '" + type +
-                                      "' is not simulated yet");
+                robot.notes.push_back("sensor '" + std::string(name) + "' has no type; skipped");
                 continue;
             }
             const auto bodyId = BodyId{static_cast<std::uint32_t>(body)};
-            world.addSensor(name, kind, bodyId, mount, rate, settings);
+            if (kind == SensorType::Custom) {
+                std::map<std::string, std::string, std::less<>> text;
+                customParameters(sensor, "", type, settings, text);
+                world.addCustomSensor(name, type, bodyId, mount, rate, settings, text);
+            } else {
+                world.addSensor(name, kind, bodyId, mount, rate, settings);
+            }
             ScenePrim prim;
             prim.name = name;
             prim.parent = robot.bodyPrim[body];
@@ -709,9 +945,19 @@ Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
     const std::uint32_t topPrim = builder.addPrim(std::move(top));
 
     // A root link named "world" is the ROS convention for something bolted to the ground.
-    const bool fixedBase = root->name == "world";
+    // So is a single chain of three or more driven joints, an arm: nothing on it could carry it
+    // around, and most arm URDFs leave out the "world" link.
+    const bool worldRoot = root->name == "world";
+    const bool arm = !worldRoot && drivenChainBelow(*model, *root) >= kArmJoints;
+    const bool fixedBase = worldRoot || arm;
     builder.setFixedBase(fixedBase);
-    if (fixedBase) {
+    if (arm) {
+        builder.addLink(*root, kWorldBody, topPrim, options.spawn, nullptr);
+        robot.world.bodies.poseInParent[firstBody] = options.spawn;
+        robot.notes.push_back("'" + model->getName() +
+                              "' is one chain of driven joints, an arm: its base is fixed where it "
+                              "starts (a root link named \"world\" says the same)");
+    } else if (worldRoot) {
         for (const urdf::JointSharedPtr& joint : root->child_joints) {
             const urdf::LinkConstSharedPtr link = model->getLink(joint->child_link_name);
             if (link) {
@@ -725,6 +971,7 @@ Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
                              BodyId{static_cast<std::uint32_t>(firstBody)}, {0.0, 0.0, 1.0}, false);
         robot.scene.prims[topPrim].body = static_cast<std::uint32_t>(firstBody);
     }
+    builder.resolveMimics();
     for (std::size_t b = firstBody; b < robot.world.bodies.names.size(); ++b) {
         robot.world.bodies.robot[b] = robotIndex;
     }
@@ -761,6 +1008,101 @@ Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
     return {};
 }
 
+Robot emptyModel(const LoadOptions& options) {
+    Robot robot;
+    robot.world.addCollider(kWorldBody, ShapeType::Plane, {0.0, 0.0, 1.0}, Pose{},
+                            options.groundFriction);
+    addGroundPrim(robot);
+    return robot;
+}
+
+void renameRobot(Robot& robot, const std::string& name) {
+    const auto rename = [&name](std::string& path) {
+        const std::size_t second = path.find('/', 1);
+        path = "/" + name + (second == std::string::npos ? "" : path.substr(second));
+    };
+    for (ScenePrim& prim : robot.scene.prims) {
+        if (prim.name == "ground" && prim.parent == kNoIndex) {
+            continue;
+        }
+        rename(prim.path);
+        if (prim.parent == kNoIndex) {
+            prim.name = name;
+        }
+    }
+    for (std::string& path : robot.world.prims.paths) {
+        rename(path);
+    }
+    if (robot.world.robots.size() <= 1) {
+        robot.world.robots = {name};
+    }
+    robot.name = name;
+}
+
+/// A robot file's power system: <lagrange><schematic file=".."/> and optional <battery source=..>,
+/// <bus node=..>, <motor joint=..>, <converter name=..> (formats.md §9.2), whose attributes are a
+/// netlist's *lagrange lines; under <robot> in a URDF, <model> in SDFormat. Other readers skip the
+/// unknown element.
+Expected<void, std::string> applyLagrangeBlock(Robot& robot, const std::string& path) {
+    tinyxml2::XMLDocument document;
+    if (document.LoadFile(path.c_str()) != tinyxml2::XML_SUCCESS) {
+        return {};  // the URDF parser has said what is wrong with it
+    }
+    const tinyxml2::XMLElement* top = document.FirstChildElement("robot");
+    if (const tinyxml2::XMLElement* sdf = document.FirstChildElement("sdf"); sdf != nullptr) {
+        top = sdf->FirstChildElement("model");
+    }
+    const tinyxml2::XMLElement* block =
+        top != nullptr ? top->FirstChildElement("lagrange") : nullptr;
+    if (block == nullptr) {
+        return {};
+    }
+    if (block->NextSiblingElement("lagrange") != nullptr) {
+        return Unexpected{path + ": only one <lagrange> block"};
+    }
+    static const std::map<std::string, std::string, std::less<>> kNamedBy{
+        {"battery", "source"}, {"bus", "node"},       {"motor", "joint"},  {"converter", "name"},
+        {"fuse", "element"},   {"switch", "element"}, {"diode", "element"}};
+    std::string schematic;
+    std::vector<std::string> directives;
+    for (const tinyxml2::XMLElement* e = block->FirstChildElement(); e != nullptr;
+         e = e->NextSiblingElement()) {
+        const std::string kind = e->Name();
+        if (kind == "schematic") {
+            const char* file = e->Attribute("file");
+            if (file == nullptr || !schematic.empty()) {
+                return Unexpected{path + ": <lagrange> takes one <schematic file=\"...\"/>"};
+            }
+            schematic = file;
+            continue;
+        }
+        const auto named = kNamedBy.find(kind);
+        if (named == kNamedBy.end()) {
+            return Unexpected{path + ": <lagrange> does not take <" + kind + ">"};
+        }
+        const char* target = e->Attribute(named->second.c_str());
+        if (target == nullptr) {
+            return Unexpected{path + ": <" + kind + "> needs " + named->second + "=\"...\""};
+        }
+        std::string line = "*lagrange " + kind + " " + target;
+        for (const tinyxml2::XMLAttribute* a = e->FirstAttribute(); a != nullptr; a = a->Next()) {
+            if (a->Name() != named->second) {
+                line += " " + std::string(a->Name()) + "=" + a->Value();
+            }
+        }
+        directives.push_back(std::move(line));
+    }
+    if (schematic.empty()) {
+        return Unexpected{path + ": <lagrange> needs <schematic file=\"...\"/>"};
+    }
+    const auto found =
+        meshes::resolveMeshUri(schematic, std::filesystem::path(path).parent_path().string());
+    if (!found) {
+        return Unexpected{path + ": <schematic>: " + found.error()};
+    }
+    return stage::applyNetlist(robot, *found, directives);
+}
+
 Expected<Robot, std::string> loadUrdf(const std::string& path, const LoadOptions& options) {
     Robot robot;
     robot.sourcePath = path;
@@ -772,6 +1114,9 @@ Expected<Robot, std::string> loadUrdf(const std::string& path, const LoadOptions
     robot.name = robot.scene.prims.front().name;
 
     addGroundPrim(robot);  // static scenery after the robot
+    if (auto power = applyLagrangeBlock(robot, path); !power) {
+        return Unexpected{power.error()};
+    }
     return robot;
 }
 
@@ -868,6 +1213,48 @@ Expected<Robot, std::string> placed(Expected<Robot, std::string> model, const Po
     return model;
 }
 
+/// How many driven joints follow one another below `body` in the world tables; -1 as
+/// drivenChainBelow: a branch, or a movable joint nothing can drive.
+int drivenChainBelow(const World& world, BodyId body) {
+    const World::Joints& joints = world.joints;
+    int below = 0;
+    for (std::size_t j = 0; j < joints.names.size(); ++j) {
+        if (joints.parent[j] != body || joints.child[j] == body) {
+            continue;
+        }
+        const int chain = drivenChainBelow(world, joints.child[j]);
+        const bool movable = joints.type[j] != JointType::Fixed;
+        if (chain < 0 || (movable && joints.effortLimit[j] <= 0.0 && !joints.actuated[j])) {
+            return -1;
+        }
+        const int here = chain + (movable ? 1 : 0);
+        if (here > 0 && below > 0) {
+            return -1;
+        }
+        below = std::max(below, here);
+    }
+    return below;
+}
+
+/// USD and SDFormat say a body with no joint to the world floats, which an arm imported from CAD
+/// never means: as in a URDF, one chain of driven joints gets a fixed base. A free joint someone
+/// wrote (MJCF's <freejoint>) stays.
+Expected<Robot, std::string> armFixed(Expected<Robot, std::string> model) {
+    if (!model) {
+        return model;
+    }
+    World::Joints& joints = model->world.joints;
+    for (std::size_t j = 0; j < joints.names.size(); ++j) {
+        if (joints.type[j] == JointType::Free && joints.names[j].ends_with("_floating") &&
+            drivenChainBelow(model->world, joints.child[j]) >= kArmJoints) {
+            joints.type[j] = JointType::Fixed;
+            model->notes.push_back("one chain of driven joints: " + joints.names[j] +
+                                   " is fixed where it starts, as an arm");
+        }
+    }
+    return model;
+}
+
 }  // namespace
 
 Expected<Robot, std::string> loadModel(const std::string& path, const LoadOptions& options) {
@@ -878,10 +1265,17 @@ Expected<Robot, std::string> loadModel(const std::string& path, const LoadOption
             stage::ReadOptions read;
             read.defaultFriction = options.surfaceFriction;
             read.groundFriction = options.groundFriction;
-            return placed(stage::loadStage(path, read), options.spawn);
+            return placed(armFixed(stage::loadStage(path, read)), options.spawn);
         }
-        case importers::Format::Sdf:
-            return placed(importers::importSdf(path, import), options.spawn);
+        case importers::Format::Sdf: {
+            auto sdf = placed(armFixed(importers::importSdf(path, import)), options.spawn);
+            if (sdf) {
+                if (auto power = applyLagrangeBlock(*sdf, path); !power) {
+                    return Unexpected{power.error()};
+                }
+            }
+            return sdf;
+        }
         case importers::Format::Mjcf:
             return placed(importers::importMjcf(path, import), options.spawn);
         case importers::Format::Urdf:

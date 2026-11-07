@@ -1,5 +1,6 @@
 #include "GeoSensors.hpp"
 #include "lagrange/fields/Field.hpp"
+#include "lagrange/gpu/Realistic.hpp"
 #include "lagrange/module/StateIO.hpp"
 #include "lagrange/random/Philox.hpp"
 #include "lagrange/sensors/CameraModel.hpp"
@@ -7,6 +8,7 @@
 #include "lagrange/sensors/Radar.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
+#include "lagrange/sensors/ThermalCamera.hpp"
 #include "lagrange/sensors/WeatherEffects.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/PoseMath.hpp"
@@ -114,8 +116,11 @@ double box(const Vec3& o, const Vec3& d, const Vec3& half) {
 
 /// Ray against a convex polyhedron, as the intersection of its faces' half-spaces.
 double convexHull(const Vec3& o, const Vec3& d, const ConvexHull& hull) {
-    thread_local std::vector<std::array<double, 4>> planes;
-    facePlanes(hull, planes);
+    thread_local std::vector<std::array<double, 4>> computed;  // for a hull not in world tables
+    if (hull.faces.empty()) {
+        hullFacePlanes(hull, computed);
+    }
+    const std::vector<std::array<double, 4>>& planes = hull.faces.empty() ? computed : hull.faces;
     if (planes.empty()) {
         return kNoHit;
     }
@@ -253,34 +258,7 @@ double heightField(const Vec3& o, const Vec3& d, const std::array<double, 3>& ha
 }  // namespace
 
 void facePlanes(const ConvexHull& hull, std::vector<std::array<double, 4>>& out) {
-    out.clear();
-    Vec3 centre{};
-    for (const auto& p : hull.points) {
-        for (std::size_t i = 0; i < 3; ++i) {
-            centre.at(i) += p.at(i) / static_cast<double>(hull.points.size());
-        }
-    }
-    for (const auto& t : hull.triangles) {
-        const Vec3& a = hull.points.at(t[0]);
-        const Vec3& b = hull.points.at(t[1]);
-        const Vec3& c = hull.points.at(t[2]);
-        const Vec3 u{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
-        const Vec3 v{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
-        Vec3 n{u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
-        const double length = std::sqrt(dot(n, n));
-        if (length <= 0.0) {
-            continue;  // a degenerate triangle has no plane
-        }
-        for (double& x : n) {
-            x /= length;
-        }
-        double offset = dot(n, a);
-        if (dot(n, centre) > offset) {
-            n = {-n[0], -n[1], -n[2]};
-            offset = -offset;
-        }
-        out.push_back({n[0], n[1], n[2], offset});
-    }
+    hullFacePlanes(hull, out);
 }
 
 double raycast(ShapeType shape, const std::array<double, 3>& size, const Pose& shapePose,
@@ -392,6 +370,7 @@ public:
         minRange_ = setting(sensors, sensor_, "min_range", 0.1);
         maxRange_ = setting(sensors, sensor_, "max_range", 30.0);
         noise_ = setting(sensors, sensor_, "range_noise", 0.0);
+        distort_ = setting(sensors, sensor_, "motion_distortion", 1.0) != 0.0 && !groundTruth_;
         if (samples_ == 0) {
             return Status::error(StatusCode::InvalidConfig, "lidar " + name_ + " has no samples");
         }
@@ -417,6 +396,14 @@ public:
             out.arrayLength = samples_;
             return out;
         }());
+        intensities_ = d.output([&] {
+            SignalSpec out =
+                spec("sensor/" + name_ + "/intensities", SignalType::ScalarArray, units::one);
+            out.arrayLength = samples_;
+            return out;
+        }());
+        wavelength1550_ = setting(sensors, sensor_, "wavelength", 905e-9) > 1.2e-6;
+        referenceReflectivity_ = setting(sensors, sensor_, "max_range_reflectivity", 0.1);
         // In the weather domain's air (config "weather": it runs): extinction at the lidar's
         // wavelength, the fog's share of it, the rain rate and the window's contamination.
         weather_ = config.get<bool>("weather").value_or(false) && !groundTruth_;
@@ -434,6 +421,9 @@ public:
             SignalSpec rain = in("env/rain_rate");
             rain.unit = units::m_per_s;
             rainRate_ = d.input(rain);
+            SignalSpec snow = in("env/snow_rate");
+            snow.unit = units::m_per_s;
+            snowRate_ = d.input(snow);
             SignalSpec dirt = in("sensor/" + name_ + "/contamination");
             dirt.unit = units::one;
             contamination_ = d.input(dirt);
@@ -462,6 +452,9 @@ public:
                             : nullptr,
                         colliders.shape[c] == ShapeType::HeightField
                             ? &world.raw().heightfields.at(colliders.hull[c])
+                            : nullptr,
+                        colliders.material[c] != kNoMaterial
+                            ? &world.raw().surfaceMaterials.at(colliders.material[c])
                             : nullptr};
             // Geometry that never moves is placed in the world once.
             if (owner == kWorldBody) {
@@ -472,7 +465,34 @@ public:
             }
             shapes_.push_back(shape);
         }
+        // Water is no collider, but a lidar sees its surface: a mirror (or a box of depth below it,
+        // from under water). What enters it is absorbed: no return from the bottom.
+        waterMaterials_.clear();
+        const std::vector<const SchemaInstance*> waters = world.instancesOf("WaterAPI_1");
+        waterMaterials_.reserve(waters.size());
+        for (const SchemaInstance* w : waters) {
+            SurfaceMaterial surface;
+            (void)surfaceMaterialPreset("water", surface);
+            surface.reflectivity905 = surface.reflectivity1550 =
+                w->real("water:reflectivity").value_or(surface.reflectivity905);
+            waterMaterials_.push_back(surface);
+            const double depth = w->real("water:depth").value_or(2.0);
+            Pose pose = world.raw().prims.poseInBody.at(w->prim.index);
+            pose.position[2] -= depth / 2.0;
+            shapes_.push_back(Shape{ShapeType::Box,
+                                    {w->real("water:sizeX").value_or(10.0) / 2.0,
+                                     w->real("water:sizeY").value_or(10.0) / 2.0, depth / 2.0},
+                                    pose,
+                                    -1,
+                                    nullptr,
+                                    nullptr,
+                                    &waterMaterials_.back()});
+        }
         placed_.resize(shapes_.size());
+        beamDirection_.resize(samples_);
+        for (std::uint32_t i = 0; i < samples_; ++i) {
+            beamDirection_[i] = layout_.direction(i);
+        }
         buffer_.assign(samples_, kNoHit);
         nearest_.assign(samples_, kNoHit);
         casterShapes_.resize(shapes_.size());
@@ -493,16 +513,21 @@ public:
             castShapes_.resize(shapes_.size());
             hits_.resize(samples_);
         }
+        hitShape_.assign(samples_, kNoShapeHit);
+        intensity_.assign(samples_, 0.0);
         bus.writeN(ranges_, buffer_);
+        bus.writeN(intensities_, intensity_);
         return {};
     }
 
     Status step(const StepContext& context, SignalBus& bus) override {
         if (groundTruth_) {
             bus.writeN(ranges_, buffer_);  // no rendering: no returns (+inf from init)
+            bus.writeN(intensities_, intensity_);
             return {};
         }
         const Pose sensor = compose(bodyPose(bus, body_), mount_);
+        sweep(sensor);
         // Place every shape once per scan, not once per beam.
         for (std::size_t k = 0; k < shapes_.size(); ++k) {
             const Shape& shape = shapes_[k];
@@ -513,10 +538,35 @@ public:
             castOnGpu(sensor);
             for (std::uint32_t i = 0; i < samples_; ++i) {
                 nearest_[i] = static_cast<double>(hits_[i].range);
+                hitShape_[i] = hits_[i].shape == gpu::kNoShape ? kNoShapeHit : hits_[i].shape;
             }
         } else {
-            castOnCpu(sensor);
+            castOnCpu(context);
         }
+        // What each hit returns, from its surface; a surface too faint for the lidar drops out.
+        tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
+            intensity_[i] = 0.0;
+            if (hitShape_[i] == kNoShapeHit || !std::isfinite(nearest_[i])) {
+                return;
+            }
+            const Shape& shape = shapes_[hitShape_[i]];
+            const Pose& from = columnPose_[i % layout_.horizontal];
+            const Vec3 dir = rotate(from.orientation, beamDirection_[i]);
+            const Vec3 at{from.position[0] + dir[0] * nearest_[i],
+                          from.position[1] + dir[1] * nearest_[i],
+                          from.position[2] + dir[2] * nearest_[i]};
+            const Vec3 n = surfaceNormal(shape.type, shape.size, placed_[hitShape_[i]], at,
+                                         shape.hull, shape.field);
+            const double cosine = -(dir[0] * n[0] + dir[1] * n[1] + dir[2] * n[2]);
+            static const SurfaceMaterial kDefault{};
+            const LidarReturn back = lidarReturn(
+                shape.material != nullptr ? *shape.material : kDefault, shape.material != nullptr,
+                wavelength1550_, cosine, nearest_[i], maxRange_, referenceReflectivity_);
+            intensity_[i] = back.intensity;
+            if (!back.detected) {
+                nearest_[i] = kNoHit;
+            }
+        });
         if (weather_) {
             // A fog field: its optical depth along each beam up to the hit, and its value at the
             // sensor for the clutter near it (taken as the extinction at the lidar's wavelength).
@@ -524,7 +574,8 @@ public:
             const fields::Vec3 at = sensor.position;
             const double local = field ? field->sampleScalar(at) : 0.0;
             const SensorWeather w{bus.read(extinction_), bus.read(fogExtinction_) + local,
-                                  bus.read(rainRate_), bus.read(contamination_)};
+                                  bus.read(rainRate_) + (kSnowClutter * bus.read(snowRate_)),
+                                  bus.read(contamination_)};
             tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
                 // Its own stream, so that the range noise below is the same with or without.
                 random::Stream rng(context.seed, context.stepIndex, kWeatherStream + i);
@@ -533,13 +584,20 @@ public:
                 const double u3 = rng.uniform();
                 double depth = 0.0;
                 if (field && std::isfinite(nearest_[i])) {
-                    const Vec3 dir = rotate(sensor.orientation, layout_.direction(i));
+                    const Pose& from = columnPose_[i % layout_.horizontal];
+                    const Vec3 dir = rotate(from.orientation, beamDirection_[i]);
                     const double to = std::min(nearest_[i], maxRange_);
+                    const Vec3& o = from.position;
                     depth = field->integrate(
-                        at, {at[0] + dir[0] * to, at[1] + dir[1] * to, at[2] + dir[2] * to});
+                        o, {o[0] + dir[0] * to, o[1] + dir[1] * to, o[2] + dir[2] * to});
                 }
+                const double hit = nearest_[i];
                 nearest_[i] =
-                    weatherRange(nearest_[i], minRange_, maxRange_, w, clutter_, u1, u2, u3, depth);
+                    weatherRange(hit, minRange_, maxRange_, w, clutter_, u1, u2, u3, depth);
+                if (nearest_[i] < hit) {  // clutter, not the surface: as faint as the air is
+                    const double r = std::max(nearest_[i], 1.0);
+                    intensity_[i] = clutter_.reflectivity / (r * r);
+                }
             });
         }
         for (std::uint32_t i = 0; i < samples_; ++i) {
@@ -554,11 +612,84 @@ public:
             }
             buffer_[i] = std::clamp(nearest, minRange_, maxRange_);
         }
+        for (std::uint32_t i = 0; i < samples_; ++i) {
+            if (!std::isfinite(buffer_[i])) {
+                intensity_[i] = 0.0;
+            }
+        }
         bus.writeN(ranges_, buffer_);
+        bus.writeN(intensities_, intensity_);
+        scanEnd_ = sensor;
+        hasScanEnd_ = true;
         return {};
     }
 
+    // Where the last scan ended is where this one starts.
+    Status saveState(StateWriter& writer) const override {
+        writer.put(hasScanEnd_);
+        writer.put(scanEnd_);
+        return {};
+    }
+    Status restoreState(StateReader& reader) override {
+        if (!reader.get(hasScanEnd_) || !reader.get(scanEnd_)) {
+            return Status::error(StatusCode::InvalidConfig, "lidar " + name_ + ": bad state");
+        }
+        return {};
+    }
+    void shiftOrigin(const std::array<double, 3>& shift) override {
+        for (std::size_t i = 0; i < 3; ++i) {
+            scanEnd_.position.at(i) -= shift.at(i);
+        }
+    }
+
 private:
+    /// Where the sensor is as each column fires: a rotating lidar's columns fire one after another
+    /// through the scan, the last at the scan's end. Between the last scan's end and this one's the
+    /// sensor is taken to move evenly. Only the sensor moves: everything else stays where it is at
+    /// the scan's end.
+    void sweep(const Pose& sensor) {
+        const std::uint32_t columns = layout_.horizontal;
+        columnPose_.resize(columns);
+        if (!distort_ || !hasScanEnd_) {
+            std::fill(columnPose_.begin(), columnPose_.end(), sensor);
+            moving_ = false;
+            return;
+        }
+        std::array<double, 4> to = sensor.orientation;
+        double dot = 0.0;
+        for (std::size_t k = 0; k < 4; ++k) {
+            dot += scanEnd_.orientation.at(k) * to.at(k);
+        }
+        if (dot < 0.0) {  // the short way round
+            dot = -dot;
+            for (double& v : to) {
+                v = -v;
+            }
+        }
+        const double angle = std::acos(std::min(dot, 1.0));
+        moving_ = angle != 0.0 || scanEnd_.position != sensor.position;
+        for (std::uint32_t c = 0; c < columns; ++c) {
+            const double f = static_cast<double>(c + 1) / columns;
+            Pose& pose = columnPose_[c];
+            for (std::size_t k = 0; k < 3; ++k) {
+                pose.position.at(k) =
+                    scanEnd_.position.at(k) + (sensor.position.at(k) - scanEnd_.position.at(k)) * f;
+            }
+            // Slerp; nearly equal, the straight line (its sine would divide by nothing).
+            const double a = angle > 1e-9 ? std::sin((1.0 - f) * angle) / std::sin(angle) : 1.0 - f;
+            const double b = angle > 1e-9 ? std::sin(f * angle) / std::sin(angle) : f;
+            double norm = 0.0;
+            for (std::size_t k = 0; k < 4; ++k) {
+                pose.orientation.at(k) = a * scanEnd_.orientation.at(k) + b * to.at(k);
+                norm += pose.orientation.at(k) * pose.orientation.at(k);
+            }
+            norm = std::sqrt(norm);
+            for (double& v : pose.orientation) {
+                v /= norm;
+            }
+        }
+    }
+
     struct Shape {
         ShapeType type;
         std::array<double, 3> size;
@@ -566,19 +697,47 @@ private:
         int body;
         const ConvexHull* hull;  // in the world tables, which outlive the run
         const HeightField* field;
+        const SurfaceMaterial* material;  // in the world tables, or none
     };
 
     /// Tier 0: exact casts in double, culled by Embree (ShapeCaster), beams in parallel. Each
     /// beam is independent, so the result does not depend on the threads.
-    void castOnCpu(const Pose& sensor) {
+    void castOnCpu(const StepContext& context) {
         for (std::size_t k = 0; k < shapes_.size(); ++k) {
             casterShapes_[k] = {shapes_[k].type, shapes_[k].size, placed_[k], shapes_[k].hull,
                                 shapes_[k].field};
         }
         caster_.update(casterShapes_);
         tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
-            nearest_[i] =
-                caster_.cast(sensor.position, rotate(sensor.orientation, layout_.direction(i)));
+            const Pose& start = columnPose_[i % layout_.horizontal];
+            const Vec3 dir = rotate(start.orientation, beamDirection_[i]);
+            Vec3 from = start.position;
+            double travelled = 0.0;
+            nearest_[i] = std::numeric_limits<double>::infinity();
+            hitShape_[i] = kNoShapeHit;
+            // Through what the beam passes (glass): by chance, (seed, step, beam).
+            for (std::uint32_t passes = 0; passes < kMaxPasses; ++passes) {
+                const services::RayHit hit = caster_.castHit(from, dir);
+                if (!hit.hit()) {
+                    return;
+                }
+                const SurfaceMaterial* m = shapes_[hit.shape].material;
+                if (m != nullptr && m->transmission > 0.0) {
+                    random::Stream rng(context.seed, context.stepIndex,
+                                       kTransmissionStream + i * kMaxPasses + passes);
+                    if (rng.uniform() < m->transmission) {
+                        // Past both of its faces; a thick pane's far face comes next.
+                        travelled += hit.distance + kPastSurfaceM;
+                        from = {start.position[0] + dir[0] * travelled,
+                                start.position[1] + dir[1] * travelled,
+                                start.position[2] + dir[2] * travelled};
+                        continue;
+                    }
+                }
+                nearest_[i] = travelled + hit.distance;
+                hitShape_[i] = hit.shape;
+                return;
+            }
         });
     }
 
@@ -595,6 +754,27 @@ private:
             out.orientation = placed_[k].orientation;
             out.faces = hullFaces_[k];
         }
+        // The beams of a moving sensor, in the frame of its pose at the scan's end.
+        if (moving_ || beamsMoved_) {
+            const std::array<double, 4> back{sensor.orientation[0], -sensor.orientation[1],
+                                             -sensor.orientation[2], -sensor.orientation[3]};
+            beamDirections_.resize(samples_);
+            beamOrigins_.resize(samples_);
+            for (std::uint32_t i = 0; i < samples_; ++i) {
+                const Pose& from = columnPose_[i % layout_.horizontal];
+                const Vec3 world = rotate(from.orientation, beamDirection_[i]);
+                const Vec3 d = rotate(back, world);
+                const Vec3 o = rotate(back, {from.position[0] - sensor.position[0],
+                                             from.position[1] - sensor.position[1],
+                                             from.position[2] - sensor.position[2]});
+                beamDirections_[i] = {static_cast<float>(d[0]), static_cast<float>(d[1]),
+                                      static_cast<float>(d[2])};
+                beamOrigins_[i] = {static_cast<float>(o[0]), static_cast<float>(o[1]),
+                                   static_cast<float>(o[2])};
+            }
+            scan_->setBeams(beamDirections_, beamOrigins_);
+            beamsMoved_ = moving_;
+        }
         scan_->cast(castShapes_, sensor.orientation, hits_);
     }
 
@@ -606,10 +786,31 @@ private:
         return {{v[0], v[1], v[2]}, {v[3], v[4], v[5], v[6]}};
     }
 
-    static constexpr std::uint32_t kWeatherStream = 0x8000'0000U;  // + beam
+    static constexpr std::uint32_t kWeatherStream = 0x8000'0000U;       // + beam
+    static constexpr std::uint32_t kTransmissionStream = 0x4000'0000U;  // + beam × passes + pass
+    static constexpr std::uint32_t kNoShapeHit = 0xFFFF'FFFFU;
+    static constexpr std::uint32_t kMaxPasses = 6;
+    static constexpr double kPastSurfaceM = 1e-4;
+    bool distort_{true};
+    bool hasScanEnd_{false};
+    bool moving_{false};      // this scan's sensor moved
+    bool beamsMoved_{false};  // the GPU's beams are not the sensor's at rest
+    Pose scanEnd_;
+    std::vector<Pose> columnPose_;
+    std::vector<Vec3> beamDirection_;  // per beam, sensor frame
+    std::vector<std::array<float, 3>> beamDirections_, beamOrigins_;
+    SignalId intensities_;
+    std::vector<SurfaceMaterial> waterMaterials_;  // reserved before shapes_ point into it
+    std::vector<std::uint32_t> hitShape_;
+    std::vector<double> intensity_;
+    bool wavelength1550_{false};
+    double referenceReflectivity_{0.1};
     bool weather_{false};
     LidarClutter clutter_;
-    SignalId extinction_, fogExtinction_, rainRate_, contamination_, fogField_;
+    SignalId extinction_, fogExtinction_, rainRate_, snowRate_, contamination_, fogField_;
+    // Flakes return more false echoes than the same water as drops: taken as this much rain
+    // (illustrative, of the order lidar snow studies show; sensors.md).
+    static constexpr double kSnowClutter = 3.0;
     fields::FieldSignal fogFieldSignal_;
     LidarLayout layout_;
     std::uint32_t samples_{0};  // beams, all rings
@@ -860,6 +1061,17 @@ public:
                     watch(drawable.body);
                 }
             }
+            hinges_.clear();
+            for (const CameraScene::Drawable& drawable : scene_->drawables) {
+                SignalId id;
+                if (!drawable.hinge.empty()) {
+                    SignalSpec angle = spec(drawable.hinge, SignalType::Scalar, units::rad);
+                    angle.feedback = true;
+                    angle.optional = true;
+                    id = d.input(angle);
+                }
+                hinges_.push_back(id);
+            }
         }
         const auto image = [&](const char* what, Unit unit) {
             SignalSpec out =
@@ -869,12 +1081,18 @@ public:
         image_ = image("image", Unit{});
         depth_ = image("depth", units::m);
         instance_ = image("instance", Unit{});
+        if (setting(sensors, sensor_, "thermal", 0.0) != 0.0 && !groundTruth_) {
+            if (Status ok = declareThermal(world, config, d); !ok.ok()) {
+                return ok;
+            }
+        }
         if (model_ && model.exposure) {
             exposureOut_ =
                 d.output(spec("sensor/" + name_ + "/exposure_time", SignalType::Scalar, units::s));
         }
         // The weather's veil (config "weather"): visible extinction and the lens's contamination.
-        weather_ = config.get<bool>("weather").value_or(false) && !groundTruth_;
+        // A thermal camera sees through the visible veil; its own extinction is owed.
+        weather_ = config.get<bool>("weather").value_or(false) && !groundTruth_ && !thermal_;
         if (weather_) {
             SignalSpec e = spec("env/extinction/visible", SignalType::Scalar, units::per_m);
             e.feedback = true;
@@ -917,18 +1135,37 @@ public:
         camera_.orientation = multiply(sensor.orientation, kSensorFromOptical);
         for (std::size_t k = 0; k < instances_.size(); ++k) {
             const CameraScene::Drawable& drawable = scene_->drawables[k];
-            const Pose pose = drawable.body == kNoIndex
-                                  ? drawable.offset
-                                  : compose(bodyPose(bus, drawable.body), drawable.offset);
-            instances_[k] = {drawable.mesh,  pose.position,  pose.orientation,
-                             drawable.scale, drawable.color, drawable.prim};
+            Pose pose = drawable.body == kNoIndex
+                            ? drawable.offset
+                            : compose(bodyPose(bus, drawable.body), drawable.offset);
+            if (hinges_[k].valid()) {
+                const double half = bus.read(hinges_[k]) / 2.0;
+                const std::array<double, 3>& a = drawable.hingeAxis;
+                pose = compose(pose, Pose{{0.0, 0.0, 0.0},
+                                          {std::cos(half), std::sin(half) * a[0],
+                                           std::sin(half) * a[1], std::sin(half) * a[2]}});
+            }
+            gpu::RasterInstance& instance = instances_[k];
+            instance.mesh = drawable.mesh;
+            instance.position = pose.position;
+            instance.rotation = pose.orientation;
+            instance.scale = drawable.scale;
+            instance.color = drawable.color;
+            instance.id = drawable.prim;
+            instance.metallic = drawable.metallic;
+            instance.roughness = drawable.roughness;
+            instance.pattern = drawable.pattern;
+            instance.emissive = drawable.emissive;
+            instance.ground = drawable.ground;
+            instance.water = drawable.water;
+            instance.box = drawable.box;
         }
         if (model_) {
             gpu::PinholeCamera render = model_->renderCamera();
             render.near = camera_.near;
             render.position = camera_.position;
             render.orientation = camera_.orientation;
-            renderer_->render(instances_, render, rendered_);
+            renderer_->render(instances_, render, rendered_, context.t.seconds());
             std::array<double, 3> omega{};
             if (twist_.valid()) {
                 const std::span<const double> t = bus.readN(twist_);
@@ -940,7 +1177,7 @@ public:
             model_->apply(rendered_, omega, context.seed, context.stepIndex, sensor_ << 16U,
                           images_);
         } else {
-            renderer_->render(instances_, camera_, images_);
+            renderer_->render(instances_, camera_, images_, context.t.seconds());
         }
         for (float& depth : images_.depth) {
             if (depth > far_) {
@@ -957,6 +1194,9 @@ public:
             }
             applyCameraWeather(images_.rgba, images_.depth, bus.read(extinction_),
                                bus.read(contamination_), fieldDepth_);
+        }
+        if (thermal_) {
+            stepThermal(context, bus);
         }
         publish(bus);
         return {};
@@ -978,6 +1218,173 @@ private:
         bus.publishBuffer(image_, buffer("rgba8", images_.rgba));
         bus.publishBuffer(depth_, buffer("r32f", images_.depth));
         bus.publishBuffer(instance_, buffer("r32u", images_.instance));
+        if (thermal_) {
+            bus.publishBuffer(temperatureOut_, buffer("r32f", temperatures_));
+        }
+    }
+
+    /// The thermal camera (ThermalCameraAPI_1): every drawable's temperature and emissivity, from
+    /// the thermal node it belongs to, a person's skin, or the ambient air.
+    Status declareThermal(const WorldView& world, const ModuleConfig& config, SignalDeclarer& d) {
+        const World::Sensors& sensors = world.sensors();
+        const std::optional<double> ambient = config.get<double>("ambient_temperature");
+        if (!ambient || *ambient <= 0.0) {
+            return Status::error(
+                StatusCode::InvalidConfig,
+                "thermal camera " + name_ +
+                    " needs the site's ambient temperature (--ambient-temperature, "
+                    "--weather temperature=K or the profile's "
+                    "thermal.ambient_temperature)");
+        }
+        thermal_ = true;
+        ambient_ = *ambient;
+        const double shortest = setting(sensors, sensor_, "thermal_band_min", 8e-6);
+        const double longest = setting(sensors, sensor_, "thermal_band_max", 14e-6);
+        netd_ = setting(sensors, sensor_, "thermal_netd", 0.05);
+        if (shortest <= 0.0 || longest <= shortest || netd_ < 0.0) {
+            return Status::error(StatusCode::InvalidConfig,
+                                 "thermal camera " + name_ + ": band or netd out of range");
+        }
+        band_ = std::make_unique<ThermalBand>(shortest, longest);
+        displayMin_ = setting(sensors, sensor_, "thermal_display_min", 0.0);
+        displayMax_ = setting(sensors, sensor_, "thermal_display_max", 0.0);
+        const double palette = setting(sensors, sensor_, "thermal_palette", 0.0);
+        palette_ = palette == 1.0   ? ThermalPalette::BlackHot
+                   : palette == 2.0 ? ThermalPalette::Ironbow
+                                    : ThermalPalette::WhiteHot;
+        temperatureOut_ = d.output(
+            spec("sensor/" + name_ + "/temperature", SignalType::Image, units::K, "optical"));
+        temperatures_.assign(std::size_t{camera_.width} * camera_.height, 0.0F);
+
+        // The thermal nodes: their prim's path and body, and their temperature signal.
+        const World& raw = world.raw();
+        struct Node {
+            std::string path;
+            BodyId body;
+            bool onLink{false};  // the node is its body's own prim
+            double emissivity{0.9};
+            SignalId temperature;
+        };
+        std::vector<Node> nodes;
+        for (const SchemaInstance* s : world.instancesOf("ThermalAPI_1")) {
+            if (s->prim.index >= raw.prims.paths.size()) {
+                continue;
+            }
+            Node node;
+            node.path = raw.prims.paths[s->prim.index];
+            node.body = raw.prims.body[s->prim.index];
+            node.onLink = node.body.index < raw.bodies.prim.size() &&
+                          raw.bodies.prim[node.body.index] == s->prim;
+            node.emissivity = s->real("thermal:emissivity").value_or(0.9);
+            SignalSpec t =
+                spec("thermal/" + std::string(world.signalInstanceName(s->prim)) + "/temperature",
+                     SignalType::Scalar, units::K);
+            t.feedback = true;
+            t.optional = true;
+            node.temperature = d.input(t);
+            nodes.push_back(std::move(node));
+        }
+        std::vector<std::string> people;  // body name prefixes of humans
+        for (const SchemaInstance* s : world.instancesOf("HumanAPI_1")) {
+            people.push_back("human_" + std::string(world.signalInstanceName(s->prim)) + "_");
+        }
+        surfaces_.clear();
+        if (!scene_) {
+            return {};
+        }
+        std::uint32_t prims = 0;
+        for (const CameraScene::Drawable& drawable : scene_->drawables) {
+            prims = std::max(prims, drawable.prim + 1);
+        }
+        surfaces_.assign(prims, Surface{});
+        for (const CameraScene::Drawable& drawable : scene_->drawables) {
+            Surface& surface = surfaces_[drawable.prim];
+            // The node whose prim holds this one (the longest path), else one on its body.
+            const Node* best = nullptr;
+            for (const Node& node : nodes) {
+                const bool under = !drawable.path.empty() && drawable.path.starts_with(node.path) &&
+                                   (drawable.path.size() == node.path.size() ||
+                                    drawable.path[node.path.size()] == '/');
+                if (under && (best == nullptr || node.path.size() > best->path.size())) {
+                    best = &node;
+                }
+            }
+            if (best == nullptr && drawable.body != kNoIndex) {
+                for (const Node& node : nodes) {
+                    if (node.body.index == drawable.body && (best == nullptr || node.onLink)) {
+                        best = &node;
+                    }
+                }
+            }
+            if (best != nullptr) {
+                surface.temperature = best->temperature;
+                surface.emissivity = best->emissivity;
+                continue;
+            }
+            if (drawable.body != kNoIndex && drawable.body < raw.bodies.names.size()) {
+                const std::string& body = raw.bodies.names[drawable.body];
+                for (const std::string& prefix : people) {
+                    if (body.starts_with(prefix)) {
+                        surface.fixed = kSkinTemperature;
+                        surface.emissivity = kSkinEmissivity;
+                    }
+                }
+            }
+        }
+        return {};
+    }
+
+    /// The temperature image and its palette, from the instance ids of the frame just drawn.
+    void stepThermal(const StepContext& context, const SignalBus& bus) {
+        // What each surface reads, once per frame: its own emission and the ambient surroundings
+        // it reflects. The clear sky where nothing is hit.
+        apparent_.assign(surfaces_.size(), ambient_);
+        for (std::size_t p = 0; p < surfaces_.size(); ++p) {
+            const Surface& surface = surfaces_[p];
+            double t = surface.fixed > 0.0 ? surface.fixed : ambient_;
+            if (surface.temperature.valid()) {
+                const double node = bus.read(surface.temperature);
+                if (std::isfinite(node) && node > 0.0) {
+                    t = node;
+                }
+            }
+            apparent_[p] = band_->apparent(t, surface.emissivity, ambient_);
+        }
+        const double sky = clearSkyTemperature(ambient_);
+        const std::uint32_t w = camera_.width;
+        const std::uint32_t h = camera_.height;
+        temperatures_.resize(std::size_t{w} * h);
+        tbb::parallel_for(std::uint32_t{0}, h, [&](std::uint32_t v) {
+            random::Stream rng(context.seed, context.stepIndex, (sensor_ << 16U) + v);
+            for (std::uint32_t u = 0; u < w; ++u) {
+                const std::size_t i = (std::size_t{v} * w) + u;
+                const std::uint32_t id =
+                    i < images_.instance.size() ? images_.instance[i] : gpu::kNoInstance;
+                const double t = id < apparent_.size() ? apparent_[id] : sky;
+                temperatures_[i] = static_cast<float>(t + (netd_ * rng.normal()));
+            }
+        });
+        double lo = displayMin_;
+        double hi = displayMax_;
+        if (!(hi > lo)) {
+            // Each frame's range, but never under kThermalSpan, so a scene all at one
+            // temperature shows as one colour, not as its noise stretched over the palette.
+            constexpr double kThermalSpan = 4.0;  // K, a display choice
+            const auto [a, b] = std::ranges::minmax(temperatures_);
+            lo = a;
+            hi = b;
+            if (hi - lo < kThermalSpan) {
+                const double mid = (lo + hi) / 2.0;
+                lo = mid - kThermalSpan / 2.0;
+                hi = mid + kThermalSpan / 2.0;
+            }
+        }
+        images_.rgba.resize(temperatures_.size() * 4);
+        for (std::size_t i = 0; i < temperatures_.size(); ++i) {
+            const std::array<std::uint8_t, 4> c =
+                paletteColour(palette_, (temperatures_[i] - lo) / (hi - lo));
+            std::ranges::copy(c, images_.rgba.begin() + static_cast<std::ptrdiff_t>(i * 4));
+        }
     }
 
     Pose bodyPose(const SignalBus& bus, std::uint32_t b) const {
@@ -1007,6 +1414,7 @@ public:
 
 private:
     std::shared_ptr<const CameraScene> scene_;
+    std::vector<SignalId> hinges_;        // per drawable; invalid: rigid
     gpu::PinholeCamera camera_;           // the output's pinhole (before the sensor model)
     std::unique_ptr<CameraModel> model_;  // null when no part of the sensor model is on
     gpu::RasterImages rendered_;          // the render the sensor model remaps
@@ -1055,6 +1463,20 @@ private:
     SignalId extinction_, contamination_, fogField_;
     fields::FieldSignal fogFieldSignal_;
     std::vector<float> fieldDepth_;
+    // The thermal camera.
+    struct Surface {
+        SignalId temperature;  // a thermal node's
+        double fixed{0.0};     // K, a person's skin; 0: the ambient air
+        double emissivity{0.9};
+    };
+    bool thermal_{false};
+    double ambient_{0.0}, netd_{0.0}, displayMin_{0.0}, displayMax_{0.0};
+    ThermalPalette palette_{ThermalPalette::WhiteHot};
+    std::unique_ptr<ThermalBand> band_;
+    std::vector<Surface> surfaces_;  // by scene prim index
+    std::vector<double> apparent_;   // K, by scene prim index, this frame
+    std::vector<float> temperatures_;
+    SignalId temperatureOut_;
 };
 }  // namespace
 
@@ -1083,6 +1505,8 @@ std::vector<std::unique_ptr<IModule>> createModules(
             case SensorType::Magnetometer:
             case SensorType::Barometer:
                 break;  // createGeoSensors, below
+            case SensorType::Custom:
+                break;  // a plugin implements it (RFC 0008 §3)
         }
     }
     createGeoSensors(world, groundTruth, modules);
@@ -1103,7 +1527,7 @@ std::vector<std::unique_ptr<IModule>> createSensorSubstitutes(const World& world
 
 std::shared_ptr<CameraScene> createCameraScene(const Model& model,
                                                const std::string& preferredDevice,
-                                               std::string& error) {
+                                               std::string& error, gpu::RasterLook look) {
     auto scene = std::make_shared<CameraScene>();
     std::vector<gpu::MeshSource> meshes;
     meshes.reserve(model.scene.meshes.size());
@@ -1121,12 +1545,33 @@ std::shared_ptr<CameraScene> createCameraScene(const Model& model,
         drawable.offset = prim.offset;
         drawable.scale = prim.scale;
         if (prim.material != kNoIndex) {
-            drawable.color = model.scene.materials[prim.material].rgba;
+            const SceneMaterial& material = model.scene.materials[prim.material];
+            drawable.color = material.rgba;
+            const SurfaceLook surface = lookOf(material);
+            drawable.metallic = surface.metallic;
+            drawable.roughness = surface.roughness;
+            drawable.emissive = surface.emissive;
+            drawable.pattern = gpu::surfacePatternOf(material.name);
         }
         drawable.prim = p;
+        drawable.path = prim.path;
+        drawable.hinge = prim.hinge;
+        drawable.hingeAxis = prim.hingeAxis;
+        drawable.ground = prim.name == "ground";
+        drawable.water = std::ranges::find(prim.apiSchemas, "WaterAPI_1") != prim.apiSchemas.end();
+        if (drawable.water) {
+            const std::vector<float>& points = model.scene.meshes[prim.mesh].positions;
+            drawable.box = {1e30F, 1e30F, 1e30F, -1e30F, -1e30F, -1e30F};
+            for (std::size_t i = 0; i + 2 < points.size(); i += 3) {
+                for (std::size_t k = 0; k < 3; ++k) {
+                    drawable.box.at(k) = std::min(drawable.box.at(k), points[i + k]);
+                    drawable.box.at(k + 3) = std::max(drawable.box.at(k + 3), points[i + k]);
+                }
+            }
+        }
         scene->drawables.push_back(drawable);
     }
-    scene->raster = gpu::RasterScene::create(preferredDevice, meshes, error);
+    scene->raster = gpu::RasterScene::create(preferredDevice, meshes, error, look);
     return scene->raster ? scene : nullptr;
 }
 

@@ -11,6 +11,7 @@
 #include <fstream>
 #include <memory>
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
@@ -29,23 +30,23 @@ namespace {
 /// One run, without ROS and without viewers, stepped only when Python asks.
 class Simulation {
 public:
-    Simulation(const std::string& robot, const std::optional<std::string>& world,
+    Simulation(const std::optional<std::string>& robot, const std::optional<std::string>& world,
                const std::optional<std::string>& profile, const std::string& lidar,
-               const std::optional<std::vector<double>>& spawn) {
+               const std::optional<std::vector<double>>& spawn,
+               const std::optional<std::array<int, 3>>& traffic, bool jointControl) {
         lagrange::server::ServerOptions options;
-        options.robotPath = robot;
+        options.jointControl = jointControl;
+        options.robotPath = robot.value_or("");  // None: an empty run to spawn robots into
         if (spawn) {
-            // x, y[, z[, yaw]] in world ENU, as --spawn.
-            if (spawn->size() < 2 || spawn->size() > 4) {
-                throw std::invalid_argument("spawn is (x, y[, z[, yaw]])");
-            }
-            options.spawn.position = {(*spawn)[0], (*spawn)[1],
-                                      spawn->size() > 2 ? (*spawn)[2] : 0.0};
-            const double yaw = spawn->size() > 3 ? (*spawn)[3] : 0.0;
-            options.spawn.orientation = {std::cos(yaw / 2.0), 0.0, 0.0, std::sin(yaw / 2.0)};
+            options.spawn = poseOf(*spawn, "spawn");
         }
         options.worldPath = world.value_or("");
         options.ros = false;
+        if (traffic) {  // vehicles, pedestrians, seed
+            options.trafficVehicles = (*traffic)[0];
+            options.trafficPedestrians = (*traffic)[1];
+            options.trafficSeed = static_cast<std::uint64_t>((*traffic)[2]);
+        }
         options.demoDrive = true;
         if (lidar == "cpu" || lidar == "auto") {
             options.lidar = lagrange::server::ServerOptions::Lidar::Cpu;
@@ -88,6 +89,21 @@ public:
         }
     }
 
+    std::string spawnRobot(const std::string& path, const std::string& name,
+                           const std::vector<double>& at) {
+        auto spawned = server_->spawnRobot(path, name, poseOf(at, "at"));
+        if (!spawned) {
+            throw std::runtime_error(spawned.error().message);
+        }
+        return *spawned;
+    }
+
+    void removeRobot(const std::string& name) {
+        if (const lagrange::Status status = server_->removeRobot(name); !status.ok()) {
+            throw std::runtime_error(status.message);
+        }
+    }
+
     [[nodiscard]] double time() const { return server_->now().seconds(); }
 
     [[nodiscard]] std::vector<double> read(const std::string& name) const {
@@ -96,6 +112,32 @@ public:
             throw nb::key_error(("no signal " + name).c_str());
         }
         return values;
+    }
+
+    bool commandJoint(const std::string& joint, const std::string& mode, double value) {
+        return server_->commandJoint(joint, mode, value);
+    }
+
+    [[nodiscard]] nb::bytes saveState() const {
+        auto state = server_->saveState();
+        if (!state) {
+            throw std::runtime_error(state.error().message);
+        }
+        return nb::bytes(reinterpret_cast<const char*>(state->data()), state->size());
+    }
+
+    void restoreState(const nb::bytes& state) {
+        const std::span<const std::byte> bytes(reinterpret_cast<const std::byte*>(state.c_str()),
+                                               state.size());
+        if (const lagrange::Status status = server_->restoreState(bytes); !status.ok()) {
+            throw std::runtime_error(status.message);
+        }
+    }
+
+    void setSite(const std::string& name, double value) {
+        if (const lagrange::Status status = server_->setSite(name, value); !status.ok()) {
+            throw std::runtime_error(status.message);
+        }
     }
 
     [[nodiscard]] nb::list signals() const {
@@ -127,6 +169,18 @@ public:
     }
 
 private:
+    /// x, y[, z[, yaw]] in world ENU, as --spawn.
+    static lagrange::Pose poseOf(const std::vector<double>& xyzYaw, const char* what) {
+        if (xyzYaw.size() < 2 || xyzYaw.size() > 4) {
+            throw std::invalid_argument(std::string(what) + " is (x, y[, z[, yaw]])");
+        }
+        lagrange::Pose pose;
+        pose.position = {xyzYaw[0], xyzYaw[1], xyzYaw.size() > 2 ? xyzYaw[2] : 0.0};
+        const double yaw = xyzYaw.size() > 3 ? xyzYaw[3] : 0.0;
+        pose.orientation = {std::cos(yaw / 2.0), 0.0, 0.0, std::sin(yaw / 2.0)};
+        return pose;
+    }
+
     /// The profile's `stage:` line, so that the profile applies to the robot given here.
     static std::string stageOf(const std::string& yaml) {
         std::istringstream lines(yaml);
@@ -157,13 +211,33 @@ NB_MODULE(_lagrange, m) {
     nb::class_<Simulation>(m, "Simulation",
                            "A run without ROS or viewers, stepped from Python. The robot and "
                            "world are URDF, SDFormat, MJCF or USD files.")
-        .def(nb::init<const std::string&, const std::optional<std::string>&,
+        .def(nb::init<const std::optional<std::string>&, const std::optional<std::string>&,
                       const std::optional<std::string>&, const std::string&,
-                      const std::optional<std::vector<double>>&>(),
+                      const std::optional<std::vector<double>>&,
+                      const std::optional<std::array<int, 3>>&, bool>(),
              "robot"_a, "world"_a = nb::none(), "profile"_a = nb::none(), "lidar"_a = "cpu",
-             "spawn"_a = nb::none())
+             "spawn"_a = nb::none(), "traffic"_a = nb::none(), "joint_control"_a = false)
+        .def("spawn", &Simulation::spawnRobot, "path"_a, "name"_a = "",
+             "at"_a = std::vector<double>{0.0, 0.0},
+             "Add a robot to the run at (x, y[, z[, yaw]]); returns its entity name. In a run "
+             "without a robot (robot=None) it is the robot; later ones are passive. Time and "
+             "poses go on; velocities start from rest.")
+        .def("delete", &Simulation::removeRobot, "name"_a, "Take a robot out of the run.")
         .def("step_until", &Simulation::stepUntil, "seconds"_a,
              "Advance to this simulated time (s), as fast as possible.")
+        .def(
+            "command_joint",
+            [](Simulation& sim, const std::string& joint, const std::string& mode, double value) {
+                return sim.commandJoint(joint, mode, value);
+            },
+            "joint"_a, "mode"_a, "value"_a,
+            "With joint_control=True: hold a joint at this position, velocity or effort. False "
+            "if it takes no such command.")
+        .def("save_state", &Simulation::saveState,
+             "The whole state as bytes: restore_state goes back to it and the run repeats.")
+        .def("restore_state", &Simulation::restoreState, "state"_a)
+        .def("set_site", &Simulation::setSite, "name"_a, "value"_a,
+             "Change a site parameter while running: gravity, wind_speed, temperature, ...")
         .def_prop_ro("time", &Simulation::time, "Simulated time (s).")
         .def("read", &Simulation::read, "name"_a,
              "Latest value of a signal (all its components). KeyError for an unknown name.")

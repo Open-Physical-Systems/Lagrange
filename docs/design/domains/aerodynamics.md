@@ -43,8 +43,17 @@ propeller file (formats.md §3.3.1) named by the rotor's `aero:rotor:propeller`.
   the blade-element forces equal the momentum change of the air through the annulus:
   `dT = 4πrρF·|V + w|·w`, `dQ = 4πr²ρF·|V + w|·w_t`, with Prandtl's tip-loss factor `F`. The
   axial balance is solved by bracketed root finding (Illinois), the swirl by a few fixed-point
-  passes. In descent through the rotor's own wake (the vortex-ring state, `−2w < V < 0`)
-  momentum theory has no valid solution; the result there is the momentum solution, flagged.
+  passes. In descent through the rotor's own wake (the vortex-ring state, `0 < V_d/v_h < 2`
+  with `V_d` the descent speed and `v_h` the induced velocity with no axial flow) momentum
+  theory has no valid solution. There each annulus takes its no-axial-flow induced velocity
+  scaled by the empirical quartic `ṽ/v_h = 1 + 1.125x − 1.372x² + 1.718x³ − 0.655x⁴`,
+  `x = V_d/v_h`, never under 1, as NeuroBEM does (Bauersfeld et al. 2021, RSS, eqs. 18–19,
+  after Hoffmann et al. 2007), and the result is flagged (`vortexRing`). The thrust joins
+  hover's at the state's start (within 0.1%) and comes within 10% of hover's thrust of the
+  windmill-brake state's at its end (a step of 497 N to 554 N for a 626 N hover); at a fixed
+  speed it rises about 5% at `x = 1` and falls about 20% under hover's near `x = 2`
+  (`test_bem`, NACA 5868 propeller). Before 2026-11-03 the annulus took no induced velocity
+  there, so a rotor sinking into its own wake made far too much thrust.
 - **Sections** over the full circle of angles of attack: linear lift with the Prandtl–Glauert
   factor when the speed of sound is given, a parabolic drag polar, a blend over 8° past stall
   into a flat plate (normal force `2·sin α`), which also covers reversed flow. So a propeller
@@ -87,7 +96,20 @@ propeller file (formats.md §3.3.1) named by the rotor's `aero:rotor:propeller`.
 Ground effect: Cheeseman–Bennett correction `T/T∞ = 1 / (1 − (R / 4z)²)` for `z/R > 0.25`,
 clamped below that. Height `z` is found by a downward ray cast against collision geometry.
 
+Ceiling effect (with `ground_effect`, both fidelities): a ray up each rotor's thrust axis finds
+the nearest fixed box of the scenery (a bridge deck, a ceiling) at distance `D`. Hsiao and
+Chirarattananon (2019, IEEE/ASME Trans. Mechatronics, arXiv:1905.04632) balance momentum under
+a flat ceiling: `½u² − u − α0·δ²/16 = 0`, `u = v∞/v_i`, `δ = R/D`, so `γ = u/2 =
+½ + ½·√(1 + α0·δ²/8)`, and the power for a thrust is `T^(3/2)/(γ·√(2ρA))`. At the same power
+the thrust is `γ^(2/3)` times the free thrust: +11% at half a radius, +3% at one radius, under
+1% beyond two. `α0 = 1.6` is their fit for a single 23 mm propeller (TODO(verify) for larger
+ones; their 50 mm propeller also needed a recirculation term); `δ` is held at 20, the edge of
+their data, and beyond 6 R the effect is left out (`test_rotor_aero`).
+
 ## 3. Signals
+
+The rotors' wakes (downwash, outwash, `rotor/{j}/air_velocity`, `rotor/{j}/thrust_axis`) are in
+[rotor_aero.md](rotor_aero.md).
 
 ```cpp
 // modules/aerodynamics — declare()
@@ -122,9 +144,37 @@ d.input({.name = "env/wind/velocity", .type = SignalType::Vec3, .unit = units::m
 Several modules produce wrenches on the same body (aero, rotor, hydro). The single-writer rule
 forbids them all writing `body/{b}/external_wrench`. A small core module, `wrench_sum`, reads
 every `*/wrench` signal declared for a body and writes `body/{b}/external_wrench`. It is always
-loaded and has no substitute. The rotor's reaction torque on the motor shaft
-(`rotor/{j}/aero_torque`) is summed into the joint by the same mechanism through
-`joint/{j}/load_torque`.
+loaded and has no substitute. The air's torque on a propeller (`rotor/{j}/aero_torque`, about the
+joint axis) is in the same wrench, on the propeller's link: the air acts on the propeller alone,
+so the frame feels only the motor's reaction, which is how a multirotor yaws. (Until 2026-11-04
+it went to `joint/{j}/load_torque`, a joint torque whose reaction also reached the frame and
+cancelled the motors' at steady speed: a held yaw rate then drove one pair of rotors nearly to a
+stop; `Multicopter.TakesOffByHandWithEveryStickAtOnce` flies the case.)
+
+### 3.1 The weather on a drone
+
+When the weather runs (the site's temperature, pressure and humidity are given), three things
+reach a multirotor, all through signals:
+
+- **Air density.** `rotor_aero`, the aerodynamics domain and the built-in multicopter controller
+  read the weather's `env/air_density` (moist air from temperature, pressure and humidity) every
+  step instead of the fixed `air_density` (config `weather_air`, set by the server when the
+  built-in weather or its clear substitute runs). Thrust and torque scale with it, so a rotor
+  turns faster in hot, thin air: ω ∝ ρ^−½ at the same thrust. The controller scales its mixer by
+  the same density, which is what a flight controller's hover-thrust estimate ends up doing (an
+  ideal one: no estimation lag). Measured on the sample quadcopter hovering 2 m up: 5690 rpm at
+  40 °C and 950 hPa (1.048 kg/m³), 4990 rpm at −10 °C and 1030 hPa (1.362 kg/m³), the ratio 1.140
+  being √(1.362/1.048).
+- **Rain and snow.** `env/rain_rate` and `env/snow_rate` push every AeroAPI_1 link with the
+  momentum of the drops that stop on it (`impactForce`, Aerodynamics.hpp: Marshall and Palmer
+  drop sizes, the fall speed of Atlas et al. 1973, inelastic impact as Haines and Luers 1983).
+  It is small, as it is in the air: 25 mm/h on the sample's 0.09 m² top is 3.7 mN against its
+  20 N weight; flying at 10 m/s through it adds a few mN of drag. Water lying on the frame, rain
+  on the propellers' lift and icing are not modelled.
+- **Wind.** As before: the mean wind, Dryden gusts and the weather's wind grid (§2).
+
+The viewer draws the same rain and snow in the realistic view: drops falling at the same speed
+through the world and carried by the run's wind (viewer.md §4.1).
 
 ## 4. Step size
 
@@ -168,6 +218,9 @@ profile validator rejects it with that explanation.
 | `bem` edgewise H-force | classical rotor theory, `C_H = σ·c_d0·μ/4` (Johnson 1980 §5.4; Leishman 2006 §3.4), blades that only drag, μ = 0.1 | 1 % |
 | `bem` in wind | moving through still air equals standing still in the wind; the sample quadcopter holds its spot in 8 m/s with gusts (`quad_x500_gusty.yaml` with `fidelity: bem`) | 1e-12; within 0.1 m |
 | Ground effect | Cheeseman–Bennett curve and published small-rotor ground-effect measurements | 10 % for `z/R` in 0.5–3 |
+| Rain's fall speed | Atlas et al. 1973's v(D) against Gunn and Kinzer 1949's measured drops (1–4 mm); its mass-weighted mean over Marshall–Palmer drops, closed form against integration | 0.15 m/s; 1e-3 m/s |
+| Water in falling rain | Marshall and Palmer 1948, W = 0.089·R^0.84 g/m³ (1–100 mm/h); ours keeps the given rate at Atlas's speed, theirs carries more | within 20 %, lower (11–17 %) |
+| Rain's push, weather's air density | the momentum flux and drag by formula, through the module | 1e-9 N |
 | Field sampling | analytic field baked to VDB | interpolation error bound from grid spacing |
 | Hover power and step response of the sample quadcopter | flight log of a comparable real vehicle (to be sourced; Q16) | reported, with tolerance set from data spread |
 
@@ -198,8 +251,9 @@ model has no stall-delay correction yet, so that range is not part of the test.
 - The air density is a site parameter with no default (`rotor_aero.air_density`, kg/m³), as the
   ambient temperature is for thermal; the rotors refuse to start without it.
 - Thrust acts along the joint axis on the rotor's link, at the link's origin; the wrench goes to
-  `body/<link>/wrench/rotor` and `WrenchSum` adds it to the link's `external_wrench`. The shaft
-  torque is the joint's `load_torque`, opposing the rotation.
+  `body/<link>/wrench/rotor` and `WrenchSum` adds it to the link's `external_wrench`. The air's
+  shaft torque, opposing the rotation, is in that wrench too, about the joint axis (not the
+  joint's `load_torque`, which stays zero), so the frame gets only the motor's reaction.
 - Inflow lag: first order with config `inflow_time_constant` (s), exact over the step; 0 (no lag)
   unless set, because a published time constant for the sample propeller is not in hand.
 - Ground effect: Cheeseman–Bennett with the height above the world's ground plane only (scenery
@@ -232,3 +286,50 @@ rotors' inflow. (NanoVDB wind grids drive link drag since v0.5:
 | Turbulence spectra | variances of the three components within 5 % of σ² over 4000 correlation times, longitudinal autocorrelation within 0.03 of e^(−τV/L); the periodogram band test is owed | `test_aerodynamics` |
 | Static thrust and torque | closed form met exactly; published propeller data owed (with the sample quadcopter's propeller) | `test_rotor_aero` |
 | Ground effect | Cheeseman–Bennett met exactly for z/R 0.5 to 3; published small-rotor measurements owed | `test_rotor_aero` |
+
+## 10. Wind tunnel (fidelity `lbm`, offline)
+
+`lagrange tunnel` puts a robot's collision shapes in a uniform grid and runs air past them: D3Q19 lattice Boltzmann, BGK with a Smagorinsky eddy viscosity (Hou et al. 1996), half-way bounce-back, forces by momentum exchange, inlet at equilibrium, zero-gradient outlet, periodic sides, and with `--ground` a rolling road under the lowest point (bounce-back off a moving wall, Ladd 1994), as a car is tested. The CPU path, threaded by z slabs, is the bit-reproducible reference (invariant 7); on a real GPU `gpu/kernels/fields/lbm.slang` steps the same update in float, about 500 million cell updates a second on an RTX 4060 against about 60 on the CPU, loads and means sampled every 25 steps. On a software device or `--cpu` it stays on the CPU. Tier 2 and 1 run the kernel; Tier 0 the reference. Not yet: a moving box around a robot in a run, a wall model, local refinement.
+
+What it is checked against (`test_lbm`): the exact decay of a shear wave within 1 %; a sphere at Re 20 and 50 on 10 cells across in a box of 40, 25 % over Schiller and Naumann, from blockage and the staircase surface (`DISABLED_ASpheresDragComesCloserWithAFinerGrid` for a finer grid); a plate and a cube face-on at high Reynolds number, 0.97 and 1.03 against Hoerner's 1.17 and 1.05. At high Reynolds numbers with no wall model, agreement on bluff bodies comes from their separating at sharp edges, and a streamlined body would not be right. No measured data of a robot exists (the project has none).
+
+The flow world is plain meshes in bands of a colour, one prim per band named after its range, so it needs no protocol change: the viewport reads its colour scales from those names (`FlowLegend.cpp`).
+
+The CPU path holds a symmetric body's flow exactly symmetric, in which a wake may not shed at all; the GPU's rounding breaks the symmetry and it sheds, as a real wake does, so the two can differ by more than either's numbers suggest (a pod on 150,000 cells: 2.11 steady on the CPU, 2.2 to 2.5 shedding on the GPU). `dragSpread` says how much the coefficient moved between windows, and `--mean-passes` averages longer.
+
+`--frames N` writes about N PNG files while averaging, so the wake is seen moving: speed in a slice along the body over pressure in a slice from above, scales in `frames/legend.json`; `--frame-spin` draws the air's spin instead. `flow.nvdb` as `--weather wind_field=` reaches a run: the sample quadcopter in the sedan's flow drifted 8 m in 10 s and tilted, where it held still without it (one run by hand, 2026-11-02).
+
+
+Known defect, seen in these frames: a checkerboard of about 1 to 2 % of the wind speed upstream of the body that does not decay over a run (sedan, 25 m/s). An empty tunnel does not have it, and starting the wind gradually does not change it, so it comes from the body, not the start. Tried by hand on 2026-11-02, none adopted:
+
+| Change | Checkerboard | Cube (1.05) | Plate (1.17) |
+|---|---|---|---|
+| None | 44.8 | 1.03 | 0.97 |
+| Regularized collision (Latt & Chopard 2006) | not measured | 1.44 | 0.85, test fails |
+| Sponge, thin, outlet only | 44.5 to 46.2 | 1.03 | 0.97 |
+| Sponge, both ends, 0.3 | 24.0 | 1.28 | 1.00 |
+| Sponge plus viscosity floor 0.005 | 6.7 | 1.69 | 1.11 |
+
+Checkerboard is the mean jump of red minus blue between neighbouring cells of a frame, out of 255, on the sedan at 300k cells on the CPU. Damping removes it, and the more it does the further the cube moves from its measurement, so the cube's good number on the coarse grid may rest partly on the undamped flow. Its effect on forces is not known. Sedan forces from those trials are left out: they were measured with `--frames`, which then kept only part of each window's force (fixed, `FramesDoNotChangeTheForce`).
+
+`--study` runs the air on a quarter, a half and all the cells and says whether Cd and Cl stopped changing (5 %, a rule of thumb). The sample sedan and the Lexus collide as one box each, so what the tunnel sees is a box and a Cd above 1 says nothing about a car; give it a car's shape to study a car.
+
+`--ground` once put the road 2 % of the body below it, under a cell on these grids, so no air passed beneath and an Ahmed body read Cd 9.5 (0.78 in free air). `--clearance M` now sets the gap, never under two cells (`AirPassesBetweenABodyAndTheRoad`); forces over a road from before that are void.
+
+Every Ahmed body number in this section used a model with sharp side edges on its nose and is void; see [cfd.md](cfd.md) §6 for the corrected ones.
+
+The Ahmed body (Ahmed et al. 1984; L 1.044, W 0.389, H 0.288 m, 40 m/s, 50 mm over a moving road, one convex hull with no stilts) is the reference this tool does not yet meet. One run on the GPU, 0.5M, 1M, 2M cells; the gap is 2.2 cells on the finest and widened to two cells on the others:
+
+| Slant | Cd | Cl | Measured Cd |
+|---|---|---|---|
+| 25° | 2.30, 2.06, 1.12 | -0.37, -0.29, 0.93 | 0.298 (Strachan et al. 2007, quoted in arXiv 2001.11074) |
+| 35° | 2.28, 2.08, 1.14 | -0.33, -0.24, 0.91 | not verified |
+
+NOT SETTLED, and at the finest grid nearly four times the measurement.
+
+Finer, by hand with the same gap, GPU, one run each: 25° at 4M, 8M, 16M cells gives Cd 1.36, 1.31, 1.17; 35° at 4M, 8M gives 1.34, 1.33 (16M did not finish in the time given). So refining alone does not reach the measurement within what this machine holds (16M took 22 minutes and 5.9 GB of host memory).
+
+Part of the excess is wall friction. A plate 1.044 x 0.389 x 0.05 m along a 40 m/s wind in free air, removing one dynamic pressure on its end area, gives a friction coefficient of 0.037 at 1M cells and 0.014 at 4M, against about 0.0037 for a turbulent flat plate at this Reynolds number (Schlichting's 0.455 / (log10 Re)^2.58). Half-way bounce-back is a no-slip wall with no wall model, far from y+ of 1. On the Ahmed body's 12.6 wetted areas per frontal area, 0.014 alone is a Cd of about 0.18, so it explains some of the excess and not all.
+
+A wall model was tried and not adopted (2026-11-02, CPU, by hand): the bounce-back wall moved tangentially at the speed that leaves the log law's friction (von Karman 0.41, E 9.8), the normal taken from a cell's face neighbours. The aligned plate at 0.5M cells fell to 0.013, still 3.6 times the flat plate's. The cube fell from 1.03 to 0.69 (measured 1.05), the bluff plate from 0.97 to 0.88 (1.17), and the Ahmed body at 0.5M cells went from Cd 1.24 to -8.25: on a slanted or curved staircase of cells the moving walls appear to push the air, since the faces do not match the normal used. A model that works there needs each link's real wall distance and normal, which the voxel grid does not hold today.
+ The two slants do not differ, so the drag crisis between them is not resolved. For a streamlined body use this tunnel for where the air goes and how shapes rank at most, not for a drag number.

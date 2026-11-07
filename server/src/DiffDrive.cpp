@@ -20,6 +20,29 @@ SignalSpec scalar(std::string name, Unit unit) {
 
 constexpr char kLinear[] = "base/command/linear_velocity";
 constexpr char kAngular[] = "base/command/angular_velocity";
+constexpr char kLateral[] = "base/command/lateral_velocity";
+
+/// The demo of a robot that moves sideways: a square without turning (each side `side` seconds
+/// at `v`), then a full turn on the spot at `v / radius`.
+VelocityCommand holonomicDemo(double t, double v, double radius) {
+    constexpr double kSideSeconds = 4.0;
+    const double turnSeconds = 2.0 * std::numbers::pi * radius / v;
+    const double period = 4.0 * kSideSeconds + turnSeconds;
+    const double phase = std::fmod(t, period);
+    if (phase >= 4.0 * kSideSeconds) {
+        return {0.0, v / radius, 0.0};
+    }
+    switch (static_cast<int>(phase / kSideSeconds)) {
+        case 0:
+            return {v, 0.0, 0.0};
+        case 1:
+            return {0.0, 0.0, v};
+        case 2:
+            return {-v, 0.0, 0.0};
+        default:
+            return {0.0, 0.0, -v};
+    }
+}
 
 }  // namespace
 
@@ -40,12 +63,18 @@ Duration DriveCommand::preferredStep() const {
 Status DriveCommand::declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) {
     linear_ = d.output(scalar(kLinear, units::m_per_s));
     angular_ = d.output(scalar(kAngular, units::rad_per_s));
+    if (settings_.lateral) {
+        lateral_ = d.output(scalar(kLateral, units::m_per_s));
+    }
     return {};
 }
 
 Status DriveCommand::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     bus.write(linear_, 0.0);
     bus.write(angular_, 0.0);
+    if (settings_.lateral) {
+        bus.write(lateral_, 0.0);
+    }
     return {};
 }
 
@@ -63,13 +92,23 @@ Status DriveCommand::step(const StepContext& context, SignalBus& bus) {
         const Settings& s = settings_;
         const double t = context.t.seconds();
         const double v = s.speedMps * std::min(1.0, t / s.rampSeconds);
+        if (s.lateral) {
+            command = holonomicDemo(t, s.speedMps, s.turnRadiusM);
+            command->linearMps *= v / s.speedMps;
+            command->lateralMps *= v / s.speedMps;
+        }
         const double loopSeconds = 2.0 * std::numbers::pi * s.turnRadiusM / s.speedMps;
         const double phase = std::sin(std::numbers::pi * t / loopSeconds);
-        command = VelocityCommand{v, (v / s.turnRadiusM) * std::tanh(8.0 * phase)};
+        if (!s.lateral) {
+            command = VelocityCommand{v, (v / s.turnRadiusM) * std::tanh(8.0 * phase)};
+        }
         source_ = "demo";
     }
     bus.write(linear_, command->linearMps);
     bus.write(angular_, command->angularRadps);
+    if (settings_.lateral) {
+        bus.write(lateral_, command->lateralMps);
+    }
     return {};
 }
 

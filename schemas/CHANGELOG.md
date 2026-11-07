@@ -8,6 +8,31 @@ and `test_schemas.py` checks it.
 
 ## Unreleased
 
+- **Electrical library** (RFC 0010): `ElectricalBranchAPI_1`, a resistor, fuse, switch or diode between two
+  buses; `elec:load:resistance` on `ElectricalLoadAPI_1`, for a resistive load given as a resistance.
+  Additions, nothing to migrate.
+
+- **`ElectricalMotorAPI_1`**: `elec:velocityLoopBandwidth`; `elec:controlMode` `velocity` and `voltage` now simulated, on prismatic joints too. Addition, nothing to migrate.
+
+- **Joint library**: `JointDynamicsAPI_1` on a physics joint: damping, dry friction and copying another joint (mimic).
+  New library, nothing to migrate.
+
+- **`LidarAPI_1`**: `sensor:lidar:motionDistortion` (bool, default true), as `formats.md` already listed it.
+  Addition, nothing to migrate.
+
+- **Water library**: `WaterAPI_1`, a box of still water (size, depth, density, drag, reflectivity). New
+  library, nothing to migrate.
+
+- **`SensorMaterialAPI_1`** gains `sensmat:preset` (a named surface for lidars). An addition; lidars
+  now read the schema's reflectivity, specular fraction, transmission and retroreflective values.
+
+- **Human library** (RFC 0009): `HumanAPI_1`, a person who walks (height, speed, behaviour,
+  waypoints). New library, nothing to migrate.
+
+- **`CustomSensorAPI_1`** in the sensor library (RFC 0008 §3): a sensor a plugin implements, by
+  its `sensor:custom:kind`, with free `sensor:custom:param:<name>` attributes. A new schema under
+  the 1.x rules (RFC 0007); nothing in `frozen_1_0.json` changes.
+
 - **Frozen at 1.0** (RFC 0007): the 27 schemas and 240 properties listed in
   `schemas/test/frozen_1_0.json`.
 

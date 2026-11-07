@@ -200,6 +200,34 @@ Expected<void, std::string> write(const std::string& path, const std::string& na
 
 }  // namespace
 
+std::shared_ptr<const Field> vectorField(const std::string& name, const DenseBox& box,
+                                         const std::function<Vec3(const Vec3&)>& value) {
+    if (box.size <= 0.0 || box.count[0] < 1 || box.count[1] < 1 || box.count[2] < 1) {
+        return nullptr;
+    }
+    nanovdb::GridBuilder<nanovdb::Vec3f> builder(nanovdb::Vec3f(0.0F));
+    auto accessor = builder.getAccessor();
+    for (int i = 0; i < box.count[0]; ++i) {
+        for (int j = 0; j < box.count[1]; ++j) {
+            for (int k = 0; k < box.count[2]; ++k) {
+                const Vec3 v = value({box.origin[0] + i * box.size, box.origin[1] + j * box.size,
+                                      box.origin[2] + k * box.size});
+                const nanovdb::Vec3f f(static_cast<float>(v[0]), static_cast<float>(v[1]),
+                                       static_cast<float>(v[2]));
+                // Every voxel active, still air too: the box's bounds are the field's.
+                accessor.setValue(nanovdb::Coord(i, j, k), f == nanovdb::Vec3f(0.0F)
+                                                               ? nanovdb::Vec3f(0.0F, 0.0F, 1e-9F)
+                                                               : f);
+            }
+        }
+    }
+    const auto handle = builder.getHandle(
+        box.size, nanovdb::Vec3d(box.origin[0], box.origin[1], box.origin[2]), name);
+    std::vector<std::byte> bytes(handle.size());
+    std::memcpy(bytes.data(), handle.data(), handle.size());
+    return Field::fromBytes(std::move(bytes));
+}
+
 Expected<void, std::string> writeScalarField(const std::string& path, const std::string& name,
                                              const DenseBox& box,
                                              const std::function<double(const Vec3&)>& value) {

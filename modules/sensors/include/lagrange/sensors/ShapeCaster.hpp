@@ -70,6 +70,32 @@ private:
                                      const Pose& pose, const std::array<double, 3>& point,
                                      const ConvexHull* hull = nullptr);
 
+/// The outward unit normal of the shape at a `point` on its surface. A height field's is its
+/// slope there, a convex hull's the nearest face's.
+[[nodiscard]] std::array<double, 3> surfaceNormal(ShapeType type, const std::array<double, 3>& size,
+                                                  const Pose& pose,
+                                                  const std::array<double, 3>& point,
+                                                  const ConvexHull* hull = nullptr,
+                                                  const HeightField* field = nullptr);
+
+/// What a lidar gets back from a surface (docs/design/domains/sensors.md §2). The intensity is
+/// reflected power relative to a white wall (reflectivity 1) head-on at kIntensityReferenceM,
+/// capped at 1: ρ·((1−s)·cos θ + s·lobe(θ))·(r₀/r)², where s is the specular fraction and the lobe
+/// is a mirror's, narrow about normal incidence. A retroreflector returns kRetroGain·ρ·(r₀/r)² at
+/// any angle. A surface with a material gives no return when its power falls under what the
+/// lidar needs at its range limit for a target of `referenceReflectivity`, so water and dark
+/// surfaces drop out at a distance or a slant; without a material there is always a return.
+inline constexpr double kIntensityReferenceM = 1.0;
+inline constexpr double kRetroGain = 100.0;        // illustrative: a retroreflector's concentration
+inline constexpr double kSpecularLobeRad = 0.035;  // about 2°, illustrative
+struct LidarReturn {
+    bool detected{true};
+    double intensity{0.0};
+};
+[[nodiscard]] LidarReturn lidarReturn(const SurfaceMaterial& material, bool hasMaterial,
+                                      bool wavelength1550, double cosIncidence, double range,
+                                      double maxRange, double referenceReflectivity);
+
 /// Radius of a sphere around the shape's origin that contains it (+inf for a plane).
 [[nodiscard]] double boundingRadius(ShapeType type, const std::array<double, 3>& size);
 

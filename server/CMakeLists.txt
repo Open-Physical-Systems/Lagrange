@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(lagrange_server VERSION 0.0.0 LANGUAGES CXX)
+project(lagrange_server VERSION 0.0.0 LANGUAGES C CXX)
 
 find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)
@@ -19,6 +19,8 @@ find_package(lagrange_emi REQUIRED)
 find_package(lagrange_comms REQUIRED)
 find_package(lagrange_vehicle_dynamics REQUIRED)
 find_package(lagrange_traffic REQUIRED)
+find_package(lagrange_humans REQUIRED)
+find_package(lagrange_hydrodynamics REQUIRED)
 find_package(lagrange_opendrive REQUIRED)
 find_package(lagrange_openscenario REQUIRED)
 find_package(lagrange_mavlink REQUIRED)
@@ -47,13 +49,17 @@ add_library(
     lagrange_server
     src/Server.cpp
     src/Robot.cpp
+    src/RobotCheck.cpp
     src/DiffDrive.cpp
     src/CarDrive.cpp
+    src/SwerveDrive.cpp
     src/Multicopter.cpp
     src/MapExport.cpp
     src/Profile.cpp
     src/Recorder.cpp
     src/RegionHost.cpp
+    src/Plugins.cpp
+    src/JointControl.cpp
 )
 lagrange_target_defaults(lagrange_server)
 target_include_directories(
@@ -91,6 +97,8 @@ target_link_libraries(
         lagrange_comms::lagrange_comms
         lagrange_vehicle_dynamics::lagrange_vehicle_dynamics
         lagrange_traffic::lagrange_traffic
+        lagrange_humans::lagrange_humans
+        lagrange_hydrodynamics::lagrange_hydrodynamics
         lagrange_opendrive::lagrange_opendrive
         lagrange_openscenario::lagrange_openscenario
         lagrange_mavlink::lagrange_mavlink
@@ -104,6 +112,7 @@ target_link_libraries(
         tinyxml2::tinyxml2
         yaml-cpp::yaml-cpp
         mcap_vendor::mcap
+        ament_index_cpp::ament_index_cpp
 )
 
 # The command line that lagrange_server and lagrange share.
@@ -165,8 +174,38 @@ target_link_libraries(
     PRIVATE lagrange_server lagrange_stage::lagrange_stage
 )
 
+add_executable(lagrange_check src/check_main.cpp)
+lagrange_target_defaults(lagrange_check)
+target_link_libraries(
+    lagrange_check
+    PRIVATE lagrange_server lagrange_stage::lagrange_stage
+)
+
+add_executable(lagrange_mesh_to_obj src/mesh_main.cpp)
+lagrange_target_defaults(lagrange_mesh_to_obj)
+target_link_libraries(
+    lagrange_mesh_to_obj
+    PRIVATE lagrange_meshes::lagrange_meshes
+)
+
+add_executable(lagrange_tunnel src/tunnel_main.cpp)
+lagrange_target_defaults(lagrange_tunnel)
+target_link_libraries(
+    lagrange_tunnel
+    PRIVATE
+        lagrange_server
+        lagrange_aerodynamics::lagrange_aerodynamics
+        lagrange_gpu::lagrange_gpu
+)
+
 install(
-    TARGETS lagrange_server_main lagrange_cli lagrange_import
+    TARGETS
+        lagrange_server_main
+        lagrange_cli
+        lagrange_import
+        lagrange_check
+        lagrange_mesh_to_obj
+        lagrange_tunnel
     RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 # The library is exported so that programs can build a run with their own modules until
@@ -195,10 +234,21 @@ if(BUILD_TESTING)
         test/test_robot.cpp
         test/test_regions.cpp
         test/test_server.cpp
+        test/test_spawn.cpp
+        test/test_joint_control.cpp
+        test/test_site.cpp
+        test/test_water.cpp
+        test/test_motor_modes.cpp
+        test/test_importer_audit.cpp
+        test/test_lidar_motion.cpp
+        test/test_lidar_materials.cpp
+        test/test_humans_run.cpp
+        test/test_plugins.cpp
         test/test_multicopter.cpp
+        test/test_downwash_pair.cpp
         test/test_toggles.cpp
         test/test_usd_assets.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/world"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world"
         TIMEOUT 120
     )
     target_link_libraries(
@@ -206,6 +256,7 @@ if(BUILD_TESTING)
         lagrange_server
         lagrange_electrical::lagrange_electrical
         lagrange_rotor_aero::lagrange_rotor_aero
+        lagrange_aerodynamics::lagrange_aerodynamics
         lagrange_rigid_body_jolt::lagrange_rigid_body_jolt
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
         lagrange_sensors::lagrange_sensors
@@ -216,7 +267,9 @@ if(BUILD_TESTING)
     target_compile_definitions(
         test_server
         PRIVATE
+            LAGRANGE_TEST_ADULT_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/humans/adult.usda"
             LAGRANGE_TEST_AMR_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.urdf"
+            LAGRANGE_TEST_AMR_FMS_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_fms/amr_fms.urdf"
             LAGRANGE_TEST_SCHEMA="${CMAKE_CURRENT_SOURCE_DIR}/../profiles/schema.json"
             LAGRANGE_TEST_PROFILES="${CMAKE_CURRENT_SOURCE_DIR}/../profiles/examples"
             LAGRANGE_TEST_WAREHOUSE_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/warehouse_small/warehouse_small.urdf"
@@ -229,6 +282,7 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_AMR_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.overlay.yaml"
             LAGRANGE_TEST_AMR_POWERED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive_powered.usda"
             LAGRANGE_TEST_AMR_WIFI_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive_wifi.usda"
+            LAGRANGE_TEST_AMR_THERMAL_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive_thermal.usda"
             LAGRANGE_TEST_SEDAN_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/sedan/sedan.usda"
             LAGRANGE_TEST_CUT_IN="${CMAKE_CURRENT_SOURCE_DIR}/../assets/scenarios/cut_in.xosc"
             LAGRANGE_TEST_CITY_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/city_block/city_block.usda"
@@ -237,10 +291,67 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_ARM6_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/arm6/arm6.overlay.yaml"
             LAGRANGE_TEST_RACK_BAKED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/rack_sample/rack_baked.usda"
             LAGRANGE_TEST_WORKCELL_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_arm6.urdf"
+            LAGRANGE_TEST_PROPELLERS="${CMAKE_CURRENT_SOURCE_DIR}/../assets/propellers"
             LAGRANGE_TEST_QUAD_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500.usda"
+            LAGRANGE_TEST_QUAD_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500.urdf"
+            LAGRANGE_TEST_QUAD_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500.overlay.yaml"
             LAGRANGE_TEST_QUAD_EMI_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500_emi.usda"
             LAGRANGE_TEST_POWER_LINE_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/power_line/power_line.usda"
             LAGRANGE_TEST_QUAD_INVERTED_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500_inverted/quad_x500_inverted.usda"
+    )
+    # Plugins for the server tests (RFC 0008), in C99 against the installed header: one with a
+    # domain of its own, and the ABI sample (an electrical substitute).
+    get_target_property(
+        _core_includes
+        lagrange_core::lagrange_core
+        INTERFACE_INCLUDE_DIRECTORIES
+    )
+    foreach(plugin IN ITEMS acme_probe scene_probe ideal_torque_source)
+        if(plugin STREQUAL "ideal_torque_source")
+            set(_source
+                ${CMAKE_CURRENT_SOURCE_DIR}/../core/plugin_abi/samples/ideal_torque_source.c
+            )
+        else()
+            set(_source test/plugins/${plugin}.c)
+        endif()
+        add_library(test_plugin_${plugin} MODULE ${_source})
+        target_include_directories(
+            test_plugin_${plugin}
+            PRIVATE ${_core_includes}
+        )
+        set_target_properties(
+            test_plugin_${plugin}
+            PROPERTIES
+                C_STANDARD 99
+                C_STANDARD_REQUIRED ON
+                C_EXTENSIONS OFF
+                OUTPUT_NAME ${plugin}
+                LIBRARY_OUTPUT_DIRECTORY
+                    ${CMAKE_CURRENT_BINARY_DIR}/test_plugins
+        )
+        target_compile_options(
+            test_plugin_${plugin}
+            PRIVATE -pedantic -Wall -Wextra -Werror
+        )
+        add_dependencies(test_server test_plugin_${plugin})
+    endforeach()
+    # A C++ plugin on the header-only SDK, which needs nothing of Lagrange's but its headers.
+    add_library(test_plugin_sdk_probe MODULE test/plugins/sdk_probe.cpp)
+    target_include_directories(test_plugin_sdk_probe PRIVATE ${_core_includes})
+    set_target_properties(
+        test_plugin_sdk_probe
+        PROPERTIES
+            CXX_STANDARD 20
+            OUTPUT_NAME sdk_probe
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/test_plugins
+    )
+    target_compile_options(test_plugin_sdk_probe PRIVATE -Wall -Wextra -Werror)
+    add_dependencies(test_server test_plugin_sdk_probe)
+    target_compile_definitions(
+        test_server
+        PRIVATE
+            LAGRANGE_TEST_PLUGIN_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_plugins"
+            LAGRANGE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/test/data"
     )
     ament_add_gtest(test_command_line test/test_command_line.cpp)
     target_link_libraries(test_command_line lagrange_server_cli)
@@ -254,7 +365,7 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_arm
         test/test_arm.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/world"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world"
         TIMEOUT 180
     )
     target_link_libraries(
@@ -272,6 +383,43 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_WORKCELL_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_arm6.urdf"
     )
     lagrange_target_defaults(test_arm)
+    # The rigid-body conformance suite (RFC 0008 §5), also installed for third-party backends.
+    ament_add_gtest(
+        lagrange_physics_conformance
+        test/physics_conformance.cpp
+        TIMEOUT 300
+    )
+    target_link_libraries(
+        lagrange_physics_conformance
+        lagrange_server
+        ament_index_cpp::ament_index_cpp
+    )
+    lagrange_target_defaults(lagrange_physics_conformance)
+    install(
+        TARGETS lagrange_physics_conformance
+        DESTINATION lib/${PROJECT_NAME}
+    )
+    # --ros-topics end to end (RFC 0008 §4): the lagrange_tof plugin's range on a ROS topic.
+    find_package(sensor_msgs REQUIRED)
+    find_package(std_msgs REQUIRED)
+    ament_add_gtest(
+        test_ros_topics
+        test/test_ros_topics.cpp
+        ENV ROS_DOMAIN_ID=88
+        TIMEOUT 120
+    )
+    target_link_libraries(
+        test_ros_topics
+        lagrange_server
+        rclcpp::rclcpp
+        ${sensor_msgs_TARGETS}
+        ${std_msgs_TARGETS}
+    )
+    target_compile_definitions(
+        test_ros_topics
+        PRIVATE LAGRANGE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/test/data"
+    )
+    lagrange_target_defaults(test_ros_topics)
     lagrange_target_defaults(test_server)
     # The installed tool end to end: exit 0 for the valid example, 1 for an invalid one.
     set(_lagrange_cli_robot

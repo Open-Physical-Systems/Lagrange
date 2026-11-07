@@ -12,7 +12,7 @@ Backend order proposed (open question Q9):
 |---|---|---|---|---|
 | MuJoCo | v0.2 default and deterministic CPU reference | Apache-2.0 | `ros-lyrical-mujoco-vendor` or `libmujoco-dev` 3.5.0 | CPU (MuJoCo Warp is Python/Warp, not linked) |
 | Jolt | second CPU backend; large scenes with many free bodies | MIT | `jolt_vendor` (v5.6.0 upstream) | CPU |
-| PhysX 5 | vehicles (v0.6), GPU batches (Tier 2) | BSD-3-Clause | `physx_vendor` | CUDA only |
+| PhysX 5 | not built, by the owner's v0.6 decision; planned for vehicles and GPU batches (Tier 2) | BSD-3-Clause | none | CUDA only |
 
 MuJoCo is first because it is packaged for Lyrical, has no GPU or CUDA build requirement, and its
 MJCF parser is also needed by the importer.
@@ -99,3 +99,87 @@ actuated joint; `body/{b}/pose`, `body/{b}/twist`, `body/{b}/acceleration` for e
 | `effective_inertia` | analytic two-link arm inertia matrix diagonal | 1e-9 relative |
 | Determinism | two runs, same seed | bit-identical state hash (MuJoCo backend) |
 | AMR drive test (v0.2) | sim-vs-real: recorded wheel odometry of a real differential-drive robot driving a square. Dataset to be recorded or sourced (open question Q16) | position error after 10 m within the spread of repeated real runs |
+
+### Pushing against measurement (2026-11-03)
+
+`APushedBlockMovesAsTheMcubeMeasurements` repeats the repeated-push experiment of Yu, Bauza, Fazeli
+and Rodriguez ("More than a Million Ways to Be Pushed", IROS 2016, §VII, Table IV): their
+stainless-steel square rect1 (0.837 kg, 90 mm, 13 mm thick) pushed 15 cm at 20 mm/s by a 9.5 mm
+rod, normal to a face, halfway between its centre and edge, on four surfaces whose friction they
+measured (abs 0.13, delrin 0.12, plywood 0.24, polyurethane 0.28; rod 0.25). Final (Δx, Δy, Δθ):
+
+| | abs | delrin | plywood | pu |
+|---|---|---|---|---|
+| Measured, mean of 2000 | (40.1, −67.6, 74.7) | (38.8, −50.7, 78.5) | (36.4, −93.6, 70.2) | (40.2, −85.0, 69.3) |
+| Quasi-static model (Lynch et al. 1992, run by Yu et al.) | (41.0, −98.1, 66.3) | | | |
+| MuJoCo | (38.7, −91.1, 61.8) | (38.6, −91.3, 61.7) | (39.4, −92.3, 59.9) | (39.6, −93.2, 59.0) |
+| Jolt | (6.0, −148.8, 1.9) | (8.5, −148.4, 2.6) | (0.2, −149.6, 0.3) | (0.6, −149.4, 0.7) |
+
+- **MuJoCo is the quasi-static theory's answer**: within 6 mm of Lynch et al.'s model, turning 4
+  to 7° less (a box on a plane rests on its four corners there, where the model spreads the
+  pressure evenly). Uniform Coulomb friction makes the path independent of the support's friction,
+  so it gives one answer for all four surfaces. Against the measurements it is 3 to 8 mm off on
+  plywood and polyurethane but 24 and 41 mm off on abs and delrin, and 10 to 17° short on all: as
+  the theory itself is (8 to 12° short, 6 to 48 mm off). What the surfaces do differently
+  (uneven pressure, anisotropy, friction that changes with speed and place, their §V) is not in
+  the model.
+- **Jolt holds the sliding block straight.** Jolt 5.6 keeps linear friction, at the centre of
+  the contact points, and friction about the contact normal on separate budgets (μ·Σλ and
+  μ·Σ dᵢ·λᵢ, `ContactConstraintManager`), so a block already sliding at full friction still
+  resists turning at full strength: it is carried 149 mm in front of the rod, turning 2°. Coulomb
+  friction couples the two (the limit surface, which Yu et al. measured). A known limitation of
+  the engine, reported, not asserted; use MuJoCo for pushing and manipulation.
+- **A bug found on the way.** Jolt gave a body whose colliders have no friction its default of
+  0.5 (`settings.mFriction = friction > 0 ? friction : 0.5`); a frictionless body now stays
+  frictionless (`AFrictionlessBoxSlidesAtGSinTheta`, all backends).
+
+## 8. Backends as plugins: the contract and the conformance suite (RFC 0008 §5)
+
+A plugin module with `domain = "rigid_body"` is a backend, picked by `--physics NAME` or a
+profile's `rigid_body: {backend: NAME}`. Its contract is §3 and §5, binding:
+
+- **Outputs**, per hinge and slide joint: `joint/<j>/position`, `velocity`; for actuated joints
+  also `acceleration`, `effective_inertia`, `constraint_torque`. Per moving body (its joint to the
+  world, or one of its ancestors', is not fixed): `body/<b>/pose`, `twist` (world_local),
+  `acceleration` (proper acceleration, body frame: what an IMU feels).
+- **Inputs**: `joint/<j>/torque` and `load_torque` (window average, optional);
+  `body/<b>/external_wrench` (world_local, at the body origin, optional);
+  `body/<b>/pose_command` for kinematic bodies (optional: without one the body stays);
+  `env/friction_scale` (optional, default 1).
+- **Behaviour**: free root bodies; every `ShapeType`, or a refusal in `declare` that names the
+  shape; no collisions between bodies of one kinematic tree, and collisions between separate
+  trees (a world file's loose objects share a robot index but not a tree); joint limits;
+  armature; `World::Joints::initialPosition` (or a warning that it starts at zero);
+  `shift_origin`; and, for a backend that says it is deterministic, `save_state` and
+  `restore_state` that restore a run bit for bit.
+
+The conformance suite, `ros2 run lagrange_server lagrange_physics_conformance`
+(`server/test/physics_conformance.cpp`), checks a backend against it. It runs the backends in
+`LAGRANGE_CONFORMANCE` (`NAME` or `NAME@PLUGIN`, comma-separated; default
+`mujoco,jolt,jolt_abi@lagrange_jolt`); a third-party engine runs it as
+`LAGRANGE_CONFORMANCE=my_engine@libmy_engine.so`:
+
+| Test | Requirement |
+|---|---|
+| Free fall | speed after 2 s within 0.1 % of 2 g: nothing damps it |
+| A falling box | dropped from 1 m, rests at its half height within 5 mm after 3 s |
+| A pendulum | period of the physical pendulum, `2π √(I / (m g d))·(1 + θ₀²/16)`, within 0.5 % |
+| A box on a slope | friction 1: holds at 30° (moves < 1 cm in 1.4 s), slides at 60° (> 0.3 m) |
+| A stack of three boxes | stands for 10 s: the top box within 1 cm of its place |
+| The sample AMR's loop | over 10 s, the distance driven within 5 % of MuJoCo's, the end within 10 % of it |
+| Determinism and state | two runs bit-identical; a saved state restored runs on bit-identically |
+
+MuJoCo, Jolt and `jolt_abi` (the same Jolt engine as a plugin through the C ABI,
+`modules/rigid_body/jolt_backend/src/jolt_plugin.cpp`, `--plugin lagrange_jolt`) pass it; Jolt and
+`jolt_abi` give identical numbers. On Jolt the AMR's loop ends 5.3 % of its 5.4 m from MuJoCo's
+end (heading drift from its per-body friction). Writing the suite found two Jolt bugs, both
+fixed (a third, Jolt's default body damping, came up later and is fixed too): loose objects of one world file passed through each other (collisions were filtered by
+robot index instead of by tree), and a restored state lost its contacts with the static scenery.
+Restored contacts now include the scenery whenever it is unchanged; it changes between a save
+and a restore only when streamed tiles come or go.
+
+## Contact force
+
+`body/<b>/contact_force` (N, in the world frame) is the sum of what touches a moving body pushes it with, read from each step's contacts, for force sensing and foot contact. On a robot at rest the bodies' forces add up to its weight (`test_contact_forces_on_a_robot_at_rest_carry_its_weight`). Jolt's contact listener gives no impulses per step, so on Jolt it is what is left of a group's momentum change: `m·Δv/Δt − m·g` less its external forces and its joints' forces (below), by Newton's second law; a group of bodies fixed together (one Jolt body) gets it on its root body. `contact/points` above is still MuJoCo only.
+
+`joint/<j>/reaction` (Wrench, world frame, linear then angular) is what the parent does to the child at the joint, including what its motor applies, as a force-torque sensor there reads it. Checked on a hinge holding a known weight (`test_a_joints_reaction_is_what_it_carries`). On Jolt it is the joint constraint's impulses over the step (`GetTotalLambda*`: the point, rotation, limit and motor parts, + on the child, − on the parent, the hinge's rotation part in the basis Jolt builds, `b2 = a2⊥`, `c2 = a2 × b2`) plus the effort applied through the joint. The conformance suite checks both engines: a box at rest is held up by its weight, a still pendulum's pivot carries it with no moment, and a swinging one's carries `m·g + m·d·ω²` at the bottom within 1% (11.349 N on MuJoCo, 11.348 N on Jolt).
