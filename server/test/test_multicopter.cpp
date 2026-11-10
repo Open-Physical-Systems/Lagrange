@@ -8,6 +8,7 @@
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/rotor_aero/RotorAero.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
+#include "lagrange/sensors/ShapeCaster.hpp"
 #include "lagrange/server/Multicopter.hpp"
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/services/WrenchSum.hpp"
@@ -474,6 +475,77 @@ TEST(Multicopter, FullStickThenLetGoStartsAndStopsSmoothly) {
     EXPECT_GT(stopped - letGo, 2.5);    // brakes: 5 m/s at 3 m/s² is about 4 m
     EXPECT_LT(stopped - letGo, 6.0);
     EXPECT_GT(stopped, furthest - 0.15);  // stays where it stopped, does not fly back
+}
+
+// Off a platform (a 3 m block it starts on): told the ground under it, it flies off the edge,
+// comes down past the platform's top and lands on the ground below, instead of taking the
+// height it started at for the ground (where it would stop descending and refuse to move).
+TEST(Multicopter, FliesOffAPlatformAndLandsBelowIt) {
+    auto robot = loadModel(LAGRANGE_TEST_QUAD_USDA);
+    ASSERT_TRUE(robot) << robot.error();
+    World& world = robot->world;
+    const auto base = std::ranges::find(world.bodies.names, "base_link");
+    ASSERT_NE(base, world.bodies.names.end());
+    Pose& start =
+        world.bodies.poseInParent[static_cast<std::size_t>(base - world.bodies.names.begin())];
+    const double onGround = start.position[2];
+    start.position[2] += 3.0;  // on the block
+    world.addCollider(kWorldBody, ShapeType::Box, {1.0, 1.0, 1.5}, Pose{{0.0, 0.0, 1.5}}, 1.0);
+    // The ground for the controller: the block and the ground plane.
+    std::vector<sensors::ShapeCaster::Shape> shapes;
+    for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
+        if (world.colliders.body[c] == kWorldBody) {
+            sensors::ShapeCaster::Shape shape;
+            shape.type = world.colliders.shape[c];
+            shape.size = world.colliders.size[c];
+            shape.pose = world.colliders.poseInBody[c];
+            shapes.push_back(shape);
+        }
+    }
+    auto ground = std::make_shared<sensors::ShapeCaster>();
+    ground->update(shapes);
+    Scheduler scheduler(SchedulerOptions{.deterministic = false});
+    scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+    ModuleConfigData power;
+    power.dt = 50_us;
+    power.values["exchange_step"] = 0.001;
+    scheduler.add(std::make_unique<electrical::ElectricalNetwork>(), ModuleConfig(power));
+    ModuleConfigData air;
+    air.values[rotor_aero::kAirDensityKey] = 1.225;
+    scheduler.add(std::make_unique<rotor_aero::RotorAero>(), ModuleConfig(air));
+    std::optional<MulticopterController::FlightCommand> command;
+    MulticopterController::Settings flight;
+    flight.waitForCommand = true;
+    scheduler.add(std::make_unique<MulticopterController>(
+                      flight, [&command] { return command; }, ground),
+                  ModuleConfig(air));
+    scheduler.add(std::make_unique<services::WrenchSum>());
+    auto wired = scheduler.wire(WorldView(world));
+    ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    const SignalBus& bus = scheduler.bus();
+    const SignalId pose = bus.find("body/base_link/pose");
+    const SignalId thrust = bus.find("rotor/rotor_1_joint/thrust");
+    double t = 0.0;
+    const auto fly = [&](double seconds) {
+        t += seconds;
+        EXPECT_TRUE(scheduler.stepUntil(SimTime{static_cast<std::int64_t>(t * 1e9)}).ok());
+        return std::vector<double>(bus.readN(pose).begin(), bus.readN(pose).end());
+    };
+    const double top = fly(0.5)[2];
+    command = MulticopterController::FlightCommand{0.0, 0.0, 1.0, 0.0};
+    (void)fly(1.5);  // up off the block
+    command = MulticopterController::FlightCommand{0.0, 2.0, 0.0, 0.0};
+    const std::vector<double> out = fly(3.0);  // left, past its edge
+    EXPECT_GT(out[1], 2.5);
+    command = MulticopterController::FlightCommand{0.0, 0.0, -1.0, 0.0};
+    const std::vector<double> low = fly(6.0);  // down, past the block's top, to the ground
+    std::printf("off the block: started %.2f m up, out to y %.2f, came down to %.2f m\n", top,
+                out[1], low[2]);
+    EXPECT_LT(low[2], top - 2.5);
+    EXPECT_NEAR(low[2], onGround, 0.05);  // on the ground
+    command.reset();
+    (void)fly(4.0);                    // its rotors coast down once the motors stop
+    EXPECT_LT(bus.read(thrust), 0.1);  // landed: rotors coasting, under 2 % of a hover's
 }
 
 }  // namespace

@@ -987,7 +987,11 @@ struct Server::Impl {
                 }
                 MulticopterController::Settings flight;
                 flight.waitForCommand = !options.demoDrive;  // --no-demo: it waits for you
-                next->add(std::make_unique<MulticopterController>(flight, std::move(commands)),
+                // The ground under it, so that it can fly off a bridge or a roof and land below.
+                auto [below, friction] = groundQuery();
+                (void)friction;
+                next->add(std::make_unique<MulticopterController>(flight, std::move(commands),
+                                                                  std::move(below)),
                           ModuleConfig(air));
             }
         }

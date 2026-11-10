@@ -1,9 +1,11 @@
 #pragma once
 
 #include "lagrange/module/IModule.hpp"
+#include "lagrange/services/SceneQuery.hpp"
 
 #include <array>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -71,8 +73,12 @@ public:
     /// Where commands come from (ROS /cmd_vel); nullopt: none recent, hold where it is.
     using CommandSource = std::function<std::optional<FlightCommand>()>;
 
-    explicit MulticopterController(Settings settings, CommandSource commands = {})
-        : settings_(settings), commands_(std::move(commands)) {}
+    /// `ground`: the fixed scenery and the ground plane. With it, "the ground" for taking off,
+    /// flying low and landing by hand is the surface under the drone (cast straight down), so it
+    /// can fly off a bridge or a roof and land below; without it, the height it started at.
+    explicit MulticopterController(Settings settings, CommandSource commands = {},
+                                   std::shared_ptr<const services::SceneQuery> ground = {})
+        : settings_(settings), commands_(std::move(commands)), ground_(std::move(ground)) {}
 
     [[nodiscard]] ModuleInfo info() const override;
     [[nodiscard]] Duration preferredStep() const override;
@@ -107,6 +113,9 @@ private:
     bool homed_{false};
     CommandSource commands_;
     std::array<double, 3> setpoint_{};  // world-local, m: where it holds or flies to
+    std::shared_ptr<const services::SceneQuery> ground_;
+    double standHeight_{0.0};  // m: its base above the surface under it, standing at the start
+    bool standKnown_{false};
     double heading_{0.0};               // rad, the yaw it holds
     bool airborne_{false};              // waitForCommand: taken off, not landed since
     std::array<double, 3> velocity_{};  // m/s, world: the set point's velocity, ramped
