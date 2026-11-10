@@ -34,14 +34,18 @@ merged, `[~]` while in progress, and write what is left under it.
       `CustomSensorAPI_1` / URDF `<sensor type="thermistor|ir_thermometer">`; tests
 
 Merged: #300 (schemas), #301 (URDF), #302 (conduction), #303 (viewer cells), #304 (thermal
-probes), #305 (EMI wires, motor leads, Coupled into). Still owed: GNSS and radio noise from PWM
+probes), #305 (EMI wires, motor leads, Coupled into), #306 (foam-cht), #307 (source prims), #308
+(motor losses heat their mount), #309 (thermal camera), #310 #311 #320 (mesh study), #312 #313
+(examples), #314 (foam-cht --radiation), #315 #321 (sky view factor), #316, #317 (tutorial), #318
+(profile), #319 #321 (lagrange heat). Still owed: GNSS and radio noise from PWM
 switching (no general coupling model found, RFC 0013 open question 3); a mesh one finer than 2.5M cells for the sample (203k, 640k and 2.5M do not converge
 monotonically; the finest matches the correlations); a sharper LED hot spot in Lagrange (its
 LED over the sink is 27 K, OpenFOAM's finer meshes 38 K).
 
 ## D. Everything tested
 
-- [x] D1. Full local check (2026-11-11 01:50 JST: 1196 tests; two suites timed out while an
+- [x] D1. Full local check (last 2026-11-11 04:40 JST, after #321: 1404 tests pass, 0 build
+      warnings, only lagrange_autoware failing for its underlay; first 01:50 JST: 1196 tests; two suites timed out while an
       8-process OpenFOAM run shared the CPU and pass alone, 238 and 36; lagrange_autoware needs its
       Autoware underlay sourced): `colcon test --packages-above lagrange_core`, viewer headless,
       determinism; fix what fails
