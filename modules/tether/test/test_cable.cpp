@@ -257,10 +257,10 @@ TEST(Cable, ATensionWinchHoldsItsTension) {
     // about its set tension at the anchor.
     CableParams p;
     p.length = 1.0;
-    p.maxLength = 20.0;
+    p.maxLength = 30.0;
     p.segmentLength = 0.2;
-    p.linearDensity = 0.0235;
-    p.diameter = 0.004;
+    p.linearDensity = 0.03;
+    p.diameter = 0.005;
     p.winch = Winch::Tension;
     p.winchTension = 2.0;
     p.winchSpeed = 1.5;
@@ -331,17 +331,17 @@ TEST(Cable, LaidThroughABoxItComesOutSlowly) {
     EXPECT_LT(most, 30.0);
 }
 
-// Laid between a station and a drone sitting on a dock that rests on a deck (the owner's bridge
-// deck): when the drone lifts the end, the winch pays out and the tension stays near its set
-// point, instead of a mass trapped between the dock and the deck holding the cable.
-TEST(Cable, LiftedOffADockTheWinchPaysOut) {
+// Laid from a winch beside a thin pad that rests on a slab, to a drone sitting on the pad: when
+// the drone lifts the end, the winch pays out and the tension stays near its set point, instead
+// of a mass trapped between the pad and the slab holding the cable.
+TEST(Cable, LiftedOffAPadTheWinchPaysOut) {
     CableParams p;
-    p.length = 1.0;
-    p.maxLength = 20.0;
-    p.diameter = 0.004;
-    p.linearDensity = 0.0235;
+    p.length = 1.2;
+    p.maxLength = 30.0;
+    p.diameter = 0.005;
+    p.linearDensity = 0.03;
     p.winch = Winch::Tension;
-    p.winchTension = 2.0;
+    p.winchTension = 2.5;
     p.winchSpeed = 3.0;
     const auto box = [](const Vec3& centre, const Vec3& half) {
         Obstacle o;
@@ -351,18 +351,19 @@ TEST(Cable, LiftedOffADockTheWinchPaysOut) {
         o.reach = reachOf(o.type, o.size, nullptr);
         return o;
     };
-    const std::array<Obstacle, 3> obstacles{box({0.0, 0.0, 2.65}, {3.1, 3.0, 0.15}),
-                                            box({-1.0, 0.0, 2.82}, {0.35, 0.35, 0.02}),
-                                            box({-1.8, 0.0, 2.975}, {0.2, 0.15, 0.175})};
-    const Vec3 anchor{-1.58, 0.0, 3.0};
-    Vec3 attach{-1.0, 0.0, 2.863};
+    // A slab (top 1 m up), a 4 cm pad on it, and the winch's housing beside the pad.
+    const std::array<Obstacle, 3> obstacles{box({0.0, 0.0, 0.8}, {4.0, 4.0, 0.2}),
+                                            box({0.5, 0.0, 1.02}, {0.5, 0.5, 0.02}),
+                                            box({-0.6, 0.0, 1.2}, {0.25, 0.2, 0.2})};
+    const Vec3 anchor{-0.33, 0.0, 1.25};  // the housing's outlet, facing the pad
+    Vec3 attach{0.5, 0.0, 1.08};          // on the pad
     Cable cable(p, anchor, attach, 0);
     Air air;
     air.density = 1.225;
     double most = 0.0;
     double mean = 0.0;
     for (int i = 1; i <= 6000; ++i) {
-        if (i > 1000 && attach[2] < 4.5) {
+        if (i > 1000 && attach[2] < 2.7) {
             attach[2] += 0.5e-3;  // up 1.6 m at 0.5 m/s
         }
         if (i > 4000) {
@@ -374,43 +375,43 @@ TEST(Cable, LiftedOffADockTheWinchPaysOut) {
             mean += cable.tensionAttach() / 4500.0;
         }
     }
-    std::printf("off the dock: paid out %.2f m, tension at the drone mean %.2f N, most %.2f N\n",
+    std::printf("off the pad: paid out %.2f m, tension at the drone mean %.2f N, most %.2f N\n",
                 cable.length(), mean, most);
     EXPECT_GT(cable.length(), 2.5);
-    EXPECT_LT(mean, 5.0);
+    EXPECT_LT(mean, 6.0);
     EXPECT_LT(most, 30.0);
 }
 
-// Over a deck's edge, out, down and back in under it (the owner's bridge): the straight
-// segments between the masses do not cut into the concrete where the cable bends over the
-// edge, which with contacts at the masses alone went 6 cm in.
+// Over a slab's edge, out, down and back in under it: the straight segments between the masses
+// do not cut into the slab where the cable bends over the edge, which with contacts at the
+// masses alone went centimetres in.
 TEST(Cable, BendsOverAnEdgeWithoutCuttingIntoIt) {
     CableParams p;
-    p.length = 1.0;
-    p.maxLength = 20.0;
-    p.diameter = 0.004;
-    p.linearDensity = 0.0235;
+    p.length = 1.2;
+    p.maxLength = 30.0;
+    p.diameter = 0.005;
+    p.linearDensity = 0.03;
     p.winch = Winch::Tension;
-    p.winchTension = 2.0;
+    p.winchTension = 2.5;
     p.winchSpeed = 3.0;
-    Obstacle deck;
-    deck.type = ShapeType::Box;
-    deck.size = {3.1, 3.0, 0.15};
-    deck.pose.position = {0.0, 0.0, 2.65};
-    deck.reach = reachOf(deck.type, deck.size, nullptr);
-    const std::array<Obstacle, 1> obstacles{deck};
-    const Vec3 anchor{-1.58, 0.0, 3.0};
-    Vec3 attach{-1.0, 0.0, 3.2};
+    Obstacle slab;  // 8 m square, 0.4 m thick, its top 1.5 m up and its edge at y = 4
+    slab.type = ShapeType::Box;
+    slab.size = {4.0, 4.0, 0.2};
+    slab.pose.position = {0.0, 0.0, 1.3};
+    slab.reach = reachOf(slab.type, slab.size, nullptr);
+    const std::array<Obstacle, 1> obstacles{slab};
+    const Vec3 anchor{-2.0, 0.0, 1.7};
+    Vec3 attach{-1.2, 0.0, 1.8};
     Cable cable(p, anchor, attach, 0);
     Air air;
     air.density = 1.225;
-    double deepest = 1e9;  // the centre line's signed distance from the deck, along every segment
+    double deepest = 1e9;  // the centre line's signed distance from the slab, along every segment
     for (int i = 1; i <= 12000; ++i) {
-        if (i < 4000 && attach[1] < 5.5) {
-            attach[1] += 1.5e-3;  // out past the north edge (y = 3)
-        } else if (i >= 4000 && i < 7000 && attach[2] > 1.8) {
-            attach[2] -= 1.0e-3;  // down below the deck
-        } else if (i >= 7000 && attach[1] > 2.0) {
+        if (i < 4500 && attach[1] < 6.5) {
+            attach[1] += 1.5e-3;  // out past the edge
+        } else if (i >= 4500 && i < 7000 && attach[2] > 0.6) {
+            attach[2] -= 1.0e-3;  // down below the slab
+        } else if (i >= 7000 && attach[1] > 2.5) {
             attach[1] -= 1.5e-3;  // back in under it
         }
         cable.step(1e-3, anchor, attach, obstacles, air);
@@ -421,13 +422,13 @@ TEST(Cable, BendsOverAnEdgeWithoutCuttingIntoIt) {
                 const Vec3 q{n[j][0] + t * (n[j + 1][0] - n[j][0]),
                              n[j][1] + t * (n[j + 1][1] - n[j][1]),
                              n[j][2] + t * (n[j + 1][2] - n[j][2])};
-                deepest = std::min(deepest, surfacePoint(deck, q).distance);
+                deepest = std::min(deepest, surfacePoint(slab, q).distance);
             }
         }
     }
-    std::printf("over the edge: the centre line at worst %+.4f m from the deck (radius %.3f)\n",
+    std::printf("over the edge: the centre line at worst %+.4f m from the slab (radius %.4f)\n",
                 deepest, 0.5 * p.diameter);
-    EXPECT_GT(deepest, -p.diameter);  // within a diameter: not through the concrete
+    EXPECT_GT(deepest, -p.diameter);  // within a diameter: not through the slab
     EXPECT_GT(cable.length(), 5.0);   // paid out round the edge
 }
 

@@ -810,12 +810,12 @@ apply:
   - create: ground_station
     schemas:
       TetherAPI_1:
-        tether:anchorPoint: [1.0, -2.0, 2.8]
+        tether:anchorPoint: [1.5, -1.0, 0.4]
         tether:attach: base
-        tether:attachPoint: [0.0, 0.0, -0.05]
-        tether:length: 20.0
-        tether:diameter: 0.004
-        tether:linearDensity: 0.0235
+        tether:attachPoint: [0.0, 0.0, -0.1]
+        tether:length: 6.0
+        tether:diameter: 0.006
+        tether:linearDensity: 0.03
         tether:winch: tension
 )");
     ASSERT_TRUE(applyOverlay(*model, overlay.string())) << overlay;
@@ -827,12 +827,12 @@ apply:
     EXPECT_EQ(view.signalInstanceName(tether->rel("tether:attach")[0]), "base");
     const auto anchor = tether->realArray("tether:anchorPoint");
     EXPECT_EQ(std::vector<double>(anchor.begin(), anchor.end()),
-              (std::vector<double>{1.0, -2.0, 2.8}));
+              (std::vector<double>{1.5, -1.0, 0.4}));
     const auto attach = tether->realArray("tether:attachPoint");
     EXPECT_EQ(std::vector<double>(attach.begin(), attach.end()),
-              (std::vector<double>{0.0, 0.0, -0.05}));
-    EXPECT_EQ(tether->real("tether:length"), 20.0);
-    EXPECT_EQ(tether->real("tether:linearDensity"), 0.0235);
+              (std::vector<double>{0.0, 0.0, -0.1}));
+    EXPECT_EQ(tether->real("tether:length"), 6.0);
+    EXPECT_EQ(tether->real("tether:linearDensity"), 0.03);
     EXPECT_EQ(tether->token("tether:winch"), "tension");
     EXPECT_EQ(tether->real("tether:friction"), 0.4);  // the fallback
 }

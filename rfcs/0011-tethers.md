@@ -19,7 +19,7 @@ A new domain `tether`, a new schema `TetherAPI_1`, and one new value in the prot
 ## Motivation
 
 Tethered drones (power over the tether, an anchor that keeps them up for hours) are common in
-inspection and surveillance, and the tether is what goes wrong: it snags on a bridge deck or a
+inspection and surveillance, and the tether is what goes wrong: it snags on a structure or a
 tree, its weight and drag pull the drone off its spot, it wraps a rotor arm, it piles up and
 tangles when the winch pays out faster than the drone climbs. Lagrange cannot show any of this:
 there is no cable, and its bodies form trees, so a body cannot be held at both ends.
@@ -154,7 +154,7 @@ other large arrays are; `--record` then keeps the tensions and length, and repla
 
 `lagrange_server --tether ANCHOR_X,ANCHOR_Y,ANCHOR_Z,LINK[,LENGTH]` and a run file's
 `tethers: [{anchor: [x, y, z], attach: link, length: m, ...}]` create the prim, the defaults of §2
-filling the rest. The drone workspace's launch file takes `tether:=true`.
+filling the rest.
 
 ### 9. Drawing
 
@@ -211,14 +211,13 @@ One PR each, in order:
    file, the tethered-quad test, docs (`docs/physics/tether.md`, a guide section, CLAUDE.md).
 5. Drawing: `KIND_CABLE`, the server's overlays, the viewer's tube, a headless screenshot test.
 6. Downwash on the cable: the aerodynamics domain's air at a point as a service.
-7. The drone workspace (outside this repository): small_drone's tether under the bridge deck.
 
 ## Alternatives considered
 
 | Alternative | Why not |
 |---|---|
 | A chain of rigid bodies in the physics engine | needs a body held at both ends (a loop the world's tree cannot hold; MuJoCo equalities and Jolt constraints differ), hundreds of engine bodies, and the cable's contacts then depend on the engine |
-| A plugin in the drone workspace | cannot draw it; not in recordings or Python by default; every tether user would rebuild it |
+| A plugin outside Lagrange | cannot draw it; not in recordings or Python by default; every tether user would rebuild it |
 | Mass-spring chain, explicit | unstable at 1 ms for a stiff tether without µs steps |
 | Kinematic capsule bodies for drawing (as humans) | hundreds of engine bodies only to draw; the `Overlay` message exists for this |
 
@@ -240,13 +239,11 @@ One PR each, in order:
 - Each cable is laid out on its first step from where the bodies are then, not from the robot
   file's rest pose (a robot spawned elsewhere had stretched it by metres).
 - Contact along each segment too, at its deepest point (golden-section search): with contacts at
-  the masses alone, a cable bent over a deck's edge cut 6 cm into the concrete between two masses.
+  the masses alone, a cable bent over a slab's edge cut 6 cm into it between two masses.
 - The viewer draws a cable as its centre line and four lines at its radius (the existing line
-  path; a 4 mm cable is under a pixel beyond a few metres).
+  path; a cable a few millimetres thick is under a pixel beyond a few metres).
 
 ## Resolutions on acceptance (2026-11-10)
 
 The owner accepted the design and asked for the physics in Lagrange and the drawing in its
-viewer, ready to use. Every question takes its proposed answer. The first user's tether, for the
-drone workspace (step 7): 20 m, 4 mm diameter, 23.5 g/m, from a ground station with a dock on top
-of a bridge deck; its stiffness, friction and winch are the defaults of §2 until measured.
+viewer, ready to use. Every question takes its proposed answer.

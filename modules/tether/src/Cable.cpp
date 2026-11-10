@@ -287,7 +287,7 @@ void Cable::layOut(const Vec3& anchor, const Vec3& attach) {
     }
     const Vec3 chord = sub(attach, anchor);
     // A parabola of rise s above the chord, its length matched to the cable's by bisection. Above,
-    // not below: a sag would start the slack inside the ground, a deck or a dock it should lie
+    // not below: a sag would start the slack inside the ground, a slab or a pad it should lie
     // on (a mass inside a thin box resting on another can be pushed back and forth between them
     // and never get out); laid above, it falls into place.
     std::vector<Vec3> line(kLayoutSamples + 1);
