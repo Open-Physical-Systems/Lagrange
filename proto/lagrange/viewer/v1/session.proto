@@ -72,6 +72,7 @@ message ServerStatus {
   uint64 dropped_deltas = 7;
   uint64 dropped_signal_blocks = 8;
   string error = 9;
+  string recording_path = 10; // added after 1.0: the file the run is recorded to; empty: none
 }
 
 message Ping {

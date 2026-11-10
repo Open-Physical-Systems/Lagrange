@@ -53,6 +53,7 @@ struct ServerStatus {
     std::int64_t replayEndNs{0};
     std::uint64_t droppedDeltas{0};
     std::uint32_t signalCount{0};
+    std::string recordingPath;  ///< The file the server records the run to; empty: not recording.
 };
 
 /// One signal the server offers.
@@ -585,6 +586,9 @@ public:
     void seek(std::int64_t simTimeNs);
     /// Restarts a live run at t = 0 (time, poses and velocities), as /reset_simulation does.
     void reset();
+    /// Starts recording the run to an MCAP file on the server (`path` empty: the server picks
+    /// one), or stops it.
+    void setRecording(bool on, const std::string& path = {});
     void step(std::int64_t durationNs);
     void setRealTimeFactor(double target);
     /// Asks the server to load a file that it can read: a robot description (.urdf, .xacro)
