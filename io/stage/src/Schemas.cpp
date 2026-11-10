@@ -49,10 +49,11 @@ constexpr std::array<PairedArrays, 1> kPairedArrays{
 struct Fraction {
     std::string_view schema, attribute;
 };
-constexpr std::array<Fraction, 3> kFractions{
+constexpr std::array<Fraction, 4> kFractions{
     {{"BatteryAPI_1", "elec:battery:initialSoc"},
      {"ElectricalMotorAPI_1", "elec:gearEfficiency"},
-     {"ElectricalConverterAPI_1", "elec:conv:efficiency"}}};
+     {"ElectricalConverterAPI_1", "elec:conv:efficiency"},
+     {"ThermalMaterialAPI_1", "thermal:material:emissivity"}}};
 struct JointTarget {
     std::string_view schema, relationship;
 };

@@ -837,6 +837,72 @@ apply:
     EXPECT_EQ(tether->real("tether:friction"), 0.4);  // the fallback
 }
 
+// RFC 0012: a link's thermal material and two heat sources on it, from an overlay.
+TEST(Overlay, AppliesAThermalMaterialAndHeatSources) {
+    auto model = loadStage(writeText("heatbot.usda", R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "board" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 0.05
+    }
+}
+)")
+                               .string());
+    ASSERT_TRUE(model) << model.error();
+    const std::filesystem::path overlay = writeText("heatbot.overlay.yaml", R"(schema_version: 1
+apply:
+  - prim: board
+    schemas:
+      ThermalMaterialAPI_1:
+        thermal:material:preset: fr4
+        thermal:material:conductivityAlong: 20.0
+        thermal:material:axis: [1.0, 0.0, 0.0]
+        thermal:material:contactConductance: 3000.0
+      HeatSourceAPI_1:led_1:
+        thermal:source:led_1:power: 3.0
+        thermal:source:led_1:efficiency: 0.35
+        thermal:source:led_1:position: [0.01, 0.0, 0.0016]
+        thermal:source:led_1:size: [0.003, 0.003, 0.001]
+      HeatSourceAPI_1:driver:
+        thermal:source:driver:powerSignal: motor/left/loss_power
+)");
+    ASSERT_TRUE(applyOverlay(*model, overlay.string())) << overlay;
+    const World& w = model->world;
+    const SchemaInstance* material = only(w, "ThermalMaterialAPI_1");
+    ASSERT_NE(material, nullptr);
+    EXPECT_EQ(material->token("thermal:material:preset"), "fr4");
+    EXPECT_EQ(material->real("thermal:material:conductivityAlong"), 20.0);
+    EXPECT_EQ(material->real("thermal:material:contactConductance"), 3000.0);
+    EXPECT_FALSE(material->real("thermal:material:conductivity"));  // from the preset
+    const auto axis = material->realArray("thermal:material:axis");
+    EXPECT_EQ(std::vector<double>(axis.begin(), axis.end()), (std::vector<double>{1.0, 0.0, 0.0}));
+    int sources = 0;
+    for (const SchemaInstance& s : w.schemaInstances) {
+        if (s.schema != "HeatSourceAPI_1") {
+            continue;
+        }
+        ++sources;
+        if (s.instance == "led_1") {
+            EXPECT_EQ(s.real("thermal:source:led_1:power"), 3.0);
+            EXPECT_EQ(s.real("thermal:source:led_1:efficiency"), 0.35);
+            const auto size = s.realArray("thermal:source:led_1:size");
+            EXPECT_EQ(std::vector<double>(size.begin(), size.end()),
+                      (std::vector<double>{0.003, 0.003, 0.001}));
+        } else {
+            EXPECT_EQ(s.instance, "driver");
+            EXPECT_EQ(s.token("thermal:source:driver:powerSignal"), "motor/left/loss_power");
+            EXPECT_EQ(s.real("thermal:source:driver:power"), 0.0);  // the fallback
+        }
+    }
+    EXPECT_EQ(sources, 2);
+}
+
 TEST(Netlist, ABatteryRcPairLoadAndMotorBecomeSchemas) {
     auto model = loadStage(writeText("netbot.usda", R"(#usda 1.0
 (
