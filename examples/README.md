@@ -18,6 +18,7 @@ ros2 launch lagrange_example_diff_drive drive.launch.py
 | [`lagrange_example_power`](lagrange_example_power) | A power system from a schematic | `<lagrange><schematic>`, `--ros-topics`, `bus/dc/voltage` |
 | [`lagrange_example_lidar`](lagrange_example_lidar) | A simulated lidar | `/scan`, `lagrange_assets` |
 | [`lagrange_example_camera`](lagrange_example_camera) | A simulated camera | Colour, depth and instance images on ROS 2 |
+| [`lagrange_example_heat`](lagrange_example_heat) | Heat inside the parts | LEDs on a board on a heat sink: where the heat goes, on ROS 2 and in the viewer |
 | [`lagrange_example_weather`](lagrange_example_weather) | Fog on a sensor | `--weather` |
 | [`lagrange_example_quadcopter`](lagrange_example_quadcopter) | A quadcopter | `--air-density`, `--geo-origin`, `/cmd_vel` |
 | [`lagrange_example_holybro`](lagrange_example_holybro) | Your own drone (Holybro X500 V2) by keyboard | `--overlay`, `--follow`, `teleop_twist_keyboard` in its own window |
