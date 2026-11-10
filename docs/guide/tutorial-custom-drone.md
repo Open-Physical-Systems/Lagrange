@@ -193,7 +193,10 @@ flowchart LR
 **Check it:**
 
 - **Moving:** it goes where you send it and tilts into the motion.
-- **Stopping:** when you stop pressing, it holds its position after 0.5 s.
+- **Starting and stopping:** the commanded speed ramps at up to 3 m/s² with a jerk limit
+  of 8 m/s³ (PX4's position-mode defaults), so it leans about 17° to speed up and to brake.
+  When you stop pressing (or 0.5 s after the last command) it brakes to a stop and holds
+  where it stopped.
 - **Ground effect:** go down with `b` to about 0.3 m and plot `joint/rotor_1_joint/velocity`.
   The rotors slow down: near the ground each turn of the blades gives more thrust, and the
   controller needs only the weight.

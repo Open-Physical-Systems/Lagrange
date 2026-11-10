@@ -404,10 +404,76 @@ TEST(Multicopter, PressedUnderACeilingItStaysUprightAndComesBack) {
     const double released = fly(8.0);
     EXPECT_GT(released - start, 1.5);  // still up there, not fallen
     EXPECT_GT(worstUp, std::cos(std::numbers::pi / 4.0)) << "tipped past 45°";
-    // Down at 1 m/s for 1.5 s: it comes down right away, about 1.5 m.
+    // Down at 1 m/s for 1.5 s: it comes down right away, ramping to that speed (about 1 m).
     command = MulticopterController::FlightCommand{0.0, 0.0, -1.0, 0.0};
     const double down = fly(1.5);
-    EXPECT_GT(released - down, 0.9) << "the set point was left far above the ceiling";
+    EXPECT_GT(released - down, 0.5) << "the set point was left far above the ceiling";
+}
+
+// Full stick forward (5 m/s) for 4 s, then let go: the commanded velocity ramps within PX4's
+// position-mode limits (3 m/s², 8 m/s³), so it leans well short of the 30° cap, keeps its
+// height, brakes to a stop and stays where it stopped, instead of throwing itself at the cap and
+// flying back to where the stick was let go.
+TEST(Multicopter, FullStickThenLetGoStartsAndStopsSmoothly) {
+    auto robot = loadModel(LAGRANGE_TEST_QUAD_USDA);
+    ASSERT_TRUE(robot) << robot.error();
+    Scheduler scheduler(SchedulerOptions{.deterministic = false});
+    scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+    ModuleConfigData power;
+    power.dt = 50_us;
+    power.values["exchange_step"] = 0.001;
+    scheduler.add(std::make_unique<electrical::ElectricalNetwork>(), ModuleConfig(power));
+    ModuleConfigData air;
+    air.values[rotor_aero::kAirDensityKey] = 1.225;
+    scheduler.add(std::make_unique<rotor_aero::RotorAero>(), ModuleConfig(air));
+    std::optional<MulticopterController::FlightCommand> command;
+    MulticopterController::Settings flight;
+    flight.waitForCommand = true;
+    scheduler.add(std::make_unique<MulticopterController>(flight, [&command] { return command; }),
+                  ModuleConfig(air));
+    scheduler.add(std::make_unique<services::WrenchSum>());
+    auto wired = scheduler.wire(WorldView(robot->world));
+    ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    const SignalBus& bus = scheduler.bus();
+    const SignalId pose = bus.find("body/base_link/pose");
+    double t = 0.0;
+    double worstUp = 1.0;  // cos of the largest tilt seen
+    double lowest = 1e9;
+    double highest = -1e9;
+    double furthest = -1e9;
+    const auto fly = [&](double seconds) {
+        for (const double end = t + seconds; t < end - 1e-9;) {
+            t += 0.01;
+            EXPECT_TRUE(scheduler.stepUntil(SimTime{static_cast<std::int64_t>(t * 1e9)}).ok());
+            const std::span<const double> p = bus.readN(pose);
+            worstUp = std::min(worstUp, 1.0 - 2.0 * (p[4] * p[4] + p[5] * p[5]));
+            lowest = std::min(lowest, p[2]);
+            highest = std::max(highest, p[2]);
+            furthest = std::max(furthest, p[0]);
+        }
+        return bus.readN(pose)[0];
+    };
+    // Up to 2 m and hold, then measure from there.
+    command = MulticopterController::FlightCommand{0.0, 0.0, 1.0, 0.0};
+    (void)fly(2.0);
+    command.reset();
+    const double start = fly(3.0);
+    worstUp = 1.0;
+    lowest = highest = bus.readN(pose)[2];
+    command = MulticopterController::FlightCommand{5.0, 0.0, 0.0, 0.0};
+    const double letGo = fly(4.0);
+    command.reset();
+    const double stopped = fly(5.0);
+    const double tilt = std::acos(worstUp) * 180.0 / std::numbers::pi;
+    std::printf(
+        "let go at %.2f m, stopped at %.2f m (furthest %.2f), worst tilt %.1f deg, "
+        "height within %.2f m\n",
+        letGo - start, stopped - start, furthest - start, tilt, highest - lowest);
+    EXPECT_LT(tilt, 25.0);              // 3 m/s² is about 17°, plus the turn-in
+    EXPECT_LT(highest - lowest, 0.15);  // keeps its height
+    EXPECT_GT(stopped - letGo, 2.5);    // brakes: 5 m/s at 3 m/s² is about 4 m
+    EXPECT_LT(stopped - letGo, 6.0);
+    EXPECT_GT(stopped, furthest - 0.15);  // stays where it stopped, does not fly back
 }
 
 }  // namespace
