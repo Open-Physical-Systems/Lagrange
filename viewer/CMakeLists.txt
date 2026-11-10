@@ -73,6 +73,20 @@ lagrange_add_slang_shader(
 )
 lagrange_add_slang_shader(
     lagrange_viewer_render
+    SOURCE ${_kernels}/camera/mesh.slang
+    ENTRY vsHeat
+    STAGE vertex
+    SYMBOL kHeatVertex
+)
+lagrange_add_slang_shader(
+    lagrange_viewer_render
+    SOURCE ${_kernels}/camera/mesh.slang
+    ENTRY fsHeat
+    STAGE fragment
+    SYMBOL kHeatFragment
+)
+lagrange_add_slang_shader(
+    lagrange_viewer_render
     SOURCE ${_kernels}/common/line.slang
     ENTRY vsMain
     STAGE vertex

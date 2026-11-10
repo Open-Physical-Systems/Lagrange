@@ -22,6 +22,9 @@ namespace lagrange::viewer {
 
 namespace {
 
+// RFC 0012: the server's field of the cells of links with a thermal material.
+constexpr const char* kThermalCells = "thermal/cells";
+
 namespace c = theme::c;
 using widgets::px;
 
@@ -304,8 +307,61 @@ private:
                 }
             }
         }
+        // Links with a thermal material (RFC 0012): their cells, drawn face by face.
+        if (!cells_) {
+            cells_ =
+                context.client.watchField(kThermalCells, 0.0, SliceOrientation::Horizontal, true);
+        }
+        const std::shared_ptr<const FieldStream::PrimVolumes> volumes = cells_->primVolumes();
+        if (volumes) {
+            for (const auto& [path, volume] : *volumes) {
+                for (const float v : volume->values) {
+                    if (!std::isnan(v)) {
+                        low = std::min(low, v);
+                        high = std::max(high, v);
+                    }
+                }
+            }
+        }
         if (low > high) {
+            options.heat.clear();
             return;  // no samples yet
+        }
+        if (high - low < kMinimumSpanK) {
+            high = low + kMinimumSpanK;
+        }
+        if (volumes != cellsDrawn_ || low != heatLow_ || high != heatHigh_) {
+            cellsDrawn_ = volumes;
+            heatLow_ = low;
+            heatHigh_ = high;
+            options.heat.clear();
+            options.heatCovered.assign(prims.size(), false);
+            for (const auto& [path, volume] : volumes ? *volumes : FieldStream::PrimVolumes{}) {
+                std::uint32_t at = kNone;
+                for (std::uint32_t i = 0; i < prims.size(); ++i) {
+                    if (prims[i].path == path) {
+                        at = i;
+                    }
+                }
+                if (at == kNone) {
+                    continue;
+                }
+                RenderOptions::HeatPatch patch;
+                patch.prim = at;
+                heatFaces(volume->nx, volume->ny, volume->nz, volume->origin, volume->cellM,
+                          volume->values, low, high, patch.vertices);
+                options.heat.push_back(std::move(patch));
+                // The link's own meshes give way to its cells: its prim and those under it
+                // that are on no other link's patch.
+                for (std::uint32_t i = 0; i < prims.size(); ++i) {
+                    for (std::uint32_t p = i; p != kNone && p < prims.size(); p = prims[p].parent) {
+                        if (p == at) {
+                            options.heatCovered[i] = true;
+                            break;
+                        }
+                    }
+                }
+            }
         }
         // At least kMinimumSpanK across, so that small differences do not saturate the map.
         if (high - low < kMinimumSpanK) {
@@ -448,6 +504,9 @@ private:
     static constexpr float kMinimumSpanK = 10.0F;
     std::vector<Temperature> temperatures_;
     std::vector<float> own_;
+    std::shared_ptr<FieldStream> cells_;  // thermal/cells, once Thermal shading is on
+    std::shared_ptr<const FieldStream::PrimVolumes> cellsDrawn_;
+    float heatLow_{0.0F}, heatHigh_{0.0F};
     std::uint64_t catalog_{~0ULL};
     std::uint64_t scene_{~0ULL};
 

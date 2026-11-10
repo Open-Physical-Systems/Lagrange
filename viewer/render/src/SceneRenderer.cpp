@@ -2,6 +2,8 @@
 #include "lagrange/gpu/Device.hpp"
 #include "lagrange/gpu/Raster.hpp"
 #include "lagrange/viewer/SceneRenderer.hpp"
+#include "shaders/kHeatFragment.hpp"
+#include "shaders/kHeatVertex.hpp"
 #include "shaders/kLineFragment.hpp"
 #include "shaders/kLineVertex.hpp"
 #include "shaders/kMeshFragment.hpp"
@@ -113,6 +115,68 @@ std::array<float, 3> currentColor(float share) {
     return rgb;
 }
 
+void heatFaces(std::uint32_t nx, std::uint32_t ny, std::uint32_t nz,
+               const std::array<double, 3>& origin, double cell, std::span<const float> values,
+               float low, float high, std::vector<float>& out) {
+    if (values.size() != static_cast<std::size_t>(nx) * ny * nz || cell <= 0.0) {
+        return;
+    }
+    const float span = std::max(high - low, 1e-3F);
+    const auto at = [&](std::int64_t x, std::int64_t y, std::int64_t z) {
+        if (x < 0 || y < 0 || z < 0 || x >= nx || y >= ny || z >= nz) {
+            return NAN;
+        }
+        return values[(static_cast<std::size_t>(z) * ny + static_cast<std::size_t>(y)) * nx +
+                      static_cast<std::size_t>(x)];
+    };
+    // Per face direction: the normal and the shade that tells the faces apart unlit.
+    static constexpr std::array<std::array<int, 3>, 6> kNormals{
+        {{-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}}};
+    static constexpr std::array<float, 6> kShade{0.78F, 0.86F, 0.74F, 0.82F, 0.62F, 1.0F};
+    const auto h = static_cast<float>(cell / 2.0);
+    for (std::uint32_t z = 0; z < nz; ++z) {
+        for (std::uint32_t y = 0; y < ny; ++y) {
+            for (std::uint32_t x = 0; x < nx; ++x) {
+                const float t = at(x, y, z);
+                if (std::isnan(t)) {
+                    continue;
+                }
+                const std::array<float, 3> rgb = thermalColor((t - low) / span);
+                const std::array<float, 3> c{static_cast<float>(origin[0] + x * cell),
+                                             static_cast<float>(origin[1] + y * cell),
+                                             static_cast<float>(origin[2] + z * cell)};
+                for (std::size_t d = 0; d < 6; ++d) {
+                    const auto& n = kNormals[d];
+                    if (!std::isnan(at(static_cast<std::int64_t>(x) + n[0],
+                                       static_cast<std::int64_t>(y) + n[1],
+                                       static_cast<std::int64_t>(z) + n[2]))) {
+                        continue;  // inside: a neighbour covers it
+                    }
+                    // The face's four corners: along the normal at +h, the other two axes ±h.
+                    const std::size_t a = d / 2;
+                    const std::size_t u = (a + 1) % 3;
+                    const std::size_t v = (a + 2) % 3;
+                    std::array<std::array<float, 3>, 4> corner{};
+                    const std::array<std::array<float, 2>, 4> signs{
+                        {{-1.0F, -1.0F}, {1.0F, -1.0F}, {1.0F, 1.0F}, {-1.0F, 1.0F}}};
+                    for (std::size_t k = 0; k < 4; ++k) {
+                        corner[k] = c;
+                        corner[k][a] += static_cast<float>(n[a]) * h;
+                        corner[k][u] += signs[k][0] * h;
+                        corner[k][v] += signs[k][1] * h;
+                    }
+                    for (const std::size_t k : {0U, 1U, 2U, 0U, 2U, 3U}) {
+                        out.insert(out.end(), corner[k].begin(), corner[k].end());
+                        out.push_back(rgb[0] * kShade[d]);
+                        out.push_back(rgb[1] * kShade[d]);
+                        out.push_back(rgb[2] * kShade[d]);
+                    }
+                }
+            }
+        }
+    }
+}
+
 std::array<float, 3> thermalColor(float t) {
     // Design tokens colormap.thermal ("inferno"), sRGB.
     static constexpr std::array<std::array<int, 3>, 6> kStops{{{0x00, 0x00, 0x04},
@@ -161,6 +225,7 @@ SceneRenderer::~SceneRenderer() {
     gpu::destroy(device_, gridMajor_);
     gpu::destroy(device_, axes_);
     gpu::destroy(device_, overlay_);
+    gpu::destroy(device_, heat_);
     gpu::destroy(device_, color_);
     gpu::destroy(device_, depth_);
     vkDestroyPipeline(device_.device(), meshPipeline_, nullptr);
@@ -173,6 +238,8 @@ SceneRenderer::~SceneRenderer() {
     }
     vkDestroyPipeline(device_.device(), linePipeline_, nullptr);
     vkDestroyPipelineLayout(device_.device(), lineLayout_, nullptr);
+    vkDestroyPipeline(device_.device(), heatPipeline_, nullptr);
+    vkDestroyPipelineLayout(device_.device(), heatLayout_, nullptr);
 }
 
 void SceneRenderer::createPipelines() {
@@ -199,6 +266,11 @@ void SceneRenderer::createPipelines() {
     line.pushSize = sizeof(LinePush);
     line.depthWrite = false;
     gpu::buildPipeline(device_, line, lineLayout_, linePipeline_);
+    // Heat patches: position, then colour where a mesh has its normal; both faces drawn.
+    gpu::PipelineSpec heat = mesh;
+    heat.vertex = kHeatVertex;
+    heat.fragment = kHeatFragment;
+    gpu::buildPipeline(device_, heat, heatLayout_, heatPipeline_);
 }
 
 bool SceneRenderer::resize(VkExtent2D extent) {
@@ -336,6 +408,10 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
             if (!prim.visible || prim.mesh == kNone) {
                 continue;
             }
+            if (options.shading == Shading::Thermal && i < options.heatCovered.size() &&
+                options.heatCovered[i]) {
+                continue;  // its link's cells are drawn instead
+            }
             MeshPush push{};
             push.viewProjection = viewProjection;
             push.model = modelRows(frame->transforms[i], eye);
@@ -369,6 +445,43 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
             if (meshes_.draw(commands, prim.mesh)) {
                 ++lastDrawCount_;
             }
+        }
+    }
+
+    // --- heat patches (RFC 0012) ------------------------------------------------------------
+    std::size_t heatFloats = 0;
+    for (const RenderOptions::HeatPatch& patch : options.heat) {
+        heatFloats += patch.vertices.size();
+    }
+    if (options.shading == Shading::Thermal && heatFloats > 0 && frame != nullptr) {
+        const VkDeviceSize bytes = heatFloats * sizeof(float);
+        if (heat_.size < bytes) {
+            gpu::destroy(device_, heat_);  // the previous frame has finished (see header)
+            heat_ = gpu::createBuffer(device_, std::max<VkDeviceSize>(bytes * 2, 256 * 1024),
+                                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
+        }
+        auto* mapped = static_cast<float*>(heat_.mapped);
+        std::size_t written = 0;
+        for (const RenderOptions::HeatPatch& patch : options.heat) {
+            std::copy(patch.vertices.begin(), patch.vertices.end(), mapped + written);
+            written += patch.vertices.size();
+        }
+        gpu::flush(device_, heat_);
+        vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, heatPipeline_);
+        std::size_t first = 0;
+        for (const RenderOptions::HeatPatch& patch : options.heat) {
+            if (patch.prim < frame->transforms.size() && !patch.vertices.empty()) {
+                MeshPush push{};
+                push.viewProjection = viewProjection;
+                push.model = modelRows(frame->transforms[patch.prim], eye);
+                push.baseColor = {1.0F, 1.0F, 1.0F, 1.0F};
+                vkCmdPushConstants(commands, heatLayout_, stages, 0, sizeof(push), &push);
+                const VkDeviceSize offset = first * sizeof(float);
+                vkCmdBindVertexBuffers(commands, 0, 1, &heat_.buffer, &offset);
+                vkCmdDraw(commands, static_cast<std::uint32_t>(patch.vertices.size() / 6), 1, 0, 0);
+                ++lastDrawCount_;
+            }
+            first += patch.vertices.size();
         }
     }
 

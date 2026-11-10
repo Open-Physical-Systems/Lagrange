@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace lagrange::viewer {
@@ -46,6 +47,15 @@ struct RenderOptions {
     std::vector<float> temperature;
     float temperatureLow{0.0F};
     float temperatureHigh{1.0F};
+    /// Thermal shading of links with a thermal material (RFC 0012): each link's outside cell
+    /// faces as triangles in its prim's frame, coloured by the cell's temperature, drawn instead
+    /// of the meshes of the prims marked in `heatCovered`.
+    struct HeatPatch {
+        std::uint32_t prim{0};        ///< whose transform places it
+        std::vector<float> vertices;  ///< x, y, z, then linear r, g, b, per vertex; triangles
+    };
+    std::vector<HeatPatch> heat;
+    std::vector<bool> heatCovered;  ///< per scene prim: drawn by a heat patch
     /// Current shading: per scene prim, its share of the largest current, -1..1, negative when
     /// reversed (NaN: no motor, its own colour dimmed).
     std::vector<float> current;
@@ -78,5 +88,14 @@ struct RenderOptions {
 /// The design's thermal colour map (design tokens colormap.thermal, "inferno") at `t` in
 /// [0, 1], as linear RGB for the mesh shader.
 [[nodiscard]] std::array<float, 3> thermalColor(float t);
+
+/// A link's cells (thermal/cells: nx × ny × nz scalars, x fastest, NaN outside the solid, the
+/// first cell's centre at `origin` in the prim's frame) as the triangles of their outside faces,
+/// coloured by temperature between `low` and `high` (K) and a little darker on faces that look
+/// down or sideways, so the shape reads without lighting. Appends to `out` (x, y, z, r, g, b per
+/// vertex).
+void heatFaces(std::uint32_t nx, std::uint32_t ny, std::uint32_t nz,
+               const std::array<double, 3>& origin, double cell, std::span<const float> values,
+               float low, float high, std::vector<float>& out);
 
 }  // namespace lagrange::viewer

@@ -45,6 +45,20 @@ or the same in an overlay or USD (`ThermalMaterialAPI_1`, `HeatSourceAPI_1:<name
 lagrange_server --robot lamp.urdf --world none --ambient-temperature 298.15
 ```
 
+![Two LEDs and their driver on a board, on a finned heat sink, in the viewer's Thermal shading](../imgs/heat-conduction.png)
+
+The viewer's **Thermal** shading (Shading menu, or `--shading thermal`) colours every outside face
+of each link's cells by its temperature (the server's field `thermal/cells`, one `FieldVolume`
+per link in its frame, 5 times a second), with the legend's range from the coldest to the
+hottest cell. The sample above is `assets/robots/led_heatsink/led_heatsink.urdf`:
+
+```bash
+lagrange assets/robots/led_heatsink/led_heatsink.urdf --ambient-temperature 298.15 --rtf 60 \
+    -- --shading thermal
+# or: lagrange_server --robot assets/robots/led_heatsink/led_heatsink.urdf --world none \
+#       --ambient-temperature 298.15 --rtf 60
+```
+
 Signals, per link `L` with a material and per source `S`:
 
 | Signal | Unit | |
