@@ -76,6 +76,43 @@ material, or `lumped` to leave the materials out), `cell` (m, default 0.002), `m
 link, default 200000), `surface_coefficient` (W/(m²·K): one film coefficient for every face
 instead of the correlations below).
 
+## Temperature sensors
+
+The sample plugin `lagrange_thermal_probe` (`core/plugin_abi/samples/thermal_probe.c`, C ABI,
+`--plugin lagrange_thermal_probe`) reads the thermal domain like a real sensor:
+
+```xml
+<gazebo reference="led_board">
+  <sensor name="led_ntc" type="thermistor">
+    <update_rate>10</update_rate>
+    <thermistor><target>led_left</target><time_constant>2.0</time_constant>
+      <noise><stddev>0.05</stddev></noise><resolution>0.0625</resolution></thermistor>
+  </sensor>
+</gazebo>
+<gazebo reference="camera_arm">
+  <sensor name="board_ir" type="ir_thermometer">
+    <pose>0 0 0 0 1.5708 0</pose>  <!-- looking down -->
+    <ir_thermometer><fov>0.2</fov><range>0.5</range><emissivity>0.95</emissivity>
+      <ambient>298.15</ambient></ir_thermometer>
+  </sensor>
+</gazebo>
+```
+
+- **`thermistor`**, a contact sensor: `thermal/<target>/temperature` (a heat source's case, a
+  link's mean, a lumped node; default its own link) through a first-order lag of `time_constant`
+  s, with Gaussian `noise/stddev` (K) and quantisation to `resolution` (K; 0.0625 for a 12-bit
+  digital sensor). Output `sensor/<name>/temperature`.
+- **`ir_thermometer`**, a spot pyrometer along its +x: a 5 × 5 grid of rays over `fov` (rad, 0
+  one ray) to `range`; what each ray meets is seen at its link's temperature with the target
+  `emissivity` set on the sensor (as on a real one), the rest of the radiance reflected from the
+  surroundings, so the reading is $(\overline{\varepsilon T^4 + (1-\varepsilon)T_{amb}^4})^{1/4}$
+  (broadband, not in the sensor's band). The ambient is `env/air_temperature` when the weather
+  runs, else `ambient` (no default). Outputs `sensor/<name>/temperature`, `valid`.
+
+Checked by `test_plugins`' `TheThermalProbesReadTheHeatConduction`: the thermistor lags its LED
+while it heats and meets it within 0.1 K; the infrared reading equals the grey-body formula for
+the board's temperature within 0.05 K.
+
 ## The model
 
 **Cells.** Each link is cut into cubes in its own frame from its collision shapes (boxes,

@@ -5,6 +5,7 @@
 #include "lagrange/world/PoseMath.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -207,6 +208,35 @@ TEST_F(Plugins, TheTofPluginMeasuresTheGround) {
     ASSERT_EQ(range.size(), 1U);
     EXPECT_NEAR(range[0], expected, 1e-6);
     EXPECT_EQ(server.read("sensor/front_tof/valid").at(0), 1.0);
+}
+
+// The thermal probe plugin (core/plugin_abi/samples/thermal_probe.c): a thermistor follows its
+// LED's case temperature through its time constant; an infrared thermometer looking down at the
+// board reads the grey-body temperature of what it sees, (ε·T⁴ + (1 − ε)·T_amb⁴)^(1/4).
+TEST_F(Plugins, TheThermalProbesReadTheHeatConduction) {
+    ServerOptions options = amr({"lagrange_thermal_probe"});
+    options.robotPath = LAGRANGE_TEST_DATA "/thermal_probes.urdf";
+    options.overlayPath.clear();
+    options.ambientTemperatureK = 298.15;
+    Server server(options);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{1'000'000'000}).ok());
+    const double led0 = server.read("thermal/led_left/temperature").at(0);
+    const double ntc0 = server.read("sensor/led_ntc/temperature").at(0);
+    EXPECT_LT(ntc0, led0);  // it lags behind the LED as it heats
+    ASSERT_TRUE(server.stepUntil(SimTime{600'000'000'000}).ok());  // ten minutes: near steady
+    const double led = server.read("thermal/led_left/temperature").at(0);
+    const double ntc = server.read("sensor/led_ntc/temperature").at(0);
+    std::printf("LED %.2f K, thermistor %.2f K\n", led, ntc);
+    EXPECT_GT(led, 298.15 + 10.0);
+    EXPECT_NEAR(ntc, led, 0.1);
+    const double board = server.read("thermal/board/temperature").at(0);
+    const double ir = server.read("sensor/board_ir/temperature").at(0);
+    const double expect = std::pow(0.95 * std::pow(board, 4) + 0.05 * std::pow(298.15, 4), 0.25);
+    std::printf("board %.2f K, infrared %.3f K (grey body %.3f K)\n", board, ir, expect);
+    EXPECT_EQ(server.read("sensor/board_ir/valid").at(0), 1.0);
+    EXPECT_NEAR(ir, expect, 0.05);  // the board's mean then, a sample earlier
 }
 
 // An ultrasonic sensor takes the nearest thing in its cone, and reads nothing inside its dead zone.

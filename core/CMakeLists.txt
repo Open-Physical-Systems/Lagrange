@@ -89,6 +89,29 @@ ament_index_register_resource(
     CONTENT "lib/liblagrange_tof.so"
 )
 
+# lagrange_thermal_probe: contact thermistors and infrared spot thermometers on the thermal
+# domain (RFC 0008, RFC 0012), the second sample plugin.
+add_library(lagrange_thermal_probe MODULE plugin_abi/samples/thermal_probe.c)
+target_include_directories(
+    lagrange_thermal_probe
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/plugin_abi/include
+)
+set_target_properties(
+    lagrange_thermal_probe
+    PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+)
+target_compile_options(
+    lagrange_thermal_probe
+    PRIVATE -pedantic -Wall -Wextra -Werror
+)
+target_link_libraries(lagrange_thermal_probe PRIVATE m)
+install(TARGETS lagrange_thermal_probe LIBRARY DESTINATION lib)
+ament_index_register_resource(
+    lagrange_plugins
+    PACKAGE_NAME lagrange_thermal_probe
+    CONTENT "lib/liblagrange_thermal_probe.so"
+)
+
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
     foreach(

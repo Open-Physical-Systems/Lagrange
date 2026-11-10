@@ -842,7 +842,7 @@ struct Server::Impl {
                 heat.dt = Duration{*settings.thermalDtNs};
             }
             const auto fidelity = settings.thermal.find("fidelity");
-            const bool conduction =
+            const bool cellsWanted =
                 hasThermalMaterials() && (fidelity == settings.thermal.end() ||
                                           std::get<std::string>(fidelity->second) == "conduction");
             if (off("thermal") && addPluginSubstitute("thermal", heat)) {
@@ -853,7 +853,7 @@ struct Server::Impl {
                 if (hasLumpedNodes()) {
                     next->add(std::make_unique<thermal::ThermalNetwork>(), ModuleConfig(heat));
                 }
-                if (conduction) {
+                if (cellsWanted) {
                     // RFC 0012: the links with a thermal material, cut into cells.
                     ModuleConfigData cells = heat;
                     cells.fidelity = "conduction";
