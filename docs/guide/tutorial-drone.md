@@ -255,6 +255,13 @@ comes out at KV × V. A 920 KV motor has `Kt = 0.008989`. To force a value,
 give `--mavlink-max-rotor-speed RAD_S`. A robot with no motor prims (or the electrical domain
 off) gets the speed at which the rotors lift twice its weight.
 
+To see how a drone flies with less thrust than its motors give, as an ESC's or autopilot's
+output limit would leave it, give `--thrust-limit FRACTION`: `--thrust-limit 0.8` caps each
+rotor at √0.8 ≈ 0.89 of its loaded top speed, so 80 % of its full thrust, for the built-in
+controller and for an autopilot's full output alike (logged per rotor at the start). The
+thrust-to-weight ratio drops by the same share (2.0 becomes 1.6), and the hover throttle
+rises by 1 ÷ the share (`MPC_THR_HOVER` 0.5 becomes 0.625 of the limited output).
+
 For an airframe of your own, copy `22100_lagrange_quad_x500` and change the rotor block:
 - `CA_ROTORn_PX`, `PY`: positions in PX4's FRD frame. Rotor `n` is the joint `rotor_{n+1}`; the
   bridge takes rotors in name order.

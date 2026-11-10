@@ -1,5 +1,7 @@
 // The built-in multicopter flight controller (Multicopter.hpp).
+#include "lagrange/mavlink/RotorTopSpeed.hpp"
 #include "lagrange/server/Multicopter.hpp"
+#include "lagrange/services/Log.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
@@ -154,6 +156,18 @@ Status MulticopterController::declare(const WorldView& world, const ModuleConfig
                  (s->token("aero:rotor:mount").value_or("puller") == "pusher" ? -1.0 : 1.0);
         r.thrustPerOmega2 = ct * perOmega2 * std::pow(diameter, 4);
         r.torquePerOmega2 = cp * perOmega2 * std::pow(diameter, 5) / (2.0 * std::numbers::pi);
+        if (settings_.thrustLimit < 1.0) {
+            // Thrust goes with the speed squared: a share of full thrust is its square root of
+            // the loaded top speed, the speed an autopilot's full output asks for (mavlink).
+            const mavlink::RotorTopSpeed top = mavlink::rotorTopSpeed(world, *s, *rho);
+            r.speedLimit = top.speed * std::sqrt(std::clamp(settings_.thrustLimit, 0.0, 1.0));
+            services::log(services::LogLevel::Info, "controller",
+                          std::string(world.signalInstanceName(s->prim)) + ": thrust limited to " +
+                              std::to_string(std::lround(100.0 * settings_.thrustLimit)) +
+                              " %, at most " + std::to_string(std::lround(r.speedLimit)) +
+                              " rad/s of " + std::to_string(std::lround(top.speed)) + " (" +
+                              top.from + ")");
+        }
         const std::string joint = "joint/" + std::string(world.signalInstanceName(s->prim)) + "/";
         SignalSpec velocity;
         velocity.name = joint + "velocity";
@@ -473,7 +487,10 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         const std::array<double, 4>& m = mixer_[i];
         const double f =
             std::max(0.0, m[0] * thrust + m[1] * torque[0] + m[2] * torque[1] + m[3] * torque[2]);
-        const double speed = r.spin * std::sqrt(f / (r.thrustPerOmega2 * airShare));
+        double speed = r.spin * std::sqrt(f / (r.thrustPerOmega2 * airShare));
+        if (r.speedLimit > 0.0) {
+            speed = std::clamp(speed, -r.speedLimit, r.speedLimit);
+        }
         const double now = bus.read(r.velocity);
         // The propeller's drag at the wanted speed, plus a proportional correction.
         const double feedForward = r.spin * r.torquePerOmega2 * airShare * speed * speed;

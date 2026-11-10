@@ -71,6 +71,9 @@ struct ServerOptions {
     /// The rotors' speed at the autopilot's full output, rad/s (--mavlink-max-rotor-speed); none:
     /// each rotor's loaded top speed from its motor and battery (mavlink::rotorTopSpeed).
     std::optional<double> mavlinkMaxRotorSpeed;
+    /// --thrust-limit FRACTION: the share of each rotor's full thrust that the built-in controller
+    /// and an autopilot's full output may ask for (an ESC limit), 0 < FRACTION <= 1.
+    double thrustLimit{1.0};
     /// Bench mode (--bench): physics replaced by this recording's rigid-body signals, replayed
     /// open loop (the replay substitute); empty = none. A profile's rigid_body replay source
     /// overrides it.

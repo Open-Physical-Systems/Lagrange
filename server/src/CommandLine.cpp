@@ -107,7 +107,7 @@ void printServerOptions(std::FILE* out) {
         "(repeatable)\n"
         "  --water X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH  a body of still water (repeatable)\n"
         "  --tether X,Y,Z,LINK[,LENGTH]  a cable from the world point X,Y,Z to LINK (RFC 0011;\n"
-        "                     repeatable; LENGTH m, default the distance plus 10 %)\n"
+        "                     repeatable; LENGTH m, default the distance plus 10 %%)\n"
         "  --water-current VX,VY[,VZ]  the water's current, m/s\n"
         "  --hydro-coefficients FILE.yaml  vehicles' Fossen coefficients by body (added_mass,\n"
         "            linear_damping, quadratic_damping: six each, surge to yaw)\n"
@@ -149,6 +149,8 @@ void printServerOptions(std::FILE* out) {
         "            tools/ci/ardupilot_mission.sh), in lockstep\n"
         "  --mavlink-max-rotor-speed RAD_S  the rotors' speed at the autopilot's full output\n"
         "            (default: each rotor's loaded top speed from its motor and battery)\n"
+        "  --thrust-limit FRACTION  cap each rotor at this share of its full thrust (0.8: 80 %%),\n"
+        "            for the built-in controller and an autopilot's full output\n"
         "  --geo-origin LAT,LON,HEIGHT  where the world's origin is on the Earth (degrees,\n"
         "            degrees, m above WGS84), for GNSS, magnetometers and barometers (no default;\n"
         "            a profile's world.geo_origin also sets it)\n"
@@ -368,6 +370,14 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--mavlink-max-rotor-speed needs a speed in rad/s";
             }
             options.mavlinkMaxRotorSpeed = speed;
+        } else if (arg == "--thrust-limit") {
+            const char* text = value();
+            char* end = nullptr;
+            const double share = text != nullptr ? std::strtod(text, &end) : 0.0;
+            if (text == nullptr || end == text || *end != '\0' || !(share > 0.0) || share > 1.0) {
+                return "--thrust-limit needs a share of full thrust, over 0 and at most 1 (0.8)";
+            }
+            options.thrustLimit = share;
         } else if (arg == "--geo-origin") {
             const char* text = value();
             double lat = 0.0, lon = 0.0, height = 0.0;
