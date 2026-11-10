@@ -53,6 +53,9 @@ html_theme_options = {
     "source_branch": BRANCH,
     "source_directory": "docs/",
     "sidebar_hide_name": True,  # the logo carries the name
+    # The design tokens' accent (docs/design/ui/shared/design-tokens.json), light and dark.
+    "light_css_variables": {"color-brand-primary": "#C9611D", "color-brand-content": "#B4561A"},
+    "dark_css_variables": {"color-brand-primary": "#E8772E", "color-brand-content": "#F0904D"},
 }
 
 # [text](target) with a relative target; images too (![alt](target)).
