@@ -279,10 +279,11 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Plan and evaluation (16)</summary>
+<details><summary>Plan and evaluation (17)</summary>
 
 - [Project overview](docs/plan/00-overview.md)
 - [Rotor downwash and live airflow: progress](docs/plan/downwash-progress.md)
+- [EMI from motors, heat conduction, thermal sensors: work queue](docs/plan/emi-thermal-queue.md)
 - [What to develop next: an evaluation, 2026-11-01](docs/plan/evaluation-2026-11.md)
 - [Open questions and challenges to the plan](docs/plan/open-questions.md)
 - [Overnight work, 2026-11-03 (until 07:00 JST)](docs/plan/overnight-2026-11-03.md)
@@ -326,7 +327,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Design proposals (RFCs) (11)</summary>
+<details><summary>Design proposals (RFCs) (12)</summary>
 
 - [RFC 0001: Module interface, signals and scheduling contract](rfcs/0001-module-interface.md)
 - [RFC 0002: USD custom schemas](rfcs/0002-usd-schemas.md)
@@ -339,6 +340,7 @@ recorded to MCAP and replayed.
 - [RFC 0009: Walking humans](rfcs/0009-walking-humans.md)
 - [RFC 0010: Components between buses, and a schematic's parts](rfcs/0010-electrical-nodes.md)
 - [RFC 0011: Tethers and cables](rfcs/0011-tethers.md)
+- [RFC 0012: Heat conduction in solids, from materials](rfcs/0012-heat-conduction.md)
 
 </details>
 

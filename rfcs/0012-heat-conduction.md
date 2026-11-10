@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft |
+| Status | Accepted (2026-11-10) by the owner, with the proposed answer to each open question; gated merges of its steps pre-approved |
 | Created | 2026-11-10 |
 | Affects | `schemas/` (one new library), `modules/thermal/` (a new fidelity), `io/stage/`, `server/` (URDF reading), `profiles/schema.json` (addition), `proto/` (one message, additions), `viewer/` (drawing), `tools/cli/` (an OpenFOAM case writer), `docs/` |
 | Builds on | RFC 0001 (modules), RFC 0002 (schemas), RFC 0003 (protocol), RFC 0005 (profiles), RFC 0007 (the 1.x freeze) |
@@ -45,7 +45,7 @@ it spreads it.
 
 ## Design
 
-### 1. Data: two schemas (`schemas/thermal_material/`)
+### 1. Data: two schemas (added to `schemas/thermal/`)
 
 `ThermalMaterialAPI_1` (single apply) on a link's prim, or on a `UsdShade` material bound to it
 (resolved like `SensorMaterialAPI_1`, by prim, then ancestor, then bound material):

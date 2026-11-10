@@ -90,3 +90,93 @@ class "ThermalLinkAPI_1" (
         doc = "The other node (a prim with ThermalAPI_1). Required."
     )
 }
+
+class "ThermalMaterialAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """The solid a link is made of (RFC 0012), for heat conduction inside it: the thermal
+    domain's conduction fidelity cuts the link into cells and works out the temperature of each.
+    On a link's prim, or on a material bound to it. A preset gives every number; an authored
+    number overrides the preset's."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token thermal:material:preset = "" (
+        doc = """A material from the cited table (docs/physics/heat-conduction.md), e.g.
+        aluminium_6061, copper, steel_304, fr4, pla, abs, petg, nylon_pa12, polycarbonate,
+        cfrp_epoxy, glass, silicone. Empty: every number below must be authored."""
+    )
+    double thermal:material:conductivity (
+        lagrangeUnit = "W/(m.K)"
+        doc = "Thermal conductivity k (across axis, when conductivityAlong is authored)."
+    )
+    double thermal:material:density (
+        lagrangeUnit = "kg/m3"
+        doc = "Density."
+    )
+    double thermal:material:specificHeat (
+        lagrangeUnit = "J/(kg.K)"
+        doc = "Specific heat capacity at constant pressure."
+    )
+    double thermal:material:emissivity (
+        lagrangeUnit = "1"
+        doc = "Emissivity of its surfaces, 0 to 1, for radiation to the sky."
+    )
+    double thermal:material:conductivityAlong (
+        lagrangeUnit = "W/(m.K)"
+        doc = """Conductivity along axis, when it differs (a circuit board's copper planes, carbon
+        fibre plies). Unauthored: the material is isotropic."""
+    )
+    double3 thermal:material:axis = (0, 0, 1) (
+        lagrangeUnit = "1"
+        doc = "The direction conductivityAlong applies in, in the link's frame."
+    )
+    double thermal:material:contactConductance (
+        lagrangeUnit = "W/(m2.K)"
+        doc = """Conductance across the contact where this link touches its parent link (bolted,
+        glued, a thermal pad). Unauthored: no conduction between them (no default)."""
+    )
+    double thermal:material:initialTemperature (
+        lagrangeUnit = "K"
+        doc = "Temperature at the start; unauthored: the ambient air temperature."
+    )
+    double thermal:material:maxTemperature (
+        lagrangeUnit = "K"
+        doc = "At or above this anywhere in the link, it is over temperature."
+    )
+}
+
+class "HeatSourceAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """Heat put into a box of a link's solid (RFC 0012): an LED, a chip, a resistor.
+    Multiple-apply: HeatSourceAPI_1:led_1 gives thermal:source:led_1:*. The heat is
+    (1 - efficiency) times the power, shared over the link's cells inside the box."""
+    customData = {
+        token apiSchemaType = "multipleApply"
+        token propertyNamespacePrefix = "thermal:source"
+    }
+)
+{
+    double power = 0 (
+        lagrangeUnit = "W"
+        doc = "Electrical input power, when constant."
+    )
+    uniform token powerSignal = "" (
+        doc = """Or a signal in W read each step (e.g. motor/left/loss_power). It overrides
+        power when authored."""
+    )
+    double efficiency = 0 (
+        lagrangeUnit = "1"
+        doc = """Share of the power that leaves as light (an LED's radiant efficiency), 0 to 1. 0
+        for a resistor or a chip."""
+    )
+    double3 position = (0, 0, 0) (
+        lagrangeUnit = "m"
+        doc = "Centre of the heated box, in the link's frame."
+    )
+    double3 size = (0.001, 0.001, 0.001) (
+        lagrangeUnit = "m"
+        doc = "Full size of the heated box, along the link's axes."
+    )
+}

@@ -8,6 +8,12 @@ and `test_schemas.py` checks it.
 
 ## Unreleased
 
+- **Thermal library** (RFC 0012): `ThermalMaterialAPI_1`, the solid a link is made of (a preset or
+  its conductivity, density, specific heat, emissivity, an optional conductivity along an axis,
+  the contact conductance to its parent), and `HeatSourceAPI_1`, multiple-apply, heat put into a
+  box of a link (power or a power signal, the share that leaves as light). Additions, nothing to
+  migrate.
+
 - **Tether library** (RFC 0011): `TetherAPI_1`, a cable from an anchor prim to a point on a body,
   with its winch. New library, nothing to migrate.
 

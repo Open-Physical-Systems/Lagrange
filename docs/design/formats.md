@@ -735,6 +735,52 @@ apply:
         tether:winch: tension
 ```
 
+### 3.13 Thermal materials and heat sources (`schemas/thermal/schema.usda`)
+
+Added in 1.x by RFC 0012, for the thermal domain's `conduction` fidelity
+(docs/physics/heat-conduction.md).
+
+**`ThermalMaterialAPI_1`** (single-apply), on a link's prim or a material bound to it. A preset
+gives every number; an authored number overrides it.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `thermal:material:preset` | token | — | `""` | A row of the cited preset table, e.g. `aluminium_6061`, `fr4`, `pla` |
+| `thermal:material:conductivity` | double | W/(m·K) | — | `k` (across `axis` when `conductivityAlong` is given) |
+| `thermal:material:density` | double | kg/m³ | — | `ρ` |
+| `thermal:material:specificHeat` | double | J/(kg·K) | — | `c_p` |
+| `thermal:material:emissivity` | double | 1 | — | Of its surfaces, 0 to 1 |
+| `thermal:material:conductivityAlong` | double | W/(m·K) | — | Along `axis` (copper planes, carbon plies); unauthored: isotropic |
+| `thermal:material:axis` | double3 | 1 | `(0, 0, 1)` | In the link's frame |
+| `thermal:material:contactConductance` | double | W/(m²·K) | — | Where it touches its parent link; unauthored: no conduction across |
+| `thermal:material:initialTemperature` | double | K | — | Unauthored: the ambient |
+| `thermal:material:maxTemperature` | double | K | — | Over it anywhere: `overtemp` |
+
+**`HeatSourceAPI_1`** (multiple-apply, `thermal:source:<name>:`), on a link's prim. Its heat,
+`(1 − efficiency) · power`, is shared over the link's cells inside the box.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `power` | double | W | `0` | Electrical input power |
+| `powerSignal` | token | — | `""` | Or a signal in W, read each step; overrides `power` |
+| `efficiency` | double | 1 | `0` | Share leaving as light |
+| `position` | double3 | m | `(0, 0, 0)` | Centre of the box, link frame |
+| `size` | double3 | m | `(0.001, 0.001, 0.001)` | Full size of the box |
+
+```yaml
+apply:
+  - prim: led_board
+    schemas:
+      ThermalMaterialAPI_1:
+        thermal:material:preset: fr4
+        thermal:material:contactConductance: 3000.0
+      HeatSourceAPI_1:led_1:
+        thermal:source:led_1:power: 3.0
+        thermal:source:led_1:efficiency: 0.35
+        thermal:source:led_1:position: [0.01, 0.0, 0.0016]
+        thermal:source:led_1:size: [0.003, 0.003, 0.001]
+```
+
 ## 4. Sample robot: differential-drive AMR
 
 `assets/robots/amr_diffdrive/amr_diffdrive.usda`. Geometry is primitive shapes so that the file
