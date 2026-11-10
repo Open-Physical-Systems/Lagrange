@@ -188,6 +188,68 @@ TEST(SurfaceLooks, AUrdfLinkSaysHowItLooks) {
     EXPECT_TRUE(seen);
 }
 
+// RFC 0012: <thermal_material> and <heat_source> on a link become its prim's schemas, and
+// lagrange_import writes them to USD, read back the same.
+TEST(ThermalMaterials, AUrdfLinksMaterialAndHeatSourcesReachTheWorldAndUsd) {
+    const std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                       ("lagrange_heat_" + std::to_string(::getpid()) + ".urdf");
+    std::ofstream(path) << R"(<?xml version="1.0"?><robot name="r">
+<link name="board"><visual><geometry><box size="0.04 0.04 0.0016"/></geometry></visual>
+<inertial><mass value="0.01"/><inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" ixz="0" iyz="0"/></inertial></link>
+<gazebo reference="board">
+  <thermal_material preset="fr4" conductivity_along="20" axis="1 0 0" contact_conductance="3000"/>
+  <heat_source name="led_1" power="3.0" efficiency="0.35" xyz="0.01 0 0.0008" size="0.003 0.003 0.001"/>
+  <heat_source name="driver" power_signal="motor/left/loss_power"/>
+  <heat_source power="1"/>
+</gazebo>
+</robot>)";
+    const auto check = [](const World& w) {
+        int materials = 0;
+        int sources = 0;
+        for (const SchemaInstance& s : w.schemaInstances) {
+            if (s.schema == "ThermalMaterialAPI_1") {
+                ++materials;
+                EXPECT_EQ(w.prims.instanceNames[s.prim.index], "board");
+                EXPECT_EQ(s.token("thermal:material:preset"), "fr4");
+                EXPECT_EQ(s.real("thermal:material:conductivityAlong"), 20.0);
+                EXPECT_EQ(s.real("thermal:material:contactConductance"), 3000.0);
+                const auto axis = s.realArray("thermal:material:axis");
+                EXPECT_EQ(std::vector<double>(axis.begin(), axis.end()),
+                          (std::vector<double>{1.0, 0.0, 0.0}));
+            } else if (s.schema == "HeatSourceAPI_1") {
+                ++sources;
+                if (s.instance == "led_1") {
+                    EXPECT_EQ(s.real("thermal:source:led_1:power"), 3.0);
+                    EXPECT_EQ(s.real("thermal:source:led_1:efficiency"), 0.35);
+                    const auto at = s.realArray("thermal:source:led_1:position");
+                    EXPECT_EQ(std::vector<double>(at.begin(), at.end()),
+                              (std::vector<double>{0.01, 0.0, 0.0008}));
+                } else {
+                    EXPECT_EQ(s.instance, "driver");
+                    EXPECT_EQ(s.token("thermal:source:driver:powerSignal"),
+                              "motor/left/loss_power");
+                }
+            }
+        }
+        EXPECT_EQ(materials, 1);
+        EXPECT_EQ(sources, 2);  // the one without a name is skipped
+    };
+    const auto model = loadUrdf(path.string(), {});
+    ASSERT_TRUE(model) << model.error();
+    check(model->world);
+    bool told = false;
+    for (const std::string& note : model->notes) {
+        told = told || note.find("heat_source without a name") != std::string::npos;
+    }
+    EXPECT_TRUE(told);
+    const std::filesystem::path usd = std::filesystem::temp_directory_path() /
+                                      ("lagrange_heat_" + std::to_string(::getpid()) + ".usda");
+    ASSERT_TRUE(stage::writeStage(*model, usd.string())) << usd;
+    const auto back = loadModel(usd.string());
+    ASSERT_TRUE(back) << back.error();
+    check(back->world);
+}
+
 TEST(MeshColliders, AUrdfMeshCollidesOnBothEngines) {
     std::vector<Triangle> box;
     addBox(box, {-0.2F, -0.2F, -0.1F}, {0.2F, 0.2F, 0.1F});

@@ -722,6 +722,85 @@ void customParameters(const tinyxml2::XMLElement* element, const std::string& pr
     }
 }
 
+/// Three numbers "x y z" of an attribute, or nothing.
+std::optional<std::vector<double>> threeNumbers(const tinyxml2::XMLElement& element,
+                                                const char* name) {
+    const char* text = element.Attribute(name);
+    if (text == nullptr) {
+        return std::nullopt;
+    }
+    std::vector<double> out(3, 0.0);
+    std::istringstream in(text);
+    if (!(in >> out[0] >> out[1] >> out[2])) {
+        return std::nullopt;
+    }
+    return out;
+}
+
+/// A link's <thermal_material> and <heat_source>s (RFC 0012) as schema instances on its prim.
+void addThermalElements(Robot& robot, const tinyxml2::XMLElement& gazebo, PrimId prim) {
+    World& world = robot.world;
+    if (const tinyxml2::XMLElement* m = gazebo.FirstChildElement("thermal_material");
+        m != nullptr) {
+        SchemaInstance s;
+        s.schema = "ThermalMaterialAPI_1";
+        s.prim = prim;
+        if (const char* preset = m->Attribute("preset"); preset != nullptr) {
+            s.tokens["thermal:material:preset"] = preset;
+        }
+        constexpr std::array<std::pair<const char*, const char*>, 8> kReals{{
+            {"conductivity", "thermal:material:conductivity"},
+            {"density", "thermal:material:density"},
+            {"specific_heat", "thermal:material:specificHeat"},
+            {"emissivity", "thermal:material:emissivity"},
+            {"conductivity_along", "thermal:material:conductivityAlong"},
+            {"contact_conductance", "thermal:material:contactConductance"},
+            {"initial_temperature", "thermal:material:initialTemperature"},
+            {"max_temperature", "thermal:material:maxTemperature"},
+        }};
+        for (const auto& [xml, attribute] : kReals) {
+            double value = 0.0;
+            if (m->QueryDoubleAttribute(xml, &value) == tinyxml2::XML_SUCCESS) {
+                s.reals[attribute] = value;
+            }
+        }
+        if (const auto axis = threeNumbers(*m, "axis")) {
+            s.realArrays["thermal:material:axis"] = *axis;
+        }
+        world.schemaInstances.push_back(std::move(s));
+    }
+    for (const tinyxml2::XMLElement* h = gazebo.FirstChildElement("heat_source"); h != nullptr;
+         h = h->NextSiblingElement("heat_source")) {
+        const char* name = h->Attribute("name");
+        if (name == nullptr || *name == '\0') {
+            robot.notes.push_back("heat_source without a name: skipped");
+            continue;
+        }
+        SchemaInstance s;
+        s.schema = "HeatSourceAPI_1";
+        s.instance = name;
+        s.prim = prim;
+        const std::string at = std::string("thermal:source:") + name + ":";
+        double value = 0.0;
+        if (h->QueryDoubleAttribute("power", &value) == tinyxml2::XML_SUCCESS) {
+            s.reals[at + "power"] = value;
+        }
+        if (h->QueryDoubleAttribute("efficiency", &value) == tinyxml2::XML_SUCCESS) {
+            s.reals[at + "efficiency"] = value;
+        }
+        if (const char* signal = h->Attribute("power_signal"); signal != nullptr) {
+            s.tokens[at + "powerSignal"] = signal;
+        }
+        if (const auto xyz = threeNumbers(*h, "xyz")) {
+            s.realArrays[at + "position"] = *xyz;
+        }
+        if (const auto size = threeNumbers(*h, "size")) {
+            s.realArrays[at + "size"] = *size;
+        }
+        world.schemaInstances.push_back(std::move(s));
+    }
+}
+
 /// Gazebo sensor blocks: <gazebo reference="link"><sensor name type>...</sensor></gazebo>.
 void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
     tinyxml2::XMLDocument document;
@@ -760,6 +839,25 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
                     world.bodies.names[owner.index] == reference) {
                     world.colliders.material[c] = index;
                 }
+            }
+        }
+        // RFC 0012: <thermal_material preset="fr4" conductivity= density= specific_heat=
+        // emissivity= conductivity_along= axis="x y z" contact_conductance= initial_temperature=
+        // max_temperature=/> and <heat_source name= power= power_signal= efficiency= xyz= size=/>
+        // on the link, as ThermalMaterialAPI_1 and HeatSourceAPI_1:<name> on its prim.
+        if (reference != nullptr && (gazebo->FirstChildElement("thermal_material") != nullptr ||
+                                     gazebo->FirstChildElement("heat_source") != nullptr)) {
+            std::optional<PrimId> prim;
+            for (std::size_t b = firstBody; b < world.bodies.names.size(); ++b) {
+                if (world.bodies.names[b] == reference) {
+                    prim = world.bodies.prim[b];
+                }
+            }
+            if (!prim) {
+                robot.notes.push_back(std::string("thermal_material/heat_source: no link ") +
+                                      reference);
+            } else {
+                addThermalElements(robot, *gazebo, *prim);
             }
         }
         // <visual_material preset="steel" metallic="1" roughness="0.3" emissive="1 0.2 0"/>: how
