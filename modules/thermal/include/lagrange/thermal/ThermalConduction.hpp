@@ -22,8 +22,13 @@ struct HeatSourceSpec {
     double power{0.0};        // W, constant (when powerSignal is empty)
     double efficiency{0.0};   // the share that leaves as light
     std::string powerSignal;  // or a signal in W
+    bool optional{false};     // the signal may be absent (a motor's loss with the network off)
     HeatBox box;              // body frame
 };
+
+/// Where a motor's losses go when it has no lumped node of its own: a 2 cm box at its joint, in
+/// the link that holds its stator (the joint's parent).
+inline constexpr double kMotorLossBox = 0.02;  // m
 
 /// What the conduction fidelity is made of, read from the world (RFC 0012): the links with a
 /// thermal material (presets resolved, shapes, parents, contact conductances, their sources'
