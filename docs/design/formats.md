@@ -435,6 +435,12 @@ the two channels have different units.
 | `emi:fieldMap` | asset | — | none | NanoVDB vector grid of B (T) or E (V/m), at `emi:current` or `emi:radiatedPower` |
 | `emi:fieldMapQuantity` | token | — | `B` | `B` or `E` |
 | `emi:drivenBy` | rel | — | none | Signal-producing prim (a motor) whose current scales the source at runtime |
+| `emi:path` | double[] | m | `[]` | For `wire` (RFC 0013, added in 1.x): x, y, z of each point of its route, prim frame |
+| `emi:returnOffset` | double3 | m | `(0, 0, 0)` | For `wire`: the return conductor, the route shifted by this; zero: none |
+| `emi:currentSignal` | token | — | `""` | A signal (A) that sets the current every step, signed for a direct current; over `emi:drivenBy` |
+
+`wire` (RFC 0013) was appended to `emi:sourceType`'s tokens: a conductor along `emi:path`, its
+field the Biot–Savart sum over its straight segments.
 
 **`EmiSusceptibilityAPI_1`** (single-apply, on a sensor, bus or radio prim). These are the
 per-robot calibration parameters.

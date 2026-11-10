@@ -205,3 +205,128 @@ TEST(Emi, AHarnessLoopPicksUpTheMainsField) {
 
 }  // namespace
 }  // namespace lagrange::emi
+
+namespace lagrange::emi {
+namespace {
+
+// RFC 0013: a straight segment by Biot–Savart (Griffiths Example 5.5).
+TEST(EmiWires, ALongSegmentIsTheInfiniteWire) {
+    const Vec3 b = segmentField({-100.0, 0.0, 0.0}, {100.0, 0.0, 0.0}, 20.0, {0.0, 0.0, 0.05});
+    const Vec3 line = lineField({0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, 20.0, {0.0, 0.0, 0.05});
+    EXPECT_NEAR(b[1], line[1], 1e-6 * std::abs(line[1]));
+    EXPECT_NEAR(b[1], -kMu0 * 20.0 / (2.0 * kPi * 0.05), 1e-9);  // 80 µT, along x̂ × ẑ = −ŷ
+}
+
+TEST(EmiWires, OnItsPerpendicularBisector) {
+    // B = μ0·I/(4π·d) · L/√(L²/4 + d²) for a segment of length L.
+    constexpr double kL = 0.2;
+    constexpr double kD = 0.03;
+    const Vec3 b = segmentField({-kL / 2, 0.0, 0.0}, {kL / 2, 0.0, 0.0}, 10.0, {0.0, kD, 0.0});
+    const double expected = kMu0 * 10.0 / (4.0 * kPi * kD) * kL / std::sqrt(kL * kL / 4 + kD * kD);
+    EXPECT_NEAR(b[2], expected, 1e-12 * expected);  // x̂ × ŷ = ẑ
+    // And off-centre, the two angles differ: the sum of two half segments.
+    const Vec3 left = segmentField({-kL / 2, 0.0, 0.0}, {0.0, 0.0, 0.0}, 10.0, {0.0, kD, 0.0});
+    const Vec3 right = segmentField({0.0, 0.0, 0.0}, {kL / 2, 0.0, 0.0}, 10.0, {0.0, kD, 0.0});
+    EXPECT_NEAR(left[2] + right[2], b[2], 1e-15);
+}
+
+TEST(EmiWires, APairFallsOffAsTheSquareOfTheDistance) {
+    // Supply and return 5 mm apart: exactly μ0·I/(2π)·(1/(r − s) − 1/r) in their plane, which
+    // far away is μ0·I·s/(2π·r²), falling as 1/r² (PX4's compass compensation guide says the
+    // same of a cable).
+    constexpr double kS = 0.005;
+    constexpr double kI = 20.0;
+    std::vector<double> fields;
+    for (const double r : {0.1, 0.2, 0.4}) {
+        const Vec3 go = segmentField({-50.0, 0.0, 0.0}, {50.0, 0.0, 0.0}, kI, {0.0, r, 0.0});
+        const Vec3 back = segmentField({-50.0, kS, 0.0}, {50.0, kS, 0.0}, -kI, {0.0, r, 0.0});
+        const double pair = std::abs(go[2] + back[2]);
+        const double exact = kMu0 * kI / (2.0 * kPi) * (1.0 / (r - kS) - 1.0 / r);
+        EXPECT_NEAR(pair, exact, 1e-10) << r;  // the 100 m wires' ends: picotesla
+        EXPECT_NEAR(pair, kMu0 * kI * kS / (2.0 * kPi * r * r), 0.06 * exact) << r;
+        fields.push_back(pair);
+    }
+    EXPECT_NEAR(fields[1] / fields[2], 4.0, 0.06);  // twice as far, a quarter
+}
+
+TEST(EmiWires, AWireFollowsItsCurrentSignalLinearly) {
+    World world;
+    SchemaInstance wire;
+    wire.schema = "EmiSourceAPI_1";
+    wire.prim = world.addPrim("/bot/lead", "lead");
+    wire.tokens = {{"emi:sourceType", "wire"}, {"emi:currentSignal", "battery/main/current"}};
+    wire.realArrays = {{"emi:path", {0.0, -0.1, 0.0, 0.0, 0.1, 0.0}},
+                       {"emi:returnOffset", {0.0, 0.0, 0.004}}};
+    world.schemaInstances.push_back(wire);
+    SchemaInstance mag;
+    mag.schema = "EmiSusceptibilityAPI_1";
+    mag.prim = world.addPrim("/bot/mag", "mag");
+    world.prims.poseInBody[mag.prim.index] = at(0.05, 0.0, 0.0);
+    mag.tokens = {{"emi:victimType", "magnetometer"}};
+    world.schemaInstances.push_back(mag);
+    const auto fieldAt = [&](double amps) {
+        auto scheduler = std::make_unique<Scheduler>(SchedulerOptions{.deterministic = true});
+        struct Current final : IModule {
+            explicit Current(double a) : amps(a) {}
+            double amps;
+            SignalId out;
+            [[nodiscard]] ModuleInfo info() const override {
+                return {"test", "battery", 1, 0, false, true, CapabilityTier::Tier0};
+            }
+            [[nodiscard]] Duration preferredStep() const override { return Duration{1'000'000}; }
+            Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+                SignalSpec s;
+                s.name = "battery/main/current";
+                s.unit = units::A;
+                out = d.output(s);
+                return {};
+            }
+            Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+                bus.write(out, amps);
+                return {};
+            }
+            Status step(const StepContext&, SignalBus& bus) override {
+                bus.write(out, amps);
+                return {};
+            }
+            Status saveState(StateWriter&) const override { return {}; }
+            Status restoreState(StateReader&) override { return {}; }
+        };
+        scheduler->add(std::make_unique<Current>(amps));
+        scheduler->add(std::make_unique<Emi>());
+        auto wired = scheduler->wire(WorldView(world));
+        EXPECT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+        EXPECT_TRUE(scheduler->stepUntil(SimTime{5'000'000}).ok());
+        const std::span<const double> b =
+            scheduler->bus().readN(scheduler->bus().find("emi/mag/b_field"));
+        return Vec3{b[0], b[1], b[2]};
+    };
+    const Vec3 ten = fieldAt(10.0);
+    const Vec3 twenty = fieldAt(20.0);
+    const Vec3 back = fieldAt(-10.0);
+    // The pair, by hand: the lead along +y at the origin and its return 4 mm above, 5 cm away.
+    const Vec3 go = segmentField({0.0, -0.1, 0.0}, {0.0, 0.1, 0.0}, 10.0, {0.05, 0.0, 0.0});
+    const Vec3 ret = segmentField({0.0, -0.1, 0.004}, {0.0, 0.1, 0.004}, -10.0, {0.05, 0.0, 0.0});
+    for (int k = 0; k < 3; ++k) {
+        EXPECT_NEAR(ten[k], go[k] + ret[k], 1e-15) << k;
+        EXPECT_NEAR(twenty[k], 2.0 * ten[k], 1e-15) << k;  // linear in the current
+        EXPECT_NEAR(back[k], -ten[k], 1e-15) << k;         // and its sign
+    }
+    EXPECT_GT(std::hypot(ten[0], ten[1], ten[2]), 1e-6);  // over a microtesla at 10 A
+}
+
+TEST(EmiWires, AWireNeedsAPathAndACurrent) {
+    World world;
+    SchemaInstance wire;
+    wire.schema = "EmiSourceAPI_1";
+    wire.prim = world.addPrim("/bot/lead", "lead");
+    wire.tokens = {{"emi:sourceType", "wire"}};
+    wire.realArrays = {{"emi:path", {0.0, 0.0, 0.0}}};
+    world.schemaInstances.push_back(wire);
+    const auto sources = sourcesOf(WorldView(world));
+    ASSERT_FALSE(sources);
+    EXPECT_NE(sources.error().find("emi:path"), std::string::npos);
+}
+
+}  // namespace
+}  // namespace lagrange::emi

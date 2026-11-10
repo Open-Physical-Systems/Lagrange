@@ -151,6 +151,9 @@ void printServerOptions(std::FILE* out) {
         "            (default: each rotor's loaded top speed from its motor and battery)\n"
         "  --thrust-limit FRACTION  cap each rotor at this share of its full thrust (0.8: 80 %%),\n"
         "            for the built-in controller and an autopilot's full output\n"
+        "  --emi-motor-leads SPACING[,X,Y,Z]  a wire from the battery (at X,Y,Z on the root\n"
+        "            link) to each motor carrying its bus current, its return SPACING m above\n"
+        "            it; magnetometers feel it (RFC 0013)\n"
         "  --geo-origin LAT,LON,HEIGHT  where the world's origin is on the Earth (degrees,\n"
         "            degrees, m above WGS84), for GNSS, magnetometers and barometers (no default;\n"
         "            a profile's world.geo_origin also sets it)\n"
@@ -627,6 +630,23 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--water needs X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH, the last three positive";
             }
             options.water.push_back({{v[0], v[1], v[2]}, v[3], v[4], v[5]});
+        } else if (arg == "--emi-motor-leads") {
+            const char* text = value();
+            double spacing = -1.0;
+            std::array<double, 3> at{};
+            char tail = 0;
+            const int read = text != nullptr ? std::sscanf(text, "%lf,%lf,%lf,%lf%c", &spacing,
+                                                           &at[0], &at[1], &at[2], &tail)
+                                             : 0;
+            if ((read != 1 && read != 4) || !(spacing >= 0.0) ||
+                !std::isfinite(at[0] + at[1] + at[2])) {
+                return "--emi-motor-leads needs SPACING[,X,Y,Z]: m between a lead and its return "
+                       "(0: no return in the model), and where the battery is on the root link";
+            }
+            options.emiMotorLeads = spacing;
+            if (read == 4) {
+                options.emiBatteryAt = at;
+            }
         } else if (arg == "--tether") {
             const char* text = value();
             ServerOptions::Tether t;

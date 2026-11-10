@@ -12,10 +12,13 @@
 #include "lagrange/sensors/ShapeCaster.hpp"
 #include "lagrange/server/Multicopter.hpp"
 #include "lagrange/server/Robot.hpp"
+#include "lagrange/server/Server.hpp"
 #include "lagrange/services/WrenchSum.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <memory>
 #include <numbers>
 #include <optional>
 #include <string>
@@ -607,6 +610,53 @@ TEST(Multicopter, AThrustLimitCapsEachRotor) {
     EXPECT_LT(fastest, std::sqrt(kLimit) * top * 1.01);  // never past the cap
     EXPECT_GT(fastest, std::sqrt(kLimit) * top * 0.97);  // and it does reach it
     EXPECT_NEAR(thrust / atTopSpeed, kLimit, 0.03);
+}
+
+// RFC 0013: --emi-motor-leads lays a wire from the battery to each motor carrying its bus
+// current; the hovering quadcopter's magnetometer then reads a disturbance that grows with the
+// current, and says what it does to its heading.
+TEST(Multicopter, ItsMotorLeadsDisturbItsCompass) {
+    // The battery under the frame and back from its middle: a symmetric star of leads from right
+    // under the compass would cancel there, and a lead passing within a centimetre of it would
+    // swamp the Earth's field (as it does on a real drone).
+    const std::array<double, 3> battery{-0.06, 0.0, -0.06};
+    const auto hover = [&](std::optional<double> leads) {
+        ServerOptions o;
+        o.robotPath = LAGRANGE_TEST_QUAD_USDA;
+        o.worldPath.clear();
+        o.ros = false;
+        o.realTimeFactor = 0.0;
+        o.airDensityKgM3 = 1.225;
+        o.geoOrigin = coords::Geodetic{47.397742 * std::numbers::pi / 180.0,
+                                       8.545594 * std::numbers::pi / 180.0, 488.0};
+        o.emiMotorLeads = leads;
+        o.emiBatteryAt = battery;
+        auto server = std::make_unique<Server>(o);
+        const Status loaded = server->load();
+        EXPECT_TRUE(loaded.ok()) << loaded.message;
+        EXPECT_TRUE(server->stepUntil(SimTime{6'000'000'000}).ok());  // up and hovering
+        return server;
+    };
+    auto quiet = hover(std::nullopt);
+    EXPECT_TRUE(quiet->read("sensor/magnetometer/interference").empty());  // no victim
+    auto led = hover(0.005);
+    const double share = led->read("sensor/magnetometer/interference").at(0);
+    const double heading = led->read("sensor/magnetometer/heading_error").at(0);
+    double current = 0.0;
+    for (int i = 1; i <= 4; ++i) {
+        current += led->read("motor/rotor_" + std::to_string(i) + "_motor/bus_current").at(0);
+    }
+    std::printf(
+        "hover: %.2f A in the leads, compass disturbed by %.2f %% of the Earth's field, "
+        "heading off by %.3f deg\n",
+        current, 100.0 * share, heading * 180.0 / std::numbers::pi);
+    EXPECT_GT(current, 1.0);
+    EXPECT_GT(share, 0.0);
+    EXPECT_LT(share, 1.0);  // a disturbance, not a new field
+    EXPECT_TRUE(std::isfinite(heading));
+    // Wider leads, the same currents: a larger loop, a larger field.
+    auto wide = hover(0.02);
+    EXPECT_GT(wide->read("sensor/magnetometer/interference").at(0), share);
 }
 
 }  // namespace

@@ -47,6 +47,13 @@ ImVec4 viridis(float fraction) {
 /// The air's speed: wind, gusts and the rotors' wakes (server kAirField, rotor_aero.md §5). The
 /// only field with vertical slices and the airflow particles.
 constexpr const char* kAirField = "aero/wind_speed";
+/// |B| of the EMI sources; sliced upright through the robot too (RFC 0013: its own wiring).
+constexpr const char* kFluxField = "emi/flux_density";
+
+/// Whether the server slices this field upright as well as level.
+bool slicedUpright(const std::string& field) {
+    return field == kAirField || field == kFluxField;
+}
 
 /// What the three panels share: which field is shown and how.
 struct EnvironmentView {
@@ -79,8 +86,8 @@ struct EnvironmentView {
                 }
             }
         }
-        if (field != kAirField) {
-            orientation = SliceOrientation::Horizontal;  // only the air is sliced upright
+        if (!slicedUpright(field)) {
+            orientation = SliceOrientation::Horizontal;  // only these are sliced upright
         }
         if (!field.empty()) {
             // The app's particles watch the air's XZ slice with volumes: ask for the same.
@@ -612,12 +619,12 @@ public:
             context.fieldSlice->clear();
         }
         view_->follow(context);
-        // Header: the plane (XY, XZ, YZ: design 07's slice choices; upright only for the air)
+        // Header: the plane (XY, XZ, YZ: design 07's slice choices; upright for the air and |B|)
         // and the height of a horizontal slice.
         if (widgets::BeginPanelTools("##slice-tools", px(150.0F))) {
             static constexpr std::array<const char*, 3> kPlanes{"XY", "XZ", "YZ"};
             int plane = static_cast<int>(view_->orientation);
-            ImGui::BeginDisabled(view_->field != kAirField);
+            ImGui::BeginDisabled(!slicedUpright(view_->field));
             if (widgets::Segmented("##plane", kPlanes.data(), static_cast<int>(kPlanes.size()),
                                    &plane)) {
                 view_->orientation = static_cast<SliceOrientation>(plane);
@@ -682,14 +689,28 @@ public:
             return ImVec2(base.x + static_cast<float>(x - left) * scale,
                           base.y - static_cast<float>(y - bottom) * scale);
         };
+        // |B| spans decades (it falls as 1/r to 1/r³): coloured on a log scale over the top
+        // four decades; the rest linearly.
+        const bool logScale = view_->field == kFluxField && slice->valueMax > 0.0F;
+        const float logHigh = logScale ? std::log10(slice->valueMax) : 0.0F;
+        const float logLow =
+            logScale ? std::max(std::log10(std::max(slice->valueMin, 1e-30F)), logHigh - 4.0F)
+                     : 0.0F;
         const float range = std::max(slice->valueMax - slice->valueMin, 1e-12F);
+        const auto fraction = [&](float value) {
+            if (logScale) {
+                return (std::log10(std::max(value, 1e-30F)) - logLow) /
+                       std::max(logHigh - logLow, 1e-6F);
+            }
+            return (value - slice->valueMin) / range;
+        };
         const float cell = static_cast<float>(slice->cellM) * scale;
         for (std::uint32_t r = 0; r < slice->height; ++r) {
             for (std::uint32_t col = 0; col < slice->width; ++col) {
                 const float value =
                     slice->values[(static_cast<std::size_t>(r) * slice->width + col) *
                                   slice->components];
-                ImVec4 color = viridis((value - slice->valueMin) / range);
+                ImVec4 color = viridis(fraction(value));
                 color.w = view_->opacity;
                 const ImVec2 min(base.x + static_cast<float>(col) * cell,
                                  base.y - static_cast<float>(r + 1) * cell);
@@ -795,7 +816,11 @@ public:
                                        barTop + px(8.0F)),
                                 u32(viridis(a)));
         }
-        std::snprintf(text, sizeof(text), "%.3g", static_cast<double>(slice->valueMin));
+        const bool logLegend = view_->field == kFluxField && slice->valueMax > 0.0F;
+        const double lowest = logLegend ? std::max(static_cast<double>(slice->valueMin),
+                                                   static_cast<double>(slice->valueMax) * 1e-4)
+                                        : static_cast<double>(slice->valueMin);
+        std::snprintf(text, sizeof(text), logLegend ? "%.3g · log" : "%.3g", lowest);
         draw->AddText(fonts.mono, small, ImVec2(barLeft, barTop + px(12.0F)), u32(c::t3), text);
         std::snprintf(text, sizeof(text), "%.3g", static_cast<double>(slice->valueMax));
         const float maxWidth = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, text).x;
@@ -923,6 +948,7 @@ public:
             widgets::PropertyRow("colormap", "viridis", nullptr);
             ImGui::Unindent(px(8.0F));
         }
+        coupledInto(context);
         if (info.synthetic) {
             ImGui::Dummy(ImVec2(0.0F, px(6.0F)));
             ImGui::PushTextWrapPos(0.0F);
@@ -935,7 +961,104 @@ public:
     }
 
 private:
+    /// One downstream effect: what it is, and the signals its value is made from.
+    struct Effect {
+        enum class Kind { Compass, Can, Radio };
+        Kind kind{Kind::Compass};
+        std::string label;
+        std::shared_ptr<ScopeBuffer> a, b;
+    };
+
+    /// "Coupled into" (design 07-environment, Overlays): the downstream effects of the fields
+    /// now: each magnetometer's heading error and its share of the Earth's field (sensor/<n>/
+    /// heading_error, interference; RFC 0013), coloured by ArduPilot's compassmot bands (under
+    /// 30 % fine, over 60 % move the compass), each CAN bus's bit-error rate and each radio
+    /// link's SNR and packet loss.
+    void coupledInto(PanelContext& context) {
+        const auto catalog = context.client.catalog();
+        if (catalog != effectsCatalog_) {
+            effectsCatalog_ = catalog;
+            for (const Effect& e : effects_) {
+                for (const auto& buffer : {e.a, e.b}) {
+                    if (buffer) {
+                        context.client.unsubscribe(buffer);
+                    }
+                }
+            }
+            effects_.clear();
+            const auto middle = [](std::string_view name, std::string_view prefix,
+                                   std::string_view suffix) -> std::string {
+                if (name.starts_with(prefix) && name.ends_with(suffix) &&
+                    name.size() > prefix.size() + suffix.size()) {
+                    return std::string(
+                        name.substr(prefix.size(), name.size() - prefix.size() - suffix.size()));
+                }
+                return {};
+            };
+            for (const SignalInfo& info : catalog ? catalog->signals : std::vector<SignalInfo>{}) {
+                if (const std::string n = middle(info.name, "sensor/", "/heading_error");
+                    !n.empty()) {
+                    effects_.push_back({Effect::Kind::Compass, n,
+                                        context.client.subscribe(info.name),
+                                        context.client.subscribe("sensor/" + n + "/interference")});
+                } else if (const std::string c = middle(info.name, "emi/", "/bit_error_rate");
+                           !c.empty()) {
+                    effects_.push_back(
+                        {Effect::Kind::Can, c, context.client.subscribe(info.name), nullptr});
+                } else if (const std::string l = middle(info.name, "link/", "/snr"); !l.empty()) {
+                    effects_.push_back(
+                        {Effect::Kind::Radio, l, context.client.subscribe(info.name),
+                         context.client.subscribe("link/" + l + "/packet_error_rate")});
+                }
+            }
+        }
+        if (effects_.empty() || !widgets::SectionHeader("Coupled into", nullptr)) {
+            return;
+        }
+        ImGui::Indent(px(8.0F));
+        const theme::Fonts& fonts = theme::fonts();
+        for (const Effect& e : effects_) {
+            const double a = e.a ? e.a->latest() : NAN;
+            const double b = e.b ? e.b->latest() : NAN;
+            char value[64];
+            ImVec4 colour = c::t1;
+            switch (e.kind) {
+                case Effect::Kind::Compass: {
+                    constexpr double kDegPerRad = 180.0 / std::numbers::pi;
+                    std::snprintf(value, sizeof(value), "%+.1f° heading · %.0f %%", a * kDegPerRad,
+                                  100.0 * b);
+                    colour = b > 0.6 ? c::error : b > 0.3 ? c::warn : c::t1;
+                    break;
+                }
+                case Effect::Kind::Can:
+                    std::snprintf(value, sizeof(value), "BER %.1e", a);
+                    break;
+                case Effect::Kind::Radio:
+                    std::snprintf(value, sizeof(value), "SNR %.0f dB · %.1f %% loss",
+                                  a > 0.0 ? 10.0 * std::log10(a) : -INFINITY, 100.0 * b);
+                    break;
+            }
+            if (std::isnan(a)) {
+                std::snprintf(value, sizeof(value), "—");
+                colour = c::t3;
+            }
+            ImGui::AlignTextToFramePadding();
+            ImGui::PushStyleColor(ImGuiCol_Text, c::t2);
+            ImGui::TextUnformatted(e.label.c_str());
+            ImGui::PopStyleColor();
+            const float mono = px(theme::kMonoSize);
+            const float width = fonts.mono->CalcTextSizeA(mono, FLT_MAX, 0.0F, value).x;
+            ImGui::SameLine(ImGui::GetContentRegionMax().x - width - px(8.0F));
+            ImGui::PushFont(fonts.mono, theme::kMonoSize);
+            ImGui::TextColored(colour, "%s", value);
+            ImGui::PopFont();
+        }
+        ImGui::Unindent(px(8.0F));
+    }
+
     std::shared_ptr<EnvironmentView> view_;
+    std::shared_ptr<const SignalCatalog> effectsCatalog_;
+    std::vector<Effect> effects_;
 };
 
 }  // namespace

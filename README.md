@@ -328,7 +328,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Design proposals (RFCs) (12)</summary>
+<details><summary>Design proposals (RFCs) (13)</summary>
 
 - [RFC 0001: Module interface, signals and scheduling contract](rfcs/0001-module-interface.md)
 - [RFC 0002: USD custom schemas](rfcs/0002-usd-schemas.md)
@@ -342,6 +342,7 @@ recorded to MCAP and replayed.
 - [RFC 0010: Components between buses, and a schematic's parts](rfcs/0010-electrical-nodes.md)
 - [RFC 0011: Tethers and cables](rfcs/0011-tethers.md)
 - [RFC 0012: Heat conduction in solids, from materials](rfcs/0012-heat-conduction.md)
+- [RFC 0013: Magnetic interference from a robot's own power wiring](rfcs/0013-motor-emi.md)
 
 </details>
 

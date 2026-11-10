@@ -8,6 +8,9 @@ and `test_schemas.py` checks it.
 
 ## Unreleased
 
+- **EMI library** (RFC 0013): `wire` appended to `emi:sourceType`; `emi:path`, `emi:returnOffset`
+  and `emi:currentSignal` on `EmiSourceAPI_1`. Additions, nothing to migrate.
+
 - **Thermal library** (RFC 0012): `ThermalMaterialAPI_1`, the solid a link is made of (a preset or
   its conductivity, density, specific heat, emissivity, an optional conductivity along an axis,
   the contact conductance to its parent), and `HeatSourceAPI_1`, multiple-apply, heat put into a
