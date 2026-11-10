@@ -577,6 +577,132 @@ void Cable::solveObstacles(double h, std::span<const Obstacle> obstacles, double
     }
 }
 
+void Cable::solveSegments(double h, std::span<const Obstacle> obstacles, double share) {
+    // A straight segment between two masses outside a shape can still cut through it where the
+    // cable bends over an edge or a corner. For each segment that could reach a shape, the point
+    // along it that goes deepest (the signed distance along a line into a convex shape is
+    // convex: golden-section search) is pushed out, the two masses sharing the move as the
+    // point's position does (Müller et al. 2007's weighting), with friction and the reaction on
+    // a moving body as for a mass.
+    constexpr int kSearch = 16;     // golden-section steps: 0.2 mm on a 0.2 m segment
+    constexpr double kEnds = 0.02;  // nearer an end than this, the mass's own contact does
+    const double golden = 0.5 * (std::sqrt(5.0) - 1.0);
+    const double total = length();
+    double along = 0.0;
+    for (std::size_t j = 0; j + 1 < count_; ++j) {
+        const std::size_t i = j;
+        const std::size_t k = j + 1;
+        const double middle = along + 0.5 * rest_[j];
+        along += rest_[j];
+        if (w_[i] <= 0.0 && w_[k] <= 0.0) {
+            continue;
+        }
+        const Vec3 a = p_[i];
+        const Vec3 b = p_[k];
+        const Vec3 ab = sub(b, a);
+        const double l = norm(ab);
+        if (l < 1e-9) {
+            continue;
+        }
+        const Vec3 mid = add(a, scale(ab, 0.5));
+        const bool nearAnchor = middle < kEndClearanceM;
+        const bool nearAttach = total - middle < kEndClearanceM;
+        for (std::size_t q = 0; q < near_.size(); ++q) {
+            const Obstacle& ob = obstacles[near_[q]];
+            if (ob.type == ShapeType::Plane) {
+                continue;  // a segment is deepest at an end: the masses' contacts
+            }
+            if ((nearAnchor &&
+                 ((endInside_[q] & 1U) != 0 || (ob.robot >= 0 && ob.robot == anchorRobot_))) ||
+                (nearAttach &&
+                 ((endInside_[q] & 2U) != 0 || (ob.robot >= 0 && ob.robot == attachRobot_)))) {
+                continue;
+            }
+            if (std::isfinite(ob.reach) &&
+                norm(sub(mid, ob.pose.position)) > ob.reach + 0.5 * l + radius_) {
+                continue;
+            }
+            // The distance is 1-Lipschitz: no point of the segment is deeper than the nearer
+            // end less half its length.
+            const double da = surfacePoint(ob, a).distance;
+            const double db = surfacePoint(ob, b).distance;
+            if (std::min(da, db) - 0.5 * l >= radius_) {
+                continue;
+            }
+            const auto at = [&](double t) { return surfacePoint(ob, add(a, scale(ab, t))); };
+            double lo = 0.0;
+            double hi = 1.0;
+            double x1 = hi - golden * (hi - lo);
+            double x2 = lo + golden * (hi - lo);
+            double f1 = at(x1).distance;
+            double f2 = at(x2).distance;
+            for (int s = 0; s < kSearch; ++s) {
+                if (f1 < f2) {
+                    hi = x2;
+                    x2 = x1;
+                    f2 = f1;
+                    x1 = hi - golden * (hi - lo);
+                    f1 = at(x1).distance;
+                } else {
+                    lo = x1;
+                    x1 = x2;
+                    f1 = f2;
+                    x2 = lo + golden * (hi - lo);
+                    f2 = at(x2).distance;
+                }
+            }
+            const double t = 0.5 * (lo + hi);
+            if (t < kEnds || t > 1.0 - kEnds) {
+                continue;
+            }
+            const SurfacePoint sp = at(t);
+            if (!(sp.distance < radius_)) {
+                continue;
+            }
+            const double ws = (1.0 - t) * (1.0 - t) * w_[i] + t * t * w_[k];
+            if (ws <= 0.0) {
+                continue;
+            }
+            Vec3 surfaceMove{};
+            if (ob.body >= 0) {
+                surfaceMove = scale(add(ob.velocity, cross(ob.angular, sub(sp.point, ob.com))), h);
+            }
+            // How the point moved this substep, relative to the surface.
+            const Vec3 moved = sub(
+                add(scale(sub(p_[i], x_[i]), 1.0 - t), scale(sub(p_[k], x_[k]), t)), surfaceMove);
+            const double away = dot(moved, sp.normal);
+            const double depth =
+                std::min(radius_ - sp.distance, std::max(0.0, kMaxDepenetrationMps * h - away));
+            Vec3 correction = scale(sp.normal, depth);
+            // Friction on the point's slide, within μ·depth it sticks.
+            const Vec3 slide = sub(moved, scale(sp.normal, away));
+            const double sliding = norm(slide);
+            const double limit = params_.friction * depth;
+            if (sliding <= limit) {
+                correction = sub(correction, slide);
+                if (sliding > 1e-7) {
+                    caught_ = true;
+                }
+            } else if (sliding > 0.0) {
+                correction = sub(correction, scale(slide, limit / sliding));
+            }
+            // Move the masses so that the point moves by the correction.
+            const Vec3 di = scale(correction, (1.0 - t) * w_[i] / ws);
+            const Vec3 dk = scale(correction, t * w_[k] / ws);
+            addTo(p_[i], di);
+            addTo(p_[k], dk);
+            touching_[i] = touching_[k] = 1;
+            if (ob.body >= 0 && static_cast<std::size_t>(ob.body) < pushes_.size()) {
+                const Vec3 impulse = add(scale(di, mass_[i]), scale(dk, mass_[k]));
+                const Vec3 force = scale(impulse, -1.0 / (h * h) * share);
+                Push& push = pushes_[static_cast<std::size_t>(ob.body)];
+                addTo(push.force, force);
+                addTo(push.torque, cross(sub(sp.point, ob.com), force));
+            }
+        }
+    }
+}
+
 void Cable::findSelfPairs(double margin) {
     // Once a step: segments that could touch within it (their midpoints within half their
     // lengths, the diameter and how far they can move), found through a grid of midpoints.
@@ -763,6 +889,7 @@ void Cable::step(double dt, const Vec3& anchor, const Vec3& attach,
         solveLengths(h, lambda_);
         solveBends(h);
         solveObstacles(h, obstacles, share);
+        solveSegments(h, obstacles, share);
         solveSelf();
         for (std::size_t i = 0; i < count_; ++i) {
             v_[i] = scale(sub(p_[i], x_[i]), 1.0 / h);

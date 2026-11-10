@@ -239,6 +239,8 @@ One PR each, in order:
   the open field otherwise shot a sag laid through the ground out at tens of m/s).
 - Each cable is laid out on its first step from where the bodies are then, not from the robot
   file's rest pose (a robot spawned elsewhere had stretched it by metres).
+- Contact along each segment too, at its deepest point (golden-section search): with contacts at
+  the masses alone, a cable bent over a deck's edge cut 6 cm into the concrete between two masses.
 - The viewer draws a cable as its centre line and four lines at its radius (the existing line
   path; a 4 mm cable is under a pixel beyond a few metres).
 
