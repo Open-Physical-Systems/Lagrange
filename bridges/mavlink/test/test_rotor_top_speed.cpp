@@ -15,9 +15,9 @@ constexpr double kRho = 1.225;  // kg/m³, ISA sea level
 
 struct Motor {
     std::string type{"bldc"};
-    double kt{0.01557};  // N·m/A: the sample quadcopter's 920 KV, 1.5·60/(2π·920)
-    double r{0.1};       // ohm
-    double l{0.00003};   // H
+    double kt{0.008989};  // N·m/A: the sample quadcopter's 920 KV, 1.5·60/(2π·920·√3)
+    double r{0.1};        // ohm
+    double l{0.00003};    // H
     int poles{7};
     double maxCurrent{25.0};  // A
 };
@@ -91,7 +91,8 @@ double propellerTorque(double omega) {
 }
 
 TEST(RotorTopSpeed, IsWhereTheDriveRunsOutOfVoltageTurningThePropeller) {
-    const Motor motor;
+    Motor motor;
+    motor.maxCurrent = 40.0;  // A: above what the propeller asks at the voltage limit
     const World w = quad(motor);
     const RotorTopSpeed top = rotorTopSpeed(WorldView(w), rotor1(w), kRho);
     // Steady state of the dq model at that speed: v_q = R·i + Ke·ω, v_d = −p·ω·L·i, i = Q/Kt,
@@ -101,16 +102,16 @@ TEST(RotorTopSpeed, IsWhereTheDriveRunsOutOfVoltageTurningThePropeller) {
     const double vd = motor.poles * top.speed * motor.l * i;
     EXPECT_NEAR(std::hypot(vq, vd), 16.8 / std::sqrt(3.0), 1e-9);
     EXPECT_LT(i, motor.maxCurrent);
-    // The sample's class: about 0.8 krad/s (the bridge's fixed 850 before), below no load.
+    // The sample's class: about 0.94 krad/s (the bridge's fixed 850 before), below no load.
     EXPECT_GT(top.speed, 750.0);
     EXPECT_LT(top.speed, 16.8 / std::sqrt(3.0) / (motor.kt / 1.5));
     EXPECT_NE(top.from.find("rotor_1_motor"), std::string::npos) << top.from;
     EXPECT_NE(top.from.find("voltage-limited"), std::string::npos) << top.from;
 }
 
+// The sample itself: its 25 A motors reach their current limit just before the voltage limit.
 TEST(RotorTopSpeed, StopsAtTheMotorsCurrentLimit) {
-    Motor motor;
-    motor.maxCurrent = 5.0;  // A: below what the propeller asks near top speed
+    const Motor motor;
     const World w = quad(motor);
     const RotorTopSpeed top = rotorTopSpeed(WorldView(w), rotor1(w), kRho);
     EXPECT_NEAR(propellerTorque(top.speed), motor.maxCurrent * motor.kt, 1e-9);
@@ -120,6 +121,7 @@ TEST(RotorTopSpeed, StopsAtTheMotorsCurrentLimit) {
 TEST(RotorTopSpeed, ABrushedMotorHasTheWholeBusVoltage) {
     Motor motor;
     motor.type = "dc_brushed";  // Ke = Kt, the limit V, no d axis
+    motor.maxCurrent = 100.0;   // A: out of the way of the voltage limit
     const World w = quad(motor);
     const RotorTopSpeed top = rotorTopSpeed(WorldView(w), rotor1(w), kRho);
     const double i = propellerTorque(top.speed) / motor.kt;

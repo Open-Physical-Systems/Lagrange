@@ -212,7 +212,7 @@ def Xform "quad_x500_inverted" (
             uniform token elec:motorType = "bldc"
             int elec:polePairs = 7
             rel elec:powerPort = </quad_x500_inverted/power/dc_bus>
-            double elec:torqueConstant = 0.01557
+            double elec:torqueConstant = 0.008989
             double elec:windingResistance = 0.1
             quatd xformOp:orient = (1, 0, 0, 0)
             double3 xformOp:translate = (0, 0, 0)
@@ -229,7 +229,7 @@ def Xform "quad_x500_inverted" (
             uniform token elec:motorType = "bldc"
             int elec:polePairs = 7
             rel elec:powerPort = </quad_x500_inverted/power/dc_bus>
-            double elec:torqueConstant = 0.01557
+            double elec:torqueConstant = 0.008989
             double elec:windingResistance = 0.1
             quatd xformOp:orient = (1, 0, 0, 0)
             double3 xformOp:translate = (0, 0, 0)
@@ -246,7 +246,7 @@ def Xform "quad_x500_inverted" (
             uniform token elec:motorType = "bldc"
             int elec:polePairs = 7
             rel elec:powerPort = </quad_x500_inverted/power/dc_bus>
-            double elec:torqueConstant = 0.01557
+            double elec:torqueConstant = 0.008989
             double elec:windingResistance = 0.1
             quatd xformOp:orient = (1, 0, 0, 0)
             double3 xformOp:translate = (0, 0, 0)
@@ -263,7 +263,7 @@ def Xform "quad_x500_inverted" (
             uniform token elec:motorType = "bldc"
             int elec:polePairs = 7
             rel elec:powerPort = </quad_x500_inverted/power/dc_bus>
-            double elec:torqueConstant = 0.01557
+            double elec:torqueConstant = 0.008989
             double elec:windingResistance = 0.1
             quatd xformOp:orient = (1, 0, 0, 0)
             double3 xformOp:translate = (0, 0, 0)
