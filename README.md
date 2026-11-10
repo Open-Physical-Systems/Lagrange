@@ -325,7 +325,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Design proposals (RFCs) (10)</summary>
+<details><summary>Design proposals (RFCs) (11)</summary>
 
 - [RFC 0001: Module interface, signals and scheduling contract](rfcs/0001-module-interface.md)
 - [RFC 0002: USD custom schemas](rfcs/0002-usd-schemas.md)
@@ -337,6 +337,7 @@ recorded to MCAP and replayed.
 - [RFC 0008: Plugins in the server: loading, scene access, custom sensors and physics backends](rfcs/0008-plugins-in-the-server.md)
 - [RFC 0009: Walking humans](rfcs/0009-walking-humans.md)
 - [RFC 0010: Components between buses, and a schematic's parts](rfcs/0010-electrical-nodes.md)
+- [RFC 0011: Tethers and cables](rfcs/0011-tethers.md)
 
 </details>
 
