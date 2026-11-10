@@ -583,6 +583,8 @@ public:
     void play();
     void pause();
     void seek(std::int64_t simTimeNs);
+    /// Restarts a live run at t = 0 (time, poses and velocities), as /reset_simulation does.
+    void reset();
     void step(std::int64_t durationNs);
     void setRealTimeFactor(double target);
     /// Asks the server to load a file that it can read: a robot description (.urdf, .xacro)
