@@ -63,7 +63,7 @@ For the steady temperatures alone, at rest and without physics, in a second or t
 
 ```bash
 lagrange heat --robot assets/robots/led_heatsink/led_heatsink.urdf --world none \
-    --ambient-temperature 298.15 [--surface-coefficient H]
+    --ambient-temperature 298.15 [--surface-coefficient H] [--cell M]
 ```
 
 prints each link's mean, max and min and each source's temperature, and the heat in and out. A
@@ -173,8 +173,11 @@ a reference for the film coefficient. Use `--cells-through 4` or more, and check
 The three meshes do not converge monotonically, so the finest is not shown to be converged
 either. Inside the solids, the LED's hot spot over the sink is 38 K on the two finer meshes
 against Lagrange's 27 K. Lagrange spreads the LED's heat over its 3 mm box on 0.8 mm cells, and
-OpenFOAM's cells under the LED are four to eight times smaller. A smaller `thermal.cell` (with
-`max_cells`) sharpens it in Lagrange.
+OpenFOAM's cells under the LED are four to eight times smaller. The hot spot depends on how
+finely the source's box is cut, in both codes, and neither has converged. Lagrange's LED reads
+352.9 K on 0.8 mm cells, 365.5 K on 0.4 mm and 357.3 K on 0.125 mm
+(`lagrange heat --cell M`). OpenFOAM's reads 379.4, 384.0 and 364.0 K on its three meshes. Read a
+source's temperature to within about 10 K, and the link's mean and the sink much closer.
 
 **With radiation** (the sample at its own emissivities, 0.85 and 0.9; `--radiation`, the default
 mesh only):

@@ -393,7 +393,7 @@ int exportNetwork(CommandLine& line, std::string_view format, const std::string&
 /// `lagrange heat`: the conduction fidelity (RFC 0012) to its steady state at the rest pose,
 /// without physics: backward Euler steps of growing length until no cell moves by 1 mK, then
 /// each link's and each heat source's temperature. A source on a signal takes no power here.
-int steadyHeat(CommandLine& line, std::optional<double> filmCoefficient) {
+int steadyHeat(CommandLine& line, std::optional<double> filmCoefficient, double cell) {
     if (line.positional.size() > 1) {
         return usage("heat takes at most one profile");
     }
@@ -417,9 +417,8 @@ int steadyHeat(CommandLine& line, std::optional<double> filmCoefficient) {
         std::fprintf(stderr, "lagrange: %s\n", status.message.c_str());
         return 1;
     }
-    constexpr double kCell = 0.002;  // m, as the conduction fidelity's default
     auto setup =
-        lagrange::thermal::thermalSetupOf(lagrange::WorldView(server.world()), ambient, kCell);
+        lagrange::thermal::thermalSetupOf(lagrange::WorldView(server.world()), ambient, cell);
     if (!setup) {
         std::fprintf(stderr, "lagrange: %s\n", setup.error().c_str());
         return 1;
@@ -430,7 +429,8 @@ int steadyHeat(CommandLine& line, std::optional<double> filmCoefficient) {
     }
     std::vector<std::string> notes;
     std::string error;
-    auto model = lagrange::thermal::ConductionModel::build(setup->parts, 200000, notes, error);
+    constexpr std::size_t kMaxCells = 2000000;  // per link: a steady solve can afford more
+    auto model = lagrange::thermal::ConductionModel::build(setup->parts, kMaxCells, notes, error);
     if (!model) {
         std::fprintf(stderr, "lagrange: %s\n", error.c_str());
         return 1;
@@ -661,6 +661,19 @@ int main(int argc, char** argv) {
         }
     }
     std::optional<double> filmCoefficient;
+    double heatCell = 0.002;  // m, `lagrange heat --cell`: the conduction fidelity's default
+    for (std::size_t i = 2; i + 1 < args.size(); ++i) {
+        if (std::string_view(args[i]) == "--cell") {
+            char* end = nullptr;
+            heatCell = std::strtod(args[i + 1], &end);
+            if (end == args[i + 1] || *end != '\0' || !(heatCell > 0.0)) {
+                return usage("--cell needs a cell size in m, over 0");
+            }
+            args.erase(args.begin() + static_cast<std::ptrdiff_t>(i),
+                       args.begin() + static_cast<std::ptrdiff_t>(i) + 2);
+            break;
+        }
+    }
     for (std::size_t i = 2; i + 1 < args.size(); ++i) {
         if (std::string_view(args[i]) == "--surface-coefficient") {
             char* end = nullptr;
@@ -704,7 +717,7 @@ int main(int argc, char** argv) {
     // Checking and printing need no ROS node.
     line.options.ros = false;
     if (command == "heat") {
-        return steadyHeat(line, filmCoefficient);
+        return steadyHeat(line, filmCoefficient, heatCell);
     }
     if (command == "export" && format == "thermal") {
         return exportThermal(line, out);
