@@ -2,6 +2,7 @@
 #include "lagrange/viewer/RenderOptions.hpp"
 
 #include <cmath>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -34,6 +35,32 @@ TEST(ThermalColour, BrightnessRisesWithTemperature) {
         EXPECT_GT(luminance, previous) << k;
         previous = luminance;
     }
+}
+
+// RFC 0012: a link's cells as the faces of its outside, each coloured by its own cell.
+TEST(HeatFaces, OnlyTheOutsideFacesOfTheSolidCellsAreDrawn) {
+    // 3 × 2 × 1 cells, the middle one of the first row outside the solid.
+    const std::vector<float> values{300.0F, NAN, 320.0F, 310.0F, 310.0F, 310.0F};
+    std::vector<float> out;
+    heatFaces(3, 2, 1, {0.0, 0.0, 0.0}, 0.01, values, 300.0F, 320.0F, out);
+    // Five cells; faces: each has top and bottom (10), and the sides that touch no solid
+    // neighbour: count by hand: (0,0): -x,+x,-y = 3; (2,0): -x,+x,-y = 3; (0,1): -x,+y = 2;
+    // (1,1): -y,+y = 2; (2,1): +x,+y = 2. Total 10 + 12 = 22 faces, 6 vertices each.
+    ASSERT_EQ(out.size(), 22U * 6U * 6U);
+    // The hottest cell's top face is the map's top colour, unshaded.
+    const std::array<float, 3> top = thermalColor(1.0F);
+    bool seen = false;
+    for (std::size_t v = 0; v < out.size(); v += 6) {
+        if (out[v] > 0.019F && out[v + 2] > 0.004F && out[v + 3] == top[0] &&
+            out[v + 4] == top[1]) {
+            seen = true;
+        }
+    }
+    EXPECT_TRUE(seen);
+    // A wrong size draws nothing.
+    std::vector<float> none;
+    heatFaces(2, 2, 2, {0.0, 0.0, 0.0}, 0.01, values, 300.0F, 320.0F, none);
+    EXPECT_TRUE(none.empty());
 }
 
 TEST(WeatherLook, FallingWeatherBringsItsSeasonOnlyOverSummer) {

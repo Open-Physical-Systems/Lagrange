@@ -597,21 +597,35 @@ void ViewerClient::handleFieldVolume(const v1::Envelope& envelope) {
     // From the network: every size is checked before the bytes are read.
     const std::string& bytes = volume.values().inline_();
     const std::uint64_t cells = static_cast<std::uint64_t>(volume.nx()) * volume.ny() * volume.nz();
-    if (cells == 0 || cells > kMaxCells || volume.components() != 3 || volume.cell_m() <= 0.0 ||
-        !std::isfinite(volume.cell_m()) || bytes.size() != cells * 3 * sizeof(float)) {
+    const std::uint32_t components = volume.components();
+    const bool inPrim = !volume.prim_path().empty();
+    if (cells == 0 || cells > kMaxCells || components != (inPrim ? 1U : 3U) ||
+        volume.cell_m() <= 0.0 || !std::isfinite(volume.cell_m()) ||
+        bytes.size() != cells * components * sizeof(float)) {
         ++stream->rejected_;
         return;
     }
     auto data = std::make_shared<FieldVolumeData>();
     data->simTimeNs = volume.sim_time().ns();
+    data->primPath = volume.prim_path();
+    data->components = components;
     data->nx = volume.nx();
     data->ny = volume.ny();
     data->nz = volume.nz();
     data->origin = {volume.origin_x(), volume.origin_y(), volume.origin_z()};
     data->cellM = volume.cell_m();
     data->valueMax = volume.value_max();
-    data->values.resize(static_cast<std::size_t>(cells) * 3);
+    data->values.resize(static_cast<std::size_t>(cells) * components);
     std::memcpy(data->values.data(), bytes.data(), bytes.size());
+    if (inPrim) {
+        // Copy on write: the frame reads the map without a lock.
+        const std::shared_ptr<const FieldStream::PrimVolumes> before = stream->primVolumes_.load();
+        auto after = before ? std::make_shared<FieldStream::PrimVolumes>(*before)
+                            : std::make_shared<FieldStream::PrimVolumes>();
+        (*after)[data->primPath] = std::move(data);
+        stream->primVolumes_.store(std::move(after));
+        return;
+    }
     stream->volume_.store(std::move(data));
 }
 

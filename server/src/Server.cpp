@@ -100,6 +100,8 @@ constexpr const char* kWindField = "weather/wind";
 constexpr const char* kFluxField = "emi/flux_density";
 // The air's speed: wind, gusts and the rotors' downwash and outwash (rotor_aero.md §5).
 constexpr const char* kAirField = "aero/wind_speed";
+// RFC 0012: the cells of every link with a thermal material, as FieldVolumes in its frame.
+constexpr const char* kThermalCellsField = "thermal/cells";
 constexpr double kAirSliceCell = 0.1;  // m: a drone is about half a metre across
 // The air around the robot for the viewer's particles: 28 × 28 × 20 cells of 0.2 m, from 3.4 m
 // below the robot to 0.6 m above it, five times a second.
@@ -109,9 +111,10 @@ constexpr double kVolumeCell = 0.2;   // m
 constexpr double kVolumeAbove = 0.6;  // m above the robot's origin
 // 20 Hz: at 5 m/s a drone moves 0.25 m between boxes, so its wake keeps up with it on screen.
 constexpr std::int64_t kVolumePeriodNs = 50'000'000;
-constexpr std::uint32_t kSliceWidth = 64;   // cells along +X
-constexpr std::uint32_t kSliceHeight = 48;  // cells along +Y
-constexpr double kSliceCell = 0.5;          // m
+constexpr std::uint64_t kThermalVolumeEvery = 4;  // volume periods: the cells at 5 Hz
+constexpr std::uint32_t kSliceWidth = 64;         // cells along +X
+constexpr std::uint32_t kSliceHeight = 48;        // cells along +Y
+constexpr double kSliceCell = 0.5;                // m
 // Most simulation time one iteration may compute; beyond it the run falls behind real time
 // instead of freezing the viewer connection.
 constexpr std::int64_t kMaxStepWallNs = 40'000'000;
@@ -480,6 +483,9 @@ struct Server::Impl {
     ServerOptions options;
     Robot robot;
     std::unique_ptr<Scheduler> scheduler;
+    /// The heat conduction module of the run (owned by the scheduler), or nullptr.
+    const thermal::ThermalConduction* conduction{nullptr};
+    const thermal::ThermalConduction* nextConduction{nullptr};  // of the run being made
     proto::Listener listener;
     std::vector<std::unique_ptr<Session>> sessions;
     std::uint64_t nextSessionId{1};
@@ -518,6 +524,7 @@ struct Server::Impl {
     Clock::time_point lastStats{Clock::now()};
     Clock::time_point lastFields{Clock::now()};
     Clock::time_point lastVolumes{Clock::now()};
+    std::uint64_t thermalVolumeTick{0};  // volume periods, for kThermalVolumeEvery
     mutable fields::FieldSignal fogFieldSignal, windFieldSignal, airBoxSignal;
     mutable std::vector<emi::Source> cachedEmiSources;  // emiSources()
     mutable bool emiSourcesRead{false};
@@ -553,6 +560,7 @@ struct Server::Impl {
 
     Expected<std::unique_ptr<Scheduler>, std::string> makeScheduler(const ProfileSettings& settings,
                                                                     DriveCommand** driveOut) {
+        nextConduction = nullptr;
         const auto off = [&settings](const char* domain) {
             return settings.substituted.contains(domain);
         };
@@ -854,7 +862,9 @@ struct Server::Impl {
                             cells.values.insert_or_assign(key, value);
                         }
                     }
-                    next->add(std::make_unique<thermal::ThermalConduction>(), ModuleConfig(cells));
+                    auto module = std::make_unique<thermal::ThermalConduction>();
+                    nextConduction = module.get();
+                    next->add(std::move(module), ModuleConfig(cells));
                 }
             }
         }
@@ -1497,6 +1507,16 @@ struct Server::Impl {
         }
         scheduler = std::move(*made);
         driveCommand = drive;  // only now: a failed build leaves the run as it was
+        conduction = nextConduction;
+        if (conduction != nullptr) {
+            services::log(services::LogLevel::Info, "thermal",
+                          "heat conduction: " + std::to_string(conduction->model().cellCount()) +
+                              " cells in " + std::to_string(conduction->model().parts().size()) +
+                              " links");
+            for (const std::string& note : conduction->notes()) {
+                services::log(services::LogLevel::Warning, "thermal", note);
+            }
+        }
         scenarioState = scheduler->bus().find("scenario/state");
         scenarioTime = scheduler->bus().find("scenario/time");
         scenarioEnded = false;
@@ -2787,11 +2807,12 @@ struct Server::Impl {
             const bool running = built && !substituted(row.domain);
             d.set_enabled(running);
             d.set_available(built);
-            d.set_active_module(running ? (physics   ? physicsBackend()
-                                           : powered ? "averaged_network"
-                                           : heated  ? "lumped"
-                                                     : sensorLevel())
-                                        : row.substitute);
+            d.set_active_module(running
+                                    ? (physics   ? physicsBackend()
+                                       : powered ? "averaged_network"
+                                       : heated  ? (conduction != nullptr ? "conduction" : "lumped")
+                                                 : sensorLevel())
+                                    : row.substitute);
             d.set_substituted(!running);
             d.set_cpu_ms_per_sim_s(cost[row.domain]);
             if (sensing) {
@@ -2815,6 +2836,9 @@ struct Server::Impl {
             }
             if (heated) {
                 d.add_fidelities("lumped");
+                if (hasThermalMaterials()) {
+                    d.add_fidelities("conduction");
+                }
                 d.set_dt_ns(thermalDtNs.value_or(100'000'000));
                 d.set_min_dt_ns(1'000'000);
                 d.set_max_dt_ns(10'000'000'000);
@@ -3347,9 +3371,11 @@ struct Server::Impl {
         }
         std::unique_ptr<Scheduler> previous = std::move(scheduler);
         DriveCommand* previousDrive = driveCommand;
+        const thermal::ThermalConduction* previousConduction = conduction;
         if (Status status = build(); !status.ok()) {
             scheduler = std::move(previous);
             driveCommand = previousDrive;
+            conduction = previousConduction;
             if (bridge) {
                 bridge->attach(robot.world, scheduler->bus());
             }
@@ -4882,6 +4908,10 @@ struct Server::Impl {
               "no wind: the aerodynamics domain's wind or a wind field");
         field(kAirField, "air speed", "aerodynamics", units::m_per_s, 1, aeroRuns(),
               "the aerodynamics domain does not run: it needs the site's air density");
+        field(kThermalCellsField, "temperature in the parts", "thermal", units::K, 1,
+              conduction != nullptr,
+              "no link has a thermal material (ThermalMaterialAPI_1), or the site's ambient "
+              "temperature is not given");
         field(kFluxField, "|B|", "emi", units::T, 1, emiRuns(),
               hasEmi() ? "the EMI domain is off (zero substitute)"
                        : "the stage has no EMI sources (EmiSourceAPI_1)");
@@ -5130,6 +5160,64 @@ struct Server::Impl {
         slice.mutable_values()->set_size(bytes.size());
         slice.mutable_values()->set_inline_(std::move(bytes));
         return envelope;
+    }
+
+    /// The temperatures of every link's cells (kThermalCellsField), one FieldVolume each in
+    /// the frame of the link's scene prim; NaN outside the solid.
+    std::vector<v1::Envelope> thermalVolumes() const {
+        std::vector<v1::Envelope> out;
+        if (conduction == nullptr || conduction->temperatures().empty()) {
+            return out;
+        }
+        const thermal::ConductionModel& model = conduction->model();
+        const std::vector<double>& t = conduction->temperatures();
+        for (std::size_t p = 0; p < model.parts().size(); ++p) {
+            const BodyId body = conduction->bodies()[p];
+            // The link's own scene prim: the top one on the body, at its frame.
+            const ScenePrim* frame = nullptr;
+            for (const ScenePrim& prim : robot.scene.prims) {
+                if (prim.body == body.index &&
+                    (frame == nullptr || prim.path.size() < frame->path.size())) {
+                    frame = &prim;
+                }
+            }
+            const Pose& offset = frame != nullptr ? frame->offset : Pose{};
+            if (frame == nullptr ||
+                offset.orientation != std::array<double, 4>{1.0, 0.0, 0.0, 0.0}) {
+                continue;  // only a link prim at its body's orientation (the usual case)
+            }
+            const thermal::ConductionModel::Grid& g = model.grid(p);
+            v1::Envelope envelope;
+            v1::FieldVolume& volume = *envelope.mutable_field_volume();
+            volume.set_field(kThermalCellsField);
+            volume.set_prim_path(frame->path);
+            volume.mutable_sim_time()->set_ns(scheduler->now().ns);
+            volume.set_nx(static_cast<std::uint32_t>(g.dims[0]));
+            volume.set_ny(static_cast<std::uint32_t>(g.dims[1]));
+            volume.set_nz(static_cast<std::uint32_t>(g.dims[2]));
+            volume.set_cell_m(g.cell);
+            volume.set_components(1);
+            // Cell centres, in the prim's frame (at the body's, less its offset).
+            volume.set_origin_x(g.origin[0] + 0.5 * g.cell - offset.position[0]);
+            volume.set_origin_y(g.origin[1] + 0.5 * g.cell - offset.position[1]);
+            volume.set_origin_z(g.origin[2] + 0.5 * g.cell - offset.position[2]);
+            std::vector<float> values(g.cellAt.size(), std::numeric_limits<float>::quiet_NaN());
+            float hi = 0.0F;
+            for (std::size_t i = 0; i < g.cellAt.size(); ++i) {
+                if (g.cellAt[i] >= 0) {
+                    values[i] =
+                        static_cast<float>(t[g.first + static_cast<std::size_t>(g.cellAt[i])]);
+                    hi = std::max(hi, values[i]);
+                }
+            }
+            volume.set_value_max(hi);
+            std::string bytes(reinterpret_cast<const char*>(values.data()),
+                              values.size() * sizeof(float));
+            volume.mutable_values()->set_size(bytes.size());
+            volume.mutable_values()->set_inline_(std::move(bytes));
+            out.push_back(std::move(envelope));
+        }
+        return out;
     }
 
     /// The air's velocity in a box around the robot (kAirField only), for the viewer's
@@ -6472,12 +6560,20 @@ void Server::runOnce(int timeoutMs) {
     }
     if (nanosSince(s.lastVolumes, now) >= kVolumePeriodNs) {
         s.lastVolumes = now;
+        ++s.thermalVolumeTick;
         for (auto& session : s.sessions) {
             if (!session->greeted || session->congested()) {
                 continue;
             }
             for (const auto& [key, want] : session->fields) {
-                if (want.volume) {
+                if (want.volume && key.first == kThermalCellsField) {
+                    // The cells change at the thermal step: a few times a second is enough.
+                    if (s.thermalVolumeTick % kThermalVolumeEvery == 0) {
+                        for (const v1::Envelope& volume : s.thermalVolumes()) {
+                            session->send(volume);
+                        }
+                    }
+                } else if (want.volume) {
                     if (auto volume = s.fieldVolume(key.first)) {
                         session->send(*volume);
                     }

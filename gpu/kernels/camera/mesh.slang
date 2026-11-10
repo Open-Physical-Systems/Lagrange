@@ -95,3 +95,29 @@ SensorLabels fsSensorLabels(VertexOutput input)
     output.instance = uint(push.baseColor.a);
     return output;
 }
+
+// Heat patches (RFC 0012): triangles coloured per vertex by temperature, the colour in the
+// slot of the normal (location 1), drawn unlit, in the frame of the prim the model rows give.
+struct HeatOutput
+{
+    float4 position : SV_Position;
+    float3 color;
+};
+
+[shader("vertex")]
+HeatOutput vsHeat(VertexInput input)
+{
+    float4 local = float4(input.position, 1.0);
+    float4 relative = float4(dot(push.model[0], local), dot(push.model[1], local), dot(push.model[2], local), 1.0);
+    HeatOutput output;
+    output.position = float4(dot(push.viewProjection[0], relative), dot(push.viewProjection[1], relative),
+                             dot(push.viewProjection[2], relative), dot(push.viewProjection[3], relative));
+    output.color = input.normal;
+    return output;
+}
+
+[shader("fragment")]
+float4 fsHeat(HeatOutput input) : SV_Target
+{
+    return float4(pow(saturate(input.color), float3(1.0 / 2.2)), 1.0);
+}
