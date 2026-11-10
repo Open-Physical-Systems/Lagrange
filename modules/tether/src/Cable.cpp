@@ -286,14 +286,17 @@ void Cable::layOut(const Vec3& anchor, const Vec3& attach) {
         rest_[j] = length / static_cast<double>(segments);
     }
     const Vec3 chord = sub(attach, anchor);
-    // A parabola of sag s below the chord, its length matched to the cable's by bisection.
+    // A parabola of rise s above the chord, its length matched to the cable's by bisection. Above,
+    // not below: a sag would start the slack inside the ground, a deck or a dock it should lie
+    // on (a mass inside a thin box resting on another can be pushed back and forth between them
+    // and never get out); laid above, it falls into place.
     std::vector<Vec3> line(kLayoutSamples + 1);
     const auto trace = [&](double sag) {
         double total = 0.0;
         for (int k = 0; k <= kLayoutSamples; ++k) {
             const double u = static_cast<double>(k) / kLayoutSamples;
             line[k] = add(anchor, scale(chord, u));
-            line[k][2] -= sag * 4.0 * u * (1.0 - u);
+            line[k][2] += sag * 4.0 * u * (1.0 - u);
             if (k > 0) {
                 total += norm(sub(line[k], line[k - 1]));
             }

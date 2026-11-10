@@ -89,8 +89,9 @@ struct Push {
 
 class Cable {
 public:
-    /// A cable from `anchor` to `attach`, laid in a sag in the vertical plane through them so that
-    /// its length is params.length (straight if that is not longer than their distance).
+    /// A cable from `anchor` to `attach`, laid in an arch above them in the vertical plane through
+    /// them so that its length is params.length (straight if that is not longer than their
+    /// distance); it falls into place.
     /// `bodies` is how many moving bodies obstacles may name.
     Cable(const CableParams& params, const Vec3& anchor, const Vec3& attach, std::size_t bodies);
 
