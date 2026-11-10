@@ -106,3 +106,19 @@ def test_a_mesh_too_coarse_for_a_part_is_told(tmp_path: Path) -> None:
                "--out", str(case), "--write-only", "--cells-through", "0.5"]  # fmt: skip
     done = subprocess.run(command, check=True, capture_output=True, text=True, timeout=120)
     assert "under two through" in done.stderr
+
+
+def test_radiation_couples_the_surfaces_at_their_emissivities(tmp_path: Path) -> None:
+    robot = tmp_path / "lamp.urdf"
+    robot.write_text(ROBOT)
+    case = tmp_path / "case"
+    command = [str(CLI / "lagrange"), "foam-cht", str(robot), "--ambient", "298.15",
+               "--out", str(case), "--write-only", "--radiation"]  # fmt: skip
+    subprocess.run(command, check=True, capture_output=True, timeout=120)
+    assert "fvDOM" in (case / "constant/air/radiationProperties").read_text()
+    surfaces = (case / "constant/air/boundaryRadiationProperties").read_text()
+    assert '"air_to_sink" { type lookup; emissivity 0.85;' in surfaces
+    assert '"air_to_board" { type lookup; emissivity 0.9;' in surfaces  # the fr4 preset's
+    assert "qrNbr qr" in (case / "0.regions/board/T").read_text()
+    assert "qr qr; qrNbr none" in (case / "0.regions/air/T").read_text()
+    assert (case / "0.regions/air/IDefault").exists()
