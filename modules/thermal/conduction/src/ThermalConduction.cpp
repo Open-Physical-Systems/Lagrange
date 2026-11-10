@@ -200,6 +200,48 @@ Expected<ThermalSetup, std::string> thermalSetupOf(const WorldView& world, doubl
         }
         out.sources.push_back(std::move(spec));
     }
+    // Motors without a lumped node of their own: their losses heat the link that holds the
+    // stator, at the joint (motor/<m>/loss_power, when the electrical network runs).
+    for (const SchemaInstance* motor : world.instancesOf("ElectricalMotorAPI_1")) {
+        if (!world.instancesOf("ThermalAPI_1").empty()) {
+            bool lumped = false;
+            for (const SchemaInstance* node : world.instancesOf("ThermalAPI_1")) {
+                lumped = lumped || node->prim == motor->prim;
+            }
+            if (lumped) {
+                continue;
+            }
+        }
+        const std::span<const PrimId> joint = motor->rel("elec:joint");
+        if (joint.empty()) {
+            continue;
+        }
+        const std::string_view jointName = world.signalInstanceName(joint[0]);
+        for (std::size_t j = 0; j < raw.joints.names.size(); ++j) {
+            if (raw.joints.names[j] != jointName || raw.joints.child[j] == kWorldBody ||
+                raw.joints.parent[j] == kWorldBody) {
+                continue;
+            }
+            const auto found = partOfBody.find(raw.joints.parent[j].index);
+            if (found == partOfBody.end()) {
+                continue;
+            }
+            const std::string name(world.signalInstanceName(motor->prim));
+            if (out.parts[found->second].name == name) {
+                continue;  // its link is named like it: the losses already go there
+            }
+            // Named for the mount, not the motor: thermal/<motor>/temperature is its winding's
+            // (a lumped node's), which the electrical network reads.
+            HeatSourceSpec spec;
+            spec.name = name + "_mount";
+            spec.part = found->second;
+            spec.powerSignal = "motor/" + name + "/loss_power";
+            spec.optional = true;
+            spec.box.centre = raw.bodies.poseInParent.at(raw.joints.child[j].index).position;
+            spec.box.size = {kMotorLossBox, kMotorLossBox, kMotorLossBox};
+            out.sources.push_back(std::move(spec));
+        }
+    }
     if (!problems.empty()) {
         return Unexpected{"heat conduction cannot be set up:" + problems};
     }
@@ -262,6 +304,7 @@ Status ThermalConduction::declare(const WorldView& world, const ModuleConfig& co
         if (!spec.powerSignal.empty()) {
             SignalSpec in = scalar(spec.powerSignal, units::W);
             in.hold = Hold::WindowAverage;
+            in.optional = spec.optional;
             io.powerSignal = d.input(in);
         }
         const std::string out = "thermal/" + spec.name + "/";

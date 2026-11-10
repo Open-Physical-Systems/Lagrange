@@ -156,6 +156,55 @@ TEST(ThermalConduction, AnLedBoardOnAPlateHeatsUpAndSpreadsIt) {
     EXPECT_EQ(last(9), 0.0);
 }
 
+// A motor's losses heat the link that holds its stator, at its joint, as <motor>_mount; with the
+// electrical network off (no loss signal) nothing heats.
+TEST(ThermalConduction, AMotorsLossesHeatItsMount) {
+    const auto world = [] {
+        World w;
+        const BodyId arm =
+            w.addBody("arm", kWorldBody, Pose{}, 0.05, {0, 0, 0}, {1e-5, 1e-5, 1e-5, 0, 0, 0});
+        w.addCollider(arm, ShapeType::Box, {0.1, 0.01, 0.005}, Pose{}, 0.5);
+        const BodyId rotor = w.addBody("rotor", arm, Pose{{0.08, 0.0, 0.01}, {1, 0, 0, 0}}, 0.01,
+                                       {0, 0, 0}, {1e-6, 1e-6, 1e-6, 0, 0, 0});
+        w.addJoint("rotor_joint", JointType::Revolute, rotor, {0, 0, 1}, true);
+        const PrimId motorPrim = w.addPrim("/bot/rotor_motor", "rotor_motor");
+        SchemaInstance m;
+        m.schema = "ElectricalMotorAPI_1";
+        m.prim = motorPrim;
+        const PrimId jointPrim = w.addPrim("/bot/rotor_joint", "rotor_joint");
+        m.relationships = {{"elec:joint", {jointPrim}}};
+        w.schemaInstances.push_back(m);
+        SchemaInstance a;
+        a.schema = "ThermalMaterialAPI_1";
+        a.prim = w.bodies.prim[arm.index];
+        a.tokens = {{"thermal:material:preset", "aluminium_6061"}};
+        w.schemaInstances.push_back(a);
+        return w;
+    }();
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<Probe>("motor/rotor_motor/loss_power", units::W, true, 5.0));
+    auto module = std::make_unique<ThermalConduction>();
+    ThermalConduction* heat = module.get();
+    scheduler.add(std::move(module), config(0.004));
+    auto mount = std::make_unique<Probe>("thermal/rotor_motor_mount/heat", units::W, false);
+    Probe* seen = mount.get();
+    scheduler.add(std::move(mount));
+    auto wired = scheduler.wire(WorldView(world));
+    ASSERT_TRUE(wired) << to_string(wired.error().front());
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{60'000'000'000}).ok());
+    EXPECT_NEAR(seen->seen.back(), 5.0, 1e-12);
+    // The heat went in at the arm's end, under the rotor: hottest there.
+    const ConductionModel& model = heat->model();
+    const auto cells = model.sourceCells(0, 0);
+    ASSERT_FALSE(cells.empty());
+    for (const std::size_t c : cells) {
+        EXPECT_GT(model.centre(c)[0], 0.06);
+    }
+    const auto& t = heat->temperatures();
+    EXPECT_NEAR(model.sourceMean(t, 0, 0), model.maximum(t, 0), 0.5);
+    EXPECT_GT(model.maximum(t, 0) - model.minimum(t, 0), 0.05);
+}
+
 TEST(ThermalConduction, MaterialsAndSourcesAreChecked) {
     const auto refused = [](const World& world, ModuleConfig c) {
         Scheduler scheduler;

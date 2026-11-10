@@ -195,7 +195,10 @@ surface).
 
 **Sources.** A heat source's $(1-\eta)P$ is shared over the cells whose centres are in its box (the
 nearest cell when none is); a `loss_power` signal named like the link is spread over all its
-cells.
+cells. A motor (`ElectricalMotorAPI_1`) with no lumped node of its own heats the link that holds
+its stator, its joint's parent, in a 2 cm box at the joint, with `motor/<m>/loss_power` (copper
+and drive losses, when the electrical network runs), as the source `<m>_mount`
+(`thermal/<m>_mount/temperature`, the mount's; the winding's is a lumped node's).
 
 **Time.** Backward Euler over the step, solved by conjugate gradients with a Jacobi
 preconditioner from the last temperatures, to a relative residual of $10^{-12}$: stable at any
