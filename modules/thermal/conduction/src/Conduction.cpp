@@ -358,7 +358,8 @@ std::optional<ConductionModel> ConductionModel::build(std::vector<SolidPart> par
         double step = 1e300;
         for (std::size_t q = 0; q < m.parts_.size(); ++q) {
             const Grid& g = m.grids_[q];
-            step = std::min(step, 0.5 * g.cell);
+            // Every solid is at least two cells thick: a step of one cell cannot pass one.
+            step = std::min(step, g.cell);
             for (int corner = 0; corner < 8; ++corner) {
                 const Vec3 local{g.origin[0] + ((corner & 1) != 0 ? g.dims[0] * g.cell : 0.0),
                                  g.origin[1] + ((corner & 2) != 0 ? g.dims[1] * g.cell : 0.0),
@@ -424,8 +425,13 @@ std::optional<ConductionModel> ConductionModel::build(std::vector<SolidPart> par
                                    ray[0] * u[2] + ray[1] * v[2] + ray[2] * n[2]};
                     bool blocked = false;
                     for (double t = step; t < reach && !blocked; t += step) {
-                        blocked = inside(
-                            {start[0] + dir[0] * t, start[1] + dir[1] * t, start[2] + dir[2] * t});
+                        const Vec3 at{start[0] + dir[0] * t, start[1] + dir[1] * t,
+                                      start[2] + dir[2] * t};
+                        if (at[0] < lo[0] || at[1] < lo[1] || at[2] < lo[2] || at[0] > hi[0] ||
+                            at[1] > hi[1] || at[2] > hi[2]) {
+                            break;  // out of every part's box, and a box is convex: free
+                        }
+                        blocked = inside(at);
                     }
                     free += blocked ? 0 : 1;
                 }
