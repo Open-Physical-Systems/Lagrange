@@ -13,6 +13,8 @@
 #include "lagrange/electrical/Export.hpp"
 #include "lagrange/gpu/Device.hpp"
 #include "lagrange/services/DeterminismCheck.hpp"
+#include "lagrange/thermal/ThermalConduction.hpp"
+#include "lagrange/world/PoseMath.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -57,6 +59,9 @@ int usage(const char* error) {
                  "  export spice|modelica [PROFILE] [options] [--out FILE]\n"
                  "                                 the robot's power system as an ngspice\n"
                  "                                 netlist or a Modelica model (to stdout)\n"
+                 "  export thermal [PROFILE] [options] [--out FILE.json]\n"
+                 "                                 the links' thermal materials and heat\n"
+                 "                                 sources, for lagrange foam-cht (RFC 0012)\n"
                  "  info [--version]               version, paths and GPUs\n"
                  "A profile's stage names the robot (URDF) unless --robot is given.\n"
                  "Options (as lagrange_server):\n");
@@ -381,6 +386,137 @@ int exportNetwork(CommandLine& line, std::string_view format, const std::string&
     return 0;
 }
 
+/// `lagrange export thermal`: every link with a thermal material, as the conduction fidelity
+/// reads it (RFC 0012), with a point inside each and its heat sources, at the rest pose in the
+/// world frame, as JSON for lagrange foam-cht.
+int exportThermal(CommandLine& line, const std::string& out) {
+    if (line.positional.size() > 1) {
+        return usage("export takes at most one profile");
+    }
+    if (!line.positional.empty()) {
+        const auto yaml = readFile(line.positional[0]);
+        if (!yaml) {
+            std::fprintf(stderr, "lagrange: cannot read %s\n", line.positional[0].c_str());
+            return 1;
+        }
+        if (const auto error = useStage(line, *yaml, line.positional[0])) {
+            std::fprintf(stderr, "lagrange: %s\n", error->c_str());
+            return 1;
+        }
+    }
+    lagrange::server::Server server(line.options);
+    if (const lagrange::Status status = server.load(); !status.ok()) {
+        std::fprintf(stderr, "lagrange: %s\n", status.message.c_str());
+        return 1;
+    }
+    constexpr double kCell = 0.002;  // m, as the conduction fidelity's default
+    const double ambient = line.options.ambientTemperatureK.value_or(0.0);
+    auto setup = lagrange::thermal::thermalSetupOf(lagrange::WorldView(server.world()),
+                                                   ambient > 0.0 ? ambient : 293.15, kCell);
+    if (!setup) {
+        std::fprintf(stderr, "lagrange: %s\n", setup.error().c_str());
+        return 1;
+    }
+    if (setup->parts.empty()) {
+        std::fprintf(stderr, "lagrange: no link has a thermal material (ThermalMaterialAPI_1)\n");
+        return 1;
+    }
+    // A point inside each part: the centre of one of its cells.
+    std::vector<std::string> notes;
+    std::string error;
+    const auto model =
+        lagrange::thermal::ConductionModel::build(setup->parts, 200000, notes, error);
+    if (!model) {
+        std::fprintf(stderr, "lagrange: %s\n", error.c_str());
+        return 1;
+    }
+    std::ostringstream json;
+    json.precision(10);
+    const auto vec = [&](const std::array<double, 3>& v) {
+        json << "[" << v[0] << ", " << v[1] << ", " << v[2] << "]";
+    };
+    const auto toWorld = [](const lagrange::Pose& pose, const std::array<double, 3>& local) {
+        return lagrange::compose(pose, lagrange::Pose{local, {1.0, 0.0, 0.0, 0.0}}).position;
+    };
+    json << "{\n  \"ambient_temperature\": " << (ambient > 0.0 ? ambient : 0.0)
+         << ",\n  \"parts\": [\n";
+    for (std::size_t p = 0; p < setup->parts.size(); ++p) {
+        const lagrange::thermal::SolidPart& part = setup->parts[p];
+        const auto& m = part.material;
+        const auto& grid = model->grid(p);
+        json << "    {\"name\": \"" << part.name << "\", \"conductivity\": " << m.conductivity;
+        if (m.conductivityAlong) {
+            json << ", \"conductivity_along\": " << *m.conductivityAlong << ", \"axis\": ";
+            vec(lagrange::rotate(part.rest.orientation, part.axis));
+        }
+        json << ", \"density\": " << m.density << ", \"specific_heat\": " << m.specificHeat
+             << ", \"emissivity\": " << m.emissivity;
+        if (part.contactConductance && part.parent) {
+            json << ", \"contact_conductance\": " << *part.contactConductance << ", \"parent\": \""
+                 << setup->parts[*part.parent].name << "\"";
+        }
+        // The cell nearest the middle of its cells: well inside, for snappyHexMesh.
+        std::array<double, 3> middle{0.0, 0.0, 0.0};
+        for (std::size_t c = grid.first; c < grid.first + grid.count; ++c) {
+            for (std::size_t k = 0; k < 3; ++k) {
+                middle[k] += model->centre(c)[k] / static_cast<double>(grid.count);
+            }
+        }
+        std::size_t inner = grid.first;
+        double best = 1e300;
+        for (std::size_t c = grid.first; c < grid.first + grid.count; ++c) {
+            const auto x = model->centre(c);
+            const double d = (x[0] - middle[0]) * (x[0] - middle[0]) +
+                             (x[1] - middle[1]) * (x[1] - middle[1]) +
+                             (x[2] - middle[2]) * (x[2] - middle[2]);
+            if (d < best) {
+                best = d;
+                inner = c;
+            }
+        }
+        json << ", \"inside\": ";
+        vec(toWorld(part.rest, model->centre(inner)));
+        json << ", \"cell\": " << grid.cell << ", \"sources\": [";
+        bool first = true;
+        for (const auto& source : setup->sources) {
+            if (source.part != p) {
+                continue;
+            }
+            json << (first ? "" : ", ") << "{\"name\": \"" << source.name
+                 << "\", \"heat\": " << (1.0 - source.efficiency) * source.power
+                 << ", \"power_signal\": \"" << source.powerSignal << "\", \"centre\": ";
+            vec(toWorld(part.rest, source.box.centre));
+            json << ", \"size\": ";
+            vec(source.box.size);
+            json << ", \"axes\": [";
+            for (int a = 0; a < 3; ++a) {
+                std::array<double, 3> e{0.0, 0.0, 0.0};
+                e[static_cast<std::size_t>(a)] = 1.0;
+                if (a > 0) {
+                    json << ", ";
+                }
+                vec(lagrange::rotate(part.rest.orientation, e));
+            }
+            json << "]}";
+            first = false;
+        }
+        json << "]}" << (p + 1 < setup->parts.size() ? "," : "") << "\n";
+    }
+    json << "  ]\n}\n";
+    if (out.empty()) {
+        std::fputs(json.str().c_str(), stdout);
+        return 0;
+    }
+    std::ofstream file(out);
+    file << json.str();
+    if (!file) {
+        std::fprintf(stderr, "lagrange: cannot write %s\n", out.c_str());
+        return 1;
+    }
+    std::printf("wrote %s\n", out.c_str());
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         return usage("no command");
@@ -401,8 +537,9 @@ int main(int argc, char** argv) {
     std::vector<char*> exportArgs;
     if (command == "export") {
         if (argc < 3 ||
-            (std::string_view(argv[2]) != "spice" && std::string_view(argv[2]) != "modelica")) {
-            return usage("export needs spice or modelica");
+            (std::string_view(argv[2]) != "spice" && std::string_view(argv[2]) != "modelica" &&
+             std::string_view(argv[2]) != "thermal")) {
+            return usage("export needs spice, modelica or thermal");
         }
         format = argv[2];
         exportArgs.assign(argv, argv + argc);
@@ -452,6 +589,9 @@ int main(int argc, char** argv) {
     }
     // Checking and printing need no ROS node.
     line.options.ros = false;
+    if (command == "export" && format == "thermal") {
+        return exportThermal(line, out);
+    }
     if (command == "export") {
         return exportNetwork(line, format, out);
     }

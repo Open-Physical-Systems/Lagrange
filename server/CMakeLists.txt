@@ -167,6 +167,7 @@ target_link_libraries(
         lagrange_gpu::lagrange_gpu
         yaml-cpp::yaml-cpp
         lagrange_electrical::lagrange_electrical
+        lagrange_thermal::lagrange_thermal
 )
 
 add_executable(lagrange_import src/import_main.cpp)

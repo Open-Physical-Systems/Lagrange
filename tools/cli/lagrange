@@ -25,6 +25,8 @@ lagrange bake ROBOT.urdf [-o OUT.urdf]
     a new URDF with its concave collision meshes split into convex parts
 lagrange foam ROBOT [--speed M_S] [--ground] [--clearance M] [--out DIR]
     the same air through OpenFOAM (GPL-3, a separate program): runs a case, reads its forces
+lagrange foam-cht ROBOT --ambient K [--out DIR]
+    heat in the links with a thermal material, in still air, through OpenFOAM (RFC 0012)
 lagrange tunnel ROBOT [--speed M_S] [--yaw DEG] [--cells N] [--out DIR]
     a wind tunnel: air past the robot, its drag and lift, and a world to look at the flow in
 lagrange run|validate|graph|determinism|export|info ...
@@ -532,6 +534,9 @@ def main(argv: list[str]) -> int:
     if argv and argv[0] == "foam-hover":
         tool = str(Path(__file__).resolve().parent / "lagrange_foam_hover")
         os.execv(tool, ["lagrange foam-hover", *argv[1:]])
+    if argv and argv[0] == "foam-cht":
+        tool = str(Path(__file__).resolve().parent / "lagrange_foam_cht")
+        os.execv(tool, ["lagrange foam-cht", *argv[1:]])
     if argv and argv[0] == "viewer":
         viewer = executable("lagrange_viewer", "lagrange_viewer")
         os.execv(viewer, [viewer, *argv[1:]])
