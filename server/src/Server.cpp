@@ -2385,6 +2385,14 @@ struct Server::Impl {
                         return scenePrimOf(PrimId{p});
                     }
                 }
+                // A heat source (RFC 0012) is named by its instance: its link's prim.
+                if (std::string_view(domain) == "thermal/") {
+                    for (const SchemaInstance* s : view.instancesOf("HeatSourceAPI_1")) {
+                        if (s->instance == component) {
+                            return scenePrimOf(s->prim);
+                        }
+                    }
+                }
             }
         }
         return kNoIndex;
