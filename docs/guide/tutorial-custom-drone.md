@@ -198,6 +198,9 @@ flowchart LR
   The rotors slow down: near the ground each turn of the blades gives more thrust, and the
   controller needs only the weight.
 - **Limit:** it never descends faster than 2 m/s (the controller's cap).
+- **Something in the way:** fly it up under a roof or into a wall and keep the key down. It
+  presses on with a bounded push (the set point stays within about 0.35 m of the drone, half a
+  g from the position loop), and when you let go it holds right where it is.
 
 **Wind, any time from here on:** in a third terminal,
 
