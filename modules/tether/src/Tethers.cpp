@@ -41,19 +41,37 @@ Vec3 vec3Of(const SchemaInstance& s, const char* name) {
 
 std::vector<TetherSpec> tethersOf(const WorldView& world, std::string& error) {
     std::vector<TetherSpec> out;
+    // A relationship to a link names its body's own prim, which a URDF robot's prim table does
+    // not map to the body (only prims the loader adds under a body are): look it up directly.
+    const auto bodyAndPose = [&](PrimId prim) -> std::pair<BodyId, Pose> {
+        const std::vector<PrimId>& own = world.raw().bodies.prim;
+        for (std::uint32_t b = 0; b < own.size(); ++b) {
+            if (own[b] == prim) {
+                return {BodyId{b}, Pose{}};
+            }
+        }
+        return {world.primBody(prim), world.primPoseInBody(prim)};
+    };
     for (const SchemaInstance* s : world.instancesOf("TetherAPI_1")) {
         TetherSpec t;
         t.prim = s->prim;
         t.name = std::string(world.signalInstanceName(s->prim));
-        t.anchorBody = world.primBody(s->prim);
-        t.anchorInBody = pointIn(world.primPoseInBody(s->prim), vec3Of(*s, "tether:anchorPoint"));
+        const auto [anchorBody, anchorPose] = bodyAndPose(s->prim);
+        t.anchorBody = anchorBody;
+        t.anchorInBody = pointIn(anchorPose, vec3Of(*s, "tether:anchorPoint"));
         const auto attach = s->rel("tether:attach");
         if (attach.empty()) {
             error = "tether " + t.name + ": tether:attach names no body";
             return {};
         }
-        t.attachBody = world.primBody(attach[0]);
-        t.attachInBody = pointIn(world.primPoseInBody(attach[0]), vec3Of(*s, "tether:attachPoint"));
+        const auto [attachBody, attachPose] = bodyAndPose(attach[0]);
+        if (attachBody == kWorldBody) {
+            error = "tether " + t.name + ": tether:attach " +
+                    std::string(world.primPath(attach[0])) + " is not on a body";
+            return {};
+        }
+        t.attachBody = attachBody;
+        t.attachInBody = pointIn(attachPose, vec3Of(*s, "tether:attachPoint"));
         CableParams& p = t.params;
         p.length = s->real("tether:length").value_or(0.0);
         p.diameter = s->real("tether:diameter").value_or(p.diameter);
