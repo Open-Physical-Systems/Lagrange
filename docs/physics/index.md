@@ -58,6 +58,7 @@ inside one step. See [Concepts](../guide/concepts.md) for the scheduler and subs
 | [Traffic](traffic.md) | Cars following lanes and lights, lane changes, crossings, pedestrians, OpenSCENARIO |
 | [Humans](humans.md) | People as moving capsules: walking with planted feet, steering round robots and each other |
 | [Tethers](tether.md) | A cable from a winch to a drone or any body: sag, drag, snagging, tangling, its pull and its hits |
+| [Heat conduction](heat-conduction.md) | Temperatures inside each part from its material: hot spots of LEDs and chips, contacts, convection |
 
 Radiation is not built yet; its zero substitute stands in ([radiation.md](../design/domains/radiation.md)).
 

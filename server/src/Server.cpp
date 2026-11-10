@@ -41,6 +41,7 @@
 #include "lagrange/services/WrenchSum.hpp"
 #include "lagrange/stage/Stage.hpp"
 #include "lagrange/tether/Tethers.hpp"
+#include "lagrange/thermal/ThermalConduction.hpp"
 #include "lagrange/thermal/ThermalNetwork.hpp"
 #include "lagrange/traffic/Traffic.hpp"
 #include "lagrange/vehicle_dynamics/VehicleDynamics.hpp"
@@ -832,12 +833,29 @@ struct Server::Impl {
             if (settings.thermalDtNs) {
                 heat.dt = Duration{*settings.thermalDtNs};
             }
+            const auto fidelity = settings.thermal.find("fidelity");
+            const bool conduction =
+                hasThermalMaterials() && (fidelity == settings.thermal.end() ||
+                                          std::get<std::string>(fidelity->second) == "conduction");
             if (off("thermal") && addPluginSubstitute("thermal", heat)) {
                 // the plugin stands in for the thermal network
             } else if (off("thermal")) {
                 next->add(std::make_unique<thermal::AmbientTemperature>(), ModuleConfig(heat));
             } else {
-                next->add(std::make_unique<thermal::ThermalNetwork>(), ModuleConfig(heat));
+                if (hasLumpedNodes()) {
+                    next->add(std::make_unique<thermal::ThermalNetwork>(), ModuleConfig(heat));
+                }
+                if (conduction) {
+                    // RFC 0012: the links with a thermal material, cut into cells.
+                    ModuleConfigData cells = heat;
+                    cells.fidelity = "conduction";
+                    for (const auto& [key, value] : settings.thermal) {
+                        if (key != "fidelity") {
+                            cells.values.insert_or_assign(key, value);
+                        }
+                    }
+                    next->add(std::make_unique<thermal::ThermalConduction>(), ModuleConfig(cells));
+                }
             }
         }
         bool weatherInRun = false;  // the sensors see the weather when it runs
@@ -1082,6 +1100,7 @@ struct Server::Impl {
         settings.streamingCollisionRadius = appliedCollisionRadius;
         settings.aerodynamics = appliedAerodynamics;
         settings.rotorAero = appliedRotorAero;
+        settings.thermal = appliedThermal;
         settings.weather = appliedWeather;
         settings.emiCoupling = appliedEmiCoupling;
         settings.substituteTokens = appliedSubstituteTokens;
@@ -1450,6 +1469,7 @@ struct Server::Impl {
     std::optional<double> appliedCollisionRadius;  // world.streaming.collision_radius
     std::map<std::string, ConfigValue, std::less<>> appliedAerodynamics;  // its wind
     std::map<std::string, ConfigValue, std::less<>> appliedRotorAero;     // its rotor settings
+    std::map<std::string, ConfigValue, std::less<>> appliedThermal;       // its conduction settings
     std::map<std::string, ConfigValue, std::less<>> appliedWeather;       // its weather
     std::optional<std::vector<std::string>> appliedEmiCoupling;           // its EMI victims
     std::shared_ptr<mavlink::Px4Link> px4Link;  // PX4's connection, across rebuilds of the run
@@ -2468,9 +2488,13 @@ struct Server::Impl {
 
     bool hasSensors() const { return !robot.world.sensors.names.empty(); }
     /// A power system to simulate: motors or a battery, from USD or an overlay.
-    /// Thermal nodes: ThermalAPI_1 prims.
-    bool hasThermalNodes() const {
+    /// Thermal nodes: ThermalAPI_1 prims, or links with a thermal material (RFC 0012).
+    bool hasThermalNodes() const { return hasLumpedNodes() || hasThermalMaterials(); }
+    bool hasLumpedNodes() const {
         return !WorldView(robot.world).instancesOf("ThermalAPI_1").empty();
+    }
+    bool hasThermalMaterials() const {
+        return !WorldView(robot.world).instancesOf("ThermalMaterialAPI_1").empty();
     }
     bool hasRotors() const { return !WorldView(robot.world).instancesOf("RotorAPI_1").empty(); }
     bool hasPowerSystem() const {
@@ -4617,6 +4641,7 @@ struct Server::Impl {
         }
         appliedAerodynamics = settings.aerodynamics;
         appliedRotorAero = settings.rotorAero;
+        appliedThermal = settings.thermal;
         appliedWeather = settings.weather;
         appliedEmiCoupling = settings.emiCoupling;
         const auto previousTokens = appliedSubstituteTokens;

@@ -100,6 +100,7 @@ physics/emi-and-radio
 physics/traffic
 physics/humans
 physics/tether
+physics/heat-conduction
 ```
 
 ```{toctree}
