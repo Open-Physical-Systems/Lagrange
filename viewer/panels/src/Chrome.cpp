@@ -262,6 +262,15 @@ void contextItem(const char* key, const char* value) {
     ImGui::PopFont();
 }
 
+/// A recording seeks back to its first moment; a live run restarts at t = 0 on the server.
+void resetToStart(PanelContext& context) {
+    if (context.connection.canSeek) {
+        context.client.seek(context.status.replayBeginNs);
+    } else {
+        context.client.reset();
+    }
+}
+
 void drawMenuBar(PanelContext& context) {
     // Design (.mb): 28 px, bg1; the mark and "Lagrange" in semibold, a rule, then the menus
     // in t2; on the right the stage, robot and profile in use and the Ctrl K hint.
@@ -344,9 +353,8 @@ void drawMenuBar(PanelContext& context) {
         if (ImGui::MenuItem("Step", ".", false, ready && context.connection.canStep && !running)) {
             context.client.step(kStepNs);
         }
-        if (ImGui::MenuItem("Reset to start", nullptr, false,
-                            ready && context.connection.canSeek)) {
-            context.client.seek(context.status.replayBeginNs);
+        if (ImGui::MenuItem("Reset to start", nullptr, false, ready)) {
+            resetToStart(context);
         }
         endMenu();
     }
@@ -468,9 +476,9 @@ void drawWorkspaceBar(PanelContext& context, ImGuiViewport* viewport) {
             ImGui::SetCursorPosY(y);
         };
 
-        ImGui::BeginDisabled(!ready || !context.connection.canSeek);
+        ImGui::BeginDisabled(!ready);
         if (widgets::Button("##reset", widgets::ButtonKind::Default, widgets::Icon::Reset, true)) {
-            context.client.seek(context.status.replayBeginNs);
+            resetToStart(context);
         }
         ImGui::SetItemTooltip("Reset the run to its start");
         ImGui::EndDisabled();
