@@ -70,6 +70,7 @@ guide/tutorial-huge-worlds
 guide/tutorial-arm
 guide/tutorial-cars
 guide/tutorial-humans
+guide/tutorial-heat-and-emi
 guide/autoware
 guide/run-file
 guide/concepts

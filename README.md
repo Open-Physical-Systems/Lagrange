@@ -168,7 +168,7 @@ recorded to MCAP and replayed.
 
 <!-- docs-index begin: written by tools/ci/docs_index.py -->
 
-<details><summary>User guide (19)</summary>
+<details><summary>User guide (20)</summary>
 
 - [User guide](docs/guide/README.md)
 - [Autoware with a simulated car](docs/guide/autoware.md)
@@ -184,6 +184,7 @@ recorded to MCAP and replayed.
 - [Tutorial: test your own drone, step by step](docs/guide/tutorial-custom-drone.md)
 - [Tutorial: a quadcopter, from hover to a PX4 mission](docs/guide/tutorial-drone.md)
 - [Tutorial: weather, interference and radio links](docs/guide/tutorial-environment.md)
+- [Tutorial: heat in the parts, and a robot's own interference](docs/guide/tutorial-heat-and-emi.md)
 - [Tutorial: huge worlds](docs/guide/tutorial-huge-worlds.md)
 - [Tutorial: people around your robot](docs/guide/tutorial-humans.md)
 - [Tutorial: a robot's power system from a schematic](docs/guide/tutorial-power.md)
