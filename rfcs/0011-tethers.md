@@ -78,7 +78,8 @@ registered schema), or created by the server from a run file's `tethers:` list (
 A chain of point masses at `segmentLength` spacing (the last segment takes the remainder), the
 first held at the anchor, the last at the attach point. Solved by extended position-based
 dynamics with small steps (Macklin et al. 2019, "Small Steps in Physics Simulation"): every 1 ms
-the step is split into substeps (default 10), each a prediction under gravity and air drag, one
+the step is split into substeps (default 20: at 10 a taut string rang 3.5 % flat, at 20 within
+0.3 %), each a prediction under gravity and air drag, one
 Gauss-Seidel pass of the length constraints with compliance `segment / EA` (forward, then back),
 the bend constraints, the contacts, and the velocity update. It is unconditionally stable for a
 stiff tether at 1 ms (a mass-spring chain would need about 20 µs), and deterministic: fixed
@@ -98,16 +99,19 @@ Every point mass is a sphere of the cable's radius; every segment is a capsule f
 contacts.
 
 - **Scenery and bodies.** The module places every collider at its body's pose this step
-  (`body/<b>/pose`, declared as feedback inputs so that physics runs first) and finds candidates
-  with a uniform grid. It needs the closest point on a shape and the normal there, which
-  `services::SceneQuery` does not give (it has ray and overlap only). So it adds
-  `sensors::closestPoint(shape, point)` beside `distanceToShape` and `surfaceNormal`, for every
-  collider shape: plane, sphere, capsule, cylinder, box, convex hull, height field. A penetrating
+  (`body/<b>/pose`, declared as feedback inputs so that physics runs first) and keeps those near
+  the cable each step. It needs the closest point on a shape and the normal there, which
+  `services::SceneQuery` does not give (it has ray and overlap only). As built that is
+  `tether::surfacePoint(shape, point)` in the tether module (not in `sensors`, which would bring
+  Embree along), for every collider shape: plane, sphere, capsule, cylinder, box, convex hull (its
+  farthest face plane) and height field (along its slope). A penetrating
   mass is moved out along the normal. Friction removes the sliding move up to `μ` times the
   penetration (static, so a cable stays caught on an edge until pulled harder than friction
   allows).
 - **Itself.** Segment against segment (closest points of two capsules), segments one or two
-  apart excluded, through the same grid. That is what lets it wrap and knot.
+  apart excluded. The pairs that could touch within a step are found once per step through a
+  grid of midpoints, with a margin for how far they can move, and resolved every substep. That
+  is what lets it wrap and knot. Turns of the cable do not yet rub on each other (no friction).
 - **The body it is tied to and every other moving body.** A push on the cable is a push back on
   the body: the move times the mass over `h²`, applied at the contact point. Summed over the
   substeps and written as `body/<b>/wrench/tether`, as the water and rain push links.
@@ -176,9 +180,8 @@ wires). Constant kind, as `humans` and `hydrodynamics`.
 
 | Check | Against | Test |
 |---|---|---|
-| Hanging shape and end tension | catenary through two fixed points | sag within 0.5 %, tension within 2 % |
-| Taut wave speed | `sqrt(T / μ)` | within 3 % |
-| Swinging | first mode of a hanging chain (Bernoulli): `T = 4π/j₀,₁ · sqrt(L/g) ≈ 5.23 sqrt(L/g)`, `j₀,₁` the first zero of J₀ | within 3 % |
+| Hanging shape and end tension | catenary through two fixed points | sag within 0.5 %, tension within 2 % (built: 0.03 %, 0.5 %) |
+| Ringing (in place of a hanging chain, whose free end this model does not have) | a taut string's fundamental, `sqrt(T/μ) / 2L` | within 3 % (built: 0.3 %) |
 | Friction over a fixed cylinder | capstan equation `T₁/T₂ = e^{μθ}` | within 5 % at θ = π, μ = 0.3 |
 | Caught on an edge | a cable dragged over a box edge stops until the pull exceeds friction | qualitative, in a test |
 | Tangling | a cable dropped in a pile keeps every segment apart by its diameter | no interpenetration |
@@ -202,7 +205,7 @@ One PR each, in order:
 
 1. This RFC.
 2. `TetherAPI_1` (schema, stage namespace, schema tests, CHANGELOG, formats.md).
-3. `modules/tether`: the solver and its contacts (`sensors::closestPoint`), tests of §Validation
+3. `modules/tether`: the solver and its contacts (`tether::surfacePoint`), tests of §Validation
    that need no server.
 4. The domain in the server: module, signals, wrenches, substitute, profile key, `--tether`, run
    file, the tethered-quad test, docs (`docs/physics/tether.md`, a guide section, CLAUDE.md).
