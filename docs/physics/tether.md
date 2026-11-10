@@ -90,8 +90,10 @@ Moving bodies are met first and scenery last, and a body feels only how far a ma
 away from it: a cable squeezed between a skid and the ground carries nothing between them.
 
 **Laying it out.** On its first step each cable is laid between its ends where the bodies are
-then, in a sag of its length in the vertical plane through them. Where that sag goes through the
-ground or a box, it comes out at 1 m/s and pulls nothing meanwhile.
+then, in an arch of its length above them in the vertical plane through them, and falls into
+place. (A sag below them would start the slack inside the ground, deck or dock it should lie on;
+a mass inside a thin box resting on another can be pushed between the two and never get out.)
+Where the arch goes through something, it comes out at 1 m/s.
 
 **The pull on each end.** The end segment's tension along it, plus the weight and drag of the
 half segment the end carries, at the attach point; with the contact pushes, the body's wrench.
@@ -132,7 +134,8 @@ connects and shows no cable.
 | 6 m piled on the ground | no segment within a diameter of another, none in the ground | holds | `Cable.PilesUpWithoutPassingThroughItself` |
 | A tension winch, drone climbing | its set point, on average | 2.00 N of 2.00 | `Cable.ATensionWinchHoldsItsTension` |
 | The sample quad hovering on 3 m of tether | the weight held by the station and the drone | 0.2 % | `TetherRun.AQuadcopterHoversOnItsTether` |
-| Laid out 1.6 m into the ground | comes out at 1 m/s, pulling nothing | 1.00 m/s, 0 N | `Cable.LaidThroughTheGroundItComesOutSlowly` |
+| Laid out through a slab | comes out at 1 m/s | 1.26 m/s, at most 14 N | `Cable.LaidThroughABoxItComesOutSlowly` |
+| Lifted off a dock on a deck by a drone, tension winch at 2 N | pays out, tension near its set point | 2.6 m out, 2.3 N mean | `Cable.LiftedOffADockTheWinchPaysOut` |
 
 **Limits.**
 - Twist and bending stiffness beyond the light bend term are not modelled: the model is for limp
