@@ -781,6 +781,20 @@ apply:
         thermal:source:led_1:size: [0.003, 0.003, 0.001]
 ```
 
+In a URDF, on the link (read by the server and `lagrange_import`, which writes the schemas):
+
+```xml
+<gazebo reference="led_board">
+  <thermal_material preset="fr4" conductivity_along="20" axis="1 0 0" contact_conductance="3000"/>
+  <heat_source name="led_1" power="3.0" efficiency="0.35" xyz="0.01 0 0.0016" size="0.003 0.003 0.001"/>
+  <heat_source name="driver" power_signal="motor/left/loss_power"/>
+</gazebo>
+```
+
+`<thermal_material>` takes `preset`, `conductivity`, `density`, `specific_heat`, `emissivity`,
+`conductivity_along`, `axis`, `contact_conductance`, `initial_temperature`, `max_temperature`;
+`<heat_source>` takes `name` (required), `power`, `power_signal`, `efficiency`, `xyz`, `size`.
+
 ## 4. Sample robot: differential-drive AMR
 
 `assets/robots/amr_diffdrive/amr_diffdrive.usda`. Geometry is primitive shapes so that the file
