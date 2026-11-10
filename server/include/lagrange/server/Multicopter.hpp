@@ -48,7 +48,10 @@ public:
         // stops smoothly, and brakes to a stop where the stick is let go.
         double maxHorizontalAccelMps2{3.0};
         double maxVerticalAccelMps2{3.0};
-        double maxJerkMps3{8.0};  // and the acceleration itself (PX4 v1.17: MPC_JERK_MAX 8)
+        double maxJerkMps3{8.0};
+        // The share of each rotor's full thrust (at its loaded top speed, from its motor and
+        // battery) it may ask for, as an ESC limit would (--thrust-limit); 1: no limit.
+        double thrustLimit{1.0};  // and the acceleration itself (PX4 v1.17: MPC_JERK_MAX 8)
         // Angle mode: the tilt at full stick (a command of maxHorizontalMps), the same as the
         // limit position mode never asks beyond.
         double maxAngleTiltRad{0.5235987755982988};  // 30°
@@ -101,6 +104,7 @@ private:
         double spin{1.0};                  // the same about the joint axis (turned for a pusher)
         double thrustPerOmega2{0.0};       // N per (rad/s)²
         double torquePerOmega2{0.0};       // N·m per (rad/s)²
+        double speedLimit{0.0};            // rad/s it may ask for; 0: none
         SignalId velocity, command;
     };
 

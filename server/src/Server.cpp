@@ -947,6 +947,7 @@ struct Server::Impl {
                 ardupilot.port = *options.ardupilotPort;
                 ardupilot.airDensity = *settings.airDensityKgM3;
                 ardupilot.maxRotorSpeed = options.mavlinkMaxRotorSpeed;
+                ardupilot.thrustLimit = options.thrustLimit;
                 next->add(mavlink::createArduPilotJson(ardupilot, ardupilotLink));
             } else if (options.px4Port) {
                 if (!px4Link) {
@@ -960,6 +961,7 @@ struct Server::Impl {
                 px4.port = *options.px4Port;
                 px4.airDensity = *settings.airDensityKgM3;
                 px4.maxRotorSpeed = options.mavlinkMaxRotorSpeed;
+                px4.thrustLimit = options.thrustLimit;
                 next->add(mavlink::createPx4Lockstep(px4, px4Link));
             } else if (!controllers && !jointControlled() &&
                        MulticopterController::canFly(WorldView(robot.world))) {
@@ -987,6 +989,7 @@ struct Server::Impl {
                     };
                 }
                 MulticopterController::Settings flight;
+                flight.thrustLimit = options.thrustLimit;
                 flight.waitForCommand = !options.demoDrive;  // --no-demo: it waits for you
                 // The ground under it, so that it can fly off a bridge or a roof and land below.
                 auto [below, friction] = groundQuery();

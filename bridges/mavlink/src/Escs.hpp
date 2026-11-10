@@ -26,8 +26,11 @@ namespace lagrange::mavlink {
 /// (rotorTopSpeed), so that full output is what the motor can do.
 class Escs {
 public:
+    /// `thrustLimit`: the share of full thrust the autopilot's full output gives, by a top speed
+    /// of sqrt(thrustLimit) times the rotor's (thrust goes with the speed squared).
     Status declare(const WorldView& world, SignalDeclarer& d, double airDensity,
-                   std::optional<double> maxSpeed, double speedGain, std::string_view who) {
+                   std::optional<double> maxSpeed, double speedGain, std::string_view who,
+                   double thrustLimit = 1.0) {
         rotors_.clear();
         gain_ = speedGain;
         std::map<std::string, const SchemaInstance*> byName;
@@ -52,10 +55,16 @@ public:
             const RotorTopSpeed top = maxSpeed
                                           ? RotorTopSpeed{*maxSpeed, "--mavlink-max-rotor-speed"}
                                           : rotorTopSpeed(world, *s, airDensity);
-            r.top = top.speed;
+            const double share = std::clamp(thrustLimit, 0.0, 1.0);
+            r.top = top.speed * std::sqrt(share);
+            std::string limited;
+            if (share < 1.0) {
+                limited = ", thrust limited to " + std::to_string(std::lround(100.0 * share)) +
+                          " % of " + std::to_string(std::lround(top.speed)) + " rad/s's";
+            }
             services::log(services::LogLevel::Info, std::string(who),
-                          name + ": full output is " + std::to_string(std::lround(top.speed)) +
-                              " rad/s (" + top.from + ")");
+                          name + ": full output is " + std::to_string(std::lround(r.top)) +
+                              " rad/s (" + top.from + limited + ")");
             const std::string base = "joint/" + name + "/";
             SignalSpec velocity;
             velocity.name = base + "velocity";

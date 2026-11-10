@@ -29,6 +29,7 @@ namespace lagrange::mavlink {
 struct Px4Settings {
     std::uint16_t port{4560};             // TCP port PX4 connects to (4560 + instance)
     std::optional<double> maxRotorSpeed;  // rad/s at control 1; none: from the motors
+    double thrustLimit{1.0};              // share of full thrust at control 1 (--thrust-limit)
     double speedGain{0.02};               // N·m per rad/s of rotor speed error
     double airDensity{0.0};               // kg/m³, for the feed-forward (rotor_aero's)
     double actuatorTimeoutS{5.0};         // s of wall time to wait for PX4 before giving up a step

@@ -27,6 +27,7 @@ struct ArduPilotSettings {
     double rateHz{1000.0};                // the exchange rate (ArduPilot's SIM_RATE_HZ; its pre-arm
                                           // check wants gyro data at 1.8 times its 400 Hz loop)
     std::optional<double> maxRotorSpeed;  // rad/s at full output; none: from the motors
+    double thrustLimit{1.0};              // share of full thrust at full output (--thrust-limit)
                                           // (rotorTopSpeed, as Px4Lockstep's ESCs)
     double speedGain{0.02};               // N·m per rad/s of rotor speed error
     double airDensity{0.0};               // kg/m³, for the ESCs' feed-forward

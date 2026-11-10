@@ -264,6 +264,7 @@ if(BUILD_TESTING)
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
         lagrange_sensors::lagrange_sensors
         lagrange_stage::lagrange_stage
+        lagrange_mavlink::lagrange_mavlink
         mcap_vendor::mcap
         tinyxml2::tinyxml2
     )

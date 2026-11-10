@@ -5,6 +5,7 @@
 // below the bus's undervoltage trip at full load: the drives trip and it does not take off.)
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
 #include "lagrange/electrical/Network.hpp"
+#include "lagrange/mavlink/RotorTopSpeed.hpp"
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/rotor_aero/RotorAero.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
@@ -546,6 +547,66 @@ TEST(Multicopter, FliesOffAPlatformAndLandsBelowIt) {
     command.reset();
     (void)fly(4.0);                    // its rotors coast down once the motors stop
     EXPECT_LT(bus.read(thrust), 0.1);  // landed: rotors coasting, under 2 % of a hover's
+}
+
+// --thrust-limit 0.8: asked for all the thrust there is (a set point 1000 m up), each rotor
+// climbs to sqrt(0.8) of its loaded top speed (an autopilot's full output, mavlink::rotorTopSpeed)
+// and no further, so the four give 80 % of the thrust they would at their top speed.
+TEST(Multicopter, AThrustLimitCapsEachRotor) {
+    constexpr double kLimit = 0.8;
+    constexpr double kRho = 1.225;  // kg/m^3, ISA sea level
+    auto robot = loadModel(LAGRANGE_TEST_QUAD_USDA);
+    ASSERT_TRUE(robot) << robot.error();
+    double top = 0.0;  // rad/s, the first rotor's loaded top speed
+    for (const SchemaInstance& s : robot->world.schemaInstances) {
+        if (s.schema == "RotorAPI_1") {
+            top = mavlink::rotorTopSpeed(WorldView(robot->world), s, kRho).speed;
+            break;
+        }
+    }
+    ASSERT_GT(top, 0.0);
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+    ModuleConfigData power;
+    power.dt = 50_us;
+    power.values["exchange_step"] = 0.001;
+    scheduler.add(std::make_unique<electrical::ElectricalNetwork>(), ModuleConfig(power));
+    ModuleConfigData air;
+    air.values[rotor_aero::kAirDensityKey] = kRho;
+    scheduler.add(std::make_unique<rotor_aero::RotorAero>(), ModuleConfig(air));
+    MulticopterController::Settings flight;
+    flight.altitudeM = 1000.0;
+    flight.takeoffAfterS = 0.0;
+    flight.thrustLimit = kLimit;
+    scheduler.add(std::make_unique<MulticopterController>(flight), ModuleConfig(air));
+    scheduler.add(std::make_unique<services::WrenchSum>());
+    auto wired = scheduler.wire(WorldView(robot->world));
+    ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    const SignalBus& bus = scheduler.bus();
+    double fastest = 0.0;
+    double thrust = 0.0;      // N, the four rotors over the last half second
+    double atTopSpeed = 0.0;  // N, what they would give at their top speed (thrust ~ omega^2)
+    for (int k = 1; k <= 1500; ++k) {
+        ASSERT_TRUE(scheduler.stepUntil(SimTime{k * 1'000'000LL}).ok());
+        for (int i = 1; i <= 4; ++i) {
+            const std::string joint = "rotor_" + std::to_string(i) + "_joint";
+            const double omega = std::abs(bus.read(bus.find("joint/" + joint + "/velocity")));
+            const double f = bus.read(bus.find("rotor/" + joint + "/thrust"));
+            fastest = std::max(fastest, omega);
+            if (k > 1000) {  // the last half second, at the limit
+                thrust += f / 500.0;
+                atTopSpeed += f * (top * top) / (omega * omega) / 500.0;
+            }
+        }
+    }
+    std::printf(
+        "top speed %.0f rad/s; limited to %.0f %%: fastest rotor %.0f rad/s (%.3f of top), "
+        "%.1f N, %.0f %% of %.1f N at top speed\n",
+        top, 100.0 * kLimit, fastest, fastest / top, thrust, 100.0 * thrust / atTopSpeed,
+        atTopSpeed);
+    EXPECT_LT(fastest, std::sqrt(kLimit) * top * 1.01);  // never past the cap
+    EXPECT_GT(fastest, std::sqrt(kLimit) * top * 0.97);  // and it does reach it
+    EXPECT_NEAR(thrust / atTopSpeed, kLimit, 0.03);
 }
 
 }  // namespace
