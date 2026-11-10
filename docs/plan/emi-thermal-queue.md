@@ -12,7 +12,8 @@ merged, `[~]` while in progress, and write what is left under it.
 - [x] A3. `conduction` fidelity: cells, conjugate gradients, surfaces, sources, signals, profile
       keys; analytic tests (erfc, fin, two-layer wall, lumped limit, grid convergence)
 - [x] A4. Viewer: per-cell thermal shading (`thermal/cells` as FieldVolumes in each link's frame,
-      `FieldVolume.prim_path`), not a new message; the inspector's min/max is still owed
+      `FieldVolume.prim_path`), not a new message; the inspector shows each link's mean, max and min
+      and its sources' temperatures in Live (#307)
 - [x] A5. `lagrange foam-cht`, sample `led_heatsink`, comparison, docs/physics/heat-conduction.md
 
 ## B. EMI from motors (RFC 0013)
@@ -39,8 +40,8 @@ probes), #305 (EMI wires, motor leads, Coupled into), #306 (foam-cht), #307 (sou
 (examples), #314 (foam-cht --radiation), #315 #321 (sky view factor), #316, #317 (tutorial), #318
 (profile), #319 #321 (lagrange heat). Still owed: GNSS and radio noise from PWM
 switching (no general coupling model found, RFC 0013 open question 3); a mesh one finer than 2.5M cells for the sample (203k, 640k and 2.5M do not converge
-monotonically; the finest matches the correlations); a sharper LED hot spot in Lagrange (its
-LED over the sink is 27 K, OpenFOAM's finer meshes 38 K).
+monotonically; the finest matches the correlations); a converged LED hot spot (it moves with how finely
+the source's box is cut in both codes, #321: Lagrange 353 to 366 K, OpenFOAM 364 to 384 K).
 
 ## D. Everything tested
 
