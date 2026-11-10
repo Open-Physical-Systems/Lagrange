@@ -70,7 +70,7 @@ def plan(surface: dict, thermal: dict, args: argparse.Namespace) -> dict:
         target = part["cell"] / args.cells_through
         level = max(1, min(args.max_level, math.ceil(math.log2(base / target))))
         levels[part["name"]] = level
-        # Fewer than two cells through the thinnest shape (2 × its conduction cell): a sample
+        # Fewer than two cells through the thinnest shape (twice its conduction cell): a sample
         # with one failed with a floating point exception in the solver.
         if base / 2**level > part["cell"] * 1.0001:
             print(f"  {part['name']}: cells of {base / 2**level * 1000:.2f} mm, under two through "
