@@ -2056,6 +2056,32 @@ struct Server::Impl {
             appendPose(data, primPose(prim), false, prim.scale);
         }
         d.set_transform_data(data);
+        // Every cable (RFC 0011), its radius and its masses where they are now.
+        if (scheduler && hasTethers()) {
+            std::string problem;
+            for (const tether::TetherSpec& t : tether::tethersOf(WorldView(robot.world), problem)) {
+                const SignalId nodes = scheduler->bus().find("tether/" + t.name + "/nodes");
+                if (!nodes.valid()) {
+                    continue;  // the domain is off
+                }
+                const std::span<const double> xyz = scheduler->bus().readN(nodes);
+                std::size_t count = 0;
+                while (3 * count + 2 < xyz.size() && std::isfinite(xyz[3 * count])) {
+                    ++count;
+                }
+                if (count < 2) {
+                    continue;
+                }
+                v1::Overlay& overlay = *d.add_overlays();
+                overlay.set_kind(v1::Overlay::KIND_CABLE);
+                overlay.set_count(static_cast<std::uint32_t>(count));
+                std::string bytes((1 + 3 * count) * sizeof(double), '\0');
+                const double radius = 0.5 * t.params.diameter;
+                std::memcpy(bytes.data(), &radius, sizeof(double));
+                std::memcpy(bytes.data() + sizeof(double), xyz.data(), 3 * count * sizeof(double));
+                overlay.set_data(std::move(bytes));
+            }
+        }
         return envelope;
     }
 

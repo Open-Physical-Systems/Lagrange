@@ -65,11 +65,15 @@ private:
     bool zero_{false};
     std::vector<TetherSpec> specs_;
     std::vector<Cable> cables_;
+    /// Each cable is laid out on its first step, between its ends where the bodies are then (a
+    /// robot may start elsewhere than its file's rest pose: spawned, on a landing pad).
+    std::vector<bool> laid_;
     std::vector<Out> out_;
     std::vector<Body> bodies_;
     std::vector<int> bodyIndex_;  // per world body: index in bodies_, or -1
     std::vector<Pose> rest_;      // per world body, every joint at zero
     std::vector<std::uint32_t> robotOfBody_;
+    std::vector<std::array<int, 2>> robotsOfEnds_;  // per cable: its anchor's and attach's robot
     // Colliders: where each is in its body, and the obstacles placed this step.
     std::vector<Obstacle> obstacles_;
     std::vector<Pose> colliderInBody_;
