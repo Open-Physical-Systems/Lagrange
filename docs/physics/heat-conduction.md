@@ -138,7 +138,9 @@ conduction fidelity's. It runs with an installed OpenFOAM or the container
 each source's mean into `report.json`, and `--compare RUN.json` sets a Lagrange run's beside them;
 `--start-from RUN.json` starts the solids at its temperatures, which shortens the iterations (the
 coupled solids converge slowly from the ambient). OpenFOAM is GPL-3 and stays a separate program:
-files only. The case has no radiation: compare it with a run whose emissivities are 0.
+files only. `--radiation` adds surface radiation through the air by discrete ordinates (fvDOM,
+3 × 3 directions per octant): each solid's faces at its emissivity, the box's walls black at the
+ambient. Without it, compare it with a run whose emissivities are 0.
 
 **The sample against OpenFOAM** (2026-11-11; `led_heatsink.urdf` with its emissivities set to
 0, 298.15 K, 203,000 cells, 8 processes, converged by iteration 1100 of 4000 and steady to 0.01 K
@@ -172,6 +174,19 @@ The sink's rise falls 16 % and the LED's hot spot sharpens from the default mesh
 one, so the 4.5 W/(m²·K) above is an estimate from the default mesh, and the next, about four
 million cells, is owed. Lagrange's own cells (0.8 mm on the board) spread the LED's heat over its
 3 mm box the way the default mesh does.
+
+**With radiation** (the sample at its own emissivities, 0.85 and 0.9; `--radiation`, the default
+mesh, converged by iteration 1200 of 2500):
+
+| | OpenFOAM | Lagrange (correlations) | Lagrange (h = 4.5) |
+|---|---|---|---|
+| sink, mean | 334.5 K | 315.1 K | 320.3 K |
+| LED, case | 360.2 K | 342.5 K | 348.2 K |
+
+Radiation takes about a third of the rise off in both (OpenFOAM 55 to 36 K over the air, Lagrange
+27 to 17 K), but Lagrange's faces each radiate to the whole surroundings, and between fins they
+see each other instead: no view factors yet. So for a finned shape Lagrange is cool on both
+counts, convection and radiation; for open shapes (a plate, a box) the two agree better.
 
 ## The model
 
