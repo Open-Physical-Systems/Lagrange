@@ -125,8 +125,8 @@ class "ThermalMaterialAPI_1" (
     )
     double thermal:material:conductivityAlong (
         lagrangeUnit = "W/(m.K)"
-        doc = """Conductivity along axis, when it differs (a circuit board's copper planes, carbon
-        fibre plies). Unauthored: the material is isotropic."""
+        doc = """Conductivity along axis, when it differs (through a circuit board or a carbon
+        laminate; conductivity is then the in-plane value). Unauthored: isotropic."""
     )
     double3 thermal:material:axis = (0, 0, 1) (
         lagrangeUnit = "1"

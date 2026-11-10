@@ -746,11 +746,11 @@ gives every number; an authored number overrides it.
 | Attribute | Type | Unit | Fallback | Meaning |
 |---|---|---|---|---|
 | `thermal:material:preset` | token | — | `""` | A row of the cited preset table, e.g. `aluminium_6061`, `fr4`, `pla` |
-| `thermal:material:conductivity` | double | W/(m·K) | — | `k` (across `axis` when `conductivityAlong` is given) |
+| `thermal:material:conductivity` | double | W/(m·K) | — | `k` (in the two directions across `axis` when `conductivityAlong` is given) |
 | `thermal:material:density` | double | kg/m³ | — | `ρ` |
 | `thermal:material:specificHeat` | double | J/(kg·K) | — | `c_p` |
 | `thermal:material:emissivity` | double | 1 | — | Of its surfaces, 0 to 1 |
-| `thermal:material:conductivityAlong` | double | W/(m·K) | — | Along `axis` (copper planes, carbon plies); unauthored: isotropic |
+| `thermal:material:conductivityAlong` | double | W/(m·K) | — | Along `axis` (through a board or a laminate); unauthored: isotropic |
 | `thermal:material:axis` | double3 | 1 | `(0, 0, 1)` | In the link's frame |
 | `thermal:material:contactConductance` | double | W/(m²·K) | — | Where it touches its parent link; unauthored: no conduction across |
 | `thermal:material:initialTemperature` | double | K | — | Unauthored: the ambient |
@@ -785,7 +785,7 @@ In a URDF, on the link (read by the server and `lagrange_import`, which writes t
 
 ```xml
 <gazebo reference="led_board">
-  <thermal_material preset="fr4" conductivity_along="20" axis="1 0 0" contact_conductance="3000"/>
+  <thermal_material preset="fr4" conductivity="20" conductivity_along="0.3" axis="0 0 1" contact_conductance="3000"/>
   <heat_source name="led_1" power="3.0" efficiency="0.35" xyz="0.01 0 0.0016" size="0.003 0.003 0.001"/>
   <heat_source name="driver" power_signal="motor/left/loss_power"/>
 </gazebo>

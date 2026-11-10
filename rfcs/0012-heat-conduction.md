@@ -84,7 +84,7 @@ two parts do not exchange heat by conduction, and the start logs which touching 
 
 ```xml
 <gazebo reference="led_board">
-  <thermal_material preset="fr4" conductivity_along="20" axis="0 0 1" contact_conductance="3000"/>
+  <thermal_material preset="fr4" conductivity="20" conductivity_along="0.3" axis="0 0 1" contact_conductance="3000"/>
   <heat_source name="led_1" power="3.0" efficiency="0.35" xyz="0.01 0 0.0016" size="0.003 0.003 0.001"/>
   <heat_source name="driver" power="0.4" xyz="-0.01 0 0.0016" size="0.004 0.004 0.001"/>
 </gazebo>

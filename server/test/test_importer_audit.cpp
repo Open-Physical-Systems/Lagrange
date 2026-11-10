@@ -250,6 +250,39 @@ TEST(ThermalMaterials, AUrdfLinksMaterialAndHeatSourcesReachTheWorldAndUsd) {
     check(back->world);
 }
 
+// RFC 0012 end to end: a URDF's LED board on an aluminium heat sink heats in the server's run
+// (the conduction fidelity, started because a link has a thermal material).
+TEST(ThermalMaterials, AUrdfLedBoardHeatsInTheServer) {
+    const std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                       ("lagrange_led_" + std::to_string(::getpid()) + ".urdf");
+    std::ofstream(path) << R"(<?xml version="1.0"?><robot name="lamp">
+<link name="sink"><collision><geometry><box size="0.05 0.05 0.005"/></geometry></collision>
+<inertial><mass value="0.034"/><inertia ixx="1e-5" iyy="1e-5" izz="1e-5" ixy="0" ixz="0" iyz="0"/></inertial></link>
+<link name="board"><collision><geometry><box size="0.04 0.04 0.0016"/></geometry></collision>
+<inertial><mass value="0.005"/><inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" ixz="0" iyz="0"/></inertial></link>
+<joint name="board_joint" type="fixed"><parent link="sink"/><child link="board"/><origin xyz="0 0 0.0033"/></joint>
+<gazebo reference="sink"><thermal_material preset="aluminium_6061" emissivity="0.85"/></gazebo>
+<gazebo reference="board">
+  <thermal_material preset="fr4" contact_conductance="3000"/>
+  <heat_source name="led_1" power="3.0" efficiency="0.35" xyz="0 0 0.0005" size="0.003 0.003 0.001"/>
+</gazebo>
+</robot>)";
+    ServerOptions o = dropped(path.string(), "mujoco");
+    o.ambientTemperatureK = 298.15;
+    Server server(o);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{60'000'000'000}).ok());  // a minute
+    const double led = server.read("thermal/led_1/temperature").at(0);
+    const double board = server.read("thermal/board/temperature").at(0);
+    const double sink = server.read("thermal/sink/temperature").at(0);
+    std::printf("after a minute: LED %.1f K, board %.1f K, sink %.1f K\n", led, board, sink);
+    EXPECT_GT(led, board);
+    EXPECT_GT(board, sink);
+    EXPECT_GT(sink, 298.15 + 0.5);
+    EXPECT_NEAR(server.read("thermal/led_1/heat").at(0), 1.95, 1e-9);
+}
+
 TEST(MeshColliders, AUrdfMeshCollidesOnBothEngines) {
     std::vector<Triangle> box;
     addBox(box, {-0.2F, -0.2F, -0.1F}, {0.2F, 0.2F, 0.1F});

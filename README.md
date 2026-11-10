@@ -192,13 +192,14 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Physics reference (17)</summary>
+<details><summary>Physics reference (18)</summary>
 
 - [Aerodynamics: drag, wind and the wind tunnel](docs/physics/aerodynamics.md)
 - [Battery](docs/physics/battery.md)
 - [Downwash](docs/physics/downwash.md)
 - [The electrical network: buses, converters and the parts between them](docs/physics/electrical-network.md)
 - [EMI and radio links](docs/physics/emi-and-radio.md)
+- [Heat conduction in solids](docs/physics/heat-conduction.md)
 - [Humans: people who walk](docs/physics/humans.md)
 - [Physics reference](docs/physics/index.md)
 - [Motors](docs/physics/motors.md)

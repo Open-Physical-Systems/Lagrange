@@ -214,6 +214,22 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                 }
                 settings.emiCoupling = coupling;
             }
+            if (name == "thermal") {
+                for (const char* key : {"cell", "max_cells", "surface_coefficient"}) {
+                    if (domain.contains(key) && domain[key].is_number()) {
+                        settings.thermal[key] = domain[key].as<double>();
+                    }
+                }
+                if (domain.contains("fidelity") && domain["fidelity"].is_string()) {
+                    const std::string fidelity = domain["fidelity"].as<std::string>();
+                    if (fidelity != "lumped" && fidelity != "conduction") {
+                        error(check, at + "/fidelity",
+                              "the thermal fidelity is lumped or conduction");
+                    } else {
+                        settings.thermal["fidelity"] = fidelity;
+                    }
+                }
+            }
             if (name == "rotor_aero") {
                 for (const char* key : {"inflow_time_constant", "speed_of_sound"}) {
                     if (domain.contains(key) && domain[key].is_number()) {

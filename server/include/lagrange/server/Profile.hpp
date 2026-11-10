@@ -55,6 +55,9 @@ struct ProfileSettings {
     /// domains.rotor_aero but the air density: fidelity, ground_effect, inflow_time_constant,
     /// speed_of_sound, as the module's config takes them.
     std::map<std::string, ConfigValue, std::less<>> rotorAero;
+    /// domains.thermal: fidelity (lumped, conduction), cell, max_cells, surface_coefficient
+    /// (RFC 0012), as the conduction module's config takes them.
+    std::map<std::string, ConfigValue, std::less<>> thermal;
     /// domains.weather: the site and effects keys, as the weather module's config takes them.
     std::map<std::string, ConfigValue, std::less<>> weather;
     /// domains.emi.coupling: the victims the EMI domain disturbs (all when absent).
