@@ -278,6 +278,28 @@ TEST(Conduction, NaturalConvectionCoefficients) {
     EXPECT_LT(forced, 30.0);
 }
 
+// A convex part alone sees all of its surroundings; two plates 2 mm apart face each other on
+// their inner sides, which see only the strip between them at the edges.
+TEST(Conduction, FacesThatSeeEachOtherRadiateLess) {
+    SolidPart plate;
+    plate.name = "plate";
+    plate.shapes = {box(0.02, 0.02, 0.001)};
+    plate.material = {167.0, 2700.0, 896.0, 0.9, std::nullopt};
+    plate.initialTemperature = kAir;
+    plate.cell = 0.001;
+    const ConductionModel alone = build({plate});
+    EXPECT_NEAR(alone.skyView(0), 1.0, 1e-12);
+    SolidPart other = plate;
+    other.name = "other";
+    other.rest.position = {0.0, 0.0, 0.004};  // 2 mm gap
+    const ConductionModel pair = build({plate, other});
+    // Of each plate's area, about half faces the other (its inner side), which sees a sliver:
+    // the share it sees falls from 1 to a little over a half.
+    std::printf("sky view: alone %.3f, facing another %.3f\n", alone.skyView(0), pair.skyView(0));
+    EXPECT_LT(pair.skyView(0), 0.65);
+    EXPECT_GT(pair.skyView(0), 0.5);
+}
+
 TEST(Conduction, IsBitReproducible) {
     const auto once = [] {
         SolidPart plate;

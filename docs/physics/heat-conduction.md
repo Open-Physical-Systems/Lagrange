@@ -180,13 +180,12 @@ mesh, converged by iteration 1200 of 2500):
 
 | | OpenFOAM | Lagrange (correlations) | Lagrange (h = 4.5) |
 |---|---|---|---|
-| sink, mean | 334.5 K | 315.1 K | 320.3 K |
-| LED, case | 360.2 K | 342.5 K | 348.2 K |
+| sink, mean | 334.5 K | 317.6 K | 325.3 K |
+| LED, case | 360.2 K | 344.8 K | 352.9 K |
 
-Radiation takes about a third of the rise off in both (OpenFOAM 55 to 36 K over the air, Lagrange
-27 to 17 K), but Lagrange's faces each radiate to the whole surroundings, and between fins they
-see each other instead: no view factors yet. So for a finned shape Lagrange is cool on both
-counts, convection and radiation; for open shapes (a plate, a box) the two agree better.
+Radiation takes about a third of the rise off in both (OpenFOAM 55 to 36 K over the air). Each
+of Lagrange's faces radiates in the share of its surroundings it sees (below); without that share
+the sink read 320.3 K with h = 4.5, 14 K under OpenFOAM's, now 9 K, the rest the convection's.
 
 ## The model
 
@@ -209,8 +208,12 @@ Bergquist Gap Pad 2500 data sheet). Touching links without one exchange nothing,
 logs the pair.
 
 **Surfaces.** Every other outside face loses $h\,A\,(T - T_{air})$ and
-$\varepsilon\sigma A (T^2 + T_{sky}^2)(T + T_{sky})(T - T_{sky})$, the radiation exact at the
-cell's temperature of the last step. The film coefficient $h$ comes from the link's mean surface
+$F\,\varepsilon\sigma A (T^2 + T_{sky}^2)(T + T_{sky})(T - T_{sky})$, the radiation exact at the
+cell's temperature of the last step, with $F$ the share of the surroundings the face sees: of 16
+fixed cosine-weighted directions over its hemisphere, those that leave every part's solid behind
+(rest poses). What a face sees of another face, between fins, is about its own temperature, and
+its net exchange is left out. A convex part alone has $F = 1$; two plates 2 mm apart see 0.59 of
+theirs (`FacesThatSeeEachOtherRadiateLess`). The film coefficient $h$ comes from the link's mean surface
 temperature and its size as it sits now:
 
 - vertical faces: Churchill and Chu, $Nu = \{0.825 + 0.387\,Ra^{1/6}/[1 + (0.492/Pr)^{9/16}]^{8/27}\}^2$
