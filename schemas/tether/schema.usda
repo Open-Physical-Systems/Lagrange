@@ -1,0 +1,98 @@
+#usda 1.0
+(
+    """Lagrange tether schemas (RFC 0011). Codeless. TetherAPI_1 makes a prim the anchor of a
+    cable (a ground station's winch outlet) whose far end is tied to a body: the tether domain
+    simulates the cable and pulls on the body."""
+    subLayers = [ @usd/schema.usda@ ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "lagrangeTether"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+    }
+)
+{
+}
+
+class "TetherAPI_1" (
+    inherits = </APISchemaBase>
+    doc = """A cable (RFC 0011) from this prim's origin, the anchor (on the world, a fixed body or
+    a moving one), to a point on another body. Simulated as point masses about segmentLength
+    apart: it sags, drags in the wind, catches on scenery and itself, and pulls on both ends."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double3 tether:anchorPoint = (0, 0, 0) (
+        lagrangeUnit = "m"
+        doc = """The anchor in this prim's frame (on the world: a world position). Lets an
+        overlay, whose new prims have no pose, place a ground station."""
+    )
+    rel tether:attach (
+        doc = "The body (link) the far end is tied to. Required."
+    )
+    double3 tether:attachPoint = (0, 0, 0) (
+        lagrangeUnit = "m"
+        doc = "Where on that body, in its frame."
+    )
+    double tether:length = 0 (
+        lagrangeUnit = "m"
+        doc = "Length paid out at the start. Required (over 0)."
+    )
+    double tether:diameter = 0.005 (
+        lagrangeUnit = "m"
+        doc = "Outer diameter: for contact, drag and drawing."
+    )
+    double tether:linearDensity = 0.02 (
+        lagrangeUnit = "kg/m"
+        doc = "Mass per metre."
+    )
+    double tether:axialStiffness = 20000 (
+        lagrangeUnit = "N"
+        doc = "EA: tension per unit strain."
+    )
+    double tether:dampingRatio = 0.05 (
+        lagrangeUnit = "1"
+        doc = "Axial damping, as a share of critical for one segment."
+    )
+    double tether:bendStiffness = 0 (
+        lagrangeUnit = "N.m2"
+        doc = "EI. A limp power tether is 0; a small value keeps it from kinking."
+    )
+    double tether:friction = 0.4 (
+        lagrangeUnit = "1"
+        doc = "Coulomb friction on scenery, bodies and itself."
+    )
+    double tether:dragCoeff = 1.2 (
+        lagrangeUnit = "1"
+        doc = "Normal drag coefficient of the cable as a cylinder; tangential is 1/50 of it."
+    )
+    double tether:segmentLength = 0.2 (
+        lagrangeUnit = "m"
+        doc = "Target spacing of the point masses."
+    )
+    uniform token tether:winch = "fixed" (
+        allowedTokens = ["fixed", "tension", "free"]
+        doc = """fixed: the length stays; tension: the winch pays out or reels in to keep
+        winchTension at the anchor; free: it pays out whatever is pulled, reels nothing in."""
+    )
+    double tether:winchTension = 5 (
+        lagrangeUnit = "N"
+        doc = "Set point of winch tension."
+    )
+    double tether:winchSpeed = 1 (
+        lagrangeUnit = "m/s"
+        doc = "Most the winch pays out or reels in."
+    )
+    double tether:maxLength = 0 (
+        lagrangeUnit = "m"
+        doc = "The drum's end: the winch pays out no further. 0: length."
+    )
+    double tether:resistancePerLength = 0 (
+        lagrangeUnit = "ohm/m"
+        doc = "Both conductors, round trip. Not simulated yet (RFC 0011, non-goals)."
+    )
+}

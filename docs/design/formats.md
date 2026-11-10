@@ -692,6 +692,49 @@ illustrative), and every driving, biking, parking or sidewalk lane becomes a `Ro
 prim with its links. The surfaces have no colliders: they lie 1 cm above the ground plane that
 the loader adds, so roads with elevation are drawn but not yet driven on.
 
+### 3.12 `schemas/tether/schema.usda`
+
+Added in 1.x by RFC 0011 and simulated by the tether domain (`modules/tether/`).
+
+**`TetherAPI_1`** (single-apply). The prim's origin is the anchor, such as a ground station's winch
+outlet. It can sit on the world, a fixed body or a moving body.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `tether:anchorPoint` | double3 | m | `(0, 0, 0)` | The anchor in the prim's frame; on the world, a world position |
+| `tether:attach` | rel | — | — | The body (link) the far end is tied to. Required |
+| `tether:attachPoint` | double3 | m | `(0, 0, 0)` | Where on that body, in its frame |
+| `tether:length` | double | m | `0` | Length paid out at the start. Required, over 0 |
+| `tether:diameter` | double | m | `0.005` | For contact, drag and drawing |
+| `tether:linearDensity` | double | kg/m | `0.02` | Mass per metre |
+| `tether:axialStiffness` | double | N | `20000` | EA |
+| `tether:dampingRatio` | double | 1 | `0.05` | Axial damping, a share of critical per segment |
+| `tether:bendStiffness` | double | N·m² | `0` | EI |
+| `tether:friction` | double | 1 | `0.4` | Coulomb, on scenery, bodies and itself |
+| `tether:dragCoeff` | double | 1 | `1.2` | Normal; tangential is 1/50 of it |
+| `tether:segmentLength` | double | m | `0.2` | Spacing of the point masses |
+| `tether:winch` | token | — | `fixed` | `fixed`, `tension` or `free` |
+| `tether:winchTension` | double | N | `5` | Set point of `tension` |
+| `tether:winchSpeed` | double | m/s | `1` | Most it pays out or reels in |
+| `tether:maxLength` | double | m | `0` | The drum's end; `0` is `length` |
+| `tether:resistancePerLength` | double | ohm/m | `0` | Both conductors, round trip; not simulated yet |
+
+An overlay applies it like any other schema. A new prim has no pose, so `anchorPoint` places the
+station:
+
+```yaml
+apply:
+  - create: ground_station
+    schemas:
+      TetherAPI_1:
+        tether:anchorPoint: [1.0, 0.0, 2.8]
+        tether:attach: base_link
+        tether:length: 20.0
+        tether:diameter: 0.004
+        tether:linearDensity: 0.0235
+        tether:winch: tension
+```
+
 ## 4. Sample robot: differential-drive AMR
 
 `assets/robots/amr_diffdrive/amr_diffdrive.usda`. Geometry is primitive shapes so that the file
