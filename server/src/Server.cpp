@@ -5476,12 +5476,12 @@ struct Server::Impl {
         double hi = 0.0;
         for (std::uint32_t j = 0; j < kSliceHeight; ++j) {
             for (std::uint32_t i = 0; i < kSliceWidth; ++i) {
-                const double u = slice.origin_x() + i * cellM;
-                const double w = slice.origin_y() + j * cellM;
-                fields::Vec3 at{u, w, height};
+                const double across = slice.origin_x() + i * cellM;
+                const double up = slice.origin_y() + j * cellM;
+                fields::Vec3 at{across, up, height};
                 if (vertical) {
-                    at = alongY ? fields::Vec3{slice.height_m(), u, w}
-                                : fields::Vec3{u, slice.height_m(), w};
+                    at = alongY ? fields::Vec3{slice.height_m(), across, up}
+                                : fields::Vec3{across, slice.height_m(), up};
                 }
                 if (flux) {
                     // |B| RMS: alternating sources add in power (as incoherent ones would), direct
