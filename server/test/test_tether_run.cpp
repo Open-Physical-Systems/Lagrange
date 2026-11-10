@@ -4,8 +4,12 @@
 #include "lagrange/server/Server.hpp"
 
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <numbers>
+#include <sstream>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -92,6 +96,51 @@ TEST(TetherRun, OffThereIsNoCableAndNoPull) {
     EXPECT_EQ(server.read("tether/tether_0/tension_attach").at(0), 0.0);
     EXPECT_TRUE(server.read("tether/tether_0/nodes").empty());
     EXPECT_TRUE(server.read("body/base_link/wrench/tether").empty());
+}
+
+// From an overlay on a URDF robot: `tether:attach: base_link` names the link's own prim, which
+// must resolve to the link's body (the cable's far end at the drone, not at the world origin).
+TEST(TetherRun, AnOverlayTiesItToAUrdfLink) {
+    // Only the tether: the drone sits where it starts, the cable from the station to it.
+    std::stringstream text;
+    text << R"(schema_version: 1
+apply:
+  - create: tether/station
+    schemas:
+      TetherAPI_1:
+        tether:anchorPoint: [2.0, 0.0, 1.0]
+        tether:attach: base_link
+        tether:attachPoint: [0.0, 0.0, -0.05]
+        tether:length: 3.0
+)";
+    const std::filesystem::path overlay =
+        std::filesystem::temp_directory_path() /
+        ("lagrange_tether_" + std::to_string(::getpid()) + ".overlay.yaml");
+    std::ofstream(overlay) << text.str();
+    ServerOptions o;
+    o.robotPath = LAGRANGE_TEST_QUAD_URDF;
+    o.overlayPath = overlay.string();
+    o.airDensityKgM3 = 1.225;
+    o.ros = false;
+    o.realTimeFactor = 0.0;
+    Server server(o);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{500'000'000}).ok());
+    const std::vector<double> drone = server.read("body/base_link/pose");
+    const std::vector<double> nodes = server.read("tether/station/nodes");
+    std::size_t count = 0;
+    while (3 * count + 2 < nodes.size() && std::isfinite(nodes[3 * count])) {
+        ++count;
+    }
+    ASSERT_GE(count, 2U);
+    const double* end = &nodes[3 * (count - 1)];
+    EXPECT_NEAR(end[0], drone.at(0), 0.02);
+    EXPECT_NEAR(end[1], drone.at(1), 0.02);
+    EXPECT_NEAR(end[2], drone.at(2) - 0.05, 0.02);
+    EXPECT_NEAR(nodes[0], 2.0, 1e-9);  // the anchor, a world point
+    EXPECT_NEAR(nodes[2], 1.0, 1e-9);
+    std::filesystem::remove(overlay);
 }
 
 }  // namespace
