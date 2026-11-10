@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<!-- The lagrange_thermal_probe plugin's test (test_plugins): an LED board on a heat sink, with a
+     contact thermistor on the LED and an infrared thermometer looking down at the board. -->
+<robot name="probes">
+  <link name="sink">
+    <collision><geometry><box size="0.06 0.04 0.004"/></geometry></collision>
+    <inertial><mass value="0.04"/><inertia ixx="1e-5" iyy="1e-5" izz="1e-5" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <link name="board">
+    <collision><geometry><box size="0.05 0.03 0.0016"/></geometry></collision>
+    <inertial><mass value="0.005"/><inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <link name="arm">
+    <collision><geometry><box size="0.01 0.01 0.002"/></geometry></collision>
+    <inertial><mass value="0.001"/><inertia ixx="1e-7" iyy="1e-7" izz="1e-7" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="board_mount" type="fixed"><parent link="sink"/><child link="board"/><origin xyz="0 0 0.0028"/></joint>
+  <joint name="arm_mount" type="fixed"><parent link="sink"/><child link="arm"/><origin xyz="0 0 0.05"/></joint>
+  <gazebo reference="sink"><thermal_material preset="aluminium_6061" emissivity="0.85"/></gazebo>
+  <gazebo reference="board">
+    <thermal_material preset="fr4" conductivity="20" conductivity_along="0.3" contact_conductance="2000"/>
+    <heat_source name="led_left" power="2.0" efficiency="0.35" xyz="-0.012 0 0.0008" size="0.003 0.003 0.001"/>
+    <sensor name="led_ntc" type="thermistor">
+      <update_rate>10</update_rate>
+      <thermistor><target>led_left</target><time_constant>2.0</time_constant></thermistor>
+    </sensor>
+  </gazebo>
+  <gazebo reference="arm">
+    <sensor name="board_ir" type="ir_thermometer">
+      <pose>0 0 -0.002 0 1.5707963267948966 0</pose>
+      <update_rate>10</update_rate>
+      <ir_thermometer><fov>0.2</fov><range>0.2</range><emissivity>0.95</emissivity><ambient>298.15</ambient></ir_thermometer>
+    </sensor>
+  </gazebo>
+</robot>
