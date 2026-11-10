@@ -124,6 +124,9 @@ public:
     [[nodiscard]] double minimum(std::span<const double> t, std::size_t part) const;
     [[nodiscard]] double sourceMean(std::span<const double> t, std::size_t part,
                                     std::size_t source) const;
+    /// The share of the surroundings a part's outside faces see, area-weighted (radiation goes
+    /// there in that share; 1 for a convex part alone).
+    [[nodiscard]] double skyView(std::size_t part) const;
     /// Conjugate gradient iterations of the last step.
     [[nodiscard]] int iterations() const { return iterations_; }
 
@@ -152,6 +155,7 @@ private:
     // Work arrays, kept between steps.
     std::vector<double> diagonal_, rhs_, residual_, direction_, product_, preconditioned_;
     std::vector<double> faceCoefficient_, faceSky_;
+    std::vector<double> faceView_;  // per face: the share of the surroundings it sees
 };
 
 }  // namespace lagrange::thermal

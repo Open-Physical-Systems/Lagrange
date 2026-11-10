@@ -348,6 +348,91 @@ std::optional<ConductionModel> ConductionModel::build(std::vector<SolidPart> par
         }
     }
     m.facesFirst_[m.parts_.size()] = m.faces_.size();
+    // How much of the surroundings each outside face sees: the share of a fixed set of
+    // cosine-weighted directions over its hemisphere that leave every part's solid behind (rest
+    // poses). Radiation goes to the surroundings in that share; the rest meets another face of
+    // about its temperature (between fins), so its net exchange is left out.
+    {
+        Vec3 lo{1e300, 1e300, 1e300};
+        Vec3 hi{-1e300, -1e300, -1e300};
+        double step = 1e300;
+        for (std::size_t q = 0; q < m.parts_.size(); ++q) {
+            const Grid& g = m.grids_[q];
+            step = std::min(step, 0.5 * g.cell);
+            for (int corner = 0; corner < 8; ++corner) {
+                const Vec3 local{g.origin[0] + ((corner & 1) != 0 ? g.dims[0] * g.cell : 0.0),
+                                 g.origin[1] + ((corner & 2) != 0 ? g.dims[1] * g.cell : 0.0),
+                                 g.origin[2] + ((corner & 4) != 0 ? g.dims[2] * g.cell : 0.0)};
+                const Vec3 w =
+                    add(m.parts_[q].rest.position, rotate(m.parts_[q].rest.orientation, local));
+                for (int i = 0; i < 3; ++i) {
+                    lo[i] = std::min(lo[i], w[i]);
+                    hi[i] = std::max(hi[i], w[i]);
+                }
+            }
+        }
+        const auto inside = [&](const Vec3& w) {
+            if (w[0] < lo[0] || w[1] < lo[1] || w[2] < lo[2] || w[0] > hi[0] || w[1] > hi[1] ||
+                w[2] > hi[2]) {
+                return false;  // out of every part's box: free
+            }
+            for (std::size_t q = 0; q < m.parts_.size(); ++q) {
+                if (cellOf(q, w) >= 0) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        const double reach = std::sqrt(dot(sub(hi, lo), sub(hi, lo)));
+        // Directions in a face's frame, cosine-weighted (Malley's method on a Fibonacci disc):
+        // the same for every face, so a run is bit-reproducible.
+        constexpr int kRays = 16;
+        std::array<Vec3, kRays> rays{};
+        for (int k = 0; k < kRays; ++k) {
+            const double r = std::sqrt((k + 0.5) / kRays);
+            const double a = k * 2.399963229728653;  // the golden angle, rad
+            rays[static_cast<std::size_t>(k)] = {r * std::cos(a), r * std::sin(a),
+                                                 std::sqrt(std::max(0.0, 1.0 - r * r))};
+        }
+        m.faceView_.assign(m.faces_.size(), 1.0);
+        for (std::size_t p = 0; p < m.parts_.size(); ++p) {
+            const Pose& rest = m.parts_[p].rest;
+            const double cell = m.grids_[p].cell;
+            for (std::size_t f = m.facesFirst_[p]; f < m.facesFirst_[p + 1]; ++f) {
+                const Face& face = m.faces_[f];
+                const auto& d = kDirections[face.direction];
+                const Vec3 n = rotate(rest.orientation,
+                                      Vec3{static_cast<double>(d[0]), static_cast<double>(d[1]),
+                                           static_cast<double>(d[2])});
+                const Vec3 helper =
+                    std::abs(n[2]) < 0.9 ? Vec3{0.0, 0.0, 1.0} : Vec3{1.0, 0.0, 0.0};
+                Vec3 u{helper[1] * n[2] - helper[2] * n[1], helper[2] * n[0] - helper[0] * n[2],
+                       helper[0] * n[1] - helper[1] * n[0]};
+                const double un = std::sqrt(dot(u, u));
+                u = {u[0] / un, u[1] / un, u[2] / un};
+                const Vec3 v{n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2],
+                             n[0] * u[1] - n[1] * u[0]};
+                const Vec3 start =
+                    add(rest.position,
+                        rotate(rest.orientation,
+                               add(m.centres_.empty() ? centres[face.cell] : m.centres_[face.cell],
+                                   Vec3{0.5 * cell * d[0], 0.5 * cell * d[1], 0.5 * cell * d[2]})));
+                int free = 0;
+                for (const Vec3& ray : rays) {
+                    const Vec3 dir{ray[0] * u[0] + ray[1] * v[0] + ray[2] * n[0],
+                                   ray[0] * u[1] + ray[1] * v[1] + ray[2] * n[1],
+                                   ray[0] * u[2] + ray[1] * v[2] + ray[2] * n[2]};
+                    bool blocked = false;
+                    for (double t = step; t < reach && !blocked; t += step) {
+                        blocked = inside(
+                            {start[0] + dir[0] * t, start[1] + dir[1] * t, start[2] + dir[2] * t});
+                    }
+                    free += blocked ? 0 : 1;
+                }
+                m.faceView_[f] = static_cast<double>(free) / kRays;
+            }
+        }
+    }
     for (const auto& [a, b] : untold) {
         notes.push_back(m.parts_[a].name + " and " + m.parts_[b].name +
                         " touch but exchange no heat: give the child link "
@@ -486,7 +571,7 @@ void ConductionModel::step(std::span<double> t, std::span<const PartInput> input
             const double hr =
                 eps * kStefanBoltzmann * (tc * tc + around.sky * around.sky) * (tc + around.sky);
             faceCoefficient_[f] = h * face.area;
-            faceSky_[f] = hr * face.area;
+            faceSky_[f] = hr * face.area * faceView_[f];
             diagonal_[face.cell] += faceCoefficient_[f] + faceSky_[f];
             rhs_[face.cell] += faceCoefficient_[f] * around.air + faceSky_[f] * around.sky;
             // The sun, overhead, on the faces looking up: a grey body absorbs as it emits.
@@ -557,6 +642,16 @@ void ConductionModel::step(std::span<double> t, std::span<const PartInput> input
         }
         heatOut_[p] = out;
     }
+}
+
+double ConductionModel::skyView(std::size_t part) const {
+    double area = 0.0;
+    double seen = 0.0;
+    for (std::size_t f = facesFirst_.at(part); f < facesFirst_.at(part + 1); ++f) {
+        area += faces_[f].area;
+        seen += faces_[f].area * faceView_[f];
+    }
+    return area > 0.0 ? seen / area : 1.0;
 }
 
 double ConductionModel::mean(std::span<const double> t, std::size_t part) const {
