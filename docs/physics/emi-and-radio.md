@@ -88,7 +88,10 @@ disturbed horizontal field less the heading from the Earth's) and `sensor/<n>/in
 bus's bit-error rate, each radio link's SNR and loss. A straight lead from the battery to a
 motor is the simplest route; a real harness is authored as `wire` prims with its own path. The
 switching noise of the drives on GNSS and radios is not modelled (measured on UAS: C/N0 down by
-up to 10 dB with everything on, Stubbs and Akos, *GPS World*, 2016).
+up to 10 dB with everything on, Stubbs and Akos, *GPS World*, 2016; an industrial drone's
+electronics cut a GPS module's sensitivity by 10 dB, 6 dB in simulation, IEICE technical report,
+2024-08, https://ken.ieice.org/ken/paper/20240806kcEx/eng/, TODO(verify) the geometry and
+source). No published measurement isolates the motor drives, so there is nothing to fit yet.
 
 ## The radio equations
 

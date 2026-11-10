@@ -36,7 +36,8 @@ merged, `[~]` while in progress, and write what is left under it.
 Merged: #300 (schemas), #301 (URDF), #302 (conduction), #303 (viewer cells), #304 (thermal
 probes), #305 (EMI wires, motor leads, Coupled into). Still owed: GNSS and radio noise from PWM
 switching (no general coupling model found, RFC 0013 open question 3); radiation in the
-OpenFOAM case; the inspector's per-link min/max.
+OpenFOAM case; a finer OpenFOAM mesh (about 4 million cells) for the sample, whose 203k and 640k
+meshes differ by 16 % in the sink's rise.
 
 ## D. Everything tested
 

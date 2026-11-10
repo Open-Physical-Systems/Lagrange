@@ -157,7 +157,21 @@ trapped: OpenFOAM's effective coefficient is about 4.5 W/(m²·K), the correlati
 the shape matters like this, run `lagrange foam-cht` once and set the run's
 `thermal.surface_coefficient` to what it gives (here about 4.5), or keep the correlations for
 open shapes. With `surface_coefficient: 4.5` Lagrange gives the sink 350.0 K and the LED 378.2 K,
-within 3.2 K and 1.2 K of OpenFOAM's (6 % and 2 % of the rise). One mesh only: a mesh study of the OpenFOAM case is still owed.
+within 3.2 K and 1.2 K of OpenFOAM's on that mesh.
+
+The OpenFOAM case is not yet converged in its mesh (`--cells-through`, the cells through the
+thinnest shape):
+
+| mesh | cells | sink, mean | LED | LED over the sink |
+|---|---|---|---|---|
+| 1 through the board (`0.5`) | 96,000 | the solver fails (warned since) | | |
+| 2 through (`1`, the default) | 203,000 | 353.2 K | 379.4 K | 26.2 K |
+| 4 through (`2`) | 640,000 | 344.5 K | 384.0 K | 39.5 K |
+
+The sink's rise falls 16 % and the LED's hot spot sharpens from the default mesh to the finer
+one, so the 4.5 W/(m²·K) above is an estimate from the default mesh, and the next, about four
+million cells, is owed. Lagrange's own cells (0.8 mm on the board) spread the LED's heat over its
+3 mm box the way the default mesh does.
 
 ## The model
 

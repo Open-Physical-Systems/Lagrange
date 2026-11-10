@@ -68,7 +68,14 @@ def plan(surface: dict, thermal: dict, args: argparse.Namespace) -> dict:
         # Two cells through the thinnest shape (the conduction fidelity's cell is half of it),
         # and args.refine more for the gradients near a heat source.
         target = part["cell"] / args.cells_through
-        levels[part["name"]] = max(1, min(args.max_level, math.ceil(math.log2(base / target))))
+        level = max(1, min(args.max_level, math.ceil(math.log2(base / target))))
+        levels[part["name"]] = level
+        # Fewer than two cells through the thinnest shape (2 × its conduction cell): a sample
+        # with one failed with a floating point exception in the solver.
+        if base / 2**level > part["cell"] * 1.0001:
+            print(f"  {part['name']}: cells of {base / 2**level * 1000:.2f} mm, under two through "
+                  f"its thinnest shape ({2000 * part['cell']:.2f} mm): raise --cells-through or "
+                  "--max-level", file=sys.stderr)  # fmt: skip
     return {"low": box_low, "high": box_high, "cells": cells, "base": base, "levels": levels}
 
 

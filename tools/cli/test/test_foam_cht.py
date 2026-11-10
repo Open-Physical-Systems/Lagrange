@@ -96,3 +96,13 @@ def test_it_reads_the_last_temperatures_back(tmp_path: Path) -> None:
     assert result["parts"]["sink"] == {"mean": 310.5, "max": 311.0, "min": 310.0}
     assert result["parts"]["board"]["max"] == 340.0
     assert result["sources"]["led"] == 338.0
+
+
+def test_a_mesh_too_coarse_for_a_part_is_told(tmp_path: Path) -> None:
+    robot = tmp_path / "lamp.urdf"
+    robot.write_text(ROBOT)
+    case = tmp_path / "case"
+    command = [str(CLI / "lagrange"), "foam-cht", str(robot), "--ambient", "298.15",
+               "--out", str(case), "--write-only", "--cells-through", "0.5"]  # fmt: skip
+    done = subprocess.run(command, check=True, capture_output=True, text=True, timeout=120)
+    assert "under two through" in done.stderr
