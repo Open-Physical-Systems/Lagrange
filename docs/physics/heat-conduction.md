@@ -63,7 +63,7 @@ For the steady temperatures alone, at rest and without physics, in a second or t
 
 ```bash
 lagrange heat --robot assets/robots/led_heatsink/led_heatsink.urdf --world none \
-    --ambient-temperature 298.15 [--surface-coefficient 4.5]
+    --ambient-temperature 298.15 [--surface-coefficient H]
 ```
 
 prints each link's mean, max and min and each source's temperature, and the heat in and out. A
@@ -153,49 +153,41 @@ files only. `--radiation` adds surface radiation through the air by discrete ord
 ambient. Without it, compare it with a run whose emissivities are 0.
 
 **The sample against OpenFOAM** (2026-11-11; `led_heatsink.urdf` with its emissivities set to
-0, 298.15 K, 203,000 cells, 8 processes, converged by iteration 1100 of 4000 and steady to 0.01 K
-after; Lagrange run for an hour of simulated time to steady state, 3.000 W in and out):
-
-| | OpenFOAM | Lagrange | |
-|---|---|---|---|
-| sink, mean | 353.2 K | 325.5 K | the air takes the heat half as well in OpenFOAM |
-| board, mean | 357.7 K | 330.3 K | |
-| LED, case | 379.4 K | 352.9 K | |
-| LED over the sink | 26.2 K | 27.4 K | conduction inside agrees within 5 % |
-
-Inside the solids the two agree; at the surface they do not. The correlations treat every face
-as a free plate, and this sink has its fins facing down with 14 mm between them, where the air is
-trapped: OpenFOAM's effective coefficient is about 4.5 W/(m²·K), the correlations' about 9. Where
-the shape matters like this, run `lagrange foam-cht` once and set the run's
-`thermal.surface_coefficient` to what it gives (here about 4.5), or keep the correlations for
-open shapes. With `surface_coefficient: 4.5` Lagrange gives the sink 350.0 K and the LED 378.2 K,
-within 3.2 K and 1.2 K of OpenFOAM's on that mesh.
-
-The OpenFOAM case is not yet converged in its mesh (`--cells-through`, the cells through the
-thinnest shape):
+0, 298.15 K; each case run until no temperature moved by 0.01 K; Lagrange run for an hour of
+simulated time to steady state, 3.000 W in and out). The OpenFOAM answer depends strongly on its
+mesh (`--cells-through`, cells through the thinnest shape): the air's thin boundary layer at each
+face is what carries the heat away, and coarse cells smear it into a still layer that insulates.
 
 | mesh | cells | sink, mean | LED | LED over the sink |
 |---|---|---|---|---|
 | 1 through the board (`0.5`) | 96,000 | the solver fails (warned since) | | |
 | 2 through (`1`, the default) | 203,000 | 353.2 K | 379.4 K | 26.2 K |
 | 4 through (`2`) | 640,000 | 344.5 K | 384.0 K | 39.5 K |
+| 8 through (`4`, solids and air under-relaxed 0.7 and 0.5) | 2,490,000 | 325.5 K | 364.0 K | 38.4 K |
+| Lagrange, the correlations | 20,788 | 325.5 K | 352.9 K | 27.4 K |
 
-The sink's rise falls 16 % and the LED's hot spot sharpens from the default mesh to the finer
-one, so the 4.5 W/(m²·K) above is an estimate from the default mesh, and the next, about four
-million cells, is owed. Lagrange's own cells (0.8 mm on the board) spread the LED's heat over its
-3 mm box the way the default mesh does.
+`lagrange foam-cht` now defaults to `--cells-through 4` and those under-relaxations. On the
+finest mesh OpenFOAM's sink sits where Lagrange's correlations put it (325.5 K both, a
+27.4 K rise). Coarser meshes leave the sink up to twice as hot, so a coarse `foam-cht` run is not
+a reference for the film coefficient. Use `--cells-through 4` or more, and check one mesh finer.
+The three meshes do not converge monotonically, so the finest is not shown to be converged
+either. Inside the solids, the LED's hot spot over the sink is 38 K on the two finer meshes
+against Lagrange's 27 K. Lagrange spreads the LED's heat over its 3 mm box on 0.8 mm cells, and
+OpenFOAM's cells under the LED are four to eight times smaller. A smaller `thermal.cell` (with
+`max_cells`) sharpens it in Lagrange.
 
 **With radiation** (the sample at its own emissivities, 0.85 and 0.9; `--radiation`, the default
-mesh, converged by iteration 1200 of 2500):
+mesh only):
 
-| | OpenFOAM | Lagrange (correlations) | Lagrange (h = 4.5) |
-|---|---|---|---|
-| sink, mean | 334.5 K | 317.6 K | 325.3 K |
-| LED, case | 360.2 K | 344.8 K | 352.9 K |
+| | OpenFOAM (203,000 cells) | Lagrange |
+|---|---|---|
+| sink, mean | 334.5 K | 317.6 K |
+| LED, case | 360.2 K | 344.8 K |
 
-Radiation takes about a third of the rise off in both (OpenFOAM 55 to 36 K over the air). Each
-of Lagrange's faces radiates in the share of its surroundings it sees (below); without that share
-the sink read 320.3 K with h = 4.5, 14 K under OpenFOAM's, now 9 K, the rest the convection's.
+Radiation takes about a third of the rise off in both (OpenFOAM 55 to 36 K over the air, Lagrange
+27 to 19 K). On this mesh the convection is under-resolved as above, so the gap is mostly that.
+Each of Lagrange's faces radiates in the share of its surroundings it sees (below). Without that
+share it radiated more from between the fins.
 
 ## The model
 

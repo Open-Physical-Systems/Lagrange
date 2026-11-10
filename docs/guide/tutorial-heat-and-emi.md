@@ -60,9 +60,10 @@ lagrange foam-cht assets/robots/led_heatsink/led_heatsink.urdf --ambient 298.15 
 ```
 
 It writes and runs a `chtMultiRegionSimpleFoam` case (in the OpenFOAM container when none is
-installed) and prints each part's temperature. On this finned sink OpenFOAM's air takes the heat
-about half as well as Lagrange's correlations; set `thermal.surface_coefficient` from it where the
-shape matters (the numbers are in docs/physics/heat-conduction.md).
+installed) and prints each part's temperature. Its answer depends on the mesh. The air's boundary
+layer needs fine cells: on this sink OpenFOAM matches Lagrange's correlations only at
+`--cells-through 4` (2.5 million cells), and coarser meshes read it up to twice as hot. The
+numbers are in docs/physics/heat-conduction.md.
 
 ## 4. The battery leads and the compass
 
