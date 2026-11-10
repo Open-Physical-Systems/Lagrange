@@ -291,6 +291,39 @@ TEST(Cable, ATensionWinchHoldsItsTension) {
     EXPECT_NEAR(holding, p.winchTension, 0.5);
 }
 
+// Laid out through the ground (a sag deeper than the anchor's height): it comes out at about
+// 1 m/s and pulls nothing meanwhile, instead of being shot out with hundreds of newtons.
+TEST(Cable, LaidThroughTheGroundItComesOutSlowly) {
+    CableParams p;
+    p.length = 4.5;
+    Obstacle ground;
+    ground.type = ShapeType::Plane;
+    ground.reach = reachOf(ground.type, {}, nullptr);
+    const std::array<Obstacle, 1> obstacles{ground};
+    const Vec3 anchor{2.5, 0.0, 0.05};
+    const Vec3 attach{0.0, 0.0, 0.13};
+    Cable cable(p, anchor, attach, 0);
+    Air air;
+    double lowest = 0.0;
+    for (const Vec3& n : cable.nodes()) {
+        lowest = std::min(lowest, n[2]);
+    }
+    ASSERT_LT(lowest, -1.0);  // laid deep in it
+    double most = 0.0;
+    for (int i = 0; i < 100; ++i) {
+        cable.step(1e-3, anchor, attach, obstacles, air);
+        most = std::max(most, cable.tensionAttach());
+    }
+    double now = 0.0;
+    for (const Vec3& n : cable.nodes()) {
+        now = std::min(now, n[2]);
+    }
+    std::printf("buried: lowest %.3f m, after 0.1 s %.3f m, most tension %.3f N\n", lowest, now,
+                most);
+    EXPECT_NEAR(now - lowest, 0.1, 0.02);  // 1 m/s
+    EXPECT_LT(most, 1.0);
+}
+
 TEST(Cable, TheSameRunGivesTheSameNumbers) {
     const auto run = [] {
         CableParams p;

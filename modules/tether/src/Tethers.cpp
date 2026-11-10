@@ -250,7 +250,10 @@ Status Tethers::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
     if (zero_) {
         return {};
     }
-    // Lay each cable out between its ends where the world puts them at the start.
+    // A cable between its ends at their rest poses, until the first step lays it out where the
+    // bodies are.
+    laid_.assign(specs_.size(), false);
+    robotsOfEnds_.clear();
     for (std::size_t k = 0; k < specs_.size(); ++k) {
         const TetherSpec& t = specs_[k];
         const auto at = [&](BodyId b, const Vec3& local) {
@@ -264,6 +267,7 @@ Status Tethers::init(const WorldView&, const ModuleConfig&, SignalBus& bus) {
             return movingIndex(b) >= 0 ? static_cast<int>(robotOfBody_.at(b.index)) : -1;
         };
         cables_[k].setEndRobots(robotOf(t.anchorBody), robotOf(t.attachBody));
+        robotsOfEnds_.push_back({robotOf(t.anchorBody), robotOf(t.attachBody)});
         const Out& o = out_[k];
         bus.write(o.length, cables_[k].length());
         bus.write(o.winchSpeed, 0.0);
@@ -345,6 +349,11 @@ Status Tethers::step(const StepContext& context, SignalBus& bus) {
         const Pose attachPose = bodyPose(t.attachBody, bus);
         const Vec3 anchor = pointIn(anchorPose, t.anchorInBody);
         const Vec3 attach = pointIn(attachPose, t.attachInBody);
+        if (!laid_[k]) {
+            cable = Cable(t.params, anchor, attach, bodies_.size());
+            cable.setEndRobots(robotsOfEnds_[k][0], robotsOfEnds_[k][1]);
+            laid_[k] = true;
+        }
         cable.step(dt, anchor, attach, obstacles_, air);
         // What the cable did to the bodies: contact pushes, the pull at each end.
         const auto pushes = cable.pushes();
@@ -402,6 +411,7 @@ Status Tethers::restoreState(StateReader& reader) {
             return Status::error(StatusCode::Internal, "tether: state does not fit the cable");
         }
     }
+    laid_.assign(cables_.size(), true);
     return {};
 }
 

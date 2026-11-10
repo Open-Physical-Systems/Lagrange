@@ -519,11 +519,75 @@ public:
         textures_.record(commands);
         buildSensorOverlays();
         buildAirflow();
+        buildCables();
         followWeather();
         overlays_.clear();
+        overlays_.insert(overlays_.end(), cableOverlays_.begin(), cableOverlays_.end());
         overlays_.insert(overlays_.end(), sensorOverlays_.begin(), sensorOverlays_.end());
         overlays_.insert(overlays_.end(), airflowOverlays_.begin(), airflowOverlays_.end());
         renderer_.render(commands, scene_.get(), camera_, renderOptions_, overlays_);
+    }
+
+    /// Every cable of the scene (RFC 0011) as scene geometry, always: its centre line, and at
+    /// its radius four lines along it, so that it reads as a tube up close and stays a line
+    /// (at least a pixel) far away.
+    void buildCables() {
+        // A black rubber jacket: the colour of the object, not a UI token.
+        constexpr std::array<float, 4> kCableColour{0.09F, 0.09F, 0.10F, 1.0F};
+        const std::size_t count = scene_ ? scene_->cables.size() : 0;
+        cableOverlays_.resize(count);
+        for (std::size_t c = 0; c < count; ++c) {
+            const CableLine& cable = scene_->cables[c];
+            OverlayLines& lines = cableOverlays_[c];
+            lines.color = kCableColour;
+            lines.vertices.clear();  // keeps its capacity
+            if (cable.points.size() < 2) {
+                continue;
+            }
+            lines.origin = cable.points[0];
+            const auto local = [&](const std::array<double, 3>& p,
+                                   const std::array<double, 3>& by) {
+                for (std::size_t a = 0; a < 3; ++a) {
+                    lines.vertices.push_back(
+                        static_cast<float>(p.at(a) - lines.origin.at(a) + by.at(a)));
+                }
+            };
+            const double r = cable.radius;
+            for (std::size_t i = 0; i + 1 < cable.points.size(); ++i) {
+                const auto& a = cable.points[i];
+                const auto& b = cable.points[i + 1];
+                std::array<double, 3> t{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+                const double l = std::hypot(t[0], t[1], t[2]);
+                if (l <= 0.0) {
+                    continue;
+                }
+                for (double& v : t) {
+                    v /= l;
+                }
+                // Two directions across the segment.
+                const std::array<double, 3> helper = std::abs(t[2]) < 0.9
+                                                         ? std::array<double, 3>{0.0, 0.0, 1.0}
+                                                         : std::array<double, 3>{1.0, 0.0, 0.0};
+                std::array<double, 3> u{t[1] * helper[2] - t[2] * helper[1],
+                                        t[2] * helper[0] - t[0] * helper[2],
+                                        t[0] * helper[1] - t[1] * helper[0]};
+                const double ul = std::hypot(u[0], u[1], u[2]);
+                for (double& v : u) {
+                    v /= ul;
+                }
+                const std::array<double, 3> w{t[1] * u[2] - t[2] * u[1], t[2] * u[0] - t[0] * u[2],
+                                              t[0] * u[1] - t[1] * u[0]};
+                local(a, {0.0, 0.0, 0.0});
+                local(b, {0.0, 0.0, 0.0});
+                for (const auto& side : {u, w}) {
+                    for (const double s : {r, -r}) {
+                        const std::array<double, 3> by{side[0] * s, side[1] * s, side[2] * s};
+                        local(a, by);
+                        local(b, by);
+                    }
+                }
+            }
+        }
     }
 
     /// The run's weather for the realistic view: wind and rain from the environment, snow from
@@ -939,6 +1003,7 @@ private:
     std::vector<std::pair<std::uint32_t, std::shared_ptr<SensorStream>>> lidars_;  // prim, frames
     std::vector<OverlayLines> sensorOverlays_;
     std::vector<OverlayLines> airflowOverlays_;
+    std::vector<OverlayLines> cableOverlays_;  // the scene's cables (RFC 0011)
     std::shared_ptr<const SignalCatalog> snowCatalog_;
     std::shared_ptr<ScopeBuffer> snowRate_, snowCover_;
     std::vector<OverlayLines> overlays_;  // both, as drawn

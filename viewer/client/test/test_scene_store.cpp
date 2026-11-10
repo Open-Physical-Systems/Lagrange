@@ -191,6 +191,36 @@ TEST(SceneBuilder, DeltaMovesOnlyItsPrimsAndSharesStatics) {
     EXPECT_DOUBLE_EQ(before->transforms[1].position[0], 4.5e5);  // old frame is unchanged
 }
 
+// RFC 0011: a delta carries every cable; a malformed one rejects the delta whole.
+TEST(SceneBuilder, DeltaCarriesCables) {
+    SceneBuilder builder;
+    std::string error;
+    ASSERT_TRUE(builder.applySnapshot(validSnapshot(), error));
+    v1::SceneDelta d = delta(100, 1, 1.0);
+    v1::Overlay& cable = *d.add_overlays();
+    cable.set_kind(v1::Overlay::KIND_CABLE);
+    const double values[7] = {0.002, 0.0, 0.0, 1.0, 2.0, 0.0, 0.5};
+    cable.set_data(std::string(reinterpret_cast<const char*>(values), sizeof(values)));
+    cable.set_count(2);
+    ASSERT_EQ(builder.applyDelta(d), SceneBuilder::DeltaResult::Applied);
+    const auto frame = builder.frame();
+    ASSERT_EQ(frame->cables.size(), 1U);
+    EXPECT_DOUBLE_EQ(frame->cables[0].radius, 0.002);
+    ASSERT_EQ(frame->cables[0].points.size(), 2U);
+    EXPECT_DOUBLE_EQ(frame->cables[0].points[1][0], 2.0);
+    EXPECT_DOUBLE_EQ(frame->cables[0].points[1][2], 0.5);
+    // The next delta without it: the cable is gone (each delta carries them all).
+    ASSERT_EQ(builder.applyDelta(delta(101, 1, 1.0)), SceneBuilder::DeltaResult::Applied);
+    EXPECT_TRUE(builder.frame()->cables.empty());
+    // A count that does not match its data.
+    v1::SceneDelta bad = delta(102, 1, 1.0);
+    v1::Overlay& wrong = *bad.add_overlays();
+    wrong.set_kind(v1::Overlay::KIND_CABLE);
+    wrong.set_data(std::string(reinterpret_cast<const char*>(values), sizeof(values)));
+    wrong.set_count(3);
+    EXPECT_EQ(builder.applyDelta(bad), SceneBuilder::DeltaResult::Invalid);
+}
+
 TEST(SceneBuilder, LostDeltaIsDetected) {
     SceneBuilder builder;
     EXPECT_EQ(builder.applyDelta(delta(1, 0, 0.0)), SceneBuilder::DeltaResult::OutOfSequence);

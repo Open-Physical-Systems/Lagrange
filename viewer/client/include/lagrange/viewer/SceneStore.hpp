@@ -103,9 +103,16 @@ struct SceneStatics {
 };
 
 /// One consistent state of the scene. Immutable.
+/// A cable as the server last drew it (RFC 0011): its radius and centre line, world-local.
+struct CableLine {
+    double radius{0.0};                         // m
+    std::vector<std::array<double, 3>> points;  // m
+};
+
 struct SceneFrame {
     std::shared_ptr<const SceneStatics> statics;
     std::vector<Transform> transforms;  // index == prim id
+    std::vector<CableLine> cables;      // every cable now; each delta carries them all
     std::uint64_t sequence{0};
     std::int64_t simTimeNs{0};
 };
