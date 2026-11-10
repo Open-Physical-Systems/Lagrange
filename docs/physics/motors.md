@@ -33,6 +33,17 @@ $$
 The torque constant in the schema is the peak-amplitude one, $K_t = 1.5\,p\,\lambda$. A brushed
 motor (`dc_brushed`) is the same with one axis: $v = R\,i + L\,di/dt + K_e\,\omega$.
 
+**From a datasheet's KV** (rpm per volt): KV is measured against the bus voltage, which is the
+line-to-line peak back-EMF, √3 times the phase peak this model uses. So
+
+$$
+K_e = p\,\lambda = \frac{60}{2\pi\,\mathrm{KV}\,\sqrt3}\ \mathrm{V\,s/rad}, \qquad K_t = 1.5\,K_e,
+$$
+
+and the no-load speed comes out at $\mathrm{KV} \times V_{bus}$ against the $V_{bus}/\sqrt3$
+limit below. A 920 KV motor has $K_t = 0.008989$ N·m/A. (Without the √3 the motor reaches only
+$1/\sqrt3$ of its rated speed.)
+
 **The drive.** The current loops are PI controllers tuned the way a drive is tuned:
 $K_p = L\,\omega_c$ and $K_i = R\,\omega_c$, a first-order loop of bandwidth $\omega_c$. The
 voltage they ask for is limited to $V_{bus}/\sqrt3$ (space-vector modulation). When it hits

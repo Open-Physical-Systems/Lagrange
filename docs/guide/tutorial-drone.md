@@ -240,11 +240,18 @@ top speed is worked out from the robot itself:
 - It is the speed at which the motor, turning the propeller, runs out of voltage at the
   battery's full charge, or reaches its current limit.
 - It uses the electrical domain's motor model, in steady state.
-- The server logs it per rotor, for example `rotor_1_joint: full output is 809 rad/s
-  (rotor_1_motor on 16.8 V full charge, voltage-limited)`.
+- The server logs it per rotor, for example `rotor_1_joint: full output is 921 rad/s
+  (rotor_1_motor on 16.8 V full charge, current-limited)`.
 
-So a drone of your own needs no tuning here; set the autopilot's hover throttle (`MPC_THR_HOVER`,
-`MOT_THST_HOVER`) near hover speed ÷ top speed, and both learn it in flight. To force a value,
+So a drone of your own needs no tuning here; set the autopilot's hover thrust (`MPC_THR_HOVER`,
+`MOT_THST_HOVER`) near (hover speed ÷ top speed)², which is 1 ÷ the thrust-to-weight ratio, and
+both learn it in flight. Thrust goes with the speed squared, and both autopilots count hover in
+thrust (PX4 with `THR_MDL_FAC 1`, ArduPilot with `MOT_THST_EXPO 1`).
+
+A motor's KV (rpm per volt) gives its constants as `Ke = 60 / (2π · KV · √3)` V·s/rad and
+`Kt = 1.5 · Ke` N·m/A: KV is measured against the bus voltage, which is the line-to-line peak
+back-EMF, while Lagrange's motor model counts the phase peak, √3 smaller, so that the no-load speed
+comes out at KV × V. A 920 KV motor has `Kt = 0.008989`. To force a value,
 give `--mavlink-max-rotor-speed RAD_S`. A robot with no motor prims (or the electrical domain
 off) gets the speed at which the rotors lift twice its weight.
 
