@@ -115,6 +115,7 @@ constexpr std::uint64_t kThermalVolumeEvery = 4;  // volume periods: the cells a
 constexpr std::uint32_t kSliceWidth = 64;         // cells along +X
 constexpr std::uint32_t kSliceHeight = 48;        // cells along +Y
 constexpr double kSliceCell = 0.5;                // m
+constexpr double kSelfEmiSliceCell = 0.04;        // m: a robot's own wiring (RFC 0013)
 // Most simulation time one iteration may compute; beyond it the run falls behind real time
 // instead of freezing the viewer connection.
 constexpr std::int64_t kMaxStepWallNs = 40'000'000;
@@ -2104,6 +2105,28 @@ struct Server::Impl {
             appendPose(data, primPose(prim), false, prim.scale);
         }
         d.set_transform_data(data);
+        // Every wire that is an EMI source (RFC 0013), where it runs now, drawn as a thin cable.
+        if (scheduler && emiRuns()) {
+            for (const emi::Source& s : emiSources()) {
+                if (s.type != emi::Source::Type::Wire || s.path.size() < 2) {
+                    continue;
+                }
+                const Pose pose = emiState(s).pose;
+                std::vector<double> xyz;
+                for (const emi::Vec3& p : s.path) {
+                    const Pose at = compose(pose, Pose{p, {1.0, 0.0, 0.0, 0.0}});
+                    xyz.insert(xyz.end(), at.position.begin(), at.position.end());
+                }
+                constexpr double kDrawnRadius = 0.0015;  // m: a lead, to see where it runs
+                v1::Overlay& overlay = *d.add_overlays();
+                overlay.set_kind(v1::Overlay::KIND_CABLE);
+                overlay.set_count(static_cast<std::uint32_t>(s.path.size()));
+                std::string bytes((1 + xyz.size()) * sizeof(double), '\0');
+                std::memcpy(bytes.data(), &kDrawnRadius, sizeof(double));
+                std::memcpy(bytes.data() + sizeof(double), xyz.data(), xyz.size() * sizeof(double));
+                overlay.set_data(std::move(bytes));
+            }
+        }
         // Every cable (RFC 0011), its radius and its masses where they are now.
         if (scheduler && hasTethers()) {
             std::string problem;
@@ -4009,6 +4032,100 @@ struct Server::Impl {
             s.reals["tether:length"] = std::max(length, 0.05);
             w.schemaInstances.push_back(std::move(s));
         }
+        // Motor leads from --emi-motor-leads (RFC 0013): a wire from the battery to each motor,
+        // on the battery's prim, carrying the motor's bus current, and every magnetometer a
+        // victim.
+        if (options.emiMotorLeads) {
+            World& w = model.world;
+            const WorldView view(w);
+            const std::vector<Pose> rest = restPoses(w);
+            const auto placed = [&](PrimId prim) {
+                const BodyId body = view.primBody(prim);
+                const Pose at = view.primPoseInBody(prim);
+                return body == kWorldBody ? at : compose(rest.at(body.index), at);
+            };
+            const auto batteries = view.instancesOf("BatteryAPI_1");
+            const auto motors = view.instancesOf("ElectricalMotorAPI_1");
+            if (batteries.empty() || motors.empty()) {
+                return invalid(
+                    "--emi-motor-leads: the robot needs a battery and motors "
+                    "(BatteryAPI_1, ElectricalMotorAPI_1)");
+            }
+            // The robot's root link carries the harness; the battery at the given point, else
+            // at its prim when the prim is on the robot.
+            BodyId root = kWorldBody;
+            for (std::size_t b = 0; b < w.bodies.names.size() && root == kWorldBody; ++b) {
+                if (w.bodies.parent[b] == kWorldBody) {
+                    root = BodyId{static_cast<std::uint32_t>(b)};
+                }
+            }
+            if (root == kWorldBody) {
+                return invalid("--emi-motor-leads: the robot has no link");
+            }
+            const Pose rootPose = rest.at(root.index);
+            std::array<double, 3> start{};
+            if (options.emiBatteryAt) {
+                start = *options.emiBatteryAt;
+            } else if (view.primBody(batteries.front()->prim) == root) {
+                start = view.primPoseInBody(batteries.front()->prim).position;
+            } else {
+                return invalid(
+                    "--emi-motor-leads: the battery prim is not on the robot's root "
+                    "link; give where it is: SPACING,X,Y,Z");
+            }
+            std::vector<SchemaInstance> added;
+            const PrimId rootPrim = w.bodies.prim[root.index];
+            for (const SchemaInstance* motor : motors) {
+                // Where the motor is: on the body its joint turns (elec:joint), else its prim.
+                Pose to = placed(motor->prim);
+                if (const std::span<const PrimId> joint = motor->rel("elec:joint");
+                    !joint.empty()) {
+                    const std::string_view jointName = view.signalInstanceName(joint[0]);
+                    for (std::size_t j = 0; j < w.joints.names.size(); ++j) {
+                        if (w.joints.names[j] == jointName && w.joints.child[j] != kWorldBody) {
+                            to = rest.at(w.joints.child[j].index);
+                        }
+                    }
+                }
+                const std::array<double, 3> local = rotate(
+                    conjugate(rootPose.orientation),
+                    {to.position[0] - rootPose.position[0], to.position[1] - rootPose.position[1],
+                     to.position[2] - rootPose.position[2]});
+                const std::string name = std::string(view.signalInstanceName(motor->prim));
+                SchemaInstance s;
+                s.schema = "EmiSourceAPI_1";
+                s.prim = w.addPrim(std::string(view.primPath(rootPrim)) + "/lead_" + name,
+                                   "lead_" + name);
+                w.prims.body[s.prim.index] = root;
+                w.prims.poseInBody[s.prim.index] = Pose{};
+                s.tokens["emi:sourceType"] = "wire";
+                s.tokens["emi:currentSignal"] = "motor/" + name + "/bus_current";
+                s.realArrays["emi:path"] = {start[0], start[1], start[2],
+                                            local[0], local[1], local[2]};
+                s.realArrays["emi:returnOffset"] = {0.0, 0.0, *options.emiMotorLeads};
+                added.push_back(std::move(s));
+            }
+            for (std::size_t k = 0; k < w.sensors.names.size(); ++k) {
+                if (w.sensors.type[k] != SensorType::Magnetometer) {
+                    continue;
+                }
+                const PrimId prim = w.sensors.prim[k];
+                bool victim = false;
+                for (const SchemaInstance* v : view.instancesOf("EmiSusceptibilityAPI_1")) {
+                    victim = victim || v->prim == prim;
+                }
+                if (!victim) {
+                    SchemaInstance v;
+                    v.schema = "EmiSusceptibilityAPI_1";
+                    v.prim = prim;
+                    v.tokens["emi:victimType"] = "magnetometer";
+                    added.push_back(std::move(v));
+                }
+            }
+            for (SchemaInstance& s : added) {
+                w.schemaInstances.push_back(std::move(s));
+            }
+        }
         // People last, so that the first bodies stay the robot's (RFC 0009 §8).
         std::vector<humans::Spec> people = humans::takeSpecs(model);
         for (const Spawned& file : spawned) {
@@ -4923,9 +5040,9 @@ struct Server::Impl {
                 out.set_frequency_hz(s.frequency);
                 out.set_current_a(emiState(s).current);
                 out.set_power_w(s.radiatedPower);
-                static constexpr std::array<const char*, 5> kKinds{
+                static constexpr std::array<const char*, 6> kKinds{
                     "power line", "motor drive (dipole)", "transmitter", "welder (dipole)",
-                    "custom"};
+                    "custom",     "wire (Biot-Savart)"};
                 out.set_detail(s.fieldMap ? "field map"
                                           : kKinds.at(static_cast<std::size_t>(s.type)));
             }
@@ -4961,7 +5078,13 @@ struct Server::Impl {
                     body = Pose{{v[0], v[1], v[2]}, {v[3], v[4], v[5], v[6]}};
                 }
             }
-            if (!s.drivenBy.empty()) {
+            if (!s.currentSignal.empty()) {
+                const SignalId id = bus.find(s.currentSignal);
+                if (id.valid()) {
+                    now.current =
+                        s.frequency > 0.0 ? std::abs(bus.read(id)) : bus.read(id);  // RFC 0013
+                }
+            } else if (!s.drivenBy.empty()) {
                 const SignalId id = bus.find("motor/" + s.drivenBy + "/current_q");
                 if (id.valid()) {
                     now.current = std::abs(bus.read(id));
@@ -5273,8 +5396,8 @@ struct Server::Impl {
         if (name == kAirField) {
             return airSlice(height, orientation);
         }
-        if (orientation != v1::SLICE_ORIENTATION_HORIZONTAL) {
-            return std::nullopt;  // only the air has vertical slices
+        if (orientation != v1::SLICE_ORIENTATION_HORIZONTAL && name != kFluxField) {
+            return std::nullopt;  // only the air and |B| have vertical slices
         }
         if (scheduler == nullptr ||
             (name != kFogField && name != kWindField && name != kFluxField)) {
@@ -5316,10 +5439,28 @@ struct Server::Impl {
         slice.set_height(kSliceHeight);
         const std::uint32_t components = fog || flux ? 1 : 2;
         slice.set_components(components);
-        slice.set_origin_x(centre.position[0] - (kSliceWidth - 1) * kSliceCell / 2.0);
-        slice.set_origin_y(centre.position[1] - (kSliceHeight - 1) * kSliceCell / 2.0);
-        slice.set_cell_m(kSliceCell);
-        slice.set_height_m(height);
+        // A robot's own wiring (RFC 0013) is centimetres from its sensors: when every EMI source
+        // rides on a body, a slice a couple of metres across, in 4 cm cells.
+        double cellM = kSliceCell;
+        if (flux && !emiSources().empty() &&
+            std::ranges::all_of(emiSources(),
+                                [](const emi::Source& e) { return e.body != kWorldBody; })) {
+            cellM = kSelfEmiSliceCell;
+        }
+        const bool vertical = orientation != v1::SLICE_ORIENTATION_HORIZONTAL;
+        const bool alongY = orientation == v1::SLICE_ORIENTATION_VERTICAL_YZ;
+        slice.set_orientation(orientation);
+        slice.set_origin_x((alongY ? centre.position[1] : centre.position[0]) -
+                           (kSliceWidth - 1) * cellM / 2.0);
+        if (vertical) {
+            // Through the robot, centred on it.
+            slice.set_origin_y(centre.position[2] - (kSliceHeight - 1) * cellM / 2.0);
+            slice.set_height_m(alongY ? centre.position[0] : centre.position[1]);
+        } else {
+            slice.set_origin_y(centre.position[1] - (kSliceHeight - 1) * cellM / 2.0);
+            slice.set_height_m(height);
+        }
+        slice.set_cell_m(cellM);
         std::vector<float> values;
         values.reserve(static_cast<std::size_t>(kSliceWidth) * kSliceHeight * components);
         const double uniform = fog ? bus.read(bus.find("env/extinction/visible")) : 0.0;
@@ -5327,15 +5468,29 @@ struct Server::Impl {
         double hi = 0.0;
         for (std::uint32_t j = 0; j < kSliceHeight; ++j) {
             for (std::uint32_t i = 0; i < kSliceWidth; ++i) {
-                const fields::Vec3 at{slice.origin_x() + i * kSliceCell,
-                                      slice.origin_y() + j * kSliceCell, height};
+                const double u = slice.origin_x() + i * cellM;
+                const double w = slice.origin_y() + j * cellM;
+                fields::Vec3 at{u, w, height};
+                if (vertical) {
+                    at = alongY ? fields::Vec3{slice.height_m(), u, w}
+                                : fields::Vec3{u, slice.height_m(), w};
+                }
                 if (flux) {
-                    // |B| RMS; sources add in power (as incoherent ones would).
+                    // |B| RMS: alternating sources add in power (as incoherent ones would), direct
+                    // ones as vectors (a lead and its return cancel), then both together.
                     double b2 = 0.0;
+                    emi::Vec3 direct{0.0, 0.0, 0.0};
                     for (std::size_t k = 0; k < sources.size(); ++k) {
-                        const double b = emi::magneticFieldRms(emiSources()[k], sources[k], at).b;
+                        const emi::Source& source = emiSources()[k];
+                        if (source.frequency <= 0.0) {
+                            const emi::Vec3 b = emi::magneticField(source, sources[k], at, 0.0);
+                            direct = {direct[0] + b[0], direct[1] + b[1], direct[2] + b[2]};
+                            continue;
+                        }
+                        const double b = emi::magneticFieldRms(source, sources[k], at).b;
                         b2 += b * b;
                     }
+                    b2 += direct[0] * direct[0] + direct[1] * direct[1] + direct[2] * direct[2];
                     const double v = std::sqrt(b2);
                     values.push_back(static_cast<float>(v));
                     lo = std::min(lo, v);

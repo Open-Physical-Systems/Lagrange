@@ -120,6 +120,12 @@ struct ServerOptions {
         double length{0.0};
     };
     std::vector<Tether> tethers;
+    /// --emi-motor-leads SPACING[,X,Y,Z] (RFC 0013): a wire on the robot's root link from the
+    /// battery (at X,Y,Z in that link's frame; else the battery prim, when it is on the robot) to
+    /// every motor, carrying its bus current, its return SPACING m above it; every magnetometer a
+    /// victim of it.
+    std::optional<double> emiMotorLeads;
+    std::optional<std::array<double, 3>> emiBatteryAt;
     /// --water-current VX,VY[,VZ]: m/s, world ENU, the water's steady current (hydrodynamics.md).
     std::array<double, 3> waterCurrent{};
     /// --water-waves AMPLITUDE,PERIOD[,TOWARDS]: m, s and degrees (0 = towards +x, 90 = +y):

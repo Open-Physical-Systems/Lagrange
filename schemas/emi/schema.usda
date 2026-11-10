@@ -26,8 +26,8 @@ class "EmiSourceAPI_1" (
 )
 {
     uniform token emi:sourceType (
-        allowedTokens = ["power_line", "motor_drive", "transmitter", "welder", "custom"]
-        doc = "power_line, motor_drive, transmitter, welder or custom. Required."
+        allowedTokens = ["power_line", "motor_drive", "transmitter", "welder", "custom", "wire"]
+        doc = "power_line, motor_drive, transmitter, welder, custom or wire (RFC 0013). Required."
     )
     double emi:frequency (
         lagrangeUnit = "Hz"
@@ -70,6 +70,20 @@ class "EmiSourceAPI_1" (
     )
     rel emi:drivenBy (
         doc = "A prim whose current scales the source at runtime (a motor)."
+    )
+    double[] emi:path = [] (
+        lagrangeUnit = "m"
+        doc = """For wire (RFC 0013): its route, x, y, z of each point in the prim's frame, at
+        least two points; the field is the Biot-Savart sum over its straight segments."""
+    )
+    double3 emi:returnOffset = (0, 0, 0) (
+        lagrangeUnit = "m"
+        doc = """For wire: the return conductor, the same route shifted by this, carrying the
+        current back (a pair of leads). Zero: no return in the model."""
+    )
+    uniform token emi:currentSignal = "" (
+        doc = """A signal in A that sets the source's current every step (e.g.
+        motor/front_left/bus_current), its sign kept for a direct current; over emi:drivenBy."""
     )
 }
 

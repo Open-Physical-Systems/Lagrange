@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 
 namespace lagrange::sensors {
 
@@ -202,6 +203,11 @@ public:
             !victim.empty() && !groundTruth_) {
             disturbance_ =
                 d.input(optionalSpec(victim + "b_field", SignalType::Vec3, units::T, "sensor"));
+            // What the disturbance does to a heading (RFC 0013).
+            headingError_ = d.output(
+                spec("sensor/" + name_ + "/heading_error", SignalType::Scalar, units::rad));
+            interference_ =
+                d.output(spec("sensor/" + name_ + "/interference", SignalType::Scalar, units::one));
         }
         field_ = d.output(spec("sensor/" + name_ + "/field", SignalType::Vec3, units::T, "sensor"));
         return {};
@@ -209,17 +215,35 @@ public:
 
     Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
         bus.writeN(field_, measure(sensorPose(bus), nullptr));
+        if (headingError_.valid()) {
+            bus.write(headingError_, 0.0);
+            bus.write(interference_, 0.0);
+        }
         return {};
     }
 
     Status step(const StepContext& context, SignalBus& bus) override {
         random::Stream rng(context.seed, context.stepIndex, 0);
-        Vec3 field = measure(sensorPose(bus), &rng);
+        const Pose pose = sensorPose(bus);
+        Vec3 field = measure(pose, &rng);
         if (disturbance_.valid()) {
             const std::span<const double> b = bus.readN(disturbance_);
             for (std::size_t i = 0; i < 3; ++i) {
                 field[i] += b[i];
             }
+            // The heading from the horizontal field, with and without the disturbance (world
+            // frame, east-north-up), and the disturbance's share of the Earth's field: the ratio
+            // ArduPilot's compassmot reports as a percentage.
+            const Vec3 earth = rotate(pose.orientation, measure(pose, nullptr));
+            const Vec3 extra = rotate(pose.orientation, Vec3{b[0], b[1], b[2]});
+            const double clean = std::atan2(earth[0], earth[1]);
+            const double disturbed = std::atan2(earth[0] + extra[0], earth[1] + extra[1]);
+            double error = disturbed - clean;
+            error = std::remainder(error, 2.0 * std::numbers::pi);
+            bus.write(headingError_, error);
+            const double earthNorm = std::hypot(earth[0], earth[1], earth[2]);
+            bus.write(interference_,
+                      earthNorm > 0.0 ? std::hypot(extra[0], extra[1], extra[2]) / earthNorm : 0.0);
         }
         bus.writeN(field_, field);
         return {};
@@ -242,7 +266,7 @@ private:
 
     double year_{kWmmValidFrom};
     double noise_{0.0};
-    SignalId field_, disturbance_;
+    SignalId field_, disturbance_, headingError_, interference_;
 };
 
 /// Barometer: static pressure and air temperature of the ICAO standard atmosphere at the
