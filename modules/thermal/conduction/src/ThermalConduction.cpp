@@ -71,39 +71,12 @@ std::array<double, 3> vec3(std::span<const double> v, std::array<double, 3> fall
 
 }  // namespace
 
-ModuleInfo ThermalConduction::info() const {
-    return {"thermal", "conduction", 0, 1, false, true, CapabilityTier::Tier0};
-}
-
-Duration ThermalConduction::preferredStep() const {
-    return 100_ms;
-}
-
-Status ThermalConduction::declare(const WorldView& world, const ModuleConfig& config,
-                                  SignalDeclarer& d) {
-    notes_.clear();
-    bodies_.clear();
-    parts_.clear();
-    sources_.clear();
-    const std::optional<double> ambient = config.get<double>(kAmbientKey);
-    if (!ambient || *ambient <= 0.0) {
-        return Status::error(StatusCode::InvalidConfig,
-                             "the thermal domain needs the site's ambient temperature "
-                             "(profile thermal.ambient_temperature, K); it has no default");
-    }
-    const double cell = config.get<double>(kCellKey).value_or(kDefaultCell);
-    const auto maxCells = static_cast<std::size_t>(
-        config.get<double>(kMaxCellsKey).value_or(static_cast<double>(kDefaultMaxCells)));
-    if (!(cell > 0.0) || maxCells < 1) {
-        return Status::error(StatusCode::InvalidConfig,
-                             "thermal.cell must be over 0 m and thermal.max_cells at least 1");
-    }
-    fixedCoefficient_ = config.get<double>(kSurfaceCoefficientKey);
+Expected<ThermalSetup, std::string> thermalSetupOf(const WorldView& world, double ambient,
+                                                   double cell) {
     const World& raw = world.raw();
-    rest_ = restPoses(raw);
-    const std::vector<bool> moving = movingBodies(raw);
+    const std::vector<Pose> rest = restPoses(raw);
+    ThermalSetup out;
     std::string problems;
-    std::vector<SolidPart> parts;
     std::map<std::uint32_t, std::size_t> partOfBody;
     for (const SchemaInstance* s : world.instancesOf("ThermalMaterialAPI_1")) {
         const std::string path(world.primPath(s->prim));
@@ -118,7 +91,7 @@ Status ThermalConduction::declare(const WorldView& world, const ModuleConfig& co
         }
         SolidPart part;
         part.name = raw.bodies.names[body.index];
-        part.rest = rest_.at(body.index);
+        part.rest = rest.at(body.index);
         ThermalMaterial m;
         if (const auto preset = s->token("thermal:material:preset"); preset && !preset->empty()) {
             const auto found = thermalMaterialPreset(*preset);
@@ -158,7 +131,7 @@ Status ThermalConduction::declare(const WorldView& world, const ModuleConfig& co
             }
             part.contactConductance = *contact;
         }
-        part.initialTemperature = s->real("thermal:material:initialTemperature").value_or(*ambient);
+        part.initialTemperature = s->real("thermal:material:initialTemperature").value_or(ambient);
         part.cell = cell;
         for (std::size_t c = 0; c < raw.colliders.body.size(); ++c) {
             if (raw.colliders.body[c] != body) {
@@ -179,19 +152,17 @@ Status ThermalConduction::declare(const WorldView& world, const ModuleConfig& co
             }
             part.shapes.push_back(std::move(shape));
         }
-        PartIo io;
-        io.maxAllowed = s->real("thermal:material:maxTemperature");
-        partOfBody.emplace(body.index, parts.size());
-        bodies_.push_back(body);
-        parts.push_back(std::move(part));
-        parts_.push_back(std::move(io));
+        partOfBody.emplace(body.index, out.parts.size());
+        out.bodies.push_back(body);
+        out.maxTemperature.push_back(s->real("thermal:material:maxTemperature"));
+        out.parts.push_back(std::move(part));
     }
     // Each part's parent: the nearest ancestor body with a part.
-    for (std::size_t p = 0; p < parts.size(); ++p) {
-        BodyId up = raw.bodies.parent.at(bodies_[p].index);
+    for (std::size_t p = 0; p < out.parts.size(); ++p) {
+        BodyId up = raw.bodies.parent.at(out.bodies[p].index);
         while (up != kWorldBody) {
             if (const auto found = partOfBody.find(up.index); found != partOfBody.end()) {
-                parts[p].parent = found->second;
+                out.parts[p].parent = found->second;
                 break;
             }
             up = raw.bodies.parent.at(up.index);
@@ -208,42 +179,99 @@ Status ThermalConduction::declare(const WorldView& world, const ModuleConfig& co
             continue;
         }
         const std::string base = "thermal:source:" + s->instance + ":";
-        SourceIo io;
-        io.part = found->second;
-        io.power = s->real(base + "power").value_or(0.0);
-        io.efficiency = s->real(base + "efficiency").value_or(0.0);
-        if (io.power < 0.0 || io.efficiency < 0.0 || io.efficiency > 1.0) {
+        HeatSourceSpec spec;
+        spec.name = s->instance;
+        spec.part = found->second;
+        spec.power = s->real(base + "power").value_or(0.0);
+        spec.efficiency = s->real(base + "efficiency").value_or(0.0);
+        if (spec.power < 0.0 || spec.efficiency < 0.0 || spec.efficiency > 1.0) {
             problems += "\n  " + path + ": heat source " + s->instance +
                         " needs a power of 0 or more and an efficiency of 0 to 1";
             continue;
         }
         const Pose inBody = poseInBodyOf(raw, s->prim);
-        HeatBox box;
-        box.centre = compose(inBody, Pose{vec3(s->realArray(base + "position"), {0.0, 0.0, 0.0}),
-                                          {1.0, 0.0, 0.0, 0.0}})
-                         .position;
-        box.size = vec3(s->realArray(base + "size"), {0.001, 0.001, 0.001});
-        parts[io.part].sources.push_back(box);
+        spec.box.centre =
+            compose(inBody, Pose{vec3(s->realArray(base + "position"), {0.0, 0.0, 0.0}),
+                                 {1.0, 0.0, 0.0, 0.0}})
+                .position;
+        spec.box.size = vec3(s->realArray(base + "size"), {0.001, 0.001, 0.001});
         if (const auto signal = s->token(base + "powerSignal"); signal && !signal->empty()) {
-            SignalSpec in = scalar(std::string(*signal), units::W);
+            spec.powerSignal = std::string(*signal);
+        }
+        out.sources.push_back(std::move(spec));
+    }
+    if (!problems.empty()) {
+        return Unexpected{"heat conduction cannot be set up:" + problems};
+    }
+    // In part order, each part's boxes in the same order as the sources.
+    std::stable_sort(
+        out.sources.begin(), out.sources.end(),
+        [](const HeatSourceSpec& a, const HeatSourceSpec& b) { return a.part < b.part; });
+    for (const HeatSourceSpec& spec : out.sources) {
+        out.parts[spec.part].sources.push_back(spec.box);
+    }
+    return out;
+}
+
+ModuleInfo ThermalConduction::info() const {
+    return {"thermal", "conduction", 0, 1, false, true, CapabilityTier::Tier0};
+}
+
+Duration ThermalConduction::preferredStep() const {
+    return 100_ms;
+}
+
+Status ThermalConduction::declare(const WorldView& world, const ModuleConfig& config,
+                                  SignalDeclarer& d) {
+    notes_.clear();
+    bodies_.clear();
+    parts_.clear();
+    sources_.clear();
+    const std::optional<double> ambient = config.get<double>(kAmbientKey);
+    if (!ambient || *ambient <= 0.0) {
+        return Status::error(StatusCode::InvalidConfig,
+                             "the thermal domain needs the site's ambient temperature "
+                             "(profile thermal.ambient_temperature, K); it has no default");
+    }
+    const double cell = config.get<double>(kCellKey).value_or(kDefaultCell);
+    const auto maxCells = static_cast<std::size_t>(
+        config.get<double>(kMaxCellsKey).value_or(static_cast<double>(kDefaultMaxCells)));
+    if (!(cell > 0.0) || maxCells < 1) {
+        return Status::error(StatusCode::InvalidConfig,
+                             "thermal.cell must be over 0 m and thermal.max_cells at least 1");
+    }
+    fixedCoefficient_ = config.get<double>(kSurfaceCoefficientKey);
+    const World& raw = world.raw();
+    rest_ = restPoses(raw);
+    const std::vector<bool> moving = movingBodies(raw);
+    auto setup = thermalSetupOf(world, *ambient, cell);
+    if (!setup) {
+        return Status::error(StatusCode::InvalidConfig, setup.error());
+    }
+    bodies_ = setup->bodies;
+    for (std::size_t p = 0; p < setup->parts.size(); ++p) {
+        PartIo io;
+        io.maxAllowed = setup->maxTemperature[p];
+        parts_.push_back(std::move(io));
+    }
+    for (const HeatSourceSpec& spec : setup->sources) {
+        SourceIo io;
+        io.part = spec.part;
+        io.power = spec.power;
+        io.efficiency = spec.efficiency;
+        if (!spec.powerSignal.empty()) {
+            SignalSpec in = scalar(spec.powerSignal, units::W);
             in.hold = Hold::WindowAverage;
             io.powerSignal = d.input(in);
         }
-        const std::string out = "thermal/" + s->instance + "/";
+        const std::string out = "thermal/" + spec.name + "/";
         io.temperature = d.output(scalar(out + "temperature", units::K));
         io.heat = d.output(scalar(out + "heat", units::W));
         io.radiant = d.output(scalar(out + "radiant_power", units::W));
         sources_.push_back(io);
     }
-    if (!problems.empty()) {
-        return Status::error(StatusCode::InvalidConfig,
-                             "heat conduction cannot be set up:" + problems);
-    }
-    // Sources are kept in part order in the model; keep sources_ in the same order.
-    std::stable_sort(sources_.begin(), sources_.end(),
-                     [](const SourceIo& a, const SourceIo& b) { return a.part < b.part; });
     std::string error;
-    auto model = ConductionModel::build(std::move(parts), maxCells, notes_, error);
+    auto model = ConductionModel::build(std::move(setup->parts), maxCells, notes_, error);
     if (!model) {
         return Status::error(StatusCode::InvalidConfig, "heat conduction: " + error);
     }

@@ -113,6 +113,47 @@ Checked by `test_plugins`' `TheThermalProbesReadTheHeatConduction`: the thermist
 while it heats and meets it within 0.1 K; the infrared reading equals the grey-body formula for
 the board's temperature within 0.05 K.
 
+## In OpenFOAM: `lagrange foam-cht`
+
+When the air's flow matters (a fan, a duct, parts that warm each other's air), give the same
+robot to OpenFOAM's conjugate heat transfer solver:
+
+```bash
+lagrange foam-cht assets/robots/led_heatsink/led_heatsink.urdf --ambient 298.15 --out led_case
+```
+
+It writes a `chtMultiRegionSimpleFoam` case (`tools/cli/lagrange_foam_cht`): a solid region per
+link with a material (its collision surfaces, `lagrange tunnel --export-surface`), still air
+around them with buoyancy (laminar, the box's walls at the ambient, its top open), each heat
+source as a `scalarSemiImplicitSource` on the cells of its box, a contact conductance as a thin
+layer on the child's side of the interface, an orthotropic board as `constAnIso`. The numbers
+come from `lagrange export thermal ROBOT --out FILE.json`, the same reading of the URDF as the
+conduction fidelity's. It runs with an installed OpenFOAM or the container
+(`opencfd/openfoam-default:2512`, `--procs` processes), reads each region's mean, max and min and
+each source's mean into `report.json`, and `--compare RUN.json` sets a Lagrange run's beside them;
+`--start-from RUN.json` starts the solids at its temperatures, which shortens the iterations (the
+coupled solids converge slowly from the ambient). OpenFOAM is GPL-3 and stays a separate program:
+files only. The case has no radiation: compare it with a run whose emissivities are 0.
+
+**The sample against OpenFOAM** (2026-11-11; `led_heatsink.urdf` with its emissivities set to
+0, 298.15 K, 203,000 cells, 8 processes, converged by iteration 1100 of 4000 and steady to 0.01 K
+after; Lagrange run for an hour of simulated time to steady state, 3.000 W in and out):
+
+| | OpenFOAM | Lagrange | |
+|---|---|---|---|
+| sink, mean | 353.2 K | 325.5 K | the air takes the heat half as well in OpenFOAM |
+| board, mean | 357.7 K | 330.3 K | |
+| LED, case | 379.4 K | 352.9 K | |
+| LED over the sink | 26.2 K | 27.4 K | conduction inside agrees within 5 % |
+
+Inside the solids the two agree; at the surface they do not. The correlations treat every face
+as a free plate, and this sink has its fins facing down with 14 mm between them, where the air is
+trapped: OpenFOAM's effective coefficient is about 4.5 W/(m²·K), the correlations' about 9. Where
+the shape matters like this, run `lagrange foam-cht` once and set the run's
+`thermal.surface_coefficient` to what it gives (here about 4.5), or keep the correlations for
+open shapes. With `surface_coefficient: 4.5` Lagrange gives the sink 350.0 K and the LED 378.2 K,
+within 3.2 K and 1.2 K of OpenFOAM's (6 % and 2 % of the rise). One mesh only: a mesh study of the OpenFOAM case is still owed.
+
 ## The model
 
 **Cells.** Each link is cut into cubes in its own frame from its collision shapes (boxes,

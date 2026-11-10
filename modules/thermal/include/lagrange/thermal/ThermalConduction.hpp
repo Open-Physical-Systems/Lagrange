@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lagrange/module/Expected.hpp"
 #include "lagrange/module/IModule.hpp"
 #include "lagrange/thermal/Conduction.hpp"
 
@@ -13,6 +14,29 @@ namespace lagrange::thermal {
 inline constexpr const char* kCellKey = "cell";                               // m, default 0.002
 inline constexpr const char* kMaxCellsKey = "max_cells";                      // per part, 200000
 inline constexpr const char* kSurfaceCoefficientKey = "surface_coefficient";  // W/(m²·K)
+
+/// A heat source as the world gives it (HeatSourceAPI_1).
+struct HeatSourceSpec {
+    std::string name;         // the instance name, as in thermal/<name>/...
+    std::size_t part{0};      // index in ThermalSetup::parts
+    double power{0.0};        // W, constant (when powerSignal is empty)
+    double efficiency{0.0};   // the share that leaves as light
+    std::string powerSignal;  // or a signal in W
+    HeatBox box;              // body frame
+};
+
+/// What the conduction fidelity is made of, read from the world (RFC 0012): the links with a
+/// thermal material (presets resolved, shapes, parents, contact conductances, their sources'
+/// boxes in source order) and the sources, sorted by part. `lagrange export thermal` writes it
+/// for OpenFOAM.
+struct ThermalSetup {
+    std::vector<SolidPart> parts;
+    std::vector<BodyId> bodies;
+    std::vector<std::optional<double>> maxTemperature;  // K, per part
+    std::vector<HeatSourceSpec> sources;
+};
+[[nodiscard]] Expected<ThermalSetup, std::string> thermalSetupOf(const WorldView& world,
+                                                                 double ambient, double cell);
 
 /// The thermal domain at the `conduction` fidelity (RFC 0012, docs/physics/heat-conduction.md):
 /// every link with ThermalMaterialAPI_1 cut into cells (ConductionModel), heated by its
