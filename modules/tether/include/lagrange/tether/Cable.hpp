@@ -139,6 +139,7 @@ private:
     void solveLengths(double h, std::span<double> lambda);
     void solveBends(double h);
     void solveObstacles(double h, std::span<const Obstacle> obstacles, double share);
+    void solveSegments(double h, std::span<const Obstacle> obstacles, double share);
     void findSelfPairs(double margin);
     void solveSelf();
 
