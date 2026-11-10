@@ -231,6 +231,17 @@ One PR each, in order:
 5. Pre-approve the gated merges (schema and protocol) of the steps above once each passes its
    tests, as for RFC 0009? *Proposed: yes.*
 
+## As built (2026-11-10)
+
+- Contact pushes on a body count only how far a mass ends up moved away from it, with moving
+  bodies met before scenery, so a cable pinched between a skid and the ground carries nothing.
+- A mass inside a shape leaves it at no more than 1 m/s relative to the surface (a whole run on
+  the open field otherwise shot a sag laid through the ground out at tens of m/s).
+- Each cable is laid out on its first step from where the bodies are then, not from the robot
+  file's rest pose (a robot spawned elsewhere had stretched it by metres).
+- The viewer draws a cable as its centre line and four lines at its radius (the existing line
+  path; a 4 mm cable is under a pixel beyond a few metres).
+
 ## Resolutions on acceptance (2026-11-10)
 
 The owner accepted the design and asked for the physics in Lagrange and the drawing in its

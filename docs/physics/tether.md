@@ -86,6 +86,12 @@ nearest surface point:
 
 Within 0.5 m of either end the cable does not touch the robot that end is tied to, nor a shape
 that holds the end, because it starts inside them (the drone's hull around its attach point).
+Moving bodies are met first and scenery last, and a body feels only how far a mass ends up moved
+away from it: a cable squeezed between a skid and the ground carries nothing between them.
+
+**Laying it out.** On its first step each cable is laid between its ends where the bodies are
+then, in a sag of its length in the vertical plane through them. Where that sag goes through the
+ground or a box, it comes out at 1 m/s and pulls nothing meanwhile.
 
 **The pull on each end.** The end segment's tension along it, plus the weight and drag of the
 half segment the end carries, at the attach point; with the contact pushes, the body's wrench.
@@ -108,6 +114,13 @@ nothing in. `fixed` holds the length. Paying out stops at `maxLength`.
 | `tether/<n>/nodes` | m | x, y, z of each mass, world; unused entries NaN |
 | `body/<b>/wrench/tether` | N, N·m | for each body it is tied to or touches |
 
+## Seeing it
+
+The viewer draws every cable as an object in the viewport, always: its centre line and four lines
+at its radius, a dark rubber colour, depth-tested like the meshes. The server sends each cable in
+every scene delta (`Overlay` `KIND_CABLE`: radius, then the points), so a viewer that predates it
+connects and shows no cable.
+
 ## How far to trust it
 
 | Check | Against | Result | Test |
@@ -119,6 +132,7 @@ nothing in. `fixed` holds the length. Paying out stops at `maxLength`.
 | 6 m piled on the ground | no segment within a diameter of another, none in the ground | holds | `Cable.PilesUpWithoutPassingThroughItself` |
 | A tension winch, drone climbing | its set point, on average | 2.00 N of 2.00 | `Cable.ATensionWinchHoldsItsTension` |
 | The sample quad hovering on 3 m of tether | the weight held by the station and the drone | 0.2 % | `TetherRun.AQuadcopterHoversOnItsTether` |
+| Laid out 1.6 m into the ground | comes out at 1 m/s, pulling nothing | 1.00 m/s, 0 N | `Cable.LaidThroughTheGroundItComesOutSlowly` |
 
 **Limits.**
 - Twist and bending stiffness beyond the light bend term are not modelled: the model is for limp

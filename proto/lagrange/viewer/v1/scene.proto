@@ -137,7 +137,7 @@ message SceneDelta {
   repeated Prim added = 7;
   repeated uint32 removed = 8 [packed = true];
   LocalFrame rebased_frame = 9; // set only when the floating origin moved
-  repeated Overlay overlays = 10; // contact points, force arrows
+  repeated Overlay overlays = 10; // contact points, force arrows; cables (all of them, each delta)
 }
 
 message Overlay {
@@ -147,6 +147,9 @@ message Overlay {
     KIND_FORCE_ARROW = 2;
     KIND_TORQUE_ARROW = 3;
     KIND_PATH = 4;
+    // A cable's centre line (RFC 0011, added after 1.0): data is its radius (1 f64, m), then
+    // `count` points (3 f64 each), world-local.
+    KIND_CABLE = 5;
   }
   Kind kind = 1;
   bytes data = 2; // kind-specific packed f64: point(3)+normal(3)+magnitude(1) ...

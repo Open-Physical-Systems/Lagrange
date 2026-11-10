@@ -15,9 +15,10 @@ constexpr double kInfinity = std::numeric_limits<double>::infinity();
 // It does not touch the robot an end is tied to there either: a drone's arms and rotors around
 // its attach point.
 constexpr double kEndClearanceM = 0.5;  // m of cable from either end
-// A mass found deep inside a shape comes out at most this fast, beyond undoing its own move of
-// the substep: a cable laid through something (or a body moved into it) is pushed out over a few
-// steps, not in one substep with a force of thousands of newtons. Resting and impacts are exact.
+// A mass found deep inside a shape leaves it at most this fast along its normal: a cable laid
+// through something (or a body moved into it) comes out over a few steps, not in one substep with
+// a force of thousands of newtons. A resting or arriving mass is stopped exactly (its own inward
+// move of the substep is always undone).
 constexpr double kMaxDepenetrationMps = 1.0;
 // The winch: m/s paid out per N of tension over its set point, and a free drum's drag.
 constexpr double kWinchGain = 0.5;       // (m/s)/N
@@ -493,53 +494,82 @@ void Cable::solveObstacles(double h, std::span<const Obstacle> obstacles, double
         }
         const bool nearAnchor = along < kEndClearanceM;
         const bool nearAttach = total - along < kEndClearanceM;
-        for (std::size_t k = 0; k < near_.size(); ++k) {
-            const Obstacle& ob = obstacles[near_[k]];
-            if ((nearAnchor &&
-                 ((endInside_[k] & 1U) != 0 || (ob.robot >= 0 && ob.robot == anchorRobot_))) ||
-                (nearAttach &&
-                 ((endInside_[k] & 2U) != 0 || (ob.robot >= 0 && ob.robot == attachRobot_)))) {
-                continue;
-            }
-            if (std::isfinite(ob.reach) &&
-                norm(sub(p_[i], ob.pose.position)) > ob.reach + radius_) {
-                continue;
-            }
-            const SurfacePoint sp = surfacePoint(ob, p_[i]);
-            if (!(sp.distance < radius_)) {
-                continue;
-            }
-            const Vec3 before = p_[i];
-            const double inward = std::max(0.0, dot(sub(x_[i], p_[i]), sp.normal));
-            const double depth = std::min(radius_ - sp.distance, inward + kMaxDepenetrationMps * h);
-            addTo(p_[i], scale(sp.normal, depth));
-            // Friction, as a position limit on the sliding over the substep (Macklin et al.
-            // 2014, "Unified Particle Physics for Real-Time Applications", §6.1): within
-            // μ·depth it sticks.
-            Vec3 surfaceMove{};
-            if (ob.body >= 0) {
-                surfaceMove = scale(add(ob.velocity, cross(ob.angular, sub(sp.point, ob.com))), h);
-            }
-            const Vec3 dx = sub(sub(p_[i], x_[i]), surfaceMove);
-            const Vec3 slide = sub(dx, scale(sp.normal, dot(dx, sp.normal)));
-            const double sliding = norm(slide);
-            const double limit = params_.friction * depth;
-            if (sliding <= limit) {
-                p_[i] = sub(p_[i], slide);
-                if (sliding > 1e-7) {
-                    caught_ = true;
+        // Moving bodies first, scenery last: scenery always wins, and a body feels only how far
+        // the mass ends up moved away from it. A cable squeezed between a skid and the ground
+        // then holds the drone up by nothing (it is thinner than the skid's contact), instead of
+        // passing on the two pushes that undo each other every substep.
+        int hitBody = -1;
+        Vec3 hitNormal{};
+        Vec3 hitPoint{};
+        Vec3 hitCom{};
+        Vec3 hitStart{};
+        for (int pass = 0; pass < 2; ++pass) {
+            for (std::size_t k = 0; k < near_.size(); ++k) {
+                const Obstacle& ob = obstacles[near_[k]];
+                if ((pass == 0) != (ob.body >= 0)) {
+                    continue;
                 }
-            } else {
-                p_[i] = sub(p_[i], scale(slide, limit / sliding));
+                if ((nearAnchor &&
+                     ((endInside_[k] & 1U) != 0 || (ob.robot >= 0 && ob.robot == anchorRobot_))) ||
+                    (nearAttach &&
+                     ((endInside_[k] & 2U) != 0 || (ob.robot >= 0 && ob.robot == attachRobot_)))) {
+                    continue;
+                }
+                if (std::isfinite(ob.reach) &&
+                    norm(sub(p_[i], ob.pose.position)) > ob.reach + radius_) {
+                    continue;
+                }
+                const SurfacePoint sp = surfacePoint(ob, p_[i]);
+                if (!(sp.distance < radius_)) {
+                    continue;
+                }
+                if (ob.body >= 0 && hitBody < 0) {
+                    hitBody = ob.body;
+                    hitNormal = sp.normal;
+                    hitPoint = sp.point;
+                    hitCom = ob.com;
+                    hitStart = p_[i];
+                }
+                Vec3 surfaceMove{};  // how far the surface moves over the substep
+                if (ob.body >= 0) {
+                    surfaceMove =
+                        scale(add(ob.velocity, cross(ob.angular, sub(sp.point, ob.com))), h);
+                }
+                // Out by the penetration, but leaving the surface at no more than
+                // kMaxDepenetrationMps along its normal: what it already moves away counts.
+                const double away = dot(sub(sub(p_[i], x_[i]), surfaceMove), sp.normal);
+                const double depth =
+                    std::min(radius_ - sp.distance, std::max(0.0, kMaxDepenetrationMps * h - away));
+                addTo(p_[i], scale(sp.normal, depth));
+                // Friction, as a position limit on the sliding over the substep (Macklin et
+                // al. 2014, "Unified Particle Physics for Real-Time Applications", §6.1):
+                // within μ·depth it sticks.
+                const Vec3 dx = sub(sub(p_[i], x_[i]), surfaceMove);
+                const Vec3 slide = sub(dx, scale(sp.normal, dot(dx, sp.normal)));
+                const double sliding = norm(slide);
+                const double limit = params_.friction * depth;
+                if (sliding <= limit) {
+                    p_[i] = sub(p_[i], slide);
+                    if (sliding > 1e-7) {
+                        caught_ = true;
+                    }
+                } else {
+                    p_[i] = sub(p_[i], scale(slide, limit / sliding));
+                }
+                touching_[i] = 1;
             }
-            touching_[i] = 1;
-            if (ob.body >= 0 && static_cast<std::size_t>(ob.body) < pushes_.size()) {
-                // Equal and opposite: what moved the mass pushes the body, at the contact.
-                const Vec3 force = scale(sub(p_[i], before), -mass_[i] / (h * h) * share);
-                Push& push = pushes_[static_cast<std::size_t>(ob.body)];
-                addTo(push.force, force);
-                addTo(push.torque, cross(sub(sp.point, ob.com), force));
-            }
+        }
+        if (hitBody >= 0 && static_cast<std::size_t>(hitBody) < pushes_.size()) {
+            // Equal and opposite: how far the mass was moved away from the body (never into
+            // it), and along it, pushes the body at the contact.
+            const Vec3 moved = sub(p_[i], hitStart);
+            const double away = std::max(0.0, dot(moved, hitNormal));
+            const Vec3 sliding = sub(moved, scale(hitNormal, dot(moved, hitNormal)));
+            const Vec3 net = add(scale(hitNormal, away), sliding);
+            const Vec3 force = scale(net, -mass_[i] / (h * h) * share);
+            Push& push = pushes_[static_cast<std::size_t>(hitBody)];
+            addTo(push.force, force);
+            addTo(push.torque, cross(sub(hitPoint, hitCom), force));
         }
     }
 }

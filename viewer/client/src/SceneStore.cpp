@@ -2,6 +2,7 @@
 #include "lagrange/viewer/v1/scene.pb.h"
 
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <utility>
 
@@ -210,7 +211,36 @@ SceneBuilder::DeltaResult SceneBuilder::applyDelta(const v1::SceneDelta& delta) 
         return DeltaResult::Invalid;
     }
 
+    // Cables (Overlay KIND_CABLE): every one, each delta. Other overlay kinds are not drawn yet.
+    std::vector<CableLine> cables;
+    for (const v1::Overlay& overlay : delta.overlays()) {
+        if (overlay.kind() != v1::Overlay::KIND_CABLE) {
+            continue;
+        }
+        const std::size_t points = overlay.count();
+        constexpr std::size_t kMostPoints = 1U << 20;
+        if (points > kMostPoints || overlay.data().size() != (1 + 3 * points) * sizeof(double)) {
+            return DeltaResult::Invalid;
+        }
+        CableLine cable;
+        std::memcpy(&cable.radius, overlay.data().data(), sizeof(double));
+        cable.points.resize(points);
+        for (std::size_t i = 0; i < points; ++i) {
+            std::memcpy(cable.points[i].data(),
+                        overlay.data().data() + (1 + 3 * i) * sizeof(double), 3 * sizeof(double));
+            if (!std::isfinite(cable.points[i][0]) || !std::isfinite(cable.points[i][1]) ||
+                !std::isfinite(cable.points[i][2])) {
+                return DeltaResult::Invalid;
+            }
+        }
+        if (!std::isfinite(cable.radius) || cable.radius < 0.0) {
+            return DeltaResult::Invalid;
+        }
+        cables.push_back(std::move(cable));
+    }
+
     auto frame = std::make_shared<SceneFrame>(*frame_);  // copies transforms, shares statics
+    frame->cables = std::move(cables);
     for (std::size_t i = 0; i < count; ++i) {
         const std::uint32_t prim = delta.transform_prims(static_cast<int>(i));
         readPose(delta.transform_data().data() + i * kDeltaTransformBytes, frame->transforms[prim]);
