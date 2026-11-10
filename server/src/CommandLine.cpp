@@ -106,6 +106,8 @@ void printServerOptions(std::FILE* out) {
         "  --sensor-timing NAME=LATENCY[,JITTER]  delay a sensor's ROS messages, in s "
         "(repeatable)\n"
         "  --water X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH  a body of still water (repeatable)\n"
+        "  --tether X,Y,Z,LINK[,LENGTH]  a cable from the world point X,Y,Z to LINK (RFC 0011;\n"
+        "                     repeatable; LENGTH m, default the distance plus 10 %%)\n"
         "  --water-current VX,VY[,VZ]  the water's current, m/s\n"
         "  --hydro-coefficients FILE.yaml  vehicles' Fossen coefficients by body (added_mass,\n"
         "            linear_damping, quadratic_damping: six each, surge to yaw)\n"
@@ -145,6 +147,13 @@ void printServerOptions(std::FILE* out) {
         "  --mavlink px4[:PORT]|ardupilot[:PORT]  fly a multicopter with PX4 SITL (TCP 4560;\n"
         "            tools/ci/px4_mission.sh) or ArduPilot SITL's JSON interface (UDP 9002;\n"
         "            tools/ci/ardupilot_mission.sh), in lockstep\n"
+        "  --mavlink-max-rotor-speed RAD_S  the rotors' speed at the autopilot's full output\n"
+        "            (default: each rotor's loaded top speed from its motor and battery)\n"
+        "  --thrust-limit FRACTION  cap each rotor at this share of its full thrust (0.8: 80 %%),\n"
+        "            for the built-in controller and an autopilot's full output\n"
+        "  --emi-motor-leads SPACING[,X,Y,Z]  a wire from the battery (at X,Y,Z on the root\n"
+        "            link) to each motor carrying its bus current, its return SPACING m above\n"
+        "            it; magnetometers feel it (RFC 0013)\n"
         "  --geo-origin LAT,LON,HEIGHT  where the world's origin is on the Earth (degrees,\n"
         "            degrees, m above WGS84), for GNSS, magnetometers and barometers (no default;\n"
         "            a profile's world.geo_origin also sets it)\n"
@@ -355,6 +364,23 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                        "ardupilot[:PORT] (ArduPilot's JSON frames on UDP 9002)";
             }
             (px4 ? options.px4Port : options.ardupilotPort) = static_cast<std::uint16_t>(port);
+        } else if (arg == "--mavlink-max-rotor-speed") {
+            const char* text = value();
+            char* end = nullptr;
+            const double speed = text != nullptr ? std::strtod(text, &end) : 0.0;
+            if (text == nullptr || end == text || *end != '\0' || !(speed > 0.0) ||
+                !std::isfinite(speed)) {
+                return "--mavlink-max-rotor-speed needs a speed in rad/s";
+            }
+            options.mavlinkMaxRotorSpeed = speed;
+        } else if (arg == "--thrust-limit") {
+            const char* text = value();
+            char* end = nullptr;
+            const double share = text != nullptr ? std::strtod(text, &end) : 0.0;
+            if (text == nullptr || end == text || *end != '\0' || !(share > 0.0) || share > 1.0) {
+                return "--thrust-limit needs a share of full thrust, over 0 and at most 1 (0.8)";
+            }
+            options.thrustLimit = share;
         } else if (arg == "--geo-origin") {
             const char* text = value();
             double lat = 0.0, lon = 0.0, height = 0.0;
@@ -604,6 +630,49 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--water needs X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH, the last three positive";
             }
             options.water.push_back({{v[0], v[1], v[2]}, v[3], v[4], v[5]});
+        } else if (arg == "--emi-motor-leads") {
+            const char* text = value();
+            double spacing = -1.0;
+            std::array<double, 3> at{};
+            char tail = 0;
+            const int read = text != nullptr ? std::sscanf(text, "%lf,%lf,%lf,%lf%c", &spacing,
+                                                           &at[0], &at[1], &at[2], &tail)
+                                             : 0;
+            if ((read != 1 && read != 4) || !(spacing >= 0.0) ||
+                !std::isfinite(at[0] + at[1] + at[2])) {
+                return "--emi-motor-leads needs SPACING[,X,Y,Z]: m between a lead and its return "
+                       "(0: no return in the model), and where the battery is on the root link";
+            }
+            options.emiMotorLeads = spacing;
+            if (read == 4) {
+                options.emiBatteryAt = at;
+            }
+        } else if (arg == "--tether") {
+            const char* text = value();
+            ServerOptions::Tether t;
+            int used = 0;
+            if (text == nullptr ||
+                std::sscanf(text, "%lf,%lf,%lf,%n", &t.anchor[0], &t.anchor[1], &t.anchor[2],
+                            &used) != 3 ||
+                !std::isfinite(t.anchor[0] + t.anchor[1] + t.anchor[2])) {
+                return "--tether needs X,Y,Z,LINK[,LENGTH]: the anchor (m) and the link it is tied "
+                       "to";
+            }
+            std::string rest = text + used;
+            if (const auto comma = rest.find(','); comma != std::string::npos) {
+                char* end = nullptr;
+                t.length = std::strtod(rest.c_str() + comma + 1, &end);
+                if (end == rest.c_str() + comma + 1 || *end != '\0' || !(t.length > 0.0)) {
+                    return "--tether: LENGTH must be a positive number of metres";
+                }
+                rest.resize(comma);
+            }
+            if (rest.empty()) {
+                return "--tether needs X,Y,Z,LINK[,LENGTH]: the anchor (m) and the link it is tied "
+                       "to";
+            }
+            t.link = rest;
+            options.tethers.push_back(std::move(t));
         } else if (arg == "--hydro-coefficients") {
             const char* text = value();
             if (text == nullptr) {

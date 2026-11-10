@@ -8,7 +8,7 @@
 #     0.0507 from the UIUC propeller database, volume 1, static test apcsf_10x4.7_static_kt0835
 #     (J. B. Brandt, R. W. Deters, G. K. Ananda, O. D. Dantsker and M. S. Selig, UIUC Applied
 #     Aerodynamics Group). Not measured on the 1045.
-#   - Motors: 920 KV, Ke = 60 / (2 pi 920) = 0.01038 V.s/rad, Kt = 1.5 Ke (peak dq convention,
+#   - Motors: 920 KV, Ke = 60 / (2 pi 920 sqrt 3) = 0.005993 V.s/rad, Kt = 1.5 Ke (peak dq convention,
 #     electrical.md §9), 7 pole pairs; resistance and inductance illustrative.
 #   - Battery: 4S 5000 mAh lithium-polymer pack (an illustrative OCV curve per cell).
 schema_version: 1
@@ -51,7 +51,7 @@ apply:
         elec:motorType: bldc
         elec:windingResistance: 0.1              # ohm at 25 °C
         elec:inductance: 0.00003                 # H
-        elec:torqueConstant: 0.01557             # N·m/A, 1.5 Ke
+        elec:torqueConstant: 0.008989            # N·m/A, 1.5 Ke
         elec:polePairs: 7
         elec:maxCurrent: 20.0                    # A, the ESC's
         elec:joint: rotor_1_joint
@@ -71,7 +71,7 @@ apply:
         elec:motorType: bldc
         elec:windingResistance: 0.1              # ohm at 25 °C
         elec:inductance: 0.00003                 # H
-        elec:torqueConstant: 0.01557             # N·m/A, 1.5 Ke
+        elec:torqueConstant: 0.008989            # N·m/A, 1.5 Ke
         elec:polePairs: 7
         elec:maxCurrent: 20.0                    # A, the ESC's
         elec:joint: rotor_2_joint
@@ -91,7 +91,7 @@ apply:
         elec:motorType: bldc
         elec:windingResistance: 0.1              # ohm at 25 °C
         elec:inductance: 0.00003                 # H
-        elec:torqueConstant: 0.01557             # N·m/A, 1.5 Ke
+        elec:torqueConstant: 0.008989            # N·m/A, 1.5 Ke
         elec:polePairs: 7
         elec:maxCurrent: 20.0                    # A, the ESC's
         elec:joint: rotor_3_joint
@@ -111,7 +111,7 @@ apply:
         elec:motorType: bldc
         elec:windingResistance: 0.1              # ohm at 25 °C
         elec:inductance: 0.00003                 # H
-        elec:torqueConstant: 0.01557             # N·m/A, 1.5 Ke
+        elec:torqueConstant: 0.008989            # N·m/A, 1.5 Ke
         elec:polePairs: 7
         elec:maxCurrent: 20.0                    # A, the ESC's
         elec:joint: rotor_4_joint

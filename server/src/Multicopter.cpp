@@ -1,5 +1,7 @@
 // The built-in multicopter flight controller (Multicopter.hpp).
+#include "lagrange/mavlink/RotorTopSpeed.hpp"
 #include "lagrange/server/Multicopter.hpp"
+#include "lagrange/services/Log.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
@@ -20,6 +22,17 @@ constexpr const char* kAirDensityKey = "air_density";  // as lagrange::rotor_aer
 constexpr double kLandBelowM = 0.05;  // m
 constexpr double kLandedM = 0.03;     // m
 constexpr double kLandedMps = 0.05;   // m/s
+constexpr double kGroundRayM = 1e4;   // m: how far down it looks for the ground
+// The leash: a velocity command moves the set point no further ahead of the drone, along each
+// commanded axis, than the position loop turns into this acceleration (kLeashAccel / kp). A
+// drone that cannot follow (pressed under a ceiling, against a wall) is then asked for a bounded
+// push, and comes back as soon as the stick does, instead of chasing a set point that ran off
+// tens of metres while it was held (PX4's position controller bounds its set point likewise).
+constexpr double kLeashAccel = 0.5 * kGravity;  // m/s²
+// The set point's velocity closes on the stick's with this time constant, within the
+// acceleration and jerk limits (Settings), so it settles without a long tail.
+constexpr double kRampTimeS = 0.3;    // s
+constexpr double kSettledMps = 0.02;  // m/s: this close, the ramp has reached the stick
 
 using Vec3 = std::array<double, 3>;
 using Mat3 = std::array<Vec3, 3>;  // rows
@@ -143,6 +156,18 @@ Status MulticopterController::declare(const WorldView& world, const ModuleConfig
                  (s->token("aero:rotor:mount").value_or("puller") == "pusher" ? -1.0 : 1.0);
         r.thrustPerOmega2 = ct * perOmega2 * std::pow(diameter, 4);
         r.torquePerOmega2 = cp * perOmega2 * std::pow(diameter, 5) / (2.0 * std::numbers::pi);
+        if (settings_.thrustLimit < 1.0) {
+            // Thrust goes with the speed squared: a share of full thrust is its square root of
+            // the loaded top speed, the speed an autopilot's full output asks for (mavlink).
+            const mavlink::RotorTopSpeed top = mavlink::rotorTopSpeed(world, *s, *rho);
+            r.speedLimit = top.speed * std::sqrt(std::clamp(settings_.thrustLimit, 0.0, 1.0));
+            services::log(services::LogLevel::Info, "controller",
+                          std::string(world.signalInstanceName(s->prim)) + ": thrust limited to " +
+                              std::to_string(std::lround(100.0 * settings_.thrustLimit)) +
+                              " %, at most " + std::to_string(std::lround(r.speedLimit)) +
+                              " rad/s of " + std::to_string(std::lround(top.speed)) + " (" +
+                              top.from + ")");
+        }
         const std::string joint = "joint/" + std::string(world.signalInstanceName(s->prim)) + "/";
         SignalSpec velocity;
         velocity.name = joint + "velocity";
@@ -225,9 +250,24 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
     const std::span<const double> p = bus.readN(pose_);
     const std::span<const double> v = bus.readN(twist_);
     const Vec3 position{p[0], p[1], p[2]};
+    // The surface straight under the drone (fixed scenery and the ground), when it was given.
+    const auto surfaceBelow = [&]() -> std::optional<double> {
+        if (!ground_) {
+            return std::nullopt;
+        }
+        const services::RayHit hit = ground_->ray(position, {0.0, 0.0, -1.0}, kGroundRayM);
+        if (!hit.hit()) {
+            return std::nullopt;
+        }
+        return position[2] - hit.distance;
+    };
     if (!homed_) {
         home_ = position;
         homed_ = true;
+        if (const std::optional<double> surface = surfaceBelow()) {
+            standHeight_ = position[2] - *surface;
+            standKnown_ = true;
+        }
         setpoint_ = {home_[0], home_[1], home_[2] + settings_.altitudeM};
         heading_ = 0.0;
         airborne_ = false;
@@ -247,6 +287,16 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         }
         airborne_ = true;
         setpoint_ = position;
+        // Where it takes off from is its start: a robot spawned or placed after the first step
+        // (--spawn) was seen at its file's pose then.
+        home_ = position;
+        if (const std::optional<double> surface = surfaceBelow()) {
+            standHeight_ = position[2] - *surface;
+            standKnown_ = true;
+        }
+        velocity_ = {};
+        accel_ = {};
+        held_ = {};
         heading_ = std::atan2(rot[1][0], rot[0][0]);
     } else if (!settings_.waitForCommand && context.t.seconds() < settings_.takeoffAfterS) {
         return grounded();
@@ -262,19 +312,29 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
     const double kp = wp * wp;
     const double kd = 2.0 * settings_.damping * wp;
     // A velocity command moves the set point (forward and left in the heading frame) and turns
-    // the heading; without one it holds where it is.
-    Vec3 wanted{};  // m/s, world: the velocity the set point moves at
+    // the heading; without one it holds where it is. The set point's velocity follows the stick
+    // within the acceleration limits, so letting go brakes it to a stop.
+    Vec3 stick{};  // m/s, world: the velocity the command asks for
     bool angleMode = false;
     std::array<double, 2> tilt{};  // angle mode: the stick's share towards world x and y
-    if (const std::optional<FlightCommand> command = commands_ ? commands_() : std::nullopt) {
-        const double dt = context.dt.seconds();
+    double yawRate = 0.0;
+    const double dt = context.dt.seconds();
+    const std::optional<FlightCommand> command = commands_ ? commands_() : std::nullopt;
+    // Where it would stand here: on the surface under it, or at its start without the scenery.
+    double standing = home_[2];
+    if (standKnown_) {
+        if (const std::optional<double> surface = surfaceBelow()) {
+            standing = *surface + standHeight_;
+        }
+    }
+    if (command) {
         // Taking off or landing by hand, near the ground, only up and down count: moving the set
         // point sideways while the legs still hold the drone would tip it over on the ground.
         const bool nearGround =
-            settings_.waitForCommand && position[2] < home_[2] + settings_.minHeightM;
+            settings_.waitForCommand && position[2] < standing + settings_.minHeightM;
         double forward = nearGround ? 0.0 : command->forwardMps;
         double left = nearGround ? 0.0 : command->leftMps;
-        const double yawRate = nearGround ? 0.0 : command->yawRateRadps;
+        yawRate = nearGround ? 0.0 : command->yawRateRadps;
         const double planar = std::hypot(forward, left);
         if (planar > settings_.maxHorizontalMps) {
             forward *= settings_.maxHorizontalMps / planar;
@@ -282,31 +342,87 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         }
         const double c = std::cos(heading_);
         const double s = std::sin(heading_);
-        wanted = {c * forward - s * left, s * forward + c * left,
-                  std::clamp(command->upMps, -settings_.maxVerticalMps, settings_.maxVerticalMps)};
+        stick = {c * forward - s * left, s * forward + c * left,
+                 std::clamp(command->upMps, -settings_.maxVerticalMps, settings_.maxVerticalMps)};
         angleMode = command->mode == FlightCommand::Mode::Angle;
         if (angleMode) {
-            tilt = {wanted[0] / settings_.maxHorizontalMps, wanted[1] / settings_.maxHorizontalMps};
-            wanted[0] = wanted[1] = 0.0;
+            tilt = {stick[0] / settings_.maxHorizontalMps, stick[1] / settings_.maxHorizontalMps};
+            stick[0] = stick[1] = 0.0;
         }
+    }
+    {
+        // The acceleration that would close the gap to the stick in kRampTimeS, within the
+        // acceleration limits; the acceleration then moves towards it within the jerk limit,
+        // and is cut where it would carry the velocity past the stick.
+        const double jerk = settings_.maxJerkMps3 * dt;
+        Vec3 aim{(stick[0] - velocity_[0]) / kRampTimeS, (stick[1] - velocity_[1]) / kRampTimeS,
+                 (stick[2] - velocity_[2]) / kRampTimeS};
+        const double planar = std::hypot(aim[0], aim[1]);
+        if (planar > settings_.maxHorizontalAccelMps2) {
+            aim[0] *= settings_.maxHorizontalAccelMps2 / planar;
+            aim[1] *= settings_.maxHorizontalAccelMps2 / planar;
+        }
+        aim[2] =
+            std::clamp(aim[2], -settings_.maxVerticalAccelMps2, settings_.maxVerticalAccelMps2);
         for (std::size_t i = 0; i < 3; ++i) {
-            setpoint_[i] += wanted[i] * dt;
+            accel_[i] += std::clamp(aim[i] - accel_[i], -jerk, jerk);
+            const double next = velocity_[i] + accel_[i] * dt;
+            if ((stick[i] - velocity_[i]) * (stick[i] - next) <= 0.0 ||
+                std::abs(stick[i] - next) < kSettledMps) {
+                velocity_[i] = stick[i];  // reached: no overshoot
+                accel_[i] = 0.0;
+            } else {
+                velocity_[i] = next;
+            }
         }
+    }
+    if (angleMode) {
+        velocity_[0] = velocity_[1] = 0.0;
+        accel_[0] = accel_[1] = 0.0;
+    }
+    const double leash = kLeashAccel / kp;
+    for (std::size_t i = 0; i < 3; ++i) {
+        if (held_[i] && stick[i] == 0.0) {
+            // Let go while something held it back (a ceiling, a wall): there is nothing to brake,
+            // so the set point stays where the drone is while the push ramps down with the
+            // velocity (easing off, not dropping it all at once), and it then holds there.
+            setpoint_[i] = position[i];
+            held_[i] = velocity_[i] != 0.0;
+            continue;
+        }
+        setpoint_[i] += velocity_[i] * dt;
+        if (velocity_[i] > 0.0 && setpoint_[i] > position[i] + leash) {
+            setpoint_[i] = position[i] + leash;
+            held_[i] = true;
+        } else if (velocity_[i] < 0.0 && setpoint_[i] < position[i] - leash) {
+            setpoint_[i] = position[i] - leash;
+            held_[i] = true;
+        } else if (velocity_[i] == 0.0) {
+            held_[i] = false;
+        }
+    }
+    if (command) {
         // Commanded by hand it may come down to the ground (a little below its start, so that
         // it sits); else it stays minHeightM up.
         const double floor =
-            settings_.waitForCommand ? home_[2] - kLandBelowM : home_[2] + settings_.minHeightM;
+            settings_.waitForCommand ? standing - kLandBelowM : home_[2] + settings_.minHeightM;
         if (setpoint_[2] < floor) {
             setpoint_[2] = floor;
-            wanted[2] = 0.0;
+            velocity_[2] = 0.0;
+            accel_[2] = 0.0;
         }
-        if (settings_.waitForCommand && command->upMps < 0.0 && position[2] < home_[2] + kLandedM &&
+        if (settings_.waitForCommand && command->upMps < 0.0 && position[2] < standing + kLandedM &&
             std::abs(velocity[2]) < kLandedMps) {
             airborne_ = false;  // landed: rotors off until the next climb
+            velocity_ = {};
+            accel_ = {};
             return grounded();
         }
         heading_ += std::clamp(yawRate, -settings_.maxYawRateRadps, settings_.maxYawRateRadps) * dt;
     }
+    // The set point's velocity and its change, fed forward.
+    const Vec3 wanted = velocity_;
+    const Vec3 accel = accel_;
     if (angleMode) {
         // Nothing holds it in place: back in position mode it holds where it then is.
         setpoint_[0] = position[0];
@@ -314,7 +430,8 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
     }
     Vec3 force{};
     for (std::size_t i = angleMode ? 2 : 0; i < 3; ++i) {
-        force[i] = mass_ * (kp * (setpoint_[i] - position[i]) + kd * (wanted[i] - velocity[i]));
+        force[i] =
+            mass_ * (kp * (setpoint_[i] - position[i]) + kd * (wanted[i] - velocity[i]) + accel[i]);
     }
     force[2] += mass_ * kGravity;
     if (angleMode) {
@@ -370,7 +487,10 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         const std::array<double, 4>& m = mixer_[i];
         const double f =
             std::max(0.0, m[0] * thrust + m[1] * torque[0] + m[2] * torque[1] + m[3] * torque[2]);
-        const double speed = r.spin * std::sqrt(f / (r.thrustPerOmega2 * airShare));
+        double speed = r.spin * std::sqrt(f / (r.thrustPerOmega2 * airShare));
+        if (r.speedLimit > 0.0) {
+            speed = std::clamp(speed, -r.speedLimit, r.speedLimit);
+        }
         const double now = bus.read(r.velocity);
         // The propeller's drag at the wanted speed, plus a proportional correction.
         const double feedForward = r.spin * r.torquePerOmega2 * airShare * speed * speed;
@@ -389,6 +509,17 @@ Status MulticopterController::saveState(StateWriter& writer) const {
     }
     writer.put(heading_);
     writer.put(airborne_);
+    writer.put(standHeight_);
+    writer.put(standKnown_);
+    for (const double v : velocity_) {
+        writer.put(v);
+    }
+    for (const double a : accel_) {
+        writer.put(a);
+    }
+    for (const bool h : held_) {
+        writer.put(h);
+    }
     return {};
 }
 
@@ -409,6 +540,17 @@ Status MulticopterController::restoreState(StateReader& reader) {
     }
     ok = ok && reader.get(heading_);
     ok = ok && reader.get(airborne_);
+    ok = ok && reader.get(standHeight_);
+    ok = ok && reader.get(standKnown_);
+    for (double& v : velocity_) {
+        ok = ok && reader.get(v);
+    }
+    for (double& a : accel_) {
+        ok = ok && reader.get(a);
+    }
+    for (bool& h : held_) {
+        ok = ok && reader.get(h);
+    }
     return ok ? Status{} : Status::error(StatusCode::InvalidConfig, "controller state truncated");
 }
 

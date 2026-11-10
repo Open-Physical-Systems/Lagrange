@@ -164,3 +164,15 @@ def test_a_run_file_says_what_is_wrong_in_it(tmp_path: Path) -> None:
 def test_an_unknown_season_is_refused() -> None:
     result = run("town", "--season", "monsoon")
     assert result.returncode != 0 and "summer" in result.stderr
+
+
+def test_heat_gives_the_steady_temperatures_in_seconds() -> None:
+    # RFC 0012: the sample LED heat sink at its steady state, all its heat out to the air.
+    robot = str(
+        Path(__file__).resolve().parents[3] / "assets/robots/led_heatsink/led_heatsink.urdf"
+    )
+    result = run("heat", "--robot", robot, "--world", "none", "--ambient-temperature", "298.15")
+    assert result.returncode == 0, result.stderr
+    assert "led_left" in result.stdout and "sink" in result.stdout
+    assert "3.000 W in, 3.000 W out" in result.stdout
+    assert run("heat", "--robot", robot, "--world", "none").returncode != 0  # no ambient

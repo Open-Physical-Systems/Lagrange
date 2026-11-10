@@ -36,6 +36,10 @@ inline constexpr double kMinDistance = 0.01;
 /// B of a magnetic dipole of moment `moment` (A·m²) at `centre`, at `at`:
 /// μ0/(4π)·(3·r̂(m·r̂) − m)/r³. T.
 [[nodiscard]] Vec3 dipoleField(const Vec3& centre, const Vec3& moment, const Vec3& at);
+/// B of a straight segment from `a` to `b` carrying `current` (A) from a to b, at `at`:
+/// μ0·I/(4π·d)·(sin θ2 − sin θ1) along (b − a) × r̂ (Griffiths, Introduction to
+/// Electrodynamics, 4th ed., Example 5.5), d the distance from the segment's line. T.
+[[nodiscard]] Vec3 segmentField(const Vec3& a, const Vec3& b, double current, const Vec3& at);
 /// RMS E of an isotropic radiator in free space, far field: √(30·EIRP)/d. V/m.
 [[nodiscard]] double farField(double eirp, double distance);
 
@@ -53,7 +57,7 @@ inline constexpr double kMinDistance = 0.01;
 
 /// One EmiSourceAPI_1 prim, read once at load.
 struct Source {
-    enum class Type { PowerLine, MotorDrive, Transmitter, Welder, Custom };
+    enum class Type { PowerLine, MotorDrive, Transmitter, Welder, Custom, Wire };
     std::string name;  // the prim's instance name
     Type type{Type::Custom};
     BodyId body{kWorldBody};  // where it is (World::Prims::body, poseInBody)
@@ -68,7 +72,10 @@ struct Source {
     double momentPerAmpere{0.0};    // m²
     std::shared_ptr<const fields::Field> fieldMap;  // in the prim's frame
     bool mapIsB{true};
-    std::string drivenBy;  // a motor whose current scales it at runtime, or empty
+    std::string drivenBy;              // a motor whose current scales it at runtime, or empty
+    std::vector<Vec3> path;            // a wire's route, in the prim's frame (RFC 0013)
+    Vec3 returnOffset{0.0, 0.0, 0.0};  // its return conductor, the route shifted by this
+    std::string currentSignal;         // a signal (A) that sets the current every step, or empty
 };
 
 /// The sources of `world`; an error for a missing or invalid required value (power lines need

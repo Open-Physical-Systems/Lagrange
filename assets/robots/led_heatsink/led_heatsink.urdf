@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<!-- A sample for heat conduction (RFC 0012, docs/physics/heat-conduction.md): two LEDs and their
+     driver on a circuit board, screwed to a finned aluminium heat sink with a thermal pad. Generic
+     dimensions; run it with the site's ambient temperature:
+       lagrange_server --robot assets/robots/led_heatsink/led_heatsink.urdf --world none \
+         --ambient-temperature 298.15 -->
+<robot name="led_heatsink">
+  <link name="sink">
+    <!-- 60 x 40 mm base, 4 mm thick, with four 2 mm fins 20 mm tall underneath -->
+    <collision><origin xyz="0 0 0"/><geometry><box size="0.06 0.04 0.004"/></geometry></collision>
+    <collision><origin xyz="-0.024 0 -0.012"/><geometry><box size="0.002 0.04 0.02"/></geometry></collision>
+    <collision><origin xyz="-0.008 0 -0.012"/><geometry><box size="0.002 0.04 0.02"/></geometry></collision>
+    <collision><origin xyz="0.008 0 -0.012"/><geometry><box size="0.002 0.04 0.02"/></geometry></collision>
+    <collision><origin xyz="0.024 0 -0.012"/><geometry><box size="0.002 0.04 0.02"/></geometry></collision>
+    <visual><origin xyz="0 0 0"/><geometry><box size="0.06 0.04 0.004"/></geometry></visual>
+    <inertial><mass value="0.04"/><inertia ixx="1e-5" iyy="1e-5" izz="1e-5" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <link name="board">
+    <collision><geometry><box size="0.05 0.03 0.0016"/></geometry></collision>
+    <visual><geometry><box size="0.05 0.03 0.0016"/></geometry></visual>
+    <inertial><mass value="0.005"/><inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="board_mount" type="fixed">
+    <parent link="sink"/><child link="board"/><origin xyz="0 0 0.0028"/>
+  </joint>
+  <gazebo reference="sink">
+    <thermal_material preset="aluminium_6061" emissivity="0.85"/> <!-- anodised -->
+  </gazebo>
+  <gazebo reference="board">
+    <!-- a 1.6 mm board with copper planes: in-plane about 20 W/(m K), through it 0.3 -->
+    <thermal_material preset="fr4" conductivity="20" conductivity_along="0.3" axis="0 0 1"
+                      contact_conductance="2000"/> <!-- a thermal pad -->
+    <heat_source name="led_left" power="2.0" efficiency="0.35" xyz="-0.012 0 0.0008" size="0.003 0.003 0.001"/>
+    <heat_source name="led_right" power="2.0" efficiency="0.35" xyz="0.012 0 0.0008" size="0.003 0.003 0.001"/>
+    <heat_source name="driver" power="0.4" xyz="0 0.009 0.0008" size="0.004 0.004 0.001"/>
+  </gazebo>
+</robot>

@@ -161,7 +161,9 @@ sends servo frames to UDP 9002 and each one is answered, in lockstep at 1 kHz, w
 exact rates, specific force, NED position, velocity and attitude (ArduPilot adds its own sensor
 noise and makes GPS, compass and barometer itself). ArduCopter Copter-4.7.2 with
 `bridges/mavlink/ardupilot/lagrange_quad_x500.parm` flies the same square
-(`tools/ci/ardupilot_mission.sh`, calm and `--wind`).
+(`tools/ci/ardupilot_mission.sh`, calm and `--wind`). Full output is each rotor's loaded top
+speed from its motor and battery (`mavlink::rotorTopSpeed`, `test_rotor_top_speed`; 921 rad/s for
+the sample at its motors' 25 A, where it was a fixed 850 until v1.1), or `--mavlink-max-rotor-speed`.
 
 *Acceptance (v0.4):* the PX4 mission passes in 8 m/s of gusty wind (`tools/ci/px4_mission.sh
 --wind`, the profile `quad_x500_gusty.yaml`). Low battery: at full throttle a full pack holds

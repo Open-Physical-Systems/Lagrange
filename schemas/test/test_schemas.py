@@ -31,7 +31,7 @@ EXPECTED = {
         "ElectricalConverterAPI_1",
         "ElectricalBranchAPI_1",
     ],
-    "thermal": ["ThermalAPI_1", "ThermalLinkAPI_1"],
+    "thermal": ["ThermalAPI_1", "ThermalLinkAPI_1", "ThermalMaterialAPI_1", "HeatSourceAPI_1"],
     "aero": ["AeroAPI_1", "RotorAPI_1"],
     "weather": ["WeatherAPI_1"],
     "emi": ["EmiSourceAPI_1", "EmiSusceptibilityAPI_1"],
@@ -43,6 +43,7 @@ EXPECTED = {
     "water": ["WaterAPI_1"],
     "joint": ["JointDynamicsAPI_1"],
     "world": ["WorldTileAPI_1"],
+    "tether": ["TetherAPI_1"],
 }
 
 

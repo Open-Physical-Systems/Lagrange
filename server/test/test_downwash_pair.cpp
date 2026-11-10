@@ -31,7 +31,7 @@ constexpr double kOmega = 565.0;   // rad/s, about its hover speed (5400 RPM)
 // constant is kT/1.5 (the overlay's BLDC convention). At constant voltage the speed falls by
 // R/(kT·kE) per N·m of load.
 constexpr double kWinding = 0.1;                 // ohm
-constexpr double kTorqueConst = 0.01557;         // N·m/A
+constexpr double kTorqueConst = 0.008989;        // N·m/A
 constexpr double kBackEmf = kTorqueConst / 1.5;  // V·s/rad
 constexpr double kSpeedEasing =
     0.02;  // per 1 ms step: the rotor's spin-up, a stand-in for its inertia

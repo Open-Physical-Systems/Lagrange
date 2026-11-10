@@ -435,6 +435,12 @@ the two channels have different units.
 | `emi:fieldMap` | asset | — | none | NanoVDB vector grid of B (T) or E (V/m), at `emi:current` or `emi:radiatedPower` |
 | `emi:fieldMapQuantity` | token | — | `B` | `B` or `E` |
 | `emi:drivenBy` | rel | — | none | Signal-producing prim (a motor) whose current scales the source at runtime |
+| `emi:path` | double[] | m | `[]` | For `wire` (RFC 0013, added in 1.x): x, y, z of each point of its route, prim frame |
+| `emi:returnOffset` | double3 | m | `(0, 0, 0)` | For `wire`: the return conductor, the route shifted by this; zero: none |
+| `emi:currentSignal` | token | — | `""` | A signal (A) that sets the current every step, signed for a direct current; over `emi:drivenBy` |
+
+`wire` (RFC 0013) was appended to `emi:sourceType`'s tokens: a conductor along `emi:path`, its
+field the Biot–Savart sum over its straight segments.
 
 **`EmiSusceptibilityAPI_1`** (single-apply, on a sensor, bus or radio prim). These are the
 per-robot calibration parameters.
@@ -691,6 +697,109 @@ per lane type, road marks become thin meshes (broken marks are 3 m on and 6 m of
 illustrative), and every driving, biking, parking or sidewalk lane becomes a `RoadLaneAPI_1`
 prim with its links. The surfaces have no colliders: they lie 1 cm above the ground plane that
 the loader adds, so roads with elevation are drawn but not yet driven on.
+
+### 3.12 `schemas/tether/schema.usda`
+
+Added in 1.x by RFC 0011 and simulated by the tether domain (`modules/tether/`).
+
+**`TetherAPI_1`** (single-apply). The prim's origin is the anchor, such as a ground station's winch
+outlet. It can sit on the world, a fixed body or a moving body.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `tether:anchorPoint` | double3 | m | `(0, 0, 0)` | The anchor in the prim's frame; on the world, a world position |
+| `tether:attach` | rel | — | — | The body (link) the far end is tied to. Required |
+| `tether:attachPoint` | double3 | m | `(0, 0, 0)` | Where on that body, in its frame |
+| `tether:length` | double | m | `0` | Length paid out at the start. Required, over 0 |
+| `tether:diameter` | double | m | `0.005` | For contact, drag and drawing |
+| `tether:linearDensity` | double | kg/m | `0.02` | Mass per metre |
+| `tether:axialStiffness` | double | N | `20000` | EA |
+| `tether:dampingRatio` | double | 1 | `0.05` | Axial damping, a share of critical per segment |
+| `tether:bendStiffness` | double | N·m² | `0` | EI |
+| `tether:friction` | double | 1 | `0.4` | Coulomb, on scenery, bodies and itself |
+| `tether:dragCoeff` | double | 1 | `1.2` | Normal; tangential is 1/50 of it |
+| `tether:segmentLength` | double | m | `0.2` | Spacing of the point masses |
+| `tether:winch` | token | — | `fixed` | `fixed`, `tension` or `free` |
+| `tether:winchTension` | double | N | `5` | Set point of `tension` |
+| `tether:winchSpeed` | double | m/s | `1` | Most it pays out or reels in |
+| `tether:maxLength` | double | m | `0` | The drum's end; `0` is `length` |
+| `tether:resistancePerLength` | double | ohm/m | `0` | Both conductors, round trip; not simulated yet |
+
+An overlay applies it like any other schema. A new prim has no pose, so `anchorPoint` places the
+station:
+
+```yaml
+apply:
+  - create: ground_station
+    schemas:
+      TetherAPI_1:
+        tether:anchorPoint: [2.0, 0.0, 0.3]
+        tether:attach: base_link
+        tether:length: 5.0
+        tether:diameter: 0.006
+        tether:linearDensity: 0.03
+        tether:winch: tension
+```
+
+### 3.13 Thermal materials and heat sources (`schemas/thermal/schema.usda`)
+
+Added in 1.x by RFC 0012, for the thermal domain's `conduction` fidelity
+(docs/physics/heat-conduction.md).
+
+**`ThermalMaterialAPI_1`** (single-apply), on a link's prim or a material bound to it. A preset
+gives every number; an authored number overrides it.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `thermal:material:preset` | token | — | `""` | A row of the cited preset table, e.g. `aluminium_6061`, `fr4`, `pla` |
+| `thermal:material:conductivity` | double | W/(m·K) | — | `k` (in the two directions across `axis` when `conductivityAlong` is given) |
+| `thermal:material:density` | double | kg/m³ | — | `ρ` |
+| `thermal:material:specificHeat` | double | J/(kg·K) | — | `c_p` |
+| `thermal:material:emissivity` | double | 1 | — | Of its surfaces, 0 to 1 |
+| `thermal:material:conductivityAlong` | double | W/(m·K) | — | Along `axis` (through a board or a laminate); unauthored: isotropic |
+| `thermal:material:axis` | double3 | 1 | `(0, 0, 1)` | In the link's frame |
+| `thermal:material:contactConductance` | double | W/(m²·K) | — | Where it touches its parent link; unauthored: no conduction across |
+| `thermal:material:initialTemperature` | double | K | — | Unauthored: the ambient |
+| `thermal:material:maxTemperature` | double | K | — | Over it anywhere: `overtemp` |
+
+**`HeatSourceAPI_1`** (multiple-apply, `thermal:source:<name>:`), on a link's prim. Its heat,
+`(1 − efficiency) · power`, is shared over the link's cells inside the box.
+
+| Attribute | Type | Unit | Fallback | Meaning |
+|---|---|---|---|---|
+| `power` | double | W | `0` | Electrical input power |
+| `powerSignal` | token | — | `""` | Or a signal in W, read each step; overrides `power` |
+| `efficiency` | double | 1 | `0` | Share leaving as light |
+| `position` | double3 | m | `(0, 0, 0)` | Centre of the box, link frame |
+| `size` | double3 | m | `(0.001, 0.001, 0.001)` | Full size of the box |
+
+```yaml
+apply:
+  - prim: led_board
+    schemas:
+      ThermalMaterialAPI_1:
+        thermal:material:preset: fr4
+        thermal:material:contactConductance: 3000.0
+      HeatSourceAPI_1:led_1:
+        thermal:source:led_1:power: 3.0
+        thermal:source:led_1:efficiency: 0.35
+        thermal:source:led_1:position: [0.01, 0.0, 0.0016]
+        thermal:source:led_1:size: [0.003, 0.003, 0.001]
+```
+
+In a URDF, on the link (read by the server and `lagrange_import`, which writes the schemas):
+
+```xml
+<gazebo reference="led_board">
+  <thermal_material preset="fr4" conductivity="20" conductivity_along="0.3" axis="0 0 1" contact_conductance="3000"/>
+  <heat_source name="led_1" power="3.0" efficiency="0.35" xyz="0.01 0 0.0016" size="0.003 0.003 0.001"/>
+  <heat_source name="driver" power_signal="motor/left/loss_power"/>
+</gazebo>
+```
+
+`<thermal_material>` takes `preset`, `conductivity`, `density`, `specific_heat`, `emissivity`,
+`conductivity_along`, `axis`, `contact_conductance`, `initial_temperature`, `max_temperature`;
+`<heat_source>` takes `name` (required), `power`, `power_signal`, `efficiency`, `xyz`, `size`.
 
 ## 4. Sample robot: differential-drive AMR
 

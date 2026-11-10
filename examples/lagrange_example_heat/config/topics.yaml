@@ -1,0 +1,5 @@
+# The temperatures of the run on ROS 2 topics (sensor_msgs/Temperature is in degrees Celsius).
+publish:
+  - {signal: thermal/led_left/temperature, topic: /heat/led_left, type: sensor_msgs/msg/Temperature}
+  - {signal: thermal/board/max_temperature, topic: /heat/board_max, type: sensor_msgs/msg/Temperature}
+  - {signal: thermal/sink/temperature, topic: /heat/sink, type: sensor_msgs/msg/Temperature}

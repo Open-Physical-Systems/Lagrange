@@ -118,7 +118,10 @@ $ ros2 topic echo --once --field twist.twist.linear.x /odom
 
 Stop the publisher: half a second without a command, the robot stops. Stop the simulator; the
 recording is closed and `run.mcap` holds every signal of the run (about 1.5 MB/s for this
-robot). Replay it with:
+robot). Without `--record`, the viewer's **Record** button (or Ctrl+R) does the same while it
+runs: its dot turns red, and a second press stops it. The file goes on the simulator's machine,
+in `~/.local/state/lagrange/recordings/` (its tooltip names it); the console logs it when it
+closes. Replay it with:
 
 ```bash
 ros2 run lagrange_server lagrange_server --replay run.mcap

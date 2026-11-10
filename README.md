@@ -11,7 +11,7 @@ unit-checked signal bus, and any of them can be disabled or replaced by ideal, c
 replayed data. A native Vulkan viewer shows the run; it talks to the simulator only through a
 protocol, never by linking it.
 
-**Status: v1.1.0, stable** ([release notes](docs/release/v1.1.0.md); documentation at
+**Status: v1.2.0, stable** ([release notes](docs/release/v1.2.0.md); documentation at
 [open-physical-systems.github.io/Lagrange](https://open-physical-systems.github.io/Lagrange/)). The USD schemas, the
 plugin C ABI, the viewer protocol, profiles and recordings are frozen for 1.x and change only by
 addition ([RFC 0007](rfcs/0007-v1-freeze.md)); 1.x is supported on `release/1.x` until ROS 2
@@ -168,7 +168,7 @@ recorded to MCAP and replayed.
 
 <!-- docs-index begin: written by tools/ci/docs_index.py -->
 
-<details><summary>User guide (19)</summary>
+<details><summary>User guide (20)</summary>
 
 - [User guide](docs/guide/README.md)
 - [Autoware with a simulated car](docs/guide/autoware.md)
@@ -184,6 +184,7 @@ recorded to MCAP and replayed.
 - [Tutorial: test your own drone, step by step](docs/guide/tutorial-custom-drone.md)
 - [Tutorial: a quadcopter, from hover to a PX4 mission](docs/guide/tutorial-drone.md)
 - [Tutorial: weather, interference and radio links](docs/guide/tutorial-environment.md)
+- [Tutorial: heat in the parts, and a robot's own interference](docs/guide/tutorial-heat-and-emi.md)
 - [Tutorial: huge worlds](docs/guide/tutorial-huge-worlds.md)
 - [Tutorial: people around your robot](docs/guide/tutorial-humans.md)
 - [Tutorial: a robot's power system from a schematic](docs/guide/tutorial-power.md)
@@ -192,19 +193,21 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Physics reference (16)</summary>
+<details><summary>Physics reference (18)</summary>
 
 - [Aerodynamics: drag, wind and the wind tunnel](docs/physics/aerodynamics.md)
 - [Battery](docs/physics/battery.md)
 - [Downwash](docs/physics/downwash.md)
 - [The electrical network: buses, converters and the parts between them](docs/physics/electrical-network.md)
 - [EMI and radio links](docs/physics/emi-and-radio.md)
+- [Heat conduction in solids](docs/physics/heat-conduction.md)
 - [Humans: people who walk](docs/physics/humans.md)
 - [Physics reference](docs/physics/index.md)
 - [Motors](docs/physics/motors.md)
 - [Rigid body](docs/physics/rigid-body.md)
 - [Rotors](docs/physics/rotors.md)
 - [Sensors](docs/physics/sensors.md)
+- [Tethers](docs/physics/tether.md)
 - [Thermal](docs/physics/thermal.md)
 - [Traffic: cars, lights, crossings and scenarios](docs/physics/traffic.md)
 - [Vehicles and wheeled bases](docs/physics/vehicles.md)
@@ -278,10 +281,11 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Plan and evaluation (16)</summary>
+<details><summary>Plan and evaluation (17)</summary>
 
 - [Project overview](docs/plan/00-overview.md)
 - [Rotor downwash and live airflow: progress](docs/plan/downwash-progress.md)
+- [EMI from motors, heat conduction, thermal sensors: work queue](docs/plan/emi-thermal-queue.md)
 - [What to develop next: an evaluation, 2026-11-01](docs/plan/evaluation-2026-11.md)
 - [Open questions and challenges to the plan](docs/plan/open-questions.md)
 - [Overnight work, 2026-11-03 (until 07:00 JST)](docs/plan/overnight-2026-11-03.md)
@@ -299,7 +303,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Release notes (9)</summary>
+<details><summary>Release notes (10)</summary>
 
 - [v0.2.0 compared with Gazebo Jetty: the sample AMR](docs/release/v0.2.0-comparison.md)
 - [Lagrange v0.2.0: simulation core and AMR (release notes, draft)](docs/release/v0.2.0.md)
@@ -310,6 +314,7 @@ recorded to MCAP and replayed.
 - [Lagrange v0.7.0: huge worlds (release notes)](docs/release/v0.7.0.md)
 - [Lagrange v1.0.0: stable (release notes)](docs/release/v1.0.0.md)
 - [Lagrange v1.1.0: easier to use, checked against measurements (release notes)](docs/release/v1.1.0.md)
+- [Lagrange v1.2.0: cables, heat in the parts, a robot's own interference (release notes)](docs/release/v1.2.0.md)
 
 </details>
 
@@ -325,7 +330,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Design proposals (RFCs) (10)</summary>
+<details><summary>Design proposals (RFCs) (13)</summary>
 
 - [RFC 0001: Module interface, signals and scheduling contract](rfcs/0001-module-interface.md)
 - [RFC 0002: USD custom schemas](rfcs/0002-usd-schemas.md)
@@ -337,6 +342,9 @@ recorded to MCAP and replayed.
 - [RFC 0008: Plugins in the server: loading, scene access, custom sensors and physics backends](rfcs/0008-plugins-in-the-server.md)
 - [RFC 0009: Walking humans](rfcs/0009-walking-humans.md)
 - [RFC 0010: Components between buses, and a schematic's parts](rfcs/0010-electrical-nodes.md)
+- [RFC 0011: Tethers and cables](rfcs/0011-tethers.md)
+- [RFC 0012: Heat conduction in solids, from materials](rfcs/0012-heat-conduction.md)
+- [RFC 0013: Magnetic interference from a robot's own power wiring](rfcs/0013-motor-emi.md)
 
 </details>
 

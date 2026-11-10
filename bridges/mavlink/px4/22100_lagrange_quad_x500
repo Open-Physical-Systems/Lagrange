@@ -8,7 +8,10 @@
 # MAVLink bridge (--mavlink px4). Rotor positions in FRD (x forward, y right), metres; the moment
 # coefficient KM = CP·D/(2π·CT) = 0.0507·0.254/(2π·0.125) of the APC 10x4.7 SF propeller,
 # positive for counter-clockwise rotors. The bridge's ESCs make rotor speed proportional to the
-# output, so thrust goes with its square (THR_MDL_FAC 1); the hover output is about 0.65.
+# output, so thrust goes with its square (THR_MDL_FAC 1). Full output is the rotors' loaded top
+# speed from their motors and 4S battery (921 rad/s at the motors' 25 A, logged by the bridge);
+# hover, 551 rad/s for 2.0 kg, is (551/921)² = 0.36 of the thrust, which is what MPC_THR_HOVER
+# counts in with THR_MDL_FAC 1.
 
 . ${R}etc/init.d/rc.mc_defaults
 
@@ -33,4 +36,4 @@ param set-default PWM_MAIN_FUNC3 103
 param set-default PWM_MAIN_FUNC4 104
 
 param set-default THR_MDL_FAC 1.0
-param set-default MPC_THR_HOVER 0.65
+param set-default MPC_THR_HOVER 0.36

@@ -68,6 +68,12 @@ struct ServerOptions {
     /// ArduPilot SITL through its JSON interface (--mavlink ardupilot[:PORT]): the UDP port its
     /// servo frames come to.
     std::optional<std::uint16_t> ardupilotPort;
+    /// The rotors' speed at the autopilot's full output, rad/s (--mavlink-max-rotor-speed); none:
+    /// each rotor's loaded top speed from its motor and battery (mavlink::rotorTopSpeed).
+    std::optional<double> mavlinkMaxRotorSpeed;
+    /// --thrust-limit FRACTION: the share of each rotor's full thrust that the built-in controller
+    /// and an autopilot's full output may ask for (an ESC limit), 0 < FRACTION <= 1.
+    double thrustLimit{1.0};
     /// Bench mode (--bench): physics replaced by this recording's rigid-body signals, replayed
     /// open loop (the replay substitute); empty = none. A profile's rigid_body replay source
     /// overrides it.
@@ -105,6 +111,21 @@ struct ServerOptions {
         double sizeX{10.0}, sizeY{10.0}, depth{2.0};
     };
     std::vector<Water> water;
+    /// --tether X,Y,Z,LINK[,LENGTH]: a cable (RFC 0011) from the world point X,Y,Z to the origin
+    /// of LINK, LENGTH m long (0: the distance between them at the start plus 10 %), the rest
+    /// TetherAPI_1's fallbacks.
+    struct Tether {
+        std::array<double, 3> anchor{};
+        std::string link;
+        double length{0.0};
+    };
+    std::vector<Tether> tethers;
+    /// --emi-motor-leads SPACING[,X,Y,Z] (RFC 0013): a wire on the robot's root link from the
+    /// battery (at X,Y,Z in that link's frame; else the battery prim, when it is on the robot) to
+    /// every motor, carrying its bus current, its return SPACING m above it; every magnetometer a
+    /// victim of it.
+    std::optional<double> emiMotorLeads;
+    std::optional<std::array<double, 3>> emiBatteryAt;
     /// --water-current VX,VY[,VZ]: m/s, world ENU, the water's steady current (hydrodynamics.md).
     std::array<double, 3> waterCurrent{};
     /// --water-waves AMPLITUDE,PERIOD[,TOWARDS]: m, s and degrees (0 = towards +x, 90 = +y):

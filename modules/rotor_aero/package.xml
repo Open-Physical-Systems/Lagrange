@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_rotor_aero</name>
-  <version>1.1.0</version>
+  <version>1.2.0</version>
   <description>The rotor_aero domain: propeller thrust and shaft torque from coefficients, with inflow lag and ground effect (v0.4), and its ideal substitute.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>

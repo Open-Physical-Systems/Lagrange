@@ -37,6 +37,7 @@
         "vehicle_dynamics": { "$ref": "#/$defs/vehicle_dynamics" },
         "rotor_aero":       { "$ref": "#/$defs/rotor_aero" },
         "hydrodynamics":    { "$ref": "#/$defs/generic_domain" },
+        "tether":           { "$ref": "#/$defs/generic_domain" },
         "traffic":          { "$ref": "#/$defs/traffic" },
         "comms":            { "$ref": "#/$defs/generic_domain" },
         "humans":           { "$ref": "#/$defs/generic_domain" }
@@ -203,7 +204,11 @@
     "thermal": {
       "allOf": [ { "$ref": "#/$defs/common" }, { "$ref": "#/$defs/enabled_or_substituted" } ],
       "properties": {
-        "ambient_temperature": { "type": "number", "exclusiveMinimum": 0, "description": "K; required for the ambient substitute when no environment file is given" }
+        "ambient_temperature": { "type": "number", "exclusiveMinimum": 0, "description": "K; required for the ambient substitute when no environment file is given" },
+        "fidelity": { "enum": ["lumped", "conduction"], "description": "lumped: the ThermalAPI_1 nodes only; conduction (RFC 0012, the default when a link has a thermal material): also every such link, cut into cells" },
+        "cell": { "type": "number", "exclusiveMinimum": 0, "description": "m, the largest cell of the conduction fidelity (default 0.002)" },
+        "max_cells": { "type": "integer", "minimum": 1, "description": "most cells per link (default 200000); coarser cells beyond" },
+        "surface_coefficient": { "type": "number", "minimum": 0, "description": "W/(m²·K): one film coefficient for every surface instead of the convection correlations" }
       },
       "unevaluatedProperties": false
     },

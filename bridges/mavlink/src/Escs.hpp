@@ -2,28 +2,36 @@
 
 // Internal to lagrange_mavlink: the electronic speed controllers both autopilot bridges drive.
 
+#include "lagrange/mavlink/RotorTopSpeed.hpp"
 #include "lagrange/module/IModule.hpp"
+#include "lagrange/services/Log.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <map>
 #include <numbers>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lagrange::mavlink {
 
 /// One ESC per RotorAPI_1 joint, in joint-name order (rotor_1 is the autopilot's motor 1): an
-/// output u in [0, 1] is a speed set point u·maxSpeed in the rotor's own direction, held by a
-/// speed loop whose torque command, with the propeller's drag as feed-forward, goes to the
-/// electrical domain (joint/<j>/torque_command) like any controller's.
+/// output u in [0, 1] is a speed set point u·top in the rotor's own direction, held by a speed
+/// loop whose torque command, with the propeller's drag as feed-forward, goes to the electrical
+/// domain (joint/<j>/torque_command) like any controller's. Each rotor's top speed is the one
+/// given (--mavlink-max-rotor-speed), else its loaded top speed from its motor and battery
+/// (rotorTopSpeed), so that full output is what the motor can do.
 class Escs {
 public:
-    Status declare(const WorldView& world, SignalDeclarer& d, double airDensity, double maxSpeed,
-                   double speedGain) {
+    /// `thrustLimit`: the share of full thrust the autopilot's full output gives, by a top speed
+    /// of sqrt(thrustLimit) times the rotor's (thrust goes with the speed squared).
+    Status declare(const WorldView& world, SignalDeclarer& d, double airDensity,
+                   std::optional<double> maxSpeed, double speedGain, std::string_view who,
+                   double thrustLimit = 1.0) {
         rotors_.clear();
-        maxSpeed_ = maxSpeed;
         gain_ = speedGain;
         std::map<std::string, const SchemaInstance*> byName;
         for (const SchemaInstance* s : world.instancesOf("RotorAPI_1")) {
@@ -44,6 +52,19 @@ public:
             r.torquePerOmega2 = s->real("aero:rotor:powerCoeff").value_or(0.0) * airDensity *
                                 std::pow(diameter, 5) /
                                 (8.0 * std::numbers::pi * std::numbers::pi * std::numbers::pi);
+            const RotorTopSpeed top = maxSpeed
+                                          ? RotorTopSpeed{*maxSpeed, "--mavlink-max-rotor-speed"}
+                                          : rotorTopSpeed(world, *s, airDensity);
+            const double share = std::clamp(thrustLimit, 0.0, 1.0);
+            r.top = top.speed * std::sqrt(share);
+            std::string limited;
+            if (share < 1.0) {
+                limited = ", thrust limited to " + std::to_string(std::lround(100.0 * share)) +
+                          " % of " + std::to_string(std::lround(top.speed)) + " rad/s's";
+            }
+            services::log(services::LogLevel::Info, std::string(who),
+                          name + ": full output is " + std::to_string(std::lround(r.top)) +
+                              " rad/s (" + top.from + limited + ")");
             const std::string base = "joint/" + name + "/";
             SignalSpec velocity;
             velocity.name = base + "velocity";
@@ -70,7 +91,7 @@ public:
         for (std::size_t i = 0; i < rotors_.size(); ++i) {
             const Rotor& r = rotors_[i];
             const double u = i < outputs.size() ? std::clamp(outputs[i], 0.0, 1.0) : 0.0;
-            const double target = r.spin * u * maxSpeed_;
+            const double target = r.spin * u * r.top;
             const double feedForward = r.spin * r.torquePerOmega2 * target * target;
             bus.write(r.command,
                       u > 0.0 ? feedForward + gain_ * (target - bus.read(r.velocity)) : 0.0);
@@ -82,11 +103,11 @@ public:
 private:
     struct Rotor {
         double spin{1.0};
+        double top{0.0};  // rad/s at full output
         double torquePerOmega2{0.0};
         SignalId velocity, command;
     };
     std::vector<Rotor> rotors_;
-    double maxSpeed_{0.0};
     double gain_{0.0};
 };
 

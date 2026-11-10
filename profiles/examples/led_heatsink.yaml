@@ -1,0 +1,18 @@
+# profiles/examples/led_heatsink.yaml — heat inside the parts (RFC 0012): the sample LED board on
+# its finned heat sink, the conduction fidelity on 2 mm cells (finer where a part is thin), the
+# site's air at 25 °C (this scenario's parameter), the convection correlations (they match
+# OpenFOAM's finest mesh on this sink, docs/physics/heat-conduction.md; surface_coefficient: H
+# would put one film coefficient on every face instead). Run:
+#   ros2 run lagrange_server lagrange run profiles/examples/led_heatsink.yaml
+schema_version: 1
+stage: robots/led_heatsink/led_heatsink.urdf
+domains:
+  rigid_body:   { enabled: true, backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: false, substitute: ideal }
+  thermal:      { enabled: true, ambient_temperature: 298.15, dt: 1.0, fidelity: conduction,
+                  cell: 0.002 }
+  aerodynamics: { enabled: false, substitute: zero }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: false, substitute: zero }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: false, substitute: ground_truth }

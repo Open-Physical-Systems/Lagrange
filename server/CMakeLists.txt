@@ -21,6 +21,7 @@ find_package(lagrange_vehicle_dynamics REQUIRED)
 find_package(lagrange_traffic REQUIRED)
 find_package(lagrange_humans REQUIRED)
 find_package(lagrange_hydrodynamics REQUIRED)
+find_package(lagrange_tether REQUIRED)
 find_package(lagrange_opendrive REQUIRED)
 find_package(lagrange_openscenario REQUIRED)
 find_package(lagrange_mavlink REQUIRED)
@@ -99,6 +100,7 @@ target_link_libraries(
         lagrange_traffic::lagrange_traffic
         lagrange_humans::lagrange_humans
         lagrange_hydrodynamics::lagrange_hydrodynamics
+        lagrange_tether::lagrange_tether
         lagrange_opendrive::lagrange_opendrive
         lagrange_openscenario::lagrange_openscenario
         lagrange_mavlink::lagrange_mavlink
@@ -165,6 +167,7 @@ target_link_libraries(
         lagrange_gpu::lagrange_gpu
         yaml-cpp::yaml-cpp
         lagrange_electrical::lagrange_electrical
+        lagrange_thermal::lagrange_thermal
 )
 
 add_executable(lagrange_import src/import_main.cpp)
@@ -245,10 +248,11 @@ if(BUILD_TESTING)
         test/test_humans_run.cpp
         test/test_plugins.cpp
         test/test_multicopter.cpp
+        test/test_tether_run.cpp
         test/test_downwash_pair.cpp
         test/test_toggles.cpp
         test/test_usd_assets.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world:${schemas_share}/usd/tether"
         TIMEOUT 120
     )
     target_link_libraries(
@@ -261,6 +265,7 @@ if(BUILD_TESTING)
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
         lagrange_sensors::lagrange_sensors
         lagrange_stage::lagrange_stage
+        lagrange_mavlink::lagrange_mavlink
         mcap_vendor::mcap
         tinyxml2::tinyxml2
     )
@@ -293,6 +298,7 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_WORKCELL_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_arm6.urdf"
             LAGRANGE_TEST_PROPELLERS="${CMAKE_CURRENT_SOURCE_DIR}/../assets/propellers"
             LAGRANGE_TEST_QUAD_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500.usda"
+            LAGRANGE_TEST_LED_HEATSINK_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/led_heatsink/led_heatsink.urdf"
             LAGRANGE_TEST_QUAD_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500.urdf"
             LAGRANGE_TEST_QUAD_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500.overlay.yaml"
             LAGRANGE_TEST_QUAD_EMI_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500_emi.usda"
@@ -365,7 +371,7 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_arm
         test/test_arm.cpp
-        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world"
+        ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world:${schemas_share}/usd/tether"
         TIMEOUT 180
     )
     target_link_libraries(

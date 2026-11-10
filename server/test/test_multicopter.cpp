@@ -5,14 +5,20 @@
 // below the bus's undervoltage trip at full load: the drives trip and it does not take off.)
 #include "lagrange/aerodynamics/Aerodynamics.hpp"
 #include "lagrange/electrical/Network.hpp"
+#include "lagrange/mavlink/RotorTopSpeed.hpp"
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/rotor_aero/RotorAero.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
+#include "lagrange/sensors/ShapeCaster.hpp"
 #include "lagrange/server/Multicopter.hpp"
 #include "lagrange/server/Robot.hpp"
+#include "lagrange/server/Server.hpp"
 #include "lagrange/services/WrenchSum.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <memory>
 #include <numbers>
 #include <optional>
 #include <string>
@@ -344,6 +350,313 @@ TEST(Multicopter, TakesOffByHandWithEveryStickAtOnce) {
     // Upright: the body's z axis within 30° of vertical (q = w, x, y, z).
     const double up = 1.0 - 2.0 * (p[4] * p[4] + p[5] * p[5]);
     EXPECT_GT(up, std::cos(std::numbers::pi / 6.0));
+}
+
+// Flown by hand into a ceiling (a fixed box 2 m above the start) with the stick held up, then
+// forward, then let go: the set point stays on its leash, so the drone presses on the ceiling
+// without tipping over, and comes down as soon as it is asked to (the set point did not run
+// metres above the ceiling while it was held there).
+TEST(Multicopter, PressedUnderACeilingItStaysUprightAndComesBack) {
+    auto robot = loadModel(LAGRANGE_TEST_QUAD_USDA);
+    ASSERT_TRUE(robot) << robot.error();
+    World& world = robot->world;
+    const auto base = std::ranges::find(world.bodies.names, "base_link");
+    ASSERT_NE(base, world.bodies.names.end());
+    const double start =
+        world.bodies.poseInParent[static_cast<std::size_t>(base - world.bodies.names.begin())]
+            .position[2];
+    // The ceiling: a 6 m x 6 m slab 0.3 m thick (half extents), its underside 2 m above the start.
+    world.addCollider(kWorldBody, ShapeType::Box, {3.0, 3.0, 0.15}, Pose{{0.0, 0.0, start + 2.15}},
+                      1.0);
+    ModuleConfigData power;
+    power.dt = 50_us;
+    power.values["exchange_step"] = 0.001;
+    ModuleConfigData air;
+    air.values[rotor_aero::kAirDensityKey] = 1.225;
+    std::optional<MulticopterController::FlightCommand> command;
+    MulticopterController::Settings flight;
+    flight.waitForCommand = true;
+    Scheduler run(SchedulerOptions{.deterministic = false});
+    run.add(std::make_unique<rigid_body::MujocoBackend>());
+    run.add(std::make_unique<electrical::ElectricalNetwork>(), ModuleConfig(power));
+    run.add(std::make_unique<rotor_aero::RotorAero>(), ModuleConfig(air));
+    run.add(std::make_unique<MulticopterController>(flight, [&command] { return command; }),
+            ModuleConfig(air));
+    run.add(std::make_unique<services::WrenchSum>());
+    auto wired = run.wire(WorldView(world));
+    ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    const SignalBus& bus = run.bus();
+    const SignalId pose = bus.find("body/base_link/pose");
+    double t = 0.0;
+    double worstUp = 1.0;  // the lowest z of the body's z axis seen (cos of the tilt)
+    const auto fly = [&](double seconds) {
+        for (const double end = t + seconds; t < end - 1e-9;) {
+            t += 0.05;
+            EXPECT_TRUE(run.stepUntil(SimTime{static_cast<std::int64_t>(t * 1e9)}).ok());
+            const std::span<const double> p = bus.readN(pose);
+            worstUp = std::min(worstUp, 1.0 - 2.0 * (p[4] * p[4] + p[5] * p[5]));
+        }
+        return bus.readN(pose)[2];
+    };
+    // Up at full stick (2 m/s) for 8 s: about 1 s to the ceiling, then 7 s pressed under it.
+    command = MulticopterController::FlightCommand{0.0, 0.0, 2.0, 0.0};
+    const double pressed = fly(8.0);
+    EXPECT_GT(pressed - start, 1.5);
+    // Forward as well for 3 s, still pressed up, then the sticks let go for 8 s.
+    command = MulticopterController::FlightCommand{2.0, 0.0, 2.0, 0.0};
+    (void)fly(3.0);
+    command.reset();
+    const double released = fly(8.0);
+    EXPECT_GT(released - start, 1.5);  // still up there, not fallen
+    EXPECT_GT(worstUp, std::cos(std::numbers::pi / 4.0)) << "tipped past 45°";
+    // Down at 1 m/s for 1.5 s: it comes down right away, ramping to that speed (about 1 m).
+    command = MulticopterController::FlightCommand{0.0, 0.0, -1.0, 0.0};
+    const double down = fly(1.5);
+    EXPECT_GT(released - down, 0.5) << "the set point was left far above the ceiling";
+}
+
+// Full stick forward (5 m/s) for 4 s, then let go: the commanded velocity ramps within PX4's
+// position-mode limits (3 m/s², 8 m/s³), so it leans well short of the 30° cap, keeps its
+// height, brakes to a stop and stays where it stopped, instead of throwing itself at the cap and
+// flying back to where the stick was let go.
+TEST(Multicopter, FullStickThenLetGoStartsAndStopsSmoothly) {
+    auto robot = loadModel(LAGRANGE_TEST_QUAD_USDA);
+    ASSERT_TRUE(robot) << robot.error();
+    Scheduler scheduler(SchedulerOptions{.deterministic = false});
+    scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+    ModuleConfigData power;
+    power.dt = 50_us;
+    power.values["exchange_step"] = 0.001;
+    scheduler.add(std::make_unique<electrical::ElectricalNetwork>(), ModuleConfig(power));
+    ModuleConfigData air;
+    air.values[rotor_aero::kAirDensityKey] = 1.225;
+    scheduler.add(std::make_unique<rotor_aero::RotorAero>(), ModuleConfig(air));
+    std::optional<MulticopterController::FlightCommand> command;
+    MulticopterController::Settings flight;
+    flight.waitForCommand = true;
+    scheduler.add(std::make_unique<MulticopterController>(flight, [&command] { return command; }),
+                  ModuleConfig(air));
+    scheduler.add(std::make_unique<services::WrenchSum>());
+    auto wired = scheduler.wire(WorldView(robot->world));
+    ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    const SignalBus& bus = scheduler.bus();
+    const SignalId pose = bus.find("body/base_link/pose");
+    double t = 0.0;
+    double worstUp = 1.0;  // cos of the largest tilt seen
+    double lowest = 1e9;
+    double highest = -1e9;
+    double furthest = -1e9;
+    const auto fly = [&](double seconds) {
+        for (const double end = t + seconds; t < end - 1e-9;) {
+            t += 0.01;
+            EXPECT_TRUE(scheduler.stepUntil(SimTime{static_cast<std::int64_t>(t * 1e9)}).ok());
+            const std::span<const double> p = bus.readN(pose);
+            worstUp = std::min(worstUp, 1.0 - 2.0 * (p[4] * p[4] + p[5] * p[5]));
+            lowest = std::min(lowest, p[2]);
+            highest = std::max(highest, p[2]);
+            furthest = std::max(furthest, p[0]);
+        }
+        return bus.readN(pose)[0];
+    };
+    // Up to 2 m and hold, then measure from there.
+    command = MulticopterController::FlightCommand{0.0, 0.0, 1.0, 0.0};
+    (void)fly(2.0);
+    command.reset();
+    const double start = fly(3.0);
+    worstUp = 1.0;
+    lowest = highest = bus.readN(pose)[2];
+    command = MulticopterController::FlightCommand{5.0, 0.0, 0.0, 0.0};
+    const double letGo = fly(4.0);
+    command.reset();
+    const double stopped = fly(5.0);
+    const double tilt = std::acos(worstUp) * 180.0 / std::numbers::pi;
+    std::printf(
+        "let go at %.2f m, stopped at %.2f m (furthest %.2f), worst tilt %.1f deg, "
+        "height within %.2f m\n",
+        letGo - start, stopped - start, furthest - start, tilt, highest - lowest);
+    EXPECT_LT(tilt, 25.0);              // 3 m/s² is about 17°, plus the turn-in
+    EXPECT_LT(highest - lowest, 0.15);  // keeps its height
+    EXPECT_GT(stopped - letGo, 2.5);    // brakes: 5 m/s at 3 m/s² is about 4 m
+    EXPECT_LT(stopped - letGo, 6.0);
+    EXPECT_GT(stopped, furthest - 0.15);  // stays where it stopped, does not fly back
+}
+
+// Off a platform (a 3 m block it starts on): told the ground under it, it flies off the edge,
+// comes down past the platform's top and lands on the ground below, instead of taking the
+// height it started at for the ground (where it would stop descending and refuse to move).
+TEST(Multicopter, FliesOffAPlatformAndLandsBelowIt) {
+    auto robot = loadModel(LAGRANGE_TEST_QUAD_USDA);
+    ASSERT_TRUE(robot) << robot.error();
+    World& world = robot->world;
+    const auto base = std::ranges::find(world.bodies.names, "base_link");
+    ASSERT_NE(base, world.bodies.names.end());
+    Pose& start =
+        world.bodies.poseInParent[static_cast<std::size_t>(base - world.bodies.names.begin())];
+    const double onGround = start.position[2];
+    start.position[2] += 3.0;  // on the block
+    world.addCollider(kWorldBody, ShapeType::Box, {1.0, 1.0, 1.5}, Pose{{0.0, 0.0, 1.5}}, 1.0);
+    // The ground for the controller: the block and the ground plane.
+    std::vector<sensors::ShapeCaster::Shape> shapes;
+    for (std::size_t c = 0; c < world.colliders.body.size(); ++c) {
+        if (world.colliders.body[c] == kWorldBody) {
+            sensors::ShapeCaster::Shape shape;
+            shape.type = world.colliders.shape[c];
+            shape.size = world.colliders.size[c];
+            shape.pose = world.colliders.poseInBody[c];
+            shapes.push_back(shape);
+        }
+    }
+    auto ground = std::make_shared<sensors::ShapeCaster>();
+    ground->update(shapes);
+    Scheduler scheduler(SchedulerOptions{.deterministic = false});
+    scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+    ModuleConfigData power;
+    power.dt = 50_us;
+    power.values["exchange_step"] = 0.001;
+    scheduler.add(std::make_unique<electrical::ElectricalNetwork>(), ModuleConfig(power));
+    ModuleConfigData air;
+    air.values[rotor_aero::kAirDensityKey] = 1.225;
+    scheduler.add(std::make_unique<rotor_aero::RotorAero>(), ModuleConfig(air));
+    std::optional<MulticopterController::FlightCommand> command;
+    MulticopterController::Settings flight;
+    flight.waitForCommand = true;
+    scheduler.add(std::make_unique<MulticopterController>(
+                      flight, [&command] { return command; }, ground),
+                  ModuleConfig(air));
+    scheduler.add(std::make_unique<services::WrenchSum>());
+    auto wired = scheduler.wire(WorldView(world));
+    ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    const SignalBus& bus = scheduler.bus();
+    const SignalId pose = bus.find("body/base_link/pose");
+    const SignalId thrust = bus.find("rotor/rotor_1_joint/thrust");
+    double t = 0.0;
+    const auto fly = [&](double seconds) {
+        t += seconds;
+        EXPECT_TRUE(scheduler.stepUntil(SimTime{static_cast<std::int64_t>(t * 1e9)}).ok());
+        return std::vector<double>(bus.readN(pose).begin(), bus.readN(pose).end());
+    };
+    const double top = fly(0.5)[2];
+    command = MulticopterController::FlightCommand{0.0, 0.0, 1.0, 0.0};
+    (void)fly(1.5);  // up off the block
+    command = MulticopterController::FlightCommand{0.0, 2.0, 0.0, 0.0};
+    const std::vector<double> out = fly(3.0);  // left, past its edge
+    EXPECT_GT(out[1], 2.5);
+    command = MulticopterController::FlightCommand{0.0, 0.0, -1.0, 0.0};
+    const std::vector<double> low = fly(6.0);  // down, past the block's top, to the ground
+    std::printf("off the block: started %.2f m up, out to y %.2f, came down to %.2f m\n", top,
+                out[1], low[2]);
+    EXPECT_LT(low[2], top - 2.5);
+    EXPECT_NEAR(low[2], onGround, 0.05);  // on the ground
+    command.reset();
+    (void)fly(4.0);                    // its rotors coast down once the motors stop
+    EXPECT_LT(bus.read(thrust), 0.1);  // landed: rotors coasting, under 2 % of a hover's
+}
+
+// --thrust-limit 0.8: asked for all the thrust there is (a set point 1000 m up), each rotor
+// climbs to sqrt(0.8) of its loaded top speed (an autopilot's full output, mavlink::rotorTopSpeed)
+// and no further, so the four give 80 % of the thrust they would at their top speed.
+TEST(Multicopter, AThrustLimitCapsEachRotor) {
+    constexpr double kLimit = 0.8;
+    constexpr double kRho = 1.225;  // kg/m^3, ISA sea level
+    auto robot = loadModel(LAGRANGE_TEST_QUAD_USDA);
+    ASSERT_TRUE(robot) << robot.error();
+    double top = 0.0;  // rad/s, the first rotor's loaded top speed
+    for (const SchemaInstance& s : robot->world.schemaInstances) {
+        if (s.schema == "RotorAPI_1") {
+            top = mavlink::rotorTopSpeed(WorldView(robot->world), s, kRho).speed;
+            break;
+        }
+    }
+    ASSERT_GT(top, 0.0);
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+    ModuleConfigData power;
+    power.dt = 50_us;
+    power.values["exchange_step"] = 0.001;
+    scheduler.add(std::make_unique<electrical::ElectricalNetwork>(), ModuleConfig(power));
+    ModuleConfigData air;
+    air.values[rotor_aero::kAirDensityKey] = kRho;
+    scheduler.add(std::make_unique<rotor_aero::RotorAero>(), ModuleConfig(air));
+    MulticopterController::Settings flight;
+    flight.altitudeM = 1000.0;
+    flight.takeoffAfterS = 0.0;
+    flight.thrustLimit = kLimit;
+    scheduler.add(std::make_unique<MulticopterController>(flight), ModuleConfig(air));
+    scheduler.add(std::make_unique<services::WrenchSum>());
+    auto wired = scheduler.wire(WorldView(robot->world));
+    ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    const SignalBus& bus = scheduler.bus();
+    double fastest = 0.0;
+    double thrust = 0.0;      // N, the four rotors over the last half second
+    double atTopSpeed = 0.0;  // N, what they would give at their top speed (thrust ~ omega^2)
+    for (int k = 1; k <= 1500; ++k) {
+        ASSERT_TRUE(scheduler.stepUntil(SimTime{k * 1'000'000LL}).ok());
+        for (int i = 1; i <= 4; ++i) {
+            const std::string joint = "rotor_" + std::to_string(i) + "_joint";
+            const double omega = std::abs(bus.read(bus.find("joint/" + joint + "/velocity")));
+            const double f = bus.read(bus.find("rotor/" + joint + "/thrust"));
+            fastest = std::max(fastest, omega);
+            if (k > 1000) {  // the last half second, at the limit
+                thrust += f / 500.0;
+                atTopSpeed += f * (top * top) / (omega * omega) / 500.0;
+            }
+        }
+    }
+    std::printf(
+        "top speed %.0f rad/s; limited to %.0f %%: fastest rotor %.0f rad/s (%.3f of top), "
+        "%.1f N, %.0f %% of %.1f N at top speed\n",
+        top, 100.0 * kLimit, fastest, fastest / top, thrust, 100.0 * thrust / atTopSpeed,
+        atTopSpeed);
+    EXPECT_LT(fastest, std::sqrt(kLimit) * top * 1.01);  // never past the cap
+    EXPECT_GT(fastest, std::sqrt(kLimit) * top * 0.97);  // and it does reach it
+    EXPECT_NEAR(thrust / atTopSpeed, kLimit, 0.03);
+}
+
+// RFC 0013: --emi-motor-leads lays a wire from the battery to each motor carrying its bus
+// current; the hovering quadcopter's magnetometer then reads a disturbance that grows with the
+// current, and says what it does to its heading.
+TEST(Multicopter, ItsMotorLeadsDisturbItsCompass) {
+    // The battery under the frame and back from its middle: a symmetric star of leads from right
+    // under the compass would cancel there, and a lead passing within a centimetre of it would
+    // swamp the Earth's field (as it does on a real drone).
+    const std::array<double, 3> battery{-0.06, 0.0, -0.06};
+    const auto hover = [&](std::optional<double> leads) {
+        ServerOptions o;
+        o.robotPath = LAGRANGE_TEST_QUAD_USDA;
+        o.worldPath.clear();
+        o.ros = false;
+        o.realTimeFactor = 0.0;
+        o.airDensityKgM3 = 1.225;
+        o.geoOrigin = coords::Geodetic{47.397742 * std::numbers::pi / 180.0,
+                                       8.545594 * std::numbers::pi / 180.0, 488.0};
+        o.emiMotorLeads = leads;
+        o.emiBatteryAt = battery;
+        auto server = std::make_unique<Server>(o);
+        const Status loaded = server->load();
+        EXPECT_TRUE(loaded.ok()) << loaded.message;
+        EXPECT_TRUE(server->stepUntil(SimTime{6'000'000'000}).ok());  // up and hovering
+        return server;
+    };
+    auto quiet = hover(std::nullopt);
+    EXPECT_TRUE(quiet->read("sensor/magnetometer/interference").empty());  // no victim
+    auto led = hover(0.005);
+    const double share = led->read("sensor/magnetometer/interference").at(0);
+    const double heading = led->read("sensor/magnetometer/heading_error").at(0);
+    double current = 0.0;
+    for (int i = 1; i <= 4; ++i) {
+        current += led->read("motor/rotor_" + std::to_string(i) + "_motor/bus_current").at(0);
+    }
+    std::printf(
+        "hover: %.2f A in the leads, compass disturbed by %.2f %% of the Earth's field, "
+        "heading off by %.3f deg\n",
+        current, 100.0 * share, heading * 180.0 / std::numbers::pi);
+    EXPECT_GT(current, 1.0);
+    EXPECT_GT(share, 0.0);
+    EXPECT_LT(share, 1.0);  // a disturbance, not a new field
+    EXPECT_TRUE(std::isfinite(heading));
+    // Wider leads, the same currents: a larger loop, a larger field.
+    auto wide = hover(0.02);
+    EXPECT_GT(wide->read("sensor/magnetometer/interference").at(0), share);
 }
 
 }  // namespace

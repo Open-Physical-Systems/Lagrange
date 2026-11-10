@@ -121,7 +121,7 @@ public:
         pose_ = d.input(sample(body + "pose", SignalType::Pose, units::m, "world_local"));
         twist_ = d.input(sample(body + "twist", SignalType::Wrench, units::m_per_s, "world_local"));
         return escs_.declare(world, d, settings_.airDensity, settings_.maxRotorSpeed,
-                             settings_.speedGain);
+                             settings_.speedGain, "ardupilot", settings_.thrustLimit);
     }
 
     Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {

@@ -1,0 +1,686 @@
+#!/usr/bin/env python3
+# ruff: noqa: E501  (OpenFOAM dictionaries are written as they read, one entry a line)
+"""lagrange foam-cht ROBOT: the robot's links with a thermal material through OpenFOAM's conjugate
+heat transfer (chtMultiRegionSimpleFoam), in a process of its own (RFC 0012).
+
+Each link with a ThermalMaterialAPI_1 (URDF <thermal_material>) becomes a solid region of its
+collision shapes, with its conductivity, density and specific heat; still air around them is the
+fluid region, with buoyancy; each heat source heats the cells of its box (fvOptions); a link's
+contact conductance to its parent is a thin layer on their interface. The case runs with an
+installed OpenFOAM or the official container, and each region's and source's temperature is read
+back into report.json, beside the conduction fidelity's when --compare names its run. OpenFOAM is
+GPL-3 and stays a separate program: Lagrange exchanges only files with it.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+IMAGE = "docker.io/opencfd/openfoam-default:2512"
+AIR_MOLAR_MASS = 28.9  # g/mol
+AIR_CP = 1007.0  # J/(kg·K), 300 K (Incropera Table A.4)
+AIR_MU = 1.846e-5  # Pa·s, 300 K (Incropera Table A.4)
+AIR_PR = 0.707  # Incropera Table A.4
+GRAVITY = 9.80665  # m/s², standard
+PRESSURE = 101325.0  # Pa
+MARGIN_SIDE, MARGIN_BELOW, MARGIN_ABOVE = 1.5, 1.0, 3.0  # air around the solids, in their size
+CONTACT_LAYER = 1e-4  # m: the thin layer that stands for a contact conductance (κ = h·t)
+
+HEADER = """FoamFile
+{{
+    version 2.0;
+    format ascii;
+    class {cls};
+    object {name};
+}}
+"""
+
+
+def foam_file(path: Path, name: str, body: str, cls: str = "dictionary") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(HEADER.format(cls=cls, name=name) + body)
+
+
+def vector(v: list[float]) -> str:
+    return "(" + " ".join(f"{x:.9g}" for x in v) + ")"
+
+
+def plan(surface: dict, thermal: dict, args: argparse.Namespace) -> dict:
+    """The air box, the base cell and each solid's refinement level."""
+    low, high = surface["low"], surface["high"]
+    size = [h - lo for lo, h in zip(low, high, strict=True)]
+    largest = max(size)
+    box_low = [low[0] - MARGIN_SIDE * largest, low[1] - MARGIN_SIDE * largest,
+               low[2] - MARGIN_BELOW * largest]  # fmt: skip
+    box_high = [high[0] + MARGIN_SIDE * largest, high[1] + MARGIN_SIDE * largest,
+                high[2] + MARGIN_ABOVE * largest]  # fmt: skip
+    base = largest / args.base_cells
+    cells = [max(1, math.ceil((h - lo) / base)) for lo, h in zip(box_low, box_high, strict=True)]
+    levels = {}
+    for part in thermal["parts"]:
+        # Two cells through the thinnest shape (the conduction fidelity's cell is half of it),
+        # and args.refine more for the gradients near a heat source.
+        target = part["cell"] / args.cells_through
+        level = max(1, min(args.max_level, math.ceil(math.log2(base / target))))
+        levels[part["name"]] = level
+        # Fewer than two cells through the thinnest shape (twice its conduction cell): a sample
+        # with one failed with a floating point exception in the solver.
+        if base / 2**level > part["cell"] * 1.0001:
+            print(f"  {part['name']}: cells of {base / 2**level * 1000:.2f} mm, under two through "
+                  f"its thinnest shape ({2000 * part['cell']:.2f} mm): raise --cells-through or "
+                  "--max-level", file=sys.stderr)  # fmt: skip
+    return {"low": box_low, "high": box_high, "cells": cells, "base": base, "levels": levels}
+
+
+def write_mesh(case: Path, p: dict, parts: list[dict]) -> None:
+    foam_file(case / "system" / "blockMeshDict", "blockMeshDict", f"""
+convertToMeters 1;
+vertices
+(
+    {vector([p['low'][0], p['low'][1], p['low'][2]])}
+    {vector([p['high'][0], p['low'][1], p['low'][2]])}
+    {vector([p['high'][0], p['high'][1], p['low'][2]])}
+    {vector([p['low'][0], p['high'][1], p['low'][2]])}
+    {vector([p['low'][0], p['low'][1], p['high'][2]])}
+    {vector([p['high'][0], p['low'][1], p['high'][2]])}
+    {vector([p['high'][0], p['high'][1], p['high'][2]])}
+    {vector([p['low'][0], p['high'][1], p['high'][2]])}
+);
+blocks ( hex (0 1 2 3 4 5 6 7) ({p['cells'][0]} {p['cells'][1]} {p['cells'][2]}) simpleGrading (1 1 1) );
+boundary
+(
+    walls {{ type wall; faces ( (0 4 7 3) (1 2 6 5) (0 1 5 4) (3 7 6 2) (0 3 2 1) ); }}
+    top {{ type patch; faces ( (4 5 6 7) ); }}
+);
+""")  # fmt: skip
+    geometry = "\n".join(
+        f"    {q['name']}.stl {{ type triSurfaceMesh; name {q['name']}; }}" for q in parts
+    )
+    surfaces = "\n".join(
+        f"        {q['name']} {{ level ({p['levels'][q['name']]} {p['levels'][q['name']]}); }}"
+        for q in parts
+    )
+    # The air: a point in the box away from every solid (the box's top corner region).
+    air = [p["low"][0] + 0.5 * p["base"], p["low"][1] + 0.5 * p["base"],
+           p["high"][2] - 0.5 * p["base"]]  # fmt: skip
+    locations = "\n".join(f"        ({vector(q['inside'])} {q['name']})" for q in parts)
+    foam_file(case / "system" / "snappyHexMeshDict", "snappyHexMeshDict", f"""
+castellatedMesh true;
+snap true;
+addLayers false;
+geometry
+{{
+{geometry}
+}}
+castellatedMeshControls
+{{
+    maxLocalCells 5000000;
+    maxGlobalCells 20000000;
+    minRefinementCells 0;
+    nCellsBetweenLevels 3;
+    features ();
+    refinementSurfaces
+    {{
+{surfaces}
+    }}
+    resolveFeatureAngle 30;
+    refinementRegions {{}}
+    locationsInMesh
+    (
+        ({vector(air)} air)
+{locations}
+    );
+    allowFreeStandingZoneFaces false;
+}}
+snapControls
+{{
+    nSmoothPatch 3;
+    tolerance 2.0;
+    nSolveIter 50;
+    nRelaxIter 5;
+    nFeatureSnapIter 10;
+    implicitFeatureSnap true;
+    explicitFeatureSnap false;
+    multiRegionFeatureSnap true;
+}}
+addLayersControls
+{{
+    relativeSizes true;
+    layers {{}}
+    expansionRatio 1.2;
+    finalLayerThickness 0.5;
+    minThickness 0.1;
+    nGrow 0;
+    featureAngle 60;
+    nRelaxIter 3;
+    nSmoothSurfaceNormals 1;
+    nSmoothNormals 3;
+    nSmoothThickness 10;
+    maxFaceThicknessRatio 0.5;
+    maxThicknessToMedialRatio 0.3;
+    minMedialAxisAngle 90;
+    nBufferCellsNoExtrude 0;
+    nLayerIter 50;
+}}
+meshQualityControls
+{{
+    #includeEtc "caseDicts/meshQualityDict"
+    nSmoothScale 4;
+    errorReduction 0.75;
+}}
+mergeTolerance 1e-6;
+""")  # fmt: skip
+
+
+SOLID_SCHEMES = """
+ddtSchemes { default steadyState; }
+gradSchemes { default Gauss linear; }
+divSchemes { default none; }
+laplacianSchemes { default Gauss linear limited 0.333; }
+interpolationSchemes { default linear; }
+snGradSchemes { default limited 0.333; }
+"""
+
+SOLID_SOLUTION = """
+solvers
+{
+    h { solver PCG; preconditioner DIC; tolerance 1e-9; relTol 0.01; }
+}
+SIMPLE { nNonOrthogonalCorrectors 1; }
+relaxationFactors { equations { h 0.7; } }
+"""
+
+FLUID_SCHEMES = """
+ddtSchemes { default steadyState; }
+gradSchemes { default Gauss linear; }
+divSchemes
+{
+    default none;
+    div(phi,U) bounded Gauss upwind;
+    div(phi,h) bounded Gauss upwind;
+    div(phi,K) bounded Gauss upwind;
+    div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;
+    div(Ji,Ii_h) bounded Gauss linearUpwind grad(Ii_h);
+}
+laplacianSchemes { default Gauss linear limited 0.333; }
+interpolationSchemes { default linear; }
+snGradSchemes { default limited 0.333; }
+"""
+
+FLUID_SOLUTION = """
+solvers
+{
+    rho { solver PCG; preconditioner DIC; tolerance 1e-7; relTol 0; }
+    p_rgh { solver GAMG; smoother GaussSeidel; tolerance 1e-8; relTol 0.01; }
+    "(U|h)" { solver PBiCGStab; preconditioner DILU; tolerance 1e-8; relTol 0.05; }
+    "Ii.*" { solver GAMG; smoother symGaussSeidel; tolerance 1e-4; relTol 0; maxIter 5; }
+}
+SIMPLE
+{
+    momentumPredictor true;
+    nNonOrthogonalCorrectors 1;
+    pRefCell 0;
+    pRefValue 101325;
+}
+relaxationFactors
+{
+    fields { p_rgh 0.7; rho 1; }
+    equations { U 0.2; h 0.5; }
+}
+"""
+
+
+def solid_thermo(part: dict) -> str:
+    mixture = f"""
+    specie {{ molWeight 50; }}
+    thermodynamics {{ Hf 0; Cp {part["specific_heat"]:.9g}; }}
+    equationOfState {{ rho {part["density"]:.9g}; }}"""
+    if "conductivity_along" in part:
+        # Orthotropic: kappa along e1, e2, e3 of a frame whose e3 is the material's axis.
+        axis = part["axis"]
+        helper = [1.0, 0.0, 0.0] if abs(axis[0]) < 0.9 else [0.0, 1.0, 0.0]
+        e1 = [helper[1] * axis[2] - helper[2] * axis[1], helper[2] * axis[0] - helper[0] * axis[2],
+              helper[0] * axis[1] - helper[1] * axis[0]]  # fmt: skip
+        n = math.sqrt(sum(x * x for x in e1))
+        e1 = [x / n for x in e1]
+        k, ka = part["conductivity"], part["conductivity_along"]
+        return f"""
+thermoType
+{{
+    type heSolidThermo;
+    mixture pureMixture;
+    transport constAnIso;
+    thermo hConst;
+    equationOfState rhoConst;
+    specie specie;
+    energy sensibleEnthalpy;
+}}
+mixture
+{{{mixture}
+    transport {{ kappa ({k:.9g} {k:.9g} {ka:.9g}); }}
+}}
+coordinateSystem
+{{
+    type cartesian;
+    origin (0 0 0);
+    rotation {{ type axes; e1 {vector(e1)}; e3 {vector(axis)}; }}
+}}
+"""
+    return f"""
+thermoType
+{{
+    type heSolidThermo;
+    mixture pureMixture;
+    transport constIso;
+    thermo hConst;
+    equationOfState rhoConst;
+    specie specie;
+    energy sensibleEnthalpy;
+}}
+mixture
+{{{mixture}
+    transport {{ kappa {part["conductivity"]:.9g}; }}
+}}
+"""
+
+
+def write_radiation(case: Path, regions: Path, parts: list[dict], ambient: float) -> None:
+    """Surface radiation through the (transparent) air by discrete ordinates: each solid's faces
+    at its emissivity, the box's walls black at the ambient."""
+    foam_file(case / "constant" / "air" / "radiationProperties", "radiationProperties", """
+radiation on;
+radiationModel fvDOM;
+fvDOMCoeffs { nPhi 3; nTheta 3; tolerance 1e-3; maxIter 5; }
+solverFreq 10;
+absorptionEmissionModel none;
+scatterModel none;
+sootModel none;
+""")  # fmt: skip
+    surfaces = "\n".join(
+        f'"air_to_{q["name"]}" {{ type lookup; emissivity {q["emissivity"]:.6g}; absorptivity {q["emissivity"]:.6g}; }}'
+        for q in parts
+    )
+    foam_file(case / "constant" / "air" / "boundaryRadiationProperties",
+              "boundaryRadiationProperties",
+              f'\n".*" {{ type lookup; emissivity 1; absorptivity 1; }}\n{surfaces}\n')  # fmt: skip
+    foam_file(regions / "air" / "IDefault", "IDefault", """
+dimensions [1 0 -3 0 0 0 0];
+internalField uniform 0;
+boundaryField { ".*" { type greyDiffusiveRadiation; value uniform 0; } }
+""", cls="volScalarField")  # fmt: skip
+    foam_file(regions / "air" / "qr", "qr", """
+dimensions [1 0 -3 0 0 0 0];
+internalField uniform 0;
+boundaryField { ".*" { type calculated; value uniform 0; } }
+""", cls="volScalarField")  # fmt: skip
+    del ambient  # the walls' temperature is their T
+
+
+def write_regions(
+    case: Path,
+    parts: list[dict],
+    ambient: float,
+    args: argparse.Namespace,
+    start: dict | None = None,
+) -> None:
+    names = [q["name"] for q in parts]
+    foam_file(case / "constant" / "regionProperties", "regionProperties",
+              f"\nregions ( fluid (air) solid ({' '.join(names)}) );\n")  # fmt: skip
+    foam_file(case / "constant" / "g", "g", f"\ndimensions [0 1 -2 0 0 0 0];\nvalue (0 0 {-GRAVITY});\n",
+              cls="uniformDimensionedVectorField")  # fmt: skip
+    foam_file(case / "constant" / "air" / "thermophysicalProperties", "thermophysicalProperties", f"""
+thermoType
+{{
+    type heRhoThermo;
+    mixture pureMixture;
+    transport const;
+    thermo hConst;
+    equationOfState perfectGas;
+    specie specie;
+    energy sensibleEnthalpy;
+}}
+mixture
+{{
+    specie {{ molWeight {AIR_MOLAR_MASS}; }}
+    thermodynamics {{ Cp {AIR_CP}; Hf 0; }}
+    transport {{ mu {AIR_MU}; Pr {AIR_PR}; }}
+}}
+""")  # fmt: skip
+    foam_file(case / "constant" / "air" / "momentumTransport", "momentumTransport",
+              "\nsimulationType laminar;\n")  # fmt: skip
+    foam_file(case / "constant" / "air" / "turbulenceProperties", "turbulenceProperties",
+              "\nsimulationType laminar;\n")  # fmt: skip
+    foam_file(case / "system" / "air" / "fvSchemes", "fvSchemes", FLUID_SCHEMES)
+    foam_file(case / "system" / "air" / "fvSolution", "fvSolution", FLUID_SOLUTION)
+    coupled = "compressible::turbulentTemperatureCoupledBaffleMixed"
+    radiative = "compressible::turbulentTemperatureRadCoupledMixed"
+    # The air's fields: still at the ambient, walls at the ambient, the top open.
+    regions = case / "0.regions"
+    if args.radiation:
+        air_interface = (f"{{ type {radiative}; Tnbr T; kappaMethod fluidThermo; qr qr; "
+                         f"qrNbr none; value uniform {ambient}; }}")  # fmt: skip
+        write_radiation(case, regions, parts, ambient)
+    else:
+        air_interface = (f"{{ type {coupled}; Tnbr T; kappaMethod fluidThermo; "
+                         f"value uniform {ambient}; }}")  # fmt: skip
+    foam_file(regions / "air" / "T", "T", f"""
+dimensions [0 0 0 1 0 0 0];
+internalField uniform {ambient};
+boundaryField
+{{
+    ".*" {{ type zeroGradient; value uniform {ambient}; }}
+    walls {{ type fixedValue; value uniform {ambient}; }}
+    top {{ type inletOutlet; inletValue uniform {ambient}; value uniform {ambient}; }}
+    "air_to_.*" {air_interface}
+}}
+""", cls="volScalarField")  # fmt: skip
+    foam_file(regions / "air" / "U", "U", """
+dimensions [0 1 -1 0 0 0 0];
+internalField uniform (0 0 0);
+boundaryField
+{
+    ".*" { type noSlip; }
+    walls { type noSlip; }
+    top { type pressureInletOutletVelocity; value uniform (0 0 0); }
+    "air_to_.*" { type noSlip; }
+}
+""", cls="volVectorField")  # fmt: skip
+    for field, top in (("p", "calculated"), ("p_rgh", "totalPressure")):
+        top_bc = (f"{{ type totalPressure; p0 uniform {PRESSURE}; value uniform {PRESSURE}; }}"
+                  if top == "totalPressure" else f"{{ type calculated; value uniform {PRESSURE}; }}")  # fmt: skip
+        wall_bc = (f"{{ type fixedFluxPressure; value uniform {PRESSURE}; }}"
+                   if field == "p_rgh" else f"{{ type calculated; value uniform {PRESSURE}; }}")  # fmt: skip
+        foam_file(regions / "air" / field, field, f"""
+dimensions [1 -1 -2 0 0 0 0];
+internalField uniform {PRESSURE};
+boundaryField
+{{
+    ".*" {wall_bc}
+    walls {wall_bc}
+    top {top_bc}
+    "air_to_.*" {wall_bc}
+}}
+""", cls="volScalarField")  # fmt: skip
+    for q in parts:
+        name = q["name"]
+        foam_file(case / "constant" / name / "thermophysicalProperties", "thermophysicalProperties",
+                  solid_thermo(q))  # fmt: skip
+        foam_file(case / "system" / name / "fvSchemes", "fvSchemes", SOLID_SCHEMES)
+        foam_file(case / "system" / name / "fvSolution", "fvSolution", SOLID_SOLUTION)
+        method = (
+            "directionalSolidThermo; alphaAni Anialpha"
+            if "conductivity_along" in q
+            else "solidThermo"
+        )
+        to_air = (
+            f"type {radiative}; Tnbr T; kappaMethod {method}; qr none; qrNbr qr;"
+            if args.radiation
+            else f"type {coupled}; Tnbr T; kappaMethod {method};"
+        )
+        interfaces = [f'    "{name}_to_air" {{ {to_air} value uniform {ambient}; }}']
+        for other in parts:
+            if other["name"] == name:
+                continue
+            # A contact conductance h as a layer of thickness t and conductivity h·t, on the
+            # child's side only (the parent's side is the plain coupling).
+            if q.get("parent") == other["name"] and "contact_conductance" in q:
+                layer = f" thicknessLayers ({CONTACT_LAYER}); kappaLayers ({q['contact_conductance'] * CONTACT_LAYER:.9g});"
+            else:
+                layer = ""
+            interfaces.append(
+                f'    "{name}_to_{other["name"]}" {{ type {coupled}; Tnbr T; kappaMethod {method};{layer} value uniform {ambient}; }}'
+            )
+        # A starting guess (the conduction fidelity's mean) only shortens the iterations: the
+        # coupled solids converge slowly from the ambient.
+        first = ((start or {}).get("parts", {}).get(name, {}) or {}).get("mean") or ambient
+        foam_file(regions / name / "T", "T", f"""
+dimensions [0 0 0 1 0 0 0];
+internalField uniform {first};
+boundaryField
+{{
+    ".*" {{ type zeroGradient; value uniform {ambient}; }}
+{chr(10).join(interfaces)}
+}}
+""", cls="volScalarField")  # fmt: skip
+        foam_file(regions / name / "p", "p", f"""
+dimensions [1 -1 -2 0 0 0 0];
+internalField uniform {PRESSURE};
+boundaryField {{ ".*" {{ type calculated; value uniform {PRESSURE}; }} }}
+""", cls="volScalarField")  # fmt: skip
+        # Heat sources: a cell zone per box, heated by the power that stays as heat.
+        actions, options = [], []
+        for s in q["sources"]:
+            if s.get("power_signal"):
+                print(
+                    f"  {s['name']}: driven by {s['power_signal']} in a run; "
+                    "OpenFOAM takes its constant power",
+                    file=sys.stderr,
+                )
+            axes, size, centre = s["axes"], s["size"], s["centre"]
+            corner = [
+                centre[k] - sum(0.5 * size[a] * axes[a][k] for a in range(3)) for k in range(3)
+            ]
+            edges = [[size[a] * axes[a][k] for k in range(3)] for a in range(3)]
+            actions.append(f"""    {{ name {s['name']}; type cellSet; action new; source rotatedBoxToCell;
+      origin {vector(corner)}; i {vector(edges[0])}; j {vector(edges[1])}; k {vector(edges[2])}; }}
+    {{ name {s['name']}; type cellZoneSet; action new; source setToCellZone; set {s['name']}; }}""")  # fmt: skip
+            options.append(f"""{s['name']}
+{{
+    type scalarSemiImplicitSource;
+    active true;
+    selectionMode cellZone;
+    cellZone {s['name']};
+    volumeMode absolute;
+    sources {{ h ({s['heat']:.9g} 0); }}
+}}""")  # fmt: skip
+        if actions:
+            foam_file(case / "system" / name / "topoSetDict", "topoSetDict",
+                      "\nactions\n(\n" + "\n".join(actions) + "\n);\n")  # fmt: skip
+            foam_file(
+                case / "system" / name / "fvOptions", "fvOptions", "\n" + "\n".join(options) + "\n"
+            )
+    # What to read back: each solid's mean and largest T, each source zone's mean.
+    functions = []
+    for q in parts:
+        for op in ("volAverage", "max", "min"):
+            functions.append(f"""    {q['name']}_{op}
+    {{
+        type volFieldValue; libs (fieldFunctionObjects); region {q['name']};
+        regionType all; operation {op}; fields (T); writeFields false;
+        writeControl timeStep; writeInterval 100; log false;
+    }}""")  # fmt: skip
+        for s in q["sources"]:
+            functions.append(f"""    {s['name']}_volAverage
+    {{
+        type volFieldValue; libs (fieldFunctionObjects); region {q['name']};
+        regionType cellZone; name {s['name']}; operation volAverage; fields (T);
+        writeFields false; writeControl timeStep; writeInterval 100; log false;
+    }}""")  # fmt: skip
+    foam_file(case / "system" / "controlDict", "controlDict", f"""
+application chtMultiRegionSimpleFoam;
+startFrom startTime;
+startTime 0;
+stopAt endTime;
+endTime {args.iterations};
+deltaT 1;
+writeControl timeStep;
+writeInterval {args.iterations};
+purgeWrite 0;
+writeFormat ascii;
+writePrecision 8;
+writeCompression off;
+timeFormat general;
+timePrecision 8;
+runTimeModifiable true;
+functions
+{{
+{chr(10).join(functions)}
+}}
+""")  # fmt: skip
+    for d in ("fvSchemes", "fvSolution"):
+        foam_file(case / "system" / d, d, SOLID_SCHEMES if d == "fvSchemes" else SOLID_SOLUTION)
+    foam_file(case / "system" / "decomposeParDict", "decomposeParDict",
+              f"\nnumberOfSubdomains {max(1, args.procs)};\nmethod scotch;\n")  # fmt: skip
+
+
+ALLRUN = """#!/bin/bash
+cd "${0%/*}" || exit 1
+. ${WM_PROJECT_DIR:?}/bin/tools/RunFunctions
+runApplication blockMesh || exit 1
+runApplication snappyHexMesh -overwrite || exit 1
+runApplication splitMeshRegions -cellZones -overwrite || exit 1
+cp -r 0.regions/* 0/
+for region in $(foamListRegions solid); do
+    if [ -f system/$region/topoSetDict ]; then
+        runApplication -s $region topoSet -region $region || exit 1
+    fi
+done
+if [ "${PROCS:-1}" -gt 1 ]; then
+    for region in $(foamListRegions); do
+        foamDictionary -entry numberOfSubdomains -set "$PROCS" system/decomposeParDict > /dev/null
+        cp system/decomposeParDict system/$region/
+    done
+    runApplication decomposePar -allRegions || exit 1
+    runParallel -np "$PROCS" chtMultiRegionSimpleFoam || exit 1
+    runApplication reconstructPar -allRegions -latestTime || exit 1
+else
+    runApplication chtMultiRegionSimpleFoam || exit 1
+fi
+"""
+
+
+def run_case(case: Path, args: argparse.Namespace) -> None:
+    if not args.container and shutil.which("chtMultiRegionSimpleFoam"):
+        subprocess.run(["bash", str(case / "Allrun")], check=True,
+                       env={**__import__("os").environ, "PROCS": str(args.procs)})  # fmt: skip
+        return
+    engine = shutil.which("podman") or shutil.which("docker")
+    if engine is None:
+        raise SystemExit("no OpenFOAM: source one, or install podman to use its container")
+    case = case.resolve()
+    # The image runs as root: Open MPI needs to be told that is fine.
+    subprocess.run([engine, "run", "--rm", "-e", f"PROCS={args.procs}",
+                    "-e", "OMPI_ALLOW_RUN_AS_ROOT=1", "-e", "OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1",
+                    "-v", f"{case}:/case:Z",
+                    "-w", "/case", args.image, "bash", "-lc", "/case/Allrun"], check=True)  # fmt: skip
+
+
+def last_value(path: Path) -> float | None:
+    """The last number in a functionObject's .dat file."""
+    rows = [r.split() for r in path.read_text().splitlines() if r and not r.startswith("#")]
+    return float(rows[-1][-1]) if rows else None
+
+
+def read_results(case: Path, parts: list[dict]) -> dict:
+    out: dict = {"parts": {}, "sources": {}}
+    post = case / "postProcessing"
+    for q in parts:
+        values = {}
+        for op in ("volAverage", "max", "min"):
+            files = sorted(post.glob(f"{q['name']}/{q['name']}_{op}/*/volFieldValue.dat"))
+            values[op] = last_value(files[-1]) if files else None
+        out["parts"][q["name"]] = {"mean": values["volAverage"], "max": values["max"],
+                                   "min": values["min"]}  # fmt: skip
+        for s in q["sources"]:
+            files = sorted(post.glob(f"{q['name']}/{s['name']}_volAverage/*/volFieldValue.dat"))
+            out["sources"][s["name"]] = last_value(files[-1]) if files else None
+    log = case / "log.chtMultiRegionSimpleFoam"
+    if log.exists():
+        times = re.findall(r"^Time = (\d+)", log.read_text(), re.MULTILINE)
+        out["iterations"] = int(times[-1]) if times else 0
+    return out
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="lagrange foam-cht", description=__doc__)
+    parser.add_argument("robot")
+    parser.add_argument("--ambient", type=float, required=True,
+                        help="the site's air temperature, K (no default)")  # fmt: skip
+    parser.add_argument("--iterations", type=int, default=4000)
+    parser.add_argument("--procs", type=int, default=8, help="processes for the solver")
+    parser.add_argument("--base-cells", type=float, default=10.0,
+                        help="cells of the air box across the robot's largest size")  # fmt: skip
+    parser.add_argument("--cells-through", type=float, default=4.0,
+                        help="cells through a link's thinnest shape, at least (4: the air's boundary layer resolved on the sample; 2.5 million cells, about 40 min on 14 processes)")  # fmt: skip
+    parser.add_argument("--max-level", type=int, default=6)
+    parser.add_argument("--out", type=Path, default=Path("foam_cht_case"))
+    parser.add_argument("--write-only", action="store_true", help="write the case, do not run it")
+    parser.add_argument("--read-only", action="store_true", help="read a finished case")
+    parser.add_argument("--compare", type=Path,
+                        help="a JSON of the conduction fidelity's temperatures to set beside")  # fmt: skip
+    parser.add_argument("--radiation", action="store_true",
+                        help="surface radiation by discrete ordinates (fvDOM), at the emissivities")  # fmt: skip
+    parser.add_argument("--start-from", type=Path,
+                        help="a JSON of temperatures (as --compare) to start the solids at")  # fmt: skip
+    parser.add_argument("--container", action="store_true", help="the container even if installed")
+    parser.add_argument("--image", default=IMAGE)
+    args = parser.parse_args()
+    case: Path = args.out
+    tools = Path(sys.argv[0]).resolve().parent
+    if not args.read_only:
+        if case.exists() and any(case.iterdir()):
+            raise SystemExit(f"{case} is not empty: name another with --out")
+        tri = case / "constant" / "triSurface"
+        tri.mkdir(parents=True)
+        subprocess.run([str(tools / "lagrange"), "tunnel", args.robot, "--export-surface", str(tri)],
+                       check=True, stdout=subprocess.DEVNULL)  # fmt: skip
+        surface = json.loads((tri / "surface.json").read_text())
+        (tri / "surface.json").rename(case / "surface.json")
+        subprocess.run([str(tools / "lagrange"), "export", "thermal", "--robot", args.robot,
+                        "--world", "none", "--no-ros", "--ambient-temperature", str(args.ambient),
+                        "--out", str(case / "thermal.json")],
+                       check=True, stdout=subprocess.DEVNULL)  # fmt: skip
+        thermal = json.loads((case / "thermal.json").read_text())
+        parts = [q for q in thermal["parts"] if (tri / f"{q['name']}.stl").exists()]
+        for q in thermal["parts"]:
+            if q not in parts:
+                print(f"  {q['name']}: no collision surface, left out", file=sys.stderr)
+        for stl in tri.glob("*.stl"):
+            if stl.stem not in {q["name"] for q in parts}:
+                stl.unlink()  # links without a material are not in the heat problem
+        p = plan(surface, thermal, args)
+        write_mesh(case, p, parts)
+        start = json.loads(args.start_from.read_text()) if args.start_from else None
+        write_regions(case, parts, args.ambient, args, start)
+        (case / "0").mkdir(exist_ok=True)
+        (case / "Allrun").write_text(ALLRUN)
+        (case / "Allrun").chmod(0o755)
+        (case / "case.foam").touch()
+        (case / "plan.json").write_text(json.dumps(p, indent=2) + "\n")
+        print(f"case in {case}: {len(parts)} solid regions, base cell {p['base'] * 1000:.1f} mm, "
+              f"levels {p['levels']}")  # fmt: skip
+        if args.write_only:
+            print(f"Run it: {case}/Allrun, in OpenFOAM's environment")
+            return 0
+        run_case(case, args)
+    thermal = json.loads((case / "thermal.json").read_text())
+    parts = [
+        q
+        for q in thermal["parts"]
+        if (case / "constant" / "triSurface" / f"{q['name']}.stl").exists()
+    ]
+    result = read_results(case, parts)
+    if args.compare:
+        result["lagrange"] = json.loads(args.compare.read_text())
+    (case / "report.json").write_text(json.dumps(result, indent=2) + "\n")
+    lagrange = result.get("lagrange", {})
+    for name, v in result["parts"].items():
+        mine = lagrange.get("parts", {}).get(name, {})
+        print(f"  {name:<20} mean {v['mean']} K  max {v['max']} K"
+              + (f"   (Lagrange: mean {mine.get('mean')} K, max {mine.get('max')} K)" if mine else ""))  # fmt: skip
+    for name, t in result["sources"].items():
+        mine = lagrange.get("sources", {}).get(name)
+        print(f"  {name:<20} {t} K" + (f"   (Lagrange: {mine} K)" if mine else ""))
+    print(f"In ParaView: {case}/case.foam")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

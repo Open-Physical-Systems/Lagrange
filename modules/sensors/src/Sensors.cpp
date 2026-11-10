@@ -10,6 +10,7 @@
 #include "lagrange/sensors/ShapeCaster.hpp"
 #include "lagrange/sensors/ThermalCamera.hpp"
 #include "lagrange/sensors/WeatherEffects.hpp"
+#include "lagrange/thermal/Materials.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
@@ -1279,6 +1280,39 @@ private:
             SignalSpec t =
                 spec("thermal/" + std::string(world.signalInstanceName(s->prim)) + "/temperature",
                      SignalType::Scalar, units::K);
+            t.feedback = true;
+            t.optional = true;
+            node.temperature = d.input(t);
+            nodes.push_back(std::move(node));
+        }
+        // Links with a thermal material (RFC 0012): their mean temperature, their material's
+        // emissivity (bare aluminium reads cold, as it does through a real thermal camera).
+        for (const SchemaInstance* s : world.instancesOf("ThermalMaterialAPI_1")) {
+            if (s->prim.index >= raw.prims.paths.size()) {
+                continue;
+            }
+            std::size_t body = raw.bodies.prim.size();
+            for (std::size_t b = 0; b < raw.bodies.prim.size(); ++b) {
+                if (raw.bodies.prim[b] == s->prim) {
+                    body = b;
+                }
+            }
+            if (body == raw.bodies.prim.size()) {
+                continue;
+            }
+            Node node;
+            node.path = raw.prims.paths[s->prim.index];
+            node.body = BodyId{static_cast<std::uint32_t>(body)};
+            node.onLink = true;
+            double emissivity = 0.9;
+            if (const auto preset = s->token("thermal:material:preset")) {
+                if (const auto found = thermal::thermalMaterialPreset(*preset)) {
+                    emissivity = found->emissivity;
+                }
+            }
+            node.emissivity = s->real("thermal:material:emissivity").value_or(emissivity);
+            SignalSpec t = spec("thermal/" + raw.bodies.names[body] + "/temperature",
+                                SignalType::Scalar, units::K);
             t.feedback = true;
             t.optional = true;
             node.temperature = d.input(t);

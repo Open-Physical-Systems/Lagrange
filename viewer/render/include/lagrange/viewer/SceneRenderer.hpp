@@ -76,6 +76,8 @@ private:
     VkPipeline wireframePipeline_{VK_NULL_HANDLE};
     VkPipelineLayout lineLayout_{VK_NULL_HANDLE};
     VkPipeline linePipeline_{VK_NULL_HANDLE};
+    VkPipelineLayout heatLayout_{VK_NULL_HANDLE};
+    VkPipeline heatPipeline_{VK_NULL_HANDLE};
 
     gpu::MeshSet meshes_;
     std::uint64_t meshGeneration_{0};  // SceneStatics::generation the meshes were built from
@@ -83,6 +85,7 @@ private:
     gpu::Buffer gridMajor_;
     gpu::Buffer axes_;
     gpu::Buffer overlay_;  // host-visible, grown as needed
+    gpu::Buffer heat_;     // host-visible: the heat patches, grown as needed
     std::uint32_t gridMinorCount_{0};
     std::uint32_t gridMajorCount_{0};
     std::uint32_t lastDrawCount_{0};

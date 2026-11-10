@@ -53,6 +53,7 @@ struct ServerStatus {
     std::int64_t replayEndNs{0};
     std::uint64_t droppedDeltas{0};
     std::uint32_t signalCount{0};
+    std::string recordingPath;  ///< The file the server records the run to; empty: not recording.
 };
 
 /// One signal the server offers.
@@ -336,6 +337,10 @@ struct FieldSliceData {
 /// Immutable.
 struct FieldVolumeData {
     std::int64_t simTimeNs{0};
+    /// Non-empty: the box is in this scene prim's frame (thermal/cells, RFC 0012), one scalar per
+    /// cell (NaN outside the solid); else the region frame, a vector per cell.
+    std::string primPath;
+    std::uint32_t components{3};
     std::uint32_t nx{0}, ny{0}, nz{0};
     std::array<double, 3> origin{};  ///< Region frame, centre of cell (0, 0, 0).
     double cellM{0.0};
@@ -358,6 +363,11 @@ public:
     [[nodiscard]] std::shared_ptr<const FieldVolumeData> latestVolume() const {
         return volume_.load();
     }
+    /// Boxes in prims' frames (thermal/cells), by prim path: the latest of each.
+    using PrimVolumes = std::map<std::string, std::shared_ptr<const FieldVolumeData>>;
+    [[nodiscard]] std::shared_ptr<const PrimVolumes> primVolumes() const {
+        return primVolumes_.load();
+    }
     [[nodiscard]] SliceOrientation orientation() const { return orientation_; }
     [[nodiscard]] std::uint64_t slices() const { return slices_.load(); }
     [[nodiscard]] std::uint64_t rejected() const { return rejected_.load(); }
@@ -368,6 +378,7 @@ private:
     SliceOrientation orientation_{SliceOrientation::Horizontal};
     std::atomic<std::shared_ptr<const FieldSliceData>> latest_;
     std::atomic<std::shared_ptr<const FieldVolumeData>> volume_;
+    std::atomic<std::shared_ptr<const PrimVolumes>> primVolumes_;
     std::atomic<std::uint64_t> slices_{0};
     std::atomic<std::uint64_t> rejected_{0};
 };
@@ -583,6 +594,11 @@ public:
     void play();
     void pause();
     void seek(std::int64_t simTimeNs);
+    /// Restarts a live run at t = 0 (time, poses and velocities), as /reset_simulation does.
+    void reset();
+    /// Starts recording the run to an MCAP file on the server (`path` empty: the server picks
+    /// one), or stops it.
+    void setRecording(bool on, const std::string& path = {});
     void step(std::int64_t durationNs);
     void setRealTimeFactor(double target);
     /// Asks the server to load a file that it can read: a robot description (.urdf, .xacro)

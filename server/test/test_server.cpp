@@ -380,6 +380,60 @@ protected:
     }
 };
 
+// RFC 0012: a link's and its heat sources' signals name the link's prim, so the inspector shows
+// them with the link; the cells reach a viewer that asks for them, in the link's frame.
+class HeatServerTest : public ServerTest {
+protected:
+    void adjust(ServerOptions& options) override {
+        options.robotPath = LAGRANGE_TEST_LED_HEATSINK_URDF;
+        options.worldPath.clear();
+        options.ambientTemperatureK = 298.15;
+    }
+};
+
+TEST_F(HeatServerTest, SourcesAreOnTheirLinkAndTheCellsReachTheViewer) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    v1::Envelope request = command(1);
+    request.mutable_command()->mutable_request_snapshot();
+    send(request);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_snapshot(); }));
+    std::uint32_t board = 0xFFFF'FFFFU;
+    const v1::SceneSnapshot snapshot = received_.back().snapshot();
+    for (int i = 0; i < snapshot.prims_size(); ++i) {
+        if (snapshot.prims(i).name() == "board") {
+            board = static_cast<std::uint32_t>(i);
+        }
+    }
+    ASSERT_NE(board, 0xFFFF'FFFFU);
+    std::map<std::string, std::uint32_t> prims;
+    for (const v1::Envelope& e : received_) {
+        if (e.has_catalog()) {
+            for (const v1::SignalInfo& info : e.catalog().signals()) {
+                prims[info.name()] = info.prim();
+            }
+        }
+    }
+    EXPECT_EQ(prims.at("thermal/board/max_temperature"), board);
+    EXPECT_EQ(prims.at("thermal/led_left/temperature"), board);
+    EXPECT_EQ(prims.at("thermal/driver/heat"), board);
+    v1::Envelope watch = command(2);
+    watch.mutable_command()->mutable_subscribe_field()->set_field("thermal/cells");
+    watch.mutable_command()->mutable_subscribe_field()->set_enabled(true);
+    watch.mutable_command()->mutable_subscribe_field()->set_volume(true);
+    send(watch);
+    v1::Envelope run = command(3);
+    run.mutable_command()->mutable_play();
+    send(run);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) {
+        return e.has_field_volume() && e.field_volume().field() == "thermal/cells";
+    }));
+    const v1::FieldVolume& volume = received_.back().field_volume();
+    EXPECT_FALSE(volume.prim_path().empty());
+    EXPECT_EQ(volume.components(), 1U);
+    EXPECT_EQ(volume.values().inline_().size(),
+              static_cast<std::size_t>(volume.nx()) * volume.ny() * volume.nz() * sizeof(float));
+}
+
 TEST_F(EmiServerTest, ThePowerLineDisturbsTheMagnetometerAndReachesTheViewer) {
     ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_environment(); }));
     const v1::EnvironmentState env = received_.back().environment();

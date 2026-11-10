@@ -193,11 +193,17 @@ flowchart LR
 **Check it:**
 
 - **Moving:** it goes where you send it and tilts into the motion.
-- **Stopping:** when you stop pressing, it holds its position after 0.5 s.
+- **Starting and stopping:** the commanded speed ramps at up to 3 m/s² with a jerk limit
+  of 8 m/s³ (PX4's position-mode defaults), so it leans about 17° to speed up and to brake.
+  When you stop pressing (or 0.5 s after the last command) it brakes to a stop and holds
+  where it stopped.
 - **Ground effect:** go down with `b` to about 0.3 m and plot `joint/rotor_1_joint/velocity`.
   The rotors slow down: near the ground each turn of the blades gives more thrust, and the
   controller needs only the weight.
 - **Limit:** it never descends faster than 2 m/s (the controller's cap).
+- **Something in the way:** fly it up under a roof or into a wall and keep the key down. It
+  presses on with a bounded push (the set point stays within about 0.35 m of the drone, half a
+  g from the position loop), and when you let go it holds right where it is.
 
 **Wind, any time from here on:** in a third terminal,
 

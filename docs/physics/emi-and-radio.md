@@ -38,6 +38,12 @@ scene's `emi:frequency`, which is a site parameter with no default (50 or 60 Hz 
   $$\mathbf B = \frac{\mu_0}{4\pi}\,\frac{3\,\hat r(\hat r\cdot\mathbf m) - \mathbf m}{r^3}$$
 - A transmitter is a free-space far field, RMS:
   $$E = \frac{\sqrt{30\,P_{EIRP}}}{d}$$
+- A wire (RFC 0013) is the sum over the straight segments of its route `emi:path`, each by
+  Biot–Savart (Griffiths, *Introduction to Electrodynamics*, Example 5.5), the return conductor
+  `emi:returnOffset` away carrying the current back:
+  $$B = \frac{\mu_0 I}{4\pi d}\,(\sin\theta_2 - \sin\theta_1)$$
+  Its current is any signal (`emi:currentSignal`, e.g. a motor's `bus_current`), its sign kept.
+  Direct sources add as vectors (a lead and its return cancel), alternating ones in power.
 
 Distances under 1 cm are taken as 1 cm.
 
@@ -55,6 +61,37 @@ Distances under 1 cm are taken as 1 cm.
 The encoder and CAN curves are behavioural, chosen to give a threshold you can set; they are not
 derived from first principles. The parameters exist so that someone with measurements can fit
 them. A per-victim `emi:shieldingEffectiveness` stands for shielding.
+
+## A robot's own wiring
+
+The current a robot's motors draw runs through its battery leads, and that field is what
+disturbs its compass most: ArduPilot's and PX4's compass calibrations ("compassmot") fit it as a
+field proportional to the current, and aeromagnetic surveys of multicopters measure it so
+(Tuck et al., *Geosci. Instrum. Method. Data Syst.* 10, 2021: 2.8 nT/A for a quadrotor's
+airframe 10 cm below a sensor, linear in the current). `--emi-motor-leads SPACING[,X,Y,Z]` lays a
+`wire` from the battery (at X,Y,Z on the root link) to each motor, carrying its
+`motor/<m>/bus_current`, its return SPACING m above it, and makes every magnetometer a victim:
+
+```bash
+lagrange_server --robot assets/robots/quad_x500/quad_x500.usda --world none --air-density 1.225 \
+  --geo-origin 47.397742,8.545594,488 --emi-motor-leads 0.005,-0.06,0,-0.06
+```
+
+![The sample quadcopter's battery leads, |B| through it in the Environment workspace](../imgs/motor-leads-emi.png)
+
+Each such magnetometer also writes `sensor/<n>/heading_error` (rad, the heading from the
+disturbed horizontal field less the heading from the Earth's) and `sensor/<n>/interference`
+(|disturbance| / |Earth's field|, what ArduPilot reports as a percentage: under 30 % fine, over
+60 % move the compass). The viewer's Environment workspace slices |B| through the robot (XZ, YZ;
+4 cm cells when every source rides on it; a log colour scale) and lists the effects under
+**Coupled into**: each compass's heading error and share, coloured by those bands, each CAN
+bus's bit-error rate, each radio link's SNR and loss. A straight lead from the battery to a
+motor is the simplest route; a real harness is authored as `wire` prims with its own path. The
+switching noise of the drives on GNSS and radios is not modelled (measured on UAS: C/N0 down by
+up to 10 dB with everything on, Stubbs and Akos, *GPS World*, 2016; an industrial drone's
+electronics cut a GPS module's sensitivity by 10 dB, 6 dB in simulation, IEICE technical report,
+2024-08, https://ken.ieice.org/ken/paper/20240806kcEx/eng/, TODO(verify) the geometry and
+source). No published measurement isolates the motor drives, so there is nothing to fit yet.
 
 ## The radio equations
 

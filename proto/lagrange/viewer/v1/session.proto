@@ -72,6 +72,7 @@ message ServerStatus {
   uint64 dropped_deltas = 7;
   uint64 dropped_signal_blocks = 8;
   string error = 9;
+  string recording_path = 10; // added after 1.0: the file the run is recorded to; empty: none
 }
 
 message Ping {
@@ -304,6 +305,11 @@ message FieldVolume {
   uint32 components = 10; // 3: a vector, m/s
   float value_max = 11; // of the magnitude
   DataRef values = 12; // float32, x fastest, then y, then z, `components` per cell
+  // Added after 1.0 (RFC 0007, by addition; RFC 0012). Non-empty: the box is in the frame of this
+  // scene prim (its path, a link), origin in that frame, and moves with it: thermal/cells, one
+  // volume per link with a thermal material, its cells' temperatures (K, components 1, NaN
+  // outside the solid).
+  string prim_path = 13;
 }
 
 // A large world: its tiles, the agents in it, the floating origin and the streaming budgets.

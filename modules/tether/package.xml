@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>lagrange_tether</name>
+  <version>1.2.0</version>
+  <description>Tethers (RFC 0011): a cable between an anchor and a body, by small-step XPBD, with contacts, friction, tangling and a winch.</description>
+  <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>lagrange_cmake</buildtool_depend>
+
+  <depend>lagrange_core</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

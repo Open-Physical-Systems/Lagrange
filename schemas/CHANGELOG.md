@@ -8,6 +8,18 @@ and `test_schemas.py` checks it.
 
 ## Unreleased
 
+- **EMI library** (RFC 0013): `wire` appended to `emi:sourceType`; `emi:path`, `emi:returnOffset`
+  and `emi:currentSignal` on `EmiSourceAPI_1`. Additions, nothing to migrate.
+
+- **Thermal library** (RFC 0012): `ThermalMaterialAPI_1`, the solid a link is made of (a preset or
+  its conductivity, density, specific heat, emissivity, an optional conductivity along an axis,
+  the contact conductance to its parent), and `HeatSourceAPI_1`, multiple-apply, heat put into a
+  box of a link (power or a power signal, the share that leaves as light). Additions, nothing to
+  migrate.
+
+- **Tether library** (RFC 0011): `TetherAPI_1`, a cable from an anchor prim to a point on a body,
+  with its winch. New library, nothing to migrate.
+
 - **Electrical library** (RFC 0010): `ElectricalBranchAPI_1`, a resistor, fuse, switch or diode between two
   buses; `elec:load:resistance` on `ElectricalLoadAPI_1`, for a resistive load given as a resistance.
   Additions, nothing to migrate.

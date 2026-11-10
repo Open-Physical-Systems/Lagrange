@@ -9,7 +9,7 @@
 #     about 5400 RPM for 1.9 + 4 x 0.025 kg. Each rotor also names its propeller as built
 #     (assets/propellers/generic_10in_2blade_*.prop.yaml, a generic blade of the same static CT
 #     and CP), drawn as its blades and flown by the bem fidelity.
-#   - Motors: 920 KV class, Ke = 60 / (2 pi 920) = 0.01038 V.s/rad, Kt = 1.5 Ke (peak dq
+#   - Motors: 920 KV class, Ke = 60 / (2 pi 920 sqrt 3) = 0.005993 V.s/rad, Kt = 1.5 Ke (peak dq
 #     convention, electrical.md §9), 7 pole pairs, 0.1 ohm, 30 uH, 25 A.
 #   - Battery: 4S 5000 mAh lithium-polymer pack (an illustrative OCV curve per cell).
 schema_version: 1
@@ -54,7 +54,7 @@ apply:
         elec:motorType: bldc
         elec:windingResistance: 0.1              # ohm at 25 °C
         elec:inductance: 0.00003                 # H
-        elec:torqueConstant: 0.01557             # N·m/A, 1.5 Ke
+        elec:torqueConstant: 0.008989            # N·m/A, 1.5 Ke
         elec:polePairs: 7
         elec:maxCurrent: 25.0                    # A
         elec:joint: rotor_1_joint
@@ -76,7 +76,7 @@ apply:
         elec:motorType: bldc
         elec:windingResistance: 0.1              # ohm at 25 °C
         elec:inductance: 0.00003                 # H
-        elec:torqueConstant: 0.01557             # N·m/A, 1.5 Ke
+        elec:torqueConstant: 0.008989            # N·m/A, 1.5 Ke
         elec:polePairs: 7
         elec:maxCurrent: 25.0                    # A
         elec:joint: rotor_2_joint
@@ -98,7 +98,7 @@ apply:
         elec:motorType: bldc
         elec:windingResistance: 0.1              # ohm at 25 °C
         elec:inductance: 0.00003                 # H
-        elec:torqueConstant: 0.01557             # N·m/A, 1.5 Ke
+        elec:torqueConstant: 0.008989            # N·m/A, 1.5 Ke
         elec:polePairs: 7
         elec:maxCurrent: 25.0                    # A
         elec:joint: rotor_3_joint
@@ -120,7 +120,7 @@ apply:
         elec:motorType: bldc
         elec:windingResistance: 0.1              # ohm at 25 °C
         elec:inductance: 0.00003                 # H
-        elec:torqueConstant: 0.01557             # N·m/A, 1.5 Ke
+        elec:torqueConstant: 0.008989            # N·m/A, 1.5 Ke
         elec:polePairs: 7
         elec:maxCurrent: 25.0                    # A
         elec:joint: rotor_4_joint

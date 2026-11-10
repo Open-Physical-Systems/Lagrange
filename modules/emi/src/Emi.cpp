@@ -29,6 +29,10 @@ double dot(const Vec3& a, const Vec3& b) {
 Vec3 cross(const Vec3& a, const Vec3& b) {
     return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
 }
+Vec3 plus(const Vec3& a, const Vec3& b) {
+    return {a[0] + b[0], a[1] + b[1], a[2] + b[2]};
+}
+
 Vec3 minus(const Vec3& a, const Vec3& b) {
     return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
 }
@@ -69,6 +73,21 @@ Vec3 fieldShape(const Source& s, const SourceState& state, const Vec3& at) {
         case Source::Type::MotorDrive:
         case Source::Type::Welder:
             return dipoleField(pose.position, scaled(axis, s.momentPerAmpere * state.current), at);
+        case Source::Type::Wire: {
+            // Each segment, and the return path shifted by its offset carrying it back.
+            const Vec3 back = rotate(pose.orientation, s.returnOffset);
+            const bool paired = norm(s.returnOffset) > 0.0;
+            Vec3 sum{0.0, 0.0, 0.0};
+            for (std::size_t k = 0; k + 1 < s.path.size(); ++k) {
+                const Vec3 a = plus(pose.position, rotate(pose.orientation, s.path[k]));
+                const Vec3 b = plus(pose.position, rotate(pose.orientation, s.path[k + 1]));
+                sum = plus(sum, segmentField(a, b, state.current, at));
+                if (paired) {
+                    sum = plus(sum, segmentField(plus(a, back), plus(b, back), -state.current, at));
+                }
+            }
+            return sum;
+        }
         case Source::Type::Transmitter:
         case Source::Type::Custom:
             return {};
@@ -98,6 +117,27 @@ Vec3 dipoleField(const Vec3& centre, const Vec3& moment, const Vec3& at) {
     const double k = kMu0 / (4.0 * std::numbers::pi * d * d * d);
     const Vec3 along = scaled(unit, 3.0 * dot(moment, unit));
     return scaled(minus(along, moment), k);
+}
+
+Vec3 segmentField(const Vec3& a, const Vec3& b, double current, const Vec3& at) {
+    const Vec3 ab = minus(b, a);
+    const double length = norm(ab);
+    if (length <= 0.0 || current == 0.0) {
+        return {0.0, 0.0, 0.0};
+    }
+    const Vec3 along = scaled(ab, 1.0 / length);
+    const Vec3 r = minus(at, a);
+    const double z1 = -dot(r, along);  // the ends' positions along the line, seen from at
+    const double z2 = length + z1;
+    const Vec3 radial = minus(r, scaled(along, dot(r, along)));
+    const double radialLength = norm(radial);
+    const double d = std::max(radialLength, kMinDistance);
+    const double sines = z2 / std::sqrt(z2 * z2 + d * d) - z1 / std::sqrt(z1 * z1 + d * d);
+    const double magnitude = kMu0 * current / (4.0 * std::numbers::pi * d) * sines;
+    if (radialLength <= 0.0) {
+        return {0.0, 0.0, 0.0};  // on the line: no direction (and no victim sits in a wire)
+    }
+    return scaled(cross(along, radial), magnitude / radialLength);
 }
 
 double farField(double eirp, double distance) {
@@ -157,6 +197,8 @@ Expected<std::vector<Source>, std::string> sourcesOf(const WorldView& world) {
             s.type = Source::Type::Welder;
         } else if (type == "custom") {
             s.type = Source::Type::Custom;
+        } else if (type == "wire") {
+            s.type = Source::Type::Wire;
         } else {
             return Unexpected{where + "emi:sourceType is required"};
         }
@@ -213,6 +255,25 @@ Expected<std::vector<Source>, std::string> sourcesOf(const WorldView& world) {
         }
         if (const std::span<const PrimId> driver = inst->rel("emi:drivenBy"); !driver.empty()) {
             s.drivenBy = std::string(world.signalInstanceName(driver[0]));
+        }
+        if (const auto signal = inst->token("emi:currentSignal"); signal && !signal->empty()) {
+            s.currentSignal = std::string(*signal);
+        }
+        if (s.type == Source::Type::Wire) {
+            const std::span<const double> path = inst->realArray("emi:path");
+            if (path.size() < 6 || path.size() % 3 != 0) {
+                return Unexpected{where + "a wire needs emi:path, x, y, z of two points or more"};
+            }
+            for (std::size_t k = 0; k < path.size(); k += 3) {
+                s.path.push_back({path[k], path[k + 1], path[k + 2]});
+            }
+            if (const std::span<const double> o = inst->realArray("emi:returnOffset");
+                o.size() == 3) {
+                s.returnOffset = {o[0], o[1], o[2]};
+            }
+            if (s.currentSignal.empty() && s.current <= 0.0) {
+                return Unexpected{where + "a wire needs emi:currentSignal or emi:current"};
+            }
         }
         if (s.type == Source::Type::PowerLine && !s.fieldMap && s.current <= 0.0) {
             return Unexpected{where + "a power line needs emi:current"};
@@ -372,7 +433,13 @@ Status Emi::declare(const WorldView& world, const ModuleConfig& config, SignalDe
         for (const Source& s : sources_) {
             sourceAt_.push_back(place(s.body, s.poseInBody));
             SignalId current;
-            if (!s.drivenBy.empty()) {
+            if (!s.currentSignal.empty()) {
+                // Any current (RFC 0013): a motor's bus current, a battery's; signed.
+                SignalSpec in = spec(s.currentSignal, SignalType::Scalar, units::A, {}, true);
+                in.optional = true;
+                in.defaultValue = s.current;
+                current = d.input(in);
+            } else if (!s.drivenBy.empty()) {
                 // The motor's current when the electrical network runs, else the source's own.
                 SignalSpec in = spec("motor/" + s.drivenBy + "/current_q", SignalType::Scalar,
                                      units::A, {}, true);
@@ -455,8 +522,14 @@ Status Emi::step(const StepContext& context, SignalBus& bus) {
     states.resize(sources_.size());
     for (std::size_t i = 0; i < sources_.size(); ++i) {
         states[i].pose = worldPose(sourceAt_[i], bus);
-        states[i].current =
-            sourceCurrent_[i].valid() ? std::abs(bus.read(sourceCurrent_[i])) : sources_[i].current;
+        const Source& s = sources_[i];
+        if (!sourceCurrent_[i].valid()) {
+            states[i].current = s.current;
+        } else if (!s.currentSignal.empty() && s.frequency <= 0.0) {
+            states[i].current = bus.read(sourceCurrent_[i]);  // direct: its direction counts
+        } else {
+            states[i].current = std::abs(bus.read(sourceCurrent_[i]));
+        }
     }
     for (const VictimOut& o : victims_) {
         if (!o.coupled) {

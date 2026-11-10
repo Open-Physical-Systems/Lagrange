@@ -40,6 +40,8 @@
 #include "lagrange/services/Log.hpp"
 #include "lagrange/services/WrenchSum.hpp"
 #include "lagrange/stage/Stage.hpp"
+#include "lagrange/tether/Tethers.hpp"
+#include "lagrange/thermal/ThermalConduction.hpp"
 #include "lagrange/thermal/ThermalNetwork.hpp"
 #include "lagrange/traffic/Traffic.hpp"
 #include "lagrange/vehicle_dynamics/VehicleDynamics.hpp"
@@ -55,6 +57,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -97,6 +100,8 @@ constexpr const char* kWindField = "weather/wind";
 constexpr const char* kFluxField = "emi/flux_density";
 // The air's speed: wind, gusts and the rotors' downwash and outwash (rotor_aero.md §5).
 constexpr const char* kAirField = "aero/wind_speed";
+// RFC 0012: the cells of every link with a thermal material, as FieldVolumes in its frame.
+constexpr const char* kThermalCellsField = "thermal/cells";
 constexpr double kAirSliceCell = 0.1;  // m: a drone is about half a metre across
 // The air around the robot for the viewer's particles: 28 × 28 × 20 cells of 0.2 m, from 3.4 m
 // below the robot to 0.6 m above it, five times a second.
@@ -106,9 +111,11 @@ constexpr double kVolumeCell = 0.2;   // m
 constexpr double kVolumeAbove = 0.6;  // m above the robot's origin
 // 20 Hz: at 5 m/s a drone moves 0.25 m between boxes, so its wake keeps up with it on screen.
 constexpr std::int64_t kVolumePeriodNs = 50'000'000;
-constexpr std::uint32_t kSliceWidth = 64;   // cells along +X
-constexpr std::uint32_t kSliceHeight = 48;  // cells along +Y
-constexpr double kSliceCell = 0.5;          // m
+constexpr std::uint64_t kThermalVolumeEvery = 4;  // volume periods: the cells at 5 Hz
+constexpr std::uint32_t kSliceWidth = 64;         // cells along +X
+constexpr std::uint32_t kSliceHeight = 48;        // cells along +Y
+constexpr double kSliceCell = 0.5;                // m
+constexpr double kSelfEmiSliceCell = 0.04;        // m: a robot's own wiring (RFC 0013)
 // Most simulation time one iteration may compute; beyond it the run falls behind real time
 // instead of freezing the viewer connection.
 constexpr std::int64_t kMaxStepWallNs = 40'000'000;
@@ -453,7 +460,7 @@ struct DomainRow {
     const char* substitute;
     const char* substituteKind;
 };
-constexpr std::array<DomainRow, 14> kDomains{{
+constexpr std::array<DomainRow, 15> kDomains{{
     {"rigid_body", "fixed", "constant"},
     {"electrical", "ideal", "ideal"},
     {"thermal", "ambient", "constant"},
@@ -468,6 +475,7 @@ constexpr std::array<DomainRow, 14> kDomains{{
     {"vehicle_dynamics", "ideal", "ideal"},
     {"rotor_aero", "ideal", "ideal"},  // a drone cannot fly on zero (aerodynamics.md §5)
     {"hydrodynamics", "zero", "constant"},
+    {"tether", "zero", "constant"},
 }};
 
 }  // namespace
@@ -476,6 +484,9 @@ struct Server::Impl {
     ServerOptions options;
     Robot robot;
     std::unique_ptr<Scheduler> scheduler;
+    /// The heat conduction module of the run (owned by the scheduler), or nullptr.
+    const thermal::ThermalConduction* conduction{nullptr};
+    const thermal::ThermalConduction* nextConduction{nullptr};  // of the run being made
     proto::Listener listener;
     std::vector<std::unique_ptr<Session>> sessions;
     std::uint64_t nextSessionId{1};
@@ -514,6 +525,7 @@ struct Server::Impl {
     Clock::time_point lastStats{Clock::now()};
     Clock::time_point lastFields{Clock::now()};
     Clock::time_point lastVolumes{Clock::now()};
+    std::uint64_t thermalVolumeTick{0};  // volume periods, for kThermalVolumeEvery
     mutable fields::FieldSignal fogFieldSignal, windFieldSignal, airBoxSignal;
     mutable std::vector<emi::Source> cachedEmiSources;  // emiSources()
     mutable bool emiSourcesRead{false};
@@ -549,6 +561,7 @@ struct Server::Impl {
 
     Expected<std::unique_ptr<Scheduler>, std::string> makeScheduler(const ProfileSettings& settings,
                                                                     DriveCommand** driveOut) {
+        nextConduction = nullptr;
         const auto off = [&settings](const char* domain) {
             return settings.substituted.contains(domain);
         };
@@ -746,6 +759,17 @@ struct Server::Impl {
             }
             next->add(std::make_unique<hydrodynamics::Water>(), ModuleConfig(water));
         }
+        // Tethers (RFC 0011): cables from their anchors to bodies, against every collider. Drag
+        // needs the site's air density; without it they hang in still, massless air.
+        if (hasTethers()) {
+            ModuleConfigData cables;
+            if (settings.airDensityKgM3) {
+                cables.values["air_density"] = *settings.airDensityKgM3;
+            }
+            if (!(off("tether") && addPluginSubstitute("tether", cables))) {
+                next->add(std::make_unique<tether::Tethers>(off("tether")), ModuleConfig(cables));
+            }
+        }
         // People (RFC 0009): moved like traffic agents, around the robots.
         if (hasHumans()) {
             ModuleConfigData people;
@@ -818,12 +842,31 @@ struct Server::Impl {
             if (settings.thermalDtNs) {
                 heat.dt = Duration{*settings.thermalDtNs};
             }
+            const auto fidelity = settings.thermal.find("fidelity");
+            const bool cellsWanted =
+                hasThermalMaterials() && (fidelity == settings.thermal.end() ||
+                                          std::get<std::string>(fidelity->second) == "conduction");
             if (off("thermal") && addPluginSubstitute("thermal", heat)) {
                 // the plugin stands in for the thermal network
             } else if (off("thermal")) {
                 next->add(std::make_unique<thermal::AmbientTemperature>(), ModuleConfig(heat));
             } else {
-                next->add(std::make_unique<thermal::ThermalNetwork>(), ModuleConfig(heat));
+                if (hasLumpedNodes()) {
+                    next->add(std::make_unique<thermal::ThermalNetwork>(), ModuleConfig(heat));
+                }
+                if (cellsWanted) {
+                    // RFC 0012: the links with a thermal material, cut into cells.
+                    ModuleConfigData cells = heat;
+                    cells.fidelity = "conduction";
+                    for (const auto& [key, value] : settings.thermal) {
+                        if (key != "fidelity") {
+                            cells.values.insert_or_assign(key, value);
+                        }
+                    }
+                    auto module = std::make_unique<thermal::ThermalConduction>();
+                    nextConduction = module.get();
+                    next->add(std::move(module), ModuleConfig(cells));
+                }
             }
         }
         bool weatherInRun = false;  // the sensors see the weather when it runs
@@ -932,6 +975,8 @@ struct Server::Impl {
                 mavlink::ArduPilotSettings ardupilot;
                 ardupilot.port = *options.ardupilotPort;
                 ardupilot.airDensity = *settings.airDensityKgM3;
+                ardupilot.maxRotorSpeed = options.mavlinkMaxRotorSpeed;
+                ardupilot.thrustLimit = options.thrustLimit;
                 next->add(mavlink::createArduPilotJson(ardupilot, ardupilotLink));
             } else if (options.px4Port) {
                 if (!px4Link) {
@@ -944,6 +989,8 @@ struct Server::Impl {
                 mavlink::Px4Settings px4;
                 px4.port = *options.px4Port;
                 px4.airDensity = *settings.airDensityKgM3;
+                px4.maxRotorSpeed = options.mavlinkMaxRotorSpeed;
+                px4.thrustLimit = options.thrustLimit;
                 next->add(mavlink::createPx4Lockstep(px4, px4Link));
             } else if (!controllers && !jointControlled() &&
                        MulticopterController::canFly(WorldView(robot.world))) {
@@ -971,8 +1018,13 @@ struct Server::Impl {
                     };
                 }
                 MulticopterController::Settings flight;
+                flight.thrustLimit = options.thrustLimit;
                 flight.waitForCommand = !options.demoDrive;  // --no-demo: it waits for you
-                next->add(std::make_unique<MulticopterController>(flight, std::move(commands)),
+                // The ground under it, so that it can fly off a bridge or a roof and land below.
+                auto [below, friction] = groundQuery();
+                (void)friction;
+                next->add(std::make_unique<MulticopterController>(flight, std::move(commands),
+                                                                  std::move(below)),
                           ModuleConfig(air));
             }
         }
@@ -1059,6 +1111,7 @@ struct Server::Impl {
         settings.streamingCollisionRadius = appliedCollisionRadius;
         settings.aerodynamics = appliedAerodynamics;
         settings.rotorAero = appliedRotorAero;
+        settings.thermal = appliedThermal;
         settings.weather = appliedWeather;
         settings.emiCoupling = appliedEmiCoupling;
         settings.substituteTokens = appliedSubstituteTokens;
@@ -1318,6 +1371,7 @@ struct Server::Impl {
 
     /// Whether the run has people.
     bool hasHumans() const { return !WorldView(robot.world).instancesOf("HumanAPI_1").empty(); }
+    bool hasTethers() const { return !WorldView(robot.world).instancesOf("TetherAPI_1").empty(); }
     /// Whether the stage has road vehicles.
     bool hasVehicles() const { return !WorldView(robot.world).instancesOf("VehicleAPI_1").empty(); }
     /// A scene query over what wheels roll on: the fixed scenery's shapes and the ground
@@ -1426,6 +1480,7 @@ struct Server::Impl {
     std::optional<double> appliedCollisionRadius;  // world.streaming.collision_radius
     std::map<std::string, ConfigValue, std::less<>> appliedAerodynamics;  // its wind
     std::map<std::string, ConfigValue, std::less<>> appliedRotorAero;     // its rotor settings
+    std::map<std::string, ConfigValue, std::less<>> appliedThermal;       // its conduction settings
     std::map<std::string, ConfigValue, std::less<>> appliedWeather;       // its weather
     std::optional<std::vector<std::string>> appliedEmiCoupling;           // its EMI victims
     std::shared_ptr<mavlink::Px4Link> px4Link;  // PX4's connection, across rebuilds of the run
@@ -1453,6 +1508,16 @@ struct Server::Impl {
         }
         scheduler = std::move(*made);
         driveCommand = drive;  // only now: a failed build leaves the run as it was
+        conduction = nextConduction;
+        if (conduction != nullptr) {
+            services::log(services::LogLevel::Info, "thermal",
+                          "heat conduction: " + std::to_string(conduction->model().cellCount()) +
+                              " cells in " + std::to_string(conduction->model().parts().size()) +
+                              " links");
+            for (const std::string& note : conduction->notes()) {
+                services::log(services::LogLevel::Warning, "thermal", note);
+            }
+        }
         scenarioState = scheduler->bus().find("scenario/state");
         scenarioTime = scheduler->bus().find("scenario/time");
         scenarioEnded = false;
@@ -2040,6 +2105,54 @@ struct Server::Impl {
             appendPose(data, primPose(prim), false, prim.scale);
         }
         d.set_transform_data(data);
+        // Every wire that is an EMI source (RFC 0013), where it runs now, drawn as a thin cable.
+        if (scheduler && emiRuns()) {
+            for (const emi::Source& s : emiSources()) {
+                if (s.type != emi::Source::Type::Wire || s.path.size() < 2) {
+                    continue;
+                }
+                const Pose pose = emiState(s).pose;
+                std::vector<double> xyz;
+                for (const emi::Vec3& p : s.path) {
+                    const Pose at = compose(pose, Pose{p, {1.0, 0.0, 0.0, 0.0}});
+                    xyz.insert(xyz.end(), at.position.begin(), at.position.end());
+                }
+                constexpr double kDrawnRadius = 0.0015;  // m: a lead, to see where it runs
+                v1::Overlay& overlay = *d.add_overlays();
+                overlay.set_kind(v1::Overlay::KIND_CABLE);
+                overlay.set_count(static_cast<std::uint32_t>(s.path.size()));
+                std::string bytes((1 + xyz.size()) * sizeof(double), '\0');
+                std::memcpy(bytes.data(), &kDrawnRadius, sizeof(double));
+                std::memcpy(bytes.data() + sizeof(double), xyz.data(), xyz.size() * sizeof(double));
+                overlay.set_data(std::move(bytes));
+            }
+        }
+        // Every cable (RFC 0011), its radius and its masses where they are now.
+        if (scheduler && hasTethers()) {
+            std::string problem;
+            for (const tether::TetherSpec& t : tether::tethersOf(WorldView(robot.world), problem)) {
+                const SignalId nodes = scheduler->bus().find("tether/" + t.name + "/nodes");
+                if (!nodes.valid()) {
+                    continue;  // the domain is off
+                }
+                const std::span<const double> xyz = scheduler->bus().readN(nodes);
+                std::size_t count = 0;
+                while (3 * count + 2 < xyz.size() && std::isfinite(xyz[3 * count])) {
+                    ++count;
+                }
+                if (count < 2) {
+                    continue;
+                }
+                v1::Overlay& overlay = *d.add_overlays();
+                overlay.set_kind(v1::Overlay::KIND_CABLE);
+                overlay.set_count(static_cast<std::uint32_t>(count));
+                std::string bytes((1 + 3 * count) * sizeof(double), '\0');
+                const double radius = 0.5 * t.params.diameter;
+                std::memcpy(bytes.data(), &radius, sizeof(double));
+                std::memcpy(bytes.data() + sizeof(double), xyz.data(), 3 * count * sizeof(double));
+                overlay.set_data(std::move(bytes));
+            }
+        }
         return envelope;
     }
 
@@ -2272,6 +2385,14 @@ struct Server::Impl {
                         return scenePrimOf(PrimId{p});
                     }
                 }
+                // A heat source (RFC 0012) is named by its instance: its link's prim.
+                if (std::string_view(domain) == "thermal/") {
+                    for (const SchemaInstance* s : view.instancesOf("HeatSourceAPI_1")) {
+                        if (s->instance == component) {
+                            return scenePrimOf(s->prim);
+                        }
+                    }
+                }
             }
         }
         return kNoIndex;
@@ -2382,6 +2503,9 @@ struct Server::Impl {
             s.mutable_replay_begin()->set_ns(0);
             s.mutable_replay_end()->set_ns(replay->duration.ns);
         }
+        if (recorder) {
+            s.set_recording_path(recorder->path());
+        }
         return envelope;
     }
     double measuredRtf{0.0};
@@ -2415,9 +2539,13 @@ struct Server::Impl {
 
     bool hasSensors() const { return !robot.world.sensors.names.empty(); }
     /// A power system to simulate: motors or a battery, from USD or an overlay.
-    /// Thermal nodes: ThermalAPI_1 prims.
-    bool hasThermalNodes() const {
+    /// Thermal nodes: ThermalAPI_1 prims, or links with a thermal material (RFC 0012).
+    bool hasThermalNodes() const { return hasLumpedNodes() || hasThermalMaterials(); }
+    bool hasLumpedNodes() const {
         return !WorldView(robot.world).instancesOf("ThermalAPI_1").empty();
+    }
+    bool hasThermalMaterials() const {
+        return !WorldView(robot.world).instancesOf("ThermalMaterialAPI_1").empty();
     }
     bool hasRotors() const { return !WorldView(robot.world).instancesOf("RotorAPI_1").empty(); }
     bool hasPowerSystem() const {
@@ -2645,6 +2773,9 @@ struct Server::Impl {
             } else if (std::string_view(row.domain) == "traffic" && hasTraffic()) {
                 yaml += substituted("traffic") ? "  traffic: {enabled: false, substitute: zero}\n"
                                                : "  traffic: {enabled: true, backend: builtin}\n";
+            } else if (std::string_view(row.domain) == "tether" && hasTethers()) {
+                yaml += substituted("tether") ? "  tether: {enabled: false, substitute: zero}\n"
+                                              : "  tether: {enabled: true}\n";
             } else if (std::string_view(row.domain) == "comms" && hasComms()) {
                 yaml += substituted("comms") ? "  comms: {enabled: false, substitute: ideal}\n"
                                              : "  comms: {enabled: true}\n";
@@ -2652,7 +2783,8 @@ struct Server::Impl {
                        std::string_view(row.domain) == "traffic" ||
                        std::string_view(row.domain) == "vehicle_dynamics" ||
                        std::string_view(row.domain) == "rotor_aero" ||
-                       std::string_view(row.domain) == "hydrodynamics") {
+                       std::string_view(row.domain) == "hydrodynamics" ||
+                       std::string_view(row.domain) == "tether") {
                 continue;  // not in the profile of a ground robot
             } else {
                 yaml += "  " + std::string(row.domain) +
@@ -2706,11 +2838,12 @@ struct Server::Impl {
             const bool running = built && !substituted(row.domain);
             d.set_enabled(running);
             d.set_available(built);
-            d.set_active_module(running ? (physics   ? physicsBackend()
-                                           : powered ? "averaged_network"
-                                           : heated  ? "lumped"
-                                                     : sensorLevel())
-                                        : row.substitute);
+            d.set_active_module(running
+                                    ? (physics   ? physicsBackend()
+                                       : powered ? "averaged_network"
+                                       : heated  ? (conduction != nullptr ? "conduction" : "lumped")
+                                                 : sensorLevel())
+                                    : row.substitute);
             d.set_substituted(!running);
             d.set_cpu_ms_per_sim_s(cost[row.domain]);
             if (sensing) {
@@ -2734,6 +2867,9 @@ struct Server::Impl {
             }
             if (heated) {
                 d.add_fidelities("lumped");
+                if (hasThermalMaterials()) {
+                    d.add_fidelities("conduction");
+                }
                 d.set_dt_ns(thermalDtNs.value_or(100'000'000));
                 d.set_min_dt_ns(1'000'000);
                 d.set_max_dt_ns(10'000'000'000);
@@ -2928,6 +3064,25 @@ struct Server::Impl {
                     r.set_error(status.message);
                 }
                 resync = true;
+                statusChanged = true;
+                break;
+            }
+            case v1::Command::kSetRecording: {
+                const v1::SetRecording& want = command.set_recording();
+                if (!want.on()) {
+                    stopRecording("stopped from the viewer");
+                } else {
+                    stopRecording("a new recording started");
+                    const std::string path =
+                        want.path().empty() ? defaultRecordingPath() : want.path();
+                    std::error_code ec;
+                    std::filesystem::create_directories(std::filesystem::path(path).parent_path(),
+                                                        ec);
+                    if (Status status = startRecording(path); !status.ok()) {
+                        r.set_ok(false);
+                        r.set_error(status.message);
+                    }
+                }
                 statusChanged = true;
                 break;
             }
@@ -3247,9 +3402,11 @@ struct Server::Impl {
         }
         std::unique_ptr<Scheduler> previous = std::move(scheduler);
         DriveCommand* previousDrive = driveCommand;
+        const thermal::ThermalConduction* previousConduction = conduction;
         if (Status status = build(); !status.ok()) {
             scheduler = std::move(previous);
             driveCommand = previousDrive;
+            conduction = previousConduction;
             if (bridge) {
                 bridge->attach(robot.world, scheduler->bus());
             }
@@ -3627,6 +3784,24 @@ struct Server::Impl {
         return {};
     }
 
+    /// Where the viewer's Record button records to: the state directory's recordings, named after
+    /// the robot and the wall-clock time, so that each recording is a new file.
+    std::string defaultRecordingPath() const {
+        const char* stateHome = std::getenv("XDG_STATE_HOME");
+        const char* home = std::getenv("HOME");
+        const std::filesystem::path base =
+            stateHome != nullptr && *stateHome != '\0'
+                ? std::filesystem::path(stateHome)
+                : std::filesystem::path(home != nullptr ? home : ".") / ".local" / "state";
+        const std::time_t now = std::time(nullptr);
+        std::tm local{};
+        localtime_r(&now, &local);
+        std::array<char, 32> stamp{};
+        std::strftime(stamp.data(), stamp.size(), "%Y%m%d-%H%M%S", &local);
+        const std::string name = robot.name.empty() ? "run" : robot.name;
+        return (base / "lagrange" / "recordings" / (name + "-" + stamp.data() + ".mcap")).string();
+    }
+
     /// The session layer: the edited model as a USD layer that `--robot FILE --world none`
     /// reads back.
     Status saveSession() {
@@ -3839,6 +4014,125 @@ struct Server::Impl {
         }
         for (const hydrodynamics::WaterBody& body : waters) {
             hydrodynamics::addWater(model, body);
+        }
+        // Tethers from --tether (RFC 0011): a prim on the world, its anchor a world point.
+        for (std::size_t k = 0; k < options.tethers.size(); ++k) {
+            const ServerOptions::Tether& t = options.tethers[k];
+            World& w = model.world;
+            const auto link = std::find(w.bodies.names.begin(), w.bodies.names.end(), t.link);
+            if (link == w.bodies.names.end()) {
+                return Unexpected{
+                    Status::error(StatusCode::InvalidConfig, "--tether: no link named " + t.link)};
+            }
+            const auto body = static_cast<std::size_t>(link - w.bodies.names.begin());
+            double length = t.length;
+            if (length <= 0.0) {
+                const std::array<double, 3> at = restPoses(w)[body].position;
+                length =
+                    1.1 * std::hypot(at[0] - t.anchor[0], at[1] - t.anchor[1], at[2] - t.anchor[2]);
+            }
+            const std::string name = "tether_" + std::to_string(k);
+            SchemaInstance s;
+            s.schema = "TetherAPI_1";
+            s.prim = w.addPrim("/tethers/" + name, name);
+            s.realArrays["tether:anchorPoint"] = {t.anchor[0], t.anchor[1], t.anchor[2]};
+            s.relationships["tether:attach"] = {w.bodies.prim[body]};
+            s.reals["tether:length"] = std::max(length, 0.05);
+            w.schemaInstances.push_back(std::move(s));
+        }
+        // Motor leads from --emi-motor-leads (RFC 0013): a wire from the battery to each motor,
+        // on the battery's prim, carrying the motor's bus current, and every magnetometer a
+        // victim.
+        if (options.emiMotorLeads) {
+            World& w = model.world;
+            const WorldView view(w);
+            const std::vector<Pose> rest = restPoses(w);
+            const auto placed = [&](PrimId prim) {
+                const BodyId body = view.primBody(prim);
+                const Pose at = view.primPoseInBody(prim);
+                return body == kWorldBody ? at : compose(rest.at(body.index), at);
+            };
+            const auto batteries = view.instancesOf("BatteryAPI_1");
+            const auto motors = view.instancesOf("ElectricalMotorAPI_1");
+            if (batteries.empty() || motors.empty()) {
+                return invalid(
+                    "--emi-motor-leads: the robot needs a battery and motors "
+                    "(BatteryAPI_1, ElectricalMotorAPI_1)");
+            }
+            // The robot's root link carries the harness; the battery at the given point, else
+            // at its prim when the prim is on the robot.
+            BodyId root = kWorldBody;
+            for (std::size_t b = 0; b < w.bodies.names.size() && root == kWorldBody; ++b) {
+                if (w.bodies.parent[b] == kWorldBody) {
+                    root = BodyId{static_cast<std::uint32_t>(b)};
+                }
+            }
+            if (root == kWorldBody) {
+                return invalid("--emi-motor-leads: the robot has no link");
+            }
+            const Pose rootPose = rest.at(root.index);
+            std::array<double, 3> start{};
+            if (options.emiBatteryAt) {
+                start = *options.emiBatteryAt;
+            } else if (view.primBody(batteries.front()->prim) == root) {
+                start = view.primPoseInBody(batteries.front()->prim).position;
+            } else {
+                return invalid(
+                    "--emi-motor-leads: the battery prim is not on the robot's root "
+                    "link; give where it is: SPACING,X,Y,Z");
+            }
+            std::vector<SchemaInstance> added;
+            const PrimId rootPrim = w.bodies.prim[root.index];
+            for (const SchemaInstance* motor : motors) {
+                // Where the motor is: on the body its joint turns (elec:joint), else its prim.
+                Pose to = placed(motor->prim);
+                if (const std::span<const PrimId> joint = motor->rel("elec:joint");
+                    !joint.empty()) {
+                    const std::string_view jointName = view.signalInstanceName(joint[0]);
+                    for (std::size_t j = 0; j < w.joints.names.size(); ++j) {
+                        if (w.joints.names[j] == jointName && w.joints.child[j] != kWorldBody) {
+                            to = rest.at(w.joints.child[j].index);
+                        }
+                    }
+                }
+                const std::array<double, 3> local = rotate(
+                    conjugate(rootPose.orientation),
+                    {to.position[0] - rootPose.position[0], to.position[1] - rootPose.position[1],
+                     to.position[2] - rootPose.position[2]});
+                const std::string name = std::string(view.signalInstanceName(motor->prim));
+                SchemaInstance s;
+                s.schema = "EmiSourceAPI_1";
+                s.prim = w.addPrim(std::string(view.primPath(rootPrim)) + "/lead_" + name,
+                                   "lead_" + name);
+                w.prims.body[s.prim.index] = root;
+                w.prims.poseInBody[s.prim.index] = Pose{};
+                s.tokens["emi:sourceType"] = "wire";
+                s.tokens["emi:currentSignal"] = "motor/" + name + "/bus_current";
+                s.realArrays["emi:path"] = {start[0], start[1], start[2],
+                                            local[0], local[1], local[2]};
+                s.realArrays["emi:returnOffset"] = {0.0, 0.0, *options.emiMotorLeads};
+                added.push_back(std::move(s));
+            }
+            for (std::size_t k = 0; k < w.sensors.names.size(); ++k) {
+                if (w.sensors.type[k] != SensorType::Magnetometer) {
+                    continue;
+                }
+                const PrimId prim = w.sensors.prim[k];
+                bool victim = false;
+                for (const SchemaInstance* v : view.instancesOf("EmiSusceptibilityAPI_1")) {
+                    victim = victim || v->prim == prim;
+                }
+                if (!victim) {
+                    SchemaInstance v;
+                    v.schema = "EmiSusceptibilityAPI_1";
+                    v.prim = prim;
+                    v.tokens["emi:victimType"] = "magnetometer";
+                    added.push_back(std::move(v));
+                }
+            }
+            for (SchemaInstance& s : added) {
+                w.schemaInstances.push_back(std::move(s));
+            }
         }
         // People last, so that the first bodies stay the robot's (RFC 0009 §8).
         std::vector<humans::Spec> people = humans::takeSpecs(model);
@@ -4332,6 +4626,9 @@ struct Server::Impl {
         if (!WorldView(robot.world).instancesOf("WaterAPI_1").empty()) {
             context.modules.insert("hydrodynamics");
         }
+        if (hasTethers()) {
+            context.modules.insert("tether");
+        }
         for (const auto& [key, value] : options.weather) {
             context.weatherKnown.insert(key);
         }
@@ -4495,6 +4792,7 @@ struct Server::Impl {
         }
         appliedAerodynamics = settings.aerodynamics;
         appliedRotorAero = settings.rotorAero;
+        appliedThermal = settings.thermal;
         appliedWeather = settings.weather;
         appliedEmiCoupling = settings.emiCoupling;
         const auto previousTokens = appliedSubstituteTokens;
@@ -4735,6 +5033,10 @@ struct Server::Impl {
               "no wind: the aerodynamics domain's wind or a wind field");
         field(kAirField, "air speed", "aerodynamics", units::m_per_s, 1, aeroRuns(),
               "the aerodynamics domain does not run: it needs the site's air density");
+        field(kThermalCellsField, "temperature in the parts", "thermal", units::K, 1,
+              conduction != nullptr,
+              "no link has a thermal material (ThermalMaterialAPI_1), or the site's ambient "
+              "temperature is not given");
         field(kFluxField, "|B|", "emi", units::T, 1, emiRuns(),
               hasEmi() ? "the EMI domain is off (zero substitute)"
                        : "the stage has no EMI sources (EmiSourceAPI_1)");
@@ -4746,9 +5048,9 @@ struct Server::Impl {
                 out.set_frequency_hz(s.frequency);
                 out.set_current_a(emiState(s).current);
                 out.set_power_w(s.radiatedPower);
-                static constexpr std::array<const char*, 5> kKinds{
+                static constexpr std::array<const char*, 6> kKinds{
                     "power line", "motor drive (dipole)", "transmitter", "welder (dipole)",
-                    "custom"};
+                    "custom",     "wire (Biot-Savart)"};
                 out.set_detail(s.fieldMap ? "field map"
                                           : kKinds.at(static_cast<std::size_t>(s.type)));
             }
@@ -4784,7 +5086,13 @@ struct Server::Impl {
                     body = Pose{{v[0], v[1], v[2]}, {v[3], v[4], v[5], v[6]}};
                 }
             }
-            if (!s.drivenBy.empty()) {
+            if (!s.currentSignal.empty()) {
+                const SignalId id = bus.find(s.currentSignal);
+                if (id.valid()) {
+                    now.current =
+                        s.frequency > 0.0 ? std::abs(bus.read(id)) : bus.read(id);  // RFC 0013
+                }
+            } else if (!s.drivenBy.empty()) {
                 const SignalId id = bus.find("motor/" + s.drivenBy + "/current_q");
                 if (id.valid()) {
                     now.current = std::abs(bus.read(id));
@@ -4985,6 +5293,64 @@ struct Server::Impl {
         return envelope;
     }
 
+    /// The temperatures of every link's cells (kThermalCellsField), one FieldVolume each in
+    /// the frame of the link's scene prim; NaN outside the solid.
+    std::vector<v1::Envelope> thermalVolumes() const {
+        std::vector<v1::Envelope> out;
+        if (conduction == nullptr || conduction->temperatures().empty()) {
+            return out;
+        }
+        const thermal::ConductionModel& model = conduction->model();
+        const std::vector<double>& t = conduction->temperatures();
+        for (std::size_t p = 0; p < model.parts().size(); ++p) {
+            const BodyId body = conduction->bodies()[p];
+            // The link's own scene prim: the top one on the body, at its frame.
+            const ScenePrim* frame = nullptr;
+            for (const ScenePrim& prim : robot.scene.prims) {
+                if (prim.body == body.index &&
+                    (frame == nullptr || prim.path.size() < frame->path.size())) {
+                    frame = &prim;
+                }
+            }
+            const Pose& offset = frame != nullptr ? frame->offset : Pose{};
+            if (frame == nullptr ||
+                offset.orientation != std::array<double, 4>{1.0, 0.0, 0.0, 0.0}) {
+                continue;  // only a link prim at its body's orientation (the usual case)
+            }
+            const thermal::ConductionModel::Grid& g = model.grid(p);
+            v1::Envelope envelope;
+            v1::FieldVolume& volume = *envelope.mutable_field_volume();
+            volume.set_field(kThermalCellsField);
+            volume.set_prim_path(frame->path);
+            volume.mutable_sim_time()->set_ns(scheduler->now().ns);
+            volume.set_nx(static_cast<std::uint32_t>(g.dims[0]));
+            volume.set_ny(static_cast<std::uint32_t>(g.dims[1]));
+            volume.set_nz(static_cast<std::uint32_t>(g.dims[2]));
+            volume.set_cell_m(g.cell);
+            volume.set_components(1);
+            // Cell centres, in the prim's frame (at the body's, less its offset).
+            volume.set_origin_x(g.origin[0] + 0.5 * g.cell - offset.position[0]);
+            volume.set_origin_y(g.origin[1] + 0.5 * g.cell - offset.position[1]);
+            volume.set_origin_z(g.origin[2] + 0.5 * g.cell - offset.position[2]);
+            std::vector<float> values(g.cellAt.size(), std::numeric_limits<float>::quiet_NaN());
+            float hi = 0.0F;
+            for (std::size_t i = 0; i < g.cellAt.size(); ++i) {
+                if (g.cellAt[i] >= 0) {
+                    values[i] =
+                        static_cast<float>(t[g.first + static_cast<std::size_t>(g.cellAt[i])]);
+                    hi = std::max(hi, values[i]);
+                }
+            }
+            volume.set_value_max(hi);
+            std::string bytes(reinterpret_cast<const char*>(values.data()),
+                              values.size() * sizeof(float));
+            volume.mutable_values()->set_size(bytes.size());
+            volume.mutable_values()->set_inline_(std::move(bytes));
+            out.push_back(std::move(envelope));
+        }
+        return out;
+    }
+
     /// The air's velocity in a box around the robot (kAirField only), for the viewer's
     /// particles: kVolumeNx² × kVolumeNz cells, down to the ground.
     std::optional<v1::Envelope> fieldVolume(const std::string& name) const {
@@ -5038,8 +5404,8 @@ struct Server::Impl {
         if (name == kAirField) {
             return airSlice(height, orientation);
         }
-        if (orientation != v1::SLICE_ORIENTATION_HORIZONTAL) {
-            return std::nullopt;  // only the air has vertical slices
+        if (orientation != v1::SLICE_ORIENTATION_HORIZONTAL && name != kFluxField) {
+            return std::nullopt;  // only the air and |B| have vertical slices
         }
         if (scheduler == nullptr ||
             (name != kFogField && name != kWindField && name != kFluxField)) {
@@ -5081,10 +5447,28 @@ struct Server::Impl {
         slice.set_height(kSliceHeight);
         const std::uint32_t components = fog || flux ? 1 : 2;
         slice.set_components(components);
-        slice.set_origin_x(centre.position[0] - (kSliceWidth - 1) * kSliceCell / 2.0);
-        slice.set_origin_y(centre.position[1] - (kSliceHeight - 1) * kSliceCell / 2.0);
-        slice.set_cell_m(kSliceCell);
-        slice.set_height_m(height);
+        // A robot's own wiring (RFC 0013) is centimetres from its sensors: when every EMI source
+        // rides on a body, a slice a couple of metres across, in 4 cm cells.
+        double cellM = kSliceCell;
+        if (flux && !emiSources().empty() &&
+            std::ranges::all_of(emiSources(),
+                                [](const emi::Source& e) { return e.body != kWorldBody; })) {
+            cellM = kSelfEmiSliceCell;
+        }
+        const bool vertical = orientation != v1::SLICE_ORIENTATION_HORIZONTAL;
+        const bool alongY = orientation == v1::SLICE_ORIENTATION_VERTICAL_YZ;
+        slice.set_orientation(orientation);
+        slice.set_origin_x((alongY ? centre.position[1] : centre.position[0]) -
+                           (kSliceWidth - 1) * cellM / 2.0);
+        if (vertical) {
+            // Through the robot, centred on it.
+            slice.set_origin_y(centre.position[2] - (kSliceHeight - 1) * cellM / 2.0);
+            slice.set_height_m(alongY ? centre.position[0] : centre.position[1]);
+        } else {
+            slice.set_origin_y(centre.position[1] - (kSliceHeight - 1) * cellM / 2.0);
+            slice.set_height_m(height);
+        }
+        slice.set_cell_m(cellM);
         std::vector<float> values;
         values.reserve(static_cast<std::size_t>(kSliceWidth) * kSliceHeight * components);
         const double uniform = fog ? bus.read(bus.find("env/extinction/visible")) : 0.0;
@@ -5092,15 +5476,29 @@ struct Server::Impl {
         double hi = 0.0;
         for (std::uint32_t j = 0; j < kSliceHeight; ++j) {
             for (std::uint32_t i = 0; i < kSliceWidth; ++i) {
-                const fields::Vec3 at{slice.origin_x() + i * kSliceCell,
-                                      slice.origin_y() + j * kSliceCell, height};
+                const double across = slice.origin_x() + i * cellM;
+                const double up = slice.origin_y() + j * cellM;
+                fields::Vec3 at{across, up, height};
+                if (vertical) {
+                    at = alongY ? fields::Vec3{slice.height_m(), across, up}
+                                : fields::Vec3{across, slice.height_m(), up};
+                }
                 if (flux) {
-                    // |B| RMS; sources add in power (as incoherent ones would).
+                    // |B| RMS: alternating sources add in power (as incoherent ones would), direct
+                    // ones as vectors (a lead and its return cancel), then both together.
                     double b2 = 0.0;
+                    emi::Vec3 direct{0.0, 0.0, 0.0};
                     for (std::size_t k = 0; k < sources.size(); ++k) {
-                        const double b = emi::magneticFieldRms(emiSources()[k], sources[k], at).b;
+                        const emi::Source& source = emiSources()[k];
+                        if (source.frequency <= 0.0) {
+                            const emi::Vec3 b = emi::magneticField(source, sources[k], at, 0.0);
+                            direct = {direct[0] + b[0], direct[1] + b[1], direct[2] + b[2]};
+                            continue;
+                        }
+                        const double b = emi::magneticFieldRms(source, sources[k], at).b;
                         b2 += b * b;
                     }
+                    b2 += direct[0] * direct[0] + direct[1] * direct[1] + direct[2] * direct[2];
                     const double v = std::sqrt(b2);
                     values.push_back(static_cast<float>(v));
                     lo = std::min(lo, v);
@@ -6325,12 +6723,20 @@ void Server::runOnce(int timeoutMs) {
     }
     if (nanosSince(s.lastVolumes, now) >= kVolumePeriodNs) {
         s.lastVolumes = now;
+        ++s.thermalVolumeTick;
         for (auto& session : s.sessions) {
             if (!session->greeted || session->congested()) {
                 continue;
             }
             for (const auto& [key, want] : session->fields) {
-                if (want.volume) {
+                if (want.volume && key.first == kThermalCellsField) {
+                    // The cells change at the thermal step: a few times a second is enough.
+                    if (s.thermalVolumeTick % kThermalVolumeEvery == 0) {
+                        for (const v1::Envelope& volume : s.thermalVolumes()) {
+                            session->send(volume);
+                        }
+                    }
+                } else if (want.volume) {
                     if (auto volume = s.fieldVolume(key.first)) {
                         session->send(*volume);
                     }

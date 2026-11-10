@@ -7,6 +7,9 @@ find_package(lagrange_core REQUIRED)
 
 add_library(
     lagrange_thermal
+    conduction/src/Conduction.cpp
+    conduction/src/Materials.cpp
+    conduction/src/ThermalConduction.cpp
     lumped/src/Lumped.cpp
     lumped/src/ThermalNetwork.cpp
     substitutes/src/AmbientTemperature.cpp
@@ -42,6 +45,12 @@ if(BUILD_TESTING)
         lagrange_electrical::lagrange_electrical
     )
     lagrange_target_defaults(test_thermal_coupling)
+    ament_add_gtest(test_conduction test/test_conduction.cpp TIMEOUT 300)
+    target_link_libraries(test_conduction lagrange_thermal)
+    lagrange_target_defaults(test_conduction)
+    ament_add_gtest(test_thermal_conduction test/test_thermal_conduction.cpp TIMEOUT 300)
+    target_link_libraries(test_thermal_conduction lagrange_thermal)
+    lagrange_target_defaults(test_thermal_conduction)
     ament_add_gtest(test_thermal_network test/test_thermal_network.cpp)
     target_link_libraries(test_thermal_network lagrange_thermal)
     lagrange_target_defaults(test_thermal_network)

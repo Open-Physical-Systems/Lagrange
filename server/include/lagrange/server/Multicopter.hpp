@@ -1,9 +1,11 @@
 #pragma once
 
 #include "lagrange/module/IModule.hpp"
+#include "lagrange/services/SceneQuery.hpp"
 
 #include <array>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -41,6 +43,15 @@ public:
         double maxHorizontalMps{5.0};
         double maxVerticalMps{2.0};
         double maxYawRateRadps{1.5};
+        // How fast the commanded velocity may change, as PX4's position mode ramps its stick
+        // (PX4 v1.17: MPC_ACC_HOR 3, MPC_ACC_UP_MAX 4, MPC_ACC_DOWN_MAX 3 m/s²): it starts and
+        // stops smoothly, and brakes to a stop where the stick is let go.
+        double maxHorizontalAccelMps2{3.0};
+        double maxVerticalAccelMps2{3.0};
+        double maxJerkMps3{8.0};
+        // The share of each rotor's full thrust (at its loaded top speed, from its motor and
+        // battery) it may ask for, as an ESC limit would (--thrust-limit); 1: no limit.
+        double thrustLimit{1.0};  // and the acceleration itself (PX4 v1.17: MPC_JERK_MAX 8)
         // Angle mode: the tilt at full stick (a command of maxHorizontalMps), the same as the
         // limit position mode never asks beyond.
         double maxAngleTiltRad{0.5235987755982988};  // 30°
@@ -65,8 +76,12 @@ public:
     /// Where commands come from (ROS /cmd_vel); nullopt: none recent, hold where it is.
     using CommandSource = std::function<std::optional<FlightCommand>()>;
 
-    explicit MulticopterController(Settings settings, CommandSource commands = {})
-        : settings_(settings), commands_(std::move(commands)) {}
+    /// `ground`: the fixed scenery and the ground plane. With it, "the ground" for taking off,
+    /// flying low and landing by hand is the surface under the drone (cast straight down), so it
+    /// can fly off a bridge or a roof and land below; without it, the height it started at.
+    explicit MulticopterController(Settings settings, CommandSource commands = {},
+                                   std::shared_ptr<const services::SceneQuery> ground = {})
+        : settings_(settings), commands_(std::move(commands)), ground_(std::move(ground)) {}
 
     [[nodiscard]] ModuleInfo info() const override;
     [[nodiscard]] Duration preferredStep() const override;
@@ -89,6 +104,7 @@ private:
         double spin{1.0};                  // the same about the joint axis (turned for a pusher)
         double thrustPerOmega2{0.0};       // N per (rad/s)²
         double torquePerOmega2{0.0};       // N·m per (rad/s)²
+        double speedLimit{0.0};            // rad/s it may ask for; 0: none
         SignalId velocity, command;
     };
 
@@ -101,8 +117,14 @@ private:
     bool homed_{false};
     CommandSource commands_;
     std::array<double, 3> setpoint_{};  // world-local, m: where it holds or flies to
+    std::shared_ptr<const services::SceneQuery> ground_;
+    double standHeight_{0.0};  // m: its base above the surface under it, standing at the start
+    bool standKnown_{false};
     double heading_{0.0};               // rad, the yaw it holds
     bool airborne_{false};              // waitForCommand: taken off, not landed since
+    std::array<double, 3> velocity_{};  // m/s, world: the set point's velocity, ramped
+    std::array<double, 3> accel_{};     // m/s², world: the set point's acceleration
+    std::array<bool, 3> held_{};        // the leash held the set point back along this axis
     SignalId pose_, twist_;
     // With the weather (config "weather_air"): its air density against the one the mixer was
     // built for, as a flight controller's hover-thrust estimate follows the air (an ideal one).

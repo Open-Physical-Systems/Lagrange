@@ -13,6 +13,8 @@
 #include "lagrange/electrical/Export.hpp"
 #include "lagrange/gpu/Device.hpp"
 #include "lagrange/services/DeterminismCheck.hpp"
+#include "lagrange/thermal/ThermalConduction.hpp"
+#include "lagrange/world/PoseMath.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -44,22 +46,29 @@ int usage(const char* error) {
     if (error != nullptr) {
         std::fprintf(stderr, "lagrange: %s\n", error);
     }
-    std::fprintf(stderr,
-                 "usage: lagrange <command> [arguments]\n"
-                 "  run PROFILE [options]          run the simulator with the profile applied\n"
-                 "  validate PROFILE... [options]  check profiles against profiles/schema.json\n"
-                 "                                 and what this simulator can run\n"
-                 "  graph [PROFILE] [options]      print the wiring of the run as Graphviz DOT\n"
-                 "  determinism [PROFILE] [options] [--seconds N]\n"
-                 "                                 run twice (no ROS, CPU lidar) and compare the\n"
-                 "                                 state hashes every 100 ms; exit 1 if they\n"
-                 "                                 differ (default 10 s)\n"
-                 "  export spice|modelica [PROFILE] [options] [--out FILE]\n"
-                 "                                 the robot's power system as an ngspice\n"
-                 "                                 netlist or a Modelica model (to stdout)\n"
-                 "  info [--version]               version, paths and GPUs\n"
-                 "A profile's stage names the robot (URDF) unless --robot is given.\n"
-                 "Options (as lagrange_server):\n");
+    std::fprintf(
+        stderr,
+        "usage: lagrange <command> [arguments]\n"
+        "  run PROFILE [options]          run the simulator with the profile applied\n"
+        "  validate PROFILE... [options]  check profiles against profiles/schema.json\n"
+        "                                 and what this simulator can run\n"
+        "  graph [PROFILE] [options]      print the wiring of the run as Graphviz DOT\n"
+        "  determinism [PROFILE] [options] [--seconds N]\n"
+        "                                 run twice (no ROS, CPU lidar) and compare the\n"
+        "                                 state hashes every 100 ms; exit 1 if they\n"
+        "                                 differ (default 10 s)\n"
+        "  export spice|modelica [PROFILE] [options] [--out FILE]\n"
+        "                                 the robot's power system as an ngspice\n"
+        "                                 netlist or a Modelica model (to stdout)\n"
+        "  heat [PROFILE] [options] [--surface-coefficient W_M2K]\n"
+        "                                 the steady temperatures of the links with a\n"
+        "                                 thermal material, at rest, in seconds (RFC 0012)\n"
+        "  export thermal [PROFILE] [options] [--out FILE.json]\n"
+        "                                 the links' thermal materials and heat\n"
+        "                                 sources, for lagrange foam-cht (RFC 0012)\n"
+        "  info [--version]               version, paths and GPUs\n"
+        "A profile's stage names the robot (URDF) unless --robot is given.\n"
+        "Options (as lagrange_server):\n");
     lagrange::server::printServerOptions(stderr);
     return error != nullptr ? 2 : 0;
 }
@@ -381,6 +390,233 @@ int exportNetwork(CommandLine& line, std::string_view format, const std::string&
     return 0;
 }
 
+/// `lagrange heat`: the conduction fidelity (RFC 0012) to its steady state at the rest pose,
+/// without physics: backward Euler steps of growing length until no cell moves by 1 mK, then
+/// each link's and each heat source's temperature. A source on a signal takes no power here.
+int steadyHeat(CommandLine& line, std::optional<double> filmCoefficient, double cell) {
+    if (line.positional.size() > 1) {
+        return usage("heat takes at most one profile");
+    }
+    if (!line.positional.empty()) {
+        const auto yaml = readFile(line.positional[0]);
+        if (!yaml) {
+            std::fprintf(stderr, "lagrange: cannot read %s\n", line.positional[0].c_str());
+            return 1;
+        }
+        if (const auto error = useStage(line, *yaml, line.positional[0])) {
+            std::fprintf(stderr, "lagrange: %s\n", error->c_str());
+            return 1;
+        }
+    }
+    if (!line.options.ambientTemperatureK) {
+        return usage("heat needs the site's air temperature: --ambient-temperature K");
+    }
+    const double ambient = *line.options.ambientTemperatureK;
+    lagrange::server::Server server(line.options);
+    if (const lagrange::Status status = server.load(); !status.ok()) {
+        std::fprintf(stderr, "lagrange: %s\n", status.message.c_str());
+        return 1;
+    }
+    auto setup =
+        lagrange::thermal::thermalSetupOf(lagrange::WorldView(server.world()), ambient, cell);
+    if (!setup) {
+        std::fprintf(stderr, "lagrange: %s\n", setup.error().c_str());
+        return 1;
+    }
+    if (setup->parts.empty()) {
+        std::fprintf(stderr, "lagrange: no link has a thermal material (ThermalMaterialAPI_1)\n");
+        return 1;
+    }
+    std::vector<std::string> notes;
+    std::string error;
+    constexpr std::size_t kMaxCells = 2000000;  // per link: a steady solve can afford more
+    auto model = lagrange::thermal::ConductionModel::build(setup->parts, kMaxCells, notes, error);
+    if (!model) {
+        std::fprintf(stderr, "lagrange: %s\n", error.c_str());
+        return 1;
+    }
+    for (const std::string& note : notes) {
+        std::fprintf(stderr, "note: %s\n", note.c_str());
+    }
+    std::vector<double> heats;
+    double total = 0.0;
+    for (const auto& s : setup->sources) {
+        const double q = s.powerSignal.empty() ? (1.0 - s.efficiency) * s.power : 0.0;
+        heats.push_back(q);
+        total += q;
+    }
+    std::vector<lagrange::thermal::PartInput> inputs(setup->parts.size());
+    for (std::size_t p = 0; p < inputs.size(); ++p) {
+        inputs[p].pose = setup->parts[p].rest;
+    }
+    std::vector<double> t = model->initialTemperatures();
+    const lagrange::thermal::Surroundings around{ambient, ambient, 0.0};
+    constexpr double kSettled = 1e-3;  // K: no cell moves by more in a step
+    double dt = 1.0;
+    int steps = 0;
+    for (; steps < 400; ++steps) {
+        const std::vector<double> before = t;
+        model->step(t, inputs, heats, around, dt, filmCoefficient);
+        double moved = 0.0;
+        for (std::size_t i = 0; i < t.size(); ++i) {
+            moved = std::max(moved, std::abs(t[i] - before[i]));
+        }
+        if (moved < kSettled && dt >= 100.0) {
+            break;
+        }
+        dt = std::min(dt * 1.5, 1e4);
+    }
+    double out = 0.0;
+    std::printf("%-24s %10s %10s %10s\n", "link", "mean K", "max K", "min K");
+    for (std::size_t p = 0; p < setup->parts.size(); ++p) {
+        out += model->heatOut(p);
+        std::printf("%-24s %10.2f %10.2f %10.2f\n", setup->parts[p].name.c_str(), model->mean(t, p),
+                    model->maximum(t, p), model->minimum(t, p));
+    }
+    std::vector<std::size_t> nth(setup->parts.size(), 0);
+    for (std::size_t i = 0; i < setup->sources.size(); ++i) {
+        const auto& s = setup->sources[i];
+        std::printf("%-24s %10.2f   (%.3g W of heat%s)\n", s.name.c_str(),
+                    model->sourceMean(t, s.part, nth[s.part]++), heats[i],
+                    s.powerSignal.empty() ? "" : ", on a signal: none here");
+    }
+    std::printf("%.3f W in, %.3f W out to the air and the sky at %.2f K, after %d steps%s\n", total,
+                out, ambient, steps,
+                filmCoefficient ? " (one film coefficient)" : " (the correlations)");
+    return 0;
+}
+
+/// `lagrange export thermal`: every link with a thermal material, as the conduction fidelity
+/// reads it (RFC 0012), with a point inside each and its heat sources, at the rest pose in the
+/// world frame, as JSON for lagrange foam-cht.
+int exportThermal(CommandLine& line, const std::string& out) {
+    if (line.positional.size() > 1) {
+        return usage("export takes at most one profile");
+    }
+    if (!line.positional.empty()) {
+        const auto yaml = readFile(line.positional[0]);
+        if (!yaml) {
+            std::fprintf(stderr, "lagrange: cannot read %s\n", line.positional[0].c_str());
+            return 1;
+        }
+        if (const auto error = useStage(line, *yaml, line.positional[0])) {
+            std::fprintf(stderr, "lagrange: %s\n", error->c_str());
+            return 1;
+        }
+    }
+    lagrange::server::Server server(line.options);
+    if (const lagrange::Status status = server.load(); !status.ok()) {
+        std::fprintf(stderr, "lagrange: %s\n", status.message.c_str());
+        return 1;
+    }
+    constexpr double kCell = 0.002;  // m, as the conduction fidelity's default
+    const double ambient = line.options.ambientTemperatureK.value_or(0.0);
+    auto setup = lagrange::thermal::thermalSetupOf(lagrange::WorldView(server.world()),
+                                                   ambient > 0.0 ? ambient : 293.15, kCell);
+    if (!setup) {
+        std::fprintf(stderr, "lagrange: %s\n", setup.error().c_str());
+        return 1;
+    }
+    if (setup->parts.empty()) {
+        std::fprintf(stderr, "lagrange: no link has a thermal material (ThermalMaterialAPI_1)\n");
+        return 1;
+    }
+    // A point inside each part: the centre of one of its cells.
+    std::vector<std::string> notes;
+    std::string error;
+    const auto model =
+        lagrange::thermal::ConductionModel::build(setup->parts, 200000, notes, error);
+    if (!model) {
+        std::fprintf(stderr, "lagrange: %s\n", error.c_str());
+        return 1;
+    }
+    std::ostringstream json;
+    json.precision(10);
+    const auto vec = [&](const std::array<double, 3>& v) {
+        json << "[" << v[0] << ", " << v[1] << ", " << v[2] << "]";
+    };
+    const auto toWorld = [](const lagrange::Pose& pose, const std::array<double, 3>& local) {
+        return lagrange::compose(pose, lagrange::Pose{local, {1.0, 0.0, 0.0, 0.0}}).position;
+    };
+    json << "{\n  \"ambient_temperature\": " << (ambient > 0.0 ? ambient : 0.0)
+         << ",\n  \"parts\": [\n";
+    for (std::size_t p = 0; p < setup->parts.size(); ++p) {
+        const lagrange::thermal::SolidPart& part = setup->parts[p];
+        const auto& m = part.material;
+        const auto& grid = model->grid(p);
+        json << "    {\"name\": \"" << part.name << "\", \"conductivity\": " << m.conductivity;
+        if (m.conductivityAlong) {
+            json << ", \"conductivity_along\": " << *m.conductivityAlong << ", \"axis\": ";
+            vec(lagrange::rotate(part.rest.orientation, part.axis));
+        }
+        json << ", \"density\": " << m.density << ", \"specific_heat\": " << m.specificHeat
+             << ", \"emissivity\": " << m.emissivity;
+        if (part.contactConductance && part.parent) {
+            json << ", \"contact_conductance\": " << *part.contactConductance << ", \"parent\": \""
+                 << setup->parts[*part.parent].name << "\"";
+        }
+        // The cell nearest the middle of its cells: well inside, for snappyHexMesh.
+        std::array<double, 3> middle{0.0, 0.0, 0.0};
+        for (std::size_t c = grid.first; c < grid.first + grid.count; ++c) {
+            for (std::size_t k = 0; k < 3; ++k) {
+                middle[k] += model->centre(c)[k] / static_cast<double>(grid.count);
+            }
+        }
+        std::size_t inner = grid.first;
+        double best = 1e300;
+        for (std::size_t c = grid.first; c < grid.first + grid.count; ++c) {
+            const auto x = model->centre(c);
+            const double d = (x[0] - middle[0]) * (x[0] - middle[0]) +
+                             (x[1] - middle[1]) * (x[1] - middle[1]) +
+                             (x[2] - middle[2]) * (x[2] - middle[2]);
+            if (d < best) {
+                best = d;
+                inner = c;
+            }
+        }
+        json << ", \"inside\": ";
+        vec(toWorld(part.rest, model->centre(inner)));
+        json << ", \"cell\": " << grid.cell << ", \"sources\": [";
+        bool first = true;
+        for (const auto& source : setup->sources) {
+            if (source.part != p) {
+                continue;
+            }
+            json << (first ? "" : ", ") << "{\"name\": \"" << source.name
+                 << "\", \"heat\": " << (1.0 - source.efficiency) * source.power
+                 << ", \"power_signal\": \"" << source.powerSignal << "\", \"centre\": ";
+            vec(toWorld(part.rest, source.box.centre));
+            json << ", \"size\": ";
+            vec(source.box.size);
+            json << ", \"axes\": [";
+            for (int a = 0; a < 3; ++a) {
+                std::array<double, 3> e{0.0, 0.0, 0.0};
+                e[static_cast<std::size_t>(a)] = 1.0;
+                if (a > 0) {
+                    json << ", ";
+                }
+                vec(lagrange::rotate(part.rest.orientation, e));
+            }
+            json << "]}";
+            first = false;
+        }
+        json << "]}" << (p + 1 < setup->parts.size() ? "," : "") << "\n";
+    }
+    json << "  ]\n}\n";
+    if (out.empty()) {
+        std::fputs(json.str().c_str(), stdout);
+        return 0;
+    }
+    std::ofstream file(out);
+    file << json.str();
+    if (!file) {
+        std::fprintf(stderr, "lagrange: cannot write %s\n", out.c_str());
+        return 1;
+    }
+    std::printf("wrote %s\n", out.c_str());
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         return usage("no command");
@@ -393,7 +629,7 @@ int main(int argc, char** argv) {
         return info(argc, argv);
     }
     if (command != "run" && command != "validate" && command != "graph" &&
-        command != "determinism" && command != "export") {
+        command != "determinism" && command != "export" && command != "heat") {
         return usage(("unknown command " + std::string(command)).c_str());
     }
     // `export` takes its format first.
@@ -401,8 +637,9 @@ int main(int argc, char** argv) {
     std::vector<char*> exportArgs;
     if (command == "export") {
         if (argc < 3 ||
-            (std::string_view(argv[2]) != "spice" && std::string_view(argv[2]) != "modelica")) {
-            return usage("export needs spice or modelica");
+            (std::string_view(argv[2]) != "spice" && std::string_view(argv[2]) != "modelica" &&
+             std::string_view(argv[2]) != "thermal")) {
+            return usage("export needs spice, modelica or thermal");
         }
         format = argv[2];
         exportArgs.assign(argv, argv + argc);
@@ -418,6 +655,33 @@ int main(int argc, char** argv) {
     for (std::size_t i = 2; i + 1 < args.size(); ++i) {
         if (std::string_view(args[i]) == "--out") {
             out = args[i + 1];
+            args.erase(args.begin() + static_cast<std::ptrdiff_t>(i),
+                       args.begin() + static_cast<std::ptrdiff_t>(i) + 2);
+            break;
+        }
+    }
+    std::optional<double> filmCoefficient;
+    double heatCell = 0.002;  // m, `lagrange heat --cell`: the conduction fidelity's default
+    for (std::size_t i = 2; i + 1 < args.size(); ++i) {
+        if (std::string_view(args[i]) == "--cell") {
+            char* end = nullptr;
+            heatCell = std::strtod(args[i + 1], &end);
+            if (end == args[i + 1] || *end != '\0' || !(heatCell > 0.0)) {
+                return usage("--cell needs a cell size in m, over 0");
+            }
+            args.erase(args.begin() + static_cast<std::ptrdiff_t>(i),
+                       args.begin() + static_cast<std::ptrdiff_t>(i) + 2);
+            break;
+        }
+    }
+    for (std::size_t i = 2; i + 1 < args.size(); ++i) {
+        if (std::string_view(args[i]) == "--surface-coefficient") {
+            char* end = nullptr;
+            const double h = std::strtod(args[i + 1], &end);
+            if (end == args[i + 1] || *end != '\0' || !(h >= 0.0)) {
+                return usage("--surface-coefficient needs W/(m²·K), 0 or more");
+            }
+            filmCoefficient = h;
             args.erase(args.begin() + static_cast<std::ptrdiff_t>(i),
                        args.begin() + static_cast<std::ptrdiff_t>(i) + 2);
             break;
@@ -452,6 +716,12 @@ int main(int argc, char** argv) {
     }
     // Checking and printing need no ROS node.
     line.options.ros = false;
+    if (command == "heat") {
+        return steadyHeat(line, filmCoefficient, heatCell);
+    }
+    if (command == "export" && format == "thermal") {
+        return exportThermal(line, out);
+    }
     if (command == "export") {
         return exportNetwork(line, format, out);
     }
