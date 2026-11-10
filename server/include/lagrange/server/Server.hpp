@@ -68,6 +68,9 @@ struct ServerOptions {
     /// ArduPilot SITL through its JSON interface (--mavlink ardupilot[:PORT]): the UDP port its
     /// servo frames come to.
     std::optional<std::uint16_t> ardupilotPort;
+    /// The rotors' speed at the autopilot's full output, rad/s (--mavlink-max-rotor-speed); none:
+    /// each rotor's loaded top speed from its motor and battery (mavlink::rotorTopSpeed).
+    std::optional<double> mavlinkMaxRotorSpeed;
     /// Bench mode (--bench): physics replaced by this recording's rigid-body signals, replayed
     /// open loop (the replay substitute); empty = none. A profile's rigid_body replay source
     /// overrides it.

@@ -145,6 +145,8 @@ void printServerOptions(std::FILE* out) {
         "  --mavlink px4[:PORT]|ardupilot[:PORT]  fly a multicopter with PX4 SITL (TCP 4560;\n"
         "            tools/ci/px4_mission.sh) or ArduPilot SITL's JSON interface (UDP 9002;\n"
         "            tools/ci/ardupilot_mission.sh), in lockstep\n"
+        "  --mavlink-max-rotor-speed RAD_S  the rotors' speed at the autopilot's full output\n"
+        "            (default: each rotor's loaded top speed from its motor and battery)\n"
         "  --geo-origin LAT,LON,HEIGHT  where the world's origin is on the Earth (degrees,\n"
         "            degrees, m above WGS84), for GNSS, magnetometers and barometers (no default;\n"
         "            a profile's world.geo_origin also sets it)\n"
@@ -355,6 +357,15 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                        "ardupilot[:PORT] (ArduPilot's JSON frames on UDP 9002)";
             }
             (px4 ? options.px4Port : options.ardupilotPort) = static_cast<std::uint16_t>(port);
+        } else if (arg == "--mavlink-max-rotor-speed") {
+            const char* text = value();
+            char* end = nullptr;
+            const double speed = text != nullptr ? std::strtod(text, &end) : 0.0;
+            if (text == nullptr || end == text || *end != '\0' || !(speed > 0.0) ||
+                !std::isfinite(speed)) {
+                return "--mavlink-max-rotor-speed needs a speed in rad/s";
+            }
+            options.mavlinkMaxRotorSpeed = speed;
         } else if (arg == "--geo-origin") {
             const char* text = value();
             double lat = 0.0, lon = 0.0, height = 0.0;
