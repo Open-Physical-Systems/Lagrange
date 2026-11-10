@@ -251,6 +251,13 @@ void ViewerClient::seek(std::int64_t simTimeNs) {
     enqueue(std::move(envelope));
 }
 
+void ViewerClient::reset() {
+    auto envelope = std::make_unique<v1::Envelope>();
+    envelope->mutable_command()->set_request_id(nextRequestId_++);
+    envelope->mutable_command()->mutable_reset();
+    enqueue(std::move(envelope));
+}
+
 void ViewerClient::step(std::int64_t durationNs) {
     auto envelope = std::make_unique<v1::Envelope>();
     envelope->mutable_command()->set_request_id(nextRequestId_++);
