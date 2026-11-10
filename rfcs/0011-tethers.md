@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft, waiting on the owner |
+| Status | Accepted (2026-11-10) by the owner, with the proposed answer to each question below; gated merges of its steps pre-approved |
 | Created | 2026-11-10 |
 | Affects | `schemas/` (one new library), `modules/tether/` (new), `io/stage/`, `server/`, `profiles/schema.json` (addition), `proto/` (one enum value), `viewer/` (drawing), `docs/` |
 | Builds on | RFC 0001 (modules), RFC 0002 (schemas), RFC 0003 (protocol), RFC 0005 (profiles), RFC 0007 (the 1.x freeze) |
@@ -226,3 +226,10 @@ One PR each, in order:
 4. Downwash on the cable as a second step (§6), not in the first version? *Proposed: yes.*
 5. Pre-approve the gated merges (schema and protocol) of the steps above once each passes its
    tests, as for RFC 0009? *Proposed: yes.*
+
+## Resolutions on acceptance (2026-11-10)
+
+The owner accepted the design and asked for the physics in Lagrange and the drawing in its
+viewer, ready to use. Every question takes its proposed answer. The first user's tether, for the
+drone workspace (step 7): 20 m, 4 mm diameter, 23.5 g/m, from a ground station with a dock on top
+of a bridge deck; its stiffness, friction and winch are the defaults of §2 until measured.
