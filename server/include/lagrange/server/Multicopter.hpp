@@ -103,6 +103,7 @@ private:
     std::array<double, 3> setpoint_{};  // world-local, m: where it holds or flies to
     double heading_{0.0};               // rad, the yaw it holds
     bool airborne_{false};              // waitForCommand: taken off, not landed since
+    std::array<bool, 3> moving_{};      // the set point moved along this axis last step
     SignalId pose_, twist_;
     // With the weather (config "weather_air"): its air density against the one the mixer was
     // built for, as a flight controller's hover-thrust estimate follows the air (an ideal one).

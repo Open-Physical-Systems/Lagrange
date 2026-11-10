@@ -12,6 +12,7 @@
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/services/WrenchSum.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 #include <optional>
@@ -344,6 +345,69 @@ TEST(Multicopter, TakesOffByHandWithEveryStickAtOnce) {
     // Upright: the body's z axis within 30° of vertical (q = w, x, y, z).
     const double up = 1.0 - 2.0 * (p[4] * p[4] + p[5] * p[5]);
     EXPECT_GT(up, std::cos(std::numbers::pi / 6.0));
+}
+
+// Flown by hand into a ceiling (a fixed box 2 m above the start) with the stick held up, then
+// forward, then let go: the set point stays on its leash, so the drone presses on the ceiling
+// without tipping over, and comes down as soon as it is asked to (the set point did not run
+// metres above the ceiling while it was held there).
+TEST(Multicopter, PressedUnderACeilingItStaysUprightAndComesBack) {
+    auto robot = loadModel(LAGRANGE_TEST_QUAD_USDA);
+    ASSERT_TRUE(robot) << robot.error();
+    World& world = robot->world;
+    const auto base = std::ranges::find(world.bodies.names, "base_link");
+    ASSERT_NE(base, world.bodies.names.end());
+    const double start =
+        world.bodies.poseInParent[static_cast<std::size_t>(base - world.bodies.names.begin())]
+            .position[2];
+    // The ceiling: a 6 m x 6 m slab 0.3 m thick (half extents), its underside 2 m above the start.
+    world.addCollider(kWorldBody, ShapeType::Box, {3.0, 3.0, 0.15}, Pose{{0.0, 0.0, start + 2.15}},
+                      1.0);
+    ModuleConfigData power;
+    power.dt = 50_us;
+    power.values["exchange_step"] = 0.001;
+    ModuleConfigData air;
+    air.values[rotor_aero::kAirDensityKey] = 1.225;
+    std::optional<MulticopterController::FlightCommand> command;
+    MulticopterController::Settings flight;
+    flight.waitForCommand = true;
+    Scheduler run(SchedulerOptions{.deterministic = false});
+    run.add(std::make_unique<rigid_body::MujocoBackend>());
+    run.add(std::make_unique<electrical::ElectricalNetwork>(), ModuleConfig(power));
+    run.add(std::make_unique<rotor_aero::RotorAero>(), ModuleConfig(air));
+    run.add(std::make_unique<MulticopterController>(flight, [&command] { return command; }),
+            ModuleConfig(air));
+    run.add(std::make_unique<services::WrenchSum>());
+    auto wired = run.wire(WorldView(world));
+    ASSERT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+    const SignalBus& bus = run.bus();
+    const SignalId pose = bus.find("body/base_link/pose");
+    double t = 0.0;
+    double worstUp = 1.0;  // the lowest z of the body's z axis seen (cos of the tilt)
+    const auto fly = [&](double seconds) {
+        for (const double end = t + seconds; t < end - 1e-9;) {
+            t += 0.05;
+            EXPECT_TRUE(run.stepUntil(SimTime{static_cast<std::int64_t>(t * 1e9)}).ok());
+            const std::span<const double> p = bus.readN(pose);
+            worstUp = std::min(worstUp, 1.0 - 2.0 * (p[4] * p[4] + p[5] * p[5]));
+        }
+        return bus.readN(pose)[2];
+    };
+    // Up at full stick (2 m/s) for 8 s: about 1 s to the ceiling, then 7 s pressed under it.
+    command = MulticopterController::FlightCommand{0.0, 0.0, 2.0, 0.0};
+    const double pressed = fly(8.0);
+    EXPECT_GT(pressed - start, 1.5);
+    // Forward as well for 3 s, still pressed up, then the sticks let go for 8 s.
+    command = MulticopterController::FlightCommand{2.0, 0.0, 2.0, 0.0};
+    (void)fly(3.0);
+    command.reset();
+    const double released = fly(8.0);
+    EXPECT_GT(released - start, 1.5);  // still up there, not fallen
+    EXPECT_GT(worstUp, std::cos(std::numbers::pi / 4.0)) << "tipped past 45°";
+    // Down at 1 m/s for 1.5 s: it comes down right away, about 1.5 m.
+    command = MulticopterController::FlightCommand{0.0, 0.0, -1.0, 0.0};
+    const double down = fly(1.5);
+    EXPECT_GT(released - down, 0.9) << "the set point was left far above the ceiling";
 }
 
 }  // namespace

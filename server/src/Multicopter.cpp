@@ -20,6 +20,12 @@ constexpr const char* kAirDensityKey = "air_density";  // as lagrange::rotor_aer
 constexpr double kLandBelowM = 0.05;  // m
 constexpr double kLandedM = 0.03;     // m
 constexpr double kLandedMps = 0.05;   // m/s
+// The leash: a velocity command moves the set point no further ahead of the drone, along each
+// commanded axis, than the position loop turns into this acceleration (kLeashAccel / kp). A
+// drone that cannot follow (pressed under a ceiling, against a wall) is then asked for a bounded
+// push, and comes back as soon as the stick does, instead of chasing a set point that ran off
+// tens of metres while it was held (PX4's position controller bounds its set point likewise).
+constexpr double kLeashAccel = 0.5 * kGravity;  // m/s²
 
 using Vec3 = std::array<double, 3>;
 using Mat3 = std::array<Vec3, 3>;  // rows
@@ -266,7 +272,17 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
     Vec3 wanted{};  // m/s, world: the velocity the set point moves at
     bool angleMode = false;
     std::array<double, 2> tilt{};  // angle mode: the stick's share towards world x and y
-    if (const std::optional<FlightCommand> command = commands_ ? commands_() : std::nullopt) {
+    const std::optional<FlightCommand> command = commands_ ? commands_() : std::nullopt;
+    if (!command) {
+        // No command (none recent): hold where it is along the axes a command was moving.
+        for (std::size_t i = 0; i < 3; ++i) {
+            if (moving_[i]) {
+                setpoint_[i] = position[i];
+                moving_[i] = false;
+            }
+        }
+    }
+    if (command) {
         const double dt = context.dt.seconds();
         // Taking off or landing by hand, near the ground, only up and down count: moving the set
         // point sideways while the legs still hold the drone would tip it over on the ground.
@@ -289,8 +305,17 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
             tilt = {wanted[0] / settings_.maxHorizontalMps, wanted[1] / settings_.maxHorizontalMps};
             wanted[0] = wanted[1] = 0.0;
         }
+        const double leash = kLeashAccel / kp;
         for (std::size_t i = 0; i < 3; ++i) {
             setpoint_[i] += wanted[i] * dt;
+            if (wanted[i] > 0.0) {
+                setpoint_[i] = std::min(setpoint_[i], position[i] + leash);
+            } else if (wanted[i] < 0.0) {
+                setpoint_[i] = std::max(setpoint_[i], position[i] - leash);
+            } else if (moving_[i]) {
+                setpoint_[i] = position[i];  // the stick came back: hold where it is now
+            }
+            moving_[i] = wanted[i] != 0.0;
         }
         // Commanded by hand it may come down to the ground (a little below its start, so that
         // it sits); else it stays minHeightM up.
@@ -389,6 +414,9 @@ Status MulticopterController::saveState(StateWriter& writer) const {
     }
     writer.put(heading_);
     writer.put(airborne_);
+    for (const bool m : moving_) {
+        writer.put(m);
+    }
     return {};
 }
 
@@ -409,6 +437,9 @@ Status MulticopterController::restoreState(StateReader& reader) {
     }
     ok = ok && reader.get(heading_);
     ok = ok && reader.get(airborne_);
+    for (bool& m : moving_) {
+        ok = ok && reader.get(m);
+    }
     return ok ? Status{} : Status::error(StatusCode::InvalidConfig, "controller state truncated");
 }
 
