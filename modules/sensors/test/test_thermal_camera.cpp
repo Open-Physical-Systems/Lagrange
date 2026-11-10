@@ -11,6 +11,7 @@
 #include <cstring>
 #include <memory>
 #include <numbers>
+#include <optional>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -237,6 +238,70 @@ TEST(ThermalCamera, ItSeesAHotNodeTheAirAndTheSky) {
     };
     EXPECT_GT(static_cast<int>(red(kWidth / 2, kHeight / 2)), 200);
     EXPECT_LT(static_cast<int>(red(kWidth / 2, 8)), 50);
+}
+
+// RFC 0012: a link with a thermal material reads at its temperature (thermal/<link>/temperature,
+// the conduction fidelity's mean) with its material's emissivity: bare aluminium (0.09) reads
+// far colder than it is, as through a real thermal camera; painted (0.9) close to it.
+TEST(ThermalCamera, ALinkWithAThermalMaterialReadsWithItsEmissivity) {
+    const auto centreOf = [](std::optional<double> emissivity) {
+        Model model = scene();
+        World& w = model.world;
+        w.schemaInstances.clear();  // the heater is a link with a material, not a node
+        const BodyId block = w.addBody("heater", kWorldBody, Pose{{3, 0, 1}, {1, 0, 0, 0}}, 1.0, {},
+                                       {0.1, 0.1, 0.1, 0, 0, 0});
+        SchemaInstance m;
+        m.schema = "ThermalMaterialAPI_1";
+        m.prim = w.bodies.prim[block.index];
+        m.tokens = {{"thermal:material:preset", "aluminium_6061"}};
+        if (emissivity) {
+            m.reals = {{"thermal:material:emissivity", *emissivity}};
+        }
+        w.schemaInstances.push_back(m);
+        model.scene.prims[0].path = w.prims.paths[m.prim.index];
+        model.scene.prims[0].body = block.index;
+        model.scene.prims[0].offset = Pose{};
+        std::string error;
+        const char* gpu = std::getenv("LAGRANGE_TEST_GPU");
+        const std::shared_ptr<CameraScene> cameras =
+            createCameraScene(model, gpu != nullptr ? gpu : "", error);
+        if (!cameras) {
+            return std::optional<double>{};
+        }
+        Scheduler scheduler{SchedulerOptions{}};
+        scheduler.add(std::make_unique<Heater>(kHot));
+        ModuleConfigData config;
+        config.values["ambient_temperature"] = kAmbient;
+        for (auto& module : createSensorModules(model.world, nullptr, cameras)) {
+            scheduler.add(std::move(module), ModuleConfig(config));
+        }
+        auto wired = scheduler.wire(WorldView(model.world));
+        EXPECT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+        for (int i = 0; i < 40; ++i) {
+            EXPECT_TRUE(scheduler.stepTick().ok());
+        }
+        const SignalBus& bus = scheduler.bus();
+        const auto kelvin = bus.buffer(bus.readBuffer(bus.find("sensor/ir/temperature")));
+        double sum = 0.0;
+        int n = 0;
+        for (std::uint32_t v = kHeight / 2 - 3; v <= kHeight / 2 + 3; ++v) {
+            for (std::uint32_t u = kWidth / 2 - 3; u <= kWidth / 2 + 3; ++u) {
+                sum += at(*kelvin, u, v);
+                ++n;
+            }
+        }
+        return std::optional<double>{sum / n};
+    };
+    const auto bare = centreOf(std::nullopt);
+    if (!bare) {
+        GTEST_SKIP() << "no Vulkan device";
+    }
+    const auto painted = centreOf(0.9);
+    const ThermalBand band(8e-6, 14e-6);
+    EXPECT_NEAR(*bare, band.apparent(kHot, 0.09, kAmbient), 0.1);
+    EXPECT_NEAR(*painted, band.apparent(kHot, 0.9, kAmbient), 0.1);
+    EXPECT_LT(*bare, kAmbient + 10.0);  // 350 K bare aluminium reads near the room's
+    EXPECT_GT(*painted, kHot - 8.0);
 }
 
 TEST(ThermalCamera, ItRefusesToStartWithoutTheSitesTemperature) {

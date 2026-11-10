@@ -78,6 +78,11 @@ instead of the correlations below).
 
 ## Temperature sensors
 
+A thermal camera (`ThermalCameraAPI_1`, docs/physics/sensors.md) reads a link with a thermal
+material at its `thermal/<L>/temperature` with the material's emissivity: bare aluminium
+(0.09) reads near the room's temperature however hot it is, as through a real camera; paint
+or anodising (0.8 to 0.9) close to its own.
+
 The sample plugin `lagrange_thermal_probe` (`core/plugin_abi/samples/thermal_probe.c`, C ABI,
 `--plugin lagrange_thermal_probe`) reads the thermal domain like a real sensor:
 
