@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -20,15 +21,17 @@ namespace lagrange::mavlink {
 /// connected it waits for the HIL_ACTUATOR_CONTROLS that answers (lockstep: the simulation never
 /// runs ahead of the autopilot). Until PX4 connects the motors are off and the run is free.
 ///
-/// The ESCs: control i (0 to 1, PX4's motor order) is a speed set point i·maxRotorSpeed for the
-/// i-th rotor joint (RotorAPI_1, in name order), held by a speed loop whose torque command, with
-/// the propeller's drag as feed-forward, goes to the electrical domain like any controller's.
+/// The ESCs: control i (0 to 1, PX4's motor order) is a speed set point i·top for the i-th rotor
+/// joint (RotorAPI_1, in name order), held by a speed loop whose torque command, with the
+/// propeller's drag as feed-forward, goes to the electrical domain like any controller's. `top`
+/// is maxRotorSpeed when given, else each rotor's loaded top speed from its motor and battery
+/// (rotorTopSpeed, RotorTopSpeed.hpp).
 struct Px4Settings {
-    std::uint16_t port{4560};      // TCP port PX4 connects to (4560 + instance)
-    double maxRotorSpeed{850.0};   // rad/s at control 1: the motors' loaded top speed
-    double speedGain{0.02};        // N·m per rad/s of rotor speed error
-    double airDensity{0.0};        // kg/m³, for the feed-forward (rotor_aero's)
-    double actuatorTimeoutS{5.0};  // s of wall time to wait for PX4 before giving up a step
+    std::uint16_t port{4560};             // TCP port PX4 connects to (4560 + instance)
+    std::optional<double> maxRotorSpeed;  // rad/s at control 1; none: from the motors
+    double speedGain{0.02};               // N·m per rad/s of rotor speed error
+    double airDensity{0.0};               // kg/m³, for the feed-forward (rotor_aero's)
+    double actuatorTimeoutS{5.0};         // s of wall time to wait for PX4 before giving up a step
 };
 
 /// The TCP link to PX4: listens on `port` from creation, and keeps PX4's connection across

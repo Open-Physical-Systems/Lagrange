@@ -932,6 +932,7 @@ struct Server::Impl {
                 mavlink::ArduPilotSettings ardupilot;
                 ardupilot.port = *options.ardupilotPort;
                 ardupilot.airDensity = *settings.airDensityKgM3;
+                ardupilot.maxRotorSpeed = options.mavlinkMaxRotorSpeed;
                 next->add(mavlink::createArduPilotJson(ardupilot, ardupilotLink));
             } else if (options.px4Port) {
                 if (!px4Link) {
@@ -944,6 +945,7 @@ struct Server::Impl {
                 mavlink::Px4Settings px4;
                 px4.port = *options.px4Port;
                 px4.airDensity = *settings.airDensityKgM3;
+                px4.maxRotorSpeed = options.mavlinkMaxRotorSpeed;
                 next->add(mavlink::createPx4Lockstep(px4, px4Link));
             } else if (!controllers && !jointControlled() &&
                        MulticopterController::canFly(WorldView(robot.world))) {

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace lagrange::mavlink {
@@ -22,13 +23,14 @@ namespace lagrange::mavlink {
 /// with the state. ArduCopter's quad X motor order is PX4's: rotor_1 front right,
 /// counter-clockwise. ArduPilot is GPL-3.0 and runs as its own program; nothing of it is linked.
 struct ArduPilotSettings {
-    std::uint16_t port{9002};     // UDP port ArduPilot sends its servo frames to
-    double rateHz{1000.0};        // the exchange rate (ArduPilot's SIM_RATE_HZ; its pre-arm
-                                  // check wants gyro data at 1.8 times its 400 Hz loop)
-    double maxRotorSpeed{850.0};  // rad/s at full output
-    double speedGain{0.02};       // N·m per rad/s of rotor speed error
-    double airDensity{0.0};       // kg/m³, for the ESCs' feed-forward
-    double frameTimeoutS{5.0};    // s of wall time to wait for a frame before giving up a step
+    std::uint16_t port{9002};             // UDP port ArduPilot sends its servo frames to
+    double rateHz{1000.0};                // the exchange rate (ArduPilot's SIM_RATE_HZ; its pre-arm
+                                          // check wants gyro data at 1.8 times its 400 Hz loop)
+    std::optional<double> maxRotorSpeed;  // rad/s at full output; none: from the motors
+                                          // (rotorTopSpeed, as Px4Lockstep's ESCs)
+    double speedGain{0.02};               // N·m per rad/s of rotor speed error
+    double airDensity{0.0};               // kg/m³, for the ESCs' feed-forward
+    double frameTimeoutS{5.0};  // s of wall time to wait for a frame before giving up a step
 };
 
 /// The UDP link to ArduPilot, kept across rebuilds of the run (as Px4Link).
