@@ -505,16 +505,30 @@ void drawWorkspaceBar(PanelContext& context, ImGuiViewport* viewport) {
         next();
         widgets::Readout("RTF", rate, target);
         next();
-        // Recording needs a simulation server; the mock server replays a recording.
-        ImGui::BeginDisabled(true);
+        // Record (design: its red dot means recording): a live run, on the server's machine.
+        const bool canRecord = ready && !context.connection.canSeek;  // not a replay
+        const bool recording = !context.status.recordingPath.empty();
+        ImGui::BeginDisabled(!canRecord);
         const ImVec2 record = ImGui::GetCursorScreenPos();
-        widgets::Button("     Record", widgets::ButtonKind::Default, widgets::Icon::Count, true);
+        if (widgets::Button("     Record", widgets::ButtonKind::Default, widgets::Icon::Count,
+                            true)) {
+            context.client.setRecording(!recording);
+        }
+        const ImVec4 dot = recording ? c::error : c::t3;
         ImGui::GetWindowDrawList()->AddCircleFilled(
             ImVec2(record.x + px(14.0F), record.y + px(13.0F)), px(4.0F),
             ImGui::ColorConvertFloat4ToU32(
-                ImVec4(c::error.x, c::error.y, c::error.z, ImGui::GetStyle().DisabledAlpha)));
+                ImVec4(dot.x, dot.y, dot.z, canRecord ? 1.0F : ImGui::GetStyle().DisabledAlpha)));
         ImGui::EndDisabled();
-        ImGui::SetItemTooltip("Recording is not available from a replay");
+        if (!canRecord) {
+            ImGui::SetItemTooltip(ready ? "Recording is not available from a replay"
+                                        : "Recording needs a running simulation");
+        } else if (recording) {
+            ImGui::SetItemTooltip("Recording to %s (on the server). Click or Ctrl+R to stop",
+                                  context.status.recordingPath.c_str());
+        } else {
+            ImGui::SetItemTooltip("Record the run to an MCAP file on the server (Ctrl+R)");
+        }
         bottomRule();
     }
     ImGui::End();
@@ -841,6 +855,9 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
             } else {
                 context.client.play();
             }
+        }
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_R) && !context.connection.canSeek) {
+            context.client.setRecording(context.status.recordingPath.empty());
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Period, false) && context.connection.canStep &&
             context.status.runState != RunState::Running) {

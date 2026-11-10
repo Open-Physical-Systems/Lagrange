@@ -13,6 +13,7 @@ message Command {
     Seek seek = 13;
     SetRealTimeFactor set_rtf = 14;
     Reset reset = 15;
+    SetRecording set_recording = 16; // added after 1.0
 
     RequestSnapshot request_snapshot = 20;
     GetAttributes get_attributes = 21;
@@ -50,6 +51,12 @@ message SetRealTimeFactor {
   double target = 1;
 } // 0 = unlimited
 message Reset {}
+// Starts or stops recording the run to an MCAP file on the server's machine (as --record does).
+// Added after 1.0.
+message SetRecording {
+  bool on = 1;
+  string path = 2; // on: the file; empty: the server picks one in its state directory
+}
 
 message RequestSnapshot {}
 message GetAttributes {

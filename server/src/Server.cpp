@@ -56,6 +56,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -2428,6 +2429,9 @@ struct Server::Impl {
             s.mutable_replay_begin()->set_ns(0);
             s.mutable_replay_end()->set_ns(replay->duration.ns);
         }
+        if (recorder) {
+            s.set_recording_path(recorder->path());
+        }
         return envelope;
     }
     double measuredRtf{0.0};
@@ -2978,6 +2982,25 @@ struct Server::Impl {
                     r.set_error(status.message);
                 }
                 resync = true;
+                statusChanged = true;
+                break;
+            }
+            case v1::Command::kSetRecording: {
+                const v1::SetRecording& want = command.set_recording();
+                if (!want.on()) {
+                    stopRecording("stopped from the viewer");
+                } else {
+                    stopRecording("a new recording started");
+                    const std::string path =
+                        want.path().empty() ? defaultRecordingPath() : want.path();
+                    std::error_code ec;
+                    std::filesystem::create_directories(std::filesystem::path(path).parent_path(),
+                                                        ec);
+                    if (Status status = startRecording(path); !status.ok()) {
+                        r.set_ok(false);
+                        r.set_error(status.message);
+                    }
+                }
                 statusChanged = true;
                 break;
             }
@@ -3675,6 +3698,24 @@ struct Server::Impl {
             return saveSession();
         }
         return {};
+    }
+
+    /// Where the viewer's Record button records to: the state directory's recordings, named after
+    /// the robot and the wall-clock time, so that each recording is a new file.
+    std::string defaultRecordingPath() const {
+        const char* stateHome = std::getenv("XDG_STATE_HOME");
+        const char* home = std::getenv("HOME");
+        const std::filesystem::path base =
+            stateHome != nullptr && *stateHome != '\0'
+                ? std::filesystem::path(stateHome)
+                : std::filesystem::path(home != nullptr ? home : ".") / ".local" / "state";
+        const std::time_t now = std::time(nullptr);
+        std::tm local{};
+        localtime_r(&now, &local);
+        std::array<char, 32> stamp{};
+        std::strftime(stamp.data(), stamp.size(), "%Y%m%d-%H%M%S", &local);
+        const std::string name = robot.name.empty() ? "run" : robot.name;
+        return (base / "lagrange" / "recordings" / (name + "-" + stamp.data() + ".mcap")).string();
     }
 
     /// The session layer: the edited model as a USD layer that `--robot FILE --world none`
