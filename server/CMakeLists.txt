@@ -298,6 +298,7 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_WORKCELL_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/worlds/workcell_arm6/workcell_arm6.urdf"
             LAGRANGE_TEST_PROPELLERS="${CMAKE_CURRENT_SOURCE_DIR}/../assets/propellers"
             LAGRANGE_TEST_QUAD_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500.usda"
+            LAGRANGE_TEST_LED_HEATSINK_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/led_heatsink/led_heatsink.urdf"
             LAGRANGE_TEST_QUAD_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500.urdf"
             LAGRANGE_TEST_QUAD_OVERLAY="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500.overlay.yaml"
             LAGRANGE_TEST_QUAD_EMI_USDA="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quad_x500/quad_x500_emi.usda"
