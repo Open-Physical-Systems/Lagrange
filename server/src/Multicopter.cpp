@@ -273,6 +273,13 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         }
         airborne_ = true;
         setpoint_ = position;
+        // Where it takes off from is its start: a robot spawned or placed after the first step
+        // (--spawn) was seen at its file's pose then.
+        home_ = position;
+        if (const std::optional<double> surface = surfaceBelow()) {
+            standHeight_ = position[2] - *surface;
+            standKnown_ = true;
+        }
         velocity_ = {};
         accel_ = {};
         held_ = {};
