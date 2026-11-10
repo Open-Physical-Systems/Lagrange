@@ -251,6 +251,15 @@ void ViewerClient::seek(std::int64_t simTimeNs) {
     enqueue(std::move(envelope));
 }
 
+void ViewerClient::setRecording(bool on, const std::string& path) {
+    auto envelope = std::make_unique<v1::Envelope>();
+    envelope->mutable_command()->set_request_id(nextRequestId_++);
+    v1::SetRecording& record = *envelope->mutable_command()->mutable_set_recording();
+    record.set_on(on);
+    record.set_path(path);
+    enqueue(std::move(envelope));
+}
+
 void ViewerClient::reset() {
     auto envelope = std::make_unique<v1::Envelope>();
     envelope->mutable_command()->set_request_id(nextRequestId_++);
@@ -876,6 +885,7 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
             w.status.replayBeginNs = s.replay_begin().ns();
             w.status.replayEndNs = s.replay_end().ns();
             w.status.droppedDeltas = s.dropped_deltas();
+            w.status.recordingPath = s.recording_path();
             status_.store(std::make_shared<const ServerStatus>(w.status));
             break;
         }
