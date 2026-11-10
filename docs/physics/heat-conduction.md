@@ -59,6 +59,16 @@ lagrange assets/robots/led_heatsink/led_heatsink.urdf --ambient-temperature 298.
 #       --ambient-temperature 298.15 --rtf 60
 ```
 
+For the steady temperatures alone, at rest and without physics, in a second or two:
+
+```bash
+lagrange heat --robot assets/robots/led_heatsink/led_heatsink.urdf --world none \
+    --ambient-temperature 298.15 [--surface-coefficient 4.5]
+```
+
+prints each link's mean, max and min and each source's temperature, and the heat in and out. A
+source on a power signal takes no power there (nothing drives it).
+
 Signals, per link `L` with a material and per source `S`:
 
 | Signal | Unit | |

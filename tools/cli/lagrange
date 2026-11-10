@@ -29,7 +29,7 @@ lagrange foam-cht ROBOT --ambient K [--out DIR]
     heat in the links with a thermal material, in still air, through OpenFOAM (RFC 0012)
 lagrange tunnel ROBOT [--speed M_S] [--yaw DEG] [--cells N] [--out DIR]
     a wind tunnel: air past the robot, its drag and lift, and a world to look at the flow in
-lagrange run|validate|graph|determinism|export|info ...
+lagrange run|validate|graph|determinism|export|heat|info ...
     the lagrange_server tools (as `ros2 run lagrange_server lagrange ...`); `run` is headless
 """
 
@@ -42,7 +42,7 @@ import time
 from pathlib import Path
 from typing import Any, NoReturn
 
-TOOLS = {"run", "validate", "graph", "determinism", "export", "info"}
+TOOLS = {"run", "validate", "graph", "determinism", "export", "heat", "info"}
 SERVER_START_SECONDS = 300.0  # large worlds and vehicles take a while to load
 STOP_SECONDS = 10.0
 
