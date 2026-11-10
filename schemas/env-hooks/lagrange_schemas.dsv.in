@@ -13,3 +13,4 @@ prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/human
 prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/water
 prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/joint
 prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/world
+prepend-non-duplicate;PXR_PLUGINPATH_NAME;share/lagrange_schemas/usd/tether

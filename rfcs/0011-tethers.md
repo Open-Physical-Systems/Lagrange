@@ -52,6 +52,7 @@ body, or on a moving body (a tether between two robots, or a truck with a winch)
 
 | Attribute | Type | Unit | Default | Meaning |
 |---|---|---|---|---|
+| `tether:anchorPoint` | double3 | m | 0, 0, 0 | the anchor in the prim's frame (an overlay's new prims have no pose) |
 | `tether:attach` | rel | | required | the body (link) the far end is tied to |
 | `tether:attachPoint` | double3 | m | 0, 0, 0 | where on that body, in its frame |
 | `tether:length` | double | m | required | length paid out at the start |

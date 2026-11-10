@@ -43,6 +43,7 @@ EXPECTED = {
     "water": ["WaterAPI_1"],
     "joint": ["JointDynamicsAPI_1"],
     "world": ["WorldTileAPI_1"],
+    "tether": ["TetherAPI_1"],
 }
 
 
