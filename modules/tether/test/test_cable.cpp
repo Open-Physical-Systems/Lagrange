@@ -291,24 +291,27 @@ TEST(Cable, ATensionWinchHoldsItsTension) {
     EXPECT_NEAR(holding, p.winchTension, 0.5);
 }
 
-// Laid out through the ground (a sag deeper than the anchor's height): it comes out at about
-// 1 m/s and pulls nothing meanwhile, instead of being shot out with hundreds of newtons.
-TEST(Cable, LaidThroughTheGroundItComesOutSlowly) {
+// Laid out through a box (its arch through a slab above the ends): it comes out at about 1 m/s,
+// instead of being shot out with thousands of newtons.
+TEST(Cable, LaidThroughABoxItComesOutSlowly) {
     CableParams p;
     p.length = 4.5;
-    Obstacle ground;
-    ground.type = ShapeType::Plane;
-    ground.reach = reachOf(ground.type, {}, nullptr);
-    const std::array<Obstacle, 1> obstacles{ground};
+    Obstacle slab;
+    slab.type = ShapeType::Box;
+    slab.size = {3.0, 3.0, 0.5};
+    slab.pose.position = {1.25, 0.0, 1.0};  // 0.5 to 1.5 m up, over the middle of the arch
+    slab.reach = reachOf(slab.type, slab.size, nullptr);
+    const std::array<Obstacle, 1> obstacles{slab};
     const Vec3 anchor{2.5, 0.0, 0.05};
     const Vec3 attach{0.0, 0.0, 0.13};
     Cable cable(p, anchor, attach, 0);
     Air air;
-    double lowest = 0.0;
+    air.gravity = {};
+    double highest = 0.0;
     for (const Vec3& n : cable.nodes()) {
-        lowest = std::min(lowest, n[2]);
+        highest = std::max(highest, n[2]);
     }
-    ASSERT_LT(lowest, -1.0);  // laid deep in it
+    ASSERT_GT(highest, 1.0);  // laid through the slab
     double most = 0.0;
     for (int i = 0; i < 100; ++i) {
         cable.step(1e-3, anchor, attach, obstacles, air);
@@ -316,12 +319,64 @@ TEST(Cable, LaidThroughTheGroundItComesOutSlowly) {
     }
     double now = 0.0;
     for (const Vec3& n : cable.nodes()) {
-        now = std::min(now, n[2]);
+        now = std::max(now, n[2]);
     }
-    std::printf("buried: lowest %.3f m, after 0.1 s %.3f m, most tension %.3f N\n", lowest, now,
-                most);
-    EXPECT_NEAR(now - lowest, 0.1, 0.02);  // 1 m/s
-    EXPECT_LT(most, 1.0);
+    std::printf("through a slab: highest %.3f m, after 0.1 s %.3f m, most tension %.3f N\n",
+                highest, now, most);
+    EXPECT_NEAR(highest - now, 0.1, 0.03);  // out through the slab's top at 1 m/s
+    // Lifted over the slab's top, the cable's path grows: some tension, not the thousands of
+    // newtons of a mass thrown out in one substep.
+    EXPECT_LT(most, 30.0);
+}
+
+// Laid between a station and a drone sitting on a dock that rests on a deck (the owner's bridge
+// deck): when the drone lifts the end, the winch pays out and the tension stays near its set
+// point, instead of a mass trapped between the dock and the deck holding the cable.
+TEST(Cable, LiftedOffADockTheWinchPaysOut) {
+    CableParams p;
+    p.length = 1.0;
+    p.maxLength = 20.0;
+    p.diameter = 0.004;
+    p.linearDensity = 0.0235;
+    p.winch = Winch::Tension;
+    p.winchTension = 2.0;
+    p.winchSpeed = 3.0;
+    const auto box = [](const Vec3& centre, const Vec3& half) {
+        Obstacle o;
+        o.type = ShapeType::Box;
+        o.size = half;
+        o.pose.position = centre;
+        o.reach = reachOf(o.type, o.size, nullptr);
+        return o;
+    };
+    const std::array<Obstacle, 3> obstacles{box({0.0, 0.0, 2.65}, {3.1, 3.0, 0.15}),
+                                            box({-1.0, 0.0, 2.82}, {0.35, 0.35, 0.02}),
+                                            box({-1.8, 0.0, 2.975}, {0.2, 0.15, 0.175})};
+    const Vec3 anchor{-1.58, 0.0, 3.0};
+    Vec3 attach{-1.0, 0.0, 2.863};
+    Cable cable(p, anchor, attach, 0);
+    Air air;
+    air.density = 1.225;
+    double most = 0.0;
+    double mean = 0.0;
+    for (int i = 1; i <= 6000; ++i) {
+        if (i > 1000 && attach[2] < 4.5) {
+            attach[2] += 0.5e-3;  // up 1.6 m at 0.5 m/s
+        }
+        if (i > 4000) {
+            attach[1] += 1.0e-3;  // then 2 m sideways at 1 m/s
+        }
+        cable.step(1e-3, anchor, attach, obstacles, air);
+        if (i > 1500) {
+            most = std::max(most, cable.tensionAttach());
+            mean += cable.tensionAttach() / 4500.0;
+        }
+    }
+    std::printf("off the dock: paid out %.2f m, tension at the drone mean %.2f N, most %.2f N\n",
+                cable.length(), mean, most);
+    EXPECT_GT(cable.length(), 2.5);
+    EXPECT_LT(mean, 5.0);
+    EXPECT_LT(most, 30.0);
 }
 
 TEST(Cable, TheSameRunGivesTheSameNumbers) {
