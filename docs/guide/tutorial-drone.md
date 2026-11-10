@@ -234,6 +234,26 @@ The server runs with `--mavlink ardupilot` and answers each of ArduCopter's serv
 the vehicle's state, 1000 times a simulated second; ArduCopter takes its parameters from
 `bridges/mavlink/ardupilot/lagrange_quad_x500.parm`.
 
+**What full throttle means.** The bridge acts as the ESCs: an output from 0 to 1 (PX4) or 1000 to
+2000 µs (ArduPilot) is a speed set point, from standstill to each rotor's loaded top speed. That
+top speed is worked out from the robot itself:
+- It is the speed at which the motor, turning the propeller, runs out of voltage at the
+  battery's full charge, or reaches its current limit.
+- It uses the electrical domain's motor model, in steady state.
+- The server logs it per rotor, for example `rotor_1_joint: full output is 809 rad/s
+  (rotor_1_motor on 16.8 V full charge, voltage-limited)`.
+
+So a drone of your own needs no tuning here; set the autopilot's hover throttle (`MPC_THR_HOVER`,
+`MOT_THST_HOVER`) near hover speed ÷ top speed, and both learn it in flight. To force a value,
+give `--mavlink-max-rotor-speed RAD_S`. A robot with no motor prims (or the electrical domain
+off) gets the speed at which the rotors lift twice its weight.
+
+For an airframe of your own, copy `22100_lagrange_quad_x500` and change the rotor block:
+- `CA_ROTORn_PX`, `PY`: positions in PX4's FRD frame. Rotor `n` is the joint `rotor_{n+1}`; the
+  bridge takes rotors in name order.
+- `CA_ROTORn_KM`: CP·D/(2π·CT), positive for counter-clockwise rotors.
+- `MPC_THR_HOVER`: the hover throttle above.
+
 ## 6. A low battery
 
 The motors draw from the simulated battery, so its voltage limits how fast they can turn. At

@@ -207,7 +207,7 @@ public:
 
         // The rotors in name order: rotor_1 is PX4's motor 1.
         return escs_.declare(world, d, settings_.airDensity, settings_.maxRotorSpeed,
-                             settings_.speedGain);
+                             settings_.speedGain, "mavlink");
     }
 
     Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {

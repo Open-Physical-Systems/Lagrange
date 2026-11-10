@@ -6,7 +6,12 @@ find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
 find_package(mavlink REQUIRED)
 
-add_library(lagrange_mavlink src/Px4Lockstep.cpp src/ArduPilotJson.cpp)
+add_library(
+    lagrange_mavlink
+    src/Px4Lockstep.cpp
+    src/ArduPilotJson.cpp
+    src/RotorTopSpeed.cpp
+)
 lagrange_target_defaults(lagrange_mavlink)
 target_include_directories(
     lagrange_mavlink
@@ -45,6 +50,9 @@ if(BUILD_TESTING)
     ament_add_gtest(test_ardupilot_json test/test_ardupilot_json.cpp TIMEOUT 120)
     target_link_libraries(test_ardupilot_json lagrange_mavlink)
     lagrange_target_defaults(test_ardupilot_json)
+    ament_add_gtest(test_rotor_top_speed test/test_rotor_top_speed.cpp)
+    target_link_libraries(test_rotor_top_speed lagrange_mavlink)
+    lagrange_target_defaults(test_rotor_top_speed)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
