@@ -99,6 +99,7 @@ physics/weather
 physics/emi-and-radio
 physics/traffic
 physics/humans
+physics/tether
 ```
 
 ```{toctree}

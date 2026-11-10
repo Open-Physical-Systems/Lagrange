@@ -21,6 +21,7 @@ find_package(lagrange_vehicle_dynamics REQUIRED)
 find_package(lagrange_traffic REQUIRED)
 find_package(lagrange_humans REQUIRED)
 find_package(lagrange_hydrodynamics REQUIRED)
+find_package(lagrange_tether REQUIRED)
 find_package(lagrange_opendrive REQUIRED)
 find_package(lagrange_openscenario REQUIRED)
 find_package(lagrange_mavlink REQUIRED)
@@ -99,6 +100,7 @@ target_link_libraries(
         lagrange_traffic::lagrange_traffic
         lagrange_humans::lagrange_humans
         lagrange_hydrodynamics::lagrange_hydrodynamics
+        lagrange_tether::lagrange_tether
         lagrange_opendrive::lagrange_opendrive
         lagrange_openscenario::lagrange_openscenario
         lagrange_mavlink::lagrange_mavlink
@@ -245,6 +247,7 @@ if(BUILD_TESTING)
         test/test_humans_run.cpp
         test/test_plugins.cpp
         test/test_multicopter.cpp
+        test/test_tether_run.cpp
         test/test_downwash_pair.cpp
         test/test_toggles.cpp
         test/test_usd_assets.cpp

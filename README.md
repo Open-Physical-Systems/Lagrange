@@ -192,7 +192,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Physics reference (16)</summary>
+<details><summary>Physics reference (17)</summary>
 
 - [Aerodynamics: drag, wind and the wind tunnel](docs/physics/aerodynamics.md)
 - [Battery](docs/physics/battery.md)
@@ -205,6 +205,7 @@ recorded to MCAP and replayed.
 - [Rigid body](docs/physics/rigid-body.md)
 - [Rotors](docs/physics/rotors.md)
 - [Sensors](docs/physics/sensors.md)
+- [Tethers](docs/physics/tether.md)
 - [Thermal](docs/physics/thermal.md)
 - [Traffic: cars, lights, crossings and scenarios](docs/physics/traffic.md)
 - [Vehicles and wheeled bases](docs/physics/vehicles.md)
