@@ -12,7 +12,13 @@ namespace {
 constexpr double kInfinity = std::numeric_limits<double>::infinity();
 // Near an end, a mass does not touch a shape that holds that end (the drone's hull around its
 // attach point, a ground station's box around its outlet): the cable starts inside them.
-constexpr double kEndClearanceM = 0.3;  // m of cable from either end
+// It does not touch the robot an end is tied to there either: a drone's arms and rotors around
+// its attach point.
+constexpr double kEndClearanceM = 0.5;  // m of cable from either end
+// A mass found deep inside a shape comes out at most this fast, beyond undoing its own move of
+// the substep: a cable laid through something (or a body moved into it) is pushed out over a few
+// steps, not in one substep with a force of thousands of newtons. Resting and impacts are exact.
+constexpr double kMaxDepenetrationMps = 1.0;
 // The winch: m/s paid out per N of tension over its set point, and a free drum's drag.
 constexpr double kWinchGain = 0.5;       // (m/s)/N
 constexpr double kWinchIntegral = 2.0;   // (m/s)/(N·s): a tension winch keeps its set point
@@ -488,11 +494,13 @@ void Cable::solveObstacles(double h, std::span<const Obstacle> obstacles, double
         const bool nearAnchor = along < kEndClearanceM;
         const bool nearAttach = total - along < kEndClearanceM;
         for (std::size_t k = 0; k < near_.size(); ++k) {
-            if ((nearAnchor && (endInside_[k] & 1U) != 0) ||
-                (nearAttach && (endInside_[k] & 2U) != 0)) {
+            const Obstacle& ob = obstacles[near_[k]];
+            if ((nearAnchor &&
+                 ((endInside_[k] & 1U) != 0 || (ob.robot >= 0 && ob.robot == anchorRobot_))) ||
+                (nearAttach &&
+                 ((endInside_[k] & 2U) != 0 || (ob.robot >= 0 && ob.robot == attachRobot_)))) {
                 continue;
             }
-            const Obstacle& ob = obstacles[near_[k]];
             if (std::isfinite(ob.reach) &&
                 norm(sub(p_[i], ob.pose.position)) > ob.reach + radius_) {
                 continue;
@@ -502,7 +510,8 @@ void Cable::solveObstacles(double h, std::span<const Obstacle> obstacles, double
                 continue;
             }
             const Vec3 before = p_[i];
-            const double depth = radius_ - sp.distance;
+            const double inward = std::max(0.0, dot(sub(x_[i], p_[i]), sp.normal));
+            const double depth = std::min(radius_ - sp.distance, inward + kMaxDepenetrationMps * h);
             addTo(p_[i], scale(sp.normal, depth));
             // Friction, as a position limit on the sliding over the substep (Macklin et al.
             // 2014, "Unified Particle Physics for Real-Time Applications", §6.1): within
@@ -675,6 +684,7 @@ void Cable::step(double dt, const Vec3& anchor, const Vec3& attach,
     std::fill(tension_.begin(), tension_.end(), 0.0);
     std::fill(touching_.begin(), touching_.end(), 0);
     forceOnAttach_ = {};
+    forceOnAnchor_ = {};
     caught_ = false;
     const Vec3 anchorFrom = anchor_;
     const Vec3 attachFrom = attach_;
@@ -728,12 +738,22 @@ void Cable::step(double dt, const Vec3& anchor, const Vec3& attach,
         for (std::size_t j = 0; j + 1 < count_; ++j) {
             tension_[j] += -lambda_[j] / (h * h) * share;
         }
+        // The ends: the end segment's pull, and the end masses' weight and drag, which the
+        // pinned ends carry.
         const std::size_t last = count_ - 2;
         const Vec3 d = sub(x_[count_ - 1], x_[last]);
         const double l = norm(d);
         if (l > 1e-12) {
             addTo(forceOnAttach_, scale(d, lambda_[last] / (h * h) / l * share));
         }
+        addTo(forceOnAttach_,
+              scale(add(scale(air.gravity, mass_[count_ - 1]), force_[count_ - 1]), share));
+        const Vec3 e = sub(x_[0], x_[1]);
+        const double m = norm(e);
+        if (m > 1e-12) {
+            addTo(forceOnAnchor_, scale(e, lambda_[0] / (h * h) / m * share));
+        }
+        addTo(forceOnAnchor_, scale(add(scale(air.gravity, mass_[0]), force_[0]), share));
     }
     anchor_ = anchor;
     attach_ = attach;
