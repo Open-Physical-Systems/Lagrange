@@ -41,6 +41,12 @@ public:
         double maxHorizontalMps{5.0};
         double maxVerticalMps{2.0};
         double maxYawRateRadps{1.5};
+        // How fast the commanded velocity may change, as PX4's position mode ramps its stick
+        // (PX4 v1.17: MPC_ACC_HOR 3, MPC_ACC_UP_MAX 4, MPC_ACC_DOWN_MAX 3 m/s²): it starts and
+        // stops smoothly, and brakes to a stop where the stick is let go.
+        double maxHorizontalAccelMps2{3.0};
+        double maxVerticalAccelMps2{3.0};
+        double maxJerkMps3{8.0};  // and the acceleration itself (PX4 v1.17: MPC_JERK_MAX 8)
         // Angle mode: the tilt at full stick (a command of maxHorizontalMps), the same as the
         // limit position mode never asks beyond.
         double maxAngleTiltRad{0.5235987755982988};  // 30°
@@ -103,7 +109,9 @@ private:
     std::array<double, 3> setpoint_{};  // world-local, m: where it holds or flies to
     double heading_{0.0};               // rad, the yaw it holds
     bool airborne_{false};              // waitForCommand: taken off, not landed since
-    std::array<bool, 3> moving_{};      // the set point moved along this axis last step
+    std::array<double, 3> velocity_{};  // m/s, world: the set point's velocity, ramped
+    std::array<double, 3> accel_{};     // m/s², world: the set point's acceleration
+    std::array<bool, 3> held_{};        // the leash held the set point back along this axis
     SignalId pose_, twist_;
     // With the weather (config "weather_air"): its air density against the one the mixer was
     // built for, as a flight controller's hover-thrust estimate follows the air (an ideal one).
