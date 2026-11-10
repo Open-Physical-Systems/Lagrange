@@ -26,15 +26,15 @@ apply:
   - create: ground_station
     schemas:
       TetherAPI_1:
-        tether:anchorPoint: [1.0, 0.0, 2.8]
+        tether:anchorPoint: [2.0, 0.0, 0.3]
         tether:attach: base_link
-        tether:attachPoint: [0.0, 0.0, -0.05]
-        tether:length: 1.0           # paid out at the start
-        tether:maxLength: 20.0       # on the drum
-        tether:diameter: 0.004
-        tether:linearDensity: 0.0235
+        tether:attachPoint: [0.0, 0.0, -0.1]
+        tether:length: 2.0           # paid out at the start
+        tether:maxLength: 50.0       # on the drum
+        tether:diameter: 0.006
+        tether:linearDensity: 0.03
         tether:winch: tension
-        tether:winchTension: 3.0
+        tether:winchTension: 4.0
 ```
 
 Or with no file: `lagrange_server ... --tether X,Y,Z,LINK[,LENGTH]` ties LINK to the world point
@@ -96,7 +96,7 @@ away from it: a cable squeezed between a skid and the ground carries nothing bet
 
 **Laying it out.** On its first step each cable is laid between its ends where the bodies are
 then, in an arch of its length above them in the vertical plane through them, and falls into
-place. (A sag below them would start the slack inside the ground, deck or dock it should lie on;
+place. (A sag below them would start the slack inside the ground, slab or pad it should lie on;
 a mass inside a thin box resting on another can be pushed between the two and never get out.)
 Where the arch goes through something, it comes out at 1 m/s.
 
@@ -140,8 +140,8 @@ connects and shows no cable.
 | A tension winch, drone climbing | its set point, on average | 2.00 N of 2.00 | `Cable.ATensionWinchHoldsItsTension` |
 | The sample quad hovering on 3 m of tether | the weight held by the station and the drone | 0.2 % | `TetherRun.AQuadcopterHoversOnItsTether` |
 | Laid out through a slab | comes out at 1 m/s | 1.26 m/s, at most 14 N | `Cable.LaidThroughABoxItComesOutSlowly` |
-| Over a deck's edge, out, down and back in under it | the centre line stays out of the concrete | at worst 1.8 mm in, within its 2 mm radius (6.4 cm with contacts at the masses alone) | `Cable.BendsOverAnEdgeWithoutCuttingIntoIt` |
-| Lifted off a dock on a deck by a drone, tension winch at 2 N | pays out, tension near its set point | 2.6 m out, 2.3 N mean | `Cable.LiftedOffADockTheWinchPaysOut` |
+| Over a slab's edge, out, down and back in under it | the centre line stays out of the slab | at worst 1.3 mm in, within its 2.5 mm radius (centimetres with contacts at the masses alone) | `Cable.BendsOverAnEdgeWithoutCuttingIntoIt` |
+| Lifted off a pad on a slab by a drone, tension winch at 2.5 N | pays out, tension near its set point | 2.6 m out, 2.9 N mean | `Cable.LiftedOffAPadTheWinchPaysOut` |
 
 **Limits.**
 - Twist and bending stiffness beyond the light bend term are not modelled: the model is for limp

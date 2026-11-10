@@ -727,11 +727,11 @@ apply:
   - create: ground_station
     schemas:
       TetherAPI_1:
-        tether:anchorPoint: [1.0, 0.0, 2.8]
+        tether:anchorPoint: [2.0, 0.0, 0.3]
         tether:attach: base_link
-        tether:length: 20.0
-        tether:diameter: 0.004
-        tether:linearDensity: 0.0235
+        tether:length: 5.0
+        tether:diameter: 0.006
+        tether:linearDensity: 0.03
         tether:winch: tension
 ```
 
