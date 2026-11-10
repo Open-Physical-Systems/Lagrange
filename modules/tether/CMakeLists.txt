@@ -5,7 +5,7 @@ find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
 
-add_library(lagrange_tether src/Cable.cpp)
+add_library(lagrange_tether src/Cable.cpp src/Tethers.cpp)
 lagrange_target_defaults(lagrange_tether)
 target_include_directories(
     lagrange_tether

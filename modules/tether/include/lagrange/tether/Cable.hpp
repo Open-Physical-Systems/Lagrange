@@ -53,6 +53,9 @@ struct Obstacle {
     const ConvexHull* hull{nullptr};
     const HeightField* field{nullptr};
     int body{-1};
+    /// The robot it belongs to (its moving bodies share one), -1 for scenery: near an end the
+    /// cable does not touch the robot that end is tied to.
+    int robot{-1};
     Vec3 velocity{};    // m/s of the body's centre of mass
     Vec3 angular{};     // rad/s of the body
     Vec3 com{};         // m, the body's centre of mass, world
@@ -94,12 +97,20 @@ public:
     /// One step of `dt`: the ends move in a straight line from where they were to these.
     void step(double dt, const Vec3& anchor, const Vec3& attach,
               std::span<const Obstacle> obstacles, const Air& air);
+    /// The robots the ends are tied to (Obstacle::robot), -1 for none.
+    void setEndRobots(int anchorRobot, int attachRobot) {
+        anchorRobot_ = anchorRobot;
+        attachRobot_ = attachRobot;
+    }
 
     // What the last step found, averaged over its substeps.
     [[nodiscard]] double tensionAttach() const { return tensionAttach_; }  // N
     [[nodiscard]] double tensionAnchor() const { return tensionAnchor_; }  // N
-    /// The cable's pull on the attach point (N, world): along the last segment, towards it.
+    /// The cable's pull on the attach point (N, world): the last segment's tension along it, and
+    /// the weight and drag of the half segment the end carries.
     [[nodiscard]] const Vec3& forceOnAttach() const { return forceOnAttach_; }
+    /// The same at the anchor.
+    [[nodiscard]] const Vec3& forceOnAnchor() const { return forceOnAnchor_; }
     [[nodiscard]] double length() const;                             // m paid out
     [[nodiscard]] double winchSpeed() const { return winchSpeed_; }  // m/s, + paying out
     [[nodiscard]] int contacts() const { return contacts_; }         // masses touching anything
@@ -150,8 +161,10 @@ private:
     double tensionAttach_{0.0}, tensionAnchor_{0.0}, winchSpeed_{0.0}, anchorFilter_{0.0};
     double winchIntegral_{0.0};
     Vec3 forceOnAttach_{};
+    Vec3 forceOnAnchor_{};
     int contacts_{0};
     bool caught_{false};
+    int anchorRobot_{-1}, attachRobot_{-1};
     std::vector<std::uint8_t> touching_;
 };
 

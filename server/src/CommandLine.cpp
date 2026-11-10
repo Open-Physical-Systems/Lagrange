@@ -106,6 +106,8 @@ void printServerOptions(std::FILE* out) {
         "  --sensor-timing NAME=LATENCY[,JITTER]  delay a sensor's ROS messages, in s "
         "(repeatable)\n"
         "  --water X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH  a body of still water (repeatable)\n"
+        "  --tether X,Y,Z,LINK[,LENGTH]  a cable from the world point X,Y,Z to LINK (RFC 0011;\n"
+        "                     repeatable; LENGTH m, default the distance plus 10 %)\n"
         "  --water-current VX,VY[,VZ]  the water's current, m/s\n"
         "  --hydro-coefficients FILE.yaml  vehicles' Fossen coefficients by body (added_mass,\n"
         "            linear_damping, quadratic_damping: six each, surge to yaw)\n"
@@ -615,6 +617,32 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--water needs X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH, the last three positive";
             }
             options.water.push_back({{v[0], v[1], v[2]}, v[3], v[4], v[5]});
+        } else if (arg == "--tether") {
+            const char* text = value();
+            ServerOptions::Tether t;
+            int used = 0;
+            if (text == nullptr ||
+                std::sscanf(text, "%lf,%lf,%lf,%n", &t.anchor[0], &t.anchor[1], &t.anchor[2],
+                            &used) != 3 ||
+                !std::isfinite(t.anchor[0] + t.anchor[1] + t.anchor[2])) {
+                return "--tether needs X,Y,Z,LINK[,LENGTH]: the anchor (m) and the link it is tied "
+                       "to";
+            }
+            std::string rest = text + used;
+            if (const auto comma = rest.find(','); comma != std::string::npos) {
+                char* end = nullptr;
+                t.length = std::strtod(rest.c_str() + comma + 1, &end);
+                if (end == rest.c_str() + comma + 1 || *end != '\0' || !(t.length > 0.0)) {
+                    return "--tether: LENGTH must be a positive number of metres";
+                }
+                rest.resize(comma);
+            }
+            if (rest.empty()) {
+                return "--tether needs X,Y,Z,LINK[,LENGTH]: the anchor (m) and the link it is tied "
+                       "to";
+            }
+            t.link = rest;
+            options.tethers.push_back(std::move(t));
         } else if (arg == "--hydro-coefficients") {
             const char* text = value();
             if (text == nullptr) {

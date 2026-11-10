@@ -40,6 +40,7 @@
 #include "lagrange/services/Log.hpp"
 #include "lagrange/services/WrenchSum.hpp"
 #include "lagrange/stage/Stage.hpp"
+#include "lagrange/tether/Tethers.hpp"
 #include "lagrange/thermal/ThermalNetwork.hpp"
 #include "lagrange/traffic/Traffic.hpp"
 #include "lagrange/vehicle_dynamics/VehicleDynamics.hpp"
@@ -453,7 +454,7 @@ struct DomainRow {
     const char* substitute;
     const char* substituteKind;
 };
-constexpr std::array<DomainRow, 14> kDomains{{
+constexpr std::array<DomainRow, 15> kDomains{{
     {"rigid_body", "fixed", "constant"},
     {"electrical", "ideal", "ideal"},
     {"thermal", "ambient", "constant"},
@@ -468,6 +469,7 @@ constexpr std::array<DomainRow, 14> kDomains{{
     {"vehicle_dynamics", "ideal", "ideal"},
     {"rotor_aero", "ideal", "ideal"},  // a drone cannot fly on zero (aerodynamics.md §5)
     {"hydrodynamics", "zero", "constant"},
+    {"tether", "zero", "constant"},
 }};
 
 }  // namespace
@@ -745,6 +747,17 @@ struct Server::Impl {
                 water.values["fossen:" + body] = coefficients;
             }
             next->add(std::make_unique<hydrodynamics::Water>(), ModuleConfig(water));
+        }
+        // Tethers (RFC 0011): cables from their anchors to bodies, against every collider. Drag
+        // needs the site's air density; without it they hang in still, massless air.
+        if (hasTethers()) {
+            ModuleConfigData cables;
+            if (settings.airDensityKgM3) {
+                cables.values["air_density"] = *settings.airDensityKgM3;
+            }
+            if (!(off("tether") && addPluginSubstitute("tether", cables))) {
+                next->add(std::make_unique<tether::Tethers>(off("tether")), ModuleConfig(cables));
+            }
         }
         // People (RFC 0009): moved like traffic agents, around the robots.
         if (hasHumans()) {
@@ -1320,6 +1333,7 @@ struct Server::Impl {
 
     /// Whether the run has people.
     bool hasHumans() const { return !WorldView(robot.world).instancesOf("HumanAPI_1").empty(); }
+    bool hasTethers() const { return !WorldView(robot.world).instancesOf("TetherAPI_1").empty(); }
     /// Whether the stage has road vehicles.
     bool hasVehicles() const { return !WorldView(robot.world).instancesOf("VehicleAPI_1").empty(); }
     /// A scene query over what wheels roll on: the fixed scenery's shapes and the ground
@@ -2647,6 +2661,9 @@ struct Server::Impl {
             } else if (std::string_view(row.domain) == "traffic" && hasTraffic()) {
                 yaml += substituted("traffic") ? "  traffic: {enabled: false, substitute: zero}\n"
                                                : "  traffic: {enabled: true, backend: builtin}\n";
+            } else if (std::string_view(row.domain) == "tether" && hasTethers()) {
+                yaml += substituted("tether") ? "  tether: {enabled: false, substitute: zero}\n"
+                                              : "  tether: {enabled: true}\n";
             } else if (std::string_view(row.domain) == "comms" && hasComms()) {
                 yaml += substituted("comms") ? "  comms: {enabled: false, substitute: ideal}\n"
                                              : "  comms: {enabled: true}\n";
@@ -2654,7 +2671,8 @@ struct Server::Impl {
                        std::string_view(row.domain) == "traffic" ||
                        std::string_view(row.domain) == "vehicle_dynamics" ||
                        std::string_view(row.domain) == "rotor_aero" ||
-                       std::string_view(row.domain) == "hydrodynamics") {
+                       std::string_view(row.domain) == "hydrodynamics" ||
+                       std::string_view(row.domain) == "tether") {
                 continue;  // not in the profile of a ground robot
             } else {
                 yaml += "  " + std::string(row.domain) +
@@ -3842,6 +3860,31 @@ struct Server::Impl {
         for (const hydrodynamics::WaterBody& body : waters) {
             hydrodynamics::addWater(model, body);
         }
+        // Tethers from --tether (RFC 0011): a prim on the world, its anchor a world point.
+        for (std::size_t k = 0; k < options.tethers.size(); ++k) {
+            const ServerOptions::Tether& t = options.tethers[k];
+            World& w = model.world;
+            const auto link = std::find(w.bodies.names.begin(), w.bodies.names.end(), t.link);
+            if (link == w.bodies.names.end()) {
+                return Unexpected{
+                    Status::error(StatusCode::InvalidConfig, "--tether: no link named " + t.link)};
+            }
+            const auto body = static_cast<std::size_t>(link - w.bodies.names.begin());
+            double length = t.length;
+            if (length <= 0.0) {
+                const std::array<double, 3> at = restPoses(w)[body].position;
+                length =
+                    1.1 * std::hypot(at[0] - t.anchor[0], at[1] - t.anchor[1], at[2] - t.anchor[2]);
+            }
+            const std::string name = "tether_" + std::to_string(k);
+            SchemaInstance s;
+            s.schema = "TetherAPI_1";
+            s.prim = w.addPrim("/tethers/" + name, name);
+            s.realArrays["tether:anchorPoint"] = {t.anchor[0], t.anchor[1], t.anchor[2]};
+            s.relationships["tether:attach"] = {w.bodies.prim[body]};
+            s.reals["tether:length"] = std::max(length, 0.05);
+            w.schemaInstances.push_back(std::move(s));
+        }
         // People last, so that the first bodies stay the robot's (RFC 0009 §8).
         std::vector<humans::Spec> people = humans::takeSpecs(model);
         for (const Spawned& file : spawned) {
@@ -4333,6 +4376,9 @@ struct Server::Impl {
         }
         if (!WorldView(robot.world).instancesOf("WaterAPI_1").empty()) {
             context.modules.insert("hydrodynamics");
+        }
+        if (hasTethers()) {
+            context.modules.insert("tether");
         }
         for (const auto& [key, value] : options.weather) {
             context.weatherKnown.insert(key);

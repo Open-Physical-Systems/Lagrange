@@ -108,6 +108,15 @@ struct ServerOptions {
         double sizeX{10.0}, sizeY{10.0}, depth{2.0};
     };
     std::vector<Water> water;
+    /// --tether X,Y,Z,LINK[,LENGTH]: a cable (RFC 0011) from the world point X,Y,Z to the origin
+    /// of LINK, LENGTH m long (0: the distance between them at the start plus 10 %), the rest
+    /// TetherAPI_1's fallbacks.
+    struct Tether {
+        std::array<double, 3> anchor{};
+        std::string link;
+        double length{0.0};
+    };
+    std::vector<Tether> tethers;
     /// --water-current VX,VY[,VZ]: m/s, world ENU, the water's steady current (hydrodynamics.md).
     std::array<double, 3> waterCurrent{};
     /// --water-waves AMPLITUDE,PERIOD[,TOWARDS]: m, s and degrees (0 = towards +x, 90 = +y):
