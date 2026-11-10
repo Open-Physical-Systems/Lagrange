@@ -20,6 +20,7 @@ constexpr const char* kAirDensityKey = "air_density";  // as lagrange::rotor_aer
 constexpr double kLandBelowM = 0.05;  // m
 constexpr double kLandedM = 0.03;     // m
 constexpr double kLandedMps = 0.05;   // m/s
+constexpr double kGroundRayM = 1e4;   // m: how far down it looks for the ground
 // The leash: a velocity command moves the set point no further ahead of the drone, along each
 // commanded axis, than the position loop turns into this acceleration (kLeashAccel / kp). A
 // drone that cannot follow (pressed under a ceiling, against a wall) is then asked for a bounded
@@ -235,9 +236,24 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
     const std::span<const double> p = bus.readN(pose_);
     const std::span<const double> v = bus.readN(twist_);
     const Vec3 position{p[0], p[1], p[2]};
+    // The surface straight under the drone (fixed scenery and the ground), when it was given.
+    const auto surfaceBelow = [&]() -> std::optional<double> {
+        if (!ground_) {
+            return std::nullopt;
+        }
+        const services::RayHit hit = ground_->ray(position, {0.0, 0.0, -1.0}, kGroundRayM);
+        if (!hit.hit()) {
+            return std::nullopt;
+        }
+        return position[2] - hit.distance;
+    };
     if (!homed_) {
         home_ = position;
         homed_ = true;
+        if (const std::optional<double> surface = surfaceBelow()) {
+            standHeight_ = position[2] - *surface;
+            standKnown_ = true;
+        }
         setpoint_ = {home_[0], home_[1], home_[2] + settings_.altitudeM};
         heading_ = 0.0;
         airborne_ = false;
@@ -283,11 +299,18 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
     double yawRate = 0.0;
     const double dt = context.dt.seconds();
     const std::optional<FlightCommand> command = commands_ ? commands_() : std::nullopt;
+    // Where it would stand here: on the surface under it, or at its start without the scenery.
+    double standing = home_[2];
+    if (standKnown_) {
+        if (const std::optional<double> surface = surfaceBelow()) {
+            standing = *surface + standHeight_;
+        }
+    }
     if (command) {
         // Taking off or landing by hand, near the ground, only up and down count: moving the set
         // point sideways while the legs still hold the drone would tip it over on the ground.
         const bool nearGround =
-            settings_.waitForCommand && position[2] < home_[2] + settings_.minHeightM;
+            settings_.waitForCommand && position[2] < standing + settings_.minHeightM;
         double forward = nearGround ? 0.0 : command->forwardMps;
         double left = nearGround ? 0.0 : command->leftMps;
         yawRate = nearGround ? 0.0 : command->yawRateRadps;
@@ -361,13 +384,13 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         // Commanded by hand it may come down to the ground (a little below its start, so that
         // it sits); else it stays minHeightM up.
         const double floor =
-            settings_.waitForCommand ? home_[2] - kLandBelowM : home_[2] + settings_.minHeightM;
+            settings_.waitForCommand ? standing - kLandBelowM : home_[2] + settings_.minHeightM;
         if (setpoint_[2] < floor) {
             setpoint_[2] = floor;
             velocity_[2] = 0.0;
             accel_[2] = 0.0;
         }
-        if (settings_.waitForCommand && command->upMps < 0.0 && position[2] < home_[2] + kLandedM &&
+        if (settings_.waitForCommand && command->upMps < 0.0 && position[2] < standing + kLandedM &&
             std::abs(velocity[2]) < kLandedMps) {
             airborne_ = false;  // landed: rotors off until the next climb
             velocity_ = {};
@@ -462,6 +485,8 @@ Status MulticopterController::saveState(StateWriter& writer) const {
     }
     writer.put(heading_);
     writer.put(airborne_);
+    writer.put(standHeight_);
+    writer.put(standKnown_);
     for (const double v : velocity_) {
         writer.put(v);
     }
@@ -491,6 +516,8 @@ Status MulticopterController::restoreState(StateReader& reader) {
     }
     ok = ok && reader.get(heading_);
     ok = ok && reader.get(airborne_);
+    ok = ok && reader.get(standHeight_);
+    ok = ok && reader.get(standKnown_);
     for (double& v : velocity_) {
         ok = ok && reader.get(v);
     }
