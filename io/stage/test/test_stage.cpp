@@ -787,6 +787,56 @@ apply:
         << again.error();
 }
 
+// RFC 0011: a tether from a new prim (the ground station, placed by its anchor point) to a link.
+TEST(Overlay, AppliesATether) {
+    auto model = loadStage(writeText("tetherbot.usda", R"(#usda 1.0
+(
+    defaultPrim = "bot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "bot"
+{
+    def Xform "base" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+    {
+        float physics:mass = 2
+    }
+}
+)")
+                               .string());
+    ASSERT_TRUE(model) << model.error();
+    const std::filesystem::path overlay = writeText("tetherbot.overlay.yaml", R"(schema_version: 1
+apply:
+  - create: ground_station
+    schemas:
+      TetherAPI_1:
+        tether:anchorPoint: [1.0, -2.0, 2.8]
+        tether:attach: base
+        tether:attachPoint: [0.0, 0.0, -0.05]
+        tether:length: 20.0
+        tether:diameter: 0.004
+        tether:linearDensity: 0.0235
+        tether:winch: tension
+)");
+    ASSERT_TRUE(applyOverlay(*model, overlay.string())) << overlay;
+    const World& w = model->world;
+    const WorldView view(w);
+    const SchemaInstance* tether = only(w, "TetherAPI_1");
+    ASSERT_NE(tether, nullptr);
+    EXPECT_EQ(view.primPath(tether->prim), "/bot/ground_station");
+    EXPECT_EQ(view.signalInstanceName(tether->rel("tether:attach")[0]), "base");
+    const auto anchor = tether->realArray("tether:anchorPoint");
+    EXPECT_EQ(std::vector<double>(anchor.begin(), anchor.end()),
+              (std::vector<double>{1.0, -2.0, 2.8}));
+    const auto attach = tether->realArray("tether:attachPoint");
+    EXPECT_EQ(std::vector<double>(attach.begin(), attach.end()),
+              (std::vector<double>{0.0, 0.0, -0.05}));
+    EXPECT_EQ(tether->real("tether:length"), 20.0);
+    EXPECT_EQ(tether->real("tether:linearDensity"), 0.0235);
+    EXPECT_EQ(tether->token("tether:winch"), "tension");
+    EXPECT_EQ(tether->real("tether:friction"), 0.4);  // the fallback
+}
+
 TEST(Netlist, ABatteryRcPairLoadAndMotorBecomeSchemas) {
     auto model = loadStage(writeText("netbot.usda", R"(#usda 1.0
 (

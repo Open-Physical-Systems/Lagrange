@@ -8,6 +8,9 @@ and `test_schemas.py` checks it.
 
 ## Unreleased
 
+- **Tether library** (RFC 0011): `TetherAPI_1`, a cable from an anchor prim to a point on a body,
+  with its winch. New library, nothing to migrate.
+
 - **Electrical library** (RFC 0010): `ElectricalBranchAPI_1`, a resistor, fuse, switch or diode between two
   buses; `elec:load:resistance` on `ElectricalLoadAPI_1`, for a resistive load given as a resistance.
   Additions, nothing to migrate.
