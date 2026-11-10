@@ -5,6 +5,64 @@ Notable changes to Lagrange are recorded here. Each release section is generated
 titles merged into `dev`; do not edit it by hand. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v1.1.0...v1.2.0) (2026-11-11)
+
+
+### Features
+
+* **bridge/mavlink:** full throttle is each rotor's loaded top speed, from its motor and battery ([#282](https://github.com/Open-Physical-Systems/Lagrange/issues/282)) ([c647093](https://github.com/Open-Physical-Systems/Lagrange/commit/c647093be3fbb0c2a40112bdfb107431e564b95b))
+* **core:** lagrange_thermal_probe, thermistor and infrared thermometer sensors as a sample plugin ([#304](https://github.com/Open-Physical-Systems/Lagrange/issues/304)) ([f68441c](https://github.com/Open-Physical-Systems/Lagrange/commit/f68441ca1b9a49850ba8a5661be58c4ad4251e26))
+* **mod/emi:** wire sources by Biot-Savart, motor leads from the battery, and what they do to a compass (RFC 0013) ([#305](https://github.com/Open-Physical-Systems/Lagrange/issues/305)) ([50b4eb6](https://github.com/Open-Physical-Systems/Lagrange/commit/50b4eb65bf57bf59ad7add326353769e81b0eb2d))
+* **mod/sensors:** a thermal camera reads a link with a thermal material with its emissivity ([#309](https://github.com/Open-Physical-Systems/Lagrange/issues/309)) ([22f2e12](https://github.com/Open-Physical-Systems/Lagrange/commit/22f2e12a0ef4a19814a2175c7e495822e4950f0b))
+* **mod/tether:** the cable model of RFC 0011, checked against the catenary, a taut string and the capstan equation ([#289](https://github.com/Open-Physical-Systems/Lagrange/issues/289)) ([883818e](https://github.com/Open-Physical-Systems/Lagrange/commit/883818e51d78d0081376e483bc3cfdc3cfd7f8fc))
+* **mod/thermal:** each outside face radiates in the share of its surroundings it sees ([#315](https://github.com/Open-Physical-Systems/Lagrange/issues/315)) ([1bde96b](https://github.com/Open-Physical-Systems/Lagrange/commit/1bde96bf05bf2e0e72c14c78df9a04a01820ab89))
+* **mod/thermal:** a motor's losses heat the link that holds its stator, at its joint ([#308](https://github.com/Open-Physical-Systems/Lagrange/issues/308)) ([9a185ac](https://github.com/Open-Physical-Systems/Lagrange/commit/9a185ac3d7f17e2acdac5a5fb4019852f0be572a))
+* **mod/thermal:** the conduction fidelity, temperatures inside each link from its material (RFC 0012) ([#302](https://github.com/Open-Physical-Systems/Lagrange/issues/302)) ([dfe0ca5](https://github.com/Open-Physical-Systems/Lagrange/commit/dfe0ca568bde3b7e055a206a8df0677bef755b64))
+* **schemas:** ThermalMaterialAPI_1 and HeatSourceAPI_1, heat conduction from materials (RFC 0012) ([#300](https://github.com/Open-Physical-Systems/Lagrange/issues/300)) ([6c6d357](https://github.com/Open-Physical-Systems/Lagrange/commit/6c6d357480385b28ad51c98d523a29c003240af5))
+* **schemas:** TetherAPI_1, a cable from an anchor to a body (RFC 0011) ([#288](https://github.com/Open-Physical-Systems/Lagrange/issues/288)) ([6dce074](https://github.com/Open-Physical-Systems/Lagrange/commit/6dce074cff648f22d027d6f6bf5a039e903b2d54))
+* **server:** lagrange heat --cell; faster sky view rays; the LED hot spot's spread on record ([#321](https://github.com/Open-Physical-Systems/Lagrange/issues/321)) ([7843f75](https://github.com/Open-Physical-Systems/Lagrange/commit/7843f755701c086489f94a57f03304c598f07185))
+* **server:** lagrange heat, the steady temperatures of the links with a thermal material in seconds ([#319](https://github.com/Open-Physical-Systems/Lagrange/issues/319)) ([d085eeb](https://github.com/Open-Physical-Systems/Lagrange/commit/d085eeb705cc71c268124b342bf6ff276d8be341))
+* **server:** a URDF link's <thermal_material> and <heat_source>s become its prim's schemas (RFC 0012) ([#301](https://github.com/Open-Physical-Systems/Lagrange/issues/301)) ([5ebcf7f](https://github.com/Open-Physical-Systems/Lagrange/commit/5ebcf7f14c52792700d197d795502d453e34a6ff))
+* **server:** --thrust-limit caps every rotor at a share of its full thrust ([#299](https://github.com/Open-Physical-Systems/Lagrange/issues/299)) ([db41397](https://github.com/Open-Physical-Systems/Lagrange/commit/db41397f0cabcc0fe9a70b922d47e99859184ebf))
+* **server:** the tether domain, a cable from --tether or TetherAPI_1 pulling and pushing bodies (RFC 0011) ([#290](https://github.com/Open-Physical-Systems/Lagrange/issues/290)) ([860a905](https://github.com/Open-Physical-Systems/Lagrange/commit/860a905e5862b819014cbbc7f25f5aa9a4551fa6))
+* **tools:** foam-cht --radiation, surface radiation by discrete ordinates, and the sample with it ([#314](https://github.com/Open-Physical-Systems/Lagrange/issues/314)) ([828da35](https://github.com/Open-Physical-Systems/Lagrange/commit/828da35285c8244c03f881163a08707d67b008dd))
+* **tools:** lagrange foam-cht, the links' heat through OpenFOAM's conjugate heat transfer (RFC 0012) ([#306](https://github.com/Open-Physical-Systems/Lagrange/issues/306)) ([b94b7ef](https://github.com/Open-Physical-Systems/Lagrange/commit/b94b7efb971dda92116ab83284c00bfb006a2970))
+* **viewer:** the Thermal shading draws each link's cells by temperature, from the server's thermal/cells (RFC 0012) ([#303](https://github.com/Open-Physical-Systems/Lagrange/issues/303)) ([8996c66](https://github.com/Open-Physical-Systems/Lagrange/commit/8996c6637f98e03575f74d2bd2f540c90f4c0d39))
+* **viewer:** the Record button records a live run on the server, started and stopped from the viewer or Ctrl+R ([#296](https://github.com/Open-Physical-Systems/Lagrange/issues/296)) ([b878242](https://github.com/Open-Physical-Systems/Lagrange/commit/b878242b438b098277fcfb5cf7e74f524fb29ab1))
+* **viewer:** draw tethers, sent as Overlay KIND_CABLE in every scene delta (RFC 0011) ([#291](https://github.com/Open-Physical-Systems/Lagrange/issues/291)) ([d37f5db](https://github.com/Open-Physical-Systems/Lagrange/commit/d37f5dbe0f6de018a0c3a08bfde173a40656dda8))
+
+### Bug Fixes
+
+* **assets:** the sample quadcopters' motors take KV against the bus, Ke = 60/(2π·KV·√3) ([#285](https://github.com/Open-Physical-Systems/Lagrange/issues/285)) ([58c8402](https://github.com/Open-Physical-Systems/Lagrange/commit/58c8402340b63fca6fa6a403ac6309c21a879145))
+* **docs:** the finest OpenFOAM mesh matches the correlations; foam-cht defaults to it, the film coefficient advice withdrawn ([#320](https://github.com/Open-Physical-Systems/Lagrange/issues/320)) ([f5c4ce7](https://github.com/Open-Physical-Systems/Lagrange/commit/f5c4ce764638f701fe519c70bd0c4f2e0731d21a))
+* **mod/tether:** contacts along each segment, so a cable bent over an edge does not cut into it ([#297](https://github.com/Open-Physical-Systems/Lagrange/issues/297)) ([c61ec31](https://github.com/Open-Physical-Systems/Lagrange/commit/c61ec31f24ae148e222472708ffaab6d387424da))
+* **mod/tether:** lay a new cable's slack in an arch above its ends, so it falls into place instead of starting trapped in what it rests on ([#293](https://github.com/Open-Physical-Systems/Lagrange/issues/293)) ([b0cf7ef](https://github.com/Open-Physical-Systems/Lagrange/commit/b0cf7ef7bde1913b007758fab8d551173e4283e5))
+* **mod/tether:** a tether tied to a link's own prim is tied to its body, on URDF robots too ([#292](https://github.com/Open-Physical-Systems/Lagrange/issues/292)) ([02bfa6f](https://github.com/Open-Physical-Systems/Lagrange/commit/02bfa6f61ab248ea8d21f90f1fa44a7bbc6b43cf))
+* **server:** a slice's local names no longer shadow the wind's ([#316](https://github.com/Open-Physical-Systems/Lagrange/issues/316)) ([6173b83](https://github.com/Open-Physical-Systems/Lagrange/commit/6173b832472b5acb61dab4ec3e5f749e1e915030))
+* **server:** a heat source's signals name its link's prim, so the inspector shows them with it ([#307](https://github.com/Open-Physical-Systems/Lagrange/issues/307)) ([23dcedf](https://github.com/Open-Physical-Systems/Lagrange/commit/23dcedf28478839d6b0e3aa08e06d761fbfa24ad))
+* **server:** a multicopter flown by hand measures its ground where it takes off, so a spawned robot gets it right ([#295](https://github.com/Open-Physical-Systems/Lagrange/issues/295)) ([3032434](https://github.com/Open-Physical-Systems/Lagrange/commit/3032434607f08867cf2bdaeb90910f0a0d07621c))
+* **server:** the multicopter takes the surface under it as the ground, so it can fly off a bridge or a roof and land below ([#294](https://github.com/Open-Physical-Systems/Lagrange/issues/294)) ([34881b6](https://github.com/Open-Physical-Systems/Lagrange/commit/34881b63f3e8a41fc4543d53a25367ab7d40500a))
+* **server:** the multicopter ramps its commanded velocity, starting and stopping smoothly and holding where it stops ([#286](https://github.com/Open-Physical-Systems/Lagrange/issues/286)) ([d673e55](https://github.com/Open-Physical-Systems/Lagrange/commit/d673e550edf3fd742810053ad4a4b2fb4a359ff4))
+* **server:** the multicopter's set point stays on a leash, so a drone held by a ceiling neither flips nor stays stuck ([#284](https://github.com/Open-Physical-Systems/Lagrange/issues/284)) ([8253234](https://github.com/Open-Physical-Systems/Lagrange/commit/8253234ab2b6d78642de0ec245b8ad92489c477f))
+* **tools:** foam-cht warns of a mesh under two cells through a part; the sample's mesh study ([#310](https://github.com/Open-Physical-Systems/Lagrange/issues/310)) ([8755580](https://github.com/Open-Physical-Systems/Lagrange/commit/8755580392f4398142ba56956be5b3aedf7304fd))
+* **viewer:** the reset button restarts a live run, not only a recording ([#283](https://github.com/Open-Physical-Systems/Lagrange/issues/283)) ([dc5e0ba](https://github.com/Open-Physical-Systems/Lagrange/commit/dc5e0baadc9e5942919c614e901e1faed77fa4f0))
+
+### Documentation
+
+* **examples:** lagrange_example_compass, a quadcopter's battery leads and its heading ([#313](https://github.com/Open-Physical-Systems/Lagrange/issues/313)) ([9c35393](https://github.com/Open-Physical-Systems/Lagrange/commit/9c353938317d2d3b61cc73758b1802e3fdff78e3))
+* **examples:** lagrange_example_heat, LEDs on a heat sink and their temperatures on ROS 2 ([#312](https://github.com/Open-Physical-Systems/Lagrange/issues/312)) ([12c63fd](https://github.com/Open-Physical-Systems/Lagrange/commit/12c63fd7a8011bb76ae5c8a8c9d76b5cc1c0520e))
+* **guide:** a tutorial for heat in the parts and a robot's own interference, checked headless ([#317](https://github.com/Open-Physical-Systems/Lagrange/issues/317)) ([1f57839](https://github.com/Open-Physical-Systems/Lagrange/commit/1f57839955fbf443560408cdf03e9e19b3d5fe4a))
+* **plan:** two stale entries in the EMI and heat queue ([#323](https://github.com/Open-Physical-Systems/Lagrange/issues/323)) ([4494cfa](https://github.com/Open-Physical-Systems/Lagrange/commit/4494cfab07a8726d214ad42b3313d53209b35a00))
+* **plan:** the EMI and heat queue as it stands, with the last full check ([#322](https://github.com/Open-Physical-Systems/Lagrange/issues/322)) ([9b00728](https://github.com/Open-Physical-Systems/Lagrange/commit/9b00728679a3515efd501c24b50c4b5375ec28cd))
+* **profiles:** led_heatsink.yaml, the conduction fidelity with a film coefficient from OpenFOAM ([#318](https://github.com/Open-Physical-Systems/Lagrange/issues/318)) ([8b33876](https://github.com/Open-Physical-Systems/Lagrange/commit/8b3387628371e65433bbcc41f1769bbd06e1b325))
+* **rfc:** RFC 0011 and the tether tests and examples in generic terms ([#298](https://github.com/Open-Physical-Systems/Lagrange/issues/298)) ([e056977](https://github.com/Open-Physical-Systems/Lagrange/commit/e0569772130f28786003eab34073de47d6669659))
+* **rfc:** RFC 0011, tethers and cables ([#287](https://github.com/Open-Physical-Systems/Lagrange/issues/287)) ([8fa4008](https://github.com/Open-Physical-Systems/Lagrange/commit/8fa400824a76debd2eb7b25a9827f1f85f14092b))
+* **site:** a landing page that shows what Lagrange does: hero, gallery, domains, why, try it ([#324](https://github.com/Open-Physical-Systems/Lagrange/issues/324)) ([e3c6eb3](https://github.com/Open-Physical-Systems/Lagrange/commit/e3c6eb3c3a81f252713bb35bc6a6e10adb7e55de))
+
+### Miscellaneous
+
+* **tools:** a plain word for the multiplication sign in foam-cht's comment ([#311](https://github.com/Open-Physical-Systems/Lagrange/issues/311)) ([bc58b95](https://github.com/Open-Physical-Systems/Lagrange/commit/bc58b95704d7979f49830807402220e7b13d55f7))
+
 ## [1.1.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v1.0.0...v1.1.0) (2026-11-07)
 
 
