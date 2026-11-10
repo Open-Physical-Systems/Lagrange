@@ -1,0 +1,5 @@
+# What the battery leads do to the compass, and the current that does it, on ROS 2.
+publish:
+  - {signal: sensor/magnetometer/heading_error, topic: /compass/heading_error, type: std_msgs/msg/Float64}
+  - {signal: sensor/magnetometer/interference, topic: /compass/interference, type: std_msgs/msg/Float64}
+  - {signal: motor/rotor_1_motor/bus_current, topic: /compass/lead_current, type: std_msgs/msg/Float64}
