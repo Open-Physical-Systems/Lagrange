@@ -194,7 +194,7 @@ solvers
     h { solver PCG; preconditioner DIC; tolerance 1e-9; relTol 0.01; }
 }
 SIMPLE { nNonOrthogonalCorrectors 1; }
-relaxationFactors { equations { h 1; } }
+relaxationFactors { equations { h 0.7; } }
 """
 
 FLUID_SCHEMES = """
@@ -232,7 +232,7 @@ SIMPLE
 relaxationFactors
 {
     fields { p_rgh 0.7; rho 1; }
-    equations { U 0.3; h 0.7; }
+    equations { U 0.2; h 0.5; }
 }
 """
 
@@ -607,8 +607,8 @@ def main() -> int:
     parser.add_argument("--procs", type=int, default=8, help="processes for the solver")
     parser.add_argument("--base-cells", type=float, default=10.0,
                         help="cells of the air box across the robot's largest size")  # fmt: skip
-    parser.add_argument("--cells-through", type=float, default=1.0,
-                        help="cells through a link's thinnest shape, at least")  # fmt: skip
+    parser.add_argument("--cells-through", type=float, default=4.0,
+                        help="cells through a link's thinnest shape, at least (4: the air's boundary layer resolved on the sample; 2.5 million cells, about 40 min on 14 processes)")  # fmt: skip
     parser.add_argument("--max-level", type=int, default=6)
     parser.add_argument("--out", type=Path, default=Path("foam_cht_case"))
     parser.add_argument("--write-only", action="store_true", help="write the case, do not run it")
