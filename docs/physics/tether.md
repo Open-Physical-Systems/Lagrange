@@ -81,6 +81,11 @@ nearest surface point:
 - **Equal and opposite.** On a moving body, the mass's move times its mass over $h^2$ is the
   force on the body at the contact point, so the cable pushes the drone it hits and the drone
   pushes back.
+- **Along each segment.** Where the cable bends over an edge or a corner, the straight segment
+  between two masses outside a shape can still cut into it. For each segment that could reach a
+  shape, the point along it that goes deepest is found (golden-section search: the distance
+  into a convex shape along a line is convex) and pushed out, the two masses sharing the move,
+  with friction and the reaction on a moving body as for a mass.
 - **Itself.** Segments that are not neighbours keep a diameter apart (closest points of two
   capsules). That is how it wraps and knots.
 
@@ -135,6 +140,7 @@ connects and shows no cable.
 | A tension winch, drone climbing | its set point, on average | 2.00 N of 2.00 | `Cable.ATensionWinchHoldsItsTension` |
 | The sample quad hovering on 3 m of tether | the weight held by the station and the drone | 0.2 % | `TetherRun.AQuadcopterHoversOnItsTether` |
 | Laid out through a slab | comes out at 1 m/s | 1.26 m/s, at most 14 N | `Cable.LaidThroughABoxItComesOutSlowly` |
+| Over a deck's edge, out, down and back in under it | the centre line stays out of the concrete | at worst 1.8 mm in, within its 2 mm radius (6.4 cm with contacts at the masses alone) | `Cable.BendsOverAnEdgeWithoutCuttingIntoIt` |
 | Lifted off a dock on a deck by a drone, tension winch at 2 N | pays out, tension near its set point | 2.6 m out, 2.3 N mean | `Cable.LiftedOffADockTheWinchPaysOut` |
 
 **Limits.**
