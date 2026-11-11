@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>jolt_vendor</name>
-  <version>1.2.0</version>
+  <version>1.2.1</version>
   <description>Jolt Physics v5.6.0 (MIT), built from its pinned release tarball for the second rigid-body backend (roadmap 0.2-C6).</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <!-- This package's own files; Jolt itself is MIT, see docs/design/dependencies.md. -->

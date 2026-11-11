@@ -1,6 +1,6 @@
 # Progress
 
-Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-11: v1.2.0 released (tethers, heat conduction, a robot's own EMI; docs/release/v1.2.0.md).
+Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-11: v1.2.1 released (one-line installer; docs/release/v1.2.1.md), after v1.2.0 (tethers, heat conduction, a robot's own EMI; docs/release/v1.2.0.md).
 
 ## The releases
 

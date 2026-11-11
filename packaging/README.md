@@ -6,6 +6,8 @@ builds and checks the artefacts locally; publishing them is the maintainers' ste
 | Artefact | Built by | Checked by |
 |---|---|---|
 | `ros-lyrical-lagrange-*` .debs (every package, bloom) | `packaging/debs/build_debs.sh OUT_DIR` (in a clean `ros:lyrical-ros-base-resolute` container, dependency order, each installed before the next) | `packaging/test_install.sh OUT_DIR` |
+| The release archive of the debs, `lagrange-VERSION-debs-amd64.tar` and its `.sha256` | `packaging/debs/release_archive.sh DEB_DIR OUT_DIR`, attached to the GitHub release | `packaging/install.sh` with `LAGRANGE_DEBS=DIR` in a bare `ubuntu:resolute` container |
+| One-line installer | `packaging/install.sh` (ROS 2 Lyrical when missing, then the release's debs, checked by SHA-256, and the pip pins) | the same, and from the release after upload |
 | Container image from the debs alone | `packaging/container/Containerfile.release` (no sources, no compiler) | `packaging/test_install.sh`: the clean-machine install test |
 | Development image from sources | `packaging/container/Containerfile` | its default command (the Nav2 demo) |
 | Python wheel | `packaging/wheel/build_wheel.sh PACKAGE_DIR OUT_DIR` | imports and runs a simulation; a platform wheel for Ubuntu 26.04 with the debs installed, not a self-contained one |
@@ -31,7 +33,11 @@ These need the project's accounts and identity, so they are not scripted here:
    long builds the buildfarm accepts, `docs/plan/spikes/0.2-H8-packaging.md` §3), or an own apt
    repository of the debs `build_debs.sh` makes.
 2. **Image.** Tag the image `test_install.sh` built and push it to the project's registry.
-3. **Wheel.** Attach it to the GitHub release (it is not useful on PyPI without the debs).
-4. **Signatures.** Sign every artefact and the SBOM with Sigstore (`cosign sign-blob` for files,
+3. **The installer's archive.** `packaging/debs/release_archive.sh DEB_DIR dist/`, then
+   `gh release upload vVERSION dist/lagrange-VERSION-debs-amd64.tar{,.sha256}`. The
+   installer on `main` takes the latest release, so upload it before people are pointed at
+   the release.
+4. **Wheel.** Attach it to the GitHub release (it is not useful on PyPI without the debs).
+5. **Signatures.** Sign every artefact and the SBOM with Sigstore (`cosign sign-blob` for files,
    `cosign sign` for the image) under the maintainers' identity, and attach the bundles to the
    release.

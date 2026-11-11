@@ -155,10 +155,17 @@ worlds tens of kilometres wide in double precision.
 
 ## Try it
 
-Once it is [installed](guide/install.md):
+On Ubuntu 26.04 (amd64), one command installs ROS 2 Lyrical and Lagrange from the latest
+release; nothing is built ([other ways to install](guide/install.md)):
 
 ```bash
-source /opt/ros/lyrical/setup.bash && source install/setup.bash
+curl -fsSL https://raw.githubusercontent.com/Open-Physical-Systems/Lagrange/main/packaging/install.sh | bash
+```
+
+Then:
+
+```bash
+source /opt/ros/lyrical/setup.bash
 lagrange amr        # the sample AMR in its warehouse, with the viewer
 lagrange quad       # a quadcopter that takes off and hovers
 lagrange town       # traffic lights, crossings, cars and people

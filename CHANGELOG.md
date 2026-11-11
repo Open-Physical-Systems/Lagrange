@@ -5,6 +5,13 @@ Notable changes to Lagrange are recorded here. Each release section is generated
 titles merged into `dev`; do not edit it by hand. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1](https://github.com/Open-Physical-Systems/Lagrange/compare/v1.2.0...v1.2.1) (2026-11-11)
+
+
+### Features
+
+* **packaging:** a one-line installer from the release's debs ([#327](https://github.com/Open-Physical-Systems/Lagrange/issues/327)) ([21eee6f](https://github.com/Open-Physical-Systems/Lagrange/commit/21eee6f))
+
 ## [1.2.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v1.1.0...v1.2.0) (2026-11-11)
 
 

@@ -56,6 +56,9 @@ for pkg in $(colcon list --base-paths src --topological-order --names-only --pac
         # pip-install them from packaging/pip-constraints.txt.
         python3 /work/src/lagrange/packaging/debs/drop_pip_depends.py debian/control \
             /work/src/lagrange/packaging/rosdep/lagrange.yaml
+        # bloom's rules are debhelper compat 9, where dh builds serially unless told: with
+        # --parallel it takes the job count from DEB_BUILD_OPTIONS (OpenUSD: hours at -j1).
+        sed -i 's/^\tdh \$@ -v /\tdh $@ -v --parallel /' debian/rules
         fakeroot debian/rules binary >/tmp/"$pkg".log 2>&1 || {
             tail -40 /tmp/"$pkg".log
             exit 1

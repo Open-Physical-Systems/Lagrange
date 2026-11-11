@@ -1,8 +1,30 @@
 # Installing Lagrange
 
 Lagrange runs on **Ubuntu 26.04 with ROS 2 Lyrical**, on amd64 (arm64 builds, without GPU
-tests). It has no binary packages on the ROS buildfarm yet, so you build it yourself. There are
-three ways to do that. Pick one:
+tests).
+
+## Quick install (Ubuntu 26.04, amd64)
+
+One command installs ROS 2 Lyrical (when it isn't there yet) and the `.deb` packages attached to
+the latest [GitHub release](https://github.com/Open-Physical-Systems/Lagrange/releases), checked
+against their SHA-256. Nothing is built, so it takes a few minutes and about 3 GB of disk:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Open-Physical-Systems/Lagrange/main/packaging/install.sh | bash
+source /opt/ros/lyrical/setup.bash
+lagrange amr
+```
+
+It uses `sudo` for apt and asks before it installs anything. Set `LAGRANGE_VERSION=1.2.1` for a
+given release, `LAGRANGE_DEBS=DIR` to install debs you built yourself (B below), and
+`LAGRANGE_YES=1` to skip the question. Read the script first if you like:
+[`packaging/install.sh`](../../packaging/install.sh). To remove it:
+`sudo apt remove 'ros-lyrical-lagrange*'`.
+
+## Building it yourself
+
+The packages are not on the ROS buildfarm yet. To change the code, or on arm64, build it
+yourself. There are three ways to do that. Pick one:
 
 ```mermaid
 flowchart TD
