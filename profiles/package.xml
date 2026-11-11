@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_profiles</name>
-  <version>1.2.0</version>
+  <version>1.2.1</version>
   <description>JSON Schema for Lagrange simulation profiles, and example profiles.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>

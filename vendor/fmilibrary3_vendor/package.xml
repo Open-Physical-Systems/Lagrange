@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>fmilibrary3_vendor</name>
-  <version>1.2.0</version>
+  <version>1.2.1</version>
   <description>FMI Library 3.0.4 (Modelon, BSD-3-Clause), built from its pinned release tarball: FMI 3.0 import for Lagrange's FMU host (roadmap v0.3).</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <!-- This package's own files; FMI Library is BSD-3-Clause, see docs/design/dependencies.md. -->
