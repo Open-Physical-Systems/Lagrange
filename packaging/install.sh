@@ -92,7 +92,7 @@ if [ ! -f "$constraints" ]; then
     printf 'mcap==1.5.0\ncoacd==1.0.14\n' >"$work/pip-constraints.txt"
     constraints="$work/pip-constraints.txt"
 fi
-$sudo env PIP_BREAK_SYSTEM_PACKAGES=1 pip3 install -q -c "$constraints" mcap coacd
+$sudo env PIP_BREAK_SYSTEM_PACKAGES=1 pip3 install -q --root-user-action=ignore -c "$constraints" mcap coacd
 
 # 4. A check: the command answers.
 set +u
