@@ -140,12 +140,22 @@ Status Weather::declare(const WorldView& world, const ModuleConfig& config, Sign
     const auto temperature = site(world, config, "temperature", "weather:ambientTemperature");
     const auto pressure = site(world, config, "pressure", "weather:pressure");
     const auto humidity = site(world, config, "relative_humidity", "weather:relativeHumidity");
-    if (!temperature || !pressure || !humidity || *temperature <= 0.0 || *pressure <= 0.0 ||
-        *humidity < 0.0 || *humidity > 1.0) {
+    if (!temperature || !pressure || !humidity) {
         return Status::error(StatusCode::InvalidConfig,
                              "the weather needs the site's air temperature (K), pressure (Pa) and "
                              "relative humidity (0 to 1): the profile's weather keys or a "
                              "WeatherAPI_1 prim; they have no defaults");
+    }
+    // Written so that NaN fails too.
+    if (!(*temperature > 0.0) || !(*pressure > 0.0) || !(*humidity >= 0.0) || !(*humidity <= 1.0) ||
+        !std::isfinite(*temperature) || !std::isfinite(*pressure)) {
+        return Status::error(StatusCode::InvalidConfig,
+                             "the weather's site is out of range: temperature " +
+                                 std::to_string(*temperature) + " K and pressure " +
+                                 std::to_string(*pressure) +
+                                 " Pa must be positive, relative "
+                                 "humidity " +
+                                 std::to_string(*humidity) + " from 0 to 1");
     }
     s_ = State{};
     s_.temperature = *temperature;
@@ -207,6 +217,9 @@ Status Weather::declare(const WorldView& world, const ModuleConfig& config, Sign
     frictionOut_ = d.output(spec("env/friction_scale", SignalType::Scalar, units::one));
     snowRateOut_ = d.output(spec("env/snow_rate", SignalType::Scalar, units::m_per_s));
     snowCoverOut_ = d.output(spec("env/snow_cover", SignalType::Scalar, units::one));
+    // The air's own dust (not what rotors lift: env/dust/downwash), for particle sensors.
+    dustOut_ = d.output(spec("env/dust/concentration", SignalType::Scalar, units::kg_per_m3));
+    dustDiameterOut_ = d.output(spec("env/dust/median_diameter", SignalType::Scalar, units::m));
     // Fields: a fog grid (extinction, 1/m, scalar) and a wind grid (m/s, vector).
     const auto loadField = [&](const char* key, const char* attribute, fields::Field::Kind kind,
                                std::shared_ptr<const fields::Field>& out) -> Status {
@@ -331,6 +344,8 @@ void Weather::writeAll(SignalBus& bus) const {
     bus.write(frictionOut_, frictionScale(wetness_, snowCover_, s_.temperature));
     bus.write(snowRateOut_, snow_ ? snowRate_ : 0.0);
     bus.write(snowCoverOut_, snowCover_);
+    bus.write(dustOut_, dust_ ? s_.dustConcentration : 0.0);
+    bus.write(dustDiameterOut_, s_.dustDiameter);
     for (std::size_t i = 0; i < contaminationOut_.size(); ++i) {
         bus.write(contaminationOut_[i], contamination_[i]);
     }

@@ -1,3 +1,4 @@
+#include "lagrange/signals/Signal.hpp"
 #include "lagrange/signals/Unit.hpp"
 
 #include <string>
@@ -131,6 +132,42 @@ TEST(ParseUnit, RejectsWithAReason) {
         EXPECT_NE(parsed.error.find(reason), std::string::npos)
             << text << ": got \"" << parsed.error << "\"";
     }
+}
+
+/// Whether `text` is valid UTF-8.
+bool validUtf8(const std::string& text) {
+    for (std::size_t i = 0; i < text.size();) {
+        const auto lead = static_cast<unsigned char>(text[i]);
+        const std::size_t n = lead < 0x80U              ? 1
+                              : (lead & 0xE0U) == 0xC0U ? 2
+                              : (lead & 0xF0U) == 0xE0U ? 3
+                              : (lead & 0xF8U) == 0xF0U ? 4
+                                                        : 0;
+        if (n == 0 || i + n > text.size()) {
+            return false;
+        }
+        for (std::size_t k = 1; k < n; ++k) {
+            if ((static_cast<unsigned char>(text[i + k]) & 0xC0U) != 0x80U) {
+                return false;
+            }
+        }
+        i += n;
+    }
+    return true;
+}
+
+// QA 2026-11-12 #14: a name with a non-ASCII character is refused with a message that quotes the
+// whole character (UTF-8, which Python can decode), not one byte of it.
+TEST(SignalName, ANonAsciiCharacterIsQuotedWhole) {
+    const std::string problem = checkSignalName("sensor/caméra/image");
+    ASSERT_FALSE(problem.empty());
+    EXPECT_TRUE(validUtf8(problem)) << problem;
+    EXPECT_NE(problem.find("'é'"), std::string::npos) << problem;
+    // Bytes that are no UTF-8 at all are written out.
+    const std::string broken = checkSignalName(std::string("sensor/a\xff/x"));
+    EXPECT_TRUE(validUtf8(broken)) << broken;
+    EXPECT_NE(broken.find("\\xff"), std::string::npos) << broken;
+    EXPECT_TRUE(checkSignalName("sensor/cam_1/image").empty());
 }
 
 }  // namespace

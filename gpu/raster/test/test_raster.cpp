@@ -3,6 +3,7 @@
 // calibration from the images recovers the intrinsics. Reprojection error < 0.1 px.
 #include "lagrange/gpu/Raster.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <memory>
@@ -229,6 +230,40 @@ TEST_F(Raster, LargeWorldCoordinatesRenderAsAtTheOrigin) {
         differing += near.instance[i] != far.instance[i] ? 1 : 0;
     }
     EXPECT_LT(differing, near.instance.size() / 10'000);  // edge pixels at most
+}
+
+TEST_F(Raster, FramesInFlightGiveWhatRenderGives) {
+    // Two cameras each begin a frame, then both finish (the scheduler's split steps): the images
+    // are the ones render() draws, byte for byte.
+    RasterCamera one(scene_, kWidth, kHeight);
+    RasterCamera two(scene_, kWidth, kHeight);
+    const std::array<double, 3> a{-0.13, -0.09, 0.55};
+    const std::array<double, 3> b{-0.15, -0.1, 0.6};
+    const RasterImages expectedA = shoot(one, a, quaternion(0.2, 0.1, 0.05));
+    const RasterImages expectedB = shoot(two, b, {1, 0, 0, 0});
+    std::vector<RasterInstance> instancesA(2);
+    instancesA[0] = {0, a, quaternion(0.2, 0.1, 0.05), {1, 1, 1}, {0.02F, 0.02F, 0.02F, 1}, 7};
+    instancesA[1] = {1, a, quaternion(0.2, 0.1, 0.05), {1, 1, 1}, {0.95F, 0.95F, 0.95F, 1}, 8};
+    std::vector<RasterInstance> instancesB(2);
+    instancesB[0] = {0, b, {1, 0, 0, 0}, {1, 1, 1}, {0.02F, 0.02F, 0.02F, 1}, 7};
+    instancesB[1] = {1, b, {1, 0, 0, 0}, {1, 1, 1}, {0.95F, 0.95F, 0.95F, 1}, 8};
+    one.begin(instancesA, camera_, nullptr);
+    two.begin(instancesB, camera_, nullptr);
+    EXPECT_TRUE(one.pending());
+    EXPECT_TRUE(two.pending());
+    RasterImages gotB;
+    RasterImages gotA;
+    two.finish(gotB);
+    one.finish(gotA);
+    EXPECT_FALSE(one.pending());
+    EXPECT_EQ(gotA.rgba, expectedA.rgba);
+    EXPECT_EQ(gotA.depth, expectedA.depth);
+    EXPECT_EQ(gotA.instance, expectedA.instance);
+    EXPECT_EQ(gotB.rgba, expectedB.rgba);
+    EXPECT_EQ(gotB.depth, expectedB.depth);
+    EXPECT_EQ(gotB.instance, expectedB.instance);
+    // A frame begun and never finished is waited for when the camera goes.
+    one.begin(instancesA, camera_, nullptr);
 }
 
 // The realistic look changes colour only: depth and instance ids are the same, sky and ground are

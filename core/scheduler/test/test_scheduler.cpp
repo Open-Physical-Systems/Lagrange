@@ -1,6 +1,7 @@
 #include "lagrange/random/Philox.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <memory>
@@ -416,6 +417,96 @@ TEST(Multirate, WriterBeforeReaderSeesTheSameTick) {
     EXPECT_NEAR(seen->values[2], 3.0, 1e-9);
 }
 
+/// A writer whose step ends later in the tick (SplitStep): step() starts the work, finishStep()
+/// writes the output, the step count so far. Each call is logged.
+class SplitWriter final : public IModule, public SplitStep {
+public:
+    explicit SplitWriter(std::shared_ptr<std::vector<std::string>> log) : log_(std::move(log)) {}
+    [[nodiscard]] ModuleInfo info() const override { return {"s", "split"}; }
+    [[nodiscard]] Duration preferredStep() const override { return 1_ms; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        id_ = d.output(scalar("x/s/count", Unit{}));
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        bus.write(id_, 0.0);
+        return {};
+    }
+    Status step(const StepContext&, SignalBus& bus) override {
+        log_->push_back("split.step");
+        pending_ = true;
+        return allowed_ ? Status{} : finishStep(bus);
+    }
+    void allowSplit(bool allowed) override { allowed_ = allowed; }
+    [[nodiscard]] bool stepPending() const override { return pending_; }
+    Status finishStep(SignalBus& bus) override {
+        log_->push_back("split.finish");
+        pending_ = false;
+        bus.write(id_, ++count_);
+        return {};
+    }
+
+private:
+    std::shared_ptr<std::vector<std::string>> log_;
+    SignalId id_;
+    double count_{0.0};
+    bool pending_{false};
+    bool allowed_{false};
+};
+
+TEST(Execution, ASplitStepEndsBeforeItsFirstReaderAndCommitsThen) {
+    auto log = std::make_shared<std::vector<std::string>>();
+    auto seen = std::make_shared<Seen>();
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<SplitWriter>(log));
+    // Another module, which the reader also reads, so that it runs before the reader.
+    auto other = source("u", 1_ms, "x/u/one", Unit{}, [](double) { return 1.0; });
+    other->onStep = [log](const StepContext&, SignalBus& bus, TestModule& m) {
+        log->push_back("other.step");
+        bus.write(m.ids[0], 1.0);
+        return Status{};
+    };
+    scheduler.add(std::move(other));
+    auto reader = sink("r", 1_ms, scalar("x/s/count", Unit{}), seen);
+    reader->onDeclare = [](SignalDeclarer& d, TestModule& m) {
+        m.ids.push_back(d.input(scalar("x/s/count", Unit{})));
+        m.ids.push_back(d.input(scalar("x/u/one", Unit{})));
+    };
+    reader->onStep = [log, seen](const StepContext&, SignalBus& bus, TestModule& m) {
+        log->push_back("reader.step");
+        seen->values.push_back(bus.read(m.ids[0]));
+        return Status{};
+    };
+    scheduler.add(std::move(reader));
+    const World world;
+    ASSERT_TRUE(scheduler.wire(WorldView(world)));
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{2'000'000}).ok());
+    // The unrelated module runs while the split step is in flight; the reader sees this tick's
+    // value, as it would without the split.
+    const std::vector<std::string> expected{"split.step",   "other.step", "split.finish",
+                                            "reader.step",  "split.step", "other.step",
+                                            "split.finish", "reader.step"};
+    EXPECT_EQ(*log, expected);
+    EXPECT_EQ(seen->values, (std::vector<double>{1.0, 2.0}));
+    for (const ModuleCost& cost : scheduler.takeCosts()) {
+        if (cost.label == "s/split") {
+            EXPECT_EQ(cost.steps, 2U);
+        }
+    }
+}
+
+TEST(Execution, ASplitStepNobodyReadsEndsWithTheTick) {
+    auto log = std::make_shared<std::vector<std::string>>();
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<SplitWriter>(log));
+    const World world;
+    ASSERT_TRUE(scheduler.wire(WorldView(world)));
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{3'000'000}).ok());
+    EXPECT_EQ(log->size(), 6U);
+    EXPECT_EQ(log->back(), "split.finish");
+    EXPECT_DOUBLE_EQ(scheduler.bus().read(scheduler.bus().find("x/s/count")), 3.0);
+}
+
 TEST(Multirate, ZeroOrderHoldOfASlowWriter) {
     Scheduler scheduler;
     auto seen = std::make_shared<Seen>();
@@ -701,6 +792,52 @@ TEST(State, SaveRunRestoreRunIsIdentical) {
     ASSERT_TRUE(scheduler.restoreState(reader).ok());
     EXPECT_EQ(scheduler.now(), SimTime{100'000'000});
     ASSERT_TRUE(scheduler.stepUntil(SimTime{300'000'000}).ok());
+    EXPECT_EQ(scheduler.stateHash().value(), first);
+}
+
+// QA 2026-11-12 #9: a restored run reads its last image at once, and publishes the same handles
+// as the run it repeats, so their hashes agree.
+TEST(State, RestoreKeepsPublishedImages) {
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    auto camera = std::make_unique<TestModule>("sensors", "camera", 10_ms);
+    camera->onDeclare = [](SignalDeclarer& d, TestModule& m) {
+        SignalSpec image;
+        image.name = "sensor/cam/image";
+        image.type = SignalType::Image;
+        m.ids.push_back(d.output(image));
+    };
+    camera->onStep = [](const StepContext& c, SignalBus& bus, TestModule& m) {
+        auto buffer = std::make_shared<Buffer>();
+        buffer->width = 2;
+        buffer->height = 1;
+        buffer->encoding = "r32u";
+        buffer->bytes.assign(8, static_cast<std::byte>(c.stepIndex + 1));
+        bus.publishBuffer(m.ids[0], std::move(buffer));
+        return Status{};
+    };
+    scheduler.add(std::move(camera));
+    ASSERT_TRUE(scheduler.wire(WorldView(World{})));
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{100'000'000}).ok());
+    const SignalId image = scheduler.bus().find("sensor/cam/image");
+    const auto shown = [&]() -> int {
+        const auto b = scheduler.bus().buffer(scheduler.bus().readBuffer(image));
+        return b ? static_cast<int>(b->bytes[0]) : -1;
+    };
+    ASSERT_EQ(shown(), 10);
+    StateWriter saved;
+    ASSERT_TRUE(scheduler.saveState(saved).ok());
+    const std::uint64_t atSave = scheduler.stateHash().value();
+
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{300'000'000}).ok());
+    const std::uint64_t first = scheduler.stateHash().value();
+
+    StateReader reader(saved.bytes());
+    ASSERT_TRUE(scheduler.restoreState(reader).ok());
+    ASSERT_EQ(shown(), 10) << "the image saved, not none";
+    EXPECT_EQ(scheduler.bus().buffer(scheduler.bus().readBuffer(image))->bytes.size(), 8U);
+    EXPECT_EQ(scheduler.stateHash().value(), atSave);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{300'000'000}).ok());
+    EXPECT_EQ(shown(), 30);
     EXPECT_EQ(scheduler.stateHash().value(), first);
 }
 

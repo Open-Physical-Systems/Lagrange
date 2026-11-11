@@ -9,6 +9,7 @@
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -23,8 +24,10 @@
 #include <memory>
 #include <mutex>
 #include <numbers>
+#include <optional>
 #include <random>
 #include <signal.h>
+#include <span>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <thread>
@@ -47,6 +50,52 @@ const ImVec4 kLidarAttenuated = theme::hex(0x2A8F76);
 constexpr float kLidarStrongIntensity = 0.12F;
 
 using Clock = std::chrono::steady_clock;
+
+/// Frame-time breakdown for LAGRANGE_VIEWER_PROFILE=1: per stage, the median and the 95th
+/// percentile over the frames since the scene arrived, printed to stderr at the end (headless)
+/// or every few seconds (windowed). CPU wall-clock only: "gpu" is the wait for the queue.
+class FrameProfile {
+public:
+    FrameProfile() {
+        // NOLINTNEXTLINE(concurrency-mt-unsafe): start-up, single-threaded.
+        const char* on = std::getenv("LAGRANGE_VIEWER_PROFILE");
+        enabled_ = on != nullptr && *on != '\0' && *on != '0';
+    }
+    [[nodiscard]] bool enabled() const { return enabled_; }
+    void add(std::size_t stage, double ms) {
+        if (enabled_ && stage < kStages) {
+            samples_.at(stage).push_back(ms);
+        }
+    }
+    void print(const char* label) {
+        if (!enabled_ || samples_[0].empty()) {
+            return;
+        }
+        std::fprintf(stderr, "profile %s: %zu frames;", label, samples_[0].size());
+        for (std::size_t k = 0; k < kStages; ++k) {
+            std::vector<double>& v = samples_.at(k);
+            if (v.empty()) {
+                continue;
+            }
+            std::sort(v.begin(), v.end());
+            std::fprintf(stderr, " %s %.2f/%.2f", kNames.at(k), v[v.size() / 2],
+                         v[std::min(v.size() - 1, v.size() * 95 / 100)]);
+            v.clear();
+        }
+        std::fputs(" ms (median/p95)\n", stderr);
+    }
+    static constexpr std::size_t kStages = 5;  // ui, record, gpu, present, frame
+    static constexpr std::array<const char*, kStages> kNames{"ui", "record", "gpu", "present",
+                                                             "frame"};
+
+private:
+    bool enabled_{false};
+    std::array<std::vector<double>, kStages> samples_;
+};
+
+double msSince(Clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+}
 
 /// Where the bundled fonts are: an explicit directory, the installed share directory next to
 /// the program, or the source tree (when run from a build directory).
@@ -343,6 +392,10 @@ public:
         info.MinImageCount = std::max<std::uint32_t>(imageCount, 2);
         info.ImageCount = std::max<std::uint32_t>(imageCount, 2);
         info.UseDynamicRendering = true;
+        // The backend sizes its vertex and index buffers to the frame's draw data exactly, so a
+        // UI that grows a little each frame (a scope filling its window) reallocated GPU memory
+        // every frame. Starting large makes that rare: 4 MB is 200 000 vertices.
+        info.MinAllocationSize = VkDeviceSize{4} << 20U;
         targetFormat_ = targetFormat;
         info.PipelineInfoMain.PipelineRenderingCreateInfo.sType =
             VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
@@ -521,12 +574,73 @@ public:
         buildAirflow();
         buildCables();
         followWeather();
-        overlays_.clear();
-        overlays_.insert(overlays_.end(), cableOverlays_.begin(), cableOverlays_.end());
-        overlays_.insert(overlays_.end(), sensorOverlays_.begin(), sensorOverlays_.end());
-        overlays_.insert(overlays_.end(), airflowOverlays_.begin(), airflowOverlays_.end());
-        renderer_.render(commands, scene_.get(), camera_, renderOptions_, overlays_);
+        // The 3D view is drawn again only when something it shows changed: a new frame of the
+        // scene, the camera, the size, the options or an overlay. The display may run at 144 Hz
+        // while the scene changes at 50 Hz, or not at all when paused; the GPU it would spend
+        // is the simulation's too (sensors), and a laptop's battery and heat.
+        // Its heat patches (megabytes) stay out of the key: heatVersion stands for them.
+        std::vector<RenderOptions::HeatPatch> heat;
+        std::swap(heat, renderOptions_.heat);
+        ViewKey key{scene_,
+                    {camera_.target[0], camera_.target[1], camera_.target[2], camera_.distance,
+                     camera_.yaw, camera_.pitch, camera_.verticalFov, camera_.nearPlane},
+                    renderer_.extent().width,
+                    renderer_.extent().height,
+                    sensorOverlayVersion_,
+                    renderOptions_};
+        std::swap(heat, renderOptions_.heat);
+        const bool moving = !airflowOverlays_.empty();  // particles move every frame
+        if (moving || !drawnKey_ || !drawnKey_->same(key)) {
+            // In this order, without copying their vertices into one list.
+            const std::array<std::span<const OverlayLines>, 3> overlays{
+                cableOverlays_, sensorOverlays_, airflowOverlays_};
+            renderer_.render(commands, scene_.get(), camera_, renderOptions_, overlays);
+            drawnKey_ = std::move(key);
+            ++viewsDrawn_;
+        }
     }
+
+    /// What the last drawn 3D view showed (see renderScene).
+    struct ViewKey {
+        std::shared_ptr<const SceneFrame> frame;
+        std::array<double, 8> camera{};
+        std::uint32_t width{0}, height{0};
+        std::uint64_t sensorOverlays{0};
+        RenderOptions options;  // without its heat patches, which heatVersion stands for
+
+        ViewKey(std::shared_ptr<const SceneFrame> f, const std::array<double, 8>& c,
+                std::uint32_t w, std::uint32_t h, std::uint64_t sensors, const RenderOptions& o)
+            : frame(std::move(f))
+            , camera(c)
+            , width(w)
+            , height(h)
+            , sensorOverlays(sensors)
+            , options(o) {}
+
+        /// Every field of RenderOptions that changes the image. A field added there must be
+        /// added here too, or a change to it shows only with the next scene frame.
+        [[nodiscard]] bool same(const ViewKey& k) const {
+            const RenderOptions& a = options;
+            const RenderOptions& b = k.options;
+            return frame == k.frame && camera == k.camera && width == k.width &&
+                   height == k.height && sensorOverlays == k.sensorOverlays && a.grid == b.grid &&
+                   a.axes == b.axes && a.sensors == b.sensors && a.follow == b.follow &&
+                   a.shading == b.shading && a.wireframeAvailable == b.wireframeAvailable &&
+                   a.realisticAvailable == b.realisticAvailable && a.season == b.season &&
+                   a.windSpeed == b.windSpeed && a.rainMmPerH == b.rainMmPerH &&
+                   a.snowMmPerH == b.snowMmPerH && a.snowCover == b.snowCover && a.wind == b.wind &&
+                   a.temperatureLow == b.temperatureLow && a.temperatureHigh == b.temperatureHigh &&
+                   a.heatVersion == b.heatVersion && a.beforeCurrent == b.beforeCurrent &&
+                   a.airflow == b.airflow && a.airflowMax == b.airflowMax &&
+                   sameValues(a.temperature, b.temperature) && sameValues(a.current, b.current) &&
+                   a.heatCovered == b.heatCovered;
+        }
+        // NaN (no value) equals NaN here, unlike with ==.
+        static bool sameValues(const std::vector<float>& a, const std::vector<float>& b) {
+            return a.size() == b.size() &&
+                   std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0;
+        }
+    };
 
     /// Every cable of the scene (RFC 0011) as scene geometry, always: its centre line, and at
     /// its radius four lines along it, so that it reads as a tube up close and stays a line
@@ -734,7 +848,11 @@ public:
         std::size_t used = 0;
         const SceneFrame* frame = scene_.get();
         if (!renderOptions_.sensors || frame == nullptr || !frame->statics) {
-            sensorOverlays_.clear();
+            if (!sensorOverlays_.empty()) {
+                sensorOverlays_.clear();
+                ++sensorOverlayVersion_;
+            }
+            sensorOverlaysStale_ = true;
             return;
         }
         const SceneStatics& statics = *frame->statics;
@@ -747,7 +865,43 @@ public:
                                        client_.watchSensor(statics.prims[i].path)});
                 }
             }
+            lidarDrawn_.clear();
+            sensorOverlaysStale_ = true;
         }
+        // Built again only when a scan or a lidar's pose changed: the scene arrives at about
+        // 50 Hz and scans at 10 Hz, the display may run at 144 Hz, and a 32-ring scan is
+        // 600 000 numbers.
+        lidarDrawn_.resize(lidars_.size());
+        bool changed = sensorOverlaysStale_;
+        for (std::size_t l = 0; l < lidars_.size(); ++l) {
+            const auto& [prim, stream] = lidars_[l];
+            LidarDrawn& drawn = lidarDrawn_[l];
+            std::shared_ptr<const PointCloud> cloud = stream->latest();
+            const Transform pose =
+                prim < frame->transforms.size() ? frame->transforms[prim] : Transform{};
+            if (cloud != drawn.cloud || pose.position != drawn.pose.position ||
+                pose.rotation != drawn.pose.rotation) {
+                changed = true;
+            }
+            if (cloud != drawn.cloud) {
+                // The fan spans the scan's bearings, which the pose does not change.
+                drawn.lowest = 1e9F;
+                drawn.highest = -1e9F;
+                for (std::uint32_t i = 0; cloud && i < cloud->count; ++i) {
+                    const float* p = &cloud->points[static_cast<std::size_t>(i) * 4];
+                    const float angle = std::atan2(p[1], p[0]);
+                    drawn.lowest = std::min(drawn.lowest, angle);
+                    drawn.highest = std::max(drawn.highest, angle);
+                }
+            }
+            drawn.cloud = std::move(cloud);
+            drawn.pose = pose;
+        }
+        if (!changed) {
+            return;
+        }
+        sensorOverlaysStale_ = false;
+        ++sensorOverlayVersion_;
         // Returns the index of a cleared batch: references into sensorOverlays_ are taken only
         // after every batch of a lidar exists, since adding one may move the others.
         const auto batch = [&](const std::array<double, 3>& origin, const ImVec4& color) {
@@ -760,12 +914,13 @@ public:
             lines.vertices.clear();  // keeps its capacity: no allocation once warmed up
             return used++;
         };
-        for (const auto& [prim, stream] : lidars_) {
-            const std::shared_ptr<const PointCloud> cloud = stream->latest();
+        for (std::size_t l = 0; l < lidars_.size(); ++l) {
+            const std::uint32_t prim = lidars_[l].first;
+            const std::shared_ptr<const PointCloud>& cloud = lidarDrawn_[l].cloud;
             if (!cloud || cloud->count == 0 || prim >= frame->transforms.size()) {
                 continue;
             }
-            const Transform& pose = frame->transforms[prim];
+            const Transform& pose = lidarDrawn_[l].pose;
             const std::array<float, 4>& q = pose.rotation;
             const auto rotate = [&q](float x, float y, float z) {
                 // v' = v + 2w (u x v) + 2 u x (u x v), u = (q.x, q.y, q.z)
@@ -780,23 +935,31 @@ public:
             const std::size_t weakBatch = batch(pose.position, kLidarAttenuated);
             std::vector<float>& strong = sensorOverlays_[strongBatch].vertices;
             std::vector<float>& weak = sensorOverlays_[weakBatch].vertices;
-            float lowest = 1e9F;
-            float highest = -1e9F;
+            const float lowest = lidarDrawn_[l].lowest;
+            const float highest = lidarDrawn_[l].highest;
+            // Sized once for every return (cut back after), then written in place.
+            constexpr std::size_t kFloatsPerCross = 18;
+            const std::size_t most = static_cast<std::size_t>(cloud->count) * kFloatsPerCross;
+            strong.resize(most);
+            weak.resize(most + (kFanSegments + 2) * 6);
+            float* strongAt = strong.data();
+            float* weakAt = weak.data();
             for (std::uint32_t i = 0; i < cloud->count; ++i) {
                 const float* p = &cloud->points[static_cast<std::size_t>(i) * 4];
-                const float angle = std::atan2(p[1], p[0]);
-                lowest = std::min(lowest, angle);
-                highest = std::max(highest, angle);
                 const std::array<float, 3> at = rotate(p[0], p[1], p[2]);
-                std::vector<float>& out = p[3] >= kLidarStrongIntensity ? strong : weak;
-                for (int axis = 0; axis < 3; ++axis) {
-                    std::array<float, 3> a = at;
-                    std::array<float, 3> b = at;
-                    a.at(axis) -= kCrossHalfM;
-                    b.at(axis) += kCrossHalfM;
-                    out.insert(out.end(), {a[0], a[1], a[2], b[0], b[1], b[2]});
+                float*& out = p[3] >= kLidarStrongIntensity ? strongAt : weakAt;
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    for (const float side : {-kCrossHalfM, kCrossHalfM}) {
+                        out[0] = at[0];
+                        out[1] = at[1];
+                        out[2] = at[2];
+                        out[axis] += side;
+                        out += 3;
+                    }
                 }
             }
+            strong.resize(static_cast<std::size_t>(strongAt - strong.data()));
+            weak.resize(static_cast<std::size_t>(weakAt - weak.data()));
             std::vector<float>& fan = weak;
             const auto edge = [&](float angle) {
                 const std::array<float, 3> end =
@@ -821,6 +984,8 @@ public:
 
     [[nodiscard]] const std::shared_ptr<const SceneFrame>& scene() const { return scene_; }
     [[nodiscard]] std::uint32_t drawCalls() const { return renderer_.lastDrawCount(); }
+    /// How many times the 3D view was drawn (it is not when nothing in it changed).
+    [[nodiscard]] std::uint64_t viewsDrawn() const { return viewsDrawn_; }
     void setCanOpenFiles(bool value) { canOpenFiles_ = value; }
     void setWorkspace(Workspace workspace) { workspace_ = workspace; }
 
@@ -1001,12 +1166,21 @@ private:
     RenderOptions renderOptions_;
     std::uint64_t lidarGeneration_{0};  // statics generation lidars_ was built from
     std::vector<std::pair<std::uint32_t, std::shared_ptr<SensorStream>>> lidars_;  // prim, frames
+    struct LidarDrawn {  // per lidar: what sensorOverlays_ was built from
+        std::shared_ptr<const PointCloud> cloud;
+        Transform pose;
+        float lowest{1e9F}, highest{-1e9F};  // the scan's bearings, rad
+    };
+    std::vector<LidarDrawn> lidarDrawn_;
+    bool sensorOverlaysStale_{true};
+    std::uint64_t sensorOverlayVersion_{0};  // counts the rebuilds of sensorOverlays_
+    std::optional<ViewKey> drawnKey_;
+    std::uint64_t viewsDrawn_{0};
     std::vector<OverlayLines> sensorOverlays_;
     std::vector<OverlayLines> airflowOverlays_;
     std::vector<OverlayLines> cableOverlays_;  // the scene's cables (RFC 0011)
     std::shared_ptr<const SignalCatalog> snowCatalog_;
     std::shared_ptr<ScopeBuffer> snowRate_, snowCover_;
-    std::vector<OverlayLines> overlays_;  // both, as drawn
     static constexpr const char* kAirField = "aero/wind_speed";
     struct Particle {
         std::array<double, 3> at{};  // region frame, m
@@ -1241,6 +1415,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             std::chrono::duration<double>(1.0 / std::max(options.recordFps, 1U)));
         const std::vector<InputEvent> input = parseInput(options.input);
         auto nextFrame = Clock::time_point{};
+        FrameProfile profile;
         std::uint32_t written = 0;
         while ((recording ? written : rendered) < wanted) {
             // With --open, wait for the requested file's scene, not the one served before it.
@@ -1257,6 +1432,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
                 exitCode = 4;
                 break;
             }
+            const auto frameStart = Clock::now();
             ui.prepare();
             applyInput(input, rendered, io);
             io.DeltaTime = 1.0F / 60.0F;
@@ -1264,7 +1440,11 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             ImGui::NewFrame();
             ui.build(0.0F);
             ImGui::Render();
+            const double uiMs = msSince(frameStart);
+            double recordMs = 0.0;
+            const auto submitStart = Clock::now();
             device->submitAndWait([&](VkCommandBuffer commands) {
+                const auto recordStart = Clock::now();
                 ui.renderScene(commands);
                 gpu::transitionImage(
                     commands, target.image, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -1273,9 +1453,14 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
                 beginUiPass(commands, target.view, extent);
                 ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commands);
                 vkCmdEndRendering(commands);
+                recordMs = msSince(recordStart);
             });
             first = false;
             if (haveScene) {
+                profile.add(0, uiMs);
+                profile.add(1, recordMs);
+                profile.add(2, msSince(submitStart) - recordMs);
+                profile.add(4, msSince(frameStart));
                 ++rendered;
                 if (recording && Clock::now() >= nextFrame) {
                     nextFrame =
@@ -1297,6 +1482,11 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             std::this_thread::sleep_for(std::chrono::milliseconds(8));
         }
 
+        profile.print("headless");
+        if (profile.enabled()) {
+            std::fprintf(stderr, "profile headless: 3D view drawn %llu times in %u frames\n",
+                         static_cast<unsigned long long>(ui.viewsDrawn()), rendered);
+        }
         if (exitCode == 0 && !options.screenshot.empty()) {
             const std::vector<std::uint8_t> pixels =
                 gpu::readbackRgba8(*device, target, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -1593,6 +1783,8 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         std::uint32_t presentedFrames = 0;
         float frameMs = 0.0F;
         auto last = Clock::now();
+        FrameProfile profile;
+        auto profiled = last;
         while (running) {
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
@@ -1619,7 +1811,9 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
                 continue;
             }
 
+            const auto waitStart = Clock::now();
             vkWaitForFences(device->device(), 1, &frameDone, VK_TRUE, UINT64_MAX);
+            profile.add(2, msSince(waitStart));
             if (rebuild) {
                 vkDeviceWaitIdle(device->device());
                 if (!createSwapchain(*device, window, swapchain)) {
@@ -1629,12 +1823,14 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
                 rebuild = false;
             }
 
+            const auto uiStart = Clock::now();
             ui.prepare();
             ImGui_ImplVulkan_NewFrame();
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
             ui.build(frameMs);
             ImGui::Render();
+            profile.add(0, msSince(uiStart));
             if (ui.takeOpenFileRequest()) {
                 static const SDL_DialogFileFilter kFilters[] = {
                     {"Robots and recordings", "urdf;sdf;xml;usd;usda;usdc;mcap"},
@@ -1675,6 +1871,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
             }
             vkResetFences(device->device(), 1, &frameDone);
 
+            const auto recordStart = Clock::now();
             vkResetCommandBuffer(commands, 0);
             VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
             beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -1690,6 +1887,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                  VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
             vkEndCommandBuffer(commands);
+            profile.add(1, msSince(recordStart));
 
             VkSemaphoreSubmitInfo waitInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
             waitInfo.semaphore = acquired;
@@ -1714,7 +1912,9 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
             present.swapchainCount = 1;
             present.pSwapchains = &swapchain.handle;
             present.pImageIndices = &imageIndex;
+            const auto presentStart = Clock::now();
             const VkResult presented = vkQueuePresentKHR(device->queue(), &present);
+            profile.add(3, msSince(presentStart));
             if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) {
                 rebuild = true;
             }
@@ -1725,8 +1925,16 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
             const auto now = Clock::now();
             frameMs = std::chrono::duration<float, std::milli>(now - last).count();
             last = now;
+            profile.add(4, frameMs);
+            if (profile.enabled() && now - profiled > std::chrono::seconds(5)) {
+                profile.print("windowed");
+                std::fprintf(stderr, "profile windowed: 3D view drawn %llu times in all\n",
+                             static_cast<unsigned long long>(ui.viewsDrawn()));
+                profiled = now;
+            }
         }
 
+        profile.print("windowed");
         vkDeviceWaitIdle(device->device());
         ImGui_ImplSDL3_Shutdown();
     }

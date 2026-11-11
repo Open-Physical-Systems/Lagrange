@@ -11,6 +11,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace lagrange::sensors {
@@ -91,17 +92,29 @@ public:
                std::uint64_t seed, std::uint64_t stepIndex, std::uint32_t entity,
                gpu::RasterImages& out);
 
+    /// apply()'s per-pixel work for the GPU (gpu::RasterCamera::setEffects, the kernel
+    /// gpu/kernels/camera/camera_model.slang): the same rays, vignetting and tables.
+    [[nodiscard]] gpu::CameraEffects gpuEffects() const;
+    /// This frame's part of it: as apply() takes `omega`, `seed`, `stepIndex` and `entity`.
+    [[nodiscard]] gpu::CameraEffectsFrame gpuFrame(const std::array<double, 3>& omega,
+                                                   std::uint64_t seed, std::uint64_t stepIndex,
+                                                   std::uint32_t entity) const;
+    /// After a frame on the GPU: auto exposure from its per-pixel `signal` (as apply() does).
+    void afterGpuFrame(std::span<const float> signal);
+
     /// The exposure time of the next frame (s); 0 without an exposure.
     [[nodiscard]] double exposureTime() const { return exposureTime_; }
     void setExposureTime(double time) { exposureTime_ = time; }
 
 private:
+    void autoExpose(double signal, std::uint64_t count);
     CameraModelConfig config_;
     bool active_{false};
     gpu::PinholeCamera render_;
     std::vector<std::array<float, 3>> rays_;  // per output pixel, (x, y, 1) before distortion
     std::vector<float> vignette_;             // per output pixel
     std::array<float, 256> decode_{};         // display value → linear
+    std::vector<std::uint8_t> encoded_;       // converter code → display value (with an exposure)
     double exposureTime_{0.0};
 };
 

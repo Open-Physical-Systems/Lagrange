@@ -832,7 +832,8 @@ float4 fsComposite(ScreenOutput input) : SV_Target
     float2 px = frame.screen.zw;
     float depth = sceneDepth.SampleLevel(uv, 0.0).r;
     float ao = occlusion(uv, depth);
-    float3 here = sceneColor.SampleLevel(uv, 0.0).rgb * ao + bloom(uv);
+    float3 glow = bloom(uv);  // once: the edge path below adds it again
+    float3 here = sceneColor.SampleLevel(uv, 0.0).rgb * ao + glow;
     float3 center = display(here);
     float lumaC = luminance(center);
     float lumaN = luminance(display(sceneColor.SampleLevel(uv + float2(0, -px.y), 0.0).rgb));
@@ -853,7 +854,7 @@ float4 fsComposite(ScreenOutput input) : SV_Target
                                  sceneColor.SampleLevel(uv + dir * 0.5, 0.0).rgb);
     float lumaB = luminance(display(b));
     float3 smoothed = (lumaB < low || lumaB > high) ? a : b;
-    return float4(display(smoothed * ao + bloom(uv)) + falling(uv, depth), 1.0);
+    return float4(display(smoothed * ao + glow) + falling(uv, depth), 1.0);
 }
 
 // --- water ----------------------------------------------------------------------------------

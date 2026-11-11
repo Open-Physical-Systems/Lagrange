@@ -1,6 +1,9 @@
 // An automotive radar by ray launching (Radar.hpp).
+#include "kinds/KindModule.hpp"
+#include "lagrange/gpu/RayCaster.hpp"
 #include "lagrange/random/Philox.hpp"
 #include "lagrange/sensors/Radar.hpp"
+#include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
@@ -9,6 +12,7 @@
 #include <limits>
 #include <map>
 #include <numbers>
+#include <tbb/parallel_for.h>
 #include <tuple>
 
 namespace lagrange::sensors {
@@ -51,17 +55,22 @@ Vec3 cross(const Vec3& a, const Vec3& b) {
 
 class Radar final : public IModule {
 public:
-    Radar(const World& world, std::uint32_t sensor, bool groundTruth)
-        : groundTruth_(groundTruth)
+    Radar(const World& world, std::uint32_t sensor, bool groundTruth,
+          std::shared_ptr<gpu::RayContext> rayContext)
+        : rayContext_(std::move(rayContext))
+        , groundTruth_(groundTruth)
         , sensor_(sensor)
         , name_(world.sensors.names[sensor])
         , label_("radar_" + world.sensors.names[sensor])
         , body_(world.sensors.body[sensor].index)
         , mount_(world.sensors.poseInBody[sensor])
-        , step_(Duration{static_cast<std::int64_t>(
-              std::llround(1e9 / std::max(world.sensors.rateHz[sensor], 1e-3)))}) {}
+        , step_(kinds::kindPeriod(world.sensors.rateHz[sensor])) {}
 
     [[nodiscard]] ModuleInfo info() const override {
+        if (rayContext_) {
+            // The rays on the GPU (float ranges): not bit-reproducible, Tier 1 and up.
+            return {"sensors", label_, 0, 1, groundTruth_, false, CapabilityTier::Tier1};
+        }
         return {"sensors", label_, 0, 1, groundTruth_, true, CapabilityTier::Tier0};
     }
     [[nodiscard]] Duration preferredStep() const override { return step_; }
@@ -110,6 +119,8 @@ public:
         rest_ = restPoses(raw);
         poses_.assign(moving.size(), SignalId{});
         twists_.assign(moving.size(), SignalId{});
+        bodyTwist_.assign(moving.size(), {});
+        bodyOrigin_.assign(moving.size(), {});
         const auto watch = [&](std::uint32_t b) {
             if (moving[b] && !poses_[b].valid()) {
                 poses_[b] = d.input(spec("body/" + raw.bodies.names[b] + "/pose", SignalType::Pose,
@@ -170,6 +181,25 @@ public:
         }
         placed_.resize(shapes_.size());
         casterShapes_.resize(shapes_.size());
+        hits_.resize(rays_.size());
+        echoes_.resize(rays_.size());
+        if (rayContext_ && !groundTruth_) {
+            hullFaces_.assign(shapes_.size(), {});
+            for (std::size_t k = 0; k < shapes_.size(); ++k) {
+                if (shapes_[k].hull != nullptr) {
+                    facePlanes(*shapes_[k].hull, hullFaces_[k]);
+                }
+            }
+            std::vector<std::array<float, 3>> directions(rays_.size());
+            for (std::size_t i = 0; i < rays_.size(); ++i) {
+                directions[i] = {static_cast<float>(rays_[i].direction[0]),
+                                 static_cast<float>(rays_[i].direction[1]),
+                                 static_cast<float>(rays_[i].direction[2])};
+            }
+            scan_ = std::make_unique<gpu::RayScan>(rayContext_, directions);
+            castShapes_.resize(shapes_.size());
+            gpuHits_.resize(rays_.size());
+        }
         write(bus, {});
         return {};
     }
@@ -188,60 +218,64 @@ public:
                                        shapes_[k].pose);
             casterShapes_[k] = {shapes_[k].type, shapes_[k].size, placed_[k], shapes_[k].hull};
         }
-        caster_.update(casterShapes_);
+        // Each ray's hit: on the GPU (float ranges), else on the CPU in parallel. Both give the
+        // distance and the shape, ray by ray; what follows does not depend on the order.
+        if (scan_) {
+            for (std::size_t k = 0; k < shapes_.size(); ++k) {
+                gpu::CastShape& out = castShapes_[k];
+                out.type = static_cast<std::uint32_t>(shapes_[k].type);
+                out.size = shapes_[k].size;
+                for (std::size_t i = 0; i < 3; ++i) {
+                    out.position[i] = placed_[k].position[i] - sensorPose.position[i];
+                }
+                out.orientation = placed_[k].orientation;
+                out.faces = hullFaces_[k];
+            }
+            scan_->cast(castShapes_, sensorPose.orientation, gpuHits_);
+            for (std::size_t i = 0; i < rays_.size(); ++i) {
+                hits_[i] = gpuHits_[i].shape == gpu::kNoShape
+                               ? services::RayHit{}
+                               : services::RayHit{static_cast<double>(gpuHits_[i].range),
+                                                  gpuHits_[i].shape};
+            }
+        } else {
+            caster_.update(casterShapes_);
+            tbb::parallel_for(std::size_t{0}, rays_.size(), [&](std::size_t i) {
+                hits_[i] = caster_.castHit(sensorPose.position,
+                                           rotate(sensorPose.orientation, rays_[i].direction));
+            });
+        }
+        // The moving bodies' poses and twists, read once for the echoes below.
+        for (std::size_t b = 0; b < poses_.size(); ++b) {
+            if (twists_[b].valid()) {
+                const std::span<const double> t = bus.readN(twists_[b]);
+                bodyTwist_[b] = {t[0], t[1], t[2], t[3], t[4], t[5]};
+                bodyOrigin_[b] = pose(bus, static_cast<std::uint32_t>(b)).position;
+            }
+        }
+        // Each ray's echo, independently (in parallel), then summed in ray order, so the CPU
+        // reference's sums are the same numbers in the same order as one loop would give.
+        tbb::parallel_for(std::size_t{0}, rays_.size(), [&](std::size_t i) {
+            echoes_[i] = echo(rays_[i], hits_[i], sensorPose, sensorVelocity);
+        });
         // Echoes by object and range cell (an object's angular extent is one detection).
         struct Cell {
             double power{0.0};                                               // Σσ (m²)
             double range{0.0}, azimuth{0.0}, elevation{0.0}, velocity{0.0};  // σ-weighted sums
         };
         std::map<std::pair<int, long>, Cell> cells;
-        for (const Ray& ray : rays_) {
-            const Vec3 dir = rotate(sensorPose.orientation, ray.direction);
-            const services::RayHit hit = caster_.castHit(sensorPose.position, dir);
-            if (!hit.hit() || hit.distance > maxRange_) {
+        for (std::size_t i = 0; i < rays_.size(); ++i) {
+            const Echo& e = echoes_[i];
+            if (!e.valid) {
                 continue;
             }
-            const Shape& shape = shapes_[hit.shape];
-            // The ground plane is clutter, not a target: a real radar's CFAR and clutter map
-            // remove the road surface's return, which this model does not simulate.
-            if (shape.type == ShapeType::Plane) {
-                continue;
-            }
-            const Vec3 p{sensorPose.position[0] + dir[0] * hit.distance,
-                         sensorPose.position[1] + dir[1] * hit.distance,
-                         sensorPose.position[2] + dir[2] * hit.distance};
-            // Incidence from the surface normal: the gradient of the distance just outside.
-            const Vec3 out{p[0] - dir[0] * kBackOff, p[1] - dir[1] * kBackOff,
-                           p[2] - dir[2] * kBackOff};
-            const ConvexHull* hull = shape.hull;
-            const auto distance = [&](const Vec3& q) {
-                return distanceToShape(shape.type, shape.size, placed_[hit.shape], q, hull);
-            };
-            Vec3 normal{distance({out[0] + kNormalStep, out[1], out[2]}) -
-                            distance({out[0] - kNormalStep, out[1], out[2]}),
-                        distance({out[0], out[1] + kNormalStep, out[2]}) -
-                            distance({out[0], out[1] - kNormalStep, out[2]}),
-                        distance({out[0], out[1], out[2] + kNormalStep}) -
-                            distance({out[0], out[1], out[2] - kNormalStep})};
-            const double n = std::sqrt(dot(normal, normal));
-            const double cosine = n > 0.0 ? std::abs(dot(normal, dir)) / n : 1.0;
-            const double solidAngle = dAzimuth_ * dElevation_ * std::cos(ray.elevation);
-            const double rcs = shape.density * hit.distance * hit.distance * solidAngle * cosine;
-            if (rcs <= 0.0) {
-                continue;
-            }
-            // Radial velocity of the hit point relative to the radar (receding positive).
-            const Vec3 target =
-                shape.moving < 0 ? Vec3{}
-                                 : pointVelocity(bus, static_cast<std::uint32_t>(shape.moving), p);
-            const double radial = dot(sub(target, sensorVelocity), dir);
-            const int object = shape.moving >= 0 ? shape.moving : -1 - static_cast<int>(hit.shape);
-            Cell& cell = cells[{object, std::lround(hit.distance / rangeResolution_)}];
-            cell.power += rcs;
-            cell.range += rcs * hit.distance;
-            cell.azimuth += rcs * ray.azimuth;
-            cell.elevation += rcs * ray.elevation;
-            cell.velocity += rcs * radial;
+            const Ray& ray = rays_[i];
+            Cell& cell = cells[{e.object, std::lround(e.distance / rangeResolution_)}];
+            cell.power += e.rcs;
+            cell.range += e.rcs * e.distance;
+            cell.azimuth += e.rcs * ray.azimuth;
+            cell.elevation += e.rcs * ray.elevation;
+            cell.velocity += e.rcs * e.radial;
         }
         std::vector<std::array<double, kRadarFields>> found;
         for (const auto& [key, cell] : cells) {
@@ -286,6 +320,71 @@ private:
         double density;
     };
 
+    /// One ray's echo: its cross-section (0: none), range, radial velocity and object.
+    struct Echo {
+        bool valid{false};
+        double rcs{0.0};
+        double distance{0.0};
+        double radial{0.0};
+        int object{0};
+    };
+
+    Echo echo(const Ray& ray, const services::RayHit& hit, const Pose& sensorPose,
+              const Vec3& sensorVelocity) const {
+        const Vec3 dir = rotate(sensorPose.orientation, ray.direction);
+        if (!hit.hit() || hit.distance > maxRange_) {
+            return {};
+        }
+        const Shape& shape = shapes_[hit.shape];
+        // The ground plane is clutter, not a target: a real radar's CFAR and clutter map
+        // remove the road surface's return, which this model does not simulate.
+        if (shape.type == ShapeType::Plane) {
+            return {};
+        }
+        const Vec3 p{sensorPose.position[0] + dir[0] * hit.distance,
+                     sensorPose.position[1] + dir[1] * hit.distance,
+                     sensorPose.position[2] + dir[2] * hit.distance};
+        // Incidence from the surface normal: the gradient of the distance just outside.
+        const Vec3 out{p[0] - dir[0] * kBackOff, p[1] - dir[1] * kBackOff,
+                       p[2] - dir[2] * kBackOff};
+        const ConvexHull* hull = shape.hull;
+        const auto distance = [&](const Vec3& q) {
+            return distanceToShape(shape.type, shape.size, placed_[hit.shape], q, hull);
+        };
+        Vec3 normal{distance({out[0] + kNormalStep, out[1], out[2]}) -
+                        distance({out[0] - kNormalStep, out[1], out[2]}),
+                    distance({out[0], out[1] + kNormalStep, out[2]}) -
+                        distance({out[0], out[1] - kNormalStep, out[2]}),
+                    distance({out[0], out[1], out[2] + kNormalStep}) -
+                        distance({out[0], out[1], out[2] - kNormalStep})};
+        const double n = std::sqrt(dot(normal, normal));
+        const double cosine = n > 0.0 ? std::abs(dot(normal, dir)) / n : 1.0;
+        const double solidAngle = dAzimuth_ * dElevation_ * std::cos(ray.elevation);
+        const double rcs = shape.density * hit.distance * hit.distance * solidAngle * cosine;
+        if (rcs <= 0.0) {
+            return {};
+        }
+        // Radial velocity of the hit point relative to the radar (receding positive).
+        const Vec3 target = shape.moving < 0
+                                ? Vec3{}
+                                : cachedPointVelocity(static_cast<std::uint32_t>(shape.moving), p);
+        const double radial = dot(sub(target, sensorVelocity), dir);
+        const int object = shape.moving >= 0 ? shape.moving : -1 - static_cast<int>(hit.shape);
+        return {true, rcs, hit.distance, radial, object};
+    }
+
+    /// pointVelocity() from the twists and poses read at the start of the step.
+    Vec3 cachedPointVelocity(std::uint32_t body, const Vec3& p) const {
+        if (!twists_[body].valid()) {
+            return {};
+        }
+        const std::array<double, 6>& t = bodyTwist_[body];
+        const Vec3 w{t[3], t[4], t[5]};
+        const Vec3 r = sub(p, bodyOrigin_[body]);
+        const Vec3 spin = cross(w, r);
+        return {t[0] + spin[0], t[1] + spin[1], t[2] + spin[2]};
+    }
+
     Pose pose(const SignalBus& bus, std::uint32_t body) const {
         if (!poses_[body].valid()) {
             return rest_[body];
@@ -317,6 +416,7 @@ private:
         bus.write(count_, static_cast<double>(found.size()));
     }
 
+    std::shared_ptr<gpu::RayContext> rayContext_;  // null: rays on the CPU
     bool groundTruth_;
     std::uint32_t sensor_;
     std::string name_;
@@ -336,6 +436,14 @@ private:
     std::vector<Pose> placed_;
     std::vector<ShapeCaster::Shape> casterShapes_;
     ShapeCaster caster_;
+    std::vector<services::RayHit> hits_;
+    std::vector<Echo> echoes_;
+    std::vector<std::array<double, 6>> bodyTwist_;
+    std::vector<Vec3> bodyOrigin_;
+    std::unique_ptr<gpu::RayScan> scan_;
+    std::vector<gpu::CastShape> castShapes_;
+    std::vector<gpu::CastHit> gpuHits_;
+    std::vector<std::vector<std::array<double, 4>>> hullFaces_;
     SignalId detections_, count_;
 };
 
@@ -349,8 +457,9 @@ double radarSnr(double txPower, double gain, double frequency, double rcs, doubl
            (fourPi * fourPi * fourPi * std::pow(range, 4) * noiseFloor);
 }
 
-std::unique_ptr<IModule> createRadar(const World& world, std::uint32_t sensor, bool groundTruth) {
-    return std::make_unique<Radar>(world, sensor, groundTruth);
+std::unique_ptr<IModule> createRadar(const World& world, std::uint32_t sensor, bool groundTruth,
+                                     std::shared_ptr<gpu::RayContext> rayContext) {
+    return std::make_unique<Radar>(world, sensor, groundTruth, std::move(rayContext));
 }
 
 }  // namespace lagrange::sensors

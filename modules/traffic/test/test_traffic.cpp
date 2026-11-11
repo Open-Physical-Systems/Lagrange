@@ -6,6 +6,7 @@
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/traffic/Traffic.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <map>
 #include <memory>
@@ -50,6 +51,23 @@ Model cityBlock(const Population& population) {
     EXPECT_EQ(made[0], population.vehicles);
     EXPECT_EQ(made[1], population.pedestrians);
     return std::move(*model);
+}
+
+// QA 2026-11-12: --traffic vehicles=100000,pedestrians=100000 spent 40 s trying to place agents
+// the lanes had no room for before the run loaded. It stops once the lanes are full.
+TEST(CityBlock, AskingForMoreAgentsThanFitStopsWhenTheLanesAreFull) {
+    auto network = opendrive::read(LAGRANGE_TEST_CITY_XODR);
+    ASSERT_TRUE(network) << network.error();
+    auto model = opendrive::toModel(*network);
+    ASSERT_TRUE(model) << model.error();
+    const auto started = std::chrono::steady_clock::now();
+    const auto made = addAgents(*model, {1'000'000, 1'000'000, 1}, {});
+    const double seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    EXPECT_GT(made[0], 0);
+    EXPECT_LT(made[0], 1000);
+    EXPECT_LT(made[1], 1000);
+    EXPECT_LT(seconds, 5.0) << "it gave up once the lanes were full";
 }
 
 struct Run {

@@ -424,32 +424,45 @@ Device::~Device() {
 }
 
 void Device::submitAndWait(const std::function<void(VkCommandBuffer)>& record) const {
+    Submission submission = submit(record);
+    wait(submission);
+}
+
+Device::Submission Device::submit(const std::function<void(VkCommandBuffer)>& record) const {
     VkCommandBufferAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     allocateInfo.commandPool = commandPool_;
     allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     allocateInfo.commandBufferCount = 1;
-    VkCommandBuffer commands = VK_NULL_HANDLE;
-    vkAllocateCommandBuffers(device_, &allocateInfo, &commands);
+    Submission submission;
+    vkAllocateCommandBuffers(device_, &allocateInfo, &submission.commands);
 
     VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(commands, &beginInfo);
-    record(commands);
-    vkEndCommandBuffer(commands);
+    vkBeginCommandBuffer(submission.commands, &beginInfo);
+    record(submission.commands);
+    vkEndCommandBuffer(submission.commands);
 
     VkCommandBufferSubmitInfo commandInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
-    commandInfo.commandBuffer = commands;
-    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-    submit.commandBufferInfoCount = 1;
-    submit.pCommandBufferInfos = &commandInfo;
+    commandInfo.commandBuffer = submission.commands;
+    VkSubmitInfo2 info{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    info.commandBufferInfoCount = 1;
+    info.pCommandBufferInfos = &commandInfo;
 
     VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-    VkFence fence = VK_NULL_HANDLE;
-    vkCreateFence(device_, &fenceInfo, nullptr, &fence);
-    vkQueueSubmit2(queue_, 1, &submit, fence);
-    vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
-    vkDestroyFence(device_, fence, nullptr);
-    vkFreeCommandBuffers(device_, commandPool_, 1, &commands);
+    vkCreateFence(device_, &fenceInfo, nullptr, &submission.fence);
+    vkQueueSubmit2(queue_, 1, &info, submission.fence);
+    return submission;
+}
+
+void Device::wait(Submission& submission) const {
+    if (submission.fence != VK_NULL_HANDLE) {
+        vkWaitForFences(device_, 1, &submission.fence, VK_TRUE, UINT64_MAX);
+        vkDestroyFence(device_, submission.fence, nullptr);
+    }
+    if (submission.commands != VK_NULL_HANDLE) {
+        vkFreeCommandBuffers(device_, commandPool_, 1, &submission.commands);
+    }
+    submission = {};
 }
 
 }  // namespace lagrange::gpu

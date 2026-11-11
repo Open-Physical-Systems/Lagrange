@@ -6,6 +6,7 @@
 //   sim.read("body/base_link/pose")
 #include "lagrange/server/Server.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -33,9 +34,11 @@ public:
     Simulation(const std::optional<std::string>& robot, const std::optional<std::string>& world,
                const std::optional<std::string>& profile, const std::string& lidar,
                const std::optional<std::vector<double>>& spawn,
-               const std::optional<std::array<int, 3>>& traffic, bool jointControl) {
+               const std::optional<std::array<int, 3>>& traffic, bool jointControl,
+               const std::vector<std::string>& sensorFaults) {
         lagrange::server::ServerOptions options;
         options.jointControl = jointControl;
+        options.sensorFaults = sensorFaults;     // checked by load(), as --sensor-fault
         options.robotPath = robot.value_or("");  // None: an empty run to spawn robots into
         if (spawn) {
             options.spawn = poseOf(*spawn, "spawn");
@@ -65,6 +68,7 @@ public:
             text << in.rdbuf();
             yaml = text.str();
             options.stageName = stageOf(yaml);
+            options.profileFollows = true;
             options.profileSchemaPath = schemaPath();
         }
         server_ = std::make_unique<lagrange::server::Server>(options);
@@ -79,6 +83,12 @@ public:
     }
 
     void stepUntil(double seconds) {
+        // A time that does not fit SimTime's nanoseconds (or NaN) would convert to nonsense and
+        // silently step nothing.
+        constexpr double kLatestSeconds = 9.2e9;  // below INT64_MAX ns
+        if (!(seconds <= kLatestSeconds)) {
+            throw std::invalid_argument("step_until needs a finite time in s, at most 9.2e9");
+        }
         const lagrange::Status status = [&] {
             const nb::gil_scoped_release release;  // pure C++: let other Python threads run
             return server_->stepUntil(
@@ -109,9 +119,72 @@ public:
     [[nodiscard]] std::vector<double> read(const std::string& name) const {
         std::vector<double> values = server_->read(name);
         if (values.empty()) {
+            if (components(name)) {
+                throw nb::type_error(
+                    (name + " has no numbers (an image: read it with image())").c_str());
+            }
             throw nb::key_error(("no signal " + name).c_str());
         }
         return values;
+    }
+
+    /// The signal's components, or nullopt for an unknown name (0 for an image).
+    [[nodiscard]] std::optional<std::uint32_t> components(const std::string& name) const {
+        for (const auto& signal : server_->signals()) {
+            if (signal.name == name) {
+                return signal.components;
+            }
+        }
+        return std::nullopt;
+    }
+
+    /// The latest frame of an image signal as a numpy array: rgba8 (height, width, 4) uint8,
+    /// rgb8 (h, w, 3) uint8, r8 (h, w) uint8, r16u (h, w) uint16, r32f (h, w) float32 (a depth
+    /// in m, a temperature in K, ...), r32u (h, w) uint32. None before the first frame.
+    [[nodiscard]] nb::object image(const std::string& name) const {
+        const std::shared_ptr<const lagrange::Buffer> buffer = server_->readImage(name);
+        if (!buffer) {
+            // Why not (looked up only now: signals() lists every signal).
+            const std::optional<std::uint32_t> count = components(name);
+            if (!count) {
+                throw nb::key_error(("no signal " + name).c_str());
+            }
+            if (*count != 0) {
+                throw nb::type_error((name + " is not an image (read it with read())").c_str());
+            }
+            return nb::none();
+        }
+        struct Layout {
+            const char* encoding;
+            const char* dtype;
+            std::size_t channels, bytesPerPixel;
+        };
+        static constexpr std::array<Layout, 6> kLayouts{{{"rgba8", "uint8", 4, 4},
+                                                         {"rgb8", "uint8", 3, 3},
+                                                         {"r8", "uint8", 1, 1},
+                                                         {"r16u", "<u2", 1, 2},
+                                                         {"r32f", "<f4", 1, 4},
+                                                         {"r32u", "<u4", 1, 4}}};
+        for (const Layout& layout : kLayouts) {
+            if (buffer->encoding != layout.encoding) {
+                continue;
+            }
+            const std::size_t h = buffer->height;
+            const std::size_t w = buffer->width;
+            if (buffer->bytes.size() != h * w * layout.bytesPerPixel) {
+                throw std::runtime_error(name + ": the frame's size does not match its encoding");
+            }
+            const nb::module_ np = nb::module_::import_("numpy");
+            const nb::bytes raw(reinterpret_cast<const char*>(buffer->bytes.data()),
+                                buffer->bytes.size());
+            const nb::object shape =
+                layout.channels == 1 ? nb::make_tuple(h, w) : nb::make_tuple(h, w, layout.channels);
+            return np.attr("frombuffer")(raw, np.attr("dtype")(layout.dtype))
+                .attr("reshape")(shape)
+                .attr("copy")();
+        }
+        throw std::runtime_error(name + ": encoding " + buffer->encoding +
+                                 " has no numpy layout here");
     }
 
     bool commandJoint(const std::string& joint, const std::string& mode, double value) {
@@ -174,6 +247,11 @@ private:
         if (xyzYaw.size() < 2 || xyzYaw.size() > 4) {
             throw std::invalid_argument(std::string(what) + " is (x, y[, z[, yaw]])");
         }
+        for (const double v : xyzYaw) {
+            if (!std::isfinite(v)) {
+                throw std::invalid_argument(std::string(what) + " must be finite numbers");
+            }
+        }
         lagrange::Pose pose;
         pose.position = {xyzYaw[0], xyzYaw[1], xyzYaw.size() > 2 ? xyzYaw[2] : 0.0};
         const double yaw = xyzYaw.size() > 3 ? xyzYaw[3] : 0.0;
@@ -214,9 +292,11 @@ NB_MODULE(_lagrange, m) {
         .def(nb::init<const std::optional<std::string>&, const std::optional<std::string>&,
                       const std::optional<std::string>&, const std::string&,
                       const std::optional<std::vector<double>>&,
-                      const std::optional<std::array<int, 3>>&, bool>(),
+                      const std::optional<std::array<int, 3>>&, bool,
+                      const std::vector<std::string>&>(),
              "robot"_a, "world"_a = nb::none(), "profile"_a = nb::none(), "lidar"_a = "cpu",
-             "spawn"_a = nb::none(), "traffic"_a = nb::none(), "joint_control"_a = false)
+             "spawn"_a = nb::none(), "traffic"_a = nb::none(), "joint_control"_a = false,
+             "sensor_faults"_a = std::vector<std::string>{})
         .def("spawn", &Simulation::spawnRobot, "path"_a, "name"_a = "",
              "at"_a = std::vector<double>{0.0, 0.0},
              "Add a robot to the run at (x, y[, z[, yaw]]); returns its entity name. In a run "
@@ -241,6 +321,11 @@ NB_MODULE(_lagrange, m) {
         .def_prop_ro("time", &Simulation::time, "Simulated time (s).")
         .def("read", &Simulation::read, "name"_a,
              "Latest value of a signal (all its components). KeyError for an unknown name.")
+        .def("image", &Simulation::image, "name"_a,
+             "Latest frame of an image signal (a camera's sensor/<n>/image or depth, a sensor "
+             "kind's sensor/<n>/<q>) as a numpy array: rgba8 (height, width, 4) uint8, r32f "
+             "(height, width) float32, r32u uint32, ... None before the first frame (the "
+             "sensors domain on ground truth renders nothing). KeyError for an unknown name.")
         .def("signals", &Simulation::signals,
              "Every signal on the bus: dicts with name, unit and components.")
         .def("bodies", &Simulation::bodies)

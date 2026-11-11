@@ -45,6 +45,8 @@ d.output({.name = "env/extinction/field",     .type = SignalType::Field3D, .unit
 d.output({.name = "env/rain_rate",         .type = SignalType::Scalar,  .unit = units::m_per_s});
 d.output({.name = "env/radar_attenuation_77ghz", .type = SignalType::Scalar, .unit = units::per_m});
 d.output({.name = "env/friction_scale",    .type = SignalType::Scalar,  .unit = units::one});
+d.output({.name = "env/dust/concentration",   .type = SignalType::Scalar, .unit = units::kg_per_m3});  // the air's own dust (particle_sensor)
+d.output({.name = "env/dust/median_diameter", .type = SignalType::Scalar, .unit = units::m});
 for (auto& s : world.instancesOf("SensorAPI_1"))
     d.output({.name = fmt("sensor/{}/contamination", name(s)), .type = SignalType::Scalar, .unit = units::one});
 ```

@@ -45,6 +45,11 @@ const char* toString(ConnectionState state) {
 struct ViewerClient::Worker {
     proto::Connection connection;
     proto::Backoff backoff;
+    // Until the first connection, for kStartingRetryWindow: a server that is starting (the
+    // `lagrange` command starts both at once) is tried every kStartingRetry, not after a backoff
+    // that has grown to seconds by the time it listens.
+    bool everConnected{false};
+    std::chrono::steady_clock::time_point started{std::chrono::steady_clock::now()};
     SceneBuilder builder;
     ConnectionInfo info;
     ServerStatus status;
@@ -314,6 +319,25 @@ std::shared_ptr<SensorStream> ViewerClient::watchSensor(const std::string& name)
     return sensors_.back();
 }
 
+void ViewerClient::unwatchSensor(const std::string& name) {
+    {
+        const std::lock_guard lock(sensorMutex_);
+        const auto it = std::ranges::find_if(
+            sensors_,
+            [&name](const std::shared_ptr<SensorStream>& s) { return s->name() == name; });
+        if (it == sensors_.end()) {
+            return;
+        }
+        sensors_.erase(it);
+    }
+    auto envelope = std::make_unique<v1::Envelope>();
+    envelope->mutable_command()->set_request_id(nextRequestId_++);
+    v1::SubscribeSensor* subscribe = envelope->mutable_command()->mutable_subscribe_sensor();
+    subscribe->set_sensor(name);
+    subscribe->set_enabled(false);
+    enqueue(std::move(envelope));
+}
+
 void ViewerClient::subscribeSensors() {
     std::vector<std::string> names;
     {
@@ -376,22 +400,93 @@ void ViewerClient::handleSensorFrame(const v1::Envelope& envelope) {
     ++stream->frames_;
 }
 
-void ViewerClient::handleImage(const v1::SensorFrame& frame, SensorStream& stream) {
+bool imageToRgba(const std::string& encoding, std::uint32_t width, std::uint32_t height,
+                 std::string_view bytes, std::vector<std::uint8_t>& rgba) {
     constexpr std::uint32_t kMaxSide = 16'384;  // as the camera module allows
-    // The message comes from the network: check every size before touching the bytes.
+    if (width == 0 || height == 0 || width > kMaxSide || height > kMaxSide) {
+        return false;
+    }
+    const std::size_t pixels = std::size_t{width} * height;
+    const auto* in = reinterpret_cast<const std::uint8_t*>(bytes.data());
+    if (encoding == "rgba8") {
+        if (bytes.size() != pixels * 4) {
+            return false;
+        }
+        rgba.assign(in, in + bytes.size());
+        return true;
+    }
+    rgba.assign(pixels * 4, 255);
+    if (encoding == "rgb8" || encoding == "r8" || encoding == "mono8") {
+        const std::size_t channels = encoding == "rgb8" ? 3 : 1;
+        if (bytes.size() != pixels * channels) {
+            return false;
+        }
+        for (std::size_t p = 0; p < pixels; ++p) {
+            for (std::size_t c = 0; c < 3; ++c) {
+                rgba[p * 4 + c] = in[p * channels + (channels == 3 ? c : 0)];
+            }
+        }
+        return true;
+    }
+    if (bytes.size() != pixels * 4) {
+        return false;
+    }
+    if (encoding == "r32f") {
+        std::vector<float> values(pixels);
+        std::memcpy(values.data(), bytes.data(), bytes.size());
+        float lo = std::numeric_limits<float>::infinity();
+        float hi = -lo;
+        for (const float v : values) {
+            if (std::isfinite(v)) {
+                lo = std::min(lo, v);
+                hi = std::max(hi, v);
+            }
+        }
+        const float span = hi > lo ? hi - lo : 1.0F;
+        for (std::size_t p = 0; p < pixels; ++p) {
+            const float v = values[p];
+            // Near is bright, far dark (a depth image as people read it); nothing is black.
+            const auto g = std::isfinite(v) ? static_cast<std::uint8_t>(std::lround(
+                                                  40.0F + 215.0F * (1.0F - (v - lo) / span)))
+                                            : std::uint8_t{0};
+            rgba[p * 4] = g;
+            rgba[p * 4 + 1] = g;
+            rgba[p * 4 + 2] = g;
+        }
+        return true;
+    }
+    if (encoding == "r32u") {
+        for (std::size_t p = 0; p < pixels; ++p) {
+            std::uint32_t id = 0;
+            std::memcpy(&id, bytes.data() + p * 4, sizeof(id));
+            if (id == 0xFFFF'FFFFU) {
+                rgba[p * 4] = rgba[p * 4 + 1] = rgba[p * 4 + 2] = 0;
+                continue;
+            }
+            // A colour per id (Knuth's multiplicative hash), never too dark to see.
+            const std::uint32_t h = id * 2'654'435'761U;
+            rgba[p * 4] = static_cast<std::uint8_t>(64 + (h >> 24U) % 192);
+            rgba[p * 4 + 1] = static_cast<std::uint8_t>(64 + (h >> 16U) % 192);
+            rgba[p * 4 + 2] = static_cast<std::uint8_t>(64 + (h >> 8U) % 192);
+        }
+        return true;
+    }
+    return false;
+}
+
+void ViewerClient::handleImage(const v1::SensorFrame& frame, SensorStream& stream) {
+    // The message comes from the network: imageToRgba checks every size before the bytes.
     const v1::ImageData& image = frame.image();
-    const std::string& bytes = image.data().inline_();
-    if (image.encoding() != "rgba8" || image.width() == 0 || image.height() == 0 ||
-        image.width() > kMaxSide || image.height() > kMaxSide ||
-        bytes.size() != std::size_t{image.width()} * image.height() * 4) {
+    auto out = std::make_shared<SensorImage>();
+    if (!imageToRgba(image.encoding(), image.width(), image.height(), image.data().inline_(),
+                     out->rgba)) {
         ++stream.rejected_;
         return;
     }
-    auto out = std::make_shared<SensorImage>();
     out->simTimeNs = frame.sim_time().ns();
     out->width = image.width();
     out->height = image.height();
-    out->rgba.assign(bytes.begin(), bytes.end());
+    out->encoding = image.encoding();
     stream.latestImage_.store(std::move(out));
     ++stream.frames_;
 }
@@ -839,6 +934,7 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
             w.info.canSeek = hello.capabilities().can_seek();
             w.info.canStep = hello.capabilities().can_step();
             w.backoff.reset();
+            w.everConnected = true;
             // The server sends its console history again on every connection.
             logs_.store(std::make_shared<const LogBook>());
             subscribeSensors();  // a new connection knows nothing of earlier requests
@@ -911,8 +1007,14 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
                 // the list. Arrays may be wide (a 3D lidar has a range per beam: 128 × 4096 is a
                 // big one) but are bounded; the scope keeps a buffer per component it plots.
                 constexpr std::uint32_t kMaxComponents = 1U << 20U;
+                // Images, point clouds, fields and bytes have no samples (0 components): they
+                // stay in the list, so that the ids after them stay dense.
+                const bool handle = source.type() == v1::SIGNAL_TYPE_IMAGE ||
+                                    source.type() == v1::SIGNAL_TYPE_POINT_CLOUD ||
+                                    source.type() == v1::SIGNAL_TYPE_FIELD3D ||
+                                    source.type() == v1::SIGNAL_TYPE_BYTES;
                 if (source.id() != catalog->signals.size() || source.native_dt_ns() <= 0 ||
-                    source.components() == 0 || source.components() > kMaxComponents) {
+                    (source.components() == 0 && !handle) || source.components() > kMaxComponents) {
                     break;
                 }
                 SignalInfo info;
@@ -925,6 +1027,7 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
                                            source.component_names().end());
                 info.dtNs = source.native_dt_ns();
                 info.prim = source.prim();
+                info.image = source.type() == v1::SIGNAL_TYPE_IMAGE;
                 catalog->signals.push_back(std::move(info));
             }
             w.catalog = catalog;
@@ -1264,7 +1367,11 @@ void ViewerClient::run() {
             }
             w.connection =
                 proto::Connection::startConnect(endpoint_, ec, proto::kDefaultMaxFrameSize, tls_);
-            w.nextAttempt = now + w.backoff.next();
+            constexpr std::chrono::milliseconds kStartingRetry{50};
+            constexpr std::chrono::seconds kStartingRetryWindow{20};
+            w.nextAttempt = !w.everConnected && now - w.started < kStartingRetryWindow
+                                ? now + kStartingRetry
+                                : now + w.backoff.next();
             if (w.connection.state() == proto::Connection::State::Closed) {
                 if (w.info.state != ConnectionState::Refused) {
                     publish(ConnectionState::Disconnected,

@@ -39,6 +39,7 @@ import socket
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -356,6 +357,7 @@ RUN_KEYS = {
     "control",
     "water",
     "sensor_timing",
+    "sensor_faults",
 }
 SITE_KEYS = {
     "gravity",
@@ -383,6 +385,30 @@ def is_profile(path: str) -> bool:
     except Exception:
         return False
     return isinstance(content, dict) and "domains" in content
+
+
+FAULT_KEYS = ("at", "for", "probability", "nan", "value", "rate", "sigma", "component")
+
+
+def sensor_fault_arg(fault: object, fail: Callable[[str], NoReturn]) -> str:
+    """One sensor_faults entry as --sensor-fault takes it: the same text, or a map of
+    {sensor, quantity, mode, at, for, ...} (sensors.md "Sensor faults (as built)")."""
+    if isinstance(fault, str):
+        return fault
+    if not isinstance(fault, dict) or "sensor" not in fault or "mode" not in fault:
+        fail("sensor_faults: each is {sensor: NAME, quantity: Q, mode: MODE, at: s, ...}")
+    assert isinstance(fault, dict)
+    if unknown := set(fault) - {"sensor", "quantity", "mode", *FAULT_KEYS}:
+        fail(f"sensor_faults: unknown {sorted(unknown)[0]}")
+    target = str(fault["sensor"])
+    if fault.get("quantity", "*") != "*":
+        target += f":{fault['quantity']}"
+    text = f"{target}={fault['mode']}"
+    for key in FAULT_KEYS:
+        if key in fault:
+            value = fault[key]
+            text += f",{key}={int(value) if isinstance(value, bool) else value}"
+    return text
 
 
 def run_file_args(path: str) -> list[str]:
@@ -459,6 +485,8 @@ def run_file_args(path: str) -> list[str]:
             fail("sensor_timing: each sensor is {latency: s, jitter: s}")
         delay = f"{float(timing.get('latency', 0))},{float(timing.get('jitter', 0))}"
         args += ["--sensor-timing", f"{name}={delay}"]
+    for fault in run.get("sensor_faults") or []:
+        args += ["--sensor-fault", sensor_fault_arg(fault, fail)]
     for body in run.get("water") or []:
         missing = {"at", "size", "depth"} - set(body)
         if missing or len(body["at"]) != 3 or len(body["size"]) != 2:
@@ -632,23 +660,25 @@ def main(argv: list[str]) -> int:
         viewer_args = ["--connect", endpoint, *viewer_args]
 
     server_process = subprocess.Popen([*server, *server_args])
-    deadline = time.monotonic() + SERVER_START_SECONDS
-    while not reachable(endpoint):
-        if server_process.poll() is not None:
-            return server_process.returncode or 1
-        if time.monotonic() > deadline:
-            print("lagrange: the server did not start listening", file=sys.stderr)
-            return stop(server_process) or 1
-        time.sleep(0.1)
-
+    # The viewer starts at once, beside the loading server: its window and GPU come up while the
+    # world loads (the viewer tries the endpoint every 50 ms until the server listens), so the
+    # first frame comes after the slower of the two, not after both.
     # Ctrl-C reaches both processes (same terminal); wait for them instead of dying first.
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     viewer_process = subprocess.Popen(
         [executable("lagrange_viewer", "lagrange_viewer"), *viewer_args],
         preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
     )
+    deadline = time.monotonic() + SERVER_START_SECONDS
+    listening = False
     while viewer_process.poll() is None and server_process.poll() is None:
-        time.sleep(0.2)
+        if not listening:
+            listening = reachable(endpoint)
+            if not listening and time.monotonic() > deadline:
+                print("lagrange: the server did not start listening", file=sys.stderr)
+                stop(viewer_process)
+                return stop(server_process) or 1
+        time.sleep(0.1 if not listening else 0.2)
     server_ended_first = server_process.poll() is not None
     viewer_status = stop(viewer_process)
     server_status = stop(server_process)

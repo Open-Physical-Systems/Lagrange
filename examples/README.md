@@ -17,6 +17,7 @@ ros2 launch lagrange_example_diff_drive drive.launch.py
 | [`lagrange_example_arm`](lagrange_example_arm) | An arm from a URDF | `--joint-control`, `/joint_commands`, `/joint_states` |
 | [`lagrange_example_power`](lagrange_example_power) | A power system from a schematic | `<lagrange><schematic>`, `--ros-topics`, `bus/dc/voltage` |
 | [`lagrange_example_lidar`](lagrange_example_lidar) | A simulated lidar | `/scan`, `lagrange_assets` |
+| [`lagrange_example_sensors`](lagrange_example_sensors) | Bumpers, cliff sensors, wheel odometry, a safety scanner | Built-in sensor kinds in a URDF, `--ros-topics` |
 | [`lagrange_example_camera`](lagrange_example_camera) | A simulated camera | Colour, depth and instance images on ROS 2 |
 | [`lagrange_example_compass`](lagrange_example_compass) | A compass next to the battery leads | What a quadcopter's own wiring does to its heading, on ROS 2 |
 | [`lagrange_example_heat`](lagrange_example_heat) | Heat inside the parts | LEDs on a board on a heat sink: where the heat goes, on ROS 2 and in the viewer |

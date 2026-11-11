@@ -5,8 +5,11 @@
 #include "lagrange/weather/Weather.hpp"
 
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -202,6 +205,20 @@ TEST(Weather, ClearHasNoFogRainOrDust) {
     EXPECT_EQ(r.read("env/air_temperature"), 283.15);
 }
 
+TEST(Weather, PublishesTheAirsDust) {
+    const World world = site();
+    ModuleConfigData c = siteConfig();
+    c.values["dust_concentration"] = 2e-7;  // 200 µg/m³
+    c.values["dust_median_diameter"] = 2e-6;
+    Fixture r = run(world, c);
+    ASSERT_TRUE(r.scheduler->stepUntil(SimTime{100'000'000}).ok());
+    EXPECT_EQ(r.read("env/dust/concentration"), 2e-7);
+    EXPECT_EQ(r.read("env/dust/median_diameter"), 2e-6);
+    Fixture clear = run(world, c, true);
+    ASSERT_TRUE(clear.scheduler->stepUntil(SimTime{100'000'000}).ok());
+    EXPECT_EQ(clear.read("env/dust/concentration"), 0.0);
+}
+
 TEST(Weather, PublishesItsFogGrid) {
     const std::string path = testing::TempDir() + "/fog_grid.nvdb";
     ASSERT_TRUE(fields::writeScalarField(path, "fog", {{0.0, 0.0, 0.0}, 0.5, {9, 9, 5}},
@@ -226,6 +243,26 @@ TEST(Weather, RefusesWithoutTheSite) {
     auto wired = scheduler.wire(WorldView(world));
     ASSERT_FALSE(wired);
     EXPECT_NE(to_string(wired.error().front()).find("no defaults"), std::string::npos);
+}
+
+// QA 2026-11-12: --weather temperature=nan was taken (NaN fails every comparison), and a site
+// out of range was refused as if it had not been given.
+TEST(Weather, RefusesASiteOutOfRangeOrNotANumberAndSaysSo) {
+    const World world = site();
+    for (const auto& [key, value] : std::vector<std::pair<std::string, double>>{
+             {"temperature", std::nan("")},
+             {"temperature", -5.0},
+             {"pressure", std::numeric_limits<double>::infinity()},
+             {"relative_humidity", std::nan("")},
+             {"relative_humidity", 7.0}}) {
+        ModuleConfigData c = siteConfig();
+        c.values[key] = value;
+        Scheduler scheduler(SchedulerOptions{.deterministic = true});
+        scheduler.add(std::make_unique<Weather>(), ModuleConfig(std::move(c)));
+        auto wired = scheduler.wire(WorldView(world));
+        ASSERT_FALSE(wired) << key << " = " << value;
+        EXPECT_NE(to_string(wired.error().front()).find("out of range"), std::string::npos) << key;
+    }
 }
 
 TEST(Weather, TheEffectsListSwitchesEffects) {

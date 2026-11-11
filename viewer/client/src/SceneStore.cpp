@@ -1,6 +1,7 @@
 #include "lagrange/viewer/SceneStore.hpp"
 #include "lagrange/viewer/v1/scene.pb.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -79,7 +80,19 @@ bool SceneBuilder::applySnapshot(const v1::SceneSnapshot& snapshot, std::string&
                 return false;
             }
         }
-        if (source.aabb_size() == 6) {
+        // The bounds from the vertices themselves, not the message's: the renderer leaves out
+        // what they put out of view, so they must hold every vertex.
+        if (vertices > 0) {
+            std::array<float, 6> box{INFINITY, INFINITY, INFINITY, -INFINITY, -INFINITY, -INFINITY};
+            for (std::size_t v = 0; v < vertices; ++v) {
+                for (std::size_t a = 0; a < 3; ++a) {
+                    const float x = mesh.positions[v * 3 + a];
+                    box.at(a) = std::min(box.at(a), x);
+                    box.at(a + 3) = std::max(box.at(a + 3), x);
+                }
+            }
+            mesh.aabb = box;
+        } else if (source.aabb_size() == 6) {
             for (int k = 0; k < 6; ++k) {
                 mesh.aabb.at(static_cast<std::size_t>(k)) = source.aabb(k);
             }

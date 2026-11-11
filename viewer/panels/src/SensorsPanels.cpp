@@ -55,14 +55,20 @@ Kind kindOf(const std::string& typeName) {
 
 bool isSensorType(const std::string& typeName) {
     return typeName == "Lidar" || typeName == "Camera" || typeName == "Imu" ||
-           typeName == "Magnetometer" || typeName == "Gnss" || typeName == "Radar";
+           typeName == "Magnetometer" || typeName == "Gnss" || typeName == "Radar" ||
+           typeName == "CustomSensor";
 }
 
 struct Sensor {
     std::uint32_t prim{kNone};
     Kind kind{Kind::Other};
     std::shared_ptr<SensorStream> stream;  // sensors that send frames (lidar, camera)
-    std::size_t signals{0};                // sensors that send signals (IMU)
+    // A custom sensor's images (a built-in kind's left, right, depth, ...) by signal name, and
+    // their quantities ("left") for the Camera panel's modes; a camera's depth and instance.
+    std::vector<std::string> images;
+    std::vector<std::string> imageLabels;
+    bool custom{false};
+    std::size_t signals{0};  // sensors that send signals (IMU)
     std::int64_t signalDtNs{0};
     // Frame rate, measured.
     std::uint64_t countedFrames{0};
@@ -139,8 +145,27 @@ private:
             Sensor sensor;
             sensor.prim = i;
             sensor.kind = kindOf(prims[i].typeName);
+            sensor.custom = prims[i].typeName == "CustomSensor";
             sensor.countedAt = ImGui::GetTime();
-            if (sensor.kind == Kind::Lidar || sensor.kind == Kind::Camera) {
+            if (context.catalog) {
+                // Its images, by name: what a custom sensor shows (sensors.md §9 "Images of
+                // kinds"), and a camera's other images. Not the delayed copies.
+                for (const SignalInfo& info : context.catalog->signals) {
+                    if (info.prim != i || !info.image ||
+                        info.name.find("/delayed/") != std::string::npos) {
+                        continue;
+                    }
+                    const std::size_t at = info.name.find('/', std::string("sensor/").size());
+                    sensor.images.push_back(info.name);
+                    sensor.imageLabels.push_back(
+                        at == std::string::npos ? info.name : info.name.substr(at + 1));
+                }
+            }
+            if (sensor.custom && !sensor.images.empty()) {
+                sensor.kind = Kind::Camera;  // drawn in the Camera panel, by its images
+                sensor.stream = context.client.watchSensor(sensor.images.front());
+                sensor.countedFrames = sensor.stream->frames();
+            } else if (sensor.kind == Kind::Lidar || sensor.kind == Kind::Camera) {
                 sensor.stream = context.client.watchSensor(prims[i].path);
                 sensor.countedFrames = sensor.stream->frames();
             }
@@ -512,20 +537,30 @@ public:
             ImGui::End();
             return;
         }
-        if (widgets::BeginPanelTools("##camera-tools", px(150.0F))) {
-            static constexpr std::array<const char*, 3> kModes{"rgb", "depth", "labels"};
-            widgets::Segmented("##mode", kModes.data(), 3, &mode_);
+        // Modes: a camera's rgb, depth and labels; a custom sensor's images by quantity.
+        static constexpr std::array<const char*, 3> kModes{"rgb", "depth", "labels"};
+        std::vector<const char*> modes(kModes.begin(), kModes.end());
+        if (camera != nullptr && camera->custom) {
+            modes.clear();
+            for (const std::string& label : camera->imageLabels) {
+                modes.push_back(label.c_str());
+            }
+        }
+        if (widgets::BeginPanelTools("##camera-tools",
+                                     px(50.0F) * static_cast<float>(modes.size()))) {
+            widgets::Segmented("##mode", modes.data(), static_cast<int>(modes.size()), &mode_);
             widgets::EndPanelTools();
         }
-        const std::shared_ptr<const SensorImage> image =
-            camera != nullptr && camera->stream ? camera->stream->latestImage() : nullptr;
-        if (camera == nullptr || !image || mode_ != 0) {
+        mode_ = std::clamp(mode_, 0, std::max(static_cast<int>(modes.size()) - 1, 0));
+        const std::shared_ptr<SensorStream> stream = streamOf(context, camera);
+        const std::shared_ptr<const SensorImage> image = stream ? stream->latestImage() : nullptr;
+        if (camera == nullptr || !image) {
             ImGui::SetCursorPos(ImVec2(px(8.0F), ImGui::GetCursorPosY() + px(8.0F)));
             if (!emptyState(context, *state_)) {
                 ImGui::PushTextWrapPos(0.0F);
                 widgets::Caption("%s", camera == nullptr ? "This stage has no camera."
-                                       : mode_ != 0
-                                           ? "This server sends the colour image only."
+                                       : !stream
+                                           ? "This server does not send this image."
                                            : "Waiting for the first image (the sensors domain "
                                              "may be on ground truth, which renders nothing).");
                 ImGui::PopTextWrapPos();
@@ -544,7 +579,9 @@ public:
             width = height / aspect;
         }
         const std::uint64_t texture =
-            context.sensorTextures != nullptr ? context.sensorTextures->texture(name, image) : 0;
+            context.sensorTextures != nullptr
+                ? context.sensorTextures->texture(name + "/" + std::to_string(mode_), image)
+                : 0;
         const ImVec2 at = ImGui::GetCursorScreenPos();
         if (texture != 0) {
             ImGui::SetCursorScreenPos(ImVec2(at.x + (available.x - width) * 0.5F, at.y));
@@ -560,14 +597,50 @@ public:
         ImGui::SameLine(0.0F, px(14.0F));
         ImGui::TextColored(c::t2, "t %.3f s", static_cast<double>(image->simTimeNs) * 1e-9);
         ImGui::SameLine(0.0F, px(14.0F));
-        ImGui::TextColored(c::t3, "raster · no sensor model");
+        if (camera->custom) {
+            ImGui::TextColored(c::t3, "%s · %s", modes[static_cast<std::size_t>(mode_)],
+                               image->encoding.c_str());
+        } else {
+            ImGui::TextColored(c::t3, "raster · no sensor model");
+        }
         ImGui::PopFont();
         ImGui::End();
     }
 
 private:
+    /// The stream of the shown mode: the sensor's own for the first, else the image signal of
+    /// the mode by name (watched while shown). Null when the server has no such image.
+    std::shared_ptr<SensorStream> streamOf(PanelContext& context, const Sensor* camera) {
+        std::string wanted;
+        if (camera != nullptr && mode_ > 0) {
+            if (camera->custom) {
+                wanted = camera->images.at(static_cast<std::size_t>(mode_));
+            } else {
+                const char* quantity = mode_ == 1 ? "/depth" : "/instance";
+                for (const std::string& name : camera->images) {
+                    if (name.ends_with(quantity)) {
+                        wanted = name;
+                    }
+                }
+            }
+        }
+        if (wanted != watched_) {
+            if (!watched_.empty()) {
+                context.client.unwatchSensor(watched_);
+            }
+            named_ = wanted.empty() ? nullptr : context.client.watchSensor(wanted);
+            watched_ = wanted;
+        }
+        if (camera == nullptr) {
+            return nullptr;
+        }
+        return mode_ == 0 ? camera->stream : named_;
+    }
+
     std::shared_ptr<SensorsState> state_;
     int mode_{0};
+    std::string watched_;                  // the image signal watched for this mode, if any
+    std::shared_ptr<SensorStream> named_;  // its stream
 };
 
 // --- summary of the selected sensor -------------------------------------------------------

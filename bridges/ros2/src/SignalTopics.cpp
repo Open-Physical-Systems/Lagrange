@@ -123,6 +123,13 @@ Expected<TopicMaps, std::string> readTopicMaps(const std::string& path) {
         return Unexpected{path + ": " + e.what()};
     }
     TopicMaps maps;
+    if (const YAML::Node defaults = root["kind_topics"]) {
+        try {
+            maps.kindTopics = defaults.as<bool>();
+        } catch (const YAML::Exception& e) {
+            return Unexpected{path + ": kind_topics is true or false: " + e.what()};
+        }
+    }
     for (const char* direction : {"publish", "subscribe"}) {
         const YAML::Node list = root[direction];
         if (!list) {

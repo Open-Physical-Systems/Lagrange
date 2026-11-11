@@ -13,6 +13,8 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include <vulkan/vulkan.h>
 
@@ -131,7 +133,15 @@ private:
     };
     Pipeline shadowPipe_;
     Pipeline opaque_;
+    Pipeline depthOnly_;    // the opaque meshes' depth, before they are shaded
+    Pipeline opaqueShade_;  // opaque_ on that depth: no writes, so each pixel is shaded once
     Pipeline transparent_;
+    // Per frame: each opaque item and its push constants (Push in Realistic.cpp), kept to
+    // reuse its capacity.
+    std::vector<std::pair<std::size_t, std::array<float, 24>>> pushes_;
+    // Per frame: each item's bounding ball relative to the eye (x, y, z, radius); radius < 0
+    // for an item that is never culled.
+    std::vector<std::array<float, 4>> balls_;
     Pipeline sky_;
     Pipeline waterPipe_;
     Pipeline composite_;

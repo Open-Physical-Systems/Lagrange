@@ -56,6 +56,9 @@ plugins: [lagrange_tof]
 humans: 6,radius=7          # people: tutorial-humans.md
 sensor_timing:              # how late a sensor's data reaches the robot, in s
   imu: {latency: 0.002, jitter: 0.0005}
+sensor_faults:              # what goes wrong with a sensor, and when: cli.md "Sensor faults"
+  - {sensor: imu, quantity: angular_rate, mode: bias, value: 0.02, at: 5}
+  - front_lidar=dropout,at=10,for=2,probability=0.3
 water:                      # still water: it floats what enters it, and lidars see it as water
   - {at: [0, 0, 0.5], size: [12, 8], depth: 0.5}    # x, y, surface height
 record: run.mcap

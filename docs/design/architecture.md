@@ -533,6 +533,20 @@ applying the hold policy, so `read` is one array access. Execution is serial in 
 level-parallel execution and real-time pacing (in the server's run loop) come later. Wiring adds
 `NotDeterministic`, `InvalidDeclaration` and `ModuleFailed` to the error kinds above.
 
+Split steps (since 1.2.x): a module may also implement `SplitStep` (`IModule.hpp`), as the camera
+does for its GPU render. The scheduler tells it so at wiring (`allowSplit(true)`); its `step()`
+may then start the work and return with `stepPending()`, and the tick goes on with the other
+modules. Its `finishStep()` runs, and its outputs commit, right before the first module that
+reads one of them, and at the end of the tick at the latest. Every reader sees what it would
+have seen had `step()` done all of it, so the results do not change; only the wait overlaps other
+modules' work. A module run under a wrapper that does not know `SplitStep` (a sensor with
+faults) is never told and finishes in `step()`. Its cost in the stats is the time in both halves.
+
+Commits (since 1.2.x): a module's outputs commit together (`SignalBus::commitAll`), runs of
+neighbouring values in one copy; the commit times live in their own array (`SignalBus::Timing`),
+and a signal's previous value is kept up to date only when a reader uses it (a feedback input or
+an extrapolation). For the town's 650 kinematic bodies this is most of the scheduler's own time.
+
 Step sequence for one tick with electrical at 100 µs and physics at 1 ms:
 
 ```mermaid

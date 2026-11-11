@@ -9,6 +9,10 @@
 
 #include <memory>
 
+namespace lagrange::gpu {
+class RayContext;
+}
+
 namespace lagrange::sensors {
 
 /// The radar equation's signal-to-noise ratio for a target of cross-section `rcs` (m²) at
@@ -36,8 +40,11 @@ inline constexpr std::size_t kRadarMaxDetections = 64;
 /// hit points along the rays, power weighted. Range, angle and velocity get Gaussian noise of
 /// resolution / √(2·SNR). A fixed threshold over the noise floor stands in for CFAR; no multipath,
 /// ghosts or raw ADC data. Writes sensor/<n>/detections (kRadarMaxDetections × kRadarFields, NaN
-/// beyond the count) and sensor/<n>/count. CPU on every tier.
-[[nodiscard]] std::unique_ptr<IModule> createRadar(const World& world, std::uint32_t sensor,
-                                                   bool groundTruth);
+/// beyond the count) and sensor/<n>/count. With `rayContext` the rays are cast on the GPU (the
+/// lidar's kernel, gpu/kernels/lidar/bvh_traverse.slang; float ranges, so not bit-reproducible,
+/// Tier 1); without, on the CPU in parallel, the deterministic reference.
+[[nodiscard]] std::unique_ptr<IModule> createRadar(
+    const World& world, std::uint32_t sensor, bool groundTruth,
+    std::shared_ptr<gpu::RayContext> rayContext = nullptr);
 
 }  // namespace lagrange::sensors

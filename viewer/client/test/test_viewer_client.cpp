@@ -4,11 +4,13 @@
 #include "lagrange/viewer/ViewerClient.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <string>
 #include <thread>
@@ -315,6 +317,87 @@ TEST(ViewerClient, AWideSignalDoesNotEndTheCatalog) {
     ASSERT_TRUE(server.pump([&] { return client.catalog() != nullptr; }));
     ASSERT_EQ(client.catalog()->signals.size(), 3U);
     EXPECT_NE(client.catalog()->find("sensor/imu/angular_rate"), nullptr);
+}
+
+// An image signal has no samples (0 components); it stays in the list, marked as an image, and
+// the signals after it are still there.
+TEST(ViewerClient, AnImageSignalDoesNotEndTheCatalog) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+    v1::Envelope envelope = catalog(1);
+    auto* image = envelope.mutable_catalog()->add_signals();
+    image->set_id(2);
+    image->set_name("sensor/rs/depth");
+    image->set_type(v1::SIGNAL_TYPE_IMAGE);
+    image->set_components(0);
+    image->set_native_dt_ns(33'000'000);
+    auto* after = envelope.mutable_catalog()->add_signals();
+    after->set_id(3);
+    after->set_name("sensor/rs/depth/intrinsics");
+    after->set_components(4);
+    after->set_native_dt_ns(33'000'000);
+    server.send(envelope);
+    ASSERT_TRUE(server.pump([&] { return client.catalog() != nullptr; }));
+    ASSERT_EQ(client.catalog()->signals.size(), 4U);
+    EXPECT_TRUE(client.catalog()->signals[2].image);
+    EXPECT_FALSE(client.catalog()->signals[3].image);
+    client.stop();
+}
+
+// Any image signal is watched by its name; r32f (a depth) arrives as grey, near bright.
+TEST(ViewerClient, AnImageSignalIsWatchedByNameAndDrawnAsRgba) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+    const auto stream = client.watchSensor("sensor/rs/depth");
+    ASSERT_TRUE(
+        server.pump([&] { return server.countCommands(v1::Command::kSubscribeSensor) == 1; }));
+    v1::Envelope envelope;
+    v1::SensorFrame* frame = envelope.mutable_sensor_frame();
+    frame->set_sensor("sensor/rs/depth");
+    frame->mutable_sim_time()->set_ns(7);
+    v1::ImageData* image = frame->mutable_image();
+    image->set_width(3);
+    image->set_height(1);
+    image->set_encoding("r32f");
+    const std::array<float, 3> metres{1.0F, 3.0F, std::numeric_limits<float>::infinity()};
+    image->mutable_data()->set_inline_(
+        std::string(reinterpret_cast<const char*>(metres.data()), sizeof(metres)));  // NOLINT
+    server.send(envelope);
+    ASSERT_TRUE(server.pump([&] { return stream->frames() == 1; }));
+    const auto shown = stream->latestImage();
+    ASSERT_NE(shown, nullptr);
+    EXPECT_EQ(shown->encoding, "r32f");
+    ASSERT_EQ(shown->rgba.size(), 12U);
+    EXPECT_EQ(shown->rgba[0], 255U);  // the nearest
+    EXPECT_EQ(shown->rgba[4], 40U);   // the farthest
+    EXPECT_EQ(shown->rgba[8], 0U);    // nothing: black
+    EXPECT_EQ(shown->rgba[11], 255U);
+
+    client.unwatchSensor("sensor/rs/depth");
+    ASSERT_TRUE(
+        server.pump([&] { return server.countCommands(v1::Command::kSubscribeSensor) == 2; }));
+    client.stop();
+}
+
+TEST(ImageToRgba, WidensEveryEncodingAndRefusesWrongSizes) {
+    std::vector<std::uint8_t> rgba;
+    EXPECT_TRUE(lagrange::viewer::imageToRgba("r8", 2, 1, std::string("\x10\x20", 2), rgba));
+    EXPECT_EQ(rgba, (std::vector<std::uint8_t>{16, 16, 16, 255, 32, 32, 32, 255}));
+    EXPECT_TRUE(lagrange::viewer::imageToRgba("rgb8", 1, 1, std::string("\x01\x02\x03", 3), rgba));
+    EXPECT_EQ(rgba, (std::vector<std::uint8_t>{1, 2, 3, 255}));
+    const std::array<std::uint32_t, 2> ids{5, 0xFFFF'FFFFU};
+    EXPECT_TRUE(lagrange::viewer::imageToRgba(
+        "r32u", 2, 1, std::string(reinterpret_cast<const char*>(ids.data()), 8), rgba));  // NOLINT
+    EXPECT_GE(rgba[0], 64U);  // a colour for id 5
+    EXPECT_EQ(rgba[4], 0U);   // none: black
+    EXPECT_FALSE(lagrange::viewer::imageToRgba("rgba8", 2, 2, std::string(15, '\0'), rgba));
+    EXPECT_FALSE(lagrange::viewer::imageToRgba("r32f", 1, 1, std::string(3, '\0'), rgba));
+    EXPECT_FALSE(lagrange::viewer::imageToRgba("bytes", 1, 1, std::string(4, '\0'), rgba));
+    EXPECT_FALSE(lagrange::viewer::imageToRgba("rgba8", 0, 1, std::string(), rgba));
 }
 
 TEST(ViewerClient, CommandsStatusAndCatalogTravel) {

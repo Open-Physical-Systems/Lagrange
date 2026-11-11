@@ -10,7 +10,9 @@
 #include "lagrange/time/SimTime.hpp"
 #include "lagrange/world/World.hpp"
 
+#include <array>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <span>
 #include <string>
@@ -141,13 +143,31 @@ public:
     Status startAt(SimTime t);
     [[nodiscard]] std::uint64_t tick() const { return tick_; }
 
-    /// All modules' state, the bus and time. Fails if a module cannot save its state.
+    /// All modules' state, the bus and time. Fails if a module cannot save its state. The
+    /// buffers that handle-typed signals (images, point clouds) refer to are saved with it, so a
+    /// restored run reads its last image at once and publishes the same handles after.
     Status saveState(StateWriter& writer) const;
     Status restoreState(StateReader& reader);
+    /// One module's state taken out of a run, to carry into a rebuilt one (robots spawned or
+    /// deleted): `signature` is what it reads and writes, its step and its name.
+    struct CarriedModule {
+        std::string signature;
+        std::vector<std::byte> state;
+    };
+    /// Every module's state by label; a module that cannot save its state is left out.
+    [[nodiscard]] std::map<std::string, CarriedModule> carryModules() const;
+    /// Restores the carried state into each module of this (freshly wired) run with the same
+    /// label and signature, the same module reading and writing the same signals, and moves
+    /// what it keeps by -shift when the run's region origin moved. A module of another
+    /// signature starts afresh: its robots changed. Returns the labels restored.
+    std::vector<std::string> restoreCarriedModules(
+        const std::map<std::string, CarriedModule>& carried, const std::array<double, 3>& shift);
     /// Floating-origin rebase between ticks: moves the bus's region-local poses and every
     /// module's kept positions by -shift (IModule::shiftOrigin).
     void shiftOrigin(const std::array<double, 3>& shift);
-    /// XXH3-64 of the saved state; equal hashes mean equal runs (determinism tests).
+    /// XXH3-64 of the saved state; equal hashes mean equal runs (determinism tests). A buffer's
+    /// bytes are left out (its handle and sequence are in): a rendered image may differ by a bit
+    /// on a GPU (invariant 7 holds for the CPU reference, not for a GPU's pixels).
     [[nodiscard]] Expected<std::uint64_t, Status> stateHash() const;
 
     [[nodiscard]] SignalBus& bus() { return bus_; }
@@ -157,6 +177,8 @@ public:
     void shutdown();
 
 private:
+    Status saveStateImpl(StateWriter& writer, bool bufferBytes) const;
+    [[nodiscard]] std::string signatureOf(std::uint32_t entry) const;
     struct Entry {
         std::unique_ptr<IModule> module;
         ModuleConfig config;
@@ -173,12 +195,21 @@ private:
         std::uint64_t costSteps{0};
         std::int64_t costTotalNs{0};
         std::int64_t costMaxNs{0};
+        SplitStep* split{nullptr};           // the module as a SplitStep, if it is one
+        std::vector<std::uint32_t> writers;  // entries whose outputs it reads (wire())
+        SimTime pendingStart{};              // a split step in flight: its start, and the
+        std::int64_t pendingNs{0};           // wall time its step() took
     };
 
     void checkSteps(std::vector<WiringError>& errors);
     void connect(std::vector<WiringError>& errors);
     void checkContracts(const WorldView& world, std::vector<WiringError>& errors);
     void order(std::vector<WiringError>& errors);
+    /// Ends a split step in flight (SplitStep): finishStep() and the commit of its outputs.
+    Status finishSplit(std::uint32_t index);
+    void finishAllSplits();
+
+    std::vector<std::uint32_t> inFlight_;  // entries whose split step has not finished
 
     SchedulerOptions options_;
     std::vector<Entry> entries_;        // in add() order; the bus refers to these indices

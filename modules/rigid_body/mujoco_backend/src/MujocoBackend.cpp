@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,12 @@ namespace {
 // the least elevation range given to a flat field (MuJoCo needs a positive one).
 constexpr double kHeightFieldBaseM = 1.0;
 constexpr double kMinHeightFieldRangeM = 1e-3;
+
+// How far a moving body may get from its last computed place before the next collision pass:
+// a fixed slack and the fastest speed allowed for over one step (both generous: beyond them a
+// contact with a kinematic body could be missed, so they err wide).
+constexpr double kCullSlackM = 0.5;
+constexpr double kCullFastestMPerS = 200.0;
 
 using namespace literals;
 
@@ -419,6 +426,8 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
     }
     // Kinematics of the initial state, so the first outputs are defined.
     contactForces_.assign(3 * static_cast<std::size_t>(model_->nbody), 0.0);
+    setupKinematicCulling();
+    accelerationsDone_ = false;
     mj_step1(model_, data_);
     writeOutputs(bus);
     return {};
@@ -474,6 +483,25 @@ Status MujocoBackend::step(const StepContext& /*context*/, SignalBus& bus) {
         appliedFrictionScale_ = scale;
     }
 
+    if (model_->nv == 0) {
+        // Nothing moves of itself (no degrees of freedom: scenery and kinematic bodies only, as
+        // the town without a robot). A MuJoCo step would integrate nothing and find no contact;
+        // what changes is the time, as mj_step2 advances it, and the kinematic bodies' poses.
+        data_->time += model_->opt.timestep;
+        mj_kinematics(model_, data_);
+        if (carriedBodies_) {
+            // Bodies fixed to a kinematic one: their twists come from the com velocities.
+            mj_comPos(model_, data_);
+            mj_comVel(model_, data_);
+        }
+        if (!accelerationsDone_) {
+            mj_rnePostConstraint(model_, data_);
+            accelerationsDone_ = true;
+        }
+        writeOutputs(bus);
+        return {};
+    }
+
     // mj_step1 ran at the end of the previous step (or in init); finish this one and prepare
     // the next, so the outputs are the state at the end of the step.
     mj_step2(model_, data_);
@@ -484,6 +512,7 @@ Status MujocoBackend::step(const StepContext& /*context*/, SignalBus& bus) {
                              "MuJoCo found a non-finite acceleration and reset the state; reduce "
                              "the step or check masses and inertias");
     }
+    cullKinematicContacts(false);
     mj_step1(model_, data_);
     mj_rnePostConstraint(model_, data_);  // body accelerations for the IMU
     writeOutputs(bus);
@@ -596,6 +625,123 @@ Status MujocoBackend::saveState(StateWriter& writer) const {
     return {};
 }
 
+void MujocoBackend::setupKinematicCulling() {
+    culled_.clear();
+    movingGeoms_.clear();
+    movingRoots_.clear();
+    rootBoxes_.clear();
+    rootIndex_.assign(static_cast<std::size_t>(model_->nbody), -1);
+    cullable_ = true;
+    const auto collides = [this](int g) {
+        return model_->geom_contype[g] != 0 || model_->geom_conaffinity[g] != 0;
+    };
+    // Mocap bodies, each with a sphere about its origin (its pose is its mocap pose).
+    for (int b = 1; b < model_->nbody; ++b) {
+        if (model_->body_mocapid[b] < 0 || model_->body_geomnum[b] == 0) {
+            continue;
+        }
+        CulledBody c;
+        c.body = b;
+        c.mocap = model_->body_mocapid[b];
+        c.contype = model_->body_contype[b];
+        c.conaffinity = model_->body_conaffinity[b];
+        bool bounded = true;
+        for (int g = model_->body_geomadr[b]; g < model_->body_geomadr[b] + model_->body_geomnum[b];
+             ++g) {
+            if (model_->geom_type[g] == mjGEOM_PLANE) {
+                bounded = false;  // infinite: never culled
+            }
+            const mjtNum* p = model_->geom_pos + 3 * g;
+            c.radius = std::max(c.radius, std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]) +
+                                              model_->geom_rbound[g] + model_->geom_margin[g] +
+                                              model_->geom_gap[g]);
+        }
+        if (bounded && (c.contype != 0 || c.conaffinity != 0)) {
+            culled_.push_back(c);
+        }
+    }
+    carriedBodies_ = false;
+    for (int b = 1; b < model_->nbody; ++b) {
+        if (model_->body_mocapid[b] < 0 && model_->body_mocapid[model_->body_weldid[b]] >= 0) {
+            carriedBodies_ = true;
+        }
+    }
+    // Geoms of bodies with degrees of freedom, grouped by their tree.
+    for (int g = 0; g < model_->ngeom; ++g) {
+        const int b = model_->geom_bodyid[g];
+        const int weld = model_->body_weldid[b];
+        if (weld == 0 || model_->body_mocapid[weld] >= 0 || !collides(g)) {
+            continue;  // fixed to the world or to a mocap body: no contact with a mocap body
+        }
+        if (model_->geom_type[g] == mjGEOM_PLANE) {
+            cullable_ = false;
+        }
+        const int root = model_->body_rootid[b];
+        if (rootIndex_[static_cast<std::size_t>(root)] < 0) {
+            rootIndex_[static_cast<std::size_t>(root)] = static_cast<int>(rootBoxes_.size());
+            rootBoxes_.push_back({});
+        }
+        movingGeoms_.push_back(g);
+        movingRoots_.push_back(rootIndex_[static_cast<std::size_t>(root)]);
+    }
+    if (!cullable_ || !cullingWanted_) {
+        culled_.clear();
+    }
+}
+
+std::size_t MujocoBackend::culledKinematicBodies() const {
+    return static_cast<std::size_t>(std::count_if(culled_.begin(), culled_.end(),
+                                                  [](const CulledBody& c) { return c.culled; }));
+}
+
+/// Clears the collision masks of the mocap bodies no moving body can reach in the coming
+/// mj_step1, and puts back the others' (all of them with `all`, when the moving bodies' last
+/// places are not known: init, a restored state, a shifted origin). MuJoCo makes no contact
+/// between two bodies without degrees of freedom (a mocap body and the world or another mocap
+/// body), so the contacts it finds are the same; it only skips them in its broad phase.
+void MujocoBackend::cullKinematicContacts(bool all) {
+    if (culled_.empty()) {
+        return;
+    }
+    const double slack = kCullSlackM + (kCullFastestMPerS * dt_);
+    for (std::array<double, 6>& box : rootBoxes_) {
+        box = {std::numeric_limits<double>::infinity(),  std::numeric_limits<double>::infinity(),
+               std::numeric_limits<double>::infinity(),  -std::numeric_limits<double>::infinity(),
+               -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()};
+    }
+    for (std::size_t k = 0; k < movingGeoms_.size(); ++k) {
+        const int g = movingGeoms_[k];
+        const mjtNum* p = data_->geom_xpos + 3 * g;
+        const double r =
+            model_->geom_rbound[g] + model_->geom_margin[g] + model_->geom_gap[g] + slack;
+        std::array<double, 6>& box = rootBoxes_[static_cast<std::size_t>(movingRoots_[k])];
+        for (std::size_t i = 0; i < 3; ++i) {
+            box.at(i) = std::min(box.at(i), p[i] - r);
+            box.at(i + 3) = std::max(box.at(i + 3), p[i] + r);
+        }
+    }
+    for (CulledBody& c : culled_) {
+        bool near = all;
+        const mjtNum* p = data_->mocap_pos + 3 * c.mocap;
+        for (std::size_t k = 0; k < rootBoxes_.size() && !near; ++k) {
+            const std::array<double, 6>& box = rootBoxes_[k];
+            // Distance from the sphere's centre to the box, against its radius.
+            double d2 = 0.0;
+            for (std::size_t i = 0; i < 3; ++i) {
+                const double out = std::max({box.at(i) - p[i], 0.0, p[i] - box.at(i + 3)});
+                d2 += out * out;
+            }
+            near = d2 <= c.radius * c.radius;
+        }
+        if (near == !c.culled) {
+            continue;
+        }
+        c.culled = !near;
+        model_->body_contype[c.body] = near ? c.contype : 0;
+        model_->body_conaffinity[c.body] = near ? c.conaffinity : 0;
+    }
+}
+
 void MujocoBackend::shiftOrigin(const std::array<double, 3>& shift) {
     if (model_ == nullptr) {
         return;
@@ -616,6 +762,7 @@ void MujocoBackend::shiftOrigin(const std::array<double, 3>& shift) {
             data_->mocap_pos[3 * m + i] -= shift.at(i);
         }
     }
+    cullKinematicContacts(true);
     mj_step1(model_, data_);
     mj_rnePostConstraint(model_, data_);
 }
@@ -636,6 +783,7 @@ Status MujocoBackend::restoreState(StateReader& reader) {
         model_->geom_friction[3 * g] = baseFriction_[g] * scale;
     }
     appliedFrictionScale_ = scale;
+    cullKinematicContacts(true);
     mj_step1(model_, data_);
     mj_rnePostConstraint(model_, data_);
     return {};

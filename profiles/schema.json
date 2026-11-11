@@ -84,6 +84,34 @@
         }
       }
     },
+    "sensor_faults": {
+      "type": "array",
+      "description": "Sensor faults (sensors.md \"Sensor faults (as built)\"): what goes wrong with which sensor and when, deterministic from the run seed, in what ROS, plugins, recordings, Python and the viewer get. Same as --sensor-fault; replaces its faults when given.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sensor", "mode"],
+        "properties": {
+          "sensor": { "type": "string", "minLength": 1, "description": "The sensor's name: its signals are sensor/<sensor>/<quantity>." },
+          "quantity": { "type": "string", "minLength": 1, "default": "*", "description": "One quantity (specific_force, ranges, ...) or * for all of them; bias, drift and noise need one." },
+          "mode": { "enum": ["dropout", "stuck", "bias", "drift", "noise", "disconnect"], "description": "dropout: samples lost (or NaN); stuck: frozen at the last reading; bias: a step offset; drift: a growing offset; noise: extra Gaussian noise; disconnect: lost for good." },
+          "at": { "type": "number", "minimum": 0, "default": 0, "description": "s: when the fault starts." },
+          "for": { "type": "number", "exclusiveMinimum": 0, "description": "s: how long it lasts; absent, for good. Not for disconnect." },
+          "probability": { "type": "number", "exclusiveMinimum": 0, "maximum": 1, "default": 1, "description": "dropout: the chance that a sample in the window is lost." },
+          "nan": { "type": "boolean", "default": false, "description": "dropout, disconnect: deliver NaN instead of nothing." },
+          "value": { "type": "number", "description": "bias: the offset, in the quantity's unit." },
+          "rate": { "type": "number", "description": "drift: the offset's growth, in the quantity's unit per second." },
+          "sigma": { "type": "number", "exclusiveMinimum": 0, "description": "noise: the standard deviation, in the quantity's unit." },
+          "component": { "type": "integer", "minimum": 0, "description": "bias, drift, noise, stuck: one component only (0 = x, ...)." }
+        },
+        "allOf": [
+          { "if": { "properties": { "mode": { "const": "bias" } } }, "then": { "required": ["value", "quantity"] } },
+          { "if": { "properties": { "mode": { "const": "drift" } } }, "then": { "required": ["rate", "quantity"] } },
+          { "if": { "properties": { "mode": { "const": "noise" } } }, "then": { "required": ["sigma", "quantity"] } },
+          { "if": { "properties": { "mode": { "const": "disconnect" } } }, "then": { "not": { "required": ["for"] } } }
+        ]
+      }
+    },
     "bridges": {
       "type": "object",
       "additionalProperties": false,
