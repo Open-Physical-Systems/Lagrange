@@ -57,7 +57,7 @@ Consequences:
 
 ## 2. Current phase
 
-**v1.2.0 is released (2026-11-11)**: tethers (RFC 0011), heat conduction from materials (RFC 0012) and a robot's own EMI (RFC 0013); after v1.1.0 (2026-11-07), the first feature release of 1.x, and v1.0.0, the first stable
+**v1.2.1 is released (2026-11-11)**: a one-line installer from the release's debs (`packaging/install.sh`); v1.2.0 (2026-11-11): tethers (RFC 0011), heat conduction from materials (RFC 0012) and a robot's own EMI (RFC 0013); after v1.1.0 (2026-11-07), the first feature release of 1.x, and v1.0.0, the first stable
 release (2026-10-29), and v0.2 to v0.7 (v0.2 to v0.6 on 2026-10-25, v0.7 on 2026-10-29;
 `docs/release/`; v0.1.0 on 2026-10-14). The documentation site is published to GitHub Pages from
 `main` by the `docs` workflow (https://open-physical-systems.github.io/Lagrange). 1.x is

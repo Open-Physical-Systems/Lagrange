@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_rigid_body_jolt</name>
-  <version>1.2.0</version>
+  <version>1.2.1</version>
   <description>Spike (roadmap 0.2-C6): the rigid-body domain on Jolt Physics, to find the gaps in the backend abstraction before a full second backend.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(lagrange_tx16s VERSION 1.2.0 LANGUAGES CXX)
+project(lagrange_tx16s VERSION 1.2.1 LANGUAGES CXX)
 
 find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)

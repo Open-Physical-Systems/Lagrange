@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_mavlink</name>
-  <version>1.2.0</version>
+  <version>1.2.1</version>
   <description>MAVLink bridge: PX4 SITL in lockstep through its simulator interface (HIL_SENSOR, HIL_GPS, HIL_ACTUATOR_CONTROLS), v0.4.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>
