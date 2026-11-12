@@ -31,9 +31,10 @@ constexpr double kIdealRxPowerW = 1.0;
 /// Minimum input sensitivity of the OFDM PHY at 6 Mb/s, 20 MHz channel (IEEE 802.11-2020,
 /// Table 17-18): a beacon weaker than this is not decoded, so the scan does not list the AP.
 constexpr double kDefaultSensitivityDbm = -82.0;
-/// Time of one full active scan, s. A scan dwells MinChannelTime to MaxChannelTime on every
-/// channel (IEEE 802.11-2020 §11.1.4.3.2; drivers use some 20–100 ms) over the 13 channels of
-/// 2.4 GHz and some 25 of 5 GHz: one to four seconds. TODO(verify) against a measured adapter.
+/// Time of one full active scan, s, illustrative: a scan dwells on every channel (Linux mac80211,
+/// net/mac80211/scan.c: IEEE80211_PROBE_DELAY + IEEE80211_CHANNEL_TIME, HZ/33 each, about 60 ms
+/// active, and HZ/9, 111 ms, passive; firmware scans set their own) over the 13 channels of
+/// 2.4 GHz and some 25 of 5 GHz: one to four seconds.
 constexpr double kDefaultScanTimeS = 2.0;
 constexpr double kDefaultTxPowerW = 0.1;         // 20 dBm, a typical access point
 constexpr double kDefaultFrequencyHz = 2.437e9;  // 2.4 GHz channel 6
@@ -246,7 +247,7 @@ private:
         std::uint32_t body{0};
         Vec3 local{};
         bool fromText{false};  // given by `access_points`, in the region frame the run began in
-        SignalId rxPower;  // link/<rx>/rx_power, for a RadioLinkAPI_1
+        SignalId rxPower;      // link/<rx>/rx_power, for a RadioLinkAPI_1
     };
 
     /// Log-distance path loss with walls (comms.md §2): free space (Friis) to the reference

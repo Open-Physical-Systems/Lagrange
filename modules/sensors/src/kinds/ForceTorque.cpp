@@ -5,9 +5,10 @@
 // `force_torque` is a six-axis wrist sensor in the manner of an ATI Mini45: the wrench moved to
 // the sensor's origin and turned into its frame, then per-axis range (saturation), noise,
 // resolution and a first-order low-pass. Preset `mini45_si_580_20` takes ATI's figures for the
-// Mini45 with calibration SI-580-20 (ati-ia.com, F/T models, Mini45 "Standard Calibrations"):
-// ranges Fx, Fy 580 N, Fz 1160 N, Tx, Ty, Tz 20 N·m; resolutions 1/4 N, Tx, Ty 1/188 N·m,
-// Tz 1/376 N·m. ATI quotes those resolutions after dropping four counts of noise; the preset's
+// Mini45 with calibration SI-580-20 (ati-ia.com, F/T models, Mini45, table "Metric Calibrations
+// (SI)" for a 16-bit DAQ, ECAT, Net, TWE or WNet F/T system): ranges Fx, Fy 580 N, Fz 1160 N,
+// Tx, Ty, Tz 20 N·m; resolutions 1/4 N, Tx, Ty 1/188 N·m, Tz 1/376 N·m (checked 2026-11-12).
+// ATI quotes those resolutions after dropping four counts of noise; the preset's
 // noise of one resolution step per axis (1 sigma) is our assumption, illustrative.
 //
 // `joint_torque` is a link-side joint torque sensor as on a Franka Panda or a KUKA LBR iiwa: the
@@ -27,7 +28,7 @@ namespace {
 using Vec3 = std::array<double, 3>;
 constexpr double kInf = std::numeric_limits<double>::infinity();
 
-// ATI Mini45, calibration SI-580-20 (ati-ia.com, Mini45 "Standard Calibrations", metric).
+// ATI Mini45, calibration SI-580-20 (ati-ia.com, Mini45 "Metric Calibrations (SI)").
 constexpr std::array<double, 6> kMini45Range{580.0, 580.0, 1160.0, 20.0, 20.0, 20.0};  // N, N·m
 constexpr std::array<double, 6> kMini45Resolution{0.25,        0.25,        0.25,
                                                   1.0 / 188.0, 1.0 / 188.0, 1.0 / 376.0};

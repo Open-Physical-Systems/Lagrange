@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <vector>
@@ -428,6 +429,7 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
     contactForces_.assign(3 * static_cast<std::size_t>(model_->nbody), 0.0);
     setupKinematicCulling();
     accelerationsDone_ = false;
+    writtenValid_ = false;
     mj_step1(model_, data_);
     writeOutputs(bus);
     return {};
@@ -519,6 +521,22 @@ Status MujocoBackend::step(const StepContext& /*context*/, SignalBus& bus) {
     return {};
 }
 
+namespace {
+
+/// Writes `values` unless they are, bit for bit, the ones last written (`last`, updated). For
+/// values that often stay the same (a standing body's contact force and twist); a fixed size,
+/// so the comparison is inlined.
+template <std::size_t N>
+void writeChanged(SignalBus& bus, SignalId id, const double* values, double* last, bool known) {
+    if (known && std::memcmp(last, values, N * sizeof(double)) == 0) {
+        return;
+    }
+    bus.writeN(id, std::span<const double>(values, N));
+    std::memcpy(last, values, N * sizeof(double));
+}
+
+}  // namespace
+
 void MujocoBackend::writeOutputs(SignalBus& bus) const {
     for (const JointSignals& s : joints_) {
         const auto dof = static_cast<std::size_t>(s.dofAddress);
@@ -554,14 +572,23 @@ void MujocoBackend::writeOutputs(SignalBus& bus) const {
         bus.write(s.effectiveInertia, data_->M[last]);
         bus.write(s.constraintTorque, data_->qfrc_constraint[dof]);
     }
+    written_.resize(kWrittenPerBody * bodies_.size());
+    const bool known = writtenValid_;
+    writtenValid_ = true;
     for (std::size_t i = 0; i < bodies_.size(); ++i) {
         const BodySignals& s = bodies_[i];
         const int b = s.mujocoBody;
+        double* const wrote = written_.data() + (kWrittenPerBody * i);
         std::array<double, 7> pose{};
         std::copy_n(data_->xpos + 3 * b, 3, pose.begin());
         std::copy_n(data_->xquat + 4 * b, 4, pose.begin() + 3);
-        bus.writeN(s.pose, pose);
-        bus.writeN(s.contactForce, std::span<const double>(&contactForces_[3 * s.mujocoBody], 3));
+        if (s.mocap >= 0) {
+            // Moved only when its command changes: the traffic and the people every 10 ms.
+            writeChanged<7>(bus, s.pose, pose.data(), wrote + 9, known);
+        } else {
+            bus.writeN(s.pose, pose);
+        }
+        writeChanged<3>(bus, s.contactForce, &contactForces_[3 * s.mujocoBody], wrote + 6, known);
         if (s.mocap >= 0) {
             // A kinematic body's twist from its last two poses; no acceleration.
             std::array<double, 7>& last = lastKinematicPose_[i];
@@ -583,8 +610,10 @@ void MujocoBackend::writeOutputs(SignalBus& bus) const {
                     sign * 2.0 * (q[0] * r[3] + q[1] * r[2] - q[2] * r[1] + q[3] * r[0]) / dt_;
             }
             last = pose;
-            bus.writeN(s.twist, twist);
-            bus.writeN(s.acceleration, std::array<double, 6>{});
+            writeChanged<6>(bus, s.twist, twist.data(), wrote, known);
+            if (!known) {
+                bus.writeN(s.acceleration, std::array<double, 6>{});  // always zero
+            }
             continue;
         }
 
@@ -762,6 +791,7 @@ void MujocoBackend::shiftOrigin(const std::array<double, 3>& shift) {
             data_->mocap_pos[3 * m + i] -= shift.at(i);
         }
     }
+    writtenValid_ = false;  // the bus shifted the poses it holds
     cullKinematicContacts(true);
     mj_step1(model_, data_);
     mj_rnePostConstraint(model_, data_);
@@ -783,6 +813,7 @@ Status MujocoBackend::restoreState(StateReader& reader) {
         model_->geom_friction[3 * g] = baseFriction_[g] * scale;
     }
     appliedFrictionScale_ = scale;
+    writtenValid_ = false;
     cullKinematicContacts(true);
     mj_step1(model_, data_);
     mj_rnePostConstraint(model_, data_);

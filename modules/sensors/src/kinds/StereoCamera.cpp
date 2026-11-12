@@ -12,11 +12,13 @@ namespace lagrange::sensors::kinds {
 
 namespace {
 
-// Intel RealSense D400 series datasheet (rev. 2019+), D435: 848 × 480 depth at 87° × 58°, 50 mm
-// baseline, disparity search range 126 px (min-Z = f b / 126 at the default disparity shift),
-// depth unit 1 mm. Sub-pixel RMS 0.08 px: Grunnet-Jepsen et al., "Tuning depth cameras for best
-// performance" (Intel white paper). The 10 m limit is illustrative (TODO(verify)): the D435 has
-// no hard maximum, its error simply grows as z².
+// RealSense D400 Series Datasheet (document 337029, March 2026), D435: table 3-49, 50 mm baseline
+// and depth field of view 87° × 58°; 848 × 480 a depth mode; depth unit 1 mm. The white paper
+// "Tuning depth cameras for best performance" (Grunnet-Jepsen et al., Intel RealSense): min-Z =
+// f · b / 126 (the disparity search range), RMS error z² · subpixel / (f · b), plotted for
+// subpixel 0.08 px. The 10 m limit is illustrative: the datasheet gives "0.2 m to over 3 m
+// (varies with lighting conditions)" and the white paper up to about 10 m on a white wall; the
+// error simply grows as z².
 constexpr double kD435Width = 848.0;
 constexpr double kD435Height = 480.0;
 constexpr double kD435HorizontalFov = 87.0 * 3.14159265358979323846 / 180.0;

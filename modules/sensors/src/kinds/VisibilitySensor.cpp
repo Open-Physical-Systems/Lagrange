@@ -10,13 +10,16 @@ namespace lagrange::sensors::kinds {
 
 namespace {
 
-// Vaisala PWD22 (PWD series datasheet): MOR 10 to 20 000 m, accuracy ±10 % from 10 to 10 000 m;
-// instantaneous values every 15 s averaged into its 1 min output. Here ±10 % is 2σ, and the
-// averaging a first-order lag of 60 s on the extinction. TODO(verify): the averaging against the
-// PWD22 user's guide (M210543EN).
+// Vaisala PWD22 (PWD series datasheet B210385EN-F): MOR 10 to 20 000 m, accuracy ±10 % from 10 to
+// 10 000 m and ±15 % from 10 to 20 km. User's Guide M210543EN-B (2004), p. 25: instantaneous
+// (15 s) values averaged from the extinction coefficient into 1 min and 10 min outputs; table 24:
+// "Time constant 60 seconds", update interval 15 s. Here ±10 % is 2σ (±15 % above 10 km), and the
+// averaging a first-order lag of 60 s on the extinction (the 1 min output is a running mean).
 constexpr double kMinRange = 10.0;       // m
 constexpr double kMaxRange = 20000.0;    // m
 constexpr double kNoiseFraction = 0.05;  // of the MOR, 1σ
+constexpr double kFarRatio = 1.5;        // ±15 % over ±10 % beyond kFar
+constexpr double kFar = 10000.0;         // m
 constexpr double kTau = 60.0;            // s
 
 class VisibilitySensor final : public KindModule {
@@ -29,8 +32,10 @@ public:
         minRange_ = kindSetting(w, sensor_, "range/min", kMinRange);
         maxRange_ = kindSetting(w, sensor_, "range/max", kMaxRange);
         noise_ = kindSetting(w, sensor_, "noise/fraction", kNoiseFraction);
+        farNoise_ = kindSetting(w, sensor_, "noise/fraction_far", kFarRatio * noise_);
         tau_ = kindSetting(w, sensor_, "time_constant", kTau);
-        if (minRange_ <= 0.0 || maxRange_ <= minRange_ || noise_ < 0.0 || tau_ < 0.0) {
+        if (minRange_ <= 0.0 || maxRange_ <= minRange_ || noise_ < 0.0 || farNoise_ < 0.0 ||
+            tau_ < 0.0) {
             return Status::error(StatusCode::InvalidConfig,
                                  "visibility_sensor " + name_ + ": parameter out of range");
         }
@@ -60,9 +65,10 @@ public:
         }
         sigma_ = firstOrderStep(sigma_, std::max(sigma, 0.0), context.dt.seconds(), tau_);
         random::Stream rng(context.seed, context.stepIndex, 0);
+        const double trueMor = meteorologicalOpticalRange(sigma_);
+        const double fraction = trueMor > kFar ? farNoise_ : noise_;
         const double mor =
-            std::clamp(meteorologicalOpticalRange(sigma_) * (1.0 + noise_ * rng.normal()),
-                       minRange_, maxRange_);
+            std::clamp(trueMor * (1.0 + fraction * rng.normal()), minRange_, maxRange_);
         write(bus, mor, -std::log(kMorContrast) / mor, true);
         return {};
     }
@@ -85,6 +91,7 @@ private:
     }
 
     double minRange_{kMinRange}, maxRange_{kMaxRange}, noise_{kNoiseFraction}, tau_{kTau};
+    double farNoise_{kFarRatio * kNoiseFraction};
     double sigma_{kNaN};
     SignalId extinctionIn_, mor_, extinction_, valid_;
 };

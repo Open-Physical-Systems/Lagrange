@@ -10,9 +10,10 @@ namespace lagrange::sensors::kinds {
 
 namespace {
 
-// Hydreon RG-15 (instructions, rev. 2022-05-18): accuracy ±10 % under controlled conditions,
-// resolution 0.2 mm (low) or 0.02 mm (high); it does not see rain when freezing. ±10 % taken as
-// 2σ of a gain error drawn once per run.
+// Hydreon RG-15 (Rain Gauge Model RG-15 Instructions, SW rev 1.000, 2022.07.18): "±10% accuracy
+// under controlled conditions, accuracy may vary near/below freezing", resolution 0.2 mm (low) or
+// 0.02 mm (high). ±10 % taken as 2σ of a gain error drawn once per run. Hydreon defines no
+// "raining" rate: its rain event runs from the first drop to 60 min after the last.
 constexpr double kResolution = 0.2e-3;          // m of water, low resolution
 constexpr double kGainError = 0.05;             // 1σ, of the reading
 constexpr double kThreshold = 0.1e-3 / 3600.0;  // m/s: 0.1 mm/h, illustrative "raining" threshold

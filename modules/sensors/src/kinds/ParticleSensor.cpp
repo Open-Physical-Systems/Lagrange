@@ -19,21 +19,26 @@ namespace lagrange::sensors::kinds {
 
 namespace {
 
-// Sensirion SPS30 datasheet (PM sensor, v1.0 2020 and v2.0 2023): particle size range 0.3 µm to
+// Sensirion SPS30 datasheet, Version 2.0 – D1 – June 2023, table 1: particle size range 0.3 µm to
 // 10 µm, mass concentration range 0–1000 µg/m³, sampling interval 1 s; precision PM1 and PM2.5
-// ±10 µg/m³ (0–100 µg/m³) and ±10 % of the measured value (100–1000), PM4 and PM10 ±25 µg/m³ and
-// ±25 %. The precision is taken as 1σ.
+// ±(5 µg/m³ + 5 % of the measured value) from 0 to 100 µg/m³ (v1.0 of March 2020 gave
+// ±10 µg/m³) and ±10 % from 100 to 1000, PM4 and PM10 ±25 µg/m³ and ±25 %. Sensirion's precision
+// is the variation between devices, on averages of 150 s or more; it is taken here as the 1σ of
+// each reading, a stand-in.
 constexpr double kLowerSizeM = 0.3e-6;
 constexpr std::array<double, 4> kClassSizeM{1.0e-6, 2.5e-6, 4.0e-6, 10.0e-6};
 constexpr std::array<const char*, 4> kClassNames{"pm1", "pm2_5", "pm4", "pm10"};
 constexpr double kUgPerM3 = 1e-9;  // kg/m³ per µg/m³
-constexpr std::array<double, 4> kPrecisionAbs{10.0 * kUgPerM3, 10.0 * kUgPerM3, 25.0 * kUgPerM3,
-                                              25.0 * kUgPerM3};
 constexpr std::array<double, 4> kPrecisionRel{0.10, 0.10, 0.25, 0.25};
+/// Below the break, the part of the precision that grows with the reading (v2.0: PM1, PM2.5).
+constexpr std::array<double, 4> kPrecisionLowRel{0.05, 0.05, 0.0, 0.0};
+constexpr std::array<double, 4> kPrecisionLowAbs{5.0 * kUgPerM3, 5.0 * kUgPerM3, 25.0 * kUgPerM3,
+                                                 25.0 * kUgPerM3};
 constexpr double kPrecisionBreak = 100.0 * kUgPerM3;  // where the precision turns relative
 constexpr double kRangeMax = 1000.0 * kUgPerM3;
-/// Time constant of the reading, s: the SPS30's start-up time at 200–3000 particles/cm³ (about
-/// 8 s, datasheet); the datasheet gives no step response. TODO(verify) against a measured step.
+/// Time constant of the reading, s: the SPS30's typical start-up time at 200–3000 particles/cm³,
+/// 8 s (table 1: the time until a stable measurement); illustrative as a lag, since Sensirion
+/// gives no step response.
 constexpr double kDefaultTimeConstantS = 8.0;
 /// Lifted ground grains, m: the weather domain's ground_dust_diameter default.
 constexpr double kDefaultDownwashDiameterM = 1e-4;
@@ -102,8 +107,9 @@ public:
                 continue;
             }
             state_[k] += (air - state_[k]) * blend;
-            const double sigma =
-                state_[k] <= kPrecisionBreak ? kPrecisionAbs[k] : kPrecisionRel[k] * state_[k];
+            const double sigma = state_[k] <= kPrecisionBreak
+                                     ? kPrecisionLowAbs[k] + kPrecisionLowRel[k] * state_[k]
+                                     : kPrecisionRel[k] * state_[k];
             const double reading = state_[k] + noiseScale_ * sigma * rng.normal();
             bus.write(out_[k], std::clamp(reading, 0.0, kRangeMax));
         }

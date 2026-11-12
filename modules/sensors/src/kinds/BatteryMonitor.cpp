@@ -1,8 +1,9 @@
 // Kind `battery_monitor` (sensors.md §9): a smart battery's fuel gauge (a TI BQ40Z50 class part)
 // or a flight controller's power module, reading one battery of the electrical domain. Its
-// registers follow the Smart Battery Data Specification Rev 1.1 (SBS-IF, 1998), §5.1: Voltage in
-// mV, Current in mA, Temperature in 0.1 K, RelativeStateOfCharge in %, RemainingCapacity in mAh;
-// those are the default steps here, in SI units.
+// registers follow the Smart Battery Data Specification Rev 1.1 (SBS-IF, December 11, 1998),
+// §5.1: Temperature() in 0.1 K (§5.1.9), Voltage() in mV (§5.1.10), Current() in mA, signed
+// (§5.1.11), RelativeStateOfCharge() in % (§5.1.14), RemainingCapacity() in mAh (§5.1.16, with
+// CAPACITY_MODE 0; 10 mWh with 1); those are the default steps here, in SI units.
 #include "Converter.hpp"
 #include "KindModule.hpp"
 #include "lagrange/services/Log.hpp"

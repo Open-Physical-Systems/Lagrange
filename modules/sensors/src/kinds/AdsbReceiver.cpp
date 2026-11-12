@@ -33,14 +33,16 @@ double radioHorizon(double h1, double h2) {
 
 namespace {
 
-// DO-260B §2.2.3.3.1: airborne position and velocity squitters every 0.4 to 0.6 s, uniformly.
+// Airborne position and velocity squitters every 0.4 to 0.6 s, uniformly at random (ICAO Annex 10
+// Vol. IV §3.1.2.8.6.4.2 and §3.1.2.8.6.4.5, read in CAA Fiji's transposition SD-ATELCOM Vol. IV
+// ed. 1.2; DO-260B itself, which RTCA sells, was not read).
 constexpr double kMinInterval = 0.4;  // s
 constexpr double kMaxInterval = 0.6;  // s
 // Typical ground receiver reach (illustrative; real ones hear 200 km and more at altitude).
 constexpr double kMaxRange = 100e3;  // m
-// What a message carries: altitude in 25 ft steps (the Q bit, DO-260B §2.2.3.2.3.4), east and
-// north velocity in 1 kt steps and the vertical rate in 64 ft/min steps (subtype 1,
-// §2.2.3.2.6.1).
+// What a message carries: altitude in 25 ft steps (the Q bit, Annex 10 Vol. IV §3.1.2.6.5.4),
+// east and north velocity in 1 kt steps and the vertical rate in 64 ft/min steps (subtype 1,
+// airborne velocity: J. Sun, "The 1090 Megahertz Riddle", 2nd ed., ch. "Airborne velocity").
 constexpr double kAltitudeStep = 25.0 * 0.3048;         // m
 constexpr double kVelocityStep = 1852.0 / 3600.0;       // m/s, one knot
 constexpr double kVerticalStep = 64.0 * 0.3048 / 60.0;  // m/s

@@ -14,7 +14,8 @@ namespace lagrange::sensors::kinds {
 namespace {
 
 // Defaults, illustrative (a short-range IR triangulation sensor a few centimetres above the
-// floor); every one is a parameter.
+// floor, no particular part: Sharp's GP2Y0A51SK0F, for one, measures 2 to 15 cm); every one is a
+// parameter.
 constexpr double kDefaultMinRange = 0.005;  // m
 constexpr double kDefaultMaxRange = 0.15;   // m
 constexpr double kDefaultThreshold = 0.06;  // m: farther than this is a drop

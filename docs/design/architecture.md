@@ -546,6 +546,11 @@ Commits (since 1.2.x): a module's outputs commit together (`SignalBus::commitAll
 neighbouring values in one copy; the commit times live in their own array (`SignalBus::Timing`),
 and a signal's previous value is kept up to date only when a reader uses it (a feedback input or
 an extrapolation). For the town's 650 kinematic bodies this is most of the scheduler's own time.
+Only signals written since their last commit are copied (`SignalBus::dirty_`; the others' pending
+values equal their committed ones), and a zero-order-hold input is copied only when its writer
+has committed since the reader last took it (`SignalBus::preparedTick_`): MuJoCo reads the
+traffic's pose commands every 1 ms, written every 10 ms. Both are reset after a restore and an
+origin shift, and the values every module reads are the same bit for bit.
 
 Step sequence for one tick with electrical at 100 µs and physics at 1 ms:
 

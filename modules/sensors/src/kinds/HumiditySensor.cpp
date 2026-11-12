@@ -10,17 +10,19 @@ namespace lagrange::sensors::kinds {
 
 namespace {
 
-// Sensirion SHT40 (SHT4x datasheet and product page): RH accuracy ±1.8 %RH typical (±3.5 max),
-// temperature ±0.2 °C typical; repeatability at high precision 0.08 %RH and 0.04 °C; response time
-// τ63 4 s for RH (at 25 °C, 1 m/s air; 6 s in the 2020 datasheet) and 2 s for temperature (on
-// its own, a board slows it); resolution 0.01 %RH and 0.01 °C. Repeatability is the noise (1σ);
-// the accuracy is a fixed offset the user sets (`offset/humidity`, `offset/temperature`).
-constexpr double kHumidityNoise = 0.0008;        // of 1 (0.08 %RH), 1σ
-constexpr double kTemperatureNoise = 0.04;       // K, 1σ
-constexpr double kHumidityTau = 4.0;             // s
-constexpr double kTemperatureTau = 2.0;          // s
-constexpr double kHumidityResolution = 0.0001;   // of 1 (0.01 %RH)
-constexpr double kTemperatureResolution = 0.01;  // K
+// Sensirion SHT40 (SHT4x datasheet Version 7.3, June 2026, tables 1 and 2): RH accuracy ±1.8 %RH
+// typical (±3.5 max from 10 to 90 %RH, figure 2), temperature ±0.2 °C typical; repeatability at
+// high precision 0.08 %RH and 0.04 °C, "three times the standard deviation (3σ)" (footnote);
+// response time τ63 4 s for RH (at 25 °C, 1 m/s air; 6 s in Version 1, October 2020) and 2 s for
+// temperature (on its own, a board slows it); resolution 0.01 %RH and 0.01 °C. Repeatability / 3
+// is the noise (1σ); the accuracy is a fixed offset the user sets (`offset/humidity`,
+// `offset/temperature`).
+constexpr double kHumidityNoise = 0.0008 / 3.0;   // of 1 (0.08 %RH at 3σ), 1σ
+constexpr double kTemperatureNoise = 0.04 / 3.0;  // K (0.04 °C at 3σ), 1σ
+constexpr double kHumidityTau = 4.0;              // s
+constexpr double kTemperatureTau = 2.0;           // s
+constexpr double kHumidityResolution = 0.0001;    // of 1 (0.01 %RH)
+constexpr double kTemperatureResolution = 0.01;   // K
 
 class HumiditySensor final : public KindModule {
 public:

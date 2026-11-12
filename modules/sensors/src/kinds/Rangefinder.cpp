@@ -11,9 +11,9 @@ namespace lagrange::sensors::kinds {
 
 namespace {
 
-// Benewake TFmini-S (datasheet SJ-PM-TFmini-S-01 A01): 0.1 to 12 m on a 90 % white target,
+// Benewake TFmini-S (Datasheet SJ-PM-TFmini-S A01): 0.1 to 12 m on a 90 % white target,
 // accuracy ±6 cm from 0.1 to 6 m and ±1 % from 6 to 12 m, resolution 1 cm, 100 Hz by default.
-// The ± figures are taken as 2σ: σ = max(3 cm, 0.5 % of the range).
+// The datasheet does not say what the ± is; taken as 2σ: σ = max(3 cm, 0.5 % of the range).
 constexpr double kMinRange = 0.1;         // m
 constexpr double kMaxRange = 12.0;        // m
 constexpr double kNoise = 0.03;           // m, 1σ

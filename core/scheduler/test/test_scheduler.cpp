@@ -795,6 +795,34 @@ TEST(State, SaveRunRestoreRunIsIdentical) {
     EXPECT_EQ(scheduler.stateHash().value(), first);
 }
 
+// A held input is copied again only when its writer has committed since (SignalBus
+// preparedTick_); a restore and an origin shift make every slot copy again.
+TEST(State, HeldInputsOfASlowWriterAfterRestoreAndShift) {
+    const World world;
+    Scheduler scheduler;
+    auto seen = std::make_shared<Seen>();
+    scheduler.add(
+        source("traffic", 10_ms, "x/slow/value", units::m, [](double t) { return 1.0 + (t * t); }));
+    scheduler.add(sink("rigid_body", 1_ms, scalar("x/slow/value", units::m), seen));
+    ASSERT_TRUE(scheduler.wire(WorldView(world)));
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{15'000'000}).ok());
+    StateWriter saved;
+    ASSERT_TRUE(scheduler.saveState(saved).ok());
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{50'000'000}).ok());
+    const std::vector<double> first(seen->values.begin() + 15, seen->values.end());
+    ASSERT_EQ(first.size(), 35U);
+    for (std::size_t i = 0; i < first.size(); ++i) {
+        const double tick = static_cast<double>(15 + i);
+        const double written = (std::floor(tick / 10.0) + 1.0) * 0.01;  // committed for then
+        EXPECT_DOUBLE_EQ(first[i], 1.0 + (written * written)) << i;
+    }
+    StateReader reader(saved.bytes());
+    ASSERT_TRUE(scheduler.restoreState(reader).ok());
+    seen->values.clear();
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{50'000'000}).ok());
+    EXPECT_EQ(seen->values, first);
+}
+
 // QA 2026-11-12 #9: a restored run reads its last image at once, and publishes the same handles
 // as the run it repeats, so their hashes agree.
 TEST(State, RestoreKeepsPublishedImages) {

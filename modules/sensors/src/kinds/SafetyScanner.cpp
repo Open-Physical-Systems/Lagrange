@@ -6,6 +6,8 @@
 //
 // Defaults are the nanoScan3 Core I/O's (SICK data sheet NANS3-AAAZ30AN1, part 1100333): 275°
 // scanning angle, 0.17° angular resolution, 70 ms response time, 40 m distance measuring range.
+// The response time is the default multiple sampling of two 30 ms scans plus 10 ms (nanoScan3 I/O
+// operating instructions 8024602/1W27/2026-05-26, §14.2 table 33 and §14.3).
 // Its fields (3 m protective, 10 m warning at most) are the user's: they have no default.
 #include "KindScene.hpp"
 #include "lagrange/random/Philox.hpp"

@@ -19,15 +19,18 @@ namespace lagrange::sensors::kinds {
 
 namespace {
 
-/// Ranging precision with line of sight, 1σ, m. DW1000 and DW3000 datasheets (Decawave/Qorvo)
-/// give two-way ranging to within ±10 cm. TODO(verify): datasheet revision.
+/// Ranging precision with line of sight, 1σ, m: "a precision of 10 cm" (Decawave DW1000 Datasheet
+/// Version 2.10, 2015, p. 1; DW3000 Datasheet Version 1.1, 2020: "an accuracy of 10 cm"), taken
+/// as 1σ, on the safe side: the DW1000's figure 11 (line-of-sight two-way ranging) spreads about
+/// ±8 cm.
 constexpr double kDefaultRangeNoiseM = 0.1;
 /// Relative permittivity of concrete, 1–100 GHz (ITU-R P.2040-1 Table 3: εr' = 5.24, frequency
 /// independent): UWB channels 5 (6.5 GHz) and 9 (8 GHz) fall in that band.
 constexpr double kConcretePermittivity = 5.24;
 /// Extra spread without line of sight, 1σ, m: illustrative (multipath fills in the first path).
 constexpr double kDefaultNlosNoiseM = 0.3;
-/// Range limit, m: illustrative for indoor anchors at 6.8 Mb/s.
+/// Range limit, m: illustrative for indoor anchors at 6.8 Mb/s (the DW1000 datasheet's figure 31
+/// shows some 50 to 110 m in open line of sight at 6.8 Mb/s, by channel and preamble).
 constexpr double kDefaultMaxRangeM = 50.0;
 /// Material shorter than this along the line does not count (an anchor mounted on a wall).
 constexpr double kSurfaceToleranceM = 0.01;

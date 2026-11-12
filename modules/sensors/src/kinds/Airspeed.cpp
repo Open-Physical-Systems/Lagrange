@@ -12,7 +12,9 @@ namespace {
 // TE Connectivity MS4525DO-DS5AI001DP (±1 psi differential, the PX4 and ArduPilot airspeed
 // sensor; MS4525DO datasheet): 14-bit pressure output between 10 % and 90 % of 16383 counts over
 // the full ±1 psi, so one count is 2·6894.76 Pa / (0.8·16383) = 1.052 Pa; 11-bit temperature.
-// TODO(verify): its total error band, not modelled by default (set noise and offset).
+// Total error band ±1 % of span (datasheet MS4525DO 04/2019, p. 4: accuracy, thermal, span and
+// offset errors over −10 to 85 °C; ±138 Pa on ±1 psi): not modelled by default (set noise and
+// offset).
 constexpr double kPsi = 6894.757;                               // Pa per psi
 constexpr double kRange = 1.0 * kPsi;                           // Pa, ±1 psi
 constexpr double kResolution = 2.0 * kRange / (0.8 * 16383.0);  // Pa per count

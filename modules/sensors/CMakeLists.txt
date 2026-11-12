@@ -27,6 +27,7 @@ add_library(
     src/WeatherEffects.cpp
     src/ThermalCamera.cpp
     src/kinds/Kinds.cpp
+    src/kinds/ImagingRadar.cpp
     src/kinds/CameraKinds.cpp
     src/kinds/EventCamera.cpp
     src/kinds/OpticalFlow.cpp
@@ -130,6 +131,17 @@ if(BUILD_TESTING)
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
     )
     lagrange_target_defaults(test_radar)
+    # Kind imaging_radar (sensors.md §2 "4D imaging radar"); its GPU case runs on the software
+    # Vulkan device (llvmpipe) where there is no GPU, skipped without any device.
+    ament_add_gtest(
+        test_kinds_imaging_radar
+        test/test_kinds_imaging_radar.cpp
+        TIMEOUT 120
+        ENV
+        ASAN_OPTIONS=${LAGRANGE_GPU_TEST_ASAN_OPTIONS}
+    )
+    target_link_libraries(test_kinds_imaging_radar lagrange_sensors)
+    lagrange_target_defaults(test_kinds_imaging_radar)
     ament_add_gtest(test_camera_model test/test_camera_model.cpp)
     target_link_libraries(test_camera_model lagrange_sensors)
     lagrange_target_defaults(test_camera_model)

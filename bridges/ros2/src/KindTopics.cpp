@@ -50,7 +50,9 @@ constexpr std::size_t kDetectionFields = 16;  // a detections row (sensors.md §
 /// Odometry's covariance diagonals (x, y, z, roll, pitch, yaw) when the sensor gives none:
 /// illustrative for a planar robot; 1e6 marks what wheels do not measure (z, roll, pitch), as
 /// robot_localization reads it. Set them with `pose_covariance_diagonal` and
-/// `twist_covariance_diagonal` (six numbers, ros2_control diff_drive_controller's names).
+/// `twist_covariance_diagonal` (six numbers, ros2_control diff_drive_controller's names; its
+/// defaults are all zero and its parameter description suggests 0.001 for x, y, z, roll, pitch
+/// and 0.01 for yaw as a start, diff_drive_controller_parameter.yaml).
 constexpr std::array<double, 6> kPoseCovariance{1e-3, 1e-3, 1e6, 1e6, 1e6, 1e-2};
 constexpr std::array<double, 6> kTwistCovariance{1e-3, 1e-3, 1e6, 1e6, 1e6, 1e-2};
 

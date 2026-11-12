@@ -13,15 +13,18 @@ namespace lagrange::sensors::kinds {
 
 namespace {
 
-// iniVation DAVIS346: 346 × 260 pixels. Contrast threshold and mismatch are v2e's defaults
-// (Hu, Liu and Delbruck 2021: 0.2 ln and σ 0.03 ln); the refractory period and the background
-// activity rate are illustrative (TODO(verify) against a DAVIS346 datasheet or v2e's defaults).
+// iniVation DAVIS346 specification sheet (latest change 15 August 2019): 346 × 260 pixels of
+// 18.5 µm, a 6.4 mm wide array; with a 4.5 mm lens 70.8° across. Contrast threshold 0.2 ln, its
+// mismatch σ 0.03 ln and the refractory period 0.5 ms are v2e's defaults (v2ecore/v2e_args.py,
+// pos_thres, sigma_thres, refractory_period); the background activity, 0.1 Hz per pixel, is the
+// typical leak event rate of Hu, Liu and Delbruck (v2e, CVPR Workshops 2021, arXiv:2006.07722
+// §3). iniVation publishes neither a refractory period nor a background rate for the DAVIS346.
 constexpr double kDefaultWidth = 346.0;
 constexpr double kDefaultHeight = 260.0;
-constexpr double kDefaultFov = 1.22;  // rad, about 70°: a 4.5 mm lens on its 6.9 mm wide array
+constexpr double kDefaultFov = 1.2357;  // rad, 70.8°: a 4.5 mm lens on its 6.4 mm wide array
 constexpr double kDefaultThreshold = 0.2;
 constexpr double kDefaultThresholdSigma = 0.03;
-constexpr double kDefaultRefractoryS = 1e-4;
+constexpr double kDefaultRefractoryS = 5e-4;
 constexpr double kDefaultNoiseRateHz = 0.1;
 constexpr double kDefaultMaxEvents = 20000.0;
 constexpr std::size_t kEventFields = 4;  // x, y, t, polarity

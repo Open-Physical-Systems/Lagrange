@@ -862,6 +862,8 @@ Status Scheduler::restoreState(StateReader& reader) {
             }
         }
     }
+    bus_.forgetPrepared();
+    bus_.markAllDirty();
     if (!ok || reader.failed()) {
         return corrupt("signal bus layout");
     }

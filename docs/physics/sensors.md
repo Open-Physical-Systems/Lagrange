@@ -67,7 +67,7 @@ r\,e^{\sigma r} = R\,(1 - c)
 $$
 
 with $\sigma$ the extinction (1/m), $R$ the clear-air maximum range and $c$ the window's
-contamination. Fog adds clutter from its backscatter (lidar ratio 18.5 sr, 5 ns pulse) about 2 m
+contamination. Fog adds clutter from its backscatter (lidar ratio 18.8 sr, 5 ns pulse) about 2 m
 out; rain adds returns from Marshall–Palmer drops of 0.5 mm and more within 2 m of the window
 (about 1 % of beams at 2 mm/h, 5 % at 25 mm/h). A NanoVDB fog grid adds its optical depth along
 each beam. See [Weather](weather.md).

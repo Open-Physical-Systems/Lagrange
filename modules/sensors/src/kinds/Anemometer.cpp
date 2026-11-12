@@ -10,18 +10,19 @@ namespace lagrange::sensors::kinds {
 
 namespace {
 
-// Gill Instruments WindSonic (1405-PK-100 datasheet; WindSonic M datasheet issue 16): speed
-// accuracy ±2 % at 12 m/s (RMS error), resolution 0.01 m/s, starting threshold 0.01 m/s; direction
-// accuracy ±3° at 12 m/s (some issues say ±2°), resolution 1°. The ± figures are taken as 2σ.
-constexpr double kSonicSpeedNoiseFraction = 0.01;                        // of the speed, 1σ
+// Gill Instruments WindSonic (User Manual 1405-PS-0019 Issue 30, Nov 2022, appendix A): speed
+// accuracy "± 2% RMSE (at 12m/s)", resolution 0.01 m/s; direction accuracy ±2° at 12 m/s (±3° in
+// the 2009 datasheet), resolution 1°; starting threshold 0.01 m/s (WindSonic datasheets). The
+// speed's RMS error is its 1σ; the direction's ± is taken as 2σ.
+constexpr double kSonicSpeedNoiseFraction = 0.02;                        // of the speed, 1σ
 constexpr double kSonicSpeedNoise = 0.01;                                // m/s, 1σ, the least
-constexpr double kSonicDirectionNoise = 1.5 * std::numbers::pi / 180.0;  // rad, 1σ
+constexpr double kSonicDirectionNoise = 1.0 * std::numbers::pi / 180.0;  // rad, 1σ
 constexpr double kSonicSpeedResolution = 0.01;                           // m/s
 constexpr double kSonicDirectionResolution = std::numbers::pi / 180.0;   // rad, 1°
 constexpr double kSonicThreshold = 0.01;                                 // m/s
-// R. M. Young 05103 Wind Monitor (propeller and vane; datasheet): propeller threshold 1.0 m/s,
-// vane threshold 1.1 m/s, distance constant 2.7 m (63 % recovery). TODO(verify): against the
-// current Young datasheet.
+// R. M. Young 05103 Wind Monitor (manual 05103-90, rev. N062819, specifications): propeller
+// threshold 1.0 m/s, vane threshold 1.1 m/s at 10° displacement, distance constant 2.7 m (63 %
+// recovery).
 constexpr double kCupThreshold = 1.0;         // m/s
 constexpr double kVaneThreshold = 1.1;        // m/s
 constexpr double kCupDistanceConstant = 2.7;  // m

@@ -28,8 +28,11 @@ struct SensorWeather {
 /// magnitude and trend, not a point match; TODO(verify): calibrate against published fog- and
 /// rain-chamber statistics, e.g. the DENSE project's).
 struct LidarClutter {
-    double pulseLength{0.75};      // m, c·τ/2 for a 5 ns pulse
-    double lidarRatio{18.5};       // sr, extinction over backscatter of fog droplets (TODO(verify))
+    double pulseLength{0.75};  // m, c·τ/2 for a 5 ns pulse
+    // sr, extinction over backscatter of liquid-water droplets at 905 nm: 18.8 ± 0.8 sr (O'Connor,
+    // Illingworth and Hogan, J. Atmos. Oceanic Technol. 21, 777–786, 2004, as used by Hopkin et
+    // al., Atmos. Meas. Tech. 12, 4131–4147, 2019, §3); for cloud droplets, fog's a proxy.
+    double lidarRatio{18.8};
     double overlap{2.0};           // m, where the receiver sees the beam (overlap 1 − e^−(r/o)⁴)
     double reflectivity{0.1};      // the reference target's reflectivity, at max range
     double gain{0.11};             // fog backscatter detection gain, set so that half the beams of

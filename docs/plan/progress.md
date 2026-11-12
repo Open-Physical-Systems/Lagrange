@@ -48,6 +48,21 @@ hunt for flaws. Done by parallel agents in worktrees, merged into `night/integra
   files untouched tonight (`docs/plan/spikes/0.2-C6-jolt.md`, `city_block_roads.usda`,
   `vendor/jolt_vendor`).
 
+## After #330 (2026-11-12, day)
+
+- `imaging_radar`, a 4D imaging radar kind (range, azimuth, elevation, Doppler; λ/(N·d) cells,
+  ambiguity folding, ground ghosts); the existing radar pinned bit for bit.
+- Every `TODO(verify)` default checked against its source: 14 corrected (among them SHT40 noise
+  3× too large, BH1750 saturating at 54 612 lx, Gazebo's meaning of `<dynamic_bias_stddev>`,
+  Livox rosette prism speeds from Livox's paper), 35 confirmed, 30 kept illustrative with the
+  reason; `docs/plan/sensor-defaults-verification-2026-11-12.md`.
+- Third perf round (`benchmarks.md` §4.2): static shapes' hierarchy built once, lidar noise in
+  parallel, bus copies only what was written; the town +33 %, lidar scans about halved; the
+  quadcopter 3–5 % slower (owed); camera time follows the laptop GPU's clocks.
+- RFC 0014 (frame limits before the handshake, QA #7; server-side prototype) and RFC 0015 (USD
+  attributes for lidar patterns and fisheye lenses) as **Drafts** for the owner. Until 0015, writing
+  those sensors to USD is refused instead of written wrong.
+
 ## v0.2, item by item
 
 Green: merged. Amber: in progress or open for review. Red: blocked on a decision. Grey: not

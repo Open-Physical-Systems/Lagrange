@@ -199,6 +199,77 @@ What is left, largest first:
   committing 2700 outputs, mostly memory traffic.
 - The CPU lidar, 1.7 to 4 ms per scan.
 
+### 4.2 Third round (2026-11-12, day)
+
+Same scenarios and method (`--no-ros --rtf 0`, 20 s, the median of the 1 s windows after the
+first four), the build before (71880eb, the second round's state) and after run in the order
+before, after, after, before per scenario; load average 1.4 to 8 on 20 threads. Camera runs are
+set by the laptop GPU's clocks (below), so for them the table also gives the real-time factor
+without the camera's time (each window's factor divided by one less the camera's share of it).
+
+| Run | Before (RTF) | After (RTF) | Without the camera, before → after | What changed it |
+|---|---|---|---|---|
+| Sample AMR, warehouse (`--lidar cpu`) | 27.3, 29.2 | 31.3, 31.5 | | caster hierarchy, lidar noise |
+| Quadcopter, open field | 61.9 to 65.9 | 59.3 to 63.9 | | 3 to 5 % slower: bus bookkeeping (below) |
+| Thermal camera AMR, 6 people | 12.3, 17.4 | 12.7, 12.8 | 21.8, 21.3 → 25.8, 25.8 | caster hierarchy, lidar noise |
+| Sedan, city block | 10.4, 12.5 | 11.1, 11.7 | 19.6, 25.7 → 28.6, 32.2 | as above |
+| Sedan in the town | 3.0, 3.0 | 3.6, 3.0 | 5.3, 5.7 → 7.0, 5.8 | as above, MuJoCo writes |
+| Sedan in the town, `--lidar gpu` | 2.6, 2.5 | 3.7, 3.4 | 2.9, 2.9 → 4.5, 4.0 | as above, BVH refit |
+| Town, no robot, 24 cars, 36 people | 16.4, 16.6, 16.9 | 21.7, 22.0, 22.9 | | bus, MuJoCo writes |
+
+Per step (medians): the AMR's top lidar 1.03 → 0.56 ms; the sedan's roof lidar 2.1 → 0.97 ms
+(city) and 3.1 → 2.0 ms (town), its radar in the town 1.0 → 0.8 ms; MuJoCo in the town 0.040 →
+0.028 ms, with the sedan 0.096 → 0.087 ms. Every signal is the same bit for bit before and after:
+`LAGRANGE_DETERMINISM_HASHES=1 lagrange determinism` prints every state hash, and the before and
+after builds give the same 201 hashes over 20 s for `amr_sample_urdf`, `sedan_city`,
+`quad_x500_hover`, the sedan in the town and the town without a robot (and each passes
+`lagrange determinism`).
+
+What each change does:
+
+- **The ray caster builds the hierarchy of shapes that never moved once.** `ShapeCaster` rebuilt
+  Embree's hierarchy over every shape whenever one moved: each lidar scan of a robot in a world
+  rebuilt the world's (about 10 % of the main thread with the sedan in the town). Shapes that have
+  never moved now sit in a scene built once, the moved ones in a second scene rebuilt when they
+  move; a top scene instances both.
+- **The lidar draws its range noise in parallel**: a Gaussian per beam on one thread was about a
+  millisecond of a 32 768-beam scan. Each beam has its own Philox stream, so threads change
+  nothing.
+- **Held inputs are copied only after a new commit**, and **commits copy only written signals**
+  (architecture.md §6): in the town MuJoCo's 655 pose-command inputs, written every 10 ms, were
+  copied every 1 ms (input preparation 9.5 → 3.5 % of the main thread).
+- **MuJoCo writes a kinematic body's unchanged values once** (rigid_body.md): its pose when its
+  command changes, its twist and contact force when they change, its zero acceleration once.
+- **The GPU lidar refits its hierarchy** instead of rebuilding it every scan (rebuilt when the
+  inner boxes' area has grown by a quarter, or after 30 scans).
+
+Measured and not fixed:
+
+- **The camera, and the GPU lidar, are set by the GPU's clocks.** With `nvidia-smi` sampled once a
+  second during the sedan in the town: for the first 10 s the GPU stays at 2010 MHz (P0) and the
+  front camera takes 3.0 ms a frame; then the driver drops it to 600 to 990 MHz (P5) at 30 to 40 %
+  utilisation and the same frame takes 12 to 13.5 ms, for the rest of the run. The driver keeps the
+  utilisation in a band by lowering the clock, so batching the same work differently does not
+  raise it; only overlapping the render with the next ticks (a frame of latency) or a GPU held at
+  its clocks would. Pinning clocks needs root (`nvidia-smi -lgc`); whether the PowerMizer
+  "prefer maximum performance" setting holds them for a Vulkan compute client on Wayland is
+  TODO(verify). Not changed here.
+- **Why Tier 1 (`--lidar gpu`) is not faster.** Timed per phase: building the shapes and the tree
+  is 0.02 to 0.05 ms; the dispatch with its wait is the rest. The sample AMR's lidar (14 400 beams,
+  13 shapes, trivial work) takes 1.1 ms per dispatch, and a second dispatch straight after the
+  first as long (spinning on the fence instead of sleeping: 0.95 ms), at 400 to 870 MHz: the GPU is
+  latency-bound at low clocks, where the CPU caster over 20 threads takes 0.56 ms. In the town the
+  lidar's and the radar's dispatches also wait behind the camera's render in flight (6.4 ms for
+  1 350 radar beams as for 32 768 lidar beams). `--lidar auto` keeps the CPU caster.
+- **The bus bookkeeping costs the quadcopter 3 to 5 %** (62.6 → 59.9 and 65.7 → 63.1 RTF in two
+  sets of four runs): its 100 µs ticks commit small signals that are all written every step, so
+  the dirty flags and the per-slot checks are pure overhead there (merging nearby written signals
+  into one copy took back part of it). Left as it is; worth a look.
+- MuJoCo with a robot among the kinematic bodies: the broad-phase culling already applies with a
+  robot present (it is per moving tree), so what is left is MuJoCo's per-body passes
+  (kinematics, velocities, `mj_rnePostConstraint`) over all 664 bodies, which a backend cannot
+  restrict to a subset of an `mjModel`.
+
 ## 5. Start-up and Python throughput (2026-11-12)
 
 The target (§13.4 of the project rules) is under 5 s from a cold start to the viewer's first frame

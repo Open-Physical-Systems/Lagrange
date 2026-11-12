@@ -348,7 +348,8 @@ struct Bridge::Impl {
     std::vector<Imu> imus;
     std::vector<Geo> geos;
     /// A radar's detections as sensor_msgs/PointCloud2 (x, y, z, velocity, rcs, snr: float32),
-    /// in the radar's frame, one point per detection (domains/sensors.md).
+    /// in the radar's frame, one point per detection (domains/sensors.md); also kind
+    /// imaging_radar's, z from each detection's elevation.
     struct Radar {
         std::string frame;
         std::string topic;
@@ -1043,7 +1044,10 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
                 }
             }
             geos.push_back(std::move(geo));
-        } else if (sensors.type[i] == SensorType::Radar) {
+        } else if (sensors.type[i] == SensorType::Radar ||
+                   (sensors.type[i] == SensorType::Custom && sensors.kind[i] == "imaging_radar")) {
+            // The 4D imaging radar (kind imaging_radar) writes the radar's detections, more of
+            // them: the same cloud (sensors.md §2 "4D imaging radar").
             Impl::Radar radar;
             radar.frame = name;
             radar.topic = "/" + name + "/detections";

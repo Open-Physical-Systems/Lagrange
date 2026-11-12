@@ -15,10 +15,12 @@ namespace lagrange::sensors::kinds {
 namespace {
 
 constexpr double kInf = std::numeric_limits<double>::infinity();
-/// Defaults, illustrative of a short-range time-of-flight skin element: 0.3 m reach, 1 mm noise.
+/// Defaults of a short-range time-of-flight skin element after the ST VL53L0X (DocID029104 Rev 2,
+/// April 2018): its field of view 25° (§5.1), its ranging standard deviation 4 % at 33 ms
+/// (table 12, white target indoors) taken at the 0.3 m reach, 12 mm. The reach is illustrative.
 constexpr double kDefaultMaxRangeM = 0.3;
-constexpr double kDefaultNoiseM = 0.001;
-constexpr double kDefaultFovRad = 0.44;  // 25°, the order of a VL53L0X-class element's cone
+constexpr double kDefaultNoiseM = 0.012;
+constexpr double kDefaultFovRad = 0.44;  // 25°, the VL53L0X's field of view
 constexpr int kMaxElements = 4096;
 
 class Proximity final : public KindModule {
