@@ -324,7 +324,10 @@ private:
             }
         }
         if (low > high) {
-            options.heat.clear();
+            if (!options.heat.empty()) {
+                options.heat.clear();
+                ++options.heatVersion;
+            }
             return;  // no samples yet
         }
         if (high - low < kMinimumSpanK) {
@@ -335,6 +338,7 @@ private:
             heatLow_ = low;
             heatHigh_ = high;
             options.heat.clear();
+            ++options.heatVersion;
             options.heatCovered.assign(prims.size(), false);
             for (const auto& [path, volume] : volumes ? *volumes : FieldStream::PrimVolumes{}) {
                 std::uint32_t at = kNone;

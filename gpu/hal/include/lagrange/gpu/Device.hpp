@@ -96,6 +96,18 @@ public:
     /// readbacks and tests; not for per-frame rendering.
     void submitAndWait(const std::function<void(VkCommandBuffer)>& record) const;
 
+    /// Commands submitted and not yet waited for (submit / wait).
+    struct Submission {
+        VkCommandBuffer commands{VK_NULL_HANDLE};
+        VkFence fence{VK_NULL_HANDLE};
+    };
+    /// submitAndWait() in two halves, so the host can work while the device does: records and
+    /// submits, and returns at once. Every submission must be waited for. Like submitAndWait,
+    /// calls on one device must not overlap (the caller serialises them).
+    [[nodiscard]] Submission submit(const std::function<void(VkCommandBuffer)>& record) const;
+    /// Waits for a submission to complete and releases it; nothing for an empty one.
+    void wait(Submission& submission) const;
+
 private:
     Device() = default;
 

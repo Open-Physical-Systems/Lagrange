@@ -13,6 +13,7 @@
   <test_depend>lagrange_example_arm</test_depend>
   <test_depend>lagrange_example_power</test_depend>
   <test_depend>lagrange_example_lidar</test_depend>
+  <test_depend>lagrange_example_sensors</test_depend>
   <test_depend>lagrange_example_weather</test_depend>
   <test_depend>lagrange_example_quadcopter</test_depend>
   <test_depend>lagrange_example_holybro</test_depend>

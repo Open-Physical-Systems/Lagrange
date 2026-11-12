@@ -55,6 +55,8 @@ struct RenderOptions {
         std::vector<float> vertices;  ///< x, y, z, then linear r, g, b, per vertex; triangles
     };
     std::vector<HeatPatch> heat;
+    /// Changed by whoever changes `heat`: the renderer copies the patches to the GPU only then.
+    std::uint64_t heatVersion{0};
     std::vector<bool> heatCovered;  ///< per scene prim: drawn by a heat patch
     /// Current shading: per scene prim, its share of the largest current, -1..1, negative when
     /// reversed (NaN: no motor, its own colour dimmed).

@@ -109,7 +109,7 @@ Power lines, a robot's own wiring, compasses, CAN errors, radio links.
 :::{container} lg-card
 **[Sensors](physics/sensors.md)**
 
-Lidar, camera, thermal camera, radar, IMU, GNSS, magnetometer, barometer.
+Lidar, camera, thermal camera, radar, IMU, GNSS, magnetometer, barometer, and [36 more](guide/sensors.md).
 :::
 
 :::{container} lg-card
@@ -189,6 +189,7 @@ print(sim.read("body/base_link/pose"))
 | Install it | [Installing Lagrange](guide/install.md): from source, as debs or in a container |
 | Fly a drone, or test your own | [Tutorial: a quadcopter](guide/tutorial-drone.md), then [Test your own drone](guide/tutorial-custom-drone.md) |
 | Load your own robot | [The run file](guide/run-file.md) and [The `lagrange` command](guide/cli.md) |
+| Find a sensor, add it, read it, break it | [Sensors](guide/sensors.md): every sensor Lagrange simulates, by robot |
 | Drive a car, or run Autoware | [Tutorial: a car in a city block](guide/tutorial-cars.md), then [Autoware](guide/autoware.md) |
 | Heat, and a robot's own EMI | [Tutorial: heat in the parts and a robot's own interference](guide/tutorial-heat-and-emi.md) |
 | Know how a number is computed | [Physics reference](physics/index.md): every model, its equations and its checks |
@@ -222,6 +223,7 @@ guide/autoware
 guide/run-file
 guide/concepts
 guide/profiles
+guide/sensors
 guide/cli
 guide/writing-a-module
 guide/writing-a-plugin

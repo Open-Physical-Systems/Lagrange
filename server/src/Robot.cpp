@@ -623,6 +623,95 @@ double firstStddev(const tinyxml2::XMLElement* element) {
     return 0.0;
 }
 
+/// A lidar's opt-in scan pattern (LidarLayout.hpp; sensors.md, "Lidar scan patterns (as
+/// built)"): <pattern> grid | flash | rosette, a channel table <scan><vertical><angles> (rad,
+/// one per channel, any order) and the rosette's <rosette> (fov, point_rate, speed_1, speed_2,
+/// prism_ratio). Returns a note for a pattern it does not know, else an empty string.
+std::string lidarPattern(const tinyxml2::XMLElement* ray,
+                         std::map<std::string, double, std::less<>>& settings) {
+    if (ray == nullptr) {
+        return {};
+    }
+    std::string note;
+    if (const tinyxml2::XMLElement* pattern = ray->FirstChildElement("pattern");
+        pattern != nullptr && pattern->GetText() != nullptr) {
+        const std::string name = pattern->GetText();
+        if (name == "flash") {
+            settings["pattern"] = 1.0;
+            settings["motion_distortion"] = 0.0;  // every beam at once
+        } else if (name == "rosette") {
+            settings["pattern"] = 2.0;
+            if (ray->FirstChildElement("scan") == nullptr ||
+                ray->FirstChildElement("scan")->FirstChildElement("horizontal") == nullptr) {
+                settings.erase("samples");  // the rosette's own default
+            }
+        } else if (name != "grid") {
+            note = "lidar pattern '" + name + "' is not known (grid, flash, rosette): grid used";
+        }
+    }
+    const tinyxml2::XMLElement* vertical = ray->FirstChildElement("scan");
+    vertical = vertical != nullptr ? vertical->FirstChildElement("vertical") : nullptr;
+    if (const tinyxml2::XMLElement* angles =
+            vertical != nullptr ? vertical->FirstChildElement("angles") : nullptr;
+        angles != nullptr && angles->GetText() != nullptr) {
+        std::istringstream text(angles->GetText());
+        std::size_t ring = 0;
+        for (double angle = 0.0; text >> angle; ++ring) {
+            settings["vertical_angle_" + std::to_string(ring)] = angle;
+        }
+    }
+    if (const tinyxml2::XMLElement* rosette = ray->FirstChildElement("rosette")) {
+        for (const auto& [element, key] :
+             {std::pair{"fov", "rosette_fov"}, std::pair{"point_rate", "rosette_point_rate"},
+              std::pair{"speed_1", "rosette_speed_1"}, std::pair{"speed_2", "rosette_speed_2"},
+              std::pair{"prism_ratio", "rosette_prism_ratio"}}) {
+            double value = 0.0;
+            if (const tinyxml2::XMLElement* e = rosette->FirstChildElement(element);
+                e != nullptr && e->QueryDoubleText(&value) == tinyxml2::XML_SUCCESS) {
+                settings[key] = value;
+            }
+        }
+    }
+    return note;
+}
+
+/// A camera's fisheye lens (FisheyeLens.hpp; sensors.md, "Fisheye cameras (as built)"):
+/// <lens><type> equidistant (or kannala_brandt, fisheye) makes <horizontal_fov> the lens's
+/// angle across the width; <cutoff_angle> (rad) and Lagrange's <k1>..<k4> (OpenCV fisheye).
+/// Returns a note for a lens type it does not draw, else an empty string.
+std::string cameraLens(const tinyxml2::XMLElement* camera,
+                       std::map<std::string, double, std::less<>>& settings) {
+    const tinyxml2::XMLElement* lens =
+        camera != nullptr ? camera->FirstChildElement("lens") : nullptr;
+    const tinyxml2::XMLElement* type = lens != nullptr ? lens->FirstChildElement("type") : nullptr;
+    if (type == nullptr || type->GetText() == nullptr) {
+        return {};
+    }
+    const std::string name = type->GetText();
+    if (name == "gnomonical") {
+        return {};  // a pinhole, as without a lens
+    }
+    if (name != "equidistant" && name != "kannala_brandt" && name != "fisheye") {
+        return "camera lens type '" + name +
+               "' is not drawn (gnomonical, equidistant, kannala_brandt): a pinhole used";
+    }
+    settings["projection"] = 1.0;
+    settings["distortion_model"] = 2.0;  // equidistant, as camera_info names it
+    double value = 0.0;
+    if (const tinyxml2::XMLElement* cutoff = lens->FirstChildElement("cutoff_angle");
+        cutoff != nullptr && cutoff->QueryDoubleText(&value) == tinyxml2::XML_SUCCESS) {
+        settings["fisheye_cutoff"] = value;
+    }
+    for (int k = 1; k <= 4; ++k) {
+        const std::string key = "k" + std::to_string(k);
+        if (const tinyxml2::XMLElement* e = lens->FirstChildElement(key.c_str());
+            e != nullptr && e->QueryDoubleText(&value) == tinyxml2::XML_SUCCESS) {
+            settings["distortion_" + key] = value;
+        }
+    }
+    return {};
+}
+
 const tinyxml2::XMLElement* firstNoise(const tinyxml2::XMLElement* element) {
     if (element == nullptr) {
         return nullptr;
@@ -972,6 +1061,9 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
                 if (childNumber(ray, {"motion_distortion"}, 1.0) == 0.0) {
                     settings["motion_distortion"] = 0.0;
                 }
+                if (std::string note = lidarPattern(ray, settings); !note.empty()) {
+                    robot.notes.push_back(std::string(name) + ": " + note);
+                }
                 typeName = "Lidar";
             } else if (type == "camera" || type == "depth" || type == "depth_camera" ||
                        type == "rgbd_camera" || type == "thermal" || type == "thermal_camera") {
@@ -985,6 +1077,9 @@ void addSensors(Robot& robot, const std::string& path, std::size_t firstBody) {
                 settings["far_clip"] = childNumber(camera, {"clip", "far"}, 100.0);
                 if (type == "thermal" || type == "thermal_camera") {
                     settings["thermal"] = 1.0;  // ThermalCameraAPI_1's defaults
+                }
+                if (std::string note = cameraLens(camera, settings); !note.empty()) {
+                    robot.notes.push_back(std::string(name) + ": " + note);
                 }
                 typeName = "Camera";
             } else if (!type.empty()) {

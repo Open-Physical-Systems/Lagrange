@@ -153,6 +153,20 @@ profile's `rigid_body: {backend: NAME}`. Its contract is §3 and §5, binding:
   `shift_origin`; and, for a backend that says it is deterministic, `save_state` and
   `restore_state` that restore a run bit for bit.
 
+MuJoCo and kinematic bodies (since 1.2.x): MuJoCo makes no contact between two bodies without
+degrees of freedom (a kinematic body and the scenery, or two kinematic bodies), but its broad
+phase still sorts and pairs them, which for the town's 650 traffic and people bodies was about
+half of a step. Before each collision pass the backend clears the collision masks of the kinematic
+bodies that no moving body can reach (a sphere about each, against a box about each moving
+tree's colliders at their last place, widened by 0.5 m and 200 m/s for a step) and puts them back
+as one comes near (`MujocoBackend::cullKinematicContacts`). The contacts are the same: the test
+`CullingFarKinematicBodiesLeavesTheRunUnchanged` runs a pusher into a box with and without it
+and compares the state hash at every step. With a moving plane in the world it stays off.
+A world with no degree of freedom at all (scenery and kinematic bodies only, as the town
+without a robot) skips MuJoCo's step: it advances the time as `mj_step2` does and places the
+kinematic bodies (`mj_kinematics`); the state is the same bit for bit (checked on the town's
+state hash over 20 s).
+
 The conformance suite, `ros2 run lagrange_server lagrange_physics_conformance`
 (`server/test/physics_conformance.cpp`), checks a backend against it. It runs the backends in
 `LAGRANGE_CONFORMANCE` (`NAME` or `NAME@PLUGIN`, comma-separated; default

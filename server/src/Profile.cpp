@@ -1,3 +1,4 @@
+#include "lagrange/sensors/Faults.hpp"
 #include "lagrange/server/Profile.hpp"
 
 #include <algorithm>
@@ -6,6 +7,7 @@
 #include <filesystem>
 #include <jsoncons/json.hpp>
 #include <jsoncons_ext/jsonschema/jsonschema.hpp>
+#include <limits>
 #include <numbers>
 
 #include <yaml-cpp/yaml.h>
@@ -435,6 +437,51 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
             }
             settings.plugins.push_back(std::move(plugin));
         }
+    }
+    if (profile.contains("sensor_faults") && profile["sensor_faults"].is_array()) {
+        // Checked as --sensor-fault checks them; whether the sensor and quantity exist is known
+        // only once the run is wired, and a profile naming one that does not is refused then.
+        std::vector<std::string> faults;
+        std::size_t index = 0;
+        for (const jsoncons::json& entry : profile["sensor_faults"].array_range()) {
+            const std::string at = "/sensor_faults/" + std::to_string(index++);
+            sensors::SensorFault fault;
+            fault.sensor = entry["sensor"].as<std::string>();
+            fault.quantity = entry.get_value_or<std::string>("quantity", "*");
+            const std::string mode = entry["mode"].as<std::string>();
+            for (const sensors::FaultMode m :
+                 {sensors::FaultMode::Dropout, sensors::FaultMode::Stuck, sensors::FaultMode::Bias,
+                  sensors::FaultMode::Drift, sensors::FaultMode::Noise,
+                  sensors::FaultMode::Disconnect}) {
+                if (sensors::to_string(m) == mode) {
+                    fault.mode = m;
+                }
+            }
+            fault.at = entry.get_value_or<double>("at", 0.0);
+            if (entry.contains("for")) {
+                fault.duration = entry["for"].as<double>();
+            }
+            fault.probability = entry.get_value_or<double>("probability", 1.0);
+            fault.nan = entry.get_value_or<bool>("nan", false);
+            fault.component = entry.get_value_or<int>("component", -1);
+            // The size each mode needs: the schema requires it, so the default never applies.
+            const double nan = std::numeric_limits<double>::quiet_NaN();
+            fault.value = entry.get_value_or<double>("value", nan);
+            fault.rate = entry.get_value_or<double>("rate", nan);
+            fault.sigma = entry.get_value_or<double>("sigma", nan);
+            if (const std::string problem = sensors::checkSensorFault(fault); !problem.empty()) {
+                error(check, at, problem);
+                continue;
+            }
+            // Written as text and read back: the same checks as the command line's.
+            const std::string text = sensors::to_string(fault);
+            if (auto parsed = sensors::parseSensorFault(text); !parsed) {
+                error(check, at, parsed.error());
+                continue;
+            }
+            faults.push_back(text);
+        }
+        settings.sensorFaults = std::move(faults);
     }
     for (const char* key : {"environment", "seed", "deterministic", "tier", "batch", "bridges",
                             "scenario", "record"}) {

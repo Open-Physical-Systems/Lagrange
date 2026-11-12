@@ -1,4 +1,6 @@
 #include "lagrange/ros2/Bridge.hpp"
+#include "lagrange/ros2/KindTopics.hpp"
+#include "lagrange/world/FisheyeLens.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
@@ -84,6 +86,24 @@ builtin_interfaces::msg::Time stampOf(SimTime t) {
 
 std::span<const double> values(const SignalBus& bus, SignalId id) {
     return id.valid() ? bus.readN(id) : std::span<const double>();
+}
+
+/// A pinhole's CameraInfo: K from `k` (fx, fy, cx, cy, px), no distortion, and P with the
+/// camera centre `at` (m, in the reference camera's optical frame) as Tx = −fx·x, Ty = −fy·y:
+/// a stereo pair's right camera at +baseline gets Tx = −fx·b (REP 104, CameraInfo.msg).
+sensor_msgs::msg::CameraInfo cameraInfoOf(std::uint32_t width, std::uint32_t height,
+                                          const std::array<double, 4>& k,
+                                          const std::array<double, 3>& at) {
+    sensor_msgs::msg::CameraInfo info;
+    info.width = width;
+    info.height = height;
+    info.distortion_model = "plumb_bob";
+    info.d.assign(5, 0.0);
+    const auto [fx, fy, cx, cy] = k;
+    info.k = {fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0};
+    info.r = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    info.p = {fx, 0.0, cx, -fx * at[0], 0.0, fy, cy, -fy * at[1], 0.0, 0.0, 1.0, 0.0};
+    return info;
 }
 
 /// Messages and an estimate of their size, per topic, for the graph's rate and bandwidth.
@@ -187,22 +207,24 @@ struct Bridge::Impl {
     CommandGate commandGate;
     std::mt19937_64 commandRng{0x636d6476U};
 
-    /// Publishes `message` on `topic`, through its radio link if it rides on one.
-    template <class Publisher, class Message>
-    void deliver(const std::string& topic, const Publisher& publisher, Message&& message) {
+    /// Where a message on `topic` goes: out now, lost on its radio link, or due later.
+    struct Route {
+        enum class Kind : std::uint8_t { Now, Lost, Later } kind{Kind::Now};
+        SimTime due{0};
+    };
+    Route route(const std::string& topic) {
         const auto it = gates.find(topic);
         const auto timed = sensorDelays.find(topic);
         const bool gated = it != gates.end();
         if ((!gated && timed == sensorDelays.end()) || gateBus == nullptr) {
-            publisher->publish(std::forward<Message>(message));
-            return;
+            return {};
         }
         std::int64_t delay = 0;
         if (gated) {
             Gate& gate = it->second;
             if (gateBus->read(gate.up) < 0.5 || uniform(rng) < gateBus->read(gate.loss)) {
                 ++gate.dropped;
-                return;
+                return {Route::Kind::Lost, {}};
             }
             delay = static_cast<std::int64_t>(std::llround(gateBus->read(gate.latency) * 1e9));
         }
@@ -216,15 +238,50 @@ struct Bridge::Impl {
             sensor.last = SimTime{gateNow.ns + delay};
         }
         if (delay <= 0 && pending.empty()) {
-            publisher->publish(std::forward<Message>(message));
-            return;
+            return {};
         }
-        auto held = std::make_shared<std::decay_t<Message>>(std::forward<Message>(message));
-        // In the order they fall due, and among equals in the order they were sent.
-        const SimTime due{gateNow.ns + delay};
+        return {Route::Kind::Later, SimTime{gateNow.ns + delay}};
+    }
+
+    /// Holds `send` until `due`: in the order they fall due, and among equals in the order they
+    /// were sent.
+    void hold(SimTime due, std::function<void()> send) {
         pending.insert(std::upper_bound(pending.begin(), pending.end(), due,
                                         [](SimTime at, const Pending& p) { return at < p.at; }),
-                       Pending{due, [publisher, held]() { publisher->publish(std::move(*held)); }});
+                       Pending{due, std::move(send)});
+    }
+
+    /// Publishes `message` on `topic`, through its radio link if it rides on one.
+    template <class Publisher, class Message>
+    void deliver(const std::string& topic, const Publisher& publisher, Message&& message) {
+        const Route r = route(topic);
+        if (r.kind == Route::Kind::Now) {
+            publisher->publish(std::forward<Message>(message));
+        } else if (r.kind == Route::Kind::Later) {
+            auto held = std::make_shared<std::decay_t<Message>>(std::forward<Message>(message));
+            hold(r.due, [publisher, held]() { publisher->publish(std::move(*held)); });
+        }
+    }
+
+    /// The same for a message already wrapped in `send` (the custom sensors' default topics).
+    void deliver(const std::string& topic, std::function<void()> send) {
+        const Route r = route(topic);
+        if (r.kind == Route::Kind::Now) {
+            send();
+        } else if (r.kind == Route::Kind::Later) {
+            hold(r.due, std::move(send));
+        }
+    }
+
+    /// Whether a large message on `topic` is worth building: someone subscribes, or the topic
+    /// rides on a radio link or a sensor delay (whose random draws must not change with who
+    /// listens). An image or a cloud nobody reads costs its copy and serialisation for nothing.
+    template <class Publisher>
+    bool wanted(const std::string& topic, const Publisher& publisher) const {
+        return publisher->get_subscription_count() +
+                       publisher->get_intra_process_subscription_count() >
+                   0 ||
+               gates.contains(topic) || sensorDelays.contains(topic);
     }
 
     /// Sends the late messages that are due by `now`, oldest first.
@@ -245,6 +302,7 @@ struct Bridge::Impl {
         SignalId ranges, intensities;
         LidarLayout layout;
         std::vector<std::array<double, 3>> directions;  // of each beam, for the cloud
+        SignalId directionsSignal;  // a rosette's beams, which change every scan (LidarLayout)
         double minRange{0.0}, maxRange{0.0}, rateHz{10.0};
         double sweep{0.0};  // s from the first column's firing to the scan's end + one column
         SimTime sent{-1};
@@ -299,6 +357,38 @@ struct Bridge::Impl {
         rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr publisher;
     };
     std::vector<Radar> radars;
+    /// An image of a custom sensor (a built-in kind's or a plugin's, sensors.md §9 "Images of
+    /// kinds"): every Image signal `sensor/<name>/<q>` as sensor/msgs/Image on
+    /// `/<name>/<q>/image_raw`, with `/<name>/<q>/camera_info` when the kind writes
+    /// `sensor/<name>/<q>/intrinsics` (and `position`, for a stereo pair's right image).
+    struct KindImage {
+        std::string frame;  // "<name>_optical" for an image in the optical frame, else "<name>"
+        std::string topic, infoTopic;
+        SignalId image, intrinsics, position;
+        SimTime sent{-1};
+        rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr publisher;
+        rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr infoPublisher;
+    };
+    std::vector<KindImage> kindImages;
+    /// A custom sensor's packed events `sensor/<name>/events` (x, y, t, polarity per event, NaN
+    /// after the last, `sensor/<name>/count` of them: event_camera) as sensor_msgs/PointCloud2
+    /// on `/<name>/events`: x, y (uint16, px), polarity (int8, ±1), t (float64, s, sim time).
+    struct KindEvents {
+        std::string frame, topic;
+        SignalId events, count;
+        SimTime sent{-1};
+        rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr publisher;
+    };
+    std::vector<KindEvents> kindEvents;
+    /// The custom sensors' numbers on their default topics (KindTopics.hpp).
+    std::unique_ptr<KindTopics> kindTopics;
+    KindTopics::Hooks kindHooks;
+    // Publishers by topic, kept across attach() calls (a new one would drop subscribers).
+    std::map<std::string, rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr> imagePublishers;
+    std::map<std::string, rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr>
+        infoPublishers;
+    std::map<std::string, rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr>
+        cloudPublishers;
     SignalId basePose, baseTwist;
     SignalId baseAirspeed;  // body/<base>/airspeed, from the aerodynamics domain
     SimTime lastClock{-1};
@@ -327,6 +417,9 @@ struct Bridge::Impl {
     /// can replace it without touching this code: docs/plan/spikes/0.2-F7-rosidl-buffer.md.
     void publishCloud(const Lidar& lidar, std::span<const double> ranges,
                       std::span<const double> intensities) {
+        if (!wanted(lidar.topic, lidar.cloudPublisher)) {
+            return;
+        }
         using sensor_msgs::msg::PointField;
         sensor_msgs::msg::PointCloud2 cloud;
         cloud.header.stamp = stampOf(firstBeam(lidar));
@@ -389,12 +482,15 @@ struct Bridge::Impl {
         // The pinhole of the camera module: square pixels, principal point at the centre.
         const double width = get("width", 640.0);
         const double height = get("height", 480.0);
-        const double f = width / 2.0 / std::tan(get("horizontal_fov", 1.047) / 2.0);
+        // A fisheye's horizontal_fov is its angle across the width (FisheyeLens.hpp).
+        const double f = FisheyeLens::isFisheye(set)
+                             ? FisheyeLens::from(set).focal(width, get("horizontal_fov", 1.047))
+                             : width / 2.0 / std::tan(get("horizontal_fov", 1.047) / 2.0);
         out.info.header.frame_id = out.frame;
         out.info.width = static_cast<std::uint32_t>(width);
         out.info.height = static_cast<std::uint32_t>(height);
         // The lens of the sensor model (CameraModel.hpp), in the same OpenCV order.
-        const double lens = get("distortion_model", 0.0);
+        const double lens = FisheyeLens::isFisheye(set) ? 2.0 : get("distortion_model", 0.0);
         out.info.distortion_model = lens == 2.0 ? "equidistant" : "plumb_bob";
         out.info.d.assign(lens == 2.0 ? 4 : 5, 0.0);
         if (lens > 0.0) {
@@ -445,7 +541,7 @@ struct Bridge::Impl {
         counters[camera.ns + "/camera_info"].add(350);
         counters[camera.ns + "/depth/camera_info"].add(350);
         const std::shared_ptr<const Buffer> rgba = bus.buffer(bus.readBuffer(camera.image));
-        if (rgba && !rgba->bytes.empty()) {
+        if (rgba && !rgba->bytes.empty() && wanted(camera.ns + "/image_raw", camera.color)) {
             sensor_msgs::msg::Image image;
             image.header = camera.info.header;
             image.width = rgba->width;
@@ -462,7 +558,8 @@ struct Bridge::Impl {
             deliver(camera.ns + "/image_raw", camera.color, std::move(image));
         }
         const std::shared_ptr<const Buffer> depth = bus.buffer(bus.readBuffer(camera.depth));
-        if (depth && !depth->bytes.empty()) {
+        if (depth && !depth->bytes.empty() &&
+            wanted(camera.ns + "/depth/image_raw", camera.depthImage)) {
             sensor_msgs::msg::Image image;
             image.header = camera.info.header;
             image.width = depth->width;
@@ -477,7 +574,8 @@ struct Bridge::Impl {
         // Which thing each pixel shows: the scene prim's index, -1 for none. The bytes are the
         // r32u of the buffer; 0xFFFFFFFF reads as -1 in 32SC1, the nearest encoding ROS has.
         const std::shared_ptr<const Buffer> instance = bus.buffer(bus.readBuffer(camera.instance));
-        if (instance && !instance->bytes.empty()) {
+        if (instance && !instance->bytes.empty() &&
+            wanted(camera.ns + "/instance/image_raw", camera.instanceImage)) {
             sensor_msgs::msg::Image image;
             image.header = camera.info.header;
             image.width = instance->width;
@@ -493,7 +591,8 @@ struct Bridge::Impl {
         if (camera.temperatureImage && camera.temperature.valid()) {
             const std::shared_ptr<const Buffer> kelvin =
                 bus.buffer(bus.readBuffer(camera.temperature));
-            if (kelvin && !kelvin->bytes.empty()) {
+            if (kelvin && !kelvin->bytes.empty() &&
+                wanted(camera.ns + "/temperature/image_raw", camera.temperatureImage)) {
                 sensor_msgs::msg::Image image;
                 image.header = camera.info.header;
                 image.width = kelvin->width;
@@ -507,6 +606,88 @@ struct Bridge::Impl {
                         std::move(image));
             }
         }
+    }
+
+    /// A custom sensor's image and its calibration, once per new frame; nothing for an empty
+    /// buffer (the ground-truth substitute) or an encoding ROS has no name for.
+    void publishKindImage(KindImage& kind, const SignalBus& bus) {
+        const std::shared_ptr<const Buffer> buffer = bus.buffer(bus.readBuffer(kind.image));
+        if (!buffer || buffer->bytes.empty()) {
+            return;
+        }
+        const std::optional<RosImageEncoding> encoding = rosImageEncoding(buffer->encoding);
+        if (!encoding || buffer->bytes.size() != std::size_t{buffer->width} * buffer->height *
+                                                     encoding->bytesPerPixel) {
+            return;
+        }
+        sensor_msgs::msg::Image image;
+        image.header.stamp = stampOf(kind.sent);
+        image.header.frame_id = kind.frame;
+        image.width = buffer->width;
+        image.height = buffer->height;
+        image.encoding = encoding->name;
+        image.step = buffer->width * encoding->bytesPerPixel;
+        const auto* in = reinterpret_cast<const std::uint8_t*>(buffer->bytes.data());
+        image.data.assign(in, in + buffer->bytes.size());
+        if (kind.infoPublisher) {
+            const std::span<const double> k = values(bus, kind.intrinsics);
+            const std::span<const double> at = values(bus, kind.position);
+            if (k.size() == 4) {
+                sensor_msgs::msg::CameraInfo info =
+                    cameraInfoOf(image.width, image.height, {k[0], k[1], k[2], k[3]},
+                                 at.size() == 3 ? std::array<double, 3>{at[0], at[1], at[2]}
+                                                : std::array<double, 3>{});
+                info.header = image.header;
+                counters[kind.infoTopic].add(350);
+                deliver(kind.infoTopic, kind.infoPublisher, std::move(info));
+            }
+        }
+        counters[kind.topic].add(image.data.size() + 64);
+        deliver(kind.topic, kind.publisher, std::move(image));
+    }
+
+    void publishKindEvents(KindEvents& kind, const SignalBus& bus) {
+        using sensor_msgs::msg::PointField;
+        sensor_msgs::msg::PointCloud2 cloud;
+        cloud.header.stamp = stampOf(kind.sent);
+        cloud.header.frame_id = kind.frame;
+        const auto field = [&cloud](const char* name, std::uint32_t offset, std::uint8_t type) {
+            PointField f;
+            f.name = name;
+            f.offset = offset;
+            f.datatype = type;
+            f.count = 1;
+            cloud.fields.push_back(f);
+        };
+        field("x", 0, PointField::UINT16);
+        field("y", 2, PointField::UINT16);
+        field("polarity", 4, PointField::INT8);
+        field("t", 8, PointField::FLOAT64);
+        constexpr std::uint32_t kStride = 16;
+        const std::span<const double> packed = bus.readN(kind.events);
+        const auto count =
+            static_cast<std::size_t>(std::clamp(kind.count.valid() ? bus.read(kind.count) : 0.0,
+                                                0.0, static_cast<double>(packed.size() / 4)));
+        cloud.height = 1;
+        cloud.width = static_cast<std::uint32_t>(count);
+        cloud.point_step = kStride;
+        cloud.row_step = kStride * cloud.width;
+        cloud.is_dense = true;
+        cloud.is_bigendian = false;
+        cloud.data.assign(static_cast<std::size_t>(cloud.row_step), 0);
+        for (std::size_t i = 0; i < count; ++i) {
+            std::uint8_t* point = cloud.data.data() + i * kStride;
+            const auto x = static_cast<std::uint16_t>(std::clamp(packed[4 * i], 0.0, 65535.0));
+            const auto y = static_cast<std::uint16_t>(std::clamp(packed[4 * i + 1], 0.0, 65535.0));
+            const double t = packed[4 * i + 2];
+            const auto polarity = static_cast<std::int8_t>(packed[4 * i + 3] < 0.0 ? -1 : 1);
+            std::memcpy(point, &x, sizeof(x));
+            std::memcpy(point + 2, &y, sizeof(y));
+            std::memcpy(point + 4, &polarity, sizeof(polarity));
+            std::memcpy(point + 8, &t, sizeof(t));
+        }
+        counters[kind.topic].add(cloud.data.size() + 128);
+        deliver(kind.topic, kind.publisher, std::move(cloud));
     }
 
     // simulation_interfaces: requests queued by the service callbacks for handleRequests().
@@ -539,6 +720,15 @@ Bridge::Bridge(BridgeSettings settings)
     : settings_(std::move(settings)), impl_(std::make_unique<Impl>()) {
     Impl& s = *impl_;
     s.node = std::make_shared<rclcpp::Node>(settings_.nodeName);
+    s.kindTopics = std::make_unique<KindTopics>(*s.node);
+    s.kindHooks.forced = [&s](const std::string& topic) {
+        return s.gates.contains(topic) || s.sensorDelays.contains(topic);
+    };
+    s.kindHooks.deliver = [&s](const std::string& topic, std::function<void()> send,
+                               std::size_t bytes) {
+        s.counters[topic].add(bytes);
+        s.deliver(topic, std::move(send));
+    };
     s.clock = s.node->create_publisher<rosgraph_msgs::msg::Clock>("/clock", rclcpp::ClockQoS());
     if (!settings_.controllersOwnState) {
         s.jointStates = s.node->create_publisher<sensor_msgs::msg::JointState>("/joint_states", 10);
@@ -723,6 +913,9 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
     std::vector<Impl::Imu> imus;
     std::vector<Impl::Geo> geos;
     std::vector<Impl::Radar> radars;
+    std::vector<Impl::KindImage> kindImages;
+    std::vector<Impl::KindEvents> kindEvents;
+    std::vector<KindTopic> kindTopics;
     for (std::size_t i = 0; i < sensors.names.size(); ++i) {
         const std::string& name = sensors.names[i];
         geometry_msgs::msg::TransformStamped mount;
@@ -758,10 +951,15 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
             timed(settings, lidar.topic);
             lidar.ranges = bus.find("sensor/" + name + "/ranges");
             lidar.intensities = bus.find("sensor/" + name + "/intensities");
+            if (lidar.layout.timeVarying()) {
+                lidar.directionsSignal = bus.find("sensor/" + name + "/directions");
+            }
             lidar.minRange = get("min_range", 0.1);
             lidar.maxRange = get("max_range", 30.0);
             lidar.rateHz = sensors.rateHz[i];
-            lidar.sweep = get("motion_distortion", 1.0) != 0.0 ? 1.0 / lidar.rateHz : 0.0;
+            lidar.sweep = get("motion_distortion", 1.0) != 0.0 && !lidar.layout.simultaneous()
+                              ? 1.0 / lidar.rateHz
+                              : 0.0;
             // Reuse the publisher across attach() calls: a new one would drop subscribers.
             for (const Impl::Lidar& old : s.lidars) {
                 if (old.topic == lidar.topic) {
@@ -862,6 +1060,83 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
                     radar.topic, rclcpp::SensorDataQoS());
             }
             radars.push_back(std::move(radar));
+        } else if (sensors.type[i] == SensorType::Custom) {
+            // Whatever images and events the kind writes, found on the bus by name (sensors.md
+            // §9 "Images of kinds"), so a new kind reaches ROS with no code here.
+            const std::string prefix = "sensor/" + name + "/";
+            bool optical = false;
+            for (std::size_t k = 0; k < bus.signalCount(); ++k) {
+                const SignalSpec& spec = bus.specAt(k);
+                if (!spec.name.starts_with(prefix)) {
+                    continue;
+                }
+                const std::string quantity = spec.name.substr(prefix.size());
+                if (quantity.starts_with("delayed/")) {
+                    continue;  // the bridge delays the messages itself (sensor timing)
+                }
+                if (spec.type == SignalType::Image) {
+                    Impl::KindImage image;
+                    optical = optical || spec.frame == "optical";
+                    image.frame = spec.frame == "optical" ? name + "_optical" : name;
+                    image.topic = "/" + name + "/" + quantity + "/image_raw";
+                    image.image = bus.find(spec.name);
+                    image.intrinsics = bus.find(spec.name + "/intrinsics");
+                    image.position = bus.find(spec.name + "/position");
+                    timed(settings, image.topic);
+                    image.publisher = s.imagePublishers[image.topic];
+                    if (!image.publisher) {
+                        image.publisher = s.node->create_publisher<sensor_msgs::msg::Image>(
+                            image.topic, rclcpp::SensorDataQoS());
+                        s.imagePublishers[image.topic] = image.publisher;
+                    }
+                    if (image.intrinsics.valid()) {
+                        image.infoTopic = "/" + name + "/" + quantity + "/camera_info";
+                        timed(settings, image.infoTopic);
+                        image.infoPublisher = s.infoPublishers[image.infoTopic];
+                        if (!image.infoPublisher) {
+                            image.infoPublisher =
+                                s.node->create_publisher<sensor_msgs::msg::CameraInfo>(
+                                    image.infoTopic, rclcpp::SensorDataQoS());
+                            s.infoPublishers[image.infoTopic] = image.infoPublisher;
+                        }
+                    }
+                    kindImages.push_back(std::move(image));
+                } else if (quantity == "events" && spec.type == SignalType::ScalarArray &&
+                           spec.arrayLength % 4 == 0) {
+                    Impl::KindEvents events;
+                    events.frame = name + "_optical";
+                    optical = true;
+                    events.topic = "/" + name + "/events";
+                    events.events = bus.find(spec.name);
+                    events.count = bus.find(prefix + "count");
+                    timed(settings, events.topic);
+                    events.publisher = s.cloudPublishers[events.topic];
+                    if (!events.publisher) {
+                        events.publisher = s.node->create_publisher<sensor_msgs::msg::PointCloud2>(
+                            events.topic, rclcpp::SensorDataQoS());
+                        s.cloudPublishers[events.topic] = events.publisher;
+                    }
+                    kindEvents.push_back(std::move(events));
+                }
+            }
+            // Its numbers on standard messages, unless the --ros-topics map publishes them.
+            for (KindTopic& topic :
+                 withoutMapped(ros2::kindTopics(world, static_cast<std::uint32_t>(i), bus),
+                               settings_.signalTopics)) {
+                timed(settings, topic.topic);
+                optical = optical || topic.frame == name + "_optical";
+                kindTopics.push_back(std::move(topic));
+            }
+            if (optical) {
+                geometry_msgs::msg::TransformStamped frame;
+                frame.header.frame_id = name;
+                frame.child_frame_id = name + "_optical";
+                frame.transform.rotation.w = kSensorFromOptical[0];
+                frame.transform.rotation.x = kSensorFromOptical[1];
+                frame.transform.rotation.y = kSensorFromOptical[2];
+                frame.transform.rotation.z = kSensorFromOptical[3];
+                mounts.transforms.push_back(frame);
+            }
         } else if (sensors.type[i] == SensorType::Imu) {
             Impl::Imu imu;
             imu.frame = name;
@@ -889,6 +1164,11 @@ void Bridge::attach(const World& world, const SignalBus& bus) {
     s.imus = std::move(imus);
     s.geos = std::move(geos);
     s.radars = std::move(radars);
+    s.kindImages = std::move(kindImages);
+    s.kindEvents = std::move(kindEvents);
+    for (const std::string& problem : s.kindTopics->attach(std::move(kindTopics), bus)) {
+        RCLCPP_WARN(s.node->get_logger(), "%s", problem.c_str());
+    }
     s.lastClock = SimTime{-1};
     s.lastState = SimTime{-1};
     if (!mounts.transforms.empty()) {
@@ -1001,6 +1281,13 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
         }
         lidar.sent = bus.stamp(lidar.ranges);
         const std::span<const double> ranges = bus.readN(lidar.ranges);
+        if (lidar.directionsSignal.valid()) {
+            const std::span<const double> d = bus.readN(lidar.directionsSignal);
+            for (std::size_t beam = 0; beam < lidar.directions.size() && 3 * beam + 2 < d.size();
+                 ++beam) {
+                lidar.directions[beam] = {d[3 * beam], d[(3 * beam) + 1], d[(3 * beam) + 2]};
+            }
+        }
         if (lidar.cloudPublisher) {
             s.publishCloud(lidar, ranges, values(bus, lidar.intensities));
             continue;
@@ -1037,6 +1324,23 @@ void Bridge::publish(const SignalBus& bus, SimTime now) {
         camera.sent = bus.stamp(camera.image);
         s.publishCamera(camera, bus);
     }
+
+    for (Impl::KindImage& kind : s.kindImages) {
+        if (bus.stamp(kind.image) == kind.sent) {
+            continue;
+        }
+        kind.sent = bus.stamp(kind.image);
+        s.publishKindImage(kind, bus);
+    }
+    for (Impl::KindEvents& kind : s.kindEvents) {
+        if (bus.stamp(kind.events) == kind.sent) {
+            continue;
+        }
+        kind.sent = bus.stamp(kind.events);
+        s.publishKindEvents(kind, bus);
+    }
+    s.kindHooks.offset = s.offset();
+    s.kindTopics->publish(bus, s.kindHooks);
 
     for (Impl::Imu& imu : s.imus) {
         if (!imu.force.valid() || bus.stamp(imu.force) == imu.sent) {
@@ -1199,6 +1503,28 @@ std::optional<CmdVel> Bridge::latestCommand(std::chrono::milliseconds maxAge) co
 FlightMode Bridge::flightMode() const {
     const std::lock_guard<std::mutex> lock(impl_->commandMutex);
     return impl_->flightMode;
+}
+
+std::optional<RosImageEncoding> rosImageEncoding(std::string_view busEncoding) {
+    if (busEncoding == "rgba8") {
+        return RosImageEncoding{"rgba8", 4};
+    }
+    if (busEncoding == "rgb8") {
+        return RosImageEncoding{"rgb8", 3};
+    }
+    if (busEncoding == "r8" || busEncoding == "mono8") {
+        return RosImageEncoding{"mono8", 1};
+    }
+    if (busEncoding == "r16u" || busEncoding == "mono16") {
+        return RosImageEncoding{"mono16", 2};
+    }
+    if (busEncoding == "r32f") {
+        return RosImageEncoding{"32FC1", 4};
+    }
+    if (busEncoding == "r32u") {
+        return RosImageEncoding{"32SC1", 4};
+    }
+    return std::nullopt;
 }
 
 std::optional<FlightMode> flightModeOf(std::string_view name) {

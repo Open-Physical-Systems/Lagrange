@@ -15,6 +15,7 @@ add_library(
     lagrange_sensors
     src/Sensors.cpp
     src/DelayLine.cpp
+    src/Faults.cpp
     src/ImuNoise.cpp
     src/ShapeCaster.cpp
     src/BodyScene.cpp
@@ -22,8 +23,46 @@ add_library(
     src/GeoSensors.cpp
     src/Radar.cpp
     src/CameraModel.cpp
+    src/Fisheye.cpp
     src/WeatherEffects.cpp
     src/ThermalCamera.cpp
+    src/kinds/Kinds.cpp
+    src/kinds/CameraKinds.cpp
+    src/kinds/EventCamera.cpp
+    src/kinds/OpticalFlow.cpp
+    src/kinds/StereoCamera.cpp
+    src/kinds/BatteryMonitor.cpp
+    src/kinds/EscTelemetry.cpp
+    src/kinds/PowerMonitor.cpp
+    src/kinds/TensionSensor.cpp
+    src/kinds/EnvironmentSensors.cpp
+    src/kinds/Airspeed.cpp
+    src/kinds/Anemometer.cpp
+    src/kinds/HumiditySensor.cpp
+    src/kinds/LightSensor.cpp
+    src/kinds/RainSensor.cpp
+    src/kinds/Rangefinder.cpp
+    src/kinds/SunSensor.cpp
+    src/kinds/VisibilitySensor.cpp
+    src/kinds/Bumper.cpp
+    src/kinds/Cliff.cpp
+    src/kinds/ForceTorque.cpp
+    src/kinds/SafetyScanner.cpp
+    src/kinds/WheelOdometry.cpp
+    src/kinds/Detections.cpp
+    src/kinds/LandingTarget.cpp
+    src/kinds/LineSensor.cpp
+    src/kinds/TagReader.cpp
+    src/kinds/GripperSensor.cpp
+    src/kinds/ParticleSensor.cpp
+    src/kinds/Proximity.cpp
+    src/kinds/Tpms.cpp
+    src/kinds/Uwb.cpp
+    src/kinds/WifiScanner.cpp
+    src/kinds/AdsbReceiver.cpp
+    src/kinds/Sonar.cpp
+    src/kinds/V2x.cpp
+    src/kinds/VehicleCan.cpp
 )
 lagrange_target_defaults(lagrange_sensors)
 target_include_directories(
@@ -61,6 +100,13 @@ if(BUILD_TESTING)
         lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
     )
     lagrange_target_defaults(test_sensors)
+    ament_add_gtest(test_faults test/test_faults.cpp)
+    target_link_libraries(
+        test_faults
+        lagrange_sensors
+        lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
+    )
+    lagrange_target_defaults(test_faults)
     ament_add_gtest(test_shape_caster test/test_shape_caster.cpp TIMEOUT 120)
     target_link_libraries(test_shape_caster lagrange_sensors)
     lagrange_target_defaults(test_shape_caster)
@@ -90,6 +136,23 @@ if(BUILD_TESTING)
     ament_add_gtest(test_imu_noise test/test_imu_noise.cpp TIMEOUT 120)
     target_link_libraries(test_imu_noise lagrange_sensors)
     lagrange_target_defaults(test_imu_noise)
+    # The built-in custom sensor kinds (sensors.md §9), each against closed forms.
+    foreach(
+        kind
+        bumper
+        cliff
+        force_torque
+        safety_scanner
+        wheel_odometry
+    )
+        ament_add_gtest(test_kinds_${kind} test/test_kinds_${kind}.cpp TIMEOUT 120)
+        target_link_libraries(
+            test_kinds_${kind}
+            lagrange_sensors
+            lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
+        )
+        lagrange_target_defaults(test_kinds_${kind})
+    endforeach()
     # Runs on the software Vulkan device (llvmpipe) where there is no GPU; skipped without any.
     ament_add_gtest(
         test_lidar_tiers
@@ -100,6 +163,24 @@ if(BUILD_TESTING)
     )
     target_link_libraries(test_lidar_tiers lagrange_sensors)
     lagrange_target_defaults(test_lidar_tiers)
+    ament_add_gtest(
+        test_lidar_patterns
+        test/test_lidar_patterns.cpp
+        TIMEOUT 120
+        ENV
+        ASAN_OPTIONS=${LAGRANGE_GPU_TEST_ASAN_OPTIONS}
+    )
+    target_link_libraries(test_lidar_patterns lagrange_sensors)
+    lagrange_target_defaults(test_lidar_patterns)
+    ament_add_gtest(
+        test_fisheye
+        test/test_fisheye.cpp
+        TIMEOUT 120
+        ENV
+        ASAN_OPTIONS=${LAGRANGE_GPU_TEST_ASAN_OPTIONS}
+    )
+    target_link_libraries(test_fisheye lagrange_sensors)
+    lagrange_target_defaults(test_fisheye)
     ament_add_gtest(
         test_camera
         test/test_camera.cpp
@@ -118,6 +199,83 @@ if(BUILD_TESTING)
     )
     target_link_libraries(test_thermal_camera lagrange_sensors)
     lagrange_target_defaults(test_thermal_camera)
+    # The camera-like built-in kinds: closed forms without a GPU; the rendered runs on the
+    # software Vulkan device (llvmpipe) where there is no GPU, skipped without any device.
+    foreach(kind optical_flow event_camera stereo_camera)
+        ament_add_gtest(
+            test_kinds_${kind}
+            test/test_kinds_${kind}.cpp
+            TIMEOUT 120
+            ENV
+            ASAN_OPTIONS=${LAGRANGE_GPU_TEST_ASAN_OPTIONS}
+        )
+        target_link_libraries(test_kinds_${kind} lagrange_sensors TBB::tbb)
+        target_include_directories(test_kinds_${kind} PRIVATE src/kinds)
+        lagrange_target_defaults(test_kinds_${kind})
+    endforeach()
+    # Built-in custom sensor kinds (sensors.md §9).
+    # Built-in kinds (sensors.md §9) tested on a scheduler without physics or rendering. One
+    # kind per line, sorted, so branches that add kinds merge cleanly.
+    foreach(
+        kind
+        battery_monitor
+        current_sensor
+        esc_telemetry
+        gripper_sensor
+        landing_target
+        line_sensor
+        particle_sensor
+        proximity
+        tag_reader
+        tension_sensor
+        tpms
+        uwb
+        voltage_sensor
+        wifi_scanner
+    )
+        ament_add_gtest(test_kinds_${kind} test/test_kinds_${kind}.cpp)
+        target_link_libraries(test_kinds_${kind} lagrange_sensors)
+        lagrange_target_defaults(test_kinds_${kind})
+    endforeach()
+    foreach(kind adsb_receiver sonar v2x vehicle_can)
+        ament_add_gtest(test_kinds_${kind} test/test_kinds_${kind}.cpp)
+        target_link_libraries(test_kinds_${kind} lagrange_sensors)
+        lagrange_target_defaults(test_kinds_${kind})
+    endforeach()
+    ament_add_gtest(test_kinds_airspeed test/test_kinds_airspeed.cpp)
+    target_link_libraries(test_kinds_airspeed lagrange_sensors)
+    lagrange_target_defaults(test_kinds_airspeed)
+    ament_add_gtest(test_kinds_anemometer test/test_kinds_anemometer.cpp)
+    target_link_libraries(test_kinds_anemometer lagrange_sensors)
+    lagrange_target_defaults(test_kinds_anemometer)
+    ament_add_gtest(test_kinds_humidity_sensor test/test_kinds_humidity_sensor.cpp)
+    target_link_libraries(test_kinds_humidity_sensor lagrange_sensors)
+    lagrange_target_defaults(test_kinds_humidity_sensor)
+    ament_add_gtest(test_kinds_light_sensor test/test_kinds_light_sensor.cpp)
+    target_link_libraries(test_kinds_light_sensor lagrange_sensors)
+    lagrange_target_defaults(test_kinds_light_sensor)
+    ament_add_gtest(test_kinds_rain_sensor test/test_kinds_rain_sensor.cpp)
+    target_link_libraries(test_kinds_rain_sensor lagrange_sensors)
+    lagrange_target_defaults(test_kinds_rain_sensor)
+    ament_add_gtest(test_kinds_rangefinder test/test_kinds_rangefinder.cpp)
+    target_link_libraries(test_kinds_rangefinder lagrange_sensors)
+    lagrange_target_defaults(test_kinds_rangefinder)
+    ament_add_gtest(test_kinds_sun_sensor test/test_kinds_sun_sensor.cpp)
+    target_link_libraries(test_kinds_sun_sensor lagrange_sensors)
+    lagrange_target_defaults(test_kinds_sun_sensor)
+    ament_add_gtest(test_kinds_visibility_sensor test/test_kinds_visibility_sensor.cpp)
+    target_link_libraries(test_kinds_visibility_sensor lagrange_sensors)
+    lagrange_target_defaults(test_kinds_visibility_sensor)
+    # Renders on the software Vulkan device (llvmpipe) where there is no GPU; skipped without any.
+    ament_add_gtest(
+        test_kinds_detections
+        test/test_kinds_detections.cpp
+        TIMEOUT 120
+        ENV
+        ASAN_OPTIONS=${LAGRANGE_GPU_TEST_ASAN_OPTIONS}
+    )
+    target_link_libraries(test_kinds_detections lagrange_sensors)
+    lagrange_target_defaults(test_kinds_detections)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

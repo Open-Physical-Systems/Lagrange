@@ -123,7 +123,7 @@ lagrange_target_defaults(lagrange_server_cli)
 target_link_libraries(
     lagrange_server_cli
     PUBLIC lagrange_server ament_index_cpp::ament_index_cpp rclcpp::rclcpp
-    PRIVATE yaml-cpp::yaml-cpp
+    PRIVATE yaml-cpp::yaml-cpp lagrange_sensors::lagrange_sensors
 )
 
 add_executable(lagrange_server_main src/main.cpp)
@@ -245,15 +245,18 @@ if(BUILD_TESTING)
         test/test_importer_audit.cpp
         test/test_lidar_motion.cpp
         test/test_lidar_materials.cpp
+        test/test_optics_import.cpp
         test/test_humans_run.cpp
         test/test_plugins.cpp
+        test/test_sensor_faults.cpp
         test/test_multicopter.cpp
         test/test_tether_run.cpp
         test/test_downwash_pair.cpp
         test/test_toggles.cpp
         test/test_usd_assets.cpp
         ENV "PXR_PLUGINPATH_NAME=${schemas_share}/usd/metadata:${schemas_share}/usd/sensor:${schemas_share}/usd/electrical:${schemas_share}/usd/thermal:${schemas_share}/usd/aero:${schemas_share}/usd/weather:${schemas_share}/usd/emi:${schemas_share}/usd/sensor_material:${schemas_share}/usd/comms:${schemas_share}/usd/vehicle:${schemas_share}/usd/road:${schemas_share}/usd/human:${schemas_share}/usd/water:${schemas_share}/usd/joint:${schemas_share}/usd/world:${schemas_share}/usd/tether"
-        TIMEOUT 120
+        # About 110 s alone on a 20-core laptop; a loaded machine (parallel builds) needs more.
+        TIMEOUT 400
     )
     target_link_libraries(
         test_server
@@ -426,6 +429,27 @@ if(BUILD_TESTING)
         PRIVATE LAGRANGE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/test/data"
     )
     lagrange_target_defaults(test_ros_topics)
+    # The built-in kinds' default topics end to end (sensors.md §9), with no --ros-topics map.
+    find_package(nav_msgs REQUIRED)
+    ament_add_gtest(
+        test_kind_topics
+        test/test_kind_topics.cpp
+        ENV ROS_DOMAIN_ID=77 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+        TIMEOUT 120
+    )
+    target_link_libraries(
+        test_kind_topics
+        lagrange_server
+        rclcpp::rclcpp
+        ${sensor_msgs_TARGETS}
+        ${std_msgs_TARGETS}
+        ${nav_msgs_TARGETS}
+    )
+    target_compile_definitions(
+        test_kind_topics
+        PRIVATE LAGRANGE_ASSETS="${CMAKE_CURRENT_SOURCE_DIR}/../assets"
+    )
+    lagrange_target_defaults(test_kind_topics)
     lagrange_target_defaults(test_server)
     # The installed tool end to end: exit 0 for the valid example, 1 for an invalid one.
     set(_lagrange_cli_robot
@@ -462,6 +486,30 @@ if(BUILD_TESTING)
     set_tests_properties(
         lagrange_cli_determinism
         PROPERTIES PASS_REGULAR_EXPRESSION "deterministic: 31 state hashes"
+    )
+    # QA 2026-11-12: heat took its ambient only from --ambient-temperature, determinism ran
+    # without its profile.
+    add_test(
+        NAME lagrange_cli_heat_profile_ambient
+        COMMAND
+            $<TARGET_FILE:lagrange_cli> heat
+            ${CMAKE_CURRENT_SOURCE_DIR}/../profiles/examples/led_heatsink.yaml --robot
+            ${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/led_heatsink/led_heatsink.urdf
+    )
+    set_tests_properties(
+        lagrange_cli_heat_profile_ambient
+        PROPERTIES PASS_REGULAR_EXPRESSION "the sky at 298.15 K"
+    )
+    add_test(
+        NAME lagrange_cli_determinism_applies_its_profile
+        COMMAND
+            $<TARGET_FILE:lagrange_cli> determinism
+            ${CMAKE_CURRENT_SOURCE_DIR}/../profiles/examples/amr_sample_urdf.yaml
+            ${_lagrange_cli_robot} --seconds 1
+    )
+    set_tests_properties(
+        lagrange_cli_determinism_applies_its_profile
+        PROPERTIES PASS_REGULAR_EXPRESSION "profile\\] applied"
     )
     add_test(
         NAME lagrange_cli_version

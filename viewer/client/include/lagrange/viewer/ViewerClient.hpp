@@ -66,6 +66,9 @@ struct SignalInfo {
     std::vector<std::string> componentNames;  ///< Empty for scalars.
     std::int64_t dtNs{0};                     ///< Native sample period.
     std::uint32_t prim{kNone};
+    /// An image (Image type, no samples: components is 0). Its frames come as SensorFrame by
+    /// watching the signal's name (ViewerClient::watchSensor).
+    bool image{false};
 };
 
 /// The server's list of signals. Immutable once published.
@@ -149,7 +152,16 @@ struct SensorImage {
     std::uint32_t width{0};
     std::uint32_t height{0};
     std::vector<std::uint8_t> rgba;  ///< width x height x 4
+    std::string encoding;            ///< What the server sent: "rgba8", "r32f", ...
 };
+
+/// A sensor image of `encoding` as RGBA8 to draw: rgba8 as it is, rgb8 and r8 (grey) widened,
+/// r32f (a depth, a temperature) as grey from its finite minimum (white) to its maximum
+/// (dark), not finite black, r32u (instance ids) a colour per id, 0xFFFFFFFF black. False for
+/// another encoding or a size that does not match.
+[[nodiscard]] bool imageToRgba(const std::string& encoding, std::uint32_t width,
+                               std::uint32_t height, std::string_view bytes,
+                               std::vector<std::uint8_t>& rgba);
 
 /// The frames of one sensor the viewer watches. Written by the client's worker, read by the UI.
 class SensorStream {
@@ -661,9 +673,12 @@ public:
     [[nodiscard]] std::shared_ptr<const WorldInfo> world() const { return world_.load(); }
 
     // --- sensors ---------------------------------------------------------------------------
-    /// Starts receiving the frames of a sensor, named by its prim path. Asking again for the
-    /// same sensor returns the same stream. The subscription survives reconnects.
+    /// Starts receiving the frames of a sensor, named by its prim path, or of one image
+    /// signal, named by the signal ("sensor/stereo/depth": any image in the catalog). Asking
+    /// again for the same name returns the same stream. The subscription survives reconnects.
     [[nodiscard]] std::shared_ptr<SensorStream> watchSensor(const std::string& name);
+    /// Stops receiving what watchSensor(name) asked for; its stream gets no more frames.
+    void unwatchSensor(const std::string& name);
 
     // --- profile ---------------------------------------------------------------------------
     /// The profile the server runs, or nullptr before it arrived.

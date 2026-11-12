@@ -50,6 +50,18 @@ public:
     /// This step has no new value of an output of the module being stepped: it does not commit,
     /// so its stamp and readers stay as they are. For outputs that come irregularly (a delay line).
     void hold(SignalId id);
+    /// Whether hold() was called on an output in this step: it will not commit. For wrappers that
+    /// post-process the outputs of the module they step (sensors::withFaults).
+    [[nodiscard]] bool held(SignalId id) const {
+        return !id.isInput() && id.valid() && id.index < held_.size() && held_[id.index] != 0;
+    }
+
+    /// Whether an input has a writer: an optional input no module writes reads its default.
+    /// Valid from init() on (after wiring); false for an output or an invalid id.
+    [[nodiscard]] bool connected(SignalId input) const {
+        return input.isInput() && input.slot() < inputs_.size() &&
+               inputs_[input.slot()].signal != kNoModule;
+    }
 
     [[nodiscard]] BufferHandle readBuffer(SignalId id, std::uint32_t env = 0) const;
     void writeBuffer(SignalId id, BufferHandle handle, std::uint32_t env = 0);
@@ -92,6 +104,9 @@ private:
         std::size_t components{0};  // doubles per environment; 0 for handle types
         std::size_t offset{0};      // into the value arrays, or the handle arrays
         std::uint32_t writer{kNoModule};
+    };
+    /// A signal's commits, kept apart from its record: every commit writes them.
+    struct Timing {
         SimTime stamp{};
         SimTime previousStamp{};
         std::uint64_t commitTick{~0ULL};  // tick of the last commit
@@ -103,8 +118,10 @@ private:
         std::uint32_t reader{kNoModule};
         std::uint32_t signal{kNoModule};  // kNoModule while unconnected (optional inputs)
         std::size_t components{0};
-        std::size_t offset{0};     // into inputValues_ or inputHandles_
-        double windowWeight{0.0};  // ns of writer steps accumulated (WindowAverage)
+        std::size_t offset{0};       // into inputValues_ or inputHandles_
+        double windowWeight{0.0};    // ns of writer steps accumulated (WindowAverage)
+        Hold hold{Hold::ZeroOrder};  // spec.hold and spec.feedback, copied by allocate()
+        bool feedback{false};
     };
 
     // Called by the scheduler.
@@ -115,7 +132,14 @@ private:
     std::uint32_t addInput(SignalSpec spec, std::uint32_t reader);
     void allocate(std::uint32_t batchCount);
     void commit(std::uint32_t signal, SimTime stamp, std::uint64_t tick, Duration writerStep);
+    /// commit() of each of `signals` (one module's outputs), with neighbours in storage copied
+    /// together: the same result, fewer calls for a module with hundreds of outputs.
+    void commitAll(std::span<const std::uint32_t> signals, SimTime stamp, std::uint64_t tick,
+                   Duration writerStep);
     void prepareInput(std::uint32_t slot, SimTime readerTime, std::uint64_t tick);
+    /// prepareInput() of each of `slots` (one module's inputs).
+    void prepareInputs(std::span<const std::uint32_t> slots, SimTime readerTime,
+                       std::uint64_t tick);
 
     /// Index of the value storage of `id`, or SIZE_MAX after flagging misuse.
     [[nodiscard]] std::size_t outputIndex(SignalId id, std::uint32_t env, bool forWrite) const;
@@ -141,6 +165,11 @@ private:
     std::vector<std::vector<std::uint32_t>> windowReaders_;  // per signal: its WindowAverage slots
     std::uint32_t currentModule_{kNoModule};                 // the module being stepped
     mutable std::string misuse_;                             // first misuse in the current step
+    // (Members added in 1.2.x stay last, so that the inline accessors above keep their layout.)
+    std::vector<Timing> timing_;  // per signal
+    // Per signal: a reader uses its previous value (feedback, extrapolation). previous_ of the
+    // others is not kept up to date by commitAll (nothing reads it).
+    std::vector<std::uint8_t> needsPrevious_;
 };
 
 }  // namespace lagrange

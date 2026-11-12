@@ -1,6 +1,6 @@
 # Progress
 
-Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-11: v1.2.1 released (one-line installer; docs/release/v1.2.1.md), after v1.2.0 (tethers, heat conduction, a robot's own EMI; docs/release/v1.2.0.md).
+Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-12: overnight work after v1.2.1 on `night/integration` (below); v1.2.1 released 2026-11-11 (one-line installer; docs/release/v1.2.1.md), after v1.2.0 (tethers, heat conduction, a robot's own EMI; docs/release/v1.2.0.md).
 
 ## The releases
 
@@ -21,6 +21,32 @@ flowchart LR
     classDef now fill:#9a6700,stroke:#d29922,color:#fff
     classDef todo fill:#30363d,stroke:#6e7681,color:#c9d1d9
 ```
+
+## After v1.2.1 (2026-11-12, overnight, branch `night/integration`)
+
+The owner asked for less lag, more GPU use, every sensor on the list up to #20 and more, and a
+hunt for flaws. Done by parallel agents in worktrees, merged into `night/integration` (not yet on
+`dev`), each merge built and tested over the whole workspace.
+
+- **Sensors:** 36 built-in custom sensor kinds (sensors.md §9, user guide `docs/guide/sensors.md`,
+  example `lagrange_example_sensors`), sensor faults for every sensor, kinds' images to ROS 2,
+  Python (`sim.image`) and the viewer, kinds' numbers on standard ROS 2 messages by default, lidar
+  scan patterns (channel table, flash, rosette) and fisheye cameras.
+- **Speed:** server 1.3–4.6× (the sedan in the town from 0.8 to 3.7 times real time; camera
+  model and thermal camera on the GPU, camera render overlapping the tick, radar parallel and on
+  the GPU, MuJoCo broad phase without far kinematic bodies, lazy ROS publishing, scene updates
+  every 8 ms); viewer (one-transfer mesh upload, 1.85 s to 37 ms; depth pre-pass; culling;
+  redraw only on change); start-up (viewer beside the loading server, device reuse on rebuild,
+  spawn 0.7 s to 0.1 s). Numbers: `docs/design/benchmarks.md` §4, §4.1, §5, `viewer.md` §11.
+- **Flaws:** two QA passes, `docs/plan/qa-2026-11-12.md` and `docs/plan/qa-sensors-2026-11-12.md`,
+  every finding with a repro, most fixed with a regression test (among them: 15/30 Hz sensors
+  refused at start, spawned robots' sensors reading the first robot's parts, a second
+  multicopter grounding the first, images lost on restore, ODR clash between kinds' helpers).
+- **Owed:** USD/SDFormat for lidar patterns and fisheye (schema addition by RFC); saved-state
+  format v2 refuses older saved states (recordings unaffected); several defaults marked
+  illustrative or `TODO(verify)` in §9; pre-commit's end-of-file and gersemi hooks fail on three
+  files untouched tonight (`docs/plan/spikes/0.2-C6-jolt.md`, `city_block_roads.usda`,
+  `vendor/jolt_vendor`).
 
 ## v0.2, item by item
 

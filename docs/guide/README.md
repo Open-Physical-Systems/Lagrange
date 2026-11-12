@@ -17,6 +17,7 @@
 | [Autoware with a simulated car](autoware.md) | The vehicle interface (`lagrange_autoware`), building it with the Autoware messages, the sedan launch, and what to do while Autoware is not on Lyrical |
 | [The run file](run-file.md) | One YAML file for a whole run: robot, world, what to simulate, the site. Start here for your own robot |
 | [Concepts](concepts.md) | Domains and substitutes, signals and units, the multirate scheduler, capability tiers, determinism, coordinates |
+| [Sensors](sensors.md) | Every sensor Lagrange simulates, grouped by robot; adding one in URDF or USD, reading it from Python, ROS 2 and the viewer, faults, limits |
 | [Profiles](profiles.md) | The YAML that says what a run simulates; what v0.2 applies; the errors |
 | [Writing a module](writing-a-module.md) | The module interface, worked through with a wheel odometer |
 | [Writing a plugin](writing-a-plugin.md) | A plugin from the template: the C ABI, seeing the scene, a custom time-of-flight sensor, ROS topics, a physics engine and its conformance suite |

@@ -103,4 +103,32 @@ public:
     virtual void shiftOrigin(const std::array<double, 3>& /*shift*/) {}
 };
 
+/// A module whose step can end later in the same tick, so that the host works while a device
+/// does (a camera's render on the GPU): a module may implement it beside IModule. When step()
+/// returns with stepPending() true, the scheduler goes on with the tick's other modules and
+/// calls finishStep() before the first one that reads this module's outputs, and at the end
+/// of the tick at the latest; the outputs are committed only then. Every reader therefore sees
+/// what it would have seen had step() done everything (the results do not change).
+///
+/// The module's inputs keep this step's values until finishStep() (no other module sets them).
+/// The scheduler calls allowSplit(true) when it wires the module; until then (and when the
+/// module runs under something that does not know SplitStep, as a wrapper) step() must finish
+/// its work itself.
+class SplitStep {
+public:
+    SplitStep() = default;
+    SplitStep(const SplitStep&) = delete;
+    SplitStep& operator=(const SplitStep&) = delete;
+    SplitStep(SplitStep&&) = delete;
+    SplitStep& operator=(SplitStep&&) = delete;
+    virtual ~SplitStep() = default;
+
+    /// Whether step() may leave work for finishStep(); off until the scheduler allows it.
+    virtual void allowSplit(bool allowed) = 0;
+    /// Whether the last step() left work for finishStep().
+    [[nodiscard]] virtual bool stepPending() const = 0;
+    /// Waits for that work and writes the outputs.
+    virtual Status finishStep(SignalBus& bus) = 0;
+};
+
 }  // namespace lagrange

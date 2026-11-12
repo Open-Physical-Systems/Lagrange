@@ -45,6 +45,7 @@ them yet.
 | `domains.rigid_body.dt` | yes | 0.0001 to 0.01 s |
 | `domains.rigid_body.backend` | | must be `mujoco` |
 | `time.real_time_factor` | yes, at once | 0 means as fast as possible |
+| `sensor_faults` | yes: replaces `--sensor-fault`'s ([cli.md](cli.md), "Sensor faults") | each as `--sensor-fault` checks it; its sensor and quantity must exist in the run |
 | `environment`, `seed`, `deterministic`, `tier`, `batch`, `world`, `bridges`, `scenario`, `record`, `time.end`, `domains.sensors.only` | not yet: a warning | |
 
 Applying a profile rebuilds the wiring and restarts the run at t = 0. If the new wiring fails,

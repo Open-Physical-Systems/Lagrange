@@ -89,6 +89,12 @@ class LagrangeEnv(_Base):  # type: ignore[misc]
         self.mode = mode
         self.action_scale = action_scale
         self.extra_signals = list(signals)
+        # What _observe reads, in order: named once, not at every step.
+        self._observed = [
+            f"joint/{joint}/{quantity}"
+            for joint in self.joint_names
+            for quantity in ("position", "velocity")
+        ] + self.extra_signals
         self.step_seconds = step_seconds
         self.episode_seconds = episode_seconds
         self.reward_function = reward
@@ -107,12 +113,10 @@ class LagrangeEnv(_Base):  # type: ignore[misc]
         return [joint for joint in self.sim.joints() if f"joint/{joint}/position" in names]
 
     def _observe(self) -> np.ndarray:
+        read = self.sim.read
         values: list[float] = []
-        for joint in self.joint_names:
-            values += self.sim.read(f"joint/{joint}/position")
-            values += self.sim.read(f"joint/{joint}/velocity")
-        for signal in self.extra_signals:
-            values += self.sim.read(signal)
+        for name in self._observed:
+            values += read(name)
         return np.asarray(values, dtype=np.float64)
 
     def reset(

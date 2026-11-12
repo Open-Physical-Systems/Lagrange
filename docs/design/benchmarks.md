@@ -80,3 +80,204 @@ What the numbers say:
 - On this machine, Tier 0 beats the integrated GPU by 1.7 to 5 times for these scans and is
   deterministic, so `--lidar auto` stays on the CPU. Tier 1 (`--lidar gpu`) is for lidars with
   far more beams, or a discrete GPU; it needs re-measuring there.
+
+## 4. Whole runs: where the server's time goes (2026-11-12)
+
+`LAGRANGE_SERVER_STATS=1` makes `lagrange_server` print, once a second on stderr, the real-time
+factor, the scheduler's module time and what it spends besides (capture, record, world update,
+the ROS bridge, emit), the ten costliest modules (ms per wall second, steps, ms per step), and with
+viewers connected the loop rate and the scene deltas sent (per second, size, build time, skipped
+for congestion). Timing is never part of the state.
+
+Measured headless with `--no-ros --rtf 0` (as fast as it goes) for 25 s, the median of the 1 s
+windows after the first four, each scenario run before and after back to back. Machine: the
+i9-13900H laptop with an RTX 4060 Laptop GPU, RelWithDebInfo; **shared with about eight other
+builds and test runs (load average 15 to 30 on 20 threads)**, so the absolute numbers are low and
+noisy (±30 % between repeats); the ratios held across two full repeats.
+
+| Run | Before (RTF) | After (RTF) | What changed it |
+|---|---|---|---|
+| Sample AMR, warehouse (`--lidar cpu`) | 7.3 | 23.2 | no sleep while time is owed |
+| Quadcopter, open field | 14.5 | 52.9 | no sleep while time is owed |
+| Thermal camera AMR, 6 people | 3.6 | 4.6 | colour not drawn, palette in parallel |
+| Sedan, city block | 1.1 | 4.7 | camera model on the GPU |
+| Sedan, city block, with ROS | 1.0 | 5.8 | as above, and no images built for nobody |
+| Sedan in the town, 24 cars, 36 people | 0.8 | 2.8 | camera model on the GPU, radar in parallel |
+| Town, no robot, 24 cars, 36 people | 3.7 | 4.8 | no sleep while time is owed |
+
+Per step (ms, same runs): the sedan's front camera 76.6 → 11.6 (city) and 73.8 → 11.7 (town);
+its radar 2.3 → 1.05 in the town; the thermal camera 11.1 → 8.9; the ROS bridge with the sedan
+34 → 3 ms per simulated second when nothing subscribes to the images.
+
+What each change does:
+
+- **The run never sleeps while it owes time.** `runOnce()` polled its sockets with a 5 ms
+  timeout every iteration, also when the run was behind real time or ran with `--rtf 0`; a run
+  that cannot keep up lost those 5 ms each time (the quadcopter spent 0.66 s of every second
+  asleep). Now the poll waits only when the run is on time.
+- **The camera model runs on the GPU** (`gpu/kernels/camera/camera_model.slang`) right after the
+  render, in the same submission; only the output's size comes back. The CPU `CameraModel::apply`
+  (18 to 50 ms for the sedan's 960 × 540 camera: six Box-Muller normals per pixel) stays the
+  reference (`LAGRANGE_CAMERA_MODEL=cpu`). sensors.md §2 has the agreement test.
+- **The radar casts and works out its echoes in parallel**, summed in ray order (bit-identical,
+  checked on a recording of the sedan), and on the GPU with `--lidar gpu`.
+- **The thermal camera draws no colour** (`RasterCamera::setColour(false)`) and paints its palette
+  in parallel.
+- **The ROS bridge builds camera images and lidar clouds only when someone subscribes** (or the
+  topic rides on a radio link or sensor delay, whose random draws must not change).
+- **Viewers get scene deltas every 8 ms while a long batch of ticks runs**, not once per batch: in
+  the town at real time, 105 to 135 deltas a second instead of 40 to 50 (42 kB each, 0.1 ms to
+  build; writing them to the socket is most of the cost).
+
+What is left, largest first:
+
+- The camera render itself: 4 to 10 ms per frame for the sedan (8 samples, the realistic look's
+  shadow cascades), waited for on the simulation thread. Overlapping it with the next ticks
+  would cost a frame of latency.
+- MuJoCo with many kinematic bodies: the town's 655 bodies cost 0.16 to 0.25 ms per 1 ms step,
+  of which `mj_step1` (positions, broad phase) about 150 µs, the bus reads and writes of every
+  body's pose, twist and contact force about 80 µs, `mj_rnePostConstraint` 30 µs.
+- The CPU lidar, 1.3 to 4 ms per scan; Tier 1 (`--lidar gpu`) is still not faster for these scans.
+
+### 4.1 Second round (2026-11-12, later)
+
+Same scenarios and method (`--no-ros --rtf 0`, 25 s, the median of the 1 s windows after the
+first four), the build before (the first round's state) and after run back to back per scenario,
+three times. The table is the third round (load average 1 to 11 on 20 threads, the quietest);
+the ratio column gives the range over all three rounds (load 2 to 21).
+
+| Run | Before (RTF) | After (RTF) | Ratio (3 rounds) | What changed it |
+|---|---|---|---|---|
+| Sample AMR, warehouse (`--lidar cpu`) | 31.1 | 31.8 | 0.99 to 1.02 | nothing it uses |
+| Quadcopter, open field | 61.9 | 66.8 | 1.08 to 1.19 | bus commits (most likely: nothing else it uses changed) |
+| Thermal camera AMR, 6 people | 11.4 | 13.2 | 1.16 to 1.8 | render overlapped |
+| Sedan, city block | 10.0 | 12.9 | 1.29 to 1.45 | render overlapped |
+| Sedan in the town, 24 cars, 36 people | 2.5 | 3.7 | 1.11 to 1.45 | render overlapped, MuJoCo |
+| Town, no robot, 24 cars, 36 people | 8.3 | 18.6 | 1.87 to 2.39 | MuJoCo, bus commits |
+
+Per step (third round): MuJoCo in the town 0.091 → 0.035 ms, in the town with the sedan 0.095
+→ 0.075 ms; the sedan's front camera 6.4 → 4.1 ms (city) and 22.4 → 12.7 ms (town), the
+thermal camera 4.2 → 3.3 ms (a split step's cost is its two halves, without what runs between).
+Every signal's value is the same bit for bit before and after (all signals hashed every 100 ms
+over 20 s of each scenario, cameras off as in `lagrange determinism`); `lagrange determinism`
+passes for `amr_sample_urdf`, `sedan_city` and the sedan in the town.
+
+What each change does:
+
+- **The camera renders while the tick's other modules run.** The scheduler has split steps
+  (`SplitStep`, architecture.md §6): the camera submits its render in `step()`, the lidar, the
+  radar and the rest of the tick run while the GPU draws, and the camera waits for it right
+  before the first module that reads its images (none, in these runs: the end of the tick).
+- **The camera model reads the render from device memory**: the images no longer go to host
+  memory and back (labels and copies 1.4 → 0.45 ms on the GPU for the sedan's camera).
+- **MuJoCo leaves far kinematic bodies out of its broad phase** (rigid_body.md): it makes no
+  contact between two bodies without degrees of freedom but sorted and paired them anyway, about
+  half of the town's step. **A world without degrees of freedom skips MuJoCo's step** (the town
+  without a robot): only the time and the kinematic bodies' poses change.
+- **Bus commits touch less memory**: a module's outputs commit together, in runs; commit times in
+  their own array; previous values kept only where a reader uses them. In the town 2700 body
+  signals commit every tick.
+- **The thermal camera remembers each surface's apparent temperature** by its temperature and
+  emissivity (0.15 → 0.01 ms a frame for the sample AMR's 138 surfaces).
+- **The thermal camera's image is drawn on the GPU** after the render (`thermal_camera.slang`,
+  sensors.md §2), measured after the table above: the sample AMR's camera 4.0 → 3.5 ms a frame,
+  RTF 12.1 → 13.1 (the same build with `LAGRANGE_THERMAL_CAMERA=cpu` and without, twice each).
+
+Measured and left alone: allocation per step is small (an `LD_PRELOAD` malloc counter: under one
+per tick in the town, about four per tick with the sedan's camera, radar and lidar); the humans
+(0.04 ms per 10 ms step for 36 people) and the traffic (0.015 ms) are a few per cent of the town.
+
+What is left, largest first:
+
+- The camera's GPU work, 3 to 12 ms a frame in the town, set mostly by the laptop GPU's clocks
+  (a camera at 10 Hz of simulated time leaves it idle in between, and it runs slow): the same
+  frame took 2.9 ms of GPU time in one run and 10.3 ms in the next. The CPU lidar after it in the
+  tick hides 2 to 4 ms of it.
+- MuJoCo with a robot among many kinematic bodies: each step still runs its kinematics, velocities
+  and `mj_rnePostConstraint` over all 664 bodies (0.075 ms in the town with the sedan).
+- The scheduler's own work in the town, about 15 µs a tick: filling 1300 input slots and
+  committing 2700 outputs, mostly memory traffic.
+- The CPU lidar, 1.7 to 4 ms per scan.
+
+## 5. Start-up and Python throughput (2026-11-12)
+
+The target (§13.4 of the project rules) is under 5 s from a cold start to the viewer's first frame
+with a sample robot on a warm disk. Every sample is far below it; what is left is mostly the GPU.
+
+`LAGRANGE_TIMING=1` makes the server (and the Python `Simulation`) print on stderr how long each
+load stage took (`compose`: the robot and world files read into world tables; `ros`; `streaming`;
+`lidar`; `cameras`; `build`: the modules made and wired), each module's `declare` and `init`, and
+each step of making the camera scene (`gpu device`, `pipelines`, `meshes`, `textures`). Timing is
+never part of the state.
+
+Measured on the same laptop as §4 (i9-13900H, RTX 4060 Laptop GPU, RelWithDebInfo), **shared with
+other builds and test runs (load average 8 to 23)**. Before is `night/integration` as built, after is
+this work; each is run in a clean environment, alternating, five times for the load and four
+for the first frame. The tables show medians. The GPU was awake: see the cold GPU below.
+
+| Run | Server load, before → after (s) | First frame with `lagrange`, before → after (s) |
+|---|---|---|
+| Sample AMR, warehouse | 0.12 → 0.07 | 0.81 → 0.42 |
+| Sedan, city block (camera, radar, lidar) | 0.80 → 0.47 | 1.65 → 0.93 |
+| Sedan in the town | 0.81 → 0.52 | 1.73 → 1.30 |
+| Quadcopter, open field | 0.13 → 0.15 | 1.02 → 0.67 |
+| Tiled town, `--spawn 1036,1036` (16 tiles at start) | 0.15 → 0.16 | 1.00 → 0.58 |
+
+The load is `lagrange_server --no-ros` from exec until its socket listens. The first frame is
+measured as the `lagrange` command starts things, with ROS: before, the server until it listened
+and then the viewer (`--headless --frames 1`); after, both at once.
+
+| Rebuild | Before (s) | After (s) |
+|---|---|---|
+| Spawn an AMR into the sedan's city run (`Simulation.spawn`), three spawns and a delete | 0.70 to 0.80 each | 0.09 to 0.15 each |
+| Apply a profile (quadcopter hover), a spawn without cameras | 0.02 to 0.05 | unchanged |
+
+What changed:
+
+- **The viewer starts beside the server.** `lagrange` waited for the server's socket and only
+  then started the viewer, so the first frame came after both start-ups, one after the other. Now
+  both start at once. Until its first connection the viewer's client tries every 50 ms (for 20 s),
+  not after an exponential backoff that has grown to seconds by the time the server listens. This
+  saves 0.3 to 0.7 s on every run.
+- **A rebuilt run keeps its camera device.** Spawning or deleting a robot, or a profile that
+  rebuilds the run, made a new Vulkan device and decoded the realistic textures again for the
+  cameras. `gpu::RasterScene::create(..., reuse)` now shares the previous scene's device, queue
+  lock and textures. The meshes are uploaded again because they changed.
+- **The camera model's ray table is computed in parallel.** It holds the undistorted ray and the
+  vignetting of every output pixel: 0.26 to 0.36 s on one core for the sedan's 960 × 540 camera,
+  now 20 to 50 ms. Each row's reach is kept separately and combined in order, so the table is
+  the same on any number of cores.
+- **The sixteen surface photographs are decoded at once** (one thread per JPEG): 100 to 175 ms
+  became 50 to 90 ms, for camera runs and for the viewer's realistic look.
+- Python: `Server::read` finds signals in a name index instead of walking every signal, and
+  `commandJoint` keeps the run's drive modes instead of working them out on every call.
+  `LagrangeEnv` builds its observed signal names once, and `image()` no longer lists every signal
+  before each frame. The API is unchanged.
+
+Results are unchanged. `lagrange determinism` passes (AMR, quadcopter). Python `state_hash()`
+after the same steps is equal before and after for the AMR, the quadcopter, the sedan and a
+spawn sequence. The `LagrangeEnv` episodes give identical observations and hashes.
+
+**The cold GPU.** On this laptop the NVIDIA GPU powers down when idle. The first Vulkan device
+after that takes 2.1 to 2.3 s instead of 0.15 to 0.28 s; it was seen in about one run in five
+here, after a pause. The server's cameras and the viewer each pay it. Starting the two together
+lets them pay it at the same time instead of one after the other. Nothing else in a start-up
+comes close. A `VkPipelineCache` on disk was considered and not added: the camera pipelines
+take 0.3 to 1.3 ms to build, because the NVIDIA and Mesa drivers keep their own shader caches.
+
+**Python throughput** (sample AMR with `joint_control`, CPU lidar, medians of 2000 calls):
+
+| Call | Cost |
+|---|---|
+| `read(name)` | 0.1 to 0.25 µs |
+| `command_joint(...)` | 0.1 to 0.35 µs |
+| `signals()` (95 signals) | 18 to 38 µs |
+| One 1 ms tick through `step_until` | 16 to 46 µs, the same whether called per tick or once for many |
+| `LagrangeEnv.step`, 20 ms steps | 1240 → 1420 per second (before → after, same run) |
+| `LagrangeEnv.step`, 2 ms steps | 10 900 → 11 100 per second |
+| `ParallelEnvs`, 1 env, 2 ms steps | ~9 900 per second: the pipe to the worker costs ~45 µs a step |
+
+The Python layer adds about 1 % to an RL step. The rest is the simulation itself (§4): the AMR's
+two lidars, MuJoCo and the electrical network. Under the shared load, `ParallelEnvs` with four
+workers gave 1.5 to 1.8× one worker at 20 ms steps. Each worker's CPU lidar already uses every
+core, and pinning workers to separate cores was slower here.
