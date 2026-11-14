@@ -83,6 +83,11 @@ target_link_libraries(
 )
 
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
+# The sensor catalog (RFC 0016 §5): data only, read by the robot builder.
+install(
+    FILES catalog/sensor_catalog.yaml
+    DESTINATION share/${PROJECT_NAME}/catalog
+)
 install(
     TARGETS lagrange_sensors
     EXPORT export_${PROJECT_NAME}
@@ -288,6 +293,35 @@ if(BUILD_TESTING)
     )
     target_link_libraries(test_kinds_detections lagrange_sensors)
     lagrange_target_defaults(test_kinds_detections)
+    # The sensor catalog against the code (RFC 0016 §5): the kinds are builtinKinds(), and every
+    # default written explicitly gives the same signals as none.
+    find_package(yaml-cpp REQUIRED)
+    ament_add_gtest(
+        test_sensor_catalog
+        test/test_sensor_catalog.cpp
+        test/catalog_cases_power_camera.cpp
+        test/catalog_cases_environment.cpp
+        test/catalog_cases_contact.cpp
+        test/catalog_cases_scene_radio.cpp
+        TIMEOUT 300
+    )
+    target_link_libraries(
+        test_sensor_catalog
+        lagrange_sensors
+        lagrange_rigid_body_mujoco::lagrange_rigid_body_mujoco
+        yaml-cpp::yaml-cpp
+        TBB::tbb
+    )
+    target_include_directories(test_sensor_catalog PRIVATE src/kinds)
+    target_compile_definitions(
+        test_sensor_catalog
+        PRIVATE
+            LAGRANGE_SENSOR_CATALOG="${CMAKE_CURRENT_SOURCE_DIR}/catalog/sensor_catalog.yaml"
+    )
+    lagrange_target_defaults(test_sensor_catalog)
+    # The catalog against sensors.md §9, both ways (tools/ci/check_sensor_catalog.py).
+    find_package(ament_cmake_pytest REQUIRED)
+    ament_add_pytest_test(test_check_sensor_catalog test/test_check_sensor_catalog.py TIMEOUT 60)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

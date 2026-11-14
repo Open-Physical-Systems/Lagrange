@@ -165,6 +165,7 @@ radar's rays and echoes (`Radar.cpp`, `sensors::createImagingRadar`): the same s
 | Setting | Meaning | Default |
 |---|---|---|
 | `azimuth_elements`, `elevation_elements` | virtual channels (N_TX × N_RX) along each axis | none: `azimuth_resolution`, `elevation_resolution` (rad) |
+| `azimuth_resolution`, `elevation_resolution` | angle cells at boresight (rad) without elements | 0.035, `azimuth_resolution` |
 | `element_spacing` | d, in wavelengths | 0.5 |
 | `bandwidth` | sweep B (Hz): `range_resolution` = c/(2B) unless given | none |
 | `chirp_period`, `chirps` | T_c (s) and N_c: unambiguous velocity ±λ/(4·T_c), `velocity_resolution` = λ/(2·N_c·T_c) unless given | none |
@@ -1064,6 +1065,23 @@ Models:
   into `adc/bits` (12) over 0 to `adc/reference` (3.3 V), as a flight controller's power module
   reads its pack.
 
+| Parameter | Unit | Default | Meaning |
+|---|---|---|---|
+| `signal` (text) | | none: required | the current (A) or voltage (V) signal it measures |
+| `model` (text) | | `ina226` | `ina226`, `hall` (current only) or `divider` (voltage only) |
+| `shunt_resistance` | Ω | 0.002 (illustrative) | `ina226`, current only |
+| `conversion_time` | s | 0.0011 | `ina226`: the nearest listed value is taken |
+| `averages` | | 1 | conversions averaged (`ina226`: the nearest listed value) |
+| `channels` | | 2 | `ina226`: 2 (shunt and bus) or 1 |
+| `noise`, `offset` | V | 0, 0 | at the ADC's input, 1σ and fixed (`hall`: noise 0.0035 V) |
+| `gain_error` | | 0 | reads (1 + gain_error) × the truth |
+| `supply` | V | 5 | `hall`: the ACS712's supply |
+| `sensitivity` | V/A | 0.185 | `hall` (ACS712ELCTR-05B) |
+| `zero_output` | V | `supply` / 2 | `hall`: the output at 0 A |
+| `ratio` | | 1/11 (illustrative) | `divider`: output over input |
+| `adc/bits` | | 12 | `hall`, `divider` |
+| `adc/reference` | V | `supply` (`hall`), 3.3 (`divider`) | the ADC's range is 0 to it |
+
 | Signal | Unit | |
 |---|---|---|
 | `sensor/<n>/current` or `sensor/<n>/voltage` | A or V | the reading |
@@ -1104,6 +1122,20 @@ mechanical RPM × pole pairs. `speed` is decoded back to the motor shaft, so RPM
 Other parameters: `pole_pairs` and `gear_ratio` (needed when no motor prim drives the joint),
 `bus`, `temperature_node`, and `current/…`, `voltage/…`, `temperature/…` noise, offset and
 gain_error (`temperature/` in °C). Telemetry periods are rounded up to whole milliseconds, as every kind's.
+
+| Parameter | Unit | Default | Meaning |
+|---|---|---|---|
+| `joint` (text) | | none: required | the motor's joint |
+| `protocol` (text) | | `kiss` | `kiss` or `dshot` |
+| `escs` | | 4 | `kiss`: ESCs asked in turn on the wire |
+| `baud` | bit/s | 115200 | `kiss`: the wire's rate |
+| `extended_rate` | Hz | 1 | `dshot`: extended frames a second |
+| `pole_pairs`, `gear_ratio` | | the motor's `elec:polePairs`, `elec:gearRatio` (else 1) | needed when no motor prim drives the joint |
+| `bus`, `temperature_node` (text) | | the motor's bus and thermal node | |
+| `current/resolution`, `voltage/resolution` | A, V | 0.01, 0.01 (`dshot`: 1 A, 0.25 V) | the frame's steps |
+| `temperature/resolution` | °C | 1 | |
+| `<q>/bits`, `<q>/full_scale` | | none | an ADC instead, as the battery monitor's |
+| `<q>/noise`, `<q>/offset`, `<q>/gain_error`, `<q>/samples` | | 0, 0, 0, 1 | the chain above, in `<q>`'s unit (`temperature/` in °C) |
 
 | Signal | Unit | |
 |---|---|---|
@@ -1644,6 +1676,14 @@ part's figures. Franka publishes none for the FR3 (datasheet R02212 2.6, July 20
 torque sensor in all 7 axes"); KUKA gives "axis-specific torque accuracy ±2 % of maximum torque"
 for the LBR iiwa 7 R800 and 14 R820 (spec sheet), no resolution or noise. Signals:
 `sensor/<n>/torque` (N·m; `force`, N, on a slide), `saturated` (Bool).
+
+| Parameter | Unit | Default | Meaning |
+|---|---|---|---|
+| `joint` (text) | | the joint whose child is the sensor's body | |
+| `range` | N·m (N) | ∞ | clipping; `saturated` reads 1 |
+| `resolution` | N·m (N) | 0: none | step |
+| `noise`, `offset` | N·m (N) | 0, 0 | 1σ, bias |
+| `cutoff_frequency` | Hz | 0: none | first-order low-pass |
 
 Test `test_kinds_force_torque` (both kinds): a 2 kg arm on a hinge held horizontal by its motor
 (m·g·d = 9.80665 N·m): at the joint F = (0, 0, m·g) and τ = (0, −m·g·d, 0) within 0.5 %; at its

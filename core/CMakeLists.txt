@@ -112,6 +112,29 @@ ament_index_register_resource(
     CONTENT "lib/liblagrange_thermal_probe.so"
 )
 
+# The sample plugins' sensor catalogs (RFC 0016 §5): one file per kind, found by the robot
+# builder through the lagrange_sensor_catalog resource index, whose entry names the files.
+install(
+    FILES
+        plugin_abi/samples/catalog/tof.yaml
+        plugin_abi/samples/catalog/ultrasonic.yaml
+        plugin_abi/samples/catalog/thermistor.yaml
+        plugin_abi/samples/catalog/ir_thermometer.yaml
+    DESTINATION share/${PROJECT_NAME}/sensor_catalog
+)
+ament_index_register_resource(
+    lagrange_sensor_catalog
+    PACKAGE_NAME lagrange_tof
+    CONTENT
+        "share/${PROJECT_NAME}/sensor_catalog/tof.yaml\nshare/${PROJECT_NAME}/sensor_catalog/ultrasonic.yaml"
+)
+ament_index_register_resource(
+    lagrange_sensor_catalog
+    PACKAGE_NAME lagrange_thermal_probe
+    CONTENT
+        "share/${PROJECT_NAME}/sensor_catalog/thermistor.yaml\nshare/${PROJECT_NAME}/sensor_catalog/ir_thermometer.yaml"
+)
+
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
     foreach(
