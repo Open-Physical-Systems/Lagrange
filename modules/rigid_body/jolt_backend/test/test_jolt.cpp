@@ -134,5 +134,57 @@ TEST(Jolt, ALimitHoldsTheJointAndReportsItsTorque) {
     EXPECT_NEAR(bus.read(bus.find("joint/pivot/constraint_torque")), held, 0.05 * held);
 }
 
+/// The energy a pendulum from 1 rad keeps after 60 s at 1 ms on `substeps` Jolt steps per step,
+/// as a fraction of its start (I = 1 + 1e-6 kg·m² about the pivot, m g d = g).
+double energyKept(std::int64_t substeps) {
+    const World world = pendulum(1.0);
+    ModuleConfigData config;
+    config.values["substeps"] = substeps;
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<JoltBackend>(), ModuleConfig(config));
+    EXPECT_TRUE(scheduler.wire(WorldView(world)));
+    const SignalId q = scheduler.bus().find("joint/pivot/position");
+    const SignalId w = scheduler.bus().find("joint/pivot/velocity");
+    const auto energy = [&] {
+        const double theta = 1.0 + scheduler.bus().read(q);
+        const double omega = scheduler.bus().read(w);
+        return 0.5 * (1.0 + 1e-6) * omega * omega + 9.80665 * (1.0 - std::cos(theta));
+    };
+    const double start = energy();
+    for (int k = 0; k < 60'000; ++k) {
+        EXPECT_TRUE(scheduler.stepTick().ok());
+    }
+    return energy() / start;
+}
+
+TEST(Jolt, APendulumLosesEnergyAsJointsAsConstraintsDoAndSubstepsDivideIt) {
+    // Jolt keeps each body free and holds the joint by projecting velocities: a body turned by
+    // ω Δt over a step has that share of its velocity made radial, and the projection takes it
+    // off, (ω Δt)² of the kinetic energy each step. Semi-implicit Euler with that projection, on
+    // a point mass in double precision, loses 16.35 % of this pendulum's energy in 60 s at 1 ms
+    // (rigid_body.md §8.1); Jolt, in single precision, 16.4 %. Nothing of Lagrange's damps it:
+    // the body damping is zero and the joint has no friction or motor.
+    const double one = energyKept(1);
+    const double four = energyKept(4);
+    std::printf("energy kept over 60 s: %.4f (1 step), %.4f (4 sub-steps)\n", one, four);
+    EXPECT_NEAR(1.0 - one, 0.1635, 0.01);
+    // Four sub-steps: a quarter of the step, a quarter of the loss (and a little more in single
+    // precision: 5.3 %, against 4.65 % for the double-precision model).
+    EXPECT_LT(1.0 - four, 0.06);
+    EXPECT_GT(1.0 - four, 0.03);
+    EXPECT_LE(four, 1.0) << "never gains";
+}
+
+TEST(Jolt, RefusesSubstepsOutOfRange) {
+    const World world = pendulum(0.1);
+    for (const std::int64_t substeps : {std::int64_t{0}, std::int64_t{65}}) {
+        ModuleConfigData config;
+        config.values["substeps"] = substeps;
+        Scheduler scheduler(SchedulerOptions{.deterministic = true});
+        scheduler.add(std::make_unique<JoltBackend>(), ModuleConfig(config));
+        EXPECT_FALSE(scheduler.wire(WorldView(world))) << substeps;
+    }
+}
+
 }  // namespace
 }  // namespace lagrange::rigid_body

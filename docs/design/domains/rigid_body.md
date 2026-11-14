@@ -181,6 +181,7 @@ The conformance suite, `ros2 run lagrange_server lagrange_physics_conformance`
 | Free fall | speed after 2 s within 0.1 % of 2 g: nothing damps it |
 | A falling box | dropped from 1 m, rests at its half height within 5 mm after 3 s |
 | A pendulum | period of the physical pendulum, `2π √(I / (m g d))·(1 + θ₀²/16)`, within 0.5 % |
+| A pendulum's energy | from 1 rad, 60 s at 1 ms: period of the first five swings within 0.25 % of the exact `4 √(I / (m g d))·K(sin(θ₀/2))`; energy never above its start by 0.5 %, at least 80 % of it kept (§8.1) |
 | A box on a slope | friction 1: holds at 30° (moves < 1 cm in 1.4 s), slides at 60° (> 0.3 m) |
 | A stack of three boxes | stands for 10 s: the top box within 1 cm of its place |
 | The sample AMR's loop | over 10 s, the distance driven within 5 % of MuJoCo's, the end within 10 % of it |
@@ -194,6 +195,49 @@ fixed (a third, Jolt's default body damping, came up later and is fixed too): lo
 robot index instead of by tree), and a restored state lost its contacts with the static scenery.
 Restored contacts now include the scenery whenever it is unchanged; it changes between a save
 and a restore only when streamed tiles come or go.
+
+### 8.1 Energy on Jolt: joints as constraints, and sub-steps
+
+A free pendulum (1 kg, 1 m, from 1 rad, 1 ms) keeps its energy within 0.07 % over 60 s on
+MuJoCo, and loses 16.4 % on Jolt (`docs/validation/comparison.md`). The loss is Jolt's method,
+not a setting of Lagrange's:
+
+- Lagrange gives Jolt no damping: body linear and angular damping are zero
+  (`mLinearDamping`, `mAngularDamping`, whose defaults are 0.05), the hinge has no friction
+  (`mMaxFrictionTorque` is the joint's, 0 here) and no motor, and the body never sleeps. Jolt's
+  solver settings change nothing measurable: no position steps, Baumgarte 0 or 1, 30 velocity
+  steps, warm start off all give 16.3–16.4 %.
+- MuJoCo, DART and Bullet's multibody solve a robot in joint coordinates. Jolt keeps every body
+  free and holds a joint by projecting the velocities at each step (sequential impulses). Over a
+  step the body turns by ω Δt, so that share of its velocity is radial at the next step, and the
+  projection takes it off: (ω Δt)² of the kinetic energy per step, O(Δt) per second. The same
+  scheme in double precision on a point mass (semi-implicit Euler, velocity projection, position
+  projection) loses 16.35 % of this pendulum's energy in 60 s; Jolt loses 16.38 %.
+- The period is not hurt: within 0.02 ppm of the exact one at 0.05 rad. A pendulum swinging
+  freely for a minute is the worst case; a driven joint gets its energy back from the motor.
+
+`domains.rigid_body.substeps: N` (profile, 1 to 64, default 1; Jolt only, MuJoCo has nothing to
+divide) runs N Jolt steps of Δt/N per scheduler step, collision detection included, so it costs
+about N times as much. Measured on the pendulum and the comparison's scenes (one core):
+
+| substeps | energy after 60 s | 200 boxes, real-time factor | AMR in the warehouse, real-time factor |
+|---|---|---|---|
+| 1 | −16.4 % | 2.35 | 68.6 |
+| 2 | −9.0 % | 1.29 | 41.6 |
+| 4 | −5.3 % | 0.66 | 23.8 |
+| 16 | −2.3 % | | |
+
+In single precision the gain falls off beyond a few sub-steps (the double-precision model gives
+−4.65 % at 4). Use MuJoCo, the default and the deterministic reference, where energy over long
+free motion matters. `Jolt.APendulumLosesEnergyAsJointsAsConstraintsDoAndSubstepsDivideIt` holds
+the loss to the model and sub-steps to it; `Conformance.APendulumKeepsItsPeriodAndEnergy` holds
+every backend to the bound in the table above.
+
+Jolt is built with `DOUBLE_PRECISION=OFF` (`vendor/jolt_vendor`). Its free fall after 1 s is
+−4.898 mm against the closed form instead of semi-implicit Euler's −4.905 mm. Float32 velocity
+and position reproduce it to the last digit (−4.898281 mm). Float32 velocity with double
+positions gives −4.900 mm. Jolt's double precision covers positions only, so turning it on would
+remove 2 of the 7 µm.
 
 ## Contact force
 

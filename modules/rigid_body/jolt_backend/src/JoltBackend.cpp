@@ -54,6 +54,10 @@ constexpr float kMimicMotorHz = 100.0F;
 // Explicit damping d is stable for d dt / I < 2; half of that leaves a margin.
 constexpr double kMaxDampingShare = 1.0;
 
+// The most sub-steps a profile may ask of Jolt per step (domains.rigid_body.substeps): each one
+// is a whole Jolt step, collision detection included, so the cost grows with the count.
+constexpr std::int64_t kMaxSubsteps = 64;
+
 // Share of a step's new armature torque estimate taken (JoltBackend::Impl::updateArmatureTorques).
 constexpr double kArmatureRelaxation = 0.5;
 
@@ -343,6 +347,7 @@ struct JoltBackend::Impl {
     void updateArmatureTorques();
     std::vector<double> armatureMatrix, armatureForces;  // its scratch, kept between steps
     bool hasArmature{false};
+    int substeps{1};  // Jolt steps per Lagrange step (domains.rigid_body.substeps)
 
     /// Joint-space inertia M(a, b): what joint a feels when joint b accelerates (0 unless one's
     /// subtree holds the other's).
@@ -700,9 +705,22 @@ Status JoltBackend::declare(const WorldView& world, const ModuleConfig& config, 
     return {};
 }
 
-Status JoltBackend::init(const WorldView& view, const ModuleConfig&, SignalIo& io) {
+Status JoltBackend::init(const WorldView& view, const ModuleConfig& config, SignalIo& io) {
     initJolt();
     Impl& s = *impl_;
+    // Jolt solves joints as constraints between free bodies (maximal coordinates): each step's
+    // velocity projection takes off the part of a body's velocity its turn over the step made
+    // radial, a loss of (ω·Δt)² of the kinetic energy per step, so O(Δt) per second (a 1 m
+    // pendulum from 1 rad loses 16 % in 60 s at 1 ms; docs/physics/rigid-body.md). Sub-steps
+    // divide it by their count at that many times the cost; one by default.
+    s.substeps = 1;
+    if (const auto asked = config.get<std::int64_t>("substeps")) {
+        if (*asked < 1 || *asked > kMaxSubsteps) {
+            return Status::error(StatusCode::InvalidConfig, "jolt: substeps must be from 1 to " +
+                                                                std::to_string(kMaxSubsteps));
+        }
+        s.substeps = static_cast<int>(*asked);
+    }
     const World& world = view.raw();
     const World::Bodies& bodies = world.bodies;
     const std::size_t n = bodies.names.size();
@@ -1180,7 +1198,7 @@ Status JoltBackend::step(const StepContext& context, SignalIo& io) {
 
     const double dt = context.dt.seconds();
     const JPH::EPhysicsUpdateError error =
-        s.system->Update(static_cast<float>(dt), 1, s.temp.get(), s.jobs.get());
+        s.system->Update(static_cast<float>(dt), s.substeps, s.temp.get(), s.jobs.get());
     if (error != JPH::EPhysicsUpdateError::None) {
         return Status::error(StatusCode::Diverged, "jolt: physics update error " +
                                                        std::to_string(static_cast<int>(error)));

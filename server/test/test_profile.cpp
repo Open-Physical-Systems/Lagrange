@@ -73,6 +73,21 @@ TEST(Profile, TheServersOwnProfileIsValid) {
     EXPECT_EQ(check.settings->rigidBodyDtNs, 1'000'000);
 }
 
+// Jolt's sub-steps (rigid_body.md §8.1): a whole count from 1 to 64, given to the backend.
+TEST(Profile, RigidBodySubstepsReachTheSettings) {
+    const ProfileCheck check = checkProfile(
+        profile("{enabled: true, backend: jolt, dt: 0.001, substeps: 4}"), schema(), context());
+    EXPECT_TRUE(check.valid) << issues(check);
+    ASSERT_TRUE(check.settings);
+    EXPECT_EQ(check.settings->rigidBodySubsteps, 4);
+    EXPECT_FALSE(
+        checkProfile(profile("{enabled: true, backend: jolt, substeps: 0}"), schema(), context())
+            .valid);
+    EXPECT_FALSE(
+        checkProfile(profile("{enabled: true, backend: jolt, substeps: 2.5}"), schema(), context())
+            .valid);
+}
+
 TEST(Profile, DisablingADomainWithAModuleSubstitutesIt) {
     const ProfileCheck check = checkProfile(profile("{enabled: false, substitute: fixed}",
                                                     "{enabled: false, substitute: ground_truth}"),

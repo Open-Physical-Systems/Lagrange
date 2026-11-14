@@ -707,6 +707,9 @@ struct Server::Impl {
             if (settings.rigidBodyDtNs) {
                 physics.dt = Duration{*settings.rigidBodyDtNs};
             }
+            if (settings.rigidBodySubsteps) {  // Jolt's (rigid_body.md §8.1); MuJoCo has none
+                physics.values["substeps"] = *settings.rigidBodySubsteps;
+            }
             if (physics.backend == "jolt") {
                 next->add(std::make_unique<rigid_body::JoltBackend>(), ModuleConfig(physics));
             } else if (physics.backend == "mujoco") {
@@ -1217,6 +1220,7 @@ struct Server::Impl {
         settings.substituted = options.substituted;
         settings.rigidBodyDtNs = rigidBodyDtNs;
         settings.rigidBodyBackend = rigidBodyBackend;
+        settings.rigidBodySubsteps = rigidBodySubsteps;
         settings.electricalDtNs = electricalDtNs;
         settings.thermalDtNs = thermalDtNs;
         settings.speedPrediction = speedPrediction;
@@ -1613,6 +1617,7 @@ struct Server::Impl {
     std::optional<std::string> rigidBodyReplay;                  // --bench, or an applied profile
     std::optional<std::int64_t> rigidBodyDtNs;                   // from an applied profile
     std::optional<std::string> rigidBodyBackend;                 // from an applied profile
+    std::optional<std::int64_t> rigidBodySubsteps;               // from an applied profile
     std::optional<std::string> appliedTireModel;                 // vehicle_dynamics.tire_model
     std::optional<openscenario::Scenario> scenario;              // --scenario
     std::vector<PluginModule> plugins;                           // --plugin (RFC 0008)
@@ -5054,6 +5059,7 @@ struct Server::Impl {
         options.substituted = settings.substituted;
         rigidBodyDtNs = settings.rigidBodyDtNs;
         rigidBodyBackend = settings.rigidBodyBackend;
+        rigidBodySubsteps = settings.rigidBodySubsteps;
         appliedTireModel = settings.tireModel;
         electricalDtNs = settings.electricalDtNs;
         thermalDtNs = settings.thermalDtNs;
@@ -5097,6 +5103,7 @@ struct Server::Impl {
             options.substituted = previous.substituted;
             rigidBodyDtNs = previous.rigidBodyDtNs;
             rigidBodyBackend = previous.rigidBodyBackend;
+            rigidBodySubsteps = previous.rigidBodySubsteps;
             electricalDtNs = previous.electricalDtNs;
             thermalDtNs = previous.thermalDtNs;
             speedPrediction = previous.speedPrediction;

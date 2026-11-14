@@ -12,6 +12,8 @@
 #include "lagrange/rigid_body/JoltBackend.hpp"
 #include "lagrange_plugin.h"
 
+#include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <new>
@@ -188,12 +190,17 @@ lagrange_status declare(void* p, const lagrange_world* world, const lagrange_con
                                        lagrange::ModuleConfig(lagrange::ModuleConfigData{}), io));
 }
 
-lagrange_status init(void* p, const lagrange_world*, const lagrange_config*, lagrange_bus* bus) {
+lagrange_status init(void* p, const lagrange_world*, const lagrange_config* config,
+                     lagrange_bus* bus) {
     auto& self = *static_cast<Plugin*>(p);
     AbiIo io(*self.host, nullptr, bus);
-    return result(self,
-                  self.backend.init(lagrange::WorldView(self.world),
-                                    lagrange::ModuleConfig(lagrange::ModuleConfigData{}), io));
+    // domains.rigid_body.substeps, as the built-in backend takes it (a whole count only).
+    lagrange::ModuleConfigData data;
+    if (double substeps = 0.0; self.host->config_get_real(config, "substeps", &substeps) == 1) {
+        data.values["substeps"] = static_cast<std::int64_t>(std::llround(substeps));
+    }
+    return result(self, self.backend.init(lagrange::WorldView(self.world),
+                                          lagrange::ModuleConfig(std::move(data)), io));
 }
 
 lagrange_status step(void* p, const lagrange_step_context* context, lagrange_bus* bus) {
