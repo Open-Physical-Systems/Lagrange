@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lagrange — Builder workspace</title>
+<style>
+@font-face{font-family:'IBM Plex Sans';src:url(fonts/IBMPlexSans-Regular.woff2) format('woff2');font-weight:400}
+@font-face{font-family:'IBM Plex Sans';src:url(fonts/IBMPlexSans-Medium.woff2) format('woff2');font-weight:500}
+@font-face{font-family:'IBM Plex Sans';src:url(fonts/IBMPlexSans-SemiBold.woff2) format('woff2');font-weight:600}
+@font-face{font-family:'IBM Plex Mono';src:url(fonts/IBMPlexMono-Regular.woff2) format('woff2');font-weight:400}
+@font-face{font-family:'IBM Plex Mono';src:url(fonts/IBMPlexMono-Medium.woff2) format('woff2');font-weight:500}
+/* Lagrange viewer — shared styles for every artboard.
+   These map 1:1 to ImGui style values; see design tokens in the handoff zips. */
+.app{
+--bg0:#070D17;--bg1:#0B1422;--bg2:#101B2C;--bg3:#16243A;--bg4:#1D2E48;
+--ln:#1B293D;--ln2:#2A3F5C;
+--t1:#E6EBF2;--t2:#A9B6C8;--t3:#8190A6;
+--acc:#E8772E;--acc2:rgba(232,119,46,.15);--acc3:rgba(232,119,46,.45);--onacc:#170A01;
+--ok:#3FB97F;--warn:#E5B33B;--err:#F04A4A;--info:#5AA2FF;
+--d-rb:#9AACC6;--d-el:#F5C842;--d-th:#FF7A6B;--d-ae:#5CC8E6;--d-we:#7FA8FF;--d-em:#B48CFF;--d-ra:#9BE15D;--d-se:#3FD1A7;
+--s1:#5AA2FF;--s2:#F5C842;--s3:#FF7A6B;--s4:#3FD1A7;--s5:#B48CFF;--s6:#5CC8E6;--s7:#E8772E;--s8:#9BE15D;
+width:1600px;height:1000px;background:var(--bg0);color:var(--t1);
+font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:13px;line-height:18px;
+display:flex;flex-direction:column;overflow:hidden;position:relative}
+.app *{box-sizing:border-box}
+:where(.app button){font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+.app svg{display:block;flex:none}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;font-variant-numeric:tabular-nums}
+.t1{color:var(--t1)}.t2{color:var(--t2)}.t3{color:var(--t3)}.acc{color:var(--acc)}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.err{color:var(--err)}.info{color:var(--info)}
+.b5{font-weight:500}.b6{font-weight:600}.sm{font-size:12px}.xs{font-size:11px;line-height:14px}
+.row{display:flex;align-items:center;gap:6px;min-width:0}
+.colf{display:flex;flex-direction:column;min-width:0;min-height:0}
+.sp{flex:1}
+.ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ---------- menu bar ---------- */
+.mb{height:28px;flex:none;display:flex;align-items:center;gap:2px;padding:0 8px;background:var(--bg1);border-bottom:1px solid var(--ln)}
+.mb .brand{display:flex;align-items:center;gap:7px;font-weight:600;padding-right:12px;margin-right:4px;border-right:1px solid var(--ln);height:18px;letter-spacing:-.2px}
+.mb .m{padding:3px 8px;border-radius:3px;color:var(--t2)}
+.mb .ctx{color:var(--t3);font-size:12px;display:flex;align-items:center;gap:8px}
+.mb .ctx b{color:var(--t2);font-weight:500}
+
+/* ---------- toolbar: workspaces + sim controls ---------- */
+.tb{height:40px;flex:none;display:flex;align-items:stretch;padding:0 4px 0 6px;background:var(--bg1);border-bottom:1px solid var(--ln)}
+.ws{display:flex;align-items:center;gap:6px;padding:0 10px;color:var(--t2);border-bottom:2px solid transparent;border-top:2px solid transparent;font-weight:500;font-size:12px;white-space:nowrap}
+.ws.on{color:var(--t1);border-bottom-color:var(--acc)}
+.ws.on svg{color:var(--acc)}
+.ctl{display:flex;align-items:center;gap:4px;padding-left:10px;margin-left:6px;border-left:1px solid var(--ln)}
+.btn{height:26px;min-width:26px;padding:0 10px;display:inline-flex;align-items:center;justify-content:center;gap:6px;border-radius:3px;background:var(--bg3);border:1px solid var(--ln2);color:var(--t1);font-weight:500;font-size:12px;white-space:nowrap}
+.app button.btn{background:var(--bg3);border:1px solid var(--ln2)}
+.app button.btn.pri,.btn.pri{background:var(--acc);border-color:var(--acc);color:var(--onacc)}
+.app button.btn.ghost,.btn.ghost{background:transparent;border-color:transparent;color:var(--t2)}
+.app button.btn.on,.btn.on{background:var(--acc2);border-color:var(--acc3);color:var(--acc)}
+.app button.btn.dis,.btn.dis{color:var(--t3);background:transparent}
+.btn.ic{padding:0;width:26px}
+.btn.sm{height:22px;min-width:22px;padding:0 8px;font-size:11px}
+.btn.sm.ic{width:22px;padding:0}
+.ro{height:26px;display:inline-flex;align-items:center;gap:6px;padding:0 8px;border-radius:3px;background:var(--bg0);border:1px solid var(--ln);font-size:12px;white-space:nowrap}
+.ro .k{color:var(--t3);font-size:11px}
+
+/* ---------- domain strip ---------- */
+.ds{height:32px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--bg0);border-bottom:1px solid var(--ln)}
+.ds .lbl{color:var(--t3);font-size:11px;margin-right:2px}
+.chip{height:22px;display:inline-flex;align-items:center;gap:6px;padding:0 9px 0 8px;border-radius:11px;border:1px solid var(--ln2);background:var(--bg2);color:var(--t1);font-size:12px;white-space:nowrap}
+.chip i{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.chip .s{color:var(--t3);font-family:'IBM Plex Mono',monospace;font-size:11px}
+.chip.sub{border-style:dashed;background:transparent;color:var(--t2)}
+.chip.sub i{background:transparent!important;border:1.5px solid var(--t3)}
+.chip.off{border-style:dashed;background:transparent;color:var(--t3)}
+.chip.off i{background:transparent!important;border:1.5px solid var(--t3)}
+.chip.bad{border-color:var(--err);color:var(--err)}
+
+/* ---------- body / panels ---------- */
+.body{flex:1;min-height:0;display:flex;gap:4px;padding:4px}
+.col{display:flex;flex-direction:column;gap:4px;min-width:0;min-height:0}
+.pn{background:var(--bg1);border:1px solid var(--ln);border-radius:3px;display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}
+.ph{height:28px;flex:none;display:flex;align-items:stretch;background:var(--bg2);border-bottom:1px solid var(--ln);padding-left:2px}
+.pt{display:flex;align-items:center;gap:6px;padding:0 10px;color:var(--t3);font-weight:500;font-size:12px;border-top:2px solid transparent;white-space:nowrap}
+.pt.on{color:var(--t1);background:var(--bg1);border-top-color:var(--acc)}
+.ph .tools{display:flex;align-items:center;gap:2px;padding-right:4px;color:var(--t3);margin-left:auto}
+.pb{flex:1;min-height:0;overflow:hidden;padding:8px}
+.pb.np{padding:0}
+.bar{height:32px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;border-bottom:1px solid var(--ln)}
+
+/* ---------- tree ---------- */
+.tr{display:flex;align-items:center;height:22px;gap:6px;padding-right:8px;border-radius:2px;white-space:nowrap;font-size:12px}
+.tr .cv{width:12px;color:var(--t3);flex:none;display:flex;justify-content:center}
+.tr .ic{color:var(--t3);flex:none}
+.tr .nm{color:var(--t1)}
+.tr .ty{color:var(--t3);font-size:11px}
+.tr .bd{margin-left:auto;display:flex;gap:3px;align-items:center}
+.tr .bd i{width:6px;height:6px;border-radius:50%;display:block}
+.tr.sel{background:var(--acc2);box-shadow:inset 2px 0 0 var(--acc)}
+.tr.sel .ic{color:var(--acc)}
+.tr.hov{background:var(--bg3)}
+.tr.dim .nm{color:var(--t3)}
+
+/* ---------- inspector ---------- */
+.sec{border-bottom:1px solid var(--ln)}
+.sh{height:26px;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--bg2);font-weight:600;font-size:12px}
+.sh .v{margin-left:auto;color:var(--t3);font-weight:400;font-family:'IBM Plex Mono',monospace;font-size:11px}
+.kv{display:grid;grid-template-columns:112px minmax(0,1fr);column-gap:8px;row-gap:4px;padding:8px;align-items:center}
+.kv .k{color:var(--t2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fld{height:22px;display:flex;align-items:center;gap:6px;padding:0 6px;background:var(--bg0);border:1px solid var(--ln);border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:12px;min-width:0;white-space:nowrap;overflow:hidden}
+.fld .u{margin-left:auto;color:var(--t3);font-size:11px}
+.fld.ed{border-color:var(--acc3)}
+.fld.ro2{background:transparent;border-color:transparent;padding-left:0}
+.fld.dd{padding-right:4px}
+.fld.dd::after{content:"";width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid var(--t3);margin-left:auto}
+.f3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}
+.ax{font-weight:600;width:8px}
+.ax.x{color:#F0605D}.ax.y{color:#4FC97A}.ax.z{color:#5AA2FF}
+.lnk{color:var(--info)}
+
+/* ---------- tables ---------- */
+.tbl{width:100%;border-collapse:collapse;font-size:12px}
+.tbl th{height:24px;text-align:left;font-weight:500;color:var(--t3);background:var(--bg2);padding:0 8px;border-bottom:1px solid var(--ln);white-space:nowrap;font-size:11px}
+.tbl td{height:23px;padding:0 8px;border-bottom:1px solid var(--ln);white-space:nowrap}
+.tbl tr.sel td{background:var(--acc2)}
+.tbl tr.sel td:first-child{box-shadow:inset 2px 0 0 var(--acc)}
+.tbl .n{text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-variant-numeric:tabular-nums}
+.tbl .m{font-family:'IBM Plex Mono',monospace;font-size:12px}
+
+/* ---------- small widgets ---------- */
+.pill{height:18px;display:inline-flex;align-items:center;gap:4px;padding:0 7px;border-radius:9px;font-size:11px;font-weight:500;background:var(--bg3);color:var(--t2);white-space:nowrap}
+.pill.ok{background:rgba(63,185,127,.14);color:var(--ok)}
+.pill.warn{background:rgba(229,179,59,.14);color:var(--warn)}
+.pill.err{background:rgba(240,74,74,.15);color:var(--err)}
+.pill.acc{background:var(--acc2);color:var(--acc)}
+.pill.info{background:rgba(90,162,255,.14);color:var(--info)}
+.sw{width:28px;height:16px;border-radius:8px;background:var(--bg4);position:relative;flex:none;border:1px solid var(--ln2);display:inline-block}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:var(--t3)}
+.sw.on{background:var(--acc);border-color:var(--acc)}
+.sw.on::after{left:14px;background:var(--onacc)}
+.cb{width:14px;height:14px;border-radius:3px;border:1px solid var(--ln2);background:var(--bg0);flex:none;display:inline-flex;align-items:center;justify-content:center}
+.cb.on{background:var(--acc);border-color:var(--acc)}
+.cb.on::after{content:"";width:7px;height:3px;border-left:2px solid var(--onacc);border-bottom:2px solid var(--onacc);transform:translateY(-1px) rotate(-45deg)}
+.seg{display:inline-flex;border:1px solid var(--ln2);border-radius:3px;overflow:hidden;flex:none}
+.seg span{height:22px;padding:0 8px;display:inline-flex;align-items:center;font-size:11px;color:var(--t2);border-right:1px solid var(--ln2);white-space:nowrap}
+.seg span:last-child{border-right:0}
+.seg span.on{background:var(--acc2);color:var(--acc)}
+.search{height:24px;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--bg0);border:1px solid var(--ln);border-radius:3px;color:var(--t3);font-size:12px;min-width:0}
+.kbd{font-family:'IBM Plex Mono',monospace;font-size:10px;padding:0 4px;border:1px solid var(--ln2);border-radius:2px;color:var(--t3);line-height:14px;white-space:nowrap;flex:none}
+.sw8{width:10px;height:10px;border-radius:2px;flex:none;display:inline-block}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.meter{height:6px;border-radius:3px;background:var(--bg4);overflow:hidden;flex:1;min-width:0}
+.meter b{display:block;height:100%;border-radius:3px}
+.hr{height:1px;background:var(--ln);flex:none}
+.cap{font-size:11px;color:var(--t3);font-weight:500;letter-spacing:.3px}
+
+/* ---------- viewport + overlays ---------- */
+.vp{position:relative;flex:1;min-height:0;background:#091120;overflow:hidden}
+.vp > svg.scene{position:absolute;inset:0;width:100%;height:100%}
+.ov{position:absolute;background:rgba(9,17,32,.88);border:1px solid var(--ln2);border-radius:4px;padding:5px 8px;font-size:12px}
+.ovbar{position:absolute;display:flex;gap:2px;padding:2px;background:rgba(9,17,32,.88);border:1px solid var(--ln2);border-radius:4px}
+.ovbar .b{width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:3px;color:var(--t2)}
+.ovbar .b.on{background:var(--acc2);color:var(--acc)}
+.tip{position:absolute;background:var(--bg2);border:1px solid var(--ln2);border-radius:4px;padding:6px 8px;font-size:12px;box-shadow:0 6px 18px rgba(0,0,0,.45)}
+
+/* ---------- plots ---------- */
+.plot{position:relative;background:var(--bg0);border:1px solid var(--ln);border-radius:3px;overflow:hidden}
+.plot > svg{position:absolute;inset:0;width:100%;height:100%}
+.plot .ttl{position:absolute;left:8px;top:5px;display:flex;align-items:center;gap:10px;font-size:11px;color:var(--t2)}
+.plot .ttl b{color:var(--t1);font-weight:600}
+.lg{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.lg i{width:12px;height:2px;border-radius:1px;display:inline-block}
+
+/* ---------- status bar ---------- */
+.sb{height:24px;flex:none;display:flex;align-items:center;gap:16px;padding:0 10px;background:var(--bg1);border-top:1px solid var(--ln);font-size:11px;color:var(--t2);white-space:nowrap}
+.sb .it{display:flex;align-items:center;gap:6px}
+.sb .k{color:var(--t3)}
+
+/* ---------- node graph ---------- */
+.node{position:absolute;background:var(--bg2);border:1px solid var(--ln2);border-radius:4px;font-size:12px;overflow:hidden}
+.node .nh{height:24px;display:flex;align-items:center;gap:6px;padding:0 8px;font-weight:600;border-bottom:1px solid var(--ln)}
+.node .nb{padding:6px 8px;display:flex;flex-direction:column;gap:3px}
+.node.sel{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.node.sub{border-style:dashed;background:var(--bg1)}
+.port{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--t2);white-space:nowrap}
+.port i{width:7px;height:7px;border-radius:50%;border:1.5px solid var(--t3);display:inline-block;flex:none}
+
+/* ---------- code ---------- */
+.code{font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:19px;white-space:pre;color:var(--t2)}
+.code .ln{color:#4A5B74;display:inline-block;width:26px;text-align:right;margin-right:12px}
+.code .k{color:#8FB8FF}.code .s{color:#9BD39B}.code .n{color:#F5C842}.code .b{color:#E8772E}.code .c{color:#6E7F98}
+.code .add{background:rgba(63,185,127,.10)}
+.code .rm{background:rgba(240,74,74,.10)}
+
+
+body{margin:0;background:#070D17}
+
+/* ---------- builder (12-builder): additions, each built from the shared styles ---------- */
+.ws.sepl{margin-left:6px;border-left:1px solid var(--ln);padding-left:14px}
+.modes{display:flex;align-items:center;gap:4px}
+.tile{width:56px;height:54px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;border-radius:3px;background:var(--bg2);border:1px solid var(--ln2);color:var(--t2);font-size:11px}
+.tile svg{color:var(--t1)}
+.jg{display:grid;grid-template-columns:128px 78px minmax(0,1fr) 72px 92px;column-gap:10px;row-gap:0;align-items:center;padding:4px 10px}
+.jg .h{height:22px;display:flex;align-items:center;color:var(--t3);font-size:11px;font-weight:500}
+.jg .c{height:30px;display:flex;align-items:center;min-width:0}
+.trk{position:relative;height:4px;border-radius:2px;background:var(--bg4);flex:1}
+.trk .fill{position:absolute;top:0;height:4px;border-radius:2px;background:#3A4F6E}
+.trk .z{position:absolute;top:-4px;width:1px;height:12px;background:var(--ln2)}
+.trk .kn{position:absolute;top:-5px;width:14px;height:14px;margin-left:-7px;border-radius:50%;background:var(--t1);border:2px solid var(--bg1);box-shadow:0 0 0 1px var(--ln2)}
+.trk.wrap{background:repeating-linear-gradient(90deg,var(--bg4) 0 6px,transparent 6px 9px)}
+.cat .tr{padding-left:8px}
+.cat .tr .nm{font-family:'IBM Plex Mono',monospace;font-size:12px;width:118px;flex:none;overflow:hidden;text-overflow:ellipsis}
+.cat .tr .ds2{color:var(--t3);font-size:11px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.cat .sh{height:24px;font-size:11px}
+.hint{font-size:11px;color:var(--t3);line-height:15px}
+</style>
+</head>
+<body>
+<div class="app">
+
+<div class="mb">
+<div class="brand"><svg width="16" height="16" viewBox="0 0 120 120" aria-hidden="true"><path d="M34 18 V86 H102" fill="none" stroke="#E6EBF2" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="68" cy="27.1" r="11" fill="#E8772E"></circle></svg>Lagrange</div>
+<button class="m">File</button><button class="m">Edit</button><button class="m">View</button><button class="m">Simulation</button><button class="m">Tools</button><button class="m">Window</button><button class="m">Help</button>
+<div class="sp"></div>
+<div class="ctx"><span>robot <b>rover_mk1</b></span><span>file <b class="mono" style="font-size: 11px">~/robots/rover_mk1.urdf</b></span><span>server <b>none</b></span><span class="kbd">Ctrl K</span></div>
+</div>
+
+<div class="tb">
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8l5.6 3.1v6.2L8 14.2l-5.6-3.1V4.9z M2.4 4.9L8 8l5.6-3.1 M8 8v6.2"></path></svg>Scene</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11 M2.5 8h11 M2.5 12h11"></path><circle cx="6" cy="4" r="1.6" fill="#0B1422"></circle><circle cx="10.5" cy="8" r="1.6" fill="#0B1422"></circle><circle cx="5" cy="12" r="1.6" fill="#0B1422"></circle></svg>Domains</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M9 1.5L3.5 9H8l-1 5.5L12.5 7H8z"></path></svg>Electrical</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 8h2.2l1.6-4.5 3 9 2-6.5 1.5 2h2.7"></path></svg>Signals</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M8 8l4.6-4.6 M14 8A6 6 0 1 1 8 2 M11 8a3 3 0 1 1-3-3"></path></svg>Sensors</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.6 9.5a3 3 0 0 1 .3-6 3.6 3.6 0 0 1 6.8 1.1 2.5 2.5 0 0 1-.2 4.9z M5.5 11.5l-.8 2 M8.5 11.5l-.8 2 M11.5 11.5l-.8 2"></path></svg>Environment</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9 M2.5 2.5v3h3 M7 5.8v4.4l3.2-2.2z"></path></svg>Replay</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="4" cy="4" r="1.7"></circle><circle cx="12" cy="4" r="1.7"></circle><circle cx="8" cy="12" r="1.7"></circle><path d="M5.7 4h4.6 M4.9 5.5L7.1 10.5 M11.1 5.5L8.9 10.5"></path></svg>ROS 2</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><path d="M2 8h12 M8 2c2.2 2.2 2.2 9.8 0 12 M8 2c-2.2 2.2-2.2 9.8 0 12"></path></svg>World</button>
+<button class="ws"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M2.5 11.5a5.5 5.5 0 1 1 11 0 M8 11.5l3-4"></path></svg>Performance</button>
+<button class="ws on sepl"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.6 2.2a3.2 3.2 0 0 0-3.5 4.3L2.4 11.2a1.3 1.3 0 0 0 0 1.9l.5.5a1.3 1.3 0 0 0 1.9 0l4.7-4.7a3.2 3.2 0 0 0 4.3-3.5l-1.9 1.9-1.9-.5-.5-1.9z"></path></svg>Builder</button>
+<div class="sp"></div>
+<div class="ctl">
+<button class="btn ic" aria-label="Undo (Ctrl Z)"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 3.5L2.5 6.5l3 3 M2.5 6.5h7a3.5 3.5 0 0 1 0 7H7"></path></svg></button>
+<button class="btn ic dis" aria-label="Redo (Ctrl Shift Z)"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.5 3.5l3 3-3 3 M13.5 6.5h-7a3.5 3.5 0 0 0 0 7H9"></path></svg></button>
+<div class="ro"><span class="k">doc</span><span class="mono">rover_mk1.urdf</span><span class="warn xs">● unsaved · 3</span></div>
+<div class="modes">
+<button class="btn on" aria-label="Build mode"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.6 2.2a3.2 3.2 0 0 0-3.5 4.3L2.4 11.2a1.3 1.3 0 0 0 0 1.9l.5.5a1.3 1.3 0 0 0 1.9 0l4.7-4.7a3.2 3.2 0 0 0 4.3-3.5l-1.9 1.9-1.9-.5-.5-1.9z"></path></svg>Build</button>
+<button class="btn pri" aria-label="Test in an empty world"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.5 3v10l8-5z"></path></svg>Test<span style="opacity: .7; font-weight: 400">· empty world</span><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg></button>
+<button class="btn" aria-label="Save (Ctrl S)"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M3 2.5h8l2.5 2.5v8.5H2.5V2.5z M5.5 2.5v3.5h5V2.5 M5 13.5V9.5h6v4"></path></svg>Save</button>
+</div>
+</div>
+</div>
+
+<div class="ds">
+<span class="lbl">Robot</span>
+<span class="chip"><i style="background: #9AACC6"></i>7 links<span class="s">1 root</span></span>
+<span class="chip"><i style="background: #9AACC6"></i>6 joints<span class="s">2 rev · 2 cont · 2 fixed</span></span>
+<span class="chip"><i style="background: #3FD1A7"></i>4 sensors<span class="s">3 types · 1 kind</span></span>
+<span class="chip">mass<span class="s">10.99 kg</span></span>
+<span class="chip">COM<span class="s">0.007 · 0.000 · 0.003 m</span></span>
+<div class="sp"></div>
+<span class="pill info">Build · no simulation · sensors not rendered · Lit</span>
+<span class="pill ok"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3 3 7-7"></path></svg>URDF valid · 1 hint</span>
+<button class="btn sm ghost">Check loads…</button>
+</div>
+
+<div class="body">
+
+<div class="col" style="width: 270px">
+<div class="pn" style="flex: 1">
+<div class="ph"><span class="pt on">Robot</span><span class="pt">Files</span><div class="tools"><button class="btn sm ic ghost" aria-label="Collapse all"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 10l4-4 4 4"></path></svg></button></div></div>
+<div class="bar">
+<div class="search" style="flex: 1"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5l3.5 3.5"></path></svg>Filter links, joints, sensors</div>
+<button class="btn sm" aria-label="Add"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"></path></svg>Add</button>
+</div>
+<div class="pb" style="padding: 4px 4px 4px 2px">
+<div class="tr"><span class="cv">▾</span><svg class="ic" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8l5.6 3.1v6.2L8 14.2l-5.6-3.1V4.9z M2.4 4.9L8 8l5.6-3.1 M8 8v6.2"></path></svg><span class="nm b5">rover_mk1</span><span class="ty">robot</span></div>
+<div class="tr" style="padding-left: 14px"><span class="cv">▾</span><span class="nm b5">base_link</span><span class="ty">box · 8.00 kg</span><span class="bd"><i style="background: #9AACC6"></i></span></div>
+<div class="tr" style="padding-left: 28px"><span class="cv"></span><span class="nm">left_wheel</span><span class="ty">continuous · cyl</span><span class="bd"><i style="background: #9AACC6"></i></span></div>
+<div class="tr" style="padding-left: 28px"><span class="cv"></span><span class="nm">right_wheel</span><span class="ty">continuous · cyl</span><span class="bd"><i style="background: #9AACC6"></i></span></div>
+<div class="tr" style="padding-left: 28px"><span class="cv"></span><span class="nm">caster</span><span class="ty">fixed · sphere</span><span class="bd"><i style="background: #9AACC6"></i></span></div>
+<div class="tr" style="padding-left: 28px"><span class="cv">▾</span><span class="nm">mast</span><span class="ty">fixed · cyl</span><span class="bd"><i style="background: #9AACC6"></i></span></div>
+<div class="tr" style="padding-left: 42px"><span class="cv"></span><svg class="ic" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M8 8l4.6-4.6 M14 8A6 6 0 1 1 8 2 M11 8a3 3 0 1 1-3-3"></path></svg><span class="nm">lidar</span><span class="ty">lidar</span><span class="bd"><i style="background: #3FD1A7"></i></span></div>
+<div class="tr" style="padding-left: 28px"><span class="cv">▾</span><span class="nm">pan_link</span><span class="ty">revolute · box</span><span class="bd"><i style="background: #9AACC6"></i></span></div>
+<div class="tr" style="padding-left: 42px"><span class="cv">▾</span><span class="nm">tilt_link</span><span class="ty">revolute · box</span><span class="bd"><i style="background: #9AACC6"></i></span></div>
+<div class="tr" style="padding-left: 56px"><span class="cv"></span><svg class="ic" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M8 8l4.6-4.6 M14 8A6 6 0 1 1 8 2 M11 8a3 3 0 1 1-3-3"></path></svg><span class="nm">camera</span><span class="ty">camera</span><span class="bd"><i style="background: #3FD1A7"></i></span></div>
+<div class="tr sel" style="padding-left: 28px"><span class="cv"></span><svg class="ic" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M8 8l4.6-4.6 M14 8A6 6 0 1 1 8 2 M11 8a3 3 0 1 1-3-3"></path></svg><span class="nm b5">front_range</span><span class="ty">rangefinder</span><span class="bd"><i style="background: #3FD1A7"></i></span></div>
+<div class="tr hov" style="padding-left: 28px"><span class="cv"></span><svg class="ic" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M8 8l4.6-4.6 M14 8A6 6 0 1 1 8 2 M11 8a3 3 0 1 1-3-3"></path></svg><span class="nm">imu</span><span class="ty">imu</span><span class="bd"><i style="background: #3FD1A7"></i></span></div>
+</div>
+<div class="bar" style="border-top: 1px solid #1B293D; border-bottom: 0; height: 26px"><span class="xs t3">7 links · 6 joints · 4 sensors · 1 selected</span></div>
+</div>
+
+<div class="pn" style="height: 212px; flex: none">
+<div class="ph"><span class="pt on">Add</span><span class="pt">Templates</span></div>
+<div class="pb" style="display: flex; flex-direction: column; gap: 8px">
+<div class="row xs t3">a link on <span class="mono t1" style="font-size: 11px">base_link</span>, by a joint</div>
+<div class="row" style="gap: 6px">
+<button class="tile"><svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8l5.6 3.1v6.2L8 14.2l-5.6-3.1V4.9z M2.4 4.9L8 8l5.6-3.1 M8 8v6.2"></path></svg>Box</button>
+<button class="tile"><svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><ellipse cx="8" cy="4" rx="5" ry="2"></ellipse><path d="M3 4v8a5 2 0 0 0 10 0V4"></path></svg>Cylinder</button>
+<button class="tile"><svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="8" cy="8" r="5.8"></circle><ellipse cx="8" cy="8" rx="5.8" ry="2.2"></ellipse></svg>Sphere</button>
+<button class="tile"><svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M2 12.5L6 3l8 2.5-2.5 8z M6 3l5.5 10.5 M2 12.5l12-7"></path></svg>Mesh…</button>
+</div>
+<div class="kv" style="padding: 0; grid-template-columns: 70px minmax(0,1fr)">
+<span class="k">joint</span><div class="fld dd">fixed</div>
+<span class="k">material</span><div class="fld dd">PLA<span class="u">1240 kg/m³</span></div>
+</div>
+<div class="hint">Or drag a tile onto a link in the tree or the viewport. A sensor comes from the catalog below the view.</div>
+</div>
+</div>
+</div>
+
+<div class="col" style="flex: 1">
+<div class="pn" style="flex: 1">
+<div class="ph"><span class="pt on">Builder view</span>
+<div class="tools">
+<button class="btn sm ghost">Lit</button>
+<button class="btn sm ghost">Perspective<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg></button>
+<button class="btn sm ghost">Show · 5<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg></button>
+</div></div>
+<div class="vp">
+<svg class="scene" viewBox="0 0 960 616" preserveAspectRatio="xMidYMid slice" aria-hidden="true" font-family="IBM Plex Sans, sans-serif" font-size="11">
+<rect width="960" height="616" fill="#0A1322"></rect>
+<path d="M488.1 -528.0L-1036.1 352.0M411.9 -528.0L1936.1 352.0M526.2 -506.0L-998.0 374.0M373.8 -506.0L1898.0 374.0M564.3 -484.0L-959.9 396.0M335.7 -484.0L1859.9 396.0M602.4 -462.0L-921.8 418.0M297.6 -462.0L1821.8 418.0M678.6 -418.0L-845.6 462.0M221.4 -418.0L1745.6 462.0M716.7 -396.0L-807.5 484.0M183.3 -396.0L1707.5 484.0M754.8 -374.0L-769.4 506.0M145.2 -374.0L1669.4 506.0M792.9 -352.0L-731.3 528.0M107.1 -352.0L1631.3 528.0M869.2 -308.0L-655.0 572.0M30.8 -308.0L1555.0 572.0M907.3 -286.0L-616.9 594.0M-7.3 -286.0L1516.9 594.0M945.4 -264.0L-578.8 616.0M-45.4 -264.0L1478.8 616.0M983.5 -242.0L-540.7 638.0M-83.5 -242.0L1440.7 638.0M1059.7 -198.0L-464.5 682.0M-159.7 -198.0L1364.5 682.0M1097.8 -176.0L-426.4 704.0M-197.8 -176.0L1326.4 704.0M1135.9 -154.0L-388.3 726.0M-235.9 -154.0L1288.3 726.0M1174.0 -132.0L-350.2 748.0M-274.0 -132.0L1250.2 748.0M1250.2 -88.0L-274.0 792.0M-350.2 -88.0L1174.0 792.0M1288.3 -66.0L-235.9 814.0M-388.3 -66.0L1135.9 814.0M1326.4 -44.0L-197.8 836.0M-426.4 -44.0L1097.8 836.0M1364.5 -22.0L-159.7 858.0M-464.5 -22.0L1059.7 858.0M1440.7 22.0L-83.5 902.0M-540.7 22.0L983.5 902.0M1478.8 44.0L-45.4 924.0M-578.8 44.0L945.4 924.0M1516.9 66.0L-7.3 946.0M-616.9 66.0L907.3 946.0M1555.0 88.0L30.8 968.0M-655.0 88.0L869.2 968.0M1631.3 132.0L107.1 1012.0M-731.3 132.0L792.9 1012.0M1669.4 154.0L145.2 1034.0M-769.4 154.0L754.8 1034.0M1707.5 176.0L183.3 1056.0M-807.5 176.0L716.7 1056.0M1745.6 198.0L221.4 1078.0M-845.6 198.0L678.6 1078.0M1821.8 242.0L297.6 1122.0M-921.8 242.0L602.4 1122.0M1859.9 264.0L335.7 1144.0M-959.9 264.0L564.3 1144.0M1898.0 286.0L373.8 1166.0M-998.0 286.0L526.2 1166.0M1936.1 308.0L411.9 1188.0M-1036.1 308.0L488.1 1188.0" stroke="#14213A" stroke-width="1" fill="none"></path>
+<path d="M450.0 -550.0L-1074.2 330.0M450.0 -550.0L1974.2 330.0M640.5 -440.0L-883.7 440.0M259.5 -440.0L1783.7 440.0M831.1 -330.0L-693.2 550.0M68.9 -330.0L1593.2 550.0M1021.6 -220.0L-502.6 660.0M-121.6 -220.0L1402.6 660.0M1212.1 -110.0L-312.1 770.0M-312.1 -110.0L1212.1 770.0M1402.6 0.0L-121.6 880.0M-502.6 0.0L1021.6 880.0M1593.2 110.0L68.9 990.0M-693.2 110.0L831.1 990.0M1783.7 220.0L259.5 1100.0M-883.7 220.0L640.5 1100.0M1974.2 330.0L450.0 1210.0M-1074.2 330.0L450.0 1210.0" stroke="#1E3150" stroke-width="1" fill="none"></path>
+<polygon points="434.8,206.8 663.4,338.8 465.2,453.2 236.6,321.2" fill="#000000" opacity=".30"></polygon>
+<polygon points="747.2,319.0 724.1,331.5 699.5,343.2 673.7,353.8 646.8,363.5 618.8,372.1 589.9,379.7 560.2,386.2 529.8,391.5 498.9,395.6 467.6,398.6 436.0,400.4 404.3,401.0 372.6,400.4 341.0,398.6 309.7,395.6 278.7,391.5 248.4,386.2 218.7,379.7 189.8,372.1 161.8,363.5 134.8,353.8 109.0,343.2 84.5,331.5 61.3,319.0 39.6,305.6 19.5,291.5 1.0,276.6 -15.7,261.0 -30.7,244.8 -43.8,228.2 -55.0,211.0 -64.2,193.5 -71.4,175.6 -76.6,157.5 -79.7,139.3 -80.7,121.0 -79.7,102.7 -76.6,84.5 -71.4,66.4 -64.2,48.5 -55.0,31.0 -43.8,13.8 -30.7,-2.8 -15.7,-19.0 1.0,-34.6 19.5,-49.5 39.6,-63.6 61.3,-77.0 84.5,-89.5 109.0,-101.2 134.8,-111.8 161.8,-121.5 189.8,-130.1 218.7,-137.7 248.4,-144.2 278.7,-149.5 309.7,-153.6 341.0,-156.6 372.6,-158.4 404.3,-159.0 436.0,-158.4 467.6,-156.6 498.9,-153.6 529.8,-149.5 560.2,-144.2 589.9,-137.7 618.8,-130.1 646.8,-121.5 673.7,-111.8 699.5,-101.2 724.1,-89.5 747.2,-77.0 768.9,-63.6 789.0,-49.5 807.5,-34.6 824.3,-19.0 839.3,-2.8 852.4,13.8 863.5,31.0 872.7,48.5 880.0,66.4 885.1,84.5 888.2,102.7 889.3,121.0 888.2,139.3 885.1,157.5 880.0,175.6 872.7,193.5 863.5,211.0 852.4,228.2 839.3,244.8 824.3,261.0 807.5,276.6 789.0,291.5 768.9,305.6" fill="#3FD1A7" fill-opacity=".04" stroke="#3FD1A7" stroke-opacity=".45" stroke-width="1" stroke-dasharray="4 4"></polygon>
+<polygon points="518.6,255.2 518.9,250.8 519.6,246.7 520.9,243.1 522.7,240.0 524.9,237.4 527.5,235.5 542.8,226.7 545.8,225.4 549.1,224.7 552.6,224.7 556.4,225.4 560.3,226.8 564.3,228.8 568.3,231.4 572.2,234.6 576.0,238.2 579.6,242.3 582.9,246.8 585.9,251.6 588.5,256.5 590.7,261.6 592.5,266.8 593.8,271.9 594.5,276.9 594.8,281.6 594.5,286.0 593.8,290.1 592.5,293.7 590.7,296.8 588.5,299.4 585.9,301.3 570.6,310.1 567.6,311.4 564.3,312.1 560.7,312.1 557.0,311.4 553.0,310.0 549.1,308.0 545.1,305.4 541.2,302.2 537.4,298.6 533.8,294.5 530.5,290.0 527.5,285.2 524.9,280.3 522.7,275.2 520.9,270.0 519.6,264.9 518.9,259.9" fill="#1C2738" stroke="#0A1322"></polygon>
+<polygon points="579.6,290.4 579.3,285.7 578.5,280.7 577.2,275.6 575.5,270.4 573.3,265.3 570.6,260.4 567.6,255.6 564.3,251.1 560.7,247.0 557.0,243.4 553.1,240.2 549.1,237.6 545.1,235.6 541.2,234.2 537.4,233.5 533.8,233.5 530.5,234.2 527.5,235.5 524.9,237.4 522.7,240.0 520.9,243.1 519.6,246.7 518.9,250.8 518.6,255.2 518.9,259.9 519.6,264.9 520.9,270.0 522.7,275.2 524.9,280.3 527.5,285.2 530.5,290.0 533.8,294.5 537.4,298.6 541.2,302.2 545.1,305.4 549.1,308.0 553.1,310.0 557.0,311.4 560.7,312.1 564.3,312.1 567.6,311.4 570.6,310.1 573.3,308.2 575.5,305.6 577.2,302.5 578.5,298.9 579.3,294.8" fill="#2C3A50" stroke="#3A4A63" stroke-width="1"></polygon>
+<polygon points="559.7,279.0 559.4,275.6 558.3,272.0 556.6,268.4 554.4,265.2 551.8,262.5 549.1,260.5 546.3,259.3 543.7,259.1 541.5,259.7 539.8,261.3 538.8,263.7 538.4,266.6 538.8,270.0 539.8,273.6 541.5,277.2 543.7,280.4 546.3,283.1 549.1,285.1 551.8,286.3 554.4,286.5 556.6,285.9 558.3,284.3 559.4,281.9" fill="#46566F"></polygon>
+<circle cx="377.6" cy="272.8" r="15.4" fill="#4A5A73" stroke="#0A1322"></circle>
+<g stroke="#0A1322" stroke-width="1" stroke-linejoin="round"><polygon points="286.1,283.8 476.7,393.8 476.7,341.0 286.1,231.0" fill="#6B7F9C"></polygon><polygon points="613.9,314.6 476.7,393.8 476.7,341.0 613.9,261.8" fill="#8798B2"></polygon><polygon points="423.3,151.8 613.9,261.8 476.7,341.0 286.1,231.0" fill="#B5C2D5"></polygon></g>
+<polygon points="393.5,132.0 393.6,131.2 393.9,130.4 394.3,129.6 394.9,128.9 395.7,128.2 396.6,127.6 397.7,127.1 398.9,126.6 400.1,126.2 401.5,126.0 402.9,125.8 404.3,125.8 405.7,125.8 407.1,126.0 408.4,126.2 409.7,126.6 410.8,127.1 411.9,127.6 412.8,128.2 413.6,128.9 414.2,129.6 414.7,130.4 415.0,131.2 415.1,132.0 415.1,220.0 415.0,220.8 414.7,221.6 414.2,222.4 413.6,223.1 412.8,223.8 411.9,224.4 410.8,224.9 409.7,225.4 408.4,225.8 407.1,226.0 405.7,226.2 404.3,226.2 402.9,226.2 401.5,226.0 400.1,225.8 398.9,225.4 397.7,224.9 396.6,224.4 395.7,223.8 394.9,223.1 394.3,222.4 393.9,221.6 393.6,220.8 393.5,220.0" fill="#7D8EA8" stroke="#0A1322"></polygon>
+<polygon points="411.9,136.4 410.8,136.9 409.7,137.4 408.4,137.7 407.1,138.0 405.7,138.2 404.3,138.2 402.9,138.2 401.5,138.0 400.1,137.7 398.9,137.4 397.7,136.9 396.7,136.4 395.7,135.8 394.9,135.1 394.3,134.4 393.9,133.6 393.6,132.8 393.5,132.0 393.6,131.2 393.9,130.4 394.3,129.6 394.9,128.9 395.7,128.2 396.7,127.6 397.7,127.1 398.9,126.6 400.1,126.3 401.5,126.0 402.9,125.8 404.3,125.8 405.7,125.8 407.1,126.0 408.4,126.3 409.7,126.6 410.8,127.1 411.9,127.6 412.8,128.2 413.6,128.9 414.2,129.6 414.7,130.4 415.0,131.2 415.1,132.0 415.0,132.8 414.7,133.6 414.2,134.4 413.6,135.1 412.8,135.8" fill="#B5C2D5" stroke="#0A1322" stroke-width="1"></polygon>
+<polygon points="382.7,110.0 382.9,108.4 383.4,106.8 384.4,105.2 385.6,103.8 387.2,102.4 389.0,101.2 391.1,100.1 393.5,99.2 396.0,98.5 398.7,98.0 401.5,97.7 404.3,97.5 407.1,97.7 409.9,98.0 412.5,98.5 415.1,99.2 417.4,100.1 419.5,101.2 421.4,102.4 422.9,103.8 424.2,105.2 425.1,106.8 425.6,108.4 425.8,110.0 425.8,132.0 425.6,133.6 425.1,135.2 424.2,136.8 422.9,138.2 421.4,139.6 419.5,140.8 417.4,141.9 415.1,142.8 412.5,143.5 409.9,144.0 407.1,144.3 404.3,144.4 401.5,144.3 398.7,144.0 396.0,143.5 393.5,142.8 391.1,141.9 389.0,140.8 387.2,139.6 385.6,138.2 384.4,136.8 383.4,135.2 382.9,133.6 382.7,132.0" fill="#2E3D52" stroke="#3FD1A7"></polygon>
+<polygon points="419.5,118.8 417.4,119.9 415.1,120.8 412.5,121.5 409.9,122.0 407.1,122.3 404.3,122.4 401.5,122.3 398.7,122.0 396.0,121.5 393.5,120.8 391.2,119.9 389.0,118.8 387.2,117.6 385.6,116.2 384.4,114.8 383.5,113.2 382.9,111.6 382.7,110.0 382.9,108.4 383.5,106.8 384.4,105.2 385.6,103.8 387.2,102.4 389.0,101.2 391.2,100.1 393.5,99.2 396.0,98.5 398.7,98.0 401.5,97.7 404.3,97.6 407.1,97.7 409.9,98.0 412.5,98.5 415.1,99.2 417.4,100.1 419.5,101.2 421.4,102.4 422.9,103.8 424.2,105.2 425.1,106.8 425.6,108.4 425.8,110.0 425.6,111.6 425.1,113.2 424.2,114.8 422.9,116.2 421.4,117.6" fill="#3A4B64" stroke="#3FD1A7" stroke-width="1"></polygon>
+<g stroke="#0A1322" stroke-width="1" stroke-linejoin="round"><polygon points="491.9,283.8 514.8,297.0 514.8,279.4 491.9,266.2" fill="#6B7F9C"></polygon><polygon points="537.6,283.8 514.8,297.0 514.8,279.4 537.6,266.2" fill="#8798B2"></polygon><polygon points="514.8,253.0 537.6,266.2 514.8,279.4 491.9,266.2" fill="#B5C2D5"></polygon></g>
+<g stroke="#0A1322" stroke-width="1" stroke-linejoin="round"><polygon points="491.9,270.6 507.2,279.4 507.2,261.8 491.9,253.0" fill="#6B7F9C"></polygon><polygon points="537.6,261.8 507.2,279.4 507.2,261.8 537.6,244.2" fill="#8798B2"></polygon><polygon points="522.4,235.4 537.6,244.2 507.2,261.8 491.9,253.0" fill="#B5C2D5"></polygon></g>
+<polygon points="366.2,343.2 366.4,338.8 367.2,334.7 368.5,331.1 370.2,328.0 372.5,325.4 375.1,323.5 390.3,314.7 393.3,313.4 396.6,312.7 400.2,312.7 404.0,313.4 407.9,314.8 411.9,316.8 415.9,319.4 419.8,322.6 423.6,326.2 427.1,330.3 430.4,334.8 433.4,339.6 436.1,344.5 438.3,349.6 440.1,354.8 441.3,359.9 442.1,364.9 442.4,369.6 442.1,374.0 441.3,378.1 440.1,381.7 438.3,384.8 436.1,387.4 433.4,389.3 418.2,398.1 415.2,399.4 411.9,400.1 408.3,400.1 404.5,399.4 400.6,398.0 396.6,396.0 392.7,393.4 388.8,390.2 385.0,386.6 381.4,382.5 378.1,378.0 375.1,373.2 372.5,368.3 370.2,363.2 368.5,358.0 367.2,352.9 366.4,347.9" fill="#1C2738" stroke="#0A1322"></polygon>
+<polygon points="427.1,378.4 426.9,373.7 426.1,368.7 424.8,363.6 423.1,358.4 420.8,353.3 418.2,348.4 415.2,343.6 411.9,339.1 408.3,335.0 404.5,331.4 400.6,328.2 396.7,325.6 392.7,323.6 388.8,322.2 385.0,321.5 381.4,321.5 378.1,322.2 375.1,323.5 372.5,325.4 370.3,328.0 368.5,331.1 367.2,334.7 366.4,338.8 366.2,343.2 366.4,347.9 367.2,352.9 368.5,358.0 370.3,363.2 372.5,368.3 375.1,373.2 378.1,378.0 381.4,382.5 385.0,386.6 388.8,390.2 392.7,393.4 396.7,396.0 400.6,398.0 404.5,399.4 408.3,400.1 411.9,400.1 415.2,399.4 418.2,398.1 420.8,396.2 423.1,393.6 424.8,390.5 426.1,386.9 426.9,382.8" fill="#2C3A50" stroke="#3A4A63" stroke-width="1"></polygon>
+<polygon points="407.3,367.0 407.0,363.6 405.9,360.0 404.2,356.4 402.0,353.2 399.4,350.5 396.7,348.5 393.9,347.3 391.3,347.1 389.1,347.7 387.4,349.3 386.3,351.7 386.0,354.6 386.3,358.0 387.4,361.6 389.1,365.2 391.3,368.4 393.9,371.1 396.7,373.1 399.4,374.3 402.0,374.5 404.2,373.9 405.9,372.3 407.0,369.9" fill="#46566F"></polygon>
+<path d="M522.4 261.8L728.2 358.6M522.4 261.8L606.2 429.0M522.4 261.8L606.2 332.2M522.4 261.8L728.2 261.8" stroke="#3FD1A7" stroke-opacity=".7" stroke-width="1" fill="none"></path>
+<polygon points="728.2,358.6 606.2,429.0 606.2,332.2 728.2,261.8" fill="#3FD1A7" fill-opacity=".06" stroke="#3FD1A7" stroke-opacity=".7" stroke-width="1"></polygon>
+<line x1="514.8" y1="248.6" x2="514.8" y2="215.0" stroke="#5AA2FF" stroke-width="1.5" stroke-dasharray="3 2"></line>
+<polygon points="514.8,209.0 510.8,217.0 518.8,217.0" fill="#5AA2FF"></polygon>
+<polyline points="540.8,226.2 538.1,230.0 533.8,233.2 528.3,235.7 521.8,237.2 514.8,237.8 507.8,237.2 501.3,235.7 495.7,233.2 491.4,230.0 488.8,226.2 487.8,222.2 488.8,218.2 491.4,214.4 495.7,211.2 501.3,208.7" fill="none" stroke="#5AA2FF" stroke-width="1.2"></polyline>
+<line x1="545.3" y1="341.0" x2="773.9" y2="473.0" stroke="#E8772E" stroke-width="2" stroke-dasharray="7 5"></line>
+<polygon points="783.9,478.0 770.9,478.0 778.9,467.0" fill="#E8772E"></polygon>
+<line x1="545.3" y1="341.0" x2="583.4" y2="363.0" stroke="#F0605D" stroke-width="2.5" stroke-linecap="round"></line>
+<circle cx="583.4" cy="363.0" r="3.5" fill="#F0605D"></circle>
+<line x1="545.3" y1="341.0" x2="507.2" y2="363.0" stroke="#4FC97A" stroke-width="2.5" stroke-linecap="round"></line>
+<circle cx="507.2" cy="363.0" r="3.5" fill="#4FC97A"></circle>
+<line x1="545.3" y1="341.0" x2="545.3" y2="297.0" stroke="#5AA2FF" stroke-width="2.5" stroke-linecap="round"></line>
+<circle cx="545.3" cy="297.0" r="3.5" fill="#5AA2FF"></circle>
+<rect x="540.8" y="336.5" width="9" height="9" fill="#E8772E" stroke="#0A1322"></rect>
+<g transform="translate(452.8 215.0)"><circle r="6" fill="#0B1422" stroke="#E6EBF2" stroke-width="1.2"></circle><path d="M0 -6A6 6 0 0 1 6 0H0z M0 6A6 6 0 0 1 -6 0H0z" fill="#E6EBF2"></path></g>
+<rect x="787.89350101538" y="443.0" width="168" height="20" rx="3" fill="#0B1422" stroke="#E8772E"></rect>
+<text x="795.89350101538" y="457.0" fill="#E8772E">front_range</text>
+<text x="874" y="457.0" fill="#8190A6">20 m</text>
+<rect x="528.778700203076" y="182.99999999999997" width="122" height="20" rx="3" fill="#0B1422" stroke="#2A3F5C"></rect>
+<text x="536.778700203076" y="196.99999999999997" fill="#E6EBF2">pan_joint</text>
+<text x="602" y="196.99999999999997" fill="#8190A6">35.0°</text>
+<rect x="266.27385868018166" y="76.00000000000003" width="104" height="20" rx="3" fill="#0B1422" stroke="#2A3F5C"></rect>
+<text x="274.27385868018166" y="90.00000000000003" fill="#E6EBF2">lidar</text>
+<text x="313" y="90.00000000000003" fill="#8190A6">lidar</text>
+<text x="462.8" y="219.0" fill="#A9B6C8">COM</text>
+</svg>
+<div class="ov" style="left: 10px; top: 10px; display: flex; gap: 12px"><span class="t2">Build · Perspective · Lit</span><span class="mono t3">1.9 ms</span><span class="mono t3">38 draws</span><span class="t3">no simulation</span></div>
+<div class="ovbar" style="left: 10px; top: 46px; flex-direction: column">
+<button class="b" aria-label="Select (Q)"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 2.5l9 5-4 1-2 4.5z"></path></svg></button>
+<button class="b on" aria-label="Move (W)"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.5v13 M1.5 8h13 M6 3.5l2-2 2 2 M6 12.5l2 2 2-2 M3.5 6l-2 2 2 2 M12.5 6l2 2-2 2"></path></svg></button>
+<button class="b" aria-label="Rotate (E)"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.6 M13 2.5v2.5h-2.5"></path></svg></button>
+<button class="b" aria-label="Joint axis (A)"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 14V3 M5.5 5.5L8 3l2.5 2.5"></path><ellipse cx="8" cy="10" rx="5" ry="2"></ellipse></svg></button>
+<button class="b" aria-label="Measure (M)"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 11l9-9 3 3-9 9z M5 8l1.5 1.5 M7.5 5.5L9 7"></path></svg></button>
+</div>
+<div class="ovbar" style="right: 10px; top: 10px">
+<button class="b on" aria-label="Grid"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 2.5h11v11h-11z M2.5 6.2h11 M2.5 9.8h11 M6.2 2.5v11 M9.8 2.5v11"></path></svg></button>
+<button class="b on" aria-label="Frames and joint axes"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M4 12V3 M4 12h9 M4 12l-2.5 2.5"></path></svg></button>
+<button class="b" aria-label="Collision shapes"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 1.6" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"></rect></svg></button>
+<button class="b on" aria-label="Centre of mass and inertia"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="5.5"></circle><path d="M8 2.5A5.5 5.5 0 0 1 13.5 8H8z M8 13.5A5.5 5.5 0 0 1 2.5 8H8z" fill="currentColor"></path></svg></button>
+<button class="b on" aria-label="Sensor frustums"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M2 8l11-5v10z"></path></svg></button>
+<button class="b on" aria-label="Names"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5h7l4 3.5-4 3.5h-7z"></path></svg></button>
+</div>
+<div class="ov" style="left: 10px; bottom: 10px; display: flex; align-items: center; gap: 10px">
+<svg width="34" height="34" viewBox="0 0 34 34" aria-hidden="true"><line x1="12" y1="24" x2="30" y2="24" stroke="#F0605D" stroke-width="2"></line><line x1="12" y1="24" x2="6" y2="12" stroke="#4FC97A" stroke-width="2"></line><line x1="12" y1="24" x2="12" y2="4" stroke="#5AA2FF" stroke-width="2"></line></svg>
+<div class="xs t3" style="display: flex; flex-direction: column; gap: 2px"><span class="mono">base_link · Z-up · m</span><span class="mono">grid 0.1 m</span></div>
+</div>
+<div class="ov" style="right: 10px; bottom: 10px; display: flex; gap: 14px; align-items: center"><span class="t3 xs">snap</span><span class="mono t2">5 mm · 5°</span><span class="t3 xs">Focus</span><span class="kbd">F</span></div>
+</div>
+</div>
+
+<div style="display: flex; gap: 4px; height: 220px; flex: none">
+<div class="pn" style="flex: 1.22">
+<div class="ph"><span class="pt on">Joints · 4 moving</span><span class="pt">Poses</span><div class="tools"><div class="seg"><span class="on">deg</span><span>rad</span></div><button class="btn sm ghost" style="margin-left: 4px">Zero all</button></div></div>
+<div class="pb np">
+<div class="jg">
+<span class="h">joint</span><span class="h">type</span><span class="h">preview position</span><span class="h" style="justify-content: flex-end">value</span><span class="h">limits</span>
+<span class="c mono">left_wheel_joint</span><span class="c"><span class="pill">continuous</span></span><span class="c"><div class="trk wrap"><div class="z" style="left: 50%"></div><div class="kn" style="left: 50%"></div></div></span><span class="c"><div class="fld" style="width: 100%; justify-content: flex-end">0.0<span class="u" style="margin-left: 6px">°</span></div></span><span class="c xs t3">none</span>
+<span class="c mono">right_wheel_joint</span><span class="c"><span class="pill">continuous</span></span><span class="c"><div class="trk wrap"><div class="z" style="left: 50%"></div><div class="kn" style="left: 50%"></div></div></span><span class="c"><div class="fld" style="width: 100%; justify-content: flex-end">0.0<span class="u" style="margin-left: 6px">°</span></div></span><span class="c xs t3">none</span>
+<span class="c mono">pan_joint</span><span class="c"><span class="pill">revolute</span></span><span class="c"><div class="trk"><div class="fill" style="left: 50%; width: 10.3%"></div><div class="z" style="left: 50%"></div><div class="kn" style="left: 60.3%"></div></div></span><span class="c"><div class="fld" style="width: 100%; justify-content: flex-end">35.0<span class="u" style="margin-left: 6px">°</span></div></span><span class="c mono xs t2">−170 … 170°</span>
+<span class="c mono">tilt_joint</span><span class="c"><span class="pill">revolute</span></span><span class="c"><div class="trk"><div class="fill" style="left: 31.4%; width: 11.4%"></div><div class="z" style="left: 42.9%"></div><div class="kn" style="left: 31.4%"></div></div></span><span class="c"><div class="fld" style="width: 100%; justify-content: flex-end">−12.0<span class="u" style="margin-left: 6px">°</span></div></span><span class="c mono xs t2">−45 … 60°</span>
+</div>
+<div class="hr" style="margin: 4px 10px 0"></div>
+<div class="row hint" style="padding: 7px 10px"><span>2 fixed joints not shown</span><div class="sp"></div><span>Preview only: no physics</span></div>
+</div>
+</div>
+
+<div class="pn" style="flex: 1">
+<div class="ph"><span class="pt on">Sensor catalog · 40</span><span class="pt">Problems · <span class="warn">1</span></span></div>
+<div class="bar">
+<div class="search" style="flex: 1"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5l3.5 3.5"></path></svg>Filter sensors</div>
+<div class="seg"><span class="on">All</span><span>URDF</span><span>Overlay · 4</span></div>
+</div>
+<div class="pb np cat" style="padding-bottom: 4px">
+<div class="sh"><span class="t3">▾</span>Built-in types<span class="v">3</span></div>
+<div class="tr"><span class="nm">camera</span><span class="ds2">colour, depth, thermal · one raster camera</span><span class="pill" style="height: 16px">in use 1</span></div>
+<div class="tr"><span class="nm">lidar</span><span class="ds2">2D or 3D scans, channel tables, patterns</span><span class="pill" style="height: 16px">in use 1</span></div>
+<div class="tr"><span class="nm">imu</span><span class="ds2">gyro and accelerometer with noise</span><span class="pill" style="height: 16px">in use 1</span></div>
+<div class="sh"><span class="t3">▾</span>Range and contact<span class="v">7</span></div>
+<div class="tr hov"><span class="nm">rangefinder</span><span class="ds2">one laser beam along +x · TFmini-S</span><button class="btn sm" style="height: 18px">Add</button></div>
+<div class="tr"><span class="nm">cliff</span><span class="ds2">infrared range finder looking down</span></div>
+<div class="tr"><span class="nm">proximity</span><span class="ds2">a skin of short-range time-of-flight</span></div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="col" style="width: 350px">
+<div class="pn" style="flex: 1">
+<div class="ph"><span class="pt on">Properties</span><span class="pt">History · 23</span><div class="tools"><button class="btn sm ic ghost" aria-label="Duplicate"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1"></rect><path d="M3 10.5V3.5a1 1 0 0 1 1-1h6.5"></path></svg></button><button class="btn sm ic ghost" aria-label="Delete"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 4.5h10 M6.5 4.5V3h3v1.5 M4.5 4.5l.6 9h5.8l.6-9"></path></svg></button></div></div>
+<div class="pb np" style="display: flex; flex-direction: column">
+<div style="padding: 10px 10px 8px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid #1B293D">
+<div class="row"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#E8772E" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M8 8l4.6-4.6 M14 8A6 6 0 1 1 8 2 M11 8a3 3 0 1 1-3-3"></path></svg><span class="b6" style="font-size: 14px">front_range</span><span class="t3 xs">sensor</span><div class="sp"></div><button class="btn sm ghost">Focus</button></div>
+<div class="mono t3" style="font-size: 11px">rover_mk1 / base_link / front_range</div>
+<div class="row" style="flex-wrap: wrap; gap: 4px">
+<span class="pill" style="color: #3FD1A7"><i class="dot" style="background: #3FD1A7; width: 6px; height: 6px"></i>rangefinder · built-in kind</span>
+<span class="pill">sensors.md §9</span>
+</div>
+</div>
+<div style="flex: 1; min-height: 0; overflow: hidden">
+<div class="sec"><div class="sh"><span class="t3">▾</span>Mount<span class="v">on its link · m · deg</span></div>
+<div class="kv">
+<span class="k">link</span><div class="fld dd">base_link</div>
+<span class="k">translate</span><div class="f3"><div class="fld"><span class="ax x">X</span>0.250</div><div class="fld"><span class="ax y">Y</span>0.000</div><div class="fld"><span class="ax z">Z</span>−0.030</div></div>
+<span class="k">rotate</span><div class="f3"><div class="fld"><span class="ax x">X</span>0.0</div><div class="fld"><span class="ax y">Y</span>0.0</div><div class="fld"><span class="ax z">Z</span>0.0</div></div>
+</div></div>
+<div class="sec"><div class="sh"><span class="t3">▾</span>Timing<span class="v">sensor:latency · jitter</span></div>
+<div class="kv">
+<span class="k mono" style="font-size: 11px">update_rate</span><div class="fld ed">100<span class="u">Hz · default 10</span></div>
+<span class="k mono" style="font-size: 11px">latency</span><div class="fld">0<span class="u">s</span></div>
+<span class="k mono" style="font-size: 11px">jitter</span><div class="fld">0<span class="u">s</span></div>
+</div></div>
+<div class="sec"><div class="sh"><span class="t3">▾</span><i class="dot" style="background: #3FD1A7; width: 6px; height: 6px"></i>rangefinder<span class="v">5 parameters · catalog</span></div>
+<div class="kv">
+<span class="k mono" style="font-size: 11px">range/min</span><div class="fld">0.1<span class="u">m</span></div>
+<span class="k mono" style="font-size: 11px">range/max</span><div class="fld ed">20<span class="u">m · default 12</span></div>
+<span class="k mono" style="font-size: 11px">noise/stddev</span><div class="fld">0.03<span class="u">m</span></div>
+<span class="k mono" style="font-size: 11px">noise/fraction</span><div class="fld">0.005<span class="u">1</span></div>
+<span class="k mono" style="font-size: 11px">resolution</span><div class="fld">0.01<span class="u">m</span></div>
+</div>
+<div class="hint" style="padding: 0 8px 8px">One laser beam along the sensor's +x, after the Benewake TFmini-S. Noise σ = max(stddev, fraction · r).</div>
+</div>
+<div class="sec"><div class="sh"><span class="t3">▾</span>Output<span class="v">when tested</span></div>
+<div class="kv" style="grid-template-columns: 112px minmax(0,1fr)">
+<span class="k">signals</span><div class="fld ro2"><span>sensor/front_range/range</span><span class="u">m</span></div>
+<span class="k"></span><div class="fld ro2"><span>sensor/front_range/valid</span><span class="u">bool</span></div>
+<span class="k">ROS 2</span><div class="fld ro2"><span>/front_range/range</span><span class="u">Range</span></div>
+</div></div>
+<div class="sec"><div class="sh"><span class="t3">▸</span>Faults<span class="v">none</span></div></div>
+</div>
+<div class="row" style="padding: 8px; border-top: 1px solid #1B293D; background: #101B2C"><span class="xs acc">2 values differ from the catalog</span><div class="sp"></div><button class="btn sm">Reset to defaults</button></div>
+</div>
+</div>
+</div>
+
+</div>
+
+<div class="sb">
+<span class="it"><span class="dot" style="background: #8190A6"></span>Not connected · building offline</span>
+<span class="it"><span class="k">test server</span>lagrange_server 1.2.1 · this machine</span>
+<span class="it"><span class="k">autosave</span><span class="mono">12 s ago</span></span>
+<div class="sp"></div>
+<span class="it"><span class="k">GPU</span>RTX 4060 Laptop · Tier 2</span>
+<span class="it"><span class="k">viewer</span><span class="mono">1.9 ms · 60 fps</span></span>
+<span class="it"><span class="k">ROS 2</span>lyrical · domain 0 · fastrtps</span>
+</div>
+
+</div>
+</body>
+</html>
