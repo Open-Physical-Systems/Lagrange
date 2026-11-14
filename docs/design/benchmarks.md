@@ -318,6 +318,88 @@ prints the same 201 hashes over 20 s with the before and after builds for `amr_s
 and each passes. `test_scheduler` has a case for the three ways a commit goes (every output
 written, some written, one held) against a model of what the readers must see.
 
+### 4.4 Lagrange's own work in the MuJoCo backend (2026-11-15)
+
+The MuJoCo 4 spike ([mujoco-4.md](../plan/spikes/mujoco-4.md)) put Lagrange's share of a step of
+the 200-box pile at about 15 % on MuJoCo 3.12 (RTF 0.156 in Lagrange, 0.183 for `boxes.xml` in
+MuJoCo alone with Lagrange's options) and suspected the split step, the contact force and
+acceleration pass and the bus writes. A timed build of `MujocoBackend::step` (steady-clock laps
+around each stage, not committed) says otherwise:
+
+| Per 1 ms step (µs) | Box pile, 5 s | Sample AMR, warehouse | Sedan in the town |
+|---|---|---|---|
+| `mj_step2` (MuJoCo) | 5546 | 10.6 | 5.3 |
+| `mj_step1` (MuJoCo: positions, collisions) | 370 | 6.4 | 45.2 |
+| `mj_rnePostConstraint` (body accelerations, joint reactions) | 88.4 | 0.68 | 18.4 |
+| `body/<b>/contact_force` sums over the contacts | 13.1 | 0.17 | 0.25 |
+| Inputs read and applied | 1.3 | 0.14 | 10.8 |
+| Outputs written | 12.7 | 0.96 | 10.8 |
+| Kinematic culling | 0.06 | 0.03 | 2.2 |
+| Outside the module until its next step (scheduler, Python) | 3.9 | 21 (other modules) | 153 (other modules) |
+
+- **On the pile, Lagrange's own work is about 2 % of the step** (120 of 6040 µs), and most of it
+  is `mj_rnePostConstraint`, which the IMU's acceleration and `joint/<j>/reaction` need. The
+  split step costs nothing: Lagrange's compiled model (saved with `mj_saveModel`) stepped alone
+  by a C program runs at RTF 0.167 with `mj_step` and 0.166 with `mj_step1`/`mj_step2`, where
+  Lagrange ran it at 0.166.
+- **The gap to `boxes.xml` is the model, not the step.** Lagrange adds its ground plane at the top
+  of the file's own ground box (as it does when the file is given as the world too), and makes
+  that box a static body of its own after the 200 boxes. `boxes.xml` with the plane added runs at 0.206
+  alone (1219 contacts at 5 s); with the ground box also moved into a body at the end, as
+  Lagrange builds it, at 0.167 (1227 contacts, Lagrange's 1227). The pile is chaotic, so where
+  its geoms sit in the model changes how it falls and how hard the solver works by ±20 %. The
+  spike's 15 % is that, not Lagrange's work.
+- **In the town the backend's own work was large**: 42 of 93 µs with the sedan (MuJoCo's own
+  steps 51), reading 663 bodies' external wrenches (1 of them connected) and 654 pose commands,
+  writing every kinematic body's pose, twist and contact force, and `mj_rnePostConstraint`.
+
+What changed (`MujocoBackend`, bit-identical by construction):
+
+- **Inputs nothing writes are read once.** An unconnected optional input reads its default for
+  the whole run (`SignalBus::allocate`), so `init` notes which bodies' `external_wrench` and
+  `pose_command` have a writer, puts the others' defaults in place once (again after
+  `restoreState`, after its accelerations, which use the saved ones as before), and `step` reads
+  only the connected ones. Town with the sedan: 10.7 → 6.1 µs.
+- **A kinematic body that stands keeps its twist.** Its twist comes from its last two poses; when
+  both of the last two steps left its pose unchanged, the twist is the one already on the bus (the
+  same poses give the same bits) and is not worked out again. Town with the sedan: 10.8 → 7.9 µs.
+
+Not changed, and why:
+
+- **Computing contact forces and `mj_rnePostConstraint` only when a module reads them.** The bus
+  knows a signal's module readers, but not its other readers: Python's `sim.read`, the ROS
+  `get_entity_state` service (it reads `body/<b>/acceleration` by name), the viewer's scopes, the
+  recorder, and the state hash. A skipped output would read stale values there, and the first
+  read cannot know. On the pile it would save 1.7 % (88 + 13 µs of 6040); in the town 18 µs. A
+  lazy path would need the bus to call back into the writer on a read: not worth it for this.
+- **A partial `mj_rnePostConstraint` over the moving trees only** (in the town it spends 18 µs on
+  654 kinematic bodies whose results Lagrange never reads): it would copy MuJoCo 3.12's internals
+  bit for bit, and 3.14 already changed that function.
+
+Measured as in §4 (`--no-ros --rtf 0`, 25 s, the median of the 1 s windows after the first four;
+the MuJoCo column is `rigid_body/mujoco`'s median ms per step), the 1.3 install (*old*) against
+this build (*new*) of the same tree, in the order old, new, new, old, old, new; **load average
+5 to 26 on 20 threads** (other agents' builds; the AMR rounds at 17 to 26, the town's at 5 to
+25). The box pile is `bench_lagrange.py` (Python, 5 s, RTF of the stepping), load 5.6 to 10.4.
+
+| Run | Old (RTF) | New (RTF) | MuJoCo per step, old / new |
+|---|---|---|---|
+| Town, no robot, 24 cars, its walkers | 20.0, 18.6, 19.0 | 24.3, 24.7, 21.7 | 33 to 36 / 24 to 28 µs |
+| Sedan in the town, 24 cars | 2.61, 3.01, 2.80 | 2.98, 3.14, 3.06 | 110 to 127 / 96 to 107 µs |
+| Sample AMR, warehouse (`--lidar cpu`) | 15.8, 24.9, 23.8 | 17.3, 25.3, 22.6 | 19 to 28 / 19 to 24 µs |
+| 200-box pile, 5 s (Python) | 0.147, 0.160, 0.165 | 0.147, 0.148, 0.166 | — |
+
+The town without a robot (no degrees of freedom: the step is the inputs, kinematics and outputs)
+runs 20 to 25 % faster; with the sedan 5 to 10 %. The AMR (10 bodies, nothing connected but its
+wheels' torques) and the pile (200 free bodies, no inputs) were within the load's noise, as the
+per-stage times above predict.
+
+Every signal is the same bit for bit: `LAGRANGE_DETERMINISM_HASHES=1 lagrange determinism` prints
+the same 201 hashes over 20 s with old and new for `amr_sample_urdf`, `sedan_city`,
+`quad_x500_hover`, the sedan in the town, the town without a robot and the box pile, and each
+passes. `test_mujoco_backend` has a case for a kinematic body that stands and moves on, restored
+while it stands.
+
 ## 5. Start-up and Python throughput (2026-11-12)
 
 The target (§13.4 of the project rules) is under 5 s from a cold start to the viewer's first frame
