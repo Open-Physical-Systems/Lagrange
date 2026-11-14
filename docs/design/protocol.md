@@ -464,6 +464,7 @@ message Command {
     LoadStage load_stage = 30;
     ImportRobot import_robot = 31;
     OpenRecording open_recording = 32;
+    RemoveRobot remove_robot = 33;     // added after 1.0 (RFC 0016 §7.2)
 
     ValidateProfile validate_profile = 40;
     ApplyProfile apply_profile = 41;
@@ -493,15 +494,28 @@ message ImportRobot {
   enum Format { FORMAT_UNSPECIFIED = 0; FORMAT_URDF = 1; FORMAT_XACRO = 2; FORMAT_SDF = 3; FORMAT_MJCF = 4; }
   Format format = 1;
   string path = 2;                     // path on the server's filesystem
-  DataRef content = 3;                 // or the file content, when the viewer is remote
-  string overlay_path = 4;
+  DataRef content = 3;                 // or the file content, inline, when the viewer is remote
+  string overlay_path = 4;             // on the server's filesystem
   repeated string xacro_args = 5;
+  DataRef overlay_content = 6;         // or the overlay's text, inline; added after 1.0
 }
 message OpenRecording { string path = 1; }
-// ImportRobot on lagrange_server (can_import): the robot at `path` is spawned into the running
+message RemoveRobot { string name = 1; } // added after 1.0 (RFC 0016 §7.2)
+// ImportRobot on lagrange_server (can_import): the robot is spawned into the running
 // simulation, as simulation_interfaces' spawn_entity does (docs/guide/cli.md "Spawning
-// robots"); the result carries the path in imported_stage_path. `content`, `overlay_path` and
-// `xacro_args` are refused for now.
+// robots"), at the origin of an empty run or 3 m beside the robots there are. By `path`, the
+// result carries the path in imported_stage_path. By `content` (inline only; blob and shm are
+// refused with "send the robot inline"), the text is written to a temporary file, the robot is
+// named by its own <robot name> (SDFormat: the first <model name>; MJCF: <mujoco model>),
+// renamed `name_2`, `name_3`… on a clash, and the result's imported_stage_path is its scene
+// path, "/name": the name RemoveRobot takes. A `format` other than FORMAT_UNSPECIFIED must
+// match the text. `overlay_path`, or `overlay_content` (inline YAML, or a SPICE netlist ending
+// in `.end`), is applied to that robot as --overlay is (formats.md §9). `xacro_args` and
+// FORMAT_XACRO are refused (run xacro first). The robot is passive (nothing drives it) when the
+// run already has one; else it is the robot ROS drives.
+// RemoveRobot: as /delete_entity (cli.md "Spawning robots"), by top prim name with or without
+// "/"; refused for the robot ros2_control drives and for scenery. A server older than these
+// additions answers an unknown command with ok = false and an error, so a viewer can try it.
 
 message ValidateProfile { string yaml = 1; }
 message ApplyProfile { string yaml = 1; bool restart = 2; }
