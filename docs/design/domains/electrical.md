@@ -118,7 +118,15 @@ it after every controller (the multicopter controller and the MAVLink bridges co
 rotors' air). With no drive between the command and the joint, the built-in multicopter
 controller (config `ideal_motors`) bounds each rotor's command by the drive's torque at the
 rotor's loaded top speed and lowers its rotor speed gain, so that its yaw-rate loop, which then
-runs through the motors' reaction on the frame within one step, does not ring.
+runs through the motors' reaction on the frame within one step, does not ring. The MAVLink
+bridges' ESCs do the same for PX4 and ArduPilot (`Px4Settings::idealMotors`,
+`ArduPilotSettings::idealMotors`, set by the server when no electrical network runs): each
+rotor's torque command is bounded by the drive's torque at its loaded top speed (never below
+what holding full output takes), and the speed gain is cut so that the speed loop's gain per ESC
+step, K·dt/J with J the rotor's inertia about its axis, is at most 0.5 (`Escs::kSpeedLoopGain`;
+the sample quadcopter's 0.02 N·m per rad/s becomes 0.011 at PX4's 250 Hz and stays at ArduPilot's
+1 kHz). `test_escs` checks that a throttle step then settles without overshoot within the bound,
+and that with the electrical domain the commands are the same as before, bit for bit.
 
 ## 6. Placement
 
