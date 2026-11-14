@@ -14,6 +14,7 @@ and USD as they are · a native Vulkan viewer · a deterministic CPU mode, bit f
 
 <p class="lg-cta">
 <a class="lg-btn lg-btn-primary" href="#try-it">Install in one command</a>
+<a class="lg-btn" href="validation/comparison.html">Measured against Gazebo</a>
 <a class="lg-btn" href="guide/tutorial-amr.html">The five-minute tutorial</a>
 <a class="lg-btn" href="https://github.com/Open-Physical-Systems/Lagrange">GitHub</a>
 </p>
@@ -79,6 +80,21 @@ and USD as they are · a native Vulkan viewer · a deterministic CPU mode, bit f
 <p class="lg-footnote">1. Headless on a laptop (i9-13900H, RTX 4060 Laptop GPU), shared with
 other jobs, ±30 %: <a href="design/benchmarks.html">benchmarks</a> §4–§5. 2. What is met and
 what is not: the <a href="validation/report.html">validation report</a>.</p>
+
+## Against Gazebo, measured
+
+Same scenes, same machine, headless, as fast as each goes; the median of five runs. The
+[comparison](validation/comparison.md) has the method, the raw output, the physics accuracy, and
+where Lagrange is worse: a younger project, one platform, a slower camera here, many contacts on
+its MuJoCo backend.
+
+| | Lagrange 1.3.0 | Gazebo Jetty 10.5.0 |
+|---|---|---|
+| AMR in a warehouse, physics only (real-time factor) | **96.6** | 14.8 |
+| The same with 2D and 3D lidars and an IMU | **54.1** | 12.7 |
+| One 640 × 480 camera at 30 Hz | 10.7 | **12.3** |
+| Start-up to the first step | **0.07 s** | 2.4 s |
+| Peak memory, AMR with sensors | **78 MB** | 961 MB |
 
 ## What it simulates
 
