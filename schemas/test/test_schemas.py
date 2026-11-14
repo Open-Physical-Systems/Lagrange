@@ -129,6 +129,45 @@ def test_motor_constants_carry_their_units():
     }
 
 
+def test_lidar_patterns_and_fisheye_lenses_are_additions():
+    # RFC 0015: the tokens are appended, the new attributes carry their units, and the rosette's
+    # numbers and the cutoff angle have no fallback (the loader's documented values instead).
+    registry = Usd.SchemaRegistry()
+    lidar = registry.FindAppliedAPIPrimDefinition("LidarAPI_1")
+    pattern = lidar.GetAttributeDefinition("sensor:lidar:scanPattern")
+    assert list(pattern.GetMetadata("allowedTokens")) == [
+        "rotating",
+        "solid_state",
+        "custom",
+        "flash",
+        "rosette",
+    ]
+    assert pattern.GetFallbackValue() == "rotating"
+    units = {
+        "sensor:lidar:channelElevations": "rad",
+        "sensor:lidar:rosette:fov": "rad",
+        "sensor:lidar:rosette:pointRate": "1/s",
+        "sensor:lidar:rosette:speed1": "rad/s",
+        "sensor:lidar:rosette:speed2": "rad/s",
+        "sensor:lidar:rosette:prismRatio": "1",
+    }
+    for name, unit in units.items():
+        attribute = lidar.GetAttributeDefinition(name)
+        assert attribute, name
+        assert attribute.GetMetadata("lagrangeUnit") == unit, name
+        if name.startswith("sensor:lidar:rosette:"):
+            assert attribute.GetFallbackValue() is None, name
+    table = lidar.GetAttributeDefinition("sensor:lidar:channelElevations")
+    assert len(table.GetFallbackValue()) == 0
+    camera = registry.FindAppliedAPIPrimDefinition("CameraSensorAPI_1")
+    lens = camera.GetAttributeDefinition("sensor:camera:lensType")
+    assert list(lens.GetMetadata("allowedTokens")) == ["gnomonical", "equidistant"]
+    assert lens.GetFallbackValue() == "gnomonical"
+    cutoff = camera.GetAttributeDefinition("sensor:camera:cutoffAngle")
+    assert cutoff.GetMetadata("lagrangeUnit") == "rad"
+    assert cutoff.GetFallbackValue() is None
+
+
 # RFC 0007: the schemas are frozen at 1.0. Every attribute of every schema at v1.0.0 is listed
 # in frozen_1_0.json with its type, fallback, unit and allowed tokens; within 1.x an attribute
 # may be added, and allowed tokens appended, but nothing listed may change or go.

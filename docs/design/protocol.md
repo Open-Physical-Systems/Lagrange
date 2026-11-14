@@ -29,8 +29,21 @@ Every message on the stream is:
 
 - Maximum frame size: 64 MiB. Larger payloads (meshes, textures, point clouds) are chunked with
   `Blob` messages or sent through shared memory.
+- Until the server has accepted its `ClientHello`, a client may send frames of at most 64 KiB
+  (`proto::kPreHandshakeMaxFrameSize`; RFC 0014 §1). A larger header closes the connection with
+  a `ServerHello` whose `refusal` says why. Frames pipelined behind the `ClientHello` are read
+  under the normal 64 MiB limit. What the server sends keeps the 64 MiB limit from the start.
 - The first frame in each direction is a handshake (`ClientHello`, then `ServerHello`). Any
-  other first frame closes the connection.
+  other first frame, and one whose payload does not parse, closes the connection, with a
+  `ServerHello` refusal ("the first message must be ClientHello").
+- Before the handshake the server also limits connections (RFC 0014 §2 to §4): at most 16
+  waiting for their `ClientHello` and 32 open in all, at most 8 new TCP connections in a burst
+  and then 2 a second from one address (IPv6: per /64), and 10 s from accept to the
+  `ClientHello` (TLS included). Over a limit a connection is sent a `ServerHello` refusal
+  (best effort; not over TLS before its handshake) and closed. `lagrange_server`
+  `--max-connections N`, `--max-pending N`, `--handshake-timeout S`,
+  `--peer-rate BURST,PER_SECOND` change them; the 64 KiB cap is a constant.
+  `ServerStats.viewers` counts greeted sessions only.
 - Default endpoints: Unix socket `$XDG_RUNTIME_DIR/lagrange/<instance>.sock` (instance defaults to
   `default`); TCP port `47610` (a project default, configurable; not an IANA registration).
 

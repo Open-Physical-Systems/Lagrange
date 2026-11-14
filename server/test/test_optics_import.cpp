@@ -3,6 +3,7 @@
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/server/Server.hpp"
 #include "lagrange/stage/Stage.hpp"
+#include "lagrange/world/FisheyeLens.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 
 #include <algorithm>
@@ -100,17 +101,155 @@ TEST(OpticsImport, PatternsAndLensesReachTheSettings) {
     std::filesystem::remove(path);
 }
 
-// USD cannot carry them yet (RFC 0015): writing such a robot is refused by name, not written as a
-// different sensor (an even grid, or a fisheye with a negative focal length the loader refuses).
-TEST(OpticsImport, WritingPatternsOrFisheyesToUsdIsRefused) {
-    const auto robot = loadUrdf(opticsRig());
-    ASSERT_TRUE(robot) << robot.error();
+const LidarLayout::Settings& settingsOf(const Model& model, const std::string& name) {
+    const World::Sensors& s = model.world.sensors;
+    for (std::size_t i = 0; i < s.names.size(); ++i) {
+        if (s.names[i] == name) {
+            return s.settings[i];
+        }
+    }
+    ADD_FAILURE() << "no sensor " << name;
+    static const LidarLayout::Settings kNone;
+    return kNone;
+}
+
+std::string usdOf(const std::string& urdf) {
+    const auto robot = loadModel(urdf);
+    EXPECT_TRUE(robot) << robot.error();
     const std::filesystem::path out = std::filesystem::temp_directory_path() /
                                       ("lagrange_optics_" + std::to_string(::getpid()) + ".usda");
     const auto written = stage::writeStage(*robot, out.string(), {});
-    ASSERT_FALSE(written);
-    EXPECT_NE(written.error().find("RFC 0015"), std::string::npos) << written.error();
-    EXPECT_FALSE(std::filesystem::exists(out));
+    EXPECT_TRUE(written) << (written ? std::string() : written.error());
+    return out.string();
+}
+
+// RFC 0015: URDF -> USD (as lagrange_import writes it) -> load gives the same beams, bit for bit,
+// and the same lens (k and cutoff exactly; the angle through UsdGeomCamera's float focal length).
+TEST(OpticsImport, PatternsAndLensesSurviveTheTripThroughUsd) {
+    const std::string urdf = opticsRig();
+    const auto robot = loadModel(urdf);
+    ASSERT_TRUE(robot) << robot.error();
+    const std::string usd = usdOf(urdf);
+    const auto again = loadModel(usd);
+    ASSERT_TRUE(again) << again.error();
+    for (const std::string& note : again->notes) {
+        EXPECT_EQ(note.find("rosette"), std::string::npos) << note;  // all five were written
+    }
+    for (const char* name : {"rosette", "flash", "vlp"}) {
+        const auto& a = settingsOf(*robot, name);
+        const auto& b = settingsOf(*again, name);
+        const LidarLayout la = LidarLayout::from(a);
+        const LidarLayout lb = LidarLayout::from(b);
+        EXPECT_EQ(la.pattern, lb.pattern) << name;
+        ASSERT_EQ(la.beams(), lb.beams()) << name;
+        for (const std::uint64_t scan : {std::uint64_t{0}, std::uint64_t{7}}) {
+            for (std::uint32_t i = 0; i < la.beams(); ++i) {
+                ASSERT_EQ(la.direction(i, scan), lb.direction(i, scan))
+                    << name << " beam " << i << " scan " << scan;
+            }
+        }
+        EXPECT_EQ(a.contains("motion_distortion"), b.contains("motion_distortion")) << name;
+    }
+    const auto& a = settingsOf(*robot, "fisheye");
+    const auto& b = settingsOf(*again, "fisheye");
+    ASSERT_TRUE(FisheyeLens::isFisheye(b));
+    const FisheyeLens la = FisheyeLens::from(a);
+    const FisheyeLens lb = FisheyeLens::from(b);
+    EXPECT_EQ(la.k, lb.k);
+    EXPECT_EQ(la.cutoff, lb.cutoff);
+    EXPECT_NEAR(b.at("horizontal_fov") / a.at("horizontal_fov"), 1.0, 1e-6);
+    const double width = a.at("width");
+    EXPECT_NEAR(lb.focal(width, b.at("horizontal_fov")) / la.focal(width, a.at("horizontal_fov")),
+                1.0, 1e-6);
+    EXPECT_FALSE(FisheyeLens::isFisheye(settingsOf(*again, "odd")));  // a pinhole, as from URDF
+
+    // A CPU run of each gives the same ranges.
+    const auto ranges = [](const std::string& path) {
+        ServerOptions o;
+        o.robotPath = path;
+        o.worldPath.clear();
+        o.demoDrive = false;
+        o.ros = false;
+        o.realTimeFactor = 0.0;
+        o.lidar = ServerOptions::Lidar::Cpu;
+        o.cameras = false;
+        Server server(o);
+        const Status loaded = server.load();
+        EXPECT_TRUE(loaded.ok()) << loaded.message;
+        EXPECT_TRUE(server.stepUntil(SimTime{350'000'000}).ok());
+        std::vector<std::vector<double>> out;
+        for (const char* name : {"rosette", "flash", "vlp"}) {
+            out.push_back(server.read("sensor/" + std::string(name) + "/ranges"));
+        }
+        out.push_back(server.read("sensor/rosette/directions"));
+        return out;
+    };
+    const auto fromUrdf = ranges(urdf);
+    const auto fromUsd = ranges(usd);
+    ASSERT_EQ(fromUrdf.size(), fromUsd.size());
+    for (std::size_t i = 0; i < fromUrdf.size(); ++i) {
+        ASSERT_FALSE(fromUrdf[i].empty()) << i;
+        EXPECT_EQ(fromUrdf[i], fromUsd[i]) << i;
+    }
+    std::filesystem::remove(urdf);
+    std::filesystem::remove(usd);
+}
+
+// RFC 0015 §4: the same sensors in SDFormat, with Lagrange's lagrange:-prefixed elements, give
+// the URDF rig's beams and lens exactly. (SDFormat's horizontal angles default to 0, URDF's here
+// to ±π: the vlp says them.)
+TEST(OpticsImport, SdformatGivesTheUrdfRigsBeamsAndLens) {
+    const std::string urdf = opticsRig();
+    const std::filesystem::path sdf = std::filesystem::temp_directory_path() /
+                                      ("lagrange_optics_" + std::to_string(::getpid()) + ".sdf");
+    std::ofstream(sdf) << R"(<?xml version="1.0"?>
+<sdf version="1.12" xmlns:lagrange="https://open-physical-systems.github.io/Lagrange">
+<model name="rig"><static>true</static><link name="head"><pose>0 0 1 0 0 0</pose>
+<sensor name="rosette" type="lidar"><update_rate>10</update_rate><lidar>
+<lagrange:pattern>rosette</lagrange:pattern>
+<scan><horizontal><samples>500</samples></horizontal></scan><range><min>0.1</min><max>60</max>
+</range><lagrange:rosette><fov>0.8</fov><point_rate>5000</point_rate><speed_1>700</speed_1>
+<speed_2>-400</speed_2><prism_ratio>0.5</prism_ratio></lagrange:rosette></lidar></sensor>
+<sensor name="flash" type="lidar"><update_rate>10</update_rate><lidar>
+<lagrange:pattern>flash</lagrange:pattern>
+<scan><horizontal><samples>16</samples><min_angle>-0.5</min_angle><max_angle>0.5</max_angle>
+</horizontal><vertical><samples>4</samples><min_angle>-0.2</min_angle><max_angle>0.2</max_angle>
+</vertical></scan></lidar></sensor>
+<sensor name="vlp" type="lidar"><update_rate>10</update_rate><lidar><scan><horizontal>
+<samples>8</samples><min_angle>-3.14159265358979</min_angle><max_angle>3.14159265358979</max_angle>
+</horizontal><vertical><samples>2</samples><lagrange:angles>0.1 -0.3 0.0</lagrange:angles></vertical></scan></lidar></sensor>
+<sensor name="fisheye" type="camera"><update_rate>10</update_rate><camera>
+<horizontal_fov>3.4907</horizontal_fov><image><width>64</width><height>64</height></image>
+<lens><type>equidistant</type><cutoff_angle>1.8</cutoff_angle><lagrange:k1>0.01</lagrange:k1>
+<lagrange:k4>0.0001</lagrange:k4></lens></camera></sensor>
+</link></model></sdf>)";
+    const auto fromUrdf = loadModel(urdf);
+    const auto fromSdf = loadModel(sdf.string());
+    ASSERT_TRUE(fromUrdf) << fromUrdf.error();
+    ASSERT_TRUE(fromSdf) << fromSdf.error();
+    for (const char* name : {"rosette", "flash", "vlp"}) {
+        const auto& a = settingsOf(*fromUrdf, name);
+        const auto& b = settingsOf(*fromSdf, name);
+        const LidarLayout la = LidarLayout::from(a);
+        const LidarLayout lb = LidarLayout::from(b);
+        EXPECT_EQ(la.pattern, lb.pattern) << name;
+        ASSERT_EQ(la.beams(), lb.beams()) << name;
+        for (const std::uint64_t scan : {std::uint64_t{0}, std::uint64_t{7}}) {
+            for (std::uint32_t i = 0; i < la.beams(); ++i) {
+                ASSERT_EQ(la.direction(i, scan), lb.direction(i, scan)) << name << " " << i;
+            }
+        }
+        EXPECT_EQ(a.contains("motion_distortion"), b.contains("motion_distortion")) << name;
+    }
+    const auto& a = settingsOf(*fromUrdf, "fisheye");
+    const auto& b = settingsOf(*fromSdf, "fisheye");
+    for (const char* key : {"projection", "distortion_model", "fisheye_cutoff", "distortion_k1",
+                            "distortion_k4", "horizontal_fov"}) {
+        EXPECT_EQ(a.at(key), b.at(key)) << key;
+    }
+    EXPECT_EQ(FisheyeLens::from(a).k, FisheyeLens::from(b).k);
+    std::filesystem::remove(urdf);
+    std::filesystem::remove(sdf);
 }
 
 TEST(OpticsImport, ARosetteLidarRunsAndSaysWhereItsBeamsWent) {

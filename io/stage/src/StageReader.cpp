@@ -2,6 +2,8 @@
 #include "Math.hpp"
 #include "Schemas.hpp"
 #include "lagrange/stage/Stage.hpp"
+#include "lagrange/world/FisheyeLens.hpp"
+#include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
@@ -779,6 +781,130 @@ private:
         return {};
     }
 
+    /// A lidar's scan pattern (RFC 0015; LidarLayout.hpp): scanPattern flash or rosette, a
+    /// channel table, the rosette's prisms. Without them the settings are the even grid's.
+    Expected<void, std::string> readLidarPattern(
+        const UsdPrim& prim, const std::string& path,
+        std::map<std::string, double, std::less<>>& settings) {
+        const TfToken pattern =
+            valueOf<TfToken>(prim.GetAttribute(TfToken("sensor:lidar:scanPattern")))
+                .value_or(TfToken());
+        const std::optional<int> channels =
+            authored<int>(prim.GetAttribute(TfToken("sensor:lidar:channels")));
+        const auto elevations =
+            valueOf<VtArray<double>>(prim.GetAttribute(TfToken("sensor:lidar:channelElevations")))
+                .value_or(VtArray<double>());
+        if (!elevations.empty()) {
+            if (channels && *channels != static_cast<int>(elevations.size())) {
+                return Unexpected{path + ": sensor:lidar:channels (" + std::to_string(*channels) +
+                                  ") is not the number of sensor:lidar:channelElevations (" +
+                                  std::to_string(elevations.size()) + ")"};
+            }
+            settings["vertical_samples"] = static_cast<double>(elevations.size());
+            for (std::size_t ring = 0; ring < elevations.size(); ++ring) {
+                settings["vertical_angle_" + std::to_string(ring)] = elevations[ring];
+            }
+        }
+        if (pattern == TfToken("flash")) {
+            settings["pattern"] = 1.0;
+            settings["motion_distortion"] = 0.0;  // every beam at once
+            const LidarLayout layout = LidarLayout::from(settings);
+            constexpr double kRightAngle = std::numbers::pi / 2.0;
+            for (const double a :
+                 {layout.minAngle, layout.maxAngle, layout.minElevation, layout.maxElevation}) {
+                if (!(std::abs(a) < kRightAngle)) {
+                    return Unexpected{path +
+                                      ": a flash lidar's angles must lie within ±π/2 (a focal "
+                                      "plane)"};
+                }
+            }
+        } else if (pattern == TfToken("rosette")) {
+            if ((channels && *channels != 1) || !elevations.empty()) {
+                return Unexpected{path + ": a rosette lidar has one channel"};
+            }
+            settings["pattern"] = 2.0;
+            settings["vertical_samples"] = 1.0;
+            std::vector<std::string> assumed;
+            for (const auto& [attribute, key] :
+                 {std::pair{"sensor:lidar:rosette:fov", "rosette_fov"},
+                  std::pair{"sensor:lidar:rosette:pointRate", "rosette_point_rate"},
+                  std::pair{"sensor:lidar:rosette:speed1", "rosette_speed_1"},
+                  std::pair{"sensor:lidar:rosette:speed2", "rosette_speed_2"},
+                  std::pair{"sensor:lidar:rosette:prismRatio", "rosette_prism_ratio"}}) {
+                if (const std::optional<double> value =
+                        authored<double>(prim.GetAttribute(TfToken(attribute)))) {
+                    settings[key] = *value;
+                } else {
+                    assumed.emplace_back(std::string(attribute).substr(21));  // after "rosette:"
+                }
+            }
+            if (!assumed.empty()) {
+                std::string list;
+                for (const std::string& name : assumed) {
+                    list += (list.empty() ? "" : ", ") + name;
+                }
+                note(path + ": rosette " + list +
+                     " not authored: the loader's values assumed (sensors.md, \"Lidar scan "
+                     "patterns (as built)\")");
+            }
+        }
+        return {};
+    }
+
+    /// An equidistant (fisheye) lens (RFC 0015; FisheyeLens.hpp): k1..k4 from distortionModel
+    /// equidistant (or none), the cutoff, and the angle across the width through the lens's own
+    /// mapping, hfov = 2 θ_d⁻¹(w / 2f), not a pinhole's.
+    Expected<void, std::string> readFisheye(const UsdPrim& prim, const std::string& path,
+                                            double focal, double aperture,
+                                            std::map<std::string, double, std::less<>>& settings) {
+        const TfToken model =
+            valueOf<TfToken>(prim.GetAttribute(TfToken("sensor:camera:distortionModel")))
+                .value_or(TfToken("none"));
+        FisheyeLens lens;
+        if (model == TfToken("equidistant")) {
+            const auto coeffs = valueOf<VtArray<double>>(
+                                    prim.GetAttribute(TfToken("sensor:camera:distortionCoeffs")))
+                                    .value_or(VtArray<double>());
+            if (coeffs.size() != lens.k.size()) {
+                return Unexpected{path +
+                                  ": sensor:camera:distortionCoeffs needs 4 values for "
+                                  "equidistant"};
+            }
+            for (std::size_t k = 0; k < lens.k.size(); ++k) {
+                lens.k.at(k) = coeffs[k];
+            }
+        } else if (model != TfToken("none") && !model.IsEmpty()) {
+            return Unexpected{path +
+                              ": an equidistant lens takes distortionModel equidistant or "
+                              "none, not " +
+                              model.GetString()};
+        }
+        const std::optional<double> cutoff =
+            authored<double>(prim.GetAttribute(TfToken("sensor:camera:cutoffAngle")));
+        if (cutoff && !(*cutoff > 0.0 && *cutoff <= FisheyeLens::kPi)) {
+            return Unexpected{path + ": sensor:camera:cutoffAngle must lie in (0, π]"};
+        }
+        // Unauthored, the cutoff follows the field of view (FisheyeLens::from): invert up to π.
+        // A lens that folds back is refused where the camera starts, as from URDF.
+        lens.cutoff = cutoff.value_or(FisheyeLens::kPi);
+        const std::optional<double> half = lens.undistorted(aperture / 2.0 / focal);
+        if (!half || !(*half > 0.0)) {
+            return Unexpected{path +
+                              ": the fisheye cannot reach horizontalAperture / (2 focalLength) "
+                              "before its cutoff angle"};
+        }
+        settings["horizontal_fov"] = 2.0 * *half;
+        settings["projection"] = 1.0;
+        settings["distortion_model"] = 2.0;  // equidistant, as camera_info names it
+        for (std::size_t k = 0; k < lens.k.size(); ++k) {
+            settings["distortion_k" + std::to_string(k + 1)] = lens.k.at(k);
+        }
+        if (cutoff) {
+            settings["fisheye_cutoff"] = *cutoff;
+        }
+        return {};
+    }
+
     Expected<void, std::string> addSensor(const UsdPrim& prim, std::uint32_t body,
                                           ScenePrim& scene) {
         const std::string path = prim.GetPath().GetString();
@@ -836,12 +962,23 @@ private:
             const auto token = [&prim](const char* name) {
                 return valueOf<TfToken>(prim.GetAttribute(TfToken(name))).value_or(TfToken());
             };
+            if (const TfToken lens = token("sensor:camera:lensType");
+                lens == TfToken("equidistant")) {
+                if (auto fisheye = readFisheye(prim, path, focal, aperture, settings); !fisheye) {
+                    return fisheye;
+                }
+            } else if (!lens.IsEmpty() && lens != TfToken("gnomonical")) {
+                return Unexpected{path + ": sensor:camera:lensType '" + lens.GetString() +
+                                  "' is not drawn (gnomonical, equidistant)"};
+            }
             if (token("sensor:camera:shutter") == TfToken("rolling")) {
                 settings["rolling_shutter_time"] =
                     real("sensor:camera:rollingShutterTime").value_or(0.0);
             }
             const TfToken distortion = token("sensor:camera:distortionModel");
-            if (distortion == TfToken("plumb_bob") || distortion == TfToken("equidistant")) {
+            if (FisheyeLens::isFisheye(settings)) {
+                // readFisheye took the coefficients: the lens's own.
+            } else if (distortion == TfToken("plumb_bob") || distortion == TfToken("equidistant")) {
                 const auto coeffs =
                     valueOf<VtArray<double>>(
                         prim.GetAttribute(TfToken("sensor:camera:distortionCoeffs")))
@@ -931,6 +1068,9 @@ private:
                     valueOf<bool>(prim.GetAttribute(TfToken("sensor:lidar:motionDistortion")));
                 distortion && !*distortion) {
                 settings["motion_distortion"] = 0.0;
+            }
+            if (auto pattern = readLidarPattern(prim, path, settings); !pattern) {
+                return pattern;
             }
         } else if (prim.HasAPI(TfToken("GnssAPI_1"))) {
             type = SensorType::Gnss;

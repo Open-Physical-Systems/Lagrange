@@ -9,6 +9,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -120,6 +121,117 @@ TEST(ImportSdf, SampleAmrMatchesTheUrdf) {
     EXPECT_EQ(amr->scene.prims[amr->sensorPrim[1]].path,
               "/amr_diffdrive/base_link/lidar_link/front_lidar");
     EXPECT_EQ(amr->scene.materials.size(), 5U);  // body, accent, rubber, steel and the floor
+}
+
+/// An SDFormat rig with the lidar patterns and fisheye of RFC 0015 §4: Lagrange's custom elements
+/// in `prefix` ("lagrange:" or "" for the plain form URDF uses).
+std::string opticsSdf(const std::string& prefix) {
+    const std::string p = prefix;
+    return R"(<?xml version="1.0"?>
+<sdf version="1.12" xmlns:lagrange="https://open-physical-systems.github.io/Lagrange">
+  <model name="rig"><static>true</static><link name="head">
+    <sensor name="rosette" type="lidar"><update_rate>10</update_rate><lidar>
+      <)" + p +
+           R"(pattern>rosette</)" + p + R"(pattern>
+      <scan><horizontal><samples>500</samples></horizontal></scan>
+      <range><min>0.1</min><max>60</max></range>
+      <)" + p +
+           R"(rosette><fov>0.8</fov><point_rate>5000</point_rate><speed_1>700</speed_1>
+      <speed_2>-400</speed_2><prism_ratio>0.5</prism_ratio></)" +
+           p + R"(rosette>
+    </lidar></sensor>
+    <sensor name="rosette_default" type="lidar"><update_rate>10</update_rate><lidar>
+      <)" + p +
+           R"(pattern>rosette</)" + p + R"(pattern>
+      <range><min>0.1</min><max>60</max></range></lidar></sensor>
+    <sensor name="flash" type="lidar"><update_rate>10</update_rate><lidar>
+      <)" + p +
+           R"(pattern>flash</)" + p + R"(pattern>
+      <scan><horizontal><samples>16</samples><min_angle>-0.5</min_angle><max_angle>0.5</max_angle>
+      </horizontal><vertical><samples>4</samples><min_angle>-0.2</min_angle>
+      <max_angle>0.2</max_angle></vertical></scan>
+      <range><min>0.1</min><max>30</max></range></lidar></sensor>
+    <sensor name="vlp" type="gpu_lidar"><update_rate>10</update_rate><lidar><scan><horizontal>
+      <samples>8</samples></horizontal><vertical><samples>2</samples>
+      <)" + p +
+           R"(angles>0.1 -0.3 0.0</)" + p + R"(angles></vertical></scan>
+      <range><min>0.1</min><max>30</max></range></lidar></sensor>
+    <sensor name="fisheye" type="camera"><update_rate>10</update_rate><camera>
+      <horizontal_fov>3.4907</horizontal_fov><image><width>64</width><height>64</height></image>
+      <lens><type>equidistant</type><cutoff_angle>1.8</cutoff_angle>
+      <)" + p +
+           R"(k1>0.01</)" + p + R"(k1><)" + p + R"(k4>0.0001</)" + p + R"(k4></lens>
+    </camera></sensor>
+    <sensor name="fisheye_default" type="camera"><update_rate>10</update_rate><camera>
+      <horizontal_fov>3.4907</horizontal_fov><image><width>64</width><height>64</height></image>
+      <lens><type>equidistant</type></lens></camera></sensor>
+    <sensor name="odd" type="camera"><update_rate>10</update_rate><camera>
+      <image><width>64</width><height>64</height></image>
+      <lens><type>stereographic</type></lens></camera></sensor>
+    <sensor name="plain" type="camera"><update_rate>10</update_rate><camera>
+      <image><width>64</width><height>64</height></image></camera></sensor>
+  </link></model>
+</sdf>)";
+}
+
+TEST(ImportSdf, LidarPatternsAndFisheyeLenses) {
+    for (const std::string prefix : {"lagrange:", ""}) {
+        auto rig = importSdf(
+            writeText("optics_" + std::to_string(prefix.size()) + ".sdf", opticsSdf(prefix))
+                .string());
+        ASSERT_TRUE(rig) << rig.error();
+        const World::Sensors& s = rig->world.sensors;
+        const auto find = [&](const std::string& name) {
+            for (std::size_t i = 0; i < s.names.size(); ++i) {
+                if (s.names[i] == name) {
+                    return s.settings[i];
+                }
+            }
+            ADD_FAILURE() << name;
+            return std::map<std::string, double, std::less<>>{};
+        };
+        const auto rosette = find("rosette");
+        EXPECT_EQ(rosette.at("pattern"), 2.0) << prefix;
+        EXPECT_EQ(rosette.at("samples"), 500.0);
+        EXPECT_EQ(rosette.at("rosette_fov"), 0.8);
+        EXPECT_EQ(rosette.at("rosette_point_rate"), 5000.0);
+        EXPECT_EQ(rosette.at("rosette_speed_1"), 700.0);
+        EXPECT_EQ(rosette.at("rosette_speed_2"), -400.0);
+        EXPECT_EQ(rosette.at("rosette_prism_ratio"), 0.5);
+        EXPECT_FALSE(find("rosette_default").contains("samples"));  // the rosette's own
+
+        const auto flash = find("flash");
+        EXPECT_EQ(flash.at("pattern"), 1.0);
+        EXPECT_EQ(flash.at("motion_distortion"), 0.0);
+
+        const auto vlp = find("vlp");
+        EXPECT_EQ(vlp.at("vertical_angle_0"), 0.1);
+        EXPECT_EQ(vlp.at("vertical_angle_1"), -0.3);
+        EXPECT_EQ(vlp.at("vertical_angle_2"), 0.0);
+        EXPECT_FALSE(vlp.contains("vertical_angle_3"));
+        EXPECT_FALSE(vlp.contains("pattern"));
+
+        const auto fisheye = find("fisheye");
+        EXPECT_EQ(fisheye.at("projection"), 1.0);
+        EXPECT_EQ(fisheye.at("distortion_model"), 2.0);
+        EXPECT_EQ(fisheye.at("fisheye_cutoff"), 1.8);
+        EXPECT_EQ(fisheye.at("distortion_k1"), 0.01);
+        EXPECT_EQ(fisheye.at("distortion_k4"), 0.0001);
+        EXPECT_FALSE(fisheye.contains("distortion_k2"));
+        EXPECT_EQ(fisheye.at("horizontal_fov"), 3.4907);
+        const auto unset = find("fisheye_default");
+        EXPECT_EQ(unset.at("projection"), 1.0);
+        EXPECT_FALSE(unset.contains("fisheye_cutoff"));  // not SDFormat's 1.5707 default
+
+        EXPECT_FALSE(find("odd").contains("projection"));
+        EXPECT_FALSE(find("plain").contains("projection"));  // no <lens>: a pinhole
+        bool noted = false;
+        for (const std::string& note : rig->notes) {
+            noted = noted || (note.find("'odd'") != std::string::npos &&
+                              note.find("stereographic") != std::string::npos);
+        }
+        EXPECT_TRUE(noted) << prefix;
+    }
 }
 
 TEST(ImportMjcf, SampleAmrMatchesTheUrdf) {

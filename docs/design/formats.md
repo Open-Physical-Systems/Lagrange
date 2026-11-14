@@ -589,13 +589,31 @@ agreed):
 | Schema | Attributes (unit, fallback) |
 |---|---|
 | `SensorAPI_1` (common) | `sensor:rate` (Hz, —), `sensor:latency` (s, 0), `sensor:jitter` (s, 0), `sensor:frameId` (string, prim name), `sensor:topic` (string, derived), `sensor:powerPort` (rel, none) |
-| `LidarAPI_1` | `sensor:lidar:wavelength` (m, 9.05e-7), `channels` (int, —), `horizontalSamples` (int, —), `verticalFov` (rad[2], —), `horizontalFov` (rad[2], (−π, π)), `rangeMin`/`rangeMax` (m, —), `rangeNoiseStd` (m, 0.02), `beamDivergence` (rad, 0.003), `returnMode` (token: `strongest`, `last`, `dual`), `scanPattern` (token: `rotating`, `solid_state`, `custom`), `rotationRate` (Hz, = rate), `motionDistortion` (bool, true) |
-| `CameraSensorAPI_1` | on a `UsdGeomCamera`: `sensor:camera:width`/`height` (int, —), `shutter` (token: `global`, `rolling`), `rollingShutterTime` (s, 0), `exposureTime` (s, —; the longest with auto exposure), `autoExposure` (bool, false), `electronRate` (1/s, —: e⁻ per second at the renderer's full white), `vignetting` (1, 0: fraction of cos⁴θ), `gain` (1, 1), `readNoiseStd` (electrons, 2), `fullWellCapacity` (electrons, 10000), `bitDepth` (int, 8), `distortionModel` (token: `none`, `plumb_bob`, `equidistant`), `distortionCoeffs` (double[], []) |
+| `LidarAPI_1` | `sensor:lidar:wavelength` (m, 9.05e-7), `channels` (int, —), `horizontalSamples` (int, —), `verticalFov` (rad[2], —), `horizontalFov` (rad[2], (−π, π)), `rangeMin`/`rangeMax` (m, —), `rangeNoiseStd` (m, 0.02), `beamDivergence` (rad, 0.003), `returnMode` (token: `strongest`, `last`, `dual`), `scanPattern` (token: `rotating`, `solid_state`, `custom`, and from RFC 0015 `flash`, `rosette`), `rotationRate` (Hz, = rate), `motionDistortion` (bool, true); RFC 0015: `channelElevations` (rad[], []: a channel table), `rosette:fov` (rad), `rosette:pointRate` (1/s), `rosette:speed1`/`speed2` (rad/s), `rosette:prismRatio` (1), the five without fallbacks |
+| `CameraSensorAPI_1` | on a `UsdGeomCamera`: `sensor:camera:width`/`height` (int, —), `shutter` (token: `global`, `rolling`), `rollingShutterTime` (s, 0), `exposureTime` (s, —; the longest with auto exposure), `autoExposure` (bool, false), `electronRate` (1/s, —: e⁻ per second at the renderer's full white), `vignetting` (1, 0: fraction of cos⁴θ), `gain` (1, 1), `readNoiseStd` (electrons, 2), `fullWellCapacity` (electrons, 10000), `bitDepth` (int, 8), `distortionModel` (token: `none`, `plumb_bob`, `equidistant`), `distortionCoeffs` (double[], []); RFC 0015: `lensType` (token: `gnomonical`, `equidistant`), `cutoffAngle` (rad, —) |
 | `RadarAPI_1` | `sensor:radar:carrierFrequency` (Hz, 7.7e10), `rangeMax` (m, —), `azimuthFov`/`elevationFov` (rad, —), `azimuthResolution` (rad, 0.035), `rangeResolution` (m, 0.2), `velocityResolution` (m/s, 0.1), `txPower` (W, —), `antennaGain` (linear, 1), `noiseFloor` (W, —: effective, after processing gain), `detectionThreshold` (linear SNR, 10) |
 | `ImuAPI_1` | v0.2 implements per-sample white noise, `sensor:imu:accelNoiseStd` (m/s², 0) and `gyroNoiseStd` (rad/s, 0), plus the bias instabilities: densities need half powers in the unit grammar. Draft: `sensor:imu:accelNoiseDensity` (m/s²/√Hz, —), `accelBiasInstability` (m/s², —), `accelRandomWalk` (m/s³/√Hz, —), `gyroNoiseDensity` (rad/s/√Hz, —), `gyroBiasInstability` (rad/s, —), `gyroRandomWalk` (rad/s²/√Hz, —), `accelRange` (m/s², —), `gyroRange` (rad/s, —) |
 | `GnssAPI_1` | `sensor:gnss:horizontalStd` (m, —), `verticalStd` (m, —), `velocityStd` (m/s, —), `multipathModel` (token: `none`, `urban`), `minElevation` (rad, 0.17) |
 | `MagnetometerAPI_1` | `sensor:mag:noiseStd` (T, —), `hardIron` (T[3], 0), `softIron` (double[9], identity), `earthFieldModel` (token: `constant`, `wmm`), `earthField` (T[3], — when `constant`; site parameter, no fallback) |
 | `CustomSensorAPI_1` | (RFC 0008 §3) `sensor:custom:kind` (string, —: what a plugin looks for), and any number of `sensor:custom:param:<name>` (double or string; `:` in the name is `/` in the parameter path). From URDF and SDFormat, every `<sensor>` of a type Lagrange does not simulate becomes one: its leaf elements are its parameters by path (`<range><max>` is `range/max`; a first element named as the type is left out) |
+
+**Lidar scan patterns and fisheye lenses (RFC 0015, as built).** `scanPattern = "flash"` is a
+focal-plane array (every beam at once, the beams evenly spaced on the image plane, outer angles
+within ±π/2, `motionDistortion` not used); `"rosette"` is two Risley prisms with
+`horizontalSamples` points per scan and one channel, read from the five `rosette:*` attributes
+(unauthored: the loader's values in `sensors.md`, with a note; no schema fallback, so unmeasured
+prism speeds are not frozen for 1.x). `rotating`, `solid_state` and `custom` stay the even grid.
+A non-empty `channelElevations` gives the rings (sorted from the lowest) instead of
+`verticalFov`; an authored `channels` must equal its length. `lensType = "equidistant"` makes the
+camera a fisheye (Kannala–Brandt; k1..k4 from `distortionModel = "equidistant"` and
+`distortionCoeffs`, or `"none"` for all zero; `"plumb_bob"` is refused): its angle across the
+width is `2 θ_d⁻¹(horizontalAperture / (2 focalLength))` through the lens's own mapping, so a
+200° fisheye has a positive focal length; `cutoffAngle` (at most π) defaults to the larger of
+half that angle and π/2. `UsdGeomCamera.projection` stays `perspective` (the only other token
+OpenUSD allows is `orthographic`). The stage writer writes all of it, so URDF → `lagrange_import`
+→ USD → run gives the same beams bit for bit and the same lens (to the float precision of
+`focalLength`). A file using them, opened by Lagrange 1.2 or older, runs as a grid lidar and a
+pinhole camera.
 
 ### 3.9 `schemas/comms/schema.usda`
 
@@ -1703,6 +1721,36 @@ colours at most by k-means), which keeps the viewer protocol unchanged.
 Without an overlay, an imported robot runs with the electrical domain substituted by the ideal
 torque source. The viewer's domain panel shows why the electrical toggle is unavailable
 ("no ElectricalMotorAPI prims in stage").
+
+### 9.3 Lagrange's own elements in SDFormat
+
+What SDFormat has no element for, Lagrange reads from custom elements prefixed `lagrange:`
+(RFC 0015 §4). The namespace URI for `xmlns:lagrange` is the documentation site,
+`https://open-physical-systems.github.io/Lagrange`; libsdformat does not require the
+declaration, keeps prefixed elements without a warning, and Gazebo ignores them. The plain
+(unprefixed) names the URDF `<gazebo>` form uses are read too, so one `<sensor>` block pastes
+between the two formats; libsdformat warns that it copies them.
+
+| Lagrange | SDFormat |
+|---|---|
+| fisheye lens | `<camera><lens><type>equidistant</type>` (SDFormat's own; `kannala_brandt` and `fisheye` as in URDF); other types are a note and a pinhole |
+| cutoff | `<lens><cutoff_angle>` (SDFormat's own; read only when the file gives it) |
+| field of view | `<horizontal_fov>` as the angle across the width (`<scale_to_hfov>false` is a note) |
+| k1..k4 | `<lens><lagrange:k1>`..`<lagrange:k4>` (SDFormat's `<distortion>` is Brown–Conrady) |
+| scan pattern | `<lidar><lagrange:pattern>grid\|flash\|rosette</lagrange:pattern>` |
+| channel table | `<lidar><scan><vertical><lagrange:angles>` (rad, space separated) |
+| rosette | `<lidar><lagrange:rosette>` with `fov`, `point_rate`, `speed_1`, `speed_2`, `prism_ratio` |
+
+```xml
+<sdf version="1.12" xmlns:lagrange="https://open-physical-systems.github.io/Lagrange">
+  ...
+  <sensor name="livox" type="gpu_lidar"><update_rate>10</update_rate><lidar>
+    <lagrange:pattern>rosette</lagrange:pattern>
+    <scan><horizontal><samples>10000</samples></horizontal></scan>
+    <range><min>0.1</min><max>260</max></range>
+    <lagrange:rosette><fov>0.670206</fov><point_rate>100000</point_rate></lagrange:rosette>
+  </lidar></sensor>
+```
 
 ## 10. Versioning and migration
 
