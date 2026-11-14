@@ -552,6 +552,12 @@ class MockServer:
                 self._loading.add(task)
                 task.add_done_callback(self._loading.discard)
                 return
+            elif kind == "remove_robot":
+                # One scene, replaced whole by import_robot: no robot is spawned beside another.
+                result.command_result.ok = False
+                result.command_result.error = (
+                    "the mock server replays one scene: it has no spawned robot to remove"
+                )
             elif kind == "get_attributes":
                 items = result.command_result.attributes
                 items.SetInParent()

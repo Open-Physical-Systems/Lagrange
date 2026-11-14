@@ -180,12 +180,14 @@ def test_ping_seek_step_and_unsupported_commands(recording, tmp_path):
 
             await client.command(load_stage={"path": "/nope.usda"})
             unsupported = await receive_until(client, "command_result")
+            await client.command(remove_robot={"name": "amr_diffdrive"})
+            removed = await receive_until(client, "command_result")
             await client.close()
-            return pong, seek, seek_result, snapshot, step, status, unsupported
+            return pong, seek, seek_result, snapshot, step, status, unsupported, removed
         finally:
             await server.stop()
 
-    pong, seek, seek_result, snapshot, _step, status, unsupported = asyncio.run(scenario())
+    pong, seek, seek_result, snapshot, _step, status, unsupported, removed = asyncio.run(scenario())
     assert pong.pong.nonce == 99
     assert seek_result.command_result.request_id == seek and seek_result.command_result.ok
     assert snapshot.snapshot.sim_time.ns == 500_000_000
@@ -193,6 +195,8 @@ def test_ping_seek_step_and_unsupported_commands(recording, tmp_path):
     assert status.status.state == session_pb2.RUN_STATE_PAUSED
     assert not unsupported.command_result.ok
     assert "load_stage" in unsupported.command_result.error
+    assert not removed.command_result.ok
+    assert "no spawned robot" in removed.command_result.error
 
 
 def test_garbage_from_one_client_does_not_affect_another(recording, tmp_path):

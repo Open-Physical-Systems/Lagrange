@@ -84,6 +84,13 @@ private:
 
     void pollTest(double now);
     void startTest(double now);
+    /// Test into the connected run (RFC 0016 §7.2): ImportRobot with the document's text, and
+    /// RemoveRobot on Back. The client stays on the user's run.
+    void startTestInRun(double now);
+    void pollTestInRun(double now);
+    /// Answers to RemoveRobot (a refusal goes to Problems), and a robot whose import was
+    /// answered after Back: removed again.
+    void pollRemovals();
     void endTest(const std::string& failure);
     void restoreClient();
     void pollJobs();
@@ -112,6 +119,10 @@ private:
     proto::Endpoint previousEndpoint_;
     bool previousRunning_{false};
     std::uint64_t snapshotsAtStart_{0};
+    bool inRun_{false};                   ///< the Test runs in the connected run
+    std::uint64_t importRequest_{0};      ///< ImportRobot's request id while Starting
+    std::uint64_t removeAfterImport_{0};  ///< Back while Starting: this import's robot goes
+    std::uint64_t removeRequest_{0};      ///< RemoveRobot's request id until answered
     double startedAt_{0.0};
     double logReadAt_{0.0};
     std::uint64_t autosavedRevision_{0};

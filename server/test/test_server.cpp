@@ -12,7 +12,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <numbers>
@@ -1232,6 +1234,181 @@ TEST(Security, TlsWithATokenGreetsOnlyClientsThatHaveIt) {
     EXPECT_FALSE(refused.ok());
     EXPECT_NE(refused.message.find("--auth-token-file"), std::string::npos) << refused.message;
     std::filesystem::remove_all(dir);
+}
+
+// RFC 0016 §7.2: the builder's Test into the connected run. The viewer sends the robot's URDF
+// text (ImportRobot.content), the server names it by its <robot name> and answers its scene
+// path, and RemoveRobot takes it out again.
+class ImportServerTest : public ServerTest {
+protected:
+    void adjust(ServerOptions& options) override { options.ros = false; }
+
+    v1::CommandResult run(v1::Envelope envelope) {
+        const std::uint64_t id = envelope.command().request_id();
+        send(envelope);
+        EXPECT_TRUE(pumpUntil([id](const v1::Envelope& e) {
+            return e.has_command_result() && e.command_result().request_id() == id;
+        }));
+        return received_.empty() ? v1::CommandResult{} : received_.back().command_result();
+    }
+
+    v1::CommandResult importText(std::uint64_t id, const std::string& text,
+                                 v1::ImportRobot::Format format = v1::ImportRobot::FORMAT_URDF,
+                                 const std::string& overlay = {}) {
+        v1::Envelope envelope = command(id);
+        v1::ImportRobot& request = *envelope.mutable_command()->mutable_import_robot();
+        request.set_format(format);
+        request.mutable_content()->set_inline_(text);
+        if (!overlay.empty()) {
+            request.mutable_overlay_content()->set_inline_(overlay);
+        }
+        return run(envelope);
+    }
+
+    v1::CommandResult removeRobot(std::uint64_t id, const std::string& name) {
+        v1::Envelope envelope = command(id);
+        envelope.mutable_command()->mutable_remove_robot()->set_name(name);
+        return run(envelope);
+    }
+
+    [[nodiscard]] bool hasBody(const std::string& name) const {
+        const std::vector<std::string>& names = server_->world().bodies.names;
+        return std::find(names.begin(), names.end(), name) != names.end();
+    }
+
+    static std::string readText(const std::string& path) {
+        std::ifstream in(path);
+        return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    }
+
+    /// A one-link robot as the builder writes it.
+    static std::string boxRobot(const std::string& name) {
+        return R"(<?xml version="1.0"?>
+<robot name=")" +
+               name + R"(">
+  <link name="body">
+    <inertial><mass value="2.0"/><inertia ixx="0.02" iyy="0.02" izz="0.02" ixy="0" ixz="0" iyz="0"/></inertial>
+    <visual><geometry><box size="0.3 0.3 0.2"/></geometry></visual>
+    <collision><geometry><box size="0.3 0.3 0.2"/></geometry></collision>
+  </link>
+</robot>
+)";
+    }
+};
+
+TEST_F(ImportServerTest, ContentIsNamedByItsRobotElementAndRemovedAgain) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_status(); }));
+    const v1::CommandResult imported = importText(1, boxRobot("crate bot"));
+    ASSERT_TRUE(imported.ok()) << imported.error();
+    EXPECT_EQ(imported.imported_stage_path(), "/crate_bot") << "a valid name from <robot name>";
+    EXPECT_TRUE(hasBody("crate_bot_body")) << "passive beside the AMR: its names prefixed";
+    EXPECT_TRUE(hasBody("base_link")) << "the run's robot stays";
+
+    const v1::CommandResult removed = removeRobot(2, imported.imported_stage_path());
+    ASSERT_TRUE(removed.ok()) << removed.error();
+    EXPECT_FALSE(hasBody("crate_bot_body"));
+    EXPECT_TRUE(hasBody("base_link"));
+
+    const v1::CommandResult again = removeRobot(3, "crate_bot");
+    EXPECT_FALSE(again.ok()) << "already gone";
+    EXPECT_NE(again.error().find("no robot named crate_bot"), std::string::npos) << again.error();
+    const v1::CommandResult scenery = removeRobot(4, "warehouse_small");
+    EXPECT_FALSE(scenery.ok()) << "the world's scenery stays";
+}
+
+TEST_F(ImportServerTest, ContentIsRenamedWhenItsNameIsTaken) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_status(); }));
+    const v1::CommandResult first = importText(1, boxRobot("crate"));
+    ASSERT_TRUE(first.ok()) << first.error();
+    const v1::CommandResult second = importText(2, boxRobot("crate"));
+    ASSERT_TRUE(second.ok()) << second.error();
+    EXPECT_EQ(first.imported_stage_path(), "/crate");
+    EXPECT_EQ(second.imported_stage_path(), "/crate_2");
+    EXPECT_TRUE(hasBody("crate_body"));
+    EXPECT_TRUE(hasBody("crate_2_body"));
+    // The run's own robot's name is taken too.
+    const v1::CommandResult third = importText(3, boxRobot("amr_diffdrive"));
+    ASSERT_TRUE(third.ok()) << third.error();
+    EXPECT_EQ(third.imported_stage_path(), "/amr_diffdrive_2");
+    // Removing the second leaves the first.
+    ASSERT_TRUE(removeRobot(4, "/crate_2").ok());
+    EXPECT_TRUE(hasBody("crate_body"));
+    EXPECT_FALSE(hasBody("crate_2_body"));
+}
+
+TEST_F(ImportServerTest, RefusesContentThatIsNotTheFormatOrNotInline) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_status(); }));
+    const std::size_t bodies = server_->world().bodies.names.size();
+
+    const v1::CommandResult notXml = importText(1, "hello robot");
+    EXPECT_FALSE(notXml.ok());
+    EXPECT_NE(notXml.error().find("neither XML nor USD"), std::string::npos) << notXml.error();
+
+    const v1::CommandResult other = importText(2, "<world/>");
+    EXPECT_FALSE(other.ok());
+    EXPECT_NE(other.error().find("is not URDF"), std::string::npos) << other.error();
+
+    const v1::CommandResult sdf = importText(3, R"(<sdf version="1.9"><model name="m"/></sdf>)");
+    EXPECT_FALSE(sdf.ok()) << "FORMAT_URDF with SDFormat text";
+    EXPECT_NE(sdf.error().find("not URDF"), std::string::npos) << sdf.error();
+
+    v1::Envelope blob = command(4);
+    blob.mutable_command()->mutable_import_robot()->mutable_content()->set_blob_id(7);
+    const v1::CommandResult byBlob = run(blob);
+    EXPECT_FALSE(byBlob.ok());
+    EXPECT_NE(byBlob.error().find("inline"), std::string::npos) << byBlob.error();
+
+    const v1::CommandResult xacro = importText(5, boxRobot("x"), v1::ImportRobot::FORMAT_XACRO);
+    EXPECT_FALSE(xacro.ok());
+    EXPECT_NE(xacro.error().find("xacro"), std::string::npos) << xacro.error();
+
+    v1::Envelope nothing = command(6);
+    nothing.mutable_command()->mutable_import_robot()->set_format(v1::ImportRobot::FORMAT_URDF);
+    const v1::CommandResult empty = run(nothing);
+    EXPECT_FALSE(empty.ok());
+    EXPECT_NE(empty.error().find("content"), std::string::npos) << empty.error();
+
+    // A link without its inertia is the loader's to refuse; the run is untouched.
+    const v1::CommandResult broken = importText(
+        7,
+        R"(<robot name="b"><link name="l"/><joint name="j" type="revolute"><parent link="l"/><child link="nope"/></joint></robot>)");
+    EXPECT_FALSE(broken.ok());
+    EXPECT_EQ(server_->world().bodies.names.size(), bodies) << "refusals leave the run";
+}
+
+/// An empty run (--robot none --world none), as the builder's own test server starts.
+class EmptyImportServerTest : public ImportServerTest {
+protected:
+    void adjust(ServerOptions& options) override {
+        options.ros = false;
+        options.robotPath.clear();
+        options.worldPath.clear();
+    }
+};
+
+// ImportRobot.overlay_content is applied to the imported robot as --overlay is: the AMR's
+// overlay gives it its battery and 48 V bus.
+TEST_F(EmptyImportServerTest, AnInlineOverlayGivesTheImportedRobotItsPowerSystem) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_status(); }));
+    const std::string urdf = readText(LAGRANGE_TEST_AMR_URDF);
+    const std::string overlay = readText(LAGRANGE_TEST_AMR_OVERLAY);
+    ASSERT_FALSE(urdf.empty());
+    ASSERT_FALSE(overlay.empty());
+    const v1::CommandResult imported = importText(1, urdf, v1::ImportRobot::FORMAT_URDF, overlay);
+    ASSERT_TRUE(imported.ok()) << imported.error();
+    EXPECT_EQ(imported.imported_stage_path(), "/amr_diffdrive");
+    EXPECT_TRUE(hasBody("base_link")) << "the first robot in an empty run is the robot";
+    const std::vector<double> volts = server_->read("bus/dc_48v/voltage");
+    ASSERT_EQ(volts.size(), 1U) << "the overlay's bus is in the run";
+
+    // A broken overlay refuses the robot with the overlay's message.
+    ASSERT_TRUE(removeRobot(2, "amr_diffdrive").ok());
+    const v1::CommandResult bad =
+        importText(3, urdf, v1::ImportRobot::FORMAT_URDF,
+                   "schema_version: 1\napply:\n  - prim: no_such_prim\n"
+                   "    schemas: {ThermalAPI_1: {thermal:heatCapacity: 1.0}}\n");
+    EXPECT_FALSE(bad.ok());
+    EXPECT_FALSE(hasBody("base_link"));
 }
 
 }  // namespace

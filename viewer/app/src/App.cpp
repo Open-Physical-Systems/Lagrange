@@ -1132,7 +1132,10 @@ public:
                 : mode == BuilderSession::Mode::Starting ? "starting"
                                                          : "testing") +
                "\", \"path\": \"" + jsonEscape(builderSession_.path.string()) +
-               "\", \"loader\": " + messages(builderSession_.problems.loader) +
+               "\", \"test_into_run\": " + (builderSession_.testIntoRun ? "true" : "false") +
+               ", \"test_robot\": \"" + jsonEscape(builderSession_.testRobotName) +
+               "\", \"test_passive\": " + (builderSession_.testPassive ? "true" : "false") +
+               ", \"loader\": " + messages(builderSession_.problems.loader) +
                ", \"files\": " + messages(builderSession_.problems.files) +
                ", \"check\": " + messages(builderSession_.problems.check) +
                ", \"check_exit\": " + std::to_string(builderSession_.problems.checkExit) +

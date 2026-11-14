@@ -509,6 +509,75 @@ constexpr std::array<DomainRow, 15> kDomains{{
     {"tether", "zero", "constant"},
 }};
 
+/// Writes a robot given as text to a temporary file the loaders read (defined below).
+Expected<std::string, std::string> writeResource(const std::string& text);
+
+/// The name a robot's text gives itself: URDF's <robot name>, SDFormat's first <model name>,
+/// MJCF's <mujoco model>; made a valid entity name (letters, digits and _, not first a
+/// digit). Empty when the text names none.
+std::string modelNameOf(const std::string& text) {
+    tinyxml2::XMLDocument document;
+    if (document.Parse(text.c_str(), text.size()) != tinyxml2::XML_SUCCESS ||
+        document.RootElement() == nullptr) {
+        return "";
+    }
+    const tinyxml2::XMLElement* root = document.RootElement();
+    const std::string_view kind = root->Name();
+    const char* given = nullptr;
+    if (kind == "robot") {
+        given = root->Attribute("name");
+    } else if (kind == "mujoco") {
+        given = root->Attribute("model");
+    } else if (kind == "sdf") {
+        const tinyxml2::XMLElement* model = root->FirstChildElement("model");
+        if (model == nullptr && root->FirstChildElement("world") != nullptr) {
+            model = root->FirstChildElement("world")->FirstChildElement("model");
+        }
+        given = model != nullptr ? model->Attribute("name") : nullptr;
+    }
+    if (given == nullptr) {
+        return "";
+    }
+    std::string name;
+    for (const char c : std::string_view(given)) {
+        name += std::isalnum(static_cast<unsigned char>(c)) != 0 ? c : '_';
+    }
+    if (!name.empty() && std::isdigit(static_cast<unsigned char>(name[0])) != 0) {
+        name = "robot_" + name;
+    }
+    return name;
+}
+
+/// Writes an overlay given as text (formats.md §9: YAML, or a SPICE netlist §9.1) to a
+/// temporary file, with the extension applyOverlay tells them apart by.
+Expected<std::string, std::string> writeOverlay(const std::string& text) {
+    // A netlist ends with .end (SPICE); YAML has no such line.
+    bool netlist = false;
+    std::size_t start = 0;
+    while (start < text.size()) {
+        const std::size_t end = std::min(text.find('\n', start), text.size());
+        std::string line = text.substr(start, end - start);
+        std::ranges::transform(line, line.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back())) != 0) {
+            line.pop_back();
+        }
+        netlist = netlist || line == ".end";
+        start = end + 1;
+    }
+    static int written = 0;
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() /
+        ("lagrange-spawn-" + std::to_string(::getpid()) + "-overlay-" + std::to_string(++written) +
+         (netlist ? ".cir" : ".yaml"));
+    std::ofstream out(path);
+    out << text;
+    if (!out) {
+        return Unexpected{"cannot write " + path.string()};
+    }
+    return path.string();
+}
+
 }  // namespace
 
 struct Server::Impl {
@@ -3404,24 +3473,20 @@ struct Server::Impl {
                 r.set_error("moving prims is not supported by this server yet");
                 break;
             case v1::Command::kImportRobot: {
-                const v1::ImportRobot& request = command.import_robot();
-                if (request.path().empty()) {
+                auto imported = importRobot(command.import_robot());
+                if (!imported) {
                     r.set_ok(false);
-                    r.set_error("name the robot file by its path on the server's machine");
-                    break;
-                }
-                if (!request.overlay_path().empty() || !request.xacro_args().empty()) {
-                    r.set_ok(false);
-                    r.set_error("overlays and xacro arguments are not taken when importing yet");
-                    break;
-                }
-                const ros2::SpawnOutcome outcome =
-                    spawn(request.path(), "", true, importPose(), false);
-                if (outcome.outcome.result != ros2::SimResult::Ok) {
-                    r.set_ok(false);
-                    r.set_error(outcome.outcome.message);
+                    r.set_error(imported.error());
                 } else {
-                    r.set_imported_stage_path(request.path());
+                    r.set_imported_stage_path(*imported);
+                }
+                break;
+            }
+            case v1::Command::kRemoveRobot: {
+                const ros2::SimOutcome outcome = remove(command.remove_robot().name());
+                if (outcome.result != ros2::SimResult::Ok) {
+                    r.set_ok(false);
+                    r.set_error(outcome.message);
                 }
                 break;
             }
@@ -4109,6 +4174,18 @@ struct Server::Impl {
         bool primary{false};    // spawned into a run without a robot: the one ROS drives
         bool temporary{false};  // `path` was written from a resource string: removed with it
         bool human{false};      // a file of people (RFC 0009 §8): never the robot
+        std::string overlay;    // applied to it as --overlay is to the --robot file; or empty
+        bool overlayTemporary{false};  // `overlay` was written from text: removed with it
+        /// Removes the files written for it from text.
+        void removeTemporaries() const {
+            std::error_code ignored;
+            if (temporary) {
+                std::filesystem::remove(path, ignored);
+            }
+            if (overlayTemporary) {
+                std::filesystem::remove(overlay, ignored);
+            }
+        }
     };
     std::vector<Spawned> spawned;
     std::optional<Model> scenarioRoads;  // the scenario's road network, when it is the world
@@ -4157,6 +4234,11 @@ struct Server::Impl {
                 return invalid(primary->name + ": " + loaded.error());
             }
             model = std::move(*loaded);
+            if (!primary->overlay.empty()) {
+                if (auto applied = stage::applyOverlay(model, primary->overlay); !applied) {
+                    return invalid(primary->name + ": " + applied.error());
+                }
+            }
             renameRobot(model, primary->name);
         } else if (!options.robotPath.empty()) {
             auto loaded = loadModel(options.robotPath, {.spawn = options.spawn});
@@ -4215,6 +4297,11 @@ struct Server::Impl {
             auto other = loadModel(passive.path, {.spawn = passive.spawn});
             if (!other) {
                 return invalid(passive.name + ": " + other.error());
+            }
+            if (!passive.overlay.empty()) {
+                if (auto applied = stage::applyOverlay(*other, passive.overlay); !applied) {
+                    return invalid(passive.name + ": " + applied.error());
+                }
             }
             prefixModel(*other, passive.name, true);
             appendModel(model, *other);
@@ -4681,13 +4768,17 @@ struct Server::Impl {
     }
 
     /// spawnRobot, with the simulation_interfaces result code.
+    /// `overlay`: a file applied to the robot as --overlay is (formats.md §9), or empty.
     ros2::SpawnOutcome spawn(const std::string& path, std::string name, bool allowRenaming,
-                             const Pose& at, bool temporary) {
+                             const Pose& at, bool temporary, const std::string& overlay = {},
+                             bool overlayTemporary = false) {
         using ros2::SimResult;
         const auto refuse = [&](SimResult code, std::string message) {
-            if (temporary) {
-                std::filesystem::remove(path);
-            }
+            Spawned{.path = path,
+                    .temporary = temporary,
+                    .overlay = overlay,
+                    .overlayTemporary = overlayTemporary}
+                .removeTemporaries();
             return ros2::SpawnOutcome{{code, std::move(message)}, ""};
         };
         if (replay) {
@@ -4699,6 +4790,9 @@ struct Server::Impl {
         }
         if (!std::filesystem::is_regular_file(path)) {
             return refuse(SimResult::ResourceParseError, "no file " + path);
+        }
+        if (!overlay.empty() && !std::filesystem::is_regular_file(overlay)) {
+            return refuse(SimResult::ResourceParseError, "no overlay file " + overlay);
         }
         if (importers::formatOf(path) == importers::Format::Unknown && !isUsd(path)) {
             return refuse(SimResult::UnsupportedFormat,
@@ -4734,11 +4828,9 @@ struct Server::Impl {
             human = !humans::takeSpecs(*file).empty();
         }
         const bool primary = !human && primaryPath().empty();
-        spawned.push_back({name, path, at, primary, temporary, human});
+        spawned.push_back({name, path, at, primary, temporary, human, overlay, overlayTemporary});
         if (Status status = recompose([this] {
-                if (spawned.back().temporary) {
-                    std::filesystem::remove(spawned.back().path);
-                }
+                spawned.back().removeTemporaries();
                 spawned.pop_back();
             });
             !status.ok()) {
@@ -4750,6 +4842,91 @@ struct Server::Impl {
                  : primary ? " (the robot: ROS drives it)"
                            : " (passive: nothing drives it)"));
         return {{}, "/" + name};
+    }
+
+    /// The viewer's ImportRobot (protocol.md "Commands"). A file on this machine by `path`, or
+    /// the robot's text as `content` (inline: the builder's Test into the connected run, RFC
+    /// 0016 §7.2), named by its own <robot name> and renamed on a clash; an overlay by
+    /// `overlay_path` or inline `overlay_content`. Gives what the result's imported_stage_path
+    /// carries: the path for a file, the robot's scene path ("/name") for content.
+    Expected<std::string, std::string> importRobot(const v1::ImportRobot& request) {
+        if (!request.xacro_args().empty() || request.format() == v1::ImportRobot::FORMAT_XACRO) {
+            return Unexpected{std::string("xacro is not taken when importing: run xacro first")};
+        }
+        const auto inlineText = [](const v1::DataRef& ref,
+                                   const char* what) -> Expected<std::string, std::string> {
+            if (ref.location_case() != v1::DataRef::kInline) {
+                return Unexpected{std::string("send the ") + what +
+                                  " inline: blob and shared-memory content are not taken"};
+            }
+            return ref.inline_();
+        };
+        std::string overlay = request.overlay_path();
+        bool overlayTemporary = false;
+        if (request.has_overlay_content()) {
+            if (!overlay.empty()) {
+                return Unexpected{std::string("give the overlay by path or content, not both")};
+            }
+            auto text = inlineText(request.overlay_content(), "overlay");
+            if (!text) {
+                return Unexpected{text.error()};
+            }
+            auto written = writeOverlay(*text);
+            if (!written) {
+                return Unexpected{written.error()};
+            }
+            overlay = *written;
+            overlayTemporary = true;
+        }
+        const auto dropOverlay = [&] {
+            if (overlayTemporary) {
+                std::error_code ignored;
+                std::filesystem::remove(overlay, ignored);
+            }
+        };
+        if (!request.path().empty()) {
+            const ros2::SpawnOutcome outcome =
+                spawn(request.path(), "", true, importPose(), false, overlay, overlayTemporary);
+            if (outcome.outcome.result != ros2::SimResult::Ok) {
+                return Unexpected{outcome.outcome.message};
+            }
+            return request.path();
+        }
+        if (!request.has_content()) {
+            dropOverlay();
+            return Unexpected{std::string(
+                "name the robot file by its path on the server's machine, or send its content")};
+        }
+        auto text = inlineText(request.content(), "robot");
+        if (!text) {
+            dropOverlay();
+            return Unexpected{text.error()};
+        }
+        auto written = writeResource(*text);
+        if (!written) {
+            dropOverlay();
+            return Unexpected{written.error()};
+        }
+        const std::string extension = std::filesystem::path(*written).extension().string();
+        const char* expected = request.format() == v1::ImportRobot::FORMAT_URDF   ? ".urdf"
+                               : request.format() == v1::ImportRobot::FORMAT_SDF  ? ".sdf"
+                               : request.format() == v1::ImportRobot::FORMAT_MJCF ? ".xml"
+                                                                                  : nullptr;
+        if (expected != nullptr && extension != expected) {
+            std::error_code ignored;
+            std::filesystem::remove(*written, ignored);
+            dropOverlay();
+            return Unexpected{"the content is not " +
+                              std::string(v1::ImportRobot::Format_Name(request.format()))
+                                  .substr(std::string_view("FORMAT_").size()) +
+                              " (it reads as " + extension.substr(1) + ")"};
+        }
+        const ros2::SpawnOutcome outcome = spawn(*written, modelNameOf(*text), true, importPose(),
+                                                 true, overlay, overlayTemporary);
+        if (outcome.outcome.result != ros2::SimResult::Ok) {
+            return Unexpected{outcome.outcome.message};
+        }
+        return outcome.entityName;
     }
 
     /// removeRobot, with the simulation_interfaces result code.
@@ -4782,9 +4959,7 @@ struct Server::Impl {
                 !status.ok()) {
                 return {SimResult::Failed, status.message};
             }
-            if (removed.temporary) {
-                std::filesystem::remove(removed.path);
-            }
+            removed.removeTemporaries();
         } else if (extraAt != options.extraRobots.end()) {
             const ServerOptions::ExtraRobot removed = *extraAt;
             const auto index = extraAt - options.extraRobots.begin();
@@ -6729,10 +6904,7 @@ Server::~Server() {
         impl_->stopRecording("the server stopped");
     }
     for (const Impl::Spawned& robot : impl_->spawned) {
-        if (robot.temporary) {
-            std::error_code ignored;
-            std::filesystem::remove(robot.path, ignored);
-        }
+        robot.removeTemporaries();
     }
 }
 

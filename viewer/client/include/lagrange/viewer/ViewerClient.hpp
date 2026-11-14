@@ -40,6 +40,15 @@ struct ConnectionInfo {
     std::string message;  ///< Refusal reason or last connection error, for the status bar.
     bool canSeek{false};
     bool canStep{false};
+    bool canImport{false};  ///< ImportRobot spawns into the run (Capabilities.can_import)
+};
+
+/// The answer to a command the UI waits for (importRobotText, removeRobot).
+struct CommandOutcome {
+    std::uint64_t requestId{0};
+    bool ok{false};
+    std::string error;              ///< one line, when !ok
+    std::string importedStagePath;  ///< ImportRobot: the file, or "/name" for content
 };
 
 enum class RunState : std::uint8_t { Unknown = 0, Stopped = 1, Paused = 2, Running = 3, Error = 4 };
@@ -616,6 +625,16 @@ public:
     /// Asks the server to load a file that it can read: a robot description (.urdf, .xacro)
     /// or a recording (.mcap). The result arrives as a Notice and, on success, a new scene.
     void openFile(const std::string& path);
+    /// Spawns a robot from its text into the run (ImportRobot.content, inline; RFC 0016 §7.2),
+    /// with an overlay's text when not empty. Returns the request id; the answer arrives in
+    /// outcome(): its importedStagePath is the robot's scene path, "/name".
+    std::uint64_t importRobotText(const std::string& urdf, const std::string& overlay = {});
+    /// Removes a robot from the run by name (RemoveRobot). Returns the request id; the answer
+    /// arrives in outcome(). A server without RemoveRobot answers with an error.
+    std::uint64_t removeRobot(const std::string& name);
+    /// The answer to importRobotText() or removeRobot() with this id, or nullptr while it has
+    /// not arrived (the last few are kept).
+    [[nodiscard]] std::shared_ptr<const CommandOutcome> outcome(std::uint64_t requestId) const;
 
     [[nodiscard]] Notice notice() const { return *notice_.load(); }
 
@@ -747,6 +766,11 @@ private:
         std::make_shared<const std::map<std::uint32_t, PrimAttributes>>()};
     std::atomic<std::uint64_t> manyAttributesRequest_{0};
     std::atomic<std::shared_ptr<const ProfileCheck>> profileCheck_;
+    /// Request ids of importRobotText() and removeRobot() not answered yet (guarded by
+    /// commandMutex_), and the last answers to them, newest last.
+    std::vector<std::uint64_t> awaited_;
+    std::atomic<std::shared_ptr<const std::vector<CommandOutcome>>> outcomes_{
+        std::make_shared<const std::vector<CommandOutcome>>()};
     std::atomic<std::uint64_t> profileSerial_{0};
     void post(bool error, std::string text);
     std::atomic<std::uint64_t> signalBlocks_{0};
