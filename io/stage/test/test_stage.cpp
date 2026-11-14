@@ -1,6 +1,8 @@
 // The stage reader and writer: a model survives the round trip, hand-written USD reads as the
 // rules say, and stages that cannot be simulated are refused with the prim named.
 #include "lagrange/stage/Stage.hpp"
+#include "lagrange/world/FisheyeLens.hpp"
+#include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
@@ -406,6 +408,234 @@ def Xform "a" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
 )");
     ASSERT_FALSE(rate);
     EXPECT_NE(rate.error().find("sensor:rate"), std::string::npos) << rate.error();
+}
+
+/// A body with the sensors of RFC 0015 inside: `sensors` is spliced into it.
+std::filesystem::path opticsStage(const std::string& name, const std::string& sensors) {
+    return writeText(name, R"(#usda 1.0
+(
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "rig" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
+{
+    float physics:mass = 1
+)" + sensors + "\n}\n");
+}
+
+const LidarLayout::Settings& settingsOf(const Model& model, const std::string& name) {
+    const World::Sensors& s = model.world.sensors;
+    for (std::size_t i = 0; i < s.names.size(); ++i) {
+        if (s.names[i] == name) {
+            return s.settings[i];
+        }
+    }
+    ADD_FAILURE() << "no sensor " << name;
+    static const LidarLayout::Settings kNone;
+    return kNone;
+}
+
+TEST(StageReader, LidarPatternsAndFisheyeLensesReachTheSettings) {
+    // RFC 0015: each new attribute lands in the settings LidarLayout and FisheyeLens read.
+    auto model = loadStage(opticsStage("optics.usda", R"(
+    def Xform "flash" ( prepend apiSchemas = ["SensorAPI_1", "LidarAPI_1"] )
+    {
+        double sensor:rate = 10
+        int sensor:lidar:horizontalSamples = 16
+        int sensor:lidar:channels = 4
+        double2 sensor:lidar:horizontalFov = (-0.5, 0.5)
+        double2 sensor:lidar:verticalFov = (-0.2, 0.2)
+        double sensor:lidar:rangeMin = 0.1
+        double sensor:lidar:rangeMax = 30
+        uniform token sensor:lidar:scanPattern = "flash"
+    }
+    def Xform "rosette" ( prepend apiSchemas = ["SensorAPI_1", "LidarAPI_1"] )
+    {
+        double sensor:rate = 10
+        int sensor:lidar:horizontalSamples = 500
+        double sensor:lidar:rangeMin = 0.1
+        double sensor:lidar:rangeMax = 60
+        uniform token sensor:lidar:scanPattern = "rosette"
+        double sensor:lidar:rosette:fov = 0.8
+        double sensor:lidar:rosette:pointRate = 5000
+        double sensor:lidar:rosette:speed1 = 700
+    }
+    def Xform "vlp" ( prepend apiSchemas = ["SensorAPI_1", "LidarAPI_1"] )
+    {
+        double sensor:rate = 10
+        int sensor:lidar:horizontalSamples = 8
+        double sensor:lidar:rangeMin = 0.1
+        double sensor:lidar:rangeMax = 30
+        double[] sensor:lidar:channelElevations = [0.1, -0.3, 0.0]
+    }
+    def Xform "label" ( prepend apiSchemas = ["SensorAPI_1", "LidarAPI_1"] )
+    {
+        double sensor:rate = 10
+        int sensor:lidar:horizontalSamples = 8
+        int sensor:lidar:channels = 2
+        double2 sensor:lidar:verticalFov = (-0.2, 0.2)
+        double sensor:lidar:rangeMin = 0.1
+        double sensor:lidar:rangeMax = 30
+        uniform token sensor:lidar:scanPattern = "solid_state"
+    }
+    def Camera "fisheye" ( prepend apiSchemas = ["SensorAPI_1", "CameraSensorAPI_1"] )
+    {
+        double sensor:rate = 10
+        int sensor:camera:width = 64
+        int sensor:camera:height = 64
+        float focalLength = 10
+        float horizontalAperture = 36
+        uniform token sensor:camera:lensType = "equidistant"
+        double sensor:camera:cutoffAngle = 1.9
+        uniform token sensor:camera:distortionModel = "equidistant"
+        double[] sensor:camera:distortionCoeffs = [0.01, 0, 0, 0.0001]
+    }
+    def Camera "plain_fisheye" ( prepend apiSchemas = ["SensorAPI_1", "CameraSensorAPI_1"] )
+    {
+        double sensor:rate = 10
+        int sensor:camera:width = 64
+        int sensor:camera:height = 64
+        float focalLength = 10
+        float horizontalAperture = 36
+        uniform token sensor:camera:lensType = "equidistant"
+    }
+    def Camera "pinhole" ( prepend apiSchemas = ["SensorAPI_1", "CameraSensorAPI_1"] )
+    {
+        double sensor:rate = 10
+        int sensor:camera:width = 64
+        int sensor:camera:height = 64
+        float focalLength = 10
+        float horizontalAperture = 20
+        uniform token sensor:camera:distortionModel = "equidistant"
+        double[] sensor:camera:distortionCoeffs = [0.01, 0, 0, 0]
+    })")
+                               .string());
+    ASSERT_TRUE(model) << model.error();
+
+    const auto& flash = settingsOf(*model, "flash");
+    EXPECT_EQ(flash.at("pattern"), 1.0);
+    EXPECT_EQ(flash.at("motion_distortion"), 0.0);
+    EXPECT_EQ(LidarLayout::from(flash).beams(), 64U);
+
+    const auto& rosetteSettings = settingsOf(*model, "rosette");
+    const LidarLayout rosette = LidarLayout::from(rosetteSettings);
+    EXPECT_EQ(rosette.pattern, LidarLayout::Pattern::Rosette);
+    EXPECT_EQ(rosette.horizontal, 500U);
+    EXPECT_EQ(rosette.vertical, 1U);
+    EXPECT_EQ(rosette.rosette.pointRate, 5000.0);
+    EXPECT_EQ(rosette.rosette.speed1, 700.0);
+    EXPECT_EQ(rosette.rosette.speed2, LidarLayout::kRosetteSpeed2);  // the loader's, noted
+    EXPECT_NEAR(rosette.rosette.deflection1 + rosette.rosette.deflection2, 0.4, 1e-15);
+    EXPECT_FALSE(rosetteSettings.contains("rosette_speed_2"));
+    bool noted = false;
+    for (const std::string& note : model->notes) {
+        noted = noted || (note.find("/rig/rosette") != std::string::npos &&
+                          note.find("speed2, prismRatio") != std::string::npos);
+    }
+    EXPECT_TRUE(noted);
+
+    const LidarLayout vlp = LidarLayout::from(settingsOf(*model, "vlp"));
+    ASSERT_EQ(vlp.vertical, 3U);
+    EXPECT_EQ(vlp.elevation(0), -0.3);
+    EXPECT_EQ(vlp.elevation(1), 0.0);
+    EXPECT_EQ(vlp.elevation(2), 0.1);
+
+    // solid_state stays a label for the even grid (RFC 0015 §1): nothing new in its settings.
+    const auto& label = settingsOf(*model, "label");
+    EXPECT_FALSE(label.contains("pattern"));
+    EXPECT_FALSE(label.contains("motion_distortion"));
+    EXPECT_EQ(LidarLayout::from(label).pattern, LidarLayout::Pattern::Grid);
+
+    // w / 2f = 1.8: the angle across the width through the lens, not 2 atan(1.8).
+    const auto& fisheye = settingsOf(*model, "fisheye");
+    ASSERT_TRUE(FisheyeLens::isFisheye(fisheye));
+    const FisheyeLens lens = FisheyeLens::from(fisheye);
+    EXPECT_EQ(lens.cutoff, 1.9);
+    EXPECT_EQ(lens.k[0], 0.01);
+    EXPECT_EQ(lens.k[3], 0.0001);
+    EXPECT_NEAR(lens.distorted(fisheye.at("horizontal_fov") / 2.0), 1.8, 1e-12);
+    EXPECT_GT(fisheye.at("horizontal_fov"), std::numbers::pi);
+    const auto& plain = settingsOf(*model, "plain_fisheye");
+    EXPECT_NEAR(plain.at("horizontal_fov"), 3.6, 1e-12);  // k = 0: θ = θ_d
+    EXPECT_FALSE(plain.contains("fisheye_cutoff"));
+    EXPECT_EQ(FisheyeLens::from(plain).cutoff, 1.8);
+
+    // An old file's pinhole with equidistant distortion is read as before.
+    const auto& pinhole = settingsOf(*model, "pinhole");
+    EXPECT_FALSE(pinhole.contains("projection"));
+    EXPECT_EQ(pinhole.at("distortion_model"), 2.0);
+    EXPECT_NEAR(pinhole.at("horizontal_fov"), 2.0 * std::atan(1.0), 1e-12);
+
+    // Written and read again: the same beams, bit for bit, and the same lens (the focal length
+    // is a float in UsdGeomCamera, so the angle comes back to float precision).
+    const std::filesystem::path out = scratch("optics_again.usda");
+    ASSERT_TRUE(writeStage(*model, out.string(), {}));
+    auto again = loadStage(out.string());
+    ASSERT_TRUE(again) << again.error();
+    for (const char* name : {"flash", "rosette", "vlp", "label"}) {
+        const LidarLayout a = LidarLayout::from(settingsOf(*model, name));
+        const LidarLayout b = LidarLayout::from(settingsOf(*again, name));
+        ASSERT_EQ(a.beams(), b.beams()) << name;
+        for (std::uint64_t scan : {0U, 7U}) {
+            for (std::uint32_t i = 0; i < a.beams(); ++i) {
+                EXPECT_EQ(a.direction(i, scan), b.direction(i, scan)) << name << " " << i;
+            }
+        }
+    }
+    for (const char* name : {"fisheye", "plain_fisheye"}) {
+        const auto& a = settingsOf(*model, name);
+        const auto& b = settingsOf(*again, name);
+        ASSERT_TRUE(FisheyeLens::isFisheye(b)) << name;
+        EXPECT_EQ(FisheyeLens::from(a).k, FisheyeLens::from(b).k) << name;
+        EXPECT_EQ(a.contains("fisheye_cutoff"), b.contains("fisheye_cutoff")) << name;
+        EXPECT_NEAR(b.at("horizontal_fov") / a.at("horizontal_fov"), 1.0, 1e-6) << name;
+    }
+    EXPECT_FALSE(settingsOf(*again, "pinhole").contains("projection"));
+}
+
+TEST(StageReader, RefusesLidarPatternsAndLensesItCannotDraw) {
+    const auto refused = [](const std::string& name, const std::string& sensor,
+                            const std::string& message) {
+        auto model = loadStage(opticsStage(name, sensor).string());
+        ASSERT_FALSE(model) << name;
+        EXPECT_NE(model.error().find("/rig/s"), std::string::npos) << model.error();
+        EXPECT_NE(model.error().find(message), std::string::npos) << model.error();
+    };
+    const std::string lidar = R"(
+    def Xform "s" ( prepend apiSchemas = ["SensorAPI_1", "LidarAPI_1"] )
+    {
+        double sensor:rate = 10
+        int sensor:lidar:horizontalSamples = 8
+        double sensor:lidar:rangeMin = 0.1
+        double sensor:lidar:rangeMax = 30
+)";
+    refused("channels.usda",
+            lidar +
+                "int sensor:lidar:channels = 2\n"
+                "double[] sensor:lidar:channelElevations = [0.1, -0.3, 0.0]\n}",
+            "is not the number of sensor:lidar:channelElevations");
+    refused("wide_flash.usda",
+            lidar +
+                "uniform token sensor:lidar:scanPattern = \"flash\"\n"
+                "double2 sensor:lidar:horizontalFov = (-2, 2)\n}",
+            "within ±π/2");
+    const std::string camera = R"(
+    def Camera "s" ( prepend apiSchemas = ["SensorAPI_1", "CameraSensorAPI_1"] )
+    {
+        double sensor:rate = 10
+        int sensor:camera:width = 64
+        int sensor:camera:height = 64
+        float focalLength = 10
+        float horizontalAperture = 36
+        uniform token sensor:camera:lensType = "equidistant"
+)";
+    refused("plumb_bob.usda",
+            camera +
+                "uniform token sensor:camera:distortionModel = \"plumb_bob\"\n"
+                "double[] sensor:camera:distortionCoeffs = [0, 0, 0, 0, 0]\n}",
+            "not plumb_bob");
+    refused("unreachable.usda", camera + "double sensor:camera:cutoffAngle = 1.5\n}",
+            "cannot reach");
 }
 
 /// A wheel on a driven joint, its motor, a battery with a port, a bus and a load: the sample

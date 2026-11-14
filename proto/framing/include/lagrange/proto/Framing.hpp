@@ -25,6 +25,11 @@ inline constexpr std::size_t kFrameHeaderSize = 4;
 /// shared memory.
 inline constexpr std::uint32_t kDefaultMaxFrameSize = 64U * 1024U * 1024U;
 
+/// Largest frame a server accepts from a peer that has not yet been greeted: 64 KiB
+/// (RFC 0014 §1). A ClientHello is well under 1 KiB; the limit is raised to
+/// kDefaultMaxFrameSize once the handshake succeeds.
+inline constexpr std::uint32_t kPreHandshakeMaxFrameSize = 64U * 1024U;
+
 /// Appends one frame (header + payload) to `out`.
 /// Returns false and leaves `out` unchanged if the payload is larger than `maxFrameSize`.
 [[nodiscard]] bool appendFrame(std::span<const std::byte> payload, std::vector<std::byte>& out,
@@ -80,6 +85,11 @@ public:
     [[nodiscard]] std::size_t bufferedBytes() const { return buffer_.size() - begin_; }
 
     [[nodiscard]] std::uint32_t maxFrameSize() const { return maxFrameSize_; }
+
+    /// Changes the size limit for frames not yet returned by next(). Bytes already buffered
+    /// stay; a frame's header is checked only in next(), so every frame is checked once, against
+    /// the limit in force when it comes out. It does not revive a stream after an Error.
+    void setMaxFrameSize(std::uint32_t maxFrameSize) { maxFrameSize_ = maxFrameSize; }
 
 private:
     void compact();

@@ -8,6 +8,14 @@ and `test_schemas.py` checks it.
 
 ## Unreleased
 
+- **Sensor library** (RFC 0015): `flash` and `rosette` appended to `sensor:lidar:scanPattern`;
+  `sensor:lidar:channelElevations` (a channel table) and five `sensor:lidar:rosette:*` (fov,
+  pointRate, speed1, speed2, prismRatio; no fallbacks) on `LidarAPI_1`; `sensor:camera:lensType`
+  (`gnomonical`, `equidistant`) and `sensor:camera:cutoffAngle` (no fallback) on
+  `CameraSensorAPI_1`, the fisheye's k1..k4 being the existing `distortionModel = "equidistant"`
+  and `distortionCoeffs`. Additions, nothing to migrate; a file that uses them, opened by
+  Lagrange 1.2 or older, runs as a grid lidar and a pinhole camera.
+
 - **EMI library** (RFC 0013): `wire` appended to `emi:sourceType`; `emi:path`, `emi:returnOffset`
   and `emi:currentSignal` on `EmiSourceAPI_1`. Additions, nothing to migrate.
 

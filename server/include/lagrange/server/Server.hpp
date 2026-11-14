@@ -193,10 +193,10 @@ struct ServerOptions {
     /// Where edits from the viewer are saved when it asks (SetAttribute save_to_session_layer):
     /// the edited model as a USD layer. Empty: $XDG_STATE_HOME/lagrange/<robot>.session.usda.
     std::string sessionPath;
-    /// Limits on viewer connections before and after the handshake. PROTOTYPE for RFC 0014
-    /// (a draft awaiting the owner's acceptance): the defaults and names may change with it.
-    /// Over a limit, a connection is accepted, told why in a ServerHello refusal (not over TLS,
-    /// whose handshake has not run yet) and closed.
+    /// Limits on viewer connections before and after the handshake (RFC 0014). Over a limit, a
+    /// connection is accepted, told why in a ServerHello refusal (not over TLS, whose handshake
+    /// has not run yet) and closed. Until its ClientHello a connection may also send frames of
+    /// at most proto::kPreHandshakeMaxFrameSize (64 KiB, a constant, not a setting).
     struct ConnectionLimits {
         std::size_t maxConnections{32};  // open connections, greeted or not
         std::size_t maxPending{16};      // connections that have not yet sent their ClientHello

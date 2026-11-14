@@ -255,8 +255,11 @@ Across them:
   against logs of the real parts. The data-sheet defaults were checked against the documents on
   2026-11-12 (`docs/plan/sensor-defaults-verification-2026-11-12.md`); the defaults marked
   illustrative in §9 have no primary source: give your part's figures.
-- **Lidar**: no beam divergence or multiple returns; scan patterns come from URDF only (not SDFormat
-  or USD).
+- **Lidar**: no beam divergence or multiple returns. Scan patterns and fisheye lenses come from
+  URDF, SDFormat (Lagrange's `lagrange:` elements, [formats.md §9.3](../design/formats.md)) and USD
+  (`LidarAPI_1`'s `scanPattern`, `channelElevations`, `rosette:*`; `CameraSensorAPI_1`'s `lensType`,
+  `cutoffAngle`; [formats.md §3.8](../design/formats.md)), and `lagrange_import` keeps them; a USD
+  file that uses them runs as a grid lidar and a pinhole camera in Lagrange 1.2 or older.
 - **Camera**: no motion blur, absolute radiance or colour filter array; a fisheye has no vignetting,
   rolling shutter or exposure model, and `detections`, `stereo_camera` and `event_camera` take
   their camera as a pinhole.

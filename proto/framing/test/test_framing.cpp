@@ -170,6 +170,73 @@ TEST(FrameReader, OneOverTheLimitIsRejected) {
     EXPECT_EQ(reader.next().status, Status::Error);
 }
 
+// RFC 0014 §1: a server reads a small limit until the handshake, then raises it.
+TEST(FrameReader, OneOverALoweredLimitIsOversize) {
+    std::vector<std::byte> stream;
+    ASSERT_TRUE(appendFrame(bytes("123456789"), stream));
+    FrameReader reader;  // the default 64 MiB
+    reader.setMaxFrameSize(8);
+    EXPECT_EQ(reader.maxFrameSize(), 8U);
+    reader.feed(stream);
+    EXPECT_EQ(reader.next().status, Status::Error);
+    EXPECT_EQ(reader.error(), FrameReader::Error::Oversize);
+}
+
+TEST(FrameReader, RaisingTheLimitAppliesToFramesAlreadyBuffered) {
+    // A small greeting and, pipelined behind it, a frame over the first limit: the greeting
+    // comes out under the small limit, the limit is raised, and the second frame comes out.
+    std::vector<std::byte> stream;
+    ASSERT_TRUE(appendFrame(bytes("hi"), stream));
+    ASSERT_TRUE(appendFrame(bytes("a longer second frame"), stream));
+    FrameReader reader(4);
+    reader.feed(stream);
+    const auto first = reader.next();
+    ASSERT_EQ(first.status, Status::Frame);
+    EXPECT_EQ(text(first.payload), "hi");
+    reader.setMaxFrameSize(64);
+    const auto second = reader.next();
+    ASSERT_EQ(second.status, Status::Frame);
+    EXPECT_EQ(text(second.payload), "a longer second frame");
+    EXPECT_EQ(reader.next().status, Status::NeedMore);
+}
+
+TEST(FrameReader, AHeaderBufferedUnderTheLimitIsCheckedWhenItComesOut) {
+    // Only next() checks a header: a partly buffered frame over a limit lowered meanwhile is
+    // refused, and one under a limit raised meanwhile is returned.
+    std::vector<std::byte> stream;
+    ASSERT_TRUE(appendFrame(bytes("0123456789"), stream));
+    FrameReader lowered(64);
+    lowered.feed(std::span{stream}.first(6));
+    EXPECT_EQ(lowered.next().status, Status::NeedMore);
+    lowered.setMaxFrameSize(4);
+    lowered.feed(std::span{stream}.subspan(6));
+    EXPECT_EQ(lowered.next().status, Status::Error);
+
+    FrameReader raised(4);
+    raised.feed(std::span{stream}.first(3));  // not yet a whole header: nothing checked
+    EXPECT_EQ(raised.next().status, Status::NeedMore);
+    raised.setMaxFrameSize(64);
+    raised.feed(std::span{stream}.subspan(3));
+    const auto frame = raised.next();
+    ASSERT_EQ(frame.status, Status::Frame);
+    EXPECT_EQ(text(frame.payload), "0123456789");
+}
+
+TEST(FrameReader, RaisingTheLimitAfterOversizeDoesNotReviveTheStream) {
+    std::vector<std::byte> stream;
+    ASSERT_TRUE(appendFrame(bytes("123456789"), stream));
+    FrameReader reader(8);
+    reader.feed(stream);
+    EXPECT_EQ(reader.next().status, Status::Error);
+    reader.setMaxFrameSize(1024);
+    std::vector<std::byte> valid;
+    ASSERT_TRUE(appendFrame(bytes("ok"), valid));
+    reader.feed(valid);
+    EXPECT_EQ(reader.next().status, Status::Error);
+    EXPECT_EQ(reader.error(), FrameReader::Error::Oversize);
+    EXPECT_EQ(reader.bufferedBytes(), 0U);
+}
+
 TEST(FrameReader, LongStreamWithRandomChunkingKeepsEveryFrameIntact) {
     // Enough data to trigger buffer compaction many times.
     std::mt19937 rng(20261013);  // fixed seed: the test is deterministic
@@ -259,6 +326,12 @@ TEST(FrameReaderHarness, SurvivesPseudoRandomStreams) {
             b = static_cast<std::byte>(rng() % 4 == 0 ? rng() % 256 : rng() % 8);
         }
         lagrange::proto::fuzz::runFrameReader(data);
+        if (!data.empty()) {
+            // The same stream in the other mode (RFC 0014: a small limit, raised after the
+            // first frame); the harness aborts if a frame or the buffer breaks its limit.
+            data.front() ^= std::byte{lagrange::proto::fuzz::kRaiseLimitMode};
+            lagrange::proto::fuzz::runFrameReader(data);
+        }
     }
     SUCCEED();
 }
@@ -271,6 +344,23 @@ TEST(FrameReaderHarness, ExtractsFramesFromAValidStream) {
         ASSERT_TRUE(appendFrame(ping, stream));
     }
     EXPECT_EQ(lagrange::proto::fuzz::runFrameReader(stream), 10U);
+}
+
+TEST(FrameReaderHarness, RaisesItsLimitAfterTheFirstFrameInTheSecondMode) {
+    // A first frame under the small limit and later ones over it: all come out, because the
+    // harness raises the limit after the first, as the server does after the ClientHello.
+    std::vector<std::byte> stream = {std::byte{7 | lagrange::proto::fuzz::kRaiseLimitMode}};
+    ASSERT_TRUE(appendFrame(bytes("hello"), stream));
+    const std::string large(lagrange::proto::fuzz::kHarnessSmallMaxFrameSize + 100, 'x');
+    for (int i = 0; i < 3; ++i) {
+        ASSERT_TRUE(appendFrame(bytes(large), stream));
+    }
+    EXPECT_EQ(lagrange::proto::fuzz::runFrameReader(stream), 4U);
+    // A first frame over the small limit ends the stream at once.
+    std::vector<std::byte> early = {std::byte{7 | lagrange::proto::fuzz::kRaiseLimitMode}};
+    ASSERT_TRUE(appendFrame(bytes(large), early));
+    ASSERT_TRUE(appendFrame(bytes("hello"), early));
+    EXPECT_EQ(lagrange::proto::fuzz::runFrameReader(early), 0U);
 }
 
 }  // namespace

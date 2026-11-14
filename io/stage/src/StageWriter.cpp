@@ -3,6 +3,8 @@
 #include "Math.hpp"
 #include "Schemas.hpp"
 #include "lagrange/stage/Stage.hpp"
+#include "lagrange/world/FisheyeLens.hpp"
+#include "lagrange/world/LidarLayout.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
@@ -222,6 +224,55 @@ private:
         return {};
     }
 
+    /// A lidar's scan pattern (RFC 0015): the grid writes nothing new; a channel table, a flash
+    /// array and a rosette (its five numbers always, so the file does not lean on the loader's).
+    static void writeLidarPattern(const UsdPrim& prim,
+                                  const std::map<std::string, double, std::less<>>& settings) {
+        const LidarLayout layout = LidarLayout::from(settings);
+        const auto token = [&prim](const char* value) {
+            prim.CreateAttribute(TfToken("sensor:lidar:scanPattern"), SdfValueTypeNames->Token,
+                                 false, SdfVariabilityUniform)
+                .Set(TfToken(value));
+        };
+        const auto real = [&prim](const char* name, double value) {
+            prim.CreateAttribute(TfToken(name), SdfValueTypeNames->Double).Set(value);
+        };
+        VtArray<double> table;  // as given, in any order
+        for (std::size_t ring = 0;; ++ring) {
+            const auto it = settings.find("vertical_angle_" + std::to_string(ring));
+            if (it == settings.end()) {
+                break;
+            }
+            table.push_back(it->second);
+        }
+        if (!table.empty()) {
+            prim.CreateAttribute(TfToken("sensor:lidar:channelElevations"),
+                                 SdfValueTypeNames->DoubleArray)
+                .Set(table);
+            prim.GetAttribute(TfToken("sensor:lidar:channels")).Set(static_cast<int>(table.size()));
+        }
+        if (layout.pattern == LidarLayout::Pattern::Flash) {
+            token("flash");
+        } else if (layout.pattern == LidarLayout::Pattern::Rosette) {
+            token("rosette");
+            const auto get = [&settings](const char* key, double fallback) {
+                const auto it = settings.find(key);
+                return it == settings.end() ? fallback : it->second;
+            };
+            prim.GetAttribute(TfToken("sensor:lidar:channels")).Set(1);
+            prim.GetAttribute(TfToken("sensor:lidar:horizontalSamples"))
+                .Set(static_cast<int>(layout.horizontal));
+            real("sensor:lidar:rosette:fov", get("rosette_fov", LidarLayout::kRosetteFov));
+            real("sensor:lidar:rosette:pointRate",
+                 get("rosette_point_rate", LidarLayout::kRosettePointRate));
+            real("sensor:lidar:rosette:speed1",
+                 get("rosette_speed_1", LidarLayout::kRosetteSpeed1));
+            real("sensor:lidar:rosette:speed2",
+                 get("rosette_speed_2", LidarLayout::kRosetteSpeed2));
+            real("sensor:lidar:rosette:prismRatio", get("rosette_prism_ratio", 1.0));
+        }
+    }
+
     Expected<void, std::string> writeSensor(const UsdPrim& prim, std::size_t s) {
         const World::Sensors& sensors = m_.world.sensors;
         const auto& settings = sensors.settings[s];
@@ -262,6 +313,7 @@ private:
                                      SdfValueTypeNames->Bool)
                     .Set(false);
             }
+            writeLidarPattern(prim, settings);
         } else if (sensors.type[s] == SensorType::Camera) {
             prim.ApplyAPI(TfToken("CameraSensorAPI_1"));
             const double width = get("width", 640.0);
@@ -273,7 +325,12 @@ private:
             // The lens: square pixels, so the apertures have the image's aspect ratio.
             const UsdGeomCamera camera(prim);
             const double aperture = kHorizontalApertureMm;
-            const double focal = aperture / 2.0 / std::tan(get("horizontal_fov", 1.047) / 2.0);
+            // A fisheye's image height is f θ_d(θ), a pinhole's f tan θ (RFC 0015).
+            const bool fisheye = FisheyeLens::isFisheye(settings);
+            const double halfFov = get("horizontal_fov", 1.047) / 2.0;
+            const double focal =
+                aperture / 2.0 /
+                (fisheye ? FisheyeLens::from(settings).distorted(halfFov) : std::tan(halfFov));
             camera.CreateFocalLengthAttr().Set(static_cast<float>(focal));
             camera.CreateHorizontalApertureAttr().Set(static_cast<float>(aperture));
             camera.CreateVerticalApertureAttr().Set(static_cast<float>(aperture * height / width));
@@ -289,7 +346,13 @@ private:
                 token("sensor:camera:shutter", "rolling");
                 real("sensor:camera:rollingShutterTime", it->second);
             }
-            if (const double model = get("distortion_model", 0.0); model > 0.0) {
+            if (fisheye) {
+                token("sensor:camera:lensType", "equidistant");
+                if (const auto it = settings.find("fisheye_cutoff"); it != settings.end()) {
+                    real("sensor:camera:cutoffAngle", std::min(it->second, FisheyeLens::kPi));
+                }
+            }
+            if (const double model = fisheye ? 2.0 : get("distortion_model", 0.0); model > 0.0) {
                 token("sensor:camera:distortionModel", model == 1.0 ? "plumb_bob" : "equidistant");
                 VtArray<double> coeffs;
                 for (int k = 1; k <= (model == 1.0 ? 5 : 4); ++k) {
@@ -848,20 +911,6 @@ private:
 
 Expected<void, std::string> writeStage(const Model& model, const std::string& path,
                                        const WriteOptions& options) {
-    // USD 1.x has no attributes for lidar scan patterns or fisheye lenses yet (RFC 0015, Draft):
-    // written as they are, the patterns came back as an even grid and a fisheye over 180° got a
-    // negative focal length the loader refuses. Refuse instead of writing a different sensor.
-    for (std::size_t s = 0; s < model.world.sensors.names.size(); ++s) {
-        const auto& settings = model.world.sensors.settings[s];
-        const bool pattern = settings.contains("pattern") || settings.contains("vertical_angle_0");
-        const bool fisheye = settings.contains("projection");
-        if (pattern || fisheye) {
-            return Unexpected{"sensor '" + model.world.sensors.names[s] + "' has " +
-                              (pattern ? "a lidar scan pattern" : "a fisheye lens") +
-                              ", which USD cannot carry yet (RFC 0015); run the robot from its "
-                              "URDF instead"};
-        }
-    }
     registerSchemaLibraries();
     UsdStageRefPtr stage = UsdStage::CreateInMemory();
     if (!stage) {

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft (2026-11-12), for the owner to accept or reject |
+| Status | Accepted (2026-11-14) by the owner, with the proposed answer to each open question; implemented (see "Implementation notes") |
 | Created | 2026-11-12 |
 | Affects | `schemas/sensor/` (additions to `LidarAPI_1` and `CameraSensorAPI_1`), `io/stage/` (reader and writer), `io/importers/` (SDFormat), `server/src/Robot.cpp` (URDF, no change in meaning), `schemas/CHANGELOG.md`, `docs/design/formats.md` §3.8 and §9, `docs/design/domains/sensors.md` |
 | Builds on | RFC 0002 (schemas), RFC 0007 (the 1.x freeze) |
@@ -230,3 +230,34 @@ notes.
 5. *A `lagrange:` namespace URI* for `xmlns:lagrange` in SDFormat files? Proposed: the
    documentation site's URL, `https://open-physical-systems.github.io/Lagrange`, documented in
    `formats.md` §9; libsdformat does not require the declaration.
+
+## Implementation notes (2026-11-14)
+
+Built as designed, with the proposed answer to each open question: the rosette as `rosette:*`
+attributes on `LidarAPI_1` without fallbacks, the fisheye's field of view through the lens from
+focal length and aperture, the plain SDFormat elements read beside the `lagrange:`-prefixed ones,
+and the namespace URI `https://open-physical-systems.github.io/Lagrange` (formats.md §9.3).
+
+| Part | Where |
+|---|---|
+| Schema additions | `schemas/sensor/schema.usda`; `schemas/CHANGELOG.md`; `test_schemas.py::test_lidar_patterns_and_fisheye_lenses_are_additions` (appended tokens, units, no fallbacks); `frozen_1_0.json` unchanged |
+| Reader | `io/stage/src/StageReader.cpp` `readLidarPattern`, `readFisheye`; refusals with the prim path for `channels` ≠ the table's length, a flash lidar beyond ±π/2, a rosette with more than one channel, `plumb_bob` or a wrong coefficient count on an equidistant lens, a `cutoffAngle` outside (0, π], and `w / 2f` beyond the lens's reach before its cutoff; unauthored rosette numbers are a note naming them |
+| Writer | `io/stage/src/StageWriter.cpp` `writeLidarPattern`; a fisheye's `focalLength = w / (2 θ_d(hfov / 2))`, `lensType`, `cutoffAngle` (clamped to π as `FisheyeLens` does); the refusal to write patterns and fisheyes is removed |
+| SDFormat | `io/importers/src/SdfImporter.cpp` `lidarPattern`, `cameraLens`: `<cutoff_angle>` only when the file gives it (`GetExplicitlySetInFile`), so SDFormat's 1.5707 default does not override the URDF rule; a rosette without `<scan><horizontal>` keeps its own point count, as in URDF |
+| Tests | `test_stage` (`LidarPatternsAndFisheyeLensesReachTheSettings`, which also writes and reads again; `RefusesLidarPatternsAndLensesItCannotDraw`), `test_importers` (`ImportSdf.LidarPatternsAndFisheyeLenses`, prefixed and plain), `test_server` (`OpticsImport.PatternsAndLensesSurviveTheTripThroughUsd`, `OpticsImport.SdformatGivesTheUrdfRigsBeamsAndLens`) |
+
+Departures from the test plan:
+
+- The fisheye's angle and focal length come back to **1e-6 relative, not 1e-12**:
+  `UsdGeomCamera.focalLength` and `horizontalAperture` are `float` in OpenUSD, so the angle
+  through θ_d⁻¹ carries float rounding (the pinhole path has always had the same). k1..k4 and the
+  cutoff come back exactly. Lidar beams are bit for bit, scans 0 and 7 of the rosette included.
+- The run comparison checks the CPU lidar's `ranges` (and the rosette's `directions`) from the
+  URDF and from its USD, bit for bit; the camera depth comparison on the software device is not
+  in the test (the rig runs with cameras off, as the existing optics test does), since the
+  fisheye's focal length differs at float precision anyway.
+- Old files: the existing sample assets (`test_usd_assets`), a `solid_state` lidar and a pinhole
+  with `equidistant` distortion read as before (`test_stage`).
+- Determinism (step 5) was checked by hand, not in CI: the rig imported by `lagrange_import` and run
+  by `lagrange determinism` with a rigid-body-and-sensors profile (CPU lidar) gave 11 identical
+  state hashes over 1 s.

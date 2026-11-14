@@ -130,7 +130,7 @@ constexpr double kSelfEmiSliceCell = 0.04;        // m: a robot's own wiring (RF
 constexpr std::int64_t kMaxStepWallNs = 40'000'000;
 constexpr std::size_t kMaxQueuedBytes = 32U * 1024U * 1024U;  // a viewer that does not read
 constexpr std::size_t kMaxLogRecords = 500;
-// RFC 0014 (prototype): most peer addresses whose connection rate is remembered; beyond it the
+// RFC 0014: most peer addresses whose connection rate is remembered; beyond it the
 // buckets that are full again are forgotten, and if none is, all of them.
 constexpr std::size_t kMaxRatePeers = 4096;
 constexpr std::int64_t kRefusalLogPeriodNs = 1'000'000'000;  // one log line a second at most
@@ -551,7 +551,7 @@ struct Server::Impl {
     proto::Listener listener;
     std::vector<std::unique_ptr<Session>> sessions;
     std::uint64_t nextSessionId{1};
-    /// RFC 0014 (prototype): new TCP connections per peer address, a token bucket each.
+    /// RFC 0014: new TCP connections per peer address, a token bucket each.
     struct PeerBucket {
         double tokens{0.0};
         Clock::time_point last{};
@@ -3194,6 +3194,9 @@ struct Server::Impl {
         caps.set_tier(0);
         session.send(reply);
         session.greeted = true;
+        // A greeted viewer may send large frames (ImportRobot with a robot file inline): from
+        // the next frame on, the normal limit (RFC 0014 §1).
+        session.connection.setMaxIncomingFrameSize(proto::kDefaultMaxFrameSize);
         if (replay) {
             session.send(recordingInfo());
         }
@@ -6146,7 +6149,13 @@ struct Server::Impl {
             stats.set_tick_ms_max(static_cast<double>(most) / 1e6);
         }
         stats.set_memory_bytes(residentBytes());
-        stats.set_viewers(static_cast<std::uint32_t>(sessions.size()));
+        // Viewers that have been greeted (RFC 0014, open question 4): connections still waiting
+        // for their handshake are not viewers yet.
+        stats.set_viewers(static_cast<std::uint32_t>(
+            std::count_if(sessions.begin(), sessions.end(), [](const auto& session) {
+                return session->greeted &&
+                       session->connection.state() != proto::Connection::State::Closed;
+            })));
         stats.set_estimated(false);
         for (const ModuleCost& cost : costs) {
             v1::ServerStats::Module& m = *stats.add_modules();
@@ -6189,6 +6198,9 @@ struct Server::Impl {
             if (!connection) {
                 return;
             }
+            // Until it is greeted, a peer may send frames of at most 64 KiB (RFC 0014 §1);
+            // handshake() raises the limit. What the server sends keeps the 64 MiB limit.
+            connection->setMaxIncomingFrameSize(proto::kPreHandshakeMaxFrameSize);
             const Clock::time_point now = Clock::now();
             if (const char* reason = admit(*connection, now); reason != nullptr) {
                 refuse(*connection, reason, now);
@@ -6201,7 +6213,7 @@ struct Server::Impl {
         }
     }
 
-    // --- Connection limits (RFC 0014, a draft: this is its prototype) ---------------------------
+    // --- Connection limits (RFC 0014) -----------------------------------------------------------
 
     /// Why a new connection is refused, or nullptr when it may stay.
     const char* admit(const proto::Connection& connection, Clock::time_point now) {
@@ -6340,6 +6352,15 @@ struct Server::Impl {
         for (;;) {
             const proto::FrameReader::Result frame = session.connection.next();
             if (frame.status == proto::FrameReader::Status::Error) {
+                if (!session.greeted) {
+                    // RFC 0014 §1: a frame over 64 KiB before the handshake. The reader has
+                    // dropped what it held; tell the peer why and close.
+                    refuse(session.connection,
+                           "a frame larger than " +
+                               std::to_string(proto::kPreHandshakeMaxFrameSize / 1024U) +
+                               " KiB before the handshake",
+                           Clock::now());
+                }
                 session.connection.close();
                 return;
             }

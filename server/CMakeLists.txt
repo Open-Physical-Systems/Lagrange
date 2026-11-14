@@ -362,6 +362,20 @@ if(BUILD_TESTING)
             LAGRANGE_TEST_PLUGIN_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_plugins"
             LAGRANGE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/test/data"
     )
+    # RFC 0014: connection limits and the QA #7 repro (a 3000-connection flood), apart from
+    # test_server so that it does not grow.
+    ament_add_gtest(
+        test_connection_limits
+        test/test_connection_limits.cpp
+        TIMEOUT 60
+    )
+    target_link_libraries(test_connection_limits lagrange_server)
+    target_compile_definitions(
+        test_connection_limits
+        PRIVATE
+            LAGRANGE_TEST_AMR_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/amr_diffdrive/amr_diffdrive.urdf"
+    )
+    lagrange_target_defaults(test_connection_limits)
     ament_add_gtest(test_command_line test/test_command_line.cpp)
     target_link_libraries(test_command_line lagrange_server_cli)
     target_include_directories(

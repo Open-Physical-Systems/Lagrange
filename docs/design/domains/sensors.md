@@ -551,9 +551,14 @@ repeating, the same scan and beam always the same direction) and both lidar tier
 refraction nonlinearity (third-order Risley theory) and the Mid-40's actual speeds; the Avia's own
 non-repetitive pattern (70.4° × 77.2°, six beams) is not modelled.
 
-These patterns come from URDF (`<gazebo reference=L><sensor type="ray|lidar">`); SDFormat (whose
-`<lidar>` element has no place for them) and USD (`LidarSensorAPI_1` is frozen, RFC 0007) cannot carry
-them yet: owed, with a schema addition.
+These patterns come from all three formats (RFC 0015): URDF (`<gazebo reference=L><sensor
+type="ray|lidar">`, as above); SDFormat, whose `<lidar>` has no place for them, from Lagrange's custom
+elements `<lagrange:pattern>`, `<scan><vertical><lagrange:angles>` and `<lagrange:rosette>` (or the
+plain names, as in URDF; formats.md §9.3); and USD, `LidarAPI_1`'s `scanPattern` `flash` or `rosette`,
+`channelElevations` and `rosette:fov`, `pointRate`, `speed1`, `speed2`, `prismRatio` (formats.md §3.8).
+The rosette's USD attributes have no fallback: unauthored, the values above are assumed and the
+loader says so. `lagrange_import` writes all of it, and the round trip URDF → USD → run gives the same
+beams bit for bit (`OpticsImport.PatternsAndLensesSurviveTheTripThroughUsd`).
 
 ## Fisheye cameras (as built)
 
@@ -600,9 +605,17 @@ puts them, at their ranges.
 
 Not yet: vignetting, rolling shutter and exposure together with a fisheye (refused at start); a fog
 field's veil and the `detections`/`stereo_camera`/`event_camera` kinds, which still take the camera as a
-pinhole; other lens types (stereographic, equisolid, orthographic); SDFormat's `<lens>` and USD (a
-`CameraSensorAPI_1` equidistant lens is the same model but stays on the pinhole render, below about
-160°; selecting the cube render from USD needs a schema addition, owed).
+pinhole; other lens types (stereographic, equisolid, orthographic).
+
+From SDFormat (RFC 0015): `<lens><type>equidistant</type>` and `<cutoff_angle>` as SDFormat defines
+them, k1..k4 from `<lens><lagrange:k1>`..`<lagrange:k4>` (or plain `<k1>`.., as in URDF; formats.md
+§9.3). From USD: `CameraSensorAPI_1`'s `lensType = "equidistant"` selects this fisheye, with k1..k4 from
+`distortionModel = "equidistant"` and `distortionCoeffs` and the cutoff from `cutoffAngle`; the angle
+across the width comes from `UsdGeomCamera`'s focal length f and horizontal aperture w through the lens,
+`2 θ_d⁻¹(w / 2f)`, so a 200° lens has a positive focal length (formats.md §3.8). Without `lensType`, an
+`equidistant` `distortionModel` stays what it was: the same distortion on the pinhole render, below
+about 160°. `lagrange_import` writes the lens, and the round trip gives the same k and cutoff exactly
+and the same angle to the float precision of `focalLength`.
 
 ## Sensor faults (as built)
 

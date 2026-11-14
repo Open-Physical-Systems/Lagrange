@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft (2026-11-12), for the owner to accept or reject |
+| Status | Accepted (2026-11-14) by the owner, with the proposed answer to each open question; gated merges of its steps pre-approved |
 | Created | 2026-11-12 |
 | Affects | `server/` (connection policy), `proto/framing/` and `proto/transport/` (a C++ API addition, no wire or `.proto` change), `docs/design/protocol.md` §2, `docs/design/security.md` §1, `tools/cli/` (options, additive) |
 | Builds on | RFC 0003 (protocol and transport), RFC 0007 (the 1.x freeze) |
@@ -228,8 +228,23 @@ Commit `feat(server): connection limits, handshake timeout and first-frame rule 
 RFC 0014)` on `night2/rfc-drafts` implements §2–§6 without the command-line options, and the
 tests of item 3. It changes nothing under `proto/`, so it does not include §1, which is the part
 that closes the QA repro (with the prototype alone, 16 waiting connections can still each hold
-64 MiB: 1 GiB, against an unbounded amount today). It awaits acceptance of this RFC and is not to
-be merged before.
+64 MiB: 1 GiB, against an unbounded amount today). It was merged to `dev` with #331; §1 and the
+rest followed after acceptance (Implementation, below).
+
+## Implementation (2026-11-14)
+
+What landed after acceptance, on `feat/rfc-0014-frame-limits` (the §2–§5 prototype was already
+on `dev` with #331):
+
+| Part | Where | Notes |
+|---|---|---|
+| §1 frame cap | `FrameReader::setMaxFrameSize`, `proto::kPreHandshakeMaxFrameSize` (`Framing.hpp`), `Connection::setMaxIncomingFrameSize` and `maxIncomingFrameSize` (`Connection.hpp`); `Server.cpp` `accept()` lowers the incoming limit to 64 KiB, `handshake()` raises it to 64 MiB after `greeted = true` | C++ additions only: no wire or `.proto` change. A frame over the cap before the handshake is refused ("connection refused: a frame larger than 64 KiB before the handshake") and closed. The constant lives in `lagrange_proto` so that the viewer side (§7) can use it later |
+| §6 options | `lagrange_server --max-connections N --max-pending N --handshake-timeout S --peer-rate BURST,PER_SECOND` (`CommandLine.cpp`, `test_command_line`) | additive; the 64 KiB cap is a constant |
+| Question 4 | `ServerStats.viewers` counts greeted, open sessions only | |
+| Test plan 1 | `test_framing`: `FrameReader.OneOverALoweredLimitIsOversize`, `RaisingTheLimitAppliesToFramesAlreadyBuffered`, `AHeaderBufferedUnderTheLimitIsCheckedWhenItComesOut`, `RaisingTheLimitAfterOversizeDoesNotReviveTheStream`; `test_transport`: `TransportTest.TheIncomingLimitCanBeRaisedAfterTheHello` | |
+| Test plan 2 | `FrameReaderHarness.hpp`: the top bit of the first byte picks the second mode (64 bytes, raised to 4096 after the first frame; aborts on a frame over the limit in force or a buffer over one chunk + limit + header). `test_framing` runs every pseudo-random stream in both modes | `fuzz_frame_reader` built with Clang 21 and `-DLAGRANGE_BUILD_FUZZERS=ON` (on Ubuntu 26.04 Clang needs `--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/15` in `CMAKE_CXX_FLAGS` when GCC 16's libstdc++ dev files are not installed) and run for 120 s, 74 million inputs, no crash; without ASan. `TODO(verify)`: the nightly hour under ASan once CI is back |
+| Test plans 3 and 4 | `server/test/test_connection_limits.cpp`, binary `test_connection_limits` (60 s timeout; the prototype's `ConnectionLimitsTest.*` moved there from `test_server`) | QA #7 as tests: 8 clients announcing 60 MiB and offering 8 MiB each are refused at their header, and resident memory stays within 10 MiB (with the cap disabled the same test measured 76 MB → 189 MB and failed); 3000 connections in a loop on a Unix socket and on TCP with a token leave at most 16 waiting, all others are refused, memory stays flat and a viewer is greeted at the end. Also `OnlyGreetedSessionsCountAsViewers` and `TheFrameLimitIsRaisedByTheHandshake` (a 100 KiB frame pipelined behind the `ClientHello` is accepted; the same frame from a stranger is refused) |
+| Not done | §7 (the viewer-side cap) and question 6 (the mock server), as proposed: later or not at all. Question 3: no `refused_connections` field | |
 
 ## Alternatives considered
 

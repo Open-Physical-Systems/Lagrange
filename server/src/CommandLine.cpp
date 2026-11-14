@@ -99,6 +99,10 @@ void printServerOptions(std::FILE* out) {
         "  --tls-cert FILE --tls-key FILE  certificate chain and key (PEM) for a tls:// --listen\n"
         "  --auth-token-file FILE  TCP clients must send this token (first line of FILE);\n"
         "                         required to listen beyond loopback\n"
+        "  --max-connections N  open viewer connections at most (default 32)\n"
+        "  --max-pending N      connections waiting for their handshake at most (default 16)\n"
+        "  --handshake-timeout S  close a connection not greeted within S s (default 10)\n"
+        "  --peer-rate BURST,PER_SECOND  new TCP connections per address (default 8,2)\n"
         "  --spawn X,Y[,Z[,YAW]]  start the robot there (m, world ENU; heading in rad)\n"
         "  --ros-topics FILE.yaml  publish signals on ROS topics and write topics into signals\n"
         "            (publish: [{signal, topic, type, frame, params}], subscribe: [...])\n"
@@ -254,6 +258,46 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--auth-token-file needs a readable file whose first line is the token";
             }
             options.authToken = token;
+        } else if (arg == "--max-connections" || arg == "--max-pending") {
+            // RFC 0014 §6: connection limits.
+            const char* text = value();
+            char* end = nullptr;
+            const unsigned long long n = text != nullptr ? std::strtoull(text, &end, 10) : 0;
+            if (text == nullptr || end == text || *end != '\0' || *text == '-' || n == 0 ||
+                n > 65536) {
+                return arg == "--max-pending" ? "--max-pending needs a count from 1 to 65536"
+                                              : "--max-connections needs a count from 1 to 65536";
+            }
+            (arg == "--max-pending" ? options.connectionLimits.maxPending
+                                    : options.connectionLimits.maxConnections) =
+                static_cast<std::size_t>(n);
+        } else if (arg == "--handshake-timeout") {
+            const char* text = value();
+            char* end = nullptr;
+            const double seconds = text != nullptr ? std::strtod(text, &end) : -1.0;
+            if (text == nullptr || end == text || *end != '\0' || !(seconds > 0.0) ||
+                !std::isfinite(seconds)) {
+                return "--handshake-timeout needs a time in s, > 0";
+            }
+            options.connectionLimits.handshakeTimeoutS = seconds;
+        } else if (arg == "--peer-rate") {
+            const char* text = value();
+            char* end = nullptr;
+            const double burst = text != nullptr ? std::strtod(text, &end) : -1.0;
+            double perSecond = -1.0;
+            if (text != nullptr && end != text && *end == ',') {
+                const char* rest = end + 1;
+                perSecond = std::strtod(rest, &end);
+                if (end == rest || *end != '\0') {
+                    perSecond = -1.0;
+                }
+            }
+            if (!(burst >= 1.0) || !std::isfinite(burst) || !(perSecond > 0.0) ||
+                !std::isfinite(perSecond)) {
+                return "--peer-rate needs BURST,PER_SECOND (a burst >= 1, a rate > 0 per s)";
+            }
+            options.connectionLimits.peerBurst = burst;
+            options.connectionLimits.peerRatePerS = perSecond;
         } else if (arg == "--spawn") {
             const auto spawn = parseSpawn(value());
             if (!spawn) {

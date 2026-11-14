@@ -47,7 +47,8 @@ class "SensorAPI_1" (
 class "LidarAPI_1" (
     inherits = </APISchemaBase>
     doc = """A scanning lidar: channels rings across verticalFov, horizontalSamples columns
-    across horizontalFov. One channel is a 2D scanner. Apply with SensorAPI_1."""
+    across horizontalFov. One channel is a 2D scanner. scanPattern and channelElevations lay
+    the beams out otherwise (flash, rosette, a channel table). Apply with SensorAPI_1."""
     customData = {
         token apiSchemaType = "singleApply"
     }
@@ -94,7 +95,40 @@ class "LidarAPI_1" (
         allowedTokens = ["strongest", "last", "dual"]
     )
     uniform token sensor:lidar:scanPattern = "rotating" (
-        allowedTokens = ["rotating", "solid_state", "custom"]
+        allowedTokens = ["rotating", "solid_state", "custom", "flash", "rosette"]
+        doc = """How the beams are laid out (RFC 0015). rotating, solid_state and custom: the even
+        grid of channels and horizontalSamples. flash: a focal-plane array, every beam at once,
+        the beams evenly spaced on the image plane (tan of the angle linear in the column, outer
+        angles within +-pi/2; motionDistortion is not used). rosette: two Risley prisms
+        (rosette:*), horizontalSamples points per scan, one channel."""
+    )
+    double[] sensor:lidar:channelElevations = [] (
+        lagrangeUnit = "rad"
+        doc = """A channel table: one elevation per channel, in any order. Non-empty: the rings are
+        these sorted from the lowest up, verticalFov is not used, and channels, when authored,
+        must equal its length."""
+    )
+    double sensor:lidar:rosette:fov (
+        lagrangeUnit = "rad"
+        doc = """A rosette's full cone angle: the two prisms' deflections add up to half of it. No
+        fallback: unauthored, the loader's documented value (sensors.md), with a note."""
+    )
+    double sensor:lidar:rosette:pointRate (
+        lagrangeUnit = "1/s"
+        doc = "Points a rosette fires per second. No fallback, as rosette:fov."
+    )
+    double sensor:lidar:rosette:speed1 (
+        lagrangeUnit = "rad/s"
+        doc = """The first prism's speed; opposite signs counter-rotate. No fallback, as
+        rosette:fov."""
+    )
+    double sensor:lidar:rosette:speed2 (
+        lagrangeUnit = "rad/s"
+        doc = "The second prism's speed. No fallback, as rosette:fov."
+    )
+    double sensor:lidar:rosette:prismRatio (
+        lagrangeUnit = "1"
+        doc = """The second prism's deflection over the first's. No fallback, as rosette:fov."""
     )
 }
 
@@ -187,6 +221,19 @@ class "CameraSensorAPI_1" (
     double[] sensor:camera:distortionCoeffs = [] (
         lagrangeUnit = "1"
         doc = "OpenCV order: k1, k2, p1, p2, k3 for plumb_bob; k1 to k4 for equidistant."
+    )
+    uniform token sensor:camera:lensType = "gnomonical" (
+        allowedTokens = ["gnomonical", "equidistant"]
+        doc = """The lens's mapping, by SDFormat's <lens><type> names (RFC 0015). gnomonical: a
+        pinhole. equidistant: a fisheye, image height f theta_d (Kannala-Brandt, k1 to k4 from
+        distortionModel equidistant and distortionCoeffs, or none for all zero; plumb_bob is an
+        error); the angle across the width is then 2 theta_d^-1(horizontalAperture / (2
+        focalLength)), not a pinhole's. UsdGeomCamera's projection stays perspective."""
+    )
+    double sensor:camera:cutoffAngle (
+        lagrangeUnit = "rad"
+        doc = """Half-angle beyond which an equidistant lens sees nothing, at most pi. No fallback:
+        unauthored, the larger of half the field of view and pi / 2."""
     )
 }
 

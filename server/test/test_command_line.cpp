@@ -69,11 +69,28 @@ TEST(CommandLine, RefusesNumbersThatAreNotFiniteOrDoNotFit) {
              {"--weather", "temperature=nan,pressure=101325,relative_humidity=0.5"},
              {"--spawn", "1,2,3,4,5"},
              {"--spawn", "1,2,"},
+             {"--max-connections", "0"},
+             {"--max-connections", "-3"},
+             {"--max-pending", "4x"},
+             {"--handshake-timeout", "inf"},
+             {"--handshake-timeout", "0"},
+             {"--peer-rate", "8"},
+             {"--peer-rate", "8,nan"},
+             {"--peer-rate", "0.5,2"},
          }) {
         EXPECT_TRUE(refusal(args)) << args[0] << " " << args[1];
     }
     // What they guard still parses.
     EXPECT_EQ(parse({"--spawn", "1,2,3,0.5"}).options.spawn.position[2], 3.0);
+    // RFC 0014 §6: the connection limits.
+    const ServerOptions limited = parse({"--max-connections", "4", "--max-pending", "2",
+                                         "--handshake-timeout", "2.5", "--peer-rate", "3,0.5"})
+                                      .options;
+    EXPECT_EQ(limited.connectionLimits.maxConnections, 4U);
+    EXPECT_EQ(limited.connectionLimits.maxPending, 2U);
+    EXPECT_EQ(limited.connectionLimits.handshakeTimeoutS, 2.5);
+    EXPECT_EQ(limited.connectionLimits.peerBurst, 3.0);
+    EXPECT_EQ(limited.connectionLimits.peerRatePerS, 0.5);
     EXPECT_EQ(parse({"--joint-loop-hz", "12.5"}).options.jointLoopHz, 12.5);
     EXPECT_EQ(parse({"--humans", "3,seed=4294967296,radius=7"}).options.humanSeed, 4294967296U);
     EXPECT_EQ(*parse({"--emi-motor-leads", "0.01,0.1,0,0.05"}).options.emiMotorLeads, 0.01);
