@@ -5,6 +5,15 @@ Notable changes to Lagrange are recorded here. Each release section is generated
 titles merged into `dev`; do not edit it by hand. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v1.2.1...v1.3.0) (2026-11-14)
+
+
+### Features
+
+* **mod/sensors:** 36 built-in sensor kinds, sensor faults, a faster server and viewer, two QA passes ([#330](https://github.com/Open-Physical-Systems/Lagrange/issues/330)) ([71880eb](https://github.com/Open-Physical-Systems/Lagrange/commit/71880eb))
+* **mod/sensors:** a 4D imaging radar, sensor defaults checked against their sources, a third perf round, RFC 0014 and 0015 drafts ([#331](https://github.com/Open-Physical-Systems/Lagrange/issues/331)) ([2bb5b20](https://github.com/Open-Physical-Systems/Lagrange/commit/2bb5b20))
+* **server:** RFC 0014 frame and connection limits before the handshake; RFC 0015 lidar patterns and fisheye lenses in USD and SDFormat ([#333](https://github.com/Open-Physical-Systems/Lagrange/issues/333)) ([289c58f](https://github.com/Open-Physical-Systems/Lagrange/commit/289c58f))
+
 ## [1.2.1](https://github.com/Open-Physical-Systems/Lagrange/compare/v1.2.0...v1.2.1) (2026-11-11)
 
 
