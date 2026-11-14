@@ -50,6 +50,13 @@ if(BUILD_TESTING)
     ament_add_gtest(test_ardupilot_json test/test_ardupilot_json.cpp TIMEOUT 120)
     target_link_libraries(test_ardupilot_json lagrange_mavlink)
     lagrange_target_defaults(test_ardupilot_json)
+    ament_add_gtest(test_escs test/test_escs.cpp)
+    target_link_libraries(test_escs lagrange_mavlink)
+    target_include_directories(
+        test_escs
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    lagrange_target_defaults(test_escs)
     ament_add_gtest(test_rotor_top_speed test/test_rotor_top_speed.cpp)
     target_link_libraries(test_rotor_top_speed lagrange_mavlink)
     lagrange_target_defaults(test_rotor_top_speed)

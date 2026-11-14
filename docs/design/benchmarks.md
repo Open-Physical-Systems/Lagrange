@@ -210,7 +210,7 @@ without the camera's time (each window's factor divided by one less the camera's
 | Run | Before (RTF) | After (RTF) | Without the camera, before → after | What changed it |
 |---|---|---|---|---|
 | Sample AMR, warehouse (`--lidar cpu`) | 27.3, 29.2 | 31.3, 31.5 | | caster hierarchy, lidar noise |
-| Quadcopter, open field | 61.9 to 65.9 | 59.3 to 63.9 | | 3 to 5 % slower: bus bookkeeping (below) |
+| Quadcopter, open field | 61.9 to 65.9 | 59.3 to 63.9 | | 3 to 5 % slower: bus bookkeeping (won back in §4.3) |
 | Thermal camera AMR, 6 people | 12.3, 17.4 | 12.7, 12.8 | 21.8, 21.3 → 25.8, 25.8 | caster hierarchy, lidar noise |
 | Sedan, city block | 10.4, 12.5 | 11.1, 11.7 | 19.6, 25.7 → 28.6, 32.2 | as above |
 | Sedan in the town | 3.0, 3.0 | 3.6, 3.0 | 5.3, 5.7 → 7.0, 5.8 | as above, MuJoCo writes |
@@ -264,11 +264,59 @@ Measured and not fixed:
 - **The bus bookkeeping costs the quadcopter 3 to 5 %** (62.6 → 59.9 and 65.7 → 63.1 RTF in two
   sets of four runs): its 100 µs ticks commit small signals that are all written every step, so
   the dirty flags and the per-slot checks are pure overhead there (merging nearby written signals
-  into one copy took back part of it). Left as it is; worth a look.
+  into one copy took back part of it). Won back in §4.3.
 - MuJoCo with a robot among the kinematic bodies: the broad-phase culling already applies with a
   robot present (it is per moving tree), so what is left is MuJoCo's per-body passes
   (kinematics, velocities, `mj_rnePostConstraint`) over all 664 bodies, which a backend cannot
   restrict to a subset of an `mjModel`.
+
+### 4.3 The quadcopter's commits (2026-11-15)
+
+The third round's dirty flags (§4.2) made each commit look at every output of the module one by
+one: its flag, then its record (a `SignalRecord`, a cache line each, for its offset and size), with
+a branchy merge of neighbours. The quadcopter's electrical network commits about 40 small outputs
+every 100 µs tick, all of them written, so that was pure cost. Now (`SignalBus::commitAll`,
+architecture.md §6):
+
+- **A module that wrote every output and held none commits with one copy.** At wiring the bus
+  notes, per module, whether its outputs are plain values with consecutive ids (so one stretch of
+  storage); then a commit checks the module's dirty and held flags in one pass and, when all are
+  written, copies the stretch, clears the flags and stamps the timings, without per-signal
+  branches. The electrical network, MuJoCo and the controllers take this way.
+- **The other commits read a 12-byte record per signal** (`CommitInfo`: offset, size, plain,
+  previous value read) instead of the signal records, in one pass with the stores to the flags not
+  forcing the compiler to reload the bus's arrays.
+
+Input preparation is unchanged (its held-copy check costs the quadcopter nothing measurable).
+
+Measured as in §4 (`--no-ros --rtf 0`, 25 s, the median of the 1 s windows after the first four),
+three builds of the same tree that differ only in `SignalBus` and its two lines in the scheduler:
+*old* is the bus before the third round (71880eb), *before* the bus as it was (dirty flags), *after*
+this one. Run in the order old, before, after, after, before, old, three times for the quadcopter
+and twice for the town; **load average 1.9 to 10.5 on 20 threads** (other agents' builds), so the
+spread within a build is up to 10 %. The overhead column is the scheduler's own time per tick, the
+modules' time less the ten costliest modules' step times (in the town more than ten modules run,
+so there it also holds the cheaper ones' steps).
+
+| Run | Old (RTF) | Before (RTF) | After (RTF) | Overhead per tick, old / before / after |
+|---|---|---|---|---|
+| Quadcopter, open field | 47.3, 52.1, 52.0, 46.5, 51.8, 52.0 | 43.0, 50.6, 46.5, 46.0, 49.7, 50.2 | 52.1, 52.2, 46.3, 46.5, 51.4, 52.1 | 335 to 384 / 392 to 472 / 340 to 391 ns |
+| Town, no robot, 24 cars, its walkers | 16.1, 14.6, 14.7, 10.5 | 18.2, 18.4, 16.4, 16.0 | 20.1, 19.8, 17.4, 18.0 | 21.2 to 31.3 / 13.4 to 15.0 / 8.7 to 10.3 µs |
+
+Paired by round, the quadcopter is back to the old bus's speed (in rounds 1 and 3 at their
+quietest both builds run at 52 RTF, where before ran 3 to 5 % slower as in §4.2; round 2 ran at
+46 for all three), and the town keeps the third round's gain and adds 6 to 12 % to it (`--robot
+none --traffic vehicles=24,pedestrians=36`; the town's own walkers walk, its lanes took no
+traffic pedestrians). A synthetic run of the same shape (a
+module at 100 µs writing 39 scalars, three at 1 ms, 2 × 10⁵ ticks per sample, the fastest of 40
+samples) gives 466 ns per tick for the old bus, 517 for before and 427 for after.
+
+Every signal is the same bit for bit: `LAGRANGE_DETERMINISM_HASHES=1 lagrange determinism` (whose
+state hash covers every committed, previous, pending and input value and every commit's time)
+prints the same 201 hashes over 20 s with the before and after builds for `amr_sample_urdf`,
+`sedan_city`, `quad_x500_hover`, the sedan in the town and the town without a robot (24 cars),
+and each passes. `test_scheduler` has a case for the three ways a commit goes (every output
+written, some written, one held) against a model of what the readers must see.
 
 ## 5. Start-up and Python throughput (2026-11-12)
 

@@ -2,6 +2,7 @@
 #include "lagrange/scheduler/Scheduler.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <memory>
@@ -680,6 +681,85 @@ TEST(Execution, BatchEnvironmentsAreSeparate) {
     const std::span<const double> batch = scheduler.bus().readBatch(id);
     ASSERT_EQ(batch.size(), 9U);
     EXPECT_EQ(batch[3], 10.0);
+}
+
+// A module's commit takes one of three ways (SignalBus::commitAll): every output written and none
+// held (commitDense, one copy), some written, or one held. Whichever, a reader sees the last
+// committed values and a feedback reader the ones before them.
+TEST(Execution, CommitsOfAllSomeAndHeldOutputs) {
+    constexpr int kOutputs = 6;
+    Scheduler scheduler;
+    auto writer = std::make_unique<TestModule>("a", "writer", 1_ms);
+    writer->onDeclare = [](SignalDeclarer& d, TestModule& m) {
+        for (int i = 0; i < kOutputs; ++i) {
+            m.ids.push_back(d.output(scalar("x/a/out" + std::to_string(i), units::m)));
+        }
+    };
+    // Step k writes 100·k + i to: every output (k % 3 == 0), outputs 2 and 4 (k % 3 == 1), or
+    // every output with output 1 held (k % 3 == 2). The model keeps what the bus should hold.
+    std::array<double, kOutputs> pending{};
+    std::array<double, kOutputs> committed{};
+    std::array<double, kOutputs> before{};  // committed, as it was before the last commit
+    std::vector<std::array<double, kOutputs>> expectSeen;
+    std::vector<double> expectFeedback;
+    writer->onStep = [&](const StepContext& c, SignalBus& bus, TestModule& m) {
+        const auto k = static_cast<int>(c.t.ns / 1'000'000);
+        before = committed;
+        for (int i = 0; i < kOutputs; ++i) {
+            if (k % 3 != 1 || i == 2 || i == 4) {
+                pending.at(i) = (100.0 * k) + i;
+                bus.write(m.ids[i], pending.at(i));
+            }
+        }
+        if (k % 3 == 2) {
+            bus.hold(m.ids[1]);
+        }
+        for (int i = 0; i < kOutputs; ++i) {
+            if (k % 3 != 2 || i != 1) {
+                committed.at(i) = pending.at(i);
+            }
+        }
+        expectSeen.push_back(committed);
+        expectFeedback.push_back(before[0]);
+        return Status{};
+    };
+    std::vector<std::array<double, kOutputs>> seen;
+    std::vector<double> feedback;
+    auto reader = std::make_unique<TestModule>("b", "reader", 1_ms);
+    reader->onDeclare = [](SignalDeclarer& d, TestModule& m) {
+        for (int i = 0; i < kOutputs; ++i) {
+            m.ids.push_back(d.input(scalar("x/a/out" + std::to_string(i), units::m)));
+        }
+    };
+    reader->onStep = [&](const StepContext&, SignalBus& bus, TestModule& m) {
+        std::array<double, kOutputs> v{};
+        for (int i = 0; i < kOutputs; ++i) {
+            v.at(i) = bus.read(m.ids[i]);
+        }
+        seen.push_back(v);
+        return Status{};
+    };
+    // Steps after the writer and reads output 0 as feedback: the value before this tick's.
+    auto late = std::make_unique<TestModule>("c", "feedback", 1_ms);
+    late->onDeclare = [](SignalDeclarer& d, TestModule& m) {
+        SignalSpec spec = scalar("x/a/out0", units::m);
+        spec.feedback = true;
+        m.ids.push_back(d.input(spec));
+        m.ids.push_back(d.input(scalar("x/a/out3", units::m)));  // after the writer
+    };
+    late->onStep = [&](const StepContext&, SignalBus& bus, TestModule& m) {
+        feedback.push_back(bus.read(m.ids[0]));
+        return Status{};
+    };
+    scheduler.add(std::move(writer));
+    scheduler.add(std::move(reader));
+    scheduler.add(std::move(late));
+    const World world;
+    ASSERT_TRUE(scheduler.wire(WorldView(world)));
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{30'000'000}).ok());
+    ASSERT_EQ(seen.size(), 30U);
+    EXPECT_EQ(seen, expectSeen);
+    EXPECT_EQ(feedback, expectFeedback);
 }
 
 TEST(Execution, CostsCountStepsAndReset) {
