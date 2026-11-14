@@ -122,6 +122,7 @@ class Mermaid(SphinxDirective):
 
 # Pictures the home page shows from its own HTML (its feature wall), which Sphinx does not copy.
 _HOME_PICTURES = (
+    "builder-poster.jpg",
     "heat-conduction.png",
     "motor-leads-emi.png",
     "x500-zurich.gif",

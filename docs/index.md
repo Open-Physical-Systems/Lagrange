@@ -29,7 +29,7 @@ and USD as they are · a native Vulkan viewer · a deterministic CPU mode, bit f
 </figure>
 
 <figure class="lg-tile">
-<video src="videos/builder.mp4" autoplay muted loop playsinline preload="auto" title="The robot builder: parts, a revolute joint, sensors from the catalog, a mesh's hull, then Test"></video>
+<video src="videos/builder.mp4" poster="imgs/builder-poster.jpg" autoplay muted loop playsinline preload="auto" title="The robot builder: parts, a revolute joint, sensors from the catalog, a mesh's hull, then Test"></video>
 <figcaption><strong>Build a robot in the viewer.</strong> Parts, joints and sensors from the catalog, one click to test it in a simulator, saved as URDF. <a href="guide/builder.html">How</a></figcaption>
 </figure>
 
