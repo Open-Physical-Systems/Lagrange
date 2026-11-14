@@ -4,7 +4,9 @@
 // The image is the viewer's own SceneRenderer drawing the builder's document on the Lit
 // pipeline (BuilderHost::frameToDraw, plan decision 1), with the builder's own camera (R3).
 // This panel moves that camera, picks with pickPrim, and draws the overlay text: the frame
-// readout, the tool column, the toggles, the triad, snap and the labels.
+// readout, the tool column, the toggles, the triad, snap and the labels. The gizmos of the
+// Move, Rotate, Joint axis and Measure tools are BuilderGizmo's.
+#include "BuilderGizmo.hpp"
 #include "lagrange/viewer/BuilderSession.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
@@ -55,21 +57,7 @@ ImU32 u32(const ImVec4& color) {
 ImVec2 overlayBox(ImDrawList* draw, const ImVec2& min, const char* first,
                   const char* second = nullptr, const ImVec4& border = c::lineStrong,
                   const ImVec4& text = c::t1) {
-    ImFont* font = theme::fonts().mono;
-    const float size = px(theme::kMonoSize);
-    const float pad = px(8.0F);
-    const float a = font->CalcTextSizeA(size, FLT_MAX, 0.0F, first).x;
-    const float gap = second != nullptr ? px(12.0F) : 0.0F;
-    const float b = second != nullptr ? font->CalcTextSizeA(size, FLT_MAX, 0.0F, second).x : 0.0F;
-    const ImVec2 max(min.x + a + gap + b + pad * 2.0F, min.y + px(18.0F) + pad);
-    draw->AddRectFilled(min, max, u32(theme::hex(0x091120, 0.88F)), px(4.0F));
-    draw->AddRect(min, max, u32(border), px(4.0F));
-    const float y = min.y + pad * 0.5F + px(2.0F);
-    draw->AddText(font, size, ImVec2(min.x + pad, y), u32(text), first);
-    if (second != nullptr) {
-        draw->AddText(font, size, ImVec2(min.x + pad + a + gap, y), u32(c::t2), second);
-    }
-    return max;
+    return builder_ui::viewOverlayBox(draw, min, first, second, &border, &text);
 }
 
 /// Where a point lands in the view, if it is in front of the camera and inside the view.
@@ -117,7 +105,6 @@ public:
             return;
         }
         BuilderSession& session = *context.builder;
-        const builder::Document& document = session.document();
         refresh(session);
 
         const ImVec2 available = ImGui::GetContentRegionAvail();
@@ -140,6 +127,15 @@ public:
             ImGui::Dummy(available);
         }
         ImDrawList* draw = ImGui::GetWindowDrawList();
+        Camera& camera = session.camera;
+        const builder_ui::BuilderGizmo::View view{&camera, origin, available};
+        const ImGuiIO& io = ImGui::GetIO();
+        const bool mouseInView = ImGui::IsWindowHovered() &&
+                                 ImGui::IsMouseHoveringRect(origin, ImVec2(origin.x + available.x,
+                                                                           origin.y + available.y));
+        if (building) {
+            gizmo_.prepare(session, links_, view, mouseInView);
+        }
 
         ImGui::SetCursorScreenPos(origin);
         ImGui::SetNextItemAllowOverlap();
@@ -147,11 +143,13 @@ public:
                                ImGuiButtonFlags_MouseButtonLeft |
                                    ImGuiButtonFlags_MouseButtonRight |
                                    ImGuiButtonFlags_MouseButtonMiddle);
-        const ImGuiIO& io = ImGui::GetIO();
         const bool hovered = ImGui::IsItemHovered();
         const double aspect = static_cast<double>(available.x) / std::max(available.y, 1.0F);
-        Camera& camera = session.camera;
-        if (ImGui::IsItemActive()) {
+        // The gizmo takes the left button when it is pressed on a handle, until let go.
+        const bool owned =
+            building &&
+            gizmo_.handle(session, view, hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left));
+        if (ImGui::IsItemActive() && !owned) {
             if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
                 camera.orbit(-io.MouseDelta.x * kOrbitRadiansPerPixel,
                              io.MouseDelta.y * kOrbitRadiansPerPixel);
@@ -165,16 +163,31 @@ public:
         if (hovered && io.MouseWheel != 0.0F) {
             camera.zoom(std::pow(kZoomPerWheelStep, io.MouseWheel));
         }
-        // Select: a click that was not a drag selects the link or sensor under it, or nothing.
-        if (hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
+        // A click that was not a drag selects the link or sensor under it (a second click on the
+        // selected link, the shape under it), or nothing; with Measure it places a point.
+        if (!owned && hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
             ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, kClickSlopPixels).x == 0.0F &&
             ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, kClickSlopPixels).y == 0.0F) {
             const Ray ray =
                 camera.ray((io.MousePos.x - origin.x) / available.x * 2.0 - 1.0,
                            (io.MousePos.y - origin.y) / available.y * 2.0 - 1.0, aspect);
-            select(session, pickPrim(*frame_, ray));
+            const std::uint32_t prim = pickPrim(*frame_, ray);
+            const bool any = prim != kNone && prim < built_.primItem.size();
+            const bool sensor = any && built_.primSensor[prim] >= 0;
+            if (building) {
+                gizmo_.click(session, links_, builder::gizmo::Line{ray.origin, ray.direction},
+                             sensor ? built_.primItem[prim] : std::string{},
+                             any && !sensor ? built_.primItem[prim] : std::string{});
+            } else {
+                select(session, prim);
+            }
         }
-        shortcuts(session, hovered || ImGui::IsWindowFocused());
+        const bool active = hovered || ImGui::IsWindowFocused();
+        if (building && active && !io.WantTextInput &&
+            ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            (void)gizmo_.escape(session);
+        }
+        shortcuts(session, active);
 
         // Top left: mode, camera, shading, frame time, draws, "no simulation".
         char text[160];
@@ -184,9 +197,12 @@ public:
         if (session.view.names) {
             labels(session, draw, origin, available);
         }
-        triad(draw, camera, document,
+        if (building) {
+            gizmo_.draw(draw, session, view);
+        }
+        triad(draw, camera, session.document(),  // not held across the gizmo's commit
               ImVec2(origin.x + px(10.0F), origin.y + available.y - px(58.0F)));
-        snapBox(draw, origin, available);
+        snapBox(draw, origin, available, io.KeyCtrl);
         toolColumn(session, ImVec2(origin.x + px(10.0F), origin.y + px(46.0F)));
         toggles(session, ImVec2(origin.x + available.x - px(10.0F), origin.y + px(10.0F)));
         if (!building) {
@@ -239,8 +255,8 @@ private:
                                                              {ImGuiKey_A, Tool::JointAxis},
                                                              {ImGuiKey_M, Tool::Measure}}};
         for (const auto& [key, tool] : keys) {
-            if (ImGui::IsKeyPressed(key, false) && tool == Tool::Select) {
-                session.tool = tool;  // the other tools are not built yet (toolColumn)
+            if (ImGui::IsKeyPressed(key, false) && !gizmo_.dragging()) {
+                session.tool = tool;
             }
         }
         if (ImGui::IsKeyPressed(ImGuiKey_F, false)) {
@@ -407,10 +423,10 @@ private:
         draw->AddText(font, size, ImVec2(x, min.y + px(25.0F)), u32(c::t2), grid);
     }
 
-    /// Bottom right: snap steps and the Focus key. Snapping applies to the Move and Rotate
-    /// gizmos, which are not built yet; the values are the SPEC's defaults.
-    static void snapBox(ImDrawList* draw, const ImVec2& origin, const ImVec2& size) {
-        const char* text = "snap  5 mm · 5°   Focus [F]";
+    /// Bottom right: snap steps (builder::gizmo's, the SPEC's defaults) and the Focus key.
+    /// Holding Ctrl turns snapping off while it is held (SPEC: "Ctrl toggles").
+    static void snapBox(ImDrawList* draw, const ImVec2& origin, const ImVec2& size, bool off) {
+        const char* text = off ? "snap  off (Ctrl)   Focus [F]" : "snap  5 mm · 5°   Focus [F]";
         const float width =
             theme::fonts().mono->CalcTextSizeA(px(theme::kMonoSize), FLT_MAX, 0.0F, text).x +
             px(16.0F);
@@ -419,8 +435,7 @@ private:
                    text);
     }
 
-    /// Left: Select (Q), Move (W), Rotate (E), Joint axis (A), Measure (M). Only Select is
-    /// built; the gizmos are owed (RFC 0016 WP-D follow-up).
+    /// Left: Select (Q), Move (W), Rotate (E), Joint axis (A), Measure (M).
     static void toolColumn(BuilderSession& session, const ImVec2& at) {
         using Tool = BuilderSession::Tool;
         struct Entry {
@@ -429,15 +444,17 @@ private:
             Tool tool;
             const char* tooltip;
         };
-        // TODO(RFC 0016 WP-E1): the Joint axis icon of 12-builder/reference.html; Frames until
-        // then.
         static constexpr std::array<Entry, 5> kTools{{
             {"##bselect", widgets::Icon::Select, Tool::Select,
-             "Select (Q): click a link or sensor"},
-            {"##bmove", widgets::Icon::Move, Tool::Move, "Move (W): not built yet"},
-            {"##brotate", widgets::Icon::Rotate, Tool::Rotate, "Rotate (E): not built yet"},
-            {"##baxis", widgets::Icon::Frames, Tool::JointAxis, "Joint axis (A): not built yet"},
-            {"##bmeasure", widgets::Icon::Measure, Tool::Measure, "Measure (M): not built yet"},
+             "Select (Q): click a link or sensor; click it again for the shape under the mouse"},
+            {"##bmove", widgets::Icon::Move, Tool::Move,
+             "Move (W): the joint origin, shape or sensor mount; face handles size a shape"},
+            {"##brotate", widgets::Icon::Rotate, Tool::Rotate,
+             "Rotate (E): the joint origin, shape or sensor mount"},
+            {"##baxis", widgets::Icon::JointAxis, Tool::JointAxis,
+             "Joint axis (A): drag to set the axis; Shift: any direction"},
+            {"##bmeasure", widgets::Icon::Measure, Tool::Measure,
+             "Measure (M): the distance between two points"},
         }};
         ImGui::SetCursorScreenPos(at);
         widgets::ToolBarFrame(static_cast<int>(kTools.size()), true);
@@ -445,12 +462,10 @@ private:
         float y = ImGui::GetCursorScreenPos().y;
         for (const Entry& entry : kTools) {
             ImGui::SetCursorScreenPos(ImVec2(x, y));
-            ImGui::BeginDisabled(entry.tool != Tool::Select);
             if (widgets::ToolButton(entry.id, entry.icon, session.tool == entry.tool,
                                     entry.tooltip)) {
                 session.tool = entry.tool;
             }
-            ImGui::EndDisabled();
             y += px(26.0F);
         }
     }
@@ -497,6 +512,7 @@ private:
     builder::Preview preview_;
     std::vector<builder::Frame> links_;
     std::shared_ptr<const SceneFrame> frame_;
+    builder_ui::BuilderGizmo gizmo_;
 };
 
 }  // namespace
