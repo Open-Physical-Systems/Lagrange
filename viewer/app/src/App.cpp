@@ -1404,7 +1404,7 @@ public:
                 char number[48];
                 std::snprintf(number, sizeof(number), "%.9g", value);
                 out += std::string(out.empty() ? "" : ", ") + "\"" + jsonEscape(name) +
-                       "\": " + number;
+                       "\": " + (std::isfinite(value) ? number : "null");
             }
             return "{" + out + "}";
         };
@@ -1449,10 +1449,10 @@ public:
                electrical + "], \"scope_values\": {" + scope +
                "}, \"live_joints\": " + values(builderSession_.liveJoints) +
                ", \"joint_targets\": " + values(builderSession_.jointTargets) +
-               ", \"joint_drive_error\": \"" + jsonEscape(builderSession_.jointDriveError) +
-               "\", \"selected\": \"" + jsonEscape(builderSession_.selection.name) +
-               "\", \"joint_types\": {" + joints + "}, \"robot\": \"" + jsonEscape(document.robot) +
-               "\", \"mode\": \"" +
+               ", \"preview\": " + values(builderSession_.preview) + ", \"joint_drive_error\": \"" +
+               jsonEscape(builderSession_.jointDriveError) + "\", \"selected\": \"" +
+               jsonEscape(builderSession_.selection.name) + "\", \"joint_types\": {" + joints +
+               "}, \"robot\": \"" + jsonEscape(document.robot) + "\", \"mode\": \"" +
                (mode == BuilderSession::Mode::Build      ? "build"
                 : mode == BuilderSession::Mode::Starting ? "starting"
                                                          : "testing") +
@@ -2080,7 +2080,17 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             std::this_thread::sleep_for(std::chrono::milliseconds(8));
         }
 
-        if (exitCode == 0 && !options.builderSave.empty() && !ui.builderSave(options.builderSave)) {
+        if (exitCode == 0 && !options.builderSave.empty() && !options.builderOpen.empty() &&
+            ui.builderSession().opened == 0) {
+            // QA F15: --builder-open did not open (or a xacro is still expanding): the
+            // document is not that file, so nothing is written over the target.
+            const auto& files = ui.builderSession().problems.files;
+            std::fprintf(stderr, "error: not saved: %s\n",
+                         files.empty() ? ("cannot open " + options.builderOpen).c_str()
+                                       : files.back().message.c_str());
+            exitCode = 5;
+        } else if (exitCode == 0 && !options.builderSave.empty() &&
+                   !ui.builderSave(options.builderSave)) {
             const auto& files = ui.builderSession().problems.files;
             std::fprintf(stderr, "error: %s\n",
                          files.empty() ? "cannot save" : files.back().message.c_str());

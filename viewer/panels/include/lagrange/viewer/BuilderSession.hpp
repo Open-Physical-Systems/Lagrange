@@ -92,6 +92,10 @@ struct BuilderSession {
     Mode mode{Mode::Build};
     /// The file the document was opened from or last saved to; empty for a new document.
     std::filesystem::path path;
+    /// The folder the document's relative mesh paths are relative to: the folder of the file it
+    /// was read from (a .xacro's for an expanded one, which `path` is empty for); empty: the
+    /// working directory (a new robot). Save as… elsewhere rewrites them for the new file.
+    std::filesystem::path meshFolder;
     double autosaveTime{0.0};  ///< ImGui::GetTime() of the last autosave, s; 0: none yet
     bool showDegrees{true};    ///< Joints panel's deg | rad (display only; files hold rad)
     std::string testTarget;    ///< "Test · empty world ▾" readout: "empty world", a file name

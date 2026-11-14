@@ -181,6 +181,10 @@ std::optional<double> hitCylinder(const Vec3& o, const Vec3& d, double r, double
 }
 
 void appendNumber(std::string& out, double value) {
+    if (!std::isfinite(value)) {
+        out += "null";  // JSON has no NaN or infinity (QA F3)
+        return;
+    }
     char text[32];
     std::snprintf(text, sizeof(text), "%.9g", value == 0.0 ? 0.0 : value);
     out += text;

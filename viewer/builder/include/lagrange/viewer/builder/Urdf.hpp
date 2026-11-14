@@ -46,6 +46,11 @@ struct WriteOptions {
     /// user's file, while the text goes to the Test copy, RFC §7.1 step 2).
     /// `lagrange-asset://` and `package://` stay as written either way.
     bool absoluteMeshes{false};
+    /// The folder the document's relative mesh paths are relative to (the folder of the file it
+    /// was read from). Set: a relative path is written relative to savedAt's folder, so Save as…
+    /// into another folder keeps every mesh (QA F1), and absoluteMeshes resolves against it.
+    /// Unset: relative paths stay as the document holds them (and resolve against savedAt's).
+    std::optional<std::filesystem::path> meshFolder;
 };
 
 /// The document as URDF text: deterministic (document order, numbers through std::to_chars in
@@ -72,8 +77,15 @@ struct ReadResult {
 [[nodiscard]] std::string keptForDisplay(std::string_view keptXml);
 
 /// Writes `text` to `path` atomically: a temporary file in the same folder, flushed, then
-/// renamed over `path`. Refuses a path ending in `.xacro` (RFC §10). Returns "" on success,
-/// else why not (one line, with the path).
+/// renamed over `path`. Refuses a path ending in `.xacro` (RFC §10). A symlink is written
+/// through to its target; an existing file keeps its mode, and a read-only one (or anything
+/// that is not a regular file) is refused. Returns "" on success, else why not (one line, with
+/// the path).
 [[nodiscard]] std::string saveAtomically(const std::filesystem::path& path, std::string_view text);
+
+/// `name` as one safe file name: letters, digits, '_', '-' and '.' kept, anything else (a '/',
+/// "..", a space) '_', no leading '.', at most 100 characters, "robot" when empty. For files
+/// named after the robot (the autosave, the Test copy): a crafted name never leaves the folder.
+[[nodiscard]] std::string safeFileName(std::string_view name);
 
 }  // namespace lagrange::viewer::builder

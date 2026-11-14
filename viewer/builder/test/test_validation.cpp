@@ -727,5 +727,51 @@ TEST(Validation, SensorRatesThatNeverLineUpAreNamed) {
     problems = validate(document, &realCatalog(), {});
     EXPECT_EQ(count(problems, Level::Warning, "sonar", "line up only"), 0U) << dump(problems);
 }
+// QA F8: a part of a tonne or more from its shapes is a size to check.
+TEST(Validation, WarnsOnAnImplausiblyHeavyPart) {
+    Document document = validRobot();
+    EXPECT_EQ(count(validate(document, nullptr, {}), Level::Warning, "arm", "kg from its shapes"),
+              0U)
+        << dump(validate(document, nullptr, {}));
+    document.links[1].shapes[0].size = {2.0, 100.0, 0.0};  // a 100 m aluminium rod
+    EXPECT_EQ(count(validate(document, nullptr, {}), Level::Warning, "arm", "kg from its shapes"),
+              1U)
+        << dump(validate(document, nullptr, {}));
+    document.links[1].inertial.mass = 3.0;  // the user's own mass: not second-guessed
+    EXPECT_EQ(count(validate(document, nullptr, {}), Level::Warning, "arm", "kg from its shapes"),
+              0U);
+}
+
+// QA F8: a mesh tens of metres across is likely a file in millimetres.
+TEST(Validation, WarnsOnAMeshTooBigForARobot) {
+    const std::filesystem::path dir = scratch("huge_mesh");
+    touch(dir / "part.stl");  // a 1 m tetrahedron
+    Document document = validRobot();
+    Shape mesh;
+    mesh.kind = Shape::Kind::Mesh;
+    mesh.mesh = "part.stl";
+    mesh.solid = false;
+    document.links[0].shapes.push_back(mesh);
+    EXPECT_EQ(count(validate(document, nullptr, dir), Level::Warning, "base_link", "file in mm"),
+              0U);
+    document.links[0].shapes.back().scale = {20.0, 20.0, 20.0};
+    EXPECT_EQ(count(validate(document, nullptr, dir), Level::Warning, "base_link", "m across"), 1U)
+        << dump(validate(document, nullptr, dir));
+}
+
+// QA F20: a kept <ros2_control> naming a joint the robot lacks is a warning.
+TEST(Validation, WarnsOnAStaleRos2ControlJoint) {
+    Document document = validRobot();
+    document.keptXml =
+        "<ros2_control name=\"hw\" type=\"system\"><joint name=\"shoulder\"/>"
+        "</ros2_control>";
+    EXPECT_EQ(count(validate(document, nullptr, {}), Level::Warning, "", "<ros2_control>"), 0U);
+    document.keptXml =
+        "<ros2_control name=\"hw\" type=\"system\"><joint name=\"elbow\"/>"
+        "</ros2_control>";
+    EXPECT_EQ(count(validate(document, nullptr, {}), Level::Warning, "", "'elbow'"), 1U)
+        << dump(validate(document, nullptr, {}));
+}
+
 }  // namespace
 }  // namespace lagrange::viewer::builder

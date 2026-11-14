@@ -9,6 +9,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <unistd.h>
 
 #include <gtest/gtest.h>
 
@@ -410,6 +411,85 @@ TEST(Urdf, SaveIsAtomic) {
     const std::string missing = saveAtomically(dir / "no" / "such" / "r.urdf", "x");
     EXPECT_NE(missing.find("r.urdf"), std::string::npos);
     std::filesystem::remove_all(dir);
+}
+
+// QA F1: Save as… into another folder rewrites relative meshes for the new file.
+TEST(Urdf, SaveAsElsewhereRewritesRelativeMeshes) {
+    Document document = newDocument("m");
+    Shape mesh;
+    mesh.kind = Shape::Kind::Mesh;
+    mesh.mesh = "meshes/part.stl";
+    document.links[0].shapes = {mesh};
+    WriteOptions options;
+    options.savedAt = "/data/robots/copy/m.urdf";
+    options.meshFolder = std::filesystem::path("/data/robots/original");
+    EXPECT_NE(writeUrdf(document, options).find("filename=\"../original/meshes/part.stl\""),
+              std::string::npos);
+    // The same folder: as written, byte for byte.
+    options.savedAt = "/data/robots/original/m.urdf";
+    EXPECT_NE(writeUrdf(document, options).find("filename=\"meshes/part.stl\""), std::string::npos);
+    options.savedAt = "/data/robots/original/sub/../m.urdf";
+    EXPECT_NE(writeUrdf(document, options).find("filename=\"meshes/part.stl\""), std::string::npos);
+    // The Test copy: absolute against the folder it was read from, not the copy's.
+    options.savedAt = "/run/copy/m.urdf";
+    options.absoluteMeshes = true;
+    EXPECT_NE(
+        writeUrdf(document, options).find("filename=\"/data/robots/original/meshes/part.stl\""),
+        std::string::npos);
+    // Unset: as the document holds it (the old behaviour).
+    options = {};
+    options.savedAt = "/elsewhere/m.urdf";
+    EXPECT_NE(writeUrdf(document, options).find("filename=\"meshes/part.stl\""), std::string::npos);
+}
+
+// QA F19: a symlink is written through, the mode is kept, a read-only file is refused.
+TEST(Urdf, SaveFollowsLinksAndKeepsModes) {
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / ("builder_links_" + std::to_string(getpid()));
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir / "src");
+    const std::filesystem::path real = dir / "src" / "real.urdf";
+    ASSERT_EQ(saveAtomically(real, "old"), "");
+    std::filesystem::permissions(real, std::filesystem::perms(0640));
+    const std::filesystem::path link = dir / "link.urdf";
+    std::filesystem::create_symlink(std::filesystem::path("src") / "real.urdf", link);
+    EXPECT_EQ(saveAtomically(link, "new"), "");
+    EXPECT_TRUE(std::filesystem::is_symlink(link)) << "the link stays a link";
+    EXPECT_EQ(readFile(real), "new") << "the edit reached the target";
+    EXPECT_EQ(std::filesystem::status(real).permissions() & std::filesystem::perms::all,
+              std::filesystem::perms(0640));
+
+    const std::filesystem::path readOnly = dir / "ro.urdf";
+    ASSERT_EQ(saveAtomically(readOnly, "kept"), "");
+    std::filesystem::permissions(readOnly, std::filesystem::perms(0444));
+    if (::access(readOnly.c_str(), W_OK) != 0) {  // root may write anything
+        const std::string refused = saveAtomically(readOnly, "lost");
+        EXPECT_NE(refused.find("read-only"), std::string::npos) << refused;
+        EXPECT_EQ(readFile(readOnly), "kept");
+        EXPECT_EQ(std::filesystem::status(readOnly).permissions() & std::filesystem::perms::all,
+                  std::filesystem::perms(0444));
+    }
+    const std::filesystem::path fresh = dir / "fresh.urdf";
+    ASSERT_EQ(saveAtomically(fresh, "x"), "");
+    EXPECT_EQ(std::filesystem::status(fresh).permissions() & std::filesystem::perms::all,
+              std::filesystem::perms(0644));
+    std::filesystem::permissions(readOnly, std::filesystem::perms(0644));
+    std::filesystem::remove_all(dir);
+}
+
+// QA F16: a robot's name never makes a path.
+TEST(Urdf, SafeFileNameStaysInItsFolder) {
+    EXPECT_EQ(safeFileName("rover_mk1"), "rover_mk1");
+    EXPECT_EQ(safeFileName("../../../../../trav/escaped"), "_._.._.._.._.._trav_escaped");
+    EXPECT_EQ(safeFileName(".."), "_.");
+    EXPECT_EQ(safeFileName(""), "robot");
+    EXPECT_EQ(safeFileName("a b/c"), "a_b_c");
+    EXPECT_EQ(safeFileName(std::string(300, 'x')).size(), 100U);
+    const std::filesystem::path folder = "/state/lagrange/builder";
+    for (const char* name : {"../x", "/etc/passwd", "..", "a/../../b", "~"}) {
+        const std::filesystem::path path = folder / (safeFileName(name) + ".autosave.urdf");
+        EXPECT_EQ(path.parent_path(), folder) << name;
+    }
 }
 
 TEST(Urdf, EverySampleAndTemplateReadsAndConverges) {

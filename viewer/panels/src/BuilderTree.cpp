@@ -5,6 +5,7 @@
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/builder/MassProperties.hpp"
 #include "lagrange/viewer/builder/Overlay.hpp"
+#include "lagrange/viewer/builder/Urdf.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
@@ -211,6 +212,16 @@ private:
                 break;
             }
         }
+        // QA F17: the indent stops where the name would have no room left; deeper rows say
+        // their depth instead, so a long chain stays readable.
+        const float step = px(14.0F);
+        const int deepest =
+            std::max(1, static_cast<int>((ImGui::GetContentRegionAvail().x - px(170.0F)) / step));
+        if (item.depth > deepest) {
+            spec.depth = deepest;
+            // Counted from the root link (the robot's row is above it).
+            type = "depth " + std::to_string(item.depth - 1) + " · " + type;
+        }
         spec.type = type.c_str();
         const auto& selection = session.selection;
         spec.selected =
@@ -313,8 +324,21 @@ public:
         bool done = false;
         switch (selection.kind) {
             case Kind::Link:
-                // The root goes only when it is the last link: a robot keeps a link.
-                done = next.links.size() > 1 && builder::removeLink(next, selection.name);
+                // A robot keeps a link (QA F7): the root of everything is not deleted, and
+                // says why, instead of leaving a robot that Add cannot build on.
+                done = builder::removeLink(next, selection.name);
+                if (done && next.links.empty()) {
+                    done = false;
+                    const bool alone = session.document().links.size() == 1;
+                    session.problems.files.push_back(
+                        {builder::Level::Warning, selection.name,
+                         alone ? "Delete: " + selection.name +
+                                     " is the robot's only link, and a robot keeps one"
+                               : "Delete: " + selection.name +
+                                     " is the root, and every other link hangs from it; delete "
+                                     "its children first, or start a New robot"});
+                    ImGui::SetWindowFocus(builder_windows::kProblems);
+                }
                 break;
             case Kind::Joint:
                 done = builder::removeJoint(next, selection.name);
@@ -426,7 +450,7 @@ private:
             state != nullptr && *state != '\0'
                 ? std::filesystem::path(state)
                 : std::filesystem::path(home != nullptr ? home : "") / ".local/state";
-        return base / "lagrange" / "builder" / (robot + ".autosave.urdf");
+        return base / "lagrange" / "builder" / (builder::safeFileName(robot) + ".autosave.urdf");
     }
 };
 

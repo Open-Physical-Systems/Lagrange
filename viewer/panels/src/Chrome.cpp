@@ -846,22 +846,39 @@ void drawRobotStrip(PanelContext& context) {
                            ? "Build · no simulation · sensors not rendered · Lit"
                        : session.testIntoRun ? "Test · the robot runs in the connected run"
                                              : "Test · the robot runs in its own simulator";
-    const int errors = session.problems.errors();
+    // QA F9: the pill counts what the Problems tab lists (its title's number), by level.
+    const BuilderSession::Problems& problems = session.problems;
+    const int errors = problems.errors() + (session.catalogError.empty() ? 0 : 1);
+    int total = session.catalogError.empty() ? 0 : 1;
     int warnings = 0;
     int hints = 0;
-    for (const builder::Problem& problem : session.problems.builder) {
-        warnings += problem.level == builder::Level::Warning ? 1 : 0;
-        hints += problem.level == builder::Level::Hint ? 1 : 0;
+    int fileErrors = 0;
+    for (const auto* list :
+         {&problems.builder, &problems.loader, &problems.check, &problems.files}) {
+        for (const builder::Problem& problem : *list) {
+            ++total;
+            warnings += problem.level == builder::Level::Warning ? 1 : 0;
+            hints += problem.level == builder::Level::Hint ? 1 : 0;
+            fileErrors += list == &problems.files && problem.level == builder::Level::Error ? 1 : 0;
+        }
     }
-    char validity[64];
+    char validity[96];
     if (errors > 0) {
-        std::snprintf(validity, sizeof(validity), "%d problem%s", errors, errors == 1 ? "" : "s");
-    } else if (warnings > 0) {
-        std::snprintf(validity, sizeof(validity), "URDF valid · %d warning%s", warnings,
-                      warnings == 1 ? "" : "s");
+        std::snprintf(validity, sizeof(validity), "%d problem%s", total, total == 1 ? "" : "s");
     } else {
-        std::snprintf(validity, sizeof(validity), "URDF valid · %d hint%s", hints,
-                      hints == 1 ? "" : "s");
+        std::string text = "URDF valid";
+        const auto add = [&](int n, const char* what) {
+            if (n > 0) {
+                text += " · " + std::to_string(n) + " " + what + (n == 1 ? "" : "s");
+            }
+        };
+        add(fileErrors, "file error");
+        add(warnings, "warning");
+        add(hints, "hint");
+        if (total == 0) {
+            text += " · 0 hints";
+        }
+        std::snprintf(validity, sizeof(validity), "%s", text.c_str());
     }
     const bool check = canCheckLoads() && session.mode == BuilderSession::Mode::Build;
     ImGui::PushFont(theme::fonts().sansMedium, theme::kCaptionSize);

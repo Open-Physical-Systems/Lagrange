@@ -2,6 +2,7 @@
 #include "lagrange/proto/Endpoint.hpp"
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/builder/Collision.hpp"
+#include "lagrange/viewer/builder/Edits.hpp"
 #include "lagrange/viewer/builder/Kinematics.hpp"
 #include "lagrange/viewer/builder/MeshShapes.hpp"
 #include "lagrange/viewer/builder/Overlay.hpp"
@@ -331,6 +332,18 @@ bool sameToggles(const BuilderSession::ViewToggles& a, const BuilderSession::Vie
 
 BuilderHost::~BuilderHost() {
     jobs_.clear();  // each stops its child
+    // QA F12: a robot tested into the connected run leaves it with the viewer, as with Back:
+    // the removal is sent and its answer waited for (a short while) before the client stops.
+    if (inRun_) {
+        endTest({});
+    }
+    const auto removalDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while ((removeAfterImport_ != 0 || removeRequest_ != 0) &&
+           client_.connection().state == ConnectionState::Ready &&
+           std::chrono::steady_clock::now() < removalDeadline) {
+        pollRemovals();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
     if (test_.state() == builder::TestServer::State::Running) {
         test_.requestStop();
     }
@@ -363,15 +376,13 @@ BuilderHost::BuilderHost(BuilderSession& session, ViewerClient& client)
 void BuilderHost::afterUi() {
     // Relative mesh paths are read against the document's folder (Addendum A): set before
     // validation and drawing, which read the meshes.
-    builder::setMeshBase(session_.path.empty() ? std::filesystem::path{}
-                                               : session_.path.parent_path());
+    builder::setMeshBase(meshFolder());
     // Validation runs on a document change, not every frame (R15).
     if (session_.history.revision() != validatedRevision_ || session_.opened != validatedOpened_) {
         validatedRevision_ = session_.history.revision();
         validatedOpened_ = session_.opened;
-        session_.problems.builder = builder::validate(
-            session_.document(), &session_.catalog,
-            session_.path.empty() ? std::filesystem::path{} : session_.path.parent_path());
+        session_.problems.builder =
+            builder::validate(session_.document(), &session_.catalog, meshFolder());
     }
     const double now = ImGui::GetTime();
     pollTest(now);
@@ -387,9 +398,19 @@ void BuilderHost::afterUi() {
         session_.mode != BuilderSession::Mode::Build) {
         endTest({});
     }
-    if (std::exchange(session_.testRequested, false) &&
-        session_.mode == BuilderSession::Mode::Build) {
-        startTest(now);
+    if (session_.testRequested && session_.mode == BuilderSession::Mode::Build) {
+        const builder::TestServer::State last = test_.state();
+        if (!session_.testIntoRun && (last == builder::TestServer::State::Running ||
+                                      last == builder::TestServer::State::Stopping)) {
+            // QA F21: Test right after Back waits for the last test server to end (poll()
+            // kills it after the grace), then starts; it is not refused.
+            if (session_.busy.empty()) {
+                session_.busy = "Stopping the last test…";
+            }
+        } else {
+            session_.testRequested = false;
+            startTest(now);
+        }
     }
     if (session_.mode != BuilderSession::Mode::Build) {
         // The document is read-only while testing: file requests wait for Build.
@@ -545,7 +566,16 @@ std::filesystem::path BuilderHost::autosavePath(const std::string& robot) {
     const std::filesystem::path base =
         !state.empty() ? std::filesystem::path(state)
                        : std::filesystem::path(environment("HOME")) / ".local/state";
-    return base / "lagrange" / "builder" / (robot + ".autosave.urdf");
+    // QA F16: the name comes from the file; never a path of its own.
+    return base / "lagrange" / "builder" / (builder::safeFileName(robot) + ".autosave.urdf");
+}
+
+std::filesystem::path BuilderHost::meshFolder() const {
+    if (!session_.meshFolder.empty()) {
+        return session_.meshFolder;
+    }
+    std::error_code ec;
+    return std::filesystem::current_path(ec);
 }
 
 std::filesystem::path BuilderHost::runtimeDirectory() {
@@ -587,11 +617,10 @@ void BuilderHost::fileProblem(builder::Level level, std::string item, std::strin
 
 std::filesystem::path BuilderHost::writeCopy(const std::string& name, std::string& error) {
     builder::WriteOptions options;
-    options.savedAt = session_.path.empty()
-                          ? std::filesystem::current_path() / (session_.document().robot + ".urdf")
-                          : session_.path;
+    options.savedAt = meshFolder() / "robot.urdf";
+    options.meshFolder = meshFolder();
     options.absoluteMeshes = true;
-    const std::filesystem::path copy = runtimeDirectory() / name;
+    const std::filesystem::path copy = runtimeDirectory() / builder::safeFileName(name);
     error = builder::saveAtomically(copy, builder::writeUrdf(session_.document(), options));
     return error.empty() ? copy : std::filesystem::path{};
 }
@@ -621,6 +650,7 @@ bool BuilderHost::save(const std::filesystem::path& target) {
     }
     builder::WriteOptions options;
     options.savedAt = path;
+    options.meshFolder = meshFolder();  // QA F1: Save as… elsewhere keeps relative meshes
     const std::string error =
         builder::saveAtomically(path, builder::writeUrdf(session_.document(), options));
     if (!error.empty()) {
@@ -709,6 +739,8 @@ bool BuilderHost::openText(const std::string& text, const std::filesystem::path&
         }
     }
     replaceDocument(std::move(*read.document), path, label);
+    // Its relative meshes are where the file is (a .xacro's folder too, QA F14).
+    session_.meshFolder = std::filesystem::absolute(from, ec).parent_path().lexically_normal();
     for (const std::string& note : read.notes) {
         fileProblem(builder::Level::Hint, "", from.filename().string() + ": " + note);
     }
@@ -798,7 +830,8 @@ void BuilderHost::autosave(double now) {
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
     builder::WriteOptions options;
-    options.savedAt = session_.path.empty() ? path : session_.path;
+    options.savedAt = path;
+    options.meshFolder = meshFolder();
     options.absoluteMeshes = true;  // it lives elsewhere than the file
     if (const std::string error =
             builder::saveAtomically(path, builder::writeUrdf(session_.document(), options));
@@ -989,9 +1022,10 @@ void BuilderHost::pollJobs() {
                         fileProblem(builder::Level::Error, "", "Open: " + error);
                     } else if (openText(text, job.source, {},
                                         "Open " + job.source.filename().string())) {
-                        fileProblem(builder::Level::Hint, "",
-                                    "Expanded " + job.source.filename().string() +
-                                        "; Save writes a .urdf (the .xacro stays as it is)");
+                        fileProblem(
+                            builder::Level::Hint, "",
+                            "Expanded " + job.source.filename().string() +
+                                "; Save as… writes it as a .urdf (the .xacro stays as it is)");
                     }
                 } else {
                     fileProblem(builder::Level::Error, "",
@@ -1221,7 +1255,8 @@ void BuilderHost::driveJoints(double now) {
     if (now - watchedAt_ >= kLookEveryS) {
         watchedAt_ = now;
         for (const builder::Joint& joint : document.joints) {
-            if (!builder::isMoving(joint.type) || joint.mimic ||
+            // A mimic joint is read too (QA F18), only never commanded.
+            if (!builder::isMoving(joint.type) ||
                 (driven_.contains(joint.name) && driven_[joint.name].position)) {
                 continue;
             }
@@ -1251,8 +1286,16 @@ void BuilderHost::driveJoints(double now) {
     }
     // Commands: what changed, at most kCommandEveryS apart per joint; the last value wins,
     // since a held change is sent when its time comes.
-    for (const auto& [name, target] : session_.jointTargets) {
+    for (const auto& [name, wanted] : session_.jointTargets) {
         DrivenJoint& entry = driven_[name];
+        // Within the joint's limits whoever set it (QA F11); a mimic joint takes no command.
+        const builder::Joint* joint = builder::findJoint(document, name);
+        const std::optional<double> clamped =
+            joint != nullptr && !joint->mimic ? builder::jointTarget(*joint, wanted) : std::nullopt;
+        if (!clamped) {
+            continue;
+        }
+        const double target = *clamped;
         if (target == entry.sent || now - entry.sentAt < kCommandEveryS) {
             continue;
         }
@@ -1351,8 +1394,11 @@ void BuilderHost::pollTest(double now) {
             session_.mode = BuilderSession::Mode::Testing;
             // The loader's notes and warnings (the run started): listed under Loader.
             for (const std::string& line : lastLines(test_.logTail(16 * 1024), 200)) {
-                if (line.find("warning") != std::string::npos ||
-                    line.find("note:") != std::string::npos) {
+                // A mesh the loader could not read is a magenta box in the run (QA F14).
+                if (line.find("cannot read") != std::string::npos) {
+                    session_.problems.loader.push_back({builder::Level::Warning, "", line});
+                } else if (line.find("warning") != std::string::npos ||
+                           line.find("note:") != std::string::npos) {
                     session_.problems.loader.push_back({builder::Level::Hint, "", line});
                 }
             }
@@ -1427,6 +1473,9 @@ void BuilderHost::runSplit() {
 
 std::shared_ptr<const SceneFrame> BuilderHost::frameToDraw(Camera& camera) {
     camera = session_.camera;
+    // A document opened in this frame's afterUi (a xacro's expansion) reads its meshes from
+    // its own folder already (QA F14).
+    builder::setMeshBase(meshFolder());
     const builder::Document& document = session_.document();
     const bool rebuilt = session_.history.revision() != builtRevision_ ||
                          session_.opened != builtOpened_ ||

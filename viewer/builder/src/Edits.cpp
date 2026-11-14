@@ -6,7 +6,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <numbers>
+#include <regex>
 #include <set>
 #include <utility>
 
@@ -308,6 +310,29 @@ bool removeLink(Document& document, std::string_view link) {
     return true;
 }
 
+std::optional<double> jointTarget(const Joint& joint, double value) {
+    if (!std::isfinite(value)) {
+        return std::nullopt;
+    }
+    if (joint.type != Joint::Type::Continuous && joint.lower && joint.upper &&
+        *joint.lower < *joint.upper) {
+        return std::clamp(value, *joint.lower, *joint.upper);
+    }
+    return value;
+}
+
+bool isRootOfAll(const Document& document, std::string_view link) {
+    if (findLink(document, link) == nullptr) {
+        return false;
+    }
+    std::set<std::string, std::less<>> gone{std::string(link)};
+    for (std::string& name : subtreeOf(document, link)) {
+        gone.insert(std::move(name));
+    }
+    return std::ranges::all_of(document.links,
+                               [&](const Link& l) { return gone.contains(l.name); });
+}
+
 bool removeJoint(Document& document, std::string_view joint) {
     const Joint* found = findJoint(document, joint);
     if (found == nullptr) {
@@ -327,6 +352,73 @@ bool removeSensor(Document& document, std::string_view sensor) {
     }
     removeFromOverlay(document, std::span<const std::string>(&name, 1));
     return true;
+}
+
+namespace {
+
+/// The [begin, end) spans of every <ros2_control> and <transmission> element in kept XML.
+std::vector<std::pair<std::size_t, std::size_t>> controlBlocks(std::string_view xml) {
+    std::vector<std::pair<std::size_t, std::size_t>> spans;
+    for (const std::string_view tag :
+         {std::string_view("ros2_control"), std::string_view("transmission")}) {
+        const std::string open = "<" + std::string(tag);
+        const std::string close = "</" + std::string(tag) + ">";
+        for (std::size_t at = xml.find(open); at != std::string_view::npos;
+             at = xml.find(open, at + 1)) {
+            const char after = at + open.size() < xml.size() ? xml[at + open.size()] : '>';
+            if (after != '>' && after != ' ' && after != '\t' && after != '\n' && after != '\r') {
+                continue;  // <ros2_control_x>: another element
+            }
+            const std::size_t end = xml.find(close, at);
+            spans.emplace_back(at, end == std::string_view::npos ? xml.size() : end);
+        }
+    }
+    return spans;
+}
+
+const std::regex& jointNamePattern() {
+    static const std::regex pattern(R"(<joint\s+name\s*=\s*(["'])([^"']*)\1)");
+    return pattern;
+}
+
+}  // namespace
+
+std::vector<std::string> controlJointNames(std::string_view keptXml) {
+    std::vector<std::string> names;
+    for (const auto& [begin, end] : controlBlocks(keptXml)) {
+        const std::string block(keptXml.substr(begin, end - begin));
+        for (auto it = std::sregex_iterator(block.begin(), block.end(), jointNamePattern());
+             it != std::sregex_iterator(); ++it) {
+            if (std::ranges::find(names, (*it)[2].str()) == names.end()) {
+                names.push_back((*it)[2].str());
+            }
+        }
+    }
+    return names;
+}
+
+void renameControlJoint(std::string& keptXml, std::string_view from, std::string_view to) {
+    // Last span first: a replacement changes the offsets after it.
+    auto spans = controlBlocks(keptXml);
+    std::ranges::sort(spans, std::greater<>());
+    for (const auto& [begin, end] : spans) {
+        std::string block = keptXml.substr(begin, end - begin);
+        std::string out;
+        std::size_t last = 0;
+        for (auto it = std::sregex_iterator(block.begin(), block.end(), jointNamePattern());
+             it != std::sregex_iterator(); ++it) {
+            const std::smatch& m = *it;
+            if (m[2].str() != from) {
+                continue;
+            }
+            const auto at = static_cast<std::size_t>(m.position(2));
+            out += block.substr(last, at - last);
+            out += to;
+            last = at + static_cast<std::size_t>(m.length(2));
+        }
+        out += block.substr(last);
+        keptXml.replace(begin, end - begin, out);
+    }
 }
 
 std::string rename(Document& document, ItemKind kind, std::string_view from, std::string_view to) {
@@ -377,6 +469,8 @@ std::string rename(Document& document, ItemKind kind, std::string_view from, std
             }
             joint->name = name;
             renameInOverlay(document, old, name);
+            // <ros2_control> and <transmission>, kept as written, name joints too (QA F20).
+            renameControlJoint(document.keptXml, old, name);
             for (Joint& other : document.joints) {
                 if (other.mimic && std::get<0>(*other.mimic) == old) {
                     std::get<0>(*other.mimic) = name;

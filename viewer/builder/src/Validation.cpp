@@ -2,6 +2,7 @@
 // message that says what is wrong and what to do. The server's loader stays the judge (§8.2).
 #include "TreeCheck.hpp"
 #include "lagrange/viewer/builder/Collision.hpp"
+#include "lagrange/viewer/builder/Edits.hpp"
 #include "lagrange/viewer/builder/MassProperties.hpp"
 #include "lagrange/viewer/builder/MeshShapes.hpp"
 #include "lagrange/viewer/builder/SensorCatalog.hpp"
@@ -176,8 +177,9 @@ void checkShapes(Findings& findings, const Link& link) {
                 break;
         }
         if (bad) {
-            findings.error(link.name,
-                           where + " has a size or scale of zero or less; give it a size");
+            findings.error(
+                link.name,
+                where + " has a size or scale of zero or less, or not a number; give it a size");
         }
     }
 }
@@ -216,6 +218,13 @@ void checkMass(Findings& findings, const Document& document, const Link& link) {
             findings.error(link.name, message);
         }
         return;
+    }
+    // QA F8: a part this heavy from its shapes is a mesh in millimetres or a size typo.
+    constexpr double kHeavyPartKg = 1000.0;
+    if (!link.inertial.mass && mass->mass > kHeavyPartKg) {
+        findings.warning(link.name, "link " + name + " weighs " + number(mass->mass) +
+                                        " kg from its shapes: check their size (a mesh in "
+                                        "millimetres needs \"file in mm\") or give it a mass");
     }
     switch (checkInertia(mass->inertia)) {
         case InertiaCheck::Ok:
@@ -390,6 +399,29 @@ void checkMeshSolid(Findings& findings, const Link& link, const Shape& shape,
         return;
     }
     const MeshSolid& solid = file->solid(shape.scale);
+    // QA F8: a mesh written in millimetres and read as metres is a thousand times too big.
+    // Longer than any part of the robots the builder is for; a millimetre file of a 1 cm part
+    // already reads as 10 m. A warning only: a long boom is possible.
+    constexpr double kHugeMeshM = 10.0;
+    if (!file->welded.points.empty()) {
+        std::array<double, 3> low = file->welded.points.front();
+        std::array<double, 3> high = low;
+        for (const auto& point : file->welded.points) {
+            for (std::size_t k = 0; k < 3; ++k) {
+                low.at(k) = std::min(low.at(k), point.at(k));
+                high.at(k) = std::max(high.at(k), point.at(k));
+            }
+        }
+        double longest = 0.0;
+        for (std::size_t k = 0; k < 3; ++k) {
+            longest = std::max(longest, (high.at(k) - low.at(k)) * std::abs(shape.scale.at(k)));
+        }
+        if (longest > kHugeMeshM) {
+            findings.warning(link.name, where + " is " + number(longest) +
+                                            " m across: if the file is in millimetres, switch "
+                                            "on \"file in mm\" in its Properties");
+        }
+    }
     if (!solid.hull) {
         if (shape.collision) {
             findings.warning(link.name, where +
@@ -597,6 +629,14 @@ std::vector<Problem> validate(const Document& document, const SensorCatalog* cat
     }
     if (catalog != nullptr) {
         findings.append(checkSensorRates(document, *catalog));
+    }
+    // QA F20: <ros2_control> and <transmission> kept as written name joints by name.
+    for (const std::string& name : controlJointNames(document.keptXml)) {
+        if (findJoint(document, name) == nullptr) {
+            findings.warning("", "<ros2_control>/<transmission> names joint " + inQuotes(name) +
+                                     ", which the robot does not have (renamed or deleted?); "
+                                     "its controllers will not start");
+        }
     }
     findings.append(checkOverlay(document));
     return findings.take();

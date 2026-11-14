@@ -24,7 +24,8 @@ lagrange viewer --workspace builder --builder-open my_robot.urdf
 
 In the viewer, the **Builder** tab is the last workspace tab, or press **Ctrl B**, also on the
 launcher before connecting to anything. A `.xacro` file opens by expansion (`xacro` must be
-installed); it is saved as a `.urdf` beside it, never over the `.xacro`.
+installed); its relative meshes are found beside the `.xacro`. It is never written over: **Save
+as…** writes the robot as a `.urdf` (Save asks for one).
 
 ## Build, Test, Save
 
@@ -35,20 +36,25 @@ The workspace bar's right side has the builder's own controls:
 | Undo, Redo | every change is one step (**Ctrl Z**, **Ctrl Shift Z** or **Ctrl Y**); the History tab beside Properties lists them and goes back to any |
 | `doc` readout | the file name, and `unsaved · N`: the edits since the last save |
 | **Build** | the mode you edit in. Nothing is simulated, no sensor is rendered, the view is drawn Lit: building costs almost nothing |
-| **Test · empty world** | validates the robot, writes it to a temporary file and starts `lagrange_server` with it on this machine (joint control on; ROS 2 on your `ROS_DOMAIN_ID` + 1, or the domain `LAGRANGE_BUILDER_ROS_DOMAIN_ID` names, `off` for none); the viewer connects to it |
+| **Test · empty world** | validates the robot, writes it to a temporary file and starts `lagrange_server` with it on this machine (joint control on; ROS 2 on your `ROS_DOMAIN_ID` + 1, or the domain `LAGRANGE_BUILDER_ROS_DOMAIN_ID` names, `off` for none); the viewer connects to it. Its menu (▾) has **Into the connected run**, enabled while the viewer is connected to a server that imports robots: the robot is added to that run, and Back (or closing the viewer) removes it again |
 | **Save** | **Ctrl S**; its menu has Save as…, Open…, **Export USD…** (runs `lagrange_import`) and **Check loads…** (runs `lagrange check`: can each joint hold the robot against gravity) |
 
 While testing, the view is the server's, live, with Play/Pause and Step; **Drive** lists the
 ROS 2 topics the robot takes, each with a command line to copy, and **Console** shows the test
 server's log. **Back to Build** (**Esc**) stops the test server and returns to the document as it
-was. If the server refuses the robot, Problems shows why and Build stays active.
+was; Test pressed while the last test server is still stopping starts once it has. If the server
+refuses the robot, Problems shows why and Build stays active.
 
 ![Testing: the robot in the test server, with Drive and its command lines](../imgs/builder-test.png)
 
 The Robot strip under the workspace bar counts links, joints by type, sensors, the total mass
 and the centre of mass; its pill says whether the URDF is valid. Problems lists every finding
-(error, warning, hint) with the item it is about; Test is refused while there is an error, Save
-is not. An autosave goes to `$XDG_STATE_HOME/lagrange/builder/<robot>.autosave.urdf` every 30 s.
+(error, warning, hint) with the item it is about; the pill counts the same ones. Test is refused
+while there is an error, Save is not. Save writes through a symbolic link to its target, keeps the
+file's permissions and refuses a read-only file; Save as… into another folder rewrites relative
+mesh paths for the new file. An autosave goes to
+`$XDG_STATE_HOME/lagrange/builder/<robot>.autosave.urdf` every 30 s (characters other than
+letters, digits, `_`, `-` and `.` in the name become `_`).
 
 ## Links and joints
 
@@ -64,8 +70,10 @@ overridden.
 
 In the **Robot** tree, a child link's row shows its joint type and shape (`revolute · box`):
 click the joint type to select the joint. Drag a row onto another link to re-parent it; the name field in
-Properties renames it; **Delete** (or the bin in Properties' tab bar) removes the selection and
-everything under it (one undo step).
+Properties renames it (a joint's `<ros2_control>` and `<transmission>` references follow; one they
+name that the robot lacks is a warning); **Delete** (or the bin in Properties' tab bar) removes the
+selection and everything under it (one undo step). The root that every other link hangs from
+stays: a robot keeps a link.
 
 A joint's Properties: the type (fixed, revolute, continuous, prismatic), parent and child, the
 origin and axis, the limits, the dynamics (damping, friction) and mimic. Revolute and prismatic
@@ -75,10 +83,12 @@ empty limit is a Problem. Angles are typed in degrees and written in radians.
 ![A box on base_link by a revolute joint, its limits typed in Properties](../imgs/builder-joint.png)
 
 The **Joints** panel has a slider per moving joint: dragging it poses the robot in the view by
-forward kinematics only (nothing is simulated, it is not an undo step). **Poses** keeps named sets
-of slider positions in the document. While testing, the slider commands its joint in the test
-run (RFC 0016 §7.3: the server's joint control, its position loop) and the panel shows the live
-position. Until its first command a joint holds where it started on a robot fixed to the
+forward kinematics only (nothing is simulated, it is not an undo step); a typed value stops at
+the joint's limits, as the slider does (a continuous joint has none). **Poses** keeps named sets
+of slider positions for this session (the document has no place for them yet, RFC 0016 open
+question 10). While testing, the slider or a typed value commands its joint in the test run
+(RFC 0016 §7.3: the server's joint control, its position loop) and the panel shows the live
+position (a mimic joint's from its leader). Until its first command a joint holds where it started on a robot fixed to the
 ground, and is free on one that moves about (`server/src/JointControl.cpp`). A robot that is
 passive in a connected run takes no commands, and the panel says so.
 
@@ -214,8 +224,8 @@ the template stays as it is.
 
 ## Not supported yet
 
-- **Test** into a world: only the empty world. *A sample world…*, *A world file…* and *Into the
-  connected run* (RFC 0016 §7.2) are greyed.
+- **Test** into a world: the empty world or *Into the connected run*; *A sample world…* and *A
+  world file…* are greyed.
 - Loads, converters, branches and thermal nodes in the overlay: kept as written, not edited
   (the Power section edits batteries, buses and motors).
 - Opening USD or SDFormat robots (phase 4); the builder opens URDF and xacro.
@@ -231,6 +241,7 @@ lagrange_viewer --headless --size 1600x1000 --workspace builder \
     --builder-save out.urdf --screenshot out.png
 ```
 
-`--builder-save` writes the document at the end; the JSON report on stdout has a `builder`
+`--builder-save` writes the document at the end (not when `--builder-open` failed: then the
+viewer exits with 5 and writes nothing); the JSON report on stdout has a `builder`
 object (links, joints, sensors, the mode, the history, Problems). `viewer/test/test_builder_acceptance.py`
 builds a robot this way from start to Test and back and compares the file with a golden one.
