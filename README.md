@@ -285,7 +285,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Plan and evaluation (21)</summary>
+<details><summary>Plan and evaluation (22)</summary>
 
 - [Project overview](docs/plan/00-overview.md)
 - [Robot builder: phase 1 and 1b work plan (RFC 0016)](docs/plan/builder-phase1-plan.md)
@@ -306,6 +306,7 @@ recorded to MCAP and replayed.
 - [Spike 0.2-C6: a second rigid-body backend on Jolt Physics](docs/plan/spikes/0.2-C6-jolt.md)
 - [Spike 0.2-F7: `rosidl::Buffer` (desk study)](docs/plan/spikes/0.2-F7-rosidl-buffer.md)
 - [Spike 0.2-H8: packaging trial](docs/plan/spikes/0.2-H8-packaging.md)
+- [Spike: MuJoCo 3.12 → 4.x](docs/plan/spikes/mujoco-4.md)
 - [Usability and sensor physics queue](docs/plan/usability-physics-queue.md)
 - [Verification record](docs/plan/verification.md)
 
@@ -341,7 +342,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Design proposals (RFCs) (16)</summary>
+<details><summary>Design proposals (RFCs) (17)</summary>
 
 - [RFC 0001: Module interface, signals and scheduling contract](rfcs/0001-module-interface.md)
 - [RFC 0002: USD custom schemas](rfcs/0002-usd-schemas.md)
@@ -359,6 +360,7 @@ recorded to MCAP and replayed.
 - [RFC 0014: Protocol frame limits before the handshake](rfcs/0014-pre-handshake-limits.md)
 - [RFC 0015: USD attributes for lidar scan patterns and fisheye lenses](rfcs/0015-lidar-patterns-fisheye-usd.md)
 - [RFC 0016: A robot builder in the viewer](rfcs/0016-robot-builder.md)
+- [RFC 0017: MuJoCo 4.x for the MuJoCo backend](rfcs/0017-mujoco-4.md)
 
 </details>
 
