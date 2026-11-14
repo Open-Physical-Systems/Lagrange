@@ -72,6 +72,20 @@ struct BuilderSession {
     Problems problems;
     /// The Builder view's own camera (R3): never the Scene viewport's.
     Camera camera;
+    /// The Builder view's tool column (SPEC "Builder view"; Q W E A M). Added by WP-D.
+    enum class Tool : std::uint8_t { Select, Move, Rotate, JointAxis, Measure };
+    Tool tool{Tool::Select};
+    /// The Builder view's toggles, top right (SPEC "Builder view"); view state, not undoable.
+    /// Added by WP-D: BuilderHost draws the overlay lines they ask for.
+    struct ViewToggles {
+        bool grid{true};
+        bool frames{true};  ///< link frames and joint axes
+        bool collision{false};
+        bool com{false};     ///< centre of mass (needs WP-A's robotMass)
+        bool sensors{true};  ///< sensor rays and frustums
+        bool names{true};    ///< labels of the selection and of previewed joints
+    };
+    ViewToggles view;
     Mode mode{Mode::Build};
     /// The file the document was opened from or last saved to; empty for a new document.
     std::filesystem::path path;

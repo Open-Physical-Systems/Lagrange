@@ -54,6 +54,8 @@ std::unique_ptr<Panel> placeholder(const char* id, const char* what, const char*
 
 }  // namespace
 
+std::unique_ptr<Panel> createBuilderViewPanel();  // BuilderView.cpp (WP-D)
+
 BuilderSession::BuilderSession() : history(builder::newDocument("robot"), "New robot") {}
 
 int BuilderSession::Problems::errors() const {
@@ -77,8 +79,7 @@ std::vector<std::unique_ptr<Panel>> createBuilderPanels() {
     panels.push_back(placeholder(w::kTemplates,
                                  "Starting robots: differential drive base, 3-joint arm, pan-tilt.",
                                  "WP-E1"));
-    panels.push_back(
-        placeholder(w::kView, "The robot being built, drawn Lit. No simulation.", "WP-D"));
+    panels.push_back(createBuilderViewPanel());
     panels.push_back(
         placeholder(w::kJoints, "Joint preview sliders (forward kinematics only).", "WP-E2"));
     panels.push_back(placeholder(w::kPoses, "Named sets of preview positions.", "WP-E2"));

@@ -597,16 +597,24 @@ public:
         std::shared_ptr<const SceneFrame> scene = scene_;
         const bool building = workspace_ == Workspace::Builder && !launcher_.active &&
                               builderSession_.mode == BuilderSession::Mode::Build;
+        // The Builder view draws Lit only, with its own grid toggle (12-builder SPEC).
+        RenderOptions builderOptions;
         if (building) {
             scene = builderHost_.frameToDraw(camera);
+            // Its grid and frames are its own overlay lines (BuilderHost), at its own scale.
+            builderOptions.grid = false;
+            builderOptions.axes = false;
+            builderOptions.sensors = false;
+            builderOptions.shading = Shading::Lit;
         }
+        const RenderOptions& options = building ? builderOptions : renderOptions_;
         ViewKey key{scene,
                     {camera.target[0], camera.target[1], camera.target[2], camera.distance,
                      camera.yaw, camera.pitch, camera.verticalFov, camera.nearPlane},
                     renderer_.extent().width,
                     renderer_.extent().height,
-                    sensorOverlayVersion_,
-                    renderOptions_};
+                    building ? builderHost_.overlayVersion() : sensorOverlayVersion_,
+                    options};
         std::swap(heat, renderOptions_.heat);
         const bool moving = !building && !airflowOverlays_.empty();  // particles move every frame
         if (moving || !drawnKey_ || !drawnKey_->same(key)) {
@@ -615,9 +623,9 @@ public:
             std::array<std::span<const OverlayLines>, 3> overlays{cableOverlays_, sensorOverlays_,
                                                                   airflowOverlays_};
             if (building) {
-                overlays = {};
+                overlays = {builderHost_.overlays(), {}, {}};
             }
-            renderer_.render(commands, scene.get(), camera, renderOptions_, overlays);
+            renderer_.render(commands, scene.get(), camera, options, overlays);
             drawnKey_ = std::move(key);
             ++viewsDrawn_;
         }

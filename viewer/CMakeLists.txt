@@ -148,6 +148,7 @@ add_library(
     lagrange_viewer_panels
     STATIC
     panels/src/BuilderPanels.cpp
+    panels/src/BuilderView.cpp
     panels/src/Chrome.cpp
     panels/src/ConsolePanel.cpp
     panels/src/DomainsPanel.cpp
@@ -291,9 +292,14 @@ if(BUILD_TESTING)
         builder/test/test_kinematics.cpp
         builder/test/test_mass_properties.cpp
         builder/test/test_validation.cpp
+        builder/test/test_scene_adapter.cpp
         TIMEOUT 120
     )
-    target_link_libraries(test_viewer_builder lagrange_viewer_builder)
+    target_link_libraries(
+        test_viewer_builder
+        lagrange_viewer_builder
+        lagrange_viewer_render
+    )
     target_compile_definitions(
         test_viewer_builder
         PRIVATE
@@ -306,6 +312,7 @@ if(BUILD_TESTING)
     ament_add_pytest_test(test_circuit_roundtrip test/test_circuit_roundtrip.py TIMEOUT 120)
     ament_add_pytest_test(test_viewer_input test/test_viewer_input.py TIMEOUT 180)
     ament_add_pytest_test(test_builder_input test/test_builder_input.py TIMEOUT 180)
+    ament_add_pytest_test(test_builder_view test/test_builder_view.py TIMEOUT 300)
     ament_add_pytest_test(
         test_headless
         test/test_headless.py
