@@ -1,0 +1,9 @@
+date: 2026-11-14T21:45:20+09:00
+host: 13th Gen Intel(R) Core(TM) i9-13900H, 20 threads, 30 GB RAM
+gpu: NVIDIA GeForce RTX 4060 Laptop GPU, 595.99.02
+kernel: 7.0.0-42-generic; os: Ubuntu 26.04.1 LTS
+lagrange: lagrange 1.2.1 (v0.2.0-254-gce3286b-dirty)
+gazebo: gz-sim 10.5.0
+mujoco (standalone): 4.0.1 and 3.12.0
+pybullet: 3.2.7
+python: Python 3.14.4

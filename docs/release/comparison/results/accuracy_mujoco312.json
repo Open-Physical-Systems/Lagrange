@@ -1,0 +1,19 @@
+{
+  "MuJoCo 3.12.0 (standalone)": {
+    "freefall_z": 5.09009500000003,
+    "freefall_error": -0.004904999999969739,
+    "pendulum_period": 2.0065398585160503,
+    "pendulum_cycles": 9,
+    "pendulum_period_rel_error": -4.0816998481130184e-07,
+    "pendulum_small_final_amplitude": 0.05000002973546329,
+    "energy_rel_drift_end": -0.0007237877621422791,
+    "energy_rel_max_dev": 0.0014782143626496168,
+    "slide_acceleration": 2.356580049844975,
+    "slide_acceleration_rel_error": 0.00012426888285199666,
+    "slide_distance_2s": 4.714709480478313,
+    "static_displacement_2s": 0.0012822131734034179,
+    "rest_penetration": 0.00010775542024177298,
+    "rest_force": 19.619999999855395,
+    "rest_force_rel_error": -7.370326571276564e-12
+  }
+}
