@@ -21,7 +21,8 @@ REVOLUTE = "1425,272"  # Properties: the joint type's Segmented
 LOWER_LIMIT = "1470,517"
 OTHER_KIND_FIELD = "1005,897"
 OTHER_KIND_ADD = "1218,897"
-DELETE_TOOL = "1572,115"  # Properties' Delete in its tab bar
+DELETE_TOOL = "1572,115"
+CATALOG_TAB = "860,763"  # brings the Sensor catalog in front of Problems  # Properties' Delete in its tab bar
 
 
 def viewer() -> str:
@@ -121,6 +122,7 @@ def test_other_kind_adds_a_sensor_on_the_selected_link(tmp_path):
     script = ";".join(
         [
             f"3:click:{BOX_TILE}",
+            f"6:click:{CATALOG_TAB}",
             f"8:click:{OTHER_KIND_FIELD}",
             "10:text:rangefinder",
             "12:key:enter",
