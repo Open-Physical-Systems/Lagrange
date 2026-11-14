@@ -211,6 +211,18 @@ Trace run(const std::string& kind, std::map<std::string, double, std::less<>> nu
     return trace;
 }
 
+/// The kinds that start without a Vulkan device (detections, refused without its camera
+/// before it looks for the scene, is one).
+std::vector<std::string> allKindsForBareRobot() {
+    std::vector<std::string> out;
+    for (std::string_view k : builtinKinds()) {
+        if (!builtinKindRenders(std::string(k))) {
+            out.emplace_back(k);
+        }
+    }
+    return out;
+}
+
 class ExplicitDefaultsChangeNothing : public testing::TestWithParam<std::string> {};
 
 TEST_P(ExplicitDefaultsChangeNothing, OverOneSecond) {
@@ -287,6 +299,65 @@ TEST_P(ExplicitDefaultsChangeNothing, OverOneSecond) {
                    << " ) the signals differ at " << (k + 1) << " ms, " << signal << "["
                    << (c - first) << "]: " << std::bit_cast<double>(bare.samples[k][c])
                    << " without, " << std::bit_cast<double>(full.samples[k][c]) << " with";
+        }
+    }
+}
+
+/// What the catalog says a kind needs beyond its defaults: its `required` parameters and its
+/// `requires` items, as words; empty when it starts with nothing given.
+std::vector<std::string> catalogNeeds(const std::string& kind) {
+    std::vector<std::string> needs;
+    const YAML::Node entry = catalog()["kinds"][kind];
+    for (const auto& param : entry["params"]) {
+        if (param["required"].as<bool>(false)) {
+            needs.push_back("parameter " + param["path"].as<std::string>());
+        }
+    }
+    for (const auto& item : entry["requires"]) {
+        needs.push_back(item["why"].as<std::string>(""));
+    }
+    return needs;
+}
+
+// RFC 0016 QA F5: a sensor the builder adds with its catalog defaults on a bare robot (one free
+// link, as a URDF's root) either starts, or the catalog says what it needs (`required`
+// parameters, `requires`), from which the builder reports it before Test. Both ways: a kind the
+// catalog marks as needing something must refuse here, so the builder never refuses what runs.
+TEST(SensorCatalog, AKindWithItsDefaultsStartsOrTheCatalogSaysWhatItNeeds) {
+    for (const std::string& kind : allKindsForBareRobot()) {
+        World world;
+        world.robots.push_back("robot");
+        const BodyId base =
+            world.addBody("base_link", kWorldBody, Pose{}, 1.0, {}, {0.01, 0.01, 0.01, 0, 0, 0});
+        world.addJoint("base_link_floating", JointType::Free, base, {0, 0, 1}, false);
+        world.addCustomSensor(kProbe, kind, base, Pose{}, 10.0, {}, {});
+        const auto index = static_cast<std::uint32_t>(world.sensors.names.size() - 1);
+        Scheduler scheduler(SchedulerOptions{.deterministic = true});
+        scheduler.add(std::make_unique<rigid_body::MujocoBackend>());
+        std::string refusal;
+        auto module = createBuiltinKind(world, index, false, nullptr, nullptr, nullptr);
+        if (!module) {
+            refusal = "createBuiltinKind gave nothing";
+        } else {
+            scheduler.add(std::move(module));
+            if (auto wired = scheduler.wire(WorldView(world)); !wired) {
+                refusal = to_string(wired.error().front());
+            }
+        }
+        const std::vector<std::string> needs = catalogNeeds(kind);
+        std::string said;
+        for (const std::string& n : needs) {
+            said += (said.empty() ? "" : "; ") + n;
+        }
+        if (needs.empty()) {
+            EXPECT_TRUE(refusal.empty())
+                << kind << " with its defaults on a bare robot is refused (" << refusal
+                << ") but the catalog marks nothing it needs: add `required: true` to the "
+                   "parameter or a `requires` item, so the builder says so before Test";
+        } else {
+            EXPECT_FALSE(refusal.empty())
+                << kind << ": the catalog says it needs " << said
+                << " but it starts without; the builder would refuse a robot that runs";
         }
     }
 }

@@ -90,6 +90,43 @@ std::set<std::string> commandedJoints(const std::string& path) {
     return joints;
 }
 
+/// Why the joints do not make one tree below `root`, or empty. urdfdom accepts a joint whose
+/// child already hangs below the root, and links in a loop of their own off it; every walk down
+/// the tree would then never end, or leave them out (QA F2).
+std::string treeProblem(const urdf::ModelInterface& model, const urdf::Link& root) {
+    // A link with two parent joints closes a loop.
+    std::map<std::string, std::string> parentOf;
+    for (const auto& [name, joint] : model.joints_) {
+        const auto [it, inserted] = parentOf.emplace(joint->child_link_name, name);
+        if (!inserted) {
+            return "joints '" + it->second + "' and '" + name + "' both carry link '" +
+                   joint->child_link_name + "', which closes a loop";
+        }
+    }
+    std::set<std::string> seen{root.name};
+    std::vector<const urdf::Link*> stack{&root};
+    while (!stack.empty()) {
+        const urdf::Link* link = stack.back();
+        stack.pop_back();
+        for (const urdf::JointSharedPtr& joint : link->child_joints) {
+            if (!seen.insert(joint->child_link_name).second) {
+                return "joint '" + joint->name + "' closes a loop at link '" +
+                       joint->child_link_name + "'";
+            }
+            if (const urdf::LinkConstSharedPtr child = model.getLink(joint->child_link_name)) {
+                stack.push_back(child.get());
+            }
+        }
+    }
+    for (const auto& [name, link] : model.links_) {
+        if (!seen.contains(name)) {
+            return "link '" + name + "' is not below the root link '" + root.name +
+                   "' (its joints make a loop of their own)";
+        }
+    }
+    return {};
+}
+
 constexpr int kArmJoints = 3;  // a chain this long is an arm, not a wheel or a door
 
 /// How many driven joints follow one another below `link`; -1 when they branch or one is passive.
@@ -1123,6 +1160,10 @@ Expected<void, std::string> addUrdf(Robot& robot, const std::string& path,
     const urdf::LinkConstSharedPtr root = model->getRoot();
     if (!root) {
         return Unexpected{path + " has no root link"};
+    }
+    if (const std::string why = treeProblem(*model, *root); !why.empty()) {
+        return Unexpected{path + ": " + why +
+                          "; a URDF must be a tree of links, each with one parent joint"};
     }
     const std::size_t firstBody = robot.world.bodies.names.size();
     const std::size_t firstJoint = robot.world.joints.names.size();

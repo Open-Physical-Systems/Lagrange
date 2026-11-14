@@ -58,6 +58,7 @@ add_library(
     builder/src/Primitives.cpp
     builder/src/SceneAdapter.cpp
     builder/src/SensorCatalog.cpp
+    builder/src/SensorNeeds.cpp
     builder/src/TestServer.cpp
     builder/src/Urdf.cpp
     builder/src/Validation.cpp

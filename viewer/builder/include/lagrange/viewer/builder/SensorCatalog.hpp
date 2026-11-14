@@ -30,6 +30,22 @@ struct CatalogParam {
     bool maxExclusive{false};          ///< max itself is refused
     std::vector<std::string> options;  ///< Enum: the allowed values
     std::string meaning;               ///< one line for the form's tooltip
+    bool required{false};  ///< the kind refuses to start without it (QA F5: a Problem first)
+    std::string refersTo;  ///< what a text parameter names: "joint", "camera", "signal", ...
+};
+
+/// Something a kind needs beyond its parameters (the catalog's `requires`, QA F5). Exactly one
+/// of the first six is set.
+struct CatalogRequirement {
+    std::vector<std::string> oneOf;  ///< at least one of these parameters is given
+    std::string schema;              ///< a prim with this applied schema ("BatteryAPI_1")
+    std::string prim;                ///< the prim this text parameter (or its default) names
+    std::string movingJoint;  ///< this parameter's joint, else the link's own, is a hinge/slide
+    std::string motorOn;      ///< an ElectricalMotorAPI_1 drives this parameter's joint
+    std::string wheelPair;    ///< unless this joint is given, two wheel hinges off the link
+    std::string unless;       ///< not needed when this parameter is given
+    bool world{false};        ///< may come from the world the robot runs in (a warning)
+    std::string why;          ///< what it needs, in words
 };
 
 /// A signal or ROS topic the sensor will have (Properties → Output).
@@ -52,6 +68,11 @@ struct CatalogEntry {
     bool overlayOnly{false};  ///< GNSS, magnetometer, barometer, radar: need the overlay (ph. 3)
     std::string source;       ///< the file it came from (built-in or a plugin's)
     std::vector<CatalogParam> params;
+    std::vector<CatalogRequirement>
+        needs;  ///< `requires` (QA F5): what it needs beyond its parameters
+    /// The sonar: its step is at least 2 · `roundTrip` / `speed` (two parameters' paths), whole
+    /// milliseconds up; empty for every other entry.
+    std::string stepRoundTrip, stepSpeed;
     std::vector<CatalogOutput> signals;
     std::vector<CatalogOutput> rosTopics;
 };

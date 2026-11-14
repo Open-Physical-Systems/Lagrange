@@ -5,6 +5,7 @@
 #include "lagrange/viewer/builder/SensorCatalog.hpp"
 #include "lagrange/viewer/builder/Validation.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -142,6 +143,23 @@ kinds:
     ASSERT_TRUE(std::holds_alternative<SensorCatalog::LoadError>(result));
     EXPECT_EQ(std::get<SensorCatalog::LoadError>(result).line, 8);
 
+    // A `requires` item that names no parameter of the kind (QA F5), on line 5.
+    const fs::path needs = write("needs.yaml", R"(schema_version: 1
+kinds:
+  scanner:
+    requires:
+      - one_of: [protective/radius]
+        why: a protective field
+    params:
+      - path: range
+        type: number
+)");
+    result = SensorCatalog::load({needs});
+    ASSERT_TRUE(std::holds_alternative<SensorCatalog::LoadError>(result));
+    EXPECT_EQ(std::get<SensorCatalog::LoadError>(result).line, 5);
+    EXPECT_NE(std::get<SensorCatalog::LoadError>(result).message.find("protective/radius"),
+              std::string::npos);
+
     // A missing file names the file, at no line.
     result = SensorCatalog::load({dir_ / "missing.yaml"});
     ASSERT_TRUE(std::holds_alternative<SensorCatalog::LoadError>(result));
@@ -266,6 +284,26 @@ TEST(CatalogLoaderReal, EveryEntryOfTheRealCatalogLoads) {
          {"camera", "lidar", "imu", "depth", "gpu_lidar", "rangefinder", "tof", "thermistor"}) {
         EXPECT_NE(catalog.find(name), nullptr) << name;
     }
+    // QA F5: what a kind needs, read from the file.
+    const CatalogEntry* radar = catalog.find("imaging_radar");
+    ASSERT_NE(radar, nullptr);
+    EXPECT_EQ(std::ranges::count_if(radar->params, &CatalogParam::required), 5);
+    const CatalogEntry* detections = catalog.find("detections");
+    ASSERT_NE(detections, nullptr);
+    const auto camera = std::ranges::find(detections->params, "camera", &CatalogParam::path);
+    ASSERT_NE(camera, detections->params.end());
+    EXPECT_TRUE(camera->required);
+    EXPECT_EQ(camera->refersTo, "camera");
+    const CatalogEntry* monitor = catalog.find("battery_monitor");
+    ASSERT_NE(monitor, nullptr);
+    ASSERT_EQ(monitor->needs.size(), 1U);
+    EXPECT_EQ(monitor->needs[0].schema, "BatteryAPI_1");
+    EXPECT_EQ(monitor->needs[0].unless, "battery");
+    EXPECT_FALSE(monitor->needs[0].world);
+    const CatalogEntry* sonar = catalog.find("sonar");
+    ASSERT_NE(sonar, nullptr);
+    EXPECT_EQ(sonar->stepRoundTrip, "range/max");
+    EXPECT_EQ(sonar->stepSpeed, "sound_speed");
     const CatalogEntry* imu = catalog.find("imu");
     ASSERT_NE(imu, nullptr);
     EXPECT_TRUE(imu->builtinType);

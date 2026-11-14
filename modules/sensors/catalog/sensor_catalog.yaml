@@ -12,7 +12,20 @@
 # Other keys: `default_note` (a mode's other default, in words), `min`, `max`, `min_exclusive`,
 # `max_exclusive` (the code refuses equality), `choices` (enum), `refers_to` (what a text
 # parameter names: joint, body, signal, ...), `source` (the data sheet, or "illustrative", as
-# sensors.md cites it), and on signals `length` or `length_from` (arrays) and `frame`.
+# sensors.md cites it), `required: true` (the kind refuses to start without it: the builder
+# reports it before Test), and on signals `length` or `length_from` (arrays) and `frame`.
+# A kind's `requires` lists what it needs beyond its own parameters, each item one of
+# `one_of: [paths]` (at least one given), `schema: S` (a prim with the applied schema S in the
+# run), `prim: path` (the prim that text parameter names, or its default), `moving_joint: path`
+# (that parameter's joint, else the joint whose child is the sensor's link, is a hinge or a
+# slide), `motor_on: path` (an ElectricalMotorAPI_1 drives that parameter's joint),
+# `wheel_pair: path` (unless that joint parameter is given, two hinges hang off the sensor's
+# link, each carrying a cylinder or sphere collider); with
+# `unless: path` (not needed when that parameter is given), `in: world` (it may come from the
+# world the robot runs in, so the builder warns; else it is the robot's and is an error) and
+# `why` (what it needs, in words). `step_at_least` (the sonar) gives what bounds the step below:
+# `round_trip` (a range parameter) and `speed` (a speed parameter), the step at least 2 · range /
+# speed, rounded up to whole milliseconds.
 # Plugins add kinds with their own files under the ament resource `lagrange_sensor_catalog`
 # (the same layout, `kinds:` only, plus `plugin:` the library).
 #
@@ -703,6 +716,10 @@ kinds:
     references:
       - Smart Battery Data Specification Rev 1.1 (SBS-IF, 1998) §5.1
     renders: false
+    requires:
+      - schema: BatteryAPI_1
+        unless: battery
+        why: a battery to read (a BatteryAPI_1 prim, from the power system), or `battery` naming one
     params:
       - path: battery
         type: text
@@ -1065,6 +1082,7 @@ kinds:
       - path: signal
         type: text
         default_from: 'none: required'
+        required: true
         refers_to: signal
         meaning: the run's current (A) signal to measure; a signal of the other unit is refused
       - path: model
@@ -1201,6 +1219,7 @@ kinds:
       - path: camera
         type: text
         default_from: 'required: the camera sensor whose images it labels'
+        required: true
         refers_to: camera
         meaning: the camera sensor whose images it labels
       - path: semantic
@@ -1249,10 +1268,15 @@ kinds:
       - Betaflight src/main/sensors/esc_sensor.c (KISS)
       - Extended DShot Telemetry v2.1.1 (github.com/bird-sanctuary/extended-dshot-telemetry)
     renders: false
+    requires:
+      - motor_on: joint
+        unless: pole_pairs
+        why: a motor on its joint (ElectricalMotorAPI_1, from the power system), or `pole_pairs`
     params:
       - path: joint
         type: text
         default_from: 'none: required'
+        required: true
         refers_to: joint
         meaning: the motor's joint (the ElectricalMotorAPI_1 whose elec:joint it is)
       - path: protocol
@@ -1572,6 +1596,9 @@ kinds:
       - ATI Mini45, calibration SI-580-20 (ati-ia.com, F/T sensor models, Mini45, table "Metric Calibrations
         (SI)")
     renders: false
+    requires:
+      - moving_joint: joint
+        why: a hinge or slide joint whose reaction it reads (`joint`, or mounted on that joint's child link)
     params:
       - path: joint
         type: text
@@ -1795,6 +1822,7 @@ kinds:
       - path: fingers
         type: text
         default_from: none (required)
+        required: true
         refers_to: joint
         meaning: finger joint names, separated by spaces
       - path: motors
@@ -1962,30 +1990,35 @@ kinds:
         type: number
         unit: m
         default_from: 'none: required'
+        required: true
         meaning: largest range reported
         min_exclusive: 0
       - path: azimuth_fov
         type: number
         unit: rad
         default_from: 'none: required'
+        required: true
         meaning: horizontal field of view, centred on +x
         min_exclusive: 0
       - path: elevation_fov
         type: number
         unit: rad
         default_from: 'none: required'
+        required: true
         meaning: vertical field of view
         min_exclusive: 0
       - path: tx_power
         type: number
         unit: W
         default_from: 'none: required'
+        required: true
         meaning: transmit power
         min_exclusive: 0
       - path: noise_floor
         type: number
         unit: W
         default_from: 'none: required'
+        required: true
         meaning: effective noise power the echo is compared with
         min_exclusive: 0
       - path: antenna_gain
@@ -2121,6 +2154,9 @@ kinds:
       - 'KUKA LBR iiwa 7 R800 / 14 R820 spec sheet: axis-specific torque accuracy ±2 % of maximum
         torque'
     renders: false
+    requires:
+      - moving_joint: joint
+        why: a hinge or slide joint to measure (`joint`, or mounted on that joint's child link)
     params:
       - path: joint
         type: text
@@ -2177,6 +2213,10 @@ kinds:
     references:
       - MAVLink common.xml LANDING_TARGET (angle_x, angle_y, distance, size_x, size_y)
     renders: false
+    requires:
+      - prim: target
+        in: world
+        why: its target, a prim named by `target` (landing_pad by default) in the world
     params:
       - path: target
         type: text
@@ -2703,6 +2743,9 @@ kinds:
       - SICK data sheet NANS3-AAAZ30AN1 (part 1100333), nanoScan3 Core I/O
       - SICK nanoScan3 I/O operating instructions 8024602/1W27/2026-05-26, §14.2 table 33, §14.3
     renders: false
+    requires:
+      - one_of: [protective/polygon, protective/radius, protective/x_max]
+        why: a protective field (protective/polygon, protective/radius, or a rectangle protective/x_max, y_min, y_max)
     params:
       - path: fov
         type: number
@@ -2915,6 +2958,9 @@ kinds:
       - Mackenzie, J. Acoust. Soc. Am. 33(11), 1498–1504, 1961
       - Urick, Principles of Underwater Sound, 3rd ed., 1983, §5.1
     renders: false
+    step_at_least:
+      round_trip: range/max
+      speed: sound_speed
     params:
       - path: beams
         type: int
@@ -3356,6 +3402,10 @@ kinds:
     references:
       - Avia Semiconductor HX711 datasheet, Table 2
     renders: false
+    requires:
+      - schema: TetherAPI_1
+        in: world
+        why: a tether to weigh (a TetherAPI_1 prim, in the overlay, the world or --tether)
     params:
       - path: tether
         type: text
@@ -3474,6 +3524,9 @@ kinds:
     references:
       - 'FMVSS No. 138 (49 CFR 571.138 S4.2): warning at 25 % below the placard'
     renders: false
+    requires:
+      - schema: WheelAPI_1
+        why: wheels to watch (WheelAPI_1 joints, a vehicle's)
     params:
       - path: fill_pressure
         type: number
@@ -3535,6 +3588,10 @@ kinds:
       - DW3000 Datasheet Version 1.1
       - ITU-R P.2040-1 Table 3
     renders: false
+    requires:
+      - one_of: [anchors]
+        in: world
+        why: anchors to range to (`anchors`, or world prims named uwb_anchor_*)
     params:
       - path: anchors
         type: text
@@ -3644,6 +3701,9 @@ kinds:
     doc: docs/design/domains/sensors.md#vehicle_can
     references: []
     renders: false
+    requires:
+      - schema: VehicleAPI_1
+        why: a car to read (its robot a VehicleAPI_1 vehicle)
     params:
       - path: teeth
         type: int
@@ -3772,6 +3832,7 @@ kinds:
       - path: signal
         type: text
         default_from: 'none: required'
+        required: true
         refers_to: signal
         meaning: the run's voltage (V) signal to measure; a signal of the other unit is refused
       - path: model
@@ -3875,6 +3936,9 @@ kinds:
     doc: docs/design/domains/sensors.md#wheel_odometry
     references: []
     renders: false
+    requires:
+      - wheel_pair: left_joint
+        why: two wheels to count (left_joint and right_joint, or two hinges off its link each carrying a cylinder or sphere)
     params:
       - path: left_joint
         type: text

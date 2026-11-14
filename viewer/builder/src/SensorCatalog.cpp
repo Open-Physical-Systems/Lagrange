@@ -204,6 +204,8 @@ public:
         if (!onlyWhen.empty()) {
             param.meaning += (param.meaning.empty() ? "" : "; ") + ("read when " + onlyWhen);
         }
+        param.required = flag(node, "required");
+        param.refersTo = text(node, "refers_to");
         param.defaultText = text(node, "default");
         if (!param.defaultText.empty()) {
             // Numbers as the form writes them ("4" for 4.0), so "differs from the catalog"
@@ -263,6 +265,52 @@ public:
         return out;
     }
 
+    CatalogRequirement requirement(const std::string& key, const YAML::Node& node,
+                                   const std::vector<CatalogParam>& params) const {
+        if (!node.IsMap()) {
+            fail(node, "sensor '" + key + "': each of 'requires' must be a map");
+        }
+        CatalogRequirement r;
+        r.oneOf = words(node, "one_of");
+        r.schema = text(node, "schema");
+        r.prim = text(node, "prim");
+        r.movingJoint = text(node, "moving_joint");
+        r.motorOn = text(node, "motor_on");
+        r.wheelPair = text(node, "wheel_pair");
+        r.unless = text(node, "unless");
+        const std::string in = text(node, "in");
+        if (!in.empty() && in != "world" && in != "robot") {
+            fail(node["in"], "sensor '" + key + "': 'in' is robot or world");
+        }
+        r.world = in == "world";
+        r.why = text(node, "why", true);
+        const int set =
+            static_cast<int>(!r.oneOf.empty()) + static_cast<int>(!r.schema.empty()) +
+            static_cast<int>(!r.prim.empty()) + static_cast<int>(!r.movingJoint.empty()) +
+            static_cast<int>(!r.motorOn.empty()) + static_cast<int>(!r.wheelPair.empty());
+        if (set != 1) {
+            fail(node, "sensor '" + key +
+                           "': a 'requires' item is one of one_of, schema, prim, moving_joint, "
+                           "motor_on or wheel_pair");
+        }
+        // Every parameter it names is one of the kind's.
+        std::vector<std::string> named = r.oneOf;
+        for (const std::string* p :
+             {&r.prim, &r.movingJoint, &r.motorOn, &r.wheelPair, &r.unless}) {
+            if (!p->empty()) {
+                named.push_back(*p);
+            }
+        }
+        for (const std::string& path : named) {
+            if (std::ranges::none_of(params,
+                                     [&](const CatalogParam& p) { return p.path == path; })) {
+                fail(node, "sensor '" + key + "': 'requires' names " + path +
+                               ", which is not one of its parameters");
+            }
+        }
+        return r;
+    }
+
     CatalogEntry entry(const std::string& key, const YAML::Node& node, bool type) const {
         if (!node.IsMap()) {
             fail(node, "sensor '" + key + "' must be a map");
@@ -296,6 +344,19 @@ public:
                 }
                 entry.params.push_back(std::move(param));
             }
+        }
+        const YAML::Node needs = node["requires"];
+        if (needs && !needs.IsNull()) {
+            if (!needs.IsSequence()) {
+                fail(needs, "sensor '" + key + "': 'requires' must be a list");
+            }
+            for (const YAML::Node& item : needs) {
+                entry.needs.push_back(requirement(key, item, entry.params));
+            }
+        }
+        if (const YAML::Node step = node["step_at_least"]; step && !step.IsNull()) {
+            entry.stepRoundTrip = text(step, "round_trip", true);
+            entry.stepSpeed = text(step, "speed", true);
         }
         entry.signals = outputs(node, "signals", "name");
         entry.rosTopics = outputs(node, "ros", "topic");
