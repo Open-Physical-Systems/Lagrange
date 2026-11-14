@@ -186,8 +186,9 @@ def test_test_shows_the_test_layout(tmp_path):
     assert "Drive" in report["windows"], report["windows"]
     assert "Builder view" in report["windows"]
     assert not any(w.startswith("Sensor catalog") for w in report["windows"])
-    # R7: nothing but the scene streams from the test server.
-    assert report["signal_blocks"] == 0
+    # R7: nothing but the scene and the moving joints' positions stream from the test server (the
+    # Joints panel reads them live, RFC 0016 §7.3); no sensor frames.
+    assert set(b["live_joints"]) == {"box_link_joint"}
     assert report["sensor_frames"] == 0
     assert shot.stat().st_size > 0
 

@@ -103,8 +103,14 @@ def test_open_rover_test_sees_its_scene(tmp_path):
     assert report["snapshots"] >= 1
     assert report["prims"] >= 7
     assert report["sim_time_ns"] > 0
-    # R7: nothing but the scene streams while the Builder is in front.
-    assert report["signal_blocks"] == 0
+    # R7: nothing but the scene and the joints' positions stream while the Builder is in front
+    # (the Joints panel reads them live, RFC 0016 §7.3): one readout per moving joint.
+    assert set(builder["live_joints"]) == {
+        "left_wheel_joint",
+        "right_wheel_joint",
+        "pan_joint",
+        "tilt_joint",
+    }
     # Closing the viewer stopped its test server and removed its runtime folder.
     assert no_test_server_of(pid)
     runtime = Path(os.environ.get("XDG_RUNTIME_DIR", "/nonexistent")) / "lagrange/builder"

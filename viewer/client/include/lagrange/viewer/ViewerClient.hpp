@@ -616,6 +616,11 @@ public:
     /// has no such signal or component. Call from the UI thread.
     [[nodiscard]] std::shared_ptr<ScopeBuffer> subscribe(const std::string& name,
                                                          std::uint32_t component = 0);
+    /// As subscribe(), but kept while quiet (setQuiet), into a small buffer (a few seconds):
+    /// for a readout of the latest value, such as the Builder's live joint positions while
+    /// testing (RFC 0016 §7.3). Stop it with unsubscribe().
+    [[nodiscard]] std::shared_ptr<ScopeBuffer> watchSignal(const std::string& name,
+                                                           std::uint32_t component = 0);
     /// Stops feeding `buffer`. The buffer keeps its history.
     void unsubscribe(const std::shared_ptr<ScopeBuffer>& buffer);
     [[nodiscard]] const proto::Endpoint& endpoint() const { return endpoint_; }
@@ -641,8 +646,12 @@ public:
     /// Removes a robot from the run by name (RemoveRobot). Returns the request id; the answer
     /// arrives in outcome(). A server without RemoveRobot answers with an error.
     std::uint64_t removeRobot(const std::string& name);
-    /// The answer to importRobotText() or removeRobot() with this id, or nullptr while it has
-    /// not arrived (the last few are kept).
+    /// Drives one joint of the run (CommandJoint; RFC 0016 §7.3): `mode` "position",
+    /// "velocity", "effort" or "voltage". Returns the request id; the answer arrives in
+    /// outcome(). A server without joint control, or older than CommandJoint, refuses it.
+    std::uint64_t commandJoint(const std::string& joint, const std::string& mode, double value);
+    /// The answer to importRobotText(), removeRobot() or commandJoint() with this id, or nullptr
+    /// while it has not arrived (the last few are kept).
     [[nodiscard]] std::shared_ptr<const CommandOutcome> outcome(std::uint64_t requestId) const;
 
     [[nodiscard]] Notice notice() const { return *notice_.load(); }
@@ -803,6 +812,7 @@ private:
         std::string name;
         std::uint32_t component{0};
         std::shared_ptr<ScopeBuffer> buffer;
+        bool evenQuiet{false};  // watchSignal(): sent while quiet too
     };
 
     void subscribeSensors();  // (re)sends the sensor subscriptions; worker thread

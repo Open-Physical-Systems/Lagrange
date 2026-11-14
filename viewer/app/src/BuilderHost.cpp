@@ -366,6 +366,11 @@ void BuilderHost::afterUi() {
     }
     const double now = ImGui::GetTime();
     pollTest(now);
+    if (session_.mode == BuilderSession::Mode::Testing) {
+        driveJoints(now);
+    } else if (!driven_.empty() || !session_.jointTargets.empty()) {
+        stopDriving();
+    }
     pollRemovals();
     pollJobs();
     runSplit();  // Addendum A: CoACD, polled in every mode
@@ -1046,7 +1051,85 @@ void BuilderHost::restoreClient() {
     }
 }
 
+void BuilderHost::driveJoints(double now) {
+    // Readouts: joint/<j>/position of each moving joint, by its name in the run. Into the
+    // connected run, a passive robot's are prefixed with its name: that name first, since the
+    // run's own robot may have a joint of the same plain name. Looked for again twice a second
+    // while the catalog lacks some (it arrives after the scene).
+    constexpr double kLookEveryS = 0.5;
+    const builder::Document& document = session_.document();
+    if (now - watchedAt_ >= kLookEveryS) {
+        watchedAt_ = now;
+        for (const builder::Joint& joint : document.joints) {
+            if (!builder::isMoving(joint.type) || joint.mimic ||
+                (driven_.contains(joint.name) && driven_[joint.name].position)) {
+                continue;
+            }
+            DrivenJoint& entry = driven_[joint.name];
+            for (const std::string& name :
+                 {session_.testRobotName.empty() ? std::string{}
+                                                 : session_.testRobotName + "_" + joint.name,
+                  joint.name}) {
+                if (name.empty()) {
+                    continue;
+                }
+                if (auto buffer = client_.watchSignal("joint/" + name + "/position")) {
+                    entry.runName = name;
+                    entry.position = std::move(buffer);
+                    break;
+                }
+            }
+        }
+    }
+    for (auto& [name, entry] : driven_) {
+        if (entry.position) {
+            const double value = entry.position->latest();
+            if (std::isfinite(value)) {
+                session_.liveJoints[name] = value;
+            }
+        }
+    }
+    // Commands: what changed, at most kCommandEveryS apart per joint; the last value wins,
+    // since a held change is sent when its time comes.
+    for (const auto& [name, target] : session_.jointTargets) {
+        DrivenJoint& entry = driven_[name];
+        if (target == entry.sent || now - entry.sentAt < kCommandEveryS) {
+            continue;
+        }
+        entry.request =
+            client_.commandJoint(entry.runName.empty() ? name : entry.runName, "position", target);
+        entry.sent = target;
+        entry.sentAt = now;
+    }
+    // Answers: a refusal is shown under the sliders until a command is taken again.
+    for (auto& [name, entry] : driven_) {
+        if (entry.request == 0) {
+            continue;
+        }
+        if (const std::shared_ptr<const CommandOutcome> answer = client_.outcome(entry.request)) {
+            entry.request = 0;
+            session_.jointDriveError = answer->ok ? std::string{} : answer->error;
+        } else if (now - entry.sentAt > kStartTimeoutS) {
+            entry.request = 0;  // answered among many others and no longer kept: let it go
+        }
+    }
+}
+
+void BuilderHost::stopDriving() {
+    for (auto& [name, entry] : driven_) {
+        if (entry.position) {
+            client_.unsubscribe(entry.position);
+        }
+    }
+    driven_.clear();
+    watchedAt_ = -1.0;
+    session_.liveJoints.clear();
+    session_.jointTargets.clear();
+    session_.jointDriveError.clear();
+}
+
 void BuilderHost::endTest(const std::string& failure) {
+    stopDriving();
     if (inRun_) {
         // Back takes the robot out of the run again; the run itself goes on.
         if (!session_.testRobotName.empty() &&

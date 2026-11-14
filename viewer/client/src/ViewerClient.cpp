@@ -60,6 +60,7 @@ struct ViewerClient::Worker {
     struct Wanted {
         std::uint32_t component;
         std::shared_ptr<ScopeBuffer> buffer;
+        bool evenQuiet{false};  // watchSignal(): subscribed while quiet too
     };
     std::unordered_map<std::string, std::vector<Wanted>> wanted;
     std::vector<const std::vector<Wanted>*> byId;  // index: signal id; null if not subscribed
@@ -161,6 +162,24 @@ std::shared_ptr<ScopeBuffer> ViewerClient::subscribe(const std::string& name,
     return buffer;
 }
 
+std::shared_ptr<ScopeBuffer> ViewerClient::watchSignal(const std::string& name,
+                                                       std::uint32_t component) {
+    const std::shared_ptr<const SignalCatalog> catalog = catalog_.load();
+    const SignalInfo* info = catalog ? catalog->find(name) : nullptr;
+    if (info == nullptr || component >= info->components) {
+        return nullptr;
+    }
+    // A readout needs the latest value only: 4096 samples, 4 s at 1 kHz.
+    constexpr std::size_t kReadout = 4096;
+    auto buffer = std::make_shared<ScopeBuffer>(info->dtNs, kReadout);
+    {
+        const std::lock_guard lock(commandMutex_);
+        subscriptionChanges_.push_back({true, name, component, buffer, true});
+    }
+    wake();
+    return buffer;
+}
+
 void ViewerClient::unsubscribe(const std::shared_ptr<ScopeBuffer>& buffer) {
     {
         const std::lock_guard lock(commandMutex_);
@@ -184,7 +203,13 @@ void ViewerClient::sendSubscriptions() {
     const bool quiet = quiet_;
     for (const SignalInfo& info : w.catalog->signals) {
         const auto found = w.wanted.find(info.name);
-        if (!quiet && found != w.wanted.end() && !found->second.empty()) {
+        // While quiet only what watchSignal() asked for (a readout, RFC 0016 §7.3).
+        const bool sent =
+            found != w.wanted.end() && !found->second.empty() &&
+            (!quiet || std::ranges::any_of(found->second, [](const Worker::Wanted& item) {
+                return item.evenQuiet;
+            }));
+        if (sent) {
             w.byId[info.id] = &found->second;
             auto* item = subscribe.mutable_subscribe()->add_signals();
             item->set_signal(info.id);
@@ -334,6 +359,23 @@ std::uint64_t ViewerClient::removeRobot(const std::string& name) {
     const std::uint64_t id = nextRequestId_++;
     envelope->mutable_command()->set_request_id(id);
     envelope->mutable_command()->mutable_remove_robot()->set_name(name);
+    {
+        const std::lock_guard lock(commandMutex_);
+        awaited_.push_back(id);
+    }
+    enqueue(std::move(envelope));
+    return id;
+}
+
+std::uint64_t ViewerClient::commandJoint(const std::string& joint, const std::string& mode,
+                                         double value) {
+    auto envelope = std::make_unique<v1::Envelope>();
+    const std::uint64_t id = nextRequestId_++;
+    envelope->mutable_command()->set_request_id(id);
+    v1::CommandJoint* command = envelope->mutable_command()->mutable_command_joint();
+    command->set_joint(joint);
+    command->set_mode(mode);
+    command->set_value(value);
     {
         const std::lock_guard lock(commandMutex_);
         awaited_.push_back(id);
@@ -1634,7 +1676,7 @@ void ViewerClient::run() {
                 for (SubscriptionChange& change : changes) {
                     if (change.add) {
                         w.wanted[change.name].push_back(
-                            {change.component, std::move(change.buffer)});
+                            {change.component, std::move(change.buffer), change.evenQuiet});
                     } else {
                         for (auto& [name, list] : w.wanted) {
                             std::erase_if(list, [&](const Worker::Wanted& item) {

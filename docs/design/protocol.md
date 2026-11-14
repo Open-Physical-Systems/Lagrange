@@ -465,6 +465,7 @@ message Command {
     ImportRobot import_robot = 31;
     OpenRecording open_recording = 32;
     RemoveRobot remove_robot = 33;     // added after 1.0 (RFC 0016 §7.2)
+    CommandJoint command_joint = 34;   // added after 1.0 (RFC 0016 §7.3)
 
     ValidateProfile validate_profile = 40;
     ApplyProfile apply_profile = 41;
@@ -501,6 +502,7 @@ message ImportRobot {
 }
 message OpenRecording { string path = 1; }
 message RemoveRobot { string name = 1; } // added after 1.0 (RFC 0016 §7.2)
+message CommandJoint { string joint = 1; string mode = 2; double value = 3; } // after 1.0 (§7.3)
 // ImportRobot on lagrange_server (can_import): the robot is spawned into the running
 // simulation, as simulation_interfaces' spawn_entity does (docs/guide/cli.md "Spawning
 // robots"), at the origin of an empty run or 3 m beside the robots there are. By `path`, the
@@ -516,6 +518,15 @@ message RemoveRobot { string name = 1; } // added after 1.0 (RFC 0016 §7.2)
 // RemoveRobot: as /delete_entity (cli.md "Spawning robots"), by top prim name with or without
 // "/"; refused for the robot ros2_control drives and for scenery. A server older than these
 // additions answers an unknown command with ok = false and an error, so a viewer can try it.
+// CommandJoint: as /joint_commands under joint control (`lagrange_server --joint-control`),
+// onto Server::commandJoint: `mode` "position" (rad, m), "velocity" (rad/s, m/s),
+// "effort" (N·m, N) or "voltage" (V, a voltage-mode motor); the joint holds it until told
+// otherwise. Refused, with the reason in `error`, for a joint the run does not have (fixed
+// joints are merged at load), a mimic joint, a joint of a passive robot, an unknown mode, a
+// value that is not finite, a mode the joint's motor cannot follow, and a run without joint
+// control or whose joints ros2_control or a vehicle or multicopter controller drives. The
+// builder's Joints sliders send it while testing, at most 30 times a second per joint (RFC 0016
+// §7.3); the mock server refuses it (a replay).
 
 message ValidateProfile { string yaml = 1; }
 message ApplyProfile { string yaml = 1; bool restart = 2; }

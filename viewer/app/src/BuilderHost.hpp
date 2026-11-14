@@ -15,6 +15,9 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <limits>
+#include <map>
 #include <memory>
 #include <span>
 #include <string>
@@ -94,6 +97,11 @@ private:
     /// answered after Back: removed again.
     void pollRemovals();
     void endTest(const std::string& failure);
+    /// While Testing (RFC 0016 §7.3): watches joint/<j>/position of the document's moving
+    /// joints into liveJoints, and sends the sliders' jointTargets as CommandJoint.
+    void driveJoints(double now);
+    /// Stops the joint readouts and forgets the targets (a test ended).
+    void stopDriving();
     void restoreClient();
     void pollJobs();
     void exportUsd();
@@ -125,6 +133,18 @@ private:
     std::uint64_t importRequest_{0};      ///< ImportRobot's request id while Starting
     std::uint64_t removeAfterImport_{0};  ///< Back while Starting: this import's robot goes
     std::uint64_t removeRequest_{0};      ///< RemoveRobot's request id until answered
+    /// One joint of the tested robot: its name in the run, the readout of its position, and
+    /// the command sent last (rate limit: kCommandEveryS).
+    struct DrivenJoint {
+        std::string runName;
+        std::shared_ptr<ScopeBuffer> position;
+        double sent{std::numeric_limits<double>::quiet_NaN()};
+        double sentAt{-1.0};
+        std::uint64_t request{0};  ///< CommandJoint not answered yet; 0: none
+    };
+    static constexpr double kCommandEveryS = 1.0 / 30.0;  // ≤ 30 commands a second per joint
+    std::map<std::string, DrivenJoint, std::less<>> driven_;
+    double watchedAt_{-1.0};  ///< when the catalog was last searched for missing readouts
     double startedAt_{0.0};
     double logReadAt_{0.0};
     std::uint64_t autosavedRevision_{0};
