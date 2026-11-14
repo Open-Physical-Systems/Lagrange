@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <poll.h>
 #include <sys/eventfd.h>
@@ -463,7 +464,6 @@ void ViewerClient::subscribeSensors() {
 
 void ViewerClient::handleSensorFrame(const v1::Envelope& envelope) {
     constexpr std::uint32_t kMaxPoints = 4'000'000;
-    constexpr std::uint32_t kFloats = 4;  // x, y, z, intensity
     const v1::SensorFrame& frame = envelope.sensor_frame();
     std::shared_ptr<SensorStream> stream;
     {
@@ -484,10 +484,26 @@ void ViewerClient::handleSensorFrame(const v1::Envelope& envelope) {
     // The message comes from the network: check every size before touching the bytes.
     const v1::PointCloudData& points = frame.points();
     const std::string& bytes = points.data().inline_();
-    const bool layout = points.fields_size() >= 4 && points.fields(0) == "x" &&
-                        points.fields(1) == "y" && points.fields(2) == "z" &&
-                        points.fields(3) == "intensity";
-    if (!layout || points.count() > kMaxPoints || points.stride() < kFloats * sizeof(float) ||
+    const auto fieldsAre = [&points](std::initializer_list<const char*> names) {
+        if (points.fields_size() < static_cast<int>(names.size())) {
+            return false;
+        }
+        int k = 0;
+        for (const char* name : names) {
+            if (points.fields(k++) != name) {
+                return false;
+            }
+        }
+        return true;
+    };
+    // A lidar's returns (x, y, z, intensity) or a radar's detections (RadarScale.hpp).
+    std::uint32_t floats = 0;
+    if (fieldsAre({"x", "y", "z", "velocity", "rcs", "snr"})) {
+        floats = 6;
+    } else if (fieldsAre({"x", "y", "z", "intensity"})) {
+        floats = 4;
+    }
+    if (floats == 0 || points.count() > kMaxPoints || points.stride() < floats * sizeof(float) ||
         bytes.size() != static_cast<std::size_t>(points.count()) * points.stride()) {
         ++stream->rejected_;
         return;
@@ -495,11 +511,12 @@ void ViewerClient::handleSensorFrame(const v1::Envelope& envelope) {
     auto cloud = std::make_shared<PointCloud>();
     cloud->simTimeNs = frame.sim_time().ns();
     cloud->count = points.count();
-    cloud->points.resize(static_cast<std::size_t>(points.count()) * kFloats);
+    cloud->floats = floats;
+    cloud->points.resize(static_cast<std::size_t>(points.count()) * floats);
     for (std::uint32_t i = 0; i < points.count(); ++i) {
-        std::memcpy(&cloud->points[static_cast<std::size_t>(i) * kFloats],
+        std::memcpy(&cloud->points[static_cast<std::size_t>(i) * floats],
                     bytes.data() + static_cast<std::size_t>(i) * points.stride(),
-                    kFloats * sizeof(float));
+                    floats * sizeof(float));
     }
     stream->latest_.store(std::move(cloud));
     ++stream->frames_;

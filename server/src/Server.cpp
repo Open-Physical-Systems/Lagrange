@@ -1809,6 +1809,11 @@ struct Server::Impl {
             if (table.type[s] == SensorType::Camera && watched) {
                 sendImage(s, path);
             }
+            if (watched &&
+                (table.type[s] == SensorType::Radar ||
+                 (table.type[s] == SensorType::Custom && table.kind[s] == "imaging_radar"))) {
+                sendRadar(s, path);
+            }
             if (table.type[s] != SensorType::Lidar) {
                 continue;
             }
@@ -1865,6 +1870,55 @@ struct Server::Impl {
         }
     }
     std::vector<SimTime> lidarSent;  // per sensor: stamp of the last frame sent (lidar, camera)
+
+    /// A radar's latest scan (RadarAPI_1, or an imaging_radar), once per new scan: its
+    /// detections (sensor/<n>/detections: range, azimuth, elevation, radial velocity, RCS, SNR;
+    /// NaN beyond the count) as points in the sensor frame (x forward, z up) with fields x, y, z,
+    /// velocity (m/s, positive receding), rcs (m²) and snr (linear). An empty scan is sent too:
+    /// the viewer then clears what it drew.
+    void sendRadar(std::size_t s, const std::string& path) {
+        constexpr std::size_t kFields = 6;  // per detection, as Radar.hpp kRadarFields
+        const SignalBus& bus = scheduler->bus();
+        const SignalId id = shownSignal(robot.world.sensors.names[s], "detections");
+        const SimTime sampled = shownStamp(robot.world.sensors.names[s], id);
+        if (!id.valid() || sampled == lidarSent[s]) {
+            return;
+        }
+        lidarSent[s] = sampled;
+        const std::span<const double> values = bus.readN(id);
+        std::vector<float> points;
+        for (std::size_t k = 0; k + kFields <= values.size(); k += kFields) {
+            const double range = values[k];
+            const double azimuth = values[k + 1];
+            const double elevation = values[k + 2];
+            if (!std::isfinite(range) || !std::isfinite(azimuth) || !std::isfinite(elevation)) {
+                continue;  // past the count
+            }
+            const double across = range * std::cos(elevation);
+            points.insert(
+                points.end(),
+                {static_cast<float>(across * std::cos(azimuth)),
+                 static_cast<float>(across * std::sin(azimuth)),
+                 static_cast<float>(range * std::sin(elevation)), static_cast<float>(values[k + 3]),
+                 static_cast<float>(values[k + 4]), static_cast<float>(values[k + 5])});
+        }
+        v1::Envelope envelope;
+        v1::SensorFrame& frame = *envelope.mutable_sensor_frame();
+        frame.set_sensor(path);
+        frame.mutable_sim_time()->set_ns(sampled.ns);
+        v1::PointCloudData& cloud = *frame.mutable_points();
+        cloud.set_count(static_cast<std::uint32_t>(points.size() / kFields));
+        cloud.set_stride(static_cast<std::uint32_t>(kFields * sizeof(float)));
+        for (const char* field : {"x", "y", "z", "velocity", "rcs", "snr"}) {
+            cloud.add_fields(field);
+        }
+        setInline(*cloud.mutable_data(), points);
+        for (auto& session : sessions) {
+            if (session->greeted && session->sensors.contains(path) && !session->congested()) {
+                session->send(envelope);
+            }
+        }
+    }
 
     /// Images by signal name (sensors.md §9 "Images of kinds"): a viewer that subscribes
     /// (SubscribeSensor) to an image signal's name, "sensor/<n>/<q>", rather than to a sensor
@@ -4027,6 +4081,14 @@ struct Server::Impl {
     [[nodiscard]] std::uint32_t worldPrimOf(std::uint32_t scenePrim) const {
         if (scenePrim >= robot.scene.prims.size()) {
             return kNoIndex;
+        }
+        // A sensor's own world prim (scenePrimOf's inverse): its world path need not be the
+        // scene's (a robot's prims are named by their own names in the world tables).
+        const World& world = robot.world;
+        for (std::size_t n = 0; n < world.sensors.prim.size() && n < robot.sensorPrim.size(); ++n) {
+            if (robot.sensorPrim[n] == scenePrim && world.sensors.prim[n].index != kNoIndex) {
+                return world.sensors.prim[n].index;
+            }
         }
         const std::string& path = robot.scene.prims[scenePrim].path;
         const auto& paths = robot.world.prims.paths;

@@ -145,6 +145,14 @@ within 3 %, a 10 m/s Doppler, the detection range from the radar equation. ROS:
 `/<name>/detections` PointCloud2 (x, y, z, velocity, rcs, snr). The sample sedan has a front
 radar. Owed: rain attenuation, multipath and ghosts, a published RCS reference.
 
+Viewer: a viewer that subscribes to a radar's prim (`SubscribeSensor`; a `RadarAPI_1` radar or an
+`imaging_radar`) gets each new scan as a `SensorFrame` of points with fields x, y, z (sensor frame),
+velocity, rcs and snr (no protocol change: `PointCloudData` names its fields). The viewport draws
+them under Overlays → Radar detections (`--overlays radar`): boxes sized by RCS (−20 to +20 dBsm),
+coloured by radial velocity on the design's diverging map (`viewer/client` `RadarScale.hpp`), a
+Doppler tick along the line of sight, and the field of view as a faint wedge to its range from the
+prim's attributes; the Sensors workspace has a Radar view (fan and range–azimuth).
+
 Placement: on the CPU the rays and their echoes run in parallel (TBB) and are summed in ray order,
 so the deterministic reference keeps its numbers bit for bit; with `--lidar gpu` the rays go to the
 lidar's kernel (`bvh_traverse.slang`, float ranges, Tier 1, not deterministic) and the echoes stay
