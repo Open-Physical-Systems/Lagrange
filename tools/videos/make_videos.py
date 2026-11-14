@@ -36,10 +36,25 @@ SCOPE = (1151, 916, (316, 160, 836, 880))  # the scope, at one to one
 BIRD = (1920, 1080, (268, 126, 928, 618))  # the lidar's bird's-eye view
 ENVIRONMENT_SLICE = (1920, 1080, (655, 200, 1295, 920))  # Environment: middle of Slice 2D
 VIEWPORT_HALF = (1920, 1080, (610, 127, 1250, 847))  # the middle of the 3D view, 640 wide
+# The Sensors workspace's Camera panel at 1920 x 1080 (Chrome.cpp: sensor list 260 px,
+# Degradation 320 px, lidar | camera above IMU | radar): a square image (CAMERA_SQUARE) fills its
+# height, 522 px from y = 124; a 4:3 one (CAMERA_PANEL) its width, 660 px from x = 933.
+CAMERA_PANEL = (1920, 1080, (933, 124, 1593, 624))
+CAMERA_SQUARE = (1920, 1080, (996, 124, 1526, 648))
+VIEWPORT_THIRD = (1920, 1080, (716, 127, 1142, 847))  # the middle of the 3D view, 426 wide
+# The Sensors workspace at 1920 x 1080: the Radar view (bottom right of the 2 x 2 grid, under the
+# camera) and the camera's image without its tool row.
+RADAR_PANEL = (1920, 1080, (1060, 700, 1593, 1050))
+CAMERA_IMAGE = (1920, 1080, (933, 104, 1593, 500))
 LEFT = (0, 0, 760, 720)
 RIGHT = (760, 0, 520, 720)
+RIGHT_TOP = (760, 0, 520, 360)
+RIGHT_BOTTOM = (760, 360, 520, 360)
 HALF_L = (0, 0, 640, 720)
 HALF_R = (640, 0, 640, 720)
+THIRD_L = (0, 0, 426, 720)
+THIRD_M = (427, 0, 426, 720)
+THIRD_R = (854, 0, 426, 720)
 
 
 @dataclass
@@ -58,6 +73,7 @@ class Pane:
     viewer: list[str] = field(default_factory=list)
     run: int = 0
     text: str | None = None  # a file to show instead of a viewer
+    of: int | None = None  # another part of pane `of`'s frames: no viewer of its own
 
 
 @dataclass
@@ -116,6 +132,121 @@ def tof_robot(work: Path) -> None:
     (work / "amr_tof.urdf").write_text(urdf)
 
 
+# A lidar head 1 m up, bolted to the world (the rig of server/test/test_optics_import.cpp), in a
+# room open at the back so that the view can stand behind it: a wall 7 m ahead, side walls, a
+# crate and a pillar that throw shadows.
+def fixed_part(name: str, geometry: str, xyz: str, rgba: str) -> str:
+    """A link welded to the world: geometry as collision and visual, at xyz."""
+    return (
+        f'<link name="{name}"><collision><geometry>{geometry}</geometry></collision>'
+        f"<visual><geometry>{geometry}</geometry>"
+        f'<material name="{name}"><color rgba="{rgba}"/></material></visual></link>'
+        f'<joint name="{name}_fix" type="fixed"><parent link="world"/><child link="{name}"/>'
+        f'<origin xyz="{xyz}"/></joint>\n'
+    )
+
+
+GREY = "0.5 0.55 0.6 1"
+LIDAR_ROOM = "".join(
+    [
+        fixed_part("front", '<box size="0.2 14 4"/>', "7 0 2", GREY),
+        fixed_part("left", '<box size="8 0.2 4"/>', "3 7 2", GREY),
+        fixed_part("right", '<box size="8 0.2 4"/>', "3 -7 2", GREY),
+        fixed_part("crate", '<box size="1 1 1"/>', "4 -1.5 0.5", "0.6 0.45 0.3 1"),
+        fixed_part("pillar", '<cylinder radius="0.25" length="4"/>', "5 1.8 2", "0.7 0.7 0.72 1"),
+    ]
+)
+LIDAR_HEAD = (
+    '<link name="head"><inertial><mass value="5"/>'
+    '<inertia ixx="1" iyy="1" izz="1" ixy="0" ixz="0" iyz="0"/></inertial>'
+    '<visual><geometry><cylinder radius="0.08" length="0.1"/></geometry>'
+    '<material name="head"><color rgba="0.9 0.5 0.15 1"/></material></visual></link>'
+    '<joint name="mount" type="fixed"><parent link="world"/><child link="head"/>'
+    '<origin xyz="0 0 1"/></joint>\n'
+)
+
+# The three opt-in scan patterns of sensors.md "Lidar scan patterns (as built)", in the URDF form
+# that server/src/Robot.cpp lidarPattern() reads: <ray><pattern>, <scan><vertical><angles>,
+# <ray><rosette>.
+LIDAR_PATTERNS = {
+    # 16 channels, uneven: dense near the horizon. Illustrative, not a product's table (deg:
+    # -25 -15 -10 -7 -5 -3.5 -2.5 -1.5 -0.75 0 0.75 1.5 3 5 9 15).
+    "lidar_channels.urdf": (
+        "A Velodyne-style channel table: one elevation per channel",
+        "<scan><horizontal><samples>1800</samples><min_angle>-3.14159</min_angle>"
+        "<max_angle>3.14159</max_angle></horizontal><vertical><angles>-0.4363 -0.2618 -0.1745"
+        " -0.1222 -0.0873 -0.0611 -0.0436 -0.0262 -0.0131 0 0.0131 0.0262 0.0524 0.0873 0.1571"
+        " 0.2618</angles></vertical></scan>",
+    ),
+    # A focal-plane array, ±25° by ±18.75°: every beam at once.
+    "lidar_flash.urdf": (
+        "A flash lidar: a pinhole's pixels, every beam at once",
+        "<pattern>flash</pattern><scan><horizontal><samples>160</samples>"
+        "<min_angle>-0.4363</min_angle><max_angle>0.4363</max_angle></horizontal><vertical>"
+        "<samples>120</samples><min_angle>-0.3272</min_angle><max_angle>0.3272</max_angle>"
+        "</vertical></scan>",
+    ),
+    # The rosette's defaults (Livox Mid-40 field and point rate; the prisms' speeds from Livox's
+    # paper), samples = point rate / update rate as sensors.md asks for the real picture.
+    "lidar_rosette.urdf": (
+        "A Livox-style rosette: two Risley prisms, a pattern that never repeats",
+        "<pattern>rosette</pattern><scan><horizontal><samples>10000</samples></horizontal>"
+        "</scan><rosette><fov>0.6702</fov><point_rate>100000</point_rate></rosette>",
+    ),
+}
+
+
+def lidar_patterns(work: Path) -> None:
+    """The lidar rig three times, one scan pattern each."""
+    for name, (doc, ray) in LIDAR_PATTERNS.items():
+        sensor = (
+            '<gazebo reference="head"><sensor name="lidar" type="lidar">'
+            f"<update_rate>10</update_rate><ray>{ray}<range><min>0.1</min><max>40</max></range>"
+            "</ray></sensor></gazebo>\n"
+        )
+        (work / name).write_text(
+            f'<?xml version="1.0"?>\n<!-- {doc} -->\n<robot name="lidar_rig"><link name="world"/>\n'
+            f"{LIDAR_HEAD}{LIDAR_ROOM}{sensor}</robot>\n"
+        )
+
+
+# Cameras on the sample AMR, 0.28 m ahead of and 0.30 m over its axle, looking ahead; it drives
+# its figure-eight demo. Same name in each file, so the Camera panel's tab reads the same.
+AMR_CAMERAS = {
+    "amr_pinhole.urdf": """<sensor name="front_camera" type="camera">
+<pose>0.28 0 0.30 0 0 0</pose>
+<update_rate>15</update_rate><camera><horizontal_fov>1.5708</horizontal_fov>
+<image><width>640</width><height>640</height></image><clip><near>0.05</near><far>100</far></clip>
+</camera></sensor>""",
+    # sensors.md "Fisheye cameras (as built)": <lens><type>equidistant</type>, <horizontal_fov> the
+    # lens's angle across the width (220°), <cutoff_angle> the half-angle it sees to (110°).
+    "amr_fisheye.urdf": """<sensor name="front_camera" type="camera">
+<pose>0.28 0 0.30 0 0 0</pose>
+<update_rate>15</update_rate><camera><horizontal_fov>3.8397</horizontal_fov>
+<image><width>640</width><height>640</height></image><clip><near>0.05</near><far>100</far></clip>
+<lens><type>equidistant</type><cutoff_angle>1.9199</cutoff_angle></lens></camera></sensor>""",
+    # A camera with the event camera's field and pixels (DAVIS346 defaults, sensors.md §9).
+    "amr_camera_346.urdf": """<sensor name="front_camera" type="camera">
+<pose>0.28 0 0.30 0 0 0</pose>
+<update_rate>15</update_rate><camera><horizontal_fov>1.2357</horizontal_fov>
+<image><width>346</width><height>260</height></image></camera></sensor>""",
+    # Kind event_camera (sensors.md §9 "event_camera"): its image is a step's events, grey 128
+    # plus 64 per ON and minus 64 per OFF. 50 Hz: 20 ms of events in each image.
+    "amr_dvs.urdf": """<sensor name="front_camera" type="event_camera">
+<pose>0.28 0 0.30 0 0 0</pose>
+<update_rate>50</update_rate><event_camera><width>346</width><height>260</height>
+<horizontal_fov>1.2357</horizontal_fov></event_camera></sensor>""",
+}
+
+
+def amr_cameras(work: Path) -> None:
+    """The sample AMR with one camera each: pinhole, fisheye, the event camera and its twin."""
+    urdf = Path(asset("robots/amr_diffdrive/amr_diffdrive.urdf")).read_text()
+    for name, sensor in AMR_CAMERAS.items():
+        block = f'<gazebo reference="base_link">{sensor}</gazebo>'
+        (work / name).write_text(urdf.replace("</robot>", block + "</robot>"))
+
+
 def ahmed_tunnel(work: Path, cells: int = 2000000, frames: int = 0) -> None:
     """An Ahmed body through lagrange tunnel, in work/tunnel."""
     maker = asset("robots/ahmed_body/make_ahmed_body.py")
@@ -136,6 +267,10 @@ ARM = asset("robots/arm6/arm6.urdf")
 BUILDING = asset("worlds/drone_building/drone_building.urdf")
 DOWNWASH = str(ROOT / "profiles/examples/quad_x500_downwash.yaml")
 LIVE_AIR = str(ROOT / "profiles/examples/quad_x500_live_air.yaml")
+AMR_SAFETY = asset("robots/amr_diffdrive/amr_diffdrive_safety.urdf")
+SEDAN_4D = asset("robots/sedan/sedan_4d_radar.usda")
+# `lagrange drive`'s start (tools/cli/lagrange): in the lane at x = 30 m, heading east.
+DRIVE = ["--spawn", "30,-1.75,0.6,0", "--no-demo", "--traffic", "vehicles=24,pedestrians=36,seed=1"]
 
 
 def cmd_vel(x: float, z: float, seconds: float) -> list[str]:
@@ -145,9 +280,29 @@ def cmd_vel(x: float, z: float, seconds: float) -> list[str]:
             f"{{twist: {{linear: {{x: {x}, z: {z}}}}}}}"]  # fmt: skip
 
 
+def twist(x: float, wz: float, seconds: float) -> list[str]:
+    """A ground robot's /cmd_vel at 20 Hz for `seconds`: forward x (m/s), turn rate wz (rad/s)."""
+    return ["ros2", "topic", "pub", "-r", "20", "-t", str(round(20 * seconds)), "-w", "1",
+            "/cmd_vel", "geometry_msgs/msg/TwistStamped",
+            f"{{twist: {{linear: {{x: {x}}}, angular: {{z: {wz}}}}}}}"]  # fmt: skip
+
+
+# simulation_interfaces' SetSimulationState to STATE_PLAYING: runs started with --paused, played
+# together so that side-by-side runs move in step.
+PLAY = ["ros2", "service", "call", "/set_simulation_state",
+        "simulation_interfaces/srv/SetSimulationState", "{state: {state: 1}}"]  # fmt: skip
+
+
 # The multicopter's /cmd_vel: 0.5 m/s down for 3 s (60 messages at 20 Hz), then it holds.
 DESCEND = ["ros2", "topic", "pub", "-r", "20", "-t", "60", "-w", "1", "/cmd_vel",
            "geometry_msgs/msg/TwistStamped", "{twist: {linear: {z: -0.5}}}"]  # fmt: skip
+FISHEYE_LINE = (
+    "<lens><type>equidistant</type><cutoff_angle>1.9199</cutoff_angle></lens>    "
+    "(Kannala-Brandt, as OpenCV's fisheye; up to 360°)"
+)
+EVENT_LINE = (
+    '<sensor type="event_camera">    DAVIS346 pixels, thresholds and noise as v2e (sensors.md §9)'
+)
 
 CLIPS: list[Clip] = [
     Clip(
@@ -773,6 +928,226 @@ CLIPS: list[Clip] = [
         ],
         [Step(0, "lagrange run.yaml")],
     ),
+    # v1.3 (docs/release/v1.3.0.md). Scripted, not yet recorded: see docs/videos/README.md.
+    Clip(
+        "radar_4d",
+        "A 4D imaging radar: detections by range, azimuth, elevation and Doppler,"
+        " in 3D and in its view",
+        26,
+        [["--robot", SEDAN_4D, "--world", TOWN, *DRIVE]],
+        [
+            # Behind the car, the follow camera keeping it in the middle; Overlays → Radar
+            # detections: boxes sized by RCS, coloured by radial velocity (blue closing).
+            Pane(
+                "3D view: Overlays → Radar detections",
+                LEFT,
+                viewer=[
+                    "--overlays",
+                    "radar",
+                    "--follow",
+                    "12,24",
+                    *view(30, -1.75, 0, 12, 180, 24),
+                ],
+            ),
+            # The Sensors workspace with front_4d_radar picked in its list (the fifth entry):
+            # the Radar view (fan) and the camera above it, from one viewer.
+            Pane(
+                "Sensors → Radar: front_4d_radar, range-azimuth",
+                RIGHT_TOP,
+                RADAR_PANEL,
+                ["--workspace", "Sensors", "--input", "20:click:80,385"],
+            ),
+            Pane("front_camera", RIGHT_BOTTOM, CAMERA_IMAGE, of=1),
+        ],
+        [
+            Step(
+                0,
+                "sedan_4d_radar.usda: kind imaging_radar, 64 x 16 virtual channels, 77 GHz,"
+                " Doppler folding, ground ghosts",
+            ),
+            Step(6, "Standing: the walls and parked things are white, at 0 m/s"),
+            # The car's /cmd_vel: forward speed (m/s), as `lagrange drive` takes it.
+            Step(
+                11,
+                "/cmd_vel 4 m/s for 9 s: all that stands now closes on it, blue",
+                cmd_vel(4.0, 0.0, 9.0),
+            ),
+        ],
+    ),
+    Clip(
+        "sensor_faults",
+        "Sensor faults: a gyro biased, then stuck, while the truth goes on",
+        30,
+        [
+            [
+                "--robot",
+                AMR,
+                "--world",
+                WAREHOUSE,
+                "--sensor-fault",
+                "imu:angular_rate=bias,value=0.5,at=8,for=6,component=2",
+                "--sensor-fault",
+                "imu:angular_rate=stuck,at=21,for=6",
+            ]
+        ],
+        [
+            Pane("3D view", LEFT, viewer=["--workspace", "Scene", "--follow", "3.5,65"]),
+            Pane(
+                "IMU yaw rate; true yaw rate; fault on",
+                RIGHT,
+                SCOPE,
+                # sensor/<n>/fault/active: modules/sensors/src/Faults.cpp; twist.wz: the Wrench
+                # of m/s's component names (server/src/Server.cpp componentNames).
+                scope(
+                    "sensor/imu/angular_rate.z",
+                    "body/base_link/twist.wz",
+                    "sensor/imu/fault/active",
+                ),
+            ),
+        ],
+        [
+            # Fault times are simulated time, about 1.5 s ahead of the clip's. The figure-eight
+            # turns the other way about every 12 s (at 11.5 and 24.5 s of simulated time): each
+            # fault holds one change of direction, which the stuck gyro then misses.
+            Step(0, "--sensor-fault imu:angular_rate=bias,value=0.5,at=8,for=6,component=2"),
+            Step(6.5, "Biased: the gyro reads 0.5 rad/s more than the robot turns"),
+            Step(15, "--sensor-fault imu:angular_rate=stuck,at=21,for=6"),
+            Step(
+                19.5, "Stuck: the gyro holds its last reading while the robot turns the other way"
+            ),
+            Step(26, "Ground truth (/ground_truth/odom, /tf, the bodies' signals) is not faulted"),
+        ],
+    ),
+    Clip(
+        "lidar_patterns",
+        "Lidar scan patterns: a channel table, a flash lidar, a Livox-style rosette",
+        14,
+        [
+            ["--robot", "lidar_channels.urdf", "--world", "none"],
+            ["--robot", "lidar_flash.urdf", "--world", "none"],
+            ["--robot", "lidar_rosette.urdf", "--world", "none"],
+        ],
+        [
+            Pane(
+                "channels: 16 rings, dense at the horizon",
+                THIRD_L,
+                VIEWPORT_THIRD,
+                ["--overlays", "sensors", *view(3.5, 0, 1.2, 11, 180, 14)],
+            ),
+            Pane(
+                "flash: 160 x 120, all at once",
+                THIRD_M,
+                VIEWPORT_THIRD,
+                ["--overlays", "sensors", *view(3.5, 0, 1.2, 11, 180, 14)],
+                run=1,
+            ),
+            Pane(
+                "rosette: 10 000 points a scan",
+                THIRD_R,
+                VIEWPORT_THIRD,
+                ["--overlays", "sensors", *view(3.5, 0, 1.2, 11, 180, 14)],
+                run=2,
+            ),
+        ],
+        [
+            Step(
+                0,
+                "<scan><vertical><angles>    <pattern>flash</pattern>    "
+                "<pattern>rosette</pattern>    (URDF, SDFormat, USD: RFC 0015)",
+            ),
+            Step(7, "The rosette never repeats: each 0.1 s scan goes on where the last stopped"),
+        ],
+        lidar_patterns,
+    ),
+    Clip(
+        "fisheye",
+        "A fisheye camera: 220° on one image",
+        16,
+        [
+            ["--robot", "amr_pinhole.urdf", "--world", WAREHOUSE, "--paused"],
+            ["--robot", "amr_fisheye.urdf", "--world", WAREHOUSE, "--paused"],
+        ],
+        [
+            Pane("pinhole, 90°", HALF_L, CAMERA_SQUARE, ["--workspace", "Sensors"]),
+            Pane(
+                "equidistant fisheye, 220°",
+                HALF_R,
+                CAMERA_SQUARE,
+                ["--workspace", "Sensors"],
+                run=1,
+            ),
+        ],
+        [
+            Step(0, FISHEYE_LINE, PLAY),
+            Step(0, FISHEYE_LINE, PLAY, run=1),
+        ],
+        amr_cameras,
+    ),
+    Clip(
+        "event_camera",
+        "An event camera: only what changes",
+        16,
+        [
+            ["--robot", "amr_camera_346.urdf", "--world", WAREHOUSE, "--paused"],
+            ["--robot", "amr_dvs.urdf", "--world", WAREHOUSE, "--paused"],
+        ],
+        [
+            Pane("camera, 346 x 260", HALF_L, CAMERA_PANEL, ["--workspace", "Sensors"]),
+            Pane(
+                "event camera: ON brighter, OFF darker",
+                HALF_R,
+                CAMERA_PANEL,
+                ["--workspace", "Sensors"],
+                run=1,
+            ),
+        ],
+        [
+            Step(0, EVENT_LINE, PLAY),
+            Step(0, EVENT_LINE, PLAY, run=1),
+            Step(9.5, "Along a plain wall: no edges cross the pixels, so hardly any events"),
+        ],
+        amr_cameras,
+    ),
+    Clip(
+        "amr_sensor_kinds",
+        "Built-in kinds on an AMR: a safety scanner's fields, wheel torque",
+        26,
+        # Driven by /cmd_vel from the usual start (facing +x): a quarter turn left, then up to the
+        # north rack (face at y = 3.0) into the 1.5 m warning field, short of the 0.6 m protective
+        # one, and back.
+        [["--robot", AMR_SAFETY, "--world", WAREHOUSE, "--no-demo"]],
+        [
+            # From the south, looking north at the rack the robot drives up to.
+            Pane("3D view", LEFT, viewer=view(0, 1.6, 0, 6, -90, 45)),
+            Pane(
+                "safety: nearest return (m); warning, protective; left wheel torque (N·m)",
+                RIGHT,
+                SCOPE,
+                # modules/sensors/src/kinds/SafetyScanner.cpp, ForceTorque.cpp (joint_torque).
+                scope(
+                    "sensor/safety/min_distance",
+                    "sensor/safety/warning",
+                    "sensor/safety/protective",
+                    "sensor/left_wheel_torque/torque",
+                ),
+            ),
+        ],
+        [
+            Step(
+                0,
+                "amr_diffdrive_safety.urdf: bumpers, cliff sensors, wheel odometry, a safety"
+                " scanner, wheel torque",
+            ),
+            Step(3, "/cmd_vel: a quarter turn left", twist(0.0, 0.6, 2.6)),
+            Step(7, "/cmd_vel 0.3 m/s towards the rack", twist(0.3, 0.0, 6.0)),
+            Step(
+                10,
+                '<sensor type="safety_scanner">: warning 1.5 m, protective 0.6 m ahead'
+                " (nanoScan3 style)",
+            ),
+            Step(17, "/cmd_vel -0.3 m/s: back out of the warning field", twist(-0.3, 0.0, 5.0)),
+        ],
+    ),
 ]
 
 
@@ -870,6 +1245,9 @@ def wait_for(path: Path, what: subprocess.Popen[bytes], log: Path | None = None)
 def record(clip: Clip, out_dir: Path, keep: bool) -> None:
     print(clip.name, flush=True)
     work = Path(tempfile.mkdtemp(prefix=f"lagrange_video_{clip.name}_"))
+    # Sockets in a short directory of their own: a socket's path holds at most 107 bytes, and
+    # $TMPDIR may be deep.
+    sockets = Path(tempfile.mkdtemp(prefix="lgv_", dir="/tmp"))
     if clip.write:
         clip.write(work)
     envs: list[dict[str, str]] = []
@@ -879,9 +1257,12 @@ def record(clip: Clip, out_dir: Path, keep: bool) -> None:
     count = int((clip.seconds + 6) * FPS)
     try:
         for r, args in enumerate(clip.runs):
-            env = dict(os.environ, ROS_DOMAIN_ID=str(80 + r))
+            # The first run in this shell's ROS_DOMAIN_ID (80 when unset), the others 60 apart
+            # (at most 232 for Fast DDS), so that a shared machine's other runs stay apart.
+            base = int(os.environ.get("ROS_DOMAIN_ID", "80"))
+            env = dict(os.environ, ROS_DOMAIN_ID=str((base + 60 * r) % 233))
             envs.append(env)
-            socket = work / f"run{r}.sock"
+            socket = sockets / f"run{r}.sock"
             if args[0] == "@cli":
                 command = ["lagrange", *args[1:], "--server-only", "--listen", f"unix:{socket}"]
             elif args[0] == "@run":  # a profile: lagrange run PROFILE ...
@@ -895,36 +1276,42 @@ def record(clip: Clip, out_dir: Path, keep: bool) -> None:
                                             stderr=subprocess.STDOUT))  # fmt: skip
             wait_for(socket, servers[-1], log)
         for p, pane in enumerate(clip.panes):
-            if pane.text is not None:
+            if pane.text is not None or pane.of is not None:
                 continue
             viewers.append(subprocess.Popen(
                 ["ros2", "run", "lagrange_viewer", "lagrange_viewer",
-                 "--connect", f"unix:{work}/run{pane.run}.sock", "--headless",
+                 "--connect", f"unix:{sockets}/run{pane.run}.sock", "--headless",
                  "--size", f"{pane.view[0]}x{pane.view[1]}", "--wait-ms", "60000",
                  "--record-frames", str(work / f"pane{p}"), "--record-fps", str(FPS),
                  "--frames", str(count), *pane.viewer],
                 env=envs[pane.run], cwd=work, stdout=subprocess.DEVNULL,
             ))  # fmt: skip
-        live = [p for p, pane in enumerate(clip.panes) if pane.text is None]
+        live = [p for p, pane in enumerate(clip.panes) if pane.text is None and pane.of is None]
         for p, viewer in zip(live, viewers, strict=True):
             wait_for(work / f"pane{p}" / "frame_00000.png", viewer)
         start = time.time()
+        # Each command runs beside the clip, its caption from the moment it was sent: a
+        # `ros2 topic pub -t N` that streams for seconds does not hold back the steps after it.
+        commands: list[tuple[list[str], subprocess.Popen[bytes]]] = []
         for step in sorted(clip.steps, key=lambda s: s.at):
             time.sleep(max(step.at - (time.time() - start), 0.0))
             if step.command:
-                done = subprocess.run(
-                    step.command, env=envs[step.run], cwd=work, timeout=30,
+                commands.append((step.command, subprocess.Popen(
+                    step.command, env=envs[step.run], cwd=work,
                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                )  # fmt: skip
-                if done.returncode != 0:
-                    raise SystemExit(f"{step.command}: {done.stderr.decode()[-500:]}")
+                )))  # fmt: skip
             sent.append((time.time() - start, step.caption))
+        for command, process in commands:
+            _, error = process.communicate(timeout=60)
+            if process.returncode != 0:
+                raise SystemExit(f"{command}: {error.decode()[-500:]}")
         for viewer in viewers:
             if viewer.wait(clip.seconds * 4 + 120) != 0:
                 raise SystemExit("a viewer failed")
     finally:
         for process in [*viewers, *servers]:
             stop(process)
+        shutil.rmtree(sockets, ignore_errors=True)
     # By the clock: each pane's latest frame at each moment, so the panes stay together.
     stamped = {p: sorted(((f.stat().st_mtime, f) for f in (work / f"pane{p}").glob("frame_*.png")),
                          key=lambda item: item[0]) for p in live}  # fmt: skip
@@ -934,7 +1321,10 @@ def record(clip: Clip, out_dir: Path, keep: bool) -> None:
     for index in range(int(clip.seconds * FPS)):
         now = start + index / FPS
         images: list[Image.Image | None] = []
-        for p in range(len(clip.panes)):
+        for p, pane in enumerate(clip.panes):
+            if pane.of is not None:
+                images.append(images[pane.of])
+                continue
             if p not in stamped:
                 images.append(None)
                 continue

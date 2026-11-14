@@ -36,6 +36,12 @@ Iris Xe, about 12 minutes for all).
 | [motor_modes.mp4](motor_modes.mp4) | A DC motor at 6 V, 12 V and 0 V: speed and current | `elec:controlMode: voltage` |
 | [spawn.mp4](spawn.mp4) | Robots and a person added to and removed from a running simulation | `lagrange spawn`, `lagrange delete` |
 | [run_file.mp4](run_file.mp4) | One file starting a whole run | `lagrange run.yaml` |
+| [radar_4d.mp4](radar_4d.mp4) | The sedan's 4D imaging radar in the town: its detections in the 3D view and in the Sensors workspace's radar view, white while it stands, blue (closing) once it drives | `--overlays radar`, `/cmd_vel` |
+| [sensor_faults.mp4](sensor_faults.mp4) | The AMR's gyro biased by 0.5 rad/s, then stuck while the robot turns the other way, against the true yaw rate | `--sensor-fault imu:angular_rate=bias,...`, `stuck` |
+| [lidar_patterns.mp4](lidar_patterns.mp4) | The same room through a channel table, a flash lidar and a Livox-style rosette, side by side | `<vertical><angles>`, `<pattern>flash</pattern>`, `<pattern>rosette</pattern>` |
+| [fisheye.mp4](fisheye.mp4) | A 90° pinhole and a 220° equidistant fisheye on the AMR in the warehouse, driving in step | `<lens><type>equidistant</type>` |
+| [event_camera.mp4](event_camera.mp4) | A camera and an event camera with the same pixels: the events are the edges that move | `<sensor type="event_camera">` |
+| [amr_sensor_kinds.mp4](amr_sensor_kinds.mp4) | The safety AMR driven up to a rack and back: its scanner's nearest return and warning field, and a wheel's torque | `amr_diffdrive_safety.urdf`, `/cmd_vel` |
 
 In the lidar materials clip the viewer's lidar views draw two tones, strong and attenuated, not a
 colour scale. The presets' reflectivities are illustrative, not measured.

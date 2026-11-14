@@ -242,6 +242,24 @@ For perfect sensors instead, switch the domain to its substitute: `--domain sens
 profile's `sensors: {enabled: false, substitute: ground_truth}`) gives exact values at the right
 times, and draws no images.
 
+## See them run
+
+Short clips of real runs, recorded by `tools/videos/make_videos.py` (all the clips:
+[feature videos](../videos/README.md)):
+
+- [radar_4d.mp4](../videos/radar_4d.mp4): the sedan's 4D imaging radar in the town, its detections
+  in the 3D view (Overlays → Radar detections) and in the Sensors workspace's radar view, coloured
+  by radial velocity.
+- [sensor_faults.mp4](../videos/sensor_faults.mp4): the AMR's gyro biased, then stuck, against the
+  true yaw rate.
+- [lidar_patterns.mp4](../videos/lidar_patterns.mp4): a channel table, a flash lidar and a
+  Livox-style rosette in the same room.
+- [fisheye.mp4](../videos/fisheye.mp4): a 90° pinhole and a 220° equidistant fisheye on the AMR.
+- [event_camera.mp4](../videos/event_camera.mp4): a camera and an event camera with the same
+  pixels.
+- [amr_sensor_kinds.mp4](../videos/amr_sensor_kinds.mp4): the safety AMR's scanner entering its
+  warning field at a rack, and a wheel's torque.
+
 ## What is not modelled
 
 Each kind's section in §9 and the [physics page](../physics/sensors.md) list their own limits.
