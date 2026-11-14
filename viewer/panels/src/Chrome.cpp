@@ -509,7 +509,9 @@ void drawBuildControls(PanelContext& context) {
     if (unsaved > 0 || session.path.empty()) {
         std::snprintf(after, sizeof(after), "unsaved · %d", unsaved);
     }
-    const std::string target = session.testTarget.empty() ? "empty world" : session.testTarget;
+    const std::string target = session.testIntoRun          ? "connected run"
+                               : session.testTarget.empty() ? "empty world"
+                                                            : session.testTarget;
     const std::string test = "Test · " + target + "      ";  // room for the chevron
     const float gap = px(4.0F);
     const float width = px(26.0F) * 2.0F + widgets::ReadoutWidth("doc", name.c_str(), after) +
@@ -557,8 +559,14 @@ void drawBuildControls(PanelContext& context) {
 
     // Test · target ▾ (the primary action). Refused while there is an error (SPEC state 3) or
     // without lagrange_server on this machine (state 5).
+    // Into the connected run (RFC 0016 §7.2) needs a server that imports instead.
     const int errors = session.problems.errors();
-    const bool installed = !context.launcher->localServer.empty();
+    const bool connected = context.connection.state == ConnectionState::Ready;
+    const bool intoRun = connected && context.connection.canImport;
+    if (intoRun && context.launcher->localServer.empty()) {
+        session.testIntoRun = true;  // SPEC state 5: then the only target
+    }
+    const bool installed = session.testIntoRun ? intoRun : !context.launcher->localServer.empty();
     ImGui::BeginDisabled(errors > 0 || !installed);
     const ImVec2 at = ImGui::GetCursorScreenPos();
     const float testWidth = widgets::ButtonWidth(test.c_str(), widgets::Icon::Play, true);
@@ -581,13 +589,18 @@ void drawBuildControls(PanelContext& context) {
     if (errors > 0) {
         ImGui::SetItemTooltip("Fix %d problem%s first", errors, errors == 1 ? "" : "s");
     } else if (!installed) {
-        ImGui::SetItemTooltip("lagrange_server is not installed");
+        ImGui::SetItemTooltip(session.testIntoRun ? "Not connected to a server that imports robots"
+                                                  : "lagrange_server is not installed");
+    } else if (session.testIntoRun) {
+        ImGui::SetItemTooltip("Add the robot to the run this viewer is connected to");
     } else {
         ImGui::SetItemTooltip("Test the robot in a simulator of its own on this machine");
     }
     if (ImGui::BeginPopup("##test-target")) {
-        if (ImGui::MenuItem("Empty world", nullptr, session.testTarget.empty())) {
+        if (ImGui::MenuItem("Empty world", nullptr,
+                            !session.testIntoRun && session.testTarget.empty())) {
             session.testTarget.clear();
+            session.testIntoRun = false;
         }
         if (ImGui::MenuItem("A sample world…", nullptr, false, false)) {
         }
@@ -595,8 +608,13 @@ void drawBuildControls(PanelContext& context) {
         if (ImGui::MenuItem("A world file…", nullptr, false, false)) {
         }
         ImGui::SetItemTooltip("Opens with WP-F's file dialog");
-        ImGui::MenuItem("Into the connected run", nullptr, false, false);
-        ImGui::SetItemTooltip("needs RFC 0016 §7.2");
+        if (ImGui::MenuItem("Into the connected run", nullptr, session.testIntoRun, intoRun)) {
+            session.testIntoRun = true;
+        }
+        ImGui::SetItemTooltip(
+            "%s", intoRun     ? "Add the robot to the run this viewer shows; Back removes it"
+                  : connected ? "This server does not import robots (a replay)"
+                              : "Connect to a server first");
         ImGui::EndPopup();
     }
     next();
@@ -645,9 +663,11 @@ void drawTestControls(PanelContext& context) {
     char rate[24];
     std::snprintf(rate, sizeof(rate), "%.2f×", context.status.realTimeFactor);
     char pill[96];
-    std::snprintf(pill, sizeof(pill), "%s · %s",
+    std::snprintf(pill, sizeof(pill), "%s · %s%s",
                   session.mode == BuilderSession::Mode::Testing ? "TEST" : "STARTING",
-                  session.document().robot.c_str());
+                  session.testRobotName.empty() ? session.document().robot.c_str()
+                                                : session.testRobotName.c_str(),
+                  session.testPassive ? " · passive" : "");
     const float gap = px(4.0F);
     ImGui::PushFont(theme::fonts().sansMedium, theme::kLabelSize);
     const float playWidth =
@@ -701,6 +721,11 @@ void drawTestControls(PanelContext& context) {
     next();
     ImGui::SetCursorPosY(y + px(4.0F));
     widgets::Pill(pill, widgets::PillKind::Info);
+    if (session.testPassive) {
+        ImGui::SetItemTooltip("passive: the run already has a robot");
+    } else if (session.testIntoRun) {
+        ImGui::SetItemTooltip("In the connected run; Back to Build removes it");
+    }
 }
 
 /// The Robot strip (SPEC "Strip under the workspace bar"), in place of the domain chips.
@@ -751,7 +776,8 @@ void drawRobotStrip(PanelContext& context) {
     // Right: what Build mode does, the validity, Check loads….
     const char* info = session.mode == BuilderSession::Mode::Build
                            ? "Build · no simulation · sensors not rendered · Lit"
-                           : "Test · the robot runs in its own simulator";
+                       : session.testIntoRun ? "Test · the robot runs in the connected run"
+                                             : "Test · the robot runs in its own simulator";
     const int errors = session.problems.errors();
     int warnings = 0;
     int hints = 0;

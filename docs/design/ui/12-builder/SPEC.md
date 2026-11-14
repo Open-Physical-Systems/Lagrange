@@ -19,7 +19,7 @@ them with its own (`ui-conventions.md` §1):
 | Undo, Redo | `.btn.ic` (Ctrl Z, Ctrl Shift Z / Ctrl Y) | redo is `.dis` when the stack top is reached |
 | Document readout | `.ro`: `doc`, mono file name, warn `● unsaved · N` (N edits since the last save) | the name is the robot name until first saved |
 | **Build** | `.btn.on` | the current mode |
-| **Test · empty world ▾** | `.btn.pri` with a menu | the primary action. Menu: Empty world · A sample world… · A world file… · *Into the connected run* (greyed with "needs RFC 0016 §7.2" until approved) |
+| **Test · empty world ▾** | `.btn.pri` with a menu | the primary action. Menu: Empty world · A sample world… · A world file… · *Into the connected run* (RFC 0016 §7.2: enabled when connected to a server that imports robots; the robot goes into that run as URDF text, passive when the run already has a robot, and Back removes it; greyed with "Connect to a server first" otherwise) |
 | **Save** | `.btn` (Ctrl S) | Save, Save as…, Export USD… (runs `lagrange_import`), Check loads… |
 
 While testing, these become: **Back to Build** (`.btn`, Esc), the Scene workspace's Play/Pause,
@@ -170,7 +170,7 @@ one undo step; typing in a field is one step when it is committed (Enter, Tab or
 5. **Disconnected / no server**: Build and Save work fully. Test needs `lagrange_server` on
    this machine; if it is not installed, Test is disabled with "lagrange_server is not installed"
    (the Launcher's wording), and *Into the connected run* is the only target when a server is
-   connected and approved.
+   connected and imports robots.
 6. **Error** (cannot read a file, cannot write): an err pill in the panel concerned, full
    message in Problems.
 

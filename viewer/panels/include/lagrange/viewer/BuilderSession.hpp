@@ -95,6 +95,9 @@ struct BuilderSession {
     double autosaveTime{0.0};  ///< ImGui::GetTime() of the last autosave, s; 0: none yet
     bool showDegrees{true};    ///< Joints panel's deg | rad (display only; files hold rad)
     std::string testTarget;    ///< "Test · empty world ▾" readout: "empty world", a file name
+    /// The Test target is the run this viewer is connected to (RFC 0016 §7.2): the robot is
+    /// imported into it as text and removed again by Back, instead of a test server's own run.
+    bool testIntoRun{false};
     /// Grows whenever a new document replaces the history (Open, a template): views that key on
     /// history.revision() key on this too, since a new History counts from 0 again.
     std::uint64_t opened{0};
@@ -108,6 +111,12 @@ struct BuilderSession {
     std::string testEndpoint;     ///< "unix:/run/user/1000/lagrange/builder-4242.sock"
     std::string testRosDomain;    ///< the test server's ROS_DOMAIN_ID; empty: started with --no-ros
     std::uint64_t testSerial{0};  ///< grows with every Test started (Drive comes to the front)
+    /// Into the connected run: the robot's name there, as the server answered ("crate_2" when
+    /// "crate" was taken); empty for a test server's own run, or before the answer.
+    std::string testRobotName;
+    /// Into the connected run: the run already had a robot, so this one is passive (nothing
+    /// drives it, no ROS topics of its own).
+    bool testPassive{false};
 
     // Out, read and cleared by BuilderHost::afterUi().
     bool testRequested{false};

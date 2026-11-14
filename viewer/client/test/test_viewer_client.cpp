@@ -654,6 +654,58 @@ TEST(ViewerClient, OpenFileSendsTheRightCommandAndReportsTheOutcome) {
     client.stop();
 }
 
+// RFC 0016 §7.2: the builder sends its robot's text and later removes it by the name the
+// server answered; both answers are kept for the UI by request id.
+TEST(ViewerClient, ImportRobotTextAndRemoveRobotRoundTrip) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+
+    const std::string urdf = R"(<robot name="crate"><link name="body"/></robot>)";
+    const std::uint64_t importId = client.importRobotText(urdf, "schema_version: 1\n");
+    ASSERT_TRUE(server.pump([&] { return server.countCommands(v1::Command::kImportRobot) == 1; }));
+    for (const v1::Envelope& e : server.received()) {
+        if (e.body_case() == v1::Envelope::kCommand && e.command().has_import_robot()) {
+            const v1::ImportRobot& sent = e.command().import_robot();
+            EXPECT_EQ(e.command().request_id(), importId);
+            EXPECT_EQ(sent.format(), v1::ImportRobot::FORMAT_URDF);
+            EXPECT_TRUE(sent.path().empty());
+            EXPECT_EQ(sent.content().inline_(), urdf);
+            EXPECT_EQ(sent.content().size(), urdf.size());
+            EXPECT_EQ(sent.overlay_content().inline_(), "schema_version: 1\n");
+        }
+    }
+    EXPECT_EQ(client.outcome(importId), nullptr) << "not answered yet";
+    v1::Envelope imported;
+    imported.mutable_command_result()->set_request_id(importId);
+    imported.mutable_command_result()->set_ok(true);
+    imported.mutable_command_result()->set_imported_stage_path("/crate_2");
+    server.send(imported);
+    ASSERT_TRUE(server.pump([&] { return client.outcome(importId) != nullptr; }));
+    EXPECT_TRUE(client.outcome(importId)->ok);
+    EXPECT_EQ(client.outcome(importId)->importedStagePath, "/crate_2");
+
+    const std::uint64_t removeId = client.removeRobot("crate_2");
+    ASSERT_TRUE(server.pump([&] { return server.countCommands(v1::Command::kRemoveRobot) == 1; }));
+    for (const v1::Envelope& e : server.received()) {
+        if (e.body_case() == v1::Envelope::kCommand && e.command().has_remove_robot()) {
+            EXPECT_EQ(e.command().request_id(), removeId);
+            EXPECT_EQ(e.command().remove_robot().name(), "crate_2");
+        }
+    }
+    // An older server does not know the command: a generic refusal, kept as the outcome.
+    v1::Envelope refused;
+    refused.mutable_command_result()->set_request_id(removeId);
+    refused.mutable_command_result()->set_error("not supported by lagrange_server");
+    server.send(refused);
+    ASSERT_TRUE(server.pump([&] { return client.outcome(removeId) != nullptr; }));
+    EXPECT_FALSE(client.outcome(removeId)->ok);
+    EXPECT_EQ(client.outcome(removeId)->error, "not supported by lagrange_server");
+    EXPECT_TRUE(client.outcome(importId)->ok) << "earlier answers are kept";
+    client.stop();
+}
+
 TEST(ViewerClient, LogLinesFillTheConsoleBookAndOldOnesFallOut) {
     FakeServer server;
     ViewerClient client(server.endpoint());

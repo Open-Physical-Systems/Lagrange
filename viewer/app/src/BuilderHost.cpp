@@ -366,6 +366,7 @@ void BuilderHost::afterUi() {
     }
     const double now = ImGui::GetTime();
     pollTest(now);
+    pollRemovals();
     pollJobs();
     runSplit();  // Addendum A: CoACD, polled in every mode
     if (std::exchange(session_.backRequested, false) &&
@@ -860,6 +861,10 @@ void BuilderHost::startTest(double now) {
     if (session_.problems.errors() > 0) {
         return;  // the button is disabled then; a key or a script may still ask
     }
+    if (session_.testIntoRun) {
+        startTestInRun(now);
+        return;
+    }
     const std::filesystem::path server = program("lagrange_server");
     if (server.empty()) {
         session_.problems.loader.push_back(
@@ -911,6 +916,128 @@ void BuilderHost::startTest(double now) {
     ++session_.testSerial;
 }
 
+void BuilderHost::startTestInRun(double now) {
+    const ConnectionInfo connection = client_.connection();
+    if (connection.state != ConnectionState::Ready || !connection.canImport) {
+        session_.problems.loader.push_back(
+            {builder::Level::Warning, "", "Test: not connected to a server that imports robots"});
+        ImGui::SetWindowFocus(builder_windows::kProblems);
+        return;
+    }
+    // The text the server reads, with meshes by absolute path (the server may run elsewhere:
+    // then they must exist there too; phase 2 sends meshes).
+    std::string error;
+    const std::filesystem::path urdf = writeCopy(
+        session_.document().robot.empty() ? "robot.urdf" : session_.document().robot + ".urdf",
+        error);
+    std::string text;
+    if (!urdf.empty()) {
+        std::ifstream in(urdf, std::ios::binary);
+        text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    if (text.empty()) {
+        session_.problems.loader.push_back(
+            {builder::Level::Warning, "", "Test: " + (error.empty() ? "no URDF written" : error)});
+        return;
+    }
+    importRequest_ = client_.importRobotText(text);
+    inRun_ = true;
+    startedAt_ = now;
+    logReadAt_ = 0.0;
+    session_.mode = BuilderSession::Mode::Starting;
+    session_.testEndpoint = proto::toString(client_.endpoint());
+    session_.testRosDomain.clear();
+    session_.testRobotName.clear();
+    session_.testPassive = false;
+    session_.testLog.clear();
+    ++session_.testSerial;
+}
+
+namespace {
+
+/// The connected run's log as the Console shows it: "[source] text" per line, the last ones.
+std::string logText(const LogBook& book) {
+    constexpr std::size_t kLines = 200;
+    std::string text;
+    const std::size_t first = book.entries.size() > kLines ? book.entries.size() - kLines : 0;
+    for (std::size_t i = first; i < book.entries.size(); ++i) {
+        text += "[" + book.entries[i].source + "] " + book.entries[i].text + "\n";
+    }
+    return text;
+}
+
+}  // namespace
+
+void BuilderHost::pollTestInRun(double now) {
+    if (client_.connection().state != ConnectionState::Ready) {
+        endTest("The connection to the run was lost");
+        return;
+    }
+    constexpr double kLogEveryS = 0.25;
+    if (now - logReadAt_ >= kLogEveryS) {
+        logReadAt_ = now;
+        const std::shared_ptr<const LogBook> book = client_.logs();
+        session_.testLog = logText(*book);
+        // The server says whether the spawned robot is the one ROS drives (Server.cpp spawn).
+        if (!session_.testRobotName.empty() && !session_.testPassive) {
+            const std::string spawned = "spawned " + session_.testRobotName + " from ";
+            for (const LogEntry& entry : book->entries) {
+                if (entry.text.starts_with(spawned) &&
+                    entry.text.find("(passive") != std::string::npos) {
+                    session_.testPassive = true;
+                }
+            }
+        }
+    }
+    if (session_.mode != BuilderSession::Mode::Starting) {
+        return;
+    }
+    if (const std::shared_ptr<const CommandOutcome> answer = client_.outcome(importRequest_)) {
+        importRequest_ = 0;
+        if (!answer->ok) {
+            // An older server takes robot files by path only (protocol.md "Commands").
+            const bool older = answer->error.find("by its path") != std::string::npos;
+            endTest("The run refused the robot: " + answer->error +
+                    (older ? " (this server is older than RFC 0016 §7.2: test in a server of "
+                             "the robot's own instead)"
+                           : ""));
+            return;
+        }
+        std::string name = answer->importedStagePath;
+        if (name.starts_with('/')) {
+            name.erase(0, 1);
+        }
+        session_.testRobotName = name;
+        session_.mode = BuilderSession::Mode::Testing;
+        logReadAt_ = 0.0;  // look for the passive line at once
+    } else if (now - startedAt_ > kStartTimeoutS) {
+        endTest("The run did not answer within " +
+                std::to_string(static_cast<int>(kStartTimeoutS)) + " s");
+    }
+}
+
+void BuilderHost::pollRemovals() {
+    if (removeAfterImport_ != 0) {
+        if (const std::shared_ptr<const CommandOutcome> answer =
+                client_.outcome(removeAfterImport_)) {
+            removeAfterImport_ = 0;
+            if (answer->ok && !answer->importedStagePath.empty()) {
+                removeRequest_ = client_.removeRobot(answer->importedStagePath);
+            }
+        }
+    }
+    if (removeRequest_ != 0) {
+        if (const std::shared_ptr<const CommandOutcome> answer = client_.outcome(removeRequest_)) {
+            removeRequest_ = 0;
+            if (!answer->ok) {
+                session_.problems.loader.push_back(
+                    {builder::Level::Warning, "",
+                     "Back: the robot stays in the run (" + answer->error + ")"});
+            }
+        }
+    }
+}
+
 void BuilderHost::restoreClient() {
     client_.stop();
     client_.setEndpoint(previousEndpoint_);
@@ -920,10 +1047,24 @@ void BuilderHost::restoreClient() {
 }
 
 void BuilderHost::endTest(const std::string& failure) {
-    if (test_.state() == builder::TestServer::State::Running) {
-        test_.requestStop();  // poll() sends SIGKILL after the grace
+    if (inRun_) {
+        // Back takes the robot out of the run again; the run itself goes on.
+        if (!session_.testRobotName.empty() &&
+            client_.connection().state == ConnectionState::Ready) {
+            removeRequest_ = client_.removeRobot(session_.testRobotName);
+        } else if (importRequest_ != 0) {
+            removeAfterImport_ = importRequest_;  // not answered yet
+        }
+        inRun_ = false;
+        importRequest_ = 0;
+        session_.testRobotName.clear();
+        session_.testPassive = false;
+    } else {
+        if (test_.state() == builder::TestServer::State::Running) {
+            test_.requestStop();  // poll() sends SIGKILL after the grace
+        }
+        restoreClient();
     }
-    restoreClient();
     session_.mode = BuilderSession::Mode::Build;
     if (!failure.empty()) {
         // SPEC state 4: the view does not change; Problems comes forward with the loader's
@@ -941,6 +1082,10 @@ void BuilderHost::endTest(const std::string& failure) {
 void BuilderHost::pollTest(double now) {
     const builder::TestServer::State state = test_.poll();
     if (session_.mode == BuilderSession::Mode::Build) {
+        return;
+    }
+    if (inRun_) {
+        pollTestInRun(now);
         return;
     }
     constexpr double kLogEveryS = 0.25;

@@ -57,22 +57,41 @@ public:
             return;
         }
         const builder::Document& document = session.document();
-        widgets::Caption("test server");
-        ImGui::SameLine();
-        widgets::Mono(c::t2, "%s", session.testEndpoint.c_str());
-        if (session.testRosDomain.empty()) {
-            widgets::Pill("no ROS", widgets::PillKind::Neutral);
+        std::string domain;
+        if (session.testIntoRun) {
+            // RFC 0016 §7.2: the robot is in the run this viewer is connected to.
+            widgets::Caption("in the connected run as");
             ImGui::SameLine();
-            widgets::Caption("started with --no-ros (LAGRANGE_BUILDER_ROS_DOMAIN_ID=off)");
-            ImGui::End();
-            return;
+            widgets::Mono(c::accent, "%s",
+                          session.testRobotName.empty() ? "…" : session.testRobotName.c_str());
+            ImGui::SameLine();
+            widgets::Mono(c::t2, "%s", session.testEndpoint.c_str());
+            if (session.testPassive) {
+                widgets::Pill("passive", widgets::PillKind::Warn);
+                ImGui::SameLine();
+                widgets::Caption("the run already has a robot: nothing drives this one");
+                ImGui::End();
+                return;
+            }
+            widgets::Caption("ROS 2 on the run's own domain");
+        } else {
+            widgets::Caption("test server");
+            ImGui::SameLine();
+            widgets::Mono(c::t2, "%s", session.testEndpoint.c_str());
+            if (session.testRosDomain.empty()) {
+                widgets::Pill("no ROS", widgets::PillKind::Neutral);
+                ImGui::SameLine();
+                widgets::Caption("started with --no-ros (LAGRANGE_BUILDER_ROS_DOMAIN_ID=off)");
+                ImGui::End();
+                return;
+            }
+            // Plan R8: the test server has a ROS domain of its own, so a teleop on the user's
+            // domain does not drive it, nor this one the user's run.
+            domain = "ROS_DOMAIN_ID=" + session.testRosDomain + " ";
+            widgets::Caption("ROS 2 on its own domain");
+            ImGui::SameLine();
+            widgets::Mono(c::accent, "%s", session.testRosDomain.c_str());
         }
-        // Plan R8: the test server has a ROS domain of its own, so a teleop on the user's
-        // domain does not drive it, nor this one the user's run.
-        const std::string domain = "ROS_DOMAIN_ID=" + session.testRosDomain + " ";
-        widgets::Caption("ROS 2 on its own domain");
-        ImGui::SameLine();
-        widgets::Mono(c::accent, "%s", session.testRosDomain.c_str());
         std::string joint;
         for (const builder::Joint& j : document.joints) {
             if (builder::isMoving(j.type) && !j.mimic) {

@@ -306,6 +306,49 @@ void ViewerClient::openFile(const std::string& path) {
     enqueue(std::move(envelope));
 }
 
+std::uint64_t ViewerClient::importRobotText(const std::string& urdf, const std::string& overlay) {
+    auto envelope = std::make_unique<v1::Envelope>();
+    const std::uint64_t id = nextRequestId_++;
+    envelope->mutable_command()->set_request_id(id);
+    v1::ImportRobot* import = envelope->mutable_command()->mutable_import_robot();
+    import->set_format(v1::ImportRobot::FORMAT_URDF);
+    import->mutable_content()->set_inline_(urdf);
+    import->mutable_content()->set_size(urdf.size());
+    if (!overlay.empty()) {
+        import->mutable_overlay_content()->set_inline_(overlay);
+        import->mutable_overlay_content()->set_size(overlay.size());
+    }
+    {
+        const std::lock_guard lock(commandMutex_);
+        awaited_.push_back(id);
+    }
+    enqueue(std::move(envelope));
+    return id;
+}
+
+std::uint64_t ViewerClient::removeRobot(const std::string& name) {
+    auto envelope = std::make_unique<v1::Envelope>();
+    const std::uint64_t id = nextRequestId_++;
+    envelope->mutable_command()->set_request_id(id);
+    envelope->mutable_command()->mutable_remove_robot()->set_name(name);
+    {
+        const std::lock_guard lock(commandMutex_);
+        awaited_.push_back(id);
+    }
+    enqueue(std::move(envelope));
+    return id;
+}
+
+std::shared_ptr<const CommandOutcome> ViewerClient::outcome(std::uint64_t requestId) const {
+    const std::shared_ptr<const std::vector<CommandOutcome>> all = outcomes_.load();
+    for (const CommandOutcome& candidate : *all) {
+        if (candidate.requestId == requestId) {
+            return {all, &candidate};  // shares the list's lifetime
+        }
+    }
+    return nullptr;
+}
+
 std::shared_ptr<SensorStream> ViewerClient::watchSensor(const std::string& name) {
     {
         const std::lock_guard lock(sensorMutex_);
@@ -995,6 +1038,7 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
             w.info.serverName = hello.server_name();
             w.info.canSeek = hello.capabilities().can_seek();
             w.info.canStep = hello.capabilities().can_step();
+            w.info.canImport = hello.capabilities().can_import();
             w.backoff.reset();
             w.everConnected = true;
             // The server sends its console history again on every connection.
@@ -1309,6 +1353,25 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
         }
         case v1::Envelope::kCommandResult: {
             const v1::CommandResult& result = envelope.command_result();
+            bool awaited = false;
+            {
+                const std::lock_guard lock(commandMutex_);
+                const auto it = std::ranges::find(awaited_, result.request_id());
+                if (it != awaited_.end()) {
+                    awaited_.erase(it);
+                    awaited = true;
+                }
+            }
+            if (awaited) {
+                constexpr std::size_t kKept = 8;
+                auto all = std::make_shared<std::vector<CommandOutcome>>(*outcomes_.load());
+                all->push_back({result.request_id(), result.ok(), result.error(),
+                                result.imported_stage_path()});
+                if (all->size() > kKept) {
+                    all->erase(all->begin());
+                }
+                outcomes_.store(std::move(all));
+            }
             if (result.has_attributes()) {
                 auto all = std::make_shared<std::map<std::uint32_t, PrimAttributes>>(
                     *attributesByPrim_.load());
@@ -1352,7 +1415,7 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
             } else if (!result.ok()) {
                 post(true,
                      result.error().empty() ? "the server refused a command" : result.error());
-            } else if (!result.imported_stage_path().empty()) {
+            } else if (!awaited && !result.imported_stage_path().empty()) {
                 post(false, "Loaded " + result.imported_stage_path());
             }
             break;
