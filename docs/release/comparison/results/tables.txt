@@ -1,0 +1,39 @@
+| Engine | Free fall, z after 1 s: error | Pendulum period (0.05 rad): error | Pendulum energy after 60 s (1 rad) | Slide on 30°, μ 0.3: acceleration error | Hold on 10°: creep in 2 s | Resting box: contact force error | Resting box: sinks |
+|---|---|---|---|---|---|---|---|
+| Lagrange mujoco | -4.905 mm | -0.41 ppm | -0.07 % (worst 0.15 %) | -135.9 ppm | 0.916 mm | +0 ppm | 0.1078 mm |
+| Lagrange jolt | -4.898 mm | -0.02 ppm | -16.38 % (worst 16.39 %) | -4.0 ppm | 0.001 mm | -2.6e-09 ppm | 0.0002 mm |
+| Gazebo Jetty (gz-sim 10.5.0) | -4.905 mm | -0.41 ppm | -0.07 % (worst 0.15 %) | -0.0 ppm | 0.000 mm | +0.1 ppm | 0.0000 mm |
+| MuJoCo 3.12.0 (standalone) | -4.905 mm | -0.41 ppm | -0.07 % (worst 0.15 %) | +124.3 ppm | 1.282 mm | -7.4e-06 ppm | 0.1078 mm |
+| MuJoCo 4.0.1 (standalone) | -4.905 mm | -0.41 ppm | -0.07 % (worst 0.15 %) | +124.3 ppm | 1.282 mm | -7.4e-06 ppm | 0.1078 mm |
+| PyBullet 3.2.7 (Bullet) | -4.905 mm | -0.41 ppm | -0.07 % (worst 0.15 %) | -0.1 ppm | -0.036 mm | -6e-06 ppm | 0.0103 mm |
+
+Runs: 111. At the start of a run: 1-minute load average 0.30 to 2.70; GPU graphics clock 210 to 2010 MHz, 44 to 52 °C, power states P0, P3, P4, P8.
+
+| Scenario | Simulator | Real-time factor | Stepping wall time (s) | Start-up to first step (s) | Peak RSS (MB) | CPU while stepping (cores) | Sensor output | n |
+|---|---|---|---|---|---|---|---|---|
+| amr_physics | lagrange_mujoco | 96.6 (96.1–97) | 0.621 (0.618–0.624) | 0.0696 (0.0686–0.0705) | 75.61 (75.53–75.85) | 1 (1–1) |  | 5 |
+| amr_physics | lagrange_jolt | 69 (68.6–69.2) | 0.869 (0.867–0.874) | 0.0689 (0.0676–0.0725) | 77.1 (76.86–77.21) | 1 (1–1) |  | 5 |
+| amr_physics | gazebo | 14.8 (14.6–14.9) | 4.06 (4.03–4.12) | 2.44 (2.42–2.45) | 137.2 (137.1–137.8) | 1.3 (1.3–1.3) |  | 5 |
+| amr_sensors | lagrange_cpu_lidar | 54.1 (53.7–56.3) | 1.11 (1.07–1.12) | 0.0684 (0.0666–0.0735) | 77.52 (77.43–77.78) | 7.8 (7.6–8.2) | 8.18e+06 (8.12e+06–8.51e+06) rays/s | 5 |
+| amr_sensors | lagrange_gpu_lidar | 18.9 (17.8–19) | 3.18 (3.16–3.37) | 0.24 (0.234–0.256) | 279.1 (278.9–279.3) | 1.8 (1.7–1.9) | 2.86e+06 (2.7e+06–2.87e+06) rays/s | 5 |
+| amr_sensors | gazebo_subscribed | 12.7 (12.3–13.2) | 4.72 (4.56–4.86) | 2.73 (2.73–2.75) | 960.9 (960.2–961.1) | 1.5 (1.5–1.5) | 1.09e+06 (1.08e+06–1.09e+06) rays/s; scans received 683 (659–697) | 5 |
+| amr_sensors | gazebo_no_subscriber | 13 (12.8–13.3) | 4.62 (4.51–4.67) | 2.73 (2.73–2.75) | 882.8 (882.7–883) | 1.2 (1.2–1.2) | none (no subscriber: nothing rendered) | 5 |
+| boxes | lagrange_mujoco | 0.166 (0.165–0.166) | 30.1 (30.1–30.2) | 0.128 (0.125–0.13) | 83.62 (83.46–84.04) | 1 (1–1) |  | 5 |
+| boxes | lagrange_jolt | 2.38 (2.38–2.38) | 2.1 (2.1–2.1) | 0.108 (0.107–0.114) | 78.73 (78.52–78.91) | 1 (1–1) |  | 5 |
+| boxes | gazebo | did not finish (timeout) | | | | | | 1 |
+| boxes | mujoco_latest | 0.458 (0.458–0.46) | 10.9 (10.9–10.9) | 0.158 (0.152–0.196) | 61.61 (61.54–61.99) | 1 (1–1) |  | 5 |
+| boxes | mujoco_3.12 | 0.289 (0.289–0.29) | 17.3 (17.2–17.3) | 0.156 (0.154–0.158) | 60.34 (60.16–60.39) | 1 (1–1) |  | 5 |
+| boxes | mujoco_3.12_lagrange_options | 0.184 (0.184–0.184) | 27.2 (27.1–27.2) | 0.154 (0.154–0.171) | 60.89 (60.41–61.12) | 1 (1–1) |  | 5 |
+| boxes | pybullet | 0.239 (0.238–0.241) | 20.9 (20.7–21) | 0.0583 (0.058–0.0714) | 56 (55.81–56.16) | 1 (1–1) |  | 5 |
+| camera | lagrange | 10.7 (10.5–11.2) | 1.86 (1.78–1.91) | 0.323 (0.31–0.332) | 396.3 (396.1–396.5) | 0.61 (0.57–0.67) | 322 (315–337) frames/s | 5 |
+| camera | gazebo_subscribed | 12.3 (11.7–12.7) | 1.63 (1.58–1.71) | 2.72 (2.71–2.74) | 961.4 (961.1–961.7) | 1.9 (1.9–2) | 372 (355–384) frames/s; frames received 607 (607–607) | 5 |
+| quad | lagrange_full | 38 (37.3–38.2) | 1.58 (1.57–1.61) | 0.0933 (0.0884–0.098) | 88.82 (88.68–89) | 1 (1–1) | height at the end 2.13 (2.13–2.13) m | 5 |
+| quad | lagrange_lean | 38.4 (38.2–38.6) | 1.56 (1.55–1.57) | 0.0909 (0.0873–0.0948) | 88.65 (88.44–88.77) | 1 (1–1) | height at the end 2.13 (2.13–2.13) m | 5 |
+| quad | gazebo_x3 | 18.3 (18.2–18.6) | 3.28 (3.23–3.29) | 2.21 (2.21–2.22) | 134.7 (134.6–135.2) | 1.3 (1.3–1.3) | height at the end 1.88 (1.88–1.88) m | 5 |
+
+
+| Engine | Run 1 digest | Run 2 digest | Bit-identical |
+|---|---|---|---|
+| lagrange-mujoco | `bbc85ed6` | `bbc85ed6` | yes |
+| lagrange-jolt | `4c510ca2` | `4c510ca2` | yes |
+| gazebo | `6c9fbab9` | not run | not known |

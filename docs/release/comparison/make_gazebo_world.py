@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 """Writes the Gazebo Jetty world for the v0.2 comparison (docs/release/v0.2.0-comparison.md).
 
 The sample AMR converts with `gz sdf -p amr_diffdrive.urdf`. The warehouse does not: its URDF

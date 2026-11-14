@@ -1,0 +1,1 @@
+{"engine": "lagrange determinism (CLI)", "command": "ros2 run lagrange_server lagrange determinism SCENARIOS/profile_sensors.yaml --seconds 60", "output": "deterministic: 601 state hashes over 60.0 s identical in both runs"}
