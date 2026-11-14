@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft (2026-11-14), for the owner to accept or reject |
+| Status | Accepted (2026-11-14): the owner accepted every proposed answer below |
 | Created | 2026-11-14 |
 | Affects | `viewer/` (a new library `viewer/builder/`, panels, one workspace entry in `Chrome.cpp`, new flags), `docs/design/ui/12-builder/` (new), `modules/sensors/` (a catalog data file and its test, no code change), `docs/design/viewer.md`, `docs/design/dependencies.md`; later phases: `server/src/Server.cpp` (§7.2) and `proto/` (§11, only with the owner's approval) |
 | Not affected (MVP) | `proto/`, `schemas/`, `core/plugin_abi/`, the server, every simulation module |
@@ -401,7 +401,7 @@ accepted.
 | Reading URDF with urdfdom in the viewer | drops the elements it does not know (`<gazebo>`, `<ros2_control>`), so they could not be kept |
 | Writing xacro | macros cannot be produced from a flat document in a way people would keep |
 
-## Open questions (with a proposed answer)
+## Open questions (answered: the owner accepted each proposed answer, 2026-11-14)
 
 1. *Test's default target*: the viewer's own test server (§7.1) in the MVP, and testing inside the
    connected run only in phase 1b? Proposed: yes.
