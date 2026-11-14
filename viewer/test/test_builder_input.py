@@ -19,10 +19,20 @@ CYLINDER_TILE = "101,862"
 BOX_LINK_TYPE_TEXT = "115,221"  # "fixed · box" on the box link's row: selects its joint
 REVOLUTE = "1425,272"  # Properties: the joint type's Segmented
 LOWER_LIMIT = "1470,517"
-OTHER_KIND_FIELD = "1005,897"
-OTHER_KIND_ADD = "1218,897"
-DELETE_TOOL = "1572,115"
-CATALOG_TAB = "860,763"  # brings the Sensor catalog in front of Problems  # Properties' Delete in its tab bar
+CATALOG_FILTER = "950,793"
+BASE_LINK_ROW = "70,199"
+FIRST_ROW_ADD = "1205,845"  # Add on the first catalog row under its group, while hovered
+RANGE_MAX = "1470,546"  # Properties: a rangefinder's range/max
+RESET_TO_DEFAULTS = "1546,949"
+# With a filter no catalog row matches, "Other kind…" is the first row (collapsed while the
+# installed catalog has entries).
+OTHER_KIND_HEADER = "868,829"
+OTHER_KIND_FIELD = "1005,864"
+OTHER_KIND_ADD = "1218,864"
+DELETE_TOOL = "1572,115"  # Properties' Delete in its tab bar
+CATALOG_TAB = (
+    "860,763"  # brings the Sensor catalog in front of Problems  # Properties' Delete in its tab bar
+)
 
 
 def viewer() -> str:
@@ -123,15 +133,43 @@ def test_other_kind_adds_a_sensor_on_the_selected_link(tmp_path):
         [
             f"3:click:{BOX_TILE}",
             f"6:click:{CATALOG_TAB}",
-            f"8:click:{OTHER_KIND_FIELD}",
-            "10:text:rangefinder",
-            "12:key:enter",
-            f"16:click:{OTHER_KIND_ADD}",
+            f"8:click:{CATALOG_FILTER}",
+            "10:text:sun_tracker",
+            f"13:click:{OTHER_KIND_HEADER}",
+            f"16:click:{OTHER_KIND_FIELD}",
+            "18:text:sun_tracker",
+            "20:key:enter",
+            f"24:click:{OTHER_KIND_ADD}",
         ]
     )
-    builder = run_input(tmp_path, script, 24)
+    builder = run_input(tmp_path, script, 32)
+    assert builder["sensors"] == 1
+    assert builder["selected"] == "sun_tracker"
+
+
+def test_a_catalog_row_adds_its_sensor_with_the_catalog_form(tmp_path):
+    # The installed catalog (share/lagrange_viewer/catalog): filter to the rangefinder, hover
+    # its row and press Add, on the selected link. Then range/max 20 is one value off the
+    # catalog, and Reset to defaults puts it back.
+    script = ";".join(
+        [
+            f"3:click:{BASE_LINK_ROW}",
+            f"6:click:{CATALOG_TAB}",
+            f"9:click:{CATALOG_FILTER}",
+            "11:text:rangefinder",
+            f"14:click:{FIRST_ROW_ADD}",
+            f"22:click:{RANGE_MAX}",
+            "24:key:ctrl+a",
+            "26:text:20",
+            "28:key:enter",
+            f"34:click:{RESET_TO_DEFAULTS}",
+        ]
+    )
+    builder = run_input(tmp_path, script, 42)
     assert builder["sensors"] == 1
     assert builder["selected"] == "rangefinder"
+    # Add, the range, and the reset: one step each.
+    assert builder["edits"] == 3
 
 
 def test_delete_removes_the_selection(tmp_path):

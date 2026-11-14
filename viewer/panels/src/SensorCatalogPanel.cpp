@@ -25,9 +25,10 @@ namespace c = theme::c;
 using builder::CatalogEntry;
 using widgets::px;
 
-/// "range_and_contact" → "Range and contact"; the built-in types' group is "Built-in types".
+/// "range_and_contact" → "Range and contact"; the built-in URDF types' group is "Built-in
+/// types" (GNSS, magnetometer, barometer and radar are types too, but sit in their groups).
 std::string groupTitle(const CatalogEntry& entry) {
-    if (entry.builtinType) {
+    if (entry.group == "built_in_types") {
         return "Built-in types";
     }
     std::string title = entry.group.empty() ? "Other" : entry.group;
@@ -136,12 +137,17 @@ private:
         const bool hovered =
             ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
             ImGui::IsMouseHoveringRect(min, ImVec2(min.x + width, min.y + height));
-        if (editable(session) && ImGui::BeginDragDropSource()) {
+        if (editable(session) && !entry.overlayOnly && ImGui::BeginDragDropSource()) {
             ImGui::SetDragDropPayload(kDragCatalog, entry.name.c_str(), entry.name.size() + 1);
             widgets::Caption("a %s sensor", entry.name.c_str());
             ImGui::EndDragDropSource();
         }
-        if (!entry.doc.empty() || !entry.summary.empty()) {
+        if (entry.overlayOnly) {
+            ImGui::SetItemTooltip(
+                "%s\n%s\nNeeds the overlay file, which the builder writes "
+                "from phase 3 (RFC 0016).",
+                entry.summary.c_str(), entry.doc.c_str());
+        } else if (!entry.doc.empty() || !entry.summary.empty()) {
             ImGui::SetItemTooltip("%s\n%s", entry.summary.c_str(), entry.doc.c_str());
         }
         ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -164,7 +170,7 @@ private:
             });
         float right = min.x + width - px(6.0F);
         bool add = false;
-        if (hovered && editable(session) && !target.empty()) {
+        if (hovered && editable(session) && !target.empty() && !entry.overlayOnly) {
             const float button = widgets::ButtonWidth("Add");
             ImGui::SetCursorScreenPos(ImVec2(right - button, min.y));
             add = widgets::Button("Add");

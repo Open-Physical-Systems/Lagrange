@@ -437,17 +437,21 @@ std::vector<Problem> checkSensorParams(const Sensor& sensor, const CatalogEntry&
                                                     (integer ? "a whole number" : "a number"));
                     break;
                 }
-                if (param->min && *value < *param->min) {
-                    findings.error(sensor.name, where + " = " + text + unit +
-                                                    " is below the "
-                                                    "catalog's minimum " +
-                                                    number(*param->min) + unit);
+                if (param->min &&
+                    (*value < *param->min || (param->minExclusive && *value == *param->min))) {
+                    findings.error(sensor.name,
+                                   where + " = " + text + unit +
+                                       (param->minExclusive ? " must be more than "
+                                                            : " is below the catalog's minimum ") +
+                                       number(*param->min) + unit);
                 }
-                if (param->max && *value > *param->max) {
-                    findings.error(sensor.name, where + " = " + text + unit +
-                                                    " is above the "
-                                                    "catalog's maximum " +
-                                                    number(*param->max) + unit);
+                if (param->max &&
+                    (*value > *param->max || (param->maxExclusive && *value == *param->max))) {
+                    findings.error(sensor.name,
+                                   where + " = " + text + unit +
+                                       (param->maxExclusive ? " must be less than "
+                                                            : " is above the catalog's maximum ") +
+                                       number(*param->max) + unit);
                 }
                 break;
             }

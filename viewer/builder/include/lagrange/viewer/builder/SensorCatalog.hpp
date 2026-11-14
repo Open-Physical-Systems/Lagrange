@@ -25,7 +25,9 @@ struct CatalogParam {
     enum class Type { Number, Int, Bool, Text, Enum, List } type{Type::Number};
     std::string unit;         ///< SI as the file holds it ("m", "rad", "Hz", "1"); empty: none
     std::string defaultText;  ///< the default as text, in `unit`; empty: no default
-    std::optional<double> min, max;    ///< inclusive bounds in `unit`, for Number and Int
+    std::optional<double> min, max;    ///< bounds in `unit`, for Number and Int
+    bool minExclusive{false};          ///< min itself is refused (the code reads `> min`)
+    bool maxExclusive{false};          ///< max itself is refused
     std::vector<std::string> options;  ///< Enum: the allowed values
     std::string meaning;               ///< one line for the form's tooltip
 };
@@ -42,7 +44,9 @@ struct CatalogEntry {
     bool builtinType{false};             ///< a built-in URDF type (camera, lidar, imu), not a kind
     std::vector<std::string> urdfTypes;  ///< the `type=` words the reader takes for it
     std::string element;                 ///< wrapper element the writer writes (plan decision 6)
-    std::string group;        ///< catalog panel group: "range_and_contact", "vision", ...
+    std::string group;        ///< catalog panel group (12-builder SPEC): "built_in_types",
+                              ///< "range_and_contact", "vision", "air_and_weather", "power",
+                              ///< "force_and_motion", "radio_and_vehicle", "plugins"
     std::string summary;      ///< one line for the catalog row
     std::string doc;          ///< "docs/design/domains/sensors.md#rangefinder"
     bool overlayOnly{false};  ///< GNSS, magnetometer, barometer, radar: need the overlay (ph. 3)
@@ -61,15 +65,17 @@ public:
     };
 
     SensorCatalog();  ///< empty: no entries; every sensor gets a free key/value form
-    /// Loads and merges `files` in order. A malformed file, or a kind named twice across the
-    /// files, is an error naming the file and line.
+    /// Loads and merges `files` in order. A malformed file, a default outside its own bounds,
+    /// or a kind (or URDF type) named twice across the files is an error naming the file and
+    /// line. A file with `plugin:` adds kinds only; its kinds form the group "plugins".
     [[nodiscard]] static std::variant<SensorCatalog, LoadError> load(
         const std::vector<std::filesystem::path>& files);
 
     /// The entry for a sensor's type or kind: a type by any of its urdfTypes ("gpu_lidar" finds
     /// "lidar"), a kind by its name. nullptr when unknown.
     [[nodiscard]] const CatalogEntry* find(std::string_view typeOrKind) const;
-    /// Built-in types first, then kinds by group in the file's order, then plugin kinds.
+    /// Built-in URDF types first, then the groups in the SPEC's order (an overlay-only type
+    /// first in its group), then plugin kinds; the files' order within a group.
     [[nodiscard]] std::span<const CatalogEntry> entries() const;
 
 private:
