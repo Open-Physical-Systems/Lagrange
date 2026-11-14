@@ -189,7 +189,11 @@ print(sim.read("sensor/wheel_odom/pose"))  # x, y, z, then the quaternion
 `sim.image("sensor/<name>/<quantity>")`
 returns an image (a camera's `image`, `depth` and `instance`, a stereo camera's `left`, `right` and
 `depth`, an event camera's `image`, `detections`' `semantic`) as a numpy array, or None before the
-first frame. `sim.signals()` lists the names.
+first frame. `sim.signals()` lists every signal as a dict `{"name", "unit", "components"}`
+(`[s["name"] for s in sim.signals() if s["name"].startswith("sensor/")]` for the sensors' names).
+What the loader noted about your files and took its own way (an unknown lidar pattern, a lens it
+does not draw) is printed to stderr as `[import] ...` when the `Simulation` is made, as the command
+line prints it, and `sim.notes()` returns those lines.
 
 **ROS 2**: the built-in types publish their own topics (`/scan`, `/points`, `/imu`,
 `/<name>/image_raw`, `/<name>/fix`, ...; see [the command line](cli.md)). A kind's images go out

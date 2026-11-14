@@ -9,6 +9,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <fstream>
 #include <memory>
 #include <nanobind/nanobind.h>
@@ -74,6 +75,10 @@ public:
         server_ = std::make_unique<lagrange::server::Server>(options);
         if (const lagrange::Status status = server_->load(); !status.ok()) {
             throw std::runtime_error(status.message);
+        }
+        // What the loader took its own way, as the CLI prints it (sensors QA F8); also notes().
+        for (const std::string& note : server_->importNotes()) {
+            std::fprintf(stderr, "[import] %s\n", note.c_str());
         }
         if (profile) {
             if (const lagrange::Status status = server_->applyProfile(yaml); !status.ok()) {
@@ -213,6 +218,8 @@ public:
         }
     }
 
+    [[nodiscard]] std::vector<std::string> notes() const { return server_->importNotes(); }
+
     [[nodiscard]] nb::list signals() const {
         nb::list out;
         for (const auto& signal : server_->signals()) {
@@ -326,6 +333,10 @@ NB_MODULE(_lagrange, m) {
              "kind's sensor/<n>/<q>) as a numpy array: rgba8 (height, width, 4) uint8, r32f "
              "(height, width) float32, r32u uint32, ... None before the first frame (the "
              "sensors domain on ground truth renders nothing). KeyError for an unknown name.")
+        .def("notes", &Simulation::notes,
+             "What the loader noted about the robot's files and took its own way (an unknown "
+             "lidar pattern, a lens it does not draw, ...), as printed to stderr with [import] "
+             "when the Simulation is made.")
         .def("signals", &Simulation::signals,
              "Every signal on the bus: dicts with name, unit and components.")
         .def("bodies", &Simulation::bodies)

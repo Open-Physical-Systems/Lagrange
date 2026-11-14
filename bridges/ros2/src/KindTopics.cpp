@@ -13,6 +13,7 @@
 #include <span>
 #include <sstream>
 #include <string_view>
+#include <vector>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/quaternion_stamped.hpp>
@@ -157,6 +158,9 @@ std::vector<KindTopic> kindTopics(const World& world, std::uint32_t sensor, cons
         if (quantity.empty() || quantity.starts_with("delayed/")) {
             continue;  // the bridge delays the messages itself (sensor timing)
         }
+        if (quantity == "contamination") {
+            continue;  // the weather's lens contamination: an input of the sensor, not a reading
+        }
         if (spec.type == SignalType::Image) {
             images.insert(quantity);
         }
@@ -258,7 +262,26 @@ std::vector<KindTopic> kindTopics(const World& world, std::uint32_t sensor, cons
             topic.signals.push_back(q.empty() ? std::string{} : prefix + q);
             used.insert(q);
         }
-        topic.params["capacity"] = get("capacity", kNaN);  // Ah
+        // Ah: the sensor's own, else the battery's rated charge (BatteryAPI_1, C), as the
+        // monitor reads it; NaN when neither says (sensors QA I1).
+        double capacity = get("capacity", kNaN);
+        if (!std::isfinite(capacity)) {
+            const auto& names = world.sensors.text[sensor];
+            const auto named = names.find("battery");
+            std::vector<const SchemaInstance*> batteries;
+            for (const SchemaInstance& b : world.schemaInstances) {
+                if (b.schema == "BatteryAPI_1" &&
+                    (named == names.end() ||
+                     world.prims.instanceNames.at(b.prim.index) == named->second)) {
+                    batteries.push_back(&b);
+                }
+            }
+            if (batteries.size() == 1) {
+                capacity = batteries.front()->real("elec:battery:capacity").value_or(kNaN) /
+                           kCoulombsPerAmpHour;
+            }
+        }
+        topic.params["capacity"] = capacity;
         const auto& text = world.sensors.text[sensor];
         const auto battery = text.find("battery");
         topic.text = battery == text.end() ? std::string{} : battery->second;
@@ -316,7 +339,11 @@ std::vector<KindTopic> kindTopics(const World& world, std::uint32_t sensor, cons
         topic.frame = rosFrame(spec->frame, name, body);
         const std::string leaf = slash == std::string::npos ? quantity : quantity.substr(slash + 1);
         const bool velocity = spec->unit.dim == units::m_per_s.dim;
-        switch (spec->type) {
+        // A `valid` flag is a Bool on ROS whatever the kind declares it as (the power kinds'
+        // are Scalar 0/1 on the bus, kept for 1.x readers): sensors QA F10.
+        const bool flag =
+            leaf == "valid" && spec->type == SignalType::Scalar && spec->unit.dim == units::one.dim;
+        switch (flag ? SignalType::Bool : spec->type) {
             case SignalType::Bool:
                 topic.type = "std_msgs/msg/Bool";
                 topic.frame.clear();
@@ -693,14 +720,16 @@ void KindTopics::Impl::make(Out& out) {
             m.capacity = static_cast<float>(
                 std::isfinite(capacity) ? capacity : (soc > 0.0 ? charge / soc : kNaN));
             m.present = valid;
+            // What the current does first: a full pack that delivers current is discharging
+            // (it read FULL at SOC 1 while giving 0.9 A, sensors QA I1); FULL only at rest.
             if (!valid) {
                 m.power_supply_status = BatteryState::POWER_SUPPLY_STATUS_UNKNOWN;
-            } else if (soc >= 1.0) {
-                m.power_supply_status = BatteryState::POWER_SUPPLY_STATUS_FULL;
             } else if (current > 0.0) {
                 m.power_supply_status = BatteryState::POWER_SUPPLY_STATUS_DISCHARGING;
             } else if (current < 0.0) {
                 m.power_supply_status = BatteryState::POWER_SUPPLY_STATUS_CHARGING;
+            } else if (soc >= 1.0) {
+                m.power_supply_status = BatteryState::POWER_SUPPLY_STATUS_FULL;
             } else {
                 m.power_supply_status = BatteryState::POWER_SUPPLY_STATUS_NOT_CHARGING;
             }
