@@ -40,6 +40,7 @@ add_library(
     STATIC
     builder/src/Document.cpp
     builder/src/Edits.cpp
+    builder/src/Gizmo.cpp
     builder/src/History.cpp
     builder/src/Kinematics.cpp
     builder/src/MassProperties.cpp
@@ -149,6 +150,7 @@ add_library(
     lagrange_viewer_panels
     STATIC
     panels/src/BuilderAdd.cpp
+    panels/src/BuilderGizmo.cpp
     panels/src/BuilderJoints.cpp
     panels/src/BuilderPanels.cpp
     panels/src/BuilderView.cpp
@@ -303,6 +305,7 @@ if(BUILD_TESTING)
         builder/test/test_urdf.cpp
         builder/test/test_edits.cpp
         builder/test/test_sensor_catalog_loader.cpp
+        builder/test/test_gizmo.cpp
         TIMEOUT 120
     )
     target_link_libraries(
@@ -329,6 +332,7 @@ if(BUILD_TESTING)
     ament_add_pytest_test(test_circuit_roundtrip test/test_circuit_roundtrip.py TIMEOUT 120)
     ament_add_pytest_test(test_viewer_input test/test_viewer_input.py TIMEOUT 180)
     ament_add_pytest_test(test_builder_input test/test_builder_input.py TIMEOUT 180)
+    ament_add_pytest_test(test_builder_gizmo test/test_builder_gizmo.py TIMEOUT 300)
     ament_add_pytest_test(test_builder_view test/test_builder_view.py TIMEOUT 300)
     ament_add_pytest_test(
         test_builder_roundtrip

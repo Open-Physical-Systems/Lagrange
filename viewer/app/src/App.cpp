@@ -7,6 +7,7 @@
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/SceneRenderer.hpp"
 #include "lagrange/viewer/ViewerClient.hpp"
+#include "lagrange/viewer/builder/Gizmo.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
@@ -1044,7 +1045,8 @@ public:
                       document.links.size(), document.joints.size(), document.sensors.size(),
                       builderSession_.history.editsSinceSave());
         return text + std::string("\"selected\": \"") + jsonEscape(builderSession_.selection.name) +
-               "\", \"joint_types\": {" + joints + "}}";
+               "\", \"joint_types\": {" + joints +
+               "}, \"geometry\": " + builder::gizmo::geometryJson(document) + "}";
     }
 
     /// Shows the launcher first: the client is started when the user chooses a server.
