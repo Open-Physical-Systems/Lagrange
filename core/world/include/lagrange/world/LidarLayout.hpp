@@ -45,15 +45,16 @@ struct LidarLayout {
         double pointRate{0.0};  // points per second
     };
 
-    // Livox Mid-40's circular field of view, 38.4° (Livox Mid-40 data sheet; TODO(verify) the
-    // document revision) and its point rate, 100 000 points/s (same source).
+    // Livox Mid-40's circular field of view, 38.4°, and its point rate, 100 000 points/s (Livox
+    // Mid Series User Manual v1.2, 2019.08, table 1.2.1 "Point cloud specifications").
     static constexpr double kRosetteFov = 0.670206;        // rad, 38.4°
     static constexpr double kRosettePointRate = 100000.0;  // 1/s
-    // The prisms' speeds are not published; these are illustrative (TODO(verify) against a
-    // recorded Livox pattern): incommensurate, counter-rotating, a rosette that fills the disc
-    // in about a second at the default point rate.
-    static constexpr double kRosetteSpeed1 = 2.0 * 3.14159265358979 * 120.0;    // rad/s
-    static constexpr double kRosetteSpeed2 = -2.0 * 3.14159265358979 * 73.737;  // rad/s
+    // Livox does not publish the Mid-40's prism speeds. These are the prototype's in Livox's
+    // paper on the design (Liu, Zhang and Hong, "Low-cost retina-like robotic lidars based on
+    // incommensurable scanning", arXiv:2006.11034, appendix B: two identical prisms at 7294 rpm
+    // and −4664 rpm): counter-rotating, a rosette that fills the disc in about a second.
+    static constexpr double kRosetteSpeed1 = 2.0 * 3.14159265358979 * 7294.0 / 60.0;   // rad/s
+    static constexpr double kRosetteSpeed2 = -2.0 * 3.14159265358979 * 4664.0 / 60.0;  // rad/s
     static constexpr double kRosetteSamples = 10000.0;  // points per scan: 100 000/s at 10 Hz
 
     std::uint32_t horizontal{1};

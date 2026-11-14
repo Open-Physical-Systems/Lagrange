@@ -111,7 +111,7 @@ Weather effects on sensors are statistical. Each validation states the quantity 
   - Lidar range by the lidar equation, `r·exp(σr) = R·(1 − c)` at its wavelength (905 nm, or
     1550 nm with the `wavelength` setting), R the clear-air max range against its reference
     target, c the window's contamination.
-  - Fog clutter: the fog's backscatter (lidar ratio 18.5 sr, 5 ns pulse) seen through the
+  - Fog clutter: the fog's backscatter (lidar ratio 18.8 sr of water droplets at 905 nm, O'Connor et al. 2004, 5 ns pulse) seen through the
     receiver's overlap, with a log-normal detection spread and a gain set so that half the
     beams of a 30 m lidar see clutter at 60 m visibility. Uncalibrated, TODO(verify) against
     fog-chamber data (DENSE); clutter sits about 2 m out.

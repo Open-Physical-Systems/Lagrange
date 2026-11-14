@@ -848,6 +848,20 @@ private:
 
 Expected<void, std::string> writeStage(const Model& model, const std::string& path,
                                        const WriteOptions& options) {
+    // USD 1.x has no attributes for lidar scan patterns or fisheye lenses yet (RFC 0015, Draft):
+    // written as they are, the patterns came back as an even grid and a fisheye over 180° got a
+    // negative focal length the loader refuses. Refuse instead of writing a different sensor.
+    for (std::size_t s = 0; s < model.world.sensors.names.size(); ++s) {
+        const auto& settings = model.world.sensors.settings[s];
+        const bool pattern = settings.contains("pattern") || settings.contains("vertical_angle_0");
+        const bool fisheye = settings.contains("projection");
+        if (pattern || fisheye) {
+            return Unexpected{"sensor '" + model.world.sensors.names[s] + "' has " +
+                              (pattern ? "a lidar scan pattern" : "a fisheye lens") +
+                              ", which USD cannot carry yet (RFC 0015); run the robot from its "
+                              "URDF instead"};
+        }
+    }
     registerSchemaLibraries();
     UsdStageRefPtr stage = UsdStage::CreateInMemory();
     if (!stage) {

@@ -5,6 +5,7 @@
 #include "lagrange/viewer/v1/envelope.pb.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -1231,6 +1232,203 @@ TEST(Security, TlsWithATokenGreetsOnlyClientsThatHaveIt) {
     EXPECT_FALSE(refused.ok());
     EXPECT_NE(refused.message.find("--auth-token-file"), std::string::npos) << refused.message;
     std::filesystem::remove_all(dir);
+}
+
+// RFC 0014 (a draft; these test its server-side prototype): limits on connections before the
+// handshake, a handshake timeout, a per-address rate of new TCP connections, and a first frame
+// that is not a ClientHello closing the connection.
+class ConnectionLimitsTest : public ::testing::Test {
+protected:
+    void start(proto::Endpoint endpoint, const ServerOptions::ConnectionLimits& limits) {
+        char made[] = "/tmp/lagrange-limits-test-XXXXXX";
+        ASSERT_NE(::mkdtemp(made), nullptr);
+        directory_ = made;
+        ServerOptions options;
+        options.endpoint = endpoint.kind == proto::Endpoint::Kind::Unix
+                               ? proto::Endpoint::unixSocket(directory_ + "/s.sock")
+                               : endpoint;
+        options.robotPath = LAGRANGE_TEST_AMR_URDF;
+        options.ros = false;
+        options.startPaused = true;
+        options.connectionLimits = limits;
+        server_ = std::make_unique<Server>(options);
+        const Status started = server_->start();
+        ASSERT_TRUE(started.ok()) << started.message;
+    }
+    void TearDown() override {
+        server_.reset();
+        if (!directory_.empty()) {
+            std::filesystem::remove_all(directory_);
+        }
+    }
+
+    proto::Connection connect() {
+        std::error_code ec;
+        proto::Connection client = proto::Connection::startConnect(server_->endpoint(), ec);
+        EXPECT_NE(client.state(), proto::Connection::State::Closed) << ec.message();
+        return client;
+    }
+    static void sendHello(proto::Connection& client) {
+        v1::Envelope hello;
+        hello.mutable_client_hello()->mutable_version()->set_major(0);
+        hello.mutable_client_hello()->mutable_version()->set_minor(1);
+        ASSERT_TRUE(client.queue(hello));
+        std::error_code ec;
+        (void)client.flush(ec);  // on its way before the server looks, as a viewer's is
+    }
+
+    struct Outcome {
+        bool hello{false};  // a ServerHello came
+        std::string refusal;
+        bool closed{false};  // the server closed the connection
+    };
+    /// Runs the server until `client` gets a ServerHello or is closed, or `seconds` pass.
+    Outcome await(proto::Connection& client, double seconds = 3.0) {
+        Outcome outcome;
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                  std::chrono::duration<double>(seconds));
+        while (std::chrono::steady_clock::now() < deadline) {
+            server_->runOnce(1);
+            std::error_code ec;
+            if (client.state() == proto::Connection::State::Connecting) {
+                (void)client.finishConnect(ec);
+            }
+            (void)client.flush(ec);
+            const proto::IoStatus io = client.receive(ec);
+            for (;;) {
+                const proto::FrameReader::Result frame = client.next();
+                if (frame.status != proto::FrameReader::Status::Frame) {
+                    break;
+                }
+                v1::Envelope envelope;
+                if (proto::parsePayload(frame.payload, envelope) && envelope.has_server_hello()) {
+                    outcome.hello = true;
+                    outcome.refusal = envelope.server_hello().refusal();
+                    return outcome;
+                }
+            }
+            if (io == proto::IoStatus::Closed || io == proto::IoStatus::Error) {
+                outcome.closed = true;
+                return outcome;
+            }
+        }
+        return outcome;
+    }
+    void pump(double seconds) {
+        const auto end = std::chrono::steady_clock::now() +
+                         std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                             std::chrono::duration<double>(seconds));
+        while (std::chrono::steady_clock::now() < end) {
+            server_->runOnce(1);
+        }
+    }
+
+    std::string directory_;
+    std::unique_ptr<Server> server_;
+};
+
+TEST_F(ConnectionLimitsTest, SilentConnectionsAreCappedThenTimedOutAndAViewerGetsIn) {
+    ServerOptions::ConnectionLimits limits;
+    limits.maxPending = 3;
+    limits.handshakeTimeoutS = 0.5;
+    start(proto::Endpoint::unixSocket(""), limits);
+
+    std::vector<proto::Connection> silent;
+    for (int i = 0; i < 3; ++i) {
+        silent.push_back(connect());
+    }
+    pump(0.05);
+    // A fourth that says nothing is refused at once: three are already waiting.
+    proto::Connection fourth = connect();
+    const Outcome refused = await(fourth, 0.3);
+    ASSERT_TRUE(refused.hello);
+    EXPECT_NE(refused.refusal.find("waiting for their handshake"), std::string::npos)
+        << refused.refusal;
+
+    // After the timeout the silent ones are told and closed.
+    for (proto::Connection& client : silent) {
+        const Outcome timedOut = await(client, 2.0);
+        EXPECT_TRUE(timedOut.hello || timedOut.closed);
+        if (timedOut.hello) {
+            EXPECT_NE(timedOut.refusal.find("handshake timeout"), std::string::npos)
+                << timedOut.refusal;
+        }
+    }
+    // A real viewer is greeted again.
+    proto::Connection viewer = connect();
+    sendHello(viewer);
+    const Outcome greeted = await(viewer);
+    ASSERT_TRUE(greeted.hello);
+    EXPECT_EQ(greeted.refusal, "");
+}
+
+TEST_F(ConnectionLimitsTest, GreetedViewersCountTowardsTheConnectionLimit) {
+    ServerOptions::ConnectionLimits limits;
+    limits.maxConnections = 2;
+    start(proto::Endpoint::unixSocket(""), limits);
+    std::vector<proto::Connection> viewers;
+    for (int i = 0; i < 2; ++i) {
+        viewers.push_back(connect());
+        sendHello(viewers.back());
+        const Outcome greeted = await(viewers.back());
+        ASSERT_TRUE(greeted.hello);
+        EXPECT_EQ(greeted.refusal, "");
+    }
+    proto::Connection third = connect();
+    sendHello(third);
+    const Outcome refused = await(third);
+    ASSERT_TRUE(refused.hello);
+    EXPECT_NE(refused.refusal.find("too many viewer connections"), std::string::npos)
+        << refused.refusal;
+    // One leaves: the next is greeted.
+    viewers.front().close();
+    pump(0.05);
+    proto::Connection next = connect();
+    sendHello(next);
+    const Outcome greeted = await(next);
+    ASSERT_TRUE(greeted.hello);
+    EXPECT_EQ(greeted.refusal, "");
+}
+
+TEST_F(ConnectionLimitsTest, AFirstFrameThatIsNotAMessageClosesTheConnection) {
+    start(proto::Endpoint::unixSocket(""), {});
+    proto::Connection client = connect();
+    // A frame whose payload is no protobuf message (a field number 0 is invalid).
+    const std::array<std::byte, 4> junk{std::byte{0x00}, std::byte{0x00}, std::byte{0xFF},
+                                        std::byte{0xFF}};
+    std::vector<std::byte> frame;
+    ASSERT_TRUE(proto::appendFrame(junk, frame));
+    ASSERT_EQ(::write(client.fd(), frame.data(), frame.size()), static_cast<ssize_t>(frame.size()));
+    const Outcome outcome = await(client);
+    ASSERT_TRUE(outcome.hello);
+    EXPECT_NE(outcome.refusal.find("ClientHello"), std::string::npos) << outcome.refusal;
+}
+
+TEST_F(ConnectionLimitsTest, ATcpAddressOpensItsBurstThenWaitsForTheRate) {
+    ServerOptions::ConnectionLimits limits;
+    limits.peerBurst = 3.0;
+    limits.peerRatePerS = 4.0;  // a token every 0.25 s
+    start(proto::Endpoint::tcp("127.0.0.1", 0, false), limits);
+    std::vector<proto::Connection> burst;
+    for (int i = 0; i < 3; ++i) {
+        burst.push_back(connect());
+        sendHello(burst.back());
+        const Outcome greeted = await(burst.back());
+        ASSERT_TRUE(greeted.hello);
+        EXPECT_EQ(greeted.refusal, "") << i;
+    }
+    proto::Connection fourth = connect();
+    sendHello(fourth);
+    const Outcome refused = await(fourth);
+    EXPECT_TRUE(refused.closed || refused.refusal.find("from this address") != std::string::npos)
+        << refused.refusal;
+    pump(0.4);  // a token comes back
+    proto::Connection later = connect();
+    sendHello(later);
+    const Outcome greeted = await(later);
+    ASSERT_TRUE(greeted.hello);
+    EXPECT_EQ(greeted.refusal, "");
 }
 
 }  // namespace

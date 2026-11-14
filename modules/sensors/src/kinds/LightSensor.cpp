@@ -9,13 +9,16 @@ namespace lagrange::sensors::kinds {
 
 namespace {
 
-// ROHM BH1750FVI (datasheet): 16-bit, H-resolution mode 1 lx per count (mode 2: 0.5 lx), 120 ms
-// typical measurement; its accuracy, sensor out over actual lux, is 1.2 typical (0.96 to 1.44) at
-// 1000 lx under a white LED, the 1.2 being the conversion it is read with, so ±20 % of a reading
-// part to part: the `gain` parameter, 1 by default. Counts saturate at 65535. TODO(verify): the
-// spectral response (close to the eye's) is taken as photopic.
-constexpr double kResolution = 1.0;     // lx
-constexpr double kMaxCounts = 65535.0;  // 16 bits
+// ROHM BH1750FVI (datasheet 2011.11 Rev.D): 16-bit, 120 ms typical measurement in H-resolution
+// mode; its accuracy, sensor out over actual lux, is 1.2 typical (0.96 to 1.44) at 1000 lx under a
+// white LED (p. 1), and a reading is counts / 1.2 lx (p. 7), so one count is 1/1.2 lx at the
+// default measurement time (the "1 lx" H-resolution of p. 1 is nominal) and the 65535 counts
+// saturate at 54 612 lx; the 0.8 to 1.2 left part to part is the `gain` parameter, 1 by default.
+// Its spectral response is "approximately human eye response" (p. 1, peak 560 nm): taken as
+// photopic.
+constexpr double kCountsPerLux = 1.2;                // the datasheet's conversion
+constexpr double kResolution = 1.0 / kCountsPerLux;  // lx per count
+constexpr double kMaxCounts = 65535.0;               // 16 bits
 
 /// Illuminance has no unit in lagrange::units (cd·sr/m², sr dimensionless): a local one.
 constexpr Unit kLux{{.length = -2, .luminous = 1}, 1.0, QuantityKind::Unspecified};

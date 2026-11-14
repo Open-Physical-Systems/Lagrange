@@ -64,7 +64,7 @@ TEST(ParticleSensor, FollowsAStepWithItsTimeConstant) {
 }
 
 TEST(ParticleSensor, ThePrecisionOfTheDatasheet) {
-    // 50 µg/m³: PM2.5 ±10 µg/m³, PM10 ±25 µg/m³ (1σ).
+    // 50 µg/m³: PM2.5 ±(5 µg/m³ + 5 %) = ±7.5 µg/m³ (SPS30 datasheet v2.0), PM10 ±25 µg/m³ (1σ).
     KindRun r = pmRun({{"time_constant", 0.0}}, air([](double) { return 50.0 * kUg; }, 2e-6));
     double s25 = 0.0, q25 = 0.0, s10 = 0.0, q10 = 0.0;
     constexpr int kSamples = 3000;
@@ -77,7 +77,7 @@ TEST(ParticleSensor, ThePrecisionOfTheDatasheet) {
         s10 += b;
         q10 += b * b;
     }
-    EXPECT_NEAR(std::sqrt(q25 / kSamples - (s25 / kSamples) * (s25 / kSamples)), 10.0, 0.6);
+    EXPECT_NEAR(std::sqrt(q25 / kSamples - (s25 / kSamples) * (s25 / kSamples)), 7.5, 0.45);
     EXPECT_NEAR(s25 / kSamples, 0.0, 1.0);
     // PM10's spread is cut at 0 (no negative readings) at 2σ below: a little under 25.
     EXPECT_GT(std::sqrt(q10 / kSamples), 18.0);

@@ -17,7 +17,8 @@ namespace lagrange::sensors {
 /// same closed-form tests in double, so results are bit-identical to the brute-force reference
 /// (invariant 7). Embree's bounding-volume hierarchy, over a conservative bounding sphere per
 /// bounded shape, only skips the shapes a ray cannot reach. Unbounded planes are tested
-/// directly. The hierarchy is refitted when shapes move (update()).
+/// directly. Shapes that have never moved sit in a hierarchy built once; the ones that have
+/// moved in a second one, rebuilt when they move (update()).
 ///
 /// cast() may run on many threads at once between update() calls.
 class ShapeCaster final : public services::SceneQuery {

@@ -193,6 +193,19 @@ struct ServerOptions {
     /// Where edits from the viewer are saved when it asks (SetAttribute save_to_session_layer):
     /// the edited model as a USD layer. Empty: $XDG_STATE_HOME/lagrange/<robot>.session.usda.
     std::string sessionPath;
+    /// Limits on viewer connections before and after the handshake. PROTOTYPE for RFC 0014
+    /// (a draft awaiting the owner's acceptance): the defaults and names may change with it.
+    /// Over a limit, a connection is accepted, told why in a ServerHello refusal (not over TLS,
+    /// whose handshake has not run yet) and closed.
+    struct ConnectionLimits {
+        std::size_t maxConnections{32};  // open connections, greeted or not
+        std::size_t maxPending{16};      // connections that have not yet sent their ClientHello
+        double handshakeTimeoutS{10.0};  // s from accept to a ClientHello (TLS included)
+        /// New TCP connections per peer address (IPv6: per /64): a token bucket of `peerBurst`
+        /// tokens refilled at `peerRatePerS`. Unix sockets (mode 0600: only the user) are exempt.
+        double peerBurst{8.0};
+        double peerRatePerS{2.0};
+    } connectionLimits;
 };
 
 /// The simulation server (roadmap 0.2-E1, E2): it loads a robot, wires the MuJoCo backend and

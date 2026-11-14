@@ -165,7 +165,10 @@ and compares the state hash at every step. With a moving plane in the world it s
 A world with no degree of freedom at all (scenery and kinematic bodies only, as the town
 without a robot) skips MuJoCo's step: it advances the time as `mj_step2` does and places the
 kinematic bodies (`mj_kinematics`); the state is the same bit for bit (checked on the town's
-state hash over 20 s).
+state hash over 20 s). The backend writes a kinematic body's pose, twist and contact force only
+when they change (a body's pose changes when its command does, every 10 ms for the traffic and
+the people), and its acceleration, always zero, once: the bus keeps a value until its writer
+writes another. Everything is written again after a restore and an origin shift.
 
 The conformance suite, `ros2 run lagrange_server lagrange_physics_conformance`
 (`server/test/physics_conformance.cpp`), checks a backend against it. It runs the backends in

@@ -23,9 +23,10 @@ namespace lagrange::sensors {
 ///                                     Normal(mean, stddev) with a random sign (SDFormat
 ///                                     <bias_mean>, <bias_stddev>)
 ///   <p>_dynamic_bias_stddev           bias instability as a first-order Gauss-Markov process:
-///   <p>_dynamic_bias_correlation_time its stationary deviation and correlation time, s
-///                                     (SDFormat <dynamic_bias_stddev>,
-///                                     <dynamic_bias_correlation_time>)
+///   <p>_dynamic_bias_correlation_time the deviation of its driving noise, unit/√s, and its
+///                                     correlation time τ, s (SDFormat <dynamic_bias_stddev>,
+///                                     <dynamic_bias_correlation_time>, read as Gazebo does);
+///                                     its stationary deviation is stddev·√(τ/2)
 ///   <p>_random_walk                   rate random walk K, unit/√s: the bias moves by K·√dt
 ///                                     per sample (the +1/2 slope of an Allan deviation plot)
 ///   <p>_range                         saturation at ±range
@@ -72,9 +73,10 @@ private:
     void sum();
 
     ImuNoise noise_;
-    double phi_{0.0};       // Gauss-Markov decay per sample, exp(-dt / tau)
-    double drive_{0.0};     // Gauss-Markov driving deviation per sample
-    double walkStep_{0.0};  // random-walk deviation per sample, K·√dt
+    double phi_{0.0};         // Gauss-Markov decay per sample, exp(-dt / tau)
+    double drive_{0.0};       // Gauss-Markov driving deviation per sample
+    double stationary_{0.0};  // Gauss-Markov stationary deviation, stddev·sqrt(tau / 2)
+    double walkStep_{0.0};    // random-walk deviation per sample, K·√dt
     std::array<double, 3> turnOn_{}, dynamic_{}, walk_{}, total_{};
 };
 

@@ -56,6 +56,7 @@ sensor can sit on any robot; the grouping only says where each is usually found.
 | Sensor | What it measures | URDF type | Model |
 |---|---|---|---|
 | Radar | detections with range, Doppler velocity, RCS and SNR | USD `RadarAPI_1` | [physics](../physics/sensors.md#radar) |
+| `imaging_radar` | a 4D imaging radar: range, azimuth, elevation and Doppler per detection, angle cells from its virtual array, Doppler folding, ground ghosts | `imaging_radar` | [§2](../design/domains/sensors.md#4d-imaging-radar-as-built) |
 | `vehicle_can` | the car's own CAN bus: wheel speeds, steering angle, yaw rate, gear | `vehicle_can` | [§9](../design/domains/sensors.md#vehicle_can) |
 | `tpms` | pressure and temperature in every tyre, with the low-pressure warning | `tpms` | [§9](../design/domains/sensors.md#tpms) |
 | `v2x` | traffic agents' Basic Safety Messages and the lights' signal phase and timing | `v2x` | [§9](../design/domains/sensors.md#v2x) |
@@ -251,7 +252,9 @@ Across them:
   fiducial or tape texture is drawn or decoded. `optical_flow` computes flow from motion and depth,
   not by matching images.
 - **No real recordings yet.** The models are checked against closed forms and data sheets, not
-  against logs of the real parts; many data-sheet defaults are marked `TODO(verify)` in §9.
+  against logs of the real parts. The data-sheet defaults were checked against the documents on
+  2026-11-12 (`docs/plan/sensor-defaults-verification-2026-11-12.md`); the defaults marked
+  illustrative in §9 have no primary source: give your part's figures.
 - **Lidar**: no beam divergence or multiple returns; scan patterns come from URDF only (not SDFormat
   or USD).
 - **Camera**: no motion blur, absolute radiance or colour filter array; a fisheye has no vignetting,

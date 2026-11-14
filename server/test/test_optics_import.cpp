@@ -2,6 +2,7 @@
 // patterns (as built)" and "Fisheye cameras (as built)"), and a rosette lidar run end to end.
 #include "lagrange/server/Robot.hpp"
 #include "lagrange/server/Server.hpp"
+#include "lagrange/stage/Stage.hpp"
 #include "lagrange/world/LidarLayout.hpp"
 
 #include <algorithm>
@@ -97,6 +98,19 @@ TEST(OpticsImport, PatternsAndLensesReachTheSettings) {
     }
     EXPECT_TRUE(noted);
     std::filesystem::remove(path);
+}
+
+// USD cannot carry them yet (RFC 0015): writing such a robot is refused by name, not written as a
+// different sensor (an even grid, or a fisheye with a negative focal length the loader refuses).
+TEST(OpticsImport, WritingPatternsOrFisheyesToUsdIsRefused) {
+    const auto robot = loadUrdf(opticsRig());
+    ASSERT_TRUE(robot) << robot.error();
+    const std::filesystem::path out = std::filesystem::temp_directory_path() /
+                                      ("lagrange_optics_" + std::to_string(::getpid()) + ".usda");
+    const auto written = stage::writeStage(*robot, out.string(), {});
+    ASSERT_FALSE(written);
+    EXPECT_NE(written.error().find("RFC 0015"), std::string::npos) << written.error();
+    EXPECT_FALSE(std::filesystem::exists(out));
 }
 
 TEST(OpticsImport, ARosetteLidarRunsAndSaysWhereItsBeamsWent) {

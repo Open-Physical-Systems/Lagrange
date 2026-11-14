@@ -2,7 +2,8 @@
 // (`end` attach) or its station (`end` anchor), read by a bridge ADC. The cell gives
 // sensitivity × excitation × F / capacity volts (a full bridge's rated output), off its line by a
 // bow of `nonlinearity` × capacity at half load and apart by `hysteresis` × capacity between
-// loading and unloading there. The ADC is an Avia HX711 by default (datasheet: 24-bit two's
+// loading and unloading there. The ADC is an Avia HX711 by default (Avia Semiconductor, "HX711
+// 24-Bit Analog-to-Digital Converter (ADC) for Weigh Scales", undated, Table 2: 24-bit two's
 // complement; channel A at gain 128 spans ±0.5·AVDD/128, ±20 mV at 5 V; input noise 50 nV rms at
 // gain 128 and 10 SPS).
 #include "Converter.hpp"

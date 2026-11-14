@@ -45,8 +45,8 @@ double seawaterAbsorption(double fKHz, double t, double s, double zKm, double ph
 
 namespace {
 
-// Blueprint Subsea Oculus M750d, 750 kHz mode (Oculus M-series datasheet): 0.1 to 120 m, 130° by
-// 20°, 512 beams, 4 mm range resolution, up to 40 Hz.
+// Blueprint Subsea Oculus M750d, 750 kHz mode (Oculus M-series specifications page): 0.1 to 120 m,
+// 130° by 20°, 512 beams, 4 mm range resolution, up to 40 Hz.
 constexpr double kMinRange = 0.1;                                     // m
 constexpr double kMaxRange = 120.0;                                   // m
 constexpr double kFovH = 130.0 * std::numbers::pi / 180.0;            // rad

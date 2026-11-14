@@ -300,6 +300,86 @@ protected:
     }
 };
 
+/// A 4D imaging radar (kind imaging_radar) writing two detections, as Radar.cpp lays them out:
+/// range, azimuth, elevation, velocity, rcs, snr.
+class FakeImagingRadar final : public IModule {
+public:
+    static constexpr std::uint32_t kRows = 256;
+    [[nodiscard]] ModuleInfo info() const override { return {"sensors", "fake_imaging_radar"}; }
+    [[nodiscard]] Duration preferredStep() const override { return 50_ms; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        SignalSpec spec;
+        spec.name = "sensor/front_radar/detections";
+        spec.type = SignalType::ScalarArray;
+        spec.unit = units::one;
+        spec.arrayLength = kRows * 6;
+        detections_ = d.output(spec);
+        spec.name = "sensor/front_radar/count";
+        spec.type = SignalType::Int;
+        spec.arrayLength = 1;
+        count_ = d.output(spec);
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        return step(StepContext{}, bus);
+    }
+    Status step(const StepContext&, SignalBus& bus) override {
+        std::vector<double> d(kRows * 6, std::numeric_limits<double>::quiet_NaN());
+        const std::array<double, 12> two{20.0, 0.1,  0.05, -3.0, 1.5, 400.0,
+                                         30.0, -0.2, -0.1, 2.0,  0.4, 50.0};
+        std::copy(two.begin(), two.end(), d.begin());
+        bus.writeN(detections_, d);
+        bus.write(count_, 2.0);
+        return {};
+    }
+
+private:
+    SignalId detections_, count_;
+};
+
+class ImagingRadarBridgeTest : public BridgeTest {
+protected:
+    void SetUp() override {
+        const BodyId base = world_.addBody("base_link", kWorldBody, Pose{}, 1.0, {}, {});
+        world_.addCustomSensor("front_radar", "imaging_radar", base, Pose{}, 20.0, {}, {});
+        scheduler_.add(std::make_unique<FakeRobot>());
+        scheduler_.add(std::make_unique<FakeImagingRadar>());
+        ASSERT_TRUE(scheduler_.wire(WorldView(world_)));
+        BridgeSettings settings;
+        settings.baseLink = "base_link";
+        bridge_ = std::make_unique<Bridge>(settings);
+        bridge_->attach(world_, scheduler_.bus());
+        listener_ = std::make_shared<rclcpp::Node>("bridge_imaging_radar_listener");
+        executor_.add_node(listener_);
+    }
+};
+
+// The imaging radar's detections reach ROS as the radar's cloud (x, y, z, velocity, rcs, snr),
+// z from each detection's elevation, and as nothing else under that name.
+TEST_F(ImagingRadarBridgeTest, PublishesTheDetectionsAsTheRadarsCloud) {
+    std::optional<sensor_msgs::msg::PointCloud2> cloud;
+    auto sub = listener_->create_subscription<sensor_msgs::msg::PointCloud2>(
+        "/front_radar/detections", rclcpp::SensorDataQoS(),
+        [&](const sensor_msgs::msg::PointCloud2& m) { cloud = m; });
+    ASSERT_TRUE(run([&] { return cloud.has_value(); }));
+    EXPECT_EQ(cloud->header.frame_id, "front_radar");
+    ASSERT_EQ(cloud->width, 2U);
+    ASSERT_EQ(cloud->fields.size(), 6U);
+    EXPECT_EQ(cloud->fields[3].name, "velocity");
+    std::array<float, 6> p{};
+    std::memcpy(p.data(), cloud->data.data() + cloud->point_step, sizeof(p));
+    EXPECT_NEAR(p[0], 30.0 * std::cos(-0.1) * std::cos(-0.2), 1e-4);
+    EXPECT_NEAR(p[1], 30.0 * std::cos(-0.1) * std::sin(-0.2), 1e-4);
+    EXPECT_NEAR(p[2], 30.0 * std::sin(-0.1), 1e-4);
+    EXPECT_FLOAT_EQ(p[3], 2.0F);
+    EXPECT_FLOAT_EQ(p[4], 0.4F);
+    EXPECT_FLOAT_EQ(p[5], 50.0F);
+    const auto types = listener_->get_topic_names_and_types();
+    const auto it = types.find("/front_radar/detections");
+    ASSERT_NE(it, types.end());
+    EXPECT_EQ(it->second, std::vector<std::string>{"sensor_msgs/msg/PointCloud2"});
+}
+
 TEST(RosImageEncoding, NamesTheBusEncodingsAsSensorMsgsDoes) {
     EXPECT_EQ(rosImageEncoding("rgba8")->name, "rgba8");
     EXPECT_EQ(rosImageEncoding("rgba8")->bytesPerPixel, 4U);

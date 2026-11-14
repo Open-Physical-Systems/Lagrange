@@ -13,13 +13,13 @@ namespace lagrange::sensors::kinds {
 
 namespace {
 
-// PixArt PMW3901MB-TXQT product datasheet (v1.x): field of view 42°, working range from 80 mm,
-// maximum speed 7.4 rad/s.
+// PixArt PMW3901MB-TXQT Product Datasheet Version 1.00, 20 Mar 2017, table 3: effective viewing
+// angle 42°, working range 80 mm to infinity, speed up to 7.4 rad/s.
 constexpr double kPmw3901FovRad = 42.0 * 3.14159265358979323846 / 180.0;
 constexpr double kPmw3901MinRangeM = 0.08;
 constexpr double kPmw3901MaxFlowRadS = 7.4;
-// Illustrative, not from a datasheet (TODO(verify) against a logged PMW3901): white noise on the
-// flow rate, rad/s (1σ), and the furthest ground the default sensor tracks, m.
+// Illustrative: PixArt publishes no noise figure or furthest tracked ground for the PMW3901 (set
+// them from a logged part): white noise on the flow rate, rad/s (1σ), and that ground, m.
 constexpr double kDefaultFlowNoiseRadS = 0.05;
 constexpr double kDefaultMaxRangeM = 30.0;
 // Quality: PX4's 0..255 scale (SensorOpticalFlow.quality).

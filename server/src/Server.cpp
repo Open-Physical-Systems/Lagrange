@@ -69,6 +69,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <netinet/in.h>
 #include <numbers>
 #include <optional>
 #include <poll.h>
@@ -77,6 +78,7 @@
 #include <span>
 #include <sstream>
 #include <string>
+#include <sys/socket.h>
 #include <tinyxml2.h>
 #include <tuple>
 #include <unistd.h>
@@ -128,6 +130,11 @@ constexpr double kSelfEmiSliceCell = 0.04;        // m: a robot's own wiring (RF
 constexpr std::int64_t kMaxStepWallNs = 40'000'000;
 constexpr std::size_t kMaxQueuedBytes = 32U * 1024U * 1024U;  // a viewer that does not read
 constexpr std::size_t kMaxLogRecords = 500;
+// RFC 0014 (prototype): most peer addresses whose connection rate is remembered; beyond it the
+// buckets that are full again are forgotten, and if none is, all of them.
+constexpr std::size_t kMaxRatePeers = 4096;
+constexpr std::int64_t kRefusalLogPeriodNs = 1'000'000'000;  // one log line a second at most
+
 constexpr std::int64_t kStepCommandDefaultNs = 1'000'000;  // Step{ticks = n}: n ms, as the mock
 // Most simulation time one Step command or step_simulation call may ask for: a step runs to its
 // end before the server reads anything else (viewers, ROS services, a stop signal), so a
@@ -452,6 +459,7 @@ struct Subscription {
 
 struct Session {
     proto::Connection connection;
+    Clock::time_point accepted{};  // when the connection was accepted (handshake timeout)
     bool greeted{false};
     std::uint64_t sequence{0};
     bool hasSnapshot{false};
@@ -543,6 +551,14 @@ struct Server::Impl {
     proto::Listener listener;
     std::vector<std::unique_ptr<Session>> sessions;
     std::uint64_t nextSessionId{1};
+    /// RFC 0014 (prototype): new TCP connections per peer address, a token bucket each.
+    struct PeerBucket {
+        double tokens{0.0};
+        Clock::time_point last{};
+    };
+    std::map<std::string, PeerBucket, std::less<>> peerBuckets;
+    std::uint64_t refusedConnections{0};
+    Clock::time_point lastRefusalLog{};
     std::uint64_t catalogGeneration{1};
 
     v1::RunState state{v1::RUN_STATE_RUNNING};
@@ -6173,9 +6189,148 @@ struct Server::Impl {
             if (!connection) {
                 return;
             }
+            const Clock::time_point now = Clock::now();
+            if (const char* reason = admit(*connection, now); reason != nullptr) {
+                refuse(*connection, reason, now);
+                continue;
+            }
             auto session = std::make_unique<Session>();
             session->connection = std::move(*connection);
+            session->accepted = now;
             sessions.push_back(std::move(session));
+        }
+    }
+
+    // --- Connection limits (RFC 0014, a draft: this is its prototype) ---------------------------
+
+    /// Why a new connection is refused, or nullptr when it may stay.
+    const char* admit(const proto::Connection& connection, Clock::time_point now) {
+        const ServerOptions::ConnectionLimits& limits = options.connectionLimits;
+        std::size_t open = 0;
+        std::size_t waiting = 0;
+        for (const auto& session : sessions) {
+            if (session->connection.state() != proto::Connection::State::Closed) {
+                ++open;
+                waiting += session->greeted ? 0 : 1;
+            }
+        }
+        if (open >= limits.maxConnections) {
+            return "too many viewer connections";
+        }
+        if (waiting >= limits.maxPending) {
+            return "too many connections waiting for their handshake";
+        }
+        if (connection.kind() == proto::Endpoint::Kind::Tcp &&
+            !takePeerToken(peerKey(connection.fd()), now)) {
+            return "too many new connections from this address";
+        }
+        return nullptr;
+    }
+
+    /// The peer's address as a rate key: IPv4 whole, IPv6 its /64 (one host's usual share);
+    /// empty when it cannot be read (all such peers then share one bucket).
+    static std::string peerKey(int fd) {
+        sockaddr_storage address{};
+        socklen_t length = sizeof(address);
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): the sockets API needs it.
+        if (::getpeername(fd, reinterpret_cast<sockaddr*>(&address), &length) != 0) {
+            return {};
+        }
+        if (address.ss_family == AF_INET) {
+            sockaddr_in v4{};
+            std::memcpy(&v4, &address, sizeof(v4));
+            std::string key = "4:";
+            key.append(reinterpret_cast<const char*>(&v4.sin_addr), sizeof(v4.sin_addr));  // NOLINT
+            return key;
+        }
+        if (address.ss_family == AF_INET6) {
+            sockaddr_in6 v6{};
+            std::memcpy(&v6, &address, sizeof(v6));
+            const auto* bytes = static_cast<const unsigned char*>(v6.sin6_addr.s6_addr);
+            // An IPv4 address mapped into IPv6 (::ffff:a.b.c.d) is keyed as that IPv4 address.
+            constexpr std::array<unsigned char, 12> kMapped{0, 0, 0, 0, 0,    0,
+                                                            0, 0, 0, 0, 0xFF, 0xFF};
+            if (std::equal(kMapped.begin(), kMapped.end(), bytes)) {
+                std::string key = "4:";
+                key.append(reinterpret_cast<const char*>(bytes + 12), 4);  // NOLINT
+                return key;
+            }
+            std::string key = "6:";
+            key.append(reinterpret_cast<const char*>(bytes), 8);  // NOLINT: the /64 prefix
+            return key;
+        }
+        return {};
+    }
+
+    bool takePeerToken(const std::string& key, Clock::time_point now) {
+        const ServerOptions::ConnectionLimits& limits = options.connectionLimits;
+        const auto refill = [&limits, now](PeerBucket& bucket) {
+            const double seconds = std::chrono::duration<double>(now - bucket.last).count();
+            bucket.tokens =
+                std::min(limits.peerBurst, bucket.tokens + seconds * limits.peerRatePerS);
+            bucket.last = now;
+        };
+        auto it = peerBuckets.find(key);
+        if (it == peerBuckets.end()) {
+            if (peerBuckets.size() >= kMaxRatePeers) {
+                std::erase_if(peerBuckets, [&](auto& entry) {
+                    refill(entry.second);
+                    return entry.second.tokens >= limits.peerBurst;
+                });
+                if (peerBuckets.size() >= kMaxRatePeers) {
+                    peerBuckets.clear();
+                }
+            }
+            it = peerBuckets.emplace(key, PeerBucket{limits.peerBurst, now}).first;
+        }
+        refill(it->second);
+        if (it->second.tokens < 1.0) {
+            return false;
+        }
+        it->second.tokens -= 1.0;
+        return true;
+    }
+
+    /// Tells a client why it is not served (a ServerHello refusal, which every v1 client reads
+    /// as its first frame; not over TLS before its handshake) and closes the connection.
+    void refuse(proto::Connection& connection, const std::string& reason, Clock::time_point now) {
+        ++refusedConnections;
+        if (!connection.secure()) {
+            // Read what the peer has sent (its ClientHello, usually): closing a socket with
+            // unread input resets it, and the client would lose the refusal.
+            std::error_code ignored;
+            (void)connection.receive(ignored);
+            v1::Envelope reply;
+            v1::ServerHello& hello = *reply.mutable_server_hello();
+            hello.mutable_version()->set_major(kProtocolMajor);
+            hello.mutable_version()->set_minor(kProtocolMinor);
+            hello.set_server_kind(v1::SERVER_KIND_SIM);
+            hello.set_server_name(kServerName);
+            hello.set_refusal("connection refused: " + reason);
+            if (connection.queue(reply)) {
+                std::error_code ec;
+                (void)connection.flush(ec);
+            }
+        }
+        connection.close();
+        if (nanosSince(lastRefusalLog, now) >= kRefusalLogPeriodNs) {
+            lastRefusalLog = now;
+            log(v1::LOG_LEVEL_WARN, "server",
+                "refused a viewer connection: " + reason + " (" +
+                    std::to_string(refusedConnections) + " refused since the start)");
+        }
+    }
+
+    /// Closes the connections that have not greeted within the handshake timeout.
+    void expireHandshakes(Clock::time_point now) {
+        const auto timeout = std::chrono::duration_cast<Clock::duration>(
+            std::chrono::duration<double>(options.connectionLimits.handshakeTimeoutS));
+        for (auto& session : sessions) {
+            if (!session->greeted &&
+                session->connection.state() != proto::Connection::State::Closed &&
+                now - session->accepted > timeout) {
+                refuse(session->connection, "no ClientHello within the handshake timeout", now);
+            }
         }
     }
 
@@ -6193,7 +6348,13 @@ struct Server::Impl {
             }
             v1::Envelope envelope;
             if (!proto::parsePayload(frame.payload, envelope)) {
-                continue;  // a malformed message must not take the server down
+                if (!session.greeted) {
+                    // protocol.md §2: any first frame but a ClientHello closes the connection
+                    // (RFC 0014); handshake() refuses an empty envelope with that reason.
+                    envelope.Clear();
+                } else {
+                    continue;  // a malformed message must not take the server down
+                }
             }
             if (!session.greeted) {
                 if (!handshake(session, envelope)) {
@@ -7145,6 +7306,7 @@ void Server::runOnce(int timeoutMs) {
         }
     }
 
+    s.expireHandshakes(Clock::now());
     s.flushSessions();
     std::erase_if(s.sessions, [](const auto& session) {
         return session->connection.state() == proto::Connection::State::Closed;

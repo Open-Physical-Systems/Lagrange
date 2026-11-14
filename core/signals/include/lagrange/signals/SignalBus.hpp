@@ -3,6 +3,7 @@
 #include "lagrange/signals/Signal.hpp"
 #include "lagrange/time/SimTime.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -170,6 +171,20 @@ private:
     // Per signal: a reader uses its previous value (feedback, extrapolation). previous_ of the
     // others is not kept up to date by commitAll (nothing reads it).
     std::vector<std::uint8_t> needsPrevious_;
+    // Per input slot: the commit tick of the value it holds when that is a plain copy of the
+    // committed value (zero-order hold), else kStale. A slot whose writer has not committed
+    // since is not copied again: in the town MuJoCo reads 655 pose commands every 1 ms that
+    // the traffic and the people write every 10 ms. Stale after a restore and an origin shift.
+    static constexpr std::uint64_t kStale = ~0ULL - 1;
+    std::vector<std::uint64_t> preparedTick_;
+    std::vector<std::uint32_t> slotSignal_;  // per input slot: its signal (InputSlot::signal)
+    // Per signal: written since its last commit, so its pending value may differ from the
+    // committed one. A commit copies only these (the others are equal already); a writer that
+    // leaves an unchanged value alone costs no copy. All set after allocate, a restore and an
+    // origin shift.
+    std::vector<std::uint8_t> dirty_;
+    void markAllDirty() { std::fill(dirty_.begin(), dirty_.end(), std::uint8_t{1}); }
+    void forgetPrepared() { std::fill(preparedTick_.begin(), preparedTick_.end(), kStale); }
 };
 
 }  // namespace lagrange

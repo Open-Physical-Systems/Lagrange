@@ -638,23 +638,24 @@ public:
                 }
             });
         }
-        for (std::uint32_t i = 0; i < samples_; ++i) {
+        // Range noise, from each beam's own stream (seed, step, beam): the same on any number
+        // of threads. A Gaussian draw per beam was a millisecond of a 32 000-beam scan.
+        tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
             double nearest = nearest_[i];
             if (nearest < minRange_ || nearest > maxRange_) {
                 buffer_[i] = kNoHit;  // no valid return (sensor_msgs/LaserScan convention)
-                continue;
+                intensity_[i] = 0.0;
+                return;
             }
             if (noise_ > 0.0) {
                 random::Stream rng(context.seed, context.stepIndex, i);
                 nearest += noise_ * rng.normal();
             }
             buffer_[i] = std::clamp(nearest, minRange_, maxRange_);
-        }
-        for (std::uint32_t i = 0; i < samples_; ++i) {
             if (!std::isfinite(buffer_[i])) {
                 intensity_[i] = 0.0;
             }
-        }
+        });
         bus.writeN(ranges_, buffer_);
         bus.writeN(intensities_, intensity_);
         scanEnd_ = sensor;
@@ -892,8 +893,9 @@ private:
     bool weather_{false};
     LidarClutter clutter_;
     SignalId extinction_, fogExtinction_, rainRate_, snowRate_, contamination_, fogField_;
-    // Flakes return more false echoes than the same water as drops: taken as this much rain
-    // (illustrative, of the order lidar snow studies show; sensors.md).
+    // Flakes return more false echoes than the same water as drops: taken as this much rain.
+    // Illustrative: no published snow-to-rain clutter ratio was found (Rasshofer, Spies and Spies,
+    // Adv. Radio Sci. 9, 2011, give snow's extinction, not its false echoes).
     static constexpr double kSnowClutter = 3.0;
     fields::FieldSignal fogFieldSignal_;
     LidarLayout layout_;

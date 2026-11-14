@@ -282,7 +282,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Plan and evaluation (17)</summary>
+<details><summary>Plan and evaluation (20)</summary>
 
 - [Project overview](docs/plan/00-overview.md)
 - [Rotor downwash and live airflow: progress](docs/plan/downwash-progress.md)
@@ -291,9 +291,12 @@ recorded to MCAP and replayed.
 - [Open questions and challenges to the plan](docs/plan/open-questions.md)
 - [Overnight work, 2026-11-03 (until 07:00 JST)](docs/plan/overnight-2026-11-03.md)
 - [Progress](docs/plan/progress.md)
+- [QA pass, 2026-11-12 (v1.2.1)](docs/plan/qa-2026-11-12.md)
+- [Sensors QA, 2026-11-12: the built-in kinds, faults, images](docs/plan/qa-sensors-2026-11-12.md)
 - [Repository, CI, release and security plan](docs/plan/repo-tooling.md)
 - [Risk register](docs/plan/risks.md)
 - [Roadmap](docs/plan/roadmap.md)
+- [Sensor defaults against their sources (2026-11-12)](docs/plan/sensor-defaults-verification-2026-11-12.md)
 - [Spike 0.2-B1: OpenUSD v26.08 on Ubuntu 26.04](docs/plan/spikes/0.2-B1-openusd.md)
 - [Spike 0.2-C1: MuJoCo source and validation](docs/plan/spikes/0.2-C1-mujoco.md)
 - [Spike 0.2-C6: a second rigid-body backend on Jolt Physics](docs/plan/spikes/0.2-C6-jolt.md)
@@ -332,7 +335,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Design proposals (RFCs) (13)</summary>
+<details><summary>Design proposals (RFCs) (15)</summary>
 
 - [RFC 0001: Module interface, signals and scheduling contract](rfcs/0001-module-interface.md)
 - [RFC 0002: USD custom schemas](rfcs/0002-usd-schemas.md)
@@ -347,6 +350,8 @@ recorded to MCAP and replayed.
 - [RFC 0011: Tethers and cables](rfcs/0011-tethers.md)
 - [RFC 0012: Heat conduction in solids, from materials](rfcs/0012-heat-conduction.md)
 - [RFC 0013: Magnetic interference from a robot's own power wiring](rfcs/0013-motor-emi.md)
+- [RFC 0014: Protocol frame limits before the handshake](rfcs/0014-pre-handshake-limits.md)
+- [RFC 0015: USD attributes for lidar scan patterns and fisheye lenses](rfcs/0015-lidar-patterns-fisheye-usd.md)
 
 </details>
 

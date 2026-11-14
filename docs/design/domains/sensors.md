@@ -151,6 +151,70 @@ lidar's kernel (`bvh_traverse.slang`, float ranges, Tier 1, not deterministic) a
 on the CPU. `test_radar` checks the GPU finds the CPU's detections within 5 mm, 1 mrad, 1 cm/s and
 1 % of cross-section.
 
+### 4D imaging radar (as built)
+
+Kind `imaging_radar` (a built-in custom kind, §9; URDF `<sensor type="imaging_radar">` with its
+settings as leaf elements, USD `CustomSensorAPI_1` with `sensor:custom:kind = "imaging_radar"`
+and `sensor:custom:param:<name>`; `RadarAPI_1` is unchanged) is a cascaded-MIMO automotive radar
+of the kind that reports range, azimuth, elevation and Doppler per detection. It shares the
+radar's rays and echoes (`Radar.cpp`, `sensors::createImagingRadar`): the same settings as
+`RadarAPI_1` (`max_range`, `azimuth_fov`, `elevation_fov`, `tx_power`, `antenna_gain`,
+`noise_floor`, `detection_threshold`, `carrier_frequency`, `range_resolution`,
+`velocity_resolution`) plus:
+
+| Setting | Meaning | Default |
+|---|---|---|
+| `azimuth_elements`, `elevation_elements` | virtual channels (N_TX × N_RX) along each axis | none: `azimuth_resolution`, `elevation_resolution` (rad) |
+| `element_spacing` | d, in wavelengths | 0.5 |
+| `bandwidth` | sweep B (Hz): `range_resolution` = c/(2B) unless given | none |
+| `chirp_period`, `chirps` | T_c (s) and N_c: unambiguous velocity ±λ/(4·T_c), `velocity_resolution` = λ/(2·N_c·T_c) unless given | none |
+| `max_velocity` | the unambiguous velocity (m/s), directly | λ/(4·T_c), else no folding |
+| `unambiguous_range` | ranges beyond it fold back, r mod R_u (m) | no folding |
+| `ghost_reflection` | the ground's power reflection \|Γ\|² for multipath ghosts | 0: none |
+| `peak_grouping` | 1: cells merge into their local peak; 0: every cell over the threshold is a detection | 1 |
+| `max_detections` | detections per scan (1..4096) | 256 |
+| `ray_spacing` | rad between rays | half the finer angle cell at boresight |
+
+The radar's resolution cells: range cells of `range_resolution`, Doppler cells of
+`velocity_resolution` after folding into [−v_max, v_max), and angle cells uniform in direction
+sine (u = cos el · sin az, w = sin el) of width 1/(N·d) for N channels d wavelengths apart, the
+Rayleigh limit λ/(N·d) at boresight that widens as 1/cos θ off it (S. Rao,
+"Introduction to mmWave Sensing: FMCW Radars", Texas Instruments mmWave training, 2017
+(TODO(verify): its TI literature number): angle resolution θ_res = λ/(N·d·cos θ); range
+resolution c/2B, v_max = λ/4T_c and v_res = λ/2T_f there too). Every echo (σ as the radar's,
+`sensmat:radarCrossSectionDensity`) falls in its cell; with peak grouping each cell climbs to its
+strongest neighbour (±1 cell in each of the four dimensions) and a local peak takes in every
+cell that climbs to it, so one target spread over neighbouring cells by the grid is one
+detection, and two targets nearer than about a cell merge (two with an emptier cell between them
+stay two). A peak whose summed signal Σσ/R⁴ (at the true ranges) beats the threshold by the
+radar equation is a detection: range, angles, folded velocity as signal-weighted means, σ the
+sum. Unlike the `RadarAPI_1` radar, which makes one detection per object and range cell, an
+object larger than a cell gives several, and objects in one cell share one. Ghosts: each echo
+also returns by the fixed ground plane both ways, from the target's mirror image below the
+ground (range to the image, its Doppler with the mirrored velocity, power × |Γ|⁴), which is what
+puts imaging radars' ghost points under the road; the two one-bounce paths, which add coherently
+to the direct return, and occlusion of the bounce are not modelled. Noise: range, velocity and
+the angle cells over √(2·SNR), as the radar's. Writes `sensor/<n>/detections`
+(`max_detections` × 6: range, azimuth, elevation, velocity, rcs, snr; NaN beyond the count) and
+`sensor/<n>/count`; ROS `/<name>/detections` is the radar's PointCloud2 (x, y, z from range and
+both angles, velocity, rcs, snr). CPU (deterministic) and GPU (`--lidar gpu`) rays as the radar's.
+Sample: `assets/robots/sedan/sedan_4d_radar.usda` (64 × 16 channels, 1 GHz, 256 chirps of 20 µs;
+illustrative, not a product's datasheet).
+
+Checked in `test_kinds_imaging_radar`: a plate's σ = ρ·A and its SNR by the radar equation, the
+detection range the equation gives; the angle cell λ/(N·d); two targets 0.08 apart in sine merge
+with 16 channels (cells of 0.125) and part with 64, two 0.3 apart part with 16; two targets
+0.23 rad apart in elevation part with 16 elevation channels at their heights and merge with one;
+a plate receding at 10 m/s reads −2 m/s at v_max = 6 m/s (from T_c = λ/24 or given); Doppler
+alone parts two targets in one range and angle cell; a 20 m plate at 5 m with R_u = 15 m; the
+ghost below the ground at |Γ|⁴ of the plate's σ and at its mirror range; the CPU reference
+repeats bit for bit; GPU against CPU (counts within 10 %, σ totals within 1 %, the strongest
+detections within 5 cm, 5 mrad, 0.1 m/s). `test_radar` pins the `RadarAPI_1` radar's CPU
+numbers bit for bit. Owed: speckle (a coherent sum per cell, which makes real point clouds of
+walls dense), sidelobes and the array's grating lobes, the one-bounce multipath paths, guard-rail
+ghosts, CA/OS-CFAR against the clutter around a cell (the threshold is fixed over the noise
+floor), rain attenuation, a published 4D-radar dataset to check against.
+
 **IMU**: specific force and angular rate from `body/*/acceleration` and `body/*/twist` at the
 sensor frame, plus white noise (noise density), bias instability (first-order Gauss–Markov),
 rate random walk, scale-factor and misalignment errors, saturation at the range limits,
@@ -162,9 +226,13 @@ saturation and quantisation, per channel; the names follow SDFormat's `<noise>` 
 the URDF loader reads. Scale-factor and misalignment errors are not modelled yet. The bias is
 saved with the module state and draws from its own Philox streams, so it leaves the white noise
 of a run unchanged. `test_imu_noise` checks the Allan deviation of a 4-hour static record
-against N²/τ + K²τ/3 (IEEE Std 952): within 1 % up to τ = 100 s and 4.3 % at 1000 s. SDFormat
-does not define whether `<dynamic_bias_stddev>` is the stationary deviation or the driving
-noise; here it is the stationary deviation. TODO(verify): Gazebo's reading of it.
+against N²/τ + K²τ/3 (IEEE Std 952): within 1 % up to τ = 100 s and 4.3 % at 1000 s.
+`<dynamic_bias_stddev>` σ_b is the deviation of the noise that drives the Gauss-Markov bias
+("the standard deviation of the noise used to drive a process to model slow variations in a sensor
+bias", SDFormat 1.12 `noise.sdf`), as Gazebo integrates it (gz-sensors `GaussianNoiseModel.cc`:
+b ← e^(−dt/τ)·b + N(0, σ_b²·τ/2·(1 − e^(−2dt/τ)))), so the bias's stationary deviation is
+σ_b·√(τ/2): 1e-3 with τ = 3600 s gives 0.042. Until 2026-11-12 Lagrange took σ_b as the
+stationary deviation itself.
 
 **GNSS**: position from the body pose converted through the local frame to WGS84
 (`core/world/coords/`), Gaussian horizontal and vertical error with first-order time
@@ -255,14 +323,16 @@ vertical samples and angles, ring after ring from the lowest); a single ring is 
 server turns ranges into the viewer's point frames, and the ROS bridge into `sensor_msgs/LaserScan`
 for 2D lidars or an organised `sensor_msgs/PointCloud2` (x, y, z, intensity, ring) for 3D ones.
 On Tier 0, rays are cast on the CPU with the exact closed-form tests in double, and Embree's
-bounding-volume hierarchy (user geometry: a padded bounding sphere per shape, refitted when
-shapes move) only skips the shapes a ray cannot reach; planes are tested directly. The result
+bounding-volume hierarchy (user geometry: a padded bounding sphere per shape; the shapes that
+have never moved in a hierarchy built once, the ones that have in a second one rebuilt when they
+move) only skips the shapes a ray cannot reach; planes are tested directly. The result
 is bit-identical to testing every shape (`ShapeCaster`, `test_shape_caster`), beams run in
 parallel with TBB, and the run stays deterministic. `--lidar auto` uses it: it outruns the GPU
 round trip for scans of this size (docs/design/benchmarks.md). On Tier 1 (`--lidar gpu`), rays
 are cast by `gpu/kernels/lidar/bvh_traverse.slang`: the same closed-form tests in float, one
-thread per beam, through a bounding-volume hierarchy built on the CPU each scan (median split,
-uploaded). Shapes are taken relative to the sensor and combined with its orientation in double
+thread per beam, through a bounding-volume hierarchy built on the CPU (median split, uploaded)
+and refitted to each scan's shapes, rebuilt when refitting has grown its inner boxes' area by a
+quarter or after 30 scans. Shapes are taken relative to the sensor and combined with its orientation in double
 before the conversion to float, and spheres and cylinders use the distance-to-line form of the
 discriminant (Ray Tracing Gems, ch. 7), so grazing rays keep their precision. Range limits and
 Philox noise are applied on the CPU after the cast, keyed by the same module name, so both tiers
@@ -457,8 +527,8 @@ from the sensor's pose at that moment).
   <rosette>
     <fov>0.6702</fov>                <!-- full cone angle, rad: 38.4°, Mid-40 -->
     <point_rate>100000</point_rate>  <!-- points/s -->
-    <speed_1>753.98</speed_1>        <!-- rad/s, prism 1 -->
-    <speed_2>-463.30</speed_2>       <!-- rad/s, prism 2; opposite sign: counter-rotating -->
+    <speed_1>763.83</speed_1>        <!-- rad/s, prism 1 -->
+    <speed_2>-488.42</speed_2>       <!-- rad/s, prism 2; opposite sign: counter-rotating -->
     <prism_ratio>1</prism_ratio>     <!-- δ₂/δ₁; ≠ 1 leaves a hole of |δ₁ − δ₂| at the centre -->
   </rosette>
 </ray>
@@ -468,17 +538,17 @@ from the sensor's pose at that moment).
 |---|---|---|
 | `pattern` | — | 2 for the rosette |
 | `samples` | points per scan | 10000 (when the rosette's URDF gives none) |
-| `rosette_fov` | rad, full cone (δ₁ + δ₂ = fov / 2) | 0.670206 (38.4°, Livox Mid-40 data sheet; TODO(verify) the revision) |
-| `rosette_point_rate` | 1/s | 100000 (Livox Mid-40 data sheet; TODO(verify)) |
-| `rosette_speed_1`, `rosette_speed_2` | rad/s | 2π·120, −2π·73.737 (illustrative: Livox does not publish the prisms' speeds; TODO(verify) against a recorded pattern) |
+| `rosette_fov` | rad, full cone (δ₁ + δ₂ = fov / 2) | 0.670206 (38.4°: Livox Mid Series User Manual v1.2, 2019.08, table 1.2.1) |
+| `rosette_point_rate` | 1/s | 100000 (same table) |
+| `rosette_speed_1`, `rosette_speed_2` | rad/s | 2π·7294/60, −2π·4664/60 (7294 and −4664 rpm: the prototype in Livox's paper, Liu, Zhang and Hong, arXiv:2006.11034, appendix B; Livox does not publish the Mid-40's own, so a recorded Mid-40 pattern may differ) |
 | `rosette_prism_ratio` | δ₂/δ₁ | 1 |
 
-With the defaults one 0.1 s scan hits about a third of the disc's 0.5° cells and a second about all of
+With the defaults one 0.1 s scan hits under half of the disc's 0.5° cells and a second about all of
 them; the shape is checked against the closed forms (reach δ₁ ± δ₂, the radial distribution
 `P(|δ| ≤ R) = 1 − (2/π) arccos(R / 2δ)` for equal prisms, coverage growing every scan, scans not
 repeating, the same scan and beam always the same direction) and both lidar tiers cast it
 (`test_lidar_patterns`). Not a measured Livox pattern: the first-order model leaves out the prisms'
-refraction nonlinearity (third-order Risley theory) and Livox's actual speeds; the Avia's own
+refraction nonlinearity (third-order Risley theory) and the Mid-40's actual speeds; the Avia's own
 non-repetitive pattern (70.4° × 77.2°, six beams) is not modelled.
 
 These patterns come from URDF (`<gazebo reference=L><sensor type="ray|lidar">`); SDFormat (whose
@@ -629,6 +699,14 @@ under RFC 0007. The sample plugins' kinds
 (`tof`, `ultrasonic`, `thermistor`, `ir_thermometer`) stay plugins; a plugin that implements one
 of the kinds below as well would write the same signals, and the run refuses to start.
 
+Defaults. A default taken from a part's data sheet cites the document (part number, document
+number and revision, where it says so); the checks of 2026-11-12 against the documents are listed
+in `docs/plan/sensor-defaults-verification-2026-11-12.md`. A default marked *illustrative* has no
+primary source because it is a property of the installation or the scene, not of a part (a
+shunt's resistance, a tag's size, a mast's height, a threshold the integrator picks), or because
+the maker publishes no figure for it (the noise of an optical flow chip, the prisms' speeds of a
+Livox lidar): give your part's or your log's figure.
+
 ### ROS topics of the built-in kinds
 
 Every custom sensor's numbers are on ROS 2 from the first run, with no mapping file, as the
@@ -719,11 +797,11 @@ rotation reads slightly more than the gyro (the `1 + y²` term of the motion fie
 
 | Parameter | Unit | Default | Meaning |
 |---|---|---|---|
-| `fov` | rad | 0.733 (42°, PMW3901 datasheet) | field of view the rays span |
+| `fov` | rad | 0.733 (42°, PMW3901MB-TXQT datasheet v1.00, table 3) | field of view the rays span |
 | `min_range` | m | 0.08 (PMW3901 datasheet) | nearer ground: quality 0 |
-| `max_range` | m | 30 (illustrative) | farther ground: quality 0 |
+| `max_range` | m | 30 (illustrative: PixArt gives no limit, "80 mm to infinity") | farther ground: quality 0 |
 | `max_flow_rate` | rad/s | 7.4 (PMW3901 datasheet) | faster flow: quality 0, it loses the texture |
-| `noise` | rad/s | 0.05 (illustrative, TODO(verify)) | white noise on each axis's rate, 1σ |
+| `noise` | rad/s | 0.05 (illustrative: the datasheet gives no noise figure) | white noise on each axis's rate, 1σ |
 
 The period is rounded to whole milliseconds. Signals: `sensor/<n>/flow` (ScalarArray of 2, rad,
 integrated over the sample: rate × period), `quality` (0–255 as PX4: the share of rays in range
@@ -752,9 +830,9 @@ between frames are interpolated, so a faster rate follows faster motion.
 ```xml
 <sensor name="dvs" type="event_camera">
   <update_rate>200</update_rate>
-  <event_camera><width>346</width><height>260</height><horizontal_fov>1.22</horizontal_fov>
+  <event_camera><width>346</width><height>260</height><horizontal_fov>1.2357</horizontal_fov>
     <threshold_on>0.2</threshold_on><threshold_off>0.2</threshold_off>
-    <threshold_sigma>0.03</threshold_sigma><refractory_period>0.0001</refractory_period>
+    <threshold_sigma>0.03</threshold_sigma><refractory_period>0.0005</refractory_period>
     <noise_rate>0.1</noise_rate><max_events>20000</max_events></event_camera>
 </sensor>
 ```
@@ -762,12 +840,12 @@ between frames are interpolated, so a faster rate follows faster motion.
 | Parameter | Unit | Default | Meaning |
 |---|---|---|---|
 | `width`, `height` | px | 346, 260 (DAVIS346) | the pixel array (also `<camera><image><width>`) |
-| `horizontal_fov` | rad | 1.22 | (also `<camera><horizontal_fov>`) |
+| `horizontal_fov` | rad | 1.2357 (70.8°: the DAVIS346 sheet's, 4.5 mm lens) | (also `<camera><horizontal_fov>`) |
 | `near_clip` | m | 0.05 | |
-| `threshold_on`, `threshold_off` | ln | 0.2 (v2e) | contrast thresholds |
+| `threshold_on`, `threshold_off` | ln | 0.2 (v2e's default; its paper calls 0.3 typical) | contrast thresholds |
 | `threshold_sigma` | ln | 0.03 (v2e) | per-pixel mismatch, 1σ |
-| `refractory_period` | s | 1e-4 (illustrative) | |
-| `noise_rate` | Hz | 0.1 (illustrative) | background activity per pixel |
+| `refractory_period` | s | 5e-4 (v2e's default; iniVation publishes none) | |
+| `noise_rate` | Hz | 0.1 (the v2e paper's typical leak rate; v2e's own default is 0.01) | background activity per pixel |
 | `max_events` | | 20000 | events per step kept in `events` |
 
 Signals: `sensor/<n>/events` (ScalarArray of 4 × `max_events`: x, y, t in s of sim time,
@@ -805,12 +883,12 @@ nearer in its depth, an occlusion shadow) is NaN; nearer than min-Z = f b / `max
 | Parameter | Unit | Default | Meaning |
 |---|---|---|---|
 | `width`, `height` | px | 848, 480 (D435 depth) | |
-| `horizontal_fov` | rad | 1.518 (87°, D435) | |
+| `horizontal_fov` | rad | 1.518 (87°, D435 depth field of view, D400 datasheet 337029 table 3-49) | |
 | `near_clip` | m | 0.05 | |
 | `baseline` | m | 0.050 (D435) | |
 | `subpixel` | px | 0.08 (Intel white paper) | σ_d |
-| `max_disparity` | px | 126 (D400 search range) | sets min-Z |
-| `max_range` | m | 10 (illustrative) | |
+| `max_disparity` | px | 126 (D400 search range, the white paper's min-Z formula) | sets min-Z |
+| `max_range` | m | 10 (illustrative: the D400 datasheet gives "0.2 m to over 3 m (varies with lighting conditions)", the white paper up to about 10 m on a white wall) | |
 | `depth_unit` | m | 0.001 (D400) | output quantum; 0 for none |
 
 Signals: `sensor/<n>/depth` (Image r32f, m along the optical axis, NaN/±inf as above), `left`
@@ -1111,9 +1189,9 @@ Ultrasonic (2D or 3D, after the Gill WindSonic) or cup and vane (after the R. M.
 |---|---|---|
 | `type` (text) | `ultrasonic` | or `cup` (cups and a vane, horizontal only) |
 | `axes` | 2 | 2 or 3 (ultrasonic) |
-| `noise/fraction` | 0.01 (cup 0) | speed noise, 1σ, of the speed |
+| `noise/fraction` | 0.02 (cup 0) | speed noise, 1σ, of the speed (the WindSonic's 2 % RMSE) |
 | `noise/speed` | 0.01 m/s (cup 0) | speed noise, 1σ, the least |
-| `noise/direction` | 1.5° (cup 0) | rad, 1σ |
+| `noise/direction` | 1° (cup 0) | rad, 1σ (the WindSonic's ±2° as 2σ) |
 | `resolution/speed`, `resolution/direction` | 0.01 m/s, 1° | |
 | `threshold/speed` | 0.01 m/s (cup 1.0 m/s) | below it the speed reads 0 |
 | `threshold/direction` | 0.01 m/s (cup 1.1 m/s) | below it the vane holds |
@@ -1131,9 +1209,11 @@ a robot's own downwash at the sensor is not included), less the sensor's own vel
 error on the speed and an angle error on the direction. Without the aerodynamics domain (no
 `AeroAPI_1` link or rotors, or no site air density) it is not valid. Check: `test_kinds_anemometer`
 (relative air and heading exact, the direction convention, WindSonic accuracy, the cup's threshold
-and its lag against y = V·(1 − e^(−t·V/L))). References: Gill WindSonic datasheet (speed ±2 % at
-12 m/s, 0.01 m/s resolution and threshold; direction ±3° at 12 m/s, 1°), R. M. Young 05103 Wind
-Monitor (TODO(verify): thresholds and distance constant against the current sheet).
+and its lag against y = V·(1 − e^(−t·V/L))). References: Gill WindSonic User Manual 1405-PS-0019
+Issue 30 (2022), appendix A (speed "± 2% RMSE (at 12m/s)", 0.01 m/s resolution; direction ±2° at
+12 m/s, ±3° in the 2009 datasheet, 1°; threshold 0.01 m/s in the datasheets), R. M. Young 05103
+Wind Monitor manual 05103-90 rev. N062819 (propeller threshold 1.0 m/s, vane 1.1 m/s at 10°
+displacement, distance constant 2.7 m for 63 % recovery).
 
 ### airspeed
 
@@ -1167,7 +1247,8 @@ weather's `env/air_density` when it runs, else the site's (`--air-density`, the 
 `rotor_aero.air_density` or `aerodynamics.air_density`, handed to the sensors domain as config
 `air_density`), else the parameter; with none it is not valid. Incompressible: under 1 % low below
 Mach 0.3. Check: `test_kinds_airspeed` (½ρV², a headwind, the weather's density first, the count
-grid). TODO(verify): the MS4525DO's total error band.
+grid). The MS4525DO's total error band, ±1 % of span (datasheet MS4525DO 04/2019, p. 4: about
+±138 Pa on ±1 psi, over −10 to 85 °C), is not modelled by default: give it as `offset`.
 
 ### rangefinder
 
@@ -1222,37 +1303,43 @@ An ambient light sensor whose face looks along the sensor's +x (after the ROHM B
 | `fog_depth` | 100 m | illustrative depth of fog the beam crosses per air mass |
 | `gain` | 1 | the BH1750's part-to-part ratio, 0.8 to 1.2 |
 | `noise/fraction` | 0 | 1σ, of the reading |
-| `resolution` | 1 lx | H-resolution mode |
-| `max_illuminance` | 65535 lx | 16 bits |
+| `resolution` | 1/1.2 lx | one count in H-resolution mode (BH1750FVI datasheet Rev.D, p. 7: lx = counts / 1.2) |
+| `max_illuminance` | 54 612 lx | 65535 counts / 1.2 |
 | `ground_reflectance` | 0 | light from the ground |
 
 Signals: `illuminance` (lx, as cd·sr/m² with no quantity kind: `lagrange::units` has no lux),
 `valid`. ROS: `sensor_msgs/msg/Illuminance`.
 
-Model: the sun (below) and the IES daylight availability model (J. IES 13(4), 1984): direct normal
-E_dn = 127.5 klx·(1 + 0.033·cos(2π·day/365))·exp(−0.21·m), m the Kasten–Young air mass, and
-diffuse horizontal (0.8 + 15.5·√sin α) klx on a clear sky, (0.3 + 21·sin α) klx and no beam on an
-overcast one (TODO(verify): the A, B, C coefficients against the paper). On the face: the beam ×
+Model: the sun (below) and the daylight model of Gillette, Pierpoint and Treado (NBS, 1982), as
+the IES daylight availability practice (J. IES 13(4), 1984; not read) took it up: direct normal
+E_dn = 127.5 klx·(1 + 0.033·cos(2π·day/365))·exp(−0.21·m), m the Kasten–Young air mass (the
+source has 1/sin α), and diffuse horizontal (0.8 + 15.5·√sin α) klx on a clear sky,
+(0.3 + 21·sin α) klx and no beam on an overcast one (Robbins and Hunter, SERI/TR-254-1703, 1983,
+eqs. 2-16, 2-17 and 3-6, which quote it). The clear-sky extinction 0.21 per air mass is the
+rural design value of LBL-17727 ("Analysis of atmospheric turbidity for daylight calculations",
+Lawrence Berkeley Laboratory, 1984: 0.21, 0.32 and 0.53 for rural, urban and industrial air). On the face: the beam ×
 cos of incidence, zero when one ray toward the sun meets a collider (its own body skipped), plus
 the sky by the isotropic model (1 + n_z)/2 and the ground's ρ_g·E_gh·(1 − n_z)/2. The weather:
 rain or snow (`env/rain_rate`, `env/snow_rate`) make the sky overcast; fog (`env/extinction/visible`)
 dims the beam by exp(−σ·fog_depth·m). Night is zero (no twilight, moon or lamps; cloud cover is
 not a weather signal yet). The cosine and spectral response are ideal. Full sun saturates the
-BH1750 (65535 lx); set `max_illuminance` for another part. Check: `test_kinds_light_sensor`
+BH1750 (65535 counts, 54 612 lx); set `max_illuminance` for another part. Check: `test_kinds_light_sensor`
 (Meeus' Julian day example, the NREL SPA example within 0.02°, Kasten–Young at the horizon, the IES
 closed forms, shade and overcast).
 
 ### sun_sensor
 
-A two-axis sun sensor looking along +x (after the Solar MEMS nanoSSOC-A60: ±60°, < 0.5° at 3σ;
-TODO(verify)).
+A two-axis sun sensor looking along +x (after the Solar MEMS nanoSSOC-A60, product sheet
+nanoSSOC-A60, solar-mems.com, 2024: field of view ±60°, accuracy < 0.5° (3σ), precision
+< 0.1°). The noise is the accuracy over 3, which holds its bias too; for the noise alone give the
+precision.
 
 | Parameter | Default | Meaning |
 |---|---|---|
 | `start_utc`, `sky`, `fog_depth` | | as the light sensor's |
 | `fov` | 120° | full cone angle |
 | `noise/stddev` | 0.167° | rad, 1σ per axis |
-| `min_illuminance` | 1000 lx | illustrative: the least direct beam it finds the sun in |
+| `min_illuminance` | 1000 lx | illustrative (Solar MEMS gives no threshold): the least direct beam it finds the sun in |
 
 Signals: `sun_direction` (Vec3, unit, sensor frame; NaN when the sun is not seen), `sun_visible`
 (the sun is in the field of view, not shaded and its beam is strong enough), `valid`.
@@ -1266,13 +1353,15 @@ NREL/TP-560-34302, example: zenith 50.11162°, azimuth 194.34024°).
 
 ### rain_sensor
 
-An optical rain gauge (after the Hydreon RG-15).
+An optical rain gauge (after the Hydreon RG-15: Rain Gauge Model RG-15 Instructions, SW rev 1.000,
+2022.07.18: ±10 % "under controlled conditions, accuracy may vary near/below freezing", 0.2 or
+0.02 mm).
 
 | Parameter | Default | Meaning |
 |---|---|---|
 | `resolution` | 0.2 mm (0.2e-3 m) | the accumulation's step (high resolution 0.02 mm) |
 | `noise/gain` | 0.05 | 1σ of a gain error drawn once per run (RG-15 ±10 %) |
-| `threshold` | 0.1 mm/h | illustrative: `raining` above it |
+| `threshold` | 0.1 mm/h | illustrative: `raining` above it (Hydreon defines no rate; its rain event lasts from the first drop to 60 min after the last) |
 | `time_constant` | 0 s | first-order lag of the rate |
 | `snow` | 0 | 1: count snow too (melted water) |
 
@@ -1287,7 +1376,7 @@ Relative humidity and temperature (after the Sensirion SHT40).
 | Parameter | Default | Meaning |
 |---|---|---|
 | `time_constant/humidity`, `time_constant/temperature` | 4 s, 2 s | τ63 |
-| `noise/humidity`, `noise/temperature` | 0.0008, 0.04 K | 1σ (repeatability, high precision) |
+| `noise/humidity`, `noise/temperature` | 0.000267, 0.0133 K | 1σ: the SHT4x's high-precision repeatability, 0.08 %RH and 0.04 °C, is 3σ (datasheet V7.3, tables 1–2) |
 | `offset/humidity`, `offset/temperature` | 0 | its accuracy (SHT40: ±0.018, ±0.2 K typical) |
 | `resolution/humidity`, `resolution/temperature` | 0.0001, 0.01 K | |
 
@@ -1299,13 +1388,15 @@ if given. Check: `test_kinds_humidity_sensor` (the lag's closed form, a step thr
 
 ### visibility_sensor
 
-A forward-scatter visibility sensor (after the Vaisala PWD22: 10 to 20 000 m, ±10 % to 10 km).
+A forward-scatter visibility sensor (after the Vaisala PWD22, datasheet B210385EN-F: 10 to 20 000 m,
+±10 % to 10 km, ±15 % from 10 to 20 km).
 
 | Parameter | Default | Meaning |
 |---|---|---|
 | `range/min`, `range/max` | 10 m, 20 000 m | |
-| `noise/fraction` | 0.05 | 1σ, of the MOR |
-| `time_constant` | 60 s | first-order lag of the extinction, for its 1 min average (TODO(verify)) |
+| `noise/fraction` | 0.05 | 1σ, of the MOR (±10 % as 2σ) |
+| `noise/fraction_far` | 1.5 × `noise/fraction` | 1σ beyond 10 km (±15 %) |
+| `time_constant` | 60 s | first-order lag of the extinction: PWD22 User's Guide M210543EN-B, table 24, "Time constant 60 seconds" (its 1 min output is a running mean of 15 s values) |
 
 Signals: `visibility` (m: the meteorological optical range), `extinction` (1/m, what it measured),
 `valid`. Model: MOR = −ln 0.05 / σ ≈ 3/σ (Koschmieder with WMO's 5 % threshold, WMO-No. 8 Vol. I
@@ -1450,8 +1541,11 @@ what turns the OSSDs off. Defaults are the nanoScan3 Core I/O's, SICK data sheet
 (part 1100333): scanning angle 275°, angular resolution 0.17°, response time 70 ms, distance
 measuring range 40 m (protective fields up to 3 m and warning fields up to 10 m on that part; the
 fields themselves are the user's, with no default, and a protective field is required). The data
-sheet gives no scan cycle time; the sensor's update rate is it (TODO(verify): the nanoScan3's
-scan cycle). Not modelled: the 65 mm protective field supplement (add it to the field), object
+sheet gives no scan cycle time; the operating instructions do: 30 ms (nanoScan3 I/O operating
+instructions 8024602/1W27/2026-05-26, Japanese edition, §14.2 table 33 "scan cycle time 30 ms";
+§14.3: response time t_R = n × 30 ms + 10 ms, n the multiple sampling, 2 by default, hence the
+70 ms). The sensor's update rate is its scan cycle: give `<update_rate>` 33.333 (a 30 ms period)
+for a nanoScan3. Not modelled: the 65 mm protective field supplement (add it to the field), object
 resolution (20–200 mm), remission limits (1.8 % up), contour detection, monitoring cases switched
 by inputs. Two speed-dependent monitoring cases are: with `switch_speed` (m/s), at or above that
 speed along the sensor's x (from `body/<b>/twist`) the `protective_fast` and `warning_fast` fields
@@ -1460,7 +1554,7 @@ watch (`warning_fast` defaults to `warning`), and `sensor/<n>/case` reads 1.
 ```xml
 <gazebo reference="base_link">
   <sensor name="safety" type="safety_scanner">
-    <pose>0.3 0 0.15 0 0 0</pose><update_rate>25</update_rate>
+    <pose>0.3 0 0.15 0 0 0</pose><update_rate>33.333</update_rate>
     <safety_scanner>
       <protective><x_max>0.6</x_max><y_min>-0.35</y_min><y_max>0.35</y_max></protective>
       <warning><polygon>0,-0.6 1.5,-0.6 1.5,0.6 0,0.6</polygon></warning>
@@ -1498,8 +1592,8 @@ sensor's body. The wrench is moved to the sensor's origin (`τ_s = τ_j + (p_j �
 turned into the sensor frame; `measure_direction` `child_to_parent` reverses it. Then per axis:
 offset, noise, a first-order low-pass at `cutoff_frequency` (`α = 1 − exp(−2π·f_c·dt)`), range
 (clipped, `saturated` = 1), resolution (rounded to whole steps). Preset `mini45_si_580_20` is ATI's
-Mini45 with calibration SI-580-20 (ati-ia.com, F/T sensor models, Mini45, Standard Calibrations,
-metric): ranges Fx, Fy 580 N, Fz 1160 N, Tx, Ty, Tz 20 N·m; resolutions Fx, Fy, Fz 1/4 N, Tx, Ty
+Mini45 with calibration SI-580-20 (ati-ia.com, F/T sensor models, Mini45, table "Metric
+Calibrations (SI)" for a 16-bit DAQ, ECAT, Net, TWE or WNet F/T system): ranges Fx, Fy 580 N, Fz 1160 N, Tx, Ty, Tz 20 N·m; resolutions Fx, Fy, Fz 1/4 N, Tx, Ty
 1/188 N·m, Tz 1/376 N·m. ATI quotes those resolutions after dropping four counts of noise; the
 preset's noise of one resolution step (1 sigma) per axis is our assumption. Temperature drift is
 not modelled.
@@ -1533,7 +1627,9 @@ A link-side joint torque sensor, as in each joint of a Franka Panda or a KUKA LB
 reaction's moment about the joint axis (its force along the axis for a slide), so at rest it reads
 what the motor holds. Parameters `joint` (text, default the body's joint), `range`, `resolution`,
 `noise` (1 sigma), `offset` (N·m or N) and `cutoff_frequency` (Hz), all ideal by default: give the
-part's figures (TODO(verify): Franka's and KUKA's published torque resolution and noise). Signals:
+part's figures. Franka publishes none for the FR3 (datasheet R02212 2.6, July 2026: "link-side
+torque sensor in all 7 axes"); KUKA gives "axis-specific torque accuracy ±2 % of maximum torque"
+for the LBR iiwa 7 R800 and 14 R820 (spec sheet), no resolution or noise. Signals:
 `sensor/<n>/torque` (N·m; `force`, N, on a slide), `saturated` (Bool).
 
 Test `test_kinds_force_torque` (both kinds): a 2 kg arm on a hinge held horizontal by its motor
@@ -1775,8 +1871,8 @@ the channels at or over `threshold`; NaN without tape), `width` (m, the tape und
 offset resolves a fraction of a channel: within one ray spacing (`spacing` /
 `samples_per_channel`) of the tape's centre without noise (`test_kinds_line_sensor`, named tape
 and bright collider). Deterministic (CPU, Philox); `ground_truth` drops the noise. Real arrays
-give a resolution near 1 mm over 16 channels (TODO(verify): a datasheet, e.g. a magnetic guide
-sensor's, before quoting numbers).
+reach about 1 mm: the Roboteq MGS1600GY magnetic guide sensor (datasheet v1.3, 2018, table 11)
+gives 160 mm of capture width, 1 mm resolution (2 mm at most) from 16 sensors, at 100 Hz.
 
 ### tag_reader
 
@@ -1886,7 +1982,7 @@ the access points' bodies left out).
 | Parameter | Unit | Default | Meaning |
 |---|---|---|---|
 | `access_points` | m | none | `x y z; ...` region-local |
-| `scan_time` | s | 2 | a new scan every so often; between scans the outputs hold. A full active scan dwells MinChannelTime–MaxChannelTime on each channel (IEEE 802.11-2020 §11.1.4.3.2; drivers use some 20–100 ms) over 13 channels at 2.4 GHz and some 25 at 5 GHz: one to four seconds. TODO(verify) against a measured adapter |
+| `scan_time` | s | 2 | a new scan every so often; between scans the outputs hold. Illustrative: a scan dwells some 60 ms on each channel when active and 111 ms when passive (Linux mac80211 `scan.c`, IEEE80211_PROBE_DELAY + IEEE80211_CHANNEL_TIME and IEEE80211_PASSIVE_CHANNEL_TIME; firmware scans set their own) over 13 channels at 2.4 GHz and some 25 at 5 GHz: one to four seconds |
 | `sensitivity` | dBm | −82 | weaker access points are not listed: the OFDM PHY's minimum input sensitivity at 6 Mb/s, 20 MHz (IEEE 802.11-2020 Table 17-18) |
 | `noise` | dB | 0 | 1σ per reading, before rounding (the comms domain adds its own shadowing) |
 | `tx_power` | W | 0.1 | 20 dBm |
@@ -1945,10 +2041,10 @@ Beyond `max_range` the anchor drops out.
 | Parameter | Unit | Default | Meaning |
 |---|---|---|---|
 | `anchors` | m | none | `x y z; ...` region-local |
-| `range_noise` | m | 0.1 | 1σ with line of sight: DW1000/DW3000 datasheets give two-way ranging to within ±10 cm (TODO(verify) the revision) |
+| `range_noise` | m | 0.1 | 1σ with line of sight: "a precision of 10 cm" (DW1000 Datasheet Version 2.10, p. 1; DW3000 Datasheet Version 1.1: "an accuracy of 10 cm"), on the safe side: the DW1000's figure 11 spreads about ±8 cm |
 | `nlos_permittivity` | 1 | 5.24 | εr of what blocks the line: concrete, 1–100 GHz (ITU-R P.2040-1 Table 3; UWB channels 5 and 9 are 6.5 and 8 GHz) |
 | `nlos_noise` | m | 0.3 | extra 1σ without line of sight, illustrative |
-| `max_range` | m | 50 | illustrative for indoor anchors at 6.8 Mb/s |
+| `max_range` | m | 50 | illustrative for indoor anchors at 6.8 Mb/s (DW1000 datasheet figure 31: some 50–110 m in open line of sight) |
 
 | Signal | Type | Unit | Meaning |
 |---|---|---|---|
@@ -1991,13 +2087,16 @@ datasheet's precision as Gaussian noise and is held within 0–1000 µg/m³. Wit
 domain (its inputs unconnected) every class is NaN and `valid` 0; without lifted dust that part
 is 0.
 
-Sensirion SPS30 datasheet (v1.0 2020, v2.0 2023): sizes 0.3–10 µm, range 0–1000 µg/m³,
-sampling interval 1 s; precision PM1 and PM2.5 ±10 µg/m³ up to 100 µg/m³ and ±10 % above, PM4
-and PM10 ±25 µg/m³ and ±25 %, taken here as 1σ.
+Sensirion SPS30 datasheet (Version 2.0 – D1 – June 2023, table 1): sizes 0.3–10 µm, range
+0–1000 µg/m³, sampling interval 1 s; precision PM1 and PM2.5 ±(5 µg/m³ + 5 % of the reading) up
+to 100 µg/m³ (±10 µg/m³ in v1.0 of March 2020) and ±10 % above, PM4 and PM10 ±25 µg/m³ and
+±25 %, taken here as 1σ of each reading. Sensirion's precision is the variation between devices
+on averages of at least 150 s, so this is a stand-in: a real part's error is more an offset that
+stays than noise.
 
 | Parameter | Unit | Default | Meaning |
 |---|---|---|---|
-| `time_constant` | s | 8 | the lag: the SPS30's start-up time at 200–3000 particles/cm³; the datasheet gives no step response, TODO(verify) against a measured step |
+| `time_constant` | s | 8 | the lag: the SPS30's typical start-up time at 200–3000 particles/cm³ (table 1); illustrative as a lag, since Sensirion gives no step response |
 | `noise_scale` | 1 | 1 | times the datasheet precision (0: no noise) |
 | `downwash_diameter` | m | 1e-4 | grains lifted by outwash (the weather's `ground_dust_diameter` default) |
 
@@ -2042,10 +2141,10 @@ elements, and the nearest of them as one signal for a speed-and-separation monit
 | Parameter | Unit | Default | Meaning |
 |---|---|---|---|
 | `rows`, `columns` | 1 | 1, 1 | elements, at most 4096 |
-| `fov` | rad | 0.44 | spread of the columns about the sensor's +x (25°, the order of a VL53L0X-class element's cone; illustrative) |
+| `fov` | rad | 0.44 | spread of the columns about the sensor's +x (25°: ST VL53L0X DocID029104 Rev 2, §5.1) |
 | `vertical_fov` | rad | `fov` | spread of the rows |
 | `min_range`, `max_range` | m | 0, 0.3 | outside them an element reads +inf |
-| `noise` | m | 0.001 | 1σ per element, illustrative |
+| `noise` | m | 0.012 | 1σ per element: the VL53L0X's 4 % standard deviation (table 12, 33 ms, white target indoors) at the 0.3 m reach |
 
 Element (row r, column c) looks at azimuth `−fov/2 + (c + ½)·fov/columns` (columns from the
 sensor's right to its left) and elevation `−vertical_fov/2 + (r + ½)·vertical_fov/rows` (rows from
@@ -2186,10 +2285,13 @@ publish:
 ### sonar
 
 An underwater sonar: by default a multibeam imaging sonar's fan, after the Blueprint Subsea
-Oculus M750d in its 750 kHz mode (Oculus M-series datasheet: 0.1 to 120 m, 130° × 20°, 512
+Oculus M750d in its 750 kHz mode (Blueprint Subsea, Oculus M-series specifications page,
+blueprintsubsea.com/oculus/oculus-m-series, read 2026-11-12: 0.1 to 120 m, 130° × 20°, 512
 beams, 4 mm range resolution, up to 40 Hz); with `beams` 1 a single-beam echosounder or altimeter
-such as the Blue Robotics Ping2 (a 25° cone, up to 100 m; TODO(verify): its minimum range and
-frequency against the Ping2 datasheet). It hears only under the surface of a body of water
+such as the Blue Robotics Ping2 (store page "Ping Sonar Altimeter and Echosounder", technical
+details, read 2026-11-12: 115 kHz, a 25° beam at −3 dB, 0.3 m to 100 m typical, range resolution
+0.5 % of range). The defaults are the Oculus's: for a Ping2 give `beams` 1, `frequency` 115000
+and `range` 0.3 to 100 m, as the example does. It hears only under the surface of a body of water
 (`WaterAPI_1`, as the hydrodynamics domain and the lidars read it).
 
 ```xml
@@ -2201,7 +2303,7 @@ frequency against the Ping2 datasheet). It hears only under the surface of a bod
 <sensor name="altimeter" type="sonar">      <!-- Ping2 looking down -->
   <pose>0 0 -0.15 0 1.5708 0</pose>
   <update_rate>10</update_rate>
-  <sonar><beams>1</beams><beam_width>0.436</beam_width><range><min>0.5</min><max>100</max></range></sonar>
+  <sonar><beams>1</beams><beam_width>0.436</beam_width><frequency>115000</frequency><range><min>0.3</min><max>100</max></range></sonar>
 </sensor>
 ```
 
@@ -2278,12 +2380,13 @@ geo origin is known (`geodetic` 1), else x, y, z in world ENU (m); east, north, 
 age of the last message (s); distance (m)); `count` (Int, aircraft heard); `geodetic` (Bool).
 
 Model: each aircraft squitters its airborne position and velocity every 0.4 to 0.6 s at random
-(DO-260B §2.2.3.3.1, about 2 Hz; the receiver should run at 10 Hz or more to see them); a message
+(ICAO Annex 10 Vol. IV §3.1.2.8.6.4.2 and .5, which DO-260B implements; about 2 Hz; the receiver should run at 10 Hz or more to see them); a message
 is heard while the aircraft is within `range/max` and the straight line is above the radio horizon
 √(2kR·h₁) + √(2kR·h₂), k = 4/3 (Bean and Dutton, *Radio Meteorology*, 1966), heights the ENU up
 coordinates (h₁ plus `antenna_height`). The message carries the sender's noisy position, height
 in 25 ft steps, east and north velocity in 1 kt steps and vertical rate in 64 ft/min steps (the Q-bit
-altitude and subtype 1 velocity of DO-260B); latitude and longitude are not CPR-encoded (their
+altitude of Annex 10 Vol. IV §3.1.2.6.5.4 and the subtype 1 velocity, as J. Sun's *The 1090
+Megahertz Riddle*, 2nd ed., gives it); latitude and longitude are not CPR-encoded (their
 ≈ 5 m step is below the noise). Out of reach the row reads NaN and heard 0. No garbling, Mode S
 interference, barometric altitude, identification or NIC/NACp fields. `ground_truth`: every step,
 exact. Check: `test_kinds_adsb_receiver` (which robots are aircraft, exact local and geodetic
@@ -2324,7 +2427,9 @@ finds them (one agent per kinematic body `traffic_vehicle_<i>`/`traffic_pedestri
 per signal head, the kinematic lamp bodies `traffic_lamp_<lane>_red` in lane order), so a
 different traffic layout would stop the run at wiring, not misread. Each step every sender in range
 is received with probability 1/(1 + exp((d − loss_distance)/loss_width)): illustrative, of the shape
-of measured DSRC packet delivery ratios (Bai, Stancil and Krishnan, IEEE VNC 2010), not fitted;
+of measured DSRC packet delivery ratios, not fitted (Meireles et al., IEEE VNC 2010: over 80 %
+at 400 m with line of sight in their suburban run, to zero at 500 m with vehicles in the way; the
+defaults, 12 % at 400 m, sit near the obstructed case);
 no walls, no channel congestion, no latency. A row keeps its last message; `age` grows until the
 next. Run it at 10 Hz (one draw per step). `ground_truth`: every message in range. Check:
 `test_kinds_v2x` (exact copies and the heads' positions, ½ received at `loss_distance` over 2000

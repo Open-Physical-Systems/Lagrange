@@ -24,8 +24,10 @@ namespace lagrange::sensors::kinds {
 inline namespace extra2 {
 
 /// The share of messages received at `distance` (m): a logistic fall-off, ½ at `d50`, over a
-/// width `width` (m). Illustrative: of the shape of measured DSRC packet delivery ratios (Bai,
-/// Stancil and Krishnan, IEEE VNC 2010, figs. 3–4), not fitted to them.
+/// width `width` (m). Illustrative, not fitted: measured DSRC packet delivery ratios fall in this
+/// way with distance (Meireles et al., "Experimental study on the impact of vehicular
+/// obstructions in VANETs", IEEE VNC 2010: over 80 % at 400 m with line of sight in their suburb,
+/// to zero at 500 m with vehicles in the way); the defaults sit near the obstructed case.
 double v2xDelivery(double distance, double d50, double width) {
     return 1.0 / (1.0 + std::exp((distance - d50) / width));
 }

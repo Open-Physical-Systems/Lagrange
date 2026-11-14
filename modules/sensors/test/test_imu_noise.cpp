@@ -154,8 +154,9 @@ TEST(ImuNoise, AllanDeviationOfAStaticRecordMatchesTheDensityAndRandomWalk) {
         EXPECT_NEAR(measured / expected, 1.0, point.tolerance) << "tau " << point.tau << " s";
     }
 
-    // The accelerometer's Gauss-Markov bias: its spread is the configured stationary deviation
-    // and its autocorrelation at one correlation time is 1/e. 4 h hold 144 correlation times,
+    // The accelerometer's Gauss-Markov bias: <dynamic_bias_stddev> drives it, as Gazebo reads it
+    // (gz-sensors GaussianNoiseModel.cc), so its spread is stddev·sqrt(tau / 2), and its
+    // autocorrelation at one correlation time is 1/e. 4 h hold 144 correlation times,
     // so the spread is known to about 1/sqrt(144) = 8 %.
     double spread = 0.0, lagged = 0.0;
     const auto lag = static_cast<std::size_t>(kCorrelationS / kDt);
@@ -174,8 +175,8 @@ TEST(ImuNoise, AllanDeviationOfAStaticRecordMatchesTheDensityAndRandomWalk) {
     spread = std::sqrt(spread / (3.0 * static_cast<double>(record.accel.size())));
     const double correlation = lagged / static_cast<double>(pairs) / (spread * spread);
     std::printf("Gauss-Markov: deviation %.4g (model %.4g), correlation at tau_c %.3f (1/e %.3f)\n",
-                spread, kGaussMarkov, correlation, std::exp(-1.0));
-    EXPECT_NEAR(spread / kGaussMarkov, 1.0, 0.2);
+                spread, kGaussMarkov * std::sqrt(kCorrelationS / 2.0), correlation, std::exp(-1.0));
+    EXPECT_NEAR(spread / (kGaussMarkov * std::sqrt(kCorrelationS / 2.0)), 1.0, 0.2);
     EXPECT_NEAR(correlation, std::exp(-1.0), 0.1);
 }
 

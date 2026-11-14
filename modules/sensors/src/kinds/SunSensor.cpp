@@ -8,8 +8,8 @@ namespace lagrange::sensors::kinds {
 
 namespace {
 
-// Solar MEMS nanoSSOC-A60 (datasheet): field of view ±60°, accuracy < 0.5° (3σ). TODO(verify):
-// against the current datasheet.
+// Solar MEMS nanoSSOC-A60 (product sheet, solar-mems.com, 2024): field of view ±60°, accuracy
+// < 0.5° (3σ), precision < 0.1°. The noise is the accuracy / 3, its bias included.
 constexpr double kHalfFieldOfView = 60.0 * std::numbers::pi / 180.0;  // rad
 constexpr double kNoise = 0.5 / 3.0 * std::numbers::pi / 180.0;       // rad, 1σ per axis
 /// Illustrative: the least direct normal illuminance the sensor still finds the sun in (lx); an

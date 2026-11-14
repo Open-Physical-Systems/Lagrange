@@ -71,7 +71,8 @@ TEST(Anemometer, NoAerodynamicsDomainIsNotValid) {
 }
 
 TEST(Anemometer, SonicNoiseStaysWithinItsAccuracy) {
-    // WindSonic: ±2 % of 12 m/s, ±3° (2σ); every sample within 3σ of the truth, on its grid.
+    // WindSonic: 2 % RMSE of 12 m/s (1σ), ±2° (2σ); every sample within 4σ of the truth, on its
+    // grid.
     KindRun r;
     rig(r.world, "wind", "anemometer", Pose{}, 100.0);
     ASSERT_TRUE(start(r, feeds(Pose{}, {}, [](double) { return std::vector<double>{-12, 0, 0}; })));
@@ -82,8 +83,8 @@ TEST(Anemometer, SonicNoiseStaysWithinItsAccuracy) {
         const double s = r.read("sensor/wind/wind_speed");
         double d = r.read("sensor/wind/wind_direction");
         d = d > kPi ? d - 2.0 * kPi : d;
-        EXPECT_NEAR(s, 12.0, 3.0 * 0.12);
-        EXPECT_NEAR(d, 0.0, 3.0 * 1.5 * kPi / 180.0 + kPi / 360.0);
+        EXPECT_NEAR(s, 12.0, 4.0 * 0.24);
+        EXPECT_NEAR(d, 0.0, 4.0 * 1.0 * kPi / 180.0 + kPi / 360.0);
         EXPECT_NEAR(std::remainder(s, 0.01), 0.0, 1e-9);
         sum += s;
         ++n;

@@ -79,16 +79,17 @@ struct SolarPosition {
 /// degrees in the bracket. Valid to the horizon (m ≈ 38).
 [[nodiscard]] double airMass(double zenith);
 
-/// Daylight on a clear or overcast sky (IES daylight availability model; Illuminating Engineering
-/// Society Daylighting Committee, "Recommended practice for the calculation of daylight
-/// availability", J. IES 13(4), 1984, 381–392): extraterrestrial illuminance E_xt = 127.5 klx ·
-/// (1 + 0.033·cos(2π·day/365)), direct normal E_dn = E_xt·exp(−c·m) with c = 0.21 for a clear sky
-/// and no direct beam under an overcast one, and diffuse horizontal E_dh = A + B·sin^C(α) klx
-/// (clear A = 0.8, B = 15.5, C = 0.5; overcast A = 0.3, B = 21.0, C = 1.0; TODO(verify): A, B, C
-/// against the paper, they are the values quoted from it in the IES Lighting Handbook). Night
-/// (α ≤ 0): both zero, twilight is not modelled.
+/// Daylight on a clear or overcast sky: the model of Gillette, Pierpoint and Treado (NBS, 1982)
+/// that the IES daylight availability practice took up (J. IES 13(4), 1984, 381–392; not read),
+/// as Robbins and Hunter quote it (SERI/TR-254-1703, 1983, eqs. 2-16, 2-17, 3-6): extraterrestrial
+/// illuminance E_xt = 127.5 klx · (1 + 0.033·cos(2π·day/365)), direct normal E_dn = E_xt·exp(−c·m)
+/// and no direct beam under an overcast sky, and diffuse horizontal E_dh = A + B·sin^C(α) klx
+/// (clear A = 0.8, B = 15.5, C = 0.5; overcast A = 0.3, B = 21.0, C = 1.0). c = 0.21 per air mass
+/// is the rural design illuminance extinction of LBL-17727 (Lawrence Berkeley Laboratory, 1984);
+/// m is Kasten–Young's air mass where the source has 1/sin α. Night (α ≤ 0): both zero, twilight
+/// is not modelled.
 inline constexpr double kExtraterrestrialIlluminance = 127.5e3;  // lx, IES 1984
-inline constexpr double kClearSkyExtinction = 0.21;              // per air mass, IES 1984
+inline constexpr double kClearSkyExtinction = 0.21;              // per air mass, LBL-17727
 struct Daylight {
     double directNormal{0.0};       // lx, on a surface facing the sun
     double diffuseHorizontal{0.0};  // lx, the sky's on a level surface

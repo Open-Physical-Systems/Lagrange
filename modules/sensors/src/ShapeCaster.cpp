@@ -78,7 +78,17 @@ double boundingRadius(ShapeType type, const std::array<double, 3>& size) {
 
 struct ShapeCaster::Impl {
     RTCDevice device{nullptr};
+    // Two levels: the shapes that have never moved, built once, and the ones that have, rebuilt
+    // whenever one moves. `scene` holds an instance of each (identity transforms), so a scan of
+    // a robot in a town no longer rebuilds the town's hierarchy. Which shapes a ray tests
+    // changes, never its result: every hit is exact in double, the nearest kept, the lower
+    // index on a tie.
     RTCScene scene{nullptr};
+    RTCScene fixedScene{nullptr};
+    RTCScene movingScene{nullptr};
+    unsigned fixedInstance{RTC_INVALID_GEOMETRY_ID};
+    unsigned movingInstance{RTC_INVALID_GEOMETRY_ID};
+    std::vector<std::uint8_t> moving;  // per shape: has moved, so lives in movingScene
     std::vector<Shape> shapes;
     std::vector<double> radius;         // bounding sphere, with the margin
     std::vector<std::uint32_t> planes;  // tested directly
@@ -124,6 +134,32 @@ struct ShapeCaster::Impl {
         RTCHitN_primID(hit, 1, 0) = args->primID;
     }
 
+    /// A user geometry for bounded shape `k` (its user data in `geometries`), attached to
+    /// `target`; returns its id there.
+    unsigned attach(RTCScene target, Geometry& user) const {
+        RTCGeometry geometry = rtcNewGeometry(device, RTC_GEOMETRY_TYPE_USER);
+        rtcSetGeometryUserPrimitiveCount(geometry, 1);
+        rtcSetGeometryUserData(geometry, &user);
+        rtcSetGeometryBoundsFunction(geometry, &Impl::bounds, nullptr);
+        rtcSetGeometryIntersectFunction(geometry, &Impl::intersect);
+        rtcCommitGeometry(geometry);
+        const unsigned id = rtcAttachGeometry(target, geometry);
+        rtcReleaseGeometry(geometry);
+        return id;
+    }
+
+    unsigned instance(RTCScene of) const {
+        RTCGeometry geometry = rtcNewGeometry(device, RTC_GEOMETRY_TYPE_INSTANCE);
+        rtcSetGeometryInstancedScene(geometry, of);
+        constexpr std::array<float, 12> kIdentity{1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F,
+                                                  0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F};
+        rtcSetGeometryTransform(geometry, 0, RTC_FORMAT_FLOAT3X4_COLUMN_MAJOR, kIdentity.data());
+        rtcCommitGeometry(geometry);
+        const unsigned id = rtcAttachGeometry(scene, geometry);
+        rtcReleaseGeometry(geometry);
+        return id;
+    }
+
     void build() {
         device = rtcNewDevice(nullptr);
         if (device == nullptr) {
@@ -131,24 +167,27 @@ struct ShapeCaster::Impl {
         }
         scene = rtcNewScene(device);
         rtcSetSceneFlags(scene, RTC_SCENE_FLAG_DYNAMIC | RTC_SCENE_FLAG_ROBUST);
-        rtcSetSceneBuildQuality(scene, RTC_BUILD_QUALITY_LOW);
+        fixedScene = rtcNewScene(device);
+        rtcSetSceneFlags(fixedScene, RTC_SCENE_FLAG_ROBUST);
+        rtcSetSceneBuildQuality(fixedScene, RTC_BUILD_QUALITY_MEDIUM);
+        movingScene = rtcNewScene(device);
+        rtcSetSceneFlags(movingScene, RTC_SCENE_FLAG_DYNAMIC | RTC_SCENE_FLAG_ROBUST);
+        rtcSetSceneBuildQuality(movingScene, RTC_BUILD_QUALITY_LOW);
         geometries.reserve(shapes.size());  // stable addresses: Embree keeps pointers to them
         geometryIds.assign(shapes.size(), RTC_INVALID_GEOMETRY_ID);
+        moving.assign(shapes.size(), 0);
         for (std::uint32_t k = 0; k < shapes.size(); ++k) {
             if (shapes[k].type == ShapeType::Plane) {
                 planes.push_back(k);
                 continue;
             }
             geometries.push_back({this, k});
-            RTCGeometry geometry = rtcNewGeometry(device, RTC_GEOMETRY_TYPE_USER);
-            rtcSetGeometryUserPrimitiveCount(geometry, 1);
-            rtcSetGeometryUserData(geometry, &geometries.back());
-            rtcSetGeometryBoundsFunction(geometry, &Impl::bounds, nullptr);
-            rtcSetGeometryIntersectFunction(geometry, &Impl::intersect);
-            rtcCommitGeometry(geometry);
-            geometryIds[k] = rtcAttachGeometry(scene, geometry);
-            rtcReleaseGeometry(geometry);
+            geometryIds[k] = attach(fixedScene, geometries.back());
         }
+        rtcCommitScene(fixedScene);
+        rtcCommitScene(movingScene);
+        fixedInstance = instance(fixedScene);
+        movingInstance = instance(movingScene);
         rtcCommitScene(scene);
     }
 };
@@ -156,8 +195,10 @@ struct ShapeCaster::Impl {
 ShapeCaster::ShapeCaster() : impl_(std::make_unique<Impl>()) {}
 
 ShapeCaster::~ShapeCaster() {
-    if (impl_->scene != nullptr) {
-        rtcReleaseScene(impl_->scene);
+    for (RTCScene scene : {impl_->scene, impl_->fixedScene, impl_->movingScene}) {
+        if (scene != nullptr) {
+            rtcReleaseScene(scene);
+        }
     }
     if (impl_->device != nullptr) {
         rtcReleaseDevice(impl_->device);
@@ -177,19 +218,39 @@ void ShapeCaster::update(std::span<const Shape> shapes) {
         return;
     }
     bool moved = false;
+    bool fixedChanged = false;
+    std::size_t user = 0;  // index in geometries of shape k, when bounded
     for (std::size_t k = 0; k < shapes.size(); ++k) {
+        const bool bounded =
+            s.geometryIds.size() > k && s.geometryIds[k] != RTC_INVALID_GEOMETRY_ID;
         const Pose& now = shapes[k].pose;
         if (now.position == s.shapes[k].pose.position &&
             now.orientation == s.shapes[k].pose.orientation) {
+            user += bounded ? 1 : 0;
             continue;
         }
         s.shapes[k].pose = now;
-        if (s.scene != nullptr && s.geometryIds[k] != RTC_INVALID_GEOMETRY_ID) {
-            rtcCommitGeometry(rtcGetGeometry(s.scene, s.geometryIds[k]));
+        if (s.scene != nullptr && bounded) {
+            if (s.moving[k] == 0) {
+                // Its first move: out of the hierarchy built once, into the one rebuilt.
+                rtcDetachGeometry(s.fixedScene, s.geometryIds[k]);
+                s.geometryIds[k] = s.attach(s.movingScene, s.geometries[user]);
+                s.moving[k] = 1;
+                fixedChanged = true;
+            } else {
+                rtcCommitGeometry(rtcGetGeometry(s.movingScene, s.geometryIds[k]));
+            }
             moved = true;
         }
+        user += bounded ? 1 : 0;
     }
     if (moved) {
+        if (fixedChanged) {
+            rtcCommitScene(s.fixedScene);
+            rtcCommitGeometry(rtcGetGeometry(s.scene, s.fixedInstance));
+        }
+        rtcCommitScene(s.movingScene);
+        rtcCommitGeometry(rtcGetGeometry(s.scene, s.movingInstance));
         rtcCommitScene(s.scene);
     }
 }

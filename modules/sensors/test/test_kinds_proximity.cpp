@@ -55,7 +55,8 @@ TEST(Proximity, NothingBeyondItsReach) {
     EXPECT_TRUE(std::isinf(d[2]));
 }
 
-TEST(Proximity, MillimetreNoise) {
+TEST(Proximity, TheVl53l0xsNoise) {
+    // 4 % of the 0.3 m reach (VL53L0X table 12), 1σ.
     KindRun r = skin(0.2, {{"rows", 1.0}, {"columns", 1.0}}, false);
     double sum = 0.0, squares = 0.0;
     constexpr int kSamples = 1000;
@@ -65,8 +66,8 @@ TEST(Proximity, MillimetreNoise) {
         sum += e;
         squares += e * e;
     }
-    EXPECT_NEAR(sum / kSamples, 0.0, 2e-4);
-    EXPECT_NEAR(std::sqrt(squares / kSamples), 0.001, 1e-4);
+    EXPECT_NEAR(sum / kSamples, 0.0, 2.4e-3);
+    EXPECT_NEAR(std::sqrt(squares / kSamples), 0.012, 1.2e-3);
 }
 
 }  // namespace

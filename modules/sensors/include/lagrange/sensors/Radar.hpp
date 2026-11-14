@@ -47,4 +47,42 @@ inline constexpr std::size_t kRadarMaxDetections = 64;
     const World& world, std::uint32_t sensor, bool groundTruth,
     std::shared_ptr<gpu::RayContext> rayContext = nullptr);
 
+/// A 4D imaging radar (kind `imaging_radar`, sensors.md §2 "4D imaging radar"): the same rays and
+/// echoes as createRadar, resolved by the radar's own cells instead of by object. The settings
+/// above (same names) plus, all optional:
+/// - `azimuth_elements`, `elevation_elements`: virtual array channels (N_TX × N_RX laid out in
+///   azimuth and elevation); with `element_spacing` d (wavelengths, 0.5) each angle cell is
+///   1/(N·d) wide in direction sine (u = cos el · sin az, w = sin el): λ/(N·d) rad at boresight.
+///   Without them, `azimuth_resolution` and `elevation_resolution` (rad, at boresight).
+/// - `bandwidth` (Hz): range_resolution = c/(2B); `chirp_period` T_c (s): the unambiguous
+///   velocity ±λ/(4·T_c); with `chirps` N_c: velocity_resolution = λ/(2·N_c·T_c).
+/// - `max_velocity` (m/s): the unambiguous velocity given directly; radial velocities fold into
+///   [−v_max, v_max). 0 or absent: no folding.
+/// - `unambiguous_range` (m): ranges beyond it fold back (r mod R_u); absent: they do not.
+/// - `ghost_reflection`: the ground's power reflection coefficient |Γ|² (0..1, 0: no ghosts);
+///   each echo also returns by the ground both ways (the target's mirror image below the ground,
+///   power × |Γ|⁴).
+/// - `peak_grouping` (1): each cell climbs to its strongest neighbour (±1 cell in the four
+///   dimensions) and a local peak takes in the cells that climb to it; 0: every cell is its own.
+/// - `max_detections` (256), `ray_spacing` (rad; half the finer angle cell at boresight).
+/// Every echo falls in a cell of (range, Doppler, azimuth sine, elevation sine); a peak whose
+/// summed Σσ/R⁴ beats the threshold by the radar equation is one detection (signal-weighted
+/// means, σ summed), so two targets nearer than a cell merge and one large object gives several
+/// detections. Writes
+/// sensor/<n>/detections (max_detections × kRadarFields, NaN beyond the count; velocity as
+/// measured, folded) and sensor/<n>/count.
+[[nodiscard]] std::unique_ptr<IModule> createImagingRadar(
+    const World& world, std::uint32_t sensor, bool groundTruth,
+    std::shared_ptr<gpu::RayContext> rayContext = nullptr);
+
+/// The width of a uniform virtual array's angle cell in direction sine, 1/(N·d) for N elements
+/// d wavelengths apart: the Rayleigh resolution λ/(N·d) at boresight (S. Rao, "Introduction
+/// to mmWave Sensing: FMCW Radars", Texas Instruments mmWave training, 2017: angle resolution
+/// θ_res = λ/(N·d·cos θ); TODO(verify): its TI literature number).
+[[nodiscard]] double arrayAngleCell(double elements, double spacingWavelengths);
+
+/// A radial velocity `v` (m/s) as a radar of unambiguous velocity ±`maxVelocity` measures it:
+/// folded into [−maxVelocity, maxVelocity). `maxVelocity` ≤ 0: unchanged.
+[[nodiscard]] double foldVelocity(double v, double maxVelocity);
+
 }  // namespace lagrange::sensors

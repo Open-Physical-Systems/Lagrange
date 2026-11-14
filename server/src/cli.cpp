@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -244,7 +245,18 @@ public:
     }
     lagrange::Status stepUntil(lagrange::SimTime t) override { return server_.stepUntil(t); }
     [[nodiscard]] lagrange::Expected<std::uint64_t, lagrange::Status> stateHash() const override {
-        return server_.stateHash();
+        auto hash = server_.stateHash();
+        // LAGRANGE_DETERMINISM_HASHES=1: every hash on stdout, so that two builds' runs can be
+        // compared (a change that must not change results; benchmarks.md §4.2).
+        static const bool print = [] {
+            const char* v = std::getenv("LAGRANGE_DETERMINISM_HASHES");
+            return v != nullptr && *v != '\0' && std::strcmp(v, "0") != 0;
+        }();
+        if (print && hash) {
+            std::printf("hash %.3f %016llx\n", server_.now().seconds(),
+                        static_cast<unsigned long long>(*hash));
+        }
+        return hash;
     }
 
 private:

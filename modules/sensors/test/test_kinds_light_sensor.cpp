@@ -124,12 +124,13 @@ TEST(LightSensor, NoSunWithoutAPlaceAndADate) {
     EXPECT_TRUE(std::isnan(r.read("sensor/lux/illuminance")));
 }
 
-TEST(LightSensor, CountsOfTheBH1750SaturateAt65535) {
+TEST(LightSensor, CountsOfTheBH1750SaturateAt65535Counts) {
     KindRun r;
     equator(r);
     ASSERT_TRUE(start(r, bodyFeeds(Pose{}, {})));
     ASSERT_TRUE(r.scheduler->stepUntil(SimTime{150'000'000}).ok());
-    EXPECT_EQ(r.read("sensor/lux/illuminance"), 65535.0);  // full sun overloads it
+    // full sun overloads it: 65535 counts / 1.2 (BH1750FVI datasheet Rev.D, p. 7)
+    EXPECT_NEAR(r.read("sensor/lux/illuminance"), 65535.0 / 1.2, 1e-9);
 }
 
 }  // namespace

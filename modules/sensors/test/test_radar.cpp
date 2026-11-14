@@ -8,8 +8,10 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <numbers>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -147,6 +149,38 @@ TEST(Radar, DetectsUpToTheRangeTheEquationGives) {
         const SignalBus& bus = r->scheduler->bus();
         EXPECT_EQ(bus.read(bus.find("sensor/front_radar/count")), detected ? 1.0 : 0.0) << range;
     }
+}
+
+/// FNV-1a over the bits of every detection and the count.
+std::uint64_t fingerprint(const SignalBus& bus) {
+    std::uint64_t h = 1469598103934665603ULL;
+    const auto mix = [&h](double v) {
+        std::uint64_t bits = 0;
+        std::memcpy(&bits, &v, sizeof bits);
+        for (int i = 0; i < 8; ++i) {
+            h = (h ^ ((bits >> (8 * i)) & 0xFFU)) * 1099511628211ULL;
+        }
+    };
+    mix(bus.read(bus.find("sensor/front_radar/count")));
+    for (const double v : bus.readN(bus.find("sensor/front_radar/detections"))) {
+        mix(v);
+    }
+    return h;
+}
+
+// The RadarAPI_1 radar's numbers did not change when the imaging radar (kind imaging_radar) came
+// to share its code: the CPU reference's detections, bit for bit, as v1.2.1 gave them.
+TEST(Radar, TheCpuReferenceKeepsItsNumbers) {
+    auto r = run(20.0, 5.0, 1e-15, nullptr, true);
+    ASSERT_TRUE(r);
+    std::vector<std::uint64_t> got;
+    for (const std::int64_t t : {120'000'000, 520'000'000}) {
+        ASSERT_TRUE(r->scheduler->stepUntil(SimTime{t}).ok());
+        got.push_back(fingerprint(r->scheduler->bus()));
+    }
+    EXPECT_GE(r->scheduler->bus().read(r->scheduler->bus().find("sensor/front_radar/count")), 3.0);
+    EXPECT_EQ(got[0], 0x8000457c4b9153edULL);
+    EXPECT_EQ(got[1], 0x7b9ade2ee822847fULL);
 }
 
 const std::shared_ptr<gpu::RayContext>& context() {

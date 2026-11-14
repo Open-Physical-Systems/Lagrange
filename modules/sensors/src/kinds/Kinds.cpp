@@ -26,6 +26,7 @@ std::unique_ptr<IModule> createTensionSensor(const World&, std::uint32_t, bool, 
 std::unique_ptr<IModule> createVoltageSensor(const World&, std::uint32_t, bool, const KindContext&);
 std::unique_ptr<IModule> makeAirspeed(const World&, std::uint32_t, bool, const KindContext&);
 std::unique_ptr<IModule> makeAnemometer(const World&, std::uint32_t, bool, const KindContext&);
+std::unique_ptr<IModule> makeImagingRadar(const World&, std::uint32_t, bool, const KindContext&);
 std::unique_ptr<IModule> makeHumiditySensor(const World&, std::uint32_t, bool, const KindContext&);
 std::unique_ptr<IModule> makeLightSensor(const World&, std::uint32_t, bool, const KindContext&);
 std::unique_ptr<IModule> makeRainSensor(const World&, std::uint32_t, bool, const KindContext&);
@@ -79,6 +80,7 @@ constexpr Entry kKinds[] = {
     {"force_torque", &kinds::makeForceTorque},
     {"gripper_sensor", &kinds::createGripperSensor},
     {"humidity_sensor", &kinds::makeHumiditySensor},
+    {"imaging_radar", &kinds::makeImagingRadar},
     {"joint_torque", &kinds::makeJointTorque},
     {"landing_target", &kinds::createLandingTarget},
     {"light_sensor", &kinds::makeLightSensor},

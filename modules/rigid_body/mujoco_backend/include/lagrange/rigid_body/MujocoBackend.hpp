@@ -113,6 +113,15 @@ private:
     // Kinematic bodies' poses at the previous output, for their twist (MuJoCo's mocap bodies
     // have no velocity of their own).
     mutable std::vector<std::array<double, 7>> lastKinematicPose_;
+    // Per body, the twist, contact force and pose last written (6 + 3 + 7; the twist and pose
+    // of kinematic bodies only), so an unchanged one is not written again: the bus keeps a value
+    // until its writer writes another. In the town most of the 655 kinematic bodies touch
+    // nothing, and their poses change only when the traffic or the people move them (every
+    // 10 ms); their accelerations (always zero) are written once. Invalid after init, a
+    // restored state and a shifted origin, when every value is written.
+    static constexpr std::size_t kWrittenPerBody = 16;
+    mutable std::vector<double> written_;
+    mutable bool writtenValid_{false};
     double dt_{0.001};
     SignalId frictionScale_;
     double appliedFrictionScale_{1.0};

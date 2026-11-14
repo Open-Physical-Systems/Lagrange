@@ -169,6 +169,45 @@ private:
     std::vector<GpuNode> nodes_;
 };
 
+/// Sum of the surface areas of the inner nodes' boxes: the expected cost of a traversal grows
+/// with it.
+double innerArea(std::span<const GpuNode> nodes) {
+    double area = 0.0;
+    for (const GpuNode& n : nodes) {
+        if (n.left >= 0) {
+            const double x = n.hi[0] - n.lo[0], y = n.hi[1] - n.lo[1], z = n.hi[2] - n.lo[2];
+            area += x * y + y * z + z * x;
+        }
+    }
+    return area;
+}
+
+/// New boxes for the same tree: each leaf takes its shape's box and each inner node the union of
+/// its children's. Nodes are in depth-first order (children after their parent), so one pass
+/// from the end is enough. `firstBounded` is the shape index of the first bounded shape.
+void refit(std::vector<GpuNode>& nodes, std::span<const Box> boxes, std::uint32_t firstBounded) {
+    for (std::size_t i = nodes.size(); i-- > 0;) {
+        GpuNode& n = nodes[i];
+        if (n.left < 0) {
+            const Box& b = boxes[static_cast<std::uint32_t>(-1 - n.left) - firstBounded];
+            std::copy(b.lo.begin(), b.lo.end(), n.lo);
+            std::copy(b.hi.begin(), b.hi.end(), n.hi);
+            continue;
+        }
+        const GpuNode& l = nodes[static_cast<std::size_t>(n.left)];
+        const GpuNode& r = nodes[static_cast<std::size_t>(n.right)];
+        for (std::size_t k = 0; k < 3; ++k) {
+            n.lo[k] = std::min(l.lo[k], r.lo[k]);
+            n.hi[k] = std::max(l.hi[k], r.hi[k]);
+        }
+    }
+}
+
+// The tree is rebuilt when refitting has grown its inner boxes' area by this factor, or after
+// this many scans: shapes that move apart make a refitted tree slower, never wrong.
+constexpr double kRebuildAreaGrowth = 1.25;
+constexpr std::uint32_t kRebuildAfterScans = 30;
+
 }  // namespace
 
 struct RayContext::Impl {
@@ -221,6 +260,13 @@ struct RayScan::Impl {
     std::vector<float> faceData;  // four per face of every hull
     std::vector<Box> boxes;
     std::vector<std::uint32_t> boundedShapes;
+    // The hierarchy of the last scan, refitted to the next scan's boxes while it stays good: a
+    // median split over thousands of shapes (a town) each scan cost more than the casts.
+    std::vector<GpuNode> tree;
+    std::uint32_t treePlanes{0};
+    std::size_t treeShapes{0};
+    double builtArea{0.0};
+    std::uint32_t scansSinceBuild{0};
 
     [[nodiscard]] const Device& device() const { return *context->impl_->device; }
 
@@ -325,7 +371,21 @@ void RayScan::cast(std::span<const CastShape> shapes,
     }
     const std::uint32_t planeCount =
         static_cast<std::uint32_t>(s.shapeData.size() - s.boundedShapes.size());
-    const std::vector<GpuNode> tree = BvhBuilder(s.boxes, s.boundedShapes).build();
+    std::vector<GpuNode>& tree = s.tree;
+    bool rebuild = tree.empty() || s.treePlanes != planeCount ||
+                   s.treeShapes != s.shapeData.size() || s.scansSinceBuild >= kRebuildAfterScans;
+    if (!rebuild) {
+        refit(tree, s.boxes, planeCount);
+        ++s.scansSinceBuild;
+        rebuild = innerArea(tree) > kRebuildAreaGrowth * s.builtArea;
+    }
+    if (rebuild) {
+        tree = BvhBuilder(s.boxes, s.boundedShapes).build();
+        s.treePlanes = planeCount;
+        s.treeShapes = s.shapeData.size();
+        s.builtArea = innerArea(tree);
+        s.scansSinceBuild = 0;
+    }
 
     Params params{};
     for (std::size_t r = 0; r < 3; ++r) {
