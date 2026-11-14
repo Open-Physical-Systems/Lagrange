@@ -15,7 +15,7 @@ source /opt/ros/lyrical/setup.bash
 lagrange amr
 ```
 
-It uses `sudo` for apt and asks before it installs anything. Set `LAGRANGE_VERSION=1.2.1` for a
+It uses `sudo` for apt and asks before it installs anything. Set `LAGRANGE_VERSION=1.3.0` for a
 given release, `LAGRANGE_DEBS=DIR` to install debs you built yourself (B below), and
 `LAGRANGE_YES=1` to skip the question. Read the script first if you like:
 [`packaging/install.sh`](../../packaging/install.sh). To remove it:

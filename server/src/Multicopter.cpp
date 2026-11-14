@@ -93,18 +93,54 @@ bool invert(std::array<std::array<double, 4>, 4> a, std::array<std::array<double
     return true;
 }
 
+/// The robot it flies: the robot of the first body, the one ROS drives (robots spawned or added
+/// after it are passive, docs/guide/cli.md "Spawning robots"); kNoRobot when the world does not
+/// say which robot a body is on (a world built by hand: one robot).
+constexpr std::uint32_t kNoRobot = 0xFFFF'FFFFU;
+
+std::uint32_t flownRobot(const WorldView& world) {
+    const World::Bodies& bodies = world.bodies();
+    return bodies.robot.empty() || bodies.robot.size() != bodies.names.size()
+               ? kNoRobot
+               : bodies.robot.front();
+}
+
+/// The RotorAPI_1 joints of the robot it flies; a rotor whose prim is no joint is a null entry.
+/// A second multicopter spawned beside it is passive: its rotors are left alone, and neither
+/// keep the first from flying nor add to its mass.
+std::vector<std::pair<const SchemaInstance*, std::size_t>> flownRotors(const WorldView& world) {
+    const World::Joints& joints = world.joints();
+    const World::Bodies& bodies = world.bodies();
+    const std::uint32_t robot = flownRobot(world);
+    std::vector<std::pair<const SchemaInstance*, std::size_t>> out;
+    for (const SchemaInstance* s : world.instancesOf("RotorAPI_1")) {
+        const auto j =
+            static_cast<std::size_t>(std::ranges::find(joints.prim, s->prim) - joints.prim.begin());
+        if (j >= joints.prim.size()) {
+            out.emplace_back(nullptr, j);
+            continue;
+        }
+        const BodyId child = joints.child[j];
+        if (robot != kNoRobot && child != kWorldBody && child.index < bodies.robot.size() &&
+            bodies.robot[child.index] != robot) {
+            continue;  // another robot's
+        }
+        out.emplace_back(s, j);
+    }
+    return out;
+}
+
 }  // namespace
 
 bool MulticopterController::canFly(const WorldView& world) {
-    const auto rotors = world.instancesOf("RotorAPI_1");
+    const auto rotors = flownRotors(world);
     if (rotors.size() < 3) {
         return false;
     }
     const World::Joints& joints = world.joints();
     std::optional<std::uint32_t> base;
-    for (const SchemaInstance* s : rotors) {
-        const auto j = std::ranges::find(joints.prim, s->prim) - joints.prim.begin();
-        if (static_cast<std::size_t>(j) >= joints.prim.size()) {
+    for (const auto& [s, j] : rotors) {
+        if (s == nullptr) {
             return false;
         }
         const std::uint32_t parent = joints.parent[j].index;
@@ -136,9 +172,10 @@ Status MulticopterController::declare(const WorldView& world, const ModuleConfig
     const World::Joints& joints = world.joints();
     const World::Bodies& bodies = world.bodies();
     std::uint32_t base = 0;
-    for (const SchemaInstance* s : world.instancesOf("RotorAPI_1")) {
-        const auto j =
-            static_cast<std::size_t>(std::ranges::find(joints.prim, s->prim) - joints.prim.begin());
+    for (const auto& [s, j] : flownRotors(world)) {
+        if (s == nullptr) {
+            return Status::error(StatusCode::InvalidConfig, "a rotor is not on a joint");
+        }
         base = joints.parent[j].index;
         const std::size_t child = joints.child[j].index;
         const double radius = s->real("aero:rotor:radius").value_or(0.0);
@@ -180,10 +217,14 @@ Status MulticopterController::declare(const WorldView& world, const ModuleConfig
         r.command = d.output(command);
         rotors_.push_back(r);
     }
-    // The whole robot's mass; the base's principal inertia stands for the airframe's.
+    // The whole robot's mass (its own bodies, not a passive robot's beside it); the base's
+    // principal inertia stands for the airframe's.
     mass_ = 0.0;
+    const std::uint32_t robot = flownRobot(world);
     for (std::size_t b = 0; b < bodies.mass.size(); ++b) {
-        mass_ += bodies.mass[b];
+        if (robot == kNoRobot || bodies.robot[b] == robot) {
+            mass_ += bodies.mass[b];
+        }
     }
     inertia_ = {bodies.inertiaLocal[base][0], bodies.inertiaLocal[base][1],
                 bodies.inertiaLocal[base][2]};

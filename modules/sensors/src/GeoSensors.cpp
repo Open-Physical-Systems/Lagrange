@@ -2,6 +2,7 @@
 // the sensor on the Earth through the world's geo origin, so they need one; createGeoSensors
 // leaves them out, with a log line, when the site has none.
 #include "GeoSensors.hpp"
+#include "kinds/KindModule.hpp"
 #include "lagrange/random/Philox.hpp"
 #include "lagrange/sensors/Wmm.hpp"
 #include "lagrange/services/Log.hpp"
@@ -51,8 +52,7 @@ public:
         , label_(std::string(kind) + "_" + world.sensors.names[sensor])
         , body_(world.sensors.body[sensor].index)
         , mount_(world.sensors.poseInBody[sensor])
-        , step_(Duration{static_cast<std::int64_t>(
-              std::llround(1e9 / std::max(world.sensors.rateHz[sensor], 1e-3)))}) {}
+        , step_(kinds::kindPeriod(world.sensors.rateHz[sensor])) {}
 
     [[nodiscard]] ModuleInfo info() const override {
         return {"sensors", label_, 0, 1, groundTruth_, true, CapabilityTier::Tier0};

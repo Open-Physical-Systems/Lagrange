@@ -47,6 +47,24 @@ def test_robots_spawn_into_an_empty_run_and_go() -> None:
         sim.delete("/mate")
 
 
+def test_times_and_poses_that_are_not_finite_are_refused() -> None:
+    # QA 2026-11-12: step_until(nan) stepped nothing silently, spawn(at=[nan, 0]) broke the
+    # physics and command_joint on no joint said True.
+    sim = lagrange.Simulation(lagrange.sample_robot(), world=None, joint_control=True)
+    for bad in (math.nan, math.inf, 1e300):
+        with pytest.raises(ValueError):
+            sim.step_until(bad)
+    with pytest.raises(ValueError):
+        sim.spawn(lagrange.sample_robot(), "mate", at=[math.nan, 0.0])
+    with pytest.raises(ValueError):
+        lagrange.Simulation(lagrange.sample_robot(), world=None, spawn=[0.0, math.inf])
+    assert not sim.command_joint("no_such_joint", "velocity", 1.0)
+    assert not sim.command_joint("left_wheel_joint", "velocity", math.nan)
+    assert sim.command_joint("left_wheel_joint", "velocity", 1.0)
+    sim.step_until(0.5)
+    assert all(math.isfinite(x) for x in sim.read("body/base_link/pose"))
+
+
 def test_world_queries() -> None:
     sim = lagrange.Simulation(lagrange.sample_robot(), world=None)
     assert "base_link" in sim.bodies()
@@ -219,3 +237,24 @@ def test_a_joints_reaction_is_what_it_carries() -> None:
     # The motor's torque, about y, holds the weight's moment.
     assert abs(ty) == pytest.approx(0.5 * weight, rel=0.02)
     assert abs(tx) < 0.1 and abs(tz) < 0.1
+
+
+def test_sensor_faults_are_what_python_reads() -> None:
+    # sensors.md "Sensor faults (as built)": the faulted value, the fault's status, and the
+    # same faults again after a restore.
+    faults = ["imu:angular_rate=bias,value=0.5,at=0.2,component=2", "front_lidar=disconnect,at=0.3"]
+    sim = lagrange.Simulation(lagrange.sample_robot(), world=None, sensor_faults=faults)
+    sim.step_until(0.1)
+    assert sim.read("sensor/imu/fault/active") == [0.0]
+    state = sim.save_state()
+    sim.step_until(1.0)
+    assert sim.read("sensor/imu/fault/active") == [1.0]
+    assert sim.read("sensor/front_lidar/fault/dropped")[0] > 0
+    rate = sim.read("sensor/imu/angular_rate")[2]
+    sim.restore_state(state)
+    sim.step_until(1.0)
+    assert sim.read("sensor/imu/angular_rate")[2] == rate
+    with pytest.raises(RuntimeError, match="no sensor compass"):
+        lagrange.Simulation(lagrange.sample_robot(), world=None, sensor_faults=["compass=stuck"])
+    with pytest.raises(RuntimeError, match="sensor-fault needs"):
+        lagrange.Simulation(lagrange.sample_robot(), world=None, sensor_faults=["imu=broken"])

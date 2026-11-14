@@ -162,6 +162,37 @@ TEST(ShapeCaster, StaysExactWhenShapesMove) {
     }
 }
 
+TEST(ShapeCaster, StaysExactWhenShapesStartAndStopMoving) {
+    // Shapes that have never moved sit in a hierarchy built once; a shape's first move takes it
+    // to the one rebuilt. Shapes start moving at different scans (a parked car pulling out),
+    // some stop again, and a frame moves nothing.
+    std::mt19937_64 random(12);
+    auto shapes = scene(random, 300, {0.0, 0.0, 0.0});
+    ShapeCaster caster;
+    caster.update(shapes);
+    std::uniform_real_distribution<double> step(-1.5, 1.5);
+    for (int frame = 0; frame < 8; ++frame) {
+        for (std::size_t k = 0; k < shapes.size(); ++k) {
+            const auto start = static_cast<int>(k % 7);  // first frame it moves
+            const bool moves = frame >= start && frame != 5 && (k % 5 != 0 || frame < 3);
+            if (!moves) {
+                continue;
+            }
+            for (double& v : shapes[k].pose.position) {
+                v += step(random);
+            }
+            shapes[k].pose.orientation = randomRotation(random);
+        }
+        caster.update(shapes);
+        int hits = 0;
+        EXPECT_EQ(mismatches(caster, shapes, {{0.2, -0.1, 0.5}, {6.0, 3.0, 1.0}, {-4.0, 8.0, 0.3}},
+                             random, 1500, hits),
+                  0)
+            << "frame " << frame;
+        EXPECT_GT(hits, 0);
+    }
+}
+
 TEST(ShapeCaster, IsExactFarFromTheRegionOrigin) {
     // The region-local frame rebases at 1 km (huge-worlds.md), so shapes stay within a few km
     // of its origin; here 2.5 km out.

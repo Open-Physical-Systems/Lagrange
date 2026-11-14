@@ -2,6 +2,7 @@
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 
+#include <array>
 #include <cmath>
 #include <memory>
 #include <numbers>
@@ -231,6 +232,113 @@ TEST(MujocoBackend, LinksOfOneTreeDoNotCollideButTreesDo) {
     ASSERT_TRUE(scheduler.stepUntil(SimTime{3'000'000'000}).ok());
     // Separate trees collide: the wall was pushed.
     EXPECT_GT(read(scheduler, "body/wall/pose", 0), 1.0 + 1e-3);
+}
+
+// --- kinematic bodies ----------------------------------------------------------------------
+
+/// Moves a kinematic body along x at a constant speed through its pose command.
+class Mover final : public IModule {
+public:
+    Mover(std::string body, double startX, double speed)
+        : body_(std::move(body)), startX_(startX), speed_(speed) {}
+    [[nodiscard]] ModuleInfo info() const override { return {"controller", "mover"}; }
+    [[nodiscard]] Duration preferredStep() const override { return 1_ms; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        SignalSpec spec;
+        spec.name = "body/" + body_ + "/pose_command";
+        spec.type = SignalType::Pose;
+        spec.unit = units::m;
+        spec.frame = "world_local";
+        id_ = d.output(spec);
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        write(bus, 0.0);
+        return {};
+    }
+    Status step(const StepContext& context, SignalBus& bus) override {
+        write(bus, (context.t + context.dt).seconds());
+        return {};
+    }
+    Status saveState(StateWriter&) const override { return {}; }
+    Status restoreState(StateReader&) override { return {}; }
+
+private:
+    void write(SignalBus& bus, double t) const {
+        bus.writeN(id_, std::array<double, 7>{startX_ + speed_ * t, 0.0, 0.15, 1.0, 0.0, 0.0, 0.0});
+    }
+    std::string body_;
+    double startX_, speed_;
+    SignalId id_;
+};
+
+/// A box on the ground, a kinematic pusher coming at it from 6 m away, and a crowd of kinematic
+/// bodies standing on the ground far off (which never touch anything).
+World pushedBox() {
+    World world = boxOnGround(0.0, 0.5);
+    const auto kinematic = [&world](const std::string& name, const Pose& pose) {
+        const BodyId b = world.addBody(name, kWorldBody, pose, 10.0, {}, diagonal(0.1, 0.1, 0.1));
+        world.bodies.kinematic[b.index] = true;
+        world.addCollider(b, ShapeType::Box, {0.15, 0.3, 0.15}, Pose{}, 0.5);
+        return b;
+    };
+    kinematic("pusher", Pose{{6.0, 0.0, 0.15}});
+    for (int k = 0; k < 20; ++k) {
+        kinematic("crowd_" + std::to_string(k), Pose{{-20.0 - k, 3.0 * (k % 3), 0.14}});
+    }
+    return world;
+}
+
+TEST(MujocoBackend, CullingFarKinematicBodiesLeavesTheRunUnchanged) {
+    // The pusher starts out of reach (left out of the broad phase), comes near and pushes the
+    // box: the state matches a run that never culls, bit for bit, at every step.
+    const World world = pushedBox();
+    std::array<Scheduler, 2> runs{Scheduler(SchedulerOptions{.deterministic = true}),
+                                  Scheduler(SchedulerOptions{.deterministic = true})};
+    std::array<MujocoBackend*, 2> backends{};
+    for (std::size_t r = 0; r < 2; ++r) {
+        auto backend = std::make_unique<MujocoBackend>();
+        backend->setKinematicCulling(r == 0);
+        backends.at(r) = backend.get();
+        runs.at(r).add(std::move(backend));
+        runs.at(r).add(std::make_unique<Mover>("pusher", 6.0, -2.0));
+        wire(runs.at(r), world);
+    }
+    std::size_t mostCulled = 0;
+    std::size_t leastCulled = 100;
+    for (std::int64_t ms = 10; ms <= 4000; ms += 10) {
+        for (Scheduler& run : runs) {
+            ASSERT_TRUE(run.stepUntil(SimTime{ms * 1'000'000}).ok());
+        }
+        ASSERT_EQ(runs[0].stateHash().value(), runs[1].stateHash().value()) << "at " << ms << " ms";
+        mostCulled = std::max(mostCulled, backends[0]->culledKinematicBodies());
+        leastCulled = std::min(leastCulled, backends[0]->culledKinematicBodies());
+    }
+    EXPECT_EQ(backends[1]->culledKinematicBodies(), 0U);
+    EXPECT_EQ(mostCulled, 21U) << "the pusher and the crowd while far";
+    EXPECT_EQ(leastCulled, 20U) << "the pusher while near the box";
+    // It was pushed: the pusher passed x = 0 at 3 s and is at -2 m.
+    EXPECT_LT(read(runs[0], "body/box/pose", 0), -1.5);
+}
+
+TEST(MujocoBackend, AWorldWithoutDegreesOfFreedomStillMovesItsKinematicBodies) {
+    // Scenery and one kinematic body only (as the town without a robot): the step skips the
+    // dynamics, and the body still follows its command with its twist from its poses.
+    World world;
+    world.addCollider(kWorldBody, ShapeType::Plane, {5.0, 5.0, 0.1}, Pose{}, 1.0);
+    const BodyId b = world.addBody("pusher", kWorldBody, Pose{{6.0, 0.0, 0.15}}, 10.0, {},
+                                   diagonal(0.1, 0.1, 0.1));
+    world.bodies.kinematic[b.index] = true;
+    world.addCollider(b, ShapeType::Box, {0.15, 0.3, 0.15}, Pose{}, 0.5);
+    Scheduler scheduler;
+    scheduler.add(std::make_unique<MujocoBackend>());
+    scheduler.add(std::make_unique<Mover>("pusher", 6.0, -2.0));
+    wire(scheduler, world);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{1'000'000'000}).ok());
+    EXPECT_NEAR(read(scheduler, "body/pusher/pose", 0), 4.0, 1e-9);
+    EXPECT_NEAR(read(scheduler, "body/pusher/pose", 2), 0.15, 1e-12);
+    EXPECT_NEAR(read(scheduler, "body/pusher/twist", 0), -2.0, 1e-6);
+    EXPECT_DOUBLE_EQ(read(scheduler, "body/pusher/acceleration", 2), 0.0);
 }
 
 // --- state ---------------------------------------------------------------------------------

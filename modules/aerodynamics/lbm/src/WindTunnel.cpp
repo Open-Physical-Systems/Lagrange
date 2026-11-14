@@ -462,8 +462,20 @@ Expected<WindTunnelResult, std::string> runWindTunnel(const World& world,
                                                       const WindTunnelOptions& options,
                                                       const std::string& outputDirectory,
                                                       const std::function<void(double)>& progress) {
-    if (options.speed <= 0.0) {
+    // Written so that NaN fails too: a NaN yaw turned every collider into NaN bounds, and the
+    // cell indices made from them crashed (QA 2026-11-12).
+    if (!(options.speed > 0.0) || !std::isfinite(options.speed)) {
         return Unexpected{std::string("the wind speed must be above zero")};
+    }
+    if (!std::isfinite(options.yawDegrees) || std::isnan(options.clearance)) {
+        return Unexpected{std::string("the yaw and the clearance must be finite numbers")};
+    }
+    if (!(options.passes > 0.0) || !(options.meanPasses > 0.0) || !std::isfinite(options.passes) ||
+        !std::isfinite(options.meanPasses)) {
+        return Unexpected{std::string("the passes must be above zero")};
+    }
+    if (options.maxCells < kMinTunnelCells) {
+        return Unexpected{"a tunnel needs at least " + std::to_string(kMinTunnelCells) + " cells"};
     }
     // Every collider where it stands at rest, turned by the yaw about z.
     const double half = options.yawDegrees * std::numbers::pi / 360.0;

@@ -210,6 +210,22 @@ TEST_F(Plugins, TheTofPluginMeasuresTheGround) {
     EXPECT_EQ(server.read("sensor/front_tof/valid").at(0), 1.0);
 }
 
+// QA 2026-11-12 #16: the same sensor without the plugin does nothing, and says so at load,
+// naming its kind and the built-in kinds.
+TEST_F(Plugins, ACustomKindNothingImplementsIsReported) {
+    ServerOptions options = amr({});
+    options.robotPath = LAGRANGE_TEST_DATA "/tof_box.urdf";
+    options.overlayPath.clear();
+    Server server(options);
+    testing::internal::CaptureStderr();
+    const Status loaded = server.load();
+    const std::string err = testing::internal::GetCapturedStderr();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    EXPECT_NE(err.find("front_tof of kind 'tof' does nothing"), std::string::npos) << err;
+    EXPECT_NE(err.find("rangefinder"), std::string::npos) << "the built-in kinds: " << err;
+    EXPECT_TRUE(server.read("sensor/front_tof/range").empty());
+}
+
 // The thermal probe plugin (core/plugin_abi/samples/thermal_probe.c): a thermistor follows its
 // LED's case temperature through its time constant; an infrared thermometer looking down at the
 // board reads the grey-body temperature of what it sees, (ε·T⁴ + (1 − ε)·T_amb⁴)^(1/4).
@@ -286,6 +302,24 @@ TEST_F(Plugins, APluginSensorCanBeDelayed) {
     EXPECT_LE(stamp, 2.0 - 0.1 + 1e-9);
     EXPECT_NEAR(server.read("sensor/front_tof/delayed/range").at(0),
                 server.read("sensor/front_tof/range").at(0), 0.05);
+}
+
+// A plugin's sensor takes faults like any other, and the delay line delays the faulted value.
+TEST_F(Plugins, APluginSensorCanBeFaulted) {
+    ServerOptions options = amr({"lagrange_tof"});
+    options.robotPath = LAGRANGE_TEST_DATA "/tof_box.urdf";
+    options.overlayPath.clear();
+    options.sensorTiming.push_back({"front_tof", 0.1, 0.0});
+    options.sensorFaults = {"front_tof:range=bias,value=3,at=0.5"};
+    Server server(options);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{400'000'000}).ok());
+    const double clean = server.read("sensor/front_tof/range").at(0);
+    ASSERT_TRUE(server.stepUntil(SimTime{2'000'000'000}).ok());
+    EXPECT_NEAR(server.read("sensor/front_tof/range").at(0), clean + 3.0, 0.05);
+    EXPECT_NEAR(server.read("sensor/front_tof/delayed/range").at(0), clean + 3.0, 0.05);
+    EXPECT_EQ(server.read("sensor/front_tof/fault/active").at(0), 1.0);
 }
 
 TEST_F(Plugins, LoadingFailuresNameTheLibrary) {

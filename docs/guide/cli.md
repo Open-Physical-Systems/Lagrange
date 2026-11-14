@@ -73,12 +73,16 @@ the frame `world`, the frame of `/odom`'s origin; the robot is placed as `--spaw
 lowest collision shape just above z.
 
 - **The first robot in a run without one is the robot**: `/cmd_vel`, `/odom`, `/joint_states`,
-  `/robot_description` and its sensors' topics are its, and the demo driver drives it. Robots
-  after it are passive, with their names prefixed (`mate_base_link`), as `--add-robot` makes
-  them; `entity_namespace` is not supported yet.
+  `/robot_description` and its sensors' topics are its, and the demo driver (or the built-in
+  multicopter controller) drives it. Robots after it are passive, with their names prefixed
+  (`mate_base_link`), as `--add-robot` makes them: nothing drives them, so a second quadcopter
+  stands with its rotors still while the first flies on; `entity_namespace` is not supported yet.
 - **A spawn or a delete rebuilds the run** with the new set of robots. Time goes on (`/clock` never
   jumps back), every body keeps its pose and, with MuJoCo, every joint its position; velocities
-  start from rest, and the modules' own state (controllers, batteries, filters) starts again.
+  start from rest. A module that reads and writes the same signals in the new run (the first
+  robot's controller, its sensors' filters and odometry) goes on with its own state; one whose
+  robots changed (physics, an electrical network the new robot joins) starts again. A spawn
+  that is refused leaves the run as it was.
   A recording stops at the change. `reset_simulation` goes back to t = 0 with the robots there
   are, where they were spawned.
 - Any robot can be deleted, the one the simulator started with too; the world's scenery cannot.
@@ -113,7 +117,9 @@ configure loaded plugins but never load one.
 
 ### Custom sensors
 
-A robot file can carry sensors Lagrange does not simulate itself, for a plugin to implement. In
+Lagrange simulates 36 kinds of custom sensor itself (bumpers, rangefinders, force-torque, sonar,
+...): [Sensors](sensors.md) lists them. A robot file can also carry sensors Lagrange does not
+simulate itself, for a plugin to implement. In
 URDF (`<gazebo reference>`) and SDFormat, a `<sensor>` of any other type (`sonar`, `tof`,
 `gas`) becomes a custom sensor of that kind, with its pose, rate and every leaf element as a
 parameter by its path (`<tof><range><max>4</max></range></tof>` is `range/max = 4`; the first
@@ -133,6 +139,31 @@ Its parameters are `range/min`, `range/max`, `fov` (a 5 × 5 grid of rays over a
 view; 0 for one ray) and `noise/stddev`; its source, `core/plugin_abi/samples/tof_sensor.c`, is the
 example of the plugin guide.
 
+### Sensor kinds on ROS 2
+
+Every custom sensor (a built-in kind, docs/design/domains/sensors.md §9, or a plugin's) is on ROS
+2 from the first run with no mapping file: its numbers on `/<sensor>/<quantity>`, on the message
+a real driver of the device publishes where ROS has one (a rangefinder or cliff sensor
+`sensor_msgs/Range`, a safety scanner or multibeam sonar `LaserScan`, wheel odometry
+`nav_msgs/Odometry`, a battery monitor `BatteryState`, a joint torque sensor `JointState`, a
+force-torque sensor `WrenchStamped`, detections `vision_msgs/Detection2DArray` and
+`Detection3DArray`), and otherwise by their unit (`Temperature`, `FluidPressure`,
+`RelativeHumidity`, `Illuminance`, `Vector3Stamped`, `std_msgs` Float64, Bool, Int64,
+Float64MultiArray). The table is sensors.md §9 "ROS topics of the built-in kinds". For example
+the safety AMR:
+
+```bash
+lagrange assets/robots/amr_diffdrive/amr_diffdrive_safety.urdf
+ros2 topic echo /safety/scan          # sensor_msgs/LaserScan
+ros2 topic echo /cliff_front_left/range  # sensor_msgs/Range
+ros2 topic echo /wheel_odom/odom      # nav_msgs/Odometry
+```
+
+They are stamped when sampled, delayed by the sensor's latency and jitter, faulted as its
+signals are, and built only while something subscribes. A `--ros-topics` map (below) wins: an
+entry on the same topic, or one that publishes a signal a default topic carries, replaces that
+default; `kind_topics: false` in the map turns them all off.
+
 ### Plugin outputs on ROS 2
 
 A plugin writes signals; `--ros-topics FILE.yaml` puts them on ROS topics, and topics into
@@ -151,7 +182,8 @@ subscribe:
 lagrange --robot my_robot.urdf --plugin lagrange_tof --ros-topics topics.yaml
 ```
 
-A signal is published each time its writer commits it, stamped with simulation time. Published
+A signal is published each time its writer commits it, stamped with simulation time. Custom
+sensors need no map (above); a map entry replaces the default topic it covers. Published
 types: `std_msgs` Float64, Float64MultiArray, Bool, Int64; `sensor_msgs` Range, Temperature (the
 signal in K, the message in °C), FluidPressure, Illuminance, RelativeHumidity, LaserScan (ranges,
 with `angle_min`/`angle_max`/`range_min`/`range_max` in `params`), PointCloud2 (x, y, z triples);
@@ -170,6 +202,49 @@ conformance suite checks it:
 LAGRANGE_CONFORMANCE=my_engine@libmy_engine.so ros2 run lagrange_server lagrange_physics_conformance
 lagrange --plugin lagrange_jolt --physics jolt_abi     # Jolt through the C ABI, the worked example
 ```
+
+## Sensor faults
+
+To see how your robot's software copes when a sensor fails, give the run faults (every sensor:
+[Sensors](sensors.md)). Each is
+`--sensor-fault NAME[:QUANTITY]=MODE[,key=value...]` (repeatable), the same text in a run file's
+`sensor_faults:` list (or as a map, below), or a profile's `sensor_faults:`:
+
+```bash
+# the IMU's z rate jumps by 0.02 rad/s at 5 s; the front lidar loses 30 % of its scans from 10 to 12 s
+lagrange amr --sensor-fault imu:angular_rate=bias,value=0.02,at=5,component=2 \
+             --sensor-fault front_lidar=dropout,at=10,for=2,probability=0.3
+lagrange amr --sensor-fault imu=disconnect,at=20        # the IMU's cable comes off at 20 s
+```
+
+| Mode | Keys | What the robot gets |
+|---|---|---|
+| `dropout` | `at`, `for`, `probability` (0–1, default 1), `nan` | no message for a lost sample, or NaN with `nan=1` |
+| `stuck` | `at`, `for`, `component` | the last reading before `at`, again and again |
+| `bias` | `value`, `at`, `for`, `component` | the reading plus `value` |
+| `drift` | `rate`, `at`, `for`, `component` | the reading plus `rate` per second since `at` |
+| `noise` | `sigma`, `at`, `for`, `component` | the reading plus Gaussian noise |
+| `disconnect` | `at`, `nan` | nothing (or NaN) from `at` on |
+
+Times are in seconds of simulated time (`at` default 0, `for` default for good); `value`, `rate` and
+`sigma` are in the quantity's unit. Without `:QUANTITY` a fault takes all of the sensor's
+quantities (only `dropout`, `stuck`, `disconnect`). The quantities are the sensor's signals
+`sensor/<name>/<quantity>`: `lagrange graph` or the viewer's Scopes list them, and a fault that
+names one the sensor does not have says which it has.
+
+What ROS, plugins, recordings, Python and the viewer get is the faulted value; `/ground_truth/odom`
+and `/tf` are not. Each faulted sensor writes `sensor/<name>/fault/active` and
+`sensor/<name>/fault/dropped` (samples lost so far), for a scope or `--ros-topics`. Random dropouts and
+noise follow the run's seed, so a run repeats. In a run file or a profile:
+
+```yaml
+sensor_faults:
+  - imu:angular_rate=bias,value=0.02,at=5,component=2
+  - {sensor: front_lidar, mode: dropout, at: 10, for: 2, probability: 0.3}
+```
+
+In Python: `lagrange.Simulation(robot, sensor_faults=["imu=stuck,at=2,for=1"])`. The model and its
+limits: [sensors.md, "Sensor faults (as built)"](../design/domains/sensors.md).
 
 ## Profiles and stages
 

@@ -1,0 +1,112 @@
+<?xml version="1.0"?>
+<!--
+  A floor for the AGV floor sensors (sensors.md §9, line_sensor and tag_reader): an 8 m guide
+  tape along x from the origin (link guide_tape: the word "tape" makes it tape), Data Matrix /
+  QR tags qr_0001..qr_0004 on the tape every 2 m from x = 1.5 m, and RFID tags rfid_1..rfid_4
+  between them. Visual only, flush with the ground; the loaders add the ground. Primitives only.
+-->
+<robot name="tag_floor">
+  <material name="tape"><color rgba="0.95 0.85 0.1 1"/></material>
+  <material name="code"><color rgba="0.05 0.05 0.05 1"/></material>
+  <material name="chip"><color rgba="0.2 0.4 0.8 1"/></material>
+  <link name="world"/>
+  <link name="guide_tape">
+    <visual>
+      <geometry><box size="8 0.05 0.001"/></geometry>
+      <material name="tape"/>
+    </visual>
+  </link>
+  <joint name="guide_tape_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="guide_tape"/>
+    <origin xyz="4 0 0.0005" rpy="0 0 0"/>
+  </joint>
+  <link name="qr_0001">
+    <visual>
+      <geometry><box size="0.05 0.05 0.001"/></geometry>
+      <material name="code"/>
+    </visual>
+  </link>
+  <joint name="qr_0001_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="qr_0001"/>
+    <origin xyz="1.5 0 0.0006" rpy="0 0 0"/>
+  </joint>
+  <link name="qr_0002">
+    <visual>
+      <geometry><box size="0.05 0.05 0.001"/></geometry>
+      <material name="code"/>
+    </visual>
+  </link>
+  <joint name="qr_0002_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="qr_0002"/>
+    <origin xyz="3.5 0 0.0006" rpy="0 0 0"/>
+  </joint>
+  <link name="qr_0003">
+    <visual>
+      <geometry><box size="0.05 0.05 0.001"/></geometry>
+      <material name="code"/>
+    </visual>
+  </link>
+  <joint name="qr_0003_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="qr_0003"/>
+    <origin xyz="5.5 0 0.0006" rpy="0 0 0"/>
+  </joint>
+  <link name="qr_0004">
+    <visual>
+      <geometry><box size="0.05 0.05 0.001"/></geometry>
+      <material name="code"/>
+    </visual>
+  </link>
+  <joint name="qr_0004_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="qr_0004"/>
+    <origin xyz="7.5 0 0.0006" rpy="0 0 0"/>
+  </joint>
+  <link name="rfid_1">
+    <visual>
+      <geometry><box size="0.03 0.03 0.001"/></geometry>
+      <material name="chip"/>
+    </visual>
+  </link>
+  <joint name="rfid_1_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="rfid_1"/>
+    <origin xyz="2.5 0 0.0006" rpy="0 0 0"/>
+  </joint>
+  <link name="rfid_2">
+    <visual>
+      <geometry><box size="0.03 0.03 0.001"/></geometry>
+      <material name="chip"/>
+    </visual>
+  </link>
+  <joint name="rfid_2_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="rfid_2"/>
+    <origin xyz="4.5 0 0.0006" rpy="0 0 0"/>
+  </joint>
+  <link name="rfid_3">
+    <visual>
+      <geometry><box size="0.03 0.03 0.001"/></geometry>
+      <material name="chip"/>
+    </visual>
+  </link>
+  <joint name="rfid_3_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="rfid_3"/>
+    <origin xyz="6.5 0 0.0006" rpy="0 0 0"/>
+  </joint>
+  <link name="rfid_4">
+    <visual>
+      <geometry><box size="0.03 0.03 0.001"/></geometry>
+      <material name="chip"/>
+    </visual>
+  </link>
+  <joint name="rfid_4_fixed" type="fixed">
+    <parent link="world"/>
+    <child link="rfid_4"/>
+    <origin xyz="8.5 0 0.0006" rpy="0 0 0"/>
+  </joint>
+</robot>

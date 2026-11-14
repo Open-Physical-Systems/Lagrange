@@ -13,7 +13,7 @@ A domain is one kind of physics, simulated by its own modules:
 | Domain | In v0.2 | Substitute when off |
 |---|---|---|
 | `rigid_body` | MuJoCo 3.12: bodies, joints, contacts, at 1 ms | `fixed`: the robot holds its pose; `replay`: a recording's joint and body motion, open loop (bench mode, `--bench RUN.mcap`) |
-| `sensors` | IMU and 2D/3D lidar, with noise models | `ground_truth`: exact values, no noise |
+| `sensors` | IMU and 2D/3D lidar, with noise models (since then many more: [Sensors](sensors.md)) | `ground_truth`: exact values, no noise |
 | `electrical` | v0.3: battery, bus, motor drives and loads, averaged, at 100 µs, for robots with motor prims (the sample AMR's come from its overlay file) | `ideal`: the commanded torque reaches the joint |
 | `thermal` | v0.3: lumped networks heated by the electrical losses, at 100 ms, for robots with thermal prims, given the site's ambient temperature | `ambient`: every node at the ambient temperature |
 | `aerodynamics`, `weather`, `emi`, `radiation` | no module yet | `zero`, `clear`, `zero`, `zero` |

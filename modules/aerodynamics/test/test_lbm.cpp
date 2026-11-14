@@ -10,8 +10,11 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <limits>
 #include <numbers>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -129,6 +132,32 @@ TEST(WindTunnel, FramesDoNotChangeTheForce) {
     ASSERT_TRUE(framed) << framed.error();
     EXPECT_NEAR(framed->dragCoefficient, plain->dragCoefficient, 1e-9);
     EXPECT_NEAR(framed->dragSpread, plain->dragSpread, 1e-9);
+    std::filesystem::remove_all(out);
+}
+
+// QA 2026-11-12: lagrange tunnel --yaw nan crashed (NaN bounds became cell indices); --cells 0
+// or a NaN speed ran on a degenerate grid. Each is refused before any air moves.
+TEST(WindTunnel, RefusesOptionsItCannotRun) {
+    World world;
+    const BodyId body = world.addBody("cube", kWorldBody, Pose{}, 1.0, {}, {1, 1, 1, 0, 0, 0});
+    world.addCollider(body, ShapeType::Box, {0.25, 0.25, 0.25}, Pose{}, 1.0);
+    const auto out = std::filesystem::temp_directory_path() / "lagrange_tunnel_refuse_test";
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    for (const auto& change : std::vector<std::function<void(WindTunnelOptions&)>>{
+             [&](WindTunnelOptions& o) { o.yawDegrees = nan; },
+             [&](WindTunnelOptions& o) { o.speed = nan; },
+             [&](WindTunnelOptions& o) { o.clearance = nan; },
+             [](WindTunnelOptions& o) { o.maxCells = 0; },
+             [](WindTunnelOptions& o) { o.maxCells = kMinTunnelCells - 1; },
+             [](WindTunnelOptions& o) { o.passes = 0.0; },
+             [&](WindTunnelOptions& o) { o.meanPasses = nan; },
+         }) {
+        WindTunnelOptions options;
+        options.maxCells = 20000;
+        options.passes = 1.0;
+        change(options);
+        EXPECT_FALSE(runWindTunnel(world, options, out.string()));
+    }
     std::filesystem::remove_all(out);
 }
 

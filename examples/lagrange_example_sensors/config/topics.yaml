@@ -1,0 +1,17 @@
+# Signals of the robot's built-in sensor kinds (docs/design/domains/sensors.md §9) on ROS 2 topics,
+# for lagrange_server --ros-topics. Each kind writes sensor/<name>/<quantity>.
+publish:
+  - {signal: sensor/front_bumper/pressed, topic: /example/front_bumper, type: std_msgs/msg/Bool}
+  - {signal: sensor/cliff_front_left/range, topic: /example/cliff_front_left,
+     type: sensor_msgs/msg/Range, frame: cliff_front_left,
+     params: {radiation_type: 1, min_range: 0.005, max_range: 0.15, field_of_view: 0.1}}
+  - {signal: sensor/cliff_front_left/cliff, topic: /example/cliff_front_left/cliff,
+     type: std_msgs/msg/Bool}
+  - {signal: sensor/wheel_odom/pose, topic: /example/wheel_odom/pose,
+     type: geometry_msgs/msg/PoseStamped, frame: odom}
+  - {signal: sensor/safety/protective, topic: /example/safety/protective, type: std_msgs/msg/Bool}
+  - {signal: sensor/safety/warning, topic: /example/safety/warning, type: std_msgs/msg/Bool}
+  - {signal: sensor/safety/min_distance, topic: /example/safety/min_distance,
+     type: std_msgs/msg/Float64}
+  - {signal: sensor/left_wheel_torque/torque, topic: /example/left_wheel_torque,
+     type: std_msgs/msg/Float64}

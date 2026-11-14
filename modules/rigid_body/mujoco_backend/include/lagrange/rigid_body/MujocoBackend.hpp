@@ -57,6 +57,12 @@ public:
     /// The compiled model, for tests and tools; null before init().
     [[nodiscard]] const mjModel_* model() const { return model_; }
 
+    /// Kinematic bodies far from every moving body are left out of MuJoCo's broad phase (on by
+    /// default; the contacts are the same either way). For tests: call before init().
+    void setKinematicCulling(bool on) { cullingWanted_ = on; }
+    /// How many kinematic bodies the last step left out of the broad phase.
+    [[nodiscard]] std::size_t culledKinematicBodies() const;
+
 private:
     struct JointSignals {
         std::uint32_t joint{0};
@@ -77,6 +83,29 @@ private:
 
     void writeOutputs(SignalBus& bus) const;
     void sumContactForces();
+    void setupKinematicCulling();
+    void cullKinematicContacts(bool all);
+
+    // A kinematic (mocap) body far from every moving body cannot touch anything: MuJoCo makes
+    // no contacts between bodies without degrees of freedom, but still puts them through its
+    // broad phase. Such a body's collision masks are cleared for the step and put back as a
+    // moving body comes near (cullKinematicContacts), which leaves the contacts unchanged.
+    struct CulledBody {
+        int body{0};
+        int mocap{0};
+        double radius{0.0};  // m, bounding sphere about its origin, margins included
+        int contype{0}, conaffinity{0};
+        bool culled{false};
+    };
+    std::vector<CulledBody> culled_;
+    std::vector<int> movingGeoms_;  // geoms of bodies with degrees of freedom that collide
+    std::vector<int> movingRoots_;  // their tree root, per geom of movingGeoms_
+    std::vector<std::array<double, 6>> rootBoxes_;  // scratch: per root, min xyz then max xyz
+    std::vector<int> rootIndex_;  // per MuJoCo body: its root's slot in rootBoxes_, or -1
+    bool cullable_{false};        // false when a plane or an unbounded geom moves
+    bool cullingWanted_{true};
+    bool accelerationsDone_{false};  // nv = 0: mj_rnePostConstraint's results never change
+    bool carriedBodies_{false};      // a body is fixed to a kinematic (mocap) one
 
     std::vector<JointSignals> joints_;
     std::vector<BodySignals> bodies_;
@@ -84,6 +113,15 @@ private:
     // Kinematic bodies' poses at the previous output, for their twist (MuJoCo's mocap bodies
     // have no velocity of their own).
     mutable std::vector<std::array<double, 7>> lastKinematicPose_;
+    // Per body, the twist, contact force and pose last written (6 + 3 + 7; the twist and pose
+    // of kinematic bodies only), so an unchanged one is not written again: the bus keeps a value
+    // until its writer writes another. In the town most of the 655 kinematic bodies touch
+    // nothing, and their poses change only when the traffic or the people move them (every
+    // 10 ms); their accelerations (always zero) are written once. Invalid after init, a
+    // restored state and a shifted origin, when every value is written.
+    static constexpr std::size_t kWrittenPerBody = 16;
+    mutable std::vector<double> written_;
+    mutable bool writtenValid_{false};
     double dt_{0.001};
     SignalId frictionScale_;
     double appliedFrictionScale_{1.0};

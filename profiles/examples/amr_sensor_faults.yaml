@@ -1,0 +1,24 @@
+# profiles/examples/amr_sensor_faults.yaml — the sample AMR with failing sensors, to see how a
+# robot stack copes (sensors.md "Sensor faults (as built)"): the IMU's yaw rate drifts from 10 s,
+# the front lidar loses a third of its scans from 20 s to 25 s and the top lidar stops at 40 s.
+# Draws follow the run's seed, so a run repeats.
+# `lagrange run profiles/examples/amr_sensor_faults.yaml`
+schema_version: 1
+stage: robots/amr_diffdrive/amr_diffdrive.urdf
+
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: true,  fidelity: averaged, dt: 0.0001 }
+  thermal:      { enabled: true,  dt: 0.1, ambient_temperature: 298.15 }
+  aerodynamics: { enabled: false, substitute: zero }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: false, substitute: zero }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: true }
+
+sensor_faults:
+  - { sensor: imu, quantity: angular_rate, mode: drift, rate: 0.002, at: 10, component: 2 }  # rad/s per s
+  - { sensor: front_lidar, mode: dropout, at: 20, for: 5, probability: 0.33 }
+  - { sensor: top_lidar, mode: disconnect, at: 40 }
+
+time: { real_time_factor: 1.0 }

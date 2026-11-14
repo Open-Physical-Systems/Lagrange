@@ -159,6 +159,12 @@ def test_a_run_file_says_what_is_wrong_in_it(tmp_path: Path) -> None:
     assert "no file" in run(str(run_file(tmp_path, "robot: missing.urdf\n"))).stderr
     bad = run(str(run_file(tmp_path, f"robot: {AMR}\nsimulate: {{ghosts: true}}\n")))
     assert "unknown ghosts" in bad.stderr
+    fault = run(
+        str(run_file(tmp_path, f"robot: {AMR}\nsensor_faults: [{{sensor: imu, when: 1}}]\n"))
+    )
+    assert "sensor_faults: each is" in fault.stderr
+    fault = run(str(run_file(tmp_path, f"robot: {AMR}\nsensor_faults: [imu=broken]\n")))
+    assert "--sensor-fault needs NAME:QUANTITY=MODE" in fault.stdout + fault.stderr
 
 
 def test_an_unknown_season_is_refused() -> None:

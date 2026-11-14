@@ -12,8 +12,10 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstring>
+#include <ranges>
 
 namespace lagrange::viewer {
 
@@ -93,6 +95,64 @@ std::array<float, 12> modelRows(const Transform& t, const std::array<double, 3>&
     return m;
 }
 
+/// The view's frustum, relative to the eye: whether a mesh's bounding ball can be seen.
+class Frustum {
+public:
+    Frustum(const Camera& camera, double aspect) : near_(camera.nearPlane) {
+        const std::array<std::array<double, 3>, 3> axes = camera.axes();  // right, up, forward
+        const double tanY = std::tan(camera.verticalFov / 2.0);
+        const double tanX = tanY * aspect;
+        forward_ = axes[2];
+        for (std::size_t k = 0; k < 3; ++k) {
+            sides_[0].at(k) = axes[2].at(k) * tanX - axes[0].at(k);
+            sides_[1].at(k) = axes[2].at(k) * tanX + axes[0].at(k);
+            sides_[2].at(k) = axes[2].at(k) * tanY - axes[1].at(k);
+            sides_[3].at(k) = axes[2].at(k) * tanY + axes[1].at(k);
+        }
+        for (std::size_t s = 0; s < 4; ++s) {
+            const std::array<double, 3>& n = sides_.at(s);
+            norms_.at(s) = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        }
+    }
+
+    /// `model`: modelRows() of the prim; `box`: its mesh's bounds, min then max.
+    [[nodiscard]] bool sees(const std::array<float, 12>& model,
+                            const std::array<float, 6>& box) const {
+        std::array<double, 3> centre{model[3], model[7], model[11]};
+        double reach = 0.0;  // the ball's radius: half the box diagonal, by the largest column
+        double half = 0.0;
+        for (std::size_t k = 0; k < 3; ++k) {
+            const double c = (static_cast<double>(box.at(k)) + box.at(k + 3)) * 0.5;
+            const double h = (static_cast<double>(box.at(k + 3)) - box.at(k)) * 0.5;
+            half += h * h;
+            for (std::size_t row = 0; row < 3; ++row) {
+                centre.at(row) += model.at(row * 4 + k) * c;
+            }
+            reach = std::max(reach, static_cast<double>(
+                                        std::hypot(model.at(k), model.at(4 + k), model.at(8 + k))));
+        }
+        const double r = std::sqrt(half) * reach * 1.01 + 0.01;  // a margin for rounding
+        const auto dot = [&centre](const std::array<double, 3>& n) {
+            return centre[0] * n[0] + centre[1] * n[1] + centre[2] * n[2];
+        };
+        if (dot(forward_) < near_ - r) {
+            return false;
+        }
+        for (std::size_t s = 0; s < 4; ++s) {
+            if (dot(sides_.at(s)) < -r * norms_.at(s)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+private:
+    double near_;
+    std::array<double, 3> forward_{};
+    std::array<std::array<double, 3>, 4> sides_{};  // inward normals, unnormalised
+    std::array<double, 4> norms_{};
+};
+
 gpu::Buffer lineBuffer(const gpu::Device& device, const std::vector<float>& vertices) {
     return gpu::createBufferWithData(device, std::as_bytes(std::span{vertices}),
                                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
@@ -122,54 +182,84 @@ void heatFaces(std::uint32_t nx, std::uint32_t ny, std::uint32_t nz,
         return;
     }
     const float span = std::max(high - low, 1e-3F);
-    const auto at = [&](std::int64_t x, std::int64_t y, std::int64_t z) {
-        if (x < 0 || y < 0 || z < 0 || x >= nx || y >= ny || z >= nz) {
-            return NAN;
-        }
-        return values[(static_cast<std::size_t>(z) * ny + static_cast<std::size_t>(y)) * nx +
-                      static_cast<std::size_t>(x)];
-    };
+    const std::size_t sx = 1;
+    const std::size_t sy = nx;
+    const std::size_t sz = static_cast<std::size_t>(nx) * ny;
     // Per face direction: the normal and the shade that tells the faces apart unlit.
     static constexpr std::array<std::array<int, 3>, 6> kNormals{
         {{-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}}};
     static constexpr std::array<float, 6> kShade{0.78F, 0.86F, 0.74F, 0.82F, 0.62F, 1.0F};
-    const auto h = static_cast<float>(cell / 2.0);
-    for (std::uint32_t z = 0; z < nz; ++z) {
+    static constexpr std::array<std::array<float, 2>, 4> kSigns{
+        {{-1.0F, -1.0F}, {1.0F, -1.0F}, {1.0F, 1.0F}, {-1.0F, 1.0F}}};
+    static constexpr std::array<std::size_t, 6> kCorners{0, 1, 2, 0, 2, 3};
+    constexpr std::size_t kFloatsPerFace = 6 * 6;  // two triangles, position and colour
+    // Which faces of a cell are outside (no filled neighbour), as six bits.
+    const auto exposed = [&](std::uint32_t x, std::uint32_t y, std::uint32_t z, std::size_t at) {
+        unsigned mask = 0;
+        if (x == 0 || std::isnan(values[at - sx])) mask |= 1U << 0U;
+        if (x + 1 == nx || std::isnan(values[at + sx])) mask |= 1U << 1U;
+        if (y == 0 || std::isnan(values[at - sy])) mask |= 1U << 2U;
+        if (y + 1 == ny || std::isnan(values[at + sy])) mask |= 1U << 3U;
+        if (z == 0 || std::isnan(values[at - sz])) mask |= 1U << 4U;
+        if (z + 1 == nz || std::isnan(values[at + sz])) mask |= 1U << 5U;
+        return mask;
+    };
+    // Counted first so that the output grows once.
+    std::size_t faces = 0;
+    for (std::uint32_t z = 0, at = 0; z < nz; ++z) {
         for (std::uint32_t y = 0; y < ny; ++y) {
-            for (std::uint32_t x = 0; x < nx; ++x) {
-                const float t = at(x, y, z);
+            for (std::uint32_t x = 0; x < nx; ++x, ++at) {
+                if (!std::isnan(values[at])) {
+                    faces += static_cast<std::size_t>(std::popcount(exposed(x, y, z, at)));
+                }
+            }
+        }
+    }
+    std::size_t written = out.size();
+    out.resize(written + faces * kFloatsPerFace);
+    float* dst = out.data() + written;
+    const auto h = static_cast<float>(cell / 2.0);
+    for (std::uint32_t z = 0, at = 0; z < nz; ++z) {
+        for (std::uint32_t y = 0; y < ny; ++y) {
+            for (std::uint32_t x = 0; x < nx; ++x, ++at) {
+                const float t = values[at];
                 if (std::isnan(t)) {
                     continue;
+                }
+                const unsigned mask = exposed(x, y, z, at);
+                if (mask == 0) {
+                    continue;  // inside: neighbours cover every face
                 }
                 const std::array<float, 3> rgb = thermalColor((t - low) / span);
                 const std::array<float, 3> c{static_cast<float>(origin[0] + x * cell),
                                              static_cast<float>(origin[1] + y * cell),
                                              static_cast<float>(origin[2] + z * cell)};
                 for (std::size_t d = 0; d < 6; ++d) {
-                    const auto& n = kNormals[d];
-                    if (!std::isnan(at(static_cast<std::int64_t>(x) + n[0],
-                                       static_cast<std::int64_t>(y) + n[1],
-                                       static_cast<std::int64_t>(z) + n[2]))) {
-                        continue;  // inside: a neighbour covers it
+                    if ((mask & (1U << d)) == 0) {
+                        continue;
                     }
                     // The face's four corners: along the normal at +h, the other two axes ±h.
+                    const auto& n = kNormals[d];
                     const std::size_t a = d / 2;
                     const std::size_t u = (a + 1) % 3;
                     const std::size_t v = (a + 2) % 3;
                     std::array<std::array<float, 3>, 4> corner{};
-                    const std::array<std::array<float, 2>, 4> signs{
-                        {{-1.0F, -1.0F}, {1.0F, -1.0F}, {1.0F, 1.0F}, {-1.0F, 1.0F}}};
                     for (std::size_t k = 0; k < 4; ++k) {
                         corner[k] = c;
                         corner[k][a] += static_cast<float>(n[a]) * h;
-                        corner[k][u] += signs[k][0] * h;
-                        corner[k][v] += signs[k][1] * h;
+                        corner[k][u] += kSigns[k][0] * h;
+                        corner[k][v] += kSigns[k][1] * h;
                     }
-                    for (const std::size_t k : {0U, 1U, 2U, 0U, 2U, 3U}) {
-                        out.insert(out.end(), corner[k].begin(), corner[k].end());
-                        out.push_back(rgb[0] * kShade[d]);
-                        out.push_back(rgb[1] * kShade[d]);
-                        out.push_back(rgb[2] * kShade[d]);
+                    const std::array<float, 3> shaded{rgb[0] * kShade[d], rgb[1] * kShade[d],
+                                                      rgb[2] * kShade[d]};
+                    for (const std::size_t k : kCorners) {
+                        dst[0] = corner[k][0];
+                        dst[1] = corner[k][1];
+                        dst[2] = corner[k][2];
+                        dst[3] = shaded[0];
+                        dst[4] = shaded[1];
+                        dst[5] = shaded[2];
+                        dst += 6;
                     }
                 }
             }
@@ -310,13 +400,15 @@ void SceneRenderer::uploadMeshes(const SceneStatics& statics) {
 }
 
 void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, const Camera& camera,
-                           const RenderOptions& options, std::span<const OverlayLines> overlays) {
+                           const RenderOptions& options,
+                           std::span<const std::span<const OverlayLines>> overlayLists) {
     if (frame != nullptr && frame->statics && frame->statics->generation != meshGeneration_) {
         uploadMeshes(*frame->statics);
     }
     const VkExtent2D extent = color_.extent;
-    const Mat4 viewProjection =
-        camera.viewProjection(static_cast<double>(extent.width) / extent.height);
+    const double aspect = static_cast<double>(extent.width) / extent.height;
+    const Mat4 viewProjection = camera.viewProjection(aspect);
+    const Frustum frustum(camera, aspect);
     const std::array<double, 3> eye = camera.eye();
 
     gpu::transitionImage(
@@ -395,6 +487,10 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
                 MeshPush push{};
                 push.viewProjection = viewProjection;
                 push.model = modelRows(at, eye);
+                if (collider.mesh < statics.meshes.size() &&
+                    !frustum.sees(push.model, statics.meshes[collider.mesh].aabb)) {
+                    continue;  // out of view: not drawn
+                }
                 push.baseColor = kColliderColor;
                 vkCmdPushConstants(commands, meshLayout_, stages, 0, sizeof(push), &push);
                 if (meshes_.draw(commands, collider.mesh)) {
@@ -415,6 +511,10 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
             MeshPush push{};
             push.viewProjection = viewProjection;
             push.model = modelRows(frame->transforms[i], eye);
+            if (prim.mesh < statics.meshes.size() &&
+                !frustum.sees(push.model, statics.meshes[prim.mesh].aabb)) {
+                continue;  // out of view: not drawn
+            }
             push.baseColor = prim.material != kNone ? statics.materials[prim.material].baseColor
                                                     : std::array<float, 4>{0.8F, 0.8F, 0.8F, 1.0F};
             if (options.shading == Shading::Thermal) {
@@ -459,14 +559,20 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
             gpu::destroy(device_, heat_);  // the previous frame has finished (see header)
             heat_ = gpu::createBuffer(device_, std::max<VkDeviceSize>(bytes * 2, 256 * 1024),
                                       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
+            heatUploaded_ = ~0ULL;
         }
-        auto* mapped = static_cast<float*>(heat_.mapped);
-        std::size_t written = 0;
-        for (const RenderOptions::HeatPatch& patch : options.heat) {
-            std::copy(patch.vertices.begin(), patch.vertices.end(), mapped + written);
-            written += patch.vertices.size();
+        // Copied only when they changed (a few times a second), not every frame: a link's
+        // cells are megabytes.
+        if (heatUploaded_ != options.heatVersion) {
+            auto* mapped = static_cast<float*>(heat_.mapped);
+            std::size_t written = 0;
+            for (const RenderOptions::HeatPatch& patch : options.heat) {
+                std::copy(patch.vertices.begin(), patch.vertices.end(), mapped + written);
+                written += patch.vertices.size();
+            }
+            gpu::flush(device_, heat_);
+            heatUploaded_ = options.heatVersion;
         }
-        gpu::flush(device_, heat_);
         vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, heatPipeline_);
         std::size_t first = 0;
         for (const RenderOptions::HeatPatch& patch : options.heat) {
@@ -530,8 +636,10 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
 
     // --- overlays -------------------------------------------------------------------------
     std::size_t floats = 0;
-    for (const OverlayLines& batch : overlays) {
-        floats += batch.vertices.size();
+    for (const std::span<const OverlayLines> overlays : overlayLists) {
+        for (const OverlayLines& batch : overlays) {
+            floats += batch.vertices.size();
+        }
     }
     if (floats > 0) {
         const VkDeviceSize bytes = floats * sizeof(float);
@@ -542,13 +650,15 @@ void SceneRenderer::render(VkCommandBuffer commands, const SceneFrame* frame, co
         }
         auto* mapped = static_cast<float*>(overlay_.mapped);
         std::size_t written = 0;
-        for (const OverlayLines& batch : overlays) {
-            std::copy(batch.vertices.begin(), batch.vertices.end(), mapped + written);
-            written += batch.vertices.size();
+        for (const std::span<const OverlayLines> overlays : overlayLists) {
+            for (const OverlayLines& batch : overlays) {
+                std::copy(batch.vertices.begin(), batch.vertices.end(), mapped + written);
+                written += batch.vertices.size();
+            }
         }
         gpu::flush(device_, overlay_);
         std::size_t first = 0;
-        for (const OverlayLines& batch : overlays) {
+        for (const OverlayLines& batch : overlayLists | std::views::join) {
             LinePush push{};
             push.viewProjection = viewProjection;
             for (std::size_t k = 0; k < 3; ++k) {

@@ -51,6 +51,10 @@ constexpr double kNominalLampMass = 0.1;      // kg; kinematic bodies are not mo
 constexpr std::uint32_t kAgentClassCar = 0;
 constexpr std::uint32_t kAgentClassPedestrian = 1;
 
+// Agents in a row that found no clear place (400 tries each): the lanes are full, stop asking.
+// Without it --traffic pedestrians=100000 spent 40 s of tries before the run loaded.
+constexpr int kFullAfterFailures = 8;
+
 SignalSpec spec(std::string name, SignalType type, Unit unit, std::string frame = {}) {
     SignalSpec s;
     s.name = std::move(name);
@@ -544,7 +548,8 @@ std::vector<WalkerStart> walkersFor(const WorldView& world, int count, std::uint
     }
     std::mt19937_64 rng(seed + 0x7A1C);
     std::uniform_real_distribution<double> unit(0.0, 1.0);
-    for (int i = 0; i < count && !walks.empty(); ++i) {
+    for (int i = 0, failed = 0; i < count && !walks.empty() && failed < kFullAfterFailures; ++i) {
+        ++failed;  // until it finds a place
         for (int attempt = 0; attempt < 400; ++attempt) {
             const Lane& lane =
                 g.lanes[walks[static_cast<std::size_t>(unit(rng) * walks.size()) % walks.size()]];
@@ -568,6 +573,7 @@ std::vector<WalkerStart> walkersFor(const WorldView& world, int count, std::uint
             walker.walkSpeed = 1.1 + (0.45 * unit(rng));
             walker.seed = i + 1;
             out.push_back(std::move(walker));
+            failed = 0;
             break;
         }
     }
@@ -752,12 +758,17 @@ std::array<int, 2> addAgents(Model& model, const Population& population,
         return false;
     };
     std::array<int, 2> made{0, 0};
-    for (int i = 0; i < population.vehicles; ++i) {
-        made[0] += place(roads, kVehicleSpacing, false, made[0]) ? 1 : 0;
+    for (int i = 0, failed = 0; i < population.vehicles && failed < kFullAfterFailures; ++i) {
+        const bool placed = place(roads, kVehicleSpacing, false, made[0]);
+        made[0] += placed ? 1 : 0;
+        failed = placed ? 0 : failed + 1;
     }
     // On a world with crossings pedestrians are walkers, which the caller adds as people.
-    for (int i = 0; g.crossings.empty() && i < population.pedestrians; ++i) {
-        made[1] += place(walks, kPedestrianSpacing, true, made[1]) ? 1 : 0;
+    for (int i = 0, failed = 0;
+         g.crossings.empty() && i < population.pedestrians && failed < kFullAfterFailures; ++i) {
+        const bool placed = place(walks, kPedestrianSpacing, true, made[1]);
+        made[1] += placed ? 1 : 0;
+        failed = placed ? 0 : failed + 1;
     }
 
     // The signals: poles and housings as scenery, and the lamps that the module moves.

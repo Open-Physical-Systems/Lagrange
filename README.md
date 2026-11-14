@@ -11,7 +11,7 @@ unit-checked signal bus, and any of them can be disabled or replaced by ideal, c
 replayed data. A native Vulkan viewer shows the run; it talks to the simulator only through a
 protocol, never by linking it.
 
-**Status: v1.2.1, stable** ([release notes](docs/release/v1.2.1.md); documentation at
+**Status: v1.3.0, stable** ([release notes](docs/release/v1.3.0.md); documentation at
 [open-physical-systems.github.io/Lagrange](https://open-physical-systems.github.io/Lagrange/)). The USD schemas, the
 plugin C ABI, the viewer protocol, profiles and recordings are frozen for 1.x and change only by
 addition ([RFC 0007](rfcs/0007-v1-freeze.md)); 1.x is supported on `release/1.x` until ROS 2
@@ -168,7 +168,7 @@ recorded to MCAP and replayed.
 
 <!-- docs-index begin: written by tools/ci/docs_index.py -->
 
-<details><summary>User guide (20)</summary>
+<details><summary>User guide (21)</summary>
 
 - [User guide](docs/guide/README.md)
 - [Autoware with a simulated car](docs/guide/autoware.md)
@@ -178,6 +178,7 @@ recorded to MCAP and replayed.
 - [Profiles](docs/guide/profiles.md)
 - [Robots and worlds](docs/guide/robots.md)
 - [The run file](docs/guide/run-file.md)
+- [Sensors](docs/guide/sensors.md)
 - [Tutorial: an AMR in a warehouse](docs/guide/tutorial-amr.md)
 - [Tutorial: the sample arm with MoveIt 2](docs/guide/tutorial-arm.md)
 - [Tutorial: a car in a city block](docs/guide/tutorial-cars.md)
@@ -281,7 +282,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Plan and evaluation (17)</summary>
+<details><summary>Plan and evaluation (20)</summary>
 
 - [Project overview](docs/plan/00-overview.md)
 - [Rotor downwash and live airflow: progress](docs/plan/downwash-progress.md)
@@ -290,9 +291,12 @@ recorded to MCAP and replayed.
 - [Open questions and challenges to the plan](docs/plan/open-questions.md)
 - [Overnight work, 2026-11-03 (until 07:00 JST)](docs/plan/overnight-2026-11-03.md)
 - [Progress](docs/plan/progress.md)
+- [QA pass, 2026-11-12 (v1.2.1)](docs/plan/qa-2026-11-12.md)
+- [Sensors QA, 2026-11-12: the built-in kinds, faults, images](docs/plan/qa-sensors-2026-11-12.md)
 - [Repository, CI, release and security plan](docs/plan/repo-tooling.md)
 - [Risk register](docs/plan/risks.md)
 - [Roadmap](docs/plan/roadmap.md)
+- [Sensor defaults against their sources (2026-11-12)](docs/plan/sensor-defaults-verification-2026-11-12.md)
 - [Spike 0.2-B1: OpenUSD v26.08 on Ubuntu 26.04](docs/plan/spikes/0.2-B1-openusd.md)
 - [Spike 0.2-C1: MuJoCo source and validation](docs/plan/spikes/0.2-C1-mujoco.md)
 - [Spike 0.2-C6: a second rigid-body backend on Jolt Physics](docs/plan/spikes/0.2-C6-jolt.md)
@@ -303,7 +307,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Release notes (11)</summary>
+<details><summary>Release notes (12)</summary>
 
 - [v0.2.0 compared with Gazebo Jetty: the sample AMR](docs/release/v0.2.0-comparison.md)
 - [Lagrange v0.2.0: simulation core and AMR (release notes, draft)](docs/release/v0.2.0.md)
@@ -316,6 +320,7 @@ recorded to MCAP and replayed.
 - [Lagrange v1.1.0: easier to use, checked against measurements (release notes)](docs/release/v1.1.0.md)
 - [Lagrange v1.2.0: cables, heat in the parts, a robot's own interference (release notes)](docs/release/v1.2.0.md)
 - [Lagrange v1.2.1: one command to install (release notes)](docs/release/v1.2.1.md)
+- [Lagrange v1.3.0: 37 new sensors, a faster simulator, hardened protocol (release notes)](docs/release/v1.3.0.md)
 
 </details>
 
@@ -331,7 +336,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Design proposals (RFCs) (13)</summary>
+<details><summary>Design proposals (RFCs) (15)</summary>
 
 - [RFC 0001: Module interface, signals and scheduling contract](rfcs/0001-module-interface.md)
 - [RFC 0002: USD custom schemas](rfcs/0002-usd-schemas.md)
@@ -346,6 +351,8 @@ recorded to MCAP and replayed.
 - [RFC 0011: Tethers and cables](rfcs/0011-tethers.md)
 - [RFC 0012: Heat conduction in solids, from materials](rfcs/0012-heat-conduction.md)
 - [RFC 0013: Magnetic interference from a robot's own power wiring](rfcs/0013-motor-emi.md)
+- [RFC 0014: Protocol frame limits before the handshake](rfcs/0014-pre-handshake-limits.md)
+- [RFC 0015: USD attributes for lidar scan patterns and fisheye lenses](rfcs/0015-lidar-patterns-fisheye-usd.md)
 
 </details>
 

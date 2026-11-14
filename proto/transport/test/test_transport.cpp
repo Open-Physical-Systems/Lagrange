@@ -244,6 +244,40 @@ TEST_P(TransportTest, OversizeFrameFromPeerIsAnError) {
                      [&] { return strict.next().status == FrameReader::Status::Error; }));
 }
 
+// RFC 0014 §1: the incoming limit is lowered until the handshake and raised after it, while
+// what the connection sends keeps its own limit.
+TEST_P(TransportTest, TheIncomingLimitCanBeRaisedAfterTheHello) {
+    Link link;
+    ASSERT_NO_FATAL_FAILURE(connectLink(where(), link));
+    link.server.setMaxIncomingFrameSize(64);
+    EXPECT_EQ(link.server.maxIncomingFrameSize(), 64U);
+    v1::Envelope hello;
+    hello.mutable_client_hello()->set_client_name("c");
+    v1::Envelope big;
+    big.mutable_blob()->set_data(std::string(1000, 'x'));
+    ASSERT_TRUE(link.client.queue(hello));
+    ASSERT_TRUE(link.client.queue(big));  // pipelined behind the hello
+    // The server still sends large frames before it raises its incoming limit.
+    ASSERT_TRUE(link.server.queue(big));
+    v1::Envelope got;
+    ASSERT_TRUE(pump({&link.client, &link.server}, [&] {
+        const auto r = link.server.next();
+        return r.status == FrameReader::Status::Frame && parsePayload(r.payload, got);
+    }));
+    EXPECT_EQ(got.client_hello().client_name(), "c");
+    link.server.setMaxIncomingFrameSize(lagrange::proto::kDefaultMaxFrameSize);
+    ASSERT_TRUE(pump({&link.client, &link.server}, [&] {
+        const auto r = link.server.next();
+        return r.status == FrameReader::Status::Frame && parsePayload(r.payload, got);
+    }));
+    EXPECT_EQ(got.blob().data().size(), 1000U);
+    ASSERT_TRUE(pump({&link.client, &link.server}, [&] {
+        const auto r = link.client.next();
+        return r.status == FrameReader::Status::Frame && parsePayload(r.payload, got);
+    }));
+    EXPECT_EQ(got.blob().data().size(), 1000U);
+}
+
 TEST_P(TransportTest, ClientReconnectsAfterServerRestart) {
     const Endpoint endpoint = where();
     Link first;

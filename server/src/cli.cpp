@@ -16,9 +16,11 @@
 #include "lagrange/thermal/ThermalConduction.hpp"
 #include "lagrange/world/PoseMath.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -173,6 +175,8 @@ int validate(const CommandLine& base) {
             code = 1;
             continue;
         }
+        // The notes of a run without the profile do not concern it (its site may answer them).
+        line.options.profileFollows = true;
         lagrange::server::Server server(line.options);
         if (const lagrange::Status status = server.load(); !status.ok()) {
             std::printf("%s: %s\n", path.c_str(), status.message.c_str());
@@ -213,6 +217,7 @@ int graph(CommandLine& line) {
             return 1;
         }
     }
+    line.options.profileFollows = yaml.has_value();
     lagrange::server::Server server(line.options);
     lagrange::Status status = server.load();
     if (status.ok() && yaml) {
@@ -230,10 +235,28 @@ int graph(CommandLine& line) {
 class ServerRun final : public lagrange::services::CheckedRun {
 public:
     explicit ServerRun(const lagrange::server::ServerOptions& options) : server_(options) {}
-    lagrange::Status load() { return server_.load(); }
+    /// Loads the run and applies the profile, when there is one.
+    lagrange::Status load(const std::optional<std::string>& profile) {
+        lagrange::Status status = server_.load();
+        if (status.ok() && profile) {
+            status = server_.applyProfile(*profile);
+        }
+        return status;
+    }
     lagrange::Status stepUntil(lagrange::SimTime t) override { return server_.stepUntil(t); }
     [[nodiscard]] lagrange::Expected<std::uint64_t, lagrange::Status> stateHash() const override {
-        return server_.stateHash();
+        auto hash = server_.stateHash();
+        // LAGRANGE_DETERMINISM_HASHES=1: every hash on stdout, so that two builds' runs can be
+        // compared (a change that must not change results; benchmarks.md §4.2).
+        static const bool print = [] {
+            const char* v = std::getenv("LAGRANGE_DETERMINISM_HASHES");
+            return v != nullptr && *v != '\0' && std::strcmp(v, "0") != 0;
+        }();
+        if (print && hash) {
+            std::printf("hash %.3f %016llx\n", server_.now().seconds(),
+                        static_cast<unsigned long long>(*hash));
+        }
+        return hash;
     }
 
 private:
@@ -261,10 +284,11 @@ int determinism(CommandLine& line, double seconds) {
     line.options.ros = false;
     line.options.lidar = lagrange::server::ServerOptions::Lidar::Cpu;
     line.options.cameras = false;
+    line.options.profileFollows = yaml.has_value();
     const auto make =
         [&]() -> lagrange::Expected<std::unique_ptr<lagrange::services::CheckedRun>, std::string> {
         auto run = std::make_unique<ServerRun>(line.options);
-        if (lagrange::Status status = run->load(); !status.ok()) {
+        if (lagrange::Status status = run->load(yaml); !status.ok()) {
             return lagrange::Unexpected{status.message};
         }
         return std::unique_ptr<lagrange::services::CheckedRun>(std::move(run));
@@ -407,9 +431,24 @@ int steadyHeat(CommandLine& line, std::optional<double> filmCoefficient, double 
             std::fprintf(stderr, "lagrange: %s\n", error->c_str());
             return 1;
         }
+        // The profile's site, unless the command line gives one.
+        if (!line.options.ambientTemperatureK) {
+            try {
+                const YAML::Node ambient =
+                    YAML::Load(*yaml)["domains"]["thermal"]["ambient_temperature"];
+                if (ambient && ambient.IsScalar()) {
+                    line.options.ambientTemperatureK = ambient.as<double>();
+                }
+            } catch (const YAML::Exception&) {
+                // Not a number or not YAML: the check below names what is missing.
+            }
+        }
     }
-    if (!line.options.ambientTemperatureK) {
-        return usage("heat needs the site's air temperature: --ambient-temperature K");
+    if (!line.options.ambientTemperatureK || !(*line.options.ambientTemperatureK > 0.0) ||
+        !std::isfinite(*line.options.ambientTemperatureK)) {
+        return usage(
+            "heat needs the site's air temperature: --ambient-temperature K or the "
+            "profile's thermal.ambient_temperature");
     }
     const double ambient = *line.options.ambientTemperatureK;
     lagrange::server::Server server(line.options);

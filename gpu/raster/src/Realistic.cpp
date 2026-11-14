@@ -55,6 +55,7 @@ struct Push {
     std::array<float, 4> emissive;
 };
 static_assert(sizeof(Push) == 96);
+static_assert(sizeof(Push) == sizeof(std::array<float, 24>));
 
 // The sun: mid-afternoon, high enough for the whole scene and low enough for long shadows. A
 // drawing choice, not a site parameter: the simulation has no time of day.
@@ -258,7 +259,8 @@ RealisticRenderer::RealisticRenderer(const Device& device,
 RealisticRenderer::~RealisticRenderer() {
     VkDevice d = device_.device();
     vkDeviceWaitIdle(d);
-    for (Pipeline* p : {&shadowPipe_, &opaque_, &transparent_, &sky_, &waterPipe_, &composite_}) {
+    for (Pipeline* p : {&shadowPipe_, &opaque_, &depthOnly_, &opaqueShade_, &transparent_, &sky_,
+                        &waterPipe_, &composite_}) {
         vkDestroyPipeline(d, p->pipeline, nullptr);
         vkDestroyPipelineLayout(d, p->layout, nullptr);
     }
@@ -284,6 +286,17 @@ void RealisticRenderer::pipelines() {
     mesh.blend = false;
     mesh.setLayout = setLayout_;
     buildPipeline(device_, mesh, opaque_.layout, opaque_.pipeline);
+
+    // Depth first, then shading where a mesh is the nearest (reversed depth, greater or equal):
+    // the costly surface shader runs once per pixel instead of once per covering triangle. The
+    // shading pass writes no depth, which keeps the early depth test on despite its discard.
+    PipelineSpec depthOnly = mesh;
+    depthOnly.fragment = kRealShadowFragment;  // empty
+    depthOnly.colorFormats = {};
+    buildPipeline(device_, depthOnly, depthOnly_.layout, depthOnly_.pipeline);
+    PipelineSpec shade = mesh;
+    shade.depthWrite = false;
+    buildPipeline(device_, shade, opaqueShade_.layout, opaqueShade_.pipeline);
 
     PipelineSpec glass = mesh;
     glass.blend = true;
@@ -530,6 +543,84 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
     const auto opaque = [&](std::size_t i) { return items[i].baseColor[3] >= 1.0F; };
     const std::size_t primCount = items.size();
 
+    // Bounding balls, relative to the eye, for leaving out what a pass cannot see (the meshes'
+    // bounds come from their vertices, in MeshSet).
+    balls_.resize(primCount);
+    for (std::size_t i = 0; i < primCount; ++i) {
+        const RealisticDraw& item = items[i];
+        std::array<float, 4>& ball = balls_[i];
+        ball = {0.0F, 0.0F, 0.0F, -1.0F};
+        const std::array<float, 6>* box = meshes.bounds(item.mesh);
+        if (box == nullptr || item.ground) {
+            continue;  // the ground is drawn far past its mesh (kGroundReach)
+        }
+        const std::array<float, 12> m = rows(item, eye);
+        const std::array<float, 6>& b = *box;
+        float half = 0.0F;  // half the box's diagonal, scaled by the largest scale
+        for (std::size_t k = 0; k < 3; ++k) {
+            const float c = (b.at(k) + b.at(k + 3)) * 0.5F;
+            ball[0] += m.at(k) * c;
+            ball[1] += m.at(4 + k) * c;
+            ball[2] += m.at(8 + k) * c;
+            const float h = (b.at(k + 3) - b.at(k)) * 0.5F;
+            half += h * h;
+        }
+        ball[0] += m[3];
+        ball[1] += m[7];
+        ball[2] += m[11];
+        const float scale =
+            std::max({std::abs(item.scale[0]), std::abs(item.scale[1]), std::abs(item.scale[2])});
+        ball[3] = std::sqrt(half) * scale * 1.01F + 0.01F;  // a little margin for rounding
+    }
+    // The view's four sides and its near plane, as inward normals (unnormalised) through the eye.
+    std::array<std::array<double, 3>, 4> sides{};
+    for (std::size_t k = 0; k < 3; ++k) {
+        sides[0].at(k) = view.forward.at(k) * view.tanHalfX - view.right.at(k);
+        sides[1].at(k) = view.forward.at(k) * view.tanHalfX + view.right.at(k);
+        sides[2].at(k) = view.forward.at(k) * view.tanHalfY - view.up.at(k);
+        sides[3].at(k) = view.forward.at(k) * view.tanHalfY + view.up.at(k);
+    }
+    std::array<double, 4> sideNorms{};
+    for (std::size_t s = 0; s < 4; ++s) {
+        sideNorms.at(s) =
+            std::sqrt(sides.at(s)[0] * sides.at(s)[0] + sides.at(s)[1] * sides.at(s)[1] +
+                      sides.at(s)[2] * sides.at(s)[2]);
+    }
+    const auto inView = [&](std::size_t i) {
+        const std::array<float, 4>& ball = balls_[i];
+        if (ball[3] < 0.0F) {
+            return true;
+        }
+        const double r = ball[3];
+        const double ahead =
+            ball[0] * view.forward[0] + ball[1] * view.forward[1] + ball[2] * view.forward[2];
+        if (ahead < view.near - r) {
+            return false;
+        }
+        for (std::size_t s = 0; s < 4; ++s) {
+            const std::array<double, 3>& n = sides.at(s);
+            if (ball[0] * n[0] + ball[1] * n[1] + ball[2] * n[2] < -r * sideNorms.at(s)) {
+                return false;
+            }
+        }
+        return true;
+    };
+    // A cascade's clip rows are orthonormal over its radius, so a ball keeps its shape there.
+    const auto inCascade = [&](std::size_t i, const std::array<float, 12>& clip) {
+        const std::array<float, 4>& ball = balls_[i];
+        if (ball[3] < 0.0F) {
+            return true;
+        }
+        const std::array<float, 3> at{
+            clip[0] * ball[0] + clip[1] * ball[1] + clip[2] * ball[2] + clip[3],
+            clip[4] * ball[0] + clip[5] * ball[1] + clip[6] * ball[2] + clip[7],
+            clip[8] * ball[0] + clip[9] * ball[1] + clip[10] * ball[2] + clip[11]};
+        const float across = ball[3] * std::hypot(clip[0], clip[1], clip[2]);
+        const float along = ball[3] * std::hypot(clip[8], clip[9], clip[10]);
+        return std::abs(at[0]) <= 1.0F + across && std::abs(at[1]) <= 1.0F + across &&
+               at[2] >= -along && at[2] <= 1.0F + along;
+    };
+
     // --- the sun's depth ---------------------------------------------------------------------
     transitionImage(commands, shadow_.image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
                     VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
@@ -540,7 +631,7 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
         region({kShadowSize, kShadowSize}, {left ? 0 : static_cast<std::int32_t>(kShadowSize), 0});
         const std::array<float, 12>& sun = left ? nearCascade.clip : farCascade.clip;
         for (std::size_t i = 0; i < primCount; ++i) {
-            if (!drawable(i) || !opaque(i) || items[i].ground) {
+            if (!drawable(i) || !opaque(i) || items[i].ground || !inCascade(i, sun)) {
                 continue;
             }
             Push push = pushFor(i, times(sun, rows(items[i], eye)));
@@ -585,17 +676,45 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     // --- the scene ---------------------------------------------------------------------------
+    // The opaque meshes' pushes, made once for both passes.
+    pushes_.clear();
+    for (std::size_t i = 0; i < primCount; ++i) {
+        if (drawable(i) && opaque(i) && inView(i)) {
+            const Push push = pushFor(i, rows(items[i], eye));
+            auto& [item, bytes] = pushes_.emplace_back();
+            item = i;
+            std::memcpy(bytes.data(), &push, sizeof(push));
+        }
+    }
+    begin(nullptr, depth.view, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+          VK_ATTACHMENT_LOAD_OP_CLEAR, extent, VK_ATTACHMENT_LOAD_OP_DONT_CARE);
+    bind(depthOnly_, mainSet_);
+    for (const auto& [i, push] : pushes_) {
+        vkCmdPushConstants(commands, depthOnly_.layout, stages, 0, sizeof(push), push.data());
+        meshes.draw(commands, items[i].mesh);
+    }
+    vkCmdEndRendering(commands);
+    {
+        // The depth just written is tested by the shading pass.
+        VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        barrier.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                               VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependency.memoryBarrierCount = 1;
+        dependency.pMemoryBarriers = &barrier;
+        vkCmdPipelineBarrier2(commands, &dependency);
+    }
     transitionImage(commands, hdr_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    begin(&hdr_, depth.view, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_ATTACHMENT_LOAD_OP_CLEAR,
+    begin(&hdr_, depth.view, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_ATTACHMENT_LOAD_OP_LOAD,
           extent, VK_ATTACHMENT_LOAD_OP_CLEAR);
-    bind(opaque_, mainSet_);
-    for (std::size_t i = 0; i < primCount; ++i) {
-        if (!drawable(i) || !opaque(i)) {
-            continue;
-        }
-        Push push = pushFor(i, rows(items[i], eye));
-        vkCmdPushConstants(commands, opaque_.layout, stages, 0, sizeof(push), &push);
+    bind(opaqueShade_, mainSet_);
+    for (const auto& [i, push] : pushes_) {
+        vkCmdPushConstants(commands, opaqueShade_.layout, stages, 0, sizeof(push), push.data());
         if (meshes.draw(commands, items[i].mesh)) {
             ++draws;
         }
@@ -639,7 +758,7 @@ std::uint32_t RealisticRenderer::record(VkCommandBuffer commands,
     // See-through things, farthest first.
     std::vector<std::pair<double, std::size_t>> glass;
     for (std::size_t i = 0; i < primCount; ++i) {
-        if (drawable(i) && !opaque(i)) {
+        if (drawable(i) && !opaque(i) && inView(i)) {
             const std::array<double, 3>& p = items[i].position;
             const std::array<double, 3> d{p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]};
             glass.emplace_back(-(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]), i);

@@ -1,10 +1,13 @@
 #include "GeoSensors.hpp"
+#include "kinds/KindModule.hpp"
 #include "lagrange/fields/Field.hpp"
 #include "lagrange/gpu/Realistic.hpp"
 #include "lagrange/module/StateIO.hpp"
 #include "lagrange/random/Philox.hpp"
 #include "lagrange/sensors/CameraModel.hpp"
+#include "lagrange/sensors/Fisheye.hpp"
 #include "lagrange/sensors/ImuNoise.hpp"
+#include "lagrange/sensors/Kinds.hpp"
 #include "lagrange/sensors/Radar.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
@@ -16,11 +19,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <map>
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <tbb/parallel_for.h>
 #include <utility>
 #include <vector>
@@ -316,8 +321,14 @@ double setting(const World::Sensors& sensors, std::uint32_t sensor, const char* 
     return it == map.end() ? fallback : it->second;
 }
 
+/// The most beams one lidar scan takes: 2^22, sixteen times an Ouster OS2-128's 2048 × 128.
+/// Each beam holds several arrays on the bus and on the GPU.
+constexpr double kMaxLidarBeams = 4'194'304.0;
+
+/// A sensor's period: exact when it is a whole number of ns, else on the kinds' grid (a lidar at
+/// 15 Hz, 66'666'666.7 ns, was refused: base tick below 1 µs).
 Duration periodOf(double rateHz) {
-    return Duration{static_cast<std::int64_t>(std::llround(1e9 / std::max(rateHz, 1e-3)))};
+    return kinds::kindPeriod(rateHz);
 }
 
 /// Common to all sensors: the mount and how its body's pose is read.
@@ -366,7 +377,24 @@ public:
 
     Status declare(const WorldView& world, const ModuleConfig& config, SignalDeclarer& d) override {
         const World::Sensors& sensors = world.sensors();
+        // Beam counts as the file gives them, before LidarLayout casts them: a negative count
+        // cast to 4294967295 columns, and 1e8 columns asked for gigabytes (std::bad_alloc).
+        for (const char* key : {"samples", "vertical_samples"}) {
+            const auto it = sensors.settings[sensor_].find(key);
+            if (it != sensors.settings[sensor_].end() &&
+                !(it->second >= 1.0 && it->second <= kMaxLidarBeams)) {
+                return Status::error(StatusCode::InvalidConfig,
+                                     "lidar " + name_ + ": " + key + " must be from 1 to " +
+                                         std::to_string(static_cast<long>(kMaxLidarBeams)));
+            }
+        }
         layout_ = LidarLayout::from(sensors.settings[sensor_]);
+        if (static_cast<double>(layout_.horizontal) * layout_.vertical > kMaxLidarBeams) {
+            return Status::error(StatusCode::InvalidConfig,
+                                 "lidar " + name_ + ": more than " +
+                                     std::to_string(static_cast<long>(kMaxLidarBeams)) +
+                                     " beams in a scan");
+        }
         samples_ = layout_.beams();
         minRange_ = setting(sensors, sensor_, "min_range", 0.1);
         maxRange_ = setting(sensors, sensor_, "max_range", 30.0);
@@ -374,6 +402,9 @@ public:
         distort_ = setting(sensors, sensor_, "motion_distortion", 1.0) != 0.0 && !groundTruth_;
         if (samples_ == 0) {
             return Status::error(StatusCode::InvalidConfig, "lidar " + name_ + " has no samples");
+        }
+        if (Status ok = declarePattern(d); !ok.ok()) {
+            return ok;
         }
         // Read the pose of every moving body that carries geometry, and of the sensor's body.
         const World& raw = world.raw();
@@ -516,12 +547,18 @@ public:
         }
         hitShape_.assign(samples_, kNoShapeHit);
         intensity_.assign(samples_, 0.0);
+        if (layout_.timeVarying()) {
+            aimRosette(0, bus);
+        }
         bus.writeN(ranges_, buffer_);
         bus.writeN(intensities_, intensity_);
         return {};
     }
 
     Status step(const StepContext& context, SignalBus& bus) override {
+        if (layout_.timeVarying()) {
+            aimRosette(context.stepIndex, bus);
+        }
         if (groundTruth_) {
             bus.writeN(ranges_, buffer_);  // no rendering: no returns (+inf from init)
             bus.writeN(intensities_, intensity_);
@@ -601,23 +638,24 @@ public:
                 }
             });
         }
-        for (std::uint32_t i = 0; i < samples_; ++i) {
+        // Range noise, from each beam's own stream (seed, step, beam): the same on any number
+        // of threads. A Gaussian draw per beam was a millisecond of a 32 000-beam scan.
+        tbb::parallel_for(std::uint32_t{0}, samples_, [&](std::uint32_t i) {
             double nearest = nearest_[i];
             if (nearest < minRange_ || nearest > maxRange_) {
                 buffer_[i] = kNoHit;  // no valid return (sensor_msgs/LaserScan convention)
-                continue;
+                intensity_[i] = 0.0;
+                return;
             }
             if (noise_ > 0.0) {
                 random::Stream rng(context.seed, context.stepIndex, i);
                 nearest += noise_ * rng.normal();
             }
             buffer_[i] = std::clamp(nearest, minRange_, maxRange_);
-        }
-        for (std::uint32_t i = 0; i < samples_; ++i) {
             if (!std::isfinite(buffer_[i])) {
                 intensity_[i] = 0.0;
             }
-        }
+        });
         bus.writeN(ranges_, buffer_);
         bus.writeN(intensities_, intensity_);
         scanEnd_ = sensor;
@@ -644,6 +682,50 @@ public:
     }
 
 private:
+    /// The opt-in scan patterns (LidarLayout): a flash lidar fires all beams at once, so its scan
+    /// has no motion distortion; a rosette's beams move on every scan and go out as
+    /// sensor/<name>/directions (unit vectors in the sensor frame, x y z per beam) for whoever
+    /// turns its ranges into points.
+    Status declarePattern(SignalDeclarer& d) {
+        if (layout_.simultaneous()) {
+            distort_ = false;
+            constexpr double kRightAngle = 1.5707963267948966;
+            for (const double a :
+                 {layout_.minAngle, layout_.maxAngle, layout_.minElevation, layout_.maxElevation}) {
+                if (!(std::abs(a) < kRightAngle)) {
+                    return Status::error(StatusCode::InvalidConfig,
+                                         "flash lidar " + name_ +
+                                             ": its angles must lie within ±π/2 (a focal plane)");
+                }
+            }
+        }
+        if (layout_.timeVarying()) {
+            if (!(layout_.rosette.pointRate > 0.0)) {
+                return Status::error(StatusCode::InvalidConfig,
+                                     "rosette lidar " + name_ + ": rosette_point_rate must be > 0");
+            }
+            SignalSpec out =
+                spec("sensor/" + name_ + "/directions", SignalType::ScalarArray, units::one);
+            out.arrayLength = 3 * samples_;
+            directions_ = d.output(out);
+        }
+        return {};
+    }
+
+    /// A rosette's beams for scan `scan`, on the bus and for the casts (the GPU's are uploaded
+    /// again).
+    void aimRosette(std::uint64_t scan, SignalBus& bus) {
+        directionValues_.resize(std::size_t{3} * samples_);
+        for (std::uint32_t i = 0; i < samples_; ++i) {
+            beamDirection_[i] = layout_.direction(i, scan);
+            for (std::size_t k = 0; k < 3; ++k) {
+                directionValues_[(std::size_t{3} * i) + k] = beamDirection_[i].at(k);
+            }
+        }
+        bus.writeN(directions_, directionValues_);
+        beamsMoved_ = scan_ != nullptr;
+    }
+
     /// Where the sensor is as each column fires: a rotating lidar's columns fire one after another
     /// through the scan, the last at the scan's end. Between the last scan's end and this one's the
     /// sensor is taken to move evenly. Only the sensor moves: everything else stays where it is at
@@ -792,6 +874,8 @@ private:
     static constexpr std::uint32_t kNoShapeHit = 0xFFFF'FFFFU;
     static constexpr std::uint32_t kMaxPasses = 6;
     static constexpr double kPastSurfaceM = 1e-4;
+    SignalId directions_;                  // a rosette's beams, per scan
+    std::vector<double> directionValues_;  // x y z per beam
     bool distort_{true};
     bool hasScanEnd_{false};
     bool moving_{false};      // this scan's sensor moved
@@ -809,8 +893,9 @@ private:
     bool weather_{false};
     LidarClutter clutter_;
     SignalId extinction_, fogExtinction_, rainRate_, snowRate_, contamination_, fogField_;
-    // Flakes return more false echoes than the same water as drops: taken as this much rain
-    // (illustrative, of the order lidar snow studies show; sensors.md).
+    // Flakes return more false echoes than the same water as drops: taken as this much rain.
+    // Illustrative: no published snow-to-rain clutter ratio was found (Rasshofer, Spies and Spies,
+    // Adv. Radio Sci. 9, 2011, give snow's extinction, not its false echoes).
     static constexpr double kSnowClutter = 3.0;
     fields::FieldSignal fogFieldSignal_;
     LidarLayout layout_;
@@ -964,7 +1049,7 @@ Duration wholeMilliseconds(double rateHz) {
     return Duration{ms * 1'000'000};
 }
 
-class Camera final : public SensorModule {
+class Camera final : public SensorModule, public SplitStep {
 public:
     Camera(const World& world, std::uint32_t sensor, bool groundTruth,
            std::shared_ptr<const CameraScene> scene)
@@ -983,8 +1068,11 @@ public:
         const double width = setting(sensors, sensor_, "width", 640.0);
         const double height = setting(sensors, sensor_, "height", 480.0);
         const double fov = setting(sensors, sensor_, "horizontal_fov", 1.047);
+        // A fisheye (FisheyeLens.hpp) sees up to all round; a pinhole stops short of 180°.
+        const bool fisheye = FisheyeLens::isFisheye(sensors.settings[sensor_]);
+        constexpr double kMaxFisheyeFov = 2.0 * FisheyeLens::kPi;
         if (width < 1.0 || height < 1.0 || width > 16384.0 || height > 16384.0 || fov <= 0.0 ||
-            fov >= 3.1) {
+            fov >= (fisheye ? kMaxFisheyeFov : 3.1)) {
             return Status::error(StatusCode::InvalidConfig,
                                  "camera " + name_ + ": image size or horizontal_fov out of range");
         }
@@ -1035,9 +1123,15 @@ public:
                 StatusCode::InvalidConfig,
                 "camera " + name_ + ": vignetting or rolling shutter out of range");
         }
-        model_ = std::make_unique<CameraModel>(model);
-        if (!model_->active()) {
-            model_.reset();
+        if (fisheye) {
+            if (Status ok = declareFisheye(sensors, model); !ok.ok()) {
+                return ok;
+            }
+        } else {
+            model_ = std::make_unique<CameraModel>(model);
+            if (!model_->active()) {
+                model_.reset();
+            }
         }
 
         const World& raw = world.raw();
@@ -1118,9 +1212,48 @@ public:
                                          "sensors domain to ground_truth to run without one)");
             }
             const gpu::PinholeCamera& render = model_ ? model_->renderCamera() : camera_;
-            renderer_ =
-                std::make_unique<gpu::RasterCamera>(scene_->raster, render.width, render.height);
+            if (fisheye_) {
+                faceRenderers_.clear();
+                for (const FisheyeFace& face : fisheye_->faces()) {
+                    faceRenderers_.push_back(std::make_unique<gpu::RasterCamera>(
+                        scene_->raster, face.camera.width, face.camera.height));
+                }
+                faceImages_.resize(fisheye_->faces().size());
+            } else {
+                renderer_ = std::make_unique<gpu::RasterCamera>(scene_->raster, render.width,
+                                                                render.height);
+            }
             instances_.resize(scene_->drawables.size());
+            // A thermal camera paints its own colour from the instance ids. A fisheye has no
+            // single renderer, only its faces (they are resampled on the CPU, so the sensor
+            // model stays on the CPU for it).
+            for (const auto& face : faceRenderers_) {
+                face->setColour(!thermal_);
+            }
+            if (renderer_) {
+                renderer_->setColour(!thermal_);
+            }
+            // The sensor model on the GPU, beside the render (CameraModel::apply is the CPU
+            // reference; LAGRANGE_CAMERA_MODEL=cpu keeps it).
+            const char* where = std::getenv("LAGRANGE_CAMERA_MODEL");
+            std::string error;
+            gpuModel_ = renderer_ && model_ &&
+                        (where == nullptr || std::string_view(where) != "cpu") &&
+                        renderer_->setEffects(model_->gpuEffects(), error);
+            // The thermal image on the GPU, after the render (stepThermal is the CPU
+            // reference; LAGRANGE_THERMAL_CAMERA=cpu keeps it). Not with a sensor model.
+            const char* thermalWhere = std::getenv("LAGRANGE_THERMAL_CAMERA");
+            if (thermal_ && renderer_ && !model_ &&
+                (thermalWhere == nullptr || std::string_view(thermalWhere) != "cpu")) {
+                gpu::ThermalImageSetup setup;
+                setup.prims = static_cast<std::uint32_t>(surfaces_.size());
+                setup.palette = static_cast<std::uint32_t>(palette_);
+                setup.netd = netd_;
+                setup.displayMin = displayMin_;
+                setup.displayMax = displayMax_;
+                setup.span = kThermalSpan;
+                gpuThermal_ = renderer_->setThermal(setup, error);
+            }
         }
         publish(bus);  // empty images until the first frame
         return {};
@@ -1161,25 +1294,85 @@ public:
             instance.water = drawable.water;
             instance.box = drawable.box;
         }
+        sensorPose_ = sensor;
+        frameContext_ = context;
+        if (fisheye_) {
+            // Each face of the cube from the camera's place, turned to look through it.
+            for (std::size_t f = 0; f < faceRenderers_.size(); ++f) {
+                gpu::PinholeCamera face = fisheye_->faces()[f].camera;
+                face.near = camera_.near;
+                face.position = camera_.position;
+                face.orientation = multiply(camera_.orientation, fisheye_->faces()[f].rotation);
+                faceRenderers_[f]->render(instances_, face, faceImages_[f], context.t.seconds());
+            }
+            fisheye_->apply(faceImages_, images_);
+            return finishFrame(bus);
+        }
+        // The render is submitted here and waited for in finishStep (SplitStep): the scheduler
+        // runs the tick's other modules meanwhile, and nothing reads the images before then.
         if (model_) {
             gpu::PinholeCamera render = model_->renderCamera();
             render.near = camera_.near;
             render.position = camera_.position;
             render.orientation = camera_.orientation;
-            renderer_->render(instances_, render, rendered_, context.t.seconds());
-            std::array<double, 3> omega{};
+            omega_ = {};
             if (twist_.valid()) {
                 const std::span<const double> t = bus.readN(twist_);
-                omega = rotate(conjugate(camera_.orientation), {t[3], t[4], t[5]});
+                omega_ = rotate(conjugate(camera_.orientation), {t[3], t[4], t[5]});
             }
             if (exposureOut_.valid()) {
                 bus.write(exposureOut_, model_->exposureTime());
             }
-            model_->apply(rendered_, omega, context.seed, context.stepIndex, sensor_ << 16U,
-                          images_);
+            if (gpuModel_) {
+                const gpu::CameraEffectsFrame frame =
+                    model_->gpuFrame(omega_, context.seed, context.stepIndex, sensor_ << 16U);
+                renderer_->begin(instances_, render, &frame, context.t.seconds());
+            } else {
+                renderer_->begin(instances_, render, nullptr, context.t.seconds());
+            }
+        } else if (gpuThermal_) {
+            thermalApparent(bus);
+            gpu::ThermalImageFrame frame;
+            frame.apparent = apparent_;
+            frame.sky = clearSkyTemperature(ambient_);
+            frame.seed = context.seed;
+            frame.stepIndex = context.stepIndex;
+            frame.entity = sensor_ << 16U;
+            renderer_->beginThermal(instances_, camera_, frame, context.t.seconds());
         } else {
-            renderer_->render(instances_, camera_, images_, context.t.seconds());
+            renderer_->begin(instances_, camera_, nullptr, context.t.seconds());
         }
+        if (!splitAllowed_) {
+            return finishStep(bus);
+        }
+        return {};
+    }
+
+    void allowSplit(bool allowed) override { splitAllowed_ = allowed; }
+
+    [[nodiscard]] bool stepPending() const override { return renderer_ && renderer_->pending(); }
+
+    Status finishStep(SignalBus& bus) override {
+        const StepContext& context = frameContext_;
+        if (model_ && gpuModel_) {
+            renderer_->finish(images_, &signal_);
+            model_->afterGpuFrame(signal_);
+        } else if (model_) {
+            renderer_->finish(rendered_, nullptr);
+            model_->apply(rendered_, omega_, context.seed, context.stepIndex, sensor_ << 16U,
+                          images_);
+        } else if (gpuThermal_) {
+            renderer_->finish(images_, &temperatures_);
+        } else {
+            renderer_->finish(images_, nullptr);
+        }
+        return finishFrame(bus);
+    }
+
+private:
+    /// What follows the render: the far clip, the weather's veil, the thermal image, and the
+    /// images out.
+    Status finishFrame(SignalBus& bus) {
         for (float& depth : images_.depth) {
             if (depth > far_) {
                 depth = std::numeric_limits<float>::infinity();
@@ -1189,21 +1382,51 @@ public:
         if (weather_) {
             const std::shared_ptr<const fields::Field> field = fogFieldSignal_.read(bus, fogField_);
             if (field) {
-                fieldDepth(*field, sensor);
+                fieldDepth(*field, sensorPose_);
             } else {
                 fieldDepth_.clear();
             }
             applyCameraWeather(images_.rgba, images_.depth, bus.read(extinction_),
                                bus.read(contamination_), fieldDepth_);
         }
-        if (thermal_) {
-            stepThermal(context, bus);
+        if (thermal_ && !gpuThermal_) {
+            stepThermal(frameContext_, bus);
         }
         publish(bus);
         return {};
     }
 
-private:
+    /// A fisheye camera (FisheyeLens.hpp, Fisheye.hpp): its focal length from the angle across
+    /// its width, and the cube faces to draw. The rest of the sensor model is not combined with
+    /// it yet (sensors.md, "Fisheye cameras (as built)").
+    Status declareFisheye(const World::Sensors& sensors, const CameraModelConfig& model) {
+        const FisheyeLens lens = FisheyeLens::from(sensors.settings[sensor_]);
+        const double fov = setting(sensors, sensor_, "horizontal_fov", 1.047);
+        if (!lens.monotonic() || !(lens.distorted(fov / 2.0) > 0.0) || !(lens.cutoff > 0.0)) {
+            return Status::error(
+                StatusCode::InvalidConfig,
+                "fisheye camera " + name_ + ": its k1..k4 fold the image back within the cutoff");
+        }
+        if (model.vignetting > 0.0 || model.rollingShutterTime > 0.0 || model.exposure) {
+            return Status::error(StatusCode::InvalidConfig,
+                                 "fisheye camera " + name_ +
+                                     ": vignetting, rolling shutter and exposure are not "
+                                     "supported with a fisheye yet");
+        }
+        camera_.fx = lens.focal(camera_.width, fov);
+        camera_.fy = camera_.fx;
+        FisheyeConfig config;
+        config.width = camera_.width;
+        config.height = camera_.height;
+        config.fx = camera_.fx;
+        config.fy = camera_.fy;
+        config.cx = camera_.cx;
+        config.cy = camera_.cy;
+        config.lens = lens;
+        fisheye_ = std::make_unique<FisheyeRemap>(config);
+        return {};
+    }
+
     /// Publishes the last images; empty buffers (with their size) before the first frame and
     /// for the ground-truth substitute.
     void publish(SignalBus& bus) {
@@ -1368,10 +1591,9 @@ private:
         return {};
     }
 
-    /// The temperature image and its palette, from the instance ids of the frame just drawn.
-    void stepThermal(const StepContext& context, const SignalBus& bus) {
-        // What each surface reads, once per frame: its own emission and the ambient surroundings
-        // it reflects. The clear sky where nothing is hit.
+    /// What each surface reads, once per frame: its own emission and the ambient surroundings
+    /// it reflects (the clear sky where nothing is hit is the caller's).
+    void thermalApparent(const SignalBus& bus) {
         apparent_.assign(surfaces_.size(), ambient_);
         for (std::size_t p = 0; p < surfaces_.size(); ++p) {
             const Surface& surface = surfaces_[p];
@@ -1382,8 +1604,13 @@ private:
                     t = node;
                 }
             }
-            apparent_[p] = band_->apparent(t, surface.emissivity, ambient_);
+            apparent_[p] = apparentOf(t, surface.emissivity);
         }
+    }
+
+    /// The temperature image and its palette, from the instance ids of the frame just drawn.
+    void stepThermal(const StepContext& context, const SignalBus& bus) {
+        thermalApparent(bus);
         const double sky = clearSkyTemperature(ambient_);
         const std::uint32_t w = camera_.width;
         const std::uint32_t h = camera_.height;
@@ -1403,7 +1630,6 @@ private:
         if (!(hi > lo)) {
             // Each frame's range, but never under kThermalSpan, so a scene all at one
             // temperature shows as one colour, not as its noise stretched over the palette.
-            constexpr double kThermalSpan = 4.0;  // K, a display choice
             const auto [a, b] = std::ranges::minmax(temperatures_);
             lo = a;
             hi = b;
@@ -1414,11 +1640,11 @@ private:
             }
         }
         images_.rgba.resize(temperatures_.size() * 4);
-        for (std::size_t i = 0; i < temperatures_.size(); ++i) {
+        tbb::parallel_for(std::size_t{0}, temperatures_.size(), [&](std::size_t i) {
             const std::array<std::uint8_t, 4> c =
                 paletteColour(palette_, (temperatures_[i] - lo) / (hi - lo));
             std::ranges::copy(c, images_.rgba.begin() + static_cast<std::ptrdiff_t>(i * 4));
-        }
+        });
     }
 
     Pose bodyPose(const SignalBus& bus, std::uint32_t b) const {
@@ -1448,15 +1674,20 @@ public:
 
 private:
     std::shared_ptr<const CameraScene> scene_;
-    std::vector<SignalId> hinges_;        // per drawable; invalid: rigid
-    gpu::PinholeCamera camera_;           // the output's pinhole (before the sensor model)
-    std::unique_ptr<CameraModel> model_;  // null when no part of the sensor model is on
-    gpu::RasterImages rendered_;          // the render the sensor model remaps
+    std::vector<SignalId> hinges_;           // per drawable; invalid: rigid
+    gpu::PinholeCamera camera_;              // the output's pinhole (before the sensor model)
+    std::unique_ptr<CameraModel> model_;     // null when no part of the sensor model is on
+    std::unique_ptr<FisheyeRemap> fisheye_;  // a fisheye's cube faces and remap; else null
+    std::vector<std::unique_ptr<gpu::RasterCamera>> faceRenderers_;
+    std::vector<gpu::RasterImages> faceImages_;
+    gpu::RasterImages rendered_;  // the render the sensor model remaps
     SignalId twist_, exposureOut_;
     double far_{100.0};
     std::vector<Pose> rest_;
     std::vector<SignalId> poses_;
     std::unique_ptr<gpu::RasterCamera> renderer_;
+    bool gpuModel_{false};       // the camera model runs on the GPU after the render
+    std::vector<float> signal_;  // its per-pixel signal, for auto exposure
     std::vector<gpu::RasterInstance> instances_;
     gpu::RasterImages images_;
     SignalId image_, depth_, instance_;
@@ -1509,6 +1740,34 @@ private:
     std::unique_ptr<ThermalBand> band_;
     std::vector<Surface> surfaces_;  // by scene prim index
     std::vector<double> apparent_;   // K, by scene prim index, this frame
+    // The frame in flight between step() and finishStep().
+    StepContext frameContext_{};
+    Pose sensorPose_{};
+    std::array<double, 3> omega_{};  // rad/s, in the optical frame
+    bool splitAllowed_{false};       // SplitStep::allowSplit
+    bool gpuThermal_{false};         // the thermal image runs on the GPU after the render
+    static constexpr double kThermalSpan = 4.0;  // K, a display choice: a frame's least range
+
+    /// ThermalBand::apparent against the ambient surroundings, remembered: most surfaces share
+    /// a temperature and an emissivity (the ambient air's, a person's skin), and each answer
+    /// costs a few hundred exponentials. The same inputs give the same bits.
+    double apparentOf(double temperature, double emissivity) {
+        if (!std::isfinite(temperature) || !std::isfinite(emissivity)) {
+            return band_->apparent(temperature, emissivity, ambient_);
+        }
+        const std::pair<double, double> key{temperature, emissivity};
+        if (const auto it = apparentCache_.find(key); it != apparentCache_.end()) {
+            return it->second;
+        }
+        constexpr std::size_t kMostRemembered = 4096;  // node temperatures drift: start over
+        if (apparentCache_.size() >= kMostRemembered) {
+            apparentCache_.clear();
+        }
+        const double value = band_->apparent(temperature, emissivity, ambient_);
+        apparentCache_.emplace(key, value);
+        return value;
+    }
+    std::map<std::pair<double, double>, double> apparentCache_;
     std::vector<float> temperatures_;
     SignalId temperatureOut_;
 };
@@ -1518,7 +1777,8 @@ namespace {
 
 std::vector<std::unique_ptr<IModule>> createModules(
     const World& world, bool groundTruth, const std::shared_ptr<gpu::RayContext>& rayContext,
-    const std::shared_ptr<const CameraScene>& cameraScene, bool groundTruthCameras) {
+    const std::shared_ptr<const CameraScene>& cameraScene, bool groundTruthCameras,
+    const Scene* scene = nullptr) {
     std::vector<std::unique_ptr<IModule>> modules;
     for (std::uint32_t s = 0; s < world.sensors.names.size(); ++s) {
         switch (world.sensors.type[s]) {
@@ -1533,14 +1793,19 @@ std::vector<std::unique_ptr<IModule>> createModules(
                     world, s, groundTruth || groundTruthCameras, cameraScene));
                 break;
             case SensorType::Radar:
-                modules.push_back(createRadar(world, s, groundTruth));
+                modules.push_back(createRadar(world, s, groundTruth, rayContext));
                 break;
             case SensorType::Gnss:
             case SensorType::Magnetometer:
             case SensorType::Barometer:
                 break;  // createGeoSensors, below
             case SensorType::Custom:
-                break;  // a plugin implements it (RFC 0008 §3)
+                // A built-in kind (sensors.md §9), else a plugin implements it (RFC 0008 §3).
+                if (auto module =
+                        createBuiltinKind(world, s, groundTruth, rayContext, cameraScene, scene)) {
+                    modules.push_back(std::move(module));
+                }
+                break;
         }
     }
     createGeoSensors(world, groundTruth, modules);
@@ -1559,9 +1824,21 @@ std::vector<std::unique_ptr<IModule>> createSensorSubstitutes(const World& world
     return createModules(world, true, nullptr, nullptr, true);
 }
 
+std::vector<std::unique_ptr<IModule>> createSensorModules(
+    const Model& model, std::shared_ptr<gpu::RayContext> rayContext,
+    std::shared_ptr<const CameraScene> cameraScene, bool groundTruthCameras) {
+    return createModules(model.world, false, rayContext, cameraScene, groundTruthCameras,
+                         &model.scene);
+}
+
+std::vector<std::unique_ptr<IModule>> createSensorSubstitutes(const Model& model) {
+    return createModules(model.world, true, nullptr, nullptr, true, &model.scene);
+}
+
 std::shared_ptr<CameraScene> createCameraScene(const Model& model,
                                                const std::string& preferredDevice,
-                                               std::string& error, gpu::RasterLook look) {
+                                               std::string& error, gpu::RasterLook look,
+                                               const std::shared_ptr<const CameraScene>& reuse) {
     auto scene = std::make_shared<CameraScene>();
     std::vector<gpu::MeshSource> meshes;
     meshes.reserve(model.scene.meshes.size());
@@ -1605,7 +1882,8 @@ std::shared_ptr<CameraScene> createCameraScene(const Model& model,
         }
         scene->drawables.push_back(drawable);
     }
-    scene->raster = gpu::RasterScene::create(preferredDevice, meshes, error, look);
+    scene->raster = gpu::RasterScene::create(preferredDevice, meshes, error, look,
+                                             reuse ? reuse->raster : nullptr);
     return scene->raster ? scene : nullptr;
 }
 

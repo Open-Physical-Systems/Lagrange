@@ -1,0 +1,49 @@
+#usda 1.0
+(
+    defaultPrim = "quad_x500"
+    doc = """The sample quadcopter with the telemetry a flight controller gets of its power
+    system (docs/design/domains/sensors.md §9): KISS telemetry from the first rotor's ESC, the
+    pack's fuel gauge, and an INA226 on the bus. Fly it with --air-density 1.225."""
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    subLayers = [
+        @quad_x500.usda@
+    ]
+    upAxis = "Z"
+)
+
+over "quad_x500"
+{
+    over "base_link"
+    {
+        def Xform "esc_1" (
+            prepend apiSchemas = ["SensorAPI_1", "CustomSensorAPI_1"]
+        )
+        {
+            string sensor:custom:kind = "esc_telemetry"
+            string sensor:custom:param:joint = "rotor_1_joint"
+            string sensor:custom:param:protocol = "kiss"
+            double sensor:custom:param:escs = 4
+            double sensor:rate = 50
+        }
+
+        def Xform "fuel_gauge" (
+            prepend apiSchemas = ["SensorAPI_1", "CustomSensorAPI_1"]
+        )
+        {
+            string sensor:custom:kind = "battery_monitor"
+            double sensor:custom:param:voltage:noise = 0.002
+            double sensor:rate = 10
+        }
+
+        def Xform "bus_monitor" (
+            prepend apiSchemas = ["SensorAPI_1", "CustomSensorAPI_1"]
+        )
+        {
+            string sensor:custom:kind = "voltage_sensor"
+            string sensor:custom:param:signal = "bus/dc_bus/voltage"
+            double sensor:custom:param:averages = 16
+            double sensor:rate = 10
+        }
+    }
+}

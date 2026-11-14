@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <numbers>
 #include <optional>
@@ -302,6 +303,84 @@ TEST(ThermalCamera, ALinkWithAThermalMaterialReadsWithItsEmissivity) {
     EXPECT_NEAR(*painted, band.apparent(kHot, 0.9, kAmbient), 0.1);
     EXPECT_LT(*bare, kAmbient + 10.0);  // 350 K bare aluminium reads near the room's
     EXPECT_GT(*painted, kHot - 8.0);
+}
+
+// The thermal image on the GPU (thermal_camera.slang) against the CPU reference (stepThermal,
+// LAGRANGE_THERMAL_CAMERA=cpu): the same render, noise bits and palette; the sums in float on the
+// GPU, in double on the CPU. Every palette, the frame's own range and a fixed one.
+TEST(ThermalCamera, TheGpuImageAgreesWithTheCpuReference) {
+    struct Frame {
+        std::shared_ptr<const Buffer> kelvin, image, instance;
+    };
+    const auto run = [](bool cpu, double palette, double displayMax) -> std::optional<Frame> {
+        Model model = scene();
+        auto& settings = model.world.sensors.settings[0];
+        settings["thermal_palette"] = palette;
+        if (displayMax > 0.0) {
+            settings["thermal_display_min"] = kAmbient - 5.0;
+            settings["thermal_display_max"] = displayMax;
+        }
+        std::string error;
+        const char* gpu = std::getenv("LAGRANGE_TEST_GPU");
+        const std::shared_ptr<CameraScene> cameras =
+            createCameraScene(model, gpu != nullptr ? gpu : "", error);
+        if (!cameras) {
+            return std::nullopt;
+        }
+        if (cpu) {
+            setenv("LAGRANGE_THERMAL_CAMERA", "cpu", 1);
+        } else {
+            unsetenv("LAGRANGE_THERMAL_CAMERA");
+        }
+        Scheduler scheduler{SchedulerOptions{.deterministic = false, .runSeed = 7}};
+        scheduler.add(std::make_unique<Heater>(kHot));
+        ModuleConfigData config;
+        config.values["ambient_temperature"] = kAmbient;
+        for (auto& module : createSensorModules(model.world, nullptr, cameras)) {
+            scheduler.add(std::move(module), ModuleConfig(config));
+        }
+        auto wired = scheduler.wire(WorldView(model.world));
+        unsetenv("LAGRANGE_THERMAL_CAMERA");
+        EXPECT_TRUE(wired) << (wired ? "" : to_string(wired.error().front()));
+        for (int i = 0; i < 40; ++i) {
+            EXPECT_TRUE(scheduler.stepTick().ok());
+        }
+        const SignalBus& bus = scheduler.bus();
+        return Frame{bus.buffer(bus.readBuffer(bus.find("sensor/ir/temperature"))),
+                     bus.buffer(bus.readBuffer(bus.find("sensor/ir/image"))),
+                     bus.buffer(bus.readBuffer(bus.find("sensor/ir/instance")))};
+    };
+    for (const double palette : {0.0, 1.0, 2.0}) {
+        for (const double displayMax : {0.0, kHot + 5.0}) {
+            const std::optional<Frame> cpu = run(true, palette, displayMax);
+            if (!cpu) {
+                GTEST_SKIP() << "no Vulkan device";
+            }
+            const std::optional<Frame> gpu = run(false, palette, displayMax);
+            ASSERT_TRUE(gpu && cpu->kelvin && gpu->kelvin && cpu->image && gpu->image);
+            ASSERT_EQ(gpu->kelvin->bytes.size(), cpu->kelvin->bytes.size());
+            ASSERT_EQ(gpu->image->bytes.size(), cpu->image->bytes.size());
+            EXPECT_EQ(gpu->instance->bytes, cpu->instance->bytes);
+            double worst = 0.0;
+            for (std::uint32_t v = 0; v < kHeight; ++v) {
+                for (std::uint32_t u = 0; u < kWidth; ++u) {
+                    worst = std::max(worst, std::abs(static_cast<double>(at(*gpu->kelvin, u, v)) -
+                                                     at(*cpu->kelvin, u, v)));
+                }
+            }
+            EXPECT_LT(worst, 1e-3) << "K, palette " << palette;
+            std::size_t off = 0;
+            int most = 0;
+            for (std::size_t k = 0; k < cpu->image->bytes.size(); ++k) {
+                const int d = std::abs(static_cast<int>(gpu->image->bytes[k]) -
+                                       static_cast<int>(cpu->image->bytes[k]));
+                off += d != 0 ? 1 : 0;
+                most = std::max(most, d);
+            }
+            EXPECT_LE(most, 1) << "palette " << palette;
+            EXPECT_LT(off, cpu->image->bytes.size() / 1000) << "palette " << palette;
+        }
+    }
 }
 
 TEST(ThermalCamera, ItRefusesToStartWithoutTheSitesTemperature) {

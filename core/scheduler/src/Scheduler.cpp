@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <map>
+#include <memory>
 #include <numeric>
 #include <set>
 #include <string>
@@ -20,11 +22,25 @@ namespace lagrange {
 namespace {
 
 constexpr std::uint32_t kStateMagic = 0x5453474CU;  // "LGST"
-constexpr std::uint32_t kStateVersion = 1;
+// 2: the bus's published buffers (their sequences and, outside a hash, their bytes) are saved.
+constexpr std::uint32_t kStateVersion = 2;
 constexpr std::int64_t kMinBaseTickNs = 1'000;              // 1 µs
 constexpr std::int64_t kMaxHyperperiodNs = 10'000'000'000;  // 10 s
 constexpr std::uint64_t kInitTick = ~0ULL;  // commit tick of initial values: before tick 0
 constexpr std::uint32_t kNone = 0xFFFF'FFFFU;
+
+/// LAGRANGE_TIMING=1: how long each module took to declare and to init, on stderr
+/// (docs/design/benchmarks.md, "Start-up and Python throughput").
+void reportTiming(const char* stage, const std::string& label,
+                  std::chrono::steady_clock::time_point since) {
+    static const bool on = std::getenv("LAGRANGE_TIMING") != nullptr;
+    if (on) {
+        std::fprintf(
+            stderr, "[timing] %s %s %.1f ms\n", stage, label.c_str(),
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - since)
+                .count());
+    }
+}
 
 std::string formatDuration(Duration d) {
     char text[32];
@@ -132,7 +148,9 @@ Expected<void, std::vector<WiringError>> Scheduler::wire(const WorldView& world)
                                             "deterministic run"});
         }
         SignalDeclarer declarer(bus_, i);
+        const auto declareStart = std::chrono::steady_clock::now();
         const Status status = entry.module->declare(world, entry.config, declarer);
+        reportTiming("declare", entry.label, declareStart);
         if (!status.ok()) {
             errors.push_back({Kind::ModuleFailed,
                               {},
@@ -146,6 +164,7 @@ Expected<void, std::vector<WiringError>> Scheduler::wire(const WorldView& world)
         entry.outputSignals = std::move(declarer.outputSignals_);
     }
 
+    const auto checksStart = std::chrono::steady_clock::now();
     // 2. Static checks; all errors are collected.
     checkSteps(errors);
     connect(errors);
@@ -170,14 +189,35 @@ Expected<void, std::vector<WiringError>> Scheduler::wire(const WorldView& world)
             }
         }
     }
+    // Split steps (SplitStep): which modules end one in flight by reading its outputs.
+    inFlight_.clear();
+    for (Entry& entry : entries_) {
+        entry.split = dynamic_cast<SplitStep*>(entry.module.get());
+        if (entry.split != nullptr) {
+            entry.split->allowSplit(true);
+        }
+        entry.writers.clear();
+        for (const std::uint32_t slot : entry.inputSlots) {
+            const SignalBus::InputSlot& input = bus_.inputs_[slot];
+            if (input.signal != SignalBus::kNoModule) {
+                entry.writers.push_back(bus_.signals_[input.signal].writer);
+            }
+        }
+        std::sort(entry.writers.begin(), entry.writers.end());
+        entry.writers.erase(std::unique(entry.writers.begin(), entry.writers.end()),
+                            entry.writers.end());
+    }
 
+    reportTiming("wiring", "checks", checksStart);
     // 3. Storage, then initial values in execution order.
     bus_.allocate(world.batchCount());
     for (const std::uint32_t index : order_) {
         Entry& entry = entries_[index];
         bus_.currentModule_ = index;
         bus_.misuse_.clear();
+        const auto initStart = std::chrono::steady_clock::now();
         const Status status = entry.module->init(world, entry.config, bus_);
+        reportTiming("init", entry.label, initStart);
         bus_.currentModule_ = SignalBus::kNoModule;
         entry.initialised = true;
         if (!status.ok()) {
@@ -476,9 +516,18 @@ Status Scheduler::stepTick() {
             continue;
         }
         const SimTime start{due - (entry.atWindowEnd ? entry.dt.ns : 0)};
-        for (const std::uint32_t slot : entry.inputSlots) {
-            bus_.prepareInput(slot, start, tick_);
+        // A split step still in flight ends before anything reads its outputs.
+        for (std::size_t k = 0; k < inFlight_.size();) {
+            const std::uint32_t pending = inFlight_[k];
+            if (std::binary_search(entry.writers.begin(), entry.writers.end(), pending)) {
+                if (Status status = finishSplit(pending); !status.ok()) {
+                    return status;
+                }
+                continue;  // finishSplit removed it
+            }
+            ++k;
         }
+        bus_.prepareInputs(entry.inputSlots, start, tick_);
         bus_.currentModule_ = index;
         bus_.misuse_.clear();
         const StepContext context{start, entry.dt, entry.stepIndex, entry.seed};
@@ -487,26 +536,83 @@ Status Scheduler::stepTick() {
         const std::int64_t elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                          std::chrono::steady_clock::now() - started)
                                          .count();
-        ++entry.costSteps;
-        entry.costTotalNs += elapsed;
-        entry.costMaxNs = std::max(entry.costMaxNs, elapsed);
         bus_.currentModule_ = SignalBus::kNoModule;
         if (!bus_.misuse_.empty()) {
+            const std::string misuse = bus_.misuse_;
+            finishAllSplits();
             return Status::error(StatusCode::Internal,
-                                 entry.label + " at " + formatTime(start) + ": " + bus_.misuse_);
+                                 entry.label + " at " + formatTime(start) + ": " + misuse);
         }
         if (!status.ok()) {
+            finishAllSplits();
             return Status::error(status.code,
                                  entry.label + " at " + formatTime(start) + ": " + status.message);
         }
-        for (const std::uint32_t signal : entry.outputSignals) {
-            bus_.commit(signal, start + entry.dt, tick_, entry.dt);
+        if (entry.split != nullptr && entry.split->stepPending()) {
+            // Its cost: this part and finishStep's, not what runs in between.
+            entry.pendingStart = start;
+            entry.pendingNs = elapsed;
+            inFlight_.push_back(index);
+            continue;
         }
+        ++entry.costSteps;
+        entry.costTotalNs += elapsed;
+        entry.costMaxNs = std::max(entry.costMaxNs, elapsed);
+        bus_.commitAll(entry.outputSignals, start + entry.dt, tick_, entry.dt);
         ++entry.stepIndex;
+    }
+    while (!inFlight_.empty()) {
+        if (Status status = finishSplit(inFlight_.front()); !status.ok()) {
+            return status;
+        }
     }
     now_ = now_ + baseTick_;
     ++tick_;
     return {};
+}
+
+Status Scheduler::finishSplit(std::uint32_t index) {
+    inFlight_.erase(std::find(inFlight_.begin(), inFlight_.end(), index));
+    Entry& entry = entries_[index];
+    bus_.currentModule_ = index;
+    bus_.misuse_.clear();
+    const auto started = std::chrono::steady_clock::now();
+    const Status status = entry.split->finishStep(bus_);
+    bus_.currentModule_ = SignalBus::kNoModule;
+    const std::int64_t elapsed =
+        entry.pendingNs + std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              std::chrono::steady_clock::now() - started)
+                              .count();
+    ++entry.costSteps;
+    entry.costTotalNs += elapsed;
+    entry.costMaxNs = std::max(entry.costMaxNs, elapsed);
+    const SimTime start = entry.pendingStart;
+    if (!bus_.misuse_.empty()) {
+        const std::string misuse = bus_.misuse_;
+        finishAllSplits();
+        return Status::error(StatusCode::Internal,
+                             entry.label + " at " + formatTime(start) + ": " + misuse);
+    }
+    if (!status.ok()) {
+        finishAllSplits();
+        return Status::error(status.code,
+                             entry.label + " at " + formatTime(start) + ": " + status.message);
+    }
+    bus_.commitAll(entry.outputSignals, start + entry.dt, tick_, entry.dt);
+    ++entry.stepIndex;
+    return {};
+}
+
+void Scheduler::finishAllSplits() {
+    // After a failure: no step left half done (its device work waited for), nothing committed.
+    while (!inFlight_.empty()) {
+        const std::uint32_t index = inFlight_.back();
+        inFlight_.pop_back();
+        bus_.currentModule_ = index;
+        (void)entries_[index].split->finishStep(bus_);
+        bus_.currentModule_ = SignalBus::kNoModule;
+    }
+    bus_.misuse_.clear();
 }
 
 Status Scheduler::startAt(SimTime t) {
@@ -610,6 +716,10 @@ bool getHandles(StateReader& reader, std::vector<std::uint64_t>& handles) {
 }  // namespace
 
 Status Scheduler::saveState(StateWriter& writer) const {
+    return saveStateImpl(writer, true);
+}
+
+Status Scheduler::saveStateImpl(StateWriter& writer, bool bufferBytes) const {
     if (!wired_) {
         return Status::error(StatusCode::Internal, "saveState() before a successful wire()");
     }
@@ -635,17 +745,35 @@ Status Scheduler::saveState(StateWriter& writer) const {
     putHandles(writer, bus_.committedHandles_);
     putHandles(writer, bus_.previousHandles_);
     putHandles(writer, bus_.pendingHandles_);
-    for (const SignalBus::SignalRecord& record : bus_.signals_) {
-        writer.put(record.stamp.ns);
-        writer.put(record.previousStamp.ns);
-        writer.put(record.commitTick);
-        writer.put(record.commits);
+    for (const SignalBus::Timing& timing : bus_.timing_) {
+        writer.put(timing.stamp.ns);
+        writer.put(timing.previousStamp.ns);
+        writer.put(timing.commitTick);
+        writer.put(timing.commits);
     }
     writer.putDoubles(bus_.inputValues_);
     putHandles(writer, bus_.inputHandles_);
     writer.putDoubles(bus_.windowSums_);
     for (const SignalBus::InputSlot& slot : bus_.inputs_) {
         writer.put(slot.windowWeight);
+    }
+    // The published buffers: without them a restored run read no image until the next frame
+    // and, numbering its handles on from where the saved run had got to, hashed differently
+    // from the run it repeats (QA 2026-11-12 #9).
+    writer.put<std::uint64_t>(bus_.published_.size());
+    for (std::size_t slot = 0; slot < bus_.published_.size(); ++slot) {
+        writer.put(bus_.published_[slot]);
+        for (const SignalBus::KeptBuffer& kept : bus_.kept_[slot]) {
+            writer.put(kept.handle);
+            writer.put<std::uint8_t>(kept.buffer ? 1 : 0);
+            if (kept.buffer && bufferBytes) {
+                writer.put(kept.buffer->width);
+                writer.put(kept.buffer->height);
+                writer.putString(kept.buffer->encoding);
+                writer.put<std::uint64_t>(kept.buffer->bytes.size());
+                writer.putBytes(kept.buffer->bytes.data(), kept.buffer->bytes.size());
+            }
+        }
     }
     return {};
 }
@@ -702,15 +830,40 @@ Status Scheduler::restoreState(StateReader& reader) {
     bool ok = reader.getDoubles(bus_.committed_) && reader.getDoubles(bus_.previous_) &&
               reader.getDoubles(bus_.pending_) && getHandles(reader, bus_.committedHandles_) &&
               getHandles(reader, bus_.previousHandles_) && getHandles(reader, bus_.pendingHandles_);
-    for (SignalBus::SignalRecord& record : bus_.signals_) {
-        ok = ok && reader.get(record.stamp.ns) && reader.get(record.previousStamp.ns) &&
-             reader.get(record.commitTick) && reader.get(record.commits);
+    for (SignalBus::Timing& timing : bus_.timing_) {
+        ok = ok && reader.get(timing.stamp.ns) && reader.get(timing.previousStamp.ns) &&
+             reader.get(timing.commitTick) && reader.get(timing.commits);
     }
     ok = ok && reader.getDoubles(bus_.inputValues_) && getHandles(reader, bus_.inputHandles_) &&
          reader.getDoubles(bus_.windowSums_);
     for (SignalBus::InputSlot& slot : bus_.inputs_) {
         ok = ok && reader.get(slot.windowWeight);
     }
+    std::uint64_t slots = 0;
+    ok = ok && reader.get(slots) && slots == bus_.published_.size();
+    for (std::size_t slot = 0; ok && slot < bus_.published_.size(); ++slot) {
+        ok = reader.get(bus_.published_[slot]);
+        for (SignalBus::KeptBuffer& kept : bus_.kept_[slot]) {
+            std::uint8_t present = 0;
+            ok = ok && reader.get(kept.handle) && reader.get(present);
+            kept.buffer.reset();
+            if (!ok || present == 0) {
+                continue;
+            }
+            auto buffer = std::make_shared<Buffer>();
+            std::uint64_t size = 0;
+            ok = reader.get(buffer->width) && reader.get(buffer->height) &&
+                 reader.getString(buffer->encoding) && reader.get(size) &&
+                 size <= reader.remaining();
+            if (ok) {
+                buffer->bytes.resize(size);
+                ok = reader.getBytes(buffer->bytes.data(), size);
+                kept.buffer = std::move(buffer);
+            }
+        }
+    }
+    bus_.forgetPrepared();
+    bus_.markAllDirty();
     if (!ok || reader.failed()) {
         return corrupt("signal bus layout");
     }
@@ -719,9 +872,71 @@ Status Scheduler::restoreState(StateReader& reader) {
     return {};
 }
 
+std::string Scheduler::signatureOf(std::uint32_t index) const {
+    const Entry& entry = entries_[index];
+    std::vector<std::string> parts;
+    for (const std::uint32_t signal : entry.outputSignals) {
+        const SignalSpec& spec = bus_.signals_[signal].spec;
+        parts.push_back("out " + spec.name + " " + symbol(spec.unit));
+    }
+    for (const std::uint32_t slot : entry.inputSlots) {
+        const SignalSpec& spec = bus_.inputs_[slot].spec;
+        parts.push_back("in " + spec.name + " " + symbol(spec.unit));
+    }
+    std::ranges::sort(parts);
+    std::string signature = std::string(entry.info.domain) + "/" + std::string(entry.info.name) +
+                            " " + std::to_string(entry.dt.ns);
+    for (const std::string& part : parts) {
+        signature += "\n" + part;
+    }
+    return signature;
+}
+
+std::map<std::string, Scheduler::CarriedModule> Scheduler::carryModules() const {
+    std::map<std::string, CarriedModule> carried;
+    if (!wired_) {
+        return carried;
+    }
+    for (const std::uint32_t index : order_) {
+        const Entry& entry = entries_[index];
+        StateWriter writer;
+        if (!entry.module->saveState(writer).ok()) {
+            continue;
+        }
+        const std::span<const std::byte> bytes = writer.bytes();
+        carried[entry.label] = {signatureOf(index), {bytes.begin(), bytes.end()}};
+    }
+    return carried;
+}
+
+std::vector<std::string> Scheduler::restoreCarriedModules(
+    const std::map<std::string, CarriedModule>& carried, const std::array<double, 3>& shift) {
+    std::vector<std::string> restored;
+    if (!wired_) {
+        return restored;
+    }
+    const bool moved = shift != std::array<double, 3>{0.0, 0.0, 0.0};
+    for (const std::uint32_t index : order_) {
+        Entry& entry = entries_[index];
+        const auto it = carried.find(entry.label);
+        if (it == carried.end() || it->second.signature != signatureOf(index)) {
+            continue;
+        }
+        StateReader reader(it->second.state);
+        if (!entry.module->restoreState(reader).ok() || reader.failed()) {
+            continue;
+        }
+        if (moved) {
+            entry.module->shiftOrigin(shift);
+        }
+        restored.push_back(entry.label);
+    }
+    return restored;
+}
+
 Expected<std::uint64_t, Status> Scheduler::stateHash() const {
     StateWriter writer;
-    if (Status status = saveState(writer); !status.ok()) {
+    if (Status status = saveStateImpl(writer, false); !status.ok()) {
         return Unexpected{std::move(status)};
     }
     return XXH3_64bits(writer.bytes().data(), writer.bytes().size());

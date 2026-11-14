@@ -57,11 +57,11 @@ struct CameraScene {
 };
 
 /// Uploads `model`'s meshes to the device named by `preferredDevice` (DeviceDesc semantics).
-/// Returns nullptr with a reason in `error` when there is no usable Vulkan device.
-[[nodiscard]] std::shared_ptr<CameraScene> createCameraScene(const Model& model,
-                                                             const std::string& preferredDevice,
-                                                             std::string& error,
-                                                             gpu::RasterLook look = {});
+/// Returns nullptr with a reason in `error` when there is no usable Vulkan device. With `reuse`,
+/// the scene of the run before, its device and textures are shared (gpu::RasterScene::create).
+[[nodiscard]] std::shared_ptr<CameraScene> createCameraScene(
+    const Model& model, const std::string& preferredDevice, std::string& error,
+    gpu::RasterLook look = {}, const std::shared_ptr<const CameraScene>& reuse = nullptr);
 
 /// The ICAO standard atmosphere in the troposphere (ICAO Doc 7488/3): static pressure (Pa) and
 /// temperature (K) at `altitudeM` above mean sea level, up to 11 km. What the barometer reads.
@@ -112,5 +112,12 @@ struct Atmosphere {
 /// an IMU reports the true specific force and angular rate, without noise; a camera publishes
 /// empty images that carry their size and encoding.
 [[nodiscard]] std::vector<std::unique_ptr<IModule>> createSensorSubstitutes(const World& world);
+
+/// As above, with the model's scene: built-in custom kinds (sensors.md §9) that find things by
+/// the name of a scene prim (a landing pad, floor tags, tape, object classes) need it.
+[[nodiscard]] std::vector<std::unique_ptr<IModule>> createSensorModules(
+    const Model& model, std::shared_ptr<gpu::RayContext> rayContext = nullptr,
+    std::shared_ptr<const CameraScene> cameraScene = nullptr, bool groundTruthCameras = false);
+[[nodiscard]] std::vector<std::unique_ptr<IModule>> createSensorSubstitutes(const Model& model);
 
 }  // namespace lagrange::sensors

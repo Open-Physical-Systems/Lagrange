@@ -28,6 +28,8 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rosgraph_msgs/msg/clock.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
+#include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -209,6 +211,240 @@ TEST_F(CloudBridgeTest, PublishesA3dLidarAsAnOrganisedPointCloud) {
     std::uint16_t ring = 0;
     std::memcpy(&ring, cloud->data.data() + 3 * cloud->point_step + 16, sizeof(ring));
     EXPECT_EQ(ring, 1U);
+}
+
+/// A custom sensor's kind as a built-in one writes its images (sensors.md §9 "Images of kinds"):
+/// a stereo pair (left rgba8, depth r32f, right rgba8 at a 5 cm baseline) with its calibration,
+/// and packed events (x, y, t, polarity) with their count.
+class FakeStereoKind final : public IModule {
+public:
+    static constexpr std::uint32_t kWidth = 4, kHeight = 2;
+    static constexpr double kFocal = 3.0, kBaseline = 0.05;
+
+    [[nodiscard]] ModuleInfo info() const override { return {"sensors", "fake_stereo"}; }
+    [[nodiscard]] Duration preferredStep() const override { return 10_ms; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        const auto out = [&d](const std::string& name, SignalType type, Unit unit,
+                              std::uint32_t n = 1, const char* frame = "") {
+            SignalSpec spec;
+            spec.name = name;
+            spec.type = type;
+            spec.unit = unit;
+            spec.arrayLength = n;
+            spec.frame = frame;
+            return d.output(spec);
+        };
+        for (const char* q : {"left", "depth", "right"}) {
+            const std::string base = std::string("sensor/stereo/") + q;
+            images_.push_back(out(base, SignalType::Image,
+                                  std::string(q) == "depth" ? units::m : Unit{}, 1, "optical"));
+            intrinsics_.push_back(
+                out(base + "/intrinsics", SignalType::ScalarArray, units::one, 4));
+            positions_.push_back(out(base + "/position", SignalType::Vec3, units::m, 3, "optical"));
+        }
+        events_ = out("sensor/stereo/events", SignalType::ScalarArray, units::one, 3 * 4);
+        count_ = out("sensor/stereo/count", SignalType::Int, units::one);
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        for (std::size_t i = 0; i < 3; ++i) {
+            const std::array<double, 4> k{kFocal, kFocal, 1.5, 0.5};
+            bus.writeN(intrinsics_[i], k);
+            const std::array<double, 3> at{i == 2 ? kBaseline : 0.0, 0.0, 0.0};
+            bus.writeN(positions_[i], at);
+        }
+        return step(StepContext{}, bus);
+    }
+    Status step(const StepContext& c, SignalBus& bus) override {
+        const auto image = [](const char* encoding, std::size_t bytesPerPixel, std::uint8_t fill) {
+            auto buffer = std::make_shared<Buffer>();
+            buffer->width = kWidth;
+            buffer->height = kHeight;
+            buffer->encoding = encoding;
+            buffer->bytes.assign(std::size_t{kWidth} * kHeight * bytesPerPixel, std::byte{fill});
+            return buffer;
+        };
+        bus.publishBuffer(images_[0], image("rgba8", 4, 10));
+        auto depth = image("r32f", 4, 0);
+        const std::array<float, kWidth * kHeight> metres{1, 2, 3, 4, 5, 6, 7, 8};
+        std::memcpy(depth->bytes.data(), metres.data(), sizeof(metres));
+        bus.publishBuffer(images_[1], depth);
+        bus.publishBuffer(images_[2], image("rgba8", 4, 20));
+        const double t = c.t.seconds();
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        const std::array<double, 12> events{1, 0, t, 1, 3, 1, t + 0.001, -1, nan, nan, nan, nan};
+        bus.writeN(events_, events);
+        bus.write(count_, 2.0);
+        return {};
+    }
+
+private:
+    std::vector<SignalId> images_, intrinsics_, positions_;
+    SignalId events_, count_;
+};
+
+class KindImageBridgeTest : public BridgeTest {
+protected:
+    void SetUp() override {
+        const BodyId base = world_.addBody("base_link", kWorldBody, Pose{}, 1.0, {}, {});
+        world_.addCustomSensor("stereo", "stereo_camera", base, Pose{}, 100.0, {}, {});
+        scheduler_.add(std::make_unique<FakeRobot>());
+        scheduler_.add(std::make_unique<FakeStereoKind>());
+        ASSERT_TRUE(scheduler_.wire(WorldView(world_)));
+        BridgeSettings settings;
+        settings.baseLink = "base_link";
+        bridge_ = std::make_unique<Bridge>(settings);
+        bridge_->attach(world_, scheduler_.bus());
+        listener_ = std::make_shared<rclcpp::Node>("bridge_kind_listener");
+        executor_.add_node(listener_);
+    }
+};
+
+/// A 4D imaging radar (kind imaging_radar) writing two detections, as Radar.cpp lays them out:
+/// range, azimuth, elevation, velocity, rcs, snr.
+class FakeImagingRadar final : public IModule {
+public:
+    static constexpr std::uint32_t kRows = 256;
+    [[nodiscard]] ModuleInfo info() const override { return {"sensors", "fake_imaging_radar"}; }
+    [[nodiscard]] Duration preferredStep() const override { return 50_ms; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        SignalSpec spec;
+        spec.name = "sensor/front_radar/detections";
+        spec.type = SignalType::ScalarArray;
+        spec.unit = units::one;
+        spec.arrayLength = kRows * 6;
+        detections_ = d.output(spec);
+        spec.name = "sensor/front_radar/count";
+        spec.type = SignalType::Int;
+        spec.arrayLength = 1;
+        count_ = d.output(spec);
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        return step(StepContext{}, bus);
+    }
+    Status step(const StepContext&, SignalBus& bus) override {
+        std::vector<double> d(kRows * 6, std::numeric_limits<double>::quiet_NaN());
+        const std::array<double, 12> two{20.0, 0.1,  0.05, -3.0, 1.5, 400.0,
+                                         30.0, -0.2, -0.1, 2.0,  0.4, 50.0};
+        std::copy(two.begin(), two.end(), d.begin());
+        bus.writeN(detections_, d);
+        bus.write(count_, 2.0);
+        return {};
+    }
+
+private:
+    SignalId detections_, count_;
+};
+
+class ImagingRadarBridgeTest : public BridgeTest {
+protected:
+    void SetUp() override {
+        const BodyId base = world_.addBody("base_link", kWorldBody, Pose{}, 1.0, {}, {});
+        world_.addCustomSensor("front_radar", "imaging_radar", base, Pose{}, 20.0, {}, {});
+        scheduler_.add(std::make_unique<FakeRobot>());
+        scheduler_.add(std::make_unique<FakeImagingRadar>());
+        ASSERT_TRUE(scheduler_.wire(WorldView(world_)));
+        BridgeSettings settings;
+        settings.baseLink = "base_link";
+        bridge_ = std::make_unique<Bridge>(settings);
+        bridge_->attach(world_, scheduler_.bus());
+        listener_ = std::make_shared<rclcpp::Node>("bridge_imaging_radar_listener");
+        executor_.add_node(listener_);
+    }
+};
+
+// The imaging radar's detections reach ROS as the radar's cloud (x, y, z, velocity, rcs, snr),
+// z from each detection's elevation, and as nothing else under that name.
+TEST_F(ImagingRadarBridgeTest, PublishesTheDetectionsAsTheRadarsCloud) {
+    std::optional<sensor_msgs::msg::PointCloud2> cloud;
+    auto sub = listener_->create_subscription<sensor_msgs::msg::PointCloud2>(
+        "/front_radar/detections", rclcpp::SensorDataQoS(),
+        [&](const sensor_msgs::msg::PointCloud2& m) { cloud = m; });
+    ASSERT_TRUE(run([&] { return cloud.has_value(); }));
+    EXPECT_EQ(cloud->header.frame_id, "front_radar");
+    ASSERT_EQ(cloud->width, 2U);
+    ASSERT_EQ(cloud->fields.size(), 6U);
+    EXPECT_EQ(cloud->fields[3].name, "velocity");
+    std::array<float, 6> p{};
+    std::memcpy(p.data(), cloud->data.data() + cloud->point_step, sizeof(p));
+    EXPECT_NEAR(p[0], 30.0 * std::cos(-0.1) * std::cos(-0.2), 1e-4);
+    EXPECT_NEAR(p[1], 30.0 * std::cos(-0.1) * std::sin(-0.2), 1e-4);
+    EXPECT_NEAR(p[2], 30.0 * std::sin(-0.1), 1e-4);
+    EXPECT_FLOAT_EQ(p[3], 2.0F);
+    EXPECT_FLOAT_EQ(p[4], 0.4F);
+    EXPECT_FLOAT_EQ(p[5], 50.0F);
+    const auto types = listener_->get_topic_names_and_types();
+    const auto it = types.find("/front_radar/detections");
+    ASSERT_NE(it, types.end());
+    EXPECT_EQ(it->second, std::vector<std::string>{"sensor_msgs/msg/PointCloud2"});
+}
+
+TEST(RosImageEncoding, NamesTheBusEncodingsAsSensorMsgsDoes) {
+    EXPECT_EQ(rosImageEncoding("rgba8")->name, "rgba8");
+    EXPECT_EQ(rosImageEncoding("rgba8")->bytesPerPixel, 4U);
+    EXPECT_EQ(rosImageEncoding("r32f")->name, "32FC1");
+    EXPECT_EQ(rosImageEncoding("r32u")->name, "32SC1");
+    EXPECT_EQ(rosImageEncoding("r8")->name, "mono8");
+    EXPECT_EQ(rosImageEncoding("r8")->bytesPerPixel, 1U);
+    EXPECT_EQ(rosImageEncoding("r16u")->name, "mono16");
+    EXPECT_FALSE(rosImageEncoding("bytes").has_value());
+}
+
+// Any image a custom sensor writes reaches ROS by its name, with the encoding of its buffer and a
+// CameraInfo from its calibration; the right image of a stereo pair carries Tx = -fx b.
+TEST_F(KindImageBridgeTest, PublishesACustomSensorsImagesWithTheirCalibration) {
+    std::optional<sensor_msgs::msg::Image> left, depth, right;
+    std::optional<sensor_msgs::msg::CameraInfo> leftInfo, rightInfo;
+    std::optional<sensor_msgs::msg::PointCloud2> events;
+    const auto qos = rclcpp::SensorDataQoS();
+    auto a = listener_->create_subscription<sensor_msgs::msg::Image>(
+        "/stereo/left/image_raw", qos, [&](const sensor_msgs::msg::Image& m) { left = m; });
+    auto b = listener_->create_subscription<sensor_msgs::msg::Image>(
+        "/stereo/depth/image_raw", qos, [&](const sensor_msgs::msg::Image& m) { depth = m; });
+    auto c = listener_->create_subscription<sensor_msgs::msg::Image>(
+        "/stereo/right/image_raw", qos, [&](const sensor_msgs::msg::Image& m) { right = m; });
+    auto d = listener_->create_subscription<sensor_msgs::msg::CameraInfo>(
+        "/stereo/left/camera_info", qos,
+        [&](const sensor_msgs::msg::CameraInfo& m) { leftInfo = m; });
+    auto e = listener_->create_subscription<sensor_msgs::msg::CameraInfo>(
+        "/stereo/right/camera_info", qos,
+        [&](const sensor_msgs::msg::CameraInfo& m) { rightInfo = m; });
+    auto f = listener_->create_subscription<sensor_msgs::msg::PointCloud2>(
+        "/stereo/events", qos, [&](const sensor_msgs::msg::PointCloud2& m) { events = m; });
+    ASSERT_TRUE(run([&] { return left && depth && right && leftInfo && rightInfo && events; }));
+
+    EXPECT_EQ(left->encoding, "rgba8");
+    EXPECT_EQ(left->width, FakeStereoKind::kWidth);
+    EXPECT_EQ(left->height, FakeStereoKind::kHeight);
+    EXPECT_EQ(left->step, FakeStereoKind::kWidth * 4);
+    EXPECT_EQ(left->header.frame_id, "stereo_optical");
+    EXPECT_EQ(left->data.at(0), 10U);
+    EXPECT_EQ(right->data.at(0), 20U);
+    EXPECT_EQ(depth->encoding, "32FC1");
+    EXPECT_EQ(depth->step, FakeStereoKind::kWidth * 4);
+    ASSERT_EQ(depth->data.size(), 8U * 4U);
+    float last = 0.0F;
+    std::memcpy(&last, depth->data.data() + 7 * 4, sizeof(last));
+    EXPECT_FLOAT_EQ(last, 8.0F);
+
+    EXPECT_EQ(leftInfo->width, FakeStereoKind::kWidth);
+    EXPECT_DOUBLE_EQ(leftInfo->k[0], FakeStereoKind::kFocal);
+    EXPECT_DOUBLE_EQ(leftInfo->k[2], 1.5);
+    EXPECT_DOUBLE_EQ(leftInfo->k[5], 0.5);
+    EXPECT_DOUBLE_EQ(leftInfo->p[3], 0.0);
+    EXPECT_DOUBLE_EQ(rightInfo->p[3], -FakeStereoKind::kFocal * FakeStereoKind::kBaseline);
+    EXPECT_EQ(rightInfo->header.frame_id, "stereo_optical");
+
+    ASSERT_EQ(events->width, 2U);
+    ASSERT_EQ(events->fields.size(), 4U);
+    EXPECT_EQ(events->fields[3].name, "t");
+    std::uint16_t x = 0;
+    std::int8_t polarity = 0;
+    std::memcpy(&x, events->data.data() + events->point_step, sizeof(x));
+    std::memcpy(&polarity, events->data.data() + events->point_step + 4, sizeof(polarity));
+    EXPECT_EQ(x, 3U);
+    EXPECT_EQ(polarity, -1);
 }
 
 // sensor:latency: the scan goes out that much later, on the simulation's clock, stamped when it

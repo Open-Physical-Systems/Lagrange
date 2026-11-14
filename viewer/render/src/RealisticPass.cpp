@@ -15,40 +15,46 @@ std::uint32_t RealisticPass::record(VkCommandBuffer commands, const SceneFrame* 
     draws_.clear();
     if (frame != nullptr && frame->statics) {
         const SceneStatics& statics = *frame->statics;
-        if (patternsOf_ != statics.generation || patterns_.size() != statics.materials.size()) {
-            patternsOf_ = statics.generation;
-            patterns_.clear();
+        if (staticsOf_ != frame->statics) {
+            staticsOf_ = frame->statics;
+            std::vector<float> patterns;
+            patterns.reserve(statics.materials.size());
             for (const MaterialData& material : statics.materials) {
-                patterns_.push_back(gpu::surfacePatternOf(material.name));
+                patterns.push_back(gpu::surfacePatternOf(material.name));
+            }
+            looks_.clear();
+            for (std::size_t i = 0; i < statics.prims.size(); ++i) {
+                const PrimData& prim = statics.prims[i];
+                if (!prim.visible || prim.mesh == kNone) {
+                    continue;
+                }
+                gpu::RealisticDraw draw;
+                draw.mesh = prim.mesh;
+                if (prim.material != kNone) {
+                    const MaterialData& material = statics.materials[prim.material];
+                    draw.baseColor = material.baseColor;
+                    draw.metallic = material.metallic;
+                    draw.roughness = material.roughness;
+                    draw.pattern = patterns[prim.material];
+                    draw.emissive = material.emissive;
+                }
+                draw.ground = prim.name == "ground";
+                draw.water = prim.mesh < statics.meshes.size() &&
+                             std::find(prim.apiSchemas.begin(), prim.apiSchemas.end(),
+                                       "WaterAPI_1") != prim.apiSchemas.end();
+                if (draw.water) {
+                    draw.box = statics.meshes[prim.mesh].aabb;
+                }
+                looks_.emplace_back(static_cast<std::uint32_t>(i), draw);
             }
         }
-        for (std::size_t i = 0; i < statics.prims.size(); ++i) {
-            const PrimData& prim = statics.prims[i];
-            if (!prim.visible || prim.mesh == kNone) {
-                continue;
-            }
-            gpu::RealisticDraw draw;
-            draw.mesh = prim.mesh;
+        draws_.reserve(looks_.size());
+        for (const auto& [i, look] : looks_) {
+            gpu::RealisticDraw& draw = draws_.emplace_back(look);
             const Transform& at = frame->transforms[i];
             draw.position = at.position;
             draw.rotation = at.rotation;
             draw.scale = at.scale;
-            if (prim.material != kNone) {
-                const MaterialData& material = statics.materials[prim.material];
-                draw.baseColor = material.baseColor;
-                draw.metallic = material.metallic;
-                draw.roughness = material.roughness;
-                draw.pattern = patterns_[prim.material];
-                draw.emissive = material.emissive;
-            }
-            draw.ground = prim.name == "ground";
-            draw.water = prim.mesh < statics.meshes.size() &&
-                         std::find(prim.apiSchemas.begin(), prim.apiSchemas.end(), "WaterAPI_1") !=
-                             prim.apiSchemas.end();
-            if (draw.water) {
-                draw.box = statics.meshes[prim.mesh].aabb;
-            }
-            draws_.push_back(draw);
         }
     }
     const VkExtent2D extent = color.extent;

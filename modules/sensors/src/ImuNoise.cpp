@@ -38,9 +38,13 @@ bool ImuNoise::hasBias() const {
 
 ImuChannel::ImuChannel(const ImuNoise& noise, double dtSeconds) : noise_(noise) {
     if (noise.dynamicBiasStddev > 0.0 && noise.dynamicBiasCorrelationTime > 0.0) {
-        // Exact discretisation of db/dt = -b/tau + w: the stationary deviation stays sigma.
-        phi_ = std::exp(-dtSeconds / noise.dynamicBiasCorrelationTime);
-        drive_ = noise.dynamicBiasStddev * std::sqrt(1.0 - phi_ * phi_);
+        // db/dt = -b/tau + sigma_b w(t), sigma_b the driving noise as SDFormat and Gazebo read
+        // <dynamic_bias_stddev> (gz-sensors GaussianNoiseModel.cc): stationary deviation
+        // sigma_b sqrt(tau / 2), discretised exactly.
+        const double tau = noise.dynamicBiasCorrelationTime;
+        phi_ = std::exp(-dtSeconds / tau);
+        stationary_ = noise.dynamicBiasStddev * std::sqrt(tau / 2.0);
+        drive_ = stationary_ * std::sqrt(1.0 - phi_ * phi_);
     }
     walkStep_ = noise.randomWalk * std::sqrt(dtSeconds);
 }
@@ -51,7 +55,7 @@ void ImuChannel::start(random::Stream& rng) {
         const double magnitude = noise_.biasMean + noise_.biasStddev * rng.normal();
         turnOn_.at(i) = rng.uniform() < 0.5 ? -magnitude : magnitude;
         // The Gauss-Markov bias starts in its stationary distribution.
-        dynamic_.at(i) = drive_ > 0.0 ? noise_.dynamicBiasStddev * rng.normal() : 0.0;
+        dynamic_.at(i) = drive_ > 0.0 ? stationary_ * rng.normal() : 0.0;
     }
     sum();
 }

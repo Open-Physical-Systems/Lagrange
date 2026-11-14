@@ -597,6 +597,24 @@ Internal targets that support them:
 On lavapipe the frame-time check is relaxed to a functional check (frames complete, golden image
 matches). Performance is asserted only on real GPUs.
 
+What keeps a frame cheap (as built):
+
+- The 3D view is drawn again only when what it shows changed: the scene frame, the camera, the
+  viewport size, the render options or an overlay (`Ui::renderScene`, `ViewKey`). Paused, it is
+  drawn once; running, at the server's scene rate, not the display's. Airflow particles, which
+  move every frame, always redraw.
+- Realistic: the opaque meshes' depth first, then shading with no depth writes (each pixel is
+  shaded once); meshes whose bounding ball is outside the view, or outside a shadow cascade's box,
+  are not drawn there (bounds from `MeshSet`, so camera sensors cull too). Raster shadings cull to
+  the view the same way, with bounds the client computes from the vertices it received.
+- A stage's meshes are uploaded in one vertex and one index buffer (two transfers, not two per
+  mesh); lidar overlays and thermal cell faces are rebuilt only when their data changed; ImGui's
+  vertex buffers start at 4 MB so that a growing scope does not reallocate them every frame.
+
+`LAGRANGE_VIEWER_PROFILE=1 lagrange_viewer ...` prints the median and 95th percentile of each
+stage (UI build, command recording, GPU wait, present, whole frame) to stderr, at the end of a
+headless run and every five seconds with a window, and how often the 3D view was drawn.
+
 ## 12. Tests
 
 - **Unit** (no display): `ScopeBuffer` (wrap, pyramid against brute force, gaps), `SceneStore`

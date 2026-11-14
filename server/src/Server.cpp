@@ -26,6 +26,8 @@
 #include "lagrange/scheduler/Scheduler.hpp"
 #include "lagrange/sensors/BodyScene.hpp"
 #include "lagrange/sensors/DelayLine.hpp"
+#include "lagrange/sensors/Faults.hpp"
+#include "lagrange/sensors/Kinds.hpp"
 #include "lagrange/sensors/Sensors.hpp"
 #include "lagrange/sensors/ShapeCaster.hpp"
 #include "lagrange/server/CarDrive.hpp"
@@ -56,6 +58,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <deque>
@@ -66,6 +69,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <netinet/in.h>
 #include <numbers>
 #include <optional>
 #include <poll.h>
@@ -74,9 +78,11 @@
 #include <span>
 #include <sstream>
 #include <string>
+#include <sys/socket.h>
 #include <tinyxml2.h>
 #include <tuple>
 #include <unistd.h>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -94,6 +100,9 @@ constexpr char kServerName[] = "lagrange_server " LAGRANGE_VERSION;
 constexpr std::int64_t kStatusPeriodNs = 100'000'000;  // 10 Hz, as the mock server
 constexpr std::int64_t kStatsPeriodNs = 1'000'000'000;
 constexpr std::int64_t kFieldPeriodNs = 500'000'000;  // field slices: twice a second
+// Scene updates to viewers while a long batch of ticks runs: about a viewer's frame rate, so
+// motion does not step when one runOnce() takes several frames of wall time.
+constexpr std::int64_t kSceneUpdatePeriodNs = 8'000'000;
 // The environment's fields (EnvironmentState.Field.name), as the mock server names them.
 constexpr const char* kFogField = "weather/fog_density";
 constexpr const char* kWindField = "weather/wind";
@@ -121,7 +130,28 @@ constexpr double kSelfEmiSliceCell = 0.04;        // m: a robot's own wiring (RF
 constexpr std::int64_t kMaxStepWallNs = 40'000'000;
 constexpr std::size_t kMaxQueuedBytes = 32U * 1024U * 1024U;  // a viewer that does not read
 constexpr std::size_t kMaxLogRecords = 500;
+// RFC 0014: most peer addresses whose connection rate is remembered; beyond it the
+// buckets that are full again are forgotten, and if none is, all of them.
+constexpr std::size_t kMaxRatePeers = 4096;
+constexpr std::int64_t kRefusalLogPeriodNs = 1'000'000'000;  // one log line a second at most
+
 constexpr std::int64_t kStepCommandDefaultNs = 1'000'000;  // Step{ticks = n}: n ms, as the mock
+// Most simulation time one Step command or step_simulation call may ask for: a step runs to its
+// end before the server reads anything else (viewers, ROS services, a stop signal), so a
+// larger one would freeze it. Longer runs play (and pause) instead.
+constexpr std::int64_t kMaxStepCommandNs = 600'000'000'000;  // 10 min
+constexpr std::uint64_t kMaxStepTicks = 1'000'000;
+
+/// LAGRANGE_TIMING=1: how long each load stage took, on stderr (benchmarks.md).
+void timing(const char* stage, Clock::time_point& since) {
+    const Clock::time_point now = Clock::now();
+    static const bool on = std::getenv("LAGRANGE_TIMING") != nullptr;
+    if (on) {
+        std::fprintf(stderr, "[timing] %s %.1f ms\n", stage,
+                     std::chrono::duration<double, std::milli>(now - since).count());
+    }
+    since = now;
+}
 
 std::int64_t nanosSince(Clock::time_point since, Clock::time_point now) {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(now - since).count();
@@ -429,6 +459,7 @@ struct Subscription {
 
 struct Session {
     proto::Connection connection;
+    Clock::time_point accepted{};  // when the connection was accepted (handshake timeout)
     bool greeted{false};
     std::uint64_t sequence{0};
     bool hasSnapshot{false};
@@ -484,17 +515,56 @@ struct Server::Impl {
     ServerOptions options;
     Robot robot;
     std::unique_ptr<Scheduler> scheduler;
+
+    /// Signals by name, for Server::read and the like (SignalBus::find looks through every
+    /// signal). Checked on each use and rebuilt when the run was rebuilt, so never stale.
+    mutable std::unordered_map<std::string, std::uint32_t> signalIndex;
+    mutable const SignalBus* signalIndexBus = nullptr;
+    mutable std::size_t signalIndexCount = 0;
+    [[nodiscard]] SignalId findSignal(const std::string& name) const {
+        const SignalBus& bus = scheduler->bus();
+        if (signalIndexBus != &bus || signalIndexCount != bus.signalCount()) {
+            signalIndex.clear();
+            signalIndex.reserve(bus.signalCount());
+            for (std::size_t i = 0; i < bus.signalCount(); ++i) {
+                signalIndex.emplace(bus.specAt(i).name, static_cast<std::uint32_t>(i));
+            }
+            signalIndexBus = &bus;
+            signalIndexCount = bus.signalCount();
+        }
+        const auto it = signalIndex.find(name);
+        if (it != signalIndex.end() && it->second < bus.signalCount() &&
+            bus.specAt(it->second).name == name) {
+            return SignalId::output(it->second);
+        }
+        // A rebuilt run at the same address with as many signals: look the slow way, and index
+        // afresh next time.
+        signalIndexBus = nullptr;
+        return bus.find(name);
+    }
+
+    /// electrical::driveModes of the run's world, worked out once per build (commandJoint).
+    std::optional<std::map<std::string, std::string>> driveModesCache;
     /// The heat conduction module of the run (owned by the scheduler), or nullptr.
     const thermal::ThermalConduction* conduction{nullptr};
     const thermal::ThermalConduction* nextConduction{nullptr};  // of the run being made
     proto::Listener listener;
     std::vector<std::unique_ptr<Session>> sessions;
     std::uint64_t nextSessionId{1};
+    /// RFC 0014: new TCP connections per peer address, a token bucket each.
+    struct PeerBucket {
+        double tokens{0.0};
+        Clock::time_point last{};
+    };
+    std::map<std::string, PeerBucket, std::less<>> peerBuckets;
+    std::uint64_t refusedConnections{0};
+    Clock::time_point lastRefusalLog{};
     std::uint64_t catalogGeneration{1};
 
     v1::RunState state{v1::RUN_STATE_RUNNING};
-    bool stopped{false};        // paused at t = 0 by simulation_interfaces' STATE_STOPPED
-    bool quitRequested{false};  // by simulation_interfaces' STATE_QUITTING
+    bool stopped{false};           // paused at t = 0 by simulation_interfaces' STATE_STOPPED
+    bool quitRequested{false};     // by simulation_interfaces' STATE_QUITTING
+    bool quietModuleNotes{false};  // load() with ServerOptions::profileFollows
     double rtfTarget{1.0};
     std::string error;
 
@@ -525,12 +595,19 @@ struct Server::Impl {
     Clock::time_point lastStats{Clock::now()};
     Clock::time_point lastFields{Clock::now()};
     Clock::time_point lastVolumes{Clock::now()};
-    std::uint64_t thermalVolumeTick{0};  // volume periods, for kThermalVolumeEvery
+    Clock::time_point lastEmit{Clock::now()};  // the last emit() to viewers
+    std::uint64_t thermalVolumeTick{0};        // volume periods, for kThermalVolumeEvery
     mutable fields::FieldSignal fogFieldSignal, windFieldSignal, airBoxSignal;
     mutable std::vector<emi::Source> cachedEmiSources;  // emiSources()
     mutable bool emiSourcesRead{false};
     SimTime statsSimTime{};
     std::vector<std::int64_t> tickNs;
+    /// Wall time of what advance() does besides the scheduler, since the last stats (ns):
+    /// capture, record, worldUpdate, the ROS bridge. For LAGRANGE_SERVER_STATS.
+    std::int64_t captureNs{0}, recordNs{0}, worldNs{0}, bridgeNs{0}, emitNs{0};
+    /// Scene deltas sent to viewers since the last stats, their bytes and build time (ns), the
+    /// deltas skipped for congestion, and the iterations of runOnce().
+    std::int64_t deltasSent{0}, deltaBytes{0}, deltaNs{0}, deltasSkipped{0}, loops{0};
 
     // --- simulation ----------------------------------------------------------------------
 
@@ -1046,18 +1123,39 @@ struct Server::Impl {
                 next->add(std::make_unique<comms::Comms>(off("comms"), fixedScenery()));
             }
         }
+        // Sensor faults (sensors.md): on what every sensor module, built-in or a plugin's,
+        // writes. None: the modules as they are.
+        std::vector<sensors::SensorFault> faults;
+        for (const std::string& text : settings.sensorFaults.value_or(options.sensorFaults)) {
+            auto fault = sensors::parseSensorFault(text);
+            if (!fault) {
+                return Unexpected{fault.error()};
+            }
+            faults.push_back(std::move(*fault));
+        }
+        const auto faulted = [&faults](std::unique_ptr<IModule> module) {
+            return sensors::withFaults(std::move(module), faults);
+        };
         ModuleConfigData sensing;
         sensing.values["weather"] = weatherInRun;
         if (siteTemperature) {
             sensing.values["ambient_temperature"] = *siteTemperature;
         }
+        // The site's air density, for the airspeed kind when the weather does not run (sensors.md
+        // §9): the aerodynamics config's own, else rotor_aero's.
+        if (const auto it = settings.aerodynamics.find("air_density");
+            it != settings.aerodynamics.end() && std::holds_alternative<double>(it->second)) {
+            sensing.values["air_density"] = std::get<double>(it->second);
+        } else if (settings.airDensityKgM3) {
+            sensing.values["air_density"] = *settings.airDensityKgM3;
+        }
         sensing.tier =
             rayContext ? static_cast<CapabilityTier>(rayContext->tier()) : CapabilityTier::Tier0;
-        for (auto& sensor : off("sensors")
-                                ? sensors::createSensorSubstitutes(robot.world)
-                                : sensors::createSensorModules(robot.world, rayContext, cameraScene,
-                                                               !options.cameras)) {
-            next->add(std::move(sensor), ModuleConfig(sensing));
+        for (auto& sensor :
+             off("sensors")
+                 ? sensors::createSensorSubstitutes(robot)
+                 : sensors::createSensorModules(robot, rayContext, cameraScene, !options.cameras)) {
+            next->add(faulted(std::move(sensor)), ModuleConfig(sensing));
         }
         // Topics written into signals (--ros-topics subscribe), for plugins to read.
         if (bridge) {
@@ -1069,7 +1167,8 @@ struct Server::Impl {
         for (const PluginModule& module : plugins) {
             if (!isBuiltInDomain(module.domain) && !module.substitute &&
                 !settings.substituted.contains(module.domain)) {
-                next->add(module.create(pluginServices), pluginConfig(module, {}, settings));
+                next->add(faulted(module.create(pluginServices)),
+                          pluginConfig(module, {}, settings));
             }
         }
         // After every sensor, the plugins' too: their outputs as the robot gets them.
@@ -1078,7 +1177,9 @@ struct Server::Impl {
         }
         // Always last: it sums the body/<b>/wrench/<source> written by the modules above.
         next->add(std::make_unique<services::WrenchSum>());
+        Clock::time_point wireStart = Clock::now();
         auto wired = next->wire(WorldView(robot.world));
+        timing("wire", wireStart);
         if (!wired) {
             std::string message = "the simulation could not start:";
             for (const WiringError& e : wired.error()) {
@@ -1086,8 +1187,19 @@ struct Server::Impl {
             }
             return Unexpected{message};
         }
+        if (std::string problem = sensors::checkFaultsWired(next->bus(), faults);
+            !problem.empty()) {
+            return Unexpected{"the simulation could not start: " + problem};
+        }
+        if (!faults.empty() && announceFaults) {
+            for (const sensors::SensorFault& fault : faults) {
+                log(v1::LOG_LEVEL_INFO, "sensors", "sensor fault " + sensors::to_string(fault));
+            }
+            announceFaults = false;
+        }
         return next;
     }
+    bool announceFaults{true};  // log the faults once, not at every rebuild
 
     /// The settings of the profile the run uses (the command line's, or the last applied).
     ProfileSettings active() const {
@@ -1116,6 +1228,7 @@ struct Server::Impl {
         settings.emiCoupling = appliedEmiCoupling;
         settings.substituteTokens = appliedSubstituteTokens;
         settings.plugins = appliedPlugins;
+        settings.sensorFaults = appliedSensorFaults;
         return settings;
     }
     /// Whether the world has traffic agents.
@@ -1500,13 +1613,18 @@ struct Server::Impl {
     std::optional<std::int64_t> electricalDtNs;                  // from an applied profile
     std::optional<ProfileSettings> pending;  // applied without restart: used at the next reset
 
+    std::optional<std::vector<std::string>> appliedSensorFaults;  // its sensor_faults
+
     Status build() {
         DriveCommand* drive = nullptr;
+        Clock::time_point stage = Clock::now();
         auto made = makeScheduler(active(), &drive);
+        timing("makeScheduler", stage);
         if (!made) {
             return Status::error(StatusCode::InvalidConfig, made.error());
         }
         scheduler = std::move(*made);
+        driveModesCache.reset();
         driveCommand = drive;  // only now: a failed build leaves the run as it was
         conduction = nextConduction;
         if (conduction != nullptr) {
@@ -1552,6 +1670,7 @@ struct Server::Impl {
             }
         }
         lidarSent.assign(robot.world.sensors.names.size(), SimTime{-1});
+        namedImageSent.clear();
         if (replay) {
             startReplay();
         }
@@ -1593,6 +1712,7 @@ struct Server::Impl {
 
     /// The latest scan of each lidar and image of each camera to the viewers that watch it.
     void sendSensorFrames() {
+        sendNamedImages();
         const World::Sensors& table = robot.world.sensors;
         const SignalBus& bus = scheduler->bus();
         for (std::size_t s = 0; s < table.names.size(); ++s) {
@@ -1617,13 +1737,23 @@ struct Server::Impl {
             const SignalId intensityId = shownSignal(table.names[s], "intensities");
             const std::span<const double> intensities =
                 intensityId.valid() ? bus.readN(intensityId) : std::span<const double>();
+            // A rosette's beams change every scan: they come with its ranges.
+            const SignalId directionId =
+                layout.timeVarying() ? shownSignal(table.names[s], "directions") : SignalId{};
+            const std::span<const double> directions =
+                directionId.valid() ? bus.readN(directionId) : std::span<const double>();
             std::vector<float> points;
             for (std::uint32_t i = 0; i < ranges.size() && i < layout.beams(); ++i) {
                 if (!std::isfinite(ranges[i])) {
                     continue;
                 }
                 // Sensor frame, as the mock server sends.
-                const std::array<double, 3> d = layout.direction(i);
+                const std::array<double, 3> d =
+                    3 * std::size_t{i} + 2 < directions.size()
+                        ? std::array<double, 3>{directions[3 * std::size_t{i}],
+                                                directions[(3 * std::size_t{i}) + 1],
+                                                directions[(3 * std::size_t{i}) + 2]}
+                        : layout.direction(i);
                 points.insert(
                     points.end(),
                     {static_cast<float>(ranges[i] * d[0]), static_cast<float>(ranges[i] * d[1]),
@@ -1649,6 +1779,63 @@ struct Server::Impl {
         }
     }
     std::vector<SimTime> lidarSent;  // per sensor: stamp of the last frame sent (lidar, camera)
+
+    /// Images by signal name (sensors.md §9 "Images of kinds"): a viewer that subscribes
+    /// (SubscribeSensor) to an image signal's name, "sensor/<n>/<q>", rather than to a sensor
+    /// prim's path gets that image's frames as SensorFrame named so. Any image on the bus: a
+    /// built-in kind's left, right or depth, a camera's depth. What it sees is what the robot
+    /// gets: the delayed image when the sensor has one.
+    void sendNamedImages() {
+        std::set<std::string> names;
+        for (const auto& session : sessions) {
+            if (!session->greeted) {
+                continue;
+            }
+            for (const std::string& name : session->sensors) {
+                if (name.starts_with("sensor/")) {
+                    names.insert(name);
+                }
+            }
+        }
+        const SignalBus& bus = scheduler->bus();
+        for (const std::string& name : names) {
+            const std::size_t slash = name.find('/', 7);
+            if (slash == std::string::npos) {
+                continue;
+            }
+            const std::string sensor = name.substr(7, slash - 7);
+            const SignalId id = shownSignal(sensor, name.substr(slash + 1));
+            if (!id.valid() || bus.spec(id).type != SignalType::Image) {
+                continue;
+            }
+            const SimTime sampled = shownStamp(sensor, id);
+            const auto last = namedImageSent.find(name);
+            if (last != namedImageSent.end() && last->second == sampled) {
+                continue;
+            }
+            namedImageSent[name] = sampled;
+            const std::shared_ptr<const Buffer> image = bus.buffer(bus.readBuffer(id));
+            if (!image || image->bytes.empty()) {
+                continue;
+            }
+            v1::Envelope envelope;
+            v1::SensorFrame& frame = *envelope.mutable_sensor_frame();
+            frame.set_sensor(name);
+            frame.mutable_sim_time()->set_ns(sampled.ns);
+            v1::ImageData& data = *frame.mutable_image();
+            data.set_width(image->width);
+            data.set_height(image->height);
+            data.set_encoding(image->encoding);
+            data.mutable_data()->set_inline_(image->bytes.data(), image->bytes.size());
+            data.mutable_data()->set_size(image->bytes.size());
+            for (auto& session : sessions) {
+                if (session->greeted && session->sensors.contains(name) && !session->congested()) {
+                    session->send(envelope);
+                }
+            }
+        }
+    }
+    std::map<std::string, SimTime> namedImageSent;  // by signal name: the last frame sent
 
     /// What a viewer sees of a sensor is what the robot gets: its delayed output if it has one.
     SignalId shownSignal(const std::string& sensor, const std::string& quantity) const {
@@ -1767,12 +1954,18 @@ struct Server::Impl {
             if (Status status = scheduler->stepTick(); !status.ok()) {
                 return status;
             }
-            tickNs.push_back(nanosSince(tickStart, Clock::now()));
+            const Clock::time_point ticked = Clock::now();
+            tickNs.push_back(nanosSince(tickStart, ticked));
             capture();
+            const Clock::time_point captured = Clock::now();
+            captureNs += nanosSince(ticked, captured);
             record();
+            const Clock::time_point recorded = Clock::now();
+            recordNs += nanosSince(captured, recorded);
             if (Status status = worldUpdate(false); !status.ok()) {
                 return status;
             }
+            worldNs += nanosSince(recorded, Clock::now());
             if (waitingForTiles) {
                 owedNs = 0;  // hold: the robot's ground is not in physics yet
                 break;
@@ -1798,7 +1991,17 @@ struct Server::Impl {
                 }
             }
             if (bridge) {
+                const Clock::time_point published = Clock::now();
                 bridge->publish(scheduler->bus(), scheduler->now());
+                bridgeNs += nanosSince(published, Clock::now());
+            }
+            // Mid-batch, the viewers get the scene at their frame rate, not once per batch.
+            if (owedNs >= tick && !sessions.empty() &&
+                nanosSince(lastEmit, Clock::now()) >= kSceneUpdatePeriodNs) {
+                const Clock::time_point emitted = Clock::now();
+                emit();
+                flushSessions();
+                emitNs += nanosSince(emitted, Clock::now());
             }
             if (nanosSince(began, Clock::now()) > kMaxStepWallNs) {
                 owedNs = 0;  // fall behind real time rather than stall the viewers
@@ -2510,6 +2713,39 @@ struct Server::Impl {
     }
     double measuredRtf{0.0};
 
+    /// Whether a module of the run writes anything of custom sensor `sensor`: a built-in kind
+    /// (sensors.md §9) or a loaded plugin implementing its kind.
+    [[nodiscard]] bool kindImplemented(std::size_t sensor) const {
+        if (!scheduler) {
+            return false;
+        }
+        const std::string prefix = "sensor/" + robot.world.sensors.names.at(sensor) + "/";
+        const SignalBus& bus = scheduler->bus();
+        for (std::size_t i = 0; i < bus.signalCount(); ++i) {
+            if (bus.specAt(i).name.starts_with(prefix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    /// A custom kind nothing implements did nothing, without a word (QA 2026-11-12 #16).
+    void warnUnimplementedKinds() {
+        const World::Sensors& sensors = robot.world.sensors;
+        for (std::size_t i = 0; i < sensors.names.size(); ++i) {
+            if (sensors.type[i] != SensorType::Custom || kindImplemented(i)) {
+                continue;
+            }
+            std::string kinds;
+            for (const std::string_view kind : lagrange::sensors::builtinKinds()) {
+                kinds += (kinds.empty() ? "" : ", ") + std::string(kind);
+            }
+            log(v1::LOG_LEVEL_WARN, "sensors",
+                "custom sensor " + sensors.names[i] + " of kind '" + sensors.kind[i] +
+                    "' does nothing: it is not a built-in kind and no loaded plugin implements "
+                    "it (--plugin LIB; built-in kinds: " +
+                    kinds + ")");
+        }
+    }
     void log(v1::LogLevel level, const std::string& source, const std::string& text) {
         v1::LogRecord record;
         record.mutable_sim_time()->set_ns(scheduler ? scheduler->now().ns : 0);
@@ -2595,7 +2831,15 @@ struct Server::Impl {
 
     /// Uploads the scene for the cameras, if the robot has any; logs the device.
     void placeCameras() {
-        const auto count = std::ranges::count(robot.world.sensors.type, SensorType::Camera);
+        const World::Sensors& table = robot.world.sensors;
+        std::ptrdiff_t count = std::ranges::count(table.type, SensorType::Camera);
+        for (std::size_t s = 0; s < table.type.size(); ++s) {
+            // The built-in kinds that render (sensors.md §9: event_camera, stereo_camera).
+            if (table.type[s] == SensorType::Custom && s < table.kind.size() &&
+                sensors::builtinKindRenders(table.kind[s])) {
+                ++count;
+            }
+        }
         if (count == 0) {
             return;
         }
@@ -2605,8 +2849,10 @@ struct Server::Impl {
             return;
         }
         std::string reason;
+        // A rebuilt run keeps the device and textures of the one before (spawn, profile).
         cameraScene = sensors::createCameraScene(robot, options.gpu, reason,
-                                                 {options.cameraRealistic, options.cameraSeason});
+                                                 {options.cameraRealistic, options.cameraSeason},
+                                                 cameraScene);
         if (!cameraScene) {
             log(v1::LOG_LEVEL_WARN, "sensors",
                 "cameras need a Vulkan device and none is usable (" + reason +
@@ -2948,6 +3194,9 @@ struct Server::Impl {
         caps.set_tier(0);
         session.send(reply);
         session.greeted = true;
+        // A greeted viewer may send large frames (ImportRobot with a robot file inline): from
+        // the next frame on, the normal limit (RFC 0014 §1).
+        session.connection.setMaxIncomingFrameSize(proto::kDefaultMaxFrameSize);
         if (replay) {
             session.send(recordingInfo());
         }
@@ -3034,6 +3283,13 @@ struct Server::Impl {
                     ns = static_cast<std::int64_t>(
                              std::max<std::uint32_t>(command.step().ticks(), 1)) *
                          kStepCommandDefaultNs;
+                }
+                if (ns > kMaxStepCommandNs) {
+                    r.set_ok(false);
+                    r.set_error(
+                        "a step is at most 600 s of simulation time; press Play for "
+                        "longer runs");
+                    break;
                 }
                 if (state == v1::RUN_STATE_RUNNING) {
                     state = v1::RUN_STATE_PAUSED;
@@ -4331,12 +4587,30 @@ struct Server::Impl {
     /// change is undone by `undo` and the run rebuilt as it was.
     Status recompose(const std::function<void()>& undo) {
         const Carried carried = carry();
+        // The modules' own state (controllers, filters, odometry, batteries), by label: a module
+        // that reads and writes the same signals in the new run goes on where it was (QA
+        // 2026-11-12 #8); one whose robots changed (physics, a shared network) starts afresh.
+        const auto modules = scheduler->carryModules();
+        const std::array<double, 3> origin = robot.world.region.worldEnu;
+        const auto carryOver = [&] {
+            std::array<double, 3> moved{};
+            for (std::size_t i = 0; i < 3; ++i) {
+                moved.at(i) = robot.world.region.worldEnu.at(i) - origin.at(i);
+            }
+            return scheduler->restoreCarriedModules(modules, moved);
+        };
         auto composed = composeModel(false);
         Status status = composed ? Status{} : composed.error();
         if (status.ok()) {
             place(*composed, carried);
             stopRecording("the robots changed");
             status = install(std::move(*composed), carried.now);
+            if (status.ok()) {
+                const auto restored = carryOver();
+                log(v1::LOG_LEVEL_INFO, "stage",
+                    std::to_string(restored.size()) + " of " + std::to_string(modules.size()) +
+                        " modules carried their state over the rebuild");
+            }
             if (status.ok() && physicsBackend() == "jolt" && !carried.joints.empty()) {
                 log(v1::LOG_LEVEL_WARN, "stage",
                     "Jolt starts joints at zero: the robots' joints were reset by the rebuild");
@@ -4353,6 +4627,8 @@ struct Server::Impl {
                 place(*previous, carried);
                 if (Status back = install(std::move(*previous), carried.now); !back.ok()) {
                     fail(back);
+                } else {
+                    carryOver();  // the same run again: every module goes on where it was
                 }
             }
             return status;
@@ -4401,6 +4677,10 @@ struct Server::Impl {
         };
         if (replay) {
             return refuse(SimResult::Failed, "a replay shows the recorded robots only");
+        }
+        if (!std::ranges::all_of(at.position, [](double v) { return std::isfinite(v); }) ||
+            !std::ranges::all_of(at.orientation, [](double v) { return std::isfinite(v); })) {
+            return refuse(SimResult::InvalidPose, "the pose is not finite");
         }
         if (!std::filesystem::is_regular_file(path)) {
             return refuse(SimResult::ResourceParseError, "no file " + path);
@@ -4797,8 +5077,10 @@ struct Server::Impl {
         appliedEmiCoupling = settings.emiCoupling;
         const auto previousTokens = appliedSubstituteTokens;
         const auto previousPlugins = appliedPlugins;
+        const auto previousFaults = appliedSensorFaults;
         appliedSubstituteTokens = settings.substituteTokens;
         appliedPlugins = settings.plugins;
+        appliedSensorFaults = settings.sensorFaults;
         pending.reset();
         if (Status status = restart(); !status.ok()) {
             // Keep the run going on the profile it had.
@@ -4813,6 +5095,7 @@ struct Server::Impl {
             appliedAmbientK = previousAmbient;
             appliedSubstituteTokens = previousTokens;
             appliedPlugins = previousPlugins;
+            appliedSensorFaults = previousFaults;
             (void)restart();
             return status;
         }
@@ -5740,7 +6023,22 @@ struct Server::Impl {
     // --- output --------------------------------------------------------------------------------
 
     /// Signal blocks and the scene of the current time to every viewer.
+    /// Writes what the sessions have queued, as far as their sockets take it; closes a broken
+    /// one.
+    void flushSessions() {
+        for (auto& session : sessions) {
+            std::error_code ec;
+            if (session->connection.state() == proto::Connection::State::Connected) {
+                const proto::IoStatus flushed = session->connection.flush(ec);
+                if (flushed == proto::IoStatus::Closed || flushed == proto::IoStatus::Error) {
+                    session->connection.close();
+                }
+            }
+        }
+    }
+
     void emit() {
+        lastEmit = Clock::now();
         for (auto& session : sessions) {
             if (!session->greeted) {
                 continue;
@@ -5753,6 +6051,7 @@ struct Server::Impl {
                 ++session->droppedBlocks;
                 if (session->hasSnapshot) {
                     ++session->droppedDeltas;
+                    ++deltasSkipped;
                 }
                 continue;
             }
@@ -5768,7 +6067,12 @@ struct Server::Impl {
                 }
             }
             if (session->hasSnapshot) {
-                session->send(delta(*session));
+                const Clock::time_point built = Clock::now();
+                const v1::Envelope envelope = delta(*session);
+                deltaNs += nanosSince(built, Clock::now());
+                deltaBytes += static_cast<std::int64_t>(envelope.ByteSizeLong());
+                ++deltasSent;
+                session->send(envelope);
             }
         }
         for (Captured& c : captured) {
@@ -5776,6 +6080,53 @@ struct Server::Impl {
             c.count = 0;
         }
         sendSensorFrames();
+    }
+
+    /// LAGRANGE_SERVER_STATS=1: the real-time factor and where the wall time went, on stderr
+    /// once a second (docs/design/benchmarks.md, "Server profile").
+    const bool statsToStderr = [] {
+        const char* v = std::getenv("LAGRANGE_SERVER_STATS");
+        return v != nullptr && *v != '\0' && std::strcmp(v, "0") != 0;
+    }();
+
+    void printStats(double wallS, std::vector<ModuleCost> costs) const {
+        std::int64_t ticks = 0;
+        for (const std::int64_t ns : tickNs) {
+            ticks += ns;
+        }
+        const auto ms = [&](std::int64_t ns) {
+            return wallS > 0.0 ? static_cast<double>(ns) / 1e6 / wallS : 0.0;
+        };
+        std::fprintf(stderr,
+                     "[stats] t=%.1f s rtf=%.3f ticks=%zu  per wall s (ms): modules %.1f "
+                     "capture %.1f record %.1f world %.1f ros %.1f emit %.1f\n",
+                     scheduler->now().seconds(), measuredRtf, tickNs.size(), ms(ticks),
+                     ms(captureNs), ms(recordNs), ms(worldNs), ms(bridgeNs), ms(emitNs));
+        if (deltasSent + deltasSkipped > 0 || loops > 0) {
+            std::fprintf(
+                stderr,
+                "[stats]   loop %.0f/s; viewer deltas %.1f/s (%.0f kB each, %.3f ms to "
+                "build), %.1f/s skipped (congested)\n",
+                static_cast<double>(loops) / wallS, static_cast<double>(deltasSent) / wallS,
+                deltasSent > 0
+                    ? static_cast<double>(deltaBytes) / 1e3 / static_cast<double>(deltasSent)
+                    : 0.0,
+                deltasSent > 0
+                    ? static_cast<double>(deltaNs) / 1e6 / static_cast<double>(deltasSent)
+                    : 0.0,
+                static_cast<double>(deltasSkipped) / wallS);
+        }
+        std::sort(costs.begin(), costs.end(),
+                  [](const ModuleCost& a, const ModuleCost& b) { return a.totalNs > b.totalNs; });
+        for (std::size_t i = 0; i < costs.size() && i < 10; ++i) {
+            const ModuleCost& c = costs[i];
+            std::fprintf(stderr, "[stats]   %-40s %8.1f ms/s %7llu steps %8.3f ms/step max %.3f\n",
+                         c.label.c_str(), ms(c.totalNs), static_cast<unsigned long long>(c.steps),
+                         c.steps > 0
+                             ? static_cast<double>(c.totalNs) / 1e6 / static_cast<double>(c.steps)
+                             : 0.0,
+                         static_cast<double>(c.maxNs) / 1e6);
+        }
     }
 
     void sendStats(Clock::time_point now) {
@@ -5798,7 +6149,13 @@ struct Server::Impl {
             stats.set_tick_ms_max(static_cast<double>(most) / 1e6);
         }
         stats.set_memory_bytes(residentBytes());
-        stats.set_viewers(static_cast<std::uint32_t>(sessions.size()));
+        // Viewers that have been greeted (RFC 0014, open question 4): connections still waiting
+        // for their handshake are not viewers yet.
+        stats.set_viewers(static_cast<std::uint32_t>(
+            std::count_if(sessions.begin(), sessions.end(), [](const auto& session) {
+                return session->greeted &&
+                       session->connection.state() != proto::Connection::State::Closed;
+            })));
         stats.set_estimated(false);
         for (const ModuleCost& cost : costs) {
             v1::ServerStats::Module& m = *stats.add_modules();
@@ -5821,7 +6178,12 @@ struct Server::Impl {
             session->bytesOut = 0;
             session->send(envelope);
         }
+        if (statsToStderr) {
+            printStats(wallS, costs);
+        }
         tickNs.clear();
+        captureNs = recordNs = worldNs = bridgeNs = emitNs = 0;
+        deltasSent = deltaBytes = deltaNs = deltasSkipped = loops = 0;
         statsSimTime = scheduler->now();
         lastStats = now;
     }
@@ -5836,9 +6198,151 @@ struct Server::Impl {
             if (!connection) {
                 return;
             }
+            // Until it is greeted, a peer may send frames of at most 64 KiB (RFC 0014 §1);
+            // handshake() raises the limit. What the server sends keeps the 64 MiB limit.
+            connection->setMaxIncomingFrameSize(proto::kPreHandshakeMaxFrameSize);
+            const Clock::time_point now = Clock::now();
+            if (const char* reason = admit(*connection, now); reason != nullptr) {
+                refuse(*connection, reason, now);
+                continue;
+            }
             auto session = std::make_unique<Session>();
             session->connection = std::move(*connection);
+            session->accepted = now;
             sessions.push_back(std::move(session));
+        }
+    }
+
+    // --- Connection limits (RFC 0014) -----------------------------------------------------------
+
+    /// Why a new connection is refused, or nullptr when it may stay.
+    const char* admit(const proto::Connection& connection, Clock::time_point now) {
+        const ServerOptions::ConnectionLimits& limits = options.connectionLimits;
+        std::size_t open = 0;
+        std::size_t waiting = 0;
+        for (const auto& session : sessions) {
+            if (session->connection.state() != proto::Connection::State::Closed) {
+                ++open;
+                waiting += session->greeted ? 0 : 1;
+            }
+        }
+        if (open >= limits.maxConnections) {
+            return "too many viewer connections";
+        }
+        if (waiting >= limits.maxPending) {
+            return "too many connections waiting for their handshake";
+        }
+        if (connection.kind() == proto::Endpoint::Kind::Tcp &&
+            !takePeerToken(peerKey(connection.fd()), now)) {
+            return "too many new connections from this address";
+        }
+        return nullptr;
+    }
+
+    /// The peer's address as a rate key: IPv4 whole, IPv6 its /64 (one host's usual share);
+    /// empty when it cannot be read (all such peers then share one bucket).
+    static std::string peerKey(int fd) {
+        sockaddr_storage address{};
+        socklen_t length = sizeof(address);
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): the sockets API needs it.
+        if (::getpeername(fd, reinterpret_cast<sockaddr*>(&address), &length) != 0) {
+            return {};
+        }
+        if (address.ss_family == AF_INET) {
+            sockaddr_in v4{};
+            std::memcpy(&v4, &address, sizeof(v4));
+            std::string key = "4:";
+            key.append(reinterpret_cast<const char*>(&v4.sin_addr), sizeof(v4.sin_addr));  // NOLINT
+            return key;
+        }
+        if (address.ss_family == AF_INET6) {
+            sockaddr_in6 v6{};
+            std::memcpy(&v6, &address, sizeof(v6));
+            const auto* bytes = static_cast<const unsigned char*>(v6.sin6_addr.s6_addr);
+            // An IPv4 address mapped into IPv6 (::ffff:a.b.c.d) is keyed as that IPv4 address.
+            constexpr std::array<unsigned char, 12> kMapped{0, 0, 0, 0, 0,    0,
+                                                            0, 0, 0, 0, 0xFF, 0xFF};
+            if (std::equal(kMapped.begin(), kMapped.end(), bytes)) {
+                std::string key = "4:";
+                key.append(reinterpret_cast<const char*>(bytes + 12), 4);  // NOLINT
+                return key;
+            }
+            std::string key = "6:";
+            key.append(reinterpret_cast<const char*>(bytes), 8);  // NOLINT: the /64 prefix
+            return key;
+        }
+        return {};
+    }
+
+    bool takePeerToken(const std::string& key, Clock::time_point now) {
+        const ServerOptions::ConnectionLimits& limits = options.connectionLimits;
+        const auto refill = [&limits, now](PeerBucket& bucket) {
+            const double seconds = std::chrono::duration<double>(now - bucket.last).count();
+            bucket.tokens =
+                std::min(limits.peerBurst, bucket.tokens + seconds * limits.peerRatePerS);
+            bucket.last = now;
+        };
+        auto it = peerBuckets.find(key);
+        if (it == peerBuckets.end()) {
+            if (peerBuckets.size() >= kMaxRatePeers) {
+                std::erase_if(peerBuckets, [&](auto& entry) {
+                    refill(entry.second);
+                    return entry.second.tokens >= limits.peerBurst;
+                });
+                if (peerBuckets.size() >= kMaxRatePeers) {
+                    peerBuckets.clear();
+                }
+            }
+            it = peerBuckets.emplace(key, PeerBucket{limits.peerBurst, now}).first;
+        }
+        refill(it->second);
+        if (it->second.tokens < 1.0) {
+            return false;
+        }
+        it->second.tokens -= 1.0;
+        return true;
+    }
+
+    /// Tells a client why it is not served (a ServerHello refusal, which every v1 client reads
+    /// as its first frame; not over TLS before its handshake) and closes the connection.
+    void refuse(proto::Connection& connection, const std::string& reason, Clock::time_point now) {
+        ++refusedConnections;
+        if (!connection.secure()) {
+            // Read what the peer has sent (its ClientHello, usually): closing a socket with
+            // unread input resets it, and the client would lose the refusal.
+            std::error_code ignored;
+            (void)connection.receive(ignored);
+            v1::Envelope reply;
+            v1::ServerHello& hello = *reply.mutable_server_hello();
+            hello.mutable_version()->set_major(kProtocolMajor);
+            hello.mutable_version()->set_minor(kProtocolMinor);
+            hello.set_server_kind(v1::SERVER_KIND_SIM);
+            hello.set_server_name(kServerName);
+            hello.set_refusal("connection refused: " + reason);
+            if (connection.queue(reply)) {
+                std::error_code ec;
+                (void)connection.flush(ec);
+            }
+        }
+        connection.close();
+        if (nanosSince(lastRefusalLog, now) >= kRefusalLogPeriodNs) {
+            lastRefusalLog = now;
+            log(v1::LOG_LEVEL_WARN, "server",
+                "refused a viewer connection: " + reason + " (" +
+                    std::to_string(refusedConnections) + " refused since the start)");
+        }
+    }
+
+    /// Closes the connections that have not greeted within the handshake timeout.
+    void expireHandshakes(Clock::time_point now) {
+        const auto timeout = std::chrono::duration_cast<Clock::duration>(
+            std::chrono::duration<double>(options.connectionLimits.handshakeTimeoutS));
+        for (auto& session : sessions) {
+            if (!session->greeted &&
+                session->connection.state() != proto::Connection::State::Closed &&
+                now - session->accepted > timeout) {
+                refuse(session->connection, "no ClientHello within the handshake timeout", now);
+            }
         }
     }
 
@@ -5848,6 +6352,15 @@ struct Server::Impl {
         for (;;) {
             const proto::FrameReader::Result frame = session.connection.next();
             if (frame.status == proto::FrameReader::Status::Error) {
+                if (!session.greeted) {
+                    // RFC 0014 §1: a frame over 64 KiB before the handshake. The reader has
+                    // dropped what it held; tell the peer why and close.
+                    refuse(session.connection,
+                           "a frame larger than " +
+                               std::to_string(proto::kPreHandshakeMaxFrameSize / 1024U) +
+                               " KiB before the handshake",
+                           Clock::now());
+                }
                 session.connection.close();
                 return;
             }
@@ -5856,7 +6369,13 @@ struct Server::Impl {
             }
             v1::Envelope envelope;
             if (!proto::parsePayload(frame.payload, envelope)) {
-                continue;  // a malformed message must not take the server down
+                if (!session.greeted) {
+                    // protocol.md §2: any first frame but a ClientHello closes the connection
+                    // (RFC 0014); handshake() refuses an empty envelope with that reason.
+                    envelope.Clear();
+                } else {
+                    continue;  // a malformed message must not take the server down
+                }
             }
             if (!session.greeted) {
                 if (!handshake(session, envelope)) {
@@ -5974,6 +6493,11 @@ public:
             return {ros2::SimResult::Failed, s_.state == v1::RUN_STATE_ERROR
                                                  ? "the run failed: " + s_.error
                                                  : "pause the simulation before stepping"};
+        }
+        if (ticks > kMaxStepTicks) {
+            return {ros2::SimResult::Failed,
+                    "step_simulation takes at most " + std::to_string(kMaxStepTicks) +
+                        " steps a call; set the state to playing for longer runs"};
         }
         s_.stopped = false;
         if (Status status = s_.stepTicks(ticks); !status.ok()) {
@@ -6201,10 +6725,20 @@ Status Server::load() {
         return {};
     }
     // What modules and plugins log goes to the viewer's console with the server's own lines.
+    // When a profile is applied right after this load, the run is built again with it: the
+    // notes of this first build (the rotors without the profile's air density, ...) would be
+    // wrong, and those still true come again from the second.
+    struct Quiet {
+        bool& on;
+        ~Quiet() { on = false; }
+    } const quiet{s.quietModuleNotes = s.options.profileFollows};
     services::setLogSink(
         [&s](services::LogLevel level, std::string_view source, std::string_view text) {
             static constexpr v1::LogLevel kLevels[] = {v1::LOG_LEVEL_DEBUG, v1::LOG_LEVEL_INFO,
                                                        v1::LOG_LEVEL_WARN, v1::LOG_LEVEL_ERROR};
+            if (s.quietModuleNotes && level != services::LogLevel::Error) {
+                return;
+            }
             s.log(kLevels[static_cast<int>(level)], std::string(source), std::string(text));
         });
     for (const auto& [name, value] : s.options.site) {
@@ -6297,11 +6831,13 @@ Status Server::load() {
         return Status::error(StatusCode::InvalidConfig,
                              "--ros-topics needs the ROS 2 bridge: drop --no-ros");
     }
+    Clock::time_point stage = Clock::now();
     auto composed = s.composeModel(true);
     if (!composed) {
         return composed.error();
     }
     s.robot = std::move(*composed);
+    timing("compose", stage);
     if (s.options.ros) {
         ros2::BridgeSettings settings;
         settings.baseLink = s.baseLink();
@@ -6357,17 +6893,23 @@ Status Server::load() {
               "no robot: spawn one with the viewer's Import robot, `lagrange spawn FILE` or "
               "the spawn_entity service");
     }
+    timing("ros", stage);
     if (Status status = s.startStreaming(); !status.ok()) {
         return status;
     }
+    timing("streaming", stage);
     if (Status status = s.placeLidar(); !status.ok()) {
         return status;
     }
+    timing("lidar", stage);
     s.placeCameras();
+    timing("cameras", stage);
     if (Status status = s.build(); !status.ok()) {
         s.scheduler.reset();
         return status;
     }
+    timing("build", stage);
+    s.warnUnimplementedKinds();
     if (!s.options.profileSchemaPath.empty()) {
         s.schemaText = readFile(s.options.profileSchemaPath);
     }
@@ -6421,12 +6963,25 @@ std::vector<double> Server::read(const std::string& name) const {
         return {};
     }
     const SignalBus& bus = impl_->scheduler->bus();
-    const SignalId id = bus.find(name);
+    const SignalId id = impl_->findSignal(name);
     if (!id.valid()) {
         return {};
     }
     const std::span<const double> values = bus.readN(id);
     return {values.begin(), values.end()};
+}
+
+std::shared_ptr<const Buffer> Server::readImage(const std::string& name) const {
+    if (!impl_->scheduler) {
+        return nullptr;
+    }
+    const SignalBus& bus = impl_->scheduler->bus();
+    const SignalId id = impl_->findSignal(name);
+    if (!id.valid() || bus.spec(id).type != SignalType::Image) {
+        return nullptr;
+    }
+    std::shared_ptr<const Buffer> buffer = bus.buffer(bus.readBuffer(id));
+    return buffer && !buffer->bytes.empty() ? buffer : nullptr;
 }
 
 Expected<std::vector<std::byte>, Status> Server::saveState() const {
@@ -6464,12 +7019,17 @@ bool Server::commandJoint(const std::string& joint, const std::string& mode, dou
     // A joint that copies another takes no commands, and a motor only what its mode follows.
     const World::Joints& joints = world().joints;
     const auto named = std::find(joints.names.begin(), joints.names.end(), joint);
-    if (named != joints.names.end() &&
-        joints.mimic[static_cast<std::size_t>(named - joints.names.begin())] != kNoMimic) {
+    if (named == joints.names.end() || !std::isfinite(value)) {
+        return false;  // no such joint, or no value to hold
+    }
+    if (joints.mimic[static_cast<std::size_t>(named - joints.names.begin())] != kNoMimic) {
         return false;
     }
     if (!impl_->options.substituted.contains("electrical")) {
-        const auto modes = electrical::driveModes(WorldView(world()));
+        if (!impl_->driveModesCache) {
+            impl_->driveModesCache = electrical::driveModes(WorldView(world()));
+        }
+        const auto& modes = *impl_->driveModesCache;
         if (const auto drive = modes.find(joint); drive != modes.end()) {
             const bool fits = drive->second == "voltage" ? mode == "voltage" || mode == "effort"
                                                          : mode == "velocity" || mode == "position";
@@ -6642,8 +7202,10 @@ Status Server::start() {
             s.log(v1::LOG_LEVEL_INFO, "sensors",
                   "custom sensor " + sensors.names[i] + " (" + sensors.kind[i] + ") on " +
                       s.robot.world.bodies.names[sensors.body[i].index] +
-                      (s.plugins.empty() ? ": no plugin is loaded to implement it"
-                                         : ": a plugin implements it"));
+                      (lagrange::sensors::isBuiltinKind(sensors.kind[i])
+                           ? ": built in (sensors.md §9)"
+                       : s.kindImplemented(i) ? ": a plugin implements it"
+                                              : ": nothing implements it"));
             continue;
         }
         const char* kind = kKinds.at(static_cast<std::size_t>(sensors.type[i]));
@@ -6671,7 +7233,14 @@ void Server::runOnce(int timeoutMs) {
     for (const auto& session : s.sessions) {
         fds.push_back({session->connection.fd(), session->connection.pollEvents(), 0});
     }
+    // A run that owes simulation time (behind real time, or as fast as possible) only looks
+    // for I/O: sleeping here would be wall time the simulation never gets back.
+    if (s.state == v1::RUN_STATE_RUNNING && s.scheduler &&
+        (s.rtfTarget <= 0.0 || s.owedNs >= s.scheduler->baseTick().ns)) {
+        timeoutMs = 0;
+    }
     ::poll(fds.data(), fds.size(), timeoutMs);
+    ++s.loops;
 
     s.accept();
     if (s.bridge) {
@@ -6694,7 +7263,9 @@ void Server::runOnce(int timeoutMs) {
         if (Status status = s.advance(simNs); !status.ok()) {
             s.fail(status);
         }
+        const Clock::time_point emitStart = Clock::now();
         s.emit();
+        s.emitNs += nanosSince(emitStart, Clock::now());
     }
     if (nanosSince(s.lastStatus, now) >= kStatusPeriodNs) {
         s.lastStatus = now;
@@ -6756,15 +7327,8 @@ void Server::runOnce(int timeoutMs) {
         }
     }
 
-    for (auto& session : s.sessions) {
-        std::error_code ec;
-        if (session->connection.state() == proto::Connection::State::Connected) {
-            const proto::IoStatus flushed = session->connection.flush(ec);
-            if (flushed == proto::IoStatus::Closed || flushed == proto::IoStatus::Error) {
-                session->connection.close();
-            }
-        }
-    }
+    s.expireHandshakes(Clock::now());
+    s.flushSessions();
     std::erase_if(s.sessions, [](const auto& session) {
         return session->connection.state() == proto::Connection::State::Closed;
     });

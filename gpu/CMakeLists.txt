@@ -146,6 +146,27 @@ lagrange_add_slang_shader(
     STAGE fragment
     SYMBOL kSensorLabels
 )
+lagrange_add_slang_shader(
+    lagrange_gpu_raster
+    SOURCE kernels/camera/camera_model.slang
+    ENTRY applyModel
+    STAGE compute
+    SYMBOL kCameraModel
+)
+lagrange_add_slang_shader(
+    lagrange_gpu_raster
+    SOURCE kernels/camera/thermal_camera.slang
+    ENTRY thermalTemperature
+    STAGE compute
+    SYMBOL kThermalTemperature
+)
+lagrange_add_slang_shader(
+    lagrange_gpu_raster
+    SOURCE kernels/camera/thermal_camera.slang
+    ENTRY thermalPalette
+    STAGE compute
+    SYMBOL kThermalPalette
+)
 
 lagrange_add_slang_shader(
     lagrange_gpu_raster

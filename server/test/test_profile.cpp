@@ -231,6 +231,38 @@ TEST(Profile, TheSampleAmrExampleValidatesWiresAndApplies) {
     EXPECT_FALSE(server.applyProfile(other).ok());
 }
 
+// QA 2026-11-12: `lagrange run quad_x500_downwash.yaml` said "the rotors do not run without the
+// site's air density" although the profile gives it: the note came from the load before the
+// profile. With profileFollows that load keeps its notes; the profile's run flies.
+TEST(Profile, ALoadAProfileFollowsKeepsNotesTheProfileAnswers) {
+    ServerOptions options;
+    options.robotPath = LAGRANGE_TEST_QUAD_USDA;
+    options.profileSchemaPath = LAGRANGE_TEST_SCHEMA;
+    options.stageName = "robots/quad_x500/quad_x500.usda";
+    std::ifstream in(LAGRANGE_TEST_PROFILES "/quad_x500_hover.yaml");
+    std::stringstream text;
+    text << in.rdbuf();
+
+    {
+        Server plain(options);
+        ::testing::internal::CaptureStderr();
+        ASSERT_TRUE(plain.load().ok());
+        EXPECT_NE(::testing::internal::GetCapturedStderr().find("the rotors do not run"),
+                  std::string::npos)
+            << "without a profile the note stands";
+    }
+    options.profileFollows = true;
+    Server server(options);
+    ::testing::internal::CaptureStderr();
+    const Status loaded = server.load();
+    const Status applied = loaded.ok() ? server.applyProfile(text.str()) : loaded;
+    const std::string said = ::testing::internal::GetCapturedStderr();
+    ASSERT_TRUE(applied.ok()) << applied.message;
+    EXPECT_EQ(said.find("the rotors do not run"), std::string::npos) << said;
+    ASSERT_TRUE(server.stepUntil(SimTime{4'000'000'000}).ok());
+    EXPECT_GT(server.read("body/base_link/pose").at(2), 1.0) << "the profile's air carries it";
+}
+
 // `lagrange determinism` (roadmap 0.2-H2) steps two servers headless: the state must move on
 // with time, and be the same in both.
 TEST(Determinism, TwoHeadlessServersStayIdenticalWhileTheRobotMoves) {

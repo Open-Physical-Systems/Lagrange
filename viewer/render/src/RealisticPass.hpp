@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace lagrange::viewer {
@@ -27,8 +28,10 @@ public:
 private:
     gpu::RealisticRenderer renderer_;
     std::vector<gpu::RealisticDraw> draws_;
-    decltype(SceneStatics::generation) patternsOf_{};
-    std::vector<float> patterns_;  // per material of that generation
+    // What does not change between frames of one stage: per drawn prim, its index and its draw
+    // without the pose, made again when the stage's generation changes.
+    std::shared_ptr<const SceneStatics> staticsOf_;
+    std::vector<std::pair<std::uint32_t, gpu::RealisticDraw>> looks_;
 };
 
 }  // namespace lagrange::viewer

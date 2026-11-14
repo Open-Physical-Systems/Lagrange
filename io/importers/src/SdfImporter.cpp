@@ -9,6 +9,7 @@
 #include <gz/math/Inertial.hh>
 #include <gz/math/Pose3.hh>
 #include <limits>
+#include <optional>
 #include <sdf/Actor.hh>
 #include <sdf/Camera.hh>
 #include <sdf/Collision.hh>
@@ -398,6 +399,127 @@ private:
         }
     }
 
+    /// The child of `element` named `name`, or null.
+    static sdf::ElementPtr childNamed(const sdf::ElementPtr& element, const std::string& name) {
+        if (element == nullptr) {
+            return nullptr;
+        }
+        for (sdf::ElementPtr child = element->GetFirstElement(); child != nullptr;
+             child = child->GetNextElement()) {
+            if (child->GetName() == name) {
+                return child;
+            }
+        }
+        return nullptr;
+    }
+    /// What SDFormat has no element for (RFC 0015 §4): the `lagrange:`-prefixed custom element,
+    /// else the plain one the URDF form uses (which libsdformat copies with a warning).
+    static sdf::ElementPtr lagrangeChild(const sdf::ElementPtr& element, const std::string& name) {
+        sdf::ElementPtr found = childNamed(element, "lagrange:" + name);
+        return found != nullptr ? found : childNamed(element, name);
+    }
+    static std::optional<std::string> textOf(const sdf::ElementPtr& element) {
+        if (element == nullptr || !element->GetValue()) {
+            return std::nullopt;
+        }
+        return element->GetValue()->GetAsString();
+    }
+    static std::optional<double> numberOf(const sdf::ElementPtr& element) {
+        const std::optional<std::string> text = textOf(element);
+        if (!text) {
+            return std::nullopt;
+        }
+        char* end = nullptr;
+        const double value = std::strtod(text->c_str(), &end);
+        if (end == text->c_str()) {
+            return std::nullopt;
+        }
+        return value;
+    }
+
+    /// A lidar's scan pattern (RFC 0015 §4; the URDF reader's settings): <lagrange:pattern>
+    /// grid | flash | rosette, a channel table <scan><vertical><lagrange:angles>, and
+    /// <lagrange:rosette> with fov, point_rate, speed_1, speed_2, prism_ratio.
+    void lidarPattern(const sdf::Sensor& sensor, SensorDesc& out) {
+        sdf::ElementPtr lidar = childNamed(sensor.Element(), "lidar");
+        if (lidar == nullptr) {
+            lidar = childNamed(sensor.Element(), "ray");
+        }
+        if (lidar == nullptr) {
+            return;
+        }
+        if (const std::optional<std::string> name = textOf(lagrangeChild(lidar, "pattern"))) {
+            if (*name == "flash") {
+                out.settings["pattern"] = 1.0;
+                out.settings["motion_distortion"] = 0.0;  // every beam at once
+            } else if (*name == "rosette") {
+                out.settings["pattern"] = 2.0;
+                const sdf::ElementPtr horizontal =
+                    childNamed(childNamed(lidar, "scan"), "horizontal");
+                if (horizontal == nullptr || !horizontal->GetExplicitlySetInFile()) {
+                    out.settings.erase("samples");  // the rosette's own default
+                }
+            } else if (*name != "grid") {
+                detail::note(model_, "sensor '" + sensor.Name() + "': lidar pattern '" + *name +
+                                         "' is not known (grid, flash, rosette): grid used");
+            }
+        }
+        const sdf::ElementPtr vertical = childNamed(childNamed(lidar, "scan"), "vertical");
+        if (const std::optional<std::string> angles = textOf(lagrangeChild(vertical, "angles"))) {
+            std::istringstream text(*angles);
+            std::size_t ring = 0;
+            for (double angle = 0.0; text >> angle; ++ring) {
+                out.settings["vertical_angle_" + std::to_string(ring)] = angle;
+            }
+        }
+        if (const sdf::ElementPtr rosette = lagrangeChild(lidar, "rosette")) {
+            for (const auto& [element, key] :
+                 {std::pair{"fov", "rosette_fov"}, std::pair{"point_rate", "rosette_point_rate"},
+                  std::pair{"speed_1", "rosette_speed_1"}, std::pair{"speed_2", "rosette_speed_2"},
+                  std::pair{"prism_ratio", "rosette_prism_ratio"}}) {
+                if (const std::optional<double> value = numberOf(lagrangeChild(rosette, element))) {
+                    out.settings[key] = *value;
+                }
+            }
+        }
+    }
+
+    /// A camera's lens (RFC 0015 §4; the URDF reader's settings): <lens><type> equidistant makes
+    /// <horizontal_fov> the lens's angle across the width (scale_to_hfov), <cutoff_angle> as
+    /// SDFormat defines it, and k1..k4 from <lagrange:k1>..<lagrange:k4>.
+    void cameraLens(const sdf::Sensor& sensor, const sdf::Camera& camera, SensorDesc& out) {
+        const sdf::ElementPtr lens = childNamed(camera.Element(), "lens");
+        if (lens == nullptr) {
+            return;
+        }
+        const std::string type = camera.LensType();
+        if (type == "gnomonical") {
+            return;  // a pinhole, as without a lens
+        }
+        if (type != "equidistant" && type != "kannala_brandt" && type != "fisheye") {
+            detail::note(model_, "sensor '" + sensor.Name() + "': camera lens type '" + type +
+                                     "' is not drawn (gnomonical, equidistant): a pinhole used");
+            return;
+        }
+        if (!camera.LensScaleToHfov()) {
+            detail::note(model_, "sensor '" + sensor.Name() +
+                                     "': lens scale_to_hfov false is not modelled: "
+                                     "horizontal_fov used as the angle across the width");
+        }
+        out.settings["projection"] = 1.0;
+        out.settings["distortion_model"] = 2.0;  // equidistant, as camera_info names it
+        if (const sdf::ElementPtr cutoff = childNamed(lens, "cutoff_angle");
+            cutoff != nullptr && cutoff->GetExplicitlySetInFile()) {
+            out.settings["fisheye_cutoff"] = camera.LensCutoffAngle().Radian();
+        }
+        for (int k = 1; k <= 4; ++k) {
+            const std::string name = "k" + std::to_string(k);
+            if (const std::optional<double> value = numberOf(lagrangeChild(lens, name))) {
+                out.settings["distortion_" + name] = *value;
+            }
+        }
+    }
+
     void readSensor(const sdf::Sensor& sensor, LinkDesc& link) {
         SensorDesc out;
         out.name = sensor.Name();
@@ -430,6 +552,7 @@ private:
             out.settings["vertical_samples"] = lidar->VerticalScanSamples();
             out.settings["vertical_min_angle"] = lidar->VerticalScanMinAngle().Radian();
             out.settings["vertical_max_angle"] = lidar->VerticalScanMaxAngle().Radian();
+            lidarPattern(sensor, out);
         } else if (const sdf::Camera* camera = sensor.CameraSensor();
                    (sensor.Type() == sdf::SensorType::CAMERA ||
                     sensor.Type() == sdf::SensorType::DEPTH_CAMERA ||
@@ -446,6 +569,7 @@ private:
             if (sensor.Type() == sdf::SensorType::THERMAL_CAMERA) {
                 out.settings["thermal"] = 1.0;  // ThermalCameraAPI_1's defaults
             }
+            cameraLens(sensor, *camera, out);
         } else if (!sensor.TypeStr().empty() && sensor.Element() != nullptr) {
             // Any other type is a custom sensor that a plugin implements (RFC 0008 §3).
             out.type = SensorType::Custom;

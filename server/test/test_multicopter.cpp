@@ -659,5 +659,29 @@ TEST(Multicopter, ItsMotorLeadsDisturbItsCompass) {
     EXPECT_GT(wide->read("sensor/magnetometer/interference").at(0), share);
 }
 
+// QA 2026-11-12 #23: a second multicopter spawned beside the first is passive (cli.md "Spawning
+// robots"); the first flies on. The controller took every RotorAPI_1 joint of the run as one
+// airframe, found rotors on two bodies and gave up, so both stood on the ground.
+TEST(Multicopter, ASecondQuadcopterSpawnedBesideItLeavesItFlying) {
+    ServerOptions o;
+    o.robotPath = LAGRANGE_TEST_QUAD_USDA;
+    o.worldPath.clear();
+    o.ros = false;
+    o.realTimeFactor = 0.0;
+    o.airDensityKgM3 = 1.225;
+    Server server(o);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{500'000'000}).ok());
+    const double ground = server.read("body/base_link/pose").at(2);
+    const auto mate = server.spawnRobot(LAGRANGE_TEST_QUAD_USDA, "q2", Pose{{3.0, 0.0, 0.0}, {}});
+    ASSERT_TRUE(mate) << mate.error().message;
+    ASSERT_TRUE(server.stepUntil(SimTime{6'000'000'000}).ok());
+    const double flown = server.read("body/base_link/pose").at(2);
+    EXPECT_NEAR(flown - ground, 2.0, 0.3) << "the first hovers 2 m above its start";
+    // The copy stays where it was put, its rotors still: robots after the first are passive.
+    EXPECT_LT(server.read("body/q2_base_link/pose").at(2), ground + 0.2);
+}
+
 }  // namespace
 }  // namespace lagrange::server

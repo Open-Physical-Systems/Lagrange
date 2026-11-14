@@ -48,7 +48,14 @@ public:
     /// `overlays` are drawn after the meshes, depth-tested. The buffer that holds them is
     /// rewritten every call, so the previous frame must have finished on the GPU.
     void render(VkCommandBuffer commands, const SceneFrame* frame, const Camera& camera,
-                const RenderOptions& options = {}, std::span<const OverlayLines> overlays = {});
+                const RenderOptions& options = {}, std::span<const OverlayLines> overlays = {}) {
+        render(commands, frame, camera, options, std::span{&overlays, 1});
+    }
+    /// As above, with the overlays in several lists (drawn in order), so that callers need not
+    /// copy them into one.
+    void render(VkCommandBuffer commands, const SceneFrame* frame, const Camera& camera,
+                const RenderOptions& options,
+                std::span<const std::span<const OverlayLines>> overlayLists);
 
     [[nodiscard]] VkImageView colorView() const { return color_.view; }
     [[nodiscard]] const gpu::Image& color() const { return color_; }
@@ -84,8 +91,9 @@ private:
     gpu::Buffer gridMinor_;
     gpu::Buffer gridMajor_;
     gpu::Buffer axes_;
-    gpu::Buffer overlay_;  // host-visible, grown as needed
-    gpu::Buffer heat_;     // host-visible: the heat patches, grown as needed
+    gpu::Buffer overlay_;                // host-visible, grown as needed
+    gpu::Buffer heat_;                   // host-visible: the heat patches, grown as needed
+    std::uint64_t heatUploaded_{~0ULL};  // RenderOptions::heatVersion that heat_ holds
     std::uint32_t gridMinorCount_{0};
     std::uint32_t gridMajorCount_{0};
     std::uint32_t lastDrawCount_{0};

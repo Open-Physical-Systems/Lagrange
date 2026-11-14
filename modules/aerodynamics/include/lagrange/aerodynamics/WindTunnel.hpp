@@ -20,6 +20,9 @@ class Device;
 
 namespace lagrange::aerodynamics {
 
+/// Fewer cells than this cannot hold a body with air round it (ten across each way).
+inline constexpr std::size_t kMinTunnelCells = 1000;
+
 struct WindTunnelOptions {
     double speed{10.0};            ///< m/s
     double yawDegrees{0.0};        ///< The robot turned about z, with the wind along +x.

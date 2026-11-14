@@ -117,6 +117,13 @@ public:
     /// Next complete frame from the bytes read so far. See FrameReader::next().
     [[nodiscard]] FrameReader::Result next() { return reader_.next(); }
 
+    /// The largest frame accepted from the peer from now on (RFC 0014 §1: a server reads at most
+    /// kPreHandshakeMaxFrameSize until it has greeted the peer). queue() keeps its own limit.
+    void setMaxIncomingFrameSize(std::uint32_t maxFrameSize) {
+        reader_.setMaxFrameSize(maxFrameSize);
+    }
+    [[nodiscard]] std::uint32_t maxIncomingFrameSize() const { return reader_.maxFrameSize(); }
+
     /// File descriptors received so far, in arrival order. A descriptor arrives no later than
     /// the frame it was queued with.
     [[nodiscard]] std::vector<UniqueFd> takeReceivedFds();

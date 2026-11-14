@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(lagrange_example_quadruped VERSION 1.2.1 LANGUAGES NONE)
+project(lagrange_example_quadruped VERSION 1.3.0 LANGUAGES NONE)
 
 find_package(ament_cmake REQUIRED)
 

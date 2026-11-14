@@ -94,7 +94,9 @@ inline constexpr double kLidar1550 = 1550e-9;         // m
 /// env/extinction/field and env/wind/velocity_field (Field3D: the fog grid, extinction in 1/m,
 /// and the wind grid, m/s, from config "fog_field" and "wind_field" or the prim's
 /// weather:fogField and weather:windField, NanoVDB files; empty buffers without),
-/// env/rain_rate, env/friction_scale and sensor/<s>/contamination for every sensor. Default
+/// env/rain_rate, env/friction_scale, env/dust/concentration (kg/m³, the air's own dust; 0
+/// without the dust effect) and env/dust/median_diameter (m, its grains), and
+/// sensor/<s>/contamination for every sensor. Default
 /// step 50 ms. With config "downwash_dust" it reads env/dust/downwash (kg/m³, the dust rotor
 /// outwash lifts, of grains "ground_dust_diameter") and adds it to the air's dust.
 ///
@@ -139,7 +141,8 @@ private:
     double snowRate_{0.0};   // m/s of melted water
     double startCover_{0.0};
     SignalId snowRateOut_, snowCoverOut_;
-    std::vector<double> contamination_;  // per sensor, 0 … 1
+    SignalId dustOut_, dustDiameterOut_;  // env/dust/concentration, env/dust/median_diameter
+    std::vector<double> contamination_;   // per sensor, 0 … 1
     SignalId temperatureOut_, skyOut_, pressureOut_, humidityOut_, densityOut_, windOut_;
     SignalId irradianceOut_, sunOut_, visibleOut_, nir905Out_, nir1550Out_, rainOut_, frictionOut_;
     SignalId fog905Out_, fog1550Out_;

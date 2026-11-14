@@ -75,6 +75,9 @@ struct ProfileSettings {
         std::map<std::string, ConfigValue, std::less<>> config;
     };
     std::vector<Plugin> plugins;
+    /// sensor_faults: each as `--sensor-fault` writes it (sensors::parseSensorFault); absent:
+    /// the command line's (sensors.md "Sensor faults (as built)").
+    std::optional<std::vector<std::string>> sensorFaults;
 };
 
 struct ProfileIssue {

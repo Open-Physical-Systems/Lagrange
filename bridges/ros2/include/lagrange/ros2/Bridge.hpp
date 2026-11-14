@@ -68,6 +68,16 @@ enum class FlightMode { Position, Angle };
 /// "position" or "angle"; nullopt for anything else.
 [[nodiscard]] std::optional<FlightMode> flightModeOf(std::string_view name);
 
+/// The sensor_msgs/Image encoding (sensor_msgs/image_encodings.hpp) of a bus image buffer's
+/// encoding (Buffer::encoding): rgba8 → rgba8, rgb8 → rgb8, r8/mono8 → mono8, r16u/mono16 →
+/// mono16, r32f → 32FC1, r32u → 32SC1 (the bits as they are: a −1 "none" reads as −1), and its
+/// bytes per pixel. Nullopt for an encoding ROS has no name for.
+struct RosImageEncoding {
+    std::string name;
+    std::uint32_t bytesPerPixel{0};
+};
+[[nodiscard]] std::optional<RosImageEncoding> rosImageEncoding(std::string_view busEncoding);
+
 /// What the viewer's ROS 2 workspace shows (lagrange.viewer.v1.RosGraph).
 struct GraphSnapshot {
     struct Topic {

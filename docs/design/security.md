@@ -8,7 +8,7 @@ Reporting a vulnerability: `SECURITY.md`.
 
 | Input | Trust | Protection |
 |---|---|---|
-| Viewer protocol from a client | **Untrusted** when reachable over TCP | Unix sockets are created mode 0600 before `bind()` (only the user). TCP: a shared token in `ClientHello.auth_token` (compared in constant time, `proto::sameSecret`); listening beyond loopback without one is refused; TLS 1.2+ on `tls://` endpoints (§2). Frames are length-limited (`FrameReader`, 64 MiB default), and every size, index and reference in a scene message is validated before use (`SceneBuilder`) |
+| Viewer protocol from a client | **Untrusted** when reachable over TCP | Unix sockets are created mode 0600 before `bind()` (only the user). TCP: a shared token in `ClientHello.auth_token` (compared in constant time, `proto::sameSecret`); listening beyond loopback without one is refused; TLS 1.2+ on `tls://` endpoints (§2). Before the handshake (RFC 0014; the token is checked only in `ClientHello`, so these hold for clients without it): frames of at most 64 KiB, at most 16 connections waiting and 32 open, 8 new TCP connections in a burst then 2 a second per address, 10 s to send the `ClientHello`, a first frame that is not one closing the connection; over a limit, a `ServerHello` refusal and a close. After it, frames are length-limited (`FrameReader`, 64 MiB default), and every size, index and reference in a scene message is validated before use (`SceneBuilder`) |
 | Viewer protocol from a server, in the viewer | **Untrusted** (a viewer may connect to any server) | The same frame limits and checks; TLS verifies the server's certificate and host name or address (`--tls-ca` or the system's trust store) |
 | Robot and world files (URDF, SDFormat, MJCF, USD), profiles, recordings, OpenStreetMap, elevation rasters, 3D Tiles | Trusted as code-adjacent content: like the files a user opens in an editor | Parsed by OpenUSD, Assimp, tinyxml2, jsoncons, GDAL and the MCAP reader at load or build time, never during a step. Do not open files from someone you do not trust in a run that has access to secrets |
 | Plugins (`core/plugin_abi`, `dlopen`) and FMUs | **Code execution** by design | Load only plugins and FMUs you would run as programs. The ABI checks the major version; it cannot sandbox. Only the person starting the server loads plugins (RFC 0008 §1): `--plugin`, or the `plugins` of a profile read at start by `lagrange run`; a profile applied from a viewer (`ApplyProfile`) may only configure libraries already loaded, so a remote viewer can never make the server load code |
@@ -34,13 +34,19 @@ lagrange_viewer --connect tls://sim-host:47610 --tls-ca cert.pem --auth-token-fi
 
 Checked by `Tls.*` (`proto/transport/test/test_transport.cpp`: frames both ways over TLS, a
 server with an untrusted certificate refused, `tls://` without a client context refused) and
-`Security.TlsWithATokenGreetsOnlyClientsThatHaveIt` (`server/test/test_server.cpp`).
+`Security.TlsWithATokenGreetsOnlyClientsThatHaveIt` (`server/test/test_server.cpp`). The limits
+before the handshake are checked by `ConnectionLimitsTest.*` and `ConnectionFloodTest.*`
+(`server/test/test_connection_limits.cpp`), which include QA finding #7 of
+`docs/plan/qa-2026-11-12.md` as a test: 8 clients announcing 60 MiB frames without a
+`ClientHello` are refused at their header with the server's memory flat, and 3000 connections
+in a loop, on a Unix socket and on TCP with a token, leave at most 16 waiting while a viewer
+still gets in.
 
 ## 3. Fuzzing
 
 | Decoder | Harness | Run in every build | libFuzzer (Clang, `-DLAGRANGE_BUILD_FUZZERS=ON`) |
 |---|---|---|---|
-| Frame reader (length prefix, limits) | `proto/framing/fuzz/FrameReaderHarness.hpp` | `test_framing`: pseudo-random streams | `fuzz_frame_reader` |
+| Frame reader (length prefix, limits; a second mode, chosen by the top bit of the first byte, starts at a small limit and raises it after the first frame as the server does after the `ClientHello`, and checks that no frame over the limit in force comes out and the buffer stays under one chunk plus the limit plus a header) | `proto/framing/fuzz/FrameReaderHarness.hpp` | `test_framing`: pseudo-random streams, each in both modes | `fuzz_frame_reader` |
 | Scene snapshots and deltas | `viewer/client/fuzz/SceneBuilderHarness.hpp` | `SceneFuzz.MutatedFramesNeverBreakTheSceneBuilder`: every golden frame and a valid snapshot, each mutated 2000 ways (54 000 inputs) | `fuzz_scene_builder` |
 
 The libFuzzer targets have not been run for a long campaign on this machine (GitHub Actions,

@@ -3,13 +3,38 @@
 #include "lagrange/gpu/Device.hpp"
 #include "lagrange/server/Robot.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
+
+namespace {
+
+/// The whole of `text` as a finite number, or nothing (atof took "nan", "5abc" and "" alike).
+std::optional<double> number(const char* text) {
+    char* end = nullptr;
+    const double value = std::strtod(text, &end);
+    if (end == text || *end != '\0' || !std::isfinite(value)) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+/// A count: a whole number from 0 up to `most`.
+std::optional<std::size_t> count(const char* text, double most) {
+    const auto value = number(text);
+    if (!value || *value < 0.0 || *value > most || std::floor(*value) != *value) {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(*value);
+}
+
+}  // namespace
 
 int main(int argc, char** argv) {
     lagrange::aerodynamics::WindTunnelOptions options;
@@ -22,27 +47,61 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         const bool more = i + 1 < argc;
+        const auto bad = [&arg](const char* what) {
+            std::fprintf(stderr, "lagrange tunnel: %s needs %s\n", arg.c_str(), what);
+            return 2;
+        };
         if (arg == "--speed" && more) {
-            options.speed = std::atof(argv[++i]);
+            const auto v = number(argv[++i]);
+            if (!v || *v <= 0.0) {
+                return bad("a wind speed above zero, in m/s");
+            }
+            options.speed = *v;
         } else if (arg == "--yaw" && more) {
-            options.yawDegrees = std::atof(argv[++i]);
+            const auto v = number(argv[++i]);
+            if (!v) {
+                return bad("an angle in degrees");
+            }
+            options.yawDegrees = *v;
         } else if (arg == "--cells" && more) {
-            options.maxCells = static_cast<std::size_t>(std::atof(argv[++i]));
+            constexpr double kMostCells = 1e10;
+            const auto v = count(argv[++i], kMostCells);
+            if (!v || *v == 0) {  // the tunnel says how many it needs at least
+                return bad("a whole number of cells");
+            }
+            options.maxCells = *v;
             cellsGiven = true;
         } else if (arg == "--passes" && more) {
-            options.passes = std::atof(argv[++i]);
+            const auto v = number(argv[++i]);
+            if (!v || *v <= 0.0) {
+                return bad("a number of passes above zero");
+            }
+            options.passes = *v;
         } else if (arg == "--cpu") {
             useGpu = false;
         } else if (arg == "--ground") {
             options.ground = true;
         } else if (arg == "--mean-passes" && more) {
-            options.meanPasses = std::atof(argv[++i]);
+            const auto v = number(argv[++i]);
+            if (!v || *v <= 0.0) {
+                return bad("a number of passes above zero");
+            }
+            options.meanPasses = *v;
         } else if (arg == "--frames" && more) {
-            options.frames = static_cast<std::size_t>(std::atof(argv[++i]));
+            constexpr double kMostFrames = 100000;
+            const auto v = count(argv[++i], kMostFrames);
+            if (!v) {
+                return bad("a whole number of frames from 0 to 100000");
+            }
+            options.frames = *v;
         } else if (arg == "--frame-spin") {
             options.frameSpin = true;
         } else if (arg == "--clearance" && more) {
-            options.clearance = std::atof(argv[++i]);
+            const auto v = number(argv[++i]);
+            if (!v) {
+                return bad("a distance in m");
+            }
+            options.clearance = *v;
         } else if (arg == "--export-surface" && more) {
             exportDir = argv[++i];
         } else if (arg == "--study") {

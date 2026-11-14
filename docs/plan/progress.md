@@ -1,6 +1,6 @@
 # Progress
 
-Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-11: v1.2.1 released (one-line installer; docs/release/v1.2.1.md), after v1.2.0 (tethers, heat conduction, a robot's own EMI; docs/release/v1.2.0.md).
+Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-14: v1.3.0 released (sensors, speed, QA, RFC 0014 and 0015; docs/release/v1.3.0.md); v1.2.1 released 2026-11-11 (one-line installer; docs/release/v1.2.1.md), after v1.2.0 (tethers, heat conduction, a robot's own EMI; docs/release/v1.2.0.md).
 
 ## The releases
 
@@ -21,6 +21,48 @@ flowchart LR
     classDef now fill:#9a6700,stroke:#d29922,color:#fff
     classDef todo fill:#30363d,stroke:#6e7681,color:#c9d1d9
 ```
+
+## v1.3.0 (released 2026-11-14): after v1.2.1, overnight 2026-11-12 (#330)
+
+The owner asked for less lag, more GPU use, every sensor on the list up to #20 and more, and a
+hunt for flaws. Done by parallel agents in worktrees, merged into `night/integration`, then `dev`
+(#330), each merge built and tested over the whole workspace.
+
+- **Sensors:** 36 built-in custom sensor kinds (sensors.md §9, user guide `docs/guide/sensors.md`,
+  example `lagrange_example_sensors`), sensor faults for every sensor, kinds' images to ROS 2,
+  Python (`sim.image`) and the viewer, kinds' numbers on standard ROS 2 messages by default, lidar
+  scan patterns (channel table, flash, rosette) and fisheye cameras.
+- **Speed:** server 1.3–4.6× (the sedan in the town from 0.8 to 3.7 times real time; camera
+  model and thermal camera on the GPU, camera render overlapping the tick, radar parallel and on
+  the GPU, MuJoCo broad phase without far kinematic bodies, lazy ROS publishing, scene updates
+  every 8 ms); viewer (one-transfer mesh upload, 1.85 s to 37 ms; depth pre-pass; culling;
+  redraw only on change); start-up (viewer beside the loading server, device reuse on rebuild,
+  spawn 0.7 s to 0.1 s). Numbers: `docs/design/benchmarks.md` §4, §4.1, §5, `viewer.md` §11.
+- **Flaws:** two QA passes, `docs/plan/qa-2026-11-12.md` and `docs/plan/qa-sensors-2026-11-12.md`,
+  every finding with a repro, most fixed with a regression test (among them: 15/30 Hz sensors
+  refused at start, spawned robots' sensors reading the first robot's parts, a second
+  multicopter grounding the first, images lost on restore, ODR clash between kinds' helpers).
+- **Owed:** USD/SDFormat for lidar patterns and fisheye (schema addition by RFC); saved-state
+  format v2 refuses older saved states (recordings unaffected); several defaults marked
+  illustrative or `TODO(verify)` in §9; pre-commit's end-of-file and gersemi hooks fail on three
+  files untouched tonight (`docs/plan/spikes/0.2-C6-jolt.md`, `city_block_roads.usda`,
+  `vendor/jolt_vendor`).
+
+## v1.3.0, the day after (#331, #333)
+
+- `imaging_radar`, a 4D imaging radar kind (range, azimuth, elevation, Doppler; λ/(N·d) cells,
+  ambiguity folding, ground ghosts); the existing radar pinned bit for bit.
+- Every `TODO(verify)` default checked against its source: 14 corrected (among them SHT40 noise
+  3× too large, BH1750 saturating at 54 612 lx, Gazebo's meaning of `<dynamic_bias_stddev>`,
+  Livox rosette prism speeds from Livox's paper), 35 confirmed, 30 kept illustrative with the
+  reason; `docs/plan/sensor-defaults-verification-2026-11-12.md`.
+- Third perf round (`benchmarks.md` §4.2): static shapes' hierarchy built once, lidar noise in
+  parallel, bus copies only what was written; the town +33 %, lidar scans about halved; the
+  quadcopter 3–5 % slower (owed); camera time follows the laptop GPU's clocks.
+- RFC 0014 (frame limits before the handshake, QA #7; server-side prototype) and RFC 0015 (USD
+  attributes for lidar patterns and fisheye lenses), accepted by the owner on 2026-11-14 with the
+  proposed answers; 0014's connection limits are in, its frame cap and 0015 follow. Until 0015, writing
+  those sensors to USD is refused instead of written wrong.
 
 ## v0.2, item by item
 

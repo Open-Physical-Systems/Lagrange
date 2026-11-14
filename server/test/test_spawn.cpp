@@ -1,6 +1,9 @@
 #include "lagrange/server/Server.hpp"
 
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -102,6 +105,29 @@ TEST(Spawn, OthersKeepTheirPosesAcrossSpawnAndDelete) {
     ASSERT_TRUE(server.stepUntil(SimTime{4'500'000'000}).ok());
 }
 
+// QA 2026-11-12: a pose that is not finite was taken (Python spawn(at=[nan, 0])) and broke the
+// physics; a joint the run does not have, or a NaN, was "commanded" (True).
+TEST(Spawn, RefusesAPoseThatIsNotFiniteAndCommandsToNoJoint) {
+    ServerOptions options = emptyRun();
+    options.robotPath = LAGRANGE_TEST_AMR_URDF;
+    options.jointControl = true;
+    Server server(options);
+    ASSERT_TRUE(server.load().ok());
+    EXPECT_FALSE(server.spawnRobot(LAGRANGE_TEST_AMR_URDF, "mate", at(std::nan(""), 0.0)));
+    Pose tilted = at(0.0, 5.0);
+    tilted.orientation[1] = std::numeric_limits<double>::infinity();
+    EXPECT_FALSE(server.spawnRobot(LAGRANGE_TEST_AMR_URDF, "mate", tilted));
+    EXPECT_FALSE(hasBody(server, "mate_base_link"));
+
+    EXPECT_FALSE(server.commandJoint("no_such_joint", "velocity", 1.0));
+    EXPECT_FALSE(server.commandJoint("left_wheel_joint", "velocity", std::nan("")));
+    EXPECT_TRUE(server.commandJoint("left_wheel_joint", "velocity", 1.0));
+    ASSERT_TRUE(server.stepUntil(SimTime{500'000'000}).ok());
+    for (const double x : server.read("body/base_link/pose")) {
+        EXPECT_TRUE(std::isfinite(x));
+    }
+}
+
 // A person spawned into an empty run is not the robot (RFC 0009 §8): the robot spawned next is,
 // unprefixed, and is the first body; the person stands where asked and can be deleted.
 TEST(Spawn, APersonIsNeverTheRobot) {
@@ -125,6 +151,53 @@ TEST(Spawn, APersonIsNeverTheRobot) {
     ASSERT_TRUE(server.removeRobot("/ana").ok());
     EXPECT_FALSE(hasBody(server, "human_ana_pelvis"));
     EXPECT_TRUE(hasBody(server, "base_link"));
+}
+
+// QA 2026-11-12 #8: a spawn rebuilds the run, but a module whose signals are the same in the
+// new run (the first robot's wheel odometry, its demo drive) goes on where it was instead of
+// starting again: the odometry does not jump back to (0, 0).
+TEST(Spawn, TheFirstRobotsSensorsKeepTheirStateAcrossASpawn) {
+    ServerOptions options = emptyRun();
+    options.robotPath =
+        (std::filesystem::path(LAGRANGE_TEST_AMR_URDF).parent_path() / "amr_diffdrive_safety.urdf")
+            .string();
+    options.lidar = ServerOptions::Lidar::Cpu;
+    Server server(options);
+    const Status loaded = server.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.message;
+    ASSERT_TRUE(server.stepUntil(SimTime{3'000'000'000}).ok());
+    const std::vector<double> before = server.read("sensor/wheel_odom/pose");
+    ASSERT_EQ(before.size(), 7U);
+    const double travelled = std::hypot(before[0], before[1]);
+    ASSERT_GT(travelled, 0.2) << "the demo drive moved it";
+
+    const auto mate = server.spawnRobot(LAGRANGE_TEST_AMR_URDF, "mate", at(0.0, 5.0));
+    ASSERT_TRUE(mate) << mate.error().message;
+    ASSERT_TRUE(server.stepUntil(SimTime{3'100'000'000}).ok());
+    const std::vector<double> after = server.read("sensor/wheel_odom/pose");
+    ASSERT_EQ(after.size(), 7U);
+    EXPECT_NEAR(std::hypot(after[0] - before[0], after[1] - before[1]), 0.0, 0.1)
+        << "odometry went on from (" << before[0] << ", " << before[1] << "), not from zero";
+
+    // A spawn refused once the new run is built (here a sensor with a parameter out of range)
+    // puts the run back as it was, its modules' state too.
+    const std::filesystem::path bad =
+        std::filesystem::temp_directory_path() / "lagrange_test_refused_spawn.urdf";
+    std::ofstream(bad) << R"(<robot name="bad"><link name="base_link">
+      <inertial><mass value="1"/><inertia ixx="0.01" iyy="0.01" izz="0.01" ixy="0" ixz="0"
+        iyz="0"/></inertial>
+      <collision><geometry><box size="0.2 0.2 0.2"/></geometry></collision></link>
+      <gazebo reference="base_link"><sensor name="bad_odom" type="wheel_odometry">
+        <update_rate>50</update_rate><wheel_odometry><separation_error>-1</separation_error>
+        </wheel_odometry></sensor></gazebo></robot>)";
+    const auto refused = server.spawnRobot(bad.string(), "bad", at(0.0, -5.0));
+    std::filesystem::remove(bad);
+    ASSERT_FALSE(refused);
+    ASSERT_TRUE(server.stepUntil(SimTime{3'200'000'000}).ok());
+    const std::vector<double> later = server.read("sensor/wheel_odom/pose");
+    ASSERT_EQ(later.size(), 7U);
+    EXPECT_NEAR(std::hypot(later[0] - after[0], later[1] - after[1]), 0.0, 0.1)
+        << "a refused spawn did not reset the odometry";
 }
 
 }  // namespace

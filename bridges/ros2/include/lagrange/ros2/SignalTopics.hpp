@@ -34,6 +34,9 @@ struct TopicMap {
 struct TopicMaps {
     std::vector<TopicMap> publish;    // signal → topic
     std::vector<TopicMap> subscribe;  // topic → signal
+    /// The custom sensors' default topics (KindTopics.hpp) beside the map; `kind_topics: false`
+    /// in the file turns them off. A default whose topic or signal the map publishes gives way.
+    bool kindTopics{true};
 };
 
 /// Reads a topic map file:
@@ -43,6 +46,7 @@ struct TopicMaps {
 ///          type: sensor_msgs/msg/Range, frame: front_tof, params: {max_range: 4.0}}
 ///     subscribe:
 ///       - {topic: /acme/valve, type: std_msgs/msg/Float64, signal: acme/valve/command}
+///     kind_topics: true   # false: no default topics for custom sensors
 ///
 /// Fails, naming the entry, for a missing key or a message type this bridge does not map.
 [[nodiscard]] Expected<TopicMaps, std::string> readTopicMaps(const std::string& path);

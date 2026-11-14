@@ -1,4 +1,5 @@
 #include "CommandLine.hpp"
+#include "lagrange/sensors/Faults.hpp"
 #include "lagrange/server/MapExport.hpp"
 #include "lagrange/server/Robot.hpp"
 
@@ -10,6 +11,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <numbers>
 #include <set>
 #include <string_view>
@@ -36,8 +38,8 @@ std::optional<Pose> parseSpawn(const char* text) {
     double values[4] = {0.0, 0.0, 0.0, 0.0};
     int count = 0;
     const char* at = text;
+    char* end = nullptr;
     while (count < 4) {
-        char* end = nullptr;
         values[count++] = std::strtod(at, &end);
         if (end == at || !std::isfinite(values[count - 1])) {
             return std::nullopt;
@@ -50,7 +52,7 @@ std::optional<Pose> parseSpawn(const char* text) {
         }
         at = end + 1;
     }
-    if (count < 2 || *at == '\0') {
+    if (count < 2 || *end != '\0') {  // two to four numbers, nothing after them
         return std::nullopt;
     }
     Pose pose;
@@ -97,6 +99,10 @@ void printServerOptions(std::FILE* out) {
         "  --tls-cert FILE --tls-key FILE  certificate chain and key (PEM) for a tls:// --listen\n"
         "  --auth-token-file FILE  TCP clients must send this token (first line of FILE);\n"
         "                         required to listen beyond loopback\n"
+        "  --max-connections N  open viewer connections at most (default 32)\n"
+        "  --max-pending N      connections waiting for their handshake at most (default 16)\n"
+        "  --handshake-timeout S  close a connection not greeted within S s (default 10)\n"
+        "  --peer-rate BURST,PER_SECOND  new TCP connections per address (default 8,2)\n"
         "  --spawn X,Y[,Z[,YAW]]  start the robot there (m, world ENU; heading in rad)\n"
         "  --ros-topics FILE.yaml  publish signals on ROS topics and write topics into signals\n"
         "            (publish: [{signal, topic, type, frame, params}], subscribe: [...])\n"
@@ -105,6 +111,9 @@ void printServerOptions(std::FILE* out) {
         "            relative_humidity, rain_rate, visibility; also while running: lagrange set\n"
         "  --sensor-timing NAME=LATENCY[,JITTER]  delay a sensor's ROS messages, in s "
         "(repeatable)\n"
+        "  --sensor-fault NAME[:QUANTITY]=MODE[,key=value...]  a sensor fault (repeatable): MODE\n"
+        "            dropout, stuck, bias, drift, noise or disconnect; keys at, for (s),\n"
+        "            probability, nan, value, rate, sigma, component (docs/guide/cli.md)\n"
         "  --water X,Y,LEVEL,SIZE_X,SIZE_Y,DEPTH  a body of still water (repeatable)\n"
         "  --tether X,Y,Z,LINK[,LENGTH]  a cable from the world point X,Y,Z to LINK (RFC 0011;\n"
         "                     repeatable; LENGTH m, default the distance plus 10 %%)\n"
@@ -249,6 +258,46 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--auth-token-file needs a readable file whose first line is the token";
             }
             options.authToken = token;
+        } else if (arg == "--max-connections" || arg == "--max-pending") {
+            // RFC 0014 §6: connection limits.
+            const char* text = value();
+            char* end = nullptr;
+            const unsigned long long n = text != nullptr ? std::strtoull(text, &end, 10) : 0;
+            if (text == nullptr || end == text || *end != '\0' || *text == '-' || n == 0 ||
+                n > 65536) {
+                return arg == "--max-pending" ? "--max-pending needs a count from 1 to 65536"
+                                              : "--max-connections needs a count from 1 to 65536";
+            }
+            (arg == "--max-pending" ? options.connectionLimits.maxPending
+                                    : options.connectionLimits.maxConnections) =
+                static_cast<std::size_t>(n);
+        } else if (arg == "--handshake-timeout") {
+            const char* text = value();
+            char* end = nullptr;
+            const double seconds = text != nullptr ? std::strtod(text, &end) : -1.0;
+            if (text == nullptr || end == text || *end != '\0' || !(seconds > 0.0) ||
+                !std::isfinite(seconds)) {
+                return "--handshake-timeout needs a time in s, > 0";
+            }
+            options.connectionLimits.handshakeTimeoutS = seconds;
+        } else if (arg == "--peer-rate") {
+            const char* text = value();
+            char* end = nullptr;
+            const double burst = text != nullptr ? std::strtod(text, &end) : -1.0;
+            double perSecond = -1.0;
+            if (text != nullptr && end != text && *end == ',') {
+                const char* rest = end + 1;
+                perSecond = std::strtod(rest, &end);
+                if (end == rest || *end != '\0') {
+                    perSecond = -1.0;
+                }
+            }
+            if (!(burst >= 1.0) || !std::isfinite(burst) || !(perSecond > 0.0) ||
+                !std::isfinite(perSecond)) {
+                return "--peer-rate needs BURST,PER_SECOND (a burst >= 1, a rate > 0 per s)";
+            }
+            options.connectionLimits.peerBurst = burst;
+            options.connectionLimits.peerRatePerS = perSecond;
         } else if (arg == "--spawn") {
             const auto spawn = parseSpawn(value());
             if (!spawn) {
@@ -331,7 +380,8 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             const char* text = value();
             char* end = nullptr;
             const double rtf = text != nullptr ? std::strtod(text, &end) : -1.0;
-            if (text == nullptr || end == text || *end != '\0' || !(rtf >= 0.0)) {
+            if (text == nullptr || end == text || *end != '\0' || !(rtf >= 0.0) ||
+                !std::isfinite(rtf)) {
                 return "--rtf needs a number >= 0";
             }
             options.realTimeFactor = rtf;
@@ -346,7 +396,8 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             const char* text = value();
             char* end = nullptr;
             const double kelvin = text != nullptr ? std::strtod(text, &end) : -1.0;
-            if (text == nullptr || end == text || *end != '\0' || !(kelvin > 0.0)) {
+            if (text == nullptr || end == text || *end != '\0' || !(kelvin > 0.0) ||
+                !std::isfinite(kelvin)) {
                 return "--ambient-temperature needs a temperature in K";
             }
             options.ambientTemperatureK = kelvin;
@@ -387,7 +438,7 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             char tail = 0;
             if (text == nullptr ||
                 std::sscanf(text, "%lf,%lf,%lf%c", &lat, &lon, &height, &tail) != 3 ||
-                std::abs(lat) > 90.0 || std::abs(lon) > 180.0) {
+                !(std::abs(lat) <= 90.0) || !(std::abs(lon) <= 180.0) || !std::isfinite(height)) {
                 return "--geo-origin needs LAT,LON,HEIGHT (degrees, degrees, m above WGS84)";
             }
             constexpr double kDegree = std::numbers::pi / 180.0;
@@ -396,7 +447,8 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             const char* text = value();
             char* end = nullptr;
             const double rho = text != nullptr ? std::strtod(text, &end) : -1.0;
-            if (text == nullptr || end == text || *end != '\0' || !(rho > 0.0)) {
+            if (text == nullptr || end == text || *end != '\0' || !(rho > 0.0) ||
+                !std::isfinite(rho)) {
                 return "--air-density needs a density in kg/m³";
             }
             options.airDensityKgM3 = rho;
@@ -426,7 +478,12 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                     equals == std::string::npos ? item : item.substr(equals + 1);
                 char* end = nullptr;
                 const double n = std::strtod(number.c_str(), &end);
-                if (number.empty() || *end != '\0' || n < 0.0) {
+                // A count must fit an int and a seed a double's integers (a cast of more is
+                // undefined).
+                constexpr double kLargestSeed = 9007199254740992.0;  // 2^53
+                if (number.empty() || *end != '\0' || !(n >= 0.0) ||
+                    n > (key == "seed" ? kLargestSeed
+                                       : static_cast<double>(std::numeric_limits<int>::max()))) {
                     return "--humans needs N[,seed=S][,radius=M]";
                 }
                 if (key.empty() && firstItem) {
@@ -459,7 +516,8 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                     equals == std::string_view::npos ? "" : std::string(item.substr(equals + 1));
                 char* end = nullptr;
                 const long long n = std::strtoll(number.c_str(), &end, 10);
-                if (number.empty() || *end != '\0' || n < 0) {
+                if (number.empty() || *end != '\0' || n < 0 ||
+                    (key != "seed" && n > std::numeric_limits<int>::max())) {
                     return "--traffic: " + std::string(item) + " is not KEY=N (N ≥ 0)";
                 }
                 if (key == "vehicles") {
@@ -530,7 +588,7 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                                      ? 0.0
                                      : std::strtod(item.c_str() + equals + 1, &end);
                 if (equals == std::string::npos || !kKeys.contains(item.substr(0, equals)) ||
-                    end == item.c_str() + equals + 1 || *end != '\0') {
+                    end == item.c_str() + equals + 1 || *end != '\0' || !std::isfinite(v)) {
                     return "--weather: \"" + item +
                            "\" is not KEY=VALUE with KEY one of temperature, pressure, "
                            "relative_humidity, visibility, rain_rate, dust_concentration, "
@@ -618,6 +676,13 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
                 return "--sensor-timing needs NAME=LATENCY[,JITTER], in seconds";
             }
             options.sensorTiming.push_back({pair.substr(0, equals), latency, jitter});
+        } else if (arg == "--sensor-fault") {
+            const char* text = value();
+            auto fault = sensors::parseSensorFault(text != nullptr ? text : "");
+            if (!fault) {
+                return fault.error();
+            }
+            options.sensorFaults.push_back(sensors::to_string(*fault));
         } else if (arg == "--water") {
             const char* text = value();
             std::array<double, 6> v{};
@@ -634,12 +699,12 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             const char* text = value();
             double spacing = -1.0;
             std::array<double, 3> at{};
-            char tail = 0;
-            const int read = text != nullptr ? std::sscanf(text, "%lf,%lf,%lf,%lf%c", &spacing,
-                                                           &at[0], &at[1], &at[2], &tail)
+            int used = 0;
+            const int read = text != nullptr ? std::sscanf(text, "%lf%n,%lf,%lf,%lf%n", &spacing,
+                                                           &used, &at[0], &at[1], &at[2], &used)
                                              : 0;
-            if ((read != 1 && read != 4) || !(spacing >= 0.0) ||
-                !std::isfinite(at[0] + at[1] + at[2])) {
+            if ((read != 1 && read != 4) || text[used] != '\0' || !(spacing >= 0.0) ||
+                !std::isfinite(spacing) || !std::isfinite(at[0] + at[1] + at[2])) {
                 return "--emi-motor-leads needs SPACING[,X,Y,Z]: m between a lead and its return "
                        "(0: no return in the model), and where the battery is on the root link";
             }
@@ -662,7 +727,8 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             if (const auto comma = rest.find(','); comma != std::string::npos) {
                 char* end = nullptr;
                 t.length = std::strtod(rest.c_str() + comma + 1, &end);
-                if (end == rest.c_str() + comma + 1 || *end != '\0' || !(t.length > 0.0)) {
+                if (end == rest.c_str() + comma + 1 || *end != '\0' || !(t.length > 0.0) ||
+                    !std::isfinite(t.length)) {
                     return "--tether: LENGTH must be a positive number of metres";
                 }
                 rest.resize(comma);
@@ -727,10 +793,13 @@ std::optional<std::string> parseCommandLine(int argc, char** argv, int first, bo
             options.jointControl = true;
         } else if (arg == "--joint-loop-hz") {
             const char* hz = value();
-            if (hz == nullptr || std::atof(hz) <= 0.0) {
+            char* end = nullptr;
+            const double bandwidth = hz != nullptr ? std::strtod(hz, &end) : 0.0;
+            if (hz == nullptr || end == hz || *end != '\0' || !(bandwidth > 0.0) ||
+                !std::isfinite(bandwidth)) {
                 return "--joint-loop-hz needs a bandwidth above zero, in Hz";
             }
-            options.jointLoopHz = std::atof(hz);
+            options.jointLoopHz = bandwidth;
         } else if (arg == "--plugin") {
             const char* library = value();
             if (library == nullptr) {
@@ -808,6 +877,7 @@ int serve(CommandLine& line, int argc, char** argv, const std::string* profileYa
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
     int code = 0;
+    options.profileFollows = profileYaml != nullptr;
     {
         Server server(options);
         Status status = server.load();

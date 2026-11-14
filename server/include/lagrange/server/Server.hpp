@@ -4,6 +4,7 @@
 #include "lagrange/module/Status.hpp"
 #include "lagrange/proto/Endpoint.hpp"
 #include "lagrange/server/Profile.hpp"
+#include "lagrange/signals/SignalBus.hpp"
 #include "lagrange/time/SimTime.hpp"
 #include "lagrange/world/World.hpp"
 
@@ -141,12 +142,19 @@ struct ServerOptions {
         double latency{0.0}, jitter{0.0};
     };
     std::vector<SensorTiming> sensorTiming;
+    /// --sensor-fault NAME:QUANTITY=MODE[,key=value...]: faults applied to what the sensors
+    /// write, as sensors::parseSensorFault reads them (sensors.md "Sensor faults (as built)").
+    /// A profile's sensor_faults replace them.
+    std::vector<std::string> sensorFaults;
     /// --site NAME=VALUE: the site at the start, as Server::setSite takes them.
     std::map<std::string, double> site;
     std::string profileSchemaPath;  // profiles/schema.json, sent to viewers; empty = none
     /// What a profile's `stage` must say to apply to this run; empty: robotPath. `lagrange run`
     /// sets it to the stage as the profile writes it.
     std::string stageName;
+    /// A profile is applied right after load() (`lagrange run`, Python's profile=): load()
+    /// keeps the modules' notes to itself, since the profile's site may answer them.
+    bool profileFollows{false};
     double realTimeFactor{1.0};  // 0 = as fast as possible
     bool ros{false};             // run the ROS 2 bridge (rclcpp::init must have been called)
     bool startPaused{false};
@@ -185,6 +193,19 @@ struct ServerOptions {
     /// Where edits from the viewer are saved when it asks (SetAttribute save_to_session_layer):
     /// the edited model as a USD layer. Empty: $XDG_STATE_HOME/lagrange/<robot>.session.usda.
     std::string sessionPath;
+    /// Limits on viewer connections before and after the handshake (RFC 0014). Over a limit, a
+    /// connection is accepted, told why in a ServerHello refusal (not over TLS, whose handshake
+    /// has not run yet) and closed. Until its ClientHello a connection may also send frames of
+    /// at most proto::kPreHandshakeMaxFrameSize (64 KiB, a constant, not a setting).
+    struct ConnectionLimits {
+        std::size_t maxConnections{32};  // open connections, greeted or not
+        std::size_t maxPending{16};      // connections that have not yet sent their ClientHello
+        double handshakeTimeoutS{10.0};  // s from accept to a ClientHello (TLS included)
+        /// New TCP connections per peer address (IPv6: per /64): a token bucket of `peerBurst`
+        /// tokens refilled at `peerRatePerS`. Unix sockets (mode 0600: only the user) are exempt.
+        double peerBurst{8.0};
+        double peerRatePerS{2.0};
+    } connectionLimits;
 };
 
 /// The simulation server (roadmap 0.2-E1, E2): it loads a robot, wires the MuJoCo backend and
@@ -235,6 +256,11 @@ public:
     [[nodiscard]] std::vector<SignalEntry> signals() const;
     /// After load(): the latest value of a signal; empty for an unknown name.
     [[nodiscard]] std::vector<double> read(const std::string& name) const;
+    /// After load(): the latest frame of an image signal (a camera's `sensor/<n>/image`, any
+    /// kind's `sensor/<n>/<q>`): width, height, encoding ("rgba8", "r32f", "r32u", ...) and
+    /// its bytes, row-major. Null for an unknown name, a signal that is not an image, or before
+    /// its first frame (an empty buffer: the ground-truth substitute renders nothing).
+    [[nodiscard]] std::shared_ptr<const Buffer> readImage(const std::string& name) const;
     /// After load(): adds a robot to the run (URDF, SDFormat, MJCF or USD) at `spawn` (world
     /// ENU, as --spawn) and returns its entity name ("/name"). In a run without a robot it
     /// becomes the robot (ROS drives it); otherwise it is passive, its names prefixed with
@@ -251,7 +277,8 @@ public:
     /// takes one out (the first air density) rebuilds the run keeping time and poses.
     Status setSite(const std::string& name, double value);
     /// With joint control: drive a joint by "position" (rad, m), "velocity" (rad/s, m/s) or
-    /// "effort" (N·m, N). False for another mode.
+    /// "effort" (N·m, N). False for another mode, a joint the run does not have, or a value
+    /// that is not finite.
     bool commandJoint(const std::string& joint, const std::string& mode, double value);
     /// After load(): takes a robot out of the run by its entity name, rebuilt likewise.
     Status removeRobot(const std::string& name);

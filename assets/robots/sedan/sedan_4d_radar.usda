@@ -1,0 +1,50 @@
+#usda 1.0
+(
+    defaultPrim = "sedan"
+    doc = """The sample sedan with a 4D imaging radar in place of its front radar's view: kind
+    imaging_radar (docs/design/domains/sensors.md §2, "4D imaging radar"), range, azimuth,
+    elevation and Doppler per detection, angle cells from a virtual array, Doppler folding at
+    the waveform's unambiguous velocity, ghosts over the road. The RadarAPI_1 front_radar stays.
+    Illustrative values, not a product's datasheet."""
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    subLayers = [@./sedan.usda@]
+    upAxis = "Z"
+)
+
+over "sedan"
+{
+    over "base_link"
+    {
+        # 77 GHz, ±45° by ±15°, a virtual array of 64 channels in azimuth by 16 in elevation at
+        # half a wavelength (cells of 1/32 and 1/8 in direction sine: 1.8° and 7.2° at
+        # boresight), 1 GHz of sweep (0.15 m range cells), 256 chirps of 20 µs (±48.7 m/s
+        # unambiguous, 0.38 m/s cells), the road reflecting |Γ|² = 0.3.
+        def Xform "front_4d_radar" (
+            prepend apiSchemas = ["SensorAPI_1", "CustomSensorAPI_1"]
+        )
+        {
+            string sensor:custom:kind = "imaging_radar"
+            double sensor:custom:param:max_range = 150
+            double sensor:custom:param:azimuth_fov = 1.5708
+            double sensor:custom:param:elevation_fov = 0.5236
+            double sensor:custom:param:azimuth_elements = 64
+            double sensor:custom:param:elevation_elements = 16
+            double sensor:custom:param:element_spacing = 0.5      # wavelengths
+            double sensor:custom:param:bandwidth = 1e9            # Hz
+            double sensor:custom:param:chirp_period = 2e-5        # s
+            double sensor:custom:param:chirps = 256
+            double sensor:custom:param:carrier_frequency = 77e9   # Hz
+            double sensor:custom:param:tx_power = 0.01            # W (10 dBm)
+            double sensor:custom:param:antenna_gain = 100         # 20 dBi
+            double sensor:custom:param:noise_floor = 4e-15        # W, as the front radar's
+            double sensor:custom:param:detection_threshold = 10   # 10 dB
+            double sensor:custom:param:ghost_reflection = 0.3
+            double sensor:custom:param:max_detections = 512
+            double sensor:rate = 20
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:translate = (2.3, 0, 0.15)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+        }
+    }
+}

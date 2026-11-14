@@ -5,12 +5,15 @@
 #include "lagrange/viewer/v1/envelope.pb.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <map>
 #include <numbers>
 #include <set>
@@ -166,6 +169,31 @@ TEST_F(ServerTest, SnapshotStepAndDeltas) {
     EXPECT_EQ(delta.transform_data().size(),
               static_cast<std::size_t>(delta.transform_prims_size()) * 40U);
     EXPECT_EQ(server_->simTime(), SimTime{10'000'000});
+}
+
+// QA 2026-11-12: Step{ticks = 4e9} (46 days) ran to its end before the server read anything
+// else, so one client froze it for every viewer and for SIGTERM. A step that long is refused.
+TEST_F(ServerTest, RefusesAStepTooLongToRunAtOnce) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    v1::Envelope huge = command(7);
+    huge.mutable_command()->mutable_step()->set_ticks(4'000'000'000U);
+    send(huge);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) {
+        return e.has_command_result() && e.command_result().request_id() == 7;
+    }));
+    EXPECT_FALSE(received_.back().command_result().ok());
+    EXPECT_NE(received_.back().command_result().error().find("at most"), std::string::npos);
+    EXPECT_EQ(server_->simTime(), SimTime{0});
+
+    v1::Envelope longest = command(8);
+    longest.mutable_command()->mutable_step()->set_duration_ns(
+        std::numeric_limits<std::int64_t>::max());
+    send(longest);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) {
+        return e.has_command_result() && e.command_result().request_id() == 8;
+    }));
+    EXPECT_FALSE(received_.back().command_result().ok());
+    EXPECT_EQ(server_->simTime(), SimTime{0});
 }
 
 // Roadmap 0.2-E5: a profile from the viewer is checked, previewed and applied; the run
@@ -691,6 +719,26 @@ TEST_F(ArmServerTest, CameraFramesCarryTheWristCameraImage) {
     EXPECT_EQ(frame.image().width(), 640U);
     EXPECT_EQ(frame.image().height(), 480U);
     EXPECT_EQ(frame.image().encoding(), "rgba8");
+    EXPECT_EQ(frame.image().data().inline_().size(), 640U * 480U * 4U);
+}
+
+// Any image signal by its name (sensors.md §9 "Images of kinds"): here the camera's depth, r32f.
+TEST_F(ArmServerTest, AnImageSignalIsSentByItsName) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    v1::Envelope watch = command(4);
+    watch.mutable_command()->mutable_subscribe_sensor()->set_sensor("sensor/wrist_camera/depth");
+    watch.mutable_command()->mutable_subscribe_sensor()->set_enabled(true);
+    send(watch);
+    v1::Envelope step = command(5);
+    step.mutable_command()->mutable_step()->set_duration_ns(100'000'000);
+    send(step);
+    if (!pumpUntil([](const v1::Envelope& e) { return e.has_sensor_frame(); })) {
+        GTEST_SKIP() << "no camera frame (no Vulkan device?)";
+    }
+    const v1::SensorFrame& frame = received_.back().sensor_frame();
+    EXPECT_EQ(frame.sensor(), "sensor/wrist_camera/depth");
+    ASSERT_TRUE(frame.has_image());
+    EXPECT_EQ(frame.image().encoding(), "r32f");
     EXPECT_EQ(frame.image().data().inline_().size(), 640U * 480U * 4U);
 }
 

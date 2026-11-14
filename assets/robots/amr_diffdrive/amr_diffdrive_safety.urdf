@@ -1,0 +1,419 @@
+<?xml version="1.0"?>
+<!--
+  Sample differential-drive AMR for Lagrange v0.2: a chassis on two driven wheels with a
+  swivel caster at the front and at the back. Built from primitives so that it needs no mesh
+  files. Masses and sizes are illustrative, not a model of any real robot; inertias are those
+  of the primitive shapes (box: m(b²+c²)/12; cylinder: mr²/2 about the axis, m(3r²+h²)/12
+  across it; sphere: 2mr²/5).
+
+  The base_link frame is at axle height, in the middle of the chassis. The simulator lifts the
+  robot so that its lowest collision shape touches the ground.
+-->
+<!--
+  amr_diffdrive_safety.urdf: the sample AMR (amr_diffdrive.urdf, unchanged above its sensors) with
+  the built-in custom sensor kinds of docs/design/domains/sensors.md §9 an AMR carries: front and
+  rear bumpers, four cliff sensors, wheel odometry from 16384-count encoders, a nanoScan3-style
+  safety scanner at the front, and torque sensors in the wheel joints. Run it headless with
+    lagrange_server --robot assets/robots/amr_diffdrive/amr_diffdrive_safety.urdf \
+      --world assets/worlds/warehouse_small/warehouse_small.usda --no-ros
+-->
+<robot name="amr_diffdrive">
+  <material name="body">
+    <color rgba="0.20 0.24 0.30 1"/>
+  </material>
+  <material name="accent">
+    <color rgba="0.91 0.47 0.18 1"/>
+  </material>
+  <material name="rubber">
+    <color rgba="0.08 0.08 0.09 1"/>
+  </material>
+  <material name="steel">
+    <color rgba="0.62 0.64 0.67 1"/>
+  </material>
+
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0 0 0.03"/>
+      <mass value="20.0"/>
+      <!-- box 0.60 x 0.40 x 0.15 m -->
+      <inertia ixx="0.30417" iyy="0.6375" izz="0.86667" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.03"/>
+      <geometry>
+        <box size="0.60 0.40 0.15"/>
+      </geometry>
+      <material name="body"/>
+    </visual>
+    <visual>
+      <origin xyz="0.28 0 0.07"/>
+      <geometry>
+        <box size="0.04 0.30 0.04"/>
+      </geometry>
+      <material name="accent"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.03"/>
+      <geometry>
+        <box size="0.60 0.40 0.15"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Driven wheels: radius 0.10 m, width 0.05 m, 1.5 kg. -->
+  <link name="left_wheel">
+    <inertial>
+      <mass value="1.5"/>
+      <inertia ixx="0.0040625" iyy="0.0075" izz="0.0040625" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin rpy="1.5707963 0 0"/>
+      <geometry>
+        <cylinder radius="0.10" length="0.05"/>
+      </geometry>
+      <material name="rubber"/>
+    </visual>
+    <collision>
+      <origin rpy="1.5707963 0 0"/>
+      <geometry>
+        <cylinder radius="0.10" length="0.05"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="left_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="left_wheel"/>
+    <origin xyz="0 0.23 0"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="10.0" velocity="20.0"/>
+  </joint>
+
+  <link name="right_wheel">
+    <inertial>
+      <mass value="1.5"/>
+      <inertia ixx="0.0040625" iyy="0.0075" izz="0.0040625" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin rpy="1.5707963 0 0"/>
+      <geometry>
+        <cylinder radius="0.10" length="0.05"/>
+      </geometry>
+      <material name="rubber"/>
+    </visual>
+    <collision>
+      <origin rpy="1.5707963 0 0"/>
+      <geometry>
+        <cylinder radius="0.10" length="0.05"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="right_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="right_wheel"/>
+    <origin xyz="0 -0.23 0"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="10.0" velocity="20.0"/>
+  </joint>
+
+  <!-- Swivel casters, front and back: a fork turning about z, a 0.03 m ball under it. -->
+  <link name="front_caster_fork">
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.0001" iyy="0.0001" izz="0.0001" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.015 0 -0.01"/>
+      <geometry>
+        <box size="0.04 0.03 0.03"/>
+      </geometry>
+      <material name="steel"/>
+    </visual>
+  </link>
+  <joint name="front_caster_swivel" type="continuous">
+    <parent link="base_link"/>
+    <child link="front_caster_fork"/>
+    <origin xyz="0.22 0 -0.04"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+  <link name="front_caster_wheel">
+    <inertial>
+      <mass value="0.2"/>
+      <inertia ixx="0.000072" iyy="0.000072" izz="0.000072" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <geometry>
+        <sphere radius="0.03"/>
+      </geometry>
+      <material name="rubber"/>
+    </visual>
+    <collision>
+      <geometry>
+        <sphere radius="0.03"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="front_caster_axle" type="continuous">
+    <parent link="front_caster_fork"/>
+    <child link="front_caster_wheel"/>
+    <origin xyz="-0.03 0 -0.03"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <link name="rear_caster_fork">
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.0001" iyy="0.0001" izz="0.0001" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.015 0 -0.01"/>
+      <geometry>
+        <box size="0.04 0.03 0.03"/>
+      </geometry>
+      <material name="steel"/>
+    </visual>
+  </link>
+  <joint name="rear_caster_swivel" type="continuous">
+    <parent link="base_link"/>
+    <child link="rear_caster_fork"/>
+    <origin xyz="-0.22 0 -0.04"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+  <link name="rear_caster_wheel">
+    <inertial>
+      <mass value="0.2"/>
+      <inertia ixx="0.000072" iyy="0.000072" izz="0.000072" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <geometry>
+        <sphere radius="0.03"/>
+      </geometry>
+      <material name="rubber"/>
+    </visual>
+    <collision>
+      <geometry>
+        <sphere radius="0.03"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="rear_caster_axle" type="continuous">
+    <parent link="rear_caster_fork"/>
+    <child link="rear_caster_wheel"/>
+    <origin xyz="-0.03 0 -0.03"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <!-- A 2D lidar on a short mast at the front, above the chassis. -->
+  <link name="lidar_link">
+    <inertial>
+      <mass value="0.3"/>
+      <inertia ixx="0.0002" iyy="0.0002" izz="0.0002" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <geometry>
+        <cylinder radius="0.04" length="0.05"/>
+      </geometry>
+      <material name="accent"/>
+    </visual>
+  </link>
+  <joint name="lidar_mount" type="fixed">
+    <parent link="base_link"/>
+    <child link="lidar_link"/>
+    <origin xyz="0.20 0 0.13"/>
+  </joint>
+
+  <!-- Roof lidar on a mast: visual only, so that its own beams never hit it. -->
+  <link name="lidar_mast">
+    <inertial>
+      <mass value="0.2"/>
+      <inertia ixx="0.0007" iyy="0.0007" izz="0.00002" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <geometry>
+        <cylinder radius="0.015" length="0.20"/>
+      </geometry>
+      <material name="body"/>
+    </visual>
+  </link>
+  <joint name="mast_mount" type="fixed">
+    <parent link="base_link"/>
+    <child link="lidar_mast"/>
+    <origin xyz="-0.10 0 0.205"/>
+  </joint>
+  <link name="top_lidar_link">
+    <inertial>
+      <mass value="0.8"/>
+      <inertia ixx="0.0008" iyy="0.0008" izz="0.001" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <geometry>
+        <cylinder radius="0.05" length="0.07"/>
+      </geometry>
+      <material name="accent"/>
+    </visual>
+  </link>
+  <joint name="top_lidar_mount" type="fixed">
+    <parent link="lidar_mast"/>
+    <child link="top_lidar_link"/>
+    <origin xyz="0 0 0.135"/>
+  </joint>
+
+  <!-- Sensors, in the Gazebo form most robot descriptions use. -->
+  <gazebo reference="lidar_link">
+    <sensor name="front_lidar" type="gpu_lidar">
+      <update_rate>10</update_rate>
+      <lidar>
+        <scan>
+          <horizontal>
+            <samples>720</samples>
+            <min_angle>-3.14159</min_angle>
+            <max_angle>3.14159</max_angle>
+          </horizontal>
+        </scan>
+        <range>
+          <min>0.12</min>
+          <max>20.0</max>
+        </range>
+        <noise>
+          <type>gaussian</type>
+          <stddev>0.01</stddev>
+        </noise>
+      </lidar>
+    </sensor>
+  </gazebo>
+  <!-- A 16-ring 3D lidar: 360 degrees in 900 columns, rings from -15 to +15 degrees. -->
+  <gazebo reference="top_lidar_link">
+    <sensor name="top_lidar" type="gpu_lidar">
+      <update_rate>10</update_rate>
+      <lidar>
+        <scan>
+          <horizontal>
+            <samples>900</samples>
+            <min_angle>-3.14159</min_angle>
+            <max_angle>3.14159</max_angle>
+          </horizontal>
+          <vertical>
+            <samples>16</samples>
+            <min_angle>-0.261799</min_angle>
+            <max_angle>0.261799</max_angle>
+          </vertical>
+        </scan>
+        <range>
+          <min>0.3</min>
+          <max>40.0</max>
+        </range>
+        <noise>
+          <type>gaussian</type>
+          <stddev>0.02</stddev>
+        </noise>
+      </lidar>
+    </sensor>
+  </gazebo>
+  <gazebo reference="base_link">
+    <sensor name="imu" type="imu">
+      <update_rate>200</update_rate>
+      <imu>
+        <angular_velocity>
+          <z><noise type="gaussian"><stddev>0.002</stddev></noise></z>
+        </angular_velocity>
+        <linear_acceleration>
+          <x><noise type="gaussian"><stddev>0.02</stddev></noise></x>
+        </linear_acceleration>
+      </imu>
+    </sensor>
+  </gazebo>
+
+  <!-- Built-in custom sensor kinds (sensors.md §9). -->
+  <gazebo reference="base_link">
+    <sensor name="front_bumper" type="bumper">
+      <pose>0.30 0 0.03 0 0 0</pose>
+      <update_rate>100</update_rate>
+      <bumper><threshold>10</threshold><sector_min>-1.2</sector_min><sector_max>1.2</sector_max></bumper>
+    </sensor>
+    <sensor name="rear_bumper" type="bumper">
+      <pose>-0.30 0 0.03 0 0 3.14159265</pose>
+      <update_rate>100</update_rate>
+      <bumper><threshold>10</threshold><sector_min>-1.2</sector_min><sector_max>1.2</sector_max></bumper>
+    </sensor>
+    <!-- Cliff sensors in the chassis corners, 5.5 cm over the floor, looking down. -->
+    <sensor name="cliff_front_left" type="cliff">
+      <pose>0.27 0.17 -0.04 0 0 0</pose>
+      <update_rate>50</update_rate>
+      <cliff><threshold>0.08</threshold><range_noise>0.001</range_noise></cliff>
+    </sensor>
+    <sensor name="cliff_front_right" type="cliff">
+      <pose>0.27 -0.17 -0.04 0 0 0</pose>
+      <update_rate>50</update_rate>
+      <cliff><threshold>0.08</threshold><range_noise>0.001</range_noise></cliff>
+    </sensor>
+    <sensor name="cliff_rear_left" type="cliff">
+      <pose>-0.27 0.17 -0.04 0 0 0</pose>
+      <update_rate>50</update_rate>
+      <cliff><threshold>0.08</threshold><range_noise>0.001</range_noise></cliff>
+    </sensor>
+    <sensor name="cliff_rear_right" type="cliff">
+      <pose>-0.27 -0.17 -0.04 0 0 0</pose>
+      <update_rate>50</update_rate>
+      <cliff><threshold>0.08</threshold><range_noise>0.001</range_noise></cliff>
+    </sensor>
+    <sensor name="wheel_odom" type="wheel_odometry">
+      <update_rate>50</update_rate>
+      <wheel_odometry>
+        <left_joint>left_wheel_joint</left_joint>
+        <right_joint>right_wheel_joint</right_joint>
+        <encoder_resolution>16384</encoder_resolution>
+        <radius_error>0.005</radius_error>
+      </wheel_odometry>
+    </sensor>
+    <!-- nanoScan3-style: 0.17 degree steps, 70 ms response; protective 0.6 m ahead, warning 1.5 m. -->
+    <sensor name="safety" type="safety_scanner">
+      <pose>0.31 0 0.0 0 0 0</pose>
+      <update_rate>25</update_rate>
+      <safety_scanner>
+        <!-- 190 degrees: mounted in the bumper, it does not see its own wheels. -->
+        <fov>3.316</fov>
+        <protective><x_max>0.6</x_max><y_min>-0.35</y_min><y_max>0.35</y_max></protective>
+        <warning><polygon>0,-0.6 1.5,-0.6 1.5,0.6 0,0.6</polygon></warning>
+      </safety_scanner>
+    </sensor>
+  </gazebo>
+  <gazebo reference="left_wheel">
+    <sensor name="left_wheel_torque" type="joint_torque">
+      <update_rate>500</update_rate>
+      <joint_torque><noise>0.02</noise><resolution>0.01</resolution></joint_torque>
+    </sensor>
+  </gazebo>
+  <gazebo reference="right_wheel">
+    <sensor name="right_wheel_torque" type="joint_torque">
+      <update_rate>500</update_rate>
+      <joint_torque><noise>0.02</noise><resolution>0.01</resolution></joint_torque>
+    </sensor>
+  </gazebo>
+  <!-- Which joints take commands: the driven wheels, by speed (diff_drive_controller) or torque. -->
+  <ros2_control name="LagrangeSystem" type="system">
+    <hardware>
+      <plugin>lagrange_ros2_control/LagrangeSystem</plugin>
+    </hardware>
+    <joint name="left_wheel_joint">
+      <command_interface name="velocity"/>
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+      <!-- Wheel speed servo (N·m per rad/s, N·m per rad) for velocity commands. -->
+      <param name="velocity_p">8.0</param>
+      <param name="velocity_i">40.0</param>
+      <!-- Wheel encoder: counts per revolution after quadrature (a 4096-line encoder). -->
+      <param name="encoder_resolution">16384</param>
+    </joint>
+    <joint name="right_wheel_joint">
+      <command_interface name="velocity"/>
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+      <!-- Wheel speed servo (N·m per rad/s, N·m per rad) for velocity commands. -->
+      <param name="velocity_p">8.0</param>
+      <param name="velocity_i">40.0</param>
+      <!-- Wheel encoder: counts per revolution after quadrature (a 4096-line encoder). -->
+      <param name="encoder_resolution">16384</param>
+    </joint>
+  </ros2_control>
+</robot>

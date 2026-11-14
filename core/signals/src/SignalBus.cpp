@@ -85,6 +85,50 @@ std::string_view to_string(Hold hold) {
     return "Unknown";
 }
 
+namespace {
+
+/// Bytes of the UTF-8 sequence starting at `text[i]`; 0 if it is not a whole, valid one.
+std::size_t utf8Length(std::string_view text, std::size_t i) {
+    const auto lead = static_cast<unsigned char>(text[i]);
+    const std::size_t n = lead < 0x80U              ? 1
+                          : (lead & 0xE0U) == 0xC0U ? 2
+                          : (lead & 0xF0U) == 0xE0U ? 3
+                          : (lead & 0xF8U) == 0xF0U ? 4
+                                                    : 0;
+    if (n == 0 || i + n > text.size()) {
+        return 0;
+    }
+    for (std::size_t k = 1; k < n; ++k) {
+        if ((static_cast<unsigned char>(text[i + k]) & 0xC0U) != 0x80U) {
+            return 0;
+        }
+    }
+    return n;
+}
+
+/// `text` with every byte that is not part of valid UTF-8 written as \xNN, so that a message
+/// quoting it is UTF-8 (Python decodes it).
+std::string printable(std::string_view text) {
+    std::string out;
+    for (std::size_t i = 0; i < text.size();) {
+        const std::size_t n = utf8Length(text, i);
+        if (n == 0) {
+            static constexpr char kHex[] = "0123456789abcdef";
+            const auto byte = static_cast<unsigned char>(text[i]);
+            out += "\\x";
+            out += kHex[byte >> 4U];
+            out += kHex[byte & 0xFU];
+            ++i;
+        } else {
+            out.append(text.substr(i, n));
+            i += n;
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
 std::string checkSignalName(std::string_view name) {
     if (name.empty()) {
         return "empty name";
@@ -102,8 +146,11 @@ std::string checkSignalName(std::string_view name) {
         const bool allowed = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
                              (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-';
         if (!allowed) {
-            return "character '" + std::string(1, c) + "' not allowed in \"" + std::string(name) +
-                   "\" (use [A-Za-z0-9_.-] and '/')";
+            // The whole character, not one byte of a multi-byte one: the message stays UTF-8
+            // (QA 2026-11-12 #14: Python raised UnicodeDecodeError instead of the error).
+            const std::size_t n = std::max<std::size_t>(utf8Length(name, i), 1);
+            return "character '" + printable(name.substr(i, n)) + "' not allowed in \"" +
+                   printable(name) + "\" (use [A-Za-z0-9_.-] and '/')";
         }
     }
     return {};
@@ -181,6 +228,7 @@ void SignalBus::writeN(SignalId id, std::span<const double> values, std::uint32_
         return;
     }
     std::copy(values.begin(), values.end(), pending_.begin() + static_cast<std::ptrdiff_t>(index));
+    dirty_[id.index] = 1;
 }
 
 BufferHandle SignalBus::readBuffer(SignalId id, std::uint32_t env) const {
@@ -252,6 +300,7 @@ std::span<double> SignalBus::writeBatch(SignalId id) {
     if (index == kBad || signals_[id.index].components == 0) {
         return {};
     }
+    dirty_[id.index] = 1;  // the caller writes through the span
     return {pending_.data() + index, signals_[id.index].components * batchCount_};
 }
 
@@ -266,9 +315,9 @@ SimTime SignalBus::stamp(SignalId id) const {
         if (id.slot() >= inputs_.size() || inputs_[id.slot()].signal == kNoModule) {
             return {};
         }
-        return signals_[inputs_[id.slot()].signal].stamp;
+        return timing_[inputs_[id.slot()].signal].stamp;
     }
-    return id.valid() && id.index < signals_.size() ? signals_[id.index].stamp : SimTime{};
+    return id.valid() && id.index < signals_.size() ? timing_[id.index].stamp : SimTime{};
 }
 
 // --- cold path -----------------------------------------------------------------------------
@@ -297,6 +346,7 @@ std::uint32_t SignalBus::addSignal(SignalSpec spec, std::uint32_t writer) {
     record.spec = std::move(spec);
     record.writer = writer;
     signals_.push_back(std::move(record));
+    timing_.emplace_back();
     return static_cast<std::uint32_t>(signals_.size() - 1);
 }
 
@@ -332,6 +382,8 @@ void SignalBus::shiftOrigin(const std::array<double, 3>& shift) {
             }
         }
     }
+    forgetPrepared();
+    markAllDirty();
     for (const InputSlot& slot : inputs_) {
         if (!regionPose(slot.spec) || slot.components == 0) {
             continue;
@@ -361,6 +413,7 @@ void SignalBus::allocate(std::uint32_t batchCount) {
         }
     }
     committed_.assign(values, 0.0);
+    dirty_.assign(signals_.size(), 1);
     previous_.assign(values, 0.0);
     pending_.assign(values, 0.0);
     committedHandles_.assign(handles, 0);
@@ -381,6 +434,11 @@ void SignalBus::allocate(std::uint32_t batchCount) {
         }
     }
     inputValues_.assign(inputValues, 0.0);
+    preparedTick_.assign(inputs_.size(), kStale);
+    slotSignal_.resize(inputs_.size());
+    for (std::size_t i = 0; i < inputs_.size(); ++i) {
+        slotSignal_[i] = inputs_[i].signal;
+    }
     inputHandles_.assign(inputHandles, 0);
     windowSums_.assign(inputValues, 0.0);
     windowReaders_.assign(signals_.size(), {});
@@ -388,6 +446,18 @@ void SignalBus::allocate(std::uint32_t batchCount) {
         if (inputs_[i].signal != kNoModule && inputs_[i].spec.hold == Hold::WindowAverage &&
             !inputs_[i].spec.feedback) {
             windowReaders_[inputs_[i].signal].push_back(static_cast<std::uint32_t>(i));
+        }
+    }
+    for (InputSlot& slot : inputs_) {
+        slot.hold = slot.spec.hold;
+        slot.feedback = slot.spec.feedback;
+    }
+    // Which signals' previous values a reader uses; commitAll keeps only those up to date.
+    needsPrevious_.assign(signals_.size(), 0);
+    for (const InputSlot& slot : inputs_) {
+        if (slot.signal != kNoModule &&
+            (slot.spec.feedback || slot.spec.hold == Hold::LinearExtrapolate)) {
+            needsPrevious_[slot.signal] = 1;
         }
     }
     // Unconnected optional inputs keep their default for the whole run.
@@ -419,11 +489,13 @@ void SignalBus::commit(std::uint32_t signal, SimTime stamp, std::uint64_t tick,
                   previous_.begin() + begin);
         std::copy(pending_.begin() + begin, pending_.begin() + begin + count,
                   committed_.begin() + begin);
+        dirty_[signal] = 0;
     }
-    record.previousStamp = record.stamp;
-    record.stamp = stamp;
-    record.commitTick = tick;
-    record.commits = std::min<std::uint32_t>(record.commits + 1, 2);
+    Timing& timing = timing_[signal];
+    timing.previousStamp = timing.stamp;
+    timing.stamp = stamp;
+    timing.commitTick = tick;
+    timing.commits = std::min<std::uint32_t>(timing.commits + 1, 2);
 
     // Window-average readers accumulate every commit, weighted by the writer's step, so the
     // mean they see conserves the integral of a flow (impulse, energy).
@@ -443,14 +515,103 @@ void SignalBus::commit(std::uint32_t signal, SimTime stamp, std::uint64_t tick,
     }
 }
 
+void SignalBus::commitAll(std::span<const std::uint32_t> signals, SimTime stamp, std::uint64_t tick,
+                          Duration writerStep) {
+    // A signal that is plain values, not held and read by no window average commits as a copy;
+    // runs of them that sit next to each other in storage copy at once.
+    const auto plain = [this](std::uint32_t signal) {
+        return held_[signal] == 0 && signals_[signal].components != 0 &&
+               windowReaders_[signal].empty();
+    };
+    std::size_t i = 0;
+    while (i < signals.size()) {
+        const std::uint32_t first = signals[i];
+        if (!plain(first)) {
+            commit(first, stamp, tick, writerStep);
+            ++i;
+            continue;
+        }
+        const std::size_t begin = signals_[first].offset;
+        std::size_t end = begin + (signals_[first].components * batchCount_);
+        std::size_t j = i + 1;
+        while (j < signals.size() && plain(signals[j]) && signals_[signals[j]].offset == end) {
+            end += signals_[signals[j]].components * batchCount_;
+            ++j;
+        }
+        // The previous value only where a reader uses it (a feedback input, an extrapolation).
+        for (std::size_t k = i; k < j; ++k) {
+            if (needsPrevious_[signals[k]] != 0) {
+                const SignalRecord& record = signals_[signals[k]];
+                const auto at = static_cast<std::ptrdiff_t>(record.offset);
+                const auto count = static_cast<std::ptrdiff_t>(record.components * batchCount_);
+                std::copy(committed_.begin() + at, committed_.begin() + at + count,
+                          previous_.begin() + at);
+            }
+        }
+        // The written ones; the others' pending values equal their committed ones, so copying
+        // a short clean stretch between two written signals is harmless and saves a call.
+        constexpr std::size_t kMergeGap = 32;  // values
+        std::size_t copyFrom = 0;
+        std::size_t copyTo = 0;
+        bool open = false;
+        const auto copyOut = [this](std::size_t from, std::size_t to) {
+            std::copy(pending_.begin() + static_cast<std::ptrdiff_t>(from),
+                      pending_.begin() + static_cast<std::ptrdiff_t>(to),
+                      committed_.begin() + static_cast<std::ptrdiff_t>(from));
+        };
+        for (std::size_t k = i; k < j; ++k) {
+            const std::uint32_t signal = signals[k];
+            if (dirty_[signal] == 0) {
+                continue;
+            }
+            dirty_[signal] = 0;
+            const std::size_t from = signals_[signal].offset;
+            const std::size_t to = from + (signals_[signal].components * batchCount_);
+            if (open && from - copyTo <= kMergeGap) {
+                copyTo = to;
+                continue;
+            }
+            if (open) {
+                copyOut(copyFrom, copyTo);
+            }
+            copyFrom = from;
+            copyTo = to;
+            open = true;
+        }
+        if (open) {
+            copyOut(copyFrom, copyTo);
+        }
+        for (std::size_t k = i; k < j; ++k) {
+            Timing& timing = timing_[signals[k]];
+            timing.previousStamp = timing.stamp;
+            timing.stamp = stamp;
+            timing.commitTick = tick;
+            timing.commits = std::min<std::uint32_t>(timing.commits + 1, 2);
+        }
+        i = j;
+    }
+}
+
 void SignalBus::prepareInput(std::uint32_t slotIndex, SimTime readerTime, std::uint64_t tick) {
+    // The common case first, from two small arrays: unconnected, or a held copy whose writer
+    // has not committed since (and not in this tick, when a feedback input reads the previous
+    // value).
+    const std::uint32_t signal = slotSignal_[slotIndex];
+    if (signal == kNoModule) {
+        return;
+    }
+    const std::uint64_t committedAt = timing_[signal].commitTick;
+    if (preparedTick_[slotIndex] == committedAt && committedAt != tick) {
+        return;
+    }
     InputSlot& slot = inputs_[slotIndex];
     if (slot.signal == kNoModule) {
         return;  // optional and unconnected: the default stays
     }
     const SignalRecord& record = signals_[slot.signal];
+    const Timing& timing = timing_[slot.signal];
     // A feedback input reads the writer's previous step when the writer already ran this tick.
-    const bool usePrevious = slot.spec.feedback && record.commitTick == tick;
+    const bool usePrevious = slot.feedback && timing.commitTick == tick;
     if (record.components == 0) {
         const auto& source = usePrevious ? previousHandles_ : committedHandles_;
         std::copy_n(source.begin() + static_cast<std::ptrdiff_t>(record.offset), batchCount_,
@@ -462,22 +623,31 @@ void SignalBus::prepareInput(std::uint32_t slotIndex, SimTime readerTime, std::u
     const double* previous = previous_.data() + record.offset;
     double* out = inputValues_.data() + slot.offset;
 
+    std::uint64_t& prepared = preparedTick_[slotIndex];
     if (usePrevious) {
         std::copy_n(previous, count, out);
+        prepared = kStale;
         return;
     }
-    switch (slot.spec.hold) {
+    if (slot.hold != Hold::ZeroOrder) {
+        prepared = kStale;
+    }
+    switch (slot.hold) {
         case Hold::ZeroOrder:
-            std::copy_n(committed, count, out);
+            // Already the committed value, unless its writer committed since.
+            if (prepared != timing.commitTick) {
+                std::copy_n(committed, count, out);
+                prepared = timing.commitTick;
+            }
             break;
         case Hold::LinearExtrapolate: {
-            const std::int64_t span = record.stamp.ns - record.previousStamp.ns;
-            if (record.commits < 2 || span <= 0) {
+            const std::int64_t span = timing.stamp.ns - timing.previousStamp.ns;
+            if (timing.commits < 2 || span <= 0) {
                 std::copy_n(committed, count, out);
                 break;
             }
             const double factor =
-                static_cast<double>(readerTime.ns - record.stamp.ns) / static_cast<double>(span);
+                static_cast<double>(readerTime.ns - timing.stamp.ns) / static_cast<double>(span);
             for (std::size_t i = 0; i < count; ++i) {
                 out[i] = committed[i] + (committed[i] - previous[i]) * factor;
             }
@@ -496,6 +666,13 @@ void SignalBus::prepareInput(std::uint32_t slotIndex, SimTime readerTime, std::u
             slot.windowWeight = 0.0;
             break;
         }
+    }
+}
+
+void SignalBus::prepareInputs(std::span<const std::uint32_t> slots, SimTime readerTime,
+                              std::uint64_t tick) {
+    for (const std::uint32_t slot : slots) {
+        prepareInput(slot, readerTime, tick);
     }
 }
 
