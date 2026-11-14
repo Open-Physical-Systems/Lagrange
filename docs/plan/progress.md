@@ -60,7 +60,8 @@ hunt for flaws. Done by parallel agents in worktrees, merged into `night/integra
   parallel, bus copies only what was written; the town +33 %, lidar scans about halved; the
   quadcopter 3–5 % slower (owed); camera time follows the laptop GPU's clocks.
 - RFC 0014 (frame limits before the handshake, QA #7; server-side prototype) and RFC 0015 (USD
-  attributes for lidar patterns and fisheye lenses) as **Drafts** for the owner. Until 0015, writing
+  attributes for lidar patterns and fisheye lenses), accepted by the owner on 2026-11-14 with the
+  proposed answers; 0014's connection limits are in, its frame cap and 0015 follow. Until 0015, writing
   those sensors to USD is refused instead of written wrong.
 
 ## v0.2, item by item

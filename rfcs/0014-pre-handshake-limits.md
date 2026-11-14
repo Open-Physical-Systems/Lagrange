@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft (2026-11-12), for the owner to accept or reject |
+| Status | Accepted (2026-11-14) by the owner, with the proposed answer to each open question; gated merges of its steps pre-approved |
 | Created | 2026-11-12 |
 | Affects | `server/` (connection policy), `proto/framing/` and `proto/transport/` (a C++ API addition, no wire or `.proto` change), `docs/design/protocol.md` §2, `docs/design/security.md` §1, `tools/cli/` (options, additive) |
 | Builds on | RFC 0003 (protocol and transport), RFC 0007 (the 1.x freeze) |

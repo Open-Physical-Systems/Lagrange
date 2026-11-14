@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft (2026-11-12), for the owner to accept or reject |
+| Status | Accepted (2026-11-14) by the owner, with the proposed answer to each open question; gated merges of its steps pre-approved |
 | Created | 2026-11-12 |
 | Affects | `schemas/sensor/` (additions to `LidarAPI_1` and `CameraSensorAPI_1`), `io/stage/` (reader and writer), `io/importers/` (SDFormat), `server/src/Robot.cpp` (URDF, no change in meaning), `schemas/CHANGELOG.md`, `docs/design/formats.md` §3.8 and §9, `docs/design/domains/sensors.md` |
 | Builds on | RFC 0002 (schemas), RFC 0007 (the 1.x freeze) |
