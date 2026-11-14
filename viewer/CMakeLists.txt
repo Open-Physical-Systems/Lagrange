@@ -293,6 +293,7 @@ if(BUILD_TESTING)
         builder/test/test_mass_properties.cpp
         builder/test/test_validation.cpp
         builder/test/test_scene_adapter.cpp
+        builder/test/test_urdf.cpp
         TIMEOUT 120
     )
     target_link_libraries(
@@ -305,14 +306,26 @@ if(BUILD_TESTING)
         PRIVATE
             LAGRANGE_BUILDER_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/builder"
             LAGRANGE_THERMAL_MATERIALS_CPP="${CMAKE_CURRENT_SOURCE_DIR}/../modules/thermal/conduction/src/Materials.cpp"
+            LAGRANGE_BUILDER_ASSETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots"
     )
     lagrange_target_defaults(test_viewer_builder)
+    # Read and write a URDF from the command line, and make the templates (WP-B); not installed.
+    add_executable(builder_urdf_tool builder/test/urdf_tool.cpp)
+    target_link_libraries(builder_urdf_tool PRIVATE lagrange_viewer_builder)
+    lagrange_target_defaults(builder_urdf_tool)
 
     find_package(ament_cmake_pytest REQUIRED)
     ament_add_pytest_test(test_circuit_roundtrip test/test_circuit_roundtrip.py TIMEOUT 120)
     ament_add_pytest_test(test_viewer_input test/test_viewer_input.py TIMEOUT 180)
     ament_add_pytest_test(test_builder_input test/test_builder_input.py TIMEOUT 180)
     ament_add_pytest_test(test_builder_view test/test_builder_view.py TIMEOUT 300)
+    ament_add_pytest_test(
+        test_builder_roundtrip
+        test/test_builder_roundtrip.py
+        TIMEOUT 300
+        ENV
+        LAGRANGE_BUILDER_URDF_TOOL=$<TARGET_FILE:builder_urdf_tool>
+    )
     ament_add_pytest_test(
         test_headless
         test/test_headless.py

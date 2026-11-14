@@ -38,6 +38,18 @@ These keep the packages apart. Each one is small. Change one only by a note in t
    (`:1072`). A kind's first element named like its type is dropped from the path
    (`Robot.cpp:779-781`). The writer always writes the wrapper: `<rangefinder>…` as in
    sensors.md's examples, `<lidar>` for lidars, `<camera>` and `<imu>`.
+7. **What URDF has no place for is written as attributes the loader ignores** (WP-B; urdfdom and
+   the `<gazebo>` reader skip unknown attributes, checked by `test_builder_roundtrip.py`: the
+   goldens load with no notes). `<link lagrange_density="ρ">` (kg/m³);
+   `<inertial lagrange_overrides="mass com inertia">` on a link with a density lists the user's
+   overrides, and the parts not listed are computed again when the file is opened (a file without
+   it, any other URDF, has all three as overrides, RFC §10); `lagrange_solid="true|false"` on a
+   `<visual>` or `<collision>` only when it differs from the default. Colours are robot-level
+   `<material>` definitions (a visual's local one is moved up). Where kept elements stood among
+   links, joints, sensors, visuals and collisions is held by comment markers
+   `<!--lagrange-builder:link-->` in `keptXml` (`keptForDisplay()` hides them), so a file read
+   and written again keeps its order and, after one save, its bytes. Sensor attributes are
+   parameters `<path>/@<name>`; an IMU's equal x, y, z read as the catalog's `{axis}`.
 
 ## 2. Work packages, phase 1
 

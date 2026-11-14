@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<robot name="joint_continuous">
+  <material name="builder_color_1">
+    <color rgba="0.5 0.5 0.5 1"/>
+  </material>
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="2"/>
+      <inertia ixx="0.013333333333333336" ixy="0" ixz="0" iyy="0.013333333333333336" iyz="0" izz="0.013333333333333336"/>
+    </inertial>
+    <visual>
+      <geometry><box size="0.2 0.2 0.2"/></geometry>
+      <material name="builder_color_1"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.2 0.2 0.2"/></geometry>
+    </collision>
+  </link>
+  <link name="child_link">
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="0.5"/>
+      <inertia ixx="0.0008333333333333335" ixy="0" ixz="0" iyy="0.0008333333333333335" iyz="0" izz="0.0008333333333333335"/>
+    </inertial>
+    <visual>
+      <geometry><box size="0.1 0.1 0.1"/></geometry>
+      <material name="builder_color_1"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.1 0.1 0.1"/></geometry>
+    </collision>
+  </link>
+  <joint name="child_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="child_link"/>
+    <origin xyz="0.15 0 0.05" rpy="0 0 0.3"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="1" velocity="10"/>
+  </joint>
+</robot>
