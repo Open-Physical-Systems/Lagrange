@@ -19,6 +19,7 @@ enum class Icon : int {
     Ros2,
     World,
     Performance,
+    Builder,  // RFC 0016: a wrench (docs/design/ui/12-builder)
     // Run controls.
     Reset,
     Pause,

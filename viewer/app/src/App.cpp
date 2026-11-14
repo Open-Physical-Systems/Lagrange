@@ -1,4 +1,5 @@
 #include "App.hpp"
+#include "BuilderHost.hpp"
 #include "lagrange/gpu/Device.hpp"
 #include "lagrange/gpu/Resources.hpp"
 #include "lagrange/proto/Endpoint.hpp"
@@ -29,6 +30,7 @@
 #include <signal.h>
 #include <span>
 #include <spawn.h>
+#include <string_view>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -510,6 +512,7 @@ public:
         context.renderOptions = &renderOptions_;
         context.bookmarks = &bookmarks_;
         context.launcher = &launcher_;
+        context.builder = &builderSession_;
         context.viewportTexture =
             static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(texture_));
         context.sensorTextures = &textures_;
@@ -527,6 +530,13 @@ public:
                 std::filesystem::is_socket(proto::defaultUnixSocketPath(), ec);
         }
         drawPanels(panels_, context);
+        builderHost_.afterUi();
+        if (launcher_.builderRequested) {
+            // Build a robot: the Builder works without a server, so nothing connects (R1).
+            launcher_.builderRequested = false;
+            launcher_.active = false;
+            workspace_ = Workspace::Builder;
+        }
         if (launcher_.connectRequested) {
             launcher_.connectRequested = false;
             const auto endpoint = proto::parseEndpoint(launcher_.connectEndpoint);
@@ -581,20 +591,33 @@ public:
         // Its heat patches (megabytes) stay out of the key: heatVersion stands for them.
         std::vector<RenderOptions::HeatPatch> heat;
         std::swap(heat, renderOptions_.heat);
-        ViewKey key{scene_,
-                    {camera_.target[0], camera_.target[1], camera_.target[2], camera_.distance,
-                     camera_.yaw, camera_.pitch, camera_.verticalFov, camera_.nearPlane},
+        // The Builder draws its own document with its own camera, never the server's scene
+        // (RFC 0016 §1; the key below then keys on which scene is drawn, R3).
+        Camera camera = camera_;
+        std::shared_ptr<const SceneFrame> scene = scene_;
+        const bool building = workspace_ == Workspace::Builder && !launcher_.active &&
+                              builderSession_.mode == BuilderSession::Mode::Build;
+        if (building) {
+            scene = builderHost_.frameToDraw(camera);
+        }
+        ViewKey key{scene,
+                    {camera.target[0], camera.target[1], camera.target[2], camera.distance,
+                     camera.yaw, camera.pitch, camera.verticalFov, camera.nearPlane},
                     renderer_.extent().width,
                     renderer_.extent().height,
                     sensorOverlayVersion_,
                     renderOptions_};
         std::swap(heat, renderOptions_.heat);
-        const bool moving = !airflowOverlays_.empty();  // particles move every frame
+        const bool moving = !building && !airflowOverlays_.empty();  // particles move every frame
         if (moving || !drawnKey_ || !drawnKey_->same(key)) {
             // In this order, without copying their vertices into one list.
-            const std::array<std::span<const OverlayLines>, 3> overlays{
-                cableOverlays_, sensorOverlays_, airflowOverlays_};
-            renderer_.render(commands, scene_.get(), camera_, renderOptions_, overlays);
+            // The server's overlays belong to its scene: none over the builder's.
+            std::array<std::span<const OverlayLines>, 3> overlays{cableOverlays_, sensorOverlays_,
+                                                                  airflowOverlays_};
+            if (building) {
+                overlays = {};
+            }
+            renderer_.render(commands, scene.get(), camera, renderOptions_, overlays);
             drawnKey_ = std::move(key);
             ++viewsDrawn_;
         }
@@ -988,6 +1011,7 @@ public:
     [[nodiscard]] std::uint64_t viewsDrawn() const { return viewsDrawn_; }
     void setCanOpenFiles(bool value) { canOpenFiles_ = value; }
     void setWorkspace(Workspace workspace) { workspace_ = workspace; }
+    [[nodiscard]] Workspace workspace() const { return workspace_; }
 
     /// Shows the launcher first: the client is started when the user chooses a server.
     void showLauncher(float displayScale) {
@@ -1191,6 +1215,8 @@ private:
     std::mt19937 airRandom_{20261102U};
     std::vector<std::int64_t> bookmarks_;
     LauncherState launcher_;
+    BuilderSession builderSession_;
+    BuilderHost builderHost_{builderSession_, client_};
     LocalServer localServer_;
     bool recordRecent_{false};
     std::string recentPath_;
@@ -1304,7 +1330,8 @@ std::vector<InputEvent> parseInput(const std::string& script) {
             up.frame = event.frame + 2;
             events.push_back(up);
         } else if (event.kind == "key") {
-            // A key pressed on this frame and let go on the next: enter, tab or escape.
+            // A key pressed on this frame and let go on the next: enter, tab, escape, or a
+            // letter with modifiers ("ctrl+b", "ctrl+shift+z").
             InputEvent down = event;
             down.kind = "keydown";
             events.push_back(down);
@@ -1335,12 +1362,35 @@ void applyInput(const std::vector<InputEvent>& events, std::uint32_t frame, ImGu
         } else if (event.kind == "text") {
             io.AddInputCharactersUTF8(event.text.c_str());
         } else if (event.kind == "keydown" || event.kind == "keyup") {
-            const ImGuiKey key = event.text == "enter"    ? ImGuiKey_Enter
-                                 : event.text == "tab"    ? ImGuiKey_Tab
-                                 : event.text == "escape" ? ImGuiKey_Escape
-                                                          : ImGuiKey_None;
+            std::string_view name = event.text;
+            bool ctrl = false;
+            bool shift = false;
+            for (bool more = true; more;) {
+                more = false;
+                if (name.starts_with("ctrl+")) {
+                    ctrl = more = true;
+                    name.remove_prefix(5);
+                } else if (name.starts_with("shift+")) {
+                    shift = more = true;
+                    name.remove_prefix(6);
+                }
+            }
+            ImGuiKey key = name == "enter"    ? ImGuiKey_Enter
+                           : name == "tab"    ? ImGuiKey_Tab
+                           : name == "escape" ? ImGuiKey_Escape
+                                              : ImGuiKey_None;
+            if (name.size() == 1 && name[0] >= 'a' && name[0] <= 'z') {
+                key = static_cast<ImGuiKey>(ImGuiKey_A + (name[0] - 'a'));
+            }
             if (key != ImGuiKey_None) {
-                io.AddKeyEvent(key, event.kind == "keydown");
+                const bool down = event.kind == "keydown";
+                if (ctrl) {
+                    io.AddKeyEvent(ImGuiMod_Ctrl, down);
+                }
+                if (shift) {
+                    io.AddKeyEvent(ImGuiMod_Shift, down);
+                }
+                io.AddKeyEvent(key, down);
             }
         }
     }
@@ -1360,7 +1410,10 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
 
     ViewerClient client(endpoint);
     client.setSecurity(options.tlsCa, options.authToken);
-    if (!options.launcher && !options.startLocal) {
+    // The Builder works without a server (RFC 0016): with --workspace builder and no --connect
+    // nothing connects, and no scene is waited for.
+    const bool builderOffline = workspace == Workspace::Builder && options.endpoint.empty();
+    if (!options.launcher && !options.startLocal && !builderOffline) {
         client.start();
         if (!options.openPath.empty()) {
             openFile(client, options.openPath);
@@ -1422,7 +1475,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             const auto current = client.scene();
             // The launcher needs no scene: it is what is shown before connecting.
             const bool haveScene =
-                options.launcher ||
+                options.launcher || builderOffline ||
                 (current != nullptr &&
                  (options.openPath.empty() || client.notice().text.rfind("Loading", 0) != 0));
             if (!haveScene && Clock::now() > deadline) {
@@ -1533,7 +1586,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             "\"log_lines\": %llu, \"attributes\": %zu, \"wiring_nodes\": %zu, "
             "\"wiring_wires\": %zu, \"events\": %zu, \"server_stats\": %s, "
             "\"environment_fields\": %zu, \"ros_topics\": %zu, \"ros_nodes\": %zu, "
-            "\"world_tiles\": %zu, \"world_agents\": %zu, \"shading\": %d}\n",
+            "\"world_tiles\": %zu, \"world_agents\": %zu, \"shading\": %d, "
+            "\"workspace\": \"%s\", \"launcher\": %s}\n",
             jsonEscape(client.notice().text).c_str(), client.notice().error ? "true" : "false",
             rendered, static_cast<unsigned long long>(stats.snapshots),
             static_cast<unsigned long long>(stats.deltas),
@@ -1557,7 +1611,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             client.rosGraph() ? client.rosGraph()->nodes.size() : std::size_t{0},
             client.world() ? client.world()->tiles.size() : std::size_t{0},
             client.world() ? client.world()->agents.size() : std::size_t{0},
-            static_cast<int>(ui.shading()));
+            static_cast<int>(ui.shading()), toString(ui.workspace()),
+            ui.launcherActive() ? "true" : "false");
         if (device->validationErrorCount() != 0 && exitCode == 0) {
             exitCode = 6;
         }
@@ -1721,8 +1776,10 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
 
     // Without a server named on the command line the viewer starts on the launcher, and the
     // client is started when the user picks a server there (design: 01-launcher).
-    const bool launcher = options.launcher || options.startLocal ||
-                          (options.endpoint.empty() && options.openPath.empty());
+    // --workspace builder opens the Builder, which needs no server (RFC 0016).
+    const bool launcher =
+        options.launcher || options.startLocal ||
+        (options.endpoint.empty() && options.openPath.empty() && workspace != Workspace::Builder);
     ViewerClient client(endpoint);
     client.setSecurity(options.tlsCa, options.authToken);
     if (!launcher) {
@@ -1964,7 +2021,8 @@ int runViewer(const Options& options) {
     if (!options.workspace.empty()) {
         const std::optional<Workspace> parsed = parseWorkspace(options.workspace);
         if (!parsed) {
-            std::fprintf(stderr, "error: unknown workspace '%s' (scene, domains, signals)\n",
+            std::fprintf(stderr,
+                         "error: unknown workspace '%s' (scene, domains, signals, ..., builder)\n",
                          options.workspace.c_str());
             return 2;
         }

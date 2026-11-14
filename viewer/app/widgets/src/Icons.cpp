@@ -70,6 +70,10 @@ constexpr std::array<Definition, static_cast<std::size_t>(Icon::Count)> kIcons{{
     {{{circle(8, 8, 6), path("M2 8h12 M8 2c2.2 2.2 2.2 9.8 0 12 M8 2c-2.2 2.2-2.2 9.8 0 12")}}, 2},
     // Performance
     {{{path("M2.5 11.5a5.5 5.5 0 1 1 11 0 M8 11.5l3-4")}}, 1},
+    // Builder (12-builder)
+    {{{path("M10.6 2.2a3.2 3.2 0 0 0-3.5 4.3L2.4 11.2a1.3 1.3 0 0 0 0 1.9l.5.5a1.3 1.3 0 0 0 1.9 "
+            "0l4.7-4.7a3.2 3.2 0 0 0 4.3-3.5l-1.9 1.9-1.9-.5-.5-1.9z")}},
+     1},
     // Reset
     {{{path("M3.5 8a4.5 4.5 0 1 0 1.3-3.2 M3.5 2.8v2.6h2.6")}}, 1},
     // Pause

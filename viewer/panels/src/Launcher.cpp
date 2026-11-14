@@ -339,9 +339,12 @@ bool card(int index, const RobotClass& item, bool selected, const ImVec2& size) 
 void start(PanelContext& context, LauncherState& state) {
     const float width = ImGui::GetContentRegionAvail().x;
     const float gap = px(8.0F);
-    const float tile = (width - gap * 2.0F) / 3.0F;
+    // Four action tiles, two by two: the design's three and Build a robot (RFC 0016 open
+    // question 6). Four in one row would cut their titles at the design's window width.
+    const float tile = (width - gap) / 2.0F;
     // The file is read by the server, so a tile only chooses what to open after connecting.
     const bool canPick = context.canOpenFiles;
+    const ImVec2 firstRow = ImGui::GetCursorScreenPos();
     ImGui::BeginDisabled(!canPick);
     if (action("##open-stage", widgets::Icon::Folder, "Open stage", ".usd · .usda · .usdc",
                "Ctrl O", tile)) {
@@ -352,7 +355,7 @@ void start(PanelContext& context, LauncherState& state) {
                "URDF / xacro · SDFormat · MJCF", "Ctrl I", tile)) {
         context.openFileRequested = true;
     }
-    ImGui::SameLine(0.0F, gap);
+    ImGui::SetCursorScreenPos(ImVec2(firstRow.x, firstRow.y + px(64.0F) + gap));
     if (action("##open-recording", widgets::Icon::Replay, "Open recording", ".mcap → replay mode",
                "Ctrl R", tile)) {
         context.openFileRequested = true;
@@ -361,6 +364,13 @@ void start(PanelContext& context, LauncherState& state) {
     if (canPick && (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_I) ||
                     ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_R))) {
         context.openFileRequested = true;
+    }
+    // Building needs no server: it opens the Builder workspace without connecting (R1).
+    ImGui::SameLine(0.0F, gap);
+    if (action("##build-robot", widgets::Icon::Builder, "Build a robot",
+               "links · joints · sensors, no server", "Ctrl B", tile) ||
+        ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_B)) {
+        state.builderRequested = true;
     }
 
     ImGui::Dummy(ImVec2(0.0F, px(16.0F)));
