@@ -36,13 +36,20 @@ SCOPE = (1151, 916, (316, 160, 836, 880))  # the scope, at one to one
 BIRD = (1920, 1080, (268, 126, 928, 618))  # the lidar's bird's-eye view
 ENVIRONMENT_SLICE = (1920, 1080, (655, 200, 1295, 920))  # Environment: middle of Slice 2D
 VIEWPORT_HALF = (1920, 1080, (610, 127, 1250, 847))  # the middle of the 3D view, 640 wide
-# The Sensors workspace's Camera panel: the right half of the centre's top (Chrome.cpp: sensor
-# list 260 px, Degradation 320 px, lidar | camera above the IMU), taken as BIRD moved 670 px
-# right. TODO(verify): against the first frames of a recording.
-CAMERA_PANEL = (1920, 1080, (938, 126, 1598, 618))
+# The Sensors workspace's Camera panel at 1920 x 1080 (Chrome.cpp: sensor list 260 px,
+# Degradation 320 px, lidar | camera above IMU | radar): a square image (CAMERA_SQUARE) fills its
+# height, 522 px from y = 124; a 4:3 one (CAMERA_PANEL) its width, 660 px from x = 933.
+CAMERA_PANEL = (1920, 1080, (933, 124, 1593, 624))
+CAMERA_SQUARE = (1920, 1080, (996, 124, 1526, 648))
 VIEWPORT_THIRD = (1920, 1080, (716, 127, 1142, 847))  # the middle of the 3D view, 426 wide
+# The Sensors workspace at 1920 x 1080: the Radar view (bottom right of the 2 x 2 grid, under the
+# camera) and the camera's image without its tool row.
+RADAR_PANEL = (1920, 1080, (1060, 700, 1593, 1050))
+CAMERA_IMAGE = (1920, 1080, (933, 104, 1593, 500))
 LEFT = (0, 0, 760, 720)
 RIGHT = (760, 0, 520, 720)
+RIGHT_TOP = (760, 0, 520, 360)
+RIGHT_BOTTOM = (760, 360, 520, 360)
 HALF_L = (0, 0, 640, 720)
 HALF_R = (640, 0, 640, 720)
 THIRD_L = (0, 0, 426, 720)
@@ -66,6 +73,7 @@ class Pane:
     viewer: list[str] = field(default_factory=list)
     run: int = 0
     text: str | None = None  # a file to show instead of a viewer
+    of: int | None = None  # another part of pane `of`'s frames: no viewer of its own
 
 
 @dataclass
@@ -272,9 +280,29 @@ def cmd_vel(x: float, z: float, seconds: float) -> list[str]:
             f"{{twist: {{linear: {{x: {x}, z: {z}}}}}}}"]  # fmt: skip
 
 
+def twist(x: float, wz: float, seconds: float) -> list[str]:
+    """A ground robot's /cmd_vel at 20 Hz for `seconds`: forward x (m/s), turn rate wz (rad/s)."""
+    return ["ros2", "topic", "pub", "-r", "20", "-t", str(round(20 * seconds)), "-w", "1",
+            "/cmd_vel", "geometry_msgs/msg/TwistStamped",
+            f"{{twist: {{linear: {{x: {x}}}, angular: {{z: {wz}}}}}}}"]  # fmt: skip
+
+
+# simulation_interfaces' SetSimulationState to STATE_PLAYING: runs started with --paused, played
+# together so that side-by-side runs move in step.
+PLAY = ["ros2", "service", "call", "/set_simulation_state",
+        "simulation_interfaces/srv/SetSimulationState", "{state: {state: 1}}"]  # fmt: skip
+
+
 # The multicopter's /cmd_vel: 0.5 m/s down for 3 s (60 messages at 20 Hz), then it holds.
 DESCEND = ["ros2", "topic", "pub", "-r", "20", "-t", "60", "-w", "1", "/cmd_vel",
            "geometry_msgs/msg/TwistStamped", "{twist: {linear: {z: -0.5}}}"]  # fmt: skip
+FISHEYE_LINE = (
+    "<lens><type>equidistant</type><cutoff_angle>1.9199</cutoff_angle></lens>    "
+    "(Kannala-Brandt, as OpenCV's fisheye; up to 360°)"
+)
+EVENT_LINE = (
+    '<sensor type="event_camera">    DAVIS346 pixels, thresholds and noise as v2e (sensors.md §9)'
+)
 
 CLIPS: list[Clip] = [
     Clip(
@@ -903,19 +931,33 @@ CLIPS: list[Clip] = [
     # v1.3 (docs/release/v1.3.0.md). Scripted, not yet recorded: see docs/videos/README.md.
     Clip(
         "radar_4d",
-        "A 4D imaging radar: detections by range, azimuth, elevation and Doppler cell",
-        24,
+        "A 4D imaging radar: detections by range, azimuth, elevation and Doppler,"
+        " in 3D and in its view",
+        26,
         [["--robot", SEDAN_4D, "--world", TOWN, *DRIVE]],
         [
-            Pane("3D view", LEFT, viewer=["--workspace", "Scene", "--follow", "12,25"]),
+            # Behind the car, the follow camera keeping it in the middle; Overlays → Radar
+            # detections: boxes sized by RCS, coloured by radial velocity (blue closing).
             Pane(
-                "detections per scan: imaging radar, radar",
-                RIGHT,
-                SCOPE,
-                # Both write sensor/<n>/count (modules/sensors/src/Radar.cpp); front_4d_radar is
-                # kind imaging_radar in sedan_4d_radar.usda, front_radar RadarAPI_1 in sedan.usda.
-                scope("sensor/front_4d_radar/count", "sensor/front_radar/count"),
+                "3D view: Overlays → Radar detections",
+                LEFT,
+                viewer=[
+                    "--overlays",
+                    "radar",
+                    "--follow",
+                    "12,24",
+                    *view(30, -1.75, 0, 12, 180, 24),
+                ],
             ),
+            # The Sensors workspace with front_4d_radar picked in its list (the fifth entry):
+            # the Radar view (fan) and the camera above it, from one viewer.
+            Pane(
+                "Sensors → Radar: front_4d_radar, range-azimuth",
+                RIGHT_TOP,
+                RADAR_PANEL,
+                ["--workspace", "Sensors", "--input", "20:click:80,385"],
+            ),
+            Pane("front_camera", RIGHT_BOTTOM, CAMERA_IMAGE, of=1),
         ],
         [
             Step(
@@ -923,12 +965,13 @@ CLIPS: list[Clip] = [
                 "sedan_4d_radar.usda: kind imaging_radar, 64 x 16 virtual channels, 77 GHz,"
                 " Doppler folding, ground ghosts",
             ),
-            Step(
-                5,
-                "It detects by resolution cell, the radar by object: a car gives it several",
-            ),
+            Step(6, "Standing: the walls and parked things are white, at 0 m/s"),
             # The car's /cmd_vel: forward speed (m/s), as `lagrange drive` takes it.
-            Step(10, "/cmd_vel 4 m/s for 6 s", cmd_vel(4.0, 0.0, 6.0)),
+            Step(
+                11,
+                "/cmd_vel 4 m/s for 9 s: all that stands now closes on it, blue",
+                cmd_vel(4.0, 0.0, 9.0),
+            ),
         ],
     ),
     Clip(
@@ -944,13 +987,13 @@ CLIPS: list[Clip] = [
                 "--sensor-fault",
                 "imu:angular_rate=bias,value=0.5,at=8,for=6,component=2",
                 "--sensor-fault",
-                "imu:angular_rate=stuck,at=18,for=6",
+                "imu:angular_rate=stuck,at=21,for=6",
             ]
         ],
         [
-            Pane("3D view", LEFT, viewer=["--workspace", "Scene", "--follow", "6,50"]),
+            Pane("3D view", LEFT, viewer=["--workspace", "Scene", "--follow", "3.5,65"]),
             Pane(
-                "yaw rate: the IMU's, the truth (rad/s); fault window",
+                "IMU yaw rate; true yaw rate; fault on",
                 RIGHT,
                 SCOPE,
                 # sensor/<n>/fault/active: modules/sensors/src/Faults.cpp; twist.wz: the Wrench
@@ -963,11 +1006,16 @@ CLIPS: list[Clip] = [
             ),
         ],
         [
-            # Fault times are simulated time, which starts a few seconds before the first
-            # frame: the captions lead their faults a little.
+            # Fault times are simulated time, about 1.5 s ahead of the clip's. The figure-eight
+            # turns the other way about every 12 s (at 11.5 and 24.5 s of simulated time): each
+            # fault holds one change of direction, which the stuck gyro then misses.
             Step(0, "--sensor-fault imu:angular_rate=bias,value=0.5,at=8,for=6,component=2"),
-            Step(12, "--sensor-fault imu:angular_rate=stuck,at=18,for=6"),
-            Step(24, "Ground truth (/ground_truth/odom, /tf, the bodies' signals) is not faulted"),
+            Step(6.5, "Biased: the gyro reads 0.5 rad/s more than the robot turns"),
+            Step(15, "--sensor-fault imu:angular_rate=stuck,at=21,for=6"),
+            Step(
+                19.5, "Stuck: the gyro holds its last reading while the robot turns the other way"
+            ),
+            Step(26, "Ground truth (/ground_truth/odom, /tf, the bodies' signals) is not faulted"),
         ],
     ),
     Clip(
@@ -1016,21 +1064,22 @@ CLIPS: list[Clip] = [
         "A fisheye camera: 220° on one image",
         16,
         [
-            ["--robot", "amr_pinhole.urdf", "--world", WAREHOUSE],
-            ["--robot", "amr_fisheye.urdf", "--world", WAREHOUSE],
+            ["--robot", "amr_pinhole.urdf", "--world", WAREHOUSE, "--paused"],
+            ["--robot", "amr_fisheye.urdf", "--world", WAREHOUSE, "--paused"],
         ],
         [
-            Pane("pinhole, 90°", HALF_L, CAMERA_PANEL, ["--workspace", "Sensors"]),
+            Pane("pinhole, 90°", HALF_L, CAMERA_SQUARE, ["--workspace", "Sensors"]),
             Pane(
-                "equidistant fisheye, 220°", HALF_R, CAMERA_PANEL, ["--workspace", "Sensors"], run=1
+                "equidistant fisheye, 220°",
+                HALF_R,
+                CAMERA_SQUARE,
+                ["--workspace", "Sensors"],
+                run=1,
             ),
         ],
         [
-            Step(
-                0,
-                "<lens><type>equidistant</type><cutoff_angle>1.9199</cutoff_angle></lens>    "
-                "(Kannala-Brandt, as OpenCV's fisheye; up to 360°)",
-            )
+            Step(0, FISHEYE_LINE, PLAY),
+            Step(0, FISHEYE_LINE, PLAY, run=1),
         ],
         amr_cameras,
     ),
@@ -1039,8 +1088,8 @@ CLIPS: list[Clip] = [
         "An event camera: only what changes",
         16,
         [
-            ["--robot", "amr_camera_346.urdf", "--world", WAREHOUSE],
-            ["--robot", "amr_dvs.urdf", "--world", WAREHOUSE],
+            ["--robot", "amr_camera_346.urdf", "--world", WAREHOUSE, "--paused"],
+            ["--robot", "amr_dvs.urdf", "--world", WAREHOUSE, "--paused"],
         ],
         [
             Pane("camera, 346 x 260", HALF_L, CAMERA_PANEL, ["--workspace", "Sensors"]),
@@ -1053,31 +1102,32 @@ CLIPS: list[Clip] = [
             ),
         ],
         [
-            Step(
-                0,
-                '<sensor type="event_camera">    DAVIS346 pixels, thresholds and noise as v2e'
-                " (sensors.md §9)",
-            )
+            Step(0, EVENT_LINE, PLAY),
+            Step(0, EVENT_LINE, PLAY, run=1),
+            Step(9.5, "Along a plain wall: no edges cross the pixels, so hardly any events"),
         ],
         amr_cameras,
     ),
     Clip(
         "amr_sensor_kinds",
         "Built-in kinds on an AMR: a safety scanner's fields, wheel torque",
-        28,
-        # 0.4 m north of the usual start: the loop's northward stretch brings the north rack
-        # (face at y = 3.0) inside the 1.5 m warning field.
-        [["--robot", AMR_SAFETY, "--world", WAREHOUSE, "--spawn", "0,0.4"]],
+        26,
+        # Driven by /cmd_vel from the usual start (facing +x): a quarter turn left, then up to the
+        # north rack (face at y = 3.0) into the 1.5 m warning field, short of the 0.6 m protective
+        # one, and back.
+        [["--robot", AMR_SAFETY, "--world", WAREHOUSE, "--no-demo"]],
         [
-            Pane("3D view", LEFT, viewer=["--workspace", "Scene", "--follow", "6,50"]),
+            # From the south, looking north at the rack the robot drives up to.
+            Pane("3D view", LEFT, viewer=view(0, 1.6, 0, 6, -90, 45)),
             Pane(
-                "safety: nearest return (m), warning field; left wheel torque (N·m)",
+                "safety: nearest return (m); warning, protective; left wheel torque (N·m)",
                 RIGHT,
                 SCOPE,
                 # modules/sensors/src/kinds/SafetyScanner.cpp, ForceTorque.cpp (joint_torque).
                 scope(
                     "sensor/safety/min_distance",
                     "sensor/safety/warning",
+                    "sensor/safety/protective",
                     "sensor/left_wheel_torque/torque",
                 ),
             ),
@@ -1088,11 +1138,14 @@ CLIPS: list[Clip] = [
                 "amr_diffdrive_safety.urdf: bumpers, cliff sensors, wheel odometry, a safety"
                 " scanner, wheel torque",
             ),
+            Step(3, "/cmd_vel: a quarter turn left", twist(0.0, 0.6, 2.6)),
+            Step(7, "/cmd_vel 0.3 m/s towards the rack", twist(0.3, 0.0, 6.0)),
             Step(
-                8,
-                '<sensor type="safety_scanner">: protective 0.6 m, warning 1.5 m ahead'
+                10,
+                '<sensor type="safety_scanner">: warning 1.5 m, protective 0.6 m ahead'
                 " (nanoScan3 style)",
             ),
+            Step(17, "/cmd_vel -0.3 m/s: back out of the warning field", twist(-0.3, 0.0, 5.0)),
         ],
     ),
 ]
@@ -1192,6 +1245,9 @@ def wait_for(path: Path, what: subprocess.Popen[bytes], log: Path | None = None)
 def record(clip: Clip, out_dir: Path, keep: bool) -> None:
     print(clip.name, flush=True)
     work = Path(tempfile.mkdtemp(prefix=f"lagrange_video_{clip.name}_"))
+    # Sockets in a short directory of their own: a socket's path holds at most 107 bytes, and
+    # $TMPDIR may be deep.
+    sockets = Path(tempfile.mkdtemp(prefix="lgv_", dir="/tmp"))
     if clip.write:
         clip.write(work)
     envs: list[dict[str, str]] = []
@@ -1201,9 +1257,12 @@ def record(clip: Clip, out_dir: Path, keep: bool) -> None:
     count = int((clip.seconds + 6) * FPS)
     try:
         for r, args in enumerate(clip.runs):
-            env = dict(os.environ, ROS_DOMAIN_ID=str(80 + r))
+            # The first run in this shell's ROS_DOMAIN_ID (80 when unset), the others 60 apart
+            # (at most 232 for Fast DDS), so that a shared machine's other runs stay apart.
+            base = int(os.environ.get("ROS_DOMAIN_ID", "80"))
+            env = dict(os.environ, ROS_DOMAIN_ID=str((base + 60 * r) % 233))
             envs.append(env)
-            socket = work / f"run{r}.sock"
+            socket = sockets / f"run{r}.sock"
             if args[0] == "@cli":
                 command = ["lagrange", *args[1:], "--server-only", "--listen", f"unix:{socket}"]
             elif args[0] == "@run":  # a profile: lagrange run PROFILE ...
@@ -1217,36 +1276,42 @@ def record(clip: Clip, out_dir: Path, keep: bool) -> None:
                                             stderr=subprocess.STDOUT))  # fmt: skip
             wait_for(socket, servers[-1], log)
         for p, pane in enumerate(clip.panes):
-            if pane.text is not None:
+            if pane.text is not None or pane.of is not None:
                 continue
             viewers.append(subprocess.Popen(
                 ["ros2", "run", "lagrange_viewer", "lagrange_viewer",
-                 "--connect", f"unix:{work}/run{pane.run}.sock", "--headless",
+                 "--connect", f"unix:{sockets}/run{pane.run}.sock", "--headless",
                  "--size", f"{pane.view[0]}x{pane.view[1]}", "--wait-ms", "60000",
                  "--record-frames", str(work / f"pane{p}"), "--record-fps", str(FPS),
                  "--frames", str(count), *pane.viewer],
                 env=envs[pane.run], cwd=work, stdout=subprocess.DEVNULL,
             ))  # fmt: skip
-        live = [p for p, pane in enumerate(clip.panes) if pane.text is None]
+        live = [p for p, pane in enumerate(clip.panes) if pane.text is None and pane.of is None]
         for p, viewer in zip(live, viewers, strict=True):
             wait_for(work / f"pane{p}" / "frame_00000.png", viewer)
         start = time.time()
+        # Each command runs beside the clip, its caption from the moment it was sent: a
+        # `ros2 topic pub -t N` that streams for seconds does not hold back the steps after it.
+        commands: list[tuple[list[str], subprocess.Popen[bytes]]] = []
         for step in sorted(clip.steps, key=lambda s: s.at):
             time.sleep(max(step.at - (time.time() - start), 0.0))
             if step.command:
-                done = subprocess.run(
-                    step.command, env=envs[step.run], cwd=work, timeout=30,
+                commands.append((step.command, subprocess.Popen(
+                    step.command, env=envs[step.run], cwd=work,
                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                )  # fmt: skip
-                if done.returncode != 0:
-                    raise SystemExit(f"{step.command}: {done.stderr.decode()[-500:]}")
+                )))  # fmt: skip
             sent.append((time.time() - start, step.caption))
+        for command, process in commands:
+            _, error = process.communicate(timeout=60)
+            if process.returncode != 0:
+                raise SystemExit(f"{command}: {error.decode()[-500:]}")
         for viewer in viewers:
             if viewer.wait(clip.seconds * 4 + 120) != 0:
                 raise SystemExit("a viewer failed")
     finally:
         for process in [*viewers, *servers]:
             stop(process)
+        shutil.rmtree(sockets, ignore_errors=True)
     # By the clock: each pane's latest frame at each moment, so the panes stay together.
     stamped = {p: sorted(((f.stat().st_mtime, f) for f in (work / f"pane{p}").glob("frame_*.png")),
                          key=lambda item: item[0]) for p in live}  # fmt: skip
@@ -1256,7 +1321,10 @@ def record(clip: Clip, out_dir: Path, keep: bool) -> None:
     for index in range(int(clip.seconds * FPS)):
         now = start + index / FPS
         images: list[Image.Image | None] = []
-        for p in range(len(clip.panes)):
+        for p, pane in enumerate(clip.panes):
+            if pane.of is not None:
+                images.append(images[pane.of])
+                continue
             if p not in stamped:
                 images.append(None)
                 continue
