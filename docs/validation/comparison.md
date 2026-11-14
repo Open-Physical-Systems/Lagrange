@@ -42,7 +42,7 @@ The key numbers, all measured here: real-time factor (higher is faster), median 
 | Start-up to the first step | 0.07 s | 2.4 to 2.7 s |
 | Peak memory, AMR with sensors | 78 MB (CPU lidar) | 961 MB |
 | Two runs bit-identical | yes (both backends) | not known: the second run was stopped |
-| Worst closed-form error in the six physics cases | Jolt backend loses 16 % of a pendulum's energy in 60 s; MuJoCo backend within 0.15 % | within 0.15 % |
+| Worst closed-form error in the six physics cases | Jolt backend loses 16 % of a pendulum's energy in 60 s (5 % with 4 sub-steps, at 4 times the cost); MuJoCo backend within 0.15 % | within 0.15 % |
 
 ## Method
 
@@ -213,6 +213,7 @@ The cases are deterministic, so one run each.
 |---|---|---|---|---|---|---|---|
 | Lagrange, MuJoCo backend | −4.905 mm | −0.41 ppm | −0.07 % (worst 0.15 %) | −136 ppm | 0.916 mm | 0 | 0.108 mm |
 | Lagrange, Jolt backend | −4.898 mm | −0.02 ppm | **−16.4 %** (worst 16.4 %) | −4.0 ppm | 0.001 mm | 0 (by construction, see below) | 0.0002 mm |
+| Lagrange, Jolt backend, `substeps: 4` | −1.242 mm (a 0.25 ms step) | −3.9 ppm | **−5.3 %** (worst 5.3 %) | −4.2 ppm | 0.001 mm | 0 (by construction) | 0.0002 mm |
 | Gazebo Jetty (DART) | −4.905 mm | −0.41 ppm | −0.07 % (worst 0.15 %) | −0.0 ppm | 0.000 mm | +0.1 ppm | 0.0000 mm |
 | MuJoCo 3.12.0 standalone | −4.905 mm | −0.41 ppm | −0.07 % (worst 0.15 %) | +124 ppm | 1.282 mm | −0.000007 ppm | 0.108 mm |
 | MuJoCo 4.0.1 standalone | −4.905 mm | −0.41 ppm | −0.07 % (worst 0.15 %) | +124 ppm | 1.282 mm | −0.000007 ppm | 0.108 mm |
@@ -223,14 +224,31 @@ What this says:
 - **Free fall.** Every engine is off by the same −4.905 mm. That is not an engine error: it is
   semi-implicit Euler at a 1 ms step, which falls exactly g·Δt·t/2 further than the closed form.
   Jolt's −4.898 mm is the same integrator in single precision: Lagrange builds Jolt with
-  `DOUBLE_PRECISION=OFF`.
+  `DOUBLE_PRECISION=OFF`. Float32 velocity and position give −4.898281 mm to the last digit.
+  Jolt's double precision covers positions only, not velocities, so turning it on would give
+  −4.900 mm. Jolt with 4 sub-steps steps every 0.25 ms, so its integrator error is a quarter.
 - **Pendulum period.** Every engine is within half a part per million of the exact period.
 - **Pendulum energy.** This is the clearest difference found. MuJoCo, DART, Bullet and Lagrange
   on MuJoCo keep the energy within 0.15 % over 60 s. **Lagrange on Jolt loses 16 % of it.**
-  Lagrange zeroes Jolt's linear and angular body damping, so the loss comes from the hinge
-  constraint's solver; the exact mechanism was not investigated here. Lagrange's own energy test
-  (`Pendulum.EnergyDriftAndLargeAnglePeriod`, under 0.1 % over 10 s) covers the MuJoCo backend
-  only. Use MuJoCo, the default and the reference, when energy over long runs matters.
+  The cause is how Jolt solves joints, not a setting in Lagrange
+  ([rigid_body.md §8.1](../design/domains/rigid_body.md)):
+  - Lagrange gives Jolt no damping. The bodies' linear and angular damping are zero (Jolt's
+    default is 0.05), the hinge has no friction and no motor, and nothing sleeps.
+  - Jolt's solver settings do not change the loss. No position steps, Baumgarte 0 or 1, and
+    30 velocity iterations all give 16.3–16.4 %.
+  - The engines that keep the energy solve the pendulum in joint coordinates (DART, Bullet's
+    multibody, MuJoCo). Jolt keeps each body free and holds the joint by projecting velocities
+    at each step. The projection takes off the share of velocity that the body's turn over the
+    step made radial: (ω Δt)² of the kinetic energy per step.
+  - The same scheme on a point mass, in double precision, loses 16.35 % in 60 s.
+  - The loss falls with the step. A profile's `rigid_body: {substeps: N}` (added after this
+    finding) gives 9.0 % at 2 sub-steps, 5.3 % at 4 and 2.3 % at 16. Each costs about N times
+    as much: the 200-box pile ran at RTF 2.35, 1.29 and 0.66 at 1, 2 and 4 sub-steps.
+  - The conformance suite now holds every backend to the bound. The test
+    `Conformance.APendulumKeepsItsPeriodAndEnergy` checks the exact period within 0.25 %, no
+    gain over 0.5 %, and at least 80 % of the energy kept. `Jolt.APendulumLosesEnergyAs...`
+    pins Jolt's loss to the model.
+  - Use MuJoCo, the default and the reference, when energy over long free motion matters.
 - **Slide.** Every engine is within 0.014 % of g(sin θ − μ cos θ).
   - Lagrange's MuJoCo backend uses MuJoCo's elliptic friction cone, and is 136 ppm low.
   - Standalone MuJoCo, with its default pyramidal cone, is 124 ppm high.
@@ -377,8 +395,9 @@ Worse at, or missing:
   Engine for photorealism. Training perception on its images is not a validated use.
 - **No PhysX**, and so no GPU-parallel rigid bodies for reinforcement learning at scale (Isaac
   Sim, MuJoCo's MJX and Warp).
-- **The Jolt backend loses energy** in the pendulum test: 16 % over 60 s. Stay on MuJoCo, the
-  default, when that matters.
+- **The Jolt backend loses energy** in the pendulum test: 16 % over 60 s. This comes from
+  Jolt's joints, which are constraints between free bodies. `substeps: 4` brings it to 5 %, at
+  four times the cost. Stay on MuJoCo, the default, when that matters.
 - **The quadcopter needed its electrical domain.** With `electrical` switched to its ideal
   substitute, the sample quadcopter's rotors did not turn and it never took off (found while
   preparing this page; fixed on `dev` after v1.3.0, test

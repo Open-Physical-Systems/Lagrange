@@ -6,7 +6,8 @@
     run_lagrange.py SCENE_DIR OUT.json        (SCENE_DIR from scenes.py)
 
 Each case's MJCF is the robot, with no world; a profile picks the backend with a 1 ms step and
-switches every other domain to its substitute.
+switches every other domain to its substitute. Jolt runs twice: as it comes (one Jolt step per
+step) and with `substeps: 4` (docs/design/domains/rigid_body.md §8.1).
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ import lagrange
 PROFILE = """schema_version: 1
 stage: {stage}
 domains:
-  rigid_body:   {{ enabled: true,  backend: {backend}, dt: 0.001 }}
+  rigid_body:   {{ enabled: true,  backend: {backend}, dt: 0.001{extra} }}
   electrical:   {{ enabled: false, substitute: ideal }}
   thermal:      {{ enabled: false, substitute: constant }}
   aerodynamics: {{ enabled: false, substitute: zero }}
@@ -35,9 +36,12 @@ domains:
 
 
 class Run:
-    def __init__(self, xml: str, backend: str) -> None:
-        profile = Path(xml).with_name(f"{Path(xml).stem}.{backend}.yaml")
-        profile.write_text(PROFILE.format(stage=xml, backend=backend), encoding="utf-8")
+    def __init__(self, xml: str, backend: str, substeps: int = 1) -> None:
+        profile = Path(xml).with_name(f"{Path(xml).stem}.{backend}{substeps}.yaml")
+        extra = f", substeps: {substeps}" if substeps > 1 else ""
+        profile.write_text(
+            PROFILE.format(stage=xml, backend=backend, extra=extra), encoding="utf-8"
+        )
         self.sim = lagrange.Simulation(xml, world=None, profile=str(profile))
         self.body = "bob" if "bob" in self.sim.bodies() else "box"
 
@@ -57,9 +61,13 @@ class Run:
 def main() -> int:
     scene_dir, out = sys.argv[1], sys.argv[2]
     results = {}
-    for backend in ("mujoco", "jolt"):
-        results[f"Lagrange {backend}"] = drive.measure(
-            lambda case, b=backend: Run(f"{case}.xml", b), scene_dir
+    for label, backend, substeps in (
+        ("Lagrange mujoco", "mujoco", 1),
+        ("Lagrange jolt", "jolt", 1),
+        ("Lagrange jolt, 4 substeps", "jolt", 4),
+    ):
+        results[label] = drive.measure(
+            lambda case, b=backend, n=substeps: Run(f"{case}.xml", b, n), scene_dir
         )
     Path(out).write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(results, indent=2))

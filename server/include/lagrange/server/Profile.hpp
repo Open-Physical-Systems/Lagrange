@@ -38,6 +38,7 @@ struct ProfileSettings {
     std::set<std::string> substituted;              // domains with modules that are switched off
     std::optional<std::int64_t> rigidBodyDtNs;      // domains.rigid_body.dt
     std::optional<std::string> rigidBodyBackend;    // domains.rigid_body.backend
+    std::optional<std::int64_t> rigidBodySubsteps;  // domains.rigid_body.substeps (Jolt)
     std::optional<std::int64_t> electricalDtNs;     // domains.electrical.dt
     std::optional<std::int64_t> thermalDtNs;        // domains.thermal.dt
     std::optional<bool> speedPrediction;            // domains.electrical.speed_prediction

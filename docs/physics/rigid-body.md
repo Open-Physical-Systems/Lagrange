@@ -77,7 +77,12 @@ engine's gravity between steps; time and speeds carry on.
 MuJoCo steps with its `implicitfast` integrator, which stays stable with joint damping. Jolt
 applies joint damping explicitly, limited to what one step can take without turning the joint
 round. Bodies of one kinematic tree do not collide with each other; separate trees do. The
-engines' own substeps are internal and do not show to the scheduler. A run on MuJoCo is
+engines' own substeps are internal and do not show to the scheduler. Jolt holds joints as
+constraints between free bodies, which loses a little energy every step: a pendulum swinging
+freely from 1 rad loses 16 % of its energy in 60 s at 1 ms, where MuJoCo keeps it within
+0.1 %. A profile's `rigid_body: {substeps: N}` divides Jolt's step N times. That brings the loss
+to 9 % at 2 sub-steps and 5 % at 4, at N times the cost
+([rigid_body.md §8.1](../design/domains/rigid_body.md)). A run on MuJoCo is
 bit-for-bit repeatable: two runs with the same seed give the same state hash, and a saved state
 restored runs on bit-identically (Jolt passes the same check).
 
@@ -92,6 +97,7 @@ restored runs on bit-identically (Jolt passes the same check).
 | Mimic joint | $2\,q + 0.1$ within 0.02 rad, commands refused | `JointDynamics.AMimicJointCopiesItsLeaderAndTakesNoCommands` |
 | MuJoCo against Jolt | arm joint-space inertia and fall within 2 %; the sample AMR within 0.02 m/s and 0.02 rad/s | `Backends.*` |
 | Conformance suite (free fall, resting box, pendulum period 0.5 %, slope, stack, AMR loop, determinism) | MuJoCo, Jolt and Jolt as a plugin pass | `lagrange_physics_conformance` |
+| Pendulum from 1 rad over 60 s at 1 ms | period within 0.25 % of the exact elliptic-integral period (MuJoCo −0.2 ppm, Jolt −0.15 % as its swing shrinks); energy MuJoCo −0.07 %, **Jolt −16.4 %** (−5.3 % with 4 sub-steps) | `Conformance.APendulumKeepsItsPeriodAndEnergy`, `Jolt.APendulumLosesEnergyAsJointsAsConstraintsDoAndSubstepsDivideIt` |
 | Contact force and joint reaction | a box at rest held up by its weight within 0.5 %; a swinging pivot carries $m g + m d \omega^2$ within 1 % (11.349 N MuJoCo, 11.348 N Jolt) | `lagrange_physics_conformance`, `test_contact_forces_on_a_robot_at_rest_carry_its_weight`, `test_a_joints_reaction_is_what_it_carries` |
 | Gravity changed while falling | the speed gained follows the new value within 0.05 m/s | `Site.GravityChangesWhileFalling` |
 | Pushing a block, against 2000 measured pushes (Yu et al. 2016) | MuJoCo within 6 mm and 4–7° of the quasi-static theory, 3–41 mm and 10–17° from the measurements; **Jolt does not turn the block** (2° against about 75°) | `Conformance.APushedBlockMovesAsTheMcubeMeasurements` |

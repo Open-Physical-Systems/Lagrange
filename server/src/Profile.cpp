@@ -256,6 +256,10 @@ ProfileCheck checkProfile(const std::string& yaml, const std::string& schemaJson
                       "the thermal domain needs the site's ambient temperature (K); it has no "
                       "default");
             }
+            if (name == "rigid_body" && domain.contains("substeps") &&
+                domain["substeps"].is_int64()) {
+                settings.rigidBodySubsteps = domain["substeps"].as<std::int64_t>();
+            }
             if (domain.contains("dt") && domain["dt"].is_number()) {
                 const double ns = domain["dt"].as<double>() * kNsPerS;
                 if (std::abs(ns - std::round(ns)) > 1e-6) {

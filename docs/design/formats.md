@@ -1246,6 +1246,7 @@ and requires a whole number of nanoseconds (architecture §2).
       "properties": {
         "backend": { "enum": ["physx", "mujoco", "jolt"] },
         "solver_iterations": { "type": "integer", "minimum": 1 },
+        "substeps": { "type": "integer", "minimum": 1, "maximum": 64, "default": 1, "description": "Jolt steps per rigid-body step: each divides Jolt's joint energy loss and multiplies its cost (rigid_body.md §8.1)." },
         "gpu": { "type": "boolean", "default": false },
         "load_profile": { "type": "string", "description": "CSV torque-vs-speed table for the load_profile substitute." }
       },

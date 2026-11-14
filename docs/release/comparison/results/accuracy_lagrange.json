@@ -32,5 +32,22 @@
     "rest_penetration": 1.9073486257070726e-07,
     "rest_force": 19.61999999999995,
     "rest_force_rel_error": -2.55351295663786e-15
+  },
+  "Lagrange jolt, 4 substeps": {
+    "freefall_z": 5.0937581062316895,
+    "freefall_error": -0.0012418937683102982,
+    "pendulum_period": 2.006532862109885,
+    "pendulum_cycles": 9,
+    "pendulum_period_rel_error": -3.8949700501555995e-06,
+    "pendulum_small_final_amplitude": 0.050093133747577664,
+    "energy_rel_drift_end": -0.052639215664299216,
+    "energy_rel_max_dev": 0.052639215664299216,
+    "slide_acceleration": 2.3562773591711563,
+    "slide_acceleration_rel_error": -4.191972475364736e-06,
+    "slide_distance_2s": 4.713244983450373,
+    "static_displacement_2s": 8.988302181958816e-07,
+    "rest_penetration": 1.9073486257070726e-07,
+    "rest_force": 19.62,
+    "rest_force_rel_error": 0.0
   }
 }
