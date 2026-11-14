@@ -11,7 +11,7 @@ unit-checked signal bus, and any of them can be disabled or replaced by ideal, c
 replayed data. A native Vulkan viewer shows the run; it talks to the simulator only through a
 protocol, never by linking it.
 
-**Status: v1.2.1, stable** ([release notes](docs/release/v1.2.1.md); documentation at
+**Status: v1.3.0, stable** ([release notes](docs/release/v1.3.0.md); documentation at
 [open-physical-systems.github.io/Lagrange](https://open-physical-systems.github.io/Lagrange/)). The USD schemas, the
 plugin C ABI, the viewer protocol, profiles and recordings are frozen for 1.x and change only by
 addition ([RFC 0007](rfcs/0007-v1-freeze.md)); 1.x is supported on `release/1.x` until ROS 2
@@ -307,7 +307,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Release notes (11)</summary>
+<details><summary>Release notes (12)</summary>
 
 - [v0.2.0 compared with Gazebo Jetty: the sample AMR](docs/release/v0.2.0-comparison.md)
 - [Lagrange v0.2.0: simulation core and AMR (release notes, draft)](docs/release/v0.2.0.md)
@@ -320,6 +320,7 @@ recorded to MCAP and replayed.
 - [Lagrange v1.1.0: easier to use, checked against measurements (release notes)](docs/release/v1.1.0.md)
 - [Lagrange v1.2.0: cables, heat in the parts, a robot's own interference (release notes)](docs/release/v1.2.0.md)
 - [Lagrange v1.2.1: one command to install (release notes)](docs/release/v1.2.1.md)
+- [Lagrange v1.3.0: 37 new sensors, a faster simulator, hardened protocol (release notes)](docs/release/v1.3.0.md)
 
 </details>
 

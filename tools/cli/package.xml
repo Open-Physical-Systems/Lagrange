@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange</name>
-  <version>1.2.1</version>
+  <version>1.3.0</version>
   <description>The `lagrange` command: runs the simulator and its viewer together (like `gazebo`), either one alone, the sample robots by name, robots spawned into a running simulation, and the lagrange_server tools (run, validate, graph, determinism, export, info).</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>

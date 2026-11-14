@@ -57,7 +57,7 @@ Consequences:
 
 ## 2. Current phase
 
-**v1.2.1 is released (2026-11-11)**: a one-line installer from the release's debs (`packaging/install.sh`); v1.2.0 (2026-11-11): tethers (RFC 0011), heat conduction from materials (RFC 0012) and a robot's own EMI (RFC 0013); after v1.1.0 (2026-11-07), the first feature release of 1.x, and v1.0.0, the first stable
+**v1.3.0 is released (2026-11-14)**: 37 built-in sensor kinds, sensor faults, a server 1.3–4.6× faster and a lighter viewer, two QA passes, protocol limits before the handshake (RFC 0014), lidar patterns and fisheye lenses in USD (RFC 0015); v1.2.1 (2026-11-11): a one-line installer from the release's debs (`packaging/install.sh`); v1.2.0 (2026-11-11): tethers (RFC 0011), heat conduction from materials (RFC 0012) and a robot's own EMI (RFC 0013); after v1.1.0 (2026-11-07), the first feature release of 1.x, and v1.0.0, the first stable
 release (2026-10-29), and v0.2 to v0.7 (v0.2 to v0.6 on 2026-10-25, v0.7 on 2026-10-29;
 `docs/release/`; v0.1.0 on 2026-10-14). The documentation site is published to GitHub Pages from
 `main` by the `docs` workflow (https://open-physical-systems.github.io/Lagrange). 1.x is
@@ -66,7 +66,7 @@ addition; fixes are backported to `release/1.x` (`GOVERNANCE.md`). Status and ow
 `docs/plan/progress.md`. Next: the owed 1.x items and post-1.0 work (radiation, other robot
 classes) by the roadmap; other platforms only through an RFC.
 
-- Unreleased after v1.2.1 (on `dev` since #330, 2026-11-12): 37 built-in custom sensor kinds (with `imaging_radar`), sensor faults, lidar scan patterns and fisheye cameras, kinds on ROS 2 by default, server/viewer/start-up speedups, two QA passes (`docs/plan/qa-2026-11-12.md`, `docs/plan/qa-sensors-2026-11-12.md`).
+- In v1.3.0 (#330, #331, #333): 37 built-in custom sensor kinds (with `imaging_radar`), sensor faults, lidar scan patterns and fisheye cameras, kinds on ROS 2 by default, server/viewer/start-up speedups, two QA passes (`docs/plan/qa-2026-11-12.md`, `docs/plan/qa-sensors-2026-11-12.md`).
 - The protocol stays v1; the v0.1 viewer connects to the C++ server unchanged.
 - RFC 0001 (module interface), 0002 (USD schemas) and 0005 (profile format) are accepted; work
   that depends on a still-Draft RFC waits until the owner accepts it.

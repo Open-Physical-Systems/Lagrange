@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lagrange_autoware</name>
-  <version>1.2.1</version>
+  <version>1.3.0</version>
   <description>Autoware vehicle interface for Lagrange's road vehicles (v0.6): Autoware's control command to /ackermann_cmd, and the velocity, steering, gear and control-mode reports and the kinematic state from the simulator.</description>
   <maintainer email="danendraclever24@gmail.com">Danendra</maintainer>
   <license>Apache-2.0</license>

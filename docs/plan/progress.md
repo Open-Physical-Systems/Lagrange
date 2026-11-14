@@ -1,6 +1,6 @@
 # Progress
 
-Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-12: overnight work after v1.2.1 on `night/integration` (below); v1.2.1 released 2026-11-11 (one-line installer; docs/release/v1.2.1.md), after v1.2.0 (tethers, heat conduction, a robot's own EMI; docs/release/v1.2.0.md).
+Where the project stands against the [roadmap](roadmap.md). Updated 2026-11-14: v1.3.0 released (sensors, speed, QA, RFC 0014 and 0015; docs/release/v1.3.0.md); v1.2.1 released 2026-11-11 (one-line installer; docs/release/v1.2.1.md), after v1.2.0 (tethers, heat conduction, a robot's own EMI; docs/release/v1.2.0.md).
 
 ## The releases
 
@@ -22,11 +22,11 @@ flowchart LR
     classDef todo fill:#30363d,stroke:#6e7681,color:#c9d1d9
 ```
 
-## After v1.2.1 (2026-11-12, overnight, branch `night/integration`)
+## v1.3.0 (released 2026-11-14): after v1.2.1, overnight 2026-11-12 (#330)
 
 The owner asked for less lag, more GPU use, every sensor on the list up to #20 and more, and a
-hunt for flaws. Done by parallel agents in worktrees, merged into `night/integration` (not yet on
-`dev`), each merge built and tested over the whole workspace.
+hunt for flaws. Done by parallel agents in worktrees, merged into `night/integration`, then `dev`
+(#330), each merge built and tested over the whole workspace.
 
 - **Sensors:** 36 built-in custom sensor kinds (sensors.md §9, user guide `docs/guide/sensors.md`,
   example `lagrange_example_sensors`), sensor faults for every sensor, kinds' images to ROS 2,
@@ -48,7 +48,7 @@ hunt for flaws. Done by parallel agents in worktrees, merged into `night/integra
   files untouched tonight (`docs/plan/spikes/0.2-C6-jolt.md`, `city_block_roads.usda`,
   `vendor/jolt_vendor`).
 
-## After #330 (2026-11-12, day)
+## v1.3.0, the day after (#331, #333)
 
 - `imaging_radar`, a 4D imaging radar kind (range, azimuth, elevation, Doppler; λ/(N·d) cells,
   ambiguity folding, ground ghosts); the existing radar pinned bit for bit.
