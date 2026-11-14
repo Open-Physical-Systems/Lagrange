@@ -56,8 +56,11 @@ struct BuilderSession {
         std::vector<builder::Problem> builder;  ///< validate(), run on every commit (R15)
         std::vector<builder::Problem> loader;   ///< from the test server's log / Console
         std::vector<builder::Problem> check;    ///< one row per line naming a link or joint
-        std::string checkTable;                 ///< lagrange check's table, verbatim
-        int checkExit{-1};                      ///< -1: not run
+        /// Files and tools (SPEC state 6): a file that could not be read or written, Export
+        /// USD's and xacro's outcome. Not counted by errors(): they never refuse a Test.
+        std::vector<builder::Problem> files;
+        std::string checkTable;  ///< lagrange check's table, verbatim
+        int checkExit{-1};       ///< -1: not run
         /// Number of Level::Error across all three.
         [[nodiscard]] int errors() const;
     };
@@ -92,6 +95,19 @@ struct BuilderSession {
     double autosaveTime{0.0};  ///< ImGui::GetTime() of the last autosave, s; 0: none yet
     bool showDegrees{true};    ///< Joints panel's deg | rad (display only; files hold rad)
     std::string testTarget;    ///< "Test · empty world ▾" readout: "empty world", a file name
+    /// Grows whenever a new document replaces the history (Open, a template): views that key on
+    /// history.revision() key on this too, since a new History counts from 0 again.
+    std::uint64_t opened{0};
+    /// The last file error (SPEC state 6), for the err pill of the Files panel; empty: none.
+    std::string fileError;
+    /// What a child process is doing now ("Exporting USD…"); empty: nothing runs.
+    std::string busy;
+
+    // The test (SPEC state 4), written by BuilderHost for the Drive and Console panels.
+    std::string testLog;  ///< the tail of the test server's log, refreshed a few times a second
+    std::string testEndpoint;     ///< "unix:/run/user/1000/lagrange/builder-4242.sock"
+    std::string testRosDomain;    ///< the test server's ROS_DOMAIN_ID; empty: started with --no-ros
+    std::uint64_t testSerial{0};  ///< grows with every Test started (Drive comes to the front)
 
     // Out, read and cleared by BuilderHost::afterUi().
     bool testRequested{false};
@@ -105,6 +121,10 @@ struct BuilderSession {
     bool checkRequested{false};      ///< Check loads… (lagrange_check)
     bool templateRequested{false};
     std::string templateName;  ///< with templateRequested: assets/robots/templates/<name>.urdf
+    /// The windowed viewer's file dialogs (SDL): Open… (.urdf, .xacro) and Save as… (.urdf).
+    /// The chosen file comes back as openRequested / saveRequested with its path.
+    bool openDialogRequested{false};
+    bool saveAsDialogRequested{false};
 
     /// The document as it is now (history.current()).
     [[nodiscard]] const builder::Document& document() const { return history.current(); }

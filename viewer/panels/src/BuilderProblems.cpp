@@ -42,7 +42,8 @@ public:
         BuilderSession& session = *context.builder;
         const BuilderSession::Problems& problems = session.problems;
         const std::size_t count = problems.builder.size() + problems.loader.size() +
-                                  problems.check.size() + (session.catalogError.empty() ? 0 : 1);
+                                  problems.check.size() + problems.files.size() +
+                                  (session.catalogError.empty() ? 0 : 1);
         const int errors = problems.errors() + (session.catalogError.empty() ? 0 : 1);
         title_ = "Problems · " + std::to_string(count) + "###BuilderProblems";
         // State 3 (Invalid): Problems comes to the front once when errors appear, not on every
@@ -67,7 +68,8 @@ public:
             row(session,
                 Problem{Level::Error, "", "the catalog was not read: " + session.catalogError});
         }
-        list(session, "Builder", problems.builder);
+        // The newest outcomes first (WP-F): a failed Test, Check loads, a file; then the
+        // builder's own findings, which also mark the tree.
         list(session, "Loader · after Test", problems.loader);
         list(session, "Check loads", problems.check);
         if (!problems.checkTable.empty()) {
@@ -75,6 +77,8 @@ public:
             widgets::Mono(c::t2, "%s", problems.checkTable.c_str());
             ImGui::PopTextWrapPos();
         }
+        list(session, "Files", problems.files);
+        list(session, "Builder", problems.builder);
         ImGui::PopStyleVar();
         ImGui::End();
     }

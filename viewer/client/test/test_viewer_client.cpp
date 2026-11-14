@@ -1034,6 +1034,94 @@ TEST(ViewerClient, EnvironmentFieldsRosGraphAndWorldArePublished) {
     client.stop();
 }
 
+// RFC 0016 R7: the Builder's cost rule. Quiet unsubscribes everything a panel asked for, with
+// existing messages, and leaving it asks for all of it again.
+TEST(ViewerClient, QuietSendsEmptySubscriptionsAndRestores) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+    server.send(catalog(1));
+    ASSERT_TRUE(server.pump([&] { return client.catalog() != nullptr; }));
+    const auto a = client.subscribe("a");
+    ASSERT_NE(a, nullptr);
+    client.setRosGraphWanted(true);
+    client.setWorldWanted(true);
+    (void)client.watchSensor("/robot/lidar");
+    (void)client.watchField("emi/flux_density", 0.1);
+    const auto lastSubscribe = [&]() -> const v1::Subscribe* {
+        const v1::Subscribe* found = nullptr;
+        for (const v1::Envelope& e : server.received()) {
+            found = e.body_case() == v1::Envelope::kSubscribe ? &e.subscribe() : found;
+        }
+        return found;
+    };
+    // Everything asked for has arrived: the signal, the sensor, the field, graph and world on.
+    ASSERT_TRUE(server.pump([&] {
+        const v1::Subscribe* s = lastSubscribe();
+        return s != nullptr && s->signals_size() == 1 &&
+               server.countCommands(v1::Command::kSubscribeSensor) == 1 &&
+               server.countCommands(v1::Command::kSubscribeField) == 1 &&
+               server.countCommands(v1::Command::kSetWorld) == 2;
+    }));
+    const auto lastCommand = [&](v1::Command::CommandCase kind) -> const v1::Command* {
+        const v1::Command* found = nullptr;
+        for (const v1::Envelope& e : server.received()) {
+            if (e.body_case() == v1::Envelope::kCommand && e.command().command_case() == kind) {
+                found = &e.command();
+            }
+        }
+        return found;
+    };
+
+    client.setQuiet(true);
+    client.setQuiet(true);  // no change: nothing more is sent
+    EXPECT_TRUE(client.quiet());
+    ASSERT_TRUE(server.pump([&] {
+        const v1::Subscribe* s = lastSubscribe();
+        return s != nullptr && s->signals_size() == 0 &&
+               server.countCommands(v1::Command::kSubscribeSensor) == 2 &&
+               server.countCommands(v1::Command::kSubscribeField) == 2 &&
+               server.countCommands(v1::Command::kSetWorld) == 3;
+    }));
+    // The last Unsubscribe names the signal that was wanted.
+    const v1::Envelope* unsubscribe = nullptr;
+    for (const v1::Envelope& e : server.received()) {
+        unsubscribe = e.body_case() == v1::Envelope::kUnsubscribe ? &e : unsubscribe;
+    }
+    ASSERT_NE(unsubscribe, nullptr);
+    ASSERT_EQ(unsubscribe->unsubscribe().signals_size(), 2);
+    EXPECT_FALSE(lastCommand(v1::Command::kSubscribeSensor)->subscribe_sensor().enabled());
+    EXPECT_FALSE(lastCommand(v1::Command::kSubscribeField)->subscribe_field().enabled());
+    EXPECT_FALSE(lastCommand(v1::Command::kSetWorld)->set_world().enabled());
+    EXPECT_FALSE(lastCommand(v1::Command::kSetRosGraph)->set_ros_graph().enabled());
+
+    // A sensor asked for while quiet is not sent until quiet ends; a block that still arrives
+    // for "a" is not delivered.
+    (void)client.watchSensor("/robot/camera");
+    server.send(signalBlock(1, 0, 1, 100'000, 0, 10));
+    server.send(snapshot(3, 1.5));
+    ASSERT_TRUE(server.pump([&] { return sceneX(client) == 1.5; }));  // the scene still comes
+    EXPECT_EQ(a->totalSamples(), 0U);
+    EXPECT_EQ(server.countCommands(v1::Command::kSubscribeSensor), 2);
+
+    client.setQuiet(false);
+    ASSERT_TRUE(server.pump([&] {
+        const v1::Subscribe* s = lastSubscribe();
+        return s != nullptr && s->signals_size() == 1 &&
+               server.countCommands(v1::Command::kSubscribeSensor) == 4 &&
+               server.countCommands(v1::Command::kSubscribeField) == 3 &&
+               server.countCommands(v1::Command::kSetWorld) == 4;
+    }));
+    EXPECT_TRUE(lastCommand(v1::Command::kSubscribeSensor)->subscribe_sensor().enabled());
+    EXPECT_TRUE(lastCommand(v1::Command::kSubscribeField)->subscribe_field().enabled());
+    EXPECT_TRUE(lastCommand(v1::Command::kSetWorld)->set_world().enabled());
+    EXPECT_TRUE(lastCommand(v1::Command::kSetRosGraph)->set_ros_graph().enabled());
+    server.send(signalBlock(1, 0, 1, 100'000, 10, 10));
+    ASSERT_TRUE(server.pump([&] { return a->totalSamples() == 10; }));
+    client.stop();
+}
+
 TEST(ViewerClient, StartsAndStopsCleanlyWithNoServer) {
     ViewerClient client(Endpoint::unixSocket("/tmp/lagrange-no-such-server.sock"));
     client.start();

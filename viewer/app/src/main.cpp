@@ -27,6 +27,8 @@ void usage() {
         "  --scope <a,b,...>      open these signals in the scope at start-up\n"
         "  --workspace <name>     workspace to show at start-up: scene, domains, signals, ...,\n"
         "                         builder (the robot builder; without --connect, no server)\n"
+        "  --builder-open <file>  open a robot (.urdf, or .xacro by expansion) in the builder\n"
+        "  --builder-save <file>  headless: save the builder's robot here at the end (.urdf)\n"
         "  --shading <mode>       viewport shading at start-up: lit, unlit, wireframe, collision\n"
         "                         or thermal\n"
         "  --follow <m>[,<deg>]   start with the follow camera, this far from the robot (and this\n"
@@ -46,7 +48,9 @@ void usage() {
         "  --export-netlist <f>   write the stage's power system to this netlist file\n"
         "  --input <script>       headless mouse and keyboard, by frame: "
         "50:click:400,200;60:text:12;61:key:enter (keys: enter, tab, escape, or a letter\n"
-        "                         with ctrl+ and shift+: ctrl+b)\n"
+        "                         with ctrl+ and shift+: ctrl+b);\n"
+        "                         FRAME:wait:connected|build|idle holds the frame count until a\n"
+        "                         builder Test is connected, back in Build, or no tool runs\n"
         "  --panel <title>        bring this panel in front of its tabs, e.g. Circuit\n"
         "  --select <prim path>   select this prim once the scene arrived, e.g. /amr/base_link\n"
         "  --set-domain <d>=on|off  switch a domain in the profile being edited (repeatable)\n"
@@ -160,6 +164,10 @@ int main(int argc, char** argv) {
             options.applyProfile = true;
         } else if (arg == "--workspace") {
             options.workspace = value();
+        } else if (arg == "--builder-open") {
+            options.builderOpen = value();
+        } else if (arg == "--builder-save") {
+            options.builderSave = value();
         } else if (arg == "--shading") {
             options.shading = value();
         } else if (arg == "--season") {

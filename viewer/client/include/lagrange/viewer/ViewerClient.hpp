@@ -665,6 +665,14 @@ public:
     /// off until a panel that shows them asks. Remembered across reconnects.
     void setRosGraphWanted(bool wanted);
     void setWorldWanted(bool wanted);
+    /// Quiet (RFC 0016 R7, the Builder's cost rule): no signals, sensor frames, field slices,
+    /// ROS graph or world state while true. Turning it on sends Unsubscribe for every signal and
+    /// the "off" form of SubscribeSensor, SubscribeField, SetRosGraph and SetWorld; turning it
+    /// off sends again everything the panels still want. Scene deltas, status and logs keep
+    /// coming. Requests made while quiet are remembered and sent on leaving. Cheap to call every
+    /// frame: only a change does anything. UI thread.
+    void setQuiet(bool quiet);
+    [[nodiscard]] bool quiet() const { return quiet_; }
     /// Where the camera is (region-local, m), for a streamed world's tile selection. Cheap to
     /// call every frame: sent only when it moved 10 m or more and at most twice a second.
     void setCameraInterest(const std::array<double, 3>& eye);
@@ -768,6 +776,8 @@ private:
     std::vector<WatchedField> fields_;  // guarded by sensorMutex_
     std::atomic<bool> rosGraphWanted_{false};
     std::atomic<bool> worldWanted_{false};
+    std::atomic<bool> quiet_{false};
+    std::atomic<bool> resubscribe_{false};  // the worker sends the signal subscriptions again
     std::array<double, 3> sentEye_{1e300, 1e300, 1e300};  // UI thread only
     std::chrono::steady_clock::time_point sentEyeAt_{};
     std::atomic<std::shared_ptr<const EnvironmentInfo>> environment_;

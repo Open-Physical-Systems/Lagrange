@@ -97,5 +97,7 @@ void deleteSelection(BuilderSession& session);
 [[nodiscard]] std::unique_ptr<Panel> createProblemsPanel();
 [[nodiscard]] std::unique_ptr<Panel> createPropertiesPanel();
 [[nodiscard]] std::unique_ptr<Panel> createHistoryPanel();
+[[nodiscard]] std::unique_ptr<Panel> createDrivePanel();        // BuilderTest.cpp (WP-F)
+[[nodiscard]] std::unique_ptr<Panel> createTestConsolePanel();  // BuilderTest.cpp (WP-F)
 
 }  // namespace lagrange::viewer::builder_ui

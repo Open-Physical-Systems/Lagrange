@@ -213,6 +213,8 @@ std::vector<std::unique_ptr<Panel>> createBuilderPanels() {
     panels.push_back(ui::createProblemsPanel());
     panels.push_back(ui::createPropertiesPanel());
     panels.push_back(ui::createHistoryPanel());
+    panels.push_back(ui::createDrivePanel());
+    panels.push_back(ui::createTestConsolePanel());
     return panels;
 }
 
