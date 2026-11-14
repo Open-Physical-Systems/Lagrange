@@ -172,7 +172,7 @@ struct Template {
     const char* summary;
 };
 constexpr std::array<Template, 3> kTemplates{{
-    {"diff_drive", "Differential drive base", "a box base, two driven wheels, a caster"},
+    {"diff_drive_base", "Differential drive base", "a box base, two driven wheels, a caster"},
     {"arm_3dof", "3-joint arm", "a fixed base and three revolute joints"},
     {"pan_tilt", "Pan-tilt head", "two revolute joints carrying a camera"},
 }};

@@ -121,7 +121,9 @@ public:
             fit(session.camera, kNone);
         }
         const bool building = session.mode == BuilderSession::Mode::Build;
-        if (context.viewportTexture != 0 && building) {
+        // Testing (SPEC state 4): the same view shows the test server's scene, drawn by the
+        // renderer with this view's camera and the viewport's shading.
+        if (context.viewportTexture != 0) {
             ImGui::Image(static_cast<ImTextureID>(context.viewportTexture), available);
         } else {
             ImGui::Dummy(available);
@@ -149,6 +151,8 @@ public:
         const bool owned =
             building &&
             gizmo_.handle(session, view, hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left));
+        // Testing: the server's scene with the viewport's camera, framed on the test robot.
+        Camera& camera = building ? session.camera : context.camera;
         if (ImGui::IsItemActive() && !owned) {
             if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
                 camera.orbit(-io.MouseDelta.x * kOrbitRadiansPerPixel,
@@ -165,7 +169,7 @@ public:
         }
         // A click that was not a drag selects the link or sensor under it (a second click on the
         // selected link, the shape under it), or nothing; with Measure it places a point.
-        if (!owned && hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
+        if (building && !owned && hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
             ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, kClickSlopPixels).x == 0.0F &&
             ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, kClickSlopPixels).y == 0.0F) {
             const Ray ray =
@@ -191,9 +195,16 @@ public:
 
         // Top left: mode, camera, shading, frame time, draws, "no simulation".
         char text[160];
-        std::snprintf(text, sizeof(text), "Build · Perspective · Lit   %.1f ms   %u draws",
+        std::snprintf(text, sizeof(text), "%s · Perspective · %s   %.1f ms   %u draws",
+                      building ? "Build" : "Test", building ? "Lit" : "live",
                       static_cast<double>(context.frameMs), context.drawCalls);
-        overlayBox(draw, ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)), text, "no simulation");
+        overlayBox(draw, ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)), text,
+                   building ? "no simulation" : "lagrange_server");
+        if (!building) {
+            // The document's marks do not belong over the simulated robot.
+            ImGui::End();
+            return;
+        }
         if (session.view.names) {
             labels(session, draw, origin, available);
         }
@@ -205,13 +216,6 @@ public:
         snapBox(draw, origin, available, io.KeyCtrl);
         toolColumn(session, ImVec2(origin.x + px(10.0F), origin.y + px(46.0F)));
         toggles(session, ImVec2(origin.x + available.x - px(10.0F), origin.y + px(10.0F)));
-        if (!building) {
-            const char* message = "Testing: the robot is in the test view.";
-            const ImVec2 size = ImGui::CalcTextSize(message);
-            draw->AddText(
-                ImVec2(origin.x + (available.x - size.x) * 0.5F, origin.y + available.y * 0.5F),
-                u32(c::t3), message);
-        }
         ImGui::End();
     }
 
@@ -220,9 +224,14 @@ private:
     /// picking and labels: rebuilt on a document edit, re-posed on a preview change.
     void refresh(const BuilderSession& session) {
         const builder::Document& document = session.document();
-        const bool edited = session.history.revision() != revision_ || !built_.statics;
+        const bool edited =
+            session.history.revision() != revision_ || session.opened != opened_ || !built_.statics;
+        if (session.opened != opened_) {
+            framed_ = false;  // a new document: centre the view on it (SPEC state 1)
+        }
         if (edited) {
             revision_ = session.history.revision();
+            opened_ = session.opened;
             built_ = builder::buildStatics(document, ++generation_);
         }
         if (edited || !frame_ || session.preview != preview_) {
@@ -507,6 +516,7 @@ private:
 
     bool framed_{false};
     std::uint64_t revision_{~std::uint64_t{0}};
+    std::uint64_t opened_{0};
     std::uint64_t generation_{0};
     builder::BuiltScene built_;
     builder::Preview preview_;

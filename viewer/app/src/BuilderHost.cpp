@@ -1,16 +1,27 @@
 #include "BuilderHost.hpp"
+#include "lagrange/proto/Endpoint.hpp"
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/builder/Kinematics.hpp"
 #include "lagrange/viewer/builder/SensorCatalog.hpp"
+#include "lagrange/viewer/builder/Urdf.hpp"
 #include "lagrange/viewer/builder/Validation.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <charconv>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
 #include <limits>
 #include <numbers>
+#include <sstream>
 #include <string_view>
+#include <sys/wait.h>
+#include <thread>
+#include <unistd.h>
 #include <variant>
 
 namespace lagrange::viewer {
@@ -233,6 +244,25 @@ bool sameToggles(const BuilderSession::ViewToggles& a, const BuilderSession::Vie
 
 }  // namespace
 
+BuilderHost::~BuilderHost() {
+    jobs_.clear();  // each stops its child
+    if (test_.state() == builder::TestServer::State::Running) {
+        test_.requestStop();
+    }
+    // The viewer is closing: wait out the stop (at most the grace and a SIGKILL), then remove
+    // the test copies, logs and the folder (plan decision 4).
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::duration<double>(builder::TestServer::kStopGraceS + 1.0);
+    while (test_.poll() == builder::TestServer::State::Stopping &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (!runtime_.empty()) {
+        std::error_code ec;
+        std::filesystem::remove_all(runtime_, ec);
+    }
+}
+
 BuilderHost::BuilderHost(BuilderSession& session, ViewerClient& client)
     : session_(session), client_(client) {
     auto loaded = builder::SensorCatalog::load(builder::catalogFiles());
@@ -247,29 +277,629 @@ BuilderHost::BuilderHost(BuilderSession& session, ViewerClient& client)
 
 void BuilderHost::afterUi() {
     // Validation runs on a document change, not every frame (R15).
-    if (session_.history.revision() != validatedRevision_) {
+    if (session_.history.revision() != validatedRevision_ || session_.opened != validatedOpened_) {
         validatedRevision_ = session_.history.revision();
+        validatedOpened_ = session_.opened;
         session_.problems.builder = builder::validate(
             session_.document(), &session_.catalog,
             session_.path.empty() ? std::filesystem::path{} : session_.path.parent_path());
     }
-    // WP-F carries these out. Until then they are dropped, so none stays set across frames.
-    session_.testRequested = false;
-    session_.backRequested = false;
-    session_.saveRequested = false;
-    session_.openRequested = false;
-    session_.exportUsdRequested = false;
-    session_.checkRequested = false;
-    session_.templateRequested = false;
-    (void)client_;
+    const double now = ImGui::GetTime();
+    pollTest(now);
+    pollJobs();
+    if (std::exchange(session_.backRequested, false) &&
+        session_.mode != BuilderSession::Mode::Build) {
+        endTest({});
+    }
+    if (std::exchange(session_.testRequested, false) &&
+        session_.mode == BuilderSession::Mode::Build) {
+        startTest(now);
+    }
+    if (session_.mode != BuilderSession::Mode::Build) {
+        // The document is read-only while testing: file requests wait for Build.
+        session_.saveRequested = session_.openRequested = session_.templateRequested = false;
+        session_.exportUsdRequested = session_.checkRequested = false;
+        return;
+    }
+    if (std::exchange(session_.saveRequested, false)) {
+        const std::filesystem::path target =
+            session_.savePath.empty() ? session_.path : session_.savePath;
+        session_.savePath.clear();
+        (void)save(target);
+    }
+    if (std::exchange(session_.openRequested, false)) {
+        open(std::exchange(session_.openPath, {}));
+    }
+    if (std::exchange(session_.templateRequested, false)) {
+        openTemplate(std::exchange(session_.templateName, {}));
+    }
+    if (std::exchange(session_.exportUsdRequested, false)) {
+        exportUsd();
+    }
+    if (std::exchange(session_.checkRequested, false)) {
+        checkLoads();
+    }
+    autosave(now);
+}
+
+// --- programs and folders -------------------------------------------------------------------
+
+namespace {
+
+/// `relative` under the first AMENT_PREFIX_PATH entry that has it, or empty.
+std::filesystem::path underPrefix(const std::filesystem::path& relative) {
+    const char* prefixes = std::getenv("AMENT_PREFIX_PATH");
+    std::string_view list = prefixes == nullptr ? std::string_view{} : prefixes;
+    while (!list.empty()) {
+        const std::size_t end = std::min(list.find(':'), list.size());
+        const std::filesystem::path candidate =
+            std::filesystem::path(list.substr(0, end)) / relative;
+        std::error_code ec;
+        if (end > 0 && std::filesystem::exists(candidate, ec)) {
+            return candidate;
+        }
+        list.remove_prefix(std::min(end + 1, list.size()));
+    }
+    return {};
+}
+
+/// A program on PATH, or empty.
+std::filesystem::path onPath(std::string_view name) {
+    const char* path = std::getenv("PATH");
+    std::string_view list = path == nullptr ? std::string_view{} : path;
+    while (!list.empty()) {
+        const std::size_t end = std::min(list.find(':'), list.size());
+        const std::filesystem::path candidate = std::filesystem::path(list.substr(0, end)) / name;
+        if (end > 0 && ::access(candidate.c_str(), X_OK) == 0) {
+            return candidate;
+        }
+        list.remove_prefix(std::min(end + 1, list.size()));
+    }
+    return {};
+}
+
+std::string environment(const char* name) {
+    const char* value = std::getenv(name);
+    return value == nullptr ? std::string{} : std::string(value);
+}
+
+/// The last non-empty lines of `text`, at most `count`.
+std::vector<std::string> lastLines(const std::string& text, std::size_t count) {
+    std::vector<std::string> lines;
+    std::istringstream in(text);
+    for (std::string line; std::getline(in, line);) {
+        if (line.find_first_not_of(" \t\r") != std::string::npos) {
+            lines.push_back(line);
+        }
+    }
+    if (lines.size() > count) {
+        lines.erase(lines.begin(), lines.end() - static_cast<std::ptrdiff_t>(count));
+    }
+    return lines;
+}
+
+std::string readFile(const std::filesystem::path& path, std::string& error) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        error = "cannot read " + path.string() + ": " + std::strerror(errno);
+        return {};
+    }
+    std::ostringstream text;
+    text << in.rdbuf();
+    return text.str();
+}
+
+/// The test server's ROS_DOMAIN_ID (plan R8): $LAGRANGE_BUILDER_ROS_DOMAIN_ID ("off": no ROS),
+/// else the viewer's domain + 1, kept in 0..101 (the range ROS 2 calls safe on Linux), so a
+/// teleop on the user's domain drives only the run it was meant for.
+std::string testRosDomain() {
+    constexpr int kSafeDomains = 102;  // 0..101: docs.ros.org "The ROS_DOMAIN_ID", Linux
+    const std::string chosen = environment("LAGRANGE_BUILDER_ROS_DOMAIN_ID");
+    if (chosen == "off") {
+        return {};
+    }
+    if (!chosen.empty()) {
+        return chosen;
+    }
+    const int user = std::atoi(environment("ROS_DOMAIN_ID").c_str());
+    return std::to_string((user + 1) % kSafeDomains);
+}
+
+}  // namespace
+
+std::filesystem::path BuilderHost::autosavePath(const std::string& robot) {
+    const std::string state = environment("XDG_STATE_HOME");
+    const std::filesystem::path base =
+        !state.empty() ? std::filesystem::path(state)
+                       : std::filesystem::path(environment("HOME")) / ".local/state";
+    return base / "lagrange" / "builder" / (robot + ".autosave.urdf");
+}
+
+std::filesystem::path BuilderHost::runtimeDirectory() {
+    if (runtime_.empty()) {
+        const std::string xdg = environment("XDG_RUNTIME_DIR");
+        const std::filesystem::path base = !xdg.empty()
+                                               ? std::filesystem::path(xdg) / "lagrange"
+                                               : std::filesystem::temp_directory_path() /
+                                                     ("lagrange-" + std::to_string(::getuid()));
+        runtime_ = base / "builder" / std::to_string(::getpid());
+        std::error_code ec;
+        std::filesystem::create_directories(runtime_, ec);
+        std::filesystem::permissions(runtime_, std::filesystem::perms::owner_all,
+                                     std::filesystem::perm_options::replace, ec);
+    }
+    return runtime_;
+}
+
+std::filesystem::path BuilderHost::program(std::string_view name) const {
+    if (name == "lagrange_server" && !serverProgram_.empty()) {
+        return serverProgram_;
+    }
+    return underPrefix(std::filesystem::path("lib/lagrange_server") / name);
+}
+
+void BuilderHost::fileProblem(builder::Level level, std::string item, std::string message) {
+    if (level == builder::Level::Error) {
+        session_.fileError = message;
+    }
+    session_.problems.files.push_back({level, std::move(item), std::move(message)});
+    constexpr std::size_t kKept = 20;  // the newest outcomes; older ones say nothing new
+    if (session_.problems.files.size() > kKept) {
+        session_.problems.files.erase(session_.problems.files.begin());
+    }
+    if (level == builder::Level::Error) {
+        ImGui::SetWindowFocus(builder_windows::kProblems);  // SPEC state 6
+    }
+}
+
+std::filesystem::path BuilderHost::writeCopy(const std::string& name, std::string& error) {
+    builder::WriteOptions options;
+    options.savedAt = session_.path.empty()
+                          ? std::filesystem::current_path() / (session_.document().robot + ".urdf")
+                          : session_.path;
+    options.absoluteMeshes = true;
+    const std::filesystem::path copy = runtimeDirectory() / name;
+    error = builder::saveAtomically(copy, builder::writeUrdf(session_.document(), options));
+    return error.empty() ? copy : std::filesystem::path{};
+}
+
+// --- files ----------------------------------------------------------------------------------
+
+bool BuilderHost::save(const std::filesystem::path& target) {
+    if (target.empty()) {
+        fileProblem(builder::Level::Error, "", "Save: the robot has no file yet; use Save as…");
+        return false;
+    }
+    std::filesystem::path path = target;
+    std::error_code ec;
+    if (path.is_relative()) {
+        path = std::filesystem::absolute(path, ec);
+    }
+    builder::WriteOptions options;
+    options.savedAt = path;
+    const std::string error =
+        builder::saveAtomically(path, builder::writeUrdf(session_.document(), options));
+    if (!error.empty()) {
+        fileProblem(builder::Level::Error, "", "Save: " + error);
+        return false;
+    }
+    session_.path = path.lexically_normal();
+    session_.history.markSaved();
+    session_.fileError.clear();
+    // The autosave is behind the file now.
+    std::filesystem::remove(autosavePath(session_.document().robot), ec);
+    autosavedRevision_ = session_.history.revision();
+    return true;
+}
+
+void BuilderHost::replaceDocument(builder::Document document, const std::filesystem::path& path,
+                                  const std::string& label) {
+    session_.history = builder::History(std::move(document), label);
+    session_.path = path;
+    session_.selection = {};
+    session_.preview.clear();
+    session_.problems.loader.clear();
+    session_.problems.check.clear();
+    session_.problems.checkTable.clear();
+    session_.problems.checkExit = -1;
+    session_.fileError.clear();
+    ++session_.opened;
+    autosavedRevision_ = session_.history.revision();
+}
+
+bool BuilderHost::openText(const std::string& text, const std::filesystem::path& from,
+                           const std::filesystem::path& path, const std::string& label) {
+    builder::ReadResult read = builder::readUrdf(text);
+    if (!read.document) {
+        fileProblem(builder::Level::Error, "",
+                    "Open " + from.filename().string() + ": " +
+                        (read.errorLine > 0 ? "line " + std::to_string(read.errorLine) + ": "
+                                            : std::string{}) +
+                        read.error);
+        return false;
+    }
+    replaceDocument(std::move(*read.document), path, label);
+    for (const std::string& note : read.notes) {
+        fileProblem(builder::Level::Hint, "", from.filename().string() + ": " + note);
+    }
+    return true;
+}
+
+void BuilderHost::open(const std::filesystem::path& requested) {
+    if (requested.empty()) {
+        return;
+    }
+    std::error_code ec;
+    const std::filesystem::path path = std::filesystem::absolute(requested, ec).lexically_normal();
+    if (path.extension() == ".xacro") {
+        // RFC §10: a xacro file opens by expansion (a child process, polled); it is saved as
+        // .urdf, never written back over the .xacro.
+        const std::filesystem::path xacro = onPath("xacro");
+        if (xacro.empty()) {
+            fileProblem(builder::Level::Error, "",
+                        "Open " + path.filename().string() +
+                            ": xacro is not installed (ros-lyrical-xacro)");
+            return;
+        }
+        auto job = std::make_unique<Job>();
+        job->kind = Job::Kind::Xacro;
+        job->source = path;
+        job->output = runtimeDirectory() / (path.stem().string() + ".expanded.urdf");
+        const std::string error =
+            job->process.start({xacro.string(), path.string(), "-o", job->output.string()},
+                               runtimeDirectory() / "xacro.log");
+        if (!error.empty()) {
+            fileProblem(builder::Level::Error, "",
+                        "Open " + path.filename().string() + ": " + error);
+            return;
+        }
+        jobs_.push_back(std::move(job));
+        return;
+    }
+    std::string error;
+    const std::string text = readFile(path, error);
+    if (!error.empty()) {
+        fileProblem(builder::Level::Error, "", "Open: " + error);
+        return;
+    }
+    (void)openText(text, path, path, "Open " + path.filename().string());
+}
+
+void BuilderHost::openTemplate(const std::string& name) {
+    if (name.empty()) {
+        return;
+    }
+    // assets/robots/templates (WP-B): $LAGRANGE_BUILDER_TEMPLATES, else lagrange_assets'.
+    std::filesystem::path directory = environment("LAGRANGE_BUILDER_TEMPLATES");
+    if (directory.empty()) {
+        directory = underPrefix("share/lagrange_assets/robots/templates");
+    }
+    const std::filesystem::path file = directory / (name + ".urdf");
+    std::string error;
+    const std::string text = directory.empty() ? std::string{} : readFile(file, error);
+    if (directory.empty() || !error.empty()) {
+        fileProblem(
+            builder::Level::Error, "",
+            "Template " + name + ": " +
+                (directory.empty() ? "lagrange_assets' templates are not installed" : error));
+        return;
+    }
+    // A template opens as a new document: Save asks for a file, the template stays as it is.
+    (void)openText(text, file, {}, "Template " + name);
+}
+
+void BuilderHost::autosave(double now) {
+    constexpr double kAutosaveEveryS = 30.0;  // RFC §10: a crash loses at most this much
+    if (session_.history.editsSinceSave() == 0 ||
+        session_.history.revision() == autosavedRevision_ ||
+        now - session_.autosaveTime < kAutosaveEveryS) {
+        return;
+    }
+    session_.autosaveTime = now;
+    autosavedRevision_ = session_.history.revision();
+    const std::filesystem::path path = autosavePath(session_.document().robot);
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    builder::WriteOptions options;
+    options.savedAt = session_.path.empty() ? path : session_.path;
+    options.absoluteMeshes = true;  // it lives elsewhere than the file
+    if (const std::string error =
+            builder::saveAtomically(path, builder::writeUrdf(session_.document(), options));
+        !error.empty()) {
+        fileProblem(builder::Level::Warning, "", "Autosave: " + error);
+    }
+}
+
+// --- Export USD, Check loads ------------------------------------------------------------------
+
+bool BuilderHost::jobRunning(Job::Kind kind) const {
+    return std::ranges::any_of(
+        jobs_, [kind](const std::unique_ptr<Job>& job) { return job->kind == kind; });
+}
+
+void BuilderHost::exportUsd() {
+    if (jobRunning(Job::Kind::Export)) {
+        return;
+    }
+    if (session_.path.empty()) {
+        fileProblem(builder::Level::Error, "",
+                    "Export USD: save the robot first; the .usda is written next to its file");
+        return;
+    }
+    const std::filesystem::path importer = program("lagrange_import");
+    if (importer.empty()) {
+        fileProblem(builder::Level::Error, "", "Export USD: lagrange_import is not installed");
+        return;
+    }
+    std::string error;
+    const std::filesystem::path copy = writeCopy("export.urdf", error);
+    if (copy.empty()) {
+        fileProblem(builder::Level::Error, "", "Export USD: " + error);
+        return;
+    }
+    auto job = std::make_unique<Job>();
+    job->kind = Job::Kind::Export;
+    job->output = std::filesystem::path(session_.path).replace_extension(".usda");
+    error = job->process.start({importer.string(), copy.string(), job->output.string()},
+                               runtimeDirectory() / "export.log");
+    if (!error.empty()) {
+        fileProblem(builder::Level::Error, "", "Export USD: " + error);
+        return;
+    }
+    jobs_.push_back(std::move(job));
+}
+
+void BuilderHost::checkLoads() {
+    if (jobRunning(Job::Kind::Check)) {
+        return;
+    }
+    const std::filesystem::path checker = program("lagrange_check");
+    if (checker.empty()) {
+        fileProblem(builder::Level::Error, "", "Check loads: lagrange_check is not installed");
+        return;
+    }
+    std::string error;
+    const std::filesystem::path copy = writeCopy("check.urdf", error);
+    if (copy.empty()) {
+        fileProblem(builder::Level::Error, "", "Check loads: " + error);
+        return;
+    }
+    auto job = std::make_unique<Job>();
+    job->kind = Job::Kind::Check;
+    error = job->process.start({checker.string(), copy.string()}, runtimeDirectory() / "check.log");
+    if (!error.empty()) {
+        fileProblem(builder::Level::Error, "", "Check loads: " + error);
+        return;
+    }
+    session_.problems.check.clear();
+    session_.problems.checkTable.clear();
+    session_.problems.checkExit = -1;
+    jobs_.push_back(std::move(job));
+}
+
+void BuilderHost::readCheck(const builder::ChildProcess& process) {
+    BuilderSession::Problems& problems = session_.problems;
+    std::string table = process.logTail(64 * 1024);
+    // The copy's temporary path means nothing to the user: name the robot instead.
+    const std::string copy = (runtimeDirectory() / "check.urdf").string();
+    for (std::size_t at = table.find(copy); at != std::string::npos; at = table.find(copy)) {
+        table.replace(at, copy.size(), session_.document().robot);
+    }
+    problems.checkTable = table;
+    problems.checkExit = WIFEXITED(process.exitStatus()) ? WEXITSTATUS(process.exitStatus()) : -1;
+    // R13: one row per table line that names a link or joint of the document and ends in a
+    // verdict ("CANNOT HOLD where it starts", "cannot hold stretched out", "denser than ...").
+    const builder::Document& document = session_.document();
+    const auto known = [&](const std::string& name) {
+        return std::ranges::any_of(document.links, [&](const auto& l) { return l.name == name; }) ||
+               std::ranges::any_of(document.joints, [&](const auto& j) { return j.name == name; });
+    };
+    std::istringstream in(table);
+    for (std::string line; std::getline(in, line);) {
+        const std::size_t end = line.find(' ');
+        const std::string name = line.substr(0, end);
+        const std::size_t verdict =
+            line.find_first_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+                               line.find_first_not_of(' ', end));
+        if (end == std::string::npos || !known(name) || verdict == std::string::npos ||
+            line.compare(verdict, 1, "-") == 0) {
+            continue;
+        }
+        std::string text = line.substr(verdict);
+        problems.check.push_back({line.find("CANNOT") != std::string::npos ? builder::Level::Warning
+                                                                           : builder::Level::Hint,
+                                  name, text});
+    }
+    if (problems.checkExit == 2) {
+        // The loader refused the robot: its message is the table's last line.
+        const auto lines = lastLines(table, 1);
+        problems.check.push_back(
+            {builder::Level::Warning, "", lines.empty() ? process.exitText() : lines.front()});
+    }
+}
+
+void BuilderHost::pollJobs() {
+    std::string busy;
+    for (auto it = jobs_.begin(); it != jobs_.end();) {
+        Job& job = **it;
+        if (job.process.poll() != builder::ChildProcess::State::Exited) {
+            busy = job.kind == Job::Kind::Export  ? "Exporting USD…"
+                   : job.kind == Job::Kind::Check ? "Checking loads…"
+                                                  : "Expanding xacro…";
+            ++it;
+            continue;
+        }
+        const std::vector<std::string> tail = lastLines(job.process.logTail(4096), 3);
+        std::string why = job.process.exitText();
+        for (const std::string& line : tail) {
+            why += " · " + line;
+        }
+        switch (job.kind) {
+            case Job::Kind::Export:
+                if (job.process.succeeded()) {
+                    fileProblem(builder::Level::Hint, "", "Exported USD to " + job.output.string());
+                } else {
+                    fileProblem(builder::Level::Error, "", "Export USD failed: " + why);
+                }
+                break;
+            case Job::Kind::Check:
+                readCheck(job.process);
+                ImGui::SetWindowFocus(builder_windows::kProblems);
+                break;
+            case Job::Kind::Xacro:
+                if (job.process.succeeded()) {
+                    std::string error;
+                    const std::string text = readFile(job.output, error);
+                    if (!error.empty()) {
+                        fileProblem(builder::Level::Error, "", "Open: " + error);
+                    } else if (openText(text, job.source, {},
+                                        "Open " + job.source.filename().string())) {
+                        fileProblem(builder::Level::Hint, "",
+                                    "Expanded " + job.source.filename().string() +
+                                        "; Save writes a .urdf (the .xacro stays as it is)");
+                    }
+                } else {
+                    fileProblem(builder::Level::Error, "",
+                                "Open " + job.source.filename().string() + ": xacro " + why);
+                }
+                break;
+        }
+        it = jobs_.erase(it);
+    }
+    if (busy.empty() && session_.mode == BuilderSession::Mode::Starting) {
+        busy = "Starting the test server…";
+    }
+    session_.busy = busy;
+}
+
+// --- Test -----------------------------------------------------------------------------------
+
+void BuilderHost::startTest(double now) {
+    session_.problems.loader.clear();
+    if (session_.problems.errors() > 0) {
+        return;  // the button is disabled then; a key or a script may still ask
+    }
+    const std::filesystem::path server = program("lagrange_server");
+    if (server.empty()) {
+        session_.problems.loader.push_back(
+            {builder::Level::Warning, "", "Test: lagrange_server is not installed"});
+        return;
+    }
+    std::string error;
+    const std::filesystem::path urdf = writeCopy(
+        session_.document().robot.empty() ? "robot.urdf" : session_.document().robot + ".urdf",
+        error);
+    if (urdf.empty()) {
+        session_.problems.loader.push_back({builder::Level::Warning, "", "Test: " + error});
+        return;
+    }
+    builder::TestRequest request;
+    request.program = server.string();
+    request.urdf = urdf;
+    request.world = session_.testWorld.empty() ? "none" : session_.testWorld;
+    // Plan decision 4: a socket named by the viewer's pid, never by the robot (sun_path).
+    request.endpoint =
+        "unix:" + proto::defaultUnixSocketPath("builder-" + std::to_string(::getpid()));
+    request.log = runtimeDirectory() / "server.log";
+    request.rosDomain = testRosDomain();
+    const auto endpoint = proto::parseEndpoint(request.endpoint);
+    if (!endpoint) {
+        session_.problems.loader.push_back(
+            {builder::Level::Warning, "", "Test: no socket path for the test server"});
+        return;
+    }
+    error = test_.start(request);
+    if (!error.empty()) {
+        session_.problems.loader.push_back({builder::Level::Warning, "", "Test: " + error});
+        ImGui::SetWindowFocus(builder_windows::kProblems);
+        return;
+    }
+    // The client follows the test server; Back puts it where it was (R3).
+    previousEndpoint_ = client_.endpoint();
+    previousRunning_ = client_.running();
+    client_.stop();
+    client_.setEndpoint(*endpoint);
+    client_.start();
+    snapshotsAtStart_ = client_.stats().snapshots;
+    startedAt_ = now;
+    logReadAt_ = 0.0;
+    session_.mode = BuilderSession::Mode::Starting;
+    session_.testEndpoint = request.endpoint;
+    session_.testRosDomain = request.rosDomain;
+    session_.testLog.clear();
+    ++session_.testSerial;
+}
+
+void BuilderHost::restoreClient() {
+    client_.stop();
+    client_.setEndpoint(previousEndpoint_);
+    if (previousRunning_) {
+        client_.start();  // the run the viewer showed before: as it was (it was left alone)
+    }
+}
+
+void BuilderHost::endTest(const std::string& failure) {
+    if (test_.state() == builder::TestServer::State::Running) {
+        test_.requestStop();  // poll() sends SIGKILL after the grace
+    }
+    restoreClient();
+    session_.mode = BuilderSession::Mode::Build;
+    if (!failure.empty()) {
+        // SPEC state 4: the view does not change; Problems comes forward with the loader's
+        // message and Build stays active.
+        session_.problems.loader.push_back({builder::Level::Warning, "", failure});
+        constexpr std::size_t kTailBytes = 4096;
+        constexpr std::size_t kTailLines = 8;
+        for (const std::string& line : lastLines(test_.logTail(kTailBytes), kTailLines)) {
+            session_.problems.loader.push_back({builder::Level::Warning, "", line});
+        }
+        ImGui::SetWindowFocus(builder_windows::kProblems);
+    }
+}
+
+void BuilderHost::pollTest(double now) {
+    const builder::TestServer::State state = test_.poll();
+    if (session_.mode == BuilderSession::Mode::Build) {
+        return;
+    }
+    constexpr double kLogEveryS = 0.25;
+    if (now - logReadAt_ >= kLogEveryS) {
+        logReadAt_ = now;
+        constexpr std::size_t kConsoleBytes = 16 * 1024;
+        session_.testLog = test_.logTail(kConsoleBytes);
+    }
+    if (state == builder::TestServer::State::Exited) {
+        endTest(session_.mode == BuilderSession::Mode::Starting
+                    ? "The test server stopped before it was ready (" + test_.exitText() + ")"
+                    : "The test server stopped (" + test_.exitText() + ")");
+        return;
+    }
+    if (session_.mode == BuilderSession::Mode::Starting) {
+        if (client_.connection().state == ConnectionState::Ready &&
+            client_.stats().snapshots > snapshotsAtStart_ && client_.scene() != nullptr) {
+            session_.mode = BuilderSession::Mode::Testing;
+            // The loader's notes and warnings (the run started): listed under Loader.
+            for (const std::string& line : lastLines(test_.logTail(16 * 1024), 200)) {
+                if (line.find("warning") != std::string::npos ||
+                    line.find("note:") != std::string::npos) {
+                    session_.problems.loader.push_back({builder::Level::Hint, "", line});
+                }
+            }
+        } else if (now - startedAt_ > kStartTimeoutS) {
+            endTest("The test server did not answer within " +
+                    std::to_string(static_cast<int>(kStartTimeoutS)) + " s");
+        }
+    }
 }
 
 std::shared_ptr<const SceneFrame> BuilderHost::frameToDraw(Camera& camera) {
     camera = session_.camera;
     const builder::Document& document = session_.document();
-    const bool rebuilt = session_.history.revision() != builtRevision_;
+    const bool rebuilt =
+        session_.history.revision() != builtRevision_ || session_.opened != builtOpened_;
     if (rebuilt) {
         builtRevision_ = session_.history.revision();
+        builtOpened_ = session_.opened;
         built_ = builder::buildStatics(document, ++generation_);
     }
     if (rebuilt || !frame_ || session_.preview != posedPreview_) {

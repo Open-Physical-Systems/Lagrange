@@ -361,6 +361,20 @@ public:
             widgets::Mono(path.empty() ? c::t3 : c::t1, "%s", path.empty() ? "—" : path.c_str());
             ImGui::PopTextWrapPos();
         };
+        // SPEC state 6: a file that could not be read or written; the whole message is in
+        // Problems.
+        if (!session.fileError.empty()) {
+            ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+            widgets::Pill("file error", widgets::PillKind::Error);
+            ImGui::SameLine();
+            ImGui::PushTextWrapPos(0.0F);
+            widgets::Caption("%s", session.fileError.c_str());
+            ImGui::PopTextWrapPos();
+        }
+        if (!session.busy.empty()) {
+            ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+            widgets::Pill(session.busy.c_str(), widgets::PillKind::Info);
+        }
         entry("URDF", session.path.string(), session.path.empty() ? "not saved yet" : nullptr);
         // RFC 0016 phase 3: GNSS, magnetometer, barometer and radar need the overlay file.
         entry("overlay YAML", {}, "not needed");

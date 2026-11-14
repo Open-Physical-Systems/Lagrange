@@ -157,6 +157,7 @@ add_library(
     panels/src/BuilderProblems.cpp
     panels/src/BuilderProperties.cpp
     panels/src/BuilderTree.cpp
+    panels/src/BuilderTest.cpp
     panels/src/Chrome.cpp
     panels/src/ConsolePanel.cpp
     panels/src/DomainsPanel.cpp
@@ -306,6 +307,7 @@ if(BUILD_TESTING)
         builder/test/test_edits.cpp
         builder/test/test_sensor_catalog_loader.cpp
         builder/test/test_gizmo.cpp
+        builder/test/test_test_server.cpp
         TIMEOUT 120
     )
     target_link_libraries(
@@ -334,6 +336,7 @@ if(BUILD_TESTING)
     ament_add_pytest_test(test_builder_input test/test_builder_input.py TIMEOUT 180)
     ament_add_pytest_test(test_builder_gizmo test/test_builder_gizmo.py TIMEOUT 300)
     ament_add_pytest_test(test_builder_view test/test_builder_view.py TIMEOUT 300)
+    ament_add_pytest_test(test_builder_test test/test_builder_test.py TIMEOUT 600)
     ament_add_pytest_test(
         test_builder_roundtrip
         test/test_builder_roundtrip.py

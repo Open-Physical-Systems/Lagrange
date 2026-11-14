@@ -448,6 +448,20 @@ public:
             framedRegion_ = scene_->statics->regionEnu;
             framedRebase_ = scene_->statics->rebaseCount;
         }
+        // A Test's run is the Builder's (R3): the camera aims at the test robot, and when the
+        // Test ends the Scene camera and the framed stage are put back as they were, so the run
+        // shown before is not re-aimed; nor does a test run join the Recent list.
+        const bool testing = builderHost_.ownsConnection();
+        if (testing && !savedView_) {
+            savedView_ = SavedView{camera_, framedStage_, framedRegion_, framedRebase_};
+            framedStage_.clear();
+        } else if (!testing && savedView_) {
+            camera_ = savedView_->camera;
+            framedStage_ = savedView_->stage;
+            framedRegion_ = savedView_->region;
+            framedRebase_ = savedView_->rebase;
+            savedView_.reset();
+        }
         if (scene_ && scene_->statics->stagePath != framedStage_) {
             frameScene(*scene_);
             framedStage_ = scene_->statics->stagePath;
@@ -462,7 +476,7 @@ public:
                 }
             }
             selectPath_.clear();
-            if (recordRecent_ && !recentPath_.empty()) {
+            if (recordRecent_ && !recentPath_.empty() && !testing) {
                 RecentEntry entry;
                 entry.stage = scene_->statics->stagePath;
                 entry.robot =
@@ -532,7 +546,15 @@ public:
             launcher_.defaultAvailable =
                 std::filesystem::is_socket(proto::defaultUnixSocketPath(), ec);
         }
+        // RFC 0016 R7: while the Builder is in front, nothing streams but the scene.
+        client_.setQuiet(workspace_ == Workspace::Builder && !launcher_.active);
         drawPanels(panels_, context);
+        if (workspace_ == Workspace::Builder && context.openFileRequested) {
+            // Ctrl O in the Builder opens a robot into the builder, not into the run.
+            context.openFileRequested = false;
+            builderSession_.openDialogRequested = true;
+        }
+        builderHost_.setServerProgram(launcher_.localServer);
         builderHost_.afterUi();
         if (launcher_.builderRequested) {
             // Build a robot: the Builder works without a server, so nothing connects (R1).
@@ -1030,6 +1052,28 @@ public:
         }
     }
     [[nodiscard]] Workspace workspace() const { return workspace_; }
+    /// --builder-open: a .urdf now, a .xacro once xacro is done (frames later).
+    void builderOpen(const std::string& path) { builderHost_.open(path); }
+    /// --builder-save: the document as it is now. False when it could not be written.
+    bool builderSave(const std::string& path) { return builderHost_.save(path); }
+    [[nodiscard]] const BuilderSession& builderSession() const { return builderSession_; }
+    [[nodiscard]] bool builderBusy() const { return builderHost_.busy(); }
+    /// The windowed loop's file dialogs for the Builder: what it asked for, once.
+    [[nodiscard]] bool takeBuilderOpenDialog() {
+        return std::exchange(builderSession_.openDialogRequested, false);
+    }
+    [[nodiscard]] bool takeBuilderSaveAsDialog() {
+        return std::exchange(builderSession_.saveAsDialogRequested, false);
+    }
+    /// A file chosen in a Builder dialog, or dropped on the window while the Builder is shown.
+    void builderOpenRequest(const std::string& path) {
+        builderSession_.openRequested = true;
+        builderSession_.openPath = path;
+    }
+    void builderSaveRequest(const std::string& path) {
+        builderSession_.saveRequested = true;
+        builderSession_.savePath = path;
+    }
     /// The Builder's document in the headless report (RFC 0016 WP-E's input tests): counts,
     /// the selection, the edits since the last save.
     [[nodiscard]] std::string builderReport() const {
@@ -1044,9 +1088,29 @@ public:
                       "{\"links\": %zu, \"joints\": %zu, \"sensors\": %zu, \"edits\": %d, ",
                       document.links.size(), document.joints.size(), document.sensors.size(),
                       builderSession_.history.editsSinceSave());
+        // WP-F: the mode, the file, and what Test, the files and Check loads left in Problems.
+        const auto messages = [](const std::vector<builder::Problem>& list) {
+            std::string out;
+            for (const builder::Problem& problem : list) {
+                out += std::string(out.empty() ? "" : ", ") + "\"" + jsonEscape(problem.message) +
+                       "\"";
+            }
+            return "[" + out + "]";
+        };
+        const BuilderSession::Mode mode = builderSession_.mode;
         return text + std::string("\"selected\": \"") + jsonEscape(builderSession_.selection.name) +
-               "\", \"joint_types\": {" + joints +
-               "}, \"geometry\": " + builder::gizmo::geometryJson(document) + "}";
+               "\", \"joint_types\": {" + joints + "}, \"robot\": \"" + jsonEscape(document.robot) +
+               "\", \"mode\": \"" +
+               (mode == BuilderSession::Mode::Build      ? "build"
+                : mode == BuilderSession::Mode::Starting ? "starting"
+                                                         : "testing") +
+               "\", \"path\": \"" + jsonEscape(builderSession_.path.string()) +
+               "\", \"loader\": " + messages(builderSession_.problems.loader) +
+               ", \"files\": " + messages(builderSession_.problems.files) +
+               ", \"check\": " + messages(builderSession_.problems.check) +
+               ", \"check_exit\": " + std::to_string(builderSession_.problems.checkExit) +
+               ", \"errors\": " + std::to_string(builderSession_.problems.errors()) +
+               ", \"geometry\": " + builder::gizmo::geometryJson(document) + "}";
     }
 
     /// Shows the launcher first: the client is started when the user chooses a server.
@@ -1255,6 +1319,14 @@ private:
     BuilderHost builderHost_{builderSession_, client_};
     LocalServer localServer_;
     bool recordRecent_{false};
+    /// The Scene camera and framed stage while a Builder Test has the connection (R3).
+    struct SavedView {
+        Camera camera;
+        std::string stage;
+        std::array<double, 3> region{};
+        std::uint64_t rebase{0};
+    };
+    std::optional<SavedView> savedView_;
     std::string recentPath_;
     double socketChecked_{-10.0};
     std::vector<std::pair<std::string, bool>> domainEdits_;
@@ -1484,6 +1556,9 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         ui.setFollow(options.followDistance, options.followPitchDeg);
         ui.setCamera(options.camera);
         ui.setProfileEdits(options.domainEdits, options.applyProfile);
+        if (!options.builderOpen.empty()) {
+            ui.builderOpen(options.builderOpen);
+        }
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize =
             ImVec2(static_cast<float>(extent.width), static_cast<float>(extent.height));
@@ -1506,6 +1581,30 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
         auto nextFrame = Clock::time_point{};
         FrameProfile profile;
         std::uint32_t written = 0;
+        // FRAME:wait:WHAT holds the frame count at FRAME until the Builder is there (R6):
+        // connected (a Test is running), build (back in Build), idle (no tool runs). Frames
+        // are not timed, so a server start is waited for, not guessed in frames.
+        std::uint32_t applied = ~0U;
+        std::optional<Clock::time_point> waitingSince;
+        const auto holding = [&](std::uint32_t frame) {
+            for (const InputEvent& event : input) {
+                if (event.frame != frame || event.kind != "wait") {
+                    continue;
+                }
+                const BuilderSession& builder = ui.builderSession();
+                const bool done = event.text == "connected"
+                                      ? builder.mode == BuilderSession::Mode::Testing &&
+                                            client.connection().state == ConnectionState::Ready
+                                  : event.text == "build"
+                                      ? builder.mode == BuilderSession::Mode::Build
+                                  : event.text == "idle" ? !ui.builderBusy()
+                                                         : true;
+                if (!done) {
+                    return true;
+                }
+            }
+            return false;
+        };
         while ((recording ? written : rendered) < wanted) {
             // With --open, wait for the requested file's scene, not the one served before it.
             const auto current = client.scene();
@@ -1523,7 +1622,10 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             }
             const auto frameStart = Clock::now();
             ui.prepare();
-            applyInput(input, rendered, io);
+            if (applied != rendered) {
+                applied = rendered;  // a held frame applies its input once
+                applyInput(input, rendered, io);
+            }
             io.DeltaTime = 1.0F / 60.0F;
             ImGui_ImplVulkan_NewFrame();
             ImGui::NewFrame();
@@ -1545,7 +1647,21 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
                 recordMs = msSince(recordStart);
             });
             first = false;
-            if (haveScene) {
+            const bool hold = haveScene && holding(rendered);
+            if (hold) {
+                if (!waitingSince) {
+                    waitingSince = Clock::now();
+                } else if (Clock::now() - *waitingSince >
+                           std::chrono::milliseconds(std::max(options.waitMs, 30'000U))) {
+                    std::fprintf(stderr, "error: waited too long at frame %u for --input's wait\n",
+                                 rendered);
+                    exitCode = 4;
+                    break;
+                }
+            } else {
+                waitingSince.reset();
+            }
+            if (haveScene && !hold) {
                 profile.add(0, uiMs);
                 profile.add(1, recordMs);
                 profile.add(2, msSince(submitStart) - recordMs);
@@ -1571,6 +1687,12 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             std::this_thread::sleep_for(std::chrono::milliseconds(8));
         }
 
+        if (exitCode == 0 && !options.builderSave.empty() && !ui.builderSave(options.builderSave)) {
+            const auto& files = ui.builderSession().problems.files;
+            std::fprintf(stderr, "error: %s\n",
+                         files.empty() ? "cannot save" : files.back().message.c_str());
+            exitCode = 5;
+        }
         profile.print("headless");
         if (profile.enabled()) {
             std::fprintf(stderr, "profile headless: 3D view drawn %llu times in %u frames\n",
@@ -1869,6 +1991,8 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         struct Chosen {
             std::mutex mutex;
             std::vector<std::string> paths;
+            std::vector<std::string> builderOpen;  // the Builder's Open… and Save as… dialogs
+            std::vector<std::string> builderSave;
         } chosen;
 
         bool running = true;
@@ -1891,8 +2015,13 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
                     rebuild = true;
                 }
                 if (event.type == SDL_EVENT_DROP_FILE && event.drop.data != nullptr) {
-                    // A file dropped on the window: opened now, or after connecting.
-                    if (ui.launcherActive()) {
+                    // A file dropped on the window: opened now, or after connecting; a robot
+                    // dropped on the Builder opens there.
+                    const std::string_view dropped = event.drop.data;
+                    if (ui.workspace() == Workspace::Builder && !ui.launcherActive() &&
+                        (dropped.ends_with(".urdf") || dropped.ends_with(".xacro"))) {
+                        ui.builderOpenRequest(event.drop.data);
+                    } else if (ui.launcherActive()) {
                         ui.setOpenTarget(event.drop.data);
                     } else {
                         openFile(client, event.drop.data);
@@ -1938,8 +2067,44 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
                     },
                     &chosen, window, kFilters, 2, nullptr, false);
             }
+            if (ui.takeBuilderOpenDialog()) {
+                static const SDL_DialogFileFilter kRobots[] = {{"Robots", "urdf;xacro"},
+                                                               {"All files", "*"}};
+                SDL_ShowOpenFileDialog(
+                    [](void* user, const char* const* files, int /*filter*/) {
+                        auto* result = static_cast<Chosen*>(user);
+                        if (files != nullptr && files[0] != nullptr) {
+                            const std::lock_guard lock(result->mutex);
+                            result->builderOpen.emplace_back(files[0]);
+                        }
+                    },
+                    &chosen, window, kRobots, 2, nullptr, false);
+            }
+            if (ui.takeBuilderSaveAsDialog()) {
+                static const SDL_DialogFileFilter kUrdf[] = {{"URDF", "urdf"}};
+                SDL_ShowSaveFileDialog(
+                    [](void* user, const char* const* files, int /*filter*/) {
+                        auto* result = static_cast<Chosen*>(user);
+                        if (files != nullptr && files[0] != nullptr) {
+                            const std::lock_guard lock(result->mutex);
+                            result->builderSave.emplace_back(files[0]);
+                        }
+                    },
+                    &chosen, window, kUrdf, 1, nullptr);
+            }
             {
                 const std::lock_guard lock(chosen.mutex);
+                for (const std::string& path : chosen.builderOpen) {
+                    ui.builderOpenRequest(path);
+                }
+                chosen.builderOpen.clear();
+                for (std::string path : chosen.builderSave) {
+                    if (!path.ends_with(".urdf")) {
+                        path += ".urdf";
+                    }
+                    ui.builderSaveRequest(path);
+                }
+                chosen.builderSave.clear();
                 for (const std::string& path : chosen.paths) {
                     if (ui.launcherActive()) {
                         ui.setOpenTarget(path);

@@ -128,6 +128,12 @@ void ViewerClient::stop() {
     wake();
     if (thread_.joinable()) {
         thread_.join();
+        // Stopped: not connected to anything (the worker no longer publishes). A refusal stays.
+        if (worker_->info.state != ConnectionState::Refused) {
+            worker_->info.state = ConnectionState::Disconnected;
+            worker_->info.message = "not connected";
+            connection_.store(std::make_shared<const ConnectionInfo>(worker_->info));
+        }
     }
 }
 
@@ -172,9 +178,10 @@ void ViewerClient::sendSubscriptions() {
     v1::Envelope subscribe;
     v1::Envelope unsubscribe;
     subscribe.mutable_subscribe()->set_catalog_generation(w.catalog->generation);
+    const bool quiet = quiet_;
     for (const SignalInfo& info : w.catalog->signals) {
         const auto found = w.wanted.find(info.name);
-        if (found != w.wanted.end() && !found->second.empty()) {
+        if (!quiet && found != w.wanted.end() && !found->second.empty()) {
             w.byId[info.id] = &found->second;
             auto* item = subscribe.mutable_subscribe()->add_signals();
             item->set_signal(info.id);
@@ -309,6 +316,10 @@ std::shared_ptr<SensorStream> ViewerClient::watchSensor(const std::string& name)
         }
         sensors_.push_back(std::make_shared<SensorStream>(name));
     }
+    if (quiet_) {  // sent by setQuiet(false)
+        const std::lock_guard lock(sensorMutex_);
+        return sensors_.back();
+    }
     auto envelope = std::make_unique<v1::Envelope>();
     envelope->mutable_command()->set_request_id(nextRequestId_++);
     v1::SubscribeSensor* subscribe = envelope->mutable_command()->mutable_subscribe_sensor();
@@ -330,6 +341,9 @@ void ViewerClient::unwatchSensor(const std::string& name) {
         }
         sensors_.erase(it);
     }
+    if (quiet_) {
+        return;  // already off at the server
+    }
     auto envelope = std::make_unique<v1::Envelope>();
     envelope->mutable_command()->set_request_id(nextRequestId_++);
     v1::SubscribeSensor* subscribe = envelope->mutable_command()->mutable_subscribe_sensor();
@@ -339,6 +353,9 @@ void ViewerClient::unwatchSensor(const std::string& name) {
 }
 
 void ViewerClient::subscribeSensors() {
+    if (quiet_) {
+        return;
+    }
     std::vector<std::string> names;
     {
         const std::lock_guard lock(sensorMutex_);
@@ -580,7 +597,7 @@ std::shared_ptr<FieldStream> ViewerClient::watchField(const std::string& name, d
             changed = true;
         }
     }
-    if (changed) {
+    if (changed && !quiet_) {
         sendFieldSubscription(name, heightM, orientation, volume);
     }
     return stream;
@@ -589,12 +606,57 @@ std::shared_ptr<FieldStream> ViewerClient::watchField(const std::string& name, d
 void ViewerClient::sendViewRequests() {
     auto graph = std::make_unique<v1::Envelope>();
     graph->mutable_command()->set_request_id(nextRequestId_++);
-    graph->mutable_command()->mutable_set_ros_graph()->set_enabled(rosGraphWanted_);
+    graph->mutable_command()->mutable_set_ros_graph()->set_enabled(rosGraphWanted_ && !quiet_);
     enqueue(std::move(graph));
     auto world = std::make_unique<v1::Envelope>();
     world->mutable_command()->set_request_id(nextRequestId_++);
-    world->mutable_command()->mutable_set_world()->set_enabled(worldWanted_);
+    world->mutable_command()->mutable_set_world()->set_enabled(worldWanted_ && !quiet_);
     enqueue(std::move(world));
+}
+
+void ViewerClient::setQuiet(bool quiet) {
+    if (quiet_.exchange(quiet) == quiet) {
+        return;
+    }
+    // Signals: the worker sends the whole subscription again, empty while quiet.
+    resubscribe_ = true;
+    // Sensors and fields: off while quiet, on again after (their streams stay).
+    std::vector<std::string> sensors;
+    std::vector<WatchedField> fields;
+    {
+        const std::lock_guard lock(sensorMutex_);
+        for (const std::shared_ptr<SensorStream>& stream : sensors_) {
+            sensors.push_back(stream->name());
+        }
+        fields = fields_;
+    }
+    for (const std::string& name : sensors) {
+        auto envelope = std::make_unique<v1::Envelope>();
+        envelope->mutable_command()->set_request_id(nextRequestId_++);
+        v1::SubscribeSensor* subscribe = envelope->mutable_command()->mutable_subscribe_sensor();
+        subscribe->set_sensor(name);
+        subscribe->set_enabled(!quiet);
+        enqueue(std::move(envelope));
+    }
+    for (const WatchedField& field : fields) {
+        if (quiet) {
+            auto envelope = std::make_unique<v1::Envelope>();
+            envelope->mutable_command()->set_request_id(nextRequestId_++);
+            v1::SubscribeField* subscribe = envelope->mutable_command()->mutable_subscribe_field();
+            subscribe->set_field(field.stream->name());
+            subscribe->set_enabled(false);
+            subscribe->set_orientation(
+                static_cast<v1::SliceOrientation>(field.stream->orientation()));
+            enqueue(std::move(envelope));
+        } else {
+            sendFieldSubscription(field.stream->name(), field.heightM, field.stream->orientation(),
+                                  field.volume);
+        }
+    }
+    if (rosGraphWanted_ || worldWanted_) {
+        sendViewRequests();
+    }
+    wake();
 }
 
 void ViewerClient::setRosGraphWanted(bool wanted) {
@@ -945,6 +1007,9 @@ void ViewerClient::handle(const v1::Envelope& envelope) {
                     wanted = fields_;
                 }
                 for (const WatchedField& field : wanted) {
+                    if (quiet_) {
+                        break;
+                    }
                     sendFieldSubscription(field.stream->name(), field.heightM,
                                           field.stream->orientation(), field.volume);
                 }
@@ -1472,6 +1537,9 @@ void ViewerClient::run() {
                             });
                         }
                     }
+                    w.subscriptionsDirty = true;
+                }
+                if (resubscribe_.exchange(false)) {
                     w.subscriptionsDirty = true;
                 }
                 if (w.subscriptionsDirty) {

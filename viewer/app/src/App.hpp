@@ -45,6 +45,8 @@ struct Options {
     std::string input;           ///< --input: headless mouse and keyboard, see parseInput.
     std::string focusPanel;      ///< --panel: a panel to bring in front of its tabs, by title.
     std::string openPath;        ///< Robot description or recording to ask the server to load.
+    std::string builderOpen;     ///< --builder-open: a .urdf or .xacro to open in the builder.
+    std::string builderSave;     ///< --builder-save: headless, save the builder's robot at the end.
     std::uint32_t width{1600};
     std::uint32_t height{900};
 };

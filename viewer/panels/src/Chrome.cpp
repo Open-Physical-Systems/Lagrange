@@ -151,6 +151,10 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         ImGui::DockBuilderDockWindow(w::kPoses, bottom);
         ImGui::DockBuilderDockWindow(w::kCatalog, catalog);
         ImGui::DockBuilderDockWindow(w::kProblems, catalog);
+        // The Test layout (SPEC state 4): Drive and the test server's Console join the bottom
+        // right while a Test runs; they submit nothing in Build.
+        ImGui::DockBuilderDockWindow(w::kDrive, catalog);
+        ImGui::DockBuilderDockWindow(w::kTestConsole, catalog);
     } else if (workspace == Workspace::Performance) {
         // Design: a row of KPI cards on top; under it the scheduler (320 px) over the
         // modules, and on the right (380 px) the RTF history (200 px) over the resources.
@@ -600,8 +604,15 @@ void drawBuildControls(PanelContext& context) {
             session.saveRequested = true;
             session.savePath.clear();
         }
-        ImGui::MenuItem("Save as…", nullptr, false, false);
-        ImGui::SetItemTooltip("Opens with WP-F's file dialog");
+        if (ImGui::MenuItem("Save as…", nullptr, false, context.canOpenFiles)) {
+            session.saveAsDialogRequested = true;
+        }
+        if (!context.canOpenFiles) {
+            ImGui::SetItemTooltip("Needs the windowed viewer's file dialog");
+        }
+        if (ImGui::MenuItem("Open…", "Ctrl+O", false, context.canOpenFiles)) {
+            session.openDialogRequested = true;
+        }
         if (ImGui::MenuItem("Export USD…")) {
             session.exportUsdRequested = true;
         }
