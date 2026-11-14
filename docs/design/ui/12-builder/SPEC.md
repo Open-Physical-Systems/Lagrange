@@ -161,7 +161,9 @@ one undo step; typing in a field is one step when it is committed (Enter, Tab or
    be saved while unfinished), with a warn line in the save dialog.
 4. **Testing**: the workspace switches to a Test layout: the center top is the normal
    server-fed Viewport (any shading the tier allows), Joints shows the joints' live positions
-   read-only (sliders become meters, until a joint-command message exists: RFC 0016 §7.3), the
+   (the knob and value follow the run; dragging a knob or typing a value commands that joint's
+   position through `CommandJoint`, RFC 0016 §7.3, ≤ 30 Hz per joint; Zero all sends zeros; a
+   refusal shows as an err caption in the footer, "Not driven: …"), the
    bottom right shows **Drive** (the ROS 2 topics this robot takes, `/cmd_vel` when the server
    drives it, `/joint_commands` for joint control, each with a copyable command line) and Console
    with the test server's log; Properties is read-only. The status bar shows the test server.

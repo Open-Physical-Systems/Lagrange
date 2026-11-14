@@ -1,6 +1,7 @@
 // ViewerClient against a scripted server built from the same transport classes.
 
 #include "lagrange/proto/Connection.hpp"
+#include "lagrange/viewer/ScopeBuffer.hpp"
 #include "lagrange/viewer/ViewerClient.hpp"
 #include "lagrange/viewer/v1/envelope.pb.h"
 
@@ -1171,6 +1172,85 @@ TEST(ViewerClient, QuietSendsEmptySubscriptionsAndRestores) {
     EXPECT_TRUE(lastCommand(v1::Command::kSetRosGraph)->set_ros_graph().enabled());
     server.send(signalBlock(1, 0, 1, 100'000, 10, 10));
     ASSERT_TRUE(server.pump([&] { return a->totalSamples() == 10; }));
+    client.stop();
+}
+
+// RFC 0016 §7.3: the Builder's joint sliders. CommandJoint goes out with its request id and the
+// answer (a refusal too) is kept by it; watchSignal() streams a readout while quiet, alone.
+TEST(ViewerClient, CommandJointRoundTripAndAReadoutWhileQuiet) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+
+    const std::uint64_t first = client.commandJoint("pan_joint", "position", 0.75);
+    const std::uint64_t second = client.commandJoint("tilt_joint", "velocity", -1.5);
+    ASSERT_TRUE(server.pump([&] { return server.countCommands(v1::Command::kCommandJoint) == 2; }));
+    std::vector<v1::CommandJoint> sent;
+    for (const v1::Envelope& e : server.received()) {
+        if (e.body_case() == v1::Envelope::kCommand && e.command().has_command_joint()) {
+            sent.push_back(e.command().command_joint());
+            EXPECT_EQ(e.command().request_id(), sent.size() == 1 ? first : second);
+        }
+    }
+    ASSERT_EQ(sent.size(), 2U);
+    EXPECT_EQ(sent[0].joint(), "pan_joint");
+    EXPECT_EQ(sent[0].mode(), "position");
+    EXPECT_DOUBLE_EQ(sent[0].value(), 0.75);
+    EXPECT_EQ(sent[1].joint(), "tilt_joint");
+    EXPECT_EQ(sent[1].mode(), "velocity");
+    EXPECT_DOUBLE_EQ(sent[1].value(), -1.5);
+    v1::Envelope ok;
+    ok.mutable_command_result()->set_request_id(first);
+    ok.mutable_command_result()->set_ok(true);
+    server.send(ok);
+    v1::Envelope refused;
+    refused.mutable_command_result()->set_request_id(second);
+    refused.mutable_command_result()->set_error(
+        "joint control is off in this run: start lagrange_server with --joint-control");
+    server.send(refused);
+    ASSERT_TRUE(server.pump([&] { return client.outcome(second) != nullptr; }));
+    ASSERT_NE(client.outcome(first), nullptr);
+    EXPECT_TRUE(client.outcome(first)->ok);
+    EXPECT_FALSE(client.outcome(second)->ok);
+    EXPECT_NE(client.outcome(second)->error.find("--joint-control"), std::string::npos);
+
+    // Quiet: "a" (a scope's) is dropped, "b" (a readout) stays subscribed and fed.
+    server.send(catalog(1));
+    ASSERT_TRUE(server.pump([&] { return client.catalog() != nullptr; }));
+    const auto scope = client.subscribe("a");
+    const auto readout = client.watchSignal("b", 2);
+    ASSERT_NE(scope, nullptr);
+    ASSERT_NE(readout, nullptr);
+    EXPECT_EQ(client.watchSignal("no such signal"), nullptr);
+    EXPECT_LT(readout->capacity(), lagrange::viewer::ScopeBuffer::kDefaultCapacity)
+        << "a small buffer";
+    const auto lastSubscribe = [&]() -> const v1::Subscribe* {
+        const v1::Subscribe* found = nullptr;
+        for (const v1::Envelope& e : server.received()) {
+            found = e.body_case() == v1::Envelope::kSubscribe ? &e.subscribe() : found;
+        }
+        return found;
+    };
+    ASSERT_TRUE(server.pump([&] {
+        const v1::Subscribe* s = lastSubscribe();
+        return s != nullptr && s->signals_size() == 2;
+    }));
+    client.setQuiet(true);
+    ASSERT_TRUE(server.pump([&] {
+        const v1::Subscribe* s = lastSubscribe();
+        return s != nullptr && s->signals_size() == 1 && s->signals(0).signal() == 1;
+    }));
+    server.send(signalBlock(1, 0, 1, 100'000, 0, 10));
+    server.send(signalBlock(1, 1, 3, 1'000'000, 0, 5));
+    ASSERT_TRUE(server.pump([&] { return readout->totalSamples() == 5; }));
+    EXPECT_DOUBLE_EQ(readout->latest(), 4.2) << "component z of the last sample";
+    EXPECT_EQ(scope->totalSamples(), 0U) << "a scope's signal is not delivered while quiet";
+    client.unsubscribe(readout);
+    ASSERT_TRUE(server.pump([&] {
+        const v1::Subscribe* s = lastSubscribe();
+        return s != nullptr && s->signals_size() == 0;
+    }));
     client.stop();
 }
 

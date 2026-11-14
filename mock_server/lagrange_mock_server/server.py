@@ -558,6 +558,12 @@ class MockServer:
                 result.command_result.error = (
                     "the mock server replays one scene: it has no spawned robot to remove"
                 )
+            elif kind == "command_joint":
+                # A replay: the recorded motion plays whatever is commanded (RFC 0016 §7.3).
+                result.command_result.ok = False
+                result.command_result.error = (
+                    "the mock server replays a recording: its joints take no commands"
+                )
             elif kind == "get_attributes":
                 items = result.command_result.attributes
                 items.SetInParent()

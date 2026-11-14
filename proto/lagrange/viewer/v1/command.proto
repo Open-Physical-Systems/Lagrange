@@ -25,6 +25,7 @@ message Command {
     ImportRobot import_robot = 31;
     OpenRecording open_recording = 32;
     RemoveRobot remove_robot = 33; // added after 1.0 (RFC 0016 §7.2)
+    CommandJoint command_joint = 34; // added after 1.0 (RFC 0016 §7.3)
 
     ValidateProfile validate_profile = 40;
     ApplyProfile apply_profile = 41;
@@ -106,6 +107,16 @@ message ImportRobot {
 // drives it). The world's scenery stays. Added after 1.0 (RFC 0016 §7.2).
 message RemoveRobot {
   string name = 1; // its top prim's name, with or without the leading "/"
+}
+// Drives one joint of the run's robot, as /joint_commands does under joint control
+// (--joint-control): the joint holds the value until told otherwise. Refused with a one-line
+// error for a joint the run does not have, one that takes no commands (fixed, a mimic, a
+// passive robot's), a mode its motor cannot follow, a value that is not finite, and a run whose
+// joints ros2_control or a robot controller drives. Added after 1.0 (RFC 0016 §7.3).
+message CommandJoint {
+  string joint = 1; // the joint's name in the run
+  string mode = 2; // "position" (rad, m), "velocity" (rad/s, m/s), "effort" (N·m, N), "voltage" (V)
+  double value = 3;
 }
 message OpenRecording {
   string path = 1;

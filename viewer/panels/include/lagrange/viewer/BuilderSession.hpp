@@ -118,6 +118,16 @@ struct BuilderSession {
     /// drives it, no ROS topics of its own).
     bool testPassive{false};
 
+    // Driving the tested robot (RFC 0016 §7.3), while Testing; cleared when a test ends.
+    /// In, from BuilderHost: the run's joint positions (rad or m) by document joint name, from
+    /// the joint/<j>/position signals (streamed while quiet: they are all that is).
+    builder::Preview liveJoints;
+    /// Out: where the sliders put each joint (rad or m). BuilderHost sends a changed one as
+    /// CommandJoint in position mode, at most 30 times a second per joint, the last value last.
+    builder::Preview jointTargets;
+    /// In: the run's last refusal of a joint command, one line; empty while it takes them.
+    std::string jointDriveError;
+
     // Out, read and cleared by BuilderHost::afterUi().
     bool testRequested{false};
     std::string testWorld;      ///< with testRequested: "none", a sample world, or a world file

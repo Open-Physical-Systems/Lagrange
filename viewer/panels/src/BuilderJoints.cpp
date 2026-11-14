@@ -6,6 +6,7 @@
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -69,7 +70,16 @@ public:
             }
             ImGui::SameLine(0.0F, px(4.0F));
             if (widgets::Button("Zero all", widgets::ButtonKind::Ghost)) {
-                session.preview.clear();
+                if (session.mode == BuilderSession::Mode::Testing) {
+                    // Testing: every moving joint is told to go to zero (RFC 0016 §7.3).
+                    for (const Joint& joint : document.joints) {
+                        if (builder::isMoving(joint.type) && !joint.mimic) {
+                            session.jointTargets[joint.name] = 0.0;
+                        }
+                    }
+                } else {
+                    session.preview.clear();
+                }
             }
             widgets::EndPanelTools();
         }
@@ -98,11 +108,37 @@ public:
             widgets::Caption("%d fixed joint%s not shown", fixed, fixed == 1 ? "" : "s");
             ImGui::SameLine();
         }
-        const char* note = session.mode == BuilderSession::Mode::Build
-                               ? "Preview only: no physics"
-                               : "Live positions need a joint-command message (RFC 0016 §7.3)";
-        widgets::AlignRight(ImGui::CalcTextSize(note).x * 0.92F);
-        widgets::Caption("%s", note);
+        // Testing: values are the run's; a slider commands its joint's position (§7.3).
+        if (session.mode == BuilderSession::Mode::Testing && !session.jointDriveError.empty()) {
+            // One line: cut with an ellipsis to the room left; the tooltip has all of it.
+            std::string note = "Not driven: " + session.jointDriveError;
+            const float room = ImGui::GetContentRegionAvail().x - px(4.0F);
+            if (ImGui::CalcTextSize(note.c_str()).x * 0.92F > room) {
+                while (note.size() > 12 &&
+                       ImGui::CalcTextSize((note + "…").c_str()).x * 0.92F > room) {
+                    // A whole UTF-8 character: its continuation bytes, then its lead byte.
+                    unsigned char last = 0;
+                    do {
+                        last = static_cast<unsigned char>(note.back());
+                        note.pop_back();
+                    } while (!note.empty() && (last & 0xC0U) == 0x80U);
+                }
+                note += "…";
+            }
+            widgets::AlignRight(ImGui::CalcTextSize(note.c_str()).x * 0.92F);
+            ImGui::PushStyleColor(ImGuiCol_Text, c::error);
+            widgets::Caption("%s", note.c_str());
+            ImGui::PopStyleColor();
+            ImGui::SetItemTooltip("%s", session.jointDriveError.c_str());
+        } else {
+            const char* note = session.mode == BuilderSession::Mode::Build
+                                   ? "Preview only: no physics"
+                               : session.mode == BuilderSession::Mode::Testing
+                                   ? "Live from the run · a slider commands its position"
+                                   : "Starting the test…";
+            widgets::AlignRight(ImGui::CalcTextSize(note).x * 0.92F);
+            widgets::Caption("%s", note);
+        }
         ImGui::End();
     }
 
@@ -126,11 +162,15 @@ private:
         ImGui::Dummy(ImVec2(0.0F, 0.0F));
         header("joint", 0.0F);
         header("type", nameW + gap);
-        header("preview position", nameW + typeW + gap * 2.0F);
+        const bool testing = session.mode == BuilderSession::Mode::Testing;
+        header(testing ? "position · drag to command" : "preview position",
+               nameW + typeW + gap * 2.0F);
         header("value", nameW + typeW + sliderW + gap * 3.0F + valueW - px(30.0F));
         header("limits", nameW + typeW + sliderW + valueW + gap * 4.0F);
 
-        const bool live = session.mode == BuilderSession::Mode::Build;
+        // Build: sliders pose the preview. Testing: they show the run's positions and, dragged
+        // or typed, command them (RFC 0016 §7.3). Starting: neither.
+        const bool live = session.mode == BuilderSession::Mode::Build || testing;
         for (const Joint& joint : document.joints) {
             if (!builder::isMoving(joint.type)) {
                 continue;
@@ -152,7 +192,17 @@ private:
             // A mimic joint follows its leader and shows no knob.
             const bool mimic = joint.mimic.has_value();
             double value = 0.0;
-            if (mimic) {
+            const auto liveValue = session.liveJoints.find(joint.name);
+            const bool hasLive = testing && liveValue != session.liveJoints.end();
+            if (testing) {
+                // The knob follows the run, except while it is dragged: then it is the command.
+                const auto target = session.jointTargets.find(joint.name);
+                value = dragging_ == joint.name && target != session.jointTargets.end()
+                            ? target->second
+                        : hasLive                              ? liveValue->second
+                        : target != session.jointTargets.end() ? target->second
+                                                               : 0.0;
+            } else if (mimic) {
                 const auto& [leader, multiplier, offset] = *joint.mimic;
                 const auto found = session.preview.find(leader);
                 value =
@@ -166,7 +216,14 @@ private:
             if (widgets::JointSlider("##slider", &value, lower, upper,
                                      joint.type == Joint::Type::Continuous, !mimic && live,
                                      sliderW)) {
-                session.preview[joint.name] = value;
+                (testing ? session.jointTargets : session.preview)[joint.name] = value;
+            }
+            if (testing) {
+                if (ImGui::IsItemActive()) {
+                    dragging_ = joint.name;
+                } else if (dragging_ == joint.name) {
+                    dragging_.clear();
+                }
             }
             if (mimic) {
                 ImGui::SetItemTooltip("Follows %s", std::get<0>(*joint.mimic).c_str());
@@ -174,19 +231,22 @@ private:
 
             const bool degrees = angular(joint) && session.showDegrees;
             cell(nameW + typeW + sliderW + gap * 3.0F, px(22.0F));
-            const double shownValue = degrees ? builder::toDegrees(value) : value;
+            // Testing: the value field is the run's position (typing commands it).
+            const double fieldValue = hasLive ? liveValue->second : value;
+            const double shownValue = degrees ? builder::toDegrees(fieldValue) : fieldValue;
             char text[32];
             std::snprintf(text, sizeof(text), "%.1f", shownValue);
             if (!degrees) {
                 std::snprintf(text, sizeof(text), "%.3f", shownValue);
             }
-            std::string field = text;
+            std::string field = testing && !hasLive ? std::string("—") : std::string(text);
             ImGui::BeginDisabled(mimic || !live);
             if (widgets::CommitField("##value", &field,
                                      angular(joint) ? (degrees ? "°" : "rad") : "m", false,
                                      valueW)) {
                 if (const auto typed = builder::parseNumber(field)) {
-                    session.preview[joint.name] = degrees ? builder::toRadians(*typed) : *typed;
+                    (testing ? session.jointTargets : session.preview)[joint.name] =
+                        degrees ? builder::toRadians(*typed) : *typed;
                 }
             }
             ImGui::EndDisabled();
@@ -208,6 +268,7 @@ private:
     }
 
     std::string title_ = "Joints###BuilderJoints";
+    std::string dragging_;  ///< Testing: the joint whose slider is held (its knob is the command)
 };
 
 /// Named sets of preview positions (SPEC "Poses", RFC 0016 open question 10). The document has

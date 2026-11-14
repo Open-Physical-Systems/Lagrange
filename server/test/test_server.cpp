@@ -1411,5 +1411,87 @@ TEST_F(EmptyImportServerTest, AnInlineOverlayGivesTheImportedRobotItsPowerSystem
     EXPECT_FALSE(hasBody("base_link"));
 }
 
+// RFC 0016 §7.3: the builder's joint sliders drive a tested robot through CommandJoint, as
+// /joint_commands does under joint control.
+class JointCommandServerTest : public ImportServerTest {
+protected:
+    void adjust(ServerOptions& options) override {
+        options.ros = false;
+        options.jointControl = true;
+        options.demoDrive = false;
+    }
+
+    v1::CommandResult commandJoint(std::uint64_t id, const std::string& joint,
+                                   const std::string& mode, double value) {
+        v1::Envelope envelope = command(id);
+        v1::CommandJoint& request = *envelope.mutable_command()->mutable_command_joint();
+        request.set_joint(joint);
+        request.set_mode(mode);
+        request.set_value(value);
+        return run(envelope);
+    }
+
+    void stepFor(std::uint64_t id, std::int64_t ns) {
+        v1::Envelope step = command(id);
+        step.mutable_command()->mutable_step()->set_duration_ns(ns);
+        (void)run(step);
+    }
+};
+
+TEST_F(JointCommandServerTest, PositionReachesTheTarget) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_status(); }));
+    const v1::CommandResult result = commandJoint(1, "front_caster_swivel", "position", 0.8);
+    ASSERT_TRUE(result.ok()) << result.error();
+    stepFor(2, 3'000'000'000);
+    EXPECT_NEAR(server_->read("joint/front_caster_swivel/position").at(0), 0.8, 0.05);
+    // The last command wins: a slider dragged back.
+    ASSERT_TRUE(commandJoint(3, "front_caster_swivel", "position", -0.3).ok());
+    stepFor(4, 3'000'000'000);
+    EXPECT_NEAR(server_->read("joint/front_caster_swivel/position").at(0), -0.3, 0.05);
+}
+
+TEST_F(JointCommandServerTest, RefusesWhatNoJointTakes) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_status(); }));
+    const auto refused = [&](std::uint64_t id, const std::string& joint, const std::string& mode,
+                             double value, const std::string& says) {
+        const v1::CommandResult result = commandJoint(id, joint, mode, value);
+        EXPECT_FALSE(result.ok()) << joint << " " << mode;
+        EXPECT_NE(result.error().find(says), std::string::npos) << result.error();
+    };
+    refused(1, "elbow", "position", 0.1, "the run has no joint elbow");
+    refused(2, "left_wheel_joint", "banana", 0.1, "no mode banana");
+    refused(3, "left_wheel_joint", "position", std::numeric_limits<double>::quiet_NaN(),
+            "not a finite number");
+    // A fixed joint is merged away at load: the run does not have it.
+    refused(4, "lidar_mount", "position", 0.1, "the run has no joint lidar_mount");
+    // A passive robot beside it: its joints are not joint-controlled.
+    const v1::CommandResult imported = importText(5, R"(<?xml version="1.0"?>
+<robot name="pan">
+  <link name="base"><inertial><mass value="1"/><inertia ixx="0.01" iyy="0.01" izz="0.01" ixy="0" ixz="0" iyz="0"/></inertial>
+    <collision><geometry><box size="0.2 0.2 0.2"/></geometry></collision></link>
+  <link name="head"><inertial><mass value="0.2"/><inertia ixx="0.001" iyy="0.001" izz="0.001" ixy="0" ixz="0" iyz="0"/></inertial>
+    <collision><geometry><box size="0.1 0.1 0.1"/></geometry></collision></link>
+  <joint name="turn" type="revolute"><parent link="base"/><child link="head"/><origin xyz="0 0 0.2"/>
+    <axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="5" velocity="2"/></joint>
+</robot>
+)");
+    ASSERT_TRUE(imported.ok()) << imported.error();
+    refused(6, "pan_turn", "position", 0.5, "passive robot");
+    // A good one still goes through.
+    EXPECT_TRUE(commandJoint(7, "left_wheel_joint", "velocity", 1.0).ok());
+}
+
+// Without joint control (the default) the run's controller drives the robot: refused, saying how.
+TEST_F(ImportServerTest, CommandJointNeedsJointControl) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_status(); }));
+    v1::Envelope envelope = command(1);
+    envelope.mutable_command()->mutable_command_joint()->set_joint("left_wheel_joint");
+    envelope.mutable_command()->mutable_command_joint()->set_mode("velocity");
+    envelope.mutable_command()->mutable_command_joint()->set_value(1.0);
+    const v1::CommandResult result = run(envelope);
+    EXPECT_FALSE(result.ok());
+    EXPECT_NE(result.error().find("--joint-control"), std::string::npos) << result.error();
+}
+
 }  // namespace
 }  // namespace lagrange::server

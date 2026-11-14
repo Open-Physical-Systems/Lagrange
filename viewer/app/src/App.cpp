@@ -1152,8 +1152,22 @@ public:
             }
             return "[" + out + "]";
         };
+        // RFC 0016 §7.3: the run's joint positions and the sliders' commands while testing.
+        const auto values = [](const builder::Preview& map) {
+            std::string out;
+            for (const auto& [name, value] : map) {
+                char number[48];
+                std::snprintf(number, sizeof(number), "%.9g", value);
+                out += std::string(out.empty() ? "" : ", ") + "\"" + jsonEscape(name) +
+                       "\": " + number;
+            }
+            return "{" + out + "}";
+        };
         const BuilderSession::Mode mode = builderSession_.mode;
-        return text + std::string("\"selected\": \"") + jsonEscape(builderSession_.selection.name) +
+        return text + std::string("\"live_joints\": ") + values(builderSession_.liveJoints) +
+               ", \"joint_targets\": " + values(builderSession_.jointTargets) +
+               ", \"joint_drive_error\": \"" + jsonEscape(builderSession_.jointDriveError) +
+               "\", \"selected\": \"" + jsonEscape(builderSession_.selection.name) +
                "\", \"joint_types\": {" + joints + "}, \"robot\": \"" + jsonEscape(document.robot) +
                "\", \"mode\": \"" +
                (mode == BuilderSession::Mode::Build      ? "build"

@@ -3482,6 +3482,13 @@ struct Server::Impl {
                 }
                 break;
             }
+            case v1::Command::kCommandJoint: {
+                if (std::string refused = commandJoint(command.command_joint()); !refused.empty()) {
+                    r.set_ok(false);
+                    r.set_error(refused);
+                }
+                break;
+            }
             case v1::Command::kRemoveRobot: {
                 const ros2::SimOutcome outcome = remove(command.remove_robot().name());
                 if (outcome.result != ros2::SimResult::Ok) {
@@ -4849,6 +4856,75 @@ struct Server::Impl {
     /// 0016 §7.2), named by its own <robot name> and renamed on a clash; an overlay by
     /// `overlay_path` or inline `overlay_content`. Gives what the result's imported_stage_path
     /// carries: the path for a file, the robot's scene path ("/name") for content.
+    /// Server::commandJoint with its reason: empty when the joint takes the command, else why
+    /// not, in one line.
+    std::string commandJoint(const std::string& joint, const std::string& mode, double value) {
+        // A joint that copies another takes no commands, and a motor only what its mode follows.
+        const World::Joints& joints = robot.world.joints;
+        const auto named = std::find(joints.names.begin(), joints.names.end(), joint);
+        if (named == joints.names.end()) {
+            return "the run has no joint " + joint;
+        }
+        if (!std::isfinite(value)) {
+            return "the value for " + joint + " is not a finite number";
+        }
+        if (mode != "position" && mode != "velocity" && mode != "effort" && mode != "voltage") {
+            return "no mode " + mode + ": position, velocity, effort or voltage";
+        }
+        if (joints.mimic[static_cast<std::size_t>(named - joints.names.begin())] != kNoMimic) {
+            return joint + " copies another joint (mimic): command that one";
+        }
+        if (!options.substituted.contains("electrical")) {
+            if (!driveModesCache) {
+                driveModesCache = electrical::driveModes(WorldView(robot.world));
+            }
+            if (const auto drive = driveModesCache->find(joint); drive != driveModesCache->end()) {
+                const bool fits = drive->second == "voltage"
+                                      ? mode == "voltage" || mode == "effort"
+                                      : mode == "velocity" || mode == "position";
+                if (!fits) {
+                    return joint + "'s motor follows a " + drive->second + ": it takes " +
+                           (drive->second == "voltage" ? "voltage or effort (volts)"
+                                                       : "position or velocity");
+                }
+            }
+        }
+        JointTarget target;
+        target.value = value;
+        target.mode = mode == "position"   ? JointTarget::Mode::Position
+                      : mode == "velocity" ? JointTarget::Mode::Velocity
+                      : mode == "effort"   ? JointTarget::Mode::Effort
+                                           : JointTarget::Mode::Voltage;
+        jointTargets->set(joint, target);
+        return {};
+    }
+
+    /// The viewer's CommandJoint (protocol.md "Commands"; RFC 0016 §7.3): as /joint_commands,
+    /// only while joint control drives the run's robot, and only for its own moving joints.
+    std::string commandJoint(const v1::CommandJoint& request) {
+        if (controllers) {
+            return "ros2_control drives the joints of this run: command them through its "
+                   "controllers";
+        }
+        if (!options.jointControl) {
+            return "joint control is off in this run: start lagrange_server with --joint-control";
+        }
+        if (!jointControllable) {
+            return "this robot's wheels or rotors belong to its vehicle or multicopter "
+                   "controller: joint control does not drive it";
+        }
+        const World::Joints& joints = robot.world.joints;
+        const auto named = std::ranges::find(joints.names, request.joint());
+        if (named != joints.names.end() &&
+            !joints.actuated[static_cast<std::size_t>(named - joints.names.begin())] &&
+            joints.mimic[static_cast<std::size_t>(named - joints.names.begin())] == kNoMimic) {
+            return request.joint() +
+                   " takes no commands: it is fixed, or of a passive robot (only the robot ROS "
+                   "drives takes joint commands)";
+        }
+        return commandJoint(request.joint(), request.mode(), request.value());
+    }
+
     Expected<std::string, std::string> importRobot(const v1::ImportRobot& request) {
         if (!request.xacro_args().empty() || request.format() == v1::ImportRobot::FORMAT_XACRO) {
             return Unexpected{std::string("xacro is not taken when importing: run xacro first")};
@@ -7205,43 +7281,7 @@ Status Server::setSite(const std::string& name, double value) {
 }
 
 bool Server::commandJoint(const std::string& joint, const std::string& mode, double value) {
-    // A joint that copies another takes no commands, and a motor only what its mode follows.
-    const World::Joints& joints = world().joints;
-    const auto named = std::find(joints.names.begin(), joints.names.end(), joint);
-    if (named == joints.names.end() || !std::isfinite(value)) {
-        return false;  // no such joint, or no value to hold
-    }
-    if (joints.mimic[static_cast<std::size_t>(named - joints.names.begin())] != kNoMimic) {
-        return false;
-    }
-    if (!impl_->options.substituted.contains("electrical")) {
-        if (!impl_->driveModesCache) {
-            impl_->driveModesCache = electrical::driveModes(WorldView(world()));
-        }
-        const auto& modes = *impl_->driveModesCache;
-        if (const auto drive = modes.find(joint); drive != modes.end()) {
-            const bool fits = drive->second == "voltage" ? mode == "voltage" || mode == "effort"
-                                                         : mode == "velocity" || mode == "position";
-            if (!fits) {
-                return false;
-            }
-        }
-    }
-    JointTarget target;
-    target.value = value;
-    if (mode == "position") {
-        target.mode = JointTarget::Mode::Position;
-    } else if (mode == "velocity") {
-        target.mode = JointTarget::Mode::Velocity;
-    } else if (mode == "effort") {
-        target.mode = JointTarget::Mode::Effort;
-    } else if (mode == "voltage") {
-        target.mode = JointTarget::Mode::Voltage;
-    } else {
-        return false;
-    }
-    impl_->jointTargets->set(joint, target);
-    return true;
+    return impl_->commandJoint(joint, mode, value).empty();
 }
 
 Expected<std::string, Status> Server::spawnRobot(const std::string& path, const std::string& name,
