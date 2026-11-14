@@ -568,6 +568,15 @@ struct ClientStats {
     std::uint64_t samples{0};         ///< Samples stored into scope buffers.
     std::uint64_t invalidRuns{0};     ///< Signal runs rejected as malformed.
     std::uint64_t droppedSamples{0};  ///< Samples missing between runs, over all buffers.
+    /// What the Builder's cost rule (RFC 0016 R7) stops: sensor frames, field slices and
+    /// volumes, world states and ROS graphs received, in all.
+    std::uint64_t sensorFrames{0};
+    std::uint64_t fieldMessages{0};
+    std::uint64_t worldMessages{0};
+    std::uint64_t rosGraphs{0};
+    /// Of those and the signal blocks, the ones that came while quiet, after kQuietGrace (what was
+    /// already on its way when the unsubscribe was sent is not counted). Zero when quiet works.
+    std::uint64_t streamedWhileQuiet{0};
 };
 
 /// The viewer's only link to a simulation (invariant 14).
@@ -727,6 +736,7 @@ public:
 private:
     void run();
     void handle(const v1::Envelope& envelope);
+    void countQuietable(const v1::Envelope& envelope);
     void enqueue(std::unique_ptr<v1::Envelope> envelope);
     void handleSignalBlock(const v1::Envelope& envelope);
     void sendSubscriptions();
@@ -777,6 +787,15 @@ private:
     std::atomic<std::uint64_t> samples_{0};
     std::atomic<std::uint64_t> invalidRuns_{0};
     std::atomic<std::uint64_t> droppedSamples_{0};
+    std::atomic<std::uint64_t> sensorFrames_{0};
+    std::atomic<std::uint64_t> fieldMessages_{0};
+    std::atomic<std::uint64_t> worldMessages_{0};
+    std::atomic<std::uint64_t> rosGraphs_{0};
+    std::atomic<std::uint64_t> streamedWhileQuiet_{0};
+    /// steady_clock nanoseconds when setQuiet(true) took effect; 0 while not quiet.
+    std::atomic<std::int64_t> quietSinceNs_{0};
+    /// Messages already sent by the server when the unsubscribe left are not stray.
+    static constexpr std::int64_t kQuietGraceNs = 1'000'000'000;
 
     /// A change to the set of subscriptions, handed from the UI thread to the worker.
     struct SubscriptionChange {

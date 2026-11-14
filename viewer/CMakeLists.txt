@@ -352,6 +352,7 @@ if(BUILD_TESTING)
     ament_add_pytest_test(test_builder_view test/test_builder_view.py TIMEOUT 300)
     ament_add_pytest_test(test_builder_test test/test_builder_test.py TIMEOUT 600)
     ament_add_pytest_test(test_builder_into_run test/test_builder_into_run.py TIMEOUT 300)
+    ament_add_pytest_test(test_builder_acceptance test/test_builder_acceptance.py TIMEOUT 600)
     ament_add_pytest_test(
         test_builder_roundtrip
         test/test_builder_roundtrip.py

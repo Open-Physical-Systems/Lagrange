@@ -138,8 +138,11 @@ void ViewerClient::stop() {
 }
 
 ClientStats ViewerClient::stats() const {
-    return {snapshots_.load(),    deltas_.load(),  resyncs_.load(),     connects_.load(),
-            signalBlocks_.load(), samples_.load(), invalidRuns_.load(), droppedSamples_.load()};
+    return {snapshots_.load(),         deltas_.load(),         resyncs_.load(),
+            connects_.load(),          signalBlocks_.load(),   samples_.load(),
+            invalidRuns_.load(),       droppedSamples_.load(), sensorFrames_.load(),
+            fieldMessages_.load(),     worldMessages_.load(),  rosGraphs_.load(),
+            streamedWhileQuiet_.load()};
 }
 
 std::shared_ptr<ScopeBuffer> ViewerClient::subscribe(const std::string& name,
@@ -661,6 +664,11 @@ void ViewerClient::setQuiet(bool quiet) {
     if (quiet_.exchange(quiet) == quiet) {
         return;
     }
+    quietSinceNs_ =
+        quiet ? std::max<std::int64_t>(1, std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                              std::chrono::steady_clock::now().time_since_epoch())
+                                              .count())
+              : 0;
     // Signals: the worker sends the whole subscription again, empty while quiet.
     resubscribe_ = true;
     // Sensors and fields: off while quiet, on again after (their streams stay).
@@ -1016,8 +1024,42 @@ WiringInfo toWiring(const v1::Wiring& source) {
 
 }  // namespace
 
+void ViewerClient::countQuietable(const v1::Envelope& envelope) {
+    std::atomic<std::uint64_t>* counter = nullptr;
+    switch (envelope.body_case()) {
+        case v1::Envelope::kSensorFrame:
+            counter = &sensorFrames_;
+            break;
+        case v1::Envelope::kFieldSlice:
+        case v1::Envelope::kFieldVolume:
+            counter = &fieldMessages_;
+            break;
+        case v1::Envelope::kWorld:
+            counter = &worldMessages_;
+            break;
+        case v1::Envelope::kRosGraph:
+            counter = &rosGraphs_;
+            break;
+        case v1::Envelope::kSignalBlock:  // counted in handleSignalBlock
+            break;
+        default:
+            return;
+    }
+    if (counter != nullptr) {
+        ++*counter;
+    }
+    const std::int64_t since = quietSinceNs_.load();
+    const std::int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                 std::chrono::steady_clock::now().time_since_epoch())
+                                 .count();
+    if (since != 0 && now - since > kQuietGraceNs) {
+        ++streamedWhileQuiet_;
+    }
+}
+
 void ViewerClient::handle(const v1::Envelope& envelope) {
     Worker& w = *worker_;
+    countQuietable(envelope);
     switch (envelope.body_case()) {
         case v1::Envelope::kServerHello: {
             const v1::ServerHello& hello = envelope.server_hello();

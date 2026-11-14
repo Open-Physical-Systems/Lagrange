@@ -412,15 +412,46 @@ into a scope. When `has_ros_graph` is false the panel says so.
 inspector), "Navigation" (viewport + ROS topics + console), "Replay review" (viewport + timeline
 + scopes).
 
-### 6.3 Robot builder (RFC 0016, Draft)
+### 6.3 Robot builder (RFC 0016)
 
-`rfcs/0016-robot-builder.md` (Draft, not accepted) proposes a **Builder** workspace: build a
-robot in the viewer (links with box, cylinder, sphere and later mesh shapes, joints, sensors from
-a catalog of the built-in types and kinds), test it in a test server of the viewer's own, and
-save it as URDF. Build mode simulates nothing and draws only the edited robot, Lit, so it works
-without a server. Its code would live in `viewer/builder/` with no simulation module linked
-(invariant 14); the MVP needs no protocol change. The screen's draft design is
-`docs/design/ui/12-builder/`. Nothing of it is built until the owner accepts the RFC.
+RFC 0016 (`rfcs/0016-robot-builder.md`, accepted, with Addendum A) is the **Builder** workspace:
+build a robot in the viewer, test it in a test server of the viewer's own, save it as URDF. The
+user page is `docs/guide/builder.md`; the screen's design `docs/design/ui/12-builder/`; the work
+plan `docs/plan/builder-phase1-plan.md`.
+
+- **Where it lives.** `viewer/builder/` (`lagrange_viewer_builder`): the document (links, shapes,
+  joints, sensors), edits and the undo history, mass properties (primitives, closed meshes by
+  Mirtich's volume integrals), validation, the URDF reader and writer (deterministic, byte for
+  byte: `viewer/test/builder/golden/`), the sensor catalog loader
+  (`modules/sensors/catalog/sensor_catalog.yaml`, installed with the viewer), gizmo maths,
+  collision choices and the split, and the test server. It links no simulation module
+  (invariant 14); meshes are read by `lagrange_meshes`, as the server reads them, linked
+  privately (with it the `lagrange_core` library), so no builder header and no panel sees core.
+  The panels are `viewer/panels/src/Builder*.cpp`; `viewer/app/src/BuilderHost.cpp` runs the
+  child processes (test server, `lagrange_import`, `lagrange check`, `xacro`, `bake_urdf`), each
+  with `posix_spawn` and polled every frame, never blocking the UI thread.
+- **Modes.** Build draws only the document's robot on the Lit pipeline: `SceneAdapter` turns the
+  document into a `SceneFrame` for the viewer's own `SceneRenderer`, not from the protocol. Test writes the URDF to the runtime folder
+  (`$XDG_RUNTIME_DIR/lagrange/builder/<pid>/`), starts `lagrange_server --robot F --world none
+  --joint-control --listen unix:…`, and points the client at it; Back sends SIGTERM (SIGKILL
+  after 3 s) and returns to the endpoint the viewer had before, or to none.
+- **Cost rule (R7).** While the Builder is in front, `ViewerClient::setQuiet(true)` unsubscribes
+  every signal and turns sensor frames, field slices, the ROS graph and world state off with
+  existing messages (no protocol change); leaving sends again what the panels want. The headless
+  report counts `sensor_frames`, `field_messages`, `world_messages`, `ros_graphs` and
+  `streamed_while_quiet` (any of those or a signal block more than 1 s after going quiet);
+  `test_builder_acceptance.py` checks it is 0 against a real server.
+- **Flags.** `--workspace builder`, `--builder-open FILE` (`.urdf`, or `.xacro` by expansion),
+  `--builder-save FILE` (headless: the document at the end; exit 5 when it cannot be written),
+  Ctrl B (also on the launcher, without a server). The headless report has a `builder` object
+  and `windows` (the windows in front), which the input tests read.
+- **Measured** (2026-11-15, `LAGRANGE_VIEWER_PROFILE=1`, 1600 × 1000, the sample rover open,
+  300 frames, a shared laptop): llvmpipe frame 17.9 / 20.9 ms median / p95 (functional only, as
+  §11 says for lavapipe); RTX 4060 Laptop 1.06 / 1.30 ms, and 1.17 / 2.44 ms while zooming the
+  view every other frame, inside the 16.6 ms budget.
+- **Not built yet**: Test into a sample world or a world file, *Into the connected run* (§7.2,
+  phase 1b), joint sliders driving a test (§7.3), the overlay's motors, battery and sensors
+  (phase 3), USD and SDFormat (phase 4).
 
 ## 7. Scopes: ring buffers and decimation
 

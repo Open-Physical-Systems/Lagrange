@@ -23,6 +23,7 @@
 #include <fstream>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_vulkan.h>
+#include <imgui_internal.h>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -344,6 +345,33 @@ private:
 };
 
 std::string jsonEscape(const std::string& text);  // below
+
+/// The titles of the top-level windows drawn in the last frame (headless report: which
+/// layout is in front, e.g. the Builder's Test layout). Docked tabs behind others are left out.
+std::string visibleWindowsJson() {
+    std::string out;
+    const ImGuiContext* context = ImGui::GetCurrentContext();
+    if (context == nullptr) {
+        return "[]";
+    }
+    for (const ImGuiWindow* window : context->Windows) {
+        // A docked window is a child of its dock node's host: kept when its tab is in front.
+        const bool shown = window->DockIsActive
+                               ? window->DockTabIsVisible
+                               : (window->Flags & ImGuiWindowFlags_ChildWindow) == 0;
+        if (!window->WasActive || window->Hidden || !shown ||
+            (window->Flags & ImGuiWindowFlags_DockNodeHost) != 0) {
+            continue;
+        }
+        std::string title = window->Name;
+        title = title.substr(0, title.find("##"));
+        if (title.empty()) {
+            continue;
+        }
+        out += std::string(out.empty() ? "" : ", ") + "\"" + jsonEscape(title) + "\"";
+    }
+    return "[" + out + "]";
+}
 
 class Ui {
 public:
@@ -1780,14 +1808,15 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             "\"deltas\": %llu, \"resyncs\": %llu, "
             "\"prims\": %zu, \"meshes\": %zu, \"draw_calls\": %u, \"sim_time_ns\": %lld, "
             "\"signal_blocks\": %llu, \"samples\": %llu, \"invalid_runs\": %llu, "
-            "\"dropped_samples\": %llu, "
+            "\"dropped_samples\": %llu, \"sensor_frames\": %llu, \"field_messages\": %llu, "
+            "\"world_messages\": %llu, \"ros_graphs\": %llu, \"streamed_while_quiet\": %llu, "
             "\"device\": \"%s\", \"tier\": %d, \"validation_errors\": %u, \"connected\": %s, "
             "\"profile\": \"%s\", \"profile_changes\": %zu, \"domains_enabled\": \"%s\", "
             "\"log_lines\": %llu, \"attributes\": %zu, \"wiring_nodes\": %zu, "
             "\"wiring_wires\": %zu, \"events\": %zu, \"server_stats\": %s, "
             "\"environment_fields\": %zu, \"ros_topics\": %zu, \"ros_nodes\": %zu, "
             "\"world_tiles\": %zu, \"world_agents\": %zu, \"shading\": %d, "
-            "\"workspace\": \"%s\", \"launcher\": %s, \"builder\": %s}\n",
+            "\"workspace\": \"%s\", \"launcher\": %s, \"windows\": %s, \"builder\": %s}\n",
             jsonEscape(client.notice().text).c_str(), client.notice().error ? "true" : "false",
             rendered, static_cast<unsigned long long>(stats.snapshots),
             static_cast<unsigned long long>(stats.deltas),
@@ -1798,7 +1827,12 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             static_cast<unsigned long long>(stats.signalBlocks),
             static_cast<unsigned long long>(stats.samples),
             static_cast<unsigned long long>(stats.invalidRuns),
-            static_cast<unsigned long long>(stats.droppedSamples), device->info().name.c_str(),
+            static_cast<unsigned long long>(stats.droppedSamples),
+            static_cast<unsigned long long>(stats.sensorFrames),
+            static_cast<unsigned long long>(stats.fieldMessages),
+            static_cast<unsigned long long>(stats.worldMessages),
+            static_cast<unsigned long long>(stats.rosGraphs),
+            static_cast<unsigned long long>(stats.streamedWhileQuiet), device->info().name.c_str(),
             static_cast<int>(device->tier()), device->validationErrorCount(),
             client.connection().state == ConnectionState::Ready ? "true" : "false", profileVerdict,
             ui.profileSession().draft().changedLineCount(), enabledDomains.c_str(),
@@ -1812,7 +1846,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             client.world() ? client.world()->tiles.size() : std::size_t{0},
             client.world() ? client.world()->agents.size() : std::size_t{0},
             static_cast<int>(ui.shading()), toString(ui.workspace()),
-            ui.launcherActive() ? "true" : "false", ui.builderReport().c_str());
+            ui.launcherActive() ? "true" : "false", visibleWindowsJson().c_str(),
+            ui.builderReport().c_str());
         if (device->validationErrorCount() != 0 && exitCode == 0) {
             exitCode = 6;
         }

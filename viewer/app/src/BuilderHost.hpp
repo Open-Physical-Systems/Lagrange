@@ -61,7 +61,9 @@ public:
     }
     /// True while a child process runs or a Test is stopping (headless `wait:idle`).
     [[nodiscard]] bool busy() const {
-        return !jobs_.empty() || test_.state() == builder::TestServer::State::Stopping;
+        // A split in progress too, so that --input's wait:idle waits for its parts.
+        return !jobs_.empty() || test_.state() == builder::TestServer::State::Stopping ||
+               session_.split.running;
     }
     /// Save to `target` now (atomic). False with the reason in Problems. Headless
     /// --builder-save, and Save / Save as.

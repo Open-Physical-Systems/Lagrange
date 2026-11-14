@@ -168,10 +168,11 @@ recorded to MCAP and replayed.
 
 <!-- docs-index begin: written by tools/ci/docs_index.py -->
 
-<details><summary>User guide (21)</summary>
+<details><summary>User guide (22)</summary>
 
 - [User guide](docs/guide/README.md)
 - [Autoware with a simulated car](docs/guide/autoware.md)
+- [The robot builder](docs/guide/builder.md)
 - [The `lagrange` command](docs/guide/cli.md)
 - [Concepts](docs/guide/concepts.md)
 - [Installing Lagrange](docs/guide/install.md)

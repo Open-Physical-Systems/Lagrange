@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<robot name="empty">
+  <link name="base_link" lagrange_density="1240">
+    <visual>
+      <geometry><box size="0.3 0.2 0.1"/></geometry>
+    </visual>
+    <collision>
+      <geometry><box size="0.3 0.2 0.1"/></geometry>
+    </collision>
+    <inertial lagrange_overrides="">
+      <origin xyz="0 0 0"/>
+      <mass value="7.440000000000001"/>
+      <inertia ixx="0.031000000000000014" ixy="0" ixz="0" iyy="0.06200000000000002" iyz="0" izz="0.08060000000000002"/>
+    </inertial>
+  </link>
+</robot>

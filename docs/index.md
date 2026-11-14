@@ -221,6 +221,7 @@ print(sim.read("body/base_link/pose"))
 | Install it | [Installing Lagrange](guide/install.md): from source, as debs or in a container |
 | Fly a drone, or test your own | [Tutorial: a quadcopter](guide/tutorial-drone.md), then [Test your own drone](guide/tutorial-custom-drone.md) |
 | Load your own robot | [The run file](guide/run-file.md) and [The `lagrange` command](guide/cli.md) |
+| Build a robot in the viewer | [The robot builder](guide/builder.md): links, joints, sensors from the catalog, Test, save as URDF |
 | Find a sensor, add it, read it, break it | [Sensors](guide/sensors.md): every sensor Lagrange simulates, by robot |
 | Drive a car, or run Autoware | [Tutorial: a car in a city block](guide/tutorial-cars.md), then [Autoware](guide/autoware.md) |
 | Heat, and a robot's own EMI | [Tutorial: heat in the parts and a robot's own interference](guide/tutorial-heat-and-emi.md) |
@@ -253,6 +254,7 @@ guide/tutorial-humans
 guide/tutorial-heat-and-emi
 guide/autoware
 guide/run-file
+guide/builder
 guide/concepts
 guide/profiles
 guide/sensors
