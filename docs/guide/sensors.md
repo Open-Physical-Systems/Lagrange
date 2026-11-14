@@ -9,7 +9,7 @@ There are two families:
 
 - **Built-in types**: IMU, lidar, camera, thermal camera, radar, GNSS, magnetometer and barometer.
   Each has its own USD schema (`ImuAPI_1`, `GnssAPI_1`, ...) and its own ROS 2 topics.
-- **Built-in kinds**: 36 more sensors, from bumpers to sonar, simulated by Lagrange itself with no
+- **Built-in kinds**: 37 more sensors, from bumpers to sonar, simulated by Lagrange itself with no
   plugin. A kind is a custom sensor (`<sensor type="KIND">` in URDF or SDFormat, USD
   `CustomSensorAPI_1`) whose kind Lagrange knows. Each writes `sensor/<name>/<quantity>` signals.
   Its parameters, signals and model are in [sensors.md §9](../design/domains/sensors.md#9-built-in-custom-sensor-kinds),
