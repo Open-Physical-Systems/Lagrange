@@ -461,11 +461,15 @@ std::string checkParam(const CatalogParam& param, std::string_view text) {
             if (param.type == CatalogParam::Type::Int && std::floor(*value) != *value) {
                 return "a whole number";
             }
-            if (param.min && *value < *param.min) {
-                return "at least " + formatNumber(*param.min) + unit;
+            if (param.min &&
+                (*value < *param.min || (param.minExclusive && *value == *param.min))) {
+                return (param.minExclusive ? "more than " : "at least ") +
+                       formatNumber(*param.min) + unit;
             }
-            if (param.max && *value > *param.max) {
-                return "at most " + formatNumber(*param.max) + unit;
+            if (param.max &&
+                (*value > *param.max || (param.maxExclusive && *value == *param.max))) {
+                return (param.maxExclusive ? "less than " : "at most ") + formatNumber(*param.max) +
+                       unit;
             }
             return {};
         }

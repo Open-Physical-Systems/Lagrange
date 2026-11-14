@@ -233,7 +233,7 @@ install(
 
 # The sensor catalog (RFC 0016 §5, R11): lagrange_sensors owns it; the viewer build-depends on
 # that package for this data file only (no find_package, no library) and installs a copy, so a
-# viewer-only install still has it. Absent until lagrange_sensors installs it (WP-C).
+# viewer-only install still has it.
 set(_lagrange_sensor_catalog "")
 string(REPLACE ":" ";" _lagrange_prefixes "$ENV{AMENT_PREFIX_PATH}")
 foreach(_prefix IN LISTS _lagrange_prefixes)
@@ -302,6 +302,7 @@ if(BUILD_TESTING)
         builder/test/test_scene_adapter.cpp
         builder/test/test_urdf.cpp
         builder/test/test_edits.cpp
+        builder/test/test_sensor_catalog_loader.cpp
         TIMEOUT 120
     )
     target_link_libraries(
@@ -315,6 +316,8 @@ if(BUILD_TESTING)
             LAGRANGE_BUILDER_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/builder"
             LAGRANGE_THERMAL_MATERIALS_CPP="${CMAKE_CURRENT_SOURCE_DIR}/../modules/thermal/conduction/src/Materials.cpp"
             LAGRANGE_BUILDER_ASSETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots"
+            LAGRANGE_SENSOR_CATALOG_YAML="${CMAKE_CURRENT_SOURCE_DIR}/../modules/sensors/catalog/sensor_catalog.yaml"
+            LAGRANGE_PLUGIN_CATALOG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../core/plugin_abi/samples/catalog"
     )
     lagrange_target_defaults(test_viewer_builder)
     # Read and write a URDF from the command line, and make the templates (WP-B); not installed.

@@ -771,7 +771,9 @@ private:
             }
             first = true;
             for (const builder::CatalogOutput& topic : entry->rosTopics) {
-                const std::string path = "/" + name + "/" + topic.name;
+                // "/imu" is the robot's own topic; "range" is under the sensor's name.
+                const std::string path =
+                    topic.name.starts_with('/') ? topic.name : "/" + name + "/" + topic.name;
                 ImGui::PushID(path.c_str());
                 widgets::PropertyRow(first ? "ROS 2" : "", path.c_str(), topic.type.c_str());
                 ImGui::PopID();
@@ -794,6 +796,20 @@ private:
         };
     }
 
+    /// The text is the catalog's default: "4.0" is the default 4 of a number.
+    static bool atDefault(const builder::CatalogParam& param, const std::string& text) {
+        if (text == param.defaultText) {
+            return true;
+        }
+        if (param.type != builder::CatalogParam::Type::Number &&
+            param.type != builder::CatalogParam::Type::Int) {
+            return false;
+        }
+        const auto value = builder::parseNumber(text);
+        const auto fallback = builder::parseNumber(param.defaultText);
+        return value && fallback && *value == *fallback;
+    }
+
     void catalogParams(BuilderSession& session, const Sensor& sensor,
                        const builder::CatalogEntry& entry) {
         const std::string meta = std::to_string(entry.params.size()) + " parameters · catalog";
@@ -803,30 +819,60 @@ private:
         }
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
         const std::string name = sensor.name;
+        // Paths too long for the label column ("imu/angular_velocity/{axis}/noise/stddev") are
+        // shown under their parent path, a mono caption row, with the last part as the label.
+        ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
+        const bool nested = std::ranges::any_of(entry.params, [](const builder::CatalogParam& p) {
+            return ImGui::CalcTextSize(p.path.c_str()).x > px(106.0F);
+        });
+        ImGui::PopFont();
+        std::string parent;
         for (const builder::CatalogParam& param : entry.params) {
+            const std::size_t slash = nested ? param.path.rfind('/') : std::string::npos;
+            const std::string label =
+                slash == std::string::npos ? param.path : param.path.substr(slash + 1);
+            const std::string under =
+                slash == std::string::npos ? std::string{} : param.path.substr(0, slash);
+            if (nested && under != parent) {
+                parent = under;
+                if (!under.empty()) {
+                    ImGui::Dummy(ImVec2(0.0F, px(2.0F)));
+                    ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
+                    ImGui::TextColored(c::t3, "%s/", under.c_str());
+                    ImGui::PopFont();
+                }
+            }
             ImGui::PushID(param.path.c_str());
             const auto found = sensor.params.find(param.path);
             const std::string value = found != sensor.params.end() ? found->second : "";
-            const bool differs = !value.empty() && value != param.defaultText;
+            const bool differs = !value.empty() && !atDefault(param, value);
             differing_ += differs ? 1 : 0;
             std::string unit = param.unit == "1" ? "1" : param.unit;
             if (differs && !param.defaultText.empty()) {
                 unit += std::string(unit.empty() ? "" : " · ") + "default " + param.defaultText;
             }
-            const auto apply = [&](const std::string& typed) {
-                const std::string error = builder::checkParam(param, typed);
+            const auto apply = [&](const std::string& entered) {
+                const std::string error = builder::checkParam(param, entered);
                 if (!error.empty()) {
                     paramError_ = param.path + ": " + error;
                     return;
                 }
                 paramError_.clear();
+                // A number is kept as the server reads it: "−2" (the design's minus) is "-2".
+                std::string typed = entered;
+                if (param.type == builder::CatalogParam::Type::Number ||
+                    param.type == builder::CatalogParam::Type::Int) {
+                    if (const auto number = builder::parseNumber(entered)) {
+                        typed = builder::formatNumber(*number, 15);
+                    }
+                }
                 const std::string from = value.empty() ? param.defaultText : value;
                 const std::string label =
                     "Set " + param.path + " " + from + " → " + typed +
                     (param.unit.empty() || param.unit == "1" ? "" : " " + param.unit);
                 edit(session, label, "sensor/" + name + "/" + param.path, [&](Document& next) {
                     auto& params = builder::findSensor(next, name)->params;
-                    if (typed.empty() || typed == param.defaultText) {
+                    if (typed.empty() || atDefault(param, typed)) {
                         params.erase(param.path);
                     } else {
                         params[param.path] = typed;
@@ -841,8 +887,9 @@ private:
                 const float start = ImGui::GetCursorPosX();
                 ImGui::AlignTextToFramePadding();
                 ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
-                ImGui::TextColored(c::t2, "%s", param.path.c_str());
+                ImGui::TextColored(c::t2, "%s", label.c_str());
                 ImGui::PopFont();
+                ImGui::SetItemTooltip("%s", param.path.c_str());
                 ImGui::SameLine(start + px(112.0F));
                 if (widgets::DropdownField("##enum", shown.c_str(), unit.c_str(),
                                            ImGui::GetContentRegionAvail().x)) {
@@ -863,8 +910,10 @@ private:
                 std::string typed = shown;
                 const bool numeric = param.type == builder::CatalogParam::Type::Number ||
                                      param.type == builder::CatalogParam::Type::Int;
-                if (widgets::CommitEdit(param.path.c_str(), &typed, unit.c_str(), differs,
-                                        param.meaning.c_str(), numeric, true)) {
+                const std::string tooltip =
+                    param.path + (param.meaning.empty() ? "" : "\n") + param.meaning;
+                if (widgets::CommitEdit(label.c_str(), &typed, unit.c_str(), differs,
+                                        tooltip.c_str(), numeric, true)) {
                     apply(typed);
                 }
             }
