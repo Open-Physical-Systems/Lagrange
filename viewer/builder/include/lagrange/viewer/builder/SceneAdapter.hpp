@@ -7,9 +7,11 @@
 #include "lagrange/viewer/builder/Document.hpp"
 #include "lagrange/viewer/builder/Kinematics.hpp"
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lagrange::viewer::builder {
@@ -24,7 +26,20 @@ struct BuiltScene {
     /// Per prim: the index into Document::links of the link it moves with (-1: none, at the
     /// identity). poseScene places each prim at its link's frame.
     std::vector<int> primLink;
+    /// Per prim: its pose in its link's frame (a shape's origin, a sensor's mount; identity for
+    /// the link's own prim). Added by WP-D: a shape's origin cannot live in the mesh without
+    /// loosening pickPrim's box test for turned shapes.
+    std::vector<Frame> primOffset;
+    /// Per prim: the index into Document::sensors it draws (-1: a link or shape prim).
+    std::vector<int> primSensor;
 };
+
+/// Default colour of a shape with no rgba (Shape::rgba all zero): a neutral light blue-grey,
+/// linear 0..1. The colour of the object, not a UI token.
+inline constexpr std::array<float, 4> kDefaultShapeColor{0.62F, 0.68F, 0.78F, 1.0F};
+/// Edge of the cube drawn for a sensor's mount (m), so a sensor can be seen and picked. A view
+/// marker only: it has no mass and does not collide.
+inline constexpr double kSensorMarkerSize = 0.03;
 
 /// One prim per link, a child prim per visual shape (MeshData from Primitives.hpp), one
 /// collider per collision shape; `generation` goes into SceneStatics::generation and must grow
@@ -36,5 +51,14 @@ struct BuiltScene {
 /// this per preview change keeps meshes on the GPU (plan decision 2).
 [[nodiscard]] std::shared_ptr<const SceneFrame> poseScene(const BuiltScene& scene,
                                                           const std::vector<Frame>& links);
+
+/// Each link's frame for the joint preview (in the root link's frame), in document order.
+/// linkFrames (WP-A) when its tree is ok; until WP-A lands (its buildTree is a stub), a local
+/// forward kinematics over the same rules: parent before child, mimic joints follow their
+/// leader, missing joints at 0, links no joint reaches at the identity. Added by WP-D.
+[[nodiscard]] std::vector<Frame> previewFrames(const Document& document, const Preview& preview);
+
+/// The index of the prim that draws `item` (a link's own prim, or a sensor's), or kNone.
+[[nodiscard]] std::uint32_t primOf(const BuiltScene& scene, std::string_view item);
 
 }  // namespace lagrange::viewer::builder

@@ -6,12 +6,15 @@
 
 #include "lagrange/viewer/BuilderSession.hpp"
 #include "lagrange/viewer/Camera.hpp"
+#include "lagrange/viewer/SceneRenderer.hpp"
 #include "lagrange/viewer/SceneStore.hpp"
 #include "lagrange/viewer/ViewerClient.hpp"
 #include "lagrange/viewer/builder/SceneAdapter.hpp"
 
 #include <cstdint>
 #include <memory>
+#include <span>
+#include <vector>
 
 namespace lagrange::viewer {
 
@@ -32,6 +35,13 @@ public:
     /// to draw.
     [[nodiscard]] std::shared_ptr<const SceneFrame> frameToDraw(Camera& camera);
 
+    /// The Builder view's overlay lines for the frame frameToDraw returned last (SPEC "Builder
+    /// view": link frames, joint axes, collision shapes, sensor rays and frustums, the
+    /// selection in accent). Added by WP-D. Valid until the next frameToDraw.
+    [[nodiscard]] std::span<const OverlayLines> overlays() const { return overlays_; }
+    /// Grows whenever overlays() changes (selection, toggles, a new frame), for the view key.
+    [[nodiscard]] std::uint64_t overlayVersion() const { return overlayVersion_; }
+
 private:
     BuilderSession& session_;
     ViewerClient& client_;
@@ -41,6 +51,16 @@ private:
     builder::BuiltScene built_;
     builder::Preview posedPreview_;
     std::shared_ptr<const SceneFrame> frame_;
+    std::vector<builder::Frame> links_;  // the link frames frame_ was posed with
+    // The overlays and what they were built for.
+    void buildOverlays(const std::vector<builder::Frame>& links);
+    /// The plane the grid is drawn on: the lowest point of the robot as posed (m).
+    [[nodiscard]] double groundHeight() const;
+    std::vector<OverlayLines> overlays_;
+    std::uint64_t overlayVersion_{0};
+    const SceneFrame* overlaysFrame_{nullptr};
+    BuilderSession::Selection overlaysSelection_;
+    BuilderSession::ViewToggles overlaysToggles_;
 };
 
 }  // namespace lagrange::viewer
