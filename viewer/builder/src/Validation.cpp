@@ -594,6 +594,7 @@ std::vector<Problem> validate(const Document& document, const SensorCatalog* cat
     for (const Sensor& sensor : document.sensors) {
         checkSensor(findings, document, sensor, catalog);
     }
+    findings.append(checkOverlay(document));
     return findings.take();
 }
 

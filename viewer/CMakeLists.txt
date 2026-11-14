@@ -54,6 +54,7 @@ add_library(
     builder/src/MassProperties.cpp
     builder/src/Materials.cpp
     builder/src/MeshShapes.cpp
+    builder/src/Overlay.cpp
     builder/src/Primitives.cpp
     builder/src/SceneAdapter.cpp
     builder/src/SensorCatalog.cpp
@@ -166,6 +167,7 @@ add_library(
     panels/src/BuilderJoints.cpp
     panels/src/BuilderPanels.cpp
     panels/src/BuilderView.cpp
+    panels/src/BuilderPower.cpp
     panels/src/BuilderProblems.cpp
     panels/src/BuilderProperties.cpp
     panels/src/BuilderTree.cpp
@@ -323,6 +325,7 @@ if(BUILD_TESTING)
         builder/test/test_test_server.cpp
         builder/test/test_scene_renderer_statics.cpp
         builder/test/test_mesh_shapes.cpp
+        builder/test/test_overlay.cpp
         TIMEOUT 600
     )
     target_link_libraries(
@@ -337,6 +340,7 @@ if(BUILD_TESTING)
             LAGRANGE_BUILDER_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/builder"
             LAGRANGE_THERMAL_MATERIALS_CPP="${CMAKE_CURRENT_SOURCE_DIR}/../modules/thermal/conduction/src/Materials.cpp"
             LAGRANGE_BUILDER_ASSETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots"
+            LAGRANGE_SCHEMAS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../schemas"
             LAGRANGE_SENSOR_CATALOG_YAML="${CMAKE_CURRENT_SOURCE_DIR}/../modules/sensors/catalog/sensor_catalog.yaml"
             LAGRANGE_PLUGIN_CATALOG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../core/plugin_abi/samples/catalog"
     )
@@ -357,6 +361,7 @@ if(BUILD_TESTING)
     ament_add_pytest_test(test_builder_into_run test/test_builder_into_run.py TIMEOUT 300)
     ament_add_pytest_test(test_builder_acceptance test/test_builder_acceptance.py TIMEOUT 600)
     ament_add_pytest_test(test_builder_joint_drive test/test_builder_joint_drive.py TIMEOUT 300)
+    ament_add_pytest_test(test_builder_power test/test_builder_power.py TIMEOUT 600)
     ament_add_pytest_test(
         test_builder_roundtrip
         test/test_builder_roundtrip.py

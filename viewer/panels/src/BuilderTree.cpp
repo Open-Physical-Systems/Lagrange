@@ -4,6 +4,7 @@
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/builder/MassProperties.hpp"
+#include "lagrange/viewer/builder/Overlay.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
@@ -376,9 +377,27 @@ public:
             widgets::Pill(session.busy.c_str(), widgets::PillKind::Info);
         }
         entry("URDF", session.path.string(), session.path.empty() ? "not saved yet" : nullptr);
-        // RFC 0016 phase 3: GNSS, magnetometer, barometer and radar need the overlay file.
-        entry("overlay YAML", {}, "not needed");
-        ImGui::SetItemTooltip("Sensors that need the overlay file come in RFC 0016 phase 3");
+        // RFC 0016 phase 3: the power system and GNSS, magnetometer, barometer and radar go
+        // into <robot>.overlay.yaml beside the URDF (formats.md §9).
+        if (builder::hasOverlay(document)) {
+            const std::size_t entries = std::ranges::count_if(
+                document.overlay.entries,
+                [](const builder::OverlayEntry& e) { return e.sensor.empty(); });
+            const std::size_t sensors = std::ranges::count_if(
+                document.sensors,
+                [](const builder::Sensor& s) { return builder::isOverlaySensor(s.type); });
+            char note[64];
+            std::snprintf(note, sizeof(note), "%zu entries · %zu sensors", entries, sensors);
+            entry("overlay YAML",
+                  session.path.empty() ? std::string{}
+                                       : builder::overlayPathFor(session.path).string(),
+                  session.path.empty() ? "not saved yet" : note);
+            ImGui::SetItemTooltip("Written with the URDF; Test runs the server with --overlay");
+        } else {
+            entry("overlay YAML", {}, "not needed");
+            ImGui::SetItemTooltip(
+                "Needed for a battery, a bus, motors, or GNSS, magnetometer, barometer, radar");
+        }
         bool meshes = false;
         for (const builder::Link& link : document.links) {
             for (const builder::Shape& shape : link.shapes) {

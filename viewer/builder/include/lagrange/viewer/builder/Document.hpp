@@ -20,6 +20,31 @@
 
 namespace lagrange::viewer::builder {
 
+// --- RFC 0016 phase 3: the overlay file (formats.md §9), as the file says it ------------------
+// One value of an attribute: its text as typed (a number, a token, a name or path), or a list.
+struct OverlayAttribute {
+    std::string name;                 ///< "elec:torqueConstant", "elec:port:dc_out:maxCurrent"
+    std::vector<std::string> values;  ///< one item for a scalar
+    bool list{false};                 ///< written as [a, b, c]
+};
+/// A schema instance: "ElectricalMotorAPI_1", or "PortAPI_1:dc_out" for a multiple-apply one.
+struct OverlaySchema {
+    std::string name;
+    std::vector<OverlayAttribute> attributes;
+};
+/// One `apply` entry: `prim` (a link, joint or sensor by name, or a path) with an optional
+/// `create_child`, or `create` (a new prim under the robot's top prim). `sensor` is a placeholder
+/// instead: the overlay-only sensor of that name (Document::sensors) is written here.
+struct OverlayEntry {
+    std::string prim, createChild, create;
+    std::vector<OverlaySchema> schemas;
+    std::string sensor;
+};
+struct Overlay {
+    std::string header;  ///< the file's leading comment lines, kept as written
+    std::vector<OverlayEntry> entries;
+};
+
 // --- RFC 0016 §3 (verbatim) -------------------------------------------------------------------
 // clang-format off
 struct Pose { std::array<double, 3> xyz{}; std::array<double, 3> rpy{}; };  // m, rad (URDF's)
@@ -60,6 +85,7 @@ struct Sensor {
 struct Document {
     std::string robot; std::vector<Link> links; std::vector<Joint> joints;
     std::vector<Sensor> sensors; std::string keptXml;  // robot-level elements kept as written
+    Overlay overlay;  // RFC 0016 phase 3 (plan note): <robot>.overlay.yaml beside the URDF
 };
 // clang-format on
 // --- end of RFC 0016 §3 -----------------------------------------------------------------------

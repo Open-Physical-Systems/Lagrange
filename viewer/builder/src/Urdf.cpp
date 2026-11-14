@@ -14,6 +14,7 @@
 // do, visual-only ones do not) carries `lagrange_solid="true|false"`.
 
 #include "lagrange/viewer/builder/MassProperties.hpp"
+#include "lagrange/viewer/builder/Overlay.hpp"
 #include "lagrange/viewer/builder/Urdf.hpp"
 
 #include <algorithm>
@@ -1187,7 +1188,17 @@ std::string keptForDisplay(std::string_view keptXml) {
     return joinedKept(pieces);
 }
 
-std::string writeUrdf(const Document& document, const WriteOptions& options) {
+std::string writeUrdf(const Document& whole, const WriteOptions& options) {
+    // GNSS, magnetometer, barometer and radar go to the overlay file (writeOverlay), never here:
+    // the server reads no such <sensor> from URDF (RFC 0016 phase 3).
+    Document filtered;
+    const bool overlaySensors =
+        std::ranges::any_of(whole.sensors, [](const Sensor& s) { return isOverlaySensor(s.type); });
+    if (overlaySensors) {
+        filtered = whole;
+        std::erase_if(filtered.sensors, [](const Sensor& s) { return isOverlaySensor(s.type); });
+    }
+    const Document& document = overlaySensors ? filtered : whole;
     Out out;
     out.line(0, "<?xml version=\"1.0\"?>");
     const Kept kept(document.keptXml);
