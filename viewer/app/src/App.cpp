@@ -448,21 +448,11 @@ public:
             framedRegion_ = scene_->statics->regionEnu;
             framedRebase_ = scene_->statics->rebaseCount;
         }
-        // A Test's run is the Builder's (R3): the camera aims at the test robot, and when the
-        // Test ends the Scene camera and the framed stage are put back as they were, so the run
-        // shown before is not re-aimed; nor does a test run join the Recent list.
+        // A Test's run is the Builder's (R3): it is seen with the Builder view's camera, so the
+        // Scene camera is not re-aimed at it (after Back the run shown before is still the
+        // framed one), and it does not join the Recent list.
         const bool testing = builderHost_.ownsConnection();
-        if (testing && !savedView_) {
-            savedView_ = SavedView{camera_, framedStage_, framedRegion_, framedRebase_};
-            framedStage_.clear();
-        } else if (!testing && savedView_) {
-            camera_ = savedView_->camera;
-            framedStage_ = savedView_->stage;
-            framedRegion_ = savedView_->region;
-            framedRebase_ = savedView_->rebase;
-            savedView_.reset();
-        }
-        if (scene_ && scene_->statics->stagePath != framedStage_) {
+        if (scene_ && scene_->statics->stagePath != framedStage_ && !testing) {
             frameScene(*scene_);
             framedStage_ = scene_->statics->stagePath;
             framedRegion_ = scene_->statics->regionEnu;
@@ -622,6 +612,11 @@ public:
         std::shared_ptr<const SceneFrame> scene = scene_;
         const bool building = workspace_ == Workspace::Builder && !launcher_.active &&
                               builderSession_.mode == BuilderSession::Mode::Build;
+        if (workspace_ == Workspace::Builder && !launcher_.active && !building) {
+            // Testing (SPEC state 4): the test server's scene in the Builder view, seen with
+            // the Builder view's own camera, drawn as the Scene viewport draws it.
+            camera = builderSession_.camera;
+        }
         // The Builder view draws Lit only, with its own grid toggle (12-builder SPEC).
         RenderOptions builderOptions;
         if (building) {
@@ -1319,14 +1314,6 @@ private:
     BuilderHost builderHost_{builderSession_, client_};
     LocalServer localServer_;
     bool recordRecent_{false};
-    /// The Scene camera and framed stage while a Builder Test has the connection (R3).
-    struct SavedView {
-        Camera camera;
-        std::string stage;
-        std::array<double, 3> region{};
-        std::uint64_t rebase{0};
-    };
-    std::optional<SavedView> savedView_;
     std::string recentPath_;
     double socketChecked_{-10.0};
     std::vector<std::pair<std::string, bool>> domainEdits_;

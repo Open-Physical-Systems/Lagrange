@@ -308,6 +308,7 @@ if(BUILD_TESTING)
         builder/test/test_sensor_catalog_loader.cpp
         builder/test/test_gizmo.cpp
         builder/test/test_test_server.cpp
+        builder/test/test_scene_renderer_statics.cpp
         TIMEOUT 120
     )
     target_link_libraries(
