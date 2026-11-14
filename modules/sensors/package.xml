@@ -18,6 +18,9 @@
   <depend>tbb</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>python3-yaml</test_depend>
+  <test_depend>yaml-cpp</test_depend>
   <test_depend>lagrange_rigid_body_mujoco</test_depend>
   <test_depend>mesa-vulkan-drivers</test_depend>
 

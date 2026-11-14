@@ -1,0 +1,4029 @@
+# The sensor catalog (RFC 0016 §5): every sensor the robot builder offers, with its parameters
+# as the URDF reader takes them (server/src/Robot.cpp) and the signals it writes. Kept honest by
+# test_sensor_catalog (the kinds are exactly sensors::builtinKinds(); every default written
+# explicitly gives bit-identical signals to none) and tools/ci/check_sensor_catalog.py (every
+# kind's parameters and defaults against its table in docs/design/domains/sensors.md §9).
+#
+# A parameter's `path` is the kind's own: <range><max> under the sensor's element is range/max,
+# and the writer turns the form back into that XML. Values are SI as the code reads them (the
+# one exception, battery_monitor's capacity in A·h, says so). `default` is the code's fallback;
+# a parameter whose default depends on the world gives `default_from` in words instead.
+# `only_when` names the mode a parameter is read in ({text parameter: value}, `a|b` for either).
+# Other keys: `default_note` (a mode's other default, in words), `min`, `max`, `min_exclusive`,
+# `max_exclusive` (the code refuses equality), `choices` (enum), `refers_to` (what a text
+# parameter names: joint, body, signal, ...), `source` (the data sheet, or "illustrative", as
+# sensors.md cites it), and on signals `length` or `length_from` (arrays) and `frame`.
+# Plugins add kinds with their own files under the ament resource `lagrange_sensor_catalog`
+# (the same layout, `kinds:` only, plus `plugin:` the library).
+#
+# `common` holds what every sensor has (not kind parameters, plan R9: written once). `types` are
+# the built-in sensors the URDF reader takes; the IMU's noise is read from the first axis that
+# has <noise> (imuNoise in Robot.cpp), so `{axis}` in its paths is written for each of `axes`
+# with the same value (plan R9); the lidar's element is <lidar> or <ray>. Types marked
+# `overlay_only` are not read from URDF: the builder writes them to the overlay YAML (formats.md
+# §9, `create_child` with the schema, as quad_x500.overlay.yaml does), and their `path` is the
+# schema attribute (schemas/sensor).
+schema_version: 1
+common:
+  - path: update_rate
+    type: number
+    unit: Hz
+    default: 10
+    min_exclusive: 0
+    meaning: samples per second; 0 (Gazebo's as fast as possible) is refused for kinds
+  - path: pose
+    type: pose
+    meaning: x y z roll pitch yaw in the link's frame
+  - path: latency
+    type: number
+    unit: s
+    default: 0
+    min: 0
+    meaning: delay of the sensor's ROS messages and sensor/<n>/delayed/... (sensor timing)
+  - path: jitter
+    type: number
+    unit: s
+    default: 0
+    min: 0
+    meaning: 1σ of the latency's spread
+types:
+  imu:
+    name: IMU
+    category: motion_and_force
+    urdf_types:
+      - imu
+    description: Three-axis gyro and accelerometer at the link, with SDFormat noise per channel.
+    doc: docs/design/domains/sensors.md#2-models-per-fidelity-level
+    axes:
+      - x
+      - y
+      - z
+    params:
+      - path: imu/angular_velocity/{axis}/noise/stddev
+        type: number
+        unit: rad/s
+        default: 0
+        min: 0
+        meaning: white noise, 1σ
+      - path: imu/angular_velocity/{axis}/noise/bias_mean
+        type: number
+        unit: rad/s
+        default: 0
+        meaning: constant bias
+      - path: imu/angular_velocity/{axis}/noise/bias_stddev
+        type: number
+        unit: rad/s
+        default: 0
+        min: 0
+        meaning: spread of the bias drawn per run
+      - path: imu/angular_velocity/{axis}/noise/dynamic_bias_stddev
+        type: number
+        unit: rad/s
+        default: 0
+        min: 0
+        meaning: random walk of the bias
+      - path: imu/angular_velocity/{axis}/noise/dynamic_bias_correlation_time
+        type: number
+        unit: s
+        default: 0
+        min: 0
+        meaning: correlation time of the bias walk
+      - path: imu/angular_velocity/{axis}/noise/precision
+        type: number
+        unit: rad/s
+        default: 0
+        min: 0
+        meaning: output quantum
+      - path: imu/linear_acceleration/{axis}/noise/stddev
+        type: number
+        unit: m/s^2
+        default: 0
+        min: 0
+        meaning: white noise, 1σ
+      - path: imu/linear_acceleration/{axis}/noise/bias_mean
+        type: number
+        unit: m/s^2
+        default: 0
+        meaning: constant bias
+      - path: imu/linear_acceleration/{axis}/noise/bias_stddev
+        type: number
+        unit: m/s^2
+        default: 0
+        min: 0
+        meaning: spread of the bias drawn per run
+      - path: imu/linear_acceleration/{axis}/noise/dynamic_bias_stddev
+        type: number
+        unit: m/s^2
+        default: 0
+        min: 0
+        meaning: random walk of the bias
+      - path: imu/linear_acceleration/{axis}/noise/dynamic_bias_correlation_time
+        type: number
+        unit: s
+        default: 0
+        min: 0
+        meaning: correlation time of the bias walk
+      - path: imu/linear_acceleration/{axis}/noise/precision
+        type: number
+        unit: m/s^2
+        default: 0
+        min: 0
+        meaning: output quantum
+    signals:
+      - name: specific_force
+        type: vec3
+        unit: m/s^2
+      - name: angular_rate
+        type: vec3
+        unit: rad/s
+      - name: orientation
+        type: quat
+    ros:
+      - topic: /imu
+        type: sensor_msgs/msg/Imu
+  lidar:
+    name: Lidar
+    category: range_and_contact
+    urdf_types:
+      - lidar
+      - gpu_lidar
+      - ray
+      - gpu_ray
+    element:
+      - lidar
+      - ray
+    description: 2D or 3D scans by rays over the scene; grid, flash or rosette patterns and channel
+      tables.
+    doc: docs/design/domains/sensors.md#lidar-scan-patterns-as-built
+    params:
+      - path: lidar/scan/horizontal/samples
+        type: int
+        default: 360
+        min: 1
+        meaning: beams per row
+      - path: lidar/scan/horizontal/min_angle
+        type: number
+        unit: rad
+        default: -3.14159265358979
+      - path: lidar/scan/horizontal/max_angle
+        type: number
+        unit: rad
+        default: 3.14159265358979
+      - path: lidar/scan/vertical/samples
+        type: int
+        default: 1
+        min: 1
+        meaning: rows (channels)
+      - path: lidar/scan/vertical/min_angle
+        type: number
+        unit: rad
+        default: 0
+      - path: lidar/scan/vertical/max_angle
+        type: number
+        unit: rad
+        default: 0
+      - path: lidar/scan/vertical/angles
+        type: text
+        meaning: 'channel table: one elevation per channel, rad, any order (replaces the even rows)'
+      - path: lidar/range/min
+        type: number
+        unit: m
+        default: 0.1
+        min: 0
+      - path: lidar/range/max
+        type: number
+        unit: m
+        default: 30
+      - path: lidar/noise/stddev
+        type: number
+        unit: m
+        default: 0
+        min: 0
+        meaning: range noise, 1σ
+      - path: lidar/motion_distortion
+        type: bool
+        default: 1
+        meaning: each column fires from the sensor's pose at its moment in the scan
+      - path: lidar/pattern
+        type: enum
+        choices:
+          - grid
+          - flash
+          - rosette
+        default: grid
+        meaning: flash fires every beam at once
+      - path: lidar/rosette/fov
+        type: number
+        unit: rad
+        only_when:
+          lidar/pattern: rosette
+        default_from: the rosette's own (sensors.md, Lidar scan patterns)
+      - path: lidar/rosette/point_rate
+        type: number
+        unit: Hz
+        only_when:
+          lidar/pattern: rosette
+        default_from: the rosette's own
+      - path: lidar/rosette/speed_1
+        type: number
+        unit: rad/s
+        only_when:
+          lidar/pattern: rosette
+        default_from: the rosette's own
+      - path: lidar/rosette/speed_2
+        type: number
+        unit: rad/s
+        only_when:
+          lidar/pattern: rosette
+        default_from: the rosette's own
+      - path: lidar/rosette/prism_ratio
+        type: number
+        unit: '1'
+        only_when:
+          lidar/pattern: rosette
+        default_from: the rosette's own
+    signals:
+      - name: ranges
+        type: scalar_array
+        unit: m
+      - name: intensities
+        type: scalar_array
+        unit: '1'
+    ros:
+      - topic: /scan
+        type: sensor_msgs/msg/LaserScan
+      - topic: /points
+        type: sensor_msgs/msg/PointCloud2
+  camera:
+    name: Camera
+    category: camera
+    urdf_types:
+      - camera
+      - depth
+      - depth_camera
+      - rgbd_camera
+      - thermal
+      - thermal_camera
+    description: One raster camera gives colour, depth and instance ids; thermal types read apparent
+      temperature.
+    doc: docs/design/domains/sensors.md#2-models-per-fidelity-level
+    params:
+      - path: camera/image/width
+        type: int
+        unit: px
+        default: 640
+        min: 1
+      - path: camera/image/height
+        type: int
+        unit: px
+        default: 480
+        min: 1
+      - path: camera/horizontal_fov
+        type: number
+        unit: rad
+        default: 1.047
+      - path: camera/clip/near
+        type: number
+        unit: m
+        default: 0.05
+        min: 0
+      - path: camera/clip/far
+        type: number
+        unit: m
+        default: 100
+      - path: camera/lens/type
+        type: enum
+        choices:
+          - gnomonical
+          - equidistant
+          - kannala_brandt
+          - fisheye
+        default: gnomonical
+        meaning: 'equidistant (or kannala_brandt, fisheye): horizontal_fov is the lens''s angle across
+          the width'
+      - path: camera/lens/cutoff_angle
+        type: number
+        unit: rad
+        only_when:
+          camera/lens/type: equidistant
+        default_from: 'none: the whole image'
+      - path: camera/lens/k1
+        type: number
+        unit: '1'
+        only_when:
+          camera/lens/type: equidistant
+        default: 0
+        meaning: OpenCV fisheye coefficient
+      - path: camera/lens/k2
+        type: number
+        unit: '1'
+        only_when:
+          camera/lens/type: equidistant
+        default: 0
+      - path: camera/lens/k3
+        type: number
+        unit: '1'
+        only_when:
+          camera/lens/type: equidistant
+        default: 0
+      - path: camera/lens/k4
+        type: number
+        unit: '1'
+        only_when:
+          camera/lens/type: equidistant
+        default: 0
+    signals:
+      - name: image
+        type: image
+      - name: depth
+        type: image
+      - name: instance
+        type: image
+    ros:
+      - topic: image_raw
+        type: sensor_msgs/msg/Image
+      - topic: depth/image_raw
+        type: sensor_msgs/msg/Image
+      - topic: instance/image_raw
+        type: sensor_msgs/msg/Image
+  gnss:
+    name: GNSS receiver
+    category: motion_and_force
+    overlay_only: true
+    schema: GnssAPI_1
+    description: WGS84 position and ENU velocity of the antenna, placed on the Earth through the world's
+      geo origin.
+    doc: docs/design/domains/sensors.md#8-gnss-magnetometer-and-barometer-v04
+    params:
+      - path: sensor:gnss:horizontalNoiseStd
+        type: number
+        unit: m
+        default: 0
+        min: 0
+        meaning: 1σ of each horizontal component
+      - path: sensor:gnss:verticalNoiseStd
+        type: number
+        unit: m
+        default: 0
+        min: 0
+        meaning: 1σ of the height
+      - path: sensor:gnss:velocityNoiseStd
+        type: number
+        unit: m/s
+        default: 0
+        min: 0
+        meaning: 1σ of each velocity component
+    ros:
+      - topic: fix
+        type: sensor_msgs/msg/NavSatFix
+  magnetometer:
+    name: Magnetometer
+    category: motion_and_force
+    overlay_only: true
+    schema: MagnetometerAPI_1
+    description: The Earth's main field (World Magnetic Model 2025) in the sensor's frame.
+    doc: docs/design/domains/sensors.md#8-gnss-magnetometer-and-barometer-v04
+    params:
+      - path: sensor:magnetometer:noiseStd
+        type: number
+        unit: T
+        default: 0
+        min: 0
+        meaning: 1σ of each axis
+    ros:
+      - topic: field
+        type: sensor_msgs/msg/MagneticField
+  barometer:
+    name: Barometer
+    category: environment
+    overlay_only: true
+    schema: BarometerAPI_1
+    description: Static pressure and air temperature at the sensor's height (ICAO standard atmosphere
+      until a weather model gives the site's).
+    doc: docs/design/domains/sensors.md#8-gnss-magnetometer-and-barometer-v04
+    params:
+      - path: sensor:barometer:noiseStd
+        type: number
+        unit: Pa
+        default: 0
+        min: 0
+        meaning: 1σ of the pressure
+    ros:
+      - topic: pressure
+        type: sensor_msgs/msg/FluidPressure
+      - topic: temperature
+        type: sensor_msgs/msg/Temperature
+  radar:
+    name: Automotive radar
+    category: perception
+    overlay_only: true
+    schema: RadarAPI_1
+    description: Rays launched over its field of view; a detection per object whose echo beats the
+      threshold above the noise floor.
+    doc: docs/design/domains/sensors.md#2-models-per-fidelity-level
+    params:
+      - path: sensor:radar:carrierFrequency
+        type: number
+        unit: Hz
+        default: 77000000000
+      - path: sensor:radar:rangeMax
+        type: number
+        unit: m
+        required: true
+      - path: sensor:radar:azimuthFov
+        type: number
+        unit: rad
+        required: true
+      - path: sensor:radar:elevationFov
+        type: number
+        unit: rad
+        required: true
+      - path: sensor:radar:azimuthResolution
+        type: number
+        unit: rad
+        default: 0.035
+      - path: sensor:radar:rangeResolution
+        type: number
+        unit: m
+        default: 0.2
+      - path: sensor:radar:velocityResolution
+        type: number
+        unit: m/s
+        default: 0.1
+      - path: sensor:radar:txPower
+        type: number
+        unit: W
+        required: true
+      - path: sensor:radar:antennaGain
+        type: number
+        unit: '1'
+        default: 1
+      - path: sensor:radar:noiseFloor
+        type: number
+        unit: W
+        required: true
+      - path: sensor:radar:detectionThreshold
+        type: number
+        unit: '1'
+        default: 10
+        meaning: 'linear SNR a detection needs (10: 10 dB)'
+    ros:
+      - topic: detections
+        type: sensor_msgs/msg/PointCloud2
+kinds:
+  adsb_receiver:
+    name: ADS-B receiver
+    category: radio
+    description: A 1090 MHz ADS-B receiver (1090ES, RTCA DO-260B) that hears the other aircraft of
+      the run, their squittered position and velocity, within range and above the radio horizon.
+    doc: docs/design/domains/sensors.md#adsb_receiver
+    references:
+      - RTCA DO-260B
+      - ICAO Annex 10 Vol. IV 3.1.2.8.6.4.2 and .5; 3.1.2.6.5.4
+      - Bean and Dutton, Radio Meteorology, 1966
+      - J. Sun, The 1090 Megahertz Riddle, 2nd ed.
+    renders: false
+    params:
+      - path: aircraft
+        type: enum
+        default: rotors
+        choices:
+          - rotors
+          - all
+        meaning: robots with RotorAPI_1 rotors, or every other robot whose root body is not kinematic
+      - path: range/max
+        type: number
+        unit: m
+        default: 100000
+        min_exclusive: 0
+        meaning: farther aircraft are not heard
+        source: illustrative
+      - path: horizon
+        type: bool
+        default: 1
+        meaning: '0: no radio horizon'
+      - path: antenna_height
+        type: number
+        unit: m
+        default: 2
+        meaning: the receiver's antenna above its mount, for the horizon
+        source: illustrative
+      - path: position_noise
+        type: number
+        unit: m
+        default: 3
+        min: 0
+        meaning: 1 sigma per axis of the sender's GNSS position
+        source: illustrative
+    signals:
+      - name: aircraft
+        type: scalar_array
+        unit: '1'
+        length_from: 10 x aircraft (at least 10)
+      - name: count
+        type: int
+      - name: geodetic
+        type: bool
+  airspeed:
+    name: Airspeed (pitot)
+    category: environment
+    description: A pitot-static probe along the sensor's +x on a differential pressure sensor, after
+      the TE MS4525DO-DS5AI001DP that PX4 and ArduPilot use.
+    doc: docs/design/domains/sensors.md#airspeed
+    references:
+      - TE MS4525DO datasheet 04/2019
+    renders: false
+    params:
+      - path: noise/stddev
+        type: number
+        unit: Pa
+        default: 0
+        min: 0
+        meaning: 1σ
+      - path: offset
+        type: number
+        unit: Pa
+        default: 0
+        meaning: zero offset
+      - path: range
+        type: number
+        unit: Pa
+        default: 6894.757
+        min_exclusive: 0
+        meaning: the reading clips there (±1 psi)
+        source: MS4525DO-DS5AI001DP
+      - path: resolution
+        type: number
+        unit: Pa
+        default: 1.0521206433498136
+        min: 0
+        meaning: 'one count: 2·1 psi / (0.8·16383)'
+        source: MS4525DO datasheet
+      - path: temperature_resolution
+        type: number
+        unit: K
+        default: 0.09770395701025891
+        meaning: 11 bits over −50 … 150 °C
+        source: MS4525DO datasheet
+      - path: air_density
+        type: number
+        unit: kg/m^3
+        default_from: the weather's env/air_density, else the site's
+        meaning: only when neither the weather nor the site gives one
+      - path: air_rotor
+        type: text
+        default_from: 'none: the aerodynamics domain''s env/wind/velocity'
+        refers_to: rotor_joint
+        meaning: as the anemometer's
+    signals:
+      - name: differential_pressure
+        type: scalar
+        unit: Pa
+      - name: airspeed
+        type: scalar
+        unit: m/s
+      - name: indicated_airspeed
+        type: scalar
+        unit: m/s
+      - name: temperature
+        type: scalar
+        unit: K
+      - name: valid
+        type: bool
+  anemometer:
+    name: Anemometer
+    category: environment
+    description: Ultrasonic (2D or 3D, after the Gill WindSonic) or cup-and-vane (after the R. M.
+      Young 05103) anemometer reading the air relative to the sensor.
+    doc: docs/design/domains/sensors.md#anemometer
+    references:
+      - Gill WindSonic User Manual 1405-PS-0019 Issue 30 (2022), appendix A
+      - R. M. Young 05103 Wind Monitor manual 05103-90 rev. N062819
+    renders: false
+    params:
+      - path: type
+        type: enum
+        default: ultrasonic
+        choices:
+          - ultrasonic
+          - cup
+        meaning: ultrasonic, or cup (cups and a vane, horizontal only)
+      - path: axes
+        type: int
+        unit: '1'
+        default: 2
+        choices:
+          - 2
+          - 3
+        meaning: 2 or 3 (ultrasonic; a cup is always 2)
+      - path: noise/fraction
+        type: number
+        unit: '1'
+        default: 0.02
+        default_note: 'cup: 0'
+        min: 0
+        meaning: speed noise, 1σ, of the speed
+        source: 'Gill WindSonic: 2 % RMSE'
+      - path: noise/speed
+        type: number
+        unit: m/s
+        default: 0.01
+        default_note: 'cup: 0'
+        min: 0
+        meaning: speed noise, 1σ, the least
+        source: Gill WindSonic
+      - path: noise/direction
+        type: number
+        unit: rad
+        default: 0.017453292519943295
+        default_note: 'cup: 0'
+        min: 0
+        meaning: 'direction noise, 1σ (1°: the WindSonic''s ±2° as 2σ)'
+        source: Gill WindSonic
+      - path: resolution/speed
+        type: number
+        unit: m/s
+        default: 0.01
+        meaning: speed step
+        source: Gill WindSonic
+      - path: resolution/direction
+        type: number
+        unit: rad
+        default: 0.017453292519943295
+        meaning: direction step (1°)
+        source: Gill WindSonic
+      - path: threshold/speed
+        type: number
+        unit: m/s
+        default: 0.01
+        default_note: 'cup: 1.0'
+        min: 0
+        meaning: below it the speed reads 0
+        source: Gill WindSonic; R. M. Young 05103 (cup)
+      - path: threshold/direction
+        type: number
+        unit: m/s
+        default: 0.01
+        default_note: 'cup: 1.1'
+        min: 0
+        meaning: below it the vane holds
+        source: Gill WindSonic; R. M. Young 05103 (cup)
+      - path: distance_constant
+        type: number
+        unit: m
+        default: 0
+        default_note: 'cup: 2.7'
+        min: 0
+        meaning: 'cup lag: first order, τ = L / V'
+        source: R. M. Young 05103 (cup)
+      - path: air_rotor
+        type: text
+        default_from: 'none: the aerodynamics domain''s env/wind/velocity'
+        refers_to: rotor_joint
+        meaning: read rotor/<j>/air_velocity instead of env/wind/velocity; a name that is no RotorAPI_1
+          joint is refused
+    signals:
+      - name: wind_velocity
+        type: vec3
+        unit: m/s
+      - name: wind_speed
+        type: scalar
+        unit: m/s
+      - name: wind_direction
+        type: scalar
+        unit: rad
+      - name: valid
+        type: bool
+  battery_monitor:
+    name: Battery monitor
+    category: power
+    description: A smart battery's fuel gauge (a TI BQ40Z50 class part) or a power module on one battery
+      of the electrical domain, in Smart Battery register steps.
+    doc: docs/design/domains/sensors.md#battery_monitor
+    references:
+      - Smart Battery Data Specification Rev 1.1 (SBS-IF, 1998) §5.1
+    renders: false
+    params:
+      - path: battery
+        type: text
+        default_from: the stage's only BatteryAPI_1 prim
+        refers_to: battery
+        meaning: which battery (its prim name); refused when there are none or several and none is
+          named
+      - path: capacity
+        type: number
+        unit: A·h
+        default_from: the battery's elec:battery:capacity
+        min: 0
+        meaning: the pack's rated charge in A·h, only when the stage has no such battery prim (the
+          one §9 parameter not in SI units)
+      - path: voltage/resolution
+        type: number
+        unit: V
+        default: 0.001
+        min: 0
+        source: Smart Battery Data Specification Rev 1.1 (SBS-IF, 1998) §5.1 (mV)
+        meaning: the step of voltage
+      - path: voltage/bits
+        type: int
+        unit: '1'
+        default_from: none (the step is resolution)
+        min: 1
+        meaning: 'an ADC instead: step = full_scale / 2^bits (with full_scale)'
+      - path: voltage/full_scale
+        type: number
+        unit: V
+        default_from: none (no range)
+        min: 0
+        meaning: the ADC's range; with bits it sets the step
+      - path: voltage/noise
+        type: number
+        unit: V
+        default: 0
+        min: 0
+        meaning: white noise per conversion, 1σ
+      - path: voltage/offset
+        type: number
+        unit: V
+        default: 0
+        meaning: fixed offset
+      - path: voltage/gain_error
+        type: number
+        unit: '1'
+        default: 0
+        meaning: reads (1 + gain_error) × the truth
+      - path: voltage/samples
+        type: int
+        unit: '1'
+        default: 1
+        min: 1
+        max: 4096
+        meaning: conversions averaged into one reading
+      - path: current/resolution
+        type: number
+        unit: A
+        default: 0.001
+        min: 0
+        source: Smart Battery Data Specification Rev 1.1 (SBS-IF, 1998) §5.1 (mA)
+        meaning: the step of current
+      - path: current/bits
+        type: int
+        unit: '1'
+        default_from: none (the step is resolution)
+        min: 1
+        meaning: 'an ADC instead: step = full_scale / 2^bits (with full_scale)'
+      - path: current/full_scale
+        type: number
+        unit: A
+        default_from: none (no range)
+        min: 0
+        meaning: the ADC's range, ±full_scale; with bits the step is full_scale / 2^(bits-1)
+      - path: current/noise
+        type: number
+        unit: A
+        default: 0
+        min: 0
+        meaning: white noise per conversion, 1σ
+      - path: current/offset
+        type: number
+        unit: A
+        default: 0
+        meaning: fixed offset
+      - path: current/gain_error
+        type: number
+        unit: '1'
+        default: 0
+        meaning: reads (1 + gain_error) × the truth
+      - path: current/samples
+        type: int
+        unit: '1'
+        default: 1
+        min: 1
+        max: 4096
+        meaning: conversions averaged into one reading
+      - path: temperature/resolution
+        type: number
+        unit: K
+        default: 0.1
+        min: 0
+        source: Smart Battery Data Specification Rev 1.1 (SBS-IF, 1998) §5.1 (0.1 K)
+        meaning: the step of temperature
+      - path: temperature/bits
+        type: int
+        unit: '1'
+        default_from: none (the step is resolution)
+        min: 1
+        meaning: 'an ADC instead: step = full_scale / 2^bits (with full_scale)'
+      - path: temperature/full_scale
+        type: number
+        unit: K
+        default_from: none (no range)
+        min: 0
+        meaning: the ADC's range; with bits it sets the step
+      - path: temperature/noise
+        type: number
+        unit: K
+        default: 0
+        min: 0
+        meaning: white noise per conversion, 1σ
+      - path: temperature/offset
+        type: number
+        unit: K
+        default: 0
+        meaning: fixed offset
+      - path: temperature/gain_error
+        type: number
+        unit: '1'
+        default: 0
+        meaning: reads (1 + gain_error) × the truth
+      - path: temperature/samples
+        type: int
+        unit: '1'
+        default: 1
+        min: 1
+        max: 4096
+        meaning: conversions averaged into one reading
+      - path: soc/resolution
+        type: number
+        unit: '1'
+        default: 0.01
+        min: 0
+        source: Smart Battery Data Specification Rev 1.1 (SBS-IF, 1998) §5.1 (%)
+        meaning: the step of the state of charge
+      - path: soc/bits
+        type: int
+        unit: '1'
+        default_from: none (the step is resolution)
+        min: 1
+        meaning: 'an ADC instead: step = full_scale / 2^bits (with full_scale)'
+      - path: soc/full_scale
+        type: number
+        unit: '1'
+        default_from: none (no range)
+        min: 0
+        meaning: the ADC's range; with bits it sets the step
+      - path: soc/noise
+        type: number
+        unit: '1'
+        default: 0
+        min: 0
+        meaning: white noise per conversion, 1σ
+      - path: soc/offset
+        type: number
+        unit: '1'
+        default: 0
+        meaning: fixed offset
+      - path: soc/gain_error
+        type: number
+        unit: '1'
+        default: 0
+        meaning: reads (1 + gain_error) × the truth
+      - path: soc/samples
+        type: int
+        unit: '1'
+        default: 1
+        min: 1
+        max: 4096
+        meaning: conversions averaged into one reading
+      - path: remaining_capacity/resolution
+        type: number
+        unit: C
+        default: 3.6
+        min: 0
+        source: Smart Battery Data Specification Rev 1.1 (SBS-IF, 1998) §5.1 (mAh = 3.6 C)
+        meaning: the step of the remaining capacity
+      - path: remaining_capacity/bits
+        type: int
+        unit: '1'
+        default_from: none (the step is resolution)
+        min: 1
+        meaning: 'an ADC instead: step = full_scale / 2^bits (with full_scale)'
+      - path: remaining_capacity/full_scale
+        type: number
+        unit: C
+        default_from: none (no range)
+        min: 0
+        meaning: the ADC's range; with bits it sets the step
+      - path: remaining_capacity/noise
+        type: number
+        unit: C
+        default: 0
+        min: 0
+        meaning: white noise per conversion, 1σ
+      - path: remaining_capacity/offset
+        type: number
+        unit: C
+        default: 0
+        meaning: fixed offset
+      - path: remaining_capacity/gain_error
+        type: number
+        unit: '1'
+        default: 0
+        meaning: reads (1 + gain_error) × the truth
+      - path: remaining_capacity/samples
+        type: int
+        unit: '1'
+        default: 1
+        min: 1
+        max: 4096
+        meaning: conversions averaged into one reading
+    signals:
+      - name: voltage
+        type: scalar
+        unit: V
+      - name: current
+        type: scalar
+        unit: A
+      - name: temperature
+        type: scalar
+        unit: K
+      - name: soc
+        type: scalar
+        unit: '1'
+      - name: remaining_capacity
+        type: scalar
+        unit: C
+      - name: valid
+        type: scalar
+        unit: '1'
+    ros:
+      - topic: battery_state
+        type: sensor_msgs/msg/BatteryState
+  bumper:
+    name: Bumper
+    category: range_and_contact
+    description: A contact switch on the sensor's body, pressed when what touches the body pushes
+      it hard enough from the side it watches. Needs physics.
+    doc: docs/design/domains/sensors.md#bumper
+    references: []
+    renders: false
+    params:
+      - path: threshold
+        type: number
+        unit: N
+        default: 5.0
+        min_exclusive: 0
+        meaning: push that closes the switch
+        source: illustrative
+      - path: sector_min
+        type: number
+        unit: rad
+        default: -3.141592653589793
+        meaning: smallest angle of the contact it reports, sensor frame (0 straight ahead); below
+          sector_max
+      - path: sector_max
+        type: number
+        unit: rad
+        default: 3.141592653589793
+        meaning: largest angle of the contact it reports, sensor frame; above sector_min
+      - path: vertical
+        type: bool
+        default: 0
+        meaning: '1: the whole force counts, the vertical part too'
+    signals:
+      - name: pressed
+        type: bool
+      - name: force
+        type: scalar
+        unit: N
+      - name: direction
+        type: scalar
+        unit: rad
+  cliff:
+    name: Cliff sensor
+    category: range_and_contact
+    description: A robot vacuum's cliff sensor, an infrared range finder looking down the sensor's
+      -z; reports a cliff when the floor is farther than its threshold or not seen.
+    doc: docs/design/domains/sensors.md#cliff
+    references: []
+    renders: false
+    params:
+      - path: min_range
+        type: number
+        unit: m
+        default: 0.005
+        min: 0
+        meaning: nearer reads min_range (the floor is there); below max_range
+        source: illustrative
+      - path: max_range
+        type: number
+        unit: m
+        default: 0.15
+        meaning: farther reads +inf
+        source: illustrative
+      - path: threshold
+        type: number
+        unit: m
+        default: 0.06
+        min_exclusive: 0
+        meaning: farther than this is a drop
+        source: illustrative
+      - path: rays
+        type: int
+        unit: '1'
+        default: 1
+        min: 1
+        max: 64
+        meaning: one straight down, the others on a ring at beam_angle; the nearest return wins
+      - path: beam_angle
+        type: number
+        unit: rad
+        default: 0.0
+        min: 0
+        max_exclusive: 1.5707963267948966
+        meaning: half angle of the ring
+      - path: range_noise
+        type: number
+        unit: m
+        default: 0.0
+        min: 0
+        meaning: 1 sigma, per reading
+      - path: ignore_own_body
+        type: bool
+        default: 1
+        meaning: rays pass the sensor's own body's colliders
+    signals:
+      - name: range
+        type: scalar
+        unit: m
+      - name: cliff
+        type: bool
+    ros:
+      - topic: range
+        type: sensor_msgs/msg/Range
+  current_sensor:
+    name: Current sensor
+    category: power
+    description: One current signal of the run (a motor's bus current, a branch current) as a TI INA226
+      shunt monitor or an Allegro ACS712 Hall sensor reads it.
+    doc: docs/design/domains/sensors.md#current_sensor-and-voltage_sensor
+    references:
+      - TI INA226 datasheet SBOS547C §5.5, Tables 7-3 to 7-5
+      - Allegro ACS712-DS Rev. 22 (2024), ACS712ELCTR-05B
+    renders: false
+    params:
+      - path: signal
+        type: text
+        default_from: 'none: required'
+        refers_to: signal
+        meaning: the run's current (A) signal to measure; a signal of the other unit is refused
+      - path: model
+        type: enum
+        default: ina226
+        choices:
+          - ina226
+          - hall
+        meaning: the measuring part
+      - path: shunt_resistance
+        type: number
+        unit: Ω
+        default: 0.002
+        only_when:
+          model: ina226
+        source: illustrative
+        meaning: the shunt the INA226 reads
+        min_exclusive: 0
+      - path: conversion_time
+        type: number
+        unit: s
+        default: 0.0011
+        choices:
+          - 0.00014
+          - 0.000204
+          - 0.000332
+          - 0.000588
+          - 0.0011
+          - 0.002116
+          - 0.004156
+          - 0.008244
+        only_when:
+          model: ina226
+        source: TI INA226 datasheet SBOS547C §5.5, Tables 7-3 to 7-5
+        meaning: per conversion; the nearest listed value is taken
+      - path: averages
+        type: int
+        unit: '1'
+        default: 1
+        min: 1
+        max: 4096
+        source: TI INA226 datasheet SBOS547C §5.5, Tables 7-3 to 7-5
+        meaning: 'conversions averaged (INA226: the nearest of 1, 4, 16, 64, 128, 256, 512, 1024)'
+      - path: channels
+        type: int
+        unit: '1'
+        default: 2
+        choices:
+          - 1
+          - 2
+        only_when:
+          model: ina226
+        meaning: '2: shunt and bus, continuous (the power-on mode); a reading every conversion_time
+          × channels × averages'
+      - path: noise
+        type: number
+        unit: V
+        default: 0
+        min: 0
+        default_note: 'hall: 0.0035 V (21 mV peak to peak as 6σ, Allegro ACS712-DS Rev. 22 (2024),
+          ACS712ELCTR-05B)'
+        meaning: white noise per conversion, 1σ, in volts at the ADC's input
+      - path: offset
+        type: number
+        unit: V
+        default: 0
+        meaning: in volts at the ADC's input
+      - path: gain_error
+        type: number
+        unit: '1'
+        default: 0
+        meaning: reads (1 + gain_error) × the truth
+        min_exclusive: -1
+      - path: supply
+        type: number
+        unit: V
+        default: 5
+        only_when:
+          model: hall
+        meaning: the ACS712's VCC
+        min_exclusive: 0
+      - path: sensitivity
+        type: number
+        unit: V/A
+        default: 0.185
+        only_when:
+          model: hall
+        source: Allegro ACS712-DS Rev. 22 (2024), ACS712ELCTR-05B
+        meaning: output per ampere
+        min_exclusive: 0
+      - path: zero_output
+        type: number
+        unit: V
+        default_from: supply / 2
+        only_when:
+          model: hall
+        meaning: output at 0 A
+      - path: adc/bits
+        type: int
+        unit: '1'
+        default: 12
+        min: 1
+        max: 32
+        only_when:
+          model: hall
+        meaning: the microcontroller's ADC
+      - path: adc/reference
+        type: number
+        unit: V
+        default_from: supply
+        only_when:
+          model: hall
+        meaning: the ADC's range is 0 to adc/reference
+        min_exclusive: 0
+    signals:
+      - name: current
+        type: scalar
+        unit: A
+      - name: valid
+        type: scalar
+        unit: '1'
+  detections:
+    name: Ground-truth detections
+    category: perception
+    description: Ground-truth annotations for machine-learning datasets from a camera's instance image
+      and the scene, per visible object its 2D box, pixels, occlusion, truncation, class and 3D box
+      (KITTI conventions), and a semantic image. Runs in step with the camera it labels.
+    doc: docs/design/domains/sensors.md#detections
+    references:
+      - Geiger, Lenz, Urtasun 2012, "Are we ready for autonomous driving?", CVPR (KITTI devkit_object
+        readme)
+    renders: false
+    params:
+      - path: camera
+        type: text
+        default_from: 'required: the camera sensor whose images it labels'
+        refers_to: camera
+        meaning: the camera sensor whose images it labels
+      - path: semantic
+        type: text
+        # yamllint disable-line rule:line-length
+        default: ground,floor,terrain=1;road,lane,sidewalk,crossing,marking=2;building,wall,house,shed,roof=3;car,sedan,vehicle,truck,bus,van=4;human,person,pedestrian,walker,actor=5;tree,bush,hedge,plant,vegetation=6;pole,sign,light,signal=7;box,crate,pallet,rack,shelf,barrel,cone=8
+        meaning: 'word,word=ID;word=ID: the first rule with a whole word of the object''s name gives
+          its class'
+      - path: max_objects
+        type: int
+        unit: '1'
+        default: 64
+        min: 1
+        max: 4096
+        meaning: rows of detections, the most pixels first (clamped to 1..4096)
+      - path: min_pixels
+        type: number
+        unit: px
+        default: 1
+        meaning: 'fewer visible pixels: not listed (still in the semantic image)'
+      - path: occlusion
+        type: bool
+        default: 1
+        meaning: '0: no occlusion renders (field 7 NaN)'
+    signals:
+      - name: detections
+        type: scalar_array
+        unit: '1'
+        length_from: 16 x max_objects
+      - name: count
+        type: int
+      - name: semantic
+        type: image
+    ros:
+      - topic: detections
+        type: vision_msgs/msg/Detection2DArray
+      - topic: detections_3d
+        type: vision_msgs/msg/Detection3DArray
+  esc_telemetry:
+    name: ESC telemetry
+    category: power
+    description: 'What a drone''s ESC (BLHeli_32, AM32) reports of the motor on a joint: speed, current,
+      voltage, temperature and consumption, by KISS serial telemetry or bidirectional DShot.'
+    doc: docs/design/domains/sensors.md#esc_telemetry
+    references:
+      - Betaflight src/main/sensors/esc_sensor.c (KISS)
+      - Extended DShot Telemetry v2.1.1 (github.com/bird-sanctuary/extended-dshot-telemetry)
+    renders: false
+    params:
+      - path: joint
+        type: text
+        default_from: 'none: required'
+        refers_to: joint
+        meaning: the motor's joint (the ElectricalMotorAPI_1 whose elec:joint it is)
+      - path: protocol
+        type: enum
+        default: kiss
+        choices:
+          - kiss
+          - dshot
+        meaning: telemetry protocol
+      - path: escs
+        type: int
+        unit: '1'
+        default: 4
+        min: 1
+        only_when:
+          protocol: kiss
+        meaning: ESCs asked in turn on the shared wire
+      - path: baud
+        type: number
+        unit: bit/s
+        default: 115200
+        only_when:
+          protocol: kiss
+        meaning: 'the wire''s rate: at most baud / (100 bits × escs) frames a second'
+        min_exclusive: 0
+      - path: extended_rate
+        type: number
+        unit: Hz
+        default: 1
+        only_when:
+          protocol: dshot
+        source: Extended DShot Telemetry v2.1.1 example schedule
+        meaning: extended frames (temperature, voltage, current) a second
+        min_exclusive: 0
+      - path: pole_pairs
+        type: number
+        unit: '1'
+        default_from: the motor's elec:polePairs
+        min: 1
+        meaning: needed when no motor prim drives the joint
+      - path: gear_ratio
+        type: number
+        unit: '1'
+        default_from: the motor's elec:gearRatio, else 1
+        meaning: motor turns per joint turn
+        min_exclusive: 0
+      - path: bus
+        type: text
+        default_from: the motor's bus, through its ports
+        refers_to: bus
+        meaning: the bus whose voltage it reads
+      - path: temperature_node
+        type: text
+        default_from: the motor's thermal node
+        refers_to: node
+        meaning: thermal/<node>/temperature stands for the ESC's
+      - path: current/resolution
+        type: number
+        unit: A
+        default: 0.01
+        min: 0
+        default_note: 'dshot: 1 A'
+        meaning: the step of current in the frame
+      - path: current/bits
+        type: int
+        unit: '1'
+        default_from: none (the step is resolution)
+        min: 1
+        meaning: 'an ADC instead: step = full_scale / 2^bits (with full_scale)'
+      - path: current/full_scale
+        type: number
+        unit: A
+        default_from: none (no range)
+        min: 0
+        meaning: the ADC's range; with bits it sets the step
+      - path: current/noise
+        type: number
+        unit: A
+        default: 0
+        min: 0
+        meaning: white noise per conversion, 1σ
+      - path: current/offset
+        type: number
+        unit: A
+        default: 0
+        meaning: fixed offset
+      - path: current/gain_error
+        type: number
+        unit: '1'
+        default: 0
+        meaning: reads (1 + gain_error) × the truth
+      - path: current/samples
+        type: int
+        unit: '1'
+        default: 1
+        min: 1
+        max: 4096
+        meaning: conversions averaged into one reading
+      - path: voltage/resolution
+        type: number
+        unit: V
+        default: 0.01
+        min: 0
+        default_note: 'dshot: 0.25 V'
+        meaning: the step of voltage in the frame
+      - path: voltage/bits
+        type: int
+        unit: '1'
+        default_from: none (the step is resolution)
+        min: 1
+        meaning: 'an ADC instead: step = full_scale / 2^bits (with full_scale)'
+      - path: voltage/full_scale
+        type: number
+        unit: V
+        default_from: none (no range)
+        min: 0
+        meaning: the ADC's range; with bits it sets the step
+      - path: voltage/noise
+        type: number
+        unit: V
+        default: 0
+        min: 0
+        meaning: white noise per conversion, 1σ
+      - path: voltage/offset
+        type: number
+        unit: V
+        default: 0
+        meaning: fixed offset
+      - path: voltage/gain_error
+        type: number
+        unit: '1'
+        default: 0
+        meaning: reads (1 + gain_error) × the truth
+      - path: voltage/samples
+        type: int
+        unit: '1'
+        default: 1
+        min: 1
+        max: 4096
+        meaning: conversions averaged into one reading
+      - path: temperature/resolution
+        type: number
+        unit: °C
+        default: 1
+        min: 0
+        meaning: the step of temperature in the frame (in °C, as the protocols count)
+      - path: temperature/bits
+        type: int
+        unit: '1'
+        default_from: none (the step is resolution)
+        min: 1
+        meaning: 'an ADC instead: step = full_scale / 2^bits (with full_scale)'
+      - path: temperature/full_scale
+        type: number
+        unit: °C
+        default_from: none (no range)
+        min: 0
+        meaning: the ADC's range; with bits it sets the step (in °C, as the protocols count)
+      - path: temperature/noise
+        type: number
+        unit: °C
+        default: 0
+        min: 0
+        meaning: white noise per conversion, 1σ (in °C, as the protocols count)
+      - path: temperature/offset
+        type: number
+        unit: °C
+        default: 0
+        meaning: fixed offset (in °C, as the protocols count)
+      - path: temperature/gain_error
+        type: number
+        unit: '1'
+        default: 0
+        meaning: reads (1 + gain_error) × the truth
+      - path: temperature/samples
+        type: int
+        unit: '1'
+        default: 1
+        min: 1
+        max: 4096
+        meaning: conversions averaged into one reading
+    signals:
+      - name: speed
+        type: scalar
+        unit: rad/s
+      - name: current
+        type: scalar
+        unit: A
+      - name: voltage
+        type: scalar
+        unit: V
+      - name: temperature
+        type: scalar
+        unit: K
+      - name: consumption
+        type: scalar
+        unit: C
+      - name: valid
+        type: scalar
+        unit: '1'
+  event_camera:
+    name: Event camera
+    category: camera
+    description: A dynamic vision sensor (iniVation DAVIS346, Prophesee) making events from successive
+      rendered frames, as ESIM and v2e do.
+    doc: docs/design/domains/sensors.md#event_camera
+    references:
+      - iniVation DAVIS346 specification sheet (15 August 2019)
+      - ESIM (Rebecq, Gehrig and Scaramuzza, CoRL 2018)
+      - v2e (Hu, Liu and Delbruck, CVPR Workshops 2021; v2ecore/v2e_args.py)
+    renders: true
+    params:
+      - path: width
+        type: int
+        unit: px
+        default: 346
+        min: 1
+        source: iniVation DAVIS346 specification sheet (15 August 2019)
+        meaning: the pixel array (also <camera><image><width>)
+      - path: height
+        type: int
+        unit: px
+        default: 260
+        min: 1
+        source: iniVation DAVIS346 specification sheet (15 August 2019)
+        meaning: (also <camera><image><height>)
+      - path: horizontal_fov
+        type: number
+        unit: rad
+        default: 1.2357
+        source: iniVation DAVIS346 specification sheet (15 August 2019) (70.8°, 4.5 mm lens)
+        meaning: (also <camera><horizontal_fov>)
+        min_exclusive: 0
+        max_exclusive: 3.1
+      - path: near_clip
+        type: number
+        unit: m
+        default: 0.05
+        meaning: (also <camera><clip><near>)
+      - path: threshold_on
+        type: number
+        unit: ln
+        default: 0.2
+        source: v2e (Hu, Liu and Delbruck, CVPR Workshops 2021; v2ecore/v2e_args.py) default
+        meaning: ON contrast threshold
+        min_exclusive: 0
+      - path: threshold_off
+        type: number
+        unit: ln
+        default: 0.2
+        source: v2e (Hu, Liu and Delbruck, CVPR Workshops 2021; v2ecore/v2e_args.py) default
+        meaning: OFF contrast threshold
+        min_exclusive: 0
+      - path: threshold_sigma
+        type: number
+        unit: ln
+        default: 0.03
+        min: 0
+        source: v2e (Hu, Liu and Delbruck, CVPR Workshops 2021; v2ecore/v2e_args.py)
+        meaning: per-pixel threshold mismatch, 1σ
+      - path: refractory_period
+        type: number
+        unit: s
+        default: 0.0005
+        min: 0
+        source: v2e (Hu, Liu and Delbruck, CVPR Workshops 2021; v2ecore/v2e_args.py) default (iniVation
+          publishes none)
+        meaning: held after a pixel's event
+      - path: noise_rate
+        type: number
+        unit: Hz
+        default: 0.1
+        min: 0
+        source: v2e (Hu, Liu and Delbruck, CVPR Workshops 2021; v2ecore/v2e_args.py) paper's typical
+          leak rate
+        meaning: background activity per pixel
+      - path: max_events
+        type: int
+        unit: '1'
+        default: 20000
+        min: 1
+        max: 1000000
+        meaning: events per step kept in events
+    signals:
+      - name: events
+        type: scalar_array
+        unit: '1'
+        length_from: 4 × max_events (x, y, t, polarity)
+      - name: count
+        type: int
+      - name: dropped
+        type: int
+      - name: image
+        type: image
+      - name: image/intrinsics
+        type: scalar_array
+        unit: '1'
+        length: 4
+      - name: image/position
+        type: vec3
+        unit: m
+    ros:
+      - topic: events
+        type: sensor_msgs/msg/PointCloud2
+      - topic: image/image_raw
+        type: sensor_msgs/msg/Image
+      - topic: image/camera_info
+        type: sensor_msgs/msg/CameraInfo
+  force_torque:
+    name: Force-torque sensor
+    category: motion_and_force
+    description: A six-axis force-torque sensor (a wrist sensor) from the joint's reaction, moved
+      to the sensor's origin and turned into its frame, then offset, noise, low-pass, range and resolution
+      per axis.
+    doc: docs/design/domains/sensors.md#force_torque
+    references:
+      - ATI Mini45, calibration SI-580-20 (ati-ia.com, F/T sensor models, Mini45, table "Metric Calibrations
+        (SI)")
+    renders: false
+    params:
+      - path: joint
+        type: text
+        default_from: the joint whose child is the sensor's body
+        refers_to: joint
+        meaning: the joint whose reaction it reads (a hinge or a slide)
+      - path: measure_direction
+        type: enum
+        default: parent_to_child
+        choices:
+          - parent_to_child
+          - child_to_parent
+        meaning: child_to_parent reverses the wrench
+      - path: preset
+        type: enum
+        default_from: none
+        choices:
+          - mini45_si_580_20
+        meaning: 'a part''s ranges and resolutions (noise: one resolution step, 1 sigma, an assumption)'
+        source: 'ATI Mini45 SI-580-20: ranges Fx, Fy 580 N, Fz 1160 N, Tx, Ty, Tz 20 N·m; resolutions
+          1/4 N, 1/188 N·m (Tx, Ty), 1/376 N·m (Tz)'
+      - path: cutoff_frequency
+        type: number
+        unit: Hz
+        default: 0.0
+        min: 0
+        meaning: 'first-order low-pass; 0: none'
+      - path: force_range
+        type: number
+        unit: N
+        default: .inf
+        default_note: 'mini45_si_580_20: the preset''s'
+        meaning: clipping, per axis (saturated reads 1), every force axis
+      - path: fx_range
+        type: number
+        unit: N
+        default_from: force_range
+        meaning: clipping, per axis (saturated reads 1), fx only
+      - path: fy_range
+        type: number
+        unit: N
+        default_from: force_range
+        meaning: clipping, per axis (saturated reads 1), fy only
+      - path: fz_range
+        type: number
+        unit: N
+        default_from: force_range
+        meaning: clipping, per axis (saturated reads 1), fz only
+      - path: force_resolution
+        type: number
+        unit: N
+        default: 0.0
+        default_note: 'mini45_si_580_20: the preset''s'
+        meaning: 'step the reading is rounded to; 0: none, every force axis'
+      - path: fx_resolution
+        type: number
+        unit: N
+        default_from: force_resolution
+        meaning: 'step the reading is rounded to; 0: none, fx only'
+      - path: fy_resolution
+        type: number
+        unit: N
+        default_from: force_resolution
+        meaning: 'step the reading is rounded to; 0: none, fy only'
+      - path: fz_resolution
+        type: number
+        unit: N
+        default_from: force_resolution
+        meaning: 'step the reading is rounded to; 0: none, fz only'
+      - path: force_noise
+        type: number
+        unit: N
+        default: 0.0
+        default_note: 'mini45_si_580_20: one resolution step'
+        meaning: 1 sigma, per axis, every force axis
+      - path: fx_noise
+        type: number
+        unit: N
+        default_from: force_noise
+        meaning: 1 sigma, per axis, fx only
+      - path: fy_noise
+        type: number
+        unit: N
+        default_from: force_noise
+        meaning: 1 sigma, per axis, fy only
+      - path: fz_noise
+        type: number
+        unit: N
+        default_from: force_noise
+        meaning: 1 sigma, per axis, fz only
+      - path: force_offset
+        type: number
+        unit: N
+        default: 0.0
+        meaning: bias, per axis, every force axis
+      - path: fx_offset
+        type: number
+        unit: N
+        default_from: force_offset
+        meaning: bias, per axis, fx only
+      - path: fy_offset
+        type: number
+        unit: N
+        default_from: force_offset
+        meaning: bias, per axis, fy only
+      - path: fz_offset
+        type: number
+        unit: N
+        default_from: force_offset
+        meaning: bias, per axis, fz only
+      - path: torque_range
+        type: number
+        unit: N·m
+        default: .inf
+        default_note: 'mini45_si_580_20: the preset''s'
+        meaning: clipping, per axis (saturated reads 1), every torque axis
+      - path: tx_range
+        type: number
+        unit: N·m
+        default_from: torque_range
+        meaning: clipping, per axis (saturated reads 1), tx only
+      - path: ty_range
+        type: number
+        unit: N·m
+        default_from: torque_range
+        meaning: clipping, per axis (saturated reads 1), ty only
+      - path: tz_range
+        type: number
+        unit: N·m
+        default_from: torque_range
+        meaning: clipping, per axis (saturated reads 1), tz only
+      - path: torque_resolution
+        type: number
+        unit: N·m
+        default: 0.0
+        default_note: 'mini45_si_580_20: the preset''s'
+        meaning: 'step the reading is rounded to; 0: none, every torque axis'
+      - path: tx_resolution
+        type: number
+        unit: N·m
+        default_from: torque_resolution
+        meaning: 'step the reading is rounded to; 0: none, tx only'
+      - path: ty_resolution
+        type: number
+        unit: N·m
+        default_from: torque_resolution
+        meaning: 'step the reading is rounded to; 0: none, ty only'
+      - path: tz_resolution
+        type: number
+        unit: N·m
+        default_from: torque_resolution
+        meaning: 'step the reading is rounded to; 0: none, tz only'
+      - path: torque_noise
+        type: number
+        unit: N·m
+        default: 0.0
+        default_note: 'mini45_si_580_20: one resolution step'
+        meaning: 1 sigma, per axis, every torque axis
+      - path: tx_noise
+        type: number
+        unit: N·m
+        default_from: torque_noise
+        meaning: 1 sigma, per axis, tx only
+      - path: ty_noise
+        type: number
+        unit: N·m
+        default_from: torque_noise
+        meaning: 1 sigma, per axis, ty only
+      - path: tz_noise
+        type: number
+        unit: N·m
+        default_from: torque_noise
+        meaning: 1 sigma, per axis, tz only
+      - path: torque_offset
+        type: number
+        unit: N·m
+        default: 0.0
+        meaning: bias, per axis, every torque axis
+      - path: tx_offset
+        type: number
+        unit: N·m
+        default_from: torque_offset
+        meaning: bias, per axis, tx only
+      - path: ty_offset
+        type: number
+        unit: N·m
+        default_from: torque_offset
+        meaning: bias, per axis, ty only
+      - path: tz_offset
+        type: number
+        unit: N·m
+        default_from: torque_offset
+        meaning: bias, per axis, tz only
+    signals:
+      - name: wrench
+        type: wrench
+        unit: N
+        frame: sensor:<n>
+      - name: force
+        type: vec3
+        unit: N
+        frame: sensor:<n>
+      - name: torque
+        type: vec3
+        unit: N·m
+        frame: sensor:<n>
+      - name: saturated
+        type: bool
+    ros:
+      - topic: wrench
+        type: geometry_msgs/msg/WrenchStamped
+  gripper_sensor:
+    name: Gripper sensor
+    category: motion_and_force
+    description: What a gripper's controller knows about its grasp - the opening, the motor current,
+      whether it holds something and whether that slips. Mount it on the hand; the fingers are joints.
+    doc: docs/design/domains/sensors.md#gripper_sensor
+    references: []
+    renders: false
+    params:
+      - path: fingers
+        type: text
+        default_from: none (required)
+        refers_to: joint
+        meaning: finger joint names, separated by spaces
+      - path: motors
+        type: text
+        default_from: none (the current is the torque proxy)
+        refers_to: motor
+        meaning: motor names for motor/<m>/current_q, separated by spaces
+      - path: width_scale
+        type: number
+        unit: m per joint unit
+        default: 1.0
+        meaning: opening = width_offset + width_scale x the sum of the finger joints' positions
+      - path: width_offset
+        type: number
+        unit: m
+        default: 0.0
+        meaning: opening at zero joint positions
+      - path: torque_constant
+        type: number
+        unit: N·m/A
+        default: 1.0
+        min_exclusive: 0
+        meaning: for the current proxy, |joint torque| / torque_constant (N/A on slides)
+      - path: contact_threshold
+        type: number
+        unit: N
+        default: 0.5
+        min: 0
+        meaning: a finger touches above this contact force
+        source: illustrative
+      - path: slip_threshold
+        type: number
+        unit: m/s
+        default: 0.005
+        min: 0
+        meaning: slip above this speed across the contact
+        source: illustrative
+      - path: closed_width
+        type: number
+        unit: m
+        default: 0.001
+        meaning: an opening at or below this holds nothing (fingers on each other)
+      - path: contact_margin
+        type: number
+        unit: m
+        default: 0.005
+        min: 0
+        meaning: how far beyond a finger's colliders an object is sought
+      - path: object
+        type: text
+        default_from: a moving body outside the gripper's body tree within a finger's reach
+        refers_to: body
+        meaning: the held body by name
+      - path: width_noise
+        type: number
+        unit: m
+        default: 0.0
+        min: 0
+        meaning: 1 sigma
+      - path: current_noise
+        type: number
+        unit: A
+        default: 0.0
+        min: 0
+        meaning: 1 sigma
+    signals:
+      - name: width
+        type: scalar
+        unit: m
+      - name: current
+        type: scalar
+        unit: A
+      - name: grip_force
+        type: scalar
+        unit: N
+      - name: object_detected
+        type: bool
+      - name: slip
+        type: bool
+      - name: slip_speed
+        type: scalar
+        unit: m/s
+  humidity_sensor:
+    name: Humidity and temperature sensor
+    category: environment
+    description: Relative humidity and temperature after the Sensirion SHT40, reading the weather's
+      air through its own response time.
+    doc: docs/design/domains/sensors.md#humidity_sensor
+    references:
+      - Sensirion SHT4x datasheet Version 7.3, tables 1 and 2
+    renders: false
+    params:
+      - path: time_constant/humidity
+        type: number
+        unit: s
+        default: 4
+        min: 0
+        meaning: τ63 of the humidity
+        source: Sensirion SHT4x datasheet V7.3
+      - path: time_constant/temperature
+        type: number
+        unit: s
+        default: 2
+        min: 0
+        meaning: τ63 of the temperature
+        source: Sensirion SHT4x datasheet V7.3
+      - path: noise/humidity
+        type: number
+        unit: '1'
+        default: 0.0002666666666666667
+        min: 0
+        meaning: '1σ: the 0.08 %RH repeatability is 3σ'
+        source: Sensirion SHT4x datasheet V7.3
+      - path: noise/temperature
+        type: number
+        unit: K
+        default: 0.013333333333333334
+        min: 0
+        meaning: '1σ: the 0.04 °C repeatability is 3σ'
+        source: Sensirion SHT4x datasheet V7.3
+      - path: offset/humidity
+        type: number
+        unit: '1'
+        default: 0
+        meaning: 'its accuracy (SHT40: ±0.018 typical)'
+      - path: offset/temperature
+        type: number
+        unit: K
+        default: 0
+        meaning: 'its accuracy (SHT40: ±0.2 K typical)'
+      - path: resolution/humidity
+        type: number
+        unit: '1'
+        default: 0.0001
+        meaning: 0.01 %RH
+        source: Sensirion SHT4x datasheet V7.3
+      - path: resolution/temperature
+        type: number
+        unit: K
+        default: 0.01
+        meaning: 0.01 °C
+        source: Sensirion SHT4x datasheet V7.3
+    signals:
+      - name: relative_humidity
+        type: scalar
+        unit: '1'
+      - name: temperature
+        type: scalar
+        unit: K
+      - name: valid
+        type: bool
+  imaging_radar:
+    name: 4D imaging radar
+    category: perception
+    description: A cascaded-MIMO automotive radar reporting range, azimuth, elevation and Doppler
+      per detection, resolved by the virtual array's cells, with Doppler and range folding and ground
+      ghosts.
+    doc: docs/design/domains/sensors.md#4d-imaging-radar-as-built
+    references:
+      - 'S. Rao, "Introduction to mmWave Sensing: FMCW Radars", Texas Instruments mmWave training,
+        2017'
+    renders: false
+    params:
+      - path: max_range
+        type: number
+        unit: m
+        default_from: 'none: required'
+        meaning: largest range reported
+        min_exclusive: 0
+      - path: azimuth_fov
+        type: number
+        unit: rad
+        default_from: 'none: required'
+        meaning: horizontal field of view, centred on +x
+        min_exclusive: 0
+      - path: elevation_fov
+        type: number
+        unit: rad
+        default_from: 'none: required'
+        meaning: vertical field of view
+        min_exclusive: 0
+      - path: tx_power
+        type: number
+        unit: W
+        default_from: 'none: required'
+        meaning: transmit power
+        min_exclusive: 0
+      - path: noise_floor
+        type: number
+        unit: W
+        default_from: 'none: required'
+        meaning: effective noise power the echo is compared with
+        min_exclusive: 0
+      - path: antenna_gain
+        type: number
+        unit: '1'
+        default: 1
+        meaning: linear, transmit and receive
+      - path: detection_threshold
+        type: number
+        unit: '1'
+        default: 10
+        meaning: 'signal-to-noise ratio a detection needs (linear; 10: 10 dB)'
+      - path: carrier_frequency
+        type: number
+        unit: Hz
+        default: 77000000000.0
+        meaning: '77 GHz: the automotive band'
+        min_exclusive: 0
+      - path: azimuth_resolution
+        type: number
+        unit: rad
+        default: 0.035
+        meaning: angle cell at boresight when azimuth_elements is not given
+        min_exclusive: 0
+      - path: elevation_resolution
+        type: number
+        unit: rad
+        default_from: azimuth_resolution
+        meaning: angle cell at boresight when elevation_elements is not given
+        min_exclusive: 0
+      - path: range_resolution
+        type: number
+        unit: m
+        default_from: c / (2 · bandwidth) when bandwidth is given, else 0.2
+        meaning: range cell
+        min_exclusive: 0
+      - path: velocity_resolution
+        type: number
+        unit: m/s
+        default_from: λ / (2 · chirps · chirp_period) when both are given, else 0.1
+        meaning: Doppler cell
+        min_exclusive: 0
+      - path: azimuth_elements
+        type: number
+        unit: '1'
+        default: 0
+        min: 0
+        meaning: 'virtual channels (N_TX × N_RX) along azimuth; 0: use azimuth_resolution'
+      - path: elevation_elements
+        type: number
+        unit: '1'
+        default: 0
+        min: 0
+        meaning: 'virtual channels along elevation; 0: use elevation_resolution'
+      - path: element_spacing
+        type: number
+        unit: wavelengths
+        default: 0.5
+        meaning: d; each angle cell is 1/(N·d) in direction sine
+        min_exclusive: 0
+      - path: bandwidth
+        type: number
+        unit: Hz
+        default: 0
+        min: 0
+        meaning: 'sweep B; 0: none'
+      - path: chirp_period
+        type: number
+        unit: s
+        default: 0
+        min: 0
+        meaning: 'T_c; 0: none'
+      - path: chirps
+        type: number
+        unit: '1'
+        default: 0
+        min: 0
+        meaning: 'N_c; 0: none'
+      - path: max_velocity
+        type: number
+        unit: m/s
+        default_from: λ / (4 · chirp_period) when chirp_period is given, else 0 (no folding)
+        min: 0
+        meaning: the unambiguous velocity; velocities fold into [−v_max, v_max)
+      - path: unambiguous_range
+        type: number
+        unit: m
+        default: 0
+        min: 0
+        meaning: 'ranges beyond it fold back; 0: no folding'
+      - path: ghost_reflection
+        type: number
+        unit: '1'
+        default: 0
+        min: 0
+        max: 1
+        meaning: 'the ground''s power reflection |Γ|² for multipath ghosts; 0: none'
+      - path: peak_grouping
+        type: bool
+        default: 1
+        meaning: '1: cells merge into their local peak; 0: every cell over the threshold'
+      - path: max_detections
+        type: int
+        unit: '1'
+        default: 256
+        min: 1
+        max: 4096
+        meaning: detections per scan
+      - path: ray_spacing
+        type: number
+        unit: rad
+        default_from: half the finer angle cell at boresight
+        meaning: between rays (at most 2 000 000 rays over the field of view)
+        min_exclusive: 0
+    signals:
+      - name: detections
+        type: scalar_array
+        unit: '1'
+        length_from: 6 × max_detections (range, azimuth, elevation, velocity, rcs, snr)
+      - name: count
+        type: int
+    ros:
+      - topic: detections
+        type: sensor_msgs/msg/PointCloud2
+  joint_torque:
+    name: Joint torque sensor
+    category: motion_and_force
+    description: A link-side joint torque sensor, as in each joint of a Franka Panda or a KUKA LBR
+      iiwa; the reaction's moment about the joint axis (its force along the axis on a slide).
+    doc: docs/design/domains/sensors.md#joint_torque
+    references:
+      - Franka FR3 datasheet R02212 2.6, July 2026 (no torque sensor figures published)
+      - 'KUKA LBR iiwa 7 R800 / 14 R820 spec sheet: axis-specific torque accuracy ±2 % of maximum
+        torque'
+    renders: false
+    params:
+      - path: joint
+        type: text
+        default_from: the joint whose child is the sensor's body
+        refers_to: joint
+        meaning: the joint it measures
+      - path: range
+        type: number
+        unit: N·m
+        default: .inf
+        meaning: clipping (saturated reads 1); N on a slide
+      - path: resolution
+        type: number
+        unit: N·m
+        default: 0.0
+        meaning: 'step the reading is rounded to; 0: none; N on a slide'
+      - path: noise
+        type: number
+        unit: N·m
+        default: 0.0
+        meaning: 1 sigma; N on a slide
+      - path: offset
+        type: number
+        unit: N·m
+        default: 0.0
+        meaning: bias; N on a slide
+      - path: cutoff_frequency
+        type: number
+        unit: Hz
+        default: 0.0
+        meaning: 'first-order low-pass; 0: none'
+    signals:
+      - name: torque
+        type: scalar
+        unit: N·m
+        only_when: a hinge
+      - name: force
+        type: scalar
+        unit: N
+        only_when: a slide
+      - name: saturated
+        type: bool
+    ros:
+      - topic: joint_state
+        type: sensor_msgs/msg/JointState
+  landing_target:
+    name: Landing target detector
+    category: perception
+    description: A vision landing-target detector (AprilTag or ArUco pad under a downward camera,
+      IR-LOCK style beacons) at the detector level, with PX4's meaning of MAVLink LANDING_TARGET.
+      The target is a scene prim, seen when wholly in view, in range, facing the camera, not hidden
+      and large enough to decode.
+    doc: docs/design/domains/sensors.md#landing_target
+    references:
+      - MAVLink common.xml LANDING_TARGET (angle_x, angle_y, distance, size_x, size_y)
+    renders: false
+    params:
+      - path: target
+        type: text
+        default: landing_pad
+        refers_to: prim
+        meaning: the prim (name or path); its box's top face centre is the target point, its +z its
+          normal
+      - path: target_size
+        type: number
+        unit: m
+        default_from: its box's x and y extents, else 1 m
+        min: 0
+        meaning: 'side of the marker (0 or absent: from the prim''s box)'
+      - path: horizontal_fov
+        type: number
+        unit: rad
+        default: 1.047
+        min: 0
+        max: 3.1
+        meaning: the camera's horizontal view (sensor x forward)
+      - path: vertical_fov
+        type: number
+        unit: rad
+        default_from: from horizontal_fov and width x height
+        min: 0
+        max: 3.1
+        meaning: the camera's vertical view
+      - path: width
+        type: number
+        unit: px
+        default: 640
+        min: 1
+        meaning: the image width, for pixels across the marker
+      - path: height
+        type: number
+        unit: px
+        default_from: width x 3/4 (480 at the default width)
+        meaning: the image height
+      - path: min_range
+        type: number
+        unit: m
+        default: 0.05
+        meaning: 'nearer: not detected'
+      - path: max_range
+        type: number
+        unit: m
+        default: 30
+        meaning: 'farther: not detected (above min_range)'
+      - path: min_pixels
+        type: number
+        unit: px
+        default: 12
+        min: 0
+        meaning: pixels across the marker's smaller side under which it is never decoded
+        source: illustrative
+      - path: max_incidence
+        type: number
+        unit: rad
+        default: 1.2217
+        meaning: the most the line of sight may be off the marker's normal (70 deg)
+        source: illustrative
+      - path: pixel_noise
+        type: number
+        unit: px
+        default: 0.5
+        min: 0
+        meaning: 1 sigma of the corners' position
+        source: illustrative
+      - path: occlusion_margin
+        type: number
+        unit: m
+        default: 0.05
+        meaning: a collider this close in front of the target does not hide it
+    signals:
+      - name: detected
+        type: bool
+      - name: angle_x
+        type: scalar
+        unit: rad
+      - name: angle_y
+        type: scalar
+        unit: rad
+      - name: distance
+        type: scalar
+        unit: m
+      - name: position
+        type: vec3
+        unit: m
+      - name: size_x
+        type: scalar
+        unit: rad
+      - name: size_y
+        type: scalar
+        unit: rad
+  light_sensor:
+    name: Ambient light sensor
+    category: environment
+    description: An ambient light sensor whose face looks along the sensor's +x, after the ROHM BH1750FVI,
+      lit by the sun and the sky.
+    doc: docs/design/domains/sensors.md#light_sensor
+    references:
+      - ROHM BH1750FVI datasheet 2011.11 Rev.D
+    renders: false
+    params:
+      - path: start_utc
+        type: text
+        default_from: 'none: the weather''s env/sun_direction'
+        meaning: UTC date and time at t = 0, YYYY-MM-DDTHH:MM:SSZ (with the site's geo origin)
+      - path: sky
+        type: enum
+        default: clear
+        choices:
+          - clear
+          - overcast
+        meaning: clear or overcast
+      - path: fog_depth
+        type: number
+        unit: m
+        default: 100
+        meaning: depth of fog the beam crosses per air mass
+        source: illustrative
+      - path: gain
+        type: number
+        unit: '1'
+        default: 1
+        min_exclusive: 0
+        meaning: the BH1750's part-to-part ratio, 0.8 to 1.2
+        source: ROHM BH1750FVI datasheet Rev.D
+      - path: noise/fraction
+        type: number
+        unit: '1'
+        default: 0
+        min: 0
+        meaning: 1σ, of the reading
+      - path: resolution
+        type: number
+        unit: lx
+        default: 0.8333333333333334
+        min: 0
+        meaning: one count in H-resolution mode (1/1.2 lx)
+        source: ROHM BH1750FVI datasheet Rev.D, p. 7
+      - path: max_illuminance
+        type: number
+        unit: lx
+        default_from: 65535 counts × resolution (54 612 lx with the default resolution)
+        meaning: the reading saturates there
+        source: ROHM BH1750FVI datasheet Rev.D
+      - path: ground_reflectance
+        type: number
+        unit: '1'
+        default: 0
+        min: 0
+        max: 1
+        meaning: light from the ground
+    signals:
+      - name: illuminance
+        type: scalar
+        unit: lx
+      - name: valid
+        type: bool
+  line_sensor:
+    name: Line guide sensor
+    category: perception
+    description: An AGV guide sensor, a row of channels across the sensor's y that look down for tape
+      on the floor (a reflective line-follower array or a magnetic tape sensor), at the detector level.
+    doc: docs/design/domains/sensors.md#line_sensor
+    references:
+      - Roboteq MGS1600GY magnetic guide sensor datasheet v1.3, 2018, table 11
+    renders: false
+    params:
+      - path: channels
+        type: int
+        unit: '1'
+        default: 16
+        min: 1
+        max: 1024
+        meaning: channels in the row
+      - path: spacing
+        type: number
+        unit: m
+        default: 0.01
+        min_exclusive: 0
+        meaning: between channel centres; each channel is that wide
+        source: illustrative
+      - path: samples_per_channel
+        type: int
+        unit: '1'
+        default: 5
+        min: 1
+        max: 64
+        meaning: rays across a channel
+      - path: max_range
+        type: number
+        unit: m
+        default: 0.1
+        min_exclusive: 0
+        meaning: tape further below is not seen
+      - path: noise
+        type: number
+        unit: '1'
+        default: 0.02
+        min: 0
+        meaning: 1 sigma on each channel's activation
+        source: illustrative
+      - path: threshold
+        type: number
+        unit: '1'
+        default: 0.2
+        meaning: activation a channel counts from in offset and width
+      - path: pattern
+        type: text
+        default: tape|line
+        meaning: words that make a prim tape, separated by | or ,
+      - path: tape_reflectivity
+        type: number
+        unit: '1'
+        default: 0.8
+        meaning: 905 nm reflectivity from which a collider's surface material counts as tape
+      - path: dark_tape
+        type: bool
+        default: 0
+        meaning: '1: tape darker than tape_reflectivity'
+    signals:
+      - name: channels
+        type: scalar_array
+        unit: '1'
+        length_from: channels
+      - name: offset
+        type: scalar
+        unit: m
+      - name: width
+        type: scalar
+        unit: m
+      - name: detected
+        type: bool
+  optical_flow:
+    name: Optical flow
+    category: camera
+    description: A downward optical flow sensor such as the PixArt PMW3901 or PX4Flow, computed from
+      the sensor's motion and the depth below it rather than by matching images.
+    doc: docs/design/domains/sensors.md#optical_flow
+    references:
+      - PixArt PMW3901MB-TXQT Product Datasheet Version 1.00 (20 Mar 2017), table 3
+      - Longuet-Higgins and Prazdny (1980)
+      - PX4-Autopilot msg/SensorOpticalFlow.msg
+    renders: false
+    params:
+      - path: fov
+        type: number
+        unit: rad
+        default: 0.7330382858376184
+        source: PixArt PMW3901MB-TXQT Product Datasheet Version 1.00 (20 Mar 2017), table 3 (42°)
+        meaning: field of view the 3 × 3 rays span
+        min_exclusive: 0
+        max_exclusive: 3
+      - path: min_range
+        type: number
+        unit: m
+        default: 0.08
+        min: 0
+        source: PixArt PMW3901MB-TXQT Product Datasheet Version 1.00 (20 Mar 2017), table 3
+        meaning: 'nearer ground: quality 0'
+      - path: max_range
+        type: number
+        unit: m
+        default: 30
+        source: 'illustrative (PixArt: 80 mm to infinity)'
+        meaning: 'farther ground: quality 0; above min_range'
+      - path: max_flow_rate
+        type: number
+        unit: rad/s
+        default: 7.4
+        source: PixArt PMW3901MB-TXQT Product Datasheet Version 1.00 (20 Mar 2017), table 3
+        meaning: 'faster flow: quality 0'
+        min_exclusive: 0
+      - path: noise
+        type: number
+        unit: rad/s
+        default: 0.05
+        min: 0
+        source: illustrative (the datasheet gives no noise figure)
+        meaning: white noise on each axis's rate, 1σ
+    signals:
+      - name: flow
+        type: scalar_array
+        unit: rad
+        length: 2
+      - name: quality
+        type: scalar
+        unit: '1'
+      - name: distance
+        type: scalar
+        unit: m
+      - name: integration_time
+        type: scalar
+        unit: s
+    ros:
+      - topic: flow
+        type: geometry_msgs/msg/Vector3Stamped
+  particle_sensor:
+    name: Particulate matter sensor
+    category: environment
+    description: An optical particulate-matter sensor such as the Sensirion SPS30, reading PM1, PM2.5,
+      PM4 and PM10 from the dust the weather domain and rotor outwash put in the air, with a first-order
+      lag and the datasheet's precision as noise.
+    doc: docs/design/domains/sensors.md#particle_sensor
+    references:
+      - Sensirion SPS30 datasheet, Version 2.0 - D1 - June 2023, table 1
+    renders: false
+    params:
+      - path: time_constant
+        type: number
+        unit: s
+        default: 8
+        min: 0
+        meaning: the reading's first-order lag (the SPS30's typical start-up time)
+        source: Sensirion SPS30 datasheet v2.0 table 1; illustrative as a lag
+      - path: noise_scale
+        type: number
+        unit: '1'
+        default: 1
+        min: 0
+        meaning: 'times the datasheet precision (0: no noise)'
+      - path: downwash_diameter
+        type: number
+        unit: m
+        default: 0.0001
+        min_exclusive: 0
+        meaning: grains lifted by rotor outwash (the weather's ground_dust_diameter default)
+    signals:
+      - name: pm1
+        type: scalar
+        unit: kg/m^3
+      - name: pm2_5
+        type: scalar
+        unit: kg/m^3
+      - name: pm4
+        type: scalar
+        unit: kg/m^3
+      - name: pm10
+        type: scalar
+        unit: kg/m^3
+      - name: valid
+        type: bool
+  proximity:
+    name: Proximity skin
+    category: range_and_contact
+    description: A collaborative robot's proximity skin, an array of short-range time-of-flight elements
+      over a field of view, with the nearest as one signal.
+    doc: docs/design/domains/sensors.md#proximity
+    references:
+      - ST VL53L0X DocID029104 Rev 2, §5.1 (field of view 25°) and table 12 (4 % standard deviation,
+        33 ms, white target indoors)
+    renders: false
+    params:
+      - path: rows
+        type: int
+        unit: '1'
+        default: 1
+        min: 1
+        meaning: element rows (rows x columns at most 4096)
+      - path: columns
+        type: int
+        unit: '1'
+        default: 1
+        min: 1
+        meaning: element columns
+      - path: fov
+        type: number
+        unit: rad
+        default: 0.44
+        min: 0
+        meaning: spread of the columns about the sensor's +x
+        source: ST VL53L0X DocID029104 Rev 2, §5.1 (25°)
+      - path: vertical_fov
+        type: number
+        unit: rad
+        default_from: fov
+        min: 0
+        meaning: spread of the rows
+      - path: min_range
+        type: number
+        unit: m
+        default: 0.0
+        min: 0
+        meaning: nearer reads +inf; below max_range
+      - path: max_range
+        type: number
+        unit: m
+        default: 0.3
+        meaning: farther reads +inf
+      - path: noise
+        type: number
+        unit: m
+        default: 0.012
+        min: 0
+        meaning: 1 sigma per element
+        source: 'ST VL53L0X table 12: 4 % standard deviation at the 0.3 m reach'
+    signals:
+      - name: distances
+        type: scalar_array
+        unit: m
+        length_from: rows x columns
+      - name: min_distance
+        type: scalar
+        unit: m
+      - name: detected
+        type: bool
+    ros:
+      - topic: range
+        type: sensor_msgs/msg/Range
+  rain_sensor:
+    name: Rain gauge
+    category: environment
+    description: An optical rain gauge after the Hydreon RG-15, reading the weather's rain rate, the
+      rain fallen since the start and whether it rains.
+    doc: docs/design/domains/sensors.md#rain_sensor
+    references:
+      - Hydreon Rain Gauge Model RG-15 Instructions, SW rev 1.000, 2022.07.18
+    renders: false
+    params:
+      - path: resolution
+        type: number
+        unit: m
+        default: 0.0002
+        min: 0
+        meaning: the accumulation's step (0.2 mm; high resolution 0.02 mm)
+        source: Hydreon RG-15
+      - path: noise/gain
+        type: number
+        unit: '1'
+        default: 0.05
+        min: 0
+        meaning: 1σ of a gain error drawn once per run (RG-15 ±10 % as 2σ)
+        source: Hydreon RG-15
+      - path: threshold
+        type: number
+        unit: m/s
+        default: 2.777777777777778e-08
+        min: 0
+        meaning: raining above it (0.1 mm/h)
+        source: illustrative
+      - path: time_constant
+        type: number
+        unit: s
+        default: 0
+        min: 0
+        meaning: first-order lag of the rate
+      - path: snow
+        type: bool
+        default: 0
+        meaning: '1: count snow too (melted water)'
+    signals:
+      - name: rain_rate
+        type: scalar
+        unit: m/s
+      - name: accumulation
+        type: scalar
+        unit: m
+      - name: raining
+        type: bool
+      - name: valid
+        type: bool
+  rangefinder:
+    name: Laser rangefinder
+    category: range_and_contact
+    description: One laser beam along the sensor's +x, after the Benewake TFmini-S (set the range
+      for a LightWare SF11/C).
+    doc: docs/design/domains/sensors.md#rangefinder
+    references:
+      - Benewake TFmini-S Datasheet SJ-PM-TFmini-S A01
+    renders: false
+    params:
+      - path: range/min
+        type: number
+        unit: m
+        default: 0.1
+        min: 0
+        meaning: 'nearer: reads −inf (REP 117)'
+        source: Benewake TFmini-S
+      - path: range/max
+        type: number
+        unit: m
+        default: 12
+        meaning: 'above range/min; farther: reads +inf'
+        source: Benewake TFmini-S
+      - path: noise/stddev
+        type: number
+        unit: m
+        default: 0.03
+        min: 0
+        meaning: 1σ, the least
+        source: 'Benewake TFmini-S: ±6 cm as 2σ'
+      - path: noise/fraction
+        type: number
+        unit: '1'
+        default: 0.005
+        min: 0
+        meaning: 1σ of the range
+        source: 'Benewake TFmini-S: ±1 % as 2σ'
+      - path: resolution
+        type: number
+        unit: m
+        default: 0.01
+        meaning: range step
+        source: Benewake TFmini-S
+    signals:
+      - name: range
+        type: scalar
+        unit: m
+      - name: valid
+        type: bool
+    ros:
+      - topic: range
+        type: sensor_msgs/msg/Range
+  safety_scanner:
+    name: Safety laser scanner
+    category: range_and_contact
+    description: A safety laser scanner in the manner of SICK's nanoScan3 and microScan3, checking
+      every return of a planar scan against a protective and a warning field; outputs switch one response
+      time late.
+    doc: docs/design/domains/sensors.md#safety_scanner
+    references:
+      - SICK data sheet NANS3-AAAZ30AN1 (part 1100333), nanoScan3 Core I/O
+      - SICK nanoScan3 I/O operating instructions 8024602/1W27/2026-05-26, §14.2 table 33, §14.3
+    renders: false
+    params:
+      - path: fov
+        type: number
+        unit: rad
+        default: 4.799655442984406
+        min_exclusive: 0
+        max: 6.283185307179586
+        meaning: aperture, centred on +x (275°)
+        source: NANS3-AAAZ30AN1, scanning angle 275°
+      - path: angular_resolution
+        type: number
+        unit: rad
+        default: 0.0029670597283903604
+        min_exclusive: 0
+        meaning: between beams (0.17°)
+        source: NANS3-AAAZ30AN1, angular resolution 0.17°
+      - path: min_range
+        type: number
+        unit: m
+        default: 0.0
+        meaning: returns nearer are dropped; below max_range
+      - path: max_range
+        type: number
+        unit: m
+        default: 40.0
+        meaning: returns farther are dropped
+        source: NANS3-AAAZ30AN1, distance measuring range 40 m
+      - path: range_noise
+        type: number
+        unit: m
+        default: 0.0
+        min: 0
+        meaning: 1 sigma, per beam
+      - path: response_time
+        type: number
+        unit: s
+        default: 0.07
+        min: 0
+        max: 60
+        meaning: delay of the outputs, rounded up to whole scans
+        source: NANS3-AAAZ30AN1, response time 70 ms (2 x 30 ms scans + 10 ms)
+      - path: switch_speed
+        type: number
+        unit: m/s
+        default: 0.0
+        min: 0
+        meaning: 'forward speed (sensor x) at or above which the _fast fields watch; 0: off'
+      - path: protective/polygon
+        type: text
+        default_from: none
+        meaning: 'the protective field (required: a polygon, a radius or a rectangle): polygon ''x,y
+          x,y x,y ...'' in m, sensor frame, even-odd rule; wins over radius and rectangle'
+      - path: protective/radius
+        type: number
+        unit: m
+        default_from: none
+        meaning: 'the protective field (required: a polygon, a radius or a rectangle): a sector of
+          this radius within the aperture'
+      - path: protective/x_min
+        type: number
+        unit: m
+        default: 0.0
+        meaning: 'the protective field (required: a polygon, a radius or a rectangle): rectangle,
+          near edge (used with x_max, y_min, y_max)'
+      - path: protective/x_max
+        type: number
+        unit: m
+        default_from: none
+        meaning: 'the protective field (required: a polygon, a radius or a rectangle): rectangle,
+          far edge'
+      - path: protective/y_min
+        type: number
+        unit: m
+        default_from: none
+        meaning: 'the protective field (required: a polygon, a radius or a rectangle): rectangle,
+          right edge'
+      - path: protective/y_max
+        type: number
+        unit: m
+        default_from: none
+        meaning: 'the protective field (required: a polygon, a radius or a rectangle): rectangle,
+          left edge'
+      - path: warning/polygon
+        type: text
+        default_from: none
+        meaning: 'the warning field: polygon ''x,y x,y x,y ...'' in m, sensor frame, even-odd rule;
+          wins over radius and rectangle'
+      - path: warning/radius
+        type: number
+        unit: m
+        default_from: none
+        meaning: 'the warning field: a sector of this radius within the aperture'
+      - path: warning/x_min
+        type: number
+        unit: m
+        default: 0.0
+        meaning: 'the warning field: rectangle, near edge (used with x_max, y_min, y_max)'
+      - path: warning/x_max
+        type: number
+        unit: m
+        default_from: none
+        meaning: 'the warning field: rectangle, far edge'
+      - path: warning/y_min
+        type: number
+        unit: m
+        default_from: none
+        meaning: 'the warning field: rectangle, right edge'
+      - path: warning/y_max
+        type: number
+        unit: m
+        default_from: none
+        meaning: 'the warning field: rectangle, left edge'
+      - path: protective_fast/polygon
+        type: text
+        default_from: none
+        meaning: 'the fast case''s protective field (required with switch_speed): polygon ''x,y x,y
+          x,y ...'' in m, sensor frame, even-odd rule; wins over radius and rectangle'
+      - path: protective_fast/radius
+        type: number
+        unit: m
+        default_from: none
+        meaning: 'the fast case''s protective field (required with switch_speed): a sector of this
+          radius within the aperture'
+      - path: protective_fast/x_min
+        type: number
+        unit: m
+        default: 0.0
+        meaning: 'the fast case''s protective field (required with switch_speed): rectangle, near
+          edge (used with x_max, y_min, y_max)'
+      - path: protective_fast/x_max
+        type: number
+        unit: m
+        default_from: none
+        meaning: 'the fast case''s protective field (required with switch_speed): rectangle, far edge'
+      - path: protective_fast/y_min
+        type: number
+        unit: m
+        default_from: none
+        meaning: 'the fast case''s protective field (required with switch_speed): rectangle, right
+          edge'
+      - path: protective_fast/y_max
+        type: number
+        unit: m
+        default_from: none
+        meaning: 'the fast case''s protective field (required with switch_speed): rectangle, left
+          edge'
+      - path: warning_fast/polygon
+        type: text
+        default_from: the warning field
+        meaning: 'the fast case''s warning field (default: warning): polygon ''x,y x,y x,y ...'' in
+          m, sensor frame, even-odd rule; wins over radius and rectangle'
+      - path: warning_fast/radius
+        type: number
+        unit: m
+        default_from: the warning field
+        meaning: 'the fast case''s warning field (default: warning): a sector of this radius within
+          the aperture'
+      - path: warning_fast/x_min
+        type: number
+        unit: m
+        default: 0.0
+        meaning: 'the fast case''s warning field (default: warning): rectangle, near edge (used with
+          x_max, y_min, y_max)'
+      - path: warning_fast/x_max
+        type: number
+        unit: m
+        default_from: the warning field
+        meaning: 'the fast case''s warning field (default: warning): rectangle, far edge'
+      - path: warning_fast/y_min
+        type: number
+        unit: m
+        default_from: the warning field
+        meaning: 'the fast case''s warning field (default: warning): rectangle, right edge'
+      - path: warning_fast/y_max
+        type: number
+        unit: m
+        default_from: the warning field
+        meaning: 'the fast case''s warning field (default: warning): rectangle, left edge'
+    signals:
+      - name: protective
+        type: bool
+      - name: warning
+        type: bool
+      - name: case
+        type: int
+        only_when: switch_speed > 0
+      - name: min_distance
+        type: scalar
+        unit: m
+      - name: ranges
+        type: scalar_array
+        unit: m
+        length_from: floor(fov / angular_resolution) + 1
+    ros:
+      - topic: scan
+        type: sensor_msgs/msg/LaserScan
+  sonar:
+    name: Sonar
+    category: range_and_contact
+    description: An underwater sonar, by default a multibeam imaging fan after the Blueprint Subsea
+      Oculus M750d (750 kHz); with beams 1 a single-beam echosounder such as the Blue Robotics Ping2.
+      It hears only under the surface of a WaterAPI_1 body of water.
+    doc: docs/design/domains/sensors.md#sonar
+    references:
+      - Blueprint Subsea, Oculus M-series specifications page, blueprintsubsea.com/oculus/oculus-m-series,
+        read 2026-11-12
+      - Blue Robotics, Ping Sonar Altimeter and Echosounder store page, technical details, read 2026-11-12
+      - Mackenzie, J. Acoust. Soc. Am. 70(3), 807–812, 1981
+      - Ainslie and McColm, J. Acoust. Soc. Am. 103(3), 1671–1672, 1998
+      - Mackenzie, J. Acoust. Soc. Am. 33(11), 1498–1504, 1961
+      - Urick, Principles of Underwater Sound, 3rd ed., 1983, §5.1
+    renders: false
+    params:
+      - path: beams
+        type: int
+        unit: '1'
+        default: 512
+        min: 1
+        max: 4096
+        meaning: 'across horizontal_fov, beam 0 on the left (+y); 1: a single beam'
+        source: Oculus M750d
+      - path: horizontal_fov
+        type: number
+        unit: rad
+        default: 2.2689280275926285
+        min: 0
+        meaning: the fan's width (130°)
+        source: Oculus M750d
+      - path: vertical_fov
+        type: number
+        unit: rad
+        default: 0.3490658503988659
+        min: 0
+        meaning: the fan's height (20°)
+        source: Oculus M750d
+      - path: beam_width
+        type: number
+        unit: rad
+        default: 0.4363323129985824
+        min_exclusive: 0
+        meaning: full cone of a single beam (25°)
+        source: Blue Robotics Ping2
+      - path: vertical_rays
+        type: int
+        unit: '1'
+        default: 5
+        min: 1
+        max: 64
+        meaning: 'rays across vertical_fov per beam (a single beam: a grid of n × n in its cone)'
+      - path: range/min
+        type: number
+        unit: m
+        default: 0.1
+        min: 0
+        meaning: nearest echo
+        source: Oculus M750d
+      - path: range/max
+        type: number
+        unit: m
+        default: 120
+        meaning: farthest echo, above range/min; sets the ping interval 2·range/max / sound_speed
+        source: Oculus M750d
+      - path: resolution
+        type: number
+        unit: m
+        default: 0.004
+        meaning: range quantisation
+        source: Oculus M750d
+      - path: noise/stddev
+        type: number
+        unit: m
+        default_from: resolution (0.004 m with the default)
+        min: 0
+        meaning: 1σ on the range
+      - path: sound_speed
+        type: number
+        unit: m/s
+        default: 1500
+        min_exclusive: 0
+        meaning: what the device converts time of flight with
+        source: Urick, Principles of Underwater Sound, 1983
+      - path: water_temperature
+        type: number
+        unit: °C
+        default_from: 'none: the water''s sound speed is sound_speed; the absorption takes 10 °C'
+        min: -2
+        max: 40
+        meaning: 'the water''s temperature in °C (not K): with it, the water''s own sound speed (Mackenzie)'
+        source: illustrative
+      - path: salinity
+        type: number
+        unit: PSU
+        default: 35
+        min: 0
+        max: 45
+        meaning: the water's salinity
+        source: illustrative
+      - path: ph
+        type: number
+        unit: '1'
+        default: 8
+        meaning: the water's acidity, for the absorption
+        source: illustrative
+      - path: frequency
+        type: number
+        unit: Hz
+        default: 750000
+        min_exclusive: 0
+        meaning: for the absorption
+        source: Oculus M750d
+      - path: backscatter
+        type: number
+        unit: dB
+        default: -27
+        meaning: Lambert's 10·log10 μ, every surface
+        source: Mackenzie, JASA 33(11), 1961
+      - path: intensity_noise
+        type: number
+        unit: dB
+        default: 1
+        min: 0
+        meaning: 1σ on the echo level
+        source: illustrative
+      - path: min_level
+        type: number
+        unit: dB
+        default: -180
+        meaning: weaker echoes are not detected
+        source: illustrative
+      - path: image_bins
+        type: int
+        unit: '1'
+        default: 0
+        min: 0
+        max: 4096
+        meaning: 'range bins of the polar image; 0: no image'
+    signals:
+      - name: ranges
+        type: scalar_array
+        unit: m
+        length_from: beams
+      - name: intensities
+        type: scalar_array
+        unit: dB
+        length_from: beams
+      - name: image
+        type: scalar_array
+        unit: dB
+        length_from: beams × image_bins (only with image_bins)
+      - name: depth
+        type: scalar
+        unit: m
+      - name: sound_speed
+        type: scalar
+        unit: m/s
+      - name: ping_interval
+        type: scalar
+        unit: s
+      - name: valid
+        type: bool
+    ros:
+      - topic: scan
+        type: sensor_msgs/msg/LaserScan
+      - topic: range
+        type: sensor_msgs/msg/Range
+  stereo_camera:
+    name: Stereo depth camera
+    category: camera
+    description: 'An active stereo depth camera like the Intel RealSense D435: left and right infrared
+      images a baseline apart and the left imager''s depth with a stereo matcher''s error and holes.'
+    doc: docs/design/domains/sensors.md#stereo_camera
+    references:
+      - Intel RealSense D400 Series Datasheet 337029, table 3-49 (D435)
+      - Grunnet-Jepsen et al., "Tuning depth cameras for best performance" (Intel RealSense white
+        paper)
+    renders: true
+    params:
+      - path: width
+        type: int
+        unit: px
+        default: 848
+        min: 2
+        source: Intel RealSense D400 Series Datasheet 337029, table 3-49 (D435) (a depth mode)
+        meaning: the pixel array (also <camera><image><width>)
+      - path: height
+        type: int
+        unit: px
+        default: 480
+        min: 1
+        source: Intel RealSense D400 Series Datasheet 337029, table 3-49 (D435) (a depth mode)
+        meaning: (also <camera><image><height>)
+      - path: horizontal_fov
+        type: number
+        unit: rad
+        default: 1.5184364492350666
+        source: Intel RealSense D400 Series Datasheet 337029, table 3-49 (D435) (87°)
+        meaning: (also <camera><horizontal_fov>)
+        min_exclusive: 0
+        max_exclusive: 3.1
+      - path: near_clip
+        type: number
+        unit: m
+        default: 0.05
+        meaning: (also <camera><clip><near>)
+      - path: baseline
+        type: number
+        unit: m
+        default: 0.05
+        source: Intel RealSense D400 Series Datasheet 337029, table 3-49 (D435)
+        meaning: ''
+        min_exclusive: 0
+      - path: subpixel
+        type: number
+        unit: px
+        default: 0.08
+        min: 0
+        source: Grunnet-Jepsen et al., "Tuning depth cameras for best performance" (Intel RealSense
+          white paper)
+        meaning: σ_d, the sub-pixel disparity error
+      - path: max_disparity
+        type: number
+        unit: px
+        default: 126
+        source: Grunnet-Jepsen et al., "Tuning depth cameras for best performance" (Intel RealSense
+          white paper)
+        meaning: the disparity search range; sets min-Z = f b / max_disparity
+        min_exclusive: 0
+      - path: max_range
+        type: number
+        unit: m
+        default: 10
+        source: 'illustrative (D400: 0.2 m to over 3 m; the white paper up to about 10 m)'
+        meaning: beyond it depth reads +inf
+        min_exclusive: 0
+      - path: depth_unit
+        type: number
+        unit: m
+        default: 0.001
+        min: 0
+        source: Intel RealSense D400 Series Datasheet 337029, table 3-49 (D435)
+        meaning: output quantum; 0 for none
+    signals:
+      - name: depth
+        type: image
+        unit: m
+      - name: left
+        type: image
+      - name: right
+        type: image
+      - name: depth/intrinsics
+        type: scalar_array
+        unit: '1'
+        length: 4
+      - name: depth/position
+        type: vec3
+        unit: m
+      - name: left/intrinsics
+        type: scalar_array
+        unit: '1'
+        length: 4
+      - name: left/position
+        type: vec3
+        unit: m
+      - name: right/intrinsics
+        type: scalar_array
+        unit: '1'
+        length: 4
+      - name: right/position
+        type: vec3
+        unit: m
+    ros:
+      - topic: left/image_raw
+        type: sensor_msgs/msg/Image
+      - topic: right/image_raw
+        type: sensor_msgs/msg/Image
+      - topic: depth/image_raw
+        type: sensor_msgs/msg/Image
+      - topic: left/camera_info
+        type: sensor_msgs/msg/CameraInfo
+      - topic: right/camera_info
+        type: sensor_msgs/msg/CameraInfo
+      - topic: depth/camera_info
+        type: sensor_msgs/msg/CameraInfo
+  sun_sensor:
+    name: Sun sensor
+    category: environment
+    description: A two-axis sun sensor looking along the sensor's +x, after the Solar MEMS nanoSSOC-A60.
+    doc: docs/design/domains/sensors.md#sun_sensor
+    references:
+      - Solar MEMS nanoSSOC-A60 product sheet, solar-mems.com, 2024
+    renders: false
+    params:
+      - path: start_utc
+        type: text
+        default_from: 'none: the weather''s env/sun_direction'
+        meaning: as the light sensor's
+      - path: sky
+        type: enum
+        default: clear
+        choices:
+          - clear
+          - overcast
+        meaning: as the light sensor's
+      - path: fog_depth
+        type: number
+        unit: m
+        default: 100
+        meaning: as the light sensor's
+        source: illustrative
+      - path: fov
+        type: number
+        unit: rad
+        default: 2.0943951023931953
+        min_exclusive: 0
+        max: 6.283185307179586
+        meaning: full cone angle (120°)
+        source: 'Solar MEMS nanoSSOC-A60: ±60°'
+      - path: noise/stddev
+        type: number
+        unit: rad
+        default: 0.0029088820866572155
+        min: 0
+        meaning: '1σ per axis (0.167°: the accuracy < 0.5° (3σ) over 3)'
+        source: Solar MEMS nanoSSOC-A60
+      - path: min_illuminance
+        type: number
+        unit: lx
+        default: 1000
+        meaning: the least direct beam it finds the sun in
+        source: illustrative
+    signals:
+      - name: sun_direction
+        type: vec3
+        unit: '1'
+      - name: sun_visible
+        type: bool
+      - name: valid
+        type: bool
+  tag_reader:
+    name: Floor tag reader
+    category: perception
+    description: A warehouse localisation reader for tags on the floor at the detector level. Mode
+      rfid reads the nearest tag within a radius; mode qr (QR or Data Matrix under a downward camera)
+      reads the tag nearest the optical axis in its footprint, with its offset and yaw.
+    doc: docs/design/domains/sensors.md#tag_reader
+    references: []
+    renders: false
+    params:
+      - path: mode
+        type: enum
+        default: rfid
+        choices:
+          - rfid
+          - qr
+        meaning: rfid or qr
+      - path: prefix
+        type: text
+        default_from: rfid_ in mode rfid, qr_ in mode qr
+        meaning: scene prims whose name starts with it are tags
+      - path: range
+        type: number
+        unit: m
+        default: 0.1
+        min_exclusive: 0
+        only_when:
+          mode: rfid
+        meaning: from the sensor's origin to the tag point (an HF floor tag)
+        source: illustrative
+      - path: min_range
+        type: number
+        unit: m
+        default: 0.01
+        only_when:
+          mode: qr
+        meaning: least depth below the reader
+      - path: max_range
+        type: number
+        unit: m
+        default: 0.5
+        min_exclusive: 0
+        only_when:
+          mode: qr
+        meaning: most depth below the reader
+      - path: horizontal_fov
+        type: number
+        unit: rad
+        default: 0.8
+        min_exclusive: 0
+        max: 3.1
+        only_when:
+          mode: qr
+        meaning: the footprint across the sensor's x
+        source: illustrative
+      - path: vertical_fov
+        type: number
+        unit: rad
+        default_from: horizontal_fov
+        min_exclusive: 0
+        max: 3.1
+        only_when:
+          mode: qr
+        meaning: the footprint across the sensor's y
+      - path: max_incidence
+        type: number
+        unit: rad
+        default: 0.79
+        only_when:
+          mode: qr
+        meaning: the most the line of sight may be off the tag's normal (45 deg)
+        source: illustrative
+      - path: position_noise
+        type: number
+        unit: m
+        default: 0.0005
+        min: 0
+        only_when:
+          mode: qr
+        meaning: 1 sigma on the offset's x and y
+        source: illustrative
+      - path: yaw_noise
+        type: number
+        unit: rad
+        default: 0.005
+        min: 0
+        only_when:
+          mode: qr
+        meaning: 1 sigma
+        source: illustrative
+    signals:
+      - name: detected
+        type: bool
+      - name: tag
+        type: int
+      - name: code
+        type: int
+      - name: tag_position
+        type: vec3
+        unit: m
+      - name: offset
+        type: vec3
+        unit: m
+      - name: yaw
+        type: scalar
+        unit: rad
+  tension_sensor:
+    name: Tension sensor
+    category: power
+    description: A strain-gauge load cell where a tether meets its body or its station, read by a
+      bridge ADC (an Avia HX711 channel A by default).
+    doc: docs/design/domains/sensors.md#tension_sensor
+    references:
+      - Avia Semiconductor HX711 datasheet, Table 2
+    renders: false
+    params:
+      - path: tether
+        type: text
+        default_from: the stage's only TetherAPI_1 prim
+        refers_to: tether
+        meaning: which tether
+      - path: end
+        type: enum
+        default: attach
+        choices:
+          - attach
+          - anchor
+        meaning: 'where the cell sits: the body (attach) or the station (anchor)'
+      - path: capacity
+        type: number
+        unit: N
+        default: 500
+        source: illustrative
+        meaning: rated load
+        min_exclusive: 0
+      - path: sensitivity
+        type: number
+        unit: V/V
+        default: 0.002
+        meaning: rated output at capacity (2 mV/V, a common figure)
+        min_exclusive: 0
+      - path: excitation
+        type: number
+        unit: V
+        default: 5
+        meaning: also the ADC's AVDD
+        min_exclusive: 0
+      - path: nonlinearity
+        type: number
+        unit: '1'
+        default: 0
+        meaning: bow at half load, fraction of capacity
+      - path: hysteresis
+        type: number
+        unit: '1'
+        default: 0
+        meaning: loading to unloading at half load, fraction of capacity
+      - path: noise
+        type: number
+        unit: N
+        default: 0
+        min: 0
+        meaning: at the cell, 1σ
+      - path: offset
+        type: number
+        unit: N
+        default: 0
+        meaning: zero balance
+      - path: gain_error
+        type: number
+        unit: '1'
+        default: 0
+        meaning: reads (1 + gain_error) × the truth
+      - path: adc/bits
+        type: int
+        unit: '1'
+        default: 24
+        min: 1
+        source: Avia Semiconductor HX711 datasheet, Table 2
+        meaning: two's complement
+      - path: adc/gain
+        type: number
+        unit: '1'
+        default: 128
+        source: Avia Semiconductor HX711 datasheet, Table 2
+        meaning: channel A gain
+        min_exclusive: 0
+      - path: adc/full_scale
+        type: number
+        unit: V
+        default_from: 0.5 × excitation / adc/gain
+        source: Avia Semiconductor HX711 datasheet, Table 2
+        meaning: ±full_scale at the bridge
+        min_exclusive: 0
+      - path: adc/noise
+        type: number
+        unit: V
+        default: 5.0e-08
+        min: 0
+        source: Avia Semiconductor HX711 datasheet, Table 2 (gain 128, 10 SPS)
+        meaning: input noise, rms
+      - path: adc/samples
+        type: int
+        unit: '1'
+        default: 1
+        min: 1
+        max: 4096
+        meaning: conversions averaged
+      - path: rated_strain
+        type: number
+        unit: '1'
+        default: 0.001
+        meaning: strain at the gauges at capacity, for strain
+    signals:
+      - name: force
+        type: scalar
+        unit: N
+      - name: strain
+        type: scalar
+        unit: '1'
+      - name: valid
+        type: scalar
+        unit: '1'
+  tpms:
+    name: Tyre pressure monitor
+    category: vehicle
+    description: A tyre-pressure monitoring system, a pressure and temperature sensor in every WheelAPI_1
+      tyre of its vehicle; the air follows Gay-Lussac at the ambient temperature, with an FMVSS No.
+      138 warning.
+    doc: docs/design/domains/sensors.md#tpms
+    references:
+      - 'FMVSS No. 138 (49 CFR 571.138 S4.2): warning at 25 % below the placard'
+    renders: false
+    params:
+      - path: fill_pressure
+        type: number
+        unit: Pa
+        default: 230000.0
+        min_exclusive: 0
+        meaning: the placard cold pressure, gauge (a typical car, 2.3 bar)
+        source: illustrative
+      - path: fill_temperature
+        type: number
+        unit: K
+        default: 293.15
+        min_exclusive: 0
+        meaning: where it was filled (20 °C)
+      - path: temperature
+        type: number
+        unit: K
+        default_from: none (env/air_temperature from the weather domain)
+        min_exclusive: 0
+        meaning: the air's when the weather domain is off
+      - path: leak_rate
+        type: number
+        unit: Pa/s
+        default: 0.0
+        min: 0
+        meaning: every tyre
+      - path: noise
+        type: number
+        unit: Pa
+        default: 0.0
+        min: 0
+        meaning: 1 sigma
+      - path: wheels
+        type: text
+        default_from: every WheelAPI_1 joint in the sensor's body tree
+        refers_to: joint
+        meaning: wheel joint names, separated by spaces
+    signals:
+      - name: pressure
+        type: scalar_array
+        unit: Pa
+        length_from: the wheels
+      - name: temperature
+        type: scalar_array
+        unit: K
+        length_from: the wheels
+      - name: warning
+        type: bool
+      - name: valid
+        type: bool
+  uwb:
+    name: UWB ranging tag
+    category: radio
+    description: Ultra-wideband two-way ranging from a tag on the robot to fixed anchors, as a Qorvo
+      (Decawave) DW1000 or DW3000 gives it, with the excess delay through material in the way.
+    doc: docs/design/domains/sensors.md#uwb
+    references:
+      - DW1000 Datasheet Version 2.10
+      - DW3000 Datasheet Version 1.1
+      - ITU-R P.2040-1 Table 3
+    renders: false
+    params:
+      - path: anchors
+        type: text
+        unit: m
+        default_from: 'none: uwb_anchor* prims or bodies only (a run with no anchor is refused)'
+        meaning: x y z; x y z; ... region-local anchors
+      - path: range_noise
+        type: number
+        unit: m
+        default: 0.1
+        min: 0
+        meaning: 1 sigma with line of sight
+        source: DW1000 Datasheet Version 2.10, p. 1; DW3000 Datasheet Version 1.1
+      - path: nlos_permittivity
+        type: number
+        unit: '1'
+        default: 5.24
+        min: 1
+        meaning: relative permittivity of what blocks the line (concrete, 1-100 GHz)
+        source: ITU-R P.2040-1 Table 3
+      - path: nlos_noise
+        type: number
+        unit: m
+        default: 0.3
+        min: 0
+        meaning: extra 1 sigma without line of sight
+        source: illustrative
+      - path: max_range
+        type: number
+        unit: m
+        default: 50
+        min_exclusive: 0
+        meaning: beyond it the anchor drops out
+        source: illustrative (DW1000 datasheet figure 31)
+    signals:
+      - name: ranges
+        type: scalar_array
+        unit: m
+        length_from: anchors
+      - name: los
+        type: scalar_array
+        unit: '1'
+        length_from: anchors
+      - name: count
+        type: int
+      - name: valid
+        type: bool
+  v2x:
+    name: V2X on-board unit
+    category: radio
+    description: A V2X on-board unit (DSRC IEEE 802.11p or C-V2X PC5) receiving the SAE J2735 Basic
+      Safety Messages of the traffic agents and the Signal Phase and Timing of the signalised approaches,
+      with distance-dependent message loss.
+    doc: docs/design/domains/sensors.md#v2x
+    references:
+      - SAE J2735; SAE J2945/1
+      - Meireles et al., IEEE VNC 2010
+    renders: false
+    params:
+      - path: loss_distance
+        type: number
+        unit: m
+        default: 300
+        min_exclusive: 0
+        meaning: where half the messages are lost
+        source: illustrative
+      - path: loss_width
+        type: number
+        unit: m
+        default: 50
+        min_exclusive: 0
+        meaning: how fast the loss grows
+        source: illustrative
+      - path: range/max
+        type: number
+        unit: m
+        default: 1000
+        min_exclusive: 0
+        meaning: nothing heard beyond
+      - path: timeout
+        type: number
+        unit: s
+        default: 0.5
+        min: 0
+        meaning: a sender counts as heard while its last message is this recent
+    signals:
+      - name: bsm
+        type: scalar_array
+        unit: '1'
+        length_from: 10 x traffic agents (at least 10)
+      - name: spat
+        type: scalar_array
+        unit: '1'
+        length_from: 7 x signal heads (at least 7)
+      - name: bsm_count
+        type: int
+      - name: spat_count
+        type: int
+      - name: valid
+        type: bool
+  vehicle_can:
+    name: Vehicle CAN sensors
+    category: vehicle
+    description: What a production car's own sensors put on its CAN bus, for a VehicleAPI_1 robot
+      - ABS wheel speeds from tone-ring edge timing, the steering wheel angle, the ESP cluster's yaw
+      rate and accelerations, and the gear.
+    doc: docs/design/domains/sensors.md#vehicle_can
+    references: []
+    renders: false
+    params:
+      - path: teeth
+        type: int
+        unit: '1'
+        default: 48
+        min: 1
+        meaning: teeth of each ABS tone ring (43 to 100 are common)
+        source: illustrative
+      - path: steering_ratio
+        type: number
+        unit: '1'
+        default: 15.5
+        min_exclusive: 0
+        meaning: steering wheel to road wheel
+        source: illustrative
+      - path: steering_resolution
+        type: number
+        unit: rad
+        default: 0.0017453292519943296
+        min: 0
+        meaning: steering wheel angle step (0.1 deg)
+        source: illustrative
+      - path: yaw_rate_noise
+        type: number
+        unit: rad/s
+        default: 0.0017453292519943296
+        min: 0
+        meaning: 1 sigma (0.1 deg/s)
+        source: illustrative
+      - path: acceleration_noise
+        type: number
+        unit: m/s^2
+        default: 0.03
+        min: 0
+        meaning: 1 sigma
+        source: illustrative
+    signals:
+      - name: wheel_speeds
+        type: scalar_array
+        unit: m/s
+        length_from: WheelAPI_1 wheels
+      - name: speed
+        type: scalar
+        unit: m/s
+      - name: steering_wheel_angle
+        type: scalar
+        unit: rad
+      - name: yaw_rate
+        type: scalar
+        unit: rad/s
+      - name: longitudinal_acceleration
+        type: scalar
+        unit: m/s^2
+      - name: lateral_acceleration
+        type: scalar
+        unit: m/s^2
+      - name: gear
+        type: scalar
+        unit: '1'
+      - name: valid
+        type: bool
+  visibility_sensor:
+    name: Visibility sensor
+    category: environment
+    description: A forward-scatter visibility sensor after the Vaisala PWD22, reporting the meteorological
+      optical range from the air's extinction.
+    doc: docs/design/domains/sensors.md#visibility_sensor
+    references:
+      - Vaisala PWD series datasheet B210385EN-F
+      - Vaisala PWD22 User's Guide M210543EN-B, table 24
+    renders: false
+    params:
+      - path: range/min
+        type: number
+        unit: m
+        default: 10
+        min_exclusive: 0
+        meaning: the least MOR it reports
+        source: Vaisala PWD22
+      - path: range/max
+        type: number
+        unit: m
+        default: 20000
+        meaning: the largest MOR it reports, above range/min
+        source: Vaisala PWD22
+      - path: noise/fraction
+        type: number
+        unit: '1'
+        default: 0.05
+        min: 0
+        meaning: 1σ, of the MOR (±10 % as 2σ)
+        source: Vaisala PWD22
+      - path: noise/fraction_far
+        type: number
+        unit: '1'
+        default_from: 1.5 × noise/fraction (0.075 with the default)
+        min: 0
+        meaning: 1σ beyond 10 km (±15 %)
+        source: Vaisala PWD22
+      - path: time_constant
+        type: number
+        unit: s
+        default: 60
+        min: 0
+        meaning: first-order lag of the extinction
+        source: Vaisala PWD22 User's Guide M210543EN-B, table 24
+    signals:
+      - name: visibility
+        type: scalar
+        unit: m
+      - name: extinction
+        type: scalar
+        unit: 1/m
+      - name: valid
+        type: bool
+  voltage_sensor:
+    name: Voltage sensor
+    category: power
+    description: One voltage signal of the run (a bus, a battery's terminals) as a TI INA226 or a
+      resistor divider into an ADC reads it.
+    doc: docs/design/domains/sensors.md#current_sensor-and-voltage_sensor
+    references:
+      - TI INA226 datasheet SBOS547C §5.5, Tables 7-3 to 7-5
+    renders: false
+    params:
+      - path: signal
+        type: text
+        default_from: 'none: required'
+        refers_to: signal
+        meaning: the run's voltage (V) signal to measure; a signal of the other unit is refused
+      - path: model
+        type: enum
+        default: ina226
+        choices:
+          - ina226
+          - divider
+        meaning: the measuring part
+      - path: conversion_time
+        type: number
+        unit: s
+        default: 0.0011
+        choices:
+          - 0.00014
+          - 0.000204
+          - 0.000332
+          - 0.000588
+          - 0.0011
+          - 0.002116
+          - 0.004156
+          - 0.008244
+        only_when:
+          model: ina226
+        source: TI INA226 datasheet SBOS547C §5.5, Tables 7-3 to 7-5
+        meaning: per conversion; the nearest listed value is taken
+      - path: averages
+        type: int
+        unit: '1'
+        default: 1
+        min: 1
+        max: 4096
+        source: TI INA226 datasheet SBOS547C §5.5, Tables 7-3 to 7-5
+        meaning: 'conversions averaged (INA226: the nearest of 1, 4, 16, 64, 128, 256, 512, 1024)'
+      - path: channels
+        type: int
+        unit: '1'
+        default: 2
+        choices:
+          - 1
+          - 2
+        only_when:
+          model: ina226
+        meaning: '2: shunt and bus, continuous (the power-on mode); a reading every conversion_time
+          × channels × averages'
+      - path: noise
+        type: number
+        unit: V
+        default: 0
+        min: 0
+        meaning: white noise per conversion, 1σ, in volts at the ADC's input
+      - path: offset
+        type: number
+        unit: V
+        default: 0
+        meaning: in volts at the ADC's input
+      - path: gain_error
+        type: number
+        unit: '1'
+        default: 0
+        meaning: reads (1 + gain_error) × the truth
+        min_exclusive: -1
+      - path: ratio
+        type: number
+        unit: '1'
+        default: 0.09090909090909091
+        only_when:
+          model: divider
+        source: 'illustrative (1/11: 10 kΩ over 1 kΩ)'
+        meaning: output over input
+        min_exclusive: 0
+      - path: adc/bits
+        type: int
+        unit: '1'
+        default: 12
+        min: 1
+        max: 32
+        only_when:
+          model: divider
+        meaning: the microcontroller's ADC
+      - path: adc/reference
+        type: number
+        unit: V
+        default: 3.3
+        only_when:
+          model: divider
+        meaning: the ADC's range is 0 to adc/reference
+        min_exclusive: 0
+    signals:
+      - name: voltage
+        type: scalar
+        unit: V
+      - name: valid
+        type: scalar
+        unit: '1'
+  wheel_odometry:
+    name: Wheel odometry
+    category: motion_and_force
+    description: Dead reckoning of a differential drive from its wheel encoders, as its base controller
+      computes it; slip shows up as drift.
+    doc: docs/design/domains/sensors.md#wheel_odometry
+    references: []
+    renders: false
+    params:
+      - path: left_joint
+        type: text
+        default_from: the driven hinge at +y hanging off the sensor's body that carries a cylinder
+          or sphere
+        refers_to: joint
+        meaning: the left wheel joint (give both or neither)
+      - path: right_joint
+        type: text
+        default_from: the other such driven hinge
+        refers_to: joint
+        meaning: the right wheel joint
+      - path: wheel_radius
+        type: number
+        unit: m
+        default_from: the left wheel's first cylinder or sphere collider's radius
+        min_exclusive: 0
+        meaning: radius it believes
+      - path: wheel_separation
+        type: number
+        unit: m
+        default_from: track_width, else the wheels' distance apart along the body's y
+        min_exclusive: 0
+        meaning: track it believes
+      - path: track_width
+        type: number
+        unit: m
+        default_from: the wheels' distance apart (read only without wheel_separation)
+        min_exclusive: 0
+        meaning: another name for wheel_separation
+      - path: radius_error
+        type: number
+        unit: '1'
+        default: 0.0
+        min_exclusive: -1
+        meaning: relative error of both radii (0.01 is 1 % large)
+      - path: radius_error_left
+        type: number
+        unit: '1'
+        default_from: radius_error
+        min_exclusive: -1
+        meaning: relative error of the left radius
+      - path: radius_error_right
+        type: number
+        unit: '1'
+        default_from: radius_error
+        min_exclusive: -1
+        meaning: relative error of the right radius
+      - path: separation_error
+        type: number
+        unit: '1'
+        default: 0.0
+        min_exclusive: -1
+        meaning: relative error of the track
+      - path: encoder_resolution
+        type: number
+        unit: counts/rev
+        default: 0.0
+        min: 0
+        meaning: encoder counts per wheel turn; 0 reads the exact angle
+    signals:
+      - name: pose
+        type: pose
+        unit: m
+      - name: yaw
+        type: scalar
+        unit: rad
+      - name: twist
+        type: wrench
+        unit: m/s
+    ros:
+      - topic: odom
+        type: nav_msgs/msg/Odometry
+  wifi_scanner:
+    name: Wi-Fi scanner
+    category: radio
+    description: What a Wi-Fi scan reports, the RSSI of every access point the robot hears, from the
+      comms domain's links or a log-distance budget with wall losses.
+    doc: docs/design/domains/sensors.md#wifi_scanner
+    references:
+      - IEEE 802.11-2020 Table 17-18 (OFDM minimum input sensitivity at 6 Mb/s, 20 MHz)
+      - Linux mac80211 scan.c (IEEE80211_PROBE_DELAY, IEEE80211_CHANNEL_TIME, IEEE80211_PASSIVE_CHANNEL_TIME)
+    renders: false
+    params:
+      - path: access_points
+        type: text
+        unit: m
+        default_from: 'none: RadioLinkAPI_1 links on the sensor''s body and wifi_ap* prims or bodies
+          only'
+        meaning: x y z; x y z; ... region-local access points
+      - path: scan_time
+        type: number
+        unit: s
+        default: 2
+        min: 0
+        meaning: a new scan every so often; between scans the outputs hold
+        source: illustrative
+      - path: sensitivity
+        type: number
+        unit: dBm
+        default: -82
+        meaning: weaker access points are not listed
+        source: IEEE 802.11-2020 Table 17-18
+      - path: noise
+        type: number
+        unit: dB
+        default: 0
+        min: 0
+        meaning: 1 sigma per reading, before rounding
+      - path: tx_power
+        type: number
+        unit: W
+        default: 0.1
+        min_exclusive: 0
+        meaning: 20 dBm
+      - path: frequency
+        type: number
+        unit: Hz
+        default: 2437000000.0
+        min_exclusive: 0
+        meaning: channel 6
+      - path: path_loss_exponent
+        type: number
+        unit: '1'
+        default: 3
+        meaning: as the sample link
+      - path: reference_distance
+        type: number
+        unit: m
+        default: 1
+        min_exclusive: 0
+        meaning: Friis free space up to here
+      - path: wall_loss_db
+        type: number
+        unit: dB
+        default: 10
+        min: 0
+        meaning: per wall (as the sample link)
+        source: illustrative
+    signals:
+      - name: rssi
+        type: scalar_array
+        unit: '1'
+        length_from: access points (at least 1)
+      - name: power
+        type: scalar_array
+        unit: W
+        length_from: access points (at least 1)
+      - name: count
+        type: int
+      - name: valid
+        type: bool
