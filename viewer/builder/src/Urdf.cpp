@@ -39,6 +39,8 @@ using tinyxml2::XMLNode;
 
 constexpr std::string_view kMarker = "lagrange-builder";
 constexpr const char* kDensityAttribute = "lagrange_density";
+/// Addendum A: how the link collides (Link::collision), ignored by the loaders.
+constexpr const char* kCollisionAttribute = "lagrange_collision";
 constexpr const char* kOverridesAttribute = "lagrange_overrides";
 constexpr const char* kSolidAttribute = "lagrange_solid";
 constexpr double kDefaultUpdateRate = 10.0;  // Hz, the server's reader's default (Robot.cpp)
@@ -426,6 +428,9 @@ std::string geometry(const Shape& shape, const WriteOptions& options) {
                    num(shape.size[1]) + "\"/>";
         case Shape::Kind::Sphere:
             return "<sphere radius=\"" + num(shape.size[0]) + "\"/>";
+        case Shape::Kind::Capsule:
+            return "<capsule radius=\"" + num(shape.size[0]) + "\" length=\"" + num(shape.size[1]) +
+                   "\"/>";
         case Shape::Kind::Mesh: {
             std::string text = "<mesh filename=\"" + escape(meshPath(shape.mesh, options)) + "\"";
             if (shape.scale != std::array<double, 3>{1, 1, 1}) {
@@ -490,6 +495,10 @@ void writeLink(Out& out, const Link& link, const WriteOptions& options, Colours&
     std::string open = "<link name=\"" + escape(link.name) + "\"";
     if (link.inertial.density > 0.0) {
         open += std::string(" ") + kDensityAttribute + "=\"" + num(link.inertial.density) + "\"";
+    }
+    if (link.collision != CollisionChoice::Unset) {
+        open += std::string(" ") + kCollisionAttribute + "=\"" +
+                std::string(toString(link.collision)) + "\"";
     }
     out.line(1, open + ">");
     const Kept kept(link.keptXml);
@@ -771,6 +780,14 @@ std::optional<Shape> readGeometry(const XMLElement& element) {
         }
         shape.kind = Shape::Kind::Sphere;
         shape.size = {*r, 0, 0};
+    } else if (kind == "capsule") {
+        const auto r = number(g->Attribute("radius"));
+        const auto l = number(g->Attribute("length"));
+        if (!r || !l) {
+            return std::nullopt;
+        }
+        shape.kind = Shape::Kind::Capsule;
+        shape.size = {*r, *l, 0};
     } else if (kind == "mesh") {
         if (g->Attribute("filename") == nullptr) {
             return std::nullopt;
@@ -813,6 +830,13 @@ struct LinkReader {
         link.name = element.Attribute("name") != nullptr ? element.Attribute("name") : "";
         if (const auto density = number(element.Attribute(kDensityAttribute))) {
             link.inertial.density = *density;
+        }
+        if (const char* choice = element.Attribute(kCollisionAttribute)) {
+            if (const auto parsed = parseCollisionChoice(choice)) {
+                link.collision = *parsed;
+            } else {
+                notes.count("an unknown lagrange_collision is dropped", link.name);
+            }
         }
         std::vector<std::string> kept;
         std::optional<std::size_t> lastVisual, lastCollision;  // shape indices, for merging
@@ -1177,7 +1201,14 @@ std::string writeUrdf(const Document& document, const WriteOptions& options) {
         }
         body.assign(at + 1, kept.nodes.end());
     }
-    out.line(0, "<robot name=\"" + escape(document.robot) + "\">");
+    // A capsule is URDF 1.1: urdfdom ignores it in a 1.0 file (Addendum A), so the version is
+    // written exactly when one is used.
+    const bool capsule = std::ranges::any_of(document.links, [](const Link& link) {
+        return std::ranges::any_of(
+            link.shapes, [](const Shape& shape) { return shape.kind == Shape::Kind::Capsule; });
+    });
+    out.line(0, "<robot name=\"" + escape(document.robot) + "\"" +
+                    (capsule ? " version=\"1.1\"" : "") + ">");
     Colours colours(kept);
     // The body is written into its own buffer first: colours the shapes name for the first
     // time are defined at the top, before it.
@@ -1262,7 +1293,8 @@ ReadResult readUrdf(std::string_view text) {
         notes.add("the <robot> has no name");
     }
     for (const tinyxml2::XMLAttribute* a = robot->FirstAttribute(); a != nullptr; a = a->Next()) {
-        if (std::string_view(a->Name()) != "name") {
+        // The version is written again from what the document uses (1.1 for a capsule).
+        if (std::string_view(a->Name()) != "name" && std::string_view(a->Name()) != "version") {
             notes.add(std::string("attribute ") + a->Name() + " of <robot> is not kept");
         }
     }

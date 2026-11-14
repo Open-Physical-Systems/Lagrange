@@ -9,6 +9,7 @@
 #include "lagrange/viewer/SceneRenderer.hpp"
 #include "lagrange/viewer/SceneStore.hpp"
 #include "lagrange/viewer/ViewerClient.hpp"
+#include "lagrange/viewer/builder/CollisionSplit.hpp"
 #include "lagrange/viewer/builder/SceneAdapter.hpp"
 #include "lagrange/viewer/builder/TestServer.hpp"
 
@@ -122,6 +123,10 @@ private:
     std::uint64_t validatedRevision_{~std::uint64_t{0}};
     std::uint64_t builtRevision_{~std::uint64_t{0}};
     std::uint64_t generation_{0};
+    bool builtCollision_{false};  // the collision toggle the statics were built with
+    // Addendum A: "Split into convex parts" (CoACD) as a polled child process.
+    builder::CollisionSplit split_;
+    void runSplit();
     builder::BuiltScene built_;
     builder::Preview posedPreview_;
     std::shared_ptr<const SceneFrame> frame_;

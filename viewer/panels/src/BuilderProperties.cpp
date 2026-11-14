@@ -5,8 +5,10 @@
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Widgets.hpp"
+#include "lagrange/viewer/builder/Collision.hpp"
 #include "lagrange/viewer/builder/MassProperties.hpp"
 #include "lagrange/viewer/builder/Materials.hpp"
+#include "lagrange/viewer/builder/MeshShapes.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
@@ -301,15 +303,316 @@ private:
             });
         }
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+        collision(session, link);
         mass(session, link);
         keptXml(link.keptXml);
+    }
+
+    // --- collision (RFC 0016 Addendum A) ----------------------------------------------------
+
+    using Change = std::function<void(const std::string&, const std::function<void(Shape&)>&)>;
+
+    /// A mesh shape's file, scale and what it is as a solid.
+    static void meshRows(const Shape& shape, const Change& change) {
+        widgets::PropertyRow("file", shape.mesh.c_str(), nullptr, false, shape.mesh.c_str());
+        double scale[3] = {shape.scale[0], shape.scale[1], shape.scale[2]};
+        if (widgets::Vec3Edit("scale", scale, "%.4g") != 0) {
+            change("scale", [&](Shape& s) { s.scale = {scale[0], scale[1], scale[2]}; });
+        }
+        const bool millimetres = shape.scale == std::array<double, 3>{0.001, 0.001, 0.001};
+        switchRow(
+            "file in mm", millimetres,
+            [&](bool on) {
+                const double k = on ? 0.001 : 1.0;
+                change("scale", [&](Shape& s) { s.scale = {k, k, k}; });
+            },
+            "A file drawn in millimetres: scale 0.001");
+        const std::shared_ptr<const builder::MeshFile> file = builder::loadMesh(shape.mesh);
+        if (!file->error.empty()) {
+            widgets::PropertyRow("solid", "not read", nullptr, false, file->error.c_str());
+            return;
+        }
+        const builder::MeshSolid& solid = file->solid(shape.scale);
+        char what[96];
+        std::snprintf(what, sizeof(what), "%zu triangles · %s", file->welded.triangles.size(),
+                      solid.closed ? "closed" : "not closed: mass of its hull");
+        widgets::PropertyRow("solid", what, nullptr, false,
+                             solid.closed ? "Mass from the closed mesh's volume (Mirtich 1996)"
+                                          : "Not closed: the mass comes from its convex hull");
+        char volume[64];
+        std::snprintf(volume, sizeof(volume), "%s",
+                      builder::formatNumber(solid.unit.mass * 1e6, 4).c_str());
+        widgets::PropertyRow("volume", volume, "cm³");
+    }
+
+    static const char* choiceMeta(builder::CollisionChoice choice) {
+        switch (choice) {
+            case builder::CollisionChoice::Unset:
+                return "as the shapes say";
+            case builder::CollisionChoice::Mesh:
+                return "same as the mesh";
+            case builder::CollisionChoice::Split:
+                return "convex parts";
+            case builder::CollisionChoice::Shapes:
+                return "template shapes";
+            case builder::CollisionChoice::Drawn:
+                return "drawn by hand";
+        }
+        return "";
+    }
+
+    void collision(BuilderSession& session, const Link& link) {
+        using builder::CollisionChoice;
+        if (!widgets::SectionHeader("Collision", choiceMeta(link.collision))) {
+            return;
+        }
+        ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+        const std::string name = link.name;
+        const std::optional<std::size_t> meshIndex = builder::collisionMeshOf(link);
+        struct Option {
+            CollisionChoice choice;
+            const char* id;
+            const char* title;
+            const char* text;
+            bool needsMesh;
+        };
+        static constexpr std::array<Option, 4> kOptions{{
+            {CollisionChoice::Mesh, "##collision-mesh", "Same as the mesh",
+             "collides as the convex hull of its vertices", true},
+            {CollisionChoice::Split, "##collision-split", "Split into convex parts",
+             "CoACD, as lagrange bake; parts beside the file", true},
+            {CollisionChoice::Shapes, "##collision-shapes", "Shapes from templates",
+             "box, cylinder, sphere, capsule; fit to the mesh", false},
+            {CollisionChoice::Drawn, "##collision-drawn", "Drawn by hand",
+             "shapes placed and sized in the Builder view", false},
+        }};
+        const float x = ImGui::GetCursorPosX() + px(8.0F);
+        const float width = ImGui::GetContentRegionAvail().x - px(16.0F);
+        for (const Option& option : kOptions) {
+            ImGui::SetCursorPosX(x);
+            ImGui::BeginDisabled(option.needsMesh && !meshIndex);
+            if (widgets::OptionCard(option.id, option.title, option.text,
+                                    link.collision == option.choice, ImVec2(width, px(50.0F))) &&
+                link.collision != option.choice) {
+                const CollisionChoice choice = option.choice;
+                edit(session, "Collide " + name + ": " + std::string(option.title), {},
+                     [&](Document& next) {
+                         builder::setCollisionChoice(*builder::findLink(next, name), choice);
+                         return true;
+                     });
+                session.view.collision = true;  // show what was chosen
+            }
+            if (option.needsMesh && !meshIndex) {
+                ImGui::SetItemTooltip("Needs a mesh shape on this link (Add → Mesh…)");
+            }
+            ImGui::EndDisabled();
+            ImGui::Dummy(ImVec2(0.0F, px(2.0F)));
+        }
+        ImGui::Dummy(ImVec2(0.0F, px(2.0F)));
+        switch (link.collision) {
+            case CollisionChoice::Unset:
+                widgets::Caption("  Each shape's collision switch decides.");
+                break;
+            case CollisionChoice::Mesh:
+                if (meshIndex) {
+                    hullRows(link.shapes[*meshIndex]);
+                }
+                break;
+            case CollisionChoice::Split:
+                splitRows(session, link);
+                break;
+            case CollisionChoice::Shapes:
+                templateRows(session, link, meshIndex);
+                break;
+            case CollisionChoice::Drawn:
+                drawnRows(session, link);
+                break;
+        }
+        ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+    }
+
+    /// Choice 1: the hull the server collides, and the concave hint.
+    static void hullRows(const Shape& mesh) {
+        const auto file = builder::loadMesh(mesh.mesh);
+        if (!file->error.empty()) {
+            widgets::PropertyRow("hull", "mesh not read", nullptr, false, file->error.c_str());
+            return;
+        }
+        const builder::MeshSolid& solid = file->solid(mesh.scale);
+        if (!solid.hull) {
+            widgets::PropertyRow("hull", "flat: no collider", nullptr);
+            return;
+        }
+        char text[64];
+        std::snprintf(text, sizeof(text), "%zu points · %zu faces", solid.hull->points.size(),
+                      solid.hull->triangles.size());
+        widgets::PropertyRow("hull", text, nullptr, false,
+                             "core/world convexHullOf: the simulator's own hull, at most 256 "
+                             "points");
+        if (solid.closed) {
+            char fill[32];
+            std::snprintf(fill, sizeof(fill), "%.0f", solid.fill * 100.0);
+            widgets::PropertyRow("fills hull", fill, "%");
+        }
+        if (solid.concave) {
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(112.0F));
+            widgets::Pill("concave: its inside will be filled", widgets::PillKind::Warn);
+            ImGui::SetItemTooltip("Split into convex parts, or use shapes, to keep it hollow");
+        }
+    }
+
+    /// Choice 2: threshold, seed, Split, and how the last split went.
+    static void splitRows(BuilderSession& session, const Link& link) {
+        std::string threshold = builder::formatNumber(session.splitThreshold);
+        if (widgets::CommitEdit("threshold", &threshold, nullptr, false,
+                                "CoACD's concavity threshold: smaller gives more, closer parts")) {
+            if (const auto value = builder::parseNumber(threshold); value && *value > 0.0) {
+                session.splitThreshold = *value;
+            }
+        }
+        std::string seed = std::to_string(session.splitSeed);
+        if (widgets::CommitEdit("seed", &seed, nullptr, false,
+                                "CoACD's seed: the same seed gives the same parts")) {
+            if (const auto value = builder::parseNumber(seed); value && *value >= 0.0) {
+                session.splitSeed = static_cast<int>(*value);
+            }
+        }
+        const bool mine = session.split.link == link.name;
+        const bool running = session.split.running;
+        int parts = 0;
+        for (const Shape& shape : link.shapes) {
+            parts += builder::collisionOnly(shape) && shape.kind == Shape::Kind::Mesh ? 1 : 0;
+        }
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(112.0F));
+        if (running && mine) {
+            if (widgets::Button("Cancel", widgets::ButtonKind::Default)) {
+                session.splitCancelRequested = true;
+            }
+        } else {
+            ImGui::BeginDisabled(running || session.path.empty());
+            if (widgets::Button(parts > 0 ? "Split again" : "Split",
+                                widgets::ButtonKind::Primary)) {
+                session.splitRequested = true;
+                session.splitLink = link.name;
+            }
+            ImGui::EndDisabled();
+            if (session.path.empty()) {
+                ImGui::SetItemTooltip("Save the robot first: the parts go beside its file");
+            }
+        }
+        char status[160];
+        if (running && mine) {
+            std::snprintf(status, sizeof(status), "running · %.0f s", session.split.seconds);
+        } else if (mine && session.split.failed) {
+            std::snprintf(status, sizeof(status), "failed");
+        } else {
+            std::snprintf(status, sizeof(status), "%d convex part%s", parts, parts == 1 ? "" : "s");
+        }
+        widgets::PropertyRow(
+            "parts", status, nullptr, false,
+            mine && !session.split.message.empty() ? session.split.message.c_str() : nullptr);
+        if (mine && session.split.failed) {
+            ImGui::PushTextWrapPos(0.0F);
+            widgets::Mono(c::t2, "%s", session.split.message.c_str());
+            ImGui::PopTextWrapPos();
+        }
+        if (session.path.empty()) {
+            widgets::Caption("  Save the robot first: the parts go beside its file.");
+        }
+    }
+
+    /// Choice 3: a template kind, Add, and Fit to mesh.
+    void templateRows(BuilderSession& session, const Link& link,
+                      const std::optional<std::size_t>& meshIndex) {
+        static constexpr std::array<const char*, 4> kKinds{"box", "cylinder", "sphere", "capsule"};
+        static constexpr std::array<Shape::Kind, 4> kShapeKinds{
+            Shape::Kind::Box, Shape::Kind::Cylinder, Shape::Kind::Sphere, Shape::Kind::Capsule};
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(8.0F));
+        (void)widgets::Segmented("##template", kKinds.data(), static_cast<int>(kKinds.size()),
+                                 &templateKind_);
+        const Shape::Kind kind = kShapeKinds.at(static_cast<std::size_t>(templateKind_));
+        const std::string name = link.name;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(8.0F));
+        if (widgets::Button("Add", widgets::ButtonKind::Default, widgets::Icon::Plus)) {
+            edit(session, "Add a collision " + std::string(builder::toString(kind)) + " to " + name,
+                 {}, [&](Document& next) {
+                     (void)builder::addCollisionShape(*builder::findLink(next, name),
+                                                      builder::defaultShape(kind));
+                     return true;
+                 });
+        }
+        ImGui::SetItemTooltip("A collision-only %s at the link's origin",
+                              kKinds.at(static_cast<std::size_t>(templateKind_)));
+        ImGui::SameLine(0.0F, px(6.0F));
+        ImGui::BeginDisabled(!meshIndex);
+        if (widgets::Button("Fit to mesh", widgets::ButtonKind::Primary)) {
+            const std::optional<Shape> fitted = builder::fitToMesh(link.shapes[*meshIndex], kind);
+            if (fitted) {
+                edit(session,
+                     "Fit a collision " + std::string(builder::toString(kind)) + " to " + name, {},
+                     [&](Document& next) {
+                         (void)builder::addCollisionShape(*builder::findLink(next, name), *fitted);
+                         return true;
+                     });
+            }
+        }
+        ImGui::SetItemTooltip(
+            "The tightest box, cylinder or capsule about the mesh's principal axes or its own "
+            "axes; the smallest sphere that encloses it");
+        ImGui::EndDisabled();
+        collisionCount(link);
+    }
+
+    /// Choice 4: shapes to place over the translucent mesh with the view's gizmos.
+    void drawnRows(BuilderSession& session, const Link& link) {
+        static constexpr std::array<std::pair<const char*, Shape::Kind>, 4> kKinds{{
+            {"Box", Shape::Kind::Box},
+            {"Cylinder", Shape::Kind::Cylinder},
+            {"Sphere", Shape::Kind::Sphere},
+            {"Capsule", Shape::Kind::Capsule},
+        }};
+        const std::string name = link.name;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(8.0F));
+        for (std::size_t i = 0; i < kKinds.size(); ++i) {
+            if (i > 0) {
+                ImGui::SameLine(0.0F, px(4.0F));
+            }
+            const auto& [label, kind] = kKinds.at(i);
+            if (widgets::Button(label, widgets::ButtonKind::Default, widgets::Icon::Plus)) {
+                edit(session,
+                     "Draw a collision " + std::string(builder::toString(kind)) + " on " + name, {},
+                     [&](Document& next) {
+                         (void)builder::addCollisionShape(*builder::findLink(next, name),
+                                                          builder::defaultShape(kind));
+                         return true;
+                     });
+            }
+        }
+        ImGui::PushTextWrapPos(0.0F);
+        widgets::Caption(
+            "  Place each over the mesh in the view: Move (W), Rotate (E) and the "
+            "size handles. Several per link.");
+        ImGui::PopTextWrapPos();
+        collisionCount(link);
+    }
+
+    static void collisionCount(const Link& link) {
+        int count = 0;
+        for (const Shape& shape : link.shapes) {
+            count += builder::collisionOnly(shape) ? 1 : 0;
+        }
+        char text[48];
+        std::snprintf(text, sizeof(text), "%d collision shape%s", count, count == 1 ? "" : "s");
+        widgets::PropertyRow("collides as", text, nullptr, false,
+                             "Collision-only shapes: listed above as shapes, edited there");
     }
 
     void shape(BuilderSession& session, const Link& link, std::size_t index) {
         const Shape& shape = link.shapes[index];
         const std::string name = link.name;
         const std::string title = "Shape " + std::to_string(index + 1) + " · " +
-                                  std::string(builder::toString(shape.kind));
+                                  std::string(builder::toString(shape.kind)) +
+                                  (builder::collisionOnly(shape) ? " · collision only" : "");
         if (!widgets::SectionHeader(title.c_str(), "m · deg")) {
             return;
         }
@@ -342,8 +645,17 @@ private:
                     change("radius", [&](Shape& s) { s.size[0] = v->value_or(s.size[0]); });
                 }
                 break;
+            case Shape::Kind::Capsule:
+                if (const auto v = numberRow("radius", shape.size[0], "m", 1.0, nullptr, false)) {
+                    change("radius", [&](Shape& s) { s.size[0] = v->value_or(s.size[0]); });
+                }
+                if (const auto v = numberRow("length", shape.size[1], "m", 1.0, nullptr, false,
+                                             false, "The straight part between the caps")) {
+                    change("length", [&](Shape& s) { s.size[1] = v->value_or(s.size[1]); });
+                }
+                break;
             case Shape::Kind::Mesh:
-                widgets::PropertyRow("file", shape.mesh.c_str(), nullptr);
+                meshRows(shape, change);
                 break;
         }
         builder::Pose origin = shape.origin;
@@ -1044,6 +1356,8 @@ private:
     int differing_{0};
     std::function<void(Document&)> resetDefaults_;
     std::string renameError_;
+    int templateKind_{
+        0};  ///< Collision section, choice 3: the template (box cylinder sphere capsule)
     std::string paramError_;
     std::string newKey_;
 };

@@ -16,5 +16,9 @@ namespace lagrange::viewer::builder {
 [[nodiscard]] MeshData boxMesh(const std::array<double, 3>& size);
 [[nodiscard]] MeshData cylinderMesh(double radius, double length, int segments = 32);
 [[nodiscard]] MeshData sphereMesh(double radius, int segments = 32, int rings = 16);
+/// A capsule along z (Addendum A): `length` is the straight part between the two caps' centres
+/// (URDF's `<capsule length>`); the sphere's tessellation cut at its equator. Not in core (the
+/// server draws a capsule visual as a cylinder): only collision shapes are drawn this way.
+[[nodiscard]] MeshData capsuleMesh(double radius, double length, int segments = 32, int rings = 16);
 
 }  // namespace lagrange::viewer::builder

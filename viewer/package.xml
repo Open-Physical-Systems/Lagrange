@@ -16,6 +16,7 @@
   <depend>libsdl3-dev</depend>
   <depend>tinyxml2</depend>
   <depend>yaml-cpp</depend>
+  <depend>lagrange_meshes</depend>
   <!-- The sensor catalog data file only (RFC 0016 §5, plan R11): no library is linked. -->
   <build_depend>lagrange_sensors</build_depend>
 

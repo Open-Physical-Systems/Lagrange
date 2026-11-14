@@ -6,6 +6,9 @@
 // What URDF has no place for is written as attributes the server's loader (urdfdom, and the
 // <gazebo> reader in server/src/Robot.cpp) ignores:
 // - `<link lagrange_density="2700">`: Inertial::density, kg/m³.
+// - `<robot version="1.1">` when a shape is a capsule (urdfdom reads <capsule> only in 1.1).
+// - `<link lagrange_collision="mesh|split|shapes|drawn">`: Link::collision (Addendum A); a link
+//   whose collision differs from its visual writes them as separate <visual> and <collision>.
 // - `<inertial lagrange_overrides="mass com inertia">`: for a link with a density, the parts of
 //   the <inertial> that are the user's overrides; the others were computed, and are computed
 //   again when the file is read. A file without it (any other URDF) has all three as overrides.

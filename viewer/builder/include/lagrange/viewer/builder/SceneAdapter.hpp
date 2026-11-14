@@ -32,19 +32,38 @@ struct BuiltScene {
     std::vector<Frame> primOffset;
     /// Per prim: the index into Document::sensors it draws (-1: a link or shape prim).
     std::vector<int> primSensor;
+    /// Per prim: the index into its link's shapes it draws (-1: the link's own prim or a
+    /// sensor). Added by Addendum A, so a pick can select one shape (a collision-only shape
+    /// placed by hand, choice 4).
+    std::vector<int> primShape;
+};
+
+/// What buildStatics draws besides the document's visuals (Addendum A).
+struct BuildOptions {
+    /// Every collision shape translucent (the view's collision toggle): primitives as
+    /// themselves, a mesh as the convex hull the server collides. Collision-only shapes are
+    /// drawn translucent either way.
+    bool collision{false};
 };
 
 /// Default colour of a shape with no rgba (Shape::rgba all zero): a neutral light blue-grey,
 /// linear 0..1. The colour of the object, not a UI token.
 inline constexpr std::array<float, 4> kDefaultShapeColor{0.62F, 0.68F, 0.78F, 1.0F};
+/// Colour of collision geometry drawn translucent (Addendum A): a cyan that reads against the
+/// default shape colour, at 0.35 alpha. The colour of an object, not a UI token.
+inline constexpr std::array<float, 4> kCollisionColor{0.25F, 0.70F, 0.90F, 0.35F};
 /// Edge of the cube drawn for a sensor's mount (m), so a sensor can be seen and picked. A view
 /// marker only: it has no mass and does not collide.
 inline constexpr double kSensorMarkerSize = 0.03;
 
-/// One prim per link, a child prim per visual shape (MeshData from Primitives.hpp), one
-/// collider per collision shape; `generation` goes into SceneStatics::generation and must grow
-/// with every rebuild, so the renderer uploads the meshes again.
-[[nodiscard]] BuiltScene buildStatics(const Document& document, std::uint64_t generation);
+/// One prim per link, a child prim per visual shape (MeshData from Primitives.hpp; a mesh file
+/// one per material, read by lagrange_meshes, scale baked in), one collider per collision shape
+/// (a mesh's is its server hull), and the translucent collision prims of `options` last
+/// (typeName "Collision"); `generation` goes into SceneStatics::generation and must grow with
+/// every rebuild, so the renderer uploads the meshes again. Relative mesh paths are read
+/// against meshBase() (MeshShapes.hpp).
+[[nodiscard]] BuiltScene buildStatics(const Document& document, std::uint64_t generation,
+                                      const BuildOptions& options = {});
 
 /// The frame to draw: `scene.statics` unchanged (same pointer), transforms from `links`
 /// (linkFrames, in the root link's frame; the root sits at the world origin). Changing only

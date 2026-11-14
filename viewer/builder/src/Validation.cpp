@@ -1,7 +1,9 @@
 // The builder's own, live validation (RFC 0016 §8.1). One rule per item of §8.1, each with a
 // message that says what is wrong and what to do. The server's loader stays the judge (§8.2).
 #include "TreeCheck.hpp"
+#include "lagrange/viewer/builder/Collision.hpp"
 #include "lagrange/viewer/builder/MassProperties.hpp"
+#include "lagrange/viewer/builder/MeshShapes.hpp"
 #include "lagrange/viewer/builder/SensorCatalog.hpp"
 #include "lagrange/viewer/builder/Validation.hpp"
 
@@ -162,6 +164,9 @@ void checkShapes(Findings& findings, const Link& link) {
                 break;
             case Shape::Kind::Cylinder:
                 bad = !(shape.size[0] > 0.0 && shape.size[1] > 0.0);
+                break;
+            case Shape::Kind::Capsule:
+                bad = !(shape.size[0] > 0.0 && shape.size[1] >= 0.0);
                 break;
             case Shape::Kind::Sphere:
                 bad = !(shape.size[0] > 0.0);
@@ -366,6 +371,72 @@ void checkMesh(Findings& findings, const Link& link, const Shape& shape,
     }
 }
 
+/// Addendum A: what a mesh that is found is as a solid and as a collider. Mesh files are read
+/// (lagrange_meshes) only when found, so checkMesh's message is the only one for a missing file.
+void checkMeshSolid(Findings& findings, const Link& link, const Shape& shape,
+                    const std::filesystem::path& meshBase) {
+    const bool relative = shape.mesh.find("://") == std::string::npos &&
+                          std::filesystem::path(shape.mesh).is_relative();
+    if (shape.mesh.empty() || (relative && meshBase.empty())) {
+        return;
+    }
+    const std::shared_ptr<const MeshFile> file = loadMesh(shape.mesh, meshBase);
+    const std::string where = "link " + inQuotes(link.name) + ": mesh " + inQuotes(shape.mesh);
+    if (!file->error.empty()) {
+        std::error_code missing;
+        if (std::filesystem::is_regular_file(file->path, missing)) {  // a missing one: checkMesh
+            findings.error(link.name, where + " cannot be read (" + file->error + ")");
+        }
+        return;
+    }
+    const MeshSolid& solid = file->solid(shape.scale);
+    if (!solid.hull) {
+        if (shape.collision) {
+            findings.warning(link.name, where +
+                                            " is flat: it has no volume, so the simulator "
+                                            "gives it no collider; choose shapes in Collision");
+        }
+        return;
+    }
+    if (shape.solid && !solid.closed) {
+        findings.warning(link.name,
+                         where +
+                             " is not closed: its mass comes from its convex hull; close it "
+                             "in a modeller or give the link a mass");
+    }
+    if (shape.collision && shape.visual && solid.concave) {
+        findings.hint(link.name,
+                      where +
+                          " is concave: it collides as its convex hull, which fills its "
+                          "inside; choose Split into convex parts or shapes in Collision");
+    }
+}
+
+void checkCollision(Findings& findings, const Link& link) {
+    const std::string name = inQuotes(link.name);
+    for (const Shape& shape : link.shapes) {
+        if (shape.kind == Shape::Kind::Capsule && shape.visual) {
+            findings.hint(link.name, "link " + name +
+                                         ": the simulator draws a capsule visual as "
+                                         "a cylinder; make it collision-only");
+        }
+    }
+    if (link.collision == CollisionChoice::Split &&
+        std::ranges::none_of(link.shapes, [](const Shape& shape) {
+            return collisionOnly(shape) && shape.kind == Shape::Kind::Mesh;
+        })) {
+        findings.warning(link.name, "link " + name +
+                                        " is to be split into convex parts, but "
+                                        "has none yet; press Split in Collision");
+    }
+    if ((link.collision == CollisionChoice::Shapes || link.collision == CollisionChoice::Drawn) &&
+        std::ranges::none_of(link.shapes, &Shape::collision)) {
+        findings.warning(link.name, "link " + name +
+                                        " has no collision shape: it passes "
+                                        "through everything; add a shape");
+    }
+}
+
 // --- sensors -------------------------------------------------------------------------------
 
 std::optional<double> parseNumber(std::string_view text, bool integer) {
@@ -511,8 +582,10 @@ std::vector<Problem> validate(const Document& document, const SensorCatalog* cat
         for (const Shape& shape : link.shapes) {
             if (shape.kind == Shape::Kind::Mesh) {
                 checkMesh(findings, link, shape, meshBase);
+                checkMeshSolid(findings, link, shape, meshBase);
             }
         }
+        checkCollision(findings, link);
         hintCaster(findings, document, link);
     }
     for (const Joint& joint : document.joints) {

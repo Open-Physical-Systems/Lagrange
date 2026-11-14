@@ -51,6 +51,7 @@ void usage() {
         "                         with ctrl+ and shift+: ctrl+b);\n"
         "                         FRAME:wait:connected|build|idle holds the frame count until a\n"
         "                         builder Test is connected, back in Build, or no tool runs\n"
+        "                         FRAME:select:NAME selects a builder link, joint or sensor\n"
         "  --panel <title>        bring this panel in front of its tabs, e.g. Circuit\n"
         "  --select <prim path>   select this prim once the scene arrived, e.g. /amr/base_link\n"
         "  --set-domain <d>=on|off  switch a domain in the profile being edited (repeatable)\n"

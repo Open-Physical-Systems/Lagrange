@@ -85,6 +85,8 @@ const char* shortShape(builder::Shape::Kind kind) {
             return "sphere";
         case builder::Shape::Kind::Mesh:
             return "mesh";
+        case builder::Shape::Kind::Capsule:
+            return "capsule";
     }
     return "box";
 }
