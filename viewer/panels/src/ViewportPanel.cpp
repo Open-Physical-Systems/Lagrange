@@ -3,6 +3,7 @@
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Picking.hpp"
+#include "lagrange/viewer/RadarScale.hpp"
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
@@ -183,6 +184,11 @@ public:
         thermal(context, draw, origin, available);
         flowLegend(context, draw, origin, available);
         airflowLegend(context, draw, origin, available);
+        radarLegend(
+            context, draw, origin, available,
+            legends_.size() +
+                (context.renderOptions->airflow && context.renderOptions->airflowMax > 0.0F ? 1U
+                                                                                            : 0U));
         overlayBox(draw, ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)), text, nullptr);
 
         // Bottom left: the frame's axes as the camera sees them, its convention, and how far
@@ -503,6 +509,53 @@ private:
                       text);
     }
 
+    /// The radar detections' colour scale (RadarScale.hpp): radial velocity on the diverging
+    /// map, approaching to receding, ± the span the app picked for the frame. Above the airflow
+    /// and wind tunnel scales when those are shown too.
+    static void radarLegend(const PanelContext& context, ImDrawList* draw, const ImVec2& origin,
+                            const ImVec2& size, std::size_t below) {
+        const RenderOptions& options = *context.renderOptions;
+        const float span = options.radarVelocitySpan;
+        if (!options.radar || span <= 0.0F) {
+            return;
+        }
+        const theme::Fonts& fonts = theme::fonts();
+        const float small = px(theme::kCaptionSize);
+        const float width = px(200.0F);
+        const float barHeight = px(8.0F);
+        const float top = origin.y + size.y - px(58.0F) - px(56.0F) * static_cast<float>(below);
+        const ImVec2 min(origin.x + size.x - width - px(10.0F), top);
+        const ImVec2 max(min.x + width, min.y + px(48.0F));
+        draw->AddRectFilled(min, max, u32(c::bg1), px(4.0F));
+        draw->AddRect(min, max, u32(c::line), px(4.0F));
+        draw->AddText(fonts.sans, small, ImVec2(min.x + px(8.0F), min.y + px(5.0F)), u32(c::t2),
+                      "radar · radial velocity · m/s");
+        const ImVec2 bar(min.x + px(8.0F), min.y + px(22.0F));
+        const float barWidth = width - px(16.0F);
+        constexpr int kSteps = 32;
+        for (int k = 0; k < kSteps; ++k) {
+            const float t = (static_cast<float>(k) + 0.5F) / kSteps;
+            const std::array<float, 4> colour = radarVelocityColour((t * 2.0F - 1.0F) * span, span);
+            const float x0 = bar.x + barWidth * static_cast<float>(k) / kSteps;
+            const float x1 = bar.x + barWidth * static_cast<float>(k + 1) / kSteps;
+            draw->AddRectFilled(ImVec2(x0, bar.y), ImVec2(x1, bar.y + barHeight),
+                                u32(ImVec4(colour[0], colour[1], colour[2], 1.0F)));
+        }
+        char text[32];
+        std::snprintf(text, sizeof(text), "%+.0f closing", -static_cast<double>(span));
+        draw->AddText(fonts.mono, small, ImVec2(bar.x, bar.y + barHeight + px(3.0F)), u32(c::t3),
+                      text);
+        const float centre = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, "0").x;
+        draw->AddText(fonts.mono, small,
+                      ImVec2(bar.x + barWidth * 0.5F - centre * 0.5F, bar.y + barHeight + px(3.0F)),
+                      u32(c::t3), "0");
+        std::snprintf(text, sizeof(text), "away %+.0f", static_cast<double>(span));
+        const float right = fonts.mono->CalcTextSizeA(small, FLT_MAX, 0.0F, text).x;
+        draw->AddText(fonts.mono, small,
+                      ImVec2(bar.x + barWidth - right, bar.y + barHeight + px(3.0F)), u32(c::t3),
+                      text);
+    }
+
     std::vector<FlowLegend> legends_;
     std::uint64_t legendsOf_{~0ULL};
     static constexpr float kMinimumSpanK = 10.0F;
@@ -582,6 +635,7 @@ private:
         overlays += context.renderOptions->grid ? 1 : 0;
         overlays += context.renderOptions->axes ? 1 : 0;
         overlays += context.renderOptions->sensors ? 1 : 0;
+        overlays += context.renderOptions->radar ? 1 : 0;
         char overlayLabel[40];
         std::snprintf(overlayLabel, sizeof(overlayLabel), "Overlays · %d###overlays", overlays);
         const char* camera =
@@ -672,6 +726,7 @@ private:
             ImGui::MenuItem("Grid", nullptr, &context.renderOptions->grid);
             ImGui::MenuItem("Frame axes", nullptr, &context.renderOptions->axes);
             ImGui::MenuItem("Sensor frustums", nullptr, &context.renderOptions->sensors);
+            ImGui::MenuItem("Radar detections", nullptr, &context.renderOptions->radar);
             // These need data that the server does not send yet.
             for (const char* overlay : {"Contacts and forces", "Planned path", "Field overlays",
                                         "Electrical overlay", "Weather effects"}) {

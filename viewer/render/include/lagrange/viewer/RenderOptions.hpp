@@ -27,6 +27,11 @@ struct RenderOptions {
     bool grid{true};
     bool axes{true};     ///< The frame's X, Y and Z axes at its origin.
     bool sensors{true};  ///< Sensor frustums: each lidar's coverage fan and latest returns.
+    /// Radar detections: each radar's latest scan as boxes coloured by radial velocity and sized
+    /// by RCS, and its field of view as a faint wedge (RadarScale.hpp).
+    bool radar{true};
+    /// m/s, the radar colour scale's half span (set by the app; 0 while no detection is drawn).
+    float radarVelocitySpan{0.0F};
     bool follow{false};  ///< The camera keeps looking at the robot, or at the selection.
 
     Shading shading{Shading::Lit};

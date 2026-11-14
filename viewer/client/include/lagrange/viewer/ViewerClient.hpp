@@ -152,7 +152,11 @@ struct PrimAttributes {
 struct PointCloud {
     std::int64_t simTimeNs{0};
     std::uint32_t count{0};
-    std::vector<float> points;  ///< count x (x, y, z, intensity), in the sensor's frame.
+    /// Floats per point: 4 for a lidar (x, y, z, intensity), 6 for a radar (x, y, z, radial
+    /// velocity m/s positive receding, rcs m², snr linear; RadarScale.hpp).
+    std::uint32_t floats{4};
+    std::vector<float> points;  ///< count x floats, in the sensor's frame.
+    [[nodiscard]] bool radar() const { return floats == 6; }
 };
 
 /// One image of a camera, as RGBA8 rows from the top. Immutable.

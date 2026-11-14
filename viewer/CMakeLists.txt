@@ -25,6 +25,7 @@ add_library(
     client/src/ViewerClient.cpp
     client/src/Circuit.cpp
     client/src/FlowLegend.cpp
+    client/src/RadarScale.cpp
     client/src/SchematicLayout.cpp
 )
 lagrange_target_defaults(lagrange_viewer_client)
@@ -281,6 +282,7 @@ if(BUILD_TESTING)
         client/test/test_schematic_layout.cpp
         client/test/test_profile_draft.cpp
         client/test/test_profile_session.cpp
+        client/test/test_radar_scale.cpp
         client/test/test_recent_list.cpp
         client/test/test_scene_store.cpp
         client/test/test_scene_fuzz.cpp
@@ -347,6 +349,7 @@ if(BUILD_TESTING)
     find_package(ament_cmake_pytest REQUIRED)
     ament_add_pytest_test(test_circuit_roundtrip test/test_circuit_roundtrip.py TIMEOUT 120)
     ament_add_pytest_test(test_viewer_input test/test_viewer_input.py TIMEOUT 180)
+    ament_add_pytest_test(test_radar_view test/test_radar_view.py TIMEOUT 600)
     ament_add_pytest_test(test_builder_input test/test_builder_input.py TIMEOUT 180)
     ament_add_pytest_test(test_builder_gizmo test/test_builder_gizmo.py TIMEOUT 300)
     ament_add_pytest_test(test_builder_view test/test_builder_view.py TIMEOUT 300)

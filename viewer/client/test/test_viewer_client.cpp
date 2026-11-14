@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <initializer_list>
 #include <limits>
 #include <optional>
 #include <string>
@@ -848,6 +849,48 @@ TEST(ViewerClient, WatchedSensorReceivesPointCloudsAndRejectsMalformedOnes) {
     ASSERT_TRUE(server.pump([&] { return stream->rejected() == 2; }));
     EXPECT_EQ(stream->frames(), 1U);
     EXPECT_EQ(stream->latest(), cloud);  // the good frame is still the one shown
+    client.stop();
+}
+
+TEST(ViewerClient, RadarFramesKeepVelocityRcsAndSnr) {
+    FakeServer server;
+    ViewerClient client(server.endpoint());
+    client.start();
+    ASSERT_NO_FATAL_FAILURE(server.handshake());
+    const auto stream = client.watchSensor("/sedan/base_link/front_radar");
+    ASSERT_TRUE(
+        server.pump([&] { return server.countCommands(v1::Command::kSubscribeSensor) == 1; }));
+    const auto frame = [](std::uint32_t count, std::uint32_t stride,
+                          std::initializer_list<const char*> fields,
+                          const std::vector<float>& values) {
+        v1::Envelope envelope;
+        v1::SensorFrame* out = envelope.mutable_sensor_frame();
+        out->set_sensor("/sedan/base_link/front_radar");
+        out->mutable_sim_time()->set_ns(7);
+        out->mutable_points()->set_count(count);
+        out->mutable_points()->set_stride(stride);
+        for (const char* field : fields) {
+            out->mutable_points()->add_fields(field);
+        }
+        out->mutable_points()->mutable_data()->set_inline_(
+            std::string(reinterpret_cast<const char*>(values.data()),  // NOLINT
+                        values.size() * sizeof(float)));
+        return envelope;
+    };
+    const std::vector<float> two{20, 1, 0, -3.5F, 10, 400, 40, -2, 0.5F, 6, 1, 25};
+    server.send(frame(2, 24, {"x", "y", "z", "velocity", "rcs", "snr"}, two));
+    ASSERT_TRUE(server.pump([&] { return stream->frames() == 1; }));
+    const auto cloud = stream->latest();
+    ASSERT_NE(cloud, nullptr);
+    EXPECT_TRUE(cloud->radar());
+    EXPECT_EQ(cloud->floats, 6U);
+    EXPECT_EQ(cloud->count, 2U);
+    EXPECT_EQ(cloud->points, two);
+    // Six floats do not fit a 16-byte stride; unknown fields are not guessed at.
+    server.send(frame(1, 16, {"x", "y", "z", "velocity", "rcs", "snr"}, {1, 2, 3, 4}));
+    server.send(frame(1, 24, {"x", "y", "z", "doppler", "rcs", "snr"}, {1, 2, 3, 4, 5, 6}));
+    ASSERT_TRUE(server.pump([&] { return stream->rejected() == 2; }));
+    EXPECT_EQ(stream->latest(), cloud);
     client.stop();
 }
 

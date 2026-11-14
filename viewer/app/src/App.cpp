@@ -5,6 +5,7 @@
 #include "lagrange/proto/Endpoint.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
+#include "lagrange/viewer/RadarScale.hpp"
 #include "lagrange/viewer/SceneRenderer.hpp"
 #include "lagrange/viewer/ViewerClient.hpp"
 #include "lagrange/viewer/builder/Gizmo.hpp"
@@ -625,6 +626,7 @@ public:
     void renderScene(VkCommandBuffer commands) {
         textures_.record(commands);
         buildSensorOverlays();
+        buildRadarOverlays();
         buildAirflow();
         buildCables();
         followWeather();
@@ -664,15 +666,16 @@ public:
                     renderer_.extent().height,
                     building ? builderHost_.overlayVersion() : sensorOverlayVersion_,
                     options};
+        key.radarOverlays = building ? 0 : radarOverlayVersion_;
         std::swap(heat, renderOptions_.heat);
         const bool moving = !building && !airflowOverlays_.empty();  // particles move every frame
         if (moving || !drawnKey_ || !drawnKey_->same(key)) {
             // In this order, without copying their vertices into one list.
             // The server's overlays belong to its scene: none over the builder's.
-            std::array<std::span<const OverlayLines>, 3> overlays{cableOverlays_, sensorOverlays_,
-                                                                  airflowOverlays_};
+            std::array<std::span<const OverlayLines>, 4> overlays{cableOverlays_, sensorOverlays_,
+                                                                  radarOverlays_, airflowOverlays_};
             if (building) {
-                overlays = {builderHost_.overlays(), {}, {}};
+                overlays = {builderHost_.overlays(), {}, {}, {}};
             }
             renderer_.render(commands, scene.get(), camera, options, overlays);
             drawnKey_ = std::move(key);
@@ -686,6 +689,7 @@ public:
         std::array<double, 8> camera{};
         std::uint32_t width{0}, height{0};
         std::uint64_t sensorOverlays{0};
+        std::uint64_t radarOverlays{0};
         RenderOptions options;  // without its heat patches, which heatVersion stands for
 
         ViewKey(std::shared_ptr<const SceneFrame> f, const std::array<double, 8>& c,
@@ -703,7 +707,8 @@ public:
             const RenderOptions& a = options;
             const RenderOptions& b = k.options;
             return frame == k.frame && camera == k.camera && width == k.width &&
-                   height == k.height && sensorOverlays == k.sensorOverlays && a.grid == b.grid &&
+                   height == k.height && sensorOverlays == k.sensorOverlays &&
+                   radarOverlays == k.radarOverlays && a.radar == b.radar && a.grid == b.grid &&
                    a.axes == b.axes && a.sensors == b.sensors && a.follow == b.follow &&
                    a.shading == b.shading && a.wireframeAvailable == b.wireframeAvailable &&
                    a.realisticAvailable == b.realisticAvailable && a.season == b.season &&
@@ -1062,8 +1067,247 @@ public:
         sensorOverlays_.resize(used);
     }
 
+    /// Radar overlay (Overlays → Radar detections): for each radar of the scene (RadarAPI_1, or
+    /// a custom sensor of kind imaging_radar), its latest detections as wireframe boxes sized by
+    /// RCS, coloured by radial velocity on the diverging scale, each with a tick along its line
+    /// of sight as long as 0.5 s of that velocity (away when receding); and its field of view
+    /// as a faint wedge out to its range, from the attributes the server reports for the prim.
+    void buildRadarOverlays() {
+        constexpr int kBins = 11;                // velocity bands, one batch of lines each
+        constexpr float kSmallestHalfM = 0.20F;  // box half size at −20 dBsm and below
+        constexpr float kLargestHalfM = 0.60F;   // at +20 dBsm and above
+        constexpr float kTickS = 0.5F;           // s of radial velocity the tick shows
+        constexpr int kArcSegments = 32;
+        constexpr float kRingStepM = 50.0F;  // range marks inside the wedge
+        const SceneFrame* frame = scene_.get();
+        if (!renderOptions_.radar || frame == nullptr || !frame->statics) {
+            if (!radarOverlays_.empty()) {
+                radarOverlays_.clear();
+                ++radarOverlayVersion_;
+            }
+            radarDrawnCount_ = 0;
+            renderOptions_.radarVelocitySpan = 0.0F;
+            radarStale_ = true;
+            return;
+        }
+        const SceneStatics& statics = *frame->statics;
+        if (statics.generation != radarGeneration_) {
+            radarGeneration_ = statics.generation;
+            radars_.clear();
+            std::vector<std::uint32_t> prims;
+            for (std::size_t i = 0; i < statics.prims.size(); ++i) {
+                const std::string& type = statics.prims[i].typeName;
+                if (type == "Radar" || type == "CustomSensor") {
+                    // A custom sensor is a radar if the server says so: its kind, or radar frames.
+                    Radar radar;
+                    radar.prim = static_cast<std::uint32_t>(i);
+                    radar.custom = type == "CustomSensor";
+                    radar.stream = client_.watchSensor(statics.prims[i].path);
+                    radars_.push_back(std::move(radar));
+                    prims.push_back(static_cast<std::uint32_t>(i));
+                }
+            }
+            if (!prims.empty()) {
+                client_.requestAttributesOf(prims);  // the fields of view
+            }
+            radarStale_ = true;
+        }
+        // Fields of view, once the attributes arrive.
+        const auto attributes = client_.attributesOf();
+        if (attributes != radarAttributes_) {
+            radarAttributes_ = attributes;
+            for (Radar& radar : radars_) {
+                const auto it = attributes->find(radar.prim);
+                if (it == attributes->end()) {
+                    continue;
+                }
+                const auto number = [&](const char* builtIn, const char* custom) {
+                    const std::string wanted = radar.custom ? custom : builtIn;
+                    for (const AttributeInfo& a : it->second.attributes) {
+                        if (a.name == wanted && !a.numbers.empty()) {
+                            return static_cast<float>(a.numbers.front());
+                        }
+                    }
+                    return 0.0F;
+                };
+                radar.rangeM = number("sensor:radar:rangeMax", "sensor:custom:param:max_range");
+                radar.azimuthFov =
+                    number("sensor:radar:azimuthFov", "sensor:custom:param:azimuth_fov");
+                radar.elevationFov =
+                    number("sensor:radar:elevationFov", "sensor:custom:param:elevation_fov");
+                for (const AttributeInfo& a : it->second.attributes) {
+                    if (a.name == "sensor:custom:kind") {
+                        radar.imaging = a.value == "imaging_radar" ||
+                                        a.value.find("imaging_radar") != std::string::npos;
+                    }
+                }
+            }
+            radarStale_ = true;
+        }
+        bool changed = radarStale_;
+        for (Radar& radar : radars_) {
+            std::shared_ptr<const PointCloud> cloud = radar.stream->latest();
+            if (cloud && !cloud->radar()) {
+                cloud = nullptr;  // not a radar's frames
+            }
+            const Transform pose =
+                radar.prim < frame->transforms.size() ? frame->transforms[radar.prim] : Transform{};
+            if (cloud != radar.cloud || pose.position != radar.pose.position ||
+                pose.rotation != radar.pose.rotation) {
+                changed = true;
+            }
+            radar.cloud = std::move(cloud);
+            radar.pose = pose;
+        }
+        if (!changed) {
+            return;
+        }
+        radarStale_ = false;
+        ++radarOverlayVersion_;
+        // One scale for every radar: the fastest detection drawn, rounded (RadarScale.hpp).
+        float fastest = 0.0F;
+        for (const Radar& radar : radars_) {
+            for (std::uint32_t i = 0; radar.cloud && i < radar.cloud->count; ++i) {
+                const float v = radar.cloud->points[std::size_t{i} * kRadarFloats + 3];
+                if (std::isfinite(v)) {
+                    fastest = std::max(fastest, std::abs(v));
+                }
+            }
+        }
+        const float span = radarVelocitySpan(fastest);
+        radarDrawnCount_ = 0;
+        // Batches are reused (their vectors keep their capacity): no allocation once warmed up.
+        std::size_t used = 0;
+        const auto batch = [&]() -> OverlayLines& {
+            if (used == radarOverlays_.size()) {
+                radarOverlays_.emplace_back();
+            }
+            OverlayLines& lines = radarOverlays_[used++];
+            lines.vertices.clear();
+            return lines;
+        };
+        // The wedge: the sensors' colour, dimmed, so that it stays behind what it frames.
+        const ImVec4 sensors = theme::kDomainColor[static_cast<int>(theme::Domain::Sensors)];
+        constexpr float kFaint = 0.35F;
+        const std::array<float, 4> wedgeColour{sensors.x * kFaint, sensors.y * kFaint,
+                                               sensors.z * kFaint, 1.0F};
+        bool anyDetection = false;
+        for (const Radar& radar : radars_) {
+            const bool isRadar = !radar.custom || radar.imaging || radar.cloud != nullptr;
+            if (!isRadar || radar.prim >= frame->transforms.size()) {
+                continue;
+            }
+            const std::array<float, 4>& q = radar.pose.rotation;
+            const auto rotate = [&q](float x, float y, float z) {
+                // v' = v + 2w (u x v) + 2 u x (u x v), u = (q.x, q.y, q.z)
+                const float tx = 2.0F * (q[2] * z - q[3] * y);
+                const float ty = 2.0F * (q[3] * x - q[1] * z);
+                const float tz = 2.0F * (q[1] * y - q[2] * x);
+                return std::array<float, 3>{x + q[0] * tx + (q[2] * tz - q[3] * ty),
+                                            y + q[0] * ty + (q[3] * tx - q[1] * tz),
+                                            z + q[0] * tz + (q[1] * ty - q[2] * tx)};
+            };
+            // In the sensor frame: azimuth about z (left positive), elevation up.
+            const auto along = [&](float range, float azimuth, float elevation) {
+                const float across = range * std::cos(elevation);
+                return rotate(across * std::cos(azimuth), across * std::sin(azimuth),
+                              range * std::sin(elevation));
+            };
+            const auto segment = [](std::vector<float>& out, const std::array<float, 3>& a,
+                                    const std::array<float, 3>& b) {
+                out.insert(out.end(), {a[0], a[1], a[2], b[0], b[1], b[2]});
+            };
+            if (radar.rangeM > 0.0F && radar.azimuthFov > 0.0F) {
+                OverlayLines& wedge = batch();
+                wedge.origin = radar.pose.position;
+                wedge.color = wedgeColour;
+                const float half = radar.azimuthFov * 0.5F;
+                const float up = radar.elevationFov * 0.5F;
+                const std::array<float, 3> zero{0.0F, 0.0F, 0.0F};
+                // Its top and bottom edges, or the one plane of a radar without elevation.
+                const std::array<float, 2> edges{-up, up};
+                const std::span<const float> levels(edges.data(), up > 0.0F ? 2U : 1U);
+                const auto arc = [&](float range, float elevation) {
+                    for (int k = 0; k < kArcSegments; ++k) {
+                        const float a0 = -half + 2.0F * half * static_cast<float>(k) / kArcSegments;
+                        const float a1 =
+                            -half + 2.0F * half * static_cast<float>(k + 1) / kArcSegments;
+                        segment(wedge.vertices, along(range, a0, elevation),
+                                along(range, a1, elevation));
+                    }
+                };
+                for (const float elevation : levels) {
+                    segment(wedge.vertices, zero, along(radar.rangeM, -half, elevation));
+                    segment(wedge.vertices, zero, along(radar.rangeM, half, elevation));
+                    arc(radar.rangeM, elevation);
+                }
+                if (levels.size() == 2) {
+                    for (const float side : {-half, half}) {
+                        segment(wedge.vertices, along(radar.rangeM, side, -up),
+                                along(radar.rangeM, side, up));
+                    }
+                }
+                for (float r = kRingStepM; r < radar.rangeM; r += kRingStepM) {
+                    arc(r, 0.0F);
+                }
+            }
+            if (!radar.cloud || radar.cloud->count == 0) {
+                continue;
+            }
+            // One batch per velocity band; their indices are taken before any is written.
+            const std::size_t first = used;
+            for (int b = 0; b < kBins; ++b) {
+                OverlayLines& lines = batch();
+                lines.origin = radar.pose.position;
+                lines.color = radarVelocityColour(radarBinVelocity(b, kBins, span), span);
+            }
+            for (std::uint32_t i = 0; i < radar.cloud->count; ++i) {
+                const float* p = &radar.cloud->points[std::size_t{i} * kRadarFloats];
+                if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2])) {
+                    continue;
+                }
+                std::vector<float>& out =
+                    radarOverlays_[first +
+                                   static_cast<std::size_t>(radarVelocityBin(p[3], span, kBins))]
+                        .vertices;
+                const std::array<float, 3> at = rotate(p[0], p[1], p[2]);
+                const float h =
+                    kSmallestHalfM + (kLargestHalfM - kSmallestHalfM) * radarRcsFraction(p[4]);
+                // A box's twelve edges, axis aligned in the world.
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    const std::size_t u = (axis + 1) % 3;
+                    const std::size_t w = (axis + 2) % 3;
+                    for (const float su : {-h, h}) {
+                        for (const float sw : {-h, h}) {
+                            std::array<float, 3> a = at;
+                            a[axis] -= h;
+                            a[u] += su;
+                            a[w] += sw;
+                            std::array<float, 3> b = a;
+                            b[axis] += 2.0F * h;
+                            segment(out, a, b);
+                        }
+                    }
+                }
+                // The Doppler tick, along the line of sight.
+                const float range = std::hypot(p[0], p[1], p[2]);
+                if (range > 0.0F && std::isfinite(p[3])) {
+                    const float k = p[3] * kTickS / range;
+                    const std::array<float, 3> d = rotate(p[0] * k, p[1] * k, p[2] * k);
+                    segment(out, at, {at[0] + d[0], at[1] + d[1], at[2] + d[2]});
+                }
+                ++radarDrawnCount_;
+                anyDetection = true;
+            }
+        }
+        radarOverlays_.resize(used);
+        renderOptions_.radarVelocitySpan = anyDetection ? span : 0.0F;
+    }
+
     [[nodiscard]] const std::shared_ptr<const SceneFrame>& scene() const { return scene_; }
     [[nodiscard]] std::uint32_t drawCalls() const { return renderer_.lastDrawCount(); }
+    /// Radar detections in the 3D view's overlay as last built (the headless report).
+    [[nodiscard]] std::size_t radarDetectionsDrawn() const { return radarDrawnCount_; }
     /// How many times the 3D view was drawn (it is not when nothing in it changed).
     [[nodiscard]] std::uint64_t viewsDrawn() const { return viewsDrawn_; }
     void setCanOpenFiles(bool value) { canOpenFiles_ = value; }
@@ -1232,6 +1476,8 @@ public:
         renderOptions_.axes = renderOptions_.axes || names.find("axes") != std::string::npos;
         renderOptions_.sensors =
             renderOptions_.sensors || names.find("sensors") != std::string::npos;
+        renderOptions_.radar = renderOptions_.radar || names.find("sensors") != std::string::npos ||
+                               names.find("radar") != std::string::npos;
         renderOptions_.airflow =
             renderOptions_.airflow || names.find("airflow") != std::string::npos;
     }
@@ -1256,6 +1502,7 @@ public:
             renderOptions_.grid = false;
             renderOptions_.axes = false;
             renderOptions_.sensors = false;
+            renderOptions_.radar = false;
         } else if (name == "lit") {
             renderOptions_.shading = Shading::Lit;
         } else if (name == "unlit") {
@@ -1369,6 +1616,22 @@ private:
         float lowest{1e9F}, highest{-1e9F};  // the scan's bearings, rad
     };
     std::vector<LidarDrawn> lidarDrawn_;
+    struct Radar {  // per radar prim: its frames, field of view and what was drawn of it
+        std::uint32_t prim{0};
+        bool custom{false};   // a CustomSensor prim: a radar only when imaging or sending radar
+        bool imaging{false};  // its sensor:custom:kind is imaging_radar
+        std::shared_ptr<SensorStream> stream;
+        std::shared_ptr<const PointCloud> cloud;
+        Transform pose;
+        float rangeM{0.0F}, azimuthFov{0.0F}, elevationFov{0.0F};  // m, rad; 0: not known
+    };
+    std::vector<Radar> radars_;
+    std::uint64_t radarGeneration_{0};
+    std::shared_ptr<const std::map<std::uint32_t, PrimAttributes>> radarAttributes_;
+    std::vector<OverlayLines> radarOverlays_;
+    std::uint64_t radarOverlayVersion_{0};
+    std::size_t radarDrawnCount_{0};  // detections in radarOverlays_ (the headless report)
+    bool radarStale_{true};
     bool sensorOverlaysStale_{true};
     std::uint64_t sensorOverlayVersion_{0};  // counts the rebuilds of sensorOverlays_
     std::optional<ViewKey> drawnKey_;
@@ -1834,7 +2097,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             "\"wiring_wires\": %zu, \"events\": %zu, \"server_stats\": %s, "
             "\"environment_fields\": %zu, \"ros_topics\": %zu, \"ros_nodes\": %zu, "
             "\"world_tiles\": %zu, \"world_agents\": %zu, \"shading\": %d, "
-            "\"workspace\": \"%s\", \"launcher\": %s, \"windows\": %s, \"builder\": %s}\n",
+            "\"workspace\": \"%s\", \"launcher\": %s, \"windows\": %s, \"builder\": %s, "
+            "\"radar_detections\": %zu}\n",
             jsonEscape(client.notice().text).c_str(), client.notice().error ? "true" : "false",
             rendered, static_cast<unsigned long long>(stats.snapshots),
             static_cast<unsigned long long>(stats.deltas),
@@ -1865,7 +2129,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             client.world() ? client.world()->agents.size() : std::size_t{0},
             static_cast<int>(ui.shading()), toString(ui.workspace()),
             ui.launcherActive() ? "true" : "false", visibleWindowsJson().c_str(),
-            ui.builderReport().c_str());
+            ui.builderReport().c_str(), ui.radarDetectionsDrawn());
         if (device->validationErrorCount() != 0 && exitCode == 0) {
             exitCode = 6;
         }

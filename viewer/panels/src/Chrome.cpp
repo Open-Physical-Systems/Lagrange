@@ -53,7 +53,7 @@ constexpr std::array<WorkspaceEntry, 11> kWorkspaces{{
      ImGuiKey_3, "Ctrl+3", "04-electrical"},
     {Workspace::Signals, "Signals", widgets::Icon::Signals, "lagrange-dock-signals-3", ImGuiKey_4,
      "Ctrl+4", "05-signals"},
-    {Workspace::Sensors, "Sensors", widgets::Icon::Sensors, "lagrange-dock-sensors-1", ImGuiKey_5,
+    {Workspace::Sensors, "Sensors", widgets::Icon::Sensors, "lagrange-dock-sensors-2", ImGuiKey_5,
      "Ctrl+5", "06-sensors"},
     {Workspace::Environment, "Environment", widgets::Icon::Environment,
      "lagrange-dock-environment-1", ImGuiKey_6, "Ctrl+6", "07-environment"},
@@ -229,8 +229,9 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
             centre, ImGuiDir_Left, fraction(260.0F, size.x), nullptr, &centre);
         const ImGuiID right = ImGui::DockBuilderSplitNode(
             centre, ImGuiDir_Right, fraction(320.0F, size.x - px(260.0F)), nullptr, &centre);
-        const ImGuiID imu =
-            ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.40F, nullptr, &centre);
+        ImGuiID imu = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.40F, nullptr, &centre);
+        // The bottom of the grid: IMU | radar (the design's magnetometer place, not built yet).
+        const ImGuiID radar = ImGui::DockBuilderSplitNode(imu, ImGuiDir_Right, 0.5F, nullptr, &imu);
         // The top of the 2x2 grid: lidar | camera.
         const ImGuiID camera =
             ImGui::DockBuilderSplitNode(centre, ImGuiDir_Right, 0.5F, nullptr, &centre);
@@ -238,6 +239,7 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         ImGui::DockBuilderDockWindow("###Lidar", centre);
         ImGui::DockBuilderDockWindow("###Camera", camera);
         ImGui::DockBuilderDockWindow("###Imu", imu);
+        ImGui::DockBuilderDockWindow("###Radar", radar);
         ImGui::DockBuilderDockWindow("Degradation", right);
     } else if (workspace == Workspace::Domains) {
         // Design: Domains 520 px left, Profile 420 px right; between them the wiring over a

@@ -588,6 +588,41 @@ TEST_F(SedanServerTest, TheCarDrivesItsDemoCircleOnItsTyres) {
     EXPECT_TRUE(server_->validateProfile(yaml).valid);
 }
 
+// The front radar's scans reach a viewer that watches it, as points with their Doppler.
+TEST_F(SedanServerTest, RadarFramesCarryDetectionsWithVelocity) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    v1::Envelope watch = command(4);
+    watch.mutable_command()->mutable_subscribe_sensor()->set_sensor("/sedan/base_link/front_radar");
+    watch.mutable_command()->mutable_subscribe_sensor()->set_enabled(true);
+    send(watch);
+    v1::Envelope step = command(5);
+    step.mutable_command()->mutable_step()->set_duration_ns(1'000'000'000);
+    send(step);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) {
+        return e.has_sensor_frame() && e.sensor_frame().points().count() > 0;
+    }));
+    const v1::SensorFrame& frame = received_.back().sensor_frame();
+    EXPECT_EQ(frame.sensor(), "/sedan/base_link/front_radar");
+    const v1::PointCloudData& cloud = frame.points();
+    ASSERT_EQ(cloud.fields_size(), 6);
+    EXPECT_EQ(cloud.fields(3), "velocity");
+    EXPECT_EQ(cloud.fields(4), "rcs");
+    EXPECT_EQ(cloud.fields(5), "snr");
+    EXPECT_EQ(cloud.stride(), 24U);
+    ASSERT_EQ(cloud.data().inline_().size(), cloud.count() * 24U);
+    for (std::uint32_t i = 0; i < cloud.count(); ++i) {
+        std::array<float, 6> p{};
+        std::memcpy(p.data(), cloud.data().inline_().data() + std::size_t{i} * 24, sizeof(p));
+        const float range = std::hypot(p[0], p[1], p[2]);
+        EXPECT_GT(range, 0.0F);
+        EXPECT_LE(range, 150.0F * 1.01F);                    // sensor:radar:rangeMax
+        EXPECT_LE(std::abs(std::atan2(p[1], p[0])), 0.80F);  // ±45° and a little noise
+        EXPECT_TRUE(std::isfinite(p[3]));                    // radial velocity
+        EXPECT_GT(p[4], 0.0F);                               // rcs
+        EXPECT_GT(p[5], 10.0F);                              // snr over its 10 dB threshold
+    }
+}
+
 /// The cut-in scenario with the sedan as its ego, on the scenario's own roads.
 class ScenarioServerTest : public ServerTest {
 protected:

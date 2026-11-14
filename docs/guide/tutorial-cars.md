@@ -86,7 +86,9 @@ sim.read("sensor/front_camera/exposure_time")  # what auto exposure chose, about
 
 The radar's detections (`sensor/front_radar/detections`: range, azimuth, elevation, radial
 velocity, cross-section, SNR) are mostly the buildings' walls, one per range cell, and the cars;
-over ROS they are a PointCloud2 on `/front_radar/detections`. The camera's
+over ROS they are a PointCloud2 on `/front_radar/detections`. In the viewer, Overlays → Radar
+detections draws them in the 3D view coloured by radial velocity (blue closing, orange moving
+away), and the Sensors workspace shows them over range and azimuth. The camera's
 `/front_camera/camera_info` carries its lens distortion.
 
 `--domain vehicle_dynamics=off` swaps the tyre and suspension model for a kinematic bicycle,
