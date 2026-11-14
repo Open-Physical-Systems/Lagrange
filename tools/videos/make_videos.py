@@ -1375,6 +1375,261 @@ def wind_tunnel_wake(out_dir: Path, keep: bool) -> None:
         shutil.rmtree(work)
 
 
+# --- the robot builder: the viewer drives itself (--input), no server of the clip's own ----------
+
+
+@dataclass
+class Script:
+    """A headless viewer's --input, written as a person would act, one viewer frame per video frame.
+
+    With --record-fps above the frame rate every frame the viewer counts is written, so an event
+    at frame N is the clip's frame N: the captions and the drawn pointer follow the same count.
+    Frames held by a wait (the test server starting) are neither counted nor written.
+    """
+
+    frame: int = 3
+    events: list[str] = field(default_factory=list)
+    pointer: list[tuple[int, float, float, bool]] = field(default_factory=list)  # frame, x, y, down
+    captions: list[tuple[int, str]] = field(default_factory=list)
+    at: tuple[float, float] = (800.0, 500.0)
+
+    def caption(self, text: str) -> None:
+        self.captions.append((self.frame, text))
+
+    def pause(self, frames: int) -> None:
+        self.frame += frames
+
+    def move(self, x: float, y: float, glide: int = 8) -> None:
+        """Glide the pointer there over `glide` frames."""
+        x0, y0 = self.at
+        for i in range(1, glide + 1):
+            px, py = x0 + (x - x0) * i / glide, y0 + (y - y0) * i / glide
+            self.events.append(f"{self.frame}:move:{px:.0f},{py:.0f}")
+            self.pointer.append((self.frame, px, py, False))
+            self.frame += 1
+        self.at = (x, y)
+
+    def click(self, x: float, y: float, glide: int = 8, after: int = 6) -> None:
+        self.move(x, y, glide)
+        self.events.append(f"{self.frame}:click:{x:.0f},{y:.0f}")
+        self.pointer.append((self.frame + 1, x, y, True))
+        self.pointer.append((self.frame + 2, x, y, False))
+        self.frame += 3 + after
+
+    def drag(self, start: tuple[float, float], to: tuple[float, float], frames: int) -> None:
+        self.move(*start)
+        self.events.append(f"{self.frame}:down")
+        self.pointer.append((self.frame, *start, True))
+        self.frame += 2
+        for i in range(1, frames + 1):
+            px = start[0] + (to[0] - start[0]) * i / frames
+            py = start[1] + (to[1] - start[1]) * i / frames
+            self.events.append(f"{self.frame}:move:{px:.0f},{py:.0f}")
+            self.pointer.append((self.frame, px, py, True))
+            self.frame += 1
+        self.events.append(f"{self.frame}:up")
+        self.pointer.append((self.frame, *to, False))
+        self.at = to
+        self.frame += 4
+
+    def type(self, text: str, per: int = 2) -> None:
+        """One character every `per` frames, as typed; all at once with per = 0."""
+        if per == 0:
+            self.events.append(f"{self.frame}:text:{text}")
+            self.frame += 1
+            return
+        for character in text:
+            self.events.append(f"{self.frame}:text:{character}")
+            self.frame += per
+
+    def key(self, name: str, after: int = 3) -> None:
+        self.events.append(f"{self.frame}:key:{name}")
+        self.frame += 2 + after
+
+    def select(self, name: str, after: int = 4) -> None:
+        """Select a link, joint or sensor by name, as a click on its row in the tree does."""
+        self.events.append(f"{self.frame}:select:{name}")
+        self.frame += 1 + after
+
+    def wait(self, what: str) -> None:
+        self.events.append(f"{self.frame}:wait:{what}")
+        self.frame += 1
+
+
+# Where things are at 1600 x 1000 in the Builder's default layout with a new robot open
+# (viewer/test/test_builder_acceptance.py and the other test_builder_*.py).
+B_VIEW = (760, 450)
+B_ADD_MATERIAL, B_PLA = (120, 905), (160, 932)
+B_BOX, B_CYLINDER, B_MESH = (40, 835), (101, 835), (225, 835)
+B_MESH_PATH, B_MESH_ADD = (400, 920), (280, 971)
+B_BOX_JOINT = (115, 221)  # "fixed · box" on box_link's row: selects its joint
+B_REVOLUTE = (1425, 272)
+B_AXIS_Y, B_LOWER = (1475, 448), (1470, 517)
+B_SLIDER = (562, 812)  # the first moving joint's slider at zero, in Joints
+B_CATALOG, B_FILTER, B_FIRST_ADD = (860, 763), (950, 793), (1205, 845)
+B_SHAPE_TRANSLATE_X = (1400, 401)  # a mesh link's Properties: its shape's translate
+B_SAME_AS_MESH = (1415, 648)
+B_TEST = (1430, 48)
+
+
+def builder_script(mesh: Path) -> Script:
+    s = Script()
+    s.caption("lagrange viewer --workspace builder: a new robot is one link, a box")
+    s.pause(30)
+    s.move(*B_VIEW, glide=1)
+    s.events.append(f"{s.frame}:wheel:3")  # closer in
+    s.pause(12)
+    s.caption("Add: a material for the next parts (PLA, 1240 kg/m³), the mass follows")
+    s.click(*B_ADD_MATERIAL)
+    s.click(*B_PLA, after=12)
+    s.caption("Add → Box: a link on the selected one, by a joint")
+    s.click(*B_BOX, after=18)
+    s.caption("Add → Cylinder, on the box")
+    s.click(*B_CYLINDER, after=18)
+    s.caption("The box's joint: revolute about y, limits -90 … 90°, 2 N·m, 3 rad/s")
+    s.click(*B_BOX_JOINT, after=8)
+    s.click(*B_REVOLUTE, after=8)
+    s.click(*B_AXIS_Y, after=2)
+    s.key("ctrl+a")
+    s.type("1")
+    s.key("tab")
+    s.key("ctrl+a")
+    s.type("0")
+    s.key("enter", after=6)
+    s.click(*B_LOWER, after=2)
+    for value, last in (("-90", False), ("90", False), ("2", False), ("3", True)):
+        s.type(value)
+        s.key("enter" if last else "tab", after=4)
+    s.pause(8)
+    s.caption("Joints: drag its slider, the view poses the robot (no physics, no undo step)")
+    s.drag(B_SLIDER, (B_SLIDER[0] + 30, B_SLIDER[1]), 14)
+    s.pause(6)
+    s.drag((B_SLIDER[0] + 30, B_SLIDER[1]), (B_SLIDER[0] - 26, B_SLIDER[1]), 22)
+    s.pause(6)
+    s.drag((B_SLIDER[0] - 26, B_SLIDER[1]), B_SLIDER, 10)
+    s.pause(10)
+    s.caption("Sensor catalog: a lidar on the cylinder")
+    s.select("cylinder_link")
+    s.click(*B_CATALOG, after=4)
+    s.click(*B_FILTER, after=2)
+    s.type("lidar")
+    s.move(B_FIRST_ADD[0] - 200, B_FIRST_ADD[1])
+    s.click(*B_FIRST_ADD, after=20)
+    s.caption("… and a rangefinder on the box, its range, rate and noise in Properties")
+    s.select("box_link")
+    s.click(*B_FILTER, after=4)
+    s.key("ctrl+a")
+    s.type("rangefinder")
+    s.move(B_FIRST_ADD[0] - 200, B_FIRST_ADD[1])
+    s.click(*B_FIRST_ADD, after=24)
+    s.caption("Add → Mesh…: an L-shaped part from an OBJ file, on base_link")
+    s.select("base_link")
+    s.click(*B_MESH, after=4)
+    s.click(*B_MESH_PATH, after=2)
+    s.type(str(mesh), per=0)
+    s.pause(6)
+    s.key("enter", after=4)
+    s.click(*B_MESH_ADD, after=10)
+    s.click(*B_SHAPE_TRANSLATE_X, after=2)
+    for value, last in (("0.15", False), ("-0.1", False), ("-0.1", True)):
+        s.key("ctrl+a")
+        s.type(value)
+        s.key("enter" if last else "tab", after=4)
+    s.pause(6)
+    s.caption(
+        "Collision: same as the mesh collides as its convex hull (outlined), the notch filled"
+    )
+    s.click(*B_SAME_AS_MESH, after=40)
+    s.caption(
+        "Test · empty world: its own lagrange_server runs the robot; the free joint tips over"
+    )
+    s.click(*B_TEST, after=0)
+    s.wait("connected")
+    s.pause(30)
+    s.caption("Joints, while testing: the slider commands the joint, the simulated robot moves")
+    s.drag(B_SLIDER, (B_SLIDER[0] + 30, B_SLIDER[1]), 14)
+    s.pause(36)
+    s.drag((B_SLIDER[0] + 30, B_SLIDER[1]), (B_SLIDER[0] - 26, B_SLIDER[1]), 20)
+    s.pause(36)
+    s.caption("Back to Build (Esc): the test server stops, the document is as it was")
+    s.key("escape", after=0)
+    s.wait("build")
+    s.pause(40)
+    return s
+
+
+def pointer_arrow(draw: ImageDraw.ImageDraw, x: float, y: float, down: bool) -> None:
+    """A mouse pointer at (x, y) of the picture; a ring while the button is down."""
+    if down:
+        draw.ellipse((x - 14, y - 14, x + 14, y + 14), outline=(255, 160, 80), width=3)
+    shape = [(0, 0), (0, 17), (4, 13), (7, 20), (10, 19), (7, 12), (12, 12)]
+    points = [(x + px, y + py) for px, py in shape]
+    draw.polygon(points, fill=(250, 250, 250), outline=(10, 10, 10))
+
+
+def builder_clip(out_dir: Path, keep: bool) -> None:
+    """The Builder: a robot made from nothing, tested in its own simulator, and back."""
+    print("builder", flush=True)
+    work = Path(tempfile.mkdtemp(prefix="lagrange_video_builder_"))
+    mesh = work / "l_bracket.obj"
+    # An L-shaped prism, 0.2 by 0.2 by 0.05 m with a 0.08 m arm: closed and concave
+    # (viewer/test/test_builder_acceptance.py write_ell).
+    outline = [(0, 0), (0.2, 0), (0.2, 0.08), (0.08, 0.08), (0.08, 0.2), (0, 0.2)]
+    n = len(outline)
+    vertices = [(x, y, 0.0) for x, y in outline] + [(x, y, 0.05) for x, y in outline]
+    fan = [(0, 1, 2), (0, 2, 3), (0, 3, 4), (0, 4, 5)]
+    faces = [(a, c, b) for a, b, c in fan] + [(a + n, b + n, c + n) for a, b, c in fan]
+    for i in range(n):
+        j = (i + 1) % n
+        faces += [(i, j, j + n), (i, j + n, i + n)]
+    lines = [f"v {x:g} {y:g} {z:g}" for x, y, z in vertices]
+    lines += [f"f {a + 1} {b + 1} {c + 1}" for a, b, c in faces]
+    mesh.write_text("\n".join(lines) + "\n")
+    robot = work / "my_robot.urdf"
+    shutil.copy(ROOT / "viewer" / "test" / "builder" / "empty.urdf", robot)
+    script = builder_script(mesh)
+    frames = work / "frames"
+    env = dict(os.environ, HOME=str(work), XDG_CONFIG_HOME=str(work / "cfg"),
+               XDG_STATE_HOME=str(work / "state"))  # fmt: skip
+    done = subprocess.run(
+        ["ros2", "run", "lagrange_viewer", "lagrange_viewer", "--headless", "--size", "1600x1000",
+         "--workspace", "builder", "--builder-open", str(robot), "--input",
+         ";".join(script.events), "--record-frames", str(frames), "--record-fps", "1000",
+         "--frames", str(script.frame)],
+        env=env, cwd=work, capture_output=True, text=True, check=False,
+    )  # fmt: skip
+    if done.returncode != 0:
+        raise SystemExit(f"the viewer failed: {done.stderr[-2000:]}")
+    finished = work / "finished"
+    finished.mkdir()
+    title = "The robot builder: make a robot in the viewer, test it, save a URDF"
+    scale = SIZE[0] / 1600
+    pointer = sorted(script.pointer)
+    p = 0
+    where = (800.0, 500.0, False)
+    for index, frame in enumerate(sorted(frames.glob("frame_*.png"))):
+        while p < len(pointer) and pointer[p][0] <= index:
+            where = pointer[p][1:]
+            p += 1
+        image = Image.open(frame).convert("RGB")
+        size = (SIZE[0], round(image.height * scale))
+        whole = Image.new("RGB", (SIZE[0], size[1] + 64), (16, 18, 22))
+        whole.paste(image.resize(size, Image.Resampling.LANCZOS), (0, 0))
+        draw = ImageDraw.Draw(whole)
+        pointer_arrow(draw, where[0] * scale, where[1] * scale, where[2])
+        line = next((text for at, text in reversed(script.captions) if at <= index), "")
+        draw.text((16, size[1] + 6), title, font=font(20), fill=(235, 235, 235))
+        draw.text((16, size[1] + 34), line, font=font(17), fill=(120, 200, 255))
+        whole.save(finished / f"c_{index:05d}.png")
+        frame.unlink()  # disk: the composed frame is all that is needed now
+    out_dir.mkdir(parents=True, exist_ok=True)
+    encode(finished, FPS, out_dir / "builder.mp4")
+    if keep:
+        print(f"  frames in {finished}")
+    else:
+        shutil.rmtree(work)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("clips", nargs="*", help="names; all by default")
@@ -1383,13 +1638,15 @@ def main() -> int:
     args = parser.parse_args()
     known = {clip.name: clip for clip in CLIPS}
     for name in args.clips:
-        if name not in known and name != "wind_tunnel_wake":
+        if name not in known and name not in ("wind_tunnel_wake", "builder"):
             raise SystemExit(f"no clip {name}; one of {', '.join(known)}")
     for clip in CLIPS:
         if not args.clips or clip.name in args.clips:
             record(clip, args.out, args.keep)
     if not args.clips or "wind_tunnel_wake" in args.clips:
         wind_tunnel_wake(args.out, args.keep)
+    if not args.clips or "builder" in args.clips:
+        builder_clip(args.out, args.keep)
     return 0
 
 
