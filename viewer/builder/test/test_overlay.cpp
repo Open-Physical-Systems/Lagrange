@@ -216,14 +216,42 @@ TEST(Overlay, FormsMatchTheElectricalSchema) {
                 const std::string first = text.substr(0, text.find('(', 1));
                 EXPECT_EQ(first.find(" = "), std::string::npos) << schema << " " << name;
             }
-            EXPECT_EQ(field.required, text.find("Required.") != std::string::npos)
-                << schema << " " << name;
+            // "Required." or "Required, above zero."; "Required unless …" and "Required for a
+            // fuse." are conditions checkOverlay applies, not plain requirements.
+            const bool required = text.find("Required.") != std::string::npos ||
+                                  text.find("Required,") != std::string::npos;
+            EXPECT_EQ(field.required, required) << schema << " " << name;
+            if (field.type == OverlayField::Type::Token) {
+                for (const std::string_view token : field.tokens) {
+                    EXPECT_NE(text.find("\"" + std::string(token) + "\""), std::string::npos)
+                        << schema << " " << name << " " << token;
+                }
+            }
         }
     };
     check("BatteryAPI_1", batteryFields());
     check("ElectricalBusAPI_1", busFields());
     check("ElectricalMotorAPI_1", motorFields());
     check("PortAPI_1", portFields());
+    check("ElectricalLoadAPI_1", loadFields());
+    check("ElectricalConverterAPI_1", converterFields());
+    check("ElectricalBranchAPI_1", branchFields());
+    // Every attribute the schema declares for these three has a field (none left out).
+    for (const auto& [schema, fields] : {std::pair{"ElectricalLoadAPI_1", loadFields()},
+                                         std::pair{"ElectricalConverterAPI_1", converterFields()},
+                                         std::pair{"ElectricalBranchAPI_1", branchFields()}}) {
+        const std::size_t cls = usda.find(std::string("class \"") + schema + "\"");
+        const std::size_t end = usda.find("\nclass ", cls + 1);
+        const std::string body = usda.substr(cls, end == std::string::npos ? end : end - cls);
+        const std::regex attribute("\\n    (uniform )?[a-z]+(\\[\\])? (elec:[A-Za-z:0-9]+)");
+        std::size_t declared = 0;
+        for (auto it = std::sregex_iterator(body.begin(), body.end(), attribute);
+             it != std::sregex_iterator(); ++it) {
+            ++declared;
+            EXPECT_NE(overlayField(schema, (*it)[3].str()), nullptr) << schema << " " << (*it)[3];
+        }
+        EXPECT_EQ(declared, fields.size()) << schema;
+    }
 }
 
 TEST(Overlay, FieldChecks) {
@@ -248,6 +276,22 @@ TEST(Overlay, FieldChecks) {
     EXPECT_EQ(displayUnit("ohm"), "Ω");
     EXPECT_EQ(displayUnit("N.m/A"), "N·m/A");
     EXPECT_EQ(displayUnit("kg.m2"), "kg·m²");
+    EXPECT_EQ(displayUnit("A2.s"), "A²·s");
+    // A converter's efficiency is (0, 1], as the loader has it.
+    const OverlayField* eta = overlayField(kConverterSchema, "elec:conv:efficiency");
+    ASSERT_NE(eta, nullptr);
+    EXPECT_NE(checkField(*eta, "0"), "");
+    EXPECT_EQ(checkField(*eta, "1"), "");
+    EXPECT_EQ(checkField(*eta, "0.9"), "");
+    EXPECT_NE(checkField(*eta, "1.1"), "");
+    const OverlayField* kind = overlayField(kBranchSchema, "elec:branch:kind");
+    EXPECT_EQ(checkField(*kind, "fuse"), "");
+    EXPECT_NE(checkField(*kind, "relay"), "");
+    EXPECT_TRUE(branchFieldApplies("fuse", "elec:branch:i2tRating"));
+    EXPECT_FALSE(branchFieldApplies("switch", "elec:branch:i2tRating"));
+    EXPECT_TRUE(branchFieldApplies("diode", "elec:branch:forwardDrop"));
+    EXPECT_TRUE(branchFieldApplies("switch", "elec:branch:initialState"));
+    EXPECT_TRUE(branchFieldApplies("resistor", "elec:branch:resistance"));
 }
 
 // --- the power system on rover_mk1 ---------------------------------------------------------
@@ -345,6 +389,311 @@ TEST(Overlay, ValidationRules) {
         const std::string gnss = addSensor(document, "base_link", "gnss");
         findSensor(document, gnss)->origin.xyz = {0.1, 0, 0};
         EXPECT_TRUE(hasProblem(checkOverlay(document), Level::Warning, gnss, "no mount pose"));
+    }
+}
+
+// --- loads, converters and branches (RFC 0010) ----------------------------------------------
+
+/// rover_mk1 powered as above, plus a 12 V bus fed from the 48 V one by a converter, with a
+/// 20 W load on it: the headless Test's robot (test_builder_power.py).
+Document roverWithRail() {
+    Document document = poweredRover();
+    const std::string rail = addBus(document, "dc_12v", nullptr);
+    OverlaySchema& bus = *findSchema(document.overlay.entries.back(), kBusSchema);
+    setAttribute(bus, nullptr, "elec:bus:capacitance", "0.001");
+    setAttribute(bus, nullptr, "elec:bus:undervoltageTrip", "10.0");
+    setAttribute(bus, nullptr, "elec:bus:overvoltageTrip", "14.0");
+    const int in = busNamed(document, "dc_48v");
+    const int out = busNamed(document, rail);
+    EXPECT_EQ(addConverter(document, "dcdc", in, out), "dcdc");
+    OverlaySchema& converter = *findSchema(document.overlay.entries.back(), kConverterSchema);
+    setAttribute(converter, nullptr, "elec:conv:outputVoltage", "12.0");
+    setAttribute(converter, nullptr, "elec:conv:maxOutputCurrent", "5.0");
+    setAttribute(converter, nullptr, "elec:conv:efficiency", "0.9");
+    EXPECT_EQ(addLoad(document, "computer", out, nullptr), "computer");
+    OverlaySchema& load = *findSchema(document.overlay.entries.back(), kLoadSchema);
+    setAttribute(load, nullptr, "elec:load:power", "20.0");
+    return document;
+}
+
+int entryNamed(const Document& document, std::string_view name) {
+    for (std::size_t i = 0; i < document.overlay.entries.size(); ++i) {
+        if (entryName(document.overlay.entries[i]) == name) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+TEST(Overlay, AConverterFeedsARailWithALoad) {
+    const Document document = roverWithRail();
+    const std::vector<Problem> problems = checkOverlay(document);
+    EXPECT_TRUE(problems.empty()) << dump(problems);
+    const std::string text = writeOverlay(document);
+    EXPECT_NE(text.find("  - create: power/dcdc\n    schemas:\n      ElectricalConverterAPI_1:\n"
+                        "        elec:conv:outputVoltage: 12.0  # V\n"
+                        "        elec:conv:efficiency: 0.9\n"
+                        "        elec:conv:maxOutputCurrent: 5.0  # A\n"
+                        "        elec:conv:input: power/dc_48v\n"
+                        "        elec:conv:output: power/dc_12v\n"),
+              std::string::npos)
+        << text;
+    EXPECT_NE(text.find("        elec:load:power: 20.0  # W\n        elec:powerPort: power/dc_12v"),
+              std::string::npos)
+        << text;
+    Document again = urdf(kTestDir / "rover_mk1.urdf");
+    ASSERT_TRUE(readOverlay(text, again).ok);
+    EXPECT_EQ(writeOverlay(again), text);
+    // The signals the run will have, by the network's names.
+    const auto signals = powerSignals(
+        document.overlay.entries[static_cast<std::size_t>(entryNamed(document, "computer"))]);
+    ASSERT_EQ(signals.size(), 2U);
+    EXPECT_EQ(signals[0].first, "load/computer/current");
+    EXPECT_EQ(powerSignals(
+                  document.overlay.entries[static_cast<std::size_t>(entryNamed(document, "dcdc"))])
+                  .front()
+                  .first,
+              "converter/dcdc/output_current");
+}
+
+TEST(Overlay, ConverterRules) {
+    {
+        // No voltage, no current limit, efficiency 0, no input bus.
+        Document document = roverWithRail();
+        OverlaySchema& c = *findSchema(
+            document.overlay.entries[static_cast<std::size_t>(entryNamed(document, "dcdc"))],
+            kConverterSchema);
+        setAttribute(c, nullptr, "elec:conv:outputVoltage", "");
+        setAttribute(c, nullptr, "elec:conv:maxOutputCurrent", "-1");
+        setAttribute(c, nullptr, "elec:conv:efficiency", "0");
+        setAttribute(c, nullptr, "elec:conv:input", "power/nowhere");
+        const std::vector<Problem> problems = checkOverlay(document);
+        EXPECT_TRUE(hasProblem(problems, Level::Error, "power/dcdc", "outputVoltage: required"))
+            << dump(problems);
+        EXPECT_TRUE(hasProblem(problems, Level::Error, "power/dcdc", "maxOutputCurrent = -1"));
+        EXPECT_TRUE(hasProblem(problems, Level::Error, "power/dcdc",
+                               "efficiency = 0: must be above 0 and at most 1"));
+        EXPECT_TRUE(hasProblem(problems, Level::Error, "power/dcdc",
+                               "input power/nowhere is not a bus of the overlay"));
+        // Its rail is then fed by nothing a battery reaches.
+        EXPECT_TRUE(hasProblem(problems, Level::Error, "power/dc_12v", "bus without a battery"));
+    }
+    {
+        // The same bus at both ends; a second converter onto the rail.
+        Document document = roverWithRail();
+        Document twice = document;
+        OverlaySchema& c = *findSchema(
+            document.overlay.entries[static_cast<std::size_t>(entryNamed(document, "dcdc"))],
+            kConverterSchema);
+        setAttribute(c, nullptr, "elec:conv:output", "power/dc_48v");
+        EXPECT_TRUE(hasProblem(checkOverlay(document), Level::Error, "power/dcdc", "same bus"));
+        (void)addConverter(twice, "dcdc", busNamed(twice, "dc_48v"), busNamed(twice, "dc_12v"));
+        EXPECT_TRUE(hasProblem(checkOverlay(twice), Level::Error, "power/dcdc_2",
+                               "two converters feed dc_12v"))
+            << dump(checkOverlay(twice));
+    }
+    {
+        // A loop: 48 V → 12 V → 48 V.
+        Document document = roverWithRail();
+        const std::string back = addConverter(document, "back", busNamed(document, "dc_12v"),
+                                              busNamed(document, "dc_48v"));
+        const std::vector<Problem> problems = checkOverlay(document);
+        EXPECT_TRUE(hasProblem(problems, Level::Warning, "power/back", "converters in a loop"))
+            << dump(problems);
+        EXPECT_TRUE(hasProblem(problems, Level::Warning, "power/dcdc", "converters in a loop"));
+    }
+    {
+        // Removing the rail leaves the converter's output and the load asking for a bus.
+        Document document = roverWithRail();
+        ASSERT_TRUE(removeEntry(document, static_cast<std::size_t>(busNamed(document, "dc_12v"))));
+        const std::vector<Problem> problems = checkOverlay(document);
+        EXPECT_TRUE(hasProblem(problems, Level::Error, "power/dcdc", "output: no bus picked"))
+            << dump(problems);
+        EXPECT_TRUE(
+            hasProblem(problems, Level::Error, "power/computer", "draws from: no bus picked"));
+    }
+}
+
+TEST(Overlay, LoadAndBranchRules) {
+    {
+        // A load without a power; a resistive one with a resistance needs none.
+        Document document = roverWithRail();
+        OverlaySchema& load = *findSchema(
+            document.overlay.entries[static_cast<std::size_t>(entryNamed(document, "computer"))],
+            kLoadSchema);
+        setAttribute(load, nullptr, "elec:load:power", "");
+        EXPECT_TRUE(hasProblem(checkOverlay(document), Level::Error, "power/computer",
+                               "needs elec:load:power"));
+        setAttribute(load, nullptr, "elec:load:model", "resistive");
+        setAttribute(load, nullptr, "elec:load:resistance", "7.2");
+        EXPECT_TRUE(checkOverlay(document).empty()) << dump(checkOverlay(document));
+        setAttribute(load, nullptr, "elec:load:minVoltage", "-3");
+        EXPECT_TRUE(hasProblem(checkOverlay(document), Level::Error, "power/computer",
+                               "minVoltage = -3: must not be negative"));
+    }
+    {
+        // A fuse from the 48 V bus feeds an aux bus; without a rating it is refused.
+        Document document = poweredRover();
+        (void)addBus(document, "aux", &busPresets()[0]);
+        const std::string fuse = addBranch(document, "", "fuse", busNamed(document, "dc_48v"),
+                                           busNamed(document, "aux"));
+        EXPECT_EQ(fuse, "fuse");
+        OverlaySchema& b = *findSchema(document.overlay.entries.back(), kBranchSchema);
+        EXPECT_EQ(attributeText(b, "elec:branch:kind"), "fuse");
+        setAttribute(b, nullptr, "elec:branch:resistance", "0.01");
+        std::vector<Problem> problems = checkOverlay(document);
+        EXPECT_TRUE(hasProblem(problems, Level::Error, "power/fuse", "i2tRating above 0"))
+            << dump(problems);
+        // The aux bus is fed through the fuse: no "bus without a battery".
+        EXPECT_FALSE(hasProblem(problems, Level::Error, "power/aux", "bus without a battery"));
+        setAttribute(b, nullptr, "elec:branch:i2tRating", "400");
+        EXPECT_TRUE(checkOverlay(document).empty()) << dump(checkOverlay(document));
+        // A value for another kind is a hint; both ends on one bus an error.
+        setAttribute(b, nullptr, "elec:branch:forwardDrop", "0.7");
+        EXPECT_TRUE(hasProblem(checkOverlay(document), Level::Hint, "power/fuse", "forwardDrop"));
+        setAttribute(b, nullptr, "elec:branch:output", "power/dc_48v");
+        EXPECT_TRUE(hasProblem(checkOverlay(document), Level::Error, "power/fuse", "same bus"));
+    }
+    {
+        // A diode feeds only forward: from aux to the battery's bus it feeds nothing.
+        Document document = poweredRover();
+        (void)addBus(document, "aux", &busPresets()[0]);
+        (void)addBranch(document, "", "diode", busNamed(document, "aux"),
+                        busNamed(document, "dc_48v"));
+        setAttribute(*findSchema(document.overlay.entries.back(), kBranchSchema), nullptr,
+                     "elec:branch:resistance", "0.05");
+        EXPECT_TRUE(
+            hasProblem(checkOverlay(document), Level::Error, "power/aux", "bus without a battery"));
+        // Unpicked ends are said.
+        (void)addBranch(document, "", "switch", -1, -1);
+        EXPECT_TRUE(hasProblem(checkOverlay(document), Level::Error, "power/switch",
+                               "the input: no bus picked"));
+    }
+}
+
+TEST(Overlay, PartsAreUndoSteps) {
+    History history(poweredRover(), "Open");
+    Document next = history.current();
+    (void)addConverter(next, "dcdc", 0, -1);
+    history.commit(std::move(next), "Add converter dcdc", {}, 0.0);
+    next = history.current();
+    (void)addBranch(next, "", "switch", 0, -1);
+    history.commit(std::move(next), "Add switch switch", {}, 0.0);
+    EXPECT_EQ(entriesWith(history.current(), kBranchSchema).size(), 1U);
+    ASSERT_TRUE(history.undo());
+    EXPECT_TRUE(entriesWith(history.current(), kBranchSchema).empty());
+    EXPECT_EQ(entriesWith(history.current(), kConverterSchema).size(), 1U);
+    ASSERT_TRUE(history.undo());
+    EXPECT_TRUE(entriesWith(history.current(), kConverterSchema).empty());
+}
+
+/// The overlays tools/ci/check_electrical.py writes beside the netlists it checks against
+/// ngspice (the same circuits as their `*lagrange converter` and branch lines): a converter
+/// rail with a resistive load, and a fuse, a switch and a diode to a far bus.
+constexpr const char* kBattery = R"(  - create: power/a
+    schemas:
+      BatteryAPI_1:
+        elec:battery:seriesCells: 1
+        elec:battery:capacity: 360000.0
+        elec:battery:ocvSoc: [0.0, 1.0]
+        elec:battery:ocvVoltage: [48.0, 48.0]
+        elec:battery:r0: 0.1
+        elec:battery:cutoffVoltage: 1.0
+        elec:battery:maxChargeCurrent: 10.0
+      PortAPI_1:dc_out:
+        elec:port:dc_out:connectedTo: power/dc
+  - create: power/dc
+    schemas:
+      ElectricalBusAPI_1:
+        elec:bus:capacitance: 0.0001
+        elec:bus:undervoltageTrip: 0.5
+        elec:bus:overvoltageTrip: 1000.0
+)";
+
+std::string netlistOverlay(const std::string& parts) {
+    return "schema_version: 1\napply:\n" + std::string(kBattery) + parts;
+}
+
+std::string farSide(const std::string& kind, const std::string& extra) {
+    return R"(  - create: power/far
+    schemas:
+      ElectricalBusAPI_1:
+        elec:bus:capacitance: 0.0001
+        elec:bus:undervoltageTrip: 0.0
+        elec:bus:overvoltageTrip: 1000.0
+  - create: power/part
+    schemas:
+      ElectricalBranchAPI_1:
+        elec:branch:kind: )" +
+           kind + R"(
+        elec:branch:resistance: 0.25
+        elec:branch:input: power/dc
+        elec:branch:output: power/far
+)" + extra +
+           R"(  - create: power/load
+    schemas:
+      ElectricalLoadAPI_1:
+        elec:load:model: resistive
+        elec:load:resistance: 12.0
+        elec:powerPort: power/far
+)";
+}
+
+TEST(Overlay, NetlistCircuitsReadAndWriteTheSame) {
+    const std::vector<std::string> overlays{
+        netlistOverlay(R"(  - create: power/rail
+    schemas:
+      ElectricalBusAPI_1:
+        elec:bus:capacitance: 0.0001
+        elec:bus:undervoltageTrip: 0.5
+        elec:bus:overvoltageTrip: 1000.0
+  - create: power/load
+    schemas:
+      ElectricalLoadAPI_1:
+        elec:load:model: resistive
+        elec:load:power: 24.0
+        elec:powerPort: power/rail
+  - create: power/dcdc
+    schemas:
+      ElectricalConverterAPI_1:
+        elec:conv:outputVoltage: 12.0
+        elec:conv:maxOutputCurrent: 1000.0
+        elec:conv:efficiency: 0.9
+        elec:conv:input: power/dc
+        elec:conv:output: power/rail
+)"),
+        netlistOverlay(farSide("resistor", "")),
+        netlistOverlay(farSide("fuse", "        elec:branch:i2tRating: 50.0\n")),
+        netlistOverlay(farSide("switch", "        elec:branch:initialState: open\n")),
+        netlistOverlay(farSide("diode", "        elec:branch:forwardDrop: 0.7\n")),
+    };
+    for (const std::string& original : overlays) {
+        Document document = newDocument();
+        const OverlayReadResult read = readOverlay(original, document);
+        ASSERT_TRUE(read.ok) << read.error;
+        const std::string written = writeOverlay(document);
+        std::string why;
+        EXPECT_TRUE(sameOverlay(original, written, &why)) << why << "\n" << written;
+        // Every part has a form, none is "kept as written", and none is a problem.
+        for (const OverlayEntry& entry : document.overlay.entries) {
+            EXPECT_TRUE(std::ranges::any_of(entry.schemas, [](const OverlaySchema& s) {
+                return !fieldsOf(s.name).empty();
+            })) << entryPrim(entry);
+        }
+        const std::vector<Problem> problems = checkOverlay(document);
+        EXPECT_TRUE(problems.empty()) << dump(problems) << original;
+        // An edit through the forms keeps the rest as it was.
+        const int part = entryNamed(document, "part");
+        if (part >= 0) {
+            OverlaySchema& b = *findSchema(document.overlay.entries[static_cast<std::size_t>(part)],
+                                           kBranchSchema);
+            setAttribute(b, overlayField(kBranchSchema, "elec:branch:resistance"),
+                         "elec:branch:resistance", "0.5");
+            EXPECT_TRUE(sameOverlay(
+                std::regex_replace(original, std::regex("resistance: 0.25"), "resistance: 0.5"),
+                writeOverlay(document), &why))
+                << why;
+        }
     }
 }
 

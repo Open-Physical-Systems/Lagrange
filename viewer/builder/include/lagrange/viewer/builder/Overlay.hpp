@@ -91,7 +91,15 @@ struct OverlayWriteOptions {
 /// loader requires it, and the loader's range rule.
 struct OverlayField {
     enum class Type { Real, Int, Token, RealArray, Rel, Asset } type{Type::Real};
-    enum class Range { Any, Positive, NonNegative, Fraction, AtLeastOne } range{Range::Any};
+    /// PositiveFraction: above 0, at most 1 (a converter's efficiency, the loader's (0, 1]).
+    enum class Range {
+        Any,
+        Positive,
+        NonNegative,
+        Fraction,
+        PositiveFraction,
+        AtLeastOne
+    } range{Range::Any};
     std::string_view name;      ///< "elec:windingResistance"; for a port, after its prefix
     std::string_view unit;      ///< "ohm", "N.m/A", "1"; empty for tokens and relationships
     std::string_view fallback;  ///< the schema's default as text; empty: none
@@ -100,12 +108,23 @@ struct OverlayField {
     std::string_view meaning;                  ///< the schema's doc, short
 };
 
-/// The fields of BatteryAPI_1, ElectricalBusAPI_1, ElectricalMotorAPI_1 and of a battery's
-/// output port (PortAPI_1:dc_out, names after "elec:port:dc_out:"), in the schema's order.
+/// The fields of BatteryAPI_1, ElectricalBusAPI_1, ElectricalMotorAPI_1, of a battery's
+/// output port (PortAPI_1:dc_out, names after "elec:port:dc_out:"), and of the parts between
+/// buses (RFC 0010): ElectricalLoadAPI_1, ElectricalConverterAPI_1, ElectricalBranchAPI_1, in
+/// the schema's order.
 [[nodiscard]] std::span<const OverlayField> batteryFields();
 [[nodiscard]] std::span<const OverlayField> busFields();
 [[nodiscard]] std::span<const OverlayField> motorFields();
 [[nodiscard]] std::span<const OverlayField> portFields();
+[[nodiscard]] std::span<const OverlayField> loadFields();
+[[nodiscard]] std::span<const OverlayField> converterFields();
+[[nodiscard]] std::span<const OverlayField> branchFields();
+/// The fields of a schema the forms edit (by its name; a port's "PortAPI_1:<x>"); empty for
+/// any other.
+[[nodiscard]] std::span<const OverlayField> fieldsOf(std::string_view schema);
+/// Whether a branch form shows `field` for a branch of `kind` ("fuse": i2tRating, "diode":
+/// forwardDrop, "switch": initialState; resistance and the two ends for all).
+[[nodiscard]] bool branchFieldApplies(std::string_view kind, std::string_view field);
 /// The field of `schema` named `attribute` (port attributes by their full name); nullptr if the
 /// forms do not know it.
 [[nodiscard]] const OverlayField* overlayField(std::string_view schema, std::string_view attribute);
@@ -123,6 +142,9 @@ inline constexpr std::string_view kBusSchema = "ElectricalBusAPI_1";
 inline constexpr std::string_view kMotorSchema = "ElectricalMotorAPI_1";
 inline constexpr std::string_view kBatteryPort = "PortAPI_1:dc_out";
 inline constexpr std::string_view kBatteryPortPrefix = "elec:port:dc_out:";
+inline constexpr std::string_view kLoadSchema = "ElectricalLoadAPI_1";
+inline constexpr std::string_view kConverterSchema = "ElectricalConverterAPI_1";
+inline constexpr std::string_view kBranchSchema = "ElectricalBranchAPI_1";
 
 /// The schema instance named `schema` of an entry; nullptr when it has none.
 [[nodiscard]] const OverlaySchema* findSchema(const OverlayEntry& entry, std::string_view schema);
@@ -163,6 +185,7 @@ struct PowerPreset {
 [[nodiscard]] std::span<const PowerPreset> batteryPresets();
 [[nodiscard]] std::span<const PowerPreset> busPresets();
 [[nodiscard]] std::span<const PowerPreset> motorPresets();
+[[nodiscard]] std::span<const PowerPreset> loadPresets();
 
 /// Adds a bus `power/<name>` (name made unique, "dc_bus" when empty) with a preset's values
 /// (nullptr: none). Returns its entry's name.
@@ -176,6 +199,27 @@ std::string addBattery(Document& document, std::string_view name, int bus,
 /// when the joint does not exist or already has a motor.
 std::string addMotor(Document& document, std::string_view joint, int bus,
                      const PowerPreset* preset);
+/// Adds a load `power/<name>` ("load") drawing from bus entry `bus` (-1: the first bus), with
+/// a preset's values (nullptr: the schema's model, constant_power, and an empty power).
+std::string addLoad(Document& document, std::string_view name, int bus, const PowerPreset* preset);
+/// Adds a DC-DC converter `power/<name>` ("dcdc") from bus entry `input` to bus entry `output`
+/// (-1: none yet; the form's dropdowns pick them). Its voltage and current limit start empty:
+/// no sample robot has a converter to take them from.
+std::string addConverter(Document& document, std::string_view name, int input, int output);
+/// Adds a branch `power/<name>` (named after its kind: "fuse", "switch", "diode", "resistor")
+/// of `kind` (resistor, fuse, switch, diode) between bus entries `input` and `output` (-1:
+/// none yet). Its resistance (and a fuse's rating) start empty.
+std::string addBranch(Document& document, std::string_view name, std::string_view kind, int input,
+                      int output);
+/// The signals the network writes for an entry with a power schema (electrical.md §3, the
+/// network's names): bus/<n>/voltage, brownout; battery/<n>/soc ...; load/<n>/current, powered;
+/// converter/<n>/output_current, input_current, loss_power; branch/<n>/current, voltage, state,
+/// loss_power. (name, unit) pairs; empty for other entries. Inputs it reads when something
+/// writes them (load/<n>/power_demand, a switch's branch/<n>/command) are not listed: the run's
+/// catalog has them only then.
+[[nodiscard]] std::vector<std::pair<std::string, std::string>> powerSignals(
+    const OverlayEntry& entry);
+
 /// Removes entry `index` and every relationship to its prim (a bus's motors and batteries keep
 /// their entries, without the relationship: validation then asks for one).
 bool removeEntry(Document& document, std::size_t index);

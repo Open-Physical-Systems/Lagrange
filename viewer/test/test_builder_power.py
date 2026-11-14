@@ -3,6 +3,8 @@
 rover_mk1 gets a bus and a battery from the robot's Power section and a motor on each wheel
 joint from the joints' Motor section, by clicks on their Add menus (the sample AMR's values);
 Test then runs the server with --overlay and the run has the bus, battery and motor signals.
+A 48 → 12 V converter with a 20 W load on the 12 V bus runs with the rail at 12 V and the load's
+current at 20 W / 12 V; fuses, switches and diodes come from their Add menu.
 Save writes <robot>.overlay.yaml beside the URDF, which opens again with the robot; *Into the
 connected run* sends it as ImportRobot.overlay_content. The test servers run with --no-ros.
 Run on the software Vulkan device (llvmpipe) unless LAGRANGE_TEST_GPU names another.
@@ -91,6 +93,68 @@ apply:
 """
 
 
+# rover_mk1 with the sample AMR's battery on a 48 V bus, a DC-DC converter to a 12 V bus and a
+# 20 W computer on it. The rail's trips and the converter's limit and efficiency are this test's
+# own (illustrative, not a product's).
+RAIL = """\
+schema_version: 1
+apply:
+  - create: power/dc_48v
+    schemas:
+      ElectricalBusAPI_1:
+        elec:bus:capacitance: 0.0047
+        elec:bus:undervoltageTrip: 42.0
+        elec:bus:overvoltageTrip: 60.0
+  - create: power/battery
+    schemas:
+      BatteryAPI_1:
+        elec:battery:chemistry: lfp
+        elec:battery:seriesCells: 16
+        elec:battery:capacity: 72000.0
+        elec:battery:ocvSoc: [0.0, 0.1, 0.5, 0.9, 1.0]
+        elec:battery:ocvVoltage: [2.80, 3.20, 3.28, 3.33, 3.45]
+        elec:battery:r0: 0.0015
+        elec:battery:cutoffVoltage: 44.8
+        elec:battery:maxChargeCurrent: 10.0
+      PortAPI_1:dc_out:
+        elec:port:dc_out:connectedTo: power/dc_48v
+  - create: power/dc_12v
+    schemas:
+      ElectricalBusAPI_1:
+        elec:bus:capacitance: 0.001
+        elec:bus:undervoltageTrip: 10.0
+        elec:bus:overvoltageTrip: 14.0
+  - create: power/dcdc
+    schemas:
+      ElectricalConverterAPI_1:
+        elec:conv:outputVoltage: 12.0
+        elec:conv:efficiency: 0.9
+        elec:conv:maxOutputCurrent: 5.0
+        elec:conv:input: power/dc_48v
+        elec:conv:output: power/dc_12v
+  - create: power/computer
+    schemas:
+      ElectricalLoadAPI_1:
+        elec:load:power: 20.0
+        elec:powerPort: power/dc_12v
+"""
+
+# With RAIL open and the robot selected: Power's third row, "Add fuse, switch…", and its menu.
+ADD_BRANCH = "1315,465"
+BRANCH_ITEM = {
+    "resistor": "1340,495",
+    "fuse": "1340,512",
+    "switch": "1340,529",
+    "diode": "1340,546",
+}
+ADD_BUS_WITH_RAIL = "1295,413"
+FIRST_BUS_WITH_RAIL = "1340,443"
+PROBLEMS_TAB = "955,764"
+RAIL_SCOPE = (
+    "bus/dc_12v/voltage,bus/dc_48v/voltage,load/computer/current,converter/dcdc/input_current"
+)
+
+
 def program(package: str, name: str) -> str:
     try:
         path = Path(get_package_prefix(package)) / "lib" / package / name
@@ -157,6 +221,9 @@ def test_a_power_system_built_by_clicks_runs_in_the_test(tmp_path):
         "ElectricalBusAPI_1": ["dc_bus"],
         "BatteryAPI_1": ["battery"],
         "ElectricalMotorAPI_1": ["left_wheel_joint_motor", "right_wheel_joint_motor"],
+        "ElectricalLoadAPI_1": [],
+        "ElectricalConverterAPI_1": [],
+        "ElectricalBranchAPI_1": [],
     }
     assert builder["history"]["labels"][1:] == [
         "Add bus dc_bus",
@@ -172,6 +239,120 @@ def test_a_power_system_built_by_clicks_runs_in_the_test(tmp_path):
     for joint in ("left_wheel_joint", "right_wheel_joint"):
         assert f"motor/{joint}_motor/current_q" in signals
         assert f"motor/{joint}_motor/bus_current" in signals
+
+
+def railed_rover(tmp_path: Path, overlay: str = RAIL) -> Path:
+    urdf = tmp_path / "rover_mk1.urdf"
+    shutil.copy(ROVER, urdf)
+    (tmp_path / "rover_mk1.overlay.yaml").write_text(overlay)
+    return urdf
+
+
+def test_a_converter_feeds_a_12_v_rail_with_a_load(tmp_path):
+    program("lagrange_server", "lagrange_server")
+    urdf = railed_rover(tmp_path)
+    # Test, then Signals (Ctrl+4), whose scope plots the rail, the load and the converter.
+    report = run(
+        tmp_path,
+        "--builder-open",
+        str(urdf),
+        "--scope",
+        RAIL_SCOPE,
+        "--input",
+        f"3:click:{TEST_BUTTON};6:wait:connected;10:key:ctrl+4",
+        frames=160,
+    )
+    builder = report["builder"]
+    assert builder["errors"] == 0
+    assert builder["mode"] == "testing", builder["loader"]
+    assert builder["overlay"]["ElectricalConverterAPI_1"] == ["dcdc"]
+    assert builder["overlay"]["ElectricalLoadAPI_1"] == ["computer"]
+    signals = set(builder["electrical_signals"])
+    for name in (
+        "bus/dc_12v/voltage",
+        "bus/dc_12v/brownout",
+        "load/computer/current",
+        "load/computer/powered",
+        "converter/dcdc/output_current",
+        "converter/dcdc/input_current",
+        "converter/dcdc/loss_power",
+    ):
+        assert name in signals, signals
+    values = builder["scope_values"]
+    # The converter holds its rail; the load draws 20 W from it; the converter draws that over
+    # its efficiency from the 48 V bus.
+    assert values["bus/dc_12v/voltage"] == pytest.approx(12.0, abs=0.05), values
+    assert values["load/computer/current"] == pytest.approx(20.0 / 12.0, rel=0.01), values
+    pack = values["bus/dc_48v/voltage"]
+    assert 44.8 < pack < 56.0, values
+    assert values["converter/dcdc/input_current"] == pytest.approx(20.0 / 0.9 / pack, rel=0.02), (
+        values
+    )
+
+
+def test_a_bad_converter_is_a_problem_and_test_is_refused(tmp_path):
+    bad = RAIL.replace("elec:conv:output: power/dc_12v", "elec:conv:output: power/dc_48v")
+    bad = bad.replace("elec:conv:efficiency: 0.9", "elec:conv:efficiency: 0.0")
+    urdf = railed_rover(tmp_path, bad)
+    report = run(tmp_path, "--builder-open", str(urdf), "--input", f"3:click:{TEST_BUTTON}")
+    builder = report["builder"]
+    assert builder["mode"] == "build"
+    # Same bus at both ends, an efficiency of 0, and the 12 V bus fed by nothing.
+    assert builder["errors"] >= 3
+
+
+def test_fuses_switches_and_diodes_come_from_the_add_menu(tmp_path):
+    urdf = railed_rover(tmp_path)
+    clicks = [
+        f"3:click:{ROBOT_ROW}",
+        f"6:click:{ADD_BUS_WITH_RAIL}",
+        f"10:click:{FIRST_BUS_WITH_RAIL}",
+    ]
+    frame = 14
+    for kind in ("fuse", "switch", "diode"):
+        clicks += [f"{frame}:click:{ADD_BRANCH}", f"{frame + 4}:click:{BRANCH_ITEM[kind]}"]
+        frame += 8
+    report = run(
+        tmp_path, "--builder-open", str(urdf), "--input", ";".join(clicks), frames=frame + 4
+    )
+    builder = report["builder"]
+    assert builder["overlay"]["ElectricalBranchAPI_1"] == ["fuse", "switch", "diode"]
+    assert builder["history"]["labels"][1:] == [
+        "Add bus dc_bus",
+        "Add fuse fuse",
+        "Add switch switch",
+        "Add diode diode",
+    ]
+    # Each needs its resistance, the fuse its rating: Problems lists them until typed.
+    assert builder["errors"] == 4
+    # Saved, each is an ElectricalBranchAPI_1 between the battery's bus and the new one.
+    out = tmp_path / "saved" / "rover_mk1.urdf"
+    out.parent.mkdir()
+    saved = run(
+        tmp_path,
+        "--builder-open",
+        str(urdf),
+        "--input",
+        ";".join(clicks),
+        "--builder-save",
+        str(out),
+        frames=frame + 4,
+    )
+    assert saved["builder"]["errors"] == 4
+    written = yaml.safe_load(out.with_name("rover_mk1.overlay.yaml").read_text())
+    branches = {
+        entry["create"]: entry["schemas"]["ElectricalBranchAPI_1"]
+        for entry in written["apply"]
+        if "ElectricalBranchAPI_1" in entry["schemas"]
+    }
+    assert branches == {
+        f"power/{kind}": {
+            "elec:branch:kind": kind,
+            "elec:branch:input": "power/dc_48v",
+            "elec:branch:output": "power/dc_bus",
+        }
+        for kind in ("fuse", "switch", "diode")
+    }
 
 
 def test_a_motor_on_a_fixed_joint_and_a_bus_without_a_battery_are_problems(tmp_path):

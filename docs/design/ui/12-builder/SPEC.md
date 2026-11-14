@@ -150,8 +150,14 @@ one undo step; typing in a field is one step when it is committed (Enter, Tab or
   the electrical domain dot, meta `overlay · N battery · N bus · N motors`): **Add bus** and
   **Add battery** (`.btn` with a menu: the sample robots' values or empty fields), then one
   section per bus (prim, fed by, motors, its fields) and per battery (prim, **output to** a bus
-  dropdown, its fields and its port's), each with **Remove** (ghost); then *Overlay, kept as
-  written* (collapsed, read-only rows). Fields: the schema attribute's last name in mono 11 px,
+  dropdown, its fields and its port's), each with **Remove** (ghost); a second row **Add load**
+  (a menu: the samples' values or empty fields) and **Add converter**, a third **Add fuse,
+  switch…** (a menu: resistor, fuse, switch, diode); then one section per converter (prim,
+  **input** and **output** bus dropdowns, its fields), per branch (title its kind; prim, `kind`,
+  **input**/**output** (a diode's **anode**/**cathode**), the fields its kind uses) and per load
+  (prim, **bus**, its fields; `resistance` only for a resistive load), each with read-only rows
+  of the signals the run will have and **Remove**; then *Overlay, kept as written* (collapsed,
+  read-only rows). The Power meta adds `· N parts` when there are loads, converters or branches. Fields: the schema attribute's last name in mono 11 px,
   its unit (Ω, V, C, A, F, H, N·m/A), the default in the unit slot when a value differs
   (`accentBorder`), "required" while a required one is empty; a value out of range keeps an
   `err` outline and is a Problem.
