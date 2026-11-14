@@ -361,8 +361,8 @@ Better at:
 
 Worse at, or missing:
 
-- **Young.** The first release was on 2026-10-14, a month before this page. It has no users,
-  no community, no third-party plugins, and 0 GitHub stars. Gazebo has been developed since
+- **Young.** The first release was on 2026-10-14, a month before this page. It has a small user base,
+  no community yet and no third-party plugins. Gazebo has been developed since
   2002 and has thousands of models on Fuel.
 - **One platform.** Ubuntu 26.04 with ROS 2 Lyrical only. No macOS, no Windows, no older
   Ubuntu or ROS distributions. Gazebo Jetty supports Ubuntu 24.04 and macOS as well, and its
