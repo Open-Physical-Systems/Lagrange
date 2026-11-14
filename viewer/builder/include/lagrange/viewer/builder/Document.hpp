@@ -24,7 +24,7 @@ namespace lagrange::viewer::builder {
 // clang-format off
 struct Pose { std::array<double, 3> xyz{}; std::array<double, 3> rpy{}; };  // m, rad (URDF's)
 struct Shape {
-    enum class Kind { Box, Cylinder, Sphere, Mesh } kind = Kind::Box;
+    enum class Kind { Box, Cylinder, Sphere, Mesh, Capsule } kind = Kind::Box;  // Capsule: Addendum A
     std::array<double, 3> size{};   // box: x y z; cylinder: radius, length (along z); sphere: radius; m
     std::string mesh;               // Mesh: the file as written (package://, relative or absolute)
     std::array<double, 3> scale{1, 1, 1};
@@ -38,7 +38,10 @@ struct Inertial {
     std::optional<std::array<double, 6>> inertia;  // ixx ixy ixz iyy iyz izz, kg·m², about the COM
     std::optional<std::array<double, 3>> com;      // m, override
 };
-struct Link { std::string name; std::vector<Shape> shapes; Inertial inertial; std::string keptXml; };
+// Addendum A: how the link collides, the user's choice in Properties (`lagrange_collision`).
+enum class CollisionChoice { Unset, Mesh, Split, Shapes, Drawn };
+struct Link { std::string name; std::vector<Shape> shapes; Inertial inertial; std::string keptXml;
+              CollisionChoice collision = CollisionChoice::Unset; };  // collision: Addendum A
 struct Joint {
     enum class Type { Fixed, Revolute, Continuous, Prismatic } type = Type::Fixed;
     std::string name, parent, child;
@@ -65,7 +68,12 @@ struct Document {
 // - Pose: the joint's `<origin>` (parent frame to child frame), a shape's origin in its link's
 //   frame, or a sensor's mount (`<pose>`) in its link's frame.
 // - Shape::size: Box {x, y, z} full edge lengths; Cylinder {radius, length, unused}, its axis
-//   along the shape frame's z; Sphere {radius, unused, unused}; Mesh unused (scale applies).
+//   along the shape frame's z; Sphere {radius, unused, unused}; Capsule {radius, length of the
+//   straight part (URDF's and urdfdom's `length`), unused}, along z; Mesh unused (scale applies).
+// - Link::collision (RFC 0016 Addendum A): Unset (no choice made: the shapes as they are),
+//   Mesh (1: the visual mesh collides, as its convex hull), Split (2: convex parts from CoACD,
+//   collision-only mesh shapes), Shapes (3: collision-only template shapes, Fit to mesh), Drawn
+//   (4: collision-only shapes placed in the Builder view). Written as `lagrange_collision`.
 // - Shape::rgba: linear 0..1; all zero means "no colour given" (the writer writes none).
 // - Shape::solid: counts for mass (RFC §4, open question 12): by default true for collision
 //   shapes; a visual-only shape is massless.
@@ -102,8 +110,11 @@ inline constexpr std::array<double, 3> kNewRootBox{0.3, 0.2, 0.1};
 /// "fixed", "revolute", "continuous", "prismatic" (URDF's words); and back (nullopt otherwise).
 [[nodiscard]] std::string_view toString(Joint::Type type);
 [[nodiscard]] std::optional<Joint::Type> parseJointType(std::string_view text);
-/// "box", "cylinder", "sphere", "mesh" (URDF's element names).
+/// "box", "cylinder", "sphere", "mesh", "capsule" (URDF's element names).
 [[nodiscard]] std::string_view toString(Shape::Kind kind);
+/// "", "mesh", "split", "shapes", "drawn" (the `lagrange_collision` words); and back.
+[[nodiscard]] std::string_view toString(CollisionChoice choice);
+[[nodiscard]] std::optional<CollisionChoice> parseCollisionChoice(std::string_view text);
 
 /// True when the joint moves (revolute, continuous or prismatic): it gets a preview slider.
 [[nodiscard]] bool isMoving(Joint::Type type);

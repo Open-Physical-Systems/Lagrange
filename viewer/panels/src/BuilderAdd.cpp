@@ -3,12 +3,15 @@
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Widgets.hpp"
+#include "lagrange/viewer/builder/Collision.hpp"
 #include "lagrange/viewer/builder/Materials.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <array>
 #include <cstdio>
+#include <filesystem>
 #include <string>
+#include <utility>
 
 #include <imgui.h>
 
@@ -25,6 +28,15 @@ public:
     [[nodiscard]] Workspace workspace() const override { return Workspace::Builder; }
 
     void draw(PanelContext& context) override {
+        // A mesh chosen in the file dialog or dropped on the window (Addendum A): added here,
+        // before Begin, so it is added while the tab is hidden too.
+        if (BuilderSession& session = *context.builder;
+            std::exchange(session.addMeshRequested, false) && editable(session)) {
+            const std::string on =
+                session.addMeshOn.empty() ? targetLink(session) : session.addMeshOn;
+            addMesh(session, on, session.addMeshPath, session.addMeshMillimetres);
+            session.addMeshOn.clear();
+        }
         if (!ImGui::Begin(title())) {
             ImGui::End();
             return;
@@ -50,10 +62,13 @@ public:
         tile(session, target, "Sphere", widgets::Icon::Sphere, builder::Shape::Kind::Sphere);
         ImGui::EndDisabled();
         ImGui::SameLine(0.0F, px(6.0F));
-        ImGui::BeginDisabled(true);
-        (void)widgets::ShapeTile("mesh", widgets::Icon::Mesh, "Mesh…");
+        ImGui::BeginDisabled(!editable(session) || target.empty());
+        if (widgets::ShapeTile("mesh", widgets::Icon::Mesh, "Mesh…")) {
+            ImGui::OpenPopup("##add-mesh");
+        }
         ImGui::EndDisabled();
-        ImGui::SetItemTooltip("Mesh links (STL, OBJ, DAE, glTF) come with RFC 0016 phase 2");
+        ImGui::SetItemTooltip("A mesh link (STL, OBJ, DAE, glTF) on %s", target.c_str());
+        meshPopup(context, session, target);
 
         defaults();
         ImGui::Dummy(ImVec2(0.0F, px(2.0F)));
@@ -66,6 +81,93 @@ public:
     }
 
 private:
+    /// Add → Mesh… (RFC 0016 Addendum A): Browse… opens the windowed viewer's file dialog
+    /// (SDL, in App); the path field and the recent files are there too, and are what a
+    /// headless run uses. BuilderHost adds the link (addMeshRequested), as it does for a mesh
+    /// dropped on the window.
+    void meshPopup(PanelContext& context, BuilderSession& session, const std::string& target) {
+        if (!ImGui::BeginPopup("##add-mesh")) {
+            return;
+        }
+        widgets::Strong("Mesh link on %s", target.c_str());
+        widgets::Caption("STL, OBJ, DAE or glTF, read as the simulator reads it");
+        ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+        ImGui::BeginDisabled(!context.canOpenFiles);
+        if (widgets::Button("Browse…", widgets::ButtonKind::Default)) {
+            session.meshDialogRequested = true;
+            session.addMeshOn = target;
+            session.addMeshMillimetres = millimetres_;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled();
+        if (!context.canOpenFiles) {
+            ImGui::SetItemTooltip("Needs the windowed viewer's file dialog: type a path");
+        }
+        ImGui::SameLine(0.0F, px(6.0F));
+        widgets::Caption("or a path:");
+        const float width = px(360.0F);
+        std::string path = meshPath_;
+        if (widgets::CommitField("##mesh-path", &path, nullptr, false, width, false)) {
+            meshPath_ = path;
+        }
+        ImGui::SetItemTooltip("An absolute path, or package://pkg/file");
+        (void)widgets::Checkbox("##mesh-mm", &millimetres_);
+        ImGui::SameLine(0.0F, px(6.0F));
+        widgets::Caption("file in millimetres (scale 0.001)");
+        ImGui::BeginDisabled(meshPath_.empty());
+        if (widgets::Button("Add mesh link", widgets::ButtonKind::Primary, widgets::Icon::Plus)) {
+            session.addMeshRequested = true;
+            session.addMeshPath = meshPath_;
+            session.addMeshOn = target;
+            session.addMeshMillimetres = millimetres_;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled();
+        if (!session.recentMeshes.empty()) {
+            ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+            widgets::Caption("Recent");
+            for (const std::string& recent : session.recentMeshes) {
+                ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
+                const bool picked = ImGui::Selectable(recent.c_str(), recent == meshPath_);
+                ImGui::PopFont();
+                if (picked) {
+                    meshPath_ = recent;
+                }
+            }
+        }
+        ImGui::EndPopup();
+    }
+
+    static void addMesh(BuilderSession& session, const std::string& target, std::string file,
+                        bool millimetres) {
+        if (target.empty() || file.empty()) {
+            return;
+        }
+        // A plain path is kept absolute; the writer makes it relative to the saved file.
+        if (file.find("://") == std::string::npos) {
+            std::error_code error;
+            file = std::filesystem::absolute(file, error).lexically_normal().string();
+        }
+        Document next = session.document();
+        const double k = millimetres ? 0.001 : 1.0;
+        const builder::AddedLink added =
+            builder::addMeshLink(next, target, file, addDefaults().joint, addDensity(), {k, k, k});
+        if (added.link.empty()) {
+            return;
+        }
+        commit(session, std::move(next), "Add mesh link " + added.link);
+        select(session, Kind::Link, added.link);
+        std::erase(session.recentMeshes, file);
+        session.recentMeshes.insert(session.recentMeshes.begin(), file);
+        if (session.recentMeshes.size() > kRecentMeshes) {
+            session.recentMeshes.resize(kRecentMeshes);
+        }
+    }
+
+    static constexpr std::size_t kRecentMeshes = 8;
+    std::string meshPath_;
+    bool millimetres_{false};
+
     static void tile(BuilderSession& session, const std::string& target, const char* label,
                      widgets::Icon icon, builder::Shape::Kind kind) {
         if (widgets::ShapeTile(label, icon, label)) {

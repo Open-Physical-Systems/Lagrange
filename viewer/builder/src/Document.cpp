@@ -82,8 +82,36 @@ std::string_view toString(Shape::Kind kind) {
             return "sphere";
         case Shape::Kind::Mesh:
             return "mesh";
+        case Shape::Kind::Capsule:
+            return "capsule";
     }
     return "box";
+}
+
+std::string_view toString(CollisionChoice choice) {
+    switch (choice) {
+        case CollisionChoice::Unset:
+            return "";
+        case CollisionChoice::Mesh:
+            return "mesh";
+        case CollisionChoice::Split:
+            return "split";
+        case CollisionChoice::Shapes:
+            return "shapes";
+        case CollisionChoice::Drawn:
+            return "drawn";
+    }
+    return "";
+}
+
+std::optional<CollisionChoice> parseCollisionChoice(std::string_view text) {
+    for (const CollisionChoice choice : {CollisionChoice::Mesh, CollisionChoice::Split,
+                                         CollisionChoice::Shapes, CollisionChoice::Drawn}) {
+        if (text == toString(choice)) {
+            return choice;
+        }
+    }
+    return std::nullopt;
 }
 
 bool isMoving(Joint::Type type) {

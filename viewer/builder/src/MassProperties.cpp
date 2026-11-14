@@ -9,9 +9,11 @@
 #include "Math.hpp"
 #include "lagrange/viewer/builder/Kinematics.hpp"
 #include "lagrange/viewer/builder/MassProperties.hpp"
+#include "lagrange/viewer/builder/MeshShapes.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <numbers>
 #include <vector>
 
@@ -65,8 +67,39 @@ MassProperties ownMass(const Shape& shape, double density) {
             out.inertia = {i, 0.0, 0.0, i, 0.0, i};
             return out;
         }
-        case Shape::Kind::Mesh:
-            return out;  // phase 2 (R12): meshes get mass from lagrange_meshes
+        case Shape::Kind::Capsule: {
+            // A cylinder r, h and two hemispheres (a sphere of radius r): each hemisphere's COM
+            // is 3r/8 from its flat face, so about the centre across the axis the caps give
+            // m_s (2r²/5 + h²/4 + 3hr/8) (parallel axis theorem).
+            const double r = shape.size[0];
+            const double h = shape.size[1];
+            if (r <= 0.0 || h < 0.0) {
+                return out;
+            }
+            const double mc = density * std::numbers::pi * r * r * h;
+            const double ms = density * 4.0 * std::numbers::pi * r * r * r / 3.0;
+            const double across = mc * (3.0 * r * r + h * h) / 12.0 +
+                                  ms * (2.0 * r * r / 5.0 + h * h / 4.0 + 3.0 * h * r / 8.0);
+            out.mass = mc + ms;
+            out.inertia = {across, 0.0, 0.0,
+                           across, 0.0, mc * r * r / 2.0 + 2.0 * ms * r * r / 5.0};
+            return out;
+        }
+        case Shape::Kind::Mesh: {
+            // Addendum A: the closed mesh's volume integrals (Mirtich 1996), else its convex
+            // hull's; about the mesh's own COM, which need not be its frame's origin.
+            const std::shared_ptr<const MeshFile> file = loadMesh(shape.mesh);
+            if (!file->error.empty()) {
+                return out;
+            }
+            const MassProperties& unit = file->solid(shape.scale).unit;
+            out.mass = unit.mass * density;
+            out.com = unit.com;
+            for (std::size_t k = 0; k < 6; ++k) {
+                out.inertia.at(k) = unit.inertia.at(k) * density;
+            }
+            return out;
+        }
     }
     return out;
 }
@@ -144,8 +177,12 @@ MassProperties shapeMass(const Shape& shape, double density) {
         return {};
     }
     const Frame frame = toFrame(shape.origin);
-    own.inertia = detail::rotateTensor(detail::matrixOf(frame.rotation), own.inertia);
-    own.com = frame.position;
+    const detail::Mat3 rotation = detail::matrixOf(frame.rotation);
+    own.inertia = detail::rotateTensor(rotation, own.inertia);
+    // A primitive's COM is its frame's origin; a mesh's is where its volume puts it.
+    const detail::Vec3 offset = detail::apply(rotation, own.com);
+    own.com = {frame.position[0] + offset[0], frame.position[1] + offset[1],
+               frame.position[2] + offset[2]};
     return own;
 }
 

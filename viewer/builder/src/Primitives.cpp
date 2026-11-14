@@ -148,4 +148,44 @@ MeshData sphereMesh(double radius, int segments, int rings) {
     return mesh;
 }
 
+MeshData capsuleMesh(double radius, double length, int segments, int rings) {
+    MeshData mesh;
+    if (segments < 3 || rings < 2 || radius <= 0.0) {
+        return mesh;
+    }
+    rings += rings % 2;  // an equator to cut the sphere at
+    // The sphere's rows, the upper half raised by length/2 and the lower lowered: the equator
+    // row twice, and the band between the two is the straight wall.
+    int rows = 0;
+    const auto row = [&](double polar, double shift) {
+        for (int s = 0; s <= segments; ++s) {
+            const double azimuth = 2.0 * std::numbers::pi * s / segments;
+            const std::array<double, 3> n{std::sin(polar) * std::cos(azimuth),
+                                          std::sin(polar) * std::sin(azimuth), std::cos(polar)};
+            addVertex(mesh, {radius * n[0], radius * n[1], radius * n[2] + shift * length / 2}, n);
+        }
+        ++rows;
+    };
+    for (int r = 0; r <= rings; ++r) {
+        const double polar = std::numbers::pi * r / rings;
+        if (r == rings / 2) {
+            row(polar, 1.0);
+            row(polar, -1.0);
+        } else {
+            row(polar, r < rings / 2 ? 1.0 : -1.0);
+        }
+    }
+    for (int r = 0; r + 1 < rows; ++r) {
+        for (int s = 0; s < segments; ++s) {
+            const auto a = static_cast<std::uint32_t>(r * (segments + 1) + s);
+            const auto b = a + static_cast<std::uint32_t>(segments + 1);
+            for (const std::uint32_t index : {a, b, a + 1, a + 1, b, b + 1}) {
+                mesh.indices.push_back(index);
+            }
+        }
+    }
+    fillAabb(mesh);
+    return mesh;
+}
+
 }  // namespace lagrange::viewer::builder

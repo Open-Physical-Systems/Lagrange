@@ -182,8 +182,9 @@ TEST(Gizmo, PickShapeFindsTheNearestShapeAndThePoint) {
     ASSERT_TRUE(ball.has_value());
     EXPECT_EQ(ball->shape, 1);
     EXPECT_NEAR(ball->point[2], 0.05, kTight);
-    // With collision shapes hidden, the collision-only sphere is not there to pick.
-    EXPECT_FALSE(pickShape(document, links, lineFrom({0.5, 0, 2}, {0, 0, -1}), false));
+    // Collision-only shapes are always drawn, translucent (RFC 0016 Addendum A), so the sphere
+    // is picked with the collision toggle off too.
+    EXPECT_TRUE(pickShape(document, links, lineFrom({0.5, 0, 2}, {0, 0, -1}), false));
     EXPECT_FALSE(pickShape(document, links, lineFrom({2, 2, 2}, {0, 0, -1})).has_value());
     // A link placed by its frame: the same box 1 m up is hit 1 m higher.
     const std::vector<Frame> raised{Frame{{0, 0, 1}}};

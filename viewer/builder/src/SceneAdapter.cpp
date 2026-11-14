@@ -3,6 +3,7 @@
 // One prim per link (no mesh), a child prim per visual shape, a prim per sensor (a small marker
 // mesh), one collider per collision shape. A preview change only re-poses: poseScene keeps the
 // statics pointer, so the renderer keeps the meshes on the GPU (R15).
+#include "lagrange/viewer/builder/MeshShapes.hpp"
 #include "lagrange/viewer/builder/Primitives.hpp"
 #include "lagrange/viewer/builder/SceneAdapter.hpp"
 
@@ -27,20 +28,86 @@ bool hasColor(const std::array<float, 4>& rgba) {
     return std::ranges::any_of(rgba, [](float v) { return v != 0.0F; });
 }
 
-std::optional<MeshData> shapeMesh(const Shape& shape) {
+/// One drawn piece of a shape: a primitive is one, a mesh file one per material.
+struct Piece {
+    MeshData mesh;
+    std::array<float, 4> color{};  // the file's colour; all zero: none (the shape's or default)
+};
+
+/// A mesh file's parts at the shape's scale (PrimData has no scale: it is baked in).
+std::vector<Piece> meshPieces(const Shape& shape) {
+    std::vector<Piece> pieces;
+    const std::shared_ptr<const MeshFile> file = loadMesh(shape.mesh);
+    for (std::size_t p = 0; p < file->parts.size(); ++p) {
+        Piece piece{file->parts[p], file->colors[p]};
+        MeshData& mesh = piece.mesh;
+        for (std::size_t i = 0; i + 2 < mesh.positions.size(); i += 3) {
+            for (std::size_t k = 0; k < 3; ++k) {
+                mesh.positions[i + k] *= static_cast<float>(shape.scale.at(k));
+            }
+        }
+        // A mirroring or uneven scale turns the normals: n' ∝ n / scale.
+        for (std::size_t i = 0; i + 2 < mesh.normals.size(); i += 3) {
+            std::array<double, 3> n{};
+            for (std::size_t k = 0; k < 3; ++k) {
+                n.at(k) =
+                    mesh.normals[i + k] / (shape.scale.at(k) != 0.0 ? shape.scale.at(k) : 1.0);
+            }
+            const double length = std::hypot(n[0], n[1], n[2]);
+            for (std::size_t k = 0; k < 3 && length > 0.0; ++k) {
+                mesh.normals[i + k] = static_cast<float>(n.at(k) / length);
+            }
+        }
+        if (!mesh.positions.empty()) {
+            std::array<float, 6> box{mesh.positions[0], mesh.positions[1], mesh.positions[2],
+                                     mesh.positions[0], mesh.positions[1], mesh.positions[2]};
+            for (std::size_t i = 0; i + 2 < mesh.positions.size(); i += 3) {
+                for (std::size_t k = 0; k < 3; ++k) {
+                    box.at(k) = std::min(box.at(k), mesh.positions[i + k]);
+                    box.at(k + 3) = std::max(box.at(k + 3), mesh.positions[i + k]);
+                }
+            }
+            mesh.aabb = box;
+        }
+        pieces.push_back(std::move(piece));
+    }
+    return pieces;
+}
+
+std::vector<Piece> shapePieces(const Shape& shape) {
     switch (shape.kind) {
         case Shape::Kind::Box:
-            return boxMesh(shape.size);
+            return {Piece{boxMesh(shape.size)}};
         case Shape::Kind::Cylinder:
-            return cylinderMesh(shape.size[0], shape.size[1]);
+            return {Piece{cylinderMesh(shape.size[0], shape.size[1])}};
         case Shape::Kind::Sphere:
-            return sphereMesh(shape.size[0]);
+            return {Piece{sphereMesh(shape.size[0])}};
+        case Shape::Kind::Capsule:
+            return {Piece{capsuleMesh(shape.size[0], shape.size[1])}};
         case Shape::Kind::Mesh:
-            // Mesh files are not loaded by the builder yet (no mesh reader in the viewer):
-            // the shape is listed but not drawn. TODO(RFC 0016 phase 2): mesh shapes.
-            return std::nullopt;
+            return meshPieces(shape);  // Addendum A: read by lagrange_meshes
     }
-    return std::nullopt;
+    return {};
+}
+
+/// What the shape collides as, to draw: a primitive itself, a mesh its server hull.
+std::optional<MeshData> collisionMesh(const Shape& shape, std::optional<std::uint32_t> drawn,
+                                      const SceneStatics& statics) {
+    if (shape.kind != Shape::Kind::Mesh) {
+        if (drawn) {
+            return statics.meshes[*drawn];
+        }
+        return std::nullopt;
+    }
+    const std::shared_ptr<const MeshFile> file = loadMesh(shape.mesh);
+    if (!file->error.empty()) {
+        return std::nullopt;
+    }
+    const MeshSolid& solid = file->solid(shape.scale);
+    if (!solid.hull) {
+        return std::nullopt;
+    }
+    return surfaceMesh(*solid.hull);
 }
 
 using Quat = std::array<double, 4>;  // w x y z
@@ -95,7 +162,8 @@ Transform toTransform(const Frame& frame) {
 
 }  // namespace
 
-BuiltScene buildStatics(const Document& document, std::uint64_t generation) {
+BuiltScene buildStatics(const Document& document, std::uint64_t generation,
+                        const BuildOptions& options) {
     auto statics = std::make_shared<SceneStatics>();
     statics->generation = generation;
     statics->stagePath = "builder:" + document.robot;
@@ -107,6 +175,7 @@ BuiltScene buildStatics(const Document& document, std::uint64_t generation) {
         scene.primLink.push_back(link);
         scene.primOffset.push_back(offset);
         scene.primSensor.push_back(sensor);
+        scene.primShape.push_back(-1);
         return static_cast<std::uint32_t>(statics->prims.size() - 1);
     };
     const auto addMaterial = [&](std::string name, const std::array<float, 4>& color) {
@@ -118,6 +187,15 @@ BuiltScene buildStatics(const Document& document, std::uint64_t generation) {
     };
 
     std::vector<std::uint32_t> linkPrims;  // per link: its own prim
+    struct CollisionPrim {
+        std::uint32_t mesh;
+        std::uint32_t parent;
+        int link;
+        Frame offset;
+        int shape;
+        std::string item;
+    };
+    std::vector<CollisionPrim> collisionPrims;  // drawn last, translucent
     const std::string root = "/" + (document.robot.empty() ? std::string("robot") : document.robot);
     for (std::size_t l = 0; l < document.links.size(); ++l) {
         const Link& link = document.links[l];
@@ -129,26 +207,62 @@ BuiltScene buildStatics(const Document& document, std::uint64_t generation) {
         const std::uint32_t linkPrimId = addPrim(linkPrim, link.name, linkIndex, Frame{}, -1);
         linkPrims.push_back(linkPrimId);
         int visualCount = 0;
-        for (const Shape& shape : link.shapes) {
-            std::optional<MeshData> mesh = shapeMesh(shape);
-            if (!mesh || mesh->positions.empty()) {
+        for (std::size_t shapeIndex = 0; shapeIndex < link.shapes.size(); ++shapeIndex) {
+            const Shape& shape = link.shapes[shapeIndex];
+            const Frame offset = toFrame(shape.origin);
+            std::optional<std::uint32_t> firstMesh;
+            // Only what is drawn or collides as itself needs its own meshes; a collision-only
+            // mesh (a split part) is drawn by its hull below.
+            const bool drawn = shape.visual || shape.kind != Shape::Kind::Mesh;
+            for (Piece& piece : drawn ? shapePieces(shape) : std::vector<Piece>{}) {
+                if (piece.mesh.positions.empty()) {
+                    continue;
+                }
+                statics->meshes.push_back(std::move(piece.mesh));
+                const auto meshId = static_cast<std::uint32_t>(statics->meshes.size() - 1);
+                firstMesh = firstMesh.value_or(meshId);
+                if (shape.visual) {
+                    PrimData prim;
+                    prim.parent = linkPrimId;
+                    prim.name = "visual_" + std::to_string(visualCount++);
+                    prim.path = linkPrim.path + "/" + prim.name;
+                    prim.typeName = "Mesh";
+                    prim.mesh = meshId;
+                    const bool own = hasColor(shape.rgba);
+                    prim.material = addMaterial(
+                        link.name + "/" + prim.name,
+                        own ? shape.rgba
+                            : (hasColor(piece.color) ? piece.color : kDefaultShapeColor));
+                    const std::uint32_t id =
+                        addPrim(std::move(prim), link.name, linkIndex, offset, -1);
+                    scene.primShape[id] = static_cast<int>(shapeIndex);
+                }
+                if (shape.collision && shape.kind != Shape::Kind::Mesh) {
+                    ColliderData collider;
+                    collider.prim = linkPrimId;
+                    collider.mesh = meshId;
+                    const Transform pose = toTransform(offset);
+                    collider.position = pose.position;
+                    collider.rotation = pose.rotation;
+                    statics->colliders.push_back(collider);
+                }
+            }
+            if (!shape.collision) {
                 continue;
             }
-            const Frame offset = toFrame(shape.origin);
-            statics->meshes.push_back(std::move(*mesh));
-            const auto meshId = static_cast<std::uint32_t>(statics->meshes.size() - 1);
-            if (shape.visual) {
-                PrimData prim;
-                prim.parent = linkPrimId;
-                prim.name = "visual_" + std::to_string(visualCount++);
-                prim.path = linkPrim.path + "/" + prim.name;
-                prim.typeName = "Mesh";
-                prim.mesh = meshId;
-                prim.material = addMaterial(link.name + "/" + prim.name,
-                                            hasColor(shape.rgba) ? shape.rgba : kDefaultShapeColor);
-                addPrim(std::move(prim), link.name, linkIndex, offset, -1);
+            // A mesh collides as its convex hull (the server's convexHullOf): that is the
+            // collider. Drawn later, translucent, so the visuals stay seen through it.
+            std::optional<MeshData> hull;
+            if (shape.kind == Shape::Kind::Mesh || options.collision || !shape.visual) {
+                hull = collisionMesh(shape, firstMesh, *statics);
             }
-            if (shape.collision) {
+            if (!hull || hull->positions.empty()) {
+                continue;
+            }
+            std::uint32_t meshId = firstMesh.value_or(kNone);
+            if (shape.kind == Shape::Kind::Mesh) {
+                statics->meshes.push_back(std::move(*hull));
+                meshId = static_cast<std::uint32_t>(statics->meshes.size() - 1);
                 ColliderData collider;
                 collider.prim = linkPrimId;
                 collider.mesh = meshId;
@@ -156,6 +270,12 @@ BuiltScene buildStatics(const Document& document, std::uint64_t generation) {
                 collider.position = pose.position;
                 collider.rotation = pose.rotation;
                 statics->colliders.push_back(collider);
+            }
+            // Collision-only shapes are always drawn (they are the user's: templates, fitted,
+            // drawn, parts); every collision shape when the view's collision toggle is on.
+            if (options.collision || !shape.visual) {
+                collisionPrims.push_back({meshId, linkPrimId, linkIndex, offset,
+                                          static_cast<int>(shapeIndex), link.name});
             }
         }
     }
@@ -199,6 +319,23 @@ BuiltScene buildStatics(const Document& document, std::uint64_t generation) {
         prim.material = *sensorMaterial;
         addPrim(std::move(prim), sensor.name, linkIndex, toFrame(sensor.origin),
                 static_cast<int>(s));
+    }
+    // Collision geometry, translucent, after everything opaque (the Lit pipeline blends by the
+    // material's alpha; drawn last, what is inside shows through).
+    if (!collisionPrims.empty()) {
+        const std::uint32_t material = addMaterial("collision", kCollisionColor);
+        int count = 0;
+        for (const CollisionPrim& c : collisionPrims) {
+            PrimData prim;
+            prim.parent = c.parent;
+            prim.name = "collision_" + std::to_string(count++);
+            prim.path = statics->prims[c.parent].path + "/" + prim.name;
+            prim.typeName = "Collision";
+            prim.mesh = c.mesh;
+            prim.material = material;
+            const std::uint32_t id = addPrim(std::move(prim), c.item, c.link, c.offset, -1);
+            scene.primShape[id] = c.shape;
+        }
     }
     scene.statics = std::move(statics);
     return scene;

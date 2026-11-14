@@ -179,7 +179,8 @@ public:
             if (building) {
                 gizmo_.click(session, links_, builder::gizmo::Line{ray.origin, ray.direction},
                              sensor ? built_.primItem[prim] : std::string{},
-                             any && !sensor ? built_.primItem[prim] : std::string{});
+                             any && !sensor ? built_.primItem[prim] : std::string{},
+                             any && prim < built_.primShape.size() ? built_.primShape[prim] : -1);
             } else {
                 select(session, prim);
             }
@@ -222,15 +223,17 @@ private:
     /// picking and labels: rebuilt on a document edit, re-posed on a preview change.
     void refresh(const BuilderSession& session) {
         const builder::Document& document = session.document();
-        const bool edited =
-            session.history.revision() != revision_ || session.opened != opened_ || !built_.statics;
+        const bool edited = session.history.revision() != revision_ || session.opened != opened_ ||
+                            !built_.statics || session.view.collision != collision_;
         if (session.opened != opened_) {
             framed_ = false;  // a new document: centre the view on it (SPEC state 1)
         }
         if (edited) {
             revision_ = session.history.revision();
             opened_ = session.opened;
-            built_ = builder::buildStatics(document, ++generation_);
+            collision_ = session.view.collision;  // the same prims as BuilderHost draws
+            built_ = builder::buildStatics(document, ++generation_,
+                                           builder::BuildOptions{.collision = collision_});
         }
         if (edited || !frame_ || session.preview != preview_) {
             preview_ = session.preview;
@@ -515,6 +518,7 @@ private:
     bool framed_{false};
     std::uint64_t revision_{~std::uint64_t{0}};
     std::uint64_t opened_{0};
+    bool collision_{false};
     std::uint64_t generation_{0};
     builder::BuiltScene built_;
     builder::Preview preview_;

@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -1065,6 +1066,28 @@ public:
         builderSession_.openRequested = true;
         builderSession_.openPath = path;
     }
+    /// Add → Mesh… → Browse… (Addendum A): the SDL dialog for a mesh file, asked for once.
+    [[nodiscard]] bool takeBuilderMeshDialog() {
+        return std::exchange(builderSession_.meshDialogRequested, false);
+    }
+    /// A mesh chosen in that dialog, or dropped on the window while the Builder is shown: a
+    /// mesh link on the Add panel's target (the selected link).
+    void builderAddMesh(const std::string& path) {
+        builderSession_.addMeshRequested = true;
+        builderSession_.addMeshPath = path;
+    }
+    /// Headless `--input N:select:NAME`: selects the link, joint or sensor NAME in the Builder.
+    void builderSelect(const std::string& name) {
+        using SelectionKind = BuilderSession::Selection::Kind;
+        const builder::Document& document = builderSession_.document();
+        if (builder::findLink(document, name) != nullptr) {
+            builderSession_.selection = {SelectionKind::Link, name};
+        } else if (builder::findJoint(document, name) != nullptr) {
+            builderSession_.selection = {SelectionKind::Joint, name};
+        } else if (builder::findSensor(document, name) != nullptr) {
+            builderSession_.selection = {SelectionKind::Sensor, name};
+        }
+    }
     void builderSaveRequest(const std::string& path) {
         builderSession_.saveRequested = true;
         builderSession_.savePath = path;
@@ -1451,6 +1474,20 @@ std::vector<InputEvent> parseInput(const std::string& script) {
     return events;
 }
 
+/// A mesh file the builder adds as a link when dropped (Addendum A): STL, DAE, OBJ, glTF.
+bool isMeshFile(std::string_view path) {
+    const std::size_t dot = path.rfind('.');
+    if (dot == std::string_view::npos) {
+        return false;
+    }
+    std::string extension(path.substr(dot + 1));
+    for (char& c : extension) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return extension == "stl" || extension == "dae" || extension == "obj" || extension == "glb" ||
+           extension == "gltf";
+}
+
 void applyInput(const std::vector<InputEvent>& events, std::uint32_t frame, ImGuiIO& io) {
     for (const InputEvent& event : events) {
         if (event.frame != frame) {
@@ -1622,6 +1659,11 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             if (applied != rendered) {
                 applied = rendered;  // a held frame applies its input once
                 applyInput(input, rendered, io);
+                for (const InputEvent& event : input) {
+                    if (event.frame == rendered && event.kind == "select") {
+                        ui.builderSelect(event.text);
+                    }
+                }
             }
             io.DeltaTime = 1.0F / 60.0F;
             ImGui_ImplVulkan_NewFrame();
@@ -1990,6 +2032,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
             std::vector<std::string> paths;
             std::vector<std::string> builderOpen;  // the Builder's Open… and Save as… dialogs
             std::vector<std::string> builderSave;
+            std::vector<std::string> builderMesh;  // Add → Mesh… → Browse…
         } chosen;
 
         bool running = true;
@@ -2018,6 +2061,9 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
                     if (ui.workspace() == Workspace::Builder && !ui.launcherActive() &&
                         (dropped.ends_with(".urdf") || dropped.ends_with(".xacro"))) {
                         ui.builderOpenRequest(event.drop.data);
+                    } else if (ui.workspace() == Workspace::Builder && !ui.launcherActive() &&
+                               isMeshFile(dropped)) {
+                        ui.builderAddMesh(event.drop.data);  // a mesh link on the selection
                     } else if (ui.launcherActive()) {
                         ui.setOpenTarget(event.drop.data);
                     } else {
@@ -2077,6 +2123,19 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
                     },
                     &chosen, window, kRobots, 2, nullptr, false);
             }
+            if (ui.takeBuilderMeshDialog()) {
+                static const SDL_DialogFileFilter kMeshes[] = {
+                    {"Meshes", "stl;STL;dae;DAE;obj;OBJ;glb;gltf"}, {"All files", "*"}};
+                SDL_ShowOpenFileDialog(
+                    [](void* user, const char* const* files, int /*filter*/) {
+                        auto* result = static_cast<Chosen*>(user);
+                        if (files != nullptr && files[0] != nullptr) {
+                            const std::lock_guard lock(result->mutex);
+                            result->builderMesh.emplace_back(files[0]);
+                        }
+                    },
+                    &chosen, window, kMeshes, 2, nullptr, false);
+            }
             if (ui.takeBuilderSaveAsDialog()) {
                 static const SDL_DialogFileFilter kUrdf[] = {{"URDF", "urdf"}};
                 SDL_ShowSaveFileDialog(
@@ -2095,6 +2154,10 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
                     ui.builderOpenRequest(path);
                 }
                 chosen.builderOpen.clear();
+                for (const std::string& path : chosen.builderMesh) {
+                    ui.builderAddMesh(path);
+                }
+                chosen.builderMesh.clear();
                 for (std::string path : chosen.builderSave) {
                     if (!path.ends_with(".urdf")) {
                         path += ".urdf";

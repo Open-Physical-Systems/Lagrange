@@ -1,7 +1,9 @@
 #include "BuilderHost.hpp"
 #include "lagrange/proto/Endpoint.hpp"
 #include "lagrange/viewer/Widgets.hpp"
+#include "lagrange/viewer/builder/Collision.hpp"
 #include "lagrange/viewer/builder/Kinematics.hpp"
+#include "lagrange/viewer/builder/MeshShapes.hpp"
 #include "lagrange/viewer/builder/SensorCatalog.hpp"
 #include "lagrange/viewer/builder/Urdf.hpp"
 #include "lagrange/viewer/builder/Validation.hpp"
@@ -12,16 +14,21 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <numbers>
+#include <optional>
+#include <set>
 #include <sstream>
 #include <string_view>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
+#include <utility>
 #include <variant>
 
 namespace lagrange::viewer {
@@ -110,9 +117,42 @@ struct Pen {
     }
 };
 
+void shapeWire(const Pen& link, const builder::Shape& shape, bool outline = false);
+
+/// A mesh's box (min x y z, max x y z) at its scale, as a box shape to outline.
+std::optional<builder::Shape> meshBox(const builder::Shape& shape) {
+    const auto file = builder::loadMesh(shape.mesh);
+    if (!file->error.empty() || file->welded.points.empty()) {
+        return std::nullopt;
+    }
+    V3 low{1e300, 1e300, 1e300};
+    V3 high{-1e300, -1e300, -1e300};
+    for (const V3& p : file->welded.points) {
+        for (std::size_t k = 0; k < 3; ++k) {
+            low.at(k) = std::min(low.at(k), p.at(k) * shape.scale.at(k));
+            high.at(k) = std::max(high.at(k), p.at(k) * shape.scale.at(k));
+        }
+    }
+    builder::Shape box;
+    box.kind = builder::Shape::Kind::Box;
+    box.size = {high[0] - low[0], high[1] - low[1], high[2] - low[2]};
+    const builder::Frame centre = builder::compose(
+        builder::toFrame(shape.origin),
+        builder::Frame{{(high[0] + low[0]) / 2, (high[1] + low[1]) / 2, (high[2] + low[2]) / 2}});
+    box.origin.xyz = centre.position;
+    box.origin.rpy = shape.origin.rpy;
+    return box;
+}
+
 /// The edges of a shape in its link's frame: a box's twelve, a cylinder's two rims and four
-/// sides, a sphere's three great circles.
-void shapeWire(const Pen& link, const builder::Shape& shape) {
+/// sides, a sphere's three great circles; a mesh its server hull's, or with `outline` its box.
+void shapeWire(const Pen& link, const builder::Shape& shape, bool outline) {
+    if (outline && shape.kind == builder::Shape::Kind::Mesh) {
+        if (const auto box = meshBox(shape)) {
+            shapeWire(link, *box);
+        }
+        return;
+    }
     const Pen pen{link.lines, builder::compose(link.frame, builder::toFrame(shape.origin))};
     switch (shape.kind) {
         case builder::Shape::Kind::Box: {
@@ -155,8 +195,44 @@ void shapeWire(const Pen& link, const builder::Shape& shape) {
             pen.arc(r, {0, 1, 0}, {0, 0, 1});
             break;
         }
-        case builder::Shape::Kind::Mesh:
-            break;  // mesh files are not drawn yet (SceneAdapter.cpp)
+        case builder::Shape::Kind::Capsule: {  // Addendum A: rims, sides and the two caps
+            const double r = shape.size[0];
+            const double z = shape.size[1] / 2;
+            for (const double side : {-z, z}) {
+                const Pen rim{pen.lines, builder::compose(pen.frame, builder::Frame{{0, 0, side}})};
+                rim.arc(r, {1, 0, 0}, {0, 1, 0});
+                const double from = side > 0 ? 0.0 : std::numbers::pi;
+                rim.arc(r, {1, 0, 0}, {0, 0, 1}, from, from + std::numbers::pi);
+                rim.arc(r, {0, 1, 0}, {0, 0, 1}, from, from + std::numbers::pi);
+            }
+            for (int i = 0; i < 4; ++i) {
+                const double a = std::numbers::pi / 2 * i;
+                pen.segment({r * std::cos(a), r * std::sin(a), -z},
+                            {r * std::cos(a), r * std::sin(a), z});
+            }
+            break;
+        }
+        case builder::Shape::Kind::Mesh: {  // Addendum A: the edges of its server hull
+            const auto file = builder::loadMesh(shape.mesh);
+            if (!file->error.empty()) {
+                break;
+            }
+            const builder::MeshSolid& solid = file->solid(shape.scale);
+            if (!solid.hull) {
+                break;
+            }
+            std::set<std::pair<std::uint32_t, std::uint32_t>> edges;
+            for (const auto& t : solid.hull->triangles) {
+                for (std::size_t e = 0; e < 3; ++e) {
+                    const std::uint32_t a = t.at(e);
+                    const std::uint32_t b = t.at((e + 1) % 3);
+                    if (edges.emplace(std::min(a, b), std::max(a, b)).second) {
+                        pen.segment(solid.hull->points[a], solid.hull->points[b]);
+                    }
+                }
+            }
+            break;
+        }
     }
 }
 
@@ -276,6 +352,10 @@ BuilderHost::BuilderHost(BuilderSession& session, ViewerClient& client)
 }
 
 void BuilderHost::afterUi() {
+    // Relative mesh paths are read against the document's folder (Addendum A): set before
+    // validation and drawing, which read the meshes.
+    builder::setMeshBase(session_.path.empty() ? std::filesystem::path{}
+                                               : session_.path.parent_path());
     // Validation runs on a document change, not every frame (R15).
     if (session_.history.revision() != validatedRevision_ || session_.opened != validatedOpened_) {
         validatedRevision_ = session_.history.revision();
@@ -287,6 +367,7 @@ void BuilderHost::afterUi() {
     const double now = ImGui::GetTime();
     pollTest(now);
     pollJobs();
+    runSplit();  // Addendum A: CoACD, polled in every mode
     if (std::exchange(session_.backRequested, false) &&
         session_.mode != BuilderSession::Mode::Build) {
         endTest({});
@@ -892,15 +973,81 @@ void BuilderHost::pollTest(double now) {
     }
 }
 
+void BuilderHost::runSplit() {
+    // Addendum A, choice 2: CoACD as a polled child process (never waited for here).
+    if (session_.splitCancelRequested) {
+        session_.splitCancelRequested = false;
+        split_.cancel();
+    }
+    if (session_.splitRequested) {
+        session_.splitRequested = false;
+        const builder::Link* link = builder::findLink(session_.document(), session_.splitLink);
+        const auto mesh = link != nullptr ? builder::collisionMeshOf(*link) : std::nullopt;
+        session_.split = {};
+        session_.split.link = session_.splitLink;
+        if (!mesh) {
+            session_.split.failed = true;
+            session_.split.message = "the link has no mesh shape to split";
+        } else {
+            const builder::Shape& shape = link->shapes[*mesh];
+            builder::SplitRequest request;
+            request.robotFile = session_.path;
+            request.robot = session_.document().robot;
+            request.link = link->name;
+            request.mesh = shape.mesh;
+            request.meshBase = builder::meshBase();
+            request.scale = shape.scale;
+            request.threshold = session_.splitThreshold;
+            request.seed = session_.splitSeed;
+            split_.reset();
+            const std::string error = split_.start(request);
+            session_.split.running = error.empty();
+            session_.split.failed = !error.empty();
+            session_.split.message = error;
+        }
+    }
+    const builder::CollisionSplit::State state = split_.poll();
+    if (state == builder::CollisionSplit::State::Running) {
+        session_.split.running = true;
+        session_.split.seconds = split_.seconds();
+    } else if (state == builder::CollisionSplit::State::Done) {
+        const std::string name = split_.link();
+        const std::vector<std::string> parts = split_.parts();
+        builder::Document next = session_.document();
+        if (builder::Link* link = builder::findLink(next, name)) {
+            builder::setSplitParts(*link, parts);
+            session_.history.commit(
+                std::move(next),
+                "Split " + name + " into " + std::to_string(parts.size()) + " convex parts", {},
+                ImGui::GetTime());
+        }
+        session_.split.running = false;
+        session_.split.failed = false;
+        session_.split.message = std::to_string(parts.size()) + " convex parts in " +
+                                 session_.document().robot + "_collision/";
+        session_.view.collision = true;
+        split_.reset();
+    } else if (state == builder::CollisionSplit::State::Failed) {
+        session_.split.running = false;
+        session_.split.failed = true;
+        session_.split.message = split_.error();
+        split_.reset();
+    }
+}
+
 std::shared_ptr<const SceneFrame> BuilderHost::frameToDraw(Camera& camera) {
     camera = session_.camera;
     const builder::Document& document = session_.document();
-    const bool rebuilt =
-        session_.history.revision() != builtRevision_ || session_.opened != builtOpened_;
+    const bool rebuilt = session_.history.revision() != builtRevision_ ||
+                         session_.opened != builtOpened_ ||
+                         session_.view.collision != builtCollision_;
     if (rebuilt) {
         builtRevision_ = session_.history.revision();
         builtOpened_ = session_.opened;
-        built_ = builder::buildStatics(document, ++generation_);
+        // The collision toggle draws collision geometry translucent (Addendum A).
+        builtCollision_ = session_.view.collision;
+        built_ = builder::buildStatics(document, ++generation_,
+                                       builder::BuildOptions{.collision = builtCollision_});
     }
     if (rebuilt || !frame_ || session_.preview != posedPreview_) {
         posedPreview_ = session_.preview;
@@ -1027,7 +1174,8 @@ void BuilderHost::buildOverlays(const std::vector<builder::Frame>& links) {
                 shapeWire(Pen{overlays_[Collision], links[l]}, shape);
             }
             if (linkSelected && shape.visual) {
-                shapeWire(Pen{overlays_[Accent], links[l]}, shape);  // the selection's outline
+                shapeWire(Pen{overlays_[Accent], links[l]}, shape,
+                          true);  // the selection's outline
             }
         }
     }

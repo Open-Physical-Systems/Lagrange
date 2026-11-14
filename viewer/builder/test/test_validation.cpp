@@ -101,6 +101,26 @@ std::filesystem::path scratch(const std::string& name) {
 
 void touch(const std::filesystem::path& file) {
     std::filesystem::create_directories(file.parent_path());
+    if (file.extension() == ".dae") {
+        // A mesh is read once found (Addendum A): a real file, a small sample one.
+        std::filesystem::copy_file(std::filesystem::path(LAGRANGE_BUILDER_ASSETS_DIR) / "amr_fms" /
+                                       "meshes" / "battery.dae",
+                                   file, std::filesystem::copy_options::overwrite_existing);
+        return;
+    }
+    if (file.extension() == ".stl") {
+        // A tetrahedron, closed and convex: found, read, and nothing to say about it.
+        std::ofstream(file) << "solid t\n"
+                               "facet normal 0 0 -1\nouter loop\nvertex 0 0 0\nvertex 0 1 0\n"
+                               "vertex 1 0 0\nendloop\nendfacet\n"
+                               "facet normal 0 -1 0\nouter loop\nvertex 0 0 0\nvertex 1 0 0\n"
+                               "vertex 0 0 1\nendloop\nendfacet\n"
+                               "facet normal -1 0 0\nouter loop\nvertex 0 0 0\nvertex 0 0 1\n"
+                               "vertex 0 1 0\nendloop\nendfacet\n"
+                               "facet normal 1 1 1\nouter loop\nvertex 1 0 0\nvertex 0 1 0\n"
+                               "vertex 0 0 1\nendloop\nendfacet\nendsolid t\n";
+        return;
+    }
     std::ofstream(file) << "solid empty\nendsolid empty\n";
 }
 

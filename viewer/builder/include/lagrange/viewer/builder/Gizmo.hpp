@@ -100,14 +100,16 @@ struct Target {
 
 /// The full length of `shape` along its own axis `axis` (box: its size; cylinder: twice the
 /// radius across x and y, the length along z; sphere: twice the radius); nullopt for a shape
-/// that has no size handles (a mesh, or a kind this builder does not size).
+/// that has no size handles (a mesh: its scale is edited in Properties). A capsule: twice the
+/// radius across x and y, tip to tip (length + 2 radius) along z.
 [[nodiscard]] std::optional<double> extentOf(const Shape& shape, int axis);
 
 /// Drags the face of `shape` on side `sign` (+1 or -1) of its axis `axis` outward by `delta`
 /// (m; negative pulls it in) while the opposite face stays where it is: the size value that
 /// changes (box size, cylinder radius or length, sphere radius) is snapped to a multiple of
 /// `step` (m; 0: off) and kept at least kMinSize, and the shape's origin moves by half the
-/// change towards the dragged face. False (shape unchanged) when it has no size handles.
+/// change towards the dragged face. A capsule along z changes its straight length (at least 0)
+/// and keeps its radius. False (shape unchanged) when it has no size handles.
 bool resize(Shape& shape, int axis, int sign, double delta, double step);
 
 // --- joint axis -------------------------------------------------------------------------------
@@ -121,9 +123,10 @@ bool resize(Shape& shape, int axis, int sign, double delta, double step);
 // --- picking ----------------------------------------------------------------------------------
 
 /// The shape a ray meets first, and where (Measure's points, and picking shapes that are not
-/// drawn, collision-only ones). Boxes, cylinders and spheres are tested exactly; meshes and
-/// kinds without a size are skipped, and so are shapes the view does not draw: neither visual
-/// nor collision, or collision only while `collisionShown` is false.
+/// drawn, collision-only ones). Boxes, cylinders, spheres and capsules are tested exactly, a
+/// mesh by its file's triangles at its scale (Addendum A); shapes neither visual nor collision
+/// are skipped. Collision-only shapes are always drawn and so always picked; `collisionShown`
+/// is kept for the callers and no longer changes the result.
 struct ShapeHit {
     int link{-1};   ///< index into Document::links
     int shape{-1};  ///< index into Link::shapes

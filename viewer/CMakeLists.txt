@@ -9,6 +9,8 @@ find_package(imgui_vendor REQUIRED)
 find_package(SDL3 REQUIRED)
 find_package(tinyxml2 REQUIRED)
 find_package(yaml-cpp REQUIRED)
+# Mesh files for the builder (RFC 0016 open question 8, Addendum A): the server's own reader.
+find_package(lagrange_meshes REQUIRED)
 
 # Protocol client and scene store. No Vulkan, no ImGui: testable without a display.
 add_library(
@@ -33,11 +35,16 @@ target_link_libraries(
 )
 
 # The robot builder's model (RFC 0016): document, mass, kinematics, validation, undo, URDF,
-# sensor catalog, primitives, scene adapter, test server. No ImGui, no Vulkan, no simulation
-# module (invariant 14); lagrange_viewer_client only for the SceneFrame types.
+# sensor catalog, primitives, scene adapter, test server, meshes and collision. No ImGui, no
+# Vulkan, no simulation module (invariant 14); lagrange_viewer_client only for the SceneFrame
+# types. lagrange_meshes (and through it lagrange_core, a library) is linked here only, privately,
+# so the builder reads a mesh and makes its hull as the server does (open question 8, accepted);
+# no builder header includes it, so the panels stay free of core.
 add_library(
     lagrange_viewer_builder
     STATIC
+    builder/src/Collision.cpp
+    builder/src/CollisionSplit.cpp
     builder/src/Document.cpp
     builder/src/Edits.cpp
     builder/src/Gizmo.cpp
@@ -45,6 +52,7 @@ add_library(
     builder/src/Kinematics.cpp
     builder/src/MassProperties.cpp
     builder/src/Materials.cpp
+    builder/src/MeshShapes.cpp
     builder/src/Primitives.cpp
     builder/src/SceneAdapter.cpp
     builder/src/SensorCatalog.cpp
@@ -57,7 +65,10 @@ target_include_directories(lagrange_viewer_builder PUBLIC builder/include)
 target_link_libraries(
     lagrange_viewer_builder
     PUBLIC lagrange_viewer_client
-    PRIVATE tinyxml2::tinyxml2 yaml-cpp::yaml-cpp
+    PRIVATE
+        tinyxml2::tinyxml2
+        yaml-cpp::yaml-cpp
+        lagrange_meshes::lagrange_meshes
 )
 
 # Scene renderer on the GPU layer, with the shared Slang shaders.
@@ -309,12 +320,14 @@ if(BUILD_TESTING)
         builder/test/test_gizmo.cpp
         builder/test/test_test_server.cpp
         builder/test/test_scene_renderer_statics.cpp
-        TIMEOUT 120
+        builder/test/test_mesh_shapes.cpp
+        TIMEOUT 600
     )
     target_link_libraries(
         test_viewer_builder
         lagrange_viewer_builder
         lagrange_viewer_render
+        lagrange_meshes::lagrange_meshes
     )
     target_compile_definitions(
         test_viewer_builder

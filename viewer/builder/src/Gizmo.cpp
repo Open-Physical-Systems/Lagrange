@@ -2,6 +2,7 @@
 // view"). See Gizmo.hpp.
 
 #include "lagrange/viewer/builder/Gizmo.hpp"
+#include "lagrange/viewer/builder/MeshShapes.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -92,6 +93,59 @@ std::optional<double> hitSphere(const Vec3& o, const Vec3& d, double r) {
 }
 
 /// A cylinder of radius r along z from -h to h.
+std::optional<double> hitCylinder(const Vec3& o, const Vec3& d, double r, double h);
+
+/// A capsule along z (Addendum A): its straight part and the two caps' spheres.
+std::optional<double> hitCapsule(const Vec3& o, const Vec3& d, double r, double h) {
+    std::optional<double> best = hitCylinder(o, d, r, h);
+    for (const double cap : {-h, h}) {
+        const auto t = hitSphere({o[0], o[1], o[2] - cap}, d, r);
+        if (t && (!best || *t < *best)) {
+            best = t;
+        }
+    }
+    return best;
+}
+
+/// A mesh file's triangles at `scale` (Möller and Trumbore 1997, both sides).
+std::optional<double> hitMesh(const Vec3& o, const Vec3& d, const Shape& shape) {
+    const auto file = loadMesh(shape.mesh);
+    if (!file->error.empty()) {
+        return std::nullopt;
+    }
+    const auto at = [&](std::uint32_t i) {
+        const Vec3& p = file->welded.points[i];
+        return Vec3{p[0] * shape.scale[0], p[1] * shape.scale[1], p[2] * shape.scale[2]};
+    };
+    std::optional<double> best;
+    for (const auto& tri : file->welded.triangles) {
+        const Vec3 a = at(tri[0]);
+        const Vec3 e1 = sub(at(tri[1]), a);
+        const Vec3 e2 = sub(at(tri[2]), a);
+        const Vec3 p = cross(d, e2);
+        const double det = dot(e1, p);
+        if (std::abs(det) < 1e-18) {
+            continue;
+        }
+        const double inv = 1.0 / det;
+        const Vec3 tv = sub(o, a);
+        const double u = dot(tv, p) * inv;
+        if (u < 0.0 || u > 1.0) {
+            continue;
+        }
+        const Vec3 q = cross(tv, e1);
+        const double v = dot(d, q) * inv;
+        if (v < 0.0 || u + v > 1.0) {
+            continue;
+        }
+        const double t = dot(e2, q) * inv;
+        if (t >= 0.0 && (!best || t < *best)) {
+            best = t;
+        }
+    }
+    return best;
+}
+
 std::optional<double> hitCylinder(const Vec3& o, const Vec3& d, double r, double h) {
     std::optional<double> best;
     const auto consider = [&](double t) {
@@ -330,6 +384,8 @@ std::optional<double> extentOf(const Shape& shape, int axis) {
             return axis == 2 ? shape.size[1] : 2.0 * shape.size[0];
         case Shape::Kind::Sphere:
             return 2.0 * shape.size[0];
+        case Shape::Kind::Capsule:  // across: twice the radius; along z: tip to tip
+            return axis == 2 ? shape.size[1] + 2.0 * shape.size[0] : 2.0 * shape.size[0];
         default:  // a mesh has no size of its own; other kinds are not sized here
             return std::nullopt;
     }
@@ -343,7 +399,18 @@ bool resize(Shape& shape, int axis, int sign, double delta, double step) {
     const double wanted = *before + delta;
     // The value the file holds: an edge length, or a radius (half the extent).
     const bool radius =
-        shape.kind == Shape::Kind::Sphere || (shape.kind == Shape::Kind::Cylinder && axis != 2);
+        shape.kind == Shape::Kind::Sphere ||
+        ((shape.kind == Shape::Kind::Cylinder || shape.kind == Shape::Kind::Capsule) && axis != 2);
+    if (shape.kind == Shape::Kind::Capsule && axis == 2) {
+        // Tip to tip: the straight part takes the change (it may be 0, a sphere), the caps stay.
+        const double r = shape.size[0];
+        shape.size[1] = std::max(0.0, snap(wanted - 2.0 * r, step));
+        const double after = shape.size[1] + 2.0 * r;
+        shape.origin.xyz =
+            add(shape.origin.xyz, rotate(toFrame(shape.origin).rotation,
+                                         scale(unit(axis), sign * (after - *before) * 0.5)));
+        return true;
+    }
     const double value = std::max(kMinSize, snap(radius ? wanted * 0.5 : wanted, step));
     double after = value;
     if (shape.kind == Shape::Kind::Box) {
@@ -400,7 +467,10 @@ std::optional<ShapeHit> pickShape(const Document& document, const std::vector<Fr
         const Link& link = document.links[l];
         for (std::size_t s = 0; s < link.shapes.size(); ++s) {
             const Shape& shape = link.shapes[s];
-            if (!shape.visual && !(shape.collision && collisionShown)) {
+            // Collision-only shapes are always drawn (Addendum A), so always picked; a shape
+            // that is both is drawn as its visual.
+            (void)collisionShown;
+            if (!shape.visual && !shape.collision) {
                 continue;
             }
             const Frame frame = compose(links[l], toFrame(shape.origin));
@@ -418,7 +488,11 @@ std::optional<ShapeHit> pickShape(const Document& document, const std::vector<Fr
                 case Shape::Kind::Sphere:
                     t = hitSphere(o, d, shape.size[0]);
                     break;
-                default:
+                case Shape::Kind::Capsule:
+                    t = hitCapsule(o, d, shape.size[0], shape.size[1] * 0.5);
+                    break;
+                case Shape::Kind::Mesh:
+                    t = hitMesh(o, d, shape);
                     break;
             }
             if (t && (!best || *t < best->distance)) {

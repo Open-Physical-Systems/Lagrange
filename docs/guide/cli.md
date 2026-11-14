@@ -316,6 +316,8 @@ lagrange robot_baked.urdf
 
 Each concave mesh becomes several `<collision>` elements, one per convex part (CoACD, `pip install coacd`). Your file is not changed. For a USD stage with mesh colliders, `collision_bake` does the same.
 
+The viewer's robot builder does the same for one link (Properties, Collision, *Split into convex parts*): it runs `lagrange bake`'s `bake_urdf` with your `python3`, so CoACD is found where `lagrange bake` finds it (the system, a venv on `PATH`, or `pip install --user`, looked up in your account's `~/.local` even when `HOME` points elsewhere). The parts go into `<robot>_collision/` beside the saved file.
+
 ## Importing a robot
 
 `lagrange robot.urdf` needs no setup:

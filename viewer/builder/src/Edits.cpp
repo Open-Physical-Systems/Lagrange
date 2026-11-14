@@ -183,6 +183,9 @@ Shape defaultShape(Shape::Kind kind) {
         case Shape::Kind::Sphere:
             shape.size = {0.05, 0.0, 0.0};
             break;
+        case Shape::Kind::Capsule:
+            shape.size = {0.05, 0.1, 0.0};
+            break;
         case Shape::Kind::Mesh:
             break;
     }
@@ -199,6 +202,8 @@ double halfHeight(const Shape& shape) {
             return shape.size[1] * 0.5;
         case Shape::Kind::Sphere:
             return shape.size[0];
+        case Shape::Kind::Capsule:
+            return shape.size[1] * 0.5 + shape.size[0];
         case Shape::Kind::Mesh:
             return 0.0;
     }

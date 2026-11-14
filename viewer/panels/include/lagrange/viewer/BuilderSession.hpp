@@ -126,6 +126,33 @@ struct BuilderSession {
     bool openDialogRequested{false};
     bool saveAsDialogRequested{false};
 
+    // RFC 0016 Addendum A: meshes and how a link collides. Out, read by BuilderHost::afterUi(),
+    // which runs the split (CoACD, as `lagrange bake`) as a polled child process.
+    bool splitRequested{false};
+    std::string splitLink;  ///< with splitRequested: the link whose mesh is split
+    bool splitCancelRequested{false};
+    double splitThreshold{0.05};  ///< CoACD's concavity threshold (bake.py's default); form state
+    int splitSeed{0};             ///< CoACD's seed (bake.py's default); form state
+    /// In, from BuilderHost: the split as it runs, for the Collision section.
+    struct SplitStatus {
+        std::string link;  ///< the link split last (empty: none yet)
+        bool running{false};
+        double seconds{0.0};  ///< since it started, while running
+        bool failed{false};
+        std::string message;  ///< "12 convex parts" or why it failed
+    };
+    SplitStatus split;
+    /// Mesh files picked lately (Add → Mesh…), newest first; view state, not undoable.
+    std::vector<std::string> recentMeshes;
+    /// Add → Mesh… → Browse…: the windowed viewer's SDL file dialog for a mesh (App).
+    bool meshDialogRequested{false};
+    /// A mesh to add as a link on `addMeshOn` (empty: the Add panel's target link): chosen in
+    /// that dialog, or a mesh file dropped on the window while the Builder is shown.
+    bool addMeshRequested{false};
+    std::string addMeshPath;
+    std::string addMeshOn;
+    bool addMeshMillimetres{false};
+
     /// The document as it is now (history.current()).
     [[nodiscard]] const builder::Document& document() const { return history.current(); }
 };

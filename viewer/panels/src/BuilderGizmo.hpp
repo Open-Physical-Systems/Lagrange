@@ -56,11 +56,13 @@ public:
     bool handle(BuilderSession& session, const View& view, bool pressed);
 
     /// A click in the view that was not a drag, with the view's own pick (`pickedSensor`: the
-    /// sensor prim hit first, or empty; `pickedLink`: the link of the prim hit first, or empty).
-    /// Selects, drills into a shape, or adds a Measure point.
+    /// sensor prim hit first, or empty; `pickedLink`: the link of the prim hit first, or empty;
+    /// `pickedShape`: the shape that prim draws, BuiltScene::primShape, or -1). Selects, drills
+    /// into a shape, or adds a Measure point. When the exact pick misses, the view's prim pick
+    /// with its shape stands in (a collision-only shape drawn translucent, Addendum A).
     void click(BuilderSession& session, const std::vector<builder::Frame>& links,
                const builder::gizmo::Line& ray, const std::string& pickedSensor,
-               const std::string& pickedLink);
+               const std::string& pickedLink, int pickedShape = -1);
 
     /// Esc: cancels a drag, else clears Measure's points, else leaves the shape for its link.
     /// True when it did something.

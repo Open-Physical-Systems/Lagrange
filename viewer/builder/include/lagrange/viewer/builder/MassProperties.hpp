@@ -4,7 +4,8 @@
 //
 // Closed forms for uniform solids (box, cylinder along z, sphere); a link's shapes combine by
 // rotating each tensor into the link frame (R I Rᵀ) and moving it to the common COM (parallel
-// axis theorem). Mesh shapes get mass only in phase 2 (R12): until then they contribute none.
+// axis theorem). Capsules: a cylinder and two hemispheres. Meshes (Addendum A): the closed mesh's
+// volume integrals (Mirtich 1996), or its convex hull's when it is not closed (MeshShapes.hpp).
 
 #include "lagrange/viewer/builder/Document.hpp"
 
@@ -22,7 +23,8 @@ struct MassProperties {
 };
 
 /// One shape of density `density` (kg/m³) as a uniform solid, in the link frame (the shape's
-/// origin applied). Mass 0 for a Mesh shape in phase 1, and for density <= 0.
+/// origin applied). Mass 0 for density <= 0 and for a mesh that does not load (MeshShapes.hpp;
+/// relative paths against meshBase()).
 [[nodiscard]] MassProperties shapeMass(const Shape& shape, double density);
 
 /// The link's mass properties in the link frame, from its solid shapes and

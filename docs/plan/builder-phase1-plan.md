@@ -534,3 +534,20 @@ the Add panel's material menu. "custom" asks for a number and stores it as `dens
 
 Phase 2 (meshes through `lagrange_meshes`, `CommandJoint`, the start pose), phase 3 (the
 overlay) and phase 4 (USD, SDFormat) get their own plan when phase 1 is merged.
+
+## 8. Note: Addendum A changes to the §3 structs and interfaces (2026-11-15)
+
+RFC 0016 Addendum A (meshes and the collision choice) changes the WP0 interfaces by addition:
+
+- `Shape::Kind` gains `Capsule` (appended, so `kDragShape` values keep): `size` {radius,
+  length of the straight part}, written as `<capsule>` with `<robot version="1.1">`, which
+  urdfdom needs to read it (it ignores a capsule in a 1.0 file).
+- `Link` gains `CollisionChoice collision` (Unset, Mesh, Split, Shapes, Drawn), written as
+  `lagrange_collision` on `<link>` like `lagrange_density`.
+- `lagrange_viewer_builder` links `lagrange_meshes` privately (open question 8); new headers
+  `MeshShapes.hpp` (mesh files, Mirtich mass, the server's hull, Fit to mesh), `Collision.hpp`
+  (the choice's edits, `addMeshLink`) and `CollisionSplit.hpp` (CoACD through `bake_urdf` as a
+  polled child process). No builder header includes a core header.
+- `buildStatics` takes `BuildOptions` (draw collision geometry translucent) and `BuiltScene`
+  gains `primShape` (which shape a prim draws), for the gizmos of choice 4.
+- `BuilderSession` gains the split request and status, and `recentMeshes`.

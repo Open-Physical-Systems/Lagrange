@@ -533,15 +533,18 @@ void BuilderGizmo::updateDrag(BuilderSession& session, const View& view) {
         const builder::Shape before = shape;
         (void)g::resize(shape, handle.axis, handle.sign, *t - drag_.t0, step);
         const bool radius = shape.kind == builder::Shape::Kind::Sphere ||
-                            (shape.kind == builder::Shape::Kind::Cylinder && handle.axis != 2);
+                            ((shape.kind == builder::Shape::Kind::Cylinder ||
+                              shape.kind == builder::Shape::Kind::Capsule) &&
+                             handle.axis != 2);
         const std::size_t slot = shape.kind == builder::Shape::Kind::Box
                                      ? static_cast<std::size_t>(handle.axis)
                                  : radius ? 0U
                                           : 1U;
-        // What the file holds and Properties calls it: a box's edge, a cylinder's length
-        // (along its z) or radius, a sphere's radius.
+        // What the file holds and Properties calls it: a box's edge, a cylinder's or capsule's
+        // length (along its z) or radius, a sphere's radius.
         drag_.readout = radius ? std::string("radius")
-                        : shape.kind == builder::Shape::Kind::Cylinder
+                        : (shape.kind == builder::Shape::Kind::Cylinder ||
+                           shape.kind == builder::Shape::Kind::Capsule)
                             ? std::string("length")
                             : std::string("size ") + axisName(handle.axis);
         std::snprintf(value, sizeof(value), "%.3f → %.3f m", before.size.at(slot),
@@ -673,9 +676,9 @@ bool BuilderGizmo::escape(BuilderSession& session) {
 
 void BuilderGizmo::click(BuilderSession& session, const std::vector<builder::Frame>& links,
                          const g::Line& ray, const std::string& pickedSensor,
-                         const std::string& pickedLink) {
+                         const std::string& pickedLink, int pickedShape) {
     const builder::Document& document = session.document();
-    const auto hit = g::pickShape(document, links, ray, session.view.collision);
+    auto hit = g::pickShape(document, links, ray, session.view.collision);
     if (session.tool == Tool::Measure) {
         std::optional<Vec3> point;
         if (hit) {
@@ -691,6 +694,14 @@ void BuilderGizmo::click(BuilderSession& session, const std::vector<builder::Fra
         }
         measure_.push_back(*point);
         return;
+    }
+    // Not for Measure (above): the prim pick has no point on the surface.
+    if (!hit && !pickedLink.empty() && pickedShape >= 0) {
+        for (std::size_t l = 0; l < document.links.size(); ++l) {
+            if (document.links[l].name == pickedLink) {
+                hit = g::ShapeHit{static_cast<int>(l), pickedShape, 0.0, ray.origin};
+            }
+        }
     }
     if (!pickedSensor.empty()) {
         session.selection = {Kind::Sensor, pickedSensor};
