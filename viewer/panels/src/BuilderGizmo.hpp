@@ -96,6 +96,9 @@ private:
         double angle{0.0};      ///< Ring: the angle turned so far (unwrapped), rad
         double lastAngle{0.0};  ///< Ring: the ring angle seen last frame
         bool committed{false};
+        /// The history before this drag's first step: Esc, or a drag back to where it began,
+        /// puts undo and redo back exactly as they were.
+        builder::History::Checkpoint before;
         std::uint64_t revision{0};  ///< history's revision after our last commit
         std::string readout;
         std::string readoutValue;

@@ -111,6 +111,26 @@ def test_escape_cancels_a_drag(tmp_path):
     assert builder["edits"] == 0
 
 
+def test_escape_leaves_undo_and_redo_as_they_were(tmp_path):
+    # One drag, undone (its step to redo); a second drag cancelled by Esc; then redo: the
+    # first drag comes back, never the cancelled one, and the stack is as before the second.
+    first_drag = [f"3:click:{BOX}", f"7:move:{IN_VIEW}", "8:key:w", *drag(12, X_ARROW)]
+    moved = base_box(run(tmp_path, ";".join(first_drag), 24))["xyz"]
+    shorter = (X_ARROW[0], X_ARROW[1][:2])  # stops short of where the first drag went
+    script = [*first_drag, "24:key:ctrl+z", *drag(28, shorter, release=False)]
+    script += ["37:key:escape", "39:up"]
+    before = run(tmp_path, ";".join(script), 42)
+    assert base_box(before)["xyz"] == [0, 0, 0]
+    assert before["history"]["position"] == 0
+    assert len(before["history"]["labels"]) == 2, before["history"]
+    first = before["history"]["labels"][1]
+    after = run(tmp_path, ";".join([*script, "44:key:ctrl+y"]), 48)
+    assert after["history"]["labels"] == before["history"]["labels"]
+    assert after["history"]["position"] == 1
+    assert after["history"]["labels"][1] == first
+    assert base_box(after)["xyz"] == moved  # the first drag, not the shorter cancelled one
+
+
 def test_a_face_handle_sizes_the_box_and_the_opposite_face_stays(tmp_path):
     script = [f"3:click:{BOX}", *drag(10, PLUS_X_FACE)]
     builder = run(tmp_path, ";".join(script), 26)

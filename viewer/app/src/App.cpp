@@ -1069,6 +1069,15 @@ public:
         builderSession_.saveRequested = true;
         builderSession_.savePath = path;
     }
+    /// The undo stack in the headless report: its labels (oldest first) and where it is.
+    [[nodiscard]] static std::string historyJson(const builder::History& history) {
+        std::string labels;
+        for (const std::string& label : history.labels()) {
+            labels += std::string(labels.empty() ? "" : ", ") + "\"" + jsonEscape(label) + "\"";
+        }
+        return "{\"position\": " + std::to_string(history.position()) + ", \"labels\": [" + labels +
+               "]}";
+    }
     /// The Builder's document in the headless report (RFC 0016 WP-E's input tests): counts,
     /// the selection, the edits since the last save.
     [[nodiscard]] std::string builderReport() const {
@@ -1105,6 +1114,7 @@ public:
                ", \"check\": " + messages(builderSession_.problems.check) +
                ", \"check_exit\": " + std::to_string(builderSession_.problems.checkExit) +
                ", \"errors\": " + std::to_string(builderSession_.problems.errors()) +
+               ", \"history\": " + historyJson(builderSession_.history) +
                ", \"geometry\": " + builder::gizmo::geometryJson(document) + "}";
     }
 

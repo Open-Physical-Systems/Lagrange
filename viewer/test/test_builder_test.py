@@ -128,6 +128,29 @@ def test_back_returns_to_build_and_stops_the_server(tmp_path):
     assert no_test_server_of(pid)
 
 
+def test_back_returns_to_build_when_the_builder_was_opened_from_the_launcher(tmp_path):
+    # 12-builder SPEC "Modes": Back stops the test and returns to Build with the document as
+    # it was, whatever opened the Builder; with no server before the Test, it stays offline.
+    program("lagrange_server", "lagrange_server")
+    report, code, err, pid = run(
+        tmp_path,
+        "--launcher",
+        "--builder-open",
+        str(ROVER),
+        "--input",
+        f"3:key:ctrl+b;8:click:{TEST_BUTTON};12:wait:connected;26:key:escape;28:wait:build;"
+        "29:wait:idle",
+        frames=40,
+    )
+    assert code == 0, err
+    assert report["workspace"] == "Builder"
+    assert report["launcher"] is False
+    assert report["builder"]["mode"] == "build"
+    assert report["builder"]["robot"] == "rover_mk1"
+    assert report["connected"] is False
+    assert no_test_server_of(pid)
+
+
 def test_a_refused_robot_puts_the_server_log_in_problems(tmp_path):
     server = program("lagrange_server", "lagrange_server")
     # A lagrange_server that is given a world that does not exist: it exits before it is ready.

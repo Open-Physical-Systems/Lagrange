@@ -796,6 +796,15 @@ private:
         };
     }
 
+    /// Outlines the field just drawn, up to `right` (its unit included), in the error colour:
+    /// a value the form would refuse.
+    static void markRefused(float right) {
+        const ImVec2 min = ImGui::GetItemRectMin();
+        const ImVec2 max(right, ImGui::GetItemRectMax().y);
+        ImGui::GetWindowDrawList()->AddRect(min, max, ImGui::GetColorU32(c::error), px(3.0F), 0,
+                                            px(1.0F));
+    }
+
     /// The text is the catalog's default: "4.0" is the default 4 of a number.
     static bool atDefault(const builder::CatalogParam& param, const std::string& text) {
         if (text == param.defaultText) {
@@ -827,6 +836,7 @@ private:
         });
         ImGui::PopFont();
         std::string parent;
+        std::vector<std::string> loadedErrors;  // values in the file the form would refuse
         for (const builder::CatalogParam& param : entry.params) {
             const std::size_t slash = nested ? param.path.rfind('/') : std::string::npos;
             const std::string label =
@@ -847,6 +857,12 @@ private:
             const std::string value = found != sensor.params.end() ? found->second : "";
             const bool differs = !value.empty() && !atDefault(param, value);
             differing_ += differs ? 1 : 0;
+            // A value the form would refuse, read from a file: marked as a refused one is
+            // (red, with the reason), and listed in Problems by validation.
+            const std::string refused = value.empty() ? "" : builder::checkParam(param, value);
+            if (!refused.empty()) {
+                loadedErrors.push_back(param.path + " = " + value + ": " + refused);
+            }
             std::string unit = param.unit == "1" ? "1" : param.unit;
             if (differs && !param.defaultText.empty()) {
                 unit += std::string(unit.empty() ? "" : " · ") + "default " + param.defaultText;
@@ -867,10 +883,10 @@ private:
                     }
                 }
                 const std::string from = value.empty() ? param.defaultText : value;
-                const std::string label =
+                const std::string step =
                     "Set " + param.path + " " + from + " → " + typed +
                     (param.unit.empty() || param.unit == "1" ? "" : " " + param.unit);
-                edit(session, label, "sensor/" + name + "/" + param.path, [&](Document& next) {
+                edit(session, step, "sensor/" + name + "/" + param.path, [&](Document& next) {
                     auto& params = builder::findSensor(next, name)->params;
                     if (typed.empty() || atDefault(param, typed)) {
                         params.erase(param.path);
@@ -881,6 +897,7 @@ private:
                 });
             };
             const std::string shown = value.empty() ? param.defaultText : value;
+            const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
             if (param.type == builder::CatalogParam::Type::Enum ||
                 param.type == builder::CatalogParam::Type::Bool) {
                 // Enum parameters are dropdowns (SPEC); a bool is the dropdown true | false.
@@ -894,6 +911,9 @@ private:
                 if (widgets::DropdownField("##enum", shown.c_str(), unit.c_str(),
                                            ImGui::GetContentRegionAvail().x)) {
                     ImGui::OpenPopup("##options");
+                }
+                if (!refused.empty()) {
+                    markRefused(right);
                 }
                 if (ImGui::BeginPopup("##options")) {
                     const std::vector<std::string> bools{"true", "false"};
@@ -912,12 +932,20 @@ private:
                                      param.type == builder::CatalogParam::Type::Int;
                 const std::string tooltip =
                     param.path + (param.meaning.empty() ? "" : "\n") + param.meaning;
-                if (widgets::CommitEdit(label.c_str(), &typed, unit.c_str(), differs,
-                                        tooltip.c_str(), numeric, true)) {
+                const bool committed =
+                    widgets::CommitEdit(label.c_str(), &typed, unit.c_str(),
+                                        differs && refused.empty(), tooltip.c_str(), numeric, true);
+                if (!refused.empty()) {
+                    markRefused(right);
+                }
+                if (committed) {
                     apply(typed);
                 }
             }
             ImGui::PopID();
+        }
+        for (const std::string& error : loadedErrors) {
+            widgets::Pill(error.c_str(), widgets::PillKind::Error);
         }
         if (!paramError_.empty()) {
             widgets::Pill(paramError_.c_str(), widgets::PillKind::Error);
