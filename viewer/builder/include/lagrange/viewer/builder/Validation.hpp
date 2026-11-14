@@ -1,0 +1,48 @@
+#pragma once
+
+// The builder's own, live validation (RFC 0016 §8.1). Owner: WP-A. The server's loader stays
+// the judge (§8.2); this catches what can be caught without it.
+
+#include "lagrange/viewer/builder/Document.hpp"
+
+#include <filesystem>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace lagrange::viewer::builder {
+
+class SensorCatalog;
+
+enum class Level {
+    Error,    ///< Test is refused while one exists (Save still works)
+    Warning,  ///< legal but likely wrong
+    Hint,     ///< legal, probably unmeant (a sphere caster on a fixed joint slides)
+};
+
+/// One finding. `item` names the link, joint or sensor it is about (empty: the robot).
+struct Problem {
+    Level level;
+    std::string item;
+    std::string message;  ///< one sentence, what is wrong and what to do
+};
+
+/// Every rule of RFC 0016 §8.1: names valid (validName) and unique; one root, no loops, every
+/// joint's parent and child exist; revolute and prismatic joints have lower < upper, effort > 0,
+/// velocity > 0 (empty is an error); a non-zero axis; positive mass and a valid inertia; a
+/// mimic's leader exists; sensor names unique, parameters within the catalog's min and max and
+/// of the right type (when `catalog` is not null); meshes found, relative paths against
+/// `meshBase` (the saved file's folder; empty: relative meshes are not checked),
+/// `lagrange-asset://` through $LAGRANGE_ASSET_DIR, `package://` through the ament index (R12).
+/// Errors first, then warnings, then hints; within a level in document order.
+[[nodiscard]] std::vector<Problem> validate(const Document& document, const SensorCatalog* catalog,
+                                            const std::filesystem::path& meshBase);
+
+/// The server's own name rule (`validName`, server/src/Server.cpp): ASCII letters, digits and
+/// '_', not empty, not starting with a digit. Applied to the robot, links, joints and sensors
+/// so that a robot that saves also spawns.
+[[nodiscard]] bool validName(std::string_view name);
+
+[[nodiscard]] std::string_view toString(Level level);  // "error", "warning", "hint"
+
+}  // namespace lagrange::viewer::builder

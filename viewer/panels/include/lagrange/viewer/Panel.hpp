@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lagrange/viewer/BuilderSession.hpp"
 #include "lagrange/viewer/Camera.hpp"
 #include "lagrange/viewer/ProfileSession.hpp"
 #include "lagrange/viewer/RecentList.hpp"
@@ -18,7 +19,7 @@
 namespace lagrange::viewer {
 
 /// A workspace is one saved dock layout with its own panels (docs/design/ui: workspace bar).
-/// All ten of the design are listed; the ones without panels yet show a notice.
+/// The ten of the design plus the Builder (RFC 0016); the ones without panels yet show a notice.
 enum class Workspace : std::uint8_t {
     Scene,
     Domains,
@@ -30,6 +31,7 @@ enum class Workspace : std::uint8_t {
     Ros2,
     World,
     Performance,
+    Builder,  ///< RFC 0016: build a robot; works with no server (Ctrl B)
 };
 
 [[nodiscard]] const char* toString(Workspace workspace);
@@ -73,6 +75,9 @@ struct LauncherState {
     bool startLocalRequested{false};  ///< Start lagrange_server first, then connect.
     std::string connectEndpoint;
     bool disconnectRequested{false};  ///< Stop the client and show the launcher again.
+    /// Build a robot (tile or Ctrl B): leave the launcher for the Builder workspace without
+    /// connecting (RFC 0016 open question 6, R1).
+    bool builderRequested{false};
 };
 
 /// What panels may read and change during one frame. Panels never touch the socket or Vulkan.
@@ -134,6 +139,7 @@ struct PanelContext {
     /// the session only. Never null in draw().
     std::vector<std::int64_t>* bookmarks{nullptr};
     LauncherState* launcher{nullptr};  ///< Never null in draw().
+    BuilderSession* builder{nullptr};  ///< The robot builder's state; never null in draw().
     bool* resetLayout{nullptr};        ///< Set to rebuild the shown workspace's default layout.
 
     std::string deviceName;
@@ -187,6 +193,9 @@ public:
 [[nodiscard]] std::unique_ptr<Panel> createStatisticsPanel();
 [[nodiscard]] std::unique_ptr<Panel> createDomainsPanel();
 [[nodiscard]] std::unique_ptr<Panel> createProfilePanel();
+
+/// The Builder workspace's panels (RFC 0016; window IDs in builder_windows).
+[[nodiscard]] std::vector<std::unique_ptr<Panel>> createBuilderPanels();
 
 /// Every panel that exists so far, for all workspaces.
 [[nodiscard]] std::vector<std::unique_ptr<Panel>> createDefaultPanels();

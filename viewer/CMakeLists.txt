@@ -7,6 +7,8 @@ find_package(lagrange_proto REQUIRED)
 find_package(lagrange_gpu REQUIRED)
 find_package(imgui_vendor REQUIRED)
 find_package(SDL3 REQUIRED)
+find_package(tinyxml2 REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 # Protocol client and scene store. No Vulkan, no ImGui: testable without a display.
 add_library(
@@ -28,6 +30,32 @@ target_include_directories(lagrange_viewer_client PUBLIC client/include)
 target_link_libraries(
     lagrange_viewer_client
     PUBLIC lagrange_proto::lagrange_proto_transport
+)
+
+# The robot builder's model (RFC 0016): document, mass, kinematics, validation, undo, URDF,
+# sensor catalog, primitives, scene adapter, test server. No ImGui, no Vulkan, no simulation
+# module (invariant 14); lagrange_viewer_client only for the SceneFrame types.
+add_library(
+    lagrange_viewer_builder
+    STATIC
+    builder/src/Document.cpp
+    builder/src/History.cpp
+    builder/src/Kinematics.cpp
+    builder/src/MassProperties.cpp
+    builder/src/Materials.cpp
+    builder/src/Primitives.cpp
+    builder/src/SceneAdapter.cpp
+    builder/src/SensorCatalog.cpp
+    builder/src/TestServer.cpp
+    builder/src/Urdf.cpp
+    builder/src/Validation.cpp
+)
+lagrange_target_defaults(lagrange_viewer_builder)
+target_include_directories(lagrange_viewer_builder PUBLIC builder/include)
+target_link_libraries(
+    lagrange_viewer_builder
+    PUBLIC lagrange_viewer_client
+    PRIVATE tinyxml2::tinyxml2 yaml-cpp::yaml-cpp
 )
 
 # Scene renderer on the GPU layer, with the shared Slang shaders.
@@ -119,6 +147,7 @@ target_link_libraries(lagrange_viewer_widgets PUBLIC imgui_vendor::imgui)
 add_library(
     lagrange_viewer_panels
     STATIC
+    panels/src/BuilderPanels.cpp
     panels/src/Chrome.cpp
     panels/src/ConsolePanel.cpp
     panels/src/DomainsPanel.cpp
@@ -149,13 +178,19 @@ target_include_directories(lagrange_viewer_panels PUBLIC panels/include)
 target_link_libraries(
     lagrange_viewer_panels
     PUBLIC
+        lagrange_viewer_builder
         lagrange_viewer_client
         lagrange_viewer_render
         lagrange_viewer_widgets
         imgui_vendor::imgui
 )
 
-add_executable(lagrange_viewer app/src/main.cpp app/src/App.cpp)
+add_executable(
+    lagrange_viewer
+    app/src/main.cpp
+    app/src/App.cpp
+    app/src/BuilderHost.cpp
+)
 lagrange_target_defaults(lagrange_viewer)
 lagrange_target_vulkan_warnings(lagrange_viewer)
 target_link_libraries(
@@ -187,6 +222,32 @@ install(
     PATTERN "*.ttf"
     PATTERN "OFL.txt"
 )
+
+# The sensor catalog (RFC 0016 §5, R11): lagrange_sensors owns it; the viewer build-depends on
+# that package for this data file only (no find_package, no library) and installs a copy, so a
+# viewer-only install still has it. Absent until lagrange_sensors installs it (WP-C).
+set(_lagrange_sensor_catalog "")
+string(REPLACE ":" ";" _lagrange_prefixes "$ENV{AMENT_PREFIX_PATH}")
+foreach(_prefix IN LISTS _lagrange_prefixes)
+    set(_candidate
+        "${_prefix}/share/lagrange_sensors/catalog/sensor_catalog.yaml"
+    )
+    if(NOT _lagrange_sensor_catalog AND EXISTS "${_candidate}")
+        set(_lagrange_sensor_catalog "${_candidate}")
+    endif()
+endforeach()
+if(_lagrange_sensor_catalog)
+    message(STATUS "Sensor catalog: ${_lagrange_sensor_catalog}")
+    install(
+        FILES "${_lagrange_sensor_catalog}"
+        DESTINATION share/${PROJECT_NAME}/catalog
+    )
+else()
+    message(
+        STATUS
+        "Sensor catalog: not installed by lagrange_sensors yet; the builder's is empty"
+    )
+endif()
 
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
@@ -222,9 +283,24 @@ if(BUILD_TESTING)
     )
     lagrange_target_defaults(test_viewer_client)
 
+    # The robot builder's model (RFC 0016): each work package adds its test files here.
+    ament_add_gtest(
+        test_viewer_builder
+        builder/test/test_builder_smoke.cpp
+        TIMEOUT 120
+    )
+    target_link_libraries(test_viewer_builder lagrange_viewer_builder)
+    target_compile_definitions(
+        test_viewer_builder
+        PRIVATE
+            LAGRANGE_BUILDER_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/builder"
+    )
+    lagrange_target_defaults(test_viewer_builder)
+
     find_package(ament_cmake_pytest REQUIRED)
     ament_add_pytest_test(test_circuit_roundtrip test/test_circuit_roundtrip.py TIMEOUT 120)
     ament_add_pytest_test(test_viewer_input test/test_viewer_input.py TIMEOUT 180)
+    ament_add_pytest_test(test_builder_input test/test_builder_input.py TIMEOUT 180)
     ament_add_pytest_test(
         test_headless
         test/test_headless.py

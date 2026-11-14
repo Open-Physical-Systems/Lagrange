@@ -14,9 +14,14 @@
   <depend>lagrange_gpu</depend>
   <depend>imgui_vendor</depend>
   <depend>libsdl3-dev</depend>
+  <depend>tinyxml2</depend>
+  <depend>yaml-cpp</depend>
+  <!-- The sensor catalog data file only (RFC 0016 §5, plan R11): no library is linked. -->
+  <build_depend>lagrange_sensors</build_depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>lagrange_assets</test_depend>
   <test_depend>lagrange_mock_server</test_depend>
   <test_depend>lagrange_server</test_depend>
   <test_depend>mesa-vulkan-drivers</test_depend>

@@ -35,10 +35,11 @@ struct WorkspaceEntry {
     const char* design;  // its folder in docs/design/ui
 };
 
-// The ten workspaces of the design, in its order, with its shortcuts (Ctrl 1 ... Ctrl 0).
+// The ten workspaces of the design, in its order, with its shortcuts (Ctrl 1 ... Ctrl 0), and
+// the Builder (RFC 0016, docs/design/ui/12-builder: Ctrl B, after a rule).
 // The dock space names carry a layout version: change it when a default layout changes, so
 // that a layout saved by an older build is not applied to the new panels.
-constexpr std::array<WorkspaceEntry, 10> kWorkspaces{{
+constexpr std::array<WorkspaceEntry, 11> kWorkspaces{{
     {Workspace::Scene, "Scene", widgets::Icon::Scene, "lagrange-dock-scene-4", ImGuiKey_1, "Ctrl+1",
      "02-scene"},
     {Workspace::Domains, "Domains", widgets::Icon::Domains, "lagrange-dock-domains-3", ImGuiKey_2,
@@ -59,6 +60,8 @@ constexpr std::array<WorkspaceEntry, 10> kWorkspaces{{
      "10-world"},
     {Workspace::Performance, "Performance", widgets::Icon::Performance,
      "lagrange-dock-performance-1", ImGuiKey_0, "Ctrl+0", "11-performance"},
+    {Workspace::Builder, "Builder", widgets::Icon::Builder, "lagrange-dock-builder-1", ImGuiKey_B,
+     "Ctrl+B", "12-builder"},
 }};
 
 const WorkspaceEntry& entryOf(Workspace workspace) {
@@ -118,6 +121,32 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         ImGui::DockBuilderDockWindow("3D overlay", centre);
         ImGui::DockBuilderDockWindow("Scopes", scopes);
         ImGui::DockBuilderDockWindow("###InspectorElectrical", right);
+    } else if (workspace == Workspace::Builder) {
+        // Design (12-builder SPEC "Dock layout"): left 270 px, Robot | Files over a 212 px
+        // Add | Templates; right 350 px, Properties | History; the Builder view over a 220 px
+        // band, 55 % Joints | Poses and 45 % Sensor catalog | Problems.
+        namespace w = builder_windows;
+        ImGuiID left = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left, fraction(270.0F, size.x),
+                                                   nullptr, &centre);
+        const ImGuiID right = ImGui::DockBuilderSplitNode(
+            centre, ImGuiDir_Right, fraction(350.0F, size.x - px(270.0F)), nullptr, &centre);
+        const ImGuiID add = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down,
+                                                        fraction(212.0F, size.y), nullptr, &left);
+        ImGuiID bottom = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down,
+                                                     fraction(220.0F, size.y), nullptr, &centre);
+        const ImGuiID catalog =
+            ImGui::DockBuilderSplitNode(bottom, ImGuiDir_Right, 0.45F, nullptr, &bottom);
+        ImGui::DockBuilderDockWindow(w::kRobot, left);
+        ImGui::DockBuilderDockWindow(w::kFiles, left);
+        ImGui::DockBuilderDockWindow(w::kAdd, add);
+        ImGui::DockBuilderDockWindow(w::kTemplates, add);
+        ImGui::DockBuilderDockWindow(w::kProperties, right);
+        ImGui::DockBuilderDockWindow(w::kHistory, right);
+        ImGui::DockBuilderDockWindow(w::kView, centre);
+        ImGui::DockBuilderDockWindow(w::kJoints, bottom);
+        ImGui::DockBuilderDockWindow(w::kPoses, bottom);
+        ImGui::DockBuilderDockWindow(w::kCatalog, catalog);
+        ImGui::DockBuilderDockWindow(w::kProblems, catalog);
     } else if (workspace == Workspace::Performance) {
         // Design: a row of KPI cards on top; under it the scheduler (320 px) over the
         // modules, and on the right (380 px) the RTF history (200 px) over the resources.
@@ -434,6 +463,15 @@ void drawWorkspaceBar(PanelContext& context, ImGuiViewport* viewport) {
     if (open) {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0F, 0.0F));
         for (const WorkspaceEntry& entry : kWorkspaces) {
+            if (entry.workspace == Workspace::Builder) {
+                // Design (12-builder: .ws.sepl): a 1 px rule sets the Builder apart.
+                const float x = ImGui::GetCursorScreenPos().x;
+                const float top = ImGui::GetWindowPos().y;
+                ImGui::GetWindowDrawList()->AddLine(ImVec2(x, top),
+                                                    ImVec2(x, top + ImGui::GetWindowHeight()),
+                                                    ImGui::ColorConvertFloat4ToU32(c::line));
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(1.0F));
+            }
             if (widgets::BarTab(entry.label, entry.icon, *context.workspace == entry.workspace,
                                 entry.dockspace != nullptr)) {
                 *context.workspace = entry.workspace;
@@ -825,6 +863,9 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
         panels.push_back(std::move(panel));
     }
     panels.push_back(createProfilePanel());
+    for (std::unique_ptr<Panel>& panel : createBuilderPanels()) {
+        panels.push_back(std::move(panel));
+    }
     return panels;
 }
 
@@ -847,8 +888,12 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
             *context.workspace = entry.workspace;
         }
     }
-    // Run shortcuts of the design, when no text field has the keyboard.
-    if (!ImGui::GetIO().WantTextInput && context.connection.state == ConnectionState::Ready) {
+    // Run shortcuts of the design, when no text field has the keyboard. Not while building:
+    // a connected run is left alone there (RFC 0016 open question 7, R2).
+    const bool building = *context.workspace == Workspace::Builder &&
+                          context.builder->mode == BuilderSession::Mode::Build;
+    if (!ImGui::GetIO().WantTextInput && context.connection.state == ConnectionState::Ready &&
+        !building) {
         if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
             if (context.status.runState == RunState::Running) {
                 context.client.pause();
@@ -893,6 +938,14 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
     }
     if (built && shown == Workspace::Electrical) {
         ImGui::SetWindowFocus("Schematic");
+    }
+    if (built && shown == Workspace::Builder) {
+        // The first tab of each group in front (SPEC: Robot, Add, Properties, Joints, catalog).
+        for (const char* window :
+             {builder_windows::kRobot, builder_windows::kAdd, builder_windows::kProperties,
+              builder_windows::kJoints, builder_windows::kCatalog, builder_windows::kView}) {
+            ImGui::SetWindowFocus(window);
+        }
     }
     // A panel asked for on the command line, in front once it exists.
     if (context.focusPanel != nullptr && !context.focusPanel->empty() &&
