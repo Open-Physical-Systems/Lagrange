@@ -140,6 +140,27 @@ std::uint64_t History::revision() const {
     return state_->revision;
 }
 
+History::Checkpoint::Checkpoint() = default;
+History::Checkpoint::~Checkpoint() = default;
+History::Checkpoint::Checkpoint(Checkpoint&&) noexcept = default;
+History::Checkpoint& History::Checkpoint::operator=(Checkpoint&&) noexcept = default;
+
+History::Checkpoint History::checkpoint() const {
+    Checkpoint out;
+    out.state_ = std::make_unique<State>(*state_);
+    return out;
+}
+
+void History::restore(const Checkpoint& checkpoint) {
+    if (!checkpoint.state_) {
+        return;
+    }
+    const std::uint64_t revision = state_->revision + 1;
+    *state_ = *checkpoint.state_;
+    state_->revision = revision;  // current() may differ from what was last seen
+    state_->mergeable = false;
+}
+
 void History::markSaved() {
     state_->saved = state_->position;
     state_->mergeable = false;  // the saved state stays as it was written

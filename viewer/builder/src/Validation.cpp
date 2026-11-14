@@ -177,6 +177,9 @@ void checkShapes(Findings& findings, const Link& link) {
     }
 }
 
+/// The root link of a robot fixed to the ground, by the URDF convention.
+constexpr std::string_view kWorldLink = "world";
+
 void checkMass(Findings& findings, const Document& document, const Link& link) {
     const std::string name = inQuotes(link.name);
     if (link.inertial.mass && !(*link.inertial.mass > 0.0)) {
@@ -188,9 +191,15 @@ void checkMass(Findings& findings, const Document& document, const Link& link) {
         findings.error(link.name, "link " + name + ": the density cannot be negative");
         return;
     }
+    const Joint* parent = parentJointOf(document, link.name);
+    if (parent == nullptr && link.name == kWorldLink && link.shapes.empty() &&
+        !link.inertial.mass) {
+        // The URDF convention for a robot bolted to the ground: a massless, shapeless root
+        // named "world", the fixed base's parent. Nothing to simulate, nothing missing.
+        return;
+    }
     const std::optional<MassProperties> mass = linkMass(link);
     if (!mass || !(mass->mass > 0.0)) {
-        const Joint* parent = parentJointOf(document, link.name);
         std::string message = "link " + name + " has no mass: ";
         message += std::ranges::any_of(link.shapes, &Shape::solid)
                        ? "give it a density (a material) or a mass"

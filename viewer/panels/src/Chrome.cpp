@@ -414,16 +414,21 @@ void drawMenuBar(PanelContext& context) {
     ImGui::PopStyleColor();
 
     // Context on the right.
+    // Building offline (12-builder SPEC state 5) shows no run: not the one a Test left behind
+    // after Back when nothing was connected before it.
+    const bool offlineBuilder = *context.workspace == Workspace::Builder &&
+                                context.connection.state != ConnectionState::Ready;
+    const SceneFrame* scene = offlineBuilder ? nullptr : context.scene.get();
     // The file name only: a full path does not fit beside the run controls.
-    const char* stage = context.scene ? context.scene->statics->stagePath.c_str() : "";
+    const char* stage = scene != nullptr ? scene->statics->stagePath.c_str() : "";
     if (const char* slash = std::strrchr(stage, '/'); slash != nullptr && slash[1] != '\0') {
         stage = slash + 1;
     }
-    const char* robot = context.scene && !context.scene->statics->prims.empty()
-                            ? context.scene->statics->prims.front().name.c_str()
+    const char* robot = scene != nullptr && !scene->statics->prims.empty()
+                            ? scene->statics->prims.front().name.c_str()
                             : "";
     char profile[48] = "";
-    if (context.profileSession->profile()) {
+    if (!offlineBuilder && context.profileSession->profile()) {
         const std::size_t changes = context.profileSession->draft().changedLineCount();
         if (changes == 0) {
             std::snprintf(profile, sizeof(profile), "applied");
@@ -1080,26 +1085,31 @@ void drawStatusBar(const PanelContext& context, ImGuiViewport* viewport) {
                                state == ConnectionState::Ready ? "Connected" : toString(state));
         }
         ImGui::PopFont();
+        // Building offline: the run readouts would be the last server's (a Test's after Back).
+        const bool offline = builderShown && state != ConnectionState::Ready;
         if (builderShown && context.builder->autosaveTime > 0.0) {
             ImGui::SameLine(0.0F, gap);
             statusItem("autosave", c::t1, "%.0f s ago",
                        ImGui::GetTime() - context.builder->autosaveTime);
         }
-        if (!context.connection.serverName.empty()) {
+        if (!offline && !context.connection.serverName.empty()) {
             ImGui::SameLine(0.0F, gap);
             statusItem("server", c::t2, "%s", context.connection.serverName.c_str());
         }
-        if (!context.connection.message.empty()) {
+        if (!offline && !context.connection.message.empty()) {
             ImGui::SameLine(0.0F, gap);
             statusItem(nullptr, c::warn, "%s", context.connection.message.c_str());
         }
-        ImGui::SameLine(0.0F, gap);
-        statusItem("signals", c::t1, "%u", context.status.signalCount);
-        ImGui::SameLine(0.0F, gap);
-        statusItem("deltas", c::t1, "%llu", static_cast<unsigned long long>(context.stats.deltas));
-        ImGui::SameLine(0.0F, gap);
-        statusItem("dropped", context.status.droppedDeltas == 0 ? c::t1 : c::warn, "%llu",
-                   static_cast<unsigned long long>(context.status.droppedDeltas));
+        if (!offline) {
+            ImGui::SameLine(0.0F, gap);
+            statusItem("signals", c::t1, "%u", context.status.signalCount);
+            ImGui::SameLine(0.0F, gap);
+            statusItem("deltas", c::t1, "%llu",
+                       static_cast<unsigned long long>(context.stats.deltas));
+            ImGui::SameLine(0.0F, gap);
+            statusItem("dropped", context.status.droppedDeltas == 0 ? c::t1 : c::warn, "%llu",
+                       static_cast<unsigned long long>(context.status.droppedDeltas));
+        }
         // The latest thing to tell the user: a file that loaded, a command that failed.
         if (!context.notice.text.empty()) {
             ImGui::SameLine(0.0F, gap);

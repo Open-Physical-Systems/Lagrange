@@ -177,7 +177,7 @@ private:
             ImGui::SetItemTooltip("Add a %s on %s", entry.name.c_str(), target.c_str());
             right -= button + px(6.0F);
         } else if (inUse > 0) {
-            char pill[24];
+            char pill[32];  // "in use " and a long's 20 characters
             std::snprintf(pill, sizeof(pill), "in use %ld", inUse);
             const float pillWidth = widgets::PillWidth(pill);
             ImGui::SetCursorScreenPos(ImVec2(right - pillWidth, midY - px(9.0F)));

@@ -538,8 +538,12 @@ void BuilderGizmo::updateDrag(BuilderSession& session, const View& view) {
                                      ? static_cast<std::size_t>(handle.axis)
                                  : radius ? 0U
                                           : 1U;
-        drag_.readout =
-            radius ? std::string("radius") : std::string("size ") + axisName(handle.axis);
+        // What the file holds and Properties calls it: a box's edge, a cylinder's length
+        // (along its z) or radius, a sphere's radius.
+        drag_.readout = radius ? std::string("radius")
+                        : shape.kind == builder::Shape::Kind::Cylinder
+                            ? std::string("length")
+                            : std::string("size ") + axisName(handle.axis);
         std::snprintf(value, sizeof(value), "%.3f → %.3f m", before.size.at(slot),
                       shape.size.at(slot));
         drag_.readoutValue = value;
@@ -635,16 +639,22 @@ void BuilderGizmo::apply(BuilderSession& session, builder::Document next,
         drag_.committed = false;
     }
     if (wanted != g::geometryJson(drag_.start)) {
+        if (drag_.before.empty()) {
+            drag_.before = session.history.checkpoint();  // before its first step
+        }
         session.history.commit(std::move(next), label, {}, ImGui::GetTime());
         drag_.committed = true;
+    } else {
+        session.history.restore(drag_.before);  // back where it began: redo as it was
     }
     drag_.revision = session.history.revision();
 }
 
 bool BuilderGizmo::escape(BuilderSession& session) {
     if (dragging()) {
-        if (drag_.committed && session.history.revision() == drag_.revision) {
-            (void)session.history.undo();
+        if (session.history.revision() == drag_.revision) {
+            // Cancelled: undo and redo exactly as before the drag (its step never redoable).
+            session.history.restore(drag_.before);
         }
         drag_ = {};
         pressOwned_ = ImGui::IsMouseDown(ImGuiMouseButton_Left);

@@ -1,14 +1,18 @@
 // The builder's own validation (RFC 0016 §8.1, plan WP-A): one test per rule.
 #include "lagrange/viewer/builder/SensorCatalog.hpp"
+#include "lagrange/viewer/builder/Urdf.hpp"
 #include "lagrange/viewer/builder/Validation.hpp"
 
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <tuple>
+#include <variant>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -514,6 +518,56 @@ TEST(Validation, ErrorsThenWarningsThenHintsInDocumentOrder) {
     EXPECT_EQ(problems[1].item, "shoulder");
     EXPECT_EQ(problems[2].level, Level::Warning);
     EXPECT_EQ(problems[3].level, Level::Hint);
+}
+
+TEST(Validation, AMasslessShapelessRootNamedWorldIsAFixedBase) {
+    Document document = validRobot();
+    Link world;
+    world.name = "world";
+    document.links.insert(document.links.begin(), world);
+    Joint bolt;
+    bolt.name = "world_joint";
+    bolt.type = Joint::Type::Fixed;
+    bolt.parent = "world";
+    bolt.child = document.links[1].name;
+    document.joints.push_back(bolt);
+    EXPECT_TRUE(validate(document, nullptr, {}).empty()) << dump(validate(document, nullptr, {}));
+    // Any other massless root is still an error, and so is a "world" that is not the root.
+    document.links.front().name = "ground";
+    document.joints.back().parent = "ground";
+    EXPECT_EQ(count(validate(document, nullptr, {}), Level::Error, "ground", "has no mass"), 1U);
+}
+
+TEST(Validation, EveryTemplateValidatesWithNoError) {
+    // The builder's File > New from template (assets/robots/templates): each one opens clean,
+    // its sensors checked against the real catalog (built-in and plugin kinds).
+    std::vector<std::filesystem::path> files = {LAGRANGE_SENSOR_CATALOG_YAML};
+    for (const auto& entry : std::filesystem::directory_iterator(LAGRANGE_PLUGIN_CATALOG_DIR)) {
+        files.push_back(entry.path());
+    }
+    std::ranges::sort(files);
+    auto loaded = SensorCatalog::load(files);
+    ASSERT_TRUE(std::holds_alternative<SensorCatalog>(loaded));
+    const SensorCatalog& catalog = std::get<SensorCatalog>(loaded);
+    const std::filesystem::path dir =
+        std::filesystem::path(LAGRANGE_BUILDER_ASSETS_DIR) / "templates";
+    int templates = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+        if (entry.path().extension() != ".urdf") {
+            continue;
+        }
+        ++templates;
+        std::ifstream in(entry.path());
+        const std::string text((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+        const ReadResult read = readUrdf(text);
+        ASSERT_TRUE(read.document) << entry.path() << ": " << read.error;
+        const auto problems = validate(*read.document, &catalog, dir);
+        EXPECT_EQ(std::ranges::count(problems, Level::Error, &Problem::level), 0)
+            << entry.path() << "\n"
+            << dump(problems);
+    }
+    EXPECT_EQ(templates, 3);
 }
 
 }  // namespace

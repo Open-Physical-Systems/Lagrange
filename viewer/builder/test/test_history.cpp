@@ -165,5 +165,38 @@ TEST(History, MovesKeepTheStack) {
     EXPECT_EQ(moved.current().robot, "a");
 }
 
+TEST(History, ACancelledGestureLeavesUndoAndRedoAsTheyWere) {
+    // A gizmo drag commits as it goes (undo + commit per frame); Esc restores the checkpoint
+    // taken before its first step, so the cancelled drag is neither undone nor redoable.
+    History history(named("a"), "New robot");
+    history.commit(named("b"), "Rename robot a → b", "", 0.0);
+    history.commit(named("c"), "Rename robot b → c", "", 10.0);
+    ASSERT_TRUE(history.undo());  // at b, c to redo
+    history.markSaved();
+    const History::Checkpoint before = history.checkpoint();
+    history.commit(named("drag1"), "Move", "", 20.0);  // the drag's first step clears redo
+    EXPECT_FALSE(history.canRedo());
+    ASSERT_TRUE(history.undo());
+    history.commit(named("drag2"), "Move", "", 20.1);
+    const auto revision = history.revision();
+    history.restore(before);
+    EXPECT_NE(history.revision(), revision);  // the view rebuilds
+    EXPECT_EQ(history.current().robot, "b");
+    EXPECT_EQ(history.position(), 1U);
+    ASSERT_EQ(history.labels().size(), 3U);
+    EXPECT_EQ(history.labels()[2], "Rename robot b → c");
+    EXPECT_EQ(history.editsSinceSave(), 0);
+    ASSERT_TRUE(history.canRedo());
+    ASSERT_TRUE(history.redo());
+    EXPECT_EQ(history.current().robot, "c");  // the redo that was there, not the drag
+    EXPECT_FALSE(history.canRedo());
+    // The checkpoint stays: restoring again gives the same stack.
+    history.restore(before);
+    EXPECT_EQ(history.current().robot, "b");
+    // An empty checkpoint does nothing.
+    history.restore(History::Checkpoint{});
+    EXPECT_EQ(history.current().robot, "b");
+}
+
 }  // namespace
 }  // namespace lagrange::viewer::builder

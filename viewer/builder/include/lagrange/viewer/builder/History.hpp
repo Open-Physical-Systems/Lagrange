@@ -15,6 +15,8 @@ namespace lagrange::viewer::builder {
 /// States are numbered 0 (the oldest kept) to labels().size() - 1 (the newest). position() is
 /// the state current() shows. State 0's label is the one given at construction.
 class History {
+    struct State;  // WP-A's to change: the layout of the stack is not part of the interface
+
 public:
     explicit History(Document initial, std::size_t depth = 256);
     History(Document initial, std::string label, std::size_t depth = 256);
@@ -44,6 +46,28 @@ public:
     /// rebuilds its statics and validation runs again when it does.
     [[nodiscard]] std::uint64_t revision() const;
 
+    /// The whole stack as it is now (undo, redo, saved state), to put back with restore(): a
+    /// gesture that commits as it goes (a gizmo drag) and is then cancelled (Esc) leaves undo and
+    /// redo exactly as they were before it began.
+    class Checkpoint {
+    public:
+        Checkpoint();
+        ~Checkpoint();
+        Checkpoint(Checkpoint&&) noexcept;
+        Checkpoint& operator=(Checkpoint&&) noexcept;
+        Checkpoint(const Checkpoint&) = delete;
+        Checkpoint& operator=(const Checkpoint&) = delete;
+        [[nodiscard]] bool empty() const { return state_ == nullptr; }
+
+    private:
+        friend class History;
+        std::unique_ptr<State> state_;
+    };
+    [[nodiscard]] Checkpoint checkpoint() const;
+    /// Puts the stack back as `checkpoint` holds it (which stays, to restore again);
+    /// revision() still moves forward. Does nothing for an empty checkpoint.
+    void restore(const Checkpoint& checkpoint);
+
     /// The current state is what is on disk now.
     void markSaved();
     /// Steps between the saved state and the current one (the bar's "● unsaved · N"): 0 when
@@ -53,7 +77,6 @@ public:
     [[nodiscard]] int editsSinceSave() const;
 
 private:
-    struct State;  // WP-A's to change: the layout of the stack is not part of the interface
     std::unique_ptr<State> state_;
 };
 
