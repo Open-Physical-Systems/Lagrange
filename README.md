@@ -237,7 +237,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Viewer UI design (26)</summary>
+<details><summary>Viewer UI design (28)</summary>
 
 - [Lagrange UI · 00 · Design system](docs/design/ui/00-design-system/README.md)
 - [00 · Design system: SPEC](docs/design/ui/00-design-system/SPEC.md)
@@ -263,6 +263,8 @@ recorded to MCAP and replayed.
 - [10 · World (huge worlds): SPEC](docs/design/ui/10-world/SPEC.md)
 - [Lagrange UI · 11 · Performance](docs/design/ui/11-performance/README.md)
 - [11 · Performance: SPEC](docs/design/ui/11-performance/SPEC.md)
+- [Lagrange UI · 12 · Builder workspace (draft)](docs/design/ui/12-builder/README.md)
+- [12 · Builder workspace: SPEC (draft, RFC 0016)](docs/design/ui/12-builder/SPEC.md)
 - [Lagrange viewer UI design](docs/design/ui/README.md)
 - [Lagrange viewer: shared UI conventions](docs/design/ui/shared/ui-conventions.md)
 
@@ -336,7 +338,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Design proposals (RFCs) (15)</summary>
+<details><summary>Design proposals (RFCs) (16)</summary>
 
 - [RFC 0001: Module interface, signals and scheduling contract](rfcs/0001-module-interface.md)
 - [RFC 0002: USD custom schemas](rfcs/0002-usd-schemas.md)
@@ -353,6 +355,7 @@ recorded to MCAP and replayed.
 - [RFC 0013: Magnetic interference from a robot's own power wiring](rfcs/0013-motor-emi.md)
 - [RFC 0014: Protocol frame limits before the handshake](rfcs/0014-pre-handshake-limits.md)
 - [RFC 0015: USD attributes for lidar scan patterns and fisheye lenses](rfcs/0015-lidar-patterns-fisheye-usd.md)
+- [RFC 0016: A robot builder in the viewer](rfcs/0016-robot-builder.md)
 
 </details>
 
