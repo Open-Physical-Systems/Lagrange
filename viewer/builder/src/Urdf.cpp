@@ -199,107 +199,6 @@ bool isZero(const Pose& pose) {
     return pose.xyz == std::array<double, 3>{} && pose.rpy == std::array<double, 3>{};
 }
 
-// --- the local mass fallback --------------------------------------------------------------------
-
-/// Closed forms of RFC 0016 §4, used only while linkMass() (WP-A) gives nothing for a link that
-/// has a density and solid primitives. TODO(WP-A): remove once MassProperties.cpp lands.
-std::optional<MassProperties> fallbackMass(const Link& link) {
-    const Inertial& in = link.inertial;
-    struct Part {
-        double mass;
-        std::array<double, 3> at;
-        Matrix inertia;  // about the part's centre, link axes
-    };
-    std::vector<Part> parts;
-    if (in.density > 0.0) {
-        for (const Shape& s : link.shapes) {
-            if (!s.solid || s.kind == Shape::Kind::Mesh) {
-                continue;
-            }
-            double m = 0.0;
-            std::array<double, 3> d{};  // principal moments in the shape frame
-            switch (s.kind) {
-                case Shape::Kind::Box: {
-                    const auto [a, b, c] = s.size;
-                    m = in.density * a * b * c;
-                    d = {m * (b * b + c * c) / 12, m * (a * a + c * c) / 12,
-                         m * (a * a + b * b) / 12};
-                    break;
-                }
-                case Shape::Kind::Cylinder: {
-                    const double r = s.size[0], h = s.size[1];
-                    m = in.density * std::numbers::pi * r * r * h;
-                    const double across = m * (3 * r * r + h * h) / 12;
-                    d = {across, across, m * r * r / 2};
-                    break;
-                }
-                case Shape::Kind::Sphere: {
-                    const double r = s.size[0];
-                    m = in.density * 4.0 / 3.0 * std::numbers::pi * r * r * r;
-                    d = {2 * m * r * r / 5, 2 * m * r * r / 5, 2 * m * r * r / 5};
-                    break;
-                }
-                case Shape::Kind::Mesh:
-                    break;
-            }
-            if (m > 0.0) {
-                parts.push_back(
-                    {m, s.origin.xyz,
-                     rotated(rotation(s.origin.rpy), tensor({d[0], 0, 0, d[1], 0, d[2]}))});
-            }
-        }
-    }
-    double total = 0.0;
-    std::array<double, 3> com{};
-    for (const Part& p : parts) {
-        total += p.mass;
-        for (int k = 0; k < 3; ++k) {
-            com[k] += p.mass * p.at[k];
-        }
-    }
-    if (total <= 0.0) {
-        if (!in.mass) {
-            return std::nullopt;
-        }
-        MassProperties out;
-        out.mass = *in.mass;
-        out.com = in.com.value_or(std::array<double, 3>{});
-        out.inertia = in.inertia.value_or(std::array<double, 6>{});
-        return out;
-    }
-    for (double& c : com) {
-        c /= total;
-    }
-    Matrix sum{};
-    for (const Part& p : parts) {
-        const std::array<double, 3> r{p.at[0] - com[0], p.at[1] - com[1], p.at[2] - com[2]};
-        const double r2 = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
-        for (int a = 0; a < 3; ++a) {
-            for (int b = 0; b < 3; ++b) {
-                sum[a][b] += p.inertia[a][b] + p.mass * ((a == b ? r2 : 0.0) - r[a] * r[b]);
-            }
-        }
-    }
-    MassProperties out;
-    out.mass = total;
-    out.com = com;
-    out.inertia = packed(sum);
-    if (in.mass) {
-        const double scale = *in.mass / total;
-        for (double& v : out.inertia) {
-            v *= scale;
-        }
-        out.mass = *in.mass;
-    }
-    if (in.inertia) {
-        out.inertia = *in.inertia;
-    }
-    if (in.com) {
-        out.com = *in.com;
-    }
-    return out;
-}
-
 /// What the written <inertial> says: the overrides as they are when all three are given (so
 /// files of overrides never depend on the mass code), else linkMass() with the overrides applied.
 std::optional<MassProperties> inertialOf(const Link& link) {
@@ -307,10 +206,7 @@ std::optional<MassProperties> inertialOf(const Link& link) {
     if (in.mass && in.com && in.inertia) {
         return MassProperties{*in.mass, *in.com, *in.inertia};
     }
-    if (auto computed = linkMass(link)) {
-        return computed;
-    }
-    return fallbackMass(link);
+    return linkMass(link);
 }
 
 // --- kept XML -------------------------------------------------------------------------------
