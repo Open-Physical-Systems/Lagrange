@@ -379,11 +379,12 @@ Worse at, or missing:
   Sim, MuJoCo's MJX and Warp).
 - **The Jolt backend loses energy** in the pendulum test: 16 % over 60 s. Stay on MuJoCo, the
   default, when that matters.
-- **The quadcopter needs its electrical domain.** With `electrical` switched to its ideal
-  substitute, the sample quadcopter's rotors do not turn and it never takes off (found while
-  preparing this page). Its sample profile runs the motors at 50 µs, which is most of a hover's
-  cost. Its [release notes](../release/v1.3.0.md) also note the quadcopter run is 3 to 5 % slower
-  than before its last performance round.
+- **The quadcopter needed its electrical domain.** With `electrical` switched to its ideal
+  substitute, the sample quadcopter's rotors did not turn and it never took off (found while
+  preparing this page; fixed on `dev` after v1.3.0, test
+  `Multicopter.HoversWithTheElectricalDomainOff`). Its sample profile runs the motors at 50 µs,
+  which is most of a hover's cost. Its [release notes](../release/v1.3.0.md) also note the
+  quadcopter run is 3 to 5 % slower than before its last performance round.
 - **Uses an older MuJoCo.** It ships MuJoCo 3.12. MuJoCo 4.0.1 steps the 200-box pile much
   faster (below).
 - **Slower on the measured camera** than Gazebo, by about 15 %, though it draws more per frame.

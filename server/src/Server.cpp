@@ -882,8 +882,9 @@ struct Server::Impl {
         }
         // The electrical domain turns the controllers' torque commands into joint torques: the
         // network when the robot has motors (from USD or an overlay), else its ideal substitute
-        // (domains/electrical.md §5).
-        if (hasPowerSystem() && !off("electrical")) {
+        // (domains/electrical.md §5), added below after every controller.
+        const bool electricalNetwork = hasPowerSystem() && !off("electrical");
+        if (electricalNetwork) {
             ModuleConfigData power;
             power.fidelity = settings.electricalFidelity.value_or("averaged");
             // The physics step the joint speeds arrive at: speed prediction and the stability
@@ -906,8 +907,6 @@ struct Server::Impl {
                     next->add(std::make_unique<electrical::FmuComponent>(std::move(binding)));
                 }
             }
-        } else if (!addPluginSubstitute("electrical")) {
-            next->add(std::make_unique<electrical::IdealTorqueSource>());
         }
         // Thermal, after electrical: it reads the losses. It needs the site's ambient
         // temperature; without one nothing stands in, and the electrical network keeps its
@@ -1100,9 +1099,14 @@ struct Server::Impl {
                 // The ground under it, so that it can fly off a bridge or a roof and land below.
                 auto [below, friction] = groundQuery();
                 (void)friction;
+                ModuleConfigData flown = air;
+                if (!electricalNetwork) {
+                    // The ideal torque source: the controller bounds what it asks of the rotors.
+                    flown.values.emplace("ideal_motors", true);
+                }
                 next->add(std::make_unique<MulticopterController>(flight, std::move(commands),
                                                                   std::move(below)),
-                          ModuleConfig(air));
+                          ModuleConfig(flown));
             }
         }
         // EMI (domains/emi.md) when the stage has sources or victims: before the sensors, which
@@ -1174,6 +1178,12 @@ struct Server::Impl {
         // After every sensor, the plugins' too: their outputs as the robot gets them.
         if (sensors::DelayLine::needed(WorldView(robot.world))) {
             next->add(std::make_unique<sensors::DelayLine>());
+        }
+        // The electrical substitute passes on the torque_command of every module above
+        // (IdealTorqueSource reads them from declaredOutputs), so it comes after them all: the
+        // multicopter controller and the MAVLink bridges are added after the rotors' air.
+        if (!electricalNetwork && !addPluginSubstitute("electrical")) {
+            next->add(std::make_unique<electrical::IdealTorqueSource>());
         }
         // Always last: it sums the body/<b>/wrench/<source> written by the modules above.
         next->add(std::make_unique<services::WrenchSum>());

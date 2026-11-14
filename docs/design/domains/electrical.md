@@ -113,6 +113,13 @@ motor prims at all, for every actuated joint with a `torque_command`).
 `IdealTorqueSource::step` keeps the body shown in CLAUDE.md §11.5, with `torqueOut` and
 `torqueCommand` being `SignalId` values resolved in `init()`.
 
+It passes on the `torque_command` outputs of the modules declared before it, so the server adds
+it after every controller (the multicopter controller and the MAVLink bridges come after the
+rotors' air). With no drive between the command and the joint, the built-in multicopter
+controller (config `ideal_motors`) bounds each rotor's command by the drive's torque at the
+rotor's loaded top speed and lowers its rotor speed gain, so that its yaw-rate loop, which then
+runs through the motors' reaction on the frame within one step, does not ring.
+
 ## 6. Placement
 
 CPU on all tiers. One robot has tens of states; the cost is dominated by call overhead, so motors

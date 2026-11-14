@@ -15,7 +15,12 @@ using namespace literals;
 namespace {
 
 constexpr double kGravity = 9.80665;  // m/s², standard gravity (the world's gravity is along −z)
-constexpr const char* kAirDensityKey = "air_density";  // as lagrange::rotor_aero
+constexpr const char* kAirDensityKey = "air_density";    // as lagrange::rotor_aero
+constexpr const char* kIdealMotorsKey = "ideal_motors";  // the electrical domain is off
+// With ideal motors: the per-step gain allowed to the yaw-rate loop that runs through the motors'
+// reaction on the frame (MulticopterController::declare); below 1 it does not ring, and half
+// leaves margin for the hover speed it is worked out at.
+constexpr double kReactionLoopGain = 0.5;
 // Landing by hand (Settings::waitForCommand): the set point may go this far below the start, so
 // the drone presses onto the ground, and it counts as landed this close to its start height and
 // this slow vertically.
@@ -205,6 +210,17 @@ Status MulticopterController::declare(const WorldView& world, const ModuleConfig
                               " rad/s of " + std::to_string(std::lround(top.speed)) + " (" +
                               top.from + ")");
         }
+        if (config.get<bool>(kIdealMotorsKey).value_or(false)) {
+            // No motor model stands between the command and the rotor: bound the command by the
+            // drive's torque at the rotor's loaded top speed (the motor's current limit, when
+            // that is what limits it), as the electrical domain would.
+            const mavlink::RotorTopSpeed top = mavlink::rotorTopSpeed(world, *s, *rho);
+            r.torqueLimit = r.torquePerOmega2 * top.speed * top.speed;
+            services::log(services::LogLevel::Info, "controller",
+                          std::string(world.signalInstanceName(s->prim)) +
+                              ": ideal motor, torque command bounded to " +
+                              std::to_string(r.torqueLimit) + " N·m (" + top.from + ")");
+        }
         const std::string joint = "joint/" + std::string(world.signalInstanceName(s->prim)) + "/";
         SignalSpec velocity;
         velocity.name = joint + "velocity";
@@ -251,6 +267,32 @@ Status MulticopterController::declare(const WorldView& world, const ModuleConfig
     mixer_.assign(4, {});
     for (std::size_t i = 0; i < 4; ++i) {
         mixer_[i] = inverse[i];
+    }
+    speedGain_ = settings_.speedGain;
+    if (config.get<bool>(kIdealMotorsKey).value_or(false)) {
+        // Ideal motors put the speed loop's torque on the frame at once, as the motors'
+        // reaction: a yaw rate asks the ccw and cw rotors apart, their speed loops push them
+        // all one way, and the frame turns back. Per step that loop's gain is
+        // Σ K·|∂ω_i/∂τz|·2ζ·ωa·dt (at the hover speed); from 1 up it rings at every step. The
+        // speed gain is cut to keep it at kReactionLoopGain (with electrical on, the drives'
+        // current loops are what keep it down).
+        const double wa = 2.0 * std::numbers::pi * settings_.attitudeHz;
+        const double dt = config.dt().value_or(preferredStep()).seconds();
+        double perGain = 0.0;  // the loop's gain per unit of K
+        for (std::size_t i = 0; i < 4; ++i) {
+            const Rotor& r = rotors_[i];
+            const double hoverThrust = std::max(mixer_[i][0] * mass_ * kGravity, 1e-9);  // N
+            const double hoverSpeed = std::sqrt(hoverThrust / r.thrustPerOmega2);        // rad/s
+            // f_i = m3·τz and f = kT·ω²: ∂ω/∂τz = |m3| / (2·kT·ω).
+            perGain += std::abs(mixer_[i][3]) / (2.0 * r.thrustPerOmega2 * hoverSpeed) * 2.0 *
+                       settings_.damping * wa * dt;
+        }
+        if (perGain > 0.0) {
+            speedGain_ = std::min(speedGain_, kReactionLoopGain / perGain);
+        }
+        services::log(
+            services::LogLevel::Info, "controller",
+            "ideal motors: rotor speed gain " + std::to_string(speedGain_) + " N·m per rad/s");
     }
     const std::string link = "body/" + std::string(world.signalInstanceName(bodies.prim[base]));
     SignalSpec pose;
@@ -535,7 +577,11 @@ Status MulticopterController::step(const StepContext& context, SignalBus& bus) {
         const double now = bus.read(r.velocity);
         // The propeller's drag at the wanted speed, plus a proportional correction.
         const double feedForward = r.spin * r.torquePerOmega2 * airShare * speed * speed;
-        bus.write(r.command, feedForward + settings_.speedGain * (speed - now));
+        double command = feedForward + speedGain_ * (speed - now);
+        if (r.torqueLimit > 0.0) {
+            command = std::clamp(command, -r.torqueLimit, r.torqueLimit);
+        }
+        bus.write(r.command, command);
     }
     return {};
 }
