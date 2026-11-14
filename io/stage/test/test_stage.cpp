@@ -499,6 +499,16 @@ TEST(StageReader, LidarPatternsAndFisheyeLensesReachTheSettings) {
         float horizontalAperture = 36
         uniform token sensor:camera:lensType = "equidistant"
     }
+    def Camera "short_cutoff" ( prepend apiSchemas = ["SensorAPI_1", "CameraSensorAPI_1"] )
+    {
+        double sensor:rate = 10
+        int sensor:camera:width = 64
+        int sensor:camera:height = 64
+        float focalLength = 10
+        float horizontalAperture = 36
+        uniform token sensor:camera:lensType = "equidistant"
+        double sensor:camera:cutoffAngle = 1.0
+    }
     def Camera "pinhole" ( prepend apiSchemas = ["SensorAPI_1", "CameraSensorAPI_1"] )
     {
         double sensor:rate = 10
@@ -559,6 +569,11 @@ TEST(StageReader, LidarPatternsAndFisheyeLensesReachTheSettings) {
     EXPECT_NEAR(plain.at("horizontal_fov"), 3.6, 1e-12);  // k = 0: θ = θ_d
     EXPECT_FALSE(plain.contains("fisheye_cutoff"));
     EXPECT_EQ(FisheyeLens::from(plain).cutoff, 1.8);
+    // A cutoff below half the angle across the width is read as from URDF: the angle stays the
+    // lens's, the pixels beyond the cutoff are black (sensors QA F1).
+    const auto& shortCutoff = settingsOf(*model, "short_cutoff");
+    EXPECT_NEAR(shortCutoff.at("horizontal_fov"), 3.6, 1e-12);
+    EXPECT_EQ(FisheyeLens::from(shortCutoff).cutoff, 1.0);
 
     // An old file's pinhole with equidistant distortion is read as before.
     const auto& pinhole = settingsOf(*model, "pinhole");
@@ -582,7 +597,7 @@ TEST(StageReader, LidarPatternsAndFisheyeLensesReachTheSettings) {
             }
         }
     }
-    for (const char* name : {"fisheye", "plain_fisheye"}) {
+    for (const char* name : {"fisheye", "plain_fisheye", "short_cutoff"}) {
         const auto& a = settingsOf(*model, name);
         const auto& b = settingsOf(*again, name);
         ASSERT_TRUE(FisheyeLens::isFisheye(b)) << name;
@@ -634,8 +649,12 @@ TEST(StageReader, RefusesLidarPatternsAndLensesItCannotDraw) {
                 "uniform token sensor:camera:distortionModel = \"plumb_bob\"\n"
                 "double[] sensor:camera:distortionCoeffs = [0, 0, 0, 0, 0]\n}",
             "not plumb_bob");
-    refused("unreachable.usda", camera + "double sensor:camera:cutoffAngle = 1.5\n}",
-            "cannot reach");
+    // θ_d = θ (1 - 0.2 θ²) peaks at 0.86 rad: never w / 2f = 1.8, whatever the cutoff.
+    refused("unreachable.usda",
+            camera +
+                "uniform token sensor:camera:distortionModel = \"equidistant\"\n"
+                "double[] sensor:camera:distortionCoeffs = [-0.2, 0, 0, 0]\n}",
+            "never reaches");
 }
 
 /// A wheel on a driven joint, its motor, a battery with a port, a bus and a load: the sample
