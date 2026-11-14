@@ -168,5 +168,61 @@ TEST(Edits, ParamsCheckedAgainstTheCatalog) {
     EXPECT_NE(checkParam(mode, "c"), "");
 }
 
+// QA F7: the root of everything is not deleted; a stray root with its subtree may be.
+TEST(Edits, TheRootOfEverythingIsKnown) {
+    Document document = rover();
+    EXPECT_TRUE(isRootOfAll(document, "base_link"));
+    EXPECT_FALSE(isRootOfAll(document, "cylinder_link"));
+    EXPECT_FALSE(isRootOfAll(document, "no_such_link"));
+    EXPECT_TRUE(isRootOfAll(newDocument(), "base_link")) << "the lone link";
+    Link stray;
+    stray.name = "stray";
+    document.links.push_back(stray);  // a second root
+    EXPECT_FALSE(isRootOfAll(document, "base_link"));
+    EXPECT_FALSE(isRootOfAll(document, "stray"));
+}
+
+// QA F11: what the Joints panel sends stays within the limits.
+TEST(Edits, JointTargetsStayWithinTheLimits) {
+    Joint pan;
+    pan.type = Joint::Type::Revolute;
+    pan.lower = -1.0;
+    pan.upper = 2.0;
+    EXPECT_DOUBLE_EQ(*jointTarget(pan, 8.7), 2.0);
+    EXPECT_DOUBLE_EQ(*jointTarget(pan, -1.7e28), -1.0);
+    EXPECT_DOUBLE_EQ(*jointTarget(pan, 0.5), 0.5);
+    EXPECT_FALSE(jointTarget(pan, std::nan("")));
+    EXPECT_FALSE(jointTarget(pan, INFINITY));
+    Joint wheel = pan;
+    wheel.type = Joint::Type::Continuous;  // limits in a file mean nothing for it
+    EXPECT_DOUBLE_EQ(*jointTarget(wheel, 40.0), 40.0);
+    Joint loose;
+    loose.type = Joint::Type::Prismatic;  // no limits yet: as typed
+    EXPECT_DOUBLE_EQ(*jointTarget(loose, 3.0), 3.0);
+}
+
+// QA F20: a joint's rename reaches <ros2_control> and <transmission> kept as written.
+TEST(Edits, RenamingAJointRenamesItsControlReferences) {
+    Document document = rover();
+    const std::string joint = document.joints.back().name;
+    document.keptXml = "<ros2_control name=\"hw\" type=\"system\">\n  <joint name=\"" + joint +
+                       "\">\n    <command_interface name=\"position\"/>\n  </joint>\n"
+                       "  <joint name='" +
+                       joint +
+                       "_x'/>\n</ros2_control>\n"
+                       "<transmission name=\"t\">\n  <joint name=\"" +
+                       joint +
+                       "\"><hardwareInterface>x</hardwareInterface></joint>\n</transmission>\n"
+                       "<gazebo><joint name=\"" +
+                       joint + "\"/></gazebo>\n";
+    EXPECT_EQ(controlJointNames(document.keptXml), (std::vector<std::string>{joint, joint + "_x"}));
+    ASSERT_EQ(rename(document, ItemKind::Joint, joint, "tilt"), "");
+    EXPECT_EQ(controlJointNames(document.keptXml),
+              (std::vector<std::string>{"tilt", joint + "_x"}));
+    EXPECT_NE(document.keptXml.find("<gazebo><joint name=\"" + joint + "\"/>"), std::string::npos)
+        << "only <ros2_control> and <transmission> are touched";
+    EXPECT_NE(document.keptXml.find("<command_interface name=\"position\"/>"), std::string::npos);
+}
+
 }  // namespace
 }  // namespace lagrange::viewer::builder

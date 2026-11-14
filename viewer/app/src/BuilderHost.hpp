@@ -75,6 +75,9 @@ public:
     void open(const std::filesystem::path& path);
     /// $XDG_STATE_HOME/lagrange/builder/<robot>.autosave.urdf (RFC 0016 §10).
     [[nodiscard]] static std::filesystem::path autosavePath(const std::string& robot);
+    /// The folder the document's relative meshes resolve against (BuilderSession::meshFolder,
+    /// else the working directory).
+    [[nodiscard]] std::filesystem::path meshFolder() const;
 
 private:
     /// A child process that is not the test server: Export USD, Check loads, xacro.

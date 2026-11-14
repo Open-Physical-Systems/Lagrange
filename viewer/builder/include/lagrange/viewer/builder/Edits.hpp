@@ -75,6 +75,20 @@ struct AddedLink {
 /// Removes a link with everything under it (its joint, child links and their joints, and the
 /// sensors on all of them). False when there is no such link.
 bool removeLink(Document& document, std::string_view link);
+/// A position typed or dragged for `joint` (rad or m) as it may be previewed or sent to a run
+/// (QA F11): within the joint's limits when it has them (lower < upper), as typed for a
+/// continuous joint or one without limits; nullopt for a value that is not finite.
+[[nodiscard]] std::optional<double> jointTarget(const Joint& joint, double value);
+
+/// True when removeLink(link) would leave no link: the lone link, or the root every other link
+/// hangs from. The builder refuses that delete (a robot keeps a link, QA F7).
+[[nodiscard]] bool isRootOfAll(const Document& document, std::string_view link);
+
+/// The joint names `<joint name=>` inside kept <ros2_control> and <transmission> elements, in
+/// order, each once (Validation warns on one the robot does not have).
+[[nodiscard]] std::vector<std::string> controlJointNames(std::string_view keptXml);
+/// Renames `<joint name="from">` to `to` inside kept <ros2_control> and <transmission> elements.
+void renameControlJoint(std::string& keptXml, std::string_view from, std::string_view to);
 /// Removes a joint by removing its child link (and so its subtree): a joint never exists
 /// without its child in the builder. False when there is no such joint.
 bool removeJoint(Document& document, std::string_view joint);
@@ -85,6 +99,8 @@ bool removeSensor(Document& document, std::string_view sensor);
 /// message, or "" when done. The new name must be validName() and not used by another item of
 /// the same kind.
 enum class ItemKind { Robot, Link, Joint, Sensor };
+/// A joint's rename also renames `<joint name=>` inside the robot's kept <ros2_control> and
+/// <transmission> elements (renameControlJoint).
 [[nodiscard]] std::string rename(Document& document, ItemKind kind, std::string_view from,
                                  std::string_view to);
 

@@ -214,7 +214,10 @@ private:
         if (widgets::Button("##delete", widgets::ButtonKind::Ghost, widgets::Icon::Delete)) {
             deleteSelection(session);
         }
-        ImGui::SetItemTooltip("Delete (and everything under it)");
+        ImGui::SetItemTooltip(
+            kind == Kind::Link && builder::isRootOfAll(session.document(), session.selection.name)
+                ? "The root stays: a robot keeps a link"
+                : "Delete (and everything under it)");
         ImGui::EndDisabled();
         widgets::EndPanelTools();
     }

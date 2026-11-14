@@ -193,13 +193,23 @@ private:
             const bool mimic = joint.mimic.has_value();
             double value = 0.0;
             const auto liveValue = session.liveJoints.find(joint.name);
-            const bool hasLive = testing && liveValue != session.liveJoints.end();
+            bool hasLive = testing && liveValue != session.liveJoints.end();
+            double liveNow = hasLive ? liveValue->second : 0.0;
+            if (testing && mimic && !hasLive) {
+                // QA F18: a run that reports no position for the copy: it follows its leader.
+                const auto& [leader, multiplier, offset] = *joint.mimic;
+                if (const auto found = session.liveJoints.find(leader);
+                    found != session.liveJoints.end()) {
+                    hasLive = true;
+                    liveNow = multiplier * found->second + offset;
+                }
+            }
             if (testing) {
                 // The knob follows the run, except while it is dragged: then it is the command.
                 const auto target = session.jointTargets.find(joint.name);
                 value = dragging_ == joint.name && target != session.jointTargets.end()
                             ? target->second
-                        : hasLive                              ? liveValue->second
+                        : hasLive                              ? liveNow
                         : target != session.jointTargets.end() ? target->second
                                                                : 0.0;
             } else if (mimic) {
@@ -216,7 +226,9 @@ private:
             if (widgets::JointSlider("##slider", &value, lower, upper,
                                      joint.type == Joint::Type::Continuous, !mimic && live,
                                      sliderW)) {
-                (testing ? session.jointTargets : session.preview)[joint.name] = value;
+                if (const auto target = builder::jointTarget(joint, value)) {
+                    (testing ? session.jointTargets : session.preview)[joint.name] = *target;
+                }
             }
             if (testing) {
                 if (ImGui::IsItemActive()) {
@@ -232,7 +244,7 @@ private:
             const bool degrees = angular(joint) && session.showDegrees;
             cell(nameW + typeW + sliderW + gap * 3.0F, px(22.0F));
             // Testing: the value field is the run's position (typing commands it).
-            const double fieldValue = hasLive ? liveValue->second : value;
+            const double fieldValue = hasLive ? liveNow : value;
             const double shownValue = degrees ? builder::toDegrees(fieldValue) : fieldValue;
             char text[32];
             std::snprintf(text, sizeof(text), "%.1f", shownValue);
@@ -244,9 +256,13 @@ private:
             if (widgets::CommitField("##value", &field,
                                      angular(joint) ? (degrees ? "°" : "rad") : "m", false,
                                      valueW)) {
-                if (const auto typed = builder::parseNumber(field)) {
-                    (testing ? session.jointTargets : session.preview)[joint.name] =
-                        degrees ? builder::toRadians(*typed) : *typed;
+                // QA F11: a typed value stops at the limits, as the knob does.
+                const auto typed = builder::parseNumber(field);
+                if (const auto target =
+                        typed ? builder::jointTarget(joint,
+                                                     degrees ? builder::toRadians(*typed) : *typed)
+                              : std::nullopt) {
+                    (testing ? session.jointTargets : session.preview)[joint.name] = *target;
                 }
             }
             ImGui::EndDisabled();

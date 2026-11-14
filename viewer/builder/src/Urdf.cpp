@@ -26,6 +26,7 @@
 #include <map>
 #include <numbers>
 #include <set>
+#include <sys/stat.h>
 #include <tinyxml2.h>
 #include <unistd.h>
 #include <utility>
@@ -347,26 +348,39 @@ std::string meshPath(const std::string& mesh, const WriteOptions& options) {
     if (mesh.find("://") != std::string::npos) {
         return mesh;  // package://, lagrange-asset://, file://: as written
     }
-    const std::filesystem::path path(mesh);
+    std::filesystem::path path(mesh);
     const std::filesystem::path folder = options.savedAt.parent_path();
+    std::error_code error;
+    if (path.is_relative() && options.meshFolder) {
+        // Where the document reads it: the file it came from (or the working directory).
+        const std::filesystem::path from = options.meshFolder->empty()
+                                               ? std::filesystem::current_path(error)
+                                               : *options.meshFolder;
+        const std::filesystem::path to =
+            folder.empty() ? std::filesystem::current_path(error) : folder;
+        if (!options.absoluteMeshes &&
+            std::filesystem::absolute(from, error).lexically_normal() ==
+                std::filesystem::absolute(to, error).lexically_normal()) {
+            return mesh;  // the same folder: as written
+        }
+        path = std::filesystem::absolute(from / path, error).lexically_normal();
+    }
     if (options.absoluteMeshes) {
         if (path.is_absolute()) {
-            return mesh;
+            return path.string();
         }
-        std::error_code error;
         const std::filesystem::path base =
             folder.empty() ? std::filesystem::current_path(error) : folder;
         return std::filesystem::absolute(base / path, error).lexically_normal().string();
     }
     if (!options.savedAt.empty() && path.is_absolute()) {
-        std::error_code error;
         const std::filesystem::path base = std::filesystem::absolute(folder, error);
         const std::filesystem::path relative = path.lexically_relative(base);
         if (!relative.empty()) {
             return relative.string();
         }
     }
-    return mesh;
+    return path.is_absolute() ? path.string() : mesh;
 }
 
 /// Colours by name: the kept robot-level <material> definitions, and the ones the writer adds.
@@ -1390,16 +1404,43 @@ ReadResult readUrdf(std::string_view text) {
     return result;
 }
 
-std::string saveAtomically(const std::filesystem::path& path, std::string_view text) {
-    if (path.extension() == ".xacro") {
-        return "cannot save " + path.string() + ": a .xacro is never written (save as .urdf)";
+std::string saveAtomically(const std::filesystem::path& requested, std::string_view text) {
+    if (requested.extension() == ".xacro") {
+        return "cannot save " + requested.string() + ": a .xacro is never written (save as .urdf)";
+    }
+    // A symlink is written through to its target (a --symlink-install share/ file points at the
+    // package's source: that is where the edit belongs), never replaced by a file of its own.
+    std::filesystem::path path = requested;
+    std::error_code error;
+    if (std::filesystem::is_symlink(requested, error)) {
+        path = std::filesystem::weakly_canonical(requested, error);
+        if (error || path.empty()) {
+            return "cannot save " + requested.string() + ": the link cannot be followed";
+        }
+        if (path.extension() == ".xacro") {
+            return "cannot save " + requested.string() + ": it links to a .xacro (" +
+                   path.string() + "), which is never written";
+        }
+    }
+    // An existing file keeps its permissions; a read-only one is refused, not replaced.
+    mode_t mode = 0644;
+    if (struct stat existing{}; ::stat(path.c_str(), &existing) == 0) {
+        if (!S_ISREG(existing.st_mode)) {
+            return "cannot save " + requested.string() + ": it is not a regular file";
+        }
+        if (::access(path.c_str(), W_OK) != 0) {
+            return "cannot save " + requested.string() +
+                   ": the file is read-only (use Save as… for a copy)";
+        }
+        mode = existing.st_mode & 07777;
     }
     const std::filesystem::path temporary =
         path.parent_path() / ("." + path.filename().string() + ".tmp" + std::to_string(getpid()));
-    const int fd = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    const int fd = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
     if (fd < 0) {
         return "cannot save " + path.string() + ": cannot create a file in its folder";
     }
+    (void)::fchmod(fd, mode);  // the old file's mode (0644 for a new one), not the umask's
     std::size_t written = 0;
     while (written < text.size()) {
         const ssize_t n = ::write(fd, text.data() + written, text.size() - written);
@@ -1414,13 +1455,27 @@ std::string saveAtomically(const std::filesystem::path& path, std::string_view t
         std::filesystem::remove(temporary);
         return "cannot save " + path.string() + ": the data did not reach the disk";
     }
-    std::error_code error;
     std::filesystem::rename(temporary, path, error);
     if (error) {
         std::filesystem::remove(temporary);
         return "cannot save " + path.string() + ": " + error.message();
     }
     return {};
+}
+
+std::string safeFileName(std::string_view name) {
+    constexpr std::size_t kLongest = 100;  // well under NAME_MAX (255) with any suffix
+    std::string out;
+    for (const char c : name.substr(0, kLongest)) {
+        const bool plain = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                           (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.';
+        out += plain ? c : '_';
+    }
+    // No hidden file, and never "." or "..".
+    while (!out.empty() && out.front() == '.') {
+        out.front() = '_';
+    }
+    return out.empty() ? std::string("robot") : out;
 }
 
 }  // namespace lagrange::viewer::builder

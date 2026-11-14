@@ -4,8 +4,9 @@ A lagrange_server runs the sample AMR in the sample warehouse (--no-ros). The vi
 to it, opens rover_mk1 in the Builder, picks *Into the connected run* in the Test menu and
 presses Test: the robot's URDF goes to the server as ImportRobot.content, the server names it
 by its <robot name> and spawns it beside the AMR, passive, since the run already has a robot.
-Back (Esc) sends RemoveRobot and the run goes on without it. Run on the software Vulkan device
-(llvmpipe) unless LAGRANGE_TEST_GPU names another.
+Back (Esc) sends RemoveRobot and the run goes on without it; so does closing the viewer while
+testing (QA F12). Run on the software Vulkan device (llvmpipe) unless LAGRANGE_TEST_GPU names
+another.
 """
 
 from __future__ import annotations
@@ -126,7 +127,16 @@ def test_the_robot_goes_into_the_run_passive_and_back_removes_it(tmp_path, wareh
     # The viewer stayed on the user's run: no test server of its own was started.
     assert report["connected"] is True
 
-    # Again, then Back: the second is renamed, and Back removes it from the run.
+    # The viewer quit while testing: the robot left the run with it (QA F12), as with Back.
+    text = log.read_text()
+    for _ in range(50):
+        if "deleted rover_mk1\n" in text:
+            break
+        time.sleep(0.1)
+        text = log.read_text()
+    assert "deleted rover_mk1\n" in text, "its viewer quit: the test robot leaves the run"
+
+    # Again, then Back: the name is free again, and Back removes it from the run.
     report = run(
         tmp_path,
         endpoint,
@@ -137,11 +147,11 @@ def test_the_robot_goes_into_the_run_passive_and_back_removes_it(tmp_path, wareh
     assert report["builder"]["mode"] == "build"
     assert report["builder"]["test_robot"] == ""
     text = log.read_text()
-    assert "spawned rover_mk1_2 from" in text
+    assert text.count("spawned rover_mk1 from") == 2, text
     for _ in range(50):
-        if "deleted rover_mk1_2" in text:
+        if text.count("deleted rover_mk1\n") == 2:
             break
         time.sleep(0.1)
         text = log.read_text()
-    assert "deleted rover_mk1_2" in text
-    assert "deleted rover_mk1\n" not in text, "the first one stays: its viewer quit without Back"
+    assert text.count("deleted rover_mk1\n") == 2, "Back removed the second one"
+    assert "rover_mk1_2" not in text, "no test robot was left behind to take the name"
