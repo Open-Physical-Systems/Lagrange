@@ -48,6 +48,380 @@ struct HullFace {
     double offset;
 };
 
+/// An edge of the rim of the faces a new point sees, wound as in the seen face, and the face
+/// beyond it that stays.
+struct RimEdge {
+    std::uint32_t from;
+    std::uint32_t to;
+    std::size_t beyond;
+};
+
+/// Grows the faces point `p` sees (`seen`: at first those it is over the tolerance above) until
+/// replacing them by a fan from `p` keeps the hull a closed, convex surface: they are one piece
+/// with one rim loop, and no fan face is thinner than the tolerance or has a hull vertex more
+/// than the tolerance in front of it. The faces it adds are ones `p` is level with (within the
+/// tolerance of their planes), next to those seen: a point that sees one face of a nearly flat
+/// pair and lies over the other must replace both, or its fan folds back over the other. Fills
+/// `rim` in the order of the faces and their edges. False when no such region exists: `p` is
+/// then left out.
+bool settleSeen(const std::vector<HullFace>& faces, const std::vector<Point>& points,
+                std::uint32_t p, double tolerance, std::vector<char>& seen,
+                std::vector<RimEdge>& rim) {
+    // Each directed edge and its face, to find the face beyond an edge.
+    std::vector<std::array<std::size_t, 3>> owners;
+    owners.reserve(3 * faces.size());
+    for (std::size_t i = 0; i < faces.size(); ++i) {
+        for (std::size_t e = 0; e < 3; ++e) {
+            owners.push_back({faces[i].v.at(e), faces[i].v.at((e + 1) % 3), i});
+        }
+    }
+    std::sort(owners.begin(), owners.end());
+    const auto beyondOf = [&](std::size_t i, std::size_t e) -> std::size_t {
+        const std::array<std::size_t, 3> key{faces[i].v.at((e + 1) % 3), faces[i].v.at(e), 0};
+        const auto it = std::lower_bound(owners.begin(), owners.end(), key);
+        if (it == owners.end() || (*it)[0] != key[0] || (*it)[1] != key[1]) {
+            return faces.size();
+        }
+        return (*it)[2];
+    };
+    std::vector<double> height(faces.size());
+    for (std::size_t i = 0; i < faces.size(); ++i) {
+        height[i] = dotOf(faces[i].normal, points[p]) - faces[i].offset;
+    }
+    // The faces joined by edges to `start` through faces that pass `through`.
+    const auto region = [&](std::size_t start, const auto& through) {
+        std::vector<char> reached(faces.size(), 0);
+        std::vector<std::size_t> queue{start};
+        reached[start] = 1;
+        while (!queue.empty()) {
+            const std::size_t i = queue.back();
+            queue.pop_back();
+            for (std::size_t e = 0; e < 3; ++e) {
+                const std::size_t j = beyondOf(i, e);
+                if (j < faces.size() && reached[j] == 0 && through(j)) {
+                    reached[j] = 1;
+                    queue.push_back(j);
+                }
+            }
+        }
+        return reached;
+    };
+    std::size_t top = faces.size();
+    for (std::size_t i = 0; i < faces.size(); ++i) {
+        if (seen[i] != 0 && (top == faces.size() || height[i] > height[top])) {
+            top = i;
+        }
+    }
+    if (top == faces.size()) {
+        return false;
+    }
+    // One piece: the seen faces joined to the one it is farthest above, through faces it sees
+    // or is level with. Every later step adds faces next to these, so it stays one piece.
+    {
+        const std::vector<char> joined =
+            region(top, [&](std::size_t j) { return seen[j] != 0 || height[j] > -tolerance; });
+        bool apart = false;
+        for (std::size_t i = 0; i < faces.size(); ++i) {
+            apart = apart || (seen[i] != 0 && joined[i] == 0);
+        }
+        if (apart) {
+            for (std::size_t i = 0; i < faces.size(); ++i) {
+                seen[i] = joined[i];
+            }
+        }
+    }
+    // Takes in the faces next to the seen ones that it is level with; false when there are none.
+    const auto takeLevelNeighbours = [&]() {
+        std::vector<std::size_t> add;
+        for (std::size_t i = 0; i < faces.size(); ++i) {
+            if (seen[i] == 0) {
+                continue;
+            }
+            for (std::size_t e = 0; e < 3; ++e) {
+                const std::size_t j = beyondOf(i, e);
+                if (j < faces.size() && seen[j] == 0 && height[j] > -tolerance) {
+                    add.push_back(j);
+                }
+            }
+        }
+        for (const std::size_t j : add) {
+            seen[j] = 1;
+        }
+        return !add.empty();
+    };
+    constexpr double kFoldSlack = 2.0;
+    std::vector<char> onHull(points.size(), 0);
+    for (std::size_t round = 0; round <= faces.size(); ++round) {
+        rim.clear();
+        for (std::size_t i = 0; i < faces.size(); ++i) {
+            if (seen[i] == 0) {
+                continue;
+            }
+            for (std::size_t e = 0; e < 3; ++e) {
+                const std::size_t beyond = beyondOf(i, e);
+                if (beyond == faces.size()) {
+                    return false;  // not a closed surface
+                }
+                if (seen[beyond] == 0) {
+                    rim.push_back({faces[i].v.at(e), faces[i].v.at((e + 1) % 3), beyond});
+                }
+            }
+        }
+        if (rim.empty()) {
+            return false;  // it sees every face
+        }
+        // One rim loop: each rim vertex starts one edge, and following them goes round all.
+        std::vector<std::pair<std::uint32_t, std::size_t>> starts;
+        starts.reserve(rim.size());
+        for (std::size_t k = 0; k < rim.size(); ++k) {
+            starts.emplace_back(rim[k].from, k);
+        }
+        std::sort(starts.begin(), starts.end());
+        bool pinched = false;
+        for (std::size_t k = 1; k < starts.size(); ++k) {
+            pinched = pinched || starts[k].first == starts[k - 1].first;
+        }
+        std::size_t length = 0;
+        if (!pinched) {
+            std::size_t k = 0;
+            do {
+                const auto it =
+                    std::lower_bound(starts.begin(), starts.end(),
+                                     std::pair<std::uint32_t, std::size_t>{rim[k].to, 0});
+                if (it == starts.end() || it->first != rim[k].to) {
+                    break;
+                }
+                k = it->second;
+                ++length;
+            } while (k != 0 && length <= rim.size());
+        }
+        if (pinched || length != rim.size()) {
+            // Fill the holes: the faces cut off from the one it is farthest below.
+            std::size_t bottom = faces.size();
+            for (std::size_t i = 0; i < faces.size(); ++i) {
+                if (seen[i] == 0 && (bottom == faces.size() || height[i] < height[bottom])) {
+                    bottom = i;
+                }
+            }
+            const std::vector<char> outside =
+                region(bottom, [&](std::size_t j) { return seen[j] == 0; });
+            bool changed = false;
+            for (std::size_t i = 0; i < faces.size(); ++i) {
+                if (seen[i] == 0 && outside[i] == 0) {
+                    seen[i] = 1;
+                    changed = true;
+                }
+            }
+            if (!changed && !takeLevelNeighbours()) {
+                return false;
+            }
+            continue;
+        }
+        // No fan face thinner than the tolerance or folded over the face beyond its edge.
+        bool changed = false;
+        for (const RimEdge& edge : rim) {
+            const Point& a = points[edge.from];
+            const Point along = minus(points[edge.to], a);
+            const Point normal = crossOf(along, minus(points[p], a));
+            const double area = std::sqrt(dotOf(normal, normal));
+            bool grow = area <= tolerance * std::sqrt(dotOf(along, along));
+            for (const std::uint32_t w : faces[edge.beyond].v) {
+                grow = grow || dotOf(normal, minus(points[w], a)) > tolerance * area;
+            }
+            if (grow) {
+                seen[edge.beyond] = 1;
+                changed = true;
+            }
+        }
+        if (changed) {
+            continue;
+        }
+        // Nor one with any hull vertex in front of it: p sees a face only through the tilt of its
+        // plane far from it (a flat side with one corner a hair off), and its fan would cover
+        // the faces beside. Take in the faces next to the seen ones that it is level with.
+        std::fill(onHull.begin(), onHull.end(), 0);
+        for (std::size_t i = 0; i < faces.size(); ++i) {
+            if (seen[i] == 0) {
+                for (const std::uint32_t v : faces[i].v) {
+                    onHull[v] = 1;
+                }
+            }
+        }
+        double fold = 0.0;  // the most a hull vertex is in front of a fan face, m
+        for (const RimEdge& edge : rim) {
+            const Point& a = points[edge.from];
+            const Point normal = crossOf(minus(points[edge.to], a), minus(points[p], a));
+            const double area = std::sqrt(dotOf(normal, normal));
+            for (std::uint32_t w = 0; w < points.size(); ++w) {
+                if (onHull[w] != 0) {
+                    fold = std::max(fold, dotOf(normal, minus(points[w], a)) / area);
+                }
+            }
+        }
+        if (fold <= tolerance) {
+            return true;
+        }
+        if (!takeLevelNeighbours()) {
+            // Nothing level left to take in: a fold of a hair over the tolerance (four nearly
+            // coplanar points) is kept rather than leaving out a point that is far outside.
+            return fold <= kFoldSlack * tolerance;
+        }
+    }
+    return false;
+}
+
+/// A fan face from a rim edge to a new point, wound as the rim edge.
+HullFace fanFace(const std::vector<Point>& points, std::uint32_t p, std::uint32_t q,
+                 std::uint32_t r) {
+    Point n = crossOf(minus(points[q], points[p]), minus(points[r], points[p]));
+    const double length = std::sqrt(dotOf(n, n));
+    if (length > 0.0) {
+        n = {n[0] / length, n[1] / length, n[2] / length};
+    }
+    return HullFace{{p, q, r}, n, dotOf(n, points[p])};
+}
+
+/// The hull grown from `start` by each point in turn: the faces it is over the tolerance above
+/// are replaced by a fan from their rim, nothing checked. Empty once it has too many faces.
+std::vector<HullFace> growInOrder(const std::vector<Point>& points,
+                                  const std::vector<HullFace>& start, double tolerance) {
+    std::vector<HullFace> faces = start;
+    for (std::uint32_t p = 0; p < points.size(); ++p) {
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> edges;
+        std::vector<HullFace> kept;
+        kept.reserve(faces.size());
+        for (const HullFace& f : faces) {
+            if (dotOf(f.normal, points[p]) - f.offset > tolerance) {
+                for (std::size_t e = 0; e < 3; ++e) {
+                    edges.emplace_back(f.v.at(e), f.v.at((e + 1) % 3));
+                }
+            } else {
+                kept.push_back(f);
+            }
+        }
+        if (edges.empty()) {
+            continue;
+        }
+        for (const auto& [from, to] : edges) {
+            if (std::find(edges.begin(), edges.end(), std::pair{to, from}) == edges.end()) {
+                kept.push_back(fanFace(points, from, to, p));
+            }
+        }
+        faces = std::move(kept);
+        if (faces.size() > 2 * points.size()) {
+            return {};  // more than a hull of these points has (2 V - 4): it went wrong
+        }
+    }
+    return faces;
+}
+
+/// The hull grown from `start` farthest point first (quickhull's order): the point farthest
+/// above a face replaces the faces it sees, grown by settleSeen into a region whose fan keeps
+/// the hull closed and convex, until no point is more than the tolerance above a face. A point
+/// no region fits is left out.
+std::vector<HullFace> growFarthestFirst(const std::vector<Point>& points,
+                                        const std::vector<HullFace>& start, double tolerance) {
+    std::vector<HullFace> faces = start;
+    std::vector<char> done(points.size(), 0);
+    for (const HullFace& f : faces) {
+        for (const std::uint32_t v : f.v) {
+            done[v] = 1;
+        }
+    }
+    std::vector<RimEdge> rim;
+    for (;;) {
+        std::uint32_t farthest = 0;
+        double most = tolerance;
+        for (std::uint32_t q = 0; q < points.size(); ++q) {
+            if (done[q] != 0) {
+                continue;
+            }
+            for (const HullFace& f : faces) {
+                const double height = dotOf(f.normal, points[q]) - f.offset;
+                if (height > most) {
+                    most = height;
+                    farthest = q;
+                }
+            }
+        }
+        if (most <= tolerance) {
+            return faces;
+        }
+        const std::uint32_t p = farthest;
+        done[p] = 1;
+        std::vector<char> sees(faces.size(), 0);
+        for (std::size_t i = 0; i < faces.size(); ++i) {
+            sees[i] = dotOf(faces[i].normal, points[p]) - faces[i].offset > tolerance ? 1 : 0;
+        }
+        if (!settleSeen(faces, points, p, tolerance, sees, rim)) {
+            continue;
+        }
+        std::vector<HullFace> kept;
+        kept.reserve(faces.size() + rim.size());
+        for (std::size_t i = 0; i < faces.size(); ++i) {
+            if (sees[i] == 0) {
+                kept.push_back(faces[i]);
+            }
+        }
+        for (const RimEdge& edge : rim) {
+            kept.push_back(fanFace(points, edge.from, edge.to, p));
+        }
+        faces = std::move(kept);
+    }
+}
+
+/// Whether `faces` close round the points: each edge once each way, a sphere (V - E + F = 2),
+/// every face a plane with every point behind it within a few times the tolerance, and a
+/// volume.
+bool isClosedConvexHull(const std::vector<HullFace>& faces, const std::vector<Point>& points,
+                        double tolerance) {
+    constexpr double kSlack = 3.0;  // a point skipped at the tolerance, under a later face
+    if (faces.size() < 4) {
+        return false;
+    }
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> edges;
+    edges.reserve(3 * faces.size());
+    std::vector<char> used(points.size(), 0);
+    for (const HullFace& f : faces) {
+        if (std::abs(dotOf(f.normal, f.normal) - 1.0) > 1e-9) {
+            return false;  // a face without a plane
+        }
+        for (std::size_t e = 0; e < 3; ++e) {
+            edges.emplace_back(f.v.at(e), f.v.at((e + 1) % 3));
+            used[f.v.at(e)] = 1;
+        }
+    }
+    std::sort(edges.begin(), edges.end());
+    if (std::adjacent_find(edges.begin(), edges.end()) != edges.end()) {
+        return false;
+    }
+    for (const auto& [from, to] : edges) {
+        if (!std::binary_search(edges.begin(), edges.end(), std::pair{to, from})) {
+            return false;
+        }
+    }
+    const auto vertices = static_cast<std::ptrdiff_t>(std::count(used.begin(), used.end(), 1));
+    const auto edgeCount = static_cast<std::ptrdiff_t>(edges.size() / 2);
+    if (vertices - edgeCount + static_cast<std::ptrdiff_t>(faces.size()) != 2) {
+        return false;
+    }
+    for (const HullFace& f : faces) {
+        for (const Point& p : points) {
+            if (dotOf(f.normal, p) - f.offset > kSlack * tolerance) {
+                return false;
+            }
+        }
+    }
+    // Closed, outward and convex: the volume about any vertex is positive.
+    const Point& o = points[faces.front().v[0]];
+    double volume = 0.0;
+    for (const HullFace& f : faces) {
+        volume += dotOf(minus(points[f.v[0]], o),
+                        crossOf(minus(points[f.v[1]], o), minus(points[f.v[2]], o)));
+    }
+    return volume > 0.0;
+}
+
 /// The farthest vertex in each of kMaxHullPoints directions spread over the sphere (a Fibonacci
 /// lattice), in the order of the vertices. Measured in the points' bounding box scaled to a cube,
 /// so that a flat shape keeps its faces as well as its rim.
@@ -195,31 +569,28 @@ std::optional<ConvexHull> convexHullOf(const TriMesh& mesh, const std::array<dou
     const auto ib = static_cast<std::uint32_t>(b);
     const auto ic = static_cast<std::uint32_t>(c);
     const auto id = static_cast<std::uint32_t>(d);
-    std::vector<HullFace> faces{face(ia, ib, ic), face(ia, ib, id), face(ia, ic, id),
-                                face(ib, ic, id)};
-    // Each point outside the hull so far replaces the faces it sees by a fan from their rim.
-    for (std::uint32_t p = 0; p < points.size(); ++p) {
-        std::vector<std::pair<std::uint32_t, std::uint32_t>> edges;
-        std::vector<HullFace> kept;
-        kept.reserve(faces.size());
-        for (const HullFace& f : faces) {
-            if (dotOf(f.normal, points[p]) - f.offset > tolerance) {
-                for (std::size_t e = 0; e < 3; ++e) {
-                    edges.emplace_back(f.v.at(e), f.v.at((e + 1) % 3));
-                }
-            } else {
-                kept.push_back(f);
+    const std::vector<HullFace> start{face(ia, ib, ic), face(ia, ib, id), face(ia, ic, id),
+                                      face(ib, ic, id)};
+    // First as convexHullOf always has: each point in turn, outside the hull so far, replaces
+    // the faces it sees by a fan from their rim. Kept for the hulls it makes well, so that they
+    // stay the same to the bit; on a nearly flat set its fan can fold back over a face the point
+    // is level with, and the result is no hull at all (a CoACD part of the AMR_FMS swerve module
+    // came out open, with faces wound inward). Then the careful way: farthest point first, each fan
+    // checked (settleSeen), with a coarser tolerance while that still fails.
+    std::vector<HullFace> faces = growInOrder(points, start, tolerance);
+    if (!isClosedConvexHull(faces, points, tolerance)) {
+        constexpr std::array<double, 4> kCoarser{1.0, 4.0, 16.0, 64.0};
+        bool closed = false;
+        for (const double coarser : kCoarser) {
+            faces = growFarthestFirst(points, start, coarser * tolerance);
+            closed = isClosedConvexHull(faces, points, coarser * tolerance);
+            if (closed) {
+                break;
             }
         }
-        if (edges.empty()) {
-            continue;
+        if (!closed) {
+            return std::nullopt;
         }
-        for (const auto& [from, to] : edges) {
-            if (std::find(edges.begin(), edges.end(), std::pair{to, from}) == edges.end()) {
-                kept.push_back(face(from, to, p));
-            }
-        }
-        faces = std::move(kept);
     }
     // Only the points on the hull, in their order.
     std::vector<std::uint32_t> index(points.size(), kNoIndex);

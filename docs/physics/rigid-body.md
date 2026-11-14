@@ -53,7 +53,8 @@ takes no commands of its own. MuJoCo couples the two both ways (a joint equality
 only the copy, by a stiff motor (100 Hz) on it.
 
 **Mesh colliders.** A collision mesh collides as the convex hull of its vertices (at most 256
-points). A mesh that fills less than 60 % of its hull is called concave and noted, and on a
+points), convex to within a millionth of its size: points that close to a face count as on it,
+so a nearly flat side (a CoACD part whose corner is a hair off) closes as one side. A mesh that fills less than 60 % of its hull is called concave and noted, and on a
 fixed link it is skipped, since its hull would block what is inside it; `collision_bake` or
 `lagrange bake` splits such a mesh into convex parts with CoACD.
 
