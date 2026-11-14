@@ -57,8 +57,13 @@ if(BUILD_TESTING)
     lagrange_skip_mujoco_asan_header(test_mujoco_validation)
 
     ament_add_gtest(test_mujoco_backend test/test_mujoco_backend.cpp)
-    target_link_libraries(test_mujoco_backend lagrange_rigid_body_mujoco)
+    target_link_libraries(
+        test_mujoco_backend
+        lagrange_rigid_body_mujoco
+        mujoco::mujoco
+    )
     lagrange_target_defaults(test_mujoco_backend)
+    lagrange_skip_mujoco_asan_header(test_mujoco_backend)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
