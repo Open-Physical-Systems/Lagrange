@@ -120,13 +120,26 @@ class Mermaid(SphinxDirective):
         return [nodes.raw("", f'<pre class="mermaid">\n{source}\n</pre>', format="html")]
 
 
+# Pictures the home page shows from its own HTML (its feature wall), which Sphinx does not copy.
+_HOME_PICTURES = (
+    "heat-conduction.png",
+    "motor-leads-emi.png",
+    "x500-zurich.gif",
+    "lexus-tokyo.gif",
+)
+
+
 def _copy_videos(app: Sphinx, error: Exception | None) -> None:
-    """The players' files, at the same place under the site as under docs/."""
+    """The players' files, at the same place under the site as under docs/, and the home page's."""
     if error is None and app.builder.format == "html":
         target = Path(app.outdir) / "videos"
         target.mkdir(parents=True, exist_ok=True)
         for video in (DOCS / "videos").glob("*.mp4"):
             shutil.copy2(video, target / video.name)
+        pictures = Path(app.outdir) / "imgs"
+        pictures.mkdir(parents=True, exist_ok=True)
+        for name in _HOME_PICTURES:
+            shutil.copy2(DOCS / "imgs" / name, pictures / name)
 
 
 def setup(app: Sphinx) -> dict[str, bool]:
