@@ -11,6 +11,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace lagrange {
@@ -168,9 +169,17 @@ private:
     mutable std::string misuse_;                             // first misuse in the current step
     // (Members added in 1.2.x stay last, so that the inline accessors above keep their layout.)
     std::vector<Timing> timing_;  // per signal
-    // Per signal: a reader uses its previous value (feedback, extrapolation). previous_ of the
-    // others is not kept up to date by commitAll (nothing reads it).
-    std::vector<std::uint8_t> needsPrevious_;
+    // Per signal, what commitAll reads (allocate()): kept apart from the records, so that a
+    // commit of a module's outputs reads 12 bytes a signal instead of a cache line each.
+    struct CommitInfo {
+        std::uint32_t offset{0};  // into the value arrays (SignalRecord::offset; 2³² is 32 GB)
+        std::uint32_t count{0};   // values: components × batch; 0 for handle types
+        std::uint8_t plain{0};    // values, read by no window average: commits as a copy
+        // A reader uses its previous value (feedback, extrapolation). previous_ of the others is
+        // not kept up to date by commitAll (nothing reads it).
+        std::uint8_t needsPrevious{0};
+    };
+    std::vector<CommitInfo> commitInfo_;
     // Per input slot: the commit tick of the value it holds when that is a plain copy of the
     // committed value (zero-order hold), else kStale. A slot whose writer has not committed
     // since is not copied again: in the town MuJoCo reads 655 pose commands every 1 ms that
@@ -185,6 +194,21 @@ private:
     std::vector<std::uint8_t> dirty_;
     void markAllDirty() { std::fill(dirty_.begin(), dirty_.end(), std::uint8_t{1}); }
     void forgetPrepared() { std::fill(preparedTick_.begin(), preparedTick_.end(), kStale); }
+    // Per writing module (by index): its outputs when they are plain values with consecutive ids,
+    // one stretch of storage [valueFrom, valueTo); count 0 when they are not.
+    struct DensePlan {
+        std::uint32_t first{0};  // its first signal
+        std::uint32_t count{0};  // its signals
+        std::uint32_t valueFrom{0}, valueTo{0};
+        std::uint32_t previousBegin{0}, previousEnd{0};  // into denseRanges_
+        bool dense{true};
+    };
+    std::vector<DensePlan> densePlans_;
+    // Stretches of values whose previous value is read, [from, to), per DensePlan.
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> denseRanges_;
+    /// commitAll() of a module with a DensePlan that wrote every output and held none: one copy.
+    /// False (nothing done) otherwise.
+    bool commitDense(std::span<const std::uint32_t> signals, SimTime stamp, std::uint64_t tick);
 };
 
 }  // namespace lagrange
