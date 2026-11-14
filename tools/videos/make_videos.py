@@ -36,10 +36,18 @@ SCOPE = (1151, 916, (316, 160, 836, 880))  # the scope, at one to one
 BIRD = (1920, 1080, (268, 126, 928, 618))  # the lidar's bird's-eye view
 ENVIRONMENT_SLICE = (1920, 1080, (655, 200, 1295, 920))  # Environment: middle of Slice 2D
 VIEWPORT_HALF = (1920, 1080, (610, 127, 1250, 847))  # the middle of the 3D view, 640 wide
+# The Sensors workspace's Camera panel: the right half of the centre's top (Chrome.cpp: sensor
+# list 260 px, Degradation 320 px, lidar | camera above the IMU), taken as BIRD moved 670 px
+# right. TODO(verify): against the first frames of a recording.
+CAMERA_PANEL = (1920, 1080, (938, 126, 1598, 618))
+VIEWPORT_THIRD = (1920, 1080, (716, 127, 1142, 847))  # the middle of the 3D view, 426 wide
 LEFT = (0, 0, 760, 720)
 RIGHT = (760, 0, 520, 720)
 HALF_L = (0, 0, 640, 720)
 HALF_R = (640, 0, 640, 720)
+THIRD_L = (0, 0, 426, 720)
+THIRD_M = (427, 0, 426, 720)
+THIRD_R = (854, 0, 426, 720)
 
 
 @dataclass
@@ -116,6 +124,121 @@ def tof_robot(work: Path) -> None:
     (work / "amr_tof.urdf").write_text(urdf)
 
 
+# A lidar head 1 m up, bolted to the world (the rig of server/test/test_optics_import.cpp), in a
+# room open at the back so that the view can stand behind it: a wall 7 m ahead, side walls, a
+# crate and a pillar that throw shadows.
+def fixed_part(name: str, geometry: str, xyz: str, rgba: str) -> str:
+    """A link welded to the world: geometry as collision and visual, at xyz."""
+    return (
+        f'<link name="{name}"><collision><geometry>{geometry}</geometry></collision>'
+        f"<visual><geometry>{geometry}</geometry>"
+        f'<material name="{name}"><color rgba="{rgba}"/></material></visual></link>'
+        f'<joint name="{name}_fix" type="fixed"><parent link="world"/><child link="{name}"/>'
+        f'<origin xyz="{xyz}"/></joint>\n'
+    )
+
+
+GREY = "0.5 0.55 0.6 1"
+LIDAR_ROOM = "".join(
+    [
+        fixed_part("front", '<box size="0.2 14 4"/>', "7 0 2", GREY),
+        fixed_part("left", '<box size="8 0.2 4"/>', "3 7 2", GREY),
+        fixed_part("right", '<box size="8 0.2 4"/>', "3 -7 2", GREY),
+        fixed_part("crate", '<box size="1 1 1"/>', "4 -1.5 0.5", "0.6 0.45 0.3 1"),
+        fixed_part("pillar", '<cylinder radius="0.25" length="4"/>', "5 1.8 2", "0.7 0.7 0.72 1"),
+    ]
+)
+LIDAR_HEAD = (
+    '<link name="head"><inertial><mass value="5"/>'
+    '<inertia ixx="1" iyy="1" izz="1" ixy="0" ixz="0" iyz="0"/></inertial>'
+    '<visual><geometry><cylinder radius="0.08" length="0.1"/></geometry>'
+    '<material name="head"><color rgba="0.9 0.5 0.15 1"/></material></visual></link>'
+    '<joint name="mount" type="fixed"><parent link="world"/><child link="head"/>'
+    '<origin xyz="0 0 1"/></joint>\n'
+)
+
+# The three opt-in scan patterns of sensors.md "Lidar scan patterns (as built)", in the URDF form
+# that server/src/Robot.cpp lidarPattern() reads: <ray><pattern>, <scan><vertical><angles>,
+# <ray><rosette>.
+LIDAR_PATTERNS = {
+    # 16 channels, uneven: dense near the horizon. Illustrative, not a product's table (deg:
+    # -25 -15 -10 -7 -5 -3.5 -2.5 -1.5 -0.75 0 0.75 1.5 3 5 9 15).
+    "lidar_channels.urdf": (
+        "A Velodyne-style channel table: one elevation per channel",
+        "<scan><horizontal><samples>1800</samples><min_angle>-3.14159</min_angle>"
+        "<max_angle>3.14159</max_angle></horizontal><vertical><angles>-0.4363 -0.2618 -0.1745"
+        " -0.1222 -0.0873 -0.0611 -0.0436 -0.0262 -0.0131 0 0.0131 0.0262 0.0524 0.0873 0.1571"
+        " 0.2618</angles></vertical></scan>",
+    ),
+    # A focal-plane array, ±25° by ±18.75°: every beam at once.
+    "lidar_flash.urdf": (
+        "A flash lidar: a pinhole's pixels, every beam at once",
+        "<pattern>flash</pattern><scan><horizontal><samples>160</samples>"
+        "<min_angle>-0.4363</min_angle><max_angle>0.4363</max_angle></horizontal><vertical>"
+        "<samples>120</samples><min_angle>-0.3272</min_angle><max_angle>0.3272</max_angle>"
+        "</vertical></scan>",
+    ),
+    # The rosette's defaults (Livox Mid-40 field and point rate; the prisms' speeds from Livox's
+    # paper), samples = point rate / update rate as sensors.md asks for the real picture.
+    "lidar_rosette.urdf": (
+        "A Livox-style rosette: two Risley prisms, a pattern that never repeats",
+        "<pattern>rosette</pattern><scan><horizontal><samples>10000</samples></horizontal>"
+        "</scan><rosette><fov>0.6702</fov><point_rate>100000</point_rate></rosette>",
+    ),
+}
+
+
+def lidar_patterns(work: Path) -> None:
+    """The lidar rig three times, one scan pattern each."""
+    for name, (doc, ray) in LIDAR_PATTERNS.items():
+        sensor = (
+            '<gazebo reference="head"><sensor name="lidar" type="lidar">'
+            f"<update_rate>10</update_rate><ray>{ray}<range><min>0.1</min><max>40</max></range>"
+            "</ray></sensor></gazebo>\n"
+        )
+        (work / name).write_text(
+            f'<?xml version="1.0"?>\n<!-- {doc} -->\n<robot name="lidar_rig"><link name="world"/>\n'
+            f"{LIDAR_HEAD}{LIDAR_ROOM}{sensor}</robot>\n"
+        )
+
+
+# Cameras on the sample AMR, 0.28 m ahead of and 0.30 m over its axle, looking ahead; it drives
+# its figure-eight demo. Same name in each file, so the Camera panel's tab reads the same.
+AMR_CAMERAS = {
+    "amr_pinhole.urdf": """<sensor name="front_camera" type="camera">
+<pose>0.28 0 0.30 0 0 0</pose>
+<update_rate>15</update_rate><camera><horizontal_fov>1.5708</horizontal_fov>
+<image><width>640</width><height>640</height></image><clip><near>0.05</near><far>100</far></clip>
+</camera></sensor>""",
+    # sensors.md "Fisheye cameras (as built)": <lens><type>equidistant</type>, <horizontal_fov> the
+    # lens's angle across the width (220°), <cutoff_angle> the half-angle it sees to (110°).
+    "amr_fisheye.urdf": """<sensor name="front_camera" type="camera">
+<pose>0.28 0 0.30 0 0 0</pose>
+<update_rate>15</update_rate><camera><horizontal_fov>3.8397</horizontal_fov>
+<image><width>640</width><height>640</height></image><clip><near>0.05</near><far>100</far></clip>
+<lens><type>equidistant</type><cutoff_angle>1.9199</cutoff_angle></lens></camera></sensor>""",
+    # A camera with the event camera's field and pixels (DAVIS346 defaults, sensors.md §9).
+    "amr_camera_346.urdf": """<sensor name="front_camera" type="camera">
+<pose>0.28 0 0.30 0 0 0</pose>
+<update_rate>15</update_rate><camera><horizontal_fov>1.2357</horizontal_fov>
+<image><width>346</width><height>260</height></image></camera></sensor>""",
+    # Kind event_camera (sensors.md §9 "event_camera"): its image is a step's events, grey 128
+    # plus 64 per ON and minus 64 per OFF. 50 Hz: 20 ms of events in each image.
+    "amr_dvs.urdf": """<sensor name="front_camera" type="event_camera">
+<pose>0.28 0 0.30 0 0 0</pose>
+<update_rate>50</update_rate><event_camera><width>346</width><height>260</height>
+<horizontal_fov>1.2357</horizontal_fov></event_camera></sensor>""",
+}
+
+
+def amr_cameras(work: Path) -> None:
+    """The sample AMR with one camera each: pinhole, fisheye, the event camera and its twin."""
+    urdf = Path(asset("robots/amr_diffdrive/amr_diffdrive.urdf")).read_text()
+    for name, sensor in AMR_CAMERAS.items():
+        block = f'<gazebo reference="base_link">{sensor}</gazebo>'
+        (work / name).write_text(urdf.replace("</robot>", block + "</robot>"))
+
+
 def ahmed_tunnel(work: Path, cells: int = 2000000, frames: int = 0) -> None:
     """An Ahmed body through lagrange tunnel, in work/tunnel."""
     maker = asset("robots/ahmed_body/make_ahmed_body.py")
@@ -136,6 +259,10 @@ ARM = asset("robots/arm6/arm6.urdf")
 BUILDING = asset("worlds/drone_building/drone_building.urdf")
 DOWNWASH = str(ROOT / "profiles/examples/quad_x500_downwash.yaml")
 LIVE_AIR = str(ROOT / "profiles/examples/quad_x500_live_air.yaml")
+AMR_SAFETY = asset("robots/amr_diffdrive/amr_diffdrive_safety.urdf")
+SEDAN_4D = asset("robots/sedan/sedan_4d_radar.usda")
+# `lagrange drive`'s start (tools/cli/lagrange): in the lane at x = 30 m, heading east.
+DRIVE = ["--spawn", "30,-1.75,0.6,0", "--no-demo", "--traffic", "vehicles=24,pedestrians=36,seed=1"]
 
 
 def cmd_vel(x: float, z: float, seconds: float) -> list[str]:
@@ -772,6 +899,201 @@ CLIPS: list[Clip] = [
             ),
         ],
         [Step(0, "lagrange run.yaml")],
+    ),
+    # v1.3 (docs/release/v1.3.0.md). Scripted, not yet recorded: see docs/videos/README.md.
+    Clip(
+        "radar_4d",
+        "A 4D imaging radar: detections by range, azimuth, elevation and Doppler cell",
+        24,
+        [["--robot", SEDAN_4D, "--world", TOWN, *DRIVE]],
+        [
+            Pane("3D view", LEFT, viewer=["--workspace", "Scene", "--follow", "12,25"]),
+            Pane(
+                "detections per scan: imaging radar, radar",
+                RIGHT,
+                SCOPE,
+                # Both write sensor/<n>/count (modules/sensors/src/Radar.cpp); front_4d_radar is
+                # kind imaging_radar in sedan_4d_radar.usda, front_radar RadarAPI_1 in sedan.usda.
+                scope("sensor/front_4d_radar/count", "sensor/front_radar/count"),
+            ),
+        ],
+        [
+            Step(
+                0,
+                "sedan_4d_radar.usda: kind imaging_radar, 64 x 16 virtual channels, 77 GHz,"
+                " Doppler folding, ground ghosts",
+            ),
+            Step(
+                5,
+                "It detects by resolution cell, the radar by object: a car gives it several",
+            ),
+            # The car's /cmd_vel: forward speed (m/s), as `lagrange drive` takes it.
+            Step(10, "/cmd_vel 4 m/s for 6 s", cmd_vel(4.0, 0.0, 6.0)),
+        ],
+    ),
+    Clip(
+        "sensor_faults",
+        "Sensor faults: a gyro biased, then stuck, while the truth goes on",
+        30,
+        [
+            [
+                "--robot",
+                AMR,
+                "--world",
+                WAREHOUSE,
+                "--sensor-fault",
+                "imu:angular_rate=bias,value=0.5,at=8,for=6,component=2",
+                "--sensor-fault",
+                "imu:angular_rate=stuck,at=18,for=6",
+            ]
+        ],
+        [
+            Pane("3D view", LEFT, viewer=["--workspace", "Scene", "--follow", "6,50"]),
+            Pane(
+                "yaw rate: the IMU's, the truth (rad/s); fault window",
+                RIGHT,
+                SCOPE,
+                # sensor/<n>/fault/active: modules/sensors/src/Faults.cpp; twist.wz: the Wrench
+                # of m/s's component names (server/src/Server.cpp componentNames).
+                scope(
+                    "sensor/imu/angular_rate.z",
+                    "body/base_link/twist.wz",
+                    "sensor/imu/fault/active",
+                ),
+            ),
+        ],
+        [
+            # Fault times are simulated time, which starts a few seconds before the first
+            # frame: the captions lead their faults a little.
+            Step(0, "--sensor-fault imu:angular_rate=bias,value=0.5,at=8,for=6,component=2"),
+            Step(12, "--sensor-fault imu:angular_rate=stuck,at=18,for=6"),
+            Step(24, "Ground truth (/ground_truth/odom, /tf, the bodies' signals) is not faulted"),
+        ],
+    ),
+    Clip(
+        "lidar_patterns",
+        "Lidar scan patterns: a channel table, a flash lidar, a Livox-style rosette",
+        14,
+        [
+            ["--robot", "lidar_channels.urdf", "--world", "none"],
+            ["--robot", "lidar_flash.urdf", "--world", "none"],
+            ["--robot", "lidar_rosette.urdf", "--world", "none"],
+        ],
+        [
+            Pane(
+                "channels: 16 rings, dense at the horizon",
+                THIRD_L,
+                VIEWPORT_THIRD,
+                ["--overlays", "sensors", *view(3.5, 0, 1.2, 11, 180, 14)],
+            ),
+            Pane(
+                "flash: 160 x 120, all at once",
+                THIRD_M,
+                VIEWPORT_THIRD,
+                ["--overlays", "sensors", *view(3.5, 0, 1.2, 11, 180, 14)],
+                run=1,
+            ),
+            Pane(
+                "rosette: 10 000 points a scan",
+                THIRD_R,
+                VIEWPORT_THIRD,
+                ["--overlays", "sensors", *view(3.5, 0, 1.2, 11, 180, 14)],
+                run=2,
+            ),
+        ],
+        [
+            Step(
+                0,
+                "<scan><vertical><angles>    <pattern>flash</pattern>    "
+                "<pattern>rosette</pattern>    (URDF, SDFormat, USD: RFC 0015)",
+            ),
+            Step(7, "The rosette never repeats: each 0.1 s scan goes on where the last stopped"),
+        ],
+        lidar_patterns,
+    ),
+    Clip(
+        "fisheye",
+        "A fisheye camera: 220° on one image",
+        16,
+        [
+            ["--robot", "amr_pinhole.urdf", "--world", WAREHOUSE],
+            ["--robot", "amr_fisheye.urdf", "--world", WAREHOUSE],
+        ],
+        [
+            Pane("pinhole, 90°", HALF_L, CAMERA_PANEL, ["--workspace", "Sensors"]),
+            Pane(
+                "equidistant fisheye, 220°", HALF_R, CAMERA_PANEL, ["--workspace", "Sensors"], run=1
+            ),
+        ],
+        [
+            Step(
+                0,
+                "<lens><type>equidistant</type><cutoff_angle>1.9199</cutoff_angle></lens>    "
+                "(Kannala-Brandt, as OpenCV's fisheye; up to 360°)",
+            )
+        ],
+        amr_cameras,
+    ),
+    Clip(
+        "event_camera",
+        "An event camera: only what changes",
+        16,
+        [
+            ["--robot", "amr_camera_346.urdf", "--world", WAREHOUSE],
+            ["--robot", "amr_dvs.urdf", "--world", WAREHOUSE],
+        ],
+        [
+            Pane("camera, 346 x 260", HALF_L, CAMERA_PANEL, ["--workspace", "Sensors"]),
+            Pane(
+                "event camera: ON brighter, OFF darker",
+                HALF_R,
+                CAMERA_PANEL,
+                ["--workspace", "Sensors"],
+                run=1,
+            ),
+        ],
+        [
+            Step(
+                0,
+                '<sensor type="event_camera">    DAVIS346 pixels, thresholds and noise as v2e'
+                " (sensors.md §9)",
+            )
+        ],
+        amr_cameras,
+    ),
+    Clip(
+        "amr_sensor_kinds",
+        "Built-in kinds on an AMR: a safety scanner's fields, wheel torque",
+        28,
+        # 0.4 m north of the usual start: the loop's northward stretch brings the north rack
+        # (face at y = 3.0) inside the 1.5 m warning field.
+        [["--robot", AMR_SAFETY, "--world", WAREHOUSE, "--spawn", "0,0.4"]],
+        [
+            Pane("3D view", LEFT, viewer=["--workspace", "Scene", "--follow", "6,50"]),
+            Pane(
+                "safety: nearest return (m), warning field; left wheel torque (N·m)",
+                RIGHT,
+                SCOPE,
+                # modules/sensors/src/kinds/SafetyScanner.cpp, ForceTorque.cpp (joint_torque).
+                scope(
+                    "sensor/safety/min_distance",
+                    "sensor/safety/warning",
+                    "sensor/left_wheel_torque/torque",
+                ),
+            ),
+        ],
+        [
+            Step(
+                0,
+                "amr_diffdrive_safety.urdf: bumpers, cliff sensors, wheel odometry, a safety"
+                " scanner, wheel torque",
+            ),
+            Step(
+                8,
+                '<sensor type="safety_scanner">: protective 0.6 m, warning 1.5 m ahead'
+                " (nanoScan3 style)",
+            ),
+        ],
     ),
 ]
 
