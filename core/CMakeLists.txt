@@ -150,6 +150,7 @@ if(BUILD_TESTING)
             services/test/test_determinism_check.cpp
             world/streaming/test/test_tile_selector.cpp
             world/regions/test/test_region_planner.cpp
+            world/test/test_convex_hull.cpp
     )
         get_filename_component(name ${test} NAME_WE)
         ament_add_gtest(${name} ${test})

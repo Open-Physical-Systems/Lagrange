@@ -26,8 +26,11 @@ struct TriMesh {
 [[nodiscard]] ConvexHull boxHull(const std::array<double, 3>& half);
 /// A cylinder along z, centred at the origin (the URDF convention).
 /// The convex hull of a mesh's vertices, scaled, in the mesh's frame. More than kMaxHullPoints
-/// vertices are first cut down to the farthest ones in that many directions. Empty when the
-/// vertices are flat or fewer than four: no volume to collide with.
+/// vertices are first cut down to the farthest ones in that many directions. Closed, wound
+/// outward, a sphere (V - E + F = 2), and convex to within 1e-6 of its size (a point that near a
+/// face counts as on it; rarely, for a nearly flat set, a few times that), the same bits for the
+/// same vertices. Empty when the vertices are flat or fewer than four: no volume to collide
+/// with (or, never seen, when no hull closes round them).
 inline constexpr std::size_t kMaxHullPoints = 256;
 [[nodiscard]] std::optional<ConvexHull> convexHullOf(const TriMesh& mesh,
                                                      const std::array<double, 3>& scale = {1.0, 1.0,
