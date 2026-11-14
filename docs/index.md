@@ -139,6 +139,8 @@ without the physics.
 :::{container} lg-point
 **Check every number.** Each model is tested against a closed form, a published measurement or
 OpenFOAM, and the [validation report](validation/report.md) says what is met and what is not.
+A [measured comparison](validation/comparison.md) with Gazebo, MuJoCo and PyBullet says where others are
+better.
 :::
 
 :::{container} lg-point
@@ -258,6 +260,7 @@ physics/heat-conduction
 :caption: Validation
 
 validation/report
+validation/comparison
 ```
 
 ```{toctree}

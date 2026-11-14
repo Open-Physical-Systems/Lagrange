@@ -1,0 +1,36 @@
+{
+  "Lagrange mujoco": {
+    "freefall_z": 5.09009500000003,
+    "freefall_error": -0.004904999999969739,
+    "pendulum_period": 2.0065398585160503,
+    "pendulum_cycles": 9,
+    "pendulum_period_rel_error": -4.0816998481130184e-07,
+    "pendulum_small_final_amplitude": 0.05000002973546329,
+    "energy_rel_drift_end": -0.0007237877621422791,
+    "energy_rel_max_dev": 0.0014782143626496168,
+    "slide_acceleration": 2.355967126378479,
+    "slide_acceleration_rel_error": -0.00013585367646895552,
+    "slide_distance_2s": 4.71444641575447,
+    "static_displacement_2s": 0.0009163378099814461,
+    "rest_penetration": 0.00010775542022134488,
+    "rest_force": 19.62,
+    "rest_force_rel_error": 0.0
+  },
+  "Lagrange jolt": {
+    "freefall_z": 5.090101718902588,
+    "freefall_error": -0.004898281097411861,
+    "pendulum_period": 2.0065406311365304,
+    "pendulum_cycles": 9,
+    "pendulum_period_rel_error": -2.3118991943071876e-08,
+    "pendulum_small_final_amplitude": 0.04999922886490822,
+    "energy_rel_drift_end": -0.1637527918141728,
+    "energy_rel_max_dev": 0.1638538573929833,
+    "slide_acceleration": 2.3562777215634223,
+    "slide_acceleration_rel_error": -4.038174474696454e-06,
+    "slide_distance_2s": 4.714915921875443,
+    "static_displacement_2s": 1.0990303543424186e-06,
+    "rest_penetration": 1.9073486257070726e-07,
+    "rest_force": 19.61999999999995,
+    "rest_force_rel_error": -2.55351295663786e-15
+  }
+}

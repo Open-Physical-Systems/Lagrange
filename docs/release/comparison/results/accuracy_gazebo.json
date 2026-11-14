@@ -1,0 +1,19 @@
+{
+  "Gazebo Jetty (gz-sim 10.5.0)": {
+    "freefall_z": 5.09009500000003,
+    "freefall_error": -0.004904999999969739,
+    "pendulum_period": 2.0065398585160503,
+    "pendulum_cycles": 9,
+    "pendulum_period_rel_error": -4.0816998481130184e-07,
+    "pendulum_small_final_amplitude": 0.050000029735463226,
+    "energy_rel_drift_end": -0.0007237877621111608,
+    "energy_rel_max_dev": 0.0014782143626712813,
+    "slide_acceleration": 2.356287236642477,
+    "slide_acceleration_rel_error": -8.453682198705792e-12,
+    "slide_distance_2s": 4.7149284067973865,
+    "static_displacement_2s": 7.860277830389138e-09,
+    "rest_penetration": 9.809930645587883e-11,
+    "rest_force": 19.62000196000455,
+    "rest_force_rel_error": 9.989829519163607e-08
+  }
+}

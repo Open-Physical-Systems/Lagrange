@@ -326,8 +326,9 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Validation (1)</summary>
+<details><summary>Validation (2)</summary>
 
+- [Lagrange compared with Gazebo, MuJoCo, PyBullet and others](docs/validation/comparison.md)
 - [Validation report (v1.0, brought up to date 2026-11-03)](docs/validation/report.md)
 
 </details>

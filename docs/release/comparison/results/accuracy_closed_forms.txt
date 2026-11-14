@@ -1,0 +1,5 @@
+freefall_z = 5.095
+pendulum_period = 2.00654068
+slide_acceleration = 2.35628724
+static_displacement = 0
+rest_force = 19.62
