@@ -29,8 +29,8 @@ and USD as they are · a native Vulkan viewer · a deterministic CPU mode, bit f
 </figure>
 
 <figure class="lg-tile">
-<video src="videos/drone_building.mp4" autoplay muted loop playsinline preload="auto" title="A quadcopter's wake beside a building and over its roof"></video>
-<figcaption><strong>Wakes that hit walls.</strong> By a wall the wake hugs it and the near rotors lose thrust, fitted to OpenFOAM. <a href="physics/downwash.html">How</a></figcaption>
+<video src="videos/builder.mp4" poster="imgs/builder-poster.jpg" autoplay muted loop playsinline preload="auto" title="The robot builder: parts, a revolute joint, sensors from the catalog, a mesh's hull, then Test"></video>
+<figcaption><strong>Build a robot in the viewer.</strong> Parts, joints and sensors from the catalog, one click to test it in a simulator, saved as URDF. <a href="guide/builder.html">How</a></figcaption>
 </figure>
 
 <figure class="lg-tile">

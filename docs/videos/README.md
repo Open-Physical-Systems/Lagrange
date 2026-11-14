@@ -42,6 +42,7 @@ Iris Xe, about 12 minutes for all).
 | [fisheye.mp4](fisheye.mp4) | A 90° pinhole and a 220° equidistant fisheye on the AMR in the warehouse, driving in step | `<lens><type>equidistant</type>` |
 | [event_camera.mp4](event_camera.mp4) | A camera and an event camera with the same pixels: the events are the edges that move | `<sensor type="event_camera">` |
 | [amr_sensor_kinds.mp4](amr_sensor_kinds.mp4) | The safety AMR driven up to a rack and back: its scanner's nearest return and warning field, and a wheel's torque | `amr_diffdrive_safety.urdf`, `/cmd_vel` |
+| [builder.mp4](builder.mp4) | The robot builder: a box and a cylinder on one box, a revolute joint posed by its slider, a lidar and a rangefinder from the catalog, an L-shaped mesh part colliding as its convex hull, then Test, where the slider drives the joint in the simulator, and Back | `lagrange viewer --workspace builder` |
 
 In the lidar materials clip the viewer's lidar views draw two tones, strong and attenuated, not a
 colour scale. The presets' reflectivities are illustrative, not measured.

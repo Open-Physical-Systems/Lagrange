@@ -7,6 +7,12 @@ simulates. One click tests it in a simulator of its own, and Save writes an ordi
 The design is RFC 0016 (`rfcs/0016-robot-builder.md`) and the screen's design
 `docs/design/ui/12-builder/`.
 
+<video src="../videos/builder.mp4" controls muted loop playsinline preload="metadata" width="100%" title="A robot made in the Builder from one box: a box and a cylinder, a revolute joint posed by its slider, a lidar and a rangefinder from the catalog, a mesh part colliding as its convex hull, then Test and the joint driven in the simulator"></video>
+
+*A robot from one box: parts, a revolute joint posed by its slider, a lidar and a rangefinder
+from the catalog, a mesh part that collides as its convex hull, then Test, where the slider
+drives the joint in the simulator, and Back. Made by `tools/videos/make_videos.py builder`.*
+
 ![The Builder with the sample rover: the tree, the Builder view, joints, the sensor catalog and the selected rangefinder's properties](../imgs/builder-overview.png)
 
 ## Opening it
@@ -70,7 +76,11 @@ empty limit is a Problem. Angles are typed in degrees and written in radians.
 
 The **Joints** panel has a slider per moving joint: dragging it poses the robot in the view by
 forward kinematics only (nothing is simulated, it is not an undo step). **Poses** keeps named sets
-of slider positions in the document.
+of slider positions in the document. While testing, the slider commands its joint in the test
+run (RFC 0016 §7.3: the server's joint control, its position loop) and the panel shows the live
+position. Until its first command a joint holds where it started on a robot fixed to the
+ground, and is free on one that moves about (`server/src/JointControl.cpp`). A robot that is
+passive in a connected run takes no commands, and the panel says so.
 
 ## Sensors from the catalog
 
@@ -180,8 +190,6 @@ the template stays as it is.
 
 - **Test** into a world: only the empty world. *A sample world…*, *A world file…* and *Into the
   connected run* (RFC 0016 §7.2) are greyed.
-- Joint sliders driving the test robot: the Joints panel shows the live positions only once a
-  joint-command message exists (RFC 0016 §7.3).
 - Loads, converters, branches and thermal nodes in the overlay: kept as written, not edited
   (the Power section edits batteries, buses and motors).
 - Opening USD or SDFormat robots (phase 4); the builder opens URDF and xacro.
