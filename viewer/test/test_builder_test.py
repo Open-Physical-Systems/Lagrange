@@ -28,8 +28,8 @@ TEST_BUTTON = "1430,48"  # "Test · empty world", left of its chevron
 SAVE_BUTTON = "1560,48"
 EXPORT_USD = "1495,170"  # in the Save menu
 CHECK_LOADS = "1555,84"  # on the Robot strip
-TEMPLATES_TAB = "77,798"
-ARM_TEMPLATE = "130,900"
+TEMPLATES_TAB = "77,771"
+ARM_TEMPLATE = "130,873"
 
 
 def program(package: str, name: str) -> str:

@@ -8,6 +8,7 @@
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -214,20 +215,26 @@ private:
 
         rowLabel("material");
         const auto presets = builder::densityPresets();
+        const auto labelOf = [](const builder::DensityPreset& preset) {
+            return std::string(preset.label.empty() ? preset.name : preset.label);
+        };
+        const bool custom =
+            defaults.preset < 0 || static_cast<std::size_t>(defaults.preset) >= presets.size();
         std::string name = "custom";
-        char unit[48] = "none";
-        if (defaults.preset >= 0 && static_cast<std::size_t>(defaults.preset) < presets.size()) {
+        char unit[48] = "";
+        if (!custom) {
             const builder::DensityPreset& preset =
                 presets[static_cast<std::size_t>(defaults.preset)];
-            name = std::string(preset.name);
+            name = labelOf(preset);
             std::snprintf(unit, sizeof(unit), "%s kg/m³",
                           builder::formatNumber(preset.density).c_str());
-        } else if (defaults.density > 0.0) {
-            std::snprintf(unit, sizeof(unit), "%s kg/m³",
-                          builder::formatNumber(defaults.density).c_str());
         }
-        if (widgets::DropdownField("##material", name.c_str(), unit,
-                                   ImGui::GetContentRegionAvail().x)) {
+        // "custom" opens a number field (SPEC "Add"), on the same row so the hint below fits.
+        const float available = ImGui::GetContentRegionAvail().x;
+        const float gap = px(4.0F);
+        const float menuWidth = custom ? std::floor(available * 0.45F) : available;
+        if (widgets::DropdownField("##material", name.c_str(), custom ? nullptr : unit,
+                                   menuWidth)) {
             ImGui::OpenPopup("##materials");
         }
         if (ImGui::BeginPopup("##materials")) {
@@ -236,8 +243,7 @@ private:
             }
             for (std::size_t i = 0; i < presets.size(); ++i) {
                 char item[96];
-                std::snprintf(item, sizeof(item), "%.*s  %s kg/m³",
-                              static_cast<int>(presets[i].name.size()), presets[i].name.data(),
+                std::snprintf(item, sizeof(item), "%s  %s kg/m³", labelOf(presets[i]).c_str(),
                               builder::formatNumber(presets[i].density).c_str());
                 if (ImGui::Selectable(item, defaults.preset == static_cast<int>(i))) {
                     defaults.preset = static_cast<int>(i);
@@ -247,14 +253,13 @@ private:
                                           presets[i].source.data());
                 }
             }
-            if (ImGui::Selectable("custom", defaults.preset < 0)) {
+            if (ImGui::Selectable("custom", custom)) {
                 defaults.preset = -1;
             }
             ImGui::EndPopup();
         }
-        if (defaults.preset < 0) {
-            // "custom" opens a number field (SPEC "Add").
-            rowLabel("density");
+        if (custom) {
+            ImGui::SameLine(0.0F, gap);
             std::string text =
                 defaults.density > 0.0 ? builder::formatNumber(defaults.density) : "";
             if (widgets::CommitField("##density", &text, "kg/m³", false,
@@ -262,6 +267,7 @@ private:
                 const auto value = builder::parseNumber(text);
                 defaults.density = value && *value > 0.0 ? *value : 0.0;
             }
+            ImGui::SetItemTooltip("Density of the next link, kg/m³ (empty: none)");
         }
     }
 };

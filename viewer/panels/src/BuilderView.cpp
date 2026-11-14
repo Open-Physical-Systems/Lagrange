@@ -12,7 +12,9 @@
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Picking.hpp"
 #include "lagrange/viewer/Widgets.hpp"
+#include "lagrange/viewer/builder/Kinematics.hpp"
 #include "lagrange/viewer/builder/SceneAdapter.hpp"
+#include "lagrange/viewer/builder/SensorCatalog.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
@@ -23,7 +25,9 @@
 #include <cstdlib>
 #include <memory>
 #include <numbers>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <imgui.h>
@@ -80,10 +84,21 @@ bool project(const Camera& camera, const std::array<double, 3>& point, const ImV
            out.y <= origin.y + size.y;
 }
 
-bool isCamera(std::string_view type) {
-    return type == "camera" || type == "depth" || type == "depth_camera" || type == "rgbd_camera" ||
-           type == "thermal" || type == "thermal_camera";
+/// Sensors that look along a beam (+x of their mount), as BuilderHost draws them: not a lidar
+/// or a camera, and not one that only measures where it is.
+bool hasBeam(std::string_view type) {
+    for (const std::string_view none : {"imu", "gnss", "navsat", "magnetometer", "altimeter",
+                                        "air_pressure", "lidar", "gpu_lidar", "ray", "gpu_ray"}) {
+        if (type == none) {
+            return false;
+        }
+    }
+    return type != "camera" && type != "depth" && type != "depth_camera" && type != "rgbd_camera" &&
+           type != "thermal" && type != "thermal_camera";
 }
+
+/// Shown when a beam's range is in neither the document nor the catalog (BuilderHost's).
+constexpr double kUnknownRange = 1.0;
 
 std::array<double, 3> rotate(const std::array<double, 4>& q, const std::array<double, 3>& v) {
     const builder::Frame f = builder::compose(builder::Frame{{0, 0, 0}, q}, builder::Frame{v});
@@ -97,14 +112,22 @@ public:
 
     void draw(PanelContext& context) override {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
-        const bool open = ImGui::Begin(
-            title(), nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        // Testing (SPEC state 4): the centre top is the normal server-fed Viewport; the same
+        // window (one dock slot, one id) under that title.
+        const bool testing =
+            context.builder != nullptr && context.builder->mode != BuilderSession::Mode::Build;
+        const bool open =
+            ImGui::Begin(testing ? "Viewport###BuilderView" : title(), nullptr,
+                         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         ImGui::PopStyleVar();
         if (!open || context.builder == nullptr) {
             ImGui::End();
             return;
         }
         BuilderSession& session = *context.builder;
+        if (!testing) {
+            headerMenus(session);
+        }
         refresh(session);
 
         const ImVec2 available = ImGui::GetContentRegionAvail();
@@ -174,7 +197,9 @@ public:
                 camera.ray((io.MousePos.x - origin.x) / available.x * 2.0 - 1.0,
                            (io.MousePos.y - origin.y) / available.y * 2.0 - 1.0, aspect);
             const std::uint32_t prim = pickPrim(*frame_, ray);
-            const bool any = prim != kNone && prim < built_.primItem.size();
+            // The ground shadow has no item: a click on it selects nothing.
+            const bool any =
+                prim != kNone && prim < built_.primItem.size() && !built_.primItem[prim].empty();
             const bool sensor = any && built_.primSensor[prim] >= 0;
             if (building) {
                 gizmo_.click(session, links_, builder::gizmo::Line{ray.origin, ray.direction},
@@ -204,8 +229,15 @@ public:
             ImGui::End();
             return;
         }
+        if (std::exchange(session.focusRequested, false)) {
+            fit(session.camera, selectedPrim(session));
+        }
+        if (session.view.com) {
+            comMarker(session, draw, origin, available);
+        }
+        const std::optional<ImVec2> beamEnd = beam(session, draw, origin, available);
         if (session.view.names) {
-            labels(session, draw, origin, available);
+            labels(session, draw, origin, available, beamEnd);
         }
         if (building) {
             gizmo_.draw(draw, session, view);
@@ -232,8 +264,11 @@ private:
             revision_ = session.history.revision();
             opened_ = session.opened;
             collision_ = session.view.collision;  // the same prims as BuilderHost draws
-            built_ = builder::buildStatics(document, ++generation_,
-                                           builder::BuildOptions{.collision = collision_});
+            // The same prims as BuilderHost's, shadow included, so picks agree.
+            built_ = builder::buildStatics(
+                document, ++generation_,
+                builder::BuildOptions{.collision = collision_, .shadow = true});
+            mass_ = builder::robotMass(document);
         }
         if (edited || !frame_ || session.preview != preview_) {
             preview_ = session.preview;
@@ -243,7 +278,7 @@ private:
     }
 
     void select(BuilderSession& session, std::uint32_t prim) const {
-        if (prim == kNone || prim >= built_.primItem.size()) {
+        if (prim == kNone || prim >= built_.primItem.size() || built_.primItem[prim].empty()) {
             session.selection = {};
             return;
         }
@@ -293,7 +328,7 @@ private:
         for (std::size_t i = 0; i < statics.prims.size(); ++i) {
             const PrimData& p = statics.prims[i];
             const bool inside = prim == kNone || i == prim || p.parent == prim;
-            if (!inside || p.mesh >= statics.meshes.size() ||
+            if (!inside || p.mesh >= statics.meshes.size() || p.typeName == "Shadow" ||
                 (prim == kNone && p.typeName == "Sensor")) {
                 continue;
             }
@@ -327,7 +362,7 @@ private:
     /// The selected item's name where it is, and every joint previewed away from zero with
     /// its value (SPEC "Labels").
     void labels(const BuilderSession& session, ImDrawList* draw, const ImVec2& origin,
-                const ImVec2& size) const {
+                const ImVec2& size, const std::optional<ImVec2>& beamEnd) const {
         const builder::Document& document = session.document();
         const auto linkAt = [&](std::string_view name) -> const builder::Frame* {
             for (std::size_t l = 0; l < document.links.size() && l < links_.size(); ++l) {
@@ -373,32 +408,183 @@ private:
         if (session.selection.kind == Kind::Sensor) {
             const builder::Sensor* sensor = builder::findSensor(document, session.selection.name);
             detail = sensor != nullptr ? sensor->type : "sensor";
-            // A range sensor's label sits at the end of its beam, with its range (SPEC). The
-            // range is the document's; the catalog's default needs WP-C's catalog.
-            const std::string* range = nullptr;
-            if (sensor != nullptr && sensor->type != "lidar" && !isCamera(sensor->type)) {
-                if (const auto found = sensor->params.find("range/max");
-                    found != sensor->params.end()) {
-                    range = &found->second;
-                }
-            }
-            if (range != nullptr) {
-                const Transform& t = frame_->transforms[prim];
-                const double r = std::strtod(range->c_str(), nullptr);
-                const auto beam =
-                    rotate({t.rotation[0], t.rotation[1], t.rotation[2], t.rotation[3]}, {r, 0, 0});
-                ImVec2 end;
-                if (r > 0.0 && project(session.camera,
-                                       {t.position[0] + beam[0], t.position[1] + beam[1],
-                                        t.position[2] + beam[2]},
-                                       origin, size, end)) {
-                    at = end;
-                }
-                detail = *range + " m";
+            // A beam's label sits at the end of the beam as drawn, with its range (SPEC).
+            if (sensor != nullptr && beamEnd) {
+                detail = formatRange(session, *sensor) + " m";
+                overlayBox(draw, ImVec2(beamEnd->x + px(14.0F), beamEnd->y - px(30.0F)),
+                           session.selection.name.c_str(), detail.c_str(), c::accent, c::accent);
+                return;
             }
         }
         overlayBox(draw, ImVec2(at.x + px(10.0F), at.y + px(8.0F)), session.selection.name.c_str(),
                    detail.c_str(), c::accent, c::accent);
+    }
+
+    /// The tools of the view's tab bar (reference.html `.ph .tools`): the shading as a label
+    /// (SPEC: "Shading menu shows Lit only; the button is a label"), the camera menu, and Show
+    /// with the number of the view's marks that are on (the toggles at its top right).
+    static void headerMenus(BuilderSession& session) {
+        using Toggles = BuilderSession::ViewToggles;
+        Toggles& v = session.view;
+        const int shown = static_cast<int>(v.grid) + static_cast<int>(v.frames) +
+                          static_cast<int>(v.collision) + static_cast<int>(v.com) +
+                          static_cast<int>(v.sensors) + static_cast<int>(v.names);
+        char show[32];
+        std::snprintf(show, sizeof(show), "Show · %d###builder-show", shown);
+        const char* camera = "Perspective###builder-camera";
+        const float gap = px(4.0F);
+        const float width = widgets::ButtonWidth("Lit") + widgets::MenuButtonWidth(camera) +
+                            widgets::MenuButtonWidth(show) + gap * 2.0F;
+        if (!widgets::BeginPanelTools("##builder-view-tools", width)) {
+            return;
+        }
+        ImGui::BeginDisabled();  // a label: the Builder view draws Lit only
+        (void)widgets::Button("Lit", widgets::ButtonKind::Ghost);
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("The Builder view draws Lit only; Test shows any shading");
+        ImGui::SameLine(0.0F, gap);
+        if (widgets::MenuButton(camera)) {
+            ImGui::OpenPopup("##builder-camera");
+        }
+        if (ImGui::BeginPopup("##builder-camera")) {
+            ImGui::MenuItem("Perspective", nullptr, true);
+            ImGui::MenuItem("Orthographic", nullptr, false, false);  // not built yet
+            if (ImGui::MenuItem("Focus the selection", "F")) {
+                session.focusRequested = true;
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::SameLine(0.0F, gap);
+        if (widgets::MenuButton(show)) {
+            ImGui::OpenPopup("##builder-show");
+        }
+        if (ImGui::BeginPopup("##builder-show")) {
+            ImGui::MenuItem("Grid", nullptr, &v.grid);
+            ImGui::MenuItem("Frames and joint axes", nullptr, &v.frames);
+            ImGui::MenuItem("Collision shapes", nullptr, &v.collision);
+            ImGui::MenuItem("Centre of mass", nullptr, &v.com);
+            ImGui::MenuItem("Sensor rays and frustums", nullptr, &v.sensors);
+            ImGui::MenuItem("Names", nullptr, &v.names);
+            ImGui::EndPopup();
+        }
+        widgets::EndPanelTools();
+    }
+
+    /// The robot's centre of mass at the rest pose (the strip's COM, in the root link's frame,
+    /// where the root sits): a disc with two filled quarters and "COM" (reference.html).
+    void comMarker(const BuilderSession& session, ImDrawList* draw, const ImVec2& origin,
+                   const ImVec2& size) const {
+        ImVec2 at;
+        if (mass_.mass <= 0.0 || !project(session.camera, mass_.com, origin, size, at)) {
+            return;
+        }
+        const float r = px(6.0F);
+        draw->AddCircleFilled(at, r, u32(c::bg1));
+        constexpr float kQuarter = std::numbers::pi_v<float> * 0.5F;
+        // Screen angles run clockwise (y down): the top right and bottom left quarters.
+        for (const float start : {-kQuarter, kQuarter}) {
+            draw->PathLineTo(at);
+            draw->PathArcTo(at, r, start, start + kQuarter, 8);
+            draw->PathFillConvex(u32(c::t1));
+        }
+        draw->AddCircle(at, r, u32(c::t1), 0, px(1.2F));
+        ImFont* font = theme::fonts().sans;
+        draw->AddText(font, px(theme::kCaptionSize), ImVec2(at.x + r + px(4.0F), at.y - px(7.0F)),
+                      u32(c::t2), "COM");
+    }
+
+    /// A beam sensor's range: the document's range/max, else the catalog's default, else
+    /// kUnknownRange (as BuilderHost draws the unselected ones).
+    static double rangeOf(const BuilderSession& session, const builder::Sensor& sensor) {
+        std::string text;
+        if (const auto found = sensor.params.find("range/max"); found != sensor.params.end()) {
+            text = found->second;
+        } else if (const builder::CatalogEntry* entry = session.catalog.find(sensor.type)) {
+            for (const builder::CatalogParam& param : entry->params) {
+                if (param.path == "range/max") {
+                    text = param.defaultText;
+                }
+            }
+        }
+        char* end = nullptr;
+        const double value = std::strtod(text.c_str(), &end);
+        return !text.empty() && end != text.c_str() && std::isfinite(value) && value > 0.0
+                   ? value
+                   : kUnknownRange;
+    }
+
+    static std::string formatRange(const BuilderSession& session, const builder::Sensor& sensor) {
+        char text[32];
+        std::snprintf(text, sizeof(text), "%g", rangeOf(session, sensor));
+        return text;
+    }
+
+    /// The selected beam sensor's ray (SPEC: "a sensor's ray ... to its range"), dashed in
+    /// accent with an arrowhead, as far along it as the view shows (a 20 m beam leaves the
+    /// view): the reference's. Returns where it ends on screen, for its label.
+    std::optional<ImVec2> beam(const BuilderSession& session, ImDrawList* draw,
+                               const ImVec2& origin, const ImVec2& size) const {
+        if (session.selection.kind != Kind::Sensor) {
+            return std::nullopt;
+        }
+        const builder::Sensor* sensor =
+            builder::findSensor(session.document(), session.selection.name);
+        const std::uint32_t prim = selectedPrim(session);
+        if (sensor == nullptr || !hasBeam(sensor->type) || prim == kNone || !frame_ ||
+            prim >= frame_->transforms.size()) {
+            return std::nullopt;
+        }
+        const Transform& t = frame_->transforms[prim];
+        const std::array<double, 4> q{t.rotation[0], t.rotation[1], t.rotation[2], t.rotation[3]};
+        const auto along = rotate(q, {1.0, 0.0, 0.0});
+        const auto point = [&](double d) {
+            return std::array<double, 3>{t.position[0] + along[0] * d, t.position[1] + along[1] * d,
+                                         t.position[2] + along[2] * d};
+        };
+        // Keep the end and its label clear of the view's edges and its overlays.
+        const ImVec2 low(origin.x + px(40.0F), origin.y + px(60.0F));
+        const ImVec2 high(origin.x + size.x - px(180.0F), origin.y + size.y - px(70.0F));
+        const auto inside = [&](double d, ImVec2& out) {
+            return project(session.camera, point(d), origin, size, out) && out.x >= low.x &&
+                   out.x <= high.x && out.y >= low.y && out.y <= high.y;
+        };
+        ImVec2 start;
+        ImVec2 end;
+        if (!inside(0.0, start)) {
+            return std::nullopt;
+        }
+        double reach = rangeOf(session, *sensor);
+        if (!inside(reach, end)) {
+            double in = 0.0;  // the visible part runs from the sensor to where it leaves
+            for (int i = 0; i < 40; ++i) {
+                const double mid = (in + reach) * 0.5;
+                ImVec2 at;
+                (inside(mid, at) ? in : reach) = mid;
+            }
+            reach = in;
+            (void)inside(reach, end);
+        }
+        const float dx = end.x - start.x;
+        const float dy = end.y - start.y;
+        const float length = std::hypot(dx, dy);
+        if (length < px(4.0F)) {
+            return std::nullopt;
+        }
+        const ImVec2 u(dx / length, dy / length);
+        const float head = px(12.0F);
+        const float dash = px(7.0F);
+        const float gap = px(5.0F);
+        const ImU32 color = u32(c::accent);
+        for (float s = 0.0F; s < length - head; s += dash + gap) {
+            const float e = std::min(s + dash, length - head);
+            draw->AddLine(ImVec2(start.x + u.x * s, start.y + u.y * s),
+                          ImVec2(start.x + u.x * e, start.y + u.y * e), color, px(2.0F));
+        }
+        const ImVec2 base(end.x - u.x * head, end.y - u.y * head);
+        const ImVec2 side(-u.y * head * 0.5F, u.x * head * 0.5F);
+        draw->AddTriangleFilled(end, ImVec2(base.x + side.x, base.y + side.y),
+                                ImVec2(base.x - side.x, base.y - side.y), color);
+        return end;
     }
 
     /// Bottom left: the axes as the camera sees them, the frame and the grid spacing.
@@ -489,15 +675,13 @@ private:
             bool Toggles::* option;
             const char* tooltip;
         };
-        // TODO(RFC 0016 WP-E1): the Collision, COM and Names icons of 12-builder/reference.html;
-        // the nearest existing icons until then.
         static constexpr std::array<Entry, 6> kToggles{{
             {"##bgrid", widgets::Icon::Grid, &Toggles::grid, "Grid"},
             {"##bframes", widgets::Icon::Frames, &Toggles::frames, "Frames and joint axes"},
-            {"##bcollision", widgets::Icon::Stage, &Toggles::collision, "Collision shapes"},
-            {"##bcom", widgets::Icon::Forces, &Toggles::com, "Centre of mass"},
+            {"##bcollision", widgets::Icon::Collision, &Toggles::collision, "Collision shapes"},
+            {"##bcom", widgets::Icon::CentreOfMass, &Toggles::com, "Centre of mass"},
             {"##bsensors", widgets::Icon::Frustum, &Toggles::sensors, "Sensor rays and frustums"},
-            {"##bnames", widgets::Icon::Component, &Toggles::names, "Names"},
+            {"##bnames", widgets::Icon::Names, &Toggles::names, "Names"},
         }};
         const auto count = static_cast<float>(kToggles.size());
         const float width = px(24.0F) * count + px(2.0F) * (count + 1.0F);
@@ -521,6 +705,7 @@ private:
     bool collision_{false};
     std::uint64_t generation_{0};
     builder::BuiltScene built_;
+    builder::MassProperties mass_;
     builder::Preview preview_;
     std::vector<builder::Frame> links_;
     std::shared_ptr<const SceneFrame> frame_;

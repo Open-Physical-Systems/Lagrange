@@ -1684,6 +1684,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             }
             return false;
         };
+        double lastFrameMs = 0.0;
         while ((recording ? written : rendered) < wanted) {
             // With --open, wait for the requested file's scene, not the one served before it.
             const auto current = client.scene();
@@ -1713,7 +1714,9 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             io.DeltaTime = 1.0F / 60.0F;
             ImGui_ImplVulkan_NewFrame();
             ImGui::NewFrame();
-            ui.build(0.0F);
+            // The frame time shown is the last frame's work (UI, recording, GPU submit and wait),
+            // without the loop's pause between frames: headless frames are not paced.
+            ui.build(static_cast<float>(lastFrameMs));
             ImGui::Render();
             const double uiMs = msSince(frameStart);
             double recordMs = 0.0;
@@ -1768,6 +1771,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
                     ++written;
                 }
             }
+            lastFrameMs = msSince(frameStart);
             std::this_thread::sleep_for(std::chrono::milliseconds(8));
         }
 

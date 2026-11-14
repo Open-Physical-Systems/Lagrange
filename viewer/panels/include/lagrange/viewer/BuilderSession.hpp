@@ -84,7 +84,7 @@ struct BuilderSession {
         bool grid{true};
         bool frames{true};  ///< link frames and joint axes
         bool collision{false};
-        bool com{false};     ///< centre of mass (needs WP-A's robotMass)
+        bool com{true};      ///< the robot's centre of mass (on, as in the reference image)
         bool sensors{true};  ///< sensor rays and frustums
         bool names{true};    ///< labels of the selection and of previewed joints
     };
@@ -127,6 +127,8 @@ struct BuilderSession {
     builder::Preview jointTargets;
     /// In: the run's last refusal of a joint command, one line; empty while it takes them.
     std::string jointDriveError;
+    /// Properties' Focus: the Builder view looks at the selection (as F), then clears it.
+    bool focusRequested{false};
 
     // Out, read and cleared by BuilderHost::afterUi().
     bool testRequested{false};

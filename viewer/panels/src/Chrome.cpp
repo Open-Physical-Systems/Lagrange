@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <imgui_internal.h>  // DockBuilder and BeginViewportSideBar
 #include <string>
+#include <unordered_map>
 
 #include <imgui.h>
 
@@ -289,14 +290,74 @@ float contextWidth(const char* key, const char* value) {
            fonts.sansMedium->CalcTextSizeA(size, FLT_MAX, 0.0F, value).x;
 }
 
-void contextItem(const char* key, const char* value) {
+void contextItem(const char* key, const char* value, bool mono = false) {
     ImGui::PushFont(theme::fonts().sans, theme::kLabelSize);
     ImGui::TextColored(c::t3, "%s", key);
     ImGui::PopFont();
     ImGui::SameLine(0.0F, px(5.0F));
-    ImGui::PushFont(theme::fonts().sansMedium, theme::kLabelSize);
+    // A path is mono at 11 px (12-builder reference.html: the menu bar's file).
+    ImGui::PushFont(mono ? theme::fonts().mono : theme::fonts().sansMedium,
+                    mono ? theme::kCaptionSize : theme::kLabelSize);
     ImGui::TextColored(c::t2, "%s", value);
     ImGui::PopFont();
+}
+
+float monoContextWidth(const char* key, const char* value) {
+    const theme::Fonts& fonts = theme::fonts();
+    return fonts.sans->CalcTextSizeA(px(theme::kLabelSize), FLT_MAX, 0.0F, key).x + px(5.0F) +
+           fonts.mono->CalcTextSizeA(px(theme::kCaptionSize), FLT_MAX, 0.0F, value).x;
+}
+
+/// The widest the menu bar's file path may be (logical px), so it never reaches the menus.
+constexpr float kContextPathWidth = 320.0F;
+
+/// A path with the home folder written "~" (the menu bar's file, as the reference writes it).
+std::string homePath(const std::filesystem::path& path) {
+    std::string text = path.string();
+    const char* home = std::getenv("HOME");
+    if (home != nullptr && *home != '\0') {
+        const std::string prefix = std::string(home) + "/";
+        if (text.starts_with(prefix)) {
+            text = "~/" + text.substr(prefix.size());
+        }
+    }
+    return text;
+}
+
+/// The Builder's context (12-builder reference.html `.ctx`): the robot being built, its file
+/// (or "not saved yet"), and the server this viewer is connected to, or "none".
+void builderContext(const PanelContext& context) {
+    const BuilderSession& session = *context.builder;
+    const std::string robot = session.document().robot;
+    std::string file = session.path.empty() ? std::string("not saved yet") : homePath(session.path);
+    // A deep path keeps its last folders and the file name: the menus need the room.
+    const float most = px(kContextPathWidth);
+    std::string tail = file;
+    while (monoContextWidth("file", file.c_str()) > most) {
+        const std::size_t slash = tail.find('/', 1);
+        if (slash == std::string::npos || tail.find('/', slash + 1) == std::string::npos) {
+            break;  // the folder and the file name stay
+        }
+        tail = tail.substr(slash);
+        file = "…" + tail;
+    }
+    const bool ready = context.connection.state == ConnectionState::Ready;
+    const std::string server = ready && !context.connection.serverName.empty()
+                                   ? context.connection.serverName
+                                   : std::string("none");
+    const float gap = px(12.0F);
+    const float width = px(44.0F) + contextWidth("robot", robot.c_str()) + gap +
+                        monoContextWidth("file", file.c_str()) + gap +
+                        contextWidth("server", server.c_str()) + gap;
+    ImGui::SameLine();
+    widgets::AlignRight(width);
+    contextItem("robot", robot.c_str());
+    ImGui::SameLine(0.0F, gap);
+    contextItem("file", file.c_str(), true);
+    ImGui::SameLine(0.0F, gap);
+    contextItem("server", server.c_str());
+    ImGui::SameLine(0.0F, gap);
+    widgets::Kbd("Ctrl K");
 }
 
 /// A recording seeks back to its first moment; a live run restarts at t = 0 on the server.
@@ -414,6 +475,11 @@ void drawMenuBar(PanelContext& context) {
     ImGui::PopStyleColor();
 
     // Context on the right.
+    if (*context.workspace == Workspace::Builder && context.builder != nullptr) {
+        builderContext(context);
+        ImGui::EndMainMenuBar();
+        return;
+    }
     // Building offline (12-builder SPEC state 5) shows no run: not the one a Test left behind
     // after Back when nothing was connected before it.
     const bool offlineBuilder = *context.workspace == Workspace::Builder &&
@@ -1083,6 +1149,59 @@ void statusItem(const char* key, const ImVec4& color, const char* format, ...) {
     ImGui::PopFont();
 }
 
+/// The version in the package.xml installed beside `program` (<prefix>/lib/<pkg>/<program> →
+/// <prefix>/share/<pkg>/package.xml), or empty. Read once per program.
+std::string installedVersion(const std::string& program) {
+    static std::string cachedFor;
+    static std::string cached;
+    if (program == cachedFor) {
+        return cached;
+    }
+    cachedFor = program;
+    cached.clear();
+    const std::filesystem::path binary(program);
+    const std::filesystem::path package = binary.parent_path();
+    const std::filesystem::path manifest =
+        package.parent_path().parent_path() / "share" / package.filename() / "package.xml";
+    if (std::FILE* file = std::fopen(manifest.c_str(), "r")) {
+        char line[512];
+        while (std::fgets(line, sizeof(line), file) != nullptr) {
+            const char* open = std::strstr(line, "<version>");
+            const char* close = open != nullptr ? std::strstr(open, "</version>") : nullptr;
+            if (close != nullptr) {
+                cached.assign(open + 9, close);
+                break;
+            }
+        }
+        std::fclose(file);
+    }
+    return cached;
+}
+
+/// "lyrical · domain 0 · fastrtps" from the environment ROS 2 programs read: ROS_DISTRO,
+/// ROS_DOMAIN_ID (0 when unset, ROS 2's default) and RMW_IMPLEMENTATION (rmw_fastrtps_cpp when
+/// unset, Lyrical's default, CLAUDE.md §1a). `domain` overrides the domain (a test server's).
+/// Empty when no ROS 2 is sourced.
+std::string rosLine(const std::string& domain) {
+    const char* distro = std::getenv("ROS_DISTRO");
+    if (distro == nullptr || *distro == '\0') {
+        return {};
+    }
+    const char* id = std::getenv("ROS_DOMAIN_ID");
+    std::string rmw = std::getenv("RMW_IMPLEMENTATION") != nullptr
+                          ? std::getenv("RMW_IMPLEMENTATION")
+                          : "rmw_fastrtps_cpp";
+    if (rmw.starts_with("rmw_")) {
+        rmw = rmw.substr(4);
+    }
+    if (rmw.ends_with("_cpp")) {
+        rmw.resize(rmw.size() - 4);
+    }
+    const std::string shown =
+        !domain.empty() ? domain : (id != nullptr && *id != '\0' ? std::string(id) : "0");
+    return std::string(distro) + " · domain " + shown + " · " + rmw;
+}
+
 void drawStatusBar(const PanelContext& context, ImGuiViewport* viewport) {
     // Design (.sb): 24 px, bg1, 11 px text, items 16 px apart.
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(px(10.0F), px(4.0F)));
@@ -1113,6 +1232,18 @@ void drawStatusBar(const PanelContext& context, ImGuiViewport* viewport) {
         ImGui::PopFont();
         // Building offline: the run readouts would be the last server's (a Test's after Back).
         const bool offline = builderShown && state != ConnectionState::Ready;
+        if (offline) {
+            // The server a Test would start (SPEC state 5; the Launcher's wording when none).
+            ImGui::SameLine(0.0F, gap);
+            const std::string& program = context.launcher->localServer;
+            if (program.empty()) {
+                statusItem("test server", c::t2, "lagrange_server is not installed");
+            } else {
+                const std::string version = installedVersion(program);
+                statusItem("test server", c::t2, "lagrange_server%s%s · this machine",
+                           version.empty() ? "" : " ", version.c_str());
+            }
+        }
         if (builderShown && context.builder->autosaveTime > 0.0) {
             ImGui::SameLine(0.0F, gap);
             statusItem("autosave", c::t1, "%.0f s ago",
@@ -1154,18 +1285,34 @@ void drawStatusBar(const PanelContext& context, ImGuiViewport* viewport) {
         char viewer[64];
         std::snprintf(viewer, sizeof(viewer), "%.1f ms · %.0f fps",
                       static_cast<double>(context.frameMs), static_cast<double>(fps));
+        // The ROS 2 a run would join (ui-conventions §1: distro, domain and RMW); a Test's
+        // server has a domain of its own.
+        const bool testing = builderShown && context.builder->mode != BuilderSession::Mode::Build;
+        std::string ros = rosLine(testing ? context.builder->testRosDomain : std::string{});
+        if (!ros.empty() && testing && !context.builder->testIntoRun &&
+            context.builder->testRosDomain.empty()) {
+            ros = "off for this test (--no-ros)";  // BuilderHost started it without ROS
+        }
         const theme::Fonts& fonts = theme::fonts();
         const float size = px(theme::kCaptionSize);
-        const float width = fonts.sans->CalcTextSizeA(size, FLT_MAX, 0.0F, "GPU").x +
-                            fonts.sans->CalcTextSizeA(size, FLT_MAX, 0.0F, "viewer").x +
-                            fonts.mono->CalcTextSizeA(size, FLT_MAX, 0.0F, gpu).x +
-                            fonts.mono->CalcTextSizeA(size, FLT_MAX, 0.0F, viewer).x +
-                            px(6.0F) * 2.0F + gap;
+        float width = fonts.sans->CalcTextSizeA(size, FLT_MAX, 0.0F, "GPU").x +
+                      fonts.sans->CalcTextSizeA(size, FLT_MAX, 0.0F, "viewer").x +
+                      fonts.mono->CalcTextSizeA(size, FLT_MAX, 0.0F, gpu).x +
+                      fonts.mono->CalcTextSizeA(size, FLT_MAX, 0.0F, viewer).x + px(6.0F) * 2.0F +
+                      gap;
+        if (!ros.empty()) {
+            width += fonts.sans->CalcTextSizeA(size, FLT_MAX, 0.0F, "ROS 2").x +
+                     fonts.mono->CalcTextSizeA(size, FLT_MAX, 0.0F, ros.c_str()).x + px(6.0F) + gap;
+        }
         ImGui::SameLine();
         widgets::AlignRight(width);
         statusItem("GPU", c::t2, "%s", gpu);
         ImGui::SameLine(0.0F, gap);
         statusItem("viewer", c::t2, "%s", viewer);
+        if (!ros.empty()) {
+            ImGui::SameLine(0.0F, gap);
+            statusItem("ROS 2", c::t2, "%s", ros.c_str());
+        }
     }
     ImGui::End();
 }
@@ -1191,9 +1338,25 @@ bool drawDockSpaces(Workspace shown, ImGuiViewport* viewport, bool reset) {
             continue;
         }
         const ImGuiID id = ImGui::GetID(entry.dockspace);
+        // A layout made in the first frames is made again once the bars have taken their
+        // room (ImGui applies a side bar's room to the work area a frame late): the dock
+        // space shrinks then, and a split away from the central node (the Builder's 212 px
+        // Add) would shrink with it instead of keeping its design size.
+        struct Made {
+            ImVec2 size;
+            int frame{0};
+        };
+        static std::unordered_map<ImGuiID, Made> made;
+        constexpr int kSettleFrames = 3;
+        const auto found = made.find(id);
+        const bool unsettled = found != made.end() &&
+                               ImGui::GetFrameCount() - found->second.frame < kSettleFrames &&
+                               (found->second.size.x != size.x || found->second.size.y != size.y);
         // Lay out when there is no saved layout for this dock space, or on request.
-        if (ImGui::DockBuilderGetNode(id) == nullptr || (reset && entry.workspace == shown)) {
+        if (ImGui::DockBuilderGetNode(id) == nullptr || (reset && entry.workspace == shown) ||
+            unsettled) {
             buildLayout(entry.workspace, id, size);
+            made[id] = Made{size, ImGui::GetFrameCount()};
             built = true;
         }
         if (entry.workspace == shown) {

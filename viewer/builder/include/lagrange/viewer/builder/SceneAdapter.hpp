@@ -44,6 +44,10 @@ struct BuildOptions {
     /// themselves, a mesh as the convex hull the server collides. Collision-only shapes are
     /// drawn translucent either way.
     bool collision{false};
+    /// A flat translucent footprint under the robot at its rest pose (typeName "Shadow", the
+    /// last prim, an empty primItem), as the reference image shows: the Lit pipeline casts no
+    /// shadows (12-builder SPEC "Builder view", reference.png).
+    bool shadow{false};
 };
 
 /// Default colour of a shape with no rgba (Shape::rgba all zero): a neutral light blue-grey,
@@ -55,6 +59,9 @@ inline constexpr std::array<float, 4> kCollisionColor{0.25F, 0.70F, 0.90F, 0.35F
 /// Edge of the cube drawn for a sensor's mount (m), so a sensor can be seen and picked. A view
 /// marker only: it has no mass and does not collide.
 inline constexpr double kSensorMarkerSize = 0.03;
+/// The lidar marker: a puck (radius, height in m), as lidars are drawn in the reference image.
+inline constexpr double kLidarMarkerRadius = 0.035;
+inline constexpr double kLidarMarkerHeight = 0.04;
 
 /// One prim per link, a child prim per visual shape (MeshData from Primitives.hpp; a mesh file
 /// one per material, read by lagrange_meshes, scale baked in), one collider per collision shape

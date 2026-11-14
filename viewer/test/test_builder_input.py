@@ -14,8 +14,8 @@ import pytest
 from ament_index_python.packages import PackageNotFoundError, get_package_prefix
 
 # Where things are at --size 1600x1000 in the Builder's default layout (12-builder SPEC).
-BOX_TILE = "40,862"
-CYLINDER_TILE = "101,862"
+BOX_TILE = "40,835"
+CYLINDER_TILE = "101,835"
 BOX_LINK_TYPE_TEXT = "115,221"  # "fixed · box" on the box link's row: selects its joint
 REVOLUTE = "1425,272"  # Properties: the joint type's Segmented
 LOWER_LIMIT = "1470,517"

@@ -17,12 +17,21 @@ namespace lagrange::viewer::builder {
 
 namespace {
 
-/// Colour of the sensor markers: the sensors domain colour (docs/design/ui tokens, #3FB68B),
-/// so a marker reads as a sensor and not as a part of the robot.
-constexpr std::array<float, 4> kSensorMarkerColor{0.247F, 0.714F, 0.545F, 1.0F};
-/// The lidar marker: a puck (radius, height in m), as lidars are drawn in the reference image.
-constexpr double kLidarMarkerRadius = 0.035;
-constexpr double kLidarMarkerHeight = 0.04;
+/// Colour of the sensor markers' bodies: a dark slate, as the reference image draws the lidar
+/// (12-builder reference.html, #2E3D52 sides); BuilderHost outlines each marker in the sensors
+/// domain colour, so it reads as a sensor and not as a part of the robot.
+constexpr std::array<float, 4> kSensorMarkerColor{0.18F, 0.24F, 0.32F, 1.0F};
+/// The ground shadow (BuildOptions::shadow): the reference draws black at 0.30 opacity over the
+/// view's background (SceneRenderer's clear colour, display 9 17 32), which gives display
+/// 6 12 22. The Lit mesh pipeline does not blend (no new pipeline for the builder, plan
+/// decision 1), so this is that colour, opaque, solved for mesh.slang's shade() of an
+/// upward face (ambient 0.6 × sky + 0.8 × diffuse, 1.05 1.08 1.14) and its 1/2.2 encoding.
+constexpr std::array<float, 4> kShadowColor{0.00025F, 0.0011F, 0.0040F, 1.0F};
+/// The shadow lies this far (m) under the robot's lowest point, so the grid drawn at that
+/// height stays in front of it. A view offset, not a physical quantity.
+constexpr double kShadowDrop = 0.002;
+/// Meshes with more vertices than this give their box's corners to the footprint instead.
+constexpr std::size_t kFootprintVertexLimit = 4096;
 
 bool hasColor(const std::array<float, 4>& rgba) {
     return std::ranges::any_of(rgba, [](float v) { return v != 0.0F; });
@@ -111,6 +120,35 @@ std::optional<MeshData> collisionMesh(const Shape& shape, std::optional<std::uin
 }
 
 using Quat = std::array<double, 4>;  // w x y z
+
+/// The convex hull of points in the plane, counter-clockwise (Andrew's monotone chain).
+std::vector<std::array<double, 2>> hull2d(std::vector<std::array<double, 2>> points) {
+    std::ranges::sort(points);
+    points.erase(std::unique(points.begin(), points.end()), points.end());
+    if (points.size() < 3) {
+        return points;
+    }
+    const auto cross = [](const std::array<double, 2>& o, const std::array<double, 2>& a,
+                          const std::array<double, 2>& b) {
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    };
+    std::vector<std::array<double, 2>> out(points.size() * 2);
+    std::size_t k = 0;
+    for (const auto& p : points) {
+        while (k >= 2 && cross(out[k - 2], out[k - 1], p) <= 0.0) {
+            --k;
+        }
+        out[k++] = p;
+    }
+    for (std::size_t i = points.size() - 1, lower = k + 1; i-- > 0;) {
+        while (k >= lower && cross(out[k - 2], out[k - 1], points[i]) <= 0.0) {
+            --k;
+        }
+        out[k++] = points[i];
+    }
+    out.resize(k - 1);
+    return out;
+}
 
 Frame jointMotion(const Joint& joint, double q) {
     Frame motion;
@@ -320,6 +358,64 @@ BuiltScene buildStatics(const Document& document, std::uint64_t generation,
         addPrim(std::move(prim), sensor.name, linkIndex, toFrame(sensor.origin),
                 static_cast<int>(s));
     }
+    // The ground shadow (BuildOptions::shadow): the footprint of the drawn shapes at the rest
+    // pose, straight down, flat under the lowest point. Not a lighting result: the Lit
+    // pipeline has no shadows, and this costs one small mesh per document edit.
+    std::optional<MeshData> shadow;
+    if (options.shadow) {
+        const std::vector<Frame> rest = previewFrames(document, {});
+        std::vector<std::array<double, 2>> footprint;
+        double lowest = 0.0;
+        bool any = false;
+        for (std::size_t i = 0; i < statics->prims.size(); ++i) {
+            const PrimData& prim = statics->prims[i];
+            const int link = scene.primLink[i];
+            if (prim.typeName != "Mesh" || prim.mesh >= statics->meshes.size() || link < 0 ||
+                static_cast<std::size_t>(link) >= rest.size()) {
+                continue;
+            }
+            const Frame placed = compose(rest[static_cast<std::size_t>(link)], scene.primOffset[i]);
+            const MeshData& mesh = statics->meshes[prim.mesh];
+            std::vector<std::array<double, 3>> points;
+            if (mesh.positions.size() / 3 > kFootprintVertexLimit) {
+                const std::array<float, 6>& b = mesh.aabb;
+                for (int c = 0; c < 8; ++c) {
+                    points.push_back({(c & 1) != 0 ? b[3] : b[0], (c & 2) != 0 ? b[4] : b[1],
+                                      (c & 4) != 0 ? b[5] : b[2]});
+                }
+            } else {
+                for (std::size_t v = 0; v + 2 < mesh.positions.size(); v += 3) {
+                    points.push_back(
+                        {mesh.positions[v], mesh.positions[v + 1], mesh.positions[v + 2]});
+                }
+            }
+            for (const auto& p : points) {
+                const std::array<double, 3> w = compose(placed, Frame{p}).position;
+                footprint.push_back({w[0], w[1]});
+                lowest = any ? std::min(lowest, w[2]) : w[2];
+                any = true;
+            }
+        }
+        const auto outline = hull2d(std::move(footprint));
+        if (outline.size() >= 3) {
+            MeshData mesh;
+            const auto z = static_cast<float>(lowest - kShadowDrop);
+            std::array<float, 6> box{z, z, z, z, z, z};
+            for (std::size_t i = 0; i < outline.size(); ++i) {
+                const auto x = static_cast<float>(outline[i][0]);
+                const auto y = static_cast<float>(outline[i][1]);
+                mesh.positions.insert(mesh.positions.end(), {x, y, z});
+                mesh.normals.insert(mesh.normals.end(), {0.0F, 0.0F, 1.0F});
+                box = {i == 0 ? x : std::min(box[0], x), i == 0 ? y : std::min(box[1], y), z,
+                       i == 0 ? x : std::max(box[3], x), i == 0 ? y : std::max(box[4], y), z};
+            }
+            for (std::uint32_t i = 1; i + 1 < outline.size(); ++i) {
+                mesh.indices.insert(mesh.indices.end(), {0U, i, i + 1});
+            }
+            mesh.aabb = box;
+            shadow = std::move(mesh);
+        }
+    }
     // Collision geometry, translucent, after everything opaque (the Lit pipeline blends by the
     // material's alpha; drawn last, what is inside shows through).
     if (!collisionPrims.empty()) {
@@ -336,6 +432,18 @@ BuiltScene buildStatics(const Document& document, std::uint64_t generation,
             const std::uint32_t id = addPrim(std::move(prim), c.item, c.link, c.offset, -1);
             scene.primShape[id] = c.shape;
         }
+    }
+    // The shadow last (after the collision prims, so their indices do not depend on it); an
+    // empty item, so a pick on it selects nothing.
+    if (shadow) {
+        statics->meshes.push_back(std::move(*shadow));
+        PrimData prim;
+        prim.name = "shadow";
+        prim.path = root + "/shadow";
+        prim.typeName = "Shadow";
+        prim.mesh = static_cast<std::uint32_t>(statics->meshes.size() - 1);
+        prim.material = addMaterial("shadow", kShadowColor);
+        (void)addPrim(std::move(prim), std::string{}, -1, Frame{}, -1);
     }
     scene.statics = std::move(statics);
     return scene;
