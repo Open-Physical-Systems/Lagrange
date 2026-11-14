@@ -57,6 +57,14 @@ public:
     [[nodiscard]] bool held(SignalId id) const {
         return !id.isInput() && id.valid() && id.index < held_.size() && held_[id.index] != 0;
     }
+    /// Undoes hold() in this step: the output commits its pending value after all. For wrappers
+    /// that give a held output a value of their own (a sensor disconnected with nan=1 reads NaN
+    /// from the fault's start, not from its next sample).
+    void release(SignalId id) {
+        if (!id.isInput() && id.valid() && id.index < held_.size()) {
+            held_[id.index] = 0;
+        }
+    }
 
     /// Whether an input has a writer: an optional input no module writes reads its default.
     /// Valid from init() on (after wiring); false for an output or an invalid id.

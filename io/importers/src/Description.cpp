@@ -125,6 +125,13 @@ public:
     Builder(const Description& d, Model& m) : d_(d), m_(m) {}
 
     Expected<void, std::string> run() {
+        for (const LinkDesc& link : d_.links) {
+            for (const SensorDesc& sensor : link.sensors) {
+                if (!sensor.problem.empty()) {
+                    return Unexpected{"sensor '" + sensor.name + "': " + sensor.problem};
+                }
+            }
+        }
         for (std::size_t l = 0; l < d_.links.size(); ++l) {
             if (!linkIndex_.emplace(d_.links[l].name, l).second) {
                 return Unexpected{"'" + d_.name + "' has two links named '" + d_.links[l].name +

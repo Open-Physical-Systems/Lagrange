@@ -521,9 +521,15 @@ based on incommensurable scanning", IEEE/ASME Trans. Mechatronics 27(1), 2022):
 `|δ|` is the beam's angle off the sensor's x axis, its direction the way round it. With equal prisms the
 beam traces petals through the centre (`|δ| = 2δ|cos((ω₁ − ω₂)t / 2)|`); since the speeds are
 incommensurate the petals never repeat, so each scan goes on where the last stopped and the field fills
-up with integration time. Each scan holds `samples` points fired one after another at
-`rosette_point_rate`; scan k's point i fires at t = (k·samples + i) / rate (so set
-`samples = rate / update_rate` for the real picture). The beams change every scan, so the module also
+up with integration time. Each scan holds the last `samples` points fired, one after another at
+`rosette_point_rate`, the last at the moment the scan is taken: point i fires (samples − 1 − i) /
+point_rate before it, which is the `time` of `/points` after its stamp (the first point's firing),
+and the pose motion distortion casts it from. The prisms' angles follow the points: scan k's point i
+is at the pattern's t = (k·samples + i) / point_rate. Both are the real picture only when
+`samples = point_rate / update_rate` (the defaults: 10000 = 100 000 / 10 Hz), and the run warns
+otherwise: with fewer, each scan covers only the end of its period (2000 points at 100 000/s and
+10 Hz span 20 ms of the 100 ms) and the pattern runs slower than the clock; with more, scans overlap
+and their first points take the last scan's pose. The beams change every scan, so the module also
 writes `sensor/<name>/directions` (ScalarArray, 3 × samples, unit vectors x y z in the sensor frame, per
 beam) and `/points` and the viewer take each scan's beams from it. `/points` is one row of `samples`
 points; each point's `time` is when it fired (with motion distortion on, the default, each point is cast
@@ -652,6 +658,15 @@ quantity's own unit (rad/s for an IMU's `angular_rate`, m for a lidar's `ranges`
 component, or to one with `component` (0 = x). A fault names one quantity, or all of the sensor's
 (`*`, or no quantity): `dropout`, `stuck` and `disconnect` can, `bias`, `drift` and `noise` need one.
 Images and point buffers take `dropout`, `stuck` and `disconnect` only; for them `nan` means nothing.
+So do Bool and Int quantities (a `valid` flag, a `count`): `bias`, `drift` or `noise` on one stops the
+start, and with `nan` their dropped samples are held instead (no new value), so a Bool still reads 0
+or 1 and a count a whole number.
+
+Faults act on samples: a sensor that samples slower than the run (a Wi-Fi scan every 2 s, a 1 Hz
+GNSS) shows `dropout`, `stuck`, `bias`, `drift` and `noise` from its first sample inside the window,
+while `fault/active` turns 1 at `at` itself; a window that opens and closes between two samples
+changes nothing. `disconnect` is the exception with `nan=1`: its numbers read NaN from `at` (a new
+value at that step), not from the next sample; without `nan` nothing new comes from `at` either way.
 A sensor's quantities in one fault go together: with `imu=dropout` the whole IMU message is lost,
 while `imu:angular_rate=dropout` keeps the message, which then carries the last angular rate (the ROS
 bridge sends an IMU message when `specific_force` is new).
@@ -758,7 +773,7 @@ other number the sensor writes goes out by its signal type and unit:
 | `sonar`, a fan | `/<n>/scan` | `sensor_msgs/LaserScan` | `ranges` and `intensities` (dB), beam 0 the left one: `angle_min` +fov/2, `angle_increment` negative; `/<n>/image` Float64MultiArray beams × bins |
 | `safety_scanner` | `/<n>/scan` | `sensor_msgs/LaserScan` | from −fov/2, `scan_time` 1/rate; `/<n>/protective`, `/<n>/warning` Bool, `/<n>/min_distance` Float64 |
 | `wheel_odometry` | `/<n>/odom` | `nav_msgs/Odometry` | `odom` → the sensor's body, twist in the body frame; covariance diagonals (x y z roll pitch yaw) from the text parameters `pose_covariance_diagonal` and `twist_covariance_diagonal` (diff_drive_controller's names), else 1e-3 m², 1e-3 m², 1e6, 1e6, 1e6, 1e-2 rad² (illustrative; 1e6: not measured) |
-| `battery_monitor` | `/<n>/battery_state` | `sensor_msgs/BatteryState` | ROS's signs and units: current negative discharging, `charge` and `capacity` in Ah (`capacity` the parameter, else charge / SOC), `percentage` 0 to 1, °C; `present` the `valid` signal; `location` the battery's name |
+| `battery_monitor` | `/<n>/battery_state` | `sensor_msgs/BatteryState` | ROS's signs and units: current negative discharging, `charge` and `capacity` in Ah (`capacity` the parameter, else the battery's rated charge, else charge / SOC), `percentage` 0 to 1, °C; `present` the `valid` signal; `location` the battery's name |
 | `joint_torque` | `/<n>/joint_state` | `sensor_msgs/JointState` | the joint's name and its `effort` (N·m, or N on a slide), as Franka's and KUKA's drivers report link-side torque; `/<n>/saturated` Bool |
 | `force_torque` | `/<n>/wrench` | `geometry_msgs/WrenchStamped` | in the signal's frame; `force` and `torque` are in it, not on topics of their own |
 | `optical_flow` | `/<n>/flow` | `geometry_msgs/Vector3Stamped` | x, y the integrated flow (rad) about `<n>_optical`'s axes, PX4's sign (`SensorOpticalFlow.pixel_flow`), z 0; no standard ROS message carries optical flow (px4_msgs and mavros_msgs' `OpticalFlowRad` are not Lyrical dependencies of Lagrange) |
@@ -786,8 +801,16 @@ So a `humidity_sensor` publishes `/<n>/relative_humidity` and `/<n>/temperature`
 `/<n>/temperature`, an `anemometer` `/<n>/wind_velocity` (Vector3Stamped in `<n>`),
 `/<n>/wind_speed`, `/<n>/wind_direction`, a `uwb` `/<n>/ranges` (no standard ROS message
 carries UWB ranges), a sensor with faults `/<n>/fault/active` and `/<n>/fault/dropped`, and every
-kind its `/<n>/valid`. Not published: `sensor/<n>/delayed/...` (the topics are delayed
-themselves), an image's `intrinsics` and `position` (its `camera_info`).
+kind its `/<n>/valid` as a `std_msgs/Bool` (the power kinds, `battery_monitor`, `current_sensor`,
+`voltage_sensor`, `esc_telemetry` and `tension_sensor`, keep `valid` a Scalar 0/1 on the bus for
+the readers they had, and publish it as a Bool like the others; it was a Float64 before). Not
+published:
+`sensor/<n>/delayed/...` (the topics are delayed themselves), an image's `intrinsics` and
+`position` (its `camera_info`), and `sensor/<n>/contamination`, the weather's lens contamination
+the sensor reads (an input, not a reading). `/<n>/battery_state`'s `power_supply_status` is
+DISCHARGING while the pack gives current and CHARGING while it takes it, FULL only at rest with
+SOC 1, NOT_CHARGING at rest below; its `design_capacity` is the parameter `capacity`, else the
+battery's `elec:battery:capacity`.
 
 **A map wins.** A `--ros-topics` publish entry replaces a default topic when it uses the same
 topic name, or when it publishes a signal the default topic carries (the whole default goes:
