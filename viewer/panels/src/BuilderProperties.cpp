@@ -18,6 +18,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -36,6 +37,36 @@ using widgets::px;
 
 /// The URDF reader's default update rate, Hz (server/src/Robot.cpp; Document.hpp's Sensor).
 constexpr double kDefaultUpdateRate = 10.0;
+/// sensor:latency and sensor:jitter when a file gives none, s (schemas/sensor/schema.usda).
+constexpr double kDefaultTiming = 0.0;
+
+/// A catalog entry's documentation as a short pill: "sensors.md §2" for a numbered section,
+/// else "sensors.md · rangefinder" (the anchor); the full reference is the pill's tooltip.
+std::string docLabel(std::string_view doc) {
+    const std::size_t hash = doc.find('#');
+    std::string_view file = doc.substr(0, hash);
+    if (const std::size_t slash = file.rfind('/'); slash != std::string_view::npos) {
+        file = file.substr(slash + 1);
+    }
+    if (hash == std::string_view::npos || hash + 1 >= doc.size()) {
+        return std::string(file);
+    }
+    const std::string_view anchor = doc.substr(hash + 1);
+    std::size_t digits = 0;
+    while (digits < anchor.size() && anchor[digits] >= '0' && anchor[digits] <= '9') {
+        ++digits;
+    }
+    if (digits > 0) {
+        return std::string(file) + " §" + std::string(anchor.substr(0, digits));
+    }
+    return std::string(file) + " · " + std::string(anchor);
+}
+
+/// A ROS message type as the reference writes it: "Range" for "sensor_msgs/msg/Range".
+std::string_view rosTypeName(std::string_view type) {
+    const std::size_t slash = type.rfind('/');
+    return slash == std::string_view::npos ? type : type.substr(slash + 1);
+}
 
 /// Copies the document, lets `change` edit it and commits it as one step. `change` returns
 /// false when nothing changed.
@@ -220,6 +251,7 @@ private:
                 const char* what, const std::string& path, builder::ItemKind kind) {
         const theme::Fonts& fonts = theme::fonts();
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+        const float lineTop = ImGui::GetCursorScreenPos().y;
         widgets::IconItem(icon, 16.0F, c::accent);
         ImGui::SameLine(0.0F, px(6.0F));
         ImGui::PushFont(fonts.sansSemiBold, 14.0F);
@@ -227,6 +259,20 @@ private:
         ImGui::PopFont();
         ImGui::SameLine(0.0F, px(6.0F));
         widgets::Caption("%s", what);
+        // Focus (SPEC "Properties": header): the Builder view looks at this item, as F does.
+        // Placed over the name's line without making it taller, then back where it ended.
+        const ImVec2 next = ImGui::GetCursorScreenPos();
+        const float focusWidth = widgets::ButtonWidth("Focus");
+        const float right = next.x + ImGui::GetContentRegionAvail().x;
+        ImGui::SetCursorScreenPos(ImVec2(right - focusWidth, lineTop - px(2.0F)));
+        // Focus changes only the view: usable while testing too (the panel is disabled then).
+        ImGui::EndDisabled();
+        if (widgets::Button("Focus##properties", widgets::ButtonKind::Ghost)) {
+            session.focusRequested = true;
+        }
+        ImGui::SetItemTooltip("Look at it in the Builder view (F)");
+        ImGui::BeginDisabled(!editable(session));
+        ImGui::SetCursorScreenPos(next);
         ImGui::PushFont(fonts.mono, theme::kCaptionSize);
         ImGui::TextColored(c::t3, "%s", path.c_str());
         ImGui::PopFont();
@@ -1013,7 +1059,8 @@ private:
                       entry != nullptr ? widgets::PillKind::Ok : widgets::PillKind::Warn);
         if (entry != nullptr && !entry->doc.empty()) {
             ImGui::SameLine(0.0F, px(4.0F));
-            widgets::Pill(entry->doc.c_str(), widgets::PillKind::Neutral);
+            widgets::Pill(docLabel(entry->doc).c_str(), widgets::PillKind::Neutral);
+            ImGui::SetItemTooltip("%s", entry->doc.c_str());
         }
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
         const std::string name = sensor.name;
@@ -1055,13 +1102,20 @@ private:
                                          rateDefault.c_str(), false, true)) {
                 change("update_rate", [&](Sensor& s) { s.updateRate = v->value_or(s.updateRate); });
             }
-            if (const auto v =
-                    numberRow("latency", sensor.latency, "s", 1.0, nullptr, true, true)) {
-                change("latency", [&](Sensor& s) { s.latency = *v; });
-            }
-            if (const auto v = numberRow("jitter", sensor.jitter, "s", 1.0, nullptr, true, true)) {
-                change("jitter", [&](Sensor& s) { s.jitter = *v; });
-            }
+            // Unset, they are the schema's default 0 (schemas/sensor: sensor:latency,
+            // sensor:jitter) and show it; typing that 0 back leaves the file without them.
+            const auto timing = [&](const char* what, const std::optional<double>& value,
+                                    std::optional<double> Sensor::* field) {
+                if (const auto v = numberRow(what, value.value_or(kDefaultTiming), "s", 1.0,
+                                             nullptr, true, true)) {
+                    const bool unchanged = !value && *v && **v == kDefaultTiming;
+                    if (!unchanged) {
+                        change(what, [&](Sensor& s) { s.*field = *v; });
+                    }
+                }
+            };
+            timing("latency", sensor.latency, &Sensor::latency);
+            timing("jitter", sensor.jitter, &Sensor::jitter);
             ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
         }
         if (entry != nullptr) {
@@ -1087,7 +1141,9 @@ private:
                 const std::string path =
                     topic.name.starts_with('/') ? topic.name : "/" + name + "/" + topic.name;
                 ImGui::PushID(path.c_str());
-                widgets::PropertyRow(first ? "ROS 2" : "", path.c_str(), topic.type.c_str());
+                widgets::PropertyRow(first ? "ROS 2" : "", path.c_str(),
+                                     std::string(rosTypeName(topic.type)).c_str());
+                ImGui::SetItemTooltip("%s", topic.type.c_str());
                 ImGui::PopID();
                 first = false;
             }

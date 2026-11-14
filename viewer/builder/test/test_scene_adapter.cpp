@@ -183,5 +183,30 @@ TEST(SceneAdapter, PreviewFramesLeaveUnreachedLinksAtTheIdentity) {
     EXPECT_NEAR(frames[1].position[2], -0.05, 1e-12);  // left_wheel at its joint
 }
 
+// The ground shadow (12-builder reference.png): the last prim, flat under the lowest point,
+// covering the footprint of the drawn shapes, and selecting nothing.
+TEST(SceneAdapter, ShadowIsTheFootprintUnderTheRobot) {
+    const Document d = rover();
+    const BuiltScene plain = buildStatics(d, 1);
+    const BuiltScene shaded = buildStatics(d, 2, BuildOptions{.shadow = true});
+    ASSERT_EQ(shaded.statics->prims.size(), plain.statics->prims.size() + 1);
+    for (std::size_t i = 0; i < plain.statics->prims.size(); ++i) {
+        EXPECT_EQ(shaded.primItem[i], plain.primItem[i]);  // the other prims keep their index
+    }
+    const PrimData& shadow = shaded.statics->prims.back();
+    EXPECT_EQ(shadow.typeName, "Shadow");
+    EXPECT_TRUE(shaded.primItem.back().empty());
+    const MeshData& mesh = shaded.statics->meshes[shadow.mesh];
+    // The wheel (radius 0.08 at z -0.05 under base_link) is the lowest: z -0.13, less the drop.
+    EXPECT_NEAR(mesh.aabb[2], -0.132, 1e-4);
+    EXPECT_NEAR(mesh.aabb[5], -0.132, 1e-4);
+    // The base box's footprint (0.5 x 0.36 about the origin) is inside it.
+    EXPECT_LE(mesh.aabb[0], -0.25 + 1e-6);
+    EXPECT_GE(mesh.aabb[3], 0.25 - 1e-6);
+    EXPECT_LE(mesh.aabb[1], -0.18 + 1e-6);
+    EXPECT_GE(mesh.aabb[4], 0.18 - 1e-6);
+    EXPECT_FALSE(mesh.indices.empty());
+}
+
 }  // namespace
 }  // namespace lagrange::viewer::builder

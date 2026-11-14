@@ -34,12 +34,12 @@ GOLDEN = HERE / "builder" / "golden" / "builder_input.urdf"
 
 # Where things are at --size 1600x1000 in the Builder's default layout (12-builder SPEC), with
 # builder/empty.urdf open (base_link only).
-ADD_MATERIAL = "168,932"  # Add: the material dropdown
-ADD_MATERIAL_PLA = "210,932"  # its "pla" row
-BOX_TILE = "40,862"
-MESH_TILE = "225,862"
-MESH_PATH = "400,927"  # Add → Mesh…: the path field
-ADD_MESH_LINK = "280,977"
+ADD_MATERIAL = "120,905"  # Add: the material dropdown (custom: half the row)
+ADD_MATERIAL_PLA = "160,932"  # its "PLA" row
+BOX_TILE = "40,835"
+MESH_TILE = "225,835"
+MESH_PATH = "400,920"  # Add → Mesh…: the path field
+ADD_MESH_LINK = "280,971"
 CHILD_JOINT_TEXT = "115,221"  # "fixed · box" on the new link's row: selects its joint
 CHILD_LINK_ROW = "80,221"
 REVOLUTE = "1425,272"  # Properties: the joint type's Segmented
@@ -184,7 +184,8 @@ def test_test_shows_the_test_layout(tmp_path):
     assert report["sim_time_ns"] > 0
     # SPEC state 4: Drive in front at the bottom right; the catalog behind it.
     assert "Drive" in report["windows"], report["windows"]
-    assert "Builder view" in report["windows"]
+    # SPEC state 4: the centre top is the normal server-fed Viewport (the same dock slot).
+    assert "Viewport" in report["windows"], report["windows"]
     assert not any(w.startswith("Sensor catalog") for w in report["windows"])
     # R7: nothing but the scene and the moving joints' positions stream from the test server (the
     # Joints panel reads them live, RFC 0016 §7.3); no sensor frames.

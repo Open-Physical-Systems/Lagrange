@@ -12,9 +12,10 @@
 namespace lagrange::viewer::builder {
 
 struct DensityPreset {
-    std::string_view name;    ///< "aluminium_6061", the thermal preset's name
-    double density;           ///< kg/m³
-    std::string_view source;  ///< as cited, for the menu's tooltip
+    std::string_view name;     ///< "aluminium_6061", the thermal preset's name
+    double density;            ///< kg/m³
+    std::string_view source;   ///< as cited, for the menu's tooltip
+    std::string_view label{};  ///< as the Add panel shows it ("PLA", reference.png)
 };
 
 /// In menu order. "custom" is not a preset: the panel asks for a number.

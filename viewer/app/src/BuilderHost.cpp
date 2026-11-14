@@ -56,6 +56,9 @@ constexpr double kUnknownRange = 1.0;
 /// Sensors that are not selected draw their reach only this far (m), so a 30 m lidar ring or a
 /// 20 m frustum does not cover the robot; the selected one draws to its full range (SPEC).
 constexpr double kUnselectedReach = 1.0;
+/// A camera that is not selected draws its frustum this far (m): a short box at the mount, as
+/// the reference image draws the camera, not lines running out of the view.
+constexpr double kUnselectedFrustum = 0.2;
 
 std::array<float, 4> rgba(const ImVec4& color, float alpha = 1.0F) {
     return {color.x, color.y, color.z, color.w * alpha};
@@ -289,8 +292,8 @@ void sensorReach(const Pen& pen, const builder::Sensor& sensor,
         return;
     }
     if (isCamera(sensor.type)) {
-        const double far =
-            std::min(limit, parameter(sensor, catalog, "clip/far").value_or(kUnknownRange));
+        const double far = std::min(std::isfinite(limit) ? kUnselectedFrustum : limit,
+                                    parameter(sensor, catalog, "clip/far").value_or(kUnknownRange));
         const double fov = parameter(sensor, catalog, "horizontal_fov").value_or(1.047);
         const double width = parameter(sensor, catalog, "image/width").value_or(4.0);
         const double height = parameter(sensor, catalog, "image/height").value_or(3.0);
@@ -303,6 +306,9 @@ void sensorReach(const Pen& pen, const builder::Sensor& sensor,
             pen.segment(corners.at(i), corners.at((i + 1) % 4));
         }
         return;
+    }
+    if (!std::isfinite(limit)) {
+        return;  // selected: the Builder view draws the beam, its arrow and its label
     }
     const double range =
         std::min(limit, parameter(sensor, catalog, "range/max").value_or(kUnknownRange));
@@ -1274,8 +1280,9 @@ std::shared_ptr<const SceneFrame> BuilderHost::frameToDraw(Camera& camera) {
         builtOpened_ = session_.opened;
         // The collision toggle draws collision geometry translucent (Addendum A).
         builtCollision_ = session_.view.collision;
-        built_ = builder::buildStatics(document, ++generation_,
-                                       builder::BuildOptions{.collision = builtCollision_});
+        built_ = builder::buildStatics(
+            document, ++generation_,
+            builder::BuildOptions{.collision = builtCollision_, .shadow = true});
     }
     if (rebuilt || !frame_ || session_.preview != posedPreview_) {
         posedPreview_ = session_.preview;
@@ -1305,7 +1312,8 @@ double BuilderHost::groundHeight() const {
         const SceneStatics& statics = *frame_->statics;
         for (std::size_t i = 0; i < statics.prims.size() && i < frame_->transforms.size(); ++i) {
             const PrimData& prim = statics.prims[i];
-            if (prim.mesh >= statics.meshes.size() || prim.typeName == "Sensor") {
+            if (prim.mesh >= statics.meshes.size() || prim.typeName == "Sensor" ||
+                prim.typeName == "Shadow") {
                 continue;
             }
             const std::array<float, 6>& box = statics.meshes[prim.mesh].aabb;
@@ -1339,6 +1347,7 @@ void BuilderHost::buildOverlays(const std::vector<builder::Frame>& links) {
         Axis,
         Collision,
         Sensors,
+        SensorOutline,
         Accent,
         Count
     };
@@ -1352,6 +1361,7 @@ void BuilderHost::buildOverlays(const std::vector<builder::Frame>& links) {
         rgba(widgets::domainColor("rigid_body")),
         rgba(c::t2, 0.6F),
         rgba(widgets::domainColor("sensors"), 0.45F),
+        rgba(widgets::domainColor("sensors")),
         rgba(c::accent)};
     for (std::size_t i = 0; i < overlays_.size(); ++i) {
         overlays_[i].color = colours.at(i);
@@ -1455,6 +1465,21 @@ void BuilderHost::buildOverlays(const std::vector<builder::Frame>& links) {
         const Pen pen{overlays_[sensorSelected ? Accent : Sensors], mount};
         sensorReach(pen, sensor, session_.catalog,
                     sensorSelected ? std::numeric_limits<double>::infinity() : kUnselectedReach);
+        // The marker's outline in the sensors colour over its dark body (the reference's
+        // lidar): a puck's rims and sides, a cube's edges.
+        if (!sensorSelected) {
+            const Pen outline{overlays_[SensorOutline], mount};
+            if (isLidar(sensor.type)) {
+                shapeWire(outline, builder::Shape{.kind = builder::Shape::Kind::Cylinder,
+                                                  .size = {builder::kLidarMarkerRadius,
+                                                           builder::kLidarMarkerHeight, 0.0}});
+            } else {
+                shapeWire(outline, builder::Shape{.kind = builder::Shape::Kind::Box,
+                                                  .size = {builder::kSensorMarkerSize,
+                                                           builder::kSensorMarkerSize,
+                                                           builder::kSensorMarkerSize}});
+            }
+        }
         if (sensorSelected) {
             Pen{overlays_[X], mount}.segment({0, 0, 0}, {kFrameAxisLength * 2, 0, 0});
             Pen{overlays_[Y], mount}.segment({0, 0, 0}, {0, kFrameAxisLength * 2, 0});
@@ -1465,17 +1490,7 @@ void BuilderHost::buildOverlays(const std::vector<builder::Frame>& links) {
                                                    builder::kSensorMarkerSize * 1.2}});
         }
     }
-    // The COM marker needs WP-A's robotMass (a stub until it lands: mass 0, nothing drawn).
-    if (view.com) {
-        const builder::MassProperties mass = builder::robotMass(document);
-        if (mass.mass > 0.0) {
-            const Pen pen{overlays_[Accent], builder::Frame{mass.com}};
-            constexpr double kComMark = 0.03;
-            pen.segment({-kComMark, 0, 0}, {kComMark, 0, 0});
-            pen.segment({0, -kComMark, 0}, {0, kComMark, 0});
-            pen.segment({0, 0, -kComMark}, {0, 0, kComMark});
-        }
-    }
+    // The COM marker is the Builder view's (a disc drawn over the image, as the reference).
 }
 
 }  // namespace lagrange::viewer
