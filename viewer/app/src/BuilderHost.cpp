@@ -4,6 +4,7 @@
 #include "lagrange/viewer/builder/Collision.hpp"
 #include "lagrange/viewer/builder/Kinematics.hpp"
 #include "lagrange/viewer/builder/MeshShapes.hpp"
+#include "lagrange/viewer/builder/Overlay.hpp"
 #include "lagrange/viewer/builder/SensorCatalog.hpp"
 #include "lagrange/viewer/builder/Urdf.hpp"
 #include "lagrange/viewer/builder/Validation.hpp"
@@ -556,6 +557,17 @@ std::filesystem::path BuilderHost::writeCopy(const std::string& name, std::strin
     return error.empty() ? copy : std::filesystem::path{};
 }
 
+std::filesystem::path BuilderHost::writeOverlayCopy(const std::string& name, std::string& error) {
+    if (!builder::hasOverlay(session_.document())) {
+        return {};
+    }
+    builder::OverlayWriteOptions options;
+    options.absoluteAssets = true;
+    const std::filesystem::path copy = builder::overlayPathFor(runtimeDirectory() / name);
+    error = builder::saveAtomically(copy, builder::writeOverlay(session_.document(), options));
+    return error.empty() ? copy : std::filesystem::path{};
+}
+
 // --- files ----------------------------------------------------------------------------------
 
 bool BuilderHost::save(const std::filesystem::path& target) {
@@ -575,6 +587,28 @@ bool BuilderHost::save(const std::filesystem::path& target) {
     if (!error.empty()) {
         fileProblem(builder::Level::Error, "", "Save: " + error);
         return false;
+    }
+    // RFC 0016 phase 3: the overlay beside it, when the robot has one or the file is there (an
+    // overlay emptied in the builder is written empty, not left stale).
+    const std::filesystem::path overlay = builder::overlayPathFor(path);
+    if (overlay.lexically_normal() != unreadOverlay_) {
+        std::string text = builder::writeOverlay(session_.document(), {path});
+        if (text.empty() && std::filesystem::exists(overlay, ec)) {
+            text = "# The overlay of " + session_.document().robot +
+                   ": no power system or overlay sensors (the robot builder).\n"
+                   "schema_version: 1\napply: []\n";
+        }
+        if (!text.empty()) {
+            if (const std::string failed = builder::saveAtomically(overlay, text);
+                !failed.empty()) {
+                fileProblem(builder::Level::Error, "", "Save the overlay: " + failed);
+                return false;
+            }
+        }
+    } else {
+        fileProblem(builder::Level::Warning, "",
+                    "Save: " + overlay.filename().string() +
+                        " did not read when opened, so it was left as it is");
     }
     session_.path = path.lexically_normal();
     session_.history.markSaved();
@@ -611,9 +645,40 @@ bool BuilderHost::openText(const std::string& text, const std::filesystem::path&
                         read.error);
         return false;
     }
+    // RFC 0016 phase 3: the overlay beside a URDF (formats.md §9) belongs to the document.
+    unreadOverlay_.clear();
+    std::vector<std::string> overlayNotes;
+    const std::filesystem::path overlay = builder::overlayPathFor(from);
+    std::error_code ec;
+    if (from.extension() == ".urdf" && std::filesystem::exists(overlay, ec)) {
+        std::string error;
+        const std::string yaml = readFile(overlay, error);
+        builder::OverlayReadResult overlayRead;
+        if (error.empty()) {
+            overlayRead = builder::readOverlay(yaml, *read.document, from.parent_path());
+            error = overlayRead.error;
+        }
+        if (!error.empty()) {
+            unreadOverlay_ = path.empty() ? std::filesystem::path{}
+                                          : builder::overlayPathFor(path).lexically_normal();
+            overlayNotes.push_back(
+                "!" + overlay.filename().string() +
+                " did not read, so its power system and sensors are not here: " + error);
+        }
+        for (const std::string& note : overlayRead.notes) {
+            overlayNotes.push_back(overlay.filename().string() + ": " + note);
+        }
+    }
     replaceDocument(std::move(*read.document), path, label);
     for (const std::string& note : read.notes) {
         fileProblem(builder::Level::Hint, "", from.filename().string() + ": " + note);
+    }
+    for (const std::string& note : overlayNotes) {
+        if (note.starts_with('!')) {
+            fileProblem(builder::Level::Error, "", "Open " + note.substr(1));
+        } else {
+            fileProblem(builder::Level::Hint, "", note);
+        }
     }
     return true;
 }
@@ -701,6 +766,16 @@ void BuilderHost::autosave(double now) {
         !error.empty()) {
         fileProblem(builder::Level::Warning, "", "Autosave: " + error);
     }
+    if (builder::hasOverlay(session_.document())) {
+        builder::OverlayWriteOptions overlayOptions;
+        overlayOptions.absoluteAssets = true;
+        if (const std::string error =
+                builder::saveAtomically(builder::overlayPathFor(path),
+                                        builder::writeOverlay(session_.document(), overlayOptions));
+            !error.empty()) {
+            fileProblem(builder::Level::Warning, "", "Autosave: " + error);
+        }
+    }
 }
 
 // --- Export USD, Check loads ------------------------------------------------------------------
@@ -733,8 +808,15 @@ void BuilderHost::exportUsd() {
     auto job = std::make_unique<Job>();
     job->kind = Job::Kind::Export;
     job->output = std::filesystem::path(session_.path).replace_extension(".usda");
-    error = job->process.start({importer.string(), copy.string(), job->output.string()},
-                               runtimeDirectory() / "export.log");
+    std::vector<std::string> argv{importer.string(), copy.string(), job->output.string()};
+    if (const std::filesystem::path overlay = writeOverlayCopy("export.urdf", error);
+        !overlay.empty()) {
+        argv.insert(argv.end(), {"--overlay", overlay.string()});
+    } else if (!error.empty()) {
+        fileProblem(builder::Level::Error, "", "Export USD: " + error);
+        return;
+    }
+    error = job->process.start(argv, runtimeDirectory() / "export.log");
     if (!error.empty()) {
         fileProblem(builder::Level::Error, "", "Export USD: " + error);
         return;
@@ -759,7 +841,15 @@ void BuilderHost::checkLoads() {
     }
     auto job = std::make_unique<Job>();
     job->kind = Job::Kind::Check;
-    error = job->process.start({checker.string(), copy.string()}, runtimeDirectory() / "check.log");
+    std::vector<std::string> argv{checker.string(), copy.string()};
+    if (const std::filesystem::path overlay = writeOverlayCopy("check.urdf", error);
+        !overlay.empty()) {
+        argv.insert(argv.end(), {"--overlay", overlay.string()});
+    } else if (!error.empty()) {
+        fileProblem(builder::Level::Error, "", "Check loads: " + error);
+        return;
+    }
+    error = job->process.start(argv, runtimeDirectory() / "check.log");
     if (!error.empty()) {
         fileProblem(builder::Level::Error, "", "Check loads: " + error);
         return;
@@ -893,6 +983,11 @@ void BuilderHost::startTest(double now) {
     builder::TestRequest request;
     request.program = server.string();
     request.urdf = urdf;
+    request.overlay = writeOverlayCopy(urdf.filename().string(), error);
+    if (request.overlay.empty() && !error.empty()) {
+        session_.problems.loader.push_back({builder::Level::Warning, "", "Test: " + error});
+        return;
+    }
     request.world = session_.testWorld.empty() ? "none" : session_.testWorld;
     // Plan decision 4: a socket named by the viewer's pid, never by the robot (sun_path).
     request.endpoint =
@@ -951,7 +1046,14 @@ void BuilderHost::startTestInRun(double now) {
             {builder::Level::Warning, "", "Test: " + (error.empty() ? "no URDF written" : error)});
         return;
     }
-    importRequest_ = client_.importRobotText(text);
+    // RFC 0016 phase 3: the overlay as text too (ImportRobot.overlay_content).
+    std::string overlay;
+    if (builder::hasOverlay(session_.document())) {
+        builder::OverlayWriteOptions options;
+        options.absoluteAssets = true;
+        overlay = builder::writeOverlay(session_.document(), options);
+    }
+    importRequest_ = client_.importRobotText(text, overlay);
     inRun_ = true;
     startedAt_ = now;
     logReadAt_ = 0.0;

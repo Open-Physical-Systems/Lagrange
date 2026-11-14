@@ -233,6 +233,10 @@ std::vector<std::string> TestServer::arguments(const TestRequest& request) {
                                   "--joint-control",
                                   "--listen",
                                   request.endpoint};
+    if (!request.overlay.empty()) {
+        args.emplace_back("--overlay");
+        args.push_back(request.overlay.string());
+    }
     if (request.rosDomain.empty()) {
         args.emplace_back("--no-ros");
     }

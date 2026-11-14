@@ -74,6 +74,13 @@ TEST(TestServer, ArgumentsAreTheRfcCommandLine) {
     request.rosDomain = "69";
     EXPECT_EQ(TestServer::arguments(request).back(), "unix:/run/user/1/lagrange/builder-7.sock");
     EXPECT_EQ(TestServer::environment(request), std::vector<std::string>{"ROS_DOMAIN_ID=69"});
+    // RFC 0016 phase 3: the overlay's test copy goes with --overlay.
+    request.overlay = "/run/user/1/lagrange/builder/7/rover.overlay.yaml";
+    const std::vector<std::string> args = TestServer::arguments(request);
+    ASSERT_GE(args.size(), 2U);
+    EXPECT_EQ(args[args.size() - 2], "--overlay");
+    EXPECT_EQ(args.back(), "/run/user/1/lagrange/builder/7/rover.overlay.yaml");
+    request.overlay.clear();
     TestServer server;
     request.program.clear();
     EXPECT_EQ(server.start(request), "lagrange_server is not installed");

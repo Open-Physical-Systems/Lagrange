@@ -137,15 +137,15 @@ private:
         const bool hovered =
             ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
             ImGui::IsMouseHoveringRect(min, ImVec2(min.x + width, min.y + height));
-        if (editable(session) && !entry.overlayOnly && ImGui::BeginDragDropSource()) {
+        if (editable(session) && ImGui::BeginDragDropSource()) {
             ImGui::SetDragDropPayload(kDragCatalog, entry.name.c_str(), entry.name.size() + 1);
             widgets::Caption("a %s sensor", entry.name.c_str());
             ImGui::EndDragDropSource();
         }
         if (entry.overlayOnly) {
             ImGui::SetItemTooltip(
-                "%s\n%s\nNeeds the overlay file, which the builder writes "
-                "from phase 3 (RFC 0016).",
+                "%s\n%s\nWritten to the overlay file beside the URDF "
+                "(<robot>.overlay.yaml), at its link's origin.",
                 entry.summary.c_str(), entry.doc.c_str());
         } else if (!entry.doc.empty() || !entry.summary.empty()) {
             ImGui::SetItemTooltip("%s\n%s", entry.summary.c_str(), entry.doc.c_str());
@@ -170,7 +170,7 @@ private:
             });
         float right = min.x + width - px(6.0F);
         bool add = false;
-        if (hovered && editable(session) && !target.empty() && !entry.overlayOnly) {
+        if (hovered && editable(session) && !target.empty()) {
             const float button = widgets::ButtonWidth("Add");
             ImGui::SetCursorScreenPos(ImVec2(right - button, min.y));
             add = widgets::Button("Add");

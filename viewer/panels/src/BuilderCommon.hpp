@@ -86,6 +86,12 @@ void addSensorOn(BuilderSession& session, const std::string& link, const std::st
 /// Deletes the selected link (with its subtree), joint (with its child) or sensor: one step.
 void deleteSelection(BuilderSession& session);
 
+/// The power-system forms (RFC 0016 phase 3, BuilderPower.cpp): the robot's batteries and
+/// buses, and a joint's motor, in Properties. Each may commit; callers use no reference into the
+/// document after them.
+void robotPowerSections(BuilderSession& session);
+void jointMotorSection(BuilderSession& session, const std::string& joint);
+
 // The panels, one file each (BuilderTree.cpp, BuilderAdd.cpp, ...).
 [[nodiscard]] std::unique_ptr<Panel> createRobotPanel();
 [[nodiscard]] std::unique_ptr<Panel> createFilesPanel();

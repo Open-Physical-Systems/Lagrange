@@ -79,7 +79,8 @@ kinds (rangefinder, bumper, cliff sensor and the others of [Sensors](sensors.md)
 groups, with any kinds from installed plugins'
 catalog files after them. Filter by name; hover a row and press **Add** to put it on the selected
 link, or drag it onto a link. The URDF and Overlay switches show what URDF holds and what needs
-the overlay file (GNSS, magnetometer, barometer and radar, not built yet). **Other kind…** adds a
+the overlay file (GNSS, magnetometer, barometer and radar: see [Power system](#power-system)).
+**Other kind…** adds a
 sensor of a kind the catalog does not know, with free keys and values.
 
 The sensor's Properties: its mount (link, translate, rotate), timing (`update_rate`, `latency`,
@@ -88,6 +89,42 @@ different from its default has an accent border and its default beside it; **Res
 defaults** puts them all back. Output lists the signals and the ROS 2 topic the sensor will have.
 
 ![A rangefinder from the catalog on the new link, its range set to 20 m](../imgs/builder-catalog.png)
+
+## Power system
+
+URDF has no place for a battery, a bus or a motor, nor for GNSS, magnetometer, barometer and
+radar. The builder keeps them in the robot's **overlay file**, `<robot>.overlay.yaml` beside the
+URDF ([formats §9](../design/formats.md#9-importers), as the sample robots have them), which
+`lagrange_server --overlay` and `lagrange_import --overlay` apply.
+
+- **Robot → Power** (select the robot row): **Add bus** and **Add battery**, each from the
+  sample AMR's or the sample quadcopter's values or with empty fields. A bus has its trips
+  (`undervoltageTrip`, `overvoltageTrip`, V) and capacitance; a battery its cells, capacity (C),
+  open-circuit curve (`ocvSoc`, `ocvVoltage`, per cell), resistances, cut-off and charge limit,
+  and **output to**, the bus it feeds. The fields are the electrical schema's
+  (`schemas/electrical/schema.usda`), with its units; a schema default shows beside a value that
+  differs from it, and a field the loader requires says *required* while empty.
+- **Joint → Motor**: **Add a motor** on a revolute, continuous or prismatic joint (a wheel drive or
+  a rotor motor from the samples, or empty), the **bus** it draws from, and its winding, torque
+  constant, gear and current limit. The motor is named `<joint>_motor`; the Motor section lists
+  the signals it will have (`motor/<name>/current_q`, `bus_current`, `joint/<joint>/torque`).
+- **GNSS, magnetometer, barometer, radar** come from the catalog like any sensor (the Overlay
+  switch lists them) and are edited in the same form. The overlay has no mount pose: they sit at
+  their link's origin, so put them on a link placed where they are.
+
+Problems checks what the loader would refuse: a required value missing, a value out of the
+schema's range (a negative resistance, an efficiency over 1), an `ocvSoc` that does not ascend or
+is not as long as `ocvVoltage`, a motor on a fixed joint or a second motor on a joint, a motor or
+battery without a bus, and a bus that no battery feeds. **Test** runs the server with the overlay
+(`--overlay`), so the run has `bus/<bus>/voltage`, `battery/<battery>/soc` and the motors'
+currents in Signals; *Into the connected run* sends it with the robot
+(`ImportRobot.overlay_content`), where a passive robot's names carry its own as a prefix
+(`bus/rover_mk1_dc_48v/voltage`). Save writes the overlay beside the URDF and Open reads it
+back. Anything else an overlay holds (thermal nodes, rotors, wheels, loads) is kept as written
+and listed under *Overlay, kept as written*; comments after the file's first lines are not kept
+(the builder writes each value's unit as its comment).
+
+![rover_mk1 with a 48 V bus, an LFP battery and a motor on each wheel joint](../imgs/builder-power.png)
 
 ## Meshes and how a link collides
 
@@ -145,8 +182,8 @@ the template stays as it is.
   connected run* (RFC 0016 §7.2) are greyed.
 - Joint sliders driving the test robot: the Joints panel shows the live positions only once a
   joint-command message exists (RFC 0016 §7.3).
-- Motors, battery and bus, and the overlay-only sensors (GNSS, magnetometer, barometer, radar):
-  RFC 0016 phase 3.
+- Loads, converters, branches and thermal nodes in the overlay: kept as written, not edited
+  (the Power section edits batteries, buses and motors).
 - Opening USD or SDFormat robots (phase 4); the builder opens URDF and xacro.
 - Free-form modelling: the builder places primitives and meshes, it is not a CAD tool.
 

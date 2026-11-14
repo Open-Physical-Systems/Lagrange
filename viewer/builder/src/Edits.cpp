@@ -1,4 +1,5 @@
 #include "lagrange/viewer/builder/Edits.hpp"
+#include "lagrange/viewer/builder/Overlay.hpp"
 #include "lagrange/viewer/builder/Validation.hpp"
 
 #include <algorithm>
@@ -287,10 +288,23 @@ bool removeLink(Document& document, std::string_view link) {
         gone.insert(std::move(name));
     }
     std::erase_if(document.links, [&](const Link& l) { return gone.contains(l.name); });
+    const std::vector<Joint> before = document.joints;
     std::erase_if(document.joints, [&](const Joint& j) {
         return gone.contains(j.child) || gone.contains(j.parent);
     });
+    std::vector<std::string> names(gone.begin(), gone.end());
+    for (const Joint& j : before) {
+        if (gone.contains(j.child) || gone.contains(j.parent)) {
+            names.push_back(j.name);
+        }
+    }
+    for (const Sensor& s : document.sensors) {
+        if (gone.contains(s.link)) {
+            names.push_back(s.name);
+        }
+    }
     std::erase_if(document.sensors, [&](const Sensor& s) { return gone.contains(s.link); });
+    removeFromOverlay(document, names);  // their motors and other overlay entries go too
     return true;
 }
 
@@ -307,7 +321,12 @@ bool removeJoint(Document& document, std::string_view joint) {
 }
 
 bool removeSensor(Document& document, std::string_view sensor) {
-    return std::erase_if(document.sensors, [&](const Sensor& s) { return s.name == sensor; }) != 0;
+    const std::string name(sensor);
+    if (std::erase_if(document.sensors, [&](const Sensor& s) { return s.name == sensor; }) == 0) {
+        return false;
+    }
+    removeFromOverlay(document, std::span<const std::string>(&name, 1));
+    return true;
 }
 
 std::string rename(Document& document, ItemKind kind, std::string_view from, std::string_view to) {
@@ -332,6 +351,7 @@ std::string rename(Document& document, ItemKind kind, std::string_view from, std
                 return "a link is already named " + name;
             }
             link->name = name;
+            renameInOverlay(document, old, name);
             for (Joint& joint : document.joints) {
                 if (joint.parent == old) {
                     joint.parent = name;
@@ -356,6 +376,7 @@ std::string rename(Document& document, ItemKind kind, std::string_view from, std
                 return "a joint is already named " + name;
             }
             joint->name = name;
+            renameInOverlay(document, old, name);
             for (Joint& other : document.joints) {
                 if (other.mimic && std::get<0>(*other.mimic) == old) {
                     std::get<0>(*other.mimic) = name;
@@ -372,6 +393,7 @@ std::string rename(Document& document, ItemKind kind, std::string_view from, std
                 return "a sensor is already named " + name;
             }
             sensor->name = name;
+            renameInOverlay(document, old, name);
             return {};
         }
     }

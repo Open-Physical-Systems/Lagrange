@@ -47,6 +47,15 @@ struct Problem {
 [[nodiscard]] std::vector<Problem> checkSensorParams(const Sensor& sensor,
                                                      const CatalogEntry& entry);
 
+/// The overlay's rules (RFC 0016 phase 3; the stage loader's, modules/electrical/network): a
+/// form's required values, numbers within the schema's range, an ascending ocvSoc as long as
+/// ocvVoltage, a bus's overvoltage above its undervoltage; a motor on a joint that exists, moves
+/// (not fixed) and has no other motor, drawing from a bus of the overlay; a battery feeding a
+/// bus; a bus fed by a battery or a converter; an entry's prim naming an item of the document; an
+/// overlay sensor at its link's origin (the overlay has no mount pose). Items: the joint a motor
+/// drives, else `power/<name>` for a battery or bus. validate() includes these.
+[[nodiscard]] std::vector<Problem> checkOverlay(const Document& document);
+
 /// The server's own name rule (`validName`, server/src/Server.cpp): ASCII letters, digits and
 /// '_', not empty, not starting with a digit. Applied to the robot, links, joints and sensors
 /// so that a robot that saves also spawns.

@@ -146,6 +146,20 @@ one undo step; typing in a field is one step when it is committed (Enter, Tab or
   parameters are dropdowns, text parameters plain fields, lists a mono text field. Then the
   catalog's description (t3, 11 px), Output (the signals and ROS topic the sensor will have,
   read-only, from the catalog), and Faults (collapsed; the sensor-fault parameters).
+- **Robot** (phase 3, RFC 0016): Parts, Kept as written, then **Power** (`SectionHeader` with
+  the electrical domain dot, meta `overlay · N battery · N bus · N motors`): **Add bus** and
+  **Add battery** (`.btn` with a menu: the sample robots' values or empty fields), then one
+  section per bus (prim, fed by, motors, its fields) and per battery (prim, **output to** a bus
+  dropdown, its fields and its port's), each with **Remove** (ghost); then *Overlay, kept as
+  written* (collapsed, read-only rows). Fields: the schema attribute's last name in mono 11 px,
+  its unit (Ω, V, C, A, F, H, N·m/A), the default in the unit slot when a value differs
+  (`accentBorder`), "required" while a required one is empty; a value out of range keeps an
+  `err` outline and is a Problem.
+- **Joint → Motor** (phase 3): the same `SectionHeader`; none: a caption and **Add a motor**
+  (disabled with a tooltip on a fixed joint); with one: its prim, **bus** dropdown, the fields,
+  read-only rows of its signals, and **Remove motor**.
+- **Overlay sensors** (GNSS, magnetometer, barometer, radar): the sensor form with the pill
+  `<type> · overlay file`; Mount shows the link only, with a caption (the overlay has no pose).
 - History tab: the undo stack, newest at the top, one row per step ("Set range/max 12 → 20 m",
   "Add link caster"); clicking a row goes back to it.
 

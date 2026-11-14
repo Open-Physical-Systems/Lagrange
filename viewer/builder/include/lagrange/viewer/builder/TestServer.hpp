@@ -64,9 +64,12 @@ private:
 struct TestRequest {
     std::string program;         ///< absolute path of lagrange_server (the Launcher's lookup)
     std::filesystem::path urdf;  ///< the written test copy (absolute meshes)
-    std::string world;           ///< "none", or a world file path
-    std::string endpoint;        ///< "unix:<path>", plan decision 4
-    std::filesystem::path log;   ///< stdout and stderr of the server go here (truncated)
+    /// The overlay's test copy (RFC 0016 phase 3: power system, overlay-only sensors); empty:
+    /// the robot has none.
+    std::filesystem::path overlay;
+    std::string world;          ///< "none", or a world file path
+    std::string endpoint;       ///< "unix:<path>", plan decision 4
+    std::filesystem::path log;  ///< stdout and stderr of the server go here (truncated)
     /// ROS for the test server (plan R8): a ROS_DOMAIN_ID of its own ("69"), so a teleop on the
     /// user's domain drives only the run it was meant for; empty: `--no-ros`.
     std::string rosDomain;
@@ -77,7 +80,8 @@ public:
     using State = ChildProcess::State;
     static constexpr double kStopGraceS = ChildProcess::kStopGraceS;
 
-    /// `program --robot URDF --world WORLD --joint-control --listen ENDPOINT [--no-ros]`.
+    /// `program --robot URDF --world WORLD --joint-control --listen ENDPOINT [--overlay FILE]
+    /// [--no-ros]`.
     [[nodiscard]] static std::vector<std::string> arguments(const TestRequest& request);
     /// The environment the server gets on top of the viewer's: ROS_DOMAIN_ID when it has ROS.
     [[nodiscard]] static std::vector<std::string> environment(const TestRequest& request);

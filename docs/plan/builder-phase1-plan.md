@@ -551,3 +551,27 @@ RFC 0016 Addendum A (meshes and the collision choice) changes the WP0 interfaces
 - `buildStatics` takes `BuildOptions` (draw collision geometry translucent) and `BuiltScene`
   gains `primShape` (which shape a prim draws), for the gizmos of choice 4.
 - `BuilderSession` gains the split request and status, and `recentMeshes`.
+
+## 9. Note: phase 3 changes to the §3 structs and interfaces (2026-11-15)
+
+RFC 0016 phase 3 (motors, battery, bus and the overlay-only sensors, written to the overlay
+YAML) changes the WP0 interfaces by addition:
+
+- `Document` gains `Overlay overlay` (appended): the overlay file as it says it, entries of
+  schema instances by prim (`prim`, `create_child`, `create`), values as typed, so any overlay
+  (thermal nodes, rotors, wheels) reads and writes back the same. An entry may instead be a
+  placeholder (`sensor`) that keeps an overlay-only sensor's place in the file.
+- GNSS, magnetometer, barometer and radar stay `Document::sensors` (the tree, the catalog's form
+  and validation treat them as any sensor); `writeUrdf` leaves them out and `writeOverlay` writes
+  them as `create_child` entries with `SensorAPI_1` and their schema. The overlay has no pose: they
+  sit at their link's origin (a warning otherwise).
+- New header `Overlay.hpp`: `readOverlay`, `writeOverlay`, `sameOverlay` (the round-trip tests),
+  the forms' fields of `BatteryAPI_1`, `ElectricalBusAPI_1`, `ElectricalMotorAPI_1` and `PortAPI_1`
+  (checked against `schemas/electrical/schema.usda` by `test_overlay`), presets from the sample
+  overlays, and the edits (`addBus`, `addBattery`, `addMotor`, `removeEntry`; renames and removals
+  of links, joints and sensors follow into the overlay). `Validation.hpp` gains `checkOverlay`,
+  which `validate` includes.
+- `TestRequest` gains `overlay` (`--overlay FILE`); Test into the connected run sends the text as
+  `ImportRobot.overlay_content`; Save and Open read and write `<robot>.overlay.yaml` beside the URDF.
+- UI: a **Power** section in the robot's Properties (batteries, buses, other entries kept as
+  written) and a **Motor** section in a joint's (12-builder SPEC "Properties", added there).

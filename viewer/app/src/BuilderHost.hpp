@@ -118,6 +118,9 @@ private:
     /// The document written for a tool (absolute meshes) in the runtime folder; empty and
     /// `error` set when it could not be written.
     std::filesystem::path writeCopy(const std::string& name, std::string& error);
+    /// The overlay written for a tool beside such a copy (absolute assets; RFC 0016 phase 3):
+    /// `<stem of name>.overlay.yaml`; empty when the document needs none or it failed (`error`).
+    std::filesystem::path writeOverlayCopy(const std::string& name, std::string& error);
     /// $XDG_RUNTIME_DIR/lagrange/builder/<pid>/ (plan decision 4), made on first use.
     std::filesystem::path runtimeDirectory();
     [[nodiscard]] std::filesystem::path program(std::string_view name) const;
@@ -148,6 +151,9 @@ private:
     double startedAt_{0.0};
     double logReadAt_{0.0};
     std::uint64_t autosavedRevision_{0};
+    /// An overlay beside the opened URDF that did not read: Save leaves it as it is, rather
+    /// than writing the document's (empty) overlay over it.
+    std::filesystem::path unreadOverlay_;
     std::uint64_t validatedOpened_{0};
     std::uint64_t builtOpened_{0};
 

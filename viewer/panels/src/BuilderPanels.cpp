@@ -8,6 +8,7 @@
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/Widgets.hpp"
 #include "lagrange/viewer/builder/Materials.hpp"
+#include "lagrange/viewer/builder/Overlay.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
@@ -119,6 +120,11 @@ bool selectByName(BuilderSession& session, std::string_view item) {
         select(session, Kind::Joint, std::string(item));
     } else if (builder::findSensor(document, item) != nullptr) {
         select(session, Kind::Sensor, std::string(item));
+    } else if (std::ranges::any_of(document.overlay.entries, [&](const builder::OverlayEntry& e) {
+                   return builder::entryPrim(e) == item;
+               })) {
+        // A battery or bus of the overlay (RFC 0016 phase 3): its form is the robot's Power.
+        select(session, Kind::Robot, {});
     } else {
         return false;
     }

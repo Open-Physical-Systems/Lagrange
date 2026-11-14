@@ -9,6 +9,7 @@
 #include "lagrange/viewer/SceneRenderer.hpp"
 #include "lagrange/viewer/ViewerClient.hpp"
 #include "lagrange/viewer/builder/Gizmo.hpp"
+#include "lagrange/viewer/builder/Overlay.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
@@ -1407,8 +1408,34 @@ public:
             }
             return "{" + out + "}";
         };
+        // RFC 0016 phase 3: the overlay's power system, and the run's electrical signals while
+        // testing (bus/, battery/, motor/ names from the signal catalog).
+        std::string power;
+        for (const std::string_view schema :
+             {builder::kBusSchema, builder::kBatterySchema, builder::kMotorSchema}) {
+            std::string names;
+            for (const std::size_t i : builder::entriesWith(document, schema)) {
+                names += std::string(names.empty() ? "" : ", ") + "\"" +
+                         jsonEscape(builder::entryName(document.overlay.entries[i])) + "\"";
+            }
+            power += std::string(power.empty() ? "" : ", ") + "\"" + std::string(schema) + "\": [" +
+                     names + "]";
+        }
+        std::string electrical;
+        if (builderSession_.mode == BuilderSession::Mode::Testing) {
+            if (const auto catalog = client_.catalog()) {
+                for (const SignalInfo& info : catalog->signals) {
+                    if (info.name.starts_with("bus/") || info.name.starts_with("battery/") ||
+                        info.name.starts_with("motor/")) {
+                        electrical += std::string(electrical.empty() ? "" : ", ") + "\"" +
+                                      jsonEscape(info.name) + "\"";
+                    }
+                }
+            }
+        }
         const BuilderSession::Mode mode = builderSession_.mode;
-        return text + std::string("\"live_joints\": ") + values(builderSession_.liveJoints) +
+        return text + std::string("\"overlay\": {") + power + "}, \"electrical_signals\": [" +
+               electrical + "], \"live_joints\": " + values(builderSession_.liveJoints) +
                ", \"joint_targets\": " + values(builderSession_.jointTargets) +
                ", \"joint_drive_error\": \"" + jsonEscape(builderSession_.jointDriveError) +
                "\", \"selected\": \"" + jsonEscape(builderSession_.selection.name) +

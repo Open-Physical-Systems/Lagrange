@@ -9,6 +9,7 @@
 #include "lagrange/viewer/builder/MassProperties.hpp"
 #include "lagrange/viewer/builder/Materials.hpp"
 #include "lagrange/viewer/builder/MeshShapes.hpp"
+#include "lagrange/viewer/builder/Overlay.hpp"
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
@@ -319,6 +320,7 @@ private:
                                  "From the links' shapes and densities (RFC 0016 §4)");
         }
         keptXml(document.keptXml);
+        robotPowerSections(session);  // last: it may replace the document
         ImGui::Dummy(ImVec2(0.0F, px(6.0F)));
         widgets::Caption("Select a link, joint or sensor in the tree to edit it.");
     }
@@ -1042,6 +1044,7 @@ private:
             ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
         }
         keptXml(joint.keptXml);
+        jointMotorSection(session, name);  // last: it may replace the document
     }
 
     // --- sensor ---------------------------------------------------------------------------
@@ -1051,10 +1054,11 @@ private:
         const builder::CatalogEntry* entry = session.catalog.find(sensor.type);
         header(session, widgets::Icon::Sensors, sensor.name, "sensor",
                treePath(document, sensor.link) + " / " + sensor.name, builder::ItemKind::Sensor);
-        const std::string kindPill =
-            sensor.type + (entry == nullptr
-                               ? " · not in the catalog"
-                               : (entry->builtinType ? " · built-in type" : " · built-in kind"));
+        const bool overlay = builder::isOverlaySensor(sensor.type);
+        const std::string kindPill = sensor.type + (entry == nullptr     ? " · not in the catalog"
+                                                    : overlay            ? " · overlay file"
+                                                    : entry->builtinType ? " · built-in type"
+                                                                         : " · built-in kind");
         widgets::Pill(kindPill.c_str(),
                       entry != nullptr ? widgets::PillKind::Ok : widgets::PillKind::Warn);
         if (entry != nullptr && !entry->doc.empty()) {
@@ -1086,9 +1090,19 @@ private:
                 }
                 ImGui::EndPopup();
             }
-            builder::Pose origin = sensor.origin;
-            if (poseRows(origin, true)) {
-                change("mount", [&](Sensor& s) { s.origin = origin; });
+            if (overlay) {
+                // RFC 0016 phase 3: an overlay's create_child has no pose (formats.md §9).
+                ImGui::PushTextWrapPos(0.0F);
+                widgets::Caption(
+                    "At the link's origin: the overlay file, where %s is written, "
+                    "has no mount pose. Put it on a link placed where it sits.",
+                    sensor.type.c_str());
+                ImGui::PopTextWrapPos();
+            } else {
+                builder::Pose origin = sensor.origin;
+                if (poseRows(origin, true)) {
+                    change("mount", [&](Sensor& s) { s.origin = origin; });
+                }
             }
             ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
         }
@@ -1206,7 +1220,10 @@ private:
         std::string parent;
         std::vector<std::string> loadedErrors;  // values in the file the form would refuse
         for (const builder::CatalogParam& param : entry.params) {
-            const std::size_t slash = nested ? param.path.rfind('/') : std::string::npos;
+            // An overlay sensor's parameters are USD attributes ("sensor:gnss:verticalNoiseStd"):
+            // shown under their namespace, as paths are under their parent.
+            const char separator = builder::isOverlaySensor(sensor.type) ? ':' : '/';
+            const std::size_t slash = nested ? param.path.rfind(separator) : std::string::npos;
             const std::string label =
                 slash == std::string::npos ? param.path : param.path.substr(slash + 1);
             const std::string under =
@@ -1216,7 +1233,7 @@ private:
                 if (!under.empty()) {
                     ImGui::Dummy(ImVec2(0.0F, px(2.0F)));
                     ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
-                    ImGui::TextColored(c::t3, "%s/", under.c_str());
+                    ImGui::TextColored(c::t3, "%s%c", under.c_str(), separator);
                     ImGui::PopFont();
                 }
             }
