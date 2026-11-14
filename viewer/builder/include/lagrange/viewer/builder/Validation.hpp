@@ -13,6 +13,7 @@
 namespace lagrange::viewer::builder {
 
 class SensorCatalog;
+struct CatalogEntry;
 
 enum class Level {
     Error,    ///< Test is refused while one exists (Save still works)
@@ -37,6 +38,14 @@ struct Problem {
 /// Errors first, then warnings, then hints; within a level in document order.
 [[nodiscard]] std::vector<Problem> validate(const Document& document, const SensorCatalog* catalog,
                                             const std::filesystem::path& meshBase);
+
+/// The catalog rules for one sensor against its entry: every parameter is one the entry lists
+/// (a warning otherwise), parses as its type (Number, Int, Bool "true"/"false"/"1"/"0", Enum one
+/// of its options; Text and List are free text) and lies within its min and max. validate()
+/// applies it to each sensor whose type the catalog finds; the Properties form can use it for
+/// one sensor. Added by WP-A (not in the WP0 interface list), additive.
+[[nodiscard]] std::vector<Problem> checkSensorParams(const Sensor& sensor,
+                                                     const CatalogEntry& entry);
 
 /// The server's own name rule (`validName`, server/src/Server.cpp): ASCII letters, digits and
 /// '_', not empty, not starting with a digit. Applied to the robot, links, joints and sensors
