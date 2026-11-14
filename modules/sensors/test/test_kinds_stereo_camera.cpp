@@ -100,6 +100,26 @@ TEST(StereoCamera, RangeLimitsAndOcclusionsFollowRep118) {
     EXPECT_NEAR(q, std::round(q), 1e-3);
 }
 
+TEST(StereoCamera, NoiseNeverCarriesADepthPastItsRange) {
+    // Sensors QA F4: at 9.9 m σ_z is 1.96 m; a reading drawn past max_range (10 m) was kept. As
+    // the lidar: gated on the true depth, held inside [min-Z, max_range] after the noise.
+    const std::vector<float> wall(std::size_t{kW} * kH, 9.9F);
+    std::vector<float> depth;
+    kinds::stereoDepth(config(), kW, kH, wall, wall, true, 7, 0, depth);
+    int finite = 0;
+    int atMax = 0;
+    for (const float d : depth) {
+        if (std::isfinite(d)) {
+            ++finite;
+            EXPECT_LE(d, 10.0F);
+            EXPECT_GE(d, 400.0F * 0.05F / 126.0F);
+            atMax += d == 10.0F ? 1 : 0;
+        }
+    }
+    ASSERT_GT(finite, 10000);
+    EXPECT_GT(atMax, finite / 4);  // about half the draws land above 10 m
+}
+
 // --- rendered ------------------------------------------------------------------------------
 
 TEST(StereoCamera, RendersBothImagersAndTheWallAhead) {

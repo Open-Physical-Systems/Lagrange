@@ -195,7 +195,9 @@ void stereoDepth(const StereoConfig& c, std::uint32_t width, std::uint32_t heigh
             if (c.depthUnit > 0.0) {
                 measured = std::round(measured / c.depthUnit) * c.depthUnit;
             }
-            out[i] = static_cast<float>(measured);
+            // Gated on the true depth, then held inside the range after the noise, as the
+            // lidar does: a point at 9.9 m with σ 1.9 m read 13 m past max_range (sensors QA F4).
+            out[i] = static_cast<float>(std::clamp(measured, minZ, c.maxRange));
         }
     });
 }

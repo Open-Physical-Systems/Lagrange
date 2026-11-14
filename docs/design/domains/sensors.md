@@ -579,7 +579,10 @@ lands `f·θ_d` from the principal point, `θ_d = θ(1 + k₁θ² + k₂θ⁴ + 
 IEEE TPAMI 28(8), 2006); all k = 0 is the ideal equidistant lens, r = fθ. `horizontal_fov` is then the
 lens's angle across the image's width (`f = (width/2) / θ_d(fov/2)`, as Gazebo's wide-angle camera with
 `scale_to_hfov`); the lens sees nothing beyond `cutoff_angle` (half-angle, default the larger of fov/2
-and 90°, as Gazebo), where pixels are black, at infinite range, with no instance. Up to 2π.
+and 90°, as Gazebo), where pixels are black, at infinite range, with no instance. Up to 2π. A cutoff
+below fov/2 is taken the same way from URDF, SDFormat and USD: the angle across the width stays the
+lens's and the pixels beyond the cutoff are black (the example below cuts off 0.05 mrad inside its
+100°).
 
 ```xml
 <sensor name="fisheye" type="camera">
@@ -720,6 +723,14 @@ tether takes its own robot's when the run has several. No schema changes: these 
 under RFC 0007. The sample plugins' kinds
 (`tof`, `ultrasonic`, `thermistor`, `ir_thermometer`) stay plugins; a plugin that implements one
 of the kinds below as well would write the same signals, and the run refuses to start.
+
+Ranges. A number parameter outside the range the sensor catalog gives it
+(`modules/sensors/catalog/sensor_catalog.yaml`, the `min`/`max` of the tables below) refuses the
+run, naming it: `battery_monitor batt: voltage/resolution = -0.5: must be at least 0 V`. None is
+clamped or read as "not given" any more (`wheel_radius` 0 was "from the colliders", a negative
+`resolution` turned quantisation off, `samples` 0 became 1): leave a parameter out for its
+default. The code's table (`src/kinds/ParamRanges.cpp`) is the catalog's row for row
+(`test_sensor_catalog`, which also starts every kind with each value just outside).
 
 Defaults. A default taken from a part's data sheet cites the document (part number, document
 number and revision, where it says so); the checks of 2026-11-12 against the documents are listed
@@ -891,7 +902,9 @@ sub-pixel disparity error, f the focal length in pixels and b the baseline (Grun
 `depth_unit`. Invalid pixels follow from the geometry: a point the right imager does not see
 (outside its image, the left band whose width is the disparity f b / z, or behind something
 nearer in its depth, an occlusion shadow) is NaN; nearer than min-Z = f b / `max_disparity` is
-−inf; beyond `max_range` or nothing is +inf (ROS REP 118).
+−inf; beyond `max_range` or nothing is +inf (ROS REP 118). As the lidar's, the gate is on the true
+depth and the noisy reading is then held inside [min-Z, `max_range`], so no finite depth is ever past
+`max_range`.
 
 ```xml
 <sensor name="d435" type="stereo_camera">
