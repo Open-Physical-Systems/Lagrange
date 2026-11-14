@@ -7,6 +7,8 @@ titles merged into `dev`; do not edit it by hand. Versions follow
 
 ## Unreleased
 
+- **Changed (ROS topics of built-in sensor kinds):** a kind's 0/1 `valid` output (the power kinds: battery_monitor, current_sensor, voltage_sensor, esc_telemetry, tension_sensor) is now published as `std_msgs/Bool`, like every other kind's; subscribers that expected `std_msgs/Float64` on `/<name>/valid` must change. The `sensor/<n>/contamination` input is no longer published. Out-of-range kind parameters are now refused at start with a message naming the range.
+
 ### Features
 
 * **viewer:** the robot builder (RFC 0016 phase 1 and Addendum A): a Builder workspace that builds a robot from shapes and meshes, joints and catalog sensors, tests it in a simulator of its own and saves it as URDF (`--workspace builder`, `--builder-open`, `--builder-save`, Ctrl B; docs/guide/builder.md)
