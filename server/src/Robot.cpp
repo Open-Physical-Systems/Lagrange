@@ -1347,7 +1347,11 @@ Expected<Robot, std::string> loadUrdf(const std::string& path, const LoadOptions
     }
     robot.name = robot.scene.prims.front().name;
 
-    addGroundPrim(robot);  // static scenery after the robot
+    if (hasOwnFloor(robot, false)) {
+        removeGroundPlane(robot);  // the file's floor is the ground (a world given as the robot)
+    } else {
+        addGroundPrim(robot);  // static scenery after the robot
+    }
     if (auto power = applyLagrangeBlock(robot, path); !power) {
         return Unexpected{power.error()};
     }
@@ -1539,8 +1543,18 @@ Expected<void, std::string> addModel(Robot& robot, const std::string& path,
             other = importers::importMjcf(path, import);
             break;
         case importers::Format::Urdf:
-        case importers::Format::Unknown:
-            return addUrdf(robot, path, options);
+        case importers::Format::Unknown: {
+            const bool ownFloor = hasOwnFloor(robot, false);
+            if (auto added = addUrdf(robot, path, options); !added) {
+                return added;
+            }
+            if (!ownFloor && hasOwnFloor(robot, false)) {
+                // A world with a floor of its own (a level slab): it is the ground.
+                removeGroundPlane(robot);
+                robot.groundPlane = false;
+            }
+            return {};
+        }
     }
     if (!other) {
         return Unexpected{other.error()};

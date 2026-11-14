@@ -125,10 +125,30 @@ struct Model {
 /// loaders add as the first collider.
 void addGroundPrim(Model& model);
 
+/// The narrowest a level box may be, in x and in y (m), to count as a file's own floor.
+inline constexpr double kFloorMinWidthM = 10.0;
+
+/// Whether the model has a floor of its own (one ground per run, docs/guide/cli.md): static
+/// geometry that is a plane facing up, a height field, or a level box (turned about z only) at
+/// least kFloorMinWidthM wide in x and in y and no thicker than a quarter of its narrower width
+/// (a slab, not a building). Static: on the world, or on a body welded to the world by fixed
+/// joints (an MJCF worldbody geom, an SDFormat static model, a URDF world's links). With
+/// `countPlanes` false, planes are left out (Lagrange's own ground is a plane on the world).
+[[nodiscard]] bool hasOwnFloor(const Model& model, bool countPlanes = true);
+
+/// Lagrange's ground: the infinite plane facing up at z = 0 as the first collider, and the slab
+/// (addGroundPrim). The loaders call it for a file that has no floor of its own (hasOwnFloor).
+void addGroundPlane(Model& model, double friction);
+
+/// Takes Lagrange's ground away: the plane colliders on the world and the root prim "ground"
+/// without a body (the slab), renumbering the scene prims after it.
+void removeGroundPlane(Model& model);
+
 /// Adds `other` to `model`: a second robot, or a world's scenery loaded separately. Indices are
 /// renumbered; `other`'s ground (plane colliders on the world and its root prim "ground") is
 /// left out, since `model` has one. Its prims go after `model`'s, before the ground slab. When
-/// `other` has groundPlane false, `model`'s plane and ground slab are taken away instead.
+/// `other` has groundPlane false, or a floor of its own other than a plane (hasOwnFloor: a level
+/// slab, a height field), `model`'s plane and ground slab are taken away instead.
 void appendModel(Model& model, const Model& other);
 
 /// Makes a robot's names unique before it joins another model (a second robot of the same

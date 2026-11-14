@@ -8,7 +8,7 @@
 namespace lagrange::importers {
 
 struct ImportOptions {
-    bool addGround{true};  // add the ground plane and slab when the file has no ground plane
+    bool addGround{true};  // add the ground plane and slab when the file has no floor (hasOwnFloor)
     double groundFriction{1.0};
 };
 

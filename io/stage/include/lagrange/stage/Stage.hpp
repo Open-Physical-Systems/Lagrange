@@ -11,7 +11,7 @@ namespace lagrange::stage {
 
 struct ReadOptions {
     double defaultFriction{1.0};  // Coulomb coefficient of colliders without a physics material
-    bool addGround{true};         // add the ground plane and slab when the stage has no plane
+    bool addGround{true};         // add the ground plane and slab when the stage has no floor
     double groundFriction{1.0};
     /// Empty: read the stage with its tiles (WorldTileAPI_1 prims) unloaded and listed in
     /// Model::tiles. A tile's path: read only that tile, its payload loaded (static scenery

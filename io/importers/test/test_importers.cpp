@@ -341,6 +341,73 @@ TEST(ImportSdf, AWorldGivesOnePrimPerModelAndUsesItsGroundPlane) {
     EXPECT_EQ(model->world.joints.type.at(0), JointType::Free);
 }
 
+// One ground per run: a file's own floor (here a 40 m ground box, as in the comparison's box
+// pile) is the ground, with no plane of Lagrange's at its top; a box too small or too thick to be
+// a floor, or a loose one, leaves Lagrange's plane in.
+std::string mjcfWithGround(const std::string& ground) {
+    return R"(<mujoco model="pile">
+  <worldbody>
+    )" + ground +
+           R"(
+    <body name="box" pos="0 0 0.5"><freejoint/><geom type="box" size="0.1 0.1 0.1" mass="1"/></body>
+  </worldbody>
+</mujoco>)";
+}
+
+TEST(ImportMjcf, AGroundBoxIsTheOnlyGround) {
+    const auto path = writeText(
+        "floor_box.xml",
+        mjcfWithGround(R"(<geom name="ground" type="box" size="20 20 0.1" pos="0 0 -0.1"/>)"));
+    auto model = importMjcf(path.string());
+    ASSERT_TRUE(model) << model.error();
+    const World::Colliders& colliders = model->world.colliders;
+    EXPECT_EQ(count(colliders, ShapeType::Plane), 0U);
+    EXPECT_EQ(count(colliders, ShapeType::Box), 2U);  // the floor and the falling box
+    EXPECT_TRUE(hasOwnFloor(*model));
+    for (const ScenePrim& prim : model->scene.prims) {
+        EXPECT_FALSE(prim.name == "ground" && prim.parent == kNoIndex && prim.body == kNoIndex)
+            << "Lagrange's slab is drawn over the file's floor";
+    }
+}
+
+TEST(ImportMjcf, NoFloorOfItsOwnGetsLagrangesGround) {
+    for (const std::string& ground : {
+             std::string(),                                                       // nothing
+             std::string(R"(<geom type="box" size="2 2 0.1" pos="0 0 -0.1"/>)"),  // a table
+             std::string(R"(<geom type="box" size="20 20 8" pos="0 0 -8"/>)"),    // a block
+             std::string(R"(<geom type="box" size="20 20 0.1" pos="0 0 -0.1" euler="0.3 0 0"/>)"),
+             std::string(
+                 R"(<body pos="0 0 -0.1"><freejoint/><geom type="box" size="20 20 0.1"/></body>)"),
+         }) {
+        auto model = importMjcf(writeText("no_floor.xml", mjcfWithGround(ground)).string());
+        ASSERT_TRUE(model) << model.error();
+        const World::Colliders& colliders = model->world.colliders;
+        EXPECT_EQ(count(colliders, ShapeType::Plane), 1U) << ground;
+        EXPECT_EQ(colliders.shape.front(), ShapeType::Plane) << ground;
+        EXPECT_EQ(colliders.body.front(), kWorldBody);
+        EXPECT_EQ(model->scene.prims.back().name, "ground") << ground;
+    }
+}
+
+TEST(ImportSdf, AStaticGroundBoxModelIsTheOnlyGround) {
+    const auto path = writeText("floor_box.sdf", R"(<?xml version="1.0"?>
+<sdf version="1.11">
+  <world name="pile">
+    <model name="floor"><static>true</static><pose>0 0 -0.1 0 0 0</pose><link name="l">
+      <collision name="c"><geometry><box><size>40 40 0.2</size></box></geometry></collision>
+    </link></model>
+    <model name="crate"><pose>0 0 1 0 0 0</pose><link name="l"><inertial><mass>1</mass></inertial>
+      <collision name="c"><geometry><box><size>0.2 0.2 0.2</size></box></geometry></collision>
+    </link></model>
+  </world>
+</sdf>)");
+    auto model = importSdf(path.string());
+    ASSERT_TRUE(model) << model.error();
+    EXPECT_EQ(count(model->world.colliders, ShapeType::Plane), 0U);
+    EXPECT_EQ(count(model->world.colliders, ShapeType::Box), 2U);
+    EXPECT_NE(model->scene.prims.back().name, "ground");
+}
+
 TEST(ImportMjcf, SeveralJointsOnABodyGetHelperFrames) {
     // A point mass on x and y slides and a hinge about z, offset from the body origin.
     const auto path = writeText("slider.xml", R"(<mujoco model="slider">

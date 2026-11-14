@@ -1,6 +1,7 @@
 // Primitive meshes for the viewer, the same shapes and vertex layout as the mock server's
 // meshes.py, so a robot looks the same whichever server shows it.
 #include "lagrange/world/Model.hpp"
+#include "lagrange/world/PoseMath.hpp"
 
 #include <algorithm>
 #include <array>
@@ -782,6 +783,141 @@ void addGroundPrim(Model& model) {
     model.scene.prims.push_back(std::move(ground));
 }
 
+namespace {
+
+/// Bodies welded to the world: no joint other than fixed above them, not kinematic.
+std::vector<bool> staticBodies(const World& world) {
+    const std::size_t n = world.bodies.names.size();
+    std::vector<bool> jointed(n, false);
+    for (std::size_t j = 0; j < world.joints.names.size(); ++j) {
+        if (world.joints.type[j] != JointType::Fixed && world.joints.child[j].index < n) {
+            jointed[world.joints.child[j].index] = true;
+        }
+    }
+    std::vector<int> state(n, -1);  // -1 unknown, 0 moving, 1 static
+    for (std::size_t b = 0; b < n; ++b) {
+        // Up the tree to a body whose answer is known (or the world), then down again.
+        std::vector<std::size_t> chain;
+        std::size_t at = b;
+        int answer = 1;
+        while (true) {
+            if (state[at] >= 0) {
+                answer = state[at];
+                break;
+            }
+            if (jointed[at] || world.bodies.kinematic[at] || chain.size() > n) {
+                answer = 0;
+                chain.push_back(at);
+                break;
+            }
+            chain.push_back(at);
+            const BodyId parent = world.bodies.parent[at];
+            if (parent == kWorldBody || parent.index >= n) {
+                break;
+            }
+            at = parent.index;
+        }
+        for (const std::size_t c : chain) {
+            state[c] = answer;
+        }
+    }
+    std::vector<bool> out(n);
+    for (std::size_t b = 0; b < n; ++b) {
+        out[b] = state[b] == 1;
+    }
+    return out;
+}
+
+}  // namespace
+
+bool hasOwnFloor(const Model& model, bool countPlanes) {
+    const World& w = model.world;
+    const World::Colliders& c = w.colliders;
+    const std::vector<bool> isStatic = staticBodies(w);
+    for (std::size_t i = 0; i < c.body.size(); ++i) {
+        const BodyId body = c.body[i];
+        if (body != kWorldBody && (body.index >= isStatic.size() || !isStatic[body.index])) {
+            continue;
+        }
+        const Pose pose = body == kWorldBody || body.index >= model.bodyRestPose.size()
+                              ? c.poseInBody[i]
+                              : compose(model.bodyRestPose[body.index], c.poseInBody[i]);
+        const std::array<double, 3> up = rotate(pose.orientation, {0.0, 0.0, 1.0});
+        constexpr double kLevel = 1e-6;  // |z axis . world z| this close to 1 counts as level
+        switch (c.shape[i]) {
+            case ShapeType::Plane:
+                if (countPlanes && up[2] > 1.0 - kLevel) {
+                    return true;
+                }
+                break;
+            case ShapeType::HeightField:
+                return true;
+            case ShapeType::Box: {
+                const double narrower = 2.0 * std::min(c.size[i][0], c.size[i][1]);
+                const double thickness = 2.0 * c.size[i][2];
+                if (std::abs(up[2]) > 1.0 - kLevel && narrower >= kFloorMinWidthM &&
+                    thickness <= narrower / 4.0) {
+                    return true;
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
+    return false;
+}
+
+void addGroundPlane(Model& model, double friction) {
+    // The infinite plane first among the colliders, the slab last among the prims.
+    World::Colliders& c = model.world.colliders;
+    c.body.insert(c.body.begin(), kWorldBody);
+    c.shape.insert(c.shape.begin(), ShapeType::Plane);
+    c.size.insert(c.size.begin(), {0.0, 0.0, 1.0});
+    c.poseInBody.insert(c.poseInBody.begin(), Pose{});
+    c.friction.insert(c.friction.begin(), friction);
+    c.hull.insert(c.hull.begin(), kNoHull);
+    c.material.insert(c.material.begin(), kNoMaterial);
+    addGroundPrim(model);
+}
+
+void removeGroundPlane(Model& model) {
+    World::Colliders& c = model.world.colliders;
+    for (std::size_t i = c.body.size(); i-- > 0;) {
+        if (c.body[i] == kWorldBody && c.shape[i] == ShapeType::Plane) {
+            const auto at = static_cast<std::ptrdiff_t>(i);
+            c.body.erase(c.body.begin() + at);
+            c.shape.erase(c.shape.begin() + at);
+            c.size.erase(c.size.begin() + at);
+            c.poseInBody.erase(c.poseInBody.begin() + at);
+            c.friction.erase(c.friction.begin() + at);
+            c.material.erase(c.material.begin() + at);
+            c.hull.erase(c.hull.begin() + at);
+        }
+    }
+    std::vector<ScenePrim>& prims = model.scene.prims;
+    for (std::size_t p = prims.size(); p-- > 0;) {
+        if (prims[p].name != "ground" || prims[p].parent != kNoIndex || prims[p].body != kNoIndex) {
+            continue;
+        }
+        const auto gone = static_cast<std::uint32_t>(p);
+        prims.erase(prims.begin() + static_cast<std::ptrdiff_t>(p));
+        const auto renumber = [gone](std::uint32_t& index) {
+            if (index != kNoIndex && index > gone) {
+                --index;
+            }
+        };
+        for (ScenePrim& prim : prims) {
+            renumber(prim.parent);
+        }
+        for (auto* list : {&model.bodyPrim, &model.jointPrim, &model.sensorPrim}) {
+            for (std::uint32_t& index : *list) {
+                renumber(index);
+            }
+        }
+    }
+}
+
 void appendModel(Model& model, const Model& other) {
     World& w = model.world;
     const World& o = other.world;
@@ -943,24 +1079,14 @@ void appendModel(Model& model, const Model& other) {
     for (const std::uint32_t p : other.sensorPrim) {
         model.sensorPrim.push_back(p == kNoIndex ? kNoIndex : primMap[p]);
     }
-    if (ground && other.groundPlane) {
+    // The joining file brings its own ground (terrain tiles, a floor slab, a height field): no
+    // infinite plane under it, a second floor at the top of its slab.
+    const bool ownFloor = !other.groundPlane || hasOwnFloor(other, false);
+    if (ground && !ownFloor) {
         prims.push_back(std::move(*ground));
     }
-    if (!other.groundPlane) {
-        // The joining world brings its own ground: no infinite plane under its terrain.
-        World::Colliders& c = w.colliders;
-        for (std::size_t i = c.body.size(); i-- > 0;) {
-            if (c.body[i] == kWorldBody && c.shape[i] == ShapeType::Plane) {
-                const auto at = static_cast<std::ptrdiff_t>(i);
-                c.body.erase(c.body.begin() + at);
-                c.shape.erase(c.shape.begin() + at);
-                c.size.erase(c.size.begin() + at);
-                c.poseInBody.erase(c.poseInBody.begin() + at);
-                c.friction.erase(c.friction.begin() + at);
-                c.material.erase(c.material.begin() + at);
-                c.hull.erase(c.hull.begin() + at);
-            }
-        }
+    if (ownFloor) {
+        removeGroundPlane(model);
         model.groundPlane = false;
     }
 }

@@ -37,7 +37,7 @@ The key numbers, all measured here: real-time factor (higher is faster), median 
 | AMR in a warehouse, physics only | 96.6 (MuJoCo), 69.0 (Jolt) | 14.8 (DART) |
 | Same, with 2D and 3D lidars and an IMU | 54.1 (CPU lidar), 18.9 (GPU lidar) | 12.7, and only 330–349 of 600 scans per lidar arrived |
 | One 640 × 480 camera at 30 Hz | 10.7 | 12.3 |
-| 200 boxes falling into a pile | 0.17 (MuJoCo), 2.38 (Jolt) | did not finish 5 s in 30 minutes |
+| 200 boxes falling into a pile | 0.12 (MuJoCo), 2.71 (Jolt), after a fix (below) | did not finish 5 s in 30 minutes |
 | A quadcopter hovering (different airframes) | 38.0 | 18.3 |
 | Start-up to the first step | 0.07 s | 2.4 to 2.7 s |
 | Peak memory, AMR with sensors | 78 MB (CPU lidar) | 961 MB |
@@ -103,8 +103,10 @@ brackets.
 | | Gazebo, no subscriber | 13.0 (12.8–13.3) | 2.73 s | 883 MB | 1.2 cores | nothing (not rendered) |
 | **One 640 × 480 camera at 30 Hz** on the AMR (20 s) | Lagrange | 10.7 (10.5–11.2) | 0.32 s | 396 MB | 0.6 cores | 322 frames/s (colour, depth and instance) |
 | | Gazebo, a subscriber | **12.3** (11.7–12.7) | 2.72 s | 961 MB | 1.9 cores | 372 frames/s; all 607 frames received |
-| **200 boxes falling into a pile** (5 s) | Lagrange, MuJoCo 3.12 | 0.166 (0.165–0.166) | 0.13 s | 84 MB | 1.0 core | |
-| | Lagrange, Jolt | **2.38** (2.38–2.38) | 0.11 s | 79 MB | 1.0 core | |
+| **200 boxes falling into a pile** (5 s) | Lagrange, MuJoCo 3.12, one floor (2026-11-15, see below) | 0.123 (0.123–0.123) | 0.13 s | 84 MB | 1.0 core | |
+| | Lagrange, Jolt, one floor (2026-11-15) | **2.71** (2.69–2.73) | 0.11 s | 79 MB | 1.0 core | |
+| | *Lagrange 1.3.0, MuJoCo 3.12, two floors* | *0.166 (0.165–0.166)* | 0.13 s | 84 MB | 1.0 core | |
+| | *Lagrange 1.3.0, Jolt, two floors* | *2.38 (2.38–2.38)* | 0.11 s | 79 MB | 1.0 core | |
 | | Gazebo (DART) | **did not finish in 30 minutes** (one run) | 2.52 s | | | |
 | | MuJoCo 3.12 standalone, its defaults | 0.289 (0.289–0.290) | 0.16 s | 60 MB | 1.0 core | |
 | | MuJoCo 3.12 standalone, Lagrange's options | 0.184 (0.184–0.184) | 0.15 s | 61 MB | 1.0 core | |
@@ -128,6 +130,25 @@ Notes on the table:
   - In the same set-up the camera's frames all arrived (607), so the subscriber kept up with far
     larger messages.
   - Why Gazebo's lidars published fewer scans than their rate was not investigated here.
+- **Lagrange's pile had two floors in 1.3.0.** `boxes.xml` has its own ground, a 40 m box with its
+  top at z = 0, and Lagrange 1.3.0 also added its infinite ground plane at z = 0, so the boxes
+  touched both (1227 contacts at 5 s against 851 in MuJoCo alone). Since 2026-11-15 (`dev` after
+  pull request 368) Lagrange adds its plane only to a file with no floor of its own
+  ([cli.md](../guide/cli.md), "Importing a robot"). The rows marked *two floors* are the
+  2026-11-14 runs; the *one floor* rows were measured on 2026-11-15 with five interleaved runs
+  each of the old build (`dev` at pull request 368) and the new one, load average 1.2 to 1.5
+  (the old build gave 0.166 and 2.40 again, so the two days compare;
+  `results/boxes_one_floor.jsonl`). Both backends' 1 s digests changed (below).
+  - **MuJoCo got slower with one floor, not faster.** The floor box is no longer on MuJoCo's
+    world body, as it is in `boxes.xml`, but on a static body of its own (the MJCF importer makes
+    `worldbody` a welded body). Contacts with that body join the boxes into fewer, larger
+    constraint islands (34.8 islands per step against 43.9, 3.0 solver iterations against 2.2),
+    and the solver takes 1.5 times as long. Standalone MuJoCo 3.12 with Lagrange's options gives
+    the same: 0.184 with the box on the world body, 0.125 with it in a static body at the end
+    (853 contacts), 0.169 with that and the plane (Lagrange 1.3.0's model). Putting static
+    bodies' geoms on the world body in the MuJoCo backend should bring Lagrange to about 0.18; not
+    done yet.
+  - **Jolt got faster**: 2.71 against 2.40, with one floor to collide with.
 - **The 200-box pile on Gazebo.**
   - The one 5 s run was stopped after 30 minutes of wall time at one CPU core.
   - The determinism check below ran the first 1 s of the same pile.
@@ -150,12 +171,16 @@ What the numbers say:
   an instance image at 8 samples per pixel against Gazebo's colour only. The image quality was
   not compared.
 - **Many contacts.**
-  - Lagrange's default MuJoCo backend is slow on the pile: RTF 0.17.
+  - Lagrange's default MuJoCo backend is slow on the pile: RTF 0.12 with one floor (0.17 in
+    1.3.0 with two).
   - Against standalone MuJoCo 3.12 with its defaults (0.289), Lagrange's choice of the elliptic
     friction cone and the implicit-fast integrator costs about a third (0.184).
-  - About 10 % comes from Lagrange's own overhead (0.166 against 0.184).
-  - MuJoCo 4.0.1 runs the same scene 2.8 times faster than Lagrange's MuJoCo.
-  - Lagrange's Jolt backend is the fastest measured here: 2.38, 14 times its MuJoCo backend. It
+  - The rest is the model Lagrange builds, not its own overhead (about 2 % of a step,
+    [benchmarks.md](../design/benchmarks.md) §4.4): its floor box in a static body of its own
+    (0.123 against 0.184; the earlier "about 10 % overhead", 0.166 against 0.184, compared a
+    model with a second floor).
+  - MuJoCo 4.0.1 runs the same scene 3.7 times faster than Lagrange's MuJoCo.
+  - Lagrange's Jolt backend is the fastest measured here: 2.71, 22 times its MuJoCo backend. It
     loses energy in the pendulum test, though (below).
   - PyBullet is in between. Gazebo's DART did not finish.
 - **Memory.** Gazebo's rendering adds 750 to 820 MB (883 to 961 MB with sensors against 137 MB
@@ -171,6 +196,8 @@ compares a SHA-256 of every box's final position and orientation, as exact bits.
 |---|---|---|---|
 | Lagrange, MuJoCo backend | `bbc85ed6` | `bbc85ed6` | yes |
 | Lagrange, Jolt backend | `4c510ca2` | `4c510ca2` | yes |
+| Lagrange, MuJoCo backend, one floor (2026-11-15) | `562e6a31` | `562e6a31` | yes |
+| Lagrange, Jolt backend, one floor (2026-11-15) | `7d238234` | `7d238234` | yes |
 | Gazebo (DART) | `6c9fbab9` | not run | not known |
 | MuJoCo, PyBullet | not run | not run | not known |
 
@@ -243,7 +270,8 @@ What this says:
   - The same scheme on a point mass, in double precision, loses 16.35 % in 60 s.
   - The loss falls with the step. A profile's `rigid_body: {substeps: N}` (added after this
     finding) gives 9.0 % at 2 sub-steps, 5.3 % at 4 and 2.3 % at 16. Each costs about N times
-    as much: the 200-box pile ran at RTF 2.35, 1.29 and 0.66 at 1, 2 and 4 sub-steps.
+    as much: the 200-box pile ran at RTF 2.35, 1.29 and 0.66 at 1, 2 and 4 sub-steps (1.3.0, with
+    two floors).
   - The conformance suite now holds every backend to the bound. The test
     `Conformance.APendulumKeepsItsPeriodAndEnergy` checks the exact period within 0.25 %, no
     gain over 0.5 %, and at least 80 % of the energy kept. `Jolt.APendulumLosesEnergyAs...`
@@ -408,9 +436,10 @@ Worse at, or missing:
   faster (below).
 - **Slower on the measured camera** than Gazebo, by about 15 %, though it draws more per frame.
 - **Its GPU lidar is slower than its CPU lidar** in a small scene: RTF 18.9 against 54.1.
-- **Its default MuJoCo backend is slow with many contacts.** The 200-box pile ran at RTF 0.17,
-  14 times slower than its Jolt backend and 2.8 times slower than MuJoCo 4.0.1. The cost is
-  MuJoCo 3.12 with Lagrange's elliptic friction cone, not the framework.
+- **Its default MuJoCo backend is slow with many contacts.** The 200-box pile ran at RTF 0.12
+  with one floor (0.17 in 1.3.0, with a second floor), 22 times slower than its Jolt backend and
+  3.7 times slower than MuJoCo 4.0.1. The cost is MuJoCo 3.12 with Lagrange's elliptic friction
+  cone, and the file's floor sitting in a static body of its own, not the framework's own work.
 
 ### Gazebo Jetty
 

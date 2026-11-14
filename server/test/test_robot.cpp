@@ -388,6 +388,114 @@ TEST(LoadUrdf, SceneHasGroundRobotLinksAndVisuals) {
     EXPECT_EQ(scene.materials.size(), 5U);  // ground + body, accent, rubber, steel
 }
 
+// One ground per run (docs/guide/cli.md, "Importing a robot"): the colliders that hold things
+// up, Lagrange's plane and a file's floor slabs.
+std::size_t groundColliders(const Robot& robot) {
+    const World::Colliders& c = robot.world.colliders;
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < c.body.size(); ++i) {
+        const bool slab = c.shape[i] == ShapeType::Box &&
+                          2.0 * std::min(c.size[i][0], c.size[i][1]) >= kFloorMinWidthM &&
+                          2.0 * c.size[i][2] <= 1.0;
+        const bool plane = c.body[i] == kWorldBody && c.shape[i] == ShapeType::Plane;
+        n += slab || plane ? 1U : 0U;
+    }
+    return n;
+}
+
+std::size_t groundSlabs(const Robot& robot) {
+    return static_cast<std::size_t>(
+        std::count_if(robot.scene.prims.begin(), robot.scene.prims.end(), [](const ScenePrim& p) {
+            return p.name == "ground" && p.parent == kNoIndex && p.body == kNoIndex;
+        }));
+}
+
+std::string writeFloorWorld(const std::string& name) {
+    const std::string path = (std::filesystem::path(::testing::TempDir()) / name).string();
+    std::ofstream out(path);
+    if (name.ends_with(".xml")) {
+        out << R"(<mujoco model="yard"><worldbody>
+  <geom name="ground" type="box" size="20 20 0.1" pos="0 0 -0.1"/>
+  <geom name="crate" type="box" size="0.5 0.5 0.5" pos="3 0 0.5"/>
+</worldbody></mujoco>)";
+    } else if (name.ends_with(".sdf")) {
+        out << R"(<?xml version="1.0"?><sdf version="1.11"><world name="yard">
+  <model name="floor"><static>true</static><pose>0 0 -0.1 0 0 0</pose><link name="l">
+    <collision name="c"><geometry><box><size>40 40 0.2</size></box></geometry></collision>
+  </link></model></world></sdf>)";
+    } else if (name.ends_with(".usda")) {
+        out << R"(#usda 1.0
+(
+    defaultPrim = "yard"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "yard"
+{
+    def Cube "floor" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1
+        float3 xformOp:scale = (40, 40, 0.2)
+        double3 xformOp:translate = (0, 0, -0.1)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+}
+)";
+    } else {
+        out << R"(<?xml version="1.0"?><robot name="yard">
+  <link name="world"/>
+  <link name="floor"><collision><geometry><box size="40 40 0.2"/></geometry></collision></link>
+  <joint name="floor_joint" type="fixed"><parent link="world"/><child link="floor"/>
+    <origin xyz="0 0 -0.1"/></joint>
+</robot>)";
+    }
+    return path;
+}
+
+TEST(Ground, AWorldWithItsOwnFloorIsTheOnlyGround) {
+    for (const std::string& name :
+         {std::string("floor_world.xml"), std::string("floor_world.sdf"),
+          std::string("floor_world.usda"), std::string("floor_world.urdf")}) {
+        Robot robot = amr();
+        ASSERT_EQ(groundColliders(robot), 1U);
+        auto added = addModel(robot, writeFloorWorld(name));
+        ASSERT_TRUE(added) << name << ": " << added.error();
+        EXPECT_EQ(groundColliders(robot), 1U) << name;
+        EXPECT_EQ(std::count(robot.world.colliders.shape.begin(), robot.world.colliders.shape.end(),
+                             ShapeType::Plane),
+                  0)
+            << name;
+        EXPECT_EQ(groundSlabs(robot), 0U) << name;
+        EXPECT_FALSE(robot.groundPlane) << name;
+        EXPECT_EQ(robot.scene.prims.front().path, "/amr_diffdrive") << name;
+        // The same file as the robot (lagrange FILE): its floor, no plane.
+        auto alone = loadModel(writeFloorWorld(name));
+        ASSERT_TRUE(alone) << name << ": " << alone.error();
+        EXPECT_EQ(groundColliders(*alone), 1U) << name;
+        EXPECT_EQ(groundSlabs(*alone), 0U) << name;
+    }
+}
+
+TEST(Ground, NoWorldOrAWorldWithoutAFloorKeepsLagrangesGround) {
+    const Robot empty = emptyModel();  // --robot none --world none
+    ASSERT_EQ(empty.world.colliders.shape.size(), 1U);
+    EXPECT_EQ(empty.world.colliders.shape[0], ShapeType::Plane);
+    EXPECT_EQ(groundSlabs(empty), 1U);
+
+    Robot robot = amr();  // --world none
+    EXPECT_EQ(robot.world.colliders.shape.front(), ShapeType::Plane);
+    EXPECT_EQ(groundColliders(robot), 1U);
+    EXPECT_EQ(groundSlabs(robot), 1U);
+    // The sample warehouse has walls and shelves but no floor: Lagrange's plane stays.
+    ASSERT_TRUE(addModel(robot, LAGRANGE_TEST_WAREHOUSE_URDF));
+    EXPECT_EQ(robot.world.colliders.shape.front(), ShapeType::Plane);
+    EXPECT_EQ(groundColliders(robot), 1U);
+    EXPECT_EQ(groundSlabs(robot), 1U);
+    EXPECT_TRUE(robot.groundPlane);
+}
+
 TEST(LoadUrdf, FixedBaseRobotAndMissingFiles) {
     auto missing = loadUrdf("/nonexistent/robot.urdf");
     ASSERT_FALSE(missing);

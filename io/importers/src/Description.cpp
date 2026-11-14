@@ -638,18 +638,6 @@ void note(Model& model, std::string text) {
     }
 }
 
-bool hasGroundPlane(const Description& description) {
-    const std::vector<bool> isStatic = staticLinks(description);
-    for (std::size_t l = 0; l < description.links.size(); ++l) {
-        for (const CollisionDesc& collision : description.links[l].collisions) {
-            if (collision.geom.type == GeomType::Plane && isStatic[l]) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 Expected<void, std::string> build(const Description& description, Model& model) {
     return Builder(description, model).run();
 }
