@@ -2,6 +2,7 @@
 
 #include "lagrange/module/IModule.hpp"
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -82,6 +83,7 @@ private:
     };
 
     void writeOutputs(SignalBus& bus) const;
+    void applyFixedWrenches();
     void sumContactForces();
     void setupKinematicCulling();
     void cullKinematicContacts(bool all);
@@ -109,6 +111,15 @@ private:
 
     std::vector<JointSignals> joints_;
     std::vector<BodySignals> bodies_;
+    // Indices into bodies_ of the inputs that have a writer, read every step; the unconnected
+    // external wrenches with their defaults, put in place once (init, restoreState).
+    std::vector<std::uint32_t> wrenchInputs_;
+    std::vector<std::uint32_t> poseInputs_;
+    struct FixedWrench {
+        int mujocoBody{0};
+        std::array<double, 6> wrench{};
+    };
+    std::vector<FixedWrench> fixedWrenches_;
     std::vector<double> contactForces_;  // N, world frame, 3 per MuJoCo body, the last step's
     // Kinematic bodies' poses at the previous output, for their twist (MuJoCo's mocap bodies
     // have no velocity of their own).
@@ -121,6 +132,9 @@ private:
     // restored state and a shifted origin, when every value is written.
     static constexpr std::size_t kWrittenPerBody = 16;
     mutable std::vector<double> written_;
+    // Per body: a kinematic body that has not moved in the last step, so its last twist was
+    // worked out from two equal poses. Meaningful only while writtenValid_.
+    mutable std::vector<std::uint8_t> still_;
     mutable bool writtenValid_{false};
     double dt_{0.001};
     SignalId frictionScale_;

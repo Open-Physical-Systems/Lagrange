@@ -431,6 +431,29 @@ Status MujocoBackend::init(const WorldView& world, const ModuleConfig& config, S
     accelerationsDone_ = false;
     writtenValid_ = false;
     mj_step1(model_, data_);
+    // Which inputs have a writer. An unconnected optional input keeps its default for the whole
+    // run (SignalBus::allocate), so it is read once here instead of every step. An unconnected
+    // pose command is all zeros, which keeps the body where it is: nothing to do.
+    wrenchInputs_.clear();
+    poseInputs_.clear();
+    fixedWrenches_.clear();
+    for (std::uint32_t i = 0; i < bodies_.size(); ++i) {
+        const BodySignals& s = bodies_[i];
+        if (bus.connected(s.externalWrench)) {
+            wrenchInputs_.push_back(i);
+        } else {
+            FixedWrench fixed;
+            fixed.mujocoBody = s.mujocoBody;
+            const std::span<const double> wrench = bus.readN(s.externalWrench);
+            std::copy_n(wrench.begin(), std::min<std::size_t>(wrench.size(), 6),
+                        fixed.wrench.begin());
+            fixedWrenches_.push_back(fixed);
+        }
+        if (s.mocap >= 0 && s.poseCommand.valid() && bus.connected(s.poseCommand)) {
+            poseInputs_.push_back(i);
+        }
+    }
+    applyFixedWrenches();
     writeOutputs(bus);
     return {};
 }
@@ -465,16 +488,20 @@ Status MujocoBackend::step(const StepContext& /*context*/, SignalBus& bus) {
             data_->qfrc_applied[s.dofAddress] = bus.read(s.torque) + bus.read(s.loadTorque);
         }
     }
-    for (const BodySignals& s : bodies_) {
+    // Only connected inputs: an unconnected one reads its default for the whole run, put in
+    // place once (applyFixedWrenches). In the town 1 of 663 bodies has a wrench to read.
+    for (const std::uint32_t i : wrenchInputs_) {
+        const BodySignals& s = bodies_[i];
         const std::span<const double> wrench = bus.readN(s.externalWrench);
         std::copy(wrench.begin(), wrench.end(), data_->xfrc_applied + 6 * s.mujocoBody);
-        if (s.mocap >= 0 && s.poseCommand.valid()) {
-            const std::span<const double> p = bus.readN(s.poseCommand);
-            const double norm = p[3] * p[3] + p[4] * p[4] + p[5] * p[5] + p[6] * p[6];
-            if (norm > 0.5) {  // an unset (zero) command keeps the body where it is
-                std::copy_n(p.begin(), 3, data_->mocap_pos + 3 * s.mocap);
-                std::copy_n(p.begin() + 3, 4, data_->mocap_quat + 4 * s.mocap);
-            }
+    }
+    for (const std::uint32_t i : poseInputs_) {
+        const BodySignals& s = bodies_[i];
+        const std::span<const double> p = bus.readN(s.poseCommand);
+        const double norm = p[3] * p[3] + p[4] * p[4] + p[5] * p[5] + p[6] * p[6];
+        if (norm > 0.5) {  // an unset (zero) command keeps the body where it is
+            std::copy_n(p.begin(), 3, data_->mocap_pos + 3 * s.mocap);
+            std::copy_n(p.begin() + 3, 4, data_->mocap_quat + 4 * s.mocap);
         }
     }
     const double scale = bus.read(frictionScale_);
@@ -573,6 +600,7 @@ void MujocoBackend::writeOutputs(SignalBus& bus) const {
         bus.write(s.constraintTorque, data_->qfrc_constraint[dof]);
     }
     written_.resize(kWrittenPerBody * bodies_.size());
+    still_.resize(bodies_.size());
     const bool known = writtenValid_;
     writtenValid_ = true;
     for (std::size_t i = 0; i < bodies_.size(); ++i) {
@@ -584,11 +612,25 @@ void MujocoBackend::writeOutputs(SignalBus& bus) const {
         std::copy_n(data_->xquat + 4 * b, 4, pose.begin() + 3);
         if (s.mocap >= 0) {
             // Moved only when its command changes: the traffic and the people every 10 ms.
-            writeChanged<7>(bus, s.pose, pose.data(), wrote + 9, known);
+            const bool moved =
+                !known || std::memcmp(wrote + 9, pose.data(), 7 * sizeof(double)) != 0;
+            if (moved) {
+                bus.writeN(s.pose, pose);
+                std::memcpy(wrote + 9, pose.data(), 7 * sizeof(double));
+            }
+            writeChanged<3>(bus, s.contactForce, &contactForces_[3 * s.mujocoBody], wrote + 6,
+                            known);
+            // Its twist from its last two poses: when it stood still over both of the last two
+            // steps the twist is the one already written (the same poses give the same bits).
+            if (!moved && still_[i] != 0) {
+                continue;
+            }
+            still_[i] = moved ? 0 : 1;
         } else {
             bus.writeN(s.pose, pose);
+            writeChanged<3>(bus, s.contactForce, &contactForces_[3 * s.mujocoBody], wrote + 6,
+                            known);
         }
-        writeChanged<3>(bus, s.contactForce, &contactForces_[3 * s.mujocoBody], wrote + 6, known);
         if (s.mocap >= 0) {
             // A kinematic body's twist from its last two poses; no acceleration.
             std::array<double, 7>& last = lastKinematicPose_[i];
@@ -817,7 +859,18 @@ Status MujocoBackend::restoreState(StateReader& reader) {
     cullKinematicContacts(true);
     mj_step1(model_, data_);
     mj_rnePostConstraint(model_, data_);
+    // The saved state's applied wrenches stood until the next step's inputs replaced them; the
+    // unconnected ones are not read again, so they take their defaults now (after the
+    // accelerations above, which use the saved ones, as before).
+    applyFixedWrenches();
     return {};
+}
+
+void MujocoBackend::applyFixedWrenches() {
+    for (const FixedWrench& fixed : fixedWrenches_) {
+        std::copy(fixed.wrench.begin(), fixed.wrench.end(),
+                  data_->xfrc_applied + 6 * fixed.mujocoBody);
+    }
 }
 
 }  // namespace lagrange::rigid_body

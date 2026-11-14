@@ -2,6 +2,7 @@
 #include "lagrange/rigid_body/MujocoBackend.hpp"
 #include "lagrange/scheduler/Scheduler.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <memory>
@@ -339,6 +340,67 @@ TEST(MujocoBackend, AWorldWithoutDegreesOfFreedomStillMovesItsKinematicBodies) {
     EXPECT_NEAR(read(scheduler, "body/pusher/pose", 2), 0.15, 1e-12);
     EXPECT_NEAR(read(scheduler, "body/pusher/twist", 0), -2.0, 1e-6);
     EXPECT_DOUBLE_EQ(read(scheduler, "body/pusher/acceleration", 2), 0.0);
+}
+
+/// Moves a kinematic body along x at 1 m/s, except while it stands from 0.5 s to 1 s.
+class StopAndGo final : public IModule {
+public:
+    [[nodiscard]] ModuleInfo info() const override { return {"controller", "stop_and_go"}; }
+    [[nodiscard]] Duration preferredStep() const override { return 1_ms; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        SignalSpec spec;
+        spec.name = "body/pusher/pose_command";
+        spec.type = SignalType::Pose;
+        spec.unit = units::m;
+        spec.frame = "world_local";
+        id_ = d.output(spec);
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        write(bus, 0.0);
+        return {};
+    }
+    Status step(const StepContext& context, SignalBus& bus) override {
+        write(bus, (context.t + context.dt).seconds());
+        return {};
+    }
+    Status saveState(StateWriter&) const override { return {}; }
+    Status restoreState(StateReader&) override { return {}; }
+
+private:
+    void write(SignalBus& bus, double t) const {
+        const double moved = std::min(t, 0.5) + std::max(t - 1.0, 0.0);  // m, at 1 m/s
+        bus.writeN(id_, std::array<double, 7>{6.0 - moved, 0.0, 0.15, 1.0, 0.0, 0.0, 0.0});
+    }
+    SignalId id_;
+};
+
+TEST(MujocoBackend, AKinematicBodyThatStandsHasNoTwistAndMovesOnAgain) {
+    // Its outputs are written only when they change; standing, its twist (from two equal poses)
+    // is not worked out again. A run restored while it stands carries on bit for bit.
+    const World world = pushedBox();
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    scheduler.add(std::make_unique<MujocoBackend>());
+    scheduler.add(std::make_unique<StopAndGo>());
+    wire(scheduler, world);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{400'000'000}).ok());
+    EXPECT_NEAR(read(scheduler, "body/pusher/twist", 0), -1.0, 1e-6);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{700'000'000}).ok());
+    StateWriter saved;
+    ASSERT_TRUE(scheduler.saveState(saved).ok());
+    for (std::size_t k = 0; k < 6; ++k) {
+        EXPECT_EQ(read(scheduler, "body/pusher/twist", k), 0.0) << k;
+    }
+    EXPECT_NEAR(read(scheduler, "body/pusher/pose", 0), 5.5, 1e-12);
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{1'200'000'000}).ok());
+    EXPECT_NEAR(read(scheduler, "body/pusher/twist", 0), -1.0, 1e-6);
+    EXPECT_NEAR(read(scheduler, "body/pusher/pose", 0), 5.3, 1e-9);
+    const std::uint64_t first = scheduler.stateHash().value();
+
+    StateReader reader(saved.bytes());
+    ASSERT_TRUE(scheduler.restoreState(reader).ok());
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{1'200'000'000}).ok());
+    EXPECT_EQ(scheduler.stateHash().value(), first);
 }
 
 // --- state ---------------------------------------------------------------------------------

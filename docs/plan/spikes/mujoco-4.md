@@ -113,7 +113,10 @@ What this says:
   and writing every body's signals. On 3.12 that overhead was 15 % of the step; on 4.0.1 it is
   44 %. A profile of the backend with 851 contacts is the next step (and is worth doing on
   3.12 too); computing contact forces and `rnePostConstraint` only when something reads them is
-  the obvious candidate. TODO(verify) by profiling.
+  the obvious candidate. TODO(verify) by profiling. *Profiled on 3.12 afterwards
+  ([benchmarks.md §4.4](../../design/benchmarks.md)): Lagrange's own work is about 2 % of the
+  pile's step; the gap to `boxes.xml` comes from the model Lagrange builds (an extra ground plane,
+  the ground box as a body of its own), in which the pile falls differently.*
 
 Not measured, and why:
 
