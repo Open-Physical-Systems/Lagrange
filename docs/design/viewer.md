@@ -412,6 +412,16 @@ into a scope. When `has_ros_graph` is false the panel says so.
 inspector), "Navigation" (viewport + ROS topics + console), "Replay review" (viewport + timeline
 + scopes).
 
+### 6.3 Robot builder (RFC 0016, Draft)
+
+`rfcs/0016-robot-builder.md` (Draft, not accepted) proposes a **Builder** workspace: build a
+robot in the viewer (links with box, cylinder, sphere and later mesh shapes, joints, sensors from
+a catalog of the built-in types and kinds), test it in a test server of the viewer's own, and
+save it as URDF. Build mode simulates nothing and draws only the edited robot, Lit, so it works
+without a server. Its code would live in `viewer/builder/` with no simulation module linked
+(invariant 14); the MVP needs no protocol change. The screen's draft design is
+`docs/design/ui/12-builder/`. Nothing of it is built until the owner accepts the RFC.
+
 ## 7. Scopes: ring buffers and decimation
 
 Requirements: at least 16 signals at 10 kHz without dropped samples (CLAUDE.md §13.4), smooth

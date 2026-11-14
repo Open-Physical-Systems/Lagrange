@@ -336,7 +336,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Design proposals (RFCs) (15)</summary>
+<details><summary>Design proposals (RFCs) (16)</summary>
 
 - [RFC 0001: Module interface, signals and scheduling contract](rfcs/0001-module-interface.md)
 - [RFC 0002: USD custom schemas](rfcs/0002-usd-schemas.md)
@@ -353,6 +353,7 @@ recorded to MCAP and replayed.
 - [RFC 0013: Magnetic interference from a robot's own power wiring](rfcs/0013-motor-emi.md)
 - [RFC 0014: Protocol frame limits before the handshake](rfcs/0014-pre-handshake-limits.md)
 - [RFC 0015: USD attributes for lidar scan patterns and fisheye lenses](rfcs/0015-lidar-patterns-fisheye-usd.md)
+- [RFC 0016: A robot builder in the viewer](rfcs/0016-robot-builder.md)
 
 </details>
 
