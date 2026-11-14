@@ -54,6 +54,15 @@ protected:
                                      "child link)");
         }
         const JointType type = raw.joints.type[joint_];
+        if (type == JointType::Free && kindText(raw, sensor_, "joint").empty()) {
+            // On the root link the joint found is the base's own to the world (URDF has none):
+            // say so in the user's words, not by that joint's internal name.
+            return Status::error(StatusCode::InvalidConfig,
+                                 kind_ + " " + name_ +
+                                     ": is on the root link, which no hinge or slide joint "
+                                     "carries; mount it on a moving joint's child link or name "
+                                     "a hinge or slide with `joint`");
+        }
         if (type != JointType::Revolute && type != JointType::Continuous &&
             type != JointType::Prismatic) {
             return Status::error(StatusCode::InvalidConfig,

@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -590,5 +591,141 @@ TEST(Validation, EveryTemplateValidatesWithNoError) {
     EXPECT_EQ(templates, 3);
 }
 
+const SensorCatalog& realCatalog() {
+    static const SensorCatalog catalog = [] {
+        auto loaded = SensorCatalog::load({LAGRANGE_SENSOR_CATALOG_YAML});
+        EXPECT_TRUE(std::holds_alternative<SensorCatalog>(loaded));
+        return std::holds_alternative<SensorCatalog>(loaded) ? std::get<SensorCatalog>(loaded)
+                                                             : SensorCatalog{};
+    }();
+    return catalog;
+}
+
+Document rover() {
+    std::ifstream in(std::filesystem::path(LAGRANGE_BUILDER_TEST_DIR) / "rover_mk1.urdf");
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const ReadResult read = readUrdf(text);
+    EXPECT_TRUE(read.document) << read.error;
+    return read.document ? *read.document : Document{};
+}
+
+/// The problems about one item, at one level.
+std::vector<Problem> about(const std::vector<Problem>& problems, std::string_view item,
+                           Level level) {
+    std::vector<Problem> out;
+    std::ranges::copy_if(problems, std::back_inserter(out),
+                         [&](const Problem& p) { return p.item == item && p.level == level; });
+    return out;
+}
+
+TEST(Validation, EveryCatalogKindWithItsDefaultsSaysWhatTheServerWillRefuse) {
+    // QA F5: each URDF kind of the catalog added with its defaults on the rover's base_link.
+    // The server refused these 15 (and the sonar, F10) (qa-builder per/<kind>.urdf, each alone) and
+    // started the rest; the builder must say so before Test: an error for what the robot lacks, a
+    // warning for what the world it runs in may give. test_sensor_catalog (lagrange_sensors) checks
+    // the catalog's marks against the server's kinds both ways.
+    const std::map<std::string, Level, std::less<>> refused{
+        {"battery_monitor", Level::Error},
+        {"current_sensor", Level::Error},
+        {"voltage_sensor", Level::Error},
+        {"detections", Level::Error},
+        {"esc_telemetry", Level::Error},
+        {"force_torque", Level::Error},
+        {"joint_torque", Level::Error},
+        {"gripper_sensor", Level::Error},
+        {"imaging_radar", Level::Error},
+        {"landing_target", Level::Warning},
+        {"safety_scanner", Level::Error},
+        {"tension_sensor", Level::Warning},
+        {"tpms", Level::Error},
+        {"uwb", Level::Warning},
+        {"vehicle_can", Level::Error},
+        // QA F10: beside the rover's 15 Hz camera its 160 ms ping never lines up (alone, it
+        // starts): a warning naming both.
+        {"sonar", Level::Warning},
+    };
+    std::size_t kinds = 0;
+    for (const CatalogEntry& entry : realCatalog().entries()) {
+        if (entry.builtinType || entry.overlayOnly) {
+            continue;
+        }
+        ++kinds;
+        Document document = rover();
+        Sensor sensor;
+        sensor.name = "probe";
+        sensor.link = "base_link";
+        sensor.type = entry.name;
+        document.sensors.push_back(sensor);
+        const auto problems = validate(document, &realCatalog(), {});
+        const auto errors = about(problems, "probe", Level::Error);
+        const auto warnings = about(problems, "probe", Level::Warning);
+        const auto expected = refused.find(entry.name);
+        if (expected == refused.end()) {
+            EXPECT_TRUE(errors.empty() && warnings.empty())
+                << entry.name << " starts on the rover, yet:\n"
+                << dump(problems);
+        } else if (expected->second == Level::Error) {
+            EXPECT_FALSE(errors.empty()) << entry.name << ": no error\n" << dump(problems);
+        } else {
+            EXPECT_TRUE(errors.empty()) << entry.name << ": a world may give it\n"
+                                        << dump(problems);
+            EXPECT_FALSE(warnings.empty()) << entry.name << ": no warning\n" << dump(problems);
+        }
+    }
+    EXPECT_GE(kinds, refused.size());
+}
+
+TEST(Validation, ASensorsNeedsAreMetByWhatTheRobotHas) {
+    Document document = rover();
+    const auto add = [&](std::string name, std::string type, std::string link,
+                         std::map<std::string, std::string, std::less<>> params) {
+        Sensor s;
+        s.name = std::move(name);
+        s.type = std::move(type);
+        s.link = std::move(link);
+        s.params = std::move(params);
+        document.sensors.push_back(std::move(s));
+    };
+    add("ft", "force_torque", "tilt_link", {});  // below the tilt hinge
+    add("ft_named", "force_torque", "base_link", {{"joint", "pan_joint"}});
+    add("ft_fixed", "joint_torque", "mast", {});  // mast is fixed to the root
+    add("labels", "detections", "base_link", {{"camera", "camera"}});
+    add("labels_wrong", "detections", "base_link", {{"camera", "imu"}});
+    add("monitor", "battery_monitor", "base_link", {{"battery", "pack"}});
+    add("scanner", "safety_scanner", "base_link", {{"protective/radius", "1.5"}});
+    add("grip", "gripper_sensor", "base_link", {{"fingers", "pan_joint nope"}});
+    add("odometry", "wheel_odometry", "base_link", {});
+    add("odometry_mast", "wheel_odometry", "mast", {});
+    const auto problems = validate(document, &realCatalog(), {});
+    for (const char* fine : {"ft", "ft_named", "labels", "monitor", "scanner", "odometry"}) {
+        EXPECT_TRUE(about(problems, fine, Level::Error).empty()) << fine << "\n" << dump(problems);
+    }
+    EXPECT_EQ(count(problems, Level::Error, "ft_fixed", "hangs from no hinge or slide"), 1U)
+        << dump(problems);
+    EXPECT_EQ(count(problems, Level::Error, "labels_wrong", "not a camera sensor"), 1U);
+    EXPECT_EQ(count(problems, Level::Error, "grip", "joint 'nope'"), 1U);
+    EXPECT_EQ(count(problems, Level::Error, "odometry_mast", "has 0 such hinges"), 1U);
+}
+
+TEST(Validation, SensorRatesThatNeverLineUpAreNamed) {
+    // QA F10: the catalog sonar (120 m in water: a ping every 160 ms) beside the rover's 15 Hz
+    // camera (67 ms) line up every 10.72 s; the scheduler refuses over 10 s.
+    Document document = rover();
+    Sensor sonar;
+    sonar.name = "sonar";
+    sonar.type = "sonar";
+    sonar.link = "base_link";
+    document.sensors.push_back(sonar);
+    auto problems = validate(document, &realCatalog(), {});
+    EXPECT_EQ(count(problems, Level::Warning, "sonar",
+                    "sensors 'camera' (every 67 ms) and 'sonar' (every 160 ms, its ping"),
+              1U)
+        << dump(problems);
+    EXPECT_EQ(count(problems, Level::Warning, "sonar", "every 10.72 s"), 1U) << dump(problems);
+    // A 10 Hz camera (100 ms) lines up with it every 800 ms.
+    findSensor(document, "camera")->updateRate = 10.0;
+    problems = validate(document, &realCatalog(), {});
+    EXPECT_EQ(count(problems, Level::Warning, "sonar", "line up only"), 0U) << dump(problems);
+}
 }  // namespace
 }  // namespace lagrange::viewer::builder

@@ -11,6 +11,7 @@
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <charconv>
 #include <chrono>
@@ -19,6 +20,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 #include <limits>
 #include <numbers>
@@ -472,6 +474,43 @@ std::vector<std::string> lastLines(const std::string& text, std::size_t count) {
     return lines;
 }
 
+/// A refused start's log, for Problems (QA F6): every line of the server's refusal (the
+/// indented reasons after "could not start:", and any line that says error, failed or refused)
+/// first, in order, then the last `tail` other lines for context.
+std::vector<std::string> refusalLines(const std::string& text, std::size_t tail) {
+    const std::vector<std::string> lines = lastLines(text, std::numeric_limits<std::size_t>::max());
+    const auto says = [](std::string line, std::initializer_list<std::string_view> words) {
+        std::ranges::transform(line, line.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return std::ranges::any_of(
+            words, [&](std::string_view w) { return line.find(w) != std::string::npos; });
+    };
+    std::vector<bool> reason(lines.size(), false);
+    bool inRefusal = false;
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        const bool indented = lines[i].starts_with(' ') || lines[i].starts_with('\t');
+        inRefusal = inRefusal && indented;
+        reason[i] = inRefusal || says(lines[i], {"error", "failed", "refuse", "could not"});
+        if (says(lines[i], {"could not start"})) {
+            inRefusal = true;
+        }
+    }
+    std::vector<std::string> out;
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        if (reason[i]) {
+            out.push_back(lines[i]);
+        }
+    }
+    std::vector<std::string> context;
+    for (std::size_t i = lines.size(); i-- > 0 && context.size() < tail;) {
+        if (!reason[i]) {
+            context.insert(context.begin(), lines[i]);
+        }
+    }
+    out.insert(out.end(), context.begin(), context.end());
+    return out;
+}
+
 std::string readFile(const std::filesystem::path& path, std::string& error) {
     std::ifstream in(path, std::ios::binary);
     if (!in) {
@@ -794,6 +833,13 @@ void BuilderHost::exportUsd() {
                     "Export USD: save the robot first; the .usda is written next to its file");
         return;
     }
+    // A loop or a second root is refused by the importer too (QA F2); say why here instead.
+    if (const builder::Tree tree = builder::buildTree(session_.document()); !tree.ok) {
+        fileProblem(
+            builder::Level::Error, "",
+            "Export USD: the joints do not make one tree (" + tree.error + "); fix that first");
+        return;
+    }
     const std::filesystem::path importer = program("lagrange_import");
     if (importer.empty()) {
         fileProblem(builder::Level::Error, "", "Export USD: lagrange_import is not installed");
@@ -831,6 +877,12 @@ void BuilderHost::checkLoads() {
     const std::filesystem::path checker = program("lagrange_check");
     if (checker.empty()) {
         fileProblem(builder::Level::Error, "", "Check loads: lagrange_check is not installed");
+        return;
+    }
+    if (const builder::Tree tree = builder::buildTree(session_.document()); !tree.ok) {
+        fileProblem(
+            builder::Level::Error, "",
+            "Check loads: the joints do not make one tree (" + tree.error + "); fix that first");
         return;
     }
     std::string error;
@@ -1261,9 +1313,11 @@ void BuilderHost::endTest(const std::string& failure) {
         // SPEC state 4: the view does not change; Problems comes forward with the loader's
         // message and Build stays active.
         session_.problems.loader.push_back({builder::Level::Warning, "", failure});
-        constexpr std::size_t kTailBytes = 4096;
-        constexpr std::size_t kTailLines = 8;
-        for (const std::string& line : lastLines(test_.logTail(kTailBytes), kTailLines)) {
+        // Every reason of the refusal first (a run refused for 16 sensors lists all 16), then
+        // the last lines before it for context (QA F6).
+        constexpr std::size_t kTailBytes = 64 * 1024;
+        constexpr std::size_t kContextLines = 4;
+        for (const std::string& line : refusalLines(test_.logTail(kTailBytes), kContextLines)) {
             session_.problems.loader.push_back({builder::Level::Warning, "", line});
         }
         ImGui::SetWindowFocus(builder_windows::kProblems);

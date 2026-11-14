@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <map>
 #include <memory>
 #include <numeric>
@@ -284,11 +285,59 @@ void Scheduler::checkSteps(std::vector<WiringError>& errors) {
                               " is below 1 µs; check the profile's dt values for a typo"});
     }
     if (overflow || lcm > kMaxHyperperiodNs) {
-        errors.push_back({Kind::IncommensurateSteps,
-                          {},
-                          "the steps repeat only after more than 10 s; check the profile's dt "
-                          "values for a typo such as 0.00101"});
+        errors.push_back({Kind::IncommensurateSteps, {}, hyperperiodMessage()});
     }
+}
+
+std::string Scheduler::hyperperiodMessage() const {
+    // RFC 0005: a violation names the offending pair, the two steps that line up last (a
+    // sonar's ping-limited 160 ms beside a 15 Hz camera's 67 ms line up every 10.72 s).
+    constexpr std::int64_t kForever = std::numeric_limits<std::int64_t>::max();
+    const auto pairPeriod = [](std::int64_t a, std::int64_t b) {
+        const std::int64_t factor = b / std::gcd(a, b);
+        return a > kForever / factor ? kForever : a * factor;
+    };
+    const Entry* worstA = nullptr;
+    const Entry* worstB = nullptr;
+    std::int64_t worst = 0;
+    for (std::size_t i = 0; i < entries_.size(); ++i) {
+        for (std::size_t j = i + 1; j < entries_.size(); ++j) {
+            const std::int64_t a = entries_[i].dt.ns;
+            const std::int64_t b = entries_[j].dt.ns;
+            if (a <= 0 || b <= 0) {
+                continue;
+            }
+            const std::int64_t together = pairPeriod(a, b);
+            if (together > worst) {
+                worstA = &entries_[i];
+                worstB = &entries_[j];
+                worst = together;
+            }
+        }
+    }
+    const auto rate = [](Duration d) {
+        char text[32];
+        std::snprintf(text, sizeof(text), "%.4g Hz", 1e9 / static_cast<double>(d.ns));
+        return std::string(text);
+    };
+    std::string out = "the steps repeat only after more than 10 s";
+    if (worstA != nullptr && worst > kMaxHyperperiodNs) {
+        char together[32];
+        std::snprintf(together, sizeof(together), "%.6g s", static_cast<double>(worst) * 1e-9);
+        out += ": " + worstA->label + " steps every " + formatDuration(worstA->dt) + " (" +
+               rate(worstA->dt) + ") and " + worstB->label + " every " +
+               formatDuration(worstB->dt) + " (" + rate(worstB->dt) + "), which line up only " +
+               (worst == kForever ? std::string("after centuries")
+                                  : "every " + std::string(together)) +
+               "; change one of their rates (update_rate, or what sets that step) so that one "
+               "period divides the other or both are whole multiples of a common one";
+    } else if (worstA != nullptr) {
+        out +=
+            " for all the modules together (no two of them alone): make the rates of the "
+            "slowest sensors share a common period";
+    }
+    out += ", or check a profile's dt values for a typo such as 0.00101";
+    return out;
 }
 
 void Scheduler::connect(std::vector<WiringError>& errors) {

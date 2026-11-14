@@ -47,6 +47,19 @@ struct Problem {
 [[nodiscard]] std::vector<Problem> checkSensorParams(const Sensor& sensor,
                                                      const CatalogEntry& entry);
 
+/// What a sensor needs before the server starts it, from its catalog entry (QA F5): each
+/// `required` parameter given; a given joint or camera parameter naming one of the robot's; each
+/// `requires` item met (an error, or a warning for one the world may give). validate() applies
+/// it to each sensor whose type the catalog finds. In SensorNeeds.cpp.
+[[nodiscard]] std::vector<Problem> checkSensorNeeds(const Document& document, const Sensor& sensor,
+                                                    const CatalogEntry& entry);
+
+/// Sensor steps the scheduler refuses (QA F10): two sensors whose periods (as the server rounds
+/// them, the sonar's at least its ping) line up only after more than 10 s, a warning naming both.
+/// validate() includes these when it has a catalog. In SensorNeeds.cpp.
+[[nodiscard]] std::vector<Problem> checkSensorRates(const Document& document,
+                                                    const SensorCatalog& catalog);
+
 /// The overlay's rules (RFC 0016 phase 3; the stage loader's, modules/electrical/network): a
 /// form's required values, numbers within the schema's range, an ascending ocvSoc as long as
 /// ocvVoltage, a bus's overvoltage above its undervoltage; a motor on a joint that exists, moves

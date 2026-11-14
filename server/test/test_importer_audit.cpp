@@ -188,6 +188,55 @@ TEST(SurfaceLooks, AUrdfLinkSaysHowItLooks) {
     EXPECT_TRUE(seen);
 }
 
+// QA F2: a loop of joints is refused by every loader with a message (it crashed the URDF loader
+// with an endless recursion); urdfdom itself accepts it.
+TEST(JointLoops, EveryLoaderRefusesALoopWithAMessage) {
+    const std::string box = R"(<inertial><mass value="1"/><inertia ixx="0.01" iyy="0.01"
+izz="0.01" ixy="0" ixz="0" iyz="0"/></inertial><collision><geometry><box size="0.1 0.1 0.1"/>
+</geometry></collision>)";
+    const auto link = [&](const std::string& name) {
+        return "<link name=\"" + name + "\">" + box + "</link>";
+    };
+    const auto joint = [](const std::string& name, const std::string& parent,
+                          const std::string& child) {
+        return "<joint name=\"" + name + "\" type=\"fixed\"><parent link=\"" + parent +
+               "\"/><child link=\"" + child + "\"/></joint>";
+    };
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / ("lagrange_loop_" + std::to_string(::getpid()));
+    std::filesystem::create_directories(dir);
+    struct Case {
+        std::string file, text, says;
+    };
+    const std::vector<Case> cases{
+        // The QA's file: b hangs below a, and c -> b closes the loop.
+        {"loop.urdf",
+         "<robot name=\"loop\">" + link("a") + link("b") + link("c") + joint("j1", "a", "b") +
+             joint("j2", "b", "c") + joint("j3", "c", "b") + "</robot>",
+         "both carry link 'b'"},
+        // A loop of its own beside the root: nothing below the root reaches it.
+        {"island.urdf",
+         "<robot name=\"island\">" + link("a") + link("b") + link("c") + joint("j1", "b", "c") +
+             joint("j2", "c", "b") + "</robot>",
+         "loop"},
+        {"loop.sdf", R"(<?xml version="1.0"?><sdf version="1.9"><model name="loop">
+<link name="a"/><link name="b"/><link name="c"/>
+<joint name="j1" type="revolute"><parent>a</parent><child>b</child><axis><xyz>0 0 1</xyz></axis></joint>
+<joint name="j2" type="revolute"><parent>b</parent><child>c</child><axis><xyz>0 0 1</xyz></axis></joint>
+<joint name="j3" type="revolute"><parent>c</parent><child>b</child><axis><xyz>0 0 1</xyz></axis></joint>
+</model></sdf>)",
+         ""},
+    };
+    for (const Case& c : cases) {
+        const std::filesystem::path path = dir / c.file;
+        std::ofstream(path) << c.text;
+        const auto model = loadModel(path.string());
+        ASSERT_FALSE(model) << c.file << " loaded";
+        EXPECT_NE(model.error().find(c.says), std::string::npos) << c.file << ": " << model.error();
+    }
+    std::filesystem::remove_all(dir);
+}
+
 // RFC 0012: <thermal_material> and <heat_source> on a link become its prim's schemas, and
 // lagrange_import writes them to USD, read back the same.
 TEST(ThermalMaterials, AUrdfLinksMaterialAndHeatSourcesReachTheWorldAndUsd) {

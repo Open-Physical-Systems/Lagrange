@@ -202,6 +202,7 @@ private:
     };
 
     void checkSteps(std::vector<WiringError>& errors);
+    [[nodiscard]] std::string hyperperiodMessage() const;  // names the pair (RFC 0005)
     void connect(std::vector<WiringError>& errors);
     void checkContracts(const WorldView& world, std::vector<WiringError>& errors);
     void order(std::vector<WiringError>& errors);

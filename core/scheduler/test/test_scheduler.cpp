@@ -297,6 +297,21 @@ TEST(Wiring, IncommensurateSteps) {
         EXPECT_NE(errors[0].detail.find("more than 10 s"), std::string::npos);
     }
     {
+        // A sonar's ping-limited 160 ms beside a 15 Hz camera's 67 ms: the message names both,
+        // with their steps, not only the profile's dt (the user may have none).
+        Scheduler scheduler;
+        scheduler.add(std::make_unique<TestModule>("rigid_body", "physics", 1_ms));
+        scheduler.add(std::make_unique<TestModule>("sensors", "sonar_front", 160_ms));
+        scheduler.add(std::make_unique<TestModule>("sensors", "camera_cam", 67_ms));
+        const World world;
+        const auto errors = wiringErrors(scheduler, world);
+        ASSERT_EQ(errors.size(), 1U);
+        const std::string& why = errors[0].detail;
+        EXPECT_NE(why.find("sensors/sonar_front steps every 160 ms"), std::string::npos) << why;
+        EXPECT_NE(why.find("sensors/camera_cam every 67 ms"), std::string::npos) << why;
+        EXPECT_NE(why.find("10.72 s"), std::string::npos) << why;
+    }
+    {
         Scheduler scheduler;
         scheduler.add(std::make_unique<TestModule>("a", "x", Duration{0}));
         const World world;
