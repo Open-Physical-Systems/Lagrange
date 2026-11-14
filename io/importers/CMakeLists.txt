@@ -7,7 +7,13 @@ find_package(lagrange_core REQUIRED)
 # libsdformat 16.1.0 from ros-lyrical-sdformat-vendor; MuJoCo 3.12.0 from ros-lyrical-mujoco-vendor.
 find_package(sdformat_vendor REQUIRED)
 find_package(sdformat REQUIRED)
-find_package(mujoco_vendor REQUIRED)
+# See lagrange_rigid_body_mujoco: LAGRANGE_MUJOCO_PACKAGE picks the MuJoCo; both must agree.
+set(LAGRANGE_MUJOCO_PACKAGE
+    mujoco_vendor
+    CACHE STRING
+    "CMake package that provides mujoco::mujoco"
+)
+find_package(${LAGRANGE_MUJOCO_PACKAGE} REQUIRED)
 find_package(tinyxml2 REQUIRED)
 
 add_library(
@@ -68,5 +74,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(lagrange_core sdformat_vendor sdformat mujoco_vendor tinyxml2)
+ament_export_dependencies(lagrange_core sdformat_vendor sdformat ${LAGRANGE_MUJOCO_PACKAGE} tinyxml2)
 ament_package()

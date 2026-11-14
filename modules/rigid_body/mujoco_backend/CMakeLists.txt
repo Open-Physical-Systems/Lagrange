@@ -4,8 +4,15 @@ project(lagrange_rigid_body_mujoco VERSION 0.0.0 LANGUAGES CXX)
 find_package(ament_cmake REQUIRED)
 find_package(lagrange_cmake REQUIRED)
 find_package(lagrange_core REQUIRED)
-# MuJoCo 3.12.0 from ros-lyrical-mujoco-vendor (docs/plan/spikes/0.2-C1-mujoco.md).
-find_package(mujoco_vendor REQUIRED)
+# MuJoCo 3.12.0 from ros-lyrical-mujoco-vendor (docs/plan/spikes/0.2-C1-mujoco.md). Spike
+# (docs/plan/spikes/mujoco-4.md): -DLAGRANGE_MUJOCO_PACKAGE=mujoco takes MuJoCo's own CMake package
+# instead (a MuJoCo 4.x install on CMAKE_PREFIX_PATH); both give the target mujoco::mujoco.
+set(LAGRANGE_MUJOCO_PACKAGE
+    mujoco_vendor
+    CACHE STRING
+    "CMake package that provides mujoco::mujoco"
+)
+find_package(${LAGRANGE_MUJOCO_PACKAGE} REQUIRED)
 
 # MuJoCo 3.12's mjsan.h switches to ASan stack instrumentation when it detects AddressSanitizer
 # (__SANITIZE_ADDRESS__ or __has_feature). Under GCC its inline definitions do not compile, and the
@@ -55,5 +62,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(lagrange_core mujoco_vendor)
+ament_export_dependencies(lagrange_core ${LAGRANGE_MUJOCO_PACKAGE})
 ament_package()
