@@ -151,7 +151,6 @@ public:
         const bool owned =
             building &&
             gizmo_.handle(session, view, hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left));
-        Camera& camera = session.camera;  // also while testing: the server's scene, this camera
         if (ImGui::IsItemActive() && !owned) {
             if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
                 camera.orbit(-io.MouseDelta.x * kOrbitRadiansPerPixel,
