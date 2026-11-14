@@ -407,17 +407,14 @@ Expected<Model, std::string> importMjcf(const std::string& path, const ImportOpt
         d.links[ensureLink(m.site_bodyid[site])].sensors.push_back(std::move(imu));
     }
 
-    const bool addGround = options.addGround && !detail::hasGroundPlane(d);
-    if (addGround) {
-        model.world.addCollider(kWorldBody, ShapeType::Plane, {0.0, 0.0, 1.0}, Pose{},
-                                options.groundFriction);
-    }
     if (auto built = detail::build(d, model); !built) {
         return Unexpected{path + ": " + built.error()};
     }
     model.name = d.name;
-    if (addGround) {
-        addGroundPrim(model);
+    // Lagrange's ground only where the file has no floor of its own (a plane, a slab, a height
+    // field), so that a file's ground box is not doubled by a plane at its top.
+    if (options.addGround && !hasOwnFloor(model)) {
+        addGroundPlane(model, options.groundFriction);
     }
     return model;
 }

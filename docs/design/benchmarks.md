@@ -349,6 +349,14 @@ around each stage, not committed) says otherwise:
   Lagrange builds it, at 0.167 (1227 contacts, Lagrange's 1227). The pile is chaotic, so where
   its geoms sit in the model changes how it falls and how hard the solver works by ±20 %. The
   spike's 15 % is that, not Lagrange's work.
+- **The doubled floor is gone (2026-11-15).** Lagrange now adds its plane only to a file with no
+  floor of its own (`hasOwnFloor`: an upward plane, a height field, or a level slab at least
+  10 m wide; docs/guide/cli.md), for every loader and as robot or world. The pile then runs at
+  0.123 on MuJoCo (2.71 on Jolt, from 2.40): with no plane the boxes rest on the ground box in
+  its static body, whose contacts merge MuJoCo's constraint islands (34.8 per step against 43.9
+  with the box on the world body, 3.0 solver iterations against 2.2). MuJoCo alone with that
+  model: 0.125 (853 contacts), against 0.184 with the box on the world body. Giving static
+  bodies' geoms to the world body in the backend is the next step.
 - **In the town the backend's own work was large**: 42 of 93 µs with the sedan (MuJoCo's own
   steps 51), reading 663 bodies' external wrenches (1 of them connected) and 654 pose commands,
   writing every kinematic body's pose, twist and contact force, and `mj_rnePostConstraint`.

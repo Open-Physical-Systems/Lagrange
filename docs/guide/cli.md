@@ -331,6 +331,12 @@ The viewer's robot builder does the same for one link (Properties, Collision, *S
   is one such chain. MJCF's written `<freejoint>` stays free.
 - A `<lagrange>` block in the URDF naming a SPICE netlist gives it its power system
   (`<lagrange><schematic file="power.cir"/>...`, formats.md §9.2), with no `--overlay`.
+- One ground per run. Lagrange adds its ground (an infinite plane at z = 0 and the 50 m slab you
+  see) only when neither the robot's file nor the world's has a floor of its own: a plane facing
+  up, a height field, or a level box at least 10 m by 10 m and no thicker than a quarter of its
+  narrower side, on the world or on a body fixed to it (an MJCF `worldbody` geom, an SDFormat
+  static model, a URDF world's links). A file with such a floor, as the robot or as the world,
+  keeps its own and gets no plane at its top (1.3.0 and earlier added the plane there too).
 - On a robot fixed to the ground, a joint with no command yet holds its start position, up to its
   URDF effort limit; a joint stopped at that limit away from its target is logged, because the file's
   limit is kept, not raised.

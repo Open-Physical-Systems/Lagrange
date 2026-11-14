@@ -1611,17 +1611,9 @@ Expected<Model, std::string> loadStage(const std::string& path, const ReadOption
         return Unexpected{path + ": tile " + options.tile +
                           " holds rigid bodies; a tile holds static scenery only"};
     }
-    if (options.addGround && !reader.hasPlane() && model.groundPlane) {
+    if (options.addGround && !reader.hasPlane() && model.groundPlane && !hasOwnFloor(model)) {
         // As the URDF loader: the infinite plane first among the colliders, the slab last.
-        World& w = model.world;
-        w.colliders.body.insert(w.colliders.body.begin(), kWorldBody);
-        w.colliders.shape.insert(w.colliders.shape.begin(), ShapeType::Plane);
-        w.colliders.size.insert(w.colliders.size.begin(), {0.0, 0.0, 1.0});
-        w.colliders.poseInBody.insert(w.colliders.poseInBody.begin(), Pose{});
-        w.colliders.friction.insert(w.colliders.friction.begin(), options.groundFriction);
-        w.colliders.hull.insert(w.colliders.hull.begin(), kNoHull);
-        w.colliders.material.insert(w.colliders.material.begin(), kNoMaterial);
-        addGroundPrim(model);
+        addGroundPlane(model, options.groundFriction);
     }
     const UsdPrim root = stage->GetDefaultPrim();
     model.name =

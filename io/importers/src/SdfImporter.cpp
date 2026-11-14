@@ -744,15 +744,6 @@ Expected<Model, std::string> importSdf(const std::string& path, const ImportOpti
         return Unexpected{path + " has no models"};
     }
 
-    bool ownGround = false;
-    for (const Description& d : descriptions) {
-        ownGround = ownGround || detail::hasGroundPlane(d);
-    }
-    const bool addGround = options.addGround && !ownGround;
-    if (addGround) {
-        model.world.addCollider(kWorldBody, ShapeType::Plane, {0.0, 0.0, 1.0}, Pose{},
-                                options.groundFriction);
-    }
     for (const Description& d : descriptions) {
         if (auto built = detail::build(d, model); !built) {
             return Unexpected{path + ": " + built.error()};
@@ -795,8 +786,10 @@ Expected<Model, std::string> importSdf(const std::string& path, const ImportOpti
         }
         model.world.schemaInstances.push_back(std::move(human));
     }
-    if (addGround) {
-        addGroundPrim(model);
+    // Lagrange's ground only where the file has no floor of its own (a plane, a slab, a height
+    // field), so that a file's ground box is not doubled by a plane at its top.
+    if (options.addGround && !hasOwnFloor(model)) {
+        addGroundPlane(model, options.groundFriction);
     }
     return model;
 }

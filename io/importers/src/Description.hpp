@@ -105,9 +105,6 @@ struct Description {
 /// represented is listed in Model::notes; a broken tree is an error.
 [[nodiscard]] Expected<void, std::string> build(const Description& description, Model& model);
 
-/// Whether a description has a plane that build() puts on the world (a ground of its own).
-[[nodiscard]] bool hasGroundPlane(const Description& description);
-
 /// Adds `text` to the model's notes once.
 void note(Model& model, std::string text);
 
