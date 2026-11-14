@@ -5,6 +5,12 @@ Notable changes to Lagrange are recorded here. Each release section is generated
 titles merged into `dev`; do not edit it by hand. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Features
+
+* **viewer:** the robot builder (RFC 0016 phase 1 and Addendum A): a Builder workspace that builds a robot from shapes and meshes, joints and catalog sensors, tests it in a simulator of its own and saves it as URDF (`--workspace builder`, `--builder-open`, `--builder-save`, Ctrl B; docs/guide/builder.md)
+
 ## [1.3.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v1.2.1...v1.3.0) (2026-11-14)
 
 
