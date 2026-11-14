@@ -9,6 +9,8 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <imgui_internal.h>  // ItemSize/ItemAdd for custom-drawn widgets
 
 namespace lagrange::viewer::widgets {
@@ -404,7 +406,8 @@ bool PrimaryButton(const char* label) {
     return Button(label, ButtonKind::Primary);
 }
 
-void Readout(const char* key, const char* value, const char* after, const ImVec4& color) {
+void Readout(const char* key, const char* value, const char* after, const ImVec4& color,
+             const ImVec4& afterColor) {
     // Design (.ro): 26 px box on bg0 with a 1 px line border; 11 px key, 12 px mono value.
     const theme::Fonts& fonts = theme::fonts();
     const float keySize = px(theme::kCaptionSize);
@@ -429,7 +432,7 @@ void Readout(const char* key, const char* value, const char* after, const ImVec4
     draw->AddText(fonts.mono, valueSize, ImVec2(x, mid - v.y * 0.5F), u32(color), value);
     x += v.x + gap;
     if (hasAfter) {
-        draw->AddText(fonts.sans, keySize, ImVec2(x, mid - a.y * 0.5F), u32(c::t3), after);
+        draw->AddText(fonts.sans, keySize, ImVec2(x, mid - a.y * 0.5F), u32(afterColor), after);
     }
 }
 
@@ -512,9 +515,10 @@ bool DomainChip(const char* id, const ImVec4& color, const char* name, const cha
     const float detailSize = px(theme::kCaptionSize);
     const ImVec2 nameExtent = fonts.sans->CalcTextSizeA(nameSize, FLT_MAX, 0.0F, name);
     const ImVec2 detailExtent = fonts.mono->CalcTextSizeA(detailSize, FLT_MAX, 0.0F, detail);
-    const float dot = px(8.0F);
+    const bool hasDot = color.w > 0.0F;  // a neutral chip has none
+    const float dot = hasDot ? px(8.0F) : 0.0F;
     const float gap = px(6.0F);
-    const ImVec2 size(px(8.0F) + dot + gap + nameExtent.x +
+    const ImVec2 size(px(8.0F) + dot + (hasDot ? gap : 0.0F) + nameExtent.x +
                           (detailExtent.x > 0.0F ? gap + detailExtent.x : 0.0F) + px(9.0F),
                       px(22.0F));
     const ImVec2 min = ImGui::GetCursorScreenPos();
@@ -559,13 +563,15 @@ bool DomainChip(const char* id, const ImVec4& color, const char* name, const cha
     }
     const float midY = min.y + size.y * 0.5F;
     const ImVec2 centre(min.x + px(8.0F) + dot * 0.5F, midY);
-    if (dashed) {
+    if (!hasDot) {
+        // Neutral: no dot.
+    } else if (dashed) {
         draw->AddCircle(centre, dot * 0.5F - px(0.75F),
                         u32(state == ChipState::Pending ? c::accent : c::t3), 0, px(1.5F));
     } else {
         draw->AddCircleFilled(centre, dot * 0.5F, u32(color));
     }
-    float x = min.x + px(8.0F) + dot + gap;
+    float x = min.x + px(8.0F) + dot + (hasDot ? gap : 0.0F);
     draw->AddText(fonts.sans, nameSize, ImVec2(x, midY - nameExtent.y * 0.5F), u32(text), name);
     x += nameExtent.x + gap;
     draw->AddText(fonts.mono, detailSize, ImVec2(x, midY - detailExtent.y * 0.5F), u32(detailColor),
@@ -1103,6 +1109,337 @@ bool BarTab(const char* label, Icon icon, bool active, bool available) {
     }
     ImGui::PopFont();
     return clicked;
+}
+
+// --- robot builder -------------------------------------------------------------------------
+
+namespace {
+
+/// The one field being typed in (ImGui has one active item at a time): its text lives here
+/// while it is active, so that what the document says does not overwrite what is typed.
+struct ActiveField {
+    ImGuiID id{0};
+    std::array<char, 256> text{};
+};
+ActiveField& activeField() {
+    static ActiveField field;
+    return field;
+}
+
+void monoRowLabel(const char* label) {
+    const float start = ImGui::GetCursorPosX();
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
+    ImGui::PushStyleColor(ImGuiCol_Text, c::t2);
+    ImGui::TextUnformatted(label);
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+    ImGui::SameLine(start + px(kLabelColumn));
+}
+
+}  // namespace
+
+bool CommitField(const char* id, std::string* text, const char* unit, bool edited, float width,
+                 bool numeric) {
+    ActiveField& active = activeField();
+    const ImGuiID self = ImGui::GetID(id);
+    std::array<char, 256> local{};
+    char* buffer = local.data();
+    if (active.id == self) {
+        buffer = active.text.data();
+    } else {
+        std::snprintf(local.data(), local.size(), "%s", text->c_str());
+    }
+    (void)editField(id, buffer, local.size(), unit, edited, width, numeric);
+    if (ImGui::IsItemActivated() && active.id != self) {
+        active.id = self;
+        std::memcpy(active.text.data(), buffer, active.text.size());
+    }
+    bool committed = false;
+    if (ImGui::IsItemDeactivated()) {
+        if (ImGui::IsItemDeactivatedAfterEdit() && *text != buffer) {
+            *text = buffer;
+            committed = true;
+        }
+        if (active.id == self) {
+            active.id = 0;
+        }
+    }
+    return committed;
+}
+
+bool CommitEdit(const char* label, std::string* text, const char* unit, bool edited,
+                const char* tooltip, bool numeric, bool monoLabel) {
+    ImGui::PushID(label);
+    if (monoLabel) {
+        monoRowLabel(label);
+    } else {
+        rowLabel(label);
+    }
+    const float width = std::max(ImGui::GetContentRegionAvail().x, px(40.0F));
+    const bool committed = CommitField("##edit", text, unit, edited, width, numeric);
+    if (tooltip != nullptr && *tooltip != '\0') {
+        ImGui::SetItemTooltip("%s", tooltip);
+    }
+    ImGui::PopID();
+    return committed;
+}
+
+int Vec3Edit(const char* label, double value[3], const char* format) {
+    static constexpr std::array<const char*, 3> kAxis{"X", "Y", "Z"};
+    const std::array<ImVec4, 3> colors{theme::hex(0xF0605D), theme::hex(0x4FC97A),
+                                       theme::hex(0x5AA2FF)};  // design tokens: color.axis
+    const theme::Fonts& fonts = theme::fonts();
+    ImGui::PushID(label);
+    rowLabel(label);
+    const float gap = px(4.0F);
+    const float width = std::max((ImGui::GetContentRegionAvail().x - gap * 2.0F) / 3.0F, px(30.0F));
+    int committed = 0;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        if (axis != 0) {
+            ImGui::SameLine(0.0F, gap);
+        }
+        const ImVec2 min = ImGui::GetCursorScreenPos();
+        // The axis letter is drawn over the field's padding; the value follows it (strtod
+        // skips the leading spaces, and a click selects them with the value).
+        char shown[40];
+        std::snprintf(shown, sizeof(shown), "   ");
+        std::snprintf(shown + 3, sizeof(shown) - 3, format, value[axis]);
+        std::string text = shown;
+        static constexpr std::array<const char*, 3> kIds{"##x", "##y", "##z"};
+        if (CommitField(kIds[axis], &text, nullptr, false, width, true)) {
+            char* end = nullptr;
+            const double parsed = std::strtod(text.c_str(), &end);
+            if (end != text.c_str() && std::isfinite(parsed)) {
+                value[axis] = parsed;
+                committed |= 1 << static_cast<int>(axis);
+            }
+        }
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        const float fontSize = px(theme::kMonoSize);
+        draw->AddText(fonts.monoMedium, fontSize,
+                      ImVec2(min.x + px(7.0F), min.y + (px(22.0F) - fontSize) * 0.5F - px(1.0F)),
+                      u32(colors[axis]), kAxis[axis]);
+    }
+    ImGui::PopID();
+    return committed;
+}
+
+bool DropdownField(const char* id, const char* value, const char* unit, float width) {
+    // Design (.fld.dd): the value field with a 4 px down triangle at its right end.
+    const theme::Fonts& fonts = theme::fonts();
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const ImVec2 max(min.x + width, min.y + px(22.0F));
+    const bool clicked = ImGui::InvisibleButton(id, ImVec2(width, px(22.0F)));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool disabled = (ImGui::GetItemFlags() & ImGuiItemFlags_Disabled) != 0;
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const float rounding = ImGui::GetStyle().FrameRounding;
+    draw->AddRectFilled(min, max, u32(c::bg0), rounding);
+    draw->AddRect(min, max, u32(hovered ? c::lineStrong : c::line), rounding);
+    const float midY = min.y + px(11.0F);
+    const ImVec2 tip(max.x - px(8.0F), midY + px(2.5F));
+    draw->AddTriangleFilled(ImVec2(tip.x - px(4.0F), tip.y - px(5.0F)),
+                            ImVec2(tip.x + px(4.0F), tip.y - px(5.0F)), tip, u32(c::t3));
+    float right = tip.x - px(10.0F);
+    if (unit != nullptr && *unit != '\0') {
+        const float unitSize = px(theme::kCaptionSize);
+        const ImVec2 extent = fonts.mono->CalcTextSizeA(unitSize, FLT_MAX, 0.0F, unit);
+        right -= extent.x;
+        draw->AddText(fonts.mono, unitSize, ImVec2(right, midY - unitSize * 0.5F), u32(c::t3),
+                      unit);
+        right -= px(6.0F);
+    }
+    const float fontSize = px(theme::kMonoSize);
+    draw->PushClipRect(min, ImVec2(std::max(right, min.x), max.y), true);
+    draw->AddText(fonts.mono, fontSize, ImVec2(min.x + px(7.0F), midY - fontSize * 0.5F - px(1.0F)),
+                  u32(disabled ? c::t3 : c::t1), value);
+    draw->PopClipRect();
+    return clicked;
+}
+
+bool DropdownRow(const char* label, const char* value, const char* unit) {
+    ImGui::PushID(label);
+    rowLabel(label);
+    const bool clicked = DropdownField("##dropdown", value, unit,
+                                       std::max(ImGui::GetContentRegionAvail().x, px(40.0F)));
+    ImGui::PopID();
+    return clicked;
+}
+
+bool JointSlider(const char* id, double* value, double lower, double upper, bool wrap, bool knob,
+                 float width) {
+    // Design (12-builder .trk): 4 px bg4 track; fill #3A4F6E from zero to the knob; zero tick
+    // 1 × 12 px lineStrong; knob 14 px t1 with a 2 px bg1 ring and a 1 px lineStrong outline;
+    // a continuous joint's track is dashed (6 px on, 3 px off).
+    const float height = px(30.0F);
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const float knobRadius = px(7.0F);
+    const float left = min.x + knobRadius;
+    const float right = min.x + std::max(width, knobRadius * 4.0F) - knobRadius;
+    const float midY = min.y + height * 0.5F;
+    bool changed = false;
+    ImGui::InvisibleButton(id, ImVec2(std::max(width, knobRadius * 4.0F), height));
+    if (upper <= lower) {
+        upper = lower + 1.0;  // a malformed range still draws
+    }
+    const auto toX = [&](double v) {
+        const double t = std::clamp((v - lower) / (upper - lower), 0.0, 1.0);
+        return left + static_cast<float>(t) * (right - left);
+    };
+    if (knob && ImGui::IsItemActive()) {
+        const double t = std::clamp(
+            static_cast<double>((ImGui::GetIO().MousePos.x - left) / (right - left)), 0.0, 1.0);
+        const double next = lower + t * (upper - lower);
+        if (next != *value) {
+            *value = next;
+            changed = true;
+        }
+    }
+    double shown = *value;
+    if (wrap) {
+        const double span = upper - lower;
+        shown = lower + std::fmod(std::fmod(shown - lower, span) + span, span);
+    }
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const float half = px(2.0F);
+    if (wrap) {
+        for (float x = left; x < right; x += px(9.0F)) {
+            draw->AddRectFilled(ImVec2(x, midY - half),
+                                ImVec2(std::min(x + px(6.0F), right), midY + half), u32(c::bg4),
+                                half);
+        }
+    } else {
+        draw->AddRectFilled(ImVec2(left, midY - half), ImVec2(right, midY + half), u32(c::bg4),
+                            half);
+    }
+    const float zero = toX(0.0);
+    const float at = toX(shown);
+    if (!wrap && knob) {
+        draw->AddRectFilled(ImVec2(std::min(zero, at), midY - half),
+                            ImVec2(std::max(zero, at), midY + half), u32(theme::hex(0x3A4F6E)),
+                            half);
+    }
+    if (lower <= 0.0 && upper >= 0.0) {
+        draw->AddRectFilled(ImVec2(zero, midY - px(6.0F)), ImVec2(zero + px(1.0F), midY + px(6.0F)),
+                            u32(c::lineStrong));
+    }
+    if (knob) {
+        const ImVec2 centre(at, midY);
+        draw->AddCircleFilled(centre, knobRadius + px(1.0F), u32(c::lineStrong));
+        draw->AddCircleFilled(centre, knobRadius, u32(c::bg1));
+        draw->AddCircleFilled(centre, knobRadius - px(2.0F),
+                              u32(ImGui::IsItemHovered() || ImGui::IsItemActive() ? c::t1 : c::t2));
+    }
+    return changed;
+}
+
+bool ShapeTile(const char* id, Icon icon, const char* label) {
+    // Design (12-builder .tile): 56 × 54, bg2, 1 px lineStrong, 3 px radius; a 20 px icon in t1
+    // over an 11 px label in t2, 5 px apart.
+    const theme::Fonts& fonts = theme::fonts();
+    const ImVec2 size(px(56.0F), px(54.0F));
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const ImVec2 max(min.x + size.x, min.y + size.y);
+    ImGui::PushID(id);
+    const bool clicked = ImGui::InvisibleButton("##tile", size);
+    ImGui::PopID();
+    const bool hovered = ImGui::IsItemHovered();
+    const bool disabled = (ImGui::GetItemFlags() & ImGuiItemFlags_Disabled) != 0;
+    const float alpha = disabled ? ImGui::GetStyle().DisabledAlpha : 1.0F;
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const float rounding = px(3.0F);
+    draw->AddRectFilled(min, max, u32(withAlpha(hovered && !disabled ? c::bg3 : c::bg2, alpha)),
+                        rounding);
+    draw->AddRect(min, max, u32(withAlpha(c::lineStrong, alpha)), rounding);
+    const float iconSize = px(20.0F);
+    const float labelSize = px(theme::kCaptionSize);
+    const ImVec2 extent = fonts.sans->CalcTextSizeA(labelSize, FLT_MAX, 0.0F, label);
+    const float top = min.y + (size.y - iconSize - px(5.0F) - extent.y) * 0.5F;
+    DrawIcon(draw, icon, ImVec2(min.x + (size.x - iconSize) * 0.5F, top), iconSize,
+             u32(withAlpha(c::t1, alpha)), u32(c::bg2));
+    draw->AddText(fonts.sans, labelSize,
+                  ImVec2(min.x + (size.x - extent.x) * 0.5F, top + iconSize + px(5.0F)),
+                  u32(withAlpha(c::t2, alpha)), label);
+    return clicked && !disabled;
+}
+
+TreeHit TreeRow(const char* id, const TreeRowSpec& row) {
+    // Design (.tr): 22 px, 12 px text; 14 px of indent per level; caret 12 px in t3; icon 12 px
+    // (accent when selected); type 11 px in t3; 6 px badges on the right; selected rows bg
+    // accentWeak with a 2 px accent bar, hovered rows bg3.
+    const theme::Fonts& fonts = theme::fonts();
+    const float height = px(22.0F);
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const float width = std::max(ImGui::GetContentRegionAvail().x, px(40.0F));
+    const ImVec2 max(min.x + width, min.y + height);
+    ImGui::PushID(id);
+    const bool clicked = ImGui::InvisibleButton("##row", ImVec2(width, height));
+    ImGui::PopID();
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    if (row.selected) {
+        draw->AddRectFilled(min, max, u32(c::accentWeak), px(2.0F));
+        draw->AddRectFilled(min, ImVec2(min.x + px(2.0F), max.y), u32(c::accent));
+    } else if (hovered) {
+        draw->AddRectFilled(min, max, u32(c::bg3), px(2.0F));
+    }
+    const float midY = min.y + height * 0.5F;
+    const float caretX = min.x + px(4.0F) + px(14.0F) * static_cast<float>(row.depth);
+    if (row.hasChildren) {
+        const float r = px(3.5F);
+        const ImVec2 at(caretX + px(6.0F), midY);
+        if (row.folded) {
+            draw->AddTriangleFilled(ImVec2(at.x - r * 0.6F, at.y - r),
+                                    ImVec2(at.x - r * 0.6F, at.y + r),
+                                    ImVec2(at.x + r * 0.9F, at.y), u32(c::t3));
+        } else {
+            draw->AddTriangleFilled(ImVec2(at.x - r, at.y - r * 0.6F),
+                                    ImVec2(at.x + r, at.y - r * 0.6F),
+                                    ImVec2(at.x, at.y + r * 0.9F), u32(c::t3));
+        }
+    }
+    float x = caretX + px(12.0F) + px(6.0F);
+    if (row.icon != Icon::Count) {
+        const float icon = px(12.0F);
+        DrawIcon(draw, row.icon, ImVec2(x, midY - icon * 0.5F), icon,
+                 u32(row.selected ? c::accent : c::t3), u32(c::bg1));
+        x += icon + px(6.0F);
+    }
+    // Badges from the right.
+    float right = max.x - px(8.0F);
+    const float dot = px(3.0F);
+    if (row.error) {
+        draw->AddCircleFilled(ImVec2(right - dot, midY), dot, u32(c::error));
+        right -= dot * 2.0F + px(3.0F);
+    }
+    for (int i = row.badgeCount; i-- > 0;) {
+        draw->AddCircleFilled(ImVec2(right - dot, midY), dot, u32(row.badges[i]));
+        right -= dot * 2.0F + px(3.0F);
+    }
+    const float nameSize = px(theme::kLabelSize);
+    ImFont* nameFont = row.strong ? fonts.sansMedium : fonts.sans;
+    const float nameWidth = nameFont->CalcTextSizeA(nameSize, FLT_MAX, 0.0F, row.name).x;
+    const float typeSize = px(theme::kCaptionSize);
+    const float typeX = x + nameWidth + px(6.0F);
+    const float typeWidth = fonts.sans->CalcTextSizeA(typeSize, FLT_MAX, 0.0F, row.type).x;
+    draw->PushClipRect(min, ImVec2(std::max(right - px(4.0F), min.x), max.y), true);
+    draw->AddText(nameFont, nameSize, ImVec2(x, midY - nameSize * 0.5F - px(1.0F)), u32(c::t1),
+                  row.name);
+    draw->AddText(fonts.sans, typeSize, ImVec2(typeX, midY - typeSize * 0.5F - px(1.0F)),
+                  u32(c::t3), row.type);
+    draw->PopClipRect();
+    if (!clicked) {
+        return TreeHit::None;
+    }
+    const float mouse = ImGui::GetIO().MousePos.x;
+    if (row.hasChildren && mouse >= caretX && mouse < caretX + px(14.0F)) {
+        return TreeHit::Caret;
+    }
+    if (*row.type != '\0' && mouse >= typeX && mouse < typeX + typeWidth) {
+        return TreeHit::Type;
+    }
+    return TreeHit::Row;
 }
 
 }  // namespace lagrange::viewer::widgets

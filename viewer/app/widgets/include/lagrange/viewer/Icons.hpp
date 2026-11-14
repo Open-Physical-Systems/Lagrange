@@ -51,6 +51,21 @@ enum class Icon : int {
     // Launcher.
     Folder,
     Download,
+    // Builder (12-builder: "New in this screen").
+    Undo,
+    Redo,
+    Save,
+    JointAxis,
+    Collision,
+    CentreOfMass,
+    Names,
+    Box,
+    Cylinder,
+    Sphere,
+    Mesh,
+    ChevronUp,
+    Duplicate,
+    Delete,
     Count,
 };
 

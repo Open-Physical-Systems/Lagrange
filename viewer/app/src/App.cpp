@@ -341,6 +341,8 @@ private:
     std::map<std::string, Entry, std::less<>> entries_;
 };
 
+std::string jsonEscape(const std::string& text);  // below
+
 class Ui {
 public:
     Ui(const gpu::Device& device, ViewerClient& client, VkFormat targetFormat,
@@ -1018,8 +1020,32 @@ public:
     /// How many times the 3D view was drawn (it is not when nothing in it changed).
     [[nodiscard]] std::uint64_t viewsDrawn() const { return viewsDrawn_; }
     void setCanOpenFiles(bool value) { canOpenFiles_ = value; }
-    void setWorkspace(Workspace workspace) { workspace_ = workspace; }
+    void setWorkspace(Workspace workspace) {
+        workspace_ = workspace;
+        if (workspace == Workspace::Builder && launcher_.localServer.empty()) {
+            // The Builder's Test needs lagrange_server on this machine (SPEC state 5), also
+            // when the launcher was never shown (--workspace builder).
+            launcher_.localServer = findLocalServer();
+        }
+    }
     [[nodiscard]] Workspace workspace() const { return workspace_; }
+    /// The Builder's document in the headless report (RFC 0016 WP-E's input tests): counts,
+    /// the selection, the edits since the last save.
+    [[nodiscard]] std::string builderReport() const {
+        const builder::Document& document = builderSession_.document();
+        std::string joints;
+        for (const builder::Joint& joint : document.joints) {
+            joints += std::string(joints.empty() ? "" : ", ") + "\"" + jsonEscape(joint.name) +
+                      "\": \"" + std::string(builder::toString(joint.type)) + "\"";
+        }
+        char text[256];
+        std::snprintf(text, sizeof(text),
+                      "{\"links\": %zu, \"joints\": %zu, \"sensors\": %zu, \"edits\": %d, ",
+                      document.links.size(), document.joints.size(), document.sensors.size(),
+                      builderSession_.history.editsSinceSave());
+        return text + std::string("\"selected\": \"") + jsonEscape(builderSession_.selection.name) +
+               "\", \"joint_types\": {" + joints + "}}";
+    }
 
     /// Shows the launcher first: the client is started when the user chooses a server.
     void showLauncher(float displayScale) {
@@ -1595,7 +1621,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             "\"wiring_wires\": %zu, \"events\": %zu, \"server_stats\": %s, "
             "\"environment_fields\": %zu, \"ros_topics\": %zu, \"ros_nodes\": %zu, "
             "\"world_tiles\": %zu, \"world_agents\": %zu, \"shading\": %d, "
-            "\"workspace\": \"%s\", \"launcher\": %s}\n",
+            "\"workspace\": \"%s\", \"launcher\": %s, \"builder\": %s}\n",
             jsonEscape(client.notice().text).c_str(), client.notice().error ? "true" : "false",
             rendered, static_cast<unsigned long long>(stats.snapshots),
             static_cast<unsigned long long>(stats.deltas),
@@ -1620,7 +1646,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             client.world() ? client.world()->tiles.size() : std::size_t{0},
             client.world() ? client.world()->agents.size() : std::size_t{0},
             static_cast<int>(ui.shading()), toString(ui.workspace()),
-            ui.launcherActive() ? "true" : "false");
+            ui.launcherActive() ? "true" : "false", ui.builderReport().c_str());
         if (device->validationErrorCount() != 0 && exitCode == 0) {
             exitCode = 6;
         }

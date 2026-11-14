@@ -1,5 +1,6 @@
 // The application chrome shared by every workspace: menu bar, workspace bar, domain strip,
 // dock space and status bar (docs/design/ui/shared/ui-conventions.md §1).
+#include "BuilderCommon.hpp"
 #include "PanelFormat.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
@@ -13,8 +14,11 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <imgui_internal.h>  // DockBuilder and BeginViewportSideBar
+#include <string>
 
 #include <imgui.h>
 
@@ -452,6 +456,357 @@ void drawMenuBar(PanelContext& context) {
     ImGui::EndMainMenuBar();
 }
 
+// --- the Builder's chrome (12-builder SPEC "Modes", "Strip under the workspace bar") ---------
+
+/// True when `program` is an executable in a $PATH folder. Looked up once per program.
+bool onPath(const char* program) {
+    const char* path = std::getenv("PATH");
+    if (path == nullptr) {
+        return false;
+    }
+    std::string_view rest(path);
+    while (!rest.empty()) {
+        const std::size_t colon = rest.find(':');
+        const std::filesystem::path folder(std::string(rest.substr(0, colon)));
+        std::error_code ec;
+        if (!folder.empty() && std::filesystem::is_regular_file(folder / program, ec)) {
+            return true;
+        }
+        rest = colon == std::string_view::npos ? std::string_view{} : rest.substr(colon + 1);
+    }
+    return false;
+}
+
+/// `lagrange check` runs on this machine (SPEC: Check loads… is hidden otherwise).
+bool canCheckLoads() {
+    static const bool found = onPath("lagrange");
+    return found;
+}
+
+/// The document's file name as the readout shows it: the robot name until first saved.
+std::string documentName(const BuilderSession& session) {
+    if (!session.path.empty()) {
+        return session.path.filename().string();
+    }
+    return session.document().robot + ".urdf";
+}
+
+/// Build mode (SPEC "Modes"): Undo, Redo, the document readout, Build, Test · target ▾, Save.
+void drawBuildControls(PanelContext& context) {
+    BuilderSession& session = *context.builder;
+    const std::string name = documentName(session);
+    const int unsaved = session.history.editsSinceSave();
+    char after[48] = "";
+    if (unsaved > 0 || session.path.empty()) {
+        std::snprintf(after, sizeof(after), "unsaved · %d", unsaved);
+    }
+    const std::string target = session.testTarget.empty() ? "empty world" : session.testTarget;
+    const std::string test = "Test · " + target + "      ";  // room for the chevron
+    const float gap = px(4.0F);
+    const float width = px(26.0F) * 2.0F + widgets::ReadoutWidth("doc", name.c_str(), after) +
+                        widgets::ButtonWidth("Build", widgets::Icon::Builder, true) +
+                        widgets::ButtonWidth(test.c_str(), widgets::Icon::Play, true) +
+                        widgets::ButtonWidth("Save", widgets::Icon::Save, true) + gap * 5.0F +
+                        px(10.0F);
+    ImGui::SameLine();
+    widgets::AlignRight(width + px(4.0F));
+    const ImVec2 rule = ImGui::GetCursorScreenPos();
+    ImGui::GetWindowDrawList()->AddLine(
+        ImVec2(rule.x, ImGui::GetWindowPos().y),
+        ImVec2(rule.x, ImGui::GetWindowPos().y + ImGui::GetWindowHeight()),
+        ImGui::ColorConvertFloat4ToU32(c::line));
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(10.0F));
+    centreInBar(px(26.0F));
+    const float y = ImGui::GetCursorPosY();
+    const auto next = [&] {
+        ImGui::SameLine(0.0F, gap);
+        ImGui::SetCursorPosY(y);
+    };
+
+    ImGui::BeginDisabled(!session.history.canUndo());
+    if (widgets::Button("##undo", widgets::ButtonKind::Default, widgets::Icon::Undo, true)) {
+        (void)session.history.undo();
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Undo (Ctrl Z)");
+    next();
+    ImGui::BeginDisabled(!session.history.canRedo());
+    if (widgets::Button("##redo", widgets::ButtonKind::Default, widgets::Icon::Redo, true)) {
+        (void)session.history.redo();
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Redo (Ctrl Shift Z)");
+    next();
+    widgets::Readout("doc", name.c_str(), after, c::t1, c::warn);
+    if (!session.path.empty()) {
+        ImGui::SetItemTooltip("%s", session.path.string().c_str());
+    }
+    next();
+    (void)widgets::Button("Build", widgets::ButtonKind::On, widgets::Icon::Builder, true);
+    ImGui::SetItemTooltip("Build mode: no simulation");
+    next();
+
+    // Test · target ▾ (the primary action). Refused while there is an error (SPEC state 3) or
+    // without lagrange_server on this machine (state 5).
+    const int errors = session.problems.errors();
+    const bool installed = !context.launcher->localServer.empty();
+    ImGui::BeginDisabled(errors > 0 || !installed);
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    const float testWidth = widgets::ButtonWidth(test.c_str(), widgets::Icon::Play, true);
+    if (widgets::Button(test.c_str(), widgets::ButtonKind::Primary, widgets::Icon::Play, true)) {
+        if (ImGui::GetIO().MousePos.x > at.x + testWidth - px(24.0F)) {
+            ImGui::OpenPopup("##test-target");
+        } else {
+            session.testRequested = true;
+            session.testWorld = session.testTarget.empty() ? "none" : session.testTarget;
+        }
+    }
+    const float chevron = px(10.0F);
+    widgets::DrawIcon(ImGui::GetWindowDrawList(), widgets::Icon::ChevronDown,
+                      ImVec2(at.x + testWidth - px(10.0F) - chevron, at.y + px(8.0F)), chevron,
+                      ImGui::ColorConvertFloat4ToU32(ImVec4(
+                          c::onAccent.x, c::onAccent.y, c::onAccent.z,
+                          errors > 0 || !installed ? ImGui::GetStyle().DisabledAlpha : 1.0F)),
+                      ImGui::ColorConvertFloat4ToU32(c::accent));
+    ImGui::EndDisabled();
+    if (errors > 0) {
+        ImGui::SetItemTooltip("Fix %d problem%s first", errors, errors == 1 ? "" : "s");
+    } else if (!installed) {
+        ImGui::SetItemTooltip("lagrange_server is not installed");
+    } else {
+        ImGui::SetItemTooltip("Test the robot in a simulator of its own on this machine");
+    }
+    if (ImGui::BeginPopup("##test-target")) {
+        if (ImGui::MenuItem("Empty world", nullptr, session.testTarget.empty())) {
+            session.testTarget.clear();
+        }
+        if (ImGui::MenuItem("A sample world…", nullptr, false, false)) {
+        }
+        ImGui::SetItemTooltip("Opens with WP-F's world picker");
+        if (ImGui::MenuItem("A world file…", nullptr, false, false)) {
+        }
+        ImGui::SetItemTooltip("Opens with WP-F's file dialog");
+        ImGui::MenuItem("Into the connected run", nullptr, false, false);
+        ImGui::SetItemTooltip("needs RFC 0016 §7.2");
+        ImGui::EndPopup();
+    }
+    next();
+    if (widgets::Button("Save", widgets::ButtonKind::Default, widgets::Icon::Save, true)) {
+        ImGui::OpenPopup("##save-menu");
+    }
+    ImGui::SetItemTooltip("Save (Ctrl S), Export USD…, Check loads…");
+    if (ImGui::BeginPopup("##save-menu")) {
+        if (ImGui::MenuItem("Save", "Ctrl+S")) {
+            session.saveRequested = true;
+            session.savePath.clear();
+        }
+        ImGui::MenuItem("Save as…", nullptr, false, false);
+        ImGui::SetItemTooltip("Opens with WP-F's file dialog");
+        if (ImGui::MenuItem("Export USD…")) {
+            session.exportUsdRequested = true;
+        }
+        if (ImGui::MenuItem("Check loads…", nullptr, false, canCheckLoads())) {
+            session.checkRequested = true;
+        }
+        if (errors > 0) {
+            ImGui::Separator();
+            ImGui::TextColored(c::warn, "%d problem%s: the file saves, but will not load yet",
+                               errors, errors == 1 ? "" : "s");
+        }
+        ImGui::EndPopup();
+    }
+}
+
+/// Testing (SPEC state 4): Back to Build, the Scene's Play/Pause, Step and readouts, and the
+/// TEST pill in place of REPLAY's.
+void drawTestControls(PanelContext& context) {
+    BuilderSession& session = *context.builder;
+    const bool ready = context.connection.state == ConnectionState::Ready &&
+                       session.mode == BuilderSession::Mode::Testing;
+    const bool running = context.status.runState == RunState::Running;
+    char time[32];
+    format::clock(context.status.simTimeNs, time, sizeof(time));
+    char rate[24];
+    std::snprintf(rate, sizeof(rate), "%.2f×", context.status.realTimeFactor);
+    char pill[96];
+    std::snprintf(pill, sizeof(pill), "%s · %s",
+                  session.mode == BuilderSession::Mode::Testing ? "TEST" : "STARTING",
+                  session.document().robot.c_str());
+    const float gap = px(4.0F);
+    ImGui::PushFont(theme::fonts().sansMedium, theme::kLabelSize);
+    const float playWidth =
+        px(20.0F) + px(14.0F) + px(6.0F) + ImGui::CalcTextSize(running ? "Pause" : "Play").x;
+    ImGui::PopFont();
+    const float width = widgets::ButtonWidth("Back to Build", widgets::Icon::Count, true) +
+                        playWidth + px(26.0F) + widgets::ReadoutWidth("sim t", time) +
+                        widgets::ReadoutWidth("RTF", rate) + widgets::PillWidth(pill) + gap * 6.0F +
+                        px(10.0F);
+    ImGui::SameLine();
+    widgets::AlignRight(width + px(4.0F));
+    const ImVec2 rule = ImGui::GetCursorScreenPos();
+    ImGui::GetWindowDrawList()->AddLine(
+        ImVec2(rule.x, ImGui::GetWindowPos().y),
+        ImVec2(rule.x, ImGui::GetWindowPos().y + ImGui::GetWindowHeight()),
+        ImGui::ColorConvertFloat4ToU32(c::line));
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(10.0F));
+    centreInBar(px(26.0F));
+    const float y = ImGui::GetCursorPosY();
+    const auto next = [&] {
+        ImGui::SameLine(0.0F, gap);
+        ImGui::SetCursorPosY(y);
+    };
+    if (widgets::Button("Back to Build", widgets::ButtonKind::Default, widgets::Icon::Count,
+                        true)) {
+        session.backRequested = true;
+    }
+    ImGui::SetItemTooltip("Stop the test and edit again (Esc)");
+    next();
+    ImGui::BeginDisabled(!ready);
+    if (widgets::Button(running ? "Pause" : "Play", widgets::ButtonKind::Primary,
+                        running ? widgets::Icon::Pause : widgets::Icon::Play, true)) {
+        if (running) {
+            context.client.pause();
+        } else {
+            context.client.play();
+        }
+    }
+    next();
+    ImGui::BeginDisabled(!context.connection.canStep || running);
+    if (widgets::Button("##step", widgets::ButtonKind::Default, widgets::Icon::Step, true)) {
+        context.client.step(kStepNs);
+    }
+    ImGui::SetItemTooltip("Step 10 ms");
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+    next();
+    widgets::Readout("sim t", time);
+    next();
+    widgets::Readout("RTF", rate);
+    next();
+    ImGui::SetCursorPosY(y + px(4.0F));
+    widgets::Pill(pill, widgets::PillKind::Info);
+}
+
+/// The Robot strip (SPEC "Strip under the workspace bar"), in place of the domain chips.
+void drawRobotStrip(PanelContext& context) {
+    BuilderSession& session = *context.builder;
+    const builder::Document& document = session.document();
+    const builder::PartCounts counts = builder::countParts(document, &session.catalog);
+    centreInBar(ImGui::GetTextLineHeight());
+    widgets::Caption("Robot");
+    const ImVec4 rigid = widgets::domainColor("rigid_body");
+    const ImVec4 sensors = widgets::domainColor("sensors");
+    const ImVec4 neutral(0.0F, 0.0F, 0.0F, 0.0F);
+    const auto chip = [&](const char* id, const ImVec4& color, const std::string& name,
+                          const std::string& detail) {
+        ImGui::SameLine(0.0F, px(6.0F));
+        centreInBar(px(22.0F));
+        return widgets::DomainChip(id, color, name.c_str(), detail.c_str(), widgets::ChipState::On);
+    };
+    const auto plural = [](int n, const char* word) {
+        return std::to_string(n) + " " + word + (n == 1 ? "" : "s");
+    };
+    (void)chip("##links", rigid, plural(counts.links, "link"),
+               counts.roots == 1 ? "1 root" : std::to_string(counts.roots) + " roots");
+    std::string types;
+    const auto add = [&](int n, const char* word) {
+        if (n > 0) {
+            types += (types.empty() ? "" : " · ") + std::to_string(n) + " " + word;
+        }
+    };
+    add(counts.revolute, "rev");
+    add(counts.continuous, "cont");
+    add(counts.prismatic, "prism");
+    add(counts.fixed, "fixed");
+    (void)chip("##joints", rigid, plural(counts.joints, "joint"), types);
+    std::string kinds = plural(counts.types, "type");
+    kinds += " · " + plural(counts.kinds, "kind");
+    (void)chip("##sensors", sensors, plural(counts.sensors, "sensor"),
+               counts.sensors == 0 ? "" : kinds);
+    // Mass and COM at zero preview, in the root link's frame (RFC 0016 §4).
+    const builder::MassProperties mass = builder::robotMass(document);
+    char text[64];
+    std::snprintf(text, sizeof(text), "%.2f kg", mass.mass);
+    (void)chip("##mass", neutral, "mass", text);
+    std::snprintf(text, sizeof(text), "%.3f · %.3f · %.3f m", mass.com[0], mass.com[1],
+                  mass.com[2]);
+    (void)chip("##com", neutral, "COM", text);
+
+    // Right: what Build mode does, the validity, Check loads….
+    const char* info = session.mode == BuilderSession::Mode::Build
+                           ? "Build · no simulation · sensors not rendered · Lit"
+                           : "Test · the robot runs in its own simulator";
+    const int errors = session.problems.errors();
+    int warnings = 0;
+    int hints = 0;
+    for (const builder::Problem& problem : session.problems.builder) {
+        warnings += problem.level == builder::Level::Warning ? 1 : 0;
+        hints += problem.level == builder::Level::Hint ? 1 : 0;
+    }
+    char validity[64];
+    if (errors > 0) {
+        std::snprintf(validity, sizeof(validity), "%d problem%s", errors, errors == 1 ? "" : "s");
+    } else if (warnings > 0) {
+        std::snprintf(validity, sizeof(validity), "URDF valid · %d warning%s", warnings,
+                      warnings == 1 ? "" : "s");
+    } else {
+        std::snprintf(validity, sizeof(validity), "URDF valid · %d hint%s", hints,
+                      hints == 1 ? "" : "s");
+    }
+    const bool check = canCheckLoads() && session.mode == BuilderSession::Mode::Build;
+    ImGui::PushFont(theme::fonts().sansMedium, theme::kCaptionSize);
+    const float button = check ? ImGui::CalcTextSize("Check loads…").x + px(16.0F) : 0.0F;
+    ImGui::PopFont();
+    ImGui::SameLine();
+    widgets::AlignRight(widgets::PillWidth(info) + px(6.0F) + widgets::PillWidth(validity) +
+                        (check ? px(8.0F) + button : 0.0F));
+    centreInBar(ImGui::GetTextLineHeight());
+    widgets::Pill(info, widgets::PillKind::Info);
+    ImGui::SameLine(0.0F, px(6.0F));
+    widgets::Pill(validity, errors > 0 ? widgets::PillKind::Error : widgets::PillKind::Ok);
+    if (ImGui::IsItemClicked()) {
+        ImGui::SetWindowFocus(builder_windows::kProblems);
+    }
+    if (errors > 0) {
+        ImGui::SetItemTooltip("Open Problems");
+    }
+    if (check) {
+        ImGui::SameLine(0.0F, px(8.0F));
+        centreInBar(px(22.0F));
+        if (widgets::Button("Check loads…", widgets::ButtonKind::Ghost)) {
+            session.checkRequested = true;
+        }
+        ImGui::SetItemTooltip("What each joint must hold against gravity (lagrange check)");
+    }
+}
+
+/// The Builder's keys (SPEC "Modes"): Ctrl Z, Ctrl Shift Z / Ctrl Y, Ctrl S; Esc while testing.
+void builderShortcuts(PanelContext& context) {
+    BuilderSession& session = *context.builder;
+    if (ImGui::GetIO().WantTextInput) {
+        return;  // a field's own undo
+    }
+    if (session.mode == BuilderSession::Mode::Build) {
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) {
+            (void)session.history.undo();
+        }
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z) ||
+            ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y)) {
+            (void)session.history.redo();
+        }
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) {
+            session.saveRequested = true;
+            session.savePath.clear();
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && !ImGui::IsAnyItemActive() &&
+            ImGui::GetTopMostPopupModal() == nullptr) {
+            builder_ui::deleteSelection(session);
+        }
+    } else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        session.backRequested = true;
+    }
+}
+
 void drawWorkspaceBar(PanelContext& context, ImGuiViewport* viewport) {
     // Design (.tb): 40 px, bg1; the workspace tabs, then on the right, after a rule, the run
     // controls and readouts.
@@ -479,6 +834,18 @@ void drawWorkspaceBar(PanelContext& context, ImGuiViewport* viewport) {
             ImGui::SameLine();
         }
         ImGui::PopStyleVar();
+
+        if (*context.workspace == Workspace::Builder && !context.launcher->active) {
+            // The Builder's own controls replace the run controls (SPEC "Modes").
+            if (context.builder->mode == BuilderSession::Mode::Build) {
+                drawBuildControls(context);
+            } else {
+                drawTestControls(context);
+            }
+            bottomRule();
+            ImGui::End();
+            return;
+        }
 
         const bool ready = context.connection.state == ConnectionState::Ready;
         const bool running = context.status.runState == RunState::Running;
@@ -582,6 +949,12 @@ void drawDomainStrip(PanelContext& context, ImGuiViewport* viewport) {
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(2);
     if (open) {
+        if (*context.workspace == Workspace::Builder) {
+            drawRobotStrip(context);  // the Robot strip in place of the domains (SPEC)
+            bottomRule();
+            ImGui::End();
+            return;
+        }
         ProfileSession& session = *context.profileSession;
         centreInBar(ImGui::GetTextLineHeight());
         widgets::Caption("Domains");
@@ -687,9 +1060,20 @@ void drawStatusBar(const PanelContext& context, ImGuiViewport* viewport) {
         widgets::Dot(dot);
         ImGui::SameLine(0.0F, px(6.0F));
         ImGui::PushFont(theme::fonts().sans, theme::kCaptionSize);
-        ImGui::TextColored(c::t1, "%s",
-                           state == ConnectionState::Ready ? "Connected" : toString(state));
+        const bool builderShown = *context.workspace == Workspace::Builder;
+        if (builderShown && state != ConnectionState::Ready) {
+            // The Builder works without a server (SPEC state 5).
+            ImGui::TextColored(c::t1, "Not connected · building offline");
+        } else {
+            ImGui::TextColored(c::t1, "%s",
+                               state == ConnectionState::Ready ? "Connected" : toString(state));
+        }
         ImGui::PopFont();
+        if (builderShown && context.builder->autosaveTime > 0.0) {
+            ImGui::SameLine(0.0F, gap);
+            statusItem("autosave", c::t1, "%.0f s ago",
+                       ImGui::GetTime() - context.builder->autosaveTime);
+        }
         if (!context.connection.serverName.empty()) {
             ImGui::SameLine(0.0F, gap);
             statusItem("server", c::t2, "%s", context.connection.serverName.c_str());
@@ -911,6 +1295,9 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !ImGui::GetIO().WantTextInput) {
         context.selectedPrim = kNone;
+    }
+    if (*context.workspace == Workspace::Builder) {
+        builderShortcuts(context);
     }
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();

@@ -39,6 +39,7 @@ add_library(
     lagrange_viewer_builder
     STATIC
     builder/src/Document.cpp
+    builder/src/Edits.cpp
     builder/src/History.cpp
     builder/src/Kinematics.cpp
     builder/src/MassProperties.cpp
@@ -147,8 +148,13 @@ target_link_libraries(lagrange_viewer_widgets PUBLIC imgui_vendor::imgui)
 add_library(
     lagrange_viewer_panels
     STATIC
+    panels/src/BuilderAdd.cpp
+    panels/src/BuilderJoints.cpp
     panels/src/BuilderPanels.cpp
     panels/src/BuilderView.cpp
+    panels/src/BuilderProblems.cpp
+    panels/src/BuilderProperties.cpp
+    panels/src/BuilderTree.cpp
     panels/src/Chrome.cpp
     panels/src/ConsolePanel.cpp
     panels/src/DomainsPanel.cpp
@@ -167,6 +173,7 @@ add_library(
     panels/src/ScheduleChart.cpp
     panels/src/ScopePanel.cpp
     panels/src/ScopePlots.cpp
+    panels/src/SensorCatalogPanel.cpp
     panels/src/SensorsPanels.cpp
     panels/src/SignalsPanel.cpp
     panels/src/TimelinePanel.cpp
@@ -294,6 +301,7 @@ if(BUILD_TESTING)
         builder/test/test_validation.cpp
         builder/test/test_scene_adapter.cpp
         builder/test/test_urdf.cpp
+        builder/test/test_edits.cpp
         TIMEOUT 120
     )
     target_link_libraries(

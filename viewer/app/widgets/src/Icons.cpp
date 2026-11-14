@@ -131,6 +131,39 @@ constexpr std::array<Definition, static_cast<std::size_t>(Icon::Count)> kIcons{{
     {{{path("M2 4.5h4l1.5 1.5H14v6.5H2z", 1.4F)}}, 1},
     // Download
     {{{path("M8 2.5v8 M4.5 7L8 10.5 11.5 7 M3 13.5h10", 1.4F)}}, 1},
+    // Undo (12-builder)
+    {{{path("M5.5 3.5L2.5 6.5l3 3 M2.5 6.5h7a3.5 3.5 0 0 1 0 7H7")}}, 1},
+    // Redo
+    {{{path("M10.5 3.5l3 3-3 3 M13.5 6.5h-7a3.5 3.5 0 0 0 0 7H9")}}, 1},
+    // Save
+    {{{path("M3 2.5h8l2.5 2.5v8.5H2.5V2.5z M5.5 2.5v3.5h5V2.5 M5 13.5V9.5h6v4")}}, 1},
+    // JointAxis (the design's <ellipse cx=8 cy=10 rx=5 ry=2> as two arcs)
+    {{{path("M8 14V3 M5.5 5.5L8 3l2.5 2.5 M3 10a5 2 0 1 0 10 0a5 2 0 1 0-10 0")}}, 1},
+    // Collision (the design's dashed rect, stroke-dasharray 2 1.6, as dashes)
+    {{{path("M2.5 2.5h2 M7 2.5h2 M11.5 2.5h2 M13.5 2.5v2 M13.5 7v2 M13.5 11.5v2 "
+            "M13.5 13.5h-2 M9 13.5h-2 M4.5 13.5h-2 M2.5 13.5v-2 M2.5 9v-2 M2.5 4.5v-2")}},
+     1},
+    // CentreOfMass
+    {{{circle(8, 8, 5.5F, 1.4F), path("M8 2.5A5.5 5.5 0 0 1 13.5 8H8z", 0.0F, Paint::Fill),
+       path("M8 13.5A5.5 5.5 0 0 1 2.5 8H8z", 0.0F, Paint::Fill)}},
+     3},
+    // Names
+    {{{path("M2.5 4.5h7l4 3.5-4 3.5h-7z")}}, 1},
+    // Box (the 20 px Add tiles use 1.3 unit strokes)
+    {{{path("M8 1.8l5.6 3.1v6.2L8 14.2l-5.6-3.1V4.9z M2.4 4.9L8 8l5.6-3.1 M8 8v6.2", 1.3F)}}, 1},
+    // Cylinder
+    {{{path("M3 4a5 2 0 1 0 10 0a5 2 0 1 0-10 0 M3 4v8a5 2 0 0 0 10 0V4", 1.3F)}}, 1},
+    // Sphere
+    {{{circle(8, 8, 5.8F, 1.3F), path("M2.2 8a5.8 2.2 0 1 0 11.6 0a5.8 2.2 0 1 0-11.6 0", 1.3F)}},
+     2},
+    // Mesh
+    {{{path("M2 12.5L6 3l8 2.5-2.5 8z M6 3l5.5 10.5 M2 12.5l12-7", 1.3F)}}, 1},
+    // ChevronUp (Collapse all)
+    {{{path("M4 10l4-4 4 4", 1.6F)}}, 1},
+    // Duplicate
+    {{{rect(5.5F, 5.5F, 8, 8), path("M3 10.5V3.5a1 1 0 0 1 1-1h6.5")}}, 2},
+    // Delete
+    {{{path("M3 4.5h10 M6.5 4.5V3h3v1.5 M4.5 4.5l.6 9h5.8l.6-9")}}, 1},
 }};
 
 // --- SVG path data to polylines --------------------------------------------------------
