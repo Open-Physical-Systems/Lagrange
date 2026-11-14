@@ -114,6 +114,20 @@ URDF ([formats §9](../design/formats.md#9-importers), as the sample robots have
   and **output to**, the bus it feeds. The fields are the electrical schema's
   (`schemas/electrical/schema.usda`), with its units; a schema default shows beside a value that
   differs from it, and a field the loader requires says *required* while empty.
+- **Robot → Power**, the parts between buses (RFC 0010, the netlist's resistors, converters,
+  fuses, switches and diodes): **Add load** (the sample AMR's 45 W computer, or empty fields), a
+  load on a bus with its `model` (`constant_power`, `resistive`, or `signal`, which draws
+  `load/<name>/power_demand`), `power` (W), a resistive load's `resistance` (Ω) and the
+  `minVoltage` below which it switches off. **Add converter**, a DC-DC converter from the bus a
+  battery feeds to another bus, with its `outputVoltage` (V), `efficiency` (above 0, at most 1)
+  and `maxOutputCurrent` (A), and its **input** and **output** buses. **Add fuse, switch…**, a
+  resistor, fuse, switch or diode between two buses: its `kind` first, its two ends (a diode's
+  **anode** and **cathode**), its `resistance` (Ω), and what its kind needs: a fuse's
+  `i2tRating` (A²·s), a switch's `initialState`, a diode's `forwardDrop` (V). No sample robot has
+  a converter or a branch, so their values start empty and Problems asks for them. Each section
+  lists the signals the run will have: `load/<name>/current` and `powered`,
+  `converter/<name>/output_current`, `input_current` and `loss_power`, `branch/<name>/current`,
+  `voltage`, `state` and `loss_power` (a switch also reads `branch/<name>/command`).
 - **Joint → Motor**: **Add a motor** on a revolute, continuous or prismatic joint (a wheel drive or
   a rotor motor from the samples, or empty), the **bus** it draws from, and its winding, torque
   constant, gear and current limit. The motor is named `<joint>_motor`; the Motor section lists
@@ -123,18 +137,30 @@ URDF ([formats §9](../design/formats.md#9-importers), as the sample robots have
   their link's origin, so put them on a link placed where they are.
 
 Problems checks what the loader would refuse: a required value missing, a value out of the
-schema's range (a negative resistance, an efficiency over 1), an `ocvSoc` that does not ascend or
-is not as long as `ocvVoltage`, a motor on a fixed joint or a second motor on a joint, a motor or
-battery without a bus, and a bus that no battery feeds. **Test** runs the server with the overlay
+schema's range (a negative resistance, an efficiency over 1 or of 0), an `ocvSoc` that does not
+ascend or is not as long as `ocvVoltage`, a motor on a fixed joint or a second motor on a joint, a
+motor, battery, load, converter or branch without its bus, a converter or branch with the same
+bus at both ends, two converters onto one bus (the network simulates one per output bus), a fuse
+without its rating, a load with neither a power nor (resistive) a resistance, and a bus that no
+battery reaches: through a converter from a fed bus, or a branch to one (a diode only from its
+anode). Converters in a loop (a → b → a) are a warning: the network runs them, but power goes
+round. A value set for another kind of branch (a fuse's drop) is a hint. **Test** runs the server with the overlay
 (`--overlay`), so the run has `bus/<bus>/voltage`, `battery/<battery>/soc` and the motors'
 currents in Signals; *Into the connected run* sends it with the robot
 (`ImportRobot.overlay_content`), where a passive robot's names carry its own as a prefix
 (`bus/rover_mk1_dc_48v/voltage`). Save writes the overlay beside the URDF and Open reads it
-back. Anything else an overlay holds (thermal nodes, rotors, wheels, loads) is kept as written
-and listed under *Overlay, kept as written*; comments after the file's first lines are not kept
+back. Anything else an overlay holds (thermal nodes, rotors, wheels) is kept as written and
+listed under *Overlay, kept as written*; comments after the file's first lines are not kept
 (the builder writes each value's unit as its comment).
 
 ![rover_mk1 with a 48 V bus, an LFP battery and a motor on each wheel joint](../imgs/builder-power.png)
+
+A 12 V rail, as a test of the rover: a converter from the 48 V bus to a `dc_12v` bus with a 20 W
+computer on it. Test, then **Signals** (Ctrl+4): `bus/dc_12v/voltage` holds 12 V, the load draws
+`20 W / 12 V = 1.67 A`, and `converter/dcdc/input_current` is that power over the efficiency
+from the 48 V bus (`viewer/test/test_builder_power.py`).
+
+![The 12 V rail in Signals while rover_mk1 is tested: the rail at 12 V, the 48 V bus, the load's and the converter's input current](../imgs/builder-power-rail.png)
 
 ## Meshes and how a link collides
 

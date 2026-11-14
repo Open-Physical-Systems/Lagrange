@@ -1,6 +1,7 @@
 // The Builder's power-system forms (RFC 0016 phase 3; docs/design/ui/12-builder/SPEC.md
-// "Properties", proposed there as "Power"): a robot's batteries and buses in its Properties, a
-// joint's motor in the joint's. The fields are formats.md §9's overlay keys, as
+// "Properties", proposed there as "Power"): a robot's batteries, buses, loads, converters and
+// branches (resistors, fuses, switches, diodes; RFC 0010) in its Properties, a joint's motor in
+// the joint's. The fields are formats.md §9's overlay keys, as
 // schemas/electrical/schema.usda declares them (builder::batteryFields() ...): the schema's
 // units, its defaults in the unit slot, required ones marked. Every change is one undo step;
 // values out of range are kept and listed in Problems, as the loader would refuse them.
@@ -12,11 +13,15 @@
 #include "lagrange/viewer/lagrange_theme.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <functional>
+#include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <imgui.h>
@@ -66,8 +71,10 @@ void markRefused(float right, const std::string& why) {
 
 /// The rows of one schema instance: each field of `fields` but the relationships, named with
 /// `prefix` (a port's "elec:port:dc_out:"). Returns how many differ from their defaults.
+/// `shown` (if given) leaves out the fields that do not apply (a branch's kind), unless set.
 int fieldRows(BuilderSession& session, const OverlayEntry& entry, const OverlaySchema& schema,
-              std::span<const OverlayField> fields, const std::string& prefix) {
+              std::span<const OverlayField> fields, const std::string& prefix,
+              const std::function<bool(const OverlayField&)>& applies = {}) {
     const std::string prim = builder::entryPrim(entry);
     const std::string who = builder::entryName(entry);
     int differing = 0;
@@ -76,8 +83,11 @@ int fieldRows(BuilderSession& session, const OverlayEntry& entry, const OverlayS
             continue;
         }
         const std::string name = prefix + std::string(field.name);
-        ImGui::PushID(name.c_str());
         const std::string value = builder::attributeText(schema, name);
+        if (applies && !applies(field) && value.empty()) {
+            continue;
+        }
+        ImGui::PushID(name.c_str());
         const std::string shown = value.empty() ? std::string(field.fallback) : value;
         const auto number = builder::parseNumber(value);
         const bool sameNumber = number && number == builder::parseNumber(field.fallback);
@@ -264,17 +274,38 @@ void busSection(BuilderSession& session, const OverlayEntry& entry) {
                            : builder::entryPrim(
                                  document.overlay.entries[static_cast<std::size_t>(bus)]);
         };
+        const auto list = [](std::string& text, const std::string& name) {
+            text += (text.empty() ? "" : ", ") + name;
+        };
         for (const OverlayEntry& other : document.overlay.entries) {
-            if (const OverlaySchema* motor = builder::findSchema(other, builder::kMotorSchema);
-                motor != nullptr &&
-                busPrimOf(builder::attributeText(*motor, "elec:powerPort")) == prim) {
-                draws += (draws.empty() ? "" : ", ") + builder::entryName(other);
+            const std::string who = builder::entryName(other);
+            for (const std::string_view schema : {builder::kMotorSchema, builder::kLoadSchema}) {
+                if (const OverlaySchema* part = builder::findSchema(other, schema);
+                    part != nullptr &&
+                    busPrimOf(builder::attributeText(*part, "elec:powerPort")) == prim) {
+                    list(draws, who);
+                }
+            }
+            if (const OverlaySchema* converter =
+                    builder::findSchema(other, builder::kConverterSchema)) {
+                if (busPrimOf(builder::attributeText(*converter, "elec:conv:input")) == prim) {
+                    list(draws, who);
+                }
+                if (busPrimOf(builder::attributeText(*converter, "elec:conv:output")) == prim) {
+                    list(feeds, who);
+                }
+            }
+            if (const OverlaySchema* branch = builder::findSchema(other, builder::kBranchSchema)) {
+                if (busPrimOf(builder::attributeText(*branch, "elec:branch:input")) == prim ||
+                    busPrimOf(builder::attributeText(*branch, "elec:branch:output")) == prim) {
+                    list(feeds, who + " (branch)");
+                }
             }
             if (const OverlaySchema* port = builder::portOf(other);
                 port != nullptr && builder::findSchema(other, builder::kBatterySchema) != nullptr &&
                 busPrimOf(builder::attributeText(
                     *port, builder::portPrefix(*port) + "connectedTo")) == prim) {
-                feeds += (feeds.empty() ? "" : ", ") + builder::entryName(other);
+                list(feeds, who);
             }
         }
     }
@@ -286,7 +317,8 @@ void busSection(BuilderSession& session, const OverlayEntry& entry) {
         widgets::PropertyRow("prim", prim.c_str(), nullptr, false,
                              "Signals bus/<name>/voltage and brownout when tested");
         widgets::PropertyRow("fed by", feeds.empty() ? "nothing" : feeds.c_str(), nullptr);
-        widgets::PropertyRow("motors", draws.empty() ? "none" : draws.c_str(), nullptr);
+        widgets::PropertyRow("drawn by", draws.empty() ? "nothing" : draws.c_str(), nullptr, false,
+                             "Motors, loads and converter inputs on this bus");
         (void)fieldRows(session, entry, *builder::findSchema(entry, builder::kBusSchema),
                         builder::busFields(), "");
         removeButton(session, prim, "bus");
@@ -337,14 +369,172 @@ void batterySection(BuilderSession& session, const OverlayEntry& entry) {
     ImGui::PopID();
 }
 
-/// Other entries of the overlay (thermal nodes, rotors, wheels, loads): kept as written.
+/// A relationship row of a part: a bus dropdown that sets `attribute` of `schema`.
+void relationRow(BuilderSession& session, const OverlayEntry& entry, std::string_view schema,
+                 std::string_view attribute, const char* label) {
+    const OverlaySchema* instance = builder::findSchema(entry, schema);
+    const OverlayField* field = builder::overlayField(schema, attribute);
+    if (instance == nullptr || field == nullptr) {
+        return;
+    }
+    const std::string prim = builder::entryPrim(entry);
+    const std::string name(attribute);
+    const std::string tooltip = name + ": " + std::string(field->meaning);
+    ImGui::PushID(name.c_str());
+    if (const auto chosen = busRow(label, session.document(),
+                                   builder::attributeText(*instance, name), tooltip.c_str())) {
+        editEntry(session, prim,
+                  "Connect " + builder::entryName(entry) + " " + label + " to " + *chosen, {},
+                  [&](Document&, OverlayEntry& target) {
+                      if (OverlaySchema* s = builder::findSchema(target, schema)) {
+                          builder::setAttribute(*s, field, name, *chosen);
+                      }
+                  });
+    }
+    ImGui::PopID();
+}
+
+/// The run's signals of a part, read-only (electrical.md §3; the network's names).
+void signalRows(const OverlayEntry& entry) {
+    bool first = true;
+    for (const auto& [signal, unit] : builder::powerSignals(entry)) {
+        ImGui::PushID(signal.c_str());
+        const std::string shown = unit == "1" ? std::string{} : unit;
+        widgets::PropertyRow(first ? "signals" : "", signal.c_str(),
+                             shown.empty() ? nullptr : shown.c_str(), false,
+                             "Written by the electrical network while tested");
+        ImGui::PopID();
+        first = false;
+    }
+}
+
+void loadSection(BuilderSession& session, const OverlayEntry& entry) {
+    const std::string prim = builder::entryPrim(entry);
+    const std::string title = "Load · " + builder::entryName(entry);
+    const ImVec4 dot = electricalColor();
+    ImGui::PushID(prim.c_str());
+    if (widgets::SectionHeader(title.c_str(), "ElectricalLoadAPI_1", true, &dot)) {
+        ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+        widgets::PropertyRow("prim", prim.c_str(), nullptr, false,
+                             "A computer, a sensor, a heater: what it draws from its bus");
+        relationRow(session, entry, builder::kLoadSchema, "elec:powerPort", "bus");
+        const OverlaySchema& load = *builder::findSchema(entry, builder::kLoadSchema);
+        const bool resistive = builder::attributeText(load, "elec:load:model") == "resistive";
+        (void)fieldRows(session, entry, load, builder::loadFields(), "",
+                        [resistive](const OverlayField& field) {
+                            return resistive || field.name != "elec:load:resistance";
+                        });
+        signalRows(entry);
+        removeButton(session, prim, "load");
+        ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+    }
+    ImGui::PopID();
+}
+
+void converterSection(BuilderSession& session, const OverlayEntry& entry) {
+    const std::string prim = builder::entryPrim(entry);
+    const std::string title = "Converter · " + builder::entryName(entry);
+    const ImVec4 dot = electricalColor();
+    ImGui::PushID(prim.c_str());
+    if (widgets::SectionHeader(title.c_str(), "ElectricalConverterAPI_1", true, &dot)) {
+        ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+        widgets::PropertyRow("prim", prim.c_str(), nullptr, false,
+                             "A DC-DC converter: an averaged regulator from one bus to another");
+        relationRow(session, entry, builder::kConverterSchema, "elec:conv:input", "input");
+        relationRow(session, entry, builder::kConverterSchema, "elec:conv:output", "output");
+        (void)fieldRows(session, entry, *builder::findSchema(entry, builder::kConverterSchema),
+                        builder::converterFields(), "");
+        signalRows(entry);
+        removeButton(session, prim, "converter");
+        ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+    }
+    ImGui::PopID();
+}
+
+void branchSection(BuilderSession& session, const OverlayEntry& entry) {
+    const std::string prim = builder::entryPrim(entry);
+    const OverlaySchema& branch = *builder::findSchema(entry, builder::kBranchSchema);
+    std::string kind = builder::attributeText(branch, "elec:branch:kind");
+    kind = kind.empty() ? "resistor" : kind;
+    std::string title = kind + " · " + builder::entryName(entry);
+    title[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(title[0])));
+    const ImVec4 dot = electricalColor();
+    ImGui::PushID(prim.c_str());
+    if (widgets::SectionHeader(title.c_str(), "ElectricalBranchAPI_1", true, &dot)) {
+        ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+        widgets::PropertyRow("prim", prim.c_str(), nullptr, false,
+                             "A two-terminal part between two buses (RFC 0010)");
+        // Its kind first (it decides the rest), then its two ends, then the values.
+        const std::span<const OverlayField> fields = builder::branchFields();
+        (void)fieldRows(session, entry, branch, fields.first(1), "");
+        relationRow(session, entry, builder::kBranchSchema, "elec:branch:input",
+                    kind == "diode" ? "anode" : "input");
+        relationRow(session, entry, builder::kBranchSchema, "elec:branch:output",
+                    kind == "diode" ? "cathode" : "output");
+        (void)fieldRows(session, entry, branch, fields.subspan(1), "",
+                        [&kind](const OverlayField& field) {
+                            return builder::branchFieldApplies(kind, field.name);
+                        });
+        signalRows(entry);
+        removeButton(session, prim, kind);
+        ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
+    }
+    ImGui::PopID();
+}
+
+/// The bus a new part starts on: the first a battery feeds (else the first bus), and for its
+/// other end the first other bus that no battery and no converter feeds (else another bus).
+std::pair<int, int> defaultEnds(const Document& document) {
+    const auto buses = builder::entriesWith(document, builder::kBusSchema);
+    std::set<int> fedByBattery;
+    std::set<int> fedAtAll;
+    for (const OverlayEntry& entry : document.overlay.entries) {
+        if (const OverlaySchema* port = builder::portOf(entry);
+            port != nullptr && builder::findSchema(entry, builder::kBatterySchema) != nullptr) {
+            const int bus = builder::busNamed(
+                document,
+                builder::attributeText(*port, builder::portPrefix(*port) + "connectedTo"));
+            fedByBattery.insert(bus);
+            fedAtAll.insert(bus);
+        }
+        if (const OverlaySchema* c = builder::findSchema(entry, builder::kConverterSchema)) {
+            fedAtAll.insert(
+                builder::busNamed(document, builder::attributeText(*c, "elec:conv:output")));
+        }
+    }
+    int input = buses.empty() ? -1 : static_cast<int>(buses.front());
+    for (const std::size_t b : buses) {
+        if (fedByBattery.contains(static_cast<int>(b))) {
+            input = static_cast<int>(b);
+            break;
+        }
+    }
+    int output = -1;
+    for (const std::size_t b : buses) {
+        if (static_cast<int>(b) != input && !fedAtAll.contains(static_cast<int>(b))) {
+            output = static_cast<int>(b);
+            break;
+        }
+    }
+    for (const std::size_t b : buses) {
+        if (output < 0 && static_cast<int>(b) != input) {
+            output = static_cast<int>(b);
+        }
+    }
+    return {input, output};
+}
+
+/// Other entries of the overlay (thermal nodes, rotors, wheels): kept as written.
 void keptEntries(const Document& document) {
     std::vector<const OverlayEntry*> kept;
     for (const OverlayEntry& entry : document.overlay.entries) {
         if (entry.sensor.empty() &&
             builder::findSchema(entry, builder::kBatterySchema) == nullptr &&
             builder::findSchema(entry, builder::kBusSchema) == nullptr &&
-            builder::findSchema(entry, builder::kMotorSchema) == nullptr) {
+            builder::findSchema(entry, builder::kMotorSchema) == nullptr &&
+            builder::findSchema(entry, builder::kLoadSchema) == nullptr &&
+            builder::findSchema(entry, builder::kConverterSchema) == nullptr &&
+            builder::findSchema(entry, builder::kBranchSchema) == nullptr) {
             kept.push_back(&entry);
         }
     }
@@ -378,11 +568,19 @@ void robotPowerSections(BuilderSession& session) {
     const auto batteries = builder::entriesWith(document, builder::kBatterySchema);
     const auto buses = builder::entriesWith(document, builder::kBusSchema);
     const auto motors = builder::entriesWith(document, builder::kMotorSchema);
-    char meta[96];
-    std::snprintf(meta, sizeof(meta), "overlay · %zu battery · %zu bus · %zu motors",
+    const auto loads = builder::entriesWith(document, builder::kLoadSchema);
+    const auto converters = builder::entriesWith(document, builder::kConverterSchema);
+    const auto branches = builder::entriesWith(document, builder::kBranchSchema);
+    char counts[96];
+    std::snprintf(counts, sizeof(counts), "overlay · %zu battery · %zu bus · %zu motors",
                   batteries.size(), buses.size(), motors.size());
+    std::string meta = counts;
+    const std::size_t parts = loads.size() + converters.size() + branches.size();
+    if (parts > 0) {
+        meta += " · " + std::to_string(parts) + " parts";
+    }
     const ImVec4 dot = electricalColor();
-    if (widgets::SectionHeader("Power", meta, true, &dot)) {
+    if (widgets::SectionHeader("Power", meta.c_str(), true, &dot)) {
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
         if (batteries.empty() && buses.empty() && motors.empty()) {
             ImGui::PushTextWrapPos(0.0F);
@@ -417,6 +615,52 @@ void robotPowerSections(BuilderSession& session) {
             const std::string name = builder::addBattery(next, "battery", -1, preset);
             commit(session, std::move(next), "Add battery " + name);
         }
+        // The parts between buses (RFC 0010): a load on a bus, a converter or a branch from one
+        // bus to another.
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(8.0F));
+        if (widgets::Button("Add load", widgets::ButtonKind::Default, widgets::Icon::Plus)) {
+            ImGui::OpenPopup("##add-load");
+        }
+        ImGui::SetItemTooltip(
+            "A load on the first bus: a computer, a sensor, a heater "
+            "(ElectricalLoadAPI_1)");
+        ImGui::SameLine(0.0F, px(6.0F));
+        if (widgets::Button("Add converter", widgets::ButtonKind::Default, widgets::Icon::Plus)) {
+            const auto [input, output] = defaultEnds(document);
+            Document next = document;
+            const std::string name = builder::addConverter(next, "dcdc", input, output);
+            commit(session, std::move(next), "Add converter " + name);
+        }
+        ImGui::SetItemTooltip(
+            "A DC-DC converter from a battery's bus to another bus "
+            "(ElectricalConverterAPI_1): type its voltage and current limit");
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(8.0F));
+        if (widgets::Button("Add fuse, switch…", widgets::ButtonKind::Default,
+                            widgets::Icon::Plus)) {
+            ImGui::OpenPopup("##add-branch");
+        }
+        ImGui::SetItemTooltip(
+            "A part between two buses: a resistor, a fuse, a switch or a "
+            "diode (ElectricalBranchAPI_1)");
+        if (const builder::PowerPreset* preset =
+                presetMenu("##add-load", builder::loadPresets(), picked);
+            picked) {
+            Document next = document;
+            const std::string name = builder::addLoad(next, "load", -1, preset);
+            commit(session, std::move(next), "Add load " + name);
+        }
+        if (ImGui::BeginPopup("##add-branch")) {
+            widgets::Caption("Between two buses");
+            for (const char* kind : {"resistor", "fuse", "switch", "diode"}) {
+                if (ImGui::Selectable(kind)) {
+                    const auto [input, output] = defaultEnds(document);
+                    Document next = document;
+                    const std::string name = builder::addBranch(next, "", kind, input, output);
+                    commit(session, std::move(next), "Add " + std::string(kind) + " " + name);
+                }
+            }
+            ImGui::EndPopup();
+        }
         ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
     }
     const std::vector<OverlayEntry>& entries = document.overlay.entries;
@@ -425,6 +669,15 @@ void robotPowerSections(BuilderSession& session) {
     }
     for (const std::size_t i : batteries) {
         batterySection(session, entries[i]);
+    }
+    for (const std::size_t i : converters) {
+        converterSection(session, entries[i]);
+    }
+    for (const std::size_t i : branches) {
+        branchSection(session, entries[i]);
+    }
+    for (const std::size_t i : loads) {
+        loadSection(session, entries[i]);
     }
     keptEntries(document);
 }

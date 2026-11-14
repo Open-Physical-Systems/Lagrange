@@ -4,9 +4,13 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
+#include <initializer_list>
+#include <map>
 #include <set>
 #include <sstream>
+#include <tuple>
 #include <utility>
 
 #include <yaml-cpp/yaml.h>
@@ -149,6 +153,61 @@ const std::array<OverlayField, 6> kPortFields{{
      "Lumped harness inductance to the net"},
 }};
 
+// The parts between buses (RFC 0010; formats.md §9.1). Required as the schema says it
+// ("Required." or "Required,"; a load's power is "required unless" a resistance is given, and a
+// fuse's rating "for a fuse": checkOverlay has those rules). Ranges: the loader's
+// (Network.cpp: "outputVoltage > 0, maxOutputCurrent > 0 and an efficiency in (0, 1]", "a branch
+// needs elec:branch:resistance above zero", "a fuse needs elec:branch:i2tRating above zero");
+// a load's power, resistance and minimum voltage and a diode's drop not negative are the
+// builder's (the loader takes them as given).
+constexpr std::array<std::string_view, 3> kLoadModel{"constant_power", "resistive", "signal"};
+constexpr std::array<std::string_view, 4> kBranchKind{"resistor", "fuse", "switch", "diode"};
+constexpr std::array<std::string_view, 2> kSwitchState{"closed", "open"};
+
+const std::array<OverlayField, 5> kLoadFields{{
+    {Type::Token, Range::Any, "elec:load:model", "", "constant_power", false, kLoadModel,
+     "constant_power draws power; resistive scales with the voltage squared; signal draws "
+     "load/<name>/power_demand"},
+    {Type::Real, Range::NonNegative, "elec:load:power", "W", "", false, kNoTokens,
+     "Power drawn (resistive: at the voltage the bus starts at)"},
+    {Type::Real, Range::NonNegative, "elec:load:resistance", "ohm", "0", false, kNoTokens,
+     "A resistive load's resistance, in place of power; 0: from the power"},
+    {Type::Real, Range::NonNegative, "elec:load:minVoltage", "V", "0", false, kNoTokens,
+     "Below this the load switches off (powered = 0)"},
+    {Type::Rel, Range::Any, "elec:powerPort", "", "", true, kNoTokens,
+     "The bus the load draws from"},
+}};
+
+const std::array<OverlayField, 5> kConverterFields{{
+    {Type::Real, Range::Positive, "elec:conv:outputVoltage", "V", "", true, kNoTokens,
+     "Regulated output voltage"},
+    {Type::Real, Range::PositiveFraction, "elec:conv:efficiency", "1", "1", false, kNoTokens,
+     "Power efficiency, above 0 and at most 1"},
+    {Type::Real, Range::Positive, "elec:conv:maxOutputCurrent", "A", "", true, kNoTokens,
+     "Output current limit"},
+    {Type::Rel, Range::Any, "elec:conv:input", "", "", true, kNoTokens,
+     "The bus the converter draws from"},
+    {Type::Rel, Range::Any, "elec:conv:output", "", "", true, kNoTokens,
+     "The bus the converter feeds (one converter per output bus)"},
+}};
+
+const std::array<OverlayField, 7> kBranchFields{{
+    {Type::Token, Range::Any, "elec:branch:kind", "", "resistor", false, kBranchKind,
+     "What it does between its two buses"},
+    {Type::Real, Range::Positive, "elec:branch:resistance", "ohm", "", true, kNoTokens,
+     "Resistance while it conducts"},
+    {Type::Real, Range::NonNegative, "elec:branch:i2tRating", "A2.s", "0", false, kNoTokens,
+     "A fuse opens when the integral of its current squared reaches this"},
+    {Type::Real, Range::NonNegative, "elec:branch:forwardDrop", "V", "0", false, kNoTokens,
+     "A diode's drop while it conducts, from input to output"},
+    {Type::Token, Range::Any, "elec:branch:initialState", "", "closed", false, kSwitchState,
+     "A switch's state until branch/<name>/command says otherwise"},
+    {Type::Rel, Range::Any, "elec:branch:input", "", "", true, kNoTokens,
+     "The bus at one end (a diode's anode); positive current flows from here"},
+    {Type::Rel, Range::Any, "elec:branch:output", "", "", true, kNoTokens,
+     "The bus at the other end (a diode's cathode)"},
+}};
+
 // --- presets: the sample robots' values, as their files have them -----------------------------
 using Values = std::pair<std::string_view, std::string_view>;
 constexpr std::string_view kAmrFile = "assets/robots/amr_diffdrive/amr_diffdrive.overlay.yaml";
@@ -211,6 +270,12 @@ constexpr std::array<Values, 6> kRotorMotor{{
     {"elec:maxCurrent", "25.0"},
 }};
 
+constexpr std::array<Values, 3> kComputerLoad{{
+    {"elec:load:model", "constant_power"},
+    {"elec:load:power", "45.0"},
+    {"elec:load:minVoltage", "36.0"},
+}};
+
 const std::array<PowerPreset, 2> kBatteryPresets{{
     {"LFP 16S 20 Ah · sample AMR", kAmrFile, kLfpBattery},
     {"LiPo 4S 5 Ah · sample quadcopter", kQuadFile, kLipoBattery},
@@ -222,6 +287,9 @@ const std::array<PowerPreset, 2> kBusPresets{{
 const std::array<PowerPreset, 2> kMotorPresets{{
     {"wheel drive, 20:1 · sample AMR", kAmrFile, kWheelMotor},
     {"rotor motor, 920 KV · sample quadcopter", kQuadFile, kRotorMotor},
+}};
+const std::array<PowerPreset, 1> kLoadPresets{{
+    {"computer, 45 W · sample AMR", kAmrFile, kComputerLoad},
 }};
 
 // --- text helpers -----------------------------------------------------------------------------
@@ -774,23 +842,61 @@ std::span<const OverlayField> motorFields() {
 std::span<const OverlayField> portFields() {
     return kPortFields;
 }
+std::span<const OverlayField> loadFields() {
+    return kLoadFields;
+}
+std::span<const OverlayField> converterFields() {
+    return kConverterFields;
+}
+std::span<const OverlayField> branchFields() {
+    return kBranchFields;
+}
 
-const OverlayField* overlayField(std::string_view schema, std::string_view attribute) {
+std::span<const OverlayField> fieldsOf(std::string_view schema) {
     if (schema == kBatterySchema) {
-        return findIn(kBatteryFields, attribute);
+        return kBatteryFields;
     }
     if (schema == kBusSchema) {
-        return findIn(kBusFields, attribute);
+        return kBusFields;
     }
     if (schema == kMotorSchema) {
-        return findIn(kMotorFields, attribute);
+        return kMotorFields;
     }
+    if (schema == kLoadSchema) {
+        return kLoadFields;
+    }
+    if (schema == kConverterSchema) {
+        return kConverterFields;
+    }
+    if (schema == kBranchSchema) {
+        return kBranchFields;
+    }
+    if (schema.starts_with("PortAPI_1:")) {
+        return kPortFields;
+    }
+    return {};
+}
+
+bool branchFieldApplies(std::string_view kind, std::string_view field) {
+    if (field == "elec:branch:i2tRating") {
+        return kind == "fuse";
+    }
+    if (field == "elec:branch:forwardDrop") {
+        return kind == "diode";
+    }
+    if (field == "elec:branch:initialState") {
+        return kind == "switch";
+    }
+    return true;
+}
+
+const OverlayField* overlayField(std::string_view schema, std::string_view attribute) {
     if (schema.starts_with("PortAPI_1:")) {
         const std::string prefix = "elec:port:" + std::string(schema.substr(10)) + ":";
         return attribute.starts_with(prefix) ? findIn(kPortFields, attribute.substr(prefix.size()))
                                              : nullptr;
     }
-    return nullptr;
+    return findIn(fieldsOf(schema), attribute);
 }
 
 std::string displayUnit(std::string_view unit) {
@@ -801,7 +907,8 @@ std::string displayUnit(std::string_view unit) {
     for (std::size_t i = 0; i < unit.size(); ++i) {
         if (unit[i] == '.') {
             out += "·";
-        } else if (unit[i] == '2' && i > 0 && unit[i - 1] == 'm') {
+        } else if (unit[i] == '2' && i > 0 &&
+                   std::isalpha(static_cast<unsigned char>(unit[i - 1])) != 0) {
             out += "²";
         } else {
             out += unit[i];
@@ -825,6 +932,8 @@ std::string checkField(const OverlayField& field, std::string_view text) {
                 return v >= 0.0 ? "" : "must not be negative";
             case Range::Fraction:
                 return v >= 0.0 && v <= 1.0 ? "" : "must lie within 0 to 1";
+            case Range::PositiveFraction:
+                return v > 0.0 && v <= 1.0 ? "" : "must be above 0 and at most 1";
             case Range::AtLeastOne:
                 return v >= 1.0 ? "" : "must be at least 1";
         }
@@ -914,10 +1023,7 @@ void setAttribute(OverlaySchema& schema, const OverlayField* field, std::string_
         return;
     }
     // A new attribute goes after the last one the form's order puts before it.
-    std::span<const OverlayField> fields = schema.name == kBatterySchema ? batteryFields()
-                                           : schema.name == kBusSchema   ? busFields()
-                                           : schema.name == kMotorSchema ? motorFields()
-                                                                         : portFields();
+    const std::span<const OverlayField> fields = fieldsOf(schema.name);
     const auto rank = [&](std::string_view attributeName) -> std::ptrdiff_t {
         std::string_view bare = attributeName;
         if (schema.name.starts_with("PortAPI_1:")) {
@@ -1007,6 +1113,9 @@ std::span<const PowerPreset> busPresets() {
 }
 std::span<const PowerPreset> motorPresets() {
     return kMotorPresets;
+}
+std::span<const PowerPreset> loadPresets() {
+    return kLoadPresets;
 }
 
 namespace {
@@ -1103,6 +1212,97 @@ std::string addMotor(Document& document, std::string_view joint, int bus,
     return name;
 }
 
+std::string addLoad(Document& document, std::string_view name, int bus, const PowerPreset* preset) {
+    OverlayEntry entry;
+    const std::string chosen = freePowerName(document, name.empty() ? "load" : name);
+    entry.create = std::string(kPowerScope) + chosen;
+    entry.schemas.push_back({std::string(kLoadSchema), {}});
+    applyPreset(entry, std::string(kLoadSchema), preset);
+    if (const std::string to = busPath(document, bus); !to.empty()) {
+        setAttribute(entry.schemas.front(), overlayField(kLoadSchema, "elec:powerPort"),
+                     "elec:powerPort", to);
+    }
+    document.overlay.entries.push_back(std::move(entry));
+    return chosen;
+}
+
+namespace {
+
+/// A bus entry's prim, or "" for -1 (a part between buses picks both ends itself).
+std::string chosenBus(const Document& document, int bus) {
+    return bus < 0 ? std::string{} : busPath(document, bus);
+}
+
+}  // namespace
+
+std::string addConverter(Document& document, std::string_view name, int input, int output) {
+    OverlayEntry entry;
+    const std::string chosen = freePowerName(document, name.empty() ? "dcdc" : name);
+    entry.create = std::string(kPowerScope) + chosen;
+    entry.schemas.push_back({std::string(kConverterSchema), {}});
+    OverlaySchema& converter = entry.schemas.front();
+    for (const auto& [attribute, bus] :
+         {std::pair{"elec:conv:input", input}, std::pair{"elec:conv:output", output}}) {
+        if (const std::string to = chosenBus(document, bus); !to.empty()) {
+            setAttribute(converter, overlayField(kConverterSchema, attribute), attribute, to);
+        }
+    }
+    document.overlay.entries.push_back(std::move(entry));
+    return chosen;
+}
+
+std::string addBranch(Document& document, std::string_view name, std::string_view kind, int input,
+                      int output) {
+    const bool known = std::ranges::find(kBranchKind, kind) != kBranchKind.end();
+    const std::string_view type = known ? kind : std::string_view("resistor");
+    OverlayEntry entry;
+    const std::string chosen = freePowerName(document, name.empty() ? type : name);
+    entry.create = std::string(kPowerScope) + chosen;
+    entry.schemas.push_back({std::string(kBranchSchema), {}});
+    OverlaySchema& branch = entry.schemas.front();
+    if (type != "resistor") {  // the schema's default stays unwritten
+        setAttribute(branch, overlayField(kBranchSchema, "elec:branch:kind"), "elec:branch:kind",
+                     type);
+    }
+    for (const auto& [attribute, bus] :
+         {std::pair{"elec:branch:input", input}, std::pair{"elec:branch:output", output}}) {
+        if (const std::string to = chosenBus(document, bus); !to.empty()) {
+            setAttribute(branch, overlayField(kBranchSchema, attribute), attribute, to);
+        }
+    }
+    document.overlay.entries.push_back(std::move(entry));
+    return chosen;
+}
+
+std::vector<std::pair<std::string, std::string>> powerSignals(const OverlayEntry& entry) {
+    const std::string name = entryName(entry);
+    std::vector<std::pair<std::string, std::string>> out;
+    const auto add =
+        [&](std::string_view scope,
+            std::initializer_list<std::pair<std::string_view, std::string_view>> list) {
+            for (const auto& [signal, unit] : list) {
+                out.emplace_back(std::string(scope) + "/" + name + "/" + std::string(signal),
+                                 std::string(unit));
+            }
+        };
+    if (findSchema(entry, kBusSchema) != nullptr) {
+        add("bus", {{"voltage", "V"}, {"brownout", "1"}});
+    } else if (findSchema(entry, kBatterySchema) != nullptr) {
+        add("battery", {{"soc", "1"},
+                        {"terminal_voltage", "V"},
+                        {"current", "A"},
+                        {"power", "W"},
+                        {"loss_power", "W"}});
+    } else if (findSchema(entry, kLoadSchema) != nullptr) {
+        add("load", {{"current", "A"}, {"powered", "1"}});
+    } else if (findSchema(entry, kConverterSchema) != nullptr) {
+        add("converter", {{"output_current", "A"}, {"input_current", "A"}, {"loss_power", "W"}});
+    } else if (findSchema(entry, kBranchSchema) != nullptr) {
+        add("branch", {{"current", "A"}, {"voltage", "V"}, {"state", "1"}, {"loss_power", "W"}});
+    }
+    return out;
+}
+
 bool removeEntry(Document& document, std::size_t index) {
     auto& entries = document.overlay.entries;
     if (index >= entries.size()) {
@@ -1196,22 +1396,138 @@ std::vector<double> numbers(const OverlaySchema& schema, std::string_view name) 
     return out;
 }
 
+/// A relationship's bus: the entry index, or -1 (and a problem for `item`).
+int busOfRelationship(const Document& document, std::vector<Problem>& out, const std::string& item,
+                      const OverlaySchema& schema, std::string_view attribute,
+                      std::string_view what) {
+    const std::string to = attributeText(schema, attribute);
+    const int bus = busNamed(document, to);
+    if (bus < 0) {
+        out.push_back({Level::Error, item,
+                       to.empty()
+                           ? std::string(what) + ": no bus picked (" + std::string(attribute) + ")"
+                           : std::string(what) + " " + to + " is not a bus of the overlay (" +
+                                 std::string(attribute) + ")"});
+    }
+    return bus;
+}
+
 }  // namespace
 
 std::vector<Problem> checkOverlay(const Document& document) {
     std::vector<Problem> out;
     const auto& entries = document.overlay.entries;
-    // Batteries and converters feed buses: which buses have a source.
+    // What feeds a bus: a battery, then (as the network starts them) a converter from a fed bus,
+    // a branch to a fed bus: a resistor, fuse or switch either way, a diode from its anode.
     std::set<int> fed;
-    for (const std::size_t i : entriesWith(document, "ElectricalConverterAPI_1")) {
-        const OverlaySchema& c = *findSchema(entries[i], "ElectricalConverterAPI_1");
-        for (const OverlayAttribute& a : c.attributes) {
-            if (a.name.ends_with("output") || a.name.ends_with("outputPort")) {
-                for (const std::string& v : a.values) {
-                    fed.insert(busNamed(document, v));
+    // Converters: their values, both ends, one per output bus, and loops among them.
+    std::vector<std::pair<int, int>> conversions;  // (input, output) bus entries
+    std::map<int, std::string> feeder;             // output bus → the converter feeding it
+    for (const std::size_t i : entriesWith(document, kConverterSchema)) {
+        const OverlayEntry& entry = entries[i];
+        const std::string item = entryPrim(entry);
+        const OverlaySchema& converter = *findSchema(entry, kConverterSchema);
+        checkValues(out, item, converter, converterFields(), "");
+        const int in = busOfRelationship(document, out, item, converter, "elec:conv:input",
+                                         "the converter's input");
+        const int to = busOfRelationship(document, out, item, converter, "elec:conv:output",
+                                         "the converter's output");
+        if (in >= 0 && in == to) {
+            out.push_back({Level::Error, item,
+                           "the converter's input and output are the same bus: pick another "
+                           "for its output"});
+            continue;
+        }
+        if (to >= 0) {
+            if (const auto [at, added] = feeder.emplace(to, entryName(entry)); !added) {
+                out.push_back({Level::Error, item,
+                               "two converters feed " +
+                                   entryName(entries[static_cast<std::size_t>(to)]) + " (with " +
+                                   at->second + "): one converter per output bus is simulated"});
+            }
+        }
+        if (in >= 0 && to >= 0) {
+            conversions.emplace_back(in, to);
+        }
+    }
+    // A loop of converters (a → b → a): the network does not refuse it, but power would go round
+    // it, each converter's losses feeding the next, and the start-up depends on the file's order.
+    for (const std::size_t i : entriesWith(document, kConverterSchema)) {
+        const OverlaySchema& converter = *findSchema(entries[i], kConverterSchema);
+        const int in = busNamed(document, attributeText(converter, "elec:conv:input"));
+        const int to = busNamed(document, attributeText(converter, "elec:conv:output"));
+        if (in < 0 || to < 0 || in == to) {
+            continue;
+        }
+        std::set<int> reached{to};
+        std::vector<int> frontier{to};
+        while (!frontier.empty()) {
+            const int at = frontier.back();
+            frontier.pop_back();
+            for (const auto& [a, b] : conversions) {
+                if (a == at && reached.insert(b).second) {
+                    frontier.push_back(b);
                 }
             }
         }
+        if (reached.contains(in)) {
+            out.push_back({Level::Warning, entryPrim(entries[i]),
+                           "converters in a loop: its output reaches its own input through other "
+                           "converters, so power goes round; the network runs it, but it is "
+                           "no real circuit"});
+        }
+    }
+    // Branches: values for their kind, two different buses.
+    std::vector<std::tuple<int, int, bool>> joins;  // (input, output, diode)
+    for (const std::size_t i : entriesWith(document, kBranchSchema)) {
+        const OverlayEntry& entry = entries[i];
+        const std::string item = entryPrim(entry);
+        const OverlaySchema& branch = *findSchema(entry, kBranchSchema);
+        std::string kind = attributeText(branch, "elec:branch:kind");
+        kind = kind.empty() ? "resistor" : kind;
+        checkValues(out, item, branch, branchFields(), "");
+        if (kind == "fuse") {
+            const auto rating = parseNumber(attributeText(branch, "elec:branch:i2tRating"));
+            if (!rating || *rating <= 0.0) {
+                out.push_back({Level::Error, item,
+                               "a fuse needs elec:branch:i2tRating above 0 (A²·s): the current "
+                               "squared over time at which it opens"});
+            }
+        }
+        for (const OverlayField& field : branchFields()) {
+            const std::string name(field.name);
+            if (!branchFieldApplies(kind, name) && !attributeText(branch, name).empty()) {
+                out.push_back(
+                    {Level::Hint, item,
+                     name + " is for another kind of branch: a " + kind + " does not use it"});
+            }
+        }
+        const int in =
+            busOfRelationship(document, out, item, branch, "elec:branch:input", "the input");
+        const int to =
+            busOfRelationship(document, out, item, branch, "elec:branch:output", "the output");
+        if (in >= 0 && in == to) {
+            out.push_back({Level::Error, item, "a branch's two ends are the same bus"});
+        } else if (in >= 0 && to >= 0) {
+            joins.emplace_back(in, to, kind == "diode");
+        }
+    }
+    // Loads: their values, a power unless a resistance gives it, and a bus.
+    for (const std::size_t i : entriesWith(document, kLoadSchema)) {
+        const OverlayEntry& entry = entries[i];
+        const std::string item = entryPrim(entry);
+        const OverlaySchema& load = *findSchema(entry, kLoadSchema);
+        checkValues(out, item, load, loadFields(), "");
+        const std::string model = attributeText(load, "elec:load:model");
+        const auto resistance = parseNumber(attributeText(load, "elec:load:resistance"));
+        const bool byResistance = model == "resistive" && resistance && *resistance > 0.0;
+        if (attributeText(load, "elec:load:power").empty() && !byResistance) {
+            out.push_back({Level::Error, item,
+                           model == "resistive"
+                               ? "a load needs elec:load:power, or a resistance above 0"
+                               : "a load needs elec:load:power (W)"});
+        }
+        (void)busOfRelationship(document, out, item, load, "elec:powerPort", "the load draws from");
     }
     for (const std::size_t i : entriesWith(document, kBatterySchema)) {
         const OverlayEntry& entry = entries[i];
@@ -1246,6 +1562,21 @@ std::vector<Problem> checkOverlay(const Document& document) {
             fed.insert(bus);
         }
     }
+    for (bool more = true; more;) {
+        more = false;
+        for (const auto& [in, to] : conversions) {
+            if (fed.contains(in)) {
+                more = fed.insert(to).second || more;
+            }
+        }
+        for (const auto& [in, to, diode] : joins) {
+            if (fed.contains(in) && !fed.contains(to)) {
+                more = fed.insert(to).second || more;
+            } else if (!diode && fed.contains(to) && !fed.contains(in)) {
+                more = fed.insert(in).second || more;
+            }
+        }
+    }
     for (const std::size_t i : entriesWith(document, kBusSchema)) {
         const OverlayEntry& entry = entries[i];
         const std::string item = entryPrim(entry);
@@ -1258,8 +1589,9 @@ std::vector<Problem> checkOverlay(const Document& document) {
         }
         if (!fed.contains(static_cast<int>(i))) {
             out.push_back({Level::Error, item,
-                           "a bus without a battery: nothing feeds it; add a battery and pick "
-                           "this bus for its output"});
+                           "a bus without a battery: nothing feeds it; add a battery, or a "
+                           "converter or branch from a bus a battery feeds, and pick this bus "
+                           "for its output"});
         }
     }
     std::set<std::string, std::less<>> driven;

@@ -1412,7 +1412,8 @@ public:
         // testing (bus/, battery/, motor/ names from the signal catalog).
         std::string power;
         for (const std::string_view schema :
-             {builder::kBusSchema, builder::kBatterySchema, builder::kMotorSchema}) {
+             {builder::kBusSchema, builder::kBatterySchema, builder::kMotorSchema,
+              builder::kLoadSchema, builder::kConverterSchema, builder::kBranchSchema}) {
             std::string names;
             for (const std::size_t i : builder::entriesWith(document, schema)) {
                 names += std::string(names.empty() ? "" : ", ") + "\"" +
@@ -1426,16 +1427,27 @@ public:
             if (const auto catalog = client_.catalog()) {
                 for (const SignalInfo& info : catalog->signals) {
                     if (info.name.starts_with("bus/") || info.name.starts_with("battery/") ||
-                        info.name.starts_with("motor/")) {
+                        info.name.starts_with("motor/") || info.name.starts_with("load/") ||
+                        info.name.starts_with("converter/") || info.name.starts_with("branch/")) {
                         electrical += std::string(electrical.empty() ? "" : ", ") + "\"" +
                                       jsonEscape(info.name) + "\"";
                     }
                 }
             }
         }
+        // The Signals scope's traces, each at its newest sample (a Test's plotted values).
+        std::string scope;
+        for (const ScopeTrace& trace : scopeSession_.traces()) {
+            const double v = trace.buffer ? trace.buffer->latest() : 0.0;
+            char number[48];
+            std::snprintf(number, sizeof(number), "%.9g", std::isfinite(v) ? v : 0.0);
+            scope += std::string(scope.empty() ? "" : ", ") + "\"" + jsonEscape(trace.label) +
+                     "\": " + number;
+        }
         const BuilderSession::Mode mode = builderSession_.mode;
         return text + std::string("\"overlay\": {") + power + "}, \"electrical_signals\": [" +
-               electrical + "], \"live_joints\": " + values(builderSession_.liveJoints) +
+               electrical + "], \"scope_values\": {" + scope +
+               "}, \"live_joints\": " + values(builderSession_.liveJoints) +
                ", \"joint_targets\": " + values(builderSession_.jointTargets) +
                ", \"joint_drive_error\": \"" + jsonEscape(builderSession_.jointDriveError) +
                "\", \"selected\": \"" + jsonEscape(builderSession_.selection.name) +
@@ -1858,6 +1870,9 @@ void applyInput(const std::vector<InputEvent>& events, std::uint32_t frame, ImGu
                                               : ImGuiKey_None;
             if (name.size() == 1 && name[0] >= 'a' && name[0] <= 'z') {
                 key = static_cast<ImGuiKey>(ImGuiKey_A + (name[0] - 'a'));
+            }
+            if (name.size() == 1 && name[0] >= '0' && name[0] <= '9') {
+                key = static_cast<ImGuiKey>(ImGuiKey_0 + (name[0] - '0'));  // ctrl+4: Signals
             }
             if (key != ImGuiKey_None) {
                 const bool down = event.kind == "keydown";
