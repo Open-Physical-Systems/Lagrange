@@ -287,6 +287,10 @@ if(BUILD_TESTING)
     ament_add_gtest(
         test_viewer_builder
         builder/test/test_builder_smoke.cpp
+        builder/test/test_history.cpp
+        builder/test/test_kinematics.cpp
+        builder/test/test_mass_properties.cpp
+        builder/test/test_validation.cpp
         TIMEOUT 120
     )
     target_link_libraries(test_viewer_builder lagrange_viewer_builder)
@@ -294,6 +298,7 @@ if(BUILD_TESTING)
         test_viewer_builder
         PRIVATE
             LAGRANGE_BUILDER_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/builder"
+            LAGRANGE_THERMAL_MATERIALS_CPP="${CMAKE_CURRENT_SOURCE_DIR}/../modules/thermal/conduction/src/Materials.cpp"
     )
     lagrange_target_defaults(test_viewer_builder)
 
