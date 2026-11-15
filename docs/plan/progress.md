@@ -42,11 +42,10 @@ hunt for flaws. Done by parallel agents in worktrees, merged into `night/integra
   every finding with a repro, most fixed with a regression test (among them: 15/30 Hz sensors
   refused at start, spawned robots' sensors reading the first robot's parts, a second
   multicopter grounding the first, images lost on restore, ODR clash between kinds' helpers).
-- **Owed:** USD/SDFormat for lidar patterns and fisheye (schema addition by RFC); saved-state
-  format v2 refuses older saved states (recordings unaffected); several defaults marked
-  illustrative or `TODO(verify)` in §9; pre-commit's end-of-file and gersemi hooks fail on three
-  files untouched tonight (`docs/plan/spikes/0.2-C6-jolt.md`, `city_block_roads.usda`,
-  `vendor/jolt_vendor`).
+- **Owed:** USD/SDFormat for lidar patterns and fisheye (schema addition by RFC); several
+  defaults marked illustrative or `TODO(verify)` in §9. Done since: format 2 reads the format 1
+  states of 1.1 and 1.2 (`formats.md` §11, a fixture saved by the 1.2.0 packages), and the
+  end-of-file and gersemi hooks pass repo-wide (the USD writer ends its files with one newline).
 
 ## v1.3.0, the day after (#331, #333)
 

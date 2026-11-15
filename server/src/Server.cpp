@@ -1019,8 +1019,13 @@ struct Server::Impl {
         }
         // The electrical domain turns the controllers' torque commands into joint torques: the
         // network when the robot has motors (from USD or an overlay), else its ideal substitute
-        // (domains/electrical.md §5), added below after every controller.
+        // (domains/electrical.md §5).
         const bool electricalNetwork = hasPowerSystem() && !off("electrical");
+        // The ideal substitute passes on the torque commands declared before it. Here, where
+        // 1.1 to 1.3 added it, it sees every controller's but a multicopter's (added after the
+        // rotors' air), and the run keeps their bus layout, so that their saved states restore
+        // (RFC 0007, formats.md §11); with rotors it comes after every module instead.
+        const bool idealTorqueLast = hasRotors();
         if (electricalNetwork) {
             ModuleConfigData power;
             power.fidelity = settings.electricalFidelity.value_or("averaged");
@@ -1044,6 +1049,8 @@ struct Server::Impl {
                     next->add(std::make_unique<electrical::FmuComponent>(std::move(binding)));
                 }
             }
+        } else if (!idealTorqueLast && !addPluginSubstitute("electrical")) {
+            next->add(std::make_unique<electrical::IdealTorqueSource>());
         }
         // Thermal, after electrical: it reads the losses. It needs the site's ambient
         // temperature; without one nothing stands in, and the electrical network keeps its
@@ -1340,14 +1347,15 @@ struct Server::Impl {
         if (sensors::DelayLine::needed(WorldView(robot.world))) {
             next->add(std::make_unique<sensors::DelayLine>());
         }
-        // The electrical substitute passes on the torque_command of every module above
-        // (IdealTorqueSource reads them from declaredOutputs), so it comes after them all: the
-        // multicopter controller and the MAVLink bridges are added after the rotors' air.
-        if (!electricalNetwork && !addPluginSubstitute("electrical")) {
+        // With rotors, the electrical substitute passes on the torque_command of every module
+        // above (IdealTorqueSource reads them from declaredOutputs), so it comes after them all:
+        // the multicopter controller and the MAVLink bridges are added after the rotors' air.
+        if (!electricalNetwork && idealTorqueLast && !addPluginSubstitute("electrical")) {
             next->add(std::make_unique<electrical::IdealTorqueSource>());
         }
         // Always last: it sums the body/<b>/wrench/<source> written by the modules above.
         next->add(std::make_unique<services::WrenchSum>());
+        next->leaveOut(leftOut);
         Clock::time_point wireStart = Clock::now();
         auto wired = next->wire(WorldView(robot.world));
         timing("wire", wireStart);
@@ -1419,6 +1427,9 @@ struct Server::Impl {
     // Of the robot itself: a passive car spawned beside an arm takes nothing from the arm.
     bool jointControllable{true};
     std::shared_ptr<JointTargets> jointTargets = std::make_shared<JointTargets>();
+    // Stateless modules ("domain/name") left out of the run because the state restored last was
+    // saved before a later release added them (Scheduler::addedSince, formats.md §11).
+    std::set<std::string> leftOut;
     std::optional<double> appliedGravity;  // m/s², downward (setSite); else the file's
 
     /// Stores one site value for the next build. An error names what can be set.
@@ -7990,11 +8001,50 @@ Status Server::restoreState(std::span<const std::byte> state) {
     if (!impl_->scheduler) {
         return Status::error(StatusCode::Internal, "restoreState() before load()");
     }
+    // A bare scheduler state ("LGST" first) has no site: Server::saveState always wrote one
+    // (since 1.1, when it came in), so this came from Scheduler::saveState, not from here.
+    constexpr std::array<std::byte, 4> kSchedulerMagic{std::byte{'L'}, std::byte{'G'},
+                                                       std::byte{'S'}, std::byte{'T'}};
+    if (state.size() >= kSchedulerMagic.size() &&
+        std::equal(kSchedulerMagic.begin(), kSchedulerMagic.end(), state.begin())) {
+        return Status::error(StatusCode::InvalidConfig,
+                             "a scheduler state without the site that Server::saveState puts "
+                             "before it: restore it with Scheduler::restoreState");
+    }
     StateReader reader(state);
     if (Status status = impl_->restoreSite(reader); !status.ok()) {
         return status;
     }
-    return impl_->scheduler->restoreState(reader);
+    // A state saved before a later release added a stateless module to this run (aerodynamics'
+    // zero substitute after 1.3) restores into the run built without it: the saved run's own
+    // composition, whose bus the state holds (RFC 0007, formats.md §11).
+    const std::span<const std::byte> schedulerState =
+        state.subspan(state.size() - reader.remaining());
+    Impl& s = *impl_;
+    if (!s.leftOut.empty()) {
+        s.leftOut.clear();
+        if (Status status = s.build(); !status.ok()) {
+            return status;
+        }
+    }
+    const auto added = s.scheduler->addedSince(schedulerState);
+    if (!added) {
+        return added.error();
+    }
+    if (!added->empty()) {
+        s.leftOut.insert(added->begin(), added->end());
+        std::string names;
+        for (const std::string& label : *added) {
+            names += (names.empty() ? "" : ", ") + label;
+        }
+        services::log(services::LogLevel::Info, "server",
+                      "the saved state comes from a run without " + names +
+                          ", which this release adds: the run goes on without them");
+        if (Status status = s.build(); !status.ok()) {
+            return status;
+        }
+    }
+    return s.scheduler->restoreState(reader);
 }
 
 Status Server::setSite(const std::string& name, double value) {

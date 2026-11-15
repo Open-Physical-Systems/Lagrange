@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <string>
@@ -962,6 +963,220 @@ TEST(State, RestoreKeepsPublishedImages) {
     ASSERT_TRUE(scheduler.stepUntil(SimTime{300'000'000}).ok());
     EXPECT_EQ(shown(), 30);
     EXPECT_EQ(scheduler.stateHash().value(), first);
+}
+
+// Saved-state format 1 (Lagrange 1.1 and 1.2, before the buffers were saved) still restores
+// (RFC 0007): the restored run reads no image until the next frame, numbers its handles on from
+// the saved run's, and so continues exactly as the run it was saved from once its sensor has
+// published as many frames as the bus keeps.
+TEST(State, RestoresAFormatOneStateWithoutItsImages) {
+    Scheduler scheduler(SchedulerOptions{.deterministic = true});
+    auto camera = std::make_unique<TestModule>("sensors", "camera", 10_ms);
+    camera->onDeclare = [](SignalDeclarer& d, TestModule& m) {
+        SignalSpec image;
+        image.name = "sensor/cam/image";
+        image.type = SignalType::Image;
+        m.ids.push_back(d.output(image));
+    };
+    camera->onStep = [](const StepContext& c, SignalBus& bus, TestModule& m) {
+        auto buffer = std::make_shared<Buffer>();
+        buffer->width = 2;
+        buffer->height = 1;
+        buffer->encoding = "r32u";
+        buffer->bytes.assign(8, static_cast<std::byte>(c.stepIndex + 1));
+        bus.publishBuffer(m.ids[0], std::move(buffer));
+        return Status{};
+    };
+    scheduler.add(std::move(camera));
+    ASSERT_TRUE(scheduler.wire(WorldView(World{})));
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{100'000'000}).ok());
+    StateWriter saved;
+    ASSERT_TRUE(scheduler.saveState(saved).ok());
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{300'000'000}).ok());
+    const std::uint64_t first = scheduler.stateHash().value();
+
+    // Format 1 is format 2 with version 1 and without the buffer section at its end: the slot
+    // count (8 bytes), the slot's last sequence (4) and its four kept buffers, each a handle (8),
+    // a presence byte (1), width and height (4 + 4), the encoding (8 + 4), the size (8) and the
+    // bytes (8). (Format 1's writer: Scheduler.cpp at 71880eb^.)
+    constexpr std::size_t kBufferSection = 8 + 4 + 4 * (8 + 1 + 4 + 4 + 8 + 4 + 8 + 8);
+    std::vector<std::byte> v1(saved.bytes().begin(), saved.bytes().end());
+    ASSERT_GT(v1.size(), kBufferSection);
+    std::uint64_t slots = 0;
+    std::memcpy(&slots, v1.data() + v1.size() - kBufferSection, sizeof(slots));
+    ASSERT_EQ(slots, 1U) << "the buffer section starts where it was computed to";
+    v1.resize(v1.size() - kBufferSection);
+    const std::uint32_t version = 1;
+    std::memcpy(v1.data() + sizeof(std::uint32_t), &version, sizeof(version));
+
+    StateReader reader(v1);
+    ASSERT_TRUE(scheduler.restoreState(reader).ok());
+    EXPECT_EQ(reader.remaining(), 0U);
+    const SignalId image = scheduler.bus().find("sensor/cam/image");
+    EXPECT_EQ(scheduler.bus().buffer(scheduler.bus().readBuffer(image)), nullptr)
+        << "format 1 kept no image";
+    ASSERT_TRUE(scheduler.stepUntil(SimTime{300'000'000}).ok());
+    const auto shown = scheduler.bus().buffer(scheduler.bus().readBuffer(image));
+    ASSERT_NE(shown, nullptr);
+    EXPECT_EQ(static_cast<int>(shown->bytes[0]), 30);
+    EXPECT_EQ(scheduler.bus().readBuffer(image).id & 0xFFFF'FFFFU, 30U)
+        << "handles numbered on from the saved run's";
+    EXPECT_EQ(scheduler.stateHash().value(), first);
+
+    // Another version is refused, and says which it reads.
+    const std::uint32_t unknown = 7;
+    std::memcpy(v1.data() + sizeof(std::uint32_t), &unknown, sizeof(unknown));
+    StateReader other(v1);
+    const Status refused = scheduler.restoreState(other);
+    EXPECT_FALSE(refused.ok());
+    EXPECT_NE(refused.message.find("version 1 or 2"), std::string::npos) << refused.message;
+}
+
+/// A constant substitute that keeps no state: still air, read by whoever wants wind.
+class StillAir final : public IModule {
+public:
+    [[nodiscard]] ModuleInfo info() const override {
+        return {"aerodynamics", "still", 1, 0, true, true, CapabilityTier::Tier0};
+    }
+    [[nodiscard]] Duration preferredStep() const override { return 1_ms; }
+    Status declare(const WorldView&, const ModuleConfig&, SignalDeclarer& d) override {
+        seen_ = d.input(scalar("x/noisy/x", units::m));
+        wind_ = d.output(scalar("x/wind", units::m));
+        return {};
+    }
+    Status init(const WorldView&, const ModuleConfig&, SignalBus& bus) override {
+        bus.write(wind_, 0.0);
+        return {};
+    }
+    Status step(const StepContext&, SignalBus& bus) override {
+        bus.write(wind_, 0.0 * bus.read(seen_));
+        return {};
+    }
+    Status saveState(StateWriter&) const override { return {}; }
+    Status restoreState(StateReader&) override { return {}; }
+
+private:
+    SignalId seen_;
+    SignalId wind_;
+};
+
+// A state saved before a run gained a stateless substitute (aerodynamics' zero substitute came
+// after 1.3) names it as added since; the run built again without it restores the state and goes
+// on as the saved run did. One that keeps state is refused by name.
+TEST(State, ARunBuiltWithoutModulesAddedSinceRestoresTheState) {
+    const World world;
+    const auto consumer = []() {
+        auto module = std::make_unique<TestModule>("control", "consumer", 10_ms);
+        module->onDeclare = [](SignalDeclarer& d, TestModule& m) {
+            SignalSpec wind = scalar("x/wind", units::m);
+            wind.optional = true;
+            m.ids.push_back(d.input(wind));
+            m.ids.push_back(d.input(scalar("x/noisy/x", units::m)));
+            m.ids.push_back(d.output(scalar("x/consumer/y", units::m)));
+        };
+        module->onStep = [](const StepContext&, SignalBus& bus, TestModule& m) {
+            m.state += bus.read(m.ids[0]) + bus.read(m.ids[1]);
+            bus.write(m.ids[2], m.state);
+            return Status{};
+        };
+        return module;
+    };
+    Scheduler before(SchedulerOptions{.deterministic = true, .runSeed = 5});
+    before.add(consumer());
+    build(before, world);
+    ASSERT_TRUE(before.stepUntil(SimTime{100'000'000}).ok());
+    StateWriter saved;
+    ASSERT_TRUE(before.saveState(saved).ok());
+    ASSERT_TRUE(before.stepUntil(SimTime{300'000'000}).ok());
+
+    Scheduler now(SchedulerOptions{.deterministic = true, .runSeed = 5});
+    now.add(std::make_unique<StillAir>());
+    now.add(consumer());
+    build(now, world);
+    StateReader direct(saved.bytes());
+    EXPECT_FALSE(now.restoreState(direct).ok()) << "the bus differs";
+    const auto added = now.addedSince(saved.bytes());
+    ASSERT_TRUE(added);
+    EXPECT_EQ(*added, std::vector<std::string>{"aerodynamics/still"});
+
+    Scheduler without(SchedulerOptions{.deterministic = true, .runSeed = 5});
+    without.add(std::make_unique<StillAir>());
+    without.add(consumer());
+    EXPECT_EQ(without.leaveOut({added->begin(), added->end()}), *added);
+    build(without, world);
+    StateReader reader(saved.bytes());
+    const Status restored = without.restoreState(reader);
+    ASSERT_TRUE(restored.ok()) << restored.message;
+    ASSERT_TRUE(without.stepUntil(SimTime{300'000'000}).ok());
+    EXPECT_EQ(without.stateHash().value(), before.stateHash().value());
+
+    // A module that keeps state cannot join mid-run.
+    Scheduler less(SchedulerOptions{.deterministic = true, .runSeed = 5});
+    build(less, world);
+    StateWriter fewer;
+    ASSERT_TRUE(less.saveState(fewer).ok());
+    const auto refused = now.addedSince(fewer.bytes());
+    ASSERT_FALSE(refused);
+    EXPECT_NE(refused.error().message.find("module control/consumer of this run, which keeps "
+                                           "state, is not in it"),
+              std::string::npos)
+        << refused.error().message;
+}
+
+// A state saved before a module read another input (after 1.3 the demo drive reads the robot's
+// pose) restores: the outputs exactly, the inputs read again at each reader's next step, so only
+// a window average's partial window is lost. In format 2 and format 1 alike.
+TEST(State, RestoresAStateFromBeforeAModuleReadMore) {
+    const World world;
+    const auto consumer = [](bool more) {
+        auto module = std::make_unique<TestModule>("control", "consumer", 10_ms);
+        module->onDeclare = [more](SignalDeclarer& d, TestModule& m) {
+            m.ids.push_back(d.input(scalar("x/noisy/x", units::m)));
+            m.ids.push_back(d.output(scalar("x/consumer/y", units::m)));
+            if (more) {
+                m.ids.push_back(d.input(scalar("x/source/u", units::m)));
+            }
+        };
+        module->onStep = [](const StepContext&, SignalBus& bus, TestModule& m) {
+            m.state += bus.read(m.ids[0]);
+            bus.write(m.ids[1], m.state);
+            return Status{};
+        };
+        return module;
+    };
+    Scheduler before(SchedulerOptions{.deterministic = true, .runSeed = 5});
+    before.add(consumer(false));
+    build(before, world);
+    ASSERT_TRUE(before.stepUntil(SimTime{100'000'000}).ok());
+    StateWriter saved;
+    ASSERT_TRUE(before.saveState(saved).ok());
+    ASSERT_TRUE(before.stepUntil(SimTime{300'000'000}).ok());
+    // Format 1: version 1, without the (here empty: no image signals) buffer section.
+    std::vector<std::byte> v1(saved.bytes().begin(), saved.bytes().end());
+    v1.resize(v1.size() - sizeof(std::uint64_t));
+    const std::uint32_t one = 1;
+    std::memcpy(v1.data() + sizeof(std::uint32_t), &one, sizeof(one));
+
+    std::vector<std::uint64_t> hashes;
+    for (const std::span<const std::byte> state :
+         {saved.bytes(), std::span<const std::byte>(v1), saved.bytes()}) {
+        Scheduler after(SchedulerOptions{.deterministic = true, .runSeed = 5});
+        after.add(consumer(true));
+        build(after, world);
+        StateReader reader(state);
+        const Status restored = after.restoreState(reader);
+        ASSERT_TRUE(restored.ok()) << restored.message;
+        EXPECT_EQ(reader.remaining(), 0U);
+        ASSERT_TRUE(after.stepUntil(SimTime{300'000'000}).ok());
+        for (const char* name : {"x/consumer/y", "x/noisy/x"}) {
+            EXPECT_NEAR(after.bus().read(after.bus().find(name)),
+                        before.bus().read(before.bus().find(name)), 1e-4)
+                << name;
+        }
+        hashes.push_back(after.stateHash().value());
+    }
+    EXPECT_EQ(hashes[0], hashes[1]) << "format 1 and 2 restore alike";
+    EXPECT_EQ(hashes[0], hashes[2]) << "deterministic";
 }
 
 // The floating origin (huge-worlds.md §1.2): a rebase moves region-local poses on the bus,

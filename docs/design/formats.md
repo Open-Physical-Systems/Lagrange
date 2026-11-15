@@ -1810,6 +1810,7 @@ between the two formats; libsdformat warns that it copies them.
 | Recordings | `RunMeta.format_version` + embedded schemas | Readers accept all older versions of the same major; new channels and fields only within 1.x | `migrate_recording` (`lagrange_migrate`): checks the version, refuses newer files; a step comes with version 2 |
 | Plugin ABI | `LAGRANGE_PLUGIN_ABI_MAJOR/MINOR` (1.0 at v1.0) | append only within a major (RFC 0007): `core/plugin_abi/test/test_abi_layout.c` pins sizes and offsets, `tools/ci/abi_check.sh` runs `abidiff` against the 1.0 baseline | none |
 | FMU map files | `schema_version` | as profiles | `migrate_profile --fmu-map` (not built: no FMU map files exist yet) |
+| Saved states | scheduler state version after the magic `LGST` (§11) | 1.x reads every saved state of 1.1 and later into a run of the same robot, world and profile | none: read in place |
 
 Loader behaviour: `core/stage/` supports the current and the previous version of each schema
 family. An older version loads with a warning that names the migration command. Two versions of
@@ -1829,3 +1830,79 @@ migration so that it is proven before it is needed: the family `ExampleMotorAPI`
 file uses (`tools/migrate/test/test_schema.py`). The stage loader notes a prim that applies an
 older version of a registered family with the command that migrates it, and refuses two versions
 of one family on one prim.
+
+## 11. Saved states
+
+`Server::saveState` (Python `save_state()`) returns the run's state as bytes for
+`restoreState` (`restore_state()`) in the same build of the same run: the robot, world and
+profile it was saved from. Within 1.x they also restore in later releases (RFC 0007).
+
+Layout: the site (`Server.cpp`, `saveSite`: gravity, ambient temperature, air density, the
+aerodynamics and weather settings, the local gravity vector), then the scheduler's state
+(`Scheduler.cpp`): the magic `LGST`, a format version, time, tick, each module's state as
+`(label, step index, length, bytes)` in execution order, then the signal bus.
+
+| Format | Written by | What it holds |
+|---|---|---|
+| 1 | 1.1, 1.2 | site, modules, bus values, handles and timing |
+| 2 | 1.3 and later | format 1, then the bus's published buffers (each image's sequence and bytes) |
+
+1.0 had no `saveState` in its API, so no 1.0 state exists to read.
+
+A format 1 state restores as follows: no buffers, so the restored run reads no image until each
+sensor's next frame (as it did in 1.2); each handle slot numbers on from the newest handle the
+state holds, the last its saved run published, so the run continues with the saved run's handles,
+and once the bus's four kept buffers have been replaced, its `state_hash()` equals the saved run's
+(`test_scheduler` `RestoresAFormatOneStateWithoutItsImages`).
+
+A module's own state grows only by appending, and a module reads the shorter layouts of earlier
+releases, filling what they lacked with what they implied:
+
+| Module | Appended in | An older state means |
+|---|---|---|
+| multicopter controller | 1.2: stand height, set point ramp, leash | no surface known (it stands at its start's height), the ramp at rest, the leash free |
+| car controller (`CarDrive`) | after 1.3: backing away when held up | driving, never held up or backing away |
+| demo drive command (`DiffDrive`) | after 1.3: the figure eight | the eight starts afresh where the robot stands |
+
+A later release may also add a module to the same run: aerodynamics' zero substitute (after 1.3)
+joins every run whose aerodynamics is off while the site's air density is given, and with it the
+wind and drag signals and the sums of them that `core/wrench_sum` writes. A state from before has
+neither, and its bus holds no place for them. `Server::restoreState` then asks the scheduler which
+of the run's modules the state lacks (`Scheduler::addedSince`); when every one keeps no state, it
+builds the run again without them (`Scheduler::leaveOut`), which is the saved run's composition,
+logs that the run goes on without them, and restores. The run goes on as the saved one did (the
+zero substitute's outputs are the defaults its readers read without it). It stays without them
+until a state that has them is restored; a module that keeps state and is missing from the state
+is refused by name, since it cannot start in the middle of a run.
+
+The bus is stored in the order the modules declare their signals, which is the order the server
+adds them. The electrical ideal substitute stays where 1.1 to 1.3 added it, after the robot's
+controllers, unless the robot has rotors: then it comes after every module, so that it sees the
+multicopter controller's torque commands (the layout of those runs changed after 1.3, see below).
+
+A module may also read more than it did (after 1.3 the demo drive reads the robot's pose to drive
+its eight). The saved run's outputs, their timing and every module's state are then restored
+exactly, and the inputs are read again from the outputs at each reader's next step; what is lost
+is a window average's partial window at the moment of the save, which starts again from its
+writer's last value, so the run goes on within that difference of the saved one, and the same on
+every restore (`test_scheduler` `RestoresAStateFromBeforeAModuleReadMore`).
+
+`python/test/test_lagrange.py` restores a state the released 1.2.0 packages saved
+(`python/test/data/quad_x500_hover_1.2.0.state`, the sample quadcopter hovering at 3 s) and
+checks the run goes on deterministically and that it saved again in format 2 continues the same.
+
+Checked by hand against the 1.2.0 packages (`localhost/lagrange:1.2.0`): the sample AMR (no
+world, CPU lidar, saved at 1 s) and the sample sedan restore and run on deterministically; the
+AMR's state (740 kB, mostly lidar ranges on the bus) is too large to commit as a fixture.
+
+What does not restore, with the reason in the message: a state of a different run (a module
+that keeps state is missing from it, or the module count or a label differs: `saved state does
+not match: ...: a state restores into a run of the same robot, world and profile`), one a module
+cannot read, or one whose run's modules now write other signals than they did (`signal bus
+layout`): among the samples, a 1.1 to 1.3 state of a multicopter with the electrical domain off
+(the run in which it could not fly, fixed after 1.3 by moving the ideal substitute); for a format 1 state the message adds that it was
+written by 1.1 or 1.2 and points here. Every module state that changed after 1.1 is in the table
+above (the layouts that changed between 1.0 and 1.1, in electrical, Jolt, lidar, traffic and
+weather, never reached a saved state, since 1.0 could not save one). A bare scheduler state
+(`Scheduler::saveState`, starting with `LGST`) given to `Server::restoreState` is refused as one
+without its site.

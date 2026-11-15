@@ -182,6 +182,13 @@ Status DriveCommand::saveState(StateWriter& writer) const {
 
 Status DriveCommand::restoreState(StateReader& reader) {
     reader.get(externalSeen_);
+    if (!reader.failed() && reader.remaining() == 0) {
+        // Saved by Lagrange 1.3 or earlier, before the demo drove an eight: the eight starts
+        // afresh where the robot stands (RFC 0007, formats.md §11).
+        eightStarted_ = false;
+        eightTurned_ = 0.0;
+        return {};
+    }
     reader.get(eightStarted_);
     reader.get(eightStart_[0]);
     reader.get(eightStart_[1]);
