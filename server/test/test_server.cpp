@@ -1348,6 +1348,36 @@ TEST(DemoDrive, TheSampleAmrKeepsToItsFigureEightInTheWarehouse) {
     EXPECT_GT(travelled, 60.0);  // m: about 0.6 m/s for two minutes, never held
 }
 
+// QA 2026-11-14: the sedan's demo in the town ran onto a crossing's post at a corner of the
+// junction after 6 s and stood there with its throttle open. It backs away and drives on.
+TEST(DemoDrive, TheSedanBacksAwayFromWhatHoldsItAndDrivesOn) {
+    ServerOptions options;
+    options.robotPath = LAGRANGE_TEST_SEDAN_USDA;
+    options.worldPath = (std::filesystem::path(LAGRANGE_TEST_CITY_USDA).parent_path().parent_path() /
+                         "town" / "town.usda")
+                            .string();
+    options.ros = false;
+    Server server(options);
+    ASSERT_TRUE(server.load().ok());
+    double longestHeld = 0.0;
+    double held = 0.0;
+    double travelledLate = 0.0;
+    std::vector<double> last;
+    for (std::int64_t k = 1; k <= 60; ++k) {  // 30 s by half seconds
+        ASSERT_TRUE(server.stepUntil(SimTime{k * 500'000'000}).ok());
+        const double speed = server.read("vehicle/sedan/speed")[0];
+        held = std::abs(speed) < 0.1 ? held + 0.5 : 0.0;
+        longestHeld = std::max(longestHeld, held);
+        const std::vector<double> pose = server.read("body/base_link/pose");
+        if (k > 40) {
+            travelledLate += std::hypot(pose[0] - last[0], pose[1] - last[1]);
+        }
+        last = pose;
+    }
+    EXPECT_LE(longestHeld, 2.5);     // s: held 2 s, then it backs away
+    EXPECT_GT(travelledLate, 20.0);  // m in the last 10 s: on its circle at 3 m/s
+}
+
 TEST_F(ServerTest, SeekingASimulationIsRefused) {
     ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
     v1::Envelope seek = command(7);

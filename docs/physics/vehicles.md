@@ -86,6 +86,8 @@ efficiency; reverse is first gear backwards.
 **The driver.** Without a planner, `/cmd_vel` (speed and turn rate) goes through the car
 controller: throttle from a PI on the speed error, brake when too fast, the steering angle from
 the turn rate; with no command it drives a demo circle (5 m radius, 3 m/s) round the origin.
+When something holds the demo still for 2 s (a post at a corner, a stopped car of the traffic),
+it backs away for 3 s with the steering the other way round and tries again.
 
 ## Wheeled robots without a vehicle model
 
