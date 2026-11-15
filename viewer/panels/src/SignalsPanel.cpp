@@ -1,6 +1,8 @@
 // Signals workspace: the signal browser on the left, and the cursor table and statistics on
-// the right (docs/design/ui/05-signals/SPEC.md).
+// the right (docs/design/ui/05-signals/SPEC.md). Their second tabs (Saved sets, Measure, FFT)
+// are in SignalsTabs.cpp.
 #include "PanelFormat.hpp"
+#include "SignalsCommon.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
 #include "lagrange/viewer/SignalList.hpp"
@@ -23,6 +25,11 @@ namespace lagrange::viewer {
 namespace {
 
 namespace c = theme::c;
+using signals::headerCell;
+using signals::kTableFlags;
+using signals::number;
+using signals::rightMono;
+using signals::traceCell;
 using widgets::px;
 
 constexpr std::int64_t kFastDtNs = 10'000'000;      // "rate >= 100 Hz"
@@ -40,21 +47,6 @@ void rate(std::int64_t dtNs, char* out, std::size_t size) {
         std::snprintf(out, size, "%g kHz", hz / 1000.0);
     } else {
         std::snprintf(out, size, "%g Hz", hz);
-    }
-}
-
-void rightMono(const ImVec4& color, const char* text) {
-    ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
-    widgets::AlignRight(ImGui::CalcTextSize(text).x);
-    ImGui::PopFont();
-    widgets::Mono(color, "%s", text);
-}
-
-void number(double value, char* out, std::size_t size, const char* format = "%.4g") {
-    if (std::isnan(value)) {
-        std::snprintf(out, size, "-");
-    } else {
-        std::snprintf(out, size, format, value);
     }
 }
 
@@ -417,32 +409,6 @@ private:
 };
 
 // --- cursors ------------------------------------------------------------------------------
-
-// Resizable: a long signal name can be given more of the width (M4).
-constexpr ImGuiTableFlags kTableFlags = ImGuiTableFlags_BordersInnerH |
-                                        ImGuiTableFlags_SizingStretchProp |
-                                        ImGuiTableFlags_NoPadOuterX | ImGuiTableFlags_Resizable;
-
-void headerCell(const char* text, bool right) {
-    ImGui::TableNextColumn();
-    if (right) {
-        ImGui::PushFont(theme::fonts().sans, theme::kCaptionSize);
-        widgets::AlignRight(ImGui::CalcTextSize(text).x);
-        ImGui::PopFont();
-    }
-    widgets::Caption("%s", text);
-}
-
-void traceCell(const ScopeTrace& trace) {
-    ImGui::TableNextColumn();
-    widgets::Swatch(theme::kSeries[trace.color % ScopeSession::kColors]);
-    ImGui::SameLine(0.0F, px(6.0F));
-    // All of the name that fits, cut in the middle; whole in the tooltip.
-    const std::string shown = fit::cut(ImGui::GetFont(), ImGui::GetFontSize(), trace.label,
-                                       ImGui::GetContentRegionAvail().x, true);
-    ImGui::TextUnformatted(shown.c_str());
-    ImGui::SetItemTooltip("%s  [%s]", trace.label.c_str(), trace.unit.c_str());
-}
 
 class CursorsPanel final : public Panel {
 public:

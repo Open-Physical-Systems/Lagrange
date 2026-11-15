@@ -33,6 +33,8 @@ add_library(
     client/src/RadarScale.cpp
     client/src/SchematicLayout.cpp
     client/src/SignalList.cpp
+    client/src/SignalAnalysis.cpp
+    client/src/SignalSets.cpp
     client/src/LabelLayout.cpp
     client/src/Fuzzy.cpp
 )
@@ -207,6 +209,7 @@ add_library(
     panels/src/SensorCatalogPanel.cpp
     panels/src/SensorsPanels.cpp
     panels/src/SignalsPanel.cpp
+    panels/src/SignalsTabs.cpp
     panels/src/TimelinePanel.cpp
     panels/src/ViewerSelf.cpp
     panels/src/ViewportPanel.cpp
@@ -341,6 +344,7 @@ if(BUILD_TESTING)
         client/test/test_scene_fuzz.cpp
         client/test/test_scope_buffer.cpp
         client/test/test_scope_session.cpp
+        client/test/test_signal_analysis.cpp
         client/test/test_text_layout.cpp
         client/test/test_viewer_client.cpp
         render/test/test_camera.cpp
@@ -411,6 +415,7 @@ if(BUILD_TESTING)
     find_package(ament_cmake_pytest REQUIRED)
     ament_add_pytest_test(test_circuit_roundtrip test/test_circuit_roundtrip.py TIMEOUT 120)
     ament_add_pytest_test(test_viewer_input test/test_viewer_input.py TIMEOUT 180)
+    ament_add_pytest_test(test_signals_tabs test/test_signals_tabs.py TIMEOUT 300)
     ament_add_pytest_test(test_profile_editor test/test_profile_editor.py TIMEOUT 180)
     ament_add_pytest_test(test_performance_tabs test/test_performance_tabs.py TIMEOUT 900)
     ament_add_pytest_test(test_domains_tabs test/test_domains_tabs.py TIMEOUT 300)
