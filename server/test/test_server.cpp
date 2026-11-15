@@ -1319,6 +1319,35 @@ TEST_F(OpenRecordingTest, OpeningARecordingTurnsTheServerIntoItsReplay) {
     expectPose(at05_);
 }
 
+// QA 2026-11-14: the sample AMR's open-loop figure-eight wandered and, after a minute, stood
+// against the warehouse's north rack. Closed-loop, it keeps to its two 1.2 m loops round the
+// start (the racks' faces are 3 m to each side).
+TEST(DemoDrive, TheSampleAmrKeepsToItsFigureEightInTheWarehouse) {
+    ServerOptions options;
+    options.robotPath = LAGRANGE_TEST_AMR_URDF;
+    options.worldPath = LAGRANGE_TEST_WAREHOUSE_URDF;
+    options.overlayPath = LAGRANGE_TEST_AMR_OVERLAY;
+    options.ros = false;
+    Server server(options);
+    ASSERT_TRUE(server.load().ok());
+    double farthestX = 0.0;
+    double farthestY = 0.0;
+    double travelled = 0.0;
+    std::vector<double> last = server.read("body/base_link/pose");
+    for (std::int64_t t = 1; t <= 120; ++t) {
+        ASSERT_TRUE(server.stepUntil(SimTime{t * 1'000'000'000}).ok());
+        const std::vector<double> pose = server.read("body/base_link/pose");
+        farthestX = std::max(farthestX, std::abs(pose[0]));
+        farthestY = std::max(farthestY, std::abs(pose[1]));
+        travelled += std::hypot(pose[0] - last[0], pose[1] - last[1]);
+        last = pose;
+    }
+    EXPECT_LT(farthestX, 1.35);  // m: the loops' radius, 1.2 m, and a little
+    EXPECT_LT(farthestY, 2.55);  // m: their two diameters, 2.4 m, and a little
+    EXPECT_GT(farthestY, 2.2);
+    EXPECT_GT(travelled, 60.0);  // m: about 0.6 m/s for two minutes, never held
+}
+
 TEST_F(ServerTest, SeekingASimulationIsRefused) {
     ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
     v1::Envelope seek = command(7);

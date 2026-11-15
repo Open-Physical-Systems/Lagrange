@@ -814,6 +814,7 @@ struct Server::Impl {
             }
             DriveCommand::Settings demo;
             demo.demo = options.demoDrive;
+            demo.basePose = drivenBasePose();  // the figure-eight keeps to its own floor
             auto drive = std::make_unique<DriveCommand>(demo, external);
             if (driveOut != nullptr) {
                 *driveOut = drive.get();
@@ -1816,6 +1817,18 @@ struct Server::Impl {
     }
 
     /// Wheel radius and track of a two-wheel robot, from its wheel colliders and positions.
+    /// The pose signal of the body the two driven wheels hang from, or "" without one.
+    std::string drivenBasePose() const {
+        const World& world = robot.world;
+        for (std::size_t j = 0; j < world.joints.names.size(); ++j) {
+            if (world.joints.names[j] == robot.actuatedJoints[0] &&
+                world.joints.parent[j] != kWorldBody) {
+                return "body/" + world.bodies.names[world.joints.parent[j].index] + "/pose";
+            }
+        }
+        return {};
+    }
+
     DiffDriveController::Settings driveSettings() const {
         DiffDriveController::Settings settings;
         settings.leftJoint = robot.actuatedJoints[0];
