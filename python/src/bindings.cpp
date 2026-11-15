@@ -10,9 +10,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <memory>
 #include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
@@ -131,6 +133,36 @@ public:
             throw nb::key_error(("no signal " + name).c_str());
         }
         return values;
+    }
+
+    /// Several signals' components one after another, as one float64 numpy array: what an
+    /// environment observes at every step, in one call instead of one per signal.
+    [[nodiscard]] nb::object readMany(const std::vector<std::string>& names) const {
+        std::vector<double> values;
+        for (const std::string& name : names) {
+            const std::vector<double> one = read(name);  // KeyError, TypeError as read()
+            values.insert(values.end(), one.begin(), one.end());
+        }
+        nb::object out =
+            nb::module_::import_("numpy").attr("empty")(values.size(), "dtype"_a = "float64");
+        auto view = nb::cast<nb::ndarray<double, nb::ndim<1>, nb::c_contig>>(out);
+        if (!values.empty()) {
+            std::memcpy(view.data(), values.data(), values.size() * sizeof(double));
+        }
+        return out;
+    }
+
+    /// command_joint for several joints in one mode, in order; true when every one took it.
+    bool commandJoints(const std::vector<std::string>& joints, const std::string& mode,
+                       const std::vector<double>& values) {
+        if (joints.size() != values.size()) {
+            throw std::invalid_argument("command_joints needs one value per joint");
+        }
+        bool all = true;
+        for (std::size_t i = 0; i < joints.size(); ++i) {
+            all = server_->commandJoint(joints[i], mode, values[i]) && all;
+        }
+        return all;
     }
 
     /// The signal's components, or nullopt for an unknown name (0 for an image).
@@ -320,6 +352,9 @@ NB_MODULE(_lagrange, m) {
             "joint"_a, "mode"_a, "value"_a,
             "With joint_control=True: hold a joint at this position, velocity or effort. False "
             "if it takes no such command.")
+        .def("command_joints", &Simulation::commandJoints, "joints"_a, "mode"_a, "values"_a,
+             "command_joint for each joint with its value, all in one mode, in one call. False "
+             "if any of them takes no such command (the others still take theirs).")
         .def("save_state", &Simulation::saveState,
              "The whole state as bytes: restore_state goes back to it and the run repeats.")
         .def("restore_state", &Simulation::restoreState, "state"_a)
@@ -328,6 +363,9 @@ NB_MODULE(_lagrange, m) {
         .def_prop_ro("time", &Simulation::time, "Simulated time (s).")
         .def("read", &Simulation::read, "name"_a,
              "Latest value of a signal (all its components). KeyError for an unknown name.")
+        .def("read_many", &Simulation::readMany, "names"_a,
+             "The latest values of several signals, every component of each in order, as one "
+             "float64 numpy array. KeyError for an unknown name.")
         .def("image", &Simulation::image, "name"_a,
              "Latest frame of an image signal (a camera's sensor/<n>/image or depth, a sensor "
              "kind's sensor/<n>/<q>) as a numpy array: rgba8 (height, width, 4) uint8, r32f "
