@@ -509,6 +509,132 @@ TEST_F(EmiServerTest, ThePowerLineDisturbsTheMagnetometerAndReachesTheViewer) {
     EXPECT_TRUE(server_->validateProfile(yaml).valid);
 }
 
+// Viewer QA H1: every domain that runs is on in the Domains table, with its module and a
+// switch; only a domain with no module at all says so. M8: no time of day, so no clock.
+TEST_F(EmiServerTest, EveryDomainThatRunsIsOnAndCanBeSwitchedOff) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_environment(); }));
+    std::map<std::string, v1::DomainState> domains;
+    for (const v1::Envelope& e : received_) {
+        if (e.has_profile_state()) {
+            for (const v1::DomainState& d : e.profile_state().domains()) {
+                domains[d.domain()] = d;
+            }
+        }
+    }
+    for (const auto& [name, module] : std::map<std::string, std::string>{
+             {"aerodynamics", "drag"}, {"emi", "analytic"}, {"rotor_aero", "coefficients"}}) {
+        ASSERT_TRUE(domains.contains(name)) << name;
+        EXPECT_TRUE(domains[name].enabled()) << name;
+        EXPECT_TRUE(domains[name].available()) << name;
+        EXPECT_FALSE(domains[name].substituted()) << name;
+        EXPECT_EQ(domains[name].active_module(), module) << name;
+        EXPECT_FALSE(domains[name].substitutes().empty()) << name;
+    }
+    EXPECT_FALSE(domains["radiation"].available());
+    EXPECT_NE(domains["radiation"].unavailable_reason().find("no module in this build"),
+              std::string::npos);
+    EXPECT_FALSE(domains["traffic"].available());
+    EXPECT_EQ(domains["traffic"].unavailable_reason().find("no module in this build"),
+              std::string::npos)
+        << domains["traffic"].unavailable_reason();
+    const v1::EnvironmentState& env = received_.back().environment();
+    EXPECT_TRUE(std::isnan(env.local_time_hours()));
+    EXPECT_TRUE(std::isnan(env.sun_elevation_deg()));
+
+    // Switched off, it stays switchable (its substitute runs in its place).
+    std::string yaml = received_[1].profile_state().yaml();
+    const std::string on = "  aerodynamics: {enabled: true, fidelity: drag}\n";
+    ASSERT_NE(yaml.find(on), std::string::npos) << yaml;
+    yaml.replace(yaml.find(on), on.size(), "  aerodynamics: {enabled: false, substitute: zero}\n");
+    v1::Envelope apply = command(2);
+    apply.mutable_command()->mutable_apply_profile()->set_yaml(yaml);
+    apply.mutable_command()->mutable_apply_profile()->set_restart(true);
+    send(apply);
+    received_.clear();
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_profile_state(); }));
+    for (const v1::DomainState& d : received_.back().profile_state().domains()) {
+        if (d.domain() == "aerodynamics") {
+            EXPECT_FALSE(d.enabled());
+            EXPECT_TRUE(d.available());
+            EXPECT_TRUE(d.substituted());
+        }
+    }
+}
+
+// Viewer QA H2: the preview of a profile with a domain off shows its substitute's nodes.
+TEST_F(ServerTest, ThePreviewOfADomainOffShowsItsSubstitute) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_profile_state(); }));
+    std::string yaml = received_.back().profile_state().yaml();
+    const std::string on = "  sensors: {enabled: true}\n";
+    ASSERT_NE(yaml.find(on), std::string::npos) << yaml;
+    yaml.replace(yaml.find(on), on.size(),
+                 "  sensors: {enabled: false, substitute: ground_truth}\n");
+    v1::Envelope check = command(1);
+    check.mutable_command()->mutable_validate_profile()->set_yaml(yaml);
+    send(check);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) {
+        return e.has_command_result() && e.command_result().request_id() == 1;
+    }));
+    const v1::ProfileValidation& validation = received_.back().command_result().validation();
+    EXPECT_TRUE(validation.valid());
+    int sensors = 0;
+    for (const v1::Wiring::Node& node : validation.wiring().nodes()) {
+        if (node.domain() == "sensors") {
+            ++sensors;
+            EXPECT_TRUE(node.substitute()) << node.detail();
+            EXPECT_TRUE(node.detail().starts_with("ground_truth")) << node.detail();
+        } else if (node.domain() == "rigid_body") {
+            EXPECT_FALSE(node.substitute());
+        }
+    }
+    EXPECT_GT(sensors, 0);
+}
+
+// Viewer QA M9: a weather preset's values, sent together, rebuild the run once; wind with the
+// aerodynamics domain off is said to push nothing.
+TEST_F(ServerTest, SiteValuesSentTogetherRebuildTheRunOnce) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_environment(); }));
+    received_.clear();
+    const std::vector<std::pair<std::string, double>> preset{
+        {"temperature", 288.15}, {"pressure", 100800.0},  {"relative_humidity", 0.9},
+        {"rain_rate", 5.6e-7},   {"visibility", 10000.0}, {"wind_speed", 3.0}};
+    std::uint64_t id = 10;
+    for (const auto& [name, value] : preset) {
+        v1::Envelope set = command(id++);
+        v1::SetAttribute& attribute = *set.mutable_command()->mutable_set_attribute();
+        attribute.set_prim(0xFFFFFFFFU);
+        attribute.mutable_attribute()->set_name("site:" + name);
+        attribute.mutable_attribute()->set_real(value);
+        send(set);  // queued: they reach the server together
+    }
+    std::size_t results = 0;
+    ASSERT_TRUE(pumpUntil([&](const v1::Envelope& e) {
+        if (e.has_command_result() && e.command_result().request_id() >= 10) {
+            EXPECT_TRUE(e.command_result().ok()) << e.command_result().error();
+            ++results;
+        }
+        return results == preset.size();
+    }));
+    int fromRest = 0;
+    int together = 0;
+    bool windWarned = false;
+    v1::EnvironmentState env;  // sent once the run is rebuilt, before the results
+    for (const v1::Envelope& e : received_) {
+        if (e.has_environment()) {
+            env = e.environment();
+        }
+        if (e.has_log() && e.log().source() == "site") {
+            fromRest += e.log().text().find("from rest") != std::string::npos ? 1 : 0;
+            together += e.log().text().starts_with("set together") ? 1 : 0;
+            windWarned = windWarned || e.log().text().find("pushes nothing") != std::string::npos;
+        }
+    }
+    EXPECT_EQ(together, 1);
+    EXPECT_LE(fromRest, 1);
+    EXPECT_TRUE(windWarned);
+    EXPECT_NEAR(env.weather().fog_visibility_m(), 10000.0, 1e-6);
+}
+
 /// The sample AMR with its Wi-Fi radio in the warehouse: the access point is outside the east
 /// wall.
 class CommsServerTest : public ServerTest {
@@ -589,6 +715,25 @@ TEST_F(SedanServerTest, TheCarDrivesItsDemoCircleOnItsTyres) {
 }
 
 // The front radar's scans reach a viewer that watches it, as points with their Doppler.
+// Viewer QA M5: the World workspace lists the traffic, not only the robot.
+TEST_F(SedanServerTest, TheWorldListsTheTrafficAgents) {
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
+    v1::Envelope want = command(3);
+    want.mutable_command()->mutable_set_world()->set_enabled(true);
+    send(want);
+    ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_world(); }));
+    std::map<std::string, int> kinds;
+    int focus = 0;
+    for (const v1::WorldState::Agent& agent : received_.back().world().agents()) {
+        ++kinds[agent.kind()];
+        focus += agent.focus() ? 1 : 0;
+    }
+    EXPECT_EQ(focus, 1);
+    EXPECT_EQ(kinds["robot"], 1);
+    EXPECT_GT(kinds["vehicle"], 0);
+    EXPECT_GT(kinds["pedestrian"], 0);
+}
+
 TEST_F(SedanServerTest, RadarFramesCarryDetectionsWithVelocity) {
     ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
     v1::Envelope watch = command(4);
@@ -1133,6 +1278,15 @@ TEST_F(OpenRecordingTest, OpeningARecordingTurnsTheServerIntoItsReplay) {
     EXPECT_EQ(opened.imported_stage_path(), file_);
     ASSERT_TRUE(pumpUntil(
         [](const v1::Envelope& e) { return e.has_status() && e.status().replay_end().ns() > 0; }));
+    // Viewer QA M7: the domain strip follows, every recorded domain standing in by its replay.
+    std::string yaml;
+    for (const v1::Envelope& e : received_) {
+        if (e.has_profile_state()) {
+            yaml = e.profile_state().yaml();
+        }
+    }
+    EXPECT_NE(yaml.find("rigid_body: {enabled: false, substitute: replay"), std::string::npos)
+        << yaml;
     ASSERT_TRUE(seekTo(1'500'000'000, 6).ok());
     expectPose(at15_);
     // A file that is not a recording is refused and the replay stays.
