@@ -1,0 +1,23 @@
+# profiles/examples/quadruped_trot_powered.yaml — quadruped_trot.yaml with the electrical domain
+# on: the sample quadruped's power-system overlay (assets/robots/quadruped/quadruped.overlay.yaml:
+# an LFP battery, a 48 V bus, a drive on each of the twelve joints, the sample AMR's values) runs
+# at 100 µs, so each joint gets the torque its drive delivers from the bus. It needs the overlay,
+# since a profile does not name one (without it there is no electrical module to run). Run:
+#   ros2 run lagrange_server lagrange run profiles/examples/quadruped_trot_powered.yaml \
+#       --joint-control --overlay assets/robots/quadruped/quadruped.overlay.yaml
+#   ros2 run lagrange_server lagrange determinism profiles/examples/quadruped_trot_powered.yaml \
+#       --overlay assets/robots/quadruped/quadruped.overlay.yaml
+# From Python: lagrange.envs.LagrangeEnv(lagrange.sample_quadruped(),
+#   profile="quadruped_trot_powered", overlay=lagrange.sample_quadruped_overlay()).
+schema_version: 1
+stage: robots/quadruped/quadruped.urdf
+
+domains:
+  rigid_body:   { enabled: true,  backend: mujoco, dt: 0.001 }
+  electrical:   { enabled: true,  fidelity: averaged, dt: 0.0001 }
+  thermal:      { enabled: false, substitute: ambient }
+  aerodynamics: { enabled: false, substitute: zero }
+  weather:      { enabled: false, substitute: clear }
+  emi:          { enabled: false, substitute: zero }
+  radiation:    { enabled: false, substitute: zero }
+  sensors:      { enabled: false, substitute: ground_truth }

@@ -15,6 +15,6 @@ RESULT: trotted 1.00 m forward in 6.7 s, -0.00 m sideways, body at 0.29 m
 
 It is an illustration, not a locomotion controller: only its heading is fed back, by lengthening the strides on one side; there is no balance control, and it goes at a third of what the stride asks. Put your own controller in `scripts/trot.py`.
 
-Where to look: `robot/quadruped.urdf`, `launch/trot.launch.py`, `scripts/trot.py`.
+Where to look: [`assets/robots/quadruped/quadruped.urdf`](../../assets/robots/quadruped/quadruped.urdf) (Lagrange's sample quadruped, installed with `lagrange_assets`; [`quadruped.overlay.yaml`](../../assets/robots/quadruped/quadruped.overlay.yaml) beside it gives it a battery and a drive on each joint, and [`profiles/examples/quadruped_trot.yaml`](../../profiles/examples/quadruped_trot.yaml) is its profile), `launch/trot.launch.py`, `scripts/trot.py`.
 
 What it shows: `--joint-control`, `--joint-loop-hz`, `/joint_commands`, a robot with no built-in controller.

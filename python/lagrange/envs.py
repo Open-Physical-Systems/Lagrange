@@ -6,6 +6,9 @@
     observation, info = env.reset(seed=1)
     observation, reward, terminated, truncated, info = env.step(env.action_space.sample())
 
+    env = LagrangeEnv(lagrange.sample_quadruped(), profile="quadruped_trot_powered",
+                      overlay=lagrange.sample_quadruped_overlay())
+
 It follows Gymnasium's Env interface, and is one when `gymnasium` is installed; it needs only numpy
 otherwise. Each environment is a whole simulation with every domain the robot's file asks for, in a
 worker process: there are no batches on the GPU, so what parallel runs give is the machine's cores.
@@ -21,6 +24,7 @@ which step some environments while others still run, so a slow one does not hold
 from __future__ import annotations
 
 import contextlib
+import functools
 import math
 import multiprocessing
 import os
@@ -29,10 +33,12 @@ import traceback
 import weakref
 from collections.abc import Callable, Sequence
 from multiprocessing.shared_memory import SharedMemory
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from lagrange import sample_profile
 from lagrange._lagrange import Simulation
 
 try:
@@ -86,6 +92,22 @@ Terminated = Callable[[np.ndarray, Simulation], bool]
 Seeds = int | Sequence[int | None] | None
 
 
+def profile_path(profile: str | os.PathLike[str] | None) -> str | None:
+    """A profile as a file: a path as given, or the name of an example profile from
+    lagrange_profiles ("quadruped_trot", as lagrange.sample_profile). FileNotFoundError if
+    neither."""
+    if profile is None:
+        return None
+    path = os.fspath(profile)
+    if Path(path).is_file():
+        return path
+    if os.sep not in path and not path.endswith((".yaml", ".yml")):
+        example = sample_profile(path)
+        if Path(example).is_file():
+            return example
+    raise FileNotFoundError(f"no profile {path}: neither a file nor an example profile's name")
+
+
 class LagrangeEnv(_Base):  # type: ignore[misc]
     """One robot in one simulation.
 
@@ -95,6 +117,12 @@ class LagrangeEnv(_Base):  # type: ignore[misc]
 
     `randomize` draws site parameters afresh at each reset, by name: {"gravity": (9.0, 10.5)}.
     Reset goes back to the saved first state, which is what makes it cheap and repeatable.
+
+    `world`, `profile` and `overlay` go to lagrange.Simulation as they are: the scenery, a
+    simulation profile (a path, or an example profile's name: domains on and off with their
+    substitutes, the physics backend and step, ...), and a power system for the robot (an overlay
+    YAML or a SPICE netlist, as lagrange_server --overlay). The profile and overlay used are
+    `self.profile` and `self.overlay`.
     """
 
     metadata: dict[str, Any] = {"render_modes": []}  # noqa: RUF012
@@ -104,6 +132,8 @@ class LagrangeEnv(_Base):  # type: ignore[misc]
         robot: str,
         world: str | None = None,
         *,
+        profile: str | os.PathLike[str] | None = None,
+        overlay: str | os.PathLike[str] | None = None,
         joints: Sequence[str] | None = None,
         mode: str = "effort",
         action_scale: float = 1.0,
@@ -114,7 +144,11 @@ class LagrangeEnv(_Base):  # type: ignore[misc]
         terminated: Terminated | None = None,
         randomize: dict[str, tuple[float, float]] | None = None,
     ) -> None:
-        self.sim = Simulation(robot, world=world, joint_control=True)
+        self.profile = profile_path(profile)
+        self.overlay = os.fspath(overlay) if overlay is not None else None
+        self.sim = Simulation(
+            robot, world=world, profile=self.profile, overlay=self.overlay, joint_control=True
+        )
         self.joint_names = list(joints) if joints is not None else self._driven_joints()
         if not self.joint_names:
             raise ValueError("the robot has no joints to command")
@@ -599,10 +633,40 @@ def _seeds_of(seed: Seeds, count: int) -> list[int | None]:
     return seeds
 
 
+def _maker(
+    make: Callable[[], Any] | str,
+    world: str | None,
+    profile: str | os.PathLike[str] | None,
+    overlay: str | os.PathLike[str] | None,
+    env_options: dict[str, Any] | None,
+) -> Callable[[], Any]:
+    """What builds one environment in a worker: `make` itself, or a LagrangeEnv of the robot file
+    `make` with the world, profile, overlay and other options given (all must pickle)."""
+    if not isinstance(make, str):
+        if world is not None or profile is not None or overlay is not None or env_options:
+            raise ValueError(
+                "world, profile, overlay and env_options go with a robot file, not with make(): "
+                "pass them to the environment make() builds"
+            )
+        return make
+    # Resolved here, so that a misspelt profile fails before any worker starts.
+    return functools.partial(
+        LagrangeEnv,
+        make,
+        world,
+        profile=profile_path(profile),
+        overlay=os.fspath(overlay) if overlay is not None else None,
+        **(env_options or {}),
+    )
+
+
 class ParallelEnvs:
     """`count` environments in worker processes, stepped together. An ended one starts again.
 
     `make` builds one environment in its process; it must be a function at a module's top level.
+    Or `make` is a robot file and each environment is LagrangeEnv(make, world, profile=, overlay=,
+    **env_options): env_options are LagrangeEnv's other options (mode, signals, reward, ...),
+    whose functions must be at a module's top level too.
     `envs_per_worker` puts that many in each process, stepped one after another (fewer processes
     for cheap environments). A worker that raises or dies raises WorkerError here and closes all.
 
@@ -616,15 +680,25 @@ class ParallelEnvs:
 
     def __init__(
         self,
-        make: Callable[[], Any],
+        make: Callable[[], Any] | str,
         count: int,
         *,
+        world: str | None = None,
+        profile: str | os.PathLike[str] | None = None,
+        overlay: str | os.PathLike[str] | None = None,
+        env_options: dict[str, Any] | None = None,
         envs_per_worker: int = 1,
         start_timeout: float | None = 300.0,
         step_timeout: float | None = None,
         spin_seconds: float = DEFAULT_SPIN_SECONDS,
     ) -> None:
-        self._pool = _Pool(make, count, envs_per_worker, start_timeout, spin_seconds)
+        self._pool = _Pool(
+            _maker(make, world, profile, overlay, env_options),
+            count,
+            envs_per_worker,
+            start_timeout,
+            spin_seconds,
+        )
         self.step_timeout = step_timeout
         self.observation_space = self._pool.observation_space
         self.action_space = self._pool.action_space
@@ -759,15 +833,22 @@ class VectorEnv(_VectorBase):  # type: ignore[misc]
     (metadata["autoreset_mode"] is same-step): the observation is the next episode's first, and
     infos["final_obs"] and infos["final_info"] hold the ended one's (masks "_final_obs", ...).
     Per-step infos of the environments are not carried, only their numbers.
+
+    `make` is a function that builds one environment, or a robot file with `world`, `profile`,
+    `overlay` and `env_options` for LagrangeEnv, as for ParallelEnvs.
     """
 
     metadata: dict[str, Any] = {"autoreset_mode": _SAME_STEP}  # noqa: RUF012
 
     def __init__(
         self,
-        make: Callable[[], Any],
+        make: Callable[[], Any] | str,
         num_envs: int,
         *,
+        world: str | None = None,
+        profile: str | os.PathLike[str] | None = None,
+        overlay: str | os.PathLike[str] | None = None,
+        env_options: dict[str, Any] | None = None,
         envs_per_worker: int = 1,
         start_timeout: float | None = 300.0,
         step_timeout: float | None = None,
@@ -776,6 +857,10 @@ class VectorEnv(_VectorBase):  # type: ignore[misc]
         self._envs = ParallelEnvs(
             make,
             num_envs,
+            world=world,
+            profile=profile,
+            overlay=overlay,
+            env_options=env_options,
             envs_per_worker=envs_per_worker,
             start_timeout=start_timeout,
             step_timeout=step_timeout,

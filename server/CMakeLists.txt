@@ -517,13 +517,44 @@ if(BUILD_TESTING)
         lagrange_cli_determinism
         PROPERTIES PASS_REGULAR_EXPRESSION "deterministic: 31 state hashes"
     )
+    # The legged sample (RFC 0019): its profile, bare and with its power-system overlay.
+    set(_lagrange_quadruped
+        ${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quadruped/quadruped.urdf
+    )
+    set(_lagrange_quadruped_overlay
+        ${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/quadruped/quadruped.overlay.yaml
+    )
+    add_test(
+        NAME lagrange_cli_determinism_quadruped
+        COMMAND
+            $<TARGET_FILE:lagrange_cli> determinism
+            ${CMAKE_CURRENT_SOURCE_DIR}/../profiles/examples/quadruped_trot.yaml
+            --robot ${_lagrange_quadruped} --seconds 3
+    )
+    set_tests_properties(
+        lagrange_cli_determinism_quadruped
+        PROPERTIES PASS_REGULAR_EXPRESSION "deterministic: 31 state hashes"
+    )
+    add_test(
+        NAME lagrange_cli_determinism_quadruped_powered
+        COMMAND
+            $<TARGET_FILE:lagrange_cli> determinism
+            ${CMAKE_CURRENT_SOURCE_DIR}/../profiles/examples/quadruped_trot_powered.yaml
+            --robot ${_lagrange_quadruped} --overlay
+            ${_lagrange_quadruped_overlay} --seconds 3
+    )
+    set_tests_properties(
+        lagrange_cli_determinism_quadruped_powered
+        PROPERTIES PASS_REGULAR_EXPRESSION "deterministic: 31 state hashes"
+    )
     # QA 2026-11-12: heat took its ambient only from --ambient-temperature, determinism ran
     # without its profile.
     add_test(
         NAME lagrange_cli_heat_profile_ambient
         COMMAND
             $<TARGET_FILE:lagrange_cli> heat
-            ${CMAKE_CURRENT_SOURCE_DIR}/../profiles/examples/led_heatsink.yaml --robot
+            ${CMAKE_CURRENT_SOURCE_DIR}/../profiles/examples/led_heatsink.yaml
+            --robot
             ${CMAKE_CURRENT_SOURCE_DIR}/../assets/robots/led_heatsink/led_heatsink.urdf
     )
     set_tests_properties(
