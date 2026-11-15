@@ -104,6 +104,168 @@ double msSince(Clock::time_point start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
 
+/// The viewer's own GPU passes, timed with Vulkan timestamp queries, and its video memory
+/// (VK_EXT_memory_budget), for the Performance workspace's GPU passes and Memory tabs. One
+/// frame is in flight at a time (both loops wait for the last frame before recording), so one
+/// query pool serves: the previous frame's marks are read before the next frame resets them.
+class GpuTimer {
+public:
+    /// The marks of a frame, in recording order; a pass runs from one mark to the next.
+    enum Mark : std::uint32_t { Begin, Uploads, View, Panels, kMarks };
+    static constexpr std::size_t kWindow = 120;  // frames the means and maxima are over
+
+    explicit GpuTimer(const gpu::Device& device) : device_(device.device()) {
+        VkPhysicalDeviceProperties properties{};
+        vkGetPhysicalDeviceProperties(device.physicalDevice(), &properties);
+        period_ = properties.limits.timestampPeriod;
+        std::uint32_t count = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(device.physicalDevice(), &count, nullptr);
+        std::vector<VkQueueFamilyProperties> families(count);
+        vkGetPhysicalDeviceQueueFamilyProperties(device.physicalDevice(), &count, families.data());
+        const std::uint32_t bits =
+            device.queueFamily() < count ? families[device.queueFamily()].timestampValidBits : 0;
+        mask_ = bits >= 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << bits) - 1;
+        if (bits != 0 && period_ > 0.0F) {
+            VkQueryPoolCreateInfo info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+            info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            info.queryCount = kMarks;
+            if (vkCreateQueryPool(device_, &info, nullptr, &pool_) != VK_SUCCESS) {
+                pool_ = VK_NULL_HANDLE;
+            }
+        }
+        physical_ = device.physicalDevice();
+        std::uint32_t extensions = 0;
+        vkEnumerateDeviceExtensionProperties(physical_, nullptr, &extensions, nullptr);
+        std::vector<VkExtensionProperties> available(extensions);
+        vkEnumerateDeviceExtensionProperties(physical_, nullptr, &extensions, available.data());
+        budget_ = std::ranges::any_of(available, [](const VkExtensionProperties& e) {
+            return std::strcmp(e.extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) == 0;
+        });
+        timings_.passes = {{"sensor images upload"}, {"3D view"}, {"panels (ImGui)"}};
+        timings_.gpuTimestamps = pool_ != VK_NULL_HANDLE;
+    }
+    GpuTimer(const GpuTimer&) = delete;
+    GpuTimer& operator=(const GpuTimer&) = delete;
+    ~GpuTimer() {
+        if (pool_ != VK_NULL_HANDLE) {
+            vkDestroyQueryPool(device_, pool_, nullptr);
+        }
+    }
+
+    /// Reads the marks of the frame recorded last (its fence has been waited for) and resets
+    /// the pool for the next one; call at the start of a command buffer, outside rendering.
+    /// The 3D view pass counts only for frames that drew it (it is skipped when nothing changed).
+    void begin(VkCommandBuffer commands) {
+        if (pool_ == VK_NULL_HANDLE) {
+            return;
+        }
+        if (pending_) {
+            std::array<std::uint64_t, kMarks> ticks{};
+            if (vkGetQueryPoolResults(device_, pool_, 0, kMarks, sizeof(ticks), ticks.data(),
+                                      sizeof(std::uint64_t),
+                                      VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+                const auto ms = [&](Mark from, Mark to) {
+                    return static_cast<double>((ticks.at(to) - ticks.at(from)) & mask_) *
+                           static_cast<double>(period_) * 1e-6;
+                };
+                push(0, ms(Begin, Uploads));
+                push(1, viewDrawn_ ? ms(Uploads, View) : -1.0);
+                push(2, ms(View, Panels));
+                ++frames_;
+                timings_.gpuTimed = true;
+            }
+        }
+        vkCmdResetQueryPool(commands, pool_, 0, kMarks);
+        mark(commands, Begin);
+        pending_ = false;
+    }
+
+    /// A mark of this frame; the last one (Panels) makes the frame's results readable.
+    void mark(VkCommandBuffer commands, Mark which) {
+        if (pool_ == VK_NULL_HANDLE) {
+            return;
+        }
+        vkCmdWriteTimestamp2(commands, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, pool_, which);
+        if (which == Panels) {
+            pending_ = true;
+        }
+    }
+
+    /// The view drawn by the frame being recorded (set by renderScene before the View mark).
+    void setViewDrawn(bool drawn) { viewDrawn_ = drawn; }
+
+    /// CPU phases of the UI thread this frame (ms); smoothed over about a second.
+    void cpu(double uiMs, double recordMs, double waitMs, double presentMs) {
+        constexpr double kSmoothing = 0.05;  // about 20 frames
+        const auto smooth = [&](double& to, double value) { to += (value - to) * kSmoothing; };
+        smooth(timings_.uiMs, uiMs);
+        smooth(timings_.recordMs, recordMs);
+        smooth(timings_.waitMs, waitMs);
+        smooth(timings_.presentMs, presentMs);
+    }
+
+    /// The numbers for the panels; video memory is read at most once a second.
+    const ViewerTimings& timings() {
+        const auto now = Clock::now();
+        if (budget_ && now - budgetAt_ > std::chrono::seconds(1)) {
+            budgetAt_ = now;
+            VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
+            VkPhysicalDeviceMemoryProperties2 memory{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
+            memory.pNext = &budget;
+            vkGetPhysicalDeviceMemoryProperties2(physical_, &memory);
+            timings_.vramUsedBytes = 0;
+            timings_.vramBudgetBytes = 0;
+            for (std::uint32_t h = 0; h < memory.memoryProperties.memoryHeapCount; ++h) {
+                if ((memory.memoryProperties.memoryHeaps[h].flags &
+                     VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0) {
+                    timings_.vramUsedBytes += budget.heapUsage[h];
+                    timings_.vramBudgetBytes += budget.heapBudget[h];
+                }
+            }
+            timings_.vramKnown = timings_.vramBudgetBytes != 0;
+        }
+        return timings_;
+    }
+
+private:
+    /// One sample of pass `index` (negative: the pass did not run this frame).
+    void push(std::size_t index, double ms) {
+        std::array<double, kWindow>& ring = samples_.at(index);
+        ring.at(frames_ % kWindow) = ms;
+        const std::size_t filled = std::min<std::size_t>(frames_ + 1, kWindow);
+        double sum = 0.0;
+        double most = 0.0;
+        std::uint32_t ran = 0;
+        for (std::size_t i = 0; i < filled; ++i) {
+            if (ring.at(i) >= 0.0) {
+                sum += ring.at(i);
+                most = std::max(most, ring.at(i));
+                ++ran;
+            }
+        }
+        ViewerTimings::Pass& pass = timings_.passes.at(index);
+        pass.meanMs = ran > 0 ? sum / ran : 0.0;
+        pass.maxMs = most;
+        pass.frames = ran;
+        timings_.window = static_cast<std::uint32_t>(filled);
+    }
+
+    VkDevice device_;
+    VkPhysicalDevice physical_{VK_NULL_HANDLE};
+    VkQueryPool pool_{VK_NULL_HANDLE};
+    float period_{0.0F};  // ns per tick
+    std::uint64_t mask_{0};
+    bool pending_{false};
+    bool viewDrawn_{false};  // by the frame recorded last, until renderScene sets it again
+    bool budget_{false};
+    Clock::time_point budgetAt_{};
+    std::size_t frames_{0};
+    std::array<std::array<double, kWindow>, 3> samples_{};
+    ViewerTimings timings_;
+};
+
 /// Where the bundled fonts are: an explicit directory, the installed share directory next to
 /// the program, or the source tree (when run from a build directory).
 std::string fontDirectory() {
@@ -348,6 +510,26 @@ private:
 
 std::string jsonEscape(const std::string& text);  // below
 
+/// The viewer's own GPU passes and video memory (headless report, Performance workspace).
+std::string viewerGpuJson(const ViewerTimings& timings) {
+    std::string passes;
+    for (const ViewerTimings::Pass& pass : timings.passes) {
+        char item[160];
+        std::snprintf(item, sizeof(item),
+                      "%s\"%s\": {\"mean_ms\": %.4f, \"max_ms\": %.4f, \"frames\": %u}",
+                      passes.empty() ? "" : ", ", pass.name, pass.meanMs, pass.maxMs, pass.frames);
+        passes += item;
+    }
+    char out[256];
+    std::snprintf(out, sizeof(out),
+                  "{\"timed\": %s, \"window\": %u, \"vram_known\": %s, \"vram_used\": %llu, "
+                  "\"passes\": {",
+                  timings.gpuTimed ? "true" : "false", timings.window,
+                  timings.vramKnown ? "true" : "false",
+                  static_cast<unsigned long long>(timings.vramUsedBytes));
+    return out + passes + "}}";
+}
+
 /// The titles of the top-level windows drawn in the last frame (headless report: which
 /// layout is in front, e.g. the Builder's Test layout). Docked tabs behind others are left out.
 std::string visibleWindowsJson() {
@@ -560,6 +742,7 @@ public:
         context.tierName = gpu::toString(device_.tier());
         context.frameMs = frameMs;
         context.drawCalls = renderer_.lastDrawCount();
+        context.viewerTimings = gpuTimer_ != nullptr ? &gpuTimer_->timings() : nullptr;
         if (launcher_.active && ImGui::GetTime() - socketChecked_ > 1.0) {
             // Is a local server listening? Looked at once a second, not every frame.
             socketChecked_ = ImGui::GetTime();
@@ -626,6 +809,10 @@ public:
     /// Records the scene pass. The UI pass (ImGui draw data) is recorded by the caller.
     void renderScene(VkCommandBuffer commands) {
         textures_.record(commands);
+        if (gpuTimer_ != nullptr) {
+            gpuTimer_->mark(commands, GpuTimer::Uploads);
+            gpuTimer_->setViewDrawn(false);
+        }
         buildSensorOverlays();
         buildRadarOverlays();
         buildAirflow();
@@ -681,8 +868,17 @@ public:
             renderer_.render(commands, scene.get(), camera, options, overlays);
             drawnKey_ = std::move(key);
             ++viewsDrawn_;
+            if (gpuTimer_ != nullptr) {
+                gpuTimer_->setViewDrawn(true);
+            }
+        }
+        if (gpuTimer_ != nullptr) {
+            gpuTimer_->mark(commands, GpuTimer::View);
         }
     }
+
+    /// The timer of the viewer's own GPU passes (Performance workspace); may be null.
+    void setGpuTimer(GpuTimer* timer) { gpuTimer_ = timer; }
 
     /// What the last drawn 3D view showed (see renderScene).
     struct ViewKey {
@@ -1675,6 +1871,7 @@ private:
     std::uint64_t sensorOverlayVersion_{0};  // counts the rebuilds of sensorOverlays_
     std::optional<ViewKey> drawnKey_;
     std::uint64_t viewsDrawn_{0};
+    GpuTimer* gpuTimer_{nullptr};
     std::vector<OverlayLines> sensorOverlays_;
     std::vector<OverlayLines> airflowOverlays_;
     std::vector<OverlayLines> cableOverlays_;  // the scene's cables (RFC 0011)
@@ -1922,6 +2119,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
     std::uint32_t rendered = 0;
     {
         Ui ui(*device, client, format, 2, 1.0F, false, options.scopeSignals);
+        GpuTimer gpuTimer(*device);
+        ui.setGpuTimer(&gpuTimer);
         ui.setWorkspace(workspace);
         if (options.launcher || options.startLocal) {
             ui.showLauncher(1.0F);
@@ -2028,6 +2227,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             const auto submitStart = Clock::now();
             device->submitAndWait([&](VkCommandBuffer commands) {
                 const auto recordStart = Clock::now();
+                gpuTimer.begin(commands);
                 ui.renderScene(commands);
                 gpu::transitionImage(
                     commands, target.image, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -2036,8 +2236,10 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
                 beginUiPass(commands, target.view, extent);
                 ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commands);
                 vkCmdEndRendering(commands);
+                gpuTimer.mark(commands, GpuTimer::Panels);
                 recordMs = msSince(recordStart);
             });
+            gpuTimer.cpu(uiMs, recordMs, msSince(submitStart) - recordMs, 0.0);
             first = false;
             const bool hold = haveScene && holding(rendered);
             if (hold) {
@@ -2150,7 +2352,7 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             "\"environment_fields\": %zu, \"ros_topics\": %zu, \"ros_nodes\": %zu, "
             "\"world_tiles\": %zu, \"world_agents\": %zu, \"shading\": %d, "
             "\"workspace\": \"%s\", \"launcher\": %s, \"windows\": %s, \"builder\": %s, "
-            "\"radar_detections\": %zu}\n",
+            "\"radar_detections\": %zu, \"viewer_gpu\": %s}\n",
             jsonEscape(client.notice().text).c_str(), client.notice().error ? "true" : "false",
             rendered, static_cast<unsigned long long>(stats.snapshots),
             static_cast<unsigned long long>(stats.deltas),
@@ -2181,7 +2383,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
             client.world() ? client.world()->agents.size() : std::size_t{0},
             static_cast<int>(ui.shading()), toString(ui.workspace()),
             ui.launcherActive() ? "true" : "false", visibleWindowsJson().c_str(),
-            ui.builderReport().c_str(), ui.radarDetectionsDrawn());
+            ui.builderReport().c_str(), ui.radarDetectionsDrawn(),
+            viewerGpuJson(gpuTimer.timings()).c_str());
         if (device->validationErrorCount() != 0 && exitCode == 0) {
             exitCode = 6;
         }
@@ -2379,6 +2582,8 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
         Ui ui(*device, client, swapchain.format,
               static_cast<std::uint32_t>(swapchain.images.size()), dpiScale, true,
               options.scopeSignals);
+        GpuTimer gpuTimer(*device);
+        ui.setGpuTimer(&gpuTimer);
         ImGui_ImplSDL3_InitForVulkan(window);
         ui.setCanOpenFiles(true);
         if (launcher) {
@@ -2450,7 +2655,8 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
 
             const auto waitStart = Clock::now();
             vkWaitForFences(device->device(), 1, &frameDone, VK_TRUE, UINT64_MAX);
-            profile.add(2, msSince(waitStart));
+            const double waitMs = msSince(waitStart);
+            profile.add(2, waitMs);
             if (rebuild) {
                 vkDeviceWaitIdle(device->device());
                 if (!createSwapchain(*device, window, swapchain)) {
@@ -2467,7 +2673,8 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
             ImGui::NewFrame();
             ui.build(frameMs);
             ImGui::Render();
-            profile.add(0, msSince(uiStart));
+            const double uiMs = msSince(uiStart);
+            profile.add(0, uiMs);
             if (ui.takeOpenFileRequest()) {
                 static const SDL_DialogFileFilter kFilters[] = {
                     {"Robots and recordings", "urdf;sdf;xml;usd;usda;usdc;mcap"},
@@ -2566,6 +2773,7 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
             VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
             beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             vkBeginCommandBuffer(commands, &beginInfo);
+            gpuTimer.begin(commands);
             ui.renderScene(commands);
             gpu::transitionImage(commands, swapchain.images[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
                                  VK_IMAGE_LAYOUT_UNDEFINED,
@@ -2573,11 +2781,13 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
             beginUiPass(commands, swapchain.views[imageIndex], swapchain.extent);
             ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commands);
             vkCmdEndRendering(commands);
+            gpuTimer.mark(commands, GpuTimer::Panels);
             gpu::transitionImage(commands, swapchain.images[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                  VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
             vkEndCommandBuffer(commands);
-            profile.add(1, msSince(recordStart));
+            const double recordMs = msSince(recordStart);
+            profile.add(1, recordMs);
 
             VkSemaphoreSubmitInfo waitInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
             waitInfo.semaphore = acquired;
@@ -2604,7 +2814,9 @@ int runWindowed(const Options& options, const proto::Endpoint& endpoint, Workspa
             present.pImageIndices = &imageIndex;
             const auto presentStart = Clock::now();
             const VkResult presented = vkQueuePresentKHR(device->queue(), &present);
-            profile.add(3, msSince(presentStart));
+            const double presentMs = msSince(presentStart);
+            profile.add(3, presentMs);
+            gpuTimer.cpu(uiMs, recordMs, waitMs, presentMs);
             if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) {
                 rebuild = true;
             }

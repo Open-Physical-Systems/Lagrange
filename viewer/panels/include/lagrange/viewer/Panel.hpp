@@ -8,6 +8,7 @@
 #include "lagrange/viewer/SceneStore.hpp"
 #include "lagrange/viewer/ScopeSession.hpp"
 #include "lagrange/viewer/ViewerClient.hpp"
+#include "lagrange/viewer/ViewerSelf.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -146,6 +147,8 @@ struct PanelContext {
     std::string tierName;
     float frameMs{0.0F};
     std::uint32_t drawCalls{0};
+    /// The viewer's own frame: CPU phases, GPU passes, video memory. May be null (tests).
+    const ViewerTimings* viewerTimings{nullptr};
 };
 
 /// One dockable panel. draw() runs on the UI thread every frame while the panel is open and

@@ -169,7 +169,10 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
             ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.58F, nullptr, &centre);
         ImGui::DockBuilderDockWindow("###PerformanceOverview", top);
         ImGui::DockBuilderDockWindow("###Scheduler", centre);
+        ImGui::DockBuilderDockWindow("###PerformanceThreads", centre);
         ImGui::DockBuilderDockWindow("###PerformanceModules", modules);
+        ImGui::DockBuilderDockWindow("###PerformanceGpuPasses", modules);
+        ImGui::DockBuilderDockWindow("###PerformanceMemory", modules);
         ImGui::DockBuilderDockWindow("RTF history", right);
         ImGui::DockBuilderDockWindow("Resources", resources);
         // The KPI row is not a tabbed panel in the design.

@@ -201,6 +201,7 @@ add_library(
     panels/src/SensorsPanels.cpp
     panels/src/SignalsPanel.cpp
     panels/src/TimelinePanel.cpp
+    panels/src/ViewerSelf.cpp
     panels/src/ViewportPanel.cpp
     panels/src/WiringPanels.cpp
     panels/src/WorldPanels.cpp
@@ -311,8 +312,11 @@ if(BUILD_TESTING)
         render/test/test_camera.cpp
         render/test/test_picking.cpp
         render/test/test_thermal.cpp
+        panels/src/ViewerSelf.cpp
+        panels/test/test_viewer_self.cpp
         TIMEOUT 120
     )
+    target_include_directories(test_viewer_client PRIVATE panels/include)
     target_link_libraries(
         test_viewer_client
         lagrange_viewer_client
@@ -372,6 +376,7 @@ if(BUILD_TESTING)
     ament_add_pytest_test(test_circuit_roundtrip test/test_circuit_roundtrip.py TIMEOUT 120)
     ament_add_pytest_test(test_viewer_input test/test_viewer_input.py TIMEOUT 180)
     ament_add_pytest_test(test_profile_editor test/test_profile_editor.py TIMEOUT 180)
+    ament_add_pytest_test(test_performance_tabs test/test_performance_tabs.py TIMEOUT 900)
     ament_add_pytest_test(test_radar_view test/test_radar_view.py TIMEOUT 600)
     ament_add_pytest_test(test_builder_input test/test_builder_input.py TIMEOUT 180)
     ament_add_pytest_test(test_builder_gizmo test/test_builder_gizmo.py TIMEOUT 300)
