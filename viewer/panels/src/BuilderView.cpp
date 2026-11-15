@@ -7,6 +7,7 @@
 // readout, the tool column, the toggles, the triad, snap and the labels. The gizmos of the
 // Move, Rotate, Joint axis and Measure tools are BuilderGizmo's.
 #include "BuilderGizmo.hpp"
+#include "PanelFormat.hpp"
 #include "lagrange/viewer/BuilderSession.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
@@ -218,12 +219,49 @@ public:
         shortcuts(session, active);
 
         // Top left: mode, camera, shading, frame time, draws, "no simulation".
+        // It stops short of the toggles at the top right (QA3 F7): in a narrow view the draw
+        // count goes first, then the frame time, the camera, the note; then it is cut.
         char text[160];
-        std::snprintf(text, sizeof(text), "%s · Perspective · %s   %.1f ms   %u draws",
-                      building ? "Build" : "Test", building ? "Lit" : "live",
-                      static_cast<double>(context.frameMs), context.drawCalls);
-        overlayBox(draw, ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)), text,
-                   building ? "no simulation" : "lagrange_server");
+        const char* note = building ? "no simulation" : "lagrange_server";
+        {
+            ImFont* mono = theme::fonts().mono;
+            const float size = px(theme::kMonoSize);
+            const auto widthOf = [&](const char* t) {
+                return mono->CalcTextSizeA(size, FLT_MAX, 0.0F, t).x;
+            };
+            const float room =
+                available.x - px(10.0F) - togglesWidth() - px(8.0F) - px(10.0F) - px(16.0F);
+            const char* mode = building ? "Build" : "Test";
+            const char* shading = building ? "Lit" : "live";
+            const double ms = static_cast<double>(context.frameMs);
+            bool fits = false;
+            for (int parts = 4; parts >= 1 && !fits; --parts) {
+                switch (parts) {
+                    case 4:
+                        std::snprintf(text, sizeof(text),
+                                      "%s · Perspective · %s   %.1f ms   %u draws", mode, shading,
+                                      ms, context.drawCalls);
+                        break;
+                    case 3:
+                        std::snprintf(text, sizeof(text), "%s · Perspective · %s   %.1f ms", mode,
+                                      shading, ms);
+                        break;
+                    case 2:
+                        std::snprintf(text, sizeof(text), "%s · Perspective · %s", mode, shading);
+                        break;
+                    default:
+                        std::snprintf(text, sizeof(text), "%s · %s", mode, shading);
+                        break;
+                }
+                fits = widthOf(text) + px(12.0F) + widthOf(note) <= room;
+            }
+            if (!fits) {
+                note = nullptr;
+                const std::string shown = fit::cut(mono, size, text, std::max(room, 0.0F));
+                std::snprintf(text, sizeof(text), "%s", shown.c_str());
+            }
+        }
+        overlayBox(draw, ImVec2(origin.x + px(10.0F), origin.y + px(10.0F)), text, note);
         if (!building) {
             // The document's marks do not belong over the simulated robot.
             ImGui::End();
@@ -666,6 +704,12 @@ private:
         }
     }
 
+    /// The width of the toggles' bar (six buttons): the readout stops before it.
+    static float togglesWidth() {
+        constexpr float kCount = 6.0F;
+        return px(24.0F) * kCount + px(2.0F) * (kCount + 1.0F);
+    }
+
     /// Top right: grid, frames and joint axes, collision shapes, COM, sensors, names.
     static void toggles(BuilderSession& session, const ImVec2& topRight) {
         using Toggles = BuilderSession::ViewToggles;
@@ -683,8 +727,8 @@ private:
             {"##bsensors", widgets::Icon::Frustum, &Toggles::sensors, "Sensor rays and frustums"},
             {"##bnames", widgets::Icon::Names, &Toggles::names, "Names"},
         }};
-        const auto count = static_cast<float>(kToggles.size());
-        const float width = px(24.0F) * count + px(2.0F) * (count + 1.0F);
+        static_assert(kToggles.size() == 6U, "togglesWidth counts six toggles");
+        const float width = togglesWidth();
         ImGui::SetCursorScreenPos(ImVec2(topRight.x - width, topRight.y));
         widgets::ToolBarFrame(static_cast<int>(kToggles.size()), false);
         float x = ImGui::GetCursorScreenPos().x;

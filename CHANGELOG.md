@@ -7,7 +7,7 @@ titles merged into `dev`; do not edit it by hand. Versions follow
 
 ## Unreleased
 
-Merged into `dev` after 1.3.0 (#332–#400).
+Merged into `dev` after 1.3.0 (#332–#406).
 
 ### Breaking or behaviour changes
 
@@ -27,6 +27,13 @@ Merged into `dev` after 1.3.0 (#332–#400).
 - **`--panel`:** the viewer's `--panel` also takes a tab's visible title (`Threads`) or its `###id`, among the windows drawn this frame or the last (#396)
 - **`/spawn_entity`:** robot text spawned without a name is named by its own `<robot name>` (renamed on a clash), as the viewer's ImportRobot does, not after its temporary file (#395)
 - **Quadruped asset moved:** the trotting example's robot moved from `examples/lagrange_example_quadruped/robot/quadruped.urdf` to `assets/robots/quadruped/quadruped.urdf` (package `lagrange_assets`, `lagrange.sample_quadruped()`) (#397)
+- **Floor rule:** a file's level slab counts as its own floor (one ground per run, #369) only when its top is the lowest ground there is: within 0.1 m of z = 0 or below, not above the robots' lowest point and not above the foot of any other static scenery. A building's roof, a mezzanine or a bridge deck is no longer taken for the floor, so a robot beside or under it keeps Lagrange's plane; a file's own planes are never taken away (docs/guide/cli.md "Importing a robot") (#403)
+- **`CommandJoint` refusals:** `"voltage"` is refused for a joint whose motor is not in voltage mode, and a joint's target belongs to its robot: removing the robot or a reset forgets it, other robots coming and going keep it (protocol.md §4.5) (#403)
+- **`ImportRobot` with both `path` and `content`** is refused ("by path or content, not both"; before, the path was taken and the rest ignored). Inline text is written, created exclusively with mode 0600, into `$XDG_RUNTIME_DIR/lagrange` (else `<tmp>/lagrange-<uid>`), a 0700 folder of the server's user; any other folder there is refused (#403)
+- **Jolt sub-step forces:** with `rigid_body.substeps` above 1, joint reactions, limit torques and the contact force left from them are the last sub-step's constraint impulses over Δt/N (rigid_body.md §8.1) (#403)
+- **Builder, unsaved work:** New, Open, a template or a dropped robot ask before replacing a document with unsaved edits (#402)
+- **Builder rename:** F2 (or the name field in Properties) renames the selection in its tree row; joints' parent and child, a sensor's link, a mimic leader, the overlay's entries and `<ros2_control>`/`<transmission>` references follow, a name in use is refused with the reason in Problems; a power part's name renames its prim and every connection to it, so the run's signals take the new name (`bus/<name>/voltage`) (#405)
+- **Builder Test into a world:** Test ▾ picks the empty world, a sample world of `lagrange_assets` (the button then names it) or a world file; a run the viewer is connected to plays on while you build unless View → Pause the run while building is ticked (#405). **Start at…** sets where the robot starts in that world (x, y, z, heading; `--spawn`), remembered per world in `builder_spawns.tsv`; a sample world starts where its sample run does (`tiled_town`, `amr_fms_warehouse`, `town`), any other at its origin (#406)
 
 ### Features
 
@@ -55,6 +62,7 @@ Merged into `dev` after 1.3.0 (#332–#400).
 - **viewer:** the Electrical workspace's Probes, + scope and History tabs; the Environment workspace's Viewport · fields and Field info (#390)
 - **python:** `ParallelEnvs` with `step_async`/`step_wait`, `send`/`recv` (each environment at its own pace), `envs_per_worker`, `spin_seconds`; `lagrange.envs.VectorEnv` (Gymnasium's VectorEnv, same-step autoreset); `sim.read_many`, `sim.command_joints` (#392)
 - **python:** `LagrangeEnv`, `ParallelEnvs` and `VectorEnv` take `world=`, `profile=` (a path or an example's name) and `overlay=`, the parallel ones a robot file with `env_options=` in place of `make`; `Simulation(overlay=)`; `lagrange.sample_quadruped()`, `sample_quadruped_overlay()`, profiles `quadruped_trot.yaml` and `quadruped_trot_powered.yaml` (#397)
+- **viewer:** the builder's Test ▾ → Start at…: where the robot starts in a world, per world (#406)
 - **mod/rigid_body:** a profile's `rigid_body: {noslip_iterations: N}` (0–100, default 0) runs MuJoCo's noslip post-solver, which stops soft contacts creeping on slopes at 30–60 % more per step (rigid_body.md §8.2); an MJCF joint's `armature` (and its actuators' `armature · gear²`) is the joint's armature (not written to USD) (#394)
 
 ### Fixes
@@ -72,6 +80,10 @@ Merged into `dev` after 1.3.0 (#332–#400).
 - **mod/rigid_body:** Jolt friction per collider; MJCF helper frames' mass from their link; an MJCF robot's mass checked through USD (#393, #395)
 - **server:** QA round 2: test and run dependencies (`lagrange_collision_bake`, the viewer's tests), the builder's Check loads… when `lagrange` is found, the sedan demo among the town's traffic, `--panel` by tab title, the Domains substitute cards listing the modules that read the domain, cut text with an ellipsis and whole in a tooltip, Validation of a constant real signal by its RMSE (*const ref*), compiler warnings (#396)
 - **viewer:** text at the design's CSS size (#399)
+- **viewer:** the builder asks before replacing unsaved work; a safer runtime folder, and split and autosave files written atomically (#402)
+- **server:** code review: Jolt sub-step forces, raised slabs not floors, `CommandJoint`, temporary files, parameter ranges against NaN and infinity (#403)
+- **viewer:** wrapped text on the design's line heights, nothing clipped; the launcher by keyboard (#404)
+- **viewer:** builder small gaps: F2 rename, power part names, the same-bus outline, joint types that fit, Test into a world (#405)
 
 ### Performance
 
@@ -88,6 +100,7 @@ Merged into `dev` after 1.3.0 (#332–#400).
 - **guide:** the viewer's workspaces (`docs/guide/viewer.md`) (#382)
 - **rfcs:** RFC 0018, the radiation domain (Draft) (#383); RFC 0019, legged robots (Draft) (#385)
 - **plan:** the legged contact spike, RFC 0019 step 1 measured (`docs/plan/spikes/legged-contact.md`) (#389, #393, #394); the owner's decisions after 2026-11-15 in one place (`docs/plan/owner-decisions-2026-11-15.md`) (#400)
+- **docs:** the changelog, CLAUDE.md and progress through #400 (#401)
 - **examples:** the quadruped's time varies with the node's timing, not a regression (#398); `lagrange_example_rl` documents the parallel environments and their speed (#392, #397)
 
 ## [1.3.0](https://github.com/Open-Physical-Systems/Lagrange/compare/v1.2.1...v1.3.0) (2026-11-14)

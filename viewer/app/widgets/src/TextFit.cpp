@@ -170,6 +170,35 @@ std::string fitDistinct(std::string_view text, std::span<const std::string> grou
             return fit(text, width, measure);
         }
     }
+    // Too narrow to show both places where they differ with the common start (QA3: "joint/" in
+    // "joint/front_caster_swivel/position" and "joint/rear_caster_swivel/position" at 20
+    // characters): the path parts all of them start with are left out, then the fits again.
+    std::size_t common = text.rfind('/');  // never into the last part
+    common = common == std::string_view::npos ? 0 : common;
+    for (const std::string_view name : names) {
+        std::size_t same = 0;
+        while (same < common && same < name.size() && name[same] == text[same]) {
+            ++same;
+        }
+        common = same;
+    }
+    const std::size_t slash = common == 0 ? std::string_view::npos : text.rfind('/', common - 1);
+    if (slash != std::string_view::npos) {
+        const std::size_t skip = slash + 1;  // whole parts only: "joint/"
+        for (const Fit fit : kFits) {
+            std::set<std::string> seen;
+            bool distinct = true;
+            for (const std::string_view name : names) {
+                distinct = seen.insert(fit(name.substr(skip), width, measure)).second;
+                if (!distinct) {
+                    break;
+                }
+            }
+            if (distinct) {
+                return fit(text.substr(skip), width, measure);
+            }
+        }
+    }
     return fitPath(text, width, measure);
 }
 

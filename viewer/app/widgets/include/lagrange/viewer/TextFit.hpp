@@ -32,8 +32,9 @@ using TextWidth = std::function<float(std::string_view)>;
 /// cut the same way by fitPath, such as "joint/front_caster_swivel_joint/position" and
 /// "joint/front_caster_wheel_joint/position", both "joint/front_cas…/position"): the first of
 /// fitPath, fitPath with its start cut in the middle ("joint/fro…wheel_joint/position"), the end
-/// alone ("…wheel_joint/position"), fitMiddle and fitEnd that tells all of `group` apart; fitPath
-/// when none does. `group` holds `text` too.
+/// alone ("…wheel_joint/position"), fitMiddle and fitEnd that tells all of `group` apart; then
+/// the same with the path parts all of them start with left out ("joint/": "fr…wivel/position"
+/// and "re…wivel/position"); fitPath when none does. `group` holds `text` too.
 [[nodiscard]] std::string fitDistinct(std::string_view text, std::span<const std::string> group,
                                       float width, const TextWidth& measure);
 

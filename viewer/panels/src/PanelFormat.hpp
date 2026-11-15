@@ -7,6 +7,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <imgui.h>
 
@@ -38,6 +39,13 @@ namespace lagrange::viewer::fit {
 [[nodiscard]] std::string cutDistinct(ImFont* font, float size, std::string_view text,
                                       std::span<const std::string> group, float width);
 
+/// Every one of `texts` cut to `width` (fitPath) so that no two different texts read the same
+/// (QA2 F10, QA3: "joint/front_caster…/position" for two signals): texts cut alike are cut
+/// again together by cutDistinct, and so on while new collisions appear. Meant for a list
+/// computed once and cached, not every frame.
+[[nodiscard]] std::vector<std::string> cutAll(ImFont* font, float size,
+                                              std::span<const std::string> texts, float width);
+
 /// Draws `text` at `at`, cut to `width`. Returns true when it was cut.
 bool draw(ImDrawList* draw, ImFont* font, float size, const ImVec2& at, ImU32 color,
           std::string_view text, float width, bool middle = false);
@@ -45,5 +53,9 @@ bool draw(ImDrawList* draw, ImFont* font, float size, const ImVec2& at, ImU32 co
 /// TextUnformatted in the current font and colour, cut to `width`; hovering a cut text shows
 /// all of it in a tooltip.
 void text(std::string_view text, float width, bool middle = false);
+
+/// fit::text in the rest of the line, right-aligned: whole when it fits, else cut to all of the
+/// rest (a note after a label, QA3 F6), with all of it in a tooltip.
+void textRight(std::string_view text, bool middle = false);
 
 }  // namespace lagrange::viewer::fit

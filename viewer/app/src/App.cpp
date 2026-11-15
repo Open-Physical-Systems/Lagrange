@@ -2559,8 +2559,8 @@ int runHeadless(const Options& options, const proto::Endpoint& endpoint, Workspa
 
         // What the server runs (applied), and what it says about the profile being edited.
         std::string enabledDomains;
-        if (const auto profile = client.profile()) {
-            for (const DomainInfo& domain : profile->domains) {
+        if (const auto serverProfile = client.profile()) {
+            for (const DomainInfo& domain : serverProfile->domains) {
                 if (domain.enabled) {
                     enabledDomains += enabledDomains.empty() ? "" : ",";
                     enabledDomains += domain.name;

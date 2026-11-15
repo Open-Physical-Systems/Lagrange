@@ -244,14 +244,20 @@ private:
         draw->AddRect(min, max, u32(c::line), px(3.0F));
         const theme::Fonts& fonts = theme::fonts();
         const float pad = px(10.0F);
+        // A narrow card (1024 px wide) cuts its texts with an ellipsis; the card's tooltip says
+        // all of them (QA3 F6).
+        const float room = std::max(width - 2.0F * pad, 0.0F);
         draw->PushClipRect(min, max, true);
-        draw->AddText(fonts.sans, px(theme::kLabelSize), ImVec2(min.x + pad, min.y + px(8.0F)),
-                      u32(c::t3), label);
-        draw->AddText(fonts.mono, px(theme::kKpiSize), ImVec2(min.x + pad, min.y + px(26.0F)),
-                      u32(color), value);
-        draw->AddText(fonts.sans, px(theme::kLabelSize), ImVec2(min.x + pad, min.y + px(54.0F)),
-                      u32(c::t3), detail);
+        bool cut = fit::draw(draw, fonts.sans, px(theme::kLabelSize),
+                             ImVec2(min.x + pad, min.y + px(8.0F)), u32(c::t3), label, room);
+        cut |= fit::draw(draw, fonts.mono, px(theme::kKpiSize),
+                         ImVec2(min.x + pad, min.y + px(26.0F)), u32(color), value, room);
+        cut |= fit::draw(draw, fonts.sans, px(theme::kLabelSize),
+                         ImVec2(min.x + pad, min.y + px(54.0F)), u32(c::t3), detail, room);
         draw->PopClipRect();
+        if (cut && ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s\n%s\n%s", label, value, detail);
+        }
         if (fraction >= 0.0F) {
             const ImVec2 a(min.x + pad, max.y - px(12.0F));
             const ImVec2 b(max.x - pad, max.y - px(6.0F));

@@ -201,8 +201,8 @@ int fieldRows(BuilderSession& session, const OverlayEntry& entry, const OverlayS
                 if (cleared) {
                     entered.clear();
                 } else if (numeric) {
-                    const auto number = builder::parseNumber(entered);
-                    entered = number ? builder::formatNumber(*number, 15) : std::string{};
+                    const auto parsed = builder::parseNumber(entered);
+                    entered = parsed ? builder::formatNumber(*parsed, 15) : std::string{};
                 }
                 if (cleared || !entered.empty() || !numeric) {
                     // Typing the default back leaves the file without it.

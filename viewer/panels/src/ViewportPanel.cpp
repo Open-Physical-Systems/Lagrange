@@ -1,4 +1,5 @@
 // Scene workspace, centre: the 3D viewport with its overlays (docs/design/ui/02-scene/SPEC.md).
+#include "PanelFormat.hpp"
 #include "lagrange/viewer/FlowLegend.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
@@ -208,6 +209,14 @@ public:
                 readoutRoom) {
                 break;
             }
+        }
+        // Narrower still (a 1024 px window, QA3 F7): the shading alone, cut with an ellipsis,
+        // so that the readout always stops before the overlay bar.
+        if (theme::fonts().mono->CalcTextSizeA(px(theme::kMonoSize), FLT_MAX, 0.0F, text).x >
+            readoutRoom) {
+            const std::string shown = fit::cut(theme::fonts().mono, px(theme::kMonoSize),
+                                               shadingName(context), std::max(readoutRoom, 0.0F));
+            std::snprintf(text, sizeof(text), "%s", shown.c_str());
         }
         thermal(context, draw, origin, available);
         flowLegend(context, draw, origin, available);

@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <unistd.h>
@@ -377,11 +378,11 @@ TEST(Urdf, MeshPathsRelativeOnSaveAbsoluteForTest) {
               std::string::npos);
     EXPECT_NE(plain.find("filename=\"/data/robots/meshes/other.stl\""), std::string::npos);
 
-    const std::string saved = writeUrdf(d, {"/data/robots/r.urdf", false});
+    const std::string saved = writeUrdf(d, {"/data/robots/r.urdf", false, std::nullopt});
     EXPECT_NE(saved.find("filename=\"meshes/other.stl\""), std::string::npos) << saved;
     EXPECT_NE(saved.find("filename=\"meshes/part.stl\""), std::string::npos);
 
-    const std::string test = writeUrdf(d, {"/data/robots/r.urdf", true});
+    const std::string test = writeUrdf(d, {"/data/robots/r.urdf", true, std::nullopt});
     EXPECT_NE(test.find("filename=\"/data/robots/meshes/part.stl\""), std::string::npos) << test;
     EXPECT_NE(test.find("filename=\"package://my_robot/meshes/base.dae\""), std::string::npos);
     EXPECT_NE(test.find("filename=\"lagrange-asset://x500/arm.stl\""), std::string::npos);

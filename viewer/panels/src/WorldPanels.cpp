@@ -16,6 +16,8 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <imgui_internal.h>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <string>
@@ -706,6 +708,8 @@ public:
             }
         }
         // Agents: active region, dot, label; a crosshair on the floating origin's anchor.
+        // Labels go after every dot (placeAgentLabels).
+        agentLabels_.clear();
         for (const WorldInfo::Agent& agent : world->agents) {
             const ImVec2 at = toScreen(agent.x, agent.y);
             const ImVec4 color = agentColor(agent);
@@ -720,12 +724,16 @@ public:
                 draw->AddLine(ImVec2(at.x, at.y - px(14.0F)), ImVec2(at.x, at.y + px(14.0F)),
                               u32(color));
             }
-            char label[96];
-            std::snprintf(label, sizeof(label), "%s%s", agent.name.c_str(),
-                          agent.name == world->anchor ? " · origin" : "");
-            draw->AddText(fonts.mono, small, ImVec2(at.x + px(10.0F), at.y - small - px(2.0F)),
-                          u32(color), label);
+            agentLabels_.push_back(
+                AgentLabel{agent.name + (agent.name == world->anchor ? " · origin" : ""), at,
+                           u32(color), agent.name == world->anchor});
         }
+        // Clear of the legend at the top right (drawn next) and the scale bar at the bottom left.
+        placeAgentLabels(draw, origin, size,
+                         {ImRect(ImVec2(origin.x + size.x - px(236.0F), origin.y),
+                                 ImVec2(origin.x + size.x, origin.y + px(150.0F))),
+                          ImRect(ImVec2(origin.x, origin.y + size.y - px(76.0F)),
+                                 ImVec2(origin.x + px(230.0F), origin.y + size.y))});
         draw->PopClipRect();
 
         // Legend with a count per tile state (design: top right).
@@ -816,6 +824,65 @@ private:
     double centreY_{0.0};
     double metresPerPixel_{4.0};
     bool framed_{false};
+
+    struct AgentLabel {
+        std::string text;
+        ImVec2 at;  // the agent's dot
+        ImU32 color{0};
+        bool anchor{false};
+    };
+    std::vector<AgentLabel> agentLabels_;
+
+    /// Each agent's name beside its dot (QA3 F7: labels ran into each other and out of the
+    /// map): the floating origin's anchor first, then the others; each at the first of four
+    /// places around its dot that is inside the map and clear of the labels already placed and
+    /// of `keepOut`; a name with no such place is left out (its dot stays, hovering it says
+    /// the name). On a dark box so that it reads over the scenery's outlines.
+    void placeAgentLabels(ImDrawList* draw, const ImVec2& origin, const ImVec2& size,
+                          std::initializer_list<ImRect> keepOut) {
+        ImFont* font = theme::fonts().mono;
+        const float small = px(theme::kCaptionSize);
+        const ImRect map(origin, ImVec2(origin.x + size.x, origin.y + size.y));
+        std::ranges::stable_partition(agentLabels_, &AgentLabel::anchor);
+        std::vector<ImRect> taken(keepOut);
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        for (const AgentLabel& label : agentLabels_) {
+            const ImVec2 extent = font->CalcTextSizeA(small, FLT_MAX, 0.0F, label.text.c_str());
+            const float pad = px(3.0F);
+            const float off = px(label.anchor ? 16.0F : 8.0F);  // past the anchor's crosshair
+            const std::array<ImVec2, 4> corners{{
+                {label.at.x + off, label.at.y - extent.y - px(4.0F)},
+                {label.at.x + off, label.at.y + px(4.0F)},
+                {label.at.x - off - extent.x, label.at.y - extent.y - px(4.0F)},
+                {label.at.x - off - extent.x, label.at.y + px(4.0F)},
+            }};
+            std::optional<ImRect> placed;
+            for (const ImVec2& corner : corners) {
+                const ImRect box(ImVec2(corner.x - pad, corner.y - px(1.0F)),
+                                 ImVec2(corner.x + extent.x + pad, corner.y + extent.y + px(1.0F)));
+                const bool inside = map.Contains(box);
+                const bool clear = std::ranges::none_of(
+                    taken, [&](const ImRect& other) { return other.Overlaps(box); });
+                if (inside && clear) {
+                    placed = box;
+                    break;
+                }
+            }
+            if (!placed) {
+                const float dx = mouse.x - label.at.x;
+                const float dy = mouse.y - label.at.y;
+                if (map.Contains(mouse) && dx * dx + dy * dy <= px(8.0F) * px(8.0F)) {
+                    ImGui::SetTooltip("%s", label.text.c_str());
+                }
+                continue;
+            }
+            taken.push_back(*placed);
+            draw->AddRectFilled(placed->Min, placed->Max, u32(theme::hex(0x091120, 0.85F)),
+                                px(2.0F));
+            draw->AddText(font, small, ImVec2(placed->Min.x + pad, placed->Min.y + px(1.0F)),
+                          label.color, label.text.c_str());
+        }
+    }
 };
 
 // --- streaming and geodesy ----------------------------------------------------------------

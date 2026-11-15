@@ -4,6 +4,7 @@
 // Everything is built from the stage's electrical nets (SceneStatics::nets) and from signals:
 // nothing here knows a particular robot.
 #include "CircuitDraw.hpp"
+#include "PanelFormat.hpp"
 #include "ScopePlots.hpp"
 #include "lagrange/viewer/Circuit.hpp"
 #include "lagrange/viewer/Fonts.hpp"
@@ -439,7 +440,7 @@ private:
                 std::snprintf(text, sizeof(text), "branches draw %.2f A  ·  sources supply %.2f A",
                               line.drawn, line.supplied);
                 ImGui::PushFont(theme::fonts().sans, theme::kLabelSize);
-                ImGui::TextUnformatted(text);
+                fit::text(text, ImGui::GetContentRegionAvail().x);  // QA3 F6
                 ImGui::PopFont();
             }
         }

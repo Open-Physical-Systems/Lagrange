@@ -673,9 +673,9 @@ void drawStartAt(BuilderSession& session) {
             widgets::Caption("%s", field.name);
             ImGui::SameLine(px(72.0F));
             ImGui::SetCursorPosY(top);
-            char shown[32];
-            std::snprintf(shown, sizeof(shown), "%g", *field.value);
-            std::string text = shown;
+            char current[32];
+            std::snprintf(current, sizeof(current), "%g", *field.value);
+            std::string text = current;
             if (widgets::CommitField("##value", &text, field.unit, false, px(150.0F))) {
                 char* end = nullptr;
                 const double typed = std::strtod(text.c_str(), &end);
@@ -1041,10 +1041,13 @@ void drawRobotStrip(PanelContext& context) {
     (void)chip("##com", neutral, "COM", text);
 
     // Right: what Build mode does, the validity, Check loads….
-    const char* info = session.mode == BuilderSession::Mode::Build
-                           ? "Build · no simulation · sensors not rendered · Lit"
-                       : session.testIntoRun ? "Test · the robot runs in the connected run"
-                                             : "Test · the robot runs in its own simulator";
+    const char* fullInfo = session.mode == BuilderSession::Mode::Build
+                               ? "Build · no simulation · sensors not rendered · Lit"
+                           : session.testIntoRun ? "Test · the robot runs in the connected run"
+                                                 : "Test · the robot runs in its own simulator";
+    const char* shortInfo = session.mode == BuilderSession::Mode::Build ? "Build · Lit"
+                            : session.testIntoRun                       ? "Test · connected run"
+                                                                        : "Test · own simulator";
     // QA F9: the pill counts what the Problems tab lists (its title's number), by level.
     const BuilderSession::Problems& problems = session.problems;
     const int errors = problems.errors() + (session.catalogError.empty() ? 0 : 1);
@@ -1065,30 +1068,42 @@ void drawRobotStrip(PanelContext& context) {
     if (errors > 0) {
         std::snprintf(validity, sizeof(validity), "%d problem%s", total, total == 1 ? "" : "s");
     } else {
-        std::string text = "URDF valid";
-        const auto add = [&](int n, const char* what) {
+        std::string summary = "URDF valid";
+        const auto addCount = [&](int n, const char* what) {
             if (n > 0) {
-                text += " · " + std::to_string(n) + " " + what + (n == 1 ? "" : "s");
+                summary += " · " + std::to_string(n) + " " + what + (n == 1 ? "" : "s");
             }
         };
-        add(fileErrors, "file error");
-        add(warnings, "warning");
-        add(hints, "hint");
+        addCount(fileErrors, "file error");
+        addCount(warnings, "warning");
+        addCount(hints, "hint");
         if (total == 0) {
-            text += " · 0 hints";
+            summary += " · 0 hints";
         }
-        std::snprintf(validity, sizeof(validity), "%s", text.c_str());
+        std::snprintf(validity, sizeof(validity), "%s", summary.c_str());
     }
     const bool check = session.canCheckLoads && session.mode == BuilderSession::Mode::Build;
     ImGui::PushFont(theme::fonts().sansMedium, theme::kCaptionSize);
     const float button = check ? ImGui::CalcTextSize("Check loads…").x + px(16.0F) : 0.0F;
     ImGui::PopFont();
     ImGui::SameLine();
-    widgets::AlignRight(widgets::PillWidth(info) + px(6.0F) + widgets::PillWidth(validity) +
-                        (check ? px(8.0F) + button : 0.0F));
+    // A narrow window (1024 px) has no room for the long note: the short one, then none; the
+    // whole note is the short pill's tooltip (QA3 F6: never "Check loa" cut by the window).
+    const float rest = widgets::PillWidth(validity) + (check ? px(8.0F) + button : 0.0F);
+    const float room = ImGui::GetContentRegionAvail().x - px(8.0F);
+    const char* info = fullInfo;
+    if (widgets::PillWidth(fullInfo) + px(6.0F) + rest > room) {
+        info = widgets::PillWidth(shortInfo) + px(6.0F) + rest <= room ? shortInfo : nullptr;
+    }
+    widgets::AlignRight((info != nullptr ? widgets::PillWidth(info) + px(6.0F) : 0.0F) + rest);
     centreInBar(ImGui::GetTextLineHeight());
-    widgets::Pill(info, widgets::PillKind::Info);
-    ImGui::SameLine(0.0F, px(6.0F));
+    if (info != nullptr) {
+        widgets::Pill(info, widgets::PillKind::Info);
+        if (info != fullInfo) {
+            ImGui::SetItemTooltip("%s", fullInfo);
+        }
+        ImGui::SameLine(0.0F, px(6.0F));
+    }
     widgets::Pill(validity, errors > 0 ? widgets::PillKind::Error : widgets::PillKind::Ok);
     if (ImGui::IsItemClicked()) {
         ImGui::SetWindowFocus(builder_windows::kProblems);

@@ -1,5 +1,6 @@
 // Environment workspace: what the environment is, a slice of one of its fields with a probe,
 // and the list of fields that can be shown (docs/design/ui/07-environment/SPEC.md).
+#include "PanelFormat.hpp"
 #include "lagrange/viewer/Camera.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
@@ -1410,13 +1411,12 @@ public:
             // On the right: the unit, or why the field cannot be shown.
             const char* note =
                 field.available ? field.unit.c_str() : field.unavailableReason.c_str();
+            // Cut with an ellipsis when the panel is narrow; whole in a tooltip (QA3 F6).
+            ImGui::SameLine(0.0F, px(8.0F));
             ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
-            const float width = ImGui::CalcTextSize(note).x;
-            ImGui::PopFont();
-            ImGui::SameLine();
-            widgets::AlignRight(width);
-            ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
-            ImGui::TextColored(c::t3, "%s", note);
+            ImGui::PushStyleColor(ImGuiCol_Text, c::t3);
+            fit::textRight(note);
+            ImGui::PopStyleColor();
             ImGui::PopFont();
             ImGui::PopID();
         }
@@ -1440,13 +1440,12 @@ public:
             ImGui::TextUnformatted("airflow · particles");
             ImGui::PopStyleColor();
             const char* note = air->available ? "m/s" : air->unavailableReason.c_str();
+            // Cut with an ellipsis when the panel is narrow; whole in a tooltip (QA3 F6).
+            ImGui::SameLine(0.0F, px(8.0F));
             ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
-            const float width = ImGui::CalcTextSize(note).x;
-            ImGui::PopFont();
-            ImGui::SameLine();
-            widgets::AlignRight(width);
-            ImGui::PushFont(theme::fonts().mono, theme::kCaptionSize);
-            ImGui::TextColored(c::t3, "%s", note);
+            ImGui::PushStyleColor(ImGuiCol_Text, c::t3);
+            fit::textRight(note);
+            ImGui::PopStyleColor();
             ImGui::PopFont();
             ImGui::PopID();
         }

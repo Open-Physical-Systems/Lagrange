@@ -469,7 +469,8 @@ Document meshRobot(const std::filesystem::path& file) {
 }
 
 Document roundTrip(const Document& document, const std::filesystem::path& at) {
-    const std::string text = builder::writeUrdf(document, {.savedAt = at});
+    const std::string text = builder::writeUrdf(
+        document, {.savedAt = at, .absoluteMeshes = false, .meshFolder = std::nullopt});
     const builder::ReadResult read = builder::readUrdf(text);
     EXPECT_TRUE(read.document.has_value()) << read.error;
     return read.document.value_or(Document{});
@@ -496,7 +497,8 @@ TEST(CollisionChoice, EachChoiceRoundTrips) {
     EXPECT_EQ(link->collision, CollisionChoice::Mesh);
 
     // 1: the mesh collides; one <visual> and one <collision> naming it, merged on reading.
-    std::string text = builder::writeUrdf(document, {.savedAt = urdf});
+    std::string text = builder::writeUrdf(
+        document, {.savedAt = urdf, .absoluteMeshes = false, .meshFolder = std::nullopt});
     EXPECT_NE(text.find("lagrange_collision=\"mesh\""), std::string::npos);
     EXPECT_NE(text.find("filename=\"part.obj\""), std::string::npos);  // relative on save
     Document back = roundTrip(document, urdf);
@@ -511,7 +513,8 @@ TEST(CollisionChoice, EachChoiceRoundTrips) {
     const auto fitted = builder::fitToMesh(link->shapes[0], Shape::Kind::Box);
     ASSERT_TRUE(fitted.has_value());
     builder::addCollisionShape(*link, *fitted);
-    text = builder::writeUrdf(document, {.savedAt = urdf});
+    text = builder::writeUrdf(
+        document, {.savedAt = urdf, .absoluteMeshes = false, .meshFolder = std::nullopt});
     EXPECT_EQ(count(text, "<visual"), 2);     // base_link's box and the mesh
     EXPECT_EQ(count(text, "<collision"), 2);  // base_link's box and the fitted box
     back = roundTrip(document, urdf);
@@ -531,7 +534,8 @@ TEST(CollisionChoice, EachChoiceRoundTrips) {
     capsule.origin.xyz = {0.01, 0.02, 0.03};
     builder::addCollisionShape(*link, capsule);
     // A capsule is URDF 1.1 (urdfdom ignores it in 1.0): the version is written with it.
-    EXPECT_NE(builder::writeUrdf(document, {.savedAt = urdf})
+    EXPECT_NE(builder::writeUrdf(
+                  document, {.savedAt = urdf, .absoluteMeshes = false, .meshFolder = std::nullopt})
                   .find("<robot name=\"meshbot\" version=\"1.1\">"),
               std::string::npos);
     back = roundTrip(document, urdf);
@@ -545,7 +549,8 @@ TEST(CollisionChoice, EachChoiceRoundTrips) {
     // 2: split: the parts replace the primitives; the choice and the parts read back.
     builder::setSplitParts(*link, {(dir / "meshbot_collision" / "part_0_000.obj").string(),
                                    (dir / "meshbot_collision" / "part_0_001.obj").string()});
-    text = builder::writeUrdf(document, {.savedAt = urdf});
+    text = builder::writeUrdf(
+        document, {.savedAt = urdf, .absoluteMeshes = false, .meshFolder = std::nullopt});
     EXPECT_NE(text.find("meshbot_collision/part_0_001.obj"), std::string::npos);
     back = roundTrip(document, urdf);
     read = builder::findLink(back, "part");
@@ -632,7 +637,11 @@ TEST(CollisionSplit, PartsAreWrittenAndLoadWithNoNotes) {
                              lagrange::viewer::builder::Joint::Type::Fixed, 1000.0);
     ASSERT_EQ(added.link, "bracket");
     const std::filesystem::path urdf = dir / "splitbot.urdf";
-    ASSERT_EQ(builder::saveAtomically(urdf, builder::writeUrdf(document, {.savedAt = urdf})), "");
+    ASSERT_EQ(
+        builder::saveAtomically(urdf, builder::writeUrdf(document, {.savedAt = urdf,
+                                                                    .absoluteMeshes = false,
+                                                                    .meshFolder = std::nullopt})),
+        "");
 
     // CoACD is found for the account, not through $HOME (a user-site install must still be
     // found when HOME points elsewhere, as here).
@@ -663,7 +672,11 @@ TEST(CollisionSplit, PartsAreWrittenAndLoadWithNoNotes) {
     EXPECT_FALSE(std::filesystem::exists(dir / ".splitbot_split_bracket"));  // work folder gone
 
     builder::setSplitParts(*builder::findLink(document, "bracket"), split.parts());
-    ASSERT_EQ(builder::saveAtomically(urdf, builder::writeUrdf(document, {.savedAt = urdf})), "");
+    ASSERT_EQ(
+        builder::saveAtomically(urdf, builder::writeUrdf(document, {.savedAt = urdf,
+                                                                    .absoluteMeshes = false,
+                                                                    .meshFolder = std::nullopt})),
+        "");
     const std::string command = import->string() + " " + urdf.string() + " " +
                                 (dir / "out.usda").string() + " 2>" + (dir / "err.txt").string();
     ASSERT_EQ(std::system(command.c_str()), 0);

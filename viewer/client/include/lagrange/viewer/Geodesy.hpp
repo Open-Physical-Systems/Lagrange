@@ -166,7 +166,7 @@ private:
     } else if (letter == 'X' && lon >= 0.0 && lon < 42.0) {
         zone = lon < 9.0 ? 31 : (lon < 21.0 ? 33 : (lon < 33.0 ? 35 : 37));
     }
-    char text[8];
+    char text[16];
     std::snprintf(text, sizeof(text), "%d%c", zone, letter);
     return text;
 }
