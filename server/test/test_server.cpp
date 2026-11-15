@@ -727,7 +727,18 @@ protected:
     }
 };
 
-TEST_F(SedanServerTest, TheCarDrivesItsDemoCircleOnItsTyres) {
+/// The sedan alone: a traffic agent crossing the junction strikes it near 9 s, and where that
+/// leaves it depends on millimetres of its line.
+class SedanAloneServerTest : public SedanServerTest {
+protected:
+    void adjust(ServerOptions& options) override {
+        SedanServerTest::adjust(options);
+        options.trafficVehicles = 0;
+        options.trafficPedestrians = 0;
+    }
+};
+
+TEST_F(SedanAloneServerTest, TheCarDrivesItsDemoCircleOnItsTyres) {
     ASSERT_TRUE(pumpUntil([](const v1::Envelope& e) { return e.has_catalog(); }));
     for (std::uint64_t id = 10; id < 22; ++id) {  // 12 s, a second at a time
         v1::Envelope step = command(id);
@@ -1509,7 +1520,9 @@ TEST(DemoDrive, TheSedanBacksAwayFromWhatHoldsItAndDrivesOn) {
     for (std::int64_t k = 1; k <= 60; ++k) {  // 30 s by half seconds
         ASSERT_TRUE(server.stepUntil(SimTime{k * 500'000'000}).ok());
         const double speed = server.read("vehicle/sedan/speed")[0];
-        held = std::abs(speed) < 0.1 ? held + 0.5 : 0.0;
+        // Held with its throttle open; standing with the brake on while it yields is meant.
+        const bool pushing = server.read("vehicle/sedan/throttle")[0] > 0.05;
+        held = std::abs(speed) < 0.1 && pushing ? held + 0.5 : 0.0;
         longestHeld = std::max(longestHeld, held);
         const std::vector<double> pose = server.read("body/base_link/pose");
         if (k > 40) {
@@ -1546,6 +1559,14 @@ TEST(BankedRing, TheSedanDrivesTheBankedRingOnItsSurface) {
     double outer = 0.0;
     double worstRoll = 0.0;
     double travelled = 0.0;
+    // The tyre forces against the turn's balance in the road's frame, each as a share of the
+    // weight: the normal loads the tyres report against m·(g cos β + a sin β), and the force
+    // across the road plane against m·(a cos β − g sin β), a = v²/r toward the centre.
+    constexpr double kMass = 1471.2;  // kg, the sedan's links (sedan.urdf)
+    constexpr double kG = 9.80665;
+    double loadError = 0.0;
+    double lateralError = 0.0;
+    int samples = 0;
     std::vector<double> last;
     for (std::int64_t k = 1; k <= 40; ++k) {  // 20 s by half seconds
         ASSERT_TRUE(server.stepUntil(SimTime{k * 500'000'000}).ok());
@@ -1569,16 +1590,43 @@ TEST(BankedRing, TheSedanDrivesTheBankedRingOnItsSurface) {
         const double z = pose[6];
         const double roll = std::atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y));
         worstRoll = std::max(worstRoll, std::abs(roll - kBank));
+        const double b = std::abs(kBank);
+        const double v = server.read("vehicle/sedan/speed").at(0);
+        const double a = v * v / r;
+        const std::array<double, 3> out{pose[0] / r, pose[1] / r, 0.0};
+        // The road rises outward: the inward line in its plane dips.
+        const std::array<double, 3> inward{-std::cos(b) * out[0], -std::cos(b) * out[1],
+                                           -std::sin(b)};
+        const std::vector<double> f = server.read("body/base_link/wrench/vehicle");
+        double loads = 0.0;
+        for (const char* w : {"front_left", "front_right", "rear_left", "rear_right"}) {
+            loads += server.read(std::string("wheel/") + w + "_spin/normal_force").at(0);
+        }
+        const double weight = kMass * kG;
+        loadError += std::abs(loads - kMass * (kG * std::cos(b) + a * std::sin(b))) / weight;
+        lateralError += std::abs(f[0] * inward[0] + f[1] * inward[1] + f[2] * inward[2] -
+                                 kMass * (a * std::cos(b) - kG * std::sin(b))) /
+                        weight;
+        ++samples;
     }
+    loadError /= samples;
+    lateralError /= samples;
     EXPECT_LT(worstHeight, 0.05) << "m off its ride height above the banked surface";
     // On the driving lanes (radius 1.5 m to 8.5 m), a car's half width (1 m) inside their edges.
     EXPECT_GT(inner, 2.5);
     EXPECT_LT(outer, 7.5);
     EXPECT_LT(worstRoll, 0.03) << "rad off the bank";
+    // 0.013 and 0.031 with the tyre forces in the level plane.
+    EXPECT_LT(loadError, 0.01) << "of the weight: the normal loads off the turn's";
+    EXPECT_LT(lateralError, 0.05) << "of the weight: the force across off the turn's";
     EXPECT_NEAR(server.read("vehicle/sedan/speed").at(0), 3.0, 0.3);
     EXPECT_GT(travelled, 40.0);  // m: about 3 m/s once up to speed
     std::printf("banked ring: worst height %.4f m, radius %.3f to %.3f m, roll %.4f rad, %.1f m\n",
                 worstHeight, inner, outer, worstRoll, travelled);
+    std::printf(
+        "banked ring: mean error of the normal loads %.4f, of the force across %.4f "
+        "(shares of the weight)\n",
+        loadError, lateralError);
 }
 
 TEST_F(ServerTest, SeekingASimulationIsRefused) {

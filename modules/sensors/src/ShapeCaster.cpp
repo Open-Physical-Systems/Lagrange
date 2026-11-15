@@ -301,8 +301,17 @@ services::RayHit ShapeCaster::castHit(const std::array<double, 3>& origin,
 
 services::RayHit ShapeCaster::ray(const std::array<double, 3>& origin,
                                   const std::array<double, 3>& dir, double maxDistance) const {
-    const services::RayHit hit = castHit(origin, dir);
-    return hit.distance <= maxDistance ? hit : services::RayHit{};
+    services::RayHit hit = castHit(origin, dir);
+    if (!(hit.distance <= maxDistance)) {
+        return services::RayHit{};
+    }
+    // The surface's outward normal where the ray meets it (vehicle contact planes).
+    const Shape& s = impl_->shapes[hit.shape];
+    const std::array<double, 3> at{origin[0] + dir[0] * hit.distance,
+                                   origin[1] + dir[1] * hit.distance,
+                                   origin[2] + dir[2] * hit.distance};
+    hit.normal = surfaceNormal(s.type, s.size, s.pose, at, s.hull, s.field);
+    return hit;
 }
 
 std::vector<std::uint32_t> ShapeCaster::overlapSphere(const std::array<double, 3>& center,

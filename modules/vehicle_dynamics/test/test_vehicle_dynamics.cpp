@@ -29,16 +29,25 @@ constexpr double kLongitudinal = 80000.0;
 
 struct Options {
     bool engine{false};
+    double slope{0.0};  // rad: the ground and the car's start pitched nose down about y
 };
+
+/// A rotation of `angle` about y: x tips down for a positive angle.
+Pose pitched(double angle) {
+    Pose p;
+    p.orientation = {std::cos(angle / 2.0), 0.0, std::sin(angle / 2.0), 0.0};
+    return p;
+}
 
 /// A 1.5 t saloon: a chassis on a free joint, front wheels on steering knuckles, rear-wheel
 /// drive, linear tyres (μ = 0.9) on a level plane.
 World car(const Options& o = {}) {
     World w;
     w.robots = {"car"};
-    w.addCollider(kWorldBody, ShapeType::Plane, {100.0, 100.0, 1.0}, Pose{}, 1.0);
-    Pose start;
-    start.position = {0.0, 0.0, kRideHeight};
+    w.addCollider(kWorldBody, ShapeType::Plane, {100.0, 100.0, 1.0}, pitched(o.slope), 1.0);
+    // At the ride height above the (sloped) ground through the origin.
+    Pose start = pitched(o.slope);
+    start.position = {kRideHeight * std::sin(o.slope), 0.0, kRideHeight * std::cos(o.slope)};
     const BodyId chassis = w.addBody("chassis", kWorldBody, start, 1400.0, {0.1, 0.0, 0.0},
                                      {607, 2591, 2740, 0, 0, 0});
     w.addJoint("root", JointType::Free, chassis, {0, 0, 1}, false);
@@ -155,11 +164,12 @@ struct Run {
     }
 };
 
-std::unique_ptr<Run> drive(World world, Driver::Command command, bool ideal = false) {
+std::unique_ptr<Run> drive(World world, Driver::Command command, bool ideal = false,
+                           double slope = 0.0) {
     auto r = std::make_unique<Run>();
     r->world = std::move(world);
     r->ground = std::make_shared<sensors::ShapeCaster>();
-    const sensors::ShapeCaster::Shape plane{ShapeType::Plane, {100.0, 100.0, 1.0}, Pose{}};
+    const sensors::ShapeCaster::Shape plane{ShapeType::Plane, {100.0, 100.0, 1.0}, pitched(slope)};
     r->ground->update(std::span(&plane, 1));
     r->scheduler = std::make_unique<Scheduler>(SchedulerOptions{.deterministic = true});
     r->scheduler->add(std::make_unique<rigid_body::MujocoBackend>());
@@ -195,6 +205,41 @@ TEST(VehicleDynamics, SettlesAtRideHeightOnItsStaticLoads) {
     EXPECT_NEAR(total, weight, 0.01 * weight);
     EXPECT_GT(front, 0.5 * total);  // the centre of mass is ahead of the middle
     EXPECT_NEAR(r->read("vehicle/car/speed"), 0.0, 0.01);
+}
+
+TEST(VehicleDynamics, ParkedOnASlopeTheTyresHoldMgSinThetaAlongItAndMgCosThetaAcrossIt) {
+    // Brakes on, nose down a 10° slope: the tyre forces lie in the road plane and hold the
+    // weight's share along it, m·g·sin θ, while the normal loads carry m·g·cos θ. (With the
+    // forces in the level plane the loads read m·g / cos θ, 3 % over m·g·cos θ, and the car
+    // crept at 13 cm/s.)
+    constexpr double kSlope = 10.0 * std::numbers::pi / 180.0;
+    auto r = drive(
+        car({.slope = kSlope}), [](double, double) { return std::array<double, 3>{0.0, 1.0, 0.0}; },
+        false, kSlope);
+    ASSERT_TRUE(r);
+    ASSERT_TRUE(stepTo(*r, 4.0));
+    const double start = r->readN("body/chassis/pose")[0];
+    ASSERT_TRUE(stepTo(*r, 5.0));
+    const double creep = r->readN("body/chassis/pose")[0] - start;  // m over the last second
+    const double weight = (1400.0 + 4 * 15.0 + 2 * 5.0) * kGravity;
+    const std::span<const double> f = r->readN("body/chassis/wrench/vehicle");
+    // Along the slope, downhill (x of the pitched frame), and along its normal.
+    const double along = f[0] * std::cos(kSlope) - f[2] * std::sin(kSlope);
+    const double normal = f[0] * std::sin(kSlope) + f[2] * std::cos(kSlope);
+    double loads = 0.0;
+    for (const char* w : {"front_left", "front_right", "rear_left", "rear_right"}) {
+        loads += r->read(std::string("wheel/") + w + "_spin/normal_force");
+    }
+    EXPECT_NEAR(-along, weight * std::sin(kSlope), 0.01 * weight * std::sin(kSlope));
+    EXPECT_NEAR(normal, weight * std::cos(kSlope), 0.01 * weight * std::cos(kSlope));
+    EXPECT_NEAR(loads, weight * std::cos(kSlope), 0.01 * weight * std::cos(kSlope));
+    EXPECT_LT(std::abs(creep), 1e-3);  // m in a second: the brakes hold it
+    RecordProperty("slope_forces", "along " + std::to_string(-along) + " N (m g sin θ " +
+                                       std::to_string(weight * std::sin(kSlope)) + "), normal " +
+                                       std::to_string(normal) + " N (m g cos θ " +
+                                       std::to_string(weight * std::cos(kSlope)) + "), loads " +
+                                       std::to_string(loads) + " N, creep " +
+                                       std::to_string(creep) + " m/s");
 }
 
 TEST(VehicleDynamics, BrakingDistanceIsVSquaredOverTwoMuG) {

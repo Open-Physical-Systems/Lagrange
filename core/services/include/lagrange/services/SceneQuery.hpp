@@ -15,6 +15,9 @@ struct RayHit {
     static constexpr std::uint32_t kNone = std::numeric_limits<std::uint32_t>::max();
     double distance{std::numeric_limits<double>::infinity()};  // m along the unit direction
     std::uint32_t shape{kNone};  // index in the implementation's shape list
+    // The outward unit normal of the surface hit, in the same frame, when the query gives one
+    // (SceneQuery::ray() of sensors::ShapeCaster does); all zero otherwise.
+    std::array<double, 3> normal{};
     [[nodiscard]] bool hit() const { return shape != kNone; }
 };
 
@@ -32,7 +35,8 @@ public:
     virtual ~SceneQuery() = default;
 
     /// The first shape along the unit direction `dir` from `origin`, within `maxDistance`. A ray
-    /// starting inside a shape reports where it leaves it.
+    /// starting inside a shape reports where it leaves it. Implementations may fill the hit's
+    /// surface normal; callers that need one fall back to their own when it is all zero.
     [[nodiscard]] virtual RayHit ray(const std::array<double, 3>& origin,
                                      const std::array<double, 3>& dir,
                                      double maxDistance) const = 0;
