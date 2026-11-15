@@ -40,6 +40,9 @@ ImU32 u32(const ImVec4& color) {
 }
 
 /// A text box drawn over the image: raised surface, thin border, mono text.
+/// The overlay bar at the top right: eight 24 px buttons with 2 px around each (logical px).
+constexpr float kOverlayBarWidth = 24.0F * 8.0F + 2.0F * 9.0F;
+
 void overlayBox(ImDrawList* draw, const ImVec2& min, const char* first, const char* second,
                 const ImVec4& border = c::lineStrong, const ImVec4& text = c::t1) {
     ImFont* font = theme::fonts().mono;
@@ -176,11 +179,36 @@ public:
         if (char* detail = std::strstr(tier, " (")) {
             *detail = '\0';  // "Tier 2 (full, hardware ray tracing)" -> "Tier 2"
         }
+        // It stops short of the overlay bar at the top right (kOverlayBarWidth): in a narrow
+        // viewport the tier goes first, then the draw count, then the frame time.
+        const float readoutRoom =
+            available.x - px(10.0F) - px(kOverlayBarWidth) - px(8.0F) - px(10.0F) - px(16.0F);
+        const char* camera = context.renderOptions->follow ? "Follow" : "Perspective";
+        const double frameMs = static_cast<double>(context.frameMs);
         char text[160];
-        std::snprintf(text, sizeof(text), "%s · %s   %.1f ms   %u draws   %s",
-                      context.renderOptions->follow ? "Follow" : "Perspective",
-                      shadingName(context), static_cast<double>(context.frameMs), context.drawCalls,
-                      tier);
+        for (int parts = 4; parts >= 1; --parts) {
+            switch (parts) {
+                case 4:
+                    std::snprintf(text, sizeof(text), "%s · %s   %.1f ms   %u draws   %s", camera,
+                                  shadingName(context), frameMs, context.drawCalls, tier);
+                    break;
+                case 3:
+                    std::snprintf(text, sizeof(text), "%s · %s   %.1f ms   %u draws", camera,
+                                  shadingName(context), frameMs, context.drawCalls);
+                    break;
+                case 2:
+                    std::snprintf(text, sizeof(text), "%s · %s   %.1f ms", camera,
+                                  shadingName(context), frameMs);
+                    break;
+                default:
+                    std::snprintf(text, sizeof(text), "%s · %s", camera, shadingName(context));
+                    break;
+            }
+            if (theme::fonts().mono->CalcTextSizeA(px(theme::kMonoSize), FLT_MAX, 0.0F, text).x <=
+                readoutRoom) {
+                break;
+            }
+        }
         thermal(context, draw, origin, available);
         flowLegend(context, draw, origin, available);
         airflowLegend(context, draw, origin, available);
@@ -788,7 +816,7 @@ private:
             {"##weather", widgets::Icon::Environment, "Weather effects: no data from this server",
              nullptr},
         }};
-        const float width = px(24.0F) * 8.0F + px(2.0F) * 9.0F;
+        const float width = px(kOverlayBarWidth);
         ImGui::SetCursorScreenPos(ImVec2(topRight.x - width, topRight.y));
         widgets::ToolBarFrame(static_cast<int>(kOverlays.size()), false);
         float x = ImGui::GetCursorScreenPos().x;

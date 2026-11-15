@@ -1741,7 +1741,7 @@ public:
                                                       : widgets::PillKind::Info);
                 ImGui::SameLine(0.0F, px(8.0F));
                 ImGui::PushTextWrapPos(ImGui::GetContentRegionMax().x - px(70.0F));
-                ImGui::TextUnformatted(event.text.c_str());
+                widgets::Paragraph(event.text);
                 ImGui::PopTextWrapPos();
                 if (ImGui::IsItemClicked() && event.prim != kNone) {
                     context.selectedPrim = event.prim;

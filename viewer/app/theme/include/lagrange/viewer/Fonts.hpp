@@ -23,6 +23,18 @@ inline constexpr float kKpiSize = 20.0F;
 /// scales each glyph by this factor so that the em is the font size, as in CSS.
 inline constexpr float kPlexLineHeightEm = 1.3F;
 
+/// Multi-line mono text that Dear ImGui lays out itself (InputTextMultiline: the netlist, the
+/// profile editor), which spaces lines one font size apart and has no line height of its own:
+/// reference.html's `.code` is 12 px Plex Mono on 19 px lines. Fonts::code is Plex Mono scaled
+/// so that, pushed at kCodeLine, its em is kCodeSize; pushed at any size its em is that size
+/// × kCodeSize / kCodeLine (11 px text: push it at codeLineFor(11)).
+inline constexpr float kCodeSize = 12.0F;
+inline constexpr float kCodeLine = 19.0F;
+/// The size to push Fonts::code at for `em` px text: its line is then em × 19 / 12.
+inline constexpr float codeLineFor(float em) {
+    return em * kCodeLine / kCodeSize;
+}
+
 /// The faces of the design: IBM Plex Sans for text, IBM Plex Mono for every number, unit,
 /// path and name. Sizes are chosen where a font is pushed (Dear ImGui sizes fonts on demand).
 struct Fonts {
@@ -31,6 +43,8 @@ struct Fonts {
     ImFont* sansSemiBold{nullptr};
     ImFont* mono{nullptr};
     ImFont* monoMedium{nullptr};
+    /// Plex Mono for multi-line editors: push it at kCodeLine for kCodeSize text (above).
+    ImFont* code{nullptr};
     bool bundled{false};  ///< False when the font files were not found and a fallback is used.
 };
 

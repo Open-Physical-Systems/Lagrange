@@ -573,11 +573,7 @@ private:
     static void suggestion(const char* tag, widgets::PillKind kind, const char* sentence) {
         widgets::Pill(tag, kind);
         ImGui::SameLine(0.0F, px(8.0F));
-        ImGui::PushTextWrapPos(0.0F);
-        ImGui::PushFont(theme::fonts().sans, theme::kLabelSize);
-        ImGui::TextUnformatted(sentence);
-        ImGui::PopFont();
-        ImGui::PopTextWrapPos();
+        widgets::ParagraphF(theme::fonts().sans, theme::kLabelSize, c::t1, "%s", sentence);
         ImGui::Dummy(ImVec2(0.0F, px(2.0F)));
     }
 

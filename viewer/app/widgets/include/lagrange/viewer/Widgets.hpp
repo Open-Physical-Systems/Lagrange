@@ -32,6 +32,30 @@ void Strong(const char* format, ...) IM_FMTARGS(1);
 /// Puts the next item so that it ends at the right edge of the content region.
 void AlignRight(float itemWidth);
 
+/// The line height of wrapped text at a design font size, both in logical pixels: the CSS
+/// line heights of reference.html (body 13 px on 18 px lines, `.xs` 11 px on 14 px; 12 px text
+/// keeps the body's 18 px; larger text 1.4 em). Dear ImGui wraps at the font size (1.0 em).
+[[nodiscard]] float ParagraphLineHeight(float fontSize);
+/// Wrapped text drawn line by line `lineHeight` apart (logical px; 0: ParagraphLineHeight of
+/// the current font), each line centred in its line box as CSS does. In the current font and
+/// text colour. Wraps at the pushed TextWrapPos, else at the content region's right edge, or
+/// at `wrapWidth` (pixels from the cursor) when it is positive. One item, so IsItemHovered and
+/// IsItemClicked follow it, and SameLine continues at its first line, as after TextWrapped.
+void Paragraph(std::string_view text, float lineHeight = 0.0F, float wrapWidth = 0.0F);
+/// Paragraph with printf formatting and a font, size (logical px) and colour of its own.
+void ParagraphF(ImFont* font, float size, const ImVec4& color, const char* format, ...)
+    IM_FMTARGS(4);
+/// The same into a draw list, at `at`, `wrapWidth` wide; `size` in pixels as AddText takes it
+/// (`lineHeight` stays logical): no item. Lines that would end
+/// below `maxY` are left out. Returns true when some were left out (the caller may show all of
+/// it in a tooltip).
+bool DrawParagraph(ImDrawList* draw, ImFont* font, float size, const ImVec2& at, ImU32 color,
+                   std::string_view text, float wrapWidth, float lineHeight = 0.0F,
+                   float maxY = 3.0e38F);
+/// The height (pixels) a paragraph takes: lines × line height (`size` in pixels).
+[[nodiscard]] float ParagraphHeight(ImFont* font, float size, std::string_view text,
+                                    float wrapWidth, float lineHeight = 0.0F);
+
 // --- controls -----------------------------------------------------------------------------
 enum class PillKind { Neutral, Ok, Warn, Error, Info, Accent };
 void Pill(const char* text, PillKind kind);
@@ -104,6 +128,8 @@ bool BarTab(const char* label, Icon icon, bool active, bool available, bool comp
 
 /// A row of exclusive choices (time windows, level filters). Returns true when it changed.
 bool Segmented(const char* id, const char* const* options, int count, int* index);
+/// The width Segmented takes with these options.
+[[nodiscard]] float SegmentedWidth(const char* const* options, int count);
 
 /// One row of a key/value grid: label column (112 px), then a read-only value field with the
 /// unit right-aligned inside it. `link` draws the value as a reference to a prim or file.

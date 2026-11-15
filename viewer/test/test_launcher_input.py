@@ -213,3 +213,31 @@ def test_a_class_without_a_sample_cannot_be_started(launcher: Any) -> None:
     x, y = CARDS["bench"]
     stats, stderr = launcher(double_click(4, f"{x},{y}"))
     assert stats["launcher"] is True and "starting" not in stderr
+
+
+def test_the_keyboard_alone_picks_a_card_and_connects(launcher: Any) -> None:
+    # SPEC acceptance: Tab into the cards, arrows to Huge world (right to Robot arm, down a row),
+    # Enter to start its sample and connect.
+    keys = "4:key:tab;8:key:right;12:key:down"
+    stats, stderr = launcher(keys)
+    assert stats["launcher"] is True and "starting" not in stderr  # arrows only pick
+    stats, stderr = launcher(keys + ";16:key:enter")
+    started = [line for line in stderr.splitlines() if "lagrange_viewer: starting" in line]
+    assert len(started) == 1, stderr
+    assert "tiled_town/tiled_town.usda" in started[0]
+    assert stats["launcher"] is False
+
+
+def test_arrows_skip_a_card_that_cannot_run(launcher: Any) -> None:
+    # Electrical bench has no sample: right from Huge world goes on to Empty stage.
+    _stats, stderr = launcher("4:key:tab;8:key:right;12:key:down;16:key:right;20:key:enter")
+    started = next(line for line in stderr.splitlines() if "lagrange_viewer: starting" in line)
+    assert "--robot none --world none" in started
+
+
+def test_tab_reaches_the_server_list_and_connect(launcher: Any) -> None:
+    # Tab, Tab: the server list; down picks the default socket, so Enter connects there without
+    # starting a server.
+    _stats, stderr = launcher("4:key:tab;8:key:tab;12:key:down;16:key:tab;20:key:enter")
+    assert "starting" not in stderr
+    assert "connecting to" in stderr

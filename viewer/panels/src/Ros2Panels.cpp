@@ -764,7 +764,12 @@ public:
                 for (const RosGraphInfo::Joint& joint : graph->joints) {
                     ImGui::TableNextRow(ImGuiTableRowFlags_None, px(23.0F));
                     ImGui::TableNextColumn();
-                    widgets::Mono(c::t1, "%s · %s", joint.name.c_str(), joint.interface.c_str());
+                    // Cut to its cell with an ellipsis, all of it on hover (it was clipped).
+                    std::snprintf(text, sizeof(text), "%s · %s", joint.name.c_str(),
+                                  joint.interface.c_str());
+                    ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
+                    fit::text(text, ImGui::GetContentRegionAvail().x);
+                    ImGui::PopFont();
                     ImGui::TableNextColumn();
                     std::snprintf(text, sizeof(text), "%.2f", joint.command);
                     rightMono(c::t1, text);

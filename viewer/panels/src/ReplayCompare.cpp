@@ -425,11 +425,8 @@ bool workerState(const CompareState& state) {
         return true;
     }
     if (state.analysis && !state.analysis->error.empty()) {
-        ImGui::PushTextWrapPos(0.0F);
-        ImGui::PushFont(theme::fonts().sans, theme::kLabelSize);
-        ImGui::TextColored(c::error, "%s", state.analysis->error.c_str());
-        ImGui::PopFont();
-        ImGui::PopTextWrapPos();
+        widgets::ParagraphF(theme::fonts().sans, theme::kLabelSize, c::error, "%s",
+                            state.analysis->error.c_str());
         return true;
     }
     return false;
@@ -487,12 +484,9 @@ public:
         widgets::PropertyRow("stage", fileName(real.stagePath).c_str(), nullptr, false,
                              real.stagePath.c_str());
         if (real.stagePath != a.sim->stagePath) {
-            ImGui::PushTextWrapPos(0.0F);
-            ImGui::PushFont(theme::fonts().sans, theme::kLabelSize);
-            ImGui::TextColored(c::warn, "Another stage than the replay's (%s).",
-                               fileName(a.sim->stagePath).c_str());
-            ImGui::PopFont();
-            ImGui::PopTextWrapPos();
+            widgets::ParagraphF(theme::fonts().sans, theme::kLabelSize, c::warn,
+                                "Another stage than the replay's (%s).",
+                                fileName(a.sim->stagePath).c_str());
         }
         if (real.synthetic) {
             widgets::Pill("synthetic", widgets::PillKind::Warn);
@@ -1171,24 +1165,23 @@ private:
             value(r->realAtWorst, r->unit, realValue, sizeof(realValue));
             char limit[40];
             ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x - pad);
-            ImGui::PushFont(theme::fonts().sans, theme::kLabelSize);
+            ImFont* sans = theme::fonts().sans;
             if (r->constantReference) {
                 value(r->absLimit, r->unit, limit, sizeof(limit));
-                ImGui::TextColored(c::t2,
-                                   "Largest error at %s: sim %s, real %s (lag %.1f ms). The real "
-                                   "signal is constant, so the RMSE is held to %s instead of a "
-                                   "share of its range.",
-                                   when, simValue, realValue, static_cast<double>(r->lagNs) * 1e-6,
-                                   limit);
+                widgets::ParagraphF(sans, theme::kLabelSize, c::t2,
+                                    "Largest error at %s: sim %s, real %s (lag %.1f ms). The real "
+                                    "signal is constant, so the RMSE is held to %s instead of a "
+                                    "share of its range.",
+                                    when, simValue, realValue, static_cast<double>(r->lagNs) * 1e-6,
+                                    limit);
             } else {
                 percent(r->limit, limit, sizeof(limit));
-                ImGui::TextColored(
-                    c::t2,
+                widgets::ParagraphF(
+                    sans, theme::kLabelSize, c::t2,
                     "Largest error at %s: sim %s, real %s (lag %.1f ms). The limit is %s of the "
                     "real range.",
                     when, simValue, realValue, static_cast<double>(r->lagNs) * 1e-6, limit);
             }
-            ImGui::PopFont();
             ImGui::PopTextWrapPos();
             const SignalInfo* info = context.catalog
                                          ? context.catalog->find(r->sim.substr(0, r->sim.find('.')))

@@ -1,8 +1,11 @@
 // The design's font sizes are CSS font sizes: loadFonts() draws a token's size as the em of IBM
 // Plex, as reference.html does, while Dear ImGui lays out with the same size.
 #include "lagrange/viewer/Fonts.hpp"
+#include "lagrange/viewer/Widgets.hpp"
 
 #include <array>
+#include <cfloat>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <iterator>
@@ -88,6 +91,59 @@ TEST_F(FontsInImGui, ATokensSizeIsTheEmAsInCss) {
     ImGui::NewFrame();
     EXPECT_FLOAT_EQ(ImGui::GetFontSize(), kBodySize);
     EXPECT_FLOAT_EQ(ImGui::GetTextLineHeight(), kBodySize);
+    ImGui::EndFrame();
+}
+
+TEST_F(FontsInImGui, TheCodeFaceHasCssLinesOfItsOwn) {
+    ASSERT_TRUE(fonts_->bundled);
+    // Pushed at kCodeLine (19 px lines, as InputTextMultiline spaces them), its glyphs are 12 px
+    // CSS mono: 7.2 px a character, the baseline where CSS centres a 12 px line in 19 px.
+    ImFontBaked* code = fonts_->code->GetFontBaked(kCodeLine);
+    EXPECT_NEAR(code->GetCharAdvance('0'), 0.6F * kCodeSize, 0.01F);
+    const float cssBaseline =
+        (kCodeLine - kPlexLineHeightEm * kCodeSize) / 2.0F + 1.025F * kCodeSize;
+    EXPECT_NEAR(code->Ascent, cssBaseline, 1.0F);
+}
+
+// Wrapped text keeps the design's CSS line heights (widgets::Paragraph), where Dear ImGui would
+// space its lines one font size apart.
+TEST_F(FontsInImGui, ParagraphsHaveTheDesignsLineHeight) {
+    using viewer::widgets::ParagraphLineHeight;
+    EXPECT_FLOAT_EQ(ParagraphLineHeight(kBodySize), 18.0F);     // body 13 / 18
+    EXPECT_FLOAT_EQ(ParagraphLineHeight(kLabelSize), 18.0F);    // .sm keeps the body's
+    EXPECT_FLOAT_EQ(ParagraphLineHeight(kCaptionSize), 14.0F);  // .xs 11 / 14
+
+    ImGui::GetIO().DisplaySize = ImVec2(800, 600);
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(400, 400));
+    ImGui::Begin("paragraph");
+    const char* text = "one two three four five six seven eight nine ten eleven twelve";
+    ImFont* sans = fonts_->sans;
+    // Wide enough for about four words a line: three lines or more, each 18 px.
+    const float wrap = sans->CalcTextSizeA(kBodySize, FLT_MAX, 0.0F, "one two three four").x;
+    const float height = viewer::widgets::ParagraphHeight(sans, kBodySize, text, wrap);
+    const float lines = height / 18.0F;
+    EXPECT_GE(lines, 3.0F);
+    EXPECT_FLOAT_EQ(lines, std::round(lines));
+    // Dear ImGui's own wrapping gives the same lines at 13 px each.
+    const float imgui = sans->CalcTextSizeA(kBodySize, FLT_MAX, wrap, text).y;
+    EXPECT_FLOAT_EQ(imgui / kBodySize, lines);
+    // As an item: the same height, and a SameLine after it on its first line.
+    ImGui::PushFont(sans, kBodySize);
+    const float top = ImGui::GetCursorScreenPos().y;
+    viewer::widgets::Paragraph(text, 0.0F, wrap);
+    EXPECT_FLOAT_EQ(ImGui::GetItemRectSize().y, height);
+    ImGui::SameLine();
+    EXPECT_FLOAT_EQ(ImGui::GetCursorScreenPos().y, top);
+    // Lines that would run below a limit are left out, and it says so.
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    EXPECT_FALSE(viewer::widgets::DrawParagraph(draw, sans, kBodySize, ImVec2(0, 0), 0xFFFFFFFF,
+                                                text, wrap, 0.0F, height));
+    EXPECT_TRUE(viewer::widgets::DrawParagraph(draw, sans, kBodySize, ImVec2(0, 0), 0xFFFFFFFF,
+                                               text, wrap, 0.0F, height - 1.0F));
+    ImGui::PopFont();
+    ImGui::End();
     ImGui::EndFrame();
 }
 

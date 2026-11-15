@@ -289,7 +289,8 @@ private:
                 ? 0.0F
                 : std::min(px(120.0F), (ImGui::GetTextLineHeightWithSpacing() * 2.0F + px(8.0F)) *
                                            static_cast<float>(all.size()));
-        ImGui::PushFont(theme::fonts().mono, theme::kMonoSize);
+        // As the read view (yaml_text): 12 px mono on 19 px lines, through the code face.
+        ImGui::PushFont(theme::fonts().code, theme::kCodeLine);
         ImGui::PushStyleColor(ImGuiCol_FrameBg, c::bg0);
         if (focusEditor_) {
             ImGui::SetKeyboardFocusHere();
@@ -346,19 +347,18 @@ private:
         const ImVec2 min = ImGui::GetCursorScreenPos();
         const float width = ImGui::GetContentRegionAvail().x;
         const float text = width - px(kGutter) - px(8.0F);
-        const ImVec2 size = ImGui::CalcTextSize(issue.message.c_str(), nullptr, false, text);
-        const float height = size.y + px(6.0F);
+        const float height =
+            widgets::ParagraphHeight(ImGui::GetFont(), ImGui::GetFontSize(), issue.message, text) +
+            px(6.0F);
         const ImVec4 tint = issue.error ? c::error : c::warn;
         ImDrawList* draw = ImGui::GetWindowDrawList();
         draw->AddRectFilled(min, ImVec2(min.x + width, min.y + height),
                             u32(withAlpha(tint, 0.12F)));
         draw->AddRectFilled(min, ImVec2(min.x + px(2.0F), min.y + height), u32(tint));
         ImGui::SetCursorScreenPos(ImVec2(min.x + px(kGutter), min.y + px(3.0F)));
-        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + text);
         ImGui::PushStyleColor(ImGuiCol_Text, tint);
-        ImGui::TextUnformatted(issue.message.c_str());
+        widgets::Paragraph(issue.message, 0.0F, text);
         ImGui::PopStyleColor();
-        ImGui::PopTextWrapPos();
         ImGui::SetCursorScreenPos(ImVec2(min.x, min.y + height));
         ImGui::Dummy(ImVec2(width, 0.0F));
     }
@@ -424,9 +424,7 @@ private:
                 ImGui::SameLine(0.0F, px(8.0F));
                 widgets::Mono(c::t1, "%s", issue->pointer.c_str());
             }
-            ImGui::PushTextWrapPos(0.0F);
-            ImGui::TextUnformatted(issue->message.c_str());
-            ImGui::PopTextWrapPos();
+            widgets::Paragraph(issue->message);
             ImGui::Dummy(ImVec2(0.0F, px(4.0F)));
         }
         ImGui::Unindent(px(10.0F));
