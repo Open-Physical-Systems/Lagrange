@@ -175,6 +175,29 @@ TEST(Jolt, APendulumLosesEnergyAsJointsAsConstraintsDoAndSubstepsDivideIt) {
     EXPECT_LE(four, 1.0) << "never gains";
 }
 
+TEST(Jolt, SubstepsKeepTheReactionAndInventNoContact) {
+    // A 1 kg bob hanging still from its pivot: the pivot holds it up with m g and nothing touches
+    // it, whatever the number of Jolt steps per step (each sub-step's impulse is over dt / n).
+    for (const std::int64_t substeps : {std::int64_t{1}, std::int64_t{4}}) {
+        const World world = pendulum(0.0);
+        ModuleConfigData config;
+        config.values["substeps"] = substeps;
+        Scheduler scheduler(SchedulerOptions{.deterministic = true});
+        scheduler.add(std::make_unique<JoltBackend>(), ModuleConfig(config));
+        ASSERT_TRUE(scheduler.wire(WorldView(world)));
+        ASSERT_TRUE(scheduler.stepUntil(SimTime{500'000'000}).ok());
+        const SignalBus& bus = scheduler.bus();
+        const std::span<const double> reaction = bus.readN(bus.find("joint/pivot/reaction"));
+        EXPECT_NEAR(reaction[0], 0.0, 0.05) << substeps;
+        EXPECT_NEAR(reaction[1], 0.0, 0.05) << substeps;
+        EXPECT_NEAR(reaction[2], 9.80665, 0.05) << substeps;
+        const std::span<const double> contact = bus.readN(bus.find("body/bob/contact_force"));
+        for (std::size_t k = 0; k < 3; ++k) {
+            EXPECT_NEAR(contact[k], 0.0, 0.05) << substeps << " axis " << k;
+        }
+    }
+}
+
 TEST(Jolt, RefusesSubstepsOutOfRange) {
     const World world = pendulum(0.1);
     for (const std::int64_t substeps : {std::int64_t{0}, std::int64_t{65}}) {
