@@ -344,7 +344,7 @@ recorded to MCAP and replayed.
 
 </details>
 
-<details><summary>Design proposals (RFCs) (18)</summary>
+<details><summary>Design proposals (RFCs) (19)</summary>
 
 - [RFC 0001: Module interface, signals and scheduling contract](rfcs/0001-module-interface.md)
 - [RFC 0002: USD custom schemas](rfcs/0002-usd-schemas.md)
@@ -364,6 +364,7 @@ recorded to MCAP and replayed.
 - [RFC 0016: A robot builder in the viewer](rfcs/0016-robot-builder.md)
 - [RFC 0017: MuJoCo 4.x for the MuJoCo backend](rfcs/0017-mujoco-4.md)
 - [RFC 0018: The radiation domain (ionizing radiation)](rfcs/0018-radiation.md)
+- [RFC 0019: Legged robots as a supported robot class](rfcs/0019-legged-robots.md)
 
 </details>
 
