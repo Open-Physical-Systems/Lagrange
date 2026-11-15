@@ -19,6 +19,7 @@ add_library(
     client/src/ProfileDraft.cpp
     client/src/ProfileSession.cpp
     client/src/RecentList.cpp
+    client/src/RosFrames.cpp
     client/src/SceneStore.cpp
     client/src/ScopeBuffer.cpp
     client/src/ScopeSession.cpp
@@ -300,6 +301,7 @@ if(BUILD_TESTING)
         client/test/test_profile_session.cpp
         client/test/test_radar_scale.cpp
         client/test/test_recent_list.cpp
+        client/test/test_ros_frames.cpp
         client/test/test_scene_store.cpp
         client/test/test_scene_fuzz.cpp
         client/test/test_scope_buffer.cpp
@@ -386,6 +388,13 @@ if(BUILD_TESTING)
         TIMEOUT 300
         ENV
         LAGRANGE_BUILDER_URDF_TOOL=$<TARGET_FILE:builder_urdf_tool>
+    )
+    ament_add_pytest_test(
+        test_ros2_tabs
+        test/test_ros2_tabs.py
+        TIMEOUT 300
+        ENV
+        LAGRANGE_VIEWER=$<TARGET_FILE:lagrange_viewer>
     )
     ament_add_pytest_test(
         test_headless
