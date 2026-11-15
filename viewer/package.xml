@@ -20,6 +20,7 @@
   <depend>lagrange_meshes</depend>
   <!-- The sensor catalog data file only (RFC 0016 §5, plan R11): no library is linked. -->
   <build_depend>lagrange_sensors</build_depend>
+  <build_depend>lagrange_profiles</build_depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>

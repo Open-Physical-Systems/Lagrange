@@ -1,6 +1,7 @@
 // The application chrome shared by every workspace: menu bar, workspace bar, domain strip,
 // dock space and status bar (docs/design/ui/shared/ui-conventions.md §1).
 #include "BuilderCommon.hpp"
+#include "DomainsTabs.hpp"
 #include "PanelFormat.hpp"
 #include "lagrange/viewer/Fonts.hpp"
 #include "lagrange/viewer/Panel.hpp"
@@ -47,7 +48,7 @@ struct WorkspaceEntry {
 constexpr std::array<WorkspaceEntry, 11> kWorkspaces{{
     {Workspace::Scene, "Scene", widgets::Icon::Scene, "lagrange-dock-scene-4", ImGuiKey_1, "Ctrl+1",
      "02-scene"},
-    {Workspace::Domains, "Domains", widgets::Icon::Domains, "lagrange-dock-domains-3", ImGuiKey_2,
+    {Workspace::Domains, "Domains", widgets::Icon::Domains, "lagrange-dock-domains-4", ImGuiKey_2,
      "Ctrl+2", "03-domains"},
     {Workspace::Electrical, "Electrical", widgets::Icon::Electrical, "lagrange-dock-electrical-1",
      ImGuiKey_3, "Ctrl+3", "04-electrical"},
@@ -269,6 +270,12 @@ void buildLayout(Workspace workspace, ImGuiID dockspace, const ImVec2& size) {
         ImGui::DockBuilderDockWindow("###UnitChecks", centre);
         ImGui::DockBuilderDockWindow("Schedule", schedule);
         ImGui::DockBuilderDockWindow("Profile", right);
+        // Their secondary tabs (SPEC 03): Modules beside Domains, Coupling beside Schedule,
+        // Diff and Schema beside Profile.
+        ImGui::DockBuilderDockWindow("###DomainsModules", left);
+        ImGui::DockBuilderDockWindow("Coupling", schedule);
+        ImGui::DockBuilderDockWindow("###ProfileDiff", right);
+        ImGui::DockBuilderDockWindow("Schema", right);
     } else {
         // Design: Signals 300 px left; Cursors over Statistics, 300 px right; scope between.
         const ImGuiID left = ImGui::DockBuilderSplitNode(
@@ -1597,6 +1604,9 @@ std::vector<std::unique_ptr<Panel>> createDefaultPanels() {
         panels.push_back(std::move(panel));
     }
     panels.push_back(createProfilePanel());
+    for (std::unique_ptr<Panel>& panel : createDomainsTabPanels()) {
+        panels.push_back(std::move(panel));
+    }
     for (std::unique_ptr<Panel>& panel : createBuilderPanels()) {
         panels.push_back(std::move(panel));
     }
@@ -1673,6 +1683,10 @@ void drawPanels(std::vector<std::unique_ptr<Panel>>& panels, PanelContext& conte
         ImGui::SetWindowFocus("Viewport");
     }
     if (built && shown == Workspace::Domains) {
+        // The first tab of each group in front: Domains, Schedule, Profile, Wiring.
+        ImGui::SetWindowFocus("Domains");
+        ImGui::SetWindowFocus("Schedule");
+        ImGui::SetWindowFocus("Profile");
         ImGui::SetWindowFocus("Wiring");
     }
     if (built && shown == Workspace::Replay) {
